@@ -1,5 +1,11 @@
 ## Antigravity native PM delta
 
+业务派发遵守共享 [只读偏好合同](../../shared/skills/xy-workflow/references/dispatch.md#read-only-native-dispatch-preferences)，
+以已核实插件的实际 native invocation name 查询；通用入口查 `*`。`agy models` 会话 slug
+不能传作 subagent tier。当前仅证实 inherit/flash/pro，无独立 effort；未观察实际
+`invoke_subagent` schema 时不猜参数，已配置而无法映射则明确阻断本次派发。inherit 不传
+model 覆盖，此步骤不启动服务或准备组件。
+
 This entire managed section applies only in Antigravity; ignore other hosts' integration sections.
 
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,

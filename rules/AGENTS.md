@@ -13,6 +13,9 @@
   当前用户显式调用。读取 `plugins/antigravity/plugin-context.md`、`skills/xy-workflow/SKILL.md`
   与其原有 `product/WORKFLOW.md` 权威，继续既有 Light/Full、业务两步确认、原型、
   原生交接和独立唯一 QA 规则。
+  每次业务原生派发前，按 `platforms/shared/skills/xy-workflow/references/dispatch.md`
+  的只读调用偏好合同读取当前 `antigravity` 与真实调用身份；通用入口使用 `*`。
+  缺少偏好沿用宿主默认，配置错误或无法映射的已配置字段明确阻断该次派发。
 
 宿主当前用户调用的参数包含其他动作、额外自然语言或 shell 片段时，不执行维护
 命令；简短说明允许的动作。不得把业务需求改写成维护调用，也不得接管宿主 `/model`。

@@ -26,6 +26,8 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    docs/standards/prototype/prototype.css
    docs/standards/prototype/workspace.css
    docs/standards/prototype/workspace.js
+   docs/standards/prototype/feedback.css
+   docs/standards/prototype/feedback.js
    docs/standards/prototype/page-shell.js
    docs/standards/prototype/<stable-page>.html
    ```
@@ -78,7 +80,8 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    derived from the single registered navigation. Before initialization, the iframe is hidden with no src;
    empty registration shows an explicit empty state. A static design entry without a controller still needs
    an explicit src pointing to a registered page. The index rejects meta refresh, arbitrary scripts and inline
-   routing. workspace.css/js belong only to the index; concrete pages use minimal page-shell.js.
+   routing. workspace.css/js and local feedback.js belong only to the index; concrete pages use minimal page-shell.js.
+   Shared feedback.css provides the outer panel and target highlight styles; it remains a real local dependency.
    Requirements-bound concrete pages declare the canonical Markdown path under configured plans with
    `body[data-prototype-plan-source]`, and provide one `data-prototype-document="markdown"` link in a
    single `nav.prototype-requirement-links`. One same-name historical HTML link marked
@@ -117,6 +120,12 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    automatic workflow evidence. Only the PM may record `visual_approved`, and approval remains in
    workflow task state. PM preserves recoverable approval evidence in the existing saved plan when
    the task-level policy saves one; this verifier creates no plan or companion approval document.
+
+## 按需反馈复核
+
+仅当前任务使用节点反馈时，读取 [反馈消费合同](../xy-ui-design/references/prototype-feedback.md)，通过当前物理插件根白名单 helper 的 `prepare`／`validate` 消费当前绑定；它复用本校验器的安全依赖闭包，不替代上述静态检查。`validate` 失败、需求 SHA 或页面依赖失效时保留原意见，返回 PM 处理；输出 `changes` 只用于当前授权原型修订。修订后仍返回上述 `prototype_verify` 证据，适用需求／视觉批准沿既有规则，反馈不产生批准、自动 patch 或新增业务 gate。
+
+生产 `templates/prototype` 工具的真实浏览器集成验证用于验证模板产品本身，不能扩张为业务原型默认浏览器操作，亦不改变以下边界。
 
 ## Prototype browser boundary
 

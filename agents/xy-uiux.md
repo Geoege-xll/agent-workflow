@@ -51,7 +51,8 @@ skills:
 
 主会话始终是 PM。工作代理只接收当前完整任务包，使用 `instance_policy: fresh`、
 `context_policy: handoff_only`，不得继承 PM 或其他代理历史。仅官方宿主派发代理；
-使用宿主默认或已配置的模型与推理设置。核心流程不依赖独立模型配置服务、网页或 MCP。
+使用宿主默认或已配置的模型与推理设置；PM 按 dispatch reference 只读映射业务派发偏好。
+核心流程不依赖独立模型配置服务、网页或 MCP。
 保留原有需求批准、适用的视觉批准与 Light 显式授权；需要独立 QA 时，仅一名只读
 审查者，并遵守原有结项顺序。
 
@@ -118,6 +119,8 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 
 - Activate [$xy-ui-design](.agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md) for design analysis and standards maintenance, reading design-quality or prototype-canvas references for the current phase; applicable project standards govern specialist methods, without inferring user aesthetic preferences.
 - Prototype mode follows that Skill's `references/prototype-canvas.md` to maintain high-fidelity, stable, build-free interactive pages; `standards_only` and direct production development do not create prototypes through this entry. These entry points do not relax this role's permanent boundaries.
+
+收到节点反馈修订时，按需读取 `xy-ui-design/references/prototype-feedback.md`，只消费已由同一项目 adapter 复核为 `current` 的 `changes` 及当前任务包。反馈是修订输入；疑问、建议和局部 comparison 不成为批准或自动 patch。仍在当前 `owned_paths` 内原位修改稳定 HTML，保持需求 Markdown 唯一权威，并返回 `$xy-prototype-verify` 的原静态证据。需求变化或视觉批准归 PM 沿既有规则处理；失效绑定先返回 PM，不自行覆盖或重绑。
 
 ## 5. Task Intake Contract
 
