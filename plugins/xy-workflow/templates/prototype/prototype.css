@@ -212,7 +212,7 @@ body.prototype-canvas {
   margin-block-start: 1.25rem;
 }
 
-/* 阅读顺序为画面、需求与平台信息、必要演示说明、五节契约。 */
+/* 阅读顺序为画面、需求与平台信息、必要演示说明、开发说明。 */
 .prototype-page-information { color: var(--prototype-muted); font-size: 12px; }
 .prototype-information-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; }
 .prototype-requirement-links { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }

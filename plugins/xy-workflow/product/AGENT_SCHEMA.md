@@ -57,9 +57,10 @@ Plugin role and Skill projection rules:
 - All three packages use the same canonical role ID, such as `xy-web`. The host entry points below refer to paths relative to the verified plugin root.
 - Implementation roles preload `xy-code-standards` and `xy-build-verify`; production UI reads
   the applicable `xy-ui-design` branch only when `surface_kind: production_ui`.
-- `xy-web` additionally binds `xy-playwright` for scoped production Web verification; other implementers do not preload it.
-- `xy-uiux` preloads `xy-ui-design`, `xy-taste` and `xy-prototype-verify`; missing/corrupt resources or an incomplete canonical read blocks UI design; declarations do not prove actual loading.
-  Preloading does not execute an inapplicable branch: `standards_only` never runs prototype verification.
+- `xy-web` 优先使用项目测试。仍需生产浏览器交互证据时，首选按需加载 `xy-playwright`。纯小程序逻辑使用项目与微信宿主工具。
+- `xy-uiux` 固定预载 `xy-ui-design`，交付具体 HTML 原型时必须加载并执行 `xy-prototype-verify`。
+  额外设计方法按[共享 Skill 选择规则](../platforms/shared/skills/xy-workflow/references/skill-selection.md)选用。
+  `standards_only` 只验证设计规范文档。
 - `xy-qa` preloads `xy-qa-review`; other local specialist Skills are matched on demand from
   `audit_surfaces` and are not written into the role manifest.
 - QA consumes the same specialist methods read-only for actual code or UI review surfaces; pure-document/backend tasks do not preload complete UI text. Static bindings come from `lib/skills/role_skills.py`; metadata and current artifacts across all three hosts must match. Reading creates no new permissions or stages.
@@ -118,6 +119,17 @@ The current workflow accepts only Light/Full and schema_version:2. Both levels d
 
 ### Scheduling Fields (Machine-Readable Task-Pack Contract)
 
+可选的顶层 `request_scope` 反映用户已明确委托的交付范围，取值为 `discussion_only`、
+`prototype_only` 或 `implementation`。init 决策与导出的单包只写本请求一个值；Full 图以
+`request_id` 为键，示例为 `"request_scope": {"checkout": "prototype_only"}`。同请求的当前
+记录共享这一约定，缺字段的历史请求继续按其原始授权运行。既有批准数组按门禁名记录，两个独立
+请求的可执行任务有同名门禁时，各自保留权威图，避免把其中一个请求的确认算给另一个请求。
+同图可以记录尚无执行任务的讨论请求。新建相关任务和交接时从原始委托填写；
+字段不授予写权限、替代需求确认或选择原型。仅讨论通常没有任务记录；仅原型委托在需求和所需方案获批后，通过任务池派发 `xy-uiux + design_ui` 原型 Writer。独立任务采用顶层 `request_scope: prototype_only` 的 Light 单包，已有 Full 依赖图沿用原图。每个设计实例只写其约定的原型子路径。交付与视觉确认后结束，
+无生产 QA。完整实现沿用原有 Light／Full 及页面门禁。详见 [请求交付范围](WORKFLOW.md#request-delivery-scope)。
+
+任务的 `verification_commands` 兼容命令字符串和 `{run, expected}`。当项目原生检查的相关文件可确切列举时，后者可选 `inputs`（项目相对文件路径数组）。该清单供逐命令核对字节变化；原生执行结果、环境、真实资源加载、用户或项目要求的重跑及独立 QA 仍按原验证合同判断。
+
 Every schema 2 task carries the identity/context fields below. Dependency and graph-scheduling fields apply to Full; Light retains current task.state without creating a DAG for dispatch:
 
 ```yaml
@@ -131,10 +143,11 @@ context_policy: handoff_only
 task_type: writer | evidence | read_only | qa
 role: <canonical xy-* role>
 surface_kind: production_ui | design_ui | non_ui
-design_mode: prototype | standards_only  # Only xy-uiux + design_ui; omit for other roles
+design_mode: prototype | standards_only  # 仅用于 xy-uiux 的 design_ui Writer；只读咨询省略
 depends_on: []       # Semantic prerequisite task IDs, never capacity waits
 blocks: []           # Exact reverse edges for depends_on; the validator requires consistency
 gates: []            # Supported business/safety gates only
+# solution_decisions: [{id: retry-policy, content: 失败后允许手动重试一次}]  # 只列本任务依赖的实质方案
 owned_paths: []      # Normalized project-relative ownership; ordered handoff may reuse a path
 semantic_locks: []   # Shared contracts that cannot be changed concurrently
 state: DECLARED      # Runtime dispatch state; saved plan keeps concise recoverable progress, not a second scheduler
@@ -168,7 +181,15 @@ This rule does not add mandatory QA to Light.
 agent_alias binds a normalized module and canonical role; independent tasks may reuse the responsibility alias, but require new instances/IDs. Short rework on the same task and same-round original-Reviewer delta checks may reuse an available original instance. The complete lifecycle is centralized in WORKFLOW's agent-instance-lifecycle: no complete parent/sibling history, inherited forks, prewarming, or pools; protect results, logs, and worktrees before actual native termination or retirement.
 `continuation --input PACK_OR_GRAPH --task-id ID --host HOST --observed-state running|idle|cancelled|missing|unknown` returns advice only, without probing, dispatching, reviving cancellations, clearing history, or creating approval.
 
-The dispatch envelope contains schema_version:2, task, applicable standards_contract, and necessary approval/UI evidence. Full uses `task --input GRAPH --task-id ID` to export only this task; Light uses `task --input PACK` to validate/return the same-shaped envelope without a Full graph. update/continuation reuse the single current record rather than creating a second Agent ledger. The receiver still checks current files and reads complete required standards. See xy-workflow/references/runtime-records.md for exact CLI arguments.
+写入任务（`task_type: writer`）按需在 `solution_decisions` 逐项保存 `id` 和具体 `content`。未受实质决定影响的任务省略此字段；依赖同一决定的原型和实现 Writer 使用同一事项及内容。
+现有初始化入口按这些事项补齐各 Writer 的 `gates`，每项格式为 `solution_approved:<id>@<sha256>`。标识使用 `[a-z0-9][a-z0-9._-]*`；
+摘要是 `json.dumps([request_id, id, content], ensure_ascii=False, separators=(',', ':'))` 的 UTF-8 字节的 SHA-256 小写十六进制。
+用户明确选定本请求的当前内容后，PM 通过既有 `update` 的独立 `approve_solutions` 补丁把完整门值记入 `approved_gates`，调用示例见[派发规则](../platforms/shared/skills/xy-workflow/references/dispatch.md)；裸 `solution_approved` 没有授权效力。
+更新内容后使用新的摘要，只让依赖本事项的原型或生产工作等待新批准。用户撤回未执行的方案时，通过独立的 `revoke_solutions` 补丁撤回相同绑定；已有运行中或已交付的 Writer 使用此门时，更新被拒绝。已有明确授权可以出自同一简报的答复，应能追溯到用户同意的内容。
+
+所有 Writer 正式交接及新登记 `RUNNING`、`BUILD_VERIFIED`、`QA_SCOPE_READY` 或 Writer 的 `QA` 时，都核对该任务声明的全部批准。Full 同时核对直接与间接依赖的当前交付、所需的 QA 回执和适用的 UI Foundation 阶段回执。已领取的 Writer 可以导出自己的包。Light 不声明图依赖，按自身声明的门核对。待决图仍可 `validate`、查询 `ready` 和修订，普通无实质方案的 Writer 继续沿用同一准入规则。
+
+The dispatch envelope contains schema_version:2, task, applicable standards_contract, and necessary approval/UI evidence. Full uses `task --input GRAPH --task-id ID` to export only this task; Light uses `task --input PACK` to validate/return the same-shaped envelope without a Full graph. update/continuation reuse the single current record rather than creating a second Agent ledger. 接收方核对当前文件，依照 `controlled_document_access` 独立读完所需规范的适用条款、例外及必要依赖；明确要求全文的材料读完整份。 See xy-workflow/references/runtime-records.md for exact CLI arguments.
 
 Full planned tasks require role, surface_kind, and qa_scope together; Light retains its canonical role and actual surface_kind without imposing Full closure fields for dispatch. Light UI permits only ordinary low-risk copy under UI-Conformance with actual current resolved authority; production UI still has engineering/design coverage, and design/interaction changes use Full. The runtime
 snapshot also carries typed `ui_contract.prototype_paths` and derives the design-standard boundary
@@ -177,7 +198,9 @@ the forbidden production boundary and allowed design-writer boundary determinist
 Every Writer in that graph which overlaps either boundary must be `xy-uiux + design_ui`, including
 roleless, broadly scoped, direct-dependency, and transitive-dependency tasks.
 
-For `xy-uiux + design_ui`, omitted `design_mode` means `prototype`. `standards_only` restricts writes
+Full 实施委托内的专业方案咨询须显式声明 `solution_consultation: true`，并使用 `task_type: read_only` 和空 `owned_paths`。工程角色使用 `non_ui`，设计角色使用 `xy-uiux + design_ui`。咨询任务省略 `design_mode`、`ui_change`、`standards_exceptions` 及 Writer 的方案事项和门值；结果用于 PM 推荐方案，沿用既有 `RESULT_VERIFIED` 结算。其他 `read_only` 或 `evidence` 任务可保留原有路径资源锁，锁不构成写入授权。实际字段用法见[只读咨询派发](../platforms/shared/skills/xy-workflow/references/dispatch.md#read-only-design-consultation)。
+
+For an `xy-uiux + design_ui` Writer, omitted `design_mode` means `prototype`. `standards_only` restricts writes
 to exact `DESIGN_*.md` leaves directly under the standards root, excluding prototype artifacts.
 It still requires `requirements_approved`, current design reads and UI/accessibility/standards audit
 surfaces, but no HTML, `xy-prototype-verify`, or visual gate. A waived production task may depend on
@@ -194,7 +217,7 @@ the graph. A snapshot refresh does not overwrite historical inputs, imply a past
 or reopen a completed task. `design_standard` authority fingerprints must match the current same-path
 leaf contract; prototype dependency fingerprints retain their separate meaning.
 
-For Full work, the task graph comes from `xy-plan` with `plan_state: draft`. Before asking for
+For Full work, the task graph comes from `xy-plan` with `plan_state: draft`. Before binding current scope authority to
 `requirements_approved`, the PM reviews that draft and records the post-QA controlled-document
 projection. After approval the PM freezes the requirements fingerprint, graph, and proposed
 projection; canonical PROJECT/plans accepted-baseline truth is not changed until integrated QA PASS. The PM then
@@ -289,7 +312,7 @@ ui_change:
 
 For `route: UI-Conformance`, require `design_delta: none`, `prototype_policy: not_applicable`,
 `prototype_decision: null`, structured resolved and fingerprinted
-`design_authority_refs`, no unresolved design choice, no `xy-uiux` dependency, no visual gate, and
+`design_authority_refs`, no unresolved design choice, no `xy-uiux` Writer dependency, no visual gate, and
 no owned-path overlap with adapter-resolved `docs.standards_root/DESIGN_*.md`. The production
 writer still carries `requirements_approved`, `xy-build-verify`, and both `ui` and `accessibility`
 audit surfaces. A `prototype_contract` path must be inside `ui_contract.prototype_paths`; a
@@ -307,9 +330,11 @@ current requirement fingerprint to exactly the same non-empty `affected_surfaces
 `recommended_policy` may differ from `selected_policy`, but `selected_policy` must exactly match
 `ui_change.prototype_policy`. The PM must not invent this record. The `waived_by_user` policy has no
 prototype-design dependency, no prototype write, no `prototype_contract` authority, and no visual gate. It
-retains `requirements_approved`, standards authority, build verification, and full ui and
+retains `requirements_approved`, applicable scoped solution decisions, standards authority, build verification, and full ui and
 accessibility QA. Existing prototype bytes remain untouched and are not current authority for the
 waived scope.
+
+当目标、业务规则、技术方案或原型有长期维护价值时，PM 在同一需求主题更新当前约定和已批准的页面链接；实现、测试、验收提供证据后，再补充已交付事实和后续维护入口。详见 [xy-plan 需求 Markdown](../platforms/shared/skills/xy-plan/references/requirements-markdown.md)。字段记录授权和执行证据；确认意向本身不足以更新已验收基线。
 
 Full task packs declare the projection decision during planning; Light assesses actual needs at handoff without requiring the Full projection record in advance:
 
@@ -333,9 +358,9 @@ pages; `UI-Conformance` tasks carry frozen `design_authority_refs`; `waived_by_u
 scope-bound `prototype_decision` and no prototype authority. Required-prototype tasks carry the same
 decision record plus concrete page authority.
 
-Only after Full integrated QA PASS, or Light acceptance of actually required verification/audit and assessment of need, does the PM project the current baseline. Each stable topic has one Markdown document in `docs.plans`; requirements/plan Markdown-to-HTML generation is retired and existing HTML is retained as historical material, separating the current goal/execution phase from the last genuinely accepted version/behavior/approval and acceptance evidence. `PROJECT.md` is the current directory, linking only explicit accepted baselines without a size limit or task logs. Further iteration, pause, or cancellation of the current goal must not erase the old baseline; completed creates neither approval nor delivery. An accepted removal marks the same document `removed`, retains reason/date/replacement and necessary history, and removes the current index link; do not create separate feature/ADR documents or renamed copies. Unindexed old execution drafts retain historical boundaries; completion labels do not establish current facts.
+Full 经集成 QA PASS、Light 经必要验证和选定审查验收后，PM 才更新已验收版本和行为。`PROJECT.md` 的 `## 主题目录` 与 STANDARDS 的规范目录分别导航到业务与规则原文。目录收录可以发生在验收前；声称已验收须定位真实版本、行为及批准与验收原件。旧已验收目录维持相同证明要求。暂停、取消保留上次基线。完整移除经实际验收后在原主题标记 `removed`、保留原因、时间及替代关系，撤下当前入口。既有 HTML 作为历史材料保留。
 
-Light saves only for an actual pause/recovery/handoff or explicit request; the PM saves Full in `docs.plans` after requirements approval and before the first design/implementation dispatch. Reuse the same source for the same topic; see plan-lifecycle for the template's ordinary Chinese metadata and six-section contract. Simplify Light as needed without adding confirmation fields or mandatory documents. Old docs.features may be removed only through an explicit one-time migration, with no runtime alias.
+Full 在批准后、首次设计或实现派发前保存一份可恢复的批准 Markdown。已有主题原地更新，独立新主题才建页。纯执行或纯符合性修复可以复用当前请求已有的持久交接位置；需绑定原型时须由配置的 `docs.plans` 内稳定原稿提供当前有效 REQ。Light 仅在暂停、恢复、交接或明确要求时保存。具体约定见[计划生命周期](../platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)。旧 docs.features 的移除仍需按显式一次性迁移保护原件和引用。
 Existing `input_contracts` carry its reference and current applicable scope; changes
 replace affected complete task inputs and QA acceptance, not merely append amendments. Preserve
 unaffected results and verify saved evidence on resumption. Follow the plan-lifecycle reference.
@@ -361,7 +386,7 @@ The PM commits only request-owned paths verified/accepted under the current leve
 projection, using exact pathspecs and complete staged-diff inspection. It must not stage unrelated or unverified changes,
 must not use `git add -A` or `git add .`, and must preserve pre-existing user work. Unsafe overlap
 yields `action: blocked`, not whole-file staging. Nested repositories are assessed independently
-and deepest first. This automatic action does not create a third business-confirmation stage or
+and deepest first. This automatic action does not create a business-confirmation stage or
 authorize push, merge, tag, release, or another remote mutation.
 
 For the selected worktree execution branch, `xy-workflow/references/worktree-delivery.md` explicitly
@@ -410,6 +435,8 @@ effective permissions/model/effort, fixed scope and execution: schema validity i
 
 When the same authorized native QA invocation supports structured output, obtain the current JSON Schema using `qa_handoff_cli.py schema`, then unpack successful terminal output with `extract --host H --input native-result.json` and apply existing handoff semantic validation; the original `validate` contract remains available. Successful transport structure is not QA PASS and does not replace real execution, fixed scope, or standards evidence. Codex exec uses `--output-schema` (review has no such flag), Claude uses `-p --json-schema`, and AGY uses `--json-schema`; still check the current version and permissions. Detailed terminal shapes and invocation paths live only in `xy-qa-review/references/inputs.md`. Task Packs are still mechanically exported through task-graph `task`; do not call another model or add a Reviewer to convert JSON.
 
+普通后台 Reviewer 缺少结构化输出时，由原 Reviewer 提供已核对的分组判定和直接证据，PM 通过[固定回执构造](../platforms/shared/skills/xy-qa-review/references/inputs.md#固定回执构造)还原同一 schema 2 回执。
+
 The implementation-acceptance handoff below does not apply to WORKFLOW's `Standalone read-only
 audit` branch. An audit-only conclusion creates no writer/BUILD_VERIFIED or implementation QA PASS;
 Full implementation and Light acceptance requiring independent QA still use the writer barrier and validated handoff.
@@ -433,6 +460,11 @@ machine projection is never shown to the user as raw JSON or YAML.
 
 `READY`, `RUNNING`, `BUILD_VERIFIED`, and `QA` are scheduler runtime facts in the runtime graph
 snapshot, not independently maintained task-pack claims or PM completion lists.
+
+The PM task pool locates the authoritative Light pack or Full graph. A pending withdrawal can end
+as `WITHDRAWN` immediately. An allocated task enters `STOP_REQUESTED` and retains its occupancy until
+the host outcome is established. The task's amendment and acknowledgement identify the revision and
+the bound native agent. See the [record operations](../platforms/shared/skills/xy-workflow/references/runtime-records.md).
 
 - `READY`: a derived queue membership: semantic dependencies and applicable gates are satisfied, so
   the task may be dispatched when capacity is available. Unmet, failed, or pending prerequisites
@@ -480,38 +512,20 @@ not all project work.
 **Do adopt:** tagged `division`/`tags`, Deliverables, Workflow steps, Success Metrics, and narrow specialization.
 
 All three hosts must preserve the same memory, verification, and closeout order. Implementation tasks
-are dynamically scheduled through the task dependency graph. The default business-confirmation
-policy is:
-
-```yaml
-business_confirmation_policy:
-  default_gates:
-    - requirements_approved
-  ui_only_gates:
-    - visual_approved
-  additional_gates: exceptional
-```
-
+are dynamically scheduled through the task dependency graph. The [Business confirmation policy](WORKFLOW.md#business-confirmation-policy) defines when each decision applies.
+需求范围复用当前授权。方案按事项和内容绑定，所选原型另按页面依赖指纹确认。
 `baseline_ready`, `ia_ready`, `prototype_verified`, `visual_review_ready`, `contract_ready`,
-`plan_ready`, `BUILD_VERIFIED`, QA, document projection, PM commit assessment, and closeout are automatic states or evidence,
-and do not themselves require user confirmation. `UI-Conformance`, non-UI, and a valid
-`waived_by_user` request have no business confirmation after `requirements_approved` by default.
-This describes development gates; selected worktree delivery separately follows its configured final
-confirm/auto local-merge policy without creating another prerequisite for implementation.
+`plan_ready`, `BUILD_VERIFIED`, QA, document projection, PM commit assessment, and closeout are automatic states or evidence.
+Selected worktree delivery separately follows its configured final confirm/auto local-merge policy.
 The design Agent self-checks prototype requirements coverage, standards conformance, and delivery consistency using existing prototype_verify static_checks, blocking_findings, and result; do not add a prototype QA role, report, approval, or browser/screenshot requirement. The user finally confirms concrete pages, and unified functional QA for subsequent production implementation remains.
 For prototypes, `prototype_verified` means deterministic structure, local-dependency, contract, and
 fingerprint validation; it does not claim Computer Use, browser automation, rendered visual review,
-or user approval. Before `visual_review_ready`, the PM separately compares all five contract sections
+or user approval. Before `visual_review_ready`, the PM separately compares the concrete page behavior, developer notes and linked requirements
 with the frozen approved requirements and acceptance criteria without invoking a browser.
 For design-change UI, `requirements_approved` is not complete until the prototype choice is also
 resolved; this choice is part of the existing confirmation rather than an additional gate.
-Reversible architecture details are automatic and may be retained in current feature rationale
-after verification. A material architecture change that changes approved requirements, scope, key constraints, or
-acceptance evidence normally reopens `requirements_approved`.
-The PM may ask architecture questions and request a user choice as clarification, but that question
-or choice does not automatically create a third business-confirmation stage. If the answer materially changes approved
-requirements, scope, key constraints, or acceptance evidence, reopen `requirements_approved`;
-use an exceptional task-scoped confirmation only when it cannot safely be folded into an existing stage.
+直接开发、非 UI 和按既定原型修正均单独判断方案事项；跳过页面视觉确认只修改原型分支。
+影响需求范围的变化回到原需求；影响某一方案的变化只更新该决定及其依赖任务。
 Platform security prompts remain mandatory for destructive, production, paid, external-mutation, or
 privileged operations and are outside this default business-confirmation policy.
 
@@ -520,15 +534,17 @@ An exceptional task pack uses this complete record and omits it otherwise:
 ```yaml
 additional_business_confirmation:
   name: <stable gate name>
-  reason: <why the default two stages are insufficient>
+  reason: <explicit user request or why the applicable confirmations are insufficient>
   decision_scope: <what the user is deciding>
   options: []
   evidence: []
   resume_condition: <exact answer that resumes dependent work>
 ```
 
-The exception requires an explicit user request or a material unresolved decision. It blocks only
+The exception requires an explicit user request or a distinct decision outside the applicable confirmations. It blocks only
 dependent DAG tasks and must not become a permanent default stage.
+
+正式 JSON 任务将上述六个字段放在单个 `task.additional_business_confirmation` 对象中。`name` 使用稳定 ID 或完整的 `exceptional:<id>`，与本任务声明的门逐字匹配。`options` 和 `evidence` 必须各含至少一项具体内容。PM 可在 `init` 中记录已明确取得的门，待决时保留完整问题。本任务包携带原记录，QA 包按实际受审 Writer 在 `reviewed_business_confirmations` 中携带问题、依据与对应门。已有受保护上游修改可继续沿用经校验且覆盖确切补丁面的 `standards_exceptions`，只满足它声明的技术例外门。
 
 ### UI routing and approval fields
 
@@ -543,23 +559,14 @@ docs/standards/prototype/prototype.css
 docs/standards/prototype/<stable-page>.html
 ```
 
-Visual approval is authoritative only in the existing workflow task state:
-
-```yaml
-visual_approval:
-  status: pending | approved
-  pages:
-    - path: docs/standards/prototype/<stable-page>.html
-      dependency_fingerprint: <verified-dependency-fingerprint>
-      changed_scope: []
-      interactions: []
-```
+PM 在用户确认具体页面后，用下述正式操作将来源、需求和页面依赖指纹一同保存到 `task.visual_approval`。其中 `status: approved` 描述 `pages` 中已记录的页面。任务需用的其余页面分别等待对应门。新记录的每页包含 `request_id`、`task_id`、`requirements_fingerprint`、`authority_id`、`path`、`dependency_fingerprint`、`approval_ref`、`changed_scope` 和 `interactions`。既有仅保存精确页面门值的图也使用当前原型交付状态及实物页面依赖指纹。无论是否已有新格式回执，后续交接、就绪及新交付登记均须核实原型页和依赖字节。多请求或不同路径复用同一门值时，须能匹配相应请求和页面的批准来源。 [视觉批准的 CAS 操作](../platforms/shared/skills/xy-workflow/references/ui-design.md#登记具体页的视觉批准)
 
 `gates` contains strings. A dependent required-prototype UI task uses
 `"visual_approved:<page-id>@<dependency-fingerprint>"`; it never uses a YAML mapping.
 
 ```text
 classification/clarification with on-demand auxiliary retrieval -> task graph READY queue
+-> applicable scoped solution decisions / affected prototype and implementation tasks
 -> dependent visual_approved gate / implementers as each task becomes ready
 -> build verification -> independent QA
 -> QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report
@@ -569,7 +576,7 @@ classification/clarification with on-demand auxiliary retrieval -> task graph RE
   dispatch, rework, commit assessment, and the final report.
 - Implementation roles write only task-owned paths, return real build/test evidence, and perform no
   nested delegation.
-- `UI-Conformance` does not dispatch `xy-uiux`; its implementation and QA bind to the frozen
+- `UI-Conformance` does not dispatch an `xy-uiux` Writer; its implementation and QA bind to the frozen
   `design_authority_refs`. `xy-uiux` writes prototypes only for required-prototype work, or exact
   normative leaves in `standards_only` mode. A valid `waived_by_user` task has no prototype-design
   dependency or visual Gate; implementation and QA

@@ -12,14 +12,17 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Callable
+from lib.verification_inputs import validate_command
 
 try:
     from .agent_continuation import validate_identity, validate_reference
+    from .request_scope import request_scopes
     from .task_graph import TaskGraphError
     from .task_sources import validate_task_source
     from .standard_paths import builtin_source_path
 except ImportError:
     from agent_continuation import validate_identity, validate_reference
+    from request_scope import request_scopes
     from task_graph import TaskGraphError
     from task_sources import validate_task_source
     from standard_paths import builtin_source_path
@@ -60,7 +63,8 @@ def _implementation_contract(task: dict) -> dict:
     重新接受完整包。原生身份由外层独立核实，不能借此投影掩盖错绑。
     Light归一化补出的空调度字段只是同义表达，沿用原先的等价处理。
     """
-    metadata = {"state", "agent_retired", "agent_ref", "handoff_assessment", "acceptance_evidence"}
+    metadata = {"state", "agent_retired", "agent_ref", "handoff_assessment", "acceptance_evidence",
+                "revision_ack", "revision_result", "claim_basis_sha256", "claim_prior_state"}
     result = {key: value for key, value in task.items() if key not in metadata}
     for field in ("depends_on", "blocks", "gates", "semantic_locks"):
         result.setdefault(field, [])
@@ -178,7 +182,7 @@ def settle_task(payload: dict, task: dict, value: Any, *, read: Callable, decode
     pack = decode(body)
     if (not isinstance(pack, dict) or type(pack.get("schema_version")) is not int
             or pack["schema_version"] != 2 or not isinstance(pack.get("task"), dict)
-            or set(pack) - {"schema_version", "task", "standards_contract", "approved_gates", "requirements_fingerprint", "runtime_binding", "ui_contract"}):
+            or set(pack) - {"schema_version", "task", "standards_contract", "approved_gates", "requirements_fingerprint", "runtime_binding", "ui_contract", "request_scope"}):
         raise TaskGraphError("settle requires a complete schema 2 Task Pack")
     # 3.0 接受包和原记录都必须属于当前插件/源码执行；不进入旧内容库补pin。
     # validate_task_source 仍是统一资源边界，存在旧字段时在调用它前明确失败关闭。
@@ -204,6 +208,9 @@ def settle_task(payload: dict, task: dict, value: Any, *, read: Callable, decode
             raise TaskGraphError("accepted and current task acceptance_evidence must be string arrays")
     if pack.get("requirements_fingerprint") != payload.get("requirements_fingerprint"):
         raise TaskGraphError("accepted Task Pack requirements fingerprint changed")
+    # 已接受的原始包必须与当前图里同一请求的范围一致；并行请求的范围无关。
+    if request_scopes(pack).get(task["request_id"]) != request_scopes(payload).get(task["request_id"]):
+        raise TaskGraphError("accepted Task Pack request_scope changed")
     # Light本身就是完整包；Full采用原导出器的任务相关权威投影。两种来源均只读。
     authority = payload["standards_contract"] if task["workflow_level"] == "Light" else _authority(payload, task)
     if pack.get("standards_contract") != authority:
@@ -232,9 +239,7 @@ def settle_task(payload: dict, task: dict, value: Any, *, read: Callable, decode
             or len(verification) != len(commands)):
         raise TaskGraphError("settle verification must cover each current command exactly once")
     for command, observed in zip(commands, verification):
-        if (not isinstance(command, str) and not (isinstance(command, dict) and set(command) == {"run", "expected"}
-                and all(isinstance(command[key], str) and command[key].strip() for key in command))):
-            raise TaskGraphError("current verification command must be a string or frozen run/expected object")
+        validate_command(command, "current verification command")
         entry = _object(observed, {"command", "exit_code", "evidence"}, "settle.verification", optional={"expected"})
         expected_command = command["run"] if isinstance(command, dict) else command
         if entry["command"] != expected_command or type(entry["exit_code"]) is not int:

@@ -14,7 +14,7 @@ bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-ro
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py validate --root <physical-project-root> --adapter <selected-project-adapter> --input <explicit-feedback-file>
 ```
 
-正式交付入口是当前具体 HTML 的 `file://` URI：`delivery_url` 为首个具体页，`delivery_urls` 列出各页；可保留的 HTTP 诊断链接另名为 `http_delivery_url`，必须无 fragment 秘密，不能替代 file 入口；正式 file／review URL 均无秘密。完整目录、缩放、移动、复位、平台画板及真实业务交互都在 file 交付工具中；目录默认收起并浮出，不挤占画布，相机工具浮于画布，删除旧大标题背景。五段契约仍在具体 HTML，交付壳以大弹窗查看，不占主画布。目录使用项目已登记具体页元数据，当前页由实际文件名选择。项目完整交付 catalog 最多 256 页，与单次 review 的 16 页限额分开；一次 open 仅绑定本次已批准同需求的 1—16 页，不扫描全项目或从旧 index 推断；同项目不同页可绑定不同请求，公开目录按项目锁合并，不能用单一 active_request 覆盖其他页。多页时，prepare-delivery 与 open 都显式传入 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`。
+正式交付入口是当前具体 HTML 的 `file://` URI：`delivery_url` 为首个具体页，`delivery_urls` 列出各页；可保留的 HTTP 诊断链接另名为 `http_delivery_url`，必须无 fragment 秘密，不能替代 file 入口；正式 file／review URL 均无秘密。完整目录、缩放、移动、复位、平台画板及真实业务交互都在 file 交付工具中；目录默认收起并浮出，不挤占画布，相机工具浮于画布，删除旧大标题背景。开发说明仍在具体 HTML，交付壳以大弹窗查看，不占主画布。目录使用项目已登记具体页元数据，当前页由实际文件名选择。项目完整交付 catalog 最多 256 页，与单次 review 的 16 页限额分开；一次 open 仅绑定本次已批准同需求的 1—16 页，不扫描全项目或从旧 index 推断；同项目不同页可绑定不同请求，公开目录按项目锁合并，不能用单一 active_request 覆盖其他页。多页时，prepare-delivery 与 open 都显式传入 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`。
 
 项目原稿仅保留固定相对经典入口 `<script src=".xy-prototype-entry/entry.js" data-xy-delivery-entry="1" charset="utf-8"></script>`，且先于所有业务脚本。`.xy-prototype-entry` 是指向用户级本项目发布目录的受管链接，目录级 `.gitignore` 只维护精确受管忽略项并保留用户内容。项目不复制完整工具或业务 HTML 副本，不生成导航 index；已有业务首页、未知文件及用户修改必须保留。受管链接须验证属主、版本与摘要后才获窄依赖例外，普通 symlink/hardlink 仍拒绝。通用工具同 payload 仅缓存一份，`delivery.html` 是唯一 markup；受信模板生成经典 `shell.js`，不手抄第二套 HTML。
 
@@ -83,6 +83,6 @@ target 按范围严格封闭：节点为 `{scope:"node",page:<登记路径>,loca
 
 ## 修订归属
 
-PM 只将复核为 `current` 的精简 `changes`、必要 `anchors` 和短 `review` 引用连同当前完整任务包交回原 UI Agent，不重复转发原反馈全文或完整校验 context。设计 Agent 只在已授权 `owned_paths` 内修订原 HTML、实际交互及原五节契约，并按 `xy-prototype-verify` 返回当前指纹和静态自检。需求变化与适用视觉批准仍沿原规则；反馈不新增第三业务 gate。没有新的原型写权限时，反馈本身不能扩大范围。
+PM 只将复核为 `current` 的精简 `changes`、必要 `anchors` 和短 `review` 引用连同当前完整任务包交回原 UI Agent，不重复转发原反馈全文或完整校验 context。设计 Agent 只在已授权 `owned_paths` 内修订原 HTML、实际交互及适用的开发说明，并按 `xy-prototype-verify` 返回当前指纹和静态自检。需求变化与适用视觉批准仍沿原规则；反馈不新增第三业务 gate。没有新的原型写权限时，反馈本身不能扩大范围。
 
 意见 JSON／Markdown 是本轮交接输入，保存在现有请求证据区；不创建 spec、sidecar、Manifest、独立设计／QA／批准文件，不恢复 plan→HTML。历史离线工具资源精确包含 index.html、workspace.css/js、feedback.css/js、page-shell.js、review-state.js、review-camera.js 和 THIRD_PARTY_NOTICES.txt，随三端插件同字节交付；固定上游相机／面板来源、提交与完整 MIT 许可保留在随包 notices 中。测试生产模板的真实浏览器用例不授权自动化业务原型，不能代替用户视觉批准或统一功能 QA。

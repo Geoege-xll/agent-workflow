@@ -66,10 +66,9 @@ treating candidates as adopted authority. An existing compatible baseline may be
 approved scope. A single approved page does not authorize an unapproved global redesign.
 
 PM assesses durable rule capture after initial visual confirmation; with an explicit baseline or
-maintenance request, assess before dispatch. Updates trace to existing requirements approval and,
-when prototypes were selected, applicable visual approval. This is not a third confirmation.
+maintenance request, assess before dispatch. Updates trace to the approved scope, applicable solution decisions and, for reviewed pages, their visual approval.
 waived_by_user uses approved requirements and explicit design decisions, without restoring prototype
-confirmation. Missing consequential decisions return to existing requirements clarification;
+confirmation. Return missing consequential choices to the PM before the dependent design work;
 the Writer cannot invent approval.
 
 Adopt new rules before related production Writers/QA consume them, not after production QA finishes.
@@ -131,5 +130,4 @@ cannot justify PASS. Return conflicts or omissions to PM instead of editing stan
 
 Validate affected structure, rule IDs and links with existing validate_project_docs.py. Select
 production tests by actual implementation risk; changing standards alone does not require all business
-tests or repeat valid prototype static evidence. Keep existing requirements confirmation, optional
-prototype confirmation and QA closeout.
+tests or repeat valid prototype static evidence. Follow the applicable decisions in WORKFLOW and existing QA closeout.

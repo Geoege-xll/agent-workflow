@@ -12,8 +12,12 @@ skills:
 This component is assembled from the unchanged shared authority. In this official
 plugin, resolve the installation root from the loaded component's physical location:
 `../..` from a skill's directory, or `..` from the `agents/` or `rules/` directory.
+Claude Code 在首次实际需要执行包内 helper 时，先按
+[Claude 安装来源核对](../platforms/claude/references/pm-integration.md#核对已安装的可执行来源)
+关联当前宿主载入项与市场、安装登记，之后才使用下述解释器入口。原生 Skill 已提供的完整静态正文可直接使用。
 Do not use the current working directory or a guessed cache path.
-Read `PLUGIN.md` there before using workflow helpers. Treat this paragraph as a
+Read `PLUGIN.md` there before using workflow helpers. Reuse complete content already
+available in this instance from the same physical source and version. Treat this paragraph as a
 resource/transport adapter; it grants no business approval, role ownership or QA PASS.
 
 读取必需长文时，核对宿主返回的起始范围、实际范围、总长度和截断标志。
@@ -33,13 +37,15 @@ Use the packaged interpreter selector for each independent invocation:
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
 Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
 existing Python 3.11+ and never installs software or changes the user's PATH.
-Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
+需要宿主集成时，从当前插件的 `platforms/<host>/references/pm-integration.md` 定位对应操作。Reviewer 只在审查方法有缺口时读当前宿主的 `Native review method` 小节及其调用约束。Claude Code 工具权限被拒时读对应的权限处理小节。
+The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
 Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
 actual discovered name or the packaged physical path when invoking one. Public aliases are
 `xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
-`product/command_identity.json`; canonical upstream names remain vendor resources, not discovery entries.
-Fully read each selected adapter and its canonical before use; never substitute unknown global names.
+`product/command_identity.json`. The host discovers the official `agent-desktop` Skill
+directly under its upstream name. For the selected upstream Skills exposed through
+`xy-` aliases, fully read the selected adapter and its packaged canonical before use.
+Never substitute unknown global names.
 Claude's explicit plugin skill commands use `/xy-workflow:<skill-name>` and
 its bundled agents use the host-discovered plugin-qualified agent name. Preserve
 the original role identity in the task pack; do not infer successful native role
@@ -52,8 +58,7 @@ sibling history. Only the official host dispatches agents. Use the official host
 default or already configured model and reasoning settings; PM applies the business-only
 read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
 neither requires nor registers a separate model configuration service, web console,
-or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
-approval remain exactly as defined in the authority; existing explicit scope
+or model MCP. Their absence does not block native dispatch. Request scope, material solutions and page approvals follow `product/WORKFLOW.md#business-confirmation-policy`; existing explicit scope
 authorization still applies to Light. A required independent QA remains one
 read-only reviewer. Preserve the original closeout order.
 
@@ -160,6 +165,8 @@ The task pack must include standards-conformance, currently applicable built-in 
 7. Review unauthorized paths, lifecycle/concurrency errors, unsafe components or permissions,
    accessibility, localization, privacy, version drift, generated noise, and unrelated rewrites.
 8. Return an evidence-first handoff to the PM.
+
+有批准原型时，结合可操作页面、页内「开发说明」和关联需求原章节实施。说明可能为空；未决行为交 PM。
 
 ## 7. Technical Deliverables
 

@@ -1,11 +1,41 @@
 # Reuse runtime record tools
 
-Use this reference only to maintain existing internal task snapshots, export changed complete Task Packs,
+Use this reference to locate registered originals, maintain internal task snapshots, export changed complete Task Packs,
 generate/check file fingerprints or read long documents within bounds. It adds no task level, state,
 business confirmation, QA phase or mandatory report. Light may directly maintain a same-shape single-task
 pack without creating a Full graph or second ledger. Accept only schema_version:2.
 
 Use the verified plugin root and the actual project for each [helper invocation](dispatch.md#workflow-helper-execution). Keep the selected adapter and task identity unchanged across calls.
+
+## 任务池中的修改、撤回和停止
+
+主会话收到「改一下刚才那项」或「撤回导出」时，先按[持续接单与恢复](dispatch.md#continuous-intake-dispatch)从当前项目、当前 PM 的任务池查到原件。进度查询只读。对修改类操作，核对用户指向的标题、目标和现行授权，从同一行取 `record`、`task_id`、`sha256`。只对这一版本调用现有更新入口：
+
+```bash
+bash "$plugin_root/lib/python_runtime.sh" -B -X utf8 "$plugin_root/plugins/source_pack.py" \
+  helper --project "$project_root" lib/task_graph_cli.py update --input "$record" \
+  --expect-sha256 "$record_sha" --patch "$patch_file"
+```
+
+下表给出 `{"tasks":{"<实际 task_id>":{…}}}` 中单个任务操作的例子。来源字段填写能回查的当前用户消息、宿主送达、同一实例明确接收或执行结果。PM 从源事件核对事实。更新返回的 `sha256` 可用于随后的独立操作。若文件在用户所见版本之后已经改变，先回读确认当前对象与意图，避免重放旧操作。
+
+| 用户或宿主事件 | 对原记录的操作 |
+| --- | --- |
+| 用户修改同一任务的交付约定 | `{"revise":{"set":{"goal":"导出增加日期列"},"source":"user:当前修改消息"}}`。按原门禁核实批准，保留原路径和角色。超出所有权或发生角色变化时按既有独立任务流程办理。 |
+| 正在执行的原实例收到本版完整包 | PM 导出现行完整包（独立仅原型的 `task` 追加 `--pm-id "$pm_id"`），用可用的原生消息工具交给已绑定实例，核实其明确接受的版本，再写 `{"ack_revision":{"revision":2,"agent_ref":{"host":"codex","agent_id":"实际绑定ID"},"delivery_source":"native:实际投递","ack_source":"native:同实例对本版的回执"}}`。版号取原件中的 `task_revision`。 |
+| 同一实例提交本版结果 | 按任务类型使用已有 Writer 构建验证、结果结算或 QA 验收操作，并在同一个任务操作旁附 `"revision_result":{"revision":2,"agent_ref":{"host":"codex","agent_id":"实际绑定ID"},"source":"native:本版结果"}`。原批准、证据和版本分别核实；迟到的旧版结论保留作历史。 |
+| 用户撤回待派任务，或要求运行中的实例停止 | `{"withdraw":{"reason":"用户撤回导出改动"}}`。待派原件变为 `WITHDRAWN`；已经领取的任务进入 `STOP_REQUESTED`，仍占用相关资源。主会话对实际实例调用受支持的停止方式，保留已有改动、唯一日志和回执。 |
+| 宿主明确观察到已绑定实例停止 | `{"confirm_stop":{"agent_ref":{"host":"codex","agent_id":"实际绑定ID"},"observed_state":"stopped","source":"native:该实例停止回执"}}`。结果未知、仅发出请求或逻辑退休时保持占用并继续核实。独立工作仍按现有准入推进。 |
+
+用户撤回多项工作时，先核对实际受影响的任务；同一张图可以在同一个 `tasks` 补丁列出多个 `withdraw`。多个原件要分别带各自 SHA，汇报时区分已成功、仍需核实和不受影响的任务。
+
+### Full QA 发现需要返工的缺陷
+
+如果 Writer 在执行中接收过修订、已经交付，而本请求的独立 QA 随后返回 `FAIL`，PM 读这份回执，找到属于原 Writer 的阻断项。在该 Writer 上单独提交 `rework_from_qa`，提供 `reviewer_id`（QA 任务 ID）、`task_pack` 和 `handoff`（各自的 `path`、`sha256`）、`finding_index`（从 0 起）及 `affected_path`（受此项影响、属于该 Writer 的项目相对路径）。已有回执用硬性规则记录失败时，可用对应的 `rule_id` 代替序号。同轮有多个受影响的 Writer 时，在同一次更新中分别列出各自的依据。
+
+原 Writer 回到 `DECLARED` 后，PM 按既有依赖与占用将其续派给原实例。原实例接收新的 `task_revision`、确认并提交修复。复审时，普通 Full 请求按原步骤重新冻结实际变化的范围；Foundation 检查点和集成工作树按其既有阶段入口恢复。已修订的 Reviewer 继续使用原实例，确认新版后再交回结果。
+
+尚未绑定实例、宿主明确证实创建失败时，使用 `pool release --receipt "$claim_receipt" --outcome definitely_not_created "${capacity[@]}"`，沿用原始领取回执和最新观察的容量。创建结果未知时传 `--outcome unknown` 并保留回执与占用，核实后再绑定或释放。若旧版本的领取回执无法与原件可靠对应，保留占用，回查原宿主创建结果。整份原件中的任务已终结、资源占用已解除并完成证据交接后，PM 可用 `pool archive --record "$record" --expect-sha256 "$record_sha"` 移除该条索引，原记录继续保留供交接与审计。
 
 ## Prefer the existing tool
 
@@ -55,13 +85,16 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
   left to the tool.
 - Use the selected real project adapter. Source development can explicitly supply paired index/root paths. Read only the selected built-in or project-specific standards leaves. An absent index has a null fingerprint. An existing index uses its real SHA. Built-in rules come from the verified plugin, project rules from the project root.
 - Each Writer retains its actual `id`, `task_type`, `role`, `surface_kind`, `goal`, `gates`, `owned_paths`,
-  input/output contracts, acceptance evidence and `verification_commands`. Use `selected_standards: [leaf-path]`
-  to identify listed leaves adopted by that task. PM still provides dependencies, locks and other applicable
+  input/output contracts, acceptance evidence and `verification_commands`. 在 `selected_standards` 列出当前任务采用的叶子。
+  路径字符串默认按该叶的 `rule_ids` 定向读取。需要关联章节时可传
+  `{"path":"…","mode":"targeted","reason":"…","sections_or_queries":["适用范围"]}`，保留全部已选规则 ID。
+  整份叶子构成任务依据时用 `{"path":"…","mode":"full","reason":"…"}` 写明原因。
+  已有项目规范索引仍整份核对，以发现其他适用叶子和例外。PM still provides dependencies, locks and other applicable
   business fields; UI, protected-path exceptions and confirmations remain subject to the original validator.
 - Optional top-level `requirements_fingerprint`, `approved_gates`, `active_paths` and `active_semantic_locks`
   accept only PM-established facts. The last three default empty, without inferred approval. The tool
   mechanically adds current SHA, standards-access references, `standards-conformance`, `DECLARED`, request-level
-  QA and empty dependency/block/lock defaults. The logical `adapter` in standards access remains `project.yaml`.
+  QA and empty dependency/block/lock defaults. `controlled_document_access.adapter` 记录本次选定的实际适配器路径。
   Completion states, execution identities and receipts are not accepted as a way to fabricate completed work.
 
 The tool first reuses original graph/standards/READY validation, then atomically publishes to the explicit
@@ -77,6 +110,9 @@ a task is READY, requirements approved, verification passed or QA PASS.
 `--patch <file>` or `--patch -` (stdin). Reuse the digest returned by the previous successful update;
 if it is unknown, use `fingerprints` on just this graph file, not a whole-project scan.
 The patch supports:
+
+- PM 用独立的 `approve_solutions` 或 `revoke_solutions` 登记或撤回已核实的方案决定，适用的字段与来源见[方案交接](dispatch.md)。页面初次批准及真实原型返工后的重新绑定使用独立的 [`approve_visuals`](ui-design.md#登记具体页的视觉批准)。
+- 普通 Full 的 PM 在 QA 通过后使用单一任务操作 [`record_qa_projection`](closeout.md) 登记文档回写，保留原审查包与回执。
 
 - `tasks`: an object keyed by existing task ID. Each operation may contain `set`, `append`,
   `documents`, and `checkpoint`, or the exclusive result-task `settle` below. New-project Foundation
@@ -104,9 +140,7 @@ The patch supports:
 
 ### Full QA acceptance
 
-After the Writer barrier, PM independently captures the complete intended review diff for ordinary
-Full and freezes its actual repositories, base/head identifiers, byte diff SHA-256 and exact
-project-relative changed paths. Use `update --input GRAPH --expect-sha256 GRAPH_SHA --patch -`
+普通 Full 在 Writer 达到交接条件后，由 PM 依据每个仓库的实际提交、Writer 开工时的基线与交付差异确定本次范围。同一文件已有未提交改动时，要能区分哪些改动属于本次，并保留可回读的差异证据。归属不清时先找原 Writer 补证；给整个工作区或文件列表计算摘要无法补出归属。冻结实际仓库、base/head、差异字节 SHA-256 和完整的项目相对路径。Use `update --input GRAPH --expect-sha256 GRAPH_SHA --patch -`
 with only the `freeze_qa_scope` operation and reuse the returned graph SHA for subsequent writes:
 
 ```json
@@ -197,7 +231,7 @@ Only record states established by actual work and the existing handoff. A file m
 update is not compilation, runnable-result evidence, independent review, `BUILD_VERIFIED` or QA PASS.
 Entering RUNNING, entering an explicit QA node's QA state, or changing running paths/locks respects dependencies,
 approved gates and locks; QA still uses the existing request QA barrier. Changing a completed task's
-owned scope, input/output contracts, verification commands, locks or controlled-document contract
+owned scope, input/output contracts, solution decisions, verification commands, locks or controlled-document contract
 requires an explicit pending state and the existing affected-work/verification branch, not silent
 reuse of its old completion. Appending actual evidence references or refreshing an unchanged-scope
 plan checkpoint does not by itself invalidate completed builds or grant review approval.
@@ -299,8 +333,7 @@ changes acceptance or messages a worker.
 
 Light uses a same-shape single pack: `task --input PACK` without --task-id validates/returns the current
 shell. Explicit output retains --output/--expect-sha256. `update --input PACK --expect-sha256 SHA --patch PATCH`
-retains the `{tasks:{current-id:{set/append/...}}}` patch, updating only this task, without changing other
-tasks or approval. Light retains current task.state but does not require a Full graph, dependencies, planning
+retains the `{tasks:{current-id:{set/append/...}}}` patch for this task. To record the user’s approval of its exact current solution after a pause, use the separate `approve_solutions` patch described in [dispatch](dispatch.md). Light retains current task.state but does not require a Full graph, dependencies, planning
 or QA fields. continuation still includes current --task-id.
 
 Optional `handoff_assessment` records only an actual handoff judgment:
@@ -370,7 +403,7 @@ zero values from unsampled hosts cannot masquerade as a baseline.
 A schema 2 task's module／role／agent_alias bind ongoing responsibilities; instance_policy is fixed fresh and
 context_policy fixed handoff_only. Create new instances on demand for independent tasks, without prewarming
 all aliases or copying full parent/sibling history. WORKFLOW's agent-instance-lifecycle owns lifecycle
-authority. This file describes existing record tools only, without another pool.
+authority. The task-pool index points back to those same original task records.
 
 Record `agent_ref: {host: codex|claude|antigravity, agent_id: <actual-native-ID>}` only after PM verifies
 actual authorized dispatch results. First put the task into actual RUNNING (an explicit qa may also use QA),
@@ -411,6 +444,21 @@ for `followup`, otherwise it blocks. Independent work recommends `new_task`, nev
 All identity, retirement, cancelled/unknown and active-task checks run before these decisions. The old
 `task_graph_cli.py continuation` still supports its original observation-only wait/followup contract.
 
+<a id="reviewer-context-exhaustion"></a>
+
+两个入口均接受 `--observed-state context_exhausted`。仅当 PM 从当前绑定实例、本次原生调用的
+终止事件确认上下文耗尽时使用，查询会返回 `blocked`，即使已核实同 ID 续发能力也停止自动重放。
+面板显示 idle、耗时、用量、用户转述及日志中的报错文字均不足以确认终止原因。
+已确认的中断由 PM 在原任务保留证据定位，后续恢复须核对此记录；如果只有含糊的终止通知则用
+`unknown` 等待核实。普通运行或成功压缩沿用原有恢复路径。
+
+Claude 的两个入口还可附 `--claude-event <单条原生事件.json>`，在传入的当前面板观察上判别
+已知的空摘要中断。PM 须核实原生通知与事件的来源、最新调用及身份；helper 只读给定事件，
+检查绑定 ID、事件标记及具体原因，既不扫描转录也不持久化。完整调用方式见
+[Claude 恢复说明](../../../../claude/references/pm-integration.md#background-execution-and-recovery)。
+原 Reviewer 缺少本轮已验证的最终回执时，保持 QA 待验，保留有效的构建、测试和已核查范围。
+中断不会自动发起替代审查或修改 QA 身份。PM 依现有请求恢复约定处理未覆盖项。
+
 Before append, apply WORKFLOW's `continuous-pm-intake`: revise the complete scope/contract and necessary
 approval, send the complete affected pack and confirm receipt before accepting new-scope results. The query's
 `revision_required`/`acceptance_requires_ack` are reminders, not approval/receipt evidence. Execute a suggested
@@ -434,16 +482,27 @@ For schema/extract of native structured QA output, see
 Task Packs still export mechanically with `task` above. Do not add model calls to convert natural language into JSON.
 
 <a id="完整读取必需长文"></a>
+<a id="read-required-long-documents-completely"></a>
 
-## Read required long documents completely
+## 按当前合同读取长文
 
-`context_read.py <file> [--offset <n>] [--limit <n>] [--expect-sha256 <sha>] [--task-pack <current-pack>]`
-is an optional standard-library, read-only single-file pager. It adds no mandatory command, gate, receipt
-or reading record. Apply these reading/reuse boundaries:
+压缩后先从现行任务包和交接取回所在阶段、已读版本、仍适用的决定及当前缺口。比如检查批准摘要只需 task-graph 的 “Concise user approval brief”；资源变化后的复核可从 verification-scope 的 “Handoff and valid evidence” 与对应交付类型开始。已知标题直接 `--section` 读取，检查依赖或例外。首次使用、来源换版、交接遗漏、上下文实质缺失或合同指定全文时，按实际所需范围恢复；显式全文不能用标题清单或摘要代替。
 
-- Each Agent independently reads the complete current self-contained task pack, required Skills/instructions
-  and applicable standards. Another Agent's reading, field declarations, summaries or SHA do not replace
-  this instance's full reading. New instances do not inherit old instances' read status.
+按问题定位长篇 Markdown 时，先用 `--outline` 看顶层标题，再重复 `--heading` 指定从父到子的标题路径。路径加 `--outline` 只列直接子标题。只给路径时返回该节直属正文及直接子标题；需要子节正文时才加 `--subtree`。已知标题路径即可直接读取，不同分支的同名子节用其父标题区分。在工作流源码根可以用架构模板试读：
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/documents/context_read.py templates/docs/ARCHITECTURE.md --outline
+bash lib/python_runtime.sh -B -X utf8 lib/documents/context_read.py templates/docs/ARCHITECTURE.md --heading 项目架构 --outline
+bash lib/python_runtime.sh -B -X utf8 lib/documents/context_read.py templates/docs/ARCHITECTURE.md --heading 项目架构 --heading 关键调用与数据流
+```
+
+标题列表只用于选路。实际项目使用当前文件及标题，必要时沿相邻约束与原文链接补齐依据。标题或正文都受 `--limit` 约束，续页保留原模式、标题路径、上一回包的 `next_offset` 与首次 `sha256`，分别作为 `--offset` 和 `--expect-sha256`。选区的 `eof` 只表示该次所选范围结束。插件使用下文同一物理插件的 helper 执行。
+
+已有字面查询 `--find`、整节 `--section`、行段 `--lines`、全文分页和任务包读取继续按各自合同使用。该工具按需读取单一文件。
+
+- 已知代码或日志的行号时，用 `--lines` 读取含首尾两行的原文，行号从 1 起算。长行按字符预算分页；续读保留同一行段、完整文件 SHA 和上一页给出的下一偏移。可参考 [QA 的源码取证示例](../../xy-qa-review/references/implementation-acceptance.md#按符号和行段核对源码)。
+
+- 每个实例独立读完当前完整任务包、已选 Skill 入口及明确要求全文的指令、规范或引用。受控资料遵循 `controlled_document_access`。对于 `full`，从开头连续读到 EOF；对于 `targeted`，读完选中条款或章节，并补齐适用范围、例外、上位规则和必要上下文；对于 `skip`，不打开正文。其他实例的摘要、字段声明或 SHA 不能替代当前实例所需的正文。
 - Directly reuse material fully read, unchanged and still completely available in the same instance context,
   including a complete task pack received/read as body text. A same-version file is only another transport.
   File-only receipt also needs only one complete read; do not repeatedly include the whole pack in later
@@ -454,40 +513,45 @@ or reading record. Apply these reading/reuse boundaries:
   available. A previous read does not allow new rules to be skipped or require reloading the unchanged whole
   tree. Contract changes still require the latest complete self-contained task pack under the original
   lifecycle; deltas/summaries cannot replace it.
-- Read long documents separately or in contiguous pages through EOF. Reduce individual text size when output
-  budget is insufficient and restore all truncated ranges before relying on conclusions. Locate ordinary
-  business material by task-relevant headings/queries. Complete required-standards reading does not expand
-  to the entire business directory or secrets. Complete machine-byte checks may return only fingerprints/
-  results, but cannot prove model reading.
+- 先按固定路径、规则 ID 或标题定位。可选的 `--find` 按字面返回命中位置与有限片段，查找结果的 `eof` 仅表示搜索结束。用同一文件、同一 SHA 的正文分页展开所需范围，必要时从命中之前的条款标题读起。未命中时核对标题、相邻章节与引用；仍缺少必需依据就报告缺口。命中、片段和机器校验均不能证明已读完所需条款。
+- Markdown 采用井号标题（ATX）且标题唯一时，可用 `--section '当前进展与恢复入口'` 读取标题、正文和子节，止于下一个同级或上级标题之前。首次省略 `--offset`，后续保留同一标题，带上 `next_offset` 和同一 `--expect-sha256`。回包的 `section_start_offset`、`section_end_offset` 及分页位置均为全文件内的 Unicode 字符偏移。该模式的 `eof` 仅表示到达该节末尾。标题缺失、同名，或下划线标题、原始 HTML 等复杂结构使边界无法确定时，按上条用 `--find` 和周边正文核实位置。若所需条款还引用上位约束、例外或其他章节，继续按引用展开。
 
-JSON contains `text`, `sha256`, `offset`, `end_offset`, `next_offset`, `eof`, `total_chars` and `total_bytes`.
+普通正文页返回实际物理 `path`、`text`、`sha256`、`offset`、`end_offset`、`next_offset`、`eof`、`total_chars` 和 `total_bytes`。
 Positions count Unicode characters and represent half-open `[offset, end_offset)` ranges. Default `limit`
 is 6000 characters, maximum 24000. It bounds returned text, not an exact token cap or total serialized-JSON
 size; escaping, metadata and host tokenizers add overhead. Reserve enough output budget for the complete
 response, or lower `--limit`. Read long documents separately, one page per tool response.
 
+例如，核对规则可先用 `--find '规则 ID' --max-matches 3 --limit 240`，再取同版回包的
+`matches[].offset` 或已定位的条款起点，以 `--offset`、`--expect-sha256` 和适当的 `--limit` 展开原文。
+继续查其他命中时保留原查询与 SHA，使用搜索回包的 `next_offset`。
+
 ```bash
-# 首页：只指定当前必需的一个文件；安装态从项目根运行。
+# 首页只传宿主已选中的一个物理入口。此例读取发行包中的 xy-workflow。
 bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/documents/context_read.py \
-  platforms/shared/skills/xy-workflow/SKILL.md --limit 6000
+  "<plugin-root>/skills/xy-workflow/SKILL.md" --limit 1000
 # 续页：填入上一完整回包的 next_offset 与首次页 sha256，不猜测位置。
 bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/documents/context_read.py \
-  platforms/shared/skills/xy-workflow/SKILL.md --offset "${document_offset:?use previous next_offset}" \
-  --limit 6000 --expect-sha256 "${document_sha:?use first page sha256}"
+  "<plugin-root>/skills/xy-workflow/SKILL.md" --offset "${document_offset:?use previous next_offset}" \
+  --limit 1000 --expect-sha256 "${document_sha:?use first page sha256}"
 ```
 
-Follow the
-previous page's `next_offset` strictly and continuously until `eof: true` and `next_offset: null`. Empty
-files or an explicit offset equal to total characters return an empty EOF page. Restore every missing/
-truncated range before using the whole text. File fingerprints prove only matching bytes/version, not
-model reading.
+全文读取时，按上一正文页的 `next_offset` 无间断续读，直至 `eof: true` 且 `next_offset: null`。空文件或恰好到达字符总数的偏移返回空 EOF 页。定向读取在所需正文及依赖完整时结束。
 
-Use the verified plugin manifest for packaged resources. The selected project adapter, business files and task records use the project reader. During pagination each call verifies the same complete SHA.
+若一次任务选中四个入口，四份正文分别返回。收到完整回包且宿主未标记截断时，核对实际路径、
+SHA、起点和正文字符数与区间长度相符，再采纳该页的下一位置或 EOF。若第三份文件的某页
+缺失或截断，保留前两份的完整正文和第三份的已确认前缀，从该页起点用更小的预算重取。
+完整确认第三份之后再读第四份。文件版本变化时，重新核对该文件在新版本中的所需范围；用于全文读取的旧页不能与新页拼接。
+
+插件原样资源按来源清单读取；发行包发现入口使用已选安装根下
+`skills/<name>/SKILL.md` 的绝对路径，按发行载荷 SHA 核对实际生成的正文。
+项目适配器、业务文件和任务记录继续由项目读取器读取。包外的宿主 Skill 按各自资源机制
+读取实际入口，沿用同样的单页确认与恢复原则。
 
 Each call computes SHA over complete original bytes, decodes strict UTF-8 without CRLF normalization and
 allows very long single lines across character pages. Concatenating decoded `text` pages in order restores
-original UTF-8 bytes. Every `offset > 0` requires first-page `--expect-sha256`. A changed body rejects
-continuation and requires rereading from offset 0. Retain the safe reader's 4 MiB input limit. Reject
+original UTF-8 bytes. Every `offset > 0` requires a matching `--expect-sha256`. A changed body rejects
+continuation. Obtain the current digest and locate the required range again. Retain the safe reader's 4 MiB input limit. Reject
 symlinks, hard links, special nodes such as FIFOs, unsafe parents, invalid UTF-8, incomplete/changing reads,
 invalid budgets and out-of-bounds positions. Exit 0 returns one page; exit 2 reports input/read errors on
 stderr without echoing text. The tool writes no read cache/state.

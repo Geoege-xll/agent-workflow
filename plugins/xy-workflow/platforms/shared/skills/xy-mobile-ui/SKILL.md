@@ -1,6 +1,6 @@
 ---
 name: xy-mobile-ui
-description: "按需指导 iOS、iPadOS、Android 原生界面和微信小程序的设计、实现与审查，覆盖安全区与键盘、导航与返回、状态生命周期及无障碍。"
+description: "Guide design, implementation, and review of native iOS, iPadOS, Android, and WeChat Mini Program interfaces, including safe areas, keyboards, navigation, state lifecycle, and accessibility."
 ---
 
 # 移动端界面指导

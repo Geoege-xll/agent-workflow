@@ -6,7 +6,9 @@ the result. For hidden resources, add `--hidden`; use `--no-ignore` only when th
 is excluded by ignore rules, still within the relevant directory and excluding dependencies/build
 outputs. No match proves absence only within that search's filters. Do not infer a filename from
 a business label, old example or another project's layout.
-New paths belong explicitly to the approved plan/`owned_paths`; they are not claimed existing files.
+When looking for a known receipt in a directory of build outputs, use its known path, or filter by basename
+and expected depth (for example, `rg --files --max-depth 2 -g '*receipt*' <release-directory>`).
+Widen only if the targeted lookup misses. New paths belong explicitly to the approved plan/`owned_paths`; they are not claimed existing files.
 For search, `rg` exit 1 means no match, while exit 2 or a read error needs inspection. Optional
 no-match searches may be handled as absence; do not mask missing required files or batch failures.
 
@@ -126,7 +128,38 @@ These are command-execution boundaries within existing steps, not additional wor
 
 <a id="continuous-intake-dispatch"></a>
 
-### Continuous intake across explicit current records
+### 持续接单与恢复
+
+当用户在 A 运行时讨论 B、问「上次那项做到哪了」或要求修改、撤回时，主会话 PM 默认通过任务池找回当前委托。使用当前项目物理根；`--pm-id` 取自宿主真实主会话身份（例如宿主名加稳定会话标识），或此前已经确认属于同一 PM 的恢复标识。用户只需描述事项。宿主未提供可靠标识、或系统临时目录清理导致索引缺失时，从当前可信交接明确引用的原件恢复，核对实际归属，再按确认的身份登记。不能按目录时间猜最近会话。
+
+```bash
+pool() {
+  bash "$plugin_root/lib/python_runtime.sh" -B -X utf8 "$plugin_root/plugins/source_pack.py" \
+    helper --project "$project_root" lib/task_pool_cli.py "$1" \
+    --root "$project_root" --pm-id "$pm_id" "${@:2}"
+}
+pool view
+pool view --query '导出报表'
+```
+
+- 首次派出任何原生任务，包括独立原型，都从下方池入口办理。仅原型原件为 schema 2 的 Light 单包，顶层 `request_scope: prototype_only`，任务为 `xy-uiux / design_ui / writer`，采用 `requirements_approved`、已明确的方案及适配器内精确原型路径。多个独立原型分别保留单包；需维护真实任务依赖的现有 Full 图继续作权威原件。
+- 用户只讨论 B 时直接讨论。需要了解已有工作时用只读 `view`。仅在用户委托了实际交付并已得到原 Light 包或 Full 图时，PM 用 `pool register --record "$record" --expect-sha256 "$record_sha" --title '导出报表'` 登记该原件。已有活动委托也按手头已知的原件逐项登记；保存原路径到归档。初次登记与查询均不等于用户批准实施。
+- 主会话恢复时先 `pool view`，按用户描述和当前上下文用 `--query` 缩小范围。返回的行给出标题、目标、请求、任务、原路径、当前状态和 SHA。PM 自己取这些字段。多个候选会导致不同操作时，用事项描述让用户辨认。目标缺失、损坏或版本变化时先核实，不能拿先前的状态或另一个同名任务替代。
+- 已登记的原图新增任务成员后，用该图最新 SHA 再次 `register`，让新成员参与恢复与准入。普通进度或合同更新仍从原件直接回读。若返回的 `errors` 表明某条原件或绑定失效，先恢复它，再按全池计算资源。
+- 已知具体任务和当前 SHA 时，直接用下面的 `pool claim` 传入项目线程／写者上限及本轮实际宿主可用量。需要挑选候选或解释等待原因时，才用相同容量执行 `pool view`。全池已登记工作一起参与既有准入，`--query` 只筛选展示。用户问进度或修改 A 时，独立获准的 B 仍可按自己的条件开始；路径、语义锁或容量冲突要说明等待原因。
+
+```bash
+capacity=(--configured-subagents "$subagent_limit" --configured-writers "$writer_limit"
+          --host-available-subagents "$available")
+pool claim --register --title "$title" --record "$record" --request-id "$request_id" --task-id "$task_id" \
+  --expect-sha256 "$record_sha" "${capacity[@]}" > "$claim_receipt"
+```
+
+将领取命令的完整 JSON 输出保留在既有请求 scratch 的 `$claim_receipt`。首次 `--register` 显式登记并以全池检查占用；资源不足时保留已登记的待派委托。已有登记也可省略该选项。领取成功后用 `task_graph_cli.py task --input "$record"` 导出当前包（独立仅原型追加 `--pm-id "$pm_id"`，Full 图追加 `--task-id "$task_id"`），仅向对应宿主实例交付该包。创建成功后立即运行 `pool bind --receipt "$claim_receipt" --host "$host" --agent-id "$native_id"`。多个并行结果分别使用自己的领取回执与返回 ID。宿主结果未知时保留占用，回查实际创建结果；不能用别名代替 ID。修改和撤回则使用[原记录操作](runtime-records.md#任务池中的修改撤回和停止)。PM 向用户说明哪些修改已生效、哪些正在等宿主回执。主会话收到后续消息、运行中 Worker 收到补充、停机确认和唤醒都取决于该次宿主会话实际提供的能力。任务池只在命令运行时读取或登记；宿主未送达的消息不能作为任何一次改版或停机的依据。
+
+### 直接提供原记录清单的既有入口
+
+任务池只能核实本 PM 明确登记的原件、版本和返回的身份字段；宿主是否真实创建实例、是否把补充送达同一实例，由 PM 查原生回执。以前的 Full 图和普通 Light 原包仍能通过原 `update` 登记观察到的状态；孤立的 RUNNING、`agent_ref` 或事后补登记无法证明派发前已进行全池领取。恢复时如实保留这个缺口，随后新派发走上方正常入口。独立仅原型单包须由全池仲裁领取；池索引冻结这次原件 SHA 作为归属依据。公开 update 的 claim 补丁、另一 PM 登记的副本和省略竞争任务的显式清单均不能产生这份依据。导出与首次绑定核对该路径的登记和领取版本。若该池缺失，找回原索引和可信交接；恢复不明时保留占用并核对实际实例。
 
 Apply `product/WORKFLOW.md#continuous-pm-intake` for relationship decisions and authority.
 Use the verified plugin source-pack entry under `workflow-helper-execution` above. The logical calls
@@ -134,7 +167,7 @@ below are source-pack examples; plugin execution uses its verified physical root
 3.0 rejects old runtime_binding, central project markers and bridge environments before any older-core
 loading; it calls only the current physical same-package record helper.
 
-PM supplies one transient manifest with `schema_version: 1`: `project_root` is the canonical absolute physical project
+For callers that already supply an explicit inventory, PM supplies one transient manifest with `schema_version: 1`: `project_root` is the canonical absolute physical project
 directory; `records` contains only explicitly selected current graph/Light-pack entries
 `{path: <absolute file>, sha256: <current SHA>, execution_roots: {<task-id>: <absolute execution root>}}`;
 `capacity` contains `configured_subagents` and `configured_writers` (integers >= 1), and current
@@ -143,6 +176,8 @@ worktrees and claims without bound IDs. Keep each record's gates and execution a
 
 ```bash
 bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py view --input '<explicit-manifest.json>'
+# 多份原记录声明同一请求的同一决定时，在首次分别批准、撤回、改版或交接前登记。
+bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py bind-solutions --input '<explicit-manifest.json>'
 bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py claim --input '<same-current-manifest.json>' \
   --record '<absolute-selected-record>' --request-id '<selected-request>' --task-id '<selected-task>'
 ```
@@ -161,6 +196,12 @@ did not occur, use the actual claim JSON with `release --input '<manifest>' --re
 --outcome definitely_not_created`; an unknown creation outcome uses `--outcome unknown`, retains allocation
 and requires native-result verification before any redispatch. The helper does not create workers or a ledger.
 Refresh the transient input when actual records change. This is not a mandatory new report or a Full graph for Light.
+
+同一项目的同一请求在多份 Light 原包或 Full 权威图中声明相同的方案 ID 时，PM 把所有声明方的实际文件和当前 SHA 放入上述清单，再运行 `bind-solutions`。这也适用于已有记录。首次联合领取某个共享事项会自动登记该事项；只读 `view` 不登记。首次登记前，单文件入口只能知道本记录，未登记的独立旧文件需要 PM 明确列出。一个记录中的多个任务仍可直接使用原有命令。
+
+登记在原记录最近的公共目录原子保存一份只含请求、事项和成员路径的 `.xy-solution-members-<摘要>.json`。公共目录须归当前用户所有、可写，且其他用户不可写。各原记录的正文、批准和执行状态仍各自在原处。保留该文件与原成员的路径供整个请求使用；扩员时提交包含所有原成员的新清单。多个请求各有自己的成员文件。该请求所有成员停止并按现有恢复/证据保留规则归档后，随其专属记录目录一并归档或清理；在复用的目录中逐项保留仍有使用者的登记。工具只访问已知事项的固定文件名和已登记成员，不搜索其他会话。
+
+登记后，原 `task_graph_cli.py update` 在相同目录锁下复核成员的当前状态。`revoke_solutions` 只改指定原件，但一次撤回立即让所有依赖方等待。成员正文不一致、任一当前批准缺失或登记副本不可读时，依赖该决定的 `ready --input`、`task`、执行状态更新以及联合 `claim` 均不能放行。其余任务按自身条件继续；显式清单中的各原件仍须可读并匹配清单 SHA，因为其运行占用也参与调度。改版时逐个修订待执行成员，核清新正文及批准后逐个登记；所有声明方一致时恢复。已运行或已交付的依赖方阻止撤回和改版。成员记录未被静默理顺。重复登记同一成员集合保持幂等；某项登记失败时该项不发生半登记，核对保留的当前 SHA 后再处理。
 
 Within the same physical project and request, the complete explicit record inventory may declare only
 one QA task, including failed, passed and retired history. Rework uses the same task and original Reviewer.
@@ -190,8 +231,7 @@ a `schema_version: 2` single pack whose `task` retains current `state`, with `wo
 normalized `module` (root is `.`), `role`, stable `agent_alias`, `instance_policy: fresh` and
 `context_policy: handoff_only`. Current goal/scope, code/workspace basis, applicable standards, trusted
 authorization sources, acceptance/necessary evidence and unresolved items must be complete. Packs cannot
-carry full PM/sibling conversations; new instances do not inherit parent history, and each recipient still
-reads required standards completely. Actual native arguments follow only current-host details. Declaring
+carry full PM/sibling conversations; new instances do not inherit parent history. 接收方依照本包的受控范围独立读完所需规范。 Actual native arguments follow only current-host details. Declaring
 handoff_only does not prove runtime isolation was tested.
 
 Ordinary Light UI copy still uses production_ui＋existing UI-Conformance, design_delta:none,
@@ -205,6 +245,24 @@ and platform permissions follow their original boundaries. Run minimum sufficien
 independent QA, documentation and memory at handoff. Complete selected mandatory items; create no empty
 records without a need. Full cannot use this to downgrade. See [record tools](runtime-records.md) for pack
 export, state and identity binding.
+
+### Read-only design consultation
+
+用户已委托 Full 实施，且 PM 需要核实影响方案选择的技术或交互事实时，可派相关工程或设计角色做只读咨询。以下以设计咨询为例。下列是完整 schema 2 任务的相关字段，其余身份、请求、读取范围和取证合同仍按本节填写。新图在顶层 `request_scope` 的本请求 ID 下记录 `implementation`；缺少该字段的旧图按可追溯的原始委托判定。
+
+```yaml
+workflow_level: Full
+role: xy-uiux
+surface_kind: design_ui
+task_type: read_only
+solution_consultation: true
+owned_paths: []
+goal: 核实提交失败后现有页面是否保留输入，并比较两种恢复方式的影响
+```
+
+PM 在 `input_contracts` 指向已知页面、规范或源码，在 `output_contracts` 要求返回证据位置、可行选项、代价及待决问题。设计咨询由 `xy-uiux` 使用 `design_ui`；工程咨询使用本模块工程角色和 `non_ui`，例如后端核实重试接口现有的幂等保证。两者都须显式设置 `solution_consultation: true`，使用 `read_only` 和空写路径，省略 `design_mode`、`ui_change`、`standards_exceptions` 和 Writer 专用的方案事项与门值。咨询按实际证据选择读取范围，无需原型 Skill、HTML 或构建。普通 `read_only` 和 `evidence` 任务省略该标识时，既有路径仍可用于资源锁；资源锁和咨询结果均不授予生产写权限。
+
+沿用 init、ready、任务导出和原生派发准入；需要结算时，按既有 `settle` 核实咨询结果，使用 `RESULT_VERIFIED`。PM 汇总专业意见向用户推荐；用户明确决定后再放行依赖方案的原型或生产 Writer。咨询结果不能充当正式原型、用户批准或独立 QA。仅讨论或仅原型的委托仍走其既有范围，不能借此派实施咨询。
 
 ### Full: planning, approval and graph dispatch
 
@@ -243,6 +301,8 @@ this reference creates no separate instance-state source.
    then read only matching feature and decision sections. Use `full` only when the whole detailed document is materially required and
    state why. `skip` means do not open the body. Read design standards only for UI work and shared
    architecture details or plans only for a relevant missing fact.
+   派发时在现有 `sections_or_queries` 写入从父到子的标题路径、规则 ID 或关键词，保留原文路径、所需依赖与当前指纹。
+   对尚未定位的长文，先列顶层标题，沿命中分支查直接子标题，确认章节后读直属正文；有明确需要再展开子树。已知章节时可直接定位。各实例按[受控文档读取约定](runtime-records.md#按当前合同读取长文)读取适用原文。
    Each production-code Writer's baseline is built-in xy-code-standards/references/rules.md. Production UI
    also selects applicable design rules from xy-ui-design/references/foundations-rules.md and
    components-rules.md; xy-uiux + design_ui selects only applicable design sources. Bind all three sources
@@ -318,25 +378,18 @@ this reference creates no separate instance-state source.
      reason: <why current verified project or feature truth changes or remains unchanged>
    ```
 
-   The PM then gives the concise natural-language approval brief and requests confirmation. For a
-   design-change UI route, include one PM recommendation with a short reason and ask the user to
-   choose design/update prototype or direct implementation. “Follow the recommendation” is an
-   explicit choice only when exactly one recommendation is visible; a generic affirmative reply does
-   not select a policy.
-   Any explicit affirmative reply records `requirements_approved` internally only after both the
-   requirements and any applicable prototype choice are resolved. Materialize only the selected
-   graph branch and bind its
-   `prototype_decision` to the frozen requirement fingerprint and exact affected surfaces. Do not
-   edit `PROJECT.md` or a topic plan’s accepted baseline before explicit approval, and do not project the
-   planned result into canonical documents until integrated QA returns PASS. After approval, freeze
-   the requirement fingerprint, approved plan, selected decision, and proposed projection;
-   implementation tasks consume that frozen contract directly. A material requirement,
-   affected-surface, or plan-boundary change returns the plan to draft and reopens approval.
-   The PM now saves the Full plan in adapter-resolved `docs.plans`, before any design/implementation
-   dispatch, retaining the single Markdown without generating HTML. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
-   write accepted PROJECT/plans baselines just to save intended work. Merge subsequent effective changes into
-   this same plan and replace affected complete Task Packs, including in-flight worker/QA inputs,
-   before accepting their results. Preserve unaffected work; apply the linked plan lifecycle.
+   预期影响模块职责、入口、依赖或数据流时，在现有交接中请开发 Agent 给出实际变动与源码依据，供本轮 QA 独立核对。PM 只在事实得到验证后维护[架构与主题入口](plan-lifecycle.md#closeout-and-document-boundaries)。
+
+   PM 按[当前请求的确认](requirements-confirmation.md)先说明目标范围与验收，复用同请求明确答复或补齐 `requirements_approved`。对 UI 设计变更，记录用户选择的原型或直接开发分支，将 `prototype_decision` 绑定准确表面与冻结需求指纹；只在选择未明时提出一项有理由的建议。再确认影响交付的行为、异常或技术取舍。没有实质取舍的任务直接沿用既有依据。
+
+   把每项实质决定的稳定 ID 和完整正文写在依赖任务的 `solution_decisions` 中。原型和实现都依赖该决定时，两者均声明；`init` 会生成对应的范围门。用户明确同意该正文后，PM 用现有 `task_graph_cli.py update --input <record> --expect-sha256 <current-record-sha256> --patch <patch>` 登记，补丁示例为 `{"approve_solutions":[{"request_id":"order-flow","task_id":"checkout","id":"retry-policy","content":"失败后允许手动重试一次","source_ref":"user:order-flow/retry-confirmation"}]}`。可选的 `source_ref` 指向能回查的用户原答复；已有记录缺少该字段时沿用原批准门，并保留其来源局限。已有批准只对同一请求、ID 和正文有效；遇到文件版本冲突先回读当前方案并核对用户原意。以 `ready` 和原派发准入结果决定哪些任务可开始。独立工作继续，接受用户答复或保存文件本身不等于执行。
+
+   用户明确撤回某项尚未开始执行的方案时，即使正文未变，PM 也在当前记录的同一 CAS（`--expect-sha256`）入口单独提交 `revoke_solutions` 补丁，沿用上述请求、任务、事项和正文四个字段。对应任务重新等待明确批准；其余决定继续有效。同一门已用于运行中或已交付的 Writer 时，入口拒绝撤回。PM 先核实实际停止并按既有流程处理运行状态，对已交付部分保留原始事实与证据，另行界定待做工作。
+
+   正式从 Full 图导出带方案决定的 Writer 时，核对该任务的全部直接和间接前置任务均已达到其既有可用交付状态。即使旧页面批准仍在，依赖的原型正返工时也须等待；不在依赖链内的任务按其自身条件继续。
+
+   PM 保留已批准需求指纹、适用方案与原型选择；实际影响哪个决定就更新对应任务包和批准。验收基线在 QA PASS 后回填。
+   首次设计或实现派发前，PM 按[计划生命周期](plan-lifecycle.md)把同一份批准 Markdown 保存到相应位置，保留待决事项。已有主题原位修订，纯执行或符合性修复可以用已有持久请求交接。原型依赖配置的 `docs.plans` 内稳定原稿及当前 REQ。之后在同一原稿合并生效变化，给受影响的 Writer 和 QA 更新完整任务包，保留其他已核实成果。
 8. Build schema_version: 2 implementation task packs from that frozen plan with exact owned paths, dependencies,
    validation commands, expected concise evidence, and this routing contract:
 
@@ -373,9 +426,7 @@ this reference creates no separate instance-state source.
    next step, not raw history. Use only an available, authorized parent-reporting channel.
    Reuse material already fully read and still current in that Agent's available context; recover
    missing/changed parts as needed. Each Agent still reads its applicable standards independently.
-   Honor explicit host/Skill reread requirements. Read selected Skills and required instructions
-   completely, separately or in contiguous pages through EOF; avoid truncation from batching long
-   documents, and recover every missing portion before relying on a partial read. When the host can read
+   Honor explicit host/Skill reread requirements. 独立读完选中的 Skill 入口及明确要求全文的材料；定向引用读完适用条款、例外及必要上下文。长文按需分段补齐，避免批量输出截断。 When the host can read
    complete Task Pack files, hand off the exact file reference, SHA and brief change summary; the recipient
    must read the complete current pack. Otherwise send the complete pack through a supported channel,
    not just deltas. No new report file is needed.

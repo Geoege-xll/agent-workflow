@@ -27,6 +27,12 @@ import stat
 import tempfile
 from typing import Any, Callable
 import unicodedata
+from lib.solution_confirmation import (
+    EXECUTING_OR_DELIVERED, bind_decisions, decision_gates, record_approvals,
+)
+
+from lib import task_intent
+from lib.writer_prerequisites import recheck_visual_publication, record_visuals, require_writer
 
 try:
     from .agent_continuation import active as _running, check_binding
@@ -45,9 +51,9 @@ except ImportError:
 SET_FIELDS = frozenset({
     "agent_ref", "agent_retired", "handoff_assessment",
     "state", "owned_paths", "semantic_locks", "input_contracts", "output_contracts",
-    "acceptance_evidence", "verification_commands", "controlled_document_access",
+    "acceptance_evidence", "verification_commands", "controlled_document_access", "solution_decisions",
 })
-APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access", "agent_ref", "agent_retired", "handoff_assessment"}
+APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access", "agent_ref", "agent_retired", "handoff_assessment", "solution_decisions"}
 COMPLETED_STATES = {"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED", "RESULT_VERIFIED"}
 
 
@@ -107,7 +113,8 @@ def _publication_lock(path: Path):
         os.close(descriptor)
 
 
-def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None) -> bool:
+def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None,
+            task_update: dict | None = None) -> bool:
     """持协作锁核对旧指纹，再以原子替换发布；读者只见完整旧文件或新文件。
 
     不移走正式文件、不创建硬链接或常驻锁文件。PM 是该记录的单一写入者；
@@ -115,8 +122,9 @@ def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None)
     与替换间的竞态不在保证范围内，也不承诺文件系统断电后的事务持久性。
     """
     path = path.absolute()
-    read_file(path)  # 取得目录锁之前也先拒绝危险父目录、符号链接和硬链接目标。
-    with _publication_lock(path):
+    initial = read_file(path)  # 取锁前也先核对记录节点，成员登记与所有旧 CAS 使用相同的目录锁。
+    from lib.shared_solution_records import publication
+    with publication(path, initial, body):
         before = read_file(path)
         actual = "missing" if before is None else digest(before)
         if expected != actual:
@@ -130,9 +138,45 @@ def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None)
             from .task_settlement import validate_new_settlement_sources
         else:
             from task_settlement import validate_new_settlement_sources
+        if before is not None and task_update is None:
+            # 普通 publish 同时服务导出工件；已有 Light 权威或 Full 图的撤回标记和
+            # 修订合同只通过有 CAS 的 update 演进。非任务文件沿用原始字节发布合同。
+            def authoritative_tasks(raw):
+                try:
+                    record = decode(raw)
+                except (ValueError, UnicodeError):
+                    return {}
+                if not isinstance(record, dict) or record.get("schema_version") != 2:
+                    return {}
+                rows = record.get("tasks")
+                if isinstance(record.get("task"), dict) and record["task"].get("workflow_level") == "Light":
+                    rows = [record["task"]]
+                if not isinstance(rows, list):
+                    return {}
+                return {row["id"]: row for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)}
+            previous = authoritative_tasks(before)
+            if previous:
+                current = authoritative_tasks(body)
+                for task_id in previous.keys() | current.keys():
+                    older, newer = previous.get(task_id, {}), current.get(task_id, {})
+                    if older != newer and task_intent.RECORD_FIELDS.intersection(older.keys() | newer.keys()):
+                        raise TaskGraphError("existing withdrawal or revision requires authoritative update")
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         from lib.foundation_qa import validate_publication
         validate_publication(path, before, body, root=root)
+        if task_update:
+            proofs = {key: ops["rework_from_qa"] for key, ops in task_update.get("tasks", {}).items()
+                      if "rework_from_qa" in ops}
+            if proofs:
+                # 和原子 PASS 一样，在正式发布锁内重读 FAIL、实际范围与原始包。
+                # 一份 FAIL 可覆盖多个 Writer，逐项都用更新前的同一图复查。
+                from lib.foundation_qa import return_writer_for_rework
+                original = decode(before)
+                for task in original["tasks"]:
+                    if task["id"] in proofs:
+                        return_writer_for_rework(original, copy.deepcopy(task), proofs[task["id"]], root=root)
+
+        recheck_visual_publication(before, body, root)
         mode = identity[2] if identity else 0o600
         descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
         temporary = Path(raw)
@@ -274,8 +318,9 @@ def _completed(task: dict[str, Any]) -> bool:
 
 
 def update(payload: dict[str, Any], patch: Any, root: Path | None,
-           validate: Callable[[str, dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
-    """只更新明确选定的现有任务；批准、依赖、角色和 QA 策略不由本工具改写。"""
+           validate: Callable[[str, dict[str, Any]], dict[str, Any]], *,
+           record_sha: str | None = None) -> dict[str, Any]:
+    """只记录 PM 明示的任务修订或对当前方案的用户批准，不推导依赖、角色与 QA 策略。"""
     patch = _object(patch, "update patch")
     changes = patch.get("tasks", {})
     if isinstance(changes, dict) and any(isinstance(operation, dict) and "settle" in operation
@@ -288,22 +333,94 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             raise TaskGraphError("3.0 settlement rejects central runtime_binding and bridge context")
     # 在验证补丁和刷新文档之前拒绝退役来源。
     validate_task_source(payload, root=root)
-    if set(patch) - {"tasks", "capacity", "refresh_documents", "integrations"}:
-        raise TaskGraphError("update patch supports only tasks, capacity, refresh_documents and integrations")
+    choice_ops = set(patch) & {"approve_solutions", "revoke_solutions", "approve_visuals"}
+    if set(patch) - {"tasks", "capacity", "refresh_documents", "integrations"} - choice_ops:
+        raise TaskGraphError("update patch supports only tasks, capacity, refresh_documents, integrations, "
+                             "approve_solutions, revoke_solutions or approve_visuals")
     result = copy.deepcopy(payload)
+    if choice_ops:
+        if len(patch) != 1:
+            raise TaskGraphError("solution approval or revocation must be a separate update of the current decision")
+        operation = next(iter(choice_ops))
+        if operation == "approve_visuals":
+            record_visuals(result, patch[operation], root)
+        else:
+            record_approvals(result, patch[operation], operation=operation)
     indexed = {task["id"]: task for task in result["tasks"]}
     old = {task["id"]: task for task in payload["tasks"]}
     changes = _object(patch.get("tasks", {}), "patch.tasks")
     changed_contracts = set()
     freezing_qa = set()
+    revised_solution_gates = set()
     for task_id, operations in changes.items():
         if task_id not in indexed:
             raise TaskGraphError(f"unknown task ID: {task_id}")
         operations = _object(operations, f"patch.tasks.{task_id}")
-        if set(operations) - {"set", "append", "documents", "checkpoint", "settle", "accept_foundation",
-                              "accept_request", "freeze_qa_scope"}:
-            raise TaskGraphError(f"unsupported task update operation: {task_id}")
         task = indexed[task_id]
+        if "rework_from_qa" in operations:
+            # 同一失败回执可涉及图内多项 Writer。按补丁前的同一快照逐项验真，
+            # 在同一原图 CAS 内整体返回，任一角色、路径、证据不符均不写入。
+            if set(patch) != {"tasks"} or not all(isinstance(entry, dict) and set(entry) == {"rework_from_qa"}
+                                                 for entry in changes.values()):
+                raise TaskGraphError("rework_from_qa requires a separate Writer rework update")
+            from lib.foundation_qa import return_writer_for_rework
+            return_writer_for_rework(payload, task, operations["rework_from_qa"], root=root)
+            continue
+        intent = task_intent.CONTROL_OPS.intersection(operations)
+        if intent:
+            name = next(iter(intent))
+            # 同一原图可原子标记多个任务撤回；其它确认和交付必须针对单项单独
+            # 记录，不能在一个事务里先改约定、再伪造它已送达或已完成。
+            grouped_withdraw = name == "withdraw" and all(isinstance(entry, dict) and set(entry) == {"withdraw"}
+                                                         for entry in changes.values())
+            if set(operations) != {name} or set(patch) != {"tasks"} or len(changes) != 1 and not grouped_withdraw:
+                raise TaskGraphError("task intent requires an exclusive update")
+            if name == "ack_revision":
+                task_intent.check_delivery(payload, task)
+                require_writer(payload, task, root)
+            task_intent.apply_control(task, name, operations[name], record_sha=record_sha)
+            continue
+        if "revision_result" in operations:
+            if set(patch) != {"tasks"} or len(changes) != 1:
+                raise TaskGraphError("revision_result requires a separate single-task update")
+            task_intent.check_delivery(payload, task)
+            require_writer(payload, task, root)
+        # 独立仅原型单包是新准入分支，从第一次原生派发开始就有领取回执。
+        # 历史 Full 图及普通 Light 记录继续使用原更新协议。领取后正式结果仍由
+        # ordinary_operations 检查宿主绑定；不能用普通 set 直接开工或从待派跳到交付。
+        if (task["workflow_level"] == "Light" and payload.get("request_scope", {}).get(task["request_id"]) == "prototype_only"
+                and isinstance(operations.get("set"), dict) and "agent_ref" not in task):
+            fields = operations["set"]
+            if ((isinstance(fields.get("state"), str) and fields["state"] in EXECUTING_OR_DELIVERED)
+                    or "agent_ref" in fields and "claim_basis_sha256" not in task):
+                raise TaskGraphError("standalone prototype dispatch requires a claim before native binding or delivery")
+        full_reviewer = task["task_type"] == "qa" and task["workflow_level"] == "Full"
+        resume = operations == {"set": {"state": "QA"}} or operations == {"set": {"state": "RUNNING"}}
+        if full_reviewer and task.get("task_revision") and task.get("qa_result_scope") and resume and task["state"] in {"FAILED", "DECLARED"}:
+            if set(patch) != {"tasks"} or len(changes) != 1:
+                raise TaskGraphError("QA rework requires a separate update for the original Reviewer")
+            from lib.task_graph_cli import task_pack_with_review_scope
+            # Foundation 与集成工作树使用既有检查点、实际内容及集成证明，不要求
+            # 普通单仓才拥有的 freeze_qa_scope。普通冻结过期仍会在这个入口被拒绝。
+            _, scope = task_pack_with_review_scope(payload, task_id, root=root, require_current_qa=True)
+            if not task_intent.reopen_changed_review(task, old[task_id], scope):
+                raise TaskGraphError("QA rework requires a changed review scope and its original Reviewer")
+        operations = task_intent.ordinary_operations(task, operations)
+        failing = full_reviewer and operations.get("set", {}).get("state") == "FAILED" and _running(old[task_id])
+        writer_handoff = (failing and task.get("agent_ref") and not task.get("agent_retired")
+                          and any(row["request_id"] == task["request_id"] and row["task_type"] == "writer"
+                                  and row.get("revision_result") for row in payload["tasks"]))
+        if writer_handoff or full_reviewer and task.get("task_revision") and (failing or "accept_request" in operations):
+            from lib.task_graph_cli import task_pack_with_review_scope
+            from lib.foundation_qa import _json_digest
+            # 在 FAILED/PASS 改变图之前保存本轮实际检查点。失败包的语义指纹绑定
+            # 原 Reviewer、轮次和审查面；Writer 返工时仍须读取原包字节和正式 FAIL。
+            pack, task["qa_result_scope"] = task_pack_with_review_scope(payload, task_id, root=root)
+            if writer_handoff:
+                task["qa_failed_pack_fingerprint"] = _json_digest(pack)
+        if set(operations) - {"set", "append", "documents", "checkpoint", "settle", "accept_foundation",
+                              "accept_request", "freeze_qa_scope", "record_qa_projection"}:
+            raise TaskGraphError(f"unsupported task update operation: {task_id}")
         acceptance = set(operations) & {"accept_foundation", "accept_request"}
         if acceptance:
             if len(acceptance) != 1 or set(operations) != acceptance or set(patch) != {"tasks"} or len(changes) != 1:
@@ -312,12 +429,33 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             operation = next(iter(acceptance))
             task.update(accept(payload, old[task_id], operations[operation], root=root,
                                kind="foundation" if operation == "accept_foundation" else "request"))
+        if "record_qa_projection" in operations:
+            # PM 单独登记验收后的实际差异，不允许同一补丁替换受审合同、批准或回执。
+            if len(operations) != 1 or set(patch) != {"tasks"} or len(changes) != 1:
+                raise TaskGraphError("record_qa_projection must be the only operation for one task")
+            from lib.foundation_qa import current_request_receipt
+            task["qa_projection"] = copy.deepcopy(operations["record_qa_projection"])
+            from lib.qa_projection import verify_projection
+            verify_projection(result, task, project_root(root))
+            if not current_request_receipt(result, task, root=root):
+                raise TaskGraphError("QA projection does not reproduce the accepted request and exact document delta")
         if "freeze_qa_scope" in operations:
             # PM 必须先固定已见范围，再用独立操作验收回执，避免将自报审查范围
             # 与结论在同一次写入中升级为权威。
             if set(operations) != {"freeze_qa_scope"} or set(patch) != {"tasks"} or len(changes) != 1:
                 raise TaskGraphError("freeze_qa_scope must be the only operation for one task")
-            task["qa_scope_ref"] = copy.deepcopy(operations["freeze_qa_scope"])
+            if "foundation_task_id" in task:
+                from lib.foundation_qa import valid_receipt
+                if not valid_receipt(payload, old[task_id], root=root):
+                    raise TaskGraphError("freeze_qa_scope requires a current Foundation checkpoint before final review")
+            scope_input = operations["freeze_qa_scope"]
+            task.pop("qa_projection_baselines", None)
+            if isinstance(scope_input, dict) and set(scope_input) == {"scope_ref", "projection_paths"}:
+                from lib.qa_projection import capture_baselines
+                task["qa_projection_baselines"] = capture_baselines(result, task, project_root(root),
+                                                                    scope_input["projection_paths"])
+                scope_input = scope_input["scope_ref"]
+            task["qa_scope_ref"] = copy.deepcopy(scope_input)
             freezing_qa.add(task_id)
         if "settle" in operations:
             # 结果态、证据引用与可选退休必须作为同一事实原子发布；拒绝同补丁
@@ -328,6 +466,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                 from .task_settlement import settle_task
             else:
                 from task_settlement import settle_task
+            task_intent.check_delivery(payload, task)
             task.update(settle_task(payload, old[task_id], operations["settle"],
                                     read=read_record, decode=decode))
         fields = _object(operations.get("set", {}), "task.set")
@@ -349,7 +488,22 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                 check_binding(old[task_id], value)
             if field in APPEND_FIELDS and not isinstance(value, list):
                 raise TaskGraphError(f"set {field} requires an array")
+        if "solution_decisions" in fields:
+            previous = old[task_id]
+            selected = decision_gates({**previous, "solution_decisions": fields["solution_decisions"]})
+            if selected == decision_gates(previous):
+                # 列表顺序、历史记录不含字段与显式空列表都不改变权威，保持原合同
+                # 字节就不会令已完成的实现、QA 范围或回执仅因重排而失效。
+                fields = {key: value for key, value in fields.items() if key != "solution_decisions"}
         task.update(copy.deepcopy(fields))
+        if "solution_decisions" in fields:
+            # 只重建 PM 显式重选的方案依赖，绝不开放 set.gates 改写需求、视觉或例外。
+            # 已执行的 Writer 需要先停回待执行状态再接收修订，防止新版本依赖旧轮写权限。
+            if _running(task) or _completed(task):
+                raise TaskGraphError("changed solution_decisions require an explicit pending state")
+            revised_solution_gates.update(gate for gate in task["gates"] if gate.startswith("solution_approved"))
+            task["gates"] = [gate for gate in task["gates"] if not gate.startswith("solution_approved")]
+            bind_decisions(task)
         # 退役只使身份不可再次执行，不证明底层已经停止；保留当前活动态与锁。
         # 拒绝复活和true→false，不能靠同补丁改状态绕过不可逆约束。
         if old[task_id].get("agent_retired") and not task.get("agent_retired"):
@@ -375,6 +529,15 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if (any(task.get(key) != old[task_id].get(key) for key in contract_fields)
                 or _document_contract(task) != _document_contract(old[task_id])):
             changed_contracts.add(task_id)
+    if revised_solution_gates:
+        # 同一个决定可能被多个 Writer 消费。仅撤回所有任务都不再采用的旧版本，
+        # 避免改动或撤下一个任务时误撤同请求其他流程仍在使用的明确批准。
+        current_gates = {gate for task in result["tasks"] for gate in task["gates"]}
+        obsolete = revised_solution_gates - current_gates
+        if obsolete and "approved_gates" in result:
+            result["approved_gates"] = [gate for gate in result["approved_gates"] if gate not in obsolete]
+            for gate in obsolete:
+                result.get("solution_approval_sources", {}).pop(gate, None)
     integrations = _object(patch.get("integrations", {}), "patch.integrations")
     for request_id, values in integrations.items():
         existing = _object(result.get("worktree_integrations", {}), "worktree_integrations")
@@ -403,12 +566,22 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
             raise TaskGraphError("capacity must be an integer >= 0")
         result["capacity"] = capacity
-    from lib.foundation_qa import (current_request_receipt, is_ordinary_reviewer, request_inputs,
+    from lib.foundation_qa import (current_request_receipt, is_full_reviewer, request_inputs,
                                    request_writers, valid_receipt)
     for qa in result["tasks"]:
+        if "qa_failed_pack_fingerprint" in qa and qa["state"] != "FAILED":
+            qa.pop("qa_failed_pack_fingerprint")
+            if "task_revision" not in qa:
+                qa.pop("qa_result_scope", None)
+        if qa["state"] != "QA_PASSED":
+            qa.pop("qa_projection", None)
         if qa.get("foundation_receipt") and not valid_receipt(result, qa, root=root):
+            # 中间阶段返工若最终恢复成完全相同的文档与日志，也必须区分失效前的最终包。
+            if qa.get("request_receipt"):
+                qa["qa_review_revision"] = qa.get("qa_review_revision", 0) + 1
             qa.pop("foundation_receipt", None)
             qa.pop("request_receipt", None)
+            qa.pop("qa_projection", None)
             # 已完成的最终QA不能在Foundation返工后复活；活跃Reviewer仍保留原状态
             # 与占用，PM必须先核实实际原生完成，再按同一节点恢复本轮审查。
             if qa["state"] == "QA_PASSED":
@@ -416,7 +589,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
     # 先校验字段类型与完整合同，再派生锁，避免错误补丁在集合操作中抛出 TypeError。
     validate("validate", result)
     for qa in result["tasks"]:
-        if not is_ordinary_reviewer(qa):
+        if not is_full_reviewer(qa):
             continue
         previous_qa = old[qa["id"]]
         before = request_inputs(payload, previous_qa, request_writers(payload, previous_qa))
@@ -426,11 +599,15 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                     or _running(previous_qa) and not _running(qa) and qa["state"] != "QA_PASSED")
         stale = (qa.get("request_receipt") and qa["state"] == "QA_PASSED"
                  and not current_request_receipt(result, qa, root=root))
+        # 阶段 PASS 本身是合法检查点迁移；在功能开始后才为最终审查递增轮次。
+        if "foundation_task_id" in qa and (not qa.get("foundation_receipt") or not previous_qa.get("foundation_receipt")):
+            continue
         if before != after or reopened or stale:
             # 返工轮次由真实受审范围变化驱动，即使 Writer 重新确认后内容和日志
             # 文案相同，旧任务包仍然过期。旧 Reviewer 身份与其退役约束始终保留。
             qa["qa_review_revision"] = previous_qa.get("qa_review_revision", 0) + 1
             qa.pop("request_receipt", None)
+            qa.pop("qa_projection", None)
             if qa["state"] == "QA_PASSED":
                 qa["state"] = "DECLARED"
         if qa["id"] in freezing_qa:
@@ -439,6 +616,10 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             if not validate("qa-ready", candidate)["qa_ready"]:
                 raise TaskGraphError("freeze_qa_scope requires the current Writer barrier")
             pack = export_task_pack(result, qa["id"], root=root, require_current_qa=True, freezing_qa_scope=True)
+            if task_intent.reopen_changed_review(qa, previous_qa, pack["task"]["qa_scope_fingerprint"]):
+                # 在旧修订号下先比实际范围，防止单纯 bump 版本造成“确有返工”的假象；
+                # 仅当范围真实变化才递增，再连同新合同版本原子冻结，复用原 Reviewer。
+                pack = export_task_pack(result, qa["id"], root=root, require_current_qa=True, freezing_qa_scope=True)
             qa["qa_scope_fingerprint"] = pack["task"]["qa_scope_fingerprint"]
             if (qa["qa_scope_fingerprint"] != previous_qa.get("qa_scope_fingerprint")
                     and qa.get("qa_review_revision") == previous_qa.get("qa_review_revision")):
@@ -446,6 +627,15 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
     for task_id in changed_contracts:
         if _completed(old[task_id]) and _completed(indexed[task_id]):
             raise TaskGraphError(f"changed completed task scope/contract requires an explicit pending state: {task_id}")
+    for task_id in changes:
+        task = indexed[task_id]
+        # 新活动态稍后按 ready 检查依赖、批准和锁；直接登记构建、可交 QA 或
+        # Writer 交接态也必须使用同一份当前前置交付。仅关心本轮状态迁移，历史
+        # 证据仍可查看或补记，不因后来重开原型而回写历史事实。
+        if (task["state"] != old[task_id]["state"] and task["state"] in EXECUTING_OR_DELIVERED
+                and not _running(task)):
+            task_intent.check_delivery(result, task)
+            require_writer(result, task, root)
     # 仅重建已知运行任务拥有的锁，含显式 QA 节点；保留外部锁，不推算宿主容量。
     for key, field in (("active_paths", "owned_paths"), ("active_semantic_locks", "semantic_locks")):
         previous = {value for task in payload["tasks"] if _running(task) for value in task[field]}
@@ -453,7 +643,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         result[key] = sorted((set(payload.get(key, [])) - previous) | current)
     # 新执行和运行中换锁都重用既有就绪规则；外部锁从原图扣除旧自有锁，不能被
     # 新增的 claim 吞掉。每次排除当前待查任务，仍保留其他运行中任务的真实锁。
-    checking = [key for key in changes if _running(indexed[key]) and (
+    checking = [key for key in changes if indexed[key]["state"] != "STOP_REQUESTED" and _running(indexed[key]) and (
         old[key]["state"] != indexed[key]["state"] or any(old[key][field] != indexed[key][field]
                                             for field in ("owned_paths", "semantic_locks")))]
     for task_id in checking:
@@ -470,13 +660,8 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                         candidate["request_id"] = task["request_id"]
                         if not validate("qa-ready", candidate)["qa_ready"]:
                             raise TaskGraphError("QA running-state update is blocked by the existing request QA barrier")
-                    task["task_type"] = "read_only"
-                    task.pop("foundation_task_id", None)
-                    task.pop("foundation_receipt", None)
-                    task.pop("request_receipt", None)
-                    task.pop("qa_review_revision", None)
-                    task.pop("qa_scope_ref", None)
-                    task.pop("qa_scope_fingerprint", None)
+                    from lib.foundation_qa import project_qa_read_only
+                    project_qa_read_only(task)
         for key, field in (("active_paths", "owned_paths"), ("active_semantic_locks", "semantic_locks")):
             candidate[key] = sorted((set(payload.get(key, [])) - {
                 value for task in payload["tasks"] if _running(task) for value in task[field]

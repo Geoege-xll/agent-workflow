@@ -38,13 +38,6 @@ MAX_DEPENDENCY_DEPTH = 16
 # 固定域版本属于公共编码合同；后续若调整闭包或编码语义，必须显式换版本，
 # 不能让同名指纹悄悄代表另一种证据。
 FINGERPRINT_DOMAIN = b"agent-workflow/prototype-dependency-fingerprint/v1\0"
-MANDATORY_SECTIONS = (
-    "purpose",
-    "navigation",
-    "interactions",
-    "states",
-    "exceptions",
-)
 BUTTON_INPUT_TYPES = {"button", "submit", "reset", "image"}
 HTML_VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 TEXT_DEPENDENCY_SUFFIXES = {
@@ -567,12 +560,12 @@ class PageParser(HTMLParser):
         self.contract_depth = 0
         self.summary_depth = 0
         self.summary_parts: list[str] = []
+        self.note_parts: list[str] = []
         self.current_section: str | None = None
         self.section_text: dict[str, list[str]] = {}
         self.section_order: list[str] = []
         self.heading_depth = 0
         self.ids: list[str] = []
-        self.material_controls: list[str] = []
         self.interactive_ids: list[str] = []
         self.mappings: list[str] = []
         self.dialog_ids: list[str] = []
@@ -662,7 +655,8 @@ class PageParser(HTMLParser):
         elif tag == "details" and self.contract_depth:
             self.contract_depth += 1
 
-        if tag == "summary" and self.contract_depth:
+        # 只读取说明自身的原生标题；正文中的嵌套折叠可以说明同一行为的不同条件。
+        if is_native_summary and self.contract_depth == 1:
             self.summary_depth += 1
 
         if tag == "section" and "data-contract-section" in attrs:
@@ -691,7 +685,6 @@ class PageParser(HTMLParser):
             stable_id = attrs.get("id", "").strip()
             if not stable_id:
                 raise ValidationError(f"material control lacks a stable id in {self.label}")
-            self.material_controls.append(stable_id)
         is_interactive_input = (
             tag == "input" and attrs.get("type", "text").casefold() != "hidden"
         )
@@ -718,9 +711,9 @@ class PageParser(HTMLParser):
             target = attrs["data-contract-for"].strip()
             if not STABLE_ID_PATTERN.fullmatch(target):
                 raise ValidationError(f"invalid contract mapping target in {self.label}: {target!r}")
-            if self.current_section != "interactions":
+            if not self.contract_depth:
                 raise ValidationError(
-                    f"contract mapping must be inside the interactions section in {self.label}"
+                    f"contract mapping must be inside the developer notes in {self.label}"
                 )
             self.mappings.append(target)
 
@@ -815,6 +808,8 @@ class PageParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.summary_depth:
             self.summary_parts.append(data)
+        if self.contract_depth and not (self.summary_depth or self.style_depth or self.script_depth):
+            self.note_parts.append(data)
         if self.current_section is not None and not self.heading_depth:
             self.section_text[self.current_section].append(data)
         if self.script_depth:
@@ -907,29 +902,25 @@ def _validate_page_structure(parser: PageParser) -> None:
         or parser.navigation_stack
     ):
         raise ValidationError(f"unclosed page contract structure in {label}")
-    if _normalized_text(parser.summary_parts) != "Page design and interaction contract":
+    if _normalized_text(parser.summary_parts) not in {"开发说明", "Page design and interaction contract"}:
         raise ValidationError(f"page contract summary is invalid in {label}")
-    if tuple(parser.section_order) != MANDATORY_SECTIONS:
-        raise ValidationError(
-            f"{label} must contain the five exact contract sections in standard order"
-        )
-    for section in MANDATORY_SECTIONS:
-        text = _normalized_text(parser.section_text.get(section, []))
-        if not text or _is_placeholder_text(text):
-            raise ValidationError(
-                f"contract section {section!r} is empty or placeholder-only in {label}"
-            )
+    # 新页可以只保留折叠标题。旧分节映射仍按真实 ID 校验；显式留下的
+    # 小节应有实际内容，但不再要求五个名称、固定顺序或每个按钮写一遍行为。
+    note = _normalized_text(parser.note_parts)
+    if note and _is_placeholder_text(note):
+        raise ValidationError(f"developer notes contain only placeholder text in {label}")
+    if len(set(parser.section_order)) != len(parser.section_order):
+        raise ValidationError(f"duplicate developer note section in {label}")
+    for section, parts in parser.section_text.items():
+        text = _normalized_text(parts)
+        if not section or not text or _is_placeholder_text(text):
+            raise ValidationError(f"developer note section is empty or placeholder-only in {label}")
 
     duplicate_ids = [value for value, count in Counter(parser.ids).items() if count > 1]
     if duplicate_ids:
         raise ValidationError(f"duplicate id in {label}: {duplicate_ids[0]}")
     id_set = set(parser.ids)
     mapping_counts = Counter(parser.mappings)
-    for control_id in parser.material_controls:
-        if mapping_counts[control_id] != 1:
-            raise ValidationError(
-                f"material control {control_id!r} needs exactly one contract mapping in {label}"
-            )
     duplicate_mappings = [
         value for value, count in mapping_counts.items() if count != 1
     ]
@@ -1333,7 +1324,6 @@ def _validate_dialog_wiring(parser: PageParser) -> None:
     comment_free, code_only = _javascript_lexical_views(script, label)
     id_set = set(parser.ids)
     interactive_ids = set(parser.interactive_ids)
-    mapped_ids = set(parser.mappings)
 
     for match in GET_ELEMENT_LITERAL_PATTERN.finditer(comment_free):
         if not _match_starts_in_code(code_only, match, "document"):
@@ -1362,9 +1352,9 @@ def _validate_dialog_wiring(parser: PageParser) -> None:
         event = match.group(4).casefold()
         if event != "click":
             continue
-        if control_id not in interactive_ids or control_id not in mapped_ids:
+        if control_id not in interactive_ids:
             raise ValidationError(
-                f"dialog event control is not a mapped interactive control in {label}: "
+                f"dialog event control is not an interactive control in {label}: "
                 f"{control_id}"
             )
         body_start, body_end = match.span("body")

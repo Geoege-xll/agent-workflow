@@ -3,76 +3,7 @@ name: xy-plan
 description: Draft a Full request implementation plan after Grill Me coverage and before requirements approval.
 ---
 
-## Official plugin resource boundary
-
-This component is assembled from the unchanged shared authority. In this official
-plugin, resolve the installation root from the loaded component's physical location:
-`../..` from a skill's directory, or `..` from the `agents/` or `rules/` directory.
-Do not use the current working directory or a guessed cache path.
-Read `PLUGIN.md` there before using workflow helpers. Treat this paragraph as a
-resource/transport adapter; it grants no business approval, role ownership or QA PASS.
-
-读取必需长文时，核对宿主返回的起始范围、实际范围、总长度和截断标志。
-若 `Read` 受 token／行数上限截断（如 `truncatedByTokenCap`，或末行小于
-`totalLines`），只续读缺失范围，或经下述既有 helper 调用
-`lib/documents/context_read.py`，遵守其 `offset`／`next_offset`／`sha256`
-续页合同。确认同一版本所需范围连续、完整后，再执行依赖该内容的流程；
-不能将部分输出当作完整已读，也不要从头重复全量 `Read` 来补缺。
-这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
-
-Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
-approvals; its `init --adapter <selected-path>` passes that exact adapter to the
-original initializer. Resolve project documents, task records and production code
-in the actual project. A packaged example is never the current project adapter.
-Use the packaged interpreter selector for each independent invocation:
-`bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
-existing Python 3.11+ and never installs software or changes the user's PATH.
-Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
-Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
-actual discovered name or the packaged physical path when invoking one. Public aliases are
-`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
-`product/command_identity.json`; canonical upstream names remain vendor resources, not discovery entries.
-Fully read each selected adapter and its canonical before use; never substitute unknown global names.
-Claude's explicit plugin skill commands use `/xy-workflow:<skill-name>` and
-its bundled agents use the host-discovered plugin-qualified agent name. Preserve
-the original role identity in the task pack; do not infer successful native role
-selection from that identity or a generic task label. Use the actual host tool's
-documented arguments and report an unavailable native selector.
-
-The main session remains PM. Workers receive only the complete current task pack
-with `instance_policy: fresh` and `context_policy: handoff_only`; never fork PM or
-sibling history. Only the official host dispatches agents. Use the official host's
-default or already configured model and reasoning settings; PM applies the business-only
-read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
-neither requires nor registers a separate model configuration service, web console,
-or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
-approval remain exactly as defined in the authority; existing explicit scope
-authorization still applies to Light. A required independent QA remains one
-read-only reviewer. Preserve the original closeout order.
-
-Claude Code and Antigravity expose packaged native agents. Codex's documented
-portable manifest exposes skills and MCP, with no documented `agents` manifest key:
-read the full packaged role and `platforms/codex/WORKER_CONSTRAINTS.md` into the current fresh task
-handoff through the host's actual supported native dispatch interface. A role label
-alone proves no native role/model selection. If the host cannot supply required
-dispatch or independent context, report that limitation instead of claiming it ran.
-Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: its authority may come from another source. Use a fresh native generic
-entry with the complete current packaged role instructions and current task pack,
-or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's history or instructions merely
-because its name matches. If the host cannot provide this boundary, report the
-dispatch limitation to the PM.
-
-This plugin uses the existing unpinned source-pack task contract. It rejects central
-`runtime_binding` records and central project markers rather than migrating them.
-Do not update/replace the installed plugin during an active task. Retention of old
-plugin resources across updates and actual native model/effort execution remain
-unverified. `runtime_verified: false` stays visible until a real host session proves
-the corresponding behavior.
+从本 Skill 的物理目录向上两级确定插件根。使用同包的[宿主资源说明](../../plugins/plugin-context.md)。当前实例已具备同一物理来源、同一版本的完整说明时直接复用；独立启动或内容缺失时补读，来源或版本变化时重新读取。
 
 
 <!-- agent-workflow-pack:managed-skill -->
@@ -100,9 +31,7 @@ plan_state: draft
 - This Skill must not edit files, dispatch Agents, update accepted PROJECT/plans baselines, or request approval.
 - Do not create worktrees, commits, implementation branches, nested Agents, or another workflow.
 - Identify controlled-document candidates, but leave the post-QA projection decision to the PM.
-- This draft Skill does not persist files. After requirements approval PM saves Full plans under
-  adapter-resolved `docs.plans` before first dispatch, following
-  `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
+- PM 在同一主题分阶段登记已确认的需求范围、实质方案与适用页面；首次设计或实现派发前保存已有决定。先判断原业务事实、项目规范或交互是否改变。已有主题原位更新，需要独立维护的新能力才建页。纯执行或符合性修复可用已有持久请求交接。原型须绑定项目内稳定批准源和当前有效 REQ。见[计划生命周期](../xy-workflow/references/plan-lifecycle.md)。
 - Formal Full requirements review uses one Markdown source. PM owns the pre-approval scratch draft
   and post-approval `.md` persistence before dispatch. Requirements/plan Markdown-to-HTML generation is retired;
   existing plan HTML remains historical material; prototype HTML and verification remain active under
@@ -113,6 +42,8 @@ plan_state: draft
 
 1. Map the affected modules, exact owned paths, existing interfaces, repository verification
    commands, and controlled-document reads before drawing task boundaries.
+   沿用[需求接单](../xy-workflow/references/requirements-intake.md)已核实且仍适用的定位与结论，
+   只补齐会改变任务边界、接口、依赖或验证安排的事实。
    Resolve configured docs.standards/docs.standards_root once. Select applicable built-in sources for each Writer,
    then add project-specific leaves, binding current SHA, stable rule IDs and owned paths. Bind the real SHA
    when the project index exists. With no project leaves and a physically missing index, retain configured
@@ -123,7 +54,8 @@ plan_state: draft
    For standards maintenance, follow WORKFLOW's `Standards document granularity and maintenance`:
    locate the existing topic and actual rule delta before proposing a new leaf; do not attach
    automatic documentation cleanup or a new rule document to every implementation task.
-2. For every production UI task, classify `UI-Conformance` only with `design_delta: none`,
+2. 对每个依赖实质分歧的任务，列明会改变验收或交付的可观察行为、状态、异常及技术选择。其余实现细节留给实现者。同请求已有明确决定时标出原意和适用边界；否则写为拟议方案和后果，由 PM 在相关设计或实施派发前取得决定。实际原型只呈现明确的行为。
+   For every production UI task, classify `UI-Conformance` only with `design_delta: none`,
    structured resolved and SHA-256-frozen `design_authority_refs`, no design-workspace write, and no
    unresolved design choice; record `prototype_policy: not_applicable`. Otherwise use the explicit
    `UI-Patch`, `UI-Page`, or `UI-Flow` route. For those routes, identify exact affected surfaces,
@@ -153,7 +85,7 @@ plan_state: draft
    delivery policy using `xy-workflow/references/worktree-delivery.md`. Include the common base,
    prerequisite handoffs, integration owner and cross-feature verification. PM resolves Git facts
    before execution; this draft Skill still creates no worktrees, commits or user confirmations.
-6. For each task, provide concrete verification commands and expected output. Apply
+6. For each task, provide concrete verification commands and expected output. Identify the affected behavior or build/resource inputs for each check and the source of any requirement to run it on every revision. Use separate repository-supported checks when their inputs differ. Apply
    `xy-build-verify/references/verification-scope.md` from the installed Skill directory; discovered
    commands are candidates and selected checks must cover actual risk and mandatory rules. Reuse
    sufficient existing coverage first. Only when a concrete regression-coverage gap needs a test,
@@ -167,7 +99,7 @@ plan_state: draft
 
 ## Output projections
 
-Before returning the Full draft, read [internal plan and task-graph contract](references/task-graph.md).
+Before returning the Full draft, use the [internal plan and task-graph contract](references/task-graph.md) to check the applicable projections. During recovery, use the current pack and draft first. For a missing field or decision, read the relevant section (planning record, approval brief, graph example, design authority, or single-task handoff).
 Return the complete internal record and a concise approval brief, keeping raw JSON/YAML hidden
 unless requested. The PM, not this Skill, decides projection, resolves user choices, saves the
 approved plan and dispatches.

@@ -36,7 +36,7 @@ independent QA. Full and actually required independent review/mandatory checks r
   the task. Do not create isolated test databases, private package repositories or copied source/artifact
   directories per round (such as `-v2`, `-r1`, `replay`, `before`, `packages-qa*`).
 - Verify pure documentation/static prototypes by delivery type, without inventing program-build requirements.
-  Light distinguishes actual changes and verification inputs using the table below, still defaults to a native
+  Light distinguishes actual changes and verification inputs using the change-type table, still defaults to a native
   implementer, adds no Full plan/DAG/repeated confirmation, and assesses necessary independent QA at handoff.
   A change being only copy does not exempt necessary verification of an affected production target.
 
@@ -60,6 +60,26 @@ independent QA. Full and actually required independent review/mandatory checks r
   selection. If genuinely indivisible, explain the necessary coverage run together and the specific reason it
   cannot be separated. Do not refactor unrelated test infrastructure or create a fixed test checklist to narrow
   one execution.
+
+## 核对一条命令的证据能否复用
+
+PM 起草任务包时，将每项验收对应到实际命令或最小可选择的用例，注明哪些检查由用户、项目 CI／Hook 或交付合同要求每次执行。一次交付的必做覆盖在后续文案修订时是否仍然有效，取决于该检查消费的源码、资源、测试本身、构建配置、依赖及运行环境。沿实际入口追踪依赖；只看到测试类名或修改文件的后缀时，继续核实。旧包明确要求当前版本重跑时遵守原约定；若需要修改约定，由 PM 按现有受控修订与同实例接收流程办理。
+
+当相关文件可以列举且预计会跨修订复用，可在当前命令的 `{run, expected}` 中加入可选 `inputs`。列出确切的项目相对文件，包括影响此命令的测试实现、资源、脚本与依赖配置。项目支持的实际命令字符串赋给 `check`。在原生运行时用现有指纹入口记录输入，与真实命令、目标、环境、结果和完整日志放在已有交接中：
+
+```bash
+graph_helper() {
+  bash "$plugin_root/lib/python_runtime.sh" -B -X utf8 "$plugin_root/plugins/source_pack.py" \
+    helper --project "$root" lib/task_graph_cli.py "$@"
+}
+graph_helper fingerprints --root "$root" --input "$task_pack" --check-command "$check" > "$input_snapshot"
+# 对照当时的原映射。0 表示声明的文件匹配，1 列出改变项，2 表示无法可靠比对。
+graph_helper fingerprints --root "$root" --input "$current_pack" --check-command "$check" --source "$input_snapshot"
+```
+
+确认原运行前后输入稳定；并行写入或缺失基线时不能把当前状态追认为当时输入。指纹只证明明列文件字节，无法发现漏列依赖、环境变化、远程服务状态或新增的隐式资源。将原执行的可解析日志、退出码、实际覆盖和目标环境一起交给下一位。已有聚合日志时核对实际运行的子项、选择器、共享依赖及原有构建证据；能证明某项仍适用时直接交接，不为补录指纹或拆分日志重跑。相同输入与环境下，复用已覆盖的逻辑用例；如果改动打包文案，重新编译受影响目标，用真实加载入口核对新文案和受影响的用例。输入未知或验收扩大时补对应检查。只有必须整体执行或无法可靠划分时才重跑整组，并保留理由。
+
+## Verification by change type
 
 | Actual change | Default verification scope |
 | --- | --- |
@@ -118,6 +138,9 @@ a concrete unresolved risk, or an explicit user/project requirement.
   dependency, changed input/environment, failure clue, missing acceptance evidence, stale evidence or an explicit
   unresolved risk. Fill the nearest gap first. One failed test does not automatically require a whole-repository
   rerun. General reassurance or one last check is not a basis.
+
+## Failure diagnosis and repair limits
+
 - After failure, identify a specific cause or testable hypothesis, then rerun the failing case and affected
   checks after repair. A suspected flaky failure needs a diagnostic purpose for retry and retention of the
   original failure. Do not repeatedly run until green and ignore an unexplained failure.
@@ -161,6 +184,11 @@ a concrete unresolved risk, or an explicit user/project requirement.
   comments, instruction wording, mock calls or implementation details. Copy/structure assertions relevant to a real
   contract may remain. Mock-only success does not replace necessary real-dependency, build and runtime evidence.
   Reversible low-risk changes with sufficient direct checks need no tests merely for delivery.
+
+## Handoff and valid evidence
+
+在现有 Validation 交接，可解析的完整日志供 QA 查验。仅报告实际覆盖的范围；如实区分复用、新执行与未验证项。
+
 - Stop tests and enter existing handoff/closeout once selected mandatory checks actually pass, acceptance evidence
   is sufficient, no material unresolved risk remains and nothing later invalidates evidence. Do not run a new
   insurance regression at Writer completion, QA start, PM acceptance, before/after commit or before the final reply.
@@ -197,6 +225,8 @@ a concrete unresolved risk, or an explicit user/project requirement.
   Retain exact commands, exit codes, applicable inputs and resolvable full-log references internally, distinguishing
   new execution from reuse. Without a full-suite run, do not claim all tests passed. Do not list unrelated unrun
   items one by one or create a test-decision document/user-facing YAML/JSON.
+
+Full 维持 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`。Light 交接按实际风险决定独立审查、文档与记忆，未审查不授予 QA PASS。只有 PM 创建隔离 worktree 的局部传递提交。PM 接收证据并经过必要反馈窗口后按 WORKFLOW 结束实例，保留可解析的完整日志。本 Skill 不创建 QA 报告、批准记录、设计产物或元数据文件。
 
 ## Verified lessons and adoption boundaries
 
