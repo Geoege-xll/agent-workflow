@@ -1,0 +1,46 @@
+/* 反馈是展示外壳工具：只映射现有原型/工作区语义token，不向产品画板传播样式。 */
+.prototype-feedback {
+  --feedback-surface: var(--prototype-surface, var(--workspace-bg));
+  --feedback-ink: var(--prototype-text, var(--workspace-ink));
+  --feedback-muted: var(--prototype-muted, var(--workspace-muted));
+  --feedback-line: var(--prototype-border, var(--workspace-line));
+  --feedback-control: var(--prototype-control-border, var(--workspace-control-line));
+  --feedback-focus: var(--prototype-focus, var(--workspace-focus));
+  box-sizing: border-box; min-width: 0; margin: 18px 32px 24px; padding: 12px 20px;
+  border: 1px solid var(--feedback-line); border-radius: 9px; color: var(--feedback-ink); background: var(--feedback-surface);
+  font-size: 13px; line-height: 1.6; overflow-wrap: anywhere;
+}
+.prototype-feedback > summary { min-height: 44px; padding-block: 10px; cursor: pointer; font-weight: 600; }
+.prototype-feedback > summary span { margin-inline-start: 10px; font-weight: 400; }
+.prototype-feedback p { white-space: pre-wrap; }
+.prototype-feedback h2 { font-size: 16px; }
+.prototype-feedback h3 { margin-block: 0 8px; font-size: 14px; }
+.prototype-feedback fieldset { min-width: 0; margin-block: 14px; padding: 12px; border: 1px solid var(--feedback-line); border-radius: 6px; }
+.prototype-feedback label { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin-block: 10px; }
+.prototype-feedback textarea, .prototype-feedback select { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--feedback-control); border-radius: 6px; background: var(--feedback-surface); color: var(--feedback-ink); font: inherit; }
+.prototype-feedback textarea { resize: vertical; }
+.prototype-feedback select { min-height: 44px; }
+.prototype-feedback button { min-height: 44px; padding: 9px 12px; border: 1px solid var(--feedback-control); border-radius: 6px; background: var(--feedback-surface); color: var(--feedback-ink); font: inherit; cursor: pointer; }
+.prototype-feedback button:hover { background: var(--prototype-canvas-bg, var(--workspace-hover)); }
+.prototype-feedback button:active { box-shadow: inset 0 0 0 1px currentColor; }
+.prototype-feedback :disabled { cursor: not-allowed; }
+.prototype-feedback :is(button, textarea, select, input, summary):focus-visible { outline: 2px solid var(--feedback-focus); outline-offset: 3px; }
+.feedback-fields, .feedback-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.feedback-comparison pre { margin-block: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.feedback-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 12px; }
+.feedback-requirements { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.feedback-requirements label { flex-direction: row; align-items: center; min-height: 44px; margin: 0; }
+.feedback-requirements input { width: 20px; height: 20px; flex-shrink: 0; }
+#feedback-items article { padding-block: 16px; border-block-end: 1px solid var(--feedback-line); }
+/* 原生dialog承担焦点隔离、Esc退出及焦点恢复；不以自制浮层代替浏览器语义。 */
+.feedback-dialog { width: min(720px, calc(100% - 24px)); max-height: calc(100dvh - 32px); margin: auto; overflow: auto; }
+.feedback-dialog::backdrop { background: var(--prototype-canvas-bg, var(--workspace-sidebar)); opacity: .9; }
+[data-prototype-feedback-highlight] { outline: 3px solid var(--prototype-focus) !important; outline-offset: 4px; }
+#prototype-page-feedback { width: auto; }
+[hidden]#prototype-page-feedback { display: none !important; }
+@media (max-width: 680px) {
+  .prototype-feedback { margin-inline: 12px; padding-inline: 14px; }
+  .feedback-dialog { margin: auto; }
+  .feedback-fields, .feedback-comparison { grid-template-columns: minmax(0, 1fr); }
+  #prototype-page-feedback { white-space: normal; width: auto; }
+}

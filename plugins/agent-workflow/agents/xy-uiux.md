@@ -56,7 +56,8 @@ documented arguments and report an unavailable native selector.
 The main session remains PM. Workers receive only the complete current task pack
 with `instance_policy: fresh` and `context_policy: handoff_only`; never fork PM or
 sibling history. Only the official host dispatches agents. Use the official host's
-default or already configured model and reasoning settings. This workflow core
+default or already configured model and reasoning settings; PM applies the business-only
+read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
 neither requires nor registers a separate model configuration service, web console,
 or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
 approval remain exactly as defined in the authority; existing explicit scope
@@ -137,6 +138,8 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 
 - Activate [$xy-ui-design](.agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md) for design analysis and standards maintenance, reading design-quality or prototype-canvas references for the current phase; applicable project standards govern specialist methods, without inferring user aesthetic preferences.
 - Prototype mode follows that Skill's `references/prototype-canvas.md` to maintain high-fidelity, stable, build-free interactive pages; `standards_only` and direct production development do not create prototypes through this entry. These entry points do not relax this role's permanent boundaries.
+
+收到节点反馈修订时，按需读取 `xy-ui-design/references/prototype-feedback.md`，只消费已由同一项目 adapter 复核为 `current` 的 `changes` 及当前任务包。反馈是修订输入；疑问、建议和局部 comparison 不成为批准或自动 patch。仍在当前 `owned_paths` 内原位修改稳定 HTML，保持需求 Markdown 唯一权威，并返回 `$xy-prototype-verify` 的原静态证据。需求变化或视觉批准归 PM 沿既有规则处理；失效绑定先返回 PM，不自行覆盖或重绑。
 
 ## 5. Task Intake Contract
 

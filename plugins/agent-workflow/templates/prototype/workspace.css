@@ -44,9 +44,10 @@ body { margin: 0; background: var(--workspace-bg); color: var(--workspace-ink); 
 .workspace-page-tree a:hover, .workspace-page-tree summary:hover, .workspace-sidebar-toggle:hover { background: var(--workspace-hover); }
 .workspace-page-tree a:active, .workspace-page-tree summary:active, .workspace-sidebar-toggle:active { background: var(--workspace-pressed); }
 .workspace-page-tree a:focus-visible, .workspace-page-tree summary:focus-visible, .workspace-sidebar-toggle:focus-visible { outline: 2px solid var(--workspace-focus); outline-offset: 3px; }
-.workspace-view { display: flex; flex-direction: column; min-width: 0; height: 100vh; height: 100dvh; }
-/* iframe 是唯一文档视口；内部响应式页仍用自然流，不加载其他页或读取跨文档 DOM。 */
-#prototype-preview { display: block; flex: 1 1 auto; min-height: 0; width: 100%; border: 0; background: var(--workspace-bg); }
+.workspace-view { display: flex; flex-direction: column; min-width: 0; }
+/* iframe 是唯一文档视口；保持整幅视口高度，反馈在其后自然展开，不挤压画板。
+   内部响应式页仍用自然流，不加载其他页或读取跨文档 DOM。 */
+#prototype-preview { display: block; flex: 0 0 auto; height: 100vh; height: 100dvh; min-height: 480px; width: 100%; border: 0; background: var(--workspace-bg); }
 /* 无桥接页才用此恢复入口，正常占据 viewer 布局，不绝对覆盖 iframe。 */
 .workspace-sidebar-toggle { display: inline-flex; flex-shrink: 0; align-self: flex-end; align-items: center; justify-content: center; gap: 7px; min-height: 44px; margin: 12px 32px; padding: 9px 11px; border: 1px solid var(--workspace-control-line); border-radius: 6px; background: var(--workspace-bg); color: var(--workspace-muted); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; transition: background-color 160ms ease; }
 .workspace-sidebar-toggle svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }

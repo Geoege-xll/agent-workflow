@@ -52,7 +52,8 @@ documented arguments and report an unavailable native selector.
 The main session remains PM. Workers receive only the complete current task pack
 with `instance_policy: fresh` and `context_policy: handoff_only`; never fork PM or
 sibling history. Only the official host dispatches agents. Use the official host's
-default or already configured model and reasoning settings. This workflow core
+default or already configured model and reasoning settings; PM applies the business-only
+read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
 neither requires nor registers a separate model configuration service, web console,
 or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
 approval remain exactly as defined in the authority; existing explicit scope

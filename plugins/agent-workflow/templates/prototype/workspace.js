@@ -22,6 +22,16 @@
   let initialized = false;
   let bridgeReady = false;
 
+  // 反馈模块可渐进缺席；普通浏览和现有消息桥始终由工作区独立维护。
+  const feedback = window.PrototypeFeedback?.create({ send: (action, target) => {
+    if (action === "navigate") {
+      const entry = entries.get(target);
+      if (!entry) return false;
+      select(entry, { updateHash: true, focus: false }); return true;
+    }
+    if (bridgeReady && current) preview.contentWindow.postMessage({ type: "prototype-workspace:review", version: 1, page: current.name, token: session, action, target }, targetOrigin);
+  } });
+  let fragment = null;
   const announce = (text) => { status.textContent = text; };
   const failClosed = (text) => {
     // 无合法登记或结构被改坏时不猜测路径，也不留下原有 src/srcdoc 继续加载。
@@ -101,13 +111,15 @@
   toggle.addEventListener("click", toggleSidebar);
 
   const readHash = () => {
-    // hash 仅作登记键；解码后像路径也必须完整命中 Map，绝不直接赋给 src。
-    if (!window.location.hash.startsWith("#page=")) return null;
-    try { return entries.get(decodeURIComponent(window.location.hash.slice(6))) || null; }
-    catch { return null; }
+    // page与review各自只允许一个值；page只用于命中登记表，绝不直接作为地址。
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    fragment = window.PrototypeFeedback?.parseFragment(window.location.hash);
+    if (fragment) feedback?.bind(fragment);
+    return params.getAll("page").length === 1 ? entries.get(params.get("page")) || null : null;
   };
   const writeHash = (entry, replace) => {
-    const hash = `#page=${encodeURIComponent(entry.name)}`;
+    const rawReview = new URLSearchParams(window.location.hash.slice(1)).getAll("review");
+    const hash = `#page=${encodeURIComponent(entry.name)}${rawReview.length === 1 ? `&review=${encodeURIComponent(rawReview[0])}` : ""}`;
     if (window.location.hash === hash) return;
     if (replace) {
       // file:// 仅替换当前文档片段；宿主限制 History API 时退回同页片段导航。
@@ -125,6 +137,7 @@
   };
   function select(entry, { updateHash = false, replaceHash = false, focus = false } = {}) {
     if (current === entry) { if (updateHash) writeHash(entry, replaceHash); return; }
+    feedback?.select(entry.name);
     current = entry;
     session = newSession();
     bridgeReady = false;
@@ -179,7 +192,10 @@
       if (bridgeReady) setSidebar(!sidebar.hidden);
       return;
     }
+    if (data.type === "prototype-workspace:catalog") { feedback?.receive(data); return; }
+    if (data.type === "prototype-workspace:located") { feedback?.receive(data); return; }
     if (data.type !== "prototype-workspace:intent") return;
+    if (data.intent === "open-feedback") { feedback?.open(); return; }
     if (data.intent === "reveal-navigation") revealNavigation();
     else if (data.intent === "toggle-sidebar") toggleSidebar();
     else if (data.intent === "navigate") {

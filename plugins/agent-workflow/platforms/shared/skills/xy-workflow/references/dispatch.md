@@ -53,6 +53,50 @@ inputs or resources change; do not repeat a completed refresh for the same chang
 does not trigger it merely on a new prompt. This is installation maintenance within existing
 dispatch, not a new business gate, QA stage or full test run; Hooks never auto-install roles.
 
+## Read-only native dispatch preferences
+
+本节仅供 PM 在业务原生派发前使用；显式维护 Skill 不进入此步骤。先核对本次真正
+暴露的原生工具 schema 与目标身份，再从已加载组件的物理根执行唯一只读合同：
+
+```bash
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
+  dispatch-preferences --host <codex|claude|antigravity> --agent '<actual-native-name-or-*>' \
+  --project "<absolute-project>"
+```
+
+项目取本次宿主已明确的真实物理绝对目录；仅无明确项目时省略 `--project`。
+测试可显式传 `--home <isolated-absolute-home>`；生产尊重宿主实际配置根，不猜缓存版本、
+服务 `data_dir` 或其他项目。源包开发入口选择固定 `native_config/preference_contract.py`，
+插件入口先验证 provenance，再执行其原样投影 `plugins/dispatch_preferences.py`。
+两者不导入服务，不启动 HTTP，不准备组件、不安装 MCP、不修改配置或权限。
+
+成功输出固定八字段 `schema_version/host/agent/status/configured/preferences/sources/runtime_verified`；
+逻辑偏好只有 `model/effort`，`runtime_verified` 始终为 false。缺文件或未配置字段沿用原生
+默认，不增加流程步骤。未知版本、损坏或危险来源非零退出且脱敏；PM 明确报告并阻断该次
+派发，不把失败当作无偏好。偏好按用户通用→用户该 Agent→项目通用→项目该 Agent 逐字段
+继承；`--agent '*'` 只读通用层，`*` 不是原生 Agent 名称。
+
+使用真实调用身份查询：通用 fresh 入口没有原生角色选择器时只用 `*`；`task_name`、
+任务角色标签及未知同名全局 `xy-*` 都不能充当 native identity。只有定义已核对到当前
+插件的 named Agent 才使用其实际 invocation name；不要导入未知全局角色的旧指令或中央 pin。
+
+读取后按当前 schema 的实际语义映射；不得猜字段，也不得假定逻辑字段同名就可直接传入。
+`model: inherit` 表示跟随宿主，不发送 model 覆盖；未配置 effort 不发送 effort。
+已配置 model/effort 若当前工具无法表达，说明具体字段与能力限制并阻断该次派发，不能静默
+丢弃或假称已采用。即使成功传参，也保留完整原生定义的实际优先级与运行未验状态；不能
+用静态解析、目录发现或参数回执证明最终模型已经执行。
+
+- Codex：通用 spawn 仅查 `*`。当前工具确有 `model`、`reasoning_effort` 等参数时，才按其
+  已观察的含义传入；如果当前表面无此字段，不发送臆造参数。完整原生 Agent 定义中的
+  model/effort 可能高于调用参数，不能保证偏好覆盖定义。真正已核实的 named Agent 使用其
+  实际原生选择器与调用身份，不能以任务名冒充。
+- Claude：实际 Agent 使用宿主发现的 plugin-qualified `subagent_type` 查询对应偏好。
+  调用模型仅采用官方 alias；完整 ID 的原生定义编辑继续走原有路径。effort 仅在实际观察
+  客户端 >= 2.1.292 且当前 Agent schema 提供该能力时映射，否则已配置 effort 阻断。
+- Antigravity：`agy models` 的会话完整 slug 列表不是子代理模型参数。当前已核实的自定义
+  子代理 tier 仅 `inherit/flash/pro`，无独立 effort；实际 `invoke_subagent` 参数 schema
+  未证实时不生成任何覆盖参数，已配置且无法映射的非 inherit 模型阻断该次派发。
+
 ## Workflow helper execution
 
 ### Central projects: use the current task pin on every call
