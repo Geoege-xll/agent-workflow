@@ -77,7 +77,7 @@
   contradictory, or fingerprints mismatch. The PM does not supplement missing browser evidence,
   repeat completed static verification, or create a new confirmation gate.
 - The active concrete page and its in-page developer notes are the design evidence.
-  新交付先显式 prepare-delivery 准备受管入口，再由 open 验证准备并返回具体页 file URI delivery_url／delivery_urls，共用画布与评审读取同一物理原稿；未准备模板不可作为完整交付。新项目不生成导航 index；旧 index 登记仅适用于历史分支，不能替代具体页证据。
+  Antigravity 使用静态验证通过的具体原稿。Codex 与 Claude Code 先显式 prepare-delivery 准备受管入口，再由 open 验证准备并返回具体页 file URI delivery_url／delivery_urls，共用画布与评审读取同一物理原稿。新项目不生成导航 index；旧 index 登记仅适用于历史分支，不能替代具体页证据。
 - For `UI-Patch`, `UI-Page`, or `UI-Flow` with `prototype_policy: required`, at `visual_review_ready`, ask once for
   `visual_approved` bound to the concrete changed pages,
   changed scope, declared operation sequence, and verified page dependency fingerprints. Reopen
@@ -86,7 +86,7 @@
   not by itself require another user confirmation. Carry non-material changes forward only under
   WORKFLOW's scoped old/new-delta review, retained user approval and verified fingerprint rule.
 - The PM MUST provide a direct link to each concrete changed page.
-- 交付时提供已 prepare-delivery 且 open 验证过的具体页 file URI delivery_url；它就是完整工具入口。file 壳仅用无秘密绑定在 noopener 新标签页引导到同一具体页的独立 HTTP 评审，不持有控制 token；失效准确提示重跑显式准备／open，不猜端口或冷启动。单独 index 不足以交付。
+- Antigravity 直接交付具体页的绝对路径或 file URI，附变更范围和操作步骤供用户确认，使用静态验证所得依赖指纹。Codex 与 Claude Code 提供已 prepare-delivery 且 open 验证过的具体页 file URI delivery_url；file 壳仅用无秘密绑定在 noopener 新标签页引导同页 HTTP 评审，不持有控制 token；失效提示重跑显式准备／open，不猜端口或冷启动。
 - The visual-confirmation workflow MUST NOT generate, persist, attach, or present screenshots.
 - Approval remains in workflow task state. Do not create companion design, mapping, or baseline
   Markdown; a Manifest; a screenshot directory; or a companion approval file.

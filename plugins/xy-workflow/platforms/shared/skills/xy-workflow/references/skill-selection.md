@@ -107,28 +107,45 @@ If an explicit local developer directory is needed, use the same `--developer-di
 for check and read; do not change system Xcode selection or launch/export Xcode to manufacture resources.
 Changed source fingerprints require a fresh check rather than combining bytes from different sources.
 
-## Taste design guidance
+## Impeccable design guidance
 
-`xy-uiux` 在当前获准设计任务确有设计方法缺口时，可选用无 hooks 的 `xy-taste`。沿用现有
+`xy-uiux` 在当前获准设计任务确有设计方法缺口时，以 `xy-impeccable` 为主要外部设计方法，按需离线读取。沿用现有
 设计系统即可完成的局部调整，可直接使用项目规范。用户要求、项目已采用的设计规范和适用移动端
 规则优先。先确认页面类型和信息密度，紧凑应用、控制台和设置页按现有产品层级、组件及密度设计。
 
-原版是当前物理插件根下非发现目录的 `third_party/selected-skills/taste/skills/taste-skill/SKILL.md`。
+原版是当前物理插件根下非发现目录的 `third_party/selected-skills/impeccable/plugin/skills/impeccable/SKILL.md`。
 选中后从同一物理根调用分段读取入口。每次 `read` 核对当前受管文件与必要来源。整包
 `selected-skills check` 用于显式诊断，可独立运行。
 
 ```text
-bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" selected-skills read xy-taste --offset 0 --length 12000
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" selected-skills read xy-impeccable --offset 0 --length 12000
 ```
 
 完整读完每段 `content`，用返回的 UTF-8 字节位置 `next_offset` 接续，核对 `path`、`sha256`、
 `total_bytes` 一致，直至 `eof` 为真并覆盖全部字节。输出截断时从未读位置缩小分页重新读取。
-用同一根的 `source_pack.py resource` 定位并完整阅读实际需要的原版引用，按所用资产的许可、
-署名及商标要求使用。必需来源缺失、损坏或读取不完整时，向 PM 报告受影响工作。
+读取原文链接的适用参考时，在同一条命令加上 `--reference reference/layout.md`（换成所需的
+`reference/*.md` 相对路径），依相同分页合同读取。新表面可读取 `reference/new-work.md`，
+设计细节可读取 `reference/craft-floor.md`；沿用既有设计系统时以该系统为准。必需来源缺失、损坏或读取不完整时，向 PM 报告受影响工作。
 
 原型与 `standards_only` 只使用适用的设计方法，继续遵守既有静态原型验收、截图禁令和角色权限。
-上游 Stop hook 仅随原版保留，禁止注册或执行。上游脚本、浏览器 gate、安装工具及获取外部资源均按
-当前任务和宿主对具体操作的授权执行。记录实际完成的读取与执行，统一 QA 沿既有流程验收。
+将上游 Setup、命令表与参考中的引擎、下载、hooks、截图、浏览器、后台及委派步骤作为原文背景。
+本入口只读随包 Markdown；直接使用当前任务已有的产品背景、设计规范和获准工具。无需启动器或初始化。
+
+## Design topic query
+
+UI UX Pro Max 提供五个专题的离线查询。只有 `xy-uiux` 在当前设计任务中遇到具体未决问题时才选用。
+项目已采用的规范优先，Impeccable 提供主要设计方法。普通任务不预载语料、不自动检索，也不把查询当成方法缺失或失败时的回退。
+
+从当前物理插件根调用。中文任务先将问题提炼为上游语料可检索的具体英文关键词。例如，退款率随时间变化的图表用：
+
+```text
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" selected-skills query chart "trend over time time series refund rate" --max-results 2
+```
+
+按问题替换专题和关键词。`ux` 可查 `form validation errors` 或 `keyboard focus`，`typography` 可查
+`editorial magazine`，`color` 可查 `healthcare clinic`，`style` 可查 `minimalism`。`--max-results` 可省略，默认 3，范围 1–20。
+从 JSON 的 `results` 中选择与实际约束相符的条目，保留 `source.path` 与提交以便复核。
+空结果可缩小或改写关键词；建议、相似词与代码示例均需结合项目判断。查询只读一个专题，不生成或持久化设计系统，也不安装字体、打开链接或启动服务。
 
 ## Desktop verification
 

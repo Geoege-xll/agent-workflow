@@ -3,17 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- 以下是 prepare-delivery 幂等插入的精确受管标签示例，不在未准备模板中激活缺失依赖：
+  <!-- 仅 Codex 与 Claude Code 使用 prepare-delivery 插入以下受管标签，然后执行 open。
+       以下是注释中的示例，实际受管标签须先于所有业务脚本。
        <script src=".xy-prototype-entry/entry.js" data-xy-delivery-entry="1" charset="utf-8"></script>
-       Agent／PM 交付前必须执行 prepare-delivery，再执行 open；实际标签须先于所有业务脚本。
-       未准备的裸模板仅用于静态自查，不能作为完整交付。机器路径、绑定和工具摘要留在项目外。 -->
+       Antigravity 在完成内容并通过静态校验后，直接交付具体 HTML。 -->
   <title>页面原型</title>
   <link rel="stylesheet" href="prototype.css">
 </head>
 <body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive" data-prototype-plan-source="">
-  <!-- 项目只维护这份具体原稿与必要业务样式；Agent 交付前先用可信 CLI prepare-delivery
-       准备受管入口，再用 open 启动受限评审服务。delivery_url 为本具体页 file URI，
-       唯一中央 shell 提供完整目录、画布与同页评审导航；来源键仅在 HTTP 响应注入。
+  <!-- 项目维护这份具体原稿与必要业务样式。Codex 与 Claude Code 的受管入口提供本页
+       file URI、画布与同页评审导航，来源键仅在 HTTP 响应中注入。
        不落盘活动业务 HTML 副本，不把 token、机器路径、随机端口或保留属性写回原稿。
        业务元素可明确声明 data-req-ids="REQ-001 REQ-002"；没有映射时保留空数组语义，
        不从元素文字猜测需求。匿名来源键由工具装配并在 validate 重读源时独立重建。 -->

@@ -1,0 +1,5 @@
+{
+  "host": "codex",
+  "manifest_target": ".codex-plugin/plugin.json",
+  "schema_version": 1
+}

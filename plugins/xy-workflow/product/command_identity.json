@@ -7,7 +7,7 @@
     "xy-config": "agent-config",
     "xy-grill-me": "grill-me",
     "xy-grilling": "grilling",
-    "xy-taste": "design-taste-frontend",
+    "xy-impeccable": "impeccable",
     "xy-playwright": "playwright-cli"
   },
   "managed_roles": ["xy-web", "xy-desktop", "xy-backend", "xy-apple", "xy-android", "xy-uiux", "xy-qa"],
