@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>原型工作区</title>
+  <link rel="stylesheet" href="workspace.css">
+  <link rel="stylesheet" href="feedback.css">
+  <script src="feedback.js" defer></script>
+  <script src="workspace.js" defer></script>
+</head>
+<body class="prototype-workspace">
+  <!-- 入口直接展示工作区；名称、简述、返回和契约均由当前独立页提供。 -->
+  <div id="prototype-workspace" class="workspace-layout">
+    <aside id="prototype-sidebar" class="workspace-sidebar" aria-label="页面侧栏">
+      <div class="workspace-brand"><span class="workspace-brand-icon" aria-hidden="true"></span><strong>原型工作区</strong></div>
+      <p class="workspace-sidebar-label">页面导航 <span id="prototype-page-count">0 页</span></p>
+      <!-- prepare把明确选择的项目页面、原标签和分组写入唯一非执行启动数据；
+           工作区从该快照投影导航，不要求业务项目复制本入口或通用工具资源。 -->
+      <nav id="prototype-pages" class="workspace-page-tree" aria-label="Prototype pages"></nav>
+    </aside>
+    <div class="workspace-view">
+      <!-- 开关只改变布局；当前页圆形返回另负责展开分组并定位导航焦点。 -->
+      <button id="prototype-sidebar-toggle" class="workspace-sidebar-toggle" type="button" aria-controls="prototype-sidebar" aria-expanded="true" hidden>
+        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg>
+        <span id="prototype-sidebar-toggle-label">收起侧栏</span>
+      </button>
+      <!-- 未登记时不设置 src，不加载模板或假页面；只向唯一 iframe 写入快照映射URL。 -->
+      <iframe id="prototype-preview" title="当前原型页面" referrerpolicy="no-referrer" hidden></iframe>
+      <!-- 反馈始终位于预览之后的自然文档流，展开时不压缩高保真画板。 -->
+      <details id="prototype-feedback" class="prototype-feedback">
+        <summary id="feedback-heading" tabindex="0">页面反馈 <span id="feedback-count">0 条</span></summary>
+        <p>反馈是修订输入，保存或导出不会批准工作流。尚无可信已批准基线；下方仅比较当前浏览器文字摘录与您的建议。</p>
+        <p id="feedback-status" role="status" aria-live="polite">普通浏览模式，反馈未启用。</p>
+        <p id="feedback-storage"></p>
+        <form id="feedback-form">
+          <fieldset id="feedback-fields" disabled>
+            <legend>按稳定控件或状态记录意见</legend>
+            <div class="feedback-fields">
+              <label>当前页节点<select id="feedback-target" required></select></label>
+              <label>意见类型<select id="feedback-kind"><option value="must_change">必须改</option><option value="suggestion" selected>建议</option><option value="question">疑问</option></select></label>
+            </div>
+            <button id="feedback-locate" type="button">定位当前节点</button>
+            <p id="feedback-relations"></p>
+            <fieldset><legend>关联需求（可选）</legend><div id="feedback-requirements" class="feedback-requirements"></div></fieldset>
+            <label>意见（必填，最多 4000 字符）<textarea id="feedback-message" rows="3" required></textarea></label>
+            <div class="feedback-comparison">
+              <div><strong>当前浏览器摘录</strong><pre id="feedback-before"></pre></div>
+              <label>建议文字（可选，最多 4000 字符）<textarea id="feedback-after" rows="3"></textarea></label>
+            </div>
+            <div class="feedback-actions"><button id="feedback-save" type="submit">保存意见</button><button id="feedback-cancel" type="button">取消当前编辑</button></div>
+          </fieldset>
+        </form>
+        <section aria-label="已保存意见"><h2>本轮草稿</h2><div id="feedback-items"></div></section>
+        <div class="feedback-actions"><button id="feedback-copy" type="button">复制反馈 JSON</button><button id="feedback-download" type="button">下载反馈 JSON</button></div>
+        <p>复制和下载包含已保存意见；尚未保存的表单输入会保留在本标签页草稿中。</p>
+      </details>
+      <dialog id="feedback-manual" class="prototype-feedback feedback-dialog" aria-labelledby="feedback-manual-title">
+        <h2 id="feedback-manual-title">手动复制反馈</h2><p>自动复制不可用。选中以下纯文本后使用系统复制快捷键，或关闭后下载 JSON。</p>
+        <label>反馈 JSON<textarea id="feedback-output" rows="12" readonly></textarea></label><button id="feedback-close" type="button">关闭</button>
+      </dialog>
+      <div id="prototype-empty" class="workspace-empty" role="status"><p>暂无原型页面</p><span>添加实际页面后，可在此分组浏览。</span></div>
+    </div>
+  </div>
+  <p id="prototype-workspace-status" class="workspace-visually-hidden" role="status" aria-live="polite"></p>
+  <noscript><p class="workspace-noscript">页面预览和侧栏开关需要本地 JavaScript；可通过左侧链接独立打开页面，原生分组仍可展开。</p></noscript>
+</body>
+</html>
