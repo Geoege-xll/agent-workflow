@@ -1,7 +1,7 @@
 """把 PM 明示的精简决定机械组装为初始任务图，不推导业务权威。
 
 本入口只补重复结构与当前文件指纹；规则选择、保护边界、门禁、批准及任务合同
-仍来自输入。完成状态和执行身份不能经初始化导入，现有2.0图继续使用 update。
+仍来自输入。完成状态和执行身份不能经初始化导入，现有schema 2图继续使用 update。
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Callable
-from lib.plugin_resources import plugin_root
 
 try:
     from lib import task_graph_records as records
@@ -26,14 +25,14 @@ try:
     from lib.project.validate_project_config import validate_docs
     from .standard_paths import builtin_source_path, source_domain
     from .validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
-    from .runtime_pins import adapter_path, project_root, record_binding, new_task_publication
+    from .task_sources import project_root, validate_task_source
 except ImportError:
     import task_graph_records as records
     from task_graph import TaskGraphError
     from lib.project.validate_project_config import validate_docs
     from standard_paths import builtin_source_path, source_domain
     from validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
-    from runtime_pins import adapter_path, project_root, record_binding, new_task_publication
+    from task_sources import project_root, validate_task_source
 
 
 INPUT_FIELDS = {
@@ -53,11 +52,6 @@ TASK_FIELDS = {
     "required_skills", "audit_surfaces", "standards_exceptions", "selected_standards", "foundation_task_id",
 }
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-# 当前控制桥只从已验证清单内源码读取这个静态协议常量。旧核心没有声明时由
-# parent 持锁；本协议由 child 在最终重验到图发布之间持锁，禁止双进程嵌套。
-CENTRAL_ADMISSION_PROTOCOL = 1
-
-
 def _object(value: Any, label: str, allowed: set[str], required: set[str]) -> dict[str, Any]:
     """白名单既约束精简格式，也阻止把旧图完成态、执行身份或权限容器带入新图。"""
     if not isinstance(value, dict):
@@ -137,14 +131,7 @@ def initialize(decisions: Any, root: Path, output: Path,
         raise TaskGraphError("init root must be an existing directory")
     if output.exists() or output.is_symlink():
         raise TaskGraphError("init output must be a new file; update existing graphs with update")
-    binding = record_binding(source, root=root, initialize=True)
-    if binding is not None:
-        # record_binding.initialize仅表示允许从桥环境取得pin，文档校验等必要
-        # 旧任务reader也会使用它。真正新任务的门在这个唯一初始化业务入口，
-        # 不能把同名参数误扩成所有读取都依赖current的全局权限判断。
-        from manager.central_runtime import new_task_gate
-        from lib.runtime_store import state_root
-        new_task_gate(state_root(), root, binding)
+    validate_task_source(source, root=root)
 
     sources: dict[str, str] = {}
 
@@ -152,7 +139,7 @@ def initialize(decisions: Any, root: Path, output: Path,
         """每个显式文件只首次取指纹；不因同一叶被多任务使用而重复读取正文。"""
         _text(relative, "init fingerprint path")
         if relative not in sources:
-            sources[relative] = records.document_digest(root, relative, binding=binding)
+            sources[relative] = records.document_digest(root, relative)
         return sources[relative]
 
     raw_standards = _object(source["standards"], "standards", STANDARDS_FIELDS,
@@ -162,18 +149,11 @@ def initialize(decisions: Any, root: Path, output: Path,
     adapter = "project.yaml"
     if ("index_path" in standards) != ("root" in standards):
         raise TaskGraphError("standards.index_path and standards.root must be provided together")
-    if binding is not None:
-        # 中央配置归项目所有者；即使 PM 显式给出索引／根，也只能核对同一适配器的
-        # 当前值，不能借 source 模式的快捷输入绕过项目配置或改读 core/project.yaml。
-        adapter = adapter_path(root, source.get("adapter_path"), binding)
-        docs, adapter_fingerprint = _adapter_docs(root, adapter)
-        sources[adapter] = adapter_fingerprint
-        configured = {"index_path": docs["standards"], "root": docs["standards_root"].rstrip("/")}
-        if any(key in standards and standards[key] != value for key, value in configured.items()):
-            raise TaskGraphError("central standards paths must match the verified project adapter")
-        standards.update(configured)
-    elif "index_path" not in standards:
-        adapter = adapter_path(root, source.get("adapter_path"), binding)
+    if "index_path" not in standards:
+        # 插件适配器由项目引导入口明确选择。源树使用当前根配置，拒绝已退役安装目录。
+        adapter = source.get("adapter_path", "project.yaml")
+        if adapter not in ("project.yaml", ".awf/project.yaml"):
+            raise TaskGraphError("adapter_path must be project.yaml or .awf/project.yaml")
         docs, adapter_fingerprint = _adapter_docs(root, adapter)
         sources[adapter] = adapter_fingerprint
         standards.update(index_path=docs["standards"], root=docs["standards_root"].rstrip("/"))
@@ -236,8 +216,6 @@ def initialize(decisions: Any, root: Path, output: Path,
 
     graph = {key: copy.deepcopy(source[key]) for key in
              ("schema_version", "request_id", "capacity", "requirements_fingerprint") if key in source}
-    if binding is not None:
-        graph["runtime_binding"] = binding
     if "requirements_fingerprint" in graph and (
             not isinstance(graph["requirements_fingerprint"], str)
             or not SHA256_RE.fullmatch(graph["requirements_fingerprint"])):
@@ -291,7 +269,7 @@ def initialize(decisions: Any, root: Path, output: Path,
                 document.update(mode="full", reason="PM 明确选择本任务完整读取并遵守此文档",
                                 sections_or_queries=[], applies_to=copy.deepcopy(task["owned_paths"]),
                                 content_fingerprint=fingerprint(document["path"]))
-            task["controlled_document_access"] = {"adapter": adapter if plugin_root() is not None else "project.yaml", "documents": documents}
+            task["controlled_document_access"] = {"adapter": adapter, "documents": documents}
         tasks.append(task)
     graph["tasks"] = tasks
     if any(task.get("surface_kind") in {"production_ui", "design_ui"} for task in tasks):
@@ -300,20 +278,20 @@ def initialize(decisions: Any, root: Path, output: Path,
 
     validate("validate", graph)
     validate("ready", graph)  # 同时复用容量、批准与活动锁的现有输入校验；不写 READY 状态。
-    with new_task_publication(root, binding):
-        for relative, expected in sources.items():
-            if records.document_digest(root, relative, binding=binding) != expected:
-                raise TaskGraphError(f"init source fingerprint changed: {relative}")
-        if standards["index_fingerprint"] is None:
-            try:
-                (root / standards["index_path"]).lstat()
-            except FileNotFoundError:
-                pass
-            else:
-                raise TaskGraphError("init absent standards index changed before publication")
-        if input_path is not None and records.read_record(input_path) != input_body:
-            raise TaskGraphError("init decision record changed before publication")
-        body = (json.dumps(graph, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
-        records.publish(output, body, "missing")
+    validate_task_source(source, root=root)
+    for relative, expected in sources.items():
+        if records.document_digest(root, relative) != expected:
+            raise TaskGraphError(f"init source fingerprint changed: {relative}")
+    if standards["index_fingerprint"] is None:
+        try:
+            (root / standards["index_path"]).lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise TaskGraphError("init absent standards index changed before publication")
+    if input_path is not None and records.read_record(input_path) != input_body:
+        raise TaskGraphError("init decision record changed before publication")
+    body = (json.dumps(graph, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
+    records.publish(output, body, "missing")
     return {"initialized": True, "path": str(output.absolute()), "sha256": records.digest(body),
             "task_count": len(tasks)}

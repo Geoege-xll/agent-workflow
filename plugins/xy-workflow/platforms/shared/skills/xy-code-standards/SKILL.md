@@ -40,6 +40,11 @@ the applicable `xy-build-verify` branch.
 
 ## Read by actual boundary
 
+下方相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper` 调用 `context_read.py` 分页时，从已验证的插件包读取，使用以 `platforms/shared/skills/xy-code-standards/references/` 开头的路径，例如 `platforms/shared/skills/xy-code-standards/references/architecture.md`。
+
+- 需要判断职责拆分、依赖方向、公开封装或兼容迁移时，按当前问题阅读[架构设计与增量演进](references/architecture.md)。
+- 需要判断是否采用某种设计模式时，按当前问题选读[设计模式案例](references/design-patterns.md)。
+- 需要在实际语言、框架和支持版本内选择惯用做法时，按任务选读 [Swift](references/swift.md)、[Kotlin](references/kotlin.md)、[Python](references/python.md) 或 [Go](references/go.md)。
 - When a change/review involves external input, mutable state, resource lifecycles or durable publication,
   read only relevant parts of [boundary reasoning](references/boundary-reasoning.md); do not load every
   specialist topic for an ordinary local change.

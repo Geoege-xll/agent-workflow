@@ -16,10 +16,7 @@ import stat
 from pathlib import Path
 
 # CLI 和包导入使用相同的契约读取实现，避免测试入口与安装入口行为不一致。
-if __package__:
-    from lib.skills.business_confirmation_policy import read_instruction_contract
-else:
-    from lib.skills.business_confirmation_policy import read_instruction_contract
+from lib.skills.business_confirmation_policy import HOST_INTEGRATIONS, read_instruction_contract
 
 
 METHODS = (
@@ -59,21 +56,10 @@ MACHINE_AUTHORITIES = (
     "platforms/shared/skills/xy-qa-review/SKILL.md",
 )
 
-PROSE_AUTHORITIES = (
-    "platforms/shared/skills/xy-workflow/SKILL.md",
-    "platforms/claude/AGENTS.claude.tpl",
-    "platforms/codex/AGENTS.codex.tpl",
-    "platforms/antigravity/AGENTS.antigravity.tpl",
-)
-
 ACTIVE_ROOTS = ("lib", "platforms", "product", "roles", "scripts", "templates")
 ACTIVE_ROOT_FILES = (
     "README.md",
     "project.yaml",
-    "setup_all.sh",
-    "setup_codex.sh",
-    "setup_claude.sh",
-    "setup_antigravity.sh",
 )
 
 
@@ -165,7 +151,7 @@ def _active_files(pack: Path) -> tuple[Path, ...]:
     return tuple(sorted(set(files)))
 
 
-def validate_pack_qa_review_policy(pack: Path) -> tuple[str, ...]:
+def validate_pack_qa_review_policy(pack: Path, host: str = "all") -> tuple[str, ...]:
     """Return deterministic policy errors for current source authorities."""
 
     pack = Path(pack)
@@ -174,7 +160,11 @@ def validate_pack_qa_review_policy(pack: Path) -> tuple[str, ...]:
         body = _read_regular(pack, relative, errors)
         if body is not None:
             errors.extend(_machine_policy_errors(relative, body))
-    for relative in PROSE_AUTHORITIES:
+    # 每个插件只含自己的 PM 细则；源码全宿主检查沿用相同表，不向已解包插件索取别端文件。
+    if host != "all" and host not in HOST_INTEGRATIONS:
+        return (f"unsupported QA review host: {host}",)
+    integrations = HOST_INTEGRATIONS.values() if host == "all" else (HOST_INTEGRATIONS[host],)
+    for relative in ("platforms/shared/skills/xy-workflow/SKILL.md", *integrations):
         body = _read_regular(pack, relative, errors)
         if body is not None:
             errors.extend(_prose_policy_errors(relative, body))

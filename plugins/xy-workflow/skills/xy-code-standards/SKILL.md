@@ -21,26 +21,16 @@ resource/transport adapter; it grants no business approval, role ownership or QA
 这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
 
 Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. The appended shared
-text retains historical `.agent-workflow/` examples. In plugin mode, resolve managed
-resource references under the plugin root using `plugins/source_pack.py resource`;
-select the actual adapter with `plugins/project_context.py inspect` through the
-same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply
-the new `.awf/project.yaml` candidate. Translate historical adapter examples to
-that selected actual path. The context entry creates no documents or business
+`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
 approvals; its `init --adapter <selected-path>` passes that exact adapter to the
 original initializer. Resolve project documents, task records and production code
 in the actual project. A packaged example is never the current project adapter.
 Use the packaged interpreter selector for each independent invocation:
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the original helper path/arguments
-instead of the historical project bridge commands. The selector only locates an
+Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
 existing Python 3.11+ and never installs software or changes the user's PATH.
 Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. Native plugin discovery replaces legacy setup,
-role refresh and central activation checks. Do not run `runtime install`,
-`runtime activate`, project registration, `setup_*.sh`, or create/edit project
-`AGENTS.md`, `CLAUDE.md` or `.agent-workflow` to make this plugin work.
+when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
 Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
 actual discovered name or the packaged physical path when invoking one. Public aliases are
 `xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
@@ -70,14 +60,14 @@ handoff through the host's actual supported native dispatch interface. A role la
 alone proves no native role/model selection. If the host cannot supply required
 dispatch or independent context, report that limitation instead of claiming it ran.
 Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: it may contain an older workflow or central pin. Use a fresh native generic
+ran: its authority may come from another source. Use a fresh native generic
 entry with the complete current packaged role instructions and current task pack,
 or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's pin, history or instructions merely
+package. Never import an unknown global role's history or instructions merely
 because its name matches. If the host cannot provide this boundary, report the
 dispatch limitation to the PM.
 
-This alpha uses the existing unpinned source-pack task contract. It rejects central
+This plugin uses the existing unpinned source-pack task contract. It rejects central
 `runtime_binding` records and central project markers rather than migrating them.
 Do not update/replace the installed plugin during an active task. Retention of old
 plugin resources across updates and actual native model/effort execution remain
@@ -122,6 +112,11 @@ the applicable `xy-build-verify` branch.
 
 ## Read by actual boundary
 
+下方相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper` 调用 `context_read.py` 分页时，从已验证的插件包读取，使用以 `platforms/shared/skills/xy-code-standards/references/` 开头的路径，例如 `platforms/shared/skills/xy-code-standards/references/architecture.md`。
+
+- 需要判断职责拆分、依赖方向、公开封装或兼容迁移时，按当前问题阅读[架构设计与增量演进](references/architecture.md)。
+- 需要判断是否采用某种设计模式时，按当前问题选读[设计模式案例](references/design-patterns.md)。
+- 需要在实际语言、框架和支持版本内选择惯用做法时，按任务选读 [Swift](references/swift.md)、[Kotlin](references/kotlin.md)、[Python](references/python.md) 或 [Go](references/go.md)。
 - When a change/review involves external input, mutable state, resource lifecycles or durable publication,
   read only relevant parts of [boundary reasoning](references/boundary-reasoning.md); do not load every
   specialist topic for an ordinary local change.

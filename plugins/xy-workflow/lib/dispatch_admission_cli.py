@@ -34,7 +34,7 @@ from lib import task_graph_records as records
 from lib.agent_continuation import active
 from lib.dispatch_admission import RecordView, ResourceIdentity, select_candidates, task_key
 from lib.platform_fs import directory_lock
-from lib.runtime_pins import PLUGIN_ENV, PROJECT_ENV, project_root, record_binding
+from lib.task_sources import PLUGIN_ENV, PROJECT_ENV, project_root, validate_task_source
 from lib.task_graph import TaskGraphError
 
 
@@ -203,7 +203,7 @@ def _resource_identity(path: Path, directory_modes: dict[tuple[int, int], bool |
 def _invocation(payload: dict, root: Path, arguments: list[str]) -> tuple[list[str], dict[str, str]]:
     """只运行当前物理同包的记录 helper；不进入旧桥、manager 或跨 pin 回退。
 
-    先拒绝中央记录及上下文，再复用 record_binding 的统一记录守卫。插件声明
+    先拒绝中央记录及上下文，再复用 validate_task_source 的统一记录守卫。插件声明
     只能匹配本模块所属物理根；环境变量不能选择别的插件/源码仓。现有子进程
     继续独立验证完整任务合同和CAS，不把本次资源投影当成批准或原生启动证据。
     """
@@ -213,8 +213,7 @@ def _invocation(payload: dict, root: Path, arguments: list[str]) -> tuple[list[s
     if ("runtime_binding" in payload or any(name in os.environ for name in central)
             or marker.exists() or marker.is_symlink()):
         raise TaskGraphError("3.0 admission only accepts current plugin/source-pack records without runtime_binding")
-    if record_binding(payload, root=root) is not None:
-        raise TaskGraphError("3.0 admission does not accept a central runtime binding")
+    validate_task_source(payload, root=root)
     core = Path(__file__).resolve(strict=True).parents[1]
     if PLUGIN_ENV in os.environ:
         from lib.plugin_resources import plugin_root, read_source
@@ -349,6 +348,9 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
             selected.pop("foundation_task_id", None)
             selected.pop("foundation_receipt", None)
             selected.pop("request_receipt", None)
+            selected.pop("qa_review_revision", None)
+            selected.pop("qa_scope_ref", None)
+            selected.pop("qa_scope_fingerprint", None)
             if "task" in qa_candidate:
                 # 只有临时就绪投影去掉QA专属包元数据；原QA包、正式claim和唯一
                 # Reviewer的完整reviewed_ui_changes仍由原记录helper验证并保留。

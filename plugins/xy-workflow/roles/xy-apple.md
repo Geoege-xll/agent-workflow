@@ -74,6 +74,9 @@ The task pack must include standards-conformance, currently applicable built-in 
    Apple-official SwiftUI Specialist; use What's New only for applicable new APIs or migration.
    Report unavailable local resources without automatic installation. Preserve the actual stack and
    minimum OS; guidance does not substitute for build/test or signing evidence.
+   For affected native iOS or iPadOS UI behavior, consider `xy-mobile-ui` under that same selection
+   policy. Apply its relevant implementation guidance with the target's actual toolkit and
+   deployment support alongside the applicable approved design authority.
 3. Map the narrow behavior, state, concurrency, lifecycle, privacy, and UI boundary. For
    `UI-Conformance`, read the frozen authority, do not edit the design workspace, and stop if the
    implementation requires a new design decision. For required-prototype design work, consume the

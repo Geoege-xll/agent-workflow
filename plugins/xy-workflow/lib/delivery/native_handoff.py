@@ -17,31 +17,31 @@ if not __package__:
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Any
 
 try:
-    from lib.hosts.claude_instructions import read_file
+    from lib.safe_text import read_file
     from lib.task_graph_records import decode
 except ImportError:
-    from lib.hosts.claude_instructions import read_file
+    from lib.safe_text import read_file
     from lib.task_graph_records import decode
 
 
 HOSTS = ("codex", "claude", "antigravity")
+MAX_HANDOFF_BYTES = 4 * 1024 * 1024
 
 
 class NativeHandoffError(ValueError):
     """终端封装或安全读取失败；错误不回显可能含私密正文的原生载荷。"""
 
 
-def _decode(body: bytes) -> Any:
-    """复用记录解析器拒绝重复键，再拒绝 JSON 扩展数值与不可输出的代理字符。
-
-    标准 json.loads 默认接受 NaN／Infinity，指数溢出也可能生成 inf，因此不能只
-    检查原始字面量。检查整个封装（包括未知元数据），避免丢弃危险字段后伪装成功。
-    """
+def decode_handoff_json(body: bytes) -> Any:
+    """复用 UTF-8 记录解析器拒绝重复键，再核对整棵树，错误不回显正文或字段名。"""
     try:
         value = decode(body)
+        # 默认解析可接受 NaN／Infinity，指数溢出也可产生 inf。键和值中转义后
+        # 残留的孤立代理字符，同样须在解包或输出前拒绝，包括错误或未知元数据。
         pending = [value]
         while pending:
             current = pending.pop()
@@ -55,8 +55,8 @@ def _decode(body: bytes) -> Any:
             elif isinstance(current, list):
                 pending.extend(current)
         return value
-    except (ValueError, UnicodeError, RecursionError):
-        raise NativeHandoffError("原生输入必须是单个有效 UTF-8 JSON，且无重复键、非有限数或非法字符") from None
+    except (ValueError, RecursionError):
+        raise NativeHandoffError("QA 输入必须是单个有效 UTF-8 JSON，且无重复键、非有限数或非法字符") from None
 
 
 def _read(path: Path) -> bytes:
@@ -78,7 +78,20 @@ def _read(path: Path) -> bytes:
             raise ValueError("input changed")
         return body
     except (OSError, ValueError, UnicodeError):
-        raise NativeHandoffError("无法安全读取原生输入：须为稳定、无链接父目录的单链接普通 UTF-8 文件，且不超过 4 MiB") from None
+        raise NativeHandoffError("无法安全读取 QA 输入：须为稳定、无链接父目录的单链接普通 UTF-8 文件，且不超过 4 MiB") from None
+
+
+def read_handoff_json(path: Path | None) -> Any:
+    """文件与 stdin 使用同一 UTF-8 JSON 边界。stdin 是字节流，不能依当前终端编码转换。"""
+    if path is not None:
+        return decode_handoff_json(_read(path))
+    try:
+        body = sys.stdin.buffer.read(MAX_HANDOFF_BYTES + 1)
+    except OSError:
+        raise NativeHandoffError("无法从 stdin 读取 QA 输入") from None
+    if len(body) > MAX_HANDOFF_BYTES:
+        raise NativeHandoffError("QA stdin 输入不能超过 4 MiB")
+    return decode_handoff_json(body)
 
 
 def extract_native_handoff(host: str, path: Path) -> dict[str, Any]:
@@ -89,7 +102,7 @@ def extract_native_handoff(host: str, path: Path) -> dict[str, Any]:
     """
     if host not in HOSTS:
         raise NativeHandoffError("不支持的原生宿主")
-    terminal = _decode(_read(path))
+    terminal = read_handoff_json(path)
     if not isinstance(terminal, dict):
         raise NativeHandoffError("原生终端输入必须是 JSON 对象")
     if host == "codex":
@@ -125,7 +138,7 @@ def extract_native_handoff(host: str, path: Path) -> dict[str, Any]:
             if not isinstance(response, str):
                 raise NativeHandoffError("AGY 可选 response 必须是字符串")
             if response:
-                decoded_response = _decode(response.encode("utf-8"))
+                decoded_response = decode_handoff_json(response.encode("utf-8"))
                 # 用规范 JSON 比较保持布尔／数值等原类型差异，不让 True == 1 掩盖冲突。
                 canonical = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
                 if canonical(decoded_response) != canonical(payload):

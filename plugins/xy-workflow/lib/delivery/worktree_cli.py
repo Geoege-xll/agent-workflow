@@ -31,7 +31,7 @@ if __package__:
     from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
     from lib.task_graph_records import read_record, decode, document_digest, file_digest
-    from lib.runtime_pins import PLUGIN_ENV, RuntimePinError, record_binding
+    from lib.task_sources import PLUGIN_ENV, TaskSourceError, validate_task_source
     from lib.standard_paths import builtin_source_path
     from lib.project.validate_project_config import validate_docs
     from lib.validate_project_docs import validate as validate_documents
@@ -41,7 +41,7 @@ else:
     from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
     from lib.task_graph_records import read_record, decode, document_digest, file_digest
-    from lib.runtime_pins import PLUGIN_ENV, RuntimePinError, record_binding
+    from lib.task_sources import PLUGIN_ENV, TaskSourceError, validate_task_source
     from lib.standard_paths import builtin_source_path
     from lib.project.validate_project_config import validate_docs
     from lib.validate_project_docs import validate as validate_documents
@@ -235,7 +235,7 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     graph = payload.get("task_graph")
     if not isinstance(graph, dict):
         raise DeliveryError("delivery requires the current task_graph")
-    binding = record_binding(graph, root=repo)
+    validate_task_source(graph, root=repo)
     _execute("validate", graph)
     if not _execute("qa-ready", graph)["qa_ready"]:
         raise DeliveryError("writers or integration verification are incomplete")
@@ -347,7 +347,7 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
         for docs in docs_views:
             if any(path != docs.get("project") and not within(path, docs["plans"]) for path in projection):
                 raise DeliveryError("PM projection must stay within configured PROJECT/plans in both checkouts")
-        errors = validate_documents(candidate_config, integration, body=candidate_bytes, binding=binding)
+        errors = validate_documents(candidate_config, integration, body=candidate_bytes)
         if errors:
             raise DeliveryError("controlled-document projection is invalid: " + "; ".join(errors))
     if any(path not in projection and not any(within(path, boundary) for boundary in owned)
@@ -415,8 +415,8 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
             if builtin is not None:
                 # 内置规则属于实际执行的插件／固定核心；纯源包也只能读取此模块
                 # 物理来源中的三份固定规则，项目中的同名文件不能替换内置权威。
-                actual = (document_digest(repo, relative, binding=binding)
-                          if binding is not None or PLUGIN_ENV in os.environ
+                actual = (document_digest(repo, relative)
+                          if PLUGIN_ENV in os.environ
                           else document_digest(Path(__file__).resolve().parents[2], builtin))
             else:
                 # 项目索引、专项叶必须取集成候选；file_digest 保留祖先符号链接、
@@ -450,6 +450,17 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
             raise DeliveryError("confirm mode requires an explicit user reply reference")
     else:
         raise DeliveryError("merge authorization.mode must be confirm or auto")
+    from lib.delivery.native_handoff import decode_handoff_json
+    from lib.foundation_qa import current_request_receipt
+    reviewer = current_qa[0]
+    # 原有实际 Git 范围、写入归属和用户授权核对继续各自生效；最终使用的
+    # 包和结论还必须是同一 Reviewer 已通过 accept_request 写入图的证据。
+    if not current_request_receipt(graph, reviewer, root=repo):
+        raise DeliveryError("request QA requires current accept_request evidence")
+    receipt = reviewer["request_receipt"]
+    if (hashlib.sha256(pack_body).hexdigest() != receipt["task_pack"]["sha256"]
+            or qa != decode_handoff_json(read_record(Path(receipt["handoff"]["path"])))):
+        raise DeliveryError("delivery QA evidence differs from the accepted request receipt")
     return {**binding, "status": "merge_ready", "mode": mode}
 
 
@@ -496,7 +507,7 @@ def main() -> int:
                 raise DeliveryError("delivery input must be an object")
             operation = merge if args.command == "merge" else merge_check
             result = operation(repo, args.config, payload)
-    except (DeliveryError, WorktreePolicyError, TaskGraphError, QAHandoffError, RuntimePinError,
+    except (DeliveryError, WorktreePolicyError, TaskGraphError, QAHandoffError, TaskSourceError,
             OSError, UnicodeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

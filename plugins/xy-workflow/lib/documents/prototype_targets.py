@@ -12,6 +12,7 @@ from html.parser import HTMLParser
 import re
 
 from lib.documents import validate_prototype_workspace as workspace
+from lib.documents.plan_documents import REQ_PATTERN, current_requirement_ids, without_fenced_code
 from lib.documents.safe_documents import normalized_relative, digest
 
 SOURCE_ATTRIBUTE = "data-prototype-review-source"
@@ -209,7 +210,6 @@ CONTEXT_FIELDS = {"schema_version", "request_id", "adapter", "prototype_root", "
                   "navigation_sha256", "tool", "review_id"}
 ITEM_FIELDS = {"id", "page", "target_id", "kind", "message", "req_ids"}
 OPTIONAL_ITEM_FIELDS = {"comparison", "interaction_id", "interface_refs"}
-REQ_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])REQ-[0-9]{3,}(?![A-Za-z0-9_-])")
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 SHA_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -281,14 +281,23 @@ def _version(value: object, label: str) -> None:
         raise FeedbackError(f"{label}仅支持 schema_version 2（旧协议须重新 prepare）")
 
 
-def check_context(value: object, *, schema_version: int = 2) -> dict:
-    context = _object(value, CONTEXT_FIELDS, "评审上下文")
+def check_context(value: object, *, schema_version: int = 2, compact_source: str | None = None) -> dict:
+    # 包4和live5都曾发布过context3。只有各自私有目录中的有效记录才能选择
+    # 历史语义；新context4还将来源种类纳入review_id，不能在两种目录间互换。
+    if compact_source is not None:
+        if compact_source not in ("offline", "live"):
+            raise FeedbackError("评审上下文来源无效")
+        schema_version = 3 if isinstance(value, dict) and value.get("schema_version") == 3 else 4
+    fields = CONTEXT_FIELDS | {"source_kind"} if schema_version == 4 else CONTEXT_FIELDS
+    context = _object(value, fields, "评审上下文")
     if len(_json_bytes(context)) > MAX_CONTEXT_BYTES:
         raise FeedbackError("评审上下文超过 8 KiB 限额")
     # context 与包、反馈各有独立版本。旧消费者必须显式保持 context2，
     # 不能把旧标签对象悄悄解释成 context3 的短需求引用。
-    if type(context["schema_version"]) is not int or context["schema_version"] != schema_version or schema_version not in {2, 3}:
+    if type(context["schema_version"]) is not int or context["schema_version"] != schema_version or schema_version not in {2, 3, 4}:
         raise FeedbackError("评审上下文版本不匹配")
+    if schema_version == 4 and (compact_source is None or context["source_kind"] != compact_source):
+        raise FeedbackError("评审上下文与来源种类不匹配")
     _identifier(context["request_id"], "请求 ID")
     for key in ("adapter", "prototype_root", "plan_source"):
         _relative(context[key], key)
@@ -331,11 +340,10 @@ def check_context(value: object, *, schema_version: int = 2) -> dict:
 
 
 
-def _requirements(body: bytes, *, ids_only: bool = False) -> list:
-    """投影现有 Markdown 标签，不生成 REQ，也不把重复导航提及当作新需求。"""
-    result = {}
+def _legacy_requirement_lines(markdown: str):
+    """重读历史context2/3时精确保留当时的围栏开关，包括遇到较短标记就关闭的行为。"""
     fence = None
-    for line in body.decode("utf-8").splitlines():
+    for line in markdown.splitlines():
         stripped = line.lstrip()
         marker = re.match(r"(`{3,}|~{3,})", stripped)
         if marker:
@@ -344,8 +352,28 @@ def _requirements(body: bytes, *, ids_only: bool = False) -> list:
             elif fence == marker[1][0]:
                 fence = None
             continue
-        if fence is not None:
-            continue
+        if fence is None:
+            yield line
+
+
+def _requirements(body: bytes, *, context_version: int, registered_requirements: list | None = None) -> list:
+    """当前声明优先；已发行的旧目录可在同一来源字节下继续使用历史提取。"""
+    markdown = body.decode("utf-8")
+    current = None
+    marker_error = None
+    if context_version == 4:
+        try:
+            current = current_requirement_ids(markdown, "评审需求 Markdown")
+        except ValueError as exc:
+            if registered_requirements is None:
+                raise FeedbackError(str(exc)) from exc
+            marker_error = exc
+        if current is not None and (registered_requirements is None or current == registered_requirements):
+            return current
+
+    lines = without_fenced_code(markdown).splitlines() if context_version == 4 else _legacy_requirement_lines(markdown)
+    result = {}
+    for line in lines:
         for match in REQ_PATTERN.finditer(line):
             req_id = match[0]
             if req_id in result:
@@ -353,11 +381,17 @@ def _requirements(body: bytes, *, ids_only: bool = False) -> list:
             # 表格优先保留需求列中的标签；正文去掉紧随 ID 的 Markdown/标点语法。
             label = " ".join(line[match.end():].split("|", 1)[0].strip().strip("`*_ []：:-").split())
             result[req_id] = {"id": req_id, "label": label or req_id}
+    historical = list(result)
+    # 只有调用方已核对完整原稿摘要、且原目录与旧提取完全相同，才可能是新标记
+    # 生效前保存的 context4。同名标题出现在旧稿里也不需要迁移；新捕获不会走这条路。
+    if marker_error is not None and historical != registered_requirements:
+        raise FeedbackError(str(marker_error)) from marker_error
+    if current is not None and historical != registered_requirements:
+        return current
     if not result:
         raise FeedbackError("选定 Markdown 中没有已存在的 REQ 标签")
-    # 直接投影真实 Markdown 中全部去重 ID；不通过截断标签或裁掉末尾需求
-    # 来满足上下文限额，超限仍由 check_context 明确拒绝。
-    return list(result) if ids_only else list(result.values())
+    # 旧目录原样保留顺序和标签，不通过裁掉末尾需求满足上下文限额。
+    return list(result.values()) if context_version == 2 else historical
 
 
 class _ContractReferences(HTMLParser):

@@ -88,8 +88,12 @@ Light tasks without an actual isolation need and read-only reviews do not acquir
   actual range with `worktree_cli.py inspect --repo <integration-root> --base <target-base> --head <head>`.
   Its binary/full-index/no-renames/no-external-diff SHA-256 is the `scope_ref.repositories` record.
   After all requested work and dependencies finish, accept only a valid current `qa_handoff` PASS.
-  If the graph carries an explicit QA node, mark it `QA_PASSED` only after that handoff validates;
-  re-review returns to `QA`/`RUNNING`, failure to `FAILED`. A cached PASS cannot override those states.
+  Record `QA_PASSED` through the exclusive [`accept_request` operation](runtime-records.md#full-qa-acceptance).
+  Final delivery checks the original accepted task pack and handoff against the complete actual Git
+  scope. Re-review returns to `QA`/`RUNNING` and failure to `FAILED`.
+  After delivery and candidate cleanup, dependency scheduling can reuse the accepted evidence when
+  the recorded target branch still contains the accepted candidate and the original complete Git
+  scope and Writer contracts verify.
 - Apply only the already-assessed PM document projection after QA PASS, in the integration checkout,
   and validate it. If projection or rework changes the reviewed head, the same QA reviewer checks the
   affected delta and refreshes its final full scope binding; reuse unaffected checks, not an old PASS
@@ -120,7 +124,7 @@ interview. Local candidate commits and default commit assessment do not by thems
   stricter repository policy. All task, QA, scope and Git checks still apply.
 - Use `worktree_cli.py merge-ready --repo <main-checkout> --config <project.yaml> --input <delivery.json>`
   for a read-only final check, then `worktree_cli.py merge` with the same arguments. Prefix all commands
-  here with `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/delivery/` at the calling project.
+  with the verified plugin helper wrapper, using `lib/delivery/worktree_cli.py` and the actual project directory.
   The command accepts only a clean checkout already on the resolved target branch and a fast-forward
   from the pinned target base to the exact reviewed candidate. It never checks out another branch,
   creates a speculative merge commit, resolves conflicts, pushes, force-updates or overwrites ignored files.

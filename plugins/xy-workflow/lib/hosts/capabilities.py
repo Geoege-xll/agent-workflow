@@ -1,0 +1,268 @@
+"""宿主能力只读诊断：区分文档合同、已生成配置、版本探测与真实会话验收。"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+
+from lib.safe_text import read_file
+
+
+COMMANDS = {"codex": "codex", "claude": "claude", "antigravity": "agy"}
+DOCS = {
+    "codex": "https://learn.chatgpt.com/docs/hooks",
+    "claude": "https://code.claude.com/docs/en/sub-agents",
+    "antigravity": "https://antigravity.google/docs/hooks",
+}
+FEATURE_DOCS = {
+    "block_writes_outside_working_directories": "https://code.claude.com/docs/en/changelog#21314",
+    "suffixed_window_env": "https://code.claude.com/docs/en/env-vars",
+}
+# 这些条目来自官方文档，不代表当前宿主已加载、已授权或已完成模型运行。
+# 审阅界面明确标为人工审阅入口；不能由 /diff 或 /artifact 推出专用 AI review。
+AGY_REFERENCE = "https://antigravity.google/docs/cli/reference/"
+AGY_HEADLESS = "https://antigravity.google/docs/cli/headless/"
+AGY_DISCOVERY = "https://antigravity.google/docs/customization-discovery"
+AGY_SUBAGENTS = "https://antigravity.google/docs/subagents?app=cli"
+CODEX_SUBAGENTS = "https://learn.chatgpt.com/docs/agent-configuration/subagents"
+CODEX_COMMANDS = "https://learn.chatgpt.com/docs/developer-commands?surface=cli"
+CODEX_SETTINGS = "https://learn.chatgpt.com/docs/reference/settings"
+CODEX_APP_SERVER = "https://learn.chatgpt.com/docs/app-server"
+CLAUDE_SUBAGENTS = "https://code.claude.com/docs/en/sub-agents"
+# 以下描述一手文档中的能力及本包调用约束，不由 CLI 版本、文件存在或角色名称推导本会话工具。
+# 特别是停止与关闭不能互换，fresh 字段也不能代替原生上下文隔离的实际核验。
+CODEX_CAPABILITIES = {
+    "custom_agent_parent_permissions": {"documentation": CODEX_SUBAGENTS, "interface": "custom agent TOML",
+                                        "boundary": "sandbox_mode/approval_policy/model_provider/mcp_servers不覆盖parent；只读职责由角色正文声明，文件生成不证明原生权限隔离"},
+    "fresh_subagent_context": {"documentation": CODEX_SUBAGENTS, "interface": "native subagent creation",
+                               "boundary": "collaboration.spawn_agent 时显式 fork_turns:none；其他入口须核对实际独立上下文能力，禁止父历史 fork 降级"},
+    "native_stop_and_close": {"documentation": CODEX_SUBAGENTS, "interface": "steer / stop / close subagents",
+                              "boundary": "文档入口不证明当前有 close；interrupt 只停止当前执行，未确认关闭时退役禁止复用"},
+    "cli_mid_turn_input": {"documentation": CODEX_COMMANDS, "interface": "Enter / Tab",
+                           "boundary": "当前文档 Enter 注入当前 turn，Tab 排队到下一 turn；具体客户端与快捷键仍须实测，不写假想 TOML"},
+    "app_followup_behavior": {"documentation": CODEX_SETTINGS, "interface": "General > Follow-up behavior",
+                              "boundary": "App 可选 steer 当前运行或 queue 下一运行；不读写宿主数据库，IDE chatgpt.followUpQueueMode 不是通用 TOML"},
+    "app_server_steer": {"documentation": CODEX_APP_SERVER, "interface": "turn/steer",
+                         "boundary": "向活动 turn 追加输入且 expectedTurnId 必须匹配；不同于 turn/interrupt 的取消，不证明本会话暴露或已调用此API"},
+}
+CLAUDE_CAPABILITIES = {
+    "fresh_named_subagent_context": {"documentation": CLAUDE_SUBAGENTS, "interface": "Agent(xy-*)",
+                                     "boundary": "普通命名角色每次调用创建新实例与独立初始上下文；fork 会复制父历史，禁止用于新任务"},
+    "send_message_resume": {"documentation": CLAUDE_SUBAGENTS, "interface": "SendMessage",
+                            "boundary": "续发保留旧上下文，仅限同任务连续工作、短返工和同轮 Reviewer；不需要启用 Teams"},
+    "task_stop": {"documentation": CLAUDE_SUBAGENTS, "interface": "TaskStop",
+                  "boundary": "停止当前执行后仍可能被 SendMessage 恢复，不能证明清空上下文、永久关闭或释放打开线程额度"},
+}
+AGY_CAPABILITIES = {
+    "diff_review_ui": {"documentation": AGY_REFERENCE, "interface": "/diff", "kind": "human_review_ui"},
+    "artifact_review_ui": {"documentation": AGY_REFERENCE, "interface": "/artifact", "kind": "human_review_ui"},
+    "independent_subagents": {"documentation": AGY_SUBAGENTS, "interface": "custom subagents"},
+    "fresh_subagent_context": {"documentation": AGY_SUBAGENTS, "interface": "invoke_subagent",
+                               "boundary": "初始 Prompt 自包含当前任务；新实例不继承父会话历史，当前规范仍须读取"},
+    "send_message_resume": {"documentation": AGY_SUBAGENTS, "interface": "message idle agent",
+                            "boundary": "文档描述空闲 Agent 收消息后保留上下文续用；已终止 Agent 不可唤醒"},
+    "running_parent_message": {"documentation": AGY_SUBAGENTS, "interface": "Running > Parent control",
+                               "boundary": "官方说明父消息可以 interrupt 正在运行的子代理；不得据此声明 non_interrupting_message，缺少实证时等待"},
+    "subagent_kill": {"documentation": AGY_SUBAGENTS, "interface": "native subagent termination",
+                      "boundary": "kill 后不可唤醒且会清理临时 worktree；先保护成果、唯一日志和必要证据，历史转录并不永久删除"},
+    "conversation_resume": {"documentation": AGY_REFERENCE, "interface": "--continue / --conversation / /resume"},
+    "context_usage": {"documentation": AGY_REFERENCE, "interface": "/context"},
+    "quota_usage": {"documentation": AGY_REFERENCE, "interface": "/usage",
+                    "boundary": "模型配额显示不等于本任务已采集 token 用量"},
+    "headless_json": {"documentation": AGY_HEADLESS, "interface": "--output-format json / stream-json"},
+    "structured_output_schema": {"documentation": AGY_HEADLESS, "interface": "--json-schema"},
+    "cumulative_session_usage": {"documentation": AGY_HEADLESS, "interface": "result.usage",
+                                 "counter_scope": "cumulative_session",
+                                 "boundary": "流式会话 usage 为累计值；读取方须按会话区分，不能逐事件相加"},
+    "skill_source_inspection": {"documentation": AGY_DISCOVERY, "interface": "/skills"},
+    "skill_reload": {"documentation": AGY_DISCOVERY, "interface": "/skills reload"},
+    "native_grill_me": {"documentation": "https://antigravity.google/docs/commands/grill-me/",
+                        "interface": "/grill-me", "kind": "native_interview"},
+    "native_plan": {"documentation": AGY_REFERENCE, "interface": "/plan", "kind": "native_planning"},
+}
+FEATURES = {
+    "codex": (("session_start_fork", None), ("session_start_compact", None))
+             + tuple((name, None) for name in CODEX_CAPABILITIES),
+    "claude": (("background_subagents", None), ("send_message_resume", None),
+               ("model_definition_precedence", (2, 1, 251)), ("model_force", (2, 1, 257)),
+               ("role_auto_compact_window", (2, 1, 296)), ("suffixed_window_env", (2, 1, 304)),
+               ("block_writes_outside_working_directories", (2, 1, 314)),
+               ("per_invocation_effort", (2, 1, 292)))
+              + tuple((name, None) for name in CLAUDE_CAPABILITIES if name != "send_message_resume"),
+    "antigravity": (("session_start", None),) + tuple((name, None) for name in AGY_CAPABILITIES),
+}
+VERSION = re.compile(r"(?:codex-cli\s+|Claude Code\s+|Antigravity CLI\s+|agy\s+)?"
+                     r"(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)(?:\s+\(Claude Code\))?", re.I)
+
+
+def client_version(host: str, *, probe: bool, environment: dict) -> dict:
+    """默认不启动任何宿主；显式探测只执行固定参数，不返回宿主 stdout/stderr 原文。"""
+    command = COMMANDS[host]
+    result = {"command": command, "status": "not_probed", "version": None,
+              "evidence_level": "runtime_unverified", "runtime_verified": False}
+    if not probe:
+        return result
+    executable = shutil.which(command, path=environment.get("PATH", os.defpath))
+    if executable is None:
+        return result | {"status": "not_found"}
+    try:
+        # 固定 argv 和短超时；不运行 doctor/login/更新命令，错误文本也不混进诊断输出。
+        completed = subprocess.run([executable, "--version"], stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True, timeout=3, check=False, env=environment)
+    except subprocess.TimeoutExpired:
+        return result | {"status": "timeout"}
+    except (OSError, UnicodeError):
+        return result | {"status": "probe_failed"}
+    if completed.returncode != 0:
+        return result | {"status": "probe_failed"}
+    # 只接受整行已知版本格式。预发行版本保留标记，不能按稳定版本推定最低版本条件。
+    for line in completed.stdout.splitlines():
+        match = VERSION.fullmatch(line.strip())
+        if match:
+            return result | {"status": "version_observed", "version": match[1], "evidence_level": "source_observed"}
+    return result | {"status": "unrecognized_version"}
+
+
+def declared_skill_name(body: bytes) -> str | None:
+    """保守识别有界单行 frontmatter；不解析完整 YAML，也不回显任意正文或异常原值。"""
+    lines = body.decode("utf-8").splitlines()
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return None
+    values = {}
+    for line in lines[1:lines.index("---", 1)]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = re.fullmatch(r"([a-z][a-z0-9_-]*):[ \t]*(.+)", line)
+        if not match or match[1] in values or not all(char.isprintable() for char in line):
+            return None
+        value = match[2].strip()
+        if not value:
+            return None
+        # 只接受确定的字符串标量。复杂 YAML 合法性无法确认时保留 unknown，
+        # 不把文件名、重复字段、转义控制字符或截断后的字符串当成真实声明。
+        if value.startswith('"'):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
+            if not isinstance(value, str) or not all(char.isprintable() for char in value):
+                return None
+        elif value.startswith("'"):
+            if not re.fullmatch(r"'(?:[^']|'')*'", value):
+                return None
+            value = value[1:-1].replace("''", "'")
+        elif value[0] in "-?:,[]{}#&*!|>%@`" or re.search(r":\s|\s#", value):
+            return None
+        values[match[1]] = value
+    name = values.get("name", "")
+    return name if len(name) <= 64 and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) else None
+
+
+def antigravity_customization_sources(project: Path | None) -> dict:
+    """只查明确项目路径，不枚举个人技能、manifest 指向目录或其他自定义来源。"""
+    relative = ".agents/skills/grill-me/SKILL.md"
+    definition = {"relative_path": relative, "status": "not_inspected", "sha256": None,
+                  "declared_name": None, "declaration_status": "unknown",
+                  "evidence_level": "runtime_unverified", "runtime_verified": False}
+    if project is not None:
+        try:
+            # 复用安全 reader 的单链接普通文件、父目录、UTF-8 与大小限制；
+            # 拒绝来源只返回固定状态，避免错误信息把正文或项目外路径带进输出。
+            body = read_file(project / relative)
+            definition.update(status="not_found" if body is None else "source_observed",
+                              evidence_level="source_observed")
+            if body is not None:
+                name = declared_skill_name(body)
+                definition.update(sha256=hashlib.sha256(body).hexdigest(), declared_name=name,
+                                  declaration_status="recognized" if name is not None else "unrecognized")
+        except (OSError, ValueError, UnicodeError):
+            definition.update(status="invalid_or_unreadable")
+    # 同名声明只构成潜在冲突。文档中的优先级还受个人来源、manifest 和当前加载状态影响，
+    # 因而绝不根据文件存在或 --version 成功推断当前 /grill-me 已被自定义技能覆盖。
+    return {"inspection_scope": "explicit_project_paths_only", "personal_directories_scanned": False,
+            "grill_me": {"project_definition": definition,
+                         "same_name_risk": "possible" if definition["declared_name"] == "grill-me" else "unknown",
+                         "actual_source": {"status": "unknown", "source": None,
+                                           "evidence_level": "runtime_unverified", "runtime_verified": False},
+                         "documentation": AGY_DISCOVERY + "#which-customization-wins",
+                         "verification_hint": "请在当前目标宿主用 /skills 查看实际路径与指令；必要时 /skills reload 后再次核对。doctor 不执行这些命令"}}
+
+
+def diagnose(host: str, *, project: Path | None = None, probe: bool = False,
+             environment: dict | None = None) -> dict:
+    """输出有界白名单元数据，不把版本满足条件误报为事件、权限或角色已运行成功。"""
+    if host not in COMMANDS:
+        raise ValueError("未知宿主")
+    environment = dict(os.environ) if environment is None else environment
+    client = client_version(host, probe=probe, environment=environment)
+    version = client["version"]
+    stable = tuple(map(int, version.split("."))) if version and re.fullmatch(r"\d+\.\d+\.\d+", version) else None
+    capabilities = []
+    for name, minimum in FEATURES[host]:
+        eligible = None if minimum is None or stable is None else stable >= minimum
+        capabilities.append({"name": name, "documentation": FEATURE_DOCS.get(name, DOCS[host]),
+                             "minimum_version": ".".join(map(str, minimum)) if minimum else None,
+                             "version_meets_minimum": eligible, "runtime_verified": False,
+                             "evidence_level": "documented", "runtime_status": "runtime_unverified",
+                             **{"codex": CODEX_CAPABILITIES, "claude": CLAUDE_CAPABILITIES,
+                                "antigravity": AGY_CAPABILITIES}[host].get(name, {})})
+    return {"platform": host, "documentation_snapshot": "2026-11-11", "client": client,
+            "documented_capabilities": capabilities,
+            "continuous_intake": continuous_intake_diagnostics(host),
+            "agent_lifecycle_boundary": {
+                "workflow_schema_version": 2, "context_policy": "handoff_only",
+                "instance_policy": "fresh", "runtime_verified": False,
+                "current_tool_surface": "not_inspected", "native_end_confirmed": False,
+                "unavailable_end_action": "retire_without_reuse",
+                "boundary": "别名不等于原生实例；新任务新ID，同任务有界续用。闭环后先保全成果与证据；结束能力缺失或失败只退役，不宣称销毁、清空或释放额度。运行数/打开线程数须按宿主实际口径核对，不建立Agent池或第二状态机。",
+            },
+            "customization_sources": antigravity_customization_sources(project) if host == "antigravity" else None,
+            "review_boundary": {"dedicated_ai_review": {"status": "not_confirmed_in_reference",
+                                 "documentation": AGY_REFERENCE, "evidence_level": "runtime_unverified",
+                                 "runtime_verified": False},
+                                "reason": "文档列有 diff／Artifact 人工审阅入口；未确认专用 /review AI 审查命令，面板不证明独立 AI 审查已完成"}
+                               if host == "antigravity" else None,
+            "runtime_verified": False, "runtime_status": "runtime_unverified",
+            "verification_boundary": "配置投影和版本信息不证明原生信任、事件触发、模型可用或实际角色完成；应在目标宿主会话验收"}
+
+
+def continuous_intake_diagnostics(host: str) -> dict:
+    """给出人工验收入口，不把配置/版本或另一次会话观察提升为运行事实。
+
+    五项行为失败方式不同：收到 B 不证明 A 未中断，wait 返回不证明 parent-final
+    后子实例仍可工作。分别保持 unknown，并由 PM 在获授权的目标原生会话留证。
+    本诊断不扫描其他会话、不改宿主设置，也不探测模型或偷偷启动后台进程。
+    """
+    checks = (
+        ("message_delivery", "A 运行时发送 B，记录 PM 实际收到 B 的时点与目标会话"),
+        ("wait_wakeup", "PM 使用当前原生 wait 时接收新用户输入/工作者结果，确认能唤回协调"),
+        ("original_task_continuity", "接收及派发 B 后确认 A 同一实例连续执行，未停止、重启或重复派发"),
+        ("same_agent_followup", "确认同任务已修订完整约定的消息送到原 ID；idle 续用与运行中非打断追加分别核实"),
+        ("parent_final_lifecycle", "单独观察主回合 final/中断后的子实例状态、结果送达和后续恢复能力"),
+    )
+    return {
+        "current_tool_surface": "not_inspected",
+        "observed_capabilities": {"non_interrupting_message": None, "idle_followup": None},
+        "runtime_checks": [{"name": name, "status": "runtime_unverified", "runtime_verified": False,
+                            "evidence_ref": None, "verification_hint": hint} for name, hint in checks],
+        "documentation": {"codex": CODEX_SUBAGENTS, "claude": CLAUDE_SUBAGENTS, "antigravity": AGY_SUBAGENTS}[host],
+        "source_boundary": ("AGY Running Parent control 允许父消息 interrupt；未核实非打断能力时 running 只能等待，idle 可核实原生恢复"
+                            if host == "antigravity" else "按本会话实际暴露且获授权的工具核实能力；不从产品名、配置或版本推导"),
+        "client_not_found_scope": "not_found 仅代表当前探测 PATH 未发现可执行文件，不代表用户未安装",
+        "settings_policy": "只给目标客户端的官方操作入口；不修改用户设置、环境或宿主数据库",
+    }
+
+
+if __name__ == "__main__":
+    # 项目工作目录由同包入口确定；默认仅报告静态资料，显式选项才读取客户端版本。
+    parser = argparse.ArgumentParser(description="只读检查宿主能力与会话证据边界")
+    parser.add_argument("--platform", choices=tuple(COMMANDS), required=True)
+    parser.add_argument("--probe-version", action="store_true")
+    args = parser.parse_args()
+    print(json.dumps(diagnose(args.platform, project=Path.cwd(), probe=args.probe_version), ensure_ascii=False))

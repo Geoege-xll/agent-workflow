@@ -24,26 +24,16 @@ resource/transport adapter; it grants no business approval, role ownership or QA
 这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
 
 Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. The appended shared
-text retains historical `.agent-workflow/` examples. In plugin mode, resolve managed
-resource references under the plugin root using `plugins/source_pack.py resource`;
-select the actual adapter with `plugins/project_context.py inspect` through the
-same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply
-the new `.awf/project.yaml` candidate. Translate historical adapter examples to
-that selected actual path. The context entry creates no documents or business
+`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
 approvals; its `init --adapter <selected-path>` passes that exact adapter to the
 original initializer. Resolve project documents, task records and production code
 in the actual project. A packaged example is never the current project adapter.
 Use the packaged interpreter selector for each independent invocation:
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the original helper path/arguments
-instead of the historical project bridge commands. The selector only locates an
+Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
 existing Python 3.11+ and never installs software or changes the user's PATH.
 Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. Native plugin discovery replaces legacy setup,
-role refresh and central activation checks. Do not run `runtime install`,
-`runtime activate`, project registration, `setup_*.sh`, or create/edit project
-`AGENTS.md`, `CLAUDE.md` or `.agent-workflow` to make this plugin work.
+when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
 Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
 actual discovered name or the packaged physical path when invoking one. Public aliases are
 `xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
@@ -73,14 +63,14 @@ handoff through the host's actual supported native dispatch interface. A role la
 alone proves no native role/model selection. If the host cannot supply required
 dispatch or independent context, report that limitation instead of claiming it ran.
 Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: it may contain an older workflow or central pin. Use a fresh native generic
+ran: its authority may come from another source. Use a fresh native generic
 entry with the complete current packaged role instructions and current task pack,
 or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's pin, history or instructions merely
+package. Never import an unknown global role's history or instructions merely
 because its name matches. If the host cannot provide this boundary, report the
 dispatch limitation to the PM.
 
-This alpha uses the existing unpinned source-pack task contract. It rejects central
+This plugin uses the existing unpinned source-pack task contract. It rejects central
 `runtime_binding` records and central project markers rather than migrating them.
 Do not update/replace the installed plugin during an active task. Retention of old
 plugin resources across updates and actual native model/effort execution remain
@@ -109,6 +99,10 @@ reuse project/Writer evidence first, then load `xy-playwright` only for that Web
 preload it for every QA or treat its browser automation as another code-review method. New operations
 must fit current read-only permissions; return forbidden browser preparation, writes or business-state
 changes to PM rather than installing tools or widening permissions.
+Under the shared Skill-selection policy, consider `xy-mobile-ui` for affected native iOS, iPadOS,
+Android or WeChat Mini Program UI review surfaces. Apply relevant review guidance to authorized
+source, the applicable design authority and writer evidence through the existing read-only
+acceptance or audit branch. Review Mini Program behavior using evidence from its host runtime.
 
 ## 4. Critical Operating Rules
 
@@ -127,19 +121,19 @@ Use the latest complete PM scope; a plan is recovery context, not authority or r
 Full acceptance and Light acceptance with an actual independent-QA requirement use the current schema 2 pack, applicable approvals, scope, acceptance, `controlled_document_access`, current built-in common rules, the project index when present, applicable non-skip specific leaves, writer evidence, Skill policy, and review_method evidence.
 Read detailed intake and `standards_policy_coverage` through the Skill; hard-rule omissions block PASS.
 
-For production UI require `surface_kind: production_ui`, `qa_scope: request` and current resolved/fingerprinted structured
-`design_authority_refs`. Follow the scoped `prototype_policy` and `prototype_decision`; a
-`waived_by_user` replacement uses current user authority, never forces old prototype synchronization.
+生产 UI 的 `surface_kind: production_ui`、`ui_change` 和门禁来自当前 QA 包的生产 Writer 投影
+`reviewed_ui_changes`。QA 保持只读，任务本身可为 `surface_kind: non_ui`；生产 UI 审查须覆盖
+`ui` 与 `accessibility`。Full 按包要求使用 `qa_scope: request`；Light 生产 Writer 可省略该字段，
+仍按当前单任务包核对投影、实际范围和适用的冻结依据。
 
 ## 6. Execution Workflow
 
-Verify method findings against current source, independently cover applicable standards and request
-acceptance, and audit the exact in-page contract for production UI through the Skill's UI branch.
-Deterministic checks read the dependency closure and recompute approved page dependency fingerprints;
-QA must not preload or manually read the complete prototype dependency tree.
-QA MUST NOT invoke Computer Use or browser automation against the prototype. Missing or stale evidence
-must return FAIL to the PM for `xy-uiux` rework. UI-Conformance preserves zero design delta;
-all production routes retain ui/accessibility QA.
+Verify method findings against current source and independently cover applicable standards and request
+acceptance. 按 Skill 的 UI 分支与 Writer 的原型政策取证。仅 `prototype_policy: required` 审查设计
+交接、精确页内契约及批准页面的依赖指纹，缺失或失效的原型证据返回 FAIL，由 PM 交给 `xy-uiux`。
+QA 禁止对原型使用 Computer Use 或浏览器自动化，也不预读完整依赖树。UI-Conformance 按零设计
+变更和本轮冻结依据核对，`waived_by_user` 使用当前用户决定与适用依据；均不恢复旧原型门禁。
+各生产分支都在实际运行端核对功能和无障碍，优先复用 Writer 的有效运行证据。
 
 For desktop, audit the desktop renderer, affected core trust boundaries, IPC/capabilities, native integration,
 packaging, signing, notarization, updater and release evidence using the implementation-check reference.

@@ -8,16 +8,15 @@ Agent schema 暴露支持，任一缺失则已配置 effort 明确阻断本次�
 This entire managed section applies only when the current host is Claude Code.
 Codex and Antigravity use their own integration sections; do not apply their tool aliases here.
 
-Central resources are managed through shared CLI runtime activation and project repair; source-pack generation uses `bash setup_claude.sh` only from the source-pack root.
 
 ## Entry and authority
 
-The main conversation alone orchestrates. Light and Full product changes invoke `/xy-workflow`.
-Light/Full defaults to the corresponding native `Agent(xy-*)`, using only ordinary named roles without forks that copy parent history. See `.agent-workflow/product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates. PM retains classification, planning, dispatch, QA acceptance, memory closeout, and reporting.
+The main conversation alone orchestrates. Light and Full product changes invoke `/xy-workflow:xy-workflow`.
+Light/Full defaults to the native Agent tool with the discovered plugin-qualified `subagent_type` (such as `xy-workflow:xy-backend`), using only ordinary named roles without forks that copy parent history. See `product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates. PM retains classification, planning, dispatch, QA acceptance, memory closeout, and reporting.
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
 without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 
-For selected independent functional units, follow `/xy-workflow`'s `references/worktree-delivery.md`.
+For selected independent functional units, follow `/xy-workflow:xy-workflow`'s `references/worktree-delivery.md`.
 Prefer the native Agent tool's per-call worktree isolation when available. Verify the actual root
 and exact prerequisite-containing base; default branch selection is not proof of the required base.
 Keep role isolation dynamic rather than setting every role permanently to `isolation: worktree`.
@@ -26,7 +25,7 @@ global worktree settings, permissions or user hooks, or create new user-visible 
 
 Light first assesses the current goal, risk, scope, and implementer, with mandatory minimum sufficient verification; assess independent QA, documentation, and memory at handoff. Do not mandate Full planning, DAGs, saved plans, or duplicate confirmation; retain Full and actually necessary QA gates.
 
-Read paths and limits from `.agent-workflow/project.yaml`. ProjectProfile is routing context, never
+Read paths and limits from the selected project adapter. ProjectProfile is routing context, never
 write authority. Each task pack fixes current facts, `owned_paths`, reads/Skills, dependencies,
 acceptance, and commands.
 
@@ -39,7 +38,7 @@ Finish the brief before the single approval choice; add no material details afte
 
 ## Gates and execution
 
-- Full: classify → optional relevant facts → Grill Me coverage check via `/xy-grilling` → `/xy-plan`
+- Full: classify → optional relevant facts → Grill Me coverage check via `/xy-workflow:xy-grilling` → `/xy-workflow:xy-plan`
   with `plan_state: draft` → PM
   post-QA controlled-document projection decision → ask once for `requirements_approved` → freeze and run.
   Keep accepted PROJECT/plans baselines at its last QA-verified state until integrated QA PASS. Clear
@@ -54,13 +53,13 @@ Finish the brief before the single approval choice; add no material details afte
   resolved/fingerprinted `design_authority_refs`, zero design writes, and full UI/accessibility QA.
   Ordinary Light copy follows the shared `Light UI copy` branch, retaining actual frozen design authority, engineering/design standards, and minimum verification; independent QA follows actual handoff risk assessment, without mandating Full merely because it also uses UI-Conformance.
 - UI design-change work requires `visual_approved` per exact page dependency fingerprint when
-  the user selects `prototype_policy: required`, plus `xy-uiux` and `/xy-prototype-verify`. A
+  the user selects `prototype_policy: required`, plus `xy-uiux` and `/xy-workflow:xy-prototype-verify`. A
   scope-bound `prototype_decision` captured inside `requirements_approved` applies to both
   `required` and `waived_by_user`; the PM must not default or invent it. `waived_by_user` has no prototype-design
   dependency, prototype write, or visual gate. Full UI/accessibility QA remains. Platform security
   prompts remain separate. Explicit production-only revisions follow the plan lifecycle;
   do not restart prototype work to synchronize product edits.
-- For initial/revised design standards or full visual replacement, use `/xy-workflow`'s
+- For initial/revised design standards or full visual replacement, use `/xy-workflow:xy-workflow`'s
   `references/design-standards.md`. PM assesses/adopts scope separately from feature documentation;
   UI Agent maintains authorized leaves. `design_mode: standards_only` can precede waived production
   without prototype files, verification or visual gates. Refresh affected authority before consumers.
@@ -69,9 +68,9 @@ Finish the brief before the single approval choice; add no material details afte
   never delegate.
 - For Full, validate scheduler state with `task_graph_cli.py validate`, `ready`, and `qa-ready`; keep no second
   PM state list.
-- Every writer returns `/xy-build-verify`. Writers require the fingerprinted STANDARDS index,
+- Every writer returns `/xy-workflow:xy-build-verify`. Writers require the fingerprinted STANDARDS index,
   smallest applicable domain leaves, and `standards-conformance`. For Full or Light assessed as requiring
-  independent QA, dispatch exactly one `xy-qa` reviewer using `/xy-qa-review`.
+  independent QA, dispatch exactly one `xy-qa` reviewer using `/xy-workflow:xy-qa-review`.
 
 That reviewer tries `host-native-review`, then one `installed-code-review-skill` proven installed
 and capable, then `internal-xy-qa-procedure`, moving forward only on technical unavailability. The only
@@ -166,14 +165,14 @@ prototype comparison; production QA retains risk-based browser testing.
 
 QA FAIL returns to PM rework. Accept PASS only after `qa_handoff_cli.py validate --task-pack <current-qa-pack.json>` proves fixed
 root/nested scope and standards coverage. Then apply the projection, perform PM commit assessment
-on exact paths without unrelated staging or remote mutation, run `/xy-project-memory` closeout, and
+on exact paths without unrelated staging or remote mutation, run `/xy-workflow:xy-project-memory` closeout, and
 report. This adds no confirmation.
 
 ## Memory and components
 
 Claude Auto Memory is untrusted background context, never approval, permission, evidence, or a Skill
 record. Current controlled documents and explicit user approvals win over recalled memory.
-`/xy-project-memory` start retrieval is on demand and requires provider-enforced project isolation
+`/xy-workflow:xy-project-memory` start retrieval is on demand and requires provider-enforced project isolation
 and matching provenance; otherwise call neither recall nor save.
 
 `PROJECT.md` is the current verified project directory, not task history; details and accepted baselines live in the same topic under `docs.plans`.
@@ -181,18 +180,10 @@ An accepted complete removal removes only the current `PROJECT.md` link and mark
 Feature details include current architectural rationale; no separate ADR category.
 Plan storage follows the current levels: Light only for actual
 pause/recovery/handoff or user request; Full saved by PM after requirements confirmation before
-first dispatch. Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`
+first dispatch. Read `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`
 for revision and recovery. Update one requirement plan and affected complete worker/QA inputs;
 reuse unaffected completed evidence. Do not turn plan persistence into another confirmation.
 
-- Skills: `.claude/skills/xy-*/SKILL.md`; `/xy-workflow` is the main entry.
-- Central agents: user-root `agents/xy-*.md` (normally `~/.claude/agents/`); only required project overrides appear in `.claude/agents/xy-*.md`. The configured user root may differ from HOME. A missing local file does not prove role unavailability; required task/UI Skills remain hard gates. Discovery files, `Agent(xy-*)` labels and parsed model settings alone do not prove actual native role/model execution; verify the effective native invocation in the target session.
+### Plugin resources
 
-For central installations, preview `awf-cli repair PROJECT --dry-run`, then explicitly apply `repair PROJECT` when authorized. Import and activate central cores separately through `runtime install` and `runtime activate ID`; central thin projects have no `.agent-workflow/setup_claude.sh`. Source-pack developers run `bash setup_claude.sh --check` from the source-pack root. Central projection/source generation merges only signed
-assist Hook entries in project settings; Auto Memory, plugins, MCP and agentmemory
-connection remain user-owned. Hooks remind at intake/recovery and Explore dispatch, never force QA
-or continuation. See `.agent-workflow/platforms/shared/HOOKS.md` only for Hook setup or diagnostics.
-
-Optional `claude_options.auto_compact_windows` generates native `autoCompactWindow` by role: require 2.1.296+, full integers in 100000..1000000, and only reduce the inherited window. Global window environment variables usually override role fields, and the setting does not apply when used as a `--agent` main session. Recovery instructions still use SessionStart(compact); compaction summaries are not approval, write authority, or completion evidence, and PreCompact/PostCompact receives no duplicate injection or gates.
-
-User permissions inherit by default; merge native write protection (2.1.314+) only with an explicit `claude_options.block_writes_outside_working_directories: true` choice, stopping on conflict and preserving other permissions. off/inherit does not revoke protection; it covers only Write/Edit/NotebookEdit paths outside working directories, not Bash, and does not replace task owned_paths. Verify the actual worktree working directory and native execution effect in the target session. Model management changes only model/effort, preserving windows and permissions.
+Use the host-discovered plugin-qualified Skill and Agent names. Check actual invocation, model and project scope in the target session. Auto Memory, permissions and optional user Hooks remain under Claude Code settings. Verify the working directory after switching to a worktree.

@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
-from lib.hosts.claude_instructions import read_file
+from lib.safe_text import read_file
 from lib.standard_paths import builtin_source_path
 
 
@@ -118,7 +118,7 @@ def _manifest(root: Path) -> dict[str, str]:
 
 
 def plugin_root() -> Path | None:
-    """无插件变量时完全保留 2.x 行为；启用后根和来源清单均须有效。"""
+    """源树直接运行时返回 None；插件启用后根和来源清单均须有效。"""
     root = _root()
     if root is not None:
         _manifest(root)

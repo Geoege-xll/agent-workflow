@@ -29,6 +29,11 @@
   by component and version and record only project differences; do not write a separate document for
   each property or build a complete component library.
 
+在当前变更范围内辨认无意漂移。对相同语义的操作，核对组件定义、变体及语义变量，留意单页用局部样式
+覆盖公共组件尺寸、间距或反馈状态的情况，即使视觉结果近似也应核对定义来源。按项目批准的变体和实际
+运行端行为判断差异，比如触控区域、键盘焦点、原生返回与宿主控件约束。涉及合理例外时，在现有交接中
+注明依据和适用范围。
+
 ## Dialogs and Overlays
 
 - `[des-dialog-001] [hard]` Distinguish informational dialogs, confirmations, form dialogs,
@@ -92,6 +97,11 @@
   record recovery paths for page-level loading/empty/error/partial-data states in the existing page
   contract; direct development follows the current task's requirements and acceptance without adding
   a prototype. Explain inapplicable items; do not require every control to implement every state.
+
+关键操作按实际业务结果提供进度、取消、失败、结果待确认或完成反馈，并给出适用的后续动作。区分退出
+页面与真正取消操作。已产生的业务结果按项目约定处理。重试沿用项目允许的恢复路径，仅在现有契约允许
+安全重复时重发原操作。涉及写入且结果未明时，遵循项目已有的结果确认与恢复办法，避免重复提交或重复
+副作用。返回、失败、取消与完成涉及的状态保留和清理，依照已批准的业务规则。
 
 ## Responsive and adaptive behavior
 

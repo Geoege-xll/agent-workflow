@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from dataclasses import replace
 import json
 import re
 import sys
@@ -20,8 +21,7 @@ try:
     from .worktree_policy import WorktreePolicyError, integration_ready, validate_execution
     from .standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
     from .validate_project_docs import builtin_standard_rule_catalog
-    from .runtime_pins import project_root, record_binding
-    from .plugin_resources import plugin_root
+    from .task_sources import project_root, validate_task_source
     from .task_graph import (
         Task,
         TaskGraphError,
@@ -36,8 +36,7 @@ except ImportError:
     from worktree_policy import WorktreePolicyError, integration_ready, validate_execution
     from standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
     from validate_project_docs import builtin_standard_rule_catalog
-    from runtime_pins import project_root, record_binding
-    from plugin_resources import plugin_root
+    from task_sources import project_root, validate_task_source
     from task_graph import (  # type: ignore[no-redef]
         Task,
         TaskGraphError,
@@ -79,7 +78,8 @@ PLAN_ONLY_FIELDS = {
     "qa_scope",
     "controlled_document_access",
     "standards_exceptions",
-    "foundation_task_id", "foundation_receipt", "request_receipt",
+    "foundation_task_id", "foundation_receipt", "request_receipt", "qa_review_revision",
+    "qa_scope_ref", "qa_scope_fingerprint",
 }
 UI_CHANGE_FIELDS = {
     "route",
@@ -164,10 +164,10 @@ REVIEWED_UI_FIELDS = {"id", "task_type", "role", "surface_kind", "workflow_level
 
 
 def _require_version(payload: dict[str, Any]) -> None:
-    """2.0直接拒绝旧格式；不会把缺版本、布尔或字符串版本静默升级。"""
+    """schema 2直接拒绝旧格式；不会把缺版本、布尔或字符串版本静默升级。"""
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
         raise TaskGraphError("schema_version must be integer 2; old formats are not accepted")
-    record_binding(payload)
+    validate_task_source(payload)
 
 
 def pack_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
@@ -178,7 +178,7 @@ def pack_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     """
     _require_version(payload)
     if set(payload) - PACK_FIELDS or not isinstance(payload.get("task"), dict):
-        raise TaskGraphError("2.0 task pack must contain one task and only current contract fields")
+        raise TaskGraphError("schema 2 task pack must contain one task and only current contract fields")
     if not isinstance(payload.get("standards_contract"), dict):
         raise TaskGraphError("self-contained task pack requires standards_contract")
     result = {key: copy.deepcopy(value) for key, value in payload.items() if key != "task"}
@@ -212,7 +212,8 @@ def replace_pack_task(payload: dict[str, Any], task: dict[str, Any]) -> dict[str
     return result
 
 
-def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
+def export_task_pack(payload: dict[str, Any], task_id: str, *, root: Path | None = None,
+                     require_current_qa: bool = False, freezing_qa_scope: bool = False) -> dict[str, Any]:
     """由当前已校验图导出唯一任务及适用依据，不携带其他任务或完整PM会话。"""
     _execute("validate", payload)
     matches = [task for task in payload["tasks"] if task["id"] == task_id]
@@ -220,21 +221,29 @@ def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
         raise TaskGraphError(f"unknown task ID: {task_id}")
     task = matches[0]
     result = {"schema_version": 2, "task": copy.deepcopy(task)}
-    if "runtime_binding" in payload:
-        result["runtime_binding"] = copy.deepcopy(payload["runtime_binding"])
     if "requirements_fingerprint" in payload:
         result["requirements_fingerprint"] = payload["requirements_fingerprint"]
     # 规范仍以原图为唯一权威；导出只投影当前任务已声明的读取来源。QA审查本请求
     # 闭包的Writer，因此保留该闭包所需规则，而不把整图其他请求的规范一起交接。
     relevant = [task]
+    ordinary_qa = False
     if task["task_type"] == "qa":
-        from lib.foundation_qa import checkpoint, fingerprint
-        selected = checkpoint(payload, task) if task.get("foundation_task_id") else None
-        closure = set(selected["writer_ids"]) if selected else request_closure(_tasks(payload), task["request_id"])
-        if selected:
+        from lib.foundation_qa import (checkpoint, fingerprint, is_ordinary_reviewer, request_fingerprints,
+                                       request_writers, verify_frozen_scope)
+        ordinary_qa = is_ordinary_reviewer(task)
+        if ordinary_qa:
+            relevant = request_writers(payload, task)
+            result["qa_checkpoint"] = {"kind": "request", "writer_ids": [item["id"] for item in relevant]}
+            # 反向依赖和运行锁只服务权威图调度；其他请求新增下游不应使同一审查失效。
+            result["task"]["blocks"] = []
+            result["task"]["semantic_locks"] = []
+            result["task"].pop("handoff_assessment", None)
+        else:
+            selected = checkpoint(payload, task, root=root)
             result["qa_checkpoint"] = selected
-            result["qa_checkpoint_fingerprint"] = fingerprint(payload, task)
-        relevant = [item for item in payload["tasks"] if item["id"] in closure and item["task_type"] == "writer"] or [task]
+            result["qa_checkpoint_fingerprint"] = fingerprint(payload, task, root=root)
+            relevant = [item for item in payload["tasks"] if item["id"] in selected["writer_ids"]]
+        relevant = relevant or [task]
         # 只投影请求闭包中生产 Writer 的审查合同，不给 QA 写权限或复制其他任务。
         result["reviewed_ui_changes"] = [
             {key: copy.deepcopy(item[key]) for key in REVIEWED_UI_FIELDS if key in item}
@@ -244,7 +253,8 @@ def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
         ("design",) if item.get("surface_kind") == "design_ui" else
         ("engineering", "design") if item.get("surface_kind") == "production_ui" else ("engineering",))}
     sources = {document["path"] for item in relevant
-               for document in item.get("controlled_document_access", {}).get("documents", [])}
+               for document in item.get("controlled_document_access", {}).get("documents", [])
+               if not ordinary_qa or document["mode"] != "skip"}
     sources.update(ref["path"] for item in relevant
                    for ref in item.get("ui_change", {}).get("design_authority_refs", []))
     if "standards_contract" in payload:
@@ -254,6 +264,16 @@ def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
         # 只读任务未显式选叶时仍携带其声明领域的当前依据；不生成不存在的规则源。
         if not contract["leaves"]:
             contract["leaves"] = [copy.deepcopy(leaf) for leaf in payload["standards_contract"]["leaves"] if leaf["domain"] in domains]
+        if ordinary_qa and sources:
+            rules = {rule for item in [task, *relevant]
+                     for document in item.get("controlled_document_access", {}).get("documents", [])
+                     if document["mode"] != "skip" for rule in document["rule_ids"]}
+            rules.update(policy["rule_id"] for policy in contract["protected_paths"]
+                         if any(_paths_overlap(path, policy["path"]) for item in relevant for path in item["owned_paths"]))
+            # 同一权威叶子可能被多个请求采用；只保留当前 Writer 所采用的规则，
+            # 不让其他请求增加同一叶的选读条款改变当前包。规则文件的字节仍冻结。
+            for leaf in contract["leaves"]:
+                leaf["rule_ids"] = sorted(set(leaf["rule_ids"]) & rules)
         for domain in ("engineering", "design"):
             available = {rule for leaf in contract["leaves"] if leaf["domain"] == domain for rule in leaf["rule_ids"]}
             contract[f"required_{domain}_rule_ids"] = [rule for rule in contract[f"required_{domain}_rule_ids"] if domain in domains and rule in available]
@@ -267,6 +287,20 @@ def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
     # 视觉/上游例外的来源。该集合只投影已有批准，不替任何任务生成新授权。
     relevant_gates = {gate for item in [task, *relevant] for gate in item["gates"]}
     result["approved_gates"] = [gate for gate in payload.get("approved_gates", []) if gate in relevant_gates]
+    if ordinary_qa:
+        result["approved_gates"].sort(key=lambda gate: (gate != "requirements_approved", gate))
+        if "standards_contract" not in result:
+            raise TaskGraphError("self-contained task pack requires standards_contract")
+        if require_current_qa and not relevant_gates <= set(result["approved_gates"]):
+            raise TaskGraphError("request QA requires the current Writer and Reviewer approvals")
+        writers = [item for item in relevant if item["task_type"] == "writer"]
+        fingerprint, scope_fingerprint = request_fingerprints(
+            payload, task, writers, result, root=root, require_current=require_current_qa or freezing_qa_scope)
+        result["qa_checkpoint_fingerprint"] = fingerprint
+        if task["request_id"] not in payload.get("worktree_integrations", {}) and (require_current_qa or freezing_qa_scope):
+            verify_frozen_scope(task, writers, scope_fingerprint, freezing=freezing_qa_scope)
+        if freezing_qa_scope:
+            result["task"]["qa_scope_fingerprint"] = scope_fingerprint
     _execute("validate", result)
     return result
 
@@ -295,9 +329,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _read_payload(path: Path | None) -> dict[str, Any]:
+    if __package__:
+        from .task_graph_records import decode
+    else:
+        from task_graph_records import decode
     try:
+        # 查询仍从原有文件或标准输入读取文本，与导出/更新共用解析规则，
+        # 防止同一份带重复字段的记录通过查询后却无法导出。
         raw = path.read_text(encoding="utf-8") if path is not None else sys.stdin.read()
-        value = json.loads(raw)
+        value = decode(raw)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise TaskGraphError(f"cannot read task graph JSON: {exc}") from exc
     if not isinstance(value, dict):
@@ -462,7 +502,7 @@ def _resolved_standards_contract(payload: dict[str, Any]) -> dict[str, Any] | No
             try:
                 if builtin_catalog is None:
                     builtin_catalog = builtin_standard_rule_catalog(
-                        Path(__file__).resolve().parents[1], binding=payload.get("runtime_binding"))
+                        Path(__file__).resolve().parents[1])
             except (OSError, UnicodeError, ValueError) as exc:
                 raise TaskGraphError(f"invalid builtin standards sources: {exc}") from exc
             current = builtin_catalog[builtin]
@@ -673,14 +713,9 @@ def _validate_standards_access(
             f"tasks[{index}].controlled_document_access has unsupported field(s): "
             f"{', '.join(sorted(unknown))}"
         )
-    # 只有资源模块核验的插件进程可以使用新的实际适配器位置；普通源包与中央
-    # 合同仍用原逻辑label，不接受任意相对路径或伪造的插件环境。
-    allowed_adapters = {"project.yaml", ".awf/project.yaml"} if plugin_root() is not None else {"project.yaml"}
-    if not isinstance(value["adapter"], str) or value["adapter"] not in allowed_adapters:
-        raise TaskGraphError(
-            f"tasks[{index}].controlled_document_access.adapter must be 'project.yaml'"
-            + (" or '.awf/project.yaml' in verified plugin mode" if len(allowed_adapters) > 1 else "")
-        )
+    # 两种 3.x 适配器均归项目所有；具体文件的读取与插件来源认证各自独立。
+    if value["adapter"] not in ("project.yaml", ".awf/project.yaml"):
+        raise TaskGraphError(f"tasks[{index}].controlled_document_access.adapter must be project.yaml or .awf/project.yaml")
     documents = value["documents"]
     if not isinstance(documents, list):
         raise TaskGraphError(
@@ -868,7 +903,7 @@ def _validate_standards_access(
             )
         domain_rule_ids[domain] = selected_rule_ids
 
-    # 2.0没有GENERAL替代内置来源的旧窗口。项目叶只补业务特有规则，每个适用领域
+    # schema 2没有GENERAL替代内置来源的旧窗口。项目叶只补业务特有规则，每个适用领域
     # 都必须显式读取实际内置底线；索引/项目规则覆盖不能冒充内置来源覆盖。
     for domain in required_domains:
         baselines = [document for document in normalized_documents
@@ -1775,19 +1810,22 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     validate_graph(tasks)
     if is_pack:
         checkpoint = payload.get("qa_checkpoint")
-        foundation = payload["task"].get("foundation_task_id")
-        if foundation:
+        handoff_task = payload["task"]
+        foundation = handoff_task.get("foundation_task_id")
+        from lib.foundation_qa import is_ordinary_reviewer
+        ordinary = is_ordinary_reviewer(handoff_task)
+        if foundation or ordinary and ("qa_checkpoint" in payload or "qa_checkpoint_fingerprint" in payload):
             if (not isinstance(checkpoint, dict) or set(checkpoint) != {"kind", "writer_ids"}
-                    or checkpoint.get("kind") not in {"foundation", "request"}
-                    or not isinstance(checkpoint.get("writer_ids"), list) or not checkpoint["writer_ids"]
+                    or checkpoint.get("kind") not in (("foundation", "request") if foundation else ("request",))
+                    or not isinstance(checkpoint.get("writer_ids"), list)
                     or any(not isinstance(item, str) or not item for item in checkpoint["writer_ids"])
                     or checkpoint["writer_ids"] != sorted(set(checkpoint["writer_ids"]))
-                    or foundation not in checkpoint["writer_ids"]
+                    or foundation and foundation not in checkpoint["writer_ids"]
                     or not isinstance(payload.get("qa_checkpoint_fingerprint"), str)
                     or not SHA256_RE.fullmatch(payload["qa_checkpoint_fingerprint"])):
-                raise TaskGraphError("Foundation QA pack requires its current checkpoint and fingerprint")
+                raise TaskGraphError("Full QA pack requires a valid checkpoint and fingerprint")
         elif "qa_checkpoint" in payload or "qa_checkpoint_fingerprint" in payload:
-            raise TaskGraphError("QA checkpoint metadata requires Foundation QA")
+            raise TaskGraphError("QA checkpoint metadata requires Full QA")
     if is_pack and payload["task"].get("foundation_task_id") and "reviewed_ui_changes" not in payload:
         raise TaskGraphError("Foundation QA pack requires complete reviewed_ui_changes")
     if is_pack and "reviewed_ui_changes" in payload:
@@ -1819,8 +1857,9 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             _validate_plan_contract(item, index, prototype_paths, root)
             _validate_ui_change(item, index, prototype_paths, root, fingerprints,
                                 payload.get("requirements_fingerprint"))
-        if payload.get("qa_checkpoint") and (not seen or not seen <= set(payload["qa_checkpoint"]["writer_ids"])):
-            raise TaskGraphError("Foundation checkpoint must include its production UI review scope")
+        if payload.get("qa_checkpoint") and (foundation and not seen
+                or not seen <= set(payload["qa_checkpoint"]["writer_ids"])):
+            raise TaskGraphError("QA checkpoint must include its production UI review scope")
         if reviewed and not {"ui", "accessibility"}.issubset(
             _string_list(payload["task"].get("audit_surfaces"), "QA audit_surfaces")
         ):
@@ -1841,6 +1880,12 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command == "validate":
         return {"status": "valid"}
     if command == "ready":
+        if not is_pack:
+            from lib.foundation_qa import current_request_receipt, is_ordinary_reviewer
+            # 原图可保留早期 QA_PASSED 供追溯；调度只把当前可校验的验收视为完成依赖。
+            stale = {task["id"] for task in snapshot["tasks"] if is_ordinary_reviewer(task)
+                     and task["state"] == "QA_PASSED" and not current_request_receipt(snapshot, task)}
+            tasks = [replace(task, state="DECLARED") if task.id in stale else task for task in tasks]
         return {
             "ready": _foundation_ready(snapshot, ready_tasks(
                 tasks,
@@ -1985,7 +2030,7 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         import task_graph_records as records
     if args.root is not None:
         # scratch／普通文件指纹同样不能误用另一项目；检查一致性不授予核心读取权。
-        project_root(args.root)
+        validate_task_source({}, root=args.root)
     if args.command == "scratch":
         if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select, args.all)):
             raise TaskGraphError("scratch requires --root and accepts only --request-id")
@@ -2041,7 +2086,7 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         else:
             updated = records.update(payload, records.decode(patch_body), args.root, _execute)
         new_body = body if updated == payload else (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-        changed = records.publish(args.input, new_body, args.expect_sha256)
+        changed = records.publish(args.input, new_body, args.expect_sha256, root=args.root)
         return {"updated": changed, "sha256": records.digest(new_body)}
     if any((args.patch, args.root, args.select)):
         raise TaskGraphError("task accepts only --input, --task-id and explicit output options")

@@ -19,11 +19,11 @@ import re
 import sys
 
 if __package__:
-    from lib.hosts.claude_instructions import read_file
-    from lib.runtime_pins import PLUGIN_ENV, project_root, read_source, record_binding, resource_path, task_pack_binding
+    from lib.safe_text import read_file
+    from lib.task_sources import PLUGIN_ENV, project_root, validate_task_source, validate_pack_source
 else:
-    from lib.hosts.claude_instructions import read_file
-    from lib.runtime_pins import PLUGIN_ENV, project_root, read_source, record_binding, resource_path, task_pack_binding
+    from lib.safe_text import read_file
+    from lib.task_sources import PLUGIN_ENV, project_root, validate_task_source, validate_pack_source
 
 
 # 预算只约束返回的文本字符数，不假定不同宿主／模型的 token 编码相同。
@@ -77,30 +77,26 @@ def read_page(
     if ".." in path.parts:
         raise ContextReadError("path 不得包含父目录跳转 ..")
     try:
-        # 中央读取只采用当前包的 pin，不能从项目 locator 或桥的当前环境补旧包。
-        # 未提供任务包时 source 保持原行为；中央上下文则由 record_binding 明确拒绝。
+        # 先验证任务与项目均属于当前来源，再决定正文由插件还是项目提供。
         selected_root = project_root(root)
-        binding = (task_pack_binding(task_pack, root=selected_root) if task_pack is not None
-                   else record_binding({}, root=selected_root))
-        logical = resource_path(path, selected_root) if binding is not None else None
+        if task_pack is not None:
+            validate_pack_source(task_pack, root=selected_root)
+        else:
+            validate_task_source({}, root=selected_root)
         plugin_logical = None
         if PLUGIN_ENV in os.environ:
-            # record_binding 已确认当前安装、清单和无中央 pin；只对清单精确来源
+            # validate_task_source 已确认当前安装、清单和无中央 pin；只对清单精确来源
             # 开放插件根读取，业务文档与项目适配器不借此前缀获得跨根权限。
             from lib.plugin_resources import resource_path as plugin_resource_path
             plugin_logical = plugin_resource_path(path, selected_root)
-        if logical is not None:
-            body = read_source(binding, logical)
-            if len(body) > 4 * 1024 * 1024:
-                raise ContextReadError("核心文档超过 4 MiB 分页输入上限")
-        elif plugin_logical is not None:
+        if plugin_logical is not None:
             from lib.plugin_resources import read_source as read_plugin_source
             body = read_plugin_source(plugin_logical)
         else:
             # 普通业务／scratch 文档仍使用原读取器，不跟随任意项目软链。
-            bounded = root is not None or binding is not None or PLUGIN_ENV in os.environ
+            bounded = root is not None or PLUGIN_ENV in os.environ
             path = (selected_root / path if bounded else path).absolute()
-            # 插件资源授权不能外溢到普通项目文档；无插件变量时保持既有2.x读取行为。
+            # 插件资源授权不能外溢到普通项目文档；直接调用时遵循显式项目根。
             if PLUGIN_ENV in os.environ and not path.is_relative_to(selected_root):
                 raise ContextReadError("普通项目文档必须位于实际项目根内")
             before = path.lstat()

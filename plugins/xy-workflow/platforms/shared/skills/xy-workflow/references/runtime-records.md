@@ -5,15 +5,7 @@ generate/check file fingerprints or read long documents within bounds. It adds n
 business confirmation, QA phase or mandatory report. Light may directly maintain a same-shape single-task
 pack without creating a Full graph or second ledger. Accept only schema_version:2.
 
-Central projects first follow the [shared helper execution boundary](dispatch.md#workflow-helper-execution):
-each call goes through the project thin entry with explicit current-pack `runtime_binding`; do not assume
-shell environment persists across tool calls. The `.agent-workflow/lib/<helper>.py` commands below remain
-source-pack development examples, resolved against the actual source root. Central mode passes the helper/arguments to the same pin's
-`runtime.py --binding '<three-field JSON>' helper lib/<helper>.py`. New workflows first check machine-local
-enabled state. New graphs freeze their top-level pin from the verified bridge environment or an explicitly
-verified binding. Task export projects it unchanged; update/refresh do not alter it. Reject old packs with
-missing pins, bridge conflicts or corrupt cores. Do not fill the current version from the project locator
-or accept arbitrary `core_root` paths.
+Use the verified plugin root and the actual project for each [helper invocation](dispatch.md#workflow-helper-execution). Keep the selected adapter and task identity unchanged across calls.
 
 ## Prefer the existing tool
 
@@ -50,7 +42,7 @@ schema_version:2 and provide each task's workflow_level, normalized module, role
 instance_policy:fresh and context_policy:handoff_only:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py init \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py init \
   --root "${project_root:?set actual project root}" \
   --input "${workflow_decisions:?use PM decisions JSON}" \
   --output "${workflow_graph:?set new graph path}"
@@ -61,21 +53,7 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
   and `allowed_paths`. Omitted `direct_edit` becomes fixed `forbidden_without_exception`; reject other values.
   PM must list all applicable required rules, leaves and protected boundaries, not one sample rule or a guess
   left to the tool.
-- Source-pack mode reads the standards index/root from root-local `project.yaml` by default. Old self-contained
-  installations explicitly set top-level `adapter_path: ".agent-workflow/project.yaml"`. Explicit source-pack
-  cases may set paired `index_path`/`root` in `standards`, then omit `adapter_path`. Do not scan the entire
-  standards directory. Central bridge context automatically uses the verified physical project's
-  `.agent-workflow/project.yaml`, never core configuration. Explicit index/root must match that configuration;
-  reject `--root` differing from the bridge project root. New graphs with an explicit pin also use the project's
-  central adapter.
-- leaves/selected_standards use exact built-in sources or actual project-specific leaves. Installed mode adds
-  .agent-workflow/ only to the three managed sources; do not change project standards_root into a runtime
-  directory. index_path/root always retain configured values. With no project rule leaves and a physically
-  absent index, index_fingerprint is null; an existing explanatory index still uses its real SHA. init/document
-  validation check real presence/absence; JSON-only validation does not claim filesystem checks. Add no fields
-  or approvals. Central built-in sources read text, IDs, severities and fingerprints only from the task-pinned
-  core. Standards classification still accepts only the three exact sources/existing aliases. Ordinary
-  `file_digest` gains no permission to escape boundaries or follow symbolic/hard links.
+- Use the selected real project adapter. Source development can explicitly supply paired index/root paths. Read only the selected built-in or project-specific standards leaves. An absent index has a null fingerprint. An existing index uses its real SHA. Built-in rules come from the verified plugin, project rules from the project root.
 - Each Writer retains its actual `id`, `task_type`, `role`, `surface_kind`, `goal`, `gates`, `owned_paths`,
   input/output contracts, acceptance evidence and `verification_commands`. Use `selected_standards: [leaf-path]`
   to identify listed leaves adopted by that task. PM still provides dependencies, locks and other applicable
@@ -124,6 +102,47 @@ The patch supports:
   not adopt new standards/visual authority, change rule IDs, grant approval or invalidate unrelated
   build evidence. A standards change still follows the ordinary adoption and affected-evidence rules.
 
+### Full QA acceptance
+
+After the Writer barrier, PM independently captures the complete intended review diff for ordinary
+Full and freezes its actual repositories, base/head identifiers, byte diff SHA-256 and exact
+project-relative changed paths. Use `update --input GRAPH --expect-sha256 GRAPH_SHA --patch -`
+with only the `freeze_qa_scope` operation and reuse the returned graph SHA for subsequent writes:
+
+```json
+{"tasks":{"qa":{"freeze_qa_scope":{"repositories":[{
+  "path":".","base_revision":"BASE","head_revision":"HEAD",
+  "diff_fingerprint":"<actual-diff-sha256>","changed_paths":["src/current-file.py"]
+}]}}}}
+```
+
+Start or resume the original Reviewer and export its current task pack with
+`task --input GRAPH --task-id QA --output PACK --expect-sha256 missing`. Ordinary Full exports
+`qa_checkpoint.kind: request`, the actual reviewed Writer IDs, the frozen `task.qa_scope_ref`,
+and `qa_checkpoint_fingerprint`. The Reviewer returns the complete frozen scope in
+`review_method.scope_ref`. The fingerprint incorporates the Writer contracts, build evidence, exact
+changed-file contents and applicable authority. Changes to these inputs require a fresh freeze.
+For isolation, actual Git integration scope supplies this binding directly. Foundation keeps its
+checkpoint contract.
+
+After validating the handoff and observing actual native completion, record PASS with the existing
+`update` command and one exclusive operation:
+
+```json
+{"tasks":{"qa":{"accept_request":{
+  "task_pack":{"path":"/absolute/current-qa-pack.json","sha256":"<original-byte-sha256>"},
+  "handoff":{"path":"/absolute/current-handoff.json","sha256":"<original-byte-sha256>"}
+}}}}
+```
+
+Keep both original files readable as independent evidence. The update validates the current graph and
+original bytes and writes the protected `request_receipt` together with `QA_PASSED`. Ordinary
+`set state: QA_PASSED` is forbidden for Full. Writer rework or affected contract/evidence changes
+reopen obsolete acceptance and preserve the original Reviewer identity and retirement state. Resume
+that Reviewer with a newly exported pack after the affected Writers are verified. A historical
+ordinary `QA_PASSED` without a receipt neither satisfies dependencies nor authorizes delivery.
+Light continues through its single-pack acceptance.
+
 ### Foundation checkpoint acceptance
 
 Only a Full QA node with immutable `foundation_task_id` uses these operations. Initialize that reference
@@ -149,14 +168,13 @@ integration HEAD advancement alone do not. Ordinary `set` cannot create a receip
 After every request writer is `BUILD_VERIFIED` and current integration evidence is available, resume the
 same QA node/Reviewer and export the complete `request` checkpoint. Use the same reference shape under
 exclusive `accept_request` to validate the final current-byte PASS and record `QA_PASSED` with protected
-`request_receipt`. Old Foundation packs and mixed phases are rejected. For this optional Foundation
-contract, ordinary `set state: QA_PASSED` is forbidden. Requests without Foundation keep existing acceptance.
+`request_receipt`. Old Foundation packs and mixed phases are rejected.
 The existing three-round recovery limit is shared; no additional business gate is created.
 
 For example, after the PM has established a task's actual ready/dispatch decision:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py update \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py update \
   --input "${workflow_graph:?set actual graph path}" \
   --expect-sha256 "${workflow_graph_sha:?reuse observed graph digest}" --patch - <<'JSON'
 {"tasks":{"api":{"set":{"state":"RUNNING"}}}}
@@ -303,22 +321,16 @@ Use the entries below on demand, without a new Full graph, report or gate for or
 They reuse current-host capabilities without starting a runner, daemon, MCP or second Agent scheduler.
 Installation/diagnosis does not automatically enable native capabilities, boost, teamwork or other optional modes.
 
-Run capability diagnosis from the central management tool's source-pack root. A business project's installed
-`.agent-workflow` does not contain `manager`; do not execute manager modules from that runtime directory.
-`--project` points to the actual business-project root:
+Use the same verified plugin and actual project for a read-only capability report:
 
 ```bash
-# 子 shell 只为本次诊断切换目录，不影响后续安装态命令的工作目录。
-(
-  cd "${workflow_manager_source_root:?请设置中央管理工具源包根}"
-  bash lib/python_runtime.sh -X utf8 -m manager.cli doctor --platform antigravity \
-    --project "${project_root:?请设置实际业务项目根}"
-)
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
+  helper --project "<absolute-project>" lib/hosts/capabilities.py --platform antigravity
 ```
 
 `documented` means only documented capability, `source_observed` only that explicit source bytes were
 observed, and `runtime_unverified` that current-session behavior remains unverified. By default no host
-process starts; explicit `--probe` runs only that host's `--version`, without login, model invocation or
+process starts; explicit `--probe-version` runs only that host's `--version`, without login, model invocation or
 `/skills`. AGY checks only the explicit project path `.agents/skills/grill-me/SKILL.md`.
 `customization_sources.grill_me.project_definition` discloses `status`, `sha256`, `declared_name`, etc.
 A matching name yields `same_name_risk: possible`; the actual source remains `actual_source.status: unknown`.
@@ -335,13 +347,11 @@ change these records. `observed_capabilities` remains unknown, never inferred fr
 `not_found` means only that this probe's PATH did not find that executable, not that the user has not installed
 the product. Use the current-host integration for official client controls, without writing host settings or databases.
 
-After explicitly exporting native usage metadata for the currently authorized scope, run the installed
-read-only adapter from the actual business-project root, not the central-management source-pack root or
-`.agent-workflow` directory:
+After exporting native usage metadata for the authorized project, invoke its read-only adapter:
 
 ```bash
 cd "${project_root:?请设置实际业务项目根}"
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/native_usage.py \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/delivery/native_usage.py \
   --host codex --input "${native_usage_input:?set explicit exported JSON or JSONL}"
 ```
 
@@ -386,12 +396,12 @@ After observing actual state through exposed tools, PM runs the installed read-o
 business-project root:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/lib/agent_continuation_cli.py \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/agent_continuation_cli.py \
   --input "${workflow_record:?set current schema 2 graph or Light pack}" --task-id "${task_id:?set existing ID}" \
   --host codex --observed-state running --intent append --capability non_interrupting_message
 ```
 
-In central mode translate this logical helper through the current pin's thin bridge above. `--intent` accepts
+`--intent` accepts
 `observe` (default), `progress`, `append` or `independent`. Repeat `--capability` only for names actually
 verified on the current exposed authorized native tools: `non_interrupting_message` and `idle_followup`.
 Do not copy the example capability merely because a product's documentation mentions messaging. Unknown
@@ -458,29 +468,21 @@ response, or lower `--limit`. Read long documents separately, one page per tool 
 
 ```bash
 # 首页：只指定当前必需的一个文件；安装态从项目根运行。
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/context_read.py \
-  .agents/skills/xy-workflow/SKILL.md --limit 6000
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/documents/context_read.py \
+  platforms/shared/skills/xy-workflow/SKILL.md --limit 6000
 # 续页：填入上一完整回包的 next_offset 与首次页 sha256，不猜测位置。
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/context_read.py \
-  .agents/skills/xy-workflow/SKILL.md --offset "${document_offset:?use previous next_offset}" \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/documents/context_read.py \
+  platforms/shared/skills/xy-workflow/SKILL.md --offset "${document_offset:?use previous next_offset}" \
   --limit 6000 --expect-sha256 "${document_sha:?use first page sha256}"
 ```
 
-Claude uses the actual `.claude/skills/` path; other hosts likewise reuse current known paths. Follow the
+Follow the
 previous page's `next_offset` strictly and continuously until `eof: true` and `next_offset: null`. Empty
 files or an explicit offset equal to total characters return an empty EOF page. Restore every missing/
 truncated range before using the whole text. File fingerprints prove only matching bytes/version, not
 model reading.
 
-The host-discovery path examples above apply to source-pack development. Central
-reads must use the bridge linked at the start, also passing `--task-pack` to the pager. Managed resources
-use fixed logical paths such as `.agent-workflow/platforms/shared/skills/xy-workflow/SKILL.md` or
-`.agent-workflow/product/WORKFLOW.md`. The pager takes the pin from the current pack and reads original
-content directly from the content-store manifest. Changed project Skill/directory symlinks cannot alter
-that text; continuation pages still check the same complete SHA. `.agent-workflow/project.yaml`, locators,
-business files and ordinary scratch documents still use the project's safe real-file reader. A pin does
-not permit following arbitrary project symlinks or making all `.agent-workflow` a link. Source calls without
-central context retain their source semantics; version 2.1 has no old self-contained compatibility branch.
+Use the verified plugin manifest for packaged resources. The selected project adapter, business files and task records use the project reader. During pagination each call verifies the same complete SHA.
 
 Each call computes SHA over complete original bytes, decodes strict UTF-8 without CRLF normalization and
 allows very long single lines across character pages. Concatenating decoded `text` pages in order restores
@@ -507,7 +509,7 @@ stderr without echoing text. The tool writes no read cache/state.
 Example using an implementer's existing receipt fields:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py fingerprints \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py fingerprints \
   --root "${project_root:?set actual project root}" --input "${evidence_receipt:?use existing receipt}" \
   --select owned_paths_sha256 --select artifacts_sha256
 ```
@@ -532,17 +534,17 @@ its descriptor. Directories that cannot be opened safely, including those withou
 are preserved with an error; do not fall back to changing permissions through an unchecked path.
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py scratch \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py scratch \
   --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}"
 ```
 
 `cleanup-scratch` requires a read-only preview before execution with the same target and retained items:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py cleanup-scratch \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py cleanup-scratch \
   --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" --dry-run
 # 核对归属、使用和引用后，将预览返回的 snapshot_sha256 设为 scratch_snapshot_sha256。
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py cleanup-scratch \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py cleanup-scratch \
   --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" \
   --expect-sha256 "${scratch_snapshot_sha256:?use the reviewed preview snapshot SHA}"
 ```

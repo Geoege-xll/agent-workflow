@@ -19,20 +19,26 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
+from lib.safe_text import read_file
+
 sys.dont_write_bytecode = True
 
 try:
     from .standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from lib.skills.business_confirmation_policy import read_instruction_contract
-    from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs
-    from lib.documents.plan_documents import validate_plan_index, validate_selected_plans
-    from .runtime_pins import PLUGIN_ENV, read_builtin_source, record_binding
+    from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs, validate_explicit_docs
+    from lib.documents.plan_documents import (
+        locate_plan, project_directory, project_path, validate_plan_index, validate_selected_plans,
+    )
+    from .task_sources import PLUGIN_ENV, read_builtin_source, validate_task_source
 except ImportError:
     from standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from lib.skills.business_confirmation_policy import read_instruction_contract
-    from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
-    from lib.documents.plan_documents import validate_plan_index, validate_selected_plans
-    from runtime_pins import PLUGIN_ENV, read_builtin_source, record_binding
+    from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs, validate_explicit_docs  # type: ignore[no-redef]
+    from lib.documents.plan_documents import (
+        locate_plan, project_directory, project_path, validate_plan_index, validate_selected_plans,
+    )
+    from task_sources import PLUGIN_ENV, read_builtin_source, validate_task_source
 
 
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
@@ -54,7 +60,7 @@ def validate_rule_definitions(body: str, label: str, errors: list[str]) -> None:
             errors.append(f"invalid standards severity {severity!r} for {rule_id}: {label}")
 
 
-def read_builtin_standard_sources(pack_root: Path, *, binding: dict | None = None) -> dict[str, str]:
+def read_builtin_standard_sources(pack_root: Path) -> dict[str, str]:
     """安全读取固定的三份内置权威，供安装候选视图和最终项目校验共同消费。
 
     返回源包相对路径到原正文的映射，不扫描个人 Skill 或宿主分发目录；复用现有
@@ -64,9 +70,9 @@ def read_builtin_standard_sources(pack_root: Path, *, binding: dict | None = Non
     owners: dict[str, str] = {}
     errors: list[str] = []
     for relative, domain in BUILTIN_STANDARD_SOURCES.items():
-        # 插件和显式 pin 都只信各自固定来源；旧 source 调用仍走原安全本地读取。
-        body = (read_builtin_source(binding, relative).decode("utf-8")
-                if binding is not None or PLUGIN_ENV in os.environ
+        # 插件只信已验证安装中的字节；源树调用复用本地安全读取。
+        body = (read_builtin_source(relative).decode("utf-8")
+                if PLUGIN_ENV in os.environ
                 else read_instruction_contract(pack_root, relative))
         validate_rule_definitions(body, relative, errors)
         if re.findall(r"(?im)^- Domain: (engineering|design)\s*$", body) != [domain]:
@@ -86,7 +92,7 @@ def read_builtin_standard_sources(pack_root: Path, *, binding: dict | None = Non
     return sources
 
 
-def builtin_standard_rule_catalog(pack_root: Path, *, binding: dict | None = None) -> dict[str, dict[str, object]]:
+def builtin_standard_rule_catalog(pack_root: Path) -> dict[str, dict[str, object]]:
     """从同一次安全读取取得内置规则元数据，任务图与 QA 共用同一字节/ID/严重性事实。"""
     return {
         path: {
@@ -94,7 +100,7 @@ def builtin_standard_rule_catalog(pack_root: Path, *, binding: dict | None = Non
             "content_fingerprint": hashlib.sha256(body.encode("utf-8")).hexdigest(),
             "rules": dict(STANDARD_RULE_RE.findall(body)),
         }
-        for path, body in read_builtin_standard_sources(pack_root, binding=binding).items()
+        for path, body in read_builtin_standard_sources(pack_root).items()
     }
 
 
@@ -189,8 +195,7 @@ def collect_standard_leaves(root: Path, errors: list[str]) -> dict[Path, str]:
     return leaves
 
 
-def validate(config: Path, project_root: Path, *, body: bytes | None = None,
-             binding: dict | None = None) -> list[str]:
+def validate(config: Path, project_root: Path, *, body: bytes | None = None) -> list[str]:
     """检查语义边界，不对 PROJECT.md 设置行数或字节数限制。
 
     显式迁移可传入已绑定前像的候选配置正文；普通运行时仍从真实配置读取并拒绝
@@ -200,17 +205,14 @@ def validate(config: Path, project_root: Path, *, body: bytes | None = None,
     errors: list[str] = []
     root = project_root.resolve()
     try:
-        # 此入口没有任务包参数，中央 helper 由桥逐进程传入固定 pin；source 默认兼容。
-        selected_binding = record_binding({"runtime_binding": binding} if binding is not None else {},
-                                          root=root, initialize=True)
-        if selected_binding is not None and config.absolute() != root / ".agent-workflow/project.yaml":
-            raise ValueError("中央文档校验只能读取本项目 .agent-workflow/project.yaml")
+        validate_task_source({}, root=root)
+        if config.absolute() == root / ".agent-workflow/project.yaml":
+            raise ValueError("旧项目适配器不能作为当前插件的业务配置")
         if PLUGIN_ENV in os.environ:
             # 适配器必须由调用方指向实际项目文件，不能用插件附带配置充当业务事实。
             if ".." in config.parts or not config.absolute().is_relative_to(root):
                 raise ValueError("插件文档校验必须显式读取实际项目中的适配器")
             if body is None:
-                from lib.hosts.claude_instructions import read_file
                 body = read_file(config.absolute())
                 if body is None:
                     raise ValueError("实际项目适配器不存在")
@@ -289,7 +291,7 @@ def validate(config: Path, project_root: Path, *, body: bytes | None = None,
     rule_owners: dict[str, Path] = {}
     try:
         for relative, body in read_builtin_standard_sources(
-                Path(__file__).resolve().parents[1], binding=selected_binding).items():
+                Path(__file__).resolve().parents[1]).items():
             for rule_id, _severity in STANDARD_RULE_RE.findall(body):
                 rule_owners[rule_id] = Path(relative)
     except (OSError, UnicodeError, ValueError) as exc:
@@ -340,15 +342,49 @@ def validate(config: Path, project_root: Path, *, body: bytes | None = None,
     return errors
 
 
+def locate_topic(root: Path, adapter: Path, topic: str, candidates: list[Path]) -> tuple[Path, Path | None]:
+    """用显式业务适配器读取 plans 路径，避免默认位置误导新建或重开主题。"""
+    root = project_directory(root)
+    validate_task_source({}, root=root)
+    adapter = project_path(root, adapter)
+    if adapter == root / ".agent-workflow/project.yaml":
+        raise ValueError("请使用当前项目适配器，旧项目适配器不能确定主题路径")
+    body = read_file(adapter)
+    if body is None:
+        raise ValueError(f"实际项目适配器不存在：{adapter}")
+    errors: list[str] = []
+    docs = validate_explicit_docs(body.decode("utf-8"), root, errors)
+    if errors:
+        raise ValueError("适配器文档配置无效：" + "；".join(errors))
+    return root, locate_plan(root, root / docs["plans"], topic, candidates)
+
+
 def main() -> int:
-    # 选中文件模式只路由到计划核心，不读 adapter/PROJECT、初始化 pin 或扫描文档树。
-    # 既有两位置参数继续进入原 validate，保留历史识别与中央运行时消费者合同。
+    # 选中文件模式只路由到计划核心，不读 adapter/PROJECT、扫描无关文档树。
+    # 既有两位置参数继续进入原 validate，保留项目文档和历史计划的校验合同。
     if any(argument.startswith("--") for argument in sys.argv[1:]):
-        parser = argparse.ArgumentParser(description="只读校验指定受管计划，无需 PROJECT 或项目配置")
+        parser = argparse.ArgumentParser(description="只读校验指定计划，或按实际项目配置定位已有主题")
         parser.add_argument("--root", required=True, type=Path, help="实际项目根")
-        parser.add_argument("--plan", required=True, action="append", type=Path,
-                            help="根内绝对或相对 Markdown 路径；可重复指定")
+        parser.add_argument("--adapter", type=Path, help="主题定位使用的实际项目适配器")
+        parser.add_argument("--topic", help="新建或更新前查询已有来源的稳定主题 ID")
+        parser.add_argument("--plan", default=[], action="append", type=Path,
+                            help="待校验的 Markdown，或主题定位时的显式候选；可重复指定")
         arguments = parser.parse_args()
+        if arguments.topic is not None:
+            if arguments.adapter is None:
+                parser.error("--topic 须同时指定 --adapter")
+            try:
+                root, match = locate_topic(arguments.root, arguments.adapter, arguments.topic, arguments.plan)
+            except (OSError, UnicodeError, ValueError) as exc:
+                print(f"[ERROR] {exc}", file=sys.stderr)
+                return 1
+            if match is None:
+                print(f"[OK] 检索范围内未找到主题 {arguments.topic}；已知未跟踪计划须通过 --plan 指定")
+            else:
+                print(f"[OK] 现有计划: {match.relative_to(root).as_posix()}")
+            return 0
+        if arguments.adapter is not None or not arguments.plan:
+            parser.error("请指定 --plan，或使用 --adapter 和 --topic 定位已有主题")
         errors = validate_selected_plans(arguments.root, arguments.plan)
         if errors:
             for error in errors:

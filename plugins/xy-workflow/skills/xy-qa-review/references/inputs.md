@@ -58,6 +58,12 @@ Light requires no Full graph, but selected independent QA still needs current id
   }
   ```
 
+  结果的 `skill_evidence.skills_used` 仅记录实际应用过的 Skill。PASS 必须逐项匹配
+  当前包明确要求的标识，且 `unavailable_required_skills` 为空。QA 任务声明的
+  `standards-conformance`、`ui`、`accessibility` 属于强制审计面，PASS 的
+  `uncovered_audit_surfaces` 必须排除这些面。生产 UI Writer 投影要求 QA 包同时声明
+  `ui` 和 `accessibility`。其它面如实报告补充覆盖缺口，缺少可选 Skill 时继续基础核验。
+
 - the single reviewer's selected-method evidence:
 
   ```yaml
@@ -146,11 +152,11 @@ original Reviewer and a new result bound to that pack, retaining still-valid con
 When the current host's available, authorized QA invocation supports a schema, first obtain this pack's
 current QA handoff JSON Schema with `qa_handoff_cli.py schema` and pass it to that same native QA call.
 Do not add a model call merely to convert existing prose into JSON or start another Reviewer. Use these
-read-only entries from the installed project root:
+read-only plugin entries with the actual project root:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py schema
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py extract \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/delivery/qa_handoff_cli.py schema
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/delivery/qa_handoff_cli.py extract \
   --host codex --input "${native_qa_result:?set actual terminal native-result.json}" \
   --task-pack "${qa_task_pack:?set current complete QA task pack}"
 ```
@@ -160,6 +166,33 @@ terminal envelope, then directly reuses existing `validate` checks for scope, re
 and evidence semantics. Success proves only those mechanical contracts. PM/QA still check actual review
 execution, read-only boundaries, pinned scope, model/effort and evidence before accepting QA PASS. Failure,
 cancellation, partial streams, non-objects or absent structured results must not masquerade as valid handoffs.
+
+同一次原生结果在 `review_details` 内记录发现和验证条目，使用已有方法取得的真实证据：
+
+```yaml
+review_details:
+  findings:
+    - severity: P1
+      blocking: true
+      detail: <具体位置、触发条件与可观察影响>
+      evidence_refs: [<可复核的差异、源文件或完整日志引用>]
+      owner_role: xy-backend
+      next_step: <负责角色可实施的返工或补证事项>
+  verification:
+    - command: <实际执行或核对的完整命令>
+      exit_code: 1
+      log_ref: <可读取的完整日志引用>
+```
+
+发现优先级用 `P0` 到 `P3`，是否阻断由 `blocking` 明确给出。每条发现至少有一项
+证据引用。FAIL 至少有一条阻断发现，并给出原 Writer 角色或 `pm` 及具体后续动作。
+PASS 可以附带非阻断建议，此时无需指派的 `owner_role`、`next_step` 填 `null`。
+没有发现或未运行及核对任何命令时，填写相应空数组。退出码根据命令目的判断，预期的
+负向验证可以有非零退出码。字段校验通过后，PM 仍须核实引用指向当前运行和完整日志。
+
+已存在的内部 schema 2 回执可省略 `review_details`。其中旧版 FAIL 需要有已记录的硬
+规则失败、当前包确实漏派的适用规则，或具名的强制 Skill／审计面缺口。沿用既有扩展元数据
+时，`extract` 原样返回内层对象。新的严格生成 schema 始终输出 `review_details`。
 
 - Codex uses the current version's supported `exec --output-schema <schema-file>`. `codex review` lacks
   that flag; do not append it to review or bypass existing review_method order for structured output.
@@ -172,6 +205,9 @@ cancellation, partial streams, non-objects or absent structured results must not
   validate structure/consistency when present. Usage visibility is not a new QA gate.
 
 Ordinary JSON handoffs use `validate --input <handoff.json> --task-pack <current-qa-task-pack.json>`.
+省略 `--input` 时从 stdin 读取。两个入口共同拒绝重复键、非有限数和非法 UTF-8
+或孤立代理字符。回执和原生终端输入限制为 4 MiB，文件应通过无链接父目录的实际路径
+指向稳定的单链接普通文件。stdin 以 UTF-8 字节流读取。
 Task Packs still export through `task_graph_cli.py task`, without the QA schema. Check native commands
 against current help and actual session capabilities; static documentation/successful extraction do not
 prove successful model execution. AGY diff/Artifact human approval is human review, not `host-native-review`

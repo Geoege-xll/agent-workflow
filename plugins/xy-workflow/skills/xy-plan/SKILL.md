@@ -21,26 +21,16 @@ resource/transport adapter; it grants no business approval, role ownership or QA
 这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
 
 Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. The appended shared
-text retains historical `.agent-workflow/` examples. In plugin mode, resolve managed
-resource references under the plugin root using `plugins/source_pack.py resource`;
-select the actual adapter with `plugins/project_context.py inspect` through the
-same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply
-the new `.awf/project.yaml` candidate. Translate historical adapter examples to
-that selected actual path. The context entry creates no documents or business
+`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
 approvals; its `init --adapter <selected-path>` passes that exact adapter to the
 original initializer. Resolve project documents, task records and production code
 in the actual project. A packaged example is never the current project adapter.
 Use the packaged interpreter selector for each independent invocation:
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the original helper path/arguments
-instead of the historical project bridge commands. The selector only locates an
+Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
 existing Python 3.11+ and never installs software or changes the user's PATH.
 Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. Native plugin discovery replaces legacy setup,
-role refresh and central activation checks. Do not run `runtime install`,
-`runtime activate`, project registration, `setup_*.sh`, or create/edit project
-`AGENTS.md`, `CLAUDE.md` or `.agent-workflow` to make this plugin work.
+when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
 Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
 actual discovered name or the packaged physical path when invoking one. Public aliases are
 `xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
@@ -70,14 +60,14 @@ handoff through the host's actual supported native dispatch interface. A role la
 alone proves no native role/model selection. If the host cannot supply required
 dispatch or independent context, report that limitation instead of claiming it ran.
 Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: it may contain an older workflow or central pin. Use a fresh native generic
+ran: its authority may come from another source. Use a fresh native generic
 entry with the complete current packaged role instructions and current task pack,
 or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's pin, history or instructions merely
+package. Never import an unknown global role's history or instructions merely
 because its name matches. If the host cannot provide this boundary, report the
 dispatch limitation to the PM.
 
-This alpha uses the existing unpinned source-pack task contract. It rejects central
+This plugin uses the existing unpinned source-pack task contract. It rejects central
 `runtime_binding` records and central project markers rather than migrating them.
 Do not update/replace the installed plugin during an active task. Retention of old
 plugin resources across updates and actual native model/effort execution remain
@@ -112,7 +102,7 @@ plan_state: draft
 - Identify controlled-document candidates, but leave the post-QA projection decision to the PM.
 - This draft Skill does not persist files. After requirements approval PM saves Full plans under
   adapter-resolved `docs.plans` before first dispatch, following
-  `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
+  `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
 - Formal Full requirements review uses one Markdown source. PM owns the pre-approval scratch draft
   and post-approval `.md` persistence before dispatch. Requirements/plan Markdown-to-HTML generation is retired;
   existing plan HTML remains historical material; prototype HTML and verification remain active under
@@ -147,7 +137,7 @@ plan_state: draft
    Independently identify initial, incremental, replacement, or unnecessary design-standard updates;
    a PROJECT/feature no-op does not decide this question. Use the existing `input_contracts` and
    `output_contracts` for scope, approval basis, replaced/retained rules, ownership and adoption order.
-   Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant.
+   Read `platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant.
    A necessary `xy-uiux + design_ui` standards task uses `design_mode: standards_only`, exact standard
    Markdown leaves, and no visual gate/prototype procedure. Waived production may depend on it;
    required production still needs a genuine prototype task. Schedule shared-rule adoption and PM

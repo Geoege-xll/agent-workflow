@@ -68,6 +68,9 @@ The task pack must include standards-conformance, currently applicable built-in 
 
 1. Read current requirements, the complete task pack, non-skip controlled_document_access, and module instructions; check the project index when present, current fingerprints of applicable built-in/project sources, owned-path coverage, and rule IDs without preloading unrelated controlled documents.
 2. Inspect Gradle configuration, manifests, resources, nearby source, variants, and tests.
+   Under WORKFLOW's shared Skill-selection policy, consider `xy-mobile-ui` for affected Android
+   native UI behavior. Apply its relevant implementation guidance with the target's actual
+   Compose or Views stack, SDK levels and approved design authority.
 3. Map the narrow UI/domain/data/lifecycle/platform boundary and security implications. For
    `UI-Conformance`, read the frozen authority, do not edit the design workspace, and stop if the
    implementation requires a new design decision. For required-prototype design work, consume the

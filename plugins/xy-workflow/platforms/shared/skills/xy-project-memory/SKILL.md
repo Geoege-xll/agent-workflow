@@ -110,7 +110,7 @@ evidence, close or retire instances under WORKFLOW's lifecycle. An unavailable h
 not cause loss of the only log.
 
 Design-standard adoption is distinct from PROJECT/plans baseline projection. Apply the lifecycle in
-`.agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant;
+`platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant;
 do not defer needed design authority until after production QA, treat a feature-document no-op as
 a standards no-op, or save agentmemory automatically because a standard changed. Record production
 migration facts only for verified scope; do not duplicate the standard or page contract in memory.
@@ -120,7 +120,7 @@ Light performs only projection/memory actually assessed as necessary, without de
 - PROJECT and a topic source's accepted-behavior section describe only the baseline after applicable acceptance.
   Keep the current goal/execution stage in that source's requirement/recovery sections; completed, cancellation
   or tab state does not establish delivery. For recovery/updates, see
-  `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`。
+  `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`。
 - PM is the sole writer of `docs.project` and `docs.plans`. Implementers/QA return bounded results and evidence only.
 - Replace the topic's accepted version, delivered behavior and necessary evidence only after integrated QA PASS
   for Full, or accepted minimum verification and actually necessary independent audit for Light. Without factual
@@ -131,7 +131,7 @@ Light performs only projection/memory actually assessed as necessary, without de
 - Mark accepted deletion as removed in the same topic source, retaining reason/date/replacement and necessary
   history while removing its current PROJECT link. Add no feature/ADR document or renamed removed copy;
   QA failure preserves the existing baseline.
-- After projection, run `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`, requiring exit 0.
+- After projection, run `bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/validate_project_docs.py <selected-project-adapter> .`, requiring exit 0.
   Validate stable topics, the current index and explicit baselines; labels do not prove real approval.
 - Return control to the main-session PM for its scoped commit assessment. Do not stage, commit,
   push, merge, tag, or release from this memory Skill. Resume only after the PM records whether a

@@ -15,11 +15,11 @@ Version 3.0 accepts only `Light | Full` and the current `schema_version: 2` task
 
 ### Official Plugin Lifecycle and Project Adapters
 
-Each official host owns plugin installation, enablement, trust, cache and updates. Use the verified host-specific local marketplace or plugin-directory payload described in the installed plugin root's `INSTALL.md` (source input: `plugins/INSTALL.md`); discovery and installation receipts do not prove actual execution. Finish active tasks before replacing or updating this alpha plugin because automatic retention of their plugin resources across updates is not implemented. Do not create central registration, activation or recovery state, install project bridges, or edit root `AGENTS.md`/`CLAUDE.md` to make the plugin work.
+Each official host owns plugin installation, enablement, trust, cache and updates. Follow the host-specific installation instructions in the plugin root's `INSTALL.md` (source input: `plugins/INSTALL.md`). Discovery and installation receipts do not prove actual execution. Finish active tasks before replacing or updating the plugin because automatic retention of their plugin resources across updates is not implemented. Do not create central registration, activation or recovery state, install project bridges, or edit root `AGENTS.md`/`CLAUDE.md` to make the plugin work.
 
 Select the actual project adapter explicitly: reuse a verified `project.yaml`, or invoke the packaged `plugins/project_context.py` through the helper wrapper to inspect and explicitly apply a missing `.awf/project.yaml`. Inspect is read-only; apply creates only the missing minimal adapter, never project documents or business approval. Multiple adapters require an explicit selection. References to `project.yaml` in shared examples mean this selected actual adapter; pass its exact path through initialization and later consumers rather than choosing it again by existence or precedence.
 
-Resolve the verified plugin/source-pack root from the loaded component's physical location, following that root's `PLUGIN.md`; never infer it from the project working directory or a guessed cache. Read workflow authority, canonical roles and common Skills from that root. Historical `.agent-workflow/` resource examples are logical aliases resolved with `plugins/source_pack.py resource`; translate their adapter paths to the selected actual project adapter. Replace historical thin-bridge helper commands with the current packaged wrapper on every independent invocation:
+Resolve the verified plugin/source-pack root from the loaded component's physical location, following that root's `PLUGIN.md`; never infer it from the project working directory or a guessed cache. Read workflow authority, canonical roles and common Skills from that root. Use canonical paths relative to the verified plugin for new records and commands. Prior 3.x records may contain a read-only `.agent-workflow/` alias, resolved only against that verified installation. Run the packaged wrapper for each independent helper invocation:
 
 ```bash
 bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
@@ -28,9 +28,9 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
 
 The wrapper verifies the packaged source and payload digests, fixes the actual project working directory and executes only its helper allowlist. Project documents, task records and production code remain in that physical project; a packaged example is never its adapter. Do not infer project, adapter and plugin roots from one another or depend on shell environment surviving across tool calls.
 
-This alpha uses the existing unpinned source-pack `schema_version: 2` graph and single-task contract. Do not add or rewrite a central `runtime_binding`, manufacture a pin, or migrate an old task to the current plugin. Plugin execution rejects old binding records, central project markers and bridge context; retain historical records and unique evidence without using them as new-task authority or falling back to an older core.
+The plugin uses the unpinned source-pack `schema_version: 2` graph and single-task contract. Do not add or rewrite a central `runtime_binding`, manufacture a pin, or migrate an old task to the current plugin. Plugin execution rejects old binding records, central project markers and bridge context; retain historical records and unique evidence without using them as new-task authority or falling back to an older core.
 
-Native resource parsing, ownership checks, model catalogs and successful configuration saves do not verify native role selection or actual model/effort execution. Where a host tool has no native role selector, `task_name` is a label and cannot prove role/model selection. Keep `runtime_verified: false` until an actual native session proves the corresponding behavior. Plugin cache definitions are read-only; an optional explicit `agent-config` maintenance action does not create new host capabilities or business approval.
+Native resource parsing, ownership checks, model catalogs and successful configuration saves do not verify native role selection or actual model/effort execution. Where a host tool has no native role selector, `task_name` is a label and cannot prove role/model selection. Keep `runtime_verified: false` until an actual native session proves the corresponding behavior. Plugin cache definitions are read-only; an optional explicit `xy-config` maintenance action does not create new host capabilities or business approval.
 
 Before each business native dispatch, PM reads optional logical preferences through the fixed
 `plugins/source_pack.py dispatch-preferences` entry and maps them only to the current native
@@ -72,7 +72,7 @@ The seven worker roles are `xy-web`, `xy-desktop`, `xy-backend`, `xy-apple`, `xy
 
 UI/UX and QA are baseline available roles before production code exists; implementation roles
 follow current module facts. Availability does not select a UI branch or add a gate. After module
-or stack changes, use `xy-workflow/references/dispatch.md` for bounded current-host role refresh.
+or stack changes, reassess routing against the installed roles and current task scope.
 
 The standard Full implementation closed loop is:
 
@@ -328,7 +328,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   and closeout. External workflow Skills never replace or wrap this control plane.
 - Every `Full` request runs a **Grill Me coverage check** owned by the PM before planning,
   using the bundled upstream `grilling` primitive through `xy-grilling`. `xy-grill-me` remains user-invoked only.
-  Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/requirements-intake.md`
+  Read `platforms/shared/skills/xy-workflow/references/requirements-intake.md`
   for the complete invocation and internal coverage contract. The PM first retrieves only auxiliary project facts
   that are materially needed for coverage; no document or memory retrieval is required when
   available information is already sufficient. If the facts answer every material question, Grill
@@ -351,7 +351,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   one lifecycle document per stable topic, without copies for Agents, iterations, or QA rework. Explicit
   task-scoped workflow opt-out and save/no-save requests prevail. Saving Light never invokes Full Skills.
   For persistence, visual changes, scope replacement or resumption, read
-  `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
+  `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
   Replace the current recovery/handoff brief in place with remaining work and next steps, linking existing plans, features, and evidence for necessary completed baselines; do not accumulate completion details batch by batch. Preserve original approvals and unique history/complete logs under that lifecycle before consolidation.
   Replaced or withdrawn discussion/proposal material follows that lifecycle's current-input cutover
   and superseded-document handling too; discussion alone does not require a saved document or plan.
@@ -371,7 +371,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   pending. Later effective changes update the same plan and affected complete Task Packs before
   dispatch. Existing running workers and QA must acknowledge their updated scope before their results
   can satisfy it; preserve unaffected completed work and approvals.
-- Formal Full requirements review uses the single current Markdown draft. Before approval, PM may keep that draft in the current request scratch; after approval, save `docs.plans/<name>.md` before dispatch. Requirements/plan Markdown-to-HTML generation is retired; retain existing plan HTML and project material; the generator and its dedicated renderer bundle are removed, following `.agent-workflow/platforms/shared/skills/xy-plan/references/requirements-markdown.md`. Light selects persistence by actual need without adding Full planning or QA. Document existence, checkboxes and source copying do not create requirements approval, prototype choice or visual approval. In the existing handoff, the design Agent returns coverage from stable REQ IDs to concrete prototype pages/actual state anchors; PM writes it into the same Markdown, without a new mapping report or independent prototype QA. Requirement and prototype dependency fingerprints retain separate responsibilities; progress/link/presentation-only changes do not automatically reopen requirements approval. Implementers receive complete current Markdown/task packs. Preserve the accepted baseline in the same document; completed/cancelled execution details and old HTML retain historical boundaries, and PROJECT may index only explicit baselines.
+- Formal Full requirements review uses the single current Markdown draft. Before approval, PM may keep that draft in the current request scratch; after approval, save `docs.plans/<name>.md` before dispatch. Requirements/plan Markdown-to-HTML generation is retired; retain existing plan HTML and project material; the generator and its dedicated renderer bundle are removed, following `platforms/shared/skills/xy-plan/references/requirements-markdown.md`. Light selects persistence by actual need without adding Full planning or QA. Document existence, checkboxes and source copying do not create requirements approval, prototype choice or visual approval. In the existing handoff, the design Agent returns coverage from stable REQ IDs to concrete prototype pages/actual state anchors; PM writes it into the same Markdown, without a new mapping report or independent prototype QA. Requirement and prototype dependency fingerprints retain separate responsibilities; progress/link/presentation-only changes do not automatically reopen requirements approval. Implementers receive complete current Markdown/task packs. Preserve the accepted baseline in the same document; completed/cancelled execution details and old HTML retain historical boundaries, and PROJECT may index only explicit baselines.
 - All hosts use the shared [on-demand Skill selection policy](../platforms/shared/skills/xy-workflow/references/skill-selection.md).
   Task packs declare mandatory `required_skills` and task-fact `audit_surfaces`; every Agent may
   select additional host-exposed Skills for its actual responsibilities without inventorying private directories.
@@ -837,7 +837,7 @@ file 顶层经典 bootstrap 不依赖 file fetch／ES 模块，在业务脚本�
 
 独立评审进入即批注，无目录、持久浏览模式切换或开发说明；按提示修饰键临时操作，释放回批注。两页读取同一物理原稿，复用组件，各自保留相机和交互状态。live 资产由 backend 的 LIVE_TOOL_ASSETS 唯一声明，新增 file-entry.js、file-delivery.js、file-page.js、canvas-presentation.js；packaging 只消费与历史 V4 九项的有序并集，TOOL_ASSETS 旧别名不变。
 
-当前 live 的 boot／bridge 5 与封闭 context 3 分开声明；context 绑定物理项目身份、adapter、
+新建评审使用 context 4 记录 offline 或 live 来源，按完整围栏边界提取需求。既有 context 2／3 按各自产生时的规则重读。当前 live 的 boot／bridge 5 与 context 独立版本化；context 绑定物理项目身份、adapter、
 需求字节、登记页导航摘要、逐页依赖、工具版本／载荷摘要及实际来源修订 review_id，requirements
 仅投影真实 REQ ID 字符串数组。复制只有固定标题 `## Agent Workflow Feedback Payload` 和单个
 json 围栏内的紧凑 `{schema_version:5,review:{request_id,review_id},anchors,items}`，也接受纯 JSON。
@@ -925,7 +925,8 @@ After this checkpoint, `qa-ready` waits for every request-closure writer and cur
 The same Reviewer resumes with `qa_checkpoint.kind: request`, the complete UI/standards scope, and
 current bytes. Only exclusive `accept_request` can record this Foundation request's final `QA_PASSED`;
 a Foundation-stage PASS or old pack cannot close the request or authorize worktree delivery. Ordinary
-Light/Full requests without this optional reference retain their existing route and acceptance contract.
+Full requests use the same final acceptance operation against their current Writer scope. Light continues
+through its single-pack acceptance.
 The existing three-round recovery limit and host capacity/lock observations apply across both checkpoints.
 
 Reuse rule: reuse existing expressive capability; evaluate extraction when the same semantic pattern
@@ -1194,9 +1195,13 @@ dependency closure. When a semantic dependency is unsatisfied, a gate is unappro
 task fails, the task remains blocked. An upstream failure blocks only its downstream dependents;
 independent branches continue running.
 
-An explicit `task_type: qa` node uses `QA_PASSED` only after its current handoff validates as PASS;
-reset it to `QA`/`RUNNING` on re-review and `FAILED` on failure. It cannot replace writer verification.
-Worktree delivery rejects unfinished or failed relevant QA nodes even when an old PASS is still present.
+Full `task_type: qa` records `QA_PASSED` only through exclusive `accept_request` with the current
+Writer scope and original PASS evidence. For ordinary non-isolated Full, PM freezes the complete
+actual repository diff before exporting the review pack and the handoff binds that scope. Worktree
+review uses the actual complete integration diff. Rework reopens affected acceptance and preserves the original
+Reviewer. Resume that node as `QA`/`RUNNING` for re-review and record `FAILED` for failure.
+Historical unbound PASS is kept for reference. Dependency scheduling and worktree delivery require
+current authoritative acceptance, with separate Writer verification.
 
 Use `xy-workflow/references/runtime-records.md` on demand for intent/capability-aware same-Agent continuation,
 native usage and provenance diagnostics under `continuous-pm-intake`; use `xy-qa-review/references/inputs.md`
@@ -1339,7 +1344,7 @@ When updating or closing out, the PM locates current plan, feature, and standard
 
 The PM freezes the unified standards authority once per runtime snapshot:
 
-Common text accepts only three exact built-in sources: `platforms/shared/skills/xy-code-standards/references/rules.md`, `platforms/shared/skills/xy-ui-design/references/foundations-rules.md`, and `platforms/shared/skills/xy-ui-design/references/components-rules.md`; read them from the verified plugin root, treating historical `.agent-workflow/` prefixes only as logical aliases. Built-in sources declare Domain/Scope, retaining stable IDs, hard/advisory severity, applicability, and exceptions. They are managed read-only authority; inclusion in leaves or UI-task reading grants no project write authority. Project-specific standards still live directly in `docs.standards_root`; design leaves use `DESIGN_*.md` and `- Domain: design`, and other leaves declare engineering. Do not create empty leaves or copy common text. Project indexes link only actual specific leaves; page exceptions remain in contracts, and prototypes stay in `docs.standards_root/prototype`.
+Common text accepts only three exact built-in sources: `platforms/shared/skills/xy-code-standards/references/rules.md`, `platforms/shared/skills/xy-ui-design/references/foundations-rules.md`, and `platforms/shared/skills/xy-ui-design/references/components-rules.md`; read them from the verified plugin root. Built-in sources declare Domain/Scope, retaining stable IDs, hard/advisory severity, applicability, and exceptions. They are managed read-only authority; inclusion in leaves or UI-task reading grants no project write authority. Project-specific standards still live directly in `docs.standards_root`; design leaves use `DESIGN_*.md` and `- Domain: design`, and other leaves declare engineering. Do not create empty leaves or copy common text. Project indexes link only actual specific leaves; page exceptions remain in contracts, and prototypes stay in `docs.standards_root/prototype`.
 
 `index_path` always retains the adapter-configured relative path, and `root` remains the project-specific standards root. With no project rule leaves and a physically absent configured index, `index_fingerprint` is null; if the index exists, record its actual SHA, without presenting an explanatory retained index as absent. init/document validation checks the filesystem; JSON-only graph validation proves structure, not actual-file verification. leaves and controlled_document_access retain existing fields, binding built-in sources and applicable project leaves with their current SHA/rule IDs.
 
