@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>原型评审</title>
+  <!-- 共享主题只属于工具文档；原稿 iframe 保留独立字体、颜色与交互。 -->
+  <link rel="stylesheet" href="/assets/tool-theme.css">
   <link rel="stylesheet" href="/assets/workspace.css">
   <link rel="stylesheet" href="/assets/feedback.css">
   <link rel="stylesheet" href="/assets/live.css">
@@ -16,16 +18,16 @@
   <script src="/assets/canvas-host.js" defer></script>
   <script src="/assets/live-workspace.js" defer></script>
 </head>
-<body class="prototype-workspace live-review">
+<body class="prototype-workspace sg-page sg-scope live-review">
 <main id="review-workspace" class="review">
 <h1 class="visually-hidden">原型评审工作台</h1>
           <header class="review-toolbar">
             <div class="review-toolbar-start">
-              <strong id="current-page-title">等待页面</strong>
+              <strong id="current-page-title">等待页面</strong><span class="sg-pill">评审</span>
             </div>
             <span class="live-keyboard-help">按住 Alt 临时操作原型，松开恢复批注</span>
             <div class="review-toolbar-end">
-              <button id="open-feedback" class="review-secondary review-mobile-panel" type="button" aria-controls="review-panel" aria-expanded="false">整改清单 <span id="feedback-count">0</span></button>
+              <button id="open-feedback" class="review-secondary review-mobile-panel" type="button" aria-controls="review-panel" aria-expanded="false">评审记录 <span id="feedback-count">0</span></button>
             </div>
           </header>
           <div class="review-body">
@@ -39,32 +41,32 @@
                 </div>
                 <div class="canvas-floating-controls" data-review-ui>
                   <div class="canvas-tool-cluster">
-                    <div id="canvas-zoom-tools" class="canvas-zoom-tools" role="toolbar" aria-label="画布缩放" aria-controls="canvas-world">
-                      <button id="canvas-fit" type="button">适应</button>
+                    <div id="canvas-zoom-tools" class="sg-card canvas-zoom-tools" role="toolbar" aria-label="画布缩放" aria-controls="canvas-world">
+                      <button id="canvas-fit" class="sg-quiet" type="button">适应</button>
                       <span role="separator" aria-orientation="vertical"></span>
-                      <button id="canvas-zoom-out" type="button" aria-label="缩小画布" title="缩小">−</button>
-                      <button id="canvas-zoom-reset" type="button" title="恢复100%">100%</button>
-                      <button id="canvas-zoom-in" type="button" aria-label="放大画布" title="放大">+</button>
+                      <button id="canvas-zoom-out" class="sg-quiet" type="button" aria-label="缩小画布" title="缩小">−</button>
+                      <button id="canvas-zoom-reset" class="sg-quiet" type="button" title="恢复100%">100%</button>
+                      <button id="canvas-zoom-in" class="sg-quiet" type="button" aria-label="放大画布" title="放大">+</button>
                     </div>
-                    <div class="canvas-display-options">
+                    <div class="sg-card canvas-display-options">
                       <label><input id="show-rectifications" type="checkbox" checked> 整改</label>
                       <label><input id="show-anchors" type="checkbox" checked> 定位</label>
                     </div>
                   </div>
-                  <button id="page-rectification" type="button" class="canvas-page-action">页面整改 <span id="page-rectification-count"></span></button>
+                  <button id="page-rectification" type="button" class="sg-card canvas-page-action">页面整改 <span id="page-rectification-count"></span></button>
                 </div>
-                <div id="selection-tools" class="selection-tools" data-review-ui hidden>
+                <div id="selection-tools" class="sg-card selection-tools" data-review-ui hidden>
                   <div id="selection-actions" role="toolbar" aria-label="所选目标操作">
-                    <button id="select-parent" type="button" class="review-quiet">选择父层</button>
+                    <button id="select-parent" type="button" class="sg-quiet review-quiet">选择父层</button>
                     <button id="mark-location" type="button">标记位置</button>
-                    <button id="add-rectification" type="button" class="review-primary">添加整改</button>
+                    <button id="add-rectification" type="button" class="sg-primary review-primary">添加整改</button>
                     <button id="remove-selected-anchor" type="button" hidden>移除标记</button>
                     <button id="withdraw-selected-item" type="button" hidden>撤回整改</button>
-                    <button id="view-anchor-references" type="button" class="review-quiet" hidden>查看引用</button>
+                    <button id="view-anchor-references" type="button" class="sg-quiet review-quiet" hidden>查看引用</button>
                   </div>
                   <p id="selection-reference-reason" class="review-field-help" hidden></p>
                 </div>
-                <details id="target-picker" class="canvas-target-picker" data-review-ui>
+                <details id="target-picker" class="sg-card canvas-target-picker" data-review-ui>
                   <summary id="target-picker-toggle">键盘选取目标</summary>
                   <div>
                     <label for="target-directory">当前页可见元素</label>
@@ -77,13 +79,13 @@
               </div>
             </section>
             <div id="review-panel-slot" class="review-panel-slot">
-              <aside id="review-panel" class="review-panel" aria-label="整改清单">
+              <aside id="review-panel" class="sg-panel review-panel" aria-label="整改清单">
                 <header class="review-panel-heading">
-                  <div id="record-tabs" class="record-tabs" role="tablist" aria-label="评审记录类型">
-                    <button id="tab-rectifications" type="button" role="tab" aria-selected="true">整改 <span id="rectification-count">0</span></button>
-                    <button id="tab-anchors" type="button" role="tab" aria-selected="false" tabindex="-1">标记 <span id="anchor-count">0</span></button>
+                  <div id="record-tabs" class="sg-card record-tabs" role="tablist" aria-label="评审记录类型">
+                    <button id="tab-rectifications" type="button" role="tab" aria-selected="true" aria-controls="rectification-tab-panel">整改 <span id="rectification-count">0</span></button>
+                    <button id="tab-anchors" type="button" role="tab" aria-selected="false" aria-controls="anchor-tab-panel" tabindex="-1">标记 <span id="anchor-count">0</span></button>
                   </div>
-                  <button id="close-panel" type="button" class="review-quiet review-mobile-panel" aria-label="收起评审记录">×</button>
+                  <button id="close-panel" type="button" class="sg-quiet review-quiet review-mobile-panel" aria-label="收起评审记录">×</button>
                 </header>
                 <div id="review-panel-scroll" class="review-panel-scroll">
                   <section id="rectification-tab-panel" role="tabpanel" aria-labelledby="tab-rectifications">
@@ -120,25 +122,25 @@
                 </div>
                 <footer class="review-panel-footer">
                   <button id="write-global" type="button" class="review-secondary">本轮整体意见</button>
-                  <button id="copy-feedback" type="button" class="review-primary">复制给 Agent ↗</button>
+                  <button id="copy-feedback" type="button" class="sg-primary review-primary">复制给 Agent ↗</button>
                   <p id="feedback-storage" class="live-storage" role="status"></p>
                   <p id="panel-footer-status" class="visually-hidden" role="status">尚无整改或定位标记</p>
                 </footer>
               </aside>
             </div>
           </div>
-          <dialog id="panel-drawer" class="review-drawer" aria-label="整改清单">
+          <dialog id="panel-drawer" class="sg-dialog review-drawer" aria-label="整改清单">
             <div id="drawer-panel-host">
             </div>
           </dialog>
           <!-- 三个范围入口共用这个表单；取消只暂存，不分配编号。 -->
-          <dialog id="rectification-dialog" class="rectification-dialog" aria-labelledby="rectification-title">
+          <dialog id="rectification-dialog" class="sg-dialog rectification-dialog" aria-labelledby="rectification-title">
             <header class="modal-heading">
               <div>
                 <p id="rectification-scope" class="modal-eyebrow">节点整改</p>
                 <h2 id="rectification-title">添加整改</h2>
               </div>
-              <button id="rectification-close" type="button" class="review-quiet" aria-label="关闭并保留草稿">×</button>
+              <button id="rectification-close" type="button" class="sg-quiet review-quiet" aria-label="关闭并保留草稿">×</button>
             </header>
             <form id="rectification-form" novalidate aria-label="完成整改">
               <div class="rectification-modal-scroll">
@@ -181,18 +183,18 @@
               <footer class="rectification-modal-footer">
                 <span id="draft-state">草稿自动保留</span>
                 <button id="rectification-cancel" type="button" class="review-secondary">取消，保留草稿</button>
-                <button id="complete-rectification" type="submit" class="review-primary">完成整改</button>
+                <button id="complete-rectification" type="submit" class="sg-primary review-primary">完成整改</button>
               </footer>
             </form>
           </dialog>
-          <dialog id="export-dialog" class="review-export" aria-labelledby="export-title">
+          <dialog id="export-dialog" class="sg-dialog review-export" aria-labelledby="export-title">
             <div class="review-export-heading">
               <span class="review-export-symbol" aria-hidden="true">↗</span>
               <div>
                 <h2 id="export-title">把整改交还给 Agent</h2>
                 <p>复制后粘贴到当前对话，再发送。</p>
               </div>
-              <button id="export-close" type="button" class="review-quiet" aria-label="关闭交还反馈">×</button>
+              <button id="export-close" type="button" class="sg-quiet review-quiet" aria-label="关闭交还反馈">×</button>
             </div>
             <div class="review-export-counts">
               <p class="export-anchor-total">交还 <span id="export-anchor-count">0</span> 个定位标记</p>
@@ -210,8 +212,8 @@
             </div>
             <div class="review-export-actions">
               <button id="export-cancel" class="review-secondary" type="button">取消，保留输入</button>
-              <button id="export-save-copy" class="review-primary" type="button" hidden>完成草稿并复制</button>
-              <button id="export-copy" class="review-primary" type="button">复制已完成整改</button>
+              <button id="export-save-copy" class="sg-primary review-primary" type="button" hidden>完成草稿并复制</button>
+              <button id="export-copy" class="sg-primary review-primary" type="button">复制已完成整改</button>
             </div>
             <details class="review-export-backup">
               <summary id="export-backup-toggle">手动复制 / 下载备用</summary>

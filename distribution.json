@@ -1,31 +1,31 @@
 {
   "artifacts_sha256": {
-    "native/native-agent-config-0.1.4.zip": "82a50eb69457d7d486491934f4cf6443881d4274a3fece06b613589c350fb8f6",
-    "workflow/xy-workflow-antigravity-3.0.5-local-source.zip": "b136e5e6b8e72f2021b312d4726a81cdd88e17883755114fb8da0d2290d5826d",
-    "workflow/xy-workflow-antigravity-3.0.5.zip": "11da486efa451c5f9e7eba54ba3ae45c0daefafcd45b7c49829290f6178772df",
-    "workflow/xy-workflow-claude-3.0.5-local-source.zip": "0d78f11eb4c1904898ebdca0413e27e754f983d3ba86cf64112a1c7c4fc38b9f",
-    "workflow/xy-workflow-claude-3.0.5.zip": "128f7a962c319ed442234484c2419279305611ce28296f3dfa4b5aa97f6960f6",
-    "workflow/xy-workflow-codex-3.0.5-local-source.zip": "1ba76182914adb9d9591ed6cdab96531458d0bddb062473edc4f75727b4fd264",
-    "workflow/xy-workflow-codex-3.0.5.zip": "65ac53047cf78cc3688c1b8b54c10cddd9d66cb4efe408930aa463f9c146252d"
+    "native/native-agent-config-0.1.5.zip": "06885f7f2f2a675f8a61f0914532f01ca1ffdeb0613fcbd8b3f8ba3cfd7f6c37",
+    "workflow/xy-workflow-antigravity-3.0.6-local-source.zip": "855180beb6bbda2ef3b438f8c0098376dc359c4848075875d3b05bf5b3ce30f8",
+    "workflow/xy-workflow-antigravity-3.0.6.zip": "f7dbc4e449ede97010adbef6d955973a6d31d336f9f260877614d3e085d4a003",
+    "workflow/xy-workflow-claude-3.0.6-local-source.zip": "67cbec34a7ee2263c45fef2d25bc135bd813dd84f2cbd390eaf854944b882e44",
+    "workflow/xy-workflow-claude-3.0.6.zip": "3c4f54251632459a25f0989816f255b5caa8f7e59c6dbdf152f13451ed96f8cd",
+    "workflow/xy-workflow-codex-3.0.6-local-source.zip": "ad73a68873b822a078c3ad2ee93669676dfa35745971bda0087e13ec14cd67a6",
+    "workflow/xy-workflow-codex-3.0.6.zip": "75537151666437810e30acc202e585f21bb5965962580f9ebafce7d6fa42eb51"
   },
-  "candidate_sha256": "e7a4ab3c9a4825b546912cfa7306c2eb06fb292b104157edaec23ef8a3bdbe35",
+  "candidate_sha256": "2498193d79e5a03519ef6e30512172d5825f5aae8e6d4af547975af0f1cb3957",
   "channel": "stable",
   "files": {
     ".antigravity-plugin/plugin.json": {
       "mode": "100644",
-      "sha256": "de9a83ef6faa3db63e7be3fc3c8269662d9b08149adbb40c5d9fdad35d6f6c56"
+      "sha256": "c09d9d10e9ced81141564e032ca87f1d0cf8d4840b8535ecb50edbe6b902668e"
     },
     "INSTALL.md": {
       "mode": "100644",
-      "sha256": "657c520637c4ab0299a56c8a520a721aabeeef81d43d5e7891e06ff291b880e4"
+      "sha256": "016741d599b3a495701c3c0f988073f1b5e55f153ac5a83f628b00f6b1268677"
     },
     "PLUGIN.md": {
       "mode": "100644",
-      "sha256": "4301e15c11e9360c1af666b6768ee0839aab7e233e372a4262e96fa4a8030683"
+      "sha256": "cf5568b9b207153d05af3104ad5b5d10a62ff80b4bca56baf3a745a216414d2c"
     },
     "README.md": {
       "mode": "100644",
-      "sha256": "4301e15c11e9360c1af666b6768ee0839aab7e233e372a4262e96fa4a8030683"
+      "sha256": "cf5568b9b207153d05af3104ad5b5d10a62ff80b4bca56baf3a745a216414d2c"
     },
     "agents/xy-android.md": {
       "mode": "100644",
@@ -117,7 +117,7 @@
     },
     "lib/documents/prototype_file_entry.py": {
       "mode": "100644",
-      "sha256": "3feee2fb8aa31b983854addad5b3adcf63e56bf2bc6137837e03340aad8448f0"
+      "sha256": "0c742f62b38e70f298d0a896ac14af93ec466d3efb9fe824a7d7376c8cca544b"
     },
     "lib/documents/prototype_handoff.py": {
       "mode": "100644",
@@ -133,7 +133,7 @@
     },
     "lib/documents/prototype_review.py": {
       "mode": "100644",
-      "sha256": "02b7bf8c55ba74313aae490f2d434411b374e878adae66de645d883cf7cb9557"
+      "sha256": "5c54e039d434a05b2017d718a5004210d7c0d3ccc9307669ad81b034f751029d"
     },
     "lib/documents/prototype_server.py": {
       "mode": "100644",
@@ -489,15 +489,15 @@
     },
     "plugins/maintenance/component.json": {
       "mode": "100644",
-      "sha256": "891a7ab7ef1f1f9a13ff38f24c8cdbfc5c642a379e2ad0b25ff9f04eb75ef834"
+      "sha256": "935ac0967518afcd5a670232a2bff58a22ad317b18c5e30835ae20c9913c1923"
     },
     "plugins/maintenance/component_store.py": {
       "mode": "100644",
-      "sha256": "2fe0b7584a609abaf2e119d10f0b70c23f2b7a89fa5f8d701231cc4909602a99"
+      "sha256": "78b72f7976b85990c85e1012c2cb623a75f55a300ab292d841b118d9dcb29943"
     },
     "plugins/maintenance/launcher.py": {
       "mode": "100644",
-      "sha256": "a3e105dcd48a6d275f640340114701c6ccd1e5bea08e89a730e36f20cb1f135b"
+      "sha256": "079fc371f70f2eb0a00a0ffa5e7943c5eed2a2787c91bec82e5a4d728069b524"
     },
     "plugins/maintenance/launcher.sh": {
       "mode": "100755",
@@ -549,7 +549,7 @@
     },
     "product/PLUGIN_VERSION": {
       "mode": "100644",
-      "sha256": "3da4414b24923430a97c932c0597fd5ebc9d126ae188181054b348d2a8559870"
+      "sha256": "21d493e8ecb5556975bc8214a308bb26c080daaed989b2564fd9d83d6782a3f6"
     },
     "product/ROLES.yaml": {
       "mode": "100644",
@@ -785,7 +785,7 @@
     },
     "sources.json": {
       "mode": "100644",
-      "sha256": "a9d1cc5777cb8705ef3807ad55edf8cee8366d1f344763515f63b38cfa867422"
+      "sha256": "2a512b886c4b9ceac5555955b92907ad060be937fadd65fc989aa3a9eb85be1e"
     },
     "templates/docs/PLAN.md": {
       "mode": "100644",
@@ -805,31 +805,31 @@
     },
     "templates/prototype/THIRD_PARTY_NOTICES.txt": {
       "mode": "100644",
-      "sha256": "ed690f837e514a4260ffc02736e42bc1f4432b05d7287b0eef326496634e8584"
+      "sha256": "c32c29f4257344199bb975e52050b4e8131ab086dbe3d2fd4558470b4cba252b"
     },
     "templates/prototype/canvas-host.js": {
       "mode": "100644",
-      "sha256": "4cd30e4f647cd0676963d02072a7a0c204ab6869f52d6de9fed79e5272ed3825"
+      "sha256": "cfcc9f8802262e0d12c8ec9db50452756173e5f27d47ede6009f4f28c345678a"
     },
     "templates/prototype/canvas-presentation.js": {
       "mode": "100644",
-      "sha256": "2289b04124f4a939b0525a022d170835fd456c089c4ef9bd18ec75168d071d0e"
+      "sha256": "9f9a97cf8add58c2c43086b6d71df518c8f1b4029d6665dda943625ef143b8ca"
     },
     "templates/prototype/delivery.html": {
       "mode": "100644",
-      "sha256": "ab69c64471f617a0fae55fd489f8e8a55e911e096ab36e136848ccfd6537afb0"
+      "sha256": "8d54fe15f7294dda6e687e415c049ede71bf4f45162158e4a02f2f43b14144d2"
     },
     "templates/prototype/feedback.css": {
       "mode": "100644",
-      "sha256": "ec3f6ef7adb22dd0db2d27bf46121e92665b6d2e7e771e5186bbd39823e97020"
+      "sha256": "b8a743cd22ce0a2b6574b9a6cc5f935ee5ff61ec33082442ad0b7aba22691bd6"
     },
     "templates/prototype/feedback.js": {
       "mode": "100644",
-      "sha256": "acfb7a740c602f461e476ad31aefea39cd702fd9e2524d415e4563b998375d37"
+      "sha256": "6e70efa52c46979979ce7ceb26021010585a8e5f63f35619e40357003ce79420"
     },
     "templates/prototype/file-delivery.js": {
       "mode": "100644",
-      "sha256": "3fca323d62985292afa9a4a6c558574a391ebded71ad9c6b4586d4ced8da388c"
+      "sha256": "98d2fe7c42a6d8d1f30c363507ec22f0c7b57b9ad12ab8402841db7e5f4c2b9c"
     },
     "templates/prototype/file-entry.js": {
       "mode": "100644",
@@ -837,7 +837,7 @@
     },
     "templates/prototype/file-page.js": {
       "mode": "100644",
-      "sha256": "a4dac985561a8ba3b1de7c431b77ef340243889e9ef591508004a5bc8b610c8f"
+      "sha256": "223d0bcbd7610eee6a1c3959b19d3cc0719706570900c9c7e64316a7d0fffd8f"
     },
     "templates/prototype/index.html": {
       "mode": "100644",
@@ -849,15 +849,15 @@
     },
     "templates/prototype/live-workspace.js": {
       "mode": "100644",
-      "sha256": "6e5f1cddd1ef9a0c49bfb337930f9e3f7de26c0809ea1da7824b6640c152f229"
+      "sha256": "2c0f69e4852e2b9abf7035564d75097df742d46afcb3948f778623e30ff443f8"
     },
     "templates/prototype/live.css": {
       "mode": "100644",
-      "sha256": "1030f115a94bfedc554cd7bda94ac2dbc9626e98314ded9b0bba27732021d1c6"
+      "sha256": "4377d452c27a4f2713bc7ff6ee2fcec76964d46bc15ec206de18e707e40b2ed0"
     },
     "templates/prototype/page-shell.js": {
       "mode": "100644",
-      "sha256": "2cb1330036d4eb4081b1050fa157dd5545c567755ae5e8aa2923cc59573c266f"
+      "sha256": "7227d77a38c057c88d1e5e6a3058391cbf1ffe598bf9cec1fc6ca78768d1cb4a"
     },
     "templates/prototype/page.html": {
       "mode": "100644",
@@ -869,7 +869,7 @@
     },
     "templates/prototype/review-camera.js": {
       "mode": "100644",
-      "sha256": "a118970a5bdc41738a1fa8b7b67e6ef6bd118859576d206e14061c2a7f7c85b4"
+      "sha256": "9e0c8e9d5df806bd16347a57187f85d3f28575cea96c13b444816c4a149e7ab8"
     },
     "templates/prototype/review-state.js": {
       "mode": "100644",
@@ -877,11 +877,19 @@
     },
     "templates/prototype/review.html": {
       "mode": "100644",
-      "sha256": "da2892aecfef8bbcd550917934c4bcc1f83de019202f0acf4752a8aa3d64adcf"
+      "sha256": "9ace777599deafb557813fc38bc1bf4a77df2ccdb684b387dd536610f2636925"
+    },
+    "templates/prototype/solid-glass-LICENSE.txt": {
+      "mode": "100644",
+      "sha256": "eb9d03950a82b3fa15b16bd05163f6691843be957e69ce8eb6f062913848be87"
+    },
+    "templates/prototype/tool-theme.css": {
+      "mode": "100644",
+      "sha256": "fb97bda4f467f80677f1f16f235dbae72531c359e429a70b3af4acdb7738ac52"
     },
     "templates/prototype/workspace.css": {
       "mode": "100644",
-      "sha256": "de3eb7fcaf75f7c3238171b4d1fc95bf800329ac3b310b3b063d546e54fb969e"
+      "sha256": "04e78af1b6871adc1575f279bffebd34c7ee94583e3cbeeab8377453c67799d0"
     },
     "templates/prototype/workspace.js": {
       "mode": "100644",
@@ -9329,16 +9337,16 @@
     },
     "workflow-sources.json": {
       "mode": "100644",
-      "sha256": "ee48a9d5e6c59648d492dbca0e7c3bfde2052353f4741e942014ff42f6c88633"
+      "sha256": "ab62685ad6af314ed80a8fd9e222fd2a33986e7475be5cd4bfc935a08a020b69"
     }
   },
   "host": "antigravity",
   "managed_by": "agent-workflow-plugin-source-v1",
-  "plugin_zip_sha256": "11da486efa451c5f9e7eba54ba3ae45c0daefafcd45b7c49829290f6178772df",
+  "plugin_zip_sha256": "f7dbc4e449ede97010adbef6d955973a6d31d336f9f260877614d3e085d4a003",
   "ref": "refs/heads/plugins-antigravity-stable",
   "repository": "Geoege-xll/agent-workflow",
   "schema_version": 1,
-  "source_revision": "140f4642dcff6d10c90be4ece9f54562011789f6",
-  "source_tree_sha256": "ac81e924e901200d46e5af44ac3271532fa69dc2449d90672c55d27c0ad65d60",
-  "version": "3.0.5"
+  "source_revision": "bf1911998788fe9fa1b834cf8121b51fdb50b0da",
+  "source_tree_sha256": "7b48866e91003ce10d81da9a400f68e01de345fd196f96285c27be8e58d6c1dc",
+  "version": "3.0.6"
 }

@@ -104,6 +104,7 @@ def payload_name(name):
             or name.startswith("/") or PurePosixPath(name).as_posix() != name):
         raise ComponentError("unsafe_archive_path")
     return (name in {"BUILD.json", "README.md", "product/command_identity.json", "product/command_identity.py", "product/release_channels.py", "product/__init__.py", "native_config/VERSION", "scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh"}
+            or name in {"templates/prototype/tool-theme.css", "templates/prototype/solid-glass-LICENSE.txt"}
             or name in {"native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css",
                         "native_config/web/connection.js", "native_config/web/native-definitions.js"}
             or len(parts) >= 2 and parts[0] == "native_config" and name.endswith(".py"))
@@ -134,8 +135,9 @@ def checked_release_payload(bodies, expected_version):
                 "native_config/__init__.py", "native_config/cli.py", "native_config/VERSION", "product/command_identity.json", "product/command_identity.py", "product/release_channels.py", "product/__init__.py",
                 "native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css",
                 "native_config/web/connection.js", "native_config/web/native-definitions.js",
+                "templates/prototype/tool-theme.css", "templates/prototype/solid-glass-LICENSE.txt",
                 "native_config/browser_sessions.py", "README.md"}
-    # 当前入口必须真正携带派生会话校验及页面拆分脚本；仅通过文件名白名单或
+    # 当前入口必须真正携带派生会话校验、页面拆分脚本及共享主题与许可；仅通过文件名白名单或
     # 重算 BUILD 摘要不能补足运行能力。历史库存仍只由 checked_build 逐字节认证。
     if not required.issubset(bodies):
         raise ComponentError("invalid_build_manifest")
@@ -447,7 +449,15 @@ def prepare(root: Path, data, artifact: Path | None):
                 unpacked.mkdir(mode=0o700)
                 for name, body in bodies.items():
                     destination = unpacked / name
-                    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    # parents=True 只会把 mode 应用于最后一级；共享主题首次引入
+                    # templates/prototype 深目录时，中间 templates 会落成默认 0755，
+                    # 随后库存认证必须拒绝它。逐层创建本次自有空暂存区的目录，
+                    # 保证每一级都是 0700；绝不 chmod 既有组件或用户目录来绕过检查。
+                    parent = unpacked
+                    for part in destination.parent.relative_to(unpacked).parts:
+                        parent = parent / part
+                        parent.mkdir(mode=0o700, exist_ok=True)
+                        physical(parent, private=True)
                     with destination.open("xb") as stream:
                         stream.write(body)
                     destination.chmod(0o700 if name.endswith(".sh") else 0o600)

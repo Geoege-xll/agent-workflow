@@ -1,57 +1,33 @@
 /* 改编自show-me-you-want-skill固定提交1f6d786dddd36a33b002ce8afff70d43d08a9460的cv-vp/cv-world、清单与编号样式，适配本页石墨token及真实HTML。
-* 来源：https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/skills/smyw/assets/style.css
-* MIT License
-*
-* Copyright (c) 2026 box
-*
-* Permission is hereby granted, free of charge, to any person obtaining a copy
-* of this software and associated documentation files (the "Software"), to deal
-* in the Software without restriction, including without limitation the rights
-* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-* copies of the Software, and to permit persons to whom the Software is
-* furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice shall be included in all
-* copies or substantial portions of the Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-* AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-* OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-* SOFTWARE.
-*/
-/* 用户明确的顶层工具页例外：语义stage/frame保留，视觉不再包裹工作台。
-* 整页深色、零外距；契约与演示说明位于大模态，不占画布/右栏常驻空间。 */
-body.prototype-workspace {
-  padding: 0;
-  background: #1c1d21;
-  color: #eff0f3;
-  color-scheme: only dark;
-  --prototype-canvas-bg: #1c1d21;
-  --prototype-surface: #17181b;
-  --prototype-text: #eff0f3;
-  --prototype-muted: #aaadb8;
-  --prototype-border: #373940;
-  --prototype-focus: #a8c5ff;
-}
-.prototype-stage,
-.prototype-frame {
-  inline-size: 100%;
-  max-inline-size: none;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
-}
-/* ① 页面业务token：沿用石墨工作台中性角色，只新增三类改动的语义配对。 */
-.review-presentation,.prototype-stage {
-  max-inline-size: none;
-}
-.review {
+ * 来源：https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/skills/smyw/assets/style.css
+ * MIT License
+ *
+ * Copyright (c) 2026 box
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+/* 边界：本文件只布局工具文档，绝不注入 iframe 原稿。材质唯一来源为 tool-theme.css。
+ * 历史 index.html 仍消费相同结构，因此无 sg-scope 的旧入口保留最小皮肤；
+ * 当前双入口仅把旧语义变量映射到共享主题，不另定义一套 SolidGlass token。 */
+body.prototype-workspace { margin: 0; padding: 0; }
+body.prototype-workspace:not(.sg-scope) { background: #1c1d21; color: #eff0f3; color-scheme: only dark; }
+body.prototype-workspace:not(.sg-scope) .review {
   --review-bg: #1c1d21;
   --review-panel: #202126;
   --review-sidebar: #17181b;
@@ -75,29 +51,50 @@ body.prototype-workspace {
   --change-added: #a4d4b4;
   --change-removed: #f1a8a1;
   --canvas-bg: #111216;
-  color-scheme: only dark;
-  color: var(--review-text);
-  background: var(--review-bg);
-  border-radius: 0;
-  display: flex;
-  flex-direction: column;
-  block-size: 100svh;
-  font: 14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color: var(--review-text); background: var(--review-bg);
+  font: 14px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;
 }
-.review * {
-  box-sizing: border-box;
+body.sg-scope .review {
+  --review-bg: var(--sg-bg); --review-panel: var(--sg-panel); --review-sidebar: var(--sg-panel);
+  --review-subtle: var(--sg-card); --review-text: var(--sg-ink); --review-muted: var(--sg-muted);
+  --review-line: var(--sg-line); --review-control: var(--sg-control-edge); --review-action: var(--sg-focus);
+  --review-on-action: var(--sg-primary-ink); --review-selected: var(--sg-state);
+  --review-hover: var(--sg-state); --review-pressed: var(--sg-state);
+  --review-danger: var(--sg-delete); --review-danger-bg: var(--sg-card);
+  --review-positive: var(--sg-add); --review-positive-bg: var(--sg-card);
+  --review-warning: var(--sg-delete); --review-warning-bg: var(--sg-card);
+  --change-modified: var(--sg-modify); --change-added: var(--sg-add); --change-removed: var(--sg-delete);
+  --canvas-bg: var(--sg-bg);
 }
-.review :is(h2,h3,h4,h5,p,fieldset,dl) {
-  margin: 0;
-}
-.review :is(button,input,select,textarea) {
+.prototype-workspace :is(.prototype-stage,.prototype-frame) { inline-size:100%; max-inline-size:none; margin:0; padding:0; border:0; border-radius:0; box-shadow:none; background:transparent; }
+.review { display:flex; flex-direction:column; block-size:100dvh; min-inline-size:0; }
+.review :where(*) { box-sizing:border-box; }
+.review :is(h2,h3,h4,h5,p,fieldset,dl) { margin:0; }
+.review [hidden] { display:none!important; }
+.review .visually-hidden { position:absolute; inline-size:1px; block-size:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+.review fieldset { border:0; padding:0; min-inline-size:0; }
+.review textarea { resize:vertical; }
+.review select { inline-size:100%; }
+.review summary { display:flex; align-items:center; gap:8px; min-block-size:36px; color:var(--review-muted); font-size:12px; cursor:pointer; list-style:none; }
+.review summary::before { content:"›"; font-size:18px; }
+.review details[open]>summary::before { transform:rotate(90deg); }
+.review summary::-webkit-details-marker { display:none; }
+.review summary:hover { color:var(--review-text); }
+
+.review .workspace-empty { position:absolute; inset:30% 10%; padding:24px; color:var(--review-text); background:var(--review-panel); }
+.review #prototype-pages details { padding-inline:8px; }
+.review #prototype-pages summary { font-size:13px; }
+
+/* 历史索引基础皮肤：不扩展白名单，不给新入口添加兼容模式。 */
+
+body.prototype-workspace:not(.sg-scope) .review :is(button,input,select,textarea) {
   font: inherit;
 }
-.review :is(button,a,summary,input,select,textarea,[tabindex]):focus-visible {
+body.prototype-workspace:not(.sg-scope) .review :is(button,a,summary,input,select,textarea,[tabindex]):focus-visible {
   outline: 2px solid var(--review-action);
   outline-offset: 3px;
 }
-.review button {
+body.prototype-workspace:not(.sg-scope) .review button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -112,56 +109,56 @@ body.prototype-workspace {
   cursor: pointer;
   transition: background-color 120ms ease;
 }
-.review button:hover {
+body.prototype-workspace:not(.sg-scope) .review button:hover {
   background: var(--review-hover);
 }
-.review button:active {
+body.prototype-workspace:not(.sg-scope) .review button:active {
   background: var(--review-pressed);
 }
-.review button:disabled {
+body.prototype-workspace:not(.sg-scope) .review button:disabled {
   cursor: not-allowed;
   color: var(--review-muted);
   border-color: var(--review-line);
   background: var(--review-subtle);
 }
-.review .review-primary,.review .design-primary {
+body.prototype-workspace:not(.sg-scope) .review .review-primary, body.prototype-workspace:not(.sg-scope) .review .design-primary {
   background: var(--review-action);
   border-color: var(--review-action);
   color: var(--review-on-action);
   font-weight: 600;
 }
-.review .review-primary:hover,.review .design-primary:hover {
+body.prototype-workspace:not(.sg-scope) .review .review-primary:hover, body.prototype-workspace:not(.sg-scope) .review .design-primary:hover {
   background: #bfd4ff;
 }
-.review .review-primary:active,.review .design-primary:active {
+body.prototype-workspace:not(.sg-scope) .review .review-primary:active, body.prototype-workspace:not(.sg-scope) .review .design-primary:active {
   background: #91b5f7;
 }
-.review .review-primary:disabled {
+body.prototype-workspace:not(.sg-scope) .review .review-primary:disabled {
   color: var(--review-muted);
   background: var(--review-subtle);
   border-color: var(--review-line);
 }
-.review .review-quiet,.review .review-inline,.review .design-quiet {
+body.prototype-workspace:not(.sg-scope) .review .review-quiet, body.prototype-workspace:not(.sg-scope) .review .review-inline, body.prototype-workspace:not(.sg-scope) .review .design-quiet {
   border-color: transparent;
   background: transparent;
   color: var(--review-muted);
   padding-inline: 7px;
 }
-.review .review-quiet:hover,.review .design-quiet:hover {
+body.prototype-workspace:not(.sg-scope) .review .review-quiet:hover, body.prototype-workspace:not(.sg-scope) .review .design-quiet:hover {
   background: var(--review-hover);
   color: var(--review-text);
 }
-.review .review-inline {
+body.prototype-workspace:not(.sg-scope) .review .review-inline {
   padding-inline: 0;
   min-block-size: 30px;
   color: var(--review-action);
   font-size: 12px;
 }
-.review .review-inline:hover {
+body.prototype-workspace:not(.sg-scope) .review .review-inline:hover {
   background: transparent;
   text-decoration: underline;
 }
-.review :is(select,textarea,input[type="search"]) {
+body.prototype-workspace:not(.sg-scope) .review :is(select,textarea,input[type="search"]) {
   inline-size: 100%;
   min-block-size: 34px;
   border: 1px solid var(--review-control);
@@ -170,33 +167,33 @@ body.prototype-workspace {
   color: var(--review-text);
   padding: 7px 9px;
 }
-.review textarea {
+body.prototype-workspace:not(.sg-scope) .review textarea {
   resize: vertical;
   line-height: 1.6;
   min-block-size: 66px;
 }
-.review textarea::placeholder,.review input::placeholder {
+body.prototype-workspace:not(.sg-scope) .review textarea::placeholder, body.prototype-workspace:not(.sg-scope) .review input::placeholder {
   color: var(--review-muted);
 }
-.review textarea[aria-invalid="true"] {
+body.prototype-workspace:not(.sg-scope) .review textarea[aria-invalid="true"] {
   border-color: var(--review-danger);
 }
-.review :is(label,legend) {
+body.prototype-workspace:not(.sg-scope) .review :is(label,legend) {
   font-size: 12px;
 }
-.review fieldset {
+body.prototype-workspace:not(.sg-scope) .review fieldset {
   border: 0;
   padding: 0;
   min-inline-size: 0;
 }
-.review input:is([type="radio"],[type="checkbox"]) {
+body.prototype-workspace:not(.sg-scope) .review input:is([type="radio"],[type="checkbox"]) {
   accent-color: var(--review-action);
   inline-size: 15px;
   block-size: 15px;
   margin: 0;
   flex-shrink: 0;
 }
-.review summary {
+body.prototype-workspace:not(.sg-scope) .review summary {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -206,20 +203,20 @@ body.prototype-workspace {
   cursor: pointer;
   list-style: none;
 }
-.review summary::before {
+body.prototype-workspace:not(.sg-scope) .review summary::before {
   content: "›";
   font-size: 18px;
 }
-.review details[open]>summary::before {
+body.prototype-workspace:not(.sg-scope) .review details[open]>summary::before {
   transform: rotate(90deg);
 }
-.review summary::-webkit-details-marker {
+body.prototype-workspace:not(.sg-scope) .review summary::-webkit-details-marker {
   display: none;
 }
-.review summary:hover {
+body.prototype-workspace:not(.sg-scope) .review summary:hover {
   color: var(--review-text);
 }
-.review .review-nav-drawer {
+body.prototype-workspace:not(.sg-scope) .review .review-nav-drawer {
   position: fixed;
   inset: 0 auto 0 0;
   inline-size: 296px;
@@ -232,27 +229,27 @@ body.prototype-workspace {
   border-radius: 0;
   background: var(--review-sidebar);
 }
-.review-nav-drawer[open] {
+body.prototype-workspace:not(.sg-scope) .review-nav-drawer[open] {
   animation: navigation-enter 160ms ease-out;
 }
-.review-nav-drawer-heading {
+body.prototype-workspace:not(.sg-scope) .review-nav-drawer-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 0 8px 20px;
 }
-.review-nav-drawer-heading h2 {
+body.prototype-workspace:not(.sg-scope) .review-nav-drawer-heading h2 {
   font-size: 15px;
   font-weight: 600;
 }
-.review-nav-drawer-heading button {
+body.prototype-workspace:not(.sg-scope) .review-nav-drawer-heading button {
   inline-size: 30px;
   min-block-size: 30px;
   padding: 0;
   font-size: 20px;
 }
-.review-page {
+body.prototype-workspace:not(.sg-scope) .review-page {
   position: relative;
   display: flex;
   align-items: center;
@@ -265,18 +262,18 @@ body.prototype-workspace {
   color: var(--review-muted);
   text-decoration: none;
 }
-.review-page:hover {
+body.prototype-workspace:not(.sg-scope) .review-page:hover {
   background: var(--review-hover);
   color: var(--review-text);
 }
-.review-page:active {
+body.prototype-workspace:not(.sg-scope) .review-page:active {
   background: var(--review-pressed);
 }
-.review-page[aria-current] {
+body.prototype-workspace:not(.sg-scope) .review-page[aria-current] {
   background: var(--review-subtle);
   color: var(--review-text);
 }
-.review-page[aria-current]::before {
+body.prototype-workspace:not(.sg-scope) .review-page[aria-current]::before {
   content: "";
   position: absolute;
   inset-inline-start: 0;
@@ -284,13 +281,13 @@ body.prototype-workspace {
   inline-size: 2px;
   background: var(--review-action);
 }
-.review-page[aria-current]::after {
+body.prototype-workspace:not(.sg-scope) .review-page[aria-current]::after {
   content: "✓";
   margin-inline-start: auto;
   color: var(--review-action);
   font-size: 13px;
 }
-.review-page-icon {
+body.prototype-workspace:not(.sg-scope) .review-page-icon {
   flex: 0 0 20px;
   inline-size: 20px;
   block-size: 20px;
@@ -299,46 +296,51 @@ body.prototype-workspace {
   stroke-width: 1.3;
   stroke-linejoin: round;
 }
-.review-page-copy {
+body.prototype-workspace:not(.sg-scope) .review-page-copy {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
-.review-page strong {
+body.prototype-workspace:not(.sg-scope) .review-page strong {
   font-size: 14px;
   font-weight: 500;
   line-height: 1.4;
 }
-.review-page small {
+body.prototype-workspace:not(.sg-scope) .review-page small {
   color: var(--review-muted);
   font-size: 12px;
   line-height: 1.4;
 }
-.review-navigation-foot {
+body.prototype-workspace:not(.sg-scope) .review-navigation-foot {
   padding: 18px 12px;
   color: var(--review-muted);
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* 历史索引未加载共享主题，保留其原生模态皮肤，不扩展历史资源合同。 */
+body.prototype-workspace:not(.sg-scope) .review dialog { color:var(--review-text); background:var(--review-panel); border:1px solid var(--review-control); border-radius:9px; padding:24px; }
+
 /* 视口与主工具栏：没有画布上方独立标题/说明背景带。 */
 .review-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
   min-block-size: 58px;
   padding: 10px 18px;
   flex-shrink: 0;
-  background: var(--review-sidebar);
+  background: var(--review-panel);
   border-block-end: 1px solid var(--review-line);
 }
 .review-toolbar-start,.review-toolbar-end {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-inline-size:0;
 }
 .review-toolbar-start strong {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
 }
 .review-toolbar-divider {
@@ -392,7 +394,7 @@ body.prototype-workspace {
 .review-body {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0,1fr) 350px;
+  grid-template-columns: minmax(0,1fr) 328px;
   min-block-size: 0;
 }
 .review-canvas-column {
@@ -407,9 +409,8 @@ body.prototype-workspace {
   position: relative;
   overflow: hidden;
   background-color: var(--canvas-bg);
-  background-image: radial-gradient(#373940 1px,transparent 1px);
-  background-size: 22px 22px;
-  touch-action: none;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
 }
 .cv-vp.panning,.cv-vp.space {
   cursor: grabbing;
@@ -422,23 +423,15 @@ body.prototype-workspace {
   inline-size: var(--canvas-width, 100%);
   block-size: var(--canvas-height, 100%);
 }
-#prototype-preview {
-  inline-size: var(--canvas-width, 100%);
-  block-size: var(--canvas-height, 100%);
-}
-.is-annotating #prototype-preview {
-  user-select: none;
-}
-.is-annotating #prototype-preview * {
-  cursor: crosshair!important;
-}
+#prototype-preview { display:block; inline-size:100%; block-size:100%; border:0; background:transparent; }
+.is-annotating #prototype-preview { user-select:none; }
 .canvas-floating-controls {
   position: absolute;
   z-index: 20;
-  inset: 12px 14px auto;
+  inset: auto 14px 20px;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  justify-content: center;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
   pointer-events: none;
@@ -448,7 +441,7 @@ body.prototype-workspace {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  max-inline-size: calc(100% - 116px);
+  min-inline-size: 0;
 }
 .canvas-tool-cluster>* {
   pointer-events: auto;
@@ -458,22 +451,15 @@ body.prototype-workspace {
   align-items: center;
   gap: 2px;
   padding: 4px;
-  border: 1px solid var(--review-line);
-  border-radius: 7px;
-  background: var(--review-sidebar);
-  box-shadow: 0 3px 12px #0003;
 }
 .review .canvas-zoom-tools button {
   min-inline-size: 28px;
-  min-block-size: 28px;
-  padding: 4px 7px;
+  min-block-size: 32px;
+  padding: 5px 8px;
   border: 0;
-  background: transparent;
   font-size: 12px;
 }
-.review .canvas-zoom-tools button:hover {
-  background: var(--review-hover);
-}
+
 #canvas-zoom-reset {
   min-inline-size: 48px;
   font-variant-numeric: tabular-nums;
@@ -496,16 +482,12 @@ body.prototype-workspace {
   cursor: pointer;
 }
 .review .canvas-page-action {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: 0;
+  flex-shrink: 0;
   pointer-events: auto;
   min-block-size: 37px;
   padding-inline: 12px;
-  border-color: var(--review-control);
-  background: var(--review-sidebar);
+
   font-size: 12px;
-  box-shadow: 0 3px 12px #0003;
 }
 .canvas-page-action>span:not(:empty) {
   padding: 0 5px;
@@ -513,6 +495,7 @@ body.prototype-workspace {
   font-variant-numeric: tabular-nums;
 }
 .selection-tools {
+  left:14px; top:70px; max-inline-size:calc(100% - 28px);
   flex-wrap: wrap;
   position: absolute;
   z-index: 25;
@@ -520,10 +503,6 @@ body.prototype-workspace {
   align-items: center;
   gap: 12px;
   padding: 8px 9px 8px 12px;
-  border: 1px solid var(--review-control);
-  border-radius: 7px;
-  background: var(--review-panel);
-  box-shadow: 0 6px 24px #0005;
 }
 #selection-actions {
   flex-wrap: wrap;
@@ -539,12 +518,9 @@ body.prototype-workspace {
 .canvas-target-picker {
   position: absolute;
   z-index: 20;
-  inset: auto auto 12px 14px;
+  inset: 12px auto auto 14px;
   max-inline-size: calc(100% - 28px);
   padding: 2px 9px;
-  border: 1px solid var(--review-line);
-  border-radius: 6px;
-  background: var(--review-sidebar);
 }
 .review .canvas-target-picker>summary {
   min-block-size: 28px;
@@ -567,8 +543,8 @@ body.prototype-workspace {
 .canvas-status {
   position: absolute;
   z-index: 10;
-  inset: auto 14px 16px auto;
-  max-inline-size: min(56%,620px);
+  inset: auto auto 4px 16px;
+  max-inline-size: calc(100% - 32px);
   padding: 3px 6px;
   border-radius: 4px;
   background: var(--canvas-bg);
@@ -577,6 +553,7 @@ body.prototype-workspace {
   line-height: 1.6;
   pointer-events: none;
 }
+
 /* 用户整改覆盖层：只作用于工具overlay，绝不改稿件业务DOM。 */
 .annotation-overlays {
   position: absolute;
@@ -655,55 +632,31 @@ body.prototype-workspace {
   border: 1px dashed var(--review-action);
   outline: 0;
 }
+
 /* 右栏按同一8/12/16间距系统组织：标题即Tab，正文先于目标，动作与底部各一组。 */
 .review-panel-slot {
+  overflow:hidden;
   min-inline-size: 0;
   min-block-size: 0;
   border-inline-start: 1px solid var(--review-line);
   background: var(--review-panel);
 }
 .review-panel {
+  border-radius:0;
   display: flex;
   flex-direction: column;
   block-size: 100%;
   min-block-size: 0;
 }
-.review-panel-heading {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: space-between;
-  padding-inline: 16px;
-  border-block-end: 1px solid var(--review-line);
-}
-.record-tabs {
-  display: flex;
-  gap: 24px;
-}
-.review .record-tabs button {
-  position: relative;
-  min-block-size: 48px;
-  padding: 12px 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--review-muted);
-  font-size: 14px;
-}
+.review-panel-heading { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:8px; padding:16px; }
+.record-tabs { display:flex; inline-size:100%; gap:4px; padding:4px; }
+.review .record-tabs button { flex:1; min-block-size:32px; padding:5px 8px; border-color:transparent; background:transparent; color:var(--review-muted); font-size:13px; }
 .record-tabs button>span {
   margin-inline-start: 6px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-.review .record-tabs [aria-selected="true"] {
-  color: var(--review-text);
-}
-.record-tabs [aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 -1px;
-  border-block-end: 2px solid var(--review-action);
-}
+.review .record-tabs [aria-selected="true"] { color:var(--review-text); background:var(--sg-state,var(--review-selected)); }
 .review .review-panel-heading>button {
   inline-size: 32px;
   min-block-size: 32px;
@@ -780,8 +733,8 @@ body.prototype-workspace {
 }
 .rectification-summary {
   color: var(--review-text);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -802,8 +755,7 @@ body.prototype-workspace {
   min-block-size: 32px;
   padding: 5px 8px;
   border: 1px solid var(--review-line);
-  border-radius: 4px;
-  background: transparent;
+
   color: var(--review-text);
   font-size: 13px;
 }
@@ -822,7 +774,7 @@ body.prototype-workspace {
   margin-block-start: 8px!important;
 }
 .review-empty {
-  padding: 32px 8px;
+  padding: 24px 0;
   text-align: start;
 }
 .review-empty h3 {
@@ -852,6 +804,7 @@ body.prototype-workspace {
   color: var(--review-positive);
   font-size: 13px;
 }
+
 /* 引用保护的移除按钮保持明确禁用态，不能被列表动作样式覆盖。 */
 .review .anchor-item>button:disabled {
   color: var(--review-muted);
@@ -926,15 +879,11 @@ body.prototype-workspace {
 .review-panel-footer>#write-global:hover {
   color: var(--review-text);
 }
+
 /* 原生唯一编辑模态、大开发说明和交还模态。关闭状态不强制display。 */
 .review dialog {
-  color: var(--review-text);
-  background: var(--review-panel);
-  border: 1px solid var(--review-control);
-  border-radius: 9px;
-  padding: 24px;
   max-inline-size: calc(100% - 24px);
-  max-block-size: calc(100svh - 24px);
+  max-block-size: calc(100dvh - 24px);
 }
 .review dialog:modal {
   overscroll-behavior: contain;
@@ -945,6 +894,7 @@ body.prototype-workspace {
   overscroll-behavior: contain;
 }
 .review .review-drawer {
+  border-radius:0;
   position: fixed;
   inset: 0 0 0 auto;
   inline-size: min(390px,100%);
@@ -953,7 +903,6 @@ body.prototype-workspace {
   max-block-size: 100svh;
   margin: 0;
   padding: 0;
-  border-radius: 0;
 }
 #drawer-panel-host {
   block-size: 100%;
@@ -1030,19 +979,26 @@ body.prototype-workspace {
   min-block-size: 36px;
   padding: 7px 10px;
   border: 1px solid var(--review-control);
-  border-radius: 5px;
+  border-radius: var(--sg-control-radius,5px);
   color: var(--review-muted);
   font-size: 13px;
 }
 .operation-segment input:checked+span {
   background: var(--review-selected);
-  border-color: var(--review-action);
+  border-color: currentColor;
   color: var(--review-text);
 }
 .operation-segment input:focus-visible+span {
   outline: 2px solid var(--review-action);
   outline-offset: 3px;
 }
+/* 三种整改为业务语义；单选圆点、文案、选中边界同步保留，不能仅靠颜色。 */
+.operation-segment label:has(#operation-modify) { color:var(--change-modified); }
+.operation-segment label:has(#operation-add) { color:var(--change-added); }
+.operation-segment label:has(#operation-delete) { color:var(--change-removed); }
+.operation-segment label>span { color:inherit; }
+.operation-segment input:checked+span { color:inherit; }
+
 .review-field {
   margin-block-end: 16px;
 }
@@ -1061,7 +1017,6 @@ body.prototype-workspace {
   font-weight: 400;
 }
 .review-field select,.review-field textarea {
-  background: var(--review-sidebar);
   color: var(--review-text);
 }
 #rectification-message {
@@ -1128,7 +1083,7 @@ body.prototype-workspace {
 .review .reference-chip {
   min-block-size: 28px;
   padding: 4px 8px;
-  background: var(--review-sidebar);
+
   font: 12px ui-monospace,monospace;
 }
 #node-extra label {
@@ -1139,7 +1094,6 @@ body.prototype-workspace {
 }
 .additional-details textarea {
   font-size: 12px;
-  background: var(--review-sidebar);
 }
 #node-extra {
   padding-block: 10px 14px;
@@ -1163,6 +1117,7 @@ body.prototype-workspace {
 }
 .review .review-export {
   inline-size: 600px;
+  padding:24px;
 }
 .review-export-heading {
   display: flex;
@@ -1274,6 +1229,7 @@ body.prototype-workspace {
 }
 .review .developer-dialog {
   inline-size: min(1100px,calc(100vw - 48px));
+  max-inline-size: calc(100vw - 48px);
   block-size: min(880px,calc(100svh - 48px));
   padding: 0;
 }
@@ -1282,6 +1238,7 @@ body.prototype-workspace {
   flex-direction: column;
 }
 .developer-scroll {
+  white-space:pre-wrap; overflow-wrap:anywhere;
   overflow: auto;
   min-block-size: 0;
   padding: 22px 28px 30px;
@@ -1336,13 +1293,14 @@ body.prototype-workspace {
 @keyframes navigation-enter {
   from {
     transform: translateX(-100%);
-  } to {
+  }
+  to {
     transform: translateX(0);
   }
 }
 @media(max-width:1100px) {
   .review-body {
-    grid-template-columns: minmax(0,1fr) 330px;
+    grid-template-columns: minmax(0,1fr) 292px;
   }
   .review-toolbar-start strong {
     max-inline-size: 180px;
@@ -1361,9 +1319,8 @@ body.prototype-workspace {
   .review-mobile-panel {
     display: inline-flex!important;
   }
-  .review-toolbar-start strong,.review-toolbar-divider {
-    display: none;
-  }
+  .review-toolbar-start strong { max-inline-size:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .review-toolbar-divider { display:none; }
   .review-toolbar {
     padding-inline: 12px;
     gap: 10px;
@@ -1389,6 +1346,7 @@ body.prototype-workspace {
   }
   .canvas-floating-controls {
     inset-inline: 10px;
+    gap:6px;
   }
   .canvas-tool-cluster {
     gap: 5px;
@@ -1397,9 +1355,7 @@ body.prototype-workspace {
     gap: 9px;
     padding-inline: 8px;
   }
-  .canvas-floating-controls {
-    gap: 6px;
-  }
+
   .selection-tools {
     flex-wrap: wrap;
     flex-direction: column;
@@ -1411,7 +1367,7 @@ body.prototype-workspace {
     justify-content: space-between;
   }
   .canvas-status {
-    inset-block-end: 52px;
+    inset-block-end: 4px;
     max-inline-size: calc(100% - 28px);
   }
   .modal-heading {
@@ -1452,8 +1408,21 @@ body.prototype-workspace {
   }
 }
 @media(pointer:coarse) {
-  .review-toolbar button,.canvas-floating-controls button,.selection-tools button,.review .review-panel button,.review summary,.operation-segment label>span {
+  /* 局部组件的桌面密度规则比共享主题更具体，触屏尺寸必须在同一组件归属明确覆盖。
+   * 这里扩大真实控件/label盒子，不用透明伪元素制造无法核验或相互重叠的命中区。 */
+  .review-toolbar button,.canvas-floating-controls button,.selection-tools button,.review .review-panel button,.review summary,.operation-segment label>span,
+  .modal-heading>button,.review-export-heading>button,.review .review-filters select,.review .reference-chip,.canvas-display-options label,.reference-option,
+  .review .canvas-zoom-tools button,.review .canvas-page-action,#selection-actions button,.review .canvas-target-picker>summary,
+  .review .rectification-filters>summary,.review .reference-details>summary,.review .additional-details>summary {
     min-block-size: 44px;
+  }
+  /* 逐项复用桌面组件的 selector：两类+元素及 ID 规则不能由低优先级容器按钮覆盖。
+   * 缩放四按钮真实盒均至少44px宽，100%保留原有更宽的48px最小宽，不挤压标签。 */
+  .modal-heading>button,.review-export-heading>button,.review .review-panel-heading>button,.review .reference-chip,.review .canvas-zoom-tools button {
+    min-inline-size: 44px;
+  }
+  .canvas-display-options label,.reference-option {
+    align-items: center;
   }
   .rectification-modal-scroll :is(select,textarea),.review-export textarea {
     font-size: 16px;
@@ -1467,47 +1436,8 @@ body.prototype-workspace {
   }
 }
 @media(forced-colors:active) {
-  .review {
-    --review-bg:Canvas;
-    --review-panel:Canvas;
-    --review-sidebar:Canvas;
-    --review-subtle:Canvas;
-    --review-text:CanvasText;
-    --review-muted:CanvasText;
-    --review-line:CanvasText;
-    --review-control:ButtonText;
-    --review-action:Highlight;
-    --review-on-action:HighlightText;
-    --review-selected:Canvas;
-    --review-danger:CanvasText;
-    --review-positive:CanvasText;
-    --review-positive-bg:Canvas;
-    --review-warning:CanvasText;
-    --review-warning-bg:Canvas;
-    --change-modified:CanvasText;
-    --change-added:CanvasText;
-    --change-removed:CanvasText;
-    --canvas-bg:Canvas;
-  }
-  .rectification-outline.delete {
-    border-style: dashed;
-  }
-  .selection-outline {
-    outline: 2px solid Highlight;
-  }
-  .review .anchor-badge,.review .rectification-badge {
-    border: 1px solid ButtonText;
-  }
+  body.prototype-workspace:not(.sg-scope) .review { --review-bg:Canvas; --review-panel:Canvas; --review-sidebar:Canvas; --review-subtle:Canvas; --review-text:CanvasText; --review-muted:CanvasText; --review-line:CanvasText; --review-control:ButtonText; --review-action:Highlight; --review-on-action:HighlightText; --review-selected:Canvas; --review-danger:CanvasText; --review-positive:CanvasText; --review-positive-bg:Canvas; --review-warning:CanvasText; --review-warning-bg:Canvas; --change-modified:CanvasText; --change-added:CanvasText; --change-removed:CanvasText; --canvas-bg:Canvas; }
+  .rectification-outline.delete { border-style:dashed; }
+  .selection-outline { outline:2px solid Highlight; }
+  .review :is(.anchor-badge,.rectification-badge,.operation-segment label>span) { border:1px solid ButtonText; }
 }
-
-/* 画布尺寸由共享呈现层声明或实测；固定稿与响应式稿分别保留原语义。 */
-html,body { margin:0; padding:0; }
-[hidden] { display:none!important; }
-#prototype-preview { display:block; width:100%; height:100%; border:0; background:#1c1d21; }
-.cv-vp { touch-action:pan-x pan-y; }
-.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.workspace-empty { position:absolute; inset:30% 10%; padding:24px; color:var(--review-text); background:var(--review-panel); }
-#prototype-pages details { padding-inline:8px; }
-#prototype-pages summary { font-size:13px; }
-#selection-tools { left:14px; top:70px; max-width:calc(100% - 28px); }
-#page-contract-content { white-space:pre-wrap; overflow-wrap:anywhere; }

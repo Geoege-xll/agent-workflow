@@ -3,7 +3,8 @@
 (() => {
   "use strict";
   const operations = { modify: "修改", add: "新增内容", delete: "删除建议" };
-  const number = (entry, anchor = false) => `${anchor ? "A" : ""}${String(entry.number).padStart(2, "0")}`;
+  // R/A 仅为可见编号前缀；持久化 ID、独立 number 序列和 feedback 载荷均不变。
+  const number = (entry, anchor = false) => `${anchor ? "A" : "R"}${String(entry.number).padStart(2, "0")}`;
   const make = (tag, text, className) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; };
   function formatExport(payload) {
     // 唯一实际交还formatter同时供复制、备用文字、下载及原子完成的提交前验证使用。

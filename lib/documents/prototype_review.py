@@ -36,7 +36,8 @@ V4_TOOL_ASSETS = V3_TOOL_ASSETS
 LIVE_TOOL_ASSETS = ("delivery.html", "review.html", "live-workspace.js", "live-connection.js",
                "canvas-host.js", "live.css", "workspace.css", "review-state.js", "review-camera.js",
                "feedback.js", "feedback.css", "page-shell.js", "THIRD_PARTY_NOTICES.txt",
-               "file-entry.js", "file-delivery.js", "file-page.js", "canvas-presentation.js")
+               "file-entry.js", "file-delivery.js", "file-page.js", "canvas-presentation.js",
+               "tool-theme.css", "solid-glass-LICENSE.txt")
 # 公开旧别名仍属于默认prepare/capture_tool的V4语义；新消费者必须明确选择live。
 TOOL_ASSETS = V4_TOOL_ASSETS
 MAX_BUNDLE_FILES = 300

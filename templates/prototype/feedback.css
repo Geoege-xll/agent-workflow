@@ -1,20 +1,19 @@
-/* 仅在通过bridge3认证的派生页隔离展示壳；项目独立源不加载本资源、不受影响。
+/* 仅在认证后的派生页隔离展示壳；项目独立源不加载本资源、不受影响。
  * 子文档overlay独占局部几何；按钮与颜色只表达评审意见，不删除或改写产品元素。 */
 body.prototype-review-embedded { margin:0!important; padding:0!important; min-width:0; min-height:0; }
 body.prototype-review-embedded .prototype-review-shell-hidden { display:none!important; }
 body.prototype-review-embedded .prototype-review-shell-ancestor { margin:0!important; padding:0!important; min-height:0!important; }
-body.prototype-review-embedded [data-prototype-page-content] { box-sizing:border-box; }
 body.pr-annotating [data-prototype-page-content],body.pr-annotating [data-prototype-page-content] * { cursor:crosshair!important; user-select:none; }
 .pr-overlays { position:fixed; inset:0; pointer-events:none; z-index:2147483000; font:13px/1.4 system-ui,sans-serif; }
-.pr-selection,.pr-hover,.pr-outline { position:absolute; pointer-events:none; box-sizing:border-box; border:2px solid #a8c5ff; border-radius:3px; }
+.pr-selection,.pr-hover,.pr-outline { position:absolute; pointer-events:none; box-sizing:border-box; border:2px solid #dedede; border-radius:3px; }
 .pr-selection { outline:1px solid #17181b; outline-offset:2px; }
-.pr-hover { border:1px dashed #a8c5ff; }
-.pr-outline.modify { border-color:#e4c270; }
-.pr-outline.delete { border-color:#f1a8a1; border-style:dashed; }
+.pr-hover { border:1px dashed #dedede; }
+.pr-outline.modify { border-color:#a7c8ff; }
+.pr-outline.delete { border-color:#ffb3ad; border-style:dashed; }
 .pr-anchor,.pr-badge { position:absolute; pointer-events:auto; min-width:40px; min-height:24px; border:1px solid #858b97; border-radius:4px; padding:3px 6px; color:#eff0f3; background:#17181b; cursor:pointer; font:12px/1.4 ui-monospace,monospace; }
 .pr-badge { color:#17181b; }
-.pr-badge.modify { background:#e4c270; }
-.pr-badge.add { background:#a4d4b4; }
-.pr-badge.delete { background:#f1a8a1; }
-.pr-anchor:focus-visible,.pr-badge:focus-visible,.pr-overlays .is-active { outline:2px solid #a8c5ff; outline-offset:3px; }
+.pr-badge.modify { background:#a7c8ff; }
+.pr-badge.add { background:#a1d8b6; }
+.pr-badge.delete { background:#ffb3ad; }
+.pr-anchor:focus-visible,.pr-badge:focus-visible,.pr-overlays .is-active { outline:2px solid #dedede; outline-offset:3px; }
 @media(forced-colors:active) { .pr-anchor,.pr-badge { background:ButtonFace; color:ButtonText; border-color:ButtonText; } .pr-selection,.pr-outline { border-color:Highlight; } }

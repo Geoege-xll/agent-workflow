@@ -1,6 +1,6 @@
-# xy-workflow 3.0.5 官方插件
+# xy-workflow 3.0.6 官方插件
 
-本包版本为 `xy-workflow 3.0.5`，唯一版本源为 `product/PLUGIN_VERSION`；固定配套 Native Agent Config `0.1.4`，其版本源为 `native_config/VERSION`。Native `0.1.4` 已从成功 CI 原包正式发布、真实下载核验并固定在 `plugins/maintenance/component.json`。插件真实发行以 GitHub Release 和对应 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本、QA、CI、发行及本机操作记录见[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。自有 Git stable 分发不等同官方公开目录上架，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
+本包版本为 `xy-workflow 3.0.6`，唯一版本源为 `product/PLUGIN_VERSION`；固定配套 Native Agent Config `0.1.5`，其版本源为 `native_config/VERSION`。固定 Native `0.1.5` 已采用同 SHA 成功 CI 原包正式发布并真实下载核验，唯一生成器已生成 `published` 绑定。插件真实发行以 GitHub Release 和对应 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本、QA、CI、发行及本机操作记录见[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。自有 Git stable 分发不等同官方公开目录上架，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
 
 ## 载荷与职责
 
@@ -54,7 +54,9 @@ Specialist，新 API／迁移才读 What's New；本机资源不随插件复制�
 
 独立配置核心位于 `native_config/`，由自身构建器交付，插件不导入服务、不包含网页、独立 ZIP 或模型 MCP。首次组件准备需要明确确认并校验真实发行包；维护失败不阻断普通工作流。插件缓存角色只读，原生文件与调用偏好分开管理。
 
-Codex 七角色的完整定义由同源角色生成到非发现目录 `native-agent-templates/codex`。需要原生文件时，进入 `xy-config` →“原生定义”→明确选“用户级（推荐）”或“项目级”→“准备原生 Agent”→预览完整定义→确认保存；只创建缺失定义，保留现有同名定义，不写模型或推理默认。插件安装不创建这些文件，升级也不自动更新或删除已准备定义，来源版本变化后需显式维护。用户级完整定义不等于统一模型默认，文件创建和发现不证明宿主按名称调用或指定模型已生效。新版启动器的 `--preparation-source` 只与固定描述绑定的 `0.1.4` 组件配套，不能调用旧 `0.1.3`。
+Codex 七角色的完整定义由同源角色生成到非发现目录 `native-agent-templates/codex`。通过完整插件显式执行 `xy-config open` 时，固定 `0.1.5` 组件按已校验模板自动补齐用户级缺失原生 Agent，再回读并打开控制台；当前项目已有同名定义时跳过，不写项目文件。已有定义及模型、推理字段保持，重复打开与升级不重写。独立组件未指定 `--preparation-source` 时不自动补齐；网页不提供手动准备入口。插件安装不创建这些文件，升级也不自动更新或删除已准备定义，来源版本变化后需显式维护。用户级完整定义不等于统一模型默认，文件创建和发现不证明宿主按名称调用或指定模型已生效。新版启动器的 `--preparation-source` 仅与固定描述绑定的 `0.1.5` 组件配套，不沿用旧组件。
+
+Agent 控制台与原型交付／评审外壳共同使用限定在 `.sg-scope` 的 SolidGlass 静态主题，完整 MIT 许可随包保留，业务原稿保持独立。原型普通滚轮由业务页面滚动；鼠标平移使用 Space 拖动或中键，Ctrl/Cmd 滚轮缩放。响应式长页保持可用设计视口，不把 iframe 撑成整页高度。
 
 唯一纯标准库只读合同 `native_config/preference_contract.py` 逐字节投影为插件的 `plugins/dispatch_preferences.py`，记录来源及投影摘要。PM 在派发前通过 `source_pack.py dispatch-preferences` 读取用户／项目偏好，无偏好时沿宿主默认；有偏好时只映射实际原生工具支持的字段，异常不静默回退。它不启动或准备组件、HTTP/MCP，不写设置，不改变业务确认、角色权限或当前主会话模型；维护 Skill 分支不进入该业务步骤。
 
