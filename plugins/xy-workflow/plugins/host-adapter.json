@@ -1,0 +1,5 @@
+{
+  "host": "claude",
+  "manifest_target": ".claude-plugin/plugin.json",
+  "schema_version": 1
+}

@@ -40,7 +40,7 @@ existing Python 3.11+ and never installs software or changes the user's PATH.
 The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
 Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
 actual discovered name or the packaged physical path when invoking one. Public aliases are
-`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
+`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-impeccable` and `xy-playwright`, governed by
 `product/command_identity.json`. The host discovers the official `agent-desktop` Skill
 directly under its upstream name. For the selected upstream Skills exposed through
 `xy-` aliases, fully read the selected adapter and its packaged canonical before use.
