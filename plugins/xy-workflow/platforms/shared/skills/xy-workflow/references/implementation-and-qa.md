@@ -157,10 +157,9 @@ local artifacts. Return distilled evidence and resolvable references to the PM.
 
 ## Native bug-fix route
 
-Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
-runs the Grill Me coverage check and `xy-plan`; when its symptom, expected result, environment,
-reproduction, impact, and acceptance evidence are complete, the coverage check asks nothing and
-returns control immediately.
+Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A clear Full bug proceeds
+to `xy-plan` using the known symptom, expected result, environment, reproduction, impact and
+acceptance evidence.
 
 ```yaml
 native_bug_fix:

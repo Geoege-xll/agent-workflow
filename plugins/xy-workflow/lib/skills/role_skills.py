@@ -25,14 +25,6 @@ SELECTED_SKILL_ALIASES = {public: canonical for public, canonical in COMMAND_IDE
                           if canonical != "agent-config"}
 SELECTED_SKILLS = frozenset(SELECTED_SKILL_ALIASES)
 
-
-def selected_alias(canonical: str) -> str:
-    """角色与构建器共用唯一产品声明的公开名称，不改上游canonical名称。"""
-    return next(public for public, original in SELECTED_SKILL_ALIASES.items() if original == canonical)
-
-
-PM_SKILLS = (selected_alias("grilling"),)
-
 ROLE_SKILLS = {
     # 浏览器项目和微信小程序共用 xy-web。只有项目测试留下生产浏览器交互缺口时，
     # 才按验证规则读取 Playwright，因此 Web 角色沿用五个实现角色共同的启动技能。

@@ -11,7 +11,7 @@ memory:
   portable_checkpoint: docs/PROJECT.md
 
 orchestration:
-  max_concurrent_subagents: 8
+  max_concurrent_subagents: 20
   max_parallel_writers: 6
   max_writers_per_path: 1
   max_depth: 1

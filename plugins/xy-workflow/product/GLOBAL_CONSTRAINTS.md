@@ -21,8 +21,11 @@ sibling histories or a parent-history fork. Alias binds module/role; independent
 After acceptance and evidence preservation, use actual native close or irreversibly retire when
 unavailable; retirement neither proves destruction/history erasure nor releases still-active locks.
 
-The pack is the only workflow orchestrator. The Full-request coverage
-check is PM-owned, using bundled upstream `grilling`; original `grill-me` is user-invoked only.
+The pack is the only workflow orchestrator. Determine the authorized deliverable first. When
+scope, impact and acceptance are clear, classify implementation directly as Light or Full.
+The PM uses bundled `xy-grilling` only for a material gap in the deliverable, scope, impact or acceptance.
+Discussion may include questions. Execution requires an explicit request for that deliverable.
+Original `grill-me` is user-invoked only.
 `grill_result` is this workflow's internal schema in `xy-workflow/references/requirements-intake.md`,
 not an upstream contract. `xy-plan` is the self-contained draft-planning procedure. Neither
 is an implementation workflow. Superpowers is disabled by default except that the same single `xy-qa` reviewer may use the installed
@@ -40,8 +43,8 @@ does not weaken the compact STANDARDS index plus targeted applicable leaves requ
 Writer: non-UI implementation uses engineering leaves, production UI uses engineering/design
 leaves, and prototype design uses design leaves.
 
-For Full work, the mandatory PM order is: classify Full using available facts → retrieve only any
-materially needed auxiliary facts → Grill Me coverage check → `xy-plan` with `plan_state: draft` → PM decides the post-QA controlled-document projection →
+For Full work, the mandatory PM order is: classify Full → record planning coverage from known
+facts → `xy-plan` with `plan_state: draft` → PM decides the post-QA controlled-document projection →
 bind `requirements_approved` to current goal/scope authority, with a recommendation and user-selected prototype policy for design-change UI → freeze and durably save the single approved Full Markdown → resolve applicable solution decisions before affected prototype or production dispatch, then obtain page approval for the selected prototype before dependent production writes →
 integrated QA. Entries explicitly claiming acceptance and the corresponding topic baselines retain their last verified truth during
 execution; only the PM applies a required projection after applicable verified acceptance. Light saves only for actual pause/recovery/handoff or explicit request. Saving never upgrades

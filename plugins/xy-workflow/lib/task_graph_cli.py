@@ -166,7 +166,7 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 AUTHORITY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 EXCEPTIONAL_GATE_RE = re.compile(r"exceptional:[a-z0-9][a-z0-9._-]*\Z")
 USER_CHOICE_REF_RE = re.compile(r"user:[a-z0-9][a-z0-9._:/-]*\Z")
-PACK_FIELDS = {"solution_approval_sources", "schema_version", "task", "standards_contract", "approved_gates", "request_scope",
+PACK_FIELDS = {"native_closeout", "solution_approval_sources", "schema_version", "task", "standards_contract", "approved_gates", "request_scope",
                "requirements_fingerprint", "ui_contract", "runtime_binding", "reviewed_ui_changes",
                "qa_checkpoint", "qa_checkpoint_fingerprint", "qa_document_base", "reviewed_solution_decisions",
                "reviewed_business_confirmations"}
@@ -431,7 +431,9 @@ def export_current_task_pack(payload: dict[str, Any], task_id: str, *, root: Pat
     validate_decisions(snapshot, for_handoff=True)
     task_intent.check_delivery(snapshot, snapshot["tasks"][0])
     require_writer(snapshot, snapshot["tasks"][0], root)
-    return replace_pack_task(payload, task_intent.handoff_task(snapshot["tasks"][0]))
+    exported = replace_pack_task(payload, task_intent.handoff_task(snapshot["tasks"][0]))
+    exported.pop("native_closeout", None)
+    return exported
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -451,7 +453,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, help="explicit new graph or task-pack output; never created by default")
     parser.add_argument("--root", type=Path, help="explicit root for initialization, selected file fingerprints or scratch workspace")
     parser.add_argument("--select", action="append", default=[], help="select an existing receipt fingerprint-map field")
-    parser.add_argument("--pm-id", help="仅独立原型 task 导出：已登记原件的实际 PM 身份")
+    parser.add_argument("--pm-id", help="独立原型 task 导出或请求清理：已登记原件的实际 PM 身份")
     parser.add_argument("--check-command", help="仅 fingerprints 使用：核对当前单包中这条命令声明的文件输入")
     parser.add_argument("--request-id", help="request identifier for deterministic scratch workspace allocation/cleanup")
     parser.add_argument("--all", action="store_true", help="clean all managed scratch workspaces for the project root")
@@ -1860,6 +1862,9 @@ def _tasks(payload: dict[str, Any], *, handoff: bool = False, root: Path | None 
                 "standards_contract.root/prototype"
             )
 
+    if "native_closeout" in payload:
+        from lib.task_closeout import validate_metadata
+        validate_metadata(payload, typed_raw_tasks)
     tasks: list[Task] = []
     scopes = request_scopes(payload)
     for index, raw in enumerate(typed_raw_tasks):
@@ -2228,8 +2233,8 @@ def _verify_ui_scope(pack: dict[str, Any], source: dict[str, Any]) -> None:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        if args.pm_id is not None and args.command != "task":
-            raise TaskGraphError("--pm-id applies only to standalone prototype task export")
+        if args.pm_id is not None and args.command not in {"task", "cleanup-scratch"}:
+            raise TaskGraphError("--pm-id applies only to standalone prototype task export and request cleanup")
         if args.check_command is not None and (args.command != "fingerprints" or not args.check_command.strip()):
             raise TaskGraphError("--check-command requires fingerprints and an exact nonempty command")
         if args.claude_event and (args.command != "continuation" or args.host != "claude"):
@@ -2293,7 +2298,7 @@ def is_standalone_prototype(payload: dict) -> bool:
 
 
 def publish_task_update(path, root, payload, body, expected, patch, *, pool_operation=False,
-                        policy: DispatchPolicy = DEFAULT_DISPATCH):
+                        policy: DispatchPolicy = DEFAULT_DISPATCH, native_closeout=None):
     """公开更新与持锁准入共用同一次原记录语义、校验与 CAS 发布。
 
     调用方提供刚读到的原字节，在持有项目/池锁的调用中也必须再次比对目标 SHA。
@@ -2340,6 +2345,15 @@ def publish_task_update(path, root, payload, body, expected, patch, *, pool_oper
     else:
         updated = records.update(payload, patch, root,
                                  lambda command, graph: _execute(command, graph, root=root), record_sha=expected)
+    if native_closeout is not None:
+        if not pool_operation:
+            raise TaskGraphError("native closeout metadata requires the registered task pool")
+        from lib.task_closeout import FIELD
+        task_id, receipt = native_closeout
+        if task_id in payload.get(FIELD, {}):
+            raise TaskGraphError("native closeout metadata for this original task already exists")
+        updated[FIELD] = {**payload.get(FIELD, {}), task_id: receipt}
+        _execute("validate", updated, root=root)
     new_body = body if updated == payload else (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     changed = records.publish(path, new_body, expected, root=root, task_update=patch)
     return {"updated": changed, "sha256": records.digest(new_body)}
@@ -2365,18 +2379,19 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "cleanup-scratch":
         if args.root is None or any((args.input, args.patch, args.task_id, args.output, args.select)):
             raise TaskGraphError("cleanup-scratch requires --root and accepts --request-id/--all, --dry-run, --keep and --expect-sha256")
-        if host == "antigravity" and not args.dry_run and args.all != bool(args.request_id):
-            from lib.hosts.handoff import validated_scratch_slot
-            from lib.task_pool import require_registered_scratch_keeps
-            slot = None if args.all else validated_scratch_slot(args.request_id)
-            base = handoff.cleanup_base(args.root, slot)
-            target = base if slot is None else base / slot
-            require_registered_scratch_keeps(args.root, target, records._scratch_keep_paths(tuple(args.keep)))
+        from lib.task_graph_records import ScratchCleanupError
+        from lib.task_pool import cleanup_request, cleanup_unregistered
+        root = project_root(args.root)
         try:
-            return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all,
-                                           dry_run=args.dry_run, keep=tuple(args.keep), expected=args.expect_sha256,
-                                           handoff=handoff)
-        except records.ScratchCleanupError as exc:
+            if args.pm_id is not None:
+                if args.all or not args.request_id:
+                    raise TaskGraphError("registered request cleanup requires the exact --request-id")
+                return cleanup_request(root, args.pm_id, args.request_id, dry_run=args.dry_run,
+                                       keep=tuple(args.keep), expected=args.expect_sha256,
+                                       handoff=handoff, installed=host)
+            return cleanup_unregistered(root, args.request_id, remove_all=args.all, dry_run=args.dry_run,
+                                        keep=tuple(args.keep), expected=args.expect_sha256, handoff=handoff)
+        except ScratchCleanupError as exc:
             return exc.report
     if args.request_id or args.all:
         raise TaskGraphError("--request-id and --all apply only to scratch and cleanup-scratch")
@@ -2492,6 +2507,16 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
     # Light 原件与导出的交接包外形相同。原件已通过 AGY 领取及绑定时，允许
     # 合法地用最新同实例的引用刷新旧交接包；旧文件中的未证实身份不能据此变成新绑定。
     original = payload["task"] if "task" in payload else next(t for t in payload["tasks"] if t["id"] == args.task_id)
+    if args.output.is_file():
+        from lib.safe_text import read_file
+        previous = read_file(args.output.absolute())
+        if previous is not None and records.digest(previous) == args.expect_sha256:
+            try:
+                previous_record = records.decode(previous)
+            except ValueError:
+                previous_record = None
+            if isinstance(previous_record, dict) and "native_closeout" in previous_record:
+                raise TaskGraphError("task export cannot overwrite an original containing native closeout metadata")
     changed = records.publish(args.output, new_body, args.expect_sha256,
                               bound_export=bound_export_reference(original), policy=dispatch_policy())
     return {"exported": changed, "sha256": records.digest(new_body), "graph_sha256": records.digest(body)}

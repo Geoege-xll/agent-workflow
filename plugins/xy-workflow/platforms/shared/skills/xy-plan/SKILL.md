@@ -1,6 +1,6 @@
 ---
 name: xy-plan
-description: Draft a Full request implementation plan after Grill Me coverage and before requirements approval.
+description: Draft a Full implementation plan from the PM’s established requirements and acceptance evidence before requirements approval.
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
@@ -21,8 +21,9 @@ plan_state: draft
 ## Boundaries
 
 - Work only after `grill_result.readiness: ready_for_planning` for a Full request.
-  This is the PM record defined in `xy-workflow/references/requirements-intake.md`, produced from
-  coverage via bundled upstream `grilling`; it is not an upstream Grill Me schema or approval.
+  The PM fills this internal record from established scope, impact and acceptance evidence under
+  `xy-workflow/references/requirements-intake.md`. A clear Full request needs no interview.
+  Include any earlier classification questions that were actually asked.
   This Skill's availability does not force a plan/DAG on Light; schema 2 drafts/tasks express only the currently authorized Full scope.
 - Produce a draft for PM review; the draft is not approval or execution authorization.
 - This Skill must not edit files, dispatch Agents, update accepted PROJECT/plans baselines, or request approval.

@@ -6,12 +6,13 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 
-from lib.documents.markdown_headings import atx_section_bounds
-from lib.documents.plan_documents import SECTIONS, parse_plan, validate_selected_plans
+from lib.documents.document_links import projection_link_errors
+from lib.documents.markdown_headings import atx_section_bounds, iter_visible_lines
+from lib.documents.plan_documents import SECTIONS, parse_plan
 from lib.foundation_qa import _reference, _sha
 from lib.safe_text import read_file
 from lib.task_graph import TaskGraphError
-from lib.task_graph_records import digest, read_record
+from lib.task_graph_records import digest, file_digest, read_record
 from lib.validate_project_docs import project_docs_layout
 
 
@@ -99,13 +100,17 @@ def _plan_evidence(body: str, path: str, *, new_evidence: bool = False, new_deli
         delivered = body[content_start:end].strip()
         changes.append((start if new_delivery else content_start, end))
     evidence = ""
+    evidence_line = None
     if SECTIONS[5] in document.sections:
         start, end = atx_section_bounds(body, SECTIONS[5])
         section = body[start:end]
-        match = re.search(r"(?m)^- 验收证据[:：][ \t]*(.+)$", section)
+        # 屏蔽围栏和注释，同时保留原字符位置；示例行不能替代被审计划的真实验收行。
+        visible = "".join(iter_visible_lines(section.splitlines(keepends=True), hide_comments=True, list_fences=True))
+        match = re.search(r"(?m)^- 验收证据[:：][ \t]*(.+)$", visible)
         if not match:
             raise TaskGraphError("PM projection requires one acceptance evidence line")
         evidence = match[1]
+        evidence_line = len(body[:start + match.start()].splitlines()) + 1
         if new_evidence:
             # 首次验收允许补上二行来源；其中批准依据还须指向图上已有的具体授权。
             if not re.fullmatch(r"## 批准依据与必要证据\s*\n- 批准依据[:：][^\n]+\n- 验收证据[:：][^\n]+\s*", section):
@@ -123,14 +128,14 @@ def _plan_evidence(body: str, path: str, *, new_evidence: bool = False, new_deli
     stable = body
     for start, end in sorted(changes, reverse=True):
         stable = stable[:start] + stable[end:]
-    return stable.rstrip("\r\n"), delivered, evidence, document
+    return stable.rstrip("\r\n"), delivered, evidence, evidence_line, document
 
 
-def _verify_plan(path: str, before: str, after: str, qa: dict, payload: dict) -> None:
+def _verify_plan(path: str, before: str, after: str, qa: dict, payload: dict) -> tuple[str, tuple[int | None, int]]:
     """旧交付段必须整段保留；首次交付可替换无基线模板并引用已经存在的批准。"""
-    stable, delivered, old_evidence, old = _plan_evidence(before, path)
+    stable, delivered, old_evidence, old_line, old = _plan_evidence(before, path)
     first = old.accepted_version == "none" and SECTIONS[5] not in old.sections
-    current, added, evidence, new = _plan_evidence(
+    current, added, evidence, new_line, new = _plan_evidence(
         after, path, new_evidence=first, new_delivery=old.accepted_version == "none" and SECTIONS[4] not in old.sections)
     receipt_sha = qa["request_receipt"]["handoff"]["sha256"]
     if first:
@@ -142,12 +147,14 @@ def _verify_plan(path: str, before: str, after: str, qa: dict, payload: dict) ->
         if new.approval_basis not in authority:
             raise TaskGraphError("first acceptance requires an existing, bound approval source")
     placeholder = old.accepted_version == "none" and delivered.startswith(("当前尚无已验收基线", "当前没有已验收基线"))
+    # 整行移入已交付历史时仍可恢复旧摘要与原声明；当前验收行只需引用本轮材料。
+    archived = old_line is not None and before.splitlines()[old_line - 1] in added.splitlines()
     retained_hashes = re.findall(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", old_evidence)
     if (stable != current or new.accepted_version == "none" or not added
             or placeholder and added.startswith(("当前尚无已验收基线", "当前没有已验收基线"))
             or not re.search(r"(?<![0-9a-f])" + receipt_sha + r"(?![0-9a-f])", evidence)
             or old.stage != new.stage and (old.stage not in {"draft", "active"} or new.stage not in {"active", "completed"})
-            or any(value not in evidence for value in retained_hashes)
+            or not archived and any(value not in evidence for value in retained_hashes)
             or delivered and not placeholder and not (added == delivered or added.startswith(delivered + "\n\n")
                                                       or added.endswith("\n\n" + delivered))):
         raise TaskGraphError("PM plan projection changed reviewed requirements, authority or historical results")
@@ -156,6 +163,7 @@ def _verify_plan(path: str, before: str, after: str, qa: dict, payload: dict) ->
     for line in Counter(after.splitlines()) - Counter(before.splitlines()):
         if re.search(r"<!--|</?[A-Za-z]|^\s*(```|~~~|\[[^]]+\]:)|^ {4}|^\t", line):
             raise TaskGraphError("PM projection only permits plain closeout text and verified links")
+    return new.topic_id.casefold(), (old_line, new_line)
 
 
 def _git_document(repo: Path, revision: str, name: str) -> bytes:
@@ -223,6 +231,9 @@ def verify_projection(payload: dict, qa: dict, root: Path, *, delivered: bool = 
     _, docs = project_docs_layout(candidate, Path(adapter))
     plans = [name for name in names if projection_kind(name, docs) == "plan"]
     originals = {}
+    topics = {}
+    documents = {}
+    acceptance_lines = {}
     for entry in entries:
         name = entry["path"]
         kind = projection_kind(name, docs)
@@ -268,8 +279,12 @@ def verify_projection(payload: dict, qa: dict, root: Path, *, delivered: bool = 
                     revision = repositories[0]["head_revision"] if len(repositories) == 1 and repositories[0]["path"] == "." else None
             if not revision or _git_document(root, revision, name) != previous:
                 raise TaskGraphError("PM-owned document differs from the reviewed Git commit")
+        before, after = previous.decode("utf-8"), current.decode("utf-8")
         if kind == "plan":
-            _verify_plan(name, previous.decode(), current.decode(), qa, payload)
+            topic, acceptance_lines[target] = _verify_plan(name, before, after, qa, payload)
+            if not delivered and topic in topics and not target.samefile(topics[topic]):
+                raise TaskGraphError(f"duplicate 主题 ID {topic}: {topics[topic]} and {target}")
+            topics[topic] = target
         else:
             # 目录/架构的维护信息可在受审候选中完整编辑。验收后的附加导航只引用本次
             # 一并验证的主题，不能借 ARCHITECTURE 或 PROJECT 发布未经审查的职责修改。
@@ -279,7 +294,12 @@ def verify_projection(payload: dict, qa: dict, root: Path, *, delivered: bool = 
             if current not in allowed:
                 raise TaskGraphError("post-QA index projection requires an exact link to a verified plan")
         originals[name] = (digest(previous), digest(current))
-    errors = [] if delivered else validate_selected_plans(candidate, [Path(plan) for plan in plans])
-    if errors:
-        raise TaskGraphError("invalid PM plan projection: " + "; ".join(errors))
+        documents[target] = before, after
+    # 历史收口按原提交重放。活动投影同时核对本轮验收行采用的证据和其余引用增量。
+    if not delivered:
+        errors = projection_link_errors(candidate, documents,
+                                        lambda target: file_digest(candidate, target.relative_to(candidate).as_posix()),
+                                        acceptance_lines=acceptance_lines)
+        if errors:
+            raise TaskGraphError("invalid PM projection links or evidence: " + "; ".join(errors))
     return originals
