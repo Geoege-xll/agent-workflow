@@ -3,6 +3,8 @@
 Read this branch only for production UI or design-standard work. For `standards_only`, use the
 design-standard checks below; do not activate production-page/prototype checks without that scope.
 
+先核对下列共享投影与权限约束，再对每个生产 Writer 阅读其路线、实际运行端证据和通用取证边界；设计规范变更另核对规范差异。
+
 The request QA task remains read-only and may use `surface_kind: non_ui`; its audit surfaces still
 include both UI and accessibility when production UI is in scope. Consume every entry in
 `reviewed_ui_changes`, including each writer's route, affected surfaces, authority, ownership and gates.
@@ -27,7 +29,7 @@ production_ui, zero design delta and real frozen UI-Conformance authority; do no
 Reading this branch does not force Full planning, repeated confirmation or a prototype on Light. Return
 any actual design/interaction change to PM for Full routing.
 
-For `UI-Conformance`:
+## UI-Conformance
 
 1. Require the Writer projection's `surface_kind: production_ui`, `route: UI-Conformance`,
    `design_delta: none`, `prototype_policy: not_applicable`, non-empty structured authority refs,
@@ -52,7 +54,7 @@ For `UI-Conformance`:
    the PM so it can reclassify the request as `UI-Patch`, `UI-Page`, or `UI-Flow`; QA must not
    perform the reclassification or design work itself.
 
-For every scoped design-change UI page with `prototype_policy: required`:
+## prototype_policy: required
 
 1. Require explicit `UI-Patch`, `UI-Page`, or `UI-Flow`, `design_delta: changed`,
    `prototype_policy: required`, a valid requirements-confirmation `prototype_decision` whose
@@ -82,7 +84,7 @@ For every scoped design-change UI page with `prototype_policy: required`:
    Expand source reading only to the smallest risk-triggered slice, or when the user explicitly asks
    for a full prototype source audit.
 
-For `prototype_policy: waived_by_user`:
+## prototype_policy: waived_by_user
 
 An explicit production-only revision can replace an earlier required-prototype scope through the
 plan lifecycle. Use the latest scoped user decision and replacement task/QA contract, not the plan's
@@ -124,6 +126,8 @@ constraints, stable rule IDs, index links and current consumer fingerprints. Ado
 proof of completed migration. For `standards_only`, audit normative text and applicable constraints
 without demanding HTML, prototype verification or browser evidence. With production changes, audit
 against the adopted scope-specific rules; self-authored weakening cannot convert a defect into PASS.
+
+## 通用取证边界
 
 Material divergence from an approved required-prototype page or frozen UI-Conformance authority is
 FAIL. Only PM may dispatch rework, reopen the scoped visual gate or upgrade the design-change route.

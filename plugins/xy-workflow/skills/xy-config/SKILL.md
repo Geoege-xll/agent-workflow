@@ -1,6 +1,6 @@
 ---
 name: xy-config
-description: 仅供当前用户在主会话显式调用，打开原生模型配置页、查看状态与诊断，或预览并确认 Codex 受管角色重绑。
+description: "Open native model settings, check status and diagnostics, or preview and confirm Codex managed-role rebinding. Requires explicit invocation by the current user in the main session."
 ---
 
 # 原生模型配置维护

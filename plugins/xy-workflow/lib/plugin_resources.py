@@ -180,3 +180,32 @@ def resource_path(path: Path, project_root: Path) -> str | None:
     if PurePosixPath(raw).parts[0] in _AUTHORITY_DIRECTORIES:
         raise PluginResourceError("插件权威资源不在插件来源清单中；拒绝项目同名替代")
     return None
+
+
+def read_pager_source(path: Path, project_root: Path) -> tuple[Path, bytes] | None:
+    """按实际安装入口或既有原样来源读取正文，返回物理路径供调用方确认续页。"""
+    root = _root()
+    if root is None:
+        return None
+    if path.is_relative_to(root / "skills"):
+        relative = path.relative_to(root)
+        # 只给宿主选中的绝对发现入口开放载荷读取。此处的正文含打包时加入的宿主指引，
+        # 摘要属于发行载荷，不能拿共享规范的摘要校验，也不能把权限泛化到相邻文件。
+        if (len(relative.parts) == 3 and relative.name == "SKILL.md"
+                and _canonical(relative.as_posix())):
+            metadata = json.loads(_read(root / "sources.json"), object_pairs_hook=_unique_object)
+            payload = metadata.get("payload_sha256") if isinstance(metadata, dict) else None
+            expected = payload.get(relative.as_posix()) if isinstance(payload, dict) else None
+            if not isinstance(expected, str) or _SHA256.fullmatch(expected) is None:
+                raise PluginResourceError("Skill 发现入口缺少发行载荷摘要")
+            body = _read(path)
+            if hashlib.sha256(body).hexdigest() != expected:
+                raise PluginResourceError("Skill 发现入口 SHA-256 与发行载荷不一致")
+            return path, body
+
+    logical = resource_path(path, project_root)
+    if logical is not None:
+        return root / logical, read_source(logical)
+    if path.is_relative_to(root):
+        raise PluginResourceError("插件文件不是可分页的清单来源或 Skill 发现入口")
+    return None

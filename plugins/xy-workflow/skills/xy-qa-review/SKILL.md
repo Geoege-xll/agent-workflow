@@ -3,76 +3,7 @@ name: xy-qa-review
 description: Accept build-verified request-scoped implementation using native code review first and project-specific QA checks, or deliver an explicitly requested standalone read-only audit.
 ---
 
-## Official plugin resource boundary
-
-This component is assembled from the unchanged shared authority. In this official
-plugin, resolve the installation root from the loaded component's physical location:
-`../..` from a skill's directory, or `..` from the `agents/` or `rules/` directory.
-Do not use the current working directory or a guessed cache path.
-Read `PLUGIN.md` there before using workflow helpers. Treat this paragraph as a
-resource/transport adapter; it grants no business approval, role ownership or QA PASS.
-
-读取必需长文时，核对宿主返回的起始范围、实际范围、总长度和截断标志。
-若 `Read` 受 token／行数上限截断（如 `truncatedByTokenCap`，或末行小于
-`totalLines`），只续读缺失范围，或经下述既有 helper 调用
-`lib/documents/context_read.py`，遵守其 `offset`／`next_offset`／`sha256`
-续页合同。确认同一版本所需范围连续、完整后，再执行依赖该内容的流程；
-不能将部分输出当作完整已读，也不要从头重复全量 `Read` 来补缺。
-这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
-
-Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
-approvals; its `init --adapter <selected-path>` passes that exact adapter to the
-original initializer. Resolve project documents, task records and production code
-in the actual project. A packaged example is never the current project adapter.
-Use the packaged interpreter selector for each independent invocation:
-`bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
-existing Python 3.11+ and never installs software or changes the user's PATH.
-Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
-Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
-actual discovered name or the packaged physical path when invoking one. Public aliases are
-`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
-`product/command_identity.json`; canonical upstream names remain vendor resources, not discovery entries.
-Fully read each selected adapter and its canonical before use; never substitute unknown global names.
-Claude's explicit plugin skill commands use `/xy-workflow:<skill-name>` and
-its bundled agents use the host-discovered plugin-qualified agent name. Preserve
-the original role identity in the task pack; do not infer successful native role
-selection from that identity or a generic task label. Use the actual host tool's
-documented arguments and report an unavailable native selector.
-
-The main session remains PM. Workers receive only the complete current task pack
-with `instance_policy: fresh` and `context_policy: handoff_only`; never fork PM or
-sibling history. Only the official host dispatches agents. Use the official host's
-default or already configured model and reasoning settings; PM applies the business-only
-read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
-neither requires nor registers a separate model configuration service, web console,
-or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
-approval remain exactly as defined in the authority; existing explicit scope
-authorization still applies to Light. A required independent QA remains one
-read-only reviewer. Preserve the original closeout order.
-
-Claude Code and Antigravity expose packaged native agents. Codex's documented
-portable manifest exposes skills and MCP, with no documented `agents` manifest key:
-read the full packaged role and `platforms/codex/WORKER_CONSTRAINTS.md` into the current fresh task
-handoff through the host's actual supported native dispatch interface. A role label
-alone proves no native role/model selection. If the host cannot supply required
-dispatch or independent context, report that limitation instead of claiming it ran.
-Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: its authority may come from another source. Use a fresh native generic
-entry with the complete current packaged role instructions and current task pack,
-or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's history or instructions merely
-because its name matches. If the host cannot provide this boundary, report the
-dispatch limitation to the PM.
-
-This plugin uses the existing unpinned source-pack task contract. It rejects central
-`runtime_binding` records and central project markers rather than migrating them.
-Do not update/replace the installed plugin during an active task. Retention of old
-plugin resources across updates and actual native model/effort execution remain
-unverified. `runtime_verified: false` stays visible until a real host session proves
-the corresponding behavior.
+从本 Skill 的物理目录向上两级确定插件根。使用同包的[宿主资源说明](../../plugins/plugin-context.md)。当前实例已具备同一物理来源、同一版本的完整说明时直接复用；独立启动或内容缺失时补读，来源或版本变化时重新读取。
 
 
 <!-- agent-workflow-pack:managed-skill -->
@@ -135,10 +66,7 @@ qa_review_policy:
   findings_or_fail_do_not_trigger_fallback: true
 ```
 
-Use the current host's native review when its exposed capability, fixed scope, effective read-only
-permissions and non-recursive execution are established; read only that host's existing
-`platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
-or installed binary alone does not prove this reviewer can invoke it safely.
+先读当前宿主 `platforms/<host>/references/pm-integration.md` 的「Native review method」。如果交互入口会再派 Agent，继续核对同一 Reviewer 能否使用已有权限的前台入口。能前台运行后，仍须按[核对原生审查目标](references/inputs.md#核对原生审查目标)确认它实际会读到的差异与 PM 冻结的本次差异一致，并保留现行模型、推理力度和只读权限。
 
 Otherwise select at most one host-exposed installed Skill proven code-review capable, read-only,
 request-scoped and non-recursive. Do not scan personal Skill directories. The installed
@@ -152,27 +80,27 @@ unavailability in `review_method`; findings, disagreement and FAIL require PM-ow
 not another method or reviewer. Reject mutated/unbound output and return any workspace change to PM;
 do not silently restore files or accept stale evidence before continuing.
 
-Native review supplies the general code-review evidence. Independently verify its findings and the
-source/evidence needed for project acceptance; supplement uncovered request, standards, integration
-or specialist checks. Do not launch a second complete generic review merely because this Skill is
-active. No findings is not implementation QA PASS. Model/effort and permissions retain their current
-project/host authority; a review method grants no additional tools or actions.
+原生审查成功返回且范围核对通过后，同一 Reviewer 核实发现的源码和证据，只补尚未覆盖的需求、规范、集成或专项验收。原生结果为零条发现时也要核对这些验收项。保留原生结果引用，避免并行或事后重做整轮通用审查。
 
 `review-swarm` is an explicit high-risk escalation, never automatic fallback.
 `review-and-simplify-changes` is allowed only in `review-only` mode for an explicitly requested
 maintainability audit. Both must not enter the ordinary fallback chain. Grill Me, feedback handling and bug
 investigation are not code-review methods.
 
-Read [input contracts](references/inputs.md) and [implementation checks](references/implementation-acceptance.md)
-for Full acceptance or Light acceptance requiring independent QA. They retain mandatory evidence, independent standards coverage, memory
-authority, worktree integration and bounded rework. Missing mandatory evidence blocks PASS.
+### 按验收项取证
 
-When the current scope includes a saved plan or plan-writing rules, read
-[document quality](../xy-plan/references/document-quality.md) and apply its reader check within this same
-review. Inspect only the selected current plan and necessary references; return ambiguous scope, conflicting
-status/baselines or missing authority to PM. Reuse applicable selected-plan validation evidence from
-[plan lifecycle](../xy-workflow/references/plan-lifecycle.md); a format pass is not approval or QA PASS.
-Do not launch reader Agents, add a reader report/gate or require another business confirmation for wording fixes.
+完整读取当前任务包。先用验收项、每个固定变更路径及其受影响调用方、声明的审计面，独立确定要核对的规则和证据。以包内 `rule_ids`、`sections_or_queries` 和既有索引为起点，同时检查实际变更可能触发的漏派规则。按[输入约定](references/inputs.md)中的「Inputs」「当前包与范围」绑定身份与依据，依[实现验收](references/implementation-acceptance.md)中的「Scope, source and verification」「Independent standards coverage」核对固定范围、验证及规则；其余按适用条件展开。
+
+| 当前要判断什么 | 从哪里取证 |
+| --- | --- |
+| 行为、错误处理、构建或回归 | 实际差异、调用方、原 Writer 的命令及完整日志引用；按[工程规范入口](../xy-code-standards/SKILL.md#read-only-review-and-evidence) 定位原规则 |
+| 生产 UI 或设计规范变更 | [UI 验收](references/ui-review.md)中各 Writer 实际路线、运行端与无障碍证据；从[设计规范入口](../xy-ui-design/SKILL.md#生产实现与-qa-只读入口)直接定位适用条款 |
+| 计划本身或计划编写规则属于验收对象 | [读者检查](../xy-plan/references/document-quality.md#在现有自查与唯一-qa-中检查读者理解)与被审修订。仅作功能依据的长期计划按当前批准项、锚点和指纹取证 |
+| 宿主调用或回执存在缺口 | 只定位当前宿主 `pm-integration.md` 中所选方法的调用段，或输入约定中的当前宿主回执段 |
+
+长文件或相近实现依[源码取证示例](references/implementation-acceptance.md#按符号和行段核对源码)先定位符号，再逐个读取命中处、受影响调用方和必要行段。规则按同版原文展开条件、例外及依赖，未命中时核对相邻章节和实际入口。全文合同仍须连续读完。每批结论依[分批取证](references/inputs.md#分批取证)保留证据与待查项。
+
+本轮计划确属审查对象时，复用[计划生命周期](../xy-workflow/references/plan-lifecycle.md)中适用的已有校验，向 PM 交回范围歧义、状态冲突或缺失依据。若声称已验收，核对原始批准、实际行为和验收证据。目录收录或格式校验均不能产生批准或 PASS，沿用同一 Reviewer 和既有业务确认。
 
 <!-- workflow-contract: references/inputs.md -->
 <!-- workflow-contract: references/implementation-acceptance.md -->
@@ -225,6 +153,5 @@ identities or old-pack PASS are rejected. The same Reviewer checks rework deltas
 pack. Stop after valid PASS; close natively or retire after PM accepts evidence and the necessary feedback
 window ends. Retirement does not prove physical erasure or lock release.
 
-原生结构化交接在同一份回执的 `review_details` 提供 `findings` 和 `verification`，携带有证据的
-发现、返工角色、验证命令、退出码与完整日志引用。字段合同见[输入约定](references/inputs.md)。
-现有文本型交接继续适用。复用同一次回执校验，无须再发一次调用收集这些字段。
+同一次授权调用支持结构化输出时，按[原生提取](references/inputs.md#原生结构化交接)取得最终回执。
+普通后台 Reviewer 无此输出时，只通过原交接提交自己已完成的判定和证据，由 PM 按[固定回执构造](references/inputs.md#固定回执构造)组装。已有完整 schema 2 回执可直接校验。未完成的批次继续待验。

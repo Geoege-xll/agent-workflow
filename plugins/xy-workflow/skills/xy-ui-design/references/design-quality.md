@@ -63,9 +63,9 @@ and dimensions; business and mental models also remain project-specific.
   让用户知道发生了什么、保留了哪些进度、下一步可做什么。依据已批准的产品语义决定返回时恢复的输入、
   筛选、滚动位置或当前步骤，以及取消或完成时清理的临时状态。结合实际失败原因提供可执行的下一步，
   例如就地修正校验错误，或在提交结果未明时先查结果。反馈的内容和形式跟随当前任务及运行端。
-- 已有原型时，把走查结果填入原五段契约。沿用 `purpose` 记录主任务及运行端，`navigation` 记录返回目标
-  与恢复的上下文，`interactions` 记录取消、重试和完成后的操作，`states` 记录失败、恢复、取消、完成等
-  适用状态的可见结果，`exceptions` 记录有依据的平台差异与必要的模拟限制。只覆盖当前需求和已有原型范围。
+- UI Agent 只在页内「开发说明」补充已经确认、操作原型后仍无法确定的行为。比如可见的重试按钮无需复述，
+  但上次提交是否已受理、保留哪些输入及允许重试的条件，可按已确认规则说明或链接原需求章节；
+  暂无补充时留空，未决事项交 PM。
 - Clarify navigation destinations, back behavior, dialog exits and focus, form validation, and
   segmented-selection/panel-switching semantics. Handle touch, keyboard, accessible names, visible
   focus, foreground/background contrast, and states that do not rely solely on color for the target
@@ -98,7 +98,7 @@ and dimensions; business and mental models also remain project-specific.
   and completed production migration distinct. Approval of one page does not establish project-wide
   adoption or prove production migration.
 - Briefly state rules/components used, actual changes, shared impact, and unverified items in the
-  existing handoff. Reuse existing static verification; the PM checks the five-section contract against
+  existing handoff. Reuse existing static verification; the PM checks the concrete behavior and developer notes against
   approved requirements, and QA reviews standards within the current scope. Add no screenshots,
   automated browser operations, confirmation stages, or full regression runs. The PM continues to
   handle visual confirmation according to the user's selected prototype branch.
@@ -109,7 +109,7 @@ The design Agent self-checks before the existing prototype handoff without addin
 prototype QA; the user gives final confirmation through concrete pages.
 
 - Requirement coverage: Map approved scope and acceptance to page navigation, operations, states,
-  validation, and the five-section contract; check omissions, unauthorized additions, and conflicts.
+  validation, and the concrete behavior and developer notes; check omissions, unauthorized additions, and conflicts.
   Self-checking does not restore unrelated or waived prototype work.
 - Standards conformance: Check applicable IDs, components/tokens, platforms, and accessibility against
   current built-in rules and project-specific standards, explaining exceptions and parts not actually
@@ -125,6 +125,34 @@ to the same design Agent and recheck only affected parts after correction; creat
 files, new states, or default browser/screenshot steps. The PM checks the current handoff and approval
 basis without repeating valid static checks; unified functional QA after production implementation
 continues through the original route.
+
+## 设计 Agent 的交付
+
+For `prototype`, the design Agent self-checks requirement coverage, standards conformance, and
+delivery consistency, reusing `xy-prototype-verify` static verification and the in-page developer notes. Hand off results through the existing `static_checks`, `blocking_findings`, and `result`;
+do not create independent prototype QA, reports, or approvals. Final confirmation remains with the
+user. Hand off only concrete pages, scope, operations, shared impact, real evidence, and unverified
+items to the PM. Static success does not establish visual satisfaction or correctness of all
+interactions; the PM still handles user visual confirmation through the existing route. Do not
+generate, save, attach, or present screenshots. Do not automate prototype browser operations by
+default; preserve only the user-request/failure-diagnosis exceptions in the existing verification
+contract. PM semantic review and QA boundaries continue to use that contract.
+In the existing handoff, return requirement coverage by stable REQ identifiers with concrete pages
+and actual state anchors. The PM writes these back to the single requirements Markdown.
+Requirements/plan Markdown-to-HTML generation is retired under [the retained reference](../../xy-plan/references/requirements-markdown.md);
+keep any existing HTML as historical material without requiring an update.
+The design Agent does not edit the PM's source or create a mapping report; this association does not
+change the prototype page, dependency fingerprint, or visual-approval contract.
+
+交付具体原型页时，按[反馈消费合同](prototype-feedback.md)的当前交付入口
+先执行 `prepare-delivery`，再以同一范围执行 `open`，向用户提供经验证的各具体 HTML 的 file URI。
+需要批注或消费评审反馈时，按需读取该合同其余适用条款，复核来源修订后仅将有效意见交回原设计 Agent。
+交付、批注和反馈沿用当前请求的需求、实质方案及页面确认规则。
+
+For `standards_only`, return rule differences, their basis, applicability, and existing document
+validation results. Distinguish candidates, adopted rules, and completed production migration; do not
+add prototype requirements because HTML or browser evidence is absent. Reuse unchanged rules and do
+not create extra reports, approval files, or memory records for closeout.
 
 ## Reference Sources and Processes Not Adopted
 

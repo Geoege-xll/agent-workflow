@@ -3,83 +3,14 @@ name: xy-prototype-verify
 description: Use when a design Agent must statically validate concrete build-free HTML pages before user visual review, visual approval, or required-prototype production UI work.
 ---
 
-## Official plugin resource boundary
-
-This component is assembled from the unchanged shared authority. In this official
-plugin, resolve the installation root from the loaded component's physical location:
-`../..` from a skill's directory, or `..` from the `agents/` or `rules/` directory.
-Do not use the current working directory or a guessed cache path.
-Read `PLUGIN.md` there before using workflow helpers. Treat this paragraph as a
-resource/transport adapter; it grants no business approval, role ownership or QA PASS.
-
-读取必需长文时，核对宿主返回的起始范围、实际范围、总长度和截断标志。
-若 `Read` 受 token／行数上限截断（如 `truncatedByTokenCap`，或末行小于
-`totalLines`），只续读缺失范围，或经下述既有 helper 调用
-`lib/documents/context_read.py`，遵守其 `offset`／`next_offset`／`sha256`
-续页合同。确认同一版本所需范围连续、完整后，再执行依赖该内容的流程；
-不能将部分输出当作完整已读，也不要从头重复全量 `Read` 来补缺。
-这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
-
-Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
-approvals; its `init --adapter <selected-path>` passes that exact adapter to the
-original initializer. Resolve project documents, task records and production code
-in the actual project. A packaged example is never the current project adapter.
-Use the packaged interpreter selector for each independent invocation:
-`bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
-existing Python 3.11+ and never installs software or changes the user's PATH.
-Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
-Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
-actual discovered name or the packaged physical path when invoking one. Public aliases are
-`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
-`product/command_identity.json`; canonical upstream names remain vendor resources, not discovery entries.
-Fully read each selected adapter and its canonical before use; never substitute unknown global names.
-Claude's explicit plugin skill commands use `/xy-workflow:<skill-name>` and
-its bundled agents use the host-discovered plugin-qualified agent name. Preserve
-the original role identity in the task pack; do not infer successful native role
-selection from that identity or a generic task label. Use the actual host tool's
-documented arguments and report an unavailable native selector.
-
-The main session remains PM. Workers receive only the complete current task pack
-with `instance_policy: fresh` and `context_policy: handoff_only`; never fork PM or
-sibling history. Only the official host dispatches agents. Use the official host's
-default or already configured model and reasoning settings; PM applies the business-only
-read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
-neither requires nor registers a separate model configuration service, web console,
-or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
-approval remain exactly as defined in the authority; existing explicit scope
-authorization still applies to Light. A required independent QA remains one
-read-only reviewer. Preserve the original closeout order.
-
-Claude Code and Antigravity expose packaged native agents. Codex's documented
-portable manifest exposes skills and MCP, with no documented `agents` manifest key:
-read the full packaged role and `platforms/codex/WORKER_CONSTRAINTS.md` into the current fresh task
-handoff through the host's actual supported native dispatch interface. A role label
-alone proves no native role/model selection. If the host cannot supply required
-dispatch or independent context, report that limitation instead of claiming it ran.
-Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: its authority may come from another source. Use a fresh native generic
-entry with the complete current packaged role instructions and current task pack,
-or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's history or instructions merely
-because its name matches. If the host cannot provide this boundary, report the
-dispatch limitation to the PM.
-
-This plugin uses the existing unpinned source-pack task contract. It rejects central
-`runtime_binding` records and central project markers rather than migrating them.
-Do not update/replace the installed plugin during an active task. Retention of old
-plugin resources across updates and actual native model/effort execution remain
-unverified. `runtime_verified: false` stays visible until a real host session proves
-the corresponding behavior.
+从本 Skill 的物理目录向上两级确定插件根。使用同包的[宿主资源说明](../../plugins/plugin-context.md)。当前实例已具备同一物理来源、同一版本的完整说明时直接复用；独立启动或内容缺失时补读，来源或版本变化时重新读取。
 
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-prototype-verify
 
-The active concrete page and its in-page `Page design and interaction contract` are the design
+The active concrete page and its in-page developer notes are the design
 evidence. The verifier is read-only: it validates the stable workspace and returns deterministic
 static evidence without creating metadata, reports, screenshots, or revision copies. The prototype
 is a user-review artifact; this procedure is not a second visual reviewer or an automated UI test.
@@ -118,19 +49,10 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    check, whose existing index and local-tool checks below remain applicable. Do not copy the generic
    plugin shell into a new project to satisfy that legacy entry.
    Keep the returned per-page fingerprints as internal evidence, not a user-facing JSON report.
-3. Verify every scoped active page contains exactly one non-empty
-   `Page design and interaction contract` with these exact five sections:
-
-   ```html
-   <section data-contract-section="purpose">...</section>
-   <section data-contract-section="navigation">...</section>
-   <section data-contract-section="interactions">...</section>
-   <section data-contract-section="states">...</section>
-   <section data-contract-section="exceptions">...</section>
-   ```
-
-   Each material interactive control needs a stable `id`, exactly one matching
-   `data-contract-for`, and executable declared outcomes.
+3. 每个具体页保留一个默认折叠的 `details.prototype-contract`，首个 summary 写「开发说明」。
+   只核对操作原型后仍不明确、且已有决定的交互。已有规则链接至需求 Markdown 原章节，无补充时允许为空；
+   未决行为交 PM。旧稿原有分节可读。重要控件保留稳定 ID；如有 data-contract-for，目标须唯一且确实可交互。
+   保留已确认目录分组，并核对真实登记页在各自层级中只出现一次；无来源的旧页仍可访问。
    Native disclosure controls may map the stable ID of a `details` element's first direct-child `summary`
    to the interaction contract. Same-name tags in ordinary containers or a second summary do not count as
    executable disclosure controls. The index may group pages with native `details/summary` inside the single
@@ -174,8 +96,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    may carry non-material changes forward after the documented old/new-delta review and retained user
    approval; uncertain or material changes return to the existing scoped visual-confirmation step.
    The verifier never grants approval or decides visual equivalence.
-7. The design Agent performs three self-checks in the same handoff: requirements coverage compares the five
-   contract sections with frozen requirements/acceptance; standards conformance checks applicable built-in
+7. The design Agent performs three self-checks in the same handoff: requirements coverage compares the concrete page behavior, developer notes and linked requirements with frozen requirements/acceptance; standards conformance checks applicable built-in
    rules and project-specific standards; delivery consistency checks pages, controls, navigation, declared
    outcomes, shared styles and current dependency fingerprints. Omissions, unauthorized additions, conflicts
    or unresolved inconsistency are FAIL. Check only current scope and state exceptions/unverified behavior.
@@ -225,8 +146,8 @@ and functional QA after production implementation remains. A host without browse
 of completing the default procedure; browser evidence is not required and the PM must not supplement
 it merely because the host could not render or operate the prototype.
 
-Before user handoff, the PM independently compares all five in-page contract sections with the frozen
-approved requirements and acceptance criteria. The PM rejects omitted, invented, broadened, or
+Before user handoff, the PM independently compares the concrete page behavior, developer notes and linked requirements with the frozen
+approved requirements, applicable solution decisions and acceptance criteria. The PM rejects omitted, invented, broadened, or
 conflicting behavior and returns it to `xy-uiux`; it must not ask the user to approve a knowingly
 divergent contract. The PM also reviews scope, contract completeness, static evidence freshness and
 consistency, fingerprints, and the user-approval handoff. This is a text-and-requirements conformance

@@ -5,19 +5,27 @@
   function create({ boot, model, announce, onNavigate = () => {}, reviewing = false }) {
     const $ = (id) => document.getElementById(id), preview = $("prototype-preview"), viewport = $("canvas-viewport");
     const entries = new Map(boot.pages.map((entry) => [entry.path, entry]));
-    let autoFit = false, current = null, token = "", ready = false, catalogReady = false, views = null, marks = [], closed = false;
+    let current = null, token = "", ready = false, catalogReady = false, views = null, marks = [], closed = false, compactCamera = null;
     let waiters = [], pinnedOrigin = null, activationEpoch = 0;
     const requests = new Map(), layer = document.createElement("div"); layer.className = "live-overlays"; viewport.append(layer);
-    const presentation = window.PrototypeCanvasPresentation.create({ viewport, world: $("canvas-world"), preview, entry: boot.pages[0] });
-    const camera = window.PrototypeReviewCamera.create({ viewport, world: $("canvas-world"), read: () => model.state.cameras[model.state.page],
-      write: (cam) => model.setCamera(model.state.page, cam), dimensions: presentation.read, topInset: () => $("canvas-zoom-tools").offsetHeight + 40,
-      onApply: (cam) => { $("canvas-zoom-reset").textContent = `${Math.round(cam.k * 100)}%`; render(); } });
+    const presentation = window.PrototypeCanvasPresentation.create({ viewport, world: $("canvas-world"), preview,
+      toolbar: $("canvas-floating-controls"), entry: boot.pages[0], onResize: () => camera.refresh() });
+    const readCamera = () => compactCamera || model.state.cameras[model.state.page];
+    const camera = window.PrototypeReviewCamera.create({ viewport, world: $("canvas-world"), read: readCamera,
+      write(cam) {
+        // 8% 以下只能作为当前画布的展示变换。覆盖层与稿内手势读同一变换，
+        // 草稿仍使用原有的 8%–300% 数据合同，避免窄窗口覆盖已保存的相机。
+        compactCamera = cam.k < .08 ? cam : null;
+        if (compactCamera) present();
+        else model.setCamera(model.state.page, cam);
+      }, dimensions: presentation.read, readArea: presentation.readArea,
+      onApply: (cam) => { $("canvas-zoom-reset").textContent = `${Math.max(1, Math.round(cam.k * 100))}%`; render(); } });
     function send(action, body = {}) {
       if (!ready || closed) return false;
       preview.contentWindow.postMessage({ type: "prototype-review:review", version: 5, page: current.path, token, action, ...body }, "*"); return true;
     }
     function present() { const state = model.state; send("present", { items: reviewing ? state.items : [], anchors: reviewing ? state.anchors : [], showItems: state.showItems,
-      showAnchors: state.showAnchors, activeAnchor: state.activeAnchor, activeItem: state.activeItem, cameraScale: state.cameras[state.page]?.k || 1 }); }
+      showAnchors: state.showAnchors, activeAnchor: state.activeAnchor, activeItem: state.activeItem, cameraScale: readCamera()?.k || 1 }); }
     function settle() { if (ready && catalogReady) { waiters.forEach((waiter) => { clearTimeout(waiter.timer); waiter.resolve(); }); waiters = []; } }
     function rejectPending(message) {
       for (const pending of [...waiters, ...requests.values()]) { clearTimeout(pending.timer); pending.reject(Error(message)); }
@@ -29,7 +37,7 @@
     function navigate(path) {
       const entry = entries.get(path); if (!entry) return Promise.reject(Error("未登记的页面不能载入。"));
       if (entry === current) return waitReady();
-      rejectPending("页面已切换，输入保留，请重试。"); current = entry; autoFit = !model.state.cameras[entry.path]; presentation.select(entry); ready = false; catalogReady = false; pinnedOrigin = null; marks = []; render();
+      rejectPending("页面已切换，输入保留，请重试。"); current = entry; compactCamera = null; camera.restore(); presentation.select(entry); ready = false; catalogReady = false; pinnedOrigin = null; marks = []; render();
       token = new URL(entry.url, location.origin).hash.slice("#bridge=".length);
       model.setPage(path); $("current-page-title").textContent = entry.label; document.title = `${entry.label} · ${reviewing ? "原型评审" : "原型交付"}`;
       preview.title = entry.label; preview.hidden = false; preview.setAttribute("aria-busy", "true"); $("prototype-empty").hidden = true;
@@ -61,7 +69,8 @@
       views?.selectRecord?.(kind, id);
     }
     function render() {
-      layer.replaceChildren(); const cam = model.state.cameras[model.state.page]; if (!cam || !reviewing) return;
+      layer.replaceChildren(); const cam = readCamera(); if (!cam || !reviewing) return;
+      views?.positionSelection?.(marks.find((mark) => mark.kind === "selection")?.bounds);
       for (const mark of marks) {
         const r = mark.bounds, outline = document.createElement("div"); outline.className = `live-outline ${mark.kind} ${["modify", "add", "delete"].includes(mark.operation) ? mark.operation : ""}`;
         Object.assign(outline.style, { left: `${cam.x + r.x * cam.k}px`, top: `${cam.y + r.y * cam.k}px`, width: `${r.w * cam.k}px`, height: `${r.h * cam.k}px` });
@@ -82,18 +91,23 @@
       // 支持Origin API时额外固定真实opaque origin；旧浏览器由event.source与随机token提供等效隔离。
       if ("Origin" in globalThis) { try { const origin = Origin.from(event); if (!origin.opaque || (pinnedOrigin && !origin.isSameOrigin(pinnedOrigin))) return; pinnedOrigin ||= origin; } catch { return; } }
       if (data.type === "prototype-review:size" && window.PrototypeCanvasPresentation.validSize(data)) {
-        const previous = presentation.read(); if (previous.width !== data.width || previous.height !== data.height) { presentation.resize(data, true); if (autoFit) camera.fit(); else camera.applyCam(); } return;
+        if (presentation.resize(data, true)) camera.refresh();
+        return;
       }
-      if (data.type === "prototype-review:ready") { ready = true; preview.setAttribute("aria-busy", "false"); if (!model.state.cameras[current.path]) camera.fit(); else camera.applyCam(); present(); settle(); return; }
+      if (data.type === "prototype-review:ready") { ready = true; presentation.matchColorScheme(data.colorScheme); preview.setAttribute("aria-busy", "false"); if (!readCamera()) camera.fit(); else camera.applyCam(); present(); settle(); return; }
       if (data.type === "prototype-review:catalog") { if (model.setCatalog(current.path, data.nodes)) { catalogReady = true; views?.catalog?.(); settle(); if (typeof data.error === "string" && data.error) announce(data.error.slice(0, 4000)); } return; }
-      if (data.type === "prototype-review:contract") { views?.contract?.(data.sections); return; }
+      if (data.type === "prototype-review:contract") { // 只有已经绑定页面才会上报片段。需求入口由父壳从受信启动 URL 的只读能力派生。
+        const url = new URL(current.url, location.href);
+        url.pathname = url.pathname.replace(/^\/content\/([^/]+)\/.+$/, "/requirement/$1/" + encodeURIComponent(current.name));
+        url.hash = "";
+        views?.contract?.(data.sections, data.fragment, url.href); return; }
       if (!ready) return;
       if (["prototype-review:located", "prototype-review:verified"].includes(data.type)) { const pending = requests.get(data.request); if (pending) { clearTimeout(pending.timer); requests.delete(data.request); pending.resolve(data); } return; }
       if (data.type === "prototype-review:selected" && !model.state.blocked) { const record = model.catalog().find((entry) => entry.key === data.key); if (record) { model.select(record, data.explicitParent === true); views?.selected?.(data.bounds); } return; }
       if (data.type === "prototype-review:geometry" && Array.isArray(data.marks) && data.marks.length <= 514
         && data.marks.every((mark) => ["selection", "hover", "anchor", "item"].includes(mark.kind) && validBounds(mark.bounds)
           && (!["anchor", "item"].includes(mark.kind) || (Number.isSafeInteger(mark.number) && mark.number > 0 && Number.isSafeInteger(mark.offset) && mark.offset >= 0 && mark.offset <= 512 && typeof mark.id === "string")))) { marks = data.marks; render(); return; }
-      if (data.type === "prototype-review:gesture") { const cam = model.state.cameras[current.path]; if (!cam) return;
+      if (data.type === "prototype-review:gesture") { const cam = readCamera(); if (!cam) return;
         if (data.gesture === "zoom" && [data.factor, data.x, data.y].every(Number.isFinite) && data.factor >= .01 && data.factor <= 100) camera.zoom(data.factor, cam.x + data.x * cam.k, cam.y + data.y * cam.k);
         if (data.gesture === "pan" && [data.dx, data.dy].every(Number.isFinite) && Math.abs(data.dx) < 10000 && Math.abs(data.dy) < 10000) camera.move(data.dx * cam.k, data.dy * cam.k); return; }
       if (data.type === "prototype-review:intent" && data.intent === "navigate" && typeof data.target === "string") {

@@ -47,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--pages", nargs="+", required=command is live_open, help="项目相对具体 HTML 路径；open须显式登记")
     for command in (status, stop): command.add_argument("--request-id", required=True, help="当前请求的稳定 ID")
     delivery.add_argument("--pages", nargs="+", required=True, help="项目相对具体HTML路径")
+    delivery.add_argument("--group", help="为本次所选旧页显式登记分组，例如 用户端/订单；空字符串取消分组")
     preview.add_argument("--confirm-no-active-use", action="store_true", help="明确已排除本轮待迁移资产的活动使用；否则只报告保留")
     for command in (apply, recover):
         command.add_argument("--preview", required=True, type=Path, help="已审阅的原 preview JSON 文件")
@@ -55,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
         if args.command == "prepare-delivery":
             from lib.documents.prototype_file_entry import prepare_delivery
-            result = prepare_delivery(args.root, args.adapter, args.pages, data_dir=args.data_dir)
+            result = prepare_delivery(args.root, args.adapter, args.pages, data_dir=args.data_dir, group=args.group)
         elif args.command in {"open", "status", "stop"}:
             from lib.documents.prototype_service import open_service, service_status, stop_service
             if args.command == "open":

@@ -1,5 +1,10 @@
-/* 仅在认证后的派生页隔离展示壳；项目独立源不加载本资源、不受影响。
- * 子文档overlay独占局部几何；按钮与颜色只表达评审意见，不删除或改写产品元素。 */
+/* 交付与实时评审的派生页共同清理文档背景。只标记实际画板外的独立展示舞台，
+ * 保留 frame 及业务 DOM 上的背景、边框、色系和滚动；旧版独立评审不挂这个标记。 */
+html.prototype-canvas-embedded,
+html.prototype-canvas-embedded > body,
+html.prototype-canvas-embedded .prototype-canvas-stage { background:transparent!important; }
+
+/* 评审子文档的覆盖层独占局部几何；按钮与颜色只表达评审意见，不删除或改写产品元素。 */
 body.prototype-review-embedded { margin:0!important; padding:0!important; min-width:0; min-height:0; }
 body.prototype-review-embedded .prototype-review-shell-hidden { display:none!important; }
 body.prototype-review-embedded .prototype-review-shell-ancestor { margin:0!important; padding:0!important; min-height:0!important; }

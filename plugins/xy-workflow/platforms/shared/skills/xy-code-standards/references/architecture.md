@@ -38,3 +38,17 @@
 1. 从真实生产者追到受影响的消费者，检查公开接口、已有数据及部署边界。字段意义、默认值、错误类型、配置和新旧版本的读写次序都可能影响既有调用。迁移前确认哪些行为需要保留，以及哪些消费者无法同步更新。`eng-common-014`、`eng-common-028`
 2. 在现有边界落实最小可用改动。需要分批切换时，先选能保持现有行为的兼容入口，再迁移实际调用方，确认旧路径仍需支持的范围及结束条件。例如，持久化字段改名且新旧版本会并行运行时，先确认读写兼容和历史数据，再切换使用方。每步都要明确失败后的恢复路径，尤其要检查回退后的旧版本能否读取已写入的数据。发现超出批准范围的契约破坏时，带着受影响调用方和迁移风险交 PM 按现有流程处理。
 3. 按 `eng-common-009` 选择验证入口，核对结果及与改动相关的失败、取消或恢复行为。必要时包含历史数据、独立部署的消费者或真实装配。针对性测试可以定位规则，实际入口和依赖验证能检查接线及跨边界行为。沿用现有计划和 QA 交接，说明相关消费者、兼容策略、验证结果和仍有的证据缺口。验证范围按 `eng-common-019` 和 `eng-verification-001` 至 `eng-verification-003` 选择。
+
+## Choose implementation from facts
+
+- Follow actual call chains to establish the behavioral goal, entry points, data/state owners and consumers.
+  Use nearby code, tests and executable configuration to distinguish facts, assumptions and gaps. Verify
+  discoverable facts first; return unresolved tradeoffs affecting contracts, permissions or side effects to
+  the original decision-maker. Do not automatically treat an observed old implementation as an upgrade target.
+- Before reuse, check semantics, inputs/outputs, failure modes and dependency direction. Before extraction,
+  identify the actual shared responsibility, variation point or isolation benefit. Similar syntax, fewer lines
+  or anticipated future extension does not justify consolidation or added layers.
+- Compare approaches by their changed behavior, preserved contracts and affected consumers; choose the smallest
+  complete change that meets current requirements. Remove redundancy caused by this change and report other
+  issues within the original task boundary. Explain non-obvious tradeoffs with comments required by applicable
+  standards and update those comments with behavior.

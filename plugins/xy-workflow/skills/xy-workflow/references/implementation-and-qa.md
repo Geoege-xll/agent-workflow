@@ -51,9 +51,9 @@ The graph, qa-ready and mandatory QA steps below apply to Full. Light uses only 
 verification, handoff and audit branches. Both levels follow WORKFLOW's `agent-instance-lifecycle` for
 instance identity, context and closure boundaries, without a separate pool.
 
-1. Follow WORKFLOW's `continuous-pm-intake` while existing work runs. For explicit current overlapping
-   request records, run `dispatch_admission_cli.py view` and immediately before native creation `claim`
-   under [shared dispatch](dispatch.md#continuous-intake-dispatch). Keep original Task.state, each request's
+1. Follow WORKFLOW's `continuous-pm-intake` from the first dispatch. Use the PM's [task pool](dispatch.md#continuous-intake-dispatch)
+   to register and claim the current authorized original before native creation, then bind the returned ID
+   with the claim receipt. Include every independent task, even when it is the only candidate. Keep original Task.state, each request's
    approvals, current plugin/source execution authority and QA. Unbound claims occupy resources but prove
    no native start; bind the actual ID after confirmed creation. Release only definite non-creation and
    retain/verify unknown outcomes before redispatch. Resource delay adds no semantic dependency and does
@@ -94,12 +94,7 @@ instance identity, context and closure boundaries, without a separate pool.
    `internal-xy-qa-procedure`, moving forward only on technical unavailability. The allowed
    Superpowers option is only its installed `requesting-code-review/code-reviewer.md` prompt;
    Grill Me remains requirements-only. Findings or `FAIL` never switch review method or reviewer.
-   Native review supplies general code-review evidence; QA verifies findings and source/evidence,
-   then supplements uncovered project-acceptance constraints without another complete generic review.
-   Keep actual method capability, fixed scope, effective model/effort, read-only permissions and any
-   preceding-method technical unavailability in the existing `review_method` evidence.
-   Do not wait for
-   unrelated project work.
+   PM 与同一 Reviewer 共用[核对原生审查目标](../../xy-qa-review/references/inputs.md#核对原生审查目标)的范围与诊断。收到范围吻合的原生结果后，Reviewer 核实发现并补齐项目验收，PM 复核其回执，无需再派通用代码审查。Do not wait for unrelated project work.
    QA receives the approved contract, applicable concrete page links/fingerprints, diff, current self-contained
    schema 2 QA pack and necessary approval/standards authority, without full sibling tasks or conversations.
    The same project/request may declare only one QA task, including failed, passed and retired history;
@@ -120,6 +115,7 @@ instance identity, context and closure boundaries, without a separate pool.
    [`freeze_qa_scope`](runtime-records.md#full-qa-acceptance) before exporting the Reviewer pack.
    The final handoff repeats that complete scope. Validate QA's internal changed-path classifications and per-rule
    standards evidence with `qa_handoff_cli.py validate --input RESULT --task-pack CURRENT_QA_PACK`; raw scope and coverage JSON stay internal.
+   PM 在原交接保留 Reviewer [每批已核实的证据和待查项](../../xy-qa-review/references/inputs.md#分批取证)。同一授权调用支持结构化结果时使用[原生提取](../../xy-qa-review/references/inputs.md#原生结构化交接)；普通后台 Reviewer 只能用消息交接时，核实原实例和最终判定，按[固定回执构造](../../xy-qa-review/references/inputs.md#固定回执构造)生成候选文件。PM 核实实际运行、证据与最终判定后才可接纳 PASS。
    Isolated work also requires the pinned integration verification described in
    [worktree delivery](worktree-delivery.md); QA reviews the composed result, not separate branch PASSes.
    For a required prototype, deterministic validation may read the complete dependency bytes and
@@ -158,3 +154,29 @@ Markdown report merely to carry the concise QA result.
 
 Keep raw exploration, command output, and full logs in subagent threads or ignored
 local artifacts. Return distilled evidence and resolvable references to the PM.
+
+## Native bug-fix route
+
+Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
+runs the Grill Me coverage check and `xy-plan`; when its symptom, expected result, environment,
+reproduction, impact, and acceptance evidence are complete, the coverage check asks nothing and
+returns control immediately.
+
+```yaml
+native_bug_fix:
+  - reproduce_exact_symptom
+  - minimize_reproduction
+  - identify_root_cause
+  - add_regression_evidence
+  - implement_minimal_fix
+  - run_selected_repository_verification
+  - assess_task_level_closeout
+```
+
+After minimum verification, Light defects assess handoff by risk; Full uses `request_unified_qa`. Explicit
+review requests, mandatory project rules or actual risk still select necessary independent review. The defect
+label itself does not force Full. The bug label alone does not
+upgrade the task or require Full planning, another approval, a saved plan, or documentation churn.
+
+Review-feedback handling is not bug diagnosis. Treat external findings as advisory evidence: verify
+them against current source, requirements, and tests before accepting or rejecting them.

@@ -3,76 +3,7 @@ name: xy-project-memory
 description: Use when project work needs bounded cross-session recall, current controlled truth, closeout projection, or an outage-safe documentation fallback.
 ---
 
-## Official plugin resource boundary
-
-This component is assembled from the unchanged shared authority. In this official
-plugin, resolve the installation root from the loaded component's physical location:
-`../..` from a skill's directory, or `..` from the `agents/` or `rules/` directory.
-Do not use the current working directory or a guessed cache path.
-Read `PLUGIN.md` there before using workflow helpers. Treat this paragraph as a
-resource/transport adapter; it grants no business approval, role ownership or QA PASS.
-
-读取必需长文时，核对宿主返回的起始范围、实际范围、总长度和截断标志。
-若 `Read` 受 token／行数上限截断（如 `truncatedByTokenCap`，或末行小于
-`totalLines`），只续读缺失范围，或经下述既有 helper 调用
-`lib/documents/context_read.py`，遵守其 `offset`／`next_offset`／`sha256`
-续页合同。确认同一版本所需范围连续、完整后，再执行依赖该内容的流程；
-不能将部分输出当作完整已读，也不要从头重复全量 `Read` 来补缺。
-这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
-
-Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
-approvals; its `init --adapter <selected-path>` passes that exact adapter to the
-original initializer. Resolve project documents, task records and production code
-in the actual project. A packaged example is never the current project adapter.
-Use the packaged interpreter selector for each independent invocation:
-`bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
-existing Python 3.11+ and never installs software or changes the user's PATH.
-Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
-Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
-actual discovered name or the packaged physical path when invoking one. Public aliases are
-`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
-`product/command_identity.json`; canonical upstream names remain vendor resources, not discovery entries.
-Fully read each selected adapter and its canonical before use; never substitute unknown global names.
-Claude's explicit plugin skill commands use `/xy-workflow:<skill-name>` and
-its bundled agents use the host-discovered plugin-qualified agent name. Preserve
-the original role identity in the task pack; do not infer successful native role
-selection from that identity or a generic task label. Use the actual host tool's
-documented arguments and report an unavailable native selector.
-
-The main session remains PM. Workers receive only the complete current task pack
-with `instance_policy: fresh` and `context_policy: handoff_only`; never fork PM or
-sibling history. Only the official host dispatches agents. Use the official host's
-default or already configured model and reasoning settings; PM applies the business-only
-read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
-neither requires nor registers a separate model configuration service, web console,
-or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
-approval remain exactly as defined in the authority; existing explicit scope
-authorization still applies to Light. A required independent QA remains one
-read-only reviewer. Preserve the original closeout order.
-
-Claude Code and Antigravity expose packaged native agents. Codex's documented
-portable manifest exposes skills and MCP, with no documented `agents` manifest key:
-read the full packaged role and `platforms/codex/WORKER_CONSTRAINTS.md` into the current fresh task
-handoff through the host's actual supported native dispatch interface. A role label
-alone proves no native role/model selection. If the host cannot supply required
-dispatch or independent context, report that limitation instead of claiming it ran.
-Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: its authority may come from another source. Use a fresh native generic
-entry with the complete current packaged role instructions and current task pack,
-or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's history or instructions merely
-because its name matches. If the host cannot provide this boundary, report the
-dispatch limitation to the PM.
-
-This plugin uses the existing unpinned source-pack task contract. It rejects central
-`runtime_binding` records and central project markers rather than migrating them.
-Do not update/replace the installed plugin during an active task. Retention of old
-plugin resources across updates and actual native model/effort execution remain
-unverified. `runtime_verified: false` stays visible until a real host session proves
-the corresponding behavior.
+从本 Skill 的物理目录向上两级确定插件根。使用同包的[宿主资源说明](../../plugins/plugin-context.md)。当前实例已具备同一物理来源、同一版本的完整说明时直接复用；独立启动或内容缺失时补读，来源或版本变化时重新读取。
 
 
 <!-- agent-workflow-pack:managed-skill -->
@@ -94,9 +25,9 @@ rule changes only retrieval; it does not remove this Skill or its post-QA closeo
 
 | Layer | Source | Use |
 |---|---|---|
-| Project entry | `project.yaml` -> `docs.project` (also `memory.portable_checkpoint`) | Current verified scope and links to accepted plan baselines |
-| Topic lifecycle and accepted baseline | `project.yaml` -> `docs.plans` | One editable Markdown per topic; plan Markdown-to-HTML generation is retired, with existing HTML retained as historical material; separate current execution from last accepted behavior, and link only explicit baselines from PROJECT |
-| Engineering and design truth | `project.yaml` -> remaining `docs.*` paths | Effective engineering, design-system, and UI evidence; paths are an index, not a preload list |
+| 项目目录 | `project.yaml` → `docs.project`（同 `memory.portable_checkpoint`） | 当前项目概况及稳定主题的导航，可明确标注已验收基线 |
+| 主题原文 | `project.yaml` → `docs.plans` | 同一主题原位维护行为、需求与必要证据，实际需要时沿链接展开 |
+| 规范目录与叶子 | `project.yaml` → `docs.standards`、`docs.standards_root` | STANDARDS 列适用范围和叶子入口，项目规则正文由叶子维护 |
 | UI design evidence | `project.yaml` -> `docs.standards_root/prototype` | Stable concrete pages, in-page contracts, and shared prototype CSS |
 | Working memory | agentmemory | Cross-session observations and retrieval hints |
 
@@ -189,22 +120,16 @@ migration facts only for verified scope; do not duplicate the standard or page c
 
 Full follows `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`;
 Light performs only projection/memory actually assessed as necessary, without describing local verification as QA success.
-- PROJECT and a topic source's accepted-behavior section describe only the baseline after applicable acceptance.
-  Keep the current goal/execution stage in that source's requirement/recovery sections; completed, cancellation
-  or tab state does not establish delivery. For recovery/updates, see
-  `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`。
+- 先判断请求是否改变以后仍需使用的事实。纯执行和纯符合性修复的进展保留在已有请求交接，项目特有规则和具体交互分别归规范叶子和原型。长期业务事实按[计划生命周期](../xy-workflow/references/plan-lifecycle.md)原位更新，先写当前行为。用关系明确的普通链接指向实际引用的原文。
 - PM is the sole writer of `docs.project` and `docs.plans`. Implementers/QA return bounded results and evidence only.
 - Replace the topic's accepted version, delivered behavior and necessary evidence only after integrated QA PASS
   for Full, or accepted minimum verification and actually necessary independent audit for Light. Without factual
   changes, add no document/PROJECT entry or batch log.
-- PROJECT has no line/byte cap and stores only the current overview, standards entry points and ordinary links
-  to explicitly accepted plans baselines. Old baselines may remain linked during active／paused／cancelled;
-  no-baseline, removed and unindexed old execution drafts must not appear as current facts.
+- PROJECT 的 `## 主题目录` 可用普通链接收录有持续查阅价值的当前主题。明确标记为已验收的条目须有真实版本、行为及批准和验收证据。保留上次已验收基线，历史执行草稿按原用途保存。
 - Mark accepted deletion as removed in the same topic source, retaining reason/date/replacement and necessary
   history while removing its current PROJECT link. Add no feature/ADR document or renamed removed copy;
   QA failure preserves the existing baseline.
-- After projection, run `bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/validate_project_docs.py <selected-project-adapter> .`, requiring exit 0.
-  Validate stable topics, the current index and explicit baselines; labels do not prove real approval.
+- 主题或相应目录项变化后，按[定向校验](../xy-workflow/references/plan-lifecycle.md#validate-the-selected-saved-plan)传入实际适配器与所选主题，要求成功退出，并对照批准与验收原件。维护规范及明确的项目级校验沿用各自既有入口。
 - Return control to the main-session PM for its scoped commit assessment. Do not stage, commit,
   push, merge, tag, or release from this memory Skill. Resume only after the PM records whether a
   safe request-owned commit was created, skipped, or blocked.

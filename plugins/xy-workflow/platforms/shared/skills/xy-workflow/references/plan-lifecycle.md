@@ -5,44 +5,40 @@ work. This supports the current Light/Full routes with schema 2 task packs; it a
 automatic memory call. Explicit task-scoped workflow opt-out and save/no-save instructions prevail;
 applicable project constraints and permission boundaries still apply.
 
-## Save by task level
+## 执行等级与批准稿去向
 
-- Light: do not create a plan by default. PM saves a short recovery plan only for an actual pause,
-  cross-session continuation, handoff need, or explicit user request. Saving does not upgrade Light
-  to Full, activate Full planning Skills, require a DAG, repeat existing authorization or force independent QA.
-- Full: after requirements approval and any applicable prototype choice, PM saves the approved
-  current plan under adapter-resolved `docs.plans` before the first design or implementation dispatch.
-  xy-plan still only drafts; PM owns persistence. Do not wait for visual approval to save the plan.
+Light 仅在实际暂停、跨会话恢复、交接或用户指定保存时落稿。Full 用单一 Markdown 草稿正式审阅，批准前可放本请求的草稿区。需求范围明确后，PM 保存同一份可恢复原稿，给拟议方案与已确认方案标明各自状态；在每次相关设计或实现派发前补入刚生效的决定。用户明确的保存要求、工作流豁免及已有权限边界仍适用。保存本身不改变任务等级。
 
-Formal Full review uses the single Markdown draft. Before approval, PM may keep that draft in the current
-request scratch. Only after approval does PM save `docs.plans/<name>.md` before dispatch. Markdown remains
-the sole editing authority. Requirements/plan Markdown-to-HTML generation is retired; preserve
-existing plan HTML and active prototype HTML under [the retained reference](../../xy-plan/references/requirements-markdown.md).
-Light selects persistence by existing save needs, complexity or user requirements, without upgrading the
-workflow. Document existence and checkbox selections do not create approval.
+PM 在起草时根据本次会改变的事实选择归属。先查现有入口、主题及范围，再决定是否需要新页。
 
-Maintain one lifecycle Markdown per stable topic. Update in place for further iterations,
-visual adjustments, implementation assignments or QA rework, without version copies. Independent topics
-have separate documents. Light persistence still depends on actual need; an old topic's Full level does
-not automatically make an unrelated small correction Full.
+| 这次发生什么变化 | 原稿与长期知识写在哪里 |
+| --- | --- |
+| 已有业务能力、长期接口或架构取舍改变 | 在原主题原位更新本轮批准要求。保留上次真实已验收基线及对应证据，直到本轮实际验收。 |
+| 出现需要单独查找、独立维护的新能力或跨主题决定 | 在适配器的 `docs.plans` 下创建一个稳定主题，从 PROJECT 的主题目录链接它；执行批次、任务编号和版本号不能单独构成建页理由。 |
+| 只执行既定步骤、排查或修复不符合已有规定的行为，原业务事实未变 | Full 批准稿可放本请求已有的持久交接位置；让后续实例能按请求和已知路径取回完整原稿、批准范围、原始证据与下一步。确认保存期覆盖实际交接和恢复，清理前保留仍需使用的原件并修复引用。会话摘要、临时目录或可能随清理消失的 scratch 不能单独承担此职责。无需为这次任务新增业务主题。 |
+| 项目特有规范或具体交互变化 | 项目长期规则写入对应规范叶子，STANDARDS 按适用范围链接；具体交互写入原型页面及状态。批准的任务原稿引用规则或页面，遵守原有所有权、采纳与验收顺序。 |
 
-The standard template is `templates/docs/PLAN.md`, using ordinary Markdown metadata rather than frontmatter.
-Preserve these literal protocol fields: `主题 ID`, `阶段`, `模块`, `任务等级`, `已验收版本`;
-each field has one current value, not a list of alternatives or revision history.
-Stage accepts only draft／active／paused／completed／cancelled／removed; task level is Full／Light;
-the accepted version is `none` when no real baseline exists. Preserve the six Full section-title literals
-in this order: `目标与范围`, `需求与验收`, `方案与原型关联`, `当前进展与恢复入口`,
-`验收结果与当前已交付行为`, `批准依据与必要证据`. The final section's literal evidence keys
-`批准依据` and `验收证据` reference real recoverable sources. Templates, non-empty lists and stage labels
-are not authorization. Simplify a baseline-free Light recovery draft as needed without extra documents or
-confirmation. If PROJECT links it as a current baseline, it must still state the version, delivered behavior
-and existing evidence. Create directories only when saving an actual topic. Installation creates no
-requirements page, empty index or placeholder plans／features directories.
+需要绑定原型评审时，选取 `docs.plans` 下范围相符的现有稳定主题作为批准源，确有独立新主题才新建。PM 保留可绑定的项目内 Markdown 路径、当前 REQ 定义、具体页及状态覆盖。实际要求原型的任务继续执行静态校验、依赖指纹和最终视觉确认；绑定来源的需要不能用临时交接链接替代。原型导航与历史 HTML 见[需求 Markdown](../../xy-plan/references/requirements-markdown.md)。
+
+## 稳定主题的写法
+
+`templates/docs/PLAN.md` 保留五个普通 Markdown 元信息字段：`主题 ID`、`阶段`、`模块`、`任务等级`、`已验收版本`。每项各填一个当前值。阶段使用 draft／active／paused／completed／cancelled／removed，任务等级为 Full 或 Light；没有已验收基线时版本为 `none`。
+
+先说明当前可观察的行为及其边界。Full 原稿须有含实质内容的 `## 需求与验收`；用其余节表达实际需要。有已验收行为时，保留 `## 验收结果与当前已交付行为` 和 `## 批准依据与必要证据`，后者用 `批准依据`、`验收证据` 分别定位原始材料。需要恢复时用 `## 当前进展与恢复入口` 记录下一安全动作。只有确有取舍、范围或交互要展开时才单列方案等章节。旧六节稿可继续按原顺序读写，同一主题始终用同一路径。
+
+一个长期事实只维护一份正文。项目内所有 Markdown 引用具体项目文档时，从引用所在文件写可点击的相对链接；指向具体章节必须带真实标题锚点或显式 ID，同页可直接用片段。链接文字说明关系，路径以实际目录为准。以下只示意表达方式，写入项目时须使用实际存在的目标。
+
+```markdown
+退款资格遵循[订单权限规则](../standards/ORDERS.md#退款资格)。
+提交后的交互见[退款确认页的待审核状态](../standards/prototype/refund.html#pending)。
+保留原订单号的决定依据见[订单标识规则的批准记录](order-identity.md#批准依据与必要证据)。
+```
+
+目录只负责发现，任务、规范和原型分别保留自己的正文。仅保存实际内容，安装不创建占位需求或空目录。
 
 For drafting, substantive refinement, save/handoff self-check or the existing QA's plan review, read
 [document quality](../../xy-plan/references/document-quality.md). It supplies section refinement and reader
-checks without adding a reader Agent, report or approval gate. Preserve the existing requirements confirmation
-and applicable final visual confirmation; format or wording fixes do not create a new business confirmation.
+checks without adding a reader Agent, report or approval gate. Apply the request’s scope, material-solution and page decisions as needed; format or wording fixes do not create a new business confirmation.
 
 Discussion alone requires neither a saved document nor a plan. When persistence is needed, keep
 necessary questions and conclusions in the relevant existing plan or authorized requirement/proposal
@@ -72,10 +68,7 @@ recoverability cannot be established, preserve originals and explicitly mark the
 current recovery entry. Do not delete user documents/sole history or add QA reports, ledgers or confirmation
 stages for organization.
 
-Record the requirement confirmation source and scope, prototype choice, and any still-pending UI
-decisions. When a concrete prototype is approved, retain its page/scope, approval source and dependency
-fingerprint in this same plan; do not create a companion approval record. If approval evidence is not
-recoverable, mark that gap rather than declaring the gate approved from a status label alone.
+按已发生的阶段原位维护同一主题。需求范围明确后写目标、约束与可观察验收。涉及用户取舍时，写明拟议行为、正常状态、异常及后果；用户决定后以其原意更新同一段，注明适用范围和可恢复出处。若选择原型，再关联实际 HTML 页、状态锚点、覆盖的 REQ 及该版批准和依赖指纹。验收后更新已交付行为、已验证的当前做法，以及维护者能找到的源码和测试入口，明确仍未验证的范围。只修正既有间距且长期事实未变时复用现有依据和任务交接，无需新主题、空章节或单独批准日志。
 Do not expose raw DAG JSON, YAML, hashes or full Task Packs in normal user feedback.
 
 PM is the sole plan writer. Workers and QA return scoped results/evidence; they do not race on the
@@ -85,12 +78,11 @@ that may never run. File persistence does not imply permission to commit, publis
 The design Agent returns coverage from REQ IDs to concrete prototype pages/actual state anchors in the original
 handoff. PM writes it into this Markdown source, without generating HTML, a separate mapping file or
 prototype QA. Progress, link or presentation-only changes do not automatically reopen requirements approval.
-requirements_fingerprint and prototype dependency fingerprints retain their separate responsibilities;
-historical HTML freshness is not required after generation retirement.
+区分语义变更与文档投影。准备原型前，在既有请求证据或可恢复的版本历史中保全正式批准的原始 Markdown 字节、批准范围及来源。现行主题增补页面链接、进度或代码／测试定位时，旧批准和原型评审仍指向当时的原件。读取历史评审时沿用已登记的不可变快照；需要验证当前来源时仍比较实际规范路径及完整字节，不能以备份替代当前源。若当前稿有变，按既有指纹及等价性规则核实差异，需要新评审时重新捕获当前来源和页。不得把旧摘要改标为新文件的批准，也不能据一次文档投影重开无关业务决定。
 
 ## 定位现有主题
 
-新建主题或恢复路径不明的主题前，按稳定主题 ID 查询已选适配器的 `docs.plans`，查到原稿就原地更新。
+已知路径或章节时直接读相关原文。按问题从 PROJECT 的主题目录定位业务能力，从 STANDARDS 的规范目录定位适用规则。长文先看顶层标题，只沿相关分支列子标题，在目标节读直属正文；需要子节时才展开。[标题路径与分页](runtime-records.md#按当前合同读取长文)给出命令示例。目录或任务引用不足以确认原稿时，按稳定主题 ID 查询已选适配器的 `docs.plans`；查到同一主题就原位更新。
 在工作流源码根执行以下命令。
 
 ```bash
@@ -102,6 +94,15 @@ bash lib/python_runtime.sh -B -X utf8 lib/validate_project_docs.py \
 围栏和 HTML 注释中的章节示例不会提前结束查询。
 用 `--plan` 明确加入已知未跟踪稿；项目根无 Git 工作树时，必须显式指定已知候选。未找到只代表本次检索范围。
 若多个文件匹配，或候选页首无法安全判定，先核实原稿再保存。查询只读候选的页首，无需读取 PROJECT、链接目标或候选正文。
+
+需要判断哪些已知材料引用某个文件，或选中主题引用了哪些来源时，运行只读关系查询。
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/validate_project_docs.py \
+  --root PROJECT_ROOT --adapter SELECTED_ADAPTER --relations TARGET [--source SOURCE] ... [--limit LIMIT]
+```
+
+目标为项目内普通非隐藏文件。默认检查目标 Markdown 的出链，以及 PROJECT、STANDARDS 直接列出的主题和规范中的一跳入链，旧目录也可使用。显式 `--source` 可将候选限定到最多 64 份已知 Markdown。HTML 等非 Markdown 目标仅检查入链。结果区分目录导航和正文引用，报告来源、行号、章节与链接携带的片段。根据 `sources_read`、`scope_truncated`、`results_truncated` 判断查了哪些资料、候选或显示数量是否截断。`--limit` 默认为 32，可选 1–100。复核影响时沿命中关系核对原文和实际消费者。某范围内无命中只能说明本次查询结果。
 
 ## Validate the selected saved plan
 
@@ -129,6 +130,16 @@ scanning unselected plans or using the network. Explicit selection must not sile
 metadata as historical material. The original two-positional-argument mode and its historical recognition
 remain available for their existing callers. 同次选择同一物理文件可去重；若两个不同文件的主题 ID 大小写折叠后相同，校验失败。
 
+有主题或其 PROJECT 目录项的实际变化时，用同一命令加上 `--adapter SELECTED_ADAPTER` 和一个或多个 `--plan PLAN_PATH`，定向核对选中节点与其对应的目录链接、锚点及明确的已验收声明。批准稿仅驻留于持久请求交接时按其实际位置核对内容、读取权限和恢复引用，避免把它注册成业务目录项。原两位置参数命令保留给明确的项目级校验。
+
+普通 Markdown 的链接检查可单独运行。源码根的 `python3` 为 3.11 或更高版本时可用以下命令，也可用仓库的 `bash lib/python_runtime.sh -B -X utf8` 代替 `python3 -B` 选择已有解释器。每个 `--document` 只选择一份本轮改动的项目 Markdown 或需要复核的引用来源，路径相对项目根。安装包使用上文同一 helper，将 `--plan` 换为 `--document`。
+
+```bash
+python3 -B -m lib.validate_project_docs --root PROJECT_ROOT --document PATH [--document OTHER_PATH ...]
+```
+
+移动、重命名或删除文件与标题时，在编辑前按[文件引用关系](#定位现有主题)定位入链，并在已知受影响的项目资料中查找旧路径、文件名与片段。目录以外的来源可显式指定。修复实际引用，再用 `--document` 检查变动页和相关来源；单次一跳查询有范围和数量边界，不能据此推断全项目没有其他入链。
+
 Return format failures to PM for in-place correction under the same scope, with actual command/exit/log
 evidence; do not dispatch from a malformed selected Full plan. A successful check proves only its format/path
 scope, not reader comprehension, approval, QA PASS or accepted delivery. Light retains its allowed simplified
@@ -145,8 +156,7 @@ without a second gate or additional reviewer.
    merely for a visual refinement. An explicit production-only revision during implementation or
    acceptance instead follows the cutover below; the old prototype choice is not perpetual authority.
 3. A change to functionality, permissions, data/API contracts, acceptance or approved scope returns
-   the affected requirement to existing clarification/approval. Preserve unaffected approvals and
-   work; do not add a third business-confirmation stage or repeat the whole interview.
+   the affected scope or solution decision to the PM before its dependent design or implementation resumes. Preserve unrelated decisions and work.
 4. Before affected dispatch, PM merges effective changes into the same current plan and refreshes
    affected Task Packs, interfaces, acceptance and prototype/standards references. Reconcile superseded
    discussion/proposal material as below before affected work resumes. Each affected Agent receives
@@ -227,10 +237,9 @@ For isolated functional units, also follow [worktree delivery](worktree-delivery
 root/base/head and pending-merge recovery facts in this same plan. Reopen existing worktrees by verified
 identity, not by recreating completed tasks; a waiting merge is not a completed main-branch delivery.
 
-When available context is sufficient, do not reload all plans or project documents. For a concrete
-recovery gap, locate the relevant plan by task/feature terms and read only that plan and necessary
-references. Check its state, pending decisions, current files and evidence; plans supplement the host
-conversation and task state rather than replacing them.
+恢复时复用同一实例中版本和范围仍匹配的资料。只缺下一步时，先定位当前主题的 `当前进展与恢复入口`
+及阶段字段。对批准范围、已交付行为或证据另有疑问时，再展开相应原文和必要引用。主题路径未知时按
+[定位现有主题](#定位现有主题)查找，并对照当前文件、原对话和任务状态核实。
 
 Treat recorded completion and approval as evidence to verify, not as self-executing authorization.
 Reuse completed work whose scope/artifacts/evidence remain valid; recheck or rework only affected or
@@ -247,14 +256,9 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
 
 ## Closeout and document boundaries
 
-- PROJECT 承载当前概况和已验收基线索引。`当前已验收基线` 专用章节内，每个已验收来源只列一次；
-  概况或其他说明章节可保留有实际意义的同源链接。围栏示例和 HTML 注释中的链接不构成索引项。
-- During iteration, update the first four sections/current stage and preserve the fifth section's last accepted
-  behavior, accepted version and corresponding evidence. active／paused／cancelled must not present new goals
-  as delivery; `completed` alone establishes no trust.
-- Replace baselines only after applicable QA PASS for Full or acceptance of actually necessary verification for
-  Light. Without factual changes, create no projection. PROJECT may list only sources with an explicit accepted
-  version and real grounds; failed acceptance preserves the original baseline.
+- PROJECT 的 `## 主题目录` 每个现行主题只列一次，普通链接表示可查阅。新目录中，行首以“已验收：”标记的条目（如 `- 已验收：[主题](相对路径)`）才作已验收声明。旧 `## 当前已验收基线` 及主题目录之外的原有主题链接继续适用既有基线检查。已完成或取消且没有已验收基线的历史稿、已移除主题留在原址，撤下当前目录链接。声明须能追溯到同一主题的真实版本、交付行为及批准与验收原件。围栏示例和 HTML 注释不构成索引项。
+- 本轮仅修改发生变化的条款。Full 经当前集成 QA PASS、Light 经必要验证及选定审查验收后，再更新已验收行为和必要目录声明。进行中、暂停或取消仍保留上次已验收基线；`completed` 自身不能证明交付。没有长期事实变化时，只完成请求交接。
+- 当实际代码结构变化时，开发 Agent 在既有交接列出入口、模块或依赖的实际变动与源码位置，本轮已有 QA 独立核对。PM 据验收结果在 `docs/ARCHITECTURE.md` 原节更新当前结构，首次确需记录才创建。PROJECT 在项目简介处、主题目录之前链接该文件一次；业务主题需要结构依据时链接具体架构章节。初始化和无结构变化的任务无需创建架构文件或空链接。
 - Mark accepted deletion as removed in the same source, retaining necessary dates, reason, replacement and
   history. Remove its current index entry; do not rename it or create a feature/ADR document.
 - Unindexed old execution drafts retain historical boundaries. Do not auto-index by completed, bulk-edit

@@ -69,7 +69,7 @@ The task pack must include standards-conformance, currently applicable built-in 
 2. Before implementation of renderer UI, follow `ui_change`. For `UI-Conformance`, require
    `design_delta: none`, read the frozen `design_authority_refs`, and stop if a new design choice is
    required; do not edit the design workspace or require a visual gate. For required-prototype design work, read
-   each approved concrete HTML page and its full five-section `Page design and interaction contract`,
+   each approved concrete HTML page and its developer notes (including an empty disclosure) and linked original requirements,
    relevant shared prototype CSS, and corresponding production code. Recompute its dependency
    fingerprint and require it to match the approved value. For `waived_by_user`, verify its
    requirement fingerprint and exact surfaces, do not read or update the old prototype, and
@@ -82,6 +82,8 @@ The task pack must include standards-conformance, currently applicable built-in 
 4. Run task-selected repository-native checks; audit privilege expansion, unsafe IPC/navigation, secrets,
    release overclaim, migration, unauthorized paths, and unrelated rewrites; return evidence to the PM.
 
+有批准原型时，结合可操作页面、页内「开发说明」和关联需求原章节实施。说明可能为空；未决行为交 PM。
+
 ## 7. Technical Deliverables
 
 - Authorized desktop changes and explicit validation for changed trust boundaries.
@@ -91,8 +93,11 @@ The task pack must include standards-conformance, currently applicable built-in 
 ## 8. Verification and Evidence
 
 Invoke `$xy-build-verify` and prefer checked-in package scripts, Cargo manifests, wrappers, CI, and
-platform tools justified by repository evidence. Report exact commands, exit codes, concise evidence,
-and complete-log references. State the operating system and architecture actually exercised. A local
+platform tools justified by repository evidence.
+实际桌面取证缺口按[共享 Skill 选择规则](../platforms/shared/skills/xy-workflow/references/skill-selection.md#desktop-verification)处理。
+
+Report exact commands, exit codes, concise evidence, and complete-log references. State the
+operating system and architecture actually exercised. A local
 build does not prove another platform; absent credentials or infrastructure are explicit unverified
 release scope, never success. For required-prototype renderer UI, recompute the relevant dependency fingerprint
 at handoff and require it to match the approved value; a mismatch invalidates use of stale

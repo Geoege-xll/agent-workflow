@@ -16,6 +16,8 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import argparse
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -52,7 +54,20 @@ class DeliveryError(ValueError):
     """停止交付并保留工作；不能通过强制 Git 操作绕过。"""
 
 
-def git(repo: Path, *arguments: str, allowed: tuple[int, ...] = (0,)) -> bytes:
+_LOCAL_OBJECTS_ONLY = ContextVar("worktree_git_local_objects_only", default=False)
+
+
+@contextmanager
+def local_objects_only():
+    """把只读诊断的 Git 子调用限制在本地对象库；退出时恢复调用前的上下文。"""
+    token = _LOCAL_OBJECTS_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _LOCAL_OBJECTS_ONLY.reset(token)
+
+
+def git(repo: Path, *arguments: str, allowed: tuple[int, ...] = (0,), stdin: bytes | None = None) -> bytes:
     """始终使用参数数组与明确 cwd；拒绝环境变量把操作重定向到其他 Git 仓库。
 
 保留用户 Git 配置和 hooks，不借工作流取消安全检查。读取 diff 禁止外部 diff 和
@@ -63,9 +78,13 @@ textconv，避免审计指纹依赖可执行转换器或用户显示偏好。
         if key.startswith("GIT_") and key not in {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"}:
             environment.pop(key)
     environment["GIT_OPTIONAL_LOCKS"] = "0"
+    if _LOCAL_OBJECTS_ONLY.get():
+        # 在清理外部 GIT_* 之后设置，使嵌套的修订解析、diff 和 status 同样受约束。
+        # 旧版 Git 即便不认识 NO_LAZY_FETCH，也不能通过本地文件或网络传输补对象。
+        environment.update(GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="")
     result = subprocess.run(["git", "--literal-pathspecs", "-C", str(repo), *arguments],
                             env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            check=False, timeout=45)
+                            input=stdin, check=False, timeout=45)
     if result.returncode not in allowed:
         raise DeliveryError(result.stderr.decode("utf-8", errors="replace").strip()
                             or f"git {arguments[0]} failed ({result.returncode})")
@@ -115,6 +134,23 @@ def clean(repo: Path) -> None:
         location = git(repo, "rev-parse", "--git-path", marker).decode().strip()
         if (repo / location).exists():
             raise DeliveryError(f"unfinished Git operation in {repo}: {marker}")
+
+
+def primary_worktree(repo: Path) -> Path:
+    """从 Git 的登记顺序和私有目录识别主 checkout，不猜工作树名或 .git 的父路径。"""
+    listing = git(repo, "worktree", "list", "--porcelain", "-z")
+    # porcelain 首条工作树记录属于主树。裸仓库没有可核对项目适配器的主 checkout；
+    # 列表或目录身份缺失时，不使用当前 cwd 的适配器替代另一棵树的授权。
+    fields = listing.split(b"\0\0", 1)[0].split(b"\0")
+    if not fields[0].startswith(b"worktree ") or b"bare" in fields:
+        raise DeliveryError("a registered non-bare primary worktree is required")
+    path = Path(os.fsdecode(fields[0][len(b"worktree "):]))
+    if not path.is_absolute():
+        raise DeliveryError("primary worktree must be an absolute registered root")
+    primary = repository(path)
+    if not private_dir(primary).samefile(common_dir(repo)):
+        raise DeliveryError("primary worktree does not own the repository common directory")
+    return primary
 
 
 def linked(repo: Path, raw: str) -> Path:
@@ -170,13 +206,18 @@ def target_branch(repo: Path, selected: str) -> str:
     return selected
 
 
+def diff_bytes(repo: Path, *revisions: str) -> bytes:
+    """统一冻结时的二进制补丁编码；一个修订读工作区，两个修订仅读提交。"""
+    return git(repo, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff",
+               "--no-textconv", *revisions, "--")
+
+
 def scope(repo: Path, base: str, tip: str) -> dict[str, Any]:
     """导出 QA 与最终交付共用的确定性范围；重命名使用删除/新增两端防止漏审。"""
     object_id(repo, base)
     object_id(repo, tip)
     ancestor(repo, base, tip)
-    patch = git(repo, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff",
-                "--no-textconv", base, tip, "--")
+    patch = diff_bytes(repo, base, tip)
     paths = git(repo, "diff", "--name-only", "--no-renames", "-z", base, tip, "--").split(b"\0")
     return {"path": ".", "base_revision": base, "head_revision": tip,
             "diff_fingerprint": hashlib.sha256(patch).hexdigest(),
@@ -236,8 +277,8 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     if not isinstance(graph, dict):
         raise DeliveryError("delivery requires the current task_graph")
     validate_task_source(graph, root=repo)
-    _execute("validate", graph)
-    if not _execute("qa-ready", graph)["qa_ready"]:
+    _execute("validate", graph, root=repo)
+    if not _execute("qa-ready", graph, root=repo)["qa_ready"]:
         raise DeliveryError("writers or integration verification are incomplete")
     request_id = graph["request_id"]
     record = graph.get("worktree_integrations", {}).get(request_id)
@@ -258,7 +299,14 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
         raise DeliveryError("integration target does not match the configured main branch")
     if git(repo, "symbolic-ref", "--quiet", "HEAD").decode().strip() != f"refs/heads/{branch}":
         raise DeliveryError("target checkout must already be on the resolved main branch; no automatic switch")
-    base, tip = record["target_base"], record["head_revision"]
+    reviewed_tip = record["head_revision"]
+    # 原集成记录与 QA 回执保留被审提交。只有经图 CAS 单独登记的窄文档投影
+    # 才可跟随其后，合并授权仍须绑定最终提交、完整 diff 与当前目标主分支。
+    reviewer = next((task for task in selected if task["task_type"] == "qa" and task["request_id"] == request_id), {})
+    projection_receipt = reviewer.get("qa_projection", {})
+    base, tip = record["target_base"], projection_receipt.get("head_revision", reviewed_tip)
+    if projection_receipt and projection_receipt["adapter"] != selected_relative:
+        raise DeliveryError("PM projection must use the selected delivery adapter")
     if head(repo) != base:
         raise DeliveryError("target branch moved; preserve work and refresh integration, QA and consent")
     clean(repo)
@@ -340,13 +388,16 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
         for path in projection
     ):
         raise DeliveryError("projection_paths requires unique normalized exact changed Markdown files")
+    if projection_receipt and not {entry["path"] for entry in projection_receipt["documents"]} <= set(projection):
+        raise DeliveryError("delivery must include all post-QA projected paths")
     if projection:
+        from lib.qa_projection import projection_kind
         # PM 投影须同时处于主配置与候选配置允许的文档边界；修改适配器不能借此
         # 扩张 PM 的写权限。真正文档校验绑定候选文件和候选字节，保留 validator
         # 对配置根目录的安全检查，不把主目录文件伪装成集成目录中的文件。
         for docs in docs_views:
-            if any(path != docs.get("project") and not within(path, docs["plans"]) for path in projection):
-                raise DeliveryError("PM projection must stay within configured PROJECT/plans in both checkouts")
+            if any(not projection_kind(path, docs) for path in projection):
+                raise DeliveryError("PM projection must stay within configured PROJECT/plans or the adjacent ARCHITECTURE.md in both checkouts")
         errors = validate_documents(candidate_config, integration, body=candidate_bytes)
         if errors:
             raise DeliveryError("controlled-document projection is invalid: " + "; ".join(errors))
@@ -379,7 +430,8 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
         raise DeliveryError("QA task pack does not match the current request's unique Reviewer")
     if qa["audit_result"] != "PASS":
         raise DeliveryError("QA FAIL blocks delivery")
-    if qa["review_method"]["scope_ref"]["repositories"] != [current_scope]:
+    reviewed_scope = scope(repo, base, reviewed_tip) if projection_receipt else current_scope
+    if qa["review_method"]["scope_ref"]["repositories"] != [reviewed_scope]:
         raise DeliveryError("QA scope does not match the actual complete integration diff")
     coverage = qa["standards_policy_coverage"]
     contract = graph["standards_contract"]

@@ -17,8 +17,7 @@ workflow stage, approval, role, delegation right or required inventory.
    project-level and other-plugin Skills actually available in the current host may also be selected
    when they serve the authorized task.
    Do not enumerate personal Skill directories, scan every installed package, or preload every Skill.
-3. Before application, completely read the selected `SKILL.md` and the relevant references it requires,
-   using its own resource mechanism and complete-reading contract. A catalog description or a name
+3. Before application, completely read the selected `SKILL.md`. 使用各来源的读取机制，按该 Skill 当前分支要求的范围读引用。明确要求全文的引用须读完全文；定向引用须读完所选章节或条款及必要依赖。 A catalog description or a name
    alone is not the Skill body. Once selected, follow its applicable instructions; mandatory wording
    inside an unselected vendor Skill does not itself require selecting that Skill. Reuse unchanged
    text already fully available in the same instance under WORKFLOW's complete-reading policy;
@@ -29,6 +28,12 @@ workflow stage, approval, role, delegation right or required inventory.
    never silently substitute it, mix its references/runtime with the packaged source, or call an
    unknown global name/latest release.
    Return unresolved same-name ambiguity or conflicting instructions to the PM.
+
+读取多份已选 Skill 时，从宿主实际给出的物理入口逐份读取。每个工具回包只放一个文件的一页，
+为正文和元数据留足输出预算，避免多文件 `cat` 或并行结果汇总后被宿主一起截断。
+按物理路径、内容 SHA 和连续范围确认进度。某页截断时，仅从该文件上一完整页的末尾缩小分页续读；
+其他文件已确认且仍在本实例上下文中的部分可直接复用。独立实例各自完整读取。
+同包发现入口的分页命令和 EOF 判定见[完整读取必需长文](runtime-records.md#完整读取必需长文)。
 
 ## Required and supplemental Skills
 
@@ -56,9 +61,8 @@ authorization, host permission and dependency requirements.
   support policy and provide compatible fallbacks when required; guidance does not change approved
   UI authority or authorize dependency/browser-target upgrades. Backend, infrastructure and pure
   renames do not trigger an unconditional Web query. `xy-desktop` or `xy-uiux` may load it for an
-  actual Web surface while retaining their original owner and prototype boundaries. `xy-taste`
-  remains the design specialist, and production browser evidence follows the existing project-test
-  and `xy-playwright` policy.
+  actual Web surface while retaining their original owner and prototype boundaries. Production browser
+  evidence follows the existing project-test and `xy-playwright` policy.
 - For SwiftUI work with an actual platform/API, state, layout or compatibility knowledge gap,
   consider `xy-apple-guidance`; SwiftUI files alone do not require loading it. Established reliable
   project solutions and pure business-logic changes may proceed without it. When selected, first
@@ -103,12 +107,63 @@ If an explicit local developer directory is needed, use the same `--developer-di
 for check and read; do not change system Xcode selection or launch/export Xcode to manufacture resources.
 Changed source fingerprints require a fresh check rather than combining bytes from different sources.
 
+## Taste design guidance
+
+`xy-uiux` 在当前获准设计任务确有设计方法缺口时，可选用无 hooks 的 `xy-taste`。沿用现有
+设计系统即可完成的局部调整，可直接使用项目规范。用户要求、项目已采用的设计规范和适用移动端
+规则优先。先确认页面类型和信息密度，紧凑应用、控制台和设置页按现有产品层级、组件及密度设计。
+
+原版是当前物理插件根下非发现目录的 `third_party/selected-skills/taste/skills/taste-skill/SKILL.md`。
+选中后从同一物理根调用分段读取入口。每次 `read` 核对当前受管文件与必要来源。整包
+`selected-skills check` 用于显式诊断，可独立运行。
+
+```text
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" selected-skills read xy-taste --offset 0 --length 12000
+```
+
+完整读完每段 `content`，用返回的 UTF-8 字节位置 `next_offset` 接续，核对 `path`、`sha256`、
+`total_bytes` 一致，直至 `eof` 为真并覆盖全部字节。输出截断时从未读位置缩小分页重新读取。
+用同一根的 `source_pack.py resource` 定位并完整阅读实际需要的原版引用，按所用资产的许可、
+署名及商标要求使用。必需来源缺失、损坏或读取不完整时，向 PM 报告受影响工作。
+
+原型与 `standards_only` 只使用适用的设计方法，继续遵守既有静态原型验收、截图禁令和角色权限。
+上游 Stop hook 仅随原版保留，禁止注册或执行。上游脚本、浏览器 gate、安装工具及获取外部资源均按
+当前任务和宿主对具体操作的授权执行。记录实际完成的读取与执行，统一 QA 沿既有流程验收。
+
+## Desktop verification
+
+`xy-desktop` 与 `xy-qa` 优先使用当前项目原生测试及已有有效运行证据。只有实际生产桌面能力
+仍有证据缺口，且应用、数据、操作范围与宿主权限匹配时，才选用随包原版 `agent-desktop`。
+浏览器交互继续遵循 `xy-playwright` 的 Web 取证规则，移动端使用对应宿主运行证据。
+该工具沿用原型自动化边界、截图禁令与 QA 只读范围。原版描述中的宽泛触发词和示例均在当前
+已授权任务范围内适用。
+
+选中后完整读取同一物理插件根下的 `skills/agent-desktop/SKILL.md`。首版提供 macOS 运行时，
+使用 `source_pack.py resource` 核验所选架构的包内资源，从其绝对路径直接运行原版 CLI：
+
+```text
+"<plugin-root>/third_party/selected-skills/agent-desktop/runtime/macos/<arm64-or-x86_64>/agent-desktop" status
+"<plugin-root>/third_party/selected-skills/agent-desktop/runtime/macos/<arm64-or-x86_64>/agent-desktop" skills get platform
+```
+
+选择实际运行环境的 `arm64` 或 `x86_64`；CLI 使用同目录的 helper。后续命令也调用该绝对路径，
+并按实际操作读取原版引用。由 `status` 核对平台、权限和支持的界面，资源缺失、权限被拒或平台
+不支持时报告相关证据缺口。全局同名命令、自动安装和权限修改均不作为回退。
+
+限定到隔离测试应用与数据，或用户明确授权的应用、窗口和数据；默认不读私人桌面、不自动执行
+破坏性操作。动作前从当前视图核对应用、窗口、控件和业务对象名称（含目标行标签），使用与目标
+一一对应的新鲜 ref。界面变化后重新获取，目标含糊或 ref 失效时先回读定位；动作结果不确定时
+先核对状态，按上游的投递与重试约定处理，避免重复提交。动作后回读同一对象并核对预期状态；涉及
+相邻条目的验证还要确认旁边条目未被误改。默认使用语义动作，物理输入须有明确用户授权和宿主许可。
+QA 仅执行获准的只读取证，需写入或提交的验证请求交回 PM。分别记录资源校验、实际命令和 GUI
+结果，只有实际应用的回读才能作为对应交互的运行证据。
+
 ## Authority and evidence stay with their existing owners
 
 Skills provide methods and evidence within existing authorization. They do not expand exact
 `owned_paths`, roles, network/tool permissions, native dispatch authority or read-only QA scope;
 do not propagate upstream hooks or allowed-tools as new permissions. Preserve the existing
-requirements/visual two-step policy, applicable prototype choice, fresh/handoff_only instances,
+request-scoped decision policy in `product/WORKFLOW.md#business-confirmation-policy`, applicable prototype choice, fresh/handoff_only instances,
 and the single independent QA reviewer. External workflows never replace or wrap this control plane.
 Loading Web guidance does not authorize prototype browser automation or screenshots; Apple official
 guidance does not replace destination-specific build/test, signing or release evidence.

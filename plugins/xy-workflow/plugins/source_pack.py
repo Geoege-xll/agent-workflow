@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import runpy
+import stat
 import sys
 
 
@@ -25,7 +27,8 @@ CENTRAL_ENV = (
 )
 HELPERS = frozenset({
     "lib/task_graph_cli.py", "lib/agent_continuation_cli.py", "lib/documents/context_read.py",
-    "lib/dispatch_admission_cli.py",
+    # PM 从任务池恢复已登记的原记录，再沿既有准入和更新流程执行；只开放命令入口。
+    "lib/dispatch_admission_cli.py", "lib/task_pool_cli.py",
     "lib/documents/validate_prototype_workspace.py",
     # 同一个反馈 CLI 提供显式项目的 prepare-delivery/open/status/stop 与历史 prepare/validate。
     # prepare-delivery 仅准备受管文件入口；open 验证准备后登记已允许源并启动本机受限服务，
@@ -64,15 +67,76 @@ def _json(relative: str) -> dict:
     return value
 
 
+def _canonical_manifest_files(source: dict) -> dict:
+    if not isinstance(source, dict) or set(source) != {"schema_version", "files"} or source["schema_version"] != 1:
+        raise ValueError("unsupported workflow-sources contract")
+    if not isinstance(source["files"], dict) or not source["files"]:
+        raise ValueError("workflow-sources files must be a nonempty object")
+    return source["files"]
+
+
+def _selected_bootstrap_bytes(relative: str) -> bytes:
+    """只读固定的发行清单或 Python 源文件，供导入精选读取器之前的来源校验。"""
+    # 此处不能依赖尚未校验的 selected_skills.read_regular。沿用包路径边界，
+    # 在同一打开文件上拒绝软硬链接、特殊节点和超额内容，避免预检触发挂起或外部读取。
+    budget = 16 * 1024 * 1024
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(_file(relative), flags), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("selected skill bootstrap source must be a single-link regular file: " + relative)
+        if info.st_size > budget:
+            raise ValueError("selected skill bootstrap source exceeds read budget: " + relative)
+        body = stream.read(budget + 1)
+        if len(body) > budget:
+            raise ValueError("selected skill bootstrap source exceeds read budget: " + relative)
+        return body
+
+
+def _selected_read_verifier() -> Callable[[str, str], None]:
+    """先验证会执行的读取与身份来源，再返回供本页核对锁和目标的摘要校验器。"""
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate package provenance key: " + key)
+            result[key] = value
+        return result
+
+    source = json.loads(_selected_bootstrap_bytes("workflow-sources.json"), object_pairs_hook=unique_object)
+    metadata = json.loads(_selected_bootstrap_bytes("sources.json"), object_pairs_hook=unique_object)
+    workflow_files = _canonical_manifest_files(source)
+    if (not isinstance(metadata, dict) or type(metadata.get("schema_version")) is not int
+            or metadata["schema_version"] != 1 or metadata.get("product") != "workflow-core"
+            or metadata.get("host") not in ("codex", "claude", "antigravity")
+            or any(not isinstance(metadata.get(key), dict) for key in ("source_files", "payload_sha256"))):
+        raise ValueError("unsupported selected skill package provenance")
+
+    def verify_digest(relative: str, digest: str) -> None:
+        # 必须同时出现在原样来源、来源记录和实际载荷。缺项也视为来源不匹配，
+        # 锁与正文校验从读取器传回同一批字节的摘要，避免再次打开文件或混入替换版本。
+        if any(records.get(relative) != digest for records in
+               (workflow_files, metadata["source_files"], metadata["payload_sha256"])):
+            raise ValueError("selected skill package source digest mismatch: " + relative)
+
+    # 包初始化与身份声明也是实际导入闭包的一部分。必须在第一次导入产品模块或
+    # 读取器之前核验，避免篡改的别名模块将合法的 xy-taste 解析为另一篇合法正文。
+    for relative in ("plugins/source_pack.py", "lib/__init__.py", "lib/skills/__init__.py",
+                     "lib/skills/selected_skills.py", "lib/skills/role_skills.py", "product/__init__.py",
+                     "product/command_identity.py", "product/command_identity.json"):
+        verify_digest(relative, hashlib.sha256(_selected_bootstrap_bytes(relative)).hexdigest())
+    from product.command_identity import load_identity
+    if metadata.get("plugin_name") != load_identity(ROOT)["plugin_name"]:
+        raise ValueError("unsupported selected skill package provenance")
+    return verify_digest
+
+
 def verify() -> dict:
     """每次独立调用核对原样来源和装配结果；摘要只证明字节，不授予业务权限。"""
     source = _json("workflow-sources.json")
     metadata = _json("sources.json")
-    if set(source) != {"schema_version", "files"} or source["schema_version"] != 1:
-        raise ValueError("unsupported workflow-sources contract")
-    if not isinstance(source["files"], dict) or not source["files"]:
-        raise ValueError("workflow-sources files must be a nonempty object")
-    for relative, expected in source["files"].items():
+    for relative, expected in _canonical_manifest_files(source).items():
         if hashlib.sha256(_file(relative).read_bytes()).hexdigest() != expected:
             raise ValueError("canonical source digest mismatch: " + relative)
     for relative, expected in metadata["payload_sha256"].items():
@@ -132,8 +196,15 @@ def _dispatch_preferences(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(ROOT))
-    from product.command_identity import load_identity
+    argv = sys.argv[1:] if argv is None else argv
     try:
+        # 本命令无需从未经验证的身份模块解析 Playwright 命令名。先绑定分页实际
+        # 使用的来源，其他子命令继续走原有解析和全量验证入口。
+        if argv[:2] == ["selected-skills", "read"]:
+            verify_source = _selected_read_verifier()
+            from lib.skills.selected_skills import main as selected_main
+            return selected_main(argv[1:], root=ROOT, verify_source=verify_source)
+        from product.command_identity import load_identity
         identity = load_identity(ROOT)
         playwright_command = next(name for name, original in identity["skill_aliases"].items() if original == "playwright-cli")
     except (ValueError, OSError, StopIteration) as exc:
@@ -164,6 +235,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "dispatch-preferences":
             return _dispatch_preferences(args)
+        if args.command == "selected-skills":
+            verify()
+            from lib.skills.selected_skills import main as selected_main
+            return selected_main(args.arguments, root=ROOT)
         metadata = verify()
         if args.command == "xy-web-guidance":
             from lib.skills.modern_web_runtime import run as web_run
@@ -174,9 +249,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == playwright_command:
             from lib.skills.playwright_runtime import run as playwright_run
             return playwright_run(args.arguments, root=ROOT)
-        if args.command == "selected-skills":
-            from lib.skills.selected_skills import main as selected_main
-            return selected_main(args.arguments, root=ROOT)
         if args.command == "resource":
             # 历史受管路径只是只读逻辑别名；项目适配器绝不走这条映射。
             relative = args.path.removeprefix(".agent-workflow/")

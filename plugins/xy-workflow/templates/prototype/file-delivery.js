@@ -11,7 +11,8 @@
   const recovery = "交付目录未通过位置校验，请让Agent在当前目录重新执行prepare-delivery；当前画稿保留，目录与评审绑定已停用。";
   const filename = /^[a-z0-9][a-z0-9-]*\.html$/;
   if (!catalog || catalog.schema_version !== 1 || !Array.isArray(catalog.pages) || !catalog.pages.length || catalog.pages.length > 256
-    || !catalog.pages.every((entry) => filename.test(entry.name) && entry.name !== "index.html" && typeof entry.path === "string" && !entry.path.split("/").some((part) => part === ".." || !part) && entry.path.split("/").pop() === entry.name && typeof entry.label === "string" && entry.label.length <= 1024)
+    || !catalog.pages.every((entry) => filename.test(entry.name) && entry.name !== "index.html" && typeof entry.path === "string" && !entry.path.split("/").some((part) => part === ".." || !part) && entry.path.split("/").pop() === entry.name && typeof entry.label === "string" && entry.label.length <= 1024
+      && Array.isArray(entry.groups) && entry.groups.length <= 32 && entry.groups.every((group) => typeof group?.label === "string" && group.label.trim() && group.label.length <= 1024 && typeof group.open === "boolean"))
     || new Set(catalog.pages.map((entry) => entry.name)).size !== catalog.pages.length) { fail("交付目录无效，请重新准备交付入口。"); return; }
   // 摘要仅绑定当前文件所在目录，无机器绝对路径进入发现信息；不以旧软链推断新目录身份。
   // crypto缺失或失败必须关闭目录/评审能力，不能把可见原稿误称为旧项目的可信交付。
@@ -26,10 +27,11 @@
   // 只有file设计子页允许same-origin以加载相对资源；HTTP评审仍由原承载器严格allow-scripts。
   preview.setAttribute("sandbox", "allow-scripts allow-same-origin");
   let current = initial, nonce = "", readyTimer, cameraValue = null, closed = false;
-  const presentation = window.PrototypeCanvasPresentation.create({ viewport, world: $("canvas-world"), preview, entry: initial });
+  const presentation = window.PrototypeCanvasPresentation.create({ viewport, world: $("canvas-world"), preview,
+    toolbar: $("canvas-floating-controls"), entry: initial, onResize: () => camera.refresh() });
   const camera = window.PrototypeReviewCamera.create({ viewport, world: $("canvas-world"), read: () => cameraValue,
-    write: (value) => { cameraValue = value; }, dimensions: presentation.read, topInset: () => $("canvas-zoom-tools").offsetHeight + 28,
-    onApply: (value) => { $("canvas-zoom-reset").textContent = `${Math.round(value.k * 100)}%`; } });
+    write: (value) => { cameraValue = value; }, dimensions: presentation.read, readArea: presentation.readArea,
+    onApply: (value) => { $("canvas-zoom-reset").textContent = `${Math.max(1, Math.round(value.k * 100))}%`; } });
   function reviewURL(entry) {
     if (!directoryTrusted) return null;
     const binding = entry.binding;
@@ -60,21 +62,27 @@
     preview.src = url.href;
     const review = reviewURL(entry); if (review) { $("open-review").href = review; $("open-review").removeAttribute("aria-disabled"); }
     else { $("open-review").removeAttribute("href"); $("open-review").setAttribute("aria-disabled", "true"); }
-    for (const link of $("prototype-pages").querySelectorAll("a")) { if (link.dataset.page === entry.name) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
+    selectNavigation(entry.name);
     announce("正在载入当前原稿……"); readyTimer = setTimeout(() => fail("设计页通信超时，请重新准备交付入口后打开；原稿保持。"), 7000);
   }
   preview.addEventListener("load", () => { if (!closed && secureHandshake) preview.contentWindow.postMessage({ type: "xy-file:connect", page: current.name, nonce }, "*"); });
   window.addEventListener("message", (event) => { const data = event.data;
     if (closed || !secureHandshake || event.source !== preview.contentWindow || event.origin !== "null" || !data || data.page !== current.name || data.nonce !== nonce) return;
-    if (data.type === "xy-file:ready") { clearTimeout(readyTimer); preview.setAttribute("aria-busy", "false"); announce(!directoryTrusted ? recovery : reviewURL(current) ? "原稿可直接操作；已登记评审入口，当前连接未核验。连接失败时请让Agent重开本轮服务。" : "当前原稿可直接操作；评审尚未就绪，请运行本轮open后重新打开此文件。"); }
-    if (data.type === "xy-file:size" && current.display !== "responsive" && window.PrototypeCanvasPresentation.validSize(data)) { if (presentation.resize(data, true)) camera.fit(); }
-    if (data.type === "xy-file:contract") window.PrototypeCanvasPresentation.contract(data.sections);
+    if (data.type === "xy-file:ready") { clearTimeout(readyTimer); presentation.matchColorScheme(data.colorScheme); preview.setAttribute("aria-busy", "false"); announce(!directoryTrusted ? recovery : reviewURL(current) ? "原稿可直接操作；已登记评审入口，当前连接未核验。连接失败时请让Agent重开本轮服务。" : "当前原稿可直接操作；评审尚未就绪，请运行本轮open后重新打开此文件。"); }
+    if (data.type === "xy-file:size" && presentation.resize(data, true)) camera.refresh();
+    if (data.type === "xy-file:contract") {
+      // 文件路径只从位置校验通过的登记生成，并按路径段编码；跨目录链接不能由子页消息指定。
+      const parts = current.plan_source?.split("/");
+      const safe = directoryTrusted && parts?.every((part) => part && part !== "." && part !== ".." && !part.includes("\\")) && current.plan_source.endsWith(".md");
+      const path = safe ? "../".repeat(current.path.split("/").length - 1) + parts.map(encodeURIComponent).join("/") : null;
+      window.PrototypeCanvasPresentation.contract(data.sections, data.fragment, path && new URL(path, state.originalFileURL).href);
+    }
     if (data.type === "xy-file:navigate") { const entry = catalog.pages.find((entry) => entry.name === data.target); if (entry) navigate(entry); else announce("目标未登记，当前原稿保持。"); }
-    if (data.type === "xy-file:gesture") { if (data.gesture === "pan" && [data.dx, data.dy].every(Number.isFinite) && Math.abs(data.dx) < 10000 && Math.abs(data.dy) < 10000) camera.move(data.dx * cameraValue.k, data.dy * cameraValue.k);
+    if (data.type === "xy-file:gesture" && cameraValue) { if (data.gesture === "pan" && [data.dx, data.dy].every(Number.isFinite) && Math.abs(data.dx) < 10000 && Math.abs(data.dy) < 10000) camera.move(data.dx * cameraValue.k, data.dy * cameraValue.k);
       if (data.gesture === "zoom" && [data.factor, data.x, data.y].every(Number.isFinite) && data.factor >= .01 && data.factor <= 100) camera.zoom(data.factor, cameraValue.x + data.x * cameraValue.k, cameraValue.y + data.y * cameraValue.k); }
   });
-  for (const entry of catalog.pages) { const link = document.createElement("a"); link.textContent = entry.label; link.dataset.page = entry.name; link.href = new URL(entry.name, location.href).href;
-    link.addEventListener("click", (event) => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); closeNavigation(); navigate(entry); }); $("prototype-pages").append(link); }
+  const selectNavigation = window.PrototypeCanvasPresentation.navigation(catalog.pages,
+    (entry) => new URL(entry.name, state.originalFileURL).href, (entry) => { closeNavigation(); navigate(entry); });
   const toggle = $("navigation-toggle"), navigation = $("delivery-navigation");
   toggle.addEventListener("click", () => { navigation.hidden = !navigation.hidden; toggle.setAttribute("aria-expanded", String(!navigation.hidden)); });
   // 目录选择和 Esc 共用同一收起路径；只恢复工具按钮焦点，不干预 iframe 业务事件。
@@ -84,7 +92,7 @@
   $("developer-close").addEventListener("click", () => $("developer-dialog").close());
   $("open-review").addEventListener("click", (event) => { if (!reviewURL(current)) { event.preventDefault(); announce(directoryTrusted ? "评审尚未就绪，请运行本轮open后重新打开此文件。" : recovery); } });
   $("canvas-fit").addEventListener("click", camera.fit); $("canvas-zoom-out").addEventListener("click", () => camera.zoom(1 / 1.25));
-  $("canvas-zoom-in").addEventListener("click", () => camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", () => camera.zoom(1 / cameraValue.k));
+  $("canvas-zoom-in").addEventListener("click", () => camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", camera.resetZoom);
   window.addEventListener("pagehide", () => { closed = true; clearTimeout(readyTimer); presentation.close(); camera.close(); });
   navigate(initial);
 })();

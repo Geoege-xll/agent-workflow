@@ -7,7 +7,7 @@
 参数投影仍为 runtime 未验。此步骤不启动独立服务、不准备组件，显式维护分支不执行。
 
 - Light and Full implementation activate `$xy-workflow:xy-workflow`; Light does not require Full planning or a DAG.
-  Light requires minimum sufficient verification and assesses independent QA, documentation, and memory at handoff; Full retains established confirmation, planning, and independent QA.
+  Light requires minimum sufficient verification and assesses independent QA, documentation, and memory at handoff; Full retains planning and independent QA. For request scope, material solutions before dependent design or implementation, and concrete page decisions, use `product/WORKFLOW.md#business-confirmation-policy` and the shared PM confirmation reference.
 - Standalone read-only audits use WORKFLOW's matching branch and stop at the scoped conclusion,
   without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 - `$xy-workflow:xy-project-memory`: retrieve only needed cross-session/history facts; retain post-QA closeout.
@@ -55,13 +55,7 @@ A base argument alone is not an arbitrary pinned base/head pair, and a clean wor
 remove already committed request changes. Do not assume optional scope flags combine with custom
 instructions: use the installed version's supported syntax and reject scope mismatches.
 
-Bind root/nested-repository base/head, complete changed paths and dirty-diff fingerprints before and
-after review. Discard output if inputs changed, a nested repository was omitted or the native range
-cannot represent the request. Preserve native findings as general review evidence; the same QA
-verifies findings and adds only uncovered project-acceptance checks. Record actual capability,
-effective invocation, scope and result references in the existing `review_method`. Help output is
-capability discovery, never proof of a completed model review. If the current tool surface cannot
-invoke native review safely, record the technical reason and continue the existing method order.
+按[核对原生审查目标](../../shared/skills/xy-qa-review/references/inputs.md#核对原生审查目标)比对这些选项实际覆盖的差异。尤其留意 `--uncommitted` 读到同一文件中的其它改动，以及 `--base` 所解析的合并基点与冻结基点不同。没有精确入口就记录具体原因并依序回退。保留实际调用和结果，核对审查前后的冻结范围后，由同一 Reviewer 核实发现并补齐业务验收。参见 [Codex CLI 审查参数](https://developers.openai.com/codex/cli/reference/#codex-review)。
 
 ## Native Tool Short Path
 
@@ -93,6 +87,8 @@ In the actual target CLI and App, separately retain evidence for B delivery, wai
 the same ID without restart/duplicate dispatch, same-ID followup, and child lifecycle after parent final or
 interruption. A successful version probe/configuration projection proves none of these. Unknown cases remain
 `runtime_unverified`; do not assume final keeps children alive or proactively finish while coordination is needed.
+
+Codex 的每项独立设计／实现沿用同一任务池。先使用共享派发入口领取原件并导出当前包，然后 spawn；从该次返回取实际 ID 并用原领取回执执行 `pool bind`。同时发起多个独立任务时，各自匹配回执及实际 ID。宿主没有确认创建时按原释放／保留规则处理。
 
 Dispatch new schema 2 tasks through a schema_version: 2 single-task envelope containing only the current task, applicable standards_contract, and necessary approval/UI evidence, without copying complete PM or sibling conversations. Stable agent_alias binds project-relative module and canonical role; create new native instances/IDs on demand for independent tasks, without precreation or filling capacity. Tasks retain workflow_level, instance_policy: fresh, and context_policy: handoff_only. When the current tool is collaboration.spawn_agent, explicitly set `fork_turns: "none"`; other native entries must also prove independent initial context and receive only a self-contained current-task prompt. Report a blocker if unavailable rather than falling back to a parent-history fork. Current effective configuration still determines host permissions, model, and effort. Inspect the current native spawn schema for its supported role selector; `task_name` names the task and does not prove a `xy-*` descriptor, model, or effort was selected. Use a native role argument only when that current authorized surface actually exposes it. Do not report native role/model execution as verified from file parsing or a task label; preserve the existing dispatch flow and report the missing native selection evidence.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections.abc import Callable
 import hashlib
 import io
 import json
@@ -19,7 +20,12 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[2]
 VENDOR = "third_party/selected-skills"
 LOCK = "third_party/selected-skills.lock.json"
+DESKTOP_SKILL_ROOT = "skills/agent-desktop"
+DESKTOP_BINARIES = ("agent-desktop", "agent-desktop-macos-helper")
+DESKTOP_MACOS_TARGETS = {"arm64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"}
+DESKTOP_REFERENCES = ("commands-interaction.md", "commands-observation.md", "commands-system.md", "workflows.md")
 SPECS = {
+    "agent-desktop": {"repository": "https://github.com/vercel-labs/agent-desktop", "roots": [DESKTOP_SKILL_ROOT, "runtime/macos"], "license": "LICENSE", "skills": {"agent-desktop": DESKTOP_SKILL_ROOT + "/SKILL.md"}},
     "modern-web-guidance": {"repository": "https://github.com/GoogleChrome/modern-web-guidance-src", "roots": ["runtime"], "license": "runtime/LICENSE", "skills": {"modern-web-guidance": "runtime/skills/modern-web-guidance/SKILL.md"}},
     "grill-me": {"repository": "https://github.com/mattpocock/skills", "roots": ["skills/productivity/grill-me", "skills/productivity/grilling"], "license": "LICENSE", "skills": {"grill-me": "skills/productivity/grill-me/SKILL.md", "grilling": "skills/productivity/grilling/SKILL.md"}},
     "taste": {"repository": "https://github.com/Leonxlnx/taste-skill", "roots": ["skills/taste-skill"], "license": "LICENSE", "skills": {"design-taste-frontend": "skills/taste-skill/SKILL.md"}},
@@ -38,7 +44,7 @@ def canonical(value: str) -> str:
 
 
 def read_regular(root: Path, relative: str, *, max_bytes: int | None = None,
-                 expected_stat: tuple[int, ...] | None = None) -> bytes:
+                 expected_stat: tuple[int, ...] | None = None, expected_mode: int | None = None) -> bytes:
     """逐级使用不跟随链接的目录描述符，避免校验后路径被换成软链的时间窗口。
 
     不执行上游代码。硬链接亦拒绝，确保依赖闭包不能借外部共享inode改变内容。
@@ -56,6 +62,9 @@ def read_regular(root: Path, relative: str, *, max_bytes: int | None = None,
             info = os.fstat(file_descriptor)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise ValueError("selected skill resource must be a single-link regular file: " + relative)
+            # 发行锁中的执行位与正文必须指向同一打开文件，避免另从路径检查到替换后的文件。
+            if expected_mode is not None and stat.S_IMODE(info.st_mode) != expected_mode:
+                raise ValueError("selected skill mode mismatch: " + relative)
             identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
             if expected_stat is not None and identity(info) != expected_stat:
                 raise ValueError("resource identity changed before read: " + relative)
@@ -68,9 +77,13 @@ def read_regular(root: Path, relative: str, *, max_bytes: int | None = None,
                 if max_bytes is not None and total > max_bytes:
                     raise ValueError("resource exceeds read budget: " + relative)
                 chunks.append(chunk)
-            # Apple按需引用采用打开的同一inode验证，避免lstat与open之间换文件后混入正文。
-            if expected_stat is not None and identity(os.fstat(file_descriptor)) != expected_stat:
-                raise ValueError("resource identity changed during read: " + relative)
+            if expected_stat is not None or expected_mode is not None:
+                final_info = os.fstat(file_descriptor)
+                # Apple 按需引用仍验证原 inode；桌面程序另拒绝读取期间丢失锁定执行位。
+                if expected_stat is not None and identity(final_info) != expected_stat:
+                    raise ValueError("resource identity changed during read: " + relative)
+                if expected_mode is not None and stat.S_IMODE(final_info.st_mode) != expected_mode:
+                    raise ValueError("selected skill mode mismatch: " + relative)
             return b"".join(chunks)
         finally:
             os.close(file_descriptor)
@@ -96,40 +109,88 @@ def scan(root: Path) -> set[str]:
     return files
 
 
-def validate_lock(lock: dict) -> dict:
-    """来源与闭包形状封闭校验；更新commit仍须显式维护，不接受任意依赖或destination。"""
+def _lock_dependencies(lock: dict) -> dict:
+    """全量核验与分段读取共用同一个锁版本和依赖集合。"""
     if not isinstance(lock, dict) or set(lock) != {"schema_version", "dependencies"} or type(lock["schema_version"]) is not int or lock["schema_version"] != 1:
         raise ValueError("unsupported selected skill lock")
     dependencies = lock["dependencies"]
     if not isinstance(dependencies, dict) or set(dependencies) != set(SPECS):
         raise ValueError("selected dependencies must match the fixed source registry")
-    for name, spec in SPECS.items():
-        item = dependencies[name]
-        fields = set(spec) | {"commit", "files"} | ({"packages"} if name == "playwright-cli" else {"package"} if name == "modern-web-guidance" else set())
-        if not isinstance(item, dict) or set(item) != fields:
-            raise ValueError("invalid dependency contract: " + name)
-        if any(item[k] != v for k, v in spec.items()) or not isinstance(item["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", item["commit"]):
-            raise ValueError("invalid fixed source or dependency closure: " + name)
-        files = item["files"]
-        if not isinstance(files, dict) or not files or not {spec["license"], *spec["skills"].values()} <= set(files):
-            raise ValueError("selected dependency is missing required entries: " + name)
+    return dependencies
+
+
+def _dependency_files(name: str, item: dict) -> dict:
+    spec = SPECS[name]
+    provenance = {"playwright-cli": {"packages"}, "modern-web-guidance": {"package"}, "agent-desktop": {"release"}}
+    fields = set(spec) | {"commit", "files"} | provenance.get(name, set())
+    if not isinstance(item, dict) or set(item) != fields:
+        raise ValueError("invalid dependency contract: " + name)
+    if any(item[k] != v for k, v in spec.items()) or not isinstance(item["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", item["commit"]):
+        raise ValueError("invalid fixed source or dependency closure: " + name)
+    files = item["files"]
+    if not isinstance(files, dict) or not {spec["license"], *spec["skills"].values()} <= files.keys():
+        raise ValueError("selected dependency is missing required entries: " + name)
+    return files
+
+
+def _validate_file_record(name: str, relative: str, record: dict) -> None:
+    spec = SPECS[name]
+    canonical(relative)
+    if relative != spec["license"] and not any(relative.startswith(p + "/") for p in spec["roots"]):
+        raise ValueError("file is outside selected upstream closure: " + relative)
+    if (not isinstance(record, dict) or set(record) not in ({"sha256", "size"}, {"sha256", "size", "mode"})
+            or not isinstance(record["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
+            or type(record["size"]) is not int or record["size"] < 0):
+        raise ValueError("invalid selected file digest: " + relative)
+    if "mode" in record and (name not in {"playwright-cli", "modern-web-guidance", "agent-desktop"}
+                             or type(record["mode"]) is not int or record["mode"] not in {0o644, 0o755}):
+        raise ValueError("invalid selected resource mode: " + relative)
+    if name == "playwright-cli" and "mode" not in record:
+        raise ValueError("Playwright file modes must be locked")
+
+
+def validate_lock(lock: dict) -> dict:
+    """来源与闭包形状封闭校验；更新commit仍须显式维护，不接受任意依赖或destination。"""
+    for name, item in _lock_dependencies(lock).items():
+        files = _dependency_files(name, item)
         for relative, record in files.items():
-            canonical(relative)
-            if relative != spec["license"] and not any(relative.startswith(p + "/") for p in spec["roots"]):
-                raise ValueError("file is outside selected upstream closure: " + relative)
-            if (not isinstance(record, dict) or set(record) not in ({"sha256", "size"}, {"sha256", "size", "mode"})
-                    or not isinstance(record["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
-                    or type(record["size"]) is not int or record["size"] < 0):
-                raise ValueError("invalid selected file digest: " + relative)
-            if "mode" in record and (name not in {"playwright-cli", "modern-web-guidance"} or type(record["mode"]) is not int or record["mode"] not in {0o644, 0o755}):
-                raise ValueError("invalid selected resource mode: " + relative)
-            if name == "playwright-cli" and "mode" not in record:
-                raise ValueError("Playwright file modes must be locked")
+            _validate_file_record(name, relative, record)
         if name == "playwright-cli":
             validate_playwright_packages(item)
         elif name == "modern-web-guidance":
             validate_modern_web_package(item)
+        elif name == "agent-desktop":
+            _validate_desktop_release(item["commit"], item["release"])
+            runtime = {f"runtime/macos/{arch}/{binary}" for arch in DESKTOP_MACOS_TARGETS for binary in DESKTOP_BINARIES}
+            docs = {"LICENSE", SPECS[name]["skills"][name],
+                    *(f"{DESKTOP_SKILL_ROOT}/references/{reference}" for reference in DESKTOP_REFERENCES)}
+            if (files.keys() != runtime | docs or any(files[path].get("mode") != 0o755 for path in runtime)
+                    or any(files[path].get("mode", 0o644) != 0o644 for path in docs)):
+                raise ValueError("agent-desktop requires the original Skill, four references, license and both executable pairs")
     return lock
+
+
+def _validate_desktop_release(commit: str, release: dict) -> None:
+    """显式维护使用完整提交和固定发行资产，拒绝替换仓库、架构或下载名称。"""
+    if not isinstance(release, dict) or set(release) != {"tag", "url", "source_archive", "assets"}:
+        raise ValueError("invalid agent-desktop release provenance")
+    tag, assets = release["tag"], release["assets"]
+    repository = SPECS["agent-desktop"]["repository"]
+    if (not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)
+            or release["url"] != repository + "/releases/tag/" + tag
+            or not isinstance(assets, dict) or assets.keys() != DESKTOP_MACOS_TARGETS.keys()):
+        raise ValueError("agent-desktop requires one exact official release and both macOS architectures")
+    expected = [(release["source_archive"], "https://codeload.github.com/vercel-labs/agent-desktop/tar.gz/" + commit)]
+    for arch, target in DESKTOP_MACOS_TARGETS.items():
+        expected.append((assets[arch], f"{repository}/releases/download/{tag}/agent-desktop-{tag}-{target}.tar.gz"))
+    for record, url in expected:
+        if (not isinstance(record, dict) or set(record) != {"url", "sha256", "compressed_bytes"}
+                or record["url"] != url or not isinstance(record["sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
+                or type(record["compressed_bytes"]) is not int or record["compressed_bytes"] <= 0):
+            raise ValueError("invalid agent-desktop official archive metadata")
+    if len({record["sha256"] for record, _ in expected}) != len(expected):
+        raise ValueError("agent-desktop source and architecture archives must be distinct")
 
 
 def validate_playwright_packages(item: dict) -> None:
@@ -297,19 +358,23 @@ def _load_playwright_archives(manifest: dict, archives: list[Path]) -> tuple[dic
     return item, files
 
 
-def load_git_archive(dependency: str, ref: str, archive: Path) -> tuple[dict, dict[str, bytes], str, int]:
+def load_git_archive(dependency: str, ref: str, archive: Path, *, archive_record: dict | None = None) -> tuple[dict, dict[str, bytes], str, int]:
     """Git子树选择与npm完整图各有格式责任，共享规范路径/普通文件/锁校验owner。
 
     整个归档均拒绝危险或重复路径；闭包外链接不解析/不提取，避免把上游仓库的
     AGENTS别名当依赖。选中闭包的链接和特殊节点仍明确失败。
     """
-    if dependency not in {"grill-me", "taste"}:
+    archive_prefixes = {"grill-me": "skills-", "taste": "taste-skill-", "agent-desktop": "agent-desktop-"}
+    if dependency not in archive_prefixes:
         raise ValueError("Git archive supports only the selected Git dependencies")
-    body = read_regular(archive.parent, archive.name)
-    if len(body) > 200 * 1024 * 1024:
-        raise ValueError("archive exceeds selected dependency review budget")
+    body = read_regular(archive.parent, archive.name, max_bytes=200 * 1024 * 1024)
+    digest = hashlib.sha256(body).hexdigest()
+    if archive_record is not None and (len(body) != archive_record["compressed_bytes"] or digest != archive_record["sha256"]):
+        raise ValueError("selected Git source archive integrity mismatch")
     spec, files, seen = SPECS[dependency], {}, set()
-    archive_root = ("skills-" if dependency == "grill-me" else "taste-skill-") + ref
+    archive_root = archive_prefixes[dependency] + ref
+    # agent-desktop 的运行文件只能来自发行包；同名 Git 子树不能替换官方二进制。
+    selected_roots = [DESKTOP_SKILL_ROOT] if dependency == "agent-desktop" else spec["roots"]
     expanded, ignored = 0, 0
     with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as stream:
         for entry in stream:
@@ -322,7 +387,7 @@ def load_git_archive(dependency: str, ref: str, archive: Path) -> tuple[dict, di
             if entry.isdir():
                 continue
             relative = name.removeprefix(archive_root + "/")
-            included = relative == spec["license"] or any(relative.startswith(root + "/") for root in spec["roots"])
+            included = relative == spec["license"] or any(relative.startswith(root + "/") for root in selected_roots)
             if not entry.isfile():
                 if included:
                     raise ValueError("selected archive links and special entries are forbidden")
@@ -334,7 +399,36 @@ def load_git_archive(dependency: str, ref: str, archive: Path) -> tuple[dict, di
             if included:
                 files[relative] = stream.extractfile(entry).read()
     inventory = {name: {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()} for name, data in sorted(files.items())}
-    return {**spec, "commit": ref, "files": inventory}, files, hashlib.sha256(body).hexdigest(), ignored
+    return {**spec, "commit": ref, "files": inventory}, files, digest, ignored
+
+
+def load_agent_desktop_archives(ref: str, release: dict, archives: list[Path]) -> tuple[dict, dict[str, bytes], int]:
+    """从按源码、arm64、x86_64 排列的三个审阅归档读取原字节，不解压到磁盘或执行程序。"""
+    if len(archives) != 1 + len(DESKTOP_MACOS_TARGETS):
+        raise ValueError("agent-desktop update requires source, arm64 and x86_64 archives in that order")
+    _validate_desktop_release(ref, release)
+    item, files, _, ignored = load_git_archive("agent-desktop", ref, archives[0], archive_record=release["source_archive"])
+    records = item["files"]
+    for arch, archive in zip(DESKTOP_MACOS_TARGETS, archives[1:], strict=True):
+        asset = release["assets"][arch]
+        raw = read_regular(archive.parent, archive.name, max_bytes=30 * 1024 * 1024)
+        if len(raw) != asset["compressed_bytes"] or hashlib.sha256(raw).hexdigest() != asset["sha256"]:
+            raise ValueError("agent-desktop release archive integrity mismatch: " + arch)
+        seen = set()
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as stream:
+            for entry in stream:
+                # 两个同目录的普通可执行文件构成完整运行闭包，不能引入链接或安装脚本。
+                if (entry.name not in DESKTOP_BINARIES or entry.name in seen or not entry.isfile()
+                        or entry.mode != 0o755 or not 0 < entry.size <= 30 * 1024 * 1024):
+                    raise ValueError("unexpected agent-desktop archive entry: " + entry.name)
+                seen.add(entry.name)
+                relative = f"runtime/macos/{arch}/{entry.name}"
+                body = stream.extractfile(entry).read()
+                files[relative] = body
+                records[relative] = {"sha256": hashlib.sha256(body).hexdigest(), "size": len(body), "mode": entry.mode}
+        if seen != set(DESKTOP_BINARIES):
+            raise ValueError("agent-desktop archive is missing the CLI or helper: " + arch)
+    return {**item, "release": release}, files, ignored
 
 
 def unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -357,7 +451,9 @@ def snapshot(root: Path = ROOT) -> tuple[dict, dict[str, bytes]]:
     for name, item in lock["dependencies"].items():
         for relative, record in item["files"].items():
             path = VENDOR + "/" + name + "/" + relative
-            body = read_regular(root, path)
+            # 锁已限制 agent-desktop 的 0755 只属于两套 CLI/helper；其余依赖仍按原规则读取。
+            expected_mode = 0o755 if name == "agent-desktop" and record.get("mode") == 0o755 else None
+            body = read_regular(root, path, expected_mode=expected_mode)
             if len(body) != record["size"] or hashlib.sha256(body).hexdigest() != record["sha256"]:
                 raise ValueError("selected skill digest mismatch: " + path)
             result[path] = body
@@ -390,13 +486,31 @@ def skill_path(name: str) -> str:
     raise ValueError("unknown selected skill")
 
 
-def read_chunk(files: dict[str, bytes], name: str, offset: int, length: int) -> dict:
-    """返回原文连续字节区间，UTF-8跨块边界不能丢字符；调用者以next_offset续读。"""
+def read_selected_chunk(root: Path, name: str, offset: int, length: int, *,
+                        verify_source: Callable[[str, str], None] | None = None) -> dict:
+    """读取指定上游正文的一页；锁、正文各读取一次，包内调用同时校验发行清单摘要。
+
+    条目归属固定在 SPECS，每页重新绑定原文摘要。调用者只有在各页摘要相同、
+    offset 与上一页 next_offset 相接时才能拼接，显式 check 仍检查完整依赖闭包。
+    """
     path = skill_path(name)
-    return read_bytes_chunk(files[path], path, offset, length)
+    dependency, relative = path.removeprefix(VENDOR + "/").split("/", 1)
+    raw_lock = read_regular(root, LOCK, max_bytes=16 * 1024 * 1024)
+    if verify_source is not None:
+        verify_source(LOCK, hashlib.sha256(raw_lock).hexdigest())
+    item = _lock_dependencies(json.loads(raw_lock, object_pairs_hook=unique_object))[dependency]
+    record = _dependency_files(dependency, item)[relative]
+    _validate_file_record(dependency, relative, record)
+    body = read_regular(root, path, max_bytes=record["size"])
+    digest = hashlib.sha256(body).hexdigest()
+    if len(body) != record["size"] or digest != record["sha256"]:
+        raise ValueError("selected skill digest mismatch: " + path)
+    if verify_source is not None:
+        verify_source(path, digest)
+    return read_bytes_chunk(body, path, offset, length, digest=digest)
 
 
-def read_bytes_chunk(body: bytes, path: str, offset: int, length: int) -> dict:
+def read_bytes_chunk(body: bytes, path: str, offset: int, length: int, *, digest: str | None = None) -> dict:
     """已绑定来源的原文字节共用同一个连续UTF-8读取合同。"""
     body.decode("utf-8")
     if offset < 0 or offset > len(body) or length < 4 or length > 16000:
@@ -413,7 +527,7 @@ def read_bytes_chunk(body: bytes, path: str, offset: int, length: int) -> dict:
             break
         except UnicodeDecodeError:
             end -= 1
-    return {"path": path, "sha256": hashlib.sha256(body).hexdigest(), "total_bytes": len(body), "offset": offset,
+    return {"path": path, "sha256": digest if digest is not None else hashlib.sha256(body).hexdigest(), "total_bytes": len(body), "offset": offset,
             "next_offset": end, "content": content, "eof": end == len(body)}
 
 
@@ -433,22 +547,25 @@ def diagnose() -> dict:
     return {"node": {"path": node, "version": version, "ready": bool(match and int(match[1]) >= 22)}, "browser": {"path": browser, "ready": bool(browser)}, "ffmpeg_optional": shutil.which("ffmpeg"), "upstream_scripts_executed": False, "host_invocation_verified": False}
 
 
-def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
+def main(argv: list[str] | None = None, *, root: Path = ROOT,
+         verify_source: Callable[[str, str], None] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check")
     commands.add_parser("diagnose")
     read = commands.add_parser("read")
-    read.add_argument("skill", help="public xy alias or canonical upstream skill name")
+    read.add_argument("skill", help="public alias or canonical upstream skill name")
     read.add_argument("--offset", type=int, default=0)
     read.add_argument("--length", type=int, default=12000)
     args = parser.parse_args(argv)
     try:
-        lock, files = snapshot(root)
-        result = {"integrity": "verified", "dependencies": {name: {"commit": item["commit"], "file_count": len(item["files"])} for name, item in lock["dependencies"].items()}, "upstream_scripts_executed": False}
         if args.command == "read":
-            result = read_chunk(files, args.skill, args.offset, args.length)
-        elif args.command == "diagnose":
+            result = read_selected_chunk(root, args.skill, args.offset, args.length, verify_source=verify_source)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        lock, _ = snapshot(root)
+        result = {"integrity": "verified", "dependencies": {name: {"commit": item["commit"], "file_count": len(item["files"])} for name, item in lock["dependencies"].items()}, "upstream_scripts_executed": False}
+        if args.command == "diagnose":
             if __package__:
                 from .playwright_runtime import doctor
             else:

@@ -31,11 +31,14 @@ branches, or add confirmation.
   scope. Top-of-page layout explanations, actual display mode/dimensions, and contract records must agree.
 - Arrange each concrete HTML vertically: current page name and compact summary
   → high-fidelity product view → requirements Markdown, optional historical HTML, platform/dimensions,
-  and necessary demo explanations → a five-section contract collapsed by default. The single
+  and necessary demo explanations → developer notes collapsed by default. The single
   nav.prototype-requirement-links requires one explicit markdown link and allows one html link only
   when the corresponding historical file exists; the body's data-prototype-plan-source binds the
   canonical Markdown under the configured plans directory. Every document link opens independently
   with target="_blank" and rel containing noopener. Plan Markdown-to-HTML generation is retired.
+  当某个界面主要说明一条已存在的规则时，需求链接可指向这份 Markdown 的实际章节或显式锚点。
+  同页覆盖多条规则时可链接共同的规则章节。设计先行时等 PM 确认原稿位置再关联。
+  用户界面保持实际业务文案，需求编号、开发约束和验证说明归入页面的交付说明。
   Leave unbound templates empty without fabricated links. The iOS/PC product area is a horizontally
   centered fixed artboard; the Web product area defaults to a naturally expanding responsive webpage.
   The contract area stays outside the product area and is collapsible by default; it does not consume
@@ -44,7 +47,7 @@ branches, or add confirmation.
   navigation, and contract area are not part of the product interface. Do not require wallpaper or
   generate background images. The artboard contains only the current page's product interface and
   its interactions.
-- 原稿页标题、说明、需求导航与五节契约保持在产品插槽之外。具体 `file://` HTML 是完整交付入口，目录来自项目公开 catalog，当前页按真实文件名选择，不用单一 active_request 覆盖其他请求页。唯一 delivery.html shell 投影到中央经典脚本，项目不手抄工具或业务 HTML。file 顶层在业务执行前装配唯一壳，一层独立设计 iframe 执行业务一次；仅此 file 分支允许 allow-scripts allow-same-origin，支持相对业务资源。HTTP 评审仍仅 allow-scripts。公开 binding 无 token，只用于 noopener 同页评审引导；file 不建立控制连接或拿 token。准备或 binding 失效准确提示交付方重跑显式 prepare-delivery／open，不猜端口、不冷启动、不虚称 ready。原稿不写机器路径、端口、认证或动态 review_id。父子同时验证准确 window、page、nonce 和 null origin；HTTP 引导须独立核验顶层导航并仅在响应内提供秘密。产品导航、滚动与浮层仍属于产品区；评审时按提示修饰键临时操作，释放回批注。真实 dialog／popover 在父画布保持可选择与可标注。完整 file 交付壳的目录与相机工具浮于画布，不挤占产品画面，不再显示旧大标题背景；五段契约保留原稿结构，在交付壳以大弹窗查看。下述原稿的自然阅读顺序不要求工具壳重复展示整段说明。详见反馈合同。
+- 原稿页标题、说明、需求导航与开发说明保持在产品插槽之外。具体 `file://` HTML 是完整交付入口，目录来自项目公开 catalog，当前页按真实文件名选择，不用单一 active_request 覆盖其他请求页。唯一 delivery.html shell 投影到中央经典脚本，项目不手抄工具或业务 HTML。file 顶层在业务执行前装配唯一壳，一层独立设计 iframe 执行业务一次；仅此 file 分支允许 allow-scripts allow-same-origin，支持相对业务资源。HTTP 评审仍仅 allow-scripts。公开 binding 无 token，只用于 noopener 同页评审引导；file 不建立控制连接或拿 token。准备或 binding 失效准确提示交付方重跑显式 prepare-delivery／open，不猜端口、不冷启动、不虚称 ready。原稿不写机器路径、端口、认证或动态 review_id。父子同时验证准确 window、page、nonce 和 null origin；HTTP 引导须独立核验顶层导航并仅在响应内提供秘密。产品导航、滚动与浮层仍属于产品区；评审时按提示修饰键临时操作，释放回批注。真实 dialog／popover 在父画布保持可选择与可标注。完整 file 交付壳的目录与相机工具浮于画布，不挤占产品画面，不再显示旧大标题背景；开发说明保留在原稿，在交付壳以大弹窗查看。下述原稿的自然阅读顺序不要求工具壳重复展示整段说明。详见反馈合同。
 - First determine platform and layout scope from the current task and project design standards.
   For fixed previews, reuse existing baseline dimensions first; if no baseline exists, choose and
   explicitly explain one. Responsive Web needs no invented fixed dimensions. Keep previews consistent
@@ -66,10 +69,10 @@ branches, or add confirmation.
   proportional scaling without stretching, changing aspect ratio, or clipping necessary actions.
   Long product content scrolls in designated areas inside the artboard; top bars, bottom bars, and
   in-page overlays use the artboard as their layout boundary instead of the entire browser window.
-- Keep the contract's existing five sections. In `purpose`, record the target platform and display
-  mode in English; for fixed previews, also record the baseline device/window, width/height, and
-  scaling explanation; for responsive Web, record applicable layout scope. Product copy follows the
-  project language; do not add contract sections, separate explanatory documents, or screenshots.
+- 将平台及画板尺寸保留在既有页面展示元数据。UI Agent 在原稿的「开发说明」中只写已确认且开发者无法从操作中确定的行为。
+  有现成规则时链接需求原章节；普通跳转、可见状态不用重复。允许空说明，未决规则交 PM。
+  原稿带有已确认目录分组时在 body 使用 `data-prototype-group="端/模块"`。旧稿也可用 `prepare-delivery --group "端/模块" --pages …`
+  按已核对清单登记；保留当前分组，缺少依据的页面保持可达，不另建 Manifest。
 - Fixed dimensions constrain only the prototype preview, not the actual product's multi-device
   adaptation, Web responsiveness, or client-window resizing. Add no confirmation stages, automated
   browser operations, or QA process. Apply only to the currently authorized prototype task without
