@@ -57,12 +57,14 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
 
 确保回执为 `state: BUILD_VERIFIED`、`active: false`，再进入现有独立 QA 或仅原型交付。原型继续按规则交付具体 HTML，取得并保留对当前页面的用户确认。若 SHA 已变化，先回读当前原件并重新核对结果。证据缺失、验证失败或回查失败时，保留任务及证据，以当前原件为准。已经准备的旧更新补丁仍可走正式 `task_graph_cli.py update`。
 
-Full: classify → facts → Grill Me coverage through original `/xy-grilling` → `xy-plan` draft → projection decision →
+Full: classify → record planning coverage from established facts → `xy-plan` draft → projection decision →
 `requirements_approved`. Grill Me remains requirements-only. For applicable solution and page decisions follow `product/WORKFLOW.md#business-confirmation-policy` and the shared PM confirmation reference. Confirm the material solution before dispatching dependent design or implementation. Retain the user’s applicable prototype choice and the last accepted baseline until QA PASS.
-`/xy-grill-me` is user-invoked only; use the actually discovered plugin-qualified `/xy-grilling` for PM intake.
+Classify an explicitly delegated implementation directly as Light or Full when scope, impact and acceptance
+are clear. Use the discovered plugin-qualified `/xy-grilling` only for a material gap in the deliverable, scope, impact or acceptance.
+`/xy-grill-me` is user-invoked only.
 Read xy-workflow/references/requirements-intake.md for the PM-owned schema and canonical fallback;
 declared skills paths do not prove runtime loading.
-Full work records the Grill Me coverage check and `plan_state: draft`; the pre-approval projection
+Full work records planning coverage and `plan_state: draft`; the pre-approval projection
 decision remains a draft, while post-QA controlled-document projection happens only after QA PASS.
 PM 在首次设计或实现派发前保存单一可恢复的 Full 批准稿，按计划生命周期选择稳定主题或现有持久请求交接。原型绑定配置的 `docs.plans` 内稳定原稿与当前 REQ。
 Light saves only for actual pause/recovery/handoff or user request.
@@ -137,7 +139,7 @@ Dispatch only current schema_version: 2 single-task packs: task, applicable stan
 
 Continuous same-task implementation, recent short rework, and same-round Reviewer delta checks may follow up to the original ID. After the feedback window, PM acceptance, and necessary verification/QA, first protect temporary-worktree results, unique logs, and necessary evidence, then use the currently exposed authorized native termination capability. Official kill removes temporary worktrees and prevents recovery while retaining historical transcripts; never kill before retrieving the only delivery, or claim permanent history deletion. Without native capabilities such as manage_subagents kill, or if invocation fails, only record agent_retired and prohibit continuation, with native termination unconfirmed; do not claim destruction, context clearing, or thread-capacity release. Retirement releases no still-running task locks. Observe running/open-thread counts separately under actual host definitions; under pressure reclaim accepted instances with sufficient handoff first, retain executing instances, undelivered evidence, and necessary reviewers, and reserve later necessary QA/integration capacity. resume/compact is not prepareForReuse; create no Agent pool, runner, daemon, or second state machine.
 
-Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe-version` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace PM coverage through bundled `grilling` or change aliases.
+Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe-version` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace the bundled `grilling` primitive or change aliases.
 
 普通非 UI 的 Light 修复从[完整单包示例](../../shared/skills/xy-workflow/references/dispatch.md#light-non-ui-pack)填写原件。PM 从当前宿主取得真实父会话 UUID，以 `--pm-id antigravity:<UUID>` 执行共享派发说明中的 `pool claim`。每个独立任务分别领取，然后只用它自己的领取回执生成初始交接：
 
@@ -163,8 +165,12 @@ See `xy-qa-review/references/inputs.md` for structured QA output: when supported
 
 - PM 可通过原生工具读取工作区，直接核对角色与当前任务，调用原生派发、消息和等待。终端可分别运行 `pwd`、`git status --short`、`git diff --stat`、`rg -n`、`sed -n '1,80p'` 等只读命令。使用实际工作区的物理绝对路径。只有一个工作区时可使用相对路径。
 - PM 用固定包内命令 `bash <插件绝对路径>/lib/python_runtime.sh -B -X utf8 <插件绝对路径>/plugins/source_pack.py helper --project <项目绝对路径> lib/task_graph_cli.py scratch --root <项目绝对路径> --request-id <请求ID>` 分配本次目录。从输出取 `scratch_dir`，用原生 `write_file` 在其中准备任务包、方案输入和验收资料。沿用同一个包内入口执行 `pool claim --register`、`task` 导出和 `pool bind`，将实际领取回执重定向到该目录内的具体文件。将示例占位符、变量换为真实值。派发角色和原样 marker 的完整步骤见上文及随包 `skills/xy-workflow/references/dispatch.md`。
-- AGY 的 `scratch_dir` 位于本项目 `.awf/agy-requests/request-<请求摘要>/`。PM 和工作者在宿主默认工作区内即可交接；该目录自带局部 Git 忽略规则。使用实际返回路径。仍登记的原件须在清理时显式 `--keep`；按既有规则归档后再清理时，保留仍被验收回执引用的原件与证据。
+- AGY 的 `scratch_dir` 位于本项目 `.awf/agy-requests/request-<请求摘要>/`。PM 和工作者在宿主默认工作区内即可交接；该目录自带局部 Git 忽略规则。使用实际返回路径。已登记请求使用当前 PM 身份和原请求 ID 预览、清理。保留登记直到清理结束，原件及其引用的验收与终态证据自动保留。原件之外的必要证据用 `--keep` 指定。
 - 新项目先用同一包的 `plugins/project_context.py inspect`，需要建立适配器时调用 `apply --adapter .awf/project.yaml`。PM 可以写入所选唯一适配器指明的 PROJECT、同目录 ARCHITECTURE 及计划目录内的 Markdown，也可以准备当前会话的任务、实施计划和交接 Artifact。规范正文与实现者的其他资源仍按原有所有权和阶段处理。
 - 用户当前原话明确指定执行者，例如“这次由主会话亲自改”，在单工作区仅对当前用户轮次生效。指明具体相对文件的“请 PM 本人直接修改 total.py”仅对该文件生效。后续普通委托恢复默认分工。按现有 WORKFLOW 执行请求范围、验证及独立 QA。
 - 实现者以当前领取、原生父子会话、执行目录及原件中的 `owned_paths` 核对编辑范围。若实现者先于 PM 绑定开始编辑，使用同一原生创建回执核对。QA 和只读任务使用原生读取和只读核验。原任务已明确登记的常规测试命令可由 PM 或当前实现者从对应工作区运行。Xcode 工程或 workspace 的设备及 Simulator 构建需同时匹配已发现的本地工程、共享 scheme、固定目标和登记的完整参数。workspace 的每条直接工程引用都须指向同模块内真实存在、无符号链接的工程文件。忽略目录内明确引用的本地依赖仍可验证其确切路径。测试内部的项目代码继续由宿主沙箱管理。
 - 常用的纯只读命令可以用 `&&` 或管道组合，每一段分别核对。带写入的复合命令、变量展开、任意解释器程序和交互式终端输入无法在执行前确定目标。可使用原生文件工具进行任务内编辑，将读取、派工、验收分别写为独立调用。新工具、第三方 MCP、外部进程以及工具执行后的文件系统副作用不在这些原生入口的覆盖范围。
+
+
+已验收的实例按[共用收口入口](../../shared/skills/xy-workflow/references/closeout.md#回收已验收的原生实例)
+核对当前请求、证据保全和精确原生 ID，再用当前会话实际提供的工具处理。 AGY 的精确 kill 可能删除临时工作树。先把实际交付、唯一日志和验收证据保存在该工作树之外，再根据原生终止结果登记。若工具会移除任务池仍须核对的固定执行根，先保留该根；只能安全退役时使用退役流程。

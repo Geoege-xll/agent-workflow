@@ -842,6 +842,49 @@ def _check_scratch_names(descriptor: int, expected: set[str], relative: str) -> 
         raise TaskGraphError(f"scratch directory entries changed while cleaning: {relative or '.'}")
 
 
+def _snapshot_keep_name(parent, slot, relative, entries):
+    """把保留项绑定到快照中的目录项。名称不同必须由同一固定父目录的实际查找证明。"""
+    if relative in entries and stat.S_ISREG(entries[relative]["metadata"][2]):
+        return relative
+    error = f"scratch keep path must be an existing regular file without linked ancestors: {relative}"
+    if "" not in entries:
+        raise TaskGraphError(error)
+    with ExitStack() as stack:
+        directory = stack.enter_context(_scratch_directory(slot, parent=parent))
+        current = ""
+        parts = PurePosixPath(relative).parts
+        for index, part in enumerate(parts):
+            entry = entries[current]
+            if _scratch_metadata(os.fstat(directory)) != entry["metadata"]:
+                raise TaskGraphError(f"scratch directory changed while resolving keep: {current or '.'}")
+            try:
+                metadata = _scratch_metadata(os.stat(part, dir_fd=directory, follow_symlinks=False))
+            except FileNotFoundError as exc:
+                raise TaskGraphError(error) from exc
+            prefix = current + "/" if current else ""
+            selected = prefix + part
+            if selected not in entries:
+                # 同目录硬链接可共享全部元数据，不能任选其一。只有内核确认的同一节点
+                # 且名称拼写可唯一对应才采纳；敏感卷上不存在的拼写在上面的 stat 即拒绝。
+                aliases = [prefix + name for name in entry["children"]
+                           if entries[prefix + name]["metadata"] == metadata
+                           and unicodedata.normalize("NFD", name).casefold()
+                           == unicodedata.normalize("NFD", part).casefold()]
+                if len(aliases) != 1:
+                    raise TaskGraphError(error)
+                selected, = aliases
+            if entries[selected]["metadata"] != metadata:
+                raise TaskGraphError(f"scratch entry changed while resolving keep: {selected}")
+            current = selected
+            if index < len(parts) - 1:
+                if not stat.S_ISDIR(metadata[2]):
+                    raise TaskGraphError(error)
+                directory = stack.enter_context(_scratch_directory(part, parent=directory))
+            elif not stat.S_ISREG(metadata[2]):
+                raise TaskGraphError(error)
+        return current
+
+
 def _remove_scratch_item(parent: int, name: str, info, report: dict[str, Any], *, directory: bool = False) -> None:
     """成功后立即记账；Windows 后置 flush 失败时也核对名字是否已真正消失。"""
     def count() -> None:
@@ -977,12 +1020,10 @@ def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bo
                     _scratch_snapshot(parent, target.name, "", entries)
             else:
                 selected = []
-            for relative in kept:
-                entry = entries.get(relative)
-                if entry is None or not stat.S_ISREG(entry["metadata"][2]):
-                    raise TaskGraphError(f"scratch keep path must be an existing regular file without linked ancestors: {relative}")
-            retained = set(kept)
-            for relative in kept:
+            kept_names = {_snapshot_keep_name(parent, target.name, relative, entries) for relative in kept}
+            report["kept_files"] = sorted(kept_names)
+            retained = set(kept_names)
+            for relative in kept_names:
                 retained.update(str(path) if str(path) != "." else "" for path in PurePosixPath(relative).parents)
             candidates = [path for path in sorted(entries) if path not in retained and not (remove_all and path == "")]
             for path in candidates:
@@ -1010,7 +1051,7 @@ def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bo
                 _check_scratch_names(parent, remaining, "")
             for name in selected:
                 if _remove_scratch_tree(parent, name, name if remove_all else "", entries,
-                                        set(kept), report, removed_links) and remove_all:
+                                        kept_names, report, removed_links) and remove_all:
                     remaining.remove(name)
             if remove_all and exists:
                 _check_scratch_names(parent, remaining, "")

@@ -1,6 +1,6 @@
 # 安装 xy-workflow 正式插件
 
-本页对应 `xy-workflow 3.1.2` 和 Native Agent Config `0.1.8`。正式安装使用 Git stable 来源和 GitHub Release，维护入口通过包内组件描述校验 ZIP，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [插件载荷](PLUGIN.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
+本页对应 `xy-workflow 3.1.3` 和 Native Agent Config `0.1.8`。正式安装使用 Git stable 来源和 GitHub Release，维护入口通过包内组件描述校验 ZIP，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [插件载荷](PLUGIN.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
 
 本页 `xy-workflow` 身份由 `product/command_identity.json` 唯一维护；使用下列命令时核对匹配的远程分发资产与客户端回执，
 不能仅凭源码版本或命令说明判断本机已经切换。活动任务使用原物理资源完成后再按官方客户端切换。
@@ -27,7 +27,7 @@ bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source
 
 `check` 核对整包资源锁。`diagnose` 只读检查已有 Node >=22、浏览器与可选 ffmpeg。Impeccable 的设计方法可按需离线使用，
 选中后的全文读取见物理插件根的 `platforms/shared/skills/xy-workflow/references/skill-selection.md`。
-PM 自动通过同包 `xy-grilling` 加载原版，`xy-grill-me` 由用户显式调用。
+只有仍有影响 Light／Full 判级依据的实质缺口时，PM 才通过同包 `xy-grilling` 追问。`xy-grill-me` 由用户显式调用。
 
 同一物理插件内置 UI UX Pro Max 专题库，使用已有的 Python 标准库运行。有具体设计问题时按照上述共享规则的 `Design topic query` 调用，无需额外安装或服务。
 
@@ -62,7 +62,7 @@ codex plugin add xy-workflow@xy-workflow
 codex plugin list --json
 ```
 
-安装后在官方 `/hooks` 中审阅并信任当前 SessionStart 定义，再开始新会话。安装或启用不授予 Hook 信任，不直接写 trust 记录，不以全局或项目指令文件替代官方审阅。Codex 包保留单一 `.codex-plugin/plugin.json` 清单，避免已发现的 portable 根清单漏载 Hook 问题。
+安装后在官方 `/hooks` 中审阅并信任当前 SessionStart（主会话入口）、PreToolUse（受管项目写入分工）和 Stop（登记结果任务的收尾提示），再开始新会话。安装或启用不授予 Hook 信任，不直接写 trust 记录，不以全局或项目指令文件替代官方审阅。Codex 包保留单一 `.codex-plugin/plugin.json` 清单，避免已发现的 portable 根清单漏载 Hook 问题。停用 Hook 或尚未信任 Stop 时，PM 仍可通过原生完成结果与任务池核对结果。详见 [Codex Hook 审阅规则](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)。
 
 ## Claude Code
 

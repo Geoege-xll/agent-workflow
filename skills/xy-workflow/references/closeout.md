@@ -55,7 +55,7 @@ New risks, invalidated evidence and explicit user/project rereview requirements 
   [the retained HTML boundary](../../xy-plan/references/requirements-markdown.md).
 ### QA 后登记已验收事实
 
-Full 的原 QA 任务包、handoff、`request_receipt` 和受审文档原字节保存在原证据位置。PM 在原主题中更新已核实的验收版本、进展首段、已交付行为和验收证据。保留以往已交付的正文和证据摘要，验收证据行引用本次已接收 handoff 的 SHA-256。首次交付可替换无基线占位；首次添加证据节时，批准依据引用原图已有的方案来源，或用 `requirements_approved@<requirements_fingerprint>` 定位本次已批准的需求。主题可省略恢复节。
+Full 的原 QA 任务包、handoff、`request_receipt` 和受审文档原字节保存在原证据位置。PM 在原主题中更新已核实的验收版本、进展首段、已交付行为和验收证据。保留以往已交付的正文、证据摘要和可恢复的证据链接，验收证据行引用本次已接收 handoff 的 SHA-256。首次交付可替换无基线占位；首次添加证据节时，批准依据引用原图已有的方案来源，或用 `requirements_approved@<requirements_fingerprint>` 定位本次已批准的需求。主题可省略恢复节。
 
 通过既有 `task_graph_cli.py update --input <图> --patch <补丁> --expect-sha256 <图原摘要> --root <项目根>`，以单独操作登记。下例的 SHA 和路径应替换为实际值。
 
@@ -63,7 +63,11 @@ Full 的原 QA 任务包、handoff、`request_receipt` 和受审文档原字节�
 {"tasks":{"qa":{"record_qa_projection":{"adapter":"project.yaml","documents":[{"path":"docs/plans/example.md","reviewed":{"path":"/absolute/evidence/reviewed-example.md","sha256":"<原字节摘要>"},"projected_sha256":"<当前文档摘要>"}]}}}}
 ```
 
-单树从原冻结范围复算受审摘要。主题同时属于受控读取或设计权威时，原已核对的需求、实现与审查合同共用同一份经过验证的前像。Foundation 最终包保留全部 Writer 范围；有本地 Git 提交时，包中的 `qa_document_base` 可定位由 PM 独占的已有文档。对于受审范围之外的 PM 专有文档，工具用同一仓库已冻结的 Git 提交核对原对象。已有未跟踪的 PM 文档可以在原有冻结步骤（Foundation 阶段通过后、最终交接前）使用 `"freeze_qa_scope":{"scope_ref":{"repositories":[…]},"projection_paths":["docs/plans/example.md"]}` 预存字节摘要，保留原档供验收后回放。原档或受审提交不可恢复时应先取得可核实的原始依据。登记、后续就绪与交付核对都会检查原回执及其余受审业务。需求、批准、接口或规范发生变化时，回到受影响的验收范围。
+单树从原冻结范围复算受审摘要。主题同时属于受控读取或设计权威时，原已核对的需求、实现与审查合同共用同一份经过验证的前像。Foundation 最终包保留全部 Writer 范围；有本地 Git 提交时，包中的 `qa_document_base` 可定位由 PM 独占的已有文档。对于受审范围之外的 PM 专有文档，工具用同一仓库已冻结的 Git 提交核对原对象。
+
+在原有冻结步骤（Foundation 阶段通过后、最终交接前）使用 `"freeze_qa_scope":{"scope_ref":{"repositories":[…]},"projection_paths":["docs/plans/example.md"]}` 指定本轮应写回的具体原主题，包含已有但尚未跟踪的主题。保留原档供验收后回放。独立 QA 仍可先通过。收口或任务池归档返回 `required_plan_projection_pending` 时，完成选定原主题的投影登记后再继续。省略 `projection_paths` 的 Full 请求按既有收口条件推进。原档或受审提交不可恢复时，应先取得可核实的原始依据。
+
+登记时使用相对当前 Markdown 的项目内路径。本轮验收证据行中的每个链接都会重新核对，包括沿用的链接及其直接引用的 Markdown 证据中的链接。其余正文核对新增或改变的引用。若文件沿用同一路径发布了新版本，可将完整的旧验收证据行原样移入已交付行为的历史段，并在当前验收行声明新摘要。要为实际文件声明字节摘要，将 `SHA256=<64 位十六进制摘要>` 写在文件链接后，同一行以空格分隔，例如 `[本轮 SQL](../evidence/release.sql) SHA256=<实际摘要>`。QA handoff 的摘要继续按原方式记录。登记、后续就绪与交付核对都会检查原回执及其余受审业务。已交付且清理了集成工作树的记录按原 Git 对象重放。需求、批准、接口或规范发生变化时，回到受影响的验收范围。
 
 隔离请求保留原 `worktree_integrations` 及其构建、QA 提交。PM 将验收事实提交到该集成工作树，在上例操作中增加 `head_revision` 指向最终文档提交。工具核对两个提交之间的全部差异。交付的 `projection_paths` 明列 PM 路径，合并授权绑定最终提交和完整差异。PROJECT 与相邻的 `ARCHITECTURE.md` 可在受审候选中包含实际目录或模块职责更新。若在 QA 后补入口，可用一条普通 Markdown 列表链接指向本次登记的主题，标签取计划文件名去掉扩展名，路径相对于索引页。其余结构描述应在受审候选中核对。
 
@@ -103,7 +107,8 @@ Full 的原 QA 任务包、handoff、`request_receipt` 和受审文档原字节�
   durable location and repair current references; a summary cannot replace the sole complete evidence.
   If transfer is impossible, retain only necessary files/ancestors, not an entire candidate for one reference.
   For scratch, follow the [record-tool preview and cleanup contract](runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace):
-  preview this `request-id` read-only with the same necessary `--keep` values, then execute against its reviewed
+  preview this `request-id` read-only using the current PM ID for registered work and the same necessary
+  `--keep` values, then execute against its reviewed
   snapshot fingerprint. Recheck an invalidated snapshot; `--all` is not default closeout. Likewise reclaim only
   task-owned isolated databases, containers and rolling snapshots with proven ownership, no active use and no
   necessary references. If cleanup occurs, briefly record results/remaining limits in the original task.
@@ -120,3 +125,34 @@ Under pressure, prefer accepted, sufficiently handed-off instances; do not simpl
 evidence-unreceived or necessary-review instances. Protect temporary worktrees/sole logs before AGY kill.
 Preserve existing recovery boundaries for cancellation/exceptions. Native closure/scratch cleanup must not
 delete still-referenced sole evidence.
+
+
+## 回收已验收的原生实例
+
+反馈窗口结束且没有返工后，PM 从本请求原登记核对 Writer 构建/运行、适用的独立 QA
+及实际交付。Full 生产交付须有当前唯一 Reviewer 的请求级有效 PASS。单独委托的只读、
+证据或原型按它们现有验收结束。先保全交付成果和必要证据，AGY 的临时工作树尤其
+需在原生 kill 之前确认外部留存。
+
+通过同包 helper 的 `lib/task_pool_cli.py closeout --root <项目> --pm-id <当前PM>
+--request-id <请求> --preservation <证据引用.json>` 只读取得可回收目标。保留清单是实际
+成果、验证和必要证据的绝对文件路径与字节 SHA-256 列表，每项形如
+`{"path":"<实际文件>","sha256":"<当前字节SHA>"}`。临时工作树中的原件应先保存在工作树之外。
+有未验收任务、待返工 Reviewer、待定工作或证据缺口时保留当前原件及占用。
+
+使用当前宿主确实提供的关闭、停止或终止工具处理计划中**同一原生 ID**，保留实际回执。
+仅停止的回执登记为 `stopped`，可证实关闭才登记 `closed`。宿主只能确认已安全结束，
+无法关闭或关闭未获证实时使用 `retired` 并保留依据。继续保有历史转录。逻辑任务池占用由
+已有验收状态决定，退役标记只约束后续复用。不同宿主的真实工具和能力见各自 PM 适配。
+
+写入一份终态观察 JSON，包含 `schema_version: 1`、计划中的完整 `agent_ref`、观察所得
+`outcome`、`native_evidence` 的绝对路径与 SHA 以及计划返回的 `preservation` 引用。
+通过 `lib/task_pool_cli.py finish-closeout --root <项目> --pm-id <当前PM>
+--request-id <请求> --record <原件> --task-id <任务> --expect-sha256 <计划中的原件SHA>
+--evidence <终态观察.json>` 在原件的运行元数据中登记。已审任务的验收证据和 QA 指纹保留原值。原件变化时重读当前计划。丢失响应时先查回写
+结果，勿再次终止实例。该入口核对当前状态、精确 ID 和证据原字节，宿主的实际终态
+仍来自 PM 核实的原生回执。
+
+三端在同一请求实例回收后，以 `cleanup-scratch --pm-id <当前PM> --request-id <请求>`
+预览和清理能够回收的临时文件。保持原登记、会话历史、必要日志和验收依据，由
+[现有快照入口](runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace)复核具体保留与删除范围。

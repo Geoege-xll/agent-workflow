@@ -22,6 +22,7 @@ from lib.task_graph import TaskGraphError
 # Created/Completed 是宿主附加的时间行；命令输出和聊天的相同文字不能作为回执。
 _MARKER = "XY-WORKFLOW-CLAIM "
 _PACK_MARKER = "XY-WORKFLOW-TASK-PACK-V1"
+_PACK_INSTRUCTION = "Use this complete current Task Pack as your assignment. Limit writes to its owned_paths."
 _RECEIPT_HEADER = re.compile(r"(?:(?:Created|Completed) At: [0-9T:+.Z-]+\n)*Created the following subagent:\n")
 _UPDATE_ACK = re.compile(r"(?:Created At: [0-9T:+.Z-]+\nCompleted At: [0-9T:+.Z-]+\n){2}OK")
 _RECEIPT_FOOTER = ("\nThe subagent will send you a message when it has completed its task or requires guidance. "
@@ -64,8 +65,7 @@ def initial_prompt(root: Path, target: dict, marker: str) -> str:
     pack = export_current_task_pack(payload, task["id"], root=root)
     if task.get("solution_decisions") and not filter_ready(original, [task], [task["id"]]):
         raise TaskGraphError("AGY prompt requires current shared solution approvals")
-    return (f"{marker}\n{_PACK_MARKER}\n"
-            "Use this complete current Task Pack as your assignment. Limit writes to its owned_paths.\n"
+    return (f"{marker}\n{_PACK_MARKER}\n{_PACK_INSTRUCTION}\n"
             + json.dumps(pack, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
 
 
@@ -181,7 +181,30 @@ def _focus_update(call, *, full: bool) -> bool:
     return isinstance(focus, str) and 0 < len(focus) <= 512 and bool(focus.strip()) and focus.isprintable()
 
 
-def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool, expected_prompt) -> tuple[int, int] | None:
+def _historical_focus_prompt(prompt: str, header: str, role: str, expected_task: dict | None) -> str | None:
+    if expected_task is None:
+        return None
+    from lib.task_graph_cli import pack_snapshot
+    from lib.task_graph_records import decode
+
+    body = prompt[len(header):].partition("\n")[0]
+    try:
+        pack = decode(body)
+        if not isinstance(pack, dict):
+            return None
+        pack_snapshot(pack)
+        canonical = json.dumps(pack, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    task = pack["task"]
+    if (body != canonical or task.get("state") not in ("RUNNING", "QA") or task.get("role") != role
+            or task.get("id") != expected_task["task_id"] or task.get("request_id") != expected_task["request_id"]):
+        return None
+    return header + body
+
+
+def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool,
+                   expected_prompt, expected_task: dict | None) -> tuple[int, int] | None:
     calls = event.get("tool_calls")
     if (event.get("type") != "PLANNER_RESPONSE" or not isinstance(calls, list) or not 1 <= len(calls) <= 3
             or not _field_complete(event, "tool_calls")):
@@ -189,7 +212,9 @@ def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool
     updates = len(calls) - 1
     if updates and not app:
         return None
-    if updates:
+    # App 2.36 的完整日志也会在当前任务包的创建前只更新一次焦点，仍须逐条确认。
+    focus_only = updates == 1 and full and _focus_update(calls[0], full=full)
+    if updates and not focus_only:
         # App 可按任一顺序发出清单和焦点更新。仍只认一次清单、至多一次焦点，
         # 紧接一次创建，并逐条核对宿主确认。
         display = calls[:-1]
@@ -212,10 +237,22 @@ def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool
         except (ValueError, RecursionError):
             return None
     # 完整日志的参数是直接字符串。两个来源各按自己的格式读，禁止混用或猜测解码。
-    if isinstance(prompt, str) and isinstance(selector, str) and _matches_prompt(
-            selector, role, prompt, marker, expected_prompt):
-        return event["step_index"] + 1, updates
-    return None
+    if not isinstance(prompt, str) or not isinstance(selector, str):
+        return None
+    if focus_only:
+        header = f"{marker}\n{_PACK_MARKER}\n{_PACK_INSTRUCTION}\n"
+        if not prompt.startswith(header):
+            return None
+        if expected_prompt is None:
+            # 已绑定或撤回后原包可能已修订。只使用原生提示中的规范化任务包及原领取的
+            # 稳定身份核对旧回执，不以当前任务目标或范围倒推历史派发内容。
+            original = _historical_focus_prompt(prompt, header, role, expected_task)
+            if original is None:
+                return None
+            expected_prompt = lambda: original
+    if not _matches_prompt(selector, role, prompt, marker, expected_prompt):
+        return None
+    return event["step_index"] + 1, updates
 
 
 def _matches_receipt(content: str, agent_id: str, log: Path, workspace: Path) -> bool:
@@ -246,7 +283,7 @@ def _parent_transcript(directory: Path):
 
 
 def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, role: str, *,
-                    brain: Path | None = None, expected_prompt=None) -> None:
+                    brain: Path | None = None, expected_prompt=None, expected_task: dict | None = None) -> None:
     from lib.skills.role_skills import ROLE_SKILLS
     if role not in ROLE_SKILLS:
         raise TaskGraphError("AGY dispatch requires a role defined by the current workflow package")
@@ -303,7 +340,7 @@ def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, ro
                     if not remaining_updates and _matches_receipt(event["content"], agent_id, child_log, workspace):
                         return
                 pending = _dispatch_step(event, marker, role, full=full, app=root == app_root,
-                                         expected_prompt=expected_prompt)
+                                         expected_prompt=expected_prompt, expected_task=expected_task)
     except TaskGraphError:
         raise
     except (OSError, ValueError) as exc:
@@ -423,7 +460,8 @@ class AntigravityDispatch(DispatchPolicy):
             expected_prompt = None
             # A withdrawal may follow an unbound revision. Bind the proven original
             # child so the PM can stop it, without reauthorizing implementation.
-            if task["state"] != "STOP_REQUESTED" and claim.get("prompt_format") == AGY_TASK_PACK_PROMPT:
+            modern_claim = claim.get("prompt_format") == AGY_TASK_PACK_PROMPT
+            if task["state"] != "STOP_REQUESTED" and modern_claim:
                 expected_prompt = lambda: initial_prompt(root, target, marker)
             verify_creation(parent, reference["agent_id"], execution_root(), marker, task["role"],
-                            expected_prompt=expected_prompt)
+                            expected_prompt=expected_prompt, expected_task=target if modern_claim else None)

@@ -1,6 +1,6 @@
-# xy-workflow 3.1.2
+# xy-workflow 3.1.3
 
-本包为 `xy-workflow 3.1.2`，配套 Native Agent Config `0.1.8`。版本来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，维护入口根据包内组件描述校验下载来源和摘要。正式安装使用 Git stable 来源和 GitHub Release，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [安装说明](INSTALL.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
+本包为 `xy-workflow 3.1.3`，配套 Native Agent Config `0.1.8`。版本来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，维护入口根据包内组件描述校验下载来源和摘要。正式安装使用 Git stable 来源和 GitHub Release，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [安装说明](INSTALL.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
 
 ## 载荷与职责
 
@@ -21,7 +21,7 @@ CLI/Skill，以及官方 `agent-desktop`。前四个发现入口为无 hooks 薄
 
 构建器把锁定的 `grilling` 和 `grill-me` 原文从同一批校验过的字节投影到各自的原生 Skill，
 并在 `sources.json` 记录原文依赖。两个小入口随宿主调用直接交付全文，源码只维护 vendor 中的一份原版。
-PM 自动需求覆盖通过 `xy-grilling` 完整加载原版；`xy-grill-me` 只接受当前用户显式调用，原版转调解析为同包
+PM 只在仍有影响判级依据的实质缺口时通过 `xy-grilling` 完整加载原版。`xy-grill-me` 只接受当前用户显式调用，原版转调解析为同包
 qualified `xy-grilling` 或读取同包 canonical，不能误调未知全局同名技能。`grill_result` 属于
 xy-workflow 的 PM 适配。`xy-uiux` 固定绑定 `xy-ui-design`。交付具体 HTML 原型时必须加载并执行
 `xy-prototype-verify`，仅维护设计规范时按文档验收。`xy-impeccable` 由当前设计需求决定是否选用。

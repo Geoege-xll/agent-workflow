@@ -17,7 +17,7 @@
   and fingerprinted `design_authority_refs`, affected surfaces, and the objective justification in
   the task pack.
   It does not dispatch `xy-uiux`, does not mutate a prototype, and does not require
-  `visual_approved`. Except for the explicit Light copy above, it remains Full, retaining Grill coverage,
+  `visual_approved`. Except for the explicit Light copy above, it remains Full, retaining Full planning coverage,
   xy-plan, applicable user decisions, xy-build-verify and integrated QA; Light does not relax other UI changes.
 - A `UI-Conformance` task must not edit `docs.standards_root/DESIGN_*.md`. Its production writer
   uses the frozen authority references and declares both UI and accessibility audit surfaces.

@@ -89,7 +89,8 @@ def dispatched(snapshot, project, parent, child, marker, brain):
     if reference is None and claim.get("prompt_format") == AGY_TASK_PACK_PROMPT:
         expected_prompt = lambda: native.initial_prompt(project, target, actual)
     native.verify_creation(parent, child, snapshot.execution_root, actual, task["role"], brain=brain,
-                           expected_prompt=expected_prompt)
+                           expected_prompt=expected_prompt,
+                           expected_task=target if claim.get("prompt_format") == AGY_TASK_PACK_PROMPT else None)
     return True
 
 
