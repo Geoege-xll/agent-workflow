@@ -167,6 +167,9 @@ def _launch(configuration, fd):
 def open_service(root, adapter, plan, request_id, pages=None, *, data_dir=None):
     review.require_external_data_dir(root, data_dir)
     if not isinstance(pages, list) or not pages: raise ValueError("open必须显式登记具体页面数组")
+    from lib.documents.prototype_file_entry import require_prepared, publish_binding
+    # open只消费显式prepare-delivery已经准备的入口；不暗中改写原稿或冷准备。
+    require_prepared(root, adapter, pages, data_dir=data_dir)
     tool, _ = review.capture_tool(format_version=5)
     context, _, _, navigation = capture_live(root, adapter, plan, request_id, pages, tool=tool)
     register_live(root, context, data_dir=data_dir)
@@ -182,9 +185,12 @@ def open_service(root, adapter, plan, request_id, pages=None, *, data_dir=None):
             connection = _launch(configuration, fd)
         base = "http://127.0.0.1:" + str(connection["port"])
         name = navigation[0]["name"]
+        publish_binding(root, adapter, [page["path"] for page in context["pages"]], context, connection, data_dir=data_dir)
+        deliveries = [(Path(root) / page["path"]).as_uri() for page in context["pages"]]
         return {"status": "ready", "request_id": request_id, "review_id": context["review_id"], "reused": reused,
-            "delivery_url": base + "/delivery/" + name + "#token=" + connection["token"],
-            "review_url": base + "/review/" + name + "#token=" + connection["token"]}
+            "delivery_url": deliveries[0], "delivery_urls": deliveries,
+            "http_delivery_url": base + "/delivery/" + name,
+            "review_url": base + "/_entry-review/" + connection["instance"] + "/" + context["review_id"] + "/" + name}
 
 
 def serve_from_pipe(fd):

@@ -160,14 +160,9 @@ In the existing handoff, return requirement coverage by stable REQ identifiers w
 and actual state anchors. The PM writes these back to the single requirements Markdown.
 Requirements/plan Markdown-to-HTML generation is retired under [the retained reference](../xy-plan/references/requirements-markdown.md);
 keep any existing HTML as historical material without requiring an update.
-需要评审整改时，按需读取 [反馈消费合同](references/prototype-feedback.md)。新交付通过当前物理插件根
-白名单 helper 的 `open` 显式登记实际项目、adapter、需求、request-id 与具体 pages，交付时启动本机
-服务并提供具体页的 HTTP `delivery_url`；交付页默认收起目录，“进入评审”以 noopener 新标签页打开
-同一页。评审进入即批注，无目录、模式切换或开发说明；按工具提示修饰键临时操作后释放回批注。
-两页复用画布组件并读取同一物理原稿，仅 HTTP 内存响应装配来源键与桥，不落盘活动业务 HTML 副本。
-项目只保留具体 HTML/CSS/JS 与五段契约，不生成导航 index，不复制通用工具。file:// 原稿可离线
-操作，但不能冷启动 Python 或发现随机端口；服务不可用由交付方重跑同样显式 open 参数提供新链接，
-不向原稿写 token、机器路径或随机端口。status/stop 管理精确项目请求服务，不设置系统启动项。
+需要评审整改时，按需读取 [反馈消费合同](references/prototype-feedback.md)。Agent／PM 交付前先从当前物理插件的白名单 helper 执行 `prepare-delivery --root --adapter --pages`，再用 `open` 显式登记相同实际项目、adapter、需求、request-id 与具体 pages。prepare-delivery 幂等准备受管入口而不启动服务；open 先验证准备，缺失报 `preparation_required`，不会悄悄修改业务 HTML。正式 `delivery_url` 是具体 HTML 的 file URI，`delivery_urls` 给出各页；未准备模板不能作为完整交付。
+file 入口提供完整共用画布及默认收起目录，“进入评审”只通过公开 binding 以 noopener 新标签页进入当前具体页的无秘密 HTTP 引导。file 壳不创建控制连接或持有 token；失效明确提示交付方重跑相同显式命令，不猜端口或冷启动。独立评审进入即批注，无目录、模式切换或开发说明；按提示修饰键临时操作后释放回批注。两页读取同一物理原稿，复用相机组件并保留原始 stage/frame 尺寸，不能统一成 1120×860。
+项目仅保留具体 HTML/CSS/JS、五段契约、固定相对 entry 标签、受管 `.xy-prototype-entry` 链接和精确 `.gitignore` 项；不生成导航 index，不复制业务 HTML 或完整工具。唯一 delivery.html 模板投影到中央经典 shell。file 设计 iframe 的 allow-same-origin 仅限明确 file 分支，业务只执行一次；HTTP 评审仍只有 allow-scripts。父子核对真实 source、当前页、随机 nonce 和 null origin；HTTP 来源键按原始字节装配后才移除精确 entry 标签。引导 token 只在可核浏览器顶层响应内提供，控制 Bearer／精确Origin、私有管理cap边界不变。status/stop 管理精确项目请求，不设置系统启动项。
 新 boot 5 使用严格 context 3；feedback 5 四字段为 schema_version/review/anchors/items，短 review
 仅含 request_id/review_id，绑定实际来源修订。草稿 CAS 冲突可见，源变化保留意见并阻止错误提交；
 先由 validate 复核 live 来源，只消费 current 精简 changes、必要 anchors、短 review 及当前任务包。
@@ -175,7 +170,7 @@ keep any existing HTML as historical material without requiring an update.
 REQ 映射仅取明确 data-req-ids，动态无来源节点要求显式选择真实源父层，不从摘录猜测或静默改绑。
 A 与整改独立编号且不设等级；普通整改仅交还明确引用的 A，无整改时交还全部明确标记。
 历史 prepare 与 feedback 2／3／4 的不可变包、工具名单及装配／消费合同独立保留，不迁移旧草稿，
-不将新 live 状态写回旧包。源码能力不代表本机 3.0.2 已升级；反馈从不构成需求或视觉批准。
+不将新 live 状态写回旧包。源码能力不代表本机 3.0.3 已升级；反馈从不构成需求或视觉批准。
 The design Agent does not edit the PM's source or create a mapping report; this association does not
 change the prototype page, dependency fingerprint, or visual-approval contract.
 
