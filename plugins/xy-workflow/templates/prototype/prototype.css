@@ -134,7 +134,8 @@ body.prototype-canvas {
   overflow: visible;
 }
 
-/* iOS／PC 及明确指定的固定视口预览才启用画板。
+/* file 与 HTTP 共用相机保留此原始 stage/frame 约束；不能统一改成 1120×860。
+   iOS／PC 及明确指定的固定视口预览才启用画板。
    auto 外边距在空间不足时退为零，保留左上侧入口；滚动不会改变内部基准宽高。 */
 [data-prototype-display="fixed"] .prototype-stage {
   display: flex;

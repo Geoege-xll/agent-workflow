@@ -88,8 +88,12 @@ class PrototypeServer(ThreadingHTTPServer):
 
     def urls(self, name=None):
         name = name or self.navigation[0]["name"]
-        if name not in {entry["name"] for entry in self.navigation}: raise ValueError("页面未登记")
-        return {kind + "_url": self.origin + "/" + kind + "/" + name + "#token=" + self.token for kind in ("delivery", "review")}
+        entry = next((entry for entry in self.navigation if entry["name"] == name), None)
+        if entry is None: raise ValueError("页面未登记")
+        # 便利入口也遵守CLI的无秘密URL合同，不能让直接服务消费者重新传播旧fragment。
+        return {"delivery_url": (self.source.root / entry["path"]).as_uri(),
+            "http_delivery_url": self.origin + "/delivery/" + name,
+            "review_url": self.origin + "/_entry-review/" + self.instance + "/" + self.source.context["review_id"] + "/" + name}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -127,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
         if shell:
             self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
             self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.end_headers()
         try: self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError): pass
@@ -200,14 +205,39 @@ class Handler(BaseHTTPRequestHandler):
                     return self.answer(200, self.server.source.save_draft(value["revision"], value["draft"]))
             return self.failure(404, "not_found", "控制操作未登记")
         if self.command != "GET": return self.failure(405, "method_not_allowed", "请求方法未登记")
+        # 公共ID和Fetch Metadata均不是认证秘密。这一路只负责浏览器顶层引导，
+        # 将随机控制Bearer放入隔离的可信父文档；API仍独立核对Bearer和精确Origin。
+        # file/opaque iframe、脚本、fetch和object不能借公开导航URL取得凭据。
+        bootstrap = False
+        bootstrap_name = None
+        prefix = "/_entry-review/"
+        if path.startswith(prefix):
+            expected = prefix + self.server.instance + "/" + self.server.source.context["review_id"] + "/"
+            bootstrap_name = path.removeprefix(expected) if path.startswith(expected) else None
+            if parsed.query or bootstrap_name not in {entry["name"] for entry in self.server.navigation}:
+                return self.failure(404, "not_found", "评审实例、修订或页面已失效；请重新执行open")
+            if (self.headers.get_all("Origin", []) or
+                self.headers.get_all("Sec-Fetch-Dest", []) != ["document"] or
+                self.headers.get_all("Sec-Fetch-Mode", []) != ["navigate"] or
+                self.headers.get_all("Sec-Fetch-Site", []) not in (["none"], ["cross-site"], ["same-origin"], ["same-site"])):
+                return self.failure(403, "top_level_required", "评审入口只接受浏览器新标签顶层导航")
+            try: self.server.source.current()
+            except LiveError as exc:
+                if exc.code != "source_changed": raise
+                return self.failure(409, "source_changed", "原稿或工具已变化；请核对后重新执行open")
+            bootstrap = True
         for kind in ("delivery", "review"):
-            if path.startswith("/" + kind + "/") and not parsed.query:
-                name = path[len(kind) + 2:]
+            if ((bootstrap and kind == "review") or path.startswith("/" + kind + "/")) and not parsed.query:
+                name = bootstrap_name if bootstrap else path[len(kind) + 2:]
                 if name not in {entry["name"] for entry in self.server.navigation}: break
                 template = self.server.tools["tool/" + kind + ".html"].decode("utf-8")
                 if 'id="prototype-review-data"' in template or template.count("</head>") != 1: raise ValueError("工具启动模板无效")
                 boot = {"schema_version": 5, "context": self.server.source.context, "pages": self.server.navigation}
                 template = template.replace("</head>", '<script type="application/json" id="prototype-review-data">' + safe_boot(boot) + '</script></head>')
+                if bootstrap:
+                    connection = {"schema_version": 1, "review_id": self.server.source.context["review_id"], "token": self.server.token}
+                    if 'id="prototype-browser-connection"' in template: raise ValueError("工具连接模板重复")
+                    template = template.replace("</head>", '<script type="application/json" id="prototype-browser-connection">' + safe_boot(connection) + '</script></head>')
                 # 模板只引用固定工具资产，映射为统一绝对路径以兼容两个壳路由。
                 for asset in review.LIVE_TOOL_ASSETS:
                     template = template.replace('"' + asset + '"', '"/assets/' + asset + '"')
@@ -224,8 +254,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.failure(404, "not_found", "内容资源未登记")
             body = files[relative]
             if relative in self.server.bridges:
-                source = inject_source_targets(relative, body).decode("utf-8")
-                bridge = '<script src="/assets/page-shell.js" data-prototype-review-bridge="5" data-prototype-review-page="' + html.escape(relative, quote=True) + '" data-prototype-review-token="' + self.server.bridges[relative] + '"></script>'
+                from lib.documents.prototype_file_entry import strip_entry
+                # 源键按原始HTML字节计算完毕，再仅在HTTP内存响应移除file入口。
+                # 顺序反过来会让无ID节点偏移与交接校验不一致，且会递归加载file外壳。
+                source = strip_entry(inject_source_targets(relative, body)).decode("utf-8")
+                bridge = '<script src="/assets/canvas-presentation.js"></script><script src="/assets/page-shell.js" data-prototype-review-bridge="5" data-prototype-review-page="' + html.escape(relative, quote=True) + '" data-prototype-review-token="' + self.server.bridges[relative] + '"></script>'
                 matches = list(re.finditer(r"</body\s*>", source, re.I))
                 if len(matches) != 1: raise ValueError("业务页面必须有唯一body结束标签")
                 body = (source[:matches[0].start()] + bridge + source[matches[0].start():]).encode("utf-8")

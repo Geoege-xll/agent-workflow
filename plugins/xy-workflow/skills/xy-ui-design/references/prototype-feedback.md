@@ -2,41 +2,42 @@
 
 仅在当前任务使用评审整改时读取。本合同补充 `prototype-canvas.md` 的展示外壳与 `xy-prototype-verify` 的静态证据，不使其他 Worker 默认预读反馈格式。需求与方案仍以同一主题 Markdown 为唯一编辑权威，具体稳定 HTML 是视觉评审对象。
 
-## 当前交付：双网页、同一原稿
+## 当前交付：具体 file HTML 与同页独立评审
 
-当前源码的新路线是可信 CLI `open`，在交付时启动本机服务并返回具体页的 `delivery_url` 与 `review_url`。这些是当前源码能力，不代表本机已发布的 3.0.2 自动升级。仅从当前所选物理插件调用，同一项目、adapter、需求和 request 参数贯穿 open／validate；每次 open 必须明确提供 `--pages`，不生成导航 index、不复制通用工具到交付目录：
+3.0.4 的具体 file HTML 交付入口按本节操作；实际安装版本以官方客户端清单为准。Agent 交付前，先从当前物理插件的白名单 helper 显式执行 `prepare-delivery --root --adapter --pages`，准备受管入口与公开目录；此命令幂等、不启动服务、不执行业务请求。再以同一项目、adapter、需求、request-id 和具体 pages 执行 `open`。`open` 先验证已准备，缺失返回准确的 `preparation_required`，不会悄悄修改业务 HTML。历史 `prepare` 仍是下节独立的不可变离线评审合同；处理新的 prepared 源时，先按原始字节注入来源键再移除精确 entry，旧无标签 2／3／4 字节及 V4 九项资产不变。
 
 ```text
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py prepare-delivery --root <physical-project-root> --adapter <selected-project-adapter> --pages <project-relative-HTML>
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML>
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py status --root <physical-project-root> --request-id <request-id>
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py stop --root <physical-project-root> --request-id <request-id>
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py validate --root <physical-project-root> --adapter <selected-project-adapter> --input <explicit-feedback-file>
 ```
 
-交付目录只列出本次 `--pages` 明确登记、属于同一需求且通过安全校验的 1—16 个具体页。上面的单页示例仅登记一页，不会自动扫描整个项目、其他需求或未登记页面。一次 `open` 可在相同 `--plan` 和 `--request-id` 下登记多页，参数按实际页面替换：
+正式交付入口是当前具体 HTML 的 `file://` URI：`delivery_url` 为首个具体页，`delivery_urls` 列出各页；可保留的 HTTP 诊断链接另名为 `http_delivery_url`，必须无 fragment 秘密，不能替代 file 入口；正式 file／review URL 均无秘密。完整目录、缩放、移动、复位、平台画板及真实业务交互都在 file 交付工具中；目录默认收起并浮出，不挤占画布，相机工具浮于画布，删除旧大标题背景。五段契约仍在具体 HTML，交付壳以大弹窗查看，不占主画布。目录使用项目已登记具体页元数据，当前页由实际文件名选择。项目完整交付 catalog 最多 256 页，与单次 review 的 16 页限额分开；一次 open 仅绑定本次已批准同需求的 1—16 页，不扫描全项目或从旧 index 推断；同项目不同页可绑定不同请求，公开目录按项目锁合并，不能用单一 active_request 覆盖其他页。多页时，prepare-delivery 与 open 都显式传入 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`。
 
-```text
-bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML-1> <project-relative-HTML-2>
-```
+项目原稿仅保留固定相对经典入口 `<script src=".xy-prototype-entry/entry.js" data-xy-delivery-entry="1" charset="utf-8"></script>`，且先于所有业务脚本。`.xy-prototype-entry` 是指向用户级本项目发布目录的受管链接，目录级 `.gitignore` 只维护精确受管忽略项并保留用户内容。项目不复制完整工具或业务 HTML 副本，不生成导航 index；已有业务首页、未知文件及用户修改必须保留。受管链接须验证属主、版本与摘要后才获窄依赖例外，普通 symlink/hardlink 仍拒绝。通用工具同 payload 仅缓存一份，`delivery.html` 是唯一 markup；受信模板生成经典 `shell.js`，不手抄第二套 HTML。
 
-交付时提供 `delivery_url` 的当前具体页：左侧目录默认收起且由登记元数据派生，共用可缩放画布保留真实产品交互；“进入评审”通过 `noopener` 新标签页准确打开当前页，原交付页保留。评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放回批注。两页复用画布组件，分别持有相机和交互状态，不承诺任意业务内存同步。真实弹窗／popover 的选择及标注由父画布支持；动态无来源节点明确要求选择真实源父层，不静默改绑。
+file 顶层经典 bootstrap 不依赖 file fetch 或 ES 模块，在原始业务脚本执行前停止顶层业务解析；独立一层 file 设计 iframe 执行原稿业务一次。仅此明确 file 分支使用 `sandbox="allow-scripts allow-same-origin"`，支持相对 CSS／经典 JS；HTTP 评审内容仍仅 `sandbox="allow-scripts"`，绝不授予 allow-same-origin。父子消息同时核对准确 `event.source`、当前页、随机 nonce 和 `origin=null`，不能把相同 null 字符串当信任。保留原始 stage/frame、声明或受限实际测量的画板尺寸，公共相机不得统一成 1120×860 或清空 frame 约束。
 
-两页都从交付目录读取同一物理原稿，服务只在 HTTP 内存响应装配来源键与通信桥，活动评审不在磁盘维护业务 HTML 副本。原稿仍可 `file://` 离线查看与操作，但不承诺目录、完整相机、一键冷启动或自动发现随机端口。服务不可用时，由交付方用同样的显式参数重新运行 `open` 并提供新链接；`status` 查看有限状态，`stop` 停止精确实例并保留意见。不往原稿写认证 fragment、token、机器绝对路径或随机端口。返回 URL 只交给受信本机用户，不把认证 fragment 写入日志或公开报告。
+公开 `catalog.js` 只通过 `window.XYFileDeliveryEntry.receiveCatalog(data)` 提供封闭 schema 1：`{schema_version,project_id,directory_sha256,tool:{version,payload_sha256},pages:[{name,path,label,groups,platform,display,viewport,plan_source,binding}]}`。viewport 为 `{width,height}` 或 null；binding 为 null 或 `{request_id,review_id,instance,origin}`，origin 仅为固定 `http://127.0.0.1:<端口>`。name/path 必须合法有界且指向同目录具体页。directory_sha256 是实际 prototype 目录 canonical file URI 末尾带 `/` 的 UTF-8 字节 SHA256；file UI 以 `new URL('.', originalFileURL).href` 和 WebCrypto 同口径核验后才信任目录／评审绑定，缺失、不匹配或 crypto 不可用时保留画稿、拒绝旧绑定并提示 Agent 重新准备，防止复制目录沿旧链接错入原项目。label 与原导航合同一致，最多 1024 字符；viewport 每轴为 1..16384 的有限正数，不静默缩窄或猜固定宽高。它没有 token、management、root 或 argv 权限字段，动态目录及工具引用不进入业务 render 摘要，tool 独立绑定。
 
-服务绑定 `127.0.0.1` 随机可用端口，限定显式项目和请求，复用相应活动会话；不配置系统自启动或 URL 协议。网页不接受任意 root、argv、file、安装或执行请求。公开 `/health` 无 secret；交付与评审壳分别位于 `/delivery/<name>`、`/review/<name>`，工具只来自固定 `/assets/<name>` 白名单，内容仅来自 `/content/<随机只读cap>/<已登记资源>`。内容 iframe 只有 `sandbox="allow-scripts"`，不授予 `allow-same-origin`；桥联合核对真实 `event.source`、当前页、随机 token 和 `origin=null`，不能单凭 null origin 信任消息。内容 cap 无权访问控制 API 或父认证。
+file 壳完全不创建控制连接、不获取 token。公开 binding 只代表最后登记的入口，不证明当前服务 ready；不新增探测或后台连接。stop 后 file 仍可看稿，评审恢复由 Agent 显式重开服务。用户点击“进入评审”后，仅按当前页公开 binding 以 `noopener` 新标签导航到 精确引导入口 `/_entry-review/<instance>/<review_id>/<registered-name>`，原交付页保留。未准备、服务不可用或 binding 失效显示准确恢复说明，不猜端口、不冷启动、不虚称 ready；交付方用同样显式参数重跑 prepare-delivery／open。status/stop 管理精确项目请求实例，不设置系统自启动或系统 URL 协议。
 
-启动 JSON 精确为 boot 5 的 `{schema_version,context,pages}`，唯一脚本为 `script#prototype-review-data`；context 仍是下述严格 context 3 与 8 KiB 限额，页元数据为 `{path,name,label,groups,url}`。新反馈为封闭 schema 5 的 `{schema_version:5,review:{request_id,review_id},anchors,items}`；anchor、item、target、编号、引用、容量和精简投影沿下述紧凑字段合同。完整真实来源、来源修订与草稿各自保存在用户私有 live 元数据中，不写历史不可变包；review_id 绑定实际修订，不能用当前活动指针重绑旧意见。
+服务仅绑定 127.0.0.1 随机端口，HTTP 引导严格核验当前实例、修订、登记页和精确 Host，只允许可核浏览器顶层 document/navigate；拒绝 `Origin:null` 及 iframe/script/object/fetch 取得秘密。公开 ID 和 Fetch Metadata 都不是秘密认证。合法顶层响应通过单独安全转义的 `script#prototype-browser-connection` 提供 `{schema_version:1,review_id,token}`，并设置 no-store、no-referrer、nosniff、frame-ancestors none、X-Frame-Options DENY 和 COOP 隔离。无秘密跳转 URL、cookie、凭据 CORS 或 JSONP。live-connection 仅在可信 HTTP 父工具消费原认证入口或此 bootstrap，核对相同 review_id，绝不向业务 frame 泄露认证；控制 API 继续使用 Bearer 和精确 Origin，管理 cap 保持私有。工具仅从固定 `/assets/<name>` 白名单加载，内容仅来自 `/content/<随机只读cap>/<已登记资源>`。
 
-控制 API 使用统一 Bearer、精确 Host／Origin 和有界 JSON。`GET /api/context` 返回 `{status:'ready'|'source_changed',context,page}`，`GET /api/draft` 返回 `{revision,draft}`；`PUT /api/draft` 以相同快照和 revision 做 CAS，冲突返回 `409 draft_conflict`，不静默覆盖。原稿变化返回 `409 source_changed`，保留旧正文且仍允许读取草稿，阻止错误定位、保存与交还。客户端不能上传可信 context、自动续期或重放写请求。刷新与重新进入恢复绑定该 review_id 的草稿；相机、撤回和工具状态不进入反馈。`validate` 按 feedback 5 的 live 元数据分支核验同一真实修订，严格复核后仍只输出 current 精简交接，不改变批准合同。
+独立评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放回批注。交付与评审复用画布组件，各自持有相机和交互状态，不承诺任意业务内存同步。原始 HTML 字节先装配来源目标，再在 HTTP 内存响应移除精确 file 入口；不能先删后算偏移。没有 ID 的节点仍按原始字节定位，动态无来源节点保留用户输入并要求显式选择真实源父层，不静默改绑。
 
-新 live 固定 13 项资产：`delivery.html`、`review.html`、`live-workspace.js`、`live-connection.js`、`canvas-host.js`、`live.css`、`workspace.css`、`review-state.js`、`review-camera.js`、`feedback.js`、`feedback.css`、`page-shell.js`、`THIRD_PARTY_NOTICES.txt`。三端按同一白名单同字节交付。历史 V4 九项保持独立冻结；不能用 live 名单回验旧包，也不能把两套协议混写进旧包。
+启动 JSON 仍精确为 boot 5 的 `{schema_version,context,pages}`，脚本为 `script#prototype-review-data`；context 保留下述严格 context 3 与 8 KiB 限额。新反馈保留封闭 schema 5 `{schema_version:5,review:{request_id,review_id},anchors,items}`；完整来源、修订与草稿在用户私有 live 元数据中，review_id 不由活动指针重绑。`GET /api/context` 返回 `{status:'ready'|'source_changed',context,page}`，`GET /api/draft` 返回 `{revision,draft}`；`PUT /api/draft` 用 revision 和相同快照做 CAS，冲突返回 `409 draft_conflict`。原稿变化返回 `409 source_changed`，保留旧正文和可读草稿，阻止错误定位、保存与交还。客户端不能上传可信 context、自动续期或重放写请求。相机、撤回及工具状态不进入反馈；validate 严格复核真实 live 修订后只输出 current 精简交接，不产生批准。
+
+live 固定 17 项资产：`delivery.html`、`review.html`、`live-workspace.js`、`live-connection.js`、`canvas-host.js`、`live.css`、`workspace.css`、`review-state.js`、`review-camera.js`、`feedback.js`、`feedback.css`、`page-shell.js`、`THIRD_PARTY_NOTICES.txt`、`file-entry.js`、`file-delivery.js`、`file-page.js`、`canvas-presentation.js`。三端按 backend 的 LIVE_TOOL_ASSETS 权威名单同字节交付；packaging 只消费与历史 V4 九项的有序并集。V4 及 TOOL_ASSETS 旧别名保持，不用 live 名单回验旧包。
 
 ## 历史离线 prepare 与 feedback 2／3／4
 
 本节的快照、index、浏览／批注、开发说明及 manifest／boot／bridge 4 仅描述历史离线分支。`prepare` 继续保留原只读装配与严格消费语义；新交付使用上面的 open 路线，不因下文而重新生成项目导航壳。
 
 
-以下格式是历史 feedback 4 消费合同；3.0.3 当前为未发布候选，本机已安装的 3.0.2 不因源码版本更新自动具备该能力。实际调用使用当前所选版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
+以下格式是历史 feedback 4 消费合同；3.0.4 的 file 交付不会改变这些旧包合同。实际调用使用当前所选版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py resource templates/prototype/page.html

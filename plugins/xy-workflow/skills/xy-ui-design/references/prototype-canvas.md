@@ -12,16 +12,14 @@ branches, or add confirmation.
   files and add files only for new pages. Output separately the different platform pages that need
   design; do not combine multiple product pages in one HTML or force presentation of all three
   platforms. Demonstrate a page's dialogs, loading, empty, error, and success states interactively in
-  that HTML without separate state pages. 新交付由可信 CLI `open` 显式指定项目、adapter、需求、
-  request-id 与具体页，返回 HTTP `delivery_url`，提供共用缩放画布和默认收起目录。
+  that HTML without separate state pages. Agent／PM 交付前先用可信 CLI `prepare-delivery --root --adapter --pages` 幂等准备入口，再由 `open` 显式指定项目、adapter、需求、
+  request-id 与具体页；open 缺准备报 preparation_required，不改业务 HTML。返回具体 HTML 的 file URI `delivery_url` 及 `delivery_urls`，提供完整共用缩放画布和默认收起目录。未准备的裸模板不作为完整交付。
   “进入评审”以 `noopener` 新标签页准确打开当前页的 `review_url`；评审进入即批注，
   没有目录、持久浏览模式或开发说明。两页读取同一物理原稿，复用画布组件，各自保留相机和交互状态。
   新项目不生成额外导航 index、不复制通用工具；既有业务首页和未知文件不得按名称删除。
   历史 `prepare` 及 feedback 2／3／4 包独立保留原 index、资产和消费语义。
 - For new pages, resolve `templates/prototype/page.html` through the current physical plugin's
-  resource entry, and reuse the project's compatible `prototype.css` when present. Remove template
-  references to plugin-only feedback/bridge resources from the project page; live 服务仅在 HTTP
-  内存响应提供这些资源，不持久化第二份业务 HTML。 Create only authorized page/business-style paths. Preserve the
+  resource entry, and reuse the project's compatible `prototype.css` when present. Do not activate missing tool dependencies in the bare template; prepare-delivery 在首个业务脚本之前插入固定相对 entry 标签，并准备受管 `.xy-prototype-entry` 链接及精确忽略项。通用资源留在中央工具中，不持久化第二份业务 HTML。 Create only authorized page/business-style paths. Preserve the
   unified page header, `.prototype-stage`, `.prototype-frame`, product slot
   `data-prototype-page-content`, and bottom page contract. Fill in page information and explanations
   and set `data-prototype-platform` and `data-prototype-display`; Web defaults to `responsive`, while
@@ -46,11 +44,7 @@ branches, or add confirmation.
   navigation, and contract area are not part of the product interface. Do not require wallpaper or
   generate background images. The artboard contains only the current page's product interface and
   its interactions.
-- 原稿页标题、说明、需求导航与五节契约保持在产品插槽之外。HTTP 交付壳从登记元数据派生
-  默认收起目录，不在每页手抄。`file://` 原稿可离线查看与操作，但不承诺完整相机、目录或 Python
-  冷启动；服务不可用时由交付方用相同显式参数重跑 `prototype_feedback_cli.py open` 并提供新链接。
-  不在原稿写 token、机器路径或随机端口。产品导航、滚动与浮层仍属于产品区；评审时按工具提示的
-  修饰键临时操作设计，释放回批注。真实 dialog／popover 在父画布保持可选择与可标注。
+- 原稿页标题、说明、需求导航与五节契约保持在产品插槽之外。具体 `file://` HTML 是完整交付入口，目录来自项目公开 catalog，当前页按真实文件名选择，不用单一 active_request 覆盖其他请求页。唯一 delivery.html shell 投影到中央经典脚本，项目不手抄工具或业务 HTML。file 顶层在业务执行前装配唯一壳，一层独立设计 iframe 执行业务一次；仅此 file 分支允许 allow-scripts allow-same-origin，支持相对业务资源。HTTP 评审仍仅 allow-scripts。公开 binding 无 token，只用于 noopener 同页评审引导；file 不建立控制连接或拿 token。准备或 binding 失效准确提示交付方重跑显式 prepare-delivery／open，不猜端口、不冷启动、不虚称 ready。原稿不写机器路径、端口、认证或动态 review_id。父子同时验证准确 window、page、nonce 和 null origin；HTTP 引导须独立核验顶层导航并仅在响应内提供秘密。产品导航、滚动与浮层仍属于产品区；评审时按提示修饰键临时操作，释放回批注。真实 dialog／popover 在父画布保持可选择与可标注。完整 file 交付壳的目录与相机工具浮于画布，不挤占产品画面，不再显示旧大标题背景；五段契约保留原稿结构，在交付壳以大弹窗查看。下述原稿的自然阅读顺序不要求工具壳重复展示整段说明。详见反馈合同。
 - First determine platform and layout scope from the current task and project design standards.
   For fixed previews, reuse existing baseline dimensions first; if no baseline exists, choose and
   explicitly explain one. Responsive Web needs no invented fixed dimensions. Keep previews consistent
@@ -82,4 +76,4 @@ branches, or add confirmation.
   automatically reworking all existing prototypes; this creates no prototype tasks for
   `standards_only` or user-selected direct-development branches.
 
-- 当前任务使用节点反馈时，按需读取 [反馈修订消费合同](prototype-feedback.md)。交付工具位于 HTTP 外壳，独立评审页进入即批注；用户修改提案不成为产品 DOM、已批准基线或任务批准。继续在原路径修改稳定 HTML，并沿原静态验收与适用视觉确认交付，不新建 spec、sidecar 或独立设计报告。
+- 当前任务使用节点反馈时，按需读取 [反馈修订消费合同](prototype-feedback.md)。交付工具位于具体 file HTML 装配的中央外壳，独立评审页进入即批注；用户修改提案不成为产品 DOM、已批准基线或任务批准。继续在原路径修改稳定 HTML，并沿原静态验收与适用视觉确认交付，不新建 spec、sidecar 或独立设计报告。

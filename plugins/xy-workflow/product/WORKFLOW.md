@@ -810,7 +810,9 @@ artifact for standards maintenance.
 ```text
 docs/standards/prototype/
 ├── prototype.css          # 可按项目需要维护的业务／展示样式
-└── <stable-page>.html     # 稳定具体页及完整五节契约
+├── <stable-page>.html     # 稳定具体页及完整五节契约
+├── .xy-prototype-entry    # prepare-delivery 管理的链接，不复制工具
+└── .gitignore            # 只维护精确受管忽略项，保留已有内容
 ```
 
 One product page has one stable HTML path: update an existing page in place and create a file only
@@ -819,22 +821,21 @@ installation, a build, framework, router, external CDN, live API, database, acco
 项目脚手架不投放通用 index、workspace.css/js、feedback.css/js 或 page-shell.js。
 已有 `docs/standards/prototype/index.html`、`docs/standards/prototype/prototype.css`、具体页面、
 业务组件和分组语义均保留；不按文件名覆盖或删除。新页面从物理插件的 `resource` 解析
-page.html 模板，去掉项目源对插件反馈／桥接资源的引用，只创建有权限的具体页和业务样式。
+page.html 模板；裸模板只注释受管标签示例，不激活缺失依赖。只创建有权限的具体页和业务样式；Agent／PM 交付前必须准备受管入口，未准备模板不能作为完整交付。
 
 反馈评审按需使用 [prototype-feedback](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
-当前交付通过物理插件根的白名单 `prototype_feedback_cli.py open`，显式指定项目 root、同一
-adapter、唯一需求 Markdown、request_id 和本次 `--pages`，在交付时启动或复用本机服务，
-返回具体页的 `delivery_url/review_url/reused`。目录仅含本次登记且通过安全校验的 1—16 个
-同需求具体页；单页参数只显示一页，不扫描全项目、其他需求或从旧 index 派生当前目录。
-同一次 open 可用 `--pages <project-relative-HTML-1> <project-relative-HTML-2>` 登记多页。
+当前交付先通过物理插件根的白名单 `prototype_feedback_cli.py prepare-delivery --root --adapter --pages`，幂等准备受管入口／公开目录，不启动服务或业务请求；再用 `open` 显式指定相同项目 root、adapter、唯一需求 Markdown、request_id 和本次 `--pages`。open 先验证准备，缺失准确返回 `preparation_required`，不会悄悄修改业务 HTML。ready 后 `delivery_url` 为首个具体 HTML 的 file URI，`delivery_urls` 列出各页，`review_url` 为无秘密 HTTP 导航入口；诊断 HTTP 交付链接仅可另名 `http_delivery_url`，必须无 fragment 秘密；正式 file／review URL 均无秘密。
+项目完整交付 catalog 上限为256页，与单次 review 的16页限额分离；一次 open 仅绑定本次已批准、通过安全校验的同需求 1—16 页，多页使用 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`，不扫描全项目或从旧 index 派生。项目公开 catalog 按项目锁合并，不同具体页可绑定不同请求，当前页按实际文件名选择，不能用单一 active_request 覆盖其他页。
 
-完整工具入口是 HTTP 具体页 delivery_url，交付页以共用缩放画布和默认收起目录展示原稿，
-“进入评审”以 noopener 新标签页准确打开当前具体页，保留交付页。独立评审页进入即批注，
-无目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放回批注。
-两页复用画布组件并读取交付目录同一物理原稿，分别保留相机和交互状态。来源键与桥只装配于
-HTTP 内存响应，不写原稿或落盘活动业务 HTML 副本。file:// 原稿仍可离线查看与操作，但不能
-冷启动 Python 或发现随机端口；服务不可用由交付方重跑同样显式 open 参数并提供新链接，
-status/stop 管理精确请求实例，不向原稿写 token、机器路径或随机端口，不配置系统自启动。
+正式完整工具入口是具体 file HTML，提供共用缩放／移动／复位画布、平台尺寸和默认收起目录，保留真实业务交互。目录默认收起并浮出，不挤占画布；缩放等工具浮于画布，取消旧大标题背景。五段契约仍保存在具体 HTML，完整交付壳以大弹窗查看，不占主画布。“进入评审”仅按当前页公开 binding，以 noopener 新标签准确导航到 `/_entry-review/<instance>/<review_id>/<registered-name>`，保留原交付页；file 壳不创建控制连接、不获取 token。公开 binding 只代表最后登记入口，不证明当前服务 ready，不新增探测或后台连接；stop 后 file 仍可看稿，需要 Agent 显式重开服务恢复评审。未准备、失效或服务不可用须准确提示交付方用相同显式参数重跑 prepare-delivery／open，不猜端口、不冷启动、不虚称 ready。status/stop 管理精确请求实例，不配置系统自启动或系统 URL 协议。
+
+项目只保存固定相对经典标签 `<script src=".xy-prototype-entry/entry.js" data-xy-delivery-entry="1" charset="utf-8"></script>`，在任何业务脚本之前，由 prepare-delivery 幂等插入。受管 `.xy-prototype-entry` 指向用户级本项目发布目录，目录级 `.gitignore` 仅维护精确受管项并保留用户内容；源 HTML 不写机器路径、随机端口、认证或动态 review_id。普通 symlink/hardlink 仍拒绝，受管入口只在精确标签／路径／可信链接／属主／版本／摘要均验证后获窄例外。通用同 payload 工具只缓存一份，唯一 `delivery.html` 模板生成中央经典 shell，不手抄第二套 markup 或复制业务 HTML。
+
+file 顶层经典 bootstrap 不依赖 file fetch／ES 模块，在业务脚本前停止顶层解析，只在独立一层 file 设计 iframe 执行业务一次。仅此 file 分支可用 allow-scripts allow-same-origin 以支持相对 CSS／经典 JS；HTTP 评审内容仍仅 allow-scripts，绝不加 allow-same-origin。父子同时核对准确 window、当前页、随机 nonce 和 null origin，不能仅凭 null 字符串信任。共用相机保留原始 stage/frame、声明或受限实际测量的画板宽高，不统一成 1120×860 或清空 frame 约束。HTTP 来源键先按原始 HTML 字节定位注入，再移除精确 file 标签，避免匿名源偏移错误；不落盘活动业务 HTML 副本。
+
+公开 catalog schema 1 只有 project_id、directory_sha256、tool 和 pages 的名称／路径／label／groups／platform／display／viewport／plan_source／binding，binding 仅含 request_id、review_id、instance 和精确 127.0.0.1 origin；无 token、管理 cap、root 或 argv。directory_sha256 为实际 prototype 目录 canonical file URI 末尾带 `/` 的 UTF-8 SHA256，file 以 new URL('.',originalFileURL).href／WebCrypto 同口径核验后才信任绑定；缺失、不匹配或 crypto 不可用时保留画稿、拒绝旧绑定并提示 Agent 重新准备，防止复制目录错绑。label 最多1024字符，viewport 每轴为有限正数1..16384。动态目录和工具引用不进入业务 render 摘要，tool 独立绑定。HTTP 引导核验当前实例／修订／登记页及精确 Host，仅允许可核浏览器顶层 document/navigate，拒绝 Origin:null 和 iframe/script/object/fetch 取得秘密。合法响应的独立 `script#prototype-browser-connection` 才提供安全转义的 schema1/review_id/token，并设置 no-store、no-referrer、nosniff、frame-ancestors none、X-Frame-Options DENY 和 COOP。公开 ID／Fetch Metadata 不是秘密认证；无秘密跳转 URL、cookie、凭据 CORS 或 JSONP。可信 HTTP 父工具核对同 review_id 后消费连接，Bearer／精确 Origin 控制及私有管理 cap 保持，绝不向业务 frame 传 token。
+
+独立评审进入即批注，无目录、持久浏览模式切换或开发说明；按提示修饰键临时操作，释放回批注。两页读取同一物理原稿，复用组件，各自保留相机和交互状态。live 资产由 backend 的 LIVE_TOOL_ASSETS 唯一声明，新增 file-entry.js、file-delivery.js、file-page.js、canvas-presentation.js；packaging 只消费与历史 V4 九项的有序并集，TOOL_ASSETS 旧别名不变。
 
 当前 live 的 boot／bridge 5 与封闭 context 3 分开声明；context 绑定物理项目身份、adapter、
 需求字节、登记页导航摘要、逐页依赖、工具版本／载荷摘要及实际来源修订 review_id，requirements
@@ -843,11 +844,11 @@ json 围栏内的紧凑 `{schema_version:5,review:{request_id,review_id},anchors
 短引用仅定位当前真实项目和指定请求的本机既有 live 来源修订；缺失、来源变化或完整性错误明确
 失败，不扫描、不接受外部 context 回退或以活动指针重绑 latest。草稿按来源修订独立保存，CAS
 冲突可见，原稿变化保留原意见并阻止错误提交；live 元数据不写入历史不可变包。项目源不加入
-保留来源属性。源码能力不表示已发布安装的 3.0.2 自动具备新格式。
+保留来源属性。源码能力不表示已发布安装的 3.0.3 自动具备新格式。
 
 历史 prepare 及已生成 feedback 2／3／4 的不可变离线包保留各自原装配和严格只读消费分支，
 旧 index、manifest／boot／bridge、context 2／3 及资产名单按各自历史合同处理；不使用新 live
-名单回验旧包，不迁移旧包／草稿或覆盖旧评审。历史离线入口不作为新交付的默认启动路线。
+名单回验旧包，不迁移旧包／草稿或覆盖旧评审。历史离线入口不作为新交付的默认启动路线。旧 prepare 处理新 prepared 源时，仅在原始字节来源键注入后移除精确 entry；旧无标签2／3／4字节和V4九项不变。
 
 `validate` 只读重读项目与真实目标，成功只返回 `status:current/review/anchors/changes/notice`；
 changes 按 target 分组，item 不重复 target，源 REQ／交互／接口关联仅在组层还原一次且无值省略。

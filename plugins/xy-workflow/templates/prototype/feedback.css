@@ -1,9 +1,9 @@
 /* 仅在通过bridge3认证的派生页隔离展示壳；项目独立源不加载本资源、不受影响。
  * 子文档overlay独占局部几何；按钮与颜色只表达评审意见，不删除或改写产品元素。 */
-body.prototype-review-embedded { margin:0!important; padding:0!important; min-width:1120px; width:1120px; min-height:860px; }
+body.prototype-review-embedded { margin:0!important; padding:0!important; min-width:0; min-height:0; }
 body.prototype-review-embedded .prototype-review-shell-hidden { display:none!important; }
-body.prototype-review-embedded .prototype-review-shell-ancestor { display:contents!important; }
-body.prototype-review-embedded [data-prototype-page-content] { margin:0!important; max-width:none!important; width:1120px; min-height:860px; box-sizing:border-box; }
+body.prototype-review-embedded .prototype-review-shell-ancestor { margin:0!important; padding:0!important; min-height:0!important; }
+body.prototype-review-embedded [data-prototype-page-content] { box-sizing:border-box; }
 body.pr-annotating [data-prototype-page-content],body.pr-annotating [data-prototype-page-content] * { cursor:crosshair!important; user-select:none; }
 .pr-overlays { position:fixed; inset:0; pointer-events:none; z-index:2147483000; font:13px/1.4 system-ui,sans-serif; }
 .pr-selection,.pr-hover,.pr-outline { position:absolute; pointer-events:none; box-sizing:border-box; border:2px solid #a8c5ff; border-radius:3px; }

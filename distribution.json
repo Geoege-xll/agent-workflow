@@ -1,14 +1,14 @@
 {
   "artifacts_sha256": {
     "native/native-agent-config-0.1.3.zip": "368faac571dfa438a25c103ec2b1ab27b1483ee7692eaa982d248c5647618c26",
-    "workflow/xy-workflow-antigravity-3.0.3-local-source.zip": "8ba9f26fa0936cf61d9c0508b347ae747864402dbe385e2de0f349fda9ec9b4f",
-    "workflow/xy-workflow-antigravity-3.0.3.zip": "fa15b0a114931b7e84fab87e6372c6f9f24aadaf4b86c7a64c94d513dd5774f9",
-    "workflow/xy-workflow-claude-3.0.3-local-source.zip": "c3927d88155ec4c30c9858549dacf3773226c594af331321ba6465948dcc75e1",
-    "workflow/xy-workflow-claude-3.0.3.zip": "daf3f787bff612fcad5ec1093254f7a9538d1f58c059619ed8bc66532b8b194c",
-    "workflow/xy-workflow-codex-3.0.3-local-source.zip": "011537b9258131381c80ed2c52a9601fccfeb43bf562abf761ca6b6c123538f2",
-    "workflow/xy-workflow-codex-3.0.3.zip": "8516ac22680a67e1e8aaaed43a1d56a0f54195f198039eca7a4b479cec9409c5"
+    "workflow/xy-workflow-antigravity-3.0.4-local-source.zip": "2c5045c11566b37afc124fcfc9b17585d7a25026a17b35fdb69f40a3f43050e0",
+    "workflow/xy-workflow-antigravity-3.0.4.zip": "88eac2042fba9b9d905b9f5478e351458acab111fbad301493b64093f5b43cef",
+    "workflow/xy-workflow-claude-3.0.4-local-source.zip": "28ce2e5e6adf9ece16a1382625af73a47624e8822167b44ad0bc9cf159098654",
+    "workflow/xy-workflow-claude-3.0.4.zip": "31b558df55256cdc1123f541bbec6dc139c79870add1713a8d52ebe0e2350e39",
+    "workflow/xy-workflow-codex-3.0.4-local-source.zip": "85972a50bbcb6f4666c2d3c087d9ea77224f1484eadd33392e8367af071da250",
+    "workflow/xy-workflow-codex-3.0.4.zip": "2f60ddf6562368d832e95a368590c79587147308038b122dceaf9d80ac121653"
   },
-  "candidate_sha256": "3a7a1a4a9c1c44e3289bb0200182793aec9d51ecbab5b9d5df4fdd31b08acc31",
+  "candidate_sha256": "9f69313e36d074ae0391144e5217bcbba13712fba2aa46fe3a6edec9df21ff9a",
   "channel": "stable",
   "files": {
     ".claude-plugin/marketplace.json": {
@@ -17,7 +17,7 @@
     },
     "plugins/xy-workflow/.claude-plugin/plugin.json": {
       "mode": "100644",
-      "sha256": "ef00836ecb1b8fcd8503dfe346a2f95aa0b39c9e361e8b14ff8830d37652980d"
+      "sha256": "bab52316f2a4e3ea46ddf6e21e10d36ccfe976e4e2774e8f21130e25b0b45099"
     },
     "plugins/xy-workflow/INSTALL.md": {
       "mode": "100644",
@@ -121,7 +121,11 @@
     },
     "plugins/xy-workflow/lib/documents/prototype_feedback_cli.py": {
       "mode": "100644",
-      "sha256": "6da3d944b6ed1761bcae5ef93910da093e054d1281c37ec67dab57ead33e95b7"
+      "sha256": "42751802b76368bde5c65f60ef06ca65701e7c798595c168de005fa4e1172812"
+    },
+    "plugins/xy-workflow/lib/documents/prototype_file_entry.py": {
+      "mode": "100644",
+      "sha256": "3feee2fb8aa31b983854addad5b3adcf63e56bf2bc6137837e03340aad8448f0"
     },
     "plugins/xy-workflow/lib/documents/prototype_handoff.py": {
       "mode": "100644",
@@ -137,15 +141,15 @@
     },
     "plugins/xy-workflow/lib/documents/prototype_review.py": {
       "mode": "100644",
-      "sha256": "fb1138dd89934fa7d3fa6030a0ec45f6ab00395e34118eea458c9acc4d832ecd"
+      "sha256": "02b7bf8c55ba74313aae490f2d434411b374e878adae66de645d883cf7cb9557"
     },
     "plugins/xy-workflow/lib/documents/prototype_server.py": {
       "mode": "100644",
-      "sha256": "e319c4ef7ee9413c2a39f8c8913e2e9c87a32c2429f13eb5ab16048f0154ea06"
+      "sha256": "70b02ce000616f48f64e6e77e2731714b8fd7a55333b5416725f869f55f0abaf"
     },
     "plugins/xy-workflow/lib/documents/prototype_service.py": {
       "mode": "100644",
-      "sha256": "564d6e04b2bdc83872bd6a003cb3856d4b89fa9c5457a0631708c047b0995921"
+      "sha256": "64979ac67a0598268e5d8faba3ed622376237d2caaf7ee8f42566bc2faf4a349"
     },
     "plugins/xy-workflow/lib/documents/prototype_targets.py": {
       "mode": "100644",
@@ -161,7 +165,7 @@
     },
     "plugins/xy-workflow/lib/documents/validate_prototype_workspace.py": {
       "mode": "100644",
-      "sha256": "bbcfa2d25081dbcced0e879c270465d737a757397387b992ff045fd8262b1444"
+      "sha256": "2b060cd45d806b1528e68ec307c92b7ea36d52ddc4234015a91da2c14ef5e40c"
     },
     "plugins/xy-workflow/lib/foundation_qa.py": {
       "mode": "100644",
@@ -389,7 +393,7 @@
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-prototype-verify/SKILL.md": {
       "mode": "100644",
-      "sha256": "81258779814c206a17268fc5b9eeabfa9e96bd038e245727da9dd496fcad4a16"
+      "sha256": "f69a1c4f6baeba9ca69072e053ee4377ebacace80bd6b65a65eb13733ed1654b"
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-qa-review/SKILL.md": {
       "mode": "100644",
@@ -409,7 +413,7 @@
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-ui-design/SKILL.md": {
       "mode": "100644",
-      "sha256": "2760d5f1632e9ff12aa84358dbc42791e50aebf50cd96f48a2b832a05fe37776"
+      "sha256": "9c50cf0e6873c724de6d614b3756f85e6d71fe52173457b57a8feb2ec07047b3"
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-ui-design/references/components-rules.md": {
       "mode": "100644",
@@ -425,11 +429,11 @@
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-ui-design/references/prototype-canvas.md": {
       "mode": "100644",
-      "sha256": "a9df6b6352307d7dd9588627c06f1f258fe5f9a2001b340d836dcc40bbfea983"
+      "sha256": "3d9dd7a9d5d5786e440eb0fc44508098b6b5ced7c86738d63ab5e4e43567415c"
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-ui-design/references/prototype-feedback.md": {
       "mode": "100644",
-      "sha256": "69498bfb2d8abd9ebff1c11fad93357dc5e9deaa1c989eb32927905788a36246"
+      "sha256": "9f865943970c3ad1b63f4604cc0aa43f1293dfbfa3511b30df974379cace6592"
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-web-guidance/SKILL.md": {
       "mode": "100644",
@@ -473,7 +477,7 @@
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-workflow/references/ui-design.md": {
       "mode": "100644",
-      "sha256": "cc11a3bd959ff07e93542af27cf1fe176e73a855d9d8072f21a7668755acb328"
+      "sha256": "d7d931b1848eaf47f674a3c348ca0d4dba83c3e71d112158c9e9d7c9f35524be"
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-workflow/references/worktree-delivery.md": {
       "mode": "100644",
@@ -545,7 +549,7 @@
     },
     "plugins/xy-workflow/plugins/source_pack.py": {
       "mode": "100755",
-      "sha256": "1aaaf05ef88a0f79e12d61a2747cb3f9282a1c3bab65218e94fcab80ae944881"
+      "sha256": "29b013b4f708078edfe7ae5dff3e54a2a3507d396bc76b20aaed30598fa5a0f7"
     },
     "plugins/xy-workflow/product/AGENT_SCHEMA.md": {
       "mode": "100644",
@@ -557,7 +561,7 @@
     },
     "plugins/xy-workflow/product/PLUGIN_VERSION": {
       "mode": "100644",
-      "sha256": "db65b7b653f7c33a2c1f9fd381f5fbe089a389f063567831785baf4b2e1497e9"
+      "sha256": "224dbe2e4ea610ff39a61ccdc0af85c31a309ff1e19336b0448ccef9766a2c94"
     },
     "plugins/xy-workflow/product/ROLES.yaml": {
       "mode": "100644",
@@ -569,7 +573,7 @@
     },
     "plugins/xy-workflow/product/WORKFLOW.md": {
       "mode": "100644",
-      "sha256": "5cc25746e05778e64a94eea8f71be85bdcf55f68b169332d76e33ad84e9d6673"
+      "sha256": "26801c8f965cddc3294fd25be8b0bf145c0a12dbcee6a8ad5f019b6768d4d498"
     },
     "plugins/xy-workflow/product/__init__.py": {
       "mode": "100644",
@@ -697,7 +701,7 @@
     },
     "plugins/xy-workflow/skills/xy-prototype-verify/SKILL.md": {
       "mode": "100644",
-      "sha256": "f4144dd49d5201346dce5fa0ea78d1878757ba4c2844042de0aab4da9ea8a283"
+      "sha256": "f4a759ad8e8160d39b57062cc6751d5b4129a2c675e6ad80cf0256908dfe85a2"
     },
     "plugins/xy-workflow/skills/xy-qa-review/SKILL.md": {
       "mode": "100644",
@@ -721,7 +725,7 @@
     },
     "plugins/xy-workflow/skills/xy-ui-design/SKILL.md": {
       "mode": "100644",
-      "sha256": "b9fb37a3a233a6fd33c46c9f0a3c36148d9401bd0aff1c140bb1d697d7375706"
+      "sha256": "cb1247891faaf9f73d0afc37ff7e4fb1dea336fe28da94b7517399be68e83e49"
     },
     "plugins/xy-workflow/skills/xy-ui-design/references/components-rules.md": {
       "mode": "100644",
@@ -737,11 +741,11 @@
     },
     "plugins/xy-workflow/skills/xy-ui-design/references/prototype-canvas.md": {
       "mode": "100644",
-      "sha256": "a9df6b6352307d7dd9588627c06f1f258fe5f9a2001b340d836dcc40bbfea983"
+      "sha256": "3d9dd7a9d5d5786e440eb0fc44508098b6b5ced7c86738d63ab5e4e43567415c"
     },
     "plugins/xy-workflow/skills/xy-ui-design/references/prototype-feedback.md": {
       "mode": "100644",
-      "sha256": "69498bfb2d8abd9ebff1c11fad93357dc5e9deaa1c989eb32927905788a36246"
+      "sha256": "9f865943970c3ad1b63f4604cc0aa43f1293dfbfa3511b30df974379cace6592"
     },
     "plugins/xy-workflow/skills/xy-web-guidance/SKILL.md": {
       "mode": "100644",
@@ -785,7 +789,7 @@
     },
     "plugins/xy-workflow/skills/xy-workflow/references/ui-design.md": {
       "mode": "100644",
-      "sha256": "cc11a3bd959ff07e93542af27cf1fe176e73a855d9d8072f21a7668755acb328"
+      "sha256": "d7d931b1848eaf47f674a3c348ca0d4dba83c3e71d112158c9e9d7c9f35524be"
     },
     "plugins/xy-workflow/skills/xy-workflow/references/worktree-delivery.md": {
       "mode": "100644",
@@ -793,7 +797,7 @@
     },
     "plugins/xy-workflow/sources.json": {
       "mode": "100644",
-      "sha256": "52784bf99aa9fe8369b4bc0055b554c9ba0b28580728a3cf748fdd256fbde609"
+      "sha256": "f7604200deedf3bebbd260efaa1ff2893ea6db0cdfc650b046dc09e9e89ca195"
     },
     "plugins/xy-workflow/templates/docs/PLAN.md": {
       "mode": "100644",
@@ -817,19 +821,35 @@
     },
     "plugins/xy-workflow/templates/prototype/canvas-host.js": {
       "mode": "100644",
-      "sha256": "a4b6070922bde427df9637f35dba7f985bf6d30a97697ce2db291f7fba56b0a8"
+      "sha256": "4cd30e4f647cd0676963d02072a7a0c204ab6869f52d6de9fed79e5272ed3825"
+    },
+    "plugins/xy-workflow/templates/prototype/canvas-presentation.js": {
+      "mode": "100644",
+      "sha256": "2289b04124f4a939b0525a022d170835fd456c089c4ef9bd18ec75168d071d0e"
     },
     "plugins/xy-workflow/templates/prototype/delivery.html": {
       "mode": "100644",
-      "sha256": "8dda8274b4b0c4c780ff7f4c9b044210f8d37b776813a1dea75a6d9419367e19"
+      "sha256": "ab69c64471f617a0fae55fd489f8e8a55e911e096ab36e136848ccfd6537afb0"
     },
     "plugins/xy-workflow/templates/prototype/feedback.css": {
       "mode": "100644",
-      "sha256": "5fafdc33614b66fe713270ac0e7ae0ee7d0e3f7f8f74a27f8147cbbc9ed9b12a"
+      "sha256": "ec3f6ef7adb22dd0db2d27bf46121e92665b6d2e7e771e5186bbd39823e97020"
     },
     "plugins/xy-workflow/templates/prototype/feedback.js": {
       "mode": "100644",
       "sha256": "acfb7a740c602f461e476ad31aefea39cd702fd9e2524d415e4563b998375d37"
+    },
+    "plugins/xy-workflow/templates/prototype/file-delivery.js": {
+      "mode": "100644",
+      "sha256": "3fca323d62985292afa9a4a6c558574a391ebded71ad9c6b4586d4ced8da388c"
+    },
+    "plugins/xy-workflow/templates/prototype/file-entry.js": {
+      "mode": "100644",
+      "sha256": "8cae37c9e8847dd22700871fb98fbaa0234121b0704fd39b8564a5d761deb283"
+    },
+    "plugins/xy-workflow/templates/prototype/file-page.js": {
+      "mode": "100644",
+      "sha256": "a4dac985561a8ba3b1de7c431b77ef340243889e9ef591508004a5bc8b610c8f"
     },
     "plugins/xy-workflow/templates/prototype/index.html": {
       "mode": "100644",
@@ -837,31 +857,31 @@
     },
     "plugins/xy-workflow/templates/prototype/live-connection.js": {
       "mode": "100644",
-      "sha256": "cf905241c3071c08cff9e554931606e1a3aa85277fda4b0f472ba356a7aef81d"
+      "sha256": "5287aba70b0d473e5c85de2a7be9f8dd91a987545402287214a14e85584d2c62"
     },
     "plugins/xy-workflow/templates/prototype/live-workspace.js": {
       "mode": "100644",
-      "sha256": "2dddc7116e6c9a79be75c1a8c4dfd0e150ac56cfb5989687505924963cfc1335"
+      "sha256": "6e5f1cddd1ef9a0c49bfb337930f9e3f7de26c0809ea1da7824b6640c152f229"
     },
     "plugins/xy-workflow/templates/prototype/live.css": {
       "mode": "100644",
-      "sha256": "0d3971a22fd758144b07816322a1030ad2f37ab5c4ab417a4202797fd26a4950"
+      "sha256": "1030f115a94bfedc554cd7bda94ac2dbc9626e98314ded9b0bba27732021d1c6"
     },
     "plugins/xy-workflow/templates/prototype/page-shell.js": {
       "mode": "100644",
-      "sha256": "4df78d05a1629c361f53283f202f6a826bee1843f6120733fe68a0742ac93806"
+      "sha256": "2cb1330036d4eb4081b1050fa157dd5545c567755ae5e8aa2923cc59573c266f"
     },
     "plugins/xy-workflow/templates/prototype/page.html": {
       "mode": "100644",
-      "sha256": "49053887bea57e67116f068318c4fae74362bc1e6d52ffb732875bd9787f82b9"
+      "sha256": "c56fc4e125c7726986b28c2fa3103b07c20fbff1d08d8b279cbf5bc021e5332d"
     },
     "plugins/xy-workflow/templates/prototype/prototype.css": {
       "mode": "100644",
-      "sha256": "bf508b3b9c690e9a2bc973ff105b64aaf5af42ce82d03132edd39acaa3e5dde4"
+      "sha256": "8eb9ac07b91d24b32a41e036ad251cdf7597ed13d53a3971e8419b962606ead3"
     },
     "plugins/xy-workflow/templates/prototype/review-camera.js": {
       "mode": "100644",
-      "sha256": "4e64007e02794a3ef156a323fc4bacd837641a6f08882ca85dbb53ada640d887"
+      "sha256": "a118970a5bdc41738a1fa8b7b67e6ef6bd118859576d206e14061c2a7f7c85b4"
     },
     "plugins/xy-workflow/templates/prototype/review-state.js": {
       "mode": "100644",
@@ -869,11 +889,11 @@
     },
     "plugins/xy-workflow/templates/prototype/review.html": {
       "mode": "100644",
-      "sha256": "88a4fb76973f5d7139e1c204234891cbb7b35ae599e22430e526c49e9e4be708"
+      "sha256": "da2892aecfef8bbcd550917934c4bcc1f83de019202f0acf4752a8aa3d64adcf"
     },
     "plugins/xy-workflow/templates/prototype/workspace.css": {
       "mode": "100644",
-      "sha256": "a52edeb4991b5777b1ddfc17e8cf14bd86068c4022e077a1555aa6fbf81d081f"
+      "sha256": "de3eb7fcaf75f7c3238171b4d1fc95bf800329ac3b310b3b063d546e54fb969e"
     },
     "plugins/xy-workflow/templates/prototype/workspace.js": {
       "mode": "100644",
@@ -9321,16 +9341,16 @@
     },
     "plugins/xy-workflow/workflow-sources.json": {
       "mode": "100644",
-      "sha256": "80028ded32ae5d2c5b76b1c756a7d5fd770e76a424460608c587d225de301561"
+      "sha256": "ae3d075cc07d97f0e0eb2999ab5c84ed252fcd2787b344d3f39466c4ab09850f"
     }
   },
   "host": "claude",
   "managed_by": "agent-workflow-plugin-source-v1",
-  "plugin_zip_sha256": "daf3f787bff612fcad5ec1093254f7a9538d1f58c059619ed8bc66532b8b194c",
+  "plugin_zip_sha256": "31b558df55256cdc1123f541bbec6dc139c79870add1713a8d52ebe0e2350e39",
   "ref": "refs/heads/plugins-claude-stable",
   "repository": "Geoege-xll/agent-workflow",
   "schema_version": 1,
-  "source_revision": "f65c290b410299c5f37b42b6b6892118473ccfd8",
-  "source_tree_sha256": "0e59e43e63cd34081263e9ddfb09e0ad5c11cb0bc1796f4a56ccb4f37ec2c312",
-  "version": "3.0.3"
+  "source_revision": "484760aab0fc3010dbce8e7b18bc7defeca62baf",
+  "source_tree_sha256": "8eec97f7729e8b8d23b175bcd03786541c0fb8cb0b2140e9206d62eb2fa5ae06",
+  "version": "3.0.4"
 }

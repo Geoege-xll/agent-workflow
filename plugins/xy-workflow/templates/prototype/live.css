@@ -21,7 +21,11 @@
 
 /* 目录悬浮在画布左侧，打开时不重置相机或挤压真实设计视口。 */
 .live-delivery-body { position:relative; }
-.live-navigation { position:absolute; z-index:8; inset:0 auto 0 0; box-shadow:12px 0 24px #0004; }
+.live-navigation { position:absolute; z-index:24; inset:0 auto 0 0; box-shadow:12px 0 24px #0004; }
 .review .live-marker.item.modify { background:var(--change-modified); color:var(--review-on-action); }
 .review .live-marker.item.add { background:var(--change-added); color:var(--review-on-action); }
 .review .live-marker.item.delete { background:var(--change-removed); color:var(--review-on-action); }
+/* 交付壳直接承载缩放工具，不经过评审cluster；浮层空白穿透，实际按钮必须可点击。 */
+.canvas-floating-controls>.canvas-zoom-tools { pointer-events:auto; }
+.live-review-link[aria-disabled="true"] { background:var(--review-subtle); color:var(--review-muted); border-color:var(--review-control); }
+.live-review-link:focus-visible,.live-navigation a:focus-visible { outline:2px solid var(--review-action); outline-offset:3px; }
