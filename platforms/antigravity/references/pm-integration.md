@@ -22,6 +22,8 @@ integration and confirm/auto local main delivery, read `/xy-workflow`'s `referen
 If isolated tool binding is unavailable, report it and retain safe ownership-based scheduling;
 never emulate isolation by concurrently switching branches in one directory or overwriting host settings.
 
+自然语言委托开发、设计交付或独立 QA 时，主会话直接进入 xy-workflow。复用用户对当前范围的明确批准，按现有业务门禁处理尚缺的实质决定。运行包内已知 helper 默认沿用宿主沙箱。参数错误、摘要过期或校验失败时先修正具体输入，不用 `BypassSandbox` 重跑。确实需要额外访问时遵循宿主权限流程。用户明确指定 PM 实施的范围沿用现有例外，独立 QA 由真实 Reviewer 完成。
+
 Light first assesses the current goal, risk, scope, and implementer, dispatching the corresponding native role subagent by default with mandatory minimum sufficient verification; assess independent QA, documentation, and memory at handoff without mandatory Full planning, DAG, saved plans, or duplicate confirmation.
 
 Full: classify → facts → Grill Me coverage through original `/xy-grilling` → `xy-plan` draft → projection decision →
@@ -96,6 +98,20 @@ Continuous same-task implementation, recent short rework, and same-round Reviewe
 
 Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe-version` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace PM coverage through bundled `grilling` or change aliases.
 
-PM records the actual `invoke_subagent` result ID as `agent_ref` through existing update and queries `continuation --host antigravity --observed-state <current-observation>`; only currently exposed authorized native follow-up/wait tools may execute its advice. Cancelled, unknown, invalid, or cross-host states block automatic continuation; still hand off the complete Task Pack/scope. Retirement prohibits continuation; absent capabilities do not justify a custom runner, daemon, MCP, or replacement Reviewer. AGY native cumulative usage retains an unknown initial baseline, last_cumulative, and observed_delta rather than summing each record.
+普通非 UI 的 Light 修复从[完整单包示例](../../shared/skills/xy-workflow/references/dispatch.md#light-non-ui-pack)填写原件。PM 从当前宿主取得真实父会话 UUID，以 `--pm-id antigravity:<UUID>` 执行共享派发说明中的 `pool claim`。把领取回执的 `dispatch_marker` 原样放在初始 Prompt 的独立一行，同时交付完整的当前任务包或已核实的完整包文件引用。每次只发起一个 `invoke_subagent` 工具调用，以便匹配紧邻的原生结果；其他已就绪任务可分别创建并同时执行。获取 `conversationId` 后立即执行 `pool bind --host antigravity --agent-id <conversationId> --receipt <原领取回执>`。核对当前父会话、任务、执行目录及原生类型。命名派发的 `TypeName` 必须等于任务包的 `task.role`。只能走通用入口时，已验证的 `research` 类型须在初始 Prompt 连续附上同包 `roles/<task.role>.md` 的完整正文（可连同 YAML 头），并满足该任务的工具及隔离要求。显示用的 `Role` 标签不能证明角色交接。当前实现已核对 AGY CLI 1.5.13 在本机系统账号目录下的父会话 transcript，仅查看该会话最近 32 MiB。日志不可读、回执缺失或工具格式变化时保留占用，核实创建结果；不要重复创建、将角色名填作实例 ID 或报告独立 QA 通过。已绑定的同一 ID 可幂等重试。原生创建及日志来源见[官方子代理说明](https://antigravity.google/docs/subagents?app=cli)和[官方 Hook 的 transcriptPath](https://antigravity.google/docs/hooks/)。
+
+PM queries `continuation --host antigravity --observed-state <current-observation>`; only currently exposed authorized native follow-up/wait tools may execute its advice. Cancelled, unknown, invalid, or cross-host states block automatic continuation; still hand off the complete Task Pack/scope. Retirement prohibits continuation; absent capabilities do not justify a custom runner, daemon, MCP, or replacement Reviewer. AGY native cumulative usage retains an unknown initial baseline, last_cumulative, and observed_delta rather than summing each record.
 
 See `xy-qa-review/references/inputs.md` for structured QA output: when supported, use `--json-schema <schema-json>` in the same authorized invocation, then `qa_handoff_cli.py extract --host antigravity --input <native-result.json> --task-pack <current-qa-pack.json>`. Missing optional usage is not a QA gate.
+
+### CLI 工具执行前的写入分工
+
+启用本插件后，AGY CLI 从插件根的 `hooks.json` 加载 `xy-workflow-write-ownership`。在当前 CLI 1.5.13 中，原生 `edit_file`、`write_file`、兼容文件编辑工具及 `run_command` 由 PreToolUse 核对。放行交给宿主原有许可继续判断；守卫不会自动批准操作。[官方 Hook 协议](https://antigravity.google/docs/hooks/)
+
+- PM 可通过原生工具读取工作区，直接核对角色与当前任务，调用原生派发、消息和等待。终端可分别运行 `pwd`、`git status --short`、`git diff --stat`、`rg -n`、`sed -n '1,80p'` 等只读命令。使用实际工作区的物理绝对路径。只有一个工作区时可使用相对路径。
+- PM 用固定包内命令 `bash <插件绝对路径>/lib/python_runtime.sh -B -X utf8 <插件绝对路径>/plugins/source_pack.py helper --project <项目绝对路径> lib/task_graph_cli.py scratch --root <项目绝对路径> --request-id <请求ID>` 分配本次目录。从输出取 `scratch_dir`，用原生 `write_file` 在其中准备任务包、方案输入和验收资料。沿用同一个包内入口执行 `pool claim --register`、`task` 导出和 `pool bind`，将实际领取回执重定向到该目录内的具体文件。将示例占位符、变量换为真实值。派发角色和原样 marker 的完整步骤见上文及随包 `skills/xy-workflow/references/dispatch.md`。
+- AGY 的 `scratch_dir` 位于本项目 `.awf/agy-requests/request-<请求摘要>/`。PM 和工作者在宿主默认工作区内即可交接；该目录自带局部 Git 忽略规则。使用实际返回路径，不复制到系统临时目录。池索引、准入锁和已登记原件继续沿用原有位置。
+- 新项目先用同一包的 `plugins/project_context.py inspect`，需要建立适配器时调用 `apply --adapter .awf/project.yaml`。PM 可以写入所选唯一适配器指明的 PROJECT、同目录 ARCHITECTURE 及计划目录内的 Markdown，也可以准备当前会话的任务、实施计划和交接 Artifact。规范正文与实现者的其他资源仍按原有所有权和阶段处理。
+- 用户当前原话明确指定执行者，例如“这次由主会话亲自改”，在单工作区仅对当前用户轮次生效。指明具体相对文件的“请 PM 本人直接修改 total.py”仅对该文件生效。后续普通委托恢复默认分工。按现有 WORKFLOW 执行请求范围、验证及独立 QA。
+- 实现者以当前领取、原生父子会话、执行目录及原件中的 `owned_paths` 核对编辑范围。若实现者先于 PM 绑定开始编辑，使用同一原生创建回执核对。QA 和只读任务使用原生读取和只读核验。原任务已明确登记的常规测试命令可由 PM 或当前实现者从对应工作区运行，测试内部的项目代码继续由宿主沙箱管理。
+- 常用的纯只读命令可以用 `&&` 或管道组合，每一段分别核对。带写入的复合命令、变量展开、任意解释器程序和交互式终端输入无法在执行前确定目标。可使用原生文件工具进行任务内编辑，将读取、派工、验收分别写为独立调用。新工具、第三方 MCP、外部进程以及工具执行后的文件系统副作用不在这些原生入口的覆盖范围。

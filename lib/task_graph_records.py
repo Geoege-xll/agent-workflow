@@ -114,7 +114,7 @@ def _publication_lock(path: Path):
 
 
 def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None,
-            task_update: dict | None = None) -> bool:
+            task_update: dict | None = None, bound_export: dict | None = None) -> bool:
     """持协作锁核对旧指纹，再以原子替换发布；读者只见完整旧文件或新文件。
 
     不移走正式文件、不创建硬链接或常驻锁文件。PM 是该记录的单一写入者；
@@ -161,6 +161,12 @@ def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None,
                     older, newer = previous.get(task_id, {}), current.get(task_id, {})
                     if older != newer and task_intent.RECORD_FIELDS.intersection(older.keys() | newer.keys()):
                         raise TaskGraphError("existing withdrawal or revision requires authoritative update")
+                    if older and newer and older != newer and (not bound_export or newer.get("agent_ref") != bound_export):
+                        # task --output 同样可以 CAS 覆盖已有 Light 文件。若目标就是
+                        # 原件，不可借未核实的输入补绑历史别名。真正已绑定的权威原件
+                        # 仍可把同一身份同步到之前导出的交接包；已领取的原件由上方保护。
+                        from lib.hosts import antigravity_dispatch
+                        antigravity_dispatch.guard_public_update(older, {"set": newer})
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         from lib.foundation_qa import validate_publication
         validate_publication(path, before, body, root=root)
@@ -676,6 +682,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
 # 旧 agent-workflow-scratch 容器整体留待原任务或人工核对，不参与新版分配和清理。
 SCRATCH_ROOT_NAME = "agent-workflow-request-scratch"
 SCRATCH_SLOT_RE = re.compile(r"request-[0-9a-f]{64}\Z")
+AGY_HANDOFF = Path(".awf/agy-requests")
 
 
 def _project_scratch_base(root: Path) -> Path:
@@ -711,7 +718,10 @@ def _validated_scratch_slot(request_id: str | None) -> str:
 @contextmanager
 def _scratch_directory(name, *, parent: int | None = None, create: bool = False):
     """相对已打开的父目录创建/打开子目录；不提供跟随链接的降级路径。"""
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    # macOS 的两个禁链标志互斥。绝对路径使用内核全路径保护，openat 子层只需
+    # 禁止叶链接；其它平台在 _scratch_base_directory 中逐层固定祖先描述符。
+    nofollow = getattr(os, "O_NOFOLLOW_ANY", os.O_NOFOLLOW) if parent is None else os.O_NOFOLLOW
+    flags = os.O_RDONLY | os.O_DIRECTORY | nofollow | getattr(os, "O_CLOEXEC", 0)
     if create:
         try:
             os.mkdir(name, 0o700, dir_fd=parent)
@@ -726,23 +736,54 @@ def _scratch_directory(name, *, parent: int | None = None, create: bool = False)
 
 @contextmanager
 def _scratch_base_directory(base: Path, *, create: bool = False):
-    """从文件系统根逐层固定临时根及受管目录，避免父路径被替换后越界。"""
+    """固定系统临时根后只相对目录描述符操作受管子层，防止路径被替换后越界。"""
     temp_root = base.parent.parent
     with ExitStack() as stack:
-        descriptor = stack.enter_context(_scratch_directory(temp_root.anchor))
-        for part in temp_root.parts[1:]:
-            descriptor = stack.enter_context(_scratch_directory(part, parent=descriptor))
+        if getattr(os, "O_NOFOLLOW_ANY", 0):
+            # 已获许可的临时根只需祖先具有路径穿越权限。原先从 / 开始逐层打开
+            # /private 等目录会额外要求读取祖先；内核全路径禁链可在一次 open 中同样安全地固定根。
+            descriptor = stack.enter_context(_scratch_directory(temp_root))
+        else:
+            descriptor = stack.enter_context(_scratch_directory(temp_root.anchor))
+            for part in temp_root.parts[1:]:
+                descriptor = stack.enter_context(_scratch_directory(part, parent=descriptor))
         descriptor = stack.enter_context(_scratch_directory(base.parent.name, parent=descriptor, create=create))
         descriptor = stack.enter_context(_scratch_directory(base.name, parent=descriptor, create=create))
         yield descriptor
 
 
-def scratch_workspace(root: Path, request_id: str | None = None) -> dict[str, Any]:
+def _ignore_workspace_handoff(base: Path, parent: int) -> None:
+    """原子发布仅对专用交接根生效的忽略规则，不覆盖用户文件或并发创建的规则。"""
+    if read_file(base / ".gitignore") is None:
+        import secrets
+        temporary = ".ignore-" + secrets.token_hex(12)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(b"*\n")
+            try:
+                os.link(temporary, ".gitignore", src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+            except FileExistsError:
+                pass  # 另一个请求已发布；退出临时链接后统一检查现有字节。
+        finally:
+            os.unlink(temporary, dir_fd=parent)
+    if read_file(base / ".gitignore") != b"*\n":
+        raise TaskGraphError("AGY 交接目录含有不同的 .gitignore；请保留并核对现有内容")
+
+
+def scratch_workspace(root: Path, request_id: str | None = None, *, workspace_handoff: bool = False) -> dict[str, Any]:
     """返回并按需创建项目的固定任务临时目录，同一请求重试与 QA 原地复用。"""
-    base = _project_scratch_base(root)
+    # CLI 的原生子代理默认只能读所在工作区。只有 AGY 面向用户的交接目录
+    # 采用项目内布局；准入锁、任务池私有索引和其余宿主仍使用原系统临时根。
+    base = root.absolute() / AGY_HANDOFF if workspace_handoff else _project_scratch_base(root)
     slot = _validated_scratch_slot(request_id)
     target = base / slot
     with _scratch_base_directory(base, create=True) as parent:
+        if workspace_handoff:
+            # 只在这个根的极短发布窗口互斥，同时请求不会把临时双链接当作坏规则。
+            from lib.platform_fs import directory_lock
+            with directory_lock(base, "agy-handoff-ignore", blocking=True):
+                _ignore_workspace_handoff(base, parent)
         try:
             os.mkdir(slot, 0o700, dir_fd=parent)
             existed = False
@@ -911,7 +952,8 @@ def _remove_scratch_tree(parent: int, name: str, relative: str,
 
 
 def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bool = False,
-                    dry_run: bool = False, keep: tuple[str, ...] = (), expected: str | None = None) -> dict[str, Any]:
+                    dry_run: bool = False, keep: tuple[str, ...] = (), expected: str | None = None,
+                    workspace_handoff: bool = False) -> dict[str, Any]:
     """预览／清理明确归属且已静默的请求；摘要绑定元数据，不承诺物理磁盘回收。
 
     --all 只供已核实全部归属及静默的显式人工管理；普通任务收口必须使用自己的
@@ -928,7 +970,14 @@ def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bo
     if not dry_run and (not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)):
         raise TaskGraphError("cleanup-scratch deletion requires --expect-sha256 from a prior --dry-run")
     kept = _scratch_keep_paths(keep)
-    base = _project_scratch_base(root)
+    base = root.absolute() / AGY_HANDOFF if workspace_handoff else _project_scratch_base(root)
+    if workspace_handoff and request_id is not None:
+        # 升级前已分配的该请求目录仍可用旧预览摘要完成清理。新旧两处并存时
+        # 优先当前项目内目录；摘要含物理 target，不能拿一处授权删除另一处。
+        slot = _validated_scratch_slot(request_id)
+        previous = _project_scratch_base(root)
+        if not os.path.lexists(base / slot) and os.path.lexists(previous / slot):
+            base = previous
     target = base if remove_all else base / _validated_scratch_slot(request_id)
     report: dict[str, Any] = {
         "target": str(target), "dry_run": dry_run, "snapshot_kind": "metadata",
