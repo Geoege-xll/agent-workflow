@@ -1,5 +1,11 @@
 ## Codex-only integration
 
+业务派发先遵守共享 [只读偏好合同](../../shared/skills/xy-workflow/references/dispatch.md#read-only-native-dispatch-preferences)。
+通用 fresh 工具没有原生角色选择器时使用 `--agent '*'`，不按 `task_name` 或角色标签查偏好。
+仅当前实际 schema 提供 model／reasoning_effort 时才按其语义映射；inherit 不传 model，
+未配置 effort 不传 effort，不支持的已配置字段阻断该次派发。完整原生定义可能更高优先，
+参数投影仍为 runtime 未验。此步骤不启动独立服务、不准备组件，显式维护分支不执行。
+
 - Light and Full implementation activate `$xy-workflow`; Light does not require Full planning or a DAG.
   Light requires minimum sufficient verification and assesses independent QA, documentation, and memory at handoff; Full retains established confirmation, planning, and independent QA.
 - Standalone read-only audits use WORKFLOW's matching branch and stop at the scoped conclusion,

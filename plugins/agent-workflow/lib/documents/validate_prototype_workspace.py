@@ -320,6 +320,16 @@ class IndexParser(HTMLParser):
         self.preview_count = 0
         self.preview_hidden = False
         self.controller_count = 0
+        # 反馈是展示外壳的固定辅助能力，不能成为第二个登记/路由控制器。
+        # 用确切根节点、栈深度与独立计数约束豁免范围，避免普通容器冒名，
+        # 或未闭合/交叉结束标签把目录后续内容也误纳入反馈区域。
+        self.feedback_script_count = 0
+        self.feedback_stylesheet_count = 0
+        self.feedback_regions: Counter[str] = Counter()
+        self.feedback_tag: str | None = None
+        self.feedback_depth: int | None = None
+        self.feedback_summary_count = 0
+        self.feedback_summary_depth = 0
         self.script_depth = 0
         self.inline_script: list[str] = []
         self.workspace_tags: set[str] = set()
@@ -341,24 +351,50 @@ class IndexParser(HTMLParser):
             raise ValidationError("prototype index must use its local controller instead of inline event handlers")
         if attrs.get("id") == "prototype-preview" and tag != "iframe":
             raise ValidationError("prototype-preview id is reserved for the controlled index iframe")
+        feedback_roots = {"prototype-feedback": "details", "feedback-manual": "dialog"}
+        feedback_id = attrs.get("id", "")
+        starts_feedback = feedback_id in feedback_roots
+        if starts_feedback:
+            if (tag != feedback_roots[feedback_id] or self.feedback_regions[feedback_id]
+                    or self.feedback_depth is not None or self.nav_depth or self.preview_depth
+                    or self.document_depths["body"] != 1 or self.document_depths["head"]):
+                raise ValidationError("feedback roots must be unique exact body regions outside navigation and preview")
+            if tag == "details" and "open" in attrs:
+                raise ValidationError("prototype feedback panel must be collapsed initially")
+            self.feedback_regions[feedback_id] += 1
+            self.feedback_tag = tag
+            self.feedback_depth = len(self.element_stack)
+        in_feedback = self.feedback_depth is not None
         if tag in {"html", "head", "body"}:
             self.document_counts[tag] += 1
             self.document_depths[tag] += 1
-        if tag in self.FORBIDDEN_TAGS:
+        # 仅两个确切反馈根中的 form/input/section 获得结构许可；dialog 只能
+        # 是 feedback-manual 自身。不能全局移除薄目录原有禁止项。
+        feedback_structure = (in_feedback and tag in {"form", "input", "section"}) or (
+            starts_feedback and tag == "dialog")
+        if tag in self.FORBIDDEN_TAGS and not feedback_structure:
             raise ValidationError(f"thin prototype index must not contain <{tag}>")
+        if in_feedback and (any(name in attrs for name in ("action", "formaction", "formtarget"))
+                            or (tag == "input" and ("src" in attrs or attrs.get("type", "").casefold() in {"image", "file"}))):
+            raise ValidationError("feedback controls must not navigate, upload or load external form resources")
         if tag in {"aside", "button"}:
             self.workspace_tags.add(tag)
         if attrs.get("id") == "prototype-empty":
             self.empty_state_count += 1
         if tag == "script":
-            # 工作区只加载真实共享控制器，不开放任意 index 脚本或内联程序。
-            if attrs.get("src") != "workspace.js" or self.controller_count:
-                raise ValidationError("prototype index permits only its one local workspace.js controller")
+            # 只增开固定本地反馈辅助库；其他路径、重复辅助库/路由器仍然拒绝，
+            # 下方原闭包入口继续验证这两个脚本的真实依赖与安全文件身份。
+            source = attrs.get("src")
+            if source == "workspace.js" and not self.controller_count:
+                self.controller_count += 1
+            elif source == "feedback.js" and not self.feedback_script_count:
+                self.feedback_script_count += 1
+            else:
+                raise ValidationError("prototype index permits one local workspace.js controller and one feedback.js helper")
             if attrs.get("type", "").casefold() not in {"", "text/javascript"}:
                 raise ValidationError("prototype workspace controller must use its supported classic script type")
-            self.controller_count += 1
             self.script_depth += 1
-            self.references.append(("src", "workspace.js"))
+            self.references.append(("src", source))
         if "prototype-contract" in _classes(attrs.get("class", "")):
             raise ValidationError("thin prototype index must not contain a page contract")
         if "data-contract-section" in attrs or "data-contract-for" in attrs:
@@ -382,23 +418,34 @@ class IndexParser(HTMLParser):
             self.navigation_id = attrs.get("id", "")
         if tag == "details":
             # 分组只扩展唯一页面导航，不能借原生折叠容器在目录中塞入另一份产品说明。
-            if not self.nav_depth or self.group_summary_depth or self.navigation_id != "prototype-pages":
+            if starts_feedback:
+                pass
+            elif not self.nav_depth or self.group_summary_depth or self.navigation_id != "prototype-pages":
                 raise ValidationError("prototype index groups must stay inside the page navigation")
-            self.group_summaries.append(0)
+            else:
+                self.group_summaries.append(0)
         if tag == "summary":
-            if (not self.group_summaries or self.group_summary_depth
+            if (self.feedback_tag == "details" and self.feedback_depth is not None
+                    and len(self.element_stack) == self.feedback_depth + 1
+                    and self.element_stack[-1] == "details"):
+                self.feedback_summary_count += 1
+                if self.feedback_summary_count != 1:
+                    raise ValidationError("prototype feedback panel must contain exactly one direct summary")
+                self.feedback_summary_depth += 1
+            elif (not self.group_summaries or self.group_summary_depth
                     or not self.element_stack or self.element_stack[-1] != "details"):
                 raise ValidationError("prototype index summary must belong to a navigation group")
-            self.group_summaries[-1] += 1
-            if self.group_summaries[-1] != 1:
-                raise ValidationError("prototype index group must contain exactly one summary")
-            self.group_summary_depth += 1
+            else:
+                self.group_summaries[-1] += 1
+                if self.group_summaries[-1] != 1:
+                    raise ValidationError("prototype index group must contain exactly one summary")
+                self.group_summary_depth += 1
         if tag == "iframe":
             # 这里只开放已批准的 index 单页承载，不把普通产品页或任意 HTML 当成嵌入工作区。
             # src 必须是登记页的原始规范文件名；不接受重定向、文档路径或脚本内联变更来源。
             if self.preview_count or attrs.get("id") != "prototype-preview":
                 raise ValidationError("prototype index permits only one iframe with id prototype-preview")
-            if self.nav_depth or self.document_depths["body"] != 1 or self.document_depths["head"]:
+            if in_feedback or self.nav_depth or self.document_depths["body"] != 1 or self.document_depths["head"]:
                 raise ValidationError("controlled prototype preview must be inside the index body, outside navigation")
             if any(name in attrs for name in ("srcdoc", "style", "srcset")) or any(name.startswith("on") for name in attrs):
                 raise ValidationError("controlled prototype preview forbids inline content, styles and event handlers")
@@ -434,6 +481,10 @@ class IndexParser(HTMLParser):
                     raise ValidationError(
                         "thin prototype index permits only its local stylesheet link"
                     )
+                if attrs.get("href") == "feedback.css":
+                    self.feedback_stylesheet_count += 1
+                    if self.feedback_stylesheet_count != 1:
+                        raise ValidationError("prototype index permits only one local feedback.css stylesheet")
             for attribute in ("href", "src"):
                 if attribute in attrs:
                     self.references.append((attribute, attrs[attribute]))
@@ -453,11 +504,25 @@ class IndexParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.casefold()
+        closes_feedback = False
+        if self.feedback_depth is not None and tag in self.element_stack:
+            position = len(self.element_stack) - 1 - self.element_stack[::-1].index(tag)
+            if position < self.feedback_depth:
+                raise ValidationError("feedback region must close before its containing body structure")
+            if position == self.feedback_depth:
+                if tag != self.feedback_tag or position != len(self.element_stack) - 1:
+                    raise ValidationError("feedback region must contain closed child elements")
+                if tag == "details" and (self.feedback_summary_count != 1 or self.feedback_summary_depth):
+                    raise ValidationError("prototype feedback panel must contain one closed summary")
+                closes_feedback = True
         if tag == "summary":
-            if not self.group_summary_depth:
+            if self.feedback_summary_depth:
+                self.feedback_summary_depth -= 1
+            elif not self.group_summary_depth:
                 raise ValidationError("unexpected closing summary in prototype index")
-            self.group_summary_depth -= 1
-        if tag == "details":
+            else:
+                self.group_summary_depth -= 1
+        if tag == "details" and not closes_feedback:
             if not self.group_summaries or self.group_summaries.pop() != 1 or self.group_summary_depth:
                 raise ValidationError("prototype index group must contain one closed summary")
         if tag == "iframe":
@@ -481,6 +546,9 @@ class IndexParser(HTMLParser):
         if tag in self.element_stack:
             position = len(self.element_stack) - 1 - self.element_stack[::-1].index(tag)
             del self.element_stack[position:]
+        if closes_feedback:
+            self.feedback_depth = None
+            self.feedback_tag = None
 
     def handle_data(self, data: str) -> None:
         if self.script_depth:
@@ -791,6 +859,15 @@ def _validate_index_structure(parser: IndexParser) -> None:
         raise ValidationError("controlled prototype preview iframe must be closed")
     if parser.script_depth or _normalized_text(parser.inline_script):
         raise ValidationError("prototype index controller must be closed and contain no inline code")
+    if parser.feedback_depth is not None or parser.feedback_summary_depth:
+        raise ValidationError("prototype feedback regions must be closed")
+    # 旧目录和旧单控制器外壳无需补造反馈；一旦实际声明反馈区域或辅助脚本，
+    # 必须同时具备原受控工作区和固定本地反馈资源，不接受半套静态豁免。
+    if parser.feedback_regions or parser.feedback_script_count:
+        if (parser.controller_count != 1 or parser.feedback_script_count != 1
+                or parser.feedback_stylesheet_count != 1 or parser.preview_count != 1
+                or parser.navigation_id != "prototype-pages"):
+            raise ValidationError("prototype feedback needs the controlled workspace and one local feedback.js/feedback.css")
     if parser.controller_count or parser.workspace_tags:
         if parser.controller_count != 1 or parser.preview_count != 1 or parser.navigation_id != "prototype-pages":
             raise ValidationError("prototype workspace structure needs one local controller, registration nav and preview")
@@ -1374,7 +1451,7 @@ class DependencyValidator:
         target = _resolve_local_reference(source, raw, label)
         if target is not None:
             if resource and source != PurePosixPath("index.html") and target in {
-                PurePosixPath("workspace.js"), PurePosixPath("workspace.css"),
+                PurePosixPath("workspace.js"), PurePosixPath("workspace.css"), PurePosixPath("feedback.js"),
             }:
                 raise ValidationError("workspace controller and stylesheet may only be loaded by index.html")
             if resource:
