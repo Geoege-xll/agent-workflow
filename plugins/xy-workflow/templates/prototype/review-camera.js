@@ -33,7 +33,7 @@
     // 画布空白拥有平移；稿件内的原生控件/滚动由child处理后，仅显式手势发到此边界。
     viewport.addEventListener("pointerdown", (event) => {
       if (event.target.closest("[data-review-ui]")) return;
-      if (event.button !== 1 && !(event.button === 0 && (space || event.target === viewport))) return;
+      if (event.button !== 1 && !(event.button === 0 && (space || (event.pointerType === "touch" && event.target === viewport)))) return;
       const c = read(); if (!c) return;
       pan = { id: event.pointerId, x: event.clientX, y: event.clientY, cx: c.x, cy: c.y };
       viewport.setPointerCapture(event.pointerId); event.preventDefault();
@@ -46,24 +46,28 @@
     viewport.addEventListener("pointerup", end); viewport.addEventListener("pointercancel", end);
     viewport.addEventListener("wheel", (event) => {
       if (event.target.closest("[data-review-ui]")) return;
+      // 普通 wheel/触控板属于稿内原生滚动；iframe 事件不会冒泡到父文档。
+      // 父相机也不把根 scrollport 到边界后的滚动链转换成平移，只有显式组合键缩放。
+      if (event.defaultPrevented || (!event.ctrlKey && !event.metaKey)) return;
       const r = viewport.getBoundingClientRect(); event.preventDefault();
-      if (event.ctrlKey || event.metaKey) zoom(Math.exp(-event.deltaY * .0022), event.clientX - r.left, event.clientY - r.top);
-      else move(-(event.shiftKey ? event.deltaY : event.deltaX), -(event.shiftKey ? 0 : event.deltaY));
+      zoom(Math.exp(-event.deltaY * .0022), event.clientX - r.left, event.clientY - r.top);
     }, { passive: false });
     viewport.addEventListener("keydown", (event) => {
       if (event.target !== viewport) return;
       if (event.code === "Space") { space = true; viewport.classList.add("space"); event.preventDefault(); }
+      // 方向键仅在画布本身获得焦点时保留既有键盘可访问性，不消费稿内滚轮或输入。
       const delta = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] }[event.key];
       if (delta) { event.preventDefault(); move(...delta); }
     });
-    viewport.addEventListener("keyup", () => { space = false; viewport.classList.remove("space"); });
-    window.addEventListener("blur", end);
+    const reset = () => { space = false; viewport.classList.remove("space"); end(); };
+    viewport.addEventListener("keyup", (event) => { if (event.code === "Space") { space = false; viewport.classList.remove("space"); } });
+    window.addEventListener("blur", reset);
     // 外窗口改变只重新适应展示相机；首次observer回调不覆盖已恢复的草稿相机。
     let previousSize = viewport.getBoundingClientRect();
     const resizeObserver = new ResizeObserver(() => { const next = viewport.getBoundingClientRect();
       if (next.width !== previousSize.width || next.height !== previousSize.height) { previousSize = next; if (read()) fit(); }
     }); resizeObserver.observe(viewport);
-    return Object.freeze({ applyCam, fit, zoom, move, close() { resizeObserver.disconnect(); window.removeEventListener("blur", end); }, focus(bounds) { const r = viewport.getBoundingClientRect(); if (read()) update(focusBounds(read(), bounds, r.width, r.height)); } });
+    return Object.freeze({ applyCam, fit, zoom, move, close() { resizeObserver.disconnect(); window.removeEventListener("blur", reset); }, focus(bounds) { const r = viewport.getBoundingClientRect(); if (read()) update(focusBounds(read(), bounds, r.width, r.height)); } });
   }
   window.PrototypeReviewCamera = Object.freeze({ zoomAt, fitCam, focusBounds, create });
 })();

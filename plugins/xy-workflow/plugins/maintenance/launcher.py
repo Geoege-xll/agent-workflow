@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -101,16 +102,19 @@ def run(argv, *, component_root=None, descriptor_path=None, invoke=subprocess.ru
             return receipt(args, data, "preparation_required", "preparation_required"), 2
         if target is None:
             target = prepare(root, data, args.artifact)
+        # 来源只取启动器自身 resolve 后的物理插件根；不接受用户指定来源，
+        # 也不扫描缓存寻找替代项。用完整摘要作为固定目录名，任意来源路径文本
+        # 都不能变成状态目录的层级或穿越片段；版本已由 descriptor 严格验证。
+        source = Path(__file__).resolve().parents[2]
+        source_identity = "source-" + hashlib.sha256(str(source).encode("utf-8")).hexdigest()
+        state = root / "state" / args.host / data["version"] / source_identity
+        # 旧组件或旧物理来源仍可能提供健康服务，却无法与当前来源安全握手。
+        # 按宿主、组件版本、来源分流 connection/锁，保留旧 flat/host 状态和服务，
+        # 不终止、不迁移、不等 idle。项目不参与分流，同源同版本跨项目仍复用。
+        # 此处只计算路径，status/doctor 不创建任何目录；open 由组件创建新 slot。
+        # 原生定义、模型偏好和写入 CAS 仍使用唯一实际 host_root/HOME，不复制配置。
         command = ["bash", str(target / "scripts/agent_config.sh"), args.action, "--host", args.host,
-                   # 每个宿主绑定不同的物理插件来源，不能共用 connection 与服务锁，
-                   # 否则先打开的宿主会让后续宿主触发 configuration_conflict。
-                   # 这里只隔离控制台状态；原生定义和模型偏好仍由实际 host_root
-                   # 定位，不迁移或复制配置，也不自动停止、删除旧 state 根的服务。
-                   "--data-dir", str(root / "state" / args.host),
-                   # 来源只取启动器自身的物理插件根，用户不能通过维护参数注入
-                   # 任意候选目录。独立组件负责校验来源摘要及绑定服务身份；
-                   # 启动器不导入其业务核心，也不在当前项目搜索另一份插件。
-                   "--preparation-source", str(Path(__file__).resolve().parents[2])]
+                   "--data-dir", str(state), "--preparation-source", str(source)]
         for flag, value in (("--project", args.project), ("--home", args.home)):
             if value is not None:
                 command.extend((flag, str(value)))

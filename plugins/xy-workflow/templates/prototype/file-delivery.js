@@ -74,10 +74,12 @@
       if (data.gesture === "zoom" && [data.factor, data.x, data.y].every(Number.isFinite) && data.factor >= .01 && data.factor <= 100) camera.zoom(data.factor, cameraValue.x + data.x * cameraValue.k, cameraValue.y + data.y * cameraValue.k); }
   });
   for (const entry of catalog.pages) { const link = document.createElement("a"); link.textContent = entry.label; link.dataset.page = entry.name; link.href = new URL(entry.name, location.href).href;
-    link.addEventListener("click", (event) => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate(entry); }); $("prototype-pages").append(link); }
+    link.addEventListener("click", (event) => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); closeNavigation(); navigate(entry); }); $("prototype-pages").append(link); }
   const toggle = $("navigation-toggle"), navigation = $("delivery-navigation");
   toggle.addEventListener("click", () => { navigation.hidden = !navigation.hidden; toggle.setAttribute("aria-expanded", String(!navigation.hidden)); });
-  navigation.addEventListener("keydown", (event) => { if (event.key === "Escape") { navigation.hidden = true; toggle.setAttribute("aria-expanded", "false"); toggle.focus(); } });
+  // 目录选择和 Esc 共用同一收起路径；只恢复工具按钮焦点，不干预 iframe 业务事件。
+  function closeNavigation() { navigation.hidden = true; toggle.setAttribute("aria-expanded", "false"); toggle.focus(); }
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !navigation.hidden) { event.preventDefault(); closeNavigation(); } });
   $("open-developer").addEventListener("click", () => { $("developer-dialog").showModal(); $("developer-title").focus(); });
   $("developer-close").addEventListener("click", () => $("developer-dialog").close());
   $("open-review").addEventListener("click", (event) => { if (!reviewURL(current)) { event.preventDefault(); announce(directoryTrusted ? "评审尚未就绪，请运行本轮open后重新打开此文件。" : recovery); } });

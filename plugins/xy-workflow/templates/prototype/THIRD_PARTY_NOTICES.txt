@@ -25,3 +25,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+工具外壳共享主题 tool-theme.css 改编自 deeplethe/solid-glass。
+固定提交：6e8903e494a15491ceda38fafea5056c95a74d44
+来源：https://github.com/deeplethe/solid-glass/blob/6e8903e494a15491ceda38fafea5056c95a74d44/src/solid-glass.css
+上游 CSS SHA256：c3c9e4e739f2b3f991d2412c07970f53df4a54f9d416ec3e8e1c0d5261e84bc3
+material.mdx SHA256：508c4f3b91bb2055ccfb566f9412da7c68e3ef234ca4c31b020c75ea8aa6f523
+Copyright (c) 2026 DeepLethe. MIT License.
+完整版权及许可正文随包保存在 solid-glass-LICENSE.txt。
+仅适配材质 token 与 rim/edge/shadow 结构，不包含 React/Tailwind 构建依赖。
+此主题仅用于 Agent 控制台和交付/评审工具外壳，禁止注入业务原稿。

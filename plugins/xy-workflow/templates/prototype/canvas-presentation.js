@@ -5,22 +5,37 @@
   const validSize = (value) => value && Number.isFinite(value.width) && Number.isFinite(value.height)
     && value.width >= 1 && value.width <= 16384 && value.height >= 1 && value.height <= 16384;
   function measure() {
-    const frames = document.querySelectorAll(".prototype-frame");
-    const frame = frames.length === 1 ? frames[0] : document.querySelector("[data-prototype-page-content]");
-    const rect = frame?.getBoundingClientRect();
-    return validSize(rect && { width: rect.width, height: rect.height }) ? { width: rect.width, height: rect.height } : { width: innerWidth, height: innerHeight };
+    // 只有明确 fixed 稿件的 frame 是设计视口。responsive 的自然高度是内容高度，
+    // 不能上报后反过来撑大 iframe，否则长页会再次 fit 成一张极小的整页缩略图。
+    if (document.body.dataset.prototypeDisplay === "fixed") {
+      const frames = document.querySelectorAll(".prototype-frame");
+      const frame = frames.length === 1 ? frames[0] : document.querySelector("[data-prototype-page-content]");
+      const rect = frame?.getBoundingClientRect();
+      if (validSize(rect && { width: rect.width, height: rect.height })) return { width: rect.width, height: rect.height };
+    }
+    return { width: innerWidth, height: innerHeight };
   }
   function create({ viewport, world, preview, entry, onResize = () => {} }) {
     let current = entry, size, measured = false;
-    function resize(value, fromChild = false) { if (!validSize(value) || (fromChild && measured)) return false;
-      if (fromChild) measured = true; size = { width: value.width, height: value.height };
+    const declared = () => current?.display !== "responsive" && validSize(current?.viewport);
+    function resize(value, fromChild = false) {
+      if (!validSize(value)) return false;
+      // 父层持有最终设计视口。声明固定尺寸优先；只有未解析到声明的 fixed 页允许
+      // 首次子页 frame 测量补足。responsive/未声明页面绝不消费自然内容的整页高度。
+      if (fromChild && (declared() || current?.display !== "fixed" || measured)) return false;
+      if (fromChild) measured = true;
+      size = { width: value.width, height: value.height };
       for (const node of [world, preview]) { node.style.width = `${size.width}px`; node.style.height = `${size.height}px`; node.style.inlineSize = `${size.width}px`; node.style.blockSize = `${size.height}px`; }
-      onResize(size); return true; }
-    function select(value) { current = value; measured = false;
-      // 响应式稿由当前可用画布宽度驱动媒体查询；固定稿只用声明尺寸，未知稿先测量真实子页。
+      onResize(size); return true;
+    }
+    function select(value) {
+      current = value; measured = false;
       const rect = viewport.getBoundingClientRect();
-      resize(validSize(value?.viewport) ? value.viewport : { width: Math.max(120, rect.width - 48), height: Math.max(120, rect.height - 48) }); }
-    const observer = new ResizeObserver(() => { if (!validSize(current?.viewport) && !measured) select(current); }); observer.observe(viewport);
+      // 保留现有24px四周画布余量；宽高均由可用视口决定，不读取 scrollHeight，
+      // 不推断设备类别，也不更改子文档自身的响应式/固定布局与内部滚动策略。
+      resize(declared() ? current.viewport : { width: Math.max(120, rect.width - 48), height: Math.max(120, rect.height - 48) });
+    }
+    const observer = new ResizeObserver(() => { if (!declared() && !measured) select(current); }); observer.observe(viewport);
     select(entry);
     return Object.freeze({ select, resize, read: () => size, close() { observer.disconnect(); } });
   }
