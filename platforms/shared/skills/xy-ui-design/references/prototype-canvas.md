@@ -12,14 +12,14 @@ branches, or add confirmation.
   files and add files only for new pages. Output separately the different platform pages that need
   design; do not combine multiple product pages in one HTML or force presentation of all three
   platforms. Demonstrate a page's dialogs, loading, empty, error, and success states interactively in
-  that HTML without separate state pages. Agent／PM 交付前先用可信 CLI `prepare-delivery --root --adapter --pages` 幂等准备入口，再由 `open` 显式指定项目、adapter、需求、
+  that HTML without separate state pages. Antigravity 用[静态验证合同](../../xy-prototype-verify/SKILL.md)核对原稿和依赖后直接交付具体页绝对路径或 file URI。Codex 与 Claude Code 的 Agent／PM 交付前先用可信 CLI `prepare-delivery --root --adapter --pages` 幂等准备入口，再由 `open` 显式指定项目、adapter、需求、
   request-id 与具体页；open 缺准备报 preparation_required，不改业务 HTML。返回具体 HTML 的 file URI `delivery_url` 及 `delivery_urls`，提供完整共用缩放画布和默认收起目录。未准备的裸模板不作为完整交付。
   “进入评审”以 `noopener` 新标签页准确打开当前页的 `review_url`；评审进入即批注，
   没有目录、持久浏览模式或开发说明。两页读取同一物理原稿，复用画布组件，各自保留相机和交互状态。
   新项目不生成额外导航 index、不复制通用工具；既有业务首页和未知文件不得按名称删除。
   历史 `prepare` 及 feedback 2／3／4 包独立保留原 index、资产和消费语义。
 - For new pages, resolve `templates/prototype/page.html` through the current physical plugin's
-  resource entry, and reuse the project's compatible `prototype.css` when present. Do not activate missing tool dependencies in the bare template; prepare-delivery 在首个业务脚本之前插入固定相对 entry 标签，并准备受管 `.xy-prototype-entry` 链接及精确忽略项。通用资源留在中央工具中，不持久化第二份业务 HTML。 Create only authorized page/business-style paths. Preserve the
+  resource entry, and reuse the project's compatible `prototype.css` when present. Do not activate missing tool dependencies in the bare template; Codex 与 Claude Code 的 prepare-delivery 在首个业务脚本之前插入固定相对 entry 标签，并准备受管 `.xy-prototype-entry` 链接及精确忽略项。通用资源留在中央工具中，不持久化第二份业务 HTML。 Create only authorized page/business-style paths. Preserve the
   unified page header, `.prototype-stage`, `.prototype-frame`, product slot
   `data-prototype-page-content`, and bottom page contract. Fill in page information and explanations
   and set `data-prototype-platform` and `data-prototype-display`; Web defaults to `responsive`, while
@@ -47,7 +47,7 @@ branches, or add confirmation.
   navigation, and contract area are not part of the product interface. Do not require wallpaper or
   generate background images. The artboard contains only the current page's product interface and
   its interactions.
-- 原稿页标题、说明、需求导航与开发说明保持在产品插槽之外。具体 `file://` HTML 是完整交付入口，目录来自项目公开 catalog，当前页按真实文件名选择，不用单一 active_request 覆盖其他请求页。唯一 delivery.html shell 投影到中央经典脚本，项目不手抄工具或业务 HTML。file 顶层在业务执行前装配唯一壳，一层独立设计 iframe 执行业务一次；仅此 file 分支允许 allow-scripts allow-same-origin，支持相对业务资源。HTTP 评审仍仅 allow-scripts。公开 binding 无 token，只用于 noopener 同页评审引导；file 不建立控制连接或拿 token。准备或 binding 失效准确提示交付方重跑显式 prepare-delivery／open，不猜端口、不冷启动、不虚称 ready。原稿不写机器路径、端口、认证或动态 review_id。父子同时验证准确 window、page、nonce 和 null origin；HTTP 引导须独立核验顶层导航并仅在响应内提供秘密。产品导航、滚动与浮层仍属于产品区；评审时按提示修饰键临时操作，释放回批注。真实 dialog／popover 在父画布保持可选择与可标注。完整 file 交付壳的目录与相机工具浮于画布，不挤占产品画面，不再显示旧大标题背景；开发说明保留在原稿，在交付壳以大弹窗查看。下述原稿的自然阅读顺序不要求工具壳重复展示整段说明。详见反馈合同。
+- 原稿页标题、说明、需求导航与开发说明保持在产品插槽之外。Codex 与 Claude Code 的具体 `file://` HTML 是完整交付工具入口，目录来自项目公开 catalog，当前页按真实文件名选择，不用单一 active_request 覆盖其他请求页。唯一 delivery.html shell 投影到中央经典脚本，项目不手抄工具或业务 HTML。file 顶层在业务执行前装配唯一壳，一层独立设计 iframe 执行业务一次；仅此 file 分支允许 allow-scripts allow-same-origin，支持相对业务资源。HTTP 评审仍仅 allow-scripts。公开 binding 无 token，只用于 noopener 同页评审引导；file 不建立控制连接或拿 token。准备或 binding 失效准确提示交付方重跑显式 prepare-delivery／open，不猜端口、不冷启动、不虚称 ready。原稿不写机器路径、端口、认证或动态 review_id。父子同时验证准确 window、page、nonce 和 null origin；HTTP 引导须独立核验顶层导航并仅在响应内提供秘密。产品导航、滚动与浮层仍属于产品区；评审时按提示修饰键临时操作，释放回批注。真实 dialog／popover 在父画布保持可选择与可标注。完整 file 交付壳的目录与相机工具浮于画布，不挤占产品画面，不再显示旧大标题背景；开发说明保留在原稿，在交付壳以大弹窗查看。下述原稿的自然阅读顺序不要求工具壳重复展示整段说明。详见反馈合同。
 - First determine platform and layout scope from the current task and project design standards.
   For fixed previews, reuse existing baseline dimensions first; if no baseline exists, choose and
   explicitly explain one. Responsive Web needs no invented fixed dimensions. Keep previews consistent
@@ -71,7 +71,7 @@ branches, or add confirmation.
   in-page overlays use the artboard as their layout boundary instead of the entire browser window.
 - 将平台及画板尺寸保留在既有页面展示元数据。UI Agent 在原稿的「开发说明」中只写已确认且开发者无法从操作中确定的行为。
   有现成规则时链接需求原章节；普通跳转、可见状态不用重复。允许空说明，未决规则交 PM。
-  原稿带有已确认目录分组时在 body 使用 `data-prototype-group="端/模块"`。旧稿也可用 `prepare-delivery --group "端/模块" --pages …`
+  原稿带有已确认目录分组时在 body 使用 `data-prototype-group="端/模块"`。Codex 与 Claude Code 的旧稿也可用 `prepare-delivery --group "端/模块" --pages …`
   按已核对清单登记；保留当前分组，缺少依据的页面保持可达，不另建 Manifest。
 - Fixed dimensions constrain only the prototype preview, not the actual product's multi-device
   adaptation, Web responsiveness, or client-window resizing. Add no confirmation stages, automated

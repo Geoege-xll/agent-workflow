@@ -50,6 +50,8 @@ except ImportError:
     )
 
 from lib import task_intent
+from lib.hosts.dispatch_contract import DEFAULT_DISPATCH, DispatchPolicy, bound_export_reference
+from lib.hosts.factory import dispatch_policy, handoff_policy, packaged_host
 from lib.solution_confirmation import bind_decisions, validate_decisions
 from lib.verification_inputs import command_fingerprints, validate_command
 from lib.writer_prerequisites import (business_confirmation, require_writer, reviewed_business_confirmations,
@@ -2277,14 +2279,14 @@ def is_standalone_prototype(payload: dict) -> bool:
             and payload["task"].get("workflow_level") == "Light")
 
 
-def publish_task_update(path, root, payload, body, expected, patch, *, pool_operation=False):
+def publish_task_update(path, root, payload, body, expected, patch, *, pool_operation=False,
+                        policy: DispatchPolicy = DEFAULT_DISPATCH):
     """公开更新与持锁准入共用同一次原记录语义、校验与 CAS 发布。
 
     调用方提供刚读到的原字节，在持有项目/池锁的调用中也必须再次比对目标 SHA。
     业务批准、许可和依赖仍消费原包；这里不依据调用方提供的 JSON 声明池准入。
     """
     from lib import task_graph_records as records
-    from lib.hosts import antigravity_dispatch
 
     if records.digest(body) != expected:
         raise TaskGraphError("graph fingerprint differs from --expect-sha256")
@@ -2295,7 +2297,7 @@ def publish_task_update(path, root, payload, body, expected, patch, *, pool_oper
         for task in ([payload["task"]] if "task" in payload else payload["tasks"]):
             operation = patch["tasks"].get(task["id"])
             if isinstance(operation, dict):
-                antigravity_dispatch.guard_public_update(task, operation)
+                policy.guard_public_update(task, operation)
     if "task" in payload:
         if payload["task"].get("workflow_level") != "Light":
             raise TaskGraphError("Full task updates require the authoritative graph")
@@ -2341,19 +2343,18 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         validate_task_source({}, root=args.root)
     if args.command in {"scratch", "cleanup-scratch"}:
         # 以当前代码所属实体包识别 AGY，不接受任务参数、角色或环境变量切换宿主。
-        from lib.hosts.antigravity_dispatch import packaged_host
-        workspace_handoff = packaged_host()
+        handoff = handoff_policy(packaged_host())
     if args.command == "scratch":
         if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select, args.all)):
             raise TaskGraphError("scratch requires --root and accepts only --request-id")
-        return records.scratch_workspace(args.root, args.request_id, workspace_handoff=workspace_handoff)
+        return records.scratch_workspace(args.root, args.request_id, handoff=handoff)
     if args.command == "cleanup-scratch":
         if args.root is None or any((args.input, args.patch, args.task_id, args.output, args.select)):
             raise TaskGraphError("cleanup-scratch requires --root and accepts --request-id/--all, --dry-run, --keep and --expect-sha256")
         try:
             return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all,
                                            dry_run=args.dry_run, keep=tuple(args.keep), expected=args.expect_sha256,
-                                           workspace_handoff=workspace_handoff)
+                                           handoff=handoff)
         except records.ScratchCleanupError as exc:
             return exc.report
     if args.request_id or args.all:
@@ -2397,7 +2398,8 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
             raise TaskGraphError("graph fingerprint differs from --expect-sha256")
         patch_body = sys.stdin.buffer.read() if args.patch == "-" else records.read_record(Path(args.patch))
         patch = records.decode(patch_body)
-        return publish_task_update(args.input, args.root, payload, body, args.expect_sha256, patch)
+        return publish_task_update(args.input, args.root, payload, body, args.expect_sha256, patch,
+                                   policy=dispatch_policy())
     if any((args.patch, args.select)):
         raise TaskGraphError("task accepts only --input, --task-id and explicit output options")
     if "task" in payload:
@@ -2473,8 +2475,8 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
     # Light 原件与导出的交接包外形相同。原件已通过 AGY 领取及绑定时，允许
     # 合法地用最新同实例的引用刷新旧交接包；旧文件中的未证实身份不能据此变成新绑定。
     original = payload["task"] if "task" in payload else next(t for t in payload["tasks"] if t["id"] == args.task_id)
-    bound_export = original.get("agent_ref") if "antigravity_claim" in original else None
-    changed = records.publish(args.output, new_body, args.expect_sha256, bound_export=bound_export)
+    changed = records.publish(args.output, new_body, args.expect_sha256,
+                              bound_export=bound_export_reference(original), policy=dispatch_policy())
     return {"exported": changed, "sha256": records.digest(new_body), "graph_sha256": records.digest(body)}
 
 

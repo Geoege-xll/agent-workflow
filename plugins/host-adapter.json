@@ -1,0 +1,5 @@
+{
+  "host": "antigravity",
+  "manifest_target": ".antigravity-plugin/plugin.json",
+  "schema_version": 1
+}

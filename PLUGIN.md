@@ -1,6 +1,6 @@
-# xy-workflow 3.0.9
+# xy-workflow 3.1.0
 
-本包为 `xy-workflow 3.0.9`，配套 Native Agent Config `0.1.7`。版本来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，维护入口根据包内组件描述校验下载来源和摘要。正式安装使用 Git stable 来源和 GitHub Release，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [安装说明](INSTALL.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
+本包为 `xy-workflow 3.1.0`，配套 Native Agent Config `0.1.8`。版本来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，维护入口根据包内组件描述校验下载来源和摘要。正式安装使用 Git stable 来源和 GitHub Release，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [安装说明](INSTALL.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
 
 ## 载荷与职责
 
@@ -10,10 +10,10 @@
 
 计划交付只维护 Markdown，已退役生成器及专用 renderer 不入包；两档交付按实际委托确认目标、实质方案及适用原型，相关设计或实施依赖先确定的行为；原型 HTML、静态验收、依赖指纹和视觉确认继续有效。完整工作流规则由产品、角色、共用 Skill 维护。
 
-精选第三方 Skill 包括 Matt Pocock 的 `grill-me` 与 `grilling`、Leonxlnx Taste、官方 Playwright
+精选第三方 Skill 包括 Matt Pocock 的 `grill-me` 与 `grilling`、Paul Bakaus 的 Impeccable、官方 Playwright
 CLI/Skill，以及官方 `agent-desktop`。前四个发现入口为无 hooks 薄适配 `xy-grill-me`、`xy-grilling`、
-`xy-taste`、`xy-playwright`。Taste 原文超过 AGY 24,000 字节正文限制，含 Stop hook 的原版保留在
-非发现目录。`agent-desktop` 按上游名称与原文直接发现，首版随包提供 macOS `arm64` 和 `x86_64`
+`xy-impeccable`、`xy-playwright`。Impeccable 的正式分发 Markdown、LICENSE 与 NOTICE 随包保存在
+非发现目录，供设计角色按需离线读取。`agent-desktop` 按上游名称与原文直接发现，首版随包提供 macOS `arm64` 和 `x86_64`
 的 v1.3.1 原版 CLI 及同目录 helper。
 
 锁 `third_party/selected-skills.lock.json` 记录 `third_party/selected-skills/` 原版资源的固定来源、提交或
@@ -24,8 +24,11 @@ CLI/Skill，以及官方 `agent-desktop`。前四个发现入口为无 hooks 薄
 PM 自动需求覆盖通过 `xy-grilling` 完整加载原版；`xy-grill-me` 只接受当前用户显式调用，原版转调解析为同包
 qualified `xy-grilling` 或读取同包 canonical，不能误调未知全局同名技能。`grill_result` 属于
 xy-workflow 的 PM 适配。`xy-uiux` 固定绑定 `xy-ui-design`。交付具体 HTML 原型时必须加载并执行
-`xy-prototype-verify`，仅维护设计规范时按文档验收。`xy-taste` 由当前设计需求决定是否选用。
+`xy-prototype-verify`，仅维护设计规范时按文档验收。`xy-impeccable` 由当前设计需求决定是否选用。
 Claude 子代理的 skills 声明仅描述其预载配置。
+
+UI UX Pro Max 的 MIT 原版检索引擎、五个专题数据表和上游引用记录在非发现目录随包交付。
+有具体未决设计问题时，`xy-uiux` 通过同一物理插件的 `source_pack.py selected-skills query` 显式检索。沿用项目规范与 Impeccable 主设计方法。
 
 Playwright CLI采用锁定的官方发布包，不依赖用户全局命令或npm/npx临时下载；三个原包与
 原版Skill完整随包，Node仍为运行前提，浏览器复用官方匹配缓存、按已有任务授权和宿主权限准备。
@@ -34,7 +37,7 @@ Playwright CLI采用锁定的官方发布包，不依赖用户全局命令或npm
 
 所有 Agent（包括 PM、设计、计划与唯一 QA）都按当前任务、实际技术栈及职责按需选择 Skill，
 统一规则位于物理插件根的 `platforms/shared/skills/xy-workflow/references/skill-selection.md`，包括
-Taste 选中后的分段全文读取和 `xy-desktop`、`xy-qa` 的桌面取证与权限边界。
+Impeccable 选中后的正文和参考分段读取和 `xy-desktop`、`xy-qa` 的桌面取证与权限边界。
 内置入口是候选推荐，不强制选用；宿主实际提供的用户级、项目级及其它插件 Skill 也可按需使用。
 先按名称与说明缩小范围，完整读取选中 Skill 入口。引用按该分支指定的章节或条款及其必要依赖读取；明确要求全文的读完整份。不扫描个人目录或全量预载。
 任务包的 `required_skills` 只记当前任务真正不可缺的依赖，不因内置推荐自动加入；缺失会阻断对应

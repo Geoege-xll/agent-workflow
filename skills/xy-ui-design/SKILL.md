@@ -48,8 +48,8 @@ selected `design_mode` determines the applicable stage; preloading does not requ
 
 ## 设计 Agent 的创作与交付
 
-`xy-uiux` 按授权模式阅读设计质量中的设计分析、精修、自查及交付条款。需要额外指导时按[共享 Skill 选择规则](../xy-workflow/references/skill-selection.md)选用。结合适用的基础与组件规则、项目索引的实际链接及相关页面分析，优先使用已批准需求与项目规则，按需核对实际采用的值和映射。
+`xy-uiux` 按授权模式阅读设计质量中的设计分析、精修、自查及交付条款。需要额外设计方法时按[共享 Skill 选择规则](../xy-workflow/references/skill-selection.md)选用 Impeccable。若仍有具体的图表、表单无障碍、字体、配色或样式问题，可按需[查询一个专题](../xy-workflow/references/skill-selection.md#design-topic-query)。结合适用的基础与组件规则、项目索引的实际链接及相关页面分析，优先使用已批准需求与项目规则，按需核对实际采用的值和映射。
 
-组织原型页面时使用[原型画布](references/prototype-canvas.md)，并按[反馈消费合同](references/prototype-feedback.md)准备和验证具体页交付。Do not generate, save, attach, or present screenshots. Do not automate prototype browser operations by default. 仅既有验证合同允许的用户明确要求或具体故障诊断例外适用。
+组织原型页面时使用[原型画布](references/prototype-canvas.md)，并按[静态验证合同](../xy-prototype-verify/SKILL.md)验证具体页。Antigravity 直接交付具体 HTML。Codex 与 Claude Code 按[反馈消费合同](references/prototype-feedback.md)准备受管交付入口。Do not generate, save, attach, or present screenshots. Do not automate prototype browser operations by default. 仅既有验证合同允许的用户明确要求或具体故障诊断例外适用。
 
 <!-- workflow-contract: references/prototype-canvas.md -->

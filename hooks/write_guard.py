@@ -15,77 +15,41 @@ PLUGIN = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lib import task_graph_records as records, task_pool
-from lib.hosts import antigravity_dispatch as native
-from lib.qa_projection import projection_kind
-from lib.safe_text import open_file, read_file
-from lib.validate_project_docs import project_docs_layout
-from guard_command import check_runner, command_allowed
-
-
-DENY = ("xy-workflow：请从当前插件 skills/xy-workflow/references/dispatch.md 的完整任务包开始，"
-        "用包内 lib/task_pool_cli.py claim --register 领取，把回执的 dispatch_marker 独占一行放进 "
-        "invoke_subagent 的初始 Prompt，取得 conversationId 后用同一回执 pool bind。"
-        "PM 可用原生 read_file、受控计划和请求 scratch 继续准备或验证。")
+DENY_COMMAND = ("xy-workflow 拒绝此命令形式。请使用已支持的只读查询、"
+                "精确匹配任务原件的验证命令，或改用具备对应权限的原生文件工具。")
+DENY_PATH = ("xy-workflow 无法确认目标路径的工作区归属或物理节点。"
+             "请核对工作区、规范绝对路径及路径中是否存在链接。")
+DENY_PM = ("xy-workflow 未找到 PM 亲自写入此业务目标的明确授权。"
+           "请按当前任务包交给已验证的实现角色。")
+DENY_CHILD = ("xy-workflow 无法核对当前子会话的可写派发。QA 只允许读取。"
+              "实现任务请核对 claim、初始 Prompt 中的独立标记、原生创建回执和任务绑定。")
+DENY_OWNERSHIP = ("xy-workflow 已核对实现派发，目标超出当前 Writer 的 owned_paths、"
+                  "固定工作区或可写资源范围。")
 AGENT_DIRS = {".git", ".agents", ".agent", ".antigravity", ".awf", ".gemini", ".codex", ".claude"}
 EDIT_TOOLS = {"edit_file": "Path", "write_file": "Path", "write_to_file": "TargetFile",
               "replace_file_content": "TargetFile", "multi_replace_file_content": "TargetFile"}
 
 
+class GuardRefusal(Exception):
+    """仅携带固定脱敏原因，避免回显用户输入、完整工具参数或任何私有路径。"""
+
+
 def physical(value, base):
     """写入以真实路径和节点类型为准；拒绝借符号链接、硬链接或设备改写另一个对象。"""
     if not isinstance(value, str) or not value or "\0" in value or ".." in Path(value).parts:
-        raise ValueError("无法识别写入路径")
+        raise GuardRefusal(DENY_PATH)
     path = base / value
     # macOS 的 /tmp、/var 是系统别名。调用方须传宿主报告的物理路径；
     # 不能先 resolve 再丢掉项目内符号链接这条关键信息。
     if not path.is_absolute() or any(node.is_symlink() for node in (path, *path.parents)):
-        raise ValueError("需要无链接的物理路径")
+        raise GuardRefusal(DENY_PATH)
     try:
         info = path.stat()
     except FileNotFoundError:
         return path
     if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode) and info.st_nlink == 1):
-        raise ValueError("写入目标不是独立普通文件或目录")
+        raise GuardRefusal(DENY_PATH)
     return path
-
-
-def session_origin(event):
-    """身份只读宿主指定会话的首条原生事件，首条工具输出或普通聊天均不能充当派发。"""
-    current = event["conversationId"]
-    native.parent_id("antigravity:" + current)
-    directory = native._brain() / current / ".system_generated/logs"
-    path = Path(event["transcriptPath"])
-    if path not in (directory / "transcript_full.jsonl", directory / "transcript.jsonl"):
-        raise ValueError("缺少当前 AGY CLI 会话来源")
-    with open_file(path) as stream:
-        if stream is None:
-            raise ValueError("宿主尚未写入会话来源")
-        first = json.loads(stream.readline(8 * 1024 * 1024))
-    if first.get("step_index") != 0 or first.get("status") != "DONE":
-        raise ValueError("缺少原生首条消息")
-    if (first.get("type"), first.get("source")) == ("USER_INPUT", "USER_EXPLICIT"):
-        return current, None, None
-    if (first.get("type"), first.get("source")) != ("SYSTEM_MESSAGE", "SYSTEM"):
-        raise ValueError("无法识别原生派发身份")
-    header = re.search(r"\n<SYSTEM_MESSAGE>\n\[Message\] timestamp=\S+ sender=(\S+) priority=\S+ content=", first["content"])
-    if not header:
-        raise ValueError("缺少原生派发来源")
-    parent = native.parent_id("antigravity:" + header[1])
-    native.validate_child_id(parent, current)
-    lines = first["content"][header.end():].splitlines()
-    markers = [line for line in lines if line.startswith("XY-WORKFLOW-CLAIM ")]
-    return current, parent, markers[0] if len(markers) == 1 else None
-
-
-def inventory(root, parent):
-    # 沿用当前 PM 的唯一索引、原件和绑定校验。只读现存槽，绝不靠目录扫描猜任务，
-    # 也不在 Hook 内首次领取/绑定。释放池锁后才去核对较长的原生派发日志。
-    with task_pool._index(root, "antigravity:" + parent, create=False) as (_, data):
-        snapshots, errors = task_pool._read_pool(root, data["records"])
-        if errors:
-            raise ValueError("已登记任务原件需要核对")
-    return snapshots
 
 
 def project_candidates(workspace):
@@ -105,30 +69,40 @@ def project_candidates(workspace):
             yield slot.parent.parent.parent
 
 
+def dispatched(snapshot, project, parent, child, marker=None):
+    task = snapshot.task
+    claim = task.get("antigravity_claim", {})
+    reference = task.get("agent_ref")
+    if (claim.get("parent") != parent or not child or
+            reference is not None and reference != {"host": "antigravity", "agent_id": child}):
+        return False
+    target = {"record": snapshot.record, "request_id": task["request_id"], "task_id": task["id"]}
+    actual = native.dispatch_marker(project, target, task["claim_basis_sha256"], claim)
+    if marker is not None and marker != actual:
+        return False
+    # 绑定前后均认原生创建回执。任务 JSON 中的角色、实例 ID 或登记状态不能单独证明派发。
+    native.verify_creation(parent, child, snapshot.execution_root, actual, task["role"])
+    return True
+
+
 def child_task(roots, current, parent, marker):
     if not marker:
         return None
     for workspace in roots:
         for project in project_candidates(workspace):
-            for snap in inventory(project, parent):
-                for task in snap.tasks:
-                    if (task.get("state") != "RUNNING" or task.get("agent_retired") or task.get("withdrawal")
-                            or task.get("task_type") != "writer" or task.get("role") == "xy-qa"
-                            or snap.descriptor["execution_roots"][task["id"]] != str(workspace)):
-                        continue
-                    claim = task.get("antigravity_claim", {})
-                    if claim.get("parent") != parent:
-                        continue
-                    target = {"record": snap.descriptor["path"], "request_id": task["request_id"], "task_id": task["id"]}
-                    if native.dispatch_marker(project, target, task["claim_basis_sha256"], claim) != marker:
-                        continue
-                    reference = task.get("agent_ref")
-                    if reference is not None and reference != {"host": "antigravity", "agent_id": current}:
-                        continue
-                    # 原件可以由 PM 的本地文件工具写入，其中的 ID 本身不能证明角色。
-                    # 绑定前后都复核原生创建来源；既有绑定只进一步排除其他实例。
-                    native.verify_creation(parent, current, workspace, marker, task["role"])
-                    return workspace, task
+            # 任务池已在锁内核对本 PM 的原件和执行根。释放池锁后才读取原生日志，
+            # 保证 Hook 不持久化绑定，也不把耗时日志核验塞进任务池的临界区。
+            for snapshot in task_pool.registered_tasks(project, "antigravity:" + parent):
+                task = snapshot.task
+                if (task.get("state") != "RUNNING" or task.get("agent_retired") or task.get("withdrawal")
+                        or task.get("task_type") != "writer" or task.get("role") == "xy-qa"
+                        or snapshot.execution_root != workspace):
+                    continue
+                try:
+                    if dispatched(snapshot, project, parent, current, marker):
+                        return workspace, task
+                except TaskGraphError as exc:
+                    raise GuardRefusal(DENY_CHILD) from exc
     return None
 
 
@@ -201,17 +175,20 @@ def explicit_scope(message, root, target, *, single_root):
 
 
 class Access:
-    def __init__(self, event):
+    def __init__(self, event, handoff):
         self.roots = [Path(path).resolve(strict=True) for path in event["workspacePaths"]]
         if not all(p.is_dir() for p in self.roots):
             raise ValueError("缺少项目根")
-        self.current, self.parent, self.marker = session_origin(event)
+        self.handoff = handoff
+        self.current, self.parent, self.marker = native.session_origin(event)
         self.message = event.get("lastUserInput")
         self.transcript = Path(event["transcriptPath"])
-        self.artifacts = native._brain() / self.current
+        # 原生适配器已核对当前会话和日志的绝对路径，Artifact 同属这个会话目录。
+        self.artifacts = self.transcript.parents[2]
         # 实机顶层 cwd 是 Hook 自身的插件目录。工具省略 Cwd 时，单工作区才有
         # 可确定的相对路径基准；多工作区的绝对文件操作仍可正常核对。
         self.cwd = self.roots[0] if len(self.roots) == 1 else None
+        self.refusal = DENY_COMMAND
 
     @cached_property
     def task(self):
@@ -219,28 +196,65 @@ class Access:
         # 核对角色、回执与所有权；QA 的正常只读取证不受忙锁或创建回执延迟影响。
         return child_task(self.roots, self.current, self.parent, self.marker) if self.parent else None
 
-    def scratch_file(self, path):
+    def scratch_file(self, path, project=None):
         path = physical(str(path), Path("/"))
-        for root in self.roots:
+        for root in (project,) if project is not None else self.roots:
             # 新领取使用项目内交接槽，让原生工具在默认沙箱内可读写。已在途原件
             # 也可通过原系统临时槽完成交接；不枚举、不迁移、不修改原有任务池。
-            for base in (root / records.AGY_HANDOFF, records._project_scratch_base(root)):
+            for base in self.handoff.compatible_bases(root):
                 if path.is_relative_to(base):
                     parts = path.relative_to(base).parts
-                    return (len(parts) >= 2 and records.SCRATCH_SLOT_RE.fullmatch(parts[0])
+                    return (len(parts) >= 2 and SCRATCH_SLOT_RE.fullmatch(parts[0])
                             and (base / parts[0]).is_dir() and not any(p.startswith(".") for p in parts)
                             and path.suffix in {".json", ".jsonl", ".md", ".txt", ".log", ".patch", ".diff"})
         return False
 
+    def project_input(self, raw, project, *, scratch=False):
+        # 只读 helper 也必须读当前调用选定的项目；明确登记的输入才可读取
+        # 同项目请求临时槽。始终先检查物理路径，避免借链接重定向到别的工作区。
+        path = physical(raw, project)
+        if path.is_relative_to(project) or scratch and self.scratch_file(path, project):
+            return True
+        raise GuardRefusal(DENY_PATH)
+
+    def project_root(self, raw, *, expected=None):
+        # 缺参数仍由命令形态拒绝；显式选了其他根时报告工作区拒绝。内层
+        # helper 的项目参数必须与已核对的外层选择完全相同。
+        if raw is None:
+            return None
+        path = Path(raw)
+        if path not in self.roots or expected is not None and raw != str(expected):
+            raise GuardRefusal(DENY_PATH)
+        return path
+
+    def workspace_directory(self, raw, *, base=None):
+        # 原生 Cwd 必须绝对；Git -C 的相对路径以已核对的终端 Cwd 为基准。
+        # 核对解析后的真实目录，防止 ..、链接或多工作区下未知基准越界。
+        try:
+            path = Path(raw)
+            if not path.is_absolute():
+                if base is None:
+                    raise GuardRefusal(DENY_PATH)
+                path = base / path
+            directory = path.resolve(strict=True)
+            if directory.is_dir() and any(directory.is_relative_to(root) for root in self.roots):
+                return directory
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise GuardRefusal(DENY_PATH) from exc
+        raise GuardRefusal(DENY_PATH)
+
     def can_write(self, raw, cwd=None):
         base = cwd or self.cwd
         if base is None and not Path(raw).is_absolute():
+            self.refusal = DENY_PATH
             return False
         path = physical(raw, base or Path("/"))
         if self.parent:
             if self.task is None:
+                self.refusal = DENY_CHILD
                 return False
             root, task = self.task
+            self.refusal = DENY_OWNERSHIP
             if not path.is_relative_to(root) or managed_path(path.relative_to(root)):
                 return False
             return (not path.is_relative_to(PLUGIN)
@@ -250,12 +264,14 @@ class Access:
         # 宿主自带计划/交接 Artifact 的正文可写；同目录下的原生会话日志不是交付物。
         if path.parent == self.artifacts and path.name in {"task.md", "implementation_plan.md", "walkthrough.md"}:
             return True
+        self.refusal = DENY_PATH
         for root in self.roots:
             if not path.is_relative_to(root):
                 continue
             relative = path.relative_to(root)
             if not relative.parts or managed_path(relative) or path.is_relative_to(PLUGIN):
                 continue
+            self.refusal = DENY_PM
             if explicit_scope(self.message, root, path, single_root=len(self.roots) == 1):
                 return True
             if path.suffix != ".md" or any(part.startswith(".") for part in relative.parts):
@@ -305,10 +321,11 @@ class Access:
         if self.parent:
             tasks = [self.task] if self.task else []
         else:
-            tasks = [(Path(snap.descriptor["execution_roots"][task["id"]]), task)
+            tasks = [(snapshot.execution_root, snapshot.task)
                      for root in self.roots if cwd.is_relative_to(root)
-                     for project in project_candidates(root) for snap in inventory(project, self.current)
-                     for task in snap.tasks if task.get("state") not in ("CANCELLED", "WITHDRAWN", "STOP_REQUESTED")]
+                     for project in project_candidates(root)
+                     for snapshot in task_pool.registered_tasks(project, "antigravity:" + self.current)
+                     if snapshot.task.get("state") not in ("CANCELLED", "WITHDRAWN", "STOP_REQUESTED")]
         def invocation(words):
             # AGY 默认环境可能只有 python3，既有任务原件可能登记 python。归一化仅限
             # 这两个无路径命令名和禁止写字节码的 -B，所有脚本路径及测试参数逐字保留。
@@ -347,24 +364,50 @@ class Access:
         return False
 
 
-def decide(event):
+def decide(event, handoff):
     call = event["toolCall"]
     name, args = call["name"], call["args"]
     if name == "manage_task":
-        return args.get("Action") in {"status", "list", "kill"}
+        return None if args.get("Action") in {"status", "list", "kill"} else DENY_COMMAND
     if name == "send_command_input":
-        return args.get("Terminate") is True and not args.get("Input")
-    access = Access(event)
+        return None if args.get("Terminate") is True and not args.get("Input") else DENY_COMMAND
+    access = Access(event, handoff)
     if name == "run_command":
-        return command_allowed(args, access, PLUGIN)
-    return name in EDIT_TOOLS and access.can_write(args[EDIT_TOOLS[name]])
+        try:
+            return None if command_allowed(args, access, PLUGIN) else access.refusal
+        except ValueError:
+            # 命令词、参数或重定向无法按受控 argv 解析。保留脱敏原因。
+            return access.refusal
+    return None if name in EDIT_TOOLS and access.can_write(args[EDIT_TOOLS[name]]) else access.refusal
 
 
 if __name__ == "__main__":
     try:
+        from lib.hosts.factory import handoff_policy, packaged_host
+
+        # 在加载写入逻辑和宿主日志解释器前核对实体宿主和固定入口。
+        # 原生 Hook 逐次同步运行，避免按整个载荷或第三方资源树全量扫描。
+        host = packaged_host(PLUGIN, expected="antigravity", resources=(
+            "hooks.json", "hooks/write_guard.py", "hooks/guard_command.py", "lib/python_runtime.sh",
+            "lib/hosts/factory.py", "lib/hosts/dispatch_contract.py", "lib/hosts/handoff.py",
+            "lib/hosts/antigravity_dispatch.py", "lib/hosts/antigravity_handoff.py", "lib/task_pool.py",
+            "lib/writer_prerequisites.py", "lib/task_graph_cli.py",
+            "workflow-sources.json", "lib/safe_text.py", "lib/qa_projection.py", "lib/validate_project_docs.py",
+        ))
+        from lib import task_pool
+        from lib.hosts import antigravity_dispatch as native
+        from lib.hosts.handoff import SCRATCH_SLOT_RE
+        from lib.qa_projection import projection_kind
+        from lib.safe_text import read_file
+        from lib.task_graph import TaskGraphError
+        from lib.validate_project_docs import project_docs_layout
+        from guard_command import check_runner, command_allowed
+
         os.environ["AGENT_WORKFLOW_PLUGIN_ROOT"] = str(PLUGIN)
-        allowed = decide(json.load(sys.stdin))
-        result = {"decision": "allow"} if allowed else {"decision": "deny", "reason": DENY}
+        reason = decide(json.load(sys.stdin), handoff_policy(host))
+        result = {"decision": "deny", "reason": reason} if reason else {"decision": "allow"}
+    except GuardRefusal as refusal:
+        result = {"decision": "deny", "reason": str(refusal)}
     except Exception:
         # 宿主对失败进程的处理依版本不同。解析/身份/路径异常都输出有效 deny，
         # 不在输出中复制用户文本、任务包、私有路径或日志内容。

@@ -34,7 +34,7 @@ from lib import task_graph_records as records
 from lib.agent_continuation import active
 from lib.dispatch_admission import RecordView, ResourceIdentity, select_candidates, task_key
 from lib.foundation_qa import project_qa_read_only
-from lib.hosts import antigravity_dispatch
+from lib.hosts.dispatch_contract import DEFAULT_DISPATCH, DispatchPolicy
 from lib.platform_fs import directory_lock
 from lib.task_sources import PLUGIN_ENV, PROJECT_ENV, project_root, validate_task_source
 from lib.request_scope import request_scopes
@@ -439,7 +439,8 @@ def claim_target(receipt: dict) -> dict:
 
 
 def admission(command: str, manifest: dict, target: dict | None = None,
-              receipt: dict | None = None, outcome: str | None = None, *, freeze_prototype=None, agy_pm=None) -> dict:
+              receipt: dict | None = None, outcome: str | None = None, *, freeze_prototype=None,
+              policy: DispatchPolicy = DEFAULT_DISPATCH) -> dict:
     """执行 view/claim/release；错误抛 TaskGraphError，CLI 映射为 JSON stderr/退出2。
 
     claim 成功返回的 receipt 只关联原字节和原任务，不是宿主启动凭据。release 要求
@@ -482,8 +483,7 @@ def admission(command: str, manifest: dict, target: dict | None = None,
         from lib.task_graph_cli import is_standalone_prototype, publish_task_update
         prototype_claim = command == "claim" and is_standalone_prototype(sources[view.path])
         if command == "claim":
-            if antigravity_dispatch.packaged_host() and agy_pm is None:
-                raise TaskGraphError("AGY dispatch requires a claim through the current PM task pool")
+            policy.check_pool_claim()
             if prototype_claim and freeze_prototype is None:
                 raise TaskGraphError("standalone prototype claim requires the registered PM task pool")
             if target not in projection["candidates"]:
@@ -496,16 +496,7 @@ def admission(command: str, manifest: dict, target: dict | None = None,
             # 同图中别的任务可先行变更。新领取绑定本任务领取前的 SHA 和原待派状态，
             # 旧版无此绑定时仍须核对领取整图 SHA；旧撤回已将被撤回的 SHA 保存在原件中。
             stopping = task["state"] == "STOP_REQUESTED"
-            if "dispatch_marker" in receipt and "antigravity_claim" not in task:
-                raise TaskGraphError("unexpected AGY dispatch marker on a non-AGY claim")
-            if "antigravity_claim" in task:
-                # release 与 bind 都消费同一轮派发凭据；即使重建了相同初始原件，
-                # 上次运行导出的回执也不能释放刚产生的新占用。
-                agy_claim = task["antigravity_claim"]
-                if (agy_pm is None or antigravity_dispatch.parent_id(agy_pm) != agy_claim["parent"]
-                        or receipt.get("dispatch_marker") != antigravity_dispatch.dispatch_marker(
-                            root, target, task["claim_basis_sha256"], agy_claim)):
-                    raise TaskGraphError("AGY release requires the current PM task pool and original dispatch marker")
+            verified_pool_release = policy.check_release(root, target, task, receipt)
             if "claim_basis_sha256" in task:
                 matching = (task["claim_basis_sha256"] == receipt["previous_sha256"]
                             and task.get("claim_prior_state") == receipt["prior_state"])
@@ -522,10 +513,8 @@ def admission(command: str, manifest: dict, target: dict | None = None,
             state = "WITHDRAWN" if stopping else receipt["prior_state"]
         _recheck(views)
         if command == "claim":
-            operation = {"claim": {"previous_sha256": view.sha256}}
-            if agy_pm is not None:
-                agy_claim = antigravity_dispatch.new_claim(agy_pm)
-                operation["claim"]["antigravity_claim"] = agy_claim
+            claim_fields, receipt_fields = policy.claim_fields(root, target, view.sha256)
+            operation = {"claim": {"previous_sha256": view.sha256, **claim_fields}}
         elif state == "WITHDRAWN":
             version = "previous_sha256" if "claim_basis_sha256" in task else "claimed_sha256"
             operation = {"confirm_uncreated": {version: receipt[version], "outcome": outcome}}
@@ -535,10 +524,10 @@ def admission(command: str, manifest: dict, target: dict | None = None,
         else:
             operation = {"set": {"state": state}}
         patch = {"tasks": {task["id"]: operation}}
-        # 新 AGY 领取的 claim 和已核实结果的 release 都只在持池锁的路径发布。
-        # 未带 AGY 字段的历史释放继续调用原 helper；unknown 已在上方原样返回。
-        agy_pool_operation = agy_pm is not None and (command == "claim" or "antigravity_claim" in task)
-        if prototype_claim or agy_pool_operation:
+        # 宿主只决定是否已为本次操作提供池内证据，核心仍持有准入锁、
+        # 原件 CAS 和发布路径。旧记录无此证据时继续使用公开 helper。
+        pool_operation = bool(claim_fields) if command == "claim" else verified_pool_release
+        if prototype_claim or pool_operation:
             if prototype_claim:
                 freeze_prototype(view.path, view.sha256)
             source = Path(view.path)
@@ -556,9 +545,7 @@ def admission(command: str, manifest: dict, target: dict | None = None,
         if command == "claim":
             result = {"schema_version": 1, "status": "claimed", "target": target,
                       "prior_state": task["state"], "previous_sha256": view.sha256,
-                      "claimed_sha256": updated["sha256"]}
-            if agy_pm is not None:
-                result["dispatch_marker"] = antigravity_dispatch.dispatch_marker(root, target, view.sha256, agy_claim)
+                      "claimed_sha256": updated["sha256"], **receipt_fields}
             return result
         return {"schema_version": 1, "status": "released", "target": target,
                 "sha256": updated["sha256"], "state": state}
@@ -581,7 +568,8 @@ def main(argv: list[str] | None = None) -> int:
             raise TaskGraphError("target requires --record/--request-id/--task-id together")
         target = dict(zip(("record", "request_id", "task_id"), supplied_target)) if all(supplied_target) else None
         receipt = records.decode(records.read_record(args.receipt)) if args.receipt else None
-        result = admission(args.command, manifest, target, receipt, args.outcome)
+        from lib.hosts.factory import dispatch_policy
+        result = admission(args.command, manifest, target, receipt, args.outcome, policy=dispatch_policy())
     except (ValueError, OSError, UnicodeError, subprocess.SubprocessError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

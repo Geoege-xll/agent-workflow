@@ -718,7 +718,7 @@ the same validator through the packaged `source_pack.py helper --project` entry 
 
 Initial design verification omits `--expect`. JSON returns `pages`, each with a project-relative
 `path` and `dependency_fingerprint`; the thin index is not a concrete approval page. Page selection
-uses explicit pages in standalone mode without requiring a generic index or prototype.css/js. The strict legacy workspace entry remains available by omitting `--standalone`; it retains its existing safety checks. Navigation links remain validated but do not
+uses explicit pages in standalone mode without requiring a generic index or prototype.css/js. For the strict legacy workspace check, replace `.` with the physical absolute project root passed to `--project` and omit `--standalone`. The legacy check retains its existing safety and managed project identity checks. Navigation links remain validated but do not
 couple otherwise independent page fingerprints. This command does not activate the designer's
 complete procedure or require a browser, and its machine output stays internal.
 
@@ -773,7 +773,7 @@ artifact for standards maintenance.
 
 ### Prototype artifacts
 
-项目保留具体原型与业务资产，插件持有通用评审工具：
+项目保留具体原型与业务资产，插件持有通用评审工具。Codex 与 Claude Code 的受管交付另准备下列链接和精确忽略项：
 
 ```text
 docs/standards/prototype/
@@ -789,9 +789,13 @@ installation, a build, framework, router, external CDN, live API, database, acco
 项目脚手架不投放通用 index、workspace.css/js、feedback.css/js 或 page-shell.js。
 已有 `docs/standards/prototype/index.html`、`docs/standards/prototype/prototype.css`、具体页面、
 业务组件和分组语义均保留；不按文件名覆盖或删除。新页面从物理插件的 `resource` 解析
-page.html 模板；裸模板只注释受管标签示例，不激活缺失依赖。只创建有权限的具体页和业务样式；Agent／PM 交付前必须准备受管入口，未准备模板不能作为完整交付。
+page.html 模板；裸模板只注释受管标签示例，不激活缺失依赖。只创建有权限的具体页和业务样式。
 
-反馈评审按需使用 [prototype-feedback](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+Antigravity 的设计角色按原任务制作具体 HTML，并用上文的静态校验入口验证原稿及依赖。PM 提供静态验证通过的各具体页绝对 HTML 路径或 file URI，按原流程请用户确认具体页、变更范围及操作步骤，批准仍绑定到同一依赖指纹。此交付不使用 `prepare-delivery` 或本机 HTTP 评审。
+
+### Codex 与 Claude Code 受管原型交付与评审
+
+Codex 与 Claude Code 在交付前必须准备受管入口。反馈评审按需使用 [prototype-feedback](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 当前交付先通过物理插件根的白名单 `prototype_feedback_cli.py prepare-delivery --root --adapter --pages`，幂等准备受管入口／公开目录，不启动服务或业务请求；再用 `open` 显式指定相同项目 root、adapter、唯一需求 Markdown、request_id 和本次 `--pages`。open 先验证准备，缺失准确返回 `preparation_required`，不会悄悄修改业务 HTML。ready 后 `delivery_url` 为首个具体 HTML 的 file URI，`delivery_urls` 列出各页，`review_url` 为无秘密 HTTP 导航入口；诊断 HTTP 交付链接仅可另名 `http_delivery_url`，必须无 fragment 秘密；正式 file／review URL 均无秘密。
 项目完整交付 catalog 上限为256页，与单次 review 的16页限额分离；一次 open 仅绑定本次已批准、通过安全校验的同需求 1—16 页，多页使用 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`，不扫描全项目或从旧 index 派生。项目公开 catalog 按项目锁合并，不同具体页可绑定不同请求，当前页按实际文件名选择，不能用单一 active_request 覆盖其他页。
 
@@ -835,12 +839,14 @@ PM 只将该精简 changes、必要 anchors 和短 review 引用连同当前完�
 混合、未知和活动冲突资产均保留。失败通过同 preview 的 `migration-recover` 恢复，
 不覆盖用户并发新内容；插件更新与本请求的 fixture 证明均不授权真实业务项目迁移。
 
+### 具体原型页的交互与说明
+
 `prototype.js` is not part of the standard tree. Create it only when two or more pages genuinely
 share the same native interaction; otherwise keep trivial behavior page-local.
 
 每个具体页保留一个默认折叠的 `details.prototype-contract`，首个 `summary` 写「开发说明」。UI Agent 只补充开发者操作原型后仍无法确定、且已确认的行为。普通可操作跳转无需复述；提交超时后保留哪些输入、在什么条件下重试等已确定规则，可用文字补充，已有需求规则则在本页需求导航链接到真实 Markdown 章节。整页已经表达清楚时保留空说明，尚待决定的行为交回 PM。历史 `Page design and interaction contract` 与分节继续可读。重要控件仍须有稳定 ID 和可演示的交互；可选 `data-contract-for` 只关联真实且唯一的控件，不要求逐控件编写说明。功能实现者结合批准的页面、开发说明与原需求章节落地。沿用当前稳定 HTML，不创建配套说明文档。
 
-目录使用原稿 body 的显式 `data-prototype-group="客户服务/订单"`（由外至内）。UI Agent 保留已确认的目录归属；准备多组旧稿时，可按已核对的页面清单分别运行 `prepare-delivery --group "客户服务/订单" --pages …`，原稿字节无需为分组作改写。未提供新分组会沿用已有登记，无来源的页保留在「未分组」。两种入口由同一登记生成，页面名称、文件编号与平台都不作为分类依据。
+目录使用原稿 body 的显式 `data-prototype-group="客户服务/订单"`（由外至内）。UI Agent 保留已确认的目录归属。Codex 与 Claude Code 准备多组旧稿时，可按已核对的页面清单分别运行 `prepare-delivery --group "客户服务/订单" --pages …`，原稿字节无需为分组作改写。未提供新分组会沿用已有登记，无来源的页保留在「未分组」。受管交付和评审由同一登记生成，页面名称、文件编号与平台都不作为分类依据。
 
 After final visual approval, a new project must establish the UI Foundation first:
 

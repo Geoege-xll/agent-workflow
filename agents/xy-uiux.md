@@ -46,7 +46,7 @@ skills:
 插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
 
 公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
-发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
+发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-impeccable`、`xy-playwright`，
 按实际发现格式调用。官方 `agent-desktop` 使用上游原名直接发现。通过 `xy-` 别名
 提供的上游技能须完整读取选中的薄适配及其包内原文。不要用未知全局同名技能代替，
 也不传播原版 hooks/allowed-tools 为额外权限。

@@ -1788,7 +1788,7 @@ def capture_selected_pages(project_root: str | Path, prototype_relative_raw: str
             body, actual_identity = snapshot_navigation(path)
             if digest_navigation(body) != expected_digest or actual_identity != expected_identity:
                 raise ValidationError("requirement navigation changed during capture")
-            files[path.relative_to(Path(project_root)).as_posix()] = body
+            files[path.relative_to(navigation.project).as_posix()] = body
         return {"pages": result, "files": files}
     finally:
         if prototype_fd >= 0:

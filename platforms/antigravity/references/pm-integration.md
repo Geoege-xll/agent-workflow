@@ -24,6 +24,17 @@ never emulate isolation by concurrently switching branches in one directory or o
 
 自然语言委托开发、设计交付或独立 QA 时，主会话直接进入 xy-workflow。复用用户对当前范围的明确批准，按现有业务门禁处理尚缺的实质决定。运行包内已知 helper 默认沿用宿主沙箱。参数错误、摘要过期或校验失败时先修正具体输入，不用 `BypassSandbox` 重跑。确实需要额外访问时遵循宿主权限流程。用户明确指定 PM 实施的范围沿用现有例外，独立 QA 由真实 Reviewer 完成。
 
+普通设计委托仍由原生设计角色在登记执行根制作可直接打开的具体 HTML。按 [静态验证合同](../../shared/skills/xy-prototype-verify/SKILL.md) 使用包内 helper，外层 `--project` 传物理绝对项目根，校验器使用 `.` 与 `--standalone`，并传原任务选择的适配器与具体页。交付每页绝对 HTML 路径或 `file://` URI、变更范围、操作步骤及内部依赖指纹。设计关联以当前批准需求为准。页面如在 `data-prototype-plan-source` 中声明需求路径，PM 将其与本请求实际批准的需求 Markdown 路径核对，再请用户确认具体页。AGY 的交付直接使用原稿，跳过 `prepare-delivery` 和本机 HTTP 评审。用户明确点名 PM 实施具体页面时才沿用已有 PM 写入例外。
+
+本地主分支交付由登记原图的 PM 执行。把交付 JSON 放在本请求交接槽，使用已接受的 QA 包和回执原件。按共享 worktree-delivery 合同取得当前候选的 confirm 或 auto 授权后，对交付文件运行 `shasum -a 256 <delivery.json>`，将摘要和实际 PM 会话 ID 填入两次调用：
+
+```text
+bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py helper --project <main-checkout> lib/delivery/worktree_cli.py merge-ready --repo <main-checkout> --config <selected-project.yaml> --input <delivery.json> --pm-id antigravity:<current-PM-UUID> --expect-sha256 <delivery-json-SHA256>
+bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py helper --project <main-checkout> lib/delivery/worktree_cli.py merge --repo <main-checkout> --config <selected-project.yaml> --input <delivery.json> --pm-id antigravity:<current-PM-UUID> --expect-sha256 <delivery-json-SHA256>
+```
+
+两次使用同一份已核对的交付文件。若文件或原图已变化，按已有交付合同复核受影响的范围、QA 和授权，再固定当前输入。
+
 Light first assesses the current goal, risk, scope, and implementer, dispatching the corresponding native role subagent by default with mandatory minimum sufficient verification; assess independent QA, documentation, and memory at handoff without mandatory Full planning, DAG, saved plans, or duplicate confirmation.
 
 Full: classify → facts → Grill Me coverage through original `/xy-grilling` → `xy-plan` draft → projection decision →
