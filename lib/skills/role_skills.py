@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from product.command_identity import load_identity
 
 
 IMPLEMENTER_ROLES = frozenset({
@@ -15,18 +20,29 @@ LEGACY_CORE_SKILLS = frozenset({
     "grill-me", "xy-build-verify", "xy-project-memory", "xy-plan",
     "xy-prototype-verify", "xy-qa-review", "xy-workflow",
 })
-CORE_SKILLS = LEGACY_CORE_SKILLS | {"xy-code-standards", "xy-ui-design"}
+# 外部原版与内部受管Skill分开，历史集合只证明旧磁盘所有权。
+CORE_SKILLS = (LEGACY_CORE_SKILLS - {"grill-me"}) | {"xy-code-standards", "xy-ui-design"}
+COMMAND_IDENTITY = load_identity(Path(__file__).resolve().parents[2])
+SELECTED_SKILL_ALIASES = {public: canonical for public, canonical in COMMAND_IDENTITY["skill_aliases"].items()
+                          if canonical != "agent-config"}
+SELECTED_SKILLS = frozenset(SELECTED_SKILL_ALIASES)
+
+
+def selected_alias(canonical: str) -> str:
+    """角色与构建器共用唯一产品声明的公开名称，不改上游canonical名称。"""
+    return next(public for public, original in SELECTED_SKILL_ALIASES.items() if original == canonical)
+
+
+PM_SKILLS = (selected_alias("grilling"),)
 
 ROLE_SKILLS = {
     **{role: ("xy-code-standards", "xy-build-verify") for role in IMPLEMENTER_ROLES},
-    "xy-uiux": ("xy-ui-design", "xy-prototype-verify"),
+    "xy-web": ("xy-code-standards", "xy-build-verify", selected_alias("playwright-cli")),
+    "xy-uiux": ("xy-ui-design", selected_alias("design-taste-frontend"), "xy-prototype-verify"),
     # QA 保持唯一审查入口，代码/UI 方法由实际审查面选择，不能无条件预载全文。
     "xy-qa": ("xy-qa-review",),
 }
-CLAUDE_ROLE_SKILLS = {
-    **ROLE_SKILLS,
-    "xy-uiux": ("xy-ui-design", "ui-ux-pro-max", "xy-prototype-verify"),
-}
+CLAUDE_ROLE_SKILLS = dict(ROLE_SKILLS)
 ANTIGRAVITY_ROLE_SKILLS = {
     role: tuple(f"skills/{skill}" for skill in skills)
     for role, skills in ROLE_SKILLS.items()

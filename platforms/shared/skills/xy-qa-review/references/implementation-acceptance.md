@@ -96,6 +96,15 @@ retain configured `project_id`, set `filter_enforced: false`, and leave `capabil
 provenance, call neither recall nor save. Provider unavailability alone does not fail QA; missing
 mandatory task evidence does. Only PM performs post-PASS project memory closeout.
 
+## Web 浏览器证据
+
+实际 Web audit surface 的浏览器证据缺口，遵守
+[共用 Web 工具选择政策](../../xy-build-verify/references/web-browser-verification.md)。先核实并
+复用项目测试和 Writer 有效证据；确需补充交互时按需完整读取内置 `xy-playwright` adapter／
+canonical Skill，首选固定 CLI。其它浏览器工具需具体能力、环境或用户理由；电脑操控需真实
+桌面能力。固定 QA 入口、原型禁自动化/截图、只读权限和唯一 Reviewer 不变。需要安装浏览器、
+写文件或改变业务状态而权限不允许时返回 PM，由原 Writer 补证；QA 不自行绕过。
+
 ## Integration and rework
 
 For worktree requests, follow installed `xy-workflow/references/worktree-delivery.md`: review the

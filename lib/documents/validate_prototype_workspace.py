@@ -10,6 +10,8 @@ if not __package__:
     from pathlib import Path as _Path
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
+from lib.documents.safe_documents import snapshot as snapshot_navigation, digest as digest_navigation
+
 import argparse
 import hashlib
 import json
@@ -1393,9 +1395,12 @@ def _validate_dialog_wiring(parser: PageParser) -> None:
 class DependencyValidator:
     """Validate a bounded graph of descriptor-anchored local dependencies."""
 
-    def __init__(self, prototype_fd: int, *, navigation: RequirementNavigation | None = None) -> None:
+    def __init__(self, prototype_fd: int, *, navigation: RequirementNavigation | None = None,
+                 selected_pages: bool = False) -> None:
         self.prototype_fd = prototype_fd
         self.navigation = navigation
+        # 独立评审只捕获实际渲染闭包；业务导航不是自动选页或复制整个工作区的权限。
+        self.selected_pages = selected_pages
         self.visited: set[PurePosixPath] = set()
         self.total_size = 0
         self.contents: dict[PurePosixPath, bytes] = {}
@@ -1450,14 +1455,14 @@ class DependencyValidator:
     ) -> PurePosixPath | None:
         target = _resolve_local_reference(source, raw, label)
         if target is not None:
-            if resource and source != PurePosixPath("index.html") and target in {
+            if resource and not self.selected_pages and source != PurePosixPath("index.html") and target in {
                 PurePosixPath("workspace.js"), PurePosixPath("workspace.css"), PurePosixPath("feedback.js"),
             }:
                 raise ValidationError("workspace controller and stylesheet may only be loaded by index.html")
             if resource:
                 self.edges.setdefault(source, set()).add(target)
                 self.validate_path(target, depth=depth + 1)
-            else:
+            elif not self.selected_pages:
                 # 导航目标仍完整验证，但从独立根计深度且不建立当前页的资源边。
                 # 这样 CSS 下载链接也不能藏外部依赖，页面互链又不会变成资源闭环。
                 self.validate_path(target)
@@ -1608,12 +1613,24 @@ def validate_workspace(
     pages: list[str] | None = None,
     expected: dict[str, str] | None = None,
     adapter: str | None = None,
+    standalone: bool = False,
 ) -> dict[str, list[dict[str, str]]]:
     """验证整个工作区，返回选定具体页的证据；指纹相等不代表授予用户批准。"""
     prototype_relative = _safe_relative_path(
         prototype_relative_raw,
         "prototype root",
     )
+    if standalone:
+        if adapter is None or not pages:
+            raise ValidationError("standalone validation requires explicit adapter and concrete --page selections")
+        result = capture_selected_pages(project_root, prototype_relative_raw, pages=pages, adapter=adapter)
+        fingerprints = {Path(page["path"]).name: page["dependency_fingerprint"] for page in result["pages"]}
+        for name, fingerprint in (expected or {}).items():
+            if (name not in fingerprints or not isinstance(fingerprint, str)
+                    or not re.fullmatch(r"[0-9a-fA-F]{64}", fingerprint)
+                    or fingerprints[name] != fingerprint.lower()):
+                raise ValidationError("standalone prototype dependency fingerprint mismatch: " + name)
+        return {"pages": result["pages"]}
     project_fd = _open_root(project_root, "project root")
     prototype_fd = -1
     pages_fd = -1
@@ -1721,6 +1738,60 @@ def validate_workspace(
         os.close(project_fd)
 
 
+def capture_selected_pages(project_root: str | Path, prototype_relative_raw: str, *,
+                           pages: list[str], adapter: str) -> dict:
+    """捕获明确页面的真实渲染闭包，不要求项目拥有通用查看器或索引。
+
+    与旧 validate_workspace 共用解析、no-follow 文件读取和 v1 指纹域；只有
+    选择边界不同。导航链接仍做本地越界检查，但不授权复制未选业务页面。
+    返回字节仅供派生评审包装配，不能作为修改项目文件的授权。
+    """
+    prototype = _safe_relative_path(prototype_relative_raw, "prototype root")
+    if not pages or len(pages) != len(set(pages)):
+        raise ValidationError("selected pages must be non-empty and unique")
+    for name in pages:
+        if (not re.fullmatch(r"[a-z0-9][a-z0-9-]*\.html", name) or name == "index.html"
+                or VERSION_COPY_PATTERN.search(PurePosixPath(name).stem)):
+            raise ValidationError("selected page must be a canonical concrete HTML: " + name)
+    project_fd = _open_root(project_root, "project root")
+    prototype_fd = -1
+    try:
+        prototype_fd = _walk_directory(project_fd, prototype, "prototype root")
+        root_identity = os.fstat(prototype_fd)
+        navigation = RequirementNavigation(Path(project_root), prototype, adapter=adapter)
+        dependencies = DependencyValidator(prototype_fd, navigation=navigation, selected_pages=True)
+        result = []
+        for name in sorted(pages):
+            source = PurePosixPath(name)
+            parser = PageParser(name)
+            _parse_html(parser, dependencies.text(source, size_limit=MAX_TEXT_FILE_SIZE), name)
+            _validate_page_structure(parser)
+            dependencies.validate_path(source)
+            result.append({"path": (prototype / name).as_posix(),
+                           "dependency_fingerprint": dependencies.fingerprint(source)})
+        dependencies.require_current_identities()
+        navigation.require_current_inputs()
+        current_fd = _walk_directory(project_fd, prototype, "current prototype root")
+        try:
+            current = os.fstat(current_fd)
+            if (current.st_dev, current.st_ino) != (root_identity.st_dev, root_identity.st_ino):
+                raise ValidationError("prototype root changed during selected-page capture")
+        finally:
+            os.close(current_fd)
+        # 每份字节来自刚才验证的同一捕获，不按普通路径重新读取资源。
+        files = {(prototype / path).as_posix(): body for path, body in dependencies.contents.items()}
+        for path, (expected_digest, expected_identity) in navigation.inputs.items():
+            body, actual_identity = snapshot_navigation(path)
+            if digest_navigation(body) != expected_digest or actual_identity != expected_identity:
+                raise ValidationError("requirement navigation changed during capture")
+            files[path.relative_to(Path(project_root)).as_posix()] = body
+        return {"pages": result, "files": files}
+    finally:
+        if prototype_fd >= 0:
+            os.close(prototype_fd)
+        os.close(project_fd)
+
+
 def _validate_workspace_nodes(root_fd: int) -> None:
     """浅层页面与资源分目录共存，但不能混入计划、链接节点或隐藏的第二套页面。
 
@@ -1766,6 +1837,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("prototype_root")
     parser.add_argument("--adapter", help="explicitly selected project-relative adapter; required for requirements navigation")
     parser.add_argument("--json", action="store_true", dest="json_output")
+    parser.add_argument("--standalone", action="store_true", help="validate explicit pages without a project viewer/index")
     parser.add_argument("--page", action="append", help="concrete page relative to the prototype root; repeatable")
     parser.add_argument("--expect", action="append", default=[], metavar="PAGE=SHA256")
     try:
@@ -1783,7 +1855,7 @@ def main(argv: list[str]) -> int:
                 raise ValidationError(f"conflicting expected fingerprints for page: {name}")
             expected[name] = fingerprint.lower()
         result = validate_workspace(args.project_root, args.prototype_root, pages=args.page, expected=expected,
-                                    adapter=args.adapter)
+                                    adapter=args.adapter, standalone=args.standalone)
     except Exception as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 1

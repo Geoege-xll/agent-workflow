@@ -28,6 +28,11 @@ description: "Orchestrate current Light／Full implementation, UI changes and re
 `runtime activate`、项目注册、`setup_*.sh`，或创建/修改项目 `AGENTS.md`、
 `CLAUDE.md`、`.agent-workflow` 来使插件生效。
 
+公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
+发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
+按实际发现格式调用；canonical原name只保留在非发现vendor。先完整读取薄adapter及其
+canonical，不以未知全局同名Skill代替，不传播原版hooks/allowed-tools为额外权限。
+
 主会话始终是 PM。工作代理只接收当前完整任务包，使用 `instance_policy: fresh`、
 `context_policy: handoff_only`，不得继承 PM 或其他代理历史。仅官方宿主派发代理；
 使用宿主默认或已配置的模型与推理设置；PM 按 dispatch reference 只读映射业务派发偏好。
@@ -206,7 +211,7 @@ Current controlled documents and explicit user approvals win over recalled memor
 
 ```yaml
 external_workflow_policy:
-  requirements_provider: grill-me
+  requirements_provider: xy-grilling
   planning_provider: xy-plan
   planning_methodology: superpowers-writing-plans-adapted
   superpowers_default: disabled
@@ -214,12 +219,17 @@ external_workflow_policy:
   parallel_provider: host-native-agents
 ```
 
-This pack owns planning, implementation routing, parallel scheduling, QA, and closeout. `grill-me`
-and `xy-plan` are self-contained core Skills in this pack. The latter adapts only the exact-file,
+This pack owns planning, implementation routing, parallel scheduling, QA, and closeout. PM coverage
+uses upstream `grilling`; original `grill-me` is user-invoked only, never automatically invoked on intake.
+The PM's `grill_result` belongs to this workflow, not to upstream. Read the complete
+[requirements intake adapter](references/requirements-intake.md) before Full coverage. `xy-plan`
+is a self-contained core Skill; it adapts only the exact-file,
 independently testable task, verification, and self-review ideas of Superpowers writing-plans; it
 does not activate external worktrees, commits, execution, TDD, branch-finishing, or
 Subagent-orchestration workflows. The only runtime Superpowers integration is the bounded QA
 fallback described below.
+
+<!-- workflow-contract: references/requirements-intake.md -->
 
 ## Route
 
@@ -239,7 +249,7 @@ contract. Light uses that reference's lightweight branch; documentation/memory r
 
 ## Clarification fallback
 
-Use this only when the route above requires `grill-me` and that Skill is unavailable:
+Use this only when the route above requires `grilling` and that primitive is unavailable:
 
 1. Inspect the project truth first; do not ask what the repository can answer.
 2. Ask one compact batch covering only unresolved items:
@@ -253,7 +263,7 @@ Use this only when the route above requires `grill-me` and that Skill is unavail
 
    ```yaml
    grill_fallback:
-     trigger: missing-grill-me
+     trigger: missing-grilling
      answered_questions: []
      assumptions: []
      unresolved_questions: []

@@ -19,16 +19,10 @@ the PM's standard-maintenance task without running these checks, creating protot
 requesting visual approval. A preloaded Skill is not a mandate to execute an inapplicable procedure.
 
 1. Use the exact project adapter already selected for this task to resolve `docs.standards_root`, then derive its `prototype` child. The
-   default active workspace is:
+   new project contains only concrete pages and necessary business styles:
 
    ```text
-   docs/standards/prototype/index.html
    docs/standards/prototype/prototype.css
-   docs/standards/prototype/workspace.css
-   docs/standards/prototype/workspace.js
-   docs/standards/prototype/feedback.css
-   docs/standards/prototype/feedback.js
-   docs/standards/prototype/page-shell.js
    docs/standards/prototype/<stable-page>.html
    ```
 
@@ -36,7 +30,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
    ```bash
    bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/documents/validate_prototype_workspace.py \
-     <project-root> docs/standards/prototype --adapter <selected-project-adapter> --json --page <stable-page>.html
+     <project-root> docs/standards/prototype --standalone --adapter <selected-project-adapter> --json --page <stable-page>.html
    ```
 
    For an official plugin installation, use its verified source-pack entry and the same selected adapter:
@@ -45,7 +39,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    bash <physical-plugin-root>/lib/python_runtime.sh <physical-plugin-root>/plugins/source_pack.py \
      helper --project <physical-project-root> lib/documents/validate_prototype_workspace.py \
      <physical-project-root> <docs.standards_root>/prototype --adapter <selected-project-adapter> \
-     --json --page <stable-page>.html
+     --standalone --json --page <stable-page>.html
    ```
 
    Use `.awf/project.yaml` for the newly applied plugin adapter, or the explicitly selected existing
@@ -53,7 +47,11 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    a fallback. Central tasks retain their fixed runtime and `.agent-workflow/project.yaml`.
    Substitute the configured project-relative `docs.standards_root` path when it differs. A nonzero
    exit is FAIL. Do not weaken or bypass its path, dependency, structure, contract, or interaction
-   checks. Repeat `--page` for multiple scoped concrete pages; omitting it returns all concrete pages.
+   checks. `--standalone` requires explicit concrete `--page` values and does not require index or
+   prototype.css/js. Repeat `--page` for multiple scoped pages. Existing workspaces may retain
+   `docs/standards/prototype/index.html`; omit `--standalone` only for the strict legacy workspace
+   check, whose existing index and local-tool checks below remain applicable. Do not copy the generic
+   plugin shell into a new project to satisfy that legacy entry.
    Keep the returned per-page fingerprints as internal evidence, not a user-facing JSON report.
 3. Verify every scoped active page contains exactly one non-empty
    `Page design and interaction contract` with these exact five sections:
@@ -80,7 +78,9 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    derived from the single registered navigation. Before initialization, the iframe is hidden with no src;
    empty registration shows an explicit empty state. A static design entry without a controller still needs
    an explicit src pointing to a registered page. The index rejects meta refresh, arbitrary scripts and inline
-   routing. workspace.css/js and local feedback.js belong only to the index; concrete pages use minimal page-shell.js.
+   routing. These index/controller rules apply to existing legacy workspaces only. New projects
+   keep workspace.css/js, feedback.css/js and page-shell.js in the plugin and derived review bundle;
+   prepare injects the bridge into derived HTML without changing source pages.
    Shared feedback.css provides the outer panel and target highlight styles; it remains a real local dependency.
    Requirements-bound concrete pages declare the canonical Markdown path under configured plans with
    `body[data-prototype-plan-source]`, and provide one `data-prototype-document="markdown"` link in a

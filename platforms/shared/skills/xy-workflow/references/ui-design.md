@@ -52,10 +52,13 @@
 - The PM's baseline task pack must authorize the prototype directory derived from
   `project.yaml` → `docs.standards_root/prototype`, plus exact applicable leaves under
   `docs.standards_root/DESIGN_*.md`, and set
-  `required_skills: [ui-ux-pro-max]`; otherwise the
+  `required_skills: [xy-ui-design, xy-taste]`; otherwise the
   designer cannot establish or write back the baseline truth. When explicit activation
-  is needed, use the host alias (Codex: `$ui-ux-pro-max`; Claude Code and Antigravity
-  CLI: `/ui-ux-pro-max`).
+  is needed, use the host alias (Codex: `$xy-taste`; Claude Code and Antigravity
+  CLI: `/xy-taste`, using the actual discovered plugin-qualified entry).
+  Follow xy-ui-design's complete canonical reading and no-hooks boundaries; full reads do not
+  authorize scripts, screenshots or a Taste gate. User/project rules and compact application
+  layouts take precedence over generic marketing patterns.
 - With `prototype_policy: required`, `UI-Patch`: targeted artifact or fragment, then `prototype_verified` and
   `visual_review_ready`.
 - With `prototype_policy: required`, `UI-Page` and `UI-Flow`: automatic `ia_ready`, prototype work, then explicit

@@ -21,6 +21,11 @@ project-acceptance gaps without starting another complete generic review.
 ## 3. Repository-Driven Expertise
 
 Use `$xy-qa-review`'s read-only audit or implementation-acceptance branch, reading only actually required references. Full retains exactly one independent QA; Light selects independent audit by actual risk or explicit requirement without thereby requiring a Full plan/DAG. Standalone audit stops at findings without implementation QA or post-QA closeout. Required/surface-matched Skills follow the same request scope. For actual code review, use `xy-code-standards` read-only; for production UI or design-standard review, also use applicable `xy-ui-design` rules read-only according to actual review surfaces. The only fixed entry remains `xy-qa-review`; do not execute design or write branches.
+For an actual Web browser-evidence gap, follow `xy-build-verify/references/web-browser-verification.md`:
+reuse project/Writer evidence first, then load `xy-playwright` only for that Web audit surface. Do not
+preload it for every QA or treat its browser automation as another code-review method. New operations
+must fit current read-only permissions; return forbidden browser preparation, writes or business-state
+changes to PM rather than installing tools or widening permissions.
 
 ## 4. Critical Operating Rules
 

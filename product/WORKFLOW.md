@@ -319,14 +319,16 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
 
 - The pack owns planning, task decomposition, parallel scheduling, implementation routing, QA,
   and closeout. External workflow Skills never replace or wrap this control plane.
-- `grill-me` is this pack's self-contained requirements-coverage Skill. Every `Full` request runs a
-  **Grill Me coverage check** before planning. The PM first retrieves only auxiliary project facts
+- Every `Full` request runs a **Grill Me coverage check** owned by the PM before planning,
+  using the bundled upstream `grilling` primitive through `xy-grilling`. `xy-grill-me` remains user-invoked only.
+  Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/requirements-intake.md`
+  for the complete invocation and internal coverage contract. The PM first retrieves only auxiliary project facts
   that are materially needed for coverage; no document or memory retrieval is required when
   available information is already sufficient. If the facts answer every material question, Grill
   Me returns immediately without manufacturing questions; otherwise it conducts the smallest
   necessary interview. Clear Light work does not invoke it merely because the Skill is
   installed.
-- If Grill Me is unavailable, run the focused local clarification fallback below and record
+- If the bundled `grilling` primitive is unavailable, run the focused local clarification fallback below and record
   `grill_fallback` in the request record. Absence alone does not authorize another external planning
   or orchestration workflow and does not block safe, already-clear Light work.
 - The fallback must inspect only any task-relevant project facts needed to resolve a material gap,
@@ -335,7 +337,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   evidence, and approval/rollback boundaries. Unresolved questions that would materially change
   implementation or authorize irreversible actions must wait for the user. Otherwise, record the
   minimum safe assumptions and `unresolved_questions`.
-- Light requests that are clear and conflict-free do not require `$grill-me`.
+- Light requests that are clear and conflict-free do not require `$xy-grilling`.
 - Plan persistence follows task classification, not file count or the number of workers: Light
   saves only for an actual pause/recovery/handoff or explicit request;
   Full saves after requirements approval and before first design/implementation dispatch. PM writes
@@ -373,7 +375,7 @@ Built-in `xy-code-standards` supplies code implementation and read-only review m
 
 ```yaml
 external_workflow_policy:
-  requirements_provider: grill-me
+  requirements_provider: xy-grilling
   planning_provider: xy-plan
   planning_methodology: superpowers-writing-plans-adapted
   superpowers_default: disabled
@@ -386,6 +388,15 @@ ideas of Superpowers writing-plans, but it is locally self-contained. It does no
 Superpowers worktrees, commits, execution workflows, or Subagent orchestration. The PM uses this
 pack's deterministic READY DAG and host-native Agent dispatch directly. Superpowers contributes at
 runtime only the explicitly bounded QA review fallback defined in section 10.
+
+### Web Browser Verification Tool Selection
+
+The single production Web tool-selection policy is
+`xy-build-verify/references/web-browser-verification.md`. Implementers and the single QA reviewer
+read it for actual browser-evidence gaps; platform adapters retain only native invocation differences.
+The selected CLI adapter owns canonical reading and fixed-runtime resolution, not workflow scheduling
+or permissions. Prototype/static verification, screenshot limits, two confirmations and independent
+read-only QA remain under their existing owners; loading a tool grants none of those authorities.
 
 ### Native Bug-Fix Route
 
@@ -618,8 +629,12 @@ inspect the real screens/components/assets/interactions
   -> enter the feature IA / prototype workflow
 ```
 
-- Before UI analysis or design, `xy-uiux` must explicitly invoke `$ui-ux-pro-max`. If unavailable,
-  the UI phase is hard-blocked with installation guidance; no generic substitute is allowed.
+- Before UI analysis or design, `xy-uiux` activates `xy-ui-design` and the bundled
+  `xy-taste` no-hooks adapter, completely reading the canonical Taste original
+  and task-relevant references under its reading contract. Missing/corrupt resources or incomplete
+  reads block the dependent UI phase; use the bundled-resource health check, not a global installer.
+  User requirements, project design rules and the current page type govern applicability: compact
+  consoles/configuration pages do not inherit marketing hero layouts, whitespace or imagery by default.
 - The audit must cover at least pages, components, tokens, assets, navigation, interaction, states,
   responsiveness, accessibility, and platform conventions. It must distinguish reusable patterns,
   patterns requiring correction, temporarily retained patterns, and accidental patterns that must
@@ -627,10 +642,11 @@ inspect the real screens/components/assets/interactions
 - When issuing the baseline task pack, the PM must authorize the prototype directory derived from
   `project.yaml` -> `docs.standards_root/prototype` and, only when durable project
   principles need an update, exact applicable leaves under `docs.standards_root/DESIGN_*.md`. Set
-  `required_skills: [$ui-ux-pro-max]`. Without the path authorization, the designer cannot update
+  `required_skills: [xy-ui-design, xy-taste]`. Without the path authorization, the designer cannot update
   the prototype; without the required Skill, the UI phase cannot start.
-- The baseline and IA receive automatic evidence from `$ui-ux-pro-max`, the inspected real project,
-  and `$xy-prototype-verify`. They do not create another user confirmation. Generic Skill advice
+- The baseline and IA use Taste design judgment, the inspected real project,
+  and, in prototype mode, `$xy-prototype-verify` static evidence. Taste scripts/gate/hooks
+  are not automatically executed; a Taste gate never establishes workflow QA PASS. They do not create another user confirmation. Generic Skill advice
   never overrides controlled requirements, approved design facts, or the real project's compatible
   visual language. Do not redesign unrelated pages.
 
@@ -718,7 +734,7 @@ Use the same machine entry from the project root; repeat `--page` and `--expect`
 ```bash
 bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
   helper --project "<absolute-project>" lib/documents/validate_prototype_workspace.py \
-  . <docs.standards_root>/prototype --adapter <selected-project-adapter> --json --page <page>.html --expect <page>.html=<approved-sha256>
+  . <docs.standards_root>/prototype --standalone --adapter <selected-project-adapter> --json --page <page>.html --expect <page>.html=<approved-sha256>
 ```
 
 Pass the actual project-relative adapter selected for this task, including `.awf/project.yaml` for a
@@ -729,11 +745,11 @@ the same validator through the packaged `source_pack.py helper --project` entry 
 
 Initial design verification omits `--expect`. JSON returns `pages`, each with a project-relative
 `path` and `dependency_fingerprint`; the thin index is not a concrete approval page. Page selection
-filters evidence, not workspace safety validation. Navigation links remain validated but do not
+uses explicit pages in standalone mode without requiring a generic index or prototype.css/js. The strict legacy workspace entry remains available by omitting `--standalone`; it retains its existing safety checks. Navigation links remain validated but do not
 couple otherwise independent page fingerprints. This command does not activate the designer's
 complete procedure or require a browser, and its machine output stays internal.
 
-Page registration comes from ordinary relative page links inside the unique `nav#prototype-pages` in `index.html`; native `details/summary` may group modules or business logic, without a separate Manifest or script registration copy. The first direct summary in a native disclosure may record interaction results with a stable ID and `data-contract-for`.
+For retained legacy workspaces, page registration comes from ordinary relative page links inside the unique `nav#prototype-pages` in `index.html`; native `details/summary` may group modules or business logic, without a separate Manifest or script registration copy. The first direct summary in a native disclosure may record interaction results with a stable ID and `data-contract-for`.
 The workspace index may directly display one registered local concrete page through the unique `iframe#prototype-preview`, preserving an accessible name and using the exact canonical page name as static src; reject srcdoc, external/out-of-boundary/unregistered paths, self-nesting, and extra frames. The iframe is a real rendering resource, so still verify the concrete page and local dependency closure; this capability belongs only to the index, and product pages must not embed frames.
 Concrete pages bind the canonical Markdown path under configured `docs.plans` through `body[data-prototype-plan-source]`. The unique `nav.prototype-requirement-links` must contain one `data-prototype-document="markdown"` anchor to that source; it may additionally contain one `data-prototype-document="html"` anchor to an existing same-name historical HTML file. Every document anchor uses `target="_blank"` and `rel` containing `noopener` to open independently while preserving the workspace; related duplicate attributes are rejected. The source template may leave the binding empty until configured.
 This grants document-navigation permission only in explicit slots; other resources, embeds and ordinary links remain subject to the prototype-root boundary. Verification checks safe actual regular files, canonical source/target paths and concurrent replacement without scanning reverse prototype references or adding document-render dependency edges. Historical HTML source hashes, records and renderer identities are not freshness requirements and cannot block Markdown revisions; an unlinked old HTML is not read. Requirements/plan Markdown-to-HTML generation remains retired. Static checks never create approval.
@@ -784,35 +800,46 @@ artifact for standards maintenance.
 
 ### Prototype artifacts
 
-The active prototype workspace is intentionally small:
+项目保留具体原型与业务资产，插件持有通用评审工具：
 
 ```text
 docs/standards/prototype/
-├── index.html
-├── prototype.css
-├── workspace.css
-├── workspace.js
-├── feedback.css
-├── feedback.js
-├── page-shell.js
-└── <stable-page>.html
+├── prototype.css          # 可按项目需要维护的业务／展示样式
+└── <stable-page>.html     # 稳定具体页及完整五节契约
 ```
 
-The stable root entry is `docs/standards/prototype/index.html`; shared prototype styles live in
-`docs/standards/prototype/prototype.css`.
+One product page has one stable HTML path: update an existing page in place and create a file only
+for a genuinely new product page. Every page must load directly through `file://` without package
+installation, a build, framework, router, external CDN, live API, database, account, credential, or real user data.
+项目脚手架不投放通用 index、workspace.css/js、feedback.css/js 或 page-shell.js。
+已有 `docs/standards/prototype/index.html`、`docs/standards/prototype/prototype.css`、具体页面、
+业务组件和分组语义均保留；不按文件名覆盖或删除。新页面从物理插件的 `resource` 解析
+page.html 模板，去掉项目源对插件反馈／桥接资源的引用，只创建有权限的具体页和业务样式。
 
-`index.html` directly opens the browsing workspace and shows one registered page at a time, without
-a separate directory landing page or extra outer header. It is not full project design context. One product page has
-one stable HTML path: update an existing page in place and create a file only for a genuinely new
-product page. Use ordinary relative links. Every page must load directly through `file://` without
-package installation, a build, framework, router, external CDN, live API, database, account,
-credential, or real user data.
+反馈评审按需使用 [prototype-feedback](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+通过当前物理插件根的白名单 `prototype_feedback_cli.py prepare`，显式接收项目 root、同一
+adapter、唯一需求 Markdown、request_id 和本轮具体 `--pages`，生成用户级私有不可变离线包，
+返回 `context/review_url/bundle_path/reused`。不写项目或复制整树；仅包含插件工具、明确页面的
+必要渲染依赖与需求导航文档。新导航来自安全元数据；旧 index 只提供链接文本及 details/summary
+分组，不执行旧脚本。评审入口 `index.html#page=<文件名>` 不承载 base64 context。
 
-Only the index loads workspace.css/js and the local feedback.js; prototype.css and minimal page-shell.js belong to concrete pages. Shared feedback.css supports the outer feedback panel and page-local target highlighting. Empty registration shows an explicit empty state with the iframe hidden and no src; once registered, the single local controller derives loading from nav links without bulk preloading. After the current page name and compact brief, show the high-fidelity canvas first, followed by requirements Markdown (and an optional existing historical HTML link), platform/size, necessary demo guidance, and finally the five contract sections collapsed by default. A circular back control with a light background, fine border, and black chevron locates the current group/page, separately from sidebar toggling; product navigation, overlays, and scrolling belong only to the canvas. Source-template updates do not bulk-rebuild existing nonempty business prototypes.
+封闭 schema 2 context 绑定物理项目身份、adapter、需求字节、导航摘要、逐页依赖、工具版本／
+载荷摘要及 review_id；导出为 `{schema_version:2,context,items}`，拒绝旧 schema 1。桥只注入
+派生页面并幂等处理 `prototype-review:* version:2`，忽略旧 `prototype-workspace:* version:1`。
+插件更新不覆盖旧评审包；`validate` 重读项目当前源并核验原包，不自动重绑 latest。
+草稿、comparison 的当前文字／建议文字、REQ／交互／接口引用均不可执行，不产生需求或视觉批准。
 
-反馈评审仅在当前原型修订范围内按需使用 [prototype-feedback](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。从当前物理插件根解析模板及白名单 `prototype_feedback_cli.py`；`prepare` 显式接收项目 root、同一 adapter、唯一需求 Markdown 和 request_id，返回带有界版本 context 的 `review_url`，用户无需填写 SHA。链接仅声明版本，浏览器仅导出 `context/items` 修订输入；`validate` 依据显式 adapter 重算实际需求字节 SHA 与既有逐页依赖指纹，拒绝旧绑定、越界和未知字段，再输出按节点归属的 `changes`。草稿、comparison 的当前文字／建议文字、REQ／交互／接口引用均不可执行，也不产生需求或视觉批准。没有可信已批准基线时明确说明，不把当前文字冒称历史。
+PM 将复核为 `current` 的按节点 `changes` 交回原 `xy-uiux`；设计 Agent 仅在当前 owned_paths 内
+原位修改具体 HTML、实际交互与五节契约，返回静态校验和指纹。需求变化与适用视觉批准仍沿原规则；
+工具不 patch HTML、不写需求或批准、不增业务 gate，不恢复计划转 HTML，也不创建业务 spec/sidecar。
+反馈工具位于默认折叠的展示外壳，不侵入产品画板。生产工具自身的授权浏览器测试不扩张为业务原型
+默认浏览器操作，不能代替用户视觉批准。
 
-PM 将有效反馈交回原 `xy-uiux`，设计 Agent 只在当前 `owned_paths` 内原位修改稳定 HTML，更新五节契约并返回原静态校验与指纹证据；实际需求变化和视觉批准继续沿原规则处理。反馈工具不 patch HTML、不写需求或批准、不增业务 gate，也不恢复计划转 HTML 或创建 spec/sidecar。上下文损坏仅停用反馈，普通浏览仍可用；复核失败保留意见，不自动重绑到新版本。反馈面板属于默认折叠的展示外壳，不侵入产品画板。生产模板工具自身的风险驱动或明确授权浏览器测试与业务原型静态验收分开，不能据此自动化业务原型。
+旧壳迁移先用 `migration-preview` 只读报告；未明确确认无活动使用时不产生删除候选。
+项目精确写权限与同一 preview 来源复核齐备后，才可执行 `migration-apply --preview`，
+只清理字节完全同源且无实际引用的纯工具资产；index、prototype.css/js、具体页、用户修改、
+混合、未知和活动冲突资产均保留。失败通过同 preview 的 `migration-recover` 恢复，
+不覆盖用户并发新内容；插件更新与本请求的 fixture 证明均不授权真实业务项目迁移。
 
 `prototype.js` is not part of the standard tree. Create it only when two or more pages genuinely
 share the same native interaction; otherwise keep trivial behavior page-local.
@@ -1150,7 +1177,7 @@ native usage and provenance diagnostics under `continuous-pm-intake`; use `xy-qa
 and the current host pm-integration for structured QA schema/extract. An ID proves neither liveness, role,
 approval nor completion. Diagnostics distinguish documented/source_observed/runtime_unverified; do not sum
 native cumulative usage per record, replace unknown with zero, or calculate cost/savings rates. Verify AGY
-native grill-me provenance rather than replacing this pack's coverage check; human diff/Artifact review is
+native grill-me provenance and its user-invoked boundary rather than replacing the PM's grilling coverage check; human diff/Artifact review is
 not independent AI QA. This adds no gates to ordinary read-only/Light work or automatic native/boost/teamwork.
 
 Effective dispatch capacity is the minimum of configured remaining subagent slots, configured

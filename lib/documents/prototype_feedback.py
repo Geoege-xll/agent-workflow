@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import copy
 import json
 from collections import Counter
@@ -10,6 +9,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 import re
 from urllib.parse import urlencode
+
+from lib.documents import prototype_review as review
 
 from lib.documents.safe_documents import digest, normalized_relative, snapshot
 from lib.documents import validate_prototype_workspace as workspace
@@ -27,7 +28,8 @@ MAX_ID_LENGTH = 128
 MAX_INTERFACE_REFS = 32
 MAX_INTERFACE_LENGTH = 512
 CONTEXT_FIELDS = {"schema_version", "request_id", "adapter", "prototype_root", "plan_source",
-                  "plan_sha256", "requirements", "pages"}
+                  "plan_sha256", "requirements", "pages", "project_id", "adapter_sha256",
+                  "navigation_sha256", "tool", "review_id"}
 ITEM_FIELDS = {"id", "page", "target_id", "kind", "message", "req_ids"}
 OPTIONAL_ITEM_FIELDS = {"comparison", "interaction_id", "interface_refs"}
 REQ_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])REQ-[0-9]{3,}(?![A-Za-z0-9_-])")
@@ -112,8 +114,8 @@ def _strings(value: object, label: str, limit: int, item_limit: int) -> list[str
 
 def _version(value: object, label: str) -> None:
     # bool 是 Python int 的子类，但不属于 JSON 协议版本；必须使用精确整数类型。
-    if type(value) is not int or value != 1:
-        raise FeedbackError(f"{label}仅支持 schema_version 1")
+    if type(value) is not int or value != 2:
+        raise FeedbackError(f"{label}仅支持 schema_version 2（旧协议须重新 prepare）")
 
 
 def _requirements(body: bytes) -> list[dict[str, str]]:
@@ -151,8 +153,15 @@ def _check_context(value: object) -> dict:
     _identifier(context["request_id"], "请求 ID")
     for key in ("adapter", "prototype_root", "plan_source"):
         _relative(context[key], key)
-    if not isinstance(context["plan_sha256"], str) or not SHA_PATTERN.fullmatch(context["plan_sha256"]):
-        raise FeedbackError("需求 SHA-256 无效")
+    for key in ("plan_sha256", "adapter_sha256", "navigation_sha256", "project_id", "review_id"):
+        if not isinstance(context[key], str) or not SHA_PATTERN.fullmatch(context[key]):
+            raise FeedbackError("评审摘要无效：" + key)
+    tool = _object(context["tool"], {"version", "payload_sha256"}, "工具绑定")
+    if (not isinstance(tool["version"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}", tool["version"])
+            or not isinstance(tool["payload_sha256"], str) or not SHA_PATTERN.fullmatch(tool["payload_sha256"])):
+        raise FeedbackError("工具版本或载荷摘要无效")
+    if review.review_id(context) != context["review_id"]:
+        raise FeedbackError("评审内容身份不匹配")
     requirements = context["requirements"]
     if not isinstance(requirements, list) or not requirements:
         raise FeedbackError("需求标签须为非空数组")
@@ -229,7 +238,7 @@ class _ContractReferences(HTMLParser):
 
 
 def _capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
-                    pages: list[str] | None) -> tuple[dict, dict]:
+                    pages: list[str] | None, *, tool: dict) -> tuple[dict, dict, dict, list]:
     """无条件确认项目画像与来源，再复用原校验器；导航缺失不能跳过这些边界。"""
     project = Path(root)
     if not project.is_absolute() or ".." in project.parts or "\\" in str(project):
@@ -298,31 +307,42 @@ def _capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
         references.feed(body)
         references.close()
         metadata[page] = {"ids": references.ids, "contracts": references.contracts}
-    # 只有此现有入口计算渲染资源闭包；不能另造哈希域，不能用 HTML 字节哈希替代。
-    evidence = workspace.validate_workspace(project, prototype, pages=[Path(page).name for page in chosen], adapter=adapter)
-    context = {"schema_version": 1, "request_id": request_id, "adapter": adapter, "prototype_root": prototype,
+    # 沿用同一 DependencyValidator 与指纹域；独立页不再依赖项目通用外壳。
+    evidence = workspace.capture_selected_pages(project, prototype, pages=[Path(page).name for page in chosen], adapter=adapter)
+    index_path = prototype_path / "index.html"
+    index_snapshot = snapshot(index_path, required=False)
+    index_body = index_snapshot[0]
+    context = {"schema_version": 2, "request_id": request_id, "adapter": adapter, "prototype_root": prototype,
                "plan_source": plan, "plan_sha256": digest(plan_body), "requirements": _requirements(plan_body),
-               "pages": evidence["pages"]}
+               "pages": evidence["pages"], "project_id": review.project_id(project),
+               "adapter_sha256": digest(adapter_body), "navigation_sha256": digest(index_body or b""),
+               "tool": copy.deepcopy(tool)}
+    context["review_id"] = review.review_id(context)
     _check_context(context)
     # adapter/Markdown/节点元数据均由 snapshot 末尾复查，防止绑定检查与结果之间被替换。
     for path in tuple(captures):
         capture(path)
-    return context, metadata
+    if snapshot(index_path, required=False) != index_snapshot:
+        raise FeedbackError("旧索引在评审捕获期间发生变化")
+    files = dict(evidence["files"])
+    files[plan] = plan_body
+    navigation = review.navigation_data(index_body, evidence["pages"], files)
+    return context, metadata, files, navigation
 
 
 def prepare_review(root: str | Path, adapter: str, plan: str, request_id: str,
-                   pages: list[str] | None = None) -> dict:
-    """返回有限上下文的 file:// 入口；不创建 sidecar、规格、批准或任何输出文件。"""
-    context, _ = _capture_review(root, adapter, plan, request_id, pages)
-    review = base64.urlsafe_b64encode(_json_bytes(context)).decode("ascii").rstrip("=")
-    fragment = urlencode({"page": Path(context["pages"][0]["path"]).name, "review": review})
-    if len(fragment.encode("ascii")) > MAX_FRAGMENT_BYTES:
-        raise FeedbackError("评审链接 fragment 超过 12 KiB 限额")
-    review_url = (Path(root) / context["prototype_root"] / "index.html").as_uri() + "#" + fragment
-    return {"status": "ready", "context": context, "review_url": review_url}
+                   pages: list[str] | None = None, *, data_dir: str | Path | None = None) -> dict:
+    """将固定工具与选定业务页面装配成用户级私有离线快照，不写项目。"""
+    review.require_external_data_dir(root, data_dir)
+    tool, tools = review.capture_tool()
+    context, _, files, navigation = _capture_review(root, adapter, plan, request_id, pages, tool=tool)
+    published = review.publish_bundle(context, files, tools, navigation, data_dir=data_dir)
+    review_url = (Path(published["bundle_path"]) / "index.html").as_uri() + "#" + urlencode({"page": navigation[0]["name"]})
+    return {"status": "ready", "context": context, "review_url": review_url, **published}
 
 
-def validate_feedback(root: str | Path, adapter: str, feedback: dict) -> dict:
+def validate_feedback(root: str | Path, adapter: str, feedback: dict, *,
+                      data_dir: str | Path | None = None) -> dict:
     """重算权威输入并按稳定节点交接；意见字样和哈希相等都不授予修订/批准权限。"""
     # 公开 Python API 与 CLI 使用同样的限额和封闭字段，不信任调用方已做前端校验。
     if len(_json_bytes(feedback)) > MAX_FEEDBACK_BYTES:
@@ -330,6 +350,7 @@ def validate_feedback(root: str | Path, adapter: str, feedback: dict) -> dict:
     envelope = _object(feedback, {"schema_version", "context", "items"}, "反馈")
     _version(envelope["schema_version"], "反馈")
     context = _check_context(envelope["context"])
+    review.require_external_data_dir(root, data_dir)
     if adapter != context["adapter"]:
         raise FeedbackError("反馈适配器与显式选择不一致")
     items = envelope["items"]
@@ -362,7 +383,11 @@ def validate_feedback(root: str | Path, adapter: str, feedback: dict) -> dict:
         if "interface_refs" in item:
             if not _strings(item["interface_refs"], "接口引用", MAX_INTERFACE_REFS, MAX_INTERFACE_LENGTH):
                 raise FeedbackError("没有明确接口引用时必须省略 interface_refs")
-    current, metadata = _capture_review(root, adapter, context["plan_source"], context["request_id"], pages)
+    # 原离线包是当轮工具字节的权威；插件升级不要求旧缓存长期保留，
+    # 也不允许把旧反馈静默绑定到新工具。项目源则必须每次真实重读。
+    review.validate_bundle(context, data_dir=data_dir)
+    current, metadata, current_files, navigation = _capture_review(root, adapter, context["plan_source"], context["request_id"], pages, tool=context["tool"])
+    review.validate_bundle(context, data_dir=data_dir, source_files=current_files, navigation=navigation)
     if current != context:
         raise FeedbackError("反馈绑定已过期或来源不匹配；请保留原意见并重新准备评审")
     changes = {}

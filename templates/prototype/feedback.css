@@ -35,7 +35,12 @@
 /* 原生dialog承担焦点隔离、Esc退出及焦点恢复；不以自制浮层代替浏览器语义。 */
 .feedback-dialog { width: min(720px, calc(100% - 24px)); max-height: calc(100dvh - 32px); margin: auto; overflow: auto; }
 .feedback-dialog::backdrop { background: var(--prototype-canvas-bg, var(--workspace-sidebar)); opacity: .9; }
-[data-prototype-feedback-highlight] { outline: 3px solid var(--prototype-focus) !important; outline-offset: 4px; }
+/* 独立页无需加载prototype.css：定位高亮自持冻结基线的明暗焦点色，
+   只在项目未提供--prototype-focus时回退，不定义全局token或改写业务主题。 */
+[data-prototype-feedback-highlight] { outline: 3px solid var(--prototype-focus, #2356b5) !important; outline-offset: 4px; }
+@media (prefers-color-scheme: dark) {
+  [data-prototype-feedback-highlight] { outline-color: var(--prototype-focus, #a8cbff) !important; }
+}
 #prototype-page-feedback { width: auto; }
 [hidden]#prototype-page-feedback { display: none !important; }
 @media (max-width: 680px) {

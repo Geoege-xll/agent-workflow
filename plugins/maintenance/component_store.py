@@ -99,7 +99,7 @@ def payload_name(name):
             or any(part in {".", ".."} for part in name.split("/"))
             or name.startswith("/") or PurePosixPath(name).as_posix() != name):
         raise ComponentError("unsafe_archive_path")
-    return (name in {"BUILD.json", "README.md", "native_config/VERSION", "scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh"}
+    return (name in {"BUILD.json", "README.md", "product/command_identity.json", "product/command_identity.py", "product/__init__.py", "native_config/VERSION", "scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh"}
             or name in {"native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css"}
             or len(parts) >= 2 and parts[0] == "native_config" and name.endswith(".py"))
 
@@ -114,7 +114,7 @@ def checked_build(bodies, expected_version):
                 or bodies["native_config/VERSION"].decode("ascii").strip() != expected_version):
             raise ComponentError("invalid_build_manifest")
         required = {"scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh",
-                    "native_config/__init__.py", "native_config/cli.py", "native_config/VERSION",
+                    "native_config/__init__.py", "native_config/cli.py", "native_config/VERSION", "product/command_identity.json", "product/command_identity.py", "product/__init__.py",
                     "native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css", "README.md"}
         if not required.issubset(bodies):
             raise ComponentError("invalid_build_manifest")

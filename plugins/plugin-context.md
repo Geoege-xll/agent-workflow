@@ -36,9 +36,12 @@ when host integration is required. Native plugin discovery replaces legacy setup
 role refresh and central activation checks. Do not run `runtime install`,
 `runtime activate`, project registration, `setup_*.sh`, or create/edit project
 `AGENTS.md`, `CLAUDE.md` or `.agent-workflow` to make this plugin work.
-Codex's discovered plugin skill names are `agent-workflow:<skill-name>`; use the
-actual discovered name or the packaged physical path when invoking one.
-Claude's explicit plugin skill commands use `/agent-workflow:<skill-name>` and
+Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
+actual discovered name or the packaged physical path when invoking one. Public aliases are
+`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
+`product/command_identity.json`; canonical upstream names remain vendor resources, not discovery entries.
+Fully read each selected adapter and its canonical before use; never substitute unknown global names.
+Claude's explicit plugin skill commands use `/xy-workflow:<skill-name>` and
 its bundled agents use the host-discovered plugin-qualified agent name. Preserve
 the original role identity in the task pack; do not infer successful native role
 selection from that identity or a generic task label. Use the actual host tool's

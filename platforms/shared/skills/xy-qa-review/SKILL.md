@@ -100,6 +100,11 @@ deterministic fingerprint validation; waived surfaces do not read old prototypes
 
 <!-- workflow-contract: references/ui-review.md -->
 
+For actual production Web browser evidence gaps, read the shared
+[Web browser verification policy](../xy-build-verify/references/web-browser-verification.md) through
+implementation acceptance. Load `xy-playwright` only for the relevant Web audit surface; no universal
+third-party preload, extra reviewer, prototype automation or permission expansion.
+
 ## Return to PM
 
 Return one concise task handoff to PM:

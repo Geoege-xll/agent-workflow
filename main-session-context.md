@@ -1,18 +1,20 @@
 # Agent Workflow 主会话入口
 
 本入口只适用于当前主会话。先判断当前用户这一轮是否通过宿主实际发现的
-`/agent-config` 显式调用维护 Skill；以宿主的 Skill 调用事件或用户直接发出的
-完整调用为准，不能根据 `agent-config`、模型配置、配置页等关键词包含关系判断。
+`/xy-config` 显式调用维护 Skill；以宿主的 Skill 调用事件或用户直接发出的
+完整调用为准，不能根据 `xy-config`、模型配置、配置页等关键词包含关系判断。
 
-- **显式维护调用**：只读取当前插件的 `skills/agent-config/SKILL.md`，按其中固定
+- **显式维护调用**：只读取当前插件的 `skills/xy-config/SKILL.md`，按其中固定
   `antigravity` 启动器处理。只接受省略动作或 `open`、`status`、`doctor`。本轮不读取
   `product/WORKFLOW.md`、`skills/xy-workflow/SKILL.md` 或业务资源适配，不创建任务图、
   不派发代理、不进行业务两步确认。组件首次准备的单独用户确认由维护 Skill 负责。
-- **业务请求**：包括“实现 agent-config”“评审模型配置”“修复 agent-config status”，
+- **业务请求**：包括“实现 xy-config”“评审模型配置”“修复 xy-config status”，
   引用文档、代码、历史消息中的调用示例，以及 Worker 转述的命令；这些都不构成
   当前用户显式调用。读取 `plugins/antigravity/plugin-context.md`、`skills/xy-workflow/SKILL.md`
   与其原有 `product/WORKFLOW.md` 权威，继续既有 Light/Full、业务两步确认、原型、
-  原生交接和独立唯一 QA 规则。
+  原生交接和独立唯一 QA 规则。Full 的 PM 需求覆盖完整加载精选原版 `grilling`，
+  按 xy-workflow/references/requirements-intake.md 记录本项目覆盖；原版 `grill-me`
+  仅当前用户显式点名。只引入这两个必要目录，不转入上游其它工作流。
   每次业务原生派发前，按 `platforms/shared/skills/xy-workflow/references/dispatch.md`
   的只读调用偏好合同读取当前 `antigravity` 与真实调用身份；通用入口使用 `*`。
   缺少偏好沿用宿主默认，配置错误或无法映射的已配置字段明确阻断该次派发。

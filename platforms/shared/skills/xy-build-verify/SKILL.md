@@ -27,6 +27,13 @@ unsupported repeated builds/regressions.
 
 <!-- workflow-contract: references/verification-scope.md -->
 
+For actual production Web browser evidence gaps, read the shared
+[Web browser verification policy](references/web-browser-verification.md). Reuse project tests first;
+supplemental interaction prefers the bundled `xy-playwright` adapter, with concrete reasons for other
+browser tools and desktop-only need for computer control. This does not automate prototypes or widen QA permissions.
+
+<!-- workflow-contract: references/web-browser-verification.md -->
+
 ## Evidence contract
 
 ```text

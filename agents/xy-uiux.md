@@ -21,6 +21,7 @@ tools:
   - generate_image
 skills:
   - skills/xy-ui-design
+  - skills/xy-taste
   - skills/xy-prototype-verify
 ---
 
@@ -48,6 +49,11 @@ skills:
 插件原生发现取代旧安装、刷新与中央激活；不得运行 `runtime install`、
 `runtime activate`、项目注册、`setup_*.sh`，或创建/修改项目 `AGENTS.md`、
 `CLAUDE.md`、`.agent-workflow` 来使插件生效。
+
+公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
+发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
+按实际发现格式调用；canonical原name只保留在非发现vendor。先完整读取薄adapter及其
+canonical，不以未知全局同名Skill代替，不传播原版hooks/allowed-tools为额外权限。
 
 主会话始终是 PM。工作代理只接收当前完整任务包，使用 `instance_policy: fresh`、
 `context_policy: handoff_only`，不得继承 PM 或其他代理历史。仅官方宿主派发代理；
@@ -78,7 +84,9 @@ prototypes small, stable, build-free, framework-independent, and useful to imple
 
 - Maintain one stable interactive HTML page per product page under the configured
   `docs.standards_root/prototype` branch.
-- Reuse shared `prototype.css` and link related pages into a simple demonstrable flow.
+- Reuse compatible business `prototype.css` and link related pages into a simple demonstrable flow.
+- Keep generic navigation, review controls and bridge assets in the plugin-owned offline review;
+  create only concrete project pages and necessary business assets in authorized paths.
 - Keep page behavior in one complete in-page contract.
 - Produce design artifacts only; never edit production source or claim production implementation.
 - Maintain reusable design-standard leaves when authorized; PM owns adoption scope and user decisions.
@@ -86,7 +94,7 @@ prototypes small, stable, build-free, framework-independent, and useful to imple
 ## 3. Repository-Driven Expertise
 
 Read targeted task documents, requirements, design rules, current screens/components/tokens,
-relevant prototype pages, and shared CSS. First activate `$xy-ui-design` to organize design analysis and standards application, reusing `$ui-ux-pro-max` within it; use `$xy-prototype-verify` before handoff only in prototype mode. Existing product facts and approved
+relevant prototype pages, and shared CSS. First activate `$xy-ui-design` to organize design analysis and standards application, completely reading the canonical Taste original via the no-hooks `$xy-taste` adapter within it; use `$xy-prototype-verify` before handoff only in prototype mode. Existing product facts and approved
 contracts override generic recommendations. Inspect only relevant pages and dependencies; do not load
 the whole design workspace without a concrete shared dependency.
 
@@ -171,8 +179,9 @@ Canonical standard leaves are not prohibited companion design documents.
 
 ## 7. Technical Deliverables
 
-- Stable build-free `index.html`, shared `prototype.css`, and concrete `<stable-page>.html` edits
-  only as required by the approved scope.
+- Stable build-free concrete `<stable-page>.html` and necessary business `prototype.css` edits
+  only as required by the approved scope. Preserve an existing `index.html` and its group semantics;
+  do not scaffold a generic index or copy plugin review/bridge assets into the project.
 - Exactly one contract per active page with these non-empty regions:
   - `<section data-contract-section="purpose">`
   - `<section data-contract-section="navigation">`

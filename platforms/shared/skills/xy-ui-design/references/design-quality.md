@@ -13,7 +13,8 @@ and dimensions; business and mental models also remain project-specific.
 - First read applicable rules from the built-in `foundations-rules.md` and `components-rules.md`;
   when a project index exists, follow its links to current project-specific foundation values,
   components, and platform differences. Inspect only relevant tokens, pages, and dependencies.
-  Official guidance and `ui-ux-pro-max` are references and cannot override approved requirements.
+  Official guidance and canonical Taste are references and cannot override approved requirements,
+  project standards, compact application layouts or the existing static prototype-verification boundary.
 - Determine target users, use contexts, main tasks, content density, platform/module, existing
   baseline, color and scale token sources, reusable components, and allowed variants. If a baseline
   is missing, propose only the candidate values needed by this task and adopt them through the existing
@@ -123,11 +124,11 @@ or databases. Sources support checks as needed; network access is not required f
   with the directory's [Apache-2.0 license](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/LICENSE.txt).
   It informs visual intent around a real subject, content-driven typography, and restrained
   self-review; its screenshot self-review and any additional confirmation process are not adopted.
-- Next Level Builder [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill),
-  [MIT license](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill/blob/main/LICENSE),
-  with the copyright notice Copyright (c) 2024 Next Level Builder. Reuse the installed Skill's targeted
-  analysis; do not run its installation/build, introduce external fonts/CDNs, or use
-  `--persist`/`--force` to establish another MASTER authority.
+- Leonxlnx [Taste](https://github.com/Leonxlnx/taste-skill), fixed by the bundled selected-skills lock.
+  The complete original and its MIT LICENSE plus asset-specific credits stay in the canonical vendor
+  directory. Use the no-hooks adapter and fully read the original under xy-ui-design's contract;
+  do not register Stop hooks or execute its screenshot/gate pipeline during default prototype work.
+  Its marketing patterns are conditional advice, not a required layout for compact product consoles.
 
 If substantive source code or text is copied in the future, first preserve the required notices and
 license materials under the applicable license; these references grant no additional rights to use

@@ -18,6 +18,12 @@ MAX_BYTES = 1024 * 1024
 MAX_RECORDS = 512
 FIELDS = ("model", "effort")
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+@\[\]-]{0,199}\Z")
+# 由本脚本物理位置定位固定产品根，支持源码、独立包及插件投影；不搜索 cwd。
+PACKAGE_ROOT = Path(__file__).resolve(strict=True).parents[1]
+sys.path.insert(0, str(PACKAGE_ROOT))
+from product.command_identity import load_identity
+
+
 _EFFORT = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 
 
@@ -215,15 +221,30 @@ def parse_document(body, host):
         raise PreferenceError("偏好 JSON 格式无效") from exc
 
 
+def legacy_target(host, agent):
+    """只读兼容精确七个 Claude 受管角色，不改文件也不重写 opaque 清单 ID。"""
+    identity = load_identity(PACKAGE_ROOT)
+    prefix = identity["plugin_name"] + ":"
+    if host == "claude" and agent.startswith(prefix) and agent[len(prefix):] in identity["managed_roles"]:
+        return identity["legacy_plugin_name"] + ":" + agent[len(prefix):]
+    return None
+
+
+def role_values(document, agents, agent):
+    """同一层先用旧键补缺，再由新键逐字段覆盖；不改变跨层优先级。"""
+    old = legacy_target(document["host"], agent)
+    return {**agents.get(old, {}), **agents.get(agent, {})}
+
+
 def project_preferences(document, agent, project=None):
     """逐字段继承，未配置字段保持缺失；sources 始终说明最终逻辑来源。"""
     if agent != "*":
         target_name(agent)
     preferences, sources = {}, {field: "host_default" for field in FIELDS}
-    layers = [("user_default", document["defaults"]), ("user_agent", document["agents"].get(agent, {}))]
+    layers = [("user_default", document["defaults"]), ("user_agent", role_values(document, document["agents"], agent))]
     if project is not None:
         selected = document["projects"].get(str(project), {"defaults": {}, "agents": {}})
-        layers.extend((("project_default", selected["defaults"]), ("project_agent", selected["agents"].get(agent, {}))))
+        layers.extend((("project_default", selected["defaults"]), ("project_agent", role_values(document, selected["agents"], agent))))
     for source, values in layers:
         for field, value in values.items():
             preferences[field], sources[field] = value, source
