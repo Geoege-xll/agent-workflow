@@ -1,0 +1,4 @@
+interface:
+  display_name: "XY Plan"
+  short_description: "Draft bounded Task Packs and a READY DAG"
+  default_prompt: "Use $xy-plan to draft PM-owned Task Packs and a validated READY DAG."

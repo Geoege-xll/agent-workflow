@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>原型工作区</title>
+  <link rel="stylesheet" href="workspace.css">
+  <script src="workspace.js" defer></script>
+</head>
+<body class="prototype-workspace">
+  <!-- 入口直接展示工作区；名称、简述、返回和契约均由当前独立页提供。 -->
+  <div id="prototype-workspace" class="workspace-layout">
+    <aside id="prototype-sidebar" class="workspace-sidebar" aria-label="页面侧栏">
+      <div class="workspace-brand"><span class="workspace-brand-icon" aria-hidden="true"></span><strong>原型工作区</strong></div>
+      <p class="workspace-sidebar-label">页面导航 <span id="prototype-page-count">0 页</span></p>
+      <!-- 唯一登记源：真实页面直接放在原型根，每页只登记一次普通相对链接。
+           不登记 page.html 模板或复制 JS 清单；分组使用原生 details/summary。
+           例如：<details open><summary>模块名称</summary><a href="actual-page.html">实际页面名称</a></details> -->
+      <nav id="prototype-pages" class="workspace-page-tree" aria-label="Prototype pages"></nav>
+    </aside>
+    <div class="workspace-view">
+      <!-- 开关只改变布局；当前页圆形返回另负责展开分组并定位导航焦点。 -->
+      <button id="prototype-sidebar-toggle" class="workspace-sidebar-toggle" type="button" aria-controls="prototype-sidebar" aria-expanded="true" hidden>
+        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg>
+        <span id="prototype-sidebar-toggle-label">收起侧栏</span>
+      </button>
+      <!-- 未登记时不设置 src，不加载模板或假页面；只向唯一 iframe 写入登记页名。 -->
+      <iframe id="prototype-preview" title="当前原型页面" referrerpolicy="no-referrer" hidden></iframe>
+      <div id="prototype-empty" class="workspace-empty" role="status"><p>暂无原型页面</p><span>添加实际页面后，可在此分组浏览。</span></div>
+    </div>
+  </div>
+  <p id="prototype-workspace-status" class="workspace-visually-hidden" role="status" aria-live="polite"></p>
+  <noscript><p class="workspace-noscript">页面预览和侧栏开关需要本地 JavaScript；可通过左侧链接独立打开页面，原生分组仍可展开。</p></noscript>
+</body>
+</html>
