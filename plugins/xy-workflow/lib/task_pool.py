@@ -27,6 +27,10 @@ MAX_RECORDS = 128  # 与跨请求准入的单次显式记录清单上限一致�
 MAX_INDEX_BYTES = 4 * 1024 * 1024  # 与安全读取器一致，写入前避免生成自己不能恢复的索引。
 
 
+class MissingPoolIndex(TaskGraphError):
+    """A known PM slot is present, but its registered inventory is unavailable."""
+
+
 def _text(value, label: str, limit: int) -> str:
     if (not isinstance(value, str) or not value.strip() or len(value) > limit
             or any(unicodedata.category(ch).startswith("C") for ch in value)):
@@ -141,7 +145,7 @@ def _index(root: Path, pm_id: str, *, create: bool):
         stack.enter_context(directory_lock(file.parent, "pm-task-pool", blocking=new_slot))
         data = _read_index(file, scope)
         if data is None:
-            raise TaskGraphError("missing task pool index in existing PM slot; restore the registered inventory")
+            raise MissingPoolIndex("missing task pool index in existing PM slot; restore the registered inventory")
         yield file, data
 
 
@@ -164,7 +168,7 @@ def registered_record_paths(root: Path) -> frozenset[Path]:
                 _private(slot)
                 data = _read_index(base / "task-pools" / key / "index.json", _index_scope(root, key))
                 if data is None:
-                    raise TaskGraphError("missing task pool index in existing PM slot; restore the registered inventory")
+                    raise MissingPoolIndex("missing task pool index in existing PM slot; restore the registered inventory")
                 found.update(Path(path) for path in data["records"])
     return frozenset(found)
 
@@ -509,6 +513,91 @@ def bind(root: Path, pm_id: str, receipt: dict, reference: dict, *,
             updated = publish_task_update(Path(path), root, payload, body, sha, patch, pool_operation=True)
             sha = dispatch._sha(updated["sha256"])
         return {"status": "bound", "target": target, "agent_ref": reference, "sha256": sha}
+
+
+def agy_handoff(root: Path, pm_id: str, receipt: dict) -> dict:
+    """Return a complete initial Prompt for the exact registered AGY claim."""
+    from lib.hosts.antigravity_dispatch import dispatch_marker, initial_prompt, parent_id
+    from lib.task_graph_cli import is_standalone_prototype
+
+    parent = parent_id(pm_id)
+    target = dispatch.claim_target(receipt)
+    path = target["record"]
+    with _index(root, pm_id, create=False) as (_, data):
+        entry = _require_entry(data["records"], path)
+        snap = _snapshot(root, path)
+        _check_binding(entry, snap)
+        task = _selected_task(snap, target)
+        claim = task.get("antigravity_claim")
+        if (task["state"] not in {"RUNNING", "QA"} or "agent_ref" in task
+                or task.get("agent_retired") or not claim or claim["parent"] != parent
+                or task.get("claim_basis_sha256") != receipt["previous_sha256"]
+                or task.get("claim_prior_state") != receipt["prior_state"]):
+            raise TaskGraphError("AGY handoff requires the current PM's unbound claim")
+        if is_standalone_prototype(snap.source) and entry.get("prototype_claim") != receipt["previous_sha256"]:
+            raise TaskGraphError("handoff requires the prototype claim recorded by this PM pool")
+        marker = dispatch_marker(root, target, task["claim_basis_sha256"], claim)
+        if receipt.get("dispatch_marker") != marker:
+            raise TaskGraphError("AGY handoff requires the original dispatch marker")
+        prompt = initial_prompt(root, target, marker)
+        if records.digest(records.read_record(Path(path))) != snap.descriptor["sha256"]:
+            raise TaskGraphError("record changed during AGY handoff")
+        return {"target": target, "role": task["role"], "prompt": prompt,
+                "sha256": snap.descriptor["sha256"]}
+
+
+def _selected_task(snapshot: Snapshot, target: dict) -> dict:
+    for task in snapshot.tasks:
+        if task["id"] == target["task_id"] and task["request_id"] == target["request_id"]:
+            return task
+    raise TaskGraphError("target does not identify a registered task")
+
+
+def complete_agy_writer(root: Path, pm_id: str, target: dict, expected: str, agent_id: str, *,
+                        revision: int | None, verification_exit_code: int, source: str, evidence: str) -> dict:
+    """Commit the PM's explicitly accepted Writer verification via the original update and CAS."""
+    from lib.hosts.antigravity_dispatch import parent_id, validate_child_id
+    from lib.task_graph_cli import export_current_task_pack, is_standalone_prototype, publish_task_update
+
+    parent = parent_id(pm_id)
+    validate_child_id(parent, agent_id)
+    if verification_exit_code != 0:
+        raise TaskGraphError("Writer completion requires successful verification")
+    source = _text(source, "native result reference", 1024)
+    evidence = _text(evidence, "accepted verification evidence", 4096)
+    reference = {"host": "antigravity", "agent_id": agent_id}
+    path = target["record"]
+    with _index(root, pm_id, create=False) as (_, data):
+        entry = _require_entry(data["records"], path)
+        snap = _snapshot(root, path, expected)
+        _check_binding(entry, snap)
+        task = _selected_task(snap, target)
+        if (task["task_type"] != "writer" or task["state"] != "RUNNING" or task.get("agent_retired")
+                or task.get("withdrawal") or task.get("agent_ref") != reference
+                or task.get("antigravity_claim", {}).get("parent") != parent):
+            raise TaskGraphError("completion requires this PM's current running native-bound Writer")
+        if task.get("task_revision") != revision or (revision is not None and not task.get("revision_ack")):
+            raise TaskGraphError("completion requires the current acknowledged task revision")
+        if (is_standalone_prototype(snap.source)
+                and entry.get("prototype_claim") != task.get("claim_basis_sha256")):
+            raise TaskGraphError("completion requires the prototype claim recorded by this PM pool")
+        export_current_task_pack(snap.source, task["id"], root=root)
+        if task.get("solution_decisions") and not solutions.filter_ready(Path(path), [task], [task["id"]]):
+            raise TaskGraphError("completion requires current shared solution approvals")
+        operation = {"set": {"state": "BUILD_VERIFIED"},
+                     "append": {"acceptance_evidence": [f"{evidence} | Native result: {source}"]}}
+        if revision is not None:
+            operation["revision_result"] = {"revision": revision, "agent_ref": reference, "source": source}
+        body = records.read_record(Path(path))
+        updated = publish_task_update(Path(path), root, snap.source, body, expected,
+                                      {"tasks": {task["id"]: operation}}, pool_operation=True)
+        current = _snapshot(root, path, updated["sha256"])
+        _check_binding(entry, current)
+        task = _selected_task(current, target)
+        if not updated["updated"] or task["state"] != "BUILD_VERIFIED" or active(task) or task.get("agent_ref") != reference:
+            raise TaskGraphError("could not read back Writer completion; inspect the registered original")
+        return {"status": "completed", "target": target, "sha256": current.descriptor["sha256"],
+                "agent_ref": reference, "state": task["state"], "active": False}
 
 
 def view(root: Path, pm_id: str, *, path: str | None, query: str | None, capacity: dict | None) -> dict:

@@ -421,6 +421,19 @@ def task_pack_with_review_scope(payload: dict, task_id: str, *, root: Path | Non
     return result, scope_fingerprint
 
 
+def export_current_task_pack(payload: dict[str, Any], task_id: str, *, root: Path | None) -> dict[str, Any]:
+    """Project the exact member using the original Full or standalone Light export rules."""
+    if "task" not in payload:
+        return export_task_pack(payload, task_id, root=root)
+    if payload["task"]["id"] != task_id or payload["task"].get("workflow_level") != "Light":
+        raise TaskGraphError("single-pack task requires the authoritative Light task")
+    snapshot = pack_snapshot(payload)
+    validate_decisions(snapshot, for_handoff=True)
+    task_intent.check_delivery(snapshot, snapshot["tasks"][0])
+    require_writer(snapshot, snapshot["tasks"][0], root)
+    return replace_pack_task(payload, task_intent.handoff_task(snapshot["tasks"][0]))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate and evaluate a PM task graph JSON snapshot.")
     parser.add_argument(
@@ -2415,16 +2428,12 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
             raise TaskGraphError("single-pack task input requires Light and no --task-id")
         # 独立包同时是 Light 权威记录，validate/ready 允许保留待决定稿；task 是
         # Writer 交接出口，因此发布前必须核实每个当前方案均已获批。
-        snapshot = pack_snapshot(payload)
-        validate_decisions(snapshot, for_handoff=True)
-        task_intent.check_delivery(snapshot, snapshot["tasks"][0])
-        require_writer(snapshot, snapshot["tasks"][0], args.root)
+        exported = export_current_task_pack(payload, payload["task"]["id"], root=args.root)
         if is_standalone_prototype(payload):
             if not args.pm_id or "claim_basis_sha256" not in payload["task"] or payload["task"]["state"] in task_intent.PENDING:
                 raise TaskGraphError("standalone prototype handoff requires --pm-id and its claimed original pack")
             from lib.task_pool import check_handoff
             check_handoff(project_root(args.root), args.pm_id, args.input, records.digest(body))
-        exported = replace_pack_task(payload, task_intent.handoff_task(snapshot["tasks"][0]))
     else:
         if not args.task_id:
             raise TaskGraphError("graph task export requires --task-id")

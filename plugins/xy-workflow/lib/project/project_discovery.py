@@ -517,7 +517,15 @@ def _is_under(path: str, ancestor: str) -> bool:
     return path == ancestor or path.startswith(f"{ancestor}/")
 
 
+def _is_xcode_workspace_manifest(name: str, parent_parts: tuple[str, ...]) -> bool:
+    return (name == "contents.xcworkspacedata" and bool(parent_parts)
+            and parent_parts[-1].endswith(".xcworkspace")
+            and not any(part.endswith(".xcodeproj") for part in parent_parts))
+
+
 def _is_candidate_name(name: str, parent_parts: tuple[str, ...]) -> bool:
+    if name == "contents.xcworkspacedata":
+        return _is_xcode_workspace_manifest(name, parent_parts)
     if name in JSON_MANIFESTS | TOML_MANIFESTS | XML_MANIFESTS | PLAIN_MANIFESTS:
         if name == "project.pbxproj":
             return bool(parent_parts and parent_parts[-1].endswith(".xcodeproj"))
@@ -623,7 +631,7 @@ def _parse_candidate(path: str, body: bytes) -> Any:
             if not isinstance(parsed, dict):
                 raise ValueError("top-level value must be a table")
             return parsed
-        if name in XML_MANIFESTS or name.endswith(".csproj"):
+        if name in XML_MANIFESTS or name.endswith(".csproj") or name == "contents.xcworkspacedata":
             markup = _xml_markup_for_security_check(text)
             declaration = re.search(
                 r"<\s*!\s*(DOCTYPE|ENTITY)\b",
@@ -949,14 +957,14 @@ class _Scanner:
 
             # 微信原生模板不一定使用 npm；单独的项目配置也应取证。同名文件也
             # 可能来自其他工具，因此仅将安全读取、解析成功的普通文件作为线索。
-            optional_mini_config = name == "project.config.json"
+            optional_manifest = name == "project.config.json" or _is_xcode_workspace_manifest(name, parent_parts)
             candidate = _is_candidate_name(name, parent_parts)
             if stat.S_ISLNK(info.st_mode):
-                if candidate and not optional_mini_config:
+                if candidate and not optional_manifest:
                     raise DiscoveryError(f"candidate manifest must not be a symlink: {relative}")
                 continue
             if stat.S_ISDIR(info.st_mode):
-                if candidate and not optional_mini_config:
+                if candidate and not optional_manifest:
                     raise DiscoveryError(
                         f"candidate manifest must be a real regular file: {relative}"
                     )
@@ -995,9 +1003,8 @@ class _Scanner:
             if stat.S_ISREG(info.st_mode):
                 self.regular_paths.add(relative)
                 if candidate:
-                    # 超限的可选配置不是可信证据，也不读取其内容；真实小程序
-                    # 只能在配置、清单和入口都安全可用时被识别。
-                    if optional_mini_config and info.st_size > MAX_MANIFEST_SIZE:
+                    # 超限的可选清单不能作为候选命令或技术栈的证据。
+                    if optional_manifest and info.st_size > MAX_MANIFEST_SIZE:
                         continue
                     self.candidate_count += 1
                     if self.candidate_count > MAX_CANDIDATE_MANIFESTS:
@@ -1017,12 +1024,12 @@ class _Scanner:
                     try:
                         parsed = _parse_candidate(relative, body)
                     except DiscoveryError:
-                        if optional_mini_config:
+                        if optional_manifest:
                             continue
                         raise
                     self.candidates.append(_Candidate(relative, parsed))
                 continue
-            if candidate and not optional_mini_config:
+            if candidate and not optional_manifest:
                 raise DiscoveryError(
                     f"candidate manifest must be a real regular file: {relative}"
                 )
@@ -1058,34 +1065,30 @@ def _open_project_root(root: Path) -> int:
     return descriptor
 
 
-def _require_override_directory(root_fd: int, relative: str, label: str) -> None:
-    if relative == ".":
-        return
+def _open_relative_directory(
+    root_fd: int, path: PurePosixPath, *, ancestors: list[tuple[int, int]] | None = None
+) -> int:
     descriptor = os.dup(root_fd)
     try:
-        for component in PurePosixPath(relative).parts:
-            try:
-                child = os.open(
-                    component, _directory_flags(), dir_fd=descriptor
-                )
-            except OSError as exc:
-                raise DiscoveryError(
-                    f"{label} must name a real non-symlink directory: {relative}: {exc}"
-                ) from exc
+        for component in path.parts:
+            child = os.open(component, _directory_flags(), dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
-            try:
-                opened = os.fstat(descriptor)
-            except OSError as exc:
-                raise DiscoveryError(
-                    f"cannot inspect {label} {relative}: {exc}"
-                ) from exc
-            if not stat.S_ISDIR(opened.st_mode):
-                raise DiscoveryError(
-                    f"{label} must name a real non-symlink directory: {relative}"
-                )
-    finally:
+            if ancestors is not None:
+                info = os.fstat(descriptor)
+                ancestors.append((info.st_dev, info.st_ino))
+        return descriptor
+    except BaseException:
         os.close(descriptor)
+        raise
+
+
+def _require_override_directory(root_fd: int, relative: str, label: str) -> None:
+    try:
+        descriptor = _open_relative_directory(root_fd, PurePosixPath(relative))
+    except OSError as exc:
+        raise DiscoveryError(f"{label} must name a real non-symlink directory: {relative}: {exc}") from exc
+    os.close(descriptor)
 
 
 def _validated_overrides(
@@ -2080,10 +2083,43 @@ def _preset_names(parsed: Any, key: str) -> tuple[str, ...]:
     )
 
 
+def _xcode_scope_nodes(root_fd: int, directories: Sequence[str]) -> dict[tuple[int, int], str]:
+    result = {}
+    for directory in directories:
+        descriptor = _open_relative_directory(root_fd, PurePosixPath(directory))
+        try:
+            info = os.fstat(descriptor)
+            result[info.st_dev, info.st_ino] = directory
+        finally:
+            os.close(descriptor)
+    return result
+
+
+def _physical_xcode_project(
+    root_fd: int, path: PurePosixPath, owner: str, scope_nodes: dict[tuple[int, int], str]
+) -> bool:
+    """Verify only this direct reference, including its physical module on aliasing filesystems."""
+    ancestors: list[tuple[int, int]] = []
+    try:
+        descriptor = _open_relative_directory(root_fd, path, ancestors=ancestors)
+        try:
+            actual = next((scope_nodes[node] for node in reversed(ancestors) if node in scope_nodes), ".")
+            if actual != owner:
+                return False
+            info = os.stat("project.pbxproj", dir_fd=descriptor, follow_symlinks=False)
+            return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return False
+
+
 def _discover_verification_commands(
     candidates: tuple[_Candidate, ...],
     regular_paths: frozenset[str],
     modules: dict[str, _ModuleFacts],
+    root_fd: int,
+    exclusions: frozenset[PurePosixPath],
 ) -> dict[str, tuple[VerificationCommand, ...]]:
     commands: dict[str, set[VerificationCommand]] = {
         root: set() for root in modules
@@ -2325,31 +2361,83 @@ def _discover_verification_commands(
                     (candidate.path,),
                 )
 
-    for module_root in modules:
-        prefix = "" if module_root == "." else f"{module_root}/"
-        project_paths = tuple(
-            candidate.path
-            for candidate in candidates
-            if candidate.path.startswith(prefix)
-            and PurePosixPath(candidate.path).name == "project.pbxproj"
-            and _owning_module_root(_parent(candidate.path), modules) == module_root
-        )
-        for project_path in project_paths:
-            project_dir = PurePosixPath(project_path).parent.as_posix()
-            scheme_prefix = f"{project_dir}/xcshareddata/xcschemes/"
-            for scheme_path in sorted(regular_paths):
-                if not (
-                    scheme_path.startswith(scheme_prefix)
-                    and scheme_path.endswith(".xcscheme")
-                ):
-                    continue
-                scheme = PurePosixPath(scheme_path).stem
-                add(
-                    module_root,
-                    "build",
-                    ("xcodebuild", "-scheme", scheme, "build"),
-                    (project_path, scheme_path),
-                )
+    ios_projects = {}
+    shared_schemes = {}
+    for relative in sorted(regular_paths):
+        path = PurePosixPath(relative)
+        if path.suffix != ".xcscheme" or path.parent.parts[-2:] != ("xcshareddata", "xcschemes"):
+            continue
+        scheme = path.stem
+        if scheme and not scheme.startswith("-") and scheme.isprintable():
+            shared_schemes.setdefault(path.parents[2].as_posix(), {})[scheme] = relative
+
+    def xcode_builds(owner, selector, bundle, schemes, evidence):
+        name = _relative_to_module(bundle, owner)
+        if name.startswith("-") or not name.isprintable():
+            return
+        for scheme, source in schemes.items():
+            prefix = ("xcodebuild", selector, name, "-scheme", scheme)
+            inputs = (*evidence, source)
+            add(owner, "build", (*prefix, "build"), inputs)
+            device = (*prefix, "-destination", "generic/platform=iOS")
+            simulator = (*prefix, "-destination", "generic/platform=iOS Simulator")
+            add(owner, "build", (*device, "CODE_SIGNING_ALLOWED=NO", "build"), inputs)
+            add(owner, "build", (*simulator, "build"), inputs)
+            add(owner, "build", (*simulator, "CODE_SIGNING_ALLOWED=NO", "build"), inputs)
+
+    for candidate in candidates:
+        if PurePosixPath(candidate.path).name != "project.pbxproj":
+            continue
+        bundle = _parent(candidate.path)
+        owner = _owning_module_root(bundle, modules)
+        if owner is None:
+            continue
+        schemes = shared_schemes.get(bundle, {})
+        for scheme, relative in schemes.items():
+            add(owner, "build", ("xcodebuild", "-scheme", scheme, "build"), (candidate.path, relative))
+        # Generic iOS commands require actual iOS settings in a discovered Xcode project.
+        # Retain the previously discovered unqualified build for other Apple projects.
+        if not re.search(r'(?m)^\s*(?:IPHONEOS_DEPLOYMENT_TARGET\s*=|SDKROOT\s*=\s*"?iphoneos"?\s*;)',
+                         _pbx_without_comments(candidate.parsed)):
+            continue
+        ios_projects[bundle] = schemes
+        xcode_builds(owner, "-project", bundle, schemes, (candidate.path,))
+
+    scope_nodes = None
+    for candidate in candidates:
+        if PurePosixPath(candidate.path).name != "contents.xcworkspacedata" or candidate.parsed.tag != "Workspace":
+            continue
+        bundle = _parent(candidate.path)
+        owner = _owning_module_root(bundle, modules)
+        if owner is None:
+            continue
+        if scope_nodes is None:
+            scope_nodes = _xcode_scope_nodes(root_fd, [*modules, *(path.as_posix() for path in exclusions)])
+        base = PurePosixPath(bundle).parent
+        references = []
+        schemes = {}
+        has_ios_project = False
+        for entry in candidate.parsed:
+            kind, _, relative = entry.get("location", "").partition(":")
+            path = PurePosixPath(relative)
+            if (entry.tag != "FileRef" or len(entry) or kind not in {"group", "container"}
+                    or path.suffix != ".xcodeproj" or path.is_absolute() or ".." in path.parts
+                    or "\\" in relative or not relative.isprintable()):
+                break
+            reference = base / path
+            if (_owning_module_root(reference.as_posix(), modules) != owner
+                    or any(node in exclusions for node in (reference, *reference.parents))
+                    or not _physical_xcode_project(root_fd, reference, owner, scope_nodes)):
+                break
+            references.append((reference / "project.pbxproj").as_posix())
+            project_schemes = ios_projects.get(reference.as_posix())
+            if project_schemes is not None:
+                has_ios_project = True
+                schemes.update(project_schemes)
+        else:
+            if has_ios_project:
+                schemes.update(shared_schemes.get(bundle, {}))
+                xcode_builds(owner, "-workspace", bundle, schemes, (candidate.path, *references))
 
     return {
         root: tuple(
@@ -2373,18 +2461,17 @@ def discover_project(
     try:
         module_overrides, exclusions = _validated_overrides(root_fd, overrides)
         candidates, regular_paths = _Scanner(exclusions).scan(root_fd)
+        modules = _classify(candidates, regular_paths)
+        for module_root, role in module_overrides.items():
+            facts = _module_facts(modules, module_root)
+            facts.roles = {role}
+            facts.facts.add("override:explicit-role")
+
+        verification_commands = _discover_verification_commands(
+            candidates, regular_paths, modules, root_fd, exclusions
+        )
     finally:
         os.close(root_fd)
-
-    modules = _classify(candidates, regular_paths)
-    for module_root, role in module_overrides.items():
-        facts = _module_facts(modules, module_root)
-        facts.roles = {role}
-        facts.facts.add("override:explicit-role")
-
-    verification_commands = _discover_verification_commands(
-        candidates, regular_paths, modules
-    )
     profiles = tuple(
         ModuleProfile(
             root=module_root,
