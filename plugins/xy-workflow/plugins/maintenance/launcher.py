@@ -102,7 +102,15 @@ def run(argv, *, component_root=None, descriptor_path=None, invoke=subprocess.ru
         if target is None:
             target = prepare(root, data, args.artifact)
         command = ["bash", str(target / "scripts/agent_config.sh"), args.action, "--host", args.host,
-                   "--data-dir", str(root / "state")]
+                   # 每个宿主绑定不同的物理插件来源，不能共用 connection 与服务锁，
+                   # 否则先打开的宿主会让后续宿主触发 configuration_conflict。
+                   # 这里只隔离控制台状态；原生定义和模型偏好仍由实际 host_root
+                   # 定位，不迁移或复制配置，也不自动停止、删除旧 state 根的服务。
+                   "--data-dir", str(root / "state" / args.host),
+                   # 来源只取启动器自身的物理插件根，用户不能通过维护参数注入
+                   # 任意候选目录。独立组件负责校验来源摘要及绑定服务身份；
+                   # 启动器不导入其业务核心，也不在当前项目搜索另一份插件。
+                   "--preparation-source", str(Path(__file__).resolve().parents[2])]
         for flag, value in (("--project", args.project), ("--home", args.home)):
             if value is not None:
                 command.extend((flag, str(value)))
