@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|clear|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/lib/python_runtime.sh\" -B -X utf8 \"${PLUGIN_ROOT}/hooks/session_start.py\"",
+            "statusMessage": "Loading Agent Workflow entry",
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ]
+  }
+}

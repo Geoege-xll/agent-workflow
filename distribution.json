@@ -1,0 +1,672 @@
+{
+  "artifacts_sha256": {
+    "native/native-agent-config-0.1.0-alpha.3.zip": "74d015e0c005c980694acf09985345ae342c15ffc3ff8b448b1cb406843181dd",
+    "workflow/agent-workflow-antigravity-3.0.0-alpha.5-local-source.zip": "a7293b66f2fce3a1b551e461d8a31acef15837dfb1e72a71f9a8d0d71abdc0e9",
+    "workflow/agent-workflow-antigravity-3.0.0-alpha.5.zip": "1ddb5f36bef644a168b9f6d190471e97c44376a4b71b8dc6be81a605d7d56fe2",
+    "workflow/agent-workflow-claude-3.0.0-alpha.5-local-source.zip": "2b0f4b666118864eb6596dc7a69862acf69491f060742e6033572d4bc23faf5d",
+    "workflow/agent-workflow-claude-3.0.0-alpha.5.zip": "e2220482b1e5f8dbeacacf89d52c5f7129eb7048727fea6713186a4ce19f4690",
+    "workflow/agent-workflow-codex-3.0.0-alpha.5-local-source.zip": "2e0449f6756afda65df50729fb200c38a9c274dc020f0d2069268fdbcbe62cd2",
+    "workflow/agent-workflow-codex-3.0.0-alpha.5.zip": "edeea8452d62c0ce98f7413f0d4234597eee07c091da8b014b4296093f2ab8bf"
+  },
+  "candidate_sha256": "afe41538e4a0e181f339ca81156585f182f8c50da0d3b65c35d78764cc37ecbf",
+  "channel": "alpha",
+  "files": {
+    ".agents/plugins/marketplace.json": {
+      "mode": "100644",
+      "sha256": "7aee87e2580523406c6cc4c2fac9c1d20931bf3265bde78397fa609ddef33beb"
+    },
+    "plugins/agent-workflow/.codex-plugin/plugin.json": {
+      "mode": "100644",
+      "sha256": "fa9e5a440f0ba84c0a4ef2fe5b911b80a9d5943ea72a40cc5c12c5817c0ab3ae"
+    },
+    "plugins/agent-workflow/INSTALL.md": {
+      "mode": "100644",
+      "sha256": "e964ae768dd0d9ebf964b9acd92c813804b62b25b4bf7c9c5f488c1309e19148"
+    },
+    "plugins/agent-workflow/PLUGIN.md": {
+      "mode": "100644",
+      "sha256": "b680ef48a1ea398c2e095f7fd8daeba00810028c706eeea321c18dfaff7f4ec8"
+    },
+    "plugins/agent-workflow/README.md": {
+      "mode": "100644",
+      "sha256": "b680ef48a1ea398c2e095f7fd8daeba00810028c706eeea321c18dfaff7f4ec8"
+    },
+    "plugins/agent-workflow/hooks/hooks.json": {
+      "mode": "100644",
+      "sha256": "165c59723a3d8f399c3aabdca0d37fedaa680325a791959a959c41e15d739295"
+    },
+    "plugins/agent-workflow/hooks/session_start.py": {
+      "mode": "100644",
+      "sha256": "760c3d91f1c66691aaedd21621c4635b4f63a50f2691eff93263ac206d602723"
+    },
+    "plugins/agent-workflow/lib/__init__.py": {
+      "mode": "100644",
+      "sha256": "e1ad091206bd943c54ec3a2a78cc8208a9a1f90c270d00d9c9f14575d3b7b49e"
+    },
+    "plugins/agent-workflow/lib/agent_continuation.py": {
+      "mode": "100644",
+      "sha256": "c996e2a2a900fae057af4a79d6e984f38a0316469b1a51d6818722b3f6763c93"
+    },
+    "plugins/agent-workflow/lib/agent_continuation_cli.py": {
+      "mode": "100644",
+      "sha256": "a7b81e75384177806dab0993611f65307f7b8393b7b938ca24aaf7b8e3a956cd"
+    },
+    "plugins/agent-workflow/lib/delivery/__init__.py": {
+      "mode": "100644",
+      "sha256": "8ae04794b1407b1b7ba87cbddcee512ab1c8cc1bc40fa5957c276cd66157146b"
+    },
+    "plugins/agent-workflow/lib/delivery/native_handoff.py": {
+      "mode": "100644",
+      "sha256": "52fbe3c80692fbfc7295b9ec688ce1115db7439bdee438fa30271ae815d6ab65"
+    },
+    "plugins/agent-workflow/lib/delivery/native_usage.py": {
+      "mode": "100644",
+      "sha256": "f8efcbca377a4e38ecaf8add09ae46ebb9e726634b89c82166a9718fc83de540"
+    },
+    "plugins/agent-workflow/lib/delivery/qa_handoff_cli.py": {
+      "mode": "100644",
+      "sha256": "b620df57d55629dcbc2b5af85a775afac4f77229d4b091c6d426d41f2ca50191"
+    },
+    "plugins/agent-workflow/lib/delivery/worktree_cli.py": {
+      "mode": "100644",
+      "sha256": "540048eb43caa20c076edd2eb565b4df26777916cc9f2a108f59006762ff9c86"
+    },
+    "plugins/agent-workflow/lib/dispatch_admission.py": {
+      "mode": "100644",
+      "sha256": "8ea311fe64529babc6c9f0200159c49687d093a7c5ced35af91ad82aaa38eed5"
+    },
+    "plugins/agent-workflow/lib/dispatch_admission_cli.py": {
+      "mode": "100644",
+      "sha256": "f620042d5fc96886abb3a87a0673296a241abec14d9d4537df0f680d1116dfff"
+    },
+    "plugins/agent-workflow/lib/documents/__init__.py": {
+      "mode": "100644",
+      "sha256": "1d06b7c0c085826d11e3fa7550c90f3a37d8de536927c890c54958c60aeeb9e7"
+    },
+    "plugins/agent-workflow/lib/documents/context_read.py": {
+      "mode": "100644",
+      "sha256": "eac5aa390f99a29dc5fb0114db51660b33dcac05a8f0bad5d487dedfc904da94"
+    },
+    "plugins/agent-workflow/lib/documents/plan_documents.py": {
+      "mode": "100644",
+      "sha256": "68e05549b9ccce0158a437066c2cb176d6521465534164a7914dac2c3337747b"
+    },
+    "plugins/agent-workflow/lib/documents/prototype_navigation.py": {
+      "mode": "100644",
+      "sha256": "4cf7a8241cdd349529cbb394c4c809f2cc282dfaa0c43d031cd0c0f744ade6e9"
+    },
+    "plugins/agent-workflow/lib/documents/safe_documents.py": {
+      "mode": "100644",
+      "sha256": "e287ff99f490e619e338c06252a80a4028b78b76ab2917d49fbe4046df287531"
+    },
+    "plugins/agent-workflow/lib/documents/standards_baseline.py": {
+      "mode": "100644",
+      "sha256": "82bb068db4db5d5d00bc7934153eb90b32f04ea03b5654d6578e1bf5ffd3c60a"
+    },
+    "plugins/agent-workflow/lib/documents/validate_prototype_workspace.py": {
+      "mode": "100644",
+      "sha256": "2e0763231cc15140c29005e9e5f6ca87aecc6c3837d38e07583d786eb98176c1"
+    },
+    "plugins/agent-workflow/lib/hosts/__init__.py": {
+      "mode": "100644",
+      "sha256": "38f10341d42159a661b21264531a3cd39fbbfa09e289177ca32769b9f8ad92fc"
+    },
+    "plugins/agent-workflow/lib/hosts/claude_instructions.py": {
+      "mode": "100644",
+      "sha256": "7edbf9acbc38f1bd06123227b54b0df6d78bc7d01c6978484831b5903aa3e53c"
+    },
+    "plugins/agent-workflow/lib/hosts/claude_options.py": {
+      "mode": "100644",
+      "sha256": "feb08b52d5b7f1fdc7e3749f3ade867c794aa94cd4ab98666bb4ed1590af6002"
+    },
+    "plugins/agent-workflow/lib/hosts/workflow_hook_settings.py": {
+      "mode": "100644",
+      "sha256": "b67f9d5d88ae8ba9e8f32c52f0026782f0998aecd6d5782f905abdf9592d16c6"
+    },
+    "plugins/agent-workflow/lib/platform_fs.py": {
+      "mode": "100644",
+      "sha256": "1790bd3c21de37a8e7a77ae757794806fea0885ccf563733ec01150d8560e12a"
+    },
+    "plugins/agent-workflow/lib/plugin_resources.py": {
+      "mode": "100644",
+      "sha256": "6bef3cdefb13f2fed6c16b6b93c13138c8ef7f93fb438471d09a143388434c44"
+    },
+    "plugins/agent-workflow/lib/project/__init__.py": {
+      "mode": "100644",
+      "sha256": "cfaaee785cf59f77b48d73a7bfcec08a7d7f50901f54dfcda444b8489de25803"
+    },
+    "plugins/agent-workflow/lib/project/ensure_project_id.py": {
+      "mode": "100644",
+      "sha256": "7f73a99ad55f911bca84c813fd8bf84cefa3320ff6f8ef82952960db5b31a0ef"
+    },
+    "plugins/agent-workflow/lib/project/profile_context.py": {
+      "mode": "100644",
+      "sha256": "000477a8281d0670895960cc2fdb74953f91526ec415aabdfac5662530a65fda"
+    },
+    "plugins/agent-workflow/lib/project/project_discovery.py": {
+      "mode": "100644",
+      "sha256": "5a22507753b97ab5551bd36638c7447588457a892bc05bf963f41f37d98d6879"
+    },
+    "plugins/agent-workflow/lib/project/project_profile_cli.py": {
+      "mode": "100644",
+      "sha256": "c0467cffdb0094547818cb7daf53532e1bfe157ef2d97f0e8ace41948dd95cfd"
+    },
+    "plugins/agent-workflow/lib/project/validate_project_config.py": {
+      "mode": "100644",
+      "sha256": "faddbab887e31f2acc17f00bb25a8a8c15c56f5fcac0f0375b248c984a137a95"
+    },
+    "plugins/agent-workflow/lib/python_runtime.sh": {
+      "mode": "100755",
+      "sha256": "9ae0e322939f18a7ce3ee821e27d7f863b31450ebb1ca98dcc20974a6ff0184e"
+    },
+    "plugins/agent-workflow/lib/role_models.py": {
+      "mode": "100644",
+      "sha256": "13b04d67f75a175529b41769275f5ee2a510ba04a5b9f0196e596a9d1a5a9e09"
+    },
+    "plugins/agent-workflow/lib/runtime_pins.py": {
+      "mode": "100644",
+      "sha256": "ee7a6bf1a05df11792b2b6638d1648710cd739f700996989e8d4abca4018d3e5"
+    },
+    "plugins/agent-workflow/lib/runtime_store.py": {
+      "mode": "100644",
+      "sha256": "8de4a2f7fdcec304dffc7398b59d11b7456288b93d1277cdca5d257d4bb58d63"
+    },
+    "plugins/agent-workflow/lib/skills/__init__.py": {
+      "mode": "100644",
+      "sha256": "6f6665e01b918a855c239960e630356b2375ff80e2cb9ed455e3017360b5eb4f"
+    },
+    "plugins/agent-workflow/lib/skills/business_confirmation_policy.py": {
+      "mode": "100644",
+      "sha256": "022d067edb6cec06a1cb0a5b8c157990362b6504341d6c475f18343b74085c8e"
+    },
+    "plugins/agent-workflow/lib/skills/qa_review_policy.py": {
+      "mode": "100644",
+      "sha256": "1b08e30a9458a279570c2a046e37f99840a5059e73a7753377312a297a131877"
+    },
+    "plugins/agent-workflow/lib/skills/role_skills.py": {
+      "mode": "100644",
+      "sha256": "3ee8871a81f40b58c670feadc9d0990c31271f8fb0768863040b660f0bbd6774"
+    },
+    "plugins/agent-workflow/lib/skills/shared_core_skills.py": {
+      "mode": "100644",
+      "sha256": "59baa48f08e6076ec0bb410f495486e6820b4e9e7797d3bcc7eac46970ec43e0"
+    },
+    "plugins/agent-workflow/lib/skills/skill_contracts.py": {
+      "mode": "100644",
+      "sha256": "b93452ec9769c5fadcdb9a187fbc8ae2d87f5c72ae747f8861a6bcac0de086b5"
+    },
+    "plugins/agent-workflow/lib/standard_paths.py": {
+      "mode": "100644",
+      "sha256": "398fe42ef25a45d091aa2b5e3feb71cc8ad6f789e39c50696470669fa8ace5e5"
+    },
+    "plugins/agent-workflow/lib/task_graph.py": {
+      "mode": "100644",
+      "sha256": "164f95d093c1a8fbe561f61eb2a76c6c581ab5725925b466984fcb41c6b52510"
+    },
+    "plugins/agent-workflow/lib/task_graph_cli.py": {
+      "mode": "100644",
+      "sha256": "cdd212d7063ddcb8e28c52377a0f5c0cf6960caab5bc74641953479f277936f9"
+    },
+    "plugins/agent-workflow/lib/task_graph_init.py": {
+      "mode": "100644",
+      "sha256": "812f13d087e872fe277c329a174a68b52fd95ecb97a9cfbac8278be0c9e54d68"
+    },
+    "plugins/agent-workflow/lib/task_graph_records.py": {
+      "mode": "100644",
+      "sha256": "c543e8daaeddf93c57359c13415750ab0c25476d48d35d6101e1a67269c860a2"
+    },
+    "plugins/agent-workflow/lib/task_settlement.py": {
+      "mode": "100644",
+      "sha256": "62d552b425077603cbe100eac913aea0e4b8ec35c25f3e96a230f7db119093b9"
+    },
+    "plugins/agent-workflow/lib/validate_project_docs.py": {
+      "mode": "100644",
+      "sha256": "14ac241ab0bdc6f522897de7883de9a39b90a94d05125797ef9606804cee24f7"
+    },
+    "plugins/agent-workflow/lib/worktree_policy.py": {
+      "mode": "100644",
+      "sha256": "57af2590618a5af168ced0a9264adb1f147404ead53211cb8d6cfc0e29d7791f"
+    },
+    "plugins/agent-workflow/main-session-context.md": {
+      "mode": "100644",
+      "sha256": "3d8ad3383d51dbc3b93d7bf20391e37d0a314469007f9799670d5483de6ec7e2"
+    },
+    "plugins/agent-workflow/platforms/codex/AGENTS.codex.tpl": {
+      "mode": "100644",
+      "sha256": "f4df5ed261a59048d557067ec8742ab2876272a7b5401732f3f1d0eaecea8b3b"
+    },
+    "plugins/agent-workflow/platforms/codex/WORKER_CONSTRAINTS.md": {
+      "mode": "100644",
+      "sha256": "f322f1268e97eec0efd86c3f044b9099553f12e9270d0a412e7a3022810d8580"
+    },
+    "plugins/agent-workflow/platforms/codex/references/pm-integration.md": {
+      "mode": "100644",
+      "sha256": "38b2f73eed4a3e8708b82e28b9567bd0f77b098bec7f15cbf034bc716f8df45f"
+    },
+    "plugins/agent-workflow/platforms/shared/AGENTS.product.tpl": {
+      "mode": "100644",
+      "sha256": "a1e7317709b573a1a083e688d40c4affa8a33ee5dd6478e2e1c67b86e2a3ec90"
+    },
+    "plugins/agent-workflow/platforms/shared/HOOKS.md": {
+      "mode": "100644",
+      "sha256": "589a3d8354f092f6826b052b0737f5d67526f4ffc76699f020e40fdaed48ed5c"
+    },
+    "plugins/agent-workflow/platforms/shared/core-skills.txt": {
+      "mode": "100644",
+      "sha256": "b23bfed8481e093bc239ee7c804a58cab8eef517680be58e3f32a31767359b67"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/grill-me/SKILL.md": {
+      "mode": "100644",
+      "sha256": "6076a15a82484e557db7db166010d790806d761fb10567da58df324068aea786"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/grill-me/agents/openai.yaml": {
+      "mode": "100644",
+      "sha256": "b56819a093d583de32b61b57f14ce8bd38e1599ed2c47a96cb941d1ccd5f4d74"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-build-verify/SKILL.md": {
+      "mode": "100644",
+      "sha256": "da0d6c1556e18acb41664cd91bcda4297d3b1568ed1a1776b8cd8c888a750a1f"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-build-verify/references/verification-scope.md": {
+      "mode": "100644",
+      "sha256": "ced49dc1d0df1d86e2202f7bd1a19aef3ffcea6130c9892209eaeef94d1777da"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-code-standards/SKILL.md": {
+      "mode": "100644",
+      "sha256": "fa837485784ffbd5501e612f1bd4375c297b912fc106218190d3baaf2871b6b7"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-code-standards/references/boundary-reasoning.md": {
+      "mode": "100644",
+      "sha256": "2670265553a532dea7a7cc8d6866e141eb8e96b8c3f4c07eaaca1e11f6e89739"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-code-standards/references/rules.md": {
+      "mode": "100644",
+      "sha256": "29705cc41f15119b04da06730df927dc6eb1488dfe2dbbb6e9958b25977e1b79"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-code-standards/references/sources.md": {
+      "mode": "100644",
+      "sha256": "1ac3735bda4ffa09227e105b3f6286c74a3682cd2ff27364e0bb8158cdc2c663"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-plan/SKILL.md": {
+      "mode": "100644",
+      "sha256": "201f2cb2e0b12c8907181d77239eb97cb0bb13419e2eaa6ed62a81126f4ee6ed"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-plan/agents/openai.yaml": {
+      "mode": "100644",
+      "sha256": "393ed138bdb4daa4f3606a6618041f024a3c9fc74aa6c607cb04ab7a1934c7c3"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-plan/references/requirements-markdown.md": {
+      "mode": "100644",
+      "sha256": "1449f77fe46a9f099f089edd635927b895d35e068d5a50d68c90031fa4a96523"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-plan/references/task-graph.md": {
+      "mode": "100644",
+      "sha256": "1d40e49ba7dbc2ebc2d3f7a73535f8e4b87d76a26251b1fda62b6225f48f86a4"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-project-memory/SKILL.md": {
+      "mode": "100644",
+      "sha256": "35a50d41466d13ddbaf21b9dcea095cf034a30c8406528ac1ea4127e92dddac6"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-prototype-verify/SKILL.md": {
+      "mode": "100644",
+      "sha256": "0a1938010d51e012bff5574b87a3caaa4fbe1f1b73905fa329c4bf3267a9fb33"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-qa-review/SKILL.md": {
+      "mode": "100644",
+      "sha256": "ed239bc74954e878a9aad8a85dcb18ac3cce8d130b750c9970404231d51eaf19"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-qa-review/references/implementation-acceptance.md": {
+      "mode": "100644",
+      "sha256": "b8f266440757e75fc5c4b3054e96be43da2ff42d92d9e52e4e20ad69df069c3c"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-qa-review/references/inputs.md": {
+      "mode": "100644",
+      "sha256": "14f9fbbf325a4137cbdc35c465923bb8a0e237e136dc5d91076e383e5bd8384f"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-qa-review/references/ui-review.md": {
+      "mode": "100644",
+      "sha256": "3a299c4531c5f2dafac532cd2458c733eeaeb2dfd3ea6310742c06d0f057facf"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md": {
+      "mode": "100644",
+      "sha256": "fc2ea9548249930499e62bcf0799dd923ea436eabc0399fecd492f26b210156c"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-ui-design/references/components-rules.md": {
+      "mode": "100644",
+      "sha256": "6df2b5d6d76fd4ee2f8a7ccd23d4840aef1cd25a0216889fd6c5da0929caffdf"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-ui-design/references/design-quality.md": {
+      "mode": "100644",
+      "sha256": "ebf67e73452e156db1b79ae08fcccac6f288bfa736c0f54cf278dd14ec1b41f3"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-ui-design/references/foundations-rules.md": {
+      "mode": "100644",
+      "sha256": "d6c9427ea07dc9a6fe3ace486003abc77dd5da18fc5edc05782c2d43d8a15208"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-ui-design/references/prototype-canvas.md": {
+      "mode": "100644",
+      "sha256": "5a97a2b7c62791080cf41e84fdc3e274db54c28310e44a27badd2fd0ac9c7a5b"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/SKILL.md": {
+      "mode": "100644",
+      "sha256": "f226d4511785033cb6468c2b3a92c0ac039edcde26497b6861cae373e7a4160a"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/closeout.md": {
+      "mode": "100644",
+      "sha256": "35ec1c281902173e20811a59904cdf47b429de58af6f4100c6a19449c6920d6c"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md": {
+      "mode": "100644",
+      "sha256": "0fd710c4a70a0b53bb3afe2bd66d4879aa047d8b893cf44a942f92397f2f3cd7"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/dispatch.md": {
+      "mode": "100644",
+      "sha256": "9fd1dec2555df794591e18ae99d5a1e8a33170595eac8a54bb31df786caedae3"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/implementation-and-qa.md": {
+      "mode": "100644",
+      "sha256": "bc7fbfe07a877fc078059c9ad3772f83928be8434a64c61002cae390fabf9780"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md": {
+      "mode": "100644",
+      "sha256": "3f9905e08f49e25d5f0f2af5f3fc4da65404f1d94b36dc5836cc7cc894c54207"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/runtime-records.md": {
+      "mode": "100644",
+      "sha256": "272e9ce932a3cc85350396f272803b4956f44451e3e1fde2c9485905d8fbaaba"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/ui-design.md": {
+      "mode": "100644",
+      "sha256": "26a7f4bb66e1345d3a264b3d5dea0763713ab1c3f4cb4a63f884e3320203772d"
+    },
+    "plugins/agent-workflow/platforms/shared/skills/xy-workflow/references/worktree-delivery.md": {
+      "mode": "100644",
+      "sha256": "d59986bf918c9787c1eb78d30b30e108e1675eda9d92ea6e2d70e5839d7300d4"
+    },
+    "plugins/agent-workflow/plugins/__init__.py": {
+      "mode": "100644",
+      "sha256": "662bf385d6b794eef22a8f5b7ec6847747bc44bf007dc116aeafecd874570372"
+    },
+    "plugins/agent-workflow/plugins/main-session-context.md": {
+      "mode": "100644",
+      "sha256": "5df2cbb52448977fc6a8a9f0866c721180a6c355b0264fcb6512d81542dbe9fc"
+    },
+    "plugins/agent-workflow/plugins/maintenance/component.json": {
+      "mode": "100644",
+      "sha256": "1c95bddf93b7766ed084da7ee3f0ab89fc092eeb155b029f7a731f98100b4ea3"
+    },
+    "plugins/agent-workflow/plugins/maintenance/component_store.py": {
+      "mode": "100644",
+      "sha256": "02b29109f8c43d8154ff7187a938cc9516ba40a0b66be25fa055155ae477cc38"
+    },
+    "plugins/agent-workflow/plugins/maintenance/launcher.py": {
+      "mode": "100644",
+      "sha256": "ed5478d65bb59c3ea586b8e02be9b9a6154012a6e3e62ed8d5caaa4e6ba2fc9f"
+    },
+    "plugins/agent-workflow/plugins/maintenance/launcher.sh": {
+      "mode": "100755",
+      "sha256": "0a008bc21470137ac6986acb3c5a96e32b217f9ec705f8e4c31eeb6585c4980c"
+    },
+    "plugins/agent-workflow/plugins/maintenance/skills/agent-config/SKILL.md": {
+      "mode": "100644",
+      "sha256": "9a2cc0c0ffc2def359c924e840e65180d0c0dbb4a916f82ce2bae9e26f807fc9"
+    },
+    "plugins/agent-workflow/plugins/plugin-context.md": {
+      "mode": "100644",
+      "sha256": "42a2d86bcb93f423e04b6a8310a37c057660297b3976ef97aa0d87e159ca6c19"
+    },
+    "plugins/agent-workflow/plugins/project_context.py": {
+      "mode": "100644",
+      "sha256": "84a6ce5dfc2d14105e0f602326c51cc4158ec96b5ee642fad759d5bc5cec22eb"
+    },
+    "plugins/agent-workflow/plugins/source_pack.py": {
+      "mode": "100755",
+      "sha256": "7fde5f32033bf5aa5f042f422d8826cbb01ee04c3d984516f83ef8b30db46383"
+    },
+    "plugins/agent-workflow/product/AGENT_SCHEMA.md": {
+      "mode": "100644",
+      "sha256": "7d91f3fa6a24a682a2d4884c98a47de79c17901b846fe1031940b8107579a828"
+    },
+    "plugins/agent-workflow/product/GLOBAL_CONSTRAINTS.md": {
+      "mode": "100644",
+      "sha256": "5f371800a48f97012b827326f122c8599789ae9113abb8b009535de4df494915"
+    },
+    "plugins/agent-workflow/product/PLUGIN_VERSION": {
+      "mode": "100644",
+      "sha256": "03256850a82114dd8d7f37ef9b6e785b2df9160220bc8722eba9deecc920c8b7"
+    },
+    "plugins/agent-workflow/product/ROLES.yaml": {
+      "mode": "100644",
+      "sha256": "219d567e600b6036fb1a4638d1ce9e1472f01458eecb8703003371e5574b8000"
+    },
+    "plugins/agent-workflow/product/VERSION": {
+      "mode": "100644",
+      "sha256": "eb01a4e8e8922406f15a22cadc3fae28d4f513afe11b4734788eb2ea73cf034e"
+    },
+    "plugins/agent-workflow/product/WORKFLOW.md": {
+      "mode": "100644",
+      "sha256": "84c9d9724222c941da4b2065b6bff2c4fc69c264f02b4fc352e74103383eb9ef"
+    },
+    "plugins/agent-workflow/roles/xy-android.md": {
+      "mode": "100644",
+      "sha256": "bd3a3debc96f4d860ae894e635a5a7a0e4e45ef6858f6aece7fca85a3a33afe3"
+    },
+    "plugins/agent-workflow/roles/xy-apple.md": {
+      "mode": "100644",
+      "sha256": "fd044bfa8852463d08194f99c284a30230b50954f3376bc0ec6c7aab6b19ce4f"
+    },
+    "plugins/agent-workflow/roles/xy-backend.md": {
+      "mode": "100644",
+      "sha256": "a3089256114c7c96fb493911497b4d99ce7a8559978f6a0c1f7e57941dc42599"
+    },
+    "plugins/agent-workflow/roles/xy-desktop.md": {
+      "mode": "100644",
+      "sha256": "23f0905b888636fffea32d4c653fbc9395eaaf63b3e83e649777d176f8d0cf42"
+    },
+    "plugins/agent-workflow/roles/xy-qa.md": {
+      "mode": "100644",
+      "sha256": "653f3ac3c86897aa8267762ff9961c6bc1d927b08454e8b933c24df783f783ef"
+    },
+    "plugins/agent-workflow/roles/xy-uiux.md": {
+      "mode": "100644",
+      "sha256": "db07b5b977670cba17784e87d90e7f126a759412329f113755f7d11e42ed5236"
+    },
+    "plugins/agent-workflow/roles/xy-web.md": {
+      "mode": "100644",
+      "sha256": "8e41670dc97053d774f999207904aea8e14064cfec7c8a8a258715f6366a08fd"
+    },
+    "plugins/agent-workflow/skills/agent-config/SKILL.md": {
+      "mode": "100644",
+      "sha256": "521e49f9a8ec7260e3468ff52433ab8c68c8dbb4fdf8558ddc9ff2aa58cd41ef"
+    },
+    "plugins/agent-workflow/skills/agent-config/agents/openai.yaml": {
+      "mode": "100644",
+      "sha256": "7d52e95b1dbc7ebae8429a698a12b73ffc503d9bd8caac0b006c1879abe21b11"
+    },
+    "plugins/agent-workflow/skills/grill-me/SKILL.md": {
+      "mode": "100644",
+      "sha256": "616caa77cf7b736d1f9f43d820f38ca720e2fe9d55890d26d7c520074ba8dc96"
+    },
+    "plugins/agent-workflow/skills/grill-me/agents/openai.yaml": {
+      "mode": "100644",
+      "sha256": "b56819a093d583de32b61b57f14ce8bd38e1599ed2c47a96cb941d1ccd5f4d74"
+    },
+    "plugins/agent-workflow/skills/xy-build-verify/SKILL.md": {
+      "mode": "100644",
+      "sha256": "2e8a8c2517ad38f36db76a84644acc2dc21ddf8fc5ce9297b3dcd0b251322280"
+    },
+    "plugins/agent-workflow/skills/xy-build-verify/references/verification-scope.md": {
+      "mode": "100644",
+      "sha256": "ced49dc1d0df1d86e2202f7bd1a19aef3ffcea6130c9892209eaeef94d1777da"
+    },
+    "plugins/agent-workflow/skills/xy-code-standards/SKILL.md": {
+      "mode": "100644",
+      "sha256": "c73793de1cf3b69a1ce6f796ada85116a0d1d242a9317d201c0e32698ff4cdd9"
+    },
+    "plugins/agent-workflow/skills/xy-code-standards/references/boundary-reasoning.md": {
+      "mode": "100644",
+      "sha256": "2670265553a532dea7a7cc8d6866e141eb8e96b8c3f4c07eaaca1e11f6e89739"
+    },
+    "plugins/agent-workflow/skills/xy-code-standards/references/rules.md": {
+      "mode": "100644",
+      "sha256": "29705cc41f15119b04da06730df927dc6eb1488dfe2dbbb6e9958b25977e1b79"
+    },
+    "plugins/agent-workflow/skills/xy-code-standards/references/sources.md": {
+      "mode": "100644",
+      "sha256": "1ac3735bda4ffa09227e105b3f6286c74a3682cd2ff27364e0bb8158cdc2c663"
+    },
+    "plugins/agent-workflow/skills/xy-plan/SKILL.md": {
+      "mode": "100644",
+      "sha256": "e2f9f43adb716341916d15bb18273782740a3d87989ed006519c36a686c5da61"
+    },
+    "plugins/agent-workflow/skills/xy-plan/agents/openai.yaml": {
+      "mode": "100644",
+      "sha256": "393ed138bdb4daa4f3606a6618041f024a3c9fc74aa6c607cb04ab7a1934c7c3"
+    },
+    "plugins/agent-workflow/skills/xy-plan/references/requirements-markdown.md": {
+      "mode": "100644",
+      "sha256": "1449f77fe46a9f099f089edd635927b895d35e068d5a50d68c90031fa4a96523"
+    },
+    "plugins/agent-workflow/skills/xy-plan/references/task-graph.md": {
+      "mode": "100644",
+      "sha256": "1d40e49ba7dbc2ebc2d3f7a73535f8e4b87d76a26251b1fda62b6225f48f86a4"
+    },
+    "plugins/agent-workflow/skills/xy-project-memory/SKILL.md": {
+      "mode": "100644",
+      "sha256": "c53b2239bb69bf48995df0800ae396c8ff3c90a0311b7ea053d2363aeefdf81a"
+    },
+    "plugins/agent-workflow/skills/xy-prototype-verify/SKILL.md": {
+      "mode": "100644",
+      "sha256": "50c6f46e3981fb183dc21721315bd835825eaecfad15676a3fb50f2a0b138f81"
+    },
+    "plugins/agent-workflow/skills/xy-qa-review/SKILL.md": {
+      "mode": "100644",
+      "sha256": "e1b85ed192952d9a5ff725c8e90c9634b0eb01332e7f4c1328874fe80e4b12bd"
+    },
+    "plugins/agent-workflow/skills/xy-qa-review/references/implementation-acceptance.md": {
+      "mode": "100644",
+      "sha256": "b8f266440757e75fc5c4b3054e96be43da2ff42d92d9e52e4e20ad69df069c3c"
+    },
+    "plugins/agent-workflow/skills/xy-qa-review/references/inputs.md": {
+      "mode": "100644",
+      "sha256": "14f9fbbf325a4137cbdc35c465923bb8a0e237e136dc5d91076e383e5bd8384f"
+    },
+    "plugins/agent-workflow/skills/xy-qa-review/references/ui-review.md": {
+      "mode": "100644",
+      "sha256": "3a299c4531c5f2dafac532cd2458c733eeaeb2dfd3ea6310742c06d0f057facf"
+    },
+    "plugins/agent-workflow/skills/xy-ui-design/SKILL.md": {
+      "mode": "100644",
+      "sha256": "650c6f263e8d59f317abbe6cbc0f2e4bd703390565776f71de3b7a48de6aacd8"
+    },
+    "plugins/agent-workflow/skills/xy-ui-design/references/components-rules.md": {
+      "mode": "100644",
+      "sha256": "6df2b5d6d76fd4ee2f8a7ccd23d4840aef1cd25a0216889fd6c5da0929caffdf"
+    },
+    "plugins/agent-workflow/skills/xy-ui-design/references/design-quality.md": {
+      "mode": "100644",
+      "sha256": "ebf67e73452e156db1b79ae08fcccac6f288bfa736c0f54cf278dd14ec1b41f3"
+    },
+    "plugins/agent-workflow/skills/xy-ui-design/references/foundations-rules.md": {
+      "mode": "100644",
+      "sha256": "d6c9427ea07dc9a6fe3ace486003abc77dd5da18fc5edc05782c2d43d8a15208"
+    },
+    "plugins/agent-workflow/skills/xy-ui-design/references/prototype-canvas.md": {
+      "mode": "100644",
+      "sha256": "5a97a2b7c62791080cf41e84fdc3e274db54c28310e44a27badd2fd0ac9c7a5b"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/SKILL.md": {
+      "mode": "100644",
+      "sha256": "78ee6611c7324fb2b584be136d5a4104c380757e4fac50f0b968303e495db3f1"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/closeout.md": {
+      "mode": "100644",
+      "sha256": "35ec1c281902173e20811a59904cdf47b429de58af6f4100c6a19449c6920d6c"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/design-standards.md": {
+      "mode": "100644",
+      "sha256": "0fd710c4a70a0b53bb3afe2bd66d4879aa047d8b893cf44a942f92397f2f3cd7"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/dispatch.md": {
+      "mode": "100644",
+      "sha256": "9fd1dec2555df794591e18ae99d5a1e8a33170595eac8a54bb31df786caedae3"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/implementation-and-qa.md": {
+      "mode": "100644",
+      "sha256": "bc7fbfe07a877fc078059c9ad3772f83928be8434a64c61002cae390fabf9780"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/plan-lifecycle.md": {
+      "mode": "100644",
+      "sha256": "3f9905e08f49e25d5f0f2af5f3fc4da65404f1d94b36dc5836cc7cc894c54207"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/runtime-records.md": {
+      "mode": "100644",
+      "sha256": "272e9ce932a3cc85350396f272803b4956f44451e3e1fde2c9485905d8fbaaba"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/ui-design.md": {
+      "mode": "100644",
+      "sha256": "26a7f4bb66e1345d3a264b3d5dea0763713ab1c3f4cb4a63f884e3320203772d"
+    },
+    "plugins/agent-workflow/skills/xy-workflow/references/worktree-delivery.md": {
+      "mode": "100644",
+      "sha256": "d59986bf918c9787c1eb78d30b30e108e1675eda9d92ea6e2d70e5839d7300d4"
+    },
+    "plugins/agent-workflow/sources.json": {
+      "mode": "100644",
+      "sha256": "f0547c0c92e25f6861339181261e2dc7e2d858fea88a1a766bf0b163ea2f400c"
+    },
+    "plugins/agent-workflow/templates/docs/PLAN.md": {
+      "mode": "100644",
+      "sha256": "503d697a0652c3ea00ec41126ceef628968694de3a555865bd3468145bc1284b"
+    },
+    "plugins/agent-workflow/templates/docs/PROJECT.md": {
+      "mode": "100644",
+      "sha256": "c0737156e7ef1349cdc0c1ce77b36d8f61c51a63b272224673211e6ab7760746"
+    },
+    "plugins/agent-workflow/templates/docs/STANDARDS.md": {
+      "mode": "100644",
+      "sha256": "716528a10d60ff8e36a332973759fc46d258c4271baa6cc860cdff810f56a160"
+    },
+    "plugins/agent-workflow/templates/project.yaml.example": {
+      "mode": "100644",
+      "sha256": "56af9f164c3d64466befaa3659a9909527d1432d471608b17742e70bfaca3c9e"
+    },
+    "plugins/agent-workflow/templates/prototype/index.html": {
+      "mode": "100644",
+      "sha256": "ea09adc3bfb2110127ab2c8efb552036a3b42a0b17a76ca95b214198c06fb80f"
+    },
+    "plugins/agent-workflow/templates/prototype/page-shell.js": {
+      "mode": "100644",
+      "sha256": "c92bb317185c29fbf4a93ec0bc08ec4f67e6fc85ae2b14d45f3b064d317283eb"
+    },
+    "plugins/agent-workflow/templates/prototype/page.html": {
+      "mode": "100644",
+      "sha256": "d61abd601ea6c2921ae18529a99d09d9a9d0b9fa2c828259ad7b819ab9f36168"
+    },
+    "plugins/agent-workflow/templates/prototype/prototype.css": {
+      "mode": "100644",
+      "sha256": "bf508b3b9c690e9a2bc973ff105b64aaf5af42ce82d03132edd39acaa3e5dde4"
+    },
+    "plugins/agent-workflow/templates/prototype/workspace.css": {
+      "mode": "100644",
+      "sha256": "8404c8a97e90f0594ee53982e0726a5492f9f8ce3bccd27eb0edd33765657716"
+    },
+    "plugins/agent-workflow/templates/prototype/workspace.js": {
+      "mode": "100644",
+      "sha256": "471b85b88407020d76ab4499b5fc62f4e84935fe5126009cce2595aea08f54e3"
+    },
+    "plugins/agent-workflow/workflow-sources.json": {
+      "mode": "100644",
+      "sha256": "6d20671f5aeda9096c3664710bb6521807596ddc684452fb6d9610ab39c46a1b"
+    }
+  },
+  "host": "codex",
+  "managed_by": "agent-workflow-plugin-source-v1",
+  "plugin_zip_sha256": "edeea8452d62c0ce98f7413f0d4234597eee07c091da8b014b4296093f2ab8bf",
+  "ref": "refs/heads/plugins-codex-alpha",
+  "repository": "Geoege-xll/agent-workflow",
+  "schema_version": 1,
+  "source_revision": "94968efcd65f8d3e0812aa4905039028bd423656",
+  "source_tree_sha256": "0ed259069c3de1e67f7d8a426b587f1a580e34b2d6f873c7b7877f09f3a66f44",
+  "version": "3.0.0-alpha.5"
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: "原生模型配置"
+  short_description: "显式打开原生模型配置页，或只读查看组件状态与配置范围诊断"
+policy:
+  allow_implicit_invocation: false

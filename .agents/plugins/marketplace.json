@@ -1,0 +1,17 @@
+{
+  "name": "agent-workflow-alpha",
+  "plugins": [
+    {
+      "category": "Productivity",
+      "name": "agent-workflow",
+      "policy": {
+        "authentication": "ON_INSTALL",
+        "installation": "AVAILABLE"
+      },
+      "source": {
+        "path": "./plugins/agent-workflow",
+        "source": "local"
+      }
+    }
+  ]
+}
