@@ -123,7 +123,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
 ## 按需反馈复核
 
-仅当前任务使用节点反馈时，读取 [反馈消费合同](../xy-ui-design/references/prototype-feedback.md)，通过当前物理插件根白名单 helper 的 `prepare`／`validate` 消费当前绑定；它复用本校验器的安全依赖闭包，不替代上述静态检查。`validate` 失败、需求 SHA 或页面依赖失效时保留原意见，返回 PM 处理；输出 `changes` 只用于当前授权原型修订。修订后仍返回上述 `prototype_verify` 证据，适用需求／视觉批准沿既有规则，反馈不产生批准、自动 patch 或新增业务 gate。
+仅当前任务使用评审反馈时，读取 [反馈消费合同](../xy-ui-design/references/prototype-feedback.md)，通过当前物理插件根白名单 helper 的 `prepare`／`validate` 消费当前绑定；它复用本校验器的安全依赖闭包，不替代上述静态检查。新 JSON／Markdown 均承载 feedback 3 的 `schema_version/context/anchors/items` 四字段，context 仍为严格版本 2；Markdown 只在唯一 `## Agent Workflow Feedback Payload` 标题下包含单个 JSON 代码围栏。节点／页面／全局目标、独立 A 与整改编号、显式 `reference_ids` 和源 `data-req-ids` 经同一后端验证，未映射的 REQ 为 `[]`。匿名源节点的 `data-prototype-review-source` 仅由 prepare 注入派生快照，不写业务源；无来源动态节点不能凭摘录确认。旧 feedback 2／manifest 2／bridge 2 继续严格只读消费，不用新装配逻辑回验旧格式。`validate` 失败、需求 SHA 或页面依赖失效时保留原意见，返回 PM 处理；输出 `changes` 只用于当前授权原型修订。修订后仍返回上述 `prototype_verify` 证据，适用需求／视觉批准沿既有规则，反馈不产生批准、自动 patch 或新增业务 gate。
 
 生产 `templates/prototype` 工具的真实浏览器集成验证用于验证模板产品本身，不能扩张为业务原型默认浏览器操作，亦不改变以下边界。
 

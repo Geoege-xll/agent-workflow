@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "native-agent-config",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "channel": "stable",
   "cli_protocol": 1,
   "service_protocol": 2,
   "release_status": "published",
   "artifact": {
-    "name": "native-agent-config-0.1.1.zip",
-    "sha256": "ad7c60fdbf5a417adaa67620f4c41d8315a36eb75cdec54e70601d8184a2a567",
-    "url": "https://github.com/Geoege-xll/agent-workflow/releases/download/native-agent-config-v0.1.1/native-agent-config-0.1.1.zip"
+    "name": "native-agent-config-0.1.2.zip",
+    "sha256": "db5b3bdf225bce5a788f3a6894e7ca27d59ffc250f6e8fd12887e3d55a2b2ce0",
+    "url": "https://github.com/Geoege-xll/agent-workflow/releases/download/native-agent-config-v0.1.2/native-agent-config-0.1.2.zip"
   }
 }
