@@ -1,0 +1,10 @@
+{
+  "author": {
+    "name": "Agent Workflow"
+  },
+  "description": "Repository-driven Light and Full workflows with native delegation and independent QA.",
+  "hooks": "./hooks/hooks.json",
+  "name": "xy-workflow",
+  "skills": "./skills/",
+  "version": "3.0.0-alpha.8"
+}

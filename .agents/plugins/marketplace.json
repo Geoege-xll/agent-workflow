@@ -1,15 +1,15 @@
 {
-  "name": "agent-workflow-alpha",
+  "name": "xy-workflow-alpha",
   "plugins": [
     {
       "category": "Productivity",
-      "name": "agent-workflow",
+      "name": "xy-workflow",
       "policy": {
         "authentication": "ON_INSTALL",
         "installation": "AVAILABLE"
       },
       "source": {
-        "path": "./plugins/agent-workflow",
+        "path": "./plugins/xy-workflow",
         "source": "local"
       }
     }
