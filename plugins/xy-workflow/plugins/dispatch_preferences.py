@@ -62,9 +62,21 @@ def _open_directory(path):
     """逐级 no-follow 并持有所有祖先，防止链接与父路径替换逃逸。"""
     path = _absolute(path)
     descriptors, links = [], []
+    # 祖先句柄仅用于相对查找、固定身份与复查。支持 O_SEARCH 时只申请穿越权限，
+    # 避免沙箱把访问已授权子目录误判为读取祖先目录。末级仍要求原有目录读取权限；
+    # 部分 macOS Python 3.11 构建未导出 O_SEARCH。Darwin 的 sys/fcntl.h
+    # 固定将它定义为 O_EXEC（0x40000000）与 O_DIRECTORY 的组合。
+    # 其余平台若未提供 O_SEARCH，继续按原方式打开。所有层级仍禁止跟随符号链接。
+    directory_flags = os.O_DIRECTORY | os.O_NOFOLLOW
+    search_flag = getattr(os, "O_SEARCH", None)
+    if search_flag is None:
+        search_flag = 0x40000000 if sys.platform == "darwin" else os.O_RDONLY
+    ancestor_flags = directory_flags | search_flag
+    target_flags = directory_flags | os.O_RDONLY
     try:
-        descriptors.append(os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
-        for name in path.parts[1:]:
+        parts = path.parts[1:]
+        descriptors.append(os.open(path.anchor, ancestor_flags if parts else target_flags))
+        for depth, name in enumerate(parts, start=1):
             parent = descriptors[-1]
             try:
                 before = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -73,7 +85,7 @@ def _open_directory(path):
                 raise
             if not stat.S_ISDIR(before.st_mode):
                 raise PreferenceError("偏好父路径不能是链接或特殊节点")
-            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            child = os.open(name, target_flags if depth == len(parts) else ancestor_flags, dir_fd=parent)
             descriptors.append(child)
             after = os.fstat(child)
             if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):

@@ -1,14 +1,14 @@
 {
   "artifacts_sha256": {
-    "native/native-agent-config-0.1.6.zip": "7823621ab1fa22767c707454b0c772b74ce6eb283801cd89a60b808b28a793d7",
-    "workflow/xy-workflow-antigravity-3.0.8-local-source.zip": "72dda29ab0114ee4a42ff4e4a9fe8c6b2bc223709b447abae1cbb3373c22fb6b",
-    "workflow/xy-workflow-antigravity-3.0.8.zip": "95ac781d9c1f6ffcede6fa74e9cca23bed76b26abafdc74979e1176b33d7dfec",
-    "workflow/xy-workflow-claude-3.0.8-local-source.zip": "1905891ea60a7fd4b2de7a2e631f5a90bd4ba10480f2661cf77f3ff7e4ae6288",
-    "workflow/xy-workflow-claude-3.0.8.zip": "8e6889787c53c11e804e024d02cccb02d1c71532fb1e80a736664f2bbb417e1e",
-    "workflow/xy-workflow-codex-3.0.8-local-source.zip": "a5700d21d96fedcef4e8b86f2e203a9869b19c6fc7a9233fdd3fd49778b8ae43",
-    "workflow/xy-workflow-codex-3.0.8.zip": "c21991fb96b6b6d37467b95896453d4462d168c51719a36dfab5896f3f17e313"
+    "native/native-agent-config-0.1.7.zip": "2cf437014ff98edcff882c81dd47b2ea812ee5c012aacb6bfdf33eb4274d8d39",
+    "workflow/xy-workflow-antigravity-3.0.9-local-source.zip": "284d06eec3604538143cd997d136db85b43816a077336faaf98974d3cbcf20ad",
+    "workflow/xy-workflow-antigravity-3.0.9.zip": "45fe5f379967ad6e41b3a7fa9c1013e02e58cbf3156c8fd1cbeb0b494e3abb6a",
+    "workflow/xy-workflow-claude-3.0.9-local-source.zip": "c3b4ce44d50730663ff07dfc31eae408d93a664b4127881c88686c9085d3f6de",
+    "workflow/xy-workflow-claude-3.0.9.zip": "546de3f9d5ca8878e105023da1e0633cdf532c35cead5da424431b6b001e64a5",
+    "workflow/xy-workflow-codex-3.0.9-local-source.zip": "7edbf7ab3c8fa79b01cf84e36a1eb9afb0a7cdc5b8594ff279086a10e8d07a86",
+    "workflow/xy-workflow-codex-3.0.9.zip": "32a510e26de20914d22bfcb85889fde2b10a5f6dcbbdda7c489218910cc67090"
   },
-  "candidate_sha256": "1095915e9ba089987c495d8c9ff6cf8adf6b4e8cca82960095a915cf3ec54d3d",
+  "candidate_sha256": "f87e5dfa65b91dcc148042a309e109fc253b0fa6b3d8dd6a14428f4faceb8835",
   "channel": "stable",
   "files": {
     ".claude-plugin/marketplace.json": {
@@ -17,19 +17,19 @@
     },
     "plugins/xy-workflow/.claude-plugin/plugin.json": {
       "mode": "100644",
-      "sha256": "399df4e490f4d8534e32aa83263df4c00e5c556bcf0692eeead2ddb998670e7a"
+      "sha256": "d13fe456e727a0cab97cc7be5f0e849e0bfb1295e116192bde2aebf4e94f3cad"
     },
     "plugins/xy-workflow/INSTALL.md": {
       "mode": "100644",
-      "sha256": "b6a1eb60986c53f30d60c34d63a6d6cdb99962ca07b3d9ff7efdc5b871678b52"
+      "sha256": "f1a1a050fcbd51b03637af88364ea5d9aae82d40205dde1c2dbbece0cb29211b"
     },
     "plugins/xy-workflow/PLUGIN.md": {
       "mode": "100644",
-      "sha256": "e553a1033f5a70272860db820a2354326af3a27b54a7909afe6ef82c9d359f54"
+      "sha256": "45f77ac2d775d451f93aa9706a6e5d78996af2c5c871f74c767455c743efb2e4"
     },
     "plugins/xy-workflow/README.md": {
       "mode": "100644",
-      "sha256": "e553a1033f5a70272860db820a2354326af3a27b54a7909afe6ef82c9d359f54"
+      "sha256": "45f77ac2d775d451f93aa9706a6e5d78996af2c5c871f74c767455c743efb2e4"
     },
     "plugins/xy-workflow/agents/pm.md": {
       "mode": "100644",
@@ -105,7 +105,7 @@
     },
     "plugins/xy-workflow/lib/dispatch_admission_cli.py": {
       "mode": "100644",
-      "sha256": "e67413f302c2714e643b04237326e5cb2639b105119c966afcb97398180bfbbd"
+      "sha256": "ecb47539ade7b8cdb8b750a7aa23b47a0ae41e0f8b6d1d0abdd535864944dfb7"
     },
     "plugins/xy-workflow/lib/documents/__init__.py": {
       "mode": "100644",
@@ -190,6 +190,10 @@
     "plugins/xy-workflow/lib/hosts/__init__.py": {
       "mode": "100644",
       "sha256": "38f10341d42159a661b21264531a3cd39fbbfa09e289177ca32769b9f8ad92fc"
+    },
+    "plugins/xy-workflow/lib/hosts/antigravity_dispatch.py": {
+      "mode": "100644",
+      "sha256": "b863237114e825769a42c85a0942f32c312644e830e240aeb94dd25fc1ec21ab"
     },
     "plugins/xy-workflow/lib/hosts/capabilities.py": {
       "mode": "100644",
@@ -297,7 +301,7 @@
     },
     "plugins/xy-workflow/lib/task_graph_cli.py": {
       "mode": "100644",
-      "sha256": "b3cd003ea2b80c93f4ba32ba762462a8b9e41d7bf1e39245226f655bde1d309c"
+      "sha256": "8c09bd51033310fe8f6243889f9e240ab0580e0096af956e699460572f2a5bf8"
     },
     "plugins/xy-workflow/lib/task_graph_init.py": {
       "mode": "100644",
@@ -305,15 +309,15 @@
     },
     "plugins/xy-workflow/lib/task_graph_records.py": {
       "mode": "100644",
-      "sha256": "0de90439c9a899e571a3faf6dfb7e1825fcf2ed9109a695262920d0d3159f3ca"
+      "sha256": "5a4ea81215b89aae1d9cd4a4339896c2334bb20ac43a051bc4d7094b6ba54373"
     },
     "plugins/xy-workflow/lib/task_intent.py": {
       "mode": "100644",
-      "sha256": "85572f0ea0f80f13aa12c301749a839a3693a3ad0363e35c5b02e3ad5e73640b"
+      "sha256": "c42c6b175b7e7d5de04ab604360aa6dbc7edbd85110a3e7711d6f12e969f4cf5"
     },
     "plugins/xy-workflow/lib/task_pool.py": {
       "mode": "100644",
-      "sha256": "dc3c48d3e24b1251c506578b0b1f7010690c5116f78ec619a4d14468451d0a7f"
+      "sha256": "bf65b14d76215681654fb51d34c81f0c2a38c5cdb00a6fb3a8d3d423ffeb17b0"
     },
     "plugins/xy-workflow/lib/task_pool_cli.py": {
       "mode": "100644",
@@ -321,7 +325,7 @@
     },
     "plugins/xy-workflow/lib/task_settlement.py": {
       "mode": "100644",
-      "sha256": "0a9bacbb65f20866c588e0f19247f269abdce7a8bb8ab14c656e6afca23e3f10"
+      "sha256": "0eabe72c542f7dada93b76ccc22ffaf692c3705e71886aabeae8ad7e847a141d"
     },
     "plugins/xy-workflow/lib/task_sources.py": {
       "mode": "100644",
@@ -365,7 +369,7 @@
     },
     "plugins/xy-workflow/platforms/shared/HOOKS.md": {
       "mode": "100644",
-      "sha256": "21ea4996b52f32a2190f9f104753eb3efc5ae88ad563a47c8701f0643ed1ae29"
+      "sha256": "28c504fafa67a2e75a09929e26d2364c0aae0be967606069cbac68ecb6375ada"
     },
     "plugins/xy-workflow/platforms/shared/core-skills.txt": {
       "mode": "100644",
@@ -537,7 +541,7 @@
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-workflow/references/dispatch.md": {
       "mode": "100644",
-      "sha256": "ebf88c02247c942d7019b8133b9448fa08910f95abd545330d619f06a361ba01"
+      "sha256": "1fe61644fc26a3cda538000ee131a690578fa55d50a0f36c87ff65bc4c9b4607"
     },
     "plugins/xy-workflow/platforms/shared/skills/xy-workflow/references/implementation-and-qa.md": {
       "mode": "100644",
@@ -581,7 +585,7 @@
     },
     "plugins/xy-workflow/plugins/dispatch_preferences.py": {
       "mode": "100644",
-      "sha256": "020f1ce045d16d31448ee2b881bbe610af9d4aa6a302227a2a9159c28b617a9f"
+      "sha256": "0c5c06944974b541a3c94e2ed1d8d205c086844e19fd97820ecf1f7f6b48f924"
     },
     "plugins/xy-workflow/plugins/main-session-context.md": {
       "mode": "100644",
@@ -589,7 +593,7 @@
     },
     "plugins/xy-workflow/plugins/maintenance/component.json": {
       "mode": "100644",
-      "sha256": "62828ac4e4d1006b9a0116ce346e67badcd56a670ee4b1fcc935053812145a07"
+      "sha256": "f4af33b8a34fcaef7dd848976b02e3aa0f73818f8e332c5524d8f1f38da3f0cb"
     },
     "plugins/xy-workflow/plugins/maintenance/component_store.py": {
       "mode": "100644",
@@ -649,7 +653,7 @@
     },
     "plugins/xy-workflow/product/PLUGIN_VERSION": {
       "mode": "100644",
-      "sha256": "2a612f3f9494fa52305039d3474f9448e4eadcdbca3517a767df080009a393e9"
+      "sha256": "11c7c96942a1a8a4d51da813897c69403141802c4508dc88f867fe7022ef19ff"
     },
     "plugins/xy-workflow/product/ROLES.yaml": {
       "mode": "100644",
@@ -921,7 +925,7 @@
     },
     "plugins/xy-workflow/skills/xy-workflow/references/dispatch.md": {
       "mode": "100644",
-      "sha256": "ebf88c02247c942d7019b8133b9448fa08910f95abd545330d619f06a361ba01"
+      "sha256": "1fe61644fc26a3cda538000ee131a690578fa55d50a0f36c87ff65bc4c9b4607"
     },
     "plugins/xy-workflow/skills/xy-workflow/references/implementation-and-qa.md": {
       "mode": "100644",
@@ -957,7 +961,7 @@
     },
     "plugins/xy-workflow/sources.json": {
       "mode": "100644",
-      "sha256": "c460eef2fb5a8ee743ca715898c88e556b1e23ad0ed9cfcf36a1df9a5e376c4f"
+      "sha256": "d29db9493420a80c4af63f7dc933e134a424b93198888a0e6d6d9ea8131a9b24"
     },
     "plugins/xy-workflow/templates/docs/ARCHITECTURE.md": {
       "mode": "100644",
@@ -9553,16 +9557,16 @@
     },
     "plugins/xy-workflow/workflow-sources.json": {
       "mode": "100644",
-      "sha256": "bdf5a3aa40611f5260860a082433a489e3dfedaa4f505916d92a08a0d6014713"
+      "sha256": "ed5c32b16921eee6ee9477139945aaba116eaa212b04851f2c5c68ae85660493"
     }
   },
   "host": "claude",
   "managed_by": "agent-workflow-plugin-source-v1",
-  "plugin_zip_sha256": "8e6889787c53c11e804e024d02cccb02d1c71532fb1e80a736664f2bbb417e1e",
+  "plugin_zip_sha256": "546de3f9d5ca8878e105023da1e0633cdf532c35cead5da424431b6b001e64a5",
   "ref": "refs/heads/plugins-claude-stable",
   "repository": "Geoege-xll/agent-workflow",
   "schema_version": 1,
-  "source_revision": "c1759ebf00d00687dbec2469cd3172de5eac070c",
-  "source_tree_sha256": "155113afd54befd1c09d4d3b8fc56df83db632f13f1530e5403f72a7889c33a1",
-  "version": "3.0.8"
+  "source_revision": "f93cf3316e0fd926eb8e213910c8186f5f63e026",
+  "source_tree_sha256": "3bf58d40ce636eb22888f85d349f4db52e8c6ad523f97d2da8671119d593f0ef",
+  "version": "3.0.9"
 }

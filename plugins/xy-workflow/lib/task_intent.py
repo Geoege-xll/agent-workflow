@@ -6,13 +6,14 @@ import copy
 import re
 
 from lib.agent_continuation import active, validate_reference
+from lib.hosts import antigravity_dispatch
 from lib.task_graph import TaskGraphError, WITHDRAWAL_STATES, delivery_complete
 from lib.verification_inputs import validate_command
 
 PENDING = {"DECLARED", "READY", "BLOCKED"}
 CONTROL_OPS = {"claim", "release_claim", "withdraw", "confirm_stop", "confirm_uncreated", "revise", "ack_revision"}
 REVISION_FIELDS = {"goal", "input_contracts", "output_contracts", "acceptance_evidence", "verification_commands"}
-CLAIM_FIELDS = {"claim_basis_sha256", "claim_prior_state"}
+CLAIM_FIELDS = {"claim_basis_sha256", "claim_prior_state", "antigravity_claim"}
 RECORD_FIELDS = CLAIM_FIELDS | {"withdrawal", "task_revision", "revision_source", "revision_ack", "revision_result", "qa_result_scope", "qa_failed_pack_fingerprint"}
 
 
@@ -67,6 +68,15 @@ def validate_intent(task):
                 or not re.fullmatch(r"[0-9a-f]{64}", task["claim_basis_sha256"])
                 or not isinstance(task.get("claim_prior_state"), str) or task["claim_prior_state"] not in PENDING):
             raise TaskGraphError("claim basis requires the original CAS SHA256 and pending state")
+        if "antigravity_claim" in task:
+            antigravity_dispatch.validate_claim(task["antigravity_claim"])
+            if "agent_ref" in task:
+                # 新领取的状态即使是从磁盘恢复，也不得把主会话、角色别名、
+                # 或其它宿主的引用报告成已绑定。旧记录没有此字段，仍按原协议读取。
+                ref = validate_reference(task["agent_ref"])
+                if ref["host"] != "antigravity":
+                    raise TaskGraphError("AGY claim requires an AGY agent_ref")
+                antigravity_dispatch.validate_child_id(task["antigravity_claim"]["parent"], ref["agent_id"])
     if "withdrawal" in task or task["state"] in WITHDRAWAL_STATES:
         withdrawal = task.get("withdrawal")
         if not isinstance(withdrawal, dict) or task["state"] not in WITHDRAWAL_STATES:
@@ -145,13 +155,19 @@ def apply_control(task, name, value, *, record_sha):
     """仅返回原任务的增量事实，不发送宿主消息，不触碰代码和现有构建产物。"""
     state = task["state"]
     if name == "claim":
-        _fields(value, {"previous_sha256"}, "claim")
+        agy = isinstance(value, dict) and "antigravity_claim" in value
+        _fields(value, {"previous_sha256", "antigravity_claim"} if agy else {"previous_sha256"}, "claim")
         if (state not in PENDING or "agent_ref" in task or task.get("agent_retired")
                 or not record_sha or value["previous_sha256"] != record_sha):
             raise TaskGraphError("claim requires the current pending task and original record CAS")
         # 回执上的 previous_sha256 属于这次领取。即使同图 B 有新进展仍能核对 A；
         # 释放后保留基线，使重新领取的原件不同，过期 release 不能核销新领取。
         task.update(state="RUNNING", claim_basis_sha256=record_sha, claim_prior_state=state)
+        # 旧轮的标记与原领取一起失效。新准入若切到其它宿主，也不能误用前轮的 AGY 身份。
+        task.pop("antigravity_claim", None)
+        if agy:
+            antigravity_dispatch.validate_claim(value["antigravity_claim"])
+            task["antigravity_claim"] = value["antigravity_claim"].copy()
         return
     if name == "release_claim":
         _fields(value, {"previous_sha256", "outcome", "prior_state"}, "release_claim")
