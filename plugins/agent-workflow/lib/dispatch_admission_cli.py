@@ -346,10 +346,15 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
             # 与原 update 的 QA 准入完全同义：仅临时作为 read_only 复用门禁/锁，
             # 发布仍使用原 QA 合同，由原 update 再做一次 request QA barrier。
             selected["task_type"] = "read_only"
+            selected.pop("foundation_task_id", None)
+            selected.pop("foundation_receipt", None)
+            selected.pop("request_receipt", None)
             if "task" in qa_candidate:
                 # 只有临时就绪投影去掉QA专属包元数据；原QA包、正式claim和唯一
                 # Reviewer的完整reviewed_ui_changes仍由原记录helper验证并保留。
                 qa_candidate.pop("reviewed_ui_changes", None)
+                qa_candidate.pop("qa_checkpoint", None)
+                qa_candidate.pop("qa_checkpoint_fingerprint", None)
             if task["id"] in _query(qa_candidate, root, "ready")["ready"]:
                 eligible.add(task["id"])
         known_paths = {item for task in tasks if active(task) for item in task.get("owned_paths", ())}

@@ -30,7 +30,9 @@ if __package__:
     from lib.delivery.qa_handoff_cli import QAHandoffError, validate_qa_handoff
     from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
-    from lib.task_graph_records import read_record, decode
+    from lib.task_graph_records import read_record, decode, document_digest, file_digest
+    from lib.runtime_pins import PLUGIN_ENV, RuntimePinError, record_binding
+    from lib.standard_paths import builtin_source_path
     from lib.project.validate_project_config import validate_docs
     from lib.validate_project_docs import validate as validate_documents
     from lib.worktree_policy import WorktreePolicyError, revision, settings
@@ -38,7 +40,9 @@ else:
     from lib.delivery.qa_handoff_cli import QAHandoffError, validate_qa_handoff
     from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
-    from lib.task_graph_records import read_record, decode
+    from lib.task_graph_records import read_record, decode, document_digest, file_digest
+    from lib.runtime_pins import PLUGIN_ENV, RuntimePinError, record_binding
+    from lib.standard_paths import builtin_source_path
     from lib.project.validate_project_config import validate_docs
     from lib.validate_project_docs import validate as validate_documents
     from lib.worktree_policy import WorktreePolicyError, revision, settings
@@ -200,18 +204,38 @@ def within(path: str, owned: str) -> bool:
     return path == owned.rstrip("/") or path.startswith(owned.rstrip("/") + "/")
 
 
+def adapter_bytes(root: Path, relative: str) -> bytes:
+    """绑定真实适配器字节；复用指纹读取器拒绝危险祖先、链接和读取中变化。
+
+    前后安全指纹与实际正文必须一致，不能拿虚拟正文补足缺失文件，也不能在读取
+    配置和解释授权之间悄悄切换配置版本。普通文件路径仍严格局限在对应 checkout。
+    """
+    try:
+        fingerprint = file_digest(root, relative)
+        body = (root / relative).read_bytes()
+        if (hashlib.sha256(body).hexdigest() != fingerprint
+                or file_digest(root, relative) != fingerprint):
+            raise DeliveryError("selected project adapter changed while reading")
+        return body
+    except (OSError, TaskGraphError) as exc:
+        raise DeliveryError(f"cannot safely read selected project adapter {relative}: {exc}") from exc
+
+
 def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, Any]:
     """最终核验真实仓库状态，不把 JSON 中的 PASS、路径数组或旧任务状态当成事实。"""
     config = config.absolute()
     if config != config.resolve() or not config.is_relative_to(repo) or config.name != "project.yaml":
         raise DeliveryError("merge --config must be the canonical project.yaml inside the target checkout")
-    lines = config.read_text(encoding="utf-8").splitlines()
+    selected_relative = config.relative_to(repo).as_posix()
+    main_bytes = adapter_bytes(repo, selected_relative)
+    lines = main_bytes.decode("utf-8").splitlines()
     policy = settings(lines)
     if policy["mode"] == "off":
         raise DeliveryError("parallel_worktrees.mode is off")
     graph = payload.get("task_graph")
     if not isinstance(graph, dict):
         raise DeliveryError("delivery requires the current task_graph")
+    binding = record_binding(graph, root=repo)
     _execute("validate", graph)
     if not _execute("qa-ready", graph)["qa_ready"]:
         raise DeliveryError("writers or integration verification are incomplete")
@@ -242,6 +266,21 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     clean(integration)
     if head(integration) != tip:
         raise DeliveryError("integration HEAD changed after verification")
+    # 选定路径贯穿两个 checkout；候选不能以另一个适配器或主目录正文冒充存在。
+    # 主配置控制本次交付策略，候选配置只解释即将交付的文档布局。允许 Writer 在
+    # 自己的范围内修改适配器，但这些字节仍须进入完整 diff、QA 和当次交付授权。
+    candidate_config = integration / selected_relative
+    candidate_bytes = adapter_bytes(integration, selected_relative)
+    docs_views: list[dict[str, str]] = []
+    for body, root in ((main_bytes, repo), (candidate_bytes, integration)):
+        errors: list[str] = []
+        docs = validate_docs(body.decode("utf-8").splitlines(), root, errors)
+        contract = graph["standards_contract"]
+        if (errors or root == integration and (
+                docs.get("standards") != contract["index_path"]
+                or docs.get("standards_root", "").rstrip("/") != contract["root"].rstrip("/"))):
+            raise DeliveryError("selected project adapter standards paths do not match the current task contract")
+        docs_views.append(docs)
     current_scope = scope(repo, base, tip)
     if not current_scope["changed_paths"]:
         raise DeliveryError("no changed files to deliver; report a no-op instead of manufacturing a merge")
@@ -302,14 +341,13 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     ):
         raise DeliveryError("projection_paths requires unique normalized exact changed Markdown files")
     if projection:
-        errors: list[str] = []
-        docs = validate_docs(lines, integration, errors)
-        allowed_files = {docs.get("project")}
-        allowed_roots = [docs.get(key, "") for key in ("plans",)]
-        if errors or any(path not in allowed_files and not any(root and within(path, root) for root in allowed_roots)
-                         for path in projection):
-            raise DeliveryError("PM projection must stay within configured PROJECT/plans")
-        errors = validate_documents(config, integration)
+        # PM 投影须同时处于主配置与候选配置允许的文档边界；修改适配器不能借此
+        # 扩张 PM 的写权限。真正文档校验绑定候选文件和候选字节，保留 validator
+        # 对配置根目录的安全检查，不把主目录文件伪装成集成目录中的文件。
+        for docs in docs_views:
+            if any(path != docs.get("project") and not within(path, docs["plans"]) for path in projection):
+                raise DeliveryError("PM projection must stay within configured PROJECT/plans in both checkouts")
+        errors = validate_documents(candidate_config, integration, body=candidate_bytes, binding=binding)
         if errors:
             raise DeliveryError("controlled-document projection is invalid: " + "; ".join(errors))
     if any(path not in projection and not any(within(path, boundary) for boundary in owned)
@@ -327,9 +365,14 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     except QAHandoffError as exc:
         # 对外维持交付边界的失败类型，同时保留原始QA诊断链，不把拒绝当作无结果。
         raise DeliveryError(str(exc)) from exc
+    handed_pack = decode(pack_body)
+    # Foundation PASS 只解除后续功能 Writer 的前置条件，不能冒充整个请求的最终
+    # 验收；即使有人复用阶段 PASS 填入完整 diff，仍须回到原 Reviewer 的请求检查点。
+    if handed_pack.get("qa_checkpoint", {}).get("kind") == "foundation":
+        raise DeliveryError("Foundation QA checkpoint cannot authorize final request delivery")
     current_qa = [task for task in graph["tasks"]
                   if task["request_id"] == request_id and task["task_type"] == "qa"]
-    handed_qa = decode(pack_body)["task"]
+    handed_qa = handed_pack["task"]
     # 固定diff和PASS尚不足以证明当前请求的同一Reviewer已审查；对照权威图身份。
     if (len(current_qa) != 1 or any(current_qa[0].get(field) != handed_qa.get(field)
                                    for field in ("id", "request_id", "agent_alias", "module", "role", "agent_ref"))):
@@ -367,10 +410,30 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
         (check["source_path"], check["source_fingerprint"]) for check in coverage["rule_checks"]
     ]
     for relative, fingerprint in frozen_sources:
-        document = integration / relative
-        if (document.resolve() != document or not document.is_relative_to(integration)
-                or hashlib.sha256(document.read_bytes()).hexdigest() != fingerprint):
-            raise DeliveryError(f"QA standards authority changed: {relative}")
+        builtin = builtin_source_path(relative)
+        try:
+            if builtin is not None:
+                # 内置规则属于实际执行的插件／固定核心；纯源包也只能读取此模块
+                # 物理来源中的三份固定规则，项目中的同名文件不能替换内置权威。
+                actual = (document_digest(repo, relative, binding=binding)
+                          if binding is not None or PLUGIN_ENV in os.environ
+                          else document_digest(Path(__file__).resolve().parents[2], builtin))
+            else:
+                # 项目索引、专项叶必须取集成候选；file_digest 保留祖先符号链接、
+                # 单链接普通文件以及读取中变化的拒绝，不让可选索引弱化安全边界。
+                actual = file_digest(integration, relative)
+        except FileNotFoundError:
+            if relative == contract["index_path"] and fingerprint is None:
+                continue
+            raise DeliveryError(f"QA standards authority is missing: {relative}") from None
+        except (OSError, TaskGraphError) as exc:
+            raise DeliveryError(f"cannot safely read QA standards authority {relative}: {exc}") from exc
+        if actual != fingerprint:
+            raise DeliveryError(f"QA standards authority changed; refresh standards contract and QA: {relative}")
+    # 两份适配器无需同字节；只要求本次已核验的各自正文在决策期间保持不变。
+    for root, body in ((repo, main_bytes), (integration, candidate_bytes)):
+        if file_digest(root, selected_relative) != hashlib.sha256(body).hexdigest():
+            raise DeliveryError("selected project adapter changed during delivery checks")
     # 授权绑定整个候选版本。项目 auto 是显式配置；confirm 则必须记录用户自然语言答复。
     authorization = payload.get("authorization")
     binding = {"request_id": request_id, "target_branch": branch, "target_base": base,
@@ -433,7 +496,7 @@ def main() -> int:
                 raise DeliveryError("delivery input must be an object")
             operation = merge if args.command == "merge" else merge_check
             result = operation(repo, args.config, payload)
-    except (DeliveryError, WorktreePolicyError, TaskGraphError, QAHandoffError,
+    except (DeliveryError, WorktreePolicyError, TaskGraphError, QAHandoffError, RuntimePinError,
             OSError, UnicodeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

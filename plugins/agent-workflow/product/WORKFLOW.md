@@ -836,6 +836,30 @@ project's UI foundation; it is not a business confirmation or a task-scoped conf
 It is not the default local QA pattern for ordinary feature modules. Ordinary requests still run one unified QA
 after relevant writers complete under `qa_scope: request`.
 
+For this new-project Foundation case only, declare immutable `foundation_task_id` on the request's
+single Full QA node, pointing to its Full `production_ui` Foundation writer. Every subsequent production
+UI writer depends on Foundation, never on the QA node; QA's own dependency edges stay within the
+Foundation closure. The same native Reviewer performs two checkpoints, with no second QA node or user
+gate. `qa-ready` first waits only for Foundation-closure writers and current composed-candidate evidence.
+Export derives `qa_checkpoint: {kind: foundation, writer_ids: [...]}` and a
+`qa_checkpoint_fingerprint` binding that closure's contracts, build evidence, actual scoped contents,
+adopted standards and approvals. `qa_scope` remains `request`.
+
+After inspecting successful native completion and the validated current PASS, PM uses the exclusive
+`update` operation `accept_foundation` with original-byte task-pack/handoff SHA-256 references. It
+atomically saves a protected receipt and returns the same QA node to `DECLARED`, preserving its original
+`agent_ref`. It neither retires the Reviewer nor records `QA_PASSED`. PM still checks actual native
+completion before releasing execution occupancy. QA start, failure and ordinary state updates cannot
+release feature writers. Foundation rework, changed evidence, scope, adopted authority or approval
+invalidates its receipt; unrelated feature edits and integration HEAD changes alone do not.
+
+After this checkpoint, `qa-ready` waits for every request-closure writer and current integration evidence.
+The same Reviewer resumes with `qa_checkpoint.kind: request`, the complete UI/standards scope, and
+current bytes. Only exclusive `accept_request` can record this Foundation request's final `QA_PASSED`;
+a Foundation-stage PASS or old pack cannot close the request or authorize worktree delivery. Ordinary
+Light/Full requests without this optional reference retain their existing route and acceptance contract.
+The existing three-round recovery limit and host capacity/lock observations apply across both checkpoints.
+
 Reuse rule: reuse existing expressive capability; evaluate extraction when the same semantic pattern
 appears a second time; extraction is mandatory on the third occurrence or QA fails.
 
@@ -1081,6 +1105,9 @@ canonical `role`, stable `agent_alias`, `instance_policy: fresh`, and `context_p
 - `agent_ref`: actual native reference after dispatch, `{host: codex|claude|antigravity, agent_id: <actual-ID>}`. Record it through existing `update` after the task enters execution; once bound, it cannot be changed/cleared. Different tasks cannot share identities, and historical references do not authorize new tasks. `agent_retired: true` is irreversible and does not release active locks.
 - `state`: the scheduler's single state source: `DECLARED`, `BLOCKED`, `READY`, `RUNNING`,
   `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, `RESULT_VERIFIED`, or `FAILED`.
+- `foundation_task_id`: optional immutable reference only on a Full QA node, identifying this request's
+  Full `production_ui` Foundation writer. The two fixed checkpoints and protected receipts follow section 6;
+  initialization accepts the reference but never imports receipts or completed states.
 - `qa_scope`: required for tasks with a `role` and exactly `request`, meaning the current request's
   dependency closure rather than the entire project.
 
@@ -1120,7 +1147,9 @@ The PM, implementers, and QA share scope and stop rules from installed `xy-build
 The PM runs `qa-ready` and
 dispatches one unified `xy-qa` only after every relevant `task_type: writer` in this request's
 `qa_scope: request` reaches `BUILD_VERIFIED`. Evidence, read-only, and QA tasks do not create a
-circular writer barrier. QA reviews only the **current request dependency closure**, not all project work.
+circular writer barrier. The sole exception is the fixed Foundation checkpoint in section 6, whose first
+barrier and exported scope cover only the Foundation dependency closure; final QA still covers all writers.
+QA reviews only the **current request dependency closure**, not all project work.
 For worktree requests, `qa-ready` additionally requires successful evidence on the composed candidate.
 Final local delivery separately checks all non-QA work in this request closure is complete and each
 writer's current checkpoint is incorporated; unrelated project tasks are not a global merge barrier.
