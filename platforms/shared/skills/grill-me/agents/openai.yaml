@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grill Me"
+  short_description: "Clarify Full requirements before planning"
+  default_prompt: "Use $grill-me to pressure-test and complete these Full-task requirements."
