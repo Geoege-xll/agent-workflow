@@ -33,8 +33,11 @@ import unicodedata
 from lib import task_graph_records as records
 from lib.agent_continuation import active
 from lib.dispatch_admission import RecordView, ResourceIdentity, select_candidates, task_key
+from lib.foundation_qa import project_qa_read_only
 from lib.platform_fs import directory_lock
 from lib.task_sources import PLUGIN_ENV, PROJECT_ENV, project_root, validate_task_source
+from lib.request_scope import request_scopes
+from lib import shared_solution_records
 from lib.task_graph import TaskGraphError
 
 
@@ -90,6 +93,19 @@ def _project_directory(value: Any) -> Path:
     supplied = os.environ.get(PROJECT_ENV)
     if supplied is not None and not _same_directory(root, _absolute(supplied, directory=True)):
         raise TaskGraphError("explicit project root differs from the bridge physical project")
+    if sys.platform == "darwin":
+        # APFS 的大小写/Unicode 别名可以指向同一项目，但 resolve() 会保留调用者拼法。
+        # 从已打开的目录 fd 取内核名称，使项目 scratch、池及非 Git 准入锁落在同一物理域。
+        import fcntl
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            name = fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0]
+            canonical = _absolute(os.fsdecode(name), directory=True)
+            if not _same_directory(root, canonical):
+                raise TaskGraphError("project root changed during canonical name lookup")
+            root = canonical
+        finally:
+            os.close(fd)
     return root
 
 
@@ -265,6 +281,31 @@ def _query(payload: dict, root: Path, command: str) -> dict:
     return result
 
 
+def authoritative_tasks(payload: dict) -> Any:
+    """Full 的执行权威在整张图，Light 的执行权威在原单包；池与显式清单共用识别边界。"""
+    if not isinstance(payload, dict):
+        raise TaskGraphError("authoritative record must be a JSON object")
+    if "task" in payload:
+        if not isinstance(payload["task"], dict) or payload["task"].get("workflow_level") != "Light":
+            raise TaskGraphError("Full handoff packs cannot replace an authoritative graph")
+        return [payload["task"]]
+    # 完整任务字段由原 helper 拒绝或接受；调用者在校验成功之后才遍历成员。
+    return payload.get("tasks")
+
+
+def execution_root(payload: dict, task: dict, root: Path) -> Path:
+    """Writer 使用本任务的工作树，QA 使用原请求集成树，普通任务属于当前项目根。"""
+    integration = (payload.get("worktree_integrations", {}).get(task["request_id"])
+                   if task["task_type"] == "qa" else None)
+    binding = integration or task.get("execution_workspace")
+    expected = _absolute(binding["root"], directory=True) if binding else root
+    # 同一个目录名称不足以证明工作树归属。池登记、查看和显式准入都核对 Git 公共根。
+    if (not _same_directory(expected, root)
+            and not _same_directory(Path(_git_identity(expected)), Path(_git_identity(root)))):
+        raise TaskGraphError("execution worktree does not belong to the actual project")
+    return expected
+
+
 def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]]:
     """安全读全部指定 SHA 后，逐记录调用原 validate/ready/qa-ready；不接受验证旗标。"""
     _object(manifest, {"schema_version", "project_root", "records", "capacity"}, "admission manifest")
@@ -292,14 +333,7 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
         if records.digest(body) != _sha(descriptor["sha256"]):
             raise TaskGraphError(f"record fingerprint changed: {path}")
         payload = records.decode(body)
-        if not isinstance(payload, dict):
-            raise TaskGraphError("authoritative record must be a JSON object")
-        if "task" in payload:
-            if not isinstance(payload["task"], dict) or payload["task"].get("workflow_level") != "Light":
-                raise TaskGraphError("Full handoff packs cannot replace an authoritative graph")
-            tasks = [payload["task"]]
-        else:
-            tasks = payload.get("tasks")
+        tasks = authoritative_tasks(payload)
         # 原 ready 与 validate 共用完整 schema/资源/规范/图/worktree 校验入口；
         # 先在当前物理同包内完成真实 ready，再投影物理执行根，避免额外启动一轮
         # 重复 validate。结果仅用于本快照候选，不能代替后续 SHA 重读或原 update。
@@ -313,21 +347,15 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
         roots = descriptor["execution_roots"]
         if not isinstance(roots, dict) or set(roots) != {task["id"] for task in tasks}:
             raise TaskGraphError("execution_roots must exactly cover authoritative task IDs")
+        # 已登记成员即使被误漏也不能让另一成员的旧批准恢复候选资格。就绪只过滤用到
+        # 该决定的任务；明确的 claim 仍在持锁登记时要求提交完整清单。
+        eligible = set(shared_solution_records.filter_ready(path, tasks, eligible))
         checked_roots, resource_paths = {}, {}
         for task in tasks:
             execution = _absolute(roots[task["id"]], directory=True)
-            workspace = task.get("execution_workspace")
-            integration = (payload.get("worktree_integrations", {}).get(task["request_id"])
-                           if task["task_type"] == "qa" else None)
-            # execution_workspace 属于 Writer，QA 的审查树由其原请求集成记录
-            # 决定；不得要求 QA 伪造 Writer 字段，也不能借 manifest 改绑根。
-            binding = integration or workspace
-            expected = _absolute(binding["root"], directory=True) if binding else root
+            expected = execution_root(payload, task, root)
             if not _same_directory(execution, expected):
                 raise TaskGraphError("execution root differs from original task binding")
-            if (not _same_directory(execution, root)
-                    and not _same_directory(Path(_git_identity(execution)), Path(_git_identity(root)))):
-                raise TaskGraphError("execution worktree does not belong to the actual project")
             resource_paths[task["id"]] = tuple(_resource_identity(execution / owned, directory_modes)
                                                 for owned in task.get("owned_paths", ()))
             checked_roots[task["id"]] = str(execution)
@@ -344,17 +372,14 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
                 item for item in qa_candidate["tasks"] if item["id"] == task["id"]))
             # 与原 update 的 QA 准入完全同义：仅临时作为 read_only 复用门禁/锁，
             # 发布仍使用原 QA 合同，由原 update 再做一次 request QA barrier。
-            selected["task_type"] = "read_only"
-            selected.pop("foundation_task_id", None)
-            selected.pop("foundation_receipt", None)
-            selected.pop("request_receipt", None)
-            selected.pop("qa_review_revision", None)
-            selected.pop("qa_scope_ref", None)
-            selected.pop("qa_scope_fingerprint", None)
+            project_qa_read_only(selected)
             if "task" in qa_candidate:
                 # 只有临时就绪投影去掉QA专属包元数据；原QA包、正式claim和唯一
                 # Reviewer的完整reviewed_ui_changes仍由原记录helper验证并保留。
                 qa_candidate.pop("reviewed_ui_changes", None)
+                qa_candidate.pop("reviewed_solution_decisions", None)
+                qa_candidate.pop("reviewed_business_confirmations", None)
+                qa_candidate.pop("qa_document_base", None)
                 qa_candidate.pop("qa_checkpoint", None)
                 qa_candidate.pop("qa_checkpoint_fingerprint", None)
             if task["id"] in _query(qa_candidate, root, "ready")["ready"]:
@@ -364,6 +389,7 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
         external_paths = tuple(set(payload.get("active_paths", ())) - known_paths)
         views.append(RecordView(identity, descriptor["sha256"], str(root), tuple(tasks), checked_roots,
                                 frozenset(eligible), semantic_scope=semantic_scope,
+                                request_scopes=request_scopes(payload), approved_gates=frozenset(payload.get("approved_gates", [])),
                                 external_paths=external_paths,
                                 external_semantic_locks=tuple(set(payload.get("active_semantic_locks", ())) - known_locks),
                                 resource_paths=resource_paths,
@@ -396,8 +422,20 @@ def _recheck(views: tuple[RecordView, ...]) -> None:
             raise TaskGraphError("record fingerprint changed during admission; no claim may be retried blindly")
 
 
+def claim_target(receipt: dict) -> dict:
+    """绑定或释放只能引用真实领取协议的目标和版本；宿主返回的 ID 另行核对。"""
+    _object(receipt, {"schema_version", "status", "target", "prior_state", "previous_sha256", "claimed_sha256"}, "claim receipt")
+    if type(receipt["schema_version"]) is not int or receipt["schema_version"] != 1 or receipt["status"] != "claimed":
+        raise TaskGraphError("operation requires a v1 claimed receipt")
+    _sha(receipt["previous_sha256"])
+    _sha(receipt["claimed_sha256"])
+    if not isinstance(receipt["prior_state"], str) or receipt["prior_state"] not in {"DECLARED", "BLOCKED", "READY"}:
+        raise TaskGraphError("claim receipt has invalid prior_state")
+    return _object(receipt["target"], {"record", "request_id", "task_id"}, "target")
+
+
 def admission(command: str, manifest: dict, target: dict | None = None,
-              receipt: dict | None = None, outcome: str | None = None) -> dict:
+              receipt: dict | None = None, outcome: str | None = None, *, freeze_prototype=None) -> dict:
     """执行 view/claim/release；错误抛 TaskGraphError，CLI 映射为 JSON stderr/退出2。
 
     claim 成功返回的 receipt 只关联原字节和原任务，不是宿主启动凭据。release 要求
@@ -405,7 +443,7 @@ def admission(command: str, manifest: dict, target: dict | None = None,
     或 RUNNING 前提不符而拒绝。非协作手工编辑应暂停；原 CAS 不承诺跨文件事务。
     """
     _object(manifest, {"schema_version", "project_root", "records", "capacity"}, "admission manifest")
-    if command not in {"view", "claim", "release"}:
+    if command not in {"view", "claim", "release", "bind-solutions"}:
         raise TaskGraphError("unknown admission command")
     if command == "view":
         if target is not None or receipt is not None or outcome is not None:
@@ -419,18 +457,17 @@ def admission(command: str, manifest: dict, target: dict | None = None,
         _, views, sources = _load(manifest)
         if any(not _same_directory(Path(view.semantic_scope), Path(locked_scope)) for view in views):
             raise TaskGraphError("project Git coordination identity changed during admission")
+        if command == "bind-solutions":
+            if any(value is not None for value in (target, receipt, outcome)):
+                raise TaskGraphError("bind-solutions accepts only manifest")
+            _recheck(views)
+            count = shared_solution_records.bind(views)
+            return {"schema_version": 1, "status": "bound", "changed_decisions": count}
         projection = select_candidates(views, manifest["capacity"])
         if command == "release":
             if target is not None or outcome not in {"definitely_not_created", "unknown"}:
                 raise TaskGraphError("release requires receipt and explicit native creation outcome")
-            _object(receipt, {"schema_version", "status", "target", "prior_state", "previous_sha256", "claimed_sha256"}, "claim receipt")
-            if type(receipt["schema_version"]) is not int or receipt["schema_version"] != 1 or receipt["status"] != "claimed":
-                raise TaskGraphError("release requires a v1 claimed receipt")
-            _sha(receipt["previous_sha256"])
-            _sha(receipt["claimed_sha256"])
-            if not isinstance(receipt["prior_state"], str) or receipt["prior_state"] not in {"DECLARED", "BLOCKED", "READY"}:
-                raise TaskGraphError("claim receipt has invalid prior_state")
-            target = receipt["target"]
+            target = claim_target(receipt)
         elif receipt is not None or outcome is not None:
             raise TaskGraphError("claim accepts only target")
         _object(target, {"record", "request_id", "task_id"}, "target")
@@ -438,25 +475,58 @@ def admission(command: str, manifest: dict, target: dict | None = None,
         if len(matches) != 1:
             raise TaskGraphError("target must identify exactly one authoritative task")
         view, task = matches[0]
+        from lib.task_graph_cli import is_standalone_prototype, publish_task_update
+        prototype_claim = command == "claim" and is_standalone_prototype(sources[view.path])
         if command == "claim":
+            if prototype_claim and freeze_prototype is None:
+                raise TaskGraphError("standalone prototype claim requires the registered PM task pool")
             if target not in projection["candidates"]:
                 raise TaskGraphError("target is not an admitted spawn candidate")
+            # 旧 Light/Full 的首个共享领取会原子登记当前事项的显式成员。发布仍只改目标，
+            # 登记之后，旧 update/task 也会看见相同成员，即使它们没有收到 manifest。
+            shared_solution_records.bind(views, selected=shared_solution_records.decision_keys(task))
             state = "RUNNING"
         else:
-            if (view.sha256 != receipt["claimed_sha256"] or task["state"] != "RUNNING"
+            # 同图中别的任务可先行变更。新领取绑定本任务领取前的 SHA 和原待派状态，
+            # 旧版无此绑定时仍须核对领取整图 SHA；旧撤回已将被撤回的 SHA 保存在原件中。
+            stopping = task["state"] == "STOP_REQUESTED"
+            if "claim_basis_sha256" in task:
+                matching = (task["claim_basis_sha256"] == receipt["previous_sha256"]
+                            and task.get("claim_prior_state") == receipt["prior_state"])
+            else:
+                previous = task.get("withdrawal", {}).get("claimed_sha256") if stopping else view.sha256
+                matching = previous == receipt["claimed_sha256"]
+            if (not matching or task["state"] not in {"RUNNING", "STOP_REQUESTED"}
                     or "agent_ref" in task or task.get("agent_retired")):
-                raise TaskGraphError("release requires unchanged, unbound, non-retired RUNNING claim")
+                raise TaskGraphError("release requires unchanged, unbound, non-retired RUNNING claim or its matching stop request")
             if outcome == "unknown":
                 _recheck(views)
                 return {"schema_version": 1, "status": "retained", "target": target,
                         "sha256": view.sha256, "reason": "native_creation_unknown; verify before further action"}
-            state = receipt["prior_state"]
+            state = "WITHDRAWN" if stopping else receipt["prior_state"]
         _recheck(views)
-        patch = {"tasks": {task["id"]: {"set": {"state": state}}}}
-        updated = _helper(sources[view.path], root,
-                          ["update", "--input", view.path, "--root", str(root), "--patch", "-",
-                           "--expect-sha256", view.sha256],
-                          json.dumps(patch, ensure_ascii=False).encode("utf-8"))
+        if command == "claim":
+            operation = {"claim": {"previous_sha256": view.sha256}}
+        elif state == "WITHDRAWN":
+            version = "previous_sha256" if "claim_basis_sha256" in task else "claimed_sha256"
+            operation = {"confirm_uncreated": {version: receipt[version], "outcome": outcome}}
+        elif "claim_basis_sha256" in task:
+            operation = {"release_claim": {"previous_sha256": receipt["previous_sha256"],
+                                           "prior_state": receipt["prior_state"], "outcome": outcome}}
+        else:
+            operation = {"set": {"state": state}}
+        patch = {"tasks": {task["id"]: operation}}
+        if prototype_claim:
+            freeze_prototype(view.path, view.sha256)
+            source = Path(view.path)
+            body = records.read_record(source)
+            updated = publish_task_update(source, root, sources[view.path], body, view.sha256, patch,
+                                          pool_operation=True)
+        else:
+            updated = _helper(sources[view.path], root,
+                              ["update", "--input", view.path, "--root", str(root), "--patch", "-",
+                               "--expect-sha256", view.sha256],
+                              json.dumps(patch, ensure_ascii=False).encode("utf-8"))
         if set(updated) != {"updated", "sha256"} or updated.get("updated") is not True:
             raise TaskGraphError("record helper did not publish the state transition; inspect original record")
         _sha(updated["sha256"])
@@ -470,7 +540,7 @@ def admission(command: str, manifest: dict, target: dict | None = None,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("view", "claim", "release"))
+    parser.add_argument("command", choices=("view", "claim", "release", "bind-solutions"))
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--record")
     parser.add_argument("--request-id")

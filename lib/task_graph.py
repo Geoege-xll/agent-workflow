@@ -17,7 +17,8 @@ class TaskGraphError(ValueError):
     """任务图、运行时锁或容量输入违反编排契约。"""
 
 
-VALID_STATES = frozenset(
+WITHDRAWAL_STATES = frozenset({"STOP_REQUESTED", "WITHDRAWN"})
+VALID_STATES = WITHDRAWAL_STATES | frozenset(
     {"DECLARED", "BLOCKED", "READY", "RUNNING", "BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED", "RESULT_VERIFIED", "FAILED"}
 )
 VALID_TASK_TYPES = frozenset({"writer", "evidence", "read_only", "qa"})
@@ -25,6 +26,7 @@ SATISFIED_DEPENDENCY_STATES = frozenset({"BUILD_VERIFIED", "QA_SCOPE_READY", "QA
 SEMANTIC_LOCK_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]*$")
 EXCEPTIONAL_GATE_RE = re.compile(r"^exceptional:[a-z0-9][a-z0-9._-]*$")
 VISUAL_GATE_RE = re.compile(r"^visual_approved:[^@\s]+@[A-Fa-f0-9]{8,128}$")
+SOLUTION_GATE_RE = re.compile(r"solution_approved:[a-z0-9][a-z0-9._-]*@[0-9a-f]{64}\Z")
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ def _paths_overlap(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
 def _validate_gate(gate: str, task_id: str) -> None:
     if gate in {"requirements_approved", "platform_security_prompt"}:
         return
-    if VISUAL_GATE_RE.fullmatch(gate) or EXCEPTIONAL_GATE_RE.fullmatch(gate):
+    if VISUAL_GATE_RE.fullmatch(gate) or SOLUTION_GATE_RE.fullmatch(gate) or EXCEPTIONAL_GATE_RE.fullmatch(gate):
         return
     raise TaskGraphError(f"task {task_id} has unsupported gate: {gate}")
 
@@ -368,6 +370,16 @@ def qa_ready(tasks: Iterable[Task], request_id: str, *, writer_ids: set[str] | N
         if not writer_ids or not writer_ids <= closure or any(indexed[key].task_type != "writer" for key in writer_ids):
             raise TaskGraphError("QA checkpoint writer IDs must be non-empty writers in the request closure")
         closure = writer_ids
+    # 撤回不是成功依赖。只阻断当前检查点及其实际前置项，不阻塞无关请求。
+    checkpoint = set(closure)
+    if writer_ids is not None:
+        for key in writer_ids:
+            checkpoint.update(_transitive_dependencies(indexed, key))
+    if any(indexed[key].state in WITHDRAWAL_STATES for key in checkpoint) or any(
+        task.task_type == "qa" and task.request_id == request_id and task.state in WITHDRAWAL_STATES
+        for task in indexed.values()
+    ):
+        return False
     writers = [indexed[task_id] for task_id in closure if indexed[task_id].task_type == "writer"]
     if not writers:
         return False

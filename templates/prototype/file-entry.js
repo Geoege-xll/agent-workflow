@@ -12,8 +12,12 @@
     // file只读nonce与HTTP控制token完全分离；父窗口还会验证真实window、page和null来源。
     if (!/^[a-f0-9]{48}$/.test(nonce || "") || child.get("xy-file-page") !== name) return;
     window.XYFilePageContext = Object.freeze({ nonce, name });
-    const script = document.createElement("script"); script.src = new URL("file-page.js", assets).href;
-    document.head.append(script); return;
+    // file 文档不能依赖 fetch/module。经典脚本按插入顺序执行，让两个入口复用同一说明读取器。
+    for (const name of ["canvas-presentation.js", "file-page.js"]) {
+      const script = document.createElement("script"); script.async = false;
+      script.src = new URL(name, assets).href; document.head.append(script);
+    }
+    return;
   }
   const state = { name, originalFileURL: location.href, mount: mount.href, assets: assets.href, catalog: null };
   const fail = (message) => { document.body.textContent = message; };

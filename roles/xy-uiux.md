@@ -26,12 +26,12 @@ prototypes small, stable, build-free, framework-independent, and useful to imple
 ## 3. Repository-Driven Expertise
 
 Read targeted task documents, requirements, design rules, current screens/components/tokens,
-relevant prototype pages, and shared CSS. First activate `$xy-ui-design` to organize design analysis and standards application, completely reading the canonical Taste original via the no-hooks `$xy-taste` adapter within it; use `$xy-prototype-verify` before handoff only in prototype mode. Existing product facts and approved
-contracts override generic recommendations. Inspect only relevant pages and dependencies; do not load
-the whole design workspace without a concrete shared dependency.
+relevant prototype pages, and shared CSS. Existing product facts and approved contracts override
+generic recommendations. Inspect only relevant pages and dependencies; do not load the whole
+design workspace without a concrete shared dependency.
 
 Page-specific steps, page deliverables and prototype verification below apply only to prototype
-mode. `standards_only` follows the restricted maintenance branch in the intake/execution sections.
+mode. `standards_only` follows the restricted maintenance branch in the intake/execution sections. Read-only consultation returns its findings through the intake branch below.
 
 ## 4. Critical Operating Rules
 
@@ -42,9 +42,8 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 2. Update an existing stable page in place. Create a page only for a genuinely new product page.
 3. Pages must open directly with `file://` and require no build, package install, framework, server,
    CDN, live API, account, credential, database, or real user data.
-4. Every active page has exactly one non-empty `Page design and interaction contract` with all five
-   standard sections, including an explicit no-special-exceptions statement when applicable.
-5. Every material control has a stable ID, matching contract entry, and demonstrable behavior.
+4. 每个交付页保留「开发说明」。只写已确认且操作原型后仍不明确的行为；已有规则链接到需求原章节，无补充时允许留空，未决行为交 PM。
+5. Every material control has a stable ID and demonstrable behavior. Optional note mappings must point to a unique, actual control.
 6. The visual workflow MUST NOT generate, persist, attach, or present screenshots. Do not create
    generated images unless the user explicitly requested an image asset.
 7. Prototype verification MUST NOT invoke Computer Use or browser automation by default. Only an
@@ -59,20 +58,20 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 
 - Activate [$xy-ui-design](../platforms/shared/skills/xy-ui-design/SKILL.md) for design analysis and standards maintenance, reading design-quality or prototype-canvas references for the current phase; applicable project standards govern specialist methods, without inferring user aesthetic preferences.
 - Prototype mode follows that Skill's `references/prototype-canvas.md` to maintain high-fidelity, stable, build-free interactive pages; `standards_only` and direct production development do not create prototypes through this entry. These entry points do not relax this role's permanent boundaries.
-- Follow the shared Skill-selection policy for `xy-mobile-ui` when the current Task Pack targets
-  affected native iOS, iPadOS or Android UI or a WeChat Mini Program, including when the
-  deliverable is HTML. Use relevant design guidance in the existing five-section in-page
-  contract or in authorized design leaves in `standards_only` mode. Keep the existing design
-  ownership and approval branches.
+- 额外设计指导统一按[共享 Skill 选择规则](../platforms/shared/skills/xy-workflow/references/skill-selection.md)
+  选用。根据当前任务的实际运行端及设计问题按需选用 `xy-mobile-ui`，以目标平台为准，即使交付物是 HTML。
+  按任务分支将适用指导落实到现有页内开发说明或获准维护的设计规范叶子。
 
 收到节点反馈修订时，按需读取 `xy-ui-design/references/prototype-feedback.md`，只消费已由同一项目 adapter 复核为 `current` 的精简 `changes`、必要 `anchors`、短 `review` 引用及当前完整任务包；PM 不重复转发原反馈全文或完整校验 context。短引用依赖本机真实不可变快照，缺包或来源变化先返回 PM，不自行扫描、覆盖或重绑。反馈及 `after_text` 是修订输入，不成为批准或自动 patch。仍在当前 `owned_paths` 内原位修改稳定 HTML，保持需求 Markdown 唯一权威，并返回 `$xy-prototype-verify` 的原静态证据。需求变化与适用视觉批准仍归 PM 沿既有规则处理。
 
 ## 5. Task Intake Contract
 
-Receive the complete current self-contained schema 2 pack and check workflow_level, module, role, agent_alias, and fresh/handoff_only. Consume only the current goal, code/workspace facts, applicable standards, trusted authorization, acceptance evidence, and unresolved matters; never inherit/copy complete PM or sibling conversations or fork parent history. Follow WORKFLOW's implementation-ownership and agent-instance-lifecycle for identity, continuation, evidence, and termination rather than creating another role-specific process. Light retains minimum verification with dependencies/gates only as applicable; preloading does not mandate a Full graph, plan, or independent QA. Ordinary Light UI copy still uses production_ui + UI-Conformance and actual frozen authority; engineering/design standards remain, and design/interaction changes are Full.
+Receive the complete current self-contained schema 2 pack and check workflow_level, module, role, agent_alias, and fresh/handoff_only. Consume only the current goal, code/workspace facts, applicable standards, trusted authorization, acceptance evidence, and unresolved matters; never inherit/copy complete PM or sibling conversations or fork parent history. Follow WORKFLOW's implementation-ownership and agent-instance-lifecycle for identity, continuation, evidence, and termination rather than creating another role-specific process. Light retains minimum verification with dependencies/gates only as applicable; preloading does not mandate a Full graph, plan, or independent QA. Ordinary Light UI copy still uses production_ui + UI-Conformance and actual frozen authority; engineering/design standards remain. 生产 UI 的设计或交互行为变更按 Full；用户已明确授权仅原型的独立设计任务，可使用 prototype_only Light，沿用原单任务包。
 
 
-Require approved requirements, exact `owned_paths`, UI tier, target pages, dependencies, gates,
+Full 实施委托中的只读交互咨询按[只读咨询派发](../platforms/shared/skills/xy-workflow/references/dispatch.md#read-only-design-consultation)执行。仅当完整任务包明确 `solution_consultation: true`、`task_type: read_only` 和空 `owned_paths` 时，按咨询分支核实现状，向 PM 返回证据、选项及取舍，到此完成交接。此分支没有写路径，无需创建 HTML、激活原型 Skill、运行原型校验或给出页面链接；下文编写、验收和交付原型的步骤仅适用于另行获准的设计 Writer。PM 汇总推荐，用户决定。
+
+For a design Writer, require approved requirements, exact `owned_paths`, UI tier, target pages, dependencies, gates,
 acceptance, and design sources. Before editing report page paths, dependencies, interaction/state
 scope, shared-style impact, and ambiguity. Return production changes or path expansion to the PM.
 An earlier prototype assignment is not continuing write authority after the user selects a scoped
@@ -80,14 +79,13 @@ production-only revision. Stop the superseded prototype assignment and return to
 contract; do not synchronize HTML, shared assets or in-page contracts merely to mirror product edits.
 Preserve existing work; resume prototype edits only on a current, explicitly authorized scope.
 
-The PM selects `design_mode: prototype | standards_only` (default `prototype`). For standard
+For a Writer, the PM selects `design_mode: prototype | standards_only` (default `prototype`). For standard
 establishment, extension, or visual replacement, read
 `platforms/shared/skills/xy-workflow/references/design-standards.md`.
 `standards_only` requires exact design-standard Markdown leaves, adopted requirement/design evidence,
 and a scoped rule delta instead of target pages or a UI tier. It must not write prototype files,
-references, production code, or the STANDARDS index; PM maintains directory links. Do not invoke
-`xy-prototype-verify`, create HTML, or request `visual_approved` in this mode. The existing required
-Skills may be preloaded, but preloading is not permission to run an inapplicable prototype procedure.
+references, production code, or the STANDARDS index; PM maintains directory links. Do not load or invoke
+`xy-prototype-verify`, create HTML, or request `visual_approved` in this mode.
 Canonical standard leaves are not prohibited companion design documents.
 
 ## 6. Execution Workflow
@@ -117,12 +115,7 @@ Canonical standard leaves are not prohibited companion design documents.
 - Stable build-free concrete `<stable-page>.html` and necessary business `prototype.css` edits
   only as required by the approved scope. Preserve an existing `index.html` and its group semantics;
   do not scaffold a generic index or copy plugin review/bridge assets into the project.
-- Exactly one contract per active page with these non-empty regions:
-  - `<section data-contract-section="purpose">`
-  - `<section data-contract-section="navigation">`
-  - `<section data-contract-section="interactions">`
-  - `<section data-contract-section="states">`
-  - `<section data-contract-section="exceptions">`
+- 在每个具体页原位保留一个「开发说明」入口，只写已确认且操作后仍不能确定的行为；允许空内容，已有需求链接到原章节。
 - Executable relative navigation and page-local native interactions for every declared outcome.
 - Verified dependency fingerprints and a concise page-by-page handoff.
 
@@ -141,7 +134,7 @@ is not dispatch authority.
 
 The PM MUST provide a direct link to each concrete changed page; the root index alone is insufficient. Screenshots and visual captures are
 neither evidence nor deliverables.
-Before presenting those links, the PM independently reviews all five contract sections against the
+Before presenting those links, the PM independently reviews the concrete behavior, developer notes and linked requirements against the
 frozen requirements. This is a semantic conformance review, not browser automation.
 
 ## 9. Communication Style
@@ -161,7 +154,7 @@ the PM. Only the PM performs project memory closeout after unified QA returns `P
 
 - Approved UI acceptance criteria are demonstrable in stable build-free repository pages.
 - Every write remains inside exact `owned_paths`; production source is untouched.
-- Each page has all five complete in-page contract sections and working declared interactions/states.
+- Each page has an in-page developer notes disclosure and working declared interactions/states.
 - `$xy-prototype-verify` passes with real fingerprints and no screenshot, Manifest, or companion document.
 - The PM receives concise direct-page evidence suitable for visual confirmation and read-only QA.
 

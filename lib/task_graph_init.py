@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Callable
+from lib.solution_confirmation import bind_decisions
+from lib.verification_inputs import validate_command
 
 try:
     from lib import task_graph_records as records
@@ -37,7 +39,7 @@ except ImportError:
 
 INPUT_FIELDS = {
     "schema_version", "runtime_binding",
-    "request_id", "requirements_fingerprint", "capacity", "approved_gates",
+    "request_id", "request_scope", "requirements_fingerprint", "capacity", "approved_gates",
     "active_paths", "active_semantic_locks", "adapter_path", "standards", "tasks",
 }
 STANDARDS_FIELDS = {
@@ -50,8 +52,11 @@ TASK_FIELDS = {
     "blocks", "gates", "owned_paths", "semantic_locks", "input_contracts",
     "output_contracts", "acceptance_evidence", "verification_commands", "ui_change",
     "required_skills", "audit_surfaces", "standards_exceptions", "selected_standards", "foundation_task_id",
+    "solution_decisions", "solution_consultation", "additional_business_confirmation",
 }
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
 def _object(value: Any, label: str, allowed: set[str], required: set[str]) -> dict[str, Any]:
     """白名单既约束精简格式，也阻止把旧图完成态、执行身份或权限容器带入新图。"""
     if not isinstance(value, dict):
@@ -77,20 +82,51 @@ def _text(value: Any, label: str) -> str:
 
 
 def _verification(value: Any, label: str) -> None:
-    """保留现有命令字符串和 run/expected 对象两种任务包表达，不执行命令。"""
+    """复用单包校验保留两种命令表达与可选文件输入，初始化不执行命令。"""
     if not isinstance(value, list) or not value:
         raise TaskGraphError(f"{label} must contain verification commands")
     for position, command in enumerate(value):
+        validate_command(command, f"{label}[{position}]")
+
+
+def _selected_leaf_documents(value: Any, leaves: dict[str, dict[str, Any]], label: str) -> list[dict[str, Any]]:
+    """将每个已选规范叶转换为读取合同，兼容原来的路径数组及带理由的显式决定。"""
+    if not isinstance(value, list):
+        raise TaskGraphError(f"{label} must be an array of leaf selections")
+    documents = []
+    seen: set[str] = set()
+    for position, item in enumerate(value):
         item_label = f"{label}[{position}]"
-        if isinstance(command, str):
-            _text(command, item_label)
+        if isinstance(item, str):
+            path = _text(item, item_label)
+            mode = "targeted"
+            reason = "按本任务选定的规则 ID 阅读适用条款、例外与直接引用。"
+            sections = []
         else:
-            _object(command, item_label, {"run", "expected"}, {"run", "expected"})
-            _text(command["run"], f"{item_label}.run")
-            _text(command["expected"], f"{item_label}.expected")
+            _object(item, item_label, {"path", "mode", "reason", "sections_or_queries"}, {"path", "mode", "reason"})
+            path = _text(item["path"], f"{item_label}.path")
+            mode = _text(item["mode"], f"{item_label}.mode")
+            if mode not in ("targeted", "full"):
+                raise TaskGraphError(f"{item_label}.mode must be targeted or full for a selected leaf")
+            reason = _text(item["reason"], f"{item_label}.reason")
+            sections = _strings(item.get("sections_or_queries", []), f"{item_label}.sections_or_queries")
+        if path in seen:
+            raise TaskGraphError(f"{label} must not duplicate paths: {path}")
+        seen.add(path)
+        if path not in leaves:
+            raise TaskGraphError(f"{item_label} selects a leaf absent from standards: {path}")
+        leaf = leaves[path]
+        rule_ids = leaf["rule_ids"]
+        # 旧路径写法已经采用此叶登记的全部 ID。附加章节仅补充定位信息，不能
+        # 替换已选条款；显式全文决定则直接保留 PM 的理由及其提供的关注点。
+        if mode == "targeted":
+            sections = list(dict.fromkeys([*rule_ids, *sections]))
+        documents.append({"path": path, "mode": mode, "reason": reason, "sections_or_queries": sections,
+                          "rule_ids": rule_ids.copy(), "content_fingerprint": leaf["content_fingerprint"]})
+    return documents
 
 
-def _adapter_docs(root: Path, relative: str) -> tuple[dict[str, str], str]:
+def adapter_docs(root: Path, relative: str) -> tuple[dict[str, str], str]:
     """复用适配器现有 docs 解析与路径校验；不发现业务模块或读取完整规范树。"""
     expected = records.file_digest(root, relative)
     body = records.read_record(root / relative)
@@ -154,7 +190,7 @@ def initialize(decisions: Any, root: Path, output: Path,
         adapter = source.get("adapter_path", "project.yaml")
         if adapter not in ("project.yaml", ".awf/project.yaml"):
             raise TaskGraphError("adapter_path must be project.yaml or .awf/project.yaml")
-        docs, adapter_fingerprint = _adapter_docs(root, adapter)
+        docs, adapter_fingerprint = adapter_docs(root, adapter)
         sources[adapter] = adapter_fingerprint
         standards.update(index_path=docs["standards"], root=docs["standards_root"].rstrip("/"))
     elif "adapter_path" in source:
@@ -168,6 +204,7 @@ def initialize(decisions: Any, root: Path, output: Path,
         _object(leaf, label, {"path", "domain", "rule_ids"}, {"path", "domain", "rule_ids"})
         path = _text(leaf["path"], f"{label}.path")
         _text(leaf["domain"], f"{label}.domain")
+        rule_ids = _strings(leaf["rule_ids"], f"{label}.rule_ids", nonempty=True)
         if path in indexed_leaves:
             raise TaskGraphError("standards.leaves must not duplicate paths")
         leaf["content_fingerprint"] = fingerprint(path)
@@ -183,7 +220,7 @@ def initialize(decisions: Any, root: Path, output: Path,
             matches = STANDARD_RULE_RE.findall(text)
             if errors or not matches or re.findall(r"(?im)^- Domain: (engineering|design)\s*$", text) != [leaf["domain"]]:
                 raise TaskGraphError(f"selected project standards must contain valid rules and matching domain: {path}")
-            if set(_strings(leaf["rule_ids"], f"{label}.rule_ids")) - {rule_id for rule_id, _severity in matches}:
+            if set(rule_ids) - {rule_id for rule_id, _severity in matches}:
                 raise TaskGraphError(f"selected project standards claims unknown rule IDs: {path}")
         indexed_leaves[path] = leaf
     # 缺失索引只在没有项目规则叶时合法。保留配置路径用于以后新增专项规范；
@@ -216,6 +253,9 @@ def initialize(decisions: Any, root: Path, output: Path,
 
     graph = {key: copy.deepcopy(source[key]) for key in
              ("schema_version", "request_id", "capacity", "requirements_fingerprint") if key in source}
+    if "request_scope" in source:
+        # init 只组装当前请求；多请求快照按 request_id 取值，独立请求不会继承它。
+        graph["request_scope"] = {request_id: source["request_scope"]}
     if "requirements_fingerprint" in graph and (
             not isinstance(graph["requirements_fingerprint"], str)
             or not SHA256_RE.fullmatch(graph["requirements_fingerprint"])):
@@ -234,7 +274,8 @@ def initialize(decisions: Any, root: Path, output: Path,
         for field in ("id", "task_type", "role", "surface_kind", "design_mode"):
             if field in task:
                 _text(task[field], f"{label}.{field}")
-        selection = _strings(task.pop("selected_standards", []), f"{label}.selected_standards")
+        documents = _selected_leaf_documents(task.pop("selected_standards", []), indexed_leaves,
+                                             f"{label}.selected_standards")
         if task["task_type"] == "writer":
             # 合同内容与适用规则都是 PM 决定；初始化只拒绝缺失，绝不生成替代需求。
             for field in ("goal", "role", "surface_kind"):
@@ -243,6 +284,7 @@ def initialize(decisions: Any, root: Path, output: Path,
                 _strings(task.get(field), f"{label}.{field}", nonempty=True)
             _verification(task.get("verification_commands"), f"{label}.verification_commands")
         task.update(request_id=request_id, state="DECLARED")
+        bind_decisions(task)
         for field in ("depends_on", "blocks", "semantic_locks"):
             task.setdefault(field, [])
         if "role" in task:
@@ -252,23 +294,23 @@ def initialize(decisions: Any, root: Path, output: Path,
             audit.append("standards-conformance")
         if "role" in task or audit:
             task["audit_surfaces"] = audit
-        if task["task_type"] == "writer" or selection:
+        if task["task_type"] == "writer" or documents:
             # 选择一条叶引用即显式采用该叶中 PM 已列明的规则集；不按文件后缀、
             # 技术栈或角色选择叶子，也不把 required_* 自动补进选择集合。
             if task["task_type"] == "writer":
                 domains = ("design",) if task["surface_kind"] == "design_ui" else ("engineering", "design") if task["surface_kind"] == "production_ui" else ("engineering",)
                 for domain in domains:
-                    if not any(builtin_source_path(path) is not None and source_domain(path, standards["root"]) == domain for path in selection):
+                    if not any(builtin_source_path(doc["path"]) is not None and source_domain(doc["path"], standards["root"]) == domain for doc in documents):
                         raise TaskGraphError(f"{label} new init requires a selected builtin {domain} standards source")
-            documents = [{"path": standards["index_path"], "rule_ids": []}] if standards["index_fingerprint"] is not None else []
-            for path in selection:
-                if path not in indexed_leaves:
-                    raise TaskGraphError(f"{label} selects a leaf absent from standards: {path}")
-                documents.append({"path": path, "rule_ids": copy.deepcopy(indexed_leaves[path]["rule_ids"])})
+            if standards["index_fingerprint"] is not None:
+                # 索引负责发现适用来源。只搜已选叶名会漏掉其他适用项，而且项目索引
+                # 未约定统一的章节名；保留完整索引及真实依据，正文仍按各叶的决定读取。
+                documents.insert(0, {"path": standards["index_path"], "mode": "full",
+                                     "reason": "通读项目规范索引，核对所有入口的适用范围与例外，检查本任务是否漏选规范。",
+                                     "sections_or_queries": [], "rule_ids": [],
+                                     "content_fingerprint": standards["index_fingerprint"]})
             for document in documents:
-                document.update(mode="full", reason="PM 明确选择本任务完整读取并遵守此文档",
-                                sections_or_queries=[], applies_to=copy.deepcopy(task["owned_paths"]),
-                                content_fingerprint=fingerprint(document["path"]))
+                document["applies_to"] = copy.deepcopy(task["owned_paths"])
             task["controlled_document_access"] = {"adapter": adapter, "documents": documents}
         tasks.append(task)
     graph["tasks"] = tasks

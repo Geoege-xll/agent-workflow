@@ -1,10 +1,17 @@
 /* 双入口只维护工具布局差异、生产覆盖层与连接状态。共享材质由 tool-theme.css 提供；
  * 本文件始终留在父工具文档，不得随设计稿响应注入 iframe，业务字号/颜色/布局不受影响。 */
+/* 刷新手势是顶级纵向滚动边界的默认动作；稿内与右侧面板继续由自身的原生滚动区接管。 */
+html.prototype-live-shell { overscroll-behavior-y:none; }
 .live-delivery-body { position:relative; display:flex; flex:1; min-block-size:0; }
 .live-delivery-body>.cv-vp { flex:1; min-inline-size:0; }
 /* 目录默认 hidden，由既有导航事件展开。悬浮尺寸不参与相机视口布局，切页不挤压原稿。 */
 .live-navigation { position:absolute; z-index:24; inset:15px auto auto 16px; inline-size:220px; max-inline-size:calc(100% - 32px); max-block-size:calc(100% - 30px); overflow:auto; padding:12px 10px; }
 .live-navigation nav { display:grid; gap:4px; }
+.live-navigation details > :is(details, a) { margin-inline-start:12px; }
+.live-navigation summary { cursor:pointer; padding:8px 6px; overflow-wrap:anywhere; }
+.live-navigation [aria-current="page"] { font-weight:700; }
+.developer-scroll > a { display:block; margin-block-start:1em; color:inherit; }
+.developer-scroll > p { white-space:pre-line; }
 .live-navigation a { display:flex; align-items:center; min-block-size:38px; padding:8px 10px; color:var(--sg-muted); border-radius:var(--sg-control-radius); text-decoration:none; overflow-wrap:anywhere; }
 .live-navigation a:is([aria-current],:hover) { color:var(--sg-ink); background:var(--sg-state); }
 .live-review-link { white-space:nowrap; }
@@ -27,13 +34,26 @@
 .live-source-warning { padding:10px 16px; color:var(--sg-delete); background:var(--sg-card); border-block-end:1px solid currentColor; }
 /* 交付页没有评审 cluster；浮层空白穿透，实际按钮保留可点击目标。 */
 .canvas-floating-controls>.canvas-zoom-tools { pointer-events:auto; }
+.prototype-live-shell .canvas-floating-controls :is(.canvas-zoom-tools,.canvas-display-options) {
+  max-inline-size:100%; flex-wrap:wrap; justify-content:center;
+}
+.live-review .selection-tools { overflow:auto; overscroll-behavior-y:contain; }
+@media(max-height:340px) {
+  /* 很短的视口给设计稿和工具都留出空间。工具行超出时仅滚动工具自身，
+   * 保留完整按钮及可滚入视口的键盘焦点。相机读取此滚动盒的实际外部边界。 */
+  .prototype-live-shell .canvas-floating-controls {
+    inset-block-end:min(8px, 5%); max-block-size:50%; overflow:auto; overscroll-behavior-y:contain;
+    align-content:flex-start; padding:3px; pointer-events:auto;
+  }
+}
 @media(max-width:1020px) { .live-keyboard-help { display:none; } }
 @media(max-width:600px) {
   .live-delivery .review-toolbar { flex-wrap:wrap; }
   .live-delivery .review-toolbar-start { flex:1 1 100%; }
   .live-delivery .review-toolbar-end { margin-inline-start:auto; }
   .live-review .canvas-floating-controls { gap:8px; }
-  .live-review .canvas-tool-cluster { justify-content:center; }
+  /* 窄屏由外层一次排完三组工具，避免内外两层分别换行多占一整行。DOM 和 Tab 顺序沿用原有工具顺序。 */
+  .live-review .canvas-tool-cluster { display:contents; }
   .live-review .canvas-display-options { gap:8px; }
 }
 @media(pointer:coarse) {

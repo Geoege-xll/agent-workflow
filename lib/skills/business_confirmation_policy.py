@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the workflow pack's default two-stage confirmation policy and exceptions."""
+"""校验实际插件入口的条件式业务确认、独立权限与任务例外。"""
 
 from __future__ import annotations
 
@@ -20,15 +20,21 @@ from typing import Iterable
 
 # 直接脚本由上方可信 __file__ 引导到核心根，包模式则沿用调用方已选定的固定核心。
 from lib.skills.skill_contracts import expand_skill_contract, verification_scope_errors
+from lib.task_graph import SOLUTION_GATE_RE
 
 
-DEFAULT_POLICY = """business_confirmation_policy:
-  default_gates:
-    - requirements_approved
-  ui_only_gates:
-    - visual_approved
-  additional_gates: exceptional"""
+# 只有 WORKFLOW 声明这张适用条件表。schema 和全局约束链接同一节；
+# 校验整个代码块，避免在正确的首几行后追加无条件签字项仍然通过打包。
+POLICY_AUTHORITY = Path("product/WORKFLOW.md")
+POLICY_SECTION = "### Business confirmation policy"
+POLICY_REFERENCE = "(WORKFLOW.md#business-confirmation-policy)"
+POLICY_CONSUMERS = (Path("product/AGENT_SCHEMA.md"), Path("product/GLOBAL_CONSTRAINTS.md"))
 POLICY_HEADER = "business_confirmation_policy:"
+DEFAULT_POLICY = """business_confirmation_policy:
+  requirements_approved: current_goal_and_scope
+  solution_approved: material_solution_decision
+  visual_approved: selected_required_prototype
+  additional_gates: exceptional"""
 
 COMMON_SOURCES = (
     "product/WORKFLOW.md",
@@ -57,12 +63,13 @@ HOST_SOURCES["all"] = tuple(dict.fromkeys(path for paths in HOST_SOURCES.values(
 
 REQUIRED_ANCHORS = (
     "requirements_approved",
+    "solution_decisions",
+    "solution_approved:<id>@<sha256>",
     "visual_approved",
     "baseline_ready",
     "ia_ready",
     "prototype_verified",
     "visual_review_ready",
-    "`UI-Conformance` and non-UI requests have no business confirmation after",
     "additional_business_confirmation:",
     "decision_scope:",
     "resume_condition:",
@@ -70,22 +77,29 @@ REQUIRED_ANCHORS = (
 )
 
 FORBIDDEN_PATTERNS = (
+    # 已退役的固定轮次说法会让真实入口跳过有分歧的方案，或让已定方案反复求批。
+    ("fixed confirmation sequence", re.compile(
+        r"\b(?:requirements/visual two-step policy|two[- ]stage business confirmation policy|"
+        r"(?:normal|default) two business confirmations|no business confirmation after\s+`?requirements_approved|"
+        r"(?:all|every) (?:Full |Light )?requests? (?:must obtain|always require|requires?) solution (?:approval|confirmation))\b",
+        re.I,
+    )),
     ("legacy Baseline business gate", re.compile(r"\bBaseline\s+Proceed\b", re.I)),
     ("legacy IA business gate", re.compile(r"\bIA\s+Proceed\b", re.I)),
     ("legacy Plan business gate", re.compile(r"\bPlan\s+Proceed\b", re.I)),
     (
-        "third business confirmation",
+        "automatic evidence promoted to business confirmation",
         re.compile(
             r"\b(?:document|contract|implementation\s+plan|plan|HTML[ -]?preview|"
-            r"build|QA|rework|closeout)\s+(?:user\s+)?(?:approval|confirmation)\b",
+            r"baseline|IA|build|QA|rework|closeout)\s+(?:user\s+)?(?:approval|confirmation)\b",
             re.I,
         ),
     ),
     (
-        "third business confirmation",
+        "automatic evidence promoted to business confirmation",
         re.compile(
             r"\b(?:approve|confirm)\s+(?:the\s+)?(?:document|contract|"
-            r"implementation\s+plan|plan|HTML[ -]?preview|build|QA|rework|closeout)\b",
+            r"implementation\s+plan|plan|HTML[ -]?preview|baseline|IA|build|QA|rework|closeout)\b",
             re.I,
         ),
     ),
@@ -382,8 +396,31 @@ def _is_visual_gate(name: str) -> bool:
     ) is not None
 
 
-def _is_default_or_external_gate(name: str) -> bool:
-    return name in {"requirements_approved", "platform_security_prompt"} or _is_visual_gate(name)
+def _is_applicable_or_external_gate(name: str) -> bool:
+    # 模板可演示有范围的占位门值。具体方案必须和调度器采用相同的实际格式，
+    # 只有运行时对请求、事项和正文重新计算摘要后才可作为用户的当前授权。
+    return (
+        name in {"requirements_approved", "platform_security_prompt", "solution_approved:<id>@<sha256>"}
+        or SOLUTION_GATE_RE.fullmatch(name) is not None
+        or _is_visual_gate(name)
+    )
+
+
+def _is_conditional_solution_instruction(body: str, match: re.Match[str]) -> bool:
+    """只豁免明确作用于实质决定的方案指令；通篇提到方案不能覆盖另一条固定签字。"""
+    name = match.group("name").strip().casefold()
+    if name not in {"solution", "material solution"}:
+        return False
+    # 在同一句前后取条件，允许 Markdown 的自然换行；句号和段落隔离
+    # 两条独立指令，防止上一段的真实方案理由被套用到下一段的固定审批。
+    before = re.split(r"[.!?;。；]|\n\s*\n", body[:match.start()])[-1]
+    after = re.split(r"[.!?;。；]|\n\s*\n", body[match.end():], maxsplit=1)[0]
+    sentence = " ".join((before + match.group() + after).casefold().split())
+    return re.search(
+        r"\b(?:for|when|if|where) (?:an? |the )?(?:task depends on (?:an? |the )?)?"
+        r"(?:material (?:unresolved |open )?|unresolved material )(?:solution )?(?:decision|trade-?off)\b",
+        sentence,
+    ) is not None
 
 
 def _validate_structured_exceptions(path: Path, body: str) -> list[str]:
@@ -392,16 +429,19 @@ def _validate_structured_exceptions(path: Path, body: str) -> list[str]:
     for pattern in ADDITIONAL_CONFIRMATION_PATTERNS:
         for match in pattern.finditer(body):
             name = " ".join(match.group("name").lower().split())
-            if name in {"requirement", "requirements", "visual", "final visual"}:
+            if name in {"requirement", "requirements", "visual", "final visual"} or _is_conditional_solution_instruction(body, match):
                 continue
             matches.append(match)
     records = _exception_records(body)
     gates, gate_errors = _gate_names(body)
     errors.extend(f"invalid gates in {path}: {error}" for error in gate_errors)
     for gate in sorted(gates):
-        if _is_default_or_external_gate(gate):
+        if _is_applicable_or_external_gate(gate):
             continue
-        if re.fullmatch(r"[a-z][a-z0-9_-]*", gate) is None:
+        # 裸门没有事项或页面范围，不能靠同名例外记录包装成已批准。
+        if gate in {"solution_approved", "visual_approved"}:
+            errors.append(f"unscoped confirmation gate {gate!r} in {path}")
+        elif re.fullmatch(r"[a-z][a-z0-9_-]*", gate) is None:
             errors.append(f"unsupported or scoped gate {gate!r} in {path}")
     if matches and not records:
         errors.append(
@@ -430,7 +470,7 @@ def _validate_structured_exceptions(path: Path, body: str) -> list[str]:
     exceptional_gates = {
         name
         for name in gates
-        if not _is_default_or_external_gate(name)
+        if not _is_applicable_or_external_gate(name)
         and re.fullmatch(r"[a-z][a-z0-9_-]*", name)
     }
     for gate in sorted(exceptional_gates):
@@ -524,7 +564,23 @@ def validate_business_confirmation_texts(
 ) -> list[str]:
     errors: list[str] = []
     combined_parts: list[str] = []
+    authority_count = 0
     for path, body in sources:
+        # 构建前接收绝对资源路径，加载后的投影则传入包内路径。两条入口
+        # 均核验同一权威小节；消费者可以解释字段，却不能重新声明默认政策。
+        relative = Path(*path.parts[-2:])
+        if relative == POLICY_AUTHORITY:
+            authority_count += 1
+            section_pattern = r"^" + re.escape(POLICY_SECTION) + r"\n(.*?)(?=^#{1,3} |\Z)"
+            section = re.search(section_pattern, body, re.M | re.S)
+            fenced_policy = "```yaml\n" + DEFAULT_POLICY + "\n```"
+            if not section or fenced_policy not in section.group(1) or body.count(POLICY_HEADER) != 1:
+                errors.append(f"missing or invalid canonical business confirmation policy in {path}")
+        else:
+            if POLICY_HEADER in body:
+                errors.append(f"duplicate business confirmation policy outside its authority: {path}")
+            if relative in POLICY_CONSUMERS and POLICY_REFERENCE not in body:
+                errors.append(f"missing canonical business confirmation policy reference in {path}")
         combined_parts.append(body)
         for label, pattern in FORBIDDEN_PATTERNS:
             for match in pattern.finditer(body):
@@ -534,6 +590,8 @@ def validate_business_confirmation_texts(
                 break
         errors.extend(_validate_structured_exceptions(path, body))
 
+    if authority_count != 1:
+        errors.append(f"expected one business confirmation authority, found {authority_count}")
     combined = "\n".join(combined_parts)
     for anchor in REQUIRED_ANCHORS:
         if anchor not in combined:
@@ -598,18 +656,6 @@ def validate_business_confirmation_pack(pack: Path, host: str) -> list[str]:
             continue
         sources.append((path, body))
 
-    for relative in (
-        "product/WORKFLOW.md",
-        "product/AGENT_SCHEMA.md",
-        "product/GLOBAL_CONSTRAINTS.md",
-    ):
-        path = pack / relative
-        body = next((text for source, text in sources if source == path), "")
-        if body.count(DEFAULT_POLICY) != 1 or body.count(POLICY_HEADER) != 1:
-            errors.append(
-                f"expected exactly one canonical business confirmation policy in {path}"
-            )
-
     errors.extend(validate_business_confirmation_texts(sources))
     errors.extend(validate_execution_texts(sources))
     # 三个宿主都调用这个只读源检查，因此验证范围策略只维护一套，且缺失/反向
@@ -633,7 +679,7 @@ def main() -> int:
         for error in errors:
             print(f"[ERROR] {error}", file=sys.stderr)
         return 1
-    print(f"[OK] {sys.argv[2]} default two-stage business confirmation policy")
+    print(f"[OK] {sys.argv[2]} conditional business confirmation policy")
     return 0
 
 

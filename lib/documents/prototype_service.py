@@ -215,7 +215,14 @@ def serve_from_pipe(fd):
     tool, tools = review.capture_tool(format_version=5)
     context, _, _, navigation = capture_live(value["root"], value["adapter"], value["plan"], value["request_id"], value["pages"], tool=tool)
     if context["review_id"] != value["review_id"]: raise ValueError("来源在启动期间变化")
-    server = PrototypeServer(LiveSource(value["root"], context, data_dir=value["data_dir"]), tools, navigation, instance=value["instance"])
+    from lib.documents.prototype_file_entry import require_prepared
+
+    def delivery_catalog():
+        # 直接读取该项目最新受管登记，使已复用的服务也看到重新归组的旧页。
+        return require_prepared(value["root"], value["adapter"], value["pages"], data_dir=value["data_dir"])
+
+    server = PrototypeServer(LiveSource(value["root"], context, data_dir=value["data_dir"]), tools,
+                             navigation, delivery_catalog=delivery_catalog, instance=value["instance"])
     connection = {"schema_version": 5, "pid": os.getpid(), "instance": server.instance, "port": server.server_port,
         "token": server.token, "management": server.management, "context": context}
     # 外层open持有live目录锁直到握手结束；子进程仅发布当前连接，不反向等待同一锁。

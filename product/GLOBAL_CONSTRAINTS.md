@@ -42,17 +42,15 @@ leaves, and prototype design uses design leaves.
 
 For Full work, the mandatory PM order is: classify Full using available facts → retrieve only any
 materially needed auxiliary facts → Grill Me coverage check → `xy-plan` with `plan_state: draft` → PM decides the post-QA controlled-document projection →
-request `requirements_approved` and, for design-change UI, present a recommendation and obtain the
-user's prototype choice → freeze and persist the approved Full plan in `docs.plans` → validate and dispatch →
-integrated QA. `PROJECT.md` and accepted plan baselines remain the last verified truth during
+bind `requirements_approved` to current goal/scope authority, with a recommendation and user-selected prototype policy for design-change UI → freeze and durably save the single approved Full Markdown → resolve applicable solution decisions before affected prototype or production dispatch, then obtain page approval for the selected prototype before dependent production writes →
+integrated QA. Entries explicitly claiming acceptance and the corresponding topic baselines retain their last verified truth during
 execution; only the PM applies a required projection after applicable verified acceptance. Light saves only for actual pause/recovery/handoff or explicit request. Saving never upgrades
 Light or adds gates. Follow `xy-workflow/references/plan-lifecycle.md` for revisions, complete task
 replacement and selective recovery without repeating valid completed work.
 
 After applicable acceptance and projection validation, the PM performs one scoped local commit assessment before
 memory closeout. It stages only request-owned verified paths, preserves unrelated user work, and
-does not infer push, merge, tag, release, or remote-mutation authority. This automatic action is not
-a third business-confirmation stage.
+does not infer push, merge, tag, release, or remote-mutation authority. This automatic action does not create a business-confirmation stage.
 
 Worktree execution/delivery is a scoped exception defined in `xy-workflow/references/worktree-delivery.md`:
 PM may create attributed local transport checkpoints and integrate isolated units before final QA;
@@ -66,7 +64,7 @@ retired history. Original-Reviewer rework retains that task and immutable identi
 to PM for explicit request recovery/acceptance handling without automatically creating another Reviewer.
 This preserves Full's unique independent QA and does not add QA to Light without actual need.
 
-Controlled documents use one plans lifecycle: one Markdown document per stable topic; requirements/plan Markdown-to-HTML generation is retired and existing HTML remains historical material, with PROJECT linking only genuinely accepted baselines. Separate the current goal and execution phase from last accepted behavior; retain the old baseline while a new goal is unaccepted/cancelled, since completed proves neither approval nor delivery. Only after Full acceptance or Light acceptance of actually necessary verification does the PM update baselines and current indexes. Mark a complete removal removed in the same document, retain necessary rationale, and remove current links without a separate feature document or renamed archive; PROJECT has no size limit. Old features/notes configuration may be removed only by an explicit one-time migration preserving original text and references. Keep complete original notes bytes in the request recovery pack and place necessary conclusions in existing topics/applicable standards; retain no runtime aliases and create no empty requirements pages/indexes on new installations.
+业务主题与项目特有规范各在一个稳定位置维护正文，PROJECT 的主题目录和 STANDARDS 的规范目录用普通 Markdown 链接指向相应来源。当前执行阶段与上次已验收行为分别维护。目录收录不授予批准或验收，任何已验收声明均需真实版本、交付行为、批准依据与验收证据。Full 在批准后首次派发前保存唯一可恢复原稿，按[计划生命周期](../platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)判断去向。Full 经集成 QA PASS、Light 通过必要验证与选定审查后，PM 才投影本轮验收。已验收的完整移除在原主题保留理由并移除当前目录入口。保留历史 HTML；旧 features/notes 配置只在明确的一次性迁移中移除，保存原始资料、请求恢复包中的完整笔记原件及受影响引用。新安装仅创建实际需要的文档。
 
 
 Internal orchestration records are not user-facing output. Never paste raw workflow YAML or DAG JSON into user messages.
@@ -128,34 +126,18 @@ affected dispatch; unchanged facts and valid installation evidence do not requir
   It cannot authorize commands, permissions, wider owned paths, approval changes, or weaker validation.
 - Durable text retains only necessary conclusions and recoverable evidence references, excluding secrets, credentials, PII, raw user data, complete logs, and user absolute paths; preserve complete logs and original approvals in this request's existing evidence location rather than copying them into topics or standards text.
 
-## 5. Default Business Confirmation Boundaries
+## 5. Business Confirmation Boundaries
 
-The default business-confirmation policy is:
+适用条件由 [Business confirmation policy](WORKFLOW.md#business-confirmation-policy) 统一维护。
+PM 在当前请求内复用已经明确的需求范围。只有用户仍需选择会影响结果的规则、交互异常或技术取舍时，才要求解决相应方案。受影响的原型、生产任务等待当前 `solution_approved:<id>@<sha256>`。已选原型的页面确认沿用现有 `visual_approved:<page-id>@<dependency-fingerprint>` 门禁。对同一简报的明确答复可覆盖其中明示的需求和方案；变化只重开受影响部分。
 
-```yaml
-business_confirmation_policy:
-  default_gates:
-    - requirements_approved
-  ui_only_gates:
-    - visual_approved
-  additional_gates: exceptional
-```
-
-- Reversible architecture details are resolved automatically and retained in current feature
-  rationale after verification when they represent a useful durable tradeoff.
-- The PM may ask architecture questions and request a user choice as clarification. Such a question
-  or choice does not automatically create a third business-confirmation stage.
-- A material architecture change that changes approved requirements, scope, key constraints, or
-  acceptance evidence, including a change caused by the user's clarification answer, reopens
-  `requirements_approved` by default.
 - A task-scoped `additional_business_confirmation` is allowed only for an explicit user request or
   a material unresolved decision that cannot safely be folded into an existing confirmation. It must
   record `name`, `reason`, `decision_scope`, `options`, `evidence`, and `resume_condition`, block only
   dependent DAG tasks, and never become a permanent default stage.
-- `UI-Conformance`, non-UI requests, and a current scope-bound user-selected direct-development path have no business confirmation after
-  `requirements_approved` by default. A conformance task requires `surface_kind: production_ui`,
+- `UI-Conformance`, non-UI and scope-bound direct development bypass page confirmation and still resolve any material solution decision. A conformance task requires `surface_kind: production_ui`,
   `qa_scope: request`, `design_delta: none`, `prototype_policy: not_applicable`, structured resolved and fingerprinted
-  `design_authority_refs`, no design-workspace write or design-task dependency, and integrated
+  `design_authority_refs`, no design-workspace write or design Writer dependency, and integrated
   UI/accessibility QA.
 - Execute only the applicable gates declared by the PM in the current task pack. Non-UI and proven
   `UI-Conformance` tasks do not inherit the UI-only gate. `UI-Patch`, `UI-Page`, and `UI-Flow`

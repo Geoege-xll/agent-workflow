@@ -19,7 +19,7 @@ copy status does not exempt workflow instructions, permissions, security, APIs o
 New risks, invalidated evidence and explicit user/project rereview requirements still apply to affected scope.
 
 - Every implementation task pack carries its approved goal, non-goals, constraints, acceptance
-  evidence, and applicable UI authority. Required-prototype design tasks carry concrete pages;
+  evidence, applicable solution decisions and UI authority. Required-prototype design tasks carry concrete pages;
   `UI-Conformance` tasks carry `design_authority_refs`; waived tasks carry the scope-bound
   `prototype_decision` and must not treat an old prototype as current authority. Required-prototype
   tasks carry the same decision plus concrete page authority. Full packs record the projection decision
@@ -35,8 +35,7 @@ New risks, invalidated evidence and explicit user/project rereview requirements 
   ```
 
   For Full work this decision belongs to PM review of the `plan_state: draft` proposal. It describes
-  a post-QA projection and is never early write authority. Canonical documents remain the last
-  QA-verified project truth while implementation and QA are in progress.
+  a post-QA projection. 实现与 QA 期间，原主题的已验收行为及其证据保留上次基线。
 
   Use `required` for an added, changed, replaced, restored, renamed, split, merged, cancelled, or
   removed feature truth. Also use `reimplemented` for a major behavior-preserving rewrite that future
@@ -50,18 +49,24 @@ New risks, invalidated evidence and explicit user/project rereview requirements 
   prototype link misleading, project the verified production truth and scoped authority boundary;
   do not synchronize the historical prototype during closeout.
 
-  Full projects after integrated QA PASS; Light updates on acceptance of actual minimum verification and
-  necessary independent audit, without calling unaudited results QA-verified. PM updates the topic plan's
-  accepted version, delivered behavior and necessary evidence in place. PROJECT retains only current baseline
-  links, without appended execution states or one entry per revision. Preserve the old baseline during
-  iteration; canceling the current goal does not erase old delivery. completed does not prove acceptance,
-  and unindexed old drafts do not automatically become facts. Without changes, add no feature document/ADR.
-  Mark accepted complete deletion as removed in the same source, retaining reason/date/replacement and
-  necessary history, removing the current PROJECT link and repairing references. Do not project after QA
-  failure. Project the verified topic plan into its single Markdown source, the sole editing authority.
+  Full 经当前集成 QA PASS 后投影，Light 在必要验证与选定的独立审查通过后按需更新。开发者在原交接给出实际做法、源码与测试定位和未验证边界，本轮 QA 按审查范围核实。PM 将已验证的版本、已交付行为和维护入口用相对链接写回原主题，未验证项保留原状态；项目级架构与规范只链接其权威章节。PROJECT 的主题目录每个稳定主题只列一次，已验收声明指向可核实的真实基线。迭代、暂停或取消仍保留上次已验收行为。完整移除经实际验收后在原主题标记 `removed`，保留原因、时间和替代关系，撤下当前入口并修复引用。验收失败保留原基线。
   Requirements/plan Markdown-to-HTML generation remains retired; preserve existing HTML as
   historical material without generating, updating or checking its freshness. Follow
   [the retained HTML boundary](../../xy-plan/references/requirements-markdown.md).
+### QA 后登记已验收事实
+
+Full 的原 QA 任务包、handoff、`request_receipt` 和受审文档原字节保存在原证据位置。PM 在原主题中更新已核实的验收版本、进展首段、已交付行为和验收证据。保留以往已交付的正文和证据摘要，验收证据行引用本次已接收 handoff 的 SHA-256。首次交付可替换无基线占位；首次添加证据节时，批准依据引用原图已有的方案来源，或用 `requirements_approved@<requirements_fingerprint>` 定位本次已批准的需求。主题可省略恢复节。
+
+通过既有 `task_graph_cli.py update --input <图> --patch <补丁> --expect-sha256 <图原摘要> --root <项目根>`，以单独操作登记。下例的 SHA 和路径应替换为实际值。
+
+```json
+{"tasks":{"qa":{"record_qa_projection":{"adapter":"project.yaml","documents":[{"path":"docs/plans/example.md","reviewed":{"path":"/absolute/evidence/reviewed-example.md","sha256":"<原字节摘要>"},"projected_sha256":"<当前文档摘要>"}]}}}}
+```
+
+单树从原冻结范围复算受审摘要。主题同时属于受控读取或设计权威时，原已核对的需求、实现与审查合同共用同一份经过验证的前像。Foundation 最终包保留全部 Writer 范围；有本地 Git 提交时，包中的 `qa_document_base` 可定位由 PM 独占的已有文档。对于受审范围之外的 PM 专有文档，工具用同一仓库已冻结的 Git 提交核对原对象。已有未跟踪的 PM 文档可以在原有冻结步骤（Foundation 阶段通过后、最终交接前）使用 `"freeze_qa_scope":{"scope_ref":{"repositories":[…]},"projection_paths":["docs/plans/example.md"]}` 预存字节摘要，保留原档供验收后回放。原档或受审提交不可恢复时应先取得可核实的原始依据。登记、后续就绪与交付核对都会检查原回执及其余受审业务。需求、批准、接口或规范发生变化时，回到受影响的验收范围。
+
+隔离请求保留原 `worktree_integrations` 及其构建、QA 提交。PM 将验收事实提交到该集成工作树，在上例操作中增加 `head_revision` 指向最终文档提交。工具核对两个提交之间的全部差异。交付的 `projection_paths` 明列 PM 路径，合并授权绑定最终提交和完整差异。PROJECT 与相邻的 `ARCHITECTURE.md` 可在受审候选中包含实际目录或模块职责更新。若在 QA 后补入口，可用一条普通 Markdown 列表链接指向本次登记的主题，标签取计划文件名去掉扩展名，路径相对于索引页。其余结构描述应在受审候选中核对。
+
 - Full performs PM commit assessment after QA PASS, and Light after acceptance of minimum verification and
   actually mandatory audit, including verified document projection.
   Keep the result internal:
@@ -85,7 +90,7 @@ New risks, invalidated evidence and explicit user/project rereview requirements 
   and must not use `git add -A` or `git add .`. Preserve pre-existing user edits. Unsafe overlap is
   `blocked`, not permission to stage a whole file. Assess nested repositories independently and
   deepest first. Verify the committed patch against the inspected staged snapshot. This automatic
-  action does not create a third business-confirmation stage or authorize push, merge, tag, release,
+  action does not create a business-confirmation stage or authorize push, merge, tag, release,
   or another remote mutation.
   The selected [worktree delivery](worktree-delivery.md) branch separately grants bounded PM-local
   checkpoint/integration authority before final QA and confirm/auto delivery after all work completes.

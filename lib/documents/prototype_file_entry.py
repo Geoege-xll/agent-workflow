@@ -56,12 +56,15 @@ class _Presentation(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.platform = self.display = ""
+        self.groups = None
         self.frames = []
         self.plan_source = ""
 
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
         if tag == "body":
+            if "data-prototype-group" in attrs:
+                self.groups = group_path(attrs["data-prototype-group"] or "")
             self.platform = attrs.get("data-prototype-platform", "")
             self.display = attrs.get("data-prototype-display", "")
             self.plan_source = attrs.get("data-prototype-plan-source", "")
@@ -75,13 +78,23 @@ class _Presentation(HTMLParser):
             self.frames.append(sizes if set(sizes) == {"width", "height"} else None)
 
 
+def group_path(raw):
+    """只接受作者指定的层级。显式空串表示退回未分组，未提供则保留原登记。"""
+    if raw == "":
+        return []
+    labels = [part.strip() for part in raw.split("/")]
+    if len(labels) > 32 or any(not label or len(label) > 1024 or any(ord(c) < 32 for c in label) for label in labels):
+        raise ValueError("分组须为 1 至 32 个用 / 分隔的非空名称")
+    return [{"label": label, "open": False} for label in labels]
+
+
 def presentation(body):
     parser = _Presentation()
     parser.feed(body.decode("utf-8")); parser.close()
     for value in (parser.platform, parser.display):
         if len(value) > 128 or any(ord(char) < 32 for char in value): raise ValueError("原稿展示声明无效")
     return {"platform": parser.platform, "display": parser.display,
-        "viewport": parser.frames[0] if len(parser.frames) == 1 else None, "plan_source": parser.plan_source}
+        "groups": parser.groups, "viewport": parser.frames[0] if len(parser.frames) == 1 else None, "plan_source": parser.plan_source}
 
 
 def _entry_span(body):
@@ -360,10 +373,11 @@ def _configuration(root, adapter, pages):
     return prototype
 
 
-def prepare_delivery(root, adapter, pages, *, data_dir=None):
+def prepare_delivery(root, adapter, pages, *, data_dir=None, group=None):
     """显式准备只挂载可信工具和元数据，不创建请求、不启动服务、幂等保留既有绑定。"""
     review.require_external_data_dir(root, data_dir)
     prototype = _configuration(root, adapter, pages)
+    selected_groups = group_path(group) if group is not None else None
     tool, tools = review.capture_tool(format_version=5)
     identity = {"project_id": review.project_id(Path(root))}
     with review._project_lock(identity, data_dir):
@@ -395,7 +409,21 @@ def prepare_delivery(root, adapter, pages, *, data_dir=None):
                 # 在所有写入前对候选字节执行同一精确入口校验，保证“prepared”含义真实。
                 if not entry_present(replacements[name]): raise PreparationError("无法安全插入首个受管入口")
                 parsed = review.navigation_data(None, [{"path": page}], {page: body})[0]
-                entries[name] = {key: parsed[key] for key in ("name", "path", "label", "groups")} | presentation(body) | {"binding": entries.get(name, {}).get("binding")}
+                previous = entries.get(name, {})
+                display = presentation(body)
+                declared = display.pop("groups")
+                # 原稿声明可跨机器重建。旧稿只需显式登记一次；局部 prepare、重开服务
+                # 和工具升级都不应抹掉已确认的目录信息。冲突时先纠正来源，避免静默改组。
+                if selected_groups is not None and declared is not None and selected_groups != declared:
+                    raise ValueError("显式分组与原稿声明冲突：" + name)
+                groups = declared if declared is not None else selected_groups
+                # 新登记或改组按操作方给出的清单排序，之后只重开/准备同组页面时保留位置。
+                # 因此可按归档目录的分组顺序逐组恢复，单页后续修订不打乱其他登记。
+                if groups is not None and groups != previous.get("groups"):
+                    entries.pop(name, None)
+                entries[name] = {key: parsed[key] for key in ("name", "path", "label")} | display | {
+                    "groups": previous.get("groups", []) if groups is None else groups,
+                    "binding": previous.get("binding")}
             if len(entries) > MAX_DELIVERY_PAGES: raise ValueError("项目登记页面总数超过256")
             ignore = _read_optional(fd, ".gitignore")
             ignored = ignore or b""
@@ -405,7 +433,7 @@ def prepare_delivery(root, adapter, pages, *, data_dir=None):
                 links = {"entry.js": cache / "file-entry.js", "shell.js": cache / "shell.js", "assets": cache}
                 previous_catalog = _read_optional(published, "catalog.js")
                 next_catalog = {"schema_version": 1, "project_id": identity["project_id"], "directory_sha256": directory_sha256(root, prototype),
-                    "tool": tool, "pages": sorted(entries.values(), key=lambda page: page["name"])}
+                    "tool": tool, "pages": list(entries.values())}
                 next_body = _catalog_bytes(next_catalog)
                 link_changes = []
                 mounted = False

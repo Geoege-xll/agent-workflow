@@ -3,55 +3,14 @@ name: xy-prototype-verify
 description: Use when a design Agent must statically validate concrete build-free HTML pages before user visual review, visual approval, or required-prototype production UI work.
 ---
 
-## 官方 Antigravity 插件资源边界
-
-本段仅适配资源与原生传输，不授予业务批准、角色所有权或 QA PASS。
-从已加载组件的物理路径解析插件根目录：技能目录上两级，`agents/`、`rules/`
-目录上一级；禁止用项目 cwd 或猜测缓存路径。先读根目录 `PLUGIN.md`。
-唯一流程依据是其中的 `product/WORKFLOW.md`、`roles/`、
-`platforms/shared/skills/`，以下共享正文保持原样。
-宿主读取如被截断，按缺失行范围续读，或复用包内已有分页 helper；完整连续覆盖
-当前任务所需权威范围后才执行。不重复读取已覆盖内容，不自行实现另一套分页器。
-
-包内资源使用相对插件根的规范路径，通过 `plugins/source_pack.py resource` 解析。每次独立调用都使用：
-`bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`。
-原有辅助命令使用 `helper --project <absolute-project> <original-helper> <arguments>`；
-它只选已有 Python 3.11+，不安装软件、不改 PATH。项目文档、任务与业务代码仍属于
-真实项目；包内示例不是当前项目配置。
-
-通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
-`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
-批准。需要宿主集成时读取 `platforms/antigravity/references/pm-integration.md`。
-插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
-
-公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
-发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
-按实际发现格式调用；canonical原name只保留在非发现vendor。先完整读取薄adapter及其
-canonical，不以未知全局同名Skill代替，不传播原版hooks/allowed-tools为额外权限。
-
-主会话始终是 PM。工作代理只接收当前完整任务包，使用 `instance_policy: fresh`、
-`context_policy: handoff_only`，不得继承 PM 或其他代理历史。仅官方宿主派发代理；
-使用宿主默认或已配置的模型与推理设置；PM 按 dispatch reference 只读映射业务派发偏好。
-核心流程不依赖独立模型配置服务、网页或 MCP。
-保留原有需求批准、适用的视觉批准与 Light 显式授权；需要独立 QA 时，仅一名只读
-审查者，并遵守原有结项顺序。
-
-Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对到当前插件的原生
-选择器；角色标签不证明实际角色、模型或上下文隔离。未知同名全局 `xy-*` 可能来自
-旧流程，禁止据此作为本插件运行证据，或导入其中央 pin、历史与指令。若只能使用
-通用原生入口，应以全新上下文交付当前完整角色正文与任务包；无法保证选择或隔离时
-向 PM 报告宿主限制，不得宣称已运行。
-
-当前插件沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
-不自动迁移。活动任务期间不得更新/替换插件；跨更新资源保留与实际模型/effort
-执行仍需真实宿主证明。未获得对应证据时保留 `runtime_verified: false`。
+从本 Skill 的物理目录向上两级确定插件根。使用同包的[宿主资源说明](../../plugins/antigravity/plugin-context.md)。当前实例已具备同一物理来源、同一版本的完整说明时直接复用；独立启动或内容缺失时补读，来源或版本变化时重新读取。
 
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-prototype-verify
 
-The active concrete page and its in-page `Page design and interaction contract` are the design
+The active concrete page and its in-page developer notes are the design
 evidence. The verifier is read-only: it validates the stable workspace and returns deterministic
 static evidence without creating metadata, reports, screenshots, or revision copies. The prototype
 is a user-review artifact; this procedure is not a second visual reviewer or an automated UI test.
@@ -90,19 +49,10 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    check, whose existing index and local-tool checks below remain applicable. Do not copy the generic
    plugin shell into a new project to satisfy that legacy entry.
    Keep the returned per-page fingerprints as internal evidence, not a user-facing JSON report.
-3. Verify every scoped active page contains exactly one non-empty
-   `Page design and interaction contract` with these exact five sections:
-
-   ```html
-   <section data-contract-section="purpose">...</section>
-   <section data-contract-section="navigation">...</section>
-   <section data-contract-section="interactions">...</section>
-   <section data-contract-section="states">...</section>
-   <section data-contract-section="exceptions">...</section>
-   ```
-
-   Each material interactive control needs a stable `id`, exactly one matching
-   `data-contract-for`, and executable declared outcomes.
+3. 每个具体页保留一个默认折叠的 `details.prototype-contract`，首个 summary 写「开发说明」。
+   只核对操作原型后仍不明确、且已有决定的交互。已有规则链接至需求 Markdown 原章节，无补充时允许为空；
+   未决行为交 PM。旧稿原有分节可读。重要控件保留稳定 ID；如有 data-contract-for，目标须唯一且确实可交互。
+   保留已确认目录分组，并核对真实登记页在各自层级中只出现一次；无来源的旧页仍可访问。
    Native disclosure controls may map the stable ID of a `details` element's first direct-child `summary`
    to the interaction contract. Same-name tags in ordinary containers or a second summary do not count as
    executable disclosure controls. The index may group pages with native `details/summary` inside the single
@@ -146,8 +96,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    may carry non-material changes forward after the documented old/new-delta review and retained user
    approval; uncertain or material changes return to the existing scoped visual-confirmation step.
    The verifier never grants approval or decides visual equivalence.
-7. The design Agent performs three self-checks in the same handoff: requirements coverage compares the five
-   contract sections with frozen requirements/acceptance; standards conformance checks applicable built-in
+7. The design Agent performs three self-checks in the same handoff: requirements coverage compares the concrete page behavior, developer notes and linked requirements with frozen requirements/acceptance; standards conformance checks applicable built-in
    rules and project-specific standards; delivery consistency checks pages, controls, navigation, declared
    outcomes, shared styles and current dependency fingerprints. Omissions, unauthorized additions, conflicts
    or unresolved inconsistency are FAIL. Check only current scope and state exceptions/unverified behavior.
@@ -197,8 +146,8 @@ and functional QA after production implementation remains. A host without browse
 of completing the default procedure; browser evidence is not required and the PM must not supplement
 it merely because the host could not render or operate the prototype.
 
-Before user handoff, the PM independently compares all five in-page contract sections with the frozen
-approved requirements and acceptance criteria. The PM rejects omitted, invented, broadened, or
+Before user handoff, the PM independently compares the concrete page behavior, developer notes and linked requirements with the frozen
+approved requirements, applicable solution decisions and acceptance criteria. The PM rejects omitted, invented, broadened, or
 conflicting behavior and returns it to `xy-uiux`; it must not ask the user to approve a knowingly
 divergent contract. The PM also reviews scope, contract completeness, static evidence freshness and
 consistency, fingerprints, and the user-approval handoff. This is a text-and-requirements conformance

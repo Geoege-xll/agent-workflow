@@ -34,9 +34,11 @@ def selected_alias(canonical: str) -> str:
 PM_SKILLS = (selected_alias("grilling"),)
 
 ROLE_SKILLS = {
+    # 浏览器项目和微信小程序共用 xy-web。只有项目测试留下生产浏览器交互缺口时，
+    # 才按验证规则读取 Playwright，因此 Web 角色沿用五个实现角色共同的启动技能。
     **{role: ("xy-code-standards", "xy-build-verify") for role in IMPLEMENTER_ROLES},
-    "xy-web": ("xy-code-standards", "xy-build-verify", selected_alias("playwright-cli")),
-    "xy-uiux": ("xy-ui-design", selected_alias("design-taste-frontend"), "xy-prototype-verify"),
+    # 设计规范维护与原型交付共用设计方法；具体 HTML 页交付时由设计角色执行静态验收。
+    "xy-uiux": ("xy-ui-design",),
     # QA 保持唯一审查入口，代码/UI 方法由实际审查面选择，不能无条件预载全文。
     "xy-qa": ("xy-qa-review",),
 }

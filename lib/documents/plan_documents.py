@@ -11,14 +11,23 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 from dataclasses import dataclass
+from itertools import tee
+from functools import lru_cache
+from lib.documents.document_links import body_link_errors, decoded_link, document_prose, target_anchors
 import os
 from pathlib import Path
 import re
 import stat
 import subprocess
-from typing import Iterable, Iterator
+from typing import Iterator
 from urllib.parse import unquote, urlsplit
 
+# 保留既有计划消费者导入的标题常量与正文屏蔽入口；扫描和锚点规则由文档层共用。
+from lib.documents.markdown_headings import (
+    ATX_HEADING, atx_section_bounds, iter_visible_lines, markdown_anchors, visible_markdown_lines,
+    without_fenced_code,
+)
+from lib.documents.markdown_links import line_links, prose_lines
 from lib.safe_text import open_file, read_file
 
 
@@ -29,18 +38,14 @@ SECTIONS = (
 FIELDS = ("主题 ID", "阶段", "模块", "任务等级", "已验收版本")
 STAGES = frozenset({"draft", "active", "paused", "completed", "cancelled", "removed"})
 LINK = re.compile(r"(?<!!)\[[^\]\n]+\]\(([^)\n]+)\)")
-# 选中计划中的图片同样携带本地路径，必须检查节点；旧索引链接识别保持原合同。
-SELECTED_LINK = re.compile(r"!?\[[^\]\n]*\]\(([^)\n]+)\)")
 EMPTY = frozenset({"", "none", "todo", "pending", "待确认", "无", "未验收"})
 TOPIC_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 TOPIC_FIELD = re.compile(r"^\- 主题 ID[:：][ \t]*(.*)$")
-ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*)?$")
 REQ_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])REQ-[0-9]{3,}(?![A-Za-z0-9_-])")
 REQUIREMENT_ENTRY = re.compile(
     r"^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)]|#{4,6})[ \t]+|\|[ \t]*)?"
     r"(?:\*\*|__|`)?(" + REQ_PATTERN.pattern + r")"
 )
-COMMENT_OR_INLINE_CODE = re.compile(r"<!--|-->|`+|\\[\\<`]")
 # 定位仅识别页首元信息。前缀无法判定时报错，而不是因保护限额误报可新建同主题。
 MAX_TOPIC_HEADER_BYTES = 64 * 1024
 
@@ -76,79 +81,15 @@ def evidence_value(section: str, key: str, label: str) -> str:
     if len(values) != 1:
         raise ValueError(f"{label}: 已验收基线须有唯一的 {key} 引用")
     value = scalar(values[0])
-    if value.casefold() in EMPTY or any(token in value for token in ("**TODO**", "{{", "<")):
+    placeholder_text = value
+    if "<" in value:
+        # Markdown 的尖括号目的地允许含空格。只豁免已解析链接的起始分隔符，
+        # 正文、标签、标题及路径里的 <模板占位> 仍须拒绝。
+        for link in line_links(value):
+            placeholder_text = placeholder_text.replace("](<" + link.raw + ">", "](" + link.raw + ">", 1)
+    if value.casefold() in EMPTY or any(token in placeholder_text for token in ("**TODO**", "{{", "<")):
         raise ValueError(f"{label}: {key} 不能是待定或模板占位")
     return value
-
-
-def _mask_comment_line(line: str, in_comment: bool) -> tuple[str, bool]:
-    """在一行内屏蔽 HTML 注释，向下一行携带尚未闭合的注释状态。"""
-    if not in_comment and "<!--" not in line:
-        return line, False
-    tokens = list(COMMENT_OR_INLINE_CODE.finditer(line))
-    inline_ends: dict[int, int] = {}
-    next_tick: dict[int, int] = {}
-    # 行内代码可展示 `<!--` 示例。一次逆序查找同宽结束符，避免对每个反引号
-    # 从头重扫长行；未配对的反引号只是文字，不能隐藏其后的真实注释。
-    for index in range(len(tokens) - 1, -1, -1):
-        token = tokens[index][0]
-        if token.startswith("`"):
-            width = len(token)
-            if width in next_tick:
-                inline_ends[index] = next_tick[width]
-            next_tick[width] = index
-
-    output: list[str] = []
-    visible_from = 0
-    comment_from = 0 if in_comment else None
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if comment_from is not None:
-            if token[0] == "-->":
-                output.append(line[visible_from:comment_from])
-                output.append(" " * (token.end() - comment_from))
-                visible_from = token.end()
-                comment_from = None
-        elif token[0] == "<!--":
-            comment_from = token.start()
-        elif index in inline_ends:
-            index = inline_ends[index]
-        index += 1
-    if comment_from is not None:
-        output.append(line[visible_from:comment_from])
-        output.append(re.sub(r"[^\r\n]", " ", line[comment_from:]))
-    else:
-        output.append(line[visible_from:])
-    return "".join(output), comment_from is not None
-
-
-def _visible_lines(lines: Iterable[str], *, hide_comments: bool = False) -> Iterator[str]:
-    """保留原行和偏移，支持在首个真实章节停读；旧目录仍使用原围栏语义。"""
-    fence = ""
-    width = 0
-    in_comment = False
-    for line in lines:
-        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
-        if fence:
-            closing = marker and marker[1][0] == fence and len(marker[1]) >= width and not marker[2].strip()
-            yield re.sub(r"[^\r\n]", " ", line)
-            if closing:
-                fence = ""
-        elif not in_comment and marker and not (marker[1][0] == "`" and "`" in marker[2]):
-            fence, width = marker[1][0], len(marker[1])
-            yield re.sub(r"[^\r\n]", " ", line)
-        elif hide_comments:
-            # 围栏内的注释标记只是示例，注释里的围栏也不能吞掉之后的真实章节。
-            visible, in_comment = _mask_comment_line(line, in_comment)
-            yield visible
-        else:
-            yield line
-
-
-def without_fenced_code(body: str) -> str:
-    """保留旧的仅围栏屏蔽语义，供已有评审的原字节合同使用。"""
-    return "".join(_visible_lines(body.splitlines(keepends=True)))
 
 
 def current_requirement_ids(markdown: str, label: str) -> list[str] | None:
@@ -157,7 +98,7 @@ def current_requirement_ids(markdown: str, label: str) -> list[str] | None:
     found = False
     in_current = False
     requirements: dict[str, None] = {}
-    for line in _visible_lines(markdown.splitlines(), hide_comments=True):
+    for line in visible_markdown_lines(markdown):
         heading = ATX_HEADING.fullmatch(line)
         if heading:
             level, title = len(heading[1]), heading[2] or ""
@@ -184,15 +125,18 @@ def parse_plan(body: str, label: str, *, required: bool = False,
                selected: bool = False) -> PlanDocument | None:
     """只认明确的中文元信息合同；未索引旧稿不因标题或 completed 成为当前基线。
 
-    Full 采用六节完整形状。Light 的无基线恢复稿可以少节；一旦 PROJECT 引用其
-    已验收行为，仍须具备基线和证据两节。字段仅描述可恢复的既有事实，不授予批准。
+    Full 的核心是可验收的需求，其余章节可以按读者需要增减、前置。旧六节使用相同
+    标题和证据键，仍能恢复原有基线；无基线的 Light 草稿允许只有页首元信息。
     """
     # 严格形状只用于显式选择的受管计划；旧入口仍保留未索引历史稿的识别合同。
     if selected:
         # 从原稿识别当前范围，避免过早按旧规则屏蔽注释内的伪围栏。
         current_requirement_ids(body, label)
-        body = without_fenced_code(body)
-    header = re.split(r"(?m)^ {0,3}##(?:[ \t]|$)" if selected else r"(?m)^## ", body, maxsplit=1)[0]
+    # 无论入口如何，隐藏示例不得提供身份、已交付事实或验收证据。保留 H2 的实际
+    # 边界，防止无关自定义章节的内容被前面的“批准依据与必要证据”吞入。
+    body = "\n".join(visible_markdown_lines(body))
+    headings = list(re.finditer(r"(?m)^ {0,3}##(?:[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*|[ \t]*)$", body))
+    header = body[:headings[0].start()] if headings else body
     if not re.search(r"(?m)^- 主题 ID[:：]", header):
         if selected:
             raise ValueError(f"{label}: 显式计划缺少生命周期元信息 主题 ID")
@@ -214,19 +158,15 @@ def parse_plan(body: str, label: str, *, required: bool = False,
         raise ValueError(f"{label}: 无效的阶段或任务等级")
     if not values["模块"] or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}|none", values["已验收版本"]):
         raise ValueError(f"{label}: 模块不能为空，已验收版本须为明确标识或 none")
-    headings = list(re.finditer(r"(?m)^ {0,3}##(?:[ \t]+(.*?)[ \t]*|[ \t]*)$" if selected else
-                               r"(?m)^## (" + "|".join(map(re.escape, SECTIONS)) + r")[ \t]*$", body))
-    names = [match[1] for match in headings]
-    if selected and any(name not in SECTIONS for name in names):
-        raise ValueError(f"{label}: 额外 H2 标题须改用 H3；只允许六节生命周期标题")
-    if len(names) != len(set(names)) or names != [name for name in SECTIONS if name in names]:
-        raise ValueError(f"{label}: 六节生命周期标题不得重复或乱序")
+    names = [match[1] for match in headings if match[1] in SECTIONS]
+    if len(names) != len(set(names)):
+        raise ValueError(f"{label}: 生命周期 H2 标题不得重复")
     sections = {
         match[1]: body[match.end():headings[index + 1].start() if index + 1 < len(headings) else len(body)].strip()
-        for index, match in enumerate(headings)
+        for index, match in enumerate(headings) if match[1] in SECTIONS
     }
-    if values["任务等级"] == "Full" and names != list(SECTIONS):
-        raise ValueError(f"{label}: Full 生命周期文档须包含六节中文标题")
+    if values["任务等级"] == "Full" and not sections.get(SECTIONS[1]):
+        raise ValueError(f"{label}: Full 主题须有非空的 ## 需求与验收")
     approval = evidence = ""
     if values["已验收版本"] != "none":
         if not sections.get(SECTIONS[4]) or not sections.get(SECTIONS[5]):
@@ -247,30 +187,34 @@ def inspect_local_target(target: Path) -> None:
         raise ValueError(f"文档目标须为真实目录或单链接普通文件：{target}")
 
 
-def local_target(root: Path, source: Path, raw: str, *, inspect_only: bool = False) -> Path | None:
-    """按项目根解析普通文件链接，拒绝歧义、外逃和链接祖先；不跟随系统外资料。"""
+def _local_link_path(source: Path, raw: str, *, allow_spaces: bool) -> Path | None:
+    """先辨认 URL 与项目内的相对写法，保留父跳转供后续安全核对。"""
     split = urlsplit(raw)
     if ((split.scheme in {"https", "http"} and split.netloc)
             or (split.scheme == "mailto" and split.path)):
         return None
-    if split.scheme or split.netloc or split.query or "\\" in raw or any(c.isspace() for c in raw):
+    # 只有共享 Markdown 解析器已分清目的地与标题时才接受文件名中的普通空格；
+    # 历史正文链接、原型等直接传入字符串的调用方维持原有空白规则。
+    def unsafe_character(char: str) -> bool:
+        return ord(char) < 32 or ord(char) == 127 or (char.isspace() and not (allow_spaces and char == " "))
+
+    if split.scheme or split.netloc or split.query or "\\" in raw or any(map(unsafe_character, raw)):
         raise ValueError(f"不安全或不支持的文档链接：{source}: {raw!r}")
     if not split.path:
         return None
-    decoded = unquote(split.path)
-    if decoded.startswith("/") or "\\" in decoded or "\0" in decoded or any(c.isspace() for c in decoded):
+    decoded = unquote(split.path, errors="strict")
+    if decoded.startswith("/") or "\\" in decoded or any(map(unsafe_character, decoded)):
         raise ValueError(f"文档链接须位于项目内：{raw!r}")
-    parts = list(source.parent.relative_to(root).parts)
-    for part in Path(decoded).parts:
-        if part == "..":
-            if not parts:
-                raise ValueError(f"文档链接越出项目：{raw!r}")
-            if inspect_only:
-                inspect_local_target(root.joinpath(*parts))
-            parts.pop()
-        elif part not in {"", "."}:
-            parts.append(part)
-    target = root.joinpath(*parts)
+    return source.parent / decoded
+
+
+def local_target(root: Path, source: Path, raw: str, *, inspect_only: bool = False,
+                 allow_spaces: bool = False) -> Path | None:
+    """按项目根解析实际目标，拒绝歧义、外逃和链接祖先；不跟随系统外资料。"""
+    candidate = _local_link_path(source, raw, allow_spaces=allow_spaces)
+    if candidate is None:
+        return None
+    target = project_path(root, candidate)
     # 显式计划只对目标做安全元数据检查，不能因链接而扩展正文读取范围；旧入口不变。
     if inspect_only:
         inspect_local_target(target)
@@ -278,7 +222,7 @@ def local_target(root: Path, source: Path, raw: str, *, inspect_only: bool = Fal
         read_file(target)
     else:
         current = root
-        for part in parts:
+        for part in target.relative_to(root).parts:
             current /= part
             if current.is_symlink():
                 raise ValueError(f"文档链接包含符号链接：{raw!r}")
@@ -304,15 +248,20 @@ def project_path(root: Path, path: Path) -> Path:
         if part == "..":
             if not parts:
                 raise ValueError(f"路径越出项目根：{path}")
-            inspect_local_target(root.joinpath(*parts))
+            # 父跳转须能在真实目录上执行。若先把 file.md/.. 折叠掉，本来
+            # 无法遍历的文档链接会在同级恰有目标时被错误接受。
+            crossed = root.joinpath(*parts)
+            inspect_local_target(crossed)
+            if not crossed.is_dir():
+                raise ValueError(f"父跳转前的路径须为目录：{crossed}")
             parts.pop()
         elif part != ".":
             parts.append(part)
     return root.joinpath(*parts)
 
 
-def validate_selected_plans(root: Path, plans: list[Path]) -> list[str]:
-    """独立校验指定计划，不需要配置/PROJECT，不枚举目录，不修改任何受验文件。"""
+def validate_selected_plans(root: Path, plans: list[Path], *, docs: dict[str, str] | None = None) -> list[str]:
+    """校验指定主题；显式提供 adapter 布局才核对 PROJECT 到这些主题的引用。"""
     errors: list[str] = []
     try:
         root = project_directory(root)
@@ -320,6 +269,8 @@ def validate_selected_plans(root: Path, plans: list[Path]) -> list[str]:
         return [str(exc)]
     seen: set[Path] = set()
     topics: dict[str, Path] = {}
+    documents: dict[Path, tuple[PlanDocument | None, str]] = {}
+    read_anchors = lru_cache(maxsize=32)(target_anchors)
     for selected_path in plans:
         path = selected_path
         try:
@@ -329,6 +280,8 @@ def validate_selected_plans(root: Path, plans: list[Path]) -> list[str]:
             seen.add(path)
             if path.suffix != ".md":
                 raise ValueError("计划须为 Markdown .md 文件")
+            if docs is not None and not path.is_relative_to(root / docs["plans"]):
+                raise ValueError("所选主题须位于实际 docs.plans")
             data = read_file(path)
             if data is None:
                 raise ValueError("计划文件不存在")
@@ -338,10 +291,27 @@ def validate_selected_plans(root: Path, plans: list[Path]) -> list[str]:
             if key in topics and not path.samefile(topics[key]):
                 raise ValueError(f"duplicate 主题 ID {document.topic_id}：{topics[key]} 和 {path}")
             topics[key] = path
-            for raw in SELECTED_LINK.findall(without_fenced_code(body)):
-                local_target(root, path, raw, inspect_only=True)
+            # 链接和图片只消费实际正文。列表/引用中的资源仍参与核对，围栏、行内
+            # 代码和缩进代码中的字面示例不构成文件访问。普通路径只核对节点元信息。
+            for line in document_prose(body):
+                for link in line_links(line, include_images=True):
+                    local_target(root, path, decoded_link(link.raw), inspect_only=True, allow_spaces=True)
+            # 只有显式 HTML 状态片段读取目的页；链接定义与代码屏蔽沿用 --document 的逻辑。
+            errors.extend(body_link_errors(root, path, body, read_anchors, html_only=True))
+            if docs is not None:
+                documents[path] = (document, body)
         except (OSError, UnicodeError, ValueError) as exc:
             errors.append(f"{path}: {exc}")
+    if docs is not None and not errors:
+        try:
+            project = root / docs["project"]
+            data = read_file(project)
+            if data is None:
+                raise ValueError(f"PROJECT 不存在：{project}")
+            _validate_project_links(root, root / docs["plans"], project, data.decode("utf-8"),
+                                    documents, selected_only=True)
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors.append(str(exc))
     return errors
 
 
@@ -363,7 +333,7 @@ def _topic_header(path: Path, *, required: bool) -> str | None:
                 yield raw.decode("utf-8", errors="strict").rstrip("\r\n")
 
         values = []
-        for line in _visible_lines(read_header_lines(), hide_comments=True):
+        for line in iter_visible_lines(read_header_lines(), hide_comments=True):
             heading = ATX_HEADING.fullmatch(line)
             if heading and heading[1] == "##":
                 break
@@ -442,54 +412,90 @@ def collect_plans(plans_root: Path) -> dict[Path, str]:
     return result
 
 
-def _project_links(body: str) -> Iterator[tuple[str, bool]]:
-    """标记专用 H2 内的实际链接，其他可见说明仍由原有链接合同处理。"""
-    active = False
-    for line in _visible_lines(body.splitlines(), hide_comments=True):
+def _project_links(body: str) -> Iterator[tuple[str, str, bool]]:
+    """区分目录导航、显式验收条目和原有正文；标题或说明里的举例不能授予验收。"""
+    section = ""
+    original, for_catalog = tee(visible_markdown_lines(body))
+    for legacy_line, line in zip(original, prose_lines(for_catalog)):
         heading = ATX_HEADING.fullmatch(line)
-        index_item = active
         if heading and len(heading[1]) <= 2:
-            active = heading[1] == "##" and heading[2] == "当前已验收基线"
-            index_item = False
-        for link in LINK.finditer(line):
-            yield link[1], index_item
+            section = heading[2] if heading[1] == "##" else ""
+        context = section if not heading or len(heading[1]) > 2 else ""
+        if context != "主题目录":
+            # 旧索引曾把围栏和注释以外的正文链接（包括引用块内的链接）作为基线声明。
+            # 只有新目录明确放宽导航资格；不可因别处写成块引用就绕开已有验收保护。
+            for link in LINK.finditer(legacy_line):
+                yield link[1], context, False
+            continue
+        # 只认行首声明，避免将“尚未验收”“待检查已验收行为”等主题文字误作证明。
+        claim = bool(re.match(r"^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?已验收[ \t]*[:：]", line))
+        for link in line_links(line):
+            yield link.raw, context, claim
+
+
+def _validate_project_links(root: Path, plans_root: Path, project: Path, body: str,
+                            documents: dict[Path, tuple[PlanDocument | None, str]], *,
+                            selected_only: bool = False) -> None:
+    """在选中范围或完整索引上执行相同的目录、基线与锚点语义。"""
+    indexed: set[tuple[str, str]] = set()
+    for raw, section, claim in _project_links(body):
+        catalog = section == "主题目录"
+        if selected_only:
+            # 仅用词法路径选择本次核对的引用，不访问无关目标（可含未选历史坏稿）。
+            # 命中后重新走真实节点安全检查，词法折叠不得让软链或越界父路径过关。
+            path = urlsplit(raw)
+            if path.scheme or path.netloc or not path.path:
+                continue
+            candidate = Path(os.path.normpath(project.parent / unquote(path.path)))
+            if candidate not in documents:
+                continue
+        target = local_target(root, project, raw, inspect_only=selected_only, allow_spaces=catalog)
+        if target is not None and target.is_relative_to(root / "docs/features"):
+            raise ValueError(f"PROJECT 不能引用旧 features 权威，请显式单次迁移：{target}")
+        if target is None or target == plans_root or not target.is_relative_to(plans_root):
+            if catalog:
+                raise ValueError(f"PROJECT 主题目录只收录实际 docs.plans 内的主题：{raw}")
+            continue
+        if target.suffix != ".md" or target not in documents:
+            raise ValueError(f"PROJECT links missing or non-Markdown plan: {target}")
+        document, content = documents[target]
+        if catalog and not claim:
+            if document is None or not (document.has_current_baseline or document.stage in {"draft", "active", "paused"}):
+                raise ValueError(f"PROJECT 主题目录只收录有稳定 ID 的进行中或已验收主题：{target}")
+        elif document is None or not document.has_current_baseline:
+            raise ValueError(f"PROJECT 只能链接明确的当前已验收基线：{target}")
+        if catalog or section == "当前已验收基线":
+            # 同一目录按稳定主题去重；正文说明或独立的验收索引可有意交叉引用。
+            key = section, document.topic_id.casefold()
+            if key in indexed:
+                raise ValueError(f"PROJECT {section}重复索引同一计划：{target}")
+            indexed.add(key)
+        if catalog:
+            fragment = unquote(urlsplit(raw).fragment)
+            if fragment and fragment not in markdown_anchors(content):
+                raise ValueError(f"PROJECT 主题目录锚点不存在：{raw}")
 
 
 def validate_plan_index(root: Path, plans_root: Path, project_doc: Path, project_body: str) -> list[str]:
-    """PROJECT 只链接明确基线；不要求将执行中、未验收或旧历史稿全部索引。"""
+    """完整维护检查保留全树重复主题与证据验证，目录按导航和验收语义分别核对。"""
     errors: list[str] = []
-    documents: dict[Path, PlanDocument | None] = {}
+    documents: dict[Path, tuple[PlanDocument | None, str]] = {}
     topics: dict[str, Path] = {}
     try:
         for path, body in collect_plans(plans_root).items():
             document = parse_plan(body, str(path))
-            documents[path] = document
+            documents[path] = document, body
             if document:
                 key = document.topic_id.casefold()
                 if key in topics:
                     raise ValueError(f"duplicate 主题 ID {document.topic_id}: {topics[key]} and {path}")
                 topics[key] = path
-                for raw in LINK.findall(document.approval_basis + "\n" + document.acceptance_evidence):
-                    target = local_target(root, path, raw)
-                    if target is not None and read_file(target) is None:
-                        raise ValueError(f"基线批准／验收证据链接不存在：{path}: {raw}")
-        indexed: set[Path] = set()
-        for raw, index_item in _project_links(project_body):
-            target = local_target(root, project_doc, raw)
-            if target is not None and target.is_relative_to(root / "docs/features"):
-                raise ValueError(f"PROJECT 不能引用旧 features 权威，请显式单次迁移：{target}")
-            if target is None or target == plans_root or not target.is_relative_to(plans_root):
-                continue
-            if target.suffix != ".md" or target not in documents:
-                raise ValueError(f"PROJECT links missing or non-Markdown baseline: {target}")
-            document = documents[target]
-            if document is None or not document.has_current_baseline:
-                raise ValueError(f"PROJECT 只能链接明确的当前已验收基线：{target}")
-            if index_item:
-                # 锚点、相对别名和编码不改变同一基线来源，去重基于已验证目标。
-                if target in indexed:
-                    raise ValueError(f"PROJECT 当前已验收基线重复索引同一计划：{target}")
-                indexed.add(target)
+                for proof in (document.approval_basis, document.acceptance_evidence):
+                    for link in line_links(proof):
+                        target = local_target(root, path, link.raw, allow_spaces=True)
+                        if target is not None and read_file(target) is None:
+                            raise ValueError(f"基线批准／验收证据链接不存在：{path}: {link.raw}")
+        _validate_project_links(root, plans_root, project_doc, project_body, documents)
     except (OSError, UnicodeError, ValueError) as exc:
         errors.append(str(exc))
     return errors

@@ -140,19 +140,29 @@
       child = child.parentElement; if (child !== document.body) child.classList.add("prototype-review-shell-ancestor");
     }
     const designFrame = document.querySelector(".prototype-frame") || root;
+    if (live) {
+      // v5 认证派生页只透出画板外的区域；独立旧评审和业务画板的样式仍由各自文档管理。
+      document.documentElement.classList.add("prototype-canvas-embedded");
+      designFrame.parentElement?.closest(".prototype-stage")?.classList.add("prototype-canvas-stage");
+    }
     for (let ancestor = designFrame.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
       ancestor.style.margin = "0"; ancestor.style.padding = "0"; ancestor.style.minHeight = "0";
       if (getComputedStyle(ancestor).display.includes("flex")) { ancestor.style.justifyContent = "flex-start"; ancestor.style.alignItems = "flex-start"; }
     }
     const measure = () => { if (document.body.dataset.prototypeDisplay !== "fixed") return; const rect = designFrame.getBoundingClientRect();
-      if (rect.width >= 1 && rect.width <= 16384 && rect.height >= 1 && rect.height <= 16384) send("size", { width: rect.width, height: rect.height }); };
+      if (rect.width >= 1 && rect.width <= 16384 && rect.height >= 1 && rect.height <= 16384) send("size", live
+        ? { display: "fixed", width: rect.width, height: rect.height } : { width: rect.width, height: rect.height }); };
     new ResizeObserver(measure).observe(designFrame); measure();
     overlay = document.createElement("div"); overlay.setAttribute("data-prototype-review-overlay", ""); overlay.className = "pr-overlays"; document.body.append(overlay);
     const stylesheet = document.createElement("link"); stylesheet.rel = "stylesheet"; stylesheet.href = new URL("feedback.css", injected.src).href; document.head.append(stylesheet);
     stylesheet.addEventListener("load", () => { measure(); catalog(); render(); });
-    const contract = Array.from(document.querySelectorAll("details")).find((el) => el.querySelector("summary")?.textContent.trim() === "Page design and interaction contract");
-    const sections = ["purpose", "navigation", "interactions", "states", "exceptions"].map((name) => ({ name, text: Array.from(contract?.querySelectorAll(`[data-contract-section="${name}"]`) || []).map((node) => node.textContent.trim()).join("\n") }));
-    send("contract", { sections });
+    if (live) send("contract", window.PrototypeCanvasPresentation.readNotes());
+    else {
+      // 历史离线评审包使用自身版本的五段传输格式；新交付页和活动诊断入口共用自由说明。
+      const contract = Array.from(document.querySelectorAll("details")).find((el) => el.querySelector("summary")?.textContent.trim() === "Page design and interaction contract");
+      const sections = ["purpose", "navigation", "interactions", "states", "exceptions"].map((name) => ({ name, text: Array.from(contract?.querySelectorAll(`[data-contract-section="${name}"]`) || []).map((node) => node.textContent.trim()).join("\n") }));
+      send("contract", { sections });
+    }
     new MutationObserver((changes) => {
       if (changes.every((change) => overlay.contains(change.target) || change.target === overlay)) return;
       catalog(); queueRender();
@@ -167,7 +177,8 @@
         ? data.page !== injected.getAttribute("data-prototype-review-page") || data.token !== injected.getAttribute("data-prototype-review-token")
         : !window.location.pathname.endsWith(`/${data.page}`))) return;
       page = data.page; session = data.token; mode = data.mode === "annotate" ? "annotate" : "browse";
-      embed(); document.body.classList.toggle("pr-annotating", mode === "annotate"); send("ready"); catalog(); return;
+      embed(); document.body.classList.toggle("pr-annotating", mode === "annotate");
+      send("ready", live ? { colorScheme: getComputedStyle(document.documentElement).colorScheme } : {}); catalog(); return;
     }
     if (!session || data.page !== page || data.token !== session) return;
     if (data.type !== "prototype-review:review") return;

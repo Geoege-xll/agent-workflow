@@ -1,81 +1,24 @@
 ---
 name: xy-build-verify
-description: "Verify the build, runnable results and relevant tests for the current Light／Full delivery, handing off real evidence according to actual risk."
+description: "Verify the build, runnable results and relevant tests for the current Light/Full delivery, handing off real evidence according to actual risk."
 ---
 
-## 官方 Antigravity 插件资源边界
-
-本段仅适配资源与原生传输，不授予业务批准、角色所有权或 QA PASS。
-从已加载组件的物理路径解析插件根目录：技能目录上两级，`agents/`、`rules/`
-目录上一级；禁止用项目 cwd 或猜测缓存路径。先读根目录 `PLUGIN.md`。
-唯一流程依据是其中的 `product/WORKFLOW.md`、`roles/`、
-`platforms/shared/skills/`，以下共享正文保持原样。
-宿主读取如被截断，按缺失行范围续读，或复用包内已有分页 helper；完整连续覆盖
-当前任务所需权威范围后才执行。不重复读取已覆盖内容，不自行实现另一套分页器。
-
-包内资源使用相对插件根的规范路径，通过 `plugins/source_pack.py resource` 解析。每次独立调用都使用：
-`bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`。
-原有辅助命令使用 `helper --project <absolute-project> <original-helper> <arguments>`；
-它只选已有 Python 3.11+，不安装软件、不改 PATH。项目文档、任务与业务代码仍属于
-真实项目；包内示例不是当前项目配置。
-
-通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
-`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
-批准。需要宿主集成时读取 `platforms/antigravity/references/pm-integration.md`。
-插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
-
-公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
-发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
-按实际发现格式调用；canonical原name只保留在非发现vendor。先完整读取薄adapter及其
-canonical，不以未知全局同名Skill代替，不传播原版hooks/allowed-tools为额外权限。
-
-主会话始终是 PM。工作代理只接收当前完整任务包，使用 `instance_policy: fresh`、
-`context_policy: handoff_only`，不得继承 PM 或其他代理历史。仅官方宿主派发代理；
-使用宿主默认或已配置的模型与推理设置；PM 按 dispatch reference 只读映射业务派发偏好。
-核心流程不依赖独立模型配置服务、网页或 MCP。
-保留原有需求批准、适用的视觉批准与 Light 显式授权；需要独立 QA 时，仅一名只读
-审查者，并遵守原有结项顺序。
-
-Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对到当前插件的原生
-选择器；角色标签不证明实际角色、模型或上下文隔离。未知同名全局 `xy-*` 可能来自
-旧流程，禁止据此作为本插件运行证据，或导入其中央 pin、历史与指令。若只能使用
-通用原生入口，应以全新上下文交付当前完整角色正文与任务包；无法保证选择或隔离时
-向 PM 报告宿主限制，不得宣称已运行。
-
-当前插件沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
-不自动迁移。活动任务期间不得更新/替换插件；跨更新资源保留与实际模型/effort
-执行仍需真实宿主证明。未获得对应证据时保留 `runtime_verified: false`。
+从本 Skill 的物理目录向上两级确定插件根。使用同包的[宿主资源说明](../../plugins/antigravity/plugin-context.md)。当前实例已具备同一物理来源、同一版本的完整说明时直接复用；独立启动或内容缺失时补读，来源或版本变化时重新读取。
 
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-build-verify
 
-Both Light／Full use minimum sufficient verification appropriate to the actual delivery type. Production
-code retains evidence of a successful affected-target build/compile and minimum startup/smoke or key entry;
-verify documentation/static prototypes by type. Light defaults to a native implementer with the current
-self-contained task pack; loading this Skill does not force a Full plan, DAG or independent QA. At handoff,
-PM assesses independent audit, documentation and memory by actual risk. Full and selected mandatory
-independent QA must not be omitted. Ordinary copy uses WORKFLOW's `Light UI copy` consumer/resource checks;
-file suffixes do not exempt actual build inputs.
+Light／Full 实现角色都保留本入口。确定具体验证工作时，才按阶段定位[验证范围](references/verification-scope.md)。多项适用时合并读取，覆盖完整条款、前提、例外与依赖。标题或片段只用于定位，截断须同版本续读；要求全文的来源仍读完。相对链接以本 Skill 为基准；包内 helper 的规范路径从 `platforms/shared/skills/xy-build-verify/` 起。
 
-Before verification, read [verification scope](references/verification-scope.md).
-Select proportionate commands from the task pack, adapter and repository evidence; discovered
-commands are candidates, not a mandatory full-suite list. Preserve required checks, run selected
-commands for real, and record every exit code. Reuse valid evidence and stop when coverage is
-sufficient; expand or repeat only for a specific gap identified by the linked policy.
-Determine the minimum sufficient scope before execution. Repository-wide tests require an actual coverage
-need or explicit requirement, not merely entry into delivery. Production-target build/compile and runnable
-evidence are mandatory. Hand off when coverage is sufficient and evidence remains valid; do not append
-unsupported repeated builds/regressions.
+- 选择命令时读[范围与命令](references/verification-scope.md#determine-minimum-sufficient-verification-first)和[交付类型](references/verification-scope.md#verification-by-change-type)。逐项核对任务与项目必做检查的执行条件、依赖和已有证据；须本版重跑的照常执行，逐项记录真实退出码。仅修改某项资源时按[逐命令输入核对](references/verification-scope.md#核对一条命令的证据能否复用)判断各项旧证据，另做受影响目标的实际构建和加载。普通文案循包内 `product/WORKFLOW.md` 的 `Light UI copy` 核对消费者、真实加载和打包路径；静态原型走 [xy-prototype-verify](../xy-prototype-verify/SKILL.md)。
+- 生产代码（含 CLI）及编译／打包资源读[构建与运行](references/verification-scope.md#production-delivery-must-build-and-run)。必须有当前受影响目标成功构建／编译和启动、冒烟或关键入口运行证据；解释型项目做实际导入／语法检查及运行。核对输入、依赖、配置与环境后才可复用。
+- 项目现有证据仍缺生产 Web 浏览器交互时，完整读[浏览器验证政策](references/web-browser-verification.md)。
+- 补测或重跑先读[增量证据](references/verification-scope.md#information-gained-from-continued-work)，按实际动作读[新增测试](references/verification-scope.md#new-tests-and-stopping-conditions)或[扩大范围](references/verification-scope.md#expansion-or-repetition-needs-specific-grounds)。失败读[失败诊断](references/verification-scope.md#failure-diagnosis-and-repair-limits)，保留原始证据。无新进展提前交 PM，两次修复失败即停止。
+- 交接读[停止条件](references/verification-scope.md#handoff-and-valid-evidence)，PM／QA 按职责读[审查与交付](references/verification-scope.md#independent-qa-review-and-pm-delivery)。隔离 worktree 按[交付合同](../xy-workflow/references/worktree-delivery.md)绑定 worktree、base、checkpoint，并验证实际合成候选。
 
 <!-- workflow-contract: references/verification-scope.md -->
-
-For actual production Web browser evidence gaps, read the shared
-[Web browser verification policy](references/web-browser-verification.md). Reuse project tests first;
-supplemental interaction prefers the bundled `xy-playwright` adapter, with concrete reasons for other
-browser tools and desktop-only need for computer control. This does not automate prototypes or widen QA permissions.
-
 <!-- workflow-contract: references/web-browser-verification.md -->
 
 ## Evidence contract
@@ -83,32 +26,12 @@ browser tools and desktop-only need for computer control. This does not automate
 ```text
 ## Build-verify
 - Role: xy-*
-- Scope: <changed behavior and mandatory coverage; distinguish new execution from valid reused evidence>
-- Build / runnable result: <affected target, environment and actual build plus run/smoke evidence; non-production applicability>
-- Commands: <exact commands>
-- Exit code: 0
-- Evidence summary: <success trailer and relevant warnings>
-- Full log: <subagent thread reference or ignored local artifact path>
+- Scope: <变更、必做覆盖、已执行／有效复用、相关未验证项>
+- Build / runnable result: <目标、环境、实际构建和运行结果；非生产交付写明适用检查>
+- Commands: <逐项记录真实命令>
+- Exit code: <每条命令的实际退出码>
+- Evidence summary: <成功尾行与相关警告，或失败摘要与 Status: BLOCKED>
+- Full log: <QA 能读取的完整线程引用或已忽略的本地日志路径>
 ```
 
-Do not paste a long raw log into the PM handoff. The full reference must be resolvable
-by QA. If a command fails, include the exit code, a short failure excerpt, the full-log
-reference, and `Status: BLOCKED`. After two failed repair attempts, stop and report to
-the PM. Never invent, paraphrase away, or claim unexecuted validation.
-In existing Validation, explain added coverage, invalidated evidence/specific risk, or the new diagnosis,
-testable hypothesis/repair progress and expected evidence for continued failed rework. Keep relevant
-unverified scope explicit. Without progress, stop the current repeated failing path early and return it to
-PM under the policy above; do not reset existing limits or treat stopping as success. Without a gap, add
-no verification report/test file. A scoped pass supports only that scope, not a claim that all tests passed.
-
-`BUILD_VERIFIED` is evidence, not a QA result or user-facing completion state. For Full work, preserve the order
-`QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`;
-this Skill creates no QA report, design artifact,
-approval record, or metadata file. Light assesses closeout at the actual handoff; an unaudited result is not QA PASS.
-After PM accepts evidence and the necessary feedback window ends, close or retire the instance under WORKFLOW's
-instance lifecycle. Retain readable full-log references; ending a native instance must not lose the sole evidence.
-
-For isolated tasks, hand evidence back with the exact worktree/base/checkpoint identity; only PM
-creates scoped local transport checkpoints. Follow `xy-workflow/references/worktree-delivery.md` for
-composed-result verification and confirm/auto main-branch delivery. A unit's green tests are not
-integration proof; keep checks proportional and preserve the ordinary non-worktree route.
+验证执行失败或必做证据缺失须报 `Status: BLOCKED`，禁止标记 `BUILD_VERIFIED`。`BUILD_VERIFIED` 仅表示实现验证，独立 QA 保持只读。Light 默认由原生实现角色验证，交接时由 PM 按风险决定独立审查、文档和记忆；Full 或已选为必需的独立 QA 必须执行。

@@ -12,6 +12,7 @@
   if (!boot?.context || boot.schema_version !== 5 || parent !== window || document.querySelectorAll("iframe").length !== 1
     || $("prototype-preview").getAttribute("sandbox") !== "allow-scripts") { fail(boot?.error || "请从本轮交付入口打开画布。"); return; }
   const connection = window.PrototypeLiveConnection.create(boot.context);
+  let selectNavigation;
   let model, host, timer = null, saveTimer = null, closed = false, checking = false, revision = 0, pending = null, saving = false, paused = false;
   const warning = document.createElement("p"); warning.className = "live-source-warning"; warning.setAttribute("role", "alert"); warning.hidden = true; $("review-workspace").insertBefore(warning, document.querySelector(".review-toolbar").nextSibling);
   function stopWrites(message, block = false) { paused = true; clearTimeout(saveTimer); warning.hidden = false; warning.textContent = message; if (block) { clearInterval(timer); model?.block(); } model?.setStorageMessage(message); announce(message); }
@@ -40,7 +41,8 @@
     host = window.PrototypeCanvasHost.create({ boot, model, reviewing, announce, onNavigate(entry) {
       if (!reviewing) {
         $("open-review").href = `/review/${encodeURIComponent(entry.name)}`;
-        for (const link of $("prototype-pages").querySelectorAll("a")) { if (link.dataset.page === entry.path) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); }
+        selectNavigation(entry.name);
+        $("page-contract-content").replaceChildren();
       }
       // 地址只投影登记的name，凭据已从fragment清除；刷新不会跳回首个页面。
       history.replaceState(null, "", `/${reviewing ? "review" : "delivery"}/${encodeURIComponent(entry.name)}`);
@@ -50,7 +52,7 @@
       const toggle = $("navigation-toggle"), navigation = $("delivery-navigation");
       // 收起只改变工具目录和焦点，不重建原稿或重置相机；HTTP 与 file 各自仅注册一次。
       function closeNavigation() { navigation.hidden = true; toggle.setAttribute("aria-expanded", "false"); toggle.focus(); }
-      // 合同仍属于交付说明，只投影子页声明的五段纯文本；评审壳不维护说明入口或副本。
+      // 合同仍属于交付说明，只投影子页声明的纯文本和当前页的已登记需求；评审壳不维护说明入口或副本。
       host.attachViews({ contract: window.PrototypeCanvasPresentation.contract });
       $("open-review").addEventListener("click", (event) => {
         event.preventDefault();
@@ -59,11 +61,12 @@
       });
       $("open-developer").addEventListener("click", () => { $("developer-dialog").showModal(); $("developer-title").focus(); });
       $("developer-close").addEventListener("click", () => $("developer-dialog").close());
-      for (const entry of boot.pages) { const link = document.createElement("a"); link.textContent = entry.label; link.dataset.page = entry.path; link.href = `/delivery/${encodeURIComponent(entry.name)}`;
-        link.addEventListener("click", (event) => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); closeNavigation(); host.navigate(entry.path).catch((error) => announce(error.message)); }); $("prototype-pages").append(link); }
+      selectNavigation = window.PrototypeCanvasPresentation.navigation(boot.pages,
+        (entry) => `/delivery/${encodeURIComponent(entry.name)}`,
+        (entry) => { closeNavigation(); host.navigate(entry.path).catch((error) => announce(error.message)); });
       toggle.addEventListener("click", () => { navigation.hidden = !navigation.hidden; toggle.setAttribute("aria-expanded", String(!navigation.hidden)); });
       document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !navigation.hidden) { event.preventDefault(); closeNavigation(); } });
-      $("canvas-fit").addEventListener("click", host.camera.fit); $("canvas-zoom-out").addEventListener("click", () => host.camera.zoom(1 / 1.25)); $("canvas-zoom-in").addEventListener("click", () => host.camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", () => host.camera.zoom(1 / model.state.cameras[model.state.page].k));
+      $("canvas-fit").addEventListener("click", host.camera.fit); $("canvas-zoom-out").addEventListener("click", () => host.camera.zoom(1 / 1.25)); $("canvas-zoom-in").addEventListener("click", () => host.camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", host.camera.resetZoom);
     }
     const name = decodeURIComponent(location.pathname.split("/").at(-1)), initial = boot.pages.find((entry) => entry.name === name);
     if (!initial) throw Error("此页面未登记在本轮来源中。");

@@ -23,7 +23,7 @@ from typing import Any
 
 try:
     from lib.delivery.native_handoff import (
-        HOSTS, NativeHandoffError, decode_handoff_json, extract_native_handoff, read_handoff_json,
+        HOSTS, MAX_HANDOFF_BYTES, NativeHandoffError, decode_handoff_json, extract_native_handoff, read_handoff_json,
     )
     from lib.skills.qa_review_policy import METHODS
     from lib.skills.role_skills import IMPLEMENTER_ROLES
@@ -35,7 +35,7 @@ try:
     from lib.validate_project_docs import builtin_standard_rule_catalog
 except ImportError:
     from lib.delivery.native_handoff import (
-        HOSTS, NativeHandoffError, decode_handoff_json, extract_native_handoff, read_handoff_json,
+        HOSTS, MAX_HANDOFF_BYTES, NativeHandoffError, decode_handoff_json, extract_native_handoff, read_handoff_json,
     )
     from lib.skills.qa_review_policy import METHODS
     from lib.skills.role_skills import IMPLEMENTER_ROLES
@@ -105,7 +105,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate fixed QA scope and standards-policy coverage JSON."
     )
-    parser.add_argument("command", choices=("validate", "schema", "extract"))
+    parser.add_argument("command", choices=("validate", "schema", "extract", "compose", "compare-target"),
+                        help="compose 展开 Reviewer 判定；compare-target 只比对当前包与 Git 候选目标")
     parser.add_argument("--input", type=Path, help="JSON file; omit to read UTF-8 JSON from stdin")
     parser.add_argument("--host", choices=HOSTS, help="Native terminal envelope host; extract only")
     parser.add_argument("--task-pack", type=Path, help="required current self-contained QA task pack; schema accepts none")
@@ -252,10 +253,15 @@ def _string_list(value: Any, label: str, *, allow_empty: bool = True) -> tuple[s
     return values
 
 
-def _details_record(value: Any, label: str, fields: set[str]) -> dict[str, Any]:
+def _details_record(value: Any, label: str, fields: set[str], *, optional: set[str] | None = None) -> dict[str, Any]:
     record = _object(value, label)
-    if set(record) != fields:
+    if optional is None and set(record) != fields:
         raise QAHandoffError(f"{label} must contain exactly: {', '.join(sorted(fields))}")
+    if optional is not None:
+        missing = fields - record.keys()
+        unknown = record.keys() - fields - optional
+        if missing or unknown:
+            raise QAHandoffError(f"{label} 缺少字段 {sorted(missing)}，未识别字段 {sorted(unknown)}")
     return record
 
 
@@ -666,7 +672,11 @@ def _validate_standards_coverage(
             "standards_policy_coverage.path_checks must classify every changed path"
         )
     if audit_result == "PASS":
-        missing_from_task_pack = sorted(required_rule_ids - task_pack_rule_ids)
+        # 完整回执也可能手工构造。逐条有适用处置的规则和逐路径映射已经表明 Reviewer
+        # 实际采用了它们，不能通过删去 required 汇总中的 ID 把漏派规则洗成 PASS。
+        applicable_rule_ids = {rule_id for rule_id, check in rule_checks.items()
+                               if check["disposition"] != "not_applicable"}
+        missing_from_task_pack = sorted((required_rule_ids | applicable_rule_ids) - task_pack_rule_ids)
         if missing_from_task_pack:
             raise QAHandoffError(
                 "PASS cannot hide applicable rule(s) omitted from the PM Task Pack: "
@@ -684,13 +694,11 @@ def _validate_standards_coverage(
             )
 
 
-def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
-    """验证 QA 内部结果；成功即返回，失败抛出稳定、可测试的错误。"""
+def _current_qa_pack(task_pack_body: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
+    """校验原始 QA 包并取得当前 Reviewer 的唯一身份，供生成和校验共用。"""
 
     # 对照真正交给Reviewer的包原字节，而非把回执自报身份或重序列化SHA当权威。
     # 这里只核对当前输入；哈希与fresh声明都不能证明宿主实际隔离或模型已阅读。
-    if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
-        raise QAHandoffError("QA schema_version must be integer 2")
     try:
         pack = decode_handoff_json(task_pack_body)
         if not isinstance(pack, dict) or "task" not in pack:
@@ -702,14 +710,37 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
         if task.get("agent_retired") or task.get("state") not in {"RUNNING", "QA"}:
             raise TaskGraphError("current QA task pack must identify an active, non-retired Reviewer")
         validate_reference(task.get("agent_ref"))
-    except (TaskGraphError, ValueError, UnicodeError) as exc:
+    except (TaskGraphError, ValueError, UnicodeError, TypeError) as exc:
         raise QAHandoffError(f"invalid current QA task pack: {exc}") from exc
+    return pack, {"request_id": task["request_id"], "task_id": task["id"],
+                  "agent_alias": task["agent_alias"], "agent_ref": task["agent_ref"],
+                  "task_pack_sha256": digest(task_pack_body)}
+
+
+def _frozen_rule_sources(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """每个稳定 ID 在完整覆盖表中只有一行，跨领域重名时无法确定权威来源。"""
+    sources = {}
+    for leaf in contract["leaves"]:
+        for rule in leaf["rule_ids"]:
+            if rule in sources:
+                raise QAHandoffError(f"当前 QA 包的规则 {rule} 存在多个来源")
+            sources[rule] = leaf
+    return sources
+
+
+def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
+    """既有回执入口与 compose 共用相同的当前包约束与完整语义校验。"""
+    _validate_receipt(payload, *_current_qa_pack(task_pack_body))
+
+
+def _validate_receipt(payload: dict[str, Any], pack: dict[str, Any], expected: dict[str, Any]) -> None:
+    """校验已绑定原始字节的当前包；只有整份回执通过才可向调用方返回。"""
+    if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
+        raise QAHandoffError("QA schema_version must be integer 2")
+    task = pack["task"]
     reference = _object(payload.get("handoff_ref"), "handoff_ref")
     if set(reference) != HANDOFF_REF_FIELDS:
         raise QAHandoffError("handoff_ref must contain exactly the schema 2 current task identity fields")
-    expected = {"request_id": task["request_id"], "task_id": task["id"],
-                "agent_alias": task["agent_alias"], "agent_ref": task["agent_ref"],
-                "task_pack_sha256": digest(task_pack_body)}
     if reference != expected:
         raise QAHandoffError("handoff_ref does not match the current QA task pack identity or original-byte SHA-256")
     audit_result = payload.get("audit_result")
@@ -720,6 +751,10 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
     review_method = _object(payload.get("review_method"), "review_method")
     _validate_review_method(review_method)
     changed_paths = _validate_scope(review_method)
+    # 与 Foundation 最终验收沿用同一完整相等合同：仓库和路径数组保留冻结顺序，
+    # 单改某个子仓的 head 或指纹也不再是原审计快照。三个回执入口在此共同把关。
+    if "qa_scope_ref" in task and review_method["scope_ref"] != task["qa_scope_ref"]:
+        raise QAHandoffError("QA handoff does not match the complete PM-frozen scope_ref (task.qa_scope_ref)")
     if "engineering_policy_coverage" in payload:
         raise QAHandoffError(
             "engineering_policy_coverage is unsupported after the direct STANDARDS upgrade"
@@ -734,7 +769,7 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
     contract = pack["standards_contract"]
     if any(coverage[key] != contract[key] for key in ("index_path", "root", "index_fingerprint")):
         raise QAHandoffError("QA standards index does not match the current task pack")
-    frozen_rules = {rule: leaf for leaf in contract["leaves"] for rule in leaf["rule_ids"]}
+    frozen_rules = _frozen_rule_sources(contract)
     for check in coverage["rule_checks"]:
         source = frozen_rules.get(check["rule_id"])
         if source is not None and (
@@ -754,15 +789,103 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
     elif audit_result == "FAIL":
         # 早期内部回执没有 review_details。已验证规则中的硬失败或实际漏派规则
         # 仍能定位返工证据；回执自行删去 task_pack_rule_ids 不能凭空构成一条发现。
-        required_rules = set(coverage["required_engineering_rule_ids"] + coverage["required_design_rule_ids"])
-        undispatched_rules = required_rules - frozen_rules.keys()
         legacy_rule_blocker = any(
             (check["severity"] == "hard" and check["disposition"] == "fail")
-            or (check["rule_id"] in undispatched_rules and check["disposition"] != "not_applicable")
+            or (check["rule_id"] not in frozen_rules and check["disposition"] != "not_applicable")
             for check in coverage["rule_checks"]
         )
         if not (legacy_rule_blocker or legacy_skill_blocker):
             raise QAHandoffError("FAIL requires actionable review_details or a specific documented mandatory failure")
+
+
+def _compose_coverage(decisions: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
+    """展开 Reviewer 的明确分组。每个路径的适用规则只输入一次，反向索引生成 affected_paths。"""
+    coverage = {key: contract[key] for key in ("index_path", "root", "index_fingerprint")}
+    frozen_rules = _frozen_rule_sources(contract)
+    coverage["task_pack_rule_ids"] = sorted(frozen_rules)
+    coverage["path_checks"] = []
+    coverage["rule_checks"] = []
+    paths_by_rule: dict[str, list[str]] = {}
+    # 必审规则仍需显式判定，独立发现的适用规则也计入对应领域。只有派发清单从包
+    # 复制，绝不把 PM 的选择当作 Reviewer 对每个变更或规则的自动适用性判断。
+    required = {domain: set(contract[f"required_{domain}_rule_ids"]) for domain in ("engineering", "design")}
+    remaining = MAX_HANDOFF_BYTES
+
+    def append_row(key: str, row: dict[str, Any]) -> None:
+        # 极小的分组可能形成很大的笛卡尔积。按实际行计算共享读取上限，超限时及时
+        # 停止展开，既不消耗无界内存，也不产生后续 validate 无法读取的成功回执。
+        nonlocal remaining
+        remaining -= len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        if remaining < 0:
+            raise QAHandoffError("分组展开后的 QA 回执超过 4 MiB")
+        coverage[key].append(row)
+
+    for i, entry in enumerate(_array(decisions["path_groups"], "path_groups")):
+        label = f"path_groups[{i}]"
+        group = _details_record(entry, label, {"paths", "rule_ids", "reason"})
+        paths = _string_list(group["paths"], f"{label}.paths", allow_empty=False)
+        rules = list(_stable_ids(group["rule_ids"], f"{label}.rule_ids"))
+        reason = _nonempty_string(group["reason"], f"{label}.reason")
+        for path in paths:
+            append_row("path_checks", {"path": path, "applicable_rule_ids": rules, "reason": reason})
+        for rule in rules:
+            paths_by_rule.setdefault(rule, []).extend(paths)
+
+    builtin_catalog = None
+    for i, entry in enumerate(_array(decisions["rule_groups"], "rule_groups")):
+        label = f"rule_groups[{i}]"
+        group = _details_record(entry, label, {"rule_ids", "disposition", "evidence_refs"}, optional={
+            "severity", "source_anchor", "source_path", "source_fingerprint", "not_applicable_reason", "exception_ref",
+        })
+        for rule in _stable_ids(group["rule_ids"], f"{label}.rule_ids", allow_empty=False):
+            leaf = frozen_rules.get(rule, {})
+            # 项目规则的严重性未冻结在包中，必须由 Reviewer 读叶文档后提供。内置规则
+            # 以当前运行核心的固定目录为准。对于 QA 独立发现的漏派规则，允许给出真实
+            # 来源、指纹和证据供 FAIL 交接；完整校验器会阻止用这组证据掩盖漏派并 PASS。
+            path = _nonempty_string(group.get("source_path", leaf.get("path")), f"{label}.source_path")
+            fingerprint = group.get("source_fingerprint", leaf.get("content_fingerprint"))
+            domain = source_domain(path, contract["root"])
+            severity = group.get("severity")
+            builtin = builtin_source_path(path)
+            if builtin is not None and "severity" not in group:
+                if builtin_catalog is None:
+                    builtin_catalog = builtin_standard_rule_catalog(Path(__file__).resolve().parents[2])
+                severity = builtin_catalog[builtin]["rules"].get(rule)
+            if group["disposition"] != "not_applicable" and domain in required:
+                required[domain].add(rule)
+            append_row("rule_checks", {
+                "rule_id": rule, "source_path": path, "source_fingerprint": fingerprint,
+                "source_anchor": group.get("source_anchor", rule), "domain": domain, "severity": severity,
+                "disposition": group["disposition"], "affected_paths": paths_by_rule.get(rule, []),
+                "evidence_refs": group["evidence_refs"], "not_applicable_reason": group.get("not_applicable_reason", ""),
+                "exception_ref": group.get("exception_ref", ""),
+            })
+    for domain, rules in required.items():
+        coverage[f"required_{domain}_rule_ids"] = sorted(rules)
+    return coverage
+
+
+def _compose_receipt(decisions: dict[str, Any], pack: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
+    """将同一 Reviewer 已给出的事实展开，构造过程只派生身份、冻结范围和重复元数据。"""
+    _details_record(decisions, "compose", {"task_pack_sha256", "audit_result", "review_method", "skill_evidence",
+                                          "review_details", "path_groups", "rule_groups"})
+    if decisions["task_pack_sha256"] != reference["task_pack_sha256"]:
+        raise QAHandoffError("判定的 task_pack_sha256 与本次 QA 原包字节不符")
+    method = _details_record(decisions["review_method"], "review_method", {"selected", "capability_evidence"},
+                             optional=REVIEW_METHOD_FIELDS - {"selected", "capability_evidence"})
+    method = {"external_skill": None, "fallback_reason": None, **method}
+    frozen_scope = pack["task"].get("qa_scope_ref")
+    if frozen_scope is not None:
+        # 若 Reviewer 给了显式范围，原样留给共用校验器与冻结包比较，不能覆盖分歧。
+        method.setdefault("scope_ref", frozen_scope)
+    elif "scope_ref" not in method:
+        raise QAHandoffError("当前 QA 包没有 qa_scope_ref，Reviewer 必须提供实审 review_method.scope_ref")
+    _details_record(method["scope_ref"], "review_method.scope_ref", {"repositories"})
+    _details_record(decisions["skill_evidence"], "skill_evidence", SKILL_EVIDENCE_FIELDS)
+    return {"schema_version": 2, "handoff_ref": reference, "audit_result": decisions["audit_result"],
+            "review_method": method, "skill_evidence": decisions["skill_evidence"],
+            "review_details": decisions["review_details"],
+            "standards_policy_coverage": _compose_coverage(decisions, pack["standards_contract"])}
 
 
 def main() -> int:
@@ -775,21 +898,32 @@ def main() -> int:
         return 0
     if args.command == "extract" and (args.input is None or args.host is None):
         parser.error("extract requires --host and --input")
-    if args.command == "validate" and args.host is not None:
+    if args.command != "extract" and args.host is not None:
         parser.error("--host is supported only for extract")
     if args.task_pack is None:
-        parser.error("validate/extract requires --task-pack")
+        parser.error(f"{args.command} requires --task-pack")
     try:
         payload = (extract_native_handoff(args.host, args.input) if args.command == "extract"
                    else _object(read_handoff_json(args.input), "QA handoff input"))
-        task_pack_body = read_record(args.task_pack)
-        validate_qa_handoff(payload, task_pack_body)
+        pack, reference = _current_qa_pack(read_record(args.task_pack))
+        if args.command == "compare-target":
+            # 只读辅助命令沿用同一原包身份；直接返回机械诊断，避开回执生成及验收。
+            from lib.delivery.review_target import compare_target
+            print(json.dumps(compare_target(pack["task"], reference, payload, Path.cwd()),
+                             ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.command == "compose":
+            payload = _compose_receipt(payload, pack, reference)
+        _validate_receipt(payload, pack, reference)
         if args.command == "extract" and payload["handoff_ref"]["agent_ref"]["host"] != args.host:
             raise QAHandoffError("native host does not match the current QA task pack")
-        # 两个入口共用 schema 2 校验，extract 保留内层附加字段。过深的 JSON 即使
+        # 三个入口共用 schema 2 校验，extract 保留内层附加字段。过深的 JSON 即使
         # 通过了解析也可能无法重新编码，必须在写出任何成功结果前拒绝该类输入。
-        result = payload if args.command == "extract" else {"status": "valid"}
-        response = json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        result = {"status": "valid"} if args.command == "validate" else payload
+        response = json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False,
+                              separators=(",", ":") if args.command == "compose" else None)
+        if args.command == "compose" and len(response.encode("utf-8")) + 1 > MAX_HANDOFF_BYTES:
+            raise QAHandoffError("分组展开后的 QA 回执超过 4 MiB")
     except (QAHandoffError, NativeHandoffError, TaskGraphError, OSError, UnicodeError, ValueError, RecursionError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

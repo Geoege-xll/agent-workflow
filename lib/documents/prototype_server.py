@@ -31,13 +31,18 @@ class PrototypeServer(ThreadingHTTPServer):
     daemon_threads = False
     block_on_close = True
     allow_reuse_address = False
+    # 浏览器同时请求同一工具壳的样式、脚本和 iframe。macOS 在默认 5 个待接受
+    # 连接被占满时可能直接 reset 随后的资源连接；使用与实际工作线程相同的有界容量。
+    # 此处只调整 accept 前的内核队列，运行中请求及慢连接的限制仍由信号量和超时控制。
+    request_queue_size = 32
 
-    def __init__(self, source: LiveSource, tools, navigation, *, instance=None, idle_seconds=1800, lifetime_seconds=86400):
+    def __init__(self, source: LiveSource, tools, navigation, *, delivery_catalog=None, instance=None, idle_seconds=1800, lifetime_seconds=86400):
         self.source, self.tools = source, dict(tools)
         # 生命周期内固定当次安全捕获的有界闭包，只驻留内存，不在磁盘派生HTML。
         # 外壳通过context检查明确显示来源变化；保存/交还仍重读真实文件，不能将
         # 这里的旧修订画面当作最新源，亦不能随最新指针悄悄替换旧定位所见内容。
         _, self.files, _ = source.current()
+        self.delivery_catalog = delivery_catalog
         self.instance = instance or secrets.token_hex(24)
         self.token, self.management = secrets.token_hex(32), secrets.token_hex(32)
         self.content_cap = secrets.token_hex(32)
@@ -232,7 +237,15 @@ class Handler(BaseHTTPRequestHandler):
                 if name not in {entry["name"] for entry in self.server.navigation}: break
                 template = self.server.tools["tool/" + kind + ".html"].decode("utf-8")
                 if 'id="prototype-review-data"' in template or template.count("</head>") != 1: raise ValueError("工具启动模板无效")
-                boot = {"schema_version": 5, "context": self.server.source.context, "pages": self.server.navigation}
+                navigation = self.server.navigation
+                if kind == "delivery" and self.server.delivery_catalog is not None:
+                    # 工具由 prepare 登记，HTTP 诊断使用同一目录。只合并当前请求已获准
+                    # 访问的页面分组，不向这个实例开放其他请求的页面或绑定。
+                    catalog = self.server.delivery_catalog()
+                    selected = {entry["path"]: entry for entry in navigation}
+                    navigation = [{**selected[page["path"]], "groups": page["groups"]}
+                                  for page in catalog["pages"] if page["path"] in selected]
+                boot = {"schema_version": 5, "context": self.server.source.context, "pages": navigation}
                 template = template.replace("</head>", '<script type="application/json" id="prototype-review-data">' + safe_boot(boot) + '</script></head>')
                 if bootstrap:
                     connection = {"schema_version": 1, "review_id": self.server.source.context["review_id"], "token": self.server.token}
@@ -246,6 +259,23 @@ class Handler(BaseHTTPRequestHandler):
             asset = path.removeprefix("/assets/")
             if asset in review.LIVE_TOOL_ASSETS and asset not in {"delivery.html", "review.html"}:
                 return self.answer(200, self.server.tools["tool/" + asset], mimetypes.guess_type(asset)[0] or "application/octet-stream")
+        prefix = "/requirement/" + self.server.content_cap + "/"
+        if path.startswith(prefix) and self.command == "GET" and not parsed.query:
+            # 只接受受信交付壳打开的新标签。业务 iframe、fetch、外部来源均不能
+            # 读取需求正文；内容闭包和草稿权限保持独立，不开放通用文件服务。
+            if (self.headers.get_all("Sec-Fetch-Mode", []) != ["navigate"]
+                or self.headers.get_all("Sec-Fetch-Dest", []) != ["document"]
+                or self.headers.get_all("Sec-Fetch-Site", []) != ["same-origin"]):
+                return self.failure(403, "navigation_required", "请从本页开发说明打开需求")
+            entry = next((page for page in self.server.navigation if page["name"] == path[len(prefix):]), None)
+            if entry:
+                source = self.server.source.context["plan_source"]
+                parser = review.workspace.PageParser(entry["path"])
+                parser.feed(self.server.files[entry["path"]].decode("utf-8"))
+                parser.close()
+                if parser.plan_source == source and any(kind == "markdown" for kind, _ in parser.requirement_links):
+                    return self.answer(200, self.server.files[source], "text/plain; charset=utf-8")
+            return self.failure(404, "not_found", "页面没有登记需求链接")
         prefix = "/content/" + self.server.content_cap + "/"
         if path.startswith(prefix):
             relative = path[len(prefix):]

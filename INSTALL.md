@@ -1,6 +1,6 @@
 # 安装 xy-workflow 正式插件
 
-本页对应 `xy-workflow 3.0.7` 和配套 Native Agent Config `0.1.6`。正式安装使用 Git stable 来源和 GitHub Release，维护入口通过包内组件描述校验 ZIP，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [插件载荷](PLUGIN.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
+本页对应 `xy-workflow 3.0.8` 和配套 Native Agent Config `0.1.6`。正式安装使用 Git stable 来源和 GitHub Release，维护入口通过包内组件描述校验 ZIP，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [插件载荷](PLUGIN.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
 
 本页 `xy-workflow` 身份由 `product/command_identity.json` 唯一维护；使用下列命令时核对匹配的远程分发资产与客户端回执，
 不能仅凭源码版本或命令说明判断本机已经切换。活动任务使用原物理资源完成后再按官方客户端切换。
@@ -13,11 +13,10 @@
 
 ## 随包精选 Skill
 
-新机器安装本插件时一起获得原版 Grill Me、唯一必要primitive grilling、Taste，以及官方
-Playwright CLI与其完整Skill；公开入口统一 `xy-grill-me`、`xy-grilling`、`xy-taste`、
-`xy-playwright`，配置入口为 `xy-config`。无需逐个安装全局Skill或完整上游plugin。
-固定来源、commit/发布版本、inventory、LICENSE、NOTICE和资产credit位于当前包的
-`third_party/selected-skills.lock.json` 及 `third_party/selected-skills/`；构建只消费本地锁定资源。
+安装插件会一并提供 Grill Me、grilling、Taste、官方 Playwright CLI/Skill 和官方
+`agent-desktop`。前四个入口为 `xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，桌面
+Skill 使用上游名称 `agent-desktop`。配置入口为 `xy-config`。固定来源、版本、逐文件清单、许可
+和资产署名见当前包的 `third_party/selected-skills.lock.json` 与 `third_party/selected-skills/`。
 
 从官方客户端取得实际插件物理目录后，可只读区分资源齐备与现有运行环境：
 
@@ -26,10 +25,19 @@ bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source
 bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py selected-skills diagnose
 ```
 
-check 成功只证明资源锁匹配；diagnose 检查已有 Node >=22、浏览器与可选 ffmpeg，不安装软件，
-不执行 Taste 脚本。设计方法读取与 Taste 完整脚本/gate 运行分别判断；默认原型仍静态验收且
-不截图，不注册上游 Stop hook。实际 Skill 调用、全文阅读和宿主运行需要本次会话证据。
-PM 自动通过同包 `xy-grilling` 加载原版，`xy-grill-me` 仅用户显式；不会因安装而默认启用其它上游工作流。
+`check` 核对整包资源锁。`diagnose` 只读检查已有 Node >=22、浏览器与可选 ffmpeg。Taste 按需使用，
+选中后的全文读取见物理插件根的 `platforms/shared/skills/xy-workflow/references/skill-selection.md`。
+PM 自动通过同包 `xy-grilling` 加载原版，`xy-grill-me` 由用户显式调用。
+
+macOS 可从当前插件物理目录直接调用 `agent-desktop` v1.3.1，按实际运行环境选 `arm64` 或
+`x86_64`，CLI 使用同目录随装的 helper。`status` 报告权限及支持的界面：
+
+```text
+"<plugin-root>/third_party/selected-skills/agent-desktop/runtime/macos/<arm64-or-x86_64>/agent-desktop" status
+```
+
+系统权限依当前宿主与用户授权。桌面交互验证按上述共享规则选用、定位及回读取证；安装和状态输出
+只提供资源与环境证据。
 
 Playwright只读诊断入口为：
 
@@ -55,6 +63,18 @@ codex plugin list --json
 安装后在官方 `/hooks` 中审阅并信任当前 SessionStart 定义，再开始新会话。安装或启用不授予 Hook 信任，不直接写 trust 记录，不以全局或项目指令文件替代官方审阅。Codex 包保留单一 `.codex-plugin/plugin.json` 清单，避免已发现的 portable 根清单漏载 Hook 问题。
 
 ## Claude Code
+
+在已安装官方 Claude Code CLI 和 Python 3.11+ 的 macOS 或 Linux 电脑上，可从当前源码仓根目录运行 `python3 scripts/install_claude.py`。也可将这个文件单独复制到另一台电脑，审阅后在文件所在目录运行以下命令。
+
+```bash
+python3 install_claude.py
+```
+
+脚本先从官方 CLI 核对正式 Git 地址、分支与用户级启用状态，再显示可选的来源说明。键入 `yes` 后，它会将说明追加到当前用户的 `autoMode.environment`。此设置默认位于 `~/.claude/settings.json`，设置了 `CLAUDE_CONFIG_DIR` 时使用该目录下的 `settings.json`。新建数组保留 `"$defaults"`，已有数组沿用原有默认项选择。直接回车即可跳过；切换项目后无需再次选择。同源重跑沿用现有选择，同名不同来源会停下并提示检查。
+
+通过官方 `/plugin install` 或下列 CLI 命令只安装插件。已安装或曾跳过的用户可在同一脚本命令后加 `--configure-source` 补选。若要手动配置，从源码根目录或已安装插件根目录打开 `platforms/claude/references/pm-integration.md`，其中的“跨项目复用 Claude Auto 的来源说明”提供完整 JSON 示例。保存后在任一项目运行 `claude auto-mode config` 核对生效条目。该说明仅描述已核实的本地工作流用途；宿主仍执行 ask、deny 和组织策略。
+
+也可以直接使用官方命令安装：
 
 ```bash
 claude plugin marketplace add 'https://github.com/Geoege-xll/agent-workflow.git#plugins-claude-stable'

@@ -11,13 +11,16 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 if __package__:
+    from lib.documents.markdown_headings import markdown_anchors
     from lib.documents.plan_documents import local_target
     from lib.documents.safe_documents import digest, normalized_relative, snapshot
     from lib.project.validate_project_config import validate_docs
     from lib.task_sources import validate_task_source
 else:
+    from lib.documents.markdown_headings import markdown_anchors
     from lib.documents.plan_documents import local_target
     from lib.documents.safe_documents import digest, normalized_relative, snapshot
     from lib.project.validate_project_config import validate_docs
@@ -81,15 +84,18 @@ class RequirementNavigation:
         html = source.with_suffix(".html")
         expected = {"html": html, "markdown": source}
         for kind, raw in links:
-            target = local_target(self.project, self.prototype / page, raw)
+            # 先按完整 href 核对目录、协议和声明路径，再读取目标正文。只检查节点
+            # 元数据可避免误读指向另一个 Markdown 的链接，也省去对有效原稿的重复读取。
+            target = local_target(self.project, self.prototype / page, raw, inspect_only=True)
             if target != expected[kind]:
                 raise ValueError(f"需求导航 {kind} 链接未指向声明来源的对应文件：{raw!r}")
-        # 只捕获已声明的链接目标；不读取未链接的旧 HTML，更不要求它随原稿同步。
-        # 每次 validate 都复核已捕获的目标，后续 require_current_inputs 再统一检查，
-        # 既保留跨页面复用时的竞态拒绝，也不因缓存命中跳过新出现的可选 HTML。
-        for kind, _ in links:
-            self._capture(expected[kind])
-        # 反向原型链接与历史 HTML 的旧版本记录不是页面渲染依赖或视觉重批条件。
+            body = self._capture(target)
+            if kind == "markdown" and (fragment := urlsplit(raw).fragment):
+                # HTML 解析器已处理属性实体，URL 片段此处只解码一次。用安全快照的
+                # 同一份原稿匹配真实标题或显式锚点；后续统一复核快照，避免混用两个版本。
+                anchor = unquote(fragment, errors="strict")
+                if anchor not in markdown_anchors(body.decode("utf-8")):
+                    raise ValueError(f"需求导航 {raw!r} 找不到 ATX 标题或单行显式锚点 #{anchor}")
 
     def require_current_inputs(self) -> None:
         """返回原型证据前复核已读输入，不能把期间被替换的文档绑定到成功结果。"""

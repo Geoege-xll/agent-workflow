@@ -80,8 +80,7 @@ The task pack must include standards-conformance, currently applicable built-in 
    resolved and SHA-256-fingerprinted `design_authority_refs` entry, and stop if the target needs a new design decision. Do not edit the
    design workspace or require a visual gate. For `UI-Patch`, `UI-Page`, or `UI-Flow` with
    `prototype_policy: required`,
-   verify each approved concrete page dependency fingerprint and read its complete
-   `Page design and interaction contract` plus only relevant shared prototype CSS. For
+   verify each approved concrete page dependency fingerprint and read its developer notes and linked original requirements plus only relevant shared prototype CSS. For
    `waived_by_user`, verify the scope-bound user decision, read the frozen requirements and applicable
    non-prototype authority, do not read or update the old prototype, and implement only the approved
    production surfaces.
@@ -96,10 +95,13 @@ The task pack must include standards-conformance, currently applicable built-in 
    environment or user reason; computer control needs an actual desktop capability. Keep task-named
    sessions and scratch cwd, close only owned sessions, and preserve permissions and screenshot limits.
    Use the repository's host-specific build and runnable evidence for WeChat Mini Programs.
+   纯小程序逻辑无需加载 `xy-playwright`。
    Browser and Playwright results apply only to actual browser surfaces.
 6. Review the diff for unauthorized paths, stack drift, prototype-only mock runtime, accessibility,
    localization, security, privacy, and unrelated rewrites.
 7. Return an evidence-first handoff to the PM.
+
+有批准原型时，结合可操作页面、页内「开发说明」和关联需求原章节实施。说明可能为空；未决行为交 PM。
 
 ## 7. Technical Deliverables
 

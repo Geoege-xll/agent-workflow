@@ -9,13 +9,13 @@ project acceptance constraints and do not start another complete generic code re
 First read the complete current schema 2 QA task pack and verify identity/SHA needed by handoff_ref. Consume only
 current request authority, selected standards, actual source/diff and necessary complete logs, without
 inheriting/copying PM or sibling conversations.
-Pin every root, nested repository and submodule independently to an explicit base/head range and
-SHA-256 diff fingerprint; a clean worktree does not exclude already committed request changes.
-Verify the native/installed method's actual scope against that binding before consuming its output.
+核对 PM 冻结的每个根仓、嵌套仓库和子模块的 base/head、变更路径及 SHA-256 差异指纹，包括本次已经提交的改动。原生或已安装审查方法的实际输入和结果都须与这份范围吻合。
 
-Read installed `xy-build-verify/references/verification-scope.md` when assessing verification.
+按验证项定位已安装的 `xy-build-verify/references/verification-scope.md`，核对涉及的构建运行、证据有效性、补测或停止条件。
 Independently inspect source, command argv, exit codes, relevant output, complete-log references and
 evidence freshness; reuse valid implementer evidence without automatically repeating all tests.
+逐条对照命令消费的输入与现行变更。有 `verification_commands[].inputs` 基线时，
+核实清单是否覆盖真实依赖、当时的日志及环境是否仍适用，另查本轮受影响目标的实际编译和加载结果。
 Preserve mandatory checks and require current build/compile and runnable-result evidence appropriate
 to the changed target. Proposed commands, stale logs, summaries and unavailable environments are
 not current success. New execution needs a specific gap, failure, changed input or unresolved risk.
@@ -33,6 +33,32 @@ path ownership and build/test/type-check/lint evidence according to actual chang
 method findings against source before deciding; no findings never establishes acceptance by itself.
 For desktop changes, cover affected desktop renderer/core trust boundaries, IPC/capabilities, native
 integration, packaging, signing, notarization, updater and release evidence.
+
+## 按符号和行段核对源码
+
+先选一个验收问题，从固定差异找出路径、符号和涉及的调用方。项目已有 CodeGraph 索引时，优先使用该索引。按 CLI 实际支持的参数取证。
+
+- 先用 `codegraph query -p "$project" --limit 3 "$symbol"` 看候选位置。已知文件但缺少具体行号时，用 `codegraph node -p "$project" --file "$file" --symbols-only` 看该文件的符号表。
+- 已知行号时用 `codegraph node -p "$project" --file "$file" --offset "$first" --limit 16`。限行仍可能遇到超长行。需要跨文件调用关系时再按实际需要对具体符号调用 `codegraph explore -p "$project" --max-files 1 "$symbol"`。
+
+各宿主以实际暴露的工具为准。只有 `codegraph_explore` 的 MCP 可能只支持 `projectPath`、`query` 和 `maxFiles`，文件数不能保证字符上限。需要有界定位时，使用可用的上述 CLI，或在宿主能保留完整响应并只展示选段时使用其选段能力。若只有不限正文的入口，遵守项目的首次查询约定，使用具体符号和支持的最小文件数，随后从实际差异或文件补读缺口。无索引时从固定差异或已知文件的字面量定位。均不创建索引或改动业务项目。
+
+对当前源码或已有完整日志，可通过插件原有 helper 先定位，再展开实际行段。下例中 `file` 为已确定的项目文件，`symbol` 为定义或错误的字面量。第二条命令的 `first`、`last` 来自实际定位或差异，`sha` 取自同一文件首个完整回包。
+
+```sh
+read_evidence() {
+  bash "$plugin/lib/python_runtime.sh" -B -X utf8 "$plugin/plugins/source_pack.py" \
+    helper --project "$project" lib/documents/context_read.py "$file" "$@"
+}
+read_evidence --find "$symbol" --max-matches 3 --limit 144
+read_evidence --lines "${first}:${last}" --limit 1200 --expect-sha256 "$sha"
+```
+
+核对回包的物理 `path`、全文件摘要和本轮固定版本。起止行均从 1 计且包含在内，`eof` 仅表示本次选定行段读完。遇到 `eof: false`，以相同行段、摘要和 `--offset <next_offset>` 续页。进一步需要调用方、异常分支或测试时，按具体缺口选下一段。已获完整工具回包中的精确片段可直接使用。引用保留原文件或完整日志、固定版本及具体行号，片段用于判断对应验收项。
+
+若未命中，检查文件、同名定义或调用入口。回包被宿主截断、摘要变化、工具失败、路径不符或文件超过 helper 的 4 MiB 读取上限时，保留失败事实，改用宿主支持的定向读取核对同一固定来源。规定须全文读取的证据继续读完；缺失或无法验证的必需证据按既有验收规则处理。
+
+## 资源与文档验收
 
 Include resource/document checks in this review. Only for actual new resources, check purpose, location,
 owner, reuse entry point and retention/reclamation conditions in original input/output contracts. Confirm
@@ -71,14 +97,7 @@ authority, source/diff or complete-log references is FAIL.
 
 ## Specialist checks and memory
 
-For actual code changes, apply installed `xy-code-standards` read-only and read relevant references only for
-matched boundaries. For production UI/design-standard tasks with actual `ui`/`accessibility` audit surfaces,
-also read the `xy-ui-design` entry's usage boundaries and applicable `references/design-quality.md` rules,
-retaining currently adopted authority. Do not execute its design, standards-writing or prototype-verification
-branches, or load prototype canvases, sources or all references for QA. Pure explanatory documentation needs
-no code method; pure backend review needs no UI method. These reads do not change independent-review method
-order, read-only permissions, task level, user prototype choice, UI-Conformance or standards_only, or start a
-second review.
+代码审查使用 `xy-code-standards` 的只读入口，由实际变更定位工程条款；生产 UI／设计规范审查使用 `xy-ui-design` 的只读入口，根据验收项展开冻结依据、基础／组件规则和适用的 `references/design-quality.md` 段落。设计创作、维护、原型交付及 PM 历史流程仅在其产物属于本轮验收对象时取相应证据。纯后端验收沿工程规则，纯说明文档按文档契约。当前包显式要求的 Skill 仍须完整读取并实际应用其适用分支。
 
 Match locally available specialist Skills progressively by description only when they improve a
 declared `audit_surface`; use host-exposed capabilities, not a scan, preload, enumeration or saved
@@ -128,7 +147,4 @@ Do not restart still-valid audit coverage, switch method/Reviewer or record stop
 Ordinary explanatory closeout alone does not trigger rereview; changes to workflow instructions, permissions,
 security, APIs or behavioral contracts still require review by actual impact.
 
-Document acceptance checks current goals/execution stage separately from the topic plan's genuinely accepted
-version. PROJECT links only explicit baselines. completed, HTML existence or non-empty lists do not create
-approval/delivery. Preserve old baselines during iteration/cancellation; do not automatically index old
-historical drafts without grounds.
+涉及主题文档时，对照验收项定位受影响的原文与引用。目录中的普通链接可指向在研主题；明确的已验收声明须能在同一主题核对版本、可观察行为、真实批准及验收证据。目录项、阶段、HTML 或勾选本身均不能证明交付。迭代或取消保留上次基线。

@@ -47,10 +47,11 @@ Before approval, the PM presents only:
 
 Use short prose and bullets. Omit raw YAML/JSON, internal Skill names, requirement fingerprints,
 task IDs and states, memory/provider details, complete Task Packs, and routine scheduler output.
-Complete this brief before the PM presents or invokes the single approval choice; do not append
-material plan details after opening that choice. For a revised request with an explicit production-only
+先呈现当前要决定的内容及后果；需求范围明确后，有实质方案取舍的任务才消费相应 `solution_decisions`。不把尚待选择的行为当作用户已同意，不用固定三次问答凑齐流程。 For a revised request with an explicit production-only
 instruction, follow the linked plan lifecycle rather than inheriting a completed prototype task or
 asking for the same choice again. Draft only the current affected work; preserve unaffected approvals.
+
+### Schema 2 graph example
 
 ```json
 {
@@ -168,6 +169,8 @@ asking for the same choice again. Draft only the current affected work; preserve
 }
 ```
 
+### Design authority and dependencies
+
 The example shows a project with an existing index. If the index is physically absent and no
 project rule leaves exist, retain configured index_path/root, set index_fingerprint to null and omit the
 index-read entry. Built-in sources use the three exact canonical paths relative to the verified plugin. Add components-rules.md for actual component rules and specific leaves for actual project differences;
@@ -189,7 +192,7 @@ affected surfaces, `recommended_policy`, a non-empty `recommendation_reason`, an
 `selected_policy` matching `prototype_policy`. For `waived_by_user`, omit prototype authorities,
 prototype-design dependencies, prototype writes, and visual Gates. Necessary `standards_only`
 maintenance remains allowed. For `required`, add the matching prototype-mode design task,
-prototype authority, and exact page Gates. Preserve requirements approval, standards conformance,
+prototype authority, and exact page Gates. Preserve scope and applicable solution decisions, standards conformance,
 build evidence, and ui/accessibility QA in both branches.
 Across the graph, only the `xy-uiux + design_ui` Writer may own either the prototype or design-standards boundary; reject
 non-design roles, missing roles, broad ancestor ownership, and hidden transitive Writers.
@@ -198,6 +201,8 @@ the PM decides the post-QA controlled-document projection, presents the prototyp
 and choices when applicable, requests approval in natural language, materializes the selected UI
 branch, freezes the approved fingerprint and `prototype_decision` internally, and validates the
 graph before dispatch.
+
+### Single-task handoff
 
 Full implementation dispatch projects the current single-task shell through the task output with schema_version:2,
 attaching only applicable standards and necessary approval/UI authority, without sibling tasks, the full graph

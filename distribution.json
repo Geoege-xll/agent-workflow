@@ -1,59 +1,59 @@
 {
   "artifacts_sha256": {
     "native/native-agent-config-0.1.6.zip": "7823621ab1fa22767c707454b0c772b74ce6eb283801cd89a60b808b28a793d7",
-    "workflow/xy-workflow-antigravity-3.0.7-local-source.zip": "b54e6ee54f1cb9f99ec0323ca5475e4ec066a412cef0f9d27711260b997f7bfa",
-    "workflow/xy-workflow-antigravity-3.0.7.zip": "39bc2a94f34f3980bc5ac8ea7c94cc96b7152b79eb04f0691479a9282bc745b8",
-    "workflow/xy-workflow-claude-3.0.7-local-source.zip": "7c4ec5f3e05d805da01f1e3db3494dcac5ef7bba921035b722cc740bbb13d342",
-    "workflow/xy-workflow-claude-3.0.7.zip": "8cd428326905bdebcd3578ffd738c76e750ef23ad18120be1521e7a3858b6f04",
-    "workflow/xy-workflow-codex-3.0.7-local-source.zip": "e0b61ab5e1f2f0e64b7c837cf0aed780239ef92e24e40c3b17898e671a7f658f",
-    "workflow/xy-workflow-codex-3.0.7.zip": "4e6b99c4fa69b149f8bfa3f0e2ff586d07d672948a9b681a4bc425a03b887a16"
+    "workflow/xy-workflow-antigravity-3.0.8-local-source.zip": "72dda29ab0114ee4a42ff4e4a9fe8c6b2bc223709b447abae1cbb3373c22fb6b",
+    "workflow/xy-workflow-antigravity-3.0.8.zip": "95ac781d9c1f6ffcede6fa74e9cca23bed76b26abafdc74979e1176b33d7dfec",
+    "workflow/xy-workflow-claude-3.0.8-local-source.zip": "1905891ea60a7fd4b2de7a2e631f5a90bd4ba10480f2661cf77f3ff7e4ae6288",
+    "workflow/xy-workflow-claude-3.0.8.zip": "8e6889787c53c11e804e024d02cccb02d1c71532fb1e80a736664f2bbb417e1e",
+    "workflow/xy-workflow-codex-3.0.8-local-source.zip": "a5700d21d96fedcef4e8b86f2e203a9869b19c6fc7a9233fdd3fd49778b8ae43",
+    "workflow/xy-workflow-codex-3.0.8.zip": "c21991fb96b6b6d37467b95896453d4462d168c51719a36dfab5896f3f17e313"
   },
-  "candidate_sha256": "1166640d893d1734c89d4be5dbc0a85dbfce3919070cf4682bd92503b2d0cd94",
+  "candidate_sha256": "1095915e9ba089987c495d8c9ff6cf8adf6b4e8cca82960095a915cf3ec54d3d",
   "channel": "stable",
   "files": {
     ".antigravity-plugin/plugin.json": {
       "mode": "100644",
-      "sha256": "8b6a89b3b78eefb71e9da81ee569eaa561fb4d164a87ea9ba8df069a9cfced14"
+      "sha256": "7f745a456478fe7d1c6c6f07c9c5fa5d6759f530aafef4cdd07b0e48d5743b3c"
     },
     "INSTALL.md": {
       "mode": "100644",
-      "sha256": "27c9d140c72815990dec027080e88ebc7ebcbfa74ef2fd5889849ee51158c94c"
+      "sha256": "b6a1eb60986c53f30d60c34d63a6d6cdb99962ca07b3d9ff7efdc5b871678b52"
     },
     "PLUGIN.md": {
       "mode": "100644",
-      "sha256": "8c9cff9318170278946465ee789af18df634672cdd6e36429889a30c728d58e4"
+      "sha256": "e553a1033f5a70272860db820a2354326af3a27b54a7909afe6ef82c9d359f54"
     },
     "README.md": {
       "mode": "100644",
-      "sha256": "8c9cff9318170278946465ee789af18df634672cdd6e36429889a30c728d58e4"
+      "sha256": "e553a1033f5a70272860db820a2354326af3a27b54a7909afe6ef82c9d359f54"
     },
     "agents/xy-android.md": {
       "mode": "100644",
-      "sha256": "49e7d4c0b9d59a4b90961faddb28d123a76d825e40e6c6a5f11aa1cf29dbb303"
+      "sha256": "9419361761cd60d425c5902d202ecbbb4451e633affa4550629f8117138faf4a"
     },
     "agents/xy-apple.md": {
       "mode": "100644",
-      "sha256": "b1c5b155dc32bc347d1138c1ca5e4113aa1aca0f52dafa81bee588ff4c402727"
+      "sha256": "025b0aa2c0fc00fe3b3b4c8f726c77e67c0e6f46f4d3cd01fbd8f03a2b123874"
     },
     "agents/xy-backend.md": {
       "mode": "100644",
-      "sha256": "7db80e0cdfa028214b61ed36f740c393d2b33ee767f2638772a3f17001d2f32a"
+      "sha256": "a2ea315191d48e439dabaec43b659965b3dc70e4ea802a3b3a693f9137b39a72"
     },
     "agents/xy-desktop.md": {
       "mode": "100644",
-      "sha256": "473de8d5233e2be53ca6dcc7766e61857e4112687d2705bc0f8dfbbfc422e9d7"
+      "sha256": "5c11fc331dbaa173a37c13920bbb55df4b0a65c77a2e9e90a46dd9d16152f375"
     },
     "agents/xy-qa.md": {
       "mode": "100644",
-      "sha256": "e64c4fba9f457f860f82a3e20f5abb243a700e43d47bfc6917e81eca44834afd"
+      "sha256": "54f3eb5c78c4e7759219ac3d5e762644646b5bdba69c65fd205cab2e3379f230"
     },
     "agents/xy-uiux.md": {
       "mode": "100644",
-      "sha256": "7072dfe4d0bd7aa7adc24fee3c5358adae5882c23c89519f916114dde19ed192"
+      "sha256": "dcf0f6cadbf9c843a6f32fa4285d56a8855f86e7a4f5e506ac1e073bbc790f64"
     },
     "agents/xy-web.md": {
       "mode": "100644",
-      "sha256": "91331cbad019ac8a23c9a287743475e5499bf8ab6ef39ebbdafd6decc5de0f71"
+      "sha256": "78dd9c07cb372fe44475bcfc39a673c0f8134339cc9b9bb90d7163e74ba85c20"
     },
     "lib/__init__.py": {
       "mode": "100644",
@@ -61,11 +61,11 @@
     },
     "lib/agent_continuation.py": {
       "mode": "100644",
-      "sha256": "03b616af1b75d0d3cfe4c44f0df52a265026bcb6d425c96a15cb18e85ee49180"
+      "sha256": "ae7c11cf48c9779ee8db3c4fcc7f3a99728dca9d1f30c17248230a61df4874de"
     },
     "lib/agent_continuation_cli.py": {
       "mode": "100644",
-      "sha256": "a7b81e75384177806dab0993611f65307f7b8393b7b938ca24aaf7b8e3a956cd"
+      "sha256": "1378031bd022b06ebc49c466c0b3e8673ae6be5c3ea31ab03596e6cd95cb1b2f"
     },
     "lib/delivery/__init__.py": {
       "mode": "100644",
@@ -81,19 +81,23 @@
     },
     "lib/delivery/qa_handoff_cli.py": {
       "mode": "100644",
-      "sha256": "f699604f9c95548e9b28c4088cb9e6151ff90a1905bdda9e380b0162f2cae1bc"
+      "sha256": "3e1315ae82015998821ad6d76946fff281b828843af470499f078e0c3bc7341b"
+    },
+    "lib/delivery/review_target.py": {
+      "mode": "100644",
+      "sha256": "74f60da7eba175ea99fd8cfed64908a9f870e4e64c3a7cc551415c11402636fb"
     },
     "lib/delivery/worktree_cli.py": {
       "mode": "100644",
-      "sha256": "424e56fb7ed9c59cd69237c04fccfb1fe96316a789028f2dcfb30a7cd096078a"
+      "sha256": "abde428b4a0b64bc6889d4e7387592a2c3b2180efe4c6e93636128c3816efe45"
     },
     "lib/dispatch_admission.py": {
       "mode": "100644",
-      "sha256": "8ea311fe64529babc6c9f0200159c49687d093a7c5ced35af91ad82aaa38eed5"
+      "sha256": "5dc6553991ce99e983a90507d5569703513d12efa215321ff2cb60ddf98d02c6"
     },
     "lib/dispatch_admission_cli.py": {
       "mode": "100644",
-      "sha256": "9359c3716eeff82efd72d1b137d639b35dbd458b4bf52f0b911ebae02cb2a334"
+      "sha256": "e67413f302c2714e643b04237326e5cb2639b105119c966afcb97398180bfbbd"
     },
     "lib/documents/__init__.py": {
       "mode": "100644",
@@ -101,11 +105,23 @@
     },
     "lib/documents/context_read.py": {
       "mode": "100644",
-      "sha256": "10c113dfddbe8dcc8772e2fdb05dba04de374abb14741ed49a90c0f60ed6dcc5"
+      "sha256": "2975992258a1bf4a34328ee7c88810fbe1e942342cbc08f21493e5c54c4e6dd6"
+    },
+    "lib/documents/document_links.py": {
+      "mode": "100644",
+      "sha256": "4887f8880b2d301d61d434254f4991c9312a1d82037e2791a48139f86ada374c"
+    },
+    "lib/documents/markdown_headings.py": {
+      "mode": "100644",
+      "sha256": "24b0008f6dc264b9c3729c1aced2919f67b2ce8e466fbee24d9ae4880c75bc9e"
+    },
+    "lib/documents/markdown_links.py": {
+      "mode": "100644",
+      "sha256": "2d084a73dfc483e94d16501eab63800881a24423be296bbd27641cd07156d4fe"
     },
     "lib/documents/plan_documents.py": {
       "mode": "100644",
-      "sha256": "b3efd88b3306bf404dae3b67e080a11faeb89c5ebea4d908fd67eb95a6a3a463"
+      "sha256": "f381ab4b74e9db3e1e8f9b7f2892a4eacaafd51a2ad45801234ff7a32852b155"
     },
     "lib/documents/prototype_feedback.py": {
       "mode": "100644",
@@ -113,11 +129,11 @@
     },
     "lib/documents/prototype_feedback_cli.py": {
       "mode": "100644",
-      "sha256": "42751802b76368bde5c65f60ef06ca65701e7c798595c168de005fa4e1172812"
+      "sha256": "ac9791e696beabe6888dd4513db2f1516e969a03c9eac7284f81d2fc53a2ea8b"
     },
     "lib/documents/prototype_file_entry.py": {
       "mode": "100644",
-      "sha256": "0041a9e52b88e218534e3d90ec28bdbb6ebd18f74e5444ff97bfc99871d6f1b1"
+      "sha256": "48409ef31b1d71371d1482206b44e3b8242f6b891ffa52176cd90472937c8284"
     },
     "lib/documents/prototype_handoff.py": {
       "mode": "100644",
@@ -129,7 +145,7 @@
     },
     "lib/documents/prototype_navigation.py": {
       "mode": "100644",
-      "sha256": "39626f206e57d57cc6153421f3b5578743e429e6e9953d541bb5d36869181191"
+      "sha256": "d5100ba0969e72823f803a41cb475da7eb795a026fa2bde0bd3614d2d7034def"
     },
     "lib/documents/prototype_review.py": {
       "mode": "100644",
@@ -137,15 +153,19 @@
     },
     "lib/documents/prototype_server.py": {
       "mode": "100644",
-      "sha256": "70b02ce000616f48f64e6e77e2731714b8fd7a55333b5416725f869f55f0abaf"
+      "sha256": "521add7a164eaede275a731d6eff076b2c02517fbd83374bd8e3105ea812a7d0"
     },
     "lib/documents/prototype_service.py": {
       "mode": "100644",
-      "sha256": "f0ea031a6629201056944b5b2983e68a1f2522c16a8bc3b6b6fbf5dbc800dce0"
+      "sha256": "4ef9aa168dd558130ba41462128e192356320c28b3c21258156aedc30c0f1c91"
     },
     "lib/documents/prototype_targets.py": {
       "mode": "100644",
       "sha256": "834ee8c0606466154ec5fa695161030fb14e10555801ba6d11779b79ce72f69a"
+    },
+    "lib/documents/query_relations.py": {
+      "mode": "100644",
+      "sha256": "71f6ba8826cc8f78786d79824092c899f6e49d56a2c6d2936c9db0b60c19db76"
     },
     "lib/documents/safe_documents.py": {
       "mode": "100644",
@@ -153,11 +173,11 @@
     },
     "lib/documents/validate_prototype_workspace.py": {
       "mode": "100644",
-      "sha256": "2b060cd45d806b1528e68ec307c92b7ea36d52ddc4234015a91da2c14ef5e40c"
+      "sha256": "dd28ec74b8a9b1548935d5a721cd95fd381933b746b5c9831a376c8a2263d217"
     },
     "lib/foundation_qa.py": {
       "mode": "100644",
-      "sha256": "fd33ec4ba163be646f167d3445e7145bb9a5088d4820a07a416d14c55a7353e4"
+      "sha256": "7cb24dbf3c9221d128e72472b48aa88bd65959f82de502099b8f8fe2b9c5ae7d"
     },
     "lib/hosts/__init__.py": {
       "mode": "100644",
@@ -173,7 +193,7 @@
     },
     "lib/plugin_resources.py": {
       "mode": "100644",
-      "sha256": "b4b33411519443c1d15c9e81d24ff7edbb0825c7f5e7ced394579dac46702f31"
+      "sha256": "1c37f42d5a864f463a35ddf0939aa32ee93ee53c07e00fa984deafc9159b72e4"
     },
     "lib/project/__init__.py": {
       "mode": "100644",
@@ -203,9 +223,21 @@
       "mode": "100755",
       "sha256": "202343da3cd07d70b01d7cb90c33ef9252b820efaf7a42fd5cadc3e55902022f"
     },
+    "lib/qa_projection.py": {
+      "mode": "100644",
+      "sha256": "679a50b649579605ef761899cffcb2cecbf05e26bb0a5daaff14de1e1d78ba11"
+    },
+    "lib/request_scope.py": {
+      "mode": "100644",
+      "sha256": "e4bde2128ffb8612d3891b0d469cfc6ae53d36245154a5b1b42caa6696353ebd"
+    },
     "lib/safe_text.py": {
       "mode": "100644",
       "sha256": "1aef1c03883bbb90ea94a4b05c5d17cfed0790ef75c4bb53afc3861b7599167b"
+    },
+    "lib/shared_solution_records.py": {
+      "mode": "100644",
+      "sha256": "500c536e151d4ebb2e27aaad9baa9d50984b845dfca2825e68ca843c57d79fef"
     },
     "lib/skills/__init__.py": {
       "mode": "100644",
@@ -217,7 +249,7 @@
     },
     "lib/skills/business_confirmation_policy.py": {
       "mode": "100644",
-      "sha256": "0dcead478b2460920031a62ff7577b2be4ae866b1f17e9ffb04d528081bd40a0"
+      "sha256": "e85d13d6d40e7cf998094612a16a7eb2b9a975b07f1275b357d917f6a26f3a03"
     },
     "lib/skills/modern_web_runtime.py": {
       "mode": "100644",
@@ -233,15 +265,19 @@
     },
     "lib/skills/role_skills.py": {
       "mode": "100644",
-      "sha256": "89aef633e626610fce3381c2e4855599a164dc62d0c1686d08b4d10c9ebd8f0f"
+      "sha256": "e7d2168cdaf00a361ea9cb4b85af97db7630c3ae9baa811964991418e1c579d9"
     },
     "lib/skills/selected_skills.py": {
       "mode": "100644",
-      "sha256": "097e682062b71dcc94eabab5ea2dee18d4aa3250e7e80ab2062b72c7a02f4038"
+      "sha256": "26ef67b488c110d7245aed2919e9e3024ca5bcd487bde9578a969eae60940561"
     },
     "lib/skills/skill_contracts.py": {
       "mode": "100644",
       "sha256": "dd3a03a965567dfc78a86fe3fd97c77e453c5a997307215dcef484d698413c77"
+    },
+    "lib/solution_confirmation.py": {
+      "mode": "100644",
+      "sha256": "627b33172531de180275265e1c71b88d5291c4b1e89771f9d6b36426daf7ee29"
     },
     "lib/standard_paths.py": {
       "mode": "100644",
@@ -249,23 +285,35 @@
     },
     "lib/task_graph.py": {
       "mode": "100644",
-      "sha256": "5ea759afbf387284a225ab4efe90601040f071403e40ef038cc00a57d2656750"
+      "sha256": "b96acb0510fa5cd3b02f44cda5b7789d880d4924d8217cf6b823057b5144737d"
     },
     "lib/task_graph_cli.py": {
       "mode": "100644",
-      "sha256": "0d09be1bc20311e78035454309875c81484429f97aa50addf868562493091435"
+      "sha256": "b3cd003ea2b80c93f4ba32ba762462a8b9e41d7bf1e39245226f655bde1d309c"
     },
     "lib/task_graph_init.py": {
       "mode": "100644",
-      "sha256": "227ed9b109b6ad420a51e7254d2d6fa0ac8cc5fb15c632ec5436b51bb0a9c657"
+      "sha256": "cfd61f516df94f9ce9e2bf4356e9ef25c3bb3bd23f39ca66be00b4e1ff6e653f"
     },
     "lib/task_graph_records.py": {
       "mode": "100644",
-      "sha256": "a3b176dbaf33cfeeea1108fd33ec4b4a18e964d8aa6c3bea6bd1d2531d5a5fff"
+      "sha256": "0de90439c9a899e571a3faf6dfb7e1825fcf2ed9109a695262920d0d3159f3ca"
+    },
+    "lib/task_intent.py": {
+      "mode": "100644",
+      "sha256": "85572f0ea0f80f13aa12c301749a839a3693a3ad0363e35c5b02e3ad5e73640b"
+    },
+    "lib/task_pool.py": {
+      "mode": "100644",
+      "sha256": "dc3c48d3e24b1251c506578b0b1f7010690c5116f78ec619a4d14468451d0a7f"
+    },
+    "lib/task_pool_cli.py": {
+      "mode": "100644",
+      "sha256": "673b2f346927fbc925ea93a1f25b53189f3e96057fa600d86b3c80621d79b4f8"
     },
     "lib/task_settlement.py": {
       "mode": "100644",
-      "sha256": "b5a2d976cba0d377f4c80a5ed67acccb4c58dbac18359dc66fe83176718ef1c1"
+      "sha256": "0a9bacbb65f20866c588e0f19247f269abdce7a8bb8ab14c656e6afca23e3f10"
     },
     "lib/task_sources.py": {
       "mode": "100644",
@@ -273,19 +321,31 @@
     },
     "lib/validate_project_docs.py": {
       "mode": "100644",
-      "sha256": "6ca3bfc247a3d9530d7c7241bb01a35c8eddac33d3fbe6014fae50c8f9bb783e"
+      "sha256": "50c4606089909e5682e6911fed6714858e2bc5da43f082551234e8e59a6f4f4e"
+    },
+    "lib/verification_inputs.py": {
+      "mode": "100644",
+      "sha256": "5cd4f20046693df8512cccfd5c6221cad436aff3d190e8738b97e98e1136aeda"
+    },
+    "lib/visual_authority.py": {
+      "mode": "100644",
+      "sha256": "009a979b159401c3e76d1cfa16c28303bf8dce113065fa196ea239851174cf17"
     },
     "lib/worktree_policy.py": {
       "mode": "100644",
       "sha256": "57af2590618a5af168ced0a9264adb1f147404ead53211cb8d6cfc0e29d7791f"
     },
+    "lib/writer_prerequisites.py": {
+      "mode": "100644",
+      "sha256": "01197896ec4b9a559835095001aa1ba940ce6e8fb59f6733c6ee8833fc69870a"
+    },
     "main-session-context.md": {
       "mode": "100644",
-      "sha256": "ec9e54ff9b17660ae3002418162795fbef25ae4117787412065811771ad38fa4"
+      "sha256": "2141a6c62dc8d395d8a2f506b0384015fb40f7766186d8a9552ee846a414e079"
     },
     "platforms/antigravity/references/pm-integration.md": {
       "mode": "100644",
-      "sha256": "4d42439c88e5d7e738818fc9944498a4c31e3352ee6f38479521d74fe0e67e57"
+      "sha256": "89746fc0fb8e14f12b87eb648ddfb1d1991235f57c41011ea2ae125a5f1f3d94"
     },
     "platforms/shared/HOOKS.md": {
       "mode": "100644",
@@ -297,27 +357,27 @@
     },
     "platforms/shared/skills/xy-apple-guidance/SKILL.md": {
       "mode": "100644",
-      "sha256": "3ade117082ea51e3acd38a1d635f803ba3e40bc67eb49beaac2c29519d7bd114"
+      "sha256": "0f550e2ed349f107450b1e200ff9d2882cb8c869e3d86502496aa4635ebef158"
     },
     "platforms/shared/skills/xy-build-verify/SKILL.md": {
       "mode": "100644",
-      "sha256": "9f224daf0d7a6c12bd1612a52c535586872aa6d966c16152163c34607329b4dd"
+      "sha256": "7a7a0448e7af6a6c2f06bc30748c87dcf0642ee20c2b267d5652210728dbbdf0"
     },
     "platforms/shared/skills/xy-build-verify/references/verification-scope.md": {
       "mode": "100644",
-      "sha256": "b7afff391439e1d1d710c6940577223a39c55c052a3f993803c1fc3863e9ff6e"
+      "sha256": "2c2b48e1c53d35464e7196f7f7774eb18a39c5ccf7c6c60cf764dbee46f16f16"
     },
     "platforms/shared/skills/xy-build-verify/references/web-browser-verification.md": {
       "mode": "100644",
-      "sha256": "8fc46fa2f89b2ff9796225efda4cafe9ecc2d48cd900cd478c54cc4ca89393b4"
+      "sha256": "c56820cf16fb7d6a286e91c68f3e1879a90980eadbbdb071897b82ca5791a686"
     },
     "platforms/shared/skills/xy-code-standards/SKILL.md": {
       "mode": "100644",
-      "sha256": "d7d619fb78f2b332dbd10fec927c9717e011d9b7ed40e869a6132a5a82bf45c6"
+      "sha256": "369299e070bd1b02051dc61fb149013874e9132f795b092393f5eb515b1ebb89"
     },
     "platforms/shared/skills/xy-code-standards/references/architecture.md": {
       "mode": "100644",
-      "sha256": "e98361b755bfa3e757f3a34e61992f15e89872393dbae73d7742a262cb3bfc45"
+      "sha256": "802e1fa4ecc0b957a240d3e476dd4bfc15d7aa6a25298611cda3940da82d8b5f"
     },
     "platforms/shared/skills/xy-code-standards/references/boundary-reasoning.md": {
       "mode": "100644",
@@ -341,7 +401,7 @@
     },
     "platforms/shared/skills/xy-code-standards/references/rules.md": {
       "mode": "100644",
-      "sha256": "ef77c28a1ecf5e0b0a287910b758f7568263c3d5591d044db763a807f4f820e3"
+      "sha256": "c1f00aa29c8395a376463e7c1ca940b70b7d511b663103d05201557404909e25"
     },
     "platforms/shared/skills/xy-code-standards/references/sources.md": {
       "mode": "100644",
@@ -353,7 +413,7 @@
     },
     "platforms/shared/skills/xy-mobile-ui/SKILL.md": {
       "mode": "100644",
-      "sha256": "4e397e9a80f304d7f2a666ed4286444c3cd66ef3dad0cbec596a526e54e4e621"
+      "sha256": "33b3e489f1a1dba4709a6ad75419ec7cdb0ce6f509bc5b16cd104cc793e07c12"
     },
     "platforms/shared/skills/xy-mobile-ui/references/android.md": {
       "mode": "100644",
@@ -361,11 +421,11 @@
     },
     "platforms/shared/skills/xy-mobile-ui/references/apple.md": {
       "mode": "100644",
-      "sha256": "fd299d889030c7c1c0f7d34560cfc0be9371c3391f2904ff22367db7dd8a0468"
+      "sha256": "5601761f9d569773ad21568337f8660ebe051d583d8263fd7e7c546447bd9cad"
     },
     "platforms/shared/skills/xy-mobile-ui/references/mobile-rules.md": {
       "mode": "100644",
-      "sha256": "05ecd24773dcf0ecc2caa3b915975fa04046ba97f76b194883bf902bf343c5ad"
+      "sha256": "1810d22199c4b779ca6f3ab894ea4fd32672b4dad2889b53671d9b8faf4f1ccb"
     },
     "platforms/shared/skills/xy-mobile-ui/references/sources.md": {
       "mode": "100644",
@@ -377,7 +437,7 @@
     },
     "platforms/shared/skills/xy-plan/SKILL.md": {
       "mode": "100644",
-      "sha256": "f020b2aaa564b37bf6688baf5a1a13d83f21be11bf2d421e1bf19ba12f05d3bf"
+      "sha256": "6997602aa27bf747f0870a8d77b2aa27b4fac76a541e733317c6a54db390068a"
     },
     "platforms/shared/skills/xy-plan/agents/openai.yaml": {
       "mode": "100644",
@@ -385,43 +445,43 @@
     },
     "platforms/shared/skills/xy-plan/references/document-quality.md": {
       "mode": "100644",
-      "sha256": "101603843552f8f4950e9ae4af5974f6325dc3be09fc915b6bfc316a3dcbb586"
+      "sha256": "55e223edbe64ac1c8e56099d6807eaed15e7b1c58a3c2612db83aca22e865626"
     },
     "platforms/shared/skills/xy-plan/references/requirements-markdown.md": {
       "mode": "100644",
-      "sha256": "2ccf6f25b9e12873754426eb7e6a90a254f5a80d4821453c7480d8323379af76"
+      "sha256": "5490e0435cd76e86cd2e2e2a490d9eea186c5725d31f56a9b2562240cd2031ea"
     },
     "platforms/shared/skills/xy-plan/references/task-graph.md": {
       "mode": "100644",
-      "sha256": "6e1b6a8121bbffa254931dbe8aa60d3dbe3e56aee5cd4b59ae4e7bc1e5b07996"
+      "sha256": "b706a3e38951f04b92e13bfbe5751c981cb5ff8869b449c90e343787155e7439"
     },
     "platforms/shared/skills/xy-project-memory/SKILL.md": {
       "mode": "100644",
-      "sha256": "5e5ad9393e1c7fcd1f5d9657ca29718124fc24ccca19e6712a99e2948fba0b36"
+      "sha256": "3a87f0ccdd2d115310d4850768a769a1bcdcd9c313fcfc994349c606d0e35cab"
     },
     "platforms/shared/skills/xy-prototype-verify/SKILL.md": {
       "mode": "100644",
-      "sha256": "1aa0241929773a6aef4e940cfabca74943c1a88a98d86ee9c4fecae94c8bacc9"
+      "sha256": "a5d381d5de9062c33f002d479b59f1de0d8001c8272ec51e518d59e81ae063e7"
     },
     "platforms/shared/skills/xy-qa-review/SKILL.md": {
       "mode": "100644",
-      "sha256": "646a018be57ea08dee7321bca2d5854d341e818f198c51d24522ff518986be79"
+      "sha256": "7c40e4e6b59b15219e3f07bf475ae35f33859de49c431560789e52eae6c8cc5c"
     },
     "platforms/shared/skills/xy-qa-review/references/implementation-acceptance.md": {
       "mode": "100644",
-      "sha256": "75d32e41138517bddf551f2dbaaa061604af3967d6e823b35db7f254dbc00620"
+      "sha256": "217de55123e1075c2f2be1289a580bbe097564b7a3653c91688fe21d5eeaca68"
     },
     "platforms/shared/skills/xy-qa-review/references/inputs.md": {
       "mode": "100644",
-      "sha256": "26aee210b109692c5c250b4cf61584e103f6d28c2870e155fd14f7a4b362ccbf"
+      "sha256": "da4590c0fe2f3bb2d48bec14ba40ff2e5e5769a1be68e7bce1dc339edb965092"
     },
     "platforms/shared/skills/xy-qa-review/references/ui-review.md": {
       "mode": "100644",
-      "sha256": "532e545263ecd1689c68c81a85e9e05a430bc6d73443db472ff79df220b1f6ca"
+      "sha256": "432cdc586421c287d53184afeb7cf5ca88a8c779d555f3cfbfc9c38f0f7a4e79"
     },
     "platforms/shared/skills/xy-ui-design/SKILL.md": {
       "mode": "100644",
-      "sha256": "d6959c1f923931cd50b8dccf19c2d1158c95876dce7578029b5ceb33369d00fd"
+      "sha256": "a59c99af52d9d160a44de085696fed9f9cc03d5417c7ca1101015269ebdb05a9"
     },
     "platforms/shared/skills/xy-ui-design/references/components-rules.md": {
       "mode": "100644",
@@ -429,7 +489,7 @@
     },
     "platforms/shared/skills/xy-ui-design/references/design-quality.md": {
       "mode": "100644",
-      "sha256": "78fca2e7d724f4fc818ada794e53ea458ea1bc6d1664d2c752ab6d5b5c1d1f41"
+      "sha256": "3c9b128caf6acd2a49b69085a8f3b56e38de2dd8ecddb67b70d24871da0776f9"
     },
     "platforms/shared/skills/xy-ui-design/references/foundations-rules.md": {
       "mode": "100644",
@@ -437,55 +497,59 @@
     },
     "platforms/shared/skills/xy-ui-design/references/prototype-canvas.md": {
       "mode": "100644",
-      "sha256": "3d9dd7a9d5d5786e440eb0fc44508098b6b5ced7c86738d63ab5e4e43567415c"
+      "sha256": "39f5cc322f3b8546f331d3ff27b4b700ac2f19cd0aedf67ff9f8be2c00cabbda"
     },
     "platforms/shared/skills/xy-ui-design/references/prototype-feedback.md": {
       "mode": "100644",
-      "sha256": "505d8f40cdec4051bc63e43d869e670d9eb4d81fef3ed580520934a2c59a74e0"
+      "sha256": "f0947dd282c4b9ee7e30fef49d3438eb79f399283b7b64f2c6dfe103dc08ad5e"
     },
     "platforms/shared/skills/xy-web-guidance/SKILL.md": {
       "mode": "100644",
-      "sha256": "fed3bab3c1910de326eaa9f32cdea51b4b1f78b6b08ac35da99c2a4510e597be"
+      "sha256": "2b9b2443d2ab35ceb122b2c3cc5a6cf85054983943296149ac4320b87029e9ab"
     },
     "platforms/shared/skills/xy-workflow/SKILL.md": {
       "mode": "100644",
-      "sha256": "e21262f553712b2f557325c7ecff27802f4bce10ac9606f3d37989610e7246a0"
+      "sha256": "e336d6277edd737aead961dc3071b389266567422453f6b1dca45751b903c196"
     },
     "platforms/shared/skills/xy-workflow/references/closeout.md": {
       "mode": "100644",
-      "sha256": "35ec1c281902173e20811a59904cdf47b429de58af6f4100c6a19449c6920d6c"
+      "sha256": "2998bf9d2628cedeef5c6070a8cc6bdb626d46688e052d04c5f1ab3e0420633e"
     },
     "platforms/shared/skills/xy-workflow/references/design-standards.md": {
       "mode": "100644",
-      "sha256": "0fd710c4a70a0b53bb3afe2bd66d4879aa047d8b893cf44a942f92397f2f3cd7"
+      "sha256": "73bcc308d2f2c6a02a566c7c442a2717245751722a9cc411cd8b8bcb4ad42e5c"
     },
     "platforms/shared/skills/xy-workflow/references/dispatch.md": {
       "mode": "100644",
-      "sha256": "220c38f03bea0d3981c64338f2d9595e0d6577ddff8b5b6726299c794ca02df2"
+      "sha256": "ebf88c02247c942d7019b8133b9448fa08910f95abd545330d619f06a361ba01"
     },
     "platforms/shared/skills/xy-workflow/references/implementation-and-qa.md": {
       "mode": "100644",
-      "sha256": "08ed1be3fc89c5b0621939fd225fd5c6d250024824bc9ddd3e9cc5ac5015b3e8"
+      "sha256": "934950225a8b942e5246ec6df714126bb0e369b4160cb5d6d9ba37aa4c4e32cc"
     },
     "platforms/shared/skills/xy-workflow/references/plan-lifecycle.md": {
       "mode": "100644",
-      "sha256": "a7b59a7f63ce49cb7e59b7ca55d73f3d9f2c8a737da3e14905a347a1bddada7f"
+      "sha256": "e234f0dbe3ecda881c93c1eb178784c6b3e62f1c20e4d096767e172352fce8eb"
+    },
+    "platforms/shared/skills/xy-workflow/references/requirements-confirmation.md": {
+      "mode": "100644",
+      "sha256": "5a85c921edbbfdedf31b165939bdde0a567c3c1c3edeac9f09030d2bdc1d16ba"
     },
     "platforms/shared/skills/xy-workflow/references/requirements-intake.md": {
       "mode": "100644",
-      "sha256": "409d1e2f1586898f8982b31fc73ce8ea2d4788467c6a3e44ef0e96803deabef3"
+      "sha256": "58b215d1854e44a56afeb1ae6361581464bd690e317d4110e8c0be4f7b19e95f"
     },
     "platforms/shared/skills/xy-workflow/references/runtime-records.md": {
       "mode": "100644",
-      "sha256": "254c61e8bee6cb25b520ea784c965ae114a28b95d9bbe7818dbf813504165ac8"
+      "sha256": "94e399423b77d158f6ebe96cd061696213d7de6775d149c1a9a9e021a79f8852"
     },
     "platforms/shared/skills/xy-workflow/references/skill-selection.md": {
       "mode": "100644",
-      "sha256": "a5499cf0dbc2d762ef5f3f3936ced95b32ca4b820ccec44a0da771e40fa7bc86"
+      "sha256": "972e38c13ef2074b26fa3fc2f4adde99c038a8f1995e0fc6b7f179b77b4ac7b0"
     },
     "platforms/shared/skills/xy-workflow/references/ui-design.md": {
       "mode": "100644",
-      "sha256": "d7d931b1848eaf47f674a3c348ca0d4dba83c3e71d112158c9e9d7c9f35524be"
+      "sha256": "0d3a6198f0a60eb5cb6a2abf74935e8f3e4d57ead1bfcdcf36cf4b4bd996fc6b"
     },
     "platforms/shared/skills/xy-workflow/references/worktree-delivery.md": {
       "mode": "100644",
@@ -497,7 +561,7 @@
     },
     "plugins/antigravity/plugin-context.md": {
       "mode": "100644",
-      "sha256": "619965bbb303c1de4c4380a7c4dce4e9b61a16b2d4a589c1f8dea40a15c8a92c"
+      "sha256": "901b2a2a08ccc77323e089e5aeecc8f5f8dcc2b70f38ac80d07bbcb3cc115bc1"
     },
     "plugins/dispatch_preferences.py": {
       "mode": "100644",
@@ -505,7 +569,7 @@
     },
     "plugins/main-session-context.md": {
       "mode": "100644",
-      "sha256": "f40dab63cc12933ed2e71f924a756172c57d462d31f25273f4ccdaa327e15a08"
+      "sha256": "22ef4af5175593d5061571eaf637d6db8d959c39a7723543468e3a3212cdba36"
     },
     "plugins/maintenance/component.json": {
       "mode": "100644",
@@ -525,11 +589,11 @@
     },
     "plugins/maintenance/skills/xy-config/SKILL.md": {
       "mode": "100644",
-      "sha256": "332b31c5e9c366b3794d68f5dc0268cd187cd02c59dd265f3a7bfad3e131e318"
+      "sha256": "52ffc2a710e3e343f90736a25aeecb546d2b9736be36c651d1e38309a6b77d37"
     },
     "plugins/plugin-context.md": {
       "mode": "100644",
-      "sha256": "6ce79097ce0ada0265086e0d43faf00555319ecb2835bc624018aa65dace3a51"
+      "sha256": "94644212689fa0122cd75334fe1aae4fc4d8172e26e708199c82fdfbe72a8652"
     },
     "plugins/project_context.py": {
       "mode": "100644",
@@ -537,7 +601,7 @@
     },
     "plugins/selected-skills/xy-grill-me/SKILL.md": {
       "mode": "100644",
-      "sha256": "699281ad239d839a4c92c7a73b71145a6fa563affc4c54d410419ed354348c37"
+      "sha256": "fde2478c19074016d8b875ac4e2c62a1573be1f9e55b33d5ad20930328d98e10"
     },
     "plugins/selected-skills/xy-grill-me/agents/openai.yaml": {
       "mode": "100644",
@@ -545,39 +609,39 @@
     },
     "plugins/selected-skills/xy-grilling/SKILL.md": {
       "mode": "100644",
-      "sha256": "3ac3b987d863a619824ec9705dd1d5790e958bc1a75507ade69f88752616125d"
+      "sha256": "a3674387d7524b30847c822da6b848940382ac6f9efa53428babfcf7dd051218"
     },
     "plugins/selected-skills/xy-playwright/SKILL.md": {
       "mode": "100644",
-      "sha256": "2ed89da5f5826eccea47181046dce7612a83ac00b59c1dd03b4d85312a17bfdd"
+      "sha256": "236873639ec507de09ad084ebe1210976955ff77d79d7e84b6957b444c6e31e0"
     },
     "plugins/selected-skills/xy-taste/SKILL.md": {
       "mode": "100644",
-      "sha256": "6d9d24814b1d713b021b0ca79adef75c35e988c8426ed0997cd75058c85d6125"
+      "sha256": "ac92445523bda9cd3495e73e5325fe7556d04954d684a738610c2f48fce53afb"
     },
     "plugins/source_pack.py": {
       "mode": "100755",
-      "sha256": "171d9bd750a3831c3fb78387f07d97673878dbc7c47dd3df010851e15f265b3f"
+      "sha256": "e8f8336c0ec7b01088d433ea890c0408bf2e14984867e3b95a7787adfee009da"
     },
     "product/AGENT_SCHEMA.md": {
       "mode": "100644",
-      "sha256": "dbee301b2b733c75b13cdc63100938751c7a4f5b0778538439522b414cc892cf"
+      "sha256": "9eeaf88fc250227c5173bd61a143f66bbe8926474d40d15a125a993f390a5a4c"
     },
     "product/GLOBAL_CONSTRAINTS.md": {
       "mode": "100644",
-      "sha256": "647105043c135e9eec40a8f9c98c9c3ef93359dd048b36156b50d296fa66f610"
+      "sha256": "3436349550691d4ae5626d24a8dedc279b96aa8c00651ee49196ec83aa62cf81"
     },
     "product/PLUGIN_VERSION": {
       "mode": "100644",
-      "sha256": "7bb9bbd2e2162e7c4db854f8740421fd7f8e6a2113a09dc1ef4711aec644536a"
+      "sha256": "2a612f3f9494fa52305039d3474f9448e4eadcdbca3517a767df080009a393e9"
     },
     "product/ROLES.yaml": {
       "mode": "100644",
-      "sha256": "42d543e73a3ba03e545244648bd20a934291f432578a42c0847a224ecc2f7d9b"
+      "sha256": "4e164aa53a45e83a393ab029c29d05da0f347961e425428c17afadac5545f2b8"
     },
     "product/WORKFLOW.md": {
       "mode": "100644",
-      "sha256": "9dace26b32c36f8868bc92039b64d41cdd4b68608c2cf0f9105c53d56fc62fcb"
+      "sha256": "5941848d51282629f9723193654647c8ffb623ac9d90af1c37ae4a60f02ce3ff"
     },
     "product/__init__.py": {
       "mode": "100644",
@@ -597,11 +661,11 @@
     },
     "roles/xy-android.md": {
       "mode": "100644",
-      "sha256": "649cecd7f427ab20ba2f29566dfa7992fca5ee9a3470fc174ea5a8f28bc0ffd0"
+      "sha256": "6d0efeeabef9acb97045dbaf99ea046b8503928300cf6b22678bc7f938d1bcc8"
     },
     "roles/xy-apple.md": {
       "mode": "100644",
-      "sha256": "47f5e199edce263759888b701d0ffa57532ae322489362640312846b7a5bc50e"
+      "sha256": "89d15397c60f9f42b9b4b4607092d1e17a6bcbadc61fd4b48863f391a808834e"
     },
     "roles/xy-backend.md": {
       "mode": "100644",
@@ -609,47 +673,71 @@
     },
     "roles/xy-desktop.md": {
       "mode": "100644",
-      "sha256": "23f0905b888636fffea32d4c653fbc9395eaaf63b3e83e649777d176f8d0cf42"
+      "sha256": "d26418bb0fe5cd98e48b6bf38d6b73e4189d54969aecb2369ae7a87b4477c0df"
     },
     "roles/xy-qa.md": {
       "mode": "100644",
-      "sha256": "fb71d8e3f7f04b048654c438057e5ecaab8afec2b07b2e29f16dac12b2fe2006"
+      "sha256": "5279e43726a5904aae34a1032c2e28b11aaafdb6a1b90101c858d83de507344d"
     },
     "roles/xy-uiux.md": {
       "mode": "100644",
-      "sha256": "265d211cd2786017dc31115c4edcdc1ad7d87834215bc73b712e78545cfeea90"
+      "sha256": "a770d778bf6019cea9d9d5687ebddc64a8e0a109aa4e1f510398b41e9663db42"
     },
     "roles/xy-web.md": {
       "mode": "100644",
-      "sha256": "ad9af9f057d41bb3215e6cb1e671ebf9096173739f37344b52d864ddf7f6cb7c"
+      "sha256": "743ca5d71822f48237b5f6294f8b4b7d150e0214c1089574c56aa3c0e14a7dd3"
     },
     "rules/AGENTS.md": {
       "mode": "100644",
-      "sha256": "ec9e54ff9b17660ae3002418162795fbef25ae4117787412065811771ad38fa4"
+      "sha256": "2141a6c62dc8d395d8a2f506b0384015fb40f7766186d8a9552ee846a414e079"
+    },
+    "skills/agent-desktop/LICENSE": {
+      "mode": "100644",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "skills/agent-desktop/SKILL.md": {
+      "mode": "100644",
+      "sha256": "abd913be10552c028e461e0a45c20e3734a7a1e5251fc2f9ef6fd63fdd606a6e"
+    },
+    "skills/agent-desktop/references/commands-interaction.md": {
+      "mode": "100644",
+      "sha256": "5ef8a87be8aed9b0102adb3c332dcd50586c7fb28dc0f1490207ab9321673bf5"
+    },
+    "skills/agent-desktop/references/commands-observation.md": {
+      "mode": "100644",
+      "sha256": "9c31aec6f51dacfc14ff68dc04533a8dcf3ed5edb3f935d90e453f471894b936"
+    },
+    "skills/agent-desktop/references/commands-system.md": {
+      "mode": "100644",
+      "sha256": "673c931a285b360c1deb669983e87ca8571ee8520f48c81f00d49f711e0e95ac"
+    },
+    "skills/agent-desktop/references/workflows.md": {
+      "mode": "100644",
+      "sha256": "9c5a93361f992d73eff50e9ec99bb895424ababd57d3f6742ff71e73734c1af1"
     },
     "skills/xy-apple-guidance/SKILL.md": {
       "mode": "100644",
-      "sha256": "73e2d8f969f19eecf251df0941bc49943e3eecab8f51944129357408d2266113"
+      "sha256": "cab79203c037049cd99cd093b7250ba315e98b6878f9cc1d99ecace5b9e9c503"
     },
     "skills/xy-build-verify/SKILL.md": {
       "mode": "100644",
-      "sha256": "5939d7c43c74aa0b5a7665cfaebc4556c6f85a11aa2d275849f3705f00f351e0"
+      "sha256": "858f5bd571e01a8b49a2eba65e1e47f537ce678ca479a7f2f8398ddad4d2b6e9"
     },
     "skills/xy-build-verify/references/verification-scope.md": {
       "mode": "100644",
-      "sha256": "b7afff391439e1d1d710c6940577223a39c55c052a3f993803c1fc3863e9ff6e"
+      "sha256": "2c2b48e1c53d35464e7196f7f7774eb18a39c5ccf7c6c60cf764dbee46f16f16"
     },
     "skills/xy-build-verify/references/web-browser-verification.md": {
       "mode": "100644",
-      "sha256": "8fc46fa2f89b2ff9796225efda4cafe9ecc2d48cd900cd478c54cc4ca89393b4"
+      "sha256": "c56820cf16fb7d6a286e91c68f3e1879a90980eadbbdb071897b82ca5791a686"
     },
     "skills/xy-code-standards/SKILL.md": {
       "mode": "100644",
-      "sha256": "4f73a62011cbfaf566de45033f0abf13d9634121f0bfeec8c307509db527db85"
+      "sha256": "fa22cf1d81991e77098329c213f873d6eb099df5074853c0e4b6ae3ac9acc109"
     },
     "skills/xy-code-standards/references/architecture.md": {
       "mode": "100644",
-      "sha256": "e98361b755bfa3e757f3a34e61992f15e89872393dbae73d7742a262cb3bfc45"
+      "sha256": "802e1fa4ecc0b957a240d3e476dd4bfc15d7aa6a25298611cda3940da82d8b5f"
     },
     "skills/xy-code-standards/references/boundary-reasoning.md": {
       "mode": "100644",
@@ -673,7 +761,7 @@
     },
     "skills/xy-code-standards/references/rules.md": {
       "mode": "100644",
-      "sha256": "ef77c28a1ecf5e0b0a287910b758f7568263c3d5591d044db763a807f4f820e3"
+      "sha256": "c1f00aa29c8395a376463e7c1ca940b70b7d511b663103d05201557404909e25"
     },
     "skills/xy-code-standards/references/sources.md": {
       "mode": "100644",
@@ -685,11 +773,11 @@
     },
     "skills/xy-config/SKILL.md": {
       "mode": "100644",
-      "sha256": "4ef0087b8497d0d8c8502a0fdab8e47b330dd4ee04b44bf000f31d52ec224771"
+      "sha256": "89f13aaa5e1396d9c922951da0b8bb054b8c91ccb61a335c2b372b3ec4a9eae3"
     },
     "skills/xy-grill-me/SKILL.md": {
       "mode": "100644",
-      "sha256": "699281ad239d839a4c92c7a73b71145a6fa563affc4c54d410419ed354348c37"
+      "sha256": "dd4acf1a8b1fe07bf5d658b5abb17aff921d69d06561c60407d2825bcf3f23e3"
     },
     "skills/xy-grill-me/agents/openai.yaml": {
       "mode": "100644",
@@ -697,11 +785,11 @@
     },
     "skills/xy-grilling/SKILL.md": {
       "mode": "100644",
-      "sha256": "3ac3b987d863a619824ec9705dd1d5790e958bc1a75507ade69f88752616125d"
+      "sha256": "89fa4b6a854e32019392e440d57d873e7026997798a14e19dcbf3428c06bd8ab"
     },
     "skills/xy-mobile-ui/SKILL.md": {
       "mode": "100644",
-      "sha256": "d5932c78627eae54ba047de5bd5543e213fee8ed4a6277c80859693b027c0ad6"
+      "sha256": "356566bf8cc9ff5e6d697c17b3287e33f376234ead07e490e4132ab695850ed6"
     },
     "skills/xy-mobile-ui/references/android.md": {
       "mode": "100644",
@@ -709,11 +797,11 @@
     },
     "skills/xy-mobile-ui/references/apple.md": {
       "mode": "100644",
-      "sha256": "fd299d889030c7c1c0f7d34560cfc0be9371c3391f2904ff22367db7dd8a0468"
+      "sha256": "5601761f9d569773ad21568337f8660ebe051d583d8263fd7e7c546447bd9cad"
     },
     "skills/xy-mobile-ui/references/mobile-rules.md": {
       "mode": "100644",
-      "sha256": "05ecd24773dcf0ecc2caa3b915975fa04046ba97f76b194883bf902bf343c5ad"
+      "sha256": "1810d22199c4b779ca6f3ab894ea4fd32672b4dad2889b53671d9b8faf4f1ccb"
     },
     "skills/xy-mobile-ui/references/sources.md": {
       "mode": "100644",
@@ -725,7 +813,7 @@
     },
     "skills/xy-plan/SKILL.md": {
       "mode": "100644",
-      "sha256": "dc697a4235c2e600abb51b0b8a404a47a9ad53f290f74c55d8dd214cfa58ac88"
+      "sha256": "3950d34e2ddbe27d055ba5e0fc250da9255383030fb7704f5a4dd3482412ff4f"
     },
     "skills/xy-plan/agents/openai.yaml": {
       "mode": "100644",
@@ -733,51 +821,51 @@
     },
     "skills/xy-plan/references/document-quality.md": {
       "mode": "100644",
-      "sha256": "101603843552f8f4950e9ae4af5974f6325dc3be09fc915b6bfc316a3dcbb586"
+      "sha256": "55e223edbe64ac1c8e56099d6807eaed15e7b1c58a3c2612db83aca22e865626"
     },
     "skills/xy-plan/references/requirements-markdown.md": {
       "mode": "100644",
-      "sha256": "2ccf6f25b9e12873754426eb7e6a90a254f5a80d4821453c7480d8323379af76"
+      "sha256": "5490e0435cd76e86cd2e2e2a490d9eea186c5725d31f56a9b2562240cd2031ea"
     },
     "skills/xy-plan/references/task-graph.md": {
       "mode": "100644",
-      "sha256": "6e1b6a8121bbffa254931dbe8aa60d3dbe3e56aee5cd4b59ae4e7bc1e5b07996"
+      "sha256": "b706a3e38951f04b92e13bfbe5751c981cb5ff8869b449c90e343787155e7439"
     },
     "skills/xy-playwright/SKILL.md": {
       "mode": "100644",
-      "sha256": "2ed89da5f5826eccea47181046dce7612a83ac00b59c1dd03b4d85312a17bfdd"
+      "sha256": "236873639ec507de09ad084ebe1210976955ff77d79d7e84b6957b444c6e31e0"
     },
     "skills/xy-project-memory/SKILL.md": {
       "mode": "100644",
-      "sha256": "b9ea894b183637205a1cd92ab068d3db3c2bd60617293307bbc4e3956d7410ba"
+      "sha256": "1e502bb0202bcfc9ffc08ec6773427b0738b072df55e22736f7c223661585c8d"
     },
     "skills/xy-prototype-verify/SKILL.md": {
       "mode": "100644",
-      "sha256": "07e01a7ae3bc7c2aa053807c18d1958ad1be141e3b4b36390ec4949cedecfd07"
+      "sha256": "8e1abe5321de86de9a1647ae7c608d6234c91ea93d737fe9da017171d7dc93c7"
     },
     "skills/xy-qa-review/SKILL.md": {
       "mode": "100644",
-      "sha256": "b743bb5187efb4e0bd73f6b3757d6e2f9a1821c892769d98d47496cb7b600e0d"
+      "sha256": "bd8e75b5a8c9cb7d77711a782a40caa7bbf0984191f2da6fc94afd6fb822779d"
     },
     "skills/xy-qa-review/references/implementation-acceptance.md": {
       "mode": "100644",
-      "sha256": "75d32e41138517bddf551f2dbaaa061604af3967d6e823b35db7f254dbc00620"
+      "sha256": "217de55123e1075c2f2be1289a580bbe097564b7a3653c91688fe21d5eeaca68"
     },
     "skills/xy-qa-review/references/inputs.md": {
       "mode": "100644",
-      "sha256": "26aee210b109692c5c250b4cf61584e103f6d28c2870e155fd14f7a4b362ccbf"
+      "sha256": "da4590c0fe2f3bb2d48bec14ba40ff2e5e5769a1be68e7bce1dc339edb965092"
     },
     "skills/xy-qa-review/references/ui-review.md": {
       "mode": "100644",
-      "sha256": "532e545263ecd1689c68c81a85e9e05a430bc6d73443db472ff79df220b1f6ca"
+      "sha256": "432cdc586421c287d53184afeb7cf5ca88a8c779d555f3cfbfc9c38f0f7a4e79"
     },
     "skills/xy-taste/SKILL.md": {
       "mode": "100644",
-      "sha256": "6d9d24814b1d713b021b0ca79adef75c35e988c8426ed0997cd75058c85d6125"
+      "sha256": "ac92445523bda9cd3495e73e5325fe7556d04954d684a738610c2f48fce53afb"
     },
     "skills/xy-ui-design/SKILL.md": {
       "mode": "100644",
-      "sha256": "822305145c7c0ff8624b459012944fa75672d4095c92e28c85235ca8c1844035"
+      "sha256": "b10b5e28c63eee29724b773648ff177eaed3b3a813fed81918bbe6c910f54042"
     },
     "skills/xy-ui-design/references/components-rules.md": {
       "mode": "100644",
@@ -785,7 +873,7 @@
     },
     "skills/xy-ui-design/references/design-quality.md": {
       "mode": "100644",
-      "sha256": "78fca2e7d724f4fc818ada794e53ea458ea1bc6d1664d2c752ab6d5b5c1d1f41"
+      "sha256": "3c9b128caf6acd2a49b69085a8f3b56e38de2dd8ecddb67b70d24871da0776f9"
     },
     "skills/xy-ui-design/references/foundations-rules.md": {
       "mode": "100644",
@@ -793,55 +881,59 @@
     },
     "skills/xy-ui-design/references/prototype-canvas.md": {
       "mode": "100644",
-      "sha256": "3d9dd7a9d5d5786e440eb0fc44508098b6b5ced7c86738d63ab5e4e43567415c"
+      "sha256": "39f5cc322f3b8546f331d3ff27b4b700ac2f19cd0aedf67ff9f8be2c00cabbda"
     },
     "skills/xy-ui-design/references/prototype-feedback.md": {
       "mode": "100644",
-      "sha256": "505d8f40cdec4051bc63e43d869e670d9eb4d81fef3ed580520934a2c59a74e0"
+      "sha256": "f0947dd282c4b9ee7e30fef49d3438eb79f399283b7b64f2c6dfe103dc08ad5e"
     },
     "skills/xy-web-guidance/SKILL.md": {
       "mode": "100644",
-      "sha256": "ff3db33c72d8bd827063971dbefda786a08a9dfd6d0441bb079a7e3215038ae6"
+      "sha256": "c868bb59c8468c196d7e0e9444310c261f511b0c98d39426eb8bd4dec6c89aae"
     },
     "skills/xy-workflow/SKILL.md": {
       "mode": "100644",
-      "sha256": "33e9db2ac1cb094556cfa8a26bbc0f467a4ca3bd851082da2bf64c17fa4be758"
+      "sha256": "2da87b6cf355325f8e81c245a76fc99bee78c514a8877880529962d8ca151369"
     },
     "skills/xy-workflow/references/closeout.md": {
       "mode": "100644",
-      "sha256": "35ec1c281902173e20811a59904cdf47b429de58af6f4100c6a19449c6920d6c"
+      "sha256": "2998bf9d2628cedeef5c6070a8cc6bdb626d46688e052d04c5f1ab3e0420633e"
     },
     "skills/xy-workflow/references/design-standards.md": {
       "mode": "100644",
-      "sha256": "0fd710c4a70a0b53bb3afe2bd66d4879aa047d8b893cf44a942f92397f2f3cd7"
+      "sha256": "73bcc308d2f2c6a02a566c7c442a2717245751722a9cc411cd8b8bcb4ad42e5c"
     },
     "skills/xy-workflow/references/dispatch.md": {
       "mode": "100644",
-      "sha256": "220c38f03bea0d3981c64338f2d9595e0d6577ddff8b5b6726299c794ca02df2"
+      "sha256": "ebf88c02247c942d7019b8133b9448fa08910f95abd545330d619f06a361ba01"
     },
     "skills/xy-workflow/references/implementation-and-qa.md": {
       "mode": "100644",
-      "sha256": "08ed1be3fc89c5b0621939fd225fd5c6d250024824bc9ddd3e9cc5ac5015b3e8"
+      "sha256": "934950225a8b942e5246ec6df714126bb0e369b4160cb5d6d9ba37aa4c4e32cc"
     },
     "skills/xy-workflow/references/plan-lifecycle.md": {
       "mode": "100644",
-      "sha256": "a7b59a7f63ce49cb7e59b7ca55d73f3d9f2c8a737da3e14905a347a1bddada7f"
+      "sha256": "e234f0dbe3ecda881c93c1eb178784c6b3e62f1c20e4d096767e172352fce8eb"
+    },
+    "skills/xy-workflow/references/requirements-confirmation.md": {
+      "mode": "100644",
+      "sha256": "5a85c921edbbfdedf31b165939bdde0a567c3c1c3edeac9f09030d2bdc1d16ba"
     },
     "skills/xy-workflow/references/requirements-intake.md": {
       "mode": "100644",
-      "sha256": "409d1e2f1586898f8982b31fc73ce8ea2d4788467c6a3e44ef0e96803deabef3"
+      "sha256": "58b215d1854e44a56afeb1ae6361581464bd690e317d4110e8c0be4f7b19e95f"
     },
     "skills/xy-workflow/references/runtime-records.md": {
       "mode": "100644",
-      "sha256": "254c61e8bee6cb25b520ea784c965ae114a28b95d9bbe7818dbf813504165ac8"
+      "sha256": "94e399423b77d158f6ebe96cd061696213d7de6775d149c1a9a9e021a79f8852"
     },
     "skills/xy-workflow/references/skill-selection.md": {
       "mode": "100644",
-      "sha256": "a5499cf0dbc2d762ef5f3f3936ced95b32ca4b820ccec44a0da771e40fa7bc86"
+      "sha256": "972e38c13ef2074b26fa3fc2f4adde99c038a8f1995e0fc6b7f179b77b4ac7b0"
     },
     "skills/xy-workflow/references/ui-design.md": {
       "mode": "100644",
-      "sha256": "d7d931b1848eaf47f674a3c348ca0d4dba83c3e71d112158c9e9d7c9f35524be"
+      "sha256": "0d3a6198f0a60eb5cb6a2abf74935e8f3e4d57ead1bfcdcf36cf4b4bd996fc6b"
     },
     "skills/xy-workflow/references/worktree-delivery.md": {
       "mode": "100644",
@@ -849,19 +941,23 @@
     },
     "sources.json": {
       "mode": "100644",
-      "sha256": "524f204b6552fbc9f3191d1ddbb8963d6c05e8e644fccc469863ef8eabd1b8ed"
+      "sha256": "d234e568aebca860de80ce668dda9cc4e6229bf8edaa6f6ba609fc5ad366038e"
+    },
+    "templates/docs/ARCHITECTURE.md": {
+      "mode": "100644",
+      "sha256": "98f271d5fb81c54a7efd7ab6ad1e166319cfa83b4e9cf405eb65cf392fa3c5f9"
     },
     "templates/docs/PLAN.md": {
       "mode": "100644",
-      "sha256": "200e40cd986fcb776b18a0efad71aeafc60a26a884b1765ac4d3ffc8d2744c24"
+      "sha256": "9e5bd847917235012514f03161dddd96ed61c515f124c3aeb866a9f80d67f45a"
     },
     "templates/docs/PROJECT.md": {
       "mode": "100644",
-      "sha256": "c0737156e7ef1349cdc0c1ce77b36d8f61c51a63b272224673211e6ab7760746"
+      "sha256": "0d36110feadedad592499d9f2e2fac1cee1ed21fa90cc52a79ecce3dec60b165"
     },
     "templates/docs/STANDARDS.md": {
       "mode": "100644",
-      "sha256": "716528a10d60ff8e36a332973759fc46d258c4271baa6cc860cdff810f56a160"
+      "sha256": "363cb90402f1b59dab5043f53e3698a2acf09133bbb445ff3e9ba5dbf63cc6c0"
     },
     "templates/project.yaml.example": {
       "mode": "100644",
@@ -873,35 +969,35 @@
     },
     "templates/prototype/canvas-host.js": {
       "mode": "100644",
-      "sha256": "cfcc9f8802262e0d12c8ec9db50452756173e5f27d47ede6009f4f28c345678a"
+      "sha256": "fb536e8c2a8fdd4abbb7f6e635dcdc5f6e6c178392f8662bc7693d54120ee523"
     },
     "templates/prototype/canvas-presentation.js": {
       "mode": "100644",
-      "sha256": "9f9a97cf8add58c2c43086b6d71df518c8f1b4029d6665dda943625ef143b8ca"
+      "sha256": "577d36b28b5bd388578c49376750f943006c67313b42172a8c59c85d47542c71"
     },
     "templates/prototype/delivery.html": {
       "mode": "100644",
-      "sha256": "8d54fe15f7294dda6e687e415c049ede71bf4f45162158e4a02f2f43b14144d2"
+      "sha256": "012626649e88f557fe7dcc2271e2a338cbee3d046b7d0769d213e8168eac179f"
     },
     "templates/prototype/feedback.css": {
       "mode": "100644",
-      "sha256": "b8a743cd22ce0a2b6574b9a6cc5f935ee5ff61ec33082442ad0b7aba22691bd6"
+      "sha256": "dfddcb53a24d64f0fd7da5f3e46622a43e46955f58eabafdc2374514ccedd4a4"
     },
     "templates/prototype/feedback.js": {
       "mode": "100644",
-      "sha256": "6e70efa52c46979979ce7ceb26021010585a8e5f63f35619e40357003ce79420"
+      "sha256": "3a938e58d9417fc5bb61b72331db2ae40a51dfac5005f742e95485c57f5649bb"
     },
     "templates/prototype/file-delivery.js": {
       "mode": "100644",
-      "sha256": "98d2fe7c42a6d8d1f30c363507ec22f0c7b57b9ad12ab8402841db7e5f4c2b9c"
+      "sha256": "a0250418db65a87bd5b9f8a117570e804fea6b9b6f8aa84017328302f91ae115"
     },
     "templates/prototype/file-entry.js": {
       "mode": "100644",
-      "sha256": "8cae37c9e8847dd22700871fb98fbaa0234121b0704fd39b8564a5d761deb283"
+      "sha256": "3abef2d215e8b328e69e1982ecdb17914f5c030ec512e8065cad7147d3982116"
     },
     "templates/prototype/file-page.js": {
       "mode": "100644",
-      "sha256": "223d0bcbd7610eee6a1c3959b19d3cc0719706570900c9c7e64316a7d0fffd8f"
+      "sha256": "009e64afc96fe85d0a1ed0979674a4a1f86244db3811cf00d3114bd40333271c"
     },
     "templates/prototype/index.html": {
       "mode": "100644",
@@ -913,27 +1009,27 @@
     },
     "templates/prototype/live-workspace.js": {
       "mode": "100644",
-      "sha256": "2c0f69e4852e2b9abf7035564d75097df742d46afcb3948f778623e30ff443f8"
+      "sha256": "3f6e3cfcd0187e379d27ac26bafa874b6bbf11e45df0cf641d74ac83535baf53"
     },
     "templates/prototype/live.css": {
       "mode": "100644",
-      "sha256": "4377d452c27a4f2713bc7ff6ee2fcec76964d46bc15ec206de18e707e40b2ed0"
+      "sha256": "712997c8e21296e263afdd38da72a0f339c4b695edc16f44185a2b4d6cd22bbf"
     },
     "templates/prototype/page-shell.js": {
       "mode": "100644",
-      "sha256": "7227d77a38c057c88d1e5e6a3058391cbf1ffe598bf9cec1fc6ca78768d1cb4a"
+      "sha256": "edd106dc4f8c834714a3a9ef11c818b2cd3f8a7e13bc231882863f7a0b0efc42"
     },
     "templates/prototype/page.html": {
       "mode": "100644",
-      "sha256": "c56fc4e125c7726986b28c2fa3103b07c20fbff1d08d8b279cbf5bc021e5332d"
+      "sha256": "4dc59a3b58a11e0df11e242253bdab678cbcd49a1e40df8a8146aeadc2542df9"
     },
     "templates/prototype/prototype.css": {
       "mode": "100644",
-      "sha256": "8eb9ac07b91d24b32a41e036ad251cdf7597ed13d53a3971e8419b962606ead3"
+      "sha256": "ee709419b4fab2f3183be2f9feb4c988593f484826e55490339ffefbeed7e22d"
     },
     "templates/prototype/review-camera.js": {
       "mode": "100644",
-      "sha256": "9e0c8e9d5df806bd16347a57187f85d3f28575cea96c13b444816c4a149e7ab8"
+      "sha256": "f79445a345d185ac9200671385dd756b9b5317a3a182b582a82cee00310c8b95"
     },
     "templates/prototype/review-state.js": {
       "mode": "100644",
@@ -941,7 +1037,7 @@
     },
     "templates/prototype/review.html": {
       "mode": "100644",
-      "sha256": "9ace777599deafb557813fc38bc1bf4a77df2ccdb684b387dd536610f2636925"
+      "sha256": "510787023bedf3d84533912e4bb9a6fb50aa771be6c587ef1daaad49a99ec36d"
     },
     "templates/prototype/solid-glass-LICENSE.txt": {
       "mode": "100644",
@@ -961,7 +1057,47 @@
     },
     "third_party/selected-skills.lock.json": {
       "mode": "100644",
-      "sha256": "99b201ffe2ac37fd3bd5c40bcda9466f32de8afbd49a2ef3c5317a11e663bf17"
+      "sha256": "27aec863836449baa882ea400fcb21f29623e72f62103c32993c5e63b00e49e0"
+    },
+    "third_party/selected-skills/agent-desktop/LICENSE": {
+      "mode": "100644",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "third_party/selected-skills/agent-desktop/runtime/macos/arm64/agent-desktop": {
+      "mode": "100755",
+      "sha256": "9a6b0829736a486da532a9d1ceed1e07192fa8967326c7b27125646adab6baf7"
+    },
+    "third_party/selected-skills/agent-desktop/runtime/macos/arm64/agent-desktop-macos-helper": {
+      "mode": "100755",
+      "sha256": "87348178e546974ee0f96b74dd03410f61f4972cae5eb5fbd36bf04d2cb50a42"
+    },
+    "third_party/selected-skills/agent-desktop/runtime/macos/x86_64/agent-desktop": {
+      "mode": "100755",
+      "sha256": "f762f8ed6a14b114f8a50b902205d3ecb6bcf554d8031f67abd7938af88663cb"
+    },
+    "third_party/selected-skills/agent-desktop/runtime/macos/x86_64/agent-desktop-macos-helper": {
+      "mode": "100755",
+      "sha256": "95eb80c7a18119319e3345a0ab6587c508e5999985cb7f1bdf1fb887553ea072"
+    },
+    "third_party/selected-skills/agent-desktop/skills/agent-desktop/SKILL.md": {
+      "mode": "100644",
+      "sha256": "abd913be10552c028e461e0a45c20e3734a7a1e5251fc2f9ef6fd63fdd606a6e"
+    },
+    "third_party/selected-skills/agent-desktop/skills/agent-desktop/references/commands-interaction.md": {
+      "mode": "100644",
+      "sha256": "5ef8a87be8aed9b0102adb3c332dcd50586c7fb28dc0f1490207ab9321673bf5"
+    },
+    "third_party/selected-skills/agent-desktop/skills/agent-desktop/references/commands-observation.md": {
+      "mode": "100644",
+      "sha256": "9c31aec6f51dacfc14ff68dc04533a8dcf3ed5edb3f935d90e453f471894b936"
+    },
+    "third_party/selected-skills/agent-desktop/skills/agent-desktop/references/commands-system.md": {
+      "mode": "100644",
+      "sha256": "673c931a285b360c1deb669983e87ca8571ee8520f48c81f00d49f711e0e95ac"
+    },
+    "third_party/selected-skills/agent-desktop/skills/agent-desktop/references/workflows.md": {
+      "mode": "100644",
+      "sha256": "9c5a93361f992d73eff50e9ec99bb895424ababd57d3f6742ff71e73734c1af1"
     },
     "third_party/selected-skills/grill-me/LICENSE": {
       "mode": "100644",
@@ -9401,16 +9537,16 @@
     },
     "workflow-sources.json": {
       "mode": "100644",
-      "sha256": "4b0be2d143554fcad2a189e062afb8ca4084222e15466539be1a510456322a3c"
+      "sha256": "ec4d7cde63dc41a5180144ba10496585554fc968a9e81ef453f7e5ef7c23e5b3"
     }
   },
   "host": "antigravity",
   "managed_by": "agent-workflow-plugin-source-v1",
-  "plugin_zip_sha256": "39bc2a94f34f3980bc5ac8ea7c94cc96b7152b79eb04f0691479a9282bc745b8",
+  "plugin_zip_sha256": "95ac781d9c1f6ffcede6fa74e9cca23bed76b26abafdc74979e1176b33d7dfec",
   "ref": "refs/heads/plugins-antigravity-stable",
   "repository": "Geoege-xll/agent-workflow",
   "schema_version": 1,
-  "source_revision": "e9c1f3043accc64e01155de833cbf62add2f73f5",
-  "source_tree_sha256": "4ec0c2329c7db6d2a45690528703e13a49ed34d3379762b713e16c0a9901fffc",
-  "version": "3.0.7"
+  "source_revision": "c1759ebf00d00687dbec2469cd3172de5eac070c",
+  "source_tree_sha256": "155113afd54befd1c09d4d3b8fc56df83db632f13f1530e5403f72a7889c33a1",
+  "version": "3.0.8"
 }
