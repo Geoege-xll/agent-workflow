@@ -1,0 +1,387 @@
+---
+name: xy-workflow
+description: "Orchestrate current Light／Full implementation, UI changes and recovery of unfinished work, selecting schema 2 task packs, native implementers and acceptance by risk; use a separate branch for read-only audits."
+---
+
+## Official plugin resource boundary
+
+This component is assembled from the unchanged shared authority. In this official
+plugin, resolve the installation root from the loaded component's physical location:
+`../..` from a skill's directory, or `..` from the `agents/` or `rules/` directory.
+Do not use the current working directory or a guessed cache path.
+Read `PLUGIN.md` there before using workflow helpers. Treat this paragraph as a
+resource/transport adapter; it grants no business approval, role ownership or QA PASS.
+
+读取必需长文时，核对宿主返回的起始范围、实际范围、总长度和截断标志。
+若 `Read` 受 token／行数上限截断（如 `truncatedByTokenCap`，或末行小于
+`totalLines`），只续读缺失范围，或经下述既有 helper 调用
+`lib/documents/context_read.py`，遵守其 `offset`／`next_offset`／`sha256`
+续页合同。确认同一版本所需范围连续、完整后，再执行依赖该内容的流程；
+不能将部分输出当作完整已读，也不要从头重复全量 `Read` 来补缺。
+这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
+
+Use that root's `product/WORKFLOW.md`, `roles/`, and
+`platforms/shared/skills/` as the unchanged workflow authority. The appended shared
+text retains historical `.agent-workflow/` examples. In plugin mode, resolve managed
+resource references under the plugin root using `plugins/source_pack.py resource`;
+select the actual adapter with `plugins/project_context.py inspect` through the
+same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply
+the new `.awf/project.yaml` candidate. Translate historical adapter examples to
+that selected actual path. The context entry creates no documents or business
+approvals; its `init --adapter <selected-path>` passes that exact adapter to the
+original initializer. Resolve project documents, task records and production code
+in the actual project. A packaged example is never the current project adapter.
+Use the packaged interpreter selector for each independent invocation:
+`bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
+Pass `helper --project <absolute-project>` and the original helper path/arguments
+instead of the historical project bridge commands. The selector only locates an
+existing Python 3.11+ and never installs software or changes the user's PATH.
+Read the current host's packaged `platforms/<host>/references/pm-integration.md`
+when host integration is required. Native plugin discovery replaces legacy setup,
+role refresh and central activation checks. Do not run `runtime install`,
+`runtime activate`, project registration, `setup_*.sh`, or create/edit project
+`AGENTS.md`, `CLAUDE.md` or `.agent-workflow` to make this plugin work.
+Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
+actual discovered name or the packaged physical path when invoking one. Public aliases are
+`xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
+`product/command_identity.json`; canonical upstream names remain vendor resources, not discovery entries.
+Fully read each selected adapter and its canonical before use; never substitute unknown global names.
+Claude's explicit plugin skill commands use `/xy-workflow:<skill-name>` and
+its bundled agents use the host-discovered plugin-qualified agent name. Preserve
+the original role identity in the task pack; do not infer successful native role
+selection from that identity or a generic task label. Use the actual host tool's
+documented arguments and report an unavailable native selector.
+
+The main session remains PM. Workers receive only the complete current task pack
+with `instance_policy: fresh` and `context_policy: handoff_only`; never fork PM or
+sibling history. Only the official host dispatches agents. Use the official host's
+default or already configured model and reasoning settings; PM applies the business-only
+read-only dispatch preference contract in `xy-workflow/references/dispatch.md` when present. This workflow core
+neither requires nor registers a separate model configuration service, web console,
+or model MCP. Their absence does not block native dispatch. Requirements approval and applicable visual
+approval remain exactly as defined in the authority; existing explicit scope
+authorization still applies to Light. A required independent QA remains one
+read-only reviewer. Preserve the original closeout order.
+
+Claude Code and Antigravity expose packaged native agents. Codex's documented
+portable manifest exposes skills and MCP, with no documented `agents` manifest key:
+read the full packaged role and `platforms/codex/WORKER_CONSTRAINTS.md` into the current fresh task
+handoff through the host's actual supported native dispatch interface. A role label
+alone proves no native role/model selection. If the host cannot supply required
+dispatch or independent context, report that limitation instead of claiming it ran.
+Do not select an unknown same-named global `xy-*` role as evidence that this package
+ran: it may contain an older workflow or central pin. Use a fresh native generic
+entry with the complete current packaged role instructions and current task pack,
+or a native selector whose definition has actually been verified against this
+package. Never import an unknown global role's pin, history or instructions merely
+because its name matches. If the host cannot provide this boundary, report the
+dispatch limitation to the PM.
+
+This alpha uses the existing unpinned source-pack task contract. It rejects central
+`runtime_binding` records and central project markers rather than migrating them.
+Do not update/replace the installed plugin during an active task. Retention of old
+plugin resources across updates and actual native model/effort execution remain
+unverified. `runtime_verified: false` stays visible until a real host session proves
+the corresponding behavior.
+
+
+<!-- agent-workflow-pack:managed-skill -->
+
+# xy-workflow
+
+Accept only Light／Full and `schema_version: 2`. Code changes retain applicable methods and standards
+from `xy-code-standards`; both levels default to native implementers. PM exceptions, independent context
+and instance closure follow
+`.agent-workflow/product/WORKFLOW.md#implementation-ownership` and `#agent-instance-lifecycle`.
+
+## Standalone read-only audit
+
+Before implementation routing, apply WORKFLOW's `Standalone read-only audit` when the task only
+asks for audit findings, not implementation acceptance or fixes. Deliver the scoped conclusion and
+stop; do not create writers, BUILD_VERIFIED, an implementation QA PASS or a second audit of the
+report. Honor explicitly requested independent/full re-review and mandatory project checks. If fixes
+are authorized, route their actual implementation normally. QA being read-only does not exempt
+Full implementation or actual Light acceptance requiring QA from current scope/standards and handoff validation.
+
+## Light and Full
+
+Before dispatch, assess the goal, actual consumers, scope, risk and implementer. Light uses the current
+self-contained single-task pack, defaults to the corresponding native implementer and minimum sufficient
+verification, and does not repeat confirmation when an explicit user instruction already authorizes the
+current scope. It does not force Grill Me, xy-plan, a DAG, a saved plan or independent QA. At handoff,
+assess independent audit, documentation and memory by actual risk and complete selected mandatory items;
+without actual QA, do not claim QA PASS. Ordinary UI copy follows WORKFLOW's `Light UI copy` real-consumer,
+semantic and resource checks. Use production_ui＋UI-Conformance, zero design delta and current resolved,
+frozen authority; do not label it non_ui to evade engineering/design standards. Actual design/interaction
+changes are Full. Shared contracts, data, root configuration, multiple roles or actual UI design changes
+use Full and retain the complete route below. Do not split risky work into Light to evade confirmation,
+or use handoff assessment to skip Full's single independent QA.
+
+Each new implementer/QA receives only the current task pack. Do not copy full PM/sibling conversations or
+fork parent history. Continuous implementation, short rework of the same task and same-round delta review
+by the original Reviewer may reuse the instance; independent tasks use new instances/IDs. Close natively
+promptly after acceptance/evidence protection. Without that capability, retire only to prevent misdispatch;
+do not claim erased history or released unconfirmed capacity. Follow the product authority above for the
+full lifecycle, reading current-host details when operating; add no Agent pool.
+
+## Applicable specialist branches
+
+For initial/revised design standards or a visual-system replacement, read
+[design-standards.md](references/design-standards.md). PM assesses standard updates separately from
+PROJECT/plans baseline projection; UI Agent writes authorized leaves, PM adopts scope and refreshes affected
+authority, implementation roles own production tokens/components, and QA audits independently.
+No reusable rule change means no update. `xy-uiux + design_ui` supports `design_mode: standards_only`
+for exact normative Markdown leaves without prototype writes, `xy-prototype-verify`, or visual gates.
+Existing user confirmation stages are unchanged; adopted design rules do not imply migrated production.
+
+Use `.agent-workflow/product/WORKFLOW.md` as the canonical product procedure and
+`.agent-workflow/project.yaml` as the project adapter.
+
+In central mode, first verify machine-local enablement under WORKFLOW's “Centrally Pinned Versions and
+Project Adapters”. Host Skill symlinks aid discovery only; a clone without a machine binding cannot
+orchestrate automatically. New graphs/single packs pin a strict three-field `runtime_binding`. Running
+tasks do not switch versions, and missing pins, conflicts or corruption do not fall back. For each managed
+read/helper execution, use the linked shared bridge boundary with the current pack's pin. A changed project
+Skill version must not redirect reads/execution to a new version; do not assume shell environment survives
+from a previous tool call. Source-pack development retains its source entry points; version 2.1 has no
+old self-contained execution branch. The central adapter
+always belongs to the actual project's `.agent-workflow/project.yaml`.
+
+Formal Full requirements review uses one Markdown source. PM keeps any pre-approval draft in the current
+request scratch, saves the approved plans `.md` before dispatch, and writes prototype coverage back to it.
+Requirements/plan Markdown-to-HTML generation is retired under
+[the retained reference](../xy-plan/references/requirements-markdown.md); preserve historical plan HTML and the active prototype workflow. Document existence creates no approval and replaces neither requirement nor prototype fingerprints.
+
+Use host-native aliases only when explicit activation is needed. Examples:
+`xy-project-memory` (Codex: `$xy-project-memory`; Claude Code: `/xy-project-memory`;
+Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
+`$xy-build-verify`; Claude Code: `/xy-build-verify`; Antigravity CLI:
+`/xy-build-verify`). The procedure below otherwise uses host-neutral Skill names.
+
+## Main-session contract
+
+- Keep accepting natural-language requirements while existing workers run. Apply
+  `.agent-workflow/product/WORKFLOW.md#continuous-pm-intake` for independent requests, result reuse,
+  same-task append, splitting and resource waiting; do not require users to supply IDs or manage Agents.
+  Before dispatch, PM checks explicit current records and actual native occupancy through
+  [shared dispatch](references/dispatch.md#continuous-intake-dispatch). Original records own state;
+  separate requests keep their own approval, execution-resource authority and QA. For same-ID progress/append use the intent and
+  verified capability query in [runtime records](references/runtime-records.md), never interrupt as steer.
+
+- Project Hooks are advisory activation/recovery reminders, not a workflow execution engine.
+  They never establish task level, approval, QA PASS, permissions or completion. Missing/disabled
+  Hooks do not disable this Skill. Continue related work using current context and valid evidence;
+  do not restart an earlier completed task just because this Skill or a Hook is invoked again.
+
+- Each Agent independently reads the complete current task pack, required Skills/instructions and applicable
+  standards. Reuse unchanged text already fully available in the same instance; file transport of the same
+  pack version does not require rereading. Restore affected content when missing, truncated, compacted or
+  changed. Explicit host/Skill reread requirements remain. See [complete reading of required long documents](references/runtime-records.md#完整读取必需长文)
+  for reuse boundaries and the optional pager; add no reading ledger or mandatory gate. Ordinary business
+  material remains on demand. Machine byte checks/fingerprints do not replace this Agent's required reading.
+- Resolve existing paths from current context, configured directory links or a scoped file listing;
+  do not invent filenames. Choose filters appropriate to the requested resource; no match proves
+  absence only within those filters, not a task failure. Before affected dispatch, assess whether
+  current-host resources actually need checking/refresh using the [dispatch procedure](references/dispatch.md).
+  Reuse unchanged facts and successful installation evidence instead of probing every task.
+- For workflow-owned Python helpers and dependent CLI calls, follow the shared
+  [execution boundary](references/dispatch.md#workflow-helper-execution): reuse the runtime selector,
+  keep UTF-8 explicit, and stop only the failed command's dependent chain.
+  For routine state/scope/document-reference updates, complete Task Pack export or file evidence
+  checks, use the existing [record tools](references/runtime-records.md) rather than rewriting
+  temporary Python programs. Read that reference only when those operations are needed.
+- Main session = PM. It owns requirements, routing, approvals, task packs, synthesis,
+  rework, and the user-facing result.
+- Light／Full default to the corresponding native subagent, except when the user explicitly instructs PM
+  itself to implement the current scope. PM maintains only coordination and its owned documents. The exception
+  does not lower the original level's requirements; summaries create neither authorization nor downgrades.
+- The default business confirmations are `requirements_approved` and, for required-prototype UI
+  design-change work, `visual_approved`. A proven `UI-Conformance` request has no visual
+  confirmation because it makes no design decision; a user-selected direct-development branch also
+  has no visual gate for its exact surfaces. The PM recommends but never selects or invents either
+  design-change branch. A task-scoped structured exception is allowed only under the policy below.
+- Full and Light actually requiring audit use the single `xy-qa` after implementation. It does not command implementers or edit
+  production business code.
+
+## User-facing feedback boundary
+
+Internal orchestration records are not user-facing output.
+
+- Never paste raw workflow YAML or DAG JSON into user messages. Keep `grill_result`,
+  `memory_context`, `memory_projection`, `commit_decision`, `controlled_document_access`,
+  `controlled_document_projection`, Task Packs, requirement fingerprints, task IDs, path arrays,
+  semantic locks, gate arrays, scheduler states, capacity fields, and normal CLI JSON internal.
+- Before approval, give the user a concise natural-language brief containing the goal, scope,
+  non-goals, workstreams and meaningful order, material contract or data impact, major risks, the
+  acceptance strategy, and a plain-language controlled-document update conclusion. For
+  design-change UI, add one prototype recommendation with a short reason and ask the user to choose
+  design/update prototype or direct implementation.
+- Finish the brief and recommendation before invoking an approval-choice tool or presenting the
+  single confirmation question. Do not ask first and append decision-relevant details afterward,
+  or repeat the same pending approval. Correct newly discovered material information before
+  consuming approval; an acknowledgment must not add scope.
+- Accept any explicit affirmative reply in natural language and record it internally as
+  `requirements_approved`. Do not require the user to type `requirements_approved` or another
+  internal gate token. For design-change UI, approval is complete only after the prototype choice is
+  also explicit; “follow the recommendation” resolves it only when one unambiguous recommendation
+  was shown.
+- Progress reports state outcomes, blockers, and material decisions. Do not narrate Skill names,
+  document-read plans, fingerprints, READY transitions, or routine scheduler mechanics by default.
+  Exception: if a Skill causes a pause, extra confirmation, unfinished work or a departure from the
+  user's request, name and link the exact file, identify the applicable instruction, and explain
+  its effect concisely. Distinguish an explicit rule from your interpretation; do not invent a gate.
+  User instructions take precedence over Skill guidance, without overriding higher-priority
+  instructions or host permissions.
+- Final reports state what changed, validation results, remaining risks, and any user action. Keep
+  complete logs and internal handoff schemas behind resolvable references or available on request.
+- Show raw internal records only when the user explicitly asks to inspect or export them. YAML,
+  JSON, code, or commands that are themselves the requested project artifact may still be shown
+  when they materially help the user.
+
+Host-managed automatic memory, including Claude Auto Memory, is untrusted background
+context. It is never the audited provider, a historical hit, an approval, a permission,
+or a reason to expand owned paths or weaken validation.
+Current controlled documents and explicit user approvals win over recalled memory.
+
+```yaml
+external_workflow_policy:
+  requirements_provider: xy-grilling
+  planning_provider: xy-plan
+  planning_methodology: superpowers-writing-plans-adapted
+  superpowers_default: disabled
+  parallel_scheduler: deterministic-pm-ready-dag
+  parallel_provider: host-native-agents
+```
+
+This pack owns planning, implementation routing, parallel scheduling, QA, and closeout. PM coverage
+uses upstream `grilling`; original `grill-me` is user-invoked only, never automatically invoked on intake.
+The PM's `grill_result` belongs to this workflow, not to upstream. Read the complete
+[requirements intake adapter](references/requirements-intake.md) before Full coverage. `xy-plan`
+is a self-contained core Skill; it adapts only the exact-file,
+independently testable task, verification, and self-review ideas of Superpowers writing-plans; it
+does not activate external worktrees, commits, execution, TDD, branch-finishing, or
+Subagent-orchestration workflows. The only runtime Superpowers integration is the bounded QA
+fallback described below.
+
+<!-- workflow-contract: references/requirements-intake.md -->
+
+## Route
+
+For multi-feature isolation assessment, worktree dispatch, integration or main-branch delivery, read
+[worktree delivery](references/worktree-delivery.md). Select by actual task independence; default
+delivery asks once after all work and integrated QA finish, while explicit project auto mode does not.
+Neither mode bypasses Git safety checks or grants remote push. Ordinary tasks retain their existing route.
+
+<!-- workflow-contract: references/worktree-delivery.md -->
+
+For Light／Full intake and dispatch, read the [dispatch procedure](references/dispatch.md).
+It preserves Full Grill Me → xy-plan draft → PM projection decision → requirements approval →
+approved-plan storage → validated READY dispatch. Do not dispatch before reading the applicable
+contract. Light uses that reference's lightweight branch; documentation/memory remain on demand. Do not enter a Full graph merely to dispatch.
+
+<!-- workflow-contract: references/dispatch.md -->
+
+## Clarification fallback
+
+Use this only when the route above requires `grilling` and that primitive is unavailable:
+
+1. Inspect the project truth first; do not ask what the repository can answer.
+2. Ask one compact batch covering only unresolved items:
+   - the observable outcome and affected users or surfaces;
+   - in-scope work and explicit non-goals;
+   - precedence among conflicting constraints;
+   - acceptance evidence, approval boundaries, and rollback expectations.
+3. If an unanswered item would materially change implementation or an irreversible
+   action, stop and wait for the user. Otherwise state the smallest safe assumptions.
+4. Record the result in the task pack:
+
+   ```yaml
+   grill_fallback:
+     trigger: missing-grilling
+     answered_questions: []
+     assumptions: []
+     unresolved_questions: []
+   ```
+
+## Native bug-fix route
+
+Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
+runs the Grill Me coverage check and `xy-plan`; when its symptom, expected result, environment,
+reproduction, impact, and acceptance evidence are complete, the coverage check asks nothing and
+returns control immediately.
+
+```yaml
+native_bug_fix:
+  - reproduce_exact_symptom
+  - minimize_reproduction
+  - identify_root_cause
+  - add_regression_evidence
+  - implement_minimal_fix
+  - run_selected_repository_verification
+  - assess_task_level_closeout
+```
+
+After minimum verification, Light defects assess handoff by risk; Full uses `request_unified_qa`. Explicit
+review requests, mandatory project rules or actual risk still select necessary independent review. The defect
+label itself does not force Full. The bug label alone does not
+upgrade the task or require Full planning, another approval, a saved plan, or documentation churn.
+
+Review-feedback handling is not bug diagnosis. Treat external findings as advisory evidence: verify
+them against current source, requirements, and tests before accepting or rejecting them.
+
+## Default business confirmations and exceptions
+
+These confirmations apply to Full. Light with explicit scope authorization does not repeat confirmation;
+clarify only affected decisions when material gaps exist.
+
+- Ask once for `requirements_approved` after scope, non-goals, constraints, and acceptance
+  evidence are clear. For Full work, first complete Grill coverage, create the `xy-plan` draft, and
+  record the PM's post-QA controlled-document projection decision. For design-change UI, fold the
+  reasoned PM recommendation and user's prototype choice into this same confirmation. Reopen only
+  after a material requirement, affected-surface, or scope change.
+- Handle reversible architecture details automatically and record durable tradeoffs in an
+  relevant feature rationale when warranted after verification. A material architecture change that alters approved requirements,
+  scope, key constraints, or acceptance evidence normally reopens `requirements_approved`.
+- The PM may ask architecture questions or request a user choice. A task-scoped extra
+  confirmation is allowed only when the user explicitly requests it or a material unresolved
+  decision cannot safely be folded into an existing confirmation.
+- `UI-Conformance`, non-UI, and a valid `waived_by_user` request have no business confirmation after
+  `requirements_approved` by default during development. A selected worktree delivery route separately
+  follows its configured confirm/auto policy at final local merge; do not attach that consent to implementation gates.
+
+For Full UI classification, prototype choice, design handoff or visual confirmation, read
+[UI design branches](references/ui-design.md). Required prototypes retain exact page gates; conformance and scoped
+user waivers do not inherit them. Production-only revisions use the current replacement authority.
+Read [plan lifecycle](references/plan-lifecycle.md) when saving, revising or resuming a plan.
+
+<!-- workflow-contract: references/ui-design.md -->
+
+For the PM projection decision before requirements approval, or after verified QA for document
+projection and commit assessment, read [closeout decisions](references/closeout.md). Assess first; do not update
+PROJECT/plans merely to finish. Current truth changes only after verified implementation.
+
+<!-- workflow-contract: references/closeout.md -->
+
+- An exceptional confirmation must be represented in the task pack and omitted otherwise:
+
+  ```yaml
+  additional_business_confirmation:
+    name: <stable gate name>
+    reason: <why the default two stages are insufficient>
+    decision_scope: <what the user is deciding>
+    options: []
+    evidence: []
+    resume_condition: <exact answer that resumes dependent work>
+  ```
+
+  It blocks only dependent DAG tasks and must never become a permanent default stage.
+
+## Implementation and QA loop
+
+For implementation handoff, rework or closeout, read the current level's applicable branch of
+[implementation and QA](references/implementation-and-qa.md). Use exactly one read-only request
+reviewer; preserve independent source/standards audit and valid evidence reuse. The same reviewer
+checks affected repairs without restarting unchanged coverage. Light first assesses independent-audit need
+by actual risk. Read-only audits stop after delivering conclusions, without entering implementation closeout.
+
+<!-- workflow-contract: references/implementation-and-qa.md -->

@@ -1,0 +1,5 @@
+interface:
+  display_name: "XY Grill Me"
+  short_description: "Explicit user entry for bundled original Grill Me"
+policy:
+  allow_implicit_invocation: false
