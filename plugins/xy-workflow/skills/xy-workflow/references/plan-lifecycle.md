@@ -258,6 +258,7 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
 
 - PROJECT 的 `## 主题目录` 每个现行主题只列一次，普通链接表示可查阅。新目录中，行首以“已验收：”标记的条目（如 `- 已验收：[主题](相对路径)`）才作已验收声明。旧 `## 当前已验收基线` 及主题目录之外的原有主题链接继续适用既有基线检查。已完成或取消且没有已验收基线的历史稿、已移除主题留在原址，撤下当前目录链接。声明须能追溯到同一主题的真实版本、交付行为及批准与验收原件。围栏示例和 HTML 注释不构成索引项。
 - 本轮仅修改发生变化的条款。Full 经当前集成 QA PASS、Light 经必要验证及选定审查验收后，再更新已验收行为和必要目录声明。进行中、暂停或取消仍保留上次已验收基线；`completed` 自身不能证明交付。没有长期事实变化时，只完成请求交接。
+- 已批准计划、实际进展与阻塞可以先写入原主题，保留上次验收的版本、日期和证据。Full 单树请求在既有 QA 范围冻结步骤选定本轮应写回的原主题，经当前独立 QA PASS 后登记同一主题，收口以有效登记为准。见[QA 后登记已验收事实](closeout.md#qa-后登记已验收事实)。
 - 当实际代码结构变化时，开发 Agent 在既有交接列出入口、模块或依赖的实际变动与源码位置，本轮已有 QA 独立核对。PM 据验收结果在 `docs/ARCHITECTURE.md` 原节更新当前结构，首次确需记录才创建。PROJECT 在项目简介处、主题目录之前链接该文件一次；业务主题需要结构依据时链接具体架构章节。初始化和无结构变化的任务无需创建架构文件或空链接。
 - Mark accepted deletion as removed in the same source, retaining necessary dates, reason, replacement and
   history. Remove its current index entry; do not rename it or create a feature/ADR document.

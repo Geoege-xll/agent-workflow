@@ -241,7 +241,7 @@ prototype_policy:not_applicable, current resolved/frozen design_authority_refs a
 coverage. Fill missing authority with real grounds first; actual design/interaction changes become Full.
 Do not use non_ui or empty authority to evade standards.
 
-Light does not force the Full Grill Me, xy-plan, graph, plan persistence, independent QA or repeated
+Light does not force Full planning coverage, xy-plan, graph, plan persistence, independent QA or repeated
 confirmation below. Explicit user scope authority permits direct dispatch; material unresolved contracts
 and platform permissions follow their original boundaries. Run minimum sufficient verification and assess
 independent QA, documentation and memory at handoff. Complete selected mandatory items; create no empty
@@ -364,9 +364,9 @@ this reference creates no separate instance-state source.
    create no empty index: retain configured index_path/root and null index_fingerprint. Each source covers
    owned_paths and applicable IDs through existing fields in the complete current worker/QA pack. Missing,
    stale or insufficient coverage still blocks; do not preload the whole standards directory.
-2. Classify production scope from the current request and available facts. If classification,
-   requirement coverage, or planning materially depends on a missing project fact, apply the
-   auxiliary-source policy above and retrieve only that fact before finalizing the classification:
+2. Classify only an explicitly delegated implementation. When scope, impact and acceptance are
+   clear, classify directly. Retrieve a missing material fact from the narrowest authorized source.
+   Use the bundled `xy-grilling` only for a material gap in the deliverable, scope, impact or acceptance, then classify:
    - Light: one clear, bounded-risk delivery surface, including ordinary low-risk copy; use the single-pack branch above.
    - Full: multiple roles, shared contracts/database/root configuration, or production UI beyond low-risk copy.
    Light saves a brief plan only for actual pause/recovery/handoff or explicit request. Full saves after
@@ -402,16 +402,9 @@ this reference creates no separate instance-state source.
    Do not select a prototype policy for a design-change route yet. Record the exact affected
    surfaces and prepare both consequences so the PM can recommend one branch and the user can choose
    `required` or `waived_by_user` during requirements confirmation.
-5. Every `Full` request performs a **Grill Me coverage check** using upstream `grilling`
-   (Codex: `$xy-grilling`; Claude Code and Antigravity CLI: `/xy-grilling`, using the actual discovered
-   plugin-qualified entry). First read [requirements intake](requirements-intake.md) completely:
-   it owns PM `coverage_check`, `full_interview` and `grill_result`; these are not upstream schema.
-   Original `grill-me` is user-invoked only; never automatically activate it. Reuse settled facts,
-   ask only the unresolved frontier with recommendations, and fold shared-understanding confirmation
-   into the existing requirements approval after the draft. A complete request returns without artificial
-   questions. Clear Light work does not run this merely because the Skill is installed.
-   Keep the complete `grill_result` internal. If `grilling` is unavailable, use the local
-   clarification fallback and record it internally.
+5. For Full planning coverage, read [requirements intake](requirements-intake.md) and fill the PM's
+   internal `grill_result` from established facts and any earlier clarification. A clear Full
+   request proceeds without an interview Skill. Original `grill-me` is user-invoked only.
 6. After Full coverage is complete, activate `xy-plan` (Codex: `$xy-plan`; Claude Code and
    Antigravity CLI: `/xy-plan`). It returns a self-contained proposal with `plan_state: draft`,
    exact paths, interfaces, task packs, verification commands and expected results, semantic locks,

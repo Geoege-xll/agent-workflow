@@ -108,8 +108,8 @@ def _reference_key(label: str) -> str:
     return " ".join(label.casefold().split())
 
 
-def document_links(prose: Iterable[str]) -> Iterator[tuple[int, MarkdownLink]]:
-    """读取所选文档里用到的行内链接和引用式链接，返回物理行号，定义行自己不构成引用。"""
+def document_links(prose: Iterable[str], *, include_images: bool = False) -> Iterator[tuple[int, MarkdownLink]]:
+    """读取所用行内及引用式链接，可按需纳入图片。定义本身不产生引用，行号指向使用处。"""
     lines = list(prose)
     definitions: dict[str, str] = {}
     for index, line in enumerate(lines):
@@ -129,7 +129,7 @@ def document_links(prose: Iterable[str]) -> Iterator[tuple[int, MarkdownLink]]:
             for consumed in range(index, end + 1):
                 lines[consumed] = ""
     for number, line in enumerate(lines, 1):
-        for link in line_links(line, references=definitions):
+        for link in line_links(line, references=definitions, include_images=include_images):
             yield number, link
 
 

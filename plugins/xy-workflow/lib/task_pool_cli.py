@@ -64,6 +64,12 @@ def main(argv: list[str] | None = None) -> int:
         finish.add_argument("--" + field, required=True)
     finish.add_argument("--revision", type=int)
     finish.add_argument("--verification-exit-code", required=True, type=int)
+    closeout = sub.add_parser("closeout", parents=[common], help="只读核对本请求的验收、保全及精确可回收实例")
+    closeout.add_argument("--request-id", required=True)
+    closeout.add_argument("--preservation", type=Path)
+    finish_closeout = sub.add_parser("finish-closeout", parents=[common], help="按原件 SHA 登记精确实例的终态观察")
+    for field in ("request-id", "task-id", "record", "expect-sha256", "evidence"):
+        finish_closeout.add_argument("--" + field, required=True)
     for cmd in (view, claim, release):
         for flag in ("configured-subagents", "configured-writers", "host-available-subagents"):
             cmd.add_argument("--" + flag, type=int, required=cmd is not view)
@@ -100,6 +106,14 @@ def main(argv: list[str] | None = None) -> int:
                     root, args.pm_id, target, args.expect_sha256, args.agent_id, revision=args.revision,
                     verification_exit_code=args.verification_exit_code, source=args.source, evidence=args.evidence,
                 )
+        elif args.command in {"closeout", "finish-closeout"}:
+            if args.command == "closeout":
+                result = task_pool.closeout(root, args.pm_id, args.request_id, args.preservation,
+                                            installed=packaged_host())
+            else:
+                target = {"record": args.record, "request_id": args.request_id, "task_id": args.task_id}
+                result = task_pool.finish_closeout(root, args.pm_id, target, args.expect_sha256,
+                                                   Path(args.evidence), installed=packaged_host())
         elif args.command == "bind":
             receipt = records.decode(records.read_record(args.receipt))
             result = task_pool.bind(root, args.pm_id, receipt, {"host": args.host, "agent_id": args.agent_id},

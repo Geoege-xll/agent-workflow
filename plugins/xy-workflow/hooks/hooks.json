@@ -12,6 +12,31 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/lib/python_runtime.sh\" -I -B -X utf8 \"${PLUGIN_ROOT}/hooks/write_guard.py\"",
+            "statusMessage": "Checking managed-project write ownership",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/lib/python_runtime.sh\" -I -B -X utf8 \"${PLUGIN_ROOT}/hooks/result_closeout.py\"",
+            "statusMessage": "Checking registered result tasks",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
