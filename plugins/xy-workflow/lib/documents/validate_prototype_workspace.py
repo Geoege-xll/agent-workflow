@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict, read-only validation for the active HTML prototype workspace."""
+"""通过 --standalone 只读验证新交付具体原稿；同时保留历史 index 工作区校验。"""
 
 from __future__ import annotations
 
@@ -1615,7 +1615,11 @@ def validate_workspace(
     adapter: str | None = None,
     standalone: bool = False,
 ) -> dict[str, list[dict[str, str]]]:
-    """验证整个工作区，返回选定具体页的证据；指纹相等不代表授予用户批准。"""
+    """新交付用 standalone 验证明确原稿；省略仅保留历史 index 工作区校验。
+
+    两路均使用原 v1 依赖指纹，不把服务壳或活动草稿当作原稿依赖。历史分支的
+    唯一 index 登记规则不施加给新交付，也不能据此向新项目复制工具或导航壳。
+    """
     prototype_relative = _safe_relative_path(
         prototype_relative_raw,
         "prototype root",
@@ -1742,9 +1746,10 @@ def capture_selected_pages(project_root: str | Path, prototype_relative_raw: str
                            pages: list[str], adapter: str) -> dict:
     """捕获明确页面的真实渲染闭包，不要求项目拥有通用查看器或索引。
 
-    与旧 validate_workspace 共用解析、no-follow 文件读取和 v1 指纹域；只有
+    与历史 index 校验共用解析、no-follow 文件读取和 v1 指纹域；只有
     选择边界不同。导航链接仍做本地越界检查，但不授权复制未选业务页面。
-    返回字节仅供派生评审包装配，不能作为修改项目文件的授权。
+    返回字节供 live HTTP 内存响应或历史离线包装配，不能授权修改原稿，
+    也不能据此为活动服务落盘业务 HTML 副本。
     """
     prototype = _safe_relative_path(prototype_relative_raw, "prototype root")
     if not pages or len(pages) != len(set(pages)):
@@ -1837,7 +1842,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("prototype_root")
     parser.add_argument("--adapter", help="explicitly selected project-relative adapter; required for requirements navigation")
     parser.add_argument("--json", action="store_true", dest="json_output")
-    parser.add_argument("--standalone", action="store_true", help="validate explicit pages without a project viewer/index")
+    parser.add_argument("--standalone", action="store_true", help="新交付：验证显式原稿，不要求index或工具副本；省略仅用于历史index工作区")
     parser.add_argument("--page", action="append", help="concrete page relative to the prototype root; repeatable")
     parser.add_argument("--expect", action="append", default=[], metavar="PAGE=SHA256")
     try:

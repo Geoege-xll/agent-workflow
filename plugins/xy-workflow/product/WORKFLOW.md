@@ -822,22 +822,42 @@ installation, a build, framework, router, external CDN, live API, database, acco
 page.html 模板，去掉项目源对插件反馈／桥接资源的引用，只创建有权限的具体页和业务样式。
 
 反馈评审按需使用 [prototype-feedback](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
-通过当前物理插件根的白名单 `prototype_feedback_cli.py prepare`，显式接收项目 root、同一
-adapter、唯一需求 Markdown、request_id 和本轮具体 `--pages`，生成用户级私有不可变离线包，
-返回 `context/review_url/bundle_path/reused`。不写项目或复制整树；仅包含插件工具、明确页面的
-必要渲染依赖与需求导航文档。新导航来自安全元数据；旧 index 只提供链接文本及 details/summary
-分组，不执行旧脚本。评审入口 `index.html#page=<文件名>` 不承载 base64 context。
+当前交付通过物理插件根的白名单 `prototype_feedback_cli.py open`，显式指定项目 root、同一
+adapter、唯一需求 Markdown、request_id 和本次 `--pages`，在交付时启动或复用本机服务，
+返回具体页的 `delivery_url/review_url/reused`。目录仅含本次登记且通过安全校验的 1—16 个
+同需求具体页；单页参数只显示一页，不扫描全项目、其他需求或从旧 index 派生当前目录。
+同一次 open 可用 `--pages <project-relative-HTML-1> <project-relative-HTML-2>` 登记多页。
 
-封闭 schema 2 context 绑定物理项目身份、adapter、需求字节、导航摘要、逐页依赖、工具版本／
-载荷摘要及 review_id；导出为 `{schema_version:2,context,items}`，拒绝旧 schema 1。桥只注入
-派生页面并幂等处理 `prototype-review:* version:2`，忽略旧 `prototype-workspace:* version:1`。
-插件更新不覆盖旧评审包；`validate` 重读项目当前源并核验原包，不自动重绑 latest。
-草稿、comparison 的当前文字／建议文字、REQ／交互／接口引用均不可执行，不产生需求或视觉批准。
+完整工具入口是 HTTP 具体页 delivery_url，交付页以共用缩放画布和默认收起目录展示原稿，
+“进入评审”以 noopener 新标签页准确打开当前具体页，保留交付页。独立评审页进入即批注，
+无目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放回批注。
+两页复用画布组件并读取交付目录同一物理原稿，分别保留相机和交互状态。来源键与桥只装配于
+HTTP 内存响应，不写原稿或落盘活动业务 HTML 副本。file:// 原稿仍可离线查看与操作，但不能
+冷启动 Python 或发现随机端口；服务不可用由交付方重跑同样显式 open 参数并提供新链接，
+status/stop 管理精确请求实例，不向原稿写 token、机器路径或随机端口，不配置系统自启动。
 
-PM 将复核为 `current` 的按节点 `changes` 交回原 `xy-uiux`；设计 Agent 仅在当前 owned_paths 内
+当前 live 的 boot／bridge 5 与封闭 context 3 分开声明；context 绑定物理项目身份、adapter、
+需求字节、登记页导航摘要、逐页依赖、工具版本／载荷摘要及实际来源修订 review_id，requirements
+仅投影真实 REQ ID 字符串数组。复制只有固定标题 `## Agent Workflow Feedback Payload` 和单个
+json 围栏内的紧凑 `{schema_version:5,review:{request_id,review_id},anchors,items}`，也接受纯 JSON。
+短引用仅定位当前真实项目和指定请求的本机既有 live 来源修订；缺失、来源变化或完整性错误明确
+失败，不扫描、不接受外部 context 回退或以活动指针重绑 latest。草稿按来源修订独立保存，CAS
+冲突可见，原稿变化保留原意见并阻止错误提交；live 元数据不写入历史不可变包。项目源不加入
+保留来源属性。源码能力不表示已发布安装的 3.0.2 自动具备新格式。
+
+历史 prepare 及已生成 feedback 2／3／4 的不可变离线包保留各自原装配和严格只读消费分支，
+旧 index、manifest／boot／bridge、context 2／3 及资产名单按各自历史合同处理；不使用新 live
+名单回验旧包，不迁移旧包／草稿或覆盖旧评审。历史离线入口不作为新交付的默认启动路线。
+
+`validate` 只读重读项目与真实目标，成功只返回 `status:current/review/anchors/changes/notice`；
+changes 按 target 分组，item 不重复 target，源 REQ／交互／接口关联仅在组层还原一次且无值省略。
+PM 只将该精简 changes、必要 anchors 和短 review 引用连同当前完整任务包交回原 `xy-uiux`，
+不再转发完整 context／需求目录／自动摘录或原反馈全文。普通整改只交还明确引用的 A；无整改
+时交还全部明确标记且不推断整改。反馈、草稿和建议文字均不可执行，notice 明确修订输入不等于批准。
+设计 Agent 仅在当前 owned_paths 内
 原位修改具体 HTML、实际交互与五节契约，返回静态校验和指纹。需求变化与适用视觉批准仍沿原规则；
 工具不 patch HTML、不写需求或批准、不增业务 gate，不恢复计划转 HTML，也不创建业务 spec/sidecar。
-反馈工具位于默认折叠的展示外壳，不侵入产品画板。生产工具自身的授权浏览器测试不扩张为业务原型
+反馈工具位于插件提供的独立评审新网页，不侵入产品画板。生产工具自身的授权浏览器测试不扩张为业务原型
 默认浏览器操作，不能代替用户视觉批准。
 
 旧壳迁移先用 `migration-preview` 只读报告；未明确确认无活动使用时不产生删除候选。
