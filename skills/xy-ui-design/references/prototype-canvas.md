@@ -12,17 +12,16 @@ branches, or add confirmation.
   files and add files only for new pages. Output separately the different platform pages that need
   design; do not combine multiple product pages in one HTML or force presentation of all three
   platforms. Demonstrate a page's dialogs, loading, empty, error, and success states interactively in
-  that HTML without separate state pages. The plugin-owned offline review `index.html` enters the
-  grouped browsing workspace directly, hosting only the current page. Projects retain concrete
-  pages and business assets; do not copy workspace.css/js, feedback.css/js, page-shell.js or the
-  generic index into a new project. An existing project index remains preserved navigation input:
-  its relative links and native details/summary labels are read without executing its scripts.
-  Prepare the review from explicitly selected pages; it generates navigation from bounded metadata
-  and injects the version 2 bridge into derived copies only. No invented business pages or spec JSON.
+  that HTML without separate state pages. 新交付由可信 CLI `open` 显式指定项目、adapter、需求、
+  request-id 与具体页，返回 HTTP `delivery_url`，提供共用缩放画布和默认收起目录。
+  “进入评审”以 `noopener` 新标签页准确打开当前页的 `review_url`；评审进入即批注，
+  没有目录、持久浏览模式或开发说明。两页读取同一物理原稿，复用画布组件，各自保留相机和交互状态。
+  新项目不生成额外导航 index、不复制通用工具；既有业务首页和未知文件不得按名称删除。
+  历史 `prepare` 及 feedback 2／3／4 包独立保留原 index、资产和消费语义。
 - For new pages, resolve `templates/prototype/page.html` through the current physical plugin's
   resource entry, and reuse the project's compatible `prototype.css` when present. Remove template
-  references to plugin-only feedback/bridge resources from the project page; prepare supplies them
-  in the derived review. Create only authorized page/business-style paths. Preserve the
+  references to plugin-only feedback/bridge resources from the project page; live 服务仅在 HTTP
+  内存响应提供这些资源，不持久化第二份业务 HTML。 Create only authorized page/business-style paths. Preserve the
   unified page header, `.prototype-stage`, `.prototype-frame`, product slot
   `data-prototype-page-content`, and bottom page contract. Fill in page information and explanations
   and set `data-prototype-platform` and `data-prototype-display`; Web defaults to `responsive`, while
@@ -32,7 +31,7 @@ branches, or add confirmation.
   rules from the runtime template CSS after confirming explicit write authority; do not overwrite
   product styles with an entire file. Without write authority, return to the PM to adjust current
   scope. Top-of-page layout explanations, actual display mode/dimensions, and contract records must agree.
-- Arrange each concrete HTML vertically: current page name, compact summary, and circular back control
+- Arrange each concrete HTML vertically: current page name and compact summary
   → high-fidelity product view → requirements Markdown, optional historical HTML, platform/dimensions,
   and necessary demo explanations → a five-section contract collapsed by default. The single
   nav.prototype-requirement-links requires one explicit markdown link and allows one html link only
@@ -47,15 +46,11 @@ branches, or add confirmation.
   navigation, and contract area are not part of the product interface. Do not require wallpaper or
   generate background images. The artboard contains only the current page's product interface and
   its interactions.
-- At the top of the current page, use a circular back control with a light background, thin border,
-  and black left chevron, providing a name and visible focus without relying on browser history.
-  Inside the workspace, back only expands the sidebar/current group and focuses the current link
-  while preserving the view; a standalone source page stays directly openable without requiring a
-  project index. The injected review bridge handles locating the page even without an old back button. Use a separate
-  toggle to expand/collapse the sidebar. Demo data, reset-on-refresh behavior, unimplemented scope,
-  and necessary pending confirmations belong to the explanations after the view; actual business
-  messages remain inside the artboard. The product's own navigation, scrolling, and overlays do not
-  move into the outer workspace.
+- 原稿页标题、说明、需求导航与五节契约保持在产品插槽之外。HTTP 交付壳从登记元数据派生
+  默认收起目录，不在每页手抄。`file://` 原稿可离线查看与操作，但不承诺完整相机、目录或 Python
+  冷启动；服务不可用时由交付方用相同显式参数重跑 `prototype_feedback_cli.py open` 并提供新链接。
+  不在原稿写 token、机器路径或随机端口。产品导航、滚动与浮层仍属于产品区；评审时按工具提示的
+  修饰键临时操作设计，释放回批注。真实 dialog／popover 在父画布保持可选择与可标注。
 - First determine platform and layout scope from the current task and project design standards.
   For fixed previews, reuse existing baseline dimensions first; if no baseline exists, choose and
   explicitly explain one. Responsive Web needs no invented fixed dimensions. Keep previews consistent
@@ -87,4 +82,4 @@ branches, or add confirmation.
   automatically reworking all existing prototypes; this creates no prototype tasks for
   `standards_only` or user-selected direct-development branches.
 
-- 当前任务使用节点反馈时，按需读取 [反馈修订消费合同](prototype-feedback.md)。反馈工具保持在默认折叠的展示外壳内；用户修改提案不成为产品 DOM、已批准基线或任务批准。继续在原路径修改稳定 HTML，并沿原静态验收与适用视觉确认交付，不新建 spec、sidecar 或独立设计报告。
+- 当前任务使用节点反馈时，按需读取 [反馈修订消费合同](prototype-feedback.md)。交付工具位于 HTTP 外壳，独立评审页进入即批注；用户修改提案不成为产品 DOM、已批准基线或任务批准。继续在原路径修改稳定 HTML，并沿原静态验收与适用视觉确认交付，不新建 spec、sidecar 或独立设计报告。

@@ -60,7 +60,7 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 - Activate [$xy-ui-design](.agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md) for design analysis and standards maintenance, reading design-quality or prototype-canvas references for the current phase; applicable project standards govern specialist methods, without inferring user aesthetic preferences.
 - Prototype mode follows that Skill's `references/prototype-canvas.md` to maintain high-fidelity, stable, build-free interactive pages; `standards_only` and direct production development do not create prototypes through this entry. These entry points do not relax this role's permanent boundaries.
 
-收到节点反馈修订时，按需读取 `xy-ui-design/references/prototype-feedback.md`，只消费已由同一项目 adapter 复核为 `current` 的 `changes` 及当前任务包。反馈是修订输入；疑问、建议和局部 comparison 不成为批准或自动 patch。仍在当前 `owned_paths` 内原位修改稳定 HTML，保持需求 Markdown 唯一权威，并返回 `$xy-prototype-verify` 的原静态证据。需求变化或视觉批准归 PM 沿既有规则处理；失效绑定先返回 PM，不自行覆盖或重绑。
+收到节点反馈修订时，按需读取 `xy-ui-design/references/prototype-feedback.md`，只消费已由同一项目 adapter 复核为 `current` 的精简 `changes`、必要 `anchors`、短 `review` 引用及当前完整任务包；PM 不重复转发原反馈全文或完整校验 context。短引用依赖本机真实不可变快照，缺包或来源变化先返回 PM，不自行扫描、覆盖或重绑。反馈及 `after_text` 是修订输入，不成为批准或自动 patch。仍在当前 `owned_paths` 内原位修改稳定 HTML，保持需求 Markdown 唯一权威，并返回 `$xy-prototype-verify` 的原静态证据。需求变化与适用视觉批准仍归 PM 沿既有规则处理。
 
 ## 5. Task Intake Contract
 

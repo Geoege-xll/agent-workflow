@@ -1,19 +1,21 @@
 /* 派生设计页唯一DOM所有者：命中、局部几何、可见目录与覆盖层都留在子文档。
- * 只响应prepare注入的bridge3，独立打开项目源时不改变外观或业务行为。 */
+ * 只响应prepare注入的bridge4，独立打开项目源时不改变外观或业务行为。 */
 (() => {
   "use strict";
   const injected = document.currentScript;
-  if (window.parent === window || injected?.getAttribute("data-prototype-review-bridge") !== "3" || window.__prototypeReviewBridgeV3) return;
-  window.__prototypeReviewBridgeV3 = true;
-  const expectedOrigin = window.location.protocol === "file:" ? "null" : window.location.origin;
-  const targetOrigin = window.location.protocol === "file:" ? "*" : window.location.origin;
+  const version = Number(injected?.getAttribute("data-prototype-review-bridge"));
+  const live = version === 5;
+  if (window.parent === window || ![4, 5].includes(version) || window.__prototypeReviewBridgeV4) return;
+  window.__prototypeReviewBridgeV4 = true;
+  const expectedOrigin = live ? new URL(injected.src).origin : window.location.protocol === "file:" ? "null" : window.location.origin;
+  const targetOrigin = live ? expectedOrigin : window.location.protocol === "file:" ? "*" : window.location.origin;
   const roots = document.querySelectorAll("[data-prototype-page-content]");
   if (roots.length !== 1) return;
   const root = roots[0], sourceAttr = "data-prototype-review-source";
   let session = "", page = "", mode = "browse", selected = null, overlay = null, hover = null, frame = 0;
   let presentation = { anchors: [], items: [], showAnchors: true, showItems: true, activeAnchor: null, activeItem: null };
   const runtimeKeys = new WeakMap(); let runtimeSequence = 0;
-  let nodes = new Map(), pan = null, space = false, panMoved = false;
+  let nodes = new Map(), pan = null, space = false, panMoved = false, temporary = false;
   const stableId = (value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value);
   const sourceKey = (value) => typeof value === "string" && /^source-[a-f0-9]{64}$/.test(value);
   const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -41,7 +43,10 @@
     let node = null;
     if (exact(value.locator, ["type", "id"]) && value.locator.type === "id" && stableId(value.locator.id)) node = unique("id", value.locator.id);
     if (exact(value.locator, ["type", "key"]) && value.locator.type === "source" && sourceKey(value.locator.key)) node = unique(sourceAttr, value.locator.key);
-    return node && target(node) && JSON.stringify(target(node)) === JSON.stringify(value) ? node : null;
+    // 上方exact检查已拒绝未知字段；此处只比较身份字段值，服务排序JSON键后仍是同一来源。
+    const actual = node && target(node);
+    return actual && actual.scope === value.scope && actual.page === value.page && actual.locator.type === value.locator.type
+      && (actual.locator.type === "id" ? actual.locator.id === value.locator.id : actual.locator.key === value.locator.key) ? node : null;
   }
   function parentNode(node) {
     if (node === root) return null;
@@ -67,7 +72,7 @@
       interaction_text: mapping ? Array.from(mapping.textContent.trim()).slice(0, 4000).join("") : "",
       interaction_id: stableId(interactionId) && unique("id", interactionId) === mapping ? interactionId : "", interface_refs: [...new Set(refs)] };
   }
-  const send = (type, body = {}) => { if (session) window.parent.postMessage({ type: `prototype-review:${type}`, version: 3, page, token: session, ...body }, targetOrigin); };
+  const send = (type, body = {}) => { if (session) window.parent.postMessage({ type: `prototype-review:${type}`, version, page, token: session, ...body }, targetOrigin); };
   function catalog() {
     nodes = new Map();
     for (const node of [root, ...root.querySelectorAll("*")]) if (meaningful(node) && visible(node)) nodes.set(keyFor(node), node);
@@ -84,6 +89,21 @@
     Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` }); return el;
   }
   function render() {
+    if (live) {
+      // modal/popover位于子文档top layer，普通子DOM覆盖层无法盖过它们。
+      // live只发送局部几何，父画布绘制标记；不克隆业务DOM，也不改变原稿层级。
+      const marks = [], offsets = new Map();
+      if (selected && visible(selected)) marks.push({ kind: "selection", bounds: bounds(selected) });
+      if (mode === "annotate" && !temporary && hover && hover !== selected && visible(hover)) marks.push({ kind: "hover", bounds: bounds(hover) });
+      const append = (entry, anchor) => {
+        const node = resolve(entry.target); if (!node || !visible(node)) return;
+        const key = JSON.stringify(entry.target), offset = offsets.get(key) || 0; offsets.set(key, offset + 1);
+        marks.push({ kind: anchor ? "anchor" : "item", id: entry.id, number: entry.number, operation: entry.operation || "", bounds: bounds(node), offset });
+      };
+      if (presentation.showItems) presentation.items.forEach((entry) => append(entry, false));
+      if (presentation.showAnchors) presentation.anchors.forEach((entry) => append(entry, true));
+      send("geometry", { marks }); return;
+    }
     if (!overlay) return;
     overlay.replaceChildren();
     if (selected && visible(selected)) overlay.append(rectangle(selected, "pr-selection"));
@@ -127,11 +147,13 @@
   window.addEventListener("message", (event) => {
     const data = event.data;
     // null来源仅对固定parent窗口有意义，还必须联合登记page和随机token；任何单项都不授予权限。
-    if (event.source !== window.parent || event.origin !== expectedOrigin || !data || data.version !== 3 || typeof data.page !== "string") return;
+    if (event.source !== window.parent || event.origin !== expectedOrigin || !data || data.version !== version || typeof data.page !== "string") return;
     if (data.type === "prototype-review:connect") {
-      if (session || !/^[a-f0-9]{32}$/.test(data.token) || !window.location.pathname.endsWith(`/${data.page}`)) return;
+      if (session || !/^[a-f0-9]{32,128}$/.test(data.token) || (live
+        ? data.page !== injected.getAttribute("data-prototype-review-page") || data.token !== injected.getAttribute("data-prototype-review-token")
+        : !window.location.pathname.endsWith(`/${data.page}`))) return;
       page = data.page; session = data.token; mode = data.mode === "annotate" ? "annotate" : "browse";
-      embed(); send("ready"); catalog(); return;
+      embed(); document.body.classList.toggle("pr-annotating", mode === "annotate"); send("ready"); catalog(); return;
     }
     if (!session || data.page !== page || data.token !== session) return;
     if (data.type !== "prototype-review:review") return;
@@ -170,8 +192,10 @@
     if (!session || event.target.closest?.("[data-prototype-review-overlay]")) return;
     if (panMoved) { event.preventDefault(); event.stopImmediatePropagation(); return; }
     const node = inContent(event);
-    if (mode === "annotate" && node) { event.preventDefault(); event.stopImmediatePropagation(); choose(node); return; }
-    if (mode !== "browse" || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (mode === "annotate" && !temporary && !event.altKey && node) { event.preventDefault(); event.stopImmediatePropagation(); choose(node); return; }
+    // live的Alt只临时放行业务控件；链接仍必须送父画布登记导航，否则iframe自行换页后
+    // 父current/page/token仍指向旧页，会丢失握手及意见归属。旧V4修饰键行为保持不变。
+    if ((mode !== "browse" && !temporary && !event.altKey) || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || (event.altKey && !live)) return;
     const link = event.target.closest?.("a[href]"); if (!link) return;
     const href = link.getAttribute("href"); if (href.startsWith("#")) return;
     event.preventDefault(); send("intent", { intent: "navigate", target: href });
@@ -183,7 +207,7 @@
       if (Math.abs(dx) + Math.abs(dy) > 3) { panMoved = true; send("gesture", { gesture: "pan", dx, dy }); pan.x = event.clientX; pan.y = event.clientY; }
       return;
     }
-    if (mode === "annotate") { hover = inContent(event); queueRender(); }
+    if (mode === "annotate" && !temporary) { hover = inContent(event); queueRender(); }
   });
   document.addEventListener("pointerdown", (event) => {
     if (!session || !(event.button === 1 || (event.button === 0 && space)) || event.target.closest?.("[data-prototype-review-overlay]")) return;
@@ -199,10 +223,11 @@
   }, { passive: false });
   document.addEventListener("keydown", (event) => {
     if (!session) return;
+    if (live && event.key === "Alt") { temporary = true; hover = null; document.body.classList.remove("pr-annotating"); queueRender(); }
     if (event.code === "Space" && !event.target.closest?.("input,select,textarea,button,a,[contenteditable]")) { space = true; event.preventDefault(); }
-    if (mode === "annotate" && ["Enter", " "].includes(event.key) && inContent(event)) { event.preventDefault(); event.stopImmediatePropagation(); choose(inContent(event)); }
+    if (mode === "annotate" && !temporary && !event.altKey && ["Enter", " "].includes(event.key) && inContent(event)) { event.preventDefault(); event.stopImmediatePropagation(); choose(inContent(event)); }
   }, true);
-  document.addEventListener("keyup", () => { space = false; });
-  window.addEventListener("blur", () => { space = false; pan = null; });
+  document.addEventListener("keyup", (event) => { space = false; if (live && !event.altKey) { temporary = false; document.body.classList.toggle("pr-annotating", mode === "annotate"); queueRender(); } });
+  window.addEventListener("blur", () => { space = false; pan = null; temporary = false; document.body.classList.toggle("pr-annotating", mode === "annotate"); });
   window.addEventListener("scroll", queueRender, true); window.addEventListener("resize", queueRender);
 })();

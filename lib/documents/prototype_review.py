@@ -30,7 +30,14 @@ from lib.runtime_pins import adapter_path, record_binding
 
 TOOL_ROOT = Path(__file__).resolve().parents[2]
 LEGACY_TOOL_ASSETS = ("index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js", "page-shell.js")
-TOOL_ASSETS = LEGACY_TOOL_ASSETS + ("review-state.js", "review-camera.js", "THIRD_PARTY_NOTICES.txt")
+V3_TOOL_ASSETS = LEGACY_TOOL_ASSETS + ("review-state.js", "review-camera.js", "THIRD_PARTY_NOTICES.txt")
+# 不可变包4必须永久使用发布时的九项名单；活动源5的工具升级不得使历史包失效。
+V4_TOOL_ASSETS = V3_TOOL_ASSETS
+LIVE_TOOL_ASSETS = ("delivery.html", "review.html", "live-workspace.js", "live-connection.js",
+               "canvas-host.js", "live.css", "workspace.css", "review-state.js", "review-camera.js",
+               "feedback.js", "feedback.css", "page-shell.js", "THIRD_PARTY_NOTICES.txt")
+# 公开旧别名仍属于默认prepare/capture_tool的V4语义；新消费者必须明确选择live。
+TOOL_ASSETS = V4_TOOL_ASSETS
 MAX_BUNDLE_FILES = 300
 MAX_MANIFEST_BYTES = 256 * 1024
 
@@ -44,7 +51,7 @@ def project_id(root: Path) -> str:
         os.close(fd)
 
 
-def _payload(version: bytes, files: dict[str, bytes], *, format_version: int = 3) -> str:
+def _payload(version: bytes, files: dict[str, bytes], *, format_version: int = 4) -> str:
     # 长度前缀固定路径/字节边界，不能用简单字符串拼接产生歧义。
     import hashlib
     value = hashlib.sha256(f"agent-workflow/prototype-review-tool/v{format_version}\0".encode("ascii"))
@@ -55,12 +62,13 @@ def _payload(version: bytes, files: dict[str, bytes], *, format_version: int = 3
     return value.hexdigest()
 
 
-def capture_tool() -> tuple[dict, dict[str, bytes]]:
+def capture_tool(*, format_version: int = 4) -> tuple[dict, dict[str, bytes]]:
     """只读取当前物理代码根中的固定白名单，不接受项目或 CLI 指定工具根。"""
     version_path = TOOL_ROOT / "product/PLUGIN_VERSION"
     captures = {version_path: snapshot(version_path)}
     assets = {}
-    for name in TOOL_ASSETS:
+    if format_version not in {4, 5}: raise ValueError("工具捕获仅支持格式4或5")
+    for name in V4_TOOL_ASSETS if format_version == 4 else LIVE_TOOL_ASSETS:
         path = TOOL_ROOT / "templates/prototype" / name
         captures[path] = snapshot(path)
         assets[name] = captures[path][0]
@@ -71,7 +79,7 @@ def capture_tool() -> tuple[dict, dict[str, bytes]]:
     for path, expected in captures.items():
         if snapshot(path) != expected:
             raise ValueError("工具载荷在读取期间变化")
-    return {"version": version, "payload_sha256": _payload(version_raw, assets)}, {
+    return {"version": version, "payload_sha256": _payload(version_raw, assets, format_version=format_version)}, {
         **{"tool/" + name: body for name, body in assets.items()}, "tool/version.txt": version_raw}
 
 
@@ -141,10 +149,13 @@ def navigation_data(index: bytes | None, pages: list[dict], files: dict[str, byt
 
 
 def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
-                    pages: list[str] | None, *, tool: dict, format_version: int = 3) -> tuple[dict, dict, dict, list]:
+                    pages: list[str] | None, *, tool: dict, format_version: int = 4,
+                    navigation_source: str = "legacy_index") -> tuple[dict, dict, dict, list]:
     """无条件确认项目画像与来源，再复用原校验器；导航缺失不能跳过这些边界。"""
-    if type(format_version) is not int or format_version not in {2, 3}:
-        raise FeedbackError("来源捕获仅支持明确的包格式2或3")
+    if type(format_version) is not int or format_version not in {2, 3, 4}:
+        raise FeedbackError("来源捕获仅支持明确的包格式2、3或4")
+    if navigation_source not in ("legacy_index", "registered_pages") or (navigation_source == "registered_pages" and format_version != 4):
+        raise FeedbackError("导航来源须为历史索引或活动源登记页；旧格式仅允许历史索引")
     project = Path(root)
     if not project.is_absolute() or ".." in project.parts or "\\" in str(project):
         raise FeedbackError("项目根必须是无父跳转的实际绝对目录")
@@ -208,7 +219,7 @@ def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
         parser.close()
         if parser.plan_source and parser.plan_source != plan:
             raise FeedbackError("评审页面已绑定另一份需求 Markdown：" + page)
-        if format_version == 3:
+        if format_version >= 3:
             metadata[page] = capture_targets(page, body.encode("utf-8"))
         else:
             # 旧包重读仍使用发布时的ID/契约语义，不强加新来源属性合同。
@@ -218,23 +229,31 @@ def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
     # 沿用同一 DependencyValidator 与指纹域；独立页不再依赖项目通用外壳。
     evidence = workspace.capture_selected_pages(project, prototype, pages=[Path(page).name for page in chosen], adapter=adapter)
     index_path = prototype_path / "index.html"
-    index_snapshot = snapshot(index_path, required=False)
-    index_body = index_snapshot[0]
-    context = {"schema_version": 2, "request_id": request_id, "adapter": adapter, "prototype_root": prototype,
-               "plan_source": plan, "plan_sha256": digest(plan_body), "requirements": _requirements(plan_body),
+    # 默认分支永久保留历史2/3/4对旧索引字节、标签、分组及读取竞态的原合同。
+    # live必须显式选择登记页：完全不读取可选旧index，防止已退役工具壳的新增/
+    # 改字让业务原稿不变的评审失效，也不能从旧壳重新引入过期目录标签或分组。
+    index_snapshot = snapshot(index_path, required=False) if navigation_source == "legacy_index" else None
+    index_body = index_snapshot[0] if index_snapshot is not None else None
+    registered_navigation = (navigation_data(None, evidence["pages"], evidence["files"])
+                             if navigation_source == "registered_pages" else None)
+    navigation_digest = (digest(index_body or b"") if navigation_source == "legacy_index"
+                         else digest(json_bytes(registered_navigation)))
+    context_version = 3 if format_version == 4 else 2
+    context = {"schema_version": context_version, "request_id": request_id, "adapter": adapter, "prototype_root": prototype,
+               "plan_source": plan, "plan_sha256": digest(plan_body), "requirements": _requirements(plan_body, ids_only=format_version == 4),
                "pages": evidence["pages"], "project_id": project_id(project),
-               "adapter_sha256": digest(adapter_body), "navigation_sha256": digest(index_body or b""),
+               "adapter_sha256": digest(adapter_body), "navigation_sha256": navigation_digest,
                "tool": copy.deepcopy(tool)}
     context["review_id"] = review_id(context)
-    check_context(context)
+    check_context(context, schema_version=context_version)
     # adapter/Markdown/节点元数据均由 snapshot 末尾复查，防止绑定检查与结果之间被替换。
     for path in tuple(captures):
         capture(path)
-    if snapshot(index_path, required=False) != index_snapshot:
+    if navigation_source == "legacy_index" and snapshot(index_path, required=False) != index_snapshot:
         raise FeedbackError("旧索引在评审捕获期间发生变化")
     files = dict(evidence["files"])
     files[plan] = plan_body
-    navigation = navigation_data(index_body, evidence["pages"], files)
+    navigation = navigation_data(index_body, evidence["pages"], files) if navigation_source == "legacy_index" else registered_navigation
     return context, metadata, files, navigation
 
 
@@ -345,6 +364,8 @@ def _read_at(root_fd: int, relative: str, limit=workspace.MAX_DEPENDENCY_SIZE) -
     fd = workspace._open_dependency_at(root_fd, path, "评审包文件 " + relative)
     try:
         before = os.fstat(fd)
+        if before.st_uid != os.getuid():
+            raise ValueError("评审包文件必须属于当前用户")
         body = workspace._read_descriptor(fd, relative, limit)
         if workspace._file_identity(before) != workspace._file_identity(os.fstat(fd)):
             raise ValueError("评审包文件读取期间变化")
@@ -414,10 +435,11 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
     try:
         manifest = _closed_json(_read_at(fd, "manifest.json", MAX_MANIFEST_BYTES))
         if (not isinstance(manifest, dict) or set(manifest) != {"schema_version", "context", "files"}
-                or type(manifest["schema_version"]) is not int or manifest["schema_version"] not in {2, 3}
+                or type(manifest["schema_version"]) is not int or manifest["schema_version"] not in {2, 3, 4}
                 or manifest["context"] != context or not isinstance(manifest["files"], list)
                 or not 1 <= len(manifest["files"]) < MAX_BUNDLE_FILES):
             raise ValueError("评审包清单不匹配")
+        check_context(manifest["context"], schema_version=3 if manifest["schema_version"] == 4 else 2)
         files = {}
         for entry in manifest["files"]:
             if (not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256"}
@@ -435,7 +457,7 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
             raise ValueError("评审包包含清单外文件或缺失文件")
         # 格式由已校验清单决定，旧包永不按新资产白名单或新装配算法回验。
         format_version = manifest["schema_version"]
-        asset_names = LEGACY_TOOL_ASSETS if format_version == 2 else TOOL_ASSETS
+        asset_names = LEGACY_TOOL_ASSETS if format_version == 2 else V3_TOOL_ASSETS if format_version == 3 else V4_TOOL_ASSETS
         tool_paths = {"tool/" + name for name in asset_names} | {"tool/version.txt"}
         if not tool_paths.issubset(files): raise ValueError("评审包缺少工具载荷")
         if (files["tool/version.txt"].decode("utf-8").strip() != context["tool"]["version"]
@@ -444,7 +466,7 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
             raise ValueError("评审包工具版本或摘要不匹配")
         if source_files is not None:
             original_tools = {path: files[path] for path in tool_paths}
-            assembler = _assemble_v2 if format_version == 2 else _assemble
+            assembler = _assemble_v2 if format_version == 2 else _assemble_v3 if format_version == 3 else _assemble
             expected = assembler(context, source_files, original_tools, navigation)
         if expected is not None and files != {path: body for path, body in expected.items() if path != "manifest.json"}:
             raise ValueError("评审包派生文件不匹配真实来源与固定工具")
@@ -461,6 +483,36 @@ def validate_bundle(context: dict, *, data_dir=None, source_files=None, navigati
         if format_version is not None and manifest["schema_version"] != format_version:
             raise ValueError("反馈版本与不可变包格式不匹配")
         return manifest
+
+
+def resolve_review_reference(root: str | Path, reference: dict, *, data_dir=None) -> dict:
+    """只在当前真实项目的精确 request/review 目录读取既有新包上下文。
+
+    短引用不携带路径，也不允许扫描或绑定 latest。先用既有 no-follow、属主、
+    普通唯一文件及大小边界读取清单，再执行整包核验；完整 context 永不接受
+    浏览器回退。调用方还必须重读项目来源并按原装配算法对照全部派生字节。
+    """
+    from lib.documents.prototype_handoff import check_review_reference
+    reference = check_review_reference(reference)
+    require_external_data_dir(root, data_dir)
+    project = Path(root)
+    if not project.is_absolute() or ".." in project.parts or "\\" in str(project):
+        raise FeedbackError("项目根必须是无父跳转的实际绝对目录")
+    identity = {"project_id": project_id(project), **reference}
+    with _request_directory(identity, data_dir, create=False) as (_, request_fd):
+        fd = _child(request_fd, reference["review_id"], create=False)
+        try:
+            manifest = _closed_json(_read_at(fd, "manifest.json", MAX_MANIFEST_BYTES))
+        finally:
+            os.close(fd)
+        if (not isinstance(manifest, dict) or set(manifest) != {"schema_version", "context", "files"}
+                or type(manifest["schema_version"]) is not int or manifest["schema_version"] != 4):
+            raise FeedbackError("短引用仅允许已有格式4评审包")
+        context = check_context(manifest["context"], schema_version=3)
+        if any(context[key] != identity[key] for key in identity):
+            raise FeedbackError("短引用与当前项目或不可变包来源不匹配")
+        _check_bundle(request_fd, context)
+        return context
 
 
 def _assemble_v2(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict]) -> dict[str, bytes]:
@@ -492,7 +544,16 @@ def _assemble_v2(context: dict, files: dict[str, bytes], tools: dict[str, bytes]
     return result
 
 
+def _assemble_v3(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict]) -> dict[str, bytes]:
+    """冻结旧 v3 装配语义；新工具白名单变化不能影响既有包的只读验证。"""
+    return _assemble_source_bundle(context, files, tools, navigation, format_version=3, asset_names=V3_TOOL_ASSETS)
+
+
 def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict]) -> dict[str, bytes]:
+    return _assemble_source_bundle(context, files, tools, navigation, format_version=4, asset_names=V4_TOOL_ASSETS)
+
+
+def _assemble_source_bundle(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict], *, format_version: int, asset_names: tuple) -> dict[str, bytes]:
     result = dict(tools)
     selected = {page["path"] for page in context["pages"]}
     for path, body in files.items():
@@ -500,19 +561,19 @@ def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], n
         if path in selected:
             source = inject_source_targets(path, body).decode("utf-8")
             bridge = posixpath.relpath("tool/page-shell.js", posixpath.dirname(target))
-            addition = '<script src="' + html.escape(bridge, quote=True) + '" data-prototype-review-bridge="3"></script>'
+            addition = '<script src="' + html.escape(bridge, quote=True) + '" data-prototype-review-bridge="' + str(format_version) + '"></script>'
             matches = list(re.finditer(r"</body\s*>", source, re.I))
             if len(matches) != 1: raise ValueError("具体页面必须有唯一 body 结束标签")
             source = source[:matches[0].start()] + addition + source[matches[0].start():]
             body = source.encode("utf-8")
         result[target] = body
-    boot = {"schema_version": 3, "context": context, "pages": navigation}
+    boot = {"schema_version": format_version, "context": context, "pages": navigation}
     # JSON 是非执行数据；转义 '<' 防止业务标签中的 </script> 结束数据元素。
     encoded = json_bytes(boot).decode("utf-8")
     for char, replacement in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
         encoded = encoded.replace(char, replacement)
     source = tools["tool/index.html"].decode("utf-8")
-    for name in TOOL_ASSETS:
+    for name in asset_names:
         if name != "index.html":
             source = source.replace('"' + name + '"', '"tool/' + name + '"')
     if 'id="prototype-review-data"' in source: raise ValueError("工具模板不能预带评审数据")
@@ -523,7 +584,7 @@ def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], n
 
 def publish_bundle(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict], *, data_dir=None) -> dict:
     assembled = _assemble(context, files, tools, navigation)
-    manifest = {"schema_version": 3, "context": context, "files": [
+    manifest = {"schema_version": 4, "context": context, "files": [
         {"path": path, "size": len(body), "sha256": digest(body)} for path, body in sorted(assembled.items())]}
     assembled["manifest.json"] = json_bytes(manifest)
     with _request_directory(context, data_dir, create=True) as (path, fd), _lock(fd):
@@ -594,7 +655,9 @@ def migration_preview(root: str | Path, adapter: str, plan: str, request_id: str
                       pages: list[str] | None = None, *, confirm_no_active_use: bool = False) -> dict:
     """只读清点；活动使用未知时不推定删除许可，所有候选均保留报告。"""
     tool, tools = capture_tool()
-    context, _, _, _ = capture_review(root, adapter, plan, request_id, pages, tool=tool)
+    # 迁移 preview 是独立既有协议，保持 context2 以读取原事务和恢复资料；
+    # 新评审的 context3/短反馈不静默升级或重绑任何迁移输入。
+    context, _, _, _ = capture_review(root, adapter, plan, request_id, pages, tool=tool, format_version=3)
     inventory = _migration_inventory(Path(root), context["prototype_root"])
     candidates, preserved = [], []
     for path, body in sorted(inventory.items()):

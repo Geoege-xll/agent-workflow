@@ -80,7 +80,7 @@
   contradictory, or fingerprints mismatch. The PM does not supplement missing browser evidence,
   repeat completed static verification, or create a new confirmation gate.
 - The active concrete page and its in-page `Page design and interaction contract` are the design evidence.
-  The root index is the single-page browsing workspace; registration and navigation context do not replace a concrete page's evidence.
+  新交付由可信 open 返回 HTTP 具体页 delivery_url，共用画布与评审读取同一物理原稿。新项目不生成导航 index；旧 index 登记仅适用于历史分支，不能替代具体页证据。
 - For `UI-Patch`, `UI-Page`, or `UI-Flow` with `prototype_policy: required`, at `visual_review_ready`, ask once for
   `visual_approved` bound to the concrete changed pages,
   changed scope, declared operation sequence, and verified page dependency fingerprints. Reopen
@@ -89,7 +89,7 @@
   not by itself require another user confirmation. Carry non-material changes forward only under
   WORKFLOW's scoped old/new-delta review, retained user approval and verified fingerprint rule.
 - The PM MUST provide a direct link to each concrete changed page.
-- The root prototype index alone is not sufficient.
+- 交付时提供已准备好的具体页 HTTP delivery_url，同时保留原稿 HTML 的直接路径；单独 index 不足以交付，离线 HTML 不能冷启动服务或发现随机端口。
 - The visual-confirmation workflow MUST NOT generate, persist, attach, or present screenshots.
 - Approval remains in workflow task state. Do not create companion design, mapping, or baseline
   Markdown; a Manifest; a screenshot directory; or a companion approval file.
