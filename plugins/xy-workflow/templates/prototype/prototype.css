@@ -1,0 +1,236 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  /* 这里只定义原型展示外壳的中性色，不替代项目的产品设计 token。 */
+  --prototype-canvas-bg: #edf0f5;
+  --prototype-surface: #ffffff;
+  --prototype-text: #20252e;
+  --prototype-muted: #596372;
+  --prototype-border: #cbd5e1;
+  --prototype-control-border: #7c8796;
+  --prototype-focus: #2356b5;
+  --prototype-shadow: 0 12px 36px rgb(15 23 42 / 14%);
+  /* 返回保持用户指定的浅底、细边、黑色左 chevron；独立于产品外观模式。 */
+  --prototype-back-bg: #f7f8fa;
+  --prototype-back-ink: #15191f;
+  --prototype-back-border: #c9cfd7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --prototype-canvas-bg: #111827;
+    --prototype-surface: #1d232c;
+    --prototype-text: #f1f4f8;
+    --prototype-muted: #c0cad7;
+    --prototype-border: #4b5563;
+    --prototype-control-border: #8b9bad;
+    --prototype-focus: #a8cbff;
+    --prototype-shadow: 0 12px 36px rgb(0 0 0 / 30%);
+  }
+}
+
+body {
+  margin: 0;
+}
+
+/* 只有明确使用统一外壳的页面才应用画布配色，产品区域仍可使用自己的设计系统。 */
+body.prototype-canvas {
+  background: var(--prototype-surface);
+  color: var(--prototype-text);
+  padding: 28px 32px 24px;
+}
+
+.prototype-shell,
+.prototype-stage,
+.prototype-contract {
+  width: min(100%, 1600px);
+  margin-inline: auto;
+}
+
+.prototype-contract {
+  margin-block-start: 18px;
+}
+
+.prototype-back-link {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 44px;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  border: 1px solid var(--prototype-back-border);
+  border-radius: 50%;
+  color: var(--prototype-back-ink);
+  background: var(--prototype-back-bg);
+  text-decoration: none;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.prototype-back-chevron { width: 9px; height: 9px; margin-inline-start: 4px; border-inline-start: 1.8px solid currentColor; border-block-end: 1.8px solid currentColor; transform: rotate(45deg); }
+.prototype-back-link:hover { background: #e9edf2; box-shadow: 0 2px 6px rgb(15 23 42 / 8%); }
+.prototype-back-link:active { background: #dce2e9; }
+
+/* 统一页头始终在正常文档流中，长说明自然换行，不浮动遮挡画板。 */
+.prototype-header { display: flex; align-items: flex-start; gap: 15px; box-sizing: border-box; margin-block-end: 22px; }
+.prototype-heading-copy { min-width: 0; flex: 1 1 auto; }
+/* 开关处于真实页头文档流；认证前 hidden 不受控件 display 样式覆盖。 */
+.prototype-header [hidden] { display: none !important; }
+.prototype-sidebar-toggle { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 7px; min-height: 44px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--prototype-control-border); border-radius: 6px; background: var(--prototype-surface); color: var(--prototype-muted); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.prototype-sidebar-toggle svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.prototype-sidebar-toggle:hover { background: var(--prototype-canvas-bg); }
+.prototype-sidebar-toggle:active { box-shadow: inset 0 0 0 1px currentColor; }
+.prototype-header h1 {
+  margin: 0 0 5px;
+  font-size: 24px;
+  line-height: 1.4;
+  font-weight: 650;
+  letter-spacing: -.5px;
+  overflow-wrap: anywhere;
+}
+
+.prototype-meta {
+  margin: 0;
+  color: var(--prototype-muted);
+  overflow-wrap: anywhere;
+}
+
+.prototype-description {
+  margin: 0;
+  color: var(--prototype-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.prototype-description p {
+  margin: 0;
+}
+
+.prototype-description p + p {
+  margin-block-start: 0.75rem;
+}
+
+/* Web 默认直接使用自然文档流：这些容器只分隔功能区，不给网页套固定窗口。 */
+.prototype-stage {
+  display: block;
+  min-width: 0;
+  margin-block: 0 20px;
+  padding: 0;
+  overflow: visible;
+}
+
+.prototype-frame {
+  position: relative;
+  display: block;
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+
+.prototype-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+/* iOS／PC 及明确指定的固定视口预览才启用画板。
+   auto 外边距在空间不足时退为零，保留左上侧入口；滚动不会改变内部基准宽高。 */
+[data-prototype-display="fixed"] .prototype-stage {
+  display: flex;
+  padding: 1.5rem;
+  overflow: auto;
+}
+
+[data-prototype-display="fixed"] .prototype-frame {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: var(--prototype-frame-width);
+  height: var(--prototype-frame-height);
+  margin: auto;
+  background: var(--prototype-surface);
+  border-radius: var(--prototype-frame-radius, 0.75rem);
+  outline: 1px solid var(--prototype-border);
+  box-shadow: var(--prototype-shadow);
+  overflow: hidden;
+  /* 画板成为尺寸查询和布局边界；产品响应式用 @container，不借外层视口重排。 */
+  container-type: inline-size;
+  contain: layout;
+}
+
+/* 平台只调整画板轮廓；系统栏和窗口按钮由实际产品设计提供，不全局添加假控件。 */
+[data-prototype-platform="ios"] .prototype-frame {
+  --prototype-frame-radius: 2rem;
+}
+
+[data-prototype-platform="windows"] .prototype-frame,
+[data-prototype-platform="web"] .prototype-frame {
+  --prototype-frame-radius: 0.375rem;
+}
+
+[data-prototype-display="fixed"] .prototype-content {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+/* 此占位样式只服务模板示例；创建真实页面时连同占位内容一起替换。 */
+.prototype-placeholder {
+  padding: 2rem;
+}
+
+.prototype-contract {
+  box-sizing: border-box;
+  padding: 12px 20px;
+  margin-block-end: 2rem;
+  border: 1px solid var(--prototype-border);
+  border-radius: 9px;
+  background: var(--prototype-surface);
+  overflow-wrap: anywhere;
+}
+
+.prototype-contract > summary {
+  min-height: 2.75rem;
+  padding-block: 0.5rem;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+/* 保留原生键盘操作和可见焦点，不给产品内部所有控件施加展示外壳的样式。 */
+.prototype-back-link:focus-visible,
+.prototype-stage:focus-visible,
+.prototype-contract > summary:focus-visible,
+.prototype-sidebar-toggle:focus-visible,
+.prototype-requirement-links a:focus-visible {
+  outline: 2px solid var(--prototype-focus);
+  outline-offset: 3px;
+}
+
+.prototype-contract > section {
+  margin-block-start: 1.25rem;
+}
+
+/* 阅读顺序为画面、需求与平台信息、必要演示说明、五节契约。 */
+.prototype-page-information { color: var(--prototype-muted); font-size: 12px; }
+.prototype-information-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; }
+.prototype-requirement-links { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.prototype-requirement-links a { display: inline-flex; align-items: center; min-height: 36px; color: var(--prototype-text); text-underline-offset: 3px; }
+.prototype-requirement-links a:hover { text-decoration-thickness: 2px; }
+.prototype-demo-note { margin: 8px 0 0; line-height: 1.8; overflow-wrap: anywhere; }
+.prototype-demo-note strong { margin-inline-end: 6px; font-weight: 550; }
+.prototype-contract h2 { font-size: 15px; }
+.prototype-contract p { font-size: 13px; line-height: 1.9; }
+@media (max-width: 1100px) {
+  .prototype-sidebar-toggle { width: 44px; padding: 10px; }
+  .prototype-sidebar-toggle > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (max-width: 680px) {
+  body.prototype-canvas { padding: 20px 12px 18px; }
+  .prototype-header { gap: 10px; margin-block-end: 18px; }
+  .prototype-header h1 { font-size: 21px; }
+  .prototype-description { font-size: 12px; line-height: 1.8; }
+  .prototype-requirement-links a { min-height: 44px; }
+  .prototype-contract { padding-inline: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { .prototype-back-link { transition: none; } }

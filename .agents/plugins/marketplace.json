@@ -1,0 +1,17 @@
+{
+  "name": "xy-workflow",
+  "plugins": [
+    {
+      "category": "Productivity",
+      "name": "xy-workflow",
+      "policy": {
+        "authentication": "ON_INSTALL",
+        "installation": "AVAILABLE"
+      },
+      "source": {
+        "path": "./plugins/xy-workflow",
+        "source": "local"
+      }
+    }
+  ]
+}
