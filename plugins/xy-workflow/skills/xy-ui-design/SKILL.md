@@ -21,26 +21,16 @@ resource/transport adapter; it grants no business approval, role ownership or QA
 这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
 
 Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. The appended shared
-text retains historical `.agent-workflow/` examples. In plugin mode, resolve managed
-resource references under the plugin root using `plugins/source_pack.py resource`;
-select the actual adapter with `plugins/project_context.py inspect` through the
-same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply
-the new `.awf/project.yaml` candidate. Translate historical adapter examples to
-that selected actual path. The context entry creates no documents or business
+`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
 approvals; its `init --adapter <selected-path>` passes that exact adapter to the
 original initializer. Resolve project documents, task records and production code
 in the actual project. A packaged example is never the current project adapter.
 Use the packaged interpreter selector for each independent invocation:
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the original helper path/arguments
-instead of the historical project bridge commands. The selector only locates an
+Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
 existing Python 3.11+ and never installs software or changes the user's PATH.
 Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. Native plugin discovery replaces legacy setup,
-role refresh and central activation checks. Do not run `runtime install`,
-`runtime activate`, project registration, `setup_*.sh`, or create/edit project
-`AGENTS.md`, `CLAUDE.md` or `.agent-workflow` to make this plugin work.
+when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
 Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
 actual discovered name or the packaged physical path when invoking one. Public aliases are
 `xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
@@ -70,14 +60,14 @@ handoff through the host's actual supported native dispatch interface. A role la
 alone proves no native role/model selection. If the host cannot supply required
 dispatch or independent context, report that limitation instead of claiming it ran.
 Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: it may contain an older workflow or central pin. Use a fresh native generic
+ran: its authority may come from another source. Use a fresh native generic
 entry with the complete current packaged role instructions and current task pack,
 or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's pin, history or instructions merely
+package. Never import an unknown global role's history or instructions merely
 because its name matches. If the host cannot provide this boundary, report the
 dispatch limitation to the PM.
 
-This alpha uses the existing unpinned source-pack task contract. It rejects central
+This plugin uses the existing unpinned source-pack task contract. It rejects central
 `runtime_binding` records and central project markers rather than migrating them.
 Do not update/replace the installed plugin during an active task. Retention of old
 plugin resources across updates and actual native model/effort execution remain
@@ -90,6 +80,11 @@ the corresponding behavior.
 # xy-ui-design
 
 ## Usage Boundaries
+
+相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper`
+调用 `lib/documents/context_read.py` 分页时，从已验证的插件包读取，使用包内规范路径，例如
+`platforms/shared/skills/xy-ui-design/references/design-quality.md`。跨 Skill 引用使用目标 Skill
+在 `platforms/shared/skills/` 下的规范路径。
 
 Follow the current Task Pack, applicable project standards, and the permanent responsibilities of
 `xy-uiux`. Loading this Skill does not grant write authority or change the task level, implementer,
@@ -194,19 +189,13 @@ In the existing handoff, return requirement coverage by stable REQ identifiers w
 and actual state anchors. The PM writes these back to the single requirements Markdown.
 Requirements/plan Markdown-to-HTML generation is retired under [the retained reference](../xy-plan/references/requirements-markdown.md);
 keep any existing HTML as historical material without requiring an update.
-需要评审整改时，按需读取 [反馈消费合同](references/prototype-feedback.md)。Agent／PM 交付前先从当前物理插件的白名单 helper 执行 `prepare-delivery --root --adapter --pages`，再用 `open` 显式登记相同实际项目、adapter、需求、request-id 与具体 pages。prepare-delivery 幂等准备受管入口而不启动服务；open 先验证准备，缺失报 `preparation_required`，不会悄悄修改业务 HTML。正式 `delivery_url` 是具体 HTML 的 file URI，`delivery_urls` 给出各页；未准备模板不能作为完整交付。
-file 入口提供完整共用画布及默认收起目录，“进入评审”只通过公开 binding 以 noopener 新标签页进入当前具体页的无秘密 HTTP 引导。file 壳不创建控制连接或持有 token；失效明确提示交付方重跑相同显式命令，不猜端口或冷启动。独立评审进入即批注，无目录、模式切换或开发说明；按提示修饰键临时操作后释放回批注。两页读取同一物理原稿，复用相机组件并保留原始 stage/frame 尺寸，不能统一成 1120×860。
-项目仅保留具体 HTML/CSS/JS、五段契约、固定相对 entry 标签、受管 `.xy-prototype-entry` 链接和精确 `.gitignore` 项；不生成导航 index，不复制业务 HTML 或完整工具。唯一 delivery.html 模板投影到中央经典 shell。file 设计 iframe 的 allow-same-origin 仅限明确 file 分支，业务只执行一次；HTTP 评审仍只有 allow-scripts。父子核对真实 source、当前页、随机 nonce 和 null origin；HTTP 来源键按原始字节装配后才移除精确 entry 标签。引导 token 只在可核浏览器顶层响应内提供，控制 Bearer／精确Origin、私有管理cap边界不变。status/stop 管理精确项目请求，不设置系统启动项。
-新 boot 5 使用严格 context 3；feedback 5 四字段为 schema_version/review/anchors/items，短 review
-仅含 request_id/review_id，绑定实际来源修订。草稿 CAS 冲突可见，源变化保留意见并阻止错误提交；
-先由 validate 复核 live 来源，只消费 current 精简 changes、必要 anchors、短 review 及当前任务包。
-节点优先唯一稳定 ID；匿名来源键只在服务响应注入，不在原稿手写 data-prototype-review-source。
-REQ 映射仅取明确 data-req-ids，动态无来源节点要求显式选择真实源父层，不从摘录猜测或静默改绑。
-A 与整改独立编号且不设等级；普通整改仅交还明确引用的 A，无整改时交还全部明确标记。
-历史 prepare 与 feedback 2／3／4 的不可变包、工具名单及装配／消费合同独立保留，不迁移旧草稿，
-不将新 live 状态写回旧包。源码能力不代表本机 3.0.3 已升级；反馈从不构成需求或视觉批准。
 The design Agent does not edit the PM's source or create a mapping report; this association does not
 change the prototype page, dependency fingerprint, or visual-approval contract.
+
+交付具体原型页时，按[反馈消费合同](references/prototype-feedback.md)的当前交付入口
+先执行 `prepare-delivery`，再以同一范围执行 `open`，向用户提供经验证的各具体 HTML 的 file URI。
+需要批注或消费评审反馈时，按需读取该合同其余适用条款，复核来源修订后仅将有效意见交回原设计 Agent。
+交付、批注和反馈沿用既有需求批准与适用的视觉批准流程。
 
 For `standards_only`, return rule differences, their basis, applicability, and existing document
 validation results. Distinguish candidates, adopted rules, and completed production migration; do not

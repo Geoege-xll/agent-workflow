@@ -35,11 +35,11 @@ def validate_identity(task: dict[str, Any]) -> None:
     """
     missing = IDENTITY_FIELDS - set(task)
     if missing:
-        raise TaskGraphError("task is missing 2.0 identity field(s): " + ", ".join(sorted(missing)))
+        raise TaskGraphError("task is missing schema 2 identity field(s): " + ", ".join(sorted(missing)))
     if task["workflow_level"] not in ("Light", "Full"):
         raise TaskGraphError("workflow_level must be Light or Full")
     if task["instance_policy"] != "fresh" or task["context_policy"] != "handoff_only":
-        raise TaskGraphError("2.0 requires instance_policy fresh and context_policy handoff_only")
+        raise TaskGraphError("schema 2 requires instance_policy fresh and context_policy handoff_only")
     for field, pattern in (("agent_alias", ALIAS_RE), ("role", ROLE_RE)):
         if not isinstance(task[field], str) or not pattern.fullmatch(task[field]):
             raise TaskGraphError(f"task {field} must be a bounded canonical identifier")

@@ -6,21 +6,21 @@
 未配置 effort 不传 effort，不支持的已配置字段阻断该次派发。完整原生定义可能更高优先，
 参数投影仍为 runtime 未验。此步骤不启动独立服务、不准备组件，显式维护分支不执行。
 
-- Light and Full implementation activate `$xy-workflow`; Light does not require Full planning or a DAG.
+- Light and Full implementation activate `$xy-workflow:xy-workflow`; Light does not require Full planning or a DAG.
   Light requires minimum sufficient verification and assesses independent QA, documentation, and memory at handoff; Full retains established confirmation, planning, and independent QA.
 - Standalone read-only audits use WORKFLOW's matching branch and stop at the scoped conclusion,
   without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
-- `$xy-project-memory`: retrieve only needed cross-session/history facts; retain post-QA closeout.
-- Load `.agents/skills/` progressively, using Codex aliases, never other hosts' slash commands.
-  Full PM coverage loads original `$xy-grilling` under xy-workflow/references/requirements-intake.md;
-  `$xy-grill-me` is user-invoked only. Without a Skill tool, fully read the packaged canonical primitive;
+- `$xy-workflow:xy-project-memory`: retrieve only needed cross-session/history facts; retain post-QA closeout.
+- Load discovered plugin Skills progressively, using their Codex-qualified names.
+  Full PM coverage loads original `$xy-workflow:xy-grilling` under xy-workflow/references/requirements-intake.md;
+  `$xy-workflow:xy-grill-me` is user-invoked only. Without a Skill tool, fully read the packaged canonical primitive;
   discovery and handoff declarations do not prove loading or runtime execution.
-- Central custom agents use canonical `xy-*` IDs in the configured user Codex root's `agents/` (normally `~/.codex/agents/`). Projects keep only required sparse overrides in `.codex/agents/`; absence of a local role file does not prove the role is unavailable. Project settings in `.codex/config.toml` come from `project.yaml` → `orchestration`. Managed Skills remain project discovery symlinks in `.agents/skills/`, pointing to the verified immutable core.
+- Native Codex definitions can be discovered in user and project agent directories. Resolve package roles and Skills against the verified plugin. Confirm the actual native selector before applying per-role preferences.
 - Source observation for Codex `rust-v0.166.0`: enabled configuration layers load from low to high; a trusted project role definition takes precedence over the same user role name, subject to other native overrides. See [role loader](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/agent-roles/src/loader.rs) and [configuration layer priorities](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/config/src/config_layer_source.rs). This is source-observed behavior, not proof of actual role/model execution in the current session.
-- Plan revision/recovery: `$xy-workflow`'s `references/plan-lifecycle.md`.
+- Plan revision/recovery: `$xy-workflow:xy-workflow`'s `references/plan-lifecycle.md`.
 - For Full, the main-session PM dispatches independent READY tasks in parallel through Codex-native
   custom Agents and keeps nested delegation disabled.
-  Light/Full defaults to the corresponding native role subagent; see `.agent-workflow/product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates.
+  Light/Full defaults to the corresponding native role subagent; see `product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates.
 - Superpowers planning, execution, TDD, branch-finishing, and Subagent orchestration remain
   disabled by default.
 - Testing and delivery follow installed `xy-build-verify/references/verification-scope.md`: choose the minimum sufficient scope at dispatch and do not repeat valid accepted evidence as PM. Full suites or additional checks need concrete justification; production delivery still requires successful affected-target build/compile and runnable evidence. Preserve Full/necessary Light independent QA, mandatory verification, and worktree integration requirements; proceed to existing closeout when stop conditions are met.
@@ -30,9 +30,9 @@
   Superpowers option is only its installed `requesting-code-review/code-reviewer.md` prompt; Grill
   Me remains requirements-only. Findings or `FAIL` never switch review method or reviewer.
 - Role TOML references boundaries and project documents; do not duplicate their content.
-- Project command Hooks provide bounded intake/recovery reminders, not approvals or QA results.
+- The plugin SessionStart Hook provides a bounded entry reminder, not approvals or QA results.
   Respect native project/Hook trust and disabled settings; never bypass trust to make setup pass.
-  See `.agent-workflow/platforms/shared/HOOKS.md` only for Hook configuration or diagnostics.
+  See `platforms/shared/HOOKS.md` only for Hook configuration or diagnostics.
 - SessionStart recovery includes native `fork` and `compact` sources. After a fork, verify the actual
   workspace and still-valid task authority; copied conversation context does not authorize another
   writer or repeat completed work. Do not add a second PostCompact reminder for the same recovery.
@@ -102,4 +102,4 @@ Use doctor, native usage, and `continuation` paths in `xy-workflow/references/ru
 
 See `xy-qa-review/references/inputs.md` for structured QA output: when supported, use `codex exec --output-schema <schema-file>` in the same authorized invocation, obtain the final object with `--output-last-message <native-result.json>`, then run `qa_handoff_cli.py extract --host codex --input <native-result.json> --task-pack <current-qa-pack.json>`. `codex review` does not support this schema flag; do not change the original method order, model/effort, or permissions to obtain structured output. Deduplicate native usage by response, disclose sample scope and missing values truthfully, and infer no costs or savings rates.
 
-Maintain central installations through the shared manager: explicitly `runtime install`, preview `runtime activate ID --dry-run`, activate, and use `repair PROJECT --dry-run` / `repair PROJECT` for project-owned resources. A central thin project has no `.agent-workflow/setup_codex.sh`. Only source-pack development runs `bash setup_codex.sh` and `bash setup_codex.sh --check` from the verified source-pack root. Resource checks and source observations remain `runtime_unverified` until actual native role/model execution is exercised.
+Use the official Codex marketplace for updates. Resource checks remain `runtime_unverified` until an actual native invocation exercises the role and model.

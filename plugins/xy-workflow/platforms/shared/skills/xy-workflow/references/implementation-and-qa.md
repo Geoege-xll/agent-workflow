@@ -88,7 +88,7 @@ instance identity, context and closure boundaries, without a separate pool.
    to preserve the Reviewer identity and return the node to `DECLARED`, releasing only feature eligibility.
    QA start/FAIL/ordinary set never substitutes for this protected receipt. After all request writers
    complete, resume this same native Reviewer for the complete `request` checkpoint; exclusive
-   `accept_request` alone records final `QA_PASSED` for this optional Foundation contract. Stage PASS
+   `accept_request` records final `QA_PASSED` for every Full request. A Foundation stage PASS
    cannot authorize closeout or worktree delivery. Both checkpoints share the existing recovery limits. That same reviewer tries
    `host-native-review`, then one `installed-code-review-skill` proven installed and capable, then
    `internal-xy-qa-procedure`, moving forward only on technical unavailability. The allowed
@@ -116,7 +116,9 @@ instance identity, context and closure boundaries, without a separate pool.
    run every test in the project.
    An unavailable required Skill blocks PASS; missing optional coverage remains explicit.
    Freeze each root or nested repository as an explicit base/head range, changed-path list, and
-   SHA-256 diff fingerprint. Validate QA's internal changed-path classifications and per-rule
+   SHA-256 diff fingerprint. For non-isolated ordinary Full, PM records that scope with
+   [`freeze_qa_scope`](runtime-records.md#full-qa-acceptance) before exporting the Reviewer pack.
+   The final handoff repeats that complete scope. Validate QA's internal changed-path classifications and per-rule
    standards evidence with `qa_handoff_cli.py validate --input RESULT --task-pack CURRENT_QA_PACK`; raw scope and coverage JSON stay internal.
    Isolated work also requires the pinned integration verification described in
    [worktree delivery](worktree-delivery.md); QA reviews the composed result, not separate branch PASSes.
@@ -128,7 +130,10 @@ instance identity, context and closure boundaries, without a separate pool.
    FAIL to the PM for `xy-uiux` rework. A waived route skips prototype authority checks and still
    performs full production ui and accessibility QA. Risk-based browser testing of the real
    production implementation remains available.
-5. QA PASS permits closeout only after that validation succeeds. QA FAIL or an invalid PASS returns
+5. For Full, use the exclusive [`accept_request` operation](runtime-records.md#full-qa-acceptance)
+   with the original task-pack and result bytes after validation succeeds. Changes to the reviewed
+   Writer scope or evidence reopen the affected acceptance and require the same Reviewer's current
+   pack. QA FAIL or an invalid PASS returns
    only to the PM. PM dispatches bounded rework to its original author under existing recovery boundaries. The same independent
    reviewer rechecks the findings, repair delta and actually affected contracts; it does not restart
    the unchanged full audit. Bind the latest complete request scope, refresh affected rule checks

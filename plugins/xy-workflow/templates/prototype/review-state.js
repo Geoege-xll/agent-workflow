@@ -1,5 +1,5 @@
 /* 唯一评审状态所有者：输入、编号、引用与原子完成都在此处；视图只消费公开方法。
- * context3 是只读来源绑定，feedback4 仅投影修订输入；相机/草稿与源派生元数据永不混入机器载荷。 */
+ * 上下文绑定只读来源，反馈仅投影修订输入；相机/草稿与源派生元数据永不混入机器载荷。 */
 (() => {
   "use strict";
   const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
@@ -26,8 +26,13 @@
       const safe = JSON.stringify(boot).replace(/[<>&\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
       if (safe !== raw || !exact(boot, ["schema_version", "context", "pages"]) || ![4, 5].includes(boot.schema_version)) throw Error();
       const context = boot.context;
-      if (!exact(context, ["schema_version", "request_id", "project_id", "adapter", "adapter_sha256", "prototype_root", "plan_source", "plan_sha256", "navigation_sha256", "requirements", "pages", "tool", "review_id"])
-          || context.schema_version !== 3 || new TextEncoder().encode(JSON.stringify(context)).length > 8192
+      const fields = ["schema_version", "request_id", "project_id", "adapter", "adapter_sha256", "prototype_root", "plan_source", "plan_sha256", "navigation_sha256", "requirements", "pages", "tool", "review_id"];
+      // 历史context3沿用原封闭字段；新修订的来源种类必须与实际离线或活动入口吻合。
+      if (context?.schema_version === 4) {
+        fields.push("source_kind");
+        if (context.source_kind !== (boot.schema_version === 5 ? "live" : "offline")) throw Error();
+      }
+      if (!exact(context, fields) || ![3, 4].includes(context.schema_version) || new TextEncoder().encode(JSON.stringify(context)).length > 8192
           || typeof context.request_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(context.request_id)
           || !path(context.adapter) || !path(context.prototype_root) || !path(context.plan_source) || !context.plan_source.endsWith(".md")
           || ![context.project_id, context.adapter_sha256, context.plan_sha256, context.navigation_sha256, context.review_id].every(sha)

@@ -16,12 +16,12 @@ if __package__:
     from lib.documents.plan_documents import local_target
     from lib.documents.safe_documents import digest, normalized_relative, snapshot
     from lib.project.validate_project_config import validate_docs
-    from lib.runtime_pins import adapter_path, record_binding
+    from lib.task_sources import validate_task_source
 else:
     from lib.documents.plan_documents import local_target
     from lib.documents.safe_documents import digest, normalized_relative, snapshot
     from lib.project.validate_project_config import validate_docs
-    from lib.runtime_pins import adapter_path, record_binding
+    from lib.task_sources import validate_task_source
 
 
 class RequirementNavigation:
@@ -47,13 +47,11 @@ class RequirementNavigation:
         if self.plans is not None:
             return
         # 适配器是本次项目画像/任务已经选定的输入，不能在原型阶段重新按存在性猜测。
-        # record_binding 同时复用插件物理根、中央桥与实际项目边界；中央模式仍只能
-        # 读取原固定运行时的 .agent-workflow 适配器，不把插件路径混入旧任务。
+        # 插件和源树入口均拒绝中央任务，绝不按旧任务绑定改选另一个适配器。
         if self.adapter is None:
             raise ValueError("需求导航必须传入本次明确选择的项目适配器 --adapter")
-        binding = record_binding({}, root=self.project, initialize=True)
-        selected = adapter_path(self.project, self.adapter, binding)
-        config = self.project / normalized_relative(selected)
+        validate_task_source({}, root=self.project)
+        config = self.project / normalized_relative(self.adapter)
         errors: list[str] = []
         docs = validate_docs(self._capture(config).decode("utf-8").splitlines(), self.project, errors)
         if errors:

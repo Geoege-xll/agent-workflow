@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path, PurePosixPath
 
-from lib.hosts.claude_instructions import read_file
+from lib.safe_text import read_file
 
 
 class DocumentSafetyError(ValueError):

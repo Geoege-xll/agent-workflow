@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from graphlib import CycleError, TopologicalSorter
 from pathlib import PurePosixPath
 from typing import Iterable
 
@@ -160,19 +161,11 @@ def _transitive_dependencies(indexed: dict[str, Task], task_id: str) -> set[str]
     return result
 
 
-def _ordered(indexed: dict[str, Task], first: str, second: str) -> bool:
-    """存在任意方向的传递依赖即说明两个任务不会成为并行 Writer。"""
-
-    return (
-        first in _transitive_dependencies(indexed, second)
-        or second in _transitive_dependencies(indexed, first)
-    )
-
-
 def validate_graph(tasks: Iterable[Task]) -> None:
     """校验 ID、双向边、循环、Gate、路径重叠和语义锁冲突。"""
 
     indexed = _tasks_by_id(tasks)
+    expected_blocks: dict[str, set[str]] = {task_id: set() for task_id in indexed}
     for task in indexed.values():
         if task.id in task.depends_on:
             raise TaskGraphError(f"task {task.id} cannot depend on itself")
@@ -189,64 +182,51 @@ def validate_graph(tasks: Iterable[Task]) -> None:
                 f"task {task.id} blocks unknown task(s): {', '.join(missing_blocks)}"
             )
 
-    # 先验证无环，再做传递依赖判断；否则冲突检查可能在错误图上循环。
-    visiting: set[str] = set()
-    visited: set[str] = set()
+        for dependency in task.depends_on:
+            expected_blocks[dependency].add(task.id)
 
-    def visit(task_id: str) -> None:
-        if task_id in visiting:
-            raise TaskGraphError(f"dependency cycle detected at task: {task_id}")
-        if task_id in visited:
-            return
-        visiting.add(task_id)
-        for dependency in indexed[task_id].depends_on:
-            visit(dependency)
-        visiting.remove(task_id)
-        visited.add(task_id)
-
-    for task_id in sorted(indexed):
-        visit(task_id)
+    # 标准库按拓扑顺序迭代并检测环；合法依赖链的深度不应受解释器递归栈限制。
+    # 按稳定的 ID 顺序建图，让多个可行遍历顺序中的首个诊断可重现。
+    graph = TopologicalSorter({task_id: indexed[task_id].depends_on for task_id in sorted(indexed)})
+    try:
+        ordered_ids = tuple(graph.static_order())
+    except CycleError as exc:
+        raise TaskGraphError(f"dependency cycle detected at task: {exc.args[1][0]}") from exc
 
     for task in indexed.values():
-        expected_blocks = {
-            candidate.id
-            for candidate in indexed.values()
-            if task.id in candidate.depends_on
-        }
-        if set(task.blocks) != expected_blocks:
+        if set(task.blocks) != expected_blocks[task.id]:
             raise TaskGraphError(
                 f"task {task.id} blocks/depends_on mismatch: "
-                f"declared={sorted(task.blocks)}, expected={sorted(expected_blocks)}"
+                f"declared={sorted(task.blocks)}, expected={sorted(expected_blocks[task.id])}"
             )
 
-    ordered_ids = sorted(indexed)
-    for position, first_id in enumerate(ordered_ids):
-        first = indexed[first_id]
-        first_paths = [
-            (raw, _normalized_path_parts(raw, label=f"task {first.id} owned_paths"))
-            for raw in first.owned_paths
-        ]
-        for second_id in ordered_ids[position + 1 :]:
-            if _ordered(indexed, first_id, second_id):
+    # 只需比较持有资源的任务。拓扑序保证此前的任务不可能依赖当前任务，
+    # 因而每个任务至多回溯一次祖先，不必为每一对任务双向遍历依赖链。
+    previous_paths: dict[str, dict[str, tuple[str, ...]]] = {}
+    for task_id in ordered_ids:
+        task = indexed[task_id]
+        if not task.owned_paths and not task.semantic_locks:
+            continue
+        paths = {raw: _normalized_path_parts(raw, label=f"task {task.id} owned_paths")
+                 for raw in task.owned_paths}
+        ancestors = _transitive_dependencies(indexed, task_id) if previous_paths else set()
+        for previous_id, earlier_paths in previous_paths.items():
+            if previous_id in ancestors:
                 continue
-            second = indexed[second_id]
-            second_paths = [
-                (raw, _normalized_path_parts(raw, label=f"task {second.id} owned_paths"))
-                for raw in second.owned_paths
-            ]
-            for first_raw, first_parts in first_paths:
-                for second_raw, second_parts in second_paths:
+            for first_raw, first_parts in earlier_paths.items():
+                for second_raw, second_parts in paths.items():
                     if _paths_overlap(first_parts, second_parts):
                         raise TaskGraphError(
                             "unordered tasks have overlapping owned paths: "
-                            f"{first.id}:{first_raw!r}, {second.id}:{second_raw!r}"
+                            f"{previous_id}:{first_raw!r}, {task_id}:{second_raw!r}"
                         )
-            shared_locks = sorted(set(first.semantic_locks) & set(second.semantic_locks))
+            shared_locks = sorted(set(indexed[previous_id].semantic_locks).intersection(task.semantic_locks))
             if shared_locks:
                 raise TaskGraphError(
                     "unordered tasks share semantic lock(s): "
-                    f"{first.id}, {second.id}: {', '.join(shared_locks)}"
+                    f"{previous_id}, {task_id}: {', '.join(shared_locks)}"
                 )
+        previous_paths[task_id] = paths
 
 
 def ready_tasks(

@@ -22,20 +22,26 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 try:
-    from lib.delivery.native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
+    from lib.delivery.native_handoff import (
+        HOSTS, NativeHandoffError, decode_handoff_json, extract_native_handoff, read_handoff_json,
+    )
     from lib.skills.qa_review_policy import METHODS
+    from lib.skills.role_skills import IMPLEMENTER_ROLES
     from lib.task_graph import TaskGraphError
     from lib.task_graph_cli import _execute
-    from lib.task_graph_records import decode, digest, read_record
+    from lib.task_graph_records import digest, read_record
     from lib.agent_continuation import validate_reference
     from lib.standard_paths import builtin_source_path, source_domain, canonical_standard_source_path
     from lib.validate_project_docs import builtin_standard_rule_catalog
 except ImportError:
-    from lib.delivery.native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
+    from lib.delivery.native_handoff import (
+        HOSTS, NativeHandoffError, decode_handoff_json, extract_native_handoff, read_handoff_json,
+    )
     from lib.skills.qa_review_policy import METHODS
+    from lib.skills.role_skills import IMPLEMENTER_ROLES
     from lib.task_graph import TaskGraphError
     from lib.task_graph_cli import _execute
-    from lib.task_graph_records import decode, digest, read_record
+    from lib.task_graph_records import digest, read_record
     from lib.agent_continuation import validate_reference
     from lib.standard_paths import builtin_source_path, source_domain, canonical_standard_source_path
     from lib.validate_project_docs import builtin_standard_rule_catalog
@@ -83,6 +89,12 @@ STANDARDS_COVERAGE_FIELDS = {
 }
 SKILL_EVIDENCE_FIELDS = {"skills_used", "unavailable_required_skills", "uncovered_audit_surfaces"}
 HANDOFF_REF_FIELDS = {"request_id", "task_id", "agent_alias", "agent_ref", "task_pack_sha256"}
+MANDATORY_AUDIT_SURFACES = {"standards-conformance", "ui", "accessibility"}
+REVIEW_DETAILS_FIELDS = {"findings", "verification"}
+FINDING_FIELDS = {"severity", "blocking", "detail", "evidence_refs", "owner_role", "next_step"}
+FINDING_SEVERITIES = ("P0", "P1", "P2", "P3")
+REWORK_ROLES = IMPLEMENTER_ROLES | {"pm", "xy-uiux"}
+VERIFICATION_FIELDS = {"command", "exit_code", "log_ref"}
 
 
 class QAHandoffError(ValueError):
@@ -101,11 +113,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def qa_handoff_schema() -> dict[str, Any]:
-    """导出原生 strict 生成可用的最小 QA 合同，不以结构约束代替真实证据核验。
+    """导出同一次原生调用可生成的完整 QA 回执，不以结构约束代替真实证据核验。
 
-    复用既有字段集合和方法枚举，每层对象都完整 required 并禁止额外字段，以兼容
-    OpenAI strict 的对象要求。此最小生成合同不描述任意发现元数据；extract 仍保留
-    实际输入的原始附加字段。条件回退、固定范围和规则闭合继续由原语义校验器决定。
+    每层对象完整 required 且禁止额外字段，以兼容原生 strict schema。没有发现或
+    命令时显式输出空数组。已有内部回执可省略新增字段，结果语义仍由校验器核对。
     """
     def obj(fields: set[str], properties: dict[str, Any]) -> dict[str, Any]:
         return {"type": "object", "properties": properties, "required": sorted(fields),
@@ -148,7 +159,23 @@ def qa_handoff_schema() -> dict[str, Any]:
         "path_checks": {"type": "array", "items": path_check},
         "rule_checks": {"type": "array", "items": rule_check},
     })
-    return obj({"schema_version", "handoff_ref", "audit_result", "review_method", "standards_policy_coverage", "skill_evidence"}, {
+    finding = obj(FINDING_FIELDS, {
+        "severity": {"type": "string", "enum": list(FINDING_SEVERITIES)},
+        "blocking": {"type": "boolean"}, "detail": {"type": "string"},
+        "evidence_refs": strings(),
+        "owner_role": {"type": ["string", "null"], "enum": [None, *sorted(REWORK_ROLES)]},
+        "next_step": {"type": ["string", "null"]},
+    })
+    verification = obj(VERIFICATION_FIELDS, {
+        "command": {"type": "string"}, "exit_code": {"type": "integer"},
+        "log_ref": {"type": "string"},
+    })
+    details = obj(REVIEW_DETAILS_FIELDS, {
+        "findings": {"type": "array", "items": finding},
+        "verification": {"type": "array", "items": verification},
+    })
+    return obj({"schema_version", "handoff_ref", "audit_result", "review_method",
+                "standards_policy_coverage", "skill_evidence", "review_details"}, {
         "schema_version": {"type": "integer", "enum": [2]},
         "handoff_ref": obj(HANDOFF_REF_FIELDS, {
             "request_id": {"type": "string"}, "task_id": {"type": "string"},
@@ -160,30 +187,39 @@ def qa_handoff_schema() -> dict[str, Any]:
         "audit_result": {"type": "string", "enum": ["PASS", "FAIL"]},
         "review_method": method, "standards_policy_coverage": coverage,
         "skill_evidence": obj(SKILL_EVIDENCE_FIELDS, {field: strings() for field in sorted(SKILL_EVIDENCE_FIELDS)}),
+        "review_details": details,
     })
 
 
-def _validate_native_contract(payload: dict[str, Any]) -> None:
-    """2.0所有入口都要求显式技能证据，不保留旧validate的较弱分支。"""
+def _validate_skill_evidence(payload: dict[str, Any], task: dict[str, Any], audit_result: str) -> bool:
+    """核对当前包的硬门槛；返回旧回执中已明确记录的强制项目缺口。"""
     evidence = _object(payload.get("skill_evidence"), "skill_evidence")
     missing = SKILL_EVIDENCE_FIELDS - set(evidence)
     if missing:
         raise QAHandoffError("skill_evidence is missing field(s): " + ", ".join(sorted(missing)))
-    for field in sorted(SKILL_EVIDENCE_FIELDS):
+    for field in ("skills_used", "unavailable_required_skills"):
         _string_list(evidence[field], f"skill_evidence.{field}")
-    if payload.get("audit_result") == "PASS" and evidence["unavailable_required_skills"]:
+
+    required_skills = task.get("required_skills", [])
+    _string_list(required_skills, "task.required_skills")
+    # 技能标识按当前包的原值比较；附加技能不妨碍 PASS，也不能替代明确要求的名称。
+    # 只有既有强制面构成硬门槛；并发等任务事实仍可如实记录缺少可选的补充审查。
+    missing_skills = set(required_skills) - set(evidence["skills_used"])
+    declared_surfaces = set(_string_list(task.get("audit_surfaces", []), "task.audit_surfaces"))
+    reported_uncovered = _string_list(
+        evidence["uncovered_audit_surfaces"], "skill_evidence.uncovered_audit_surfaces",
+    )
+    uncovered = declared_surfaces & MANDATORY_AUDIT_SURFACES & set(reported_uncovered)
+    unavailable = set(evidence["unavailable_required_skills"])
+    if audit_result != "PASS":
+        return bool((missing_skills & unavailable) or uncovered)
+    if unavailable:
         raise QAHandoffError("PASS requires empty skill_evidence.unavailable_required_skills")
-
-
-def _read_payload(path: Path | None) -> dict[str, Any]:
-    try:
-        raw = path.read_text(encoding="utf-8") if path is not None else sys.stdin.read()
-        value = json.loads(raw)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise QAHandoffError(f"cannot read QA handoff JSON: {exc}") from exc
-    if not isinstance(value, dict):
-        raise QAHandoffError("QA handoff input must be a JSON object")
-    return value
+    if missing_skills:
+        raise QAHandoffError("PASS omits current task pack required Skill(s): " + ", ".join(sorted(missing_skills)))
+    if uncovered:
+        raise QAHandoffError("PASS leaves mandatory audit surface(s) uncovered: " + ", ".join(sorted(uncovered)))
+    return False
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -214,6 +250,49 @@ def _string_list(value: Any, label: str, *, allow_empty: bool = True) -> tuple[s
     if len(set(values)) != len(values):
         raise QAHandoffError(f"{label} must not contain duplicates")
     return values
+
+
+def _details_record(value: Any, label: str, fields: set[str]) -> dict[str, Any]:
+    record = _object(value, label)
+    if set(record) != fields:
+        raise QAHandoffError(f"{label} must contain exactly: {', '.join(sorted(fields))}")
+    return record
+
+
+def _validate_review_details(value: Any, audit_result: str) -> None:
+    """结构化失败须给出补救责任及可复核证据；文件和命令引用只记录，不执行。"""
+    details = _details_record(value, "review_details", REVIEW_DETAILS_FIELDS)
+    has_blocker = False
+    for index, raw_finding in enumerate(_array(details["findings"], "review_details.findings")):
+        label = f"review_details.findings[{index}]"
+        finding = _details_record(raw_finding, label, FINDING_FIELDS)
+        if finding["severity"] not in FINDING_SEVERITIES:
+            raise QAHandoffError(f"{label}.severity must be P0, P1, P2 or P3")
+        blocking = finding["blocking"]
+        if type(blocking) is not bool:
+            raise QAHandoffError(f"{label}.blocking must be boolean")
+        has_blocker |= blocking
+        _nonempty_string(finding["detail"], f"{label}.detail")
+        _string_list(finding["evidence_refs"], f"{label}.evidence_refs", allow_empty=False)
+        owner = finding["owner_role"]
+        if (blocking or owner is not None) and (not isinstance(owner, str) or owner not in REWORK_ROLES):
+            raise QAHandoffError(f"{label}.owner_role must identify PM or a Writer role")
+        if blocking or finding["next_step"] is not None:
+            _nonempty_string(finding["next_step"], f"{label}.next_step")
+
+    for index, raw_verification in enumerate(_array(details["verification"], "review_details.verification")):
+        label = f"review_details.verification[{index}]"
+        verification = _details_record(raw_verification, label, VERIFICATION_FIELDS)
+        _nonempty_string(verification["command"], f"{label}.command")
+        # Python 的 bool 是 int 子类；成功证据必须给出实际数值退出码，不能填 false。
+        if type(verification["exit_code"]) is not int:
+            raise QAHandoffError(f"{label}.exit_code must be an integer")
+        _nonempty_string(verification["log_ref"], f"{label}.log_ref")
+
+    if audit_result == "PASS" and has_blocker:
+        raise QAHandoffError("PASS cannot contain blocking review_details findings")
+    if audit_result == "FAIL" and not has_blocker:
+        raise QAHandoffError("FAIL requires at least one actionable blocking review_details finding")
 
 
 def _safe_project_path(value: Any, label: str) -> str:
@@ -349,7 +428,6 @@ def _validate_scope(review_method: dict[str, Any]) -> tuple[str, ...]:
 
 def _validate_standards_coverage(
     coverage: dict[str, Any], changed_paths: tuple[str, ...], audit_result: str,
-    *, binding: dict | None = None,
 ) -> None:
     """逐条验证规范索引、叶规则、变更路径和证据的闭合关系。
 
@@ -460,7 +538,7 @@ def _validate_standards_coverage(
             try:
                 if builtin_catalog is None:
                     builtin_catalog = builtin_standard_rule_catalog(
-                        Path(__file__).resolve().parents[2], binding=binding)
+                        Path(__file__).resolve().parents[2])
             except (OSError, UnicodeError, ValueError) as exc:
                 raise QAHandoffError(f"invalid builtin standards sources: {exc}") from exc
             current = builtin_catalog[builtin]
@@ -614,7 +692,7 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
         raise QAHandoffError("QA schema_version must be integer 2")
     try:
-        pack = decode(task_pack_body)
+        pack = decode_handoff_json(task_pack_body)
         if not isinstance(pack, dict) or "task" not in pack:
             raise TaskGraphError("QA requires a self-contained task pack")
         _execute("validate", pack)
@@ -628,17 +706,17 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
         raise QAHandoffError(f"invalid current QA task pack: {exc}") from exc
     reference = _object(payload.get("handoff_ref"), "handoff_ref")
     if set(reference) != HANDOFF_REF_FIELDS:
-        raise QAHandoffError("handoff_ref must contain exactly the 2.0 current task identity fields")
+        raise QAHandoffError("handoff_ref must contain exactly the schema 2 current task identity fields")
     expected = {"request_id": task["request_id"], "task_id": task["id"],
                 "agent_alias": task["agent_alias"], "agent_ref": task["agent_ref"],
                 "task_pack_sha256": digest(task_pack_body)}
     if reference != expected:
         raise QAHandoffError("handoff_ref does not match the current QA task pack identity or original-byte SHA-256")
-    _validate_native_contract(payload)
     audit_result = payload.get("audit_result")
     # 外部 JSON 可把枚举伪装为数组／对象；先核对类型，避免集合查询泄漏 TypeError。
     if not isinstance(audit_result, str) or audit_result not in {"PASS", "FAIL"}:
         raise QAHandoffError("audit_result must be PASS or FAIL")
+    legacy_skill_blocker = _validate_skill_evidence(payload, task, audit_result)
     review_method = _object(payload.get("review_method"), "review_method")
     _validate_review_method(review_method)
     changed_paths = _validate_scope(review_method)
@@ -650,7 +728,7 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
         payload.get("standards_policy_coverage"), "standards_policy_coverage"
     )
     # 版本来自已经验证的当前 Task Pack；QA 结果自报路径或字段不能选择另一份核心。
-    _validate_standards_coverage(coverage, changed_paths, audit_result, binding=pack.get("runtime_binding"))
+    _validate_standards_coverage(coverage, changed_paths, audit_result)
     # 身份绑定不能掩盖旧覆盖表：当前包冻结的规范来源同样必须一致。QA可在FAIL中
     # 报告PM漏选的新规则，但PASS不能自报一组当前包根本没有采用的规则或旧来源。
     contract = pack["standards_contract"]
@@ -671,6 +749,20 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
             key = f"required_{domain}_rule_ids"
             if not set(contract[key]) <= set(coverage[key]):
                 raise QAHandoffError(f"PASS omits current task pack required {domain} rules")
+    if "review_details" in payload:
+        _validate_review_details(payload["review_details"], audit_result)
+    elif audit_result == "FAIL":
+        # 早期内部回执没有 review_details。已验证规则中的硬失败或实际漏派规则
+        # 仍能定位返工证据；回执自行删去 task_pack_rule_ids 不能凭空构成一条发现。
+        required_rules = set(coverage["required_engineering_rule_ids"] + coverage["required_design_rule_ids"])
+        undispatched_rules = required_rules - frozen_rules.keys()
+        legacy_rule_blocker = any(
+            (check["severity"] == "hard" and check["disposition"] == "fail")
+            or (check["rule_id"] in undispatched_rules and check["disposition"] != "not_applicable")
+            for check in coverage["rule_checks"]
+        )
+        if not (legacy_rule_blocker or legacy_skill_blocker):
+            raise QAHandoffError("FAIL requires actionable review_details or a specific documented mandatory failure")
 
 
 def main() -> int:
@@ -689,17 +781,19 @@ def main() -> int:
         parser.error("validate/extract requires --task-pack")
     try:
         payload = (extract_native_handoff(args.host, args.input) if args.command == "extract"
-                   else _read_payload(args.input))
+                   else _object(read_handoff_json(args.input), "QA handoff input"))
         task_pack_body = read_record(args.task_pack)
         validate_qa_handoff(payload, task_pack_body)
         if args.command == "extract" and payload["handoff_ref"]["agent_ref"]["host"] != args.host:
             raise QAHandoffError("native host does not match the current QA task pack")
-    except (QAHandoffError, NativeHandoffError, TaskGraphError, OSError, UnicodeError, ValueError) as exc:
+        # 两个入口共用 schema 2 校验，extract 保留内层附加字段。过深的 JSON 即使
+        # 通过了解析也可能无法重新编码，必须在写出任何成功结果前拒绝该类输入。
+        result = payload if args.command == "extract" else {"status": "valid"}
+        response = json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    except (QAHandoffError, NativeHandoffError, TaskGraphError, OSError, UnicodeError, ValueError, RecursionError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
-    # 两个入口使用同一2.0身份及语义校验；extract保留完整原始发现和元数据。
-    result = payload if args.command == "extract" else {"status": "valid"}
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
+    print(response)
     return 0
 
 

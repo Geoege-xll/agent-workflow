@@ -88,6 +88,21 @@ prototype QA. Progress, link or presentation-only changes do not automatically r
 requirements_fingerprint and prototype dependency fingerprints retain their separate responsibilities;
 historical HTML freshness is not required after generation retirement.
 
+## 定位现有主题
+
+新建主题或恢复路径不明的主题前，按稳定主题 ID 查询已选适配器的 `docs.plans`，查到原稿就原地更新。
+在工作流源码根执行以下命令。
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/validate_project_docs.py \
+  --root PROJECT_ROOT --adapter SELECTED_ADAPTER --topic TOPIC_ID [--plan KNOWN_CANDIDATE ...]
+```
+
+安装插件时复用下文的 `helper`。查询只读取实际 plans 路径下 Git 已跟踪 Markdown 的首个可见 H2 之前的元信息，
+围栏和 HTML 注释中的章节示例不会提前结束查询。
+用 `--plan` 明确加入已知未跟踪稿；项目根无 Git 工作树时，必须显式指定已知候选。未找到只代表本次检索范围。
+若多个文件匹配，或候选页首无法安全判定，先核实原稿再保存。查询只读候选的页首，无需读取 PROJECT、链接目标或候选正文。
+
 ## Validate the selected saved plan
 
 After initial persistence and after substantive updates or a handoff checkpoint, PM validates the current
@@ -112,7 +127,7 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
 format check. It checks only selected files and link/path safety, without reading link-target bodies,
 scanning unselected plans or using the network. Explicit selection must not silently skip a new plan missing
 metadata as historical material. The original two-positional-argument mode and its historical recognition
-remain available for their existing callers.
+remain available for their existing callers. 同次选择同一物理文件可去重；若两个不同文件的主题 ID 大小写折叠后相同，校验失败。
 
 Return format failures to PM for in-place correction under the same scope, with actual command/exit/log
 evidence; do not dispatch from a malformed selected Full plan. A successful check proves only its format/path
@@ -222,7 +237,7 @@ Reuse completed work whose scope/artifacts/evidence remain valid; recheck or rew
 uncertain parts. Do not replay the old plan from its first step, restart live workers, reconstruct stale
 locks as active, or mark prior work failed just because its Agent session is no longer active.
 Check implementer, classification and exception authority against
-`.agent-workflow/product/WORKFLOW.md#implementation-ownership`. Only continuous implementation or short rework
+`product/WORKFLOW.md#implementation-ownership`. Only continuous implementation or short rework
 of the same task may reuse the available original instance and valid evidence; independent tasks need new
 instances/IDs. Compacted summaries do not authorize PM implementation or change the original level. Do not
 copy full PM/sibling conversations. Native closure/retirement and cancellation/invalidation follow WORKFLOW's
@@ -232,8 +247,8 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
 
 ## Closeout and document boundaries
 
-- PROJECT is the current overview and accepted-baseline index. Each topic has one plans source; do not append
-  index entries per revision.
+- PROJECT 承载当前概况和已验收基线索引。`当前已验收基线` 专用章节内，每个已验收来源只列一次；
+  概况或其他说明章节可保留有实际意义的同源链接。围栏示例和 HTML 注释中的链接不构成索引项。
 - During iteration, update the first four sections/current stage and preserve the fifth section's last accepted
   behavior, accepted version and corresponding evidence. active／paused／cancelled must not present new goals
   as delivery; `completed` alone establishes no trust.

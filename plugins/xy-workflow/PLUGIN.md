@@ -1,6 +1,6 @@
-# xy-workflow 3.0.6 官方插件
+# xy-workflow 3.0.7
 
-本包版本为 `xy-workflow 3.0.6`，唯一版本源为 `product/PLUGIN_VERSION`；固定配套 Native Agent Config `0.1.5`，其版本源为 `native_config/VERSION`。固定 Native `0.1.5` 已采用同 SHA 成功 CI 原包正式发布并真实下载核验，唯一生成器已生成 `published` 绑定。插件真实发行以 GitHub Release 和对应 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本、QA、CI、发行及本机操作记录见[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。自有 Git stable 分发不等同官方公开目录上架，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
+本包为 `xy-workflow 3.0.7`，配套 Native Agent Config `0.1.6`。版本来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，维护入口根据包内组件描述校验下载来源和摘要。正式安装使用 Git stable 来源和 GitHub Release，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [安装说明](INSTALL.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
 
 ## 载荷与职责
 
@@ -50,11 +50,13 @@ Specialist，新 API／迁移才读 What's New；本机资源不随插件复制�
 不改变语言模式、UI 框架或最低系统要求。读取成功、CLI 查询成功与宿主模型实际采纳分别报告，
 不能代替构建、运行、签名或唯一 QA。任何 Skill 都不扩大权限、路径、网络或原型自动化授权。
 
+`xy-ui-design` 的组件一致性与关键流程规则适用于 Web、桌面、原生 App 和小程序。`xy-mobile-ui` 为 iOS、iPadOS、Android 和微信小程序提供按需平台指导。设计、开发与 QA 根据运行端选读安全区、键盘、导航、状态生命周期和无障碍规则，并沿用现有交接记录原型行为与实际运行证据。
+
 另有独立 `xy-config` 维护 Skill、固定薄启动器和组件发行描述，不计入 CORE_SKILLS 或 Worker 预载，不注入业务 envelope。仅用户在当前主会话显式调用时执行；普通需求中出现命令名称、实现或评审配置功能仍进入完整业务流程。维护动作不读整份 WORKFLOW、不建图、不派代理，也不产生业务批准。
 
 独立配置核心位于 `native_config/`，由自身构建器交付，插件不导入服务、不包含网页、独立 ZIP 或模型 MCP。首次组件准备需要明确确认并校验真实发行包；维护失败不阻断普通工作流。插件缓存角色只读，原生文件与调用偏好分开管理。
 
-Codex 七角色的完整定义由同源角色生成到非发现目录 `native-agent-templates/codex`。通过完整插件显式执行 `xy-config open` 时，固定 `0.1.5` 组件按已校验模板自动补齐用户级缺失原生 Agent，再回读并打开控制台；当前项目已有同名定义时跳过，不写项目文件。已有定义及模型、推理字段保持，重复打开与升级不重写。独立组件未指定 `--preparation-source` 时不自动补齐；网页不提供手动准备入口。插件安装不创建这些文件，升级也不自动更新或删除已准备定义，来源版本变化后需显式维护。用户级完整定义不等于统一模型默认，文件创建和发现不证明宿主按名称调用或指定模型已生效。新版启动器的 `--preparation-source` 仅与固定描述绑定的 `0.1.5` 组件配套，不沿用旧组件。
+Codex 七角色的完整定义由同源角色生成到非发现目录 `native-agent-templates/codex`。通过完整插件显式执行 `xy-config open` 时，配套组件按已校验模板自动补齐用户级缺失原生 Agent，再回读并打开控制台；当前项目已有同名定义时跳过，不写项目文件。已有定义及模型、推理字段保持，重复打开与升级不重写。独立组件未指定 `--preparation-source` 时不自动补齐；网页不提供手动准备入口。插件安装不创建这些文件，升级也不自动更新或删除已准备定义，来源版本变化后，显式调用 `xy-config rebind` 查看候选角色；确认本次预览后才会写入用户级受管定义。用户级完整定义不等于统一模型默认，文件创建和发现不证明宿主按名称调用或指定模型已生效。新版启动器的 `--preparation-source` 仅与固定描述绑定的组件配套，不沿用旧组件。
 
 Agent 控制台与原型交付／评审外壳共同使用限定在 `.sg-scope` 的 SolidGlass 静态主题，完整 MIT 许可随包保留，业务原稿保持独立。原型普通滚轮由业务页面滚动；鼠标平移使用 Space 拖动或中键，Ctrl/Cmd 滚轮缩放。响应式长页保持可用设计视口，不把 iframe 撑成整页高度。
 
@@ -74,7 +76,7 @@ Agent 控制台与原型交付／评审外壳共同使用限定在 `.sg-scope` �
 在同一个安装版本中解析实际物理资源，保留原 helper 和明确的项目边界：
 
 ```text
-bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py resource .agent-workflow/product/WORKFLOW.md
+bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py resource product/WORKFLOW.md
 bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py resource platforms/shared/skills/xy-workflow/SKILL.md
 bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py helper --project <absolute-project> lib/task_graph_cli.py validate --input <absolute-task-file>
 ```
@@ -101,7 +103,7 @@ inspect 只读；显式 apply 只创建缺失 adapter，复用已有有效配置
 
 Codex 包只生成 `.codex-plugin/plugin.json`。客户端官方 Hook 审阅和信任不可绕过，不直接写信任记录或以全局指令替代；安装成功不自动授予 Hook 信任。AGY 构建保护每个 Skill 的 24,000 字节正文上限。
 
-宿主入口、发现、安装、真实模型响应与完整工作流收口按各自证据分层判定。历史运行范围、失败及安装记录见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)、[远程安装记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-remote-install.md)及[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。每个新包从 `runtime_verified:false` 开始，不能因构建、静态验证或安装回执宣称完整原生运行通过。
+宿主入口、发现、安装、真实模型响应与完整工作流收口按各自证据分层判定。历史运行范围、失败及安装记录见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/archive/plugin-v3-native-acceptance.md)、[远程安装记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/archive/plugin-remote-install.md)及[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。每个新包从 `runtime_verified:false` 开始，不能因构建、静态验证或安装回执宣称完整原生运行通过。
 
 活动任务跨插件更新的自动资源保留协议尚未实现，更新前先收尾或交接。组件发行、插件 Git 分发与官方公开目录分别判定；本机安装不代表全局替换所有用户或业务项目。
 

@@ -26,6 +26,10 @@ reuse project/Writer evidence first, then load `xy-playwright` only for that Web
 preload it for every QA or treat its browser automation as another code-review method. New operations
 must fit current read-only permissions; return forbidden browser preparation, writes or business-state
 changes to PM rather than installing tools or widening permissions.
+Under the shared Skill-selection policy, consider `xy-mobile-ui` for affected native iOS, iPadOS,
+Android or WeChat Mini Program UI review surfaces. Apply relevant review guidance to authorized
+source, the applicable design authority and writer evidence through the existing read-only
+acceptance or audit branch. Review Mini Program behavior using evidence from its host runtime.
 
 ## 4. Critical Operating Rules
 
@@ -44,19 +48,19 @@ Use the latest complete PM scope; a plan is recovery context, not authority or r
 Full acceptance and Light acceptance with an actual independent-QA requirement use the current schema 2 pack, applicable approvals, scope, acceptance, `controlled_document_access`, current built-in common rules, the project index when present, applicable non-skip specific leaves, writer evidence, Skill policy, and review_method evidence.
 Read detailed intake and `standards_policy_coverage` through the Skill; hard-rule omissions block PASS.
 
-For production UI require `surface_kind: production_ui`, `qa_scope: request` and current resolved/fingerprinted structured
-`design_authority_refs`. Follow the scoped `prototype_policy` and `prototype_decision`; a
-`waived_by_user` replacement uses current user authority, never forces old prototype synchronization.
+生产 UI 的 `surface_kind: production_ui`、`ui_change` 和门禁来自当前 QA 包的生产 Writer 投影
+`reviewed_ui_changes`。QA 保持只读，任务本身可为 `surface_kind: non_ui`；生产 UI 审查须覆盖
+`ui` 与 `accessibility`。Full 按包要求使用 `qa_scope: request`；Light 生产 Writer 可省略该字段，
+仍按当前单任务包核对投影、实际范围和适用的冻结依据。
 
 ## 6. Execution Workflow
 
-Verify method findings against current source, independently cover applicable standards and request
-acceptance, and audit the exact in-page contract for production UI through the Skill's UI branch.
-Deterministic checks read the dependency closure and recompute approved page dependency fingerprints;
-QA must not preload or manually read the complete prototype dependency tree.
-QA MUST NOT invoke Computer Use or browser automation against the prototype. Missing or stale evidence
-must return FAIL to the PM for `xy-uiux` rework. UI-Conformance preserves zero design delta;
-all production routes retain ui/accessibility QA.
+Verify method findings against current source and independently cover applicable standards and request
+acceptance. 按 Skill 的 UI 分支与 Writer 的原型政策取证。仅 `prototype_policy: required` 审查设计
+交接、精确页内契约及批准页面的依赖指纹，缺失或失效的原型证据返回 FAIL，由 PM 交给 `xy-uiux`。
+QA 禁止对原型使用 Computer Use 或浏览器自动化，也不预读完整依赖树。UI-Conformance 按零设计
+变更和本轮冻结依据核对，`waived_by_user` 使用当前用户决定与适用依据；均不恢复旧原型门禁。
+各生产分支都在实际运行端核对功能和无障碍，优先复用 Writer 的有效运行证据。
 
 For desktop, audit the desktop renderer, affected core trust boundaries, IPC/capabilities, native integration,
 packaging, signing, notarization, updater and release evidence using the implementation-check reference.

@@ -15,43 +15,7 @@ does not select a UI route, grant writes, or add a confirmation. Implementation 
 current repository facts. After cloning/adding a module, changing the stack, or finding a required
 role unavailable, assess the affected host's resources before dispatch; this is not a per-task probe.
 Reuse current ProjectProfile facts and prior successful installation evidence while their inputs
-and resources remain unchanged. If those facts already establish that a refresh is required, go
-directly to refresh rather than running a redundant presence check. When role availability is
-unknown, perform one read-only resource check using the current host. Central thin projects use `awf-cli roles --project PROJECT --platform HOST` and `awf-cli check --project PROJECT`, with explicit `--state-dir` / `--host-home` when isolating state. Their role availability includes verified user-level roles plus sparse project overrides; a missing local descriptor alone is not unavailability. These checks prove resources, not actual native role/model execution. The following profile/setup examples apply only to source-pack development from the verified source-pack root:
-
-```bash
-bash lib/python_runtime.sh -B -X utf8 lib/project/project_profile_cli.py \
-  check-roles codex . .
-```
-
-Use `claude` or `antigravity` for that host; do not preload other hosts' integration files. This
-presence check does not prove configuration/content validity or establish fresh installation evidence.
-Refresh when required native resources are missing/invalid, or installation inputs changed:
-
-- Codex persists module/stack/verification-command context in its generated roles. Changed persisted
-  facts require one refresh even when role names stay the same.
-- Claude/Antigravity receive dynamic module and command facts through the PM task pack. When the
-  role set, source pack/configuration, installation root/runtime and design-scaffold needs are unchanged,
-  managed resources have valid unchanged installation evidence, and required document/prototype
-  scaffolds are complete, refresh only the current task-pack facts; do not reinstall for a module
-  path, stack or command change alone. Missing or changed installation inputs still require setup.
-
-Codex discovery context deduplicates identical fact/command groups, while retaining each module's exact root,
-command cwd and evidence-base mapping. Different arguments, purposes or evidence are not merged for superficial
-similarity. To inspect a role's full mapping, run read-only `project_profile_cli.py context . . <role>`
-with the Python entry below. It reuses the discoverer without executing candidate commands, writing state or
-refreshing the host, and does not change the refresh conditions above.
-
-For required central maintenance, preview and explicitly apply the shared manager's `repair PROJECT`; import and activate a new core separately using `runtime install` and `runtime activate ID`. Central thin projects contain no setup scripts. Source-pack development runs the current host's `bash setup_<host>.sh`, then `bash setup_<host>.sh --check` once from the source-pack root. Normal
-setup already performs its mandatory preflight; do not prepend another standalone `--preflight`
-unless a write-free preview or aggregate multi-host preflight is specifically needed. Preserve all
-ownership protections, populated documents, user settings, native permissions/Hook trust and active
-worktrees. A role description read in PM context is not a substitute for native installation.
-If the host caches changed roles, use its supported reload while retaining current task/approvals;
-report actual unavailability if necessary. Reuse successful refresh/check evidence until affected
-inputs or resources change; do not repeat a completed refresh for the same change. Light/read-only work
-does not trigger it merely on a new prompt. This is installation maintenance within existing
-dispatch, not a new business gate, QA stage or full test run; Hooks never auto-install roles.
+and resources remain unchanged. When availability is unclear, check the current host's actual plugin discovery and the selected native role. If the client caches an older installation, use its supported reload after preserving active work. Refresh project facts in the current task pack when a module or its verification commands change.
 
 ## Read-only native dispatch preferences
 
@@ -99,59 +63,17 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
 
 ## Workflow helper execution
 
-### Central projects: use the current task pin on every call
+### Official plugin calls
 
-This section is the execution boundary shared by all Skills/roles. A central project with
-`.agent-workflow/runtime.json` must not directly execute `.agent-workflow/lib/<helper>.py` from source-pack
-examples below, or select the current core through host-discovery symlinks. A new workflow,
-including Light without an init step, first checks machine-local enablement. The stable bridge loads the verified central current controller before admission, then selects the project's effective follow/pinned version. A missing current, pending central activation or project drift cannot be treated as enabled. Install and activate a core explicitly before first enablement; never silently import source, clear a project lock or restart an old task to bypass rejection. Resource health and native file parsing do not prove that the host selected or executed a role/model; a task label such as `task_name` is not a native role selector. Check admission with:
+Use the physical plugin root's interpreter and allowlisted wrapper with the actual project directory:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py check
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
+  helper --project "<absolute-project>" lib/task_graph_cli.py validate --input "<absolute-task-file>"
 ```
 
-Only after success, create a new graph/single pack with the returned strict three-field binding. `init`
-itself also checks enabled through the bridge. Clones lacking machine records, disabled projects or resource
-conflicts cannot start automatically; automatic installation must not bypass failure. New tasks adopt the
-project version verified now; running tasks use only top-level `runtime_binding` from the current Task Pack.
-
-For every independent tool/shell call, take the three-field JSON unchanged from the current pack and pass
-it as explicit `--binding` to the project's thin entry. Replace the placeholder JSON below with actual
-current-pack values; do not assume a variable from a previous shell exists. The bridge executes only that
-pin's `lib/*.py` and freshly exports for this child process
-`AGENT_WORKFLOW_RUNTIME_BINDING`、`AGENT_WORKFLOW_STATE_DIR`、
-`AGENT_WORKFLOW_PROJECT_ROOT`, `AGENT_WORKFLOW_CONFIG_PATH` and
-`AGENT_WORKFLOW_CORE_ROOT`. The last three are computed from the trusted machine binding; packs/projects
-cannot self-declare an arbitrary core path.
-
-```bash
-bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py \
-  --binding '<complete three-field runtime_binding JSON from current Task Pack>' \
-  helper lib/task_graph_cli.py validate --input '<current graph or single-pack path>'
-bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py \
-  --binding '<complete three-field runtime_binding JSON from the same current Task Pack>' \
-  helper lib/documents/context_read.py .agent-workflow/product/WORKFLOW.md \
-  --task-pack '<current single-pack path>' --limit 6000
-```
-
-Use the same substitution for `ready`, `qa-ready`, export, update, standards checks, QA handoff and other
-helpers; ordinary business build/test commands retain the project's own environment. Obtain complete required
-managed text such as Skills/roles through that pin's `read` or a pager with `--task-pack`; do not assemble old/new
-text through a host Skill symlink whose version changed. Read project configuration from `.agent-workflow/project.yaml`,
-not `core/project.yaml` or a path derived from `core.parent`.
-
-Explicit `--binding` takes precedence over the environment at bridge invocation. After bridge selection,
-the helper's pack pin must match the exported environment pin. Existing valid tasks may continue reading
-old versions under this project's `used_bindings`; disabling prevents new tasks. Missing pins, cross-project
-roots and unknown/corrupt versions fail immediately, without latest-version fallback. This defines only the
-invocation contract; it does not prove host loading or Agent execution.
-
-### Source-pack development
-
-Source-pack development without a central marker/bridge context uses the Python entries below
-and the existing unpinned source contract. Resolve these examples against the actual source-pack root;
-central projects always use pinned-core bridge calls under the preceding section. Version 2.1 does not
-provide a compatibility execution or upgrade branch for old self-contained installations.
+Pass the previously selected project adapter to helpers that require it. Plugin tasks use the unpinned
+schema 2 contract. Use the same wrapper for ready, export, update and QA. Source developers may run the corresponding entry from the verified checkout.
 
 - Reuse the existing [record tools](runtime-records.md) for common snapshot updates, Task Pack
   export and selected fingerprint checks. Prefer existing project verification commands for behavior.
@@ -166,7 +88,7 @@ provide a compatibility execution or upgrade branch for old self-contained insta
   `next_offset` continuously with the same SHA until `eof`. Reserve host output budget for complete JSON;
   a character budget is not an exact token cap, so reduce page size when necessary. Each Agent still
   completes required reading independently; a fingerprint is not evidence of reading.
-- Use `bash .agent-workflow/lib/python_runtime.sh` for all workflow-owned Python, including
+- Use `bash "<plugin-root>/lib/python_runtime.sh"` for all workflow-owned Python, including
   temporary/inline helpers that generate DAG snapshots, Task Packs or fingerprints, not just bundled
   CLIs. For these workflow calls, pass `-X utf8` before the script path (or `-` for stdin), including
   bundled CLI output that may contain Chinese. Helpers specify `encoding="utf-8"` for text-file
@@ -184,7 +106,7 @@ provide a compatibility execution or upgrade branch for old self-contained insta
   interpreter is still unknown and needed for diagnosis, ask the same entry once:
 
   ```bash
-  bash .agent-workflow/lib/python_runtime.sh -X utf8 -c 'import sys; print(sys.executable)'
+  bash "<plugin-root>/lib/python_runtime.sh" -X utf8 -c 'import sys; print(sys.executable)'
   ```
 
   Respect an explicit `AGENT_WORKFLOW_PYTHON`; do not guess Homebrew paths or versioned executables,
@@ -206,7 +128,7 @@ These are command-execution boundaries within existing steps, not additional wor
 
 ### Continuous intake across explicit current records
 
-Apply `.agent-workflow/product/WORKFLOW.md#continuous-pm-intake` for relationship decisions and authority.
+Apply `product/WORKFLOW.md#continuous-pm-intake` for relationship decisions and authority.
 Use the verified plugin source-pack entry under `workflow-helper-execution` above. The logical calls
 below are source-pack examples; plugin execution uses its verified physical root and helper allowlist.
 3.0 rejects old runtime_binding, central project markers and bridge environments before any older-core
@@ -288,7 +210,7 @@ export, state and identity binding.
 
 The complete planning, graph and QA route below applies to Full. Shared standards selection and minimum
 sufficient verification also apply to Light. Implementation ownership, aliases/instances and lifecycle
-closure follow `.agent-workflow/product/WORKFLOW.md`'s `implementation-ownership` and `agent-instance-lifecycle`;
+closure follow `product/WORKFLOW.md`'s `implementation-ownership` and `agent-instance-lifecycle`;
 this reference creates no separate instance-state source.
 
 1. `project.yaml` is the fixed workflow-adapter read for paths, limits, and routing configuration.
@@ -324,7 +246,7 @@ this reference creates no separate instance-state source.
    Each production-code Writer's baseline is built-in xy-code-standards/references/rules.md. Production UI
    also selects applicable design rules from xy-ui-design/references/foundations-rules.md and
    components-rules.md; xy-uiux + design_ui selects only applicable design sources. Bind all three sources
-   through actual source-pack paths or installed .agent-workflow/ prefixes, then add applicable project-specific
+   through canonical paths relative to the verified plugin, then add applicable project-specific
    leaves. Bind the real SHA when the project index exists. With no project leaves and a missing index,
    create no empty index: retain configured index_path/root and null index_fingerprint. Each source covers
    owned_paths and applicable IDs through existing fields in the complete current worker/QA pack. Missing,
@@ -478,8 +400,8 @@ this reference creates no separate instance-state source.
 
     ```bash
     # 上游快照生成失败时不要进入本段；校验失败时 && 会阻止依赖查询继续执行。
-    bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py validate --input "${workflow_graph:?set the resolved task graph path}" &&
-      bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py ready --input "${workflow_graph}"
+    bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py validate --input "${workflow_graph:?set the resolved task graph path}" &&
+      bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py ready --input "${workflow_graph}"
     ```
 
     Query `qa-ready` separately at the existing request QA scheduling point. It does not replace

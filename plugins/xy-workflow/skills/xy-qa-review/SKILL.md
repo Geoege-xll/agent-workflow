@@ -21,26 +21,16 @@ resource/transport adapter; it grants no business approval, role ownership or QA
 这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
 
 Use that root's `product/WORKFLOW.md`, `roles/`, and
-`platforms/shared/skills/` as the unchanged workflow authority. The appended shared
-text retains historical `.agent-workflow/` examples. In plugin mode, resolve managed
-resource references under the plugin root using `plugins/source_pack.py resource`;
-select the actual adapter with `plugins/project_context.py inspect` through the
-same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply
-the new `.awf/project.yaml` candidate. Translate historical adapter examples to
-that selected actual path. The context entry creates no documents or business
+`platforms/shared/skills/` as the unchanged workflow authority. Resolve canonical package-relative paths using `plugins/source_pack.py resource`; select the actual project adapter with `plugins/project_context.py inspect` through the same helper wrapper. Reuse a verified existing `project.yaml`, or explicitly apply the new `.awf/project.yaml` candidate. The context entry creates no documents or business
 approvals; its `init --adapter <selected-path>` passes that exact adapter to the
 original initializer. Resolve project documents, task records and production code
 in the actual project. A packaged example is never the current project adapter.
 Use the packaged interpreter selector for each independent invocation:
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`.
-Pass `helper --project <absolute-project>` and the original helper path/arguments
-instead of the historical project bridge commands. The selector only locates an
+Pass `helper --project <absolute-project>` and the documented helper path/arguments. The selector only locates an
 existing Python 3.11+ and never installs software or changes the user's PATH.
 Read the current host's packaged `platforms/<host>/references/pm-integration.md`
-when host integration is required. Native plugin discovery replaces legacy setup,
-role refresh and central activation checks. Do not run `runtime install`,
-`runtime activate`, project registration, `setup_*.sh`, or create/edit project
-`AGENTS.md`, `CLAUDE.md` or `.agent-workflow` to make this plugin work.
+when host integration is required. The host discovers and manages the installed plugin. Project instruction or configuration files do not activate it.
 Codex's discovered plugin skill names are `xy-workflow:<skill-name>`; use the
 actual discovered name or the packaged physical path when invoking one. Public aliases are
 `xy-config`, `xy-grill-me`, `xy-grilling`, `xy-taste` and `xy-playwright`, governed by
@@ -70,14 +60,14 @@ handoff through the host's actual supported native dispatch interface. A role la
 alone proves no native role/model selection. If the host cannot supply required
 dispatch or independent context, report that limitation instead of claiming it ran.
 Do not select an unknown same-named global `xy-*` role as evidence that this package
-ran: it may contain an older workflow or central pin. Use a fresh native generic
+ran: its authority may come from another source. Use a fresh native generic
 entry with the complete current packaged role instructions and current task pack,
 or a native selector whose definition has actually been verified against this
-package. Never import an unknown global role's pin, history or instructions merely
+package. Never import an unknown global role's history or instructions merely
 because its name matches. If the host cannot provide this boundary, report the
 dispatch limitation to the PM.
 
-This alpha uses the existing unpinned source-pack task contract. It rejects central
+This plugin uses the existing unpinned source-pack task contract. It rejects central
 `runtime_binding` records and central project markers rather than migrating them.
 Do not update/replace the installed plugin during an active task. Retention of old
 plugin resources across updates and actual native model/effort execution remain
@@ -88,6 +78,11 @@ the corresponding behavior.
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-qa-review
+
+相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper`
+调用 `lib/documents/context_read.py` 分页时，从已验证的插件包读取，使用包内规范路径，例如
+`platforms/shared/skills/xy-qa-review/references/inputs.md`。跨 Skill 引用使用目标 Skill
+在 `platforms/shared/skills/` 下的规范路径。
 
 Use the latest complete PM-issued scope and acceptance. A saved plan helps recover an actual gap;
 it is not approval or completion evidence. Acknowledge scope replacements before returning a result,
@@ -142,7 +137,7 @@ qa_review_policy:
 
 Use the current host's native review when its exposed capability, fixed scope, effective read-only
 permissions and non-recursive execution are established; read only that host's existing
-`.agent-workflow/platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
+`platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
 or installed binary alone does not prove this reviewer can invoke it safely.
 
 Otherwise select at most one host-exposed installed Skill proven code-review capable, read-only,
@@ -182,10 +177,10 @@ Do not launch reader Agents, add a reader report/gate or require another busines
 <!-- workflow-contract: references/inputs.md -->
 <!-- workflow-contract: references/implementation-acceptance.md -->
 
-For production UI or design-standard work, also read [UI audit branches](references/ui-review.md),
-selecting only the current scoped route. Keep production UI/accessibility audit and current design
-authority. Required prototypes use frozen designer evidence, the exact in-page contract and
-deterministic fingerprint validation; waived surfaces do not read old prototypes.
+审查生产 UI 或设计规范时，读取 [UI 审查分支](references/ui-review.md)。生产 UI 逐项使用 QA 包
+中 `reviewed_ui_changes` 的生产 Writer 投影，并按实际运行端核对界面与无障碍证据。仅
+`prototype_policy: required` 触发原型静态身份复核、设计交接及页内契约审查；其余生产分支
+按本轮冻结依据核对生产行为，无须复读旧原型。
 
 <!-- workflow-contract: references/ui-review.md -->
 
@@ -220,7 +215,7 @@ List only Skills actually applied; unavailable required Skills block PASS. Sugge
 findings within PASS or blockers within FAIL, never a third outcome. Return FAIL to PM for rework.
 Before accepting PASS, PM validates the internal `review_method.scope_ref` and
 `standards_policy_coverage` using
-`bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
+`bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
 Only valid PASS lets Full enter `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`. Light performs its actually selected audit and closeout assessment.
 Keep raw records internal and stop after valid acceptance; ordinary closeout does not trigger another audit.
 
@@ -229,3 +224,7 @@ actual agent_ref and task_pack_sha256. Both validate/extract require current --t
 identities or old-pack PASS are rejected. The same Reviewer checks rework deltas under the current complete
 pack. Stop after valid PASS; close natively or retire after PM accepts evidence and the necessary feedback
 window ends. Retirement does not prove physical erasure or lock release.
+
+原生结构化交接在同一份回执的 `review_details` 提供 `findings` 和 `verification`，携带有证据的
+发现、返工角色、验证命令、退出码与完整日志引用。字段合同见[输入约定](references/inputs.md)。
+现有文本型交接继续适用。复用同一次回执校验，无须再发一次调用收集这些字段。
