@@ -29,20 +29,16 @@ skills:
 宿主读取如被截断，按缺失行范围续读，或复用包内已有分页 helper；完整连续覆盖
 当前任务所需权威范围后才执行。不重复读取已覆盖内容，不自行实现另一套分页器。
 
-历史 `.agent-workflow/` 资源引用改由本插件的 `plugins/source_pack.py resource`
-解析。每次独立调用都使用：
+包内资源使用相对插件根的规范路径，通过 `plugins/source_pack.py resource` 解析。每次独立调用都使用：
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`。
 原有辅助命令使用 `helper --project <absolute-project> <original-helper> <arguments>`；
 它只选已有 Python 3.11+，不安装软件、不改 PATH。项目文档、任务与业务代码仍属于
 真实项目；包内示例不是当前项目配置。
 
 通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
-`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`；历史配置路径随实际选择
-转换。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
+`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
 批准。需要宿主集成时读取 `platforms/antigravity/references/pm-integration.md`。
-插件原生发现取代旧安装、刷新与中央激活；不得运行 `runtime install`、
-`runtime activate`、项目注册、`setup_*.sh`，或创建/修改项目 `AGENTS.md`、
-`CLAUDE.md`、`.agent-workflow` 来使插件生效。
+插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
 
 公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
 发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
@@ -62,7 +58,7 @@ Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对
 通用原生入口，应以全新上下文交付当前完整角色正文与任务包；无法保证选择或隔离时
 向 PM 报告宿主限制，不得宣称已运行。
 
-当前 alpha 沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
+当前插件沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
 不自动迁移。活动任务期间不得更新/替换插件；跨更新资源保留与实际模型/effort
 执行仍需真实宿主证明。未获得对应证据时保留 `runtime_verified: false`。
 
@@ -88,6 +84,10 @@ reuse project/Writer evidence first, then load `xy-playwright` only for that Web
 preload it for every QA or treat its browser automation as another code-review method. New operations
 must fit current read-only permissions; return forbidden browser preparation, writes or business-state
 changes to PM rather than installing tools or widening permissions.
+Under the shared Skill-selection policy, consider `xy-mobile-ui` for affected native iOS, iPadOS,
+Android or WeChat Mini Program UI review surfaces. Apply relevant review guidance to authorized
+source, the applicable design authority and writer evidence through the existing read-only
+acceptance or audit branch. Review Mini Program behavior using evidence from its host runtime.
 
 ## 4. Critical Operating Rules
 
@@ -106,19 +106,19 @@ Use the latest complete PM scope; a plan is recovery context, not authority or r
 Full acceptance and Light acceptance with an actual independent-QA requirement use the current schema 2 pack, applicable approvals, scope, acceptance, `controlled_document_access`, current built-in common rules, the project index when present, applicable non-skip specific leaves, writer evidence, Skill policy, and review_method evidence.
 Read detailed intake and `standards_policy_coverage` through the Skill; hard-rule omissions block PASS.
 
-For production UI require `surface_kind: production_ui`, `qa_scope: request` and current resolved/fingerprinted structured
-`design_authority_refs`. Follow the scoped `prototype_policy` and `prototype_decision`; a
-`waived_by_user` replacement uses current user authority, never forces old prototype synchronization.
+生产 UI 的 `surface_kind: production_ui`、`ui_change` 和门禁来自当前 QA 包的生产 Writer 投影
+`reviewed_ui_changes`。QA 保持只读，任务本身可为 `surface_kind: non_ui`；生产 UI 审查须覆盖
+`ui` 与 `accessibility`。Full 按包要求使用 `qa_scope: request`；Light 生产 Writer 可省略该字段，
+仍按当前单任务包核对投影、实际范围和适用的冻结依据。
 
 ## 6. Execution Workflow
 
-Verify method findings against current source, independently cover applicable standards and request
-acceptance, and audit the exact in-page contract for production UI through the Skill's UI branch.
-Deterministic checks read the dependency closure and recompute approved page dependency fingerprints;
-QA must not preload or manually read the complete prototype dependency tree.
-QA MUST NOT invoke Computer Use or browser automation against the prototype. Missing or stale evidence
-must return FAIL to the PM for `xy-uiux` rework. UI-Conformance preserves zero design delta;
-all production routes retain ui/accessibility QA.
+Verify method findings against current source and independently cover applicable standards and request
+acceptance. 按 Skill 的 UI 分支与 Writer 的原型政策取证。仅 `prototype_policy: required` 审查设计
+交接、精确页内契约及批准页面的依赖指纹，缺失或失效的原型证据返回 FAIL，由 PM 交给 `xy-uiux`。
+QA 禁止对原型使用 Computer Use 或浏览器自动化，也不预读完整依赖树。UI-Conformance 按零设计
+变更和本轮冻结依据核对，`waived_by_user` 使用当前用户决定与适用依据；均不恢复旧原型门禁。
+各生产分支都在实际运行端核对功能和无障碍，优先复用 Writer 的有效运行证据。
 
 For desktop, audit the desktop renderer, affected core trust boundaries, IPC/capabilities, native integration,
 packaging, signing, notarization, updater and release evidence using the implementation-check reference.

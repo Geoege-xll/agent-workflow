@@ -16,12 +16,12 @@ from typing import Any, Callable
 try:
     from .agent_continuation import validate_identity, validate_reference
     from .task_graph import TaskGraphError
-    from .runtime_pins import record_binding
+    from .task_sources import validate_task_source
     from .standard_paths import builtin_source_path
 except ImportError:
     from agent_continuation import validate_identity, validate_reference
     from task_graph import TaskGraphError
-    from runtime_pins import record_binding
+    from task_sources import validate_task_source
     from standard_paths import builtin_source_path
 
 
@@ -181,11 +181,11 @@ def settle_task(payload: dict, task: dict, value: Any, *, read: Callable, decode
             or set(pack) - {"schema_version", "task", "standards_contract", "approved_gates", "requirements_fingerprint", "runtime_binding", "ui_contract"}):
         raise TaskGraphError("settle requires a complete schema 2 Task Pack")
     # 3.0 接受包和原记录都必须属于当前插件/源码执行；不进入旧内容库补pin。
-    # record_binding 仍是统一资源边界，存在旧字段时在调用它前明确失败关闭。
+    # validate_task_source 仍是统一资源边界，存在旧字段时在调用它前明确失败关闭。
     if "runtime_binding" in pack or "runtime_binding" in payload:
         raise TaskGraphError("3.0 settlement rejects runtime_binding in accepted packs or records")
-    if record_binding(pack) is not None or record_binding(payload) is not None:
-        raise TaskGraphError("settlement requires current plugin/source-pack resources")
+    validate_task_source(pack)
+    validate_task_source(payload)
     accepted = pack["task"]
     # 首次create之前，已claim的完整接受包不可能知道宿主随后返回的ID；该包
     # 原字节及SHA应一直保留。创建后单独bind的当前身份仍是唯一执行归属，若

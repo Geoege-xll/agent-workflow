@@ -19,6 +19,10 @@ and dimensions; business and mental models also remain project-specific.
   baseline, color and scale token sources, reusable components, and allowed variants. If a baseline
   is missing, propose only the candidate values needed by this task and adopt them through the existing
   confirmation process; template defaults and search results are not approved project facts.
+- Web、桌面、原生 App 和小程序按受影响的运行端核对跨页面一致性。先找到项目已批准的规则，再追到实际使用的
+  语义设计变量（token）与组件变体。有同类消费者时，选至少一个相关页面进行对照，比较同一语义的组件来源、
+  变量映射和适用状态。以 [组件规则](components-rules.md) 判断差异，已有页面的用法可提供实现证据，采用频率
+  不能作为批准依据。
 - Organize content and action priorities first: make the main task discoverable, critical information
   scannable, and secondary explanations expandable as needed. Refine the structure with representative
   copy and data lengths close to actual tasks, rather than filling content gaps with repeated
@@ -55,6 +59,13 @@ and dimensions; business and mental models also remain project-specific.
   actions provide clear feedback and an understandable next step; failure, cancellation, and
   incompletion must not appear successful. Update demonstrable interactions together with the in-page
   contract; drawing controls that merely look operable is insufficient.
+- 按当前需求走查关键流程遇到中断之后如何继续。按实际入口核对返回、取消、失败恢复、重试与完成反馈，
+  让用户知道发生了什么、保留了哪些进度、下一步可做什么。依据已批准的产品语义决定返回时恢复的输入、
+  筛选、滚动位置或当前步骤，以及取消或完成时清理的临时状态。结合实际失败原因提供可执行的下一步，
+  例如就地修正校验错误，或在提交结果未明时先查结果。反馈的内容和形式跟随当前任务及运行端。
+- 已有原型时，把走查结果填入原五段契约。沿用 `purpose` 记录主任务及运行端，`navigation` 记录返回目标
+  与恢复的上下文，`interactions` 记录取消、重试和完成后的操作，`states` 记录失败、恢复、取消、完成等
+  适用状态的可见结果，`exceptions` 记录有依据的平台差异与必要的模拟限制。只覆盖当前需求和已有原型范围。
 - Clarify navigation destinations, back behavior, dialog exits and focus, form validation, and
   segmented-selection/panel-switching semantics. Handle touch, keyboard, accessible names, visible
   focus, foreground/background contrast, and states that do not rely solely on color for the target
@@ -117,8 +128,8 @@ continues through the original route.
 
 ## Reference Sources and Processes Not Adopted
 
-This independently authored guidance is provided in English; it does not copy external Skill bodies
-or databases. Sources support checks as needed; network access is not required for every task.
+This independently authored guidance does not copy external Skill bodies or databases.
+Sources support checks as needed; network access is not required for every task.
 
 - Anthropic [frontend-design](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md),
   with the directory's [Apache-2.0 license](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/LICENSE.txt).
@@ -129,6 +140,10 @@ or databases. Sources support checks as needed; network access is not required f
   directory. Use the no-hooks adapter and fully read the original under xy-ui-design's contract;
   do not register Stop hooks or execute its screenshot/gate pipeline during default prototype work.
   Its marketing patterns are conditional advice, not a required layout for compact product consoles.
+- 跨页面一致性参考 wg-skills 的取证方法，用项目基线解释同语义组件之间的差异。固定提交附 Apache-2.0 许可。
+  [frontend-style-harmonizer](https://github.com/jiushiwon/wg-skills/blob/ff6680f4a722a057e00c54a2abde6d574f582bd7/frontend/frontend-style-harmonizer-skill/SKILL.md) · [许可证](https://github.com/jiushiwon/wg-skills/blob/ff6680f4a722a057e00c54a2abde6d574f582bd7/LICENSE)
+- 流程反馈参考 mobile-app-ui-design 按任务阶段给出状态和后续动作的思路。固定提交的 README 标注 MIT，
+  该提交缺少独立许可文件，仅参考理念。[Smart Patterns](https://github.com/ceorkm/mobile-app-ui-design/blob/0ad61f025fc647417d4b8fb0ca786cb493c5156a/SKILL.md#smart-patterns-to-apply)
 
 If substantive source code or text is copied in the future, first preserve the required notices and
 license materials under the applicable license; these references grant no additional rights to use

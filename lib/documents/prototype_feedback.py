@@ -232,7 +232,8 @@ def _validate_feedback_v4(root, adapter, envelope, *, data_dir=None):
     pages = [page["path"] for page in context["pages"]]
     check_feedback(envelope, pages)
     current, metadata, files, navigation = capture_review(root, adapter, context["plan_source"],
-            context["request_id"], pages, tool=context["tool"], format_version=4)
+            context["request_id"], pages, tool=context["tool"], format_version=4,
+            context_version=context["schema_version"], registered_context=context)
     review.validate_bundle(context, data_dir=data_dir, source_files=files, navigation=navigation, format_version=4)
     if current != context:
         raise FeedbackError("反馈绑定已过期或来源不匹配；请保留原意见并重新准备评审")

@@ -67,13 +67,13 @@ asking for the same choice again. Draft only the current affected work; preserve
       "required_design_rule_ids": ["<applicable-design-rule-id>"],
       "leaves": [
         {
-          "path": ".agent-workflow/platforms/shared/skills/xy-code-standards/references/rules.md",
+          "path": "platforms/shared/skills/xy-code-standards/references/rules.md",
           "domain": "engineering",
           "content_fingerprint": "<leaf-sha256>",
           "rule_ids": ["<applicable-engineering-rule-id>"]
         },
         {
-          "path": ".agent-workflow/platforms/shared/skills/xy-ui-design/references/foundations-rules.md",
+          "path": "platforms/shared/skills/xy-ui-design/references/foundations-rules.md",
           "domain": "design",
           "content_fingerprint": "<leaf-sha256>",
           "rule_ids": ["<applicable-design-rule-id>"]
@@ -122,7 +122,7 @@ asking for the same choice again. Draft only the current affected work; preserve
               "rule_ids": []
             },
             {
-              "path": ".agent-workflow/platforms/shared/skills/xy-code-standards/references/rules.md",
+              "path": "platforms/shared/skills/xy-code-standards/references/rules.md",
               "mode": "targeted",
               "reason": "<why these engineering rules apply>",
               "sections_or_queries": ["<relevant-heading-or-rule-id>"],
@@ -131,7 +131,7 @@ asking for the same choice again. Draft only the current affected work; preserve
               "rule_ids": ["<applicable-engineering-rule-id>"]
             },
             {
-              "path": ".agent-workflow/platforms/shared/skills/xy-ui-design/references/foundations-rules.md",
+              "path": "platforms/shared/skills/xy-ui-design/references/foundations-rules.md",
               "mode": "targeted",
               "reason": "<why these design rules apply>",
               "sections_or_queries": ["<relevant-heading-or-rule-id>"],
@@ -168,10 +168,9 @@ asking for the same choice again. Draft only the current affected work; preserve
 }
 ```
 
-The example shows an installed project with an existing index. If the index is physically absent and no
+The example shows a project with an existing index. If the index is physically absent and no
 project rule leaves exist, retain configured index_path/root, set index_fingerprint to null and omit the
-index-read entry. Built-in sources use the three exact managed paths (without .agent-workflow/ in source-pack
-mode). Add components-rules.md for actual component rules and specific leaves for actual project differences;
+index-read entry. Built-in sources use the three exact canonical paths relative to the verified plugin. Add components-rules.md for actual component rules and specific leaves for actual project differences;
 do not treat this example as a complete default rule list.
 This example is a `production_ui` task. Use `surface_kind: design_ui` for `xy-uiux`; use
 `surface_kind: non_ui` and omit `ui_change` for non-UI work. Every dependency must have the matching

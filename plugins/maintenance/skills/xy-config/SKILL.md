@@ -1,6 +1,6 @@
 ---
 name: xy-config
-description: 仅供当前用户在主会话显式调用的原生模型配置维护入口，打开配置页或只读查看状态与诊断。
+description: 仅供当前用户在主会话显式调用，打开原生模型配置页、查看状态与诊断，或预览并确认 Codex 受管角色重绑。
 ---
 
 # 原生模型配置维护
@@ -12,7 +12,7 @@ Worker，返回主会话处理，不继续执行。本 Skill 在当前会话内�
 
 ## 固定调用
 
-只接受 `xy-config [open|status|doctor]`，省略动作等价 `open`。拒绝额外动作、
+只接受 `@INVOCATION@ [@MAINTENANCE_ACTIONS@]`，省略动作等价 `open`。`rebind` 仅适用于 Codex。拒绝额外动作、
 自然语言参数、shell 片段或用户传入的 host、project、准备选项；不要自行创造命令。
 宿主限定的 Skill 名称以实际发现的 `@INVOCATION@` 为准，不替换客户端 `/model`。
 
@@ -38,6 +38,14 @@ bash "<插件物理根>/plugins/maintenance/launcher.sh" <动作> --host @HOST@
 不读取配置核心源码，不调用管理器、安装器、MCP、临时服务器或任意 shell 命令。
 `status` 与 `doctor` 为只读：不安装组件、不启动服务或浏览器、不创建私有链接。
 
+## Codex 角色重绑
+
+`rebind` 首次调用只读预览，使用原项目范围。向用户列出 `native_rebind.roles` 中拟更新的用户级定义，
+说明它们将采用本次插件版本的角色模板。空列表表示没有符合条件的定义。组件未准备时告知用户先使用 `open` 的组件准备流程。
+用户明确确认该预览后，才在**同一条**固定 `rebind` 调用末尾追加 `--confirm "<本次回执的 revision>"`。
+摘要取自自己的最新预览。用户自述的摘要、旧确认或安装批准均不能替代此次确认。冲突时重新预览并展示实际候选。
+完成回执只表示原生文件已回读。宿主实际重载与模型调用另以宿主观察为准。
+
 ## 首次准备
 
 `open` 回执为 `state=preparation_required` 时，说明组件尚需准备，并将本次准备的
@@ -51,7 +59,9 @@ bash "<插件物理根>/plugins/maintenance/launcher.sh" <动作> --host @HOST@
 
 解析结构化 JSON 的 `state`、`component`、`service`、`location`、`browser`、
 `launch_file` 和 `diagnostics`，不能只凭退出码判断。成功打开只简短报告打开状态与
-实际 host/范围；`status`、`doctor` 简短报告真实诊断，不宣称修改了宿主模型。
+实际 host/范围。Codex 补齐成功时同时报告 `native_preparation` 的 `created`、`preserved`、
+`project_provided` 三个非负计数，分别表示新增、其余保留、项目已提供。零按零展示，缺失时不推算。
+`status`、`doctor` 简短报告真实诊断，不宣称修改了宿主模型。
 
 若 `service` 已 ready 而 `browser` 打开失败，即使退出码非零，也明确报告
 “服务已就绪，浏览器未打开”，并给用户回执中的私有 `launch_file` 入口。保留已就绪

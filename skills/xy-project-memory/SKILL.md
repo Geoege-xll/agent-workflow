@@ -13,20 +13,16 @@ description: Use when project work needs bounded cross-session recall, current c
 宿主读取如被截断，按缺失行范围续读，或复用包内已有分页 helper；完整连续覆盖
 当前任务所需权威范围后才执行。不重复读取已覆盖内容，不自行实现另一套分页器。
 
-历史 `.agent-workflow/` 资源引用改由本插件的 `plugins/source_pack.py resource`
-解析。每次独立调用都使用：
+包内资源使用相对插件根的规范路径，通过 `plugins/source_pack.py resource` 解析。每次独立调用都使用：
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`。
 原有辅助命令使用 `helper --project <absolute-project> <original-helper> <arguments>`；
 它只选已有 Python 3.11+，不安装软件、不改 PATH。项目文档、任务与业务代码仍属于
 真实项目；包内示例不是当前项目配置。
 
 通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
-`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`；历史配置路径随实际选择
-转换。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
+`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
 批准。需要宿主集成时读取 `platforms/antigravity/references/pm-integration.md`。
-插件原生发现取代旧安装、刷新与中央激活；不得运行 `runtime install`、
-`runtime activate`、项目注册、`setup_*.sh`，或创建/修改项目 `AGENTS.md`、
-`CLAUDE.md`、`.agent-workflow` 来使插件生效。
+插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
 
 公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
 发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
@@ -46,7 +42,7 @@ Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对
 通用原生入口，应以全新上下文交付当前完整角色正文与任务包；无法保证选择或隔离时
 向 PM 报告宿主限制，不得宣称已运行。
 
-当前 alpha 沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
+当前插件沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
 不自动迁移。活动任务期间不得更新/替换插件；跨更新资源保留与实际模型/effort
 执行仍需真实宿主证明。未获得对应证据时保留 `runtime_verified: false`。
 
@@ -158,7 +154,7 @@ evidence, close or retire instances under WORKFLOW's lifecycle. An unavailable h
 not cause loss of the only log.
 
 Design-standard adoption is distinct from PROJECT/plans baseline projection. Apply the lifecycle in
-`.agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant;
+`platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant;
 do not defer needed design authority until after production QA, treat a feature-document no-op as
 a standards no-op, or save agentmemory automatically because a standard changed. Record production
 migration facts only for verified scope; do not duplicate the standard or page contract in memory.
@@ -168,7 +164,7 @@ Light performs only projection/memory actually assessed as necessary, without de
 - PROJECT and a topic source's accepted-behavior section describe only the baseline after applicable acceptance.
   Keep the current goal/execution stage in that source's requirement/recovery sections; completed, cancellation
   or tab state does not establish delivery. For recovery/updates, see
-  `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`。
+  `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`。
 - PM is the sole writer of `docs.project` and `docs.plans`. Implementers/QA return bounded results and evidence only.
 - Replace the topic's accepted version, delivered behavior and necessary evidence only after integrated QA PASS
   for Full, or accepted minimum verification and actually necessary independent audit for Light. Without factual
@@ -179,7 +175,7 @@ Light performs only projection/memory actually assessed as necessary, without de
 - Mark accepted deletion as removed in the same topic source, retaining reason/date/replacement and necessary
   history while removing its current PROJECT link. Add no feature/ADR document or renamed removed copy;
   QA failure preserves the existing baseline.
-- After projection, run `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`, requiring exit 0.
+- After projection, run `bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/validate_project_docs.py <selected-project-adapter> .`, requiring exit 0.
   Validate stable topics, the current index and explicit baselines; labels do not prove real approval.
 - Return control to the main-session PM for its scoped commit assessment. Do not stage, commit,
   push, merge, tag, or release from this memory Skill. Resume only after the PM records whether a

@@ -13,20 +13,16 @@ description: "When writing, refactoring or reviewing code read-only, combine bui
 宿主读取如被截断，按缺失行范围续读，或复用包内已有分页 helper；完整连续覆盖
 当前任务所需权威范围后才执行。不重复读取已覆盖内容，不自行实现另一套分页器。
 
-历史 `.agent-workflow/` 资源引用改由本插件的 `plugins/source_pack.py resource`
-解析。每次独立调用都使用：
+包内资源使用相对插件根的规范路径，通过 `plugins/source_pack.py resource` 解析。每次独立调用都使用：
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`。
 原有辅助命令使用 `helper --project <absolute-project> <original-helper> <arguments>`；
 它只选已有 Python 3.11+，不安装软件、不改 PATH。项目文档、任务与业务代码仍属于
 真实项目；包内示例不是当前项目配置。
 
 通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
-`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`；历史配置路径随实际选择
-转换。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
+`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
 批准。需要宿主集成时读取 `platforms/antigravity/references/pm-integration.md`。
-插件原生发现取代旧安装、刷新与中央激活；不得运行 `runtime install`、
-`runtime activate`、项目注册、`setup_*.sh`，或创建/修改项目 `AGENTS.md`、
-`CLAUDE.md`、`.agent-workflow` 来使插件生效。
+插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
 
 公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
 发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
@@ -46,7 +42,7 @@ Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对
 通用原生入口，应以全新上下文交付当前完整角色正文与任务包；无法保证选择或隔离时
 向 PM 报告宿主限制，不得宣称已运行。
 
-当前 alpha 沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
+当前插件沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
 不自动迁移。活动任务期间不得更新/替换插件；跨更新资源保留与实际模型/effort
 执行仍需真实宿主证明。未获得对应证据时保留 `runtime_verified: false`。
 
@@ -88,6 +84,11 @@ the applicable `xy-build-verify` branch.
 
 ## Read by actual boundary
 
+下方相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper` 调用 `context_read.py` 分页时，从已验证的插件包读取，使用以 `platforms/shared/skills/xy-code-standards/references/` 开头的路径，例如 `platforms/shared/skills/xy-code-standards/references/architecture.md`。
+
+- 需要判断职责拆分、依赖方向、公开封装或兼容迁移时，按当前问题阅读[架构设计与增量演进](references/architecture.md)。
+- 需要判断是否采用某种设计模式时，按当前问题选读[设计模式案例](references/design-patterns.md)。
+- 需要在实际语言、框架和支持版本内选择惯用做法时，按任务选读 [Swift](references/swift.md)、[Kotlin](references/kotlin.md)、[Python](references/python.md) 或 [Go](references/go.md)。
 - When a change/review involves external input, mutable state, resource lifecycles or durable publication,
   read only relevant parts of [boundary reasoning](references/boundary-reasoning.md); do not load every
   specialist topic for an ordinary local change.

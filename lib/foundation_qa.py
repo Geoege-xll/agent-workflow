@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,9 @@ if not __package__:
 from lib.task_graph import TaskGraphError
 
 SHA_FIELDS = {"task_pack", "handoff"}
+REQUEST_RECEIPT_FIELDS = SHA_FIELDS | {"agent_ref", "scope_fingerprint"}
+FROZEN_SCOPE_FIELDS = {"qa_scope_ref", "qa_scope_fingerprint"}
+ISOLATED_RECEIPT_FIELDS = REQUEST_RECEIPT_FIELDS | {"writer_contract_fingerprint"}
 
 
 def closure(payload: dict, task_id: str) -> set[str]:
@@ -38,10 +42,31 @@ def validate_contract(payload: dict, *, handoff: bool = False) -> None:
     indexed = {task["id"]: task for task in payload["tasks"]}
     for qa in indexed.values():
         if "request_receipt" in qa:
-            if "foundation_task_id" not in qa or not isinstance(qa["request_receipt"], dict) or set(qa["request_receipt"]) != SHA_FIELDS:
-                raise TaskGraphError("request_receipt belongs only to Foundation request acceptance")
-            for value in qa["request_receipt"].values():
-                _reference(value)
+            receipt = qa["request_receipt"]
+            expected = SHA_FIELDS if "foundation_task_id" in qa else REQUEST_RECEIPT_FIELDS
+            accepted_shapes = (expected,) if expected == SHA_FIELDS else (expected, ISOLATED_RECEIPT_FIELDS)
+            if (qa.get("task_type") != "qa" or qa.get("workflow_level") != "Full"
+                    or not isinstance(receipt, dict) or set(receipt) not in accepted_shapes):
+                raise TaskGraphError("request_receipt requires the corresponding Full QA acceptance contract")
+            for field in SHA_FIELDS:
+                _reference(receipt[field])
+            if expected == REQUEST_RECEIPT_FIELDS and (
+                    not _sha(receipt["scope_fingerprint"]) or not qa.get("agent_ref")
+                    or receipt["agent_ref"] != qa["agent_ref"]):
+                raise TaskGraphError("request_receipt requires the reviewed scope and original Reviewer")
+            if "writer_contract_fingerprint" in receipt and not _sha(receipt["writer_contract_fingerprint"]):
+                raise TaskGraphError("isolated request receipt requires a Writer contract SHA256")
+        if FROZEN_SCOPE_FIELDS & qa.keys():
+            integrations = payload.get("worktree_integrations", {})
+            if (not is_ordinary_reviewer(qa) or "qa_scope_ref" not in qa
+                    or isinstance(integrations, dict) and qa["request_id"] in integrations):
+                raise TaskGraphError("qa_scope_ref belongs only to non-isolated ordinary Full QA")
+            _frozen_scope_paths(qa["qa_scope_ref"])
+            if "qa_scope_fingerprint" in qa and not _sha(qa["qa_scope_fingerprint"]):
+                raise TaskGraphError("qa_scope_fingerprint must be a SHA256 of the frozen Writer inputs")
+        if "qa_review_revision" in qa and (not is_ordinary_reviewer(qa)
+                or type(qa["qa_review_revision"]) is not int or qa["qa_review_revision"] < 1):
+            raise TaskGraphError("qa_review_revision belongs only to ordinary Full QA and must be positive")
         if "foundation_receipt" in qa and "foundation_task_id" not in qa:
             raise TaskGraphError("foundation_receipt requires foundation_task_id")
         if "foundation_task_id" not in qa:
@@ -97,6 +122,166 @@ def _reference(value: Any) -> None:
         raise TaskGraphError("QA evidence requires a normalized absolute path and byte SHA256")
 
 
+def is_ordinary_reviewer(task: dict) -> bool:
+    return task.get("task_type") == "qa" and task.get("workflow_level") == "Full" and "foundation_task_id" not in task
+
+
+def request_writers(payload: dict, qa: dict) -> list[dict]:
+    from lib.task_graph import request_closure
+    from lib.task_graph_cli import _tasks
+    ids = request_closure(_tasks(payload), qa["request_id"])
+    return sorted((task for task in payload["tasks"] if task["id"] in ids and task["task_type"] == "writer"),
+                  key=lambda task: task["id"])
+
+
+def request_inputs(payload: dict, qa: dict, writers: list[dict]) -> dict:
+    """只保留已审 Writer 的输入、输出、构建状态及实际采用的读取约定。"""
+    from lib.task_graph_records import _document_contract
+    contracts = []
+    for task in writers:
+        # 下游反向边、锁、宿主身份及交接建议只调度或记账。其他请求借用本 Writer
+        # 时可新增 blocks；这不代表本次审查的代码、证据或合同发生改变。
+        omitted = {"blocks", "semantic_locks", "agent_ref", "agent_retired", "handoff_assessment", "controlled_document_access"}
+        contract = {key: value for key, value in task.items() if key not in omitted}
+        access = _document_contract(task)
+        if access is not None:
+            access["documents"] = [doc for doc in access["documents"] if doc["mode"] != "skip"]
+        contract["controlled_document_access"] = access
+        contracts.append(contract)
+    reviewer = {key: value for key, value in qa.items() if key not in {
+        "state", "agent_ref", "agent_retired", "blocks", "semantic_locks", "handoff_assessment",
+        "request_receipt", "qa_review_revision", "qa_scope_fingerprint"}}
+    return {"writers": contracts, "reviewer": reviewer,
+            "integration": payload.get("worktree_integrations", {}).get(qa["request_id"])}
+
+
+def request_fingerprints(payload: dict, qa: dict, writers: list[dict], pack: dict, *,
+                         root: Path | None = None, require_current: bool = False) -> tuple[str, str]:
+    """绑定图中可归因的证据、实际文件与权威，只在正式接收时要求全部权威仍有效。"""
+    from lib import task_graph_records as records
+    from lib.standard_paths import builtin_source_path
+    from lib.task_sources import PLUGIN_ENV, project_root
+
+    selected_root = project_root(root)
+    projection = request_inputs(payload, qa, writers)
+    integration = projection["integration"]
+    # 隔离请求审查实际集成候选；跨请求已交付的 Writer 可能已清理旧目录，其
+    # 当前内容应从本候选（普通请求为项目根）读取。旧修订仍保存在 Writer 合同里。
+    candidate_root = selected_root
+    changed_paths = _frozen_scope_paths(qa["qa_scope_ref"]) if "qa_scope_ref" in qa else ()
+    if integration:
+        from lib.delivery.worktree_cli import clean, head, linked, scope
+        candidate_root = linked(selected_root, integration["root"])
+        if require_current:
+            clean(candidate_root)
+        projection["candidate_head"] = head(candidate_root)
+        if require_current and projection["candidate_head"] != integration["head_revision"]:
+            raise TaskGraphError("integration HEAD changed after verification")
+        if integration["head_revision"]:
+            changed_paths = scope(selected_root, integration["target_base"], integration["head_revision"])["changed_paths"]
+    # owned_paths 是保护及授权边界，经常包含整目录。仅对冻结范围列出的文件取样，
+    # 不读同目录的缓存、被忽略文件或与本候选无关的其他写入。
+    content = {relative: _scoped_content(candidate_root, relative) for relative in changed_paths}
+    contract = pack["standards_contract"]
+    authorities = {contract["index_path"]: {contract["index_fingerprint"]}}
+    documents = [doc for task in [qa, *writers]
+                 for doc in task.get("controlled_document_access", {}).get("documents", []) if doc["mode"] != "skip"]
+    design_refs = [ref for task in writers for ref in task.get("ui_change", {}).get("design_authority_refs", [])]
+    for source in [*contract["leaves"], *documents, *(ref for ref in design_refs if ref["kind"] != "prototype_contract")]:
+        authorities.setdefault(source["path"], set()).add(source["content_fingerprint"])
+    actual_authorities = {}
+    for relative, expected in sorted(authorities.items()):
+        try:
+            builtin = builtin_source_path(relative)
+            # 源码入口由当前核心提供内置规则；官方插件则仍走原有受控资源解析。
+            if builtin is not None and PLUGIN_ENV not in os.environ:
+                actual = records.document_digest(Path(__file__).resolve().parents[1], builtin)
+            else:
+                actual = records.document_digest(candidate_root, relative)
+        except FileNotFoundError:
+            actual = None
+        if require_current and expected != {actual}:
+            raise TaskGraphError(f"request QA authority is stale: {relative}")
+        actual_authorities[relative] = actual
+    projection["prototype_authority"] = _prototype_authority(candidate_root, writers, pack, require_current)
+    # 宿主状态、退役及反向边独立于已审事实。Revision 则让一次明确返工即使
+    # 恰好产出完全相同的文件和证据也必须重新交接，不能接收上一轮旧包。
+    projection.update(content=content, authorities=actual_authorities,
+                      standards=contract, requirements=pack.get("requirements_fingerprint"),
+                      approved_gates=pack["approved_gates"], ui_contract=pack.get("ui_contract"))
+    # Scope证书不使用Reviewer轮次。只因Reviewer中止而续审时，同一实际候选范围
+    # 仍可信；任务包摘要另含轮次，保证之前已发出的包不能重放。
+    scope_fingerprint = _json_digest(projection)
+    projection["revision"] = qa.get("qa_review_revision", 0)
+    return _json_digest(projection), scope_fingerprint
+
+
+def _json_digest(value: dict) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _frozen_scope_paths(scope_ref: Any) -> tuple[str, ...]:
+    # 冻结图和 Reviewer 回执使用相同仓库/路径合同；只有图内 PM 冻结入口能写权威。
+    from lib.delivery.qa_handoff_cli import _validate_scope
+    if not isinstance(scope_ref, dict) or set(scope_ref) != {"repositories"}:
+        raise TaskGraphError("qa_scope_ref requires only its repositories array")
+    return _validate_scope({"scope_ref": scope_ref})
+
+
+def verify_frozen_scope(qa: dict, writers: list[dict], scope_fingerprint: str, *, freezing: bool) -> None:
+    from lib.task_graph_cli import _is_within
+    scope_ref = qa.get("qa_scope_ref")
+    if scope_ref is None or (not freezing and "qa_scope_fingerprint" not in qa):
+        raise TaskGraphError("ordinary request QA requires a PM-frozen qa_scope_ref")
+    if not freezing and qa["qa_scope_fingerprint"] != scope_fingerprint:
+        raise TaskGraphError("PM-frozen QA scope is stale; freeze the current Writer scope before review")
+    owned = [relative for task in writers for relative in task["owned_paths"]]
+    if any(not any(_is_within(path, boundary) for boundary in owned) for path in _frozen_scope_paths(scope_ref)):
+        raise TaskGraphError("frozen QA changed path is outside the reviewed Writer closure")
+
+
+def _prototype_authority(root: Path, writers: list[dict], pack: dict, require_current: bool) -> dict:
+    """复用具体原型页闭包的公开指纹，采用页及其实际依赖，不把 HTML 原字节当批准指纹。"""
+    from lib.documents.validate_prototype_workspace import capture_selected_pages
+    selected = {}
+    for writer in writers:
+        for reference in writer.get("ui_change", {}).get("design_authority_refs", []):
+            if reference["kind"] != "prototype_contract":
+                continue
+            relative = Path(reference["path"])
+            prototype, = pack["ui_contract"]["prototype_paths"]
+            if relative.parent.as_posix() != prototype:
+                raise TaskGraphError("request QA prototype authority must be a concrete page in the approved root")
+            adapter = writer["controlled_document_access"]["adapter"]
+            selected.setdefault((prototype, adapter), {}).setdefault(relative.name, set()).add(reference["content_fingerprint"])
+    actual = {}
+    for (prototype, adapter), expected in selected.items():
+        available = [page for page in expected if (root / prototype / page).exists()]
+        capture = capture_selected_pages(root, prototype, pages=available, adapter=adapter)["pages"] if available else []
+        fingerprints = {Path(page["path"]).name: page["dependency_fingerprint"] for page in capture}
+        for page, values in expected.items():
+            fingerprint = fingerprints.get(page)
+            if require_current and values != {fingerprint}:
+                raise TaskGraphError(f"request QA prototype dependency fingerprint is stale: {page}")
+            actual[f"{prototype}/{page}"] = fingerprint
+    return actual
+
+
+def _scoped_content(root: Path, relative: str) -> list | None:
+    """读取明确的文件或删除标识，拒绝链接和特殊文件，不把目录展开成额外范围。"""
+    from lib.task_graph_records import file_digest
+    target = root / relative
+    if root.is_symlink() or any(parent.is_symlink() for parent in target.parents if parent.is_relative_to(root)):
+        raise TaskGraphError("request QA content root and parents must be physical directories")
+    if target.is_symlink():
+        raise TaskGraphError("request QA content must not use symlinks")
+    # Git 的文件→目录替换包含删除及新增记录；新增子文件会各自出现在精确范围。
+    if target.is_dir() or not target.exists():
+        return None
+    # 文件摘要流式支持二进制和大文件。可执行位也影响候选行为，需独立保留。
+    return [file_digest(root, relative), target.lstat().st_mode & 0o111]
+
+
 def fingerprint(payload: dict, qa: dict, *, root: Path | None = None) -> str:
     """冻结闭包自身合同、构建、内容与采用权威，不绑定整图或集成全局 HEAD。
 
@@ -105,7 +290,7 @@ def fingerprint(payload: dict, qa: dict, *, root: Path | None = None) -> str:
     已通过的基础设施；Foundation 返工、证据、采用规范和批准变化会改变摘要。
     """
     from lib import task_graph_records as records
-    from lib.runtime_pins import project_root
+    from lib.task_sources import project_root
     selected_root = project_root(root)
     ids = closure(payload, qa["foundation_task_id"])
     tasks = [task for task in payload["tasks"] if task["id"] in ids]
@@ -143,12 +328,12 @@ def fingerprint(payload: dict, qa: dict, *, root: Path | None = None) -> str:
         for doc in task.get("controlled_document_access", {}).get("documents", []):
             if doc.get("mode") == "skip":
                 continue
-            actual = records.document_digest(selected_root, doc["path"], binding=payload.get("runtime_binding"))
+            actual = records.document_digest(selected_root, doc["path"])
             if actual != doc["content_fingerprint"]:
                 raise TaskGraphError("Foundation controlled document fingerprint is stale: " + doc["path"])
             sources[doc["path"]] = actual
         for ref in task.get("ui_change", {}).get("design_authority_refs", []):
-            actual = records.document_digest(selected_root, ref["path"], binding=payload.get("runtime_binding"))
+            actual = records.document_digest(selected_root, ref["path"])
             if actual != ref["content_fingerprint"]:
                 raise TaskGraphError("Foundation design authority fingerprint is stale: " + ref["path"])
             sources[ref["path"]] = actual
@@ -191,12 +376,12 @@ def valid_receipt(payload: dict, qa: dict, *, root: Path | None = None) -> bool:
         return False
 
 
-def checkpoint(payload: dict, qa: dict) -> dict:
+def checkpoint(payload: dict, qa: dict, *, root: Path | None = None) -> dict:
     """只从当前权威图推导两种固定审查范围，调用者不能自报或缩小 writer IDs。"""
     from lib.task_graph import request_closure
     from lib.task_graph_cli import _tasks
     foundation = qa.get("foundation_task_id")
-    stage = bool(foundation and not valid_receipt(payload, qa))
+    stage = bool(foundation and not valid_receipt(payload, qa, root=root))
     ids = closure(payload, foundation) if stage else request_closure(_tasks(payload), qa["request_id"])
     return {"kind": "foundation" if stage else "request", "writer_ids": sorted(
         task["id"] for task in payload["tasks"] if task["id"] in ids and task["task_type"] == "writer")}
@@ -207,9 +392,12 @@ def accept(payload: dict, qa: dict, operation: Any, *, kind: str, root: Path | N
     from lib import task_graph_records as records
     from lib.task_graph_cli import export_task_pack, _execute
     from lib.delivery.qa_handoff_cli import validate_qa_handoff
-    if (qa.get("task_type") != "qa" or "foundation_task_id" not in qa
+    from lib.delivery.native_handoff import decode_handoff_json
+    ordinary = is_ordinary_reviewer(qa)
+    if (qa.get("task_type") != "qa" or qa.get("workflow_level") != "Full"
+            or kind == "foundation" and ordinary or not qa.get("agent_ref")
             or qa.get("state") not in {"QA", "RUNNING"} or qa.get("agent_retired")):
-        raise TaskGraphError("checkpoint acceptance requires the active original Foundation Reviewer")
+        raise TaskGraphError("checkpoint acceptance requires the active original Full Reviewer")
     if not isinstance(operation, dict) or set(operation) != SHA_FIELDS:
         raise TaskGraphError("checkpoint acceptance requires task_pack and handoff byte references")
     bodies = {}
@@ -219,19 +407,29 @@ def accept(payload: dict, qa: dict, operation: Any, *, kind: str, root: Path | N
         if records.digest(bodies[field]) != operation[field]["sha256"]:
             raise TaskGraphError("QA checkpoint evidence fingerprint changed")
     pack = records.decode(bodies["task_pack"])
-    current = export_task_pack(payload, qa["id"])
+    current = export_task_pack(payload, qa["id"], root=root, require_current_qa=True)
     if pack != current or pack.get("qa_checkpoint", {}).get("kind") != kind:
         raise TaskGraphError("QA task pack differs from the current checkpoint")
     candidate = copy.deepcopy(payload)
     candidate["request_id"] = qa["request_id"]
     if not _execute("qa-ready", candidate)["qa_ready"]:
         raise TaskGraphError("QA checkpoint is not ready")
-    handoff = records.decode(bodies["handoff"])
+    handoff = decode_handoff_json(bodies["handoff"])
     if not isinstance(handoff, dict):
         raise TaskGraphError("QA checkpoint handoff must be an object")
     validate_qa_handoff(handoff, bodies["task_pack"])
     if handoff["audit_result"] != "PASS":
         raise TaskGraphError("QA checkpoint acceptance requires PASS")
+    if ordinary:
+        isolated = qa["request_id"] in payload.get("worktree_integrations", {})
+        receipt = {"scope_fingerprint": current["qa_checkpoint_fingerprint"],
+                   "agent_ref": copy.deepcopy(qa["agent_ref"]), **copy.deepcopy(operation)}
+        if isolated:
+            _validate_integration(payload, qa, handoff, root=root)
+            receipt["writer_contract_fingerprint"] = _writer_contract_fingerprint(payload, qa)
+        elif handoff["review_method"]["scope_ref"] != qa["qa_scope_ref"]:
+            raise TaskGraphError("QA handoff does not match the complete PM-frozen scope_ref")
+        return {"state": "QA_PASSED", "request_receipt": receipt}
     if kind == "foundation":
         return {"state": "DECLARED", "foundation_receipt": {
             "checkpoint_fingerprint": fingerprint(payload, qa, root=root),
@@ -239,7 +437,82 @@ def accept(payload: dict, qa: dict, operation: Any, *, kind: str, root: Path | N
     return {"state": "QA_PASSED", "request_receipt": copy.deepcopy(operation)}
 
 
-def validate_publication(target: Path, before: bytes | None, after: bytes) -> None:
+def _validate_integration(payload: dict, qa: dict, handoff: dict, *, root: Path | None = None) -> None:
+    integration = payload["worktree_integrations"][qa["request_id"]]
+    from lib.delivery.worktree_cli import scope
+    from lib.task_sources import project_root
+    current_scope = scope(project_root(root), integration["target_base"], integration["head_revision"])
+    if handoff["review_method"]["scope_ref"]["repositories"] != [current_scope]:
+        raise TaskGraphError("QA scope does not match the actual complete integration diff")
+
+
+def _writer_contract_fingerprint(payload: dict, qa: dict) -> str:
+    # 已交付后工作树可删除。独立冻结不依赖候选目录的合同与轮次，用于验证旧记录
+    # 仍描述同一次交付；原 QA 包和真实 Git diff 另行按自己的原始依据验证。
+    projection = request_inputs(payload, qa, request_writers(payload, qa))
+    projection["revision"] = qa.get("qa_review_revision", 0)
+    return _json_digest(projection)
+
+
+def _historical_integration(payload: dict, qa: dict, handoff: dict, *, root: Path | None) -> bool:
+    from lib.delivery.worktree_cli import ancestor, git, repository
+    from lib.task_sources import project_root
+    integration = payload["worktree_integrations"][qa["request_id"]]
+    if qa["request_receipt"].get("writer_contract_fingerprint") != _writer_contract_fingerprint(payload, qa):
+        return False
+    repo = repository(project_root(root))
+    # 只使用记录的本地分支完整引用，禁止把同名标签或别的仓库对象当已交付证据。
+    target = git(repo, "show-ref", "--verify", "--hash", f"refs/heads/{integration['target_branch']}").decode().strip()
+    ancestor(repo, integration["head_revision"], target)
+    _validate_integration(payload, qa, handoff, root=repo)
+    return True
+
+
+def current_request_receipt(payload: dict, qa: dict, *, root: Path | None = None) -> bool:
+    """历史无绑定 PASS 只供查看；有回执也必须是同一 Reviewer、当前范围及原证据字节。"""
+    from lib import task_graph_records as records
+    from lib.delivery.native_handoff import decode_handoff_json
+    from lib.delivery.qa_handoff_cli import validate_qa_handoff
+    from lib.task_graph_cli import export_task_pack
+    receipt = qa.get("request_receipt")
+    if qa.get("state") != "QA_PASSED" or not receipt:
+        return False
+    try:
+        bodies = {field: records.read_record(Path(receipt[field]["path"])) for field in SHA_FIELDS}
+        if any(records.digest(body) != receipt[field]["sha256"] for field, body in bodies.items()):
+            return False
+        if is_ordinary_reviewer(qa):
+            pack = decode_handoff_json(bodies["task_pack"])
+            writer_ids = [writer["id"] for writer in request_writers(payload, qa)]
+            if (not isinstance(pack, dict) or not isinstance(pack.get("task"), dict)
+                    or pack.get("qa_checkpoint") != {"kind": "request", "writer_ids": writer_ids}
+                    or pack.get("qa_checkpoint_fingerprint") != receipt["scope_fingerprint"]
+                    or receipt["agent_ref"] != qa.get("agent_ref")
+                    or pack["task"].get("agent_ref") != qa.get("agent_ref")):
+                return False
+            handoff = decode_handoff_json(bodies["handoff"])
+            if not isinstance(handoff, dict) or handoff.get("audit_result") != "PASS":
+                return False
+            validate_qa_handoff(handoff, bodies["task_pack"])
+            integration = payload.get("worktree_integrations", {}).get(qa["request_id"])
+            if integration:
+                try:
+                    Path(integration["root"]).lstat()
+                except FileNotFoundError:
+                    # 只对已实际合并且路径确实已清理的历史证据启用此分支。活跃 QA
+                    # 仍走现有真实工作树、干净候选和完整 diff 检查。
+                    return _historical_integration(payload, qa, handoff, root=root)
+            elif handoff["review_method"]["scope_ref"] != qa.get("qa_scope_ref"):
+                return False
+            current = export_task_pack(payload, qa["id"], root=root, require_current_qa=True)
+            if receipt["scope_fingerprint"] != current["qa_checkpoint_fingerprint"]:
+                return False
+        return True
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def validate_publication(target: Path, before: bytes | None, after: bytes, *, root: Path | None = None) -> None:
     """发布锁内重读新阶段回执，拒绝同一记录自毁证据和计算后的证据替换。"""
     from lib import task_graph_records as records
     if before is None:
@@ -263,11 +536,24 @@ def validate_publication(target: Path, before: bytes | None, after: bytes) -> No
     old = {task["id"]: task for task in previous_tasks}
     for task in current_tasks:
         request = task.get("request_receipt")
-        if request and request != old.get(task["id"], {}).get("request_receipt"):
-            for reference in request.values():
+        previous_task = old.get(task["id"], {})
+        if (is_ordinary_reviewer(task) and task.get("state") == "QA_PASSED"
+                and previous_task.get("state") != "QA_PASSED" and not request):
+            raise TaskGraphError("new Full request QA_PASSED requires accept_request evidence")
+        if request and request != previous_task.get("request_receipt"):
+            for field in SHA_FIELDS:
+                reference = request[field]
                 path = Path(reference["path"])
                 if path.samefile(target) or records.digest(records.read_record(path)) != reference["sha256"]:
                     raise TaskGraphError("new request QA receipt requires unchanged independent evidence")
+            if is_ordinary_reviewer(task):
+                # 锁内按发布前权威图重走一次完整验收。只比较文件摘要无法发现读取与
+                # 落盘之间代码／集成变化，也无法证明写入者确实提交了正式 PASS。
+                accepted = accept(previous, previous_task, {field: request[field] for field in SHA_FIELDS},
+                                  kind="request", root=root)
+                if (task["state"] != accepted["state"] or request != accepted["request_receipt"]
+                        or not current_request_receipt(current, task, root=root)):
+                    raise TaskGraphError("request QA scope changed before receipt publication")
         receipt = task.get("foundation_receipt")
         if not receipt or receipt == old.get(task["id"], {}).get("foundation_receipt"):
             continue
@@ -276,5 +562,5 @@ def validate_publication(target: Path, before: bytes | None, after: bytes) -> No
             path = Path(reference["path"])
             if path.samefile(target) or records.digest(records.read_record(path)) != reference["sha256"]:
                 raise TaskGraphError("new Foundation receipt requires unchanged independent evidence")
-        if not valid_receipt(current, task):
+        if not valid_receipt(current, task, root=root):
             raise TaskGraphError("Foundation changed before receipt publication")

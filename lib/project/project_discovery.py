@@ -947,12 +947,10 @@ class _Scanner:
             except OSError as exc:
                 raise DiscoveryError(f"cannot inspect repository entry {relative}: {exc}") from exc
 
-            # project.config.json 也可能是其他工具的同名文件。只有与包清单
-            # 同目录的普通文件才可提供小程序线索，不能改变其他清单的严格合同。
+            # 微信原生模板不一定使用 npm；单独的项目配置也应取证。同名文件也
+            # 可能来自其他工具，因此仅将安全读取、解析成功的普通文件作为线索。
             optional_mini_config = name == "project.config.json"
-            candidate = _is_candidate_name(name, parent_parts) and (
-                not optional_mini_config or "package.json" in names
-            )
+            candidate = _is_candidate_name(name, parent_parts)
             if stat.S_ISLNK(info.st_mode):
                 if candidate and not optional_mini_config:
                     raise DiscoveryError(f"candidate manifest must not be a symlink: {relative}")
@@ -1657,40 +1655,37 @@ def _classify(
         path = PurePosixPath(candidate.path)
         name = path.name
         root = _parent(candidate.path)
-        if name == "package.json":
-            config = by_path.get(_join(root, "project.config.json"))
-            if config is not None and config.parsed.get("compileType") == "miniprogram":
-                # 配置中的入口目录是不可信的项目输入，只允许模块内的相对路径；
-                # 文件必须是扫描器已确认的普通文件，不能借符号链接越出工作区。
-                configured_root = config.parsed.get("miniprogramRoot", ".")
-                try:
-                    mini_root = _normalize_relative(
-                        configured_root, "miniprogramRoot", allow_root=True
-                    )
-                except DiscoveryError:
-                    mini_root = None
-                if mini_root is not None:
-                    app_root = root if mini_root == "." else _join(root, mini_root)
-                    manifest = _join(app_root, "app.json")
-                    entries = tuple(
-                        _join(app_root, filename) for filename in ("app.js", "app.ts")
-                        if _join(app_root, filename) in regular_paths
-                    )
-                    # 仅依赖描述文字或 TypeScript 依赖不足以证明原生应用；
-                    # 应用清单和实际入口同时存在时才产生模块画像。
-                    if manifest in regular_paths and entries:
-                        # TypeScript 源码可能与编译生成的 JavaScript 入口并存；
-                        # 只要存在 TS 入口，就按源语言标识而非取首个文件。
-                        language = (
-                            "language:typescript"
-                            if any(entry.endswith(".ts") for entry in entries)
-                            else "language:javascript"
-                        )
-                        add_classification(
-                            root, "xy-web", (candidate.path, config.path, manifest, *entries),
-                            ("platform:wechat-miniprogram", language),
-                            collapse_into_desktop=True,
-                        )
+        if name == "project.config.json":
+            if candidate.parsed.get("compileType") != "miniprogram":
+                continue
+            # 配置以所在模块为根，只允许模块内相对路径。扫描器只记录安全扫描到
+            # 的普通文件，既不能用链接补齐入口，也不能借父目录引用其他模块。
+            try:
+                mini_root = _normalize_relative(
+                    candidate.parsed.get("miniprogramRoot", "."),
+                    "miniprogramRoot",
+                    allow_root=True,
+                )
+            except DiscoveryError:
+                continue
+            app_root = root if mini_root == "." else _join(root, mini_root)
+            manifest = _join(app_root, "app.json")
+            js_entry = _join(app_root, "app.js")
+            ts_entry = _join(app_root, "app.ts")
+            entries = tuple(entry for entry in (js_entry, ts_entry) if entry in regular_paths)
+            if manifest not in regular_paths or not entries:
+                continue
+            # npm 只能补充已有项目证据和脚本，不能代替配置、清单或入口。
+            # TS 与编译生成的 JS 并存时保留两个入口，以 TS 作为源语言。
+            package = by_path.get(_join(root, "package.json"))
+            package_evidence = (package.path,) if package is not None else ()
+            language = "language:typescript" if ts_entry in entries else "language:javascript"
+            add_classification(
+                root, "xy-web", (candidate.path, manifest, *entries, *package_evidence),
+                ("platform:wechat-miniprogram", language),
+                collapse_into_desktop=True,
+            )
+        elif name == "package.json":
             dependencies = _package_dependencies(
                 candidate.parsed, RUNTIME_PACKAGE_DEPENDENCY_SECTIONS
             )

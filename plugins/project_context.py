@@ -11,10 +11,11 @@ from pathlib import Path
 import tempfile
 import os
 
-from lib.hosts.claude_instructions import read_file
+from lib.safe_text import read_file
 from lib import plugin_resources, task_graph_cli, task_graph_records as records
 from lib.platform_fs import publish_exclusive
 from lib.project.ensure_project_id import derive_project_id
+from lib.project.project_discovery import ProjectProfile
 from lib.project.validate_project_config import validate_with_profile
 from lib.task_graph_init import initialize
 
@@ -23,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ADAPTERS = ("project.yaml", ".awf/project.yaml")
 
 
-def context(adapter: str | None = None) -> tuple[dict, bytes]:
+def resolve_adapter(adapter: str | None = None) -> tuple[dict, bytes, ProjectProfile]:
     """画像只来自实际cwd及已选适配器；模板仅用于新配置候选，不冒充项目事实。"""
     if plugin_resources.plugin_root() != ROOT:
         raise ValueError("invoke project_context through the packaged source_pack helper")
@@ -58,7 +59,13 @@ def context(adapter: str | None = None) -> tuple[dict, bytes]:
         raise ValueError("invalid project adapter: " + "; ".join(checked.errors))
     return {"project": str(project), "adapter": adapter, "exists": present,
             "sha256": records.digest(body) if present else None,
-            "profile": asdict(checked.profile), "created": False}, body
+            "created": False}, body, checked.profile
+
+
+def context(adapter: str | None = None) -> tuple[dict, bytes]:
+    """公开 JSON 查询和画像渲染复用同一次校验结果，原始字节用于应用前复查。"""
+    info, body, profile = resolve_adapter(adapter)
+    return {**info, "profile": asdict(profile)}, body
 
 
 def apply(adapter: str) -> dict:

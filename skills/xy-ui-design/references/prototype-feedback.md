@@ -28,7 +28,7 @@ file 壳完全不创建控制连接、不获取 token。公开 binding 只代表
 
 独立评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放回批注。交付与评审复用画布组件，各自持有相机和交互状态，不承诺任意业务内存同步。原始 HTML 字节先装配来源目标，再在 HTTP 内存响应移除精确 file 入口；不能先删后算偏移。没有 ID 的节点仍按原始字节定位，动态无来源节点保留用户输入并要求显式选择真实源父层，不静默改绑。
 
-启动 JSON 仍精确为 boot 5 的 `{schema_version,context,pages}`，脚本为 `script#prototype-review-data`；context 保留下述严格 context 3 与 8 KiB 限额。新反馈保留封闭 schema 5 `{schema_version:5,review:{request_id,review_id},anchors,items}`；完整来源、修订与草稿在用户私有 live 元数据中，review_id 不由活动指针重绑。`GET /api/context` 返回 `{status:'ready'|'source_changed',context,page}`，`GET /api/draft` 返回 `{revision,draft}`；`PUT /api/draft` 用 revision 和相同快照做 CAS，冲突返回 `409 draft_conflict`。原稿变化返回 `409 source_changed`，保留旧正文和可读草稿，阻止错误定位、保存与交还。客户端不能上传可信 context、自动续期或重放写请求。相机、撤回及工具状态不进入反馈；validate 严格复核真实 live 修订后只输出 current 精简交接，不产生批准。
+启动 JSON 仍精确为 boot 5 的 `{schema_version,context,pages}`，脚本为 `script#prototype-review-data`；新登记使用下述 context 4，绑定 live 来源；历史 context 3 按原规则重读。两者均限 8 KiB。新反馈保留封闭 schema 5 `{schema_version:5,review:{request_id,review_id},anchors,items}`；完整来源、修订与草稿在用户私有 live 元数据中，review_id 不由活动指针重绑。`GET /api/context` 返回 `{status:'ready'|'source_changed',context,page}`，`GET /api/draft` 返回 `{revision,draft}`；`PUT /api/draft` 用 revision 和相同快照做 CAS，冲突返回 `409 draft_conflict`。原稿变化返回 `409 source_changed`，保留旧正文和可读草稿，阻止错误定位、保存与交还。客户端不能上传可信 context、自动续期或重放写请求。相机、撤回及工具状态不进入反馈；validate 严格复核真实 live 修订后只输出 current 精简交接，不产生批准。
 
 live 固定 17 项资产：`delivery.html`、`review.html`、`live-workspace.js`、`live-connection.js`、`canvas-host.js`、`live.css`、`workspace.css`、`review-state.js`、`review-camera.js`、`feedback.js`、`feedback.css`、`page-shell.js`、`THIRD_PARTY_NOTICES.txt`、`file-entry.js`、`file-delivery.js`、`file-page.js`、`canvas-presentation.js`。三端按 backend 的 LIVE_TOOL_ASSETS 权威名单同字节交付；packaging 只消费与历史 V4 九项的有序并集。V4 及 TOOL_ASSETS 旧别名保持，不用 live 名单回验旧包。
 
@@ -47,7 +47,7 @@ bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-ro
 
 `prepare` 只读项目，成功向 stdout 返回 `status: ready`、`context`、`review_url`、`bundle_path` 和 `reused`。新项目用 `--pages` 明确列出本轮实际 HTML；省略时消费既有登记。工具从当前物理插件装配用户级私有、不可变的离线包，只复制明确页面的必要渲染依赖和需求导航文档，不复制整个项目。默认数据根为 macOS `~/Library/Application Support/agent-workflow/prototype-reviews`，其他 POSIX 使用绝对 `XDG_DATA_HOME` 或 `~/.local/share` 下的 `agent-workflow/prototype-reviews`；隔离验证可显式传 `--data-dir <项目外绝对实际目录>`，prepare 与 validate 使用同一目录。
 
-用户通过该包的 `index.html#page=<文件名>` 进入评审，无需输入 SHA；启动 context 来自包内安全转义的 JSON，链接不承载 base64 review。导航保留既有 index 的文本和 details/summary 分组，但不执行旧 index。通用查看器、反馈和通信代码只在插件与派生包持有，项目源不增加工具壳；当前源码新快照使用 manifest 4、boot 4 和幂等 `prototype-review:* version:4` 桥，context 单独声明版本 3，忽略旧 `prototype-workspace:* version:1`。
+用户通过该包的 `index.html#page=<文件名>` 进入评审，无需输入 SHA；启动 context 来自包内安全转义的 JSON，链接不承载 base64 review。导航保留既有 index 的文本和 details/summary 分组，但不执行旧 index。通用查看器、反馈和通信代码只在插件与派生包持有，项目源不增加工具壳；当前源码新快照使用 manifest 4、boot 4 和幂等 `prototype-review:* version:4` 桥，新捕获的 context 单独声明版本 4 并绑定 offline 来源，忽略旧 `prototype-workspace:* version:1`。
 
 工作台固定设计视口，以相机缩放／移动查看而不重排页面；浮动控件、默认收起的导航抽屉、“整改／标记”两个 Tab 和独立开发说明大对话框属于工具。浏览模式保留业务按钮、输入、滚动与内页导航，批注模式才拦截节点选择。节点／页面／全局入口打开同一个编辑对话框，入口固定目标范围。父壳唯一 state 管理选择、A、整改、草稿和导出；子页独占 DOM 命中、局部几何、高亮及有限摘录。失败如实显示并保留可恢复输入，意见不设等级。
 
@@ -57,7 +57,9 @@ bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-ro
 
 ## 格式和安全边界
 
-context 为封闭 schema 3 对象：`schema_version/request_id/project_id/adapter/adapter_sha256/prototype_root/plan_source/plan_sha256/navigation_sha256/requirements/pages/tool/review_id`。`project_id` 绑定物理项目根、设备及 inode 身份，`tool` 精确为 `{version,payload_sha256}`，`review_id` 绑定其余 context 的规范 JSON。`requirements` 仅为需求 Markdown 中完整、唯一的真实 REQ ID 字符串数组，不含标签正文；`pages` 为 `[{path,dependency_fingerprint}]`，path 是项目相对实际 HTML 路径。context 最多 16 页、UTF-8 正文最多 8 KiB；不得为满足上限截断丢弃真实 REQ。它是版本声明而非权限凭证，不携带页面树、HTML 或批准。
+历史 context 为封闭 schema 3 对象：`schema_version/request_id/project_id/adapter/adapter_sha256/prototype_root/plan_source/plan_sha256/navigation_sha256/requirements/pages/tool/review_id`。`project_id` 绑定物理项目根、设备及 inode 身份，`tool` 精确为 `{version,payload_sha256}`，`review_id` 绑定其余 context 的规范 JSON。`requirements` 仅为需求 Markdown 中完整、唯一的真实 REQ ID 字符串数组，不含标签正文；`pages` 为 `[{path,dependency_fingerprint}]`，path 是项目相对实际 HTML 路径。context 最多 16 页、UTF-8 正文最多 8 KiB；不得为满足上限截断丢弃真实 REQ。它是版本声明而非权限凭证，不携带页面树、HTML 或批准。
+
+新建的离线快照和活动评审使用封闭 context 4，沿用上述字段并增加 `source_kind`。离线为 `offline`，活动源为 `live`，种类及版本均参与 `review_id` 计算。新需求目录与计划校验共用围栏规则。只在同类、长度足够且行尾仅有空白的闭栏后恢复提取 REQ；未闭合围栏中的示例直到文末均被屏蔽。验证先定位原离线包或 live 元数据，再按其中的上下文版本重读同一来源。历史 context 2／3 保留当时的围栏及标签语义，来源种类或修订身份冲突会使验证失败。
 
 历史 feedback 4 精确为封闭 schema 4：`{schema_version:4,review:{request_id,review_id},anchors,items}`。review 只有稳定 request_id 和 64 位十六进制 review_id。复制只输出固定唯一标题 `## Agent Workflow Feedback Payload`，其下单个 `json` 围栏内为紧凑 JSON，不附同义摘要；纯 JSON 输入仍受支持。Markdown 与 JSON 交给同一 `validate --input`，不从自由文字推断整改或引用关系。
 

@@ -13,20 +13,16 @@ description: Use when a design Agent must statically validate concrete build-fre
 宿主读取如被截断，按缺失行范围续读，或复用包内已有分页 helper；完整连续覆盖
 当前任务所需权威范围后才执行。不重复读取已覆盖内容，不自行实现另一套分页器。
 
-历史 `.agent-workflow/` 资源引用改由本插件的 `plugins/source_pack.py resource`
-解析。每次独立调用都使用：
+包内资源使用相对插件根的规范路径，通过 `plugins/source_pack.py resource` 解析。每次独立调用都使用：
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`。
 原有辅助命令使用 `helper --project <absolute-project> <original-helper> <arguments>`；
 它只选已有 Python 3.11+，不安装软件、不改 PATH。项目文档、任务与业务代码仍属于
 真实项目；包内示例不是当前项目配置。
 
 通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
-`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`；历史配置路径随实际选择
-转换。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
+`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
 批准。需要宿主集成时读取 `platforms/antigravity/references/pm-integration.md`。
-插件原生发现取代旧安装、刷新与中央激活；不得运行 `runtime install`、
-`runtime activate`、项目注册、`setup_*.sh`，或创建/修改项目 `AGENTS.md`、
-`CLAUDE.md`、`.agent-workflow` 来使插件生效。
+插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
 
 公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
 发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
@@ -46,7 +42,7 @@ Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对
 通用原生入口，应以全新上下文交付当前完整角色正文与任务包；无法保证选择或隔离时
 向 PM 报告宿主限制，不得宣称已运行。
 
-当前 alpha 沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
+当前插件沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
 不自动迁移。活动任务期间不得更新/替换插件；跨更新资源保留与实际模型/effort
 执行仍需真实宿主证明。未获得对应证据时保留 `runtime_verified: false`。
 
@@ -74,14 +70,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    docs/standards/prototype/<stable-page>.html
    ```
 
-2. Run the repository validator from the project root:
-
-   ```bash
-   bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/documents/validate_prototype_workspace.py \
-     <project-root> docs/standards/prototype --standalone --adapter <selected-project-adapter> --json --page <stable-page>.html
-   ```
-
-   For an official plugin installation, use its verified source-pack entry and the same selected adapter:
+2. Run the plugin validator with the actual project and selected adapter:
 
    ```bash
    bash <physical-plugin-root>/lib/python_runtime.sh <physical-plugin-root>/plugins/source_pack.py \
@@ -92,7 +81,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
    Use `.awf/project.yaml` for the newly applied plugin adapter, or the explicitly selected existing
    `project.yaml`. Both may coexist; never choose again by precedence or create a root configuration as
-   a fallback. Central tasks retain their fixed runtime and `.agent-workflow/project.yaml`.
+   a fallback.
    Substitute the configured project-relative `docs.standards_root` path when it differs. A nonzero
    exit is FAIL. Do not weaken or bypass its path, dependency, structure, contract, or interaction
    checks. `--standalone` requires explicit concrete `--page` values and does not require index or
@@ -173,15 +162,11 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
 ## 按需反馈复核
 
-仅当前任务使用评审反馈时，读取 [反馈消费合同](../xy-ui-design/references/prototype-feedback.md)。
-新交付先用白名单 helper 的 `prepare-delivery --root --adapter --pages` 幂等准备受管入口，再用 `open` 显式选择项目、adapter、plan、request-id 和 pages。open 缺准备返回 preparation_required，不悄悄改业务 HTML；delivery_url 是具体页 file URI，delivery_urls 为各页，复用安全闭包且不替代静态检查或用户视觉确认。
-file 交付提供完整画布和默认收起目录，使用唯一中央 delivery.html shell，业务原稿只在独立 file iframe 执行一次，保留真实 stage/frame；明确 file 分支允许 allow-scripts allow-same-origin，HTTP 评审仍仅 allow-scripts。file 壳不持控制 token，通过公开页 binding 以 noopener 新标签引导到同页 HTTP 评审；失效准确提示交付方重跑原显式命令。来源键按原始字节注入后才在 HTTP 内存响应移除精确 entry 标签，不落盘业务 HTML 副本。
-新 boot 5 沿严格 context 3，feedback 5 为 schema_version/review/anchors/items；源修订绑定的
-live 元数据及 CAS 草稿独立于历史包，原稿变化保留意见并明确拒绝错误提交。validate 只接受真实
-来源并返回 current 精简 changes、必要 anchors 和短 review；动态无源目标不能静默改绑。
-历史 prepare 及 feedback 2／3／4 与各自不可变包仍按原资产／装配／提取合同严格只读消费；
-不迁移旧包／草稿，不用新名单回验旧包。反馈只用于当前授权原型修订，不产生批准、自动 patch
-或新增业务 gate。修订后返回当前静态证据，适用需求／视觉批准沿既有规则。
+具体页交付与按需反馈复核使用[反馈消费合同](../xy-ui-design/references/prototype-feedback.md)。
+通过插件 `source_pack.py resource` 定位或以 `helper` 调用 `lib/documents/context_read.py`
+分页时，使用 `platforms/shared/skills/xy-ui-design/references/prototype-feedback.md`。
+交付按步骤 5 准备和核对当前 file 入口，批注、来源校验和历史格式按需读取该合同。
+仅在当前授权范围内应用已复核的意见，修订后返回当前静态证据；保留既有需求与适用视觉批准。
 
 生产 `templates/prototype` 工具的真实浏览器集成验证用于验证模板产品本身，不能扩张为业务原型默认浏览器操作，亦不改变以下边界。
 

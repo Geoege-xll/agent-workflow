@@ -30,15 +30,15 @@ import unicodedata
 
 try:
     from .agent_continuation import active as _running, check_binding
-    from lib.hosts.claude_instructions import read_file
+    from lib.safe_text import read_file
     from .task_graph import TaskGraphError, SATISFIED_DEPENDENCY_STATES
-    from .runtime_pins import PLUGIN_ENV, project_root, read_builtin_source, record_binding
+    from .task_sources import PLUGIN_ENV, project_root, read_builtin_source, validate_task_source
     from .standard_paths import builtin_source_path
 except ImportError:
     from agent_continuation import active as _running, check_binding
-    from lib.hosts.claude_instructions import read_file
+    from lib.safe_text import read_file
     from task_graph import TaskGraphError, SATISFIED_DEPENDENCY_STATES
-    from runtime_pins import PLUGIN_ENV, project_root, read_builtin_source, record_binding
+    from task_sources import PLUGIN_ENV, project_root, read_builtin_source, validate_task_source
     from standard_paths import builtin_source_path
 
 
@@ -56,7 +56,7 @@ def digest(body: bytes) -> str:
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """变更输入不接受重复键，避免旧值被 JSON 解析静默覆盖。"""
+    """所有任务记录入口拒绝嵌套对象中的重复键，避免后一项静默覆盖前一项。"""
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -65,8 +65,10 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def decode(body: bytes) -> Any:
-    return json.loads(body.decode("utf-8"), object_pairs_hook=_unique_object)
+def decode(body: bytes | str) -> Any:
+    """原始记录必须是 UTF-8；查询入口已读取的文字沿用同一套 JSON 字段检查。"""
+    text = body.decode("utf-8") if isinstance(body, bytes) else body
+    return json.loads(text, object_pairs_hook=_unique_object)
 
 
 def read_record(path: Path) -> bytes:
@@ -89,14 +91,6 @@ def _publication_lock(path: Path):
     目录 fd 不随目标文件替换而失效，进程退出时锁自动释放。此锁仅约束使用本工具
     的协作写者，不宣称能阻止外部编辑器对旧 inode 或目标路径的非协作写入。
     """
-    if os.name == "nt":
-        try:
-            from .platform_fs import directory_lock
-        except ImportError:
-            from platform_fs import directory_lock
-        with directory_lock(path.parent, "taskgraph"):
-            yield
-        return
     try:
         import fcntl
     except ImportError as exc:
@@ -113,7 +107,7 @@ def _publication_lock(path: Path):
         os.close(descriptor)
 
 
-def publish(path: Path, body: bytes, expected: str) -> bool:
+def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None) -> bool:
     """持协作锁核对旧指纹，再以原子替换发布；读者只见完整旧文件或新文件。
 
     不移走正式文件、不创建硬链接或常驻锁文件。PM 是该记录的单一写入者；
@@ -138,7 +132,7 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
             from task_settlement import validate_new_settlement_sources
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         from lib.foundation_qa import validate_publication
-        validate_publication(path, before, body)
+        validate_publication(path, before, body, root=root)
         mode = identity[2] if identity else 0o600
         descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
         temporary = Path(raw)
@@ -208,18 +202,19 @@ def file_digest(root: Path, relative: str) -> str:
     return hasher.hexdigest()
 
 
-def document_digest(root: Path, relative: str, *, binding: dict | None = None) -> str:
+def document_digest(root: Path, relative: str) -> str:
     """受控文档才可读取固定内置源，普通指纹 API 保持项目根和链接拒绝边界。
 
     判断顺序必须先做精确内置来源分类；不能凭 .agent-workflow 前缀、项目软链或
     外部 core_root 获得读取权限。项目索引、专项叶及其他文档仍使用 file_digest。
     """
-    project_root(root)
-    if PLUGIN_ENV in os.environ:
-        # 插件只改变精确内置来源的定位；普通项目指纹仍使用下方原有根内读取器。
-        record_binding({"runtime_binding": binding} if binding is not None else {}, root=root)
-    if (binding is not None or PLUGIN_ENV in os.environ) and builtin_source_path(relative) is not None:
-        return digest(read_builtin_source(binding, relative))
+    validate_task_source({}, root=root)
+    if builtin_source_path(relative) is not None:
+        if PLUGIN_ENV in os.environ:
+            return digest(read_builtin_source(relative))
+        if relative.startswith(".agent-workflow/"):
+            raise TaskGraphError("historical builtin aliases require a verified plugin source")
+
     return file_digest(root, relative)
 
 
@@ -291,8 +286,8 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                 or any(name in os.environ for name in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
                                                        "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"))):
             raise TaskGraphError("3.0 settlement rejects central runtime_binding and bridge context")
-    # update 从原记录读取 pin，补丁白名单不允许添加／替换它；刷新也不能偷用项目当前版。
-    binding = record_binding(payload, root=root)
+    # 在验证补丁和刷新文档之前拒绝退役来源。
+    validate_task_source(payload, root=root)
     if set(patch) - {"tasks", "capacity", "refresh_documents", "integrations"}:
         raise TaskGraphError("update patch supports only tasks, capacity, refresh_documents and integrations")
     result = copy.deepcopy(payload)
@@ -300,11 +295,13 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
     old = {task["id"]: task for task in payload["tasks"]}
     changes = _object(patch.get("tasks", {}), "patch.tasks")
     changed_contracts = set()
+    freezing_qa = set()
     for task_id, operations in changes.items():
         if task_id not in indexed:
             raise TaskGraphError(f"unknown task ID: {task_id}")
         operations = _object(operations, f"patch.tasks.{task_id}")
-        if set(operations) - {"set", "append", "documents", "checkpoint", "settle", "accept_foundation", "accept_request"}:
+        if set(operations) - {"set", "append", "documents", "checkpoint", "settle", "accept_foundation",
+                              "accept_request", "freeze_qa_scope"}:
             raise TaskGraphError(f"unsupported task update operation: {task_id}")
         task = indexed[task_id]
         acceptance = set(operations) & {"accept_foundation", "accept_request"}
@@ -315,6 +312,13 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             operation = next(iter(acceptance))
             task.update(accept(payload, old[task_id], operations[operation], root=root,
                                kind="foundation" if operation == "accept_foundation" else "request"))
+        if "freeze_qa_scope" in operations:
+            # PM 必须先固定已见范围，再用独立操作验收回执，避免将自报审查范围
+            # 与结论在同一次写入中升级为权威。
+            if set(operations) != {"freeze_qa_scope"} or set(patch) != {"tasks"} or len(changes) != 1:
+                raise TaskGraphError("freeze_qa_scope must be the only operation for one task")
+            task["qa_scope_ref"] = copy.deepcopy(operations["freeze_qa_scope"])
+            freezing_qa.add(task_id)
         if "settle" in operations:
             # 结果态、证据引用与可选退休必须作为同一事实原子发布；拒绝同补丁
             # 修改范围或其他任务，避免先改约定再拿旧结果结算。CAS仍由原CLI统一发布。
@@ -330,8 +334,8 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         additions = _object(operations.get("append", {}), "task.append")
         if set(fields) - SET_FIELDS or set(additions) - APPEND_FIELDS:
             raise TaskGraphError("task update attempts to modify a protected or unsupported field")
-        if old[task_id].get("foundation_task_id") and fields.get("state") == "QA_PASSED":
-            raise TaskGraphError("Foundation request QA_PASSED requires accept_request")
+        if fields.get("state") == "QA_PASSED" and task["workflow_level"] == "Full":
+            raise TaskGraphError("Full request QA_PASSED requires accept_request")
         if fields.get("state") == "RESULT_VERIFIED":
             raise TaskGraphError("RESULT_VERIFIED requires the evidence-bound settle operation")
         if (task["task_type"] in {"read_only", "evidence"} and "state" in fields
@@ -391,7 +395,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         matches = [doc for task in result["tasks"] for doc in _documents(task) if doc["path"] == name]
         if not matches:
             raise TaskGraphError(f"no existing controlled-document reference: {name}")
-        value = document_digest(project_root(root), name, binding=binding)
+        value = document_digest(project_root(root), name)
         for doc in matches:
             doc["content_fingerprint"] = value
     if "capacity" in patch:
@@ -399,7 +403,8 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
             raise TaskGraphError("capacity must be an integer >= 0")
         result["capacity"] = capacity
-    from lib.foundation_qa import valid_receipt
+    from lib.foundation_qa import (current_request_receipt, is_ordinary_reviewer, request_inputs,
+                                   request_writers, valid_receipt)
     for qa in result["tasks"]:
         if qa.get("foundation_receipt") and not valid_receipt(result, qa, root=root):
             qa.pop("foundation_receipt", None)
@@ -410,6 +415,34 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                 qa["state"] = "DECLARED"
     # 先校验字段类型与完整合同，再派生锁，避免错误补丁在集合操作中抛出 TypeError。
     validate("validate", result)
+    for qa in result["tasks"]:
+        if not is_ordinary_reviewer(qa):
+            continue
+        previous_qa = old[qa["id"]]
+        before = request_inputs(payload, previous_qa, request_writers(payload, previous_qa))
+        after = request_inputs(result, qa, request_writers(result, qa))
+        # 上一轮已通过、失败或中止后再审，即使 Writer 未改动，也拒绝迟到的上一轮结论。
+        reopened = (previous_qa["state"] == "QA_PASSED" and qa["state"] != "QA_PASSED"
+                    or _running(previous_qa) and not _running(qa) and qa["state"] != "QA_PASSED")
+        stale = (qa.get("request_receipt") and qa["state"] == "QA_PASSED"
+                 and not current_request_receipt(result, qa, root=root))
+        if before != after or reopened or stale:
+            # 返工轮次由真实受审范围变化驱动，即使 Writer 重新确认后内容和日志
+            # 文案相同，旧任务包仍然过期。旧 Reviewer 身份与其退役约束始终保留。
+            qa["qa_review_revision"] = previous_qa.get("qa_review_revision", 0) + 1
+            qa.pop("request_receipt", None)
+            if qa["state"] == "QA_PASSED":
+                qa["state"] = "DECLARED"
+        if qa["id"] in freezing_qa:
+            from lib.task_graph_cli import export_task_pack
+            candidate = {**result, "request_id": qa["request_id"]}
+            if not validate("qa-ready", candidate)["qa_ready"]:
+                raise TaskGraphError("freeze_qa_scope requires the current Writer barrier")
+            pack = export_task_pack(result, qa["id"], root=root, require_current_qa=True, freezing_qa_scope=True)
+            qa["qa_scope_fingerprint"] = pack["task"]["qa_scope_fingerprint"]
+            if (qa["qa_scope_fingerprint"] != previous_qa.get("qa_scope_fingerprint")
+                    and qa.get("qa_review_revision") == previous_qa.get("qa_review_revision")):
+                qa["qa_review_revision"] = previous_qa.get("qa_review_revision", 0) + 1
     for task_id in changed_contracts:
         if _completed(old[task_id]) and _completed(indexed[task_id]):
             raise TaskGraphError(f"changed completed task scope/contract requires an explicit pending state: {task_id}")
@@ -441,6 +474,9 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                     task.pop("foundation_task_id", None)
                     task.pop("foundation_receipt", None)
                     task.pop("request_receipt", None)
+                    task.pop("qa_review_revision", None)
+                    task.pop("qa_scope_ref", None)
+                    task.pop("qa_scope_fingerprint", None)
         for key, field in (("active_paths", "owned_paths"), ("active_semantic_locks", "semantic_locks")):
             candidate[key] = sorted((set(payload.get(key, [])) - {
                 value for task in payload["tasks"] if _running(task) for value in task[field]
@@ -528,11 +564,8 @@ def scratch_workspace(root: Path, request_id: str | None = None) -> dict[str, An
         except FileExistsError:
             existed = True
         with _scratch_directory(slot, parent=parent) as descriptor:
-            # POSIX 只修改已打开的目录身份；Windows 复用固定祖先句柄的显式后端。
-            if os.name == "nt":
-                os.chmod(slot, 0o700, dir_fd=parent, follow_symlinks=False)
-            else:
-                os.fchmod(descriptor, 0o700)
+            # 使用已打开的目录句柄修改当前身份，避免路径被并发替换。
+            os.fchmod(descriptor, 0o700)
     return {
         "project_scratch_root": str(base),
         "request_id": "shared" if request_id is None else request_id,
@@ -665,7 +698,7 @@ def _remove_scratch_tree(parent: int, name: str, relative: str,
         widened = False
         remaining = set(entry["children"])
         try:
-            if os.name != "nt" and (original_mode & 0o700) != 0o700:
+            if (original_mode & 0o700) != 0o700:
                 os.fchmod(descriptor, original_mode | 0o700)
                 widened = True
             # 每个目录只在遍历前后枚举集合，避免 N 个文件触发 N 次全目录扫描。

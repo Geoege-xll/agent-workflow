@@ -24,9 +24,10 @@ workflow stage, approval, role, delegation right or required inventory.
    text already fully available in the same instance under WORKFLOW's complete-reading policy;
    restore missing or changed required content.
 4. Resolve the actual source before invoking it. Selected packaged recommendations use this verified
-   plugin's qualified adapter or physical resource, its fixed canonical source and lock. A host-exposed
-   same-named user/project/other-plugin Skill is a distinct source; never silently substitute it,
-   mix its references/runtime with the packaged source, or call an unknown global name/latest release.
+   plugin's qualified adapter or physical resource. Follow its packaged canonical source and vendor lock
+   when applicable. A host-exposed same-named user/project/other-plugin Skill is a distinct source;
+   never silently substitute it, mix its references/runtime with the packaged source, or call an
+   unknown global name/latest release.
    Return unresolved same-name ambiguity or conflicting instructions to the PM.
 
 ## Required and supplemental Skills
@@ -45,7 +46,7 @@ be met, return that specific blocker rather than treating the Skill as optional.
 configure Skills, tools or runtimes to fill a gap. Any such operation retains its existing user
 authorization, host permission and dependency requirements.
 
-## Recommended Web and Apple candidates
+## Recommended Web, Apple and mobile UI candidates
 
 - For HTML/CSS/client-side JavaScript implementation or review with relevant Web API, compatibility
   or implementation uncertainty, consider `xy-web-guidance` to resolve that gap. The presence of Web
@@ -67,6 +68,18 @@ authorization, host permission and dependency requirements.
   replaced by automatically installed third-party mirrors. Relevant host-exposed concurrency,
   SwiftData or performance Skills may supplement it on demand. Do not impose Swift 6.2, replace
   UIKit with SwiftUI, change architecture or raise the minimum OS without current task authority.
+- For design, implementation or read-only review of iOS, iPadOS or Android native UI or a WeChat
+  Mini Program, consider `xy-mobile-ui` when the affected behavior raises a question about safe
+  areas or insets, the keyboard, navigation or Back, state and lifecycle, or accessibility.
+  Identify the target from the current Task Pack even when the prototype is delivered in HTML.
+  Ordinary Web surfaces (including mobile H5), desktop surfaces and pure business logic do not
+  qualify. For embedded H5, this candidate applies only to affected native or Mini Program host
+  interactions. WeChat Mini Program behavior uses evidence from its host runtime and tooling.
+  Read the shared mobile rules and relevant platform references from the same verified physical
+  plugin root using the Skill's instructions. Continue to use applicable project standards and the
+  established design, implementation and QA branches. SwiftUI-specific gaps may still need
+  `xy-apple-guidance`; neither recommendation authorizes a framework change, a newer API requirement
+  or a target upgrade.
 
 After selecting the relevant entry, use the verified physical plugin root and its existing Python
 selector for each independent call; these are conditional examples, not an every-task checklist:

@@ -13,20 +13,16 @@ description: Accept build-verified request-scoped implementation using native co
 宿主读取如被截断，按缺失行范围续读，或复用包内已有分页 helper；完整连续覆盖
 当前任务所需权威范围后才执行。不重复读取已覆盖内容，不自行实现另一套分页器。
 
-历史 `.agent-workflow/` 资源引用改由本插件的 `plugins/source_pack.py resource`
-解析。每次独立调用都使用：
+包内资源使用相对插件根的规范路径，通过 `plugins/source_pack.py resource` 解析。每次独立调用都使用：
 `bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py`。
 原有辅助命令使用 `helper --project <absolute-project> <original-helper> <arguments>`；
 它只选已有 Python 3.11+，不安装软件、不改 PATH。项目文档、任务与业务代码仍属于
 真实项目；包内示例不是当前项目配置。
 
 通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
-`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`；历史配置路径随实际选择
-转换。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
+`project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
 批准。需要宿主集成时读取 `platforms/antigravity/references/pm-integration.md`。
-插件原生发现取代旧安装、刷新与中央激活；不得运行 `runtime install`、
-`runtime activate`、项目注册、`setup_*.sh`，或创建/修改项目 `AGENTS.md`、
-`CLAUDE.md`、`.agent-workflow` 来使插件生效。
+插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
 
 公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
 发现入口 `xy-config`、`xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，
@@ -46,7 +42,7 @@ Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对
 通用原生入口，应以全新上下文交付当前完整角色正文与任务包；无法保证选择或隔离时
 向 PM 报告宿主限制，不得宣称已运行。
 
-当前 alpha 沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
+当前插件沿用未绑定的源包合同，拒绝中央 `runtime_binding` 与中央项目标记，
 不自动迁移。活动任务期间不得更新/替换插件；跨更新资源保留与实际模型/effort
 执行仍需真实宿主证明。未获得对应证据时保留 `runtime_verified: false`。
 
@@ -54,6 +50,11 @@ Antigravity 通过本插件 `agents/` 原生发现角色。使用定义已核对
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-qa-review
+
+相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper`
+调用 `lib/documents/context_read.py` 分页时，从已验证的插件包读取，使用包内规范路径，例如
+`platforms/shared/skills/xy-qa-review/references/inputs.md`。跨 Skill 引用使用目标 Skill
+在 `platforms/shared/skills/` 下的规范路径。
 
 Use the latest complete PM-issued scope and acceptance. A saved plan helps recover an actual gap;
 it is not approval or completion evidence. Acknowledge scope replacements before returning a result,
@@ -108,7 +109,7 @@ qa_review_policy:
 
 Use the current host's native review when its exposed capability, fixed scope, effective read-only
 permissions and non-recursive execution are established; read only that host's existing
-`.agent-workflow/platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
+`platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
 or installed binary alone does not prove this reviewer can invoke it safely.
 
 Otherwise select at most one host-exposed installed Skill proven code-review capable, read-only,
@@ -148,10 +149,10 @@ Do not launch reader Agents, add a reader report/gate or require another busines
 <!-- workflow-contract: references/inputs.md -->
 <!-- workflow-contract: references/implementation-acceptance.md -->
 
-For production UI or design-standard work, also read [UI audit branches](references/ui-review.md),
-selecting only the current scoped route. Keep production UI/accessibility audit and current design
-authority. Required prototypes use frozen designer evidence, the exact in-page contract and
-deterministic fingerprint validation; waived surfaces do not read old prototypes.
+审查生产 UI 或设计规范时，读取 [UI 审查分支](references/ui-review.md)。生产 UI 逐项使用 QA 包
+中 `reviewed_ui_changes` 的生产 Writer 投影，并按实际运行端核对界面与无障碍证据。仅
+`prototype_policy: required` 触发原型静态身份复核、设计交接及页内契约审查；其余生产分支
+按本轮冻结依据核对生产行为，无须复读旧原型。
 
 <!-- workflow-contract: references/ui-review.md -->
 
@@ -186,7 +187,7 @@ List only Skills actually applied; unavailable required Skills block PASS. Sugge
 findings within PASS or blockers within FAIL, never a third outcome. Return FAIL to PM for rework.
 Before accepting PASS, PM validates the internal `review_method.scope_ref` and
 `standards_policy_coverage` using
-`bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
+`bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
 Only valid PASS lets Full enter `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`. Light performs its actually selected audit and closeout assessment.
 Keep raw records internal and stop after valid acceptance; ordinary closeout does not trigger another audit.
 
@@ -195,3 +196,7 @@ actual agent_ref and task_pack_sha256. Both validate/extract require current --t
 identities or old-pack PASS are rejected. The same Reviewer checks rework deltas under the current complete
 pack. Stop after valid PASS; close natively or retire after PM accepts evidence and the necessary feedback
 window ends. Retirement does not prove physical erasure or lock release.
+
+原生结构化交接在同一份回执的 `review_details` 提供 `findings` 和 `verification`，携带有证据的
+发现、返工角色、验证命令、退出码与完整日志引用。字段合同见[输入约定](references/inputs.md)。
+现有文本型交接继续适用。复用同一次回执校验，无须再发一次调用收集这些字段。

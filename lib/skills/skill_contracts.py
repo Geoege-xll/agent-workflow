@@ -1,6 +1,6 @@
 """校验器按入口中的显式引用展开完整契约；Agent 仍按场景渐进读取。
 
-此模块只组织待校验文本，不改变安装产物，也不替 Agent 预载引用。各宿主继续
+此模块只组织待校验文本，不改变插件产物，也不替 Agent 预载引用。各宿主继续
 提供自己的安全读取函数，保留已有的目录、符号链接、硬链接和文件身份检查。
 普通 Markdown 链接不会自动展开，避免把辅助资料或外部内容升级成契约入口。
 """
@@ -12,45 +12,6 @@ from collections.abc import Callable
 
 
 INCLUDE = re.compile(r"(?m)^<!-- workflow-contract: (references/[a-z0-9-]+\.md) -->$")
-
-# 根入口只允许引用已知的本包契约，不能把目录化升级变成任意文件包含机制。
-# 这些注释仅供安装器完整审计；宿主看到普通 Markdown 导航，仍按当前任务读取。
-BOOTSTRAP_TARGETS = {
-    "platforms/shared/AGENTS.product.tpl": "platforms/shared/skills/xy-workflow/SKILL.md",
-    **{f"platforms/{host}/AGENTS.{host}.tpl": f"platforms/{host}/references/pm-integration.md"
-       for host in ("codex", "claude", "antigravity")},
-}
-BOOTSTRAP_INCLUDE = re.compile(
-    r"(?m)^<!-- bootstrap-contract: ("
-    + "|".join(re.escape(path) for path in BOOTSTRAP_TARGETS.values())
-    + r") -->$"
-)
-
-
-def expand_bootstrap_contract(
-    body: str, read_reference: Callable[[str], str], expected_reference: str,
-) -> str:
-    """审计短入口及唯一声明的详细契约，不替宿主预载任何文件。
-
-    限定目标、唯一标记及可发现的导航链接；错配宿主、缺失、空文件、递归包含
-    都拒绝安装。回调继续使用调用方的安全读取，保留链接与目录逃逸保护。
-    """
-    matches = list(BOOTSTRAP_INCLUDE.finditer(body))
-    if body.count("<!-- bootstrap-contract:") != len(matches):
-        raise ValueError("malformed bootstrap contract reference")
-    if len(matches) != 1 or matches[0].group(1) != expected_reference:
-        raise ValueError(f"bootstrap must route exactly once to {expected_reference}")
-    relative = matches[0].group(1)
-    link = r"\[[^\]\n]+\]\(\.agent-workflow/" + re.escape(relative) + r"\)"
-    if not re.search(link, body):
-        raise ValueError(f"bootstrap contract reference has no routing link: {relative}")
-    detail = read_reference(relative)
-    if not detail.strip():
-        raise ValueError(f"empty bootstrap contract reference: {relative}")
-    if "<!-- bootstrap-contract:" in detail:
-        raise ValueError(f"nested bootstrap contract reference is unsupported: {relative}")
-    return BOOTSTRAP_INCLUDE.sub(lambda _match: detail.rstrip(), body)
-
 
 def expand_skill_contract(body: str, read_reference: Callable[[str], str]) -> str:
     """按原位置展开显式分支，防止缩短入口后漏检原有规则或生命周期顺序。

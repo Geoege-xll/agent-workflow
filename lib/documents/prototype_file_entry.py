@@ -346,8 +346,8 @@ def _configuration(root, adapter, pages):
     project = Path(root)
     if not project.is_absolute() or ".." in project.parts or "\\" in str(project): raise ValueError("项目根必须为实际绝对目录")
     adapter = review._relative(adapter, "适配器路径")
-    binding = review.record_binding({}, root=project, initialize=True)
-    if binding is not None or review.adapter_path(project, adapter, binding) != adapter: raise ValueError("交付准备只接受当前显式项目适配器")
+    # 与评审一致，先确认项目来源，再直接读取同一个显式适配器。
+    review.validate_task_source({}, root=project)
     body, _ = snapshot(project / adapter)
     errors = []
     docs = review.validate_docs(body.decode("utf-8").splitlines(), project, errors)

@@ -25,8 +25,9 @@ from lib.documents import validate_prototype_workspace as workspace
 from lib.documents.prototype_targets import (inject_source_targets, check_context, capture_targets,
     FeedbackError, _identifier, _relative, _requirements, _ContractReferences, MAX_PAGES,
     json_bytes, review_id)
-from lib.project.validate_project_config import validate_docs
-from lib.runtime_pins import adapter_path, record_binding
+# 文件交付入口沿用这里的 validate_docs 导出；评审使用额外要求唯一 docs 节的显式入口。
+from lib.project.validate_project_config import validate_docs as validate_docs, validate_explicit_docs
+from lib.task_sources import validate_task_source
 
 TOOL_ROOT = Path(__file__).resolve().parents[2]
 LEGACY_TOOL_ASSETS = ("index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js", "page-shell.js")
@@ -152,12 +153,19 @@ def navigation_data(index: bytes | None, pages: list[dict], files: dict[str, byt
 
 def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
                     pages: list[str] | None, *, tool: dict, format_version: int = 4,
-                    navigation_source: str = "legacy_index") -> tuple[dict, dict, dict, list]:
+                    navigation_source: str = "legacy_index", context_version: int | None = None,
+                    registered_context: dict | None = None) -> tuple[dict, dict, dict, list]:
     """无条件确认项目画像与来源，再复用原校验器；导航缺失不能跳过这些边界。"""
     if type(format_version) is not int or format_version not in {2, 3, 4}:
         raise FeedbackError("来源捕获仅支持明确的包格式2、3或4")
     if navigation_source not in ("legacy_index", "registered_pages") or (navigation_source == "registered_pages" and format_version != 4):
         raise FeedbackError("导航来源须为历史索引或活动源登记页；旧格式仅允许历史索引")
+    # 新捕获默认使用当前语义；重读时由通过来源校验的旧快照或live元数据指定。
+    # 包2/3只能重建context2，包4及复用其捕获逻辑的live才有新旧两种紧凑上下文。
+    if context_version is None:
+        context_version = 4 if format_version == 4 else 2
+    if type(context_version) is not int or context_version not in ((3, 4) if format_version == 4 else (2,)):
+        raise FeedbackError("来源捕获格式与上下文版本不匹配")
     project = Path(root)
     if not project.is_absolute() or ".." in project.parts or "\\" in str(project):
         raise FeedbackError("项目根必须是无父跳转的实际绝对目录")
@@ -167,12 +175,8 @@ def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
     _identifier(request_id, "请求 ID")
     adapter = _relative(adapter, "适配器路径")
     plan = _relative(plan, "需求路径")
-    binding = record_binding({}, root=project, initialize=True)
-    if binding is not None:
-        raise FeedbackError("反馈入口不接管中央固定运行时任务")
-    selected = adapter_path(project, adapter, binding)
-    if selected != adapter:
-        raise FeedbackError("适配器不属于当前显式选择")
+    # 先拒绝带中央标记的项目，随后始终读取调用方显式指定并已验证的相对适配器路径。
+    validate_task_source({}, root=project)
     captures = {}
 
     def capture(path):
@@ -183,11 +187,12 @@ def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
         return current[0]
 
     adapter_body = capture(project / adapter)
-    lines = adapter_body.decode("utf-8").splitlines()
-    if sum(bool(re.fullmatch(r"docs:\s*(?:#.*)?", line)) for line in lines) != 1:
-        raise FeedbackError("适配器必须包含唯一 docs 配置")
+    adapter_text = adapter_body.decode("utf-8")
     errors = []
-    docs = validate_docs(lines, project, errors)
+    try:
+        docs = validate_explicit_docs(adapter_text, project, errors)
+    except ValueError as exc:
+        raise FeedbackError(str(exc)) from exc
     if errors:
         raise FeedbackError("适配器文档配置无效：" + "; ".join(errors))
     prototype = _relative(docs["standards_root"].rstrip("/") + "/prototype", "原型根")
@@ -240,14 +245,25 @@ def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
                              if navigation_source == "registered_pages" else None)
     navigation_digest = (digest(index_body or b"") if navigation_source == "legacy_index"
                          else digest(json_bytes(registered_navigation)))
-    context_version = 3 if format_version == 4 else 2
+    plan_sha256 = digest(plan_body)
+    # 只有私有目录中已验证的同原稿登记才能识别历史目录。即使仅修改当前段之外的
+    # 文字，完整字节摘要仍变化，旧意见不能凭相同的需求 ID 重绑至编辑后的来源。
+    registered_requirements = (
+        registered_context["requirements"] if context_version == 4 and registered_context is not None
+        and registered_context["plan_sha256"] == plan_sha256 else None
+    )
     context = {"schema_version": context_version, "request_id": request_id, "adapter": adapter, "prototype_root": prototype,
-               "plan_source": plan, "plan_sha256": digest(plan_body), "requirements": _requirements(plan_body, ids_only=format_version == 4),
+               "plan_source": plan, "plan_sha256": plan_sha256,
+               "requirements": _requirements(plan_body, context_version=context_version,
+                                             registered_requirements=registered_requirements),
                "pages": evidence["pages"], "project_id": project_id(project),
                "adapter_sha256": digest(adapter_body), "navigation_sha256": navigation_digest,
                "tool": copy.deepcopy(tool)}
+    source_kind = "live" if navigation_source == "registered_pages" else "offline"
+    if context_version == 4:
+        context["source_kind"] = source_kind
     context["review_id"] = review_id(context)
-    check_context(context, schema_version=context_version)
+    check_context(context, compact_source=source_kind if format_version == 4 else None)
     # adapter/Markdown/节点元数据均由 snapshot 末尾复查，防止绑定检查与结果之间被替换。
     for path in tuple(captures):
         capture(path)
@@ -441,7 +457,7 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
                 or manifest["context"] != context or not isinstance(manifest["files"], list)
                 or not 1 <= len(manifest["files"]) < MAX_BUNDLE_FILES):
             raise ValueError("评审包清单不匹配")
-        check_context(manifest["context"], schema_version=3 if manifest["schema_version"] == 4 else 2)
+        check_context(manifest["context"], compact_source="offline" if manifest["schema_version"] == 4 else None)
         files = {}
         for entry in manifest["files"]:
             if (not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256"}
@@ -510,7 +526,7 @@ def resolve_review_reference(root: str | Path, reference: dict, *, data_dir=None
         if (not isinstance(manifest, dict) or set(manifest) != {"schema_version", "context", "files"}
                 or type(manifest["schema_version"]) is not int or manifest["schema_version"] != 4):
             raise FeedbackError("短引用仅允许已有格式4评审包")
-        context = check_context(manifest["context"], schema_version=3)
+        context = check_context(manifest["context"], compact_source="offline")
         if any(context[key] != identity[key] for key in identity):
             raise FeedbackError("短引用与当前项目或不可变包来源不匹配")
         _check_bundle(request_fd, context)
@@ -588,6 +604,8 @@ def _assemble_source_bundle(context: dict, files: dict[str, bytes], tools: dict[
 
 
 def publish_bundle(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict], *, data_dir=None) -> dict:
+    # 装配并创建任何目录前先校验来源，避免错误的live上下文留下不可重用的离线包。
+    check_context(context, compact_source="offline")
     assembled = _assemble(context, files, tools, navigation)
     manifest = {"schema_version": 4, "context": context, "files": [
         {"path": path, "size": len(body), "sha256": digest(body)} for path, body in sorted(assembled.items())]}
