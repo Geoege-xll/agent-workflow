@@ -142,9 +142,23 @@ owned_paths: []      # Normalized project-relative ownership; ordered handoff ma
 semantic_locks: []   # Shared contracts that cannot be changed concurrently
 state: DECLARED      # Runtime dispatch state; saved plan keeps concise recoverable progress, not a second scheduler
 qa_scope: request    # Current request dependency closure, not the entire project
+# Optional, immutable, Full QA only; points to the same request's production UI Foundation writer.
+# foundation_task_id: <foundation-writer-id>
 # Only PM records this after checking actual native dispatch results; once bound, it cannot be changed/cleared.
 # agent_ref: {host: codex, agent_id: <actual-native-id>}
 ```
+
+For new-project Foundation work, the same QA node and original native Reviewer perform Foundation
+and final request checkpoints. Feature writers depend on Foundation and require its protected PASS
+receipt; they must not depend on the QA node. Exported QA packs derive top-level
+`qa_checkpoint: {kind: foundation | request, writer_ids: [...]}` and `qa_checkpoint_fingerprint` from
+the graph. `qa_scope` stays `request`. Exclusive `accept_foundation` binds current task-pack/handoff
+original-byte SHA references, saves protected `foundation_receipt`, and returns QA to `DECLARED`
+without retiring its identity or granting `QA_PASSED`. Final `accept_request` validates complete request
+scope and saves protected `request_receipt` with `QA_PASSED`. Ordinary `set` cannot create either
+receipt or this Foundation request's final PASS. These records prove mechanical evidence binding,
+not native completion; PM must still observe that completion before releasing occupancy. No second QA
+node, generic phase engine or user confirmation is introduced; existing recovery limits apply.
 
 `agent_ref` accepts only host (codex/claude/antigravity) and agent_id (1..256 characters, without whitespace/control characters). The PM first claims actual RUNNING (or the applicable explicit QA execution state), freezes/exports the complete current pack without an as-yet-unknown native ID, creates the native instance with those bytes, then records its actual ID through a separate update; the same value is idempotent, but replacement/clearing is forbidden. Different tasks in the same graph, including historical completed tasks, cannot share an ID. Optional bool agent_retired defaults to false and may only become true; it prevents reuse but releases no active lock and does not prove native process termination.
 

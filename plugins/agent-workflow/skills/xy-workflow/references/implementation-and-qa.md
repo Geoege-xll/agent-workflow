@@ -82,7 +82,14 @@ instance identity, context and closure boundaries, without a separate pool.
    closeout of actual new resources under that policy and built-in `eng-common-030`, without new resource rules here.
 4. Run `task_graph_cli.py qa-ready` for the request. Only `task_type: writer` tasks participate in
    this barrier; `evidence`, `read_only`, and `qa` tasks do not create a circular wait. When it
-   returns true, dispatch exactly one integrated read-only `xy-qa` reviewer for this request. That same reviewer tries
+   returns true, dispatch exactly one integrated read-only `xy-qa` reviewer for this request.
+   New-project Foundation requests first export the graph-derived Foundation-closure checkpoint on this
+   same node. After validated PASS and observed native completion, PM uses exclusive `accept_foundation`
+   to preserve the Reviewer identity and return the node to `DECLARED`, releasing only feature eligibility.
+   QA start/FAIL/ordinary set never substitutes for this protected receipt. After all request writers
+   complete, resume this same native Reviewer for the complete `request` checkpoint; exclusive
+   `accept_request` alone records final `QA_PASSED` for this optional Foundation contract. Stage PASS
+   cannot authorize closeout or worktree delivery. Both checkpoints share the existing recovery limits. That same reviewer tries
    `host-native-review`, then one `installed-code-review-skill` proven installed and capable, then
    `internal-xy-qa-procedure`, moving forward only on technical unavailability. The allowed
    Superpowers option is only its installed `requesting-code-review/code-reviewer.md` prompt;
