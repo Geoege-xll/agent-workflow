@@ -27,8 +27,9 @@ HELPERS = frozenset({
     "lib/task_graph_cli.py", "lib/agent_continuation_cli.py", "lib/documents/context_read.py",
     "lib/dispatch_admission_cli.py",
     "lib/documents/validate_prototype_workspace.py",
-    # 同一个反馈 CLI 装配用户级不可变离线包并只读复核节点意见；有界迁移必须
-    # 另给精确 preview，不能把 helper 白名单误当作项目写权限或 HTML patch 批准。
+    # 同一个反馈 CLI 提供显式项目的 open/status/stop 与历史 prepare/validate。
+    # open 只登记已允许源并启动本机受限服务，不接受网页任意 root/argv/file；
+    # 白名单不授予项目写权限、HTML patch 批准或系统自启动权限。
     "lib/documents/prototype_feedback_cli.py",
     "lib/validate_project_docs.py",
     "lib/project/validate_project_config.py", "lib/project/ensure_project_id.py",

@@ -2,9 +2,41 @@
 
 仅在当前任务使用评审整改时读取。本合同补充 `prototype-canvas.md` 的展示外壳与 `xy-prototype-verify` 的静态证据，不使其他 Worker 默认预读反馈格式。需求与方案仍以同一主题 Markdown 为唯一编辑权威，具体稳定 HTML 是视觉评审对象。
 
-## 准备和交还
+## 当前交付：双网页、同一原稿
 
-使用当前安装版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
+当前源码的新路线是可信 CLI `open`，在交付时启动本机服务并返回具体页的 `delivery_url` 与 `review_url`。这些是当前源码能力，不代表本机已发布的 3.0.2 自动升级。仅从当前所选物理插件调用，同一项目、adapter、需求和 request 参数贯穿 open／validate；每次 open 必须明确提供 `--pages`，不生成导航 index、不复制通用工具到交付目录：
+
+```text
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML>
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py status --root <physical-project-root> --request-id <request-id>
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py stop --root <physical-project-root> --request-id <request-id>
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py validate --root <physical-project-root> --adapter <selected-project-adapter> --input <explicit-feedback-file>
+```
+
+交付目录只列出本次 `--pages` 明确登记、属于同一需求且通过安全校验的 1—16 个具体页。上面的单页示例仅登记一页，不会自动扫描整个项目、其他需求或未登记页面。一次 `open` 可在相同 `--plan` 和 `--request-id` 下登记多页，参数按实际页面替换：
+
+```text
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML-1> <project-relative-HTML-2>
+```
+
+交付时提供 `delivery_url` 的当前具体页：左侧目录默认收起且由登记元数据派生，共用可缩放画布保留真实产品交互；“进入评审”通过 `noopener` 新标签页准确打开当前页，原交付页保留。评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放回批注。两页复用画布组件，分别持有相机和交互状态，不承诺任意业务内存同步。真实弹窗／popover 的选择及标注由父画布支持；动态无来源节点明确要求选择真实源父层，不静默改绑。
+
+两页都从交付目录读取同一物理原稿，服务只在 HTTP 内存响应装配来源键与通信桥，活动评审不在磁盘维护业务 HTML 副本。原稿仍可 `file://` 离线查看与操作，但不承诺目录、完整相机、一键冷启动或自动发现随机端口。服务不可用时，由交付方用同样的显式参数重新运行 `open` 并提供新链接；`status` 查看有限状态，`stop` 停止精确实例并保留意见。不往原稿写认证 fragment、token、机器绝对路径或随机端口。返回 URL 只交给受信本机用户，不把认证 fragment 写入日志或公开报告。
+
+服务绑定 `127.0.0.1` 随机可用端口，限定显式项目和请求，复用相应活动会话；不配置系统自启动或 URL 协议。网页不接受任意 root、argv、file、安装或执行请求。公开 `/health` 无 secret；交付与评审壳分别位于 `/delivery/<name>`、`/review/<name>`，工具只来自固定 `/assets/<name>` 白名单，内容仅来自 `/content/<随机只读cap>/<已登记资源>`。内容 iframe 只有 `sandbox="allow-scripts"`，不授予 `allow-same-origin`；桥联合核对真实 `event.source`、当前页、随机 token 和 `origin=null`，不能单凭 null origin 信任消息。内容 cap 无权访问控制 API 或父认证。
+
+启动 JSON 精确为 boot 5 的 `{schema_version,context,pages}`，唯一脚本为 `script#prototype-review-data`；context 仍是下述严格 context 3 与 8 KiB 限额，页元数据为 `{path,name,label,groups,url}`。新反馈为封闭 schema 5 的 `{schema_version:5,review:{request_id,review_id},anchors,items}`；anchor、item、target、编号、引用、容量和精简投影沿下述紧凑字段合同。完整真实来源、来源修订与草稿各自保存在用户私有 live 元数据中，不写历史不可变包；review_id 绑定实际修订，不能用当前活动指针重绑旧意见。
+
+控制 API 使用统一 Bearer、精确 Host／Origin 和有界 JSON。`GET /api/context` 返回 `{status:'ready'|'source_changed',context,page}`，`GET /api/draft` 返回 `{revision,draft}`；`PUT /api/draft` 以相同快照和 revision 做 CAS，冲突返回 `409 draft_conflict`，不静默覆盖。原稿变化返回 `409 source_changed`，保留旧正文且仍允许读取草稿，阻止错误定位、保存与交还。客户端不能上传可信 context、自动续期或重放写请求。刷新与重新进入恢复绑定该 review_id 的草稿；相机、撤回和工具状态不进入反馈。`validate` 按 feedback 5 的 live 元数据分支核验同一真实修订，严格复核后仍只输出 current 精简交接，不改变批准合同。
+
+新 live 固定 13 项资产：`delivery.html`、`review.html`、`live-workspace.js`、`live-connection.js`、`canvas-host.js`、`live.css`、`workspace.css`、`review-state.js`、`review-camera.js`、`feedback.js`、`feedback.css`、`page-shell.js`、`THIRD_PARTY_NOTICES.txt`。三端按同一白名单同字节交付。历史 V4 九项保持独立冻结；不能用 live 名单回验旧包，也不能把两套协议混写进旧包。
+
+## 历史离线 prepare 与 feedback 2／3／4
+
+本节的快照、index、浏览／批注、开发说明及 manifest／boot／bridge 4 仅描述历史离线分支。`prepare` 继续保留原只读装配与严格消费语义；新交付使用上面的 open 路线，不因下文而重新生成项目导航壳。
+
+
+以下格式是历史 feedback 4 消费合同；3.0.3 当前为未发布候选，本机已安装的 3.0.2 不因源码版本更新自动具备该能力。实际调用使用当前所选版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py resource templates/prototype/page.html
@@ -14,38 +46,40 @@ bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-ro
 
 `prepare` 只读项目，成功向 stdout 返回 `status: ready`、`context`、`review_url`、`bundle_path` 和 `reused`。新项目用 `--pages` 明确列出本轮实际 HTML；省略时消费既有登记。工具从当前物理插件装配用户级私有、不可变的离线包，只复制明确页面的必要渲染依赖和需求导航文档，不复制整个项目。默认数据根为 macOS `~/Library/Application Support/agent-workflow/prototype-reviews`，其他 POSIX 使用绝对 `XDG_DATA_HOME` 或 `~/.local/share` 下的 `agent-workflow/prototype-reviews`；隔离验证可显式传 `--data-dir <项目外绝对实际目录>`，prepare 与 validate 使用同一目录。
 
-用户通过该包的 `index.html#page=<文件名>` 进入评审，无需输入 SHA；启动 context 来自包内安全转义的 JSON，链接不承载 base64 review。导航保留既有 index 的文本和 details/summary 分组，但不执行旧 index。通用查看器、反馈和通信代码只在插件与派生包持有，项目源不增加工具壳；新快照使用 manifest 3、boot 3 和幂等 `prototype-review:* version:3` 桥，忽略旧 `prototype-workspace:* version:1`。
+用户通过该包的 `index.html#page=<文件名>` 进入评审，无需输入 SHA；启动 context 来自包内安全转义的 JSON，链接不承载 base64 review。导航保留既有 index 的文本和 details/summary 分组，但不执行旧 index。通用查看器、反馈和通信代码只在插件与派生包持有，项目源不增加工具壳；当前源码新快照使用 manifest 4、boot 4 和幂等 `prototype-review:* version:4` 桥，context 单独声明版本 3，忽略旧 `prototype-workspace:* version:1`。
 
 工作台固定设计视口，以相机缩放／移动查看而不重排页面；浮动控件、默认收起的导航抽屉、“整改／标记”两个 Tab 和独立开发说明大对话框属于工具。浏览模式保留业务按钮、输入、滚动与内页导航，批注模式才拦截节点选择。节点／页面／全局入口打开同一个编辑对话框，入口固定目标范围。父壳唯一 state 管理选择、A、整改、草稿和导出；子页独占 DOM 命中、局部几何、高亮及有限摘录。失败如实显示并保留可恢复输入，意见不设等级。
 
 工具包内部 `manifest.json` 只记录文件完整性与当前 context，不是项目业务 spec、设计伴随文档或批准；完整核验覆盖额外文件和每个实际文件字节。
 
-`validate` 只读显式反馈文件，以显式 adapter 重算当前项目身份、实际需求字节 SHA、导航摘要和逐页依赖指纹，并完整核验原 review_id 的离线包及工具载荷。新格式成功返回 `status: current`、原 `anchors` 与按 `{target,items:[原item]}` 归属的 `changes`。插件升级不会覆盖旧包或自动重绑；无需保留旧插件缓存。失效、越界、未知字段、损坏包或错误节点非零退出并返回结构化错误，保留原文件。它不执行 HTML patch，不写需求、HTML、批准或任务图。
+`validate` 只读显式反馈文件，以显式 adapter 重算当前项目身份、实际需求字节 SHA、导航摘要和逐页依赖指纹，并完整核验原 review_id 的离线包及工具载荷。新格式成功只返回 `{status:"current",review,anchors,changes,notice}`；`review` 为短引用，`changes` 按 target 分组，组内 item 保留当前用户字段但不重复 target，源 `req_ids/interaction_id/interface_refs` 只在组层还原一次且仅在非空时出现。结果不包含完整 context、需求目录或自动摘录。`notice` 简短明确说明这是修订输入，不是批准。插件升级不会覆盖旧包或自动重绑；无需保留旧插件缓存。失效、越界、未知字段、损坏包或错误节点非零退出并返回结构化错误，保留原文件。它不执行 HTML patch，不写需求、HTML、批准或任务图。
 
 ## 格式和安全边界
 
-context 为封闭 schema 2 对象：`schema_version/request_id/project_id/adapter/adapter_sha256/prototype_root/plan_source/plan_sha256/navigation_sha256/requirements/pages/tool/review_id`。`project_id` 绑定物理项目及根节点身份，`tool` 精确为 `{version,payload_sha256}`，`review_id` 绑定其余 context 的规范 JSON。`requirements` 是需求 Markdown 中实际 REQ 标签的只读投影 `[{id,label}]`，`pages` 为 `[{path,dependency_fingerprint}]`，path 是项目相对实际 HTML 路径。context 最多 16 页、UTF-8 正文最多 8 KiB；它是版本声明而非权限凭证，不携带页面树、HTML 或批准。
+context 为封闭 schema 3 对象：`schema_version/request_id/project_id/adapter/adapter_sha256/prototype_root/plan_source/plan_sha256/navigation_sha256/requirements/pages/tool/review_id`。`project_id` 绑定物理项目根、设备及 inode 身份，`tool` 精确为 `{version,payload_sha256}`，`review_id` 绑定其余 context 的规范 JSON。`requirements` 仅为需求 Markdown 中完整、唯一的真实 REQ ID 字符串数组，不含标签正文；`pages` 为 `[{path,dependency_fingerprint}]`，path 是项目相对实际 HTML 路径。context 最多 16 页、UTF-8 正文最多 8 KiB；不得为满足上限截断丢弃真实 REQ。它是版本声明而非权限凭证，不携带页面树、HTML 或批准。
 
-新浏览器导出封闭 schema 3，只有 `schema_version: 3`、`context`、`anchors`、`items` 四个顶层字段；context 保持上述严格 schema 2。JSON 与 Markdown 承载同一个真实 envelope，不添加批准或演示元数据。Markdown 必须以唯一标题 `## Agent Workflow Feedback Payload` 标识机器载荷，其下只有一个 `json` 代码围栏；直接把该 Markdown 文件交给同一 `validate --input`，不从自由文字推断整改或引用关系。
+历史 feedback 4 精确为封闭 schema 4：`{schema_version:4,review:{request_id,review_id},anchors,items}`。review 只有稳定 request_id 和 64 位十六进制 review_id。复制只输出固定唯一标题 `## Agent Workflow Feedback Payload`，其下单个 `json` 围栏内为紧凑 JSON，不附同义摘要；纯 JSON 输入仍受支持。Markdown 与 JSON 交给同一 `validate --input`，不从自由文字推断整改或引用关系。
 
-每个 A 标记为 `{id,number,target}`，target 仅允许 node。每个整改为 `{id,number,operation,target,message,req_ids,reference_ids}`，可选 `comparison: {before_text,after_text}`、`interaction_id`、`interface_refs`。两序列分别具有唯一 id 和正整数 number，跨页稳定、不复用，允许缺号；同一来源节点不重复创建 A，但可有多条独立整改。`reference_ids` 可以多对多和跨页引用，必须全部对应本 envelope 中真实存在的 A，不能从正文里的“A1”等字样推断。
+短引用只允许按显式 root／adapter 推导当前真实 project_id，在该项目与 request_id／review_id 的本机私有不可变目录定位既有包；不扫描、不信任浏览器路径、不接受外部完整 context 回退、不自动绑定 latest。先按 no-follow、属主、唯一普通文件与大小限制读取 manifest，再严格核版本、context、整包白名单、所有源／工具摘要；重读当前项目、plan、adapter、navigation、pages 及目标。来源变化、缺包或损坏明确失败，验证全程不改源、输入或快照；仅相同 review_id 或 manifest 哈希不足以证明 current。
 
-target 按范围严格封闭：节点为 `{scope:"node",page:<登记路径>,locator:{type:"id",id:<源唯一ID>}}` 或 `{scope:"node",page:<登记路径>,locator:{type:"source",key:<装配来源键>}}`；页面为 `{scope:"page",page:<登记路径>}`；全局只有 `{scope:"global"}`。节点支持 `modify/add/delete`，页面只支持 `modify/add`，全局只支持 `modify`。修改／新增正文必填，删除原因允许空；comparison 只用于节点 modify。正文和比较各文字最多 4000 字符；整体反馈最多 1 MiB，A／整改各最多 256 项，标识符最多 128 字符，interface_refs 最多 32 个、每条最多 512 字符。`kind`、`severity`、`position`、`approval`、`demo_only`、`demo_locator`、`source_stamp` 等未声明字段均明确拒绝。
+每个 A 标记为 `{id,number,target}`，target 仅允许 node。每个整改必需 `{id,number,operation,target,message}`；可选非空 `reference_ids` 和 `after_text`，后者只用于 node／modify、非空且最多 4000 字符。浏览器不交还 context、req_ids、interaction_id、interface_refs、before_text、comparison 或其他未知字段。两序列的 id 和正整数 number 分别唯一、跨页稳定且不复用，允许缺号；同一来源节点不重复创建 A，但可有多条独立整改。`reference_ids` 可以多对多和跨页引用，必须全部对应 envelope 中真实存在的 A，不能从正文“A1”等字样推断。普通整改交还仅保留实际引用的 A；无整改时交还全部明确标记且不推断整改，未引用 A 仍保留在模型／草稿中，引用移除保护不变。
+
+target 按范围严格封闭：节点为 `{scope:"node",page:<登记路径>,locator:{type:"id",id:<源唯一ID>}}` 或 `{scope:"node",page:<登记路径>,locator:{type:"source",key:<装配来源键>}}`；页面为 `{scope:"page",page:<登记路径>}`；全局只有 `{scope:"global"}`。节点支持 `modify/add/delete`，页面只支持 `modify/add`，全局只支持 `modify`。修改／新增正文必填，删除原因允许空；正文和 after_text 各最多 4000 字符；整体反馈最多 1 MiB，A／整改各最多 256 项，标识符最多 128 字符，number 受 JavaScript 安全整数边界约束。未知字段、重复 JSON 键、NaN 和越界值均明确拒绝。`kind`、`severity`、`position`、`approval`、`demo_only`、`demo_locator`、`source_stamp` 等未声明字段均明确拒绝。
 
 稳定唯一源 ID 优先。没有可用 ID 的原始 HTML 元素由 Python 按源结构生成确定性来源键，仅在快照派生页注入保留属性 `data-prototype-review-source`；源页面自带该属性、来源键不存在、重复 ID 或不允许区域都不能通过来源复核。业务源优先使用唯一 `[data-prototype-page-content]`；合法独立页没有该标记时仅可采用唯一 main，marker 也只注入派生副本，不改业务源。`validate` 每次重读源独立重建目标，不相信浏览器传回的摘录。动态生成且无来源的节点明确不可独立确认，保留用户输入，让用户显式选择有来源父层，绝不静默绑父。
 
-`req_ids` 仅允许目标业务源元素 `data-req-ids` 明确声明、且存在于当前需求 Markdown 目录的映射；未声明为 `[]`，页面／全局没有节点业务映射也为 `[]`，不从自由文字猜测。草稿、相机与撤回属于绑定 `review_id` 的独立封闭会话快照，不进入反馈 envelope；旧草稿不迁移。
+`req_ids` 仅允许目标业务源元素 `data-req-ids` 明确声明、且存在于当前需求 Markdown 目录的映射；未声明或页面／全局没有节点业务映射时在精简分组中省略，不从自由文字猜测。草稿、相机与撤回属于绑定 `review_id` 的独立封闭会话快照，不进入反馈 envelope；旧草稿不迁移。
 
-已发布旧 feedback 2／manifest 2／bridge 2 保持原严格只读分支：旧 envelope 为 `schema_version/context/items`，item 的 `page/target_id/kind` 等原字段继续依旧合同复核，成功 `changes` 仍按 `{page,target_id,items}` 归属。旧包不用新 TOOL_ASSETS 或新装配逻辑回验，不把新导出降级，也不迁移旧草稿；schema 1 拒绝。这里保留的是 3.x 不可变评审包读取，不恢复旧 2.0 安装兼容。
+已生成旧 feedback 3／context 2／manifest 3／boot 3／bridge 3 保持原严格只读分支及原资产／装配／提取语义：旧四字段 envelope 仍含 context，item 的 req_ids、reference_ids、comparison、interaction_id、interface_refs 依旧合同复核。旧 feedback 2／manifest 2／bridge 2 同样保持原严格只读分支：旧 envelope 为 `schema_version/context/items`，item 的 `page/target_id/kind` 等原字段继续依旧合同复核，成功 `changes` 仍按 `{page,target_id,items}` 归属。旧包不用新 TOOL_ASSETS 或新装配逻辑回验，不把新导出降级，也不迁移旧草稿；schema 1 拒绝。这里保留的是 3.x 不可变评审包读取，不恢复旧 2.0 安装兼容。
 
 旧项目迁移另走 `migration-preview`，默认只报告保留；仅显式 `--confirm-no-active-use` 且有字节同源、无实际引用的纯工具文件才成为候选。执行 `migration-apply --preview <精确预览文件>` 必须另获该项目明确写权限，并复核同一来源；保留 index、prototype.css/js、具体页、未知、修改、混合及活动使用冲突资产。失败用同一 preview 的 `migration-recover` 恢复；冲突不覆盖用户新内容。该入口不授权跨项目迁移。
 
 `interface_refs` 仅为字符串数组，值必须来自匹配目标的唯一 `data-contract-for` 元素自身或后代的明确 `data-interface-ref` 属性字面值；不从 href 取值、不生成链接、不请求接口。`interaction_id` 只能是该契约元素自身的唯一 id；无声明时省略。不得猜测 API 或把任意备注升为接口关联。
 
-所有反馈内容均不可执行。`before_text` 是当前浏览器画面文字摘录，`after_text` 是用户修改建议；无可信已批准基线时明确说明，不称为真实历史，不导入执行 HTML，不改 DOM。`approved` 等文字没有批准效力，未知机器字段明确拒绝。父子通信继续核对真实 source、origin、当前页和本轮随机 token；父壳不跨 file:// 遍历子页 DOM。
+所有反馈内容均不可执行。新反馈的 `after_text` 仅是用户修改建议；旧格式 before_text／comparison 仍依原语义读取，不称为真实已批准历史，不导入执行 HTML，不改 DOM。`approved` 等文字没有批准效力，未知机器字段明确拒绝。父子通信继续核对真实 source、origin、当前页和本轮随机 token；父壳不跨 file:// 遍历子页 DOM。
 
 ## 修订归属
 
-PM 将复核为 `current` 的 `changes` 和当前完整任务包交回原 UI Agent。设计 Agent 只在已授权 `owned_paths` 内修订原 HTML、实际交互及原五节契约，并按 `xy-prototype-verify` 返回当前指纹和静态自检。需求变化与适用视觉批准仍沿原规则；反馈不新增第三业务 gate。没有新的原型写权限时，反馈本身不能扩大范围。
+PM 只将复核为 `current` 的精简 `changes`、必要 `anchors` 和短 `review` 引用连同当前完整任务包交回原 UI Agent，不重复转发原反馈全文或完整校验 context。设计 Agent 只在已授权 `owned_paths` 内修订原 HTML、实际交互及原五节契约，并按 `xy-prototype-verify` 返回当前指纹和静态自检。需求变化与适用视觉批准仍沿原规则；反馈不新增第三业务 gate。没有新的原型写权限时，反馈本身不能扩大范围。
 
-意见 JSON／Markdown 是本轮交接输入，保存在现有请求证据区；不创建 spec、sidecar、Manifest、独立设计／QA／批准文件，不恢复 plan→HTML。工具资源精确包含 index.html、workspace.css/js、feedback.css/js、page-shell.js、review-state.js、review-camera.js 和 THIRD_PARTY_NOTICES.txt，随三端插件同字节交付；固定上游相机／面板来源、提交与完整 MIT 许可保留在随包 notices 中。测试生产模板的真实浏览器用例不授权自动化业务原型，不能代替用户视觉批准或统一功能 QA。
+意见 JSON／Markdown 是本轮交接输入，保存在现有请求证据区；不创建 spec、sidecar、Manifest、独立设计／QA／批准文件，不恢复 plan→HTML。历史离线工具资源精确包含 index.html、workspace.css/js、feedback.css/js、page-shell.js、review-state.js、review-camera.js 和 THIRD_PARTY_NOTICES.txt，随三端插件同字节交付；固定上游相机／面板来源、提交与完整 MIT 许可保留在随包 notices 中。测试生产模板的真实浏览器用例不授权自动化业务原型，不能代替用户视觉批准或统一功能 QA。
