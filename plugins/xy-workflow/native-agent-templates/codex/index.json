@@ -1,0 +1,50 @@
+{
+  "host": "codex",
+  "product": "xy-workflow",
+  "schema_version": 1,
+  "templates": [
+    {
+      "description": "Repository-driven Android engineer. Implements native Android applications with the project's actual Gradle, Kotlin or Java, Compose or Views, architecture, and verification stack.",
+      "name": "xy-android",
+      "path": "native-agent-templates/codex/xy-android.toml",
+      "sha256": "f74e9efe5b836a537d3d68e60388665b3554daa32f6c4cb7a40703892f4c39a4"
+    },
+    {
+      "description": "Repository-driven Apple platforms engineer. Implements iOS, iPadOS, macOS, watchOS, tvOS, and visionOS application work with the project's actual Xcode and Swift or Objective-C stack.",
+      "name": "xy-apple",
+      "path": "native-agent-templates/codex/xy-apple.toml",
+      "sha256": "f5932a5e71df801fafc90baea6d50b1e77b26c17762626c79ab0c78ec911e314"
+    },
+    {
+      "description": "General repository-driven backend and systems engineer for server, service, data, CLI, worker, and native-system changes across existing languages and toolchains.",
+      "name": "xy-backend",
+      "path": "native-agent-templates/codex/xy-backend.toml",
+      "sha256": "030ea00b974c5688e2124ba9925d3935122ff72f1aeba736671cf6e827fe2856"
+    },
+    {
+      "description": "Repository-driven Electron and Tauri desktop engineer. Owns renderer, main/preload or Rust core, IPC/capabilities, native integration, packaging, signing, updates, and platform evidence.",
+      "name": "xy-desktop",
+      "path": "native-agent-templates/codex/xy-desktop.toml",
+      "sha256": "d93b2164a97b031a874a354f12b8a3662d121486d5b1863c5b5351e2ac0a8c53"
+    },
+    {
+      "description": "Independent read-only QA owner using native review first and verifying request acceptance against current source, standards and evidence.",
+      "name": "xy-qa",
+      "path": "native-agent-templates/codex/xy-qa.toml",
+      "sha256": "409ce8facf795d98e39b7b6276d2e685bc6f87ab5b88c50688e8d9b43c2771a1"
+    },
+    {
+      "description": "Repository-driven UI/UX designer. Maintains approved design standards and stable build-free interactive HTML pages within explicit task paths, never production source.",
+      "name": "xy-uiux",
+      "path": "native-agent-templates/codex/xy-uiux.toml",
+      "sha256": "3d92c180c97b40d10c138fe7fc401be4636bab85aff8cc886123774f4485be20"
+    },
+    {
+      "description": "Repository-driven Web engineer. Implements production browser applications with the project's existing framework, components, tokens, and verification commands.",
+      "name": "xy-web",
+      "path": "native-agent-templates/codex/xy-web.toml",
+      "sha256": "9c5d56c7b2b673da922af7b3401223f627f89a8356509824dfbbb4b322428fdb"
+    }
+  ],
+  "version": "3.0.5"
+}
