@@ -160,6 +160,14 @@ In the existing handoff, return requirement coverage by stable REQ identifiers w
 and actual state anchors. The PM writes these back to the single requirements Markdown.
 Requirements/plan Markdown-to-HTML generation is retired under [the retained reference](../xy-plan/references/requirements-markdown.md);
 keep any existing HTML as historical material without requiring an update.
+需要评审整改时，按需读取 [反馈消费合同](references/prototype-feedback.md)，通过当前物理插件根
+`prepare` 生成项目外不可变快照；项目只保留具体 HTML/CSS/JS 与五段页面契约，不复制通用壳。
+新 JSON／Markdown 导出承载相同的 feedback 3 四字段 envelope，context 仍为严格版本 2；先由
+`validate` 重读源页面确认，再消费节点／页面／全局整改及显式 REQ、A 引用，不把意见当批准。
+节点优先唯一稳定 ID；匿名源元素使用工具派生来源键，不在业务源手写保留属性
+`data-prototype-review-source`。业务 REQ 映射须明确写在源元素 `data-req-ids`，无映射时为 `[]`。
+动态无来源节点保留输入并提示显式选有来源父层；不得凭局部摘录或静默改绑确认来源。
+标记 A 与整改独立编号，不恢复意见等级；旧 feedback 2 仅保留原严格只读消费，不迁移旧草稿。
 The design Agent does not edit the PM's source or create a mapping report; this association does not
 change the prototype page, dependency fingerprint, or visual-approval contract.
 

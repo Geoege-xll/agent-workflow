@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     preview.add_argument("--confirm-no-active-use", action="store_true", help="明确已排除本轮待迁移资产的活动使用；否则只报告保留")
     for command in (apply, recover):
         command.add_argument("--preview", required=True, type=Path, help="已审阅的原 preview JSON 文件")
-    validate.add_argument("--input", required=True, type=Path, help="显式选择的反馈 JSON 文件")
+    validate.add_argument("--input", required=True, type=Path, help="显式选择的反馈 JSON 或固定机器载荷 Markdown 文件")
     try:
         args = parser.parse_args(argv)
         if args.command == "prepare":

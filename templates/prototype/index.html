@@ -3,66 +3,240 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>原型工作区</title>
+  <meta name="color-scheme" content="dark">
+  <title>原型评审工作台</title>
   <link rel="stylesheet" href="workspace.css">
   <link rel="stylesheet" href="feedback.css">
+  <script src="review-state.js" defer></script>
+  <script src="review-camera.js" defer></script>
   <script src="feedback.js" defer></script>
   <script src="workspace.js" defer></script>
 </head>
 <body class="prototype-workspace">
-  <!-- 入口直接展示工作区；名称、简述、返回和契约均由当前独立页提供。 -->
-  <div id="prototype-workspace" class="workspace-layout">
-    <aside id="prototype-sidebar" class="workspace-sidebar" aria-label="页面侧栏">
-      <div class="workspace-brand"><span class="workspace-brand-icon" aria-hidden="true"></span><strong>原型工作区</strong></div>
-      <p class="workspace-sidebar-label">页面导航 <span id="prototype-page-count">0 页</span></p>
-      <!-- prepare把明确选择的项目页面、原标签和分组写入唯一非执行启动数据；
-           工作区从该快照投影导航，不要求业务项目复制本入口或通用工具资源。 -->
-      <nav id="prototype-pages" class="workspace-page-tree" aria-label="Prototype pages"></nav>
-    </aside>
-    <div class="workspace-view">
-      <!-- 开关只改变布局；当前页圆形返回另负责展开分组并定位导航焦点。 -->
-      <button id="prototype-sidebar-toggle" class="workspace-sidebar-toggle" type="button" aria-controls="prototype-sidebar" aria-expanded="true" hidden>
-        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg>
-        <span id="prototype-sidebar-toggle-label">收起侧栏</span>
-      </button>
-      <!-- 未登记时不设置 src，不加载模板或假页面；只向唯一 iframe 写入快照映射URL。 -->
-      <iframe id="prototype-preview" title="当前原型页面" referrerpolicy="no-referrer" hidden></iframe>
-      <!-- 反馈始终位于预览之后的自然文档流，展开时不压缩高保真画板。 -->
-      <details id="prototype-feedback" class="prototype-feedback">
-        <summary id="feedback-heading" tabindex="0">页面反馈 <span id="feedback-count">0 条</span></summary>
-        <p>反馈是修订输入，保存或导出不会批准工作流。尚无可信已批准基线；下方仅比较当前浏览器文字摘录与您的建议。</p>
-        <p id="feedback-status" role="status" aria-live="polite">普通浏览模式，反馈未启用。</p>
-        <p id="feedback-storage"></p>
-        <form id="feedback-form">
-          <fieldset id="feedback-fields" disabled>
-            <legend>按稳定控件或状态记录意见</legend>
-            <div class="feedback-fields">
-              <label>当前页节点<select id="feedback-target" required></select></label>
-              <label>意见类型<select id="feedback-kind"><option value="must_change">必须改</option><option value="suggestion" selected>建议</option><option value="question">疑问</option></select></label>
+<main id="review-workspace" class="review">
+<h1 class="visually-hidden">原型评审工作台</h1>
+          <header class="review-toolbar">
+            <div class="review-toolbar-start">
+              <button id="navigation-toggle" type="button" class="review-quiet" aria-controls="navigation-drawer" aria-expanded="false">☰ 原型页面</button>
+              <span class="review-toolbar-divider"></span>
+              <strong id="current-page-title">等待页面</strong>
             </div>
-            <button id="feedback-locate" type="button">定位当前节点</button>
-            <p id="feedback-relations"></p>
-            <fieldset><legend>关联需求（可选）</legend><div id="feedback-requirements" class="feedback-requirements"></div></fieldset>
-            <label>意见（必填，最多 4000 字符）<textarea id="feedback-message" rows="3" required></textarea></label>
-            <div class="feedback-comparison">
-              <div><strong>当前浏览器摘录</strong><pre id="feedback-before"></pre></div>
-              <label>建议文字（可选，最多 4000 字符）<textarea id="feedback-after" rows="3"></textarea></label>
+            <fieldset class="review-segment mode-segment">
+              <legend class="visually-hidden">操作模式</legend>
+              <label><input id="mode-browse" name="review-mode" type="radio" value="browse" checked><span>浏览</span></label>
+              <label><input id="mode-annotate" name="review-mode" type="radio" value="annotate"><span>⌖ 批注</span></label>
+            </fieldset>
+            <div class="review-toolbar-end">
+              <button id="open-developer" type="button" class="review-quiet">开发说明</button>
+              <button id="open-feedback" class="review-secondary review-mobile-panel" type="button" aria-controls="review-panel" aria-expanded="false">整改清单 <span id="feedback-count">0</span></button>
             </div>
-            <div class="feedback-actions"><button id="feedback-save" type="submit">保存意见</button><button id="feedback-cancel" type="button">取消当前编辑</button></div>
-          </fieldset>
-        </form>
-        <section aria-label="已保存意见"><h2>本轮草稿</h2><div id="feedback-items"></div></section>
-        <div class="feedback-actions"><button id="feedback-copy" type="button">复制反馈 JSON</button><button id="feedback-download" type="button">下载反馈 JSON</button></div>
-        <p>复制和下载包含已保存意见；尚未保存的表单输入会保留在本标签页草稿中。</p>
-      </details>
-      <dialog id="feedback-manual" class="prototype-feedback feedback-dialog" aria-labelledby="feedback-manual-title">
-        <h2 id="feedback-manual-title">手动复制反馈</h2><p>自动复制不可用。选中以下纯文本后使用系统复制快捷键，或关闭后下载 JSON。</p>
-        <label>反馈 JSON<textarea id="feedback-output" rows="12" readonly></textarea></label><button id="feedback-close" type="button">关闭</button>
-      </dialog>
-      <div id="prototype-empty" class="workspace-empty" role="status"><p>暂无原型页面</p><span>添加实际页面后，可在此分组浏览。</span></div>
-    </div>
-  </div>
-  <p id="prototype-workspace-status" class="workspace-visually-hidden" role="status" aria-live="polite"></p>
-  <noscript><p class="workspace-noscript">页面预览和侧栏开关需要本地 JavaScript；可通过左侧链接独立打开页面，原生分组仍可展开。</p></noscript>
-</body>
-</html>
+          </header>
+          <div class="review-body">
+            <section class="review-canvas-column" aria-label="设计稿画布">
+              <!-- 视口工具不在world内，不随相机缩放；中央只保留实际HTML稿件。 -->
+              <div id="canvas-viewport" class="cv-vp" role="region" aria-label="设计稿画布，方向键平移" tabindex="0">
+                <!-- 固定设计视口仅由相机整体变换；父壳从不读取子文档 DOM。 -->
+                <div id="canvas-world" class="cv-world">
+                  <iframe id="prototype-preview" title="当前原型页面" referrerpolicy="no-referrer" hidden></iframe>
+
+                </div>
+                <div class="canvas-floating-controls" data-review-ui>
+                  <div class="canvas-tool-cluster">
+                    <div id="canvas-zoom-tools" class="canvas-zoom-tools" role="toolbar" aria-label="画布缩放" aria-controls="canvas-world">
+                      <button id="canvas-fit" type="button">适应</button>
+                      <span role="separator" aria-orientation="vertical"></span>
+                      <button id="canvas-zoom-out" type="button" aria-label="缩小画布" title="缩小">−</button>
+                      <button id="canvas-zoom-reset" type="button" title="恢复100%">100%</button>
+                      <button id="canvas-zoom-in" type="button" aria-label="放大画布" title="放大">+</button>
+                    </div>
+                    <div class="canvas-display-options">
+                      <label><input id="show-rectifications" type="checkbox" checked> 整改</label>
+                      <label><input id="show-anchors" type="checkbox" checked> 定位</label>
+                    </div>
+                  </div>
+                  <button id="page-rectification" type="button" class="canvas-page-action">页面整改 <span id="page-rectification-count"></span></button>
+                </div>
+                <div id="selection-tools" class="selection-tools" data-review-ui hidden>
+                  <div id="selection-actions" role="toolbar" aria-label="所选目标操作">
+                    <button id="select-parent" type="button" class="review-quiet">选择父层</button>
+                    <button id="mark-location" type="button">标记位置</button>
+                    <button id="add-rectification" type="button" class="review-primary">添加整改</button>
+                    <button id="remove-selected-anchor" type="button" hidden>移除标记</button>
+                    <button id="withdraw-selected-item" type="button" hidden>撤回整改</button>
+                    <button id="view-anchor-references" type="button" class="review-quiet" hidden>查看引用</button>
+                  </div>
+                  <p id="selection-reference-reason" class="review-field-help" hidden></p>
+                </div>
+                <details id="target-picker" class="canvas-target-picker" data-review-ui>
+                  <summary id="target-picker-toggle">键盘选取目标</summary>
+                  <div>
+                    <label for="target-directory">当前页可见元素</label>
+                    <select id="target-directory">
+                      <option value="">选择目标</option>
+                    </select>
+                  </div>
+                </details>
+                <p id="review-status" class="canvas-status" role="status" aria-live="polite">浏览模式 · 整改与定位标记均为空</p>
+              </div>
+            </section>
+            <div id="review-panel-slot" class="review-panel-slot">
+              <aside id="review-panel" class="review-panel" aria-label="整改清单">
+                <header class="review-panel-heading">
+                  <div id="record-tabs" class="record-tabs" role="tablist" aria-label="评审记录类型">
+                    <button id="tab-rectifications" type="button" role="tab" aria-selected="true">整改 <span id="rectification-count">0</span></button>
+                    <button id="tab-anchors" type="button" role="tab" aria-selected="false" tabindex="-1">标记 <span id="anchor-count">0</span></button>
+                  </div>
+                  <button id="close-panel" type="button" class="review-quiet review-mobile-panel" aria-label="收起评审记录">×</button>
+                </header>
+                <div id="review-panel-scroll" class="review-panel-scroll">
+                  <section id="rectification-tab-panel" role="tabpanel" aria-labelledby="tab-rectifications">
+                    <details class="rectification-filters">
+                      <summary id="filter-toggle">筛选整改</summary>
+                      <div class="review-filters">
+                        <div>
+                          <label for="filter-scope" class="visually-hidden">整改范围</label>
+                          <select id="filter-scope">
+                            <option value="current">当前页及整体</option>
+                            <option value="all">全部页面</option>
+                            <option value="global">仅本轮整体</option>
+                          </select>
+                        </div>
+                      </div>
+                    </details>
+                    <div id="rectification-list">
+                    </div>
+                    <div id="rectification-empty" class="review-empty">
+                      <h3>从一处整改开始</h3>
+                      <p id="empty-description">在批注模式点选元素，写下修改、新增或删除建议。</p>
+                      <button id="start-annotation" type="button" class="review-secondary">开始批注</button>
+                    </div>
+                    <div id="withdraw-notice" class="review-withdraw" hidden>
+                      <span id="withdraw-message"></span>
+                      <button id="undo-withdraw" type="button" class="review-inline">恢复</button>
+                    </div>
+                  </section>
+                  <section id="anchor-tab-panel" class="anchor-section" role="tabpanel" aria-labelledby="tab-anchors" hidden>
+                    <p class="anchor-section-help">A编号只标位置，与整改编号独立。</p>
+                    <div id="anchor-list">
+                    </div>
+                  </section>
+                </div>
+                <footer class="review-panel-footer">
+                  <button id="write-global" type="button" class="review-secondary">本轮整体意见</button>
+                  <button id="copy-feedback" type="button" class="review-primary">复制给 Agent ↗</button>
+                  <p id="panel-footer-status" class="visually-hidden" role="status">尚无整改或定位标记</p>
+                </footer>
+              </aside>
+            </div>
+          </div>
+<dialog id="navigation-drawer" class="review-nav-drawer" aria-labelledby="navigation-title" closedby="any">
+<div class="review-nav-drawer-heading"><h2 id="navigation-title">原型页面</h2><button id="close-navigation" type="button" class="review-quiet" aria-label="关闭原型页面">×</button></div>
+<nav id="prototype-pages" aria-label="原型页面切换"></nav><p class="review-navigation-foot">切换保留视口与草稿。</p></dialog>
+          <dialog id="panel-drawer" class="review-drawer" aria-label="整改清单">
+            <div id="drawer-panel-host">
+            </div>
+          </dialog>
+          <!-- 三个范围入口共用这个表单；取消只暂存，不分配编号。 -->
+          <dialog id="rectification-dialog" class="rectification-dialog" aria-labelledby="rectification-title">
+            <header class="modal-heading">
+              <div>
+                <p id="rectification-scope" class="modal-eyebrow">节点整改</p>
+                <h2 id="rectification-title">添加整改</h2>
+              </div>
+              <button id="rectification-close" type="button" class="review-quiet" aria-label="关闭并保留草稿">×</button>
+            </header>
+            <form id="rectification-form" novalidate aria-label="完成整改">
+              <div class="rectification-modal-scroll">
+                <fieldset class="operation-segment">
+                  <legend>整改类型</legend>
+                  <label><input id="operation-modify" type="radio" name="operation" value="modify" checked><span>修改</span></label>
+                  <label id="operation-add-label"><input id="operation-add" type="radio" name="operation" value="add"><span>新增内容</span></label>
+                  <label id="operation-delete-label"><input id="operation-delete" type="radio" name="operation" value="delete"><span>删除建议</span></label>
+                </fieldset>
+                <div class="review-field">
+                  <label for="rectification-message"><span id="message-field-label">期望效果</span><span id="message-required">必填</span></label>
+                  <textarea id="rectification-message" autofocus rows="5" maxlength="4000" required aria-describedby="message-help message-error" placeholder="说明希望如何调整，以及原因或预期效果。">
+                  </textarea>
+                  <p id="message-help" class="review-field-help">⌘ / Ctrl + Enter 完成 · 取消也会保留草稿</p>
+                  <p id="message-error" class="review-error" role="alert" hidden></p>
+                </div>
+                <div id="selected-references" class="selected-references">
+                </div>
+                <p id="conflict-warning" class="conflict-warning" role="status" hidden></p>
+                <details id="reference-details" class="reference-details">
+                  <summary id="reference-toggle">引用定位标记 <span id="selected-reference-count">0</span></summary>
+                  <p class="review-field-help">选中已有位置即可插入引用；引用可点击定位，正文始终是纯文字。</p>
+                  <div id="reference-options">
+                  </div>
+                </details>
+                <details id="additional-details" class="additional-details">
+                  <summary id="additional-toggle">更多信息 <span>原文 / 建议文字</span></summary>
+                  <div id="node-extra"><p id="target-relations" class="review-field-help"></p><p class="review-field-help">当前摘录来自浏览器，尚无可信的已批准历史基线；建议仅表达修订意图。</p>
+                    <label for="original-excerpt">当前摘录 · 只读</label>
+                    <textarea id="original-excerpt" rows="2" readonly>
+                    </textarea>
+                    <div id="comparison-field">
+                      <label for="comparison-after">建议文字 · 可选</label>
+                      <textarea id="comparison-after" rows="2" maxlength="4000">
+                      </textarea>
+                    </div>
+                  </div>
+                </details>
+              </div>
+              <footer class="rectification-modal-footer">
+                <span id="draft-state">草稿自动保留</span>
+                <button id="rectification-cancel" type="button" class="review-secondary">取消，保留草稿</button>
+                <button id="complete-rectification" type="submit" class="review-primary">完成整改</button>
+              </footer>
+            </form>
+          </dialog>
+          <dialog id="export-dialog" class="review-export" aria-labelledby="export-title">
+            <div class="review-export-heading">
+              <span class="review-export-symbol" aria-hidden="true">↗</span>
+              <div>
+                <h2 id="export-title">把整改交还给 Agent</h2>
+                <p>复制后粘贴到当前对话，再发送。</p>
+              </div>
+              <button id="export-close" type="button" class="review-quiet" aria-label="关闭交还反馈">×</button>
+            </div>
+            <div class="review-export-counts">
+              <p class="export-anchor-total">另有 <span id="export-anchor-count">0</span> 个定位标记</p>
+              <div>
+                <strong id="export-saved-count">0</strong>
+                <span>条已完成整改</span>
+              </div>
+              <div>
+                <strong id="export-draft-count">0</strong>
+                <span>份未完成草稿</span>
+              </div>
+            </div>
+            <p id="export-warning" class="review-export-warning">将交还本轮已完成整改及其引用的定位关系。</p>
+            <div id="export-result" class="review-export-result" role="status">
+            </div>
+            <div class="review-export-actions">
+              <button id="export-cancel" class="review-secondary" type="button">取消，保留输入</button>
+              <button id="export-save-copy" class="review-primary" type="button" hidden>完成草稿并复制</button>
+              <button id="export-copy" class="review-primary" type="button">复制已完成整改</button>
+            </div>
+            <details class="review-export-backup">
+              <summary id="export-backup-toggle">手动复制 / 下载备用</summary>
+              <p>反馈必须经本轮 CLI 独立来源校验。</p>
+              <label for="export-text">可读摘要与反馈载荷</label>
+              <textarea id="export-text" rows="8" readonly>
+              </textarea>
+              <div>
+                <button id="select-export" class="review-secondary" type="button">选中全部文字</button>
+                <button id="download-feedback" class="review-secondary" type="button">下载反馈 .md</button>
+              </div>
+            </details>
+            <p class="review-export-note">意见只表达修改建议；复制与下载不会批准方案或自动启动实现。</p>
+          </dialog>
+<dialog id="developer-dialog" class="developer-dialog" aria-labelledby="developer-title">
+<header class="modal-heading"><div><p class="modal-eyebrow">设计稿说明</p><h2 id="developer-title" tabindex="-1">开发说明</h2></div><button id="developer-close" type="button" class="review-quiet" aria-label="关闭开发说明">×</button></header>
+<div class="developer-scroll"><nav class="prototype-requirement-links" aria-label="关联需求"><a id="workspace-requirement-markdown" target="_blank" rel="noopener">需求原稿 ↗</a></nav><p id="feedback-storage" role="status"></p>
+<details id="page-contract" class="prototype-contract" open><summary>Page design and interaction contract</summary><div id="page-contract-content"></div></details>
+<p class="review-field-help">HTML 是本轮设计来源。整改、A标记和草稿不会改写设计稿；复制后仍需粘贴并发送给 Agent。</p></div></dialog>
+<p id="prototype-empty" class="workspace-empty" role="status" hidden></p>
+</main>
+<noscript><p class="noscript-notice">评审工作台需要本地 JavaScript。</p></noscript>
+</body></html>

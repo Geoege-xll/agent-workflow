@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import copy
 import html
 from html.parser import HTMLParser
 import json
@@ -21,20 +22,17 @@ from urllib.parse import unquote, urlsplit
 
 from lib.documents.safe_documents import digest, normalized_relative, snapshot
 from lib.documents import validate_prototype_workspace as workspace
+from lib.documents.prototype_targets import (inject_source_targets, check_context, capture_targets,
+    FeedbackError, _identifier, _relative, _requirements, _ContractReferences, MAX_PAGES,
+    json_bytes, review_id)
+from lib.project.validate_project_config import validate_docs
+from lib.runtime_pins import adapter_path, record_binding
 
 TOOL_ROOT = Path(__file__).resolve().parents[2]
-TOOL_ASSETS = ("index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js", "page-shell.js")
+LEGACY_TOOL_ASSETS = ("index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js", "page-shell.js")
+TOOL_ASSETS = LEGACY_TOOL_ASSETS + ("review-state.js", "review-camera.js", "THIRD_PARTY_NOTICES.txt")
 MAX_BUNDLE_FILES = 300
 MAX_MANIFEST_BYTES = 256 * 1024
-
-
-def json_bytes(value: object) -> bytes:
-    """规范 JSON 排序键，避免浏览器导出调整键顺序就改变内容身份。"""
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-
-
-def review_id(context: dict) -> str:
-    return digest(json_bytes({key: value for key, value in context.items() if key != "review_id"}))
 
 
 def project_id(root: Path) -> str:
@@ -46,10 +44,10 @@ def project_id(root: Path) -> str:
         os.close(fd)
 
 
-def _payload(version: bytes, files: dict[str, bytes]) -> str:
+def _payload(version: bytes, files: dict[str, bytes], *, format_version: int = 3) -> str:
     # 长度前缀固定路径/字节边界，不能用简单字符串拼接产生歧义。
     import hashlib
-    value = hashlib.sha256(b"agent-workflow/prototype-review-tool/v2\0")
+    value = hashlib.sha256(f"agent-workflow/prototype-review-tool/v{format_version}\0".encode("ascii"))
     for name, body in [("version", version)] + sorted(files.items()):
         encoded = name.encode("utf-8")
         value.update(len(encoded).to_bytes(8, "big")); value.update(encoded)
@@ -140,6 +138,105 @@ def navigation_data(index: bytes | None, pages: list[dict], files: dict[str, byt
         result.append({"name": name, "path": path, "url": "project/" + path,
                        "label": label, "groups": found["groups"]})
     return result
+
+
+def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
+                    pages: list[str] | None, *, tool: dict, format_version: int = 3) -> tuple[dict, dict, dict, list]:
+    """无条件确认项目画像与来源，再复用原校验器；导航缺失不能跳过这些边界。"""
+    if type(format_version) is not int or format_version not in {2, 3}:
+        raise FeedbackError("来源捕获仅支持明确的包格式2或3")
+    project = Path(root)
+    if not project.is_absolute() or ".." in project.parts or "\\" in str(project):
+        raise FeedbackError("项目根必须是无父跳转的实际绝对目录")
+    # 使用原校验器逐祖先 no-follow 打开目录；不能先 resolve 后把符号链接别名洗成安全路径。
+    descriptor = workspace._open_root(project, "反馈项目根")
+    workspace.os.close(descriptor)
+    _identifier(request_id, "请求 ID")
+    adapter = _relative(adapter, "适配器路径")
+    plan = _relative(plan, "需求路径")
+    binding = record_binding({}, root=project, initialize=True)
+    if binding is not None:
+        raise FeedbackError("反馈入口不接管中央固定运行时任务")
+    selected = adapter_path(project, adapter, binding)
+    if selected != adapter:
+        raise FeedbackError("适配器不属于当前显式选择")
+    captures = {}
+
+    def capture(path):
+        current = snapshot(path)
+        if path in captures and captures[path] != current:
+            raise FeedbackError("反馈来源在读取期间发生变化：" + path.name)
+        captures[path] = current
+        return current[0]
+
+    adapter_body = capture(project / adapter)
+    lines = adapter_body.decode("utf-8").splitlines()
+    if sum(bool(re.fullmatch(r"docs:\s*(?:#.*)?", line)) for line in lines) != 1:
+        raise FeedbackError("适配器必须包含唯一 docs 配置")
+    errors = []
+    docs = validate_docs(lines, project, errors)
+    if errors:
+        raise FeedbackError("适配器文档配置无效：" + "; ".join(errors))
+    prototype = _relative(docs["standards_root"].rstrip("/") + "/prototype", "原型根")
+    plans = normalized_relative(docs["plans"].rstrip("/"))
+    relative_plan = normalized_relative(plan)
+    if (relative_plan.suffix != ".md" or not relative_plan.is_relative_to(plans)
+            or any(part.startswith(".") for part in relative_plan.parts)):
+        raise FeedbackError("需求来源必须是所选 adapter 的 docs.plans 内 Markdown")
+    plan_body = capture(project / plan)
+    prototype_path = project / prototype
+    descriptor = workspace._open_root(prototype_path, "反馈原型根")
+    workspace.os.close(descriptor)
+    if pages is None:
+        chosen = sorted((Path(prototype) / path.name).as_posix() for path in prototype_path.iterdir()
+                        if path.name != "index.html" and path.suffix.lower() in {".html", ".htm"})
+    else:
+        if not isinstance(pages, list):
+            raise FeedbackError("pages 必须是项目相对 HTML 路径数组")
+        chosen = [_relative(page, "页面路径") for page in pages]
+    if not 1 <= len(chosen) <= MAX_PAGES or len(chosen) != len(set(chosen)):
+        raise FeedbackError("须选择 1 至 16 个不重复页面")
+    for page in chosen:
+        if Path(page).parent != Path(prototype) or Path(page).name == "index.html":
+            raise FeedbackError("评审页面须为配置原型根下的具体 HTML")
+    chosen.sort()
+    metadata = {}
+    for page in chosen:
+        body = capture(project / page).decode("utf-8")
+        parser = workspace.PageParser(page)
+        parser.feed(body)
+        parser.close()
+        if parser.plan_source and parser.plan_source != plan:
+            raise FeedbackError("评审页面已绑定另一份需求 Markdown：" + page)
+        if format_version == 3:
+            metadata[page] = capture_targets(page, body.encode("utf-8"))
+        else:
+            # 旧包重读仍使用发布时的ID/契约语义，不强加新来源属性合同。
+            references = _ContractReferences()
+            references.feed(body); references.close()
+            metadata[page] = {"ids": references.ids, "contracts": references.contracts}
+    # 沿用同一 DependencyValidator 与指纹域；独立页不再依赖项目通用外壳。
+    evidence = workspace.capture_selected_pages(project, prototype, pages=[Path(page).name for page in chosen], adapter=adapter)
+    index_path = prototype_path / "index.html"
+    index_snapshot = snapshot(index_path, required=False)
+    index_body = index_snapshot[0]
+    context = {"schema_version": 2, "request_id": request_id, "adapter": adapter, "prototype_root": prototype,
+               "plan_source": plan, "plan_sha256": digest(plan_body), "requirements": _requirements(plan_body),
+               "pages": evidence["pages"], "project_id": project_id(project),
+               "adapter_sha256": digest(adapter_body), "navigation_sha256": digest(index_body or b""),
+               "tool": copy.deepcopy(tool)}
+    context["review_id"] = review_id(context)
+    check_context(context)
+    # adapter/Markdown/节点元数据均由 snapshot 末尾复查，防止绑定检查与结果之间被替换。
+    for path in tuple(captures):
+        capture(path)
+    if snapshot(index_path, required=False) != index_snapshot:
+        raise FeedbackError("旧索引在评审捕获期间发生变化")
+    files = dict(evidence["files"])
+    files[plan] = plan_body
+    navigation = navigation_data(index_body, evidence["pages"], files)
+    return context, metadata, files, navigation
+
 
 
 def default_data_dir() -> Path:
@@ -317,7 +414,7 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
     try:
         manifest = _closed_json(_read_at(fd, "manifest.json", MAX_MANIFEST_BYTES))
         if (not isinstance(manifest, dict) or set(manifest) != {"schema_version", "context", "files"}
-                or type(manifest["schema_version"]) is not int or manifest["schema_version"] != 2
+                or type(manifest["schema_version"]) is not int or manifest["schema_version"] not in {2, 3}
                 or manifest["context"] != context or not isinstance(manifest["files"], list)
                 or not 1 <= len(manifest["files"]) < MAX_BUNDLE_FILES):
             raise ValueError("评审包清单不匹配")
@@ -336,15 +433,19 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
             files[path] = body
         if _tree(fd) != set(files) | {"manifest.json"}:
             raise ValueError("评审包包含清单外文件或缺失文件")
-        tool_paths = {"tool/" + name for name in TOOL_ASSETS} | {"tool/version.txt"}
+        # 格式由已校验清单决定，旧包永不按新资产白名单或新装配算法回验。
+        format_version = manifest["schema_version"]
+        asset_names = LEGACY_TOOL_ASSETS if format_version == 2 else TOOL_ASSETS
+        tool_paths = {"tool/" + name for name in asset_names} | {"tool/version.txt"}
         if not tool_paths.issubset(files): raise ValueError("评审包缺少工具载荷")
         if (files["tool/version.txt"].decode("utf-8").strip() != context["tool"]["version"]
-                or _payload(files["tool/version.txt"], {name: files["tool/" + name] for name in TOOL_ASSETS})
+                or _payload(files["tool/version.txt"], {name: files["tool/" + name] for name in asset_names}, format_version=format_version)
                 != context["tool"]["payload_sha256"]):
             raise ValueError("评审包工具版本或摘要不匹配")
         if source_files is not None:
             original_tools = {path: files[path] for path in tool_paths}
-            expected = _assemble(context, source_files, original_tools, navigation)
+            assembler = _assemble_v2 if format_version == 2 else _assemble
+            expected = assembler(context, source_files, original_tools, navigation)
         if expected is not None and files != {path: body for path, body in expected.items() if path != "manifest.json"}:
             raise ValueError("评审包派生文件不匹配真实来源与固定工具")
         return manifest
@@ -352,14 +453,17 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
         os.close(fd)
 
 
-def validate_bundle(context: dict, *, data_dir=None, source_files=None, navigation=None) -> dict:
+def validate_bundle(context: dict, *, data_dir=None, source_files=None, navigation=None, format_version=None) -> dict:
     if review_id(context) != context["review_id"]:
         raise ValueError("评审内容身份不匹配")
     with _request_directory(context, data_dir, create=False) as (_, fd):
-        return _check_bundle(fd, context, source_files=source_files, navigation=navigation)
+        manifest = _check_bundle(fd, context, source_files=source_files, navigation=navigation)
+        if format_version is not None and manifest["schema_version"] != format_version:
+            raise ValueError("反馈版本与不可变包格式不匹配")
+        return manifest
 
 
-def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict]) -> dict[str, bytes]:
+def _assemble_v2(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict]) -> dict[str, bytes]:
     result = dict(tools)
     selected = {page["path"] for page in context["pages"]}
     for path, body in files.items():
@@ -379,6 +483,35 @@ def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], n
     for char, replacement in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
         encoded = encoded.replace(char, replacement)
     source = tools["tool/index.html"].decode("utf-8")
+    for name in LEGACY_TOOL_ASSETS:
+        if name != "index.html":
+            source = source.replace('"' + name + '"', '"tool/' + name + '"')
+    if 'id="prototype-review-data"' in source: raise ValueError("工具模板不能预带评审数据")
+    source = source.replace("</head>", '<script type="application/json" id="prototype-review-data">' + encoded + '</script></head>', 1)
+    result["index.html"] = source.encode("utf-8")
+    return result
+
+
+def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict]) -> dict[str, bytes]:
+    result = dict(tools)
+    selected = {page["path"] for page in context["pages"]}
+    for path, body in files.items():
+        target = "project/" + normalized_relative(path).as_posix()
+        if path in selected:
+            source = inject_source_targets(path, body).decode("utf-8")
+            bridge = posixpath.relpath("tool/page-shell.js", posixpath.dirname(target))
+            addition = '<script src="' + html.escape(bridge, quote=True) + '" data-prototype-review-bridge="3"></script>'
+            matches = list(re.finditer(r"</body\s*>", source, re.I))
+            if len(matches) != 1: raise ValueError("具体页面必须有唯一 body 结束标签")
+            source = source[:matches[0].start()] + addition + source[matches[0].start():]
+            body = source.encode("utf-8")
+        result[target] = body
+    boot = {"schema_version": 3, "context": context, "pages": navigation}
+    # JSON 是非执行数据；转义 '<' 防止业务标签中的 </script> 结束数据元素。
+    encoded = json_bytes(boot).decode("utf-8")
+    for char, replacement in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        encoded = encoded.replace(char, replacement)
+    source = tools["tool/index.html"].decode("utf-8")
     for name in TOOL_ASSETS:
         if name != "index.html":
             source = source.replace('"' + name + '"', '"tool/' + name + '"')
@@ -390,7 +523,7 @@ def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], n
 
 def publish_bundle(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict], *, data_dir=None) -> dict:
     assembled = _assemble(context, files, tools, navigation)
-    manifest = {"schema_version": 2, "context": context, "files": [
+    manifest = {"schema_version": 3, "context": context, "files": [
         {"path": path, "size": len(body), "sha256": digest(body)} for path, body in sorted(assembled.items())]}
     assembled["manifest.json"] = json_bytes(manifest)
     with _request_directory(context, data_dir, create=True) as (path, fd), _lock(fd):
@@ -460,9 +593,8 @@ def _migration_inventory(root: Path, prototype: str) -> dict[str, bytes]:
 def migration_preview(root: str | Path, adapter: str, plan: str, request_id: str,
                       pages: list[str] | None = None, *, confirm_no_active_use: bool = False) -> dict:
     """只读清点；活动使用未知时不推定删除许可，所有候选均保留报告。"""
-    from lib.documents.prototype_feedback import _capture_review
     tool, tools = capture_tool()
-    context, _, _, _ = _capture_review(root, adapter, plan, request_id, pages, tool=tool)
+    context, _, _, _ = capture_review(root, adapter, plan, request_id, pages, tool=tool)
     inventory = _migration_inventory(Path(root), context["prototype_root"])
     candidates, preserved = [], []
     for path, body in sorted(inventory.items()):
@@ -602,13 +734,12 @@ def migration_recover(root: str | Path, adapter: str, preview: dict, *, data_dir
 
 
 def _validate_preview(preview: dict, adapter: str):
-    from lib.documents.prototype_feedback import _check_context
     if (not isinstance(preview, dict) or set(preview) != {"schema_version", "status", "context", "active_use_confirmed", "candidates", "preserved", "source_digest"}
             or type(preview["schema_version"]) is not int or preview["schema_version"] != 2
             or preview["status"] != "preview" or type(preview["active_use_confirmed"]) is not bool
             or not isinstance(preview["source_digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", preview["source_digest"])):
         raise ValueError("迁移 preview 字段不完整或包含未知字段")
-    context = _check_context(preview["context"])
+    context = check_context(preview["context"])
     if context["adapter"] != adapter: raise ValueError("迁移适配器不一致")
     for field, keys in (("candidates", {"path", "sha256", "mode", "reason"}), ("preserved", {"path", "reason"})):
         if not isinstance(preview[field], list) or len(preview[field]) > workspace.MAX_DEPENDENCY_NODES:

@@ -1,303 +1,274 @@
+/* 工作台视图、唯一编辑器与交还操作。所有业务变更通过review-state的公开方法，
+ * 不持有第二份整改/草稿集合，不把用户文本作为HTML执行，不在浏览器声称Agent已收到。 */
 (() => {
   "use strict";
-
-  // 此模块只维护浏览器反馈输入；context 是只读绑定，不是批准或执行权限。
-  const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
-    && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-  const text = (value, max = 4096) => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= max && !value.includes("\0");
-  const path = (value) => text(value, 1024) && !value.startsWith("/") && !/[\\:#?%\x00-\x1f\x7f]/.test(value)
-    && value.split("/").every((part) => part && part !== "." && part !== "..");
-  const sha = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
-  const stableId = (value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value);
-  function parseStartup(raw) {
-    const result = { rawReview: "", context: null, pages: [], error: "" };
-    try {
-      // 数据只来自prepare写入的唯一非执行script。紧凑JSON安全转义往返检查同时
-      // 拒绝重复键，不能把JSON.parse最后同名值洗成可信启动绑定；不读取hash中的context。
-      if (typeof raw !== "string") throw Error();
-      const boot = JSON.parse(raw);
-      const safe = JSON.stringify(boot).replace(/[<>&\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
-      if (safe !== raw || !exact(boot, ["schema_version", "context", "pages"]) || boot.schema_version !== 2) throw Error();
-      const context = boot.context;
-      if (!exact(context, ["schema_version", "request_id", "project_id", "adapter", "adapter_sha256", "prototype_root", "plan_source", "plan_sha256", "navigation_sha256", "requirements", "pages", "tool", "review_id"])
-          || context.schema_version !== 2 || new TextEncoder().encode(JSON.stringify(context)).length > 8192
-          || typeof context.request_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(context.request_id)
-          || !path(context.adapter) || !path(context.prototype_root) || !path(context.plan_source) || !context.plan_source.endsWith(".md")
-          || ![context.project_id, context.adapter_sha256, context.plan_sha256, context.navigation_sha256, context.review_id].every(sha)
-          || !exact(context.tool, ["version", "payload_sha256"]) || typeof context.tool.version !== "string"
-          || !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$/.test(context.tool.version) || !sha(context.tool.payload_sha256)
-          || !Array.isArray(context.requirements) || !context.requirements.length || !Array.isArray(context.pages) || !context.pages.length || context.pages.length > 16) throw Error();
-      const requirements = new Set();
-      for (const req of context.requirements) {
-        if (!exact(req, ["id", "label"]) || typeof req.id !== "string" || !/^REQ-[0-9]{3,}$/.test(req.id) || !text(req.label, 8192) || requirements.has(req.id)) throw Error();
-        requirements.add(req.id);
-      }
-      const pages = new Set();
-      for (const item of context.pages) {
-        const name = typeof item?.path === "string" ? item.path.slice(context.prototype_root.length + 1) : "";
-        if (!exact(item, ["path", "dependency_fingerprint"]) || !path(item.path) || !item.path.startsWith(`${context.prototype_root}/`)
-            || !/^[a-z0-9][a-z0-9-]*\.html$/.test(name) || name === "index.html" || !sha(item.dependency_fingerprint) || pages.has(item.path)) throw Error();
-        pages.add(item.path);
-      }
-      if (!Array.isArray(boot.pages) || boot.pages.length !== pages.size) throw Error();
-      const registered = new Set();
-      for (const entry of boot.pages) {
-        // URL不是可推导的消息输入，只接受核心给出的project/精确源路径映射。
-        // 全部校验成功后才生成导航和设置iframe src，任何损坏都不能留下部分可用清单。
-        if (!exact(entry, ["name", "path", "url", "label", "groups"]) || !pages.has(entry.path) || registered.has(entry.path)
-            || entry.name !== entry.path.slice(context.prototype_root.length + 1) || entry.url !== `project/${entry.path}`
-            || !text(entry.label, 1024) || !Array.isArray(entry.groups)
-            || !entry.groups.every((group) => exact(group, ["label", "open"]) && text(group.label, 1024) && typeof group.open === "boolean")) throw Error();
-        registered.add(entry.path);
-      }
-      result.context = context; result.rawReview = JSON.stringify(context); result.pages = boot.pages;
-    } catch {
-      result.error = "本轮评审快照数据损坏或超出范围，请重新准备评审包；已有输入不会自动重绑。";
-    }
-    return result;
+  const operations = { modify: "修改", add: "新增内容", delete: "删除建议" };
+  const number = (entry, anchor = false) => `${anchor ? "A" : ""}${String(entry.number).padStart(2, "0")}`;
+  const make = (tag, text, className) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; };
+  function formatExport(payload, scopeLabel) {
+    // 唯一实际交还formatter同时供复制、备用文字、下载及原子完成的提交前验证使用。
+    // 用户正文逐行作为引用，防止正文中的机器标题/反引号产生第二个机器块。
+    const summary = ["# 原型评审反馈", `已完成整改：${payload.items.length}；定位标记：${payload.anchors.length}。`];
+    for (const item of payload.items) summary.push(`\n${number(item)} · ${operations[item.operation]} · ${scopeLabel(item.target)}`, ...item.message.split("\n").map((line) => `> ${line}`));
+    for (const anchor of payload.anchors) summary.push(`${number(anchor, true)} · ${scopeLabel(anchor.target)}`);
+    const value = `${summary.join("\n")}\n\n## Agent Workflow Feedback Payload\n\x60\x60\x60json\n${JSON.stringify(payload, null, 2)}\n\x60\x60\x60\n`;
+    // 摘要和pretty JSON会额外占字节，只有最终全文通过同一UTF8预算才能对外交还。
+    return window.PrototypeReviewState.checkFeedbackBytes(value, "交还全文（含摘要与机器载荷）");
   }
-
-  function create({ send }) {
-    const panel = document.getElementById("prototype-feedback");
-    if (!panel) return null;
-    const get = (id) => document.getElementById(`feedback-${id}`);
-    const form = get("form"), controls = get("fields"), target = get("target"), kind = get("kind"), message = get("message");
-    const before = get("before"), after = get("after"), requirements = get("requirements"), relations = get("relations"), list = get("items");
-    const storageStatus = get("storage"), status = get("status"), manual = get("manual"), output = get("output");
-    let context = null, binding = "", page = "", nodes = [], items = [], editing = null, drafts = {}, storageAvailable = true, bindingBlocked = false, bindingNotice = "", savePending = false, saveTimer = null, pendingAction = null;
-    const announce = (value) => { status.textContent = value; };
-    const pagePath = () => context && `${context.prototype_root}/${page}`;
-    const selectedNode = () => nodes.find((node) => node.id === target.value);
-    const make = (tag, value) => { const node = document.createElement(tag); if (value !== undefined) node.textContent = value; return node; };
-    const checks = () => Array.from(requirements.querySelectorAll("input")).filter((input) => input.checked).map((input) => input.value);
-    const draft = () => ({ page: pagePath(), target_id: target.value, kind: kind.value, message: message.value, after_text: after.value, req_ids: checks(), editing });
-    function persist() {
-      // sessionStorage 天然按顶层标签页隔离；键和值都绑定完整context，绝不读写localStorage跨页共享草稿。
-      // 存储失败只降级持久性，内存和表单仍为当前输入权威，绝不能提示“已保存”。
-      if (!binding || !context) return;
-      if (page) drafts[pagePath()] = draft();
-      try {
-        window.sessionStorage.setItem(`prototype-feedback:${binding}`, JSON.stringify({ context, items, drafts }));
-        storageAvailable = true;
-        storageStatus.textContent = "草稿仅保存在本标签页；相同评审链接刷新后可恢复。复制或下载后仍需独立复核。";
-      } catch {
-        storageAvailable = false;
-        storageStatus.textContent = "浏览器存储不可用：输入仅留在当前页面内存。刷新可能丢失，请先复制或下载反馈。";
-      }
+  function create({ model, send, locate, verifySources, camera, announce, present }) {
+    const $ = (id) => document.getElementById(id), state = model.state;
+    const editor = $("rectification-dialog"), exporter = $("export-dialog"), drawer = $("panel-drawer"), panel = $("review-panel");
+    const narrow = matchMedia("(max-width:900px)");
+    let exportEpoch = 0, busy = false, saving = false, backup = "";
+    const resumeDrawer = new WeakMap();
+    const button = (label, action, className = "review-inline") => { const el = make("button", label, className); el.type = "button"; el.addEventListener("click", action); return el; };
+    const report = (error) => announce(error?.message || "操作失败，当前输入已保留。");
+    const safe = (action) => { try { const result = action(); if (result?.catch) result.catch(report); } catch (error) { report(error); } };
+    const draft = () => state.drafts[state.editor];
+    function openPanel() {
+      if (!narrow.matches || drawer.open) return;
+      $("drawer-panel-host").append(panel); drawer.showModal(); $("open-feedback").setAttribute("aria-expanded", "true");
     }
-    function validItem(item) {
-      // sessionStorage同样属于外部输入；恢复采用封闭字段，避免被篡改草稿带入批准等非法字段。
-      const required = ["id", "page", "target_id", "kind", "message", "req_ids"];
-      const optional = ["comparison", "interaction_id", "interface_refs"];
-      const plain = (value, empty = false) => typeof value === "string" && Array.from(value).length <= 4000 && !value.includes("\0") && (empty || value.trim());
-      return item && typeof item === "object" && required.every((key) => Object.hasOwn(item, key))
-        && Object.keys(item).every((key) => required.includes(key) || optional.includes(key))
-        && typeof item.id === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(item.id) && context.pages.some((entry) => entry.path === item.page)
-        && stableId(item.target_id) && ["must_change", "suggestion", "question"].includes(item.kind) && plain(item.message)
-        && Array.isArray(item.req_ids) && new Set(item.req_ids).size === item.req_ids.length
-        && item.req_ids.every((id) => context.requirements.some((req) => req.id === id))
-        && (!Object.hasOwn(item, "comparison") || (exact(item.comparison, ["before_text", "after_text"]) && plain(item.comparison.before_text, true) && plain(item.comparison.after_text, true)))
-        && (!Object.hasOwn(item, "interaction_id") || stableId(item.interaction_id))
-        && (!Object.hasOwn(item, "interface_refs") || (Array.isArray(item.interface_refs) && item.interface_refs.length <= 32 && new Set(item.interface_refs).size === item.interface_refs.length && item.interface_refs.every((ref) => text(ref, 512))));
+    function showModal(dialog) {
+      // 窄屏先关闭清单抽屉，再打开同一编辑/交还模态；关闭后恢复同一个panel，绝不嵌套。
+      resumeDrawer.set(dialog, drawer.open);
+      if (drawer.open) drawer.close();
+      dialog.showModal();
     }
-    function renderItems() {
-      list.replaceChildren();
-      if (!items.length) list.append(make("p", "尚无反馈。选择节点并保存第一条意见。"));
+    drawer.addEventListener("close", () => { $("review-panel-slot").append(panel); $("open-feedback").setAttribute("aria-expanded", "false"); });
+    for (const dialog of [editor, exporter]) dialog.addEventListener("close", () => {
+      if (dialog === editor) model.closeEditor();
+      if (dialog === exporter) { exportEpoch++; busy = false; }
+      if (resumeDrawer.get(dialog)) { resumeDrawer.set(dialog, false); openPanel(); }
+      dialog.returnValue = "";
+    });
+    narrow.addEventListener("change", () => { if (!narrow.matches && drawer.open) drawer.close(); });
+    for (const [open, close, dialog] of [["navigation-toggle", "close-navigation", $("navigation-drawer")], ["open-developer", "developer-close", $("developer-dialog")]]) {
+      $(open).addEventListener("click", () => { if (open === "open-developer") $("page-contract").open = true; dialog.showModal(); $(open).setAttribute("aria-expanded", "true"); if (open === "open-developer") $("developer-title").focus(); });
+      $(close).addEventListener("click", () => dialog.close());
+      dialog.addEventListener("close", () => { $(open).setAttribute("aria-expanded", "false"); dialog.returnValue = ""; });
+    }
+    // closedby仅作渐进增强，Safari等宿主仍通过几何检测提供原型约定的抽屉外点关闭。
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      const nav = $("navigation-drawer"); let pressedOutside = false;
+      const outside = (e) => { const r = nav.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom; };
+      nav.addEventListener("pointerdown", (e) => { pressedOutside = outside(e); });
+      nav.addEventListener("pointerup", (e) => { if (pressedOutside && outside(e)) nav.close(); });
+    }
+    $("open-feedback").addEventListener("click", openPanel); $("close-panel").addEventListener("click", () => drawer.close());
+    $("mode-browse").addEventListener("change", () => setMode("browse")); $("mode-annotate").addEventListener("change", () => setMode("annotate"));
+    function setMode(mode) { model.setMode(mode); send("mode", { mode }); $("mode-browse").checked = mode === "browse"; $("mode-annotate").checked = mode === "annotate"; announce(mode === "browse" ? "浏览模式：原生控件、滚动与业务导航保持可用。" : "批注模式：点选元素后标记位置或添加整改。"); }
+    $("canvas-fit").addEventListener("click", camera.fit); $("canvas-zoom-out").addEventListener("click", () => camera.zoom(1 / 1.25));
+    $("canvas-zoom-in").addEventListener("click", () => camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", () => camera.zoom(1 / state.cameras[state.page].k));
+    $("show-anchors").addEventListener("change", () => model.setView({ showAnchors: $("show-anchors").checked }));
+    $("show-rectifications").addEventListener("change", () => model.setView({ showItems: $("show-rectifications").checked }));
+    $("select-parent").addEventListener("click", () => send("parent"));
+    $("mark-location").addEventListener("click", () => safe(() => { const anchor = model.addAnchor(); model.setView({ activeAnchor: anchor.id, activeItem: null }); announce(`已标记位置 ${number(anchor, true)}；尚未创建整改。`); }));
+    $("add-rectification").addEventListener("click", () => safe(() => openEditor(state.selection?.target || null)));
+    $("page-rectification").addEventListener("click", () => safe(() => openEditor({ scope: "page", page: state.page })));
+    $("write-global").addEventListener("click", () => safe(() => openEditor({ scope: "global" })));
+    $("remove-selected-anchor").addEventListener("click", () => safe(() => { model.removeAnchor(state.activeAnchor); model.setView({ activeAnchor: null }); }));
+    $("withdraw-selected-item").addEventListener("click", () => safe(() => { model.withdrawItem(state.activeItem); model.setView({ activeItem: null }); announce("已撤回当前整改，可单次恢复原编号与编辑草稿。"); }));
+    $("view-anchor-references").addEventListener("click", () => { setTab("anchors"); openPanel(); scrollRecord(state.activeAnchor, true); });
+    $("start-annotation").addEventListener("click", () => { if (state.items.length) model.setView({ filter: "all" }); else setMode("annotate"); if (drawer.open) drawer.close(); });
+    $("filter-scope").addEventListener("change", () => model.setView({ filter: $("filter-scope").value }));
+    $("undo-withdraw").addEventListener("click", () => safe(() => { const item = model.restoreItem(); announce(item?.reference_ids.some((id) => !state.anchors.some((anchor) => anchor.id === id)) ? "已恢复原编号；存在失效A引用，请编辑解除后交还。" : "已恢复原编号及该条编辑草稿。"); }));
+    function setTab(tab) { model.setView({ tab }); }
+    const tabs = [$("tab-rectifications"), $("tab-anchors")];
+    tabs.forEach((tab, index) => { tab.addEventListener("click", () => setTab(index ? "anchors" : "rectifications")); tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? 1 : 1 - index; tabs[next].focus(); setTab(next ? "anchors" : "rectifications");
+    }); });
+    function scrollRecord(id, anchor = false) {
+      const el = document.getElementById(`${anchor ? "anchor" : "item"}-${id}`); if (!el) return;
+      const scroller = document.querySelector(".review-panel-scroll"), r = el.getBoundingClientRect(), s = scroller.getBoundingClientRect();
+      scroller.scrollTop += r.top - s.top - 12;
+    }
+    function scopeLabel(target) { return !target ? "未确认来源的动态元素" : target.scope === "global" ? "本轮整体" : state.pages.find((page) => page.path === target.page)?.label || "页面"; }
+    async function locateRecord(entry, anchor) {
+      await locate(entry.target); model.setView({ activeAnchor: anchor ? entry.id : null, activeItem: anchor ? null : entry.id, tab: anchor ? "anchors" : "rectifications", filter: "all" });
+      scrollRecord(entry.id, anchor);
+    }
+    function renderLists() {
+      $("rectification-count").textContent = state.items.length; $("feedback-count").textContent = state.items.length; $("anchor-count").textContent = state.anchors.length;
+      $("page-rectification-count").textContent = state.items.filter((item) => item.target.scope === "page" && item.target.page === state.page).length || "";
+      $("feedback-storage").textContent = state.storageMessage;
+      tabs.forEach((tab, index) => { const selected = state.tab === (index ? "anchors" : "rectifications"); tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1; });
+      $("rectification-tab-panel").hidden = state.tab !== "rectifications"; $("anchor-tab-panel").hidden = state.tab !== "anchors";
+      $("filter-scope").value = state.filter;
+      const list = $("rectification-list"); list.replaceChildren();
+      const items = state.items.filter((item) => state.filter === "all" || (state.filter === "global" ? item.target.scope === "global" : item.target.scope === "global" || item.target.page === state.page));
+      $("rectification-empty").hidden = items.length > 0; $("empty-description").textContent = state.items.length ? "此范围暂无整改，可恢复全部页面。" : "在批注模式点选元素，写下修改、新增或删除建议。";
       for (const item of items) {
-        const card = make("article");
-        card.append(make("h3", `${({ must_change: "必须改", suggestion: "建议", question: "疑问" })[item.kind]} · ${item.target_id}`));
-        card.append(make("p", `${item.page} · ${item.req_ids.join("、") || "未关联 REQ"}`), make("p", item.message));
-        if (item.comparison) {
-          const compare = make("div"); compare.className = "feedback-comparison";
-          const old = make("div"), proposed = make("div");
-          old.append(make("strong", "当前浏览器摘录"), make("pre", item.comparison.before_text));
-          proposed.append(make("strong", "建议修改"), make("pre", item.comparison.after_text)); compare.append(old, proposed); card.append(compare);
-        }
-        const actions = make("div"); actions.className = "feedback-actions";
-        for (const [label, action] of [["定位节点", () => locate(item)], ["编辑草稿", () => edit(item)], ["撤回意见", () => {
-          items = items.filter((entry) => entry.id !== item.id); if (editing === item.id) resetEditor(); persist(); renderItems(); (controls.disabled ? get("heading") : get("save")).focus(); announce("意见已撤回，其他输入保留。");
-        }]]) {
-          const button = make("button", label); button.type = "button"; button.addEventListener("click", action); actions.append(button);
-        }
-        card.append(actions); list.append(card);
+        const row = make("article", undefined, "rectification-item"); row.id = `item-${item.id}`; row.classList.toggle("is-active", state.activeItem === item.id);
+        const meta = make("div", undefined, "rectification-item-meta"); meta.append(make("span", number(item), `rectification-number ${item.operation}`), make("strong", operations[item.operation], `operation-label ${item.operation}`));
+        row.append(meta, make("p", item.message || "删除原因未填写", "rectification-summary"), make("p", `${scopeLabel(item.target)} · ${item.target.scope === "node" ? model.recordFor(item.target)?.label || "原目标（当前状态不可见）" : item.target.scope === "page" ? "页面" : "整体"}`, "rectification-context"));
+        if (item.reference_ids.length) { const refs = make("div", undefined, "item-references"); for (const id of item.reference_ids) {
+          const anchor = state.anchors.find((entry) => entry.id === id); refs.append(button(anchor ? number(anchor, true) : "失效A引用", () => anchor ? safe(() => locateRecord(anchor, true)) : report(Error("请编辑解除失效A引用。"))));
+        } row.append(refs); }
+        const actions = make("div", undefined, "rectification-item-actions");
+        actions.append(button("定位", () => safe(() => locateRecord(item, false))), button("编辑", () => safe(async () => { if (item.target.scope === "node") await locate(item.target); openEditor(item.target, item.id); })),
+          button("撤回", () => safe(() => { model.withdrawItem(item.id); announce(`整改${number(item)}已撤回。`); })));
+        row.append(actions);
+        if (model.conflicts(item.target, item.operation, item.id).length) row.append(make("p", "同一目标存在删除与修改/新增建议，请交还时一起复核。", "item-conflict"));
+        list.append(row);
       }
-      get("count").textContent = `${items.length} 条`;
+      $("withdraw-notice").hidden = !state.withdrawn; $("withdraw-message").textContent = state.withdrawn ? `已撤回 ${number(state.withdrawn.item)}` : "";
+      const anchors = $("anchor-list"); anchors.replaceChildren();
+      if (!state.anchors.length) anchors.append(make("p", "尚无定位标记。在批注模式选择元素后标记位置。", "anchor-section-help"));
+      for (const anchor of state.anchors) {
+        const row = make("article", undefined, "anchor-item"); row.id = `anchor-${anchor.id}`;
+        const head = make("div", undefined, "anchor-item-heading"); head.append(button(number(anchor, true), () => safe(() => locateRecord(anchor, true))), make("span", scopeLabel(anchor.target)));
+        const users = model.anchorUsers(anchor.id), protection = users.items.length || users.drafts.length;
+        row.append(head, make("p", model.recordFor(anchor.target)?.text || "原来源目标（文字摘录不作为来源证明）"));
+        if (protection) { const relations = make("div", undefined, "anchor-relations"); relations.append(make("span", `被${users.items.length}条整改、${users.drafts.length}份草稿引用`)); users.items.forEach((item) => relations.append(button(`整改${number(item)}`, () => safe(() => locateRecord(item, false))))); row.append(relations); }
+        const remove = button("移除标记", () => safe(() => model.removeAnchor(anchor.id))); remove.disabled = Boolean(protection); row.append(remove);
+        if (protection) row.append(make("p", "请先解除引用或撤回相关整改。", "anchor-protection")); anchors.append(row);
+      }
+      renderSelection();
     }
-    function cancelPending() {
-      if (saveTimer) window.clearTimeout(saveTimer);
-      savePending = false;
+    function renderSelection() {
+      const selection = state.selection, anchor = state.anchors.find((entry) => entry.id === state.activeAnchor), item = state.items.find((entry) => entry.id === state.activeItem);
+      $("selection-tools").hidden = !selection; $("select-parent").hidden = !selection?.has_parent;
+      $("remove-selected-anchor").hidden = !anchor; $("view-anchor-references").hidden = !anchor; $("withdraw-selected-item").hidden = !item;
+      const users = anchor ? model.anchorUsers(anchor.id) : null, protectedAnchor = users && (users.items.length || users.drafts.length);
+      $("remove-selected-anchor").disabled = Boolean(protectedAnchor);
+      $("mark-location").disabled = !selection?.target;
+      const reason = !selection?.target ? "此动态元素无可确认来源。可保留整改输入，再显式选择有来源的父层。" : protectedAnchor ? "此A标记被完成整改或活跃草稿引用，请先解除或撤回。" : "";
+      $("selection-reference-reason").hidden = !reason; $("selection-reference-reason").textContent = reason;
     }
-    function navigateToItem(item, editAfterLoad) {
-      pendingAction = { id: item.id, page: item.page, edit: editAfterLoad };
-      const name = item.page.slice(context.prototype_root.length + 1);
-      if (send("navigate", name) === false) { pendingAction = null; announce("意见所属页面未在导航登记，输入与意见保持不变。"); }
+    function renderReferences() {
+      const value = draft(); if (!value) return;
+      const refs = $("reference-options"), chips = $("selected-references"); refs.replaceChildren(); chips.replaceChildren();
+      const ids = [...new Set([...state.anchors.map((anchor) => anchor.id), ...value.reference_ids])];
+      for (const id of ids) {
+        const anchor = state.anchors.find((entry) => entry.id === id), label = make("label", undefined, "reference-option"), input = document.createElement("input");
+        input.type = "checkbox"; input.value = id; input.checked = value.reference_ids.includes(id); input.id = `reference-${id}`; label.htmlFor = input.id;
+        label.append(input, make("strong", anchor ? number(anchor, true) : "失效A引用"), make("span", anchor ? scopeLabel(anchor.target) : "请取消选中以解除失效引用"));
+        input.addEventListener("change", () => { const selected = new Set(draft().reference_ids); input.checked ? selected.add(id) : selected.delete(id); model.updateDraft({ reference_ids: [...selected] }); renderReferences(); clearError(); }); refs.append(label);
+        if (input.checked) chips.append(button(anchor ? number(anchor, true) : "解除失效A引用", () => {
+          if (!anchor) { model.updateDraft({ reference_ids: draft().reference_ids.filter((value) => value !== id) }); renderReferences(); return; }
+          // 定位离开前关闭时会保留同目标草稿，不因引用导航覆盖原表单。
+          resumeDrawer.set(editor, false); editor.close(); safe(() => locateRecord(anchor, true));
+        }, "reference-chip"));
+      }
+      $("selected-reference-count").textContent = value.reference_ids.length;
     }
-    function locate(item) {
-      if (item.page !== pagePath()) { navigateToItem(item, false); return; }
-      if (!nodes.some((node) => node.id === item.target_id)) { announce("该节点当前不可定位，可能已更改或不再唯一；意见仍保留。"); return; }
-      send("locate", item.target_id); announce(`正在定位节点：${item.target_id}。`);
+    function clearError() { $("message-error").hidden = true; $("rectification-message").removeAttribute("aria-invalid"); }
+    function showError(error) { $("message-error").textContent = error.message; $("message-error").hidden = false; $("rectification-message").setAttribute("aria-invalid", "true"); $("rectification-message").focus(); }
+    function renderEditor() {
+      const value = draft(); if (!value) return;
+      const scope = value.target?.scope || "node";
+      $("rectification-scope").textContent = scope === "global" ? "本轮整体意见" : scope === "page" ? "页面整改" : "节点整改";
+      $("rectification-title").textContent = value.editing ? "编辑整改" : "添加整改";
+      $("operation-add-label").hidden = scope === "global"; $("operation-delete-label").hidden = scope !== "node";
+      for (const radio of document.querySelectorAll('input[name="operation"]')) { radio.checked = radio.value === value.operation; radio.disabled = (radio.value === "delete" && scope !== "node") || (radio.value === "add" && scope === "global"); }
+      $("rectification-message").value = value.message; $("comparison-after").value = value.after_text; $("original-excerpt").value = value.excerpt;
+      const source = value.target ? model.recordFor(value.target) : state.selection;
+      $("target-relations").textContent = `交互说明：${source?.interaction_text || "未声明"}；接口引用：${source?.interface_refs.join("、") || "未声明"}。`;
+      $("node-extra").hidden = scope !== "node"; $("comparison-field").hidden = value.operation !== "modify"; $("additional-details").hidden = scope !== "node";
+      $("message-field-label").textContent = value.operation === "delete" ? "删除原因" : value.operation === "add" ? "新增内容" : "期望效果";
+      $("message-required").textContent = value.operation === "delete" ? "可选" : "必填"; $("rectification-message").required = value.operation !== "delete";
+      $("conflict-warning").hidden = !model.conflicts(value.target, value.operation, value.editing).length;
+      $("conflict-warning").textContent = "同一目标已有删除与修改/新增建议，允许保留，请一起复核。";
+      renderReferences(); clearError();
     }
-    function showNode() {
-      const node = selectedNode(); before.textContent = node?.text || "当前节点没有可读文字。";
-      relations.textContent = node ? `交互映射：${node.interaction_id || "无稳定映射 ID"}。${node.interaction_text || "未发现现有交互说明。"} 接口引用：${node.interface_refs.join("、") || "未声明明确来源"}` : "等待当前页提供唯一稳定节点。";
-    }
-    function resetEditor() {
-      cancelPending();
-      editing = null; message.value = ""; after.value = ""; kind.value = "suggestion";
-      for (const input of requirements.querySelectorAll("input")) input.checked = false;
-      get("save").textContent = "保存意见"; showNode();
-    }
-    function edit(item) {
-      cancelPending();
-      if (item.page !== pagePath()) { navigateToItem(item, true); return; }
-      if (!nodes.some((node) => node.id === item.target_id)) { locate(item); return; }
-      editing = item.id; target.value = item.target_id; kind.value = item.kind; message.value = item.message; after.value = item.comparison?.after_text || "";
-      for (const input of requirements.querySelectorAll("input")) input.checked = item.req_ids.includes(input.value);
-      get("save").textContent = "保存修改"; showNode(); panel.open = true; message.focus(); persist();
-    }
+    function openEditor(target, itemId = null) { model.openEditor(target, itemId); renderEditor(); if (!editor.open) showModal(editor); $("rectification-message").focus(); }
+    $("rectification-message").addEventListener("input", () => { model.updateDraft({ message: $("rectification-message").value }); clearError(); });
+    $("comparison-after").addEventListener("input", () => { model.updateDraft({ after_text: $("comparison-after").value }); clearError(); });
+    for (const radio of document.querySelectorAll('input[name="operation"]')) radio.addEventListener("change", () => { model.updateDraft({ operation: radio.value }); renderEditor(); });
+    for (const id of ["rectification-close", "rectification-cancel"]) $(id).addEventListener("click", () => editor.close());
+    $("rectification-form").addEventListener("submit", async (event) => {
+      event.preventDefault(); if (saving) return;
+      const key = state.editor, value = draft(); if (!value) return;
+      saving = true; $("complete-rectification").disabled = true; $("draft-state").textContent = "正在确认目标来源……";
+      try {
+        // 完成前重新走真实child来源解析，不能把首次目录或局部文字冒称当前来源。
+        // 引用可以跨页，验证也会逐页确认；任一失败仍留在同一草稿且不分配编号。
+        await verifySources([value.target, ...value.reference_ids.map((id) => state.anchors.find((anchor) => anchor.id === id)?.target)]);
+        if (!editor.open || state.editor !== key) return;
+        const [item] = model.completeEditor(); editor.close(); model.setView({ activeItem: item.id, activeAnchor: null }); scrollRecord(item.id); announce(`整改 ${number(item)} 已完成，编号保持稳定。`);
+      } catch (error) { if (editor.open && state.editor === key) showError(error); }
+      finally { saving = false; $("complete-rectification").disabled = false; $("draft-state").textContent = "草稿自动保留"; }
+    });
+    editor.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $("rectification-form").requestSubmit(); } });
+    function allTargets(includeDrafts = false) { return [...state.items, ...state.anchors, ...(includeDrafts ? model.activeDrafts().map(([, value]) => value) : [])].map((entry) => entry.target); }
     function exportText() {
-      if (!context) throw Error("缺少有效评审绑定");
-      // 没有任何approved字段或工作流状态；JSON只是用户输入，必须经过核心validate复核。
-      const value = JSON.stringify({ schema_version: 2, context, items }, null, 2);
-      if (new TextEncoder().encode(value).length > 1048576) throw Error("反馈超过1MiB");
-      return value;
+      return formatExport(model.exportPayload(), scopeLabel);
     }
-    function saveOpinion() {
-      const node = selectedNode();
-      if (!context || bindingBlocked || !node || !message.value.trim() || message.value.includes("\0") || after.value.includes("\0")) { announce("请选择当前唯一节点，并填写意见。输入已保留。"); return; }
-      if (Array.from(message.value).length > 4000 || Array.from(after.value).length > 4000 || (!editing && items.length >= 256)) {
-        announce("意见或建议超过 4000 字符，或意见已达 256 条。请缩短内容或撤回已有意见；原输入已保留。"); return;
-      }
-      const item = { id: editing || `feedback-${window.crypto.randomUUID()}`, page: pagePath(), target_id: node.id, kind: kind.value, message: message.value, req_ids: checks() };
-      if (after.value.trim()) item.comparison = { before_text: node.text, after_text: after.value };
-      if (node.interaction_id) item.interaction_id = node.interaction_id;
-      if (node.interface_refs.length) item.interface_refs = node.interface_refs;
-      if (!validItem(item)) { announce("意见字段不符合本轮格式，输入已保留，请检查节点、类型与关联需求。"); return; }
-      const index = items.findIndex((entry) => entry.id === editing);
-      const candidate = [...items];
-      if (index < 0) candidate.push(item); else candidate[index] = item;
-      if (new TextEncoder().encode(JSON.stringify({ schema_version: 2, context, items: candidate }, null, 2)).length > 1048576) {
-        announce("反馈超过 1 MiB，无法保存本条。请缩短内容或撤回部分意见；输入已保留。"); return;
-      }
-      items = candidate;
-      resetEditor(); persist(); renderItems(); announce(storageAvailable ? "意见已保存到本标签页草稿；尚未经过独立复核。" : "意见已保留在内存；存储不可用，请先导出。");
+    function counts() { $("export-saved-count").textContent = state.items.length; $("export-anchor-count").textContent = state.anchors.length; $("export-draft-count").textContent = model.activeDrafts().length; }
+    function enableExport(enabled) { for (const id of ["export-copy", "select-export", "download-feedback"]) $(id).disabled = !enabled; $("export-save-copy").disabled = busy; }
+    function exportResult(message, failed = false) { $("export-result").textContent = message; $("export-result").classList.toggle("is-error", failed); }
+    async function refreshExport() {
+      const epoch = ++exportEpoch; backup = ""; $("export-text").value = ""; counts(); enableExport(false);
+      const unfinished = model.activeDrafts().length > 0; $("export-save-copy").hidden = !unfinished; $("export-copy").hidden = unfinished;
+      if (unfinished) { exportResult("仍有未完成草稿。可验证全部草稿后一起完成；任一失败都不会部分交还。"); return; }
+      try { await verifySources(allTargets()); if (epoch !== exportEpoch || !exporter.open) return; backup = exportText(); $("export-text").value = backup; enableExport(true); exportResult("已核对目标，可以复制或下载反馈；之后仍需粘贴并发送。"); }
+      catch (error) { if (epoch === exportEpoch) { enableExport(false); exportResult(error.message, true); } }
     }
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      if (!context || bindingBlocked || !selectedNode()) { announce("当前页节点尚未就绪，输入已保留。"); return; }
-      if (savePending) return;
-      // 保存前重新向当前页读取文字，不能把首次载入的目录冒称当前浏览器摘录。
-      // 只发受控refresh动作；超时/换页取消待保存状态，表单与草稿都保留。
-      persist(); savePending = true; announce("正在读取当前节点文字……");
-      saveTimer = window.setTimeout(() => { savePending = false; announce("当前页未响应，意见尚未保存；输入已保留，请重试。"); }, 3000);
-      send("refresh");
-    });
-    form.addEventListener("input", persist);
-    target.addEventListener("change", () => { cancelPending(); showNode(); persist(); });
-    get("locate").addEventListener("click", () => locate({ page: pagePath(), target_id: target.value }));
-    get("cancel").addEventListener("click", () => { resetEditor(); persist(); announce("已取消当前编辑，已保存意见保留。"); });
-    get("copy").addEventListener("click", async () => {
+    $("copy-feedback").addEventListener("click", () => { showModal(exporter); refreshExport(); });
+    for (const id of ["export-close", "export-cancel"]) $(id).addEventListener("click", () => exporter.close());
+    async function copyFeedback(finishDrafts) {
+      if (busy) return; busy = true; const epoch = ++exportEpoch;
+      // 新交还必须重新生成全文；来源或字节校验失败时不能把上一次backup冒充本次结果。
+      backup = ""; $("export-text").value = ""; enableExport(false); exportResult("正在核对来源并准备复制……");
       try {
-        const value = exportText(); announce("正在复制反馈……");
-        await navigator.clipboard.writeText(value); announce("反馈 JSON 已复制；后续仍需独立复核。");
-      } catch {
-        // 剪贴板可能被安全上下文/权限拒绝，改用原生dialog供手动选择，绝不清空表单。
-        if (!context) { announce("评审绑定无效，无法导出。输入保持不变。"); return; }
-        output.value = exportText(); manual.showModal(); output.focus(); output.select(); announce("自动复制失败。请在对话框手动复制，或关闭后下载 JSON；输入已保留。");
+        await verifySources(allTargets(finishDrafts));
+        if (epoch !== exportEpoch || !exporter.open) return;
+        if (finishDrafts) model.completeAll((payload) => formatExport(payload, scopeLabel));
+        backup = exportText(); $("export-text").value = backup; counts(); $("export-save-copy").hidden = true; $("export-copy").hidden = false;
+        await navigator.clipboard.writeText(backup);
+        if (epoch === exportEpoch) exportResult("反馈已复制。请粘贴到当前对话后发送。");
+      } catch (error) {
+        if (epoch !== exportEpoch) return;
+        if (error.draftKey) {
+          // 所有草稿验证失败时退出交还、回到该草稿。state尚未分配任何新编号。
+          resumeDrawer.set(exporter, false); exporter.close(); model.resumeEditor(error.draftKey); renderEditor(); showModal(editor); showError(error); return;
+        }
+        exportResult(backup ? "自动复制失败，输入已保留；请使用下方手动复制或下载备用。" : error.message, true);
+        if (backup) { $("export-backup-toggle").parentElement.open = true; $("export-text").focus(); }
+      } finally { busy = false; if (exporter.open) enableExport(Boolean(backup) && !model.activeDrafts().length); }
+    }
+    $("export-copy").addEventListener("click", () => copyFeedback(false)); $("export-save-copy").addEventListener("click", () => copyFeedback(true));
+    $("select-export").addEventListener("click", () => { if (!backup) return; $("export-text").focus(); $("export-text").select(); exportResult("已选中全部文字，请按 Ctrl / Cmd + C 复制。"); });
+    $("download-feedback").addEventListener("click", async () => {
+      if (busy || !backup) return;
+      busy = true; const epoch = ++exportEpoch; let url;
+      backup = ""; $("export-text").value = ""; enableExport(false);
+      try {
+        await verifySources(allTargets()); if (!exporter.open || epoch !== exportEpoch) return;
+        const value = exportText(); backup = value; $("export-text").value = value;
+        url = URL.createObjectURL(new Blob([value], { type: "text/markdown;charset=utf-8" }));
+        const link = make("a"); link.href = url; link.download = "prototype-feedback.md"; link.click(); exportResult("已请求下载反馈 .md，请确认浏览器下载结果。");
+      } catch (error) { if (epoch === exportEpoch) exportResult(error.message || "下载未能启动，请手动复制；输入保留。", true); }
+      finally {
+        if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
+        busy = false; if (exporter.open && epoch === exportEpoch) enableExport(Boolean(backup) && !model.activeDrafts().length);
       }
     });
-    get("download").addEventListener("click", () => {
-      let url;
-      try {
-        url = URL.createObjectURL(new Blob([exportText()], { type: "application/json;charset=utf-8" }));
-        const link = make("a"); link.href = url; link.download = "prototype-feedback.json"; link.click();
-        announce("已请求下载反馈 JSON。请确认浏览器下载结果；输入仍保留。");
-      } catch { announce("下载未能启动，请使用复制反馈或手动复制；输入保持不变。"); }
-      finally { if (url) window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    $("target-directory").addEventListener("change", () => { const key = $("target-directory").value; if (key) { setMode("annotate"); send("select", { key }); } });
+    model.subscribe(renderLists); renderLists();
+    return Object.freeze({
+      get activeAnchor() { return state.activeAnchor; }, get activeItem() { return state.activeItem; },
+      catalog() { const select = $("target-directory"), old = select.value; select.replaceChildren(new Option("选择设计稿中的元素", "")); for (const record of model.catalog()) select.add(new Option(record.label, record.key)); if (model.catalog().some((record) => record.key === old)) select.value = old; },
+      selected(bounds) {
+        model.setView({ activeAnchor: null, activeItem: null }); renderSelection();
+        if (!bounds || ![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite)) return;
+        const cam = state.cameras[state.page], vp = $("canvas-viewport"); if (!cam) return;
+        const toolbar = $("selection-tools"); toolbar.style.left = `${Math.max(14, Math.min(vp.clientWidth - toolbar.offsetWidth - 14, cam.x + bounds.x * cam.k))}px`;
+        toolbar.style.top = `${Math.max(70, Math.min(vp.clientHeight - toolbar.offsetHeight - 60, cam.y + (bounds.y + bounds.h) * cam.k + 12))}px`;
+        if (!state.selection?.target) announce("当前动态元素无来源；整改输入可以保留，请显式选择有来源的父层。");
+      },
+      selectRecord(kind, id) {
+        const entries = kind === "anchor" ? state.anchors : state.items, entry = entries.find((value) => value.id === id); if (!entry || entry.target.page !== state.page) return;
+        model.setView({ activeAnchor: kind === "anchor" ? id : null, activeItem: kind === "item" ? id : null, tab: kind === "anchor" ? "anchors" : "rectifications", filter: "all" }); openPanel(); scrollRecord(id, kind === "anchor");
+      },
+      contract(sections) {
+        if (!Array.isArray(sections) || sections.length !== 5 || !sections.every((entry, index) => entry?.name === ["purpose", "navigation", "interactions", "states", "exceptions"][index] && typeof entry.text === "string" && entry.text.length <= 65536)) return;
+        const content = $("page-contract-content"); content.replaceChildren();
+        for (const entry of sections) { const section = make("section"), heading = make("h2", ({ purpose: "页面职责", navigation: "导航", interactions: "交互", states: "状态与恢复", exceptions: "例外与实现边界" })[entry.name]); section.append(heading, make("p", entry.text)); content.append(section); }
+      },
     });
-    get("close").addEventListener("click", () => manual.close());
-    manual.addEventListener("keydown", (event) => {
-      // 保留原生dialog的模态/inert、Esc和关闭后焦点恢复，仅约束首末Tab边界；
-      // Chromium在末项Tab可能先把焦点交给浏览器viewport，故不能仅凭showModal
-      // 推定表单键盘循环已满足。两个入口固定，不扫描或接管页面其他可聚焦节点。
-      if (event.key !== "Tab") return;
-      if (event.shiftKey && document.activeElement === output) { event.preventDefault(); get("close").focus(); }
-      else if (!event.shiftKey && document.activeElement === get("close")) { event.preventDefault(); output.focus(); }
-    });
-    return {
-      bind(fragment) {
-        if (bindingBlocked || (fragment.rawReview === binding && context)) return;
-        // 运行期间换context不自动重绑旧草稿；保留当前内存，要求重新打开明确链接。
-        if (binding) { cancelPending(); controls.disabled = true; bindingBlocked = true; bindingNotice = "评审绑定已改变，反馈编辑已停用。原输入仍绑定原链接，可导出；请在新标签页打开新的评审链接。"; announce(bindingNotice); return; }
-        if (!fragment.context) { controls.disabled = true; bindingBlocked = Boolean(fragment.error); bindingNotice = fragment.error || "普通浏览模式。请通过准备好的评审链接开始反馈。"; announce(bindingNotice); return; }
-        context = fragment.context; binding = fragment.rawReview;
-        requirements.replaceChildren();
-        for (const req of context.requirements) {
-          const label = make("label"), input = make("input"); input.type = "checkbox"; input.value = req.id;
-          label.append(input, make("span", `${req.id} · ${req.label}`)); requirements.append(label);
-        }
-        try {
-          const saved = JSON.parse(window.sessionStorage.getItem(`prototype-feedback:${binding}`) || "null");
-          // 恢复只读取同一context的本标签页快照；损坏内容不写回覆盖，页面内保持可用。
-          if (saved) {
-            if (JSON.stringify(saved.context) !== JSON.stringify(context) || !Array.isArray(saved.items)
-                || saved.items.length > 256 || !saved.items.every(validItem) || new Set(saved.items.map((item) => item.id)).size !== saved.items.length
-                || new TextEncoder().encode(JSON.stringify({ schema_version: 2, context, items: saved.items }, null, 2)).length > 1048576) throw Error("草稿无效");
-            items = saved.items;
-            // 编辑器快照只恢复已知纯文本字段；不执行存储对象提供的路径、selector或动作。
-            if (saved.drafts && typeof saved.drafts === "object" && !Array.isArray(saved.drafts)) {
-              for (const [key, value] of Object.entries(saved.drafts)) {
-                if (context.pages.some((entry) => entry.path === key) && value && value.page === key
-                    && typeof value.target_id === "string" && typeof value.message === "string" && typeof value.after_text === "string"
-                    && ["must_change", "suggestion", "question"].includes(value.kind) && Array.isArray(value.req_ids)
-                    && value.req_ids.every((id) => context.requirements.some((req) => req.id === id))
-                    && (value.editing === null || items.some((item) => item.id === value.editing))) drafts[key] = value;
-              }
-            }
-          }
-          storageStatus.textContent = "草稿仅保存在本标签页；相同评审链接刷新后可恢复。";
-        } catch { storageStatus.textContent = "浏览器存储不可用或草稿损坏，当前输入仅留内存；请及时导出。"; storageAvailable = false; }
-        renderItems(); announce("评审绑定已载入。反馈是修订输入，保存或导出不会批准工作流。");
-      },
-      select(name) {
-        cancelPending();
-        if (page && context) persist();
-        page = name;
-        if (pendingAction && pendingAction.page !== pagePath()) pendingAction = null;
-        resetEditor(); nodes = []; target.replaceChildren(); controls.disabled = true;
-        announce(bindingNotice || (context ? "等待当前页确认唯一稳定节点……" : "普通浏览模式，反馈未启用。"));
-      },
-      receive(data) {
-        if (data.type === "prototype-review:located") {
-          announce(data.ok ? `已定位当前节点：${data.target}。` : "节点当前不可定位，请先在画板中显示对应状态。输入与意见保持不变。"); return;
-        }
-        if (!context || bindingBlocked || data.type !== "prototype-review:catalog" || !context.pages.some((entry) => entry.path === pagePath()) || !Array.isArray(data.nodes) || data.nodes.length > 512) return;
-        // 父壳仍验证消息来源/session；此处再验证有限数据，所有显示均textContent，不执行HTML或路径。
-        if (!data.nodes.every((node) => exact(node, ["id", "text", "interaction_id", "interaction_text", "interface_refs"])
-            && stableId(node.id) && typeof node.text === "string" && Array.from(node.text).length <= 4000
-            && (node.interaction_id === "" || stableId(node.interaction_id)) && typeof node.interaction_text === "string" && Array.from(node.interaction_text).length <= 4000
-            && Array.isArray(node.interface_refs) && node.interface_refs.length <= 32 && node.interface_refs.every((ref) => text(ref, 512)))) return;
-        if (new Set(data.nodes.map((node) => node.id)).size !== data.nodes.length) return;
-        nodes = data.nodes; target.replaceChildren();
-        for (const node of nodes) { const option = make("option", `${node.id} · ${node.text.slice(0, 60) || "无文字"}`); option.value = node.id; target.append(option); }
-        controls.disabled = !nodes.length;
-        const pending = drafts[pagePath()];
-        if (pending?.page === pagePath()) {
-          target.value = pending.target_id; kind.value = pending.kind || "suggestion"; message.value = pending.message || ""; after.value = pending.after_text || ""; editing = pending.editing || null;
-          for (const input of requirements.querySelectorAll("input")) input.checked = pending.req_ids?.includes(input.value) || false;
-        }
-        get("save").textContent = editing ? "保存修改" : "保存意见";
-        showNode();
-        if (savePending) { window.clearTimeout(saveTimer); savePending = false; saveOpinion(); return; }
-        if (pendingAction?.page === pagePath()) {
-          const action = pendingAction; pendingAction = null;
-          const item = items.find((entry) => entry.id === action.id);
-          if (item) { if (action.edit) edit(item); else locate(item); return; }
-        }
-        announce(data.error || (nodes.length ? "当前页节点可供反馈。请选择节点，定位后填写意见。" : "当前页没有唯一稳定 ID 节点；页面仍可浏览，已有意见保留。"));
-      },
-      open() { if (context && !bindingBlocked) send("refresh"); panel.open = true; panel.scrollIntoView({ block: "start" }); get("heading").focus(); },
-    };
   }
-  window.PrototypeFeedback = Object.freeze({ parseStartup, create });
+  window.PrototypeFeedback = Object.freeze({ create, formatExport });
 })();
