@@ -1,14 +1,14 @@
 {
   "artifacts_sha256": {
     "native/native-agent-config-0.1.0-alpha.5.zip": "0c8c7e07de79c18b8747c0686555085020955b820fa0c5fbedeeb090e58f52ad",
-    "workflow/xy-workflow-antigravity-3.0.0-alpha.8-local-source.zip": "e9127608acac896a714fd6264145927568d987a44d8829c55bfe01c94e31032f",
-    "workflow/xy-workflow-antigravity-3.0.0-alpha.8.zip": "27cb1ac3064f1d74d54dc533d313db5bea5572abff0d5a255f548285a48d8e56",
-    "workflow/xy-workflow-claude-3.0.0-alpha.8-local-source.zip": "54a2d9027fe16c82c3db3c29bde0fde08dbe3b713a02bbf2c530164096c39074",
-    "workflow/xy-workflow-claude-3.0.0-alpha.8.zip": "fd76f6fb6407f47a47966317fc316b7f29ac3f20016d6e448d7a823f77f15d4a",
-    "workflow/xy-workflow-codex-3.0.0-alpha.8-local-source.zip": "08878a1c24cea6c2c3c4b04df656e9733e352aac2ebb5fd448a549be9c74d52d",
-    "workflow/xy-workflow-codex-3.0.0-alpha.8.zip": "4572717a739ed9633fb583f93544db24fec7bdf5d757b462d08c66f963b3a4ce"
+    "workflow/xy-workflow-antigravity-3.0.0-alpha.9-local-source.zip": "f092eec0f6a5a70ff6f15ba7899aacbc48ff6165048baea102dcbd99b2d5feec",
+    "workflow/xy-workflow-antigravity-3.0.0-alpha.9.zip": "0f072a7d9e30206230cb3d4bb696a1e0af780d24ad6b76e7a061febc4bbe17d8",
+    "workflow/xy-workflow-claude-3.0.0-alpha.9-local-source.zip": "ca2d819770556889f4950c61499fa915d59603dfcdedbc3bd7db447237165a94",
+    "workflow/xy-workflow-claude-3.0.0-alpha.9.zip": "f62176785675885836a471b2a581357471a15cdb776ac91068a562355238adf5",
+    "workflow/xy-workflow-codex-3.0.0-alpha.9-local-source.zip": "834a159d7d689328c27421556c34cf997a672945823f0d7b274f5c6e72529a6f",
+    "workflow/xy-workflow-codex-3.0.0-alpha.9.zip": "fca8cb022fbac972b0688afa8b532f66b8272ca4b6d0b46c93aa716b31928c7a"
   },
-  "candidate_sha256": "6417b5abc37b8c0d5ad159afd373b1f589d0acac389f59ca30d0073307e25ea0",
+  "candidate_sha256": "e7b8146af3f7ac302d9ab488810c1bb1a87c232395c53067b57b144da0cd855b",
   "channel": "alpha",
   "files": {
     ".claude-plugin/marketplace.json": {
@@ -17,19 +17,19 @@
     },
     "plugins/xy-workflow/.claude-plugin/plugin.json": {
       "mode": "100644",
-      "sha256": "67464b4d0c9b891c91098f3ec72bfe4c7157a9abb206345c5a333c0942d1afd0"
+      "sha256": "e6eab05c06ef4a7000e757ed5e16e22ab1b2fe2731036d2f83770337599fcd4c"
     },
     "plugins/xy-workflow/INSTALL.md": {
       "mode": "100644",
-      "sha256": "b85ba48005f9712723f631385abd96db1d18627a7b274e9b78f09fcb39b2e9b3"
+      "sha256": "ea0ede9f66664fdcf96b48a880ddf13674f6f701624a58c3e07dd58cd025d55e"
     },
     "plugins/xy-workflow/PLUGIN.md": {
       "mode": "100644",
-      "sha256": "75bbd45ab0a2c4f1330a476d71d14b8c18608806e6f4e4a040a377fe351fdd93"
+      "sha256": "aafd6b5e36077236bb6ab110e31b5f21d5a63f10992e7ba0a364f29fc485b22d"
     },
     "plugins/xy-workflow/README.md": {
       "mode": "100644",
-      "sha256": "75bbd45ab0a2c4f1330a476d71d14b8c18608806e6f4e4a040a377fe351fdd93"
+      "sha256": "aafd6b5e36077236bb6ab110e31b5f21d5a63f10992e7ba0a364f29fc485b22d"
     },
     "plugins/xy-workflow/agents/pm.md": {
       "mode": "100644",
@@ -457,7 +457,7 @@
     },
     "plugins/xy-workflow/plugins/maintenance/component_store.py": {
       "mode": "100644",
-      "sha256": "16abdd2e67a8f964b30a226699bacf072b8b01b8dd489c70a25cd1cfe8e3011e"
+      "sha256": "d608b670063b33dfafd848c2adb2be37b45632ec853625920d9891481ce9d364"
     },
     "plugins/xy-workflow/plugins/maintenance/launcher.py": {
       "mode": "100644",
@@ -513,7 +513,7 @@
     },
     "plugins/xy-workflow/product/PLUGIN_VERSION": {
       "mode": "100644",
-      "sha256": "dc61127c4619e7dde2bb80246fdccf8a297fe449603ce3914c1769b8a35e2541"
+      "sha256": "a46bc8010dad05c171e99cde599a13a8312fb6c6c6ea2aa8a7bf5267430aceb4"
     },
     "plugins/xy-workflow/product/ROLES.yaml": {
       "mode": "100644",
@@ -729,7 +729,7 @@
     },
     "plugins/xy-workflow/sources.json": {
       "mode": "100644",
-      "sha256": "53ba497df995741cae688e4bf5d416a9864ee3540faba06eec5f12627aaef6d5"
+      "sha256": "32e5cf7925d53aceaeee919077d4bdaa5a80b6c7b1e1360208874299b384b063"
     },
     "plugins/xy-workflow/templates/docs/PLAN.md": {
       "mode": "100644",
@@ -8101,16 +8101,16 @@
     },
     "plugins/xy-workflow/workflow-sources.json": {
       "mode": "100644",
-      "sha256": "01c59c0adafe3e4af918a858679d7105474d88079f6fb0b35312f976a567b9ce"
+      "sha256": "5db2f2adafa551f4a8f5d07c0848719225f078f1b7cb724243bf964c395268fe"
     }
   },
   "host": "claude",
   "managed_by": "agent-workflow-plugin-source-v1",
-  "plugin_zip_sha256": "fd76f6fb6407f47a47966317fc316b7f29ac3f20016d6e448d7a823f77f15d4a",
+  "plugin_zip_sha256": "f62176785675885836a471b2a581357471a15cdb776ac91068a562355238adf5",
   "ref": "refs/heads/plugins-claude-alpha",
   "repository": "Geoege-xll/agent-workflow",
   "schema_version": 1,
-  "source_revision": "2955afd67f5f41114655648d9414a163a4f55a1e",
-  "source_tree_sha256": "3c98e60a71415314be09682ead17be5d07bb4e179ec3ead6f444b78bfb3e5f4e",
-  "version": "3.0.0-alpha.8"
+  "source_revision": "aa3b6f559cc692b738618d16f66009f8ec02f9d2",
+  "source_tree_sha256": "94ef44431a0f93bd970024ed2c9580349538a077df78a9b274cb1244f47cc9c5",
+  "version": "3.0.0-alpha.9"
 }

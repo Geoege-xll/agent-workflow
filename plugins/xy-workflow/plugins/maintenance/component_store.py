@@ -105,6 +105,7 @@ def payload_name(name):
 
 
 def checked_build(bodies, expected_version):
+    """认证包自身声明的版本、文件闭包和摘要，不把后来新增的运行 ABI 套在历史库存上。"""
     try:
         build = json.loads(bodies["BUILD.json"].decode("utf-8"))
         if (set(build) != {"name", "version", "third_party_dependencies", "files"}
@@ -112,11 +113,6 @@ def checked_build(bodies, expected_version):
                 or build["third_party_dependencies"] != [] or not isinstance(build["files"], dict)
                 or set(build["files"]) != set(bodies) - {"BUILD.json"}
                 or bodies["native_config/VERSION"].decode("ascii").strip() != expected_version):
-            raise ComponentError("invalid_build_manifest")
-        required = {"scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh",
-                    "native_config/__init__.py", "native_config/cli.py", "native_config/VERSION", "product/command_identity.json", "product/command_identity.py", "product/__init__.py",
-                    "native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css", "README.md"}
-        if not required.issubset(bodies):
             raise ComponentError("invalid_build_manifest")
         for name, digest in build["files"].items():
             if not isinstance(digest, str) or not DIGEST.fullmatch(digest) or hashlib.sha256(bodies[name]).hexdigest() != digest:
@@ -126,7 +122,24 @@ def checked_build(bodies, expected_version):
         raise ComponentError("invalid_build_manifest") from None
 
 
+def checked_release_payload(bodies, expected_version):
+    """当前发行/运行入口的完整 ABI；新输入、当前活动版本和登记重试都必须满足。"""
+    build = checked_build(bodies, expected_version)
+    required = {"scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh",
+                "native_config/__init__.py", "native_config/cli.py", "native_config/VERSION", "product/command_identity.json", "product/command_identity.py", "product/__init__.py",
+                "native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css", "README.md"}
+    if not required.issubset(bodies):
+        raise ComponentError("invalid_build_manifest")
+    return build
+
+
 def archive_payload(path: Path, expected_version: str, expected_sha: str | None = None, *, snapshot=None):
+    """公开发行输入始终采用当前 ABI，防止装配 descriptor 等调用者意外接受历史布局。"""
+    return _archive_payload(path, expected_version, expected_sha,
+                            check_payload=checked_release_payload, snapshot=snapshot)
+
+
+def _archive_payload(path: Path, expected_version: str, expected_sha: str | None, *, check_payload, snapshot=None):
     """先在内存中完整检查中央目录、类型、大小及 BUILD 闭包，再允许写入任何版本文件。"""
     try:
         physical(path)
@@ -151,7 +164,7 @@ def archive_payload(path: Path, expected_version: str, expected_sha: str | None 
                 if entry.file_size > MAX_FILE or total > MAX_CONTENT:
                     raise ComponentError("archive_too_large")
                 bodies[entry.filename] = package.read(entry)
-        checked_build(bodies, expected_version)
+        check_payload(bodies, expected_version)
         if snapshot is not None:
             with snapshot.open("xb") as stream:
                 stream.write(raw)
@@ -300,16 +313,17 @@ def directory_name(data):
 
 
 def verified_version(root: Path, version: str, digest: str):
-    """用固定摘要认证已落盘版本；活动记录和登记失败后的重试共用同一完整检查。"""
+    """认证不可变库存并返回其字节；是否能作为当前运行版本由调用方的发行合同决定。"""
     target = physical(root / "versions" / f"{version}-{digest}", private=True)
     physical(root / "versions", private=True)
     if not target.is_dir():
         raise ComponentError("invalid_registry")
-    # 原始发行包保存在版本目录外的私有内容寻址区。每次只读核验都用 descriptor
-    # 固定的外层摘要重新认证 BUILD，避免文件和 BUILD 被一起改写后自证为完整。
+    # 原始发行包保存在版本目录外的私有内容寻址区。历史活动记录使用其原先登记的
+    # 外层摘要重新认证 BUILD 与文件闭包，不要求它具有后来新增的身份文件。
+    # 落盘字节仍须逐一匹配保留原包，不能靠同时改写文件和 BUILD 自证为完整。
     physical(root / "artifacts", private=True)
     trusted_archive = physical(root / "artifacts" / (digest + ".zip"), private=True)
-    _, trusted_bodies = archive_payload(trusted_archive, version, digest)
+    _, trusted_bodies = _archive_payload(trusted_archive, version, digest, check_payload=checked_build)
     bodies = {}
     for path in target.rglob("*"):
         physical(path, private=True)
@@ -325,7 +339,7 @@ def verified_version(root: Path, version: str, digest: str):
     checked_build(bodies, version)
     if bodies != trusted_bodies:
         raise ComponentError("installed_payload_mismatch")
-    return target
+    return target, bodies
 
 
 def installed(root: Path, data):
@@ -345,9 +359,13 @@ def installed(root: Path, data):
                 or not isinstance(record["sha256"], str) or not DIGEST.fullmatch(record["sha256"])
                 or record["directory"] != f"versions/{record['version']}-{record['sha256']}"):
             raise ComponentError("invalid_registry")
-        target = verified_version(root, record["version"], record["sha256"])
-        # 合法旧版本可以保留为 active；新 pinned 版本只有准备全部成功后才替换记录。
-        return target if (record["version"], record["sha256"]) == (data["version"], data["artifact"]["sha256"]) else None
+        target, bodies = verified_version(root, record["version"], record["sha256"])
+        # 合法旧版本只认证和保留，绝不返回旧代码供启动器执行。精确匹配当前固定
+        # 发行后仍须检查当前 ABI，不能用历史认证路径绕过当前运行要求。
+        if (record["version"], record["sha256"]) != (data["version"], data["artifact"]["sha256"]):
+            return None
+        checked_release_payload(bodies, data["version"])
+        return target
     except (OSError, ValueError, TypeError):
         raise ComponentError("invalid_registry") from None
 
@@ -400,7 +418,8 @@ def prepare(root: Path, data, artifact: Path | None):
                 # 上次可能已成功原子发布版本，但在 registry 发布时遇到 ENOSPC 等瞬时错误。
                 # 只能接续完全匹配本次 pinned 发行的安全版本；任何缺文件、软链、摘要或
                 # BUILD 不一致都会失败。这里不重写、删除旧目录，也不碰旧活动服务。
-                verified_version(root, data["version"], data["artifact"]["sha256"])
+                _, bodies = verified_version(root, data["version"], data["artifact"]["sha256"])
+                checked_release_payload(bodies, data["version"])
             else:
                 selected = artifact
                 if selected is None:
