@@ -63,8 +63,9 @@ def _implementation_contract(task: dict) -> dict:
     重新接受完整包。原生身份由外层独立核实，不能借此投影掩盖错绑。
     Light归一化补出的空调度字段只是同义表达，沿用原先的等价处理。
     """
-    metadata = {"state", "agent_retired", "agent_ref", "handoff_assessment", "acceptance_evidence",
-                "revision_ack", "revision_result", "claim_basis_sha256", "claim_prior_state"}
+    from lib.task_intent import CLAIM_FIELDS
+    metadata = CLAIM_FIELDS | {"state", "agent_retired", "agent_ref", "handoff_assessment", "acceptance_evidence",
+                               "revision_ack", "revision_result"}
     result = {key: value for key, value in task.items() if key not in metadata}
     for field in ("depends_on", "blocks", "gates", "semantic_locks"):
         result.setdefault(field, [])

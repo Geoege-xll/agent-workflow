@@ -2284,9 +2284,18 @@ def publish_task_update(path, root, payload, body, expected, patch, *, pool_oper
     业务批准、许可和依赖仍消费原包；这里不依据调用方提供的 JSON 声明池准入。
     """
     from lib import task_graph_records as records
+    from lib.hosts import antigravity_dispatch
 
     if records.digest(body) != expected:
         raise TaskGraphError("graph fingerprint differs from --expect-sha256")
+    # AGY 的首次身份只能由任务池核验原生回执。公开 update 同时服务 Light 和 Full，
+    # 不能通过改写 --host、伪造领取字段或用已经 RUNNING 的旧图绕开此检查。
+    # 已有引用由原更新协议处理，因此历史读取、同值重放和其它宿主保持兼容。
+    if not pool_operation and isinstance(patch, dict) and isinstance(patch.get("tasks"), dict):
+        for task in ([payload["task"]] if "task" in payload else payload["tasks"]):
+            operation = patch["tasks"].get(task["id"])
+            if isinstance(operation, dict):
+                antigravity_dispatch.guard_public_update(task, operation)
     if "task" in payload:
         if payload["task"].get("workflow_level") != "Light":
             raise TaskGraphError("Full task updates require the authoritative graph")
@@ -2330,16 +2339,21 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.root is not None:
         # scratch／普通文件指纹同样不能误用另一项目；检查一致性不授予核心读取权。
         validate_task_source({}, root=args.root)
+    if args.command in {"scratch", "cleanup-scratch"}:
+        # 以当前代码所属实体包识别 AGY，不接受任务参数、角色或环境变量切换宿主。
+        from lib.hosts.antigravity_dispatch import packaged_host
+        workspace_handoff = packaged_host()
     if args.command == "scratch":
         if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select, args.all)):
             raise TaskGraphError("scratch requires --root and accepts only --request-id")
-        return records.scratch_workspace(args.root, args.request_id)
+        return records.scratch_workspace(args.root, args.request_id, workspace_handoff=workspace_handoff)
     if args.command == "cleanup-scratch":
         if args.root is None or any((args.input, args.patch, args.task_id, args.output, args.select)):
             raise TaskGraphError("cleanup-scratch requires --root and accepts --request-id/--all, --dry-run, --keep and --expect-sha256")
         try:
             return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all,
-                                           dry_run=args.dry_run, keep=tuple(args.keep), expected=args.expect_sha256)
+                                           dry_run=args.dry_run, keep=tuple(args.keep), expected=args.expect_sha256,
+                                           workspace_handoff=workspace_handoff)
         except records.ScratchCleanupError as exc:
             return exc.report
     if args.request_id or args.all:
@@ -2456,7 +2470,11 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
     new_body = (json.dumps(exported, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     if records.read_record(args.input) != body:
         raise TaskGraphError("graph changed during task export")
-    changed = records.publish(args.output, new_body, args.expect_sha256)
+    # Light 原件与导出的交接包外形相同。原件已通过 AGY 领取及绑定时，允许
+    # 合法地用最新同实例的引用刷新旧交接包；旧文件中的未证实身份不能据此变成新绑定。
+    original = payload["task"] if "task" in payload else next(t for t in payload["tasks"] if t["id"] == args.task_id)
+    bound_export = original.get("agent_ref") if "antigravity_claim" in original else None
+    changed = records.publish(args.output, new_body, args.expect_sha256, bound_export=bound_export)
     return {"exported": changed, "sha256": records.digest(new_body), "graph_sha256": records.digest(body)}
 
 

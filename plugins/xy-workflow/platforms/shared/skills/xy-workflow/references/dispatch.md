@@ -142,7 +142,7 @@ pool view
 pool view --query '导出报表'
 ```
 
-- 首次派出任何原生任务，包括独立原型，都从下方池入口办理。仅原型原件为 schema 2 的 Light 单包，顶层 `request_scope: prototype_only`，任务为 `xy-uiux / design_ui / writer`，采用 `requirements_approved`、已明确的方案及适配器内精确原型路径。多个独立原型分别保留单包；需维护真实任务依赖的现有 Full 图继续作权威原件。
+- 首次派出任何原生任务，包括独立原型，都从下方池入口办理。普通非 UI 的 Light 修复可以直接取[完整单包示例](#light-non-ui-pack)填写。仅原型原件为 schema 2 的 Light 单包，顶层 `request_scope: prototype_only`，任务为 `xy-uiux / design_ui / writer`，采用 `requirements_approved`、已明确的方案及适配器内精确原型路径。多个独立原型分别保留单包；需维护真实任务依赖的现有 Full 图继续作权威原件。
 - 用户只讨论 B 时直接讨论。需要了解已有工作时用只读 `view`。仅在用户委托了实际交付并已得到原 Light 包或 Full 图时，PM 用 `pool register --record "$record" --expect-sha256 "$record_sha" --title '导出报表'` 登记该原件。已有活动委托也按手头已知的原件逐项登记；保存原路径到归档。初次登记与查询均不等于用户批准实施。
 - 主会话恢复时先 `pool view`，按用户描述和当前上下文用 `--query` 缩小范围。返回的行给出标题、目标、请求、任务、原路径、当前状态和 SHA。PM 自己取这些字段。多个候选会导致不同操作时，用事项描述让用户辨认。目标缺失、损坏或版本变化时先核实，不能拿先前的状态或另一个同名任务替代。
 - 已登记的原图新增任务成员后，用该图最新 SHA 再次 `register`，让新成员参与恢复与准入。普通进度或合同更新仍从原件直接回读。若返回的 `errors` 表明某条原件或绑定失效，先恢复它，再按全池计算资源。
@@ -159,7 +159,9 @@ pool claim --register --title "$title" --record "$record" --request-id "$request
 
 ### 直接提供原记录清单的既有入口
 
-任务池只能核实本 PM 明确登记的原件、版本和返回的身份字段；宿主是否真实创建实例、是否把补充送达同一实例，由 PM 查原生回执。以前的 Full 图和普通 Light 原包仍能通过原 `update` 登记观察到的状态；孤立的 RUNNING、`agent_ref` 或事后补登记无法证明派发前已进行全池领取。恢复时如实保留这个缺口，随后新派发走上方正常入口。独立仅原型单包须由全池仲裁领取；池索引冻结这次原件 SHA 作为归属依据。公开 update 的 claim 补丁、另一 PM 登记的副本和省略竞争任务的显式清单均不能产生这份依据。导出与首次绑定核对该路径的登记和领取版本。若该池缺失，找回原索引和可信交接；恢复不明时保留占用并核对实际实例。
+Antigravity 的新派发必须使用上方任务池。首次领取时使用 `--pm-id antigravity:<当前原生父会话 UUID>`，将回执的 `dispatch_marker` 原样放入当前完整任务的 `invoke_subagent.Prompt` 独立一行。每次只在该次工具响应中调用一个创建工具，多个任务可分别创建后并发执行。用返回的子会话 `conversationId` 和原领取回执执行 `pool bind`。该入口核对本机父会话的原生调用、任务角色及紧邻的创建回执。命名派发使用与任务一致的 `TypeName`，通用 `research` 的初始 Prompt 还须包含同包对应角色的完整正文。确认未创建时通过原 PM 的 `pool release` 核销。版本、访问权限或任务归属无法核实时保留占用并报告。Codex 和 Claude 的宿主创建和投递由 PM 按原生回执核实。已明确批准的范围不增加派发确认，真实宿主权限继续生效。
+
+以前的 Full 图和普通 Light 原包仍能通过原 `update` 登记观察到的状态；AGY 的首次原生身份绑定使用上述任务池。孤立的 RUNNING、`agent_ref` 或事后补登记无法证明派发前已进行全池领取。恢复时如实保留这个缺口，随后新派发走上方正常入口。独立仅原型单包须由全池仲裁领取；池索引冻结这次原件 SHA 作为归属依据。公开 update 的 claim 补丁、另一 PM 登记的副本和省略竞争任务的显式清单均不能产生这份依据。导出与首次绑定核对该路径的登记和领取版本。若该池缺失，找回原索引和可信交接；恢复不明时保留占用并核对实际实例。
 
 Apply `product/WORKFLOW.md#continuous-pm-intake` for relationship decisions and authority.
 Use the verified plugin source-pack entry under `workflow-helper-execution` above. The logical calls
@@ -167,7 +169,7 @@ below are source-pack examples; plugin execution uses its verified physical root
 3.0 rejects old runtime_binding, central project markers and bridge environments before any older-core
 loading; it calls only the current physical same-package record helper.
 
-For callers that already supply an explicit inventory, PM supplies one transient manifest with `schema_version: 1`: `project_root` is the canonical absolute physical project
+For existing Codex and Claude callers that already supply an explicit inventory, PM supplies one transient manifest with `schema_version: 1`: `project_root` is the canonical absolute physical project
 directory; `records` contains only explicitly selected current graph/Light-pack entries
 `{path: <absolute file>, sha256: <current SHA>, execution_roots: {<task-id>: <absolute execution root>}}`;
 `capacity` contains `configured_subagents` and `configured_writers` (integers >= 1), and current
@@ -245,6 +247,57 @@ and platform permissions follow their original boundaries. Run minimum sufficien
 independent QA, documentation and memory at handoff. Complete selected mandatory items; create no empty
 records without a need. Full cannot use this to downgrade. See [record tools](runtime-records.md) for pack
 export, state and identity binding.
+
+<a id="light-non-ui-pack"></a>
+
+#### 普通非 UI 修复的完整 Light 单包
+
+以修复空列表求和为例。把下面的 JSON 保存为请求 scratch 中的 `$record`，根据当前任务替换请求、角色、授权来源、精确文件和实际验证命令。用当前插件取得内置工程规范的真实 `sha256`，填到两处 `<rules-sha256>`：
+
+```bash
+bash "$plugin_root/lib/python_runtime.sh" -B -X utf8 "$plugin_root/plugins/source_pack.py" \
+  resource platforms/shared/skills/xy-code-standards/references/rules.md
+```
+
+```json
+{
+  "schema_version": 2, "request_scope": "implementation",
+  "approved_gates": [],
+  "task": {
+    "id": "fix-total", "request_id": "empty-total", "task_type": "writer", "role": "xy-backend",
+    "workflow_level": "Light", "surface_kind": "non_ui", "qa_scope": "request", "state": "DECLARED",
+    "module": ".", "agent_alias": "totals-backend", "instance_policy": "fresh", "context_policy": "handoff_only",
+    "gates": ["requirements_approved"], "owned_paths": ["src/totals.py", "tests/test_totals.py"],
+    "goal": "让 total([]) 返回 0，保留非空输入的求和行为。",
+    "input_contracts": ["<本次用户委托的原话或可回查引用>"],
+    "output_contracts": ["修复 total 并补充空列表回归用例"],
+    "acceptance_evidence": ["报告空列表和既有非空用例的实测结果"],
+    "verification_commands": ["python -m unittest discover -s tests -p test_totals.py"],
+    "audit_surfaces": ["standards-conformance"],
+    "controlled_document_access": {
+      "adapter": "project.yaml",
+      "documents": [{
+        "path": "platforms/shared/skills/xy-code-standards/references/rules.md",
+        "mode": "targeted", "reason": "核对本次修复与验证适用的工程规则",
+        "rule_ids": ["eng-verification-003"], "sections_or_queries": ["eng-verification-003"],
+        "content_fingerprint": "<rules-sha256>", "applies_to": ["src/totals.py", "tests/test_totals.py"]
+      }]
+    }
+  },
+  "standards_contract": {
+    "index_path": "docs/STANDARDS.md", "root": "docs/standards", "index_fingerprint": null,
+    "required_engineering_rule_ids": ["eng-verification-003"], "required_design_rule_ids": [],
+    "protected_paths": [], "leaves": [{
+      "path": "platforms/shared/skills/xy-code-standards/references/rules.md", "domain": "engineering",
+      "rule_ids": ["eng-verification-003"], "content_fingerprint": "<rules-sha256>"
+    }]
+  }
+}
+```
+
+示例假定项目使用 `project.yaml` 且尚无规范索引。若已选用 `.awf/project.yaml`，将 `adapter` 改为该路径。使用适配器配置的索引和规范根；索引存在时填其字节 SHA，并在 `documents` 中登记索引（`rule_ids: []`）。把实际适用的硬规则、工程叶、字节 SHA、覆盖路径及保护边界同步填入读取合同与 `standards_contract`。
+
+当前用户已明确委托这个修复、范围和验收清楚时，在 `input_contracts` 写入真实依据，将 `approved_gates` 填为 `["requirements_approved"]`，直接继续。尚缺实质决定时先澄清；纯讨论直接在会话中答复。用包内 `lib/task_graph_cli.py validate --input "$record"` 校验，取最终文件的 SHA，按[领取命令](#continuous-intake-dispatch)执行 `pool claim --register`，再按宿主说明导出、原生派发并绑定。
 
 ### Read-only design consultation
 
