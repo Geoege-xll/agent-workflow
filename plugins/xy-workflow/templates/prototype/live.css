@@ -1,31 +1,50 @@
-/* 新双网页仅定义结构差异，颜色、按钮、表单、相机尺寸继续复用workspace.css的既有token。 */
-.live-delivery-body { display:flex; flex:1; min-height:0; }
-.live-delivery-body>.cv-vp { flex:1; min-width:0; }
-.live-navigation { width:min(280px,40vw); flex-shrink:0; overflow:auto; padding:14px; background:var(--review-sidebar); border-right:1px solid var(--review-line); }
-.live-navigation a { display:block; padding:10px; color:var(--review-text); border-radius:5px; text-decoration:none; }
-.live-navigation a[aria-current] { background:var(--review-selected); color:var(--review-action); }
-.live-review-link { display:inline-flex; align-items:center; min-height:36px; padding:6px 12px; background:var(--review-action); color:var(--review-on-action); border:1px solid var(--review-action); border-radius:5px; font-weight:600; text-decoration:none; }
-.live-keyboard-help { color:var(--review-muted); font-size:12px; }
+/* 双入口只维护工具布局差异、生产覆盖层与连接状态。共享材质由 tool-theme.css 提供；
+ * 本文件始终留在父工具文档，不得随设计稿响应注入 iframe，业务字号/颜色/布局不受影响。 */
+.live-delivery-body { position:relative; display:flex; flex:1; min-block-size:0; }
+.live-delivery-body>.cv-vp { flex:1; min-inline-size:0; }
+/* 目录默认 hidden，由既有导航事件展开。悬浮尺寸不参与相机视口布局，切页不挤压原稿。 */
+.live-navigation { position:absolute; z-index:24; inset:15px auto auto 16px; inline-size:220px; max-inline-size:calc(100% - 32px); max-block-size:calc(100% - 30px); overflow:auto; padding:12px 10px; }
+.live-navigation nav { display:grid; gap:4px; }
+.live-navigation a { display:flex; align-items:center; min-block-size:38px; padding:8px 10px; color:var(--sg-muted); border-radius:var(--sg-control-radius); text-decoration:none; overflow-wrap:anywhere; }
+.live-navigation a:is([aria-current],:hover) { color:var(--sg-ink); background:var(--sg-state); }
+.live-review-link { white-space:nowrap; }
+.live-review-link[aria-disabled="true"] { color:var(--sg-muted); background:var(--sg-card); cursor:default; }
+.live-keyboard-help { color:var(--sg-muted); font-size:12px; }
 .live-overlays { position:absolute; inset:0; pointer-events:none; z-index:4; overflow:hidden; }
-.live-outline { position:absolute; box-sizing:border-box; border:2px solid var(--review-action); border-radius:3px; }
-.live-outline.hover { border:1px dashed var(--review-action); }
-.live-outline.modify { border-color:var(--change-modified); }
-.live-outline.delete { border-color:var(--change-removed); border-style:dashed; }
-.review .live-marker { position:absolute; pointer-events:auto; min-width:40px; min-height:26px; padding:3px 6px; background:var(--review-sidebar); color:var(--review-text); font:12px/1.4 ui-monospace,monospace; }
-.live-review .canvas-floating-controls,.live-review .selection-tools,.live-review .canvas-target-picker { z-index:6; }
+.live-outline { position:absolute; box-sizing:border-box; border:2px solid var(--sg-focus); border-radius:3px; }
+.live-outline.hover { border:1px dashed var(--sg-focus); }
+.live-outline.modify { border-color:var(--sg-modify); }
+.live-outline.add { border-color:var(--sg-add); }
+.live-outline.delete { border-color:var(--sg-delete); border-style:dashed; }
+/* 标记位于父级局部坐标层，只表达 R/A 和改动类型；不改写、删除或重排产品节点。 */
+.review .live-marker { position:absolute; pointer-events:auto; min-inline-size:40px; min-block-size:26px; padding:3px 6px; font:12px/1.4 ui-monospace,monospace; }
+.review .live-marker.item.modify { background:var(--sg-modify); color:var(--sg-primary-ink); }
+.review .live-marker.item.add { background:var(--sg-add); color:var(--sg-primary-ink); }
+.review .live-marker.item.delete { background:var(--sg-delete); color:var(--sg-primary-ink); }
+.live-review :is(.canvas-floating-controls,.selection-tools,.canvas-target-picker) { z-index:6; }
 .live-review .review-panel-footer { flex-wrap:wrap; }
-.live-storage { flex-basis:100%; color:var(--review-muted); font-size:11px; }
-.live-source-warning { padding:10px 16px; color:var(--review-warning); background:var(--review-warning-bg); border-bottom:1px solid var(--review-warning); }
-.live-review .review-toolbar-start strong { display:block; }
-@media(max-width:600px) { .live-keyboard-help { flex-basis:100%; order:3; } .live-navigation { width:min(220px,55vw); } }
-
-/* 目录悬浮在画布左侧，打开时不重置相机或挤压真实设计视口。 */
-.live-delivery-body { position:relative; }
-.live-navigation { position:absolute; z-index:24; inset:0 auto 0 0; box-shadow:12px 0 24px #0004; }
-.review .live-marker.item.modify { background:var(--change-modified); color:var(--review-on-action); }
-.review .live-marker.item.add { background:var(--change-added); color:var(--review-on-action); }
-.review .live-marker.item.delete { background:var(--change-removed); color:var(--review-on-action); }
-/* 交付壳直接承载缩放工具，不经过评审cluster；浮层空白穿透，实际按钮必须可点击。 */
+.live-storage { flex-basis:100%; color:var(--sg-muted); font-size:11px; }
+.live-source-warning { padding:10px 16px; color:var(--sg-delete); background:var(--sg-card); border-block-end:1px solid currentColor; }
+/* 交付页没有评审 cluster；浮层空白穿透，实际按钮保留可点击目标。 */
 .canvas-floating-controls>.canvas-zoom-tools { pointer-events:auto; }
-.live-review-link[aria-disabled="true"] { background:var(--review-subtle); color:var(--review-muted); border-color:var(--review-control); }
-.live-review-link:focus-visible,.live-navigation a:focus-visible { outline:2px solid var(--review-action); outline-offset:3px; }
+@media(max-width:1020px) { .live-keyboard-help { display:none; } }
+@media(max-width:600px) {
+  .live-delivery .review-toolbar { flex-wrap:wrap; }
+  .live-delivery .review-toolbar-start { flex:1 1 100%; }
+  .live-delivery .review-toolbar-end { margin-inline-start:auto; }
+  .live-review .canvas-floating-controls { gap:8px; }
+  .live-review .canvas-tool-cluster { justify-content:center; }
+  .live-review .canvas-display-options { gap:8px; }
+}
+@media(pointer:coarse) {
+  /* 目录链接与父画布编号拥有真实44px命中盒；沿用来源坐标锚点，边缘不作负平移裁切。
+   * 不改变 world/相机/来源节点几何，也不修改桌面紧凑尺寸。 */
+  .live-navigation a,.review .live-marker { min-block-size:44px; }
+  .review .live-marker { min-inline-size:44px; }
+}
+@media(forced-colors:active) {
+  /* 与三色 item selector 保持相同优先级，系统色边界才不会被业务背景重新覆盖。 */
+  .review .live-marker,.review .live-marker.item:is(.modify,.add,.delete) { border:1px solid ButtonText; background:ButtonFace; color:ButtonText; }
+  .live-outline { border-color:Highlight; }
+  .live-outline.delete { border-style:dashed; }
+}

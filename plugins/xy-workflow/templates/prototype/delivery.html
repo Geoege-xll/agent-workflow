@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>原型交付</title>
+  <!-- 共享主题只属于工具文档；原稿 iframe 保留独立字体、颜色与交互。 -->
+  <link rel="stylesheet" href="/assets/tool-theme.css">
   <link rel="stylesheet" href="/assets/workspace.css">
   <link rel="stylesheet" href="/assets/live.css">
   <script src="/assets/review-state.js" defer></script>
@@ -15,31 +17,31 @@
   <script src="/assets/file-delivery.js" defer></script>
   <script src="/assets/live-workspace.js" defer></script>
 </head>
-<body class="prototype-workspace live-delivery">
+<body class="prototype-workspace sg-page sg-scope live-delivery">
 <main id="review-workspace" class="review">
   <h1 class="visually-hidden">原型交付画布</h1>
   <header class="review-toolbar">
     <div class="review-toolbar-start">
-      <button id="navigation-toggle" type="button" class="review-quiet" aria-controls="delivery-navigation" aria-expanded="false">☰ 页面目录</button>
+      <button id="navigation-toggle" type="button" class="sg-quiet review-quiet" aria-controls="delivery-navigation" aria-expanded="false">☰ 页面目录</button>
       <strong id="current-page-title">正在载入</strong>
     </div>
-    <div class="review-toolbar-end"><button id="open-developer" type="button" class="review-quiet">开发说明</button><a id="open-review" class="live-review-link" target="_blank" rel="noopener">进入评审 ↗</a></div>
+    <div class="review-toolbar-end"><button id="open-developer" type="button" class="sg-quiet review-quiet">开发说明</button><a id="open-review" class="sg-button sg-primary live-review-link" target="_blank" rel="noopener">进入评审 ↗</a></div>
   </header>
   <div class="live-delivery-body">
     <!-- 目录仅在交付页存在，初始收起；内容始终从登记原稿加载，不复制业务页。 -->
-    <aside id="delivery-navigation" class="live-navigation" hidden><nav id="prototype-pages" aria-label="原型页面"></nav></aside>
+    <aside id="delivery-navigation" class="sg-card live-navigation" hidden><nav id="prototype-pages" aria-label="原型页面"></nav></aside>
     <section id="canvas-viewport" class="cv-vp" aria-label="设计稿画布，方向键平移" tabindex="0">
       <div id="canvas-world" class="cv-world"><iframe id="prototype-preview" sandbox="allow-scripts" title="当前原型页面" referrerpolicy="no-referrer" hidden></iframe></div>
       <div class="canvas-floating-controls" data-review-ui>
-        <div id="canvas-zoom-tools" class="canvas-zoom-tools" role="toolbar" aria-label="画布缩放">
-          <button id="canvas-fit" type="button">适应</button><button id="canvas-zoom-out" type="button" aria-label="缩小画布">−</button><button id="canvas-zoom-reset" type="button">100%</button><button id="canvas-zoom-in" type="button" aria-label="放大画布">+</button>
+        <div id="canvas-zoom-tools" class="sg-card canvas-zoom-tools" role="toolbar" aria-label="画布缩放">
+          <button id="canvas-fit" class="sg-quiet" type="button">适应</button><button id="canvas-zoom-out" class="sg-quiet" type="button" aria-label="缩小画布">−</button><button id="canvas-zoom-reset" class="sg-quiet" type="button">100%</button><button id="canvas-zoom-in" class="sg-quiet" type="button" aria-label="放大画布">+</button>
         </div>
       </div>
       <p id="review-status" class="canvas-status" role="status">正在连接本轮原稿……</p>
     </section>
   </div>
-  <dialog id="developer-dialog" class="developer-dialog" aria-labelledby="developer-title">
-    <header class="modal-heading"><h2 id="developer-title" tabindex="-1">开发说明</h2><button id="developer-close" type="button" class="review-quiet" aria-label="关闭开发说明">×</button></header>
+  <dialog id="developer-dialog" class="sg-dialog developer-dialog" aria-labelledby="developer-title">
+    <header class="modal-heading"><h2 id="developer-title" tabindex="-1">开发说明</h2><button id="developer-close" type="button" class="sg-quiet review-quiet" aria-label="关闭开发说明">×</button></header>
     <div id="page-contract-content" class="developer-scroll"></div>
   </dialog>
   <p id="prototype-empty" class="workspace-empty" role="alert" hidden></p>

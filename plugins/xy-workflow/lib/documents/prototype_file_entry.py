@@ -21,6 +21,17 @@ ENTRY = '<script src=".xy-prototype-entry/entry.js" data-xy-delivery-entry="1" c
 ENTRY_START = ENTRY.removesuffix("</script>")
 IGNORE = b"/.xy-prototype-entry/"
 CATALOG_PREFIX = b"window.XYFileDeliveryEntry.receiveCatalog("
+# 仅用于识别已经发布的受管 file 挂载，不是当前工具白名单的可选子集。
+# 3.0.4/3.0.5 的 format5 工具闭包在发布时固定为这17项；3.0.3没有受管
+# file入口，3.0.6起共享主题/许可属于完整新闭包。未来新增当前资产不能反向
+# 改变此历史身份，也不能因“恰好缺主题”而把不完整的新缓存降级成旧版本。
+_HISTORICAL_FILE_TOOL_VERSIONS = frozenset({"3.0.4", "3.0.5"})
+_HISTORICAL_FILE_TOOL_ASSETS = (
+    "delivery.html", "review.html", "live-workspace.js", "live-connection.js",
+    "canvas-host.js", "live.css", "workspace.css", "review-state.js", "review-camera.js",
+    "feedback.js", "feedback.css", "page-shell.js", "THIRD_PARTY_NOTICES.txt",
+    "file-entry.js", "file-delivery.js", "file-page.js", "canvas-presentation.js",
+)
 # 项目交付目录与单次评审是两个不同权限范围：目录可覆盖256页，单次live评审
 # 仍由prototype_targets.MAX_PAGES限制16页；不能因复用常量而截断整个项目目录。
 MAX_DELIVERY_PAGES = 256
@@ -310,11 +321,21 @@ def verify_mount(prototype_fd, root, prototype, *, expected_data_dir=None):
         cache_fd = workspace._open_root(cache, "不可变工具缓存")
         try:
             review._private(os.fstat(cache_fd), "不可变工具缓存")
-            names = set(review.LIVE_TOOL_ASSETS) | {"version.txt", "shell.js"}
-            if set(os.listdir(cache_fd)) != names: raise PreparationError("不可变工具清单改变")
-            tools = {"tool/" + name: review._read_at(cache_fd, name) for name in review.LIVE_TOOL_ASSETS}
             version = review._read_at(cache_fd, "version.txt")
-            if version.decode().strip() != value["tool"]["version"] or review._payload(version, {name.removeprefix("tool/"): body for name, body in tools.items()}, format_version=5) != value["tool"]["payload_sha256"]: raise PreparationError("不可变工具版本或摘要不匹配")
+            actual_version = version.decode().strip()
+            if actual_version != value["tool"]["version"]: raise PreparationError("不可变工具版本或摘要不匹配")
+            names = set(os.listdir(cache_fd))
+            if names == set(review.LIVE_TOOL_ASSETS) | {"version.txt", "shell.js"}:
+                asset_names = review.LIVE_TOOL_ASSETS
+            elif (actual_version in _HISTORICAL_FILE_TOOL_VERSIONS
+                  and names == set(_HISTORICAL_FILE_TOOL_ASSETS) | {"version.txt", "shell.js"}):
+                asset_names = _HISTORICAL_FILE_TOOL_ASSETS
+            else:
+                raise PreparationError("不可变工具清单改变")
+            # schema 只决定本次必须完整验证的封闭名单，不授予旧字节当前版本身份。
+            # 全载荷仍使用原format5长度前缀摘要；shell必须由同一份delivery原字节派生。
+            tools = {"tool/" + name: review._read_at(cache_fd, name) for name in asset_names}
+            if review._payload(version, {name.removeprefix("tool/"): body for name, body in tools.items()}, format_version=5) != value["tool"]["payload_sha256"]: raise PreparationError("不可变工具版本或摘要不匹配")
             if review._read_at(cache_fd, "shell.js") != _shell(tools): raise PreparationError("唯一交付外壳已改变")
         finally: os.close(cache_fd)
     if os.readlink(MOUNT, dir_fd=prototype_fd) != str(target): raise PreparationError("受管链接在验证期间改变")

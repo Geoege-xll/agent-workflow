@@ -1,0 +1,82 @@
+/* SolidGlass 共享生产主题：仅用于 Agent 控制台和交付/评审工具外壳。
+ * 参考 deeplethe/solid-glass，commit 6e8903e494a15491ceda38fafea5056c95a74d44。
+ * 材质 token 与 rim/edge/shadow 结构改编自 src/solid-glass.css。
+ * 上游 CSS SHA256: c3c9e4e739f2b3f991d2412c07970f53df4a54f9d416ec3e8e1c0d5261e84bc3
+ * material.mdx SHA256: 508c4f3b91bb2055ccfb566f9412da7c68e3ef234ca4c31b020c75ea8aa6f523
+ * Copyright (c) 2026 DeepLethe. MIT，完整许可见 solid-glass-LICENSE.txt。
+ * 本文件是两产品唯一规范静态 CSS；布局文件只维护各自布局，不复制材质规则。
+ * 不含 Tailwind 构建指令，不依赖 React。所有组件选择器均限定在 .sg-scope 内；
+ * 业务设计稿位于独立 iframe，禁止把本文件注入其他业务原稿。 */
+.sg-page { margin: 0; background: #161616; }
+.sg-scope {
+  --sg-bg: #161616; --sg-panel: #1e1e1e; --sg-card: #242424; --sg-popover: #262626;
+  --sg-ink: #f4f4f4; --sg-muted: #b5b5b5; --sg-line: #ffffff15;
+  --sg-rim: #ffffff29; --sg-inner: #ffffff0a; --sg-edge: #ffffff0f;
+  --sg-state: #ffffff12; --sg-state-rim: #ffffff1c; --sg-control-edge: #737373;
+  --sg-focus: #dedede; --sg-primary: #e7e7e7; --sg-primary-ink: #202020;
+  --sg-modify: #a7c8ff; --sg-add: #a1d8b6; --sg-delete: #ffb3ad;
+  --sg-radius: 14px; --sg-control-radius: 10px;
+  color-scheme: only dark; background: var(--sg-bg); color: var(--sg-ink);
+  font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  accent-color: #d8d8d8; isolation: isolate;
+}
+.sg-scope :where(*, *::before, *::after) { box-sizing: border-box; }
+.sg-scope :where(h1,h2,h3,h4,p,dl,dd,fieldset) { margin: 0; }
+.sg-scope :where(h1,h2,h3,h4) { font-weight: 600; letter-spacing: -.025em; }
+.sg-scope h1 { font-size: 18px; } .sg-scope h2 { font-size: 26px; line-height: 1.3; }
+.sg-scope h3 { font-size: 15px; } .sg-scope .sg-muted { color: var(--sg-muted); }
+.sg-scope .sg-eyebrow { margin-block-end: 7px; color: var(--sg-muted); font-size: 12px; letter-spacing: .08em; }
+.sg-scope .sg-panel, .sg-scope .sg-card { border: 0; border-radius: var(--sg-radius); box-shadow: inset 0 1px var(--sg-rim), inset 0 0 0 1px var(--sg-inner), 0 0 0 1px var(--sg-edge), 0 1px 2px #0002, 0 12px 32px -14px #0009; }
+.sg-scope .sg-panel { background: var(--sg-panel); }
+.sg-scope .sg-card { background: var(--sg-card); }
+.sg-scope :where(button,.sg-button) { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-block-size: 36px; padding: 7px 13px; border: 1px solid var(--sg-control-edge); border-block-start-color: #858585; border-radius: var(--sg-control-radius); background: #ffffff0d; color: var(--sg-ink); font: inherit; font-weight: 500; line-height: 1.4; text-decoration: none; cursor: pointer; }
+/* 悬停、选中、展开只用同一小块清玻璃，不叠加发光或渐变。 */
+.sg-scope :where(button:hover,.sg-button:hover,[aria-current="page"],[aria-selected="true"],details[open]>summary) { background: var(--sg-state); box-shadow: inset 0 1px var(--sg-state-rim); }
+.sg-scope :where(button,.sg-button):active { transform: translateY(1px); }
+.sg-scope :where(button,input,select,textarea,summary,a,[tabindex]):focus-visible { outline: 2px solid var(--sg-focus); outline-offset: 3px; }
+.sg-scope :where(input,select,textarea) { max-inline-size: 100%; min-inline-size: 0; min-block-size: 36px; padding: 7px 10px; border: 1px solid var(--sg-control-edge); border-block-start-color: #888; border-radius: var(--sg-control-radius); color: var(--sg-ink); background: #ffffff0f; font: inherit; font-size: max(1rem, 1em); line-height: 1.4; }
+.sg-scope :where(select option) { background: #262626; color: #f4f4f4; }
+.sg-scope :where(textarea) { display: block; inline-size: 100%; resize: vertical; }
+.sg-scope :where(input[type="radio"],input[type="checkbox"]) { min-block-size: 0; inline-size: 16px; block-size: 16px; padding: 0; }
+.sg-scope :where(label) { font-size: 13px; }
+.sg-scope .sg-field { display: grid; gap: 7px; }
+.sg-scope .sg-primary { color: var(--sg-primary-ink); background: var(--sg-primary); border-color: #ffffff42; box-shadow: inset 0 1px #fff, inset 0 -1px #0004, 0 2px 3px #0002; }
+.sg-scope .sg-primary:hover { background: #efefef; }
+.sg-scope .sg-quiet { border-color: transparent; background: transparent; color: var(--sg-muted); }
+.sg-scope .sg-quiet:hover { color: var(--sg-ink); }
+/* 安静按钮的透明底色优先级高于通用状态选择器；显式恢复选中/按下材质，
+ * 使静态导航和脚本生成的同类按钮都用同一个状态合同，不在布局文件另画一套。 */
+.sg-scope .sg-quiet:is([aria-current="page"],[aria-selected="true"],[aria-pressed="true"]) { background: var(--sg-state); color: var(--sg-ink); box-shadow: inset 0 1px var(--sg-state-rim); }
+.sg-scope :where(button:disabled,select:disabled,input:disabled) { opacity: .45; cursor: default; transform: none; }
+.sg-scope .sg-rule { border: 0; border-block-start: 1px solid var(--sg-line); }
+.sg-scope .sg-sr-only { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); border: 0; white-space: nowrap; }
+.sg-scope [hidden] { display: none !important; }
+.sg-scope .sg-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--sg-line); border-radius: 6px; color: var(--sg-muted); font-size: 12px; white-space: nowrap; }
+/* 弹出菜单和模态框共用已确认的浮层材质，几何与打开方式由各工具布局维护。 */
+.sg-scope :where(.sg-popover,.sg-dialog) { border: 1px solid var(--sg-edge); border-radius: 18px; background: var(--sg-popover); color: var(--sg-ink); box-shadow: inset 0 1px var(--sg-rim), 0 24px 60px -18px #000a, 0 6px 16px -6px #0005; }
+.sg-scope .sg-dialog { max-inline-size: min(620px, calc(100vw - 32px)); max-block-size: calc(100dvh - 48px); margin: auto; padding: 0; }
+.sg-scope .sg-dialog::backdrop { background: #0009; }
+.sg-scope .sg-dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 24px; padding: 24px 24px 18px; }
+.sg-scope .sg-dialog-heading h2 { font-size: 22px; }
+.sg-scope .sg-dialog-body { display: grid; gap: 20px; padding: 0 24px 24px; }
+.sg-scope .sg-dialog-actions { display: flex; justify-content: end; gap: 10px; padding: 18px 24px; border-block-start: 1px solid var(--sg-line); }
+.sg-scope .sg-search { display: flex; align-items: center; gap: 9px; min-block-size: 36px; border: 1px solid var(--sg-control-edge); border-radius: var(--sg-control-radius); padding-inline: 11px; background: #ffffff0f; }
+/* 搜索只由外壳拥有边框和焦点线；内部 input 不另画第二圈。 */
+.sg-scope .sg-search input { inline-size: 100%; border: 0; border-radius: 0; background: transparent; padding-inline: 0; }
+.sg-scope .sg-search:has(input:focus-visible) { outline: 2px solid var(--sg-focus); outline-offset: -2px; }
+.sg-scope .sg-search input:focus-visible { outline: none; }
+.sg-scope .sg-error { color: var(--sg-delete); font-size: 13px; }
+/* 材质不靠模糊才能成立；尊重系统减少透明度/动态的偏好。 */
+@media (prefers-reduced-transparency: reduce) { .sg-scope .sg-panel { background: #1e1e1e; } .sg-scope .sg-card,.sg-scope .sg-popover,.sg-scope .sg-dialog { background: #262626; backdrop-filter: none; } }
+@media (prefers-reduced-motion: reduce) { .sg-scope :where(button,.sg-button):active { transform: none; } }
+@media (pointer: coarse) { .sg-scope :where(button,.sg-button,input:not([type="radio"]):not([type="checkbox"]),select) { min-block-size: 48px; } }
+/* 强制色模式会移除阴影；边框与选中线因此使用系统色提供独立替代。 */
+@media (forced-colors: active) {
+  .sg-scope { --sg-bg: Canvas; --sg-panel: Canvas; --sg-card: Canvas; --sg-popover: Canvas; --sg-ink: CanvasText; --sg-muted: CanvasText; --sg-line: CanvasText; --sg-control-edge: ButtonText; --sg-focus: Highlight; --sg-primary: ButtonFace; --sg-primary-ink: ButtonText; --sg-modify: CanvasText; --sg-add: CanvasText; --sg-delete: CanvasText; }
+  .sg-scope :where(.sg-panel,.sg-card,.sg-popover,.sg-dialog,button,.sg-button,input,select,textarea,.sg-search) { border: 1px solid ButtonText; box-shadow: none; }
+  /* 系统色仍由复合搜索外壳画唯一边界；后置覆盖避免通用 input 边框重新出现。 */
+  .sg-scope .sg-search input { border: 0; background: transparent; }
+  /* 系统灰字表达禁用状态，避免透明度叠加削弱用户选定的高对比配色。 */
+  .sg-scope :where(button:disabled,select:disabled,input:disabled) { color: GrayText; border-color: GrayText; opacity: 1; }
+  .sg-scope :where([aria-current="page"],[aria-selected="true"],[aria-pressed="true"],input:checked+span) { outline: 2px solid Highlight; outline-offset: -3px; }
+}
