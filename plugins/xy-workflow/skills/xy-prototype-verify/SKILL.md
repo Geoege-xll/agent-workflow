@@ -162,7 +162,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    an explicit src pointing to a registered page. The index rejects meta refresh, arbitrary scripts and inline
    routing. These index/controller rules apply to existing legacy workspaces only. New projects
    keep workspace.css/js, feedback.css/js and page-shell.js in the plugin and derived review bundle;
-   live 服务只在 HTTP 内存响应装桥，不改原稿或落盘业务 HTML 副本；历史 prepare 保持原派生包语义。
+   prepare-delivery 仅插入固定相对 entry 标签并准备受管链接／精确忽略项，通用工具留在中央；HTTP 内存响应在原始字节定位后移除该精确标签并装桥，不落盘业务 HTML 副本。普通 symlink/hardlink 仍拒绝，受管入口例外须验证属主／版本／摘要；历史 prepare 保持原派生包语义。
    Shared feedback.css provides the outer panel and target highlight styles; it remains a real local dependency.
    Requirements-bound concrete pages declare the canonical Markdown path under configured plans with
    `body[data-prototype-plan-source]`, and provide one `data-prototype-document="markdown"` link in a
@@ -180,7 +180,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    task-scoped page copies.
 5. Confirm each source page opens through `file://` with its real interactions and without a
    build, package installation, framework, router, external CDN, live API, database, account,
-   credential, or real user data. 完整交付／评审工具使用交付时可信 open 返回的 HTTP 具体页 delivery_url。
+   credential, or real user data. Agent／PM 交付前必须先 prepare-delivery，再由可信 open 验证；delivery_url／delivery_urls 是具体 file HTML 完整工具入口，未准备的裸模板不能作为完整交付。
    离线 HTML 不能冷启动 Python 或发现随机端口；服务不可用由交付方重跑相同显式 open 参数并提供
    新链接，不向项目原稿写认证信息、机器路径或随机端口。
 6. Use the same command's per-page dependency fingerprints, computed from the safe local transitive
@@ -208,9 +208,8 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 ## 按需反馈复核
 
 仅当前任务使用评审反馈时，读取 [反馈消费合同](../xy-ui-design/references/prototype-feedback.md)。
-新交付通过白名单 helper 的 `open` 显式选择项目、adapter、plan、request-id 和 pages，返回 HTTP
-具体页 delivery_url／review_url；复用本校验器的安全闭包，不替代静态检查或用户视觉确认。
-交付与评审读取同一物理原稿、共享画布组件，来源键与桥只注入 HTTP 响应，不落盘业务 HTML 副本。
+新交付先用白名单 helper 的 `prepare-delivery --root --adapter --pages` 幂等准备受管入口，再用 `open` 显式选择项目、adapter、plan、request-id 和 pages。open 缺准备返回 preparation_required，不悄悄改业务 HTML；delivery_url 是具体页 file URI，delivery_urls 为各页，复用安全闭包且不替代静态检查或用户视觉确认。
+file 交付提供完整画布和默认收起目录，使用唯一中央 delivery.html shell，业务原稿只在独立 file iframe 执行一次，保留真实 stage/frame；明确 file 分支允许 allow-scripts allow-same-origin，HTTP 评审仍仅 allow-scripts。file 壳不持控制 token，通过公开页 binding 以 noopener 新标签引导到同页 HTTP 评审；失效准确提示交付方重跑原显式命令。来源键按原始字节注入后才在 HTTP 内存响应移除精确 entry 标签，不落盘业务 HTML 副本。
 新 boot 5 沿严格 context 3，feedback 5 为 schema_version/review/anchors/items；源修订绑定的
 live 元数据及 CAS 草稿独立于历史包，原稿变化保留意见并明确拒绝错误提交。validate 只接受真实
 来源并返回 current 精简 changes、必要 anchors 和短 review；动态无源目标不能静默改绑。
@@ -267,7 +266,7 @@ the real production implementation.
 
 The PM MUST provide a direct link to each concrete changed page.
 
-新交付提供可信 open 准备好的具体页 HTTP delivery_url，同时保留原稿 HTML 的直接路径；单独根 index 不足以交付。
+新交付先 prepare-delivery，再提供可信 open 验证的具体页 file URI delivery_url；该 HTML 就是完整交付入口，单独根 index 或未准备模板不足以交付。
 
 The visual-confirmation workflow MUST NOT generate, persist, attach, or present screenshots.
 Do not create image assets unless the user explicitly requests an image asset; an image never
@@ -298,5 +297,4 @@ prototype_verify:
   pending_business_gate: none | visual_approved
 ```
 
-交付时在 `localhost_url` 填写可信 open 返回的具体页 HTTP delivery_url，认证 fragment 不进入公开日志。
-物理 HTML 路径仍是原稿权威；离线链接不承诺启动／发现服务或提供完整画布工具。
+交付时 `clickable_absolute_path` 指向 prepare-delivery 后的具体 HTML，正文提供 open 返回的 file URI delivery_url；`localhost_url` 仅可填独立评审无秘密引导 URL 或 null，不能误当正式交付入口。物理 HTML 是原稿权威和完整交付入口，file 不启动／发现服务或持有控制 token。

@@ -35,7 +35,8 @@ V3_TOOL_ASSETS = LEGACY_TOOL_ASSETS + ("review-state.js", "review-camera.js", "T
 V4_TOOL_ASSETS = V3_TOOL_ASSETS
 LIVE_TOOL_ASSETS = ("delivery.html", "review.html", "live-workspace.js", "live-connection.js",
                "canvas-host.js", "live.css", "workspace.css", "review-state.js", "review-camera.js",
-               "feedback.js", "feedback.css", "page-shell.js", "THIRD_PARTY_NOTICES.txt")
+               "feedback.js", "feedback.css", "page-shell.js", "THIRD_PARTY_NOTICES.txt",
+               "file-entry.js", "file-delivery.js", "file-page.js", "canvas-presentation.js")
 # 公开旧别名仍属于默认prepare/capture_tool的V4语义；新消费者必须明确选择live。
 TOOL_ASSETS = V4_TOOL_ASSETS
 MAX_BUNDLE_FILES = 300
@@ -559,7 +560,10 @@ def _assemble_source_bundle(context: dict, files: dict[str, bytes], tools: dict[
     for path, body in files.items():
         target = "project/" + normalized_relative(path).as_posix()
         if path in selected:
-            source = inject_source_targets(path, body).decode("utf-8")
+            from lib.documents.prototype_file_entry import strip_entry
+            # 新原稿的file入口不能递归进入历史离线派生包；仍先按原字节定位，
+            # 再移除唯一精确标签。旧无标签2/3/4装配字节及资产名单保持原合同。
+            source = strip_entry(inject_source_targets(path, body)).decode("utf-8")
             bridge = posixpath.relpath("tool/page-shell.js", posixpath.dirname(target))
             addition = '<script src="' + html.escape(bridge, quote=True) + '" data-prototype-review-bridge="' + str(format_version) + '"></script>'
             matches = list(re.finditer(r"</body\s*>", source, re.I))

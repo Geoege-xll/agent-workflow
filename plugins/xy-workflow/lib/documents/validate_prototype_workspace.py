@@ -1498,6 +1498,15 @@ class DependencyValidator:
             else:
                 parser = PageParser(str(target))
                 _parse_html(parser, body, str(target))
+                # 普通依赖继续no-follow拒绝所有链接。只有原HTML包含精确受管首脚本，
+                # 且当前项目的私有挂载、属主、版本和整个工具摘要都已验证，才将这一个
+                # 工具引用排除出业务渲染闭包；公开catalog变化不能重绑业务指纹。
+                from lib.documents.prototype_file_entry import entry_present, verify_mount
+                if entry_present(raw):
+                    if self.navigation is None: raise ValidationError("managed entry requires explicit project context")
+                    verify_mount(self.prototype_fd, self.navigation.project,
+                        self.navigation.prototype.relative_to(self.navigation.project).as_posix())
+                    parser.references.remove(("src", ".xy-prototype-entry/entry.js"))
                 if parser.plan_source or parser.requirement_links:
                     if self.navigation is None:
                         raise ValidationError("requirement navigation needs the configured project context")
@@ -1654,7 +1663,7 @@ def validate_workspace(
         # 目录被替换后，把旧目录的安全结论错误地应用到新文件。
         if "pages" in prototype_entries:
             raise ValidationError("nested prototype pages directory is retired; place pages directly in prototype root")
-        _validate_workspace_nodes(prototype_fd)
+        _validate_workspace_nodes(prototype_fd, project_root=project_root, prototype=prototype_relative)
         pages_fd = os.dup(prototype_fd)
 
         try:
@@ -1797,7 +1806,7 @@ def capture_selected_pages(project_root: str | Path, prototype_relative_raw: str
         os.close(project_fd)
 
 
-def _validate_workspace_nodes(root_fd: int) -> None:
+def _validate_workspace_nodes(root_fd: int, *, project_root=None, prototype=None) -> None:
     """浅层页面与资源分目录共存，但不能混入计划、链接节点或隐藏的第二套页面。
 
     所有节点只做 no-follow 元数据检查；实际内容/依赖仍由原来的按需验证器读取。
@@ -1805,6 +1814,11 @@ def _validate_workspace_nodes(root_fd: int) -> None:
     """
 
     count = 0
+    managed = False
+    if project_root is not None and ".xy-prototype-entry" in os.listdir(root_fd):
+        from lib.documents.prototype_file_entry import verify_mount
+        verify_mount(root_fd, project_root, str(prototype))
+        managed = True
 
     def visit(directory_fd: int, prefix: str, depth: int) -> None:
         nonlocal count
@@ -1816,6 +1830,16 @@ def _validate_workspace_nodes(root_fd: int) -> None:
                 raise ValidationError("prototype workspace node limit exceeded")
             relative = f"{prefix}/{name}" if prefix else name
             info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if not prefix and managed and name == ".xy-prototype-entry":
+                # 仅此受管链接已在上方完整核验；不递归信任任意链接或用户隐藏目录。
+                continue
+            if not prefix and managed and name == ".gitignore":
+                descriptor = _open_regular_at(directory_fd, name, relative, size_limit=MAX_TEXT_FILE_SIZE)
+                try:
+                    body = _read_descriptor(descriptor, relative, MAX_TEXT_FILE_SIZE)
+                    if b"/.xy-prototype-entry/" not in body.splitlines(): raise ValidationError("managed mount ignore entry is missing")
+                finally: os.close(descriptor)
+                continue
             if name.startswith(".") or stat.S_ISLNK(info.st_mode):
                 raise ValidationError(f"prototype contains hidden or linked entry: {relative}")
             if stat.S_ISDIR(info.st_mode):

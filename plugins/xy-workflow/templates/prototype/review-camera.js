@@ -9,14 +9,14 @@
     const k = clamp(camera.k * factor);
     return { x: mx - (mx - camera.x) * (k / camera.k), y: my - (my - camera.y) * (k / camera.k), k };
   }
-  function fitCam(width, height, worldWidth = 1120, worldHeight = 860, topInset = 76) {
+  function fitCam(width, height, worldWidth = width, worldHeight = height, topInset = 76) {
     const k = Math.max(.08, Math.min(1, (width - 48) / worldWidth, (height - topInset - 24) / worldHeight));
     return { k, x: Math.max(24, (width - worldWidth * k) / 2), y: Math.max(topInset, topInset + (height - topInset - worldHeight * k) / 2) };
   }
   function focusBounds(camera, bounds, width, height) {
     return { k: camera.k, x: width / 2 - (bounds.x + bounds.w / 2) * camera.k, y: height / 2 - (bounds.y + bounds.h / 2) * camera.k };
   }
-  function create({ viewport, world, read, write, topInset = () => 76, onApply = () => {} }) {
+  function create({ viewport, world, read, write, dimensions = () => ({ width: world.offsetWidth, height: world.offsetHeight }), topInset = () => 76, onApply = () => {} }) {
     let pan = null, space = false;
     function applyCam() {
       const c = read(); if (!c) return;
@@ -24,7 +24,7 @@
       onApply(c);
     }
     const update = (c) => { write(c); applyCam(); };
-    const fit = () => { const r = viewport.getBoundingClientRect(); update(fitCam(r.width, r.height, 1120, 860, topInset())); };
+    const fit = () => { const r = viewport.getBoundingClientRect(); const size = dimensions(); update(fitCam(r.width, r.height, size.width, size.height, topInset())); };
     function zoom(factor, x, y) {
       const r = viewport.getBoundingClientRect(); if (!read()) return;
       update(zoomAt(read(), factor, x ?? r.width / 2, y ?? r.height / 2));
@@ -58,7 +58,12 @@
     });
     viewport.addEventListener("keyup", () => { space = false; viewport.classList.remove("space"); });
     window.addEventListener("blur", end);
-    return Object.freeze({ applyCam, fit, zoom, move, focus(bounds) { const r = viewport.getBoundingClientRect(); if (read()) update(focusBounds(read(), bounds, r.width, r.height)); } });
+    // 外窗口改变只重新适应展示相机；首次observer回调不覆盖已恢复的草稿相机。
+    let previousSize = viewport.getBoundingClientRect();
+    const resizeObserver = new ResizeObserver(() => { const next = viewport.getBoundingClientRect();
+      if (next.width !== previousSize.width || next.height !== previousSize.height) { previousSize = next; if (read()) fit(); }
+    }); resizeObserver.observe(viewport);
+    return Object.freeze({ applyCam, fit, zoom, move, close() { resizeObserver.disconnect(); window.removeEventListener("blur", end); }, focus(bounds) { const r = viewport.getBoundingClientRect(); if (read()) update(focusBounds(read(), bounds, r.width, r.height)); } });
   }
   window.PrototypeReviewCamera = Object.freeze({ zoomAt, fitCam, focusBounds, create });
 })();
