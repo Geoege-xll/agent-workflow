@@ -1,0 +1,8 @@
+xy-build-verify
+xy-code-standards
+xy-project-memory
+xy-plan
+xy-prototype-verify
+xy-qa-review
+xy-ui-design
+xy-workflow

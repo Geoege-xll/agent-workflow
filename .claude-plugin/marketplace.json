@@ -1,0 +1,12 @@
+{
+  "name": "xy-workflow",
+  "owner": {
+    "name": "Agent Workflow"
+  },
+  "plugins": [
+    {
+      "name": "xy-workflow",
+      "source": "./plugins/xy-workflow"
+    }
+  ]
+}

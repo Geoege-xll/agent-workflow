@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "plugin_name": "xy-workflow",
+  "marketplaces": {"stable": "xy-workflow", "alpha": "xy-workflow-alpha", "local": "xy-workflow-local"},
+  "artifact_prefix": "xy-workflow",
+  "skill_aliases": {
+    "xy-config": "agent-config",
+    "xy-grill-me": "grill-me",
+    "xy-grilling": "grilling",
+    "xy-taste": "design-taste-frontend",
+    "xy-playwright": "playwright-cli"
+  },
+  "managed_roles": ["xy-web", "xy-desktop", "xy-backend", "xy-apple", "xy-android", "xy-uiux", "xy-qa"],
+  "legacy_plugin_name": "agent-workflow",
+  "legacy_marketplaces": {"alpha": "agent-workflow-alpha", "local": "agent-workflow-local"}
+}
