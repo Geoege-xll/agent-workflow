@@ -1,9 +1,9 @@
 # 安装 xy-workflow 3.0 alpha 插件
 
-当前源码版本为 `3.0.0-alpha.7`，配置组件源码候选为 `0.1.0-alpha.5`，未发布、未安装。默认使用官方客户端从自有 Git alpha 渠道安装，无需克隆工作流源码或本地构建；实际版本以客户端列表与发行资产为准。此渠道不等于官方公开目录上架或稳定发行，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
+插件唯一版本源为 `product/PLUGIN_VERSION`，独立配置工具版本源为 `native_config/VERSION`；实际发行以 Git alpha 分支和真实 Release 资产为准，独立组件固定发行与发布状态以 `plugins/maintenance/component.json` 为准，本机安装状态以客户端列表和实际安装回执为准。默认使用官方客户端从自有 Git alpha 渠道安装，无需克隆工作流源码或本地构建。此渠道不等于官方公开目录上架或稳定发行，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
 
-本页 `xy-workflow` 身份和命令对应本轮未发布候选；须在匹配的远程分发资产发布后使用，
-不能将下列候选命令视为新市场已就绪或本机已经切换。活动任务使用原物理资源完成后再按官方客户端切换。
+本页 `xy-workflow` 身份由 `product/command_identity.json` 唯一维护；使用下列命令时核对匹配的远程分发资产与客户端回执，
+不能仅凭源码版本或命令说明判断本机已经切换。活动任务使用原物理资源完成后再按官方客户端切换。
 
 ## 前置条件
 

@@ -1,6 +1,6 @@
 # xy-workflow 3.0 官方插件候选
 
-插件唯一版本源为 `product/PLUGIN_VERSION`，当前源码为 `3.0.0-alpha.7`；独立配置工具版本源为 `native_config/VERSION`，当前源码候选为 `0.1.0-alpha.5`，未发布、未安装。本轮本机模型目录、调用偏好、配置页及只读派发接入已通过独立 QA，见[主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/native-model-preferences.md)。实际发行以 Git alpha 分支、客户端列表和 Release 资产为准，固定组件描述只在真实下载校验后标记 published。默认使用自有 Git alpha 分发，官方公开目录与稳定发行尚未就绪，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
+插件唯一版本源为 `product/PLUGIN_VERSION`；独立配置工具版本源为 `native_config/VERSION`。本轮本机模型目录、调用偏好、配置页及只读派发接入已通过独立 QA，见[主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/native-model-preferences.md)。实际发行以 Git alpha 分支和真实 Release 资产为准，独立组件固定发行与发布状态以 `plugins/maintenance/component.json` 为准；固定组件描述只在真实下载校验后标记 published。本机安装状态以客户端列表和实际安装回执为准。默认使用自有 Git alpha 分发，官方公开目录与稳定发行尚未就绪，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
 
 ## 载荷与职责
 
@@ -36,8 +36,8 @@ Playwright CLI采用锁定的官方发布包，不依赖用户全局命令或npm
 
 唯一纯标准库只读合同 `native_config/preference_contract.py` 逐字节投影为插件的 `plugins/dispatch_preferences.py`，记录来源及投影摘要。PM 在派发前通过 `source_pack.py dispatch-preferences` 读取用户／项目偏好，无偏好时沿宿主默认；有偏好时只映射实际原生工具支持的字段，异常不静默回退。它不启动或准备组件、HTTP/MCP，不写设置，不改变业务确认、角色权限或当前主会话模型；维护 Skill 分支不进入该业务步骤。
 
-当前公开命名由 `product/command_identity.json` 唯一维护。本轮新身份和精选依赖尚是未发布候选，
-不据此宣称远程分支已切换、配置组件可下载或本机已更新；先完成当前活动任务。
+当前公开命名由 `product/command_identity.json` 唯一维护；远程分发与组件可用性以真实 Release 资产和
+`plugins/maintenance/component.json` 为准，本机是否已切换以客户端列表和实际安装回执为准；先完成当前活动任务。
 
 ## alpha 来源与安装
 
@@ -77,7 +77,7 @@ inspect 只读；显式 apply 只创建缺失 adapter，复用已有有效配置
 
 Codex 0.167.0 的实际对照发现根 portable 清单漏载 Hook，候选只生成 `.codex-plugin/plugin.json`。客户端官方 Hook 审阅和信任不可绕过，不直接写信任记录或以全局指令替代。安装成功不自动授予 Hook 信任。AGY 构建继续保护每个 Skill 的 24,000 字节正文上限。
 
-本轮 alpha.5 远程渠道的 CI、发布和安装发现分别记入[远程安装记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-remote-install.md)，不提前宣称三端模型运行通过。较早 alpha 候选的默认 PM、原生派发、同 ID 追加、配置与推理实验见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)，保留当时具体范围与失败。当前 App GUI 未验；发现、安装、真实模型响应与完整工作流收口分层判定。每个新包仍从 `runtime_verified:false` 开始，不因构建、静态验证或安装回执宣称完整原生运行通过。
+早期 alpha.5 远程渠道的 CI、发布和安装发现分别记入[远程安装记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-remote-install.md)，不提前宣称三端模型运行通过。较早 alpha 候选的默认 PM、原生派发、同 ID 追加、配置与推理实验见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)，保留当时具体范围与失败。当前 App GUI 未验；发现、安装、真实模型响应与完整工作流收口分层判定。每个新包仍从 `runtime_verified:false` 开始，不因构建、静态验证或安装回执宣称完整原生运行通过。
 
 活动任务跨插件更新的自动资源保留协议尚未实现，更新前先收尾或交接。独立配置预发行不代表插件公开市场稳定发行；本机安装也不代表全局替换所有用户或业务项目。
 
