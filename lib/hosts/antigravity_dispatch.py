@@ -10,7 +10,8 @@ import secrets
 
 from lib import plugin_resources
 from lib.hosts.dispatch_contract import (
-    AGY_CONVERSATION_UUID, AGY_PARENT_ERROR, AGY_RELEASE_ERROR, DispatchPolicy, reject_unexpected_marker,
+    AGY_CONVERSATION_UUID, AGY_PARENT_ERROR, AGY_RELEASE_ERROR, AGY_TASK_PACK_PROMPT, DispatchPolicy,
+    reject_unexpected_marker,
     validate_child_id,
 )
 from lib.safe_text import open_file, read_file
@@ -20,6 +21,7 @@ from lib.task_graph import TaskGraphError
 # AGY 回执没有可跨并行工具定位的 call ID。CLI 核对单一调用；App 也接受已核实的界面状态更新与创建顺序。
 # Created/Completed 是宿主附加的时间行；命令输出和聊天的相同文字不能作为回执。
 _MARKER = "XY-WORKFLOW-CLAIM "
+_PACK_MARKER = "XY-WORKFLOW-TASK-PACK-V1"
 _RECEIPT_HEADER = re.compile(r"(?:(?:Created|Completed) At: [0-9T:+.Z-]+\n)*Created the following subagent:\n")
 _UPDATE_ACK = re.compile(r"(?:Created At: [0-9T:+.Z-]+\nCompleted At: [0-9T:+.Z-]+\n){2}OK")
 _RECEIPT_FOOTER = ("\nThe subagent will send you a message when it has completed its task or requires guidance. "
@@ -37,7 +39,7 @@ def parent_id(pm_id: str) -> str:
 
 def new_claim(pm_id: str) -> dict:
     # 即使同一份输入被恢复，同一任务在确认未创建后重新领取也必须获得新的派发标记。
-    return {"parent": parent_id(pm_id), "nonce": secrets.token_hex(32)}
+    return {"parent": parent_id(pm_id), "nonce": secrets.token_hex(32), "prompt_format": AGY_TASK_PACK_PROMPT}
 
 
 def dispatch_marker(root: Path, target: dict, basis: str, claim: dict) -> str:
@@ -45,6 +47,26 @@ def dispatch_marker(root: Path, target: dict, basis: str, claim: dict) -> str:
     body = json.dumps([str(root), target, basis, claim], ensure_ascii=False, sort_keys=True,
                       separators=(",", ":")).encode("utf-8")
     return _MARKER + hashlib.sha256(body).hexdigest()
+
+
+def initial_prompt(root: Path, target: dict, marker: str) -> str:
+    from lib.task_graph_cli import export_current_task_pack
+    from lib.task_graph_records import decode, read_record
+    from lib.shared_solution_records import filter_ready
+
+    original = Path(target["record"])
+    payload = decode(read_record(original))
+    rows = [payload["task"]] if "task" in payload else payload["tasks"]
+    task = next((row for row in rows if row["id"] == target["task_id"]
+                 and row["request_id"] == target["request_id"]), None)
+    if task is None:
+        raise TaskGraphError("AGY prompt must identify the current task in the original")
+    pack = export_current_task_pack(payload, task["id"], root=root)
+    if task.get("solution_decisions") and not filter_ready(original, [task], [task["id"]]):
+        raise TaskGraphError("AGY prompt requires current shared solution approvals")
+    return (f"{marker}\n{_PACK_MARKER}\n"
+            "Use this complete current Task Pack as your assignment. Limit writes to its owned_paths.\n"
+            + json.dumps(pack, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
 
 
 def _brain_roots() -> tuple[Path, Path]:
@@ -87,27 +109,36 @@ def session_origin(event):
     return current, parent, markers[0] if len(markers) == 1 else None, brain
 
 
-def _matches_role(selector: str, role: str, prompt: str) -> bool:
-    # TypeName 是宿主真正选择的原生类型，Role 仅是调用者填写的描述。
-    # 错派到另一个命名角色时，即使 Prompt 里出现正确角色名或角色正文也不能视为选中该角色。
-    if selector == role:
-        return True
-    if selector != "research":
-        return False
-    # 仅对已经核实的内建通用入口允许正文交接。定位当前包自身的原始角色文件，
-    # 保持正文段落、顺序和内容不变；用户项目中的同名文件、缩写或自由标签不能代替它。
+def _role_text(role: str) -> tuple[str, str]:
     relative = f"roles/{role}.md"
     if plugin_resources.plugin_root() is not None:
         source = plugin_resources.read_source(relative)
     else:
         source = read_file(Path(__file__).resolve().parents[2] / relative)
     if not source:
-        return False
-    text = source.decode("utf-8").replace("\r\n", "\n")
+        return "", ""
+    text = source.decode("utf-8").replace("\r\n", "\n").strip("\n")
     header, separator, body = text.partition("\n---\n")
-    body = body.strip("\n")
-    return (header.startswith("---\n") and bool(separator and body)
-            and "\n" + body + "\n" in "\n" + prompt.replace("\r\n", "\n") + "\n")
+    return (text, body.strip("\n")) if header.startswith("---\n") and separator else ("", "")
+
+
+def _matches_prompt(selector: str, role: str, prompt: str, marker: str, expected_prompt) -> bool:
+    if [line for line in prompt.splitlines() if line.startswith(_MARKER)] != [marker]:
+        return False
+    if selector not in {role, "research"}:
+        return False
+    if expected_prompt is not None:
+        expected = expected_prompt()
+        if selector == role:
+            return prompt == expected
+        text, body = _role_text(role)
+        return bool(body) and prompt.removesuffix("\n") in {expected + "\n\n" + text, expected + "\n\n" + body}
+    # 历史领取只包含独立 marker。保留已发出的原生创建回执及已绑定实例的
+    # 续用，通用入口依然必须携带当前包的完整角色正文。
+    if selector == role:
+        return True
+    _, body = _role_text(role)
+    return bool(body) and "\n" + body + "\n" in "\n" + prompt.replace("\r\n", "\n") + "\n"
 
 
 def _field_complete(event: dict, required: str) -> bool:
@@ -150,16 +181,23 @@ def _focus_update(call, *, full: bool) -> bool:
     return isinstance(focus, str) and 0 < len(focus) <= 512 and bool(focus.strip()) and focus.isprintable()
 
 
-def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool) -> tuple[int, int] | None:
+def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool, expected_prompt) -> tuple[int, int] | None:
     calls = event.get("tool_calls")
     if (event.get("type") != "PLANNER_RESPONSE" or not isinstance(calls, list) or not 1 <= len(calls) <= 3
             or not _field_complete(event, "tool_calls")):
         return None
     updates = len(calls) - 1
-    # App 的实际批次先更新任务清单，再可选刷新焦点，最后只有一次创建调用。
-    if updates and (not app or not _steps_update(calls[0], full=full)
-                    or (updates == 2 and not _focus_update(calls[1], full=full))):
+    if updates and not app:
         return None
+    if updates:
+        # App 可按任一顺序发出清单和焦点更新。仍只认一次清单、至多一次焦点，
+        # 紧接一次创建，并逐条核对宿主确认。
+        display = calls[:-1]
+        if updates == 2 and _focus_update(display[0], full=full):
+            display.reverse()
+        if (not _steps_update(display[0], full=full)
+                or (updates == 2 and not _focus_update(display[1], full=full))):
+            return None
     create = calls[-1]
     if not isinstance(create, dict) or create.get("name") != "invoke_subagent":
         return None
@@ -174,8 +212,8 @@ def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool
         except (ValueError, RecursionError):
             return None
     # 完整日志的参数是直接字符串。两个来源各按自己的格式读，禁止混用或猜测解码。
-    if (isinstance(prompt, str) and [line for line in prompt.splitlines() if line.startswith(_MARKER)] == [marker]
-            and _matches_role(selector, role, prompt)):
+    if isinstance(prompt, str) and isinstance(selector, str) and _matches_prompt(
+            selector, role, prompt, marker, expected_prompt):
         return event["step_index"] + 1, updates
     return None
 
@@ -208,7 +246,7 @@ def _parent_transcript(directory: Path):
 
 
 def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, role: str, *,
-                    brain: Path | None = None) -> None:
+                    brain: Path | None = None, expected_prompt=None) -> None:
     from lib.skills.role_skills import ROLE_SKILLS
     if role not in ROLE_SKILLS:
         raise TaskGraphError("AGY dispatch requires a role defined by the current workflow package")
@@ -264,7 +302,8 @@ def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, ro
                         continue
                     if not remaining_updates and _matches_receipt(event["content"], agent_id, child_log, workspace):
                         return
-                pending = _dispatch_step(event, marker, role, full=full, app=root == app_root)
+                pending = _dispatch_step(event, marker, role, full=full, app=root == app_root,
+                                         expected_prompt=expected_prompt)
     except TaskGraphError:
         raise
     except (OSError, ValueError) as exc:
@@ -381,4 +420,10 @@ class AntigravityDispatch(DispatchPolicy):
         if "agent_ref" not in task:
             # 首次绑定才读创建日志；同一轮已绑定 ID 的重试仍核对 PM、原件和标记，
             # 日志归档后也能幂等返回。最终原件 CAS 仍由外层任务池执行。
-            verify_creation(parent, reference["agent_id"], execution_root(), marker, task["role"])
+            expected_prompt = None
+            # A withdrawal may follow an unbound revision. Bind the proven original
+            # child so the PM can stop it, without reauthorizing implementation.
+            if task["state"] != "STOP_REQUESTED" and claim.get("prompt_format") == AGY_TASK_PACK_PROMPT:
+                expected_prompt = lambda: initial_prompt(root, target, marker)
+            verify_creation(parent, reference["agent_id"], execution_root(), marker, task["role"],
+                            expected_prompt=expected_prompt)
