@@ -2343,7 +2343,8 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         validate_task_source({}, root=args.root)
     if args.command in {"scratch", "cleanup-scratch"}:
         # 以当前代码所属实体包识别 AGY，不接受任务参数、角色或环境变量切换宿主。
-        handoff = handoff_policy(packaged_host())
+        host = packaged_host()
+        handoff = handoff_policy(host)
     if args.command == "scratch":
         if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select, args.all)):
             raise TaskGraphError("scratch requires --root and accepts only --request-id")
@@ -2351,6 +2352,13 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "cleanup-scratch":
         if args.root is None or any((args.input, args.patch, args.task_id, args.output, args.select)):
             raise TaskGraphError("cleanup-scratch requires --root and accepts --request-id/--all, --dry-run, --keep and --expect-sha256")
+        if host == "antigravity" and not args.dry_run and args.all != bool(args.request_id):
+            from lib.hosts.handoff import validated_scratch_slot
+            from lib.task_pool import require_registered_scratch_keeps
+            slot = None if args.all else validated_scratch_slot(args.request_id)
+            base = handoff.cleanup_base(args.root, slot)
+            target = base if slot is None else base / slot
+            require_registered_scratch_keeps(args.root, target, records._scratch_keep_paths(tuple(args.keep)))
         try:
             return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all,
                                            dry_run=args.dry_run, keep=tuple(args.keep), expected=args.expect_sha256,

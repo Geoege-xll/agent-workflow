@@ -76,6 +76,9 @@ class DispatchPolicy:
     def check_pool_claim(self) -> None:
         """在创建登记项或领取前校验本端所需的 PM 身份。"""
 
+    def check_claim_target(self, root: Path, payload: dict, task: dict) -> None:
+        """在持准入锁的原件快照上核对宿主派发前置证据。"""
+
     def claim_fields(self, root: Path, target: dict, basis: str) -> tuple[dict, dict]:
         """分别返回要加入原件和本次回执的宿主字段。"""
         return {}, {}

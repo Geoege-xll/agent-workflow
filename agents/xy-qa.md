@@ -38,7 +38,12 @@ skills:
 
 通过同一 helper 调用 `plugins/project_context.py inspect`，复用已验证的
 `project.yaml`，或显式 `apply` 新候选 `.awf/project.yaml`。`init --adapter <selected-path>` 必须传入同一配置。此入口不创建文档、不授予
-批准。需要宿主集成时按操作定位 `platforms/antigravity/references/pm-integration.md`。Reviewer 遇到审查方法缺口时读其中的 `Native review method` 小节及其调用约束。
+批准。PM 收到已登记 Writer 的原生验收结果时，从插件根定位
+`platforms/antigravity/references/pm-integration.md#writer-completion`，按「Writer 验证结果回写」
+核对结果并更新原件。仅原型设计也用这一入口。所有已登记状态只能通过正式 helper 回写。
+Full 开始独立 QA 前，先读同一说明的 `#full-qa-closeout` 并执行到收口：普通 Full 先冻结范围再领取，
+绑定原生 QA 后导出正式验收包，接纳有效回执，按计划回填并核对已有主题。Writer 与 QA 的任务池状态均须回查。
+其他宿主操作按需定位 `platforms/antigravity/references/pm-integration.md` 的相关小节。Reviewer 遇到审查方法缺口时读其中的 `Native review method` 小节及其调用约束。
 插件由宿主原生发现、启用及更新。业务项目仅保留其自身配置。
 
 公开插件身份与别名以 `product/command_identity.json` 为准：插件 `xy-workflow`，
