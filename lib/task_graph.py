@@ -373,12 +373,21 @@ def request_closure(tasks: Iterable[Task], request_id: str) -> set[str]:
     return closure
 
 
-def qa_ready(tasks: Iterable[Task], request_id: str) -> bool:
-    """仅当请求闭包中的 Writer 全部 BUILD_VERIFIED 时允许派发统一 QA。"""
+def qa_ready(tasks: Iterable[Task], request_id: str, *, writer_ids: set[str] | None = None) -> bool:
+    """核对当前检查点的 Writer barrier，缺省仍为完整请求闭包。
+
+    Foundation 的唯一固定阶段由权威图适配层推导 writer_ids；本纯函数只核对
+    该集合真实属于请求闭包且都是 Writer，不允许外部任务或空集合冒充通过。
+    最终检查点不传子集，继续等待请求闭包所有 Writer BUILD_VERIFIED。
+    """
 
     indexed = _tasks_by_id(tasks)
     validate_graph(indexed.values())
     closure = request_closure(indexed.values(), request_id)
+    if writer_ids is not None:
+        if not writer_ids or not writer_ids <= closure or any(indexed[key].task_type != "writer" for key in writer_ids):
+            raise TaskGraphError("QA checkpoint writer IDs must be non-empty writers in the request closure")
+        closure = writer_ids
     writers = [indexed[task_id] for task_id in closure if indexed[task_id].task_type == "writer"]
     if not writers:
         return False

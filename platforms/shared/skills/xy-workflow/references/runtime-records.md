@@ -101,7 +101,8 @@ if it is unknown, use `fingerprints` on just this graph file, not a whole-projec
 The patch supports:
 
 - `tasks`: an object keyed by existing task ID. Each operation may contain `set`, `append`,
-  `documents`, and `checkpoint`, or the exclusive result-task `settle` below. `set` accepts `state`, `owned_paths`, `semantic_locks`, `input_contracts`,
+  `documents`, and `checkpoint`, or the exclusive result-task `settle` below. New-project Foundation
+  QA also supports the exclusive checkpoint accept operations described below. `set` accepts `state`, `owned_paths`, `semantic_locks`, `input_contracts`,
   `output_contracts`, `acceptance_evidence`, `verification_commands`, and
   `controlled_document_access`, and optional `agent_ref`, `agent_retired`, `handoff_assessment`; `append` supports their existing arrays,
   except non-array fields; agent_ref, agent_retired and handoff_assessment cannot be appended.
@@ -122,6 +123,35 @@ The patch supports:
   to the actual project root, recompute their bytes and refresh existing task references. This does
   not adopt new standards/visual authority, change rule IDs, grant approval or invalidate unrelated
   build evidence. A standards change still follows the ordinary adoption and affected-evidence rules.
+
+### Foundation checkpoint acceptance
+
+Only a Full QA node with immutable `foundation_task_id` uses these operations. Initialize that reference
+with the original graph; feature writers depend on Foundation, while QA dependencies stay in its closure.
+`qa-ready` and `task` derive the current Foundation/request checkpoint; never hand-edit checkpoint scope.
+After a current PASS and successful native execution have actually been checked, use exactly one task
+and one operation in the existing update patch:
+
+```json
+{"tasks":{"qa":{"accept_foundation":{
+  "task_pack":{"path":"/absolute/current-qa-pack.json","sha256":"<original-byte-sha256>"},
+  "handoff":{"path":"/absolute/current-handoff.json","sha256":"<original-byte-sha256>"}
+}}}}
+```
+
+`accept_foundation` reuses the handoff validator, checks the current graph-derived checkpoint, exact
+original Reviewer identity, closure fingerprint and integration evidence, and atomically saves protected
+`foundation_receipt` while returning QA to `DECLARED`. It preserves `agent_ref` and never retires the
+Reviewer or grants final `QA_PASSED`. Actual native completion and host occupancy remain PM observations.
+Foundation contract/build/content/authority changes invalidate this receipt; normal feature edits and
+integration HEAD advancement alone do not. Ordinary `set` cannot create a receipt.
+
+After every request writer is `BUILD_VERIFIED` and current integration evidence is available, resume the
+same QA node/Reviewer and export the complete `request` checkpoint. Use the same reference shape under
+exclusive `accept_request` to validate the final current-byte PASS and record `QA_PASSED` with protected
+`request_receipt`. Old Foundation packs and mixed phases are rejected. For this optional Foundation
+contract, ordinary `set state: QA_PASSED` is forbidden. Requests without Foundation keep existing acceptance.
+The existing three-round recovery limit is shared; no additional business gate is created.
 
 For example, after the PM has established a task's actual ready/dispatch decision:
 
