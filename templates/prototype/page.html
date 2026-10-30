@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>页面原型模板</title>
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive">
+  <!-- 统一展示页头：返回目录、尺寸和模拟说明都在产品画板之外，不作为产品导航或横幅。 -->
+  <header class="prototype-header prototype-shell">
+    <a id="prototype-back-index" class="prototype-back-link" href="index.html">返回原型目录</a>
+    <h1>页面原型模板</h1>
+    <p class="prototype-meta">平台：Web · 响应式内容区 · 模板示例，非已批准的产品设计</p>
+    <div class="prototype-description" aria-label="原型说明">
+      <p><strong>演示说明：</strong>本页只演示统一原型外壳，没有真实业务数据或业务操作。创建产品页面时，在这里说明虚构数据、会话模拟、刷新重置和未实现的范围。</p>
+      <p><strong>设计说明：</strong>页面名称、平台和布局范围需按项目规范填写；设计基线、候选视觉及待确认事项写在这里，不放进产品区，也不将模板示例视为项目批准结果。</p>
+    </div>
+  </header>
+
+  <!-- 三功能区共用同一骨架：Web 默认自然展开，无固定宽高或客户端窗口装饰。
+       iOS／PC：把 body 的显示模式改为 fixed，填写实际平台，再给下方容器设置
+       --prototype-frame-width / --prototype-frame-height（CSS px），同步顶部及 purpose。
+       fixed 画布可滚动时为 prototype-stage 加 tabindex="0"，提供键盘滚动入口。
+       产品 token 与共享组件来自项目规范；外壳的 --prototype-* 不是产品主题。 -->
+  <div class="prototype-stage" role="region" aria-label="当前页面原型">
+    <div class="prototype-frame">
+      <!-- 产品设计插槽：保留此边界，替换占位内容；产品导航、系统栏和页面交互只放在这里。 -->
+      <main class="prototype-content" data-prototype-page-content>
+        <div class="prototype-placeholder">
+          <h2>页面标题</h2>
+          <p>页面内容</p>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- 页底契约默认折叠，完整保留五个章节；不参与产品窗口布局。 -->
+  <details class="prototype-contract" lang="en">
+    <summary>Page design and interaction contract</summary>
+
+    <section data-contract-section="purpose">
+      <h2>Page purpose</h2>
+      <p>This starter demonstrates the shared HTML presentation shell, not an approved product design. Its platform is Web in responsive mode: content follows available width and natural document flow, without a fixed preview viewport. Replace this purpose with the current page's approved responsibility and layout scope; for a fixed device or desktop preview, specify its platform, dimensions in CSS pixels, and display-scale policy.</p>
+    </section>
+
+    <section data-contract-section="navigation">
+      <h2>Navigation</h2>
+      <p>Open this independent HTML directly or from the prototype index. The shared header's directory link opens index.html; it is prototype navigation, not a product navigation item.</p>
+    </section>
+
+    <section data-contract-section="interactions">
+      <h2>Interaction contract</h2>
+      <p data-contract-for="prototype-back-index">The header's directory link opens index.html without relying on browser history. This starter has no product controls; add one concrete mapping for every material product control introduced.</p>
+    </section>
+
+    <section data-contract-section="states">
+      <h2>Required states</h2>
+      <p>The initial shell has responsive content and a natively expandable contract. Loading, empty, error, success, and dialog product states are not applicable because this starter reads no business data and runs no business actions. Implement the approved states in this same HTML when designing a real page.</p>
+    </section>
+
+    <section data-contract-section="exceptions">
+      <h2>Page-specific exceptions</h2>
+      <p>No page-specific exceptions. Follow the shared prototype styles and current controlled documents.</p>
+    </section>
+  </details>
+</body>
+</html>

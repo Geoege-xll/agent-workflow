@@ -1,0 +1,190 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  /* 这里只定义原型展示外壳的中性色，不替代项目的产品设计 token。 */
+  --prototype-canvas-bg: #edf0f5;
+  --prototype-surface: #ffffff;
+  --prototype-text: #172033;
+  --prototype-muted: #4b5563;
+  --prototype-border: #cbd5e1;
+  --prototype-focus: #1d4ed8;
+  --prototype-shadow: 0 12px 36px rgb(15 23 42 / 14%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --prototype-canvas-bg: #111827;
+    --prototype-surface: #1f2937;
+    --prototype-text: #f3f4f6;
+    --prototype-muted: #cbd5e1;
+    --prototype-border: #4b5563;
+    --prototype-focus: #93c5fd;
+    --prototype-shadow: 0 12px 36px rgb(0 0 0 / 30%);
+  }
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+}
+
+/* 只有明确使用统一外壳的页面才应用画布配色，产品区域仍可使用自己的设计系统。 */
+body.prototype-canvas {
+  background: var(--prototype-canvas-bg);
+  color: var(--prototype-text);
+  padding: clamp(1rem, 2.5vw, 2rem);
+}
+
+.prototype-shell,
+.prototype-page-list,
+.prototype-contract {
+  width: min(100%, 72rem);
+  margin-inline: auto;
+}
+
+.prototype-page-list,
+.prototype-contract {
+  margin-block-start: 2rem;
+}
+
+.prototype-back-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  padding: 0.5rem 0.875rem;
+  margin-block-end: 1rem;
+  border: 1px solid var(--prototype-border);
+  border-radius: 0.625rem;
+  color: inherit;
+  background: var(--prototype-surface);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* 统一页头始终在正常文档流中，长说明自然换行，不浮动遮挡画板。 */
+.prototype-header h1 {
+  margin-block: 0 0.5rem;
+  font-size: 1.5rem;
+}
+
+.prototype-meta {
+  margin-block: 0 1rem;
+  color: var(--prototype-muted);
+  overflow-wrap: anywhere;
+}
+
+.prototype-description {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--prototype-border);
+  border-radius: 0.75rem;
+  background: var(--prototype-surface);
+  overflow-wrap: anywhere;
+}
+
+.prototype-description p {
+  margin: 0;
+}
+
+.prototype-description p + p {
+  margin-block-start: 0.75rem;
+}
+
+/* Web 默认直接使用自然文档流：这些容器只分隔功能区，不给网页套固定窗口。 */
+.prototype-stage {
+  display: block;
+  min-width: 0;
+  margin-block: 1.5rem;
+  padding: 0;
+  overflow: visible;
+}
+
+.prototype-frame {
+  position: relative;
+  display: block;
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+
+.prototype-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+}
+
+/* iOS／PC 及明确指定的固定视口预览才启用画板。
+   auto 外边距在空间不足时退为零，保留左上侧入口；滚动不会改变内部基准宽高。 */
+[data-prototype-display="fixed"] .prototype-stage {
+  display: flex;
+  padding: 1.5rem;
+  overflow: auto;
+}
+
+[data-prototype-display="fixed"] .prototype-frame {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: var(--prototype-frame-width);
+  height: var(--prototype-frame-height);
+  margin: auto;
+  background: var(--prototype-surface);
+  border-radius: var(--prototype-frame-radius, 0.75rem);
+  outline: 1px solid var(--prototype-border);
+  box-shadow: var(--prototype-shadow);
+  overflow: hidden;
+  /* 画板成为尺寸查询和布局边界；产品响应式用 @container，不借外层视口重排。 */
+  container-type: inline-size;
+  contain: layout;
+}
+
+/* 平台只调整画板轮廓；系统栏和窗口按钮由实际产品设计提供，不全局添加假控件。 */
+[data-prototype-platform="ios"] .prototype-frame {
+  --prototype-frame-radius: 2rem;
+}
+
+[data-prototype-platform="windows"] .prototype-frame,
+[data-prototype-platform="web"] .prototype-frame {
+  --prototype-frame-radius: 0.375rem;
+}
+
+[data-prototype-display="fixed"] .prototype-content {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+/* 此占位样式只服务模板示例；创建真实页面时连同占位内容一起替换。 */
+.prototype-placeholder {
+  padding: 2rem;
+}
+
+.prototype-contract {
+  box-sizing: border-box;
+  padding: 1rem 1.25rem;
+  margin-block-end: 2rem;
+  border: 1px solid var(--prototype-border);
+  border-radius: 0.75rem;
+  background: var(--prototype-surface);
+  overflow-wrap: anywhere;
+}
+
+.prototype-contract > summary {
+  min-height: 2.75rem;
+  padding-block: 0.5rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* 保留原生键盘操作和可见焦点，不给产品内部所有控件施加展示外壳的样式。 */
+.prototype-back-link:focus-visible,
+.prototype-stage:focus-visible,
+.prototype-contract > summary:focus-visible,
+.prototype-page-list a:focus-visible {
+  outline: 2px solid var(--prototype-focus);
+  outline-offset: 3px;
+}
+
+.prototype-contract > section {
+  margin-block-start: 1.25rem;
+}

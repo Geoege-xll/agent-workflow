@@ -1,0 +1,110 @@
+# Role metadata (see AGENT_SCHEMA.md). description MUST be a single line (setup parser).
+# toolsets: write | write+delegation | write-tests | read
+# claude_skills: preloaded into .claude/agents frontmatter
+
+pm:
+  name: PM
+  description: Main orchestrator. Decompose, dispatch, contracts, audit, merge. Prefer routing over implementing.
+  division: product
+  sandbox: docs-config-only
+  toolsets: none
+  tags: [orchestrator, pm, workflow]
+
+roles:
+  xy-web:
+    description: Repository-driven Web engineer. Implement independent production browser applications with the project's actual framework, components, tokens, and verification commands.
+    division: engineering
+    sandbox_key: xy-web
+    toolsets: write
+    tags: [web, browser, frontend, accessibility, localization, ui-implementation]
+    deliverables: [production-web-change, repository-native-verification-evidence, prototype-contract-mapping]
+    claude_skills: [xy-build-verify]
+    codex_effort: medium
+    codex_sandbox: workspace-write
+    claude_color: cyan
+    claude_max_turns: 40
+    nicknames: [Web, xy-web, Console-UI]
+
+  xy-desktop:
+    description: Repository-driven Electron and Tauri desktop engineer. Implement renderer, privileged runtime, IPC or capabilities, native integration, packaging, signing, updates, and release work.
+    division: engineering
+    sandbox_key: xy-desktop
+    toolsets: write
+    tags: [desktop, electron, tauri, renderer, preload, ipc, capabilities, native, packaging, updater]
+    deliverables: [desktop-application-change, privilege-boundary-evidence, per-platform-build-package-or-release-evidence]
+    claude_skills: [xy-build-verify]
+    codex_effort: high
+    codex_sandbox: workspace-write
+    claude_color: orange
+    claude_max_turns: 50
+    nicknames: [Desktop, xy-desktop, Electron, Tauri]
+
+  xy-backend:
+    description: General backend and systems engineer. Implement repository-driven services, APIs, workers, data systems, CLIs, and native modules across the project's existing languages and toolchains.
+    division: engineering
+    sandbox_key: xy-backend
+    toolsets: write
+    tags: [backend, systems, api, service, worker, cli, data, native]
+    deliverables: [backend-or-systems-change, repository-configured-build-or-test-log, contract-or-migration-note]
+    claude_skills: [xy-build-verify]
+    codex_effort: high
+    codex_sandbox: workspace-write
+    claude_color: blue
+    claude_max_turns: 45
+    nicknames: [Backend, xy-backend, Systems]
+
+  xy-apple:
+    description: Repository-driven Apple platforms engineer. Implement native applications with the project's actual Xcode, language, UI, architecture, deployment, and verification configuration.
+    division: engineering
+    sandbox_key: xy-apple
+    toolsets: write
+    tags: [apple, ios, ipados, macos, watchos, tvos, visionos, xcode, swift, objective-c]
+    deliverables: [apple-platform-change, repository-native-xcode-evidence, platform-contract-note]
+    claude_skills: [xy-build-verify]
+    codex_effort: high
+    codex_sandbox: workspace-write
+    claude_color: pink
+    claude_max_turns: 45
+    nicknames: [Apple, xy-apple, iOS, macOS]
+
+  xy-android:
+    description: Repository-driven Android engineer. Implement native applications with the project's actual Gradle, language, UI toolkit, architecture, variants, SDK, and verification configuration.
+    division: engineering
+    sandbox_key: xy-android
+    toolsets: write
+    tags: [android, gradle, kotlin, java, compose, views, lifecycle, variants]
+    deliverables: [android-platform-change, repository-native-gradle-evidence, variant-and-device-coverage]
+    claude_skills: [xy-build-verify]
+    codex_effort: high
+    codex_sandbox: workspace-write
+    claude_color: green
+    claude_max_turns: 45
+    nicknames: [Android, xy-android, Kotlin]
+
+  xy-uiux:
+    description: Repository-driven UI/UX designer. Maintain authorized design-standard leaves or stable build-free HTML prototypes with complete in-page contracts; never edit production source.
+    division: design
+    sandbox_key: xy-uiux
+    toolsets: write
+    tags: [ui, ux, wireframe, prototype, design-system]
+    deliverables: [stable-html-page, page-interaction-contract, prototype-verification, scoped-design-standard-update]
+    claude_skills: [ui-ux-pro-max, xy-prototype-verify]
+    codex_effort: medium
+    codex_sandbox: workspace-write
+    claude_color: purple
+    claude_max_turns: 25
+    nicknames: [UI-UX, xy-uiux, Design-Prototype]
+
+  xy-qa:
+    description: Repository-driven read-only QA auditor. Return PASS or FAIL from current contracts, diffs, source, and real verification evidence; never edit project files.
+    division: quality
+    sandbox_key: xy-qa
+    toolsets: read
+    tags: [qa, review, security, test, desktop-boundary, release-evidence]
+    deliverables: [concise-pass-fail-handoff, verification-evidence-review, desktop-boundary-and-release-audit]
+    claude_skills: [xy-qa-review]
+    codex_effort: high
+    codex_sandbox: read-only
+    claude_color: yellow
+    claude_max_turns: 30
+    nicknames: [QA-Audit, xy-qa, Reviewer]

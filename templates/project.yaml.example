@@ -1,0 +1,45 @@
+# Portable adapter — scheme A docs (shallow)
+project_name: MyProject
+
+memory:
+  provider: agentmemory
+  mode: preferred
+  isolation: strict
+  # Normal setup derives this from the project directory; replace it for a custom namespace.
+  project_id: replace-with-unique-project-id
+  qa_requires_provider: false
+  portable_checkpoint: docs/PROJECT.md
+  fallback_dir: docs/notes/
+
+orchestration:
+  max_concurrent_subagents: 8
+  max_parallel_writers: 6
+  max_writers_per_path: 1
+  max_depth: 1
+
+workspace:
+  discovery: auto
+
+# 多个独立功能优先隔离；仅在全部任务完成、集成 QA 通过后交付本地主分支。
+# confirm 最后询问一次；auto 表示显式授权安全自动合并，均不包含远程 push。
+parallel_worktrees:
+  mode: auto
+  merge: confirm
+  target_branch: auto
+
+# Exceptional repositories may assign a real module directory to one canonical
+# implementation role or exclude a real directory from the bounded scan.
+workspace_overrides: {}
+
+# 仅辅助提醒/入口只读检查，不拦截写入、不自动触发 QA 或改变原生权限。
+# off 可关闭本工作流 Hooks；宿主自身的禁用/信任设置始终保留。
+workflow_hooks:
+  mode: assist
+
+docs:
+  standards: docs/STANDARDS.md
+  standards_root: docs/standards/
+  project: docs/PROJECT.md
+  features: docs/features/
+  plans: docs/plans/
+  notes: docs/notes/

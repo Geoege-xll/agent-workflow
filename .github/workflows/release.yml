@@ -1,0 +1,57 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version X.Y.Z without a leading v (for example 0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Test offline packaging and generated launcher
+        run: python -I -B -m unittest discover -s tests -p test_homebrew_packaging.py -v
+      - name: Build archive, checksum and Formula
+        run: python -I -B packaging/build_release.py "$RELEASE_VERSION"
+      - name: Create draft release without replacing published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+            if [ "$(git rev-list -n 1 "$tag")" != "$GITHUB_SHA" ]; then
+              printf '%s\n' 'Existing tag points at another commit; refusing mismatched release.' >&2
+              exit 1
+            fi
+          fi
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --title "Agent Workflow $tag" \
+            --generate-notes \
+            "dist/agent-workflow-$RELEASE_VERSION.tar.gz" \
+            "dist/agent-workflow-$RELEASE_VERSION.tar.gz.sha256" \
+            dist/Formula/awf-cli.rb
