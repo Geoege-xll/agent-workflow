@@ -270,7 +270,7 @@ def validate_selection(host: str, value: dict, catalog: Catalog) -> dict:
     model = next((row for row in catalog.models if row.id == value["model"]), None)
     if model is None:
         raise ValueError("所选模型不在当前宿主本地目录中，请刷新来源后重选")
-    if value["effort"] != "inherit" and value["effort"] not in model.efforts:
+    if model.efforts and value["effort"] != "inherit" and value["effort"] not in model.efforts:
         raise ValueError("该模型缺少所选推理档位的能力证据，请使用继承或受支持档位")
     return value
 

@@ -121,19 +121,75 @@ class Theme:
     warning: int = curses.A_BOLD
     error: int = curses.A_BOLD
     success: int = curses.A_BOLD
+    border: int = curses.A_DIM
+    tab_active: int = curses.A_REVERSE | curses.A_BOLD
+    tab_inactive: int = curses.A_DIM
+    badge: int = curses.A_BOLD
+    indicator: int = curses.A_BOLD
 
     @classmethod
     def create(cls):
         try:
             if not curses.has_colors():return cls()
             curses.start_color();curses.use_default_colors()
-            for index,color in enumerate((curses.COLOR_CYAN,curses.COLOR_YELLOW,curses.COLOR_RED,curses.COLOR_GREEN),1):
+            for index,color in enumerate((curses.COLOR_CYAN,curses.COLOR_YELLOW,curses.COLOR_RED,curses.COLOR_GREEN,curses.COLOR_MAGENTA,curses.COLOR_BLUE),1):
                 curses.init_pair(index,color,-1)
             return cls(focus=curses.color_pair(1)|curses.A_BOLD,
                        selected=curses.color_pair(1)|curses.A_REVERSE|curses.A_BOLD,
                        warning=curses.color_pair(2)|curses.A_BOLD,
                        error=curses.color_pair(3)|curses.A_BOLD,
-                       success=curses.color_pair(4)|curses.A_BOLD)
+                       success=curses.color_pair(4)|curses.A_BOLD,
+                       border=curses.A_DIM,
+                       tab_active=curses.color_pair(1)|curses.A_REVERSE|curses.A_BOLD,
+                       tab_inactive=curses.A_DIM,
+                       badge=curses.color_pair(2)|curses.A_BOLD,
+                       indicator=curses.color_pair(1)|curses.A_BOLD)
         except curses.error:
             # 不强制黑底，浅色终端及不支持默认背景的终端仍可使用单色界面。
             return cls()
+
+
+def draw_box(put, y: int, x: int, h: int, w: int, *, title: str = "", count: str = "",
+             border_attr: int = 0, title_attr: int = 0, count_attr: int = 0, round_corners: bool = True):
+    if h < 2 or w < 2: return
+    tl, tr, bl, br = ("╭", "╮", "╰", "╯") if round_corners else ("┌", "┐", "└", "┘")
+    avail = max(0, w - 2)
+    t_clean = f" {title.strip()} " if title.strip() else ""
+    c_clean = f" {count.strip()} " if count.strip() else ""
+    t_w = cell_width(t_clean)
+    c_w = cell_width(c_clean)
+    put(y, x, tl, 1, border_attr)
+    if t_w + c_w <= avail:
+        mid_bar = avail - t_w - c_w
+        curr_x = x + 1
+        if t_clean:
+            put(y, curr_x, t_clean, t_w, title_attr or border_attr)
+            curr_x += t_w
+        if mid_bar > 0:
+            put(y, curr_x, "─" * mid_bar, mid_bar, border_attr)
+            curr_x += mid_bar
+        if c_clean:
+            put(y, curr_x, c_clean, c_w, count_attr or border_attr)
+    else:
+        disp_title = ellipsize(t_clean or title, avail)
+        disp_w = cell_width(disp_title)
+        put(y, x + 1, disp_title, disp_w, title_attr or border_attr)
+        rem = max(0, avail - disp_w)
+        if rem > 0:
+            put(y, x + 1 + disp_w, "─" * rem, rem, border_attr)
+    put(y, x + w - 1, tr, 1, border_attr)
+    for row in range(y + 1, y + h - 1):
+        put(row, x, "│", 1, border_attr)
+        put(row, x + w - 1, "│", 1, border_attr)
+    put(y + h - 1, x, bl + ("─" * avail) + br, w, border_attr)
+
+
+def draw_scrollbar(put, y: int, x: int, h: int, total: int, current: int, page_size: int, attr: int = 0):
+    if h <= 2 or total <= page_size or total <= 0: return
+    thumb_size = max(1, int(h * (page_size / total)))
+    max_scroll = max(1, total - page_size)
+    thumb_pos = min(h - thumb_size, max(0, int((h - thumb_size) * (current / max_scroll))))
+    for offset in range(h):
+        char = "█" if thumb_pos <= offset < thumb_pos + thumb_size else "░"
+        put(y + offset, x, char, 1, attr)
+

@@ -13,7 +13,7 @@ import time
 
 from .catalog import Catalog, clean, discover
 from . import service
-from .tui_support import Layout, TextInput, Theme, cell_width, clip, ellipsize, padded, wrapped
+from .tui_support import Layout, TextInput, Theme, cell_width, clip, draw_box, draw_scrollbar, ellipsize, padded, wrapped
 
 HOSTS=("codex","claude","antigravity")
 HOST_LABELS=("Codex","Claude Code","Antigravity")
@@ -29,7 +29,8 @@ class Binding:
     aliases: str = ""
 
 
-COMMANDS=(Binding("Enter","编辑角色","edit","edit model"),
+COMMANDS=(Binding("Enter","编辑模型","edit","edit model"),
+          Binding("e","修改推理","effort","effort reasoning level"),
           Binding("s","预览变更","preview","preview diff apply"),
           Binding("u","丢弃当前角色草稿","discard","discard undo draft"),
           Binding("g","工作流管理","manage","manage workflow"),
@@ -51,14 +52,14 @@ class App:
         self.projects=service.projects(state,scan)
         if initial and initial not in self.projects:self.projects.append(initial)
         self.project_index=self.projects.index(initial) if initial else 0
-        self.host_index=0;self.role_index=0;self.pane="roles" if self.projects else "projects"
+        self.host_index=0;self.role_index=0;self.role_column="model";self.pane="roles" if self.projects else "projects"
         self.modal=None;self.index=0;self.scroll=0;self.text="";self.editor=TextInput()
         self.filter_text="";self.searching=False;self.search_input=TextInput();self.search_before=None
         self.frames=[];self.quit_code=0;self.exit_code=0
         self.drafts={};self.expected={};self.catalogs={};self.settings_cache={};self.roles_cache={}
         self.source_stamps={};self.roles_errors={};self.page_lines=10
         self.scratch=None;self.changes=[];self.backup_rows=[]
-        self.toast="Enter 编辑角色 · / 搜索列表 · : 查找操作";self.toast_kind="info"
+        self.toast="Enter/m 编辑模型 · e 修改推理 · ←→ 选列 · / 搜索";self.toast_kind="info"
         self.done=False;self.future=None;self.after_job=None;self.show_job_result=True
         self.cancel_job=Event();self.job_cancellable=False;self.job_name="管理操作";self.job_started=0;self.job_return=None
         self.hits=[];self.screen=None;self.theme=Theme();self.cursor_visible=None
@@ -122,9 +123,10 @@ class App:
         return replace(row,label=label) if label else row
 
     def unavailable(self,action):
-        if action in {"edit","preview","discard","manage","refresh","install","check","backups","sources"} and not self.project:return "请先选择项目"
-        if action == "edit" and not self.role:return "当前宿主没有已安装角色"
-        if action == "edit" and self.role not in self.installed_roles():return "角色已移除；u 可单独丢弃此角色草稿，其他草稿保留"
+        if action in {"edit","effort","preview","discard","manage","refresh","install","check","backups","sources"} and not self.project:return "请先选择项目"
+        if action in {"edit","effort"} and not self.role:return "当前宿主没有已安装角色"
+        if action in {"edit","effort"} and self.role not in self.installed_roles():return "角色已移除；u 可单独丢弃此角色草稿，其他草稿保留"
+        if action == "effort" and self.host == "antigravity":return "Antigravity 静态角色仅支持继承"
         if action == "preview" and not self.pending():return "当前范围没有待应用变更"
         if action == "discard" and self.scope() not in self.drafts:return "当前角色没有草稿"
         return ""
@@ -148,10 +150,11 @@ class App:
             return [*scrolling,Binding("Enter",labels[self.modal],"confirm"),Binding("Esc","返回","back")]
         if self.modal:
             return [Binding("↑↓","滚动","scroll"),Binding("PgUp/PgDn","翻页","scroll"),Binding("Home/End","页首 / 页尾","scroll"),Binding("Esc","返回","back")]
+        role_binding=Binding("Enter","修改推理" if self.role_column == "effort" else "修改模型","confirm") if self.pane == "roles" else Binding("Enter","打开角色表","confirm")
         return [Binding("↑↓","选择项目" if self.pane == "projects" else "选择角色","move"),
                 Binding("Home/End","首项 / 末项","move"),Binding("PgUp/PgDn","翻页","move"),
                 Binding("Tab","切换项目 / 角色","pane"),Binding("Shift+Tab","反向切换","pane"),
-                Binding("Enter","打开角色表" if self.pane == "projects" else "编辑角色","confirm"),
+                *([Binding("←→","选列","column"),role_binding,Binding("m","修改模型","edit"),self.command("effort")] if self.pane == "roles" else [role_binding]),
                 Binding("1/2/3","切换宿主","host"),Binding("/","搜索","search"),Binding(":","命令","commands"),
                 self.command("preview",f"预览变更 ({len(self.pending())})"),
                 *([self.command("discard")] if self.scope() in self.drafts else []),
@@ -161,8 +164,18 @@ class App:
     def options(self):
         if self.modal == "model":return [(row.label,row.id) for row in self.catalog().models]
         if self.modal == "effort":
-            model=next((row for row in self.catalog().models if row.id == self.scratch["model"]),None)
-            return [("继承宿主","inherit")]+[(level,level) for level in model.efforts] if model else [("继承宿主","inherit")]
+            current_model_id=self.scratch.get("model") if self.scratch else None
+            model=next((row for row in self.catalog().models if row.id == current_model_id),None)
+            if model and model.efforts:
+                levels=model.efforts
+            elif self.host == "claude":
+                levels=("low","medium","high","xhigh","max")
+            elif self.host == "codex":
+                levels=("none","minimal","low","medium","high","xhigh","max")
+            else:
+                levels=()
+            labels={"inherit":"继承宿主","none":"none (关闭推理)","minimal":"minimal (极低)","low":"low (低)","medium":"medium (中)","high":"high (高)","xhigh":"xhigh (极高)","max":"max (最大)"}
+            return [("继承宿主","inherit")]+[(labels.get(level,level),level) for level in levels]
         if self.modal == "manage":return [(label,action) for action,label in MANAGE]
         if self.modal == "backups":return [(f'{row["id"]} · {row["status"]}',row["id"]) for row in self.backup_rows]
         if self.modal == "commands":
@@ -200,7 +213,7 @@ class App:
         if rows and self.selection() not in [row[0] for row in rows]:self.select(rows[0][0])
 
     def view_frame(self):
-        return {key:getattr(self,key) for key in ("modal","index","scroll","text","pane","filter_text","project_index","host_index","role_index")}
+        return {key:getattr(self,key) for key in ("modal","index","scroll","text","pane","filter_text","project_index","host_index","role_index","role_column")}
 
     def restore_view(self,frame):
         for key,value in frame.items():setattr(self,key,value)
@@ -219,7 +232,13 @@ class App:
         self.scratch=dict(self.current(self.role));self.show_view("model")
         # 编辑基线只能来自用户开始编辑时看到的版本，不能在暂存时悄悄更新。
         if self.scope() not in self.expected:self.expected[self.scope()]=dict(self.settings_cache[self.scope()])
-        rows=self.options();self.index=next((i for i,(_,identifier) in enumerate(rows) if identifier == self.scratch["model"]),0)
+        rows=self.options();self.index=next((i for i,(_,identifier) in enumerate(rows) if identifier == self.scratch.get("model")),0)
+
+    def open_effort(self):
+        if reason:=self.unavailable("effort"):raise ValueError(reason)
+        self.scratch=dict(self.current(self.role));self.show_view("effort")
+        if self.scope() not in self.expected:self.expected[self.scope()]=dict(self.settings_cache[self.scope()])
+        rows=self.options();self.index=next((i for i,(_,val) in enumerate(rows) if val == self.scratch.get("effort")),0)
 
     def stage(self):
         key=self.scope()
@@ -296,8 +315,11 @@ class App:
             self.close_view();self.act(action)
         elif self.modal == "model":
             self.scratch["model"]=self.options()[self.index][1]
-            if host == "codex":
-                self.show_view("effort");self.index=next((i for i,(_,value) in enumerate(self.options()) if value == self.scratch["effort"]),0)
+            if host in {"codex","claude"}:
+                model_obj=next((row for row in self.catalog().models if row.id == self.scratch["model"]),None)
+                if model_obj and model_obj.efforts and self.scratch.get("effort") not in model_obj.efforts and self.scratch.get("effort") != "inherit":
+                    self.scratch["effort"]="inherit"
+                self.show_view("effort");self.index=next((i for i,(_,value) in enumerate(self.options()) if value == self.scratch.get("effort")),0)
             else:self.scratch["effort"]="inherit";self.stage()
         elif self.modal == "effort":self.scratch["effort"]=self.options()[self.index][1];self.stage()
         elif self.modal == "manage":self.manage_action(self.options()[self.index][1])
@@ -331,7 +353,9 @@ class App:
             if self.pane == "projects":
                 if self.project is None:self.act("add")
                 else:self.pane="roles";self.filter_text=""
-            else:self.open_model()
+            else:
+                if self.role_column == "effort":self.open_effort()
+                else:self.open_model()
 
     def quit(self,*,interrupted=False):
         self.quit_code=130 if interrupted else 0
@@ -369,6 +393,12 @@ class App:
             self.role_index=rows.index(role) if role in rows else 0;self.filter_text=""
         elif action == "confirm":self.confirm()
         elif action == "edit":self.open_model()
+        elif action == "effort":self.open_effort()
+        elif action == "column":
+            if self.pane == "roles":
+                if key == "left":self.role_column="model"
+                elif key == "right":self.role_column="effort"
+                else:self.role_column="effort" if self.role_column == "model" else "model"
         elif action == "manage":
             if not self.project:raise ValueError("请先按 a 添加项目")
             self.show_view("manage")
@@ -422,9 +452,12 @@ class App:
             elif self.filter_text:self.filter_text=""
             else:
                 previous=self.modal
-                if previous == "model" and self.scope() not in self.drafts:self.expected.pop(self.scope(),None)
                 self.close_view()
-                if previous == "model":self.scratch=None
+                if self.modal is None:
+                    if previous in {"model","effort"} and self.scope() not in self.drafts:
+                        self.expected.pop(self.scope(),None)
+                    if previous in {"model","effort"}:
+                        self.scratch=None
                 if previous == "quit":self.quit_code=0
 
     def dispatch(self,key):
@@ -436,7 +469,7 @@ class App:
             return
         if self.searching and key not in {"enter","esc","up","down","pageup","pagedown"}:
             self.search_input.edit(key);self.sync_selection();return
-        groups={"↑↓":{"up","down"},"PgUp/PgDn":{"pageup","pagedown"},"Home/End":{"home","end"},"1/2/3":{"1","2","3"},"Shift+Tab":{"backtab"}}
+        groups={"↑↓":{"up","down"},"PgUp/PgDn":{"pageup","pagedown"},"Home/End":{"home","end"},"1/2/3":{"1","2","3"},"Shift+Tab":{"backtab"},"←→":{"left","right"}}
         for row in self.bindings():
             if key in groups.get(row.key,set()) or row.key.lower() == key:
                 try:self.act(row.action,key)
@@ -454,18 +487,18 @@ class App:
     def row(self,y,x,width,text,attr=0):self.put(y,x,padded(text,width),width,attr)
 
     def footer_lines(self,width):
-        priority=("confirm","add-confirm","accept-search","search","commands","back","help","preview","pane","interrupt","wait")
+        priority=("confirm","effort","add-confirm","accept-search","search","commands","back","help","preview","pane","interrupt","wait")
         bindings=self.bindings();chosen=[]
         for action in priority:
             match=next((row for row in bindings if row.action == action),None)
-            if match:chosen.append(match)
+            if match and match not in chosen:chosen.append(match)
         lines=[""]
         for row in chosen:
-            token=ellipsize(f"{row.key} {row.label}",width)
-            if lines[-1] and cell_width(lines[-1])+cell_width(token)+3>width:
+            token=ellipsize(f"[{row.key}] {row.label}",width)
+            if lines[-1] and cell_width(lines[-1])+cell_width(token)+2>width:
                 if len(lines)>=2:break
                 lines.append("")
-            lines[-1]+=("   " if lines[-1] else "")+token
+            lines[-1]+=("  " if lines[-1] else "")+token
         return lines
 
     def draw_input(self,y,x,width,field):
@@ -486,8 +519,8 @@ class App:
 
     def draw_projects(self,layout):
         width=layout.sidebar-2 if layout.sidebar else layout.width-3;x=1
-        self.put(3,x,"> 项目" if self.pane == "projects" else "  项目",width,self.theme.focus if self.pane == "projects" else self.theme.title)
         active=self.pane == "projects"
+        self.put(3,x,"◈ 项目" if active else "  项目",width,self.theme.focus if active else self.theme.title)
         query=self.search_input.text if self.searching and active else self.filter_text if active else ""
         if self.searching and active:self.draw_input(4,x,width,self.search_input)
         else:self.put(4,x,ellipsize("/ "+query if query else f"{len(self.projects)} 个本地项目",width),width,self.theme.muted)
@@ -497,23 +530,31 @@ class App:
         if active:self.page_lines=available
         for offset,(index,label,_) in enumerate(rows[start:start+available]):
             pending=index<len(self.projects) and any(key[0] == str(self.projects[index]) for key in self.drafts)
-            attr=self.theme.selected if active and index == self.project_index else self.theme.inactive if index == self.project_index else self.theme.text
-            self.row(5+offset,x,width,("> " if index == self.project_index else "  ")+("* " if pending else "")+label,attr)
+            is_sel=index == self.project_index
+            attr=self.theme.selected if active and is_sel else self.theme.inactive if is_sel else self.theme.text
+            marker="▌ " if (active and is_sel) else "› " if is_sel else "  "
+            dot="● " if pending else ""
+            self.row(5+offset,x,width,marker+dot+label,attr)
             self.hits.append((5+offset,x,width,"project",index))
         if not rows:self.put(5,x,"无匹配 · Esc 清除",width,self.theme.warning)
         if query:self.put(end,x,"+ 添加并安装 · a",width,self.theme.focus)
+        if len(rows)>available:
+            sb_x=layout.sidebar-1 if layout.sidebar else layout.width-2
+            draw_scrollbar(self.put,5,sb_x,available,len(rows),start,available,self.theme.border)
 
     def draw_roles(self,layout):
         x=layout.sidebar+2 if layout.sidebar else 1;width=layout.width-x-2
         active=self.pane == "roles"
-        title=("> " if active else "  ")+(self.project.name if self.project else "未选择项目")+" / 角色模型"
+        title=("◈ " if active else "  ")+(self.project.name if self.project else "未选择项目")+" · 角色模型"
         self.put(3,x,ellipsize(title,width),width,self.theme.focus if active else self.theme.title)
         if self.searching and active:self.draw_input(4,x,width,self.search_input)
         else:
             subtitle="/ "+self.filter_text if active and self.filter_text else f"{HOST_LABELS[self.host_index]} · {len(self.pending())} 项待应用"+(" · Tab 切换项目/角色" if not layout.sidebar else "")
             self.put(4,x,ellipsize(subtitle,width),width,self.theme.muted)
         role_width=18 if width>=65 else 14;effort_width=10;model_width=max(5,width-role_width-effort_width-2)
-        self.put(5,x,padded("角色",role_width)+" "+padded("模型",model_width)+" "+padded("推理",effort_width),width,self.theme.muted)
+        model_hdr="模型 [m]" if width>=55 else "模型"
+        effort_hdr="推理 [e]" if width>=55 else "推理"
+        self.put(5,x,padded("角色",role_width)+" "+padded(model_hdr,model_width)+" "+padded(effort_hdr,effort_width),width,self.theme.title)
         rows=self.visible_rows("roles");available=max(1,layout.bottom-layout.details-6)
         if active:self.page_lines=available
         selected=next((i for i,row in enumerate(rows) if row[0] == self.role_index),0);start=max(0,selected-available+1)
@@ -523,53 +564,80 @@ class App:
         for offset,(index,label,role) in enumerate(rows[start:start+available]):
             try:value=self.current(role)
             except (OSError,ValueError):value={"model":"配置异常","effort":"?"}
-            selected=index == self.role_index;pending=self.scope(role) in self.drafts
-            attr=self.theme.selected if active and selected else self.theme.inactive if selected else self.theme.text
-            prefix=(">" if selected else " ")+("*" if pending else " ")
-            model="继承" if value["model"] == "inherit" else value["model"];effort="继承" if value["effort"] == "inherit" else value["effort"]
-            self.row(6+offset,x,width,padded(prefix+label,role_width)+" "+padded(model,model_width)+" "+padded(effort,effort_width),attr)
+            is_sel=index == self.role_index;pending=self.scope(role) in self.drafts
+            attr=self.theme.selected if active and is_sel else self.theme.inactive if is_sel else self.theme.text
+            prefix=("▌" if (active and is_sel) else "›" if is_sel else " ")+("●" if pending else " ")
+            raw_model="继承" if value["model"] == "inherit" else value["model"];raw_effort="继承" if value["effort"] == "inherit" else value["effort"]
+            disp_model=("▸" if active and is_sel and self.role_column == "model" else "")+raw_model
+            disp_effort=("▸" if active and is_sel and self.role_column == "effort" else "")+raw_effort
+            self.row(6+offset,x,width,padded(prefix+label,role_width)+" "+padded(disp_model,model_width)+" "+padded(disp_effort,effort_width),attr)
             self.hits.append((6+offset,x,width,"role",index))
+        if len(rows)>available:
+            draw_scrollbar(self.put,6,layout.width-2,available,len(rows),start,available,self.theme.border)
 
     def draw_modal(self,layout):
         titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"变更预览","install":"安装 / 升级确认","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"添加并安装项目","result":"操作结果","error":"操作未完成","commands":"命令面板"}
+        modal_title=titles.get(self.modal,self.modal)
         x=max(1,(layout.width-92)//2);width=layout.width-2*x-1
-        self.put(3,x,titles.get(self.modal,self.modal),width,self.theme.error if self.modal in {"error","quit"} else self.theme.focus)
-        self.put(4,x,ellipsize(f"{self.project or '未选择项目'} / {HOST_LABELS[self.host_index]}",width,tail=True),width,self.theme.muted)
+        box_h=layout.bottom-2+1
+        count=""
         if self.modal in LIST_MODALS:
-            if self.modal == "commands":self.draw_input(5,x,width,self.editor)
-            elif self.searching:self.draw_input(5,x,width,self.search_input)
-            else:self.put(5,x,ellipsize("/ "+self.filter_text if self.filter_text else "↑↓ 选择 · / 搜索 · Enter 确认",width),width,self.theme.muted)
+            rows=self.visible_rows()
+            selected=next((i for i,row in enumerate(rows) if row[0] == self.index),0)
+            count=f" {selected+1 if rows else 0} / {len(rows)} "
+        elif self.modal not in {"add"}:
+            lines=wrapped(self.text,width)
+            available=max(1,layout.bottom-6)
+            if len(lines)>available:
+                count=f" {self.scroll+1}–{min(len(lines),self.scroll+available)} / {len(lines)} "
+
+        title_attr=self.theme.error if self.modal in {"error","quit"} else self.theme.focus
+        draw_box(self.put,2,x,box_h,width,title=modal_title,count=count,border_attr=self.theme.border,title_attr=title_attr,count_attr=self.theme.muted)
+
+        inner_pad=1 if width>=30 else 0
+        inner_x=x+inner_pad
+        inner_w=width-2*inner_pad
+
+        sub_info=ellipsize(f"{self.project or '未选择项目'} / {HOST_LABELS[self.host_index]}",inner_w,tail=True)
+        self.put(3,inner_x,sub_info,inner_w,self.theme.muted)
+        self.put(4,inner_x,"─"*inner_w,inner_w,self.theme.border)
+
+        if self.modal in LIST_MODALS:
+            if self.modal == "commands":self.draw_input(5,inner_x,inner_w,self.editor)
+            elif self.searching:self.draw_input(5,inner_x,inner_w,self.search_input)
+            else:self.put(5,inner_x,ellipsize("/ "+self.filter_text if self.filter_text else "↑↓ 选择 · / 搜索 · Enter 确认",inner_w),inner_w,self.theme.muted)
             details=3 if self.modal == "model" and layout.details else 0
             available=max(1,layout.bottom-details-6);self.page_lines=available
             rows=self.visible_rows();selected=next((i for i,row in enumerate(rows) if row[0] == self.index),0);start=max(0,selected-available+1)
             for offset,(index,label,_) in enumerate(rows[start:start+available]):
                 disabled=self.unavailable(COMMANDS[index].action) if self.modal == "commands" else ""
-                attr=self.theme.selected if index == self.index else self.theme.muted if disabled else self.theme.text
-                self.row(6+offset,x,width,("> " if index == self.index else "  ")+label,attr)
-                self.hits.append((6+offset,x,width,"option",index))
-            if not rows:self.put(6,x,"没有匹配项 · Esc 返回，或重新输入搜索",width,self.theme.warning)
+                is_sel=index == self.index
+                attr=self.theme.selected if is_sel else self.theme.muted if disabled else self.theme.text
+                marker="▌ " if is_sel else "  "
+                self.row(6+offset,inner_x,inner_w,marker+label,attr)
+                self.hits.append((6+offset,inner_x,inner_w,"option",index))
+            if not rows:self.put(6,inner_x,"没有匹配项 · Esc 返回，或重新输入搜索",inner_w,self.theme.warning)
             if details and rows:
                 model=next((row for row in self.catalog().models if row.id == self.options()[self.index][1]),None)
                 if model:
-                    self.put(layout.bottom-3,x,"─"*width,width,self.theme.muted)
-                    self.put(layout.bottom-2,x,ellipsize("ID  "+model.id,width),width)
-                    self.put(layout.bottom-1,x,ellipsize("来源  "+model.source,width),width,self.theme.muted)
-            count=f" {selected+1 if rows else 0} / {len(rows)} "
-            self.put(3,x+max(0,width-cell_width(count)),count,cell_width(count),self.theme.muted)
+                    self.put(layout.bottom-3,inner_x,"─"*inner_w,inner_w,self.theme.muted)
+                    self.put(layout.bottom-2,inner_x,ellipsize("ID  "+model.id,inner_w),inner_w)
+                    self.put(layout.bottom-1,inner_x,ellipsize("来源  "+model.source,inner_w),inner_w,self.theme.muted)
+            if len(rows)>available:
+                draw_scrollbar(self.put,6,x+width-1,available,len(rows),start,available,self.theme.border)
         elif self.modal == "add":
-            self.put(5,x,"拖入项目根目录，回车直接安装三平台工作流。",width)
-            self.put(6,x,"项目目录",width,self.theme.muted);self.draw_input(7,x,width,self.editor)
-            self.put(9,x,"已有工作流将升级；保留项目配置，失败由安装器恢复。",width,self.theme.muted)
-            if self.toast_kind == "error":self.put(10,x,ellipsize("! "+self.toast,width),width,self.theme.error)
+            self.put(5,inner_x,"拖入项目根目录，回车直接安装三平台工作流。",inner_w)
+            self.put(6,inner_x,"项目目录",inner_w,self.theme.muted);self.draw_input(7,inner_x,inner_w,self.editor)
+            self.put(9,inner_x,"已有工作流将升级；保留项目配置，失败由安装器恢复。",inner_w,self.theme.muted)
+            if self.toast_kind == "error":self.put(10,inner_x,ellipsize("! "+self.toast,inner_w),inner_w,self.theme.error)
         else:
-            lines=wrapped(self.text,width);available=max(1,layout.bottom-6);self.page_lines=available
+            lines=wrapped(self.text,inner_w);available=max(1,layout.bottom-6);self.page_lines=available
             self.scroll=min(self.scroll,max(0,len(lines)-available))
             for offset,line in enumerate(lines[self.scroll:self.scroll+available]):
                 attr=self.theme.error if self.modal == "error" else self.theme.warning if self.modal == "quit" else self.theme.text
-                self.put(6+offset,x,line,width,attr)
+                self.put(6+offset,inner_x,line,inner_w,attr)
             if len(lines)>available:
-                count=f" {self.scroll+1}–{min(len(lines),self.scroll+available)} / {len(lines)} "
-                self.put(3,x+max(0,width-cell_width(count)),count,cell_width(count),self.theme.muted)
+                draw_scrollbar(self.put,6,x+width-1,available,len(lines),self.scroll,available,self.theme.border)
 
     def draw(self):
         self.screen.erase();self.hits=[];self.cursor=None;h,w=self.screen.getmaxyx();layout=Layout(h,w)
@@ -582,36 +650,45 @@ class App:
             elif self.future:self.put(0,0,"任务仍在执行，请等待");self.put(2,0,self.toast)
             else:self.put(0,0,"请调整至至少 55 列 × 16 行");self.put(2,0,"q 安全退出；草稿仍保留")
             self.finish_draw();return
-        count=f"* {len(self.drafts)} 项待应用" if self.drafts else "配置未更改"
-        self.put(0,1,"awf-cli  /  角色模型",max(1,w-cell_width(count)-4),self.theme.title)
+        count=f"● {len(self.drafts)} 项待应用" if self.drafts else "✔ 配置已同步"
+        self.put(0,1,"◈ awf-cli │ 角色模型",max(1,w-cell_width(count)-4),self.theme.title)
         self.put(0,w-cell_width(count)-2,count,cell_width(count),self.theme.warning if self.drafts else self.theme.muted)
         x=1
         for i,label in enumerate(HOST_LABELS):
-            text=f" {i+1} {label} ";attr=self.theme.focus|curses.A_UNDERLINE if i == self.host_index else self.theme.muted
+            active=i == self.host_index
+            text=f" [{i+1} {label}] " if active else f"  {i+1} {label}  "
+            attr=self.theme.tab_active if active else self.theme.tab_inactive
             self.put(1,x,text,cell_width(text),attr)
             if not self.modal:self.hits.append((1,x,cell_width(text),"host",i))
             x+=cell_width(text)+1
-        self.put(2,1,"─"*(w-3),w-3,self.theme.muted)
+        self.put(2,1,"─"*(w-3),w-3,self.theme.border)
+        if layout.sidebar and not self.modal:
+            self.put(2,layout.sidebar,"┬",1,self.theme.border)
         if self.modal:self.draw_modal(layout)
         else:
             if layout.sidebar or self.pane == "projects":self.draw_projects(layout)
             if layout.sidebar:
-                for row in range(3,layout.bottom-layout.details):self.put(row,layout.sidebar,"│",1,self.theme.muted)
+                for row in range(3,layout.bottom-layout.details):self.put(row,layout.sidebar,"│",1,self.theme.border)
             if layout.sidebar or self.pane == "roles":self.draw_roles(layout)
             if layout.details:
-                self.put(layout.bottom-3,1,"─"*(w-3),w-3,self.theme.muted)
+                self.put(layout.bottom-3,1,"─"*(w-3),w-3,self.theme.border)
+                if layout.sidebar:
+                    self.put(layout.bottom-3,layout.sidebar,"┴",1,self.theme.border)
                 self.put(layout.bottom-2,1,ellipsize(str(self.project or "选择项目，或按 a 添加并安装"),w-3,tail=True),w-3,self.theme.muted)
                 if self.role:
                     try:
                         value=self.current(self.role);detail=f'{self.role}  ·  {value["model"]} / {value["effort"]}'
                     except (OSError,ValueError):detail="角色配置异常，请检查本地文件"
                     self.put(layout.bottom-1,1,ellipsize(detail,w-3),w-3)
-        self.put(layout.bottom,1,"─"*(w-3),w-3,self.theme.muted)
+        if not self.modal:
+            self.put(layout.bottom,1,"─"*(w-3),w-3,self.theme.border)
+            if layout.sidebar and not layout.details:
+                self.put(layout.bottom,layout.sidebar,"┴",1,self.theme.border)
         status=self.toast;kind=self.toast_kind
         if self.future:
             elapsed=max(0,int(time.monotonic()-self.job_started));spinner="|/-\\"[(elapsed*3)%4]
             status=f"{spinner} {self.job_name} · {elapsed}s · "+("已请求取消，等待退出及必要恢复" if self.cancel_job.is_set() else "执行中");kind="warning"
-        prefix={"error":"! ","warning":"* ","success":"+ ","info":"· "}[kind]
+        prefix={"error":"✖ ","warning":"▲ ","success":"✔ ","info":"● "}.get(kind,"· ")
         self.put(layout.status,1,ellipsize(prefix+status,w-3),w-3,getattr(self.theme,kind,self.theme.text))
         for offset,line in enumerate(self.footer_lines(w-3)):self.put(layout.hints+offset,1,line,w-3,self.theme.focus)
         self.finish_draw()
@@ -644,6 +721,8 @@ class App:
                         pane="projects" if kind == "project" else "roles"
                         if self.pane != pane:self.filter_text=""
                         self.pane=pane;self.select(index)
+                        if kind == "role":
+                            self.role_column="effort" if x>=col+width-12 else "model"
                     else:self.index=index
                     break
             return

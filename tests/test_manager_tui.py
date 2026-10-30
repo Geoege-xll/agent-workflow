@@ -318,6 +318,53 @@ class TuiTest(unittest.TestCase):
             theme=Theme.create();self.assertNotEqual(theme.selected,theme.text)
         self.app.theme=theme;self.draw()
 
+    def test_independent_model_and_effort_modification_and_column_toggling(self):
+        self.assertEqual(self.app.role_column,"model")
+        self.app.dispatch("right");self.assertEqual(self.app.role_column,"effort")
+        self.app.dispatch("enter");self.assertEqual(self.app.modal,"effort")
+        self.app.dispatch("esc");self.assertIsNone(self.app.modal)
+        self.app.dispatch("left");self.assertEqual(self.app.role_column,"model")
+        self.app.dispatch("enter");self.assertEqual(self.app.modal,"model")
+        self.app.dispatch("esc");self.assertIsNone(self.app.modal)
+        self.app.dispatch("m");self.assertEqual(self.app.modal,"model")
+        self.app.dispatch("esc")
+        self.app.dispatch("e");self.assertEqual(self.app.modal,"effort")
+        options=self.app.options();self.assertTrue(len(options)>1)
+        self.app.index=len(options)-1;val=options[-1][1]
+        self.app.dispatch("enter");self.assertIsNone(self.app.modal)
+        self.assertEqual(self.app.drafts[self.app.scope()]["effort"],val)
+        self.assertEqual(self.app.drafts[self.app.scope()]["model"],"inherit")
+
+    def test_effort_options_selectable_levels_for_hosts(self):
+        self.app.host_index=1;self.app.scratch={"model":"inherit","effort":"inherit"}
+        self.app.modal="effort"
+        # When catalog model has explicit efforts ("high", "max"):
+        model_levels=[v for _,v in self.app.options()]
+        self.assertEqual(model_levels,["inherit","high","max"])
+        # When catalog model has empty efforts, standard host levels are provided:
+        with patch.object(self.app,"catalog",return_value=Catalog("claude",[Model("inherit","继承","f",())])):
+            claude_levels=[v for _,v in self.app.options()]
+            self.assertEqual(claude_levels,["inherit","low","medium","high","xhigh","max"])
+        self.app.host_index=0;self.app.scratch={"model":"inherit","effort":"inherit"}
+        with patch.object(self.app,"catalog",return_value=Catalog("codex",[Model("inherit","继承","f",())])):
+            codex_levels=[v for _,v in self.app.options()]
+            self.assertEqual(codex_levels,["inherit","none","minimal","low","medium","high","xhigh","max"])
+        self.app.host_index=2
+        self.assertEqual(self.app.unavailable("effort"),"Antigravity 静态角色仅支持继承")
+
+    def test_mouse_selects_role_column_model_or_effort(self):
+        self.draw()
+        role_hit=next(hit for hit in self.app.hits if hit[3]=="role")
+        y,col,width,_,index=role_hit
+        self.screen.keys=[curses.KEY_MOUSE]
+        with patch("manager.tui.curses.getmouse",return_value=(0,col+width-5,y,0,curses.BUTTON1_CLICKED)):
+            self.app.read_input(self.screen)
+        self.assertEqual(self.app.role_column,"effort")
+        self.screen.keys=[curses.KEY_MOUSE]
+        with patch("manager.tui.curses.getmouse",return_value=(0,col+5,y,0,curses.BUTTON1_CLICKED)):
+            self.app.read_input(self.screen)
+        self.assertEqual(self.app.role_column,"model")
+
     def tearDown(self):
         self.assertFalse((self.root/"state").exists())
 
