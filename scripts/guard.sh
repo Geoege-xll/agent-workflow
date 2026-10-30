@@ -61,7 +61,7 @@ fi
 # Validate configuration and consume discovered ProjectProfile module scopes.
 # Outputs lines: module\trole\troot or deny\tprefix.
 MAP_FILE=$(mktemp)
-if ! PYTHONDONTWRITEBYTECODE=1 bash "${PACK_DIR}/lib/python_runtime.sh" - "${PACK_DIR}/lib" "${PROJECT_YAML}" "${PROJECT_ROOT}" "${PACK_DIR}/roles" <<'PY' > "${MAP_FILE}"; then
+if ! PYTHONDONTWRITEBYTECODE=1 bash "${PACK_DIR}/lib/python_runtime.sh" --workflow-paths=1,2,3,4 - "${PACK_DIR}/lib" "${PROJECT_YAML}" "${PROJECT_ROOT}" "${PACK_DIR}/roles" <<'PY' > "${MAP_FILE}"; then
 import re
 import sys
 

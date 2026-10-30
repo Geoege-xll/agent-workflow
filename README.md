@@ -4,7 +4,24 @@ Portable **multi-subagent collaboration workflow** for any project.
 Keep this installer folder anywhere and select a project when launching it — works with
 **Claude Code / Codex / Antigravity**.
 
-## 终端管理工具
+## Windows 项目安装（npx，本地准备版）
+
+Windows 方案只做**在项目目录执行 `npx … init` 安装工作流**，不提供 TUI、WinGet 或全局管理器。
+前置条件为 Windows 10/11 x64、本地 NTFS、Node.js LTS/npm 和完整 Git for Windows；不依赖 WSL，
+不需要预装 Python，不修改 PATH、profile、ExecutionPolicy 或 Git 全局配置。
+
+npm 包目前 `private: true`，**尚未发布，尚未通过原生 Windows 安全、恢复与端到端验收**。
+下面只是未来完成验收并获准发布后的目标用法，不是现在可用的远程安装命令：
+
+```powershell
+cd C:\work\my-project
+npx @geoege-xll/agent-workflow init
+```
+
+本地 tgz 构建、离线 `npx.cmd --offline --ignore-scripts` 验证、持久 Python 和当前限制见
+[Windows 说明](docs/windows.md)。本地验证仅使用独立临时项目，不同步真实项目。
+
+## 终端管理工具（macOS/Linux）
 
 在普通交互终端启动已确认的 TUI，无新增 Python 包依赖。
 
@@ -44,8 +61,10 @@ awf-cli tui --project /path/to/project
 内部 `cd` 仅在该次命令中隔离 `CDPATH`，避免同名目录搜索和额外输出干扰；原 `CDPATH`、PATH
 及随后传给 Python 的环境保持，不修改用户 shell 配置。
 
-主界面左侧为项目列表，选择项目即展示该项目的角色模型。80 列以上并排显示；
-较窄终端使用 Tab 切换项目与角色区域。最小终端尺寸为 55 列 × 16 行。
+主界面采用轻分隔线布局：左侧项目，右侧角色、模型和推理级别；仅键盘焦点所在面板整行高亮。
+顶部显示当前宿主及全部范围的待应用数，草稿以 `*` 标记；底部保留状态及最多两行主要操作提示，完整键位按 `?` 查看。
+80 列以上并排显示，较窄终端使用 Tab 切换项目与角色区域；55 列 × 16 行收起辅助详情。
+支持默认终端背景；无颜色或不支持默认背景时回退为粗体、反色和文字提示。
 
 新项目安装：选中列表末尾的“＋ 添加并安装项目”并回车，或直接按 `a`，
 将项目根目录拖入输入区，按一次回车即可安装三平台工作流。安装成功后自动选中项目并进入角色模型配置。
@@ -54,18 +73,26 @@ awf-cli tui --project /path/to/project
 
 | 按键 | 操作 |
 | --- | --- |
-| ↑ / ↓ | 选择项目、角色或弹层选项 |
-| Tab / Shift+Tab | 切换项目列表和角色表 |
+| ↑ / ↓ | 选择项目、角色或弹层选项；搜索输入时选择匹配项 |
+| Home / End | 列表首尾；文本页页首 / 页尾；输入区行首 / 行尾 |
+| PageUp / PageDown | 列表或文本页翻页，搜索输入期间也可翻页 |
+| Tab / Shift+Tab | 正向 / 反向切换项目列表和角色表 |
+| / | 搜索当前列表的名称、ID 或项目路径；Enter 接受筛选，再按 Enter 才确认 |
+| : | 按中文操作名或英文别名搜索命令；不可用操作显示原因，写操作仍走原确认流程 |
 | Enter | 打开角色，选择模型及推理级别并暂存 |
 | 1 / 2 / 3 | 切换 Codex、Claude Code、Antigravity |
 | s | 预览当前项目及平台的变更，Enter 确认后备份应用 |
 | u | 丢弃当前角色草稿，重新读取基线；保留其他角色和项目的草稿 |
-| ↑↓ / PageUp / PageDown | 在变更、升级及恢复确认页逐行或翻页查看完整范围 |
 | g | 安装升级、检查安装、模型配置备份恢复、本地来源 |
 | a | 添加并安装项目：拖入项目根目录，回车直接安装 |
 | r | 按需刷新本地模型目录及角色设置，保留未应用草稿 |
-| Esc | 取消编辑或逐层返回 |
-| ? / q | 帮助 / 退出；有草稿时先确认放弃 |
+| Esc | 取消搜索输入并恢复原选择；已有筛选时先清除，再逐层返回 |
+| ? / q | 帮助 / 退出；有任何项目或宿主的草稿时先确认放弃 |
+
+路径输入支持 `← / →`、`Home / End`、`Delete / Backspace` 和 `Ctrl+U` 清空；长路径围绕光标横向滚动。
+搜索、命令和路径输入中的 `q/s/u/1/2/3/?/:` 都作为正文，不触发全局操作。鼠标单击仅聚焦或选中，仍需 Enter 确认。
+刷新或切换宿主时尽量按角色 ID 保持选择；被外部移除但仍有草稿的角色显示“已移除”，可用 `u` 单独丢弃。
+小窗口退出和空闲 Ctrl+C 同样保护全部草稿；提示无法完整显示时禁止盲确认，需放大窗口。
 
 项目列表合并独立登记记录和默认桌面目录的直接子项目；不递归读取业务代码、Git worktree 或会话。
 使用 `--scan-root /path/to/projects` 指定扫描目录。管理状态及模型备份默认保存在
@@ -115,7 +142,9 @@ role_models:
 单个损坏备份显示为 `invalid`，不能恢复，但不阻断其他备份或清空界面草稿。
 安装管理器传入 600 秒应用预算，由安装器停止 setup 进程组并恢复；管理器不会超时强杀安装器，
 也不会在恢复完成前释放项目锁。恢复阶段使用独立预算，避免继承已耗尽的应用时间。
-TUI 安装期间可按 Ctrl+C 请求取消；界面保持响应，等待安装器退出及必要恢复后才释放项目锁。
+TUI 后台显示实际任务名称、活动指示和已用时间，不显示虚构百分比或恢复阶段。
+仅安装期间支持 Ctrl+C 请求取消；界面保持响应，等待安装器退出及必要恢复后才释放项目锁。
+模型应用、检查和恢复暂不支持中途取消，Ctrl+C 会提示等待，不会强杀或提前报告已终止。
 
 无交互命令同样可用，所有写操作显式确认：
 
@@ -146,7 +175,9 @@ The pack requires **Python 3.11 or newer**, including its standard-library `toml
 packages need to be installed. Setup selects a supported `python3` or versioned Python command
 already on PATH before writing project files. If needed, set `AGENT_WORKFLOW_PYTHON` to the desired
 executable path. An invalid explicit selection fails instead of silently changing environments.
-Setup never installs a runtime or changes global shell, host, or Python configuration.
+The macOS/Linux source installer never installs a runtime. The separate Windows npx preparation
+bundles Python and deploys it privately on first init; it does not change global shell, host, or
+Python configuration. See the [Windows limitations and verification status](docs/windows.md).
 
 For direct workflow CLI calls and workflow-owned temporary/inline Python helpers, use the same
 selector rather than assuming the system `python3` meets the requirement. Workflow calls use

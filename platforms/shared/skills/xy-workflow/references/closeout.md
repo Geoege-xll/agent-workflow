@@ -7,6 +7,10 @@
 Trivial 继续使用主会话局部验证，不能为了应用本段补建独立 QA 或其他收口记录。
 最终反馈只说明实际验证范围、结果及相关限制，准确区分局部通过和全量通过。
 完整命令、日志及复用来源留在现有证据引用，不创建新的报告或审批环节。
+只读审计交付结论后不进入本实现收口链。QA 通过后的普通说明文档或低风险文案收尾，
+只检查实际变化的链接、语义、资源或运行输入；需要更新交付绑定时沿用现有机制，不能
+为收尾从头再审未变功能。工作流指令、权限、安全、API 或业务合同变化不因是 Markdown
+或文案而豁免；新风险、失效证据和用户／项目明确要求的复审仍按受影响范围执行。
 
 - Every implementation task pack carries its approved goal, non-goals, constraints, acceptance
   evidence, and applicable UI authority. Required-prototype design tasks carry concrete pages;

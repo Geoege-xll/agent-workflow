@@ -10,7 +10,10 @@ import copy
 from contextlib import contextmanager
 import hashlib
 import json
-import os
+if __package__:
+    from .platform_fs import os
+else:
+    from platform_fs import os
 from pathlib import Path
 import re
 import stat
@@ -71,6 +74,14 @@ def _publication_lock(path: Path):
     目录 fd 不随目标文件替换而失效，进程退出时锁自动释放。此锁仅约束使用本工具
     的协作写者，不宣称能阻止外部编辑器对旧 inode 或目标路径的非协作写入。
     """
+    if os.name == "nt":
+        try:
+            from .platform_fs import directory_lock
+        except ImportError:
+            from platform_fs import directory_lock
+        with directory_lock(path.parent, "taskgraph"):
+            yield
+        return
     try:
         import fcntl
     except ImportError as exc:

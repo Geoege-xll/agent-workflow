@@ -25,6 +25,11 @@ completed feature is classified on its own, not inherited as Full from the old p
 only when saving a real plan; setup must not create placeholder plans. Use stable descriptive names,
 not per-revision copies. A plan records a decided change, not an automatically actionable idea backlog.
 
+Discussion alone requires neither a saved document nor a plan. When persistence is needed, keep
+necessary questions and conclusions in the relevant existing plan or authorized requirement/proposal
+location, distinguishing pending proposals from effective approved scope. Do not create a discussion,
+change-note or v2/final copy for each revision.
+
 ## Minimal recoverable content
 
 Keep the approved goal, scope/non-goals, chosen solution and essential acceptance; meaningful task
@@ -57,8 +62,9 @@ that may never run. File persistence does not imply permission to commit, publis
    the affected requirement to existing clarification/approval. Preserve unaffected approvals and
    work; do not add a third business-confirmation stage or repeat the whole interview.
 4. Before affected dispatch, PM merges effective changes into the same current plan and refreshes
-   affected Task Packs, interfaces, acceptance and prototype/standards references. Each affected Agent
-   receives the latest complete self-contained task, not an obsolete task plus unexplained amendments.
+   affected Task Packs, interfaces, acceptance and prototype/standards references. Reconcile superseded
+   discussion/proposal material as below before affected work resumes. Each affected Agent receives
+   the latest complete self-contained task, not an obsolete task plus unexplained amendments.
    Use existing input_contracts to reference the plan and current applicable scope; no new scheduler
    field or second runtime plan is required.
 5. If an affected worker is already running, send the updated contract and pause/interrupt that
@@ -70,6 +76,35 @@ that may never run. File persistence does not imply permission to commit, publis
    refinement or reuse an old page fingerprint after a material change. Unrelated ready work continues.
 7. QA receives the same current scope, acceptance and complete applicable changes. Update an in-flight
    affected review before accepting its result. An old-scope PASS cannot close a revised task.
+
+### Superseded discussion and plan documents
+
+For an effective approved revision, reconcile only related material within authorized paths, not all
+project documents. A newer date or filename is not approval. Keep one clear current execution basis
+for the requirement; retain independent requirements and unaffected approvals separately.
+
+- Update the existing current requirement/proposal and plan in place where applicable. Replace
+  obsolete goals, acceptance and queued work, preserving valid progress and necessary reasons;
+  do not make readers reconstruct the current scope from appended conflicting amendments.
+- Consolidate redundant discussion/proposal content into its current authoritative location. Transfer
+  unique still-valid information and repair affected current links and task references before
+  removing a duplicate. Do not copy whole requirements into every plan or companion document.
+- Retain useful superseded material as historical, not a competing execution input. State the
+  replacement and scope briefly in an authorized location; no new archive tree, register or report
+  is needed. Completed/cancelled plans and their old tasks are not defaults to replay on recovery.
+
+Before rewriting, merging or deleting, preserve required original approved inputs and evidence in
+recoverable existing task/input evidence or actual version history. Do not presume Git can restore
+uncommitted or untracked content. Delete obsolete duplicate files only with explicit authorization
+covering those paths, after unique relevant content and current references are handled, without losing
+required evidence, user material or a live consumer's input. Plan ownership grants no wider file rights.
+
+If safe deletion is not authorized or recoverability is unclear, preserve the original and delimit
+its non-current scope in the authorized current basis. Physical cleanup is not a dispatch prerequisite
+when the replacement basis is clear; add no cleanup approval gate. If the current execution basis or
+necessary authority is still unresolved, return only that affected work to existing clarification.
+Pending discussion never silently withdraws an approved baseline. Planned goals remain intended work;
+feature/PROJECT truth still changes only through the existing post-QA projection below.
 
 ### Production-only cutover
 

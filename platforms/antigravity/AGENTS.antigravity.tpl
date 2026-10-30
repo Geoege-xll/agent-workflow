@@ -1,6 +1,6 @@
 ## Antigravity-only integration
 
-Applies only in Antigravity. Non-Trivial: `/xy-workflow`.
+Applies only in Antigravity. Non-Trivial implementation: `/xy-workflow`.
 Skills: `.agents/skills/`; roles: `.agents/agents/`.
 Before first orchestration, the current PM reads [Antigravity integration](.agent-workflow/platforms/antigravity/references/pm-integration.md).
 Reuse fully read, unchanged context; do not read other hosts' details.

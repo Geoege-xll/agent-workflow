@@ -4,9 +4,15 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
-import os
+if __package__:
+    from .platform_fs import os, project_install_lock
+    from .platform_process import setup_command
+else:
+    from platform_fs import os, project_install_lock
+    from platform_process import setup_command
 from pathlib import Path
 import re
 import shlex
@@ -72,7 +78,16 @@ def _target_path(raw: str, source_root: Path) -> Path:
         path = Path(candidate).expanduser()
         if not path.is_dir():
             continue
-        resolved = path.resolve(strict=True)
+        if os.name == "nt":
+            if __package__:
+                from .windows_fs import Directory
+            else:
+                from windows_fs import Directory
+            # Reject junction ancestors before resolve can erase their identity.
+            with Directory(path):
+                resolved = path.resolve(strict=True)
+        else:
+            resolved = path.resolve(strict=True)
         if resolved == source_root or resolved.is_relative_to(source_root):
             raise InstallError("目标项目不能是安装包本身或其子目录。")
         if source_root.is_relative_to(resolved):
@@ -83,7 +98,12 @@ def _target_path(raw: str, source_root: Path) -> Path:
 
 def _digest(path: Path) -> str:
     hasher = hashlib.sha256()
-    with path.open("rb") as stream:
+    if os.name == "nt":
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        stream = os.fdopen(descriptor, "rb")
+    else:
+        stream = path.open("rb")
+    with stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
@@ -93,6 +113,25 @@ def _managed_files(root: Path) -> dict[str, str]:
     """配置由项目维护；其他运行时文件由安装包管理并记录指纹。"""
 
     result: dict[str, str] = {}
+    if os.name == "nt":
+        def visit(directory: Path) -> None:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    info = entry.stat(follow_symlinks=False)
+                    path = Path(entry.path)
+                    if stat.S_ISLNK(info.st_mode):
+                        raise InstallError(f"受管运行时不能包含重解析点：{path}")
+                    if stat.S_ISDIR(info.st_mode):
+                        if path.name != "__pycache__":
+                            visit(path)
+                    elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                        relative = path.relative_to(root).as_posix()
+                        if relative not in {"project.yaml", MANIFEST_NAME} and path.name != ".DS_Store":
+                            result[relative] = _digest(path)
+                    else:
+                        raise InstallError(f"受管运行时必须为单链接普通文件：{path}")
+        visit(root)
+        return result
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
             raise InstallError(f"受管运行时不能包含符号链接：{path}")
@@ -117,7 +156,10 @@ def _validate_existing(runtime: Path) -> None:
     if not manifest_path.is_file():
         raise InstallError(f"已存在未标记的目录，不能自动覆盖：{runtime}")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_body = read_file(manifest_path) if os.name == "nt" else manifest_path.read_bytes()
+        if manifest_body is None:
+            raise ValueError("installation manifest is missing")
+        manifest = json.loads(manifest_body)
     except (OSError, ValueError) as exc:
         raise InstallError(f"安装记录无法读取：{manifest_path}") from exc
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1 or not isinstance(
@@ -131,9 +173,72 @@ def _validate_existing(runtime: Path) -> None:
         )
 
 
-def _copy_runtime(source_root: Path, stage: Path) -> None:
+def _windows_copy(source: Path, target: Path, identities: dict[Path, tuple[int, int]]) -> None:
+    info = os.lstat(source)
+    if stat.S_ISDIR(info.st_mode):
+        os.mkdir(target, 0o700)
+        with os.scandir(source) as entries:
+            for entry in entries:
+                if entry.name in {"__pycache__", ".DS_Store"} or entry.name.endswith(".pyc"):
+                    continue
+                if source.name == "lib" and entry.name == "install_workflow.py":
+                    continue
+                _windows_copy(Path(entry.path), target / entry.name, identities)
+    elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+        source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(source_fd, "rb") as input_file:
+            opened = os.fstat(input_file.fileno())
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise InstallError(f"安装源文件在复制前变化：{source}")
+            target_fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(target_fd, "wb") as output:
+                shutil.copyfileobj(input_file, output)
+                output.flush()
+                os.fsync(output.fileno())
+                created = os.fstat(output.fileno())
+                identities[target] = (created.st_dev, created.st_ino)
+            after = os.fstat(input_file.fileno())
+            if (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise InstallError(f"安装源文件在复制期间变化：{source}")
+    else:
+        raise InstallError(f"安装源包含链接或不支持的类型：{source}")
+
+
+def _discard_windows_stage(stage: Path, expected: dict[str, tuple[str, tuple[int, int]]] | None) -> None:
+    # An interrupted copy without a full inventory is left for diagnosis. Never
+    # recursively delete unknown entries or a user's concurrent staged edits.
+    if expected is None:
+        return
+    if __package__:
+        from .windows_fs import remove_file_if_unchanged
+    else:
+        from windows_fs import remove_file_if_unchanged
+    for relative, (digest, identity) in expected.items():
+        path = stage / relative
+        try:
+            remove_file_if_unchanged(path, digest, identity)
+        except (OSError, ValueError):
+            pass
+    directories = set()
+    for relative in expected:
+        directories.update((stage / relative).parents)
+    for directory in sorted((p for p in directories if p == stage or p.is_relative_to(stage)),
+                            key=lambda p: -len(p.parts)):
+        try:
+            os.rmdir(directory)
+        except (OSError, ValueError):
+            pass
+
+
+def _copy_runtime(source_root: Path, stage: Path, identities=None) -> None:
     """只复制安装后运行所需的文件，避免把测试和历史草稿留在项目中。"""
 
+    if os.name == "nt":
+        if identities is None:
+            identities = {}
+        for name in (*PACK_FILES, *PACK_DIRECTORIES):
+            _windows_copy(source_root / name, stage / name, identities)
+        return
     for name in (*PACK_FILES, *PACK_DIRECTORIES):
         source = source_root / name
         if not source.exists() or source.is_symlink():
@@ -158,13 +263,17 @@ def _copy_runtime(source_root: Path, stage: Path) -> None:
 
 
 def _run_setup(runtime: Path, project: Path, *options: str) -> None:
-    command = ["bash", str(runtime / "setup_all.sh"), *options]
+    command, environment = setup_command(runtime, options)
     # 只影响展示：把含空格的路径按 shell 可读形式显示，实际执行仍使用参数数组。
     print(f"[安装] {shlex.join(command)}", flush=True)
-    (ACTIVE_RUNNER.get() or SetupRunner()).run(command, project)
+    runner = ACTIVE_RUNNER.get() or SetupRunner()
+    if environment is None:
+        runner.run(command, project)
+    else:
+        runner.run(command, project, env=environment)
 
 
-def _initialize_project_name(config: Path, project: Path) -> None:
+def _initialize_project_name(config: Path, project: Path) -> tuple[int, int] | None:
     """仅替换暂存配置的默认显示名；显式名称和其余配置均属于项目。"""
     try:
         body = read_file(config)
@@ -185,8 +294,9 @@ def _initialize_project_name(config: Path, project: Path) -> None:
         suffix = raw[len(strip_inline_comment(raw)):]
         updated = (text[:match.start(1)] + value + suffix + text[match.end(1):]).encode("utf-8")
         if updated != body:
-            atomic_write(config, updated, stat.S_IMODE(config.stat().st_mode))
+            identity = atomic_write(config, updated, stat.S_IMODE(config.stat().st_mode))
             print(f"[项目] project_name 已按目标目录初始化为 {value}", flush=True)
+            return identity
     except ValueError as exc:
         raise InstallError(f"无法初始化项目名称：{exc}") from exc
 
@@ -268,7 +378,20 @@ def _install(project: Path, source_root: Path, *, timeout: float | None = None) 
     runner = SetupRunner(timeout)
     token = ACTIVE_RUNNER.set(runner)
     try:
-        _install_transaction(project, source_root)
+        control = nullcontext()
+        if os.name == "nt":
+            if __package__:
+                from .windows_runtime import cancellation_guard
+            else:
+                from windows_runtime import cancellation_guard
+            raw = os.environ.get("AGENT_WORKFLOW_CANCEL_FILE")
+            if not raw:
+                raise InstallError("Windows init requires its private npx cancellation channel")
+            control = cancellation_guard(raw)
+        # Shared boundary, independent of the manager's outer registry lock.
+        # Both locks remain held until all writers and exact recovery finish.
+        with project_install_lock(project), control:
+            _install_transaction(project, source_root)
     finally:
         runner.close()
         ACTIVE_RUNNER.reset(token)
@@ -294,23 +417,67 @@ def _install_transaction(project: Path, source_root: Path) -> None:
 
     # 暂存目录与项目同一文件系统，发布时可用重命名切换；前置检查失败不会
     # 触碰现有运行时或宿主入口。目录名由发现器明确排除，避免误识别为业务模块。
-    stage = Path(tempfile.mkdtemp(prefix=".agent-workflow-stage-", dir=project))
+    if os.name == "nt":
+        stage = project / (".agent-workflow-stage-" + uuid.uuid4().hex)
+        os.mkdir(stage, 0o700)
+    else:
+        stage = Path(tempfile.mkdtemp(prefix=".agent-workflow-stage-", dir=project))
+    stage_inventory: dict[str, tuple[str, tuple[int, int]]] | None = None
+    created_files: dict[Path, tuple[int, int]] = {}
     backup: Path | None = None
     try:
-        _copy_runtime(source_root, stage)
+        if os.name == "nt":
+            _copy_runtime(source_root, stage, created_files)
+        else:
+            _copy_runtime(source_root, stage)
+        if os.name == "nt":
+            bootstrap = os.environ.get("AGENT_WORKFLOW_BOOTSTRAP", "")
+            if not bootstrap or not Path(bootstrap).is_absolute():
+                raise InstallError("Windows init requires its stable bootstrap path")
+            if any(char in str(sys.executable) + bootstrap for char in "\r\n\x00"):
+                raise InstallError("Windows runtime paths must be single-line absolute paths")
+            record = stage / "lib/windows-runtime.paths"
+            created_files[record] = atomic_write(
+                record, f"{sys.executable}\n{bootstrap}\n".encode("utf-8"), 0o600)
         if upgrading:
-            shutil.copy2(runtime / "project.yaml", stage / "project.yaml")
+            if os.name == "nt":
+                original_config = read_file(runtime / "project.yaml")
+                if original_config is None:
+                    raise InstallError("旧运行时缺少 project.yaml")
+                created_files[stage / "project.yaml"] = atomic_write(stage / "project.yaml", original_config, 0o600)
+                if __package__:
+                    from .windows_fs import copy_permissions
+                else:
+                    from windows_fs import copy_permissions
+                copy_permissions(runtime / "project.yaml", stage / "project.yaml")
+            else:
+                shutil.copy2(runtime / "project.yaml", stage / "project.yaml")
         # 先保留升级前的项目配置，再只补默认名称；修改留在暂存区，预检失败或
         # 发布回滚时仍可恢复旧配置。宿主 --check / --preflight 本身保持只读。
-        _initialize_project_name(stage / "project.yaml", project)
+        configured_identity = _initialize_project_name(stage / "project.yaml", project)
+        if configured_identity is not None:
+            created_files[stage / "project.yaml"] = configured_identity
         manifest = {
             "schema_version": 1,
             "managed_files": _managed_files(stage),
         }
-        (stage / MANIFEST_NAME).write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        manifest_body = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if os.name == "nt":
+            created_files[stage / MANIFEST_NAME] = atomic_write(stage / MANIFEST_NAME, manifest_body, 0o600)
+            digests = manifest["managed_files"] | {
+                name: _digest(stage / name) for name in ("project.yaml", MANIFEST_NAME)
+            }
+            stage_inventory = {
+                name: (digest, created_files[stage / name]) for name, digest in digests.items()
+                if created_files.get(stage / name) is not None
+            }
+            if __package__:
+                from .windows_fs import flush_tree
+            else:
+                from windows_fs import flush_tree
+            flush_tree(stage)
+        else:
+            (stage / MANIFEST_NAME).write_bytes(manifest_body)
         _run_setup(stage, project, "--preflight")
 
         standard_snapshots = _standard_update_snapshots(stage, project) if upgrading else []
@@ -409,7 +576,15 @@ def _install_transaction(project: Path, source_root: Path) -> None:
         )
     finally:
         if stage.exists():
-            shutil.rmtree(stage)
+            if os.name == "nt":
+                if __package__:
+                    from .windows_process import WindowsJobCleanupError
+                else:
+                    from windows_process import WindowsJobCleanupError
+                if not isinstance(sys.exception(), WindowsJobCleanupError):
+                    _discard_windows_stage(stage, stage_inventory)
+            else:
+                shutil.rmtree(stage)
 
 
 def main() -> int:
@@ -434,7 +609,7 @@ def main() -> int:
     except (EOFError, KeyboardInterrupt):
         print("\n[取消] 未安装。", file=sys.stderr)
         return 2
-    except (InstallError, OSError, subprocess.CalledProcessError, SetupRunError) as exc:
+    except (InstallError, OSError, ValueError, subprocess.CalledProcessError, SetupRunError) as exc:
         print(f"[错误] {exc}", file=sys.stderr)
         return 2
     return 0

@@ -1,0 +1,18 @@
+{
+  "name": "@geoege-xll/agent-workflow",
+  "version": "0.1.0",
+  "description": "Offline Windows x64 project workflow installer (local, unpublished)",
+  "private": true,
+  "bin": {
+    "agent-workflow": "bin/agent-workflow.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin/agent-workflow.cjs",
+    "payload/",
+    "runtime/",
+    "THIRD_PARTY_NOTICES.txt"
+  ]
+}

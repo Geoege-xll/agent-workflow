@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+if __package__:
+    from .platform_fs import os
+else:
+    from platform_fs import os
 import re
 import secrets
 import shutil
@@ -166,7 +169,7 @@ def _read_regular_path(path: Path, label: str) -> bytes:
 
 def _lstat(path: Path) -> os.stat_result:
     try:
-        return path.lstat()
+        return os.lstat(path)
     except OSError as exc:
         raise SharedCoreSkillError(f"cannot inspect shared core Skill path: {path}: {exc}") from exc
 
@@ -782,7 +785,7 @@ def _read_inventory(path: Path, skill: str) -> tuple[dict[str, object], dict[Pat
     _require_regular_file(path, "Managed Skill state")
     try:
         state = json.loads(
-            path.read_text(encoding="utf-8"),
+            _read_regular_path(path, "Managed Skill state").decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
         )
     except (json.JSONDecodeError, OSError, UnicodeError) as exc:
@@ -920,7 +923,7 @@ def _read_transaction(path: Path, expected_skill: str) -> dict[str, object]:
     _require_regular_file(path, "Managed Skill transaction")
     try:
         transaction = json.loads(
-            path.read_text(encoding="utf-8"),
+            _read_regular_path(path, "Managed Skill transaction").decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
         )
     except (json.JSONDecodeError, OSError, UnicodeError) as exc:
@@ -1080,7 +1083,7 @@ def sync_skill_tree(source: Path, target: Path, skill: str) -> None:
         transaction,
         root / _managed_temp_relative(journal_relative, nonce, "journal"),
     )
-    paths["stage"].mkdir()
+    os.mkdir(paths["stage"])
     _fsync_directory(root)
 
     for relative, node_type in sorted(
@@ -1088,7 +1091,7 @@ def sync_skill_tree(source: Path, target: Path, skill: str) -> None:
         key=lambda item: (len(item[0].parts), str(item[0])),
     ):
         if node_type == "directory":
-            (paths["stage"] / relative).mkdir(exist_ok=True)
+            os.mkdir(paths["stage"] / relative)
     files = [relative for relative, kind in source_nodes.items() if kind == "file"]
     files.sort(key=lambda relative: (relative != Path("SKILL.md"), str(relative)))
     for index, relative in enumerate(files):
@@ -1593,13 +1596,13 @@ def stage_shared_core_skills(pack_root: Path, staging_root: Path) -> tuple[str, 
     _require_empty_staging_root(staging_root)
     for snapshot in snapshots:
         skill_root = staging_root / snapshot.name
-        skill_root.mkdir(mode=0o755)
+        os.mkdir(skill_root, mode=0o755)
         for raw, node_type in sorted(
             snapshot.nodes,
             key=lambda item: (len(Path(item[0]).parts), item[0]),
         ):
             if node_type == "directory":
-                (skill_root / Path(raw)).mkdir(mode=0o755)
+                os.mkdir(skill_root / Path(raw), mode=0o755)
         for raw, body, mode in snapshot.files:
             _create_snapshot_file(skill_root / Path(raw), body, mode)
     return names

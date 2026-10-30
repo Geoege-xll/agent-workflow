@@ -2,6 +2,9 @@
 
 Do not enter this loop for any locally verified Trivial work, including Trivial UI copy. Its applicable early exit above also
 avoids the post-QA memory/projection loop; no QA result is synthesized to satisfy it.
+Standalone read-only audit also stops at its scoped conclusion under WORKFLOW's corresponding
+branch; this implementation loop does not audit that report again. A read-only reviewer performing
+implementation acceptance still follows this loop and its full handoff requirements.
 
 ### Progress and worker reports
 
@@ -77,8 +80,12 @@ avoids the post-QA memory/projection loop; no QA result is synthesized to satisf
    performs full production ui and accessibility QA. Risk-based browser testing of the real
    production implementation remains available.
 5. QA PASS permits closeout only after that validation succeeds. QA FAIL or an invalid PASS returns
-   only to the PM, which issues bounded rework
-   to the appropriate implementer and requests another independent QA pass.
+   only to the PM, which issues bounded rework to the appropriate implementer. The same independent
+   reviewer rechecks the findings, repair delta and actually affected contracts; it does not restart
+   the unchanged full audit. Bind the latest complete request scope, refresh affected rule checks
+   and evidence, reuse unaffected conclusions, and run the existing handoff validation again.
+   Expand only for a concrete new risk, invalidated evidence or explicit user/project requirement;
+   after three failed rework rounds, escalate to the user rather than looping.
 6. After QA PASS, activate `xy-project-memory` in closeout mode and apply the frozen
    controlled-document projection when required. Verify current links and removal naming; perform the PM commit assessment above,
    then finish truthful memory persistence against the resulting

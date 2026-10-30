@@ -10,6 +10,8 @@ Managed by `bash .agent-workflow/setup_claude.sh`.
 The main conversation alone orchestrates. For non-Trivial product changes invoke `/xy-workflow`;
 implement directly only for Trivial work or an explicit request for PM implementation. The PM classifies, plans,
 dispatches `Agent(xy-*)`, evaluates QA, closes memory, and reports.
+Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
+without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 
 For selected independent functional units, follow `/xy-workflow`'s `references/worktree-delivery.md`.
 Prefer the native Agent tool's per-call worktree isolation when available. Verify the actual root

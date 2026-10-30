@@ -78,6 +78,29 @@ dispatch, not a new business gate, QA stage or full test run; Hooks never auto-i
   to rediscover a working interpreter. Diagnose the script only when evidence points to it. Missing
   support is a reported environment limitation, not permission to install Python or alter global PATH.
 
+On a Windows project installed through npx, use the native Node helper from PowerShell or cmd
+instead of assuming `bash` or Python is on PATH:
+
+```powershell
+node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/project_profile_cli.py check-roles codex .agent-workflow .
+```
+
+For other workflow Python examples, replace only `bash .agent-workflow/lib/python_runtime.sh` with
+`node .agent-workflow/lib/python_runtime.cjs` and preserve the arguments. For inline Python, pass
+`-` and supply source on stdin using the current shell's syntax; Bash here-doc syntax is not
+PowerShell syntax. This helper reads the installed persistent runtime record, not npx's cache,
+and retains the caller's cwd and explicit interpreter constraint. Do not infer that arbitrary
+Bash commands become PowerShell commands; required host setup/check still runs through the
+verified Git for Windows executable, without adding it to global PATH. When a refresh is required,
+use the installed helper below for the current host, then run the same command with `--check` once:
+
+```powershell
+node .agent-workflow/lib/python_runtime.cjs .agent-workflow/lib/platform_process.py --host codex
+```
+
+Use `claude` or `antigravity` for that host. This invokes the existing host setup, not npx init,
+a new installation workflow, or an automatic refresh at every task.
+
 These are command-execution boundaries within existing steps, not additional workflow gates.
 
 ## Route

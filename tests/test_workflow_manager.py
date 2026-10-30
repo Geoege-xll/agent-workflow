@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import shlex
@@ -908,8 +909,12 @@ class TerminalAndCliTest(TemporaryProject):
         fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0))
         # 从源包之外通过真实短命令默认打开 TUI；宿主目录指向临时夹具，不读本机账户配置。
         directory=self.root/'bin';install_cli(directory)
+        codex=self.root/'codex-home';codex.mkdir()
+        (codex/'config.toml').write_text('model_catalog_json = "models.json"\n')
+        (codex/'models.json').write_text(json.dumps({'models':[{'slug':'fixture-model','display_name':'Fixture Model','supported_reasoning_levels':['high','max']}]}))
+        original={str(path.relative_to(self.project)):path.read_bytes() for path in self.project.rglob('*') if path.is_file()}
         env={**os.environ,'PATH':str(directory)+os.pathsep+os.environ['PATH'],'TERM':'xterm-256color','ESCDELAY':'25',
-             'CODEX_HOME':str(self.root/'codex-home'),'CLAUDE_CONFIG_DIR':str(self.root/'claude-home')}
+             'HOME':str(self.root/'home'),'CODEX_HOME':str(codex),'CLAUDE_CONFIG_DIR':str(self.root/'claude-home')}
         process=subprocess.Popen(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root)],cwd=self.root,
                                  stdin=slave,stdout=slave,stderr=slave,env=env)
         os.close(slave);captured=bytearray()
@@ -919,7 +924,9 @@ class TerminalAndCliTest(TemporaryProject):
                 if select.select([master],[],[],.1)[0]:
                     try:captured.extend(os.read(master,65536))
                     except OSError:break
-                if text.encode() in captured[start:]:return
+                # curses 常把连续输入拆成带 SGR 的增量；这里只检查输出，不冒充最终屏幕录制。
+                plain=re.sub(rb'\x1b(?:\[[0-?]*[ -/]*[@-~]|[()][0-2A-Z]|[ -/]*[@-~])',b'',bytes(captured[start:])).replace(b'\r',b'')
+                if text.encode() in plain:return
                 if process.poll() is not None:break
             self.fail('终端没有出现预期内容：'+text+'\n'+captured.decode(errors='replace')[-1200:])
         try:
@@ -929,9 +936,21 @@ class TerminalAndCliTest(TemporaryProject):
             os.write(master,b'g');until('工作流管理')
             os.write(master,b'\x1b');time.sleep(.1)
             os.write(master,b'\r');until('选择模型')
+            os.write(master,b'/fixture\r');until('/ fixture')
+            self.assertIsNone(process.poll())
+            os.write(master,b'\r');until('推理级别')
+            os.write(master,b'\r');until('已暂存')
+            os.write(master,b':preview\r');until('变更预览')
+            os.write(master,b'\x1b');time.sleep(.1)
+            os.write(master,b'a');until('项目目录')
+            os.write(master,'/tmp/中文路径'.encode()+b'\x15edited-path');until('edited-path')
             os.write(master,b'\x1b');time.sleep(.1)
             fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',16,55,0,0));os.kill(process.pid,signal.SIGWINCH);time.sleep(.1)
-            os.write(master,b'q')
+            os.write(master,b'q');until('退出确认')
+            os.write(master,b'\x1b');time.sleep(.1)
+            fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',10,45,0,0));os.kill(process.pid,signal.SIGWINCH);time.sleep(.1)
+            os.write(master,b'q');until('Enter 放弃全部草稿并退出')
+            os.write(master,b'\r')
             # 退出时 curses 仍需把恢复终端的序列写出；持续排空伪终端，避免测试自身反压。
             deadline=time.monotonic()+5
             while process.poll() is None and time.monotonic()<deadline:
@@ -941,6 +960,7 @@ class TerminalAndCliTest(TemporaryProject):
             process.wait(timeout=1)
             self.assertEqual(process.returncode,0,captured.decode(errors='replace')[-1000:])
             self.assertFalse(self.state.exists())
+            self.assertEqual(original,{str(path.relative_to(self.project)):path.read_bytes() for path in self.project.rglob('*') if path.is_file()})
         finally:
             if process.poll() is None:process.kill();process.wait(timeout=5)
             os.close(master)

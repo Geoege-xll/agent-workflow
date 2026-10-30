@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
+if __package__:
+    from .platform_fs import os
+else:
+    from platform_fs import os
 import re
 import stat
 import sys
@@ -94,7 +97,7 @@ def _open_root(path: str | Path, label: str) -> int:
     raw_parts = parsed_path.parts
     absolute = parsed_path.is_absolute()
     components = raw_parts[1:] if absolute else raw_parts
-    anchor = Path("/") if absolute else Path(".")
+    anchor = Path(parsed_path.anchor) if absolute else Path(".")
     try:
         descriptor = os.open(anchor, DIRECTORY_FLAGS)
     except OSError as exc:

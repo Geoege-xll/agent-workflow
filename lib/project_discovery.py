@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import json
-import os
+if __package__:
+    from .platform_fs import os
+else:
+    from platform_fs import os
 import re
 import stat
 import tomllib

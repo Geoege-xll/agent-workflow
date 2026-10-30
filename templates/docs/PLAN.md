@@ -11,7 +11,10 @@
 ## Goal and current solution
 
 <Why this change, approved scope/non-goals, chosen solution and necessary acceptance criteria.
-Link existing feature/standards instead of copying them. Distinguish unresolved proposals from approved requirements.>
+On confirmed changes, replace obsolete scope and acceptance here and remove cancelled work from the
+pending task list; retain valid progress and recoverable confirmation basis instead of appending
+competing amendments. Link existing feature/standards instead of copying them.
+Distinguish unresolved proposals from approved requirements.>
 
 ## Work and dependencies
 

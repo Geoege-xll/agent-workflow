@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import json
 import re
-import os
+if __package__:
+    from .platform_fs import os
+else:
+    from platform_fs import os
 import stat
 import sys
 from pathlib import Path

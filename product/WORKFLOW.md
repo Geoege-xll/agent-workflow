@@ -24,7 +24,7 @@ entry points required by each host. They must not copy and rewrite a parallel wo
   `project.yaml` -> `docs.standards_root/prototype` and, when a task pack explicitly
   authorizes a durable project-level design-rule change, exact leaves under
   `docs.standards_root/DESIGN_*.md`; it never modifies production source code.
-- **`xy-qa`**: for non-Trivial work, performs an independent review after every writer in the current request's
+- **`xy-qa`**: for non-Trivial implementation, performs an independent review after every writer in the current request's
   dependency closure reaches `BUILD_VERIFIED`; unrelated writers may continue running. QA
   must not modify production business code or bypass the PM to direct implementers.
 
@@ -35,7 +35,7 @@ UI/UX and QA are baseline available roles before production code exists; impleme
 follow current module facts. Availability does not select a UI branch or add a gate. After module
 or stack changes, use `xy-workflow/references/dispatch.md` for bounded current-host role refresh.
 
-The standard non-Trivial closed loop is:
+The standard non-Trivial implementation closed loop is:
 
 ```text
 alignment and classification with on-demand auxiliary retrieval
@@ -44,8 +44,24 @@ alignment and classification with on-demand auxiliary retrieval
   -> deterministic graph validation -> path/semantic conflict check -> implementation
   -> each implementer provides verifiable build evidence -> PM dispatches xy-qa
   -> PASS: controlled-document projection -> PM commit assessment -> memory closeout -> report to the user
-  -> FAIL: QA reports to PM -> PM dispatches bounded rework -> QA again
+  -> FAIL: QA reports to PM -> PM dispatches bounded rework -> same reviewer checks affected delta
 ```
+
+### Standalone read-only audit
+
+A request only to inspect existing work and deliver findings is not an implementation-acceptance
+request, regardless of its complexity. The PM audits directly or dispatches one read-only reviewer
+against the requested scope, relevant source/contracts and necessary evidence. Honor explicitly
+requested independent review, full re-review and mandatory project checks; report inaccessible or
+insufficient evidence as limitations or blockers, not success. Complete the agreed audit and deliver
+its conclusion, then stop. Do not audit the audit report again merely to close the task, or create
+an implementation plan/DAG, writer, BUILD_VERIFIED, implementation QA PASS or post-QA closeout.
+
+If fixes are authorized, classify and route the actual implementation through the existing workflow.
+A reviewer being read-only does not make implementation acceptance a standalone audit: non-Trivial
+implementation still requires the independent QA barrier, latest complete scope, standards coverage
+and validated handoff below. New concrete risks, changed inputs or explicit user/project requests
+can justify further review; otherwise reuse the completed audit rather than restarting it.
 
 ### User-facing feedback projection
 
@@ -337,6 +353,8 @@ non-Trivial work; this early classification is not UI-Conformance or a prototype
   task-scoped workflow opt-out and save/no-save requests prevail. Saving Light never invokes Full Skills.
   For persistence, visual changes, scope replacement or resumption, read
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
+  Replaced or withdrawn discussion/proposal material follows that lifecycle's current-input cutover
+  and superseded-document handling too; discussion alone does not require a saved document or plan.
 - After Full coverage is complete, activate the self-contained `xy-plan` Skill. It creates a
   `plan_state: draft` plan with exact paths, contracts, task packs, verification commands, expected
   evidence, semantic locks, and a machine-readable `task_graph`. The plan is a proposal: it must not
@@ -1040,6 +1058,43 @@ Each selected leaf names its headings or queries, carries a current fingerprint,
 `owned_path`, and includes every applicable stable hard-rule ID. Workers return missing, stale, or
 incomplete authority to the PM instead of silently widening scope or preloading the standards tree.
 
+### Standards document granularity and maintenance
+
+Before adding reusable constraints, inspect the STANDARDS index and the relevant existing topics.
+Already sufficient rules need no duplicate; a real delta normally updates the existing topic's
+section. A new rule ID does not require a new file.
+
+- Create a leaf only when the rule cannot fit clearly in an existing document and a stable topic,
+  applicable scope, maintenance/permission boundary or explicit project convention justifies its
+  independent maintenance. Do not create one file per request, feature, defect or rule, or merge/split
+  by file count or length. Do not turn GENERAL into a catch-all for unrelated specialist contracts.
+- Keep common rules in one authoritative location. Specialist leaves reference concrete base rule
+  IDs and add only their actual differences, boundaries and necessary exceptions. References do not
+  replace reading: include every applicable base leaf and hard-rule ID in the existing access and
+  standards contracts. Removing repeated prose must not remove applicable coverage.
+- Standards state current durable constraints, not implementation recipes, execution/acceptance logs
+  or a chronology of revisions. Keep those in their existing appropriate task/plan/feature evidence
+  when needed, without creating companion records. An effective feature-specific hard contract may
+  remain as an explicitly scoped subsection; do not discard it merely because it is feature-specific.
+  Express the current rule and its applicable scope directly instead of requiring historical rulings
+  to reconstruct which rule applies.
+- Use headings, applicable paths and rule IDs for targeted reads within a topic. Consolidation does
+  not require full-document preloading, erase engineering/design permissions, merge production and
+  prototype design authority, or relax upstream protection. Distinct scopes and approved variants
+  remain explicit even when their wording is similar.
+
+Consolidate only within an authorized change or explicit cleanup scope, not as an automatic extra task.
+Preserve unchanged IDs, semantics, severity, applicable scope and exceptions. Trace necessary rule
+retirement/replacement in the existing delta; do not mechanically renumber rules. Repair affected
+index links, references, anchors and rule-to-source mappings, and refresh current scope/authority
+fingerprints through the existing adoption/handoff process. Retain original inputs and recoverable
+before-content; do not leave competing old/new current authorities or treat a refreshed hash as proof
+that a task read new content. Purely organizational changes do not themselves require another business
+confirmation, full business regression or review of unchanged contracts. Actual rule/contract changes
+still follow the existing approval, risk, verification and independent-review boundaries.
+
+### Standards authority snapshot
+
 The PM freezes the unified standards authority once per runtime snapshot:
 
 Normative Markdown files are direct children of `docs.standards_root`. Use `DESIGN_*.md` with
@@ -1192,8 +1247,18 @@ build evidence. Implementers may attempt a fix at most twice before returning co
 
 ## 10. QA and Failure Recovery
 
-This section applies when independent QA is required, not to locally verified Trivial UI copy.
-Do not dispatch QA merely because a source file contains UI or a completed edit needs closeout.
+This section governs implementation acceptance when independent QA is required, not locally
+verified Trivial work or the `Standalone read-only audit` branch. Do not dispatch QA merely because
+a source file contains UI, an audit produced a report or a completed edit needs closeout.
+
+On FAIL, the PM dispatches bounded repairs and returns to the same independent reviewer for the
+findings, repair delta and actually affected contracts. Reuse unchanged reviewed conclusions instead
+of restarting the full audit. Refresh the latest complete scope binding and affected standards and
+verification evidence; the existing handoff validator still applies. A wider re-review needs changed
+inputs, a concrete new risk, invalidated evidence or an explicit user/project requirement.
+After PASS and the required closeout checks, stop; ordinary documentation or low-risk copy closeout
+does not itself restart QA. Contract, security or behavior changes follow their actual risk and
+verification inputs, not their file extension.
 
 Final QA outcome: PASS | FAIL
 

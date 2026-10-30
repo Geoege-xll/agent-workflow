@@ -1,0 +1,11 @@
+Bundled runtime: official CPython 3.14.10 Windows x64 embeddable distribution.
+Source: https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip
+
+The complete, unmodified upstream Python and third-party license notices are
+included in runtime/LICENSE.txt. Keep that file with redistributed runtimes.
+The exact archive digest and provenance are recorded in
+packaging/windows/runtime.lock.json in the source repository.
+
+These notices apply to the bundled third-party runtime, not to the licensing
+of Agent Workflow itself. No project license is declared by this npm package.
+This package is local and unpublished; private:true prevents npm publication.

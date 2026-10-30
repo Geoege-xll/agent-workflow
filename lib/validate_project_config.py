@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -426,7 +427,17 @@ def validate_with_profile(
     yaml_path = Path(yaml_path)
     project_root = Path(project_root)
     roles_dir = Path(roles_dir)
-    text = yaml_path.read_text(encoding="utf-8")
+    if os.name == "nt":
+        if __package__:
+            from .windows_fs import read_file
+        else:
+            from windows_fs import read_file
+        body = read_file(yaml_path)
+        if body is None:
+            raise FileNotFoundError(yaml_path)
+        text = body.decode("utf-8")
+    else:
+        text = yaml_path.read_text(encoding="utf-8")
     lines = text.splitlines()
     errors: list[str] = []
     discovery_root = project_root

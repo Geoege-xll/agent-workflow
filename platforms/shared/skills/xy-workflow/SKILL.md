@@ -7,6 +7,15 @@ description: Orchestrate non-trivial project implementation, multi-feature devel
 
 # xy-workflow
 
+## Standalone read-only audit
+
+Before implementation routing, apply WORKFLOW's `Standalone read-only audit` when the task only
+asks for audit findings, not implementation acceptance or fixes. Deliver the scoped conclusion and
+stop; do not create writers, BUILD_VERIFIED, an implementation QA PASS or a second audit of the
+report. Honor explicitly requested independent/full re-review and mandatory project checks. If fixes
+are authorized, route their actual implementation normally. QA being read-only does not exempt
+non-Trivial implementation from independent QA, current scope/standards or handoff validation.
+
 ## General Trivial early exit
 
 Before the non-Trivial route, apply WORKFLOW's `General Trivial early exit` to clear, small one-file
@@ -256,8 +265,10 @@ PROJECT/features merely to finish. Current truth changes only after verified imp
 
 ## Implementation and QA loop
 
-After dispatch, on rework or when closing non-Trivial work, read [implementation and QA](references/implementation-and-qa.md).
-Use exactly one read-only request reviewer; preserve independent source/standards audit and valid
-evidence reuse. Trivial work stops at its early exit and never enters this loop.
+After implementation dispatch, on rework or when closing non-Trivial implementation, read
+[implementation and QA](references/implementation-and-qa.md). Use exactly one read-only request
+reviewer; preserve independent source/standards audit and valid evidence reuse. The same reviewer
+checks affected repairs without restarting unchanged coverage. Trivial work and standalone read-only
+audits stop at their applicable early exits and never enter this loop.
 
 <!-- workflow-contract: references/implementation-and-qa.md -->

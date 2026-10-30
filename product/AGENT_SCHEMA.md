@@ -380,6 +380,12 @@ review_method:
         changed_paths: []
 ```
 
+The implementation-acceptance handoff below does not apply to WORKFLOW's `Standalone read-only
+audit` branch. An audit-only conclusion creates no writer/BUILD_VERIFIED or implementation QA PASS;
+actual non-Trivial implementation still requires the existing writer barrier and validated handoff.
+On rework, the same reviewer checks findings and the affected delta, reuses unchanged conclusions,
+and refreshes the latest complete scope and affected standards/evidence without restarting the full audit.
+
 There is exactly one `xy-qa` reviewer. An external Skill is selected only when installed and proven
 capable; the allowed Superpowers option uses only `requesting-code-review/code-reviewer.md` as that
 same reviewer's prompt. No nested Reviewer is spawned, and Grill Me remains requirements-only.

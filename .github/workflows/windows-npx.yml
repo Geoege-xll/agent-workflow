@@ -1,0 +1,91 @@
+name: Windows npx validation
+
+# Validation only. Running this remotely requires a separate push/run approval.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-npx-validation
+  cancel-in-progress: false
+
+jobs:
+  native:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      npm_config_update_notifier: "false"
+      npm_config_audit: "false"
+      npm_config_fund: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+          architecture: x64
+      - name: Check native prerequisites without installing Git or changing policy
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node -e 'if(process.platform!=="win32" || process.arch!=="x64" || Number(process.versions.node.split(".")[0])<22) process.exit(2)'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows x64 Node.js >= 22 is required' }
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          Write-Host "Elevated runner token: $($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+          Write-Host 'Hosted-runner results do not replace ordinary-user acceptance.'
+          python -I -B -c "import sys; sys.path.insert(0, 'lib'); from platform_process import locate_bash; print(locate_bash())"
+          if ($LASTEXITCODE -ne 0) { throw 'Complete Git for Windows is required' }
+      - name: Portable contracts and native Job and Hook protocol checks
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tests = @(Get-ChildItem npm/*.test.cjs | ForEach-Object FullName)
+          node --test @tests
+          if ($LASTEXITCODE -ne 0) { throw 'Node contracts failed' }
+          foreach ($pattern in @('test_platform_bridge.py', 'test_windows_fs_contract.py', 'test_windows_runtime_boundaries.py', 'test_install_process_windows.py', 'test_windows_hook_command.py')) {
+            python -I -B -m unittest discover -s tests -p $pattern -v
+            if ($LASTEXITCODE -ne 0) { throw "Failed: $pattern" }
+          }
+      - name: Native NTFS safety and real directory durability
+        run: |
+          python -I -B -c "import sys,unittest; sys.path.insert(0,'tests'); import test_npm_packaging as t; names=('WindowsFilesystemNativeTest','WindowsRuntimeContractTest','WindowsBootstrapPortableTest'); suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(t,n)) for n in names); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)"
+          if ($LASTEXITCODE -ne 0) { throw 'Native capability failure blocks acceptance; no skip/no-op fallback' }
+      - name: Acquire locked archive into its own new directory
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP ('awf-windows-' + [guid]::NewGuid().ToString('N'))
+          $download = Join-Path $root 'download'
+          New-Item -ItemType Directory -Path $download | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $root 'build'),(Join-Path $root 'tgz'),(Join-Path $root 'npm-cache') | Out-Null
+          $lock = Get-Content -LiteralPath packaging/windows/runtime.lock.json -Raw | ConvertFrom-Json
+          Invoke-WebRequest -UseBasicParsing -Uri $lock.url -OutFile (Join-Path $download $lock.archive)
+          # GITHUB_ENV is scoped to subsequent CI processes, never user/system PATH.
+          "AWF_VALIDATION_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Prepare complete offline payload using trusted isolated Python
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = Get-Content -LiteralPath packaging/windows/runtime.lock.json -Raw | ConvertFrom-Json
+          $archive = Join-Path $env:AWF_VALIDATION_ROOT ('download/' + $lock.archive)
+          $prepared = Join-Path $env:AWF_VALIDATION_ROOT 'build/prepared'
+          python -I -B packaging/build_npm_release.py --runtime-archive $archive --output $prepared
+          if ($LASTEXITCODE -ne 0) { throw 'Archive validation or preparation failed' }
+          Push-Location $prepared
+          try {
+            $cache = Join-Path $env:AWF_VALIDATION_ROOT 'npm-cache'
+            npm.cmd pack --offline --ignore-scripts --cache $cache --dry-run --json
+            if ($LASTEXITCODE -ne 0) { throw 'Offline npm dry-run failed' }
+            npm.cmd pack --offline --ignore-scripts --cache $cache --pack-destination (Join-Path $env:AWF_VALIDATION_ROOT 'tgz')
+            if ($LASTEXITCODE -ne 0) { throw 'Offline npm pack failed' }
+          } finally { Pop-Location }
+          $archives = @(Get-ChildItem (Join-Path $env:AWF_VALIDATION_ROOT 'tgz') -Filter '*.tgz')
+          if ($archives.Count -ne 1) { throw 'Expected one complete local tgz' }
+          "AGENT_WORKFLOW_NPX_TGZ=$($archives[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Offline local-tgz install and cache-independent real Hook
+        run: |
+          python -I -B -m unittest discover -s tests -p test_windows_npx_e2e.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Native local-tgz E2E failed' }

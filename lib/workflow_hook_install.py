@@ -8,6 +8,7 @@ import copy
 import hashlib
 import json
 import os
+import ntpath
 from pathlib import Path
 import re
 import shlex
@@ -20,10 +21,12 @@ if __package__:
     from .claude_instructions import atomic_write, read_file
     from .workflow_hook_settings import hook_mode
     from .workflow_hooks import OWNER
+    from . import windows_hook_command
 else:
     from claude_instructions import atomic_write, read_file
     from workflow_hook_settings import hook_mode
     from workflow_hooks import OWNER
+    import windows_hook_command
 
 BEGIN = "# agent-workflow-pack:assist-hooks-begin"
 END = "# agent-workflow-pack:assist-hooks-end"
@@ -40,11 +43,21 @@ def canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
+def _hook_command(pack: Path, project: Path, host: str, event: str) -> str:
+    tail = ["--host", host, "--event", event, "--project", str(project),
+            "--owner", OWNER, "--signature", SIGNATURE]
+    if os.name == "nt":
+        python, bootstrap = windows_hook_command.runtime_paths()
+        script = windows_hook_command.persistent_path(str(pack / "lib/workflow_hooks.py"), "project runtime")
+        windows_hook_command.persistent_path(str(project), "project")
+        return windows_hook_command.encode_command([
+            python, "-I", "-B", "-X", "utf8", bootstrap, "--script", script, *tail])
+    return shlex.join([sys.executable, "-B", str(pack / "lib/workflow_hooks.py"), *tail])
+
+
 def signed_group(pack: Path, project: Path, host: str, event: str, matcher: str) -> dict:
-    """命令路径及项目路径均按 shell 参数引用；不会执行用户拖入的路径文本。"""
-    command = shlex.join([sys.executable, "-B", str(pack / "lib/workflow_hooks.py"),
-                          "--host", host, "--event", event, "--project", str(project),
-                          "--owner", OWNER, "--signature", SIGNATURE])
+    """POSIX v1 保持原命令；Windows v2 使用可逆原生协议及持久运行时。"""
+    command = _hook_command(pack, project, host, event)
     handler = {"type": "command", "command": command, "timeout": 3}
     if host == "codex":
         handler["additionalContextLimit"] = 512
@@ -54,7 +67,12 @@ def signed_group(pack: Path, project: Path, host: str, event: str, matcher: str)
     if host == "antigravity":
         group = handler
     digest = hashlib.sha256(canonical(group)).hexdigest()
-    handler["command"] = command[:-len(SIGNATURE)] + digest
+    if command.startswith(windows_hook_command.PREFIX):
+        args = windows_hook_command.decode_command(command)
+        args[-1] = digest
+        handler["command"] = windows_hook_command.encode_command(args)
+    else:
+        handler["command"] = command[:-len(SIGNATURE)] + digest
     return group
 
 
@@ -66,23 +84,46 @@ def owned_group(group: object) -> bool:
     if not isinstance(handlers, list):
         return False
     candidates = [item for item in handlers if isinstance(item, dict)
-                  and isinstance(item.get("command"), str) and OWNER in item["command"]]
+                  and isinstance(item.get("command"), str)
+                  and windows_hook_command.looks_managed(item["command"], OWNER)]
     if not candidates:
         return False
     if len(handlers) != 1 or len(candidates) != 1:
         raise ValueError("mixed or modified managed Hook group; preserve it and resolve explicitly")
     command = candidates[0]["command"]
-    args = shlex.split(command)
-    if (len(args) != 13 or args[1] != "-B" or not args[2].endswith("/lib/workflow_hooks.py")
-            or args[3] != "--host" or args[4] not in EVENTS or args[5] != "--event"
-            or args[7] != "--project" or args[9:12] != ["--owner", OWNER, "--signature"]
-            or not re.fullmatch(r"[0-9a-f]{64}", args[12])):
-        raise ValueError("unproven managed Hook command; preserve it and resolve explicitly")
+    windows = (command.startswith("powershell.exe ") or windows_hook_command.ENCODED_MARKER in command)
+    if windows:
+        args = windows_hook_command.decode_command(command)
+        if len(args) == 18:
+            for index, label in ((0, "Python executable"), (5, "bootstrap"),
+                                 (7, "project runtime"), (13, "project")):
+                windows_hook_command.persistent_path(args[index], label)
+        if (len(args) != 18 or args[1:5] != ["-I", "-B", "-X", "utf8"]
+                or ntpath.basename(args[5]).casefold() != "windows_bootstrap.py"
+                or not ntpath.isabs(args[5]) or args[6] != "--script"
+                or not ntpath.isabs(args[7]) or not args[7].replace("\\", "/").endswith("/lib/workflow_hooks.py")
+                or args[8] != "--host" or args[9] not in EVENTS or args[10] != "--event"
+                or args[12] != "--project" or not ntpath.isabs(args[13])
+                or args[14:17] != ["--owner", OWNER, "--signature"]
+                or not re.fullmatch(r"[0-9a-f]{64}", args[17])):
+            raise ValueError("unproven managed Windows Hook command; preserve it and resolve explicitly")
+        signature = args[-1]
+        args[-1] = SIGNATURE
+        unsigned_command = windows_hook_command.encode_command(args)
+    else:
+        args = shlex.split(command)
+        if (len(args) != 13 or args[1] != "-B" or not args[2].endswith("/lib/workflow_hooks.py")
+                or args[3] != "--host" or args[4] not in EVENTS or args[5] != "--event"
+                or args[7] != "--project" or args[9:12] != ["--owner", OWNER, "--signature"]
+                or not re.fullmatch(r"[0-9a-f]{64}", args[12])):
+            raise ValueError("unproven managed Hook command; preserve it and resolve explicitly")
+        signature = args[12]
+        # 只替换末尾参数而非任意路径中的同名内容，防止签名校验产生歧义。
+        unsigned_command = command[:-64] + SIGNATURE
     unsigned = copy.deepcopy(group)
     handler = unsigned.get("hooks", [unsigned])[0]
-    # 只替换末尾参数而非任意路径中的同名内容，防止签名校验产生歧义。
-    handler["command"] = command[:-64] + SIGNATURE
-    if hashlib.sha256(canonical(unsigned)).hexdigest() != args[12]:
+    handler["command"] = unsigned_command
+    if hashlib.sha256(canonical(unsigned)).hexdigest() != signature:
         raise ValueError("modified managed Hook signature; preserve it and resolve explicitly")
     return True
 

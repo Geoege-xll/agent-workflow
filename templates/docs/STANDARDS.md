@@ -18,6 +18,10 @@
 - Subagents must follow every selected rule. A missing, stale, or incomplete applicable rule set
   blocks dispatch or QA PASS; “read on demand” is not permission to ignore a relevant standard.
 - Update current rules in place. Git retains history; this directory does not record task logs.
+- Maintain stable topics: extend the existing section first; a new leaf needs a justified independent
+  boundary, not one rule or task per file. Keep common rules authoritative and specialist differences
+  scoped. Apply WORKFLOW's `Standards document granularity and maintenance` without weakening the
+  reading and coverage contract above.
 - PM assesses/adopts design-rule changes; UI Agent maintains authorized leaves. Initial adoption,
   incremental changes and full visual replacement update only their approved scope. A feature-doc
   no-op does not imply a standards no-op; refresh affected consumers after rule adoption.

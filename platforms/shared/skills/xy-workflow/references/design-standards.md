@@ -7,6 +7,9 @@ maintenance. This supports the existing workflow; it adds no approval gate, revi
 
 In existing plan/task state, PM records whether standards need updating, why, platform/module scope,
 exact files, approval basis and rule delta. Do not create another report or expose raw YAML/JSON.
+Apply WORKFLOW's `Standards document granularity and maintenance` when choosing those files: reuse
+existing topics and keep only scoped differences, preserving distinct production/prototype authority
+and approved variants rather than merging them by wording alone.
 
 - First establishment: capture confirmed reusable rules; a populated template is not a completed baseline.
 - Existing visual reuse: reuse standards and shared styles; no new rules means no update.

@@ -1,6 +1,8 @@
 ## Codex-only integration
 
-- Non-trivial: activate `$xy-workflow`; all Trivial work uses the shared early exit.
+- Non-trivial implementation: activate `$xy-workflow`; all Trivial work uses the shared early exit.
+- Standalone read-only audits use WORKFLOW's matching branch and stop at the scoped conclusion,
+  without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 - `$xy-project-memory`: retrieve only needed cross-session/history facts; retain post-QA closeout.
 - Load `.agents/skills/` progressively, using only Codex `$xy-*` aliases, never other hosts' slash commands.
 - Custom agents: canonical `xy-*` IDs in `.codex/agents/`; settings in `.codex/config.toml` come from
@@ -14,7 +16,7 @@
   充分范围，接收有效证据后不以 PM 身份重复跑一遍。全量测试或追加检查要有具体依据；
   生产交付仍必须有受影响目标构建／编译成功和可运行证据。
   保留独立 QA、强制验证和 worktree 集成要求，满足停止条件即进入既有收口。
-- For non-Trivial work, the PM dispatches exactly one `xy-qa` reviewer. That same reviewer tries Codex native review as
+- For non-Trivial implementation, the PM dispatches exactly one `xy-qa` reviewer. That same reviewer tries Codex native review as
   `host-native-review`, then one `installed-code-review-skill` proven installed and capable, then
   `internal-xy-qa-procedure`, moving forward only on technical unavailability. The allowed
   Superpowers option is only its installed `requesting-code-review/code-reviewer.md` prompt; Grill

@@ -27,7 +27,7 @@ DOC_DESIGN_DIR="${DOC_STANDARDS_ROOT%/}"
 log_info "Scaffold reduced project documents"
 log_info "Project: ${PROJECT_NAME}  root: ${PROJECT_ROOT}"
 
-python3 - \
+python3 --workflow-paths=1,2,3 - \
   "${PROJECT_ROOT}" "${PACK_DIR}" "${TEMPLATES}" \
   "${PROJECT_NAME}" "${DATE_STR}" \
   "${DOC_STANDARDS}" "${DOC_STANDARDS_ROOT%/}" "${DOC_PROJECT}" "${DOC_FEATURES_DIR%/}" \
@@ -62,6 +62,7 @@ project_root = Path(project_root_raw).resolve()
 pack_root = Path(pack_root_raw).resolve()
 template_root = Path(template_root_raw).resolve()
 sys.path.insert(0, str(pack_root / "lib"))
+from platform_fs import os, publish_exclusive
 from standards_baseline import (
     common_span, ensure_general_link, merge_general, validate_planned_rule_ids,
     render_template as render_standards_baseline,
@@ -83,6 +84,12 @@ ui_enabled = profile.design_scaffold_required
 
 
 def regular_source(path: Path) -> bytes:
+    if os.name == "nt":
+        from windows_fs import read_file
+        body = read_file(path)
+        if body is None:
+            raise SystemExit(f"template is missing: {path}")
+        return body
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         raise SystemExit(f"template must be a single-link regular file: {path}")
@@ -118,7 +125,7 @@ def inspect_parent(target: Path) -> None:
     for part in relative.parts:
         current /= part
         try:
-            info = current.lstat()
+            info = os.lstat(current)
         except FileNotFoundError:
             return
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
@@ -128,7 +135,7 @@ def inspect_parent(target: Path) -> None:
 def inspect_target(target: Path) -> tuple[str, int, int, int, int, int]:
     inspect_parent(target)
     try:
-        info = target.lstat()
+        info = os.lstat(target)
     except FileNotFoundError:
         return ("missing", 0, 0, 0, 0, 0)
     if not stat.S_ISREG(info.st_mode):
@@ -151,10 +158,10 @@ def ensure_directory(path: Path) -> None:
     for part in relative.parts:
         current /= part
         try:
-            info = current.lstat()
+            info = os.lstat(current)
         except FileNotFoundError:
-            current.mkdir(mode=0o755)
-            info = current.lstat()
+            os.mkdir(current, 0o755)
+            info = os.lstat(current)
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             raise SystemExit(f"scaffold directory must be real: {current}")
 
@@ -205,7 +212,16 @@ def inject_test_race(
     fsync_parent(target)
 
 
-def publish(
+def publish(target: Path, body: bytes, before: tuple, original: bytes | None = None) -> str:
+    if os.name != "nt":
+        return _publish(target, body, before, original)
+    from windows_fs import Directory
+    ensure_directory(target.parent)
+    with Directory(target.parent):
+        return _publish(target, body, before, original)
+
+
+def _publish(
     target: Path,
     body: bytes,
     before: tuple[str, int, int, int, int, int],
@@ -232,18 +248,17 @@ def publish(
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, mode, follow_symlinks=False)
-        temporary_inode = temporary.stat(follow_symlinks=False).st_ino
+        temporary_inode = os.stat(temporary, follow_symlinks=False).st_ino
         if not same_snapshot(target, before) or not original_matches(target):
             raise SystemExit(f"scaffold target changed before publish: {target}")
         inject_test_race(target, before)
         if before[0] == "missing":
             try:
-                os.link(temporary, target, follow_symlinks=False)
+                publish_exclusive(temporary, target)
             except FileExistsError as exc:
                 raise SystemExit(
                     f"scaffold target appeared during atomic create: {target}"
                 ) from exc
-            temporary.unlink()
             fsync_parent(target)
             return "created"
 
@@ -257,13 +272,15 @@ def publish(
                 os.replace(backup, target)
                 fsync_parent(target)
             raise SystemExit(f"scaffold target changed during publish: {target}")
+        if os.name == "nt":
+            from windows_fs import copy_permissions
+            copy_permissions(backup, temporary)
         try:
-            os.link(temporary, target, follow_symlinks=False)
+            publish_exclusive(temporary, target)
         except FileExistsError as exc:
             raise SystemExit(
                 f"scaffold target appeared during atomic replace: {target}"
             ) from exc
-        temporary.unlink()
         fsync_parent(target)
         if inspect_target(backup) != before or not original_matches(backup):
             published = inspect_target(target)
@@ -271,11 +288,11 @@ def publish(
                 os.replace(backup, target)
                 fsync_parent(target)
             raise SystemExit(f"scaffold target changed during atomic replace: {target}")
-        backup.unlink()
+        os.unlink(backup)
         fsync_parent(target)
     finally:
         if temporary.exists():
-            temporary.unlink()
+            os.unlink(temporary)
         backup_candidate = Path(f"{temporary}.backup")
         if backup_candidate.exists():
             current = inspect_target(target)
@@ -283,7 +300,7 @@ def publish(
                 os.replace(backup_candidate, target)
                 fsync_parent(target)
             elif inspect_target(backup_candidate) == before and original_matches(backup_candidate):
-                backup_candidate.unlink()
+                os.unlink(backup_candidate)
                 fsync_parent(target)
     return "updated" if original is not None else "created"
 

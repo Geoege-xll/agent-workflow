@@ -44,6 +44,10 @@
   extra confirmation, name/link the exact file and applicable instruction and distinguish the rule
   from interpretation, so PM can give a concise, actionable explanation.
 
+Standalone read-only audits follow WORKFLOW's corresponding branch before implementation intake;
+return the scoped conclusion without fabricated writers/build evidence or a second audit of the
+report. Actual non-Trivial implementation acceptance still requires the existing QA handoff. On
+bounded rework, reuse unchanged conclusions and refresh only affected checks under the latest full scope.
 Trivial early exits belong to the main session; a mistaken routine dispatch should return the
 classification issue to PM without manufacturing QA or documentation work. The complete role
 contract below and the current task pack determine the applicable execution branch.

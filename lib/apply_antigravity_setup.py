@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+if __package__:
+    from .platform_fs import os, publish_exclusive
+else:
+    from platform_fs import os, publish_exclusive
 import posixpath
 import re
 import secrets
@@ -120,7 +123,7 @@ class Plan:
 
 def _lstat(path: Path) -> os.stat_result | None:
     try:
-        return path.lstat()
+        return os.lstat(path)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -201,7 +204,8 @@ def _tree_fingerprint(root: Path) -> tuple[tuple[str, Fingerprint], ...]:
 
     def visit(directory: Path, prefix: Path) -> None:
         try:
-            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
         except OSError as exc:
             raise ApplyError(f"cannot inspect managed tree {directory}: {exc}") from exc
         for entry in entries:
@@ -538,16 +542,42 @@ def _compose_agents_md(current: bytes, product_block: bytes, anti_block: bytes, 
 
 
 def _copy_managed_tree(source: Path, target: Path) -> None:
+    source_root = _require_real_directory(source, "managed Skill source")
     source_tree = _tree_fingerprint(source)
-    target.mkdir(mode=stat.S_IMODE(source.lstat().st_mode))
+    os.mkdir(target, mode=source_root.mode)
     for raw, node in source_tree:
         source_path = source / raw
         target_path = target / raw
         if node.kind == "directory":
-            target_path.mkdir(mode=node.mode)
+            os.mkdir(target_path, mode=node.mode)
         else:
-            target_path.write_bytes(_read_regular(source_path, "managed Skill target"))
-            target_path.chmod(node.mode)
+            body = _read_regular(source_path, "managed Skill target")
+            if hashlib.sha256(body).hexdigest() != node.payload:
+                raise ApplyError(f"managed Skill source changed during copy: {source_path}")
+            descriptor = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                 | getattr(os, "O_NOFOLLOW", 0)
+                                 | getattr(os, "O_CLOEXEC", 0), 0o600)
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ApplyError(f"managed Skill copy is not a single-link file: {target_path}")
+                os.fchmod(descriptor, node.mode)
+                with os.fdopen(descriptor, "wb") as output:
+                    descriptor = -1
+                    output.write(body)
+                    output.flush()
+                    os.fsync(output.fileno())
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+    _assert_unchanged(source, source_root)
+    if _tree_fingerprint(source) != source_tree:
+        raise ApplyError(f"managed Skill source changed during copy: {source}")
+    copied = _tree_fingerprint(target)
+    expected = tuple((raw, node.kind, node.mode, node.payload) for raw, node in source_tree)
+    actual = tuple((raw, node.kind, node.mode, node.payload) for raw, node in copied)
+    if actual != expected:
+        raise ApplyError(f"managed Skill candidate differs from its source: {target}")
 
 
 def _agent_is_managed(path: Path, role: str, *, stale: bool) -> bool:
@@ -644,7 +674,9 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         )
 
     if roots.get(agents_root, Fingerprint("missing")).kind == "directory":
-        for entry in sorted(os.scandir(agents_root), key=lambda item: item.name):
+        with os.scandir(agents_root) as iterator:
+            entries = sorted(iterator, key=lambda item: item.name)
+        for entry in entries:
             if entry.name in {f"{role}.md" for role in expected_roles}:
                 continue
             path = Path(entry.path)
@@ -668,7 +700,8 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
 
     candidate_root = staging / f"{TRANSACTION_PREFIX}candidate--{plan.nonce}"
     candidate_skills = candidate_root / "skills"
-    candidate_skills.mkdir(parents=True)
+    os.mkdir(candidate_root)
+    os.mkdir(candidate_skills)
     for name in sorted(expected_skills):
         source = staging / "skills" / name
         target = skills_root / name
@@ -698,7 +731,9 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         )
 
     if roots.get(skills_root, Fingerprint("missing")).kind == "directory":
-        for entry in sorted(os.scandir(skills_root), key=lambda item: item.name):
+        with os.scandir(skills_root) as iterator:
+            entries = sorted(iterator, key=lambda item: item.name)
+        for entry in entries:
             if entry.name in expected_skills:
                 continue
             path = Path(entry.path)
@@ -830,7 +865,7 @@ def _ensure_directories(plan: Plan, path: Path) -> None:
         _require_real_directory(current, "managed target parent")
     for directory in reversed(missing):
         try:
-            directory.mkdir(mode=0o755)
+            os.mkdir(directory, mode=0o755)
         except FileExistsError as exc:
             raise ApplyError(f"target appeared after preflight: {directory}") from exc
         plan.created_directories.append(directory)
@@ -909,8 +944,7 @@ def _publish_file(change: FileChange, plan: Plan) -> None:
     temporary = _write_temp(change.target, change.body, change.mode, plan.nonce)
     if change.before.kind == "missing":
         try:
-            os.link(temporary, change.target, follow_symlinks=False)
-            temporary.unlink()
+            publish_exclusive(temporary, change.target)
             change.published = True
             _fsync_directory(change.target.parent)
         except OSError as exc:
@@ -933,7 +967,10 @@ def _publish_file(change: FileChange, plan: Plan) -> None:
         # 原文件移入备份后，编辑器可能立即重建同名文档；排他创建避免覆盖这个
         # 间隙产生的项目内容。失败时交由事务回滚保留并发文档及原始备份。
         try:
-            os.link(temporary, change.target, follow_symlinks=False)
+            if os.name == "nt":
+                from windows_fs import copy_permissions
+                copy_permissions(backup, temporary)
+            publish_exclusive(temporary, change.target)
             change.published = True
         except OSError as exc:
             raise ApplyError(f"cannot atomically replace managed document {change.target}: {exc}") from exc
@@ -950,9 +987,20 @@ def _publish_directory(change: DirectoryChange, plan: Plan) -> None:
     if change.tree_before is not None and _tree_fingerprint(change.target) != change.tree_before:
         raise ApplyError(f"managed directory changed after preflight: {change.target}")
     _ensure_directories(plan, change.target.parent)
+    if os.name == "nt":
+        # System temp and the project may be on different volumes. Only the
+        # verified, flushed project-volume copy participates in atomic publication.
+        from windows_fs import flush_tree
+        candidate = _temp_path(change.target, plan.nonce, "candidate-tree")
+        _copy_managed_tree(change.candidate, candidate)
+        flush_tree(candidate)
+        change.candidate = candidate
+        _assert_unchanged(change.target, change.before)
+        if change.tree_before is not None and _tree_fingerprint(change.target) != change.tree_before:
+            raise ApplyError(f"managed directory changed while preparing candidate: {change.target}")
     if change.before.kind == "missing":
         try:
-            change.candidate.rename(change.target)
+            os.rename(change.candidate, change.target)
         except OSError as exc:
             raise ApplyError(f"cannot publish managed Skill {change.target}: {exc}") from exc
         _fsync_directory(change.target.parent)
@@ -966,7 +1014,10 @@ def _publish_directory(change: DirectoryChange, plan: Plan) -> None:
             os.replace(backup, change.target)
         raise ApplyError(f"managed Skill changed during publish: {change.target}")
     change.backup = backup
-    os.replace(change.candidate, change.target)
+    if os.name == "nt":
+        os.rename(change.candidate, change.target)
+    else:
+        os.replace(change.candidate, change.target)
     _fsync_directory(change.target.parent)
 
 

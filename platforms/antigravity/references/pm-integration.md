@@ -2,7 +2,10 @@
 
 This entire managed section applies only in Antigravity; ignore other hosts' integration sections.
 
-Use `/xy-workflow` for non-Trivial work; roles are `.agents/agents/xy-*.md`, Skills are
+Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
+without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
+
+Use `/xy-workflow` for non-Trivial implementation; roles are `.agents/agents/xy-*.md`, Skills are
 `.agents/skills/xy-*/SKILL.md`. Only the PM may use `invoke_subagent`; role Agents never delegate and
 `max_depth` is `1`. Dispatch READY tasks: `inherit` stays `inherit`, `worktree` becomes `branch`
 only when the actual runtime proves a distinct registered worktree root and the required base;
@@ -51,7 +54,7 @@ smallest diagnostic operation. Production QA may still use risk-based browser te
 frame may be persisted or used as approval evidence.
 
 Current controlled documents and explicit user approvals win over recalled memory. Without strict
-isolation or provenance, call neither recall nor save. For non-Trivial work, at BUILD_VERIFIED dispatch exactly one
+isolation or provenance, call neither recall nor save. For non-Trivial implementation, at BUILD_VERIFIED dispatch exactly one
 integrated, read-only `xy-qa`. Waived work skips old-prototype comparison.
 
 The reviewer tries `host-native-review`, then one `installed-code-review-skill` proven installed and

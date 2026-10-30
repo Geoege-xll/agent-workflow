@@ -16,6 +16,34 @@ PACK = Path(__file__).resolve().parents[1]
 
 
 class RuleBoundaryContractTest(unittest.TestCase):
+    def test_standalone_audit_exits_before_implementation_acceptance(self) -> None:
+        # 只保护新增分支的早退与防绕过边界，不把文本合同冒充模型行为测试。
+        for relative, following in (
+            ("platforms/shared/skills/xy-workflow/SKILL.md", "## General Trivial early exit"),
+            ("platforms/shared/skills/xy-qa-review/SKILL.md", "## Implementation acceptance"),
+        ):
+            with self.subTest(source=relative):
+                body = (PACK / relative).read_text()
+                start = body.index("## Standalone read-only audit")
+                end = body.index(following)
+                self.assertLess(start, end)
+                branch = " ".join(body[start:end].split())
+                self.assertIn("stop", branch)
+                self.assertIn("BUILD_VERIFIED", branch)
+                self.assertIn("implementation QA PASS", branch)
+                self.assertIn("non-Trivial implementation", branch)
+                self.assertIn("scope", branch)
+                self.assertIn("standards", branch)
+                self.assertIn("handoff", branch)
+
+        workflow = (PACK / "product/WORKFLOW.md").read_text()
+        branch = workflow.split("### Standalone read-only audit", 1)[1].split("### ", 1)[0]
+        branch = " ".join(branch.split())
+        self.assertIn("Do not audit the audit report again", branch)
+        self.assertIn("Honor explicitly requested independent review, full re-review", branch)
+        self.assertIn("mandatory project checks", branch)
+        self.assertIn("non-Trivial implementation still requires the independent QA barrier", branch)
+
     def test_general_trivial_route_exits_before_planning_and_qa_closeout(self) -> None:
         skill = read_contract(PACK / "platforms/shared/skills/xy-workflow/SKILL.md")
         self.assertLess(skill.index("## General Trivial early exit"), skill.index("## Non-Trivial work"))

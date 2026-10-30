@@ -74,7 +74,7 @@ claude_profile_query() {
 }
 
 roles_field() {
-  python3 - "$ROLES_YAML" "$1" "$2" <<'PY'
+  python3 --workflow-paths=1 - "$ROLES_YAML" "$1" "$2" <<'PY'
 import re, sys
 path, role, key = sys.argv[1], sys.argv[2], sys.argv[3]
 lines = open(path, encoding="utf-8").read().splitlines()
@@ -192,12 +192,13 @@ PY
 
 claude_agent_is_managed() {
   local path="$1" expected_name="$2"
-  python3 - "${path}" "${expected_name}" "${MANAGED_AGENT_MARKER}" <<'PY'
-import os
+  python3 --workflow-paths=1,2 - "${PACK_LIB_DIR}" "${path}" "${expected_name}" "${MANAGED_AGENT_MARKER}" <<'PY'
 import stat
 import sys
 
-path, expected_name, marker = sys.argv[1:]
+library, path, expected_name, marker = sys.argv[1:]
+sys.path.insert(0, library)
+from platform_fs import os
 try:
     descriptor = os.open(
         path,
@@ -251,7 +252,7 @@ array_contains() {
 
 stale_claude_skill_is_managed() {
   local name="$1" dir="${CLAUDE_SKILLS}/${name}"
-  python3 - "${PACK_DIR}/lib" "${dir}" "${name}" "${MANAGED_SKILL_MARKER}" <<'PY'
+  python3 --workflow-paths=1,2 - "${PACK_DIR}/lib" "${dir}" "${name}" "${MANAGED_SKILL_MARKER}" <<'PY'
 import os
 import stat
 import sys
@@ -259,6 +260,7 @@ from pathlib import Path
 
 library, directory, name, marker = sys.argv[1:]
 sys.path.insert(0, library)
+from platform_fs import os
 from shared_core_skills import (  # noqa: E402
     SharedCoreSkillError,
     parse_managed_skill_bytes,
@@ -312,7 +314,7 @@ PY
 
 validate_claude_markers() {
   [[ -f "${ROOT_AGENTS_MD}" ]] || return 0
-  python3 - "${ROOT_AGENTS_MD}" "${BEGIN}" "${END}" <<'PY'
+  python3 --workflow-paths=1 - "${ROOT_AGENTS_MD}" "${BEGIN}" "${END}" <<'PY'
 from pathlib import Path
 import sys
 path, begin, end = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -462,7 +464,7 @@ write_claude_agents() {
 
 check_claude_block_matches() {
   local expected="$1"
-  python3 - "${ROOT_AGENTS_MD}" "${expected}" "${BEGIN}" "${END}" <<'PY'
+  python3 --workflow-paths=1,2 - "${ROOT_AGENTS_MD}" "${expected}" "${BEGIN}" "${END}" <<'PY'
 from pathlib import Path
 import sys
 target, expected = Path(sys.argv[1]), Path(sys.argv[2])

@@ -9,7 +9,7 @@ PACK_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${PACK_LIB_DIR}/python_runtime.sh"
 workflow_select_python || return $?
 python3() {
-  command "${AGENT_WORKFLOW_PYTHON}" "$@"
+  workflow_python "$@"
 }
 PACK_DIR="$(cd "${PACK_LIB_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${PACK_DIR}/.." && pwd)"
@@ -91,7 +91,7 @@ roles_yaml_get() {
 
 # 更可靠：用 python 解析 ROLES.yaml / project.yaml（项目内已依赖 python3）
 py_yaml() {
-  python3 - "${PACK_LIB_DIR}" "$@" <<'PY'
+  python3 --workflow-paths=1,2 - "${PACK_LIB_DIR}" "$@" <<'PY'
 import sys, re
 # 极简：不依赖 PyYAML。支持本 pack 的缩进 YAML 子集。
 lib_dir, path, *pathkeys = sys.argv[1:]
@@ -238,7 +238,7 @@ PY
 
 project_profile_query() {
   local query="$1" role="${2:-}"
-  python3 - "${PACK_LIB_DIR}" "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}" "${query}" "${role}" <<'PY'
+  python3 --workflow-paths=1,2,3,4 - "${PACK_LIB_DIR}" "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}" "${query}" "${role}" <<'PY'
 import shlex
 import sys
 

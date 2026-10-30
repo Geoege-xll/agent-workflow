@@ -1,6 +1,6 @@
 ---
 name: xy-qa-review
-description: Use when completed request-scoped implementation needs an independent audit after every relevant writer reaches BUILD_VERIFIED.
+description: Review completed request-scoped implementation after every relevant writer reaches BUILD_VERIFIED, or deliver an explicitly requested standalone read-only audit without the implementation loop.
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
@@ -25,6 +25,20 @@ or qa_handoff record unless stricter project rules explicitly require them. If m
 risk is discovered, report it to PM for reclassification instead of expanding the review yourself.
 Then stop: the structured intake, UI checks and qa_handoff procedure below are for non-Trivial QA;
 this review does not activate the post-QA projection/memory pipeline.
+
+## Standalone read-only audit
+
+For an audit-only request, follow WORKFLOW's `Standalone read-only audit`: inspect the requested
+scope, relevant source/contracts, applicable standards and necessary evidence, then return a concise
+conclusion, actionable findings and limitations to PM and stop. Honor explicit full/independent
+re-review and mandatory checks; missing evidence is a limitation or blocker, not presumed success.
+Do not fabricate writers or BUILD_VERIFIED, require an implementation Task Pack or qa_handoff just
+to deliver findings, or audit the report again. This conclusion is not an implementation QA PASS and
+does not activate projection, commit or memory closeout. If the task is accepting actual non-Trivial
+implementation, continue below with the existing full intake, scope, standards and handoff contract;
+a read-only reviewer is not an exemption. Route authorized fixes back through PM.
+
+## Implementation acceptance
 
 Final QA outcome: PASS | FAIL
 
@@ -103,6 +117,13 @@ evidence does.
 
 ## Audit
 
+For bounded rework, the same independent reviewer rechecks findings, the repair delta and actually
+affected contracts, not the unchanged full audit. Bind the latest complete request scope and refresh
+affected standards/evidence; carry forward unchanged conclusions and run the existing handoff
+validation. Broaden only for a concrete new risk, invalidated evidence or explicit user/project
+requirement. Sufficient existing test coverage needs no new test file. After a valid PASS, stop;
+ordinary closeout is not a reason to audit again.
+
 For a worktree request, use `xy-workflow/references/worktree-delivery.md`: audit the actual integration
 root and full pinned main-base/candidate diff, not just each isolated unit's result. Verify prerequisites
 were present in worker bases and checkpoints were integrated. After a candidate change, review the
@@ -121,8 +142,9 @@ Keep production UI/accessibility audit and current design authority in every app
 
 <!-- workflow-contract: references/ui-review.md -->
 
-For every request, check behavior, edge cases, concurrency, API/data contracts, stack lock,
-repository conventions, path ownership, and required build/test/type-check/lint evidence. Starting
+For implementation acceptance, check behavior and applicable edge cases, concurrency, API/data
+contracts, stack lock, repository conventions, path ownership, and required build/test/type-check/lint
+evidence according to actual changed behavior and risk, not by inventing checks for every category. Starting
 from the STANDARDS index, independently resolve only leaves relevant to actual changed paths; do not
 trust the Writer's list as QA's conclusion. Classify every fixed changed path, then record every
 required or applicable engineering/design rule with its source path, anchor, severity, disposition,

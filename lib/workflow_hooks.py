@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
+if __package__:
+    from .platform_fs import os
+else:
+    from platform_fs import os
 from pathlib import Path
 import stat
 import subprocess
@@ -101,12 +104,37 @@ def first_agy_notice(root: Path, payload: dict) -> bool:
     session = payload.get("conversationId")
     if not isinstance(session, str) or not session or len(session) > 256:
         return False
+    digest = hashlib.sha256(f"antigravity\0{root}\0{session}".encode()).hexdigest()
+    if os.name == "nt":
+        if __package__:
+            from .windows_fs import Directory, assert_private, directory_lock
+            from .windows_runtime import local_appdata, OWNER as RUNTIME_OWNER
+        else:
+            from windows_fs import Directory, assert_private, directory_lock
+            from windows_runtime import local_appdata, OWNER as RUNTIME_OWNER
+        base = local_appdata() / "AgentWorkflow"
+        with directory_lock(base, "hook-notice-cache"):
+            assert_private(base)
+            if read_small(base / ".npx-owner.json").encode() != RUNTIME_OWNER:
+                return False
+            cache = base / "hook-notices"
+            try:
+                os.mkdir(cache, 0o700)
+            except FileExistsError:
+                pass
+            with Directory(cache):
+                assert_private(cache)
+                try:
+                    descriptor = os.open(cache / digest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    return False
+                os.close(descriptor)
+        return True
     cache = Path(tempfile.gettempdir()) / f"agent-workflow-hook-notices-{os.getuid()}"
     cache.mkdir(mode=0o700, exist_ok=True)
     info = cache.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
         return False
-    digest = hashlib.sha256(f"antigravity\0{root}\0{session}".encode()).hexdigest()
     try:
         descriptor = os.open(cache / digest, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                              | getattr(os, "O_NOFOLLOW", 0), 0o600)

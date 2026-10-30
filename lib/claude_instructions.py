@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import os
+if __package__:
+    from .platform_fs import os
+else:
+    from platform_fs import os
 from pathlib import Path
 import stat
 import tempfile
@@ -24,6 +27,15 @@ PAIRS = (
 
 def read_file(path: Path) -> bytes | None:
     """入口必须是单链接普通文件；拒绝链接、特殊节点及危险父目录。"""
+    if os.name == "nt":
+        if __package__:
+            from .windows_fs import read_file as windows_read
+        else:
+            from windows_fs import read_file as windows_read
+        data = windows_read(path)
+        if data is not None:
+            data.decode("utf-8", errors="strict")
+        return data
     for parent in path.parents:
         if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
             raise ValueError(f"unsafe instruction parent: {parent}")
@@ -128,20 +140,48 @@ def render(pack: Path, root: Path):
     return agents, claude, next_agents, next_claude
 
 
-def atomic_write(path: Path, data: bytes | None, mode: int) -> None:
-    """同目录原子发布；None 仅用于失败回滚，撤回本轮新建的入口。"""
+def atomic_write(path: Path, data: bytes | None, mode: int) -> tuple[int, int] | None:
+    """同目录原子发布；Windows 返回所创建文件身份供精确恢复使用。"""
     if data is None:
-        path.unlink(missing_ok=True)
-        return
+        if os.name == "nt":
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        else:
+            path.unlink(missing_ok=True)
+        return None
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
     temporary = Path(name)
+    identity = None
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
             os.fchmod(stream.fileno(), mode)
-        os.replace(temporary, path)
+            if os.name == "nt":
+                stream.flush()
+                os.fsync(stream.fileno())
+                info = os.fstat(stream.fileno())
+                identity = (info.st_dev, info.st_ino)
+        if os.name == "nt":
+            os.replace_owned(temporary, path, identity)
+        else:
+            os.replace(temporary, path)
+        return identity
     finally:
-        temporary.unlink(missing_ok=True)
+        if os.name == "nt":
+            if identity is not None:
+                if __package__:
+                    from .windows_fs import remove_file_if_unchanged
+                else:
+                    from windows_fs import remove_file_if_unchanged
+                import hashlib
+                try:
+                    remove_file_if_unchanged(temporary, hashlib.sha256(data).hexdigest(), identity)
+                except FileNotFoundError:
+                    pass
+        else:
+            temporary.unlink(missing_ok=True)
 
 
 def process(pack: Path, root: Path, action: str) -> None:

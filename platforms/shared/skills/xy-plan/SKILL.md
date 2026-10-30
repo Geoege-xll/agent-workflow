@@ -36,6 +36,9 @@ plan_state: draft
    paths. Non-UI implementation selects engineering leaves; production UI selects engineering and
    design leaves; `xy-uiux + design_ui` selects design leaves. Never preload the complete standards
    tree. Extract a protected-path rule only when an engineering leaf states it explicitly.
+   For standards maintenance, follow WORKFLOW's `Standards document granularity and maintenance`:
+   locate the existing topic and actual rule delta before proposing a new leaf; do not attach
+   automatic documentation cleanup or a new rule document to every implementation task.
 2. For every production UI task, classify `UI-Conformance` only with `design_delta: none`,
    structured resolved and SHA-256-frozen `design_authority_refs`, no design-workspace write, and no
    unresolved design choice; record `prototype_policy: not_applicable`. Otherwise use the explicit
@@ -68,9 +71,10 @@ plan_state: draft
    before execution; this draft Skill still creates no worktrees, commits or user confirmations.
 6. For each task, provide concrete verification commands and expected output. Apply
    `xy-build-verify/references/verification-scope.md` from the installed Skill directory; discovered
-   commands are candidates and selected checks must cover actual risk and mandatory rules. Prefer a failing
-   regression test before implementation when the repository can prove the behavior that way;
-   otherwise name the strongest repository-native evidence.
+   commands are candidates and selected checks must cover actual risk and mandatory rules. Reuse
+   sufficient existing coverage first. Only when a concrete regression-coverage gap needs a test,
+   prefer proving that regression before implementation in an existing suitable test file; otherwise
+   name the strongest repository-native evidence. Do not require new tests or test files per task.
 7. Include no placeholders such as TBD, generic "add validation", "handle edge cases", or "write
    tests". Name the behavior, boundary, command, and expected evidence.
 8. Self-review requirement coverage, task independence, interface consistency, path/semantic

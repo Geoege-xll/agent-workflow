@@ -109,7 +109,7 @@ validate_business_confirmations() {
 }
 
 roles_field() {
-  python3 - "$ROLES_YAML" "$1" "$2" <<'PY'
+  python3 --workflow-paths=1 - "$ROLES_YAML" "$1" "$2" <<'PY'
 import re
 import sys
 
@@ -130,7 +130,7 @@ PY
 
 nicknames_toml() {
   local role="$1"
-  python3 - "$ROLES_YAML" "$role" <<'PY'
+  python3 --workflow-paths=1 - "$ROLES_YAML" "$role" <<'PY'
 import json
 import re
 import sys
@@ -177,7 +177,7 @@ discovered_codex_roles() {
 
 render_discovered_project_context() {
   local role="$1"
-  python3 - \
+  python3 --workflow-paths=1,2,3,4 - \
     "${PACK_LIB_DIR}" \
     "${PROJECT_YAML}" \
     "${PROJECT_ROOT}" \
@@ -240,7 +240,7 @@ PY
 
 render_codex_worker_constraints() {
   # 新的角色边界必须使用与预检相同的安全读取，不能把缺失/链接文件当作空文本。
-  python3 - "${PACK_LIB_DIR}" "${PACK_DIR}" <<'PY'
+  python3 --workflow-paths=1,2 - "${PACK_LIB_DIR}" "${PACK_DIR}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -444,7 +444,7 @@ is_pack_managed_agent() {
   local file="$1" expected_name
   [[ ! -L "${file}" && -f "${file}" ]] || return 1
   expected_name=$(basename "${file}" .toml)
-  python3 - "${file}" "${expected_name}" "${MANAGED_AGENT_MARKER}" <<'PY'
+  python3 --workflow-paths=1 - "${file}" "${expected_name}" "${MANAGED_AGENT_MARKER}" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -727,7 +727,7 @@ check_managed_outputs_match_sources() {
 check_codex_contract() {
   local expected_threads
   expected_threads=$(positive_number_or_default max_concurrent_subagents 8)
-  python3 - \
+  python3 --workflow-paths=1,2,3,4,5,7,8,9 - \
     "${CODEX_CONFIG}" \
     "${ROOT_AGENTS_MD}" \
     "${CODEX_AGENTS}" \

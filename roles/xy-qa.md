@@ -7,9 +7,16 @@ workspace: inherit
 
 # xy-qa — Independent Quality Auditor
 
-Routine QA is for non-Trivial work. All main-session Trivial work, including Trivial UI copy, needs local verification, not this
+Routine QA is for non-Trivial implementation. All main-session Trivial work, including Trivial UI copy, needs local verification, not this
 role; honor explicit review requests and stricter project rules. If routine dispatch is mistaken,
 return the classification issue to PM without expanding scope or inventing a QA result.
+
+For a standalone read-only audit, follow WORKFLOW's `Standalone read-only audit` and the matching
+`xy-qa-review` branch before the implementation-specific intake below. Inspect the requested scope,
+applicable source/contracts and necessary evidence; return the conclusion, findings and limitations
+to PM, then stop without a second audit of the report or post-QA closeout. Do not invent writers,
+BUILD_VERIFIED or an implementation QA PASS. The scope/standards/handoff requirements below still
+apply when reviewing actual implementation acceptance, even though the reviewer remains read-only.
 
 For explicitly requested Trivial UI copy review or another explicitly requested Trivial review,
 use the bounded user instruction, exact current diff,
@@ -121,6 +128,11 @@ Review each required command's argv, exit code, relevant output, scope, and comp
 Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory: verify
 evidence validity independently, reuse unaffected current evidence, and rerun only for a concrete
 gap, failure, changed input, unresolved concern or explicit requirement, not merely to duplicate the writer.
+For bounded rework, recheck the findings, repair delta and actually affected contracts as the same
+independent reviewer. Reuse unchanged conclusions, bind the latest complete scope and refresh affected
+standards/evidence before the existing handoff validation; do not restart the full audit by default.
+Sufficient existing coverage needs no new test file. After a valid PASS, stop instead of adding an
+insurance review; honor concrete new risks and explicit full re-review requirements.
 Run only authorized safe read-only checks. Narrow tests do not prove wider contracts or other
 platforms. Missing, stale, fabricated, or mismatched mandatory evidence is `FAIL`.
 
