@@ -63,6 +63,40 @@ class ProjectNameInstallationTest(unittest.TestCase):
                 backup = next(project.glob(".agent-workflow-backup-*/project.yaml"))
                 self.assertEqual(original, backup.read_bytes())
 
+    def test_repeated_upgrades_keep_only_latest_runtime_backup(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="workflow-backup-rotation-") as raw:
+            project = Path(raw).resolve() / "ParentsKit"
+            project.mkdir()
+            # 角色模型备份和失败版本由其他流程维护，轮换只能处理安装器运行时备份。
+            models = project / ".agent-workflow-backup-models-keep"
+            failed = project / ".agent-workflow-failed-0123456789ab"
+            models.mkdir()
+            failed.mkdir()
+            with patch.object(install_workflow, "_run_setup"):
+                for _ in range(3):
+                    install_workflow._install(project, PACK)
+            runtime_backups = [
+                path for path in project.glob(".agent-workflow-backup-*")
+                if install_workflow.RUNTIME_BACKUP_NAME.fullmatch(path.name)
+            ]
+            self.assertEqual(1, len(runtime_backups))
+            self.assertTrue((runtime_backups[0] / "project.yaml").is_file())
+            self.assertTrue(models.is_dir())
+            self.assertTrue(failed.is_dir())
+
+            # 用户手工新增或修改过内容的备份目录不会被自动轮换删除。
+            user_touched = runtime_backups[0]
+            (user_touched / "user-note.txt").write_text("keep me\n", encoding="utf-8")
+            with patch.object(install_workflow, "_run_setup"):
+                install_workflow._install(project, PACK)
+            self.assertTrue(user_touched.is_dir())
+            self.assertTrue((user_touched / "user-note.txt").is_file())
+            remaining = [
+                path for path in project.glob(".agent-workflow-backup-*")
+                if install_workflow.RUNTIME_BACKUP_NAME.fullmatch(path.name)
+            ]
+            self.assertEqual(2, len(remaining))
+
     def test_special_directory_names_round_trip_through_both_doc_readers(self) -> None:
         names = ("中文 项目", 'Owner\'s "App" #1', r"Project & {{DATE}} | \\ Demo", "Project ")
         for name in names:

@@ -79,3 +79,8 @@ Trivial 继续使用主会话局部验证，不能为了应用本段补建独立
   The selected [worktree delivery](worktree-delivery.md) branch separately grants bounded PM-local
   checkpoint/integration authority before final QA and confirm/auto delivery after all work completes.
   It never grants workers commit/merge authority or implies a remote operation.
+- Before the final report, clean up task-owned temporary artifacts: run `task_graph_cli.py
+  cleanup-scratch --root <project-root> --request-id <request-id>`, drop any task-created temporary
+  test databases, containers or rolling pre-operation snapshots after verified changes are synced to
+  the single baseline, and keep only distilled evidence references in the task record. Report
+  reclaimed temporary resources concisely when cleanup removed task artifacts.

@@ -254,7 +254,7 @@ class HostWorkspaceDiscoveryTest(unittest.TestCase):
             (project / "app/package.json").write_text('{"dependencies":{"react":"19"}}')
             # 每个副本都包含真实可识别的业务清单；无效 JSON 还验证扫描器确实没有
             # 进入宿主管理目录，而不是先读取文件、再从最终模块列表中过滤。
-            for host in (".claude", ".codex", ".agents"):
+            for host in (".claude", ".codex", ".agents", ".backups", ".recovery", ".runtime", ".local", ".pnpm-store"):
                 for prefix in (project, project / "app"):
                     copied = prefix / host / "worktrees" / "unfinished"
                     copied.mkdir(parents=True)

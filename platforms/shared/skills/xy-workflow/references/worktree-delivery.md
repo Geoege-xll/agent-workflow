@@ -46,8 +46,13 @@ Trivial tasks and read-only reviews do not acquire worktrees or delivery consent
    indiscriminately. Missing required context or permissions stops that unit, not unrelated work.
    Keep one logical `memory.project_id` for the project across its worktrees; never create new memory
    namespaces or run setup just because a worktree directory has a different name.
-6. Isolate ports, writable build outputs and test databases where needed. Worktrees do not isolate
-   external services. Account for disk, build resources and actual host slots before dispatch.
+6. Share the single development database, runtime environment and system-wide build/package caches by
+   default, syncing schema and test data incrementally. Isolate ports, writable build outputs or test
+   databases only when concurrent writers genuinely conflict, a test is destructive, or the user
+   explicitly requests isolation; when needed, reuse a single isolated instance for the request rather
+   than creating new parent/clone databases or `-r1`/`-v2` copies per round. Honor user instructions
+   not to isolate or to work directly on the main branch and shared database immediately. Worktrees do
+   not isolate external services. Account for disk, build resources and actual host slots before dispatch.
 
 ## Checkpoints, integration and QA
 
@@ -147,6 +152,9 @@ only when warranted; do not save merely because worktrees were used.
 Release finished Agents before cleanup. Remove only identified task-owned worktrees after proving
 their commits are preserved in the delivered main history and no dirty, untracked, ignored needed
 files or active users remain. Prefer the host's safe cleanup; otherwise use non-force `git worktree
-remove` for an exact registered path. Keep any uncertain or unfinished worktree. Never recursively
-delete a workspace root, force removal, delete user branches, or treat the final merge as cleanup consent
-for unrelated work. Briefly report what was removed and where the committed work remains recoverable.
+remove` for an exact registered path. Keep any uncertain or unfinished worktree. Also tear down any
+task-created isolated database, container, rolling pre-operation snapshot, and managed task scratch
+directory (`task_graph_cli.py cleanup-scratch`) after syncing verified data to the shared baseline.
+Never recursively delete a workspace root, force removal, delete user branches, or treat the final
+merge as cleanup consent for unrelated work. Briefly report what was removed, reclaimed space, and
+where the committed work remains recoverable.

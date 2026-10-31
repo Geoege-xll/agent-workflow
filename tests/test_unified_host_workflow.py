@@ -1025,7 +1025,7 @@ class EngineeringBaselineContractTest(UnifiedHostFixture, unittest.TestCase):
                 )
                 expected_rules = {
                     f"eng-common-{number:03d}": "advisory" if number in (12, 18) else "hard"
-                    for number in range(1, 30)
+                    for number in range(1, 31)
                 }
                 # 同时检查稳定编号、严重性和重复规则；验证器再核对实际目录与索引。
                 self.assertEqual(len(expected_rules), len(common_rules))

@@ -493,6 +493,43 @@ class RecordCliTest(unittest.TestCase):
         result = self.invoke("fingerprints", "--root", self.root, input='["../private"]')
         self.assertEqual(2, result.returncode)
 
+    def test_scratch_workspace_reuses_deterministic_slot_and_cleans_up_at_closeout(self):
+        first = self.invoke("scratch", "--root", self.root, "--request-id", "req-audit-01")
+        self.assertEqual(0, first.returncode, first.stderr)
+        payload1 = json.loads(first.stdout)
+        self.assertFalse(payload1["reused"])
+        self.assertEqual("req-audit-01", payload1["request_id"])
+        scratch_dir = Path(payload1["scratch_dir"])
+        self.assertTrue(scratch_dir.is_dir())
+        (scratch_dir / "evidence.log").write_text("round 1\n", encoding="utf-8")
+        readonly_dir = scratch_dir / "readonly-build"
+        readonly_dir.mkdir()
+        readonly_file = readonly_dir / "artifact.bin"
+        readonly_file.write_bytes(b"readonly-artifact")
+        readonly_file.chmod(0o444)
+        readonly_dir.chmod(0o500)
+
+        second = self.invoke("scratch", "--root", self.root, "--request-id", "req-audit-01")
+        self.assertEqual(0, second.returncode, second.stderr)
+        payload2 = json.loads(second.stdout)
+        self.assertEqual(payload1["scratch_dir"], payload2["scratch_dir"])
+        self.assertTrue(payload2["reused"])
+        self.assertEqual("round 1\n", (scratch_dir / "evidence.log").read_text(encoding="utf-8"))
+
+        cleaned = self.invoke("cleanup-scratch", "--root", self.root, "--request-id", "req-audit-01")
+        self.assertEqual(0, cleaned.returncode, cleaned.stderr)
+        cleaned_payload = json.loads(cleaned.stdout)
+        self.assertTrue(cleaned_payload["cleaned"])
+        self.assertEqual(2, cleaned_payload["removed_files"])
+        self.assertGreater(cleaned_payload["reclaimed_bytes"], 0)
+        self.assertFalse(scratch_dir.exists())
+
+        for bad_id in ("../escape", "CON", "nul.txt", "com1"):
+            with self.subTest(bad_id=bad_id):
+                invalid = self.invoke("scratch", "--root", self.root, "--request-id", bad_id)
+                self.assertEqual(2, invalid.returncode)
+                self.assertIn("error", json.loads(invalid.stderr))
+
 
 class RecordInstalledRuntimeTest(unittest.TestCase):
     def test_three_host_install_exports_helpers_and_runs_from_detached_runtime(self):

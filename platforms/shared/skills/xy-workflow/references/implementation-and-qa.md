@@ -49,6 +49,10 @@ implementation acceptance still follows this loop and its full handoff requireme
    生产实现须有受影响目标构建／编译成功及可运行证据。按其中的 `verification-scope.md`
    先选最小充分范围，明确需要新执行或可复用的证据。
    必需项通过即交接；扩大或重跑需说明具体缺口，不能每个实现者默认全仓测试。
+   Reuse the single shared development database, runtime environment and system-wide build/package
+   caches by default, syncing schema and test data incrementally; do not create per-round isolated
+   databases, private package caches or duplicate candidate directories (`packages-qa*`,
+   `runtime-v2`, `replay`, `before`).
 4. Run `task_graph_cli.py qa-ready` for the request. Only `task_type: writer` tasks participate in
    this barrier; `evidence`, `read_only`, and `qa` tasks do not create a circular wait. When it
    returns true, dispatch exactly one integrated read-only `xy-qa` reviewer for this request. That same reviewer tries

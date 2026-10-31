@@ -351,3 +351,142 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if task_id not in validate("ready", candidate)["ready"]:
             raise TaskGraphError("RUNNING update is blocked by existing dependencies, gates or locks")
     return result
+
+
+SCRATCH_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+SCRATCH_ROOT_NAME = "agent-workflow-scratch"
+SCRATCH_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _project_scratch_base(root: Path) -> Path:
+    """按真实项目根路径派生唯一确定性的临时根目录，避免每个任务自造 /tmp 目录。"""
+    if root.is_symlink():
+        raise TaskGraphError(f"scratch project root must not be a symlink: {root}")
+    resolved = root.resolve(strict=True)
+    if not resolved.is_dir():
+        raise TaskGraphError(f"scratch project root must be an existing directory: {root}")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", resolved.name).strip("-._") or "project"
+    slug = slug[:48]
+    project_hash = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:12]
+    temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    container = temp_root / SCRATCH_ROOT_NAME
+    if container.is_symlink():
+        raise TaskGraphError(f"scratch container must not be a symlink: {container}")
+    base = container / f"{slug}-{project_hash}"
+    if base.is_symlink():
+        raise TaskGraphError(f"project scratch root must not be a symlink: {base}")
+    return base
+
+
+def _validated_scratch_slot(request_id: str | None) -> str:
+    slot = "shared" if request_id is None else request_id
+    if not isinstance(slot, str) or not SCRATCH_ID_RE.fullmatch(slot) or slot in {".", ".."}:
+        raise TaskGraphError(f"invalid scratch request_id: {request_id!r}")
+    if slot.partition(".")[0].upper() in SCRATCH_RESERVED_NAMES:
+        raise TaskGraphError(f"invalid scratch request_id: {request_id!r}")
+    return slot
+
+
+def scratch_workspace(root: Path, request_id: str | None = None) -> dict[str, Any]:
+    """返回并按需创建项目的固定任务临时目录，同一请求重试与 QA 原地复用。"""
+    base = _project_scratch_base(root)
+    slot = _validated_scratch_slot(request_id)
+    container = base.parent
+    container.mkdir(mode=0o700, exist_ok=True)
+    if container.is_symlink() or not container.is_dir():
+        raise TaskGraphError(f"invalid scratch container: {container}")
+    base.mkdir(mode=0o700, exist_ok=True)
+    if base.is_symlink() or not base.is_dir():
+        raise TaskGraphError(f"invalid project scratch base: {base}")
+    target = base / slot
+    if target.is_symlink():
+        raise TaskGraphError(f"scratch target must not be a symlink: {target}")
+    existed = target.exists()
+    target.mkdir(mode=0o700, exist_ok=True)
+    if not target.is_symlink() and target.is_dir():
+        try:
+            target.chmod(0o700)
+        except OSError:
+            pass
+    if not target.is_dir():
+        raise TaskGraphError(f"scratch target is not a directory: {target}")
+    return {
+        "project_scratch_root": str(base),
+        "request_id": slot,
+        "reused": existed,
+        "scratch_dir": str(target),
+    }
+
+
+def _remove_scratch_tree(target: Path) -> tuple[int, int]:
+    """安全删除受管临时目录树，不跟随符号链接，并统计回收文件数与字节数。"""
+    removed_files = 0
+    reclaimed_bytes = 0
+    info = target.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        target.unlink()
+        return 1, 0
+    if not stat.S_ISDIR(info.st_mode):
+        reclaimed_bytes += info.st_size
+        try:
+            target.unlink()
+        except PermissionError:
+            target.chmod(stat.S_IMODE(info.st_mode) | 0o200)
+            target.unlink()
+        return 1, reclaimed_bytes
+    if (stat.S_IMODE(info.st_mode) & 0o700) != 0o700:
+        try:
+            target.chmod(stat.S_IMODE(info.st_mode) | 0o700)
+        except OSError:
+            pass
+    for child in list(target.iterdir()):
+        files, size = _remove_scratch_tree(child)
+        removed_files += files
+        reclaimed_bytes += size
+    target.rmdir()
+    return removed_files, reclaimed_bytes
+
+
+def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bool = False) -> dict[str, Any]:
+    """收口时清理指定请求或整个项目的受管临时目录，返回实际回收空间。"""
+    if remove_all and request_id is not None:
+        raise TaskGraphError("cleanup-scratch accepts either --request-id or --all, not both")
+    if not remove_all and request_id is None:
+        raise TaskGraphError("cleanup-scratch requires --request-id <id> or --all")
+    base = _project_scratch_base(root)
+    container = base.parent
+    target = base if remove_all else base / _validated_scratch_slot(request_id)
+    if not target.exists() and not target.is_symlink():
+        return {
+            "cleaned": False,
+            "reclaimed_bytes": 0,
+            "removed_files": 0,
+            "target": str(target),
+        }
+    if target.is_symlink():
+        raise TaskGraphError(f"refusing to clean symlink target: {target}")
+    resolved_target = target.resolve(strict=True)
+    resolved_container = container.resolve(strict=True)
+    if not resolved_target.is_relative_to(resolved_container) or resolved_target == resolved_container:
+        raise TaskGraphError(f"scratch cleanup target escapes managed container: {target}")
+    removed_files, reclaimed_bytes = _remove_scratch_tree(target)
+    if not remove_all and base.exists() and not base.is_symlink():
+        try:
+            if not any(base.iterdir()):
+                base.rmdir()
+        except OSError:
+            pass
+    return {
+        "cleaned": True,
+        "reclaimed_bytes": reclaimed_bytes,
+        "removed_files": removed_files,
+        "target": str(target),
+    }
+

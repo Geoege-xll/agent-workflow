@@ -570,6 +570,7 @@ def _install_transaction(project: Path, source_root: Path) -> None:
         print(f"[完成] 项目运行时：{runtime}")
         if backup is not None:
             print(f"[备份] 上一版本保留在：{backup}")
+            _prune_runtime_backups(project, backup)
         print(
             "[完成] 可移除本次使用的原始 agent_workflow 安装包；"
             "项目内 .agent-workflow 必须保留。"
@@ -585,6 +586,31 @@ def _install_transaction(project: Path, source_root: Path) -> None:
                     _discard_windows_stage(stage, stage_inventory)
             else:
                 shutil.rmtree(stage)
+
+
+RUNTIME_BACKUP_NAME = re.compile(r"\.agent-workflow-backup-[0-9a-f]{12}")
+
+
+def _prune_runtime_backups(project: Path, keep: Path) -> None:
+    """升级验收通过后只保留最近一份旧运行时，避免每次升级累积完整副本。"""
+
+    # 仅匹配安装器自身生成的运行时备份；角色模型备份（-models-）由管理器维护，
+    # 失败版本（-failed-）留作诊断，二者都不在此处清理。符号链接及用户改动过的备份不删除。
+    for stale in project.iterdir():
+        if stale == keep or not RUNTIME_BACKUP_NAME.fullmatch(stale.name):
+            continue
+        if stale.is_symlink() or not stale.is_dir():
+            continue
+        try:
+            _validate_existing(stale)
+            if (stale / "project.yaml").is_symlink():
+                raise InstallError(f"受管备份不能包含符号链接配置：{stale / 'project.yaml'}")
+            shutil.rmtree(stale)
+        except (InstallError, OSError) as exc:
+            # 清理旧备份失败或检测到非受管改动时保留原目录，只提示用户手工核对。
+            print(f"[提示] 旧备份未能清理，已保留供人工核对：{stale}（{exc}）")
+        else:
+            print(f"[清理] 已移除更早的运行时备份：{stale.name}")
 
 
 def main() -> int:

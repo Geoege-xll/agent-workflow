@@ -14,10 +14,17 @@ business approval, QA stage, compulsory report, or requirement to create a snaps
   justify a temporary helper. Keep it task-scoped, reuse it during that task, and do not turn it
   into a default deliverable or an additional acceptance gate.
 - Internal records stay in the current resolved execution workspace, not the business source tree
-  or a new controlled-document layer. Reuse the current graph and available receipts. Do not create
-  a second task-state source, a receipt per step, or a new checkpoint script just to update metadata.
-- Assess cleanup only after the task and references are finished. Never delete active task files,
-  another Agent's temporary workspace, or evidence still needed for recovery/QA.
+  or a new controlled-document layer. Allocate the task scratch directory with `task_graph_cli.py
+  scratch --root <project-root> --request-id <request-id>` and reuse that single path in place across
+  retries, rework and QA rounds. Do not invent dated or random `/tmp/<project>-*` folders, clone source
+  trees (`work/`, `replay/`, `before/`, `packages-qa*`), or redirect global dependency/build caches
+  (`Maven`, `Gradle`, `npm`, `Cargo`, `DerivedData`) into task scratch directories. Reuse the current
+  graph and available receipts. Do not create a second task-state source, a receipt per step, or a new
+  checkpoint script just to update metadata.
+- Clean up the task's scratch workspace at closeout with `task_graph_cli.py cleanup-scratch` after
+  the task and references are finished, retaining only distilled evidence in the task record. Never
+  delete active task files, another Agent's temporary workspace, or evidence still needed while
+  implementation/QA is in flight.
 
 ## Update the current snapshot
 
@@ -124,3 +131,16 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
 
 Review the relevant original command, exit status, scope, native result and environment as before.
 Matching bytes alone never proves that a command ran, tests passed, the program runs, or QA passed.
+
+## Allocate and clean up the task scratch workspace
+
+Use `scratch` to resolve one deterministic scratch directory per project/request instead of creating
+ad-hoc `/tmp/<project>-<date>` folders, and `cleanup-scratch` at closeout to reclaim disk space:
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py scratch \
+  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}"
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py cleanup-scratch \
+  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}"
+```
+

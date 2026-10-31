@@ -145,14 +145,19 @@ USER_CHOICE_REF_RE = re.compile(r"user:[a-z0-9][a-z0-9._:/-]*\Z")
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate and evaluate a PM task graph JSON snapshot.")
-    parser.add_argument("command", choices=("validate", "ready", "qa-ready", "capacity", "update", "task", "fingerprints"))
+    parser.add_argument(
+        "command",
+        choices=("validate", "ready", "qa-ready", "capacity", "update", "task", "fingerprints", "scratch", "cleanup-scratch"),
+    )
     parser.add_argument("--input", type=Path, help="JSON file; omit to read UTF-8 JSON from stdin")
     parser.add_argument("--patch", help="update patch JSON file, or - for stdin")
     parser.add_argument("--expect-sha256", help="required old output fingerprint for writes; missing for new task output")
     parser.add_argument("--task-id", help="existing task to export")
     parser.add_argument("--output", type=Path, help="explicit task-pack output; never created by default")
-    parser.add_argument("--root", type=Path, help="explicit root for selected file fingerprints")
+    parser.add_argument("--root", type=Path, help="explicit root for selected file fingerprints or scratch workspace")
     parser.add_argument("--select", action="append", default=[], help="select an existing receipt fingerprint-map field")
+    parser.add_argument("--request-id", help="request identifier for deterministic scratch workspace allocation/cleanup")
+    parser.add_argument("--all", action="store_true", help="clean all managed scratch workspaces for the project root")
     return parser
 
 
@@ -1612,10 +1617,10 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        if args.command in {"update", "task", "fingerprints"}:
+        if args.command in {"update", "task", "fingerprints", "scratch", "cleanup-scratch"}:
             result = _record_command(args)
         else:
-            if any((args.patch, args.expect_sha256, args.task_id, args.output, args.root, args.select)):
+            if any((args.patch, args.expect_sha256, args.task_id, args.output, args.root, args.select, args.request_id, args.all)):
                 raise TaskGraphError("record-operation options do not apply to read-only queries")
             result = _execute(args.command, _read_payload(args.input))
     except (TaskGraphError, WorktreePolicyError, OSError, UnicodeError, ValueError) as exc:
@@ -1633,6 +1638,16 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         from . import task_graph_records as records
     else:
         import task_graph_records as records
+    if args.command == "scratch":
+        if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select, args.all)):
+            raise TaskGraphError("scratch requires --root and accepts only --request-id")
+        return records.scratch_workspace(args.root, args.request_id)
+    if args.command == "cleanup-scratch":
+        if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select)):
+            raise TaskGraphError("cleanup-scratch requires --root and accepts only --request-id or --all")
+        return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all)
+    if args.request_id or args.all:
+        raise TaskGraphError("--request-id and --all apply only to scratch and cleanup-scratch")
     body = records.read_record(args.input) if args.input else sys.stdin.buffer.read()
     payload = records.decode(body)
     if args.command == "fingerprints":
