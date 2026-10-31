@@ -173,6 +173,73 @@ def _validate_existing(runtime: Path) -> None:
         )
 
 
+def _backup_snapshot(root: Path) -> dict[str, dict]:
+    """记录完整备份的文件内容和 POSIX 权限位，包含项目配置及附加文件。"""
+    result: dict[str, dict] = {".": {"type": "directory", "mode": stat.S_IMODE(os.lstat(root).st_mode)}}
+
+    def identity(info):
+        # 内容读取不能掩盖并发替换、写入或权限变化；atime 的正常读取更新不参与判断。
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                info.st_ctime_ns, info.st_mode, info.st_nlink)
+
+    def visit(directory: Path) -> None:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = directory / entry.name
+                relative = path.relative_to(root).as_posix()
+                info = entry.stat(follow_symlinks=False)
+                mode = stat.S_IMODE(info.st_mode)
+                if stat.S_ISDIR(info.st_mode):
+                    result[relative] = {"type": "directory", "mode": mode}
+                    visit(path)
+                elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+                    with os.fdopen(descriptor, "rb") as stream:
+                        opened = os.fstat(stream.fileno())
+                        if (opened.st_dev, opened.st_ino, opened.st_nlink) != (info.st_dev, info.st_ino, 1):
+                            raise InstallError(f"备份文件读取前发生变化：{path}")
+                        hasher = hashlib.sha256()
+                        if relative == MANIFEST_NAME:
+                            # 只排除工具自身的快照字段以避免递归；用户附加字段及清单权限仍受保护。
+                            manifest = json.load(stream)
+                            if not isinstance(manifest, dict):
+                                raise InstallError("备份清单不是 JSON 对象")
+                            manifest.pop("backup_snapshot", None)
+                            canonical = json.dumps(manifest, ensure_ascii=False, sort_keys=True,
+                                                   separators=(",", ":")).encode("utf-8")
+                            hasher.update(canonical)
+                        else:
+                            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                                hasher.update(chunk)
+                        after = os.fstat(stream.fileno())
+                    current = os.lstat(path)
+                    if identity(info) != identity(after) or identity(info) != identity(current):
+                        raise InstallError(f"备份文件读取期间发生变化：{path}")
+                    result[relative] = {"type": "file", "mode": mode, "sha256": hasher.hexdigest()}
+                else:
+                    raise InstallError(f"备份包含链接或不支持的文件类型，已保留：{path}")
+
+    visit(root)
+    return result
+
+
+def _record_backup_snapshot(backup: Path, snapshot: dict | None = None) -> None:
+    """把创建时原始快照登记到备份清单，不能在以后清理时追认已修改的内容。"""
+    # Windows 暂停自动轮换，也不重写旧清单，保留其原有 DACL 和继承策略。
+    if os.name == "nt":
+        return
+    manifest_path = backup / MANIFEST_NAME
+    original = read_file(manifest_path)
+    if original is None:
+        raise InstallError(f"备份清单已消失：{manifest_path}")
+    manifest = json.loads(original)
+    if not isinstance(manifest, dict):
+        raise InstallError("备份清单不是 JSON 对象")
+    manifest["backup_snapshot"] = _backup_snapshot(backup) if snapshot is None else snapshot
+    body = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    atomic_write(manifest_path, body, stat.S_IMODE(manifest_path.stat().st_mode))
+
+
 def _windows_copy(source: Path, target: Path, identities: dict[Path, tuple[int, int]]) -> None:
     info = os.lstat(source)
     if stat.S_ISDIR(info.st_mode):
@@ -425,6 +492,7 @@ def _install_transaction(project: Path, source_root: Path) -> None:
     stage_inventory: dict[str, tuple[str, tuple[int, int]]] | None = None
     created_files: dict[Path, tuple[int, int]] = {}
     backup: Path | None = None
+    backup_snapshot: dict | None = None
     try:
         if os.name == "nt":
             _copy_runtime(source_root, stage, created_files)
@@ -494,6 +562,9 @@ def _install_transaction(project: Path, source_root: Path) -> None:
             # 两次目录发布也在事务异常边界内；取消不能留下只有 backup 的悬空项目。
             if backup is not None:
                 os.replace(runtime, backup)
+                # 先在内存固定创建时状态，暂不改旧清单；后续准备/安装失败仍能逐字节恢复旧版本。
+                if os.name != "nt":
+                    backup_snapshot = _backup_snapshot(backup)
             os.replace(stage, runtime)
             if backup is not None:
                 for host in ("claude", "codex", "antigravity"):
@@ -503,7 +574,7 @@ def _install_transaction(project: Path, source_root: Path) -> None:
             setup_started = True
             _run_setup(runtime, project)
             _run_setup(runtime, project, "--check")
-        except (subprocess.CalledProcessError, OSError, ValueError, KeyboardInterrupt) as exc:
+        except (InstallError, subprocess.CalledProcessError, OSError, ValueError, KeyboardInterrupt) as exc:
             runner = ACTIVE_RUNNER.get()
             if runner is not None:
                 runner.begin_recovery()
@@ -567,10 +638,20 @@ def _install_transaction(project: Path, source_root: Path) -> None:
                 "原始安装包尚不可删除。"
             ) from exc
 
+        # 至此新运行时已验收，后续只是备份维护，不能因登记失败或写后中断回滚已完成安装。
+        # 沿用创建时内存指纹，不追认安装期间的并发修改；失败则保留所有备份并跳过轮换。
+        recorded = True
+        if backup is not None:
+            try:
+                _record_backup_snapshot(backup, backup_snapshot)
+            except (InstallError, OSError, ValueError, KeyboardInterrupt):
+                recorded = False
+                print("[提示] 安装已验收，备份指纹登记未完成；旧备份已保留，本次跳过轮换。")
         print(f"[完成] 项目运行时：{runtime}")
         if backup is not None:
             print(f"[备份] 上一版本保留在：{backup}")
-            _prune_runtime_backups(project, backup)
+            if recorded:
+                _prune_runtime_backups(project, backup)
         print(
             "[完成] 可移除本次使用的原始 agent_workflow 安装包；"
             "项目内 .agent-workflow 必须保留。"
@@ -594,6 +675,11 @@ RUNTIME_BACKUP_NAME = re.compile(r"\.agent-workflow-backup-[0-9a-f]{12}")
 def _prune_runtime_backups(project: Path, keep: Path) -> None:
     """升级验收通过后只保留最近一份旧运行时，避免每次升级累积完整副本。"""
 
+    # Windows 的 stat mode 只反映只读属性，无法证明 DACL/继承权限没有变化。
+    # 在具备原生 ACL 指纹与验收前保守保留，不能把 POSIX 权限位比较当作 Windows 权限保障。
+    if os.name == "nt":
+        print("[提示] Windows 旧运行时备份已保留：尚未提供经原生验收的 ACL 权限指纹。")
+        return
     # 仅匹配安装器自身生成的运行时备份；角色模型备份（-models-）由管理器维护，
     # 失败版本（-failed-）留作诊断，二者都不在此处清理。符号链接及用户改动过的备份不删除。
     for stale in project.iterdir():
@@ -603,10 +689,16 @@ def _prune_runtime_backups(project: Path, keep: Path) -> None:
             continue
         try:
             _validate_existing(stale)
-            if (stale / "project.yaml").is_symlink():
-                raise InstallError(f"受管备份不能包含符号链接配置：{stale / 'project.yaml'}")
+            body = read_file(stale / MANIFEST_NAME)
+            if body is None:
+                raise InstallError("备份清单已消失")
+            manifest = json.loads(body)
+            expected = manifest.get("backup_snapshot")
+            # 历史备份缺少创建时证据，无法判断配置是否被修改；保留而不按当前状态补登记。
+            if not isinstance(expected, dict) or expected != _backup_snapshot(stale):
+                raise InstallError("备份缺少完整原始指纹或内容/权限已改变")
             shutil.rmtree(stale)
-        except (InstallError, OSError) as exc:
+        except (InstallError, OSError, ValueError) as exc:
             # 清理旧备份失败或检测到非受管改动时保留原目录，只提示用户手工核对。
             print(f"[提示] 旧备份未能清理，已保留供人工核对：{stale}（{exc}）")
         else:

@@ -79,6 +79,30 @@ and capable, then `internal-xy-qa-procedure`, moving forward only on technical u
 Superpowers fallback is its installed `requesting-code-review/code-reviewer.md` prompt. Findings or
 `FAIL` never switch review method or reviewer.
 
+### Background execution and recovery
+
+Current clients start main-conversation subagents in the background by default. Wait for their actual
+completion notifications before accepting results, releasing ownership, or entering dependent work;
+an Agent ID or an empty active panel is not completion evidence. Avoid busy polling or foreground
+sleep loops. Use native background waiting/monitoring only when available, without creating another
+supervisor Agent. Never alter fork/background settings merely to obtain foreground waiting.
+
+Keep the returned native Agent ID in the existing task handoff, and in an existing recovery plan only
+when needed. Use `SendMessage` to that verified ID for follow-ups and bounded QA rework; a completed
+agent resumes in the background without another Agent call. After restart, restore the same session
+and use the ID if its name no longer resolves. If the user cancelled the agent, respect cancellation;
+do not auto-resume it. A missing/expired ID is a recovery gap, not permission to invent a prior PASS.
+
+Conversation forks inherit the main session's history, tools and model. Use the named `xy-*` role
+definitions for production writers and the independent read-only `xy-qa`; do not substitute a fork
+for the QA role or infer its narrower tool permissions from its assigned task text. Only PM delegates.
+
+Role model/effort preferences remain configuration, not proof of the model that ran. An explicit
+`model: inherit` in a named role outranks the ordinary `CLAUDE_CODE_SUBAGENT_MODEL` default on 2.1.251+;
+the force option requires 2.1.257+ and can override the role. Global `CLAUDE_CODE_EFFORT_LEVEL` overrides role and invocation effort.
+`CLAUDE_CODE_SUBAGENT_EFFORT` is only a fallback when no higher effort is specified and requires
+2.1.316 or later. Do not edit user environment, model defaults or permissions to bypass these choices.
+
 For a required prototype, tooling recomputes its dependency fingerprint; QA reads only the exact
 contract and relevant source, never opening or automating the prototype. Prototype verification
 MUST NOT invoke Computer Use or browser automation by default. Only an explicit user request or
@@ -110,6 +134,17 @@ reuse unaffected completed evidence. Do not turn plan persistence into another c
 - Agents: `.claude/agents/xy-*.md`; required task/UI Skills are hard gates.
 
 Run `bash .agent-workflow/setup_claude.sh --check` to verify artifacts. Setup merges only signed
-assist Hook entries in project settings; user permissions, Auto Memory, plugins, MCP and agentmemory
+assist Hook entries in project settings; Auto Memory, plugins, MCP and agentmemory
 connection remain user-owned. Hooks remind at intake/recovery and Explore dispatch, never force QA
 or continuation. See `.agent-workflow/platforms/shared/HOOKS.md` only for Hook setup or diagnostics.
+
+可选 `claude_options.auto_compact_windows` 按角色生成原生 `autoCompactWindow`：要求
+2.1.296+、100000..1000000 完整整数，只降低继承窗口；全局窗口环境变量通常覆盖角色字段，
+作为 `--agent` 主会话时不适用。恢复指令仍走 SessionStart(compact)，不将压缩摘要当成
+批准、写入权或完成证据，也不为 PreCompact/PostCompact 增加重复注入或门禁。
+
+用户权限默认继承；只有显式选择
+`claude_options.block_writes_outside_working_directories: true` 才合并原生写入保护（2.1.314+），
+冲突时停止，保留其他权限。off/inherit 不撤销保护；它只约束 Write/Edit/NotebookEdit 的
+工作目录外路径，不覆盖 Bash，也不替代任务 owned_paths。实际 worktree 工作目录和原生
+执行效果应在目标会话核验。模型管理只改 model/effort，保留窗口与权限。

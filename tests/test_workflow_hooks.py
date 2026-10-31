@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import copy
 import json
 import os
@@ -82,6 +81,85 @@ class HookTest(unittest.TestCase):
         installer.process(self.pack, self.project, "claude", "apply")
         self.assertEqual(user, json.loads(path.read_text()))
 
+    def test_optional_write_guard_is_independent_of_hooks_and_never_disables_native_protection(self):
+        """Hooks 关闭仍可显式收紧权限；回到 inherit 及重复安装均不撤销原生保护。"""
+        config = self.pack / "project.yaml"
+        config.write_text("workflow_hooks:\n  mode: off\nclaude_options:\n  block_writes_outside_working_directories: true\n")
+        path, before, after = installer.plan_hooks(self.pack, self.project, "claude")
+        self.assertIsNone(before)
+        self.assertFalse(path.exists())
+        self.assertEqual({"permissions": {"blockWritesOutsideWorkingDirectories": True}}, json.loads(after))
+        installer.process(self.pack, self.project, "claude", "apply")
+        enabled = path.read_bytes()
+        installer.process(self.pack, self.project, "claude", "check")
+        config.write_text("workflow_hooks:\n  mode: off\nclaude_options:\n  block_writes_outside_working_directories: inherit\n")
+        installer.process(self.pack, self.project, "claude", "apply")
+        self.assertEqual(enabled, path.read_bytes())
+
+    def test_write_guard_preserves_user_permissions_and_refuses_project_or_local_conflicts(self):
+        """明确 false、错误容器都不能被覆盖；配置冲突时整个预检保持只读。"""
+        (self.pack / "project.yaml").write_text("claude_options:\n  block_writes_outside_working_directories: true\n")
+        target = self.project / ".claude/settings.json"
+        user = {"permissions": {"deny": ["Bash(rm *)"], "additionalDirectories": ["../approved"]}, "disableAllHooks": True}
+        target.write_text(json.dumps(user))
+        installer.process(self.pack, self.project, "claude", "apply")
+        merged = json.loads(target.read_bytes())
+        self.assertEqual(user["permissions"]["deny"], merged["permissions"]["deny"])
+        self.assertEqual(user["permissions"]["additionalDirectories"], merged["permissions"]["additionalDirectories"])
+        self.assertTrue(merged["disableAllHooks"])
+        for relative in ("settings.json", "settings.local.json"):
+            for permissions in ({"blockWritesOutsideWorkingDirectories": False}, {"blockWritesOutsideWorkingDirectories": "true"}, []):
+                file = target.parent / relative
+                saved = file.read_bytes() if file.exists() else None
+                file.write_text(json.dumps({"permissions": permissions}))
+                current = {p.name: p.read_bytes() for p in target.parent.glob("*.json")}
+                with self.subTest(relative=relative, permissions=permissions), self.assertRaises(ValueError):
+                    installer.process(self.pack, self.project, "claude", "preflight")
+                self.assertEqual(current, {p.name: p.read_bytes() for p in target.parent.glob("*.json")})
+                if saved is None:
+                    file.unlink()
+                else:
+                    file.write_bytes(saved)
+
+    def test_write_guard_uses_existing_byte_exact_upgrade_rollback(self):
+        """可选权限不创建第二份恢复机制；验收失败仍按原快照恢复用户字节和权限。"""
+        other = Path(self.temp.name).resolve() / "guard-upgrade-project"
+        other.mkdir()
+        # 初始与恢复 setup 使用无写入夹具；升级阶段实际调用受管设置合并器发布权限。
+        with patch.object(install_workflow, "_run_setup"):
+            install_workflow._install(other, PACK)
+        runtime = other / ".agent-workflow"
+        config = runtime / "project.yaml"
+        config.write_text(config.read_text().replace("block_writes_outside_working_directories: inherit", "block_writes_outside_working_directories: true"))
+        old_manifest = (runtime / ".install-manifest.json").read_bytes()
+        old_config = config.read_bytes()
+        path = other / ".claude/settings.json"
+        path.parent.mkdir()
+        before = b'{ "permissions": { "deny": ["Bash(rm *)"] } }\n'
+        path.write_bytes(before)
+        path.chmod(0o600)
+        published = False
+        failed = False
+
+        def setup(pack, project, *options):
+            nonlocal published, failed
+            if not options and not published:
+                installer.process(pack, project, "claude", "apply")
+                self.assertTrue(json.loads(path.read_bytes())["permissions"]["blockWritesOutsideWorkingDirectories"])
+                published = True
+            elif options == ("--check",) and not failed:
+                failed = True
+                raise install_workflow.InstallError("injected verification failure")
+
+        with patch.object(install_workflow, "_run_setup", side_effect=setup):
+            with self.assertRaises(install_workflow.InstallError):
+                install_workflow._install(other, PACK)
+        self.assertTrue(published and failed)
+        self.assertEqual(before, path.read_bytes())
+        self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+        self.assertEqual(old_config, config.read_bytes())
+        self.assertEqual(old_manifest, (runtime / ".install-manifest.json").read_bytes())
+
     def test_agy_user_hook_and_native_disabled_owned_entry_survive(self):
         path = self.project / ".agents/hooks.json"
         custom = {"custom": {"Stop": [{"command": "echo user"}], "enabled": False}}
@@ -95,6 +173,27 @@ class HookTest(unittest.TestCase):
         (self.pack / "project.yaml").write_text("workflow_hooks:\n  mode: off\n")
         installer.process(self.pack, self.project, "antigravity", "apply")
         self.assertEqual(custom, json.loads(path.read_text()))
+
+    def test_agy_upgrades_only_signed_legacy_event_and_preserves_disabled_state(self):
+        """原生事件升级只迁移本包有效签名，不能借迁移覆盖用户编辑或打开禁用条目。"""
+        legacy = installer.signed_group(self.pack, self.project, "antigravity", "PreInvocation", "")
+        user = {"user-hook": {"PreInvocation": [{"command": "echo keep"}]},
+                installer.OWNER: {"enabled": False, "PreInvocation": [legacy]}}
+        updated = installer.merge_json(user, self.pack, self.project, "antigravity", "assist")
+        self.assertEqual(user["user-hook"], updated["user-hook"])
+        self.assertEqual({"enabled", "SessionStart"}, set(updated[installer.OWNER]))
+        self.assertFalse(updated[installer.OWNER]["enabled"])
+        self.assertEqual(updated, installer.merge_json(updated, self.pack, self.project, "antigravity", "assist"))
+        for mutation in ("timeout", "unknown_event"):
+            altered = copy.deepcopy(user)
+            if mutation == "timeout":
+                altered[installer.OWNER]["PreInvocation"][0]["timeout"] = 99
+            else:
+                altered[installer.OWNER]["Stop"] = [{"command": "echo user"}]
+            before = copy.deepcopy(altered)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                installer.merge_json(altered, self.pack, self.project, "antigravity", "assist")
+            self.assertEqual(before, altered)
 
     def test_codex_inline_uses_same_source_preserving_user_toml_and_disabled_flag(self):
         path = self.project / ".codex/config.toml"
@@ -224,6 +323,10 @@ class HookTest(unittest.TestCase):
                 self.assertEqual(hooks.RECOVERY, data["hookSpecificOutput"]["additionalContext"])
             self.assertEqual({}, hooks.response(host, "SessionStart", self.payload(
                 host, hook_event_name="SessionStart", source="startup"), self.project))
+        fork = self.payload("codex", hook_event_name="SessionStart", source="fork")
+        self.assertEqual(hooks.RECOVERY, hooks.response("codex", "SessionStart", fork, self.project)
+                         ["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("fork", installer.EVENTS["codex"][0][1])
 
     def test_explore_progress_notice_is_conditional_and_does_not_block_other_agents(self):
         event = self.payload("claude", hook_event_name="PreToolUse", tool_name="Agent",
@@ -237,22 +340,17 @@ class HookTest(unittest.TestCase):
             event["tool_name"] = name
             self.assertEqual({}, hooks.response("claude", "PreToolUse", event, self.project))
 
-    def test_agy_once_per_workspace_session_with_atomic_parallel_dedup(self):
+    def test_agy_session_start_uses_native_lifecycle_without_cache_or_prompt_inspection(self):
+        """一次性由宿主事件保证，本工具不再依靠每轮模型调用及磁盘去重猜测会话启动。"""
         event = self.payload("antigravity")
-        cache = Path(self.temp.name) / "cache"
-        cache.mkdir()
-        with patch.object(hooks.tempfile, "gettempdir", return_value=str(cache)):
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                outputs = list(pool.map(lambda _: hooks.response("antigravity", "PreInvocation",
-                                            event, self.project), range(16)))
-            self.assertEqual(1, sum(bool(output) for output in outputs))
-            for number in (1, 5, 100, 0):
-                self.assertEqual({}, hooks.response("antigravity", "PreInvocation", event |
-                    {"invocationNum": number}, self.project))
-            next_session = event | {"conversationId": "different"}
-            self.assertTrue(hooks.response("antigravity", "PreInvocation", next_session, self.project))
-            marker_files = list(cache.rglob("*"))
-            self.assertTrue(all(path.stat().st_size == 0 for path in marker_files if path.is_file()))
+        before = {str(path) for path in Path(self.temp.name).rglob("*")}
+        result = hooks.response("antigravity", "SessionStart", event | {"userMessage": "SECRET"}, self.project)
+        self.assertEqual({"injectSteps": [{"ephemeralMessage": hooks.ENTRY}]}, result)
+        self.assertNotIn("SECRET", json.dumps(result))
+        for number in (1, 5, 100, 0):
+            self.assertEqual({}, hooks.response("antigravity", "PreInvocation", event |
+                                               {"invocationNum": number}, self.project))
+        self.assertEqual(before, {str(path) for path in Path(self.temp.name).rglob("*")})
 
     def test_wrong_workspace_missing_identity_and_multiroot_are_neutral(self):
         other = Path(self.temp.name) / "other"
@@ -262,9 +360,9 @@ class HookTest(unittest.TestCase):
             self.assertEqual({}, hooks.response(host, "UserPromptSubmit",
                              self.payload(host, cwd=str(other)), self.project))
         for paths in ([], [str(self.project), str(other)], [str(other)]):
-            self.assertEqual({}, hooks.response("antigravity", "PreInvocation",
+            self.assertEqual({}, hooks.response("antigravity", "SessionStart",
                 self.payload("antigravity", workspacePaths=paths), self.project))
-        self.assertEqual({}, hooks.response("antigravity", "PreInvocation",
+        self.assertEqual({}, hooks.response("antigravity", "SessionStart",
                 self.payload("antigravity", conversationId=None), self.project))
 
     def test_nested_cwd_and_worktrees_use_actual_root_not_nested_project(self):
@@ -436,7 +534,7 @@ class InstalledCallbackTest(unittest.TestCase):
                                    ("antigravity", ".agents/hooks.json")):
                 data = json.loads((project / relative).read_text())
                 if host == "antigravity":
-                    event = "PreInvocation"
+                    event = "SessionStart"
                     handler = data[hooks.OWNER][event][0]
                     payload = {"conversationId": str(uuid.uuid4()), "workspacePaths": [str(project)]}
                 else:

@@ -82,5 +82,7 @@ Trivial 继续使用主会话局部验证，不能为了应用本段补建独立
 - Before the final report, clean up task-owned temporary artifacts: run `task_graph_cli.py
   cleanup-scratch --root <project-root> --request-id <request-id>`, drop any task-created temporary
   test databases, containers or rolling pre-operation snapshots after verified changes are synced to
-  the single baseline, and keep only distilled evidence references in the task record. Report
+  the single baseline, and keep only distilled evidence references in the task record. First ensure
+  required complete logs have readable persistent references; preserve the necessary artifacts if
+  a plan, handoff or recovery reference still depends on their only copy in scratch. Report
   reclaimed temporary resources concisely when cleanup removed task artifacts.

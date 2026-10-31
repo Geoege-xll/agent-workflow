@@ -29,6 +29,11 @@ def parser() -> argparse.ArgumentParser:
     roles=commands.add_parser("roles",help="只读查看项目已安装角色的当前模型")
     roles.add_argument("--project",required=True)
     roles.add_argument("--platform",choices=service.LOCATIONS,required=True)
+    roles.add_argument("--effective",action="store_true",help="显示 Claude 具名角色的已知配置覆盖关系；不冒充运行时实测")
+    doctor=commands.add_parser("doctor",help="只读查看三宿主声明能力、配置与验证边界")
+    doctor.add_argument("--platform",choices=(*service.LOCATIONS,"all"),default="all")
+    doctor.add_argument("--project")
+    doctor.add_argument("--probe",action="store_true",help="显式执行宿主 --version；不登录、不调用模型、不修改配置")
     change=commands.add_parser("set",help="预览或应用一个角色的模型设置")
     change.add_argument("--project",required=True)
     change.add_argument("--platform",choices=service.LOCATIONS,required=True)
@@ -68,7 +73,23 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "models":
             print(json.dumps(discover(args.platform,project=project).as_dict(),ensure_ascii=False,indent=2))
         elif args.command == "roles":
-            print(json.dumps({role:service.role_settings(project,args.platform,role) for role in service.roles(project,args.platform)},ensure_ascii=False,indent=2))
+            values={role:service.role_settings(project,args.platform,role) for role in service.roles(project,args.platform)}
+            if args.effective:
+                if args.platform != "claude":raise ValueError("--effective 当前只解析 Claude 的具名非 fork 角色")
+                from .claude_execution import effective_role
+                from lib.claude_options import frontmatter_window
+                catalog=discover("claude",project=project)
+                if catalog.execution.get("status") != "projected":
+                    raise ValueError("Claude 配置来源读取失败，无法推导有效角色设置；请用 doctor 检查来源")
+                controls=catalog.execution["controls"]
+                # 诊断读取已安装原生角色；不将模型事务的可写范围扩展到窗口或权限字段。
+                values={role:effective_role(value,controls,frontmatter_window(service.read_file(service.role_path(project,"claude",role))))
+                        for role,value in values.items()}
+            print(json.dumps(values,ensure_ascii=False,indent=2))
+        elif args.command == "doctor":
+            from .capabilities import diagnose
+            hosts=service.LOCATIONS if args.platform == "all" else (args.platform,)
+            print(json.dumps([diagnose(host,project=project,probe=args.probe) for host in hosts],ensure_ascii=False,indent=2))
         elif args.command == "set":
             catalog=discover(args.platform,project=project)
             changes=service.prepare(project,args.platform,{args.role:{"model":args.model,"effort":args.effort}},catalog)

@@ -10,6 +10,7 @@ from pathlib import Path
 import tomllib
 
 from lib.role_models import EFFORTS, MODEL_ID
+from .claude_execution import project_controls, project_write_scope_guard
 
 
 @dataclass(frozen=True)
@@ -28,10 +29,11 @@ class Catalog:
     inactive: list[str] = field(default_factory=list)
     stamp: str = ""
     _inputs: list = field(default_factory=list, repr=False)
+    execution: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {"host":self.host,"models":[asdict(row) for row in self.models],
-                "notes":self.notes,"inactive":self.inactive}
+                "notes":self.notes,"inactive":self.inactive,"execution":self.execution}
 
 
 def clean(value: object, limit: int = 180) -> str:
@@ -135,6 +137,9 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict) -> Non
 def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> None:
     directory = Path(env.get("CLAUDE_CONFIG_DIR", home / ".claude")).expanduser()
     config = read_data(directory / "settings.json")
+    # 后面会更新合并用的 config，先固定此层 env/permissions，避免把项目值误标成用户来源。
+    execution_sources = [(str(directory / "settings.json"), {"env": config.get("env", {}),
+                                                           "permissions": config.get("permissions", {})})]
     layers={key:str((directory/"settings.json").absolute()) for key in ("model","modelPicker") if key in config}
     env_layers={key:str((directory/"settings.json").absolute()) for key in config.get("env",{})}
     effective_env = dict(config.get("env", {}))
@@ -146,6 +151,7 @@ def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> No
     if project:
         for name in ("settings.json", "settings.local.json"):
             local = read_data(project / ".claude" / name)
+            execution_sources.append((str(project / ".claude" / name), local))
             updates = local.get("env", {})
             if "ANTHROPIC_BASE_URL" in updates and updates["ANTHROPIC_BASE_URL"] != provider:
                 effective_env = {}; menu = {}; provider = updates["ANTHROPIC_BASE_URL"]; changed_provider = True
@@ -186,14 +192,22 @@ def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> No
                       "provider_layer":"environment" if "ANTHROPIC_BASE_URL" in env else env_layers.get("ANTHROPIC_BASE_URL"),
                       "current":current_model,"layers":layers,
                       "mapping":{key:value for key,value in effective_env.items() if key in selected_keys},
-                      "env_layers":{key:value for key,value in env_layers.items() if key in selected_keys},
-                      "forced_model":env.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE")})
+                      "env_layers":{key:value for key,value in env_layers.items() if key in selected_keys}})
     _append(catalog, current_model, current_model, "当前 Claude 配置 / 显式环境模型")
     if changed_provider:
         catalog.notes.append("提供方已切换，旧 model 偏好不作为新目录的可用性证据。")
     catalog.notes.append("代理菜单及别名来自本地配置；modelSettings 中的偏好不能证明支持的推理档位，未知时保留继承。")
-    if env.get("CLAUDE_CODE_SUBAGENT_MODEL_FORCE"):
-        catalog.notes.append("检测到宿主子 Agent 模型强制选项，角色模型可能由主会话覆盖。")
+    controls = project_controls(execution_sources, env)
+    catalog.execution = {"status": "projected", "controls": controls, "write_scope_guard": project_write_scope_guard(execution_sources),
+                         "runtime_verified": False}
+    # 只有模型/effort 覆盖变化影响来源校验；窗口、权限、fork/后台模式不会废弃模型草稿。
+    remember(catalog, {key: value for key, value in controls.items()
+                       if key in {"CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+                                  "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_SUBAGENT_EFFORT"}})
+    for key, entry in controls.items():
+        display = entry["value"] if entry["status"] == "configured" else "无效值（已隐藏）"
+        catalog.notes.append(f"{key} = {display} · {clean(entry['source'])}")
+    catalog.notes.append("以上为普通本地设置投影；组织策略、调用时覆盖及运行中会话值未核验。角色 model: inherit 高于普通子 Agent 默认模型。")
 
 
 def discover(host: str, home: Path | None = None, project: Path | None = None, env: dict | None = None) -> Catalog:
@@ -213,6 +227,11 @@ def discover(host: str, home: Path | None = None, project: Path | None = None, e
             raise ValueError("未知平台")
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         catalog.notes.append("模型来源读取失败：" + clean(str(exc)))
+        if host == "claude":
+            # 读取失败与“没有覆盖”是不同状态；不保留部分层结果以免输出确定的有效值。
+            catalog.execution = {"status": "unavailable", "controls": {}, "runtime_verified": False,
+                                 "write_scope_guard": {"status": "unknown", "value": None,
+                                                       "source": None, "runtime_verified": False}}
     # 仅持有摘要，供预览和发布前检测提供方、目录、身份与能力是否变化。
     material=[host,catalog._inputs,[{"id":row.id,"efforts":row.efforts} for row in catalog.models]]
     catalog.stamp=hashlib.sha256(json.dumps(material,sort_keys=True,default=str).encode()).hexdigest()

@@ -10,6 +10,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 
 from validate_project_config import validate_with_profile
+from profile_context import render_context
 
 
 ROLE_LOCATIONS = {
@@ -83,13 +84,19 @@ def render_preview(profile) -> str:
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     host = None
+    role = None
     if len(arguments) == 4 and arguments[0] == "check-roles" and arguments[1] in ROLE_LOCATIONS:
         mode, host, pack_raw, project_raw = arguments
+    elif len(arguments) == 4 and arguments[0] == "context":
+        # 沿用普通查询的路径参数位置，兼容 Windows 现有的显式路径转换合同。
+        # 此入口只复用发现结果并渲染，不执行候选命令，也不刷新任何宿主产物。
+        mode, pack_raw, project_raw, role = arguments
     elif len(arguments) == 3 and arguments[0] in {"preview", "roles", "json", "design-scaffold"}:
         mode, pack_raw, project_raw = arguments
     else:
         print(
             "usage: project_profile_cli.py preview|roles|json|design-scaffold PACK_DIR PROJECT_ROOT\n"
+            "       project_profile_cli.py context PACK_DIR PROJECT_ROOT ROLE\n"
             "       project_profile_cli.py check-roles codex|claude|antigravity PACK_DIR PROJECT_ROOT",
             file=sys.stderr,
         )
@@ -105,7 +112,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if mode == "check-roles":
         return check_roles(profile, project, host)
-    if mode == "preview":
+    if mode == "context":
+        try:
+            sys.stdout.write(render_context(profile, role))
+        except ValueError as exc:
+            print(f"[ERROR] cannot render ProjectProfile context: {exc}", file=sys.stderr)
+            return 1
+    elif mode == "preview":
         sys.stdout.write(render_preview(profile))
     elif mode == "roles":
         for role in profile.enabled_roles:

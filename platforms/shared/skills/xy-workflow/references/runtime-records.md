@@ -1,8 +1,8 @@
 # Reuse runtime record tools
 
-Use this reference only when maintaining the existing internal task snapshot, exporting a changed
-complete Task Pack, or generating/checking file fingerprints. It adds no task level, state,
-business approval, QA stage, compulsory report, or requirement to create a snapshot for Trivial work.
+仅在维护现有内部任务快照、导出变化后的完整 Task Pack、生成／核对文件指纹，或需要
+有界读取长文时使用本说明。它不增加任务等级、状态、业务确认、QA 阶段、强制报告，
+也不要求 Trivial 工作创建快照。
 
 ## Prefer the existing tool
 
@@ -24,7 +24,47 @@ business approval, QA stage, compulsory report, or requirement to create a snaps
 - Clean up the task's scratch workspace at closeout with `task_graph_cli.py cleanup-scratch` after
   the task and references are finished, retaining only distilled evidence in the task record. Never
   delete active task files, another Agent's temporary workspace, or evidence still needed while
-  implementation/QA is in flight.
+  implementation/QA is in flight. Before cleanup, ensure complete logs still referenced by a plan,
+  handoff or recovery path have a readable persistent reference, such as the original Agent chat.
+  A summary or a path into the directory being deleted is not a replacement for required full evidence;
+  retain the needed artifacts when no persistent reference exists.
+
+## 初始化任务图
+
+`init` 将 PM 已明确的精简决定机械组装为现有格式的新图；旧图仍使用 `update`，原有
+读取、查询与校验合同不变。输入必须给出 `request_id`、`capacity`、`standards` 和非空
+`tasks`，通过 `--input <file>` 或 stdin 提供。以下调用复用当前 scratch 中已准备好的
+决定文件，不另外建立第二份任务状态：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py init \
+  --root "${project_root:?set actual project root}" \
+  --input "${workflow_decisions:?use PM decisions JSON}" \
+  --output "${workflow_graph:?set new graph path}"
+```
+
+- `standards` 明示 `required_engineering_rule_ids`、`required_design_rule_ids`、
+  `leaves: [{path, domain, rule_ids}]` 及 `protected_paths`；保护项包含 `path`、`rule_id`、
+  `allowed_paths`，省略 `direct_edit` 时固定补 `forbidden_without_exception`，其他值拒绝。
+  PM 必须列明全部适用必需规则、叶和保护边界，不能只列一条示例规则或让工具猜测。
+- 默认从根内 `project.yaml` 读取规范索引／根目录；安装态顶层显式设置
+  `adapter_path: ".agent-workflow/project.yaml"`。源包等明确场景可在 `standards` 成对设置
+  `index_path`／`root`，此时不再提供 `adapter_path`。不扫描整个规范目录。
+- 每个 Writer 保留实际 `id`、`task_type`、`role`、`surface_kind`、`goal`、`gates`、
+  `owned_paths`、输入／输出合同、验收证据和 `verification_commands`，用
+  `selected_standards: [叶路径]` 明确该任务采用的已列叶。依赖、锁及其他适用业务字段
+  仍由 PM 提供；UI、保护路径例外和确认照常受原校验器约束。
+- 可选顶层 `requirements_fingerprint`、`approved_gates`、`active_paths`、
+  `active_semantic_locks` 只接收 PM 已建立的事实，后三者缺省为空，不推导批准。
+  工具机械补当前 SHA、规范访问引用、`standards-conformance`、`DECLARED`、请求级
+  QA 及空依赖／阻塞／锁默认值；规范访问中的逻辑 `adapter` 仍为 `project.yaml`。
+  不接收完成态、执行身份或回执来制造已完成工作。
+
+工具先复用原图／规范／READY 校验，再原子发布到明确的新文件；已存在的输出、非法
+授权、缺失规范覆盖、不安全路径或读取期间变化均失败且不发布。成功摘要为
+`initialized`、`path`、`sha256`、`task_count`，不返回整图。初始化已校验当前字节，
+无需紧接着重复 `validate`；需要派发时再查询 `ready`，QA 调度时仍单独查询 `qa-ready`。
+成功不代表任务已 READY、需求获批、验证通过或 QA PASS。
 
 ## Update the current snapshot
 
@@ -107,6 +147,46 @@ No pack or revision archive is created by default. A scope/contract change requi
 handoff under the plan lifecycle; a state-only change does not require rebuilding every Task Pack.
 Export preserves the recorded state; it never resets work, changes acceptance or messages a worker.
 
+接收方宿主可读取导出文件时，交接确切的完整文件引用、当前文件 SHA-256 和简短变化
+摘要；接收方核对版本并完整读取当前 Task Pack，不能用摘要或差量代替。宿主无法读取
+该文件时，仍通过支持的通道交付完整包。合同未变时，不仅为切换传输方式重新生成包。
+
+## 完整读取必需长文
+
+`context_read.py <file> [--offset <n>] [--limit <n>] [--expect-sha256 <sha>]` 是可选的标准库
+只读单文件分页器，不增加必跑命令、门禁、回执或读取记录。每位 Agent 独立完整读取
+其必需 Skill、指令和适用规范；同一 Agent 上下文中已完整读取、未变化且仍可用的
+内容可依既有重读规则复用。普通项目文档仍按任务相关标题或查询定位，不默认读取
+整个目录或业务秘密。
+
+JSON 包含 `text`、`sha256`、`offset`、`end_offset`、`next_offset`、`eof`、`total_chars` 和
+`total_bytes`。位置采用 Unicode 字符数，表示半开区间 `[offset, end_offset)`。默认
+`limit` 为 6000 字符、最多 24000 字符；它约束返回正文，不是精确 token 上限或总 JSON
+序列化体积，转义、元数据及各宿主 tokenizer 另有开销。为完整回包保留足够输出预算，
+否则降低 `--limit`。长文分开读取，每次工具回包只取一页。
+
+```bash
+# 首页：只指定当前必需的一个文件；安装态从项目根运行。
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/context_read.py \
+  .agents/skills/xy-workflow/SKILL.md --limit 6000
+# 续页：填入上一完整回包的 next_offset 与首次页 sha256，不猜测位置。
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/context_read.py \
+  .agents/skills/xy-workflow/SKILL.md --offset "${document_offset:?use previous next_offset}" \
+  --limit 6000 --expect-sha256 "${document_sha:?use first page sha256}"
+```
+
+Claude 使用实际 `.claude/skills/` 路径，其他宿主同样复用当前已知路径。严格按上一页
+`next_offset` 连续读取，直到 `eof: true` 且 `next_offset: null`。空文件或显式等于总字符
+数的位置返回空 EOF 页。使用全文前须补齐所有缺失或截断区间；文件指纹只证明字节／
+版本匹配，不能证明模型已读。
+
+每次调用都对完整原始字节计算 SHA，并严格解码 UTF-8、不归一化 CRLF，允许超长单行
+跨字符页。将各页解码后的 `text` 按顺序拼接可还原原始 UTF-8 字节。所有 `offset > 0`
+均要求首次页的 `--expect-sha256`；正文变化时拒绝续读，须从 offset 0 重读。沿用安全
+读取器的 4 MiB 输入上限，拒绝符号链接、硬链接、FIFO 等特殊节点、不安全父目录、
+非法 UTF-8、不完整／变化中的读取、非法预算与越界位置。退出 0 返回一页；退出 2 在
+stderr 报告输入或读取错误，不回显正文。工具不写读取缓存或状态。
+
 ## Generate or check selected fingerprints
 
 `fingerprints --root <actual-root> [--input <manifest-or-receipt>]` reads JSON from the file or stdin:
@@ -136,6 +216,15 @@ Matching bytes alone never proves that a command ran, tests passed, the program 
 
 Use `scratch` to resolve one deterministic scratch directory per project/request instead of creating
 ad-hoc `/tmp/<project>-<date>` folders, and `cleanup-scratch` at closeout to reclaim disk space:
+
+Request IDs retain the task graph's non-empty string contract, including Unicode and punctuation.
+The directory name uses the full ID's SHA-256, keeping case-distinct requests separate even on a
+case-insensitive filesystem; the returned `request_id` remains the original logical ID. The new
+`agent-workflow-request-scratch` container is separate from legacy `agent-workflow-scratch`; legacy
+directories are not adopted or automatically deleted, even when an old ID looks like a new hash name.
+Cleanup retains the empty project scratch root to avoid removing an unpinned parent path after closing
+its descriptor. Directories that cannot be opened safely, including those without read/search access,
+are preserved with an error; do not fall back to changing permissions through an unchecked path.
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py scratch \

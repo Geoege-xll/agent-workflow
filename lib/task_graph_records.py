@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import copy
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 if __package__:
@@ -353,16 +353,10 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
     return result
 
 
-SCRATCH_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-SCRATCH_ROOT_NAME = "agent-workflow-scratch"
-SCRATCH_RESERVED_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{i}" for i in range(1, 10)),
-    *(f"LPT{i}" for i in range(1, 10)),
-}
+# 使用独立容器完成命名升级：旧版原始 ID 也可能恰好长得像哈希名，不能靠正则区分归属。
+# 旧 agent-workflow-scratch 容器整体留待原任务或人工核对，不参与新版分配和清理。
+SCRATCH_ROOT_NAME = "agent-workflow-request-scratch"
+SCRATCH_SLOT_RE = re.compile(r"request-[0-9a-f]{64}\Z")
 
 
 def _project_scratch_base(root: Path) -> Path:
@@ -386,71 +380,98 @@ def _project_scratch_base(root: Path) -> Path:
 
 
 def _validated_scratch_slot(request_id: str | None) -> str:
-    slot = "shared" if request_id is None else request_id
-    if not isinstance(slot, str) or not SCRATCH_ID_RE.fullmatch(slot) or slot in {".", ".."}:
+    """逻辑 ID 沿用任务图的非空字符串合同，磁盘名称只使用其完整字节摘要。"""
+    logical_id = "shared" if request_id is None else request_id
+    if not isinstance(logical_id, str) or not logical_id.strip():
         raise TaskGraphError(f"invalid scratch request_id: {request_id!r}")
-    if slot.partition(".")[0].upper() in SCRATCH_RESERVED_NAMES:
-        raise TaskGraphError(f"invalid scratch request_id: {request_id!r}")
-    return slot
+    # 不把用户 ID 当路径片段；中文、斜杠、设备保留名及长 ID 均可安全映射。
+    # 摘要保留大小写差异，避免 macOS/Windows 上两个逻辑请求共用同一目录。
+    return "request-" + hashlib.sha256(logical_id.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _scratch_directory(name, *, parent: int | None = None, create: bool = False):
+    """相对已打开的父目录创建/打开子目录；不提供跟随链接的降级路径。"""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    if create:
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+    descriptor = os.open(name, flags, dir_fd=parent)
+    try:
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def _scratch_base_directory(base: Path, *, create: bool = False):
+    """从文件系统根逐层固定临时根及受管目录，避免父路径被替换后越界。"""
+    temp_root = base.parent.parent
+    with ExitStack() as stack:
+        descriptor = stack.enter_context(_scratch_directory(temp_root.anchor))
+        for part in temp_root.parts[1:]:
+            descriptor = stack.enter_context(_scratch_directory(part, parent=descriptor))
+        descriptor = stack.enter_context(_scratch_directory(base.parent.name, parent=descriptor, create=create))
+        descriptor = stack.enter_context(_scratch_directory(base.name, parent=descriptor, create=create))
+        yield descriptor
 
 
 def scratch_workspace(root: Path, request_id: str | None = None) -> dict[str, Any]:
     """返回并按需创建项目的固定任务临时目录，同一请求重试与 QA 原地复用。"""
     base = _project_scratch_base(root)
     slot = _validated_scratch_slot(request_id)
-    container = base.parent
-    container.mkdir(mode=0o700, exist_ok=True)
-    if container.is_symlink() or not container.is_dir():
-        raise TaskGraphError(f"invalid scratch container: {container}")
-    base.mkdir(mode=0o700, exist_ok=True)
-    if base.is_symlink() or not base.is_dir():
-        raise TaskGraphError(f"invalid project scratch base: {base}")
     target = base / slot
-    if target.is_symlink():
-        raise TaskGraphError(f"scratch target must not be a symlink: {target}")
-    existed = target.exists()
-    target.mkdir(mode=0o700, exist_ok=True)
-    if not target.is_symlink() and target.is_dir():
+    with _scratch_base_directory(base, create=True) as parent:
         try:
-            target.chmod(0o700)
-        except OSError:
-            pass
-    if not target.is_dir():
-        raise TaskGraphError(f"scratch target is not a directory: {target}")
+            os.mkdir(slot, 0o700, dir_fd=parent)
+            existed = False
+        except FileExistsError:
+            existed = True
+        with _scratch_directory(slot, parent=parent) as descriptor:
+            # POSIX 只修改已打开的目录身份；Windows 复用固定祖先句柄的显式后端。
+            if os.name == "nt":
+                os.chmod(slot, 0o700, dir_fd=parent, follow_symlinks=False)
+            else:
+                os.fchmod(descriptor, 0o700)
     return {
         "project_scratch_root": str(base),
-        "request_id": slot,
+        "request_id": "shared" if request_id is None else request_id,
         "reused": existed,
         "scratch_dir": str(target),
     }
 
 
-def _remove_scratch_tree(target: Path) -> tuple[int, int]:
-    """安全删除受管临时目录树，不跟随符号链接，并统计回收文件数与字节数。"""
+def _remove_scratch_tree(parent: int, name: str) -> tuple[int, int]:
+    """沿目录描述符递归清理，检查和打开之间发生链接替换时停止而不跟随。"""
     removed_files = 0
     reclaimed_bytes = 0
-    info = target.lstat()
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
     if stat.S_ISLNK(info.st_mode):
-        target.unlink()
+        # POSIX unlink 只移除链接本身；Windows 后端对重解析点拒绝操作并保留现场。
+        os.unlink(name, dir_fd=parent)
         return 1, 0
     if not stat.S_ISDIR(info.st_mode):
         reclaimed_bytes += info.st_size
-        try:
-            target.unlink()
-        except PermissionError:
-            target.chmod(stat.S_IMODE(info.st_mode) | 0o200)
-            target.unlink()
+        # 不为删除而 chmod 文件：硬链接可能与临时目录外的原文件共用权限。
+        os.unlink(name, dir_fd=parent)
         return 1, reclaimed_bytes
-    if (stat.S_IMODE(info.st_mode) & 0o700) != 0o700:
-        try:
-            target.chmod(stat.S_IMODE(info.st_mode) | 0o700)
-        except OSError:
-            pass
-    for child in list(target.iterdir()):
-        files, size = _remove_scratch_tree(child)
-        removed_files += files
-        reclaimed_bytes += size
-    target.rmdir()
+    with _scratch_directory(name, parent=parent) as descriptor:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise TaskGraphError(f"scratch directory changed while opening: {name}")
+        if os.name != "nt" and (stat.S_IMODE(opened.st_mode) & 0o700) != 0o700:
+            os.fchmod(descriptor, stat.S_IMODE(opened.st_mode) | 0o700)
+        for child in os.listdir(descriptor):
+            files, size = _remove_scratch_tree(descriptor, child)
+            removed_files += files
+            reclaimed_bytes += size
+        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+            raise TaskGraphError(f"scratch directory changed while cleaning: {name}")
+    # Windows 的目录句柄不共享删除权限，故先释放子句柄，再相对仍固定的父目录删除。
+    os.rmdir(name, dir_fd=parent)
     return removed_files, reclaimed_bytes
 
 
@@ -461,28 +482,35 @@ def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bo
     if not remove_all and request_id is None:
         raise TaskGraphError("cleanup-scratch requires --request-id <id> or --all")
     base = _project_scratch_base(root)
-    container = base.parent
     target = base if remove_all else base / _validated_scratch_slot(request_id)
-    if not target.exists() and not target.is_symlink():
-        return {
-            "cleaned": False,
-            "reclaimed_bytes": 0,
-            "removed_files": 0,
-            "target": str(target),
-        }
-    if target.is_symlink():
-        raise TaskGraphError(f"refusing to clean symlink target: {target}")
-    resolved_target = target.resolve(strict=True)
-    resolved_container = container.resolve(strict=True)
-    if not resolved_target.is_relative_to(resolved_container) or resolved_target == resolved_container:
-        raise TaskGraphError(f"scratch cleanup target escapes managed container: {target}")
-    removed_files, reclaimed_bytes = _remove_scratch_tree(target)
-    if not remove_all and base.exists() and not base.is_symlink():
+    with ExitStack() as stack:
+        # --all 同样逐个清理项目根内的子项，项目根始终由打开的描述符固定。
+        # 保留空项目根可避免关闭最后一个句柄后再按路径清理所产生的新竞态。
         try:
-            if not any(base.iterdir()):
-                base.rmdir()
-        except OSError:
-            pass
+            parent = stack.enter_context(_scratch_base_directory(base))
+            if not remove_all:
+                info = os.stat(target.name, dir_fd=parent, follow_symlinks=False)
+                if not stat.S_ISDIR(info.st_mode):
+                    raise TaskGraphError(f"scratch cleanup target must be a directory, not a link: {target}")
+        except FileNotFoundError:
+            return {
+                "cleaned": False,
+                "reclaimed_bytes": 0,
+                "removed_files": 0,
+                "target": str(target),
+            }
+        # 只把开始前不存在的任务目录视作幂等空操作；递归中断应报告错误，不能伪报未清理。
+        if remove_all:
+            removed_files = reclaimed_bytes = 0
+            for name in os.listdir(parent):
+                # 新容器中也只处理本工具生成的槽名，不扩大到人工放入的其他目录。
+                if not SCRATCH_SLOT_RE.fullmatch(name):
+                    continue
+                files, size = _remove_scratch_tree(parent, name)
+                removed_files += files
+                reclaimed_bytes += size
+        else:
+            removed_files, reclaimed_bytes = _remove_scratch_tree(parent, target.name)
     return {
         "cleaned": True,
         "reclaimed_bytes": reclaimed_bytes,

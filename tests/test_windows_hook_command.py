@@ -280,6 +280,8 @@ class WindowsHookOwnershipTest(unittest.TestCase):
             merged = installer.merge_json(user, PACK, PROJECT, "antigravity", "assist")
             removed = installer.merge_json(merged, PACK, PROJECT, "antigravity", "off")
         self.assertFalse(merged[installer.OWNER]["enabled"])
+        self.assertIn("SessionStart", merged[installer.OWNER])
+        self.assertNotIn("PreInvocation", merged[installer.OWNER])
         self.assertEqual({"user-hook": user["user-hook"]}, removed)
 
 
@@ -378,7 +380,7 @@ class NativeWindowsHookProtocolTest(unittest.TestCase):
         with patch.dict(os.environ, {"AGENT_WORKFLOW_BOOTSTRAP": str(bootstrap)}):
             for shell in ("cmd", "powershell", "git-bash"):
                 for host in installer.EVENTS:
-                    event = "PreInvocation" if host == "antigravity" else "UserPromptSubmit"
+                    event = "SessionStart" if host == "antigravity" else "UserPromptSubmit"
                     group = installer.signed_group(runtime, self.root, host, event, "")
                     command = group.get("hooks", [group])[0]["command"]
                     self.assertTrue(installer.owned_group(group))

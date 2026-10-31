@@ -153,6 +153,8 @@ render_claude_agent() {
     echo "description: ${desc_yaml}"
     # 模型偏好仅生成宿主支持的字段；不改权限、技能或角色正文。
     python3 "${PACK_DIR}/lib/role_models.py" "${PACK_DIR}" claude "${role}" || return 1
+    # 压缩窗口独立于模型偏好；必须输出完整整数，不能让宿主把 200k 误读成 200。
+    python3 "${PACK_DIR}/lib/claude_options.py" "${PACK_DIR}" "${role}" || return 1
     echo "tools: ${tools}"
     [[ -n "${disallowed}" ]] && echo "disallowedTools: ${disallowed}"
     # Keep project Custom Agents inside the caller's normal permission prompts.
@@ -585,7 +587,7 @@ log_ok "AGENTS.md Claude managed block + CLAUDE.md thin entry"
 sync_claude_skills
 write_claude_agents
 
-# 只合并可证明归属的辅助 Hooks；已有权限、Auto Memory、用户 Hooks 均不接管。
+# 只合并可证明归属的 Hooks 和显式选择的写入保护；其余权限、Auto Memory、用户 Hooks 保留。
 python3 "${PACK_DIR}/lib/workflow_hook_install.py" apply "${PACK_DIR}" "${PROJECT_ROOT}" claude
 
 echo -e "${GREEN}${BOLD}✅ Claude setup complete${NC}"

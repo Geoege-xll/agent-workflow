@@ -97,6 +97,117 @@ class ProjectNameInstallationTest(unittest.TestCase):
             ]
             self.assertEqual(2, len(remaining))
 
+    def test_backup_config_edits_and_permission_changes_survive_next_upgrade(self) -> None:
+        """项目配置不受升级清单约束，但它的后续修改必须阻止整份备份被轮换删除。"""
+        for change in ("content", "permissions"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory(prefix="workflow-backup-config-") as raw:
+                project = Path(raw).resolve() / "project"
+                project.mkdir()
+                with patch.object(install_workflow, "_run_setup"):
+                    install_workflow._install(project, PACK)
+                    install_workflow._install(project, PACK)
+                    backup = next(project.glob(".agent-workflow-backup-*"))
+                    config = backup / "project.yaml"
+                    if change == "content":
+                        config.write_bytes(b"project_name: unique-recovery-config\n")
+                    else:
+                        config.chmod(0o600 if stat.S_IMODE(config.stat().st_mode) != 0o600 else 0o640)
+                    expected_body = config.read_bytes()
+                    expected_mode = stat.S_IMODE(config.stat().st_mode)
+                    install_workflow._install(project, PACK)
+                self.assertTrue(backup.is_dir())
+                self.assertEqual(expected_body, config.read_bytes())
+                self.assertEqual(expected_mode, stat.S_IMODE(config.stat().st_mode))
+
+    def test_legacy_backup_without_creation_snapshot_is_preserved(self) -> None:
+        """历史备份没有原始配置指纹，不能在清理时追认其当前内容为安全基线。"""
+        with tempfile.TemporaryDirectory(prefix="workflow-backup-legacy-") as raw:
+            project = Path(raw).resolve() / "project"
+            project.mkdir()
+            with patch.object(install_workflow, "_run_setup"):
+                install_workflow._install(project, PACK)
+                install_workflow._install(project, PACK)
+                backup = next(project.glob(".agent-workflow-backup-*"))
+                manifest_path = backup / install_workflow.MANIFEST_NAME
+                manifest = json.loads(manifest_path.read_bytes())
+                del manifest["backup_snapshot"]
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                (backup / "project.yaml").write_bytes(b"project_name: legacy-recovery-config\n")
+                install_workflow._install(project, PACK)
+            self.assertTrue(backup.is_dir())
+            self.assertEqual(b"project_name: legacy-recovery-config\n", (backup / "project.yaml").read_bytes())
+
+    def test_manifest_user_fields_and_permission_changes_preserve_backup(self) -> None:
+        """清单只排除自身快照字段，不能连用户恢复备注和清单权限也一并忽略。"""
+        for change in ("user_field", "permissions"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory(prefix="workflow-backup-manifest-") as raw:
+                project = Path(raw).resolve() / "project"
+                project.mkdir()
+                with patch.object(install_workflow, "_run_setup"):
+                    install_workflow._install(project, PACK)
+                    install_workflow._install(project, PACK)
+                    backup = next(project.glob(".agent-workflow-backup-*"))
+                    manifest_path = backup / install_workflow.MANIFEST_NAME
+                    if change == "user_field":
+                        manifest = json.loads(manifest_path.read_bytes())
+                        manifest["user_recovery_note"] = "保留这份恢复依据"
+                        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                    else:
+                        manifest_path.chmod(0o600 if stat.S_IMODE(manifest_path.stat().st_mode) != 0o600 else 0o640)
+                    expected_body = manifest_path.read_bytes()
+                    expected_mode = stat.S_IMODE(manifest_path.stat().st_mode)
+                    install_workflow._install(project, PACK)
+                self.assertTrue(backup.is_dir())
+                self.assertEqual(expected_body, manifest_path.read_bytes())
+                self.assertEqual(expected_mode, stat.S_IMODE(manifest_path.stat().st_mode))
+
+    def test_windows_backup_rotation_waits_for_native_acl_evidence(self) -> None:
+        """模拟平台选择只验证保守分支，不能把此测试当成原生 Windows ACL 验收。"""
+        with tempfile.TemporaryDirectory(prefix="workflow-backup-acl-") as raw:
+            project = Path(raw).resolve()
+            backup = project / ".agent-workflow-backup-0123456789ab"
+            backup.mkdir()
+            note = backup / "recovery.txt"
+            note.write_bytes(b"keep until ACL verification exists")
+            manifest_path = backup / install_workflow.MANIFEST_NAME
+            manifest_path.write_bytes(b"original manifest and permissions stay untouched")
+            with patch.object(install_workflow.os, "name", "nt"):
+                install_workflow._record_backup_snapshot(backup)
+                install_workflow._prune_runtime_backups(project, project / ".agent-workflow-backup-111111111111")
+            self.assertEqual(b"keep until ACL verification exists", note.read_bytes())
+            self.assertEqual(b"original manifest and permissions stay untouched", manifest_path.read_bytes())
+
+    def test_failed_backup_record_before_or_after_write_keeps_verified_installation(self) -> None:
+        """验收后的维护失败不回滚新版本；写后取消也不能把带新快照的旧目录搬回运行时。"""
+        recorder = install_workflow._record_backup_snapshot
+        for after_write in (False, True):
+            with self.subTest(after_write=after_write), tempfile.TemporaryDirectory(prefix="workflow-backup-failure-") as raw:
+                project = Path(raw).resolve() / "project"
+                project.mkdir()
+                with patch.object(install_workflow, "_run_setup"):
+                    install_workflow._install(project, PACK)
+                runtime = project / ".agent-workflow"
+                original_inode = runtime.stat().st_ino
+                original_manifest = (runtime / install_workflow.MANIFEST_NAME).read_bytes()
+
+                def fail_record(backup, snapshot):
+                    if after_write:
+                        recorder(backup, snapshot)
+                        raise KeyboardInterrupt()
+                    raise OSError("cannot record backup")
+
+                with patch.object(install_workflow, "_run_setup") as setup, \
+                        patch.object(install_workflow, "_record_backup_snapshot", side_effect=fail_record), \
+                        patch.object(install_workflow, "_prune_runtime_backups") as prune:
+                    install_workflow._install(project, PACK)
+                self.assertEqual(3, setup.call_count)  # 预检、发布、验收，没有旧版本恢复重建。
+                prune.assert_not_called()
+                self.assertNotEqual(original_inode, runtime.stat().st_ino)
+                self.assertEqual(original_manifest, (runtime / install_workflow.MANIFEST_NAME).read_bytes())
+                backup = next(project.glob(".agent-workflow-backup-*"))
+                self.assertTrue((backup / "project.yaml").is_file())
+                self.assertEqual([], list(project.glob(".agent-workflow-failed-*")))
+
     def test_special_directory_names_round_trip_through_both_doc_readers(self) -> None:
         names = ("中文 项目", 'Owner\'s "App" #1', r"Project & {{DATE}} | \\ Demo", "Project ")
         for name in names:

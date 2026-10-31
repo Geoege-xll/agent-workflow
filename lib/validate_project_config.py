@@ -461,6 +461,15 @@ def validate_with_profile(
         parse_role_models(text)
     except ValueError as exc:
         errors.append(str(exc))
+    # 可选宿主能力和模型字段各自有界；三宿主预检使用同一合同，拒绝静默忽略错配。
+    try:
+        if __package__:
+            from .claude_options import parse as parse_claude_options
+        else:
+            from claude_options import parse as parse_claude_options
+        parse_claude_options(text)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     top_level_keys: dict[str, int] = {}
     for key, _ in _top_level_entries(lines):

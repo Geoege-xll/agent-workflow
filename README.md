@@ -152,6 +152,11 @@ TUI 后台显示实际任务名称、活动指示和已用时间，不显示虚�
 awf-cli projects add /path/to/project
 awf-cli models --platform codex --project /path/to/project
 awf-cli roles --platform codex --project /path/to/project
+# Claude 已知配置覆盖关系；保留配置值与来源，不冒充实际会话运行结果。
+awf-cli roles --platform claude --project /path/to/project --effective
+# 默认只读配置，不启动宿主；--probe 才显式执行固定的 --version 查询。
+awf-cli doctor --project /path/to/project
+awf-cli doctor --platform claude --project /path/to/project --probe
 # 默认仅预览；确认后添加 --apply。
 awf-cli set --project /path/to/project --platform codex \
   --role xy-backend --model your-local-model --effort high
@@ -164,6 +169,50 @@ awf-cli restore --project /path/to/project BACKUP_ID
 `manager/` 与 `workflow.sh` 仅属于管理工具，不复制进每个项目运行时。
 删除原安装包后，项目内 `.agent-workflow/` 仍可独立工作；继续使用 TUI 则需保留一份中央源包。
 管理器不会自动同步项目、提交、合并、推送或修改全局宿主设置。
+
+`doctor` 区分官方文档能力、源包目标事件、当前可见配置与显式探测到的版本；不根据版本号
+推定 Hook 已获信任、事件已经触发或模型实际可用。最低支持版本没有官方依据时保留未知。
+默认诊断不执行宿主；`--probe` 只运行 `codex/claude/agy --version`，不登录、不更新、不调用模型，
+不回显宿主原始 stdout/stderr。宿主程序自身仍可能产生启动缓存，CLI 版本也不代表 App/IDE 版本。
+
+Claude 来源页及 `roles --effective` 白名单投影模型强制覆盖、全局 effort 与子 Agent 默认 effort，
+隐藏无效值和非相关环境变量。普通本地会话通常由设置文件 env 覆盖 shell 的同名值；
+组织策略、`--settings`、调用参数、运行中会话和特殊 env 处理不在本地推导范围内。
+具名角色模型优先级按 Claude Code 2.1.251+ 合同解释，强制模型覆盖要求 2.1.257+；
+角色显式 `model: inherit` 仍高于普通子 Agent 默认模型；默认 effort 要求 2.1.316+，
+不会因为配置里出现该变量就认定旧客户端支持。fork/后台模式的变化不使模型草稿失效。
+
+Claude 可选能力独立放在安装源或项目 `.agent-workflow/project.yaml` 的 `claude_options`，
+不扩展模型管理器的可写字段；默认空窗口表和 `inherit` 都保持宿主原有选择。例如：
+
+```yaml
+claude_options:
+  auto_compact_windows: {"xy-qa": 200000, "xy-backend": 300000}
+  block_writes_outside_working_directories: true
+```
+
+修改后运行 `bash .agent-workflow/setup_claude.sh`，再用 `--check` 检查生成一致性。
+角色窗口要求 Claude Code 2.1.296+，只接受 100000..1000000 的完整整数，角色字段不能写
+`200k`。它仅能降低原本继承的窗口，作为 `--agent` 主会话角色时不生效；全局
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 通常优先（环境变量缩写要求 2.1.304+）。
+`roles --effective` 显示请求值、来源及未知的实际窗口；不会把字段存在当成真实压缩验收。
+窗口、后台模式及写入保护变化都不会无故废弃模型草稿。
+
+写入保护需要 Claude Code 2.1.314+，启用时只合并
+`permissions.blockWritesOutsideWorkingDirectories: true`，保留其他权限和用户 Hooks。
+项目或 local 层已有 false/无效值时预检停止并保留文件。该设置独立于 Hooks 开关：
+`workflow_hooks.mode: off` 不会关闭它；回到 `inherit` 也不会撤销已启用的原生保护，
+如需关闭请直接管理原生设置。本包不写 false、不修改全局权限、不自动增加工作目录。
+它约束 Write/Edit/NotebookEdit 的工作目录外路径，不覆盖 Bash，也不等同于每个任务的
+`owned_paths`；隔离 worktree 的实际工作目录仍需在目标会话核验。`doctor` 只报告当前可见
+配置及版本门槛；managed/调用时设置、实际工作目录和运行中行为保留未验证状态。
+
+压缩恢复继续复用 `SessionStart(compact)`；不增加 PreCompact/PostCompact 日志、门禁或
+重复恢复注入。Claude 的这两个事件会忽略恢复指令所需的上下文输出；Codex 的压缩事件
+也不能用普通 stdout 文本替代原生恢复入口。详见 [Hooks 边界](platforms/shared/HOOKS.md)、
+[Claude 窗口合同](https://code.claude.com/docs/en/sub-agents#auto-compaction)、
+[环境变量合同](https://code.claude.com/docs/en/env-vars)、
+[写入保护发布记录](https://code.claude.com/docs/en/changelog#21314)。
 
 宿主模型字段依据：[Codex 子 Agent](https://learn.chatgpt.com/docs/agent-configuration/subagents)、
 [Claude Code 子 Agent](https://code.claude.com/docs/en/sub-agents)、
@@ -206,6 +255,11 @@ bash /path/to/agent_workflow/install.sh
 **项目内的 `.agent-workflow/` 不能删除**。安装器不会代替用户删除原包。
 以后取得新版安装包时，运行新版的 `install.sh` 并选择同一项目即可升级：项目专属 `project.yaml` 保留，上一版隐藏运行时
 留在 `.agent-workflow-backup-*` 供恢复；受管运行时被手工修改时，升级会停止而不覆盖。
+升级验收通过后仅自动轮换具有创建时文件内容及 POSIX 权限位（mode）指纹且核对一致的旧运行时备份，保留最近一份。
+指纹包含项目自有的 `project.yaml`、清单中的附加字段及附加文件；内容／mode 改变或缺少原始指纹的历史备份保留并提示人工核对。
+该指纹不覆盖扩展 ACL、所有者及 xattr；依赖这些元数据保留恢复状态时，应另行保留所需备份。
+Windows 尚无经过原生验收的 ACL 权限指纹，旧运行时备份暂不自动轮换删除，并明确提示保留原因。
+指纹登记属于新运行时验收后的维护：登记失败或取消会保留旧备份并跳过轮换，不回滚已经验收的安装。
 首次安装或升级时，若 `project_name` 仍是默认占位名 `MyProject`，安装器会在暂存配置中将其替换为目标项目根目录名
 （例如 `/path/to/ParentsKit` → `ParentsKit`），保留原大小写、中文和空格；已明确配置的其他名称保持不变。
 名称初始化不修改源包配置或已有的 `memory.project_id`；新生成的文档使用真实名称，已有非空项目文档不批量改写。
@@ -333,11 +387,22 @@ remain the last QA-verified truth until integrated QA passes.
 The PM validates and drives the same transient JSON snapshot using `task_graph_cli.py validate`,
 `task_graph_cli.py ready`, and `task_graph_cli.py qa-ready`. This prevents each host from interpreting
 dependencies, state, path conflicts, capacity, or QA readiness differently.
-常用内部记录操作由同一 CLI 的 `update`、`task`、`fingerprints` 提供：按旧指纹校验后
-更新当前快照、显式导出完整任务包、从已有回执核对指定文件；不再为这些机械操作反复
-生成临时 Python。操作说明按需读取
+常用内部记录操作由同一 CLI 的 `init`、`update`、`task`、`fingerprints` 提供：根据 PM
+明示决定初始化新图、按旧指纹更新当前快照、显式导出完整任务包、从已有回执核对指定
+文件；不再为这些机械操作反复生成临时 Python。`init` 复用原校验器、拒绝覆盖已有图，
+不推导批准或适用规范。安装态输入须显式设置 `adapter_path: ".agent-workflow/project.yaml"`：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py init \
+  --root "${project_root:?set actual project root}" \
+  --input "${workflow_decisions:?use PM decisions JSON}" --output "${workflow_graph:?set new graph path}"
+```
+
+完整输入字段与操作说明按需读取
 [runtime-records.md](platforms/shared/skills/xy-workflow/references/runtime-records.md)。
 查询仍只读，更新不自动派发、批准或判断完成；构建成功、可运行和独立 QA 要求不变。
+宿主可读导出的完整 Task Pack 文件时，可交接确切文件引用、SHA 与简短变化摘要，接收方
+必须完整读取；宿主不可读时仍发送完整包，不能仅发差量。
 Every Writer carries a fingerprinted `STANDARDS.md` index plus targeted leaves covering its owned
 paths and applicable hard rules. QA independently resolves applicable leaves from the index and
 actual diff; `qa_handoff_cli.py validate` prevents PASS when the Task Pack omitted a rule, fixed diff
@@ -473,6 +538,16 @@ choices, not invented platform line/token limits. Codex workers receive compact 
 instead of a repeated copy of the PM's entire global procedure; model and reasoning preferences stay
 under user control.
 
+Codex 角色中的发现上下文复用原发现器，将相同技术栈／证据和命令模板分组，再保留
+每个模块的 root、命令 cwd 与证据基点映射；差异化参数、用途和证据仍分别保留。
+这只去除重复事实，不裁剪模块、不修改角色权限，也不自动执行候选验证命令。需要
+核查角色完整映射时可只读运行：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/project_profile_cli.py \
+  context .agent-workflow . xy-backend
+```
+
 PM, implementers and QA share the [verification scope policy](platforms/shared/skills/xy-build-verify/references/verification-scope.md).
 Select checks by changed behavior, dependencies and mandatory project rules. Discovered commands are
 candidates, not a requirement to run every suite. QA independently audits source and standards and
@@ -555,6 +630,16 @@ worktree 流程以及 Codex、Antigravity 的入口均不变。
 各平台 PM 细则位于 `.agent-workflow/platforms/<host>/references/pm-integration.md`，
 当前 PM 仅在首次编排时读取自己的平台细则。Trivial 局部修改不预读整套流程。
 同一上下文已完整读取且未改变的内容可复用；上下文缺失或规则变更时恢复所需部分。
+
+每位 Agent 仍须独立完整读取其必需 Skill、指令及适用规范。长文应分开读取，使用连续
+页直到 EOF，避免把多个长返回挤进一个被截断的工具结果。可选只读工具
+`context_read.py` 返回有界文本、连续字符位置、完整文件 SHA-256 和明确的
+`next_offset`／`eof`；续页必须携带同一 SHA，文件变化时拒绝继续拼接。默认页为
+6000 字符、最多 24000 字符，采用字符预算而非精确 token 上限；须为完整 JSON 预留
+宿主回包空间，必要时减小页大小。它复用 4 MiB 安全读取边界，保留中文、长单行和
+CRLF，不写读缓存／状态，也不增加必跑门禁或读取记录。机器指纹不能证明模型已读；
+普通项目文档仍按需定位相关章节。具体调用见
+[长文完整读取](platforms/shared/skills/xy-workflow/references/runtime-records.md#完整读取必需长文)。
 
 这是一套内容的不同加载入口，不新增项目记忆文档体系，不改变需求确认、原型选择、
 视觉确认、计划状态、并行隔离或 QA 收口。根入口不使用全文 include 来导入细则：

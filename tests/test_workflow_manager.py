@@ -29,6 +29,9 @@ from lib import install_workflow
 from lib.install_process import SetupRunner, SetupRunError
 from lib.install_workflow import _managed_files
 from manager.catalog import Catalog, Model, discover
+from manager.claude_execution import effective_role
+from manager.capabilities import diagnose
+from manager.cli import main as cli_main
 from manager import service
 from manager.install_cli import install as install_cli
 from manager.tui import App, cell_width, clip
@@ -234,6 +237,179 @@ class CatalogTest(unittest.TestCase):
         before=discover('claude',self.home,env={})
         self.assertNotEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_BASE_URL':'second'}).stamp)
         self.assertNotEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_DEFAULT_OPUS_MODEL':'second-model'}).stamp)
+
+
+class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
+    """验证真实配置投影与命令输出；不启动真实模型或访问用户账户。"""
+
+    setUp = CatalogTest.setUp
+    tearDown = CatalogTest.tearDown
+    write = CatalogTest.write
+
+    def test_window_override_and_write_guard_projection_are_safe_and_do_not_invalidate_model_drafts(self):
+        self.write('.claude/settings.json', {'permissions': {'blockWritesOutsideWorkingDirectories': True, 'deny': ['PRIVATE-RULE']}})
+        project = self.home / 'project'
+        self.write('project/.claude/settings.local.json', {'permissions': {'blockWritesOutsideWorkingDirectories': False},
+            'env': {'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '200k'}})
+        first = discover('claude', self.home, project, {'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '300000'})
+        result = effective_role({'model': 'opus', 'effort': 'inherit'}, first.execution['controls'], 100000)
+        window = result['auto_compact_window']
+        self.assertEqual(100000, window['configured_role'])
+        self.assertEqual(200000, window['requested'])
+        self.assertIsNone(window['actual'])
+        self.assertEqual('CLAUDE_CODE_AUTO_COMPACT_WINDOW', window['source'])
+        guard = first.execution['write_scope_guard']
+        self.assertFalse(guard['value'])
+        self.assertTrue(guard['source'].endswith('settings.local.json'))
+        self.assertNotIn('PRIVATE-RULE', json.dumps(first.as_dict()))
+        self.write('project/.claude/settings.local.json', {'permissions': {'blockWritesOutsideWorkingDirectories': True},
+            'env': {'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '1m'}})
+        second = discover('claude', self.home, project, {})
+        self.assertEqual(first.stamp, second.stamp)
+        self.assertEqual(1000000, second.execution['controls']['CLAUDE_CODE_AUTO_COMPACT_WINDOW']['value'])
+        self.write('project/.claude/settings.local.json', {'permissions': {'blockWritesOutsideWorkingDirectories': 'SECRET'},
+            'env': {'CLAUDE_CODE_AUTO_COMPACT_WINDOW': 'SECRET'}})
+        invalid = discover('claude', self.home, project, {})
+        self.assertNotIn('SECRET', json.dumps(invalid.as_dict()))
+        self.assertEqual('invalid', invalid.execution['write_scope_guard']['status'])
+        self.assertIsNone(effective_role({'model': 'opus', 'effort': 'inherit'}, invalid.execution['controls'], 100000)['auto_compact_window']['requested'])
+
+    def test_doctor_distinguishes_supported_window_from_unsupported_guard(self):
+        completed = subprocess.CompletedProcess(['fixture', '--version'], 0, '2.1.309 (Claude Code)\n', '')
+        with patch('manager.capabilities.shutil.which', return_value='/fixture/claude'), \
+                patch('manager.capabilities.subprocess.run', return_value=completed):
+            result = diagnose('claude', probe=True, home=self.home, environment={})
+        features = {row['name']: row for row in result['documented_capabilities']}
+        self.assertTrue(features['role_auto_compact_window']['version_meets_minimum'])
+        self.assertFalse(features['block_writes_outside_working_directories']['version_meets_minimum'])
+        self.assertEqual('SessionStart(compact)', result['compaction_lifecycle']['recovery_event'])
+        self.assertFalse(result['compaction_lifecycle']['pre_post_compact_registered'])
+        self.assertTrue(all(not row['runtime_verified'] for row in features.values()))
+
+    def test_unreadable_source_cannot_be_reported_as_absent_overrides(self):
+        """损坏的来源必须让有效值推导失败；不能把空目录投影误当成“角色字段生效”。"""
+        project = self.home / 'project'
+        self.write('project/.claude/agents/xy-backend.md',
+                   '---\nname: xy-backend\nmodel: opus\nautoCompactWindow: 200000\n---\nfixture\n')
+        self.write('.claude/settings.json', '{BROKEN JSON')
+        output, error = io.StringIO(), io.StringIO()
+        with patch('pathlib.Path.home', return_value=self.home), patch.dict(os.environ, {'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '300000'}, clear=True), \
+                redirect_stdout(output), redirect_stderr(error):
+            code = cli_main(['roles', '--project', str(project), '--platform', 'claude', '--effective'])
+        self.assertEqual(2, code)
+        self.assertEqual('', output.getvalue())
+        self.assertIn('来源读取失败', error.getvalue())
+        result = diagnose('claude', project=project, home=self.home, environment={})
+        self.assertEqual('unavailable', result['execution']['status'])
+        self.assertIsNone(result['execution']['write_scope_guard']['value'])
+
+    def test_effort_sources_and_role_priority_follow_local_settings(self):
+        self.write('.claude/settings.json', {'env': {'CLAUDE_CODE_SUBAGENT_EFFORT': 'low'}})
+        project = self.home / 'project'
+        self.write('project/.claude/settings.json', {'env': {'CLAUDE_CODE_EFFORT_LEVEL': 'medium'}})
+        self.write('project/.claude/settings.local.json', {'env': {'CLAUDE_CODE_EFFORT_LEVEL': 'xhigh'}})
+        catalog = discover('claude', self.home, project, {'CLAUDE_CODE_EFFORT_LEVEL': 'high'})
+        controls = catalog.execution['controls']
+        self.assertEqual('low', controls['CLAUDE_CODE_SUBAGENT_EFFORT']['value'])
+        self.assertEqual('xhigh', controls['CLAUDE_CODE_EFFORT_LEVEL']['value'])
+        self.assertTrue(controls['CLAUDE_CODE_EFFORT_LEVEL']['source'].endswith('settings.local.json'))
+        result = effective_role({'model': 'opus', 'effort': 'high'}, controls)
+        self.assertEqual('xhigh', result['effort']['value'])
+        self.assertEqual('role.model', result['model']['source'])
+        self.assertFalse(result['runtime_verified'])
+        self.assertEqual('>=2.1.251', result['version_requirements']['model_definition_precedence'])
+        defaults = {'CLAUDE_CODE_SUBAGENT_EFFORT': controls['CLAUDE_CODE_SUBAGENT_EFFORT']}
+        self.assertEqual('high', effective_role({'model': 'opus', 'effort': 'high'}, defaults)['effort']['value'])
+        self.assertEqual('low', effective_role({'model': 'opus', 'effort': 'inherit'}, defaults)['effort']['value'])
+
+    def test_model_force_and_explicit_inherit_do_not_guess_main_session(self):
+        configured = {'model': 'inherit', 'effort': 'inherit'}
+        self.write('.claude/settings.json', {'env': {'CLAUDE_CODE_SUBAGENT_MODEL': 'haiku'}})
+        controls = discover('claude', self.home, env={}).execution['controls']
+        self.assertIsNone(effective_role(configured, controls)['model']['value'])
+        self.write('.claude/settings.json', {'env': {'CLAUDE_CODE_SUBAGENT_MODEL': 'haiku',
+                                                  'CLAUDE_CODE_SUBAGENT_MODEL_FORCE': 'true'}})
+        controls = discover('claude', self.home, env={}).execution['controls']
+        self.assertEqual('haiku', effective_role({'model': 'opus', 'effort': 'high'}, controls)['model']['value'])
+        controls['CLAUDE_CODE_SUBAGENT_MODEL']['value'] = 'inherit'
+        self.assertIsNone(effective_role(configured, controls)['model']['value'])
+
+    def test_invalid_controls_and_unrelated_secrets_are_not_exposed(self):
+        self.write('.claude/settings.json', {'env': {'ANTHROPIC_AUTH_TOKEN': 'TOP-SECRET',
+            'CLAUDE_CODE_SUBAGENT_EFFORT': 'SECRET\ninjection',
+            'CLAUDE_CODE_SUBAGENT_MODEL_FORCE': {'secret': 'DO-NOT-ECHO'}}})
+        catalog = discover('claude', self.home, env={})
+        output = json.dumps(catalog.as_dict(), ensure_ascii=False)
+        for secret in ('TOP-SECRET', 'SECRET', 'DO-NOT-ECHO', 'AUTH_TOKEN'):
+            self.assertNotIn(secret, output)
+        controls = catalog.execution['controls']
+        self.assertEqual('invalid', controls['CLAUDE_CODE_SUBAGENT_EFFORT']['status'])
+        self.assertIsNone(effective_role({'model': 'opus', 'effort': 'inherit'}, controls)['model']['value'])
+
+    def test_only_effective_model_controls_invalidate_source_stamp(self):
+        self.write('.claude/settings.json', {'env': {'CLAUDE_CODE_EFFORT_LEVEL': 'high'}})
+        before = discover('claude', self.home, env={})
+        self.assertEqual(before.stamp, discover('claude', self.home, env={
+            'CLAUDE_CODE_EFFORT_LEVEL': 'low', 'CLAUDE_CODE_FORK_SUBAGENT': '0'}).stamp)
+        self.write('.claude/settings.json', {'env': {'CLAUDE_CODE_EFFORT_LEVEL': 'max'}})
+        self.assertNotEqual(before.stamp, discover('claude', self.home, env={}).stamp)
+
+    def test_doctor_default_is_read_only_and_does_not_start_clients(self):
+        project = self.home / 'project'
+        self.write('project/.agent-workflow/project.yaml', 'workflow_hooks:\n  mode: off\n')
+        before = {str(p): p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+        with patch('manager.capabilities.subprocess.run', side_effect=AssertionError('不得默认启动宿主')):
+            results = [diagnose(host, project=project, home=self.home, environment={})
+                       for host in ('codex', 'claude', 'antigravity')]
+        self.assertTrue(all(row['client']['status'] == 'not_probed' for row in results))
+        self.assertTrue(all(row['workflow']['mode'] == 'off' for row in results))
+        self.assertTrue(all(not row['runtime_verified'] for row in results))
+        self.assertEqual(['SessionStart'], results[-1]['workflow']['target_hook_events'])
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.home.rglob('*') if p.is_file()})
+
+    def test_version_probe_is_not_runtime_proof_and_never_echoes_raw_output(self):
+        for version, eligible in (('2.1.309', False), ('2.1.316', True), ('2.1.316-alpha.1', None)):
+            completed = subprocess.CompletedProcess(['fixture', '--version'], 0,
+                f'SECRET\n{version} (Claude Code)\n', 'credential error SECRET')
+            with self.subTest(version=version), patch('manager.capabilities.shutil.which', return_value='/fixture/claude'), \
+                    patch('manager.capabilities.subprocess.run', return_value=completed):
+                result = diagnose('claude', probe=True, home=self.home, environment={})
+            row = next(item for item in result['documented_capabilities'] if item['name'] == 'subagent_default_effort')
+            self.assertEqual(eligible, row['version_meets_minimum'])
+            self.assertFalse(row['runtime_verified'])
+            self.assertNotIn('SECRET', json.dumps(result))
+        completed = subprocess.CompletedProcess(['fixture'], 0, '2.1.249 (Claude Code)\n', '')
+        with patch('manager.capabilities.shutil.which', return_value='/fixture/claude'), \
+                patch('manager.capabilities.subprocess.run', return_value=completed):
+            older = diagnose('claude', probe=True, home=self.home, environment={})
+        for name in ('model_definition_precedence', 'model_force'):
+            self.assertFalse(next(item for item in older['documented_capabilities'] if item['name'] == name)['version_meets_minimum'])
+        with patch('manager.capabilities.shutil.which', return_value=None):
+            self.assertEqual('not_found', diagnose('antigravity', probe=True, home=self.home, environment={})['client']['status'])
+        with patch('manager.capabilities.shutil.which', return_value='/fixture/claude'), \
+                patch('manager.capabilities.subprocess.run', side_effect=subprocess.TimeoutExpired('SECRET', 3)):
+            self.assertEqual('timeout', diagnose('claude', probe=True, home=self.home, environment={})['client']['status'])
+
+    def test_cli_effective_roles_and_doctor_keep_configured_values_and_files(self):
+        project = self.home / 'project'
+        role = self.write('project/.claude/agents/xy-backend.md',
+                         '---\nname: xy-backend\nmodel: opus\neffort: high\nautoCompactWindow: 200000\n---\nfixture\n')
+        self.write('.claude/settings.json', {'env': {'CLAUDE_CODE_EFFORT_LEVEL': 'max'}})
+        before = role.read_bytes()
+        output = io.StringIO()
+        with patch('pathlib.Path.home', return_value=self.home), patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
+            self.assertEqual(0, cli_main(['roles', '--project', str(project), '--platform', 'claude', '--effective']))
+        result = json.loads(output.getvalue())['xy-backend']
+        self.assertEqual('high', result['configured']['effort'])
+        self.assertEqual('max', result['effort']['value'])
+        self.assertTrue(result['controls']['CLAUDE_CODE_EFFORT_LEVEL']['source'].endswith('/.claude/settings.json'))
+        self.assertEqual(200000, result['auto_compact_window']['configured_role'])
+        self.assertEqual(before, role.read_bytes())
+        output = io.StringIO()
+        with patch('pathlib.Path.home', return_value=self.home), patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
+            self.assertEqual(0, cli_main(['doctor']))
+        self.assertEqual(3, len(json.loads(output.getvalue())))
+        self.assertFalse((self.home / '.config/agent-workflow').exists())
 
 
 class TransactionTest(TemporaryProject):

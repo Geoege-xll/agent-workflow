@@ -36,6 +36,12 @@ workspace_overrides: {}
 workflow_hooks:
   mode: assist
 
+# Claude 原生可选能力：缺省继承；窗口按角色使用完整 token 整数，不使用 200k 缩写。
+# 写入保护可显式设 true（需 Claude >=2.1.314）；inherit 不会关闭已启用的原生保护。
+claude_options:
+  auto_compact_windows: {}
+  block_writes_outside_working_directories: inherit
+
 docs:
   standards: docs/STANDARDS.md
   standards_root: docs/standards/

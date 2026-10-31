@@ -177,65 +177,10 @@ discovered_codex_roles() {
 
 render_discovered_project_context() {
   local role="$1"
-  python3 --workflow-paths=1,2,3,4 - \
-    "${PACK_LIB_DIR}" \
-    "${PROJECT_YAML}" \
-    "${PROJECT_ROOT}" \
-    "${ROLES_DIR}" \
-    "${role}" <<'PY'
-from __future__ import annotations
-
-import shlex
-import sys
-
-
-lib_dir, config_path, project_root, roles_dir, role = sys.argv[1:]
-sys.path.insert(0, lib_dir)
-from validate_project_config import validate_with_profile
-
-
-result = validate_with_profile(config_path, project_root, roles_dir)
-if result.errors or result.profile is None:
-    for error in result.errors:
-        print(f"[ERROR] {error}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def inline_code(value: str) -> str:
-    return "`" + value.replace("\\", "\\\\").replace("`", "\\`") + "`"
-
-
-ui_roles = {"xy-web", "xy-desktop", "xy-apple", "xy-android"}
-modules = tuple(
-    module
-    for module in result.profile.modules
-    if module.primary_role == role
-    or role == "xy-qa"
-    or role == "xy-uiux" and module.primary_role in ui_roles
-)
-
-print("## Discovered project context")
-print()
-print(
-    "Observed repository facts below guide routing and verification; exact task-owned "
-    "paths remain the write authorization."
-)
-if not modules:
-    print("- No implementation module is assigned to this supporting role.")
-for module in modules:
-    print(f"- Module {inline_code(module.root)} (primary role {inline_code(module.primary_role)})")
-    stack = ", ".join(inline_code(item) for item in module.stack_facts) or "none observed"
-    evidence = ", ".join(inline_code(item) for item in module.evidence_paths) or "none"
-    print(f"  - Observed stack facts: {stack}")
-    print(f"  - Discovery evidence: {evidence}")
-    if module.verification_commands:
-        print("  - Repository-native verification:")
-        for command in module.verification_commands:
-            rendered = inline_code(shlex.join(command.argv))
-            print(f"    - {command.purpose}: {rendered}")
-    else:
-        print("  - Repository-native verification: none discovered; do not invent a command.")
-PY
+  # 渲染与只读 CLI 共用同一发现器和无损分组，避免每个角色重复整段模块事实。
+  # 模块根、角色、证据及 cwd/argv 映射都留在上下文中，角色正文与写入权保持原样。
+  python3 --workflow-paths=2,3 "${PROJECT_PROFILE_CLI}" \
+    context "${PACK_DIR}" "${PROJECT_ROOT}" "${role}"
 }
 
 render_codex_worker_constraints() {

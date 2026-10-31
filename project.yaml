@@ -6,7 +6,7 @@ memory:
   mode: preferred
   isolation: strict
   # Normal setup derives this from the project directory; replace it for a custom namespace.
-  project_id: desktop
+  project_id: replace-with-unique-project-id
   qa_requires_provider: false
   portable_checkpoint: docs/PROJECT.md
   fallback_dir: docs/notes/
@@ -35,6 +35,12 @@ workspace_overrides: {}
 # off 可关闭本工作流 Hooks；宿主自身的禁用/信任设置始终保留。
 workflow_hooks:
   mode: assist
+
+# Claude 原生可选能力：缺省继承；窗口按角色使用完整 token 整数，不使用 200k 缩写。
+# 写入保护可显式设 true（需 Claude >=2.1.314）；inherit 不会关闭已启用的原生保护。
+claude_options:
+  auto_compact_windows: {}
+  block_writes_outside_working_directories: inherit
 
 docs:
   standards: docs/STANDARDS.md

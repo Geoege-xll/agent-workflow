@@ -8,14 +8,25 @@ Hooks 不判断需求是否获批、任务是否完成，也不提供工作流�
 
 | 平台 | 项目配置 | 本包事件及作用 |
 | --- | --- | --- |
-| Codex | `.codex/hooks.json`；已有 TOML Hooks 时沿用 `.codex/config.toml` | SessionStart 恢复提醒/入口资源检查；UserPromptSubmit 简短任务路由提醒 |
+| Codex | `.codex/hooks.json`；已有 TOML Hooks 时沿用 `.codex/config.toml` | SessionStart 的 resume/compact/clear/fork 恢复提醒及入口资源检查；UserPromptSubmit 简短任务路由提醒 |
 | Claude Code | `.claude/settings.json` 的 hooks 字段 | 同上；Agent/Explore 派发时提醒进度询问原工作 Agent |
-| Antigravity CLI/IDE | `.agents/hooks.json` 中单独命名的配置 | PreInvocation 在本会话/工作区首次给出短入口提醒，不在每个模型调用重复 |
+| Antigravity App/CLI/IDE | `.agents/hooks.json` 中单独命名的配置 | 原生 SessionStart 在新会话启动时给出短入口提醒，不在每次模型调用重复 |
 
-AGY 的原生事件没有可靠的用户轮次/SessionStart 信号。本包不把 invocationNum 或
-initialNumSteps 猜成任务 B/压缩恢复，不读取 transcriptPath 推断任务；后续任务和恢复仍
-依靠原生上下文、根入口与 Skill。临时去重标记仅包含散列文件名，不保存提示词、任务
-状态、批准、QA 或历史内容；工作区/会话不同不会串用。缓存不可用时不反复注入提醒。
+AGY 接入依据为当前官方 SessionStart 合同，不再写临时去重标记或注册 PreInvocation。
+升级只迁移签名仍完整的本包旧事件，保留 enabled:false 和用户其他 Hooks；用户修改过的
+同名条目停止升级并保留。旧去重缓存不再使用，也不在安装时扫描或删除它们。
+SessionStart 只代表新会话开始，不代表新的用户轮次或压缩恢复；本包仍不根据 invocationNum、
+initialNumSteps、用户消息或 transcriptPath 猜任务/批准。各客户端逐步发布，官方未标明
+SessionStart 的最早支持版本；生成与 --check 通过不能替代目标客户端的实际事件验收。
+
+Codex 已通过 SessionStart(compact) 恢复压缩后的上下文，本批不再同时注册 PostCompact，
+避免重复注入；fork 只提醒核对当前工作区和现有证据，不创建新的批准或写入权限。
+
+Claude 同样在 SessionStart(compact) 注入恢复指令。PreCompact/PostCompact 会忽略
+`systemMessage` 和 `continue`，PostCompact 也不能把恢复指令加到模型上下文；
+PreCompact 的阻止压缩合同不用于本包门禁。Codex 的压缩事件忽略普通文本 stdout，
+也不借 `continue:false` 阻止压缩。本包不额外注册这两个事件、不读写压缩摘要日志。
+恢复仍核对原计划、当前工作区和持久证据，不能从压缩摘要推断批准或 QA PASS。
 
 三平台使用同一个 Python 标准库脚本，每次超时上限 3 秒。脚本只读小型配置/入口，
 不联网、不调用模型、不扫描业务 diff、不读子会话历史、不自动测试、提交或改项目文档。
@@ -33,6 +44,15 @@ PreToolUse allow/deny，也不修改工具参数。脚本故障返回中性结�
 临时关闭脚本提醒可在启动宿主前设置环境变量 `AGENT_WORKFLOW_HOOKS=off`。
 原生禁用开关也保留，不强制开启 Codex features.hooks、Claude disableAllHooks，或 AGY
 条目的 enabled。本包只拥有内容签名一致的条目/块；签名是覆盖保护，不是安全认证。
+
+Claude 的 `claude_options` 是独立的可选原生能力，并非 Hook 门禁。
+`auto_compact_windows` 按规范角色生成完整整数的 `autoCompactWindow`（2.1.296+）；
+只降低继承窗口，全局 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 通常覆盖它。
+写入保护默认 inherit；显式 true 时只合并原生
+`permissions.blockWritesOutsideWorkingDirectories: true`（2.1.314+），保留其他权限。
+项目/local 明确 false 或无效值会停止预检；off/inherit 都不自动写 false 或移除已启用保护。
+该设置只约束 Write/Edit/NotebookEdit，实际工作目录、Bash、任务 owned_paths 和组织策略
+仍依各自合同。安装事务复用现有配置快照，不另造权限备份或审批台账。
 
 Codex 的项目配置和精确 Hook 定义必须经过原生信任审查。CLI 可在 `/hooks` 查看；
 桌面使用原生审查入口。升级后的定义可能需要重新审查。安装器不预写信任记录、不

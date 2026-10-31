@@ -2817,8 +2817,9 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
         (installed / "lib").mkdir(parents=True)
         (installed / "scripts").mkdir()
         (installed / "roles").mkdir()
-        for name in ("validate_project_config.py", "project_discovery.py", "worktree_policy.py", "workflow_hook_settings.py", "python_runtime.sh"):
-            shutil.copy2(PACK / "lib" / name, installed / "lib" / name)
+        # 夹具复制真实运行时库，避免手写模块列表遗漏平台文件系统或新增配置的传递依赖。
+        shutil.copytree(PACK / "lib", installed / "lib", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy2(PACK / "scripts/guard.sh", installed / "scripts/guard.sh")
         for role in (PACK / "roles").glob("xy-*.md"):
             shutil.copy2(role, installed / "roles" / role.name)

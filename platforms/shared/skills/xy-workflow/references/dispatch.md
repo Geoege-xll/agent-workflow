@@ -36,6 +36,11 @@ Refresh when required native resources are missing/invalid, or installation inpu
   scaffolds are complete, refresh only the current task-pack facts; do not reinstall for a module
   path, stack or command change alone. Missing or changed installation inputs still require setup.
 
+Codex 的发现上下文按相同事实组／命令组去重，每个模块仍保留确切 root、命令 cwd 及
+证据基点映射；不同参数、用途或证据不会因表面相似被合并。需要核查某角色的完整
+映射时，可只读运行 `project_profile_cli.py context .agent-workflow . <role>`，并沿用下文
+Python 入口；它复用发现器、不执行候选命令、不写状态或刷新宿主，也不改变上述刷新条件。
+
 For a required refresh, run the current host's normal `setup_<host>.sh`, then `--check` once. Normal
 setup already performs its mandatory preflight; do not prepend another standalone `--preflight`
 unless a write-free preview or aggregate multi-host preflight is specifically needed. Preserve all
@@ -52,6 +57,10 @@ dispatch, not a new business gate, QA stage or full test run; Hooks never auto-i
 - Reuse the existing [record tools](runtime-records.md) for common snapshot updates, Task Pack
   export and selected fingerprint checks. Prefer existing project verification commands for behavior.
   Do not create a one-off program or extra receipt for each routine PM metadata operation.
+- 必需 Skill 或指令无法在一次可靠回包中完整返回时，可选用
+  [单文件分页器](runtime-records.md#完整读取必需长文)。每次回包读取一页，以同一 SHA
+  连续跟进每个 `next_offset` 直到 `eof`，为完整 JSON 预留宿主输出预算；字符预算不是
+  精确 token 上限，必要时减小页大小。每位 Agent 仍独立完成必需读取，指纹不是已读证据。
 - Use `bash .agent-workflow/lib/python_runtime.sh` for all workflow-owned Python, including
   temporary/inline helpers that generate DAG snapshots, Task Packs or fingerprints, not just bundled
   CLIs. For these workflow calls, pass `-X utf8` before the script path (or `-` for stdin), including
@@ -256,7 +265,9 @@ The following planning, graph and QA route applies only after both Trivial early
    missing/changed parts as needed. Each Agent still reads its applicable standards independently.
    Honor explicit host/Skill reread requirements. Read selected Skills and required instructions
    completely, separately or in contiguous pages through EOF; avoid truncation from batching long
-   documents, and recover every missing portion before relying on a partial read. No new report file is needed.
+   documents, and recover every missing portion before relying on a partial read. 宿主可读完整
+   Task Pack 文件时，可交接确切文件引用、SHA 和简短变化摘要，接收方必须完整读取当前
+   包；宿主不可读时仍通过支持的通道发送完整包，不能仅发差量。No new report file is needed.
 9. Read `orchestration` limits from `project.yaml`. One path has one writer. Run
    conflict detection before two or more writers. Do not allow nested delegation.
 10. Materialize the approved graph into a transient JSON snapshot. Freeze the configured STANDARDS

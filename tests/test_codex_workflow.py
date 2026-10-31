@@ -9,6 +9,8 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from lib.project_discovery import discover_project
+from tests.test_profile_context import expanded_context, module_facts
 from tests.skill_contract_helpers import read_bootstrap_contract, read_contract, contract_file_containing
 
 
@@ -233,10 +235,17 @@ class CodexDiscoveredProfileContractTest(unittest.TestCase):
                 "## Discovered project context",
                 "`apps/desktop`",
                 "desktop:electron",
-                "apps/desktop/package.json",
                 "npm run build",
             ):
                 self.assertIn(phrase, desktop)
+            # 压缩格式允许把证据写成显式相对模板；独立展开实际生成正文后，仍须
+            # 与发现器的完整事实一致。此处同时约束 root、角色、栈、完整证据、
+            # argv、purpose 与 cwd，不能以仅存在目录或命令片段代替原有证据合同。
+            self.assertEqual(
+                module_facts(module for module in discover_project(project).modules
+                             if module.primary_role == "xy-desktop"),
+                expanded_context(desktop),
+            )
 
             backend = tomllib.loads(
                 (project / ".codex/agents/xy-backend.toml").read_text(

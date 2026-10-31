@@ -25,6 +25,9 @@
 - Project command Hooks provide bounded intake/recovery reminders, not approvals or QA results.
   Respect native project/Hook trust and disabled settings; never bypass trust to make setup pass.
   See `.agent-workflow/platforms/shared/HOOKS.md` only for Hook configuration or diagnostics.
+- SessionStart recovery includes native `fork` and `compact` sources. After a fork, verify the actual
+  workspace and still-valid task authority; copied conversation context does not authorize another
+  writer or repeat completed work. Do not add a second PostCompact reminder for the same recovery.
 
 Regenerate with `bash .agent-workflow/setup_codex.sh`; validate with
 `bash .agent-workflow/setup_codex.sh --check`.

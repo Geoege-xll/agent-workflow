@@ -70,8 +70,10 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
   Honor explicit host/Skill reread requirements. Read selected Skills and their required instructions
   completely, using separate reads or contiguous pages through EOF for long files. Avoid batching
   long documents into a truncated response; recover every missing portion before relying on it.
-  Ordinary project documents remain targeted. Machine-side full-byte validation/fingerprinting
-  does not require returning complete file bodies to the model.
+  Ordinary project documents remain targeted. 必需长文可选用
+  [记录工具](references/runtime-records.md#完整读取必需长文)中的单文件分页器，返回有界正文、
+  连续位置和文件 SHA；这不是必跑门禁。机器侧完整字节核验／指纹检查无需返回全文，
+  也不能证明当前 Agent 已读取必需 Skill 或规范。
 - Resolve existing paths from current context, configured directory links or a scoped file listing;
   do not invent filenames. Choose filters appropriate to the requested resource; no match proves
   absence only within those filters, not a task failure. Before affected dispatch, assess whether

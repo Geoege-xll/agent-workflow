@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 if __package__:
     from .platform_fs import os
@@ -14,7 +13,6 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
-import tempfile
 
 sys.dont_write_bytecode = True
 if __package__:
@@ -95,55 +93,6 @@ def scoped_root(host: str, payload: dict, installed: Path) -> Path | None:
     return root
 
 
-def first_agy_notice(root: Path, payload: dict) -> bool:
-    """AGY 缺少 SessionStart/用户轮次事件，只在本会话工作区首次提醒。
-
-    临时去重标记不含提示词、任务状态、批准或证据，不参与恢复/QA。原子排他创建
-    防止同会话并发 Hook 重复注入；标记不可用时保持中性，避免每个模型调用都提醒。
-    """
-    session = payload.get("conversationId")
-    if not isinstance(session, str) or not session or len(session) > 256:
-        return False
-    digest = hashlib.sha256(f"antigravity\0{root}\0{session}".encode()).hexdigest()
-    if os.name == "nt":
-        if __package__:
-            from .windows_fs import Directory, assert_private, directory_lock
-            from .windows_runtime import local_appdata, OWNER as RUNTIME_OWNER
-        else:
-            from windows_fs import Directory, assert_private, directory_lock
-            from windows_runtime import local_appdata, OWNER as RUNTIME_OWNER
-        base = local_appdata() / "AgentWorkflow"
-        with directory_lock(base, "hook-notice-cache"):
-            assert_private(base)
-            if read_small(base / ".npx-owner.json").encode() != RUNTIME_OWNER:
-                return False
-            cache = base / "hook-notices"
-            try:
-                os.mkdir(cache, 0o700)
-            except FileExistsError:
-                pass
-            with Directory(cache):
-                assert_private(cache)
-                try:
-                    descriptor = os.open(cache / digest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                except FileExistsError:
-                    return False
-                os.close(descriptor)
-        return True
-    cache = Path(tempfile.gettempdir()) / f"agent-workflow-hook-notices-{os.getuid()}"
-    cache.mkdir(mode=0o700, exist_ok=True)
-    info = cache.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
-        return False
-    try:
-        descriptor = os.open(cache / digest, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                             | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    except FileExistsError:
-        return False
-    os.close(descriptor)
-    return True
-
-
 def response(host: str, event: str, payload: dict, project: Path) -> dict:
     """事件输出严格按宿主协议构造；没有 deny/allow、force_continue 或伪造用户消息。"""
     if os.environ.get("AGENT_WORKFLOW_HOOKS") == "off":
@@ -159,7 +108,10 @@ def response(host: str, event: str, payload: dict, project: Path) -> dict:
     if hook_mode(read_small(config)) == "off":
         return {}
     if host == "antigravity":
-        if event != "PreInvocation" or not first_agy_notice(root, payload):
+        # 由宿主的 SessionStart 保证新会话只调用一次；不再猜调用序号或写临时去重文件。
+        # 用户消息、转录路径等输入不进入输出，也不把会话启动解释成需求确认或压缩恢复。
+        session = payload.get("conversationId")
+        if event != "SessionStart" or not isinstance(session, str) or not session or len(session) > 256:
             return {}
         return {"injectSteps": [{"ephemeralMessage": ENTRY}]}
     if payload.get("hook_event_name") != event:
@@ -169,7 +121,7 @@ def response(host: str, event: str, payload: dict, project: Path) -> dict:
         message = ENTRY
     elif event == "SessionStart":
         source = payload.get("source")
-        if source in {"resume", "compact", "clear"}:
+        if source in {"resume", "compact", "clear"} or (host == "codex" and source == "fork"):
             message = RECOVERY
         # 入口检查只证明导航资源就绪，不把它误报为任务遵循证明或 QA PASS。
         skill_root = ".claude" if host == "claude" else ".agents"

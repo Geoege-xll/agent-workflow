@@ -524,11 +524,169 @@ class RecordCliTest(unittest.TestCase):
         self.assertGreater(cleaned_payload["reclaimed_bytes"], 0)
         self.assertFalse(scratch_dir.exists())
 
-        for bad_id in ("../escape", "CON", "nul.txt", "com1"):
+        for bad_id in ("", " ", "\t"):
             with self.subTest(bad_id=bad_id):
                 invalid = self.invoke("scratch", "--root", self.root, "--request-id", bad_id)
                 self.assertEqual(2, invalid.returncode)
                 self.assertIn("error", json.loads(invalid.stderr))
+
+
+class ScratchWorkspaceTest(unittest.TestCase):
+    """真实文件系统回归：任务身份映射、目录替换及目录外数据保护。"""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="workflow-scratch-safety-")
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name).resolve()
+        self.project = self.home / "project"
+        self.project.mkdir()
+        temp_root_patch = patch.object(records.tempfile, "gettempdir", return_value=str(self.home))
+        temp_root_patch.start()
+        self.addCleanup(temp_root_patch.stop)
+
+    def test_existing_graph_ids_map_to_safe_distinct_directories(self):
+        ids = ("需求-文档复用", "issue:123", "feature/reuse", "../escape", "CON", "r" * 129,
+               "Request-A", "request-a")
+        paths = []
+        for request_id in ids:
+            with self.subTest(request_id=request_id):
+                payload = graph()
+                payload["request_id"] = payload["tasks"][0]["request_id"] = request_id
+                self.assertEqual("valid", _execute("validate", payload)["status"])
+                allocated = records.scratch_workspace(self.project, request_id)
+                self.assertEqual(request_id, allocated["request_id"])
+                path = Path(allocated["scratch_dir"])
+                self.assertEqual(Path(allocated["project_scratch_root"]), path.parent)
+                self.assertEqual(path, Path(records.scratch_workspace(self.project, request_id)["scratch_dir"]))
+                paths.append(path)
+        self.assertEqual(len(ids), len({path.name for path in paths}))
+        # 即便底层文件系统忽略大小写，不同请求也必须保留各自的文件。
+        evidence = paths[-2] / "active.log"
+        evidence.write_text("keep active request", encoding="utf-8")
+        self.assertFalse(paths[-2].samefile(paths[-1]))
+        records.cleanup_scratch(self.project, ids[-1])
+        self.assertEqual("keep active request", evidence.read_text(encoding="utf-8"))
+
+    def test_directory_swapped_before_open_never_follows_external_link(self):
+        target = Path(records.scratch_workspace(self.project, "race")["scratch_dir"])
+        nested = target / "build"
+        nested.mkdir()
+        external = self.home / "external"
+        external.mkdir()
+        victim = external / "important.txt"
+        victim.write_bytes(b"keep outside data")
+        original_open = records.os.open
+        swapped = False
+
+        def replace_before_open(name, flags, *args, **kwargs):
+            nonlocal swapped
+            if name == "build" and not swapped:
+                swapped = True
+                nested.rename(self.home / "original-build")
+                nested.symlink_to(external, target_is_directory=True)
+            return original_open(name, flags, *args, **kwargs)
+
+        with patch.object(records.os, "open", side_effect=replace_before_open):
+            with self.assertRaises((OSError, ValueError)):
+                records.cleanup_scratch(self.project, "race")
+        self.assertTrue(swapped)
+        self.assertEqual(b"keep outside data", victim.read_bytes())
+
+    def test_opened_directory_swap_keeps_traversal_on_original_identity(self):
+        target = Path(records.scratch_workspace(self.project, "opened-race")["scratch_dir"])
+        nested = target / "build"
+        nested.mkdir()
+        (nested / "owned.bin").write_bytes(b"task artifact")
+        nested_identity = nested.stat().st_ino
+        external = self.home / "external"
+        external.mkdir()
+        victim = external / "important.txt"
+        victim.write_bytes(b"keep outside data")
+        original_listdir = records.os.listdir
+        swapped = False
+
+        def replace_before_listdir(descriptor):
+            nonlocal swapped
+            if records.os.fstat(descriptor).st_ino == nested_identity and not swapped:
+                swapped = True
+                nested.rename(self.home / "original-build")
+                nested.symlink_to(external, target_is_directory=True)
+            return original_listdir(descriptor)
+
+        with patch.object(records.os, "listdir", side_effect=replace_before_listdir):
+            with self.assertRaisesRegex(ValueError, "changed while cleaning"):
+                records.cleanup_scratch(self.project, "opened-race")
+        self.assertTrue(swapped)
+        self.assertEqual(b"keep outside data", victim.read_bytes())
+
+    def test_symlinks_and_hardlinks_never_change_external_contents_or_permissions(self):
+        target = Path(records.scratch_workspace(self.project, "links")["scratch_dir"])
+        external = self.home / "external"
+        external.mkdir()
+        victim = external / "important.txt"
+        victim.write_bytes(b"keep outside data")
+        victim.chmod(0o444)
+        (target / "external-directory").symlink_to(external, target_is_directory=True)
+        os.link(victim, target / "hardlink")
+        records.cleanup_scratch(self.project, "links")
+        self.assertEqual(b"keep outside data", victim.read_bytes())
+        self.assertEqual(0o444, stat.S_IMODE(victim.stat().st_mode))
+        self.assertFalse(target.exists())
+        self.assertFalse(records.cleanup_scratch(self.project, "links")["cleaned"])
+
+    def test_target_symlink_is_rejected_and_all_cleanup_preserves_other_projects(self):
+        target = Path(records.scratch_workspace(self.project, "linked-target")["scratch_dir"])
+        external = self.home / "external"
+        external.mkdir()
+        target.rmdir()
+        target.symlink_to(external, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "not a link"):
+            records.cleanup_scratch(self.project, "linked-target")
+        self.assertTrue(target.is_symlink())
+        target.unlink()
+        other_project = self.home / "other-project"
+        other_project.mkdir()
+        other = Path(records.scratch_workspace(other_project, "same-id")["scratch_dir"])
+        (other / "keep.log").write_bytes(b"other project")
+        own = Path(records.scratch_workspace(self.project, "own")["scratch_dir"])
+        (own / "remove.log").write_bytes(b"own project")
+        legacy = own.parent / "legacy-request"
+        legacy.mkdir()
+        (legacy / "keep.log").write_bytes(b"unadopted legacy data")
+        self.assertTrue(records.cleanup_scratch(self.project, remove_all=True)["cleaned"])
+        self.assertFalse(own.exists())
+        self.assertEqual(b"unadopted legacy data", (legacy / "keep.log").read_bytes())
+        self.assertEqual(b"other project", (other / "keep.log").read_bytes())
+
+    def test_legacy_hash_shaped_id_is_never_adopted_or_cleaned(self):
+        """旧 ID 可以恰好符合新哈希格式，迁移隔离必须依靠独立容器而非名称猜测。"""
+        base = records._project_scratch_base(self.project)
+        legacy = self.home / "agent-workflow-scratch" / base.name / records._validated_scratch_slot("current")
+        legacy.mkdir(parents=True)
+        evidence = legacy / "keep.log"
+        evidence.write_bytes(b"unfinished legacy task")
+        current = records.scratch_workspace(self.project, "current")
+        self.assertFalse(current["reused"])
+        self.assertFalse(legacy.samefile(current["scratch_dir"]))
+        records.cleanup_scratch(self.project, remove_all=True)
+        self.assertEqual(b"unfinished legacy task", evidence.read_bytes())
+
+    @unittest.skipIf(os.name == "nt" or getattr(os, "geteuid", lambda: 0)() == 0,
+                     "需要普通 POSIX 用户验证目录读取权限")
+    def test_unreadable_directory_is_preserved_with_error(self):
+        """无法安全打开时拒绝清理，不为绕过权限而恢复按路径 chmod 的竞态。"""
+        target = Path(records.scratch_workspace(self.project, "unreadable")["scratch_dir"])
+        nested = target / "restricted"
+        nested.mkdir()
+        evidence = nested / "keep.log"
+        evidence.write_bytes(b"keep inaccessible artifacts")
+        nested.chmod(0o100)
+        try:
+            with self.assertRaises(PermissionError):
+                records.cleanup_scratch(self.project, "unreadable")
+        finally:
+            nested.chmod(0o700)
+        self.assertEqual(b"keep inaccessible artifacts", evidence.read_bytes())
 
 
 class RecordInstalledRuntimeTest(unittest.TestCase):

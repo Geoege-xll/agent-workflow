@@ -21,21 +21,23 @@ if __package__:
     from .claude_instructions import atomic_write, read_file
     from .workflow_hook_settings import hook_mode
     from .workflow_hooks import OWNER
+    from .claude_options import parse as parse_claude_options
     from . import windows_hook_command
 else:
     from claude_instructions import atomic_write, read_file
     from workflow_hook_settings import hook_mode
     from workflow_hooks import OWNER
+    from claude_options import parse as parse_claude_options
     import windows_hook_command
 
 BEGIN = "# agent-workflow-pack:assist-hooks-begin"
 END = "# agent-workflow-pack:assist-hooks-end"
 SIGNATURE = "WORKFLOW_SIGNATURE_PLACEHOLDER"
 EVENTS = {
-    "codex": (("SessionStart", "startup|resume|clear|compact"), ("UserPromptSubmit", "")),
+    "codex": (("SessionStart", "startup|resume|clear|compact|fork"), ("UserPromptSubmit", "")),
     "claude": (("SessionStart", "startup|resume|clear|compact"),
                ("UserPromptSubmit", ""), ("PreToolUse", "^Agent$")),
-    "antigravity": (("PreInvocation", ""),),
+    "antigravity": (("SessionStart", ""),),
 }
 
 
@@ -143,25 +145,43 @@ def json_object(raw: bytes | None) -> dict:
     return data
 
 
-def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str) -> dict:
-    """只替换可证明归属的条目；所有其他键、事件、匹配器及权限保持原语义。"""
+def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
+               claude_options: dict | None = None, local_settings: dict | None = None) -> dict:
+    """只替换可证明归属的 Hook；Claude 可选保护独立收紧，不隐式放宽权限。"""
     result = copy.deepcopy(data)
+    if host == "claude":
+        if (claude_options or {}).get("block_writes_outside_working_directories") is True:
+            # local 层覆盖项目层；显式 false 或无效容器必须拒绝，不能声称启用后实际被盖掉。
+            # 不读取或改写用户全局权限；此处只把项目配置与本地冲突变成可审阅的预检错误。
+            key = "blockWritesOutsideWorkingDirectories"
+            for settings in (result, local_settings if local_settings is not None else {}):
+                permissions = settings.get("permissions", {})
+                if not isinstance(permissions, dict):
+                    raise ValueError("Claude permissions 必须为对象；保留原配置")
+                if key in permissions and permissions[key] is not True:
+                    raise ValueError("Claude 写入保护与现有原生设置冲突；保留原配置")
+            result.setdefault("permissions", {})[key] = True
     if host == "antigravity":
         current = result.get(OWNER)
         enabled = True
         if current is not None:
-            if not isinstance(current, dict) or set(current) - {"enabled", "PreInvocation"}:
+            # 只迁移内容签名仍有效的旧事件；保留用户关闭状态，不接管同名用户条目。
+            if not isinstance(current, dict) or set(current) - {"enabled", "PreInvocation", "SessionStart"}:
                 raise ValueError("user-owned Antigravity Hook name collision")
-            groups = current.get("PreInvocation")
-            if not isinstance(groups, list) or len(groups) != 1 or not owned_group(groups[0]):
+            events = set(current) - {"enabled"}
+            if not events:
                 raise ValueError("unproven Antigravity Hook name collision")
+            for event in events:
+                groups = current[event]
+                if not isinstance(groups, list) or len(groups) != 1 or not owned_group(groups[0]):
+                    raise ValueError("unproven Antigravity Hook name collision")
             enabled = current.get("enabled", True)
             if not isinstance(enabled, bool):
                 raise ValueError("invalid Antigravity Hook enabled value")
             result.pop(OWNER)
         if mode == "assist":
-            result[OWNER] = {"enabled": enabled, "PreInvocation": [
-                signed_group(pack, project, host, "PreInvocation", "")]}
+            result[OWNER] = {"enabled": enabled, "SessionStart": [
+                signed_group(pack, project, host, "SessionStart", "")]}
         return result
     hooks = result.get("hooks", {})
     if not isinstance(hooks, dict):
@@ -266,11 +286,15 @@ def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bo
     path = project / relative
     before = read_file(path)
     data = json_object(before)
-    merged = merge_json(data, pack, project, host, mode)
+    # 文件读取集中在预检入口；纯合并函数不访问磁盘，Windows 命令编解码也可独立验证。
+    options = parse_claude_options(config.decode("utf-8")) if host == "claude" else None
+    local = (json_object(read_file(project / ".claude/settings.local.json"))
+             if options and options["block_writes_outside_working_directories"] is True else None)
+    merged = merge_json(data, pack, project, host, mode, claude_options=options, local_settings=local)
     # 没有语义变化时保留用户格式；off 且从未安装则不创建空宿主配置。
     after = before if data == merged and before is not None else (
         json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode()
-    if before is None and mode == "off":
+    if before is None and not merged:
         after = b""
     return path, before, after
 
@@ -298,7 +322,7 @@ def process(pack: Path, project: Path, host: str, action: str) -> None:
         if read_file(path) != before:
             raise ValueError("Hook settings changed after preflight; preserve concurrent edit")
         atomic_write(path, after, mode)
-    print(f"[OK] {host} assist Hooks {action} (no permission/trust changes)")
+    print(f"[OK] {host} project Hooks / optional settings {action} (native trust preserved)")
 
 
 def main() -> int:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """通过 JSON 快照为 PM 提供确定性的任务图门禁。
 
-原有查询保持只读；显式 update/task 操作可更新内部快照或导出任务包，不派发
+原有查询保持只读；显式 init/update/task 操作可创建内部快照、更新或导出任务包，不派发
 Agent、不运行验证、不写项目计划，也不生成批准或 QA 结论。
 """
 
@@ -147,14 +147,14 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate and evaluate a PM task graph JSON snapshot.")
     parser.add_argument(
         "command",
-        choices=("validate", "ready", "qa-ready", "capacity", "update", "task", "fingerprints", "scratch", "cleanup-scratch"),
+        choices=("validate", "ready", "qa-ready", "capacity", "init", "update", "task", "fingerprints", "scratch", "cleanup-scratch"),
     )
-    parser.add_argument("--input", type=Path, help="JSON file; omit to read UTF-8 JSON from stdin")
+    parser.add_argument("--input", type=Path, help="JSON graph or explicit init decisions; omit to read UTF-8 JSON from stdin")
     parser.add_argument("--patch", help="update patch JSON file, or - for stdin")
     parser.add_argument("--expect-sha256", help="required old output fingerprint for writes; missing for new task output")
     parser.add_argument("--task-id", help="existing task to export")
-    parser.add_argument("--output", type=Path, help="explicit task-pack output; never created by default")
-    parser.add_argument("--root", type=Path, help="explicit root for selected file fingerprints or scratch workspace")
+    parser.add_argument("--output", type=Path, help="explicit new graph or task-pack output; never created by default")
+    parser.add_argument("--root", type=Path, help="explicit root for initialization, selected file fingerprints or scratch workspace")
     parser.add_argument("--select", action="append", default=[], help="select an existing receipt fingerprint-map field")
     parser.add_argument("--request-id", help="request identifier for deterministic scratch workspace allocation/cleanup")
     parser.add_argument("--all", action="store_true", help="clean all managed scratch workspaces for the project root")
@@ -1617,7 +1617,7 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        if args.command in {"update", "task", "fingerprints", "scratch", "cleanup-scratch"}:
+        if args.command in {"init", "update", "task", "fingerprints", "scratch", "cleanup-scratch"}:
             result = _record_command(args)
         else:
             if any((args.patch, args.expect_sha256, args.task_id, args.output, args.root, args.select, args.request_id, args.all)):
@@ -1648,6 +1648,16 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all)
     if args.request_id or args.all:
         raise TaskGraphError("--request-id and --all apply only to scratch and cleanup-scratch")
+    if args.command == "init":
+        if args.root is None or args.output is None or any((args.patch, args.expect_sha256, args.task_id, args.select)):
+            raise TaskGraphError("init requires --root and an explicit new --output; accepts only --input")
+        if __package__:
+            from .task_graph_init import initialize
+        else:
+            from task_graph_init import initialize
+        body = records.read_record(args.input) if args.input else sys.stdin.buffer.read()
+        return initialize(records.decode(body), args.root, args.output, _execute,
+                          input_path=args.input, input_body=body)
     body = records.read_record(args.input) if args.input else sys.stdin.buffer.read()
     payload = records.decode(body)
     if args.command == "fingerprints":

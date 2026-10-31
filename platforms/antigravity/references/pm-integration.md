@@ -66,6 +66,8 @@ Final QA outcome: PASS | FAIL. Require `qa_handoff_cli.py validate`. Completion:
 → PM commit assessment → memory closeout via `/xy-project-memory` → final user report. Setup owns
 marked artifacts and one signed, named assist Hook in `.agents/hooks.json`; other host settings,
 MCP, plugins, permissions, Agent mode and Artifact review policy stay unchanged. The Hook reminds
-once per conversation/workspace, not on every model invocation. It cannot identify user turns or
-context recovery reliably and does not invent them. See `.agent-workflow/platforms/shared/HOOKS.md`
+at native SessionStart, not on every model invocation, and creates no temporary deduplication markers.
+It does not infer user turns or context recovery from invocation counters or user message content.
+The actual client must support and execute SessionStart; generated configuration alone is not proof.
+See `.agent-workflow/platforms/shared/HOOKS.md`
 only for Hook setup or diagnostics.

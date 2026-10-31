@@ -13,6 +13,7 @@ from claude_instructions import CLAUDE_IMPORT, read_file, process as check_instr
 from qa_review_policy import validate_pack_qa_review_policy
 from validate_project_config import validate_with_profile
 from role_models import validate as validate_model_settings
+from claude_options import parse as parse_claude_options, frontmatter_window
 
 
 SKILL_MARKER = "<!-- agent-workflow-pack:managed-skill -->"
@@ -52,6 +53,7 @@ ALLOWED_SKILL_KEYS = {
     "paths",
 }
 ALLOWED_AGENT_KEYS = {
+    "autoCompactWindow",
     "name",
     "description",
     "model",
@@ -746,7 +748,7 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
                 errors.append(f"Claude runtime hardcodes adapter path {hardcoded}: {path}")
 
 
-def validate_agent(path: Path, role: str, project_root: Path, errors: list[str]) -> None:
+def validate_agent(path: Path, role: str, project_root: Path, errors: list[str], expected_window: int | None = None) -> None:
     fields, all_after = parse_frontmatter(path, errors)
     expected_name = claude_agent_name(role)
     if fields.get("name") != expected_name:
@@ -779,6 +781,12 @@ def validate_agent(path: Path, role: str, project_root: Path, errors: list[str])
     body = read_exact_utf8(path, "generated Claude Agent", errors)
     if body is None:
         return
+    # 复用安全读取后的正文，核对精确值；移除配置后遗留的窗口也必须报漂移。
+    try:
+        if frontmatter_window(body.encode("utf-8")) != expected_window:
+            errors.append(f"Agent autoCompactWindow differs from project configuration: {path}")
+    except ValueError:
+        errors.append(f"Agent has invalid autoCompactWindow: {path}")
     if AGENT_MARKER not in body:
         errors.append(f"missing managed Agent marker: {path}")
     if body.count("## PM task-pack boundary (generated)") != 1:
@@ -865,12 +873,17 @@ def validate_generated(
             if SKILL_MARKER in body and dest.parent.name not in expected:
                 errors.append(f"stale managed Claude Skill: {dest}")
     agent_root = project_root / ".claude/agents"
+    try:
+        windows = parse_claude_options((pack / "project.yaml").read_text(encoding="utf-8"))["auto_compact_windows"]
+    except (OSError, UnicodeError, ValueError) as exc:
+        errors.append(str(exc))
+        return
     for role in roles:
         path = agent_root / f"{claude_agent_name(role)}.md"
         if not path.is_file():
             errors.append(f"missing generated Agent: {path}")
             continue
-        validate_agent(path, role, project_root, errors)
+        validate_agent(path, role, project_root, errors, windows.get(role))
     if agent_root.is_dir():
         paths = {*agent_root.glob("xy-*.md"), *agent_root.glob("xy_*.md")}
         enabled_names = {claude_agent_name(role) for role in roles}

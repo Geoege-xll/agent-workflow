@@ -446,6 +446,53 @@ class ClaudeSourceContractTest(unittest.TestCase):
 
 
 class ClaudeGeneratedAgentTest(ClaudeFixtureMixin, unittest.TestCase):
+    def test_optional_window_and_write_guard_generate_check_and_detect_drift(self) -> None:
+        """通过真实安装器验证配置，不把原生字段存在当成宿主运行成功。"""
+        temp, project, pack = self.make_fixture()
+        self.addCleanup(temp.cleanup)
+        self.replace_config(pack, "auto_compact_windows: {}", 'auto_compact_windows: {"xy-qa": 200000}')
+        self.replace_config(pack, "block_writes_outside_working_directories: inherit", "block_writes_outside_working_directories: true")
+        result = self.run_setup(project)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        qa = project / ".claude/agents/xy-qa.md"
+        self.assertIn("autoCompactWindow: 200000\n", qa.read_text())
+        self.assertNotIn("autoCompactWindow:", self.read_agent(project, "xy-backend"))
+        settings = json.loads((project / ".claude/settings.json").read_text())
+        self.assertTrue(settings["permissions"]["blockWritesOutsideWorkingDirectories"])
+        checked = self.run_setup(project, "--check")
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        qa.write_text(qa.read_text().replace("autoCompactWindow: 200000", "autoCompactWindow: 300000"))
+        drift = self.run_setup(project, "--check")
+        self.assertNotEqual(0, drift.returncode)
+        self.assertIn("autoCompactWindow differs", drift.stdout + drift.stderr)
+        # 删除配置后重新生成会移除旧窗口；inherit 仍不撤销已生效的原生写入保护。
+        self.replace_config(pack, 'auto_compact_windows: {"xy-qa": 200000}', "auto_compact_windows: {}")
+        self.replace_config(pack, "block_writes_outside_working_directories: true", "block_writes_outside_working_directories: inherit")
+        result = self.run_setup(project)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("autoCompactWindow:", qa.read_text())
+        self.assertTrue(json.loads((project / ".claude/settings.json").read_text())["permissions"]["blockWritesOutsideWorkingDirectories"])
+
+    def test_invalid_window_or_native_guard_conflict_preflight_does_not_write(self) -> None:
+        """预检既不重写错误配置，也不为显式选择的保护覆盖用户 local 层。"""
+        temp, project, pack = self.make_fixture()
+        self.addCleanup(temp.cleanup)
+        self.replace_config(pack, "auto_compact_windows: {}", 'auto_compact_windows: {"xy-qa": "200k"}')
+        before = {str(p.relative_to(project)): p.read_bytes() for p in project.rglob("*") if p.is_file() and ".git" not in p.parts}
+        rejected = self.run_setup(project, "--preflight")
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertEqual(before, {str(p.relative_to(project)): p.read_bytes() for p in project.rglob("*") if p.is_file() and ".git" not in p.parts})
+        self.replace_config(pack, 'auto_compact_windows: {"xy-qa": "200k"}', "auto_compact_windows: {}")
+        self.replace_config(pack, "block_writes_outside_working_directories: inherit", "block_writes_outside_working_directories: true")
+        local = project / ".claude/settings.local.json"
+        local.parent.mkdir(exist_ok=True)
+        local.write_text('{"permissions":{"blockWritesOutsideWorkingDirectories":false}}\n')
+        before = {str(p.relative_to(project)): p.read_bytes() for p in project.rglob("*") if p.is_file() and ".git" not in p.parts}
+        rejected = self.run_setup(project, "--preflight")
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("原生设置冲突", rejected.stdout + rejected.stderr)
+        self.assertEqual(before, {str(p.relative_to(project)): p.read_bytes() for p in project.rglob("*") if p.is_file() and ".git" not in p.parts})
+
     def generated_fixture(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
         temp, project, pack = self.make_fixture()
         result = self.run_setup(project)
