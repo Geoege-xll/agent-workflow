@@ -71,3 +71,24 @@ It does not infer user turns or context recovery from invocation counters or use
 The actual client must support and execute SessionStart; generated configuration alone is not proof.
 See `.agent-workflow/platforms/shared/HOOKS.md`
 only for Hook setup or diagnostics.
+
+## 原生工具短路径
+
+按需使用 `xy-workflow/references/runtime-records.md` 的 doctor、用量与 continuation 路径。
+doctor 默认不启动进程，`--probe` 仅 `--version`，不执行 `/skills`。其
+documented/source_observed/runtime_unverified 区分文档、明确项目来源与运行未验证；
+`.agents/skills/grill-me/SKILL.md` 的声明／SHA 和 same_name_risk=possible 不能证明
+当前 `/grill-me` 的 actual_source（仍 unknown）。在目标宿主核对实际路径与指令后使用；
+原生 `/grill-me` 不自动替换本包 Full requirements coverage check，不自动改别名。
+
+PM 用实际 `invoke_subagent` 结果的 ID 经现 update 补记 `agent_ref`，以当前观察查询
+`continuation --host antigravity --observed-state <当前观察>`；只有当前已暴露且授权的
+原生续发／等待工具才能执行建议。取消、未知、失效或跨宿主均阻塞自动续用，仍须交接
+完整 Task Pack／scope；没有能力时不自建 runner、daemon、MCP 或替代 Reviewer。
+AGY 原生累计用量保留 unknown 初始基线、last_cumulative 与 observed_delta，不逐条累加。
+
+QA 结构化输出见 `xy-qa-review/references/inputs.md`：支持时同次授权调用使用
+`--json-schema <schema-json>`，再 `qa_handoff_cli.py extract --host antigravity
+--input <native-result.json>`。可选 usage 缺失不成为 QA 门禁。diff／Artifact 人工审阅
+不冒充原生 AI 审查或独立 AI QA；native、boost、teamwork 等模式不自动启用，
+也不调整现有 Artifact 策略、权限或 model／effort 来促成调用。

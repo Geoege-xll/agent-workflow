@@ -55,5 +55,20 @@ effective invocation, scope and result references in the existing `review_method
 capability discovery, never proof of a completed model review. If the current tool surface cannot
 invoke native review safely, record the technical reason and continue the existing method order.
 
+## 原生工具短路径
+
+按需使用 `xy-workflow/references/runtime-records.md` 的 doctor、原生用量和 `continuation`
+操作路径；诊断的 documented/source_observed/runtime_unverified 不等于本会话执行证明。
+PM 从当前原生工具取得真实 ID，经现有 update 补记 `agent_ref`，依实时 running/idle
+观察查询后，通过当前已暴露的原生 follow-up／wait 能力复用同一 Agent。取消、失效、
+未知或跨宿主不自动恢复；不新建 runner／Reviewer。完整 Task Pack 与 scope 仍须交接。
+当前工具表没有续发能力时如实报告，不用新开用户 chat 冒充同 Agent 续用。
+
+QA 结构化输出见 `xy-qa-review/references/inputs.md`：支持时在同次授权调用使用
+`codex exec --output-schema <schema-file>`，并用 `--output-last-message <native-result.json>`
+取得最终对象，再 `qa_handoff_cli.py extract --host codex --input <native-result.json>`。
+`codex review` 不支持该 schema 旗标；不得改变原审查方法顺序、模型／effort 或权限来
+凑结构化输出。原生用量按响应去重，样本范围和缺失值照实披露，不推算费用或节省比例。
+
 Regenerate with `bash .agent-workflow/setup_codex.sh`; validate with
 `bash .agent-workflow/setup_codex.sh --check`.

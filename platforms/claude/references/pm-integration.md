@@ -125,6 +125,18 @@ agent resumes in the background without another Agent call. After restart, resto
 and use the ID if its name no longer resolves. If the user cancelled the agent, respect cancellation;
 do not auto-resume it. A missing/expired ID is a recovery gap, not permission to invent a prior PASS.
 
+续用前按 `xy-workflow/references/runtime-records.md` 通过现有 update 补记真实
+`agent_ref`，用 `continuation --host claude --observed-state <当前观察>` 取得 wait／followup
+或阻塞建议；只由当前已暴露且获授权的原生工具执行，完整 Task Pack／scope 仍须核对。
+旧 ID、缺失名称或历史完成引用都不自动授权新任务；保留同一 Reviewer 及既有返工边界。
+同一参考中的 doctor 默认无进程，`--probe` 仅 `--version`；documented/source_observed
+与 runtime_unverified 不能冒充实际会话执行。用量只读取显式导出，保留原生字段与未知值。
+
+QA 结构化输出见 `xy-qa-review/references/inputs.md`：当前支持且已授权时，同次
+`-p --json-schema <schema-json>` 调用的成功终端 result 通过
+`qa_handoff_cli.py extract --host claude --input <native-result.json>` 解包后按原合同校验。
+不额外调用模型转 JSON，不另建 Reviewer，不改原权限、model／effort 或 method 顺序。
+
 Conversation forks inherit the main session's history, tools and model. Use the named `xy-*` role
 definitions for production writers and the independent read-only `xy-qa`; do not substitute a fork
 for the QA role or infer its narrower tool permissions from its assigned task text. Only PM delegates.

@@ -15,9 +15,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 try:
+    from .native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
     from .qa_review_policy import METHODS
     from .standard_paths import canonical_standard_path, standard_domain
 except ImportError:
+    from native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
     from qa_review_policy import METHODS
     from standard_paths import canonical_standard_path, standard_domain
 
@@ -62,6 +64,7 @@ STANDARDS_COVERAGE_FIELDS = {
     "path_checks",
     "rule_checks",
 }
+SKILL_EVIDENCE_FIELDS = {"skills_used", "unavailable_required_skills", "uncovered_audit_surfaces"}
 
 
 class QAHandoffError(ValueError):
@@ -72,9 +75,77 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate fixed QA scope and standards-policy coverage JSON."
     )
-    parser.add_argument("command", choices=("validate",))
+    parser.add_argument("command", choices=("validate", "schema", "extract"))
     parser.add_argument("--input", type=Path, help="JSON file; omit to read UTF-8 JSON from stdin")
+    parser.add_argument("--host", choices=HOSTS, help="Native terminal envelope host; extract only")
     return parser
+
+
+def qa_handoff_schema() -> dict[str, Any]:
+    """导出原生 strict 生成可用的最小 QA 合同，不以结构约束代替真实证据核验。
+
+    复用既有字段集合和方法枚举，每层对象都完整 required 并禁止额外字段，以兼容
+    OpenAI strict 的对象要求。此最小生成合同不描述任意发现元数据；extract 仍保留
+    实际输入的原始附加字段。条件回退、固定范围和规则闭合继续由原语义校验器决定。
+    """
+    def obj(fields: set[str], properties: dict[str, Any]) -> dict[str, Any]:
+        return {"type": "object", "properties": properties, "required": sorted(fields),
+                "additionalProperties": False}
+
+    def strings() -> dict[str, Any]:
+        return {"type": "array", "items": {"type": "string"}}
+
+    repository = obj(REPOSITORY_FIELDS, {
+        "path": {"type": "string"}, "base_revision": {"type": "string"},
+        "head_revision": {"type": "string"}, "diff_fingerprint": {"type": "string"},
+        "changed_paths": strings(),
+    })
+    scope = obj({"repositories"}, {"repositories": {"type": "array", "items": repository}})
+    method = obj(REVIEW_METHOD_FIELDS, {
+        "selected": {"type": "string", "enum": list(METHODS)},
+        "external_skill": {"type": ["string", "null"]},
+        "capability_evidence": strings(),
+        "fallback_reason": {"type": ["string", "null"],
+                            "enum": [None, *sorted(REVIEW_FALLBACK_REASONS)]},
+        "scope_ref": scope,
+    })
+    path_check = obj(PATH_CHECK_FIELDS, {
+        "path": {"type": "string"}, "applicable_rule_ids": strings(),
+        "reason": {"type": "string"},
+    })
+    rule_check = obj(RULE_CHECK_FIELDS, {
+        "rule_id": {"type": "string"}, "source_path": {"type": "string"},
+        "source_fingerprint": {"type": "string"}, "source_anchor": {"type": "string"},
+        "domain": {"type": "string", "enum": ["engineering", "design"]},
+        "severity": {"type": "string", "enum": ["hard", "advisory"]},
+        "disposition": {"type": "string", "enum": ["pass", "fail", "not_applicable"]},
+        "affected_paths": strings(), "evidence_refs": strings(),
+        "not_applicable_reason": {"type": "string"}, "exception_ref": {"type": "string"},
+    })
+    coverage = obj(STANDARDS_COVERAGE_FIELDS, {
+        "index_path": {"type": "string"}, "root": {"type": "string"},
+        "index_fingerprint": {"type": "string"}, "task_pack_rule_ids": strings(),
+        "required_engineering_rule_ids": strings(), "required_design_rule_ids": strings(),
+        "path_checks": {"type": "array", "items": path_check},
+        "rule_checks": {"type": "array", "items": rule_check},
+    })
+    return obj({"audit_result", "review_method", "standards_policy_coverage", "skill_evidence"}, {
+        "audit_result": {"type": "string", "enum": ["PASS", "FAIL"]},
+        "review_method": method, "standards_policy_coverage": coverage,
+        "skill_evidence": obj(SKILL_EVIDENCE_FIELDS, {field: strings() for field in sorted(SKILL_EVIDENCE_FIELDS)}),
+    })
+
+
+def _validate_native_contract(payload: dict[str, Any]) -> None:
+    """只对新原生入口要求显式技能证据，不把文档新字段变成历史 validate 硬门禁。"""
+    evidence = _object(payload.get("skill_evidence"), "skill_evidence")
+    missing = SKILL_EVIDENCE_FIELDS - set(evidence)
+    if missing:
+        raise QAHandoffError("skill_evidence is missing field(s): " + ", ".join(sorted(missing)))
+    for field in sorted(SKILL_EVIDENCE_FIELDS):
+        _string_list(evidence[field], f"skill_evidence.{field}")
+    if payload.get("audit_result") == "PASS" and evidence["unavailable_required_skills"]:
+        raise QAHandoffError("PASS requires empty skill_evidence.unavailable_required_skills")
 
 
 def _read_payload(path: Path | None) -> dict[str, Any]:
@@ -343,7 +414,7 @@ def _validate_standards_coverage(
         ):
             raise QAHandoffError(f"{label}.source_fingerprint must be lowercase SHA-256")
         domain = check["domain"]
-        if domain not in {"engineering", "design"}:
+        if not isinstance(domain, str) or domain not in {"engineering", "design"}:
             raise QAHandoffError(f"{label}.domain must be engineering or design")
         # 扁平路径仍保留类型约束，不能通过改写 domain 将工程规范伪装成设计规范。
         if not canonical_standard_path(source_path, standards_root) or standard_domain(source_path, standards_root) != domain:
@@ -352,10 +423,10 @@ def _validate_standards_coverage(
             )
         source_anchor = _nonempty_string(check["source_anchor"], f"{label}.source_anchor")
         severity = check["severity"]
-        if severity not in {"hard", "advisory"}:
+        if not isinstance(severity, str) or severity not in {"hard", "advisory"}:
             raise QAHandoffError(f"{label}.severity must be hard or advisory")
         disposition = check["disposition"]
-        if disposition not in {"pass", "fail", "not_applicable"}:
+        if not isinstance(disposition, str) or disposition not in {"pass", "fail", "not_applicable"}:
             raise QAHandoffError(
                 f"{label}.disposition must be pass, fail, or not_applicable"
             )
@@ -493,7 +564,8 @@ def validate_qa_handoff(payload: dict[str, Any]) -> None:
     """验证 QA 内部结果；成功即返回，失败抛出稳定、可测试的错误。"""
 
     audit_result = payload.get("audit_result")
-    if audit_result not in {"PASS", "FAIL"}:
+    # 外部 JSON 可把枚举伪装为数组／对象；先核对类型，避免集合查询泄漏 TypeError。
+    if not isinstance(audit_result, str) or audit_result not in {"PASS", "FAIL"}:
         raise QAHandoffError("audit_result must be PASS or FAIL")
     review_method = _object(payload.get("review_method"), "review_method")
     _validate_review_method(review_method)
@@ -509,14 +581,29 @@ def validate_qa_handoff(payload: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    args = _parser().parse_args()
+    parser = _parser()
+    args = parser.parse_args()
+    if args.command == "schema":
+        if args.input is not None or args.host is not None:
+            parser.error("schema does not accept --input or --host")
+        print(json.dumps(qa_handoff_schema(), ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "extract" and (args.input is None or args.host is None):
+        parser.error("extract requires --host and --input")
+    if args.command == "validate" and args.host is not None:
+        parser.error("--host is supported only for extract")
     try:
-        payload = _read_payload(args.input)
+        payload = (extract_native_handoff(args.host, args.input) if args.command == "extract"
+                   else _read_payload(args.input))
+        if args.command == "extract":
+            _validate_native_contract(payload)
         validate_qa_handoff(payload)
-    except QAHandoffError as exc:
+    except (QAHandoffError, NativeHandoffError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
-    print(json.dumps({"status": "valid"}, ensure_ascii=False, sort_keys=True))
+    # 原 validate 的成功响应保持不变；extract 仅输出通过原语义校验的完整内层对象。
+    result = payload if args.command == "extract" else {"status": "valid"}
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
     return 0
 
 

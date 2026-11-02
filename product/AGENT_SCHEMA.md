@@ -138,7 +138,21 @@ owned_paths: []      # Normalized project-relative ownership; ordered handoff ma
 semantic_locks: []   # Shared contracts that cannot be changed concurrently
 state: DECLARED      # Runtime dispatch state; saved plan keeps concise recoverable progress, not a second scheduler
 qa_scope: request    # Current request dependency closure, not the entire project
+# 可选计划元数据：仅 PM 从真实原生派发结果补记；init 不接受执行身份。
+# agent_ref: {host: codex, agent_id: <actual-native-id>}
 ```
+
+`agent_ref` 不进入最小 Task 调度模型，也不保存另一份 Agent／任务状态。对象仅接受
+`host`（codex／claude／antigravity）和 `agent_id`（1..256 字符，无空白或控制字符）；
+形状合法不证明真实身份。旧图可省略；PM 通过既有 `update` 的 `set.agent_ref`，只向
+补丁前已经 RUNNING 或显式 qa 的 QA 任务首次绑定真实 ID；不可 append、清空或换绑，
+同值幂等。两个活动任务不能共享同一 host／ID，历史完成引用可保留但不授权新任务。
+CAS、锁、READY、QA-ready、BUILD_VERIFIED 和 QA_PASSED 沿用原约束。只读
+`continuation --input GRAPH --task-id ID --host HOST --observed-state running|idle|cancelled|missing|unknown`
+返回当前观察下的 wait／followup 或 blocked 建议，不探测、不派发、不发消息或改状态。
+跨宿主、取消、未知、失效和非活动任务不可自动续用。ID 不证明批准、角色权限、存活
+或完成；PM 仍交接当前完整 Task Pack／scope，原生执行路径见当前 host pm-integration，
+操作细节见 `xy-workflow/references/runtime-records.md`。
 
 `role`, `surface_kind`, and `qa_scope` are mandatory together for planned Agent tasks. The runtime
 snapshot also carries typed `ui_contract.prototype_paths` and derives the design-standard boundary
@@ -387,6 +401,14 @@ has `fallback_reason: null`; installed/internal selection needs one listed techn
 evidence explaining preceding methods' unavailability. Unpinned output is `malformed-output`;
 findings or FAIL never justify fallback. PM/QA still verify referenced actual capabilities,
 effective permissions/model/effort, fixed scope and execution: schema validity is not runtime proof.
+
+同一次已授权的原生 QA 调用支持结构化输出时，可用 `qa_handoff_cli.py schema` 获取
+当前 JSON Schema，再以 `extract --host H --input native-result.json` 解包终端成功
+输出并执行原 handoff 语义校验；原 `validate` 合同保持可用。传输结构成功不代表 QA
+PASS，不取代真实执行、固定 scope 和规范证据。Codex exec 使用 `--output-schema`
+（review 无此旗标），Claude `-p --json-schema`，AGY `--json-schema`；当前版本与
+权限仍须核对。详细终端形状与调用路径只在 `xy-qa-review/references/inputs.md` 维护。
+Task Pack 仍用任务图 `task` 机械导出，不为转换 JSON 额外调用模型或增加 Reviewer。
 
 The implementation-acceptance handoff below does not apply to WORKFLOW's `Standalone read-only
 audit` branch. An audit-only conclusion creates no writer/BUILD_VERIFIED or implementation QA PASS;

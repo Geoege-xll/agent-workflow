@@ -21,18 +21,21 @@ import tempfile
 from typing import Any, Callable
 
 try:
+    from .agent_continuation import active as _running, check_binding
     from .claude_instructions import read_file
     from .task_graph import TaskGraphError
 except ImportError:
+    from agent_continuation import active as _running, check_binding
     from claude_instructions import read_file
     from task_graph import TaskGraphError
 
 
 SET_FIELDS = frozenset({
+    "agent_ref",
     "state", "owned_paths", "semantic_locks", "input_contracts", "output_contracts",
     "acceptance_evidence", "verification_commands", "controlled_document_access",
 })
-APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access"}
+APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access", "agent_ref"}
 COMPLETED_STATES = {"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED"}
 
 
@@ -234,11 +237,6 @@ def _document_contract(task: dict[str, Any]) -> Any:
     return result
 
 
-def _running(task: dict[str, Any]) -> bool:
-    """QA 的两个既有运行态共用就绪与锁规则；不新增状态或自动派发。"""
-    return task["state"] == "RUNNING" or (task["task_type"] == "qa" and task["state"] == "QA")
-
-
 def _completed(task: dict[str, Any]) -> bool:
     # 显式 QA 节点的 QA 是正在审查，不是已完成；重审可回到 QA／RUNNING。
     return task["state"] in COMPLETED_STATES and not _running(task)
@@ -267,6 +265,9 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if set(fields) - SET_FIELDS or set(additions) - APPEND_FIELDS:
             raise TaskGraphError("task update attempts to modify a protected or unsupported field")
         for field, value in fields.items():
+            if field == "agent_ref":
+                # 在套用状态变更之前检查旧记录，身份不是新派发或完成态的凭据。
+                check_binding(old[task_id], value)
             if field in APPEND_FIELDS and not isinstance(value, list):
                 raise TaskGraphError(f"set {field} requires an array")
         task.update(copy.deepcopy(fields))
@@ -284,7 +285,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             workspace["head_revision"] = copy.deepcopy(operations["checkpoint"])
         # 记录实际证据可以追加；实现输入、输出和规范合同变更则不能沿用旧完成态。
         # 此处先比较，再做单纯指纹刷新，使恢复检查点更新不会废弃无关构建证据。
-        contract_fields = SET_FIELDS - {"state", "acceptance_evidence", "controlled_document_access"}
+        contract_fields = SET_FIELDS - {"state", "acceptance_evidence", "controlled_document_access", "agent_ref"}
         if (any(task.get(key) != old[task_id].get(key) for key in contract_fields)
                 or _document_contract(task) != _document_contract(old[task_id])):
             changed_contracts.add(task_id)

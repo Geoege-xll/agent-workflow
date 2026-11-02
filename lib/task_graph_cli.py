@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 try:
+    from .agent_continuation import HOSTS, OBSERVED_STATES, continuation, validate_references
     from .worktree_policy import WorktreePolicyError, integration_ready, validate_execution
     from .standard_paths import canonical_standard_path, standard_domain
     from .task_graph import (
@@ -26,6 +27,7 @@ try:
         validate_graph,
     )
 except ImportError:
+    from agent_continuation import HOSTS, OBSERVED_STATES, continuation, validate_references
     from worktree_policy import WorktreePolicyError, integration_ready, validate_execution
     from standard_paths import canonical_standard_path, standard_domain
     from task_graph import (  # type: ignore[no-redef]
@@ -50,6 +52,7 @@ GRAPH_FIELDS = {
     "state",
 }
 PLAN_ONLY_FIELDS = {
+    "agent_ref",
     "execution_workspace",
     "role",
     "goal",
@@ -147,12 +150,14 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate and evaluate a PM task graph JSON snapshot.")
     parser.add_argument(
         "command",
-        choices=("validate", "ready", "qa-ready", "capacity", "init", "update", "task", "fingerprints", "scratch", "cleanup-scratch"),
+        choices=("validate", "ready", "qa-ready", "capacity", "init", "update", "task", "fingerprints", "scratch", "cleanup-scratch", "continuation"),
     )
     parser.add_argument("--input", type=Path, help="JSON graph or explicit init decisions; omit to read UTF-8 JSON from stdin")
     parser.add_argument("--patch", help="update patch JSON file, or - for stdin")
     parser.add_argument("--expect-sha256", help="required old output fingerprint for writes; missing for new task output")
     parser.add_argument("--task-id", help="existing task to export")
+    parser.add_argument("--host", choices=HOSTS, help="current native host, only for continuation")
+    parser.add_argument("--observed-state", choices=OBSERVED_STATES, help="PM's current native observation, only for continuation")
     parser.add_argument("--output", type=Path, help="explicit new graph or task-pack output; never created by default")
     parser.add_argument("--root", type=Path, help="explicit root for initialization, selected file fingerprints or scratch workspace")
     parser.add_argument("--select", action="append", default=[], help="select an existing receipt fingerprint-map field")
@@ -1554,6 +1559,8 @@ def _tasks(payload: dict[str, Any]) -> list[Task]:
             )
         )
     _validate_ui_dependencies(typed_raw_tasks, prototype_paths)
+    # 原生引用属于计划元数据，不进入 Task 最小调度模型，也不改变 READY/QA 算法。
+    validate_references(typed_raw_tasks)
     return tasks
 
 
@@ -1617,7 +1624,19 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        if args.command in {"init", "update", "task", "fingerprints", "scratch", "cleanup-scratch"}:
+        if args.command == "continuation":
+            if (not args.input or not args.task_id or not args.host or not args.observed_state
+                    or any((args.patch, args.expect_sha256, args.output, args.root, args.select, args.request_id, args.all))):
+                raise TaskGraphError("continuation requires --input, --task-id, --host and --observed-state only")
+            payload = _read_payload(args.input)
+            _execute("validate", payload)
+            matches = [task for task in payload["tasks"] if task["id"] == args.task_id]
+            if not matches:
+                raise TaskGraphError(f"unknown task ID: {args.task_id}")
+            result = continuation(matches[0], args.host, args.observed_state)
+        elif args.host or args.observed_state:
+            raise TaskGraphError("--host and --observed-state apply only to continuation")
+        elif args.command in {"init", "update", "task", "fingerprints", "scratch", "cleanup-scratch"}:
             result = _record_command(args)
         else:
             if any((args.patch, args.expect_sha256, args.task_id, args.output, args.root, args.select, args.request_id, args.all)):

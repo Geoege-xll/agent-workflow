@@ -367,6 +367,140 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
         self.assertEqual(['SessionStart'], results[-1]['workflow']['target_hook_events'])
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.home.rglob('*') if p.is_file()})
 
+    def test_antigravity_capabilities_separate_documentation_from_runtime_and_ai_review(self):
+        """文档列出的入口只证明合同存在，人工审阅面板不能冒充专用 AI 审查。"""
+        result = diagnose('antigravity', home=self.home, environment={})
+        features = {row['name']: row for row in result['documented_capabilities']}
+        expected = {'diff_review_ui', 'artifact_review_ui', 'independent_subagents', 'send_message_resume',
+                    'conversation_resume', 'context_usage', 'quota_usage', 'headless_json',
+                    'structured_output_schema', 'cumulative_session_usage', 'skill_source_inspection',
+                    'skill_reload', 'native_grill_me', 'native_plan'}
+        self.assertTrue(expected.issubset(features))
+        self.assertTrue(all(row['evidence_level'] == 'documented' for row in features.values()))
+        self.assertTrue(all(row['runtime_status'] == 'runtime_unverified' for row in features.values()))
+        for name in ('diff_review_ui', 'artifact_review_ui'):
+            self.assertEqual('human_review_ui', features[name]['kind'])
+        self.assertEqual('--json-schema', features['structured_output_schema']['interface'])
+        self.assertEqual('cumulative_session', features['cumulative_session_usage']['counter_scope'])
+        self.assertEqual('not_confirmed_in_reference', result['review_boundary']['dedicated_ai_review']['status'])
+        self.assertFalse(result['review_boundary']['dedicated_ai_review']['runtime_verified'])
+
+    def test_antigravity_skill_source_is_bounded_project_metadata_and_actual_source_stays_unknown(self):
+        """只读取明确项目技能；当前文件和文档优先级均不足以确认宿主实际命中。"""
+        project = self.home / 'project'
+        path = self.write('project/.agents/skills/grill-me/SKILL.md',
+                          '---\nname: "grill-me"\ndescription: fixture\n---\nPRIVATE-SKILL-BODY\n')
+        self.write('.gemini/skills/grill-me/SKILL.md', 'PERSONAL-SKILL-SECRET')
+        before = path.read_bytes()
+        with patch('pathlib.Path.rglob', side_effect=AssertionError('不得递归扫描技能目录')), \
+                patch('pathlib.Path.glob', side_effect=AssertionError('不得枚举技能目录')), \
+                patch('manager.capabilities.subprocess.run', side_effect=AssertionError('不得启动宿主')):
+            result = diagnose('antigravity', project=project, home=self.home, environment={})
+        source = result['customization_sources']['grill_me']
+        definition = source['project_definition']
+        self.assertEqual('.agents/skills/grill-me/SKILL.md', definition['relative_path'])
+        self.assertEqual('source_observed', definition['status'])
+        self.assertEqual('source_observed', definition['evidence_level'])
+        self.assertEqual('grill-me', definition['declared_name'])
+        self.assertEqual(hashlib.sha256(before).hexdigest(), definition['sha256'])
+        self.assertEqual('possible', source['same_name_risk'])
+        self.assertEqual('unknown', source['actual_source']['status'])
+        self.assertIsNone(source['actual_source']['source'])
+        self.assertEqual('runtime_unverified', source['actual_source']['evidence_level'])
+        self.assertFalse(result['customization_sources']['personal_directories_scanned'])
+        self.assertNotIn('PRIVATE-SKILL-BODY', json.dumps(result))
+        self.assertNotIn('PERSONAL-SKILL-SECRET', json.dumps(result))
+        self.assertEqual(before, path.read_bytes())
+
+    def test_antigravity_skill_declaration_does_not_trust_filename_or_echo_invalid_names(self):
+        project = self.home / 'project'
+        for declaration, name, risk in (("name: different-skill", 'different-skill', 'unknown'),
+                                        ('name: grill-me\nname: grill-me', None, 'unknown'),
+                                        ('name: grill-me\ndescription: first\ndescription: second', None, 'unknown'),
+                                        ('name: grill-me\nBROKEN-FRONTMATTER', None, 'unknown'),
+                                        ('name: grill-me\ndescription: "SECRET', None, 'unknown'),
+                                        ('name: grill-me\ndescription:   ', None, 'unknown'),
+                                        ('name: "grill-me\\u001bSECRET"', None, 'unknown'),
+                                        ('name: ' + 'a' * 65, None, 'unknown'),
+                                        ('name: [SECRET]', None, 'unknown')):
+            with self.subTest(declaration=declaration):
+                self.write('project/.agents/skills/grill-me/SKILL.md', '---\n' + declaration + '\n---\n')
+                result = diagnose('antigravity', project=project, home=self.home, environment={})
+                source = result['customization_sources']['grill_me']
+                self.assertEqual(name, source['project_definition']['declared_name'])
+                self.assertEqual(risk, source['same_name_risk'])
+                self.assertEqual('unknown', source['actual_source']['status'])
+                self.assertNotIn('SECRET', json.dumps(result))
+
+    def test_antigravity_skill_source_failure_remains_unknown_and_uses_safe_reader(self):
+        """链接、特殊节点、非法编码和超限内容全部拒绝；失败不能退回成功或空覆盖。"""
+        project = self.home / 'project'
+        path = self.write('project/.agents/skills/grill-me/SKILL.md', '---\nname: grill-me\n---\n')
+        outside = self.write('outside-skill', 'OUTSIDE-SECRET')
+        for kind in ('symlink', 'parent_symlink', 'hardlink', 'fifo', 'invalid_utf8', 'oversized'):
+            with self.subTest(kind=kind):
+                if path.is_symlink() or path.exists():
+                    path.unlink()
+                if kind == 'symlink':
+                    path.symlink_to(outside)
+                elif kind == 'parent_symlink':
+                    directory = path.parent
+                    directory.rmdir()
+                    directory.symlink_to(self.home, target_is_directory=True)
+                elif kind == 'hardlink':
+                    os.link(outside, path)
+                elif kind == 'fifo':
+                    os.mkfifo(path)
+                else:
+                    path.write_bytes(b'\xff' if kind == 'invalid_utf8' else b'x' * (4 * 1024 * 1024 + 1))
+                result = diagnose('antigravity', project=project, home=self.home, environment={})
+                source = result['customization_sources']['grill_me']
+                self.assertEqual('invalid_or_unreadable', source['project_definition']['status'])
+                self.assertIsNone(source['project_definition']['sha256'])
+                self.assertEqual('unknown', source['same_name_risk'])
+                self.assertEqual('unknown', source['actual_source']['status'])
+                self.assertNotIn('OUTSIDE-SECRET', json.dumps(result))
+                if kind == 'parent_symlink':
+                    path.parent.unlink()
+                    path.parent.mkdir()
+        path.unlink()
+        source = diagnose('antigravity', project=project, home=self.home, environment={})['customization_sources']['grill_me']
+        self.assertEqual('not_found', source['project_definition']['status'])
+        self.assertEqual('unknown', source['actual_source']['status'])
+
+    def test_doctor_probe_only_requests_version_and_keeps_unverified_source_after_failure(self):
+        """显式探测也不扩展到 help、面板或模型，探测失败只返回固定安全状态。"""
+        for response in (subprocess.CompletedProcess(['fixture', '--version'], 0, 'agy 1.4.4\n', ''),
+                         subprocess.CompletedProcess(['fixture', '--version'], 2, 'SECRET', 'SECRET'),
+                         OSError('SECRET')):
+            with self.subTest(response=type(response).__name__), \
+                    patch('manager.capabilities.shutil.which', return_value='/fixture/agy'), \
+                    patch('manager.capabilities.subprocess.run', **({'side_effect': response} if isinstance(response, OSError)
+                                                                  else {'return_value': response})) as run:
+                result = diagnose('antigravity', probe=True, home=self.home, environment={})
+            self.assertEqual(['/fixture/agy', '--version'], run.call_args.args[0])
+            self.assertEqual(3, run.call_args.kwargs['timeout'])
+            self.assertEqual(subprocess.DEVNULL, run.call_args.kwargs['stdin'])
+            self.assertEqual(1, run.call_count)
+            self.assertEqual('source_observed' if result['client']['status'] == 'version_observed' else 'runtime_unverified',
+                             result['client']['evidence_level'])
+            self.assertFalse(result['runtime_verified'])
+            self.assertNotIn('SECRET', json.dumps(result))
+
+    def test_cli_doctor_exposes_source_evidence_without_spawning_or_writing(self):
+        project = self.home / 'project'
+        path = self.write('project/.agents/skills/grill-me/SKILL.md', '---\nname: grill-me\n---\nBODY\n')
+        before = path.read_bytes()
+        output = io.StringIO()
+        with patch('pathlib.Path.home', return_value=self.home), patch.dict(os.environ, {}, clear=True), \
+                patch('manager.capabilities.subprocess.run', side_effect=AssertionError('不得启动宿主')), redirect_stdout(output):
+            self.assertEqual(0, cli_main(['doctor', '--platform', 'antigravity', '--project', str(project)]))
+        result = json.loads(output.getvalue())[0]
+        self.assertEqual('not_probed', result['client']['status'])
+        self.assertEqual('possible', result['customization_sources']['grill_me']['same_name_risk'])
+        self.assertEqual(before, path.read_bytes())
+        self.assertFalse((self.home / '.config/agent-workflow').exists())
+
     def test_version_probe_is_not_runtime_proof_and_never_echoes_raw_output(self):
         for version, eligible in (('2.1.309', False), ('2.1.316', True), ('2.1.316-alpha.1', None)):
             completed = subprocess.CompletedProcess(['fixture', '--version'], 0,

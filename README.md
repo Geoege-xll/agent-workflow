@@ -681,6 +681,15 @@ GUARD_STRICT=1 bash .agent-workflow/scripts/guard.sh
 
 ## Native landing points
 
+按需复用原生能力的操作路径集中在
+[运行记录工具](platforms/shared/skills/xy-workflow/references/runtime-records.md#原生能力观察用量与同-agent-续用)：
+doctor 区分文档、明确来源观察和运行未验证；native_usage 读取显式本地导出并保留原生
+计数语义；任务图可选 agent_ref 绑定真实 ID，continuation 按 PM 当前观察提供只读续用
+建议。取消／未知／失效／跨宿主不自动恢复，ID 不证明批准、存活或完成。
+[QA 输入合同](platforms/shared/skills/xy-qa-review/references/inputs.md#原生结构化交接)
+提供 schema／extract；原 validate、独立 QA 和完整 Task Pack 交接保持不变。
+各宿主差异见下列 PM integration，工具不新增普通只读／Trivial 门禁或自动启用可选模式。
+
 | Platform | PM instructions / entry | Roles | Core Skills |
 |:---------|:------------------------|:------|:------------|
 | Codex | `AGENTS.md` / `$xy-workflow` | `.codex/agents/xy-*.toml` | `.agents/skills/xy-*` |

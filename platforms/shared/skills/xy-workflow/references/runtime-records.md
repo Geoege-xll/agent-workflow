@@ -76,8 +76,8 @@ The patch supports:
 - `tasks`: an object keyed by existing task ID. Each operation may contain `set`, `append`,
   `documents`, and `checkpoint`. `set` accepts `state`, `owned_paths`, `semantic_locks`, `input_contracts`,
   `output_contracts`, `acceptance_evidence`, `verification_commands`, and
-  `controlled_document_access`; `append` supports their existing arrays, except the
-  non-array fields `state` and `controlled_document_access`.
+  `controlled_document_access` and optional `agent_ref`; `append` supports their existing arrays,
+  except the non-array fields `state`, `controlled_document_access` and `agent_ref`.
 - `documents`: within a task operation, map an existing document path to the owned paths that
   should be appended to its `applies_to`. Select actual applicable documents; the tool does not
   silently broaden every document. Existing standards coverage and write-boundary validation apply.
@@ -150,6 +150,74 @@ Export preserves the recorded state; it never resets work, changes acceptance or
 接收方宿主可读取导出文件时，交接确切的完整文件引用、当前文件 SHA-256 和简短变化
 摘要；接收方核对版本并完整读取当前 Task Pack，不能用摘要或差量代替。宿主无法读取
 该文件时，仍通过支持的通道交付完整包。合同未变时，不仅为切换传输方式重新生成包。
+
+## 原生能力观察、用量与同 Agent 续用
+
+以下入口都按需使用，不为普通只读或 Trivial 工作增加快照、验证、报告或门禁。
+它们复用当前宿主能力，不启动 runner、daemon、MCP 或第二套 Agent 调度器；原生
+能力、boost、teamwork 和其他可选模式不因安装或诊断自动启用。
+
+在源包根或安装态 `.agent-workflow` 根，能力诊断使用现有管理器：
+
+```bash
+bash lib/python_runtime.sh -X utf8 -m manager.cli doctor --platform antigravity \
+  --project "${project_root:?set actual project root}"
+```
+
+`documented` 仅表示文档能力，`source_observed` 仅表示明确来源字节已观察，
+`runtime_unverified` 表示尚未验证当前会话实际行为。默认不启动宿主进程；显式
+`--probe` 只运行该宿主 `--version`，不登录、不调用模型、不执行 `/skills`。
+AGY 只检查明确项目路径 `.agents/skills/grill-me/SKILL.md`，
+`customization_sources.grill_me.project_definition` 披露 `status`、`sha256`、
+`declared_name` 等；同名时 `same_name_risk: possible`，实际使用来源仍为
+`actual_source.status: unknown`。不能据文件存在断言当前会话加载了哪一份技能。
+AGY 原生 `/grill-me` 与本包的自包含 requirements coverage check 要核对实际来源和
+适用合同，不能自动替换、改别名或省略本包的 Full 需求覆盖；也不扫描个人技能目录。
+
+显式导出当前授权范围的原生用量元数据后，复用只读适配器：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/native_usage.py \
+  --host codex --input "${native_usage_input:?set explicit exported JSON or JSONL}"
+```
+
+`--input` 可重复，按输入观察顺序读取，数据留在本地任务范围，不扫账户或其他会话。
+Codex 按 `(thread_id, response_id)` 去重响应，不能再混加其他口径的 turn 计数；
+Claude 使用终端 result 的原生字段与身份。AGY result 的 usage 是累计快照，初始
+基线未知须保留 `unknown`，输出 `last_cumulative` 与首末 `observed_delta`；单次快照
+差值为 null，不能逐条 sum 或把未知填零。缺失计数保持 null，真实零仍为 0，缓存／
+推理子项不再加进原生 total，不计算费用或 token 节省百分比。只说明实际采样的会话、
+响应与完成轮范围；主会话样本不代表子 Agent，未采样宿主不以零值冒充基线。
+
+任务图可选 `agent_ref: {host: codex|claude|antigravity, agent_id: <真实原生 ID>}`
+只保存原生引用，不存另一份 Agent 状态。旧图省略字段继续合法，`init` 拒绝导入该
+执行身份。PM 先从实际已授权的原生派发结果核对 ID，再经 `update` 的
+`set.agent_ref` 补记到补丁前已经 `RUNNING` 或显式 `task_type: qa` 的 `QA` 任务；
+不能把首次派发状态与身份一次补丁合并，不能用 `append` 绕过类型校验。
+ID 为 1..256 字符，无空白或控制字符，形状合法不证明身份真实。已有引用只能同值
+幂等，不能静默替换／清空；同 `(host, agent_id)` 不能占用两个活动任务。完成任务
+可保留历史引用，但不能据此自动授权新任务。写入仍走原 CAS、协作锁与全部原校验。
+
+PM 当前通过已暴露原生工具观察身份后，运行只读查询：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py continuation \
+  --input "${workflow_graph:?set actual graph path}" --task-id "${task_id:?set existing ID}" \
+  --host codex --observed-state idle
+```
+
+`running` 建议 `action: wait`，`idle` 建议 `action: followup`，两者可复用图中同一 ID；
+跨宿主、`cancelled`、`missing`、`unknown`、未绑定或非活动任务返回
+`reuse_allowed: false`、`action: blocked`，先由 PM 解决真实恢复缺口。阻塞建议是正常
+查询结果（退出 0），输入错误退出 2。查询不探测存活、不派发、不发消息、不改状态，
+也不创建替代 Worker 或 Reviewer。后续原生动作只由当前 host 的已暴露且已授权工具
+执行；取消不能自动恢复，未知不能当作 idle，ID 存在不证明批准、角色权限或完成。
+执行前仍须交接并核对当前完整 Task Pack 和 scope；摘要与引用不能替代完整输入。
+READY、QA-ready、BUILD_VERIFIED、QA_PASSED 和同一独立 Reviewer 的返工规则保持原约束。
+
+QA 原生结构化输出的 schema／extract 操作见
+[`xy-qa-review` 的输入合同](../../xy-qa-review/references/inputs.md#原生结构化交接)。
+Task Pack 仍使用上面的 `task` 机械导出，不为把自然语言转成 JSON 额外调用模型。
 
 ## 完整读取必需长文
 

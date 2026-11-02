@@ -97,3 +97,37 @@
 
 Do not substitute the root prototype index, task summary, recalled memory, claimed result, or
 potential Skill match for applicable design authority, current source, and real logs.
+
+## 原生结构化交接
+
+当前宿主已提供且已获授权的 QA 调用支持 schema 时，先用
+`qa_handoff_cli.py schema` 获取本包当前 QA handoff 的 JSON Schema，将其交给同一次
+原生 QA 调用；不为将已有自然语言改成 JSON 额外开模型调用，不启动另一位 Reviewer。
+在安装态项目根使用以下只读入口：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py schema
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py extract \
+  --host codex --input "${native_qa_result:?set actual terminal native-result.json}"
+```
+
+`extract` 读取 Codex 保存的最终 QA 对象，或从 Claude／AGY 终端成功 envelope 提取
+结构化对象后，直接复用原 `validate` 的范围、
+review_method、规则覆盖与证据语义校验；成功只证明这些机械合同满足，PM／QA 仍须
+核对真实审查执行、只读边界、固定 scope、model／effort 与证据，才能接受 QA PASS。
+失败、取消、半截流、非对象或无结构化结果不能伪装成有效 handoff。
+
+- Codex 使用当前版本支持的 `exec --output-schema <schema-file>`；`codex review`
+  没有该旗标，不给 review 拼接它，也不为结构化输出绕过原 review_method 顺序。
+  用 `--output-last-message <native-result.json>` 保存最终 QA JSON 后再 extract，
+  不将 exec 事件流当作最终消息；还须核对该原生调用确实成功完成。
+- Claude 使用已支持且获授权的 `-p --json-schema <schema-json>`，成功终端 result
+  envelope 仍须符合 type／subtype／is_error 与 structured_output 合同。
+- AGY 使用已支持且获授权的 `--json-schema <schema-json>`，终端结果必须有
+  `conversation_id`、`status: SUCCESS` 和 `structured_output`；`response`、`usage`
+  可缺省，存在时校验结构和一致性，用量可见性不成为 QA 新门禁。
+
+普通 JSON handoff 仍使用原 `validate --input <handoff.json>`。Task Pack 继续通过
+`task_graph_cli.py task` 导出，不套 QA schema。原生命令须核对当前 help 和实际会话能力，
+不能由静态文档或成功提取推断模型运行成功。AGY 的 diff／Artifact 人工批准是人工审阅，
+不能冒充 `host-native-review` 或独立 AI QA；原审批、读写边界与 method 顺序保持不变。

@@ -189,6 +189,7 @@ class TaskGraphInitTest(unittest.TestCase):
             source[field] = value
             cases.append(source)
         for field, value in (("state", "BUILD_VERIFIED"), ("state", "DECLARED"), ("request_id", "other"),
+                             ("agent_ref", {"host": "codex", "agent_id": "fixture-agent"}),
                              ("qa_scope", "request"), ("controlled_document_access", {}),
                              ("execution_workspace", {}), ("role", []), ("owned_paths", ["../private"]),
                              ("verification_commands", []), ("gates", ["auto_approved"])):

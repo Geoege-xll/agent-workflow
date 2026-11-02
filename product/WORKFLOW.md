@@ -963,6 +963,10 @@ Every task pack must provide these scheduling fields:
   `base_revision` and PM checkpoint `head_revision` (null while pending). The graph's
   `worktree_integrations` maps each isolated request to its separate root, resolved target branch/base,
   candidate head and revision-bound verification. No independent ledger or user-visible JSON is added.
+- `agent_ref`：可选计划元数据 `{host: codex|claude|antigravity, agent_id: <真实原生ID>}`。
+  PM 核对真实 ID 后通过现有 `update`，只补记到已经 RUNNING（或显式 qa 的 QA）任务。
+  省略时兼容旧图，init 不导入执行身份。绑定除同值幂等外不可更改，活动任务不能共享
+  同一 host／ID。历史引用不授权新任务，也不建立另一份 Agent 状态来源。
 - `state`: the scheduler's single state source: `DECLARED`, `BLOCKED`, `READY`, `RUNNING`,
   `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, or `FAILED`.
 - `qa_scope`: required for tasks with a `role` and exactly `request`, meaning the current request's
@@ -985,6 +989,17 @@ independent branches continue running.
 An explicit `task_type: qa` node uses `QA_PASSED` only after its current handoff validates as PASS;
 reset it to `QA`/`RUNNING` on re-review and `FAILED` on failure. It cannot replace writer verification.
 Worktree delivery rejects unfinished or failed relevant QA nodes even when an old PASS is still present.
+
+同 Agent 续用、原生用量与来源诊断按需使用
+`xy-workflow/references/runtime-records.md`；QA 结构化 schema／extract 使用
+`xy-qa-review/references/inputs.md` 及当前宿主 pm-integration。`continuation` 只根据 PM
+当前 running／idle 观察建议等待／续发；取消、未知、失效、跨宿主或非活动任务阻塞
+自动续用，原生动作仍由当前已暴露且获授权的工具执行。ID 不证明存活、角色、批准或
+完成，须核对当前完整 Task Pack／scope；不新增 runner、状态台账或 Reviewer。
+诊断只区分 documented／source_observed／runtime_unverified；原生累计用量不逐条求和，
+未采样保持未知，不计算费用或节省百分比。AGY 原生 grill-me 来源须核对，不自动替换
+本包覆盖检查；diff／Artifact 人工审阅不等于独立 AI QA。以上均不新增普通只读或
+Trivial 的门禁，也不自动启用 native／boost／teamwork 模式。
 
 Effective dispatch capacity is the minimum of configured remaining subagent slots, configured
 remaining writer slots, and the host's currently available subagent slots. The PM never assumes the

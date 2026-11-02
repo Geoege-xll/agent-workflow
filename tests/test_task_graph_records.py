@@ -71,6 +71,68 @@ class RecordUpdateTest(unittest.TestCase):
     def update(self, change, source=None, root=None):
         return records.update(source or self.original, change, root, _execute)
 
+    def test_agent_binding_requires_observed_running_task_and_is_immutable(self):
+        """原生身份只能补记到已运行任务；完成态引用可保留但不能换绑。"""
+        reference = {"host": "codex", "agent_id": "/fixture/agent-a"}
+        bind = {"tasks": {"api": {"set": {"agent_ref": reference}}}}
+        self.assertNotIn("agent_ref", self.original["tasks"][0])
+        with self.assertRaisesRegex(ValueError, "RUNNING|QA"):
+            self.update(bind)
+        with self.assertRaisesRegex(ValueError, "RUNNING|QA"):
+            self.update({"tasks": {"api": {"set": {"state": "RUNNING", "agent_ref": reference}}}})
+        running = self.update({"tasks": {"api": {"set": {"state": "RUNNING"}}}})
+        bound = self.update(bind, running)
+        self.assertEqual(reference, bound["tasks"][0]["agent_ref"])
+        self.assertEqual(bound, self.update(bind, bound))
+        completed = self.update({"tasks": {"api": {"set": {"state": "BUILD_VERIFIED"}}}}, bound)
+        self.assertEqual(completed, self.update(bind, completed))
+        for value in (None, {}, {"host": "codex", "agent_id": "/fixture/agent-b"},
+                      {"host": "claude", "agent_id": reference["agent_id"]}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.update({"tasks": {"api": {"set": {"agent_ref": value}}}}, bound)
+        with self.assertRaisesRegex(ValueError, "protected|unsupported"):
+            self.update({"tasks": {"api": {"append": {"agent_ref": [reference]}}}}, running)
+
+    def test_agent_reference_shape_and_active_identity_collision(self):
+        """真实 ID 由 PM 核实；图只校验结构、边界与同宿主活动身份的独占。"""
+        source = self.update({"tasks": {"api": {"set": {"state": "RUNNING"}}}})
+        for reference in (None, [], {}, {"host": "other", "agent_id": "a"},
+                          {"host": "codex", "agent_id": ""}, {"host": "codex", "agent_id": " a"},
+                          {"host": "codex", "agent_id": "a\n"}, {"host": "codex", "agent_id": "a" * 257},
+                          {"host": "codex", "agent_id": "a", "state": "idle"}):
+            invalid = copy.deepcopy(source)
+            invalid["tasks"][0]["agent_ref"] = reference
+            with self.subTest(reference=reference), self.assertRaises(ValueError):
+                _execute("validate", invalid)
+        reference = {"host": "codex", "agent_id": "/fixture/agent-a"}
+        source["tasks"][0]["agent_ref"] = reference
+        source["tasks"].append({"id": "read", "request_id": "request-1", "task_type": "read_only",
+                                "state": "RUNNING", "depends_on": [], "blocks": [], "gates": [],
+                                "owned_paths": [], "semantic_locks": []})
+        bind = {"tasks": {"read": {"set": {"agent_ref": reference}}}}
+        with self.assertRaisesRegex(ValueError, "agent_ref.*active|active.*agent_ref"):
+            self.update(bind, source)
+        source["tasks"][0]["state"] = "BUILD_VERIFIED"
+        self.assertEqual(reference, self.update(bind, source)["tasks"][1]["agent_ref"])
+        # 历史任务引用不会自动授权一个尚未运行的新任务。
+        source["tasks"][1]["state"] = "DECLARED"
+        with self.assertRaisesRegex(ValueError, "RUNNING|QA"):
+            self.update(bind, source)
+
+    def test_explicit_qa_binding_preserves_existing_qa_barrier(self):
+        source = copy.deepcopy(self.original)
+        source["tasks"][0]["blocks"] = ["qa"]
+        source["tasks"].append({"id": "qa", "request_id": "request-1", "task_type": "qa",
+                                "state": "DECLARED", "depends_on": ["api"], "blocks": [],
+                                "gates": [], "owned_paths": [], "semantic_locks": []})
+        with self.assertRaisesRegex(ValueError, "QA barrier"):
+            self.update({"tasks": {"qa": {"set": {"state": "QA"}}}}, source)
+        source["tasks"][0]["state"] = "BUILD_VERIFIED"
+        qa = self.update({"tasks": {"qa": {"set": {"state": "QA"}}}}, source)
+        reference = {"host": "claude", "agent_id": "fixture-reviewer"}
+        result = self.update({"tasks": {"qa": {"set": {"agent_ref": reference}}}}, qa)
+        self.assertEqual(reference, result["tasks"][1]["agent_ref"])
+
     def test_state_updates_keep_external_locks_and_release_only_owned_locks(self):
         running = self.update({"tasks": {"api": {"set": {"state": "RUNNING"}}}, "capacity": 1})
         self.assertEqual(["external/", "src/one"], running["active_paths"])
@@ -392,6 +454,50 @@ class RecordCliTest(unittest.TestCase):
                                str(PACK / "lib/task_graph_cli.py"), *map(str, args)],
                               input=input, text=True, capture_output=True, check=False, timeout=15)
 
+    def test_continuation_cli_is_read_only_and_requires_current_host_observation(self):
+        """通过真实 CLI 验证旧图、绑定、CAS、活动观察及阻塞建议，查询不发布文件。"""
+        query = ("continuation", "--input", self.source, "--task-id", "api", "--host", "codex")
+        before = self.source.read_bytes()
+        result = self.invoke(*query, "--observed-state", "idle")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("unbound", json.loads(result.stdout)["reason"])
+        self.assertEqual(before, self.source.read_bytes())
+        reference = {"host": "codex", "agent_id": "/fixture/agent-a"}
+        for fields in ({"state": "RUNNING"}, {"agent_ref": reference}):
+            result = self.invoke("update", "--input", self.source, "--expect-sha256",
+                                 records.digest(self.source.read_bytes()), "--patch", "-",
+                                 input=json.dumps({"tasks": {"api": {"set": fields}}}))
+            self.assertEqual(0, result.returncode, result.stderr)
+        before = self.source.read_bytes()
+        for state in ("running", "idle", "cancelled", "missing", "unknown"):
+            result = self.invoke(*query, "--observed-state", state)
+            self.assertEqual(0, result.returncode, result.stderr)
+            value = json.loads(result.stdout)
+            self.assertEqual(state in {"running", "idle"}, value["reuse_allowed"])
+            self.assertEqual(reference, value["agent_ref"])
+            self.assertEqual("wait" if state == "running" else "followup" if state == "idle" else "blocked",
+                             value["action"])
+            self.assertEqual(before, self.source.read_bytes())
+        result = self.invoke("continuation", "--input", self.source, "--task-id", "api", "--host", "claude",
+                             "--observed-state", "idle")
+        self.assertFalse(json.loads(result.stdout)["reuse_allowed"])
+        self.assertEqual("host_mismatch", json.loads(result.stdout)["reason"])
+        # 绑定走原 CAS：旧摘要与 append 绕过均拒写。
+        for old_sha, operation in (("0" * 64, {"set": {"agent_ref": reference}}),
+                                   (records.digest(before), {"append": {"agent_ref": [reference]}})):
+            result = self.invoke("update", "--input", self.source, "--expect-sha256", old_sha,
+                                 "--patch", "-", input=json.dumps({"tasks": {"api": operation}}))
+            self.assertEqual(2, result.returncode)
+            self.assertEqual(before, self.source.read_bytes())
+        result = self.invoke(*query, "--observed-state", "idle", "--output", self.root / "forbidden.json")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual({"graph.json"}, {p.name for p in self.root.iterdir()})
+        completed = json.loads(before)
+        completed["tasks"][0]["state"] = "BUILD_VERIFIED"
+        self.source.write_text(json.dumps(completed), encoding="utf-8")
+        result = self.invoke(*query, "--observed-state", "idle")
+        self.assertEqual("task_not_active", json.loads(result.stdout)["reason"])
+
     def test_update_and_export_use_existing_validators_and_do_not_create_other_records(self):
         before = records.digest(self.source.read_bytes())
         result = self.invoke("update", "--input", self.source, "--expect-sha256", before, "--patch", "-",
@@ -703,6 +809,7 @@ class RecordInstalledRuntimeTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             runtime = project / ".agent-workflow"
             self.assertEqual((PACK / "lib/task_graph_records.py").read_bytes(), (runtime / "lib/task_graph_records.py").read_bytes())
+            self.assertEqual((PACK / "lib/agent_continuation.py").read_bytes(), (runtime / "lib/agent_continuation.py").read_bytes())
             reference = "xy-workflow/references/runtime-records.md"
             for directory in (".claude/skills", ".agents/skills"):
                 self.assertEqual((PACK / "platforms/shared/skills" / reference).read_bytes(), (project / directory / reference).read_bytes())
@@ -717,6 +824,21 @@ class RecordInstalledRuntimeTest(unittest.TestCase):
                 cwd=project, text=True, capture_output=True, check=False, timeout=15)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual("RUNNING", json.loads(source.read_text(encoding="utf-8"))["tasks"][0]["state"])
+            # 安装态从业务根加载新 helper，并经原 CAS 绑定后实际运行只读查询。
+            result = subprocess.run([
+                "bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", str(runtime / "lib/task_graph_cli.py"),
+                "update", "--input", str(source), "--expect-sha256", records.digest(source.read_bytes()), "--patch", "-",
+            ], input='{"tasks":{"api":{"set":{"agent_ref":{"host":"codex","agent_id":"fixture-installed-agent"}}}}}',
+                cwd=project, text=True, capture_output=True, check=False, timeout=15)
+            self.assertEqual(0, result.returncode, result.stderr)
+            before = source.read_bytes()
+            result = subprocess.run([
+                "bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", str(runtime / "lib/task_graph_cli.py"),
+                "continuation", "--input", str(source), "--task-id", "api", "--host", "codex", "--observed-state", "idle",
+            ], cwd=project, text=True, capture_output=True, check=False, timeout=15)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("followup", json.loads(result.stdout)["action"])
+            self.assertEqual(before, source.read_bytes())
             self.assertEqual(b"module example.test/records\n", business.read_bytes())
 
 

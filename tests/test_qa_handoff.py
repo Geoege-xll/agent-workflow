@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -255,6 +256,245 @@ class QAHandoffValidationTest(unittest.TestCase):
         payload["audit_result"] = "FAIL"
         result = self.invoke(payload)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+
+class NativeQAHandoffTest(unittest.TestCase):
+    """从真实 CLI 验证原生终端合同；封装夹具不冒充真实模型执行证据。"""
+
+    def setUp(self) -> None:
+        fixture = QAHandoffValidationTest()
+        fixture.setUp()
+        self.cli = fixture.cli
+        self.payload = fixture.payload
+        self.payload["skill_evidence"] = {
+            "skills_used": ["xy-qa-review"],
+            "unavailable_required_skills": [],
+            "uncovered_audit_surfaces": [],
+        }
+
+    def envelope(self, host: str, payload: dict[str, object]) -> dict[str, object]:
+        """各宿主只使用已确定的最终 JSON 形态，不给事件流猜测完成状态。"""
+        if host == "codex":
+            return payload
+        if host == "claude":
+            return {"type": "result", "subtype": "success", "is_error": False,
+                    "structured_output": payload}
+        return {"conversation_id": "conversation-qa", "status": "SUCCESS",
+                "structured_output": payload, "response": json.dumps(payload),
+                "usage": {"total_tokens": 57}}
+
+    def invoke_path(self, host: str, source: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(self.cli), "extract", "--host", host, "--input", str(source)],
+            text=True, capture_output=True, check=False,
+        )
+
+    def invoke(self, host: str, value: object) -> subprocess.CompletedProcess[str]:
+        body = value if isinstance(value, bytes) else json.dumps(value).encode("utf-8")
+        with tempfile.TemporaryDirectory(prefix="qa-native-") as raw:
+            # macOS 的系统临时路径可能有 /var 别名；正常夹具使用其实际普通父目录。
+            root = Path(raw).resolve()
+            source = root / "terminal.json"
+            source.write_bytes(body)
+            before = source.stat()
+            result = self.invoke_path(host, source)
+            self.assertEqual(body, source.read_bytes())
+            self.assertEqual(before.st_mtime_ns, source.stat().st_mtime_ns)
+            self.assertEqual([source], list(root.iterdir()))
+            return result
+
+    def assert_rejected(self, result: subprocess.CompletedProcess[str]) -> None:
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIsInstance(json.loads(result.stderr)["error"], str)
+
+    def test_schema_is_complete_strict_minimal_contract(self) -> None:
+        result = subprocess.run([sys.executable, str(self.cli), "schema"],
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        schema = json.loads(result.stdout)
+        self.assertEqual("object", schema["type"])
+        self.assertEqual({"audit_result", "review_method", "standards_policy_coverage", "skill_evidence"},
+                         set(schema["properties"]))
+        self.assertEqual(["PASS", "FAIL"], schema["properties"]["audit_result"]["enum"])
+        method = schema["properties"]["review_method"]["properties"]
+        self.assertEqual({"host-native-review", "installed-code-review-skill", "internal-xy-qa-procedure"},
+                         set(method["selected"]["enum"]))
+        self.assertIn("null", method["external_skill"]["type"])
+        self.assertIn(None, method["fallback_reason"]["enum"])
+        self.assertEqual({"skills_used", "unavailable_required_skills", "uncovered_audit_surfaces"},
+                         set(schema["properties"]["skill_evidence"]["properties"]))
+        self.assertIn("repositories", method["scope_ref"]["properties"])
+        coverage = schema["properties"]["standards_policy_coverage"]["properties"]
+        self.assertIn("rule_checks", coverage)
+        self.assertIn("path_checks", coverage)
+
+        def check_objects(value: object) -> None:
+            # OpenAI strict 要求每层对象字段全部 required，不能只约束最外层。
+            if isinstance(value, dict):
+                if value.get("type") == "object":
+                    self.assertIs(False, value["additionalProperties"])
+                    self.assertEqual(set(value["properties"]), set(value["required"]))
+                for child in value.values():
+                    check_objects(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check_objects(child)
+        check_objects(schema)
+
+    def test_success_envelopes_preserve_pass_fail_and_all_inner_metadata(self) -> None:
+        for host in ("codex", "claude", "antigravity"):
+            for outcome in ("PASS", "FAIL"):
+                with self.subTest(host=host, outcome=outcome):
+                    payload = json.loads(json.dumps(self.payload))
+                    payload.update(audit_result=outcome, findings=[{"severity": "P2", "detail": "原始发现"}],
+                                   metadata={"source": "fixture", "count": 0})
+                    if outcome == "FAIL":
+                        payload["standards_policy_coverage"]["rule_checks"][0]["disposition"] = "fail"
+                        payload["skill_evidence"]["unavailable_required_skills"] = ["required-skill"]
+                    result = self.invoke(host, self.envelope(host, payload))
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertEqual(payload, json.loads(result.stdout))
+
+    def test_failed_cancelled_partial_and_nonterminal_envelopes_are_rejected(self) -> None:
+        cases = [
+            ("codex", {"type": "turn.failed", "structured_output": self.payload}),
+            ("codex", {"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(self.payload)}}),
+        ]
+        for field, values in {"type": ["assistant", None], "subtype": ["error", "cancelled", "partial", None],
+                              "is_error": [True, 0, None]}.items():
+            for value in values:
+                envelope = self.envelope("claude", self.payload)
+                envelope[field] = value
+                cases.append(("claude", envelope))
+        for status in ("ERROR", "CANCELLED", "PARTIAL", "RUNNING", "success", None):
+            envelope = self.envelope("antigravity", self.payload)
+            envelope["status"] = status
+            cases.append(("antigravity", envelope))
+        cases.append(("antigravity", {"event": "result", "result": self.envelope("antigravity", self.payload)}))
+        for host, value in cases:
+            with self.subTest(host=host, value=value):
+                self.assert_rejected(self.invoke(host, value))
+
+    def test_native_contract_rejects_missing_or_malformed_fields(self) -> None:
+        for host in ("codex", "claude", "antigravity"):
+            for field in ("skills_used", "unavailable_required_skills", "uncovered_audit_surfaces"):
+                payload = json.loads(json.dumps(self.payload))
+                del payload["skill_evidence"][field]
+                with self.subTest(host=host, field=field, value="missing"):
+                    self.assert_rejected(self.invoke(host, self.envelope(host, payload)))
+                for bad_value in (None, "skill", [7], [""], ["same", " same "]):
+                    with self.subTest(host=host, field=field, value=bad_value):
+                        payload = json.loads(json.dumps(self.payload))
+                        payload["skill_evidence"][field] = bad_value
+                        self.assert_rejected(self.invoke(host, self.envelope(host, payload)))
+            for defect in ("missing", "required-unavailable"):
+                payload = json.loads(json.dumps(self.payload))
+                if defect == "missing":
+                    del payload["skill_evidence"]
+                else:
+                    payload["skill_evidence"]["unavailable_required_skills"] = ["missing-skill"]
+                with self.subTest(host=host, defect=defect):
+                    self.assert_rejected(self.invoke(host, self.envelope(host, payload)))
+        for field, value in (("conversation_id", ""), ("response", "plain text"),
+                             ("response", json.dumps({"audit_result": "PASS"})), ("usage", [])):
+            envelope = self.envelope("antigravity", self.payload)
+            envelope[field] = value
+            with self.subTest(field=field):
+                self.assert_rejected(self.invoke("antigravity", envelope))
+
+    def test_optional_agy_response_and_usage_do_not_create_new_qa_gates(self) -> None:
+        """AGY 的结构化终端结果不依赖可见用量；附加 response 为空时也无需再生成正文。"""
+        for response in (None, ""):
+            envelope = self.envelope("antigravity", self.payload)
+            del envelope["usage"]
+            if response is None:
+                del envelope["response"]
+            else:
+                envelope["response"] = response
+            with self.subTest(response=response):
+                result = self.invoke("antigravity", envelope)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(self.payload, json.loads(result.stdout))
+
+    def test_structured_output_must_be_an_object_and_not_a_string_or_partial_result(self) -> None:
+        for host in ("claude", "antigravity"):
+            for value in (None, [], json.dumps(self.payload)):
+                envelope = self.envelope(host, self.payload)
+                envelope["structured_output"] = value
+                with self.subTest(host=host, value=value):
+                    self.assert_rejected(self.invoke(host, envelope))
+        # QA 字段齐全也不能让 Codex 的失败事件取得最终消息身份。
+        payload = json.loads(json.dumps(self.payload))
+        payload["type"] = "turn.failed"
+        self.assert_rejected(self.invoke("codex", payload))
+        # 宿主明确带取消／部分状态时，大小写或两种取消拼写都不能被 QA 字段掩盖。
+        for status in ("FAILED", "error", "CANCELLED", "canceled", "PARTIAL", "incomplete", "running"):
+            payload = json.loads(json.dumps(self.payload))
+            payload["status"] = status
+            with self.subTest(status=status):
+                self.assert_rejected(self.invoke("codex", payload))
+
+    def test_native_generation_never_weakens_existing_semantic_gates(self) -> None:
+        for host in ("codex", "claude", "antigravity"):
+            for defect in ("fallback-findings", "native-fallback", "hard-fail", "pm-omission", "scope", "evidence",
+                           "audit-type", "domain-type", "severity-type", "disposition-type"):
+                payload = json.loads(json.dumps(self.payload))
+                method, coverage = payload["review_method"], payload["standards_policy_coverage"]
+                if defect == "fallback-findings":
+                    method["fallback_reason"] = "findings"
+                elif defect == "native-fallback":
+                    method["selected"] = "host-native-review"
+                elif defect == "hard-fail":
+                    coverage["rule_checks"][0]["disposition"] = "fail"
+                elif defect == "pm-omission":
+                    coverage["task_pack_rule_ids"] = []
+                elif defect == "scope":
+                    method["scope_ref"]["repositories"][0]["changed_paths"].append("services/other.py")
+                elif defect == "evidence":
+                    coverage["rule_checks"][0]["evidence_refs"] = []
+                elif defect == "audit-type":
+                    payload["audit_result"] = []
+                else:
+                    coverage["rule_checks"][0][defect.removesuffix("-type")] = []
+                with self.subTest(host=host, defect=defect):
+                    self.assert_rejected(self.invoke(host, self.envelope(host, payload)))
+
+    def test_text_stream_duplicates_nonfinite_and_unsafe_encoding_are_rejected(self) -> None:
+        good = json.dumps(self.payload).encode("utf-8")
+        invalid = [b"not JSON", b"```json\n" + good + b"\n```", good + b"\n" + good,
+                   b"[" + good + b"]", b'{"audit_result":"FAIL",' + good[1:],
+                   good[:-1] + b',"metadata":{"key":1,"key":2}}',
+                   good[:-1] + b',"metadata":NaN}', good[:-1] + b',"metadata":Infinity}',
+                   good[:-1] + b',"metadata":1e400}', good[:-1] + b',"metadata":"\\ud800"}',
+                   b"\xff", b" " * (4 * 1024 * 1024 + 1)]
+        for index, body in enumerate(invalid):
+            with self.subTest(case=index):
+                self.assert_rejected(self.invoke("codex", body))
+
+    def test_unsafe_file_nodes_and_parent_paths_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="qa-native-files-") as raw:
+            root = Path(raw).resolve()
+            source = root / "terminal.json"
+            source.write_text(json.dumps(self.payload), encoding="utf-8")
+            linked = root / "symlink.json"
+            linked.symlink_to(source)
+            parent = root / "parent-link"
+            parent.symlink_to(root, target_is_directory=True)
+            fifo = root / "fifo"
+            if os.name != "nt":
+                os.mkfifo(fifo)
+            candidates = [linked, parent / source.name, root, root / "missing", root / "child/../terminal.json"]
+            if os.name != "nt":
+                candidates.append(fifo)
+            for candidate in candidates:
+                with self.subTest(path=candidate):
+                    self.assert_rejected(self.invoke_path("codex", candidate))
+            hardlink = root / "hardlink.json"
+            os.link(source, hardlink)
+            self.assert_rejected(self.invoke_path("codex", source))
+            self.assert_rejected(self.invoke_path("codex", hardlink))
 
 
 if __name__ == "__main__":
