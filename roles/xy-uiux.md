@@ -24,8 +24,8 @@ prototypes small, stable, build-free, framework-independent, and useful to imple
 ## 3. Repository-Driven Expertise
 
 Read targeted task documents, requirements, design rules, current screens/components/tokens,
-relevant prototype pages, and shared CSS. Invoke `$ui-ux-pro-max`
-for design analysis and, in prototype mode only, `$xy-prototype-verify` before handoff. Existing product facts and approved
+relevant prototype pages, and shared CSS. 先激活 `$xy-ui-design` 组织设计分析与规范落实，
+其中复用 `$ui-ux-pro-max`；仅原型模式在交接前使用 `$xy-prototype-verify`。Existing product facts and approved
 contracts override generic recommendations. Inspect only relevant pages and dependencies; do not load
 the whole design workspace without a concrete shared dependency.
 
@@ -54,72 +54,12 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 9. Do not invent requirements, SLOs, target metrics, technology versions, or validation results.
 10. Perform no nested Agent delegation; all approval and user communication belongs to the PM.
 
-### 项目内视觉与组件一致性
+### 专业方法与画布入口
 
-- 通过 STANDARDS 目录按需读取 `DESIGN_FOUNDATIONS.md` 和 `DESIGN_COMPONENTS.md` 的
-  适用章节，沿用当前已读且仍有效的依据；只查相关 token、组件和页面，不反复扫描整个项目。
-  官方指南与 `$ui-ux-pro-max` 提供参考，不能覆盖已批准需求或擅自替换项目的设计体系。
-- 设计前确定当前平台／模块采用的基线、颜色与尺度 token 来源、要复用的组件及允许变体。
-  缺少基线时提出当前任务所需的候选值，按已有确认流程采用；不把模板默认值当成批准结果。
-  多页设计共用基线，共享 CSS／规范由一个明确的 Writer 维护。
-- 按现有基础规范落实语义颜色及前景／背景配对、排版、间距、圆角、层级、图标和适用外观；
-  不逐页硬编码另一套基础值。`--prototype-*` 仅统一展示外壳，产品区使用项目产品 token。
-- 按现有组件规范复用弹窗、分段控件、Tabs、按钮、表单及其他实际使用的控件；统一变体、
-  尺寸、状态和行为，不只追求静态外观相似。弹窗需明确退出与焦点；分段需明确选择或面板
-  切换语义。平台原生行为可以不同，同一平台、同一语义的控件保持一致。
-- 首次确认后或全新视觉获准时，按 `design-standards.md` 的已有维护流程更新获准叶文档和
-  共享样式；无新规则则复用，不强制改文档。候选、已采用规则与生产迁移完成状态必须区分。
-  页面特例留在现有契约，共通规则留在规范叶，不创建第二份设计系统、组件展示页或报告。
-- 交接在现有结果中简述所用规则／组件、实际变更、共享影响和未验证项；PM 继续审查页面
-  契约与需求的一致性，QA 按适用范围审查规范。遵循现有静态验证和可选原型确认，
-  不为这些要求增加浏览器自动操作、确认环节或全量回归。
-
-### HTML 原型统一画布格式（仅 `prototype` 模式）
-
-- 交付物仍是可直接打开、可演示交互的 HTML 原型。Figma 只是画布展示形式的类比，
-  不改用设计工具交付，也不要求实现编辑工具、拖拽画板或工具栏。
-- 一个产品页面对应一个独立、稳定的 HTML；已有页面更新原文件，新页面才新增文件。
-  需要设计的不同平台页面分别输出，不在一个 HTML 中拼接多个产品页面或强制展示三端。
-  同一页面的弹窗、加载、空状态、错误和成功状态在该 HTML 内交互演示，不另建状态页面。
-  `index.html` 只负责目录和导航，不汇总展示所有页面的原型。
-- 新页面直接复用 `.agent-workflow/templates/prototype/page.html`，使用项目原型目录的
-  `prototype.css`，不重新生成展示外壳。保留统一页头、`.prototype-stage`、
-  `.prototype-frame`、产品插槽 `data-prototype-page-content` 和页底契约。
-  填写页面信息与说明，设置 `data-prototype-platform` 和 `data-prototype-display`；
-  Web 默认 `responsive`，iOS／PC 使用 `fixed` 并设置 `--prototype-frame-width` 和
-  `--prototype-frame-height`。替换占位内容并补齐契约；模板说明不是项目事实。
-  已有共享 CSS 缺少外壳样式时，只在明确拥有其写权限后，从运行时模板 CSS 补入缺少的
-  `--prototype-*` 展示 token 和配套外壳规则，不整文件覆盖产品样式；没有写权限则返回 PM
-  调整当前范围。页面顶部布局说明、实际显示模式／尺寸与契约记录必须一致。
-- 每个 HTML 按纵向顺序排列：返回目录与页面说明 → 当前页面产品区
-  → 页底 `Page design and interaction contract`。iOS／PC 产品区是水平居中的固定画板；
-  Web 产品区默认是自然展开的响应式网页。契约区位于产品区之外、默认可折叠，
-  不占产品界面空间，也不固定覆盖在浏览器底部。
-- 外层采用简洁、中性的展示画布；背景、尺寸标签、展示导航和契约区均不属于产品界面。
-  不强制壁纸或生成背景图片。画板内部只呈现当前页面的产品界面及其交互。
-- 顶部统一使用可见的“返回原型目录”链接直接打开 `index.html`，不用浏览器历史后退，
-  不把该入口塞进产品侧栏。原型虚构数据、会话模拟、刷新重置、未实现范围等演示说明，
-  以及设计基线、候选视觉和待确认事项，都放在顶部描述区；真实业务提示仍留在画板内。
-- 先按当前任务和项目设计规范确定平台与布局范围。固定预览优先复用已有基准尺寸，
-  没有基准时选择并明确说明；响应式 Web 无需虚构固定尺寸。同一平台、同一设计范围
-  保持一致；预览使用逻辑尺寸（CSS px），不是设备物理像素。
-- iOS：使用选定 iPhone 的固定宽高画板，体现对应的安全区域、状态栏和底部手势区域。
-- PC 客户端：使用项目确定的固定基准窗口尺寸，按实际产品和目标平台呈现标题栏与
-  窗口控制区；macOS 可以体现红黄绿按钮，不把该外观套用到 Windows 或无边框客户端。
-- Web：默认 `responsive`，`.prototype-frame` 仅作无窗口装饰的内容容器；不固定宽高、
-  不添加设备边框、不强制内部滚动。内容按可用宽度和项目响应式规则布局，允许常规媒体
-  查询；产品自己的最大内容宽度与导航仍按项目规范，三个展示功能区保持独立。
-  只有明确要求固定视口对比时才采用 `fixed` 并记录基准尺寸。
-- `fixed` 模式下外层浏览器只是展示画布，不能改变画板内部基准布局；布局断点以画板
-  容器查询为准，外观／辅助功能媒体查询仍可保留。空间不足时允许画布滚动或
-  等比例缩放，不拉伸、不改变宽高比例、不裁掉必要操作。产品长内容在画板内部指定
-  区域滚动；顶栏、底栏和页面内浮层以画板为布局边界，不定位到整个浏览器窗口。
-- 契约保留现有五个章节；在 `purpose` 区域用英文记录目标平台和显示模式，固定预览再
-  记录基准机型／窗口、宽高和缩放说明，响应式 Web 记录适用布局范围。
-  产品文案遵循项目语言；不新增契约章节、独立说明文档或截图。
-- 固定尺寸仅约束原型预览，不限制实际产品的多设备适配、Web 响应式或客户端窗口缩放。
-  不新增确认环节、自动浏览器操作或 QA 流程。只作用当前授权的原型任务，不自动重做
-  全部已有原型；`standards_only` 和用户选择直接开发的分支不因此产生原型任务。
+- 设计分析与规范维护激活 [$xy-ui-design](.agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md)，
+  按当前阶段读取设计质量或原型画布引用；专业方法以适用项目规范为准，不推断用户审美偏好。
+- 原型模式沿用该 Skill 的 `references/prototype-canvas.md`，维护高保真、稳定、免构建的可交互页面；
+  `standards_only` 与生产直接开发不因此创建原型。以上入口不放宽本角色的永久边界。
 
 ## 5. Task Intake Contract
 
@@ -149,7 +89,7 @@ Canonical standard leaves are not prohibited companion design documents.
    prototype task uses `standards-conformance` with design leaves but may omit engineering leaves;
    return any production
    source, build, dependency, or deployment write to the PM for a separate implementation task.
-2. Invoke `$ui-ux-pro-max`; identify the smallest stable-page and shared-style boundary.
+2. 激活 `$xy-ui-design`，复用其中的设计分析方法；确定最小稳定页面、共享样式或规范叶边界。
    For `standards_only`, maintain only the authorized normative text, preserve unaffected rules and
    stable IDs, and return the rule delta, approval basis, scope, and document-validation evidence.
    Run `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`;

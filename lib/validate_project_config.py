@@ -17,6 +17,7 @@ from pathlib import PurePosixPath
 sys.dont_write_bytecode = True
 
 try:
+    from .role_skills import CORE_SKILLS as ANTIGRAVITY_CORE_SKILLS
     from .workflow_hook_settings import hook_mode
     from .worktree_policy import WorktreePolicyError, settings as worktree_settings
     from .project_discovery import (
@@ -27,6 +28,7 @@ try:
         discover_project,
     )
 except ImportError:
+    from role_skills import CORE_SKILLS as ANTIGRAVITY_CORE_SKILLS
     from workflow_hook_settings import hook_mode
     from worktree_policy import WorktreePolicyError, settings as worktree_settings
     from project_discovery import (  # type: ignore[no-redef]
@@ -69,15 +71,6 @@ MANAGED_OUTPUT_PATHS = {
     Path(".codex/config.toml"),
     Path(".codex/agents"),
     Path(".agents/skills"),
-}
-ANTIGRAVITY_CORE_SKILLS = {
-    "grill-me",
-    "xy-build-verify",
-    "xy-plan",
-    "xy-project-memory",
-    "xy-prototype-verify",
-    "xy-qa-review",
-    "xy-workflow",
 }
 MANAGED_OUTPUT_DIRECTORIES = {
     Path("docs"),

@@ -23,6 +23,8 @@ CORE_SKILLS = (
     "xy-plan",
     "xy-project-memory",
     "xy-build-verify",
+    "xy-code-standards",
+    "xy-ui-design",
     "xy-qa-review",
     "xy-prototype-verify",
 )
@@ -260,7 +262,7 @@ class ClaudeSourceContractTest(unittest.TestCase):
     def read(self, relative: str) -> str:
         return read_contract(PACK / relative)
 
-    def test_seven_core_skills_exist_with_managed_frontmatter(self) -> None:
+    def test_core_skills_exist_with_managed_frontmatter(self) -> None:
         for name in CORE_SKILLS:
             with self.subTest(skill=name):
                 path = PACK / "platforms/shared/skills" / name / "SKILL.md"
@@ -504,7 +506,7 @@ class ClaudeGeneratedAgentTest(ClaudeFixtureMixin, unittest.TestCase):
             project / ".claude/agents" / f"{claude_agent_name(role)}.md"
         ).read_text(encoding="utf-8")
 
-    def test_fresh_project_installs_exactly_the_seven_shared_core_skills(self) -> None:
+    def test_fresh_project_installs_exactly_the_shared_core_skills(self) -> None:
         temp, project, _ = self.generated_fixture()
         self.addCleanup(temp.cleanup)
         installed = {
@@ -696,16 +698,21 @@ class ClaudeGeneratedAgentTest(ClaudeFixtureMixin, unittest.TestCase):
         self.addCleanup(temp.cleanup)
 
         web = self.read_agent(project, "xy-web")
+        self.assertIn("  - xy-code-standards", web)
         self.assertIn("  - xy-build-verify", web)
         self.assertIn("/xy-build-verify", web)
+        self.assertNotIn("  - xy-ui-design", web)
 
         uiux = self.read_agent(project, "xy-uiux")
+        self.assertIn("  - xy-ui-design", uiux)
         self.assertIn("  - ui-ux-pro-max", uiux)
         self.assertIn("  - xy-prototype-verify", uiux)
         self.assertIn("/xy-prototype-verify", uiux)
 
         qa = self.read_agent(project, "xy-qa")
         self.assertIn("  - xy-qa-review", qa)
+        self.assertNotIn("  - xy-code-standards", qa)
+        self.assertNotIn("  - xy-ui-design", qa)
         self.assertIn("/xy-qa-review", qa)
         self.assertIn("audit_surfaces", qa)
         self.assertNotIn("let Codex match", qa)

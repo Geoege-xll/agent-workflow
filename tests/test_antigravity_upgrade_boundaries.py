@@ -4,11 +4,55 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+import re
 
 from tests.test_antigravity_workflow import AntigravityFixtureMixin
 
 
 class AntigravityUpgradeBoundaryTest(AntigravityFixtureMixin, unittest.TestCase):
+    def test_managed_seven_skill_install_upgrades_to_nine(self) -> None:
+        from lib.shared_core_skills import remove_stale_skill_tree_transactionally
+
+        self.run_setup()
+        # 用真实安装产生受管清单，再构造上一版七技能/旧绑定资源；不复制旧源码包。
+        for name in ("xy-code-standards", "xy-ui-design"):
+            remove_stale_skill_tree_transactionally(self.project / ".agents/skills" / name, name)
+        for path in (self.project / ".agents/agents").glob("xy-*.md"):
+            body = path.read_text(encoding="utf-8")
+            body = re.sub(r"(?m)^  - skills/xy-(?:code-standards|ui-design)\n", "", body)
+            path.write_text(body, encoding="utf-8")
+        before = self.project_tree_snapshot()
+        checked = self.invoke_setup("--check")
+        self.assertNotEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        self.assertEqual(before, self.project_tree_snapshot())
+        self.run_setup("--preflight")
+        self.assertEqual(before, self.project_tree_snapshot())
+        self.run_setup()
+        names = {path.name for path in (self.project / ".agents/skills").iterdir() if path.is_dir()}
+        self.assertEqual(9, len(names))
+        self.assertTrue({"xy-code-standards", "xy-ui-design"}.issubset(names))
+        self.run_setup("--check")
+
+    def test_new_builtin_user_skills_block_hosts_without_writes(self) -> None:
+        # 新名称同样受原所有权保护；缺少受管清单的用户资源不能被新版安装接管。
+        for directory, hosts in ((".agents/skills", ("codex", "antigravity")),
+                                 (".claude/skills", ("claude",))):
+            for name in ("xy-code-standards", "xy-ui-design"):
+                target = self.project / directory / name / "SKILL.md"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("用户自己的同名技能，不得覆盖。\n", encoding="utf-8")
+                before = self.project_tree_snapshot()
+                for host in hosts:
+                    with self.subTest(host=host, skill=name):
+                        result = subprocess.run(
+                            ["bash", f"agent_workflow/setup_{host}.sh", "--preflight"],
+                            cwd=self.project, text=True, capture_output=True, check=False, timeout=60,
+                        )
+                        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                        self.assertEqual(before, self.project_tree_snapshot())
+                target.unlink()
+                target.parent.rmdir()
+
     def test_native_claude_shared_entry_overflow_is_rejected_before_publication(self) -> None:
         # 根据当前精简模板构造临界用户内容，而不是把旧入口体积固化成测试条件。
         # 全部模板加上受管标记会超出 Codex 默认保护值，最后一端安装前必须拒绝。

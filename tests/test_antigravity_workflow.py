@@ -20,6 +20,8 @@ PACK = Path(__file__).resolve().parents[1]
 SHARED_CORE_SKILLS = {
     "grill-me",
     "xy-build-verify",
+    "xy-code-standards",
+    "xy-ui-design",
     "xy-plan",
     "xy-project-memory",
     "xy-prototype-verify",
@@ -692,11 +694,11 @@ class AntigravityGeneratedArtifactTest(
                     agent_body.index(role_heading),
                 )
                 if role in self.IMPLEMENTERS:
-                    self.assertEqual(fields["skills"], ["skills/xy-build-verify"])
+                    self.assertEqual(fields["skills"], ["skills/xy-code-standards", "skills/xy-build-verify"])
                     self.assertIn("exact `owned_paths`", agent_body)
                     self.assertIn("/xy-build-verify", agent_body)
                 elif role == "xy-uiux":
-                    self.assertEqual(fields["skills"], ["skills/xy-prototype-verify"])
+                    self.assertEqual(fields["skills"], ["skills/xy-ui-design", "skills/xy-prototype-verify"])
                     self.assertIn("/ui-ux-pro-max", agent_body)
                     self.assertIn("docs.standards_root/DESIGN_*.md", agent_body)
                     self.assertIn("docs.standards_root/DESIGN_*.md", agent_body)
@@ -1862,10 +1864,10 @@ class AntigravityValidatorTest(AntigravityFixtureMixin, unittest.TestCase):
     def agent_body(self, role: str) -> str:
         if role in self.IMPLEMENTERS:
             tools = self.IMPLEMENTER_TOOLS
-            skills = ("skills/xy-build-verify",)
+            skills = ("skills/xy-code-standards", "skills/xy-build-verify")
         elif role == "xy-uiux":
             tools = self.UIUX_TOOLS
-            skills = ("skills/xy-prototype-verify",)
+            skills = ("skills/xy-ui-design", "skills/xy-prototype-verify")
         elif role == "xy-qa":
             tools = self.QA_TOOLS
             skills = ("skills/xy-qa-review",)
@@ -3292,7 +3294,7 @@ description: Managed stale Skill fixture.
 <!-- agent-workflow-pack:managed-skill -->
 """
 
-    def test_shared_source_contains_exactly_the_seven_core_skills(self) -> None:
+    def test_shared_source_contains_exactly_the_core_skills(self) -> None:
         root = self.shared_skills_root()
         self.assertTrue(root.is_dir(), f"missing shared Skill source: {root}")
         discovered = {

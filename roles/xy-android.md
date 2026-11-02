@@ -76,7 +76,8 @@ Reject missing, stale, skipped, or incomplete authority; do not preload the stan
    approved prototype authority from the task pack. For `waived_by_user`, verify its requirement
    fingerprint and exact surfaces, do not read or update the old prototype, and implement the
    approved production UI directly.
-4. Implement the smallest complete change using existing application patterns.
+   生产 UI 按既有授权分支只读消费 `xy-ui-design` 的实现指导，不获得原型或设计规范写入权。
+4. 在当前授权边界内使用 `xy-code-standards` 的实现方法，保留 Android 模块、变体和生命周期约束。
 5. Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory;
    add focused unit, instrumentation, UI or integration tests for meaningful uncovered behavior/
    regression or explicit requirements, not mechanically for every edit.

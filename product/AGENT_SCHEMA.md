@@ -15,8 +15,9 @@ This schema adapts the [agency-agents](https://github.com/msitarzewski/agency-ag
 
 ## 2. `ROLES.yaml` Metadata (Machine-Readable and Required)
 
-All machine-consumed descriptions, deliverables, workflow text, comments, and routing metadata must
-be written in clear English so every host model receives the same canonical instructions.
+说明正文、交流和新增代码注释遵守用户及项目语言，本包当前使用中文。
+机器解析的稳定字段、角色／Skill ID、枚举和既有固定标题保留原格式；语言偏好不授权
+翻译这些接口，也不改变三宿主的生成或解析合同。
 
 ```yaml
 xy-example:
@@ -57,10 +58,14 @@ Claude generation rules:
 - Every role receives the `Skill tool`; non-delegation roles also receive `disallowedTools: Agent`.
 - Codex, Claude Code, and shared configuration use the same hyphenated role ID, such as `xy-web`,
   and generate `.codex/agents/xy-*.toml` and `.claude/agents/xy-*.md`, respectively.
-- Implementation roles preload and invoke `xy-build-verify`.
-- `xy-uiux` preloads `ui-ux-pro-max` and `xy-prototype-verify`; a missing hard gate blocks UI design.
+- Implementation roles preload `xy-code-standards` and `xy-build-verify`; production UI reads
+  the applicable `xy-ui-design` branch only when `surface_kind: production_ui`.
+- `xy-uiux` preloads `xy-ui-design`, `ui-ux-pro-max` and `xy-prototype-verify`; a missing hard gate blocks UI design.
+  Preloading does not execute an inapplicable branch: `standards_only` never runs prototype verification.
 - `xy-qa` preloads `xy-qa-review`; other local specialist Skills are matched on demand from
   `audit_surfaces` and are not written into the role manifest.
+- QA 按实际代码或 UI 审查面只读消费同一专业方法，纯文档／后端任务不预载 UI 全文。
+  静态绑定来自 `lib/role_skills.py`；metadata 和三宿主当前产物必须匹配，读取不产生新权限或阶段。
 - Generated Claude Agents always use `permissionMode: default`, preserving the parent session's
   normal permission prompts. The sandbox remains a soft role scope.
 
@@ -72,7 +77,7 @@ Generation destinations for the three hosts:
 | Claude Code | `AGENTS.md` + `/xy-workflow` | `.claude/agents/xy-*.md` | `.claude/skills/xy-*` |
 | Antigravity | Root `AGENTS.md` + `/xy-workflow` | `.agents/agents/xy-*.md` | `.agents/skills/xy-*` |
 
-The seven core Skills have one authoritative source: `platforms/shared/skills/`. Host adapter layers
+The nine core Skills have one authoritative source: `platforms/shared/skills/`. Host adapter layers
 provide only native bootstrap behavior, Agent formats, tool policies, and invocation aliases. They
 must not copy or fork the core workflow text.
 

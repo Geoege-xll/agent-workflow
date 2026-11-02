@@ -21,6 +21,8 @@ EXPECTED_SKILLS = {
     "xy-plan",
     "xy-prototype-verify",
     "xy-build-verify",
+    "xy-code-standards",
+    "xy-ui-design",
     "xy-qa-review",
     "xy-project-memory",
 }
@@ -418,6 +420,17 @@ developer_instructions = "Audit security without editing files."
             }
             self.assertEqual({"name", "description"}, keys, skill)
             self.assertIn("agent-workflow-pack:managed-skill", body, skill)
+
+        # 聚合夹具可以只有设计/QA；本夹具实际发现五种生产角色，补足它们的 Codex 绑定消费者。
+        for role in CANONICAL_DISCOVERED_ROLES:
+            expected = (("xy-ui-design", "xy-prototype-verify") if role == "xy-uiux" else
+                        ("xy-qa-review",) if role == "xy-qa" else
+                        ("xy-code-standards", "xy-build-verify"))
+            data = tomllib.loads((self.project / ".codex/agents" / f"{role}.toml").read_text(encoding="utf-8"))
+            actual = tuple(line.split("`$")[1].split("`")[0]
+                           for line in data["developer_instructions"].splitlines()
+                           if line.startswith("- Bound Skill:"))
+            self.assertEqual(expected, actual, role)
 
     def test_codex_config_uses_current_agent_keys(self) -> None:
         config = tomllib.loads(self.read(".codex/config.toml"))

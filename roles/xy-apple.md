@@ -75,7 +75,8 @@ Reject missing, stale, skipped, or incomplete authority; do not preload the stan
    approved prototype authority from the task pack. For `waived_by_user`, verify its requirement
    fingerprint and exact surfaces, do not read or update the old prototype, and implement the
    approved production UI directly.
-4. Implement the smallest complete change using existing patterns and platform-appropriate behavior.
+   生产 UI 按既有授权分支只读消费 `xy-ui-design` 的实现指导，不获得原型或设计规范写入权。
+4. 在当前授权边界内使用 `xy-code-standards` 的实现方法，保留 Apple 平台的状态、生命周期和原生行为。
 5. Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory;
    add focused tests for meaningful uncovered behavior/regression or explicit requirements.
 6. Run selected checked-in scripts and repository-native Xcode build/test commands for affected

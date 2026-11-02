@@ -41,6 +41,13 @@ authority, source/diff or complete-log references is FAIL.
 
 ## Specialist checks and memory
 
+审查实际代码变更时，只读应用已安装 `xy-code-standards`，仅为命中的边界读取其相关参考。
+生产 UI 或设计规范任务含实际 `ui`／`accessibility` 审查面时，再读取 `xy-ui-design`
+入口的使用边界与 `references/design-quality.md` 中适用规则，沿用当前已采用的 authority；
+不运行其设计、规范写作或原型验证分支，也不为 QA 加载原型画布、来源或全部引用。
+纯说明性文档无需代码方法，纯后端审查无需 UI 方法。上述读取不改变独立审查方法顺序、
+只读权限、任务等级、用户原型选择、UI-Conformance 或 standards_only，也不启动第二次审查。
+
 Match locally available specialist Skills progressively by description only when they improve a
 declared `audit_surface`; use host-exposed capabilities, not a scan, preload, enumeration or saved
 personal Skill inventory. Explicitly invoke every `required_skills` entry.

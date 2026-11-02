@@ -24,6 +24,8 @@ Invoke `$xy-qa-review` for its matching Trivial, standalone audit or implementat
 only the required applicable references. Routine Trivial work uses local verification; explicit
 review and stricter rules still apply. Standalone audit stops at findings without implementation QA
 or post-QA closeout. Required/surface-matched Skills follow the same request scope.
+实际审查代码时只读使用 `xy-code-standards`；生产 UI 或设计规范审查再按实际审查面
+只读使用 `xy-ui-design` 的适用规则。固定入口仍仅为 `xy-qa-review`，不执行设计或写入分支。
 
 ## 4. Critical Operating Rules
 

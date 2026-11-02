@@ -14,21 +14,13 @@ from qa_review_policy import validate_pack_qa_review_policy
 from validate_project_config import validate_with_profile
 from role_models import validate as validate_model_settings
 from claude_options import parse as parse_claude_options, frontmatter_window
+from role_skills import CORE_SKILLS, CLAUDE_ROLE_SKILLS
 
 
 SKILL_MARKER = "<!-- agent-workflow-pack:managed-skill -->"
 AGENT_MARKER = "<!-- agent-workflow-pack:managed-agent -->"
 CLAUDE_BEGIN = "<!-- agent-workflow-pack:claude-begin -->"
 CLAUDE_END = "<!-- agent-workflow-pack:claude-end -->"
-CORE_SKILLS = (
-    "grill-me",
-    "xy-workflow",
-    "xy-plan",
-    "xy-project-memory",
-    "xy-build-verify",
-    "xy-qa-review",
-    "xy-prototype-verify",
-)
 CANONICAL_ROLES = (
     "xy-web",
     "xy-desktop",
@@ -418,7 +410,11 @@ def validate_role_sources(pack: Path, errors: list[str]) -> None:
         if not (skills.startswith("[") and skills.endswith("]")):
             errors.append(f"claude_skills must be an inline list for {role}")
         else:
-            for skill in (item.strip() for item in skills[1:-1].split(",")):
+            names = tuple(item.strip() for item in skills[1:-1].split(",") if item.strip())
+            # 元数据与静态共用映射一同验证，不能只要名称合法就接受遗漏或过度预载。
+            if names != CLAUDE_ROLE_SKILLS[role]:
+                errors.append(f"claude_skills must match the shared role policy for {role}")
+            for skill in names:
                 if skill and not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", skill):
                     errors.append(f"invalid Claude Skill name for {role}: {skill}")
         description = values.get("description", "")
@@ -800,7 +796,10 @@ def validate_agent(path: Path, role: str, project_root: Path, errors: list[str],
                 f"Agent embeds duplicated static context {fragment!r}: {path}"
             )
     frontmatter_lines = body.split("\n---\n", 1)[0].splitlines()[1:]
-    for name in list_field(frontmatter_lines, "skills"):
+    names = tuple(list_field(frontmatter_lines, "skills"))
+    if names != CLAUDE_ROLE_SKILLS[role]:
+        errors.append(f"Agent {role} skills must match the shared role policy: {path}")
+    for name in names:
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
             errors.append(f"Agent {role} has invalid Skill name: {name}")
         if name.startswith("xy-") and not (

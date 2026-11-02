@@ -18,7 +18,7 @@ roles:
     toolsets: write
     tags: [web, browser, frontend, accessibility, localization, ui-implementation]
     deliverables: [production-web-change, repository-native-verification-evidence, prototype-contract-mapping]
-    claude_skills: [xy-build-verify]
+    claude_skills: [xy-code-standards, xy-build-verify]
     codex_effort: medium
     codex_sandbox: workspace-write
     claude_color: cyan
@@ -32,7 +32,7 @@ roles:
     toolsets: write
     tags: [desktop, electron, tauri, renderer, preload, ipc, capabilities, native, packaging, updater]
     deliverables: [desktop-application-change, privilege-boundary-evidence, per-platform-build-package-or-release-evidence]
-    claude_skills: [xy-build-verify]
+    claude_skills: [xy-code-standards, xy-build-verify]
     codex_effort: high
     codex_sandbox: workspace-write
     claude_color: orange
@@ -46,7 +46,7 @@ roles:
     toolsets: write
     tags: [backend, systems, api, service, worker, cli, data, native]
     deliverables: [backend-or-systems-change, repository-configured-build-or-test-log, contract-or-migration-note]
-    claude_skills: [xy-build-verify]
+    claude_skills: [xy-code-standards, xy-build-verify]
     codex_effort: high
     codex_sandbox: workspace-write
     claude_color: blue
@@ -60,7 +60,7 @@ roles:
     toolsets: write
     tags: [apple, ios, ipados, macos, watchos, tvos, visionos, xcode, swift, objective-c]
     deliverables: [apple-platform-change, repository-native-xcode-evidence, platform-contract-note]
-    claude_skills: [xy-build-verify]
+    claude_skills: [xy-code-standards, xy-build-verify]
     codex_effort: high
     codex_sandbox: workspace-write
     claude_color: pink
@@ -74,7 +74,7 @@ roles:
     toolsets: write
     tags: [android, gradle, kotlin, java, compose, views, lifecycle, variants]
     deliverables: [android-platform-change, repository-native-gradle-evidence, variant-and-device-coverage]
-    claude_skills: [xy-build-verify]
+    claude_skills: [xy-code-standards, xy-build-verify]
     codex_effort: high
     codex_sandbox: workspace-write
     claude_color: green
@@ -88,7 +88,7 @@ roles:
     toolsets: write
     tags: [ui, ux, wireframe, prototype, design-system]
     deliverables: [stable-html-page, page-interaction-contract, prototype-verification, scoped-design-standard-update]
-    claude_skills: [ui-ux-pro-max, xy-prototype-verify]
+    claude_skills: [xy-ui-design, ui-ux-pro-max, xy-prototype-verify]
     codex_effort: medium
     codex_sandbox: workspace-write
     claude_color: purple

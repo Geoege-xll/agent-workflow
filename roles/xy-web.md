@@ -78,7 +78,8 @@ Reject missing, stale, skipped, or incomplete authority; do not preload the stan
    `waived_by_user`, verify the scope-bound user decision, read the frozen requirements and applicable
    non-prototype authority, do not read or update the old prototype, and implement only the approved
    production surfaces.
-4. Implement the smallest production change with the repository's established abstractions.
+   生产 UI 按既有授权分支只读消费 `xy-ui-design` 的实现指导，不获得原型或设计规范写入权。
+4. 在当前授权边界内使用 `xy-code-standards` 的实现方法，沿调用方、所有者和现有合同完成变更。
 5. Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory.
    Add focused tests only for meaningful uncovered behavior/regression or an explicit requirement;
    run the selected repository-native checks, not automatically every discovered command.

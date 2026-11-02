@@ -26,6 +26,13 @@ from business_confirmation_policy import read_instruction_contract, validate_bus
 from qa_review_policy import validate_pack_qa_review_policy
 from validate_project_config import validate_with_profile
 from skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract, expand_skill_contract
+from role_skills import (
+    CORE_SKILLS,
+    IMPLEMENTER_ROLES,
+    LEGACY_CORE_SKILLS,
+    ANTIGRAVITY_ROLE_SKILLS as ROLE_SKILLS,
+    LEGACY_ANTIGRAVITY_ROLE_SKILLS,
+)
 
 from shared_core_skills import (
     SharedCoreSkillError,
@@ -65,22 +72,6 @@ AGENT_KEYS = {
     "model",
     "commandExecutionPolicy",
     "skills",
-}
-CORE_SKILLS = {
-    "grill-me",
-    "xy-workflow",
-    "xy-plan",
-    "xy-project-memory",
-    "xy-build-verify",
-    "xy-qa-review",
-    "xy-prototype-verify",
-}
-IMPLEMENTER_ROLES = {
-    "xy-web",
-    "xy-desktop",
-    "xy-backend",
-    "xy-apple",
-    "xy-android",
 }
 
 # Verified against the installed Antigravity desktop v2.7.1 frontmatter fields and
@@ -128,11 +119,6 @@ NESTED_DELEGATION_TOOLS = {
     "invoke_subagent",
     "define_subagent",
     "send_message",
-}
-ROLE_SKILLS = {
-    **{role: ("skills/xy-build-verify",) for role in IMPLEMENTER_ROLES},
-    "xy-uiux": ("skills/xy-prototype-verify",),
-    "xy-qa": ("skills/xy-qa-review",),
 }
 ROLE_TOOLS = {
     **{role: IMPLEMENTER_TOOLS for role in IMPLEMENTER_ROLES},
@@ -1446,7 +1432,9 @@ def validate_agent(
         skills = tuple(item for item in skills_value if isinstance(item, str))
         if len(skills) != len(skills_value):
             errors.append(f"Antigravity Agent skills must contain only strings: {path}")
-    if skills != expected_skills:
+    # 只有旧资源归属识别可以接受明确的旧绑定；staging/generated 始终检查当前绑定。
+    accepted_skills = (expected_skills, LEGACY_ANTIGRAVITY_ROLE_SKILLS[role]) if ownership_only else (expected_skills,)
+    if skills not in accepted_skills:
         errors.append(
             f"Antigravity Agent {role} skills must exactly match approved policy: {path}"
         )
@@ -1929,7 +1917,8 @@ def _validate_owned_native_root(root: Path) -> None:
         for path in directories
         if path.startswith("skills/") and path.count("/") == 1
     }
-    if skill_names != CORE_SKILLS:
+    # 新增随包技能后，完整受管的旧七技能树仍能升级；未知集合绝不据此接管。
+    if skill_names not in (CORE_SKILLS, LEGACY_CORE_SKILLS):
         raise SecureReadError("native managed root has an unexpected shared Skill set")
     audit_managed_skill_root(root / "skills", recover=False)
     for name in sorted(skill_names):
@@ -1956,7 +1945,7 @@ def _validate_owned_native_root(root: Path) -> None:
             root / raw,
             body,
             role,
-            set(CORE_SKILLS),
+            skill_names,
             errors,
             ownership_only=True,
         )

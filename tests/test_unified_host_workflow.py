@@ -5362,6 +5362,24 @@ class ProjectDiscoveryContractTest(unittest.TestCase):
 
 
 class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
+    def test_new_builtin_reference_drift_is_rejected_by_each_host(self) -> None:
+        temporary, project, _ = self.install_all()
+        self.addCleanup(temporary.cleanup)
+        for name, reference in (("xy-code-standards", "boundary-reasoning.md"),
+                                ("xy-ui-design", "design-quality.md")):
+            for directory, hosts in ((".agents/skills", ("codex", "antigravity")),
+                                     (".claude/skills", ("claude",))):
+                path = project / directory / name / "references" / reference
+                original = path.read_bytes()
+                # 模拟入口不变而条件参考损坏，实际 --check 必须完整检查技能资源树。
+                path.write_bytes(original + "\n未授权漂移\n".encode("utf-8"))
+                for host in hosts:
+                    with self.subTest(host=host, skill=name):
+                        result = self.run_script(project, f"setup_{host}.sh", "--check")
+                        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                        self.assertEqual(original + "\n未授权漂移\n".encode("utf-8"), path.read_bytes())
+                path.write_bytes(original)
+
     def make_docs_profile_fixture(
         self, *, ui_enabled: bool
     ) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
@@ -5458,39 +5476,15 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             timeout=90,
         )
 
-    def test_active_runtime_instruction_sources_are_english(self) -> None:
-        roots = (
-            PACK / "product/WORKFLOW.md",
-            PACK / "product/AGENT_SCHEMA.md",
-            PACK / "product/GLOBAL_CONSTRAINTS.md",
-        )
-        files = list(roots)
-        # 按需安装/诊断说明面向中文维护者，不是预载的角色/Skill 编排契约。
-        # 仅排除这两份明确的操作文档，仍检查所有实际运行时入口和规则正文。
-        operator_docs = {PACK / "platforms/shared/HOOKS.md", PACK / "platforms/claude/hooks/README.md"}
-        for directory in (
-            PACK / "roles",
-            PACK / "platforms/shared",
-            PACK / "platforms/codex",
-            PACK / "platforms/claude",
-            PACK / "platforms/antigravity",
-        ):
-            # 项目文档模板是交给中文项目维护者填写的内容，不属于宿主指令源；
-            # 宿主运行时仍单独保持英文，避免把文档语言限制误施加到工程规范。
-            files.extend(
-                path
-                for path in directory.rglob("*")
-                if path.is_file() and path.suffix in {".md", ".tpl"} and path not in operator_docs
-            )
-        cjk = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
-        findings = []
-        for path in sorted(set(files)):
-            for line_number, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
-                if cjk.search(line):
-                    findings.append(f"{path.relative_to(PACK)}:{line_number}: {line}")
-        self.assertEqual([], findings)
+    def test_chinese_skill_sources_keep_native_machine_identifiers(self) -> None:
+        from lib.shared_core_skills import parse_managed_skill
+
+        # 正文语言服从用户；稳定名称和受管 frontmatter 继续交给真实解析器验证。
+        for name in ("xy-code-standards", "xy-ui-design"):
+            path = PACK / "platforms/shared/skills" / name / "SKILL.md"
+            metadata = parse_managed_skill(path, name)
+            self.assertEqual(name, metadata["name"])
+            self.assertRegex(metadata["description"], r"[\u4e00-\u9fff]")
 
     def test_shared_pm_bootstrap_keeps_detailed_procedures_in_skills(self) -> None:
         body = (PACK / "platforms/shared/AGENTS.product.tpl").read_text(
@@ -5505,30 +5499,14 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             self.assertNotIn(skill_only_heading, body)
         self.assertNotIn("{{SCOPE_TABLE}}", body)
 
-    def test_generated_machine_instructions_are_english(self) -> None:
-        temporary, project, _ = self.install_all()
+    def test_generated_chinese_instructions_preserve_native_entries(self) -> None:
+        temporary, project, pack = self.install_all()
         self.addCleanup(temporary.cleanup)
-        candidates = [project / "AGENTS.md", project / "CLAUDE.md"]
         self.assertEqual((project / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
-        for directory in (
-            project / ".agents/agents",
-            project / ".agents/skills",
-            project / ".claude/agents",
-            project / ".claude/skills",
-            project / ".codex/agents",
-        ):
-            if directory.is_dir():
-                candidates.extend(path for path in directory.rglob("*") if path.is_file())
-        cjk = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
-        findings = []
-        for path in candidates:
-            try:
-                body = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                continue
-            if cjk.search(body):
-                findings.append(str(path.relative_to(project)))
-        self.assertEqual([], sorted(findings))
+        for name in ("xy-code-standards", "xy-ui-design"):
+            source = (pack / "platforms/shared/skills" / name / "SKILL.md").read_bytes()
+            for directory in (".agents/skills", ".claude/skills"):
+                self.assertEqual(source, (project / directory / name / "SKILL.md").read_bytes())
 
     def test_all_hosts_generate_core_skills_from_one_shared_source(self) -> None:
         temporary, project, pack = self.make_fixture()
@@ -5543,7 +5521,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             .splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         )
-        self.assertEqual(7, len(names))
+        self.assertEqual(9, len(names))
         for name in names:
             with self.subTest(skill=name):
                 source = (pack / "platforms/shared/skills" / name / "SKILL.md").read_bytes()
@@ -5559,6 +5537,20 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                     (pack / "platforms/claude/skills" / name / "SKILL.md").exists(),
                     f"duplicate Claude core Skill source: {name}",
                 )
+                # 完整目录分发同时覆盖条件参考，不能只让入口看似安装成功。
+                for reference in (pack / "platforms/shared/skills" / name).rglob("*"):
+                    if reference.is_file():
+                        relative = reference.relative_to(pack / "platforms/shared/skills")
+                        for skill_root in (".agents/skills", ".claude/skills"):
+                            self.assertEqual(reference.read_bytes(), (project / skill_root / relative).read_bytes())
+
+        for path in (project / ".codex/agents").glob("xy-*.toml"):
+            role = path.stem
+            expected = (("xy-ui-design", "xy-prototype-verify") if role == "xy-uiux" else
+                        ("xy-qa-review",) if role == "xy-qa" else
+                        ("xy-code-standards", "xy-build-verify"))
+            body = tomllib.loads(path.read_text(encoding="utf-8"))["developer_instructions"]
+            self.assertEqual(expected, tuple(re.findall(r"^- Bound Skill: `\$(xy-[a-z0-9-]+)`;", body, re.M)))
         # 此夹具直接运行源包 setup，源包本身承担运行时目录；不能假定已经执行
         # install.sh 并创建 .agent-workflow。沿用现有展开器读取实际生成入口，
         # 再把安装根相对引用映射回同一源包，确认集中规则的锚点真实存在。

@@ -400,6 +400,14 @@ non-Trivial work; this early classification is not UI-Conformance or a prototype
 - A missing `required_skills` entry blocks the corresponding phase. A missing optional specialist
   Skill does not block the base workflow, but QA must report the uncovered surface.
 
+内置 `xy-code-standards` 提供代码实现与只读审查的方法；`xy-ui-design` 提供高保真原型、
+`standards_only` 和生产／QA 按既有设计权威消费的条件分支。五个实施角色固定绑定代码方法
+与 `xy-build-verify`，`xy-uiux` 绑定设计方法与原有专业／原型 Skill；QA 固定仍只绑定
+`xy-qa-review`，按实际代码或 UI 审查面读取相应方法。生产 UI 实现按 `surface_kind: production_ui`
+读取设计规则，后端不预载 UI。项目 GENERAL 稳定规则 ID、当前规范叶和指纹仍拥有权威；
+Skill 不复制或替代这些规则。Trivial 和获明确授权的 PM 亲自编写代码同样适用代码方法，
+但读取不创建 Task Pack、原型、确认、写入权或 QA 阶段，原路线与验证停止条件保持不变。
+
 ```yaml
 external_workflow_policy:
   requirements_provider: grill-me

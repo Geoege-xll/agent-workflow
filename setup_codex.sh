@@ -202,6 +202,9 @@ PY
 
 build_agent_instructions() {
   local role="$1" src="${ROLES_DIR}/${role}.md"
+  local skill bound_skills
+  # 只注入共用映射中的技能名，不复制 Skill/引用全文；读取失败必须阻止残缺角色发布。
+  bound_skills=$(python3 "${PACK_DIR}/lib/role_skills.py" "${role}") || return 1
   {
     echo "# Global mandatory constraints"
     echo
@@ -213,6 +216,9 @@ build_agent_instructions() {
     echo
     echo "## Codex workflow skill"
     echo
+    while IFS= read -r skill; do
+      echo "- Bound Skill: \`\$${skill}\`; read only its applicable branch within current authority."
+    done <<< "${bound_skills}"
     case "${role}" in
       xy-uiux)
         # 两种设计模式必须在描述和正文一致，不能把规范维护误变成 HTML 原型任务。
@@ -707,6 +713,7 @@ sys.path.insert(0, lib_dir)
 from qa_review_policy import validate_pack_qa_review_policy
 from business_confirmation_policy import read_instruction_contract
 from validate_project_config import validate_with_profile
+from role_skills import ROLE_SKILLS
 
 errors: list[str] = []
 errors.extend(validate_pack_qa_review_policy(Path(lib_dir).parent))
@@ -1137,6 +1144,9 @@ for role in discovered_roles:
     for key in ("name", "description", "developer_instructions"):
         require(key in data, f"{path.name} missing {key}")
     require(data.get("name") == role, f"{path.name} name mismatch")
+    # 绑定名称从共用静态策略取得；只校验当前角色入口，不把条件引用展开为常驻上下文。
+    bound = re.findall(r"^- Bound Skill: `\$(xy-[a-z0-9-]+)`;", data.get("developer_instructions", ""), re.M)
+    require(tuple(bound) == ROLE_SKILLS[role], f"{path.name} Skill bindings differ from shared policy")
 
 uiux = agents_dir_path / "xy-uiux.toml"
 if uiux.exists():

@@ -18,13 +18,13 @@ PACK = Path(__file__).resolve().parents[1]
 class RuleBoundaryContractTest(unittest.TestCase):
     def test_standalone_audit_exits_before_implementation_acceptance(self) -> None:
         # 只保护新增分支的早退与防绕过边界，不把文本合同冒充模型行为测试。
-        for relative, following in (
-            ("platforms/shared/skills/xy-workflow/SKILL.md", "## General Trivial early exit"),
-            ("platforms/shared/skills/xy-qa-review/SKILL.md", "## Implementation acceptance"),
+        for relative, start_anchor, following in (
+            ("platforms/shared/skills/xy-workflow/SKILL.md", "## Standalone read-only audit", "## General Trivial early exit"),
+            ("platforms/shared/skills/xy-qa-review/SKILL.md", "- For an audit-only request", "## Implementation acceptance"),
         ):
             with self.subTest(source=relative):
                 body = (PACK / relative).read_text()
-                start = body.index("## Standalone read-only audit")
+                start = body.index(start_anchor)
                 end = body.index(following)
                 self.assertLess(start, end)
                 branch = " ".join(body[start:end].split())
@@ -32,9 +32,13 @@ class RuleBoundaryContractTest(unittest.TestCase):
                 self.assertIn("BUILD_VERIFIED", branch)
                 self.assertIn("implementation QA PASS", branch)
                 self.assertIn("non-Trivial implementation", branch)
-                self.assertIn("scope", branch)
+                # QA 已把独立审查并入任务分支；全局范围合同仍适用，不能只靠旧标题定位。
+                self.assertIn("scope", " ".join(body[:end].split()))
                 self.assertIn("standards", branch)
-                self.assertIn("handoff", branch)
+                if "xy-qa-review" in relative:
+                    self.assertIn("qa_handoff_cli.py validate", body[end:])
+                else:
+                    self.assertIn("handoff", branch)
 
         workflow = (PACK / "product/WORKFLOW.md").read_text()
         branch = workflow.split("### Standalone read-only audit", 1)[1].split("### ", 1)[0]

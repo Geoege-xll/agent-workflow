@@ -62,7 +62,7 @@ compensate by preloading the complete standards directory.
    verify the index fingerprint, engineering-leaf path coverage, and rule IDs before editing. Do not preload
    unrelated project, feature, status, or design documents merely because they are configured.
 2. Inspect current configuration, implementation, tests, and conventions; map the narrow boundary.
-3. Implement the smallest complete change using existing abstractions and dependency direction.
+3. 在当前授权边界内使用 `xy-code-standards` 的实现方法，沿调用方、所有者和现有合同完成变更。
 4. Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory.
    Add focused tests only for meaningful uncovered behavior/regression or an explicit requirement;
    run the selected repository-native checks, not automatically every discovered command.

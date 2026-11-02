@@ -327,7 +327,7 @@ migration, and the prototype index remains a page directory rather than a second
 | `product/` | Cross-platform product discipline |
 | `roles/xy-*.md` | Role technical baselines |
 | `platforms/*/` | Per-CLI templates |
-| `platforms/shared/skills/` | Seven host-neutral core Skills; one shared source for all hosts |
+| `platforms/shared/skills/` | 九个宿主共用的内置 Skill；三宿主使用同一份源资源 |
 | `platforms/shared/HOOKS.md` | 三平台辅助 Hooks、开关、所有权与原生信任说明 |
 | `scripts/` | guard (soft) / portable conflict-marker lint |
 | `setup_claude.sh` | → root `AGENTS.md` Claude section + `CLAUDE.md` thin import + `.claude/agents/` + skills |
@@ -528,6 +528,8 @@ platforms/shared/skills/          # authoritative one shared source
   xy-plan/                        # self-contained exact draft planning + task graph
   xy-project-memory/              # optional agentmemory + docs fallback
   xy-build-verify/                # implementer evidence
+  xy-code-standards/              # 代码实现与只读审查的共用方法
+  xy-ui-design/                   # 高保真设计与按既有权威消费的条件规则
   xy-qa-review/                   # native-review-first project acceptance
   xy-prototype-verify/            # UI prototype and approval evidence
 
@@ -542,6 +544,11 @@ entrypoint does not remove approval, ownership, standards or QA rules. These are
 choices, not invented platform line/token limits. Codex workers receive compact execution boundaries
 instead of a repeated copy of the PM's entire global procedure; model and reasoning preferences stay
 under user control.
+
+`xy-code-standards` 提供实现判断和只读审查方法，`xy-ui-design` 提供规范落实、一致性与
+高保真交付方法。项目 GENERAL 的稳定规则、已批准设计规范和当前指纹仍是权威；参考项目
+的满意评价不构成通用颜色、材质或审美授权。Trivial 同样适用代码方法，仍按原早退路线完成。
+角色常驻职责与权限保留，条件细节从 Skill 读取；字符／字节体积变化不等于真实 token 节省。
 
 Codex 角色中的发现上下文复用原发现器，将相同技术栈／证据和命令模板分组，再保留
 每个模块的 root、命令 cwd 与证据基点映射；差异化参数、用途和证据仍分别保留。
@@ -589,8 +596,11 @@ internal and useful recovery facts stay in the existing plan, not a second workt
 - `CLAUDE.md` contains only `@AGENTS.md`, using Claude's official import syntax without duplicating rules.
 - `/xy-workflow` owns the complete non-Trivial route; no phase or compatibility command layer is installed.
 - Every generated Custom Agent has the Claude `Skill` tool. Implementers preload
-  `xy-build-verify`; UI preloads `ui-ux-pro-max` and `xy-prototype-verify`; QA preloads
+  `xy-code-standards` and `xy-build-verify`; UI preloads `xy-ui-design`, `ui-ux-pro-max` and `xy-prototype-verify`; QA preloads
   `xy-qa-review`.
+- 生产 UI 实现按 `surface_kind: production_ui` 读取设计 Skill 的适用规则；QA 按实际代码／UI
+  审查面只读消费共用方法。预载不等于执行；`standards_only` 不运行原型验证，读取不授予写入权、
+  恢复原型门槛或增加确认。纯文档／后端 QA 不预载 UI 全文。
 - Additional QA specialist Skills are matched on demand from their descriptions. There is
   no local-Skill inventory scan or extra selection phase.
 - QA uses the host's native code-review capability first, then one proven installed review Skill,
@@ -731,7 +741,7 @@ to one host with `--only=claude`, `--only=codex`, or `--only=antigravity`.
 ## Maintain
 
 - Discipline → `product/WORKFLOW.md`
-- Role coding norms → `roles/xy-*.md`
+- 角色职责与权限 → `roles/xy-*.md`；共用代码／设计方法 → `xy-code-standards`／`xy-ui-design`
 - Core workflow Skills → `platforms/shared/skills/`
 - Host adapters → `platforms/codex/`, `platforms/claude/`, `platforms/antigravity/`
 - 修改源包也先选与变更相关的现有测试模块／用例。文案或局部指令变更只核对受影响

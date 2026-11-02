@@ -76,7 +76,9 @@ Reject missing, stale, skipped, or incomplete authority; do not preload the stan
    fingerprint and require it to match the approved value. For `waived_by_user`, verify its
    requirement fingerprint and exact surfaces, do not read or update the old prototype, and
    implement the approved renderer UI directly.
-3. Define the narrow trust boundary and implement the smallest coherent change. Apply
+   生产 UI 按既有授权分支只读消费 `xy-ui-design` 的实现指导，不获得原型或设计规范写入权。
+3. 在当前授权边界内使用 `xy-code-standards` 的实现方法；桌面特权边界仍按本角色约束。
+   Apply
    `xy-build-verify/references/verification-scope.md` from the installed Skill directory; add tests
    for meaningful uncovered behavior/regression or explicit requirements, not mechanically for every edit.
 4. Run task-selected repository-native checks; audit privilege expansion, unsafe IPC/navigation, secrets,

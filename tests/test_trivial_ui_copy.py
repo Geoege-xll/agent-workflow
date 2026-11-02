@@ -46,9 +46,15 @@ class TrivialUICopyContractTest(UnifiedHostFixture, unittest.TestCase):
         # QA 指令都应携带专门的范围限定，而非只在 PM 入口声明例外。
         for root in (".agents/skills", ".claude/skills"):
             review = (project / root / "xy-qa-review/SKILL.md").read_text(encoding="utf-8")
-            self.assertIn("For an explicitly requested Trivial UI copy review", review)
-            self.assertIn("Do not require a formal Task Pack", review)
-            self.assertIn("Then stop", review)
+            # UI copy 复用当前统一的显式 Trivial 审查分支；只定位该分支，防止别处
+            # 同名提示掩盖正式 Task Pack、完整实施验收或收口被错误地重新要求。
+            start = review.index("- For explicitly requested Trivial review")
+            end = review.index("- For an audit-only request", start)
+            branch = " ".join(review[start:end].split())
+            self.assertIn("Do not require a formal Task Pack", branch)
+            self.assertIn("then stop", branch)
+            self.assertIn("actual local checks", branch)
+            self.assertIn("do not expand the audit yourself", branch)
 
         checked = self.run_script(project, "setup_all.sh", "--check")
         self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
