@@ -9,8 +9,8 @@ IMPLEMENTER_ROLES = frozenset({
     "xy-web", "xy-desktop", "xy-backend", "xy-apple", "xy-android",
 })
 
-# 旧集合仅用于识别有受管清单和内容证明、可安全替换的安装资源。
-# 当前源、staging 和 --check 始终要求新增技能齐全，不能借兼容分支接受缺失资源。
+# 历史集合仅作为磁盘所有权证明，允许安装器在不覆盖未知用户内容的前提下替换资源。
+# 它不是 2.0 运行合同；当前源、staging 和 --check 始终要求全部技能齐全，不能接受旧绑定。
 LEGACY_CORE_SKILLS = frozenset({
     "grill-me", "xy-build-verify", "xy-project-memory", "xy-plan",
     "xy-prototype-verify", "xy-qa-review", "xy-workflow",

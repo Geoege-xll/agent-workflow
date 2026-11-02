@@ -306,7 +306,7 @@ class NpmPreparationTest(unittest.TestCase):
         project.mkdir()
         execute = [*npm_command(), "exec", "--offline", "--ignore-scripts", "--yes", "--cache", str(cache),
                    "--package", str(tgz), "--", "agent-workflow"]
-        for arguments, expected in ((["--help"], "Usage: agent-workflow"), (["--version"], "0.1.0")):
+        for arguments, expected in ((["--help"], "Usage: agent-workflow"), (["--version"], "2.0.0")):
             result = subprocess.run([*execute, *arguments], cwd=project, env=env,
                                     capture_output=True, text=True, timeout=45)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -718,7 +718,7 @@ class NpmMetadataTest(unittest.TestCase):
         package = json.loads((PACK / "npm/package.json").read_text())
         self.assertTrue(package["private"])
         self.assertEqual(package["name"], "@geoege-xll/agent-workflow")
-        self.assertEqual(package["version"], "0.1.0")
+        self.assertEqual(package["version"], "2.0.0")
         self.assertNotIn("scripts", package)
         self.assertNotIn("license", package)
         self.assertNotIn("dependencies", package)

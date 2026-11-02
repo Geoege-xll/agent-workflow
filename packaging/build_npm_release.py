@@ -289,7 +289,7 @@ def prepare(source: Path, archive: Path, output: Path) -> Path:
     bundled["manifest.json"] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     startup = {name: regular_bytes(source / "npm" / name) for name in STARTUP_FILES}
     package = json.loads(startup["package.json"])
-    if (not isinstance(package, dict) or package.get("name") != "@geoege-xll/agent-workflow" or package.get("version") != "0.1.0"
+    if (not isinstance(package, dict) or package.get("name") != "@geoege-xll/agent-workflow" or package.get("version") != "2.0.0"
             or package.get("bin") != {"agent-workflow": "bin/agent-workflow.cjs"}
             or package.get("private") is not True or package.get("scripts")
             or any(package.get(field) for field in ("dependencies", "optionalDependencies", "devDependencies"))):

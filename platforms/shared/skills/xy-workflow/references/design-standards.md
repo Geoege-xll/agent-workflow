@@ -26,8 +26,8 @@ shared standards do not copy page contracts or task history.
 
 - PM decides whether to update, replacement scope, approval basis and exact owned_paths, then reviews the result.
 - UI Agent is the primary author of design-standard content, limited to explicitly authorized leaves.
-- PM may perform mechanical edits directly without an extra Agent. If represented in the task graph,
-  use the same restricted xy-uiux maintenance contract; main-session identity does not bypass path protection.
+- 规范叶的机械修改也默认由获准实施者负责；PM亲自实施须有明确覆盖当前范围的用户指令。
+  这不改变同一xy-uiux维护合同，主会话身份不绕过路径保护。
 - PM updates the STANDARDS directory and links when files are added, removed or split. Never give a Writer the whole tree.
 - Implementation Agents own production tokens, shared components and layout, return exact mappings
   and constraints, and do not independently change the design direction.

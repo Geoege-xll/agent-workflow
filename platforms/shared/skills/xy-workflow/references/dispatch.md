@@ -48,7 +48,7 @@ ownership protections, populated documents, user settings, native permissions/Ho
 worktrees. A role description read in PM context is not a substitute for native installation.
 If the host caches changed roles, use its supported reload while retaining current task/approvals;
 report actual unavailability if necessary. Reuse successful refresh/check evidence until affected
-inputs or resources change; do not repeat a completed refresh for the same change. Trivial/read-only work
+inputs or resources change; do not repeat a completed refresh for the same change. Light/read-only work
 does not trigger it merely on a new prompt. This is installation maintenance within existing
 dispatch, not a new business gate, QA stage or full test run; Hooks never auto-install roles.
 
@@ -114,9 +114,32 @@ These are command-execution boundaries within existing steps, not additional wor
 
 ## Route
 
-The following planning, graph and QA route applies only after both Trivial early exits are ruled out.
-实施者与恢复边界统一见 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`：
-Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低原等级或省略门槛。
+派发前先按 WORKFLOW 的 Light／Full 定义判断当前风险与实际消费者。两等级默认使用
+对应原生实施者，只有明确的 PM 亲自实施授权例外；文档后缀不能扩大所有权。
+
+### Light：自包含单任务派发
+
+明确当前目标、精确拥有路径、验收、规范与最小验证后，使用 `schema_version: 2` 单包，
+其 `task` 保留当前 `state`，带 `workflow_level: Light`、规范化 `module`（根为 `.`）、
+`role`、稳定 `agent_alias`、`instance_policy: fresh`、`context_policy: handoff_only`。
+当前目标／范围、代码与工作区依据、适用规范、可信授权来源、验收与必要证据、未决事项
+必须完整。包不能携带完整 PM／兄弟会话；新实例不继承父历史，每位接收者仍完整读取必需
+规范。实际原生参数只按当前宿主细则，不因声明 handoff_only 就声称运行时隔离已实测。
+
+普通Light UI文案仍使用production_ui＋现有UI-Conformance，design_delta:none、
+prototype_policy:not_applicable，当前已解析冻结design_authority_refs及工程／设计覆盖。
+缺权威先补真实依据，实际设计／交互变化改Full；不得标non_ui或用空权威避过规范。
+
+Light 不强制下述 Full Grill Me、xy-plan、图、计划保存、独立 QA 或再次确认。已有明确
+用户范围授权可直接派发；实质未决合同和平台权限依原边界处理。执行最小充分验证，
+交接时评估是否需要独立 QA、文档与记忆；选定后完成必需项，没有需要就不创建空记录。
+Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工具](runtime-records.md)。
+
+### Full：规划、批准与图派发
+
+下面的完整规划、图与 QA 路线适用于 Full；共享规范选择和最小充分验证原则也适用于 Light。
+实施所有权、别名／实例与闭环收口统一遵守 `.agent-workflow/product/WORKFLOW.md` 的
+`implementation-ownership` 和 `agent-instance-lifecycle`，本参考不另建实例状态来源。
 
 1. `project.yaml` is the fixed workflow-adapter read for paths, limits, and routing configuration.
    Its `docs.*` values are discoverable indexes, not a static preload list.
@@ -156,16 +179,10 @@ Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低
 2. Classify production scope from the current request and available facts. If classification,
    requirement coverage, or planning materially depends on a missing project fact, apply the
    auxiliary-source policy above and retrieve only that fact before finalizing the classification:
-   - Trivial: one small non-UI file with no shared contract, or bounded low-risk UI copy above.
-   - Light: one surface, no UI, database, or shared-contract change.
-   - Full: multiple roles, shared contract/database/root configuration, or non-Trivial UI.
-   If the result is Trivial, return immediately to its applicable early exit; do not continue to
-   the numbered planning, approval, dispatch or QA steps below.
-   Plan storage uses these same levels: Trivial does not save by default; Light saves only for an
-   actual pause/recovery/handoff or explicit request; Full saves after approval before first dispatch.
-   On saving, revising or resuming a plan, read [plan lifecycle](plan-lifecycle.md).
-   A Light recovery note does not invoke Grill Me/xy-plan or upgrade the task. User-scoped workflow
-   opt-out and save/no-save requests prevail; preserve applicable project and permission constraints.
+   - Light: 范围明确、风险可控的单一交付面，含普通低风险文案；转上面的单包分支。
+   - Full: 多角色、共享合同／数据库／根配置，或超出低风险文案边界的生产 UI。
+   Light 仅在真实暂停／恢复／交接或明确要求时保存简短计划；Full 在批准后首次派发前保存。
+   需要保存、修改或恢复时读取 [计划生命周期](plan-lifecycle.md)，保存 Light 不激活 Full Skills。
 3. Activate `xy-project-memory` in start mode only when bounded cross-session recall or historical
    context is materially needed (Codex: `$xy-project-memory`; Claude Code and Antigravity CLI:
    `/xy-project-memory`). Do not invoke it merely because a new request started. When start retrieval
@@ -200,7 +217,7 @@ Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低
    (Codex: `$grill-me`; Claude Code and Antigravity CLI: `/grill-me`). Use
    `coverage_check` when project facts may already be complete and `full_interview` only for the
    unresolved material gaps it identifies. A complete request returns without artificial
-   questions. Clear Trivial or Light work does not run this merely because the Skill is installed.
+   questions. Clear Light work does not run this merely because the Skill is installed.
    Keep its complete `grill_result` internal. If the Skill is unavailable, use the local
    clarification fallback and record it internally.
 6. After Full coverage is complete, activate `xy-plan` (Codex: `$xy-plan`; Claude Code and
@@ -238,7 +255,7 @@ Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低
    write PROJECT/feature truth just to save intended work. Merge subsequent effective changes into
    this same plan and replace affected complete Task Packs, including in-flight worker/QA inputs,
    before accepting their results. Preserve unaffected work; apply the linked plan lifecycle.
-8. Build implementation task packs from that frozen plan with exact owned paths, dependencies,
+8. Build schema_version: 2 implementation task packs from that frozen plan with exact owned paths, dependencies,
    validation commands, expected concise evidence, and this routing contract:
 
    Before selecting verification, read
@@ -259,6 +276,10 @@ Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低
    inspect; do not copy or manually enumerate the user's installed specialist Skills. Every
    Writer adds `standards-conformance` as a mandatory base audit surface.
 
+   每个 task 带 workflow_level、module、role、agent_alias、instance_policy: fresh 和
+   context_policy: handoff_only。原生派发只交当前任务 shell 与必要规范、批准／UI依据，
+   不复制完整 PM／兄弟会话、不 fork 继承父历史。独立任务新实例，同任务短返工才可续用。
+
    Include a brief reporting/reading instruction in every worker and QA task pack: report completion
    and blockers to PM, give meaningful milestones for long work, and answer progress requests at a
    safe work boundary without restarting the task. Return completed/current work, blockers and the
@@ -270,7 +291,8 @@ Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低
    documents, and recover every missing portion before relying on a partial read. 宿主可读完整
    Task Pack 文件时，可交接确切文件引用、SHA 和简短变化摘要，接收方必须完整读取当前
    包；宿主不可读时仍通过支持的通道发送完整包，不能仅发差量。No new report file is needed.
-9. Read `orchestration` limits from `project.yaml`. One path has one writer. Run
+9. Read `orchestration` limits from `project.yaml`，并按当前宿主真实运行／打开线程口径观察
+   容量；按需创建，不预热全部别名，不为填满上限启动实例，为必要 QA／集成安排容量。 One path has one writer. Run
    conflict detection before two or more writers. Do not allow nested delegation.
 10. Materialize the approved graph into a transient JSON snapshot. Freeze the configured STANDARDS
     index/root, current index fingerprint, domain-specific applicable hard-rule IDs, and any explicitly

@@ -14,6 +14,7 @@ import re
 import select
 import signal
 import shlex
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -245,6 +246,28 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
     setUp = CatalogTest.setUp
     tearDown = CatalogTest.tearDown
     write = CatalogTest.write
+
+    def test_v2_lifecycle_diagnostics_never_infer_live_tools_or_native_end(self):
+        """官方能力和版本观测都不能冒充本会话隔离、关闭或容量释放证明。"""
+        expected = {"codex": {"fresh_subagent_context", "native_stop_and_close"},
+                    "claude": {"fresh_named_subagent_context", "send_message_resume", "task_stop"},
+                    "antigravity": {"fresh_subagent_context", "subagent_kill"}}
+        with patch('manager.capabilities.subprocess.run', side_effect=AssertionError('不得探测模型或工具')):
+            for host, names in expected.items():
+                result = diagnose(host, home=self.home, environment={})
+                with self.subTest(host=host):
+                    features = {row['name']: row for row in result['documented_capabilities']}
+                    self.assertTrue(names.issubset(features))
+                    self.assertTrue(all(not features[name]['runtime_verified'] for name in names))
+                    boundary = result['agent_lifecycle_boundary']
+                    self.assertEqual(2, boundary['workflow_schema_version'])
+                    self.assertEqual('handoff_only', boundary['context_policy'])
+                    self.assertEqual('fresh', boundary['instance_policy'])
+                    self.assertEqual('not_inspected', boundary['current_tool_surface'])
+                    self.assertEqual('retire_without_reuse', boundary['unavailable_end_action'])
+                    self.assertFalse(boundary['native_end_confirmed'])
+                    if host == 'codex':
+                        self.assertIn('interrupt', features['native_stop_and_close']['boundary'])
 
     def test_window_override_and_write_guard_projection_are_safe_and_do_not_invalidate_model_drafts(self):
         self.write('.claude/settings.json', {'permissions': {'blockWritesOutsideWorkingDirectories': True, 'deny': ['PRIVATE-RULE']}})
@@ -986,6 +1009,11 @@ class InstallerBoundaryTest(unittest.TestCase):
 
     def copy(self,source,stage):
         (stage/'project.yaml').write_text((PACK/'project.yaml').read_text().replace('MyProject','Fixture'))
+        # 本类只替换可控的进程脚本；规范迁移预检仍使用真实当前角色和内置规则。
+        # 缺少这些资源会在注入超时/中断前退出，无法证明子进程取消和目录回滚边界。
+        for relative in ('roles', 'platforms/shared/skills/xy-code-standards',
+                         'platforms/shared/skills/xy-ui-design', 'templates/docs'):
+            shutil.copytree(PACK/relative, stage/relative)
         (stage/'version.txt').write_text(self.version)
         (stage/'setup_all.sh').write_text(self.script)
 

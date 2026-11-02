@@ -39,6 +39,7 @@ class Task:
     semantic_locks: tuple[str, ...] = ()
     task_type: str = "writer"
     state: str = "DECLARED"
+    agent_retired: bool = False
 
 
 def _require_unique(values: tuple[str, ...], task_id: str, field: str) -> None:
@@ -251,6 +252,8 @@ def ready_tasks(
     for task_id in sorted(indexed):
         task = indexed[task_id]
         if task.task_type == "qa":
+            continue
+        if task.agent_retired:
             continue
         if task.state not in {"DECLARED", "BLOCKED", "READY"}:
             continue

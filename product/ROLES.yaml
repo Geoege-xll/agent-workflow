@@ -4,7 +4,7 @@
 
 pm:
   name: PM
-  description: Main orchestrator. Decompose, dispatch, contracts, audit, merge. Prefer routing over implementing.
+  description: Main orchestrator for requirements, dispatch, contracts and accepted document projection. Implementation requires an explicit scope-bound user exception.
   division: product
   sandbox: docs-config-only
   toolsets: none

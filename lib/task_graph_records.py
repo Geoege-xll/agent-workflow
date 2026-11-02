@@ -31,11 +31,11 @@ except ImportError:
 
 
 SET_FIELDS = frozenset({
-    "agent_ref",
+    "agent_ref", "agent_retired", "handoff_assessment",
     "state", "owned_paths", "semantic_locks", "input_contracts", "output_contracts",
     "acceptance_evidence", "verification_commands", "controlled_document_access",
 })
-APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access", "agent_ref"}
+APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access", "agent_ref", "agent_retired", "handoff_assessment"}
 COMPLETED_STATES = {"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED"}
 
 
@@ -271,6 +271,13 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             if field in APPEND_FIELDS and not isinstance(value, list):
                 raise TaskGraphError(f"set {field} requires an array")
         task.update(copy.deepcopy(fields))
+        # 退役只使身份不可再次执行，不证明底层已经停止；保留当前活动态与锁。
+        # 拒绝复活和true→false，不能靠同补丁改状态绕过不可逆约束。
+        if old[task_id].get("agent_retired") and not task.get("agent_retired"):
+            raise TaskGraphError("agent_retired cannot be cleared")
+        if (task.get("agent_retired") and _running(task)
+                and task["state"] != old[task_id]["state"]):
+            raise TaskGraphError("retired task cannot re-enter execution")
         for field, values in additions.items():
             _append(task, field, values)
         documents = _object(operations.get("documents", {}), "task.documents")
@@ -285,7 +292,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             workspace["head_revision"] = copy.deepcopy(operations["checkpoint"])
         # 记录实际证据可以追加；实现输入、输出和规范合同变更则不能沿用旧完成态。
         # 此处先比较，再做单纯指纹刷新，使恢复检查点更新不会废弃无关构建证据。
-        contract_fields = SET_FIELDS - {"state", "acceptance_evidence", "controlled_document_access", "agent_ref"}
+        contract_fields = SET_FIELDS - {"state", "acceptance_evidence", "controlled_document_access", "agent_ref", "agent_retired", "handoff_assessment"}
         if (any(task.get(key) != old[task_id].get(key) for key in contract_fields)
                 or _document_contract(task) != _document_contract(old[task_id])):
             changed_contracts.add(task_id)

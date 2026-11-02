@@ -8,6 +8,7 @@ Agent、不运行验证、不写项目计划，也不生成批准或 QA 结论�
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import sys
@@ -25,6 +26,7 @@ try:
         effective_dispatch_capacity,
         qa_ready,
         ready_tasks,
+        request_closure,
         validate_graph,
     )
 except ImportError:
@@ -38,6 +40,7 @@ except ImportError:
         effective_dispatch_capacity,
         qa_ready,
         ready_tasks,
+        request_closure,
         validate_graph,
     )
 
@@ -54,6 +57,8 @@ GRAPH_FIELDS = {
     "state",
 }
 PLAN_ONLY_FIELDS = {
+    "workflow_level", "module", "agent_alias", "instance_policy", "context_policy",
+    "agent_retired", "handoff_assessment",
     "agent_ref",
     "execution_workspace",
     "role",
@@ -146,6 +151,95 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 AUTHORITY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 EXCEPTIONAL_GATE_RE = re.compile(r"exceptional:[a-z0-9][a-z0-9._-]*\Z")
 USER_CHOICE_REF_RE = re.compile(r"user:[a-z0-9][a-z0-9._:/-]*\Z")
+PACK_FIELDS = {"schema_version", "task", "standards_contract", "approved_gates",
+               "requirements_fingerprint", "ui_contract"}
+
+
+def _require_version(payload: dict[str, Any]) -> None:
+    """2.0直接拒绝旧格式；不会把缺版本、布尔或字符串版本静默升级。"""
+    if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
+        raise TaskGraphError("schema_version must be integer 2; old formats are not accepted")
+
+
+def pack_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    """将单包归一为仅供现有校验/更新核心使用的快照，不发布第二份图。
+
+    调度边只存在于Full图；交接消费者不复制兄弟任务，也不能从引用重建兄弟历史。
+    Light保留同一个Task.state，因此首次绑定、CAS与退役规则无需另造生命周期。
+    """
+    _require_version(payload)
+    if set(payload) - PACK_FIELDS or not isinstance(payload.get("task"), dict):
+        raise TaskGraphError("2.0 task pack must contain one task and only current contract fields")
+    if not isinstance(payload.get("standards_contract"), dict):
+        raise TaskGraphError("self-contained task pack requires standards_contract")
+    result = {key: copy.deepcopy(value) for key, value in payload.items() if key != "task"}
+    task = copy.deepcopy(payload["task"])
+    if task.get("workflow_level") == "Light" and (task.get("depends_on") or task.get("blocks")):
+        raise TaskGraphError("Light single pack must not declare graph dependencies")
+    task.setdefault("depends_on", [])
+    task.setdefault("blocks", [])
+    task.setdefault("semantic_locks", [])
+    task.setdefault("gates", [])
+    result.update(tasks=[task], request_id=task.get("request_id"), capacity=1,
+                  active_paths=[], active_semantic_locks=[])
+    return result
+
+
+def replace_pack_task(payload: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    """写回同一Light单包，剔除仅为核心校验补出的空调度边。"""
+    result = copy.deepcopy(payload)
+    result["task"] = copy.deepcopy(task)
+    for field in ("depends_on", "blocks", "semantic_locks", "gates"):
+        if field not in payload["task"] and not result["task"].get(field):
+            result["task"].pop(field, None)
+    return result
+
+
+def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
+    """由当前已校验图导出唯一任务及适用依据，不携带其他任务或完整PM会话。"""
+    _execute("validate", payload)
+    matches = [task for task in payload["tasks"] if task["id"] == task_id]
+    if len(matches) != 1:
+        raise TaskGraphError(f"unknown task ID: {task_id}")
+    task = matches[0]
+    result = {"schema_version": 2, "task": copy.deepcopy(task)}
+    if "requirements_fingerprint" in payload:
+        result["requirements_fingerprint"] = payload["requirements_fingerprint"]
+    # 规范仍以原图为唯一权威；导出只投影当前任务已声明的读取来源。QA审查本请求
+    # 闭包的Writer，因此保留该闭包所需规则，而不把整图其他请求的规范一起交接。
+    relevant = [task]
+    if task["task_type"] == "qa":
+        closure = request_closure(_tasks(payload), task["request_id"])
+        relevant = [item for item in payload["tasks"] if item["id"] in closure and item["task_type"] == "writer"] or [task]
+    domains = {domain for item in relevant for domain in (
+        ("design",) if item.get("surface_kind") == "design_ui" else
+        ("engineering", "design") if item.get("surface_kind") == "production_ui" else ("engineering",))}
+    sources = {document["path"] for item in relevant
+               for document in item.get("controlled_document_access", {}).get("documents", [])}
+    sources.update(ref["path"] for item in relevant
+                   for ref in item.get("ui_change", {}).get("design_authority_refs", []))
+    if "standards_contract" in payload:
+        contract = copy.deepcopy(payload["standards_contract"])
+        contract["leaves"] = [leaf for leaf in contract["leaves"] if leaf["path"] in sources or (
+            not sources and leaf["domain"] in domains and builtin_source_path(leaf["path"]) is not None)]
+        # 只读任务未显式选叶时仍携带其声明领域的当前依据；不生成不存在的规则源。
+        if not contract["leaves"]:
+            contract["leaves"] = [copy.deepcopy(leaf) for leaf in payload["standards_contract"]["leaves"] if leaf["domain"] in domains]
+        for domain in ("engineering", "design"):
+            available = {rule for leaf in contract["leaves"] if leaf["domain"] == domain for rule in leaf["rule_ids"]}
+            contract[f"required_{domain}_rule_ids"] = [rule for rule in contract[f"required_{domain}_rule_ids"] if domain in domains and rule in available]
+        scopes = [path for item in relevant for path in item["owned_paths"]]
+        contract["protected_paths"] = [policy for policy in contract["protected_paths"] if any(_paths_overlap(path, policy["path"]) for path in scopes)]
+        result["standards_contract"] = contract
+    if (any(item.get("surface_kind") in {"production_ui", "design_ui"} for item in relevant)
+            and "ui_contract" in payload):
+        result["ui_contract"] = copy.deepcopy(payload["ui_contract"])
+    # Reviewer自己的gates通常为空；仍须保留本请求闭包实际采用的批准，才能审查
+    # 视觉/上游例外的来源。该集合只投影已有批准，不替任何任务生成新授权。
+    relevant_gates = {gate for item in [task, *relevant] for gate in item["gates"]}
+    result["approved_gates"] = [gate for gate in payload.get("approved_gates", []) if gate in relevant_gates]
+    _execute("validate", result)
+    return result
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -737,35 +831,22 @@ def _validate_standards_access(
             )
         domain_rule_ids[domain] = selected_rule_ids
 
-    # 旧纯项目合同继续要求完整 GENERAL 输入，避免在运行中换版导致已批准图失效。
-    # 一旦图采用内置来源，生产写入必须选择内置工程底线；专项叶不能代替它。
-    if "engineering" in required_domains:
-        uses_builtin = any(builtin_source_path(path) is not None for path in standards_contract["leaves"])
-        baseline_paths = [path for path in standards_contract["leaves"]
-                          if builtin_source_path(path) is not None and source_domain(path, standards_contract["root"]) == "engineering"] if uses_builtin else [f"{standards_contract['root']}/GENERAL.md"]
-        if not baseline_paths or any(path not in standards_contract["leaves"] for path in baseline_paths):
-            raise TaskGraphError(
-                f"tasks[{index}] production writer requires {'builtin engineering' if uses_builtin else 'GENERAL.md'} baseline in standards_contract"
-            )
-        baseline_document = next(
-            (
-                document
-                for document in normalized_documents
-                if document["path"] in baseline_paths and document["mode"] != "skip"
-            ),
-            None,
-        )
-        if baseline_document is None:
-            raise TaskGraphError(
-                f"tasks[{index}] production writer requires selected {'builtin engineering' if uses_builtin else 'GENERAL.md'} baseline"
-            )
+    # 2.0没有GENERAL替代内置来源的旧窗口。项目叶只补业务特有规则，每个适用领域
+    # 都必须显式读取实际内置底线；索引/项目规则覆盖不能冒充内置来源覆盖。
+    for domain in required_domains:
+        baselines = [document for document in normalized_documents
+                     if builtin_source_path(document["path"]) is not None
+                     and source_domain(document["path"], standards_contract["root"]) == domain
+                     and document["mode"] != "skip"]
+        if not baselines:
+            raise TaskGraphError(f"tasks[{index}] requires selected builtin {domain} baseline in standards_contract")
         for owned_path in owned_paths:
             if not any(
                 _is_within(owned_path, access_path)
-                for access_path in baseline_document["applies_to"]
+                for document in baselines for access_path in document["applies_to"]
             ):
                 raise TaskGraphError(
-                    f"tasks[{index}] GENERAL.md baseline does not cover owned path {owned_path!r}"
+                    f"tasks[{index}] builtin {domain} baseline does not cover owned path {owned_path!r}"
                 )
 
     exceptions = _validated_standards_exceptions(raw, index, owned_paths)
@@ -1058,9 +1139,9 @@ def _validate_plan_contract(
         raise TaskGraphError(f"tasks[{index}].role must be non-empty")
     if "surface_kind" not in raw:
         raise TaskGraphError(f"tasks[{index}] with role requires surface_kind")
-    if "qa_scope" not in raw:
+    if "qa_scope" not in raw and raw.get("workflow_level") != "Light":
         raise TaskGraphError(f"tasks[{index}] with role requires qa_scope")
-    if raw["qa_scope"] != "request":
+    if "qa_scope" in raw and raw["qa_scope"] != "request":
         raise TaskGraphError(f"tasks[{index}].qa_scope must be 'request'")
     surface_kind = raw["surface_kind"]
     if surface_kind not in {"production_ui", "design_ui", "non_ui"}:
@@ -1087,6 +1168,8 @@ def _validate_plan_contract(
         return
 
     if surface_kind == "design_ui":
+        if raw.get("workflow_level") == "Light":
+            raise TaskGraphError(f"tasks[{index}] design work requires Full")
         if role != "xy-uiux":
             raise TaskGraphError(f"tasks[{index}] design_ui must use role xy-uiux")
         if raw.get("task_type") != "writer":
@@ -1267,6 +1350,8 @@ def _validate_ui_change(
     justification = value["justification"]
     if not isinstance(route, str) or route not in UI_ROUTES:
         raise TaskGraphError(f"tasks[{index}].ui_change has unsupported route: {route!r}")
+    if raw.get("workflow_level") == "Light" and route != "UI-Conformance":
+        raise TaskGraphError(f"tasks[{index}] Light UI copy requires UI-Conformance; design changes require Full")
     expected_delta = "none" if route == "UI-Conformance" else "changed"
     if not isinstance(design_delta, str) or design_delta != expected_delta:
         raise TaskGraphError(
@@ -1304,7 +1389,7 @@ def _validate_ui_change(
     if raw.get("role") == "xy-uiux":
         raise TaskGraphError(f"tasks[{index}].ui_change cannot use role xy-uiux")
     gates = _string_list(raw["gates"], f"tasks[{index}].gates")
-    if "requirements_approved" not in gates:
+    if raw.get("workflow_level") == "Full" and "requirements_approved" not in gates:
         raise TaskGraphError(
             f"tasks[{index}].ui_change {route} requires requirements_approved"
         )
@@ -1497,7 +1582,8 @@ def _validate_ui_dependencies(
                     )
 
 
-def _tasks(payload: dict[str, Any]) -> list[Task]:
+def _tasks(payload: dict[str, Any], *, handoff: bool = False) -> list[Task]:
+    _require_version(payload)
     raw_tasks = payload.get("tasks")
     if not isinstance(raw_tasks, list):
         raise TaskGraphError("tasks must be an array")
@@ -1547,6 +1633,8 @@ def _tasks(payload: dict[str, Any]) -> list[Task]:
             raise TaskGraphError(
                 f"tasks[{index}] is missing scheduler field(s): {', '.join(sorted(missing))}"
             )
+        if not handoff and raw.get("workflow_level") != "Full":
+            raise TaskGraphError("graph tasks require workflow_level Full; Light uses a single task pack")
         _validate_plan_contract(raw, index, prototype_paths, design_standards_root)
         _validate_ui_change(
             raw,
@@ -1564,10 +1652,9 @@ def _tasks(payload: dict[str, Any]) -> list[Task]:
         if not all(isinstance(value, str) for value in (task_id, request_id, task_type, state)):
             raise TaskGraphError(f"tasks[{index}] scalar scheduler fields must be strings")
         gates = _string_list(raw["gates"], f"tasks[{index}].gates")
-        # 只有已进入正式调度快照的 Writer 必须声明需求确认依赖；非 UI 开发不能
-        # 绕过 UI 分支已有的要求。只读调查和 QA 不新增门禁，Trivial 也不因此被
-        # 强制物化为调度任务；真正的批准状态仍由 ready_tasks 按当前快照判断。
-        if task_type == "writer" and "requirements_approved" not in gates:
+        # Full保留需求确认；Light不会因复用校验器而被提升为Full。UI及保护路径的
+        # 专用门禁仍由各自原校验器执行，此处不为Light增加绕过分支。
+        if task_type == "writer" and raw.get("workflow_level") == "Full" and "requirements_approved" not in gates:
             raise TaskGraphError(f"tasks[{index}] writer requires requirements_approved")
         tasks.append(
             Task(
@@ -1582,10 +1669,12 @@ def _tasks(payload: dict[str, Any]) -> list[Task]:
                     raw["semantic_locks"], f"tasks[{index}].semantic_locks"
                 ),
                 state=state,
+                agent_retired=raw.get("agent_retired", False),
             )
         )
-    _validate_ui_dependencies(typed_raw_tasks, prototype_paths)
-    # 原生引用属于计划元数据，不进入 Task 最小调度模型，也不改变 READY/QA 算法。
+    if not handoff:
+        _validate_ui_dependencies(typed_raw_tasks, prototype_paths)
+    # 原生ID只作身份元数据；退役标记仅排除后续派发，不另存宿主存活或任务状态。
     validate_references(typed_raw_tasks)
     return tasks
 
@@ -1618,9 +1707,33 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             )
         }
 
-    tasks = _tasks(payload)
+    is_pack = "task" in payload
+    snapshot = pack_snapshot(payload) if is_pack else payload
+    if is_pack:
+        # Full交接包的依赖已在权威图中校验；只保留当前任务做局部合同核验，
+        # 不向接收方复制依赖任务，也不拿单包假冒请求级READY/QA-ready证据。
+        snapshot["tasks"][0]["depends_on"] = []
+        snapshot["tasks"][0]["blocks"] = []
+        if command != "validate" and payload["task"].get("workflow_level") == "Full":
+            raise TaskGraphError("Full readiness queries require the authoritative graph")
+        if payload["task"].get("task_type") == "writer":
+            task = payload["task"]
+            _nonempty_string(task.get("goal"), "self-contained task.goal")
+            for field in ("input_contracts", "output_contracts", "acceptance_evidence", "verification_commands"):
+                if not isinstance(task.get(field), list) or not task[field]:
+                    raise TaskGraphError(f"self-contained task requires non-empty {field}")
+                for item in task[field]:
+                    if field == "verification_commands" and isinstance(item, dict):
+                        if set(item) != {"run", "expected"}:
+                            raise TaskGraphError("verification command requires run and expected")
+                        for key in ("run", "expected"):
+                            _nonempty_string(item[key], f"verification_commands.{key}")
+                    else:
+                        _nonempty_string(item, f"task.{field}")
+    tasks = _tasks(snapshot, handoff=is_pack)
     validate_graph(tasks)
-    validate_execution(payload)
+    if not is_pack:
+        validate_execution(payload)
     if command == "validate":
         return {"status": "valid"}
     if command == "ready":
@@ -1628,18 +1741,18 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             "ready": ready_tasks(
                 tasks,
                 approved_gates=set(
-                    _string_list(payload.get("approved_gates"), "approved_gates")
+                    _string_list(snapshot.get("approved_gates", []), "approved_gates")
                 ),
-                active_paths=set(_string_list(payload.get("active_paths"), "active_paths")),
+                active_paths=set(_string_list(snapshot.get("active_paths"), "active_paths")),
                 active_semantic_locks=set(
                     _string_list(
-                        payload.get("active_semantic_locks"), "active_semantic_locks"
+                        snapshot.get("active_semantic_locks"), "active_semantic_locks"
                     )
                 ),
-                capacity=_nonnegative_integer(payload, "capacity"),
+                capacity=_nonnegative_integer(snapshot, "capacity"),
             )
         }
-    request_id = payload.get("request_id")
+    request_id = snapshot.get("request_id")
     if not isinstance(request_id, str) or not request_id.strip():
         raise TaskGraphError("request_id must be a non-empty string")
     # 分支各自验证成功不等于组合正确；只有 worktree 分支额外检查集成证据。
@@ -1656,7 +1769,7 @@ def main() -> int:
                 raise TaskGraphError("continuation requires --input, --task-id, --host and --observed-state only")
             payload = _read_payload(args.input)
             _execute("validate", payload)
-            matches = [task for task in payload["tasks"] if task["id"] == args.task_id]
+            matches = [task for task in (payload.get("tasks") or [payload.get("task")]) if task["id"] == args.task_id]
             if not matches:
                 raise TaskGraphError(f"unknown task ID: {args.task_id}")
             result = continuation(matches[0], args.host, args.observed_state)
@@ -1720,23 +1833,40 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         if records.digest(body) != args.expect_sha256:
             raise TaskGraphError("graph fingerprint differs from --expect-sha256")
         patch_body = sys.stdin.buffer.read() if args.patch == "-" else records.read_record(Path(args.patch))
-        updated = records.update(payload, records.decode(patch_body), args.root, _execute)
+        if "task" in payload:
+            if payload["task"].get("workflow_level") != "Light":
+                raise TaskGraphError("Full task updates require the authoritative graph")
+            single_patch = records.decode(patch_body)
+            if not isinstance(single_patch, dict) or set(single_patch) - {"tasks", "refresh_documents"}:
+                raise TaskGraphError("Light update supports only its current task and refresh_documents")
+            # 仍调用同一个update核心和CAS发布，不保存内部归一快照。
+            def validate_single(command: str, value: dict[str, Any]) -> dict[str, Any]:
+                return _execute(command, replace_pack_task(payload, value["tasks"][0]))
+            updated_snapshot = records.update(pack_snapshot(payload), single_patch, args.root, validate_single)
+            updated = replace_pack_task(payload, updated_snapshot["tasks"][0])
+        else:
+            updated = records.update(payload, records.decode(patch_body), args.root, _execute)
         new_body = body if updated == payload else (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         changed = records.publish(args.input, new_body, args.expect_sha256)
         return {"updated": changed, "sha256": records.digest(new_body)}
-    if not args.task_id or any((args.patch, args.root, args.select)):
-        raise TaskGraphError("task requires --task-id and accepts only explicit output options")
-    matches = [task for task in payload["tasks"] if task["id"] == args.task_id]
-    if len(matches) != 1:
-        raise TaskGraphError(f"unknown task ID: {args.task_id}")
+    if any((args.patch, args.root, args.select)):
+        raise TaskGraphError("task accepts only --input, --task-id and explicit output options")
+    if "task" in payload:
+        if args.task_id or payload["task"].get("workflow_level") != "Light":
+            raise TaskGraphError("single-pack task input requires Light and no --task-id")
+        exported = payload
+    else:
+        if not args.task_id:
+            raise TaskGraphError("graph task export requires --task-id")
+        exported = export_task_pack(payload, args.task_id)
     if args.output is None:
         if args.expect_sha256:
             raise TaskGraphError("--expect-sha256 requires an explicit --output")
-        return matches[0]
+        return exported
     if (args.output.resolve() == args.input.resolve()
             or (args.output.exists() and args.output.samefile(args.input)) or not args.expect_sha256):
         raise TaskGraphError("task output must differ from graph and requires --expect-sha256 (or missing)")
-    new_body = (json.dumps(matches[0], ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    new_body = (json.dumps(exported, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     if records.read_record(args.input) != body:
         raise TaskGraphError("graph changed during task export")
     changed = records.publish(args.output, new_body, args.expect_sha256)

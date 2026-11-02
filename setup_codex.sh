@@ -817,7 +817,7 @@ if agents_md_path.exists():
     managed = "\n".join(blocks)
     # 不再把本包自设的 8 KiB 目标当作平台限制；用可发现路由和完整契约校验
     # 保护入口质量，32 KiB 仅沿用上方针对 Codex 官方默认配置的安装保护。
-    for anchor in ("PM is the sole orchestrator", "requirements_approved", "visual_approved", "xy-qa", "$xy-workflow"):
+    for anchor in ("PM负责协调", "requirements_approved", "visual_approved", "schema_version:2", "$xy-workflow"):
         require(anchor in managed, f"AGENTS.md missing {anchor}")
     # Markdown 路径里的 /xy-workflow/ 是目录名，不是 Claude/Antigravity 命令。
     # 只拒绝独立出现的 slash alias，保留对错误宿主调用的检查。
@@ -843,15 +843,15 @@ workflow_contract = normalized(workflow_skill)
 prototype_skill = skill_bodies.get("xy-prototype-verify", "")
 prototype_contract = normalized(prototype_skill)
 require("$grill-me" in workflow_skill, "xy-workflow missing $grill-me routing")
-# Full 请求必须经过覆盖检查与草案计划；Trivial/Light 是否跳过由分类结果决定。
+# Full 请求必须经过覆盖检查与草案计划；Light 使用当前单任务轻量分支。
 require(
     "Every `Full` request performs a **Grill Me coverage check**" in workflow_contract,
     "xy-workflow must require the Grill Me coverage check for Full work",
 )
 require("fallback" in workflow_skill.lower(), "xy-workflow missing grilling fallback")
 require(
-    "Clear Trivial or Light work does not run this merely because the Skill is installed." in workflow_contract,
-    "xy-workflow must preserve the lightweight path for clear Trivial or Light work",
+    "Clear Light work does not run this merely because the Skill is installed." in workflow_contract,
+    "xy-workflow must preserve the lightweight path for clear Light work",
 )
 require("$xy-plan" in workflow_skill, "xy-workflow missing $xy-plan routing")
 require("plan_state: draft" in workflow_skill, "xy-workflow missing draft-plan boundary")
@@ -1060,7 +1060,7 @@ lifecycle_anchors = (
     "Run `task_graph_cli.py qa-ready` for the request",
     "dispatch exactly one integrated read-only `xy-qa` reviewer for this request",
     "activate `xy-project-memory` in closeout mode",
-    "report to the user",
+    "最后报告用户",
 )
 require(
     all(anchor in workflow_contract for anchor in lifecycle_anchors),
@@ -1144,6 +1144,9 @@ for role in discovered_roles:
     for key in ("name", "description", "developer_instructions"):
         require(key in data, f"{path.name} missing {key}")
     require(data.get("name") == role, f"{path.name} name mismatch")
+    # 当前角色必须包含2.0边界；内容签名只证明归属，不能替代新交接合同。
+    for anchor in ("schema_version: 2", "instance_policy: fresh", "context_policy: handoff_only", "agent_alias"):
+        require(anchor in data.get("developer_instructions", ""), f"{path.name} missing 2.0 boundary {anchor}")
     # 绑定名称从共用静态策略取得；只校验当前角色入口，不把条件引用展开为常驻上下文。
     bound = re.findall(r"^- Bound Skill: `\$(xy-[a-z0-9-]+)`;", data.get("developer_instructions", ""), re.M)
     require(tuple(bound) == ROLE_SKILLS[role], f"{path.name} Skill bindings differ from shared policy")

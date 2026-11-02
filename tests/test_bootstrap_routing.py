@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import tempfile
@@ -11,6 +12,8 @@ from unittest.mock import Mock
 
 from lib.business_confirmation_policy import read_instruction_contract
 from lib.skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract
+from lib.task_graph_cli import export_task_pack
+from tests.test_task_graph_records import graph
 from tests.test_unified_host_workflow import HOSTS, UnifiedHostFixture
 
 
@@ -59,6 +62,39 @@ class BootstrapReferenceTest(unittest.TestCase):
 
 
 class BootstrapInstallTest(UnifiedHostFixture, unittest.TestCase):
+    def check_installed_light_handoff(self, project: Path, host: str) -> None:
+        """用已安装CLI承接一项明确局部修复，验证分发后的真实交接边界。
+
+        复用规范夹具以保留Writer底线，只移除Light不需要的图字段。该检查证明安装态
+        单包可运行与禁止父历史输入，不冒充模型真的派发了Agent或已执行任务。
+        """
+        pack = export_task_pack(graph(), "api")
+        task = pack["task"]
+        task.update(workflow_level="Light", goal="修复当前CLI帮助中的已确认错误",
+                    input_contracts=["user:fixture，当前局部目标与路径已明确授权"],
+                    acceptance_evidence=["实际关键入口与必要回归验证"])
+        for field in ("depends_on", "blocks", "qa_scope", "semantic_locks", "gates"):
+            task.pop(field, None)
+        pack["approved_gates"] = []
+        # 只规范化测试拥有的临时根，保留运行时对/var等符号链接父目录的拒绝边界。
+        handoff = project.parent.resolve() / f"light-{host}.json"
+        handoff.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+        command = ["bash", str(project / ".agent-workflow/lib/python_runtime.sh"), "-X", "utf8",
+                   str(project / ".agent-workflow/lib/task_graph_cli.py"), "task", "--input", str(handoff)]
+        result = subprocess.run(command, cwd=project, text=True, capture_output=True,
+                                check=False, timeout=20)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(pack, json.loads(result.stdout))
+        self.assertNotIn("tasks", json.loads(result.stdout))
+        self.assertFalse((project / "docs/plans").exists())
+        # 同一已安装入口必须拒绝夹带父历史；不能靠来源解析失败获得虚假的通过。
+        pack["parent_history"] = ["不应进入当前实现者的PM历史"]
+        handoff.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+        rejected = subprocess.run(command, cwd=project, text=True, capture_output=True,
+                                  check=False, timeout=20)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("task pack", rejected.stderr)
+
     def test_each_host_independent_install_contains_shared_bootstrap(self):
         # 逐个平台独立安装，确保共享规则不是聚合安装恰好补齐的隐含依赖。
         for host in HOSTS:
@@ -106,7 +142,10 @@ class BootstrapInstallTest(UnifiedHostFixture, unittest.TestCase):
             self.assertEqual(b"@AGENTS.md\n", (project / "CLAUDE.md").read_bytes())
             self.assertEqual(b"user-owned business bytes\n", sentinel.read_bytes())
             targets = re.findall(r"\[[^]\n]+\]\((\.agent-workflow/[^)]+)\)", entry)
-            self.assertEqual(4, len(targets))
+            # 必需四个bootstrap路由必须齐全；普通专业方法链接也可以存在，不按链接总数
+            # 限制渐进读取入口。后续逐条检查真实目标，仍拒绝丢失或悬空的分发资源。
+            expected_routes = {".agent-workflow/" + target for target in BOOTSTRAP_TARGETS.values()}
+            self.assertTrue(expected_routes.issubset(targets))
             for target in targets:
                 self.assertTrue((project / target).is_file(), target)
             # 入口不再常驻三平台完整细则，也不以机械行数/字节目标定义规范。
@@ -120,6 +159,7 @@ class BootstrapInstallTest(UnifiedHostFixture, unittest.TestCase):
                     ["bash", str(project / ".agent-workflow" / f"setup_{host}.sh"), "--check"],
                     cwd=project, text=True, capture_output=True, check=False, timeout=90)
                 self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+            self.check_installed_light_handoff(project, "shared")
 
 
 if __name__ == "__main__":

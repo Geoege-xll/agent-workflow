@@ -2,7 +2,7 @@
 
 Read for multi-feature isolation assessment, isolated dispatch, integration, delivery or recovery.
 This is the pack's own conditional execution branch, not a Superpowers worktree/finishing workflow.
-Trivial tasks and read-only reviews do not acquire worktrees or delivery consent merely by loading it.
+Light tasks without an actual isolation need and read-only reviews do not acquire worktrees or delivery consent merely by loading it.
 
 ## Select the execution mode
 
@@ -103,9 +103,11 @@ QA binding → confirm or auto local merge → memory closeout → final report.
 revalidates only affected evidence. There is no new implementation DAG gate or repeated requirements
 interview. Local candidate commits and default commit assessment do not by themselves authorize a merge.
 
-- PM builds one internal delivery object with `task_graph`, `qa_handoff`, optional exact
+- PM builds one internal delivery object with `task_graph`, `qa_handoff`, `qa_task_pack` and optional exact
   `projection_paths` (only configured PROJECT/features/plans), and `authorization`.
   Projection entries are unique actual changed Markdown file paths, including deletions, never directories.
+  `qa_task_pack`是当前完整2.0 QA包的绝对路径；合并入口按同包核对handoff_ref身份与字节SHA，
+  不能仅凭内联旧PASS或另一任务包交付。包必须是当前xy-qa任务并绑定真实agent_ref。
 - `authorization` binds `request_id`, `target_branch`, `target_base`, `head_revision`, and
   `diff_fingerprint`, plus `mode` and `source`. In confirm mode, first show the user the completed
   features, resolved target branch, current QA/verification result, and any meaningful risk; ask one
@@ -149,7 +151,8 @@ Report local merged versus awaiting consent/blocked accurately. Pending delivery
 "main branch complete" in PROJECT, a plan or memory. Close memory against the actual delivered revision
 only when warranted; do not save merely because worktrees were used.
 
-Release finished Agents before cleanup. Remove only identified task-owned worktrees after proving
+完成当前交付单元的必要验证／QA和证据接收后，按WORKFLOW实例生命周期原生结束；
+工具缺失只退役，不能声称销毁或解锁仍活动任务。AGY kill前先保护临时worktree与唯一日志。 Remove only identified task-owned worktrees after proving
 their commits are preserved in the delivered main history and no dirty, untracked, ignored needed
 files or active users remain. Prefer the host's safe cleanup; otherwise use non-force `git worktree
 remove` for an exact registered path. Keep any uncertain or unfinished worktree. Also tear down any

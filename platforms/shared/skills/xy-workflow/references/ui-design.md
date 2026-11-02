@@ -1,3 +1,6 @@
+- 普通低风险Light UI文案使用production_ui与现有UI-Conformance、零设计差量、真实已解析
+  冻结authority和工程／设计规范；最小验证与交接风险评估保留，不强制Full规划／确认／QA。
+  实际设计／交互变化均Full，不能标non_ui、用空权威或拆小改动绕过规范。
 - `project.yaml` → `docs.standards_root/prototype/` is the stable prototype workspace.
   It keeps one in-page `Page design and interaction contract` per page and its page dependency
   fingerprint. Required-prototype QA lets the machine read complete bytes; the QA Agent reads only
@@ -9,8 +12,8 @@
   and fingerprinted `design_authority_refs`, affected surfaces, and the objective justification in
   the task pack.
   It does not dispatch `xy-uiux`, does not mutate a prototype, and does not require
-  `visual_approved`; it remains Full and still requires Grill coverage, `xy-plan`,
-  `requirements_approved`, `xy-build-verify`, and integrated QA.
+  `visual_approved`。除上述已明确的Light文案外仍属Full，保留Grill coverage、xy-plan、
+  requirements_approved、xy-build-verify和集成QA；Light不能反向放宽其他UI变更。
 - A `UI-Conformance` task must not edit `docs.standards_root/DESIGN_*.md`. Its production writer
   uses the frozen authority references and declares both UI and accessibility audit surfaces.
   Missing, stale, contradictory, incomplete, or choice-requiring evidence stops the affected write:
@@ -89,7 +92,7 @@
   one. The same plan is a recovery aid, not an independent approval authority.
 - Required-prototype production UI work cannot start before its approved concrete pages and
   fingerprints have `visual_approved` state. `UI-Conformance` and `waived_by_user` have no such
-  gate; each starts only after `requirements_approved` with its respective frozen authority or
+  gate; Full starts only after `requirements_approved` with its respective frozen authority or
   prototype-decision record.
 - For a new project, one platform owner builds and verifies the UI Foundation before
   feature-page writers run in parallel.

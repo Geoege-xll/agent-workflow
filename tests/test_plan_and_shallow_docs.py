@@ -15,6 +15,8 @@ from lib.validate_prototype_workspace import ValidationError, validate_workspace
 from tests import test_design_standards_lifecycle as design_cases
 from tests import test_prototype_workspace as prototype_cases
 from tests import test_qa_handoff as qa_cases
+# 保护路径反例必须先具备当前2.0身份，才能验证真实设计边界，避免被旧格式拒绝掩盖。
+from tests.test_scheduler_boundaries import v2_graph
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -146,7 +148,7 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         helper = design_cases.DesignStandardsLifecycleTest()
         for path in ("docs/standards/design_foundations.md", "docs/STANDARDS/DESIGN_FOUNDATIONS.md"):
             with self.subTest(path=path):
-                payload = helper.fixture(production=True)
+                payload = v2_graph(helper.fixture(production=True))
                 payload["tasks"][1]["owned_paths"] = [path]
                 for document in payload["tasks"][1]["controlled_document_access"]["documents"]:
                     document["applies_to"] = [path]
@@ -154,7 +156,7 @@ class PlanAndShallowDocsTest(unittest.TestCase):
 
     def test_ui_agent_cannot_write_engineering_leaf_in_flat_root(self) -> None:
         helper = design_cases.DesignStandardsLifecycleTest()
-        payload = helper.fixture()
+        payload = v2_graph(helper.fixture())
         payload["tasks"][0]["owned_paths"] = ["docs/standards/GENERAL.md"]
         self.assertIn("standards_only owns only exact", helper.invoke(payload).stderr)
 
@@ -162,7 +164,7 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         helper = design_cases.DesignStandardsLifecycleTest()
         for path in ("docs/standards/engineering/HIDDEN.md", "docs/standards/HIDDEN.md", "docs/standards/design/OLD.md"):
             with self.subTest(path=path):
-                payload = helper.fixture()
+                payload = v2_graph(helper.fixture())
                 documents = payload["tasks"][0]["controlled_document_access"]["documents"]
                 document = copy.deepcopy(documents[1])
                 document.update(path=path, rule_ids=["rogue-rule"])

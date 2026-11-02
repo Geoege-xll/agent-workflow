@@ -1009,7 +1009,7 @@ def validate_semantic_sources(
             "Do not wait for unrelated project work",
             "After QA PASS",
             "closeout mode",
-            "report to the user",
+            "最后报告用户",
         ),
         errors,
     )
@@ -1024,7 +1024,7 @@ def validate_semantic_sources(
             "exactly one integrated read-only `xy-qa` reviewer for this request",
             "After QA PASS",
             "closeout mode",
-            "report to the user",
+            "最后报告用户",
         ),
         "on-demand retrieval policy -> default business confirmations -> implementation -> QA -> closeout -> report",
         errors,
@@ -1232,7 +1232,7 @@ def validate_semantic_sources(
         paths["product_template"],
         product_template,
         (
-            "`xy-workflow`",
+            "xy-workflow",
             "`xy-project-memory`",
             "requirements_approved",
             "visual_approved",
@@ -1243,22 +1243,22 @@ def validate_semantic_sources(
             "design_authority_refs",
             "surface_kind: production_ui",
             "qa_scope: request",
-            "resolved/fingerprinted",
+            "resolution_state: resolved",
             "Platform security prompts",
             "READY independent tasks",
-            "exactly one `xy-qa` request audit",
+            "exactly one integrated read-only `xy-qa` reviewer for this request",
             # 共享启动规则必须明确 PM 进行合同语义审核，而不是重复机器静态校验。
             "does not repeat deterministic checks already proven by current evidence",
-            "Final QA outcome: PASS | FAIL",
+            "handoff_ref",
             "QA PASS",
-            "final user report",
+            "最后报告用户",
         ),
         errors,
     )
     require_order(
         paths["product_template"],
         product_template,
-        ("QA PASS", "`xy-project-memory` closeout", "final user report"),
+        ("After QA PASS", "closeout mode", "最后报告用户"),
         "QA PASS -> memory closeout -> final user report",
         errors,
     )
@@ -1490,6 +1490,12 @@ def validate_agent(
                 errors,
             )
         return
+    # 所有权只读识别已在上面返回；当前2.0产物不能借旧签名接受缺失的任务/上下文边界。
+    require_phrases(
+        path, body,
+        ("schema_version: 2", "instance_policy: fresh", "context_policy: handoff_only", "agent_alias"),
+        errors,
+    )
     if role == "xy-uiux":
         require_phrases(
             path,
@@ -1642,7 +1648,7 @@ def validate_staged_blocks(
             root / "AGENTS.product.block",
             product,
             (
-                "`xy-workflow`",
+                "xy-workflow",
                 "`xy-project-memory`",
                 "requirements_approved",
                 "visual_approved",
@@ -1650,18 +1656,18 @@ def validate_staged_blocks(
                 "design_authority_refs",
                 "surface_kind: production_ui",
                 "qa_scope: request",
-                "resolved/fingerprinted",
+                "resolution_state: resolved",
                 "Platform security prompts",
-                "Final QA outcome: PASS | FAIL",
+                "handoff_ref",
                 "QA PASS",
-                "final user report",
+                "最后报告用户",
             ),
             errors,
         )
         require_order(
             root / "AGENTS.product.block",
             product,
-            ("QA PASS", "`xy-project-memory` closeout", "final user report"),
+            ("After QA PASS", "closeout mode", "最后报告用户"),
             "QA PASS -> memory closeout -> final user report",
             errors,
         )

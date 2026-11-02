@@ -7,8 +7,8 @@ Managed by `bash .agent-workflow/setup_claude.sh`.
 
 ## Entry and authority
 
-The main conversation alone orchestrates. For non-Trivial product changes invoke `/xy-workflow`.
-Trivial 由主会话直接实施和局部验证；Light／Full 默认派对应 `Agent(xy-*)`。
+The main conversation alone orchestrates. Light and Full product changes invoke `/xy-workflow`.
+Light／Full 默认派对应原生 `Agent(xy-*)`，只使用普通命名角色，不使用会复制父历史的 fork。
 PM 亲自实施例外及恢复边界见 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`，
 原等级门槛不变。PM 继续负责分级、规划、派发、QA 接收、记忆收口和汇报。
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
@@ -21,16 +21,8 @@ Keep role isolation dynamic rather than setting every role permanently to `isola
 PM-local integration and confirm/auto local main delivery use the shared contract; do not rewrite
 global worktree settings, permissions or user hooks, or create new user-visible sessions as a fallback.
 
-Clear one-file non-UI corrections with no shared contract use WORKFLOW's `General Trivial early exit`:
-applicable engineering rules, direct local verification, scoped commit assessment, then stop without
-DAG, repeated approval, independent QA or automatic document/memory closeout. Reclassify material risk.
-
-Classify Trivial UI copy before UI routes: explicit local wording only, unchanged business/behavior,
-no sensitive or unresolved shared impact; follow `.agent-workflow/product/WORKFLOW.md` -> `Trivial UI copy`.
-Edit directly with applicable standards and local checks. No repeated approval, Grill/plan/DAG,
-prototype choice, independent QA or document/memory churn; assess scoped commit after verification,
-without fake QA PASS. Stricter project rules and requested review still apply. The execution and
-post-QA stages below apply to non-Trivial work, not this early exit.
+Light 先判断当前目标、风险、范围和实施者，最小充分验证必做；交接评估独立 QA、
+文档及记忆。不强制 Full 规划、DAG、保存计划或重复确认；Full 和实际必要 QA 的门槛保留。
 
 Read paths and limits from `.agent-workflow/project.yaml`. ProjectProfile is routing context, never
 write authority. Each task pack fixes current facts, `owned_paths`, reads/Skills, dependencies,
@@ -47,14 +39,16 @@ Finish the brief before the single approval choice; add no material details afte
 
 - Full: classify → optional relevant facts → Grill Me coverage check via `/grill-me` → `/xy-plan`
   with `plan_state: draft` → PM
-  post-QA controlled-document projection → ask once for `requirements_approved` → freeze and run.
+  post-QA controlled-document projection decision → ask once for `requirements_approved` → freeze and run.
   Keep PROJECT/feature truth at its last QA-verified state until integrated QA PASS. Clear
-  Trivial/Light work may skip the two Skills when facts are complete.
+  Light work may skip the two Skills when facts are complete.
 - Grill Me remains requirements-only. Superpowers is disabled by default except the bounded reviewer
   fallback below; `xy-plan` is the local planner. Reopen approval only for material scope change.
-- `UI-Conformance` requires `design_delta: none` and has no visual gate. It also requires
+- Full `UI-Conformance` requires `design_delta: none` and has no visual gate. It also requires
   `surface_kind: production_ui`, `qa_scope: request`, `prototype_policy: not_applicable`, structured
   resolved/fingerprinted `design_authority_refs`, zero design writes, and full UI/accessibility QA.
+  普通 Light 文案沿共享 `Light UI copy` 分支，仍保留真实冻结设计权威、工程／设计规范与
+  最小验证；独立 QA 依交接时的实际风险评估，不因同用 UI-Conformance 而强制 Full。
 - UI design-change work requires `visual_approved` per exact page dependency fingerprint when
   the user selects `prototype_policy: required`, plus `xy-uiux` and `/xy-prototype-verify`. A
   scope-bound `prototype_decision` captured inside `requirements_approved` applies to both
@@ -66,14 +60,14 @@ Finish the brief before the single approval choice; add no material details afte
   `references/design-standards.md`. PM assesses/adopts scope separately from feature documentation;
   UI Agent maintains authorized leaves. `design_mode: standards_only` can precede waived production
   without prototype files, verification or visual gates. Refresh affected authority before consumers.
-- Run the READY DAG with Claude native Agents. Use background Agent execution for currently READY
+- For Full, run the READY DAG with Claude native Agents. Use background Agent execution for currently READY
   independent tasks; keep gates, conflicting writes, and user interaction foreground. Static roles
   never delegate.
-- Validate scheduler state with `task_graph_cli.py validate`, `ready`, and `qa-ready`; keep no second
+- For Full, validate scheduler state with `task_graph_cli.py validate`, `ready`, and `qa-ready`; keep no second
   PM state list.
 - Every writer returns `/xy-build-verify`. Writers require the fingerprinted STANDARDS index,
-  smallest applicable domain leaves, and `standards-conformance`. Then dispatch exactly one `xy-qa` reviewer using
-  `/xy-qa-review`.
+  smallest applicable domain leaves, and `standards-conformance`. For Full or Light assessed as requiring
+  independent QA, dispatch exactly one `xy-qa` reviewer using `/xy-qa-review`.
 
 That reviewer tries `host-native-review`, then one `installed-code-review-skill` proven installed
 and capable, then `internal-xy-qa-procedure`, moving forward only on technical unavailability. The only
@@ -120,8 +114,13 @@ an Agent ID or an empty active panel is not completion evidence. Avoid busy poll
 sleep loops. Use native background waiting/monitoring only when available, without creating another
 supervisor Agent. Never alter fork/background settings merely to obtain foreground waiting.
 
+2.0 派发仅传 schema_version: 2 的当前任务外壳：task、适用 standards_contract、必要
+批准／UI 依据，不复制完整 PM／兄弟会话。核对 module、规范 role、稳定 agent_alias、
+instance_policy: fresh 与 context_policy: handoff_only；新独立任务重新调用命名 `xy-*`
+角色，取得新原生 ID，不预建所有别名或填满容量。接收者仍须完整读取当前必需规范。
+
 Keep the returned native Agent ID in the existing task handoff, and in an existing recovery plan only
-when needed. Use `SendMessage` to that verified ID for follow-ups and bounded QA rework; a completed
+when needed. Use `SendMessage` to that verified ID only for the same task's follow-ups and bounded QA rework; a completed
 agent resumes in the background without another Agent call. After restart, restore the same session
 and use the ID if its name no longer resolves. If the user cancelled the agent, respect cancellation;
 do not auto-resume it. A missing/expired ID is a recovery gap, not permission to invent a prior PASS.
@@ -130,12 +129,19 @@ do not auto-resume it. A missing/expired ID is a recovery gap, not permission to
 `agent_ref`，用 `continuation --host claude --observed-state <当前观察>` 取得 wait／followup
 或阻塞建议；只由当前已暴露且获授权的原生工具执行，完整 Task Pack／scope 仍须核对。
 旧 ID、缺失名称或历史完成引用都不自动授权新任务；保留同一 Reviewer 及既有返工边界。
+交付反馈窗口内保留必要实例，PM 接收且必要验证／QA 完成、成果日志安全后及时结束。
+`TaskStop` 只停止当前执行；它可能仍可被 SendMessage 恢复，不能记成清空上下文或永久关闭。
+普通子 Agent 未提供可验证关闭能力时，记录 agent_retired、禁止续用和“原生结束未确认”。
+不启用 Teams 或借 shutdown_request 协议替代关闭，也不默认删除历史；退役不解锁仍执行的任务。
+运行数和打开线程数分开按宿主实际口径观察；压力优先回收已验收且交接充分的实例，保留
+正在执行、证据未交付及必要复查者，为后续必要 QA／集成安排容量。resume／compact 不重置
+实例；没有独立初始上下文能力时报告阻塞，不用 fork 降级，不引入 Agent 池或第二状态机。
 同一参考中的 doctor 默认无进程，`--probe` 仅 `--version`；documented/source_observed
 与 runtime_unverified 不能冒充实际会话执行。用量只读取显式导出，保留原生字段与未知值。
 
 QA 结构化输出见 `xy-qa-review/references/inputs.md`：当前支持且已授权时，同次
 `-p --json-schema <schema-json>` 调用的成功终端 result 通过
-`qa_handoff_cli.py extract --host claude --input <native-result.json>` 解包后按原合同校验。
+`qa_handoff_cli.py extract --host claude --input <native-result.json> --task-pack <current-qa-pack.json>` 解包后按当前包身份与 SHA 校验。
 不额外调用模型转 JSON，不另建 Reviewer，不改原权限、model／effort 或 method 顺序。
 
 Conversation forks inherit the main session's history, tools and model. Use the named `xy-*` role
@@ -154,7 +160,7 @@ MUST NOT invoke Computer Use or browser automation by default. Only an explicit 
 diagnosis of a user-reported failure permits the smallest operation. A waived route skips old
 prototype comparison; production QA retains risk-based browser testing.
 
-QA FAIL returns to PM rework. Accept PASS only after `qa_handoff_cli.py validate` proves fixed
+QA FAIL returns to PM rework. Accept PASS only after `qa_handoff_cli.py validate --task-pack <current-qa-pack.json>` proves fixed
 root/nested scope and standards coverage. Then apply the projection, perform PM commit assessment
 on exact paths without unrelated staging or remote mutation, run `/xy-project-memory` closeout, and
 report. This adds no confirmation.
@@ -169,7 +175,7 @@ and matching provenance; otherwise call neither recall nor save.
 `PROJECT.md` is the current verified project directory, not task history; details live in `docs.features`.
 QA-verified removal deletes its active row, renames the detail `*.removed.md`, and marks it historical.
 Feature details include current architectural rationale; no separate ADR category.
-Plan storage follows the existing levels: Trivial none by default; Light only for actual
+Plan storage follows the current levels: Light only for actual
 pause/recovery/handoff or user request; Full saved by PM after requirements confirmation before
 first dispatch. Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`
 for revision and recovery. Update one requirement plan and affected complete worker/QA inputs;

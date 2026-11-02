@@ -327,9 +327,9 @@ TASK5_NO_COMPANION_ARTIFACT_MATRIX = {
         "empty memory/document entry",
     ),
     "platforms/shared/skills/xy-qa-review/SKILL.md": (
-        "no companion QA, baseline, mapping, or design Markdown",
+        "no companion QA, baseline, mapping or design Markdown",
         "no Manifest",
-        "no visual-capture directory",
+        "no Manifest, visual-capture directory or other design metadata",
     ),
     "platforms/shared/skills/xy-build-verify/SKILL.md": (
         "creates no QA report, design artifact, approval record, or metadata file",
@@ -755,20 +755,21 @@ def normalize_qa_outcome(value: str) -> str | None:
     return re.sub(r"[ -]+", "_", value)
 
 
-def qa_outcome_declarations(text: str) -> list[tuple[str, ...]]:
+def qa_outcome_declarations(text: str, label: str | None = None) -> list[tuple[str, ...]]:
+    """结果声明可独占行或内嵌在角色输出格式中；所有显式声明仍参与唯一性检查。
+
+    声明以行尾或代码标记结束；普通说明放在代码标记之外，不能丢弃第三个未知结果。
+    这是文档合同的测试解析器，不解析或修复生产 QA 的结构化结果。
+    """
     declarations: list[tuple[str, ...]] = []
+    labels = re.escape(label) if label is not None else r"(?:Final QA outcome:|\[Audit result\])"
+    pattern = re.compile(rf"{labels}\s*(?P<values>[^`\n]+)")
     for line in text.splitlines():
-        match = re.match(
-            r"^(?:Final QA outcome:|\[Audit result\])\s*(.+?)\s*$", line
-        )
-        if not match:
-            continue
-        normalized = tuple(
-            outcome
-            for part in match.group(1).split("|")
-            if (outcome := normalize_qa_outcome(part)) is not None
-        )
-        declarations.append(normalized)
+        for match in pattern.finditer(line):
+            values = tuple(normalize_qa_outcome(part) for part in match.group("values").split("|"))
+            # 非法项使整条声明无效，不能先过滤后让剩余 PASS/FAIL 冒充完整允许列表。
+            declarations.append(tuple(value for value in values if value is not None)
+                                if all(value is not None for value in values) else ())
     return declarations
 
 
@@ -808,15 +809,10 @@ def qa_context_outcome_identifiers(text: str) -> set[str]:
 
 
 def parse_pipe_outcome_allowlist(text: str, label: str) -> tuple[str, ...]:
-    matches = re.findall(
-        rf"^{re.escape(label)}\s*(.+?)\s*$", text, flags=re.MULTILINE
-    )
-    if len(matches) != 1:
+    declarations = qa_outcome_declarations(text, label)
+    if len(declarations) != 1:
         return ()
-    outcomes = tuple(normalize_qa_outcome(part) for part in matches[0].split("|"))
-    if not outcomes or any(outcome is None for outcome in outcomes):
-        return ()
-    return tuple(outcome for outcome in outcomes if outcome is not None)
+    return declarations[0]
 
 
 def assert_closed_qa_outcomes(text: str) -> None:
@@ -1641,6 +1637,21 @@ class PortableRoleDiscoveryContractTest(unittest.TestCase):
 class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
     """The pack owns orchestration; Grill Me and one reviewer remain bounded tools."""
 
+    def test_v2_execution_contract_rejects_retired_grade_and_missing_identity_policy(self) -> None:
+        """入口检查必须拒绝旧执行格式，不能靠保留旧文案让2.0检查继续通过。"""
+        from lib.business_confirmation_policy import validate_v2_execution_texts
+
+        path = PACK / "product/WORKFLOW.md"
+        current = path.read_text(encoding="utf-8")
+        self.assertEqual([], validate_v2_execution_texts(((path, current),)))
+        for old, new in (("Light | Full", "Trivial | Light | Full"),
+                         ("instance_policy: fresh", "instance_policy: reuse"),
+                         ("context_policy: handoff_only", "context_policy: inherit_parent")):
+            with self.subTest(field=old):
+                self.assertIn(old, current)
+                invalid = current.replace(old, new)
+                self.assertTrue(validate_v2_execution_texts(((path, invalid),)))
+
     @staticmethod
     def _text(relative: str) -> str:
         return read_contract(PACK / relative)
@@ -1903,7 +1914,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                 with self.subTest(source=relative, anchor=anchor):
                     self.assertIn(anchor, text)
             self.assertIn(
-                "Clear, reproducible Trivial or Light bugs use `native_bug_fix` without Grill Me.",
+                "Clear, reproducible Light bugs use `native_bug_fix` without Grill Me.",
                 normalized,
             )
             self.assertIn(
@@ -2258,8 +2269,10 @@ class ControlledDocumentAccessContractTest(unittest.TestCase):
             "`docs.project` (`PROJECT.md`) is needed",
             "Read design standards only for UI work",
             "shared architecture details or plans only for a relevant missing fact",
-            "Every Writer receives the current fingerprinted STANDARDS",
-            "`xy-uiux + design_ui` uses design leaves",
+            "每位生产代码 Writer 的基线是内置 xy-code-standards/references/rules.md",
+            "xy-uiux + design_ui 只选适用设计来源",
+            "项目索引存在时绑定真实SHA",
+            "无项目叶且索引缺失时不生成空索引",
             "standards-conformance",
             "`skip` means do not open the body",
         ):
@@ -2283,15 +2296,16 @@ class ControlledDocumentAccessContractTest(unittest.TestCase):
             normalized = " ".join(body.split())
             with self.subTest(role=role):
                 self.assertIn("standards-conformance", body)
-                self.assertIn("applicable hard-rule ID", normalized)
-                self.assertIn("missing, stale, skipped, or incomplete", normalized)
+                self.assertIn("当前适用内置来源", normalized)
+                self.assertIn("适用规则ID和applies_to覆盖精确拥有路径", normalized)
+                self.assertIn("缺失、skip、过期或覆盖不足交PM", normalized)
 
     def test_roles_consume_only_the_pm_access_plan(self) -> None:
         for path in sorted((PACK / "roles").glob("xy-*.md")):
             body = path.read_text(encoding="utf-8")
             with self.subTest(role=path.stem):
                 self.assertIn("controlled_document_access", body)
-                self.assertIn("non-`skip`", body)
+                self.assertIn("非skip", body)
         active = "\n".join(
             path.read_text(encoding="utf-8")
             for path in (
@@ -5522,11 +5536,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         for relative in ("AGENTS.md",):
             body = (project / relative).read_text(encoding="utf-8")
             self.assertIn(
-                "Internal orchestration records are not user-facing output.",
-                body,
-            )
-            self.assertIn(
-                "Never paste raw workflow YAML or DAG JSON into user messages.",
+                "内部YAML／DAG不直接输出给用户",
                 body,
             )
 
@@ -5711,7 +5721,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             # 使用应用动作作为锚点，避免 `str.index` 错把前置决定当成提前写文档。
             "apply the frozen",
             "perform the PM commit assessment above",
-            "report to the user",
+            "最后报告用户",
         )
         for host, path in workflows.items():
             with self.subTest(host=host):
@@ -5788,6 +5798,10 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         )
         self.assertEqual(preview.returncode, 0, preview.stdout + preview.stderr)
         self.assertEqual(set(roles), set(preview.stdout.splitlines()))
+        # 真实安装只证明当前角色声明和资源分发，不冒充模型已遵守隔离；
+        # 三宿主的所有角色仍必须携带同一2.0当前任务/上下文边界。
+        task_boundaries = ("schema_version: 2", "instance_policy: fresh",
+                           "context_policy: handoff_only", "agent_alias")
 
         codex_config = tomllib.loads(
             (project / ".codex/config.toml").read_text(encoding="utf-8")
@@ -5801,6 +5815,8 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                     )
                 )
                 self.assertEqual(role, agent["name"])
+                for boundary in task_boundaries:
+                    self.assertIn(boundary, agent["developer_instructions"])
         codex_qa = tomllib.loads(
             (project / ".codex/agents/xy-qa.toml").read_text(encoding="utf-8")
         )
@@ -5816,6 +5832,8 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 self.assertIn(f"name: {role}", frontmatter)
                 self.assertIn("Skill", frontmatter)
                 self.assertIn("disallowedTools: Agent", frontmatter)
+                for boundary in task_boundaries:
+                    self.assertIn(boundary, body)
         claude_qa = (project / ".claude/agents/xy-qa.md").read_text(encoding="utf-8")
         normalized_claude_qa = " ".join(claude_qa.split()).lower()
         self.assertIn("never edit project files, add tests", normalized_claude_qa)
@@ -5836,6 +5854,8 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 self.assertIn(f"name: {role}", frontmatter)
                 self.assertIn("mainAgent: false", frontmatter)
                 self.assertIn("subagent: true", frontmatter)
+                for boundary in task_boundaries:
+                    self.assertIn(boundary, body)
                 for tool in nested_tools:
                     self.assertNotIn(tool, frontmatter)
         for retired in ("xy-python", "xy-rust", "xy-java"):
@@ -5997,11 +6017,13 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, active_contract)
 
-        # UI-Conformance 仍然是 Full 工作：需求确认、构建证据和统一 QA 都不能省略。
+        # 普通低风险 Light 文案是明确例外；其余一致性修复保留 Full 的确认、构建和唯一 QA。
         for phrase in (
             "requirements_approved",
             "xy-build-verify",
-            "integrated read-only `xy-qa`",
+            "集成只读QA保留",
+            "除上文已明确的普通低风险Light文案外",
+            "Light文案使用相同当前已解析权威与工程／设计约束",
         ):
             with self.subTest(required_full_evidence=phrase):
                 self.assertIn(phrase, active_contract)
@@ -6130,11 +6152,14 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         ):
             with self.subTest(host=relative):
                 body = sources[relative]
+                # 共享入口展开当前机器字段；宿主紧凑条目继续说明已解析且冻结的权威。
+                authority = ("resolution_state: resolved" if relative == "platforms/shared/AGENTS.product.tpl"
+                             else "resolved/fingerprinted")
                 for anchor in (
                     "UI-Conformance",
                     "surface_kind",
                     "qa_scope",
-                    "resolved/fingerprinted",
+                    authority,
                     "xy-uiux",
                     "Gate",
                 ):
@@ -6194,7 +6219,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             " ".join(uiux.split()),
         )
         self.assertIn(
-            "semantic text review and does not require rendering the page",
+            "text-and-requirements conformance review, not browser testing",
             " ".join(prototype_skill.split()),
         )
         self.assertIn(
@@ -6481,7 +6506,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             flags=re.DOTALL,
         )
         schema_shape = re.search(
-            r"Every task pack that requires scheduling declares these fields:.*?```yaml\n(.*?)\n```",
+            r"### Scheduling Fields[^\n]*\n.*?```yaml\n(.*?)\n```",
             schema,
             flags=re.DOTALL,
         )
@@ -6533,7 +6558,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             "Prototype review MUST NOT invoke Computer Use or browser automation",
             "real production implementation requires browser inspection",
             "rendered frame ephemerally",
-            "must not persist, save, write, attach, present, or use",
+            "must not persist, save, write, attach, present or use",
             "approval evidence",
             "no screenshot artifact on disk",
         ):
@@ -6565,9 +6590,10 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         )
 
         # 根入口承担常驻边界和路由；详细规则由真实引用审计，不再强制全量重复。
-        for anchor in ("The PM is the sole orchestrator", "requirements_approved",
-                       "visual_approved", "STANDARDS", "UI-Conformance",
-                       "exactly one `xy-qa`", "Final QA outcome: PASS | FAIL"):
+        for anchor in ("PM负责协调、计划、交接", "requirements_approved", "visual_approved",
+                       "UI-Conformance", "唯一只读请求QA", "schema_version:2",
+                       "instance_policy:fresh", "context_policy:handoff_only",
+                       "validate／extract必须传当前--task-pack"):
             self.assertIn(anchor, bootstrap)
         contract = read_contract(PACK / "platforms/shared/AGENTS.product.tpl")
         for anchor in ("frozen approved requirements and acceptance criteria",
@@ -7065,7 +7091,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         result = self.run_script(project, "scripts/scaffold_project_docs.sh")
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("hard link", (result.stdout + result.stderr).casefold())
+        self.assertIn("single-link regular file", (result.stdout + result.stderr).casefold())
         self.assertEqual(b"user-owned hard-linked bytes\n", target.read_bytes())
         self.assertEqual(b"user-owned hard-linked bytes\n", peer.read_bytes())
         self.assertFalse((project / "docs/PROJECT.md").exists())

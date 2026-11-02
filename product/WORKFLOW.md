@@ -1,7 +1,10 @@
-# Product Discipline and Workflow (Cross-Platform Source of Truth)
+# Agent Workflow 2.0 — Product Discipline and Workflow (Cross-Platform Source of Truth)
 
 This document defines the portable product workflow. Platform adapters only expose the
 entry points required by each host. They must not copy and rewrite a parallel workflow.
+
+2.0 只接受 `Light | Full` 和 `schema_version: 2` 的当前任务／交接合同；不解析旧等级、
+旧格式或兼容别名。版本切换不授权删除用户历史、成果或仍需保留的证据。
 
 ## 1. Instruction Priority
 
@@ -24,7 +27,7 @@ entry points required by each host. They must not copy and rewrite a parallel wo
   `project.yaml` -> `docs.standards_root/prototype` and, when a task pack explicitly
   authorizes a durable project-level design-rule change, exact leaves under
   `docs.standards_root/DESIGN_*.md`; it never modifies production source code.
-- **`xy-qa`**: for non-Trivial implementation, performs an independent review after every writer in the current request's
+- **`xy-qa`**: for Full implementation and Light work that actually requires independent QA, performs an independent review after every writer in the current request's
   dependency closure reaches `BUILD_VERIFIED`; unrelated writers may continue running. QA
   must not modify production business code or bypass the PM to direct implementers.
 
@@ -35,7 +38,7 @@ UI/UX and QA are baseline available roles before production code exists; impleme
 follow current module facts. Availability does not select a UI branch or add a gate. After module
 or stack changes, use `xy-workflow/references/dispatch.md` for bounded current-host role refresh.
 
-The standard non-Trivial implementation closed loop is:
+The standard Full implementation closed loop is:
 
 ```text
 alignment and classification with on-demand auxiliary retrieval
@@ -46,6 +49,10 @@ alignment and classification with on-demand auxiliary retrieval
   -> PASS: controlled-document projection -> PM commit assessment -> memory closeout -> report to the user
   -> FAIL: QA reports to PM -> PM dispatches bounded rework -> same reviewer checks affected delta
 ```
+
+Light 先判断当前范围和风险，默认派对应原生实施者，完成最小充分验证后向 PM 交接。
+PM 按实际风险评估独立审计、文档与记忆；不强制 Full 规划、DAG、保存计划或重复确认。
+没有执行独立 QA 时只能报告真实验证结果，不能制造 QA PASS。
 
 ### Standalone read-only audit
 
@@ -58,8 +65,8 @@ its conclusion, then stop. Do not audit the audit report again merely to close t
 an implementation plan/DAG, writer, BUILD_VERIFIED, implementation QA PASS or post-QA closeout.
 
 If fixes are authorized, classify and route the actual implementation through the existing workflow.
-A reviewer being read-only does not make implementation acceptance a standalone audit: non-Trivial
-implementation still requires the independent QA barrier, latest complete scope, standards coverage
+A reviewer being read-only does not make implementation acceptance a standalone audit: Full
+implementation and Light work selected for independent QA still require the independent QA barrier, latest complete scope, standards coverage
 and validated handoff below. New concrete risks, changed inputs or explicit user/project requests
 can justify further review; otherwise reuse the completed audit rather than restarting it.
 
@@ -162,9 +169,12 @@ empty record, and its absence alone is not a QA finding.
 
 ### Controlled-document projection after QA passes
 
-- `PROJECT.md` and active feature documents describe only the last QA-verified project truth. They
+本节的强制QA后投影顺序适用于Full；Light按最小验证、实际必需独立审计和文档评估
+完成接收后更新必要事实，不把未审计结论称QA已通过。没有事实变化就不投影。
+
+- `PROJECT.md` and active feature documents describe only the last verified project truth under the applicable Full／Light acceptance. They
   never expose `pending`, `running`, `removal_pending`, failed, or other task execution states.
-- The PM alone applies the frozen controlled-document projection after integrated QA returns PASS.
+- PM独占受控文档投影：Full必须等集成QA PASS；Light等最小验证及其实际选定的必要独立审计接收。
   It updates existing current facts in place; full history remains in Git.
 - Do not cap `PROJECT.md` by line count or bytes. Its growth may reflect more active features, but
   completed work, removed features, QA reports, logs, and task history must not accumulate there.
@@ -197,11 +207,11 @@ empty record, and its absence alone is not a QA finding.
 
 ### PM commit assessment after QA and document projection
 
-For non-Trivial work, the canonical closeout order is `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`.
-All Trivial work, including non-UI bugs and Trivial UI copy, follows the lightweight closeout below: real local verification is sufficient for
-a scoped commit assessment; do not manufacture QA PASS or invoke QA just to permit a commit.
+For Full work, the canonical closeout order is `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`.
+Light 完成最小充分验证并由 PM 接收后，按交接时的风险评估执行必要独立审计、文档或记忆；
+无需独立 QA 的 Light 可直接做精确范围的提交评估，不为允许提交制造 QA PASS。
 The same exact-path, unrelated-change protection and no-remote-mutation rules still apply.
-After validated QA PASS and any required current-truth projection, the PM evaluates once whether the
+After the applicable acceptance and any required current-truth projection, the PM evaluates once whether the
 request should create local Git commits. This automatic assessment does not create a third business-confirmation stage
 and does not authorize a push, merge, tag, release, or remote mutation.
 
@@ -224,8 +234,8 @@ commit_decision:
       reason: <repository-specific evidence>
 ```
 
-- Commit only request-owned changes verified through the applicable Trivial local checks or
-  non-Trivial QA, plus any validated PM-owned controlled-document projection. The PM must not stage unrelated or unverified changes and must preserve pre-existing
+- Commit only request-owned changes verified through the applicable Light checks and acceptance or
+  Full QA, plus any validated PM-owned controlled-document projection. The PM must not stage unrelated or unverified changes and must preserve pre-existing
   user work byte-for-byte.
 - Use exact pathspecs, inspect the complete staged diff, and verify its changed-path set and
   fingerprint before committing. The PM must not use `git add -A` or `git add .`.
@@ -237,8 +247,8 @@ commit_decision:
   pointer only after that child decision and staged-diff verification.
 - Use `needed: false` for read-only/no-change work, changes already represented by an audited commit,
   an explicit no-commit instruction, or a repository policy that intentionally leaves the result
-  uncommitted. Non-Trivial commits require QA PASS and required document validation; all Trivial work
-  requires its completed local verification instead. Neither path permits unrelated staging.
+  uncommitted. Full commits require QA PASS and required document validation; Light requires completed
+  minimum verification and any independent audit selected for its actual risk. Neither path permits unrelated staging.
 - After a successful commit, verify that the committed path set and patch match the inspected staged
   snapshot. The final user report gives only the concise decision and commit ID when created, not the
   raw `commit_decision` record.
@@ -247,48 +257,97 @@ commit_decision:
 
 | Type | Definition | Workflow |
 |---|---|---|
-| Trivial | Small change to one non-UI file with no shared contract, or bounded low-risk UI copy as defined below | 主会话直接实施和局部验证；不默认派发或独立 QA |
-| Light | One delivery surface, with no UI, database, or shared-contract change | 默认派对应实施 subagent；保留需求确认、验证和独立 QA |
-| Full | Multiple roles, a shared contract/database/root configuration, or non-Trivial UI | 默认派对应实施 subagent；保留 Full 规划、适用门禁和独立 QA |
+| Light | 范围明确、风险可控的单一交付面，包括低风险局部修正与下述普通 UI 文案 | 默认派对应原生实施者；最小充分验证必做，交接时评估独立审计、文档与记忆，不强制 Full 计划或 DAG |
+| Full | 多角色、共享合同、数据库、根配置，或超出低风险文案边界的生产 UI | 默认派对应原生实施者；保留 Full 规划、适用确认、DAG 与唯一独立 QA |
 
 <a id="implementation-ownership"></a>
 
 ### 实施所有权与 PM 例外
 
-- 先按实际影响确定 Trivial／Light／Full，再确定实施者。功能不变、代码少或仅 CSS
-  都不能自动判为 Trivial；工作流指令、Skill、生成模板及配置等按其实际合同和消费者判断，
-  不能因文档后缀跳过分级与所有权。Trivial 继续使用下文主会话直接实施、局部验证的早退路线。
-- Light／Full 默认由对应角色的 subagent 实施；只有用户明确指定 PM 本身亲自实施当前范围，
-  才改变该范围的实施者。普通“你来优化”“开始”“继续”是任务执行指令，不能据此推断该例外；
-  跳过原型也不改变生产实施者。依据必须能追溯到可信原始用户指令及其当前范围；需要交接或恢复时，
-  沿用现有 Task Pack 的 `input_contracts`／当前计划引用来源和范围，不新增字段、审批账本或确认门禁。
-- PM 亲自实施例外只改变实施者：原等级的需求审批、适用规范、构建／可运行验证、独立 QA、
-  原型选择及适用视觉门禁均保留。PM 可以维护自己负责的计划、交接和已验收受控文档投影；
-  这些职责不能扩大到其他实现者拥有的指令资源或文件。
-- 对应角色缺失、运行失败或上下文恢复不自动授权 PM 接管。按既有派发／恢复方式处理受影响任务，
-  未解决的角色或工具能力缺口报为阻塞；保留已有修改、有效证据和独立分支，不伪装完成。
-- 压缩、交接和恢复沿用可信原指令、现有计划与当前文件，核对原分级、实施者及已完成证据；
-  按现有宿主续用规则优先复用可用的原 Agent。摘要、旧状态或临时快照不能创造 PM 实施授权，
-  不能把尚未完成的 Light／Full 降为 Trivial，也不能重启仍有效的已完成工作。
+- 先按实际影响确定 Light／Full，再判断风险和实施者。功能不变、代码少或仅 CSS
+  不能自动判为 Light；工作流指令、Skill、生成模板及配置按实际合同和消费者判断。
+- Light／Full 默认由对应原生 subagent 实施。PM 负责协调、计划、交接、文档目录与已验收
+  受控文档投影；只有用户明确指定 PM 本身亲自实施当前范围，才改变该范围的实施者。
+  普通“你来优化”“开始”“继续”、短摘要或跳过原型均不产生例外。依据必须能追溯到可信
+  原始用户指令及当前范围，通过现有 `input_contracts`／当前计划引用，不新建审批账本。
+- PM 例外只改变实施者，原等级的适用确认、规范、构建／可运行验证、风险判断、独立 QA
+  和原型选择仍保留。文档后缀或“机械修改”不能扩大 PM 对其他实现者资源的写入权限。
+- 角色缺失、运行失败或恢复不授权 PM 接管。按实际工具能力恢复受影响任务，保留有效
+  成果、证据及独立分支；未解决的能力缺口如实报告，不伪装完成。
+- 压缩、交接和恢复核对可信原指令、当前任务与代码事实。只有同一任务连续实现或短期
+  返工可续用可用原实例；独立任务须新实例。摘要不能创造授权、降低原等级或重启有效成果。
 
-本节是实施者边界的权威规则；具体计划恢复见
-`xy-workflow/references/plan-lifecycle.md`，宿主工具及权限仍由对应集成细则约束。
+<a id="agent-instance-lifecycle"></a>
 
-### General Trivial early exit
+### 职责别名、独立上下文与原生实例生命周期
 
-Classify a clear, small, one-file non-UI correction with no shared contract as Trivial only after
-checking its real scope and risk. 主会话读取内置工程规则、适用模块规则及项目特有规范（索引存在时沿链接读取）, performs the bounded edit, and runs the smallest relevant reproduction,
-regression and diff checks. The explicit request authorizes that scope; do not request the same
-approval again or enter Grill Me, full planning, DAG dispatch, independent QA or the post-QA pipeline
-merely because the task fixes a bug. After local verification, assess a scoped commit and report the
-actual checks without claiming QA PASS. No plan, document or memory update is required just to close
-the task. Requested review and stricter project rules still apply; unresolved impact or a changed
-shared/product contract returns to the appropriate Light/Full route. Do not split risky work to
-manufacture Trivial tasks. The UI-copy-specific checks below remain additional safeguards.
+- `agent_alias` 稳定绑定项目内规范化 `module` 根与规范 `role`，允许同模块同角色有多个
+  独立职责槽位；它不授予路径、工具或批准权限。角色静态昵称不是实际执行身份。
+  别名长期保留，实例按当前独立交付单元需要创建；不预热全部别名，也不为填满宿主上限派发。
+- 每个独立任务使用新原生实例和新 ID，固定 `instance_policy: fresh`、
+  `context_policy: handoff_only`。同图不同任务不能复用同一原生身份，已完成任务不复活。
+  同任务连续实现及短期返工可以续用；同一轮 QA 的原 Reviewer 复查发现、差量与受影响合同，
+  不重做未失效的完整审计。原生实例失效时保留历史 `agent_ref`，由 PM 核实恢复边界，
+  通过新任务表达必要替代，不覆盖、清空旧引用或挪用旧 PASS。
+- **任何新实现者或 QA 都不得继承、复制完整 PM 或兄弟会话，不使用复制父历史的 fork。**
+  只交接当前自包含任务包：目标与精确范围、当前代码／工作区依据、适用规范及读取入口、
+  可信授权来源、验收与必要证据、未决事项。Full 的本任务包可携带当前请求审查所需的范围
+  与证据，不携带兄弟完整任务、会话或无关状态。接收者必须完整读取当前包及必需规范；
+  摘要、字段声明、指纹或其他 Agent 已读不证明自己已读或宿主实际隔离。
+- `agent_ref` 只接受 `{host, agent_id}`，PM 核对真实派发结果后首次绑定，不可覆盖或清空。
+  原生 ID 不是存活、角色、批准或完成证明；同名别名的新任务仍需新 ID 与新上下文。
+  `resume`／`compact` 没有可靠的清空合同，不能称为 `prepareForReuse` 或已重置历史。
+- 围绕当前交付单元的反馈窗口保留必要实例，为后续 QA／集成安排容量。运行数、打开线程数
+  和平台上限按宿主真实口径观察，不能假定相同。容量不足时优先处理已验收且交接充分的实例；
+  不能按简单 LRU 淘汰仍执行、证据未交付或必要复查者，也不增加 Agent 池或第二状态机。
+- PM 接收交付、必要验证／QA 完成且成果与所需完整日志已安全保存后，使用当前实际暴露且
+  获授权的原生结束能力。能力缺失或失败时在现有任务记 `agent_retired: true` 并阻止误派，
+  如实记录原生结束未确认；退役不可逆，**不释放仍在执行任务的路径锁或语义锁**。
+  只有核实执行已停且原任务状态满足原锁规则后才能移交。退役不等于物理销毁、清空内存
+  或删除历史，不能宣称已释放未确认的宿主容量。
+- 取消、异常、失效或未知状态保留现有恢复边界，不自动复活、重复执行或删除成果。
+  AGY 原生结束／kill 前必须先保护临时 worktree 中未移交修改及唯一日志；先保存必要证据
+  再回收。清理 scratch 也不能删除仍被任务、QA、计划或恢复引用的唯一证据。
 
-Classify Trivial UI copy before applying UI routes. Other production UI changes remain Full.
-After Full classification, separate a zero-design-delta
-implementation correction from work that creates or changes design decisions:
+本节是跨宿主权威规则；具体调用只读当前宿主 `pm-integration.md`。不新增 runner、守护进程、
+默认团队模式或另一套调度器，不承诺缓存命中、费用或幻觉率改善。
+
+### Light delivery
+
+PM 派发前确认当前目标、范围、实际消费者、风险与验收，发出自包含 2.0 单任务包。
+明确用户指令已授权该范围时不重复确认；缺少影响合同、权限或不可逆操作的实质决定时，
+只澄清该缺口。Light 不强制 Grill Me、xy-plan、DAG、保存计划或独立 QA，仍默认由原生
+实施者执行适用规范和最小充分验证。生产目标保留真实构建／编译及最小可运行证据；
+文档与静态原型按各自交付类型验证。
+
+交接时由 PM 依据实际变化和证据判断是否需要独立审计、文档及记忆；选定后执行必需项，
+无需时不创建空记录。显式审查请求、项目强制要求或实际风险仍可要求唯一独立 QA；Full
+不能通过交接评估降级。只做局部验证时报告真实结果，不能编造 QA PASS。完成所需接收、
+提交评估和证据保护后按上文结束或退役实例。实际范围超出 Light 边界则改走 Full，不能
+拆小风险工作以规避审批或审查。
+
+### Light UI copy
+
+普通可见文案的明确、局部、低风险修正可用 Light，包括匹配的多语言文件。先核对真实
+消费者和共享键，保持业务含义、行为、导航、状态、布局、token、API 和可访问性语义。
+价格／费用、同意与隐私、权限、破坏操作承诺、强制合同文字及未决共享影响不在此边界。
+文件数量或 UI 后缀本身不决定 Full，短 diff 也不能证明低风险。
+
+实施者读取适用工程／设计规范，检查准确替换、diff、键与占位符、真实加载路径和必要的
+显示风险。参与构建／打包的输入需受影响目标构建及生成结果的最小可运行证据；运行时
+资源可复用未失效构建证据，但须验证更新后的真实入口。有具体渲染风险、必要运行缺口
+或明确要求才检查受影响浏览器／模拟器，不默认 clean build、全平台或全量测试。
+
+Light生产文案仍标`surface_kind: production_ui`，使用现有`UI-Conformance`、`design_delta: none`、
+`prototype_policy: not_applicable`，绑定真实已解析并冻结的`design_authority_refs`和工程／设计规则。
+不标成non_ui绕过规范；缺少当前权威先补明确依据，无法证明零设计差量则改走Full。
+Light不强制Full的requirements_approved／规划／QA字段，但仍需当前精确用户授权与实际验证。
+
+Light 文案不自动要求原型选择、设计 Agent、视觉确认、独立 QA 或文档／记忆写入；交接时
+仍评估实际需要。发现行为、业务或设计合同变化后改走 Full 的适用 UI 分支，而非伪装成
+低风险文案或原型豁免。保护路径及项目强制要求始终有效。
+
+其他生产 UI 变更属于 Full，先区分零设计差量的实现纠正与实际设计决策：
 
 | UI route | Workflow |
 |---|---|
@@ -297,55 +356,9 @@ implementation correction from work that creates or changes design decisions:
 | `UI-Page` | 2-3 textual wireframes -> `ia_ready` -> prototype -> `prototype_verified` -> `visual_review_ready` -> `visual_approved` |
 | `UI-Flow` | Journey and states -> just-in-time design-system increment -> `ia_ready` -> connected prototype -> `prototype_verified` -> `visual_review_ready` -> `visual_approved` |
 
-`UI-Conformance` is allowed only when approved requirements and current controlled design evidence
-fully determine the intended result, no new visual or interaction choice is required, and the
-production change only restores or preserves that result. `UI-Patch`, `UI-Page`, and `UI-Flow` are
-the design-change routes. Their table rows show the `prototype_policy: required` branch after the
-user selects design/update prototype during requirements confirmation. The user may instead select
-`prototype_policy: waived_by_user` for exact affected surfaces without changing the route's
-Patch/Page/Flow scope classification.
-
-### Trivial UI copy
-
-An explicit, bounded correction to ordinary visible wording may use the existing Trivial route,
-including UI files and matching locale files. File count or a UI file extension alone does not
-make it Full. The main session handles it directly; no new role, task mode or scheduler field is needed.
-
-- Confirm the requested replacement and actual usage scope from the relevant source. Preserve business
-  meaning, behavior, navigation, state, layout rules, tokens, APIs and accessibility semantics.
-- Exclude pricing/fees, consent/privacy, permissions, destructive-operation promises, or wording that
-  changes an explicit product contract. A short diff does not establish low risk. Check shared-key
-  consumers; unknown or broad impact must be resolved before editing, not assumed local.
-- 读取适用内置工程/设计规则与模块指令；项目特有规范索引存在时沿链接读取相关叶。
-  Protected upstream paths and other hard rules remain binding; Trivial is not an exception authority.
-- An explicit replacement request already authorizes that bounded edit. Do not ask for the same
-  approval again, run Grill Me/xy-plan, create a DAG/Task Pack, request a prototype choice, dispatch
-  UI Agent or independent QA, or invoke the full build/QA/closeout Skills merely to complete it.
-  Honor an explicit user review/test request or stricter applicable project rule.
-  An explicitly requested Trivial review consumes the replacement instruction, exact diff, applicable
-  standards and actual local checks. It does not require a formal Task Pack, UI-route contract or
-  qa_handoff record unless a stricter project rule requires them; return the real review result and
-  retain Trivial closeout rather than entering the non-Trivial pipeline.
-- Verify the exact replacement and diff, intended consumers/locales, unchanged keys/placeholders and
-  syntax. 按已安装 `xy-build-verify/references/verification-scope.md` 区分纯说明性文档、
-  仅运行时加载的文案／资源，以及参与编译／打包的输入。运行时资源可复用仍有效的构建
-  证据，但须验证更新后的真实加载路径或关键入口；编译／打包输入变化须有受影响目标
-  构建成功及生成结果的最小可运行证据，相同输入已验证时可复用。
-  有具体渲染风险才检查受影响显示；浏览器／模拟器检查仅用于该风险、无法由更小检查
-  取得的必要运行证据或显式要求，不因文案修改自动执行。以上均为主会话局部验证，
-  不新增 QA 或完整 Skill 交接。Do not default to a clean build, all-platform build or full test suite.
-  Never report unexecuted checks as passed.
-- Keep prototypes, design standards, PROJECT/feature and agentmemory unchanged for this copy-only
-  task; an incidental old label in a prototype is not a reason to reopen visual approval. If an
-  actual mandatory wording or product/design contract needs changing, reclassify through the existing
-  route instead of silently changing the contract or projecting new feature truth.
-- Finish after local verification and the existing scoped commit assessment. Report the change and
-  actual checks, not QA PASS. No memory-closeout call or empty documentation/approval records are needed.
-
-If inspection or verification reveals behavior changes, unresolved impact or another excluded risk,
-stop the affected edit and use the existing Light/Full route as applicable. Do not split risky work
-into small edits to evade review. The remaining UI gates and independent-QA procedures are for
-non-Trivial work; this early classification is not UI-Conformance or a prototype waiver.
+`UI-Conformance` requires current authority to determine the result with no design choice.
+The design-change rows show `prototype_policy: required` after the user selects that branch.
+A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classification and Full QA.
 
 ### Requirements Discovery and Skill Routing
 
@@ -356,20 +369,20 @@ non-Trivial work; this early classification is not UI-Conformance or a prototype
   that are materially needed for coverage; no document or memory retrieval is required when
   available information is already sufficient. If the facts answer every material question, Grill
   Me returns immediately without manufacturing questions; otherwise it conducts the smallest
-  necessary interview. Clear Trivial or Light work does not invoke it merely because the Skill is
+  necessary interview. Clear Light work does not invoke it merely because the Skill is
   installed.
 - If Grill Me is unavailable, run the focused local clarification fallback below and record
   `grill_fallback` in the request record. Absence alone does not authorize another external planning
-  or orchestration workflow and does not block safe, already-clear Trivial or Light work.
+  or orchestration workflow and does not block safe, already-clear Light work.
 - The fallback must inspect only any task-relevant project facts needed to resolve a material gap,
   then use a compact set of questions to confirm
   observable goals, scope and non-goals, precedence among conflicting constraints, acceptance
   evidence, and approval/rollback boundaries. Unresolved questions that would materially change
   implementation or authorize irreversible actions must wait for the user. Otherwise, record the
   minimum safe assumptions and `unresolved_questions`.
-- Trivial or Light requests that are clear and conflict-free do not require `$grill-me`.
-- Plan persistence follows task classification, not file count or the number of workers: Trivial
-  does not save by default; Light saves only for an actual pause/recovery/handoff or explicit request;
+- Light requests that are clear and conflict-free do not require `$grill-me`.
+- Plan persistence follows task classification, not file count or the number of workers: Light
+  saves only for an actual pause/recovery/handoff or explicit request;
   Full saves after requirements approval and before first design/implementation dispatch. PM writes
   one plan per independent requirement, not per Agent, visual iteration or QA rework. Explicit
   task-scoped workflow opt-out and save/no-save requests prevail. Saving Light never invokes Full Skills.
@@ -406,8 +419,8 @@ non-Trivial work; this early classification is not UI-Conformance or a prototype
 读取设计规则，后端不预载 UI。通用工程规则正文在 `xy-code-standards/references/rules.md`，
 通用设计规则正文在 `xy-ui-design/references/foundations-rules.md` 与 `components-rules.md`。
 项目只补特有规范；来源、稳定规则 ID 和当前指纹共同构成适用权威，不在项目复制通用正文。
-Trivial 和获明确授权的 PM 亲自编写代码同样适用代码方法，
-但读取不创建 Task Pack、原型、确认、写入权或 QA 阶段，原路线与验证停止条件保持不变。
+Light 和获明确授权的 PM 亲自编写代码同样适用代码方法；读取不创造写入权、额外确认
+或 QA 阶段，沿用当前等级的任务包、验证与停止条件。
 
 ```yaml
 external_workflow_policy:
@@ -427,7 +440,7 @@ runtime only the explicitly bounded QA review fallback defined in section 10.
 
 ### Native Bug-Fix Route
 
-Clear, reproducible Trivial or Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
+Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
 runs the Grill Me coverage check and `xy-plan`; when symptom, expected result, environment,
 reproduction, impact, and acceptance evidence are already complete, the coverage check asks no
 questions. Receiving review feedback is not bug diagnosis and does not select an external workflow.
@@ -443,15 +456,16 @@ native_bug_fix:
   - assess_task_level_closeout
 ```
 
-After local verification, Trivial bugs close through the Trivial route without mandatory independent
-QA. Light/Full work uses `request_unified_qa`; an explicit review request, stricter project rule, or
-risk requiring reclassification also selects the applicable review. The bug label alone does not
+After minimum verification, Light bugs receive the risk-based handoff assessment; Full work uses
+`request_unified_qa`. An explicit review request, stricter project rule, or actual risk selects the
+applicable independent review without imposing Full planning on Light. The bug label alone does not
 upgrade the task or require Full planning, another approval, a saved plan, or documentation churn.
 
 ## 5. Default Business Confirmations, Exceptions, and UI State
 
-For non-Trivial work, the workflow defaults to two business-confirmation stages. Trivial UI copy
-uses the explicit bounded user instruction without a duplicate confirmation, as defined above:
+For Full work, the workflow defaults to the applicable business-confirmation stages below.
+Light uses the existing explicit scope authorization without duplicate confirmation; material gaps
+still require clarification and actual platform security permissions remain binding:
 
 ```yaml
 business_confirmation_policy:
@@ -563,9 +577,10 @@ freeze time. For `prototype_contract`, it is the verified page dependency finger
 fingerprint-less reference is not design authority.
 
 A valid `UI-Conformance` request does not dispatch `xy-uiux`, does not run a prototype mutation
-phase, and does not require `visual_approved`. It remains Full: complete Grill Me coverage, the
-`xy-plan` draft, `requirements_approved`, `xy-build-verify`, and one integrated read-only `xy-qa`
-audit still apply. Its implementation task carries `audit_surfaces: [ui, accessibility]` as
+phase, and does not require `visual_approved`. 除上文已明确的普通低风险Light文案外，
+UI-Conformance仍属Full：完整Grill Me、xy-plan、requirements_approved、构建验证和唯一
+集成只读QA保留。Light文案使用相同当前已解析权威与工程／设计约束，不继承Full规划、
+重复确认或强制QA；任何设计／交互变化均Full。 Its implementation task carries `audit_surfaces: [ui, accessibility]` as
 applicable and QA verifies both regression behavior and conformance with `design_authority_refs`.
 
 If the authority is missing, stale, contradictory, incomplete, or the implementation exposes any
@@ -797,7 +812,7 @@ For initial design adoption, reusable rule changes, complete visual replacement,
 maintenance, read [the design-standard lifecycle procedure](../platforms/shared/skills/xy-workflow/references/design-standards.md).
 PM assesses design-standard updates independently from PROJECT/feature projection, including after
 the first visual confirmation. No reusable rule change means no document update. UI Agent writes
-authorized standard leaves; PM owns scope/adoption, mechanical small edits, index links and affected
+authorized standard leaves; PM owns scope/adoption, directory links and affected
 task-fingerprint refresh; implementers own production tokens/components; QA independently audits.
 Adopt approved rules before dependent implementation/QA uses them. Production migration facts remain
 post-QA truth. Candidates never silently replace approved authority. Existing confirmation gates,
@@ -806,8 +821,8 @@ optional prototype choice, and evidence reuse remain unchanged.
 `xy-uiux + design_ui` has `design_mode: prototype | standards_only` (default `prototype`).
 `standards_only` writes exact normative Markdown leaves under `docs.standards_root/DESIGN_*.md`, excluding
 `prototype/` and `references/`; it has no prototype verification, HTML, or visual gate. It still
-requires the approved task and current scoped design reads. PM may perform a mechanical edit without
-spawning another Agent under this same narrow writer contract. No production role may use the mode
+requires the approved task and current scoped design reads. Mechanical normative edits also default
+to the authorized design implementer; PM implementation requires the explicit scoped user exception. No production role may use the mode
 to bypass protected design paths. The configured prototype path is a safety boundary, not a required
 artifact for standards maintenance.
 
@@ -874,7 +889,7 @@ appears a second time; extraction is mandatory on the third occurrence or QA fai
 ## 7. Concurrency and Ownership
 
 For multiple substantive independent features, assess `parallel_worktrees.mode: auto` and prefer
-real isolated worktrees when Git and the host can bind each writer to its own root. `off`, Trivial,
+real isolated worktrees when Git and the host can bind each writer to its own root. `off`, Light without a justified isolation need,
 read-only work, shared semantic dependencies or unavailable isolation preserve safe existing routing.
 Read the complete conditional procedure in
 `xy-workflow/references/worktree-delivery.md` before isolated dispatch or delivery. This is a pack-owned
@@ -909,6 +924,8 @@ orchestration:
 
 ### Dynamic Task-Graph Scheduling
 
+This section is mandatory for Full; Light does not create a graph merely to dispatch or close.
+A Light single-task pack retains its own state and ownership through the existing record tools.
 This workflow uses a task dependency graph (DAG), not a global implementation wave, and does not
 require implementation to start only after all design work finishes. The PM recomputes the ready
 queue after every decomposition or task completion and, within configured thread, writer, and path
@@ -970,7 +987,9 @@ Across the entire graph, any Writer whose ownership overlaps either typed design
 the `xy-uiux` task with `surface_kind: design_ui`; changing the role label, omitting the role, using
 a broad ancestor path, or hiding that Writer behind a transitive dependency never bypasses this rule.
 
-Every task pack must provide these scheduling fields:
+Every Full graph task provides these scheduling fields. Every 2.0 task, including a Light single-task
+pack, first carries `workflow_level: Light | Full`, normalized project-relative `module` (`.` for root),
+canonical `role`, stable `agent_alias`, `instance_policy: fresh`, and `context_policy: handoff_only`:
 
 - `id` / `request_id`: stable task and request identifiers.
 - `task_type`: `writer`, `evidence`, `read_only`, or `qa`. Only writers participate in the
@@ -997,10 +1016,9 @@ Every task pack must provide these scheduling fields:
   `base_revision` and PM checkpoint `head_revision` (null while pending). The graph's
   `worktree_integrations` maps each isolated request to its separate root, resolved target branch/base,
   candidate head and revision-bound verification. No independent ledger or user-visible JSON is added.
-- `agent_ref`：可选计划元数据 `{host: codex|claude|antigravity, agent_id: <真实原生ID>}`。
-  PM 核对真实 ID 后通过现有 `update`，只补记到已经 RUNNING（或显式 qa 的 QA）任务。
-  省略时兼容旧图，init 不导入执行身份。绑定除同值幂等外不可更改，活动任务不能共享
-  同一 host／ID。历史引用不授权新任务，也不建立另一份 Agent 状态来源。
+- `agent_ref`:派发后真实原生引用 `{host: codex|claude|antigravity, agent_id: <真实ID>}`。
+  通过现有 `update` 补记到已进入执行态的任务，首次绑定后不可改／清空；不同任务不能
+  共享身份，历史引用不授权新任务。`agent_retired: true` 不可逆且不释放仍活动的锁。
 - `state`: the scheduler's single state source: `DECLARED`, `BLOCKED`, `READY`, `RUNNING`,
   `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, or `FAILED`.
 - `qa_scope`: required for tasks with a `role` and exactly `request`, meaning the current request's
@@ -1033,13 +1051,13 @@ Worktree delivery rejects unfinished or failed relevant QA nodes even when an ol
 诊断只区分 documented／source_observed／runtime_unverified；原生累计用量不逐条求和，
 未采样保持未知，不计算费用或节省百分比。AGY 原生 grill-me 来源须核对，不自动替换
 本包覆盖检查；diff／Artifact 人工审阅不等于独立 AI QA。以上均不新增普通只读或
-Trivial 的门禁，也不自动启用 native／boost／teamwork 模式。
+Light 的额外门禁，也不自动启用 native／boost／teamwork 模式。
 
 Effective dispatch capacity is the minimum of configured remaining subagent slots, configured
 remaining writer slots, and the host's currently available subagent slots. The PM never assumes the
 configured maximum is currently available.
 
-Every implementer in this non-Trivial loop must complete `$xy-build-verify` before delivery.
+Every implementer in this Full loop must complete `$xy-build-verify` before delivery.
 PM、实现者和 QA 共用已安装 `xy-build-verify/references/verification-scope.md` 的范围与
 停止规则：选择最小充分验证，全量或重跑须有实际依据，有效证据可以复用。
 生产代码交付必须保留受影响目标构建／编译成功和最小可运行验证的真实证据。
@@ -1058,6 +1076,31 @@ rework. Failures block only downstream dependents; independent branches continue
 
 ## 8. Task Packs
 
+2.0 的图和任务包均声明 `schema_version: 2`，旧格式直接拒绝。派发单包使用统一外壳：
+
+```yaml
+schema_version: 2
+task:
+  id: <current-task-id>
+  request_id: <current-request-id>
+  workflow_level: Light | Full
+  module: . | <normalized-project-relative-module-root>
+  role: <canonical-xy-role>
+  agent_alias: <stable-module-and-role-slot>
+  instance_policy: fresh
+  context_policy: handoff_only
+  state: DECLARED
+standards_contract: <only-current-applicable-authority>
+```
+
+可选`handoff_assessment`为`{independent_qa: required|not_required, documentation: required|not_required,
+reason: <非空实际依据>}`；不要求每个Light都创建记录，Full的independent_qa不得not_required。
+
+其余只携带当前任务实际需要的批准／UI 依据。Full 通过 `task_graph_cli.py task` 导出指定
+任务及必要权威，不导出兄弟任务或完整 PM 历史。Light 直接使用同形单包，保留任务
+`state`，不要求 `tasks`、DAG、Full 规划字段或未适用的批准／UI 字段；现有 `task`、
+`update`、`continuation` 可处理该单包。可选交接评估只记录实际判断，不是新的必填账本。
+
 Every implementation task pack includes at least:
 
 - the goal and non-goals;
@@ -1067,7 +1110,7 @@ Every implementation task pack includes at least:
   verified fingerprints; a waived UI task instead carries its scope-bound user record;
 - a task-scoped `controlled_document_access` plan;
 - exact verification commands;
-- concurrency dependencies and conflict conclusions;
+- actual dependencies and conflict conclusions; Full includes graph scheduling fields;
 - the delivery-report format and the location of complete evidence.
 
 For Full work, these packs originate from the approved and frozen `xy-plan` draft. The PM may correct
@@ -1079,7 +1122,8 @@ regenerates the draft, re-decides the post-QA document projection, and reopens
 Every implementation task pack still carries the approved goal, non-goals, constraints, acceptance
 evidence, and applicable UI evidence even when no controlled document changes. Design-change tasks
 carry approved concrete prototype pages; `UI-Conformance` tasks carry their frozen
-`design_authority_refs`. The PM also records this automatic projection decision:
+`design_authority_refs`. Full由PM在规划阶段记录投影决定；Light在交接时评估实际需要，
+不强制预填下列Full记录：
 
 ```yaml
 controlled_document_access:
@@ -1237,7 +1281,7 @@ repairs current links. Do not create an intermediate removal document state. QA 
 canonical documents unchanged. This projection creates neither another approval nor another
 companion document.
 
-Every non-Trivial task pack also includes:
+Every Full task pack and applicable Light task pack also includes:
 
 ```yaml
 skill_policy:
@@ -1305,8 +1349,8 @@ build evidence. Implementers may attempt a fix at most twice before returning co
 
 ## 10. QA and Failure Recovery
 
-This section governs implementation acceptance when independent QA is required, not locally
-verified Trivial work or the `Standalone read-only audit` branch. Do not dispatch QA merely because
+This section governs Full implementation and Light acceptance when independent QA is required,
+not a Light task whose actual risk needs no audit or the `Standalone read-only audit` branch. Do not dispatch QA merely because
 a source file contains UI, an audit produced a report or a completed edit needs closeout.
 
 On FAIL, the PM dispatches bounded repairs and returns to the same independent reviewer for the
@@ -1404,6 +1448,10 @@ including nested repositories and submodules, with its repository-relative path,
 head revision, complete changed-path list, and SHA-256 diff fingerprint. A current worktree diff is
 not a substitute for an explicit base/head range when implementation commits already exist.
 
+Every implementation QA result uses `schema_version: 2` and carries `handoff_ref` with the current
+QA task pack's `request_id`, `task_id`, `agent_alias`, exact `{host, agent_id}` `agent_ref`, and
+`task_pack_sha256`. PM validates/extracts against that complete current QA pack using mandatory
+`--task-pack`; mismatched identities, bytes or an old PASS cannot close the current review.
 QA also returns an internal `standards_policy_coverage` projection. QA 从适用内置来源、存在时的
 项目薄索引及实际变更路径独立解析规则，不只信任 Task Pack 的选择；无项目索引不省略内置规则。
 It classifies every changed path, records every required or applicable rule as
@@ -1413,7 +1461,7 @@ but returns FAIL for task correction/rework rather than silently repairing the c
 result with:
 
 ```text
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/qa_handoff_cli.py validate --input <qa-handoff.json>
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>
 ```
 
 Missing changed-path classification, missing required rules, evidence-free conclusions, stale

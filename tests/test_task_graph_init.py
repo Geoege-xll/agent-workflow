@@ -13,6 +13,7 @@ import unittest
 from lib import task_graph_records as records
 from lib.task_graph_cli import _execute
 from lib.task_graph_init import initialize
+from tests.test_scheduler_boundaries import v2_graph
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -30,7 +31,7 @@ ADAPTER = """docs:
 
 def decisions():
     """规则与授权来自 PM 输入；夹具不靠初始化自动选规范或确认需求。"""
-    return {
+    return v2_graph({
         "request_id": "修复小程序接口", "capacity": 1,
         "standards": {
             "required_engineering_rule_ids": ["eng-common-005", "eng-mini-001"],
@@ -49,7 +50,7 @@ def decisions():
             "verification_commands": [{"run": "项目已存在的定向构建和运行命令", "expected": "退出 0"}],
             "selected_standards": [BUILTIN_ENGINEERING, MINI],
         }],
-    }
+    })
 
 
 class TaskGraphInitTest(unittest.TestCase):
@@ -200,7 +201,7 @@ class TaskGraphInitTest(unittest.TestCase):
         ready = self.invoke("ready", "--input", self.target)
         self.assertEqual({"ready": ["api"]}, json.loads(ready.stdout))
         task = self.invoke("task", "--input", self.target, "--task-id", "api")
-        self.assertEqual("DECLARED", json.loads(task.stdout)["state"])
+        self.assertEqual("DECLARED", json.loads(task.stdout)["task"]["state"])
         result = self.invoke("update", "--input", self.target, "--expect-sha256", records.digest(self.target.read_bytes()),
                              "--patch", "-", input='{"tasks":{"api":{"set":{"state":"RUNNING"}}}}')
         self.assertEqual(0, result.returncode, result.stderr)

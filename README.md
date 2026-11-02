@@ -1,6 +1,7 @@
-# Agent Workflow Pack
+# Agent Workflow Pack 2.0
 
-Portable **multi-subagent collaboration workflow** for any project.
+面向项目的原生多Agent工作流，当前发布合同为 **2.0.0**。仅Light／Full及schema_version:2，
+不兼容旧任务／交接格式；用户文件、已有成果和必要证据保护继续有效。
 Keep this installer folder anywhere and select a project when launching it — works with
 **Claude Code / Codex / Antigravity**.
 
@@ -340,7 +341,7 @@ lean by removing duplication while preserving required safety and execution cont
 
 ## Unified PM lifecycle
 
-Every host implements this non-Trivial lifecycle natively:
+每个宿主的Full请求沿用以下完整生命周期；Light使用下面的按需分支：
 
 ```text
 classification with on-demand auxiliary document or agentmemory retrieval
@@ -357,18 +358,23 @@ The main session is the PM. It dispatches all currently `READY` tasks within the
 agent, writer, path, and semantic-conflict limits; task completion immediately unlocks
 eligible downstream work. A capacity delay never becomes a semantic dependency.
 
-Trivial 由主会话直接实施并做局部验证；Light／Full 默认派对应 subagent。只有明确指定
-PM 本身亲自实施当前范围时才改变实施者，原等级审批、验证、独立 QA 和原型规则保留。
-普通“你来优化／开始／继续”和压缩摘要不产生该例外，也不使 Light／Full 降级；恢复时
-复用有效进度与可用的原 Agent。完整规则见 [实施所有权与 PM 例外](product/WORKFLOW.md#implementation-ownership)。
+Light／Full默认派对应原生subagent。只有用户明确指定PM本身亲自实施当前范围才改变实施者；
+PM正常职责限于协调和其拥有的文档。普通“优化／开始／继续”及摘要不产生例外，原等级要求保留。
+见[实施所有权与PM例外](product/WORKFLOW.md#implementation-ownership)。
 
-Bounded low-risk UI copy uses the existing Trivial route before UI classification: direct main-session
-edit, applicable standards, local verification and scoped commit assessment. No repeated approval,
-Grill Me, full plan/DAG, prototype choice, independent QA or document/memory churn is required.
-The same correction across matching locale files is not Full merely because it touches several files.
-Business/permission/privacy/destructive semantics, mandatory contract wording and unknown shared impact
-are excluded; see [Trivial UI copy](product/WORKFLOW.md#trivial-ui-copy). Do not claim QA PASS when
-only local verification ran. All non-Trivial UI and protected-path rules remain unchanged.
+Light派发前判断目标、消费者、范围与风险，使用当前自包含2.0单任务包并做最小充分验证；
+不强制Full规划、DAG、保存计划、重复确认或独立QA。交接时评估必要独立审计、文档与记忆，
+没有需要不制造记录或QA PASS。普通低风险UI文案可用此分支，多语言文件数量不自动升级；
+实际UI文案仍用production_ui＋UI-Conformance及真实已解析冻结权威，工程／设计规范不省略；
+任意设计／交互变化都Full。业务／权限／隐私／破坏操作语义和未知共享影响除外，见[Light UI copy](product/WORKFLOW.md#light-ui-copy)。
+
+稳定别名绑定模块与角色职责。独立任务按需新原生实例／新ID，只交当前目标范围、代码／工作区
+事实、适用规范、可信授权、验收证据及未决事项；不复制完整PM／兄弟会话或fork父历史。
+同任务连续实现、短返工及同轮原Reviewer差量复查可续，不能称resume／compact已清空历史。
+交付接收、必要验证／QA和证据保护后及时原生结束；能力缺失只退役阻止误派，不称销毁、清空
+或释放未确认容量，退役不释放仍活动锁。按宿主真实运行／打开线程口径安排后续QA／集成容量，
+不预热全部别名、不填满上限，也不按简单LRU淘汰仍执行／未交证据／必要复查实例。
+AGY kill前保护临时worktree与唯一日志；完整规则见[实例生命周期](product/WORKFLOW.md#agent-instance-lifecycle)。
 
 Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are
 auxiliary information sources at task intake. The PM reads or queries only the smallest relevant
@@ -407,7 +413,7 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
 宿主可读导出的完整 Task Pack 文件时，可交接确切文件引用、SHA 与简短变化摘要，接收方
 必须完整读取；宿主不可读时仍发送完整包，不能仅发差量。
 每位Writer携带覆盖拥有路径的当前内置来源、适用规则ID及项目特有规范，索引存在时绑定真实SHA。
-无项目叶且索引缺失时保留配置路径/null指纹；QA按当前内置来源、存在的项目索引及实际差异独立判定； `qa_handoff_cli.py validate` prevents PASS when the Task Pack omitted a rule, fixed diff
+无项目叶且索引缺失时保留配置路径/null指纹；QA按当前内置来源、存在的项目索引及实际差异独立判定； `qa_handoff_cli.py validate --input RESULT --task-pack CURRENT_QA_PACK` prevents PASS when the Task Pack omitted a rule, fixed diff
 scope is incomplete, or changed-path/rule evidence is missing. These machine
 records remain internal; users receive concise natural-language decisions.
 
@@ -439,7 +445,7 @@ business_confirmation_policy:
   additional_gates: exceptional
 ```
 
-Every non-Trivial request asks once for `requirements_approved`. Non-UI work and proven
+Full请求在规划后使用一次`requirements_approved`；Light已有明确范围授权时不重复确认。 Non-UI work and proven
 `UI-Conformance` work have no later business confirmation. `UI-Conformance` is limited to production
 corrections with `surface_kind: production_ui`, `qa_scope: request`, `design_delta: none`,
 `prototype_policy: not_applicable`, structured
@@ -467,8 +473,7 @@ Feature details include current functional and architectural rationale; a cross-
 have one shared detail in the same directory. There is no separate ADR category and no chronological
 decision log. Replace obsolete explanations in place.
 
-`docs/plans/` holds decided changes and enough current progress to resume unfinished work. Trivial
-does not save a plan by default; Light saves only for actual pause/recovery/handoff or explicit user
+`docs/plans/` holds decided changes and enough current progress to resume unfinished work. Light saves only for actual pause/recovery/handoff or explicit user
 request; Full is saved by PM after requirements confirmation (including applicable prototype choice)
 and before first design/implementation dispatch. Saving Light does not invoke Full planning Skills.
 One independent requirement owns one plan, updated in place for effective visual changes or QA rework.
@@ -512,10 +517,10 @@ requests them; existing project assets may be reused.
 Platform security prompts for destructive, production, paid, external-mutation, or
 privileged operations remain mandatory and are outside the default business-confirmation policy.
 
-Non-Trivial production work has one writer per owned path. Every writer returns real build
+Light／Full都坚持一条拥有路径一个Writer；Full继续以下请求QA链。 Every writer returns real build
 or test evidence. After all writers in the current request dependency closure finish, the
 PM runs one integrated QA; unrelated project work neither blocks that QA nor needs to stop.
-QA reports to the PM and does not modify production business code. For non-Trivial work, only a QA PASS permits
+QA reports to the PM and does not modify production business code. Full中只有有效QA PASS才允许
 warranted controlled-document updates, PM commit assessment, memory closeout, and the final user report.
 
 ### Generated core workflow
@@ -546,7 +551,7 @@ under user control.
 
 `xy-code-standards` 提供实现判断和只读审查方法，`xy-ui-design` 提供规范落实、一致性与
 高保真交付方法与通用规范正文。三份内置来源、已批准项目特有规则及当前指纹构成适用权威；
-参考项目的满意评价不构成通用颜色、材质或审美授权。Trivial 同样适用代码方法，仍按原早退路线完成。
+参考项目的满意评价不构成通用颜色、材质或审美授权。Light同样适用代码方法，按当前包与实际风险交接。
 角色常驻职责与权限保留，条件细节从 Skill 读取；字符／字节体积变化不等于真实 token 节省。
 
 Codex 角色中的发现上下文复用原发现器，将相同技术栈／证据和命令模板分组，再保留
@@ -584,7 +589,7 @@ when its actual root/base and tool binding are verified; unsupported hosts safel
 Read [worktree execution and delivery](platforms/shared/skills/xy-workflow/references/worktree-delivery.md)
 only for that branch. `lib/worktree_cli.py` provides creation, exact Git scope inspection and guarded
 fast-forward delivery; the existing DAG now includes revision-bound integration verification before
-QA. Local PM transport checkpoints are not final QA/merge authorization. Ordinary Trivial/Light
+QA. Local PM transport checkpoints are not final QA/merge authorization. Ordinary Light
 tasks, prototype choice, standards and memory assessment remain unchanged. Runtime metadata stays
 internal and useful recovery facts stay in the existing plan, not a second worktree ledger.
 
@@ -593,7 +598,7 @@ internal and useful recovery facts stay in the existing plan, not a second workt
 - `AGENTS.md` is the shared compact instruction entry: essential boundaries and task-triggered
   navigation. The Claude-only section routes to its own on-demand integration details.
 - `CLAUDE.md` contains only `@AGENTS.md`, using Claude's official import syntax without duplicating rules.
-- `/xy-workflow` owns the complete non-Trivial route; no phase or compatibility command layer is installed.
+- `/xy-workflow` owns the Light／Full routes; no phase or compatibility command layer is installed.
 - Every generated Custom Agent has the Claude `Skill` tool. Implementers preload
   `xy-code-standards` and `xy-build-verify`; UI preloads `xy-ui-design`, `ui-ux-pro-max` and `xy-prototype-verify`; QA preloads
   `xy-qa-review`.
@@ -648,7 +653,7 @@ worktree 流程以及 Codex、Antigravity 的入口均不变。
 根 `AGENTS.md` 只常驻任务分级、关键确认、所有权、规范/QA 和输出边界，以及
 带读取条件的流程索引。详细共用流程复用现有 `xy-workflow` 与其 references；
 各平台 PM 细则位于 `.agent-workflow/platforms/<host>/references/pm-integration.md`，
-当前 PM 仅在首次编排时读取自己的平台细则。Trivial 局部修改不预读整套流程。
+当前PM首次编排时只读自己的平台细则；Light只读适用分支，不预读整套Full流程。
 同一上下文已完整读取且未改变的内容可复用；上下文缺失或规则变更时恢复所需部分。
 
 每位 Agent 仍须独立完整读取其必需 Skill、指令及适用规范。长文应分开读取，使用连续
@@ -698,11 +703,13 @@ GUARD_STRICT=1 bash .agent-workflow/scripts/guard.sh
 按需复用原生能力的操作路径集中在
 [运行记录工具](platforms/shared/skills/xy-workflow/references/runtime-records.md#原生能力观察用量与同-agent-续用)：
 doctor 区分文档、明确来源观察和运行未验证；native_usage 读取显式本地导出并保留原生
-计数语义；任务图可选 agent_ref 绑定真实 ID，continuation 按 PM 当前观察提供只读续用
-建议。取消／未知／失效／跨宿主不自动恢复，ID 不证明批准、存活或完成。
+计数语义；2.0图／单包按模块职责绑定agent_alias，派发后agent_ref绑定真实ID且不可覆盖；
+continuation只建议同任务等待／续用，退役／取消／未知／失效／跨宿主不得自动恢复。ID不证明
+批准、存活或完成；不新增Agent池、runner或第二状态账本。
 [QA 输入合同](platforms/shared/skills/xy-qa-review/references/inputs.md#原生结构化交接)
-提供 schema／extract；原 validate、独立 QA 和完整 Task Pack 交接保持不变。
-各宿主差异见下列 PM integration，工具不新增普通只读／Trivial 门禁或自动启用可选模式。
+提供2.0 schema／extract；validate与extract必须传当前--task-pack，以handoff_ref绑定当前
+QA任务、别名、原生ID和包SHA。Full只导出本任务及必要权威，Light同形单包无需DAG。
+各宿主差异见下列PM integration，不因工具存在新增门禁或自动启用可选模式。
 
 | Platform | PM instructions / entry | Roles | Core Skills |
 |:---------|:------------------------|:------|:------------|

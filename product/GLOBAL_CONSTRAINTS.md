@@ -1,21 +1,25 @@
-# Global Mandatory Constraints
+# Global Mandatory Constraints — 2.0
 
 Applies to every subagent. Complements PM orchestration in `$xy-workflow`.
 
 The canonical workers are `xy-web`, `xy-desktop`, `xy-backend`, `xy-apple`, `xy-android`,
 `xy-uiux`, and read-only `xy-qa`; the PM remains the separate main-session orchestrator.
 
-Clear one-file non-UI corrections with no shared contract follow WORKFLOW's `General Trivial early
-exit`: applicable engineering rules, local verification and scoped commit assessment, without
-entering formal dispatch or QA merely to finish. Material risk and stricter rules still take precedence.
+Only Light／Full and the schema_version: 2 task/handoff contract are accepted. Light defaults to
+native implementation with a self-contained current task pack and minimum verification; it does not
+force Full planning, DAG, saved plans, duplicate approval or independent QA. Before dispatch assess
+scope/risk; at handoff assess actual independent audit, documentation and memory needs. Full keeps
+its applicable planning/approval and exactly one independent request reviewer. Safety, path and
+project rules bind both levels. No local-only verification may be relabeled QA PASS.
 
-Classify bounded low-risk UI copy using `.agent-workflow/product/WORKFLOW.md` -> `Trivial UI copy` before any UI
-route. The main session handles it directly with applicable standards and local verification,
-without a DAG, repeated approval, prototype choice or independent QA. Business/permission/privacy/
-destructive semantics and unknown shared impact are excluded. No document or memory churn is needed.
-The graph, task-pack, business-gate and post-QA closeout clauses below govern non-Trivial work;
-All Trivial work may finish with a scoped commit assessment after real local verification, never fake
-QA PASS. Safety permissions, protected paths and stricter project rules remain binding on all work.
+PM owns coordination and its documents. Implementation defaults to the authorized native role;
+only an explicit user instruction asking PM itself to implement the current scope creates that
+narrow exception. Workflow instructions and Skills are implementation resources regardless of suffix.
+Follow WORKFLOW's implementation-ownership and agent-instance-lifecycle as the authoritative rules.
+New workers/QA receive only the current self-contained task pack, never inherited/copied PM or
+sibling histories or a parent-history fork. Alias binds module/role; independent tasks use new IDs.
+After acceptance and evidence preservation, use actual native close or irreversibly retire when
+unavailable; retirement neither proves destruction/history erasure nor releases still-active locks.
 
 The pack is the only workflow orchestrator. `grill-me` is the self-contained Full-request coverage
 check and requirements interview; `xy-plan` is the self-contained draft-planning procedure. Neither
@@ -38,13 +42,12 @@ For Full work, the mandatory PM order is: classify Full using available facts �
 materially needed auxiliary facts → Grill Me coverage check → `xy-plan` with `plan_state: draft` → PM decides the post-QA controlled-document projection →
 request `requirements_approved` and, for design-change UI, present a recommendation and obtain the
 user's prototype choice → freeze and persist the approved Full plan in `docs.plans` → validate and dispatch →
-integrated QA. `PROJECT.md` and active feature documents remain the last QA-verified truth during
-execution; only the PM applies a required projection after QA PASS. Trivial does not save a plan by
-default; Light saves only for actual pause/recovery/handoff or explicit request. Saving never upgrades
+integrated QA. `PROJECT.md` and active feature documents remain the last verified truth during
+execution; only the PM applies a required projection after applicable verified acceptance. Light saves only for actual pause/recovery/handoff or explicit request. Saving never upgrades
 Light or adds gates. Follow `xy-workflow/references/plan-lifecycle.md` for revisions, complete task
 replacement and selective recovery without repeating valid completed work.
 
-After QA PASS and projection validation, the PM performs one scoped local commit assessment before
+After applicable acceptance and projection validation, the PM performs one scoped local commit assessment before
 memory closeout. It stages only request-owned verified paths, preserves unrelated user work, and
 does not infer push, merge, tag, release, or remote-mutation authority. This automatic action is not
 a third business-confirmation stage.
@@ -98,7 +101,7 @@ affected dispatch; unchanged facts and valid installation evidence do not requir
   only for meaningful coverage, changed inputs, failures, stale evidence or unresolved concerns.
 - 默认采用最小充分验证；全量测试须有具体覆盖依据或用户／项目显式要求。
   必需检查通过且证据未失效后停止，不因进入 QA、提交或最终交付再追加保险回归。
-  复用有效证据仍保留独立源码／规范审查，以及现有 CI、Hook 与集成验证要求。
+  复用有效证据仍保留 Full／实际要求的独立源码与规范审查，以及现有 CI、Hook 与集成验证要求。
 - Return the exact command, exit code, concise relevant output, and a resolvable
   reference to the complete terminal log.
 
@@ -113,6 +116,7 @@ affected dispatch; unchanged facts and valid installation evidence do not requir
 - PM asks the worker when a long task lacks useful feedback; it does not inspect worker history or
   execution logs for progress unless the user explicitly requests that inspection. Receiving the
   final handoff and auditing its evidence remain required and do not imply QA PASS.
+- 完成交付接收、必要验证／QA与证据保护后按现有任务边界结束或退役实例；同任务短返工及同轮原 Reviewer 的必要差量复查保留，不能简单 LRU 淘汰。
 - After 2 failed fix attempts: escalate to PM (no infinite thrash).
 - On PM kill/stop: stop editing immediately.
 

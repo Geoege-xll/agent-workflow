@@ -1,7 +1,7 @@
 """把 PM 明示的精简决定机械组装为初始任务图，不推导业务权威。
 
 本入口只补重复结构与当前文件指纹；规则选择、保护边界、门禁、批准及任务合同
-仍来自输入。完成状态和执行身份不能经初始化导入，旧图继续使用原有 update。
+仍来自输入。完成状态和执行身份不能经初始化导入，现有2.0图继续使用 update。
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ except ImportError:
 
 
 INPUT_FIELDS = {
+    "schema_version",
     "request_id", "requirements_fingerprint", "capacity", "approved_gates",
     "active_paths", "active_semantic_locks", "adapter_path", "standards", "tasks",
 }
@@ -35,6 +36,7 @@ STANDARDS_FIELDS = {
     "leaves", "protected_paths",
 }
 TASK_FIELDS = {
+    "workflow_level", "module", "agent_alias", "instance_policy", "context_policy",
     "id", "task_type", "role", "surface_kind", "design_mode", "goal", "depends_on",
     "blocks", "gates", "owned_paths", "semantic_locks", "input_contracts",
     "output_contracts", "acceptance_evidence", "verification_commands", "ui_change",
@@ -108,7 +110,9 @@ def initialize(decisions: Any, root: Path, output: Path,
     安全读取、协作锁和 missing 前置条件，不另建备份、状态账本或执行器。
     """
     source = _object(decisions, "init decisions", INPUT_FIELDS,
-                     {"request_id", "capacity", "standards", "tasks"})
+                     {"schema_version", "request_id", "capacity", "standards", "tasks"})
+    if type(source["schema_version"]) is not int or source["schema_version"] != 2:
+        raise TaskGraphError("init schema_version must be integer 2")
     # JSON 标准不包含 NaN/Infinity；Python 解码器接受的扩展值不能落入正式记录。
     json.dumps(source, allow_nan=False)
     request_id = _text(source["request_id"], "request_id")
@@ -197,7 +201,7 @@ def initialize(decisions: Any, root: Path, output: Path,
         policy.setdefault("direct_edit", "forbidden_without_exception")
 
     graph = {key: copy.deepcopy(source[key]) for key in
-             ("request_id", "capacity", "requirements_fingerprint") if key in source}
+             ("schema_version", "request_id", "capacity", "requirements_fingerprint") if key in source}
     if "requirements_fingerprint" in graph and (
             not isinstance(graph["requirements_fingerprint"], str)
             or not SHA256_RE.fullmatch(graph["requirements_fingerprint"])):

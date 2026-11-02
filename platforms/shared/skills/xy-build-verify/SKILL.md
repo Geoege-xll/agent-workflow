@@ -1,23 +1,19 @@
 ---
 name: xy-build-verify
-description: Verify scoped build or compilation success and runnable-result evidence for production implementation, with relevant tests before independent QA handoff.
+description: "验证Light／Full当前交付的构建、可运行结果与相关测试，按实际风险交接真实证据。"
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-build-verify
 
-All Trivial work uses proportionate local verification and stops before this full handoff procedure;
-non-UI corrections follow WORKFLOW's `General Trivial early exit`. A missing full build is not itself
-a reason to create an independent QA task. Requested checks and stricter project rules still apply.
+Light／Full 都执行与实际交付类型相符的最小充分验证。生产代码保留受影响目标构建／
+编译成功和最小启动／冒烟或关键入口证据；文档与静态原型按各自类型验证。Light
+默认原生实施者，使用当前自包含任务包；加载本 Skill 不强制 Full 计划、DAG 或独立 QA。
+完成后由 PM 依据实际风险评估独立审计、文档和记忆。Full 及选定的必需独立 QA 不得省略。
+普通文案使用 WORKFLOW 的 `Light UI copy` 消费者与资源检查，不能按后缀豁免实际构建输入。
 
-Trivial UI copy uses the local verification in `.agent-workflow/product/WORKFLOW.md` -> `Trivial UI copy`;
-do not invoke this full handoff procedure merely because a text edit touches production UI.
-Loading this Skill does not create a build, independent QA or post-QA closeout requirement.
-生产代码交付本身要求受影响目标构建／编译成功并具有可运行证据；Trivial 在主会话
-完成相应局部验证，无需执行本 Skill 的完整交接。纯文档／静态原型按各自类型验证。
-
-For non-Trivial verification, read [verification scope](references/verification-scope.md).
+验证前读取 [verification scope](references/verification-scope.md)。
 Select proportionate commands from the task pack, adapter and repository evidence; discovered
 commands are candidates, not a mandatory full-suite list. Preserve required checks, run selected
 commands for real, and record every exit code. Reuse valid evidence and stop when coverage is
@@ -48,10 +44,12 @@ the PM. Never invent, paraphrase away, or claim unexecuted validation.
 现有 Validation 中说明扩大／重跑的触发原因以及仍未验证的相关范围；没有缺口不新增
 验证报告或测试文件。局部通过只能支持该范围，不写成“全部测试通过”。
 
-`BUILD_VERIFIED` is evidence, not a QA result or user-facing completion state. For non-Trivial work, preserve the order
+`BUILD_VERIFIED` is evidence, not a QA result or user-facing completion state. For Full work, preserve the order
 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`;
 this Skill creates no QA report, design artifact,
-approval record, or metadata file.
+approval record, or metadata file. Light 按实际交接评估收口，未审计不得称 QA PASS。
+PM 接收证据并完成必要反馈窗口后，按 WORKFLOW 的实例生命周期结束或退役；完整日志
+须保留可读引用，不能因结束原生实例失去唯一证据。
 
 For isolated tasks, hand evidence back with the exact worktree/base/checkpoint identity; only PM
 creates scoped local transport checkpoints. Follow `xy-workflow/references/worktree-delivery.md` for

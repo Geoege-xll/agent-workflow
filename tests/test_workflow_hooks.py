@@ -315,6 +315,9 @@ class HookTest(unittest.TestCase):
         # 这里只核对回调合同，不把提醒文本匹配当成模型服从或用户授权的证据。
         self.assertIn("用户明确跳过", hooks.ENTRY)
         self.assertIn("已完成", hooks.ENTRY)
+        self.assertIn("Light/Full", hooks.ENTRY)
+        self.assertNotIn("Trivial", hooks.ENTRY + hooks.RECOVERY)
+        self.assertIn("退役禁止复用", hooks.RECOVERY)
         self.assertLess(len(hooks.ENTRY), 250)
 
     def test_recovery_only_restores_missing_context_and_startup_is_quiet(self):

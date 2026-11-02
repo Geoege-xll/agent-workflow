@@ -3,7 +3,7 @@
 > PM-owned current execution plan. Update this file in place; do not record conversation or command
 > logs. This is intended change and resumable work, not verified feature truth or automatic approval.
 
-- Task level: Full | Light | Trivial (explicit save request only)
+- Task level: Full | Light
 - Status: active | paused | completed | cancelled
 - Confirmation basis: <user confirmation reference and exact approved scope; pending UI decisions remain pending>
 - Prototype choice: required | waived_by_user | not_applicable

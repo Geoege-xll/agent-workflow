@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tests.test_scheduler_boundaries import v2_graph, with_builtin_standards
 
 from lib.task_graph import (
     Task,
@@ -155,16 +156,16 @@ def _standards_payload(payload: dict[str, object]) -> dict[str, object]:
                     "rule_ids": ["des-baseline"],
                 }
             )
-    return upgraded
+    return with_builtin_standards(v2_graph(upgraded))
 
 
 class BuiltinSourceContractTest(unittest.TestCase):
     def invoke(self, payload):
         cli = Path(__file__).resolve().parents[1] / "lib/task_graph_cli.py"
-        return subprocess.run([sys.executable, str(cli), "validate"], input=json.dumps(payload),
+        return subprocess.run([sys.executable, str(cli), "validate"], input=json.dumps(v2_graph(payload)),
                               text=True, capture_output=True, check=False)
 
-    def test_builtin_only_and_installed_sources_validate_while_legacy_stays_valid(self):
+    def test_builtin_and_project_supplements_validate_in_current_v2_graph(self):
         from tests.test_scheduler_boundaries import _writer_payload
         for payload in (_builtin_standards_payload(), _builtin_standards_payload(".agent-workflow/"), _writer_payload()):
             result = self.invoke(payload)
@@ -182,11 +183,11 @@ class BuiltinSourceContractTest(unittest.TestCase):
         result = self.invoke(payload)
         self.assertNotEqual(0, result.returncode)
         self.assertIn("selected builtin engineering baseline", result.stderr)
-        # 旧格式也不能通过只删GENERAL、仅留专项叶来绕过基础工程输入。
+        # 2.0项目叶只能补充，删除内置来源后即使项目规则完整也不能替代底线。
         standards["leaves"] = [project]
         result = self.invoke(payload)
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("GENERAL.md baseline in standards_contract", result.stderr)
+        self.assertIn("builtin engineering baseline", result.stderr)
 
     def test_builtin_sources_reject_stale_ids_wrong_domains_and_missing_path_coverage(self):
         for mutation, message in (("stale", "fingerprint is stale"), ("unknown-id", "unknown rule"),
@@ -690,7 +691,7 @@ class TaskGraphTest(unittest.TestCase):
         cli = Path(__file__).resolve().parents[1] / "lib/task_graph_cli.py"
         with tempfile.TemporaryDirectory(prefix="backend-standards-") as raw:
             source = Path(raw) / "graph.json"
-            source.write_text(json.dumps(payload), encoding="utf-8")
+            source.write_text(json.dumps(with_builtin_standards(v2_graph(payload))), encoding="utf-8")
             result = subprocess.run(
                 [sys.executable, str(cli), "validate", "--input", str(source)],
                 text=True,
@@ -699,8 +700,8 @@ class TaskGraphTest(unittest.TestCase):
             )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
-        # 即使专项后端叶能覆盖写路径和任务必需规则，生产 Writer 也不能绕过
-        # GENERAL 中的跨项目基础规范；这个约束不影响原型设计任务。
+        # 2.0内置规则是唯一通用底线。项目规则可在GENERAL或专项叶补充，不能强制
+        # 一个空GENERAL作为兼容门禁；移到专项叶后仍保留当前真实内置读取来源。
         omitted_baseline = json.loads(json.dumps(payload))
         omitted_baseline["standards_contract"]["leaves"][0]["rule_ids"] = [
             "eng-common-001"
@@ -725,16 +726,18 @@ class TaskGraphTest(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-        self.assertEqual(2, rejected.returncode)
-        self.assertIn("requires selected GENERAL.md baseline", rejected.stderr)
+        self.assertEqual(0, rejected.returncode, rejected.stderr)
 
-        # 不只检查任务包读取列表，还要拒绝从冻结规范合同里直接删掉基础叶。
+        # 真实拒绝的是删除内置来源，即使项目补充叶完整也不能替代。
         missing_baseline_contract = json.loads(json.dumps(omitted_baseline))
         missing_baseline_contract["standards_contract"]["leaves"] = [
             leaf
             for leaf in missing_baseline_contract["standards_contract"]["leaves"]
-            if leaf["path"] != "docs/standards/GENERAL.md"
+            if not leaf["path"].startswith("platforms/")
         ]
+        missing_baseline_contract["tasks"][0]["controlled_document_access"]["documents"] = [
+            document for document in missing_baseline_contract["tasks"][0]["controlled_document_access"]["documents"]
+            if not document["path"].startswith("platforms/")]
         with tempfile.TemporaryDirectory(prefix="backend-standards-no-contract-") as raw:
             source = Path(raw) / "graph.json"
             source.write_text(json.dumps(missing_baseline_contract), encoding="utf-8")
@@ -745,7 +748,7 @@ class TaskGraphTest(unittest.TestCase):
                 check=False,
             )
         self.assertEqual(2, rejected.returncode)
-        self.assertIn("requires GENERAL.md baseline in standards_contract", rejected.stderr)
+        self.assertIn("builtin engineering baseline", rejected.stderr)
 
     def test_cli_requires_frozen_engineering_authority_for_implementation_writers(self) -> None:
         """实现 Writer 缺失、跳过或伪造工程规范时，必须在派发前失败。"""
@@ -844,6 +847,12 @@ class TaskGraphTest(unittest.TestCase):
 
         incomplete_scope_task = json.loads(json.dumps(task))
         incomplete_scope_task["owned_paths"].append("services/model.py")
+        # 显式冻结原范围的内置引用，再扩大写范围；基础fixture补源助手不能把这条
+        # 故意留下的实际读取缺口补成覆盖完整，从而掩盖运行时边界。
+        builtin_document = _builtin_standards_payload()["tasks"][0]["controlled_document_access"]["documents"][0]
+        incomplete_scope_task["controlled_document_access"]["documents"].append({
+            **builtin_document, "applies_to": list(task["owned_paths"]),
+        })
         incomplete_scope = invoke(incomplete_scope_task)
         self.assertEqual(2, incomplete_scope.returncode)
         self.assertIn("standards do not cover owned path", incomplete_scope.stderr)

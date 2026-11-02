@@ -5,27 +5,19 @@ This entire managed section applies only in Antigravity; ignore other hosts' int
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
 without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 
-Use `/xy-workflow` for non-Trivial implementation; roles are `.agents/agents/xy-*.md`, Skills are
+Use `/xy-workflow` for Light and Full implementation; roles are `.agents/agents/xy-*.md`, Skills are
 `.agents/skills/xy-*/SKILL.md`. Only the PM may use `invoke_subagent`; role Agents never delegate and
 `max_depth` is `1`。Light／Full 默认派对应 subagent；PM 亲自实施例外及恢复边界见
 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`，原等级门槛不变。
-Dispatch READY tasks: `inherit` stays `inherit`, `worktree` becomes `branch`
+For Full READY tasks: `inherit` stays `inherit`, `worktree` becomes `branch`
 only when the actual runtime proves a distinct registered worktree root and the required base;
 `share` is forbidden. A branch name alone is not filesystem isolation. For multi-feature selection,
 integration and confirm/auto local main delivery, read `/xy-workflow`'s `references/worktree-delivery.md`.
 If isolated tool binding is unavailable, report it and retain safe ownership-based scheduling;
 never emulate isolation by concurrently switching branches in one directory or overwriting host settings.
 
-Clear one-file non-UI corrections with no shared contract use WORKFLOW's `General Trivial early exit`:
-applicable engineering rules, direct local verification, scoped commit assessment, then stop without
-DAG, repeated approval, independent QA or automatic document/memory closeout. Reclassify material risk.
-
-Classify Trivial UI copy before UI routes: explicit local wording only, unchanged business/behavior,
-no sensitive or unresolved shared impact; follow `.agent-workflow/product/WORKFLOW.md` -> `Trivial UI copy`.
-Edit directly with applicable standards and local checks. No repeated approval, Grill/plan/DAG,
-prototype choice, independent QA or document/memory churn; assess scoped commit after verification,
-without fake QA PASS. Stricter project rules and requested review still apply. The following
-execution and post-QA stages govern non-Trivial work, not this early exit.
+Light 先判断当前目标、风险、范围和实施者，默认派对应原生角色 subagent，最小充分验证
+必做；交接评估独立 QA、文档与记忆，不强制 Full 规划、DAG、计划保存或重复确认。
 
 Full: classify → facts → Grill Me → `xy-plan` draft → projection decision →
 `requirements_approved`; Grill Me remains requirements-only. For design-change UI, include the PM
@@ -33,7 +25,7 @@ recommendation and prototype choice in that confirmation; freeze truth until QA 
 Full work records the Grill Me coverage check and `plan_state: draft`; the pre-approval projection
 decision remains a draft, while post-QA controlled-document projection happens only after QA PASS.
 PM saves the approved Full plan in `docs.plans` before first design/implementation dispatch.
-Trivial does not save by default; Light saves only for actual pause/recovery/handoff or user request.
+Light saves only for actual pause/recovery/handoff or user request.
 For revisions/recovery follow `/xy-workflow`'s `references/plan-lifecycle.md`: one requirement, one
 current plan; replace affected complete worker/QA inputs and reuse unaffected verified work.
 Feature details include current architectural rationale, with no separate ADR category.
@@ -56,7 +48,7 @@ smallest diagnostic operation. Production QA may still use risk-based browser te
 frame may be persisted or used as approval evidence.
 
 Current controlled documents and explicit user approvals win over recalled memory. Without strict
-isolation or provenance, call neither recall nor save. For non-Trivial implementation, at BUILD_VERIFIED dispatch exactly one
+isolation or provenance, call neither recall nor save. For Full or Light assessed as requiring independent QA, at BUILD_VERIFIED dispatch exactly one
 integrated, read-only `xy-qa`. Waived work skips old-prototype comparison.
 
 The reviewer tries `host-native-review`, then one `installed-code-review-skill` proven installed and
@@ -64,7 +56,7 @@ capable, then `internal-xy-qa-procedure`, moving forward only on technical unava
 Superpowers option is `requesting-code-review/code-reviewer.md`. Findings or `FAIL` never switch
 review method or reviewer.
 
-Final QA outcome: PASS | FAIL. Require `qa_handoff_cli.py validate`. Completion: QA PASS → projection
+Final QA outcome: PASS | FAIL. Require `qa_handoff_cli.py validate --task-pack <current-qa-pack.json>`. Completion: QA PASS → projection
 → PM commit assessment → memory closeout via `/xy-project-memory` → final user report. Setup owns
 marked artifacts and one signed, named assist Hook in `.agents/hooks.json`; other host settings,
 MCP, plugins, permissions, Agent mode and Artifact review policy stay unchanged. The Hook reminds
@@ -76,6 +68,22 @@ only for Hook setup or diagnostics.
 
 ## 原生工具短路径
 
+2.0 只派发 schema_version: 2 的当前单任务包：task、适用 standards_contract 和必要批准／UI
+依据。稳定 agent_alias 绑定项目相对 module 与规范 role；instance_policy: fresh 和
+context_policy: handoff_only 不允许复制完整 PM／兄弟历史。每个独立任务按需调用
+invoke_subagent，以自包含当前任务初始 Prompt 取得新 ID；必要当前文件及规范仍完整读取。
+无法证明原生独立初始上下文时报告阻塞，不用父历史 fork 降级、不预建或填满平台额度。
+
+同任务连续实现、近期短返工及同轮 Reviewer 差量复查可向原 ID 续发。反馈窗口结束且 PM
+已接收交付、必要验证／QA 完成后，先保护临时 worktree 中的成果、唯一日志和必要证据，
+再使用当前实际暴露且获授权的原生结束能力。官方 kill 会清理临时 worktree、禁止恢复，
+历史转录仍保留；因此不能先 kill 再尝试取回唯一交付，也不声称永久删除历史。
+缺少 manage_subagents 的 kill 等原生能力或调用失败时，只记录 agent_retired、禁止续用，
+原生结束未确认；不能声称销毁、清空或释放线程额度。退役不释放仍执行的任务锁。
+运行数和打开线程数按实际宿主口径分别观察；压力优先回收已验收且交接充分实例，保留
+正在执行、证据未交付和必要复查者，为后续必要 QA／集成安排容量。resume／compact
+不等于 prepareForReuse；不建立 Agent 池、runner、daemon 或第二状态机。
+
 按需使用 `xy-workflow/references/runtime-records.md` 的 doctor、用量与 continuation 路径。
 doctor 默认不启动进程，`--probe` 仅 `--version`，不执行 `/skills`。其
 documented/source_observed/runtime_unverified 区分文档、明确项目来源与运行未验证；
@@ -86,11 +94,11 @@ documented/source_observed/runtime_unverified 区分文档、明确项目来源�
 PM 用实际 `invoke_subagent` 结果的 ID 经现 update 补记 `agent_ref`，以当前观察查询
 `continuation --host antigravity --observed-state <当前观察>`；只有当前已暴露且授权的
 原生续发／等待工具才能执行建议。取消、未知、失效或跨宿主均阻塞自动续用，仍须交接
-完整 Task Pack／scope；没有能力时不自建 runner、daemon、MCP 或替代 Reviewer。
+完整 Task Pack／scope；退役禁止续用，没有能力时不自建 runner、daemon、MCP 或替代 Reviewer。
 AGY 原生累计用量保留 unknown 初始基线、last_cumulative 与 observed_delta，不逐条累加。
 
 QA 结构化输出见 `xy-qa-review/references/inputs.md`：支持时同次授权调用使用
 `--json-schema <schema-json>`，再 `qa_handoff_cli.py extract --host antigravity
---input <native-result.json>`。可选 usage 缺失不成为 QA 门禁。diff／Artifact 人工审阅
+--input <native-result.json> --task-pack <current-qa-pack.json>`。可选 usage 缺失不成为 QA 门禁。diff／Artifact 人工审阅
 不冒充原生 AI 审查或独立 AI QA；native、boost、teamwork 等模式不自动启用，
 也不调整现有 Artifact 策略、权限或 model／effort 来促成调用。

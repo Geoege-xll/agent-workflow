@@ -1,12 +1,13 @@
 # Implementation acceptance checks
 
-Read this branch only for non-Trivial implementation acceptance. The role defines identity and
+本分支用于Full或实际要求独立QA的Light实现验收。 The role defines identity and
 permissions; the selected review method supplies general code-review evidence. These checks add the
 project acceptance constraints and do not start another complete generic code review.
 
 ## Scope, source and verification
 
-Read current request authority, selected controlled documents, actual source/diff and complete logs.
+先完整读取当前2.0 QA任务包并核对handoff_ref所需身份／SHA；只消费当前请求权威、选定规范、
+实际source／diff与必要完整日志，不继承或复制PM／兄弟会话。
 Pin every root, nested repository and submodule independently to an explicit base/head range and
 SHA-256 diff fingerprint; a clean worktree does not exclude already committed request changes.
 Verify the native/installed method's actual scope against that binding before consuming its output.

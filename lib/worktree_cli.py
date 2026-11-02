@@ -23,6 +23,7 @@ if __package__:
     from .qa_handoff_cli import QAHandoffError, validate_qa_handoff
     from .task_graph import TaskGraphError, request_closure
     from .task_graph_cli import _execute, _tasks
+    from .task_graph_records import read_record, decode
     from .validate_project_config import validate_docs
     from .validate_project_docs import validate as validate_documents
     from .worktree_policy import WorktreePolicyError, revision, settings
@@ -30,6 +31,7 @@ else:
     from qa_handoff_cli import QAHandoffError, validate_qa_handoff
     from task_graph import TaskGraphError, request_closure
     from task_graph_cli import _execute, _tasks
+    from task_graph_records import read_record, decode
     from validate_project_config import validate_docs
     from validate_project_docs import validate as validate_documents
     from worktree_policy import WorktreePolicyError, revision, settings
@@ -283,7 +285,22 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     qa = payload.get("qa_handoff")
     if not isinstance(qa, dict):
         raise DeliveryError("delivery requires the independent QA handoff")
-    validate_qa_handoff(qa)
+    pack_path = payload.get("qa_task_pack")
+    if not isinstance(pack_path, str) or not Path(pack_path).is_absolute():
+        raise DeliveryError("delivery requires the absolute current qa_task_pack file")
+    pack_body = read_record(Path(pack_path))
+    try:
+        validate_qa_handoff(qa, pack_body)
+    except QAHandoffError as exc:
+        # 对外维持交付边界的失败类型，同时保留原始QA诊断链，不把拒绝当作无结果。
+        raise DeliveryError(str(exc)) from exc
+    current_qa = [task for task in graph["tasks"]
+                  if task["request_id"] == request_id and task["task_type"] == "qa"]
+    handed_qa = decode(pack_body)["task"]
+    # 固定diff和PASS尚不足以证明当前请求的同一Reviewer已审查；对照权威图身份。
+    if (len(current_qa) != 1 or any(current_qa[0].get(field) != handed_qa.get(field)
+                                   for field in ("id", "request_id", "agent_alias", "module", "role", "agent_ref"))):
+        raise DeliveryError("QA task pack does not match the current request's unique Reviewer")
     if qa["audit_result"] != "PASS":
         raise DeliveryError("QA FAIL blocks delivery")
     if qa["review_method"]["scope_ref"]["repositories"] != [current_scope]:

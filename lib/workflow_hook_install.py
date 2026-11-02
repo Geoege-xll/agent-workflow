@@ -165,7 +165,8 @@ def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
         current = result.get(OWNER)
         enabled = True
         if current is not None:
-            # 只迁移内容签名仍有效的旧事件；保留用户关闭状态，不接管同名用户条目。
+            # 历史事件仅用于磁盘归属证明后替换为当前 SessionStart，不接受旧事件运行。
+            # 保留用户关闭状态，不接管同名用户条目；不能为 2.0 同步删去这层内容签名保护。
             if not isinstance(current, dict) or set(current) - {"enabled", "PreInvocation", "SessionStart"}:
                 raise ValueError("user-owned Antigravity Hook name collision")
             events = set(current) - {"enabled"}

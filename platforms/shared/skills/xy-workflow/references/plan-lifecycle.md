@@ -1,17 +1,15 @@
 # Requirement Plans, Recovery and Change Handoff
 
 Use when deciding whether to save a plan, revising an approved request, or resuming related unfinished
-work. This supports the existing Trivial/Light/Full routes; it adds no role, confirmation gate or
+work. This supports the 2.0 Light/Full routes; it adds no role, confirmation gate or
 automatic memory call. Explicit task-scoped workflow opt-out and save/no-save instructions prevail;
 applicable project constraints and permission boundaries still apply.
 
 ## Save by task level
 
-- Trivial: do not create a plan by default. An explicit save request may create a short note without
-  invoking Grill Me/xy-plan, prototype work, a graph or independent QA merely to save it.
 - Light: do not create a plan by default. PM saves a short recovery plan only for an actual pause,
   cross-session continuation, handoff need, or explicit user request. Saving does not upgrade Light
-  to Full, activate Full planning Skills, or add approval/QA beyond the existing Light route.
+  to Full, activate Full planning Skills, require a DAG, repeat existing authorization or force independent QA.
 - Full: after requirements approval and any applicable prototype choice, PM saves the approved
   current plan under adapter-resolved `docs.plans` before the first design or implementation dispatch.
   xy-plan still only drafts; PM owns persistence. Do not wait for visual approval to save the plan.
@@ -117,7 +115,7 @@ confirmation; ask only for missing material decisions, not another approval of t
 - Update this revision's requirements, scope, acceptance and `prototype_decision` in the current
   task state and same plan if one is saved; bind the user instruction to the current requirement
   fingerprint and exact affected surfaces with `selected_policy: waived_by_user`. Do not turn an
-  actual interaction/design change into `UI-Conformance`, Trivial work, or a non-material hash refresh.
+  actual interaction/design change into `UI-Conformance`, low-risk Light copy, or a non-material hash refresh.
 - Replace affected active task/QA inputs and dependency closure using existing graph fields. Detach
   superseded prototype-mode tasks and visual gates from this revision, retaining earlier authorized
   work as history, not unfinished work to replay or fake-complete. If an affected designer is running,
@@ -151,8 +149,9 @@ Reuse completed work whose scope/artifacts/evidence remain valid; recheck or rew
 uncertain parts. Do not replay the old plan from its first step, restart live workers, reconstruct stale
 locks as active, or mark prior work failed just because its Agent session is no longer active.
 实施者、分级及例外来源按 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`
-核对；沿用可用的原 Agent 和有效证据，压缩摘要或旧状态不创造 PM 实施授权，也不把
-未完成的 Light／Full 改走 Trivial 早退。原生续用能力与取消／失效边界见当前宿主集成细则。
+核对；只有同任务连续实现或短返工可沿用可用原实例和有效证据，独立任务新实例／ID。
+压缩摘要不创造PM实施授权或改变原等级，不复制PM／兄弟完整会话。原生结束／退役、
+取消／失效边界按WORKFLOW实例生命周期及当前宿主细则，保留已有成果与必要完整日志。
 Restore the current remaining graph from verified facts; the transient CLI snapshot is not the only
 carrier of outstanding decisions or work. Report the smallest missing approval or fact when needed.
 

@@ -1,10 +1,9 @@
 ## Implementation and QA loop
 
-Do not enter this loop for any locally verified Trivial work, including Trivial UI copy. Its applicable early exit above also
-avoids the post-QA memory/projection loop; no QA result is synthesized to satisfy it.
-Standalone read-only audit also stops at its scoped conclusion under WORKFLOW's corresponding
-branch; this implementation loop does not audit that report again. A read-only reviewer performing
-implementation acceptance still follows this loop and its full handoff requirements.
+Light 使用当前单任务包、默认原生实施者及最小充分验证；交接时按实际风险评估独立 QA、
+文档与记忆，不强制 Full 图或 QA。Full 使用下述图与唯一独立 QA 链；Light 实际需要 QA
+时使用同一只读验收合同，不能把局部验证改写成 QA PASS。独立只读审计交付结论后停止，
+不为审计报告创建实现者、BUILD_VERIFIED 或另一轮审计。
 
 ### Progress and worker reports
 
@@ -33,6 +32,9 @@ implementation acceptance still follows this loop and its full handoff requireme
 按配置路径及 null 指纹绑定，不为 QA 新建 GENERAL/空索引或重复通用规则。
 
 ### Execution and acceptance
+
+下述图、qa-ready 与强制 QA 步骤适用于 Full；Light 仅使用其实际适用的验证、交接和审计分支。
+两等级实例身份／上下文／结束边界统一按 WORKFLOW 的 `agent-instance-lifecycle`，不另建池。
 
 1. Establish successful snapshot validation, then run `task_graph_cli.py ready`. Reuse a successful
    `update` result for the same bytes; otherwise run `validate` first. Dispatch every returned task
@@ -71,6 +73,8 @@ implementation acceptance still follows this loop and its full handoff requireme
    Do not wait for
    unrelated project work.
    QA receives the approved contract, applicable concrete page links and fingerprints, diff,
+   当前自包含2.0 QA包与必要批准／规范依据，不含兄弟完整任务或会话。新Reviewer不得继承父历史，
+   并以schema_version:2及handoff_ref绑定当前QA包的请求／任务／别名／agent_ref与字节SHA。
    evidence references, any task-relevant start-mode `memory_context` that actually exists, and the
    Skill policy. The absence of `memory_context` when no retrieval ran is not a QA finding. QA
    applies `xy-qa-review` as its
@@ -80,7 +84,7 @@ implementation acceptance still follows this loop and its full handoff requireme
    An unavailable required Skill blocks PASS; missing optional coverage remains explicit.
    Freeze each root or nested repository as an explicit base/head range, changed-path list, and
    SHA-256 diff fingerprint. Validate QA's internal changed-path classifications and per-rule
-   standards evidence with `qa_handoff_cli.py validate`; raw scope and coverage JSON stay internal.
+   standards evidence with `qa_handoff_cli.py validate --input RESULT --task-pack CURRENT_QA_PACK`; raw scope and coverage JSON stay internal.
    Isolated work also requires the pinned integration verification described in
    [worktree delivery](worktree-delivery.md); QA reviews the composed result, not separate branch PASSes.
    For a required prototype, deterministic validation may read the complete dependency bytes and
@@ -101,7 +105,8 @@ implementation acceptance still follows this loop and its full handoff requireme
 6. After QA PASS, activate `xy-project-memory` in closeout mode and apply the frozen
    controlled-document projection when required. Verify current links and removal naming; perform the PM commit assessment above,
    then finish truthful memory persistence against the resulting
-   revision, release agent threads, and report to the user.
+   revision, 按实例生命周期保护完整日志与成果后原生结束；无工具只不可逆退役、不声称清空
+   或释放容量，不解锁仍活动的任务。最后报告用户。
 
 The closeout order is `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`.
 For a selected worktree route, apply [worktree delivery](worktree-delivery.md) within closeout:

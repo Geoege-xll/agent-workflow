@@ -17,21 +17,16 @@ QA must not generate screenshots or dispatch another reviewer. Communicate only 
 
 ## Select the review branch
 
-- Routine Trivial work, including Trivial UI copy, uses WORKFLOW's early exit without independent QA.
-  Flag a mistaken dispatch to PM. Honor explicit review requests and stricter project requirements.
-- For explicitly requested Trivial review, inspect the bounded instruction, exact current diff,
-  applicable standards and actual local checks; return the real PASS/FAIL and findings to PM, then
-  stop. Missing full-build evidence alone is not FAIL. Do not require a formal Task Pack,
-  controlled_document_access, UI-route/prototype contract or qa_handoff unless stricter rules apply.
-  Report material non-Trivial risk for PM reclassification; do not expand the audit yourself or enter
-  post-QA projection/memory closeout.
+- Light 由PM在交接时依据实际风险评估是否需要独立审计；没有实际需要时不派QA，也不能
+  把局部验证改写成PASS。明确审查请求、项目强制项和实际风险仍可要求唯一独立审查；
+  不为审计Light强制创建Full计划或DAG。
 - For an audit-only request, follow WORKFLOW's `Standalone read-only audit`: inspect requested
   source/contracts, standards and necessary evidence; return findings, conclusion and limitations,
   then stop. Honor explicit full/independent re-review and mandatory checks. Missing evidence is a
   limitation or blocker. Do not fabricate writers, BUILD_VERIFIED, Task Packs or implementation QA
   PASS, audit the report again, or activate projection/commit/memory closeout. Authorized fixes route
   through PM. For a code-review audit, prefer safe available native review without imposing
-  implementation intake or records. Actual non-Trivial implementation acceptance uses the contract below.
+  implementation intake or records. Full 与实际要求独立QA的 Light 实现验收使用下列当前任务包合同。
 
 适用规则从受管内置来源与实际项目特有叶选择，项目索引存在才读取并绑定真实SHA；
 无特有叶且索引缺失时使用配置路径/null指纹，不制造GENERAL或空索引。
@@ -42,7 +37,8 @@ QA must not generate screenshots or dispatch another reviewer. Communicate only 
 
 Final QA outcome: PASS | FAIL
 
-The PM dispatches exactly one `xy-qa` reviewer after the relevant writers reach BUILD_VERIFIED.
+Full 的相关Writer达BUILD_VERIFIED、或Light完成其必需验证且选定独立QA后，PM只派一位
+`xy-qa`。新的Reviewer只接收当前自包含2.0任务包，不复制完整PM／兄弟会话，不fork继承父历史。
 That same reviewer uses one code-review method in this order:
 
 ```yaml
@@ -88,7 +84,7 @@ maintainability audit. Both must not enter the ordinary fallback chain. Grill Me
 investigation are not code-review methods.
 
 Read [input contracts](references/inputs.md) and [implementation checks](references/implementation-acceptance.md)
-for non-Trivial acceptance. They retain mandatory evidence, independent standards coverage, memory
+for Full acceptance or Light acceptance requiring independent QA. They retain mandatory evidence, independent standards coverage, memory
 authority, worktree integration and bounded rework. Missing mandatory evidence blocks PASS.
 
 <!-- workflow-contract: references/inputs.md -->
@@ -127,6 +123,11 @@ List only Skills actually applied; unavailable required Skills block PASS. Sugge
 findings within PASS or blockers within FAIL, never a third outcome. Return FAIL to PM for rework.
 Before accepting PASS, PM validates the internal `review_method.scope_ref` and
 `standards_policy_coverage` using
-`bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py validate --input <qa-handoff.json>`.
-Only a valid PASS permits `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`.
+`bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
+Full 只有有效PASS才进入 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`。Light执行其实际选定的审计与收口判断。
 Keep raw records internal and stop after valid acceptance; ordinary closeout does not trigger another audit.
+
+结果使用schema_version:2，并以handoff_ref绑定当前QA包的request_id、task_id、agent_alias、
+真实agent_ref及task_pack_sha256。validate／extract都必须传当前--task-pack，不接受旧格式、
+旧身份或旧包PASS。收到返工时仍由本Reviewer按当前完整包差量复查；有效PASS后停止，
+PM接收证据并完成必要反馈窗口后原生结束或退役，不据退役推断物理清空或锁释放。

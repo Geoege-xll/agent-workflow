@@ -9,6 +9,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tests.test_scheduler_boundaries import v2_graph, with_builtin_standards
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -32,7 +33,7 @@ class DesignStandardsLifecycleTest(unittest.TestCase):
         payload["standards_contract"].update(index_fingerprint=None, leaves=leaves,
                                                 required_engineering_rule_ids=["eng-common-005"], required_design_rule_ids=["des-baseline-001"])
         for task in payload["tasks"]:
-            task["controlled_document_access"]["documents"] = [doc for doc in task["controlled_document_access"]["documents"] if doc["path"] != "docs/STANDARDS.md"]
+            task["controlled_document_access"]["documents"] = list({doc["path"]: doc for doc in task["controlled_document_access"]["documents"] if doc["path"] != "docs/STANDARDS.md"}.values())
         result = self.invoke(payload, "ready")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"ready": ["web"]}, json.loads(result.stdout))
@@ -87,7 +88,7 @@ class DesignStandardsLifecycleTest(unittest.TestCase):
                 docs.append(document("docs/standards/GENERAL.md", "e" * 64,
                                      ["eng-source"], owned))
             item["controlled_document_access"] = {"adapter": "project.yaml", "documents": docs}
-        return {
+        return with_builtin_standards(v2_graph({
             "tasks": tasks, "requirements_fingerprint": "a" * 64,
             "ui_contract": {"prototype_paths": ["docs/standards/prototype"]},
             "standards_contract": {
@@ -103,7 +104,7 @@ class DesignStandardsLifecycleTest(unittest.TestCase):
             },
             "approved_gates": ["requirements_approved"], "active_paths": [],
             "active_semantic_locks": [], "capacity": 2,
-        }
+        }))
 
     def invoke(self, payload, command="validate"):
         return subprocess.run(

@@ -17,11 +17,19 @@ from typing import Any
 try:
     from .native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
     from .qa_review_policy import METHODS
+    from .task_graph import TaskGraphError
+    from .task_graph_cli import _execute
+    from .task_graph_records import decode, digest, read_record
+    from .agent_continuation import validate_reference
     from .standard_paths import builtin_source_path, source_domain, canonical_standard_source_path
     from .validate_project_docs import builtin_standard_rule_catalog
 except ImportError:
     from native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
     from qa_review_policy import METHODS
+    from task_graph import TaskGraphError
+    from task_graph_cli import _execute
+    from task_graph_records import decode, digest, read_record
+    from agent_continuation import validate_reference
     from standard_paths import builtin_source_path, source_domain, canonical_standard_source_path
     from validate_project_docs import builtin_standard_rule_catalog
 
@@ -67,6 +75,7 @@ STANDARDS_COVERAGE_FIELDS = {
     "rule_checks",
 }
 SKILL_EVIDENCE_FIELDS = {"skills_used", "unavailable_required_skills", "uncovered_audit_surfaces"}
+HANDOFF_REF_FIELDS = {"request_id", "task_id", "agent_alias", "agent_ref", "task_pack_sha256"}
 
 
 class QAHandoffError(ValueError):
@@ -80,6 +89,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("command", choices=("validate", "schema", "extract"))
     parser.add_argument("--input", type=Path, help="JSON file; omit to read UTF-8 JSON from stdin")
     parser.add_argument("--host", choices=HOSTS, help="Native terminal envelope host; extract only")
+    parser.add_argument("--task-pack", type=Path, help="required current self-contained QA task pack; schema accepts none")
     return parser
 
 
@@ -131,7 +141,15 @@ def qa_handoff_schema() -> dict[str, Any]:
         "path_checks": {"type": "array", "items": path_check},
         "rule_checks": {"type": "array", "items": rule_check},
     })
-    return obj({"audit_result", "review_method", "standards_policy_coverage", "skill_evidence"}, {
+    return obj({"schema_version", "handoff_ref", "audit_result", "review_method", "standards_policy_coverage", "skill_evidence"}, {
+        "schema_version": {"type": "integer", "enum": [2]},
+        "handoff_ref": obj(HANDOFF_REF_FIELDS, {
+            "request_id": {"type": "string"}, "task_id": {"type": "string"},
+            "agent_alias": {"type": "string"}, "task_pack_sha256": {"type": "string"},
+            "agent_ref": obj({"host", "agent_id"}, {
+                "host": {"type": "string", "enum": list(HOSTS)}, "agent_id": {"type": "string"},
+            }),
+        }),
         "audit_result": {"type": "string", "enum": ["PASS", "FAIL"]},
         "review_method": method, "standards_policy_coverage": coverage,
         "skill_evidence": obj(SKILL_EVIDENCE_FIELDS, {field: strings() for field in sorted(SKILL_EVIDENCE_FIELDS)}),
@@ -139,7 +157,7 @@ def qa_handoff_schema() -> dict[str, Any]:
 
 
 def _validate_native_contract(payload: dict[str, Any]) -> None:
-    """只对新原生入口要求显式技能证据，不把文档新字段变成历史 validate 硬门禁。"""
+    """2.0所有入口都要求显式技能证据，不保留旧validate的较弱分支。"""
     evidence = _object(payload.get("skill_evidence"), "skill_evidence")
     missing = SKILL_EVIDENCE_FIELDS - set(evidence)
     if missing:
@@ -579,9 +597,35 @@ def _validate_standards_coverage(
             )
 
 
-def validate_qa_handoff(payload: dict[str, Any]) -> None:
+def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
     """验证 QA 内部结果；成功即返回，失败抛出稳定、可测试的错误。"""
 
+    # 对照真正交给Reviewer的包原字节，而非把回执自报身份或重序列化SHA当权威。
+    # 这里只核对当前输入；哈希与fresh声明都不能证明宿主实际隔离或模型已阅读。
+    if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
+        raise QAHandoffError("QA schema_version must be integer 2")
+    try:
+        pack = decode(task_pack_body)
+        if not isinstance(pack, dict) or "task" not in pack:
+            raise TaskGraphError("QA requires a self-contained task pack")
+        _execute("validate", pack)
+        task = pack["task"]
+        if task.get("task_type") != "qa" or task.get("role") != "xy-qa":
+            raise TaskGraphError("QA task pack requires task_type qa and role xy-qa")
+        if task.get("agent_retired") or task.get("state") not in {"RUNNING", "QA"}:
+            raise TaskGraphError("current QA task pack must identify an active, non-retired Reviewer")
+        validate_reference(task.get("agent_ref"))
+    except (TaskGraphError, ValueError, UnicodeError) as exc:
+        raise QAHandoffError(f"invalid current QA task pack: {exc}") from exc
+    reference = _object(payload.get("handoff_ref"), "handoff_ref")
+    if set(reference) != HANDOFF_REF_FIELDS:
+        raise QAHandoffError("handoff_ref must contain exactly the 2.0 current task identity fields")
+    expected = {"request_id": task["request_id"], "task_id": task["id"],
+                "agent_alias": task["agent_alias"], "agent_ref": task["agent_ref"],
+                "task_pack_sha256": digest(task_pack_body)}
+    if reference != expected:
+        raise QAHandoffError("handoff_ref does not match the current QA task pack identity or original-byte SHA-256")
+    _validate_native_contract(payload)
     audit_result = payload.get("audit_result")
     # 外部 JSON 可把枚举伪装为数组／对象；先核对类型，避免集合查询泄漏 TypeError。
     if not isinstance(audit_result, str) or audit_result not in {"PASS", "FAIL"}:
@@ -597,30 +641,53 @@ def validate_qa_handoff(payload: dict[str, Any]) -> None:
         payload.get("standards_policy_coverage"), "standards_policy_coverage"
     )
     _validate_standards_coverage(coverage, changed_paths, audit_result)
+    # 身份绑定不能掩盖旧覆盖表：当前包冻结的规范来源同样必须一致。QA可在FAIL中
+    # 报告PM漏选的新规则，但PASS不能自报一组当前包根本没有采用的规则或旧来源。
+    contract = pack["standards_contract"]
+    if any(coverage[key] != contract[key] for key in ("index_path", "root", "index_fingerprint")):
+        raise QAHandoffError("QA standards index does not match the current task pack")
+    frozen_rules = {rule: leaf for leaf in contract["leaves"] for rule in leaf["rule_ids"]}
+    for check in coverage["rule_checks"]:
+        source = frozen_rules.get(check["rule_id"])
+        if source is not None and (
+                (builtin_source_path(check["source_path"]) or check["source_path"]) != (builtin_source_path(source["path"]) or source["path"])
+                or check["source_fingerprint"] != source["content_fingerprint"]
+                or check["domain"] != source["domain"]):
+            raise QAHandoffError("QA rule source does not match the current task pack")
+    if audit_result == "PASS":
+        if set(coverage["task_pack_rule_ids"]) - set(frozen_rules):
+            raise QAHandoffError("PASS cannot claim rules absent from the current task pack")
+        for domain in ("engineering", "design"):
+            key = f"required_{domain}_rule_ids"
+            if not set(contract[key]) <= set(coverage[key]):
+                raise QAHandoffError(f"PASS omits current task pack required {domain} rules")
 
 
 def main() -> int:
     parser = _parser()
     args = parser.parse_args()
     if args.command == "schema":
-        if args.input is not None or args.host is not None:
-            parser.error("schema does not accept --input or --host")
+        if args.input is not None or args.host is not None or args.task_pack is not None:
+            parser.error("schema does not accept --input, --host or --task-pack")
         print(json.dumps(qa_handoff_schema(), ensure_ascii=False, sort_keys=True))
         return 0
     if args.command == "extract" and (args.input is None or args.host is None):
         parser.error("extract requires --host and --input")
     if args.command == "validate" and args.host is not None:
         parser.error("--host is supported only for extract")
+    if args.task_pack is None:
+        parser.error("validate/extract requires --task-pack")
     try:
         payload = (extract_native_handoff(args.host, args.input) if args.command == "extract"
                    else _read_payload(args.input))
-        if args.command == "extract":
-            _validate_native_contract(payload)
-        validate_qa_handoff(payload)
-    except (QAHandoffError, NativeHandoffError) as exc:
+        task_pack_body = read_record(args.task_pack)
+        validate_qa_handoff(payload, task_pack_body)
+        if args.command == "extract" and payload["handoff_ref"]["agent_ref"]["host"] != args.host:
+            raise QAHandoffError("native host does not match the current QA task pack")
+    except (QAHandoffError, NativeHandoffError, TaskGraphError, OSError, UnicodeError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
-    # 原 validate 的成功响应保持不变；extract 仅输出通过原语义校验的完整内层对象。
+    # 两个入口使用同一2.0身份及语义校验；extract保留完整原始发现和元数据。
     result = payload if args.command == "extract" else {"status": "valid"}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
     return 0

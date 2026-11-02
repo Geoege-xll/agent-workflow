@@ -1,14 +1,15 @@
 ---
 name: xy-workflow
-description: "编排非 Trivial 项目实施、多功能开发、重构、UI 变更及未完成工作恢复，遵守 PM 路由和独立 QA；只读讨论和明确的 Trivial 修正使用各自早退路线。"
+description: "编排2.0 Light／Full实施、UI变更与未完成工作恢复，按风险选择当前任务包、原生实施者和验收；只读审计使用独立分支。"
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-workflow
 
-代码修改沿用 `xy-code-standards` 的适用方法、内置工程规则和项目特有规范（索引存在才读）；Trivial 仍局部验证后早退，
-PM 获明确亲自实施授权时仍保留原等级路线。读取专业方法不触发本 Skill 的完整编排或 QA。
+仅接受 2.0 Light／Full 和 `schema_version: 2`。代码修改沿用 `xy-code-standards` 的
+适用方法与规范；两等级都默认原生实施者。PM 例外、独立上下文和实例收口统一遵守
+`.agent-workflow/product/WORKFLOW.md#implementation-ownership` 与 `#agent-instance-lifecycle`。
 
 ## Standalone read-only audit
 
@@ -17,32 +18,25 @@ asks for audit findings, not implementation acceptance or fixes. Deliver the sco
 stop; do not create writers, BUILD_VERIFIED, an implementation QA PASS or a second audit of the
 report. Honor explicitly requested independent/full re-review and mandatory project checks. If fixes
 are authorized, route their actual implementation normally. QA being read-only does not exempt
-non-Trivial implementation from independent QA, current scope/standards or handoff validation.
+Full implementation or actual Light acceptance requiring QA from current scope/standards and handoff validation.
 
-## General Trivial early exit
+## Light 与 Full
 
-Before the non-Trivial route, apply WORKFLOW's `General Trivial early exit` to clear, small one-file
-non-UI corrections with no shared contract. Read applicable engineering/module rules, edit in the
-main session and perform proportionate local verification, then assess a scoped commit and stop.
-Do not enter the numbered route, DAG, repeated approval, independent QA or post-QA closeout solely
-for such a task. Do not create plans, documents or memory records merely to finish. Actual risk,
-requested review and stricter project rules can require the appropriate higher route; UI copy must
-also satisfy the narrower checks below. A short diff alone never establishes Trivial scope.
+派发前先判断目标、实际消费者、范围、风险与实施者。Light 使用当前自包含单任务包，
+默认派对应原生实施者并做最小充分验证；明确用户指令已授权当前范围时不重复确认。
+不强制 Grill Me、xy-plan、DAG、保存计划或独立 QA。交接时按实际风险评估独立审计、
+文档与记忆，执行选定必需项；未执行 QA 不能写 QA PASS。普通 UI 文案按 WORKFLOW 的
+`Light UI copy`核对真实消费者／语义／资源验证；使用production_ui＋UI-Conformance、
+零设计差量和当前已解析冻结权威，不标non_ui避过工程／设计规范。实际设计／交互变化Full。
+共享合同、数据、根配置、多角色或实际 UI 设计变化使用 Full，保留下面的完整路线。
+不能把危险工作拆成 Light 规避确认，不能以交接评估跳过 Full 唯一独立 QA。
 
-## Trivial UI copy: early exit
+每个新实现者或 QA 都只能接收当前任务包；禁止复制完整 PM／兄弟会话或使用继承父历史的
+fork。同一任务连续实现、短返工及同轮原 Reviewer 的差量复查可续用，独立任务使用新
+实例／ID。接收与证据保护后及时原生结束，缺能力只退役阻止误派；不声称清空历史或释放
+未确认容量。完整生命周期按上述产品权威，操作时再读当前宿主细则，不增加 Agent 池。
 
-Before the non-Trivial route, check `.agent-workflow/product/WORKFLOW.md` -> `Trivial UI copy`. An explicit, local,
-low-risk wording correction may be Trivial even across matching locale files. Confirm actual usage;
-preserve business meaning, behavior and applicable standards. Pricing, consent/privacy, permissions,
-destructive-operation promises, mandatory contract wording and unresolved shared impact are excluded.
-The main session edits directly, reads applicable standards, and verifies the replacement, diff,
-keys/placeholders and any concrete display risk. No Grill Me, xy-plan, DAG/Task Pack, repeated approval,
-prototype choice, UI Agent, independent QA or full build/QA/closeout Skill invocation is required.
-Keep prototype/standards/feature documents and agentmemory unchanged. After actual local verification,
-assess only the scoped commit and report; do not invent QA PASS. Honor requested review or stricter
-project rules. If risk/scope exceeds this boundary, use the existing non-Trivial route.
-
-## Non-Trivial work
+## 适用专业分支
 
 For initial/revised design standards or a visual-system replacement, read
 [design-standards.md](references/design-standards.md). PM assesses standard updates separately from
@@ -90,15 +84,14 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
   temporary Python programs. Read that reference only when those operations are needed.
 - Main session = PM. It owns requirements, routing, approvals, task packs, synthesis,
   rework, and the user-facing result.
-- Trivial 由主会话直接实施和局部验证；Light／Full 默认派对应 subagent，只有明确指定
-  PM 本身亲自实施当前范围时例外，原等级门槛保留。执行与恢复均遵守
-  `.agent-workflow/product/WORKFLOW.md#implementation-ownership`；摘要不创造授权或降级。
+- Light／Full 默认派对应原生 subagent；只有用户明确指定 PM 本身亲自实施当前范围时
+  例外。PM 只维护协调与其拥有的文档，例外不降低原等级门槛；摘要不创造授权或降级。
 - The default business confirmations are `requirements_approved` and, for required-prototype UI
   design-change work, `visual_approved`. A proven `UI-Conformance` request has no visual
   confirmation because it makes no design decision; a user-selected direct-development branch also
   has no visual gate for its exact surfaces. The PM recommends but never selects or invents either
   design-change branch. A task-scoped structured exception is allowed only under the policy below.
-- `xy-qa` audits after implementation. It does not command implementers or edit
+- Full 与实际要求审计的 Light 使用唯一 `xy-qa` after implementation. It does not command implementers or edit
   production business code.
 
 ## User-facing feedback boundary
@@ -167,10 +160,10 @@ Neither mode bypasses Git safety checks or grants remote push. Ordinary tasks re
 
 <!-- workflow-contract: references/worktree-delivery.md -->
 
-For non-Trivial intake, planning and dispatch, read [dispatch procedure](references/dispatch.md).
+进行 Light／Full 接收与派发时，读取 [dispatch procedure](references/dispatch.md)。
 It preserves Full Grill Me → xy-plan draft → PM projection decision → requirements approval →
 approved-plan storage → validated READY dispatch. Do not dispatch before reading the applicable
-contract. Classify Trivial first and use its early exit; documents and memory stay on demand.
+contract. Light 使用该参考的轻量分支；文档与记忆仍按需，不进入 Full 图只是为了派发。
 
 <!-- workflow-contract: references/dispatch.md -->
 
@@ -198,7 +191,7 @@ Use this only when the route above requires `grill-me` and that Skill is unavail
 
 ## Native bug-fix route
 
-Clear, reproducible Trivial or Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
+Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
 runs the Grill Me coverage check and `xy-plan`; when its symptom, expected result, environment,
 reproduction, impact, and acceptance evidence are complete, the coverage check asks nothing and
 returns control immediately.
@@ -214,9 +207,8 @@ native_bug_fix:
   - assess_task_level_closeout
 ```
 
-After local verification, Trivial bugs close through the Trivial route without mandatory independent
-QA. Light/Full work uses `request_unified_qa`; an explicit review request, stricter project rule, or
-risk requiring reclassification also selects the applicable review. The bug label alone does not
+Light 缺陷完成最小验证后按风险交接评估；Full 使用 `request_unified_qa`。显式审查要求、
+项目强制规则或实际风险仍选择必要独立审查，缺陷标签本身不强制 Full。 The bug label alone does not
 upgrade the task or require Full planning, another approval, a saved plan, or documentation churn.
 
 Review-feedback handling is not bug diagnosis. Treat external findings as advisory evidence: verify
@@ -224,7 +216,7 @@ them against current source, requirements, and tests before accepting or rejecti
 
 ## Default business confirmations and exceptions
 
-These stages govern non-Trivial work, not either already authorized Trivial early exit.
+这些确认适用于 Full；Light 已有明确范围授权时不重复确认，实质缺口只澄清受影响决定。
 
 - Ask once for `requirements_approved` after scope, non-goals, constraints, and acceptance
   evidence are clear. For Full work, first complete Grill coverage, create the `xy-plan` draft, and
@@ -241,7 +233,7 @@ These stages govern non-Trivial work, not either already authorized Trivial earl
   `requirements_approved` by default during development. A selected worktree delivery route separately
   follows its configured confirm/auto policy at final local merge; do not attach that consent to implementation gates.
 
-For non-Trivial UI classification, prototype choice, design handoff or visual confirmation, read
+For Full UI classification, prototype choice, design handoff or visual confirmation, read
 [UI design branches](references/ui-design.md). Required prototypes retain exact page gates; conformance and scoped
 user waivers do not inherit them. Production-only revisions use the current replacement authority.
 Read [plan lifecycle](references/plan-lifecycle.md) when saving, revising or resuming a plan.
@@ -270,10 +262,10 @@ PROJECT/features merely to finish. Current truth changes only after verified imp
 
 ## Implementation and QA loop
 
-After implementation dispatch, on rework or when closing non-Trivial implementation, read
+实施交接、返工或收口时，按当前等级读取
 [implementation and QA](references/implementation-and-qa.md). Use exactly one read-only request
 reviewer; preserve independent source/standards audit and valid evidence reuse. The same reviewer
-checks affected repairs without restarting unchanged coverage. Trivial work and standalone read-only
-audits stop at their applicable early exits and never enter this loop.
+checks affected repairs without restarting unchanged coverage. Light 先按实际风险评估是否需要
+独立审计；只读审计交付结论后停止，不进入实现收口链。
 
 <!-- workflow-contract: references/implementation-and-qa.md -->

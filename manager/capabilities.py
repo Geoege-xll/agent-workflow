@@ -33,12 +33,34 @@ AGY_REFERENCE = "https://antigravity.google/docs/cli/reference/"
 AGY_HEADLESS = "https://antigravity.google/docs/cli/headless/"
 AGY_DISCOVERY = "https://antigravity.google/docs/customization-discovery"
 AGY_SUBAGENTS = "https://antigravity.google/docs/subagents?tab=cli"
+CODEX_SUBAGENTS = "https://learn.chatgpt.com/docs/agent-configuration/subagents"
+CLAUDE_SUBAGENTS = "https://code.claude.com/docs/en/sub-agents"
+# 以下描述一手文档中的能力及本包调用约束，不由 CLI 版本、文件存在或角色名称推导本会话工具。
+# 特别是停止与关闭不能互换，fresh 字段也不能代替原生上下文隔离的实际核验。
+CODEX_CAPABILITIES = {
+    "fresh_subagent_context": {"documentation": CODEX_SUBAGENTS, "interface": "native subagent creation",
+                               "boundary": "collaboration.spawn_agent 时显式 fork_turns:none；其他入口须核对实际独立上下文能力，禁止父历史 fork 降级"},
+    "native_stop_and_close": {"documentation": CODEX_SUBAGENTS, "interface": "steer / stop / close subagents",
+                              "boundary": "文档入口不证明当前有 close；interrupt 只停止当前执行，未确认关闭时退役禁止复用"},
+}
+CLAUDE_CAPABILITIES = {
+    "fresh_named_subagent_context": {"documentation": CLAUDE_SUBAGENTS, "interface": "Agent(xy-*)",
+                                     "boundary": "普通命名角色每次调用创建新实例与独立初始上下文；fork 会复制父历史，禁止用于新任务"},
+    "send_message_resume": {"documentation": CLAUDE_SUBAGENTS, "interface": "SendMessage",
+                            "boundary": "续发保留旧上下文，仅限同任务连续工作、短返工和同轮 Reviewer；不需要启用 Teams"},
+    "task_stop": {"documentation": CLAUDE_SUBAGENTS, "interface": "TaskStop",
+                  "boundary": "停止当前执行后仍可能被 SendMessage 恢复，不能证明清空上下文、永久关闭或释放打开线程额度"},
+}
 AGY_CAPABILITIES = {
     "diff_review_ui": {"documentation": AGY_REFERENCE, "interface": "/diff", "kind": "human_review_ui"},
     "artifact_review_ui": {"documentation": AGY_REFERENCE, "interface": "/artifact", "kind": "human_review_ui"},
     "independent_subagents": {"documentation": AGY_SUBAGENTS, "interface": "custom subagents"},
+    "fresh_subagent_context": {"documentation": AGY_SUBAGENTS, "interface": "invoke_subagent",
+                               "boundary": "初始 Prompt 自包含当前任务；新实例不继承父会话历史，当前规范仍须读取"},
     "send_message_resume": {"documentation": AGY_SUBAGENTS, "interface": "message idle agent",
                             "boundary": "文档描述空闲 Agent 收消息后保留上下文续用；已终止 Agent 不可唤醒"},
+    "subagent_kill": {"documentation": AGY_SUBAGENTS, "interface": "native subagent termination",
+                      "boundary": "kill 后不可唤醒且会清理临时 worktree；先保护成果、唯一日志和必要证据，历史转录并不永久删除"},
     "conversation_resume": {"documentation": AGY_REFERENCE, "interface": "--continue / --conversation / /resume"},
     "context_usage": {"documentation": AGY_REFERENCE, "interface": "/context"},
     "quota_usage": {"documentation": AGY_REFERENCE, "interface": "/usage",
@@ -55,12 +77,14 @@ AGY_CAPABILITIES = {
     "native_plan": {"documentation": AGY_REFERENCE, "interface": "/plan", "kind": "native_planning"},
 }
 FEATURES = {
-    "codex": (("session_start_fork", None), ("session_start_compact", None)),
+    "codex": (("session_start_fork", None), ("session_start_compact", None))
+             + tuple((name, None) for name in CODEX_CAPABILITIES),
     "claude": (("background_subagents", None), ("send_message_resume", None),
                ("model_definition_precedence", (2, 1, 251)), ("model_force", (2, 1, 257)),
                ("role_auto_compact_window", (2, 1, 296)), ("suffixed_window_env", (2, 1, 304)),
                ("block_writes_outside_working_directories", (2, 1, 314)),
-               ("per_invocation_effort", (2, 1, 292)), ("subagent_default_effort", (2, 1, 316))),
+               ("per_invocation_effort", (2, 1, 292)), ("subagent_default_effort", (2, 1, 316)))
+              + tuple((name, None) for name in CLAUDE_CAPABILITIES if name != "send_message_resume"),
     "antigravity": (("session_start", None),) + tuple((name, None) for name in AGY_CAPABILITIES),
 }
 VERSION = re.compile(r"(?:codex-cli\s+|Claude Code\s+|Antigravity CLI\s+|agy\s+)?"
@@ -176,7 +200,8 @@ def diagnose(host: str, *, project: Path | None = None, probe: bool = False,
                              "minimum_version": ".".join(map(str, minimum)) if minimum else None,
                              "version_meets_minimum": eligible, "runtime_verified": False,
                              "evidence_level": "documented", "runtime_status": "runtime_unverified",
-                             **(AGY_CAPABILITIES.get(name, {}) if host == "antigravity" else {})})
+                             **{"codex": CODEX_CAPABILITIES, "claude": CLAUDE_CAPABILITIES,
+                                "antigravity": AGY_CAPABILITIES}[host].get(name, {})})
     mode = "not_inspected"
     options = None
     if project is not None:
@@ -191,8 +216,15 @@ def diagnose(host: str, *, project: Path | None = None, probe: bool = False,
     lifecycle = {"recovery_event": "SessionStart(compact)", "runtime_verified": False,
                  "pre_post_compact_registered": False,
                  "reason": "恢复指令通过 SessionStart 注入；不为无恢复上下文作用的事件增加命令或压缩门禁"} if host in {"codex", "claude"} else None
-    return {"platform": host, "documentation_snapshot": "2026-11-02", "client": client,
+    return {"platform": host, "documentation_snapshot": "2026-11-03", "client": client,
             "documented_capabilities": capabilities,
+            "agent_lifecycle_boundary": {
+                "workflow_schema_version": 2, "context_policy": "handoff_only",
+                "instance_policy": "fresh", "runtime_verified": False,
+                "current_tool_surface": "not_inspected", "native_end_confirmed": False,
+                "unavailable_end_action": "retire_without_reuse",
+                "boundary": "别名不等于原生实例；新任务新ID，同任务有界续用。闭环后先保全成果与证据；结束能力缺失或失败只退役，不宣称销毁、清空或释放额度。运行数/打开线程数须按宿主实际口径核对，不建立Agent池或第二状态机。",
+            },
             "customization_sources": antigravity_customization_sources(project) if host == "antigravity" else None,
             "review_boundary": {"dedicated_ai_review": {"status": "not_confirmed_in_reference",
                                  "documentation": AGY_REFERENCE, "evidence_level": "runtime_unverified",

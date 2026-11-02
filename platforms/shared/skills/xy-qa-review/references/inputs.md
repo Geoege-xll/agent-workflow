@@ -1,5 +1,11 @@
 ## Inputs
 
+只接收当前自包含2.0 QA包：`schema_version: 2`、本任务`task`、必要适用规范、批准／UI依据、
+当前审查范围与证据。task包含workflow_level、module、role、agent_alias、instance_policy:fresh、
+context_policy:handoff_only及实际agent_ref。新Reviewer不得继承／复制完整PM或兄弟历史。
+Full保持请求闭包审计；Light不要求Full图，但实际选择独立QA后同样需要当前身份与证据绑定。
+
+
 - approved task contract, request dependency closure, and exact owned paths;
 - implementation diff and real source/components/tokens;
 - implementer evidence summaries and resolvable complete-log references;
@@ -99,6 +105,26 @@
 Do not substitute the root prototype index, task summary, recalled memory, claimed result, or
 potential Skill match for applicable design authority, current source, and real logs.
 
+## 2.0 结果绑定
+
+QA结果顶层必须声明`schema_version: 2`，并包含：
+
+```yaml
+handoff_ref:
+  request_id: <current-QA-pack-task-request_id>
+  task_id: <current-QA-pack-task-id>
+  agent_alias: <current-QA-pack-task-agent_alias>
+  agent_ref: {host: <actual-host>, agent_id: <actual-native-id>}
+  task_pack_sha256: <SHA-256-of-the-complete-current-QA-pack-bytes>
+```
+
+`validate`与`extract`都必须传`--task-pack`；CLI对照当前包核对请求、任务、别名、原生身份、
+SHA与现有scope／规范语义，旧格式、身份错配和旧包PASS均拒绝。包SHA或结构有效不证明
+审查真实执行、模型已读或工具确实只读，PM／QA仍核实实际证据。不为适配旧交接保留fallback。
+执行中的QA包必须绑定实际RUNNING／QA且未退役的xy-qa任务。PASS后保留这份原包及字节SHA
+作为验收依据；图进入QA_PASSED不要求重导新包，不能将旧结果改绑到重导包。范围／规范变化
+才交接更新后的完整包并由原Reviewer差量复查，生成与新包绑定的新结果，保留未失效结论。
+
 ## 原生结构化交接
 
 当前宿主已提供且已获授权的 QA 调用支持 schema 时，先用
@@ -109,7 +135,8 @@ potential Skill match for applicable design authority, current source, and real 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py schema
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py extract \
-  --host codex --input "${native_qa_result:?set actual terminal native-result.json}"
+  --host codex --input "${native_qa_result:?set actual terminal native-result.json}" \
+  --task-pack "${qa_task_pack:?set current complete QA task pack}"
 ```
 
 `extract` 读取 Codex 保存的最终 QA 对象，或从 Claude／AGY 终端成功 envelope 提取
@@ -128,7 +155,7 @@ review_method、规则覆盖与证据语义校验；成功只证明这些机械�
   `conversation_id`、`status: SUCCESS` 和 `structured_output`；`response`、`usage`
   可缺省，存在时校验结构和一致性，用量可见性不成为 QA 新门禁。
 
-普通 JSON handoff 仍使用原 `validate --input <handoff.json>`。Task Pack 继续通过
+普通 JSON handoff 使用 `validate --input <handoff.json> --task-pack <current-qa-task-pack.json>`。Task Pack 继续通过
 `task_graph_cli.py task` 导出，不套 QA schema。原生命令须核对当前 help 和实际会话能力，
 不能由静态文档或成功提取推断模型运行成功。AGY 的 diff／Artifact 人工批准是人工审阅，
 不能冒充 `host-native-review` 或独立 AI QA；原审批、读写边界与 method 顺序保持不变。

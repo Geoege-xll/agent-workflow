@@ -71,7 +71,7 @@ def archive_bytes(source: Path, version: str) -> bytes:
 
 def build(source: Path, version: str, output: Path) -> tuple[Path, Path, Path]:
     if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version, re.ASCII):
-        raise ValueError("Version must be X.Y.Z without a leading v (for example 0.1.0)")
+        raise ValueError("Version must be X.Y.Z without a leading v (for example 2.0.0)")
     source = source.resolve(strict=True)
     output = output.expanduser().resolve()
     if output == source or any(
@@ -108,7 +108,7 @@ def build(source: Path, version: str, output: Path) -> tuple[Path, Path, Path]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version", help="release version, for example 0.1.0")
+    parser.add_argument("version", help="release version, for example 2.0.0")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
     args = parser.parse_args(argv)
     try:

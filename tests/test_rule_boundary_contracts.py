@@ -19,7 +19,7 @@ class RuleBoundaryContractTest(unittest.TestCase):
     def test_standalone_audit_exits_before_implementation_acceptance(self) -> None:
         # 只保护新增分支的早退与防绕过边界，不把文本合同冒充模型行为测试。
         for relative, start_anchor, following in (
-            ("platforms/shared/skills/xy-workflow/SKILL.md", "## Standalone read-only audit", "## General Trivial early exit"),
+            ("platforms/shared/skills/xy-workflow/SKILL.md", "## Standalone read-only audit", "## Light 与 Full"),
             ("platforms/shared/skills/xy-qa-review/SKILL.md", "- For an audit-only request", "## Implementation acceptance"),
         ):
             with self.subTest(source=relative):
@@ -31,7 +31,7 @@ class RuleBoundaryContractTest(unittest.TestCase):
                 self.assertIn("stop", branch)
                 self.assertIn("BUILD_VERIFIED", branch)
                 self.assertIn("implementation QA PASS", branch)
-                self.assertIn("non-Trivial implementation", branch)
+                self.assertIn("Full", branch)
                 # QA 已把独立审查并入任务分支；全局范围合同仍适用，不能只靠旧标题定位。
                 self.assertIn("scope", " ".join(body[:end].split()))
                 self.assertIn("standards", branch)
@@ -46,19 +46,8 @@ class RuleBoundaryContractTest(unittest.TestCase):
         self.assertIn("Do not audit the audit report again", branch)
         self.assertIn("Honor explicitly requested independent review, full re-review", branch)
         self.assertIn("mandatory project checks", branch)
-        self.assertIn("non-Trivial implementation still requires the independent QA barrier", branch)
-
-    def test_general_trivial_route_exits_before_planning_and_qa_closeout(self) -> None:
-        skill = read_contract(PACK / "platforms/shared/skills/xy-workflow/SKILL.md")
-        self.assertLess(skill.index("## General Trivial early exit"), skill.index("## Non-Trivial work"))
-        normalized = " ".join(skill.split())
-        self.assertIn("If the result is Trivial, return immediately", normalized)
-        self.assertIn("Do not enter this loop for any locally verified Trivial work", normalized)
-        workflow = " ".join((PACK / "product/WORKFLOW.md").read_text().split())
-        self.assertIn("Trivial local checks or non-Trivial QA", workflow)
-        for relative in ("platforms/shared/AGENTS.product.tpl", "platforms/claude/AGENTS.claude.tpl",
-                         "platforms/antigravity/AGENTS.antigravity.tpl"):
-            self.assertIn("General Trivial early exit", (PACK / relative).read_text())
+        self.assertIn("Full implementation", branch)
+        self.assertIn("independent QA barrier", branch)
 
     def test_workflow_python_examples_use_the_shared_runtime_selector(self) -> None:
         # 搜索真正被加载的角色/规则/Skill，避免安装脚本修好后某个低频模式仍
@@ -80,18 +69,20 @@ class RuleBoundaryContractTest(unittest.TestCase):
                 self.assertEqual("assess_task_level_closeout", steps[-1])
                 # 仍保留按等级进入既有 QA 的明确指令，不能为了省步骤整体取消 QA。
                 after = " ".join(body[match.end():match.end() + 600].split())
-                self.assertIn("Trivial bugs close through the Trivial route", after)
-                self.assertIn("Light/Full work uses `request_unified_qa`", after)
+                self.assertIn("Light", after)
+                self.assertIn("Full", after)
+                self.assertIn("`request_unified_qa`", after)
 
     def test_role_standards_paths_are_shallow_and_design_is_surface_scoped(self) -> None:
         backend = (PACK / "roles/xy-backend.md").read_text()
         self.assertNotIn("docs.standards_root/engineering", backend)
-        self.assertIn("engineering leaves directly under `docs.standards_root`", backend)
+        self.assertIn("工程基线使用 xy-code-standards/references/rules.md", backend)
         for role in ("xy-web", "xy-apple", "xy-android", "xy-desktop"):
             with self.subTest(role=role):
                 body = " ".join((PACK / "roles" / f"{role}.md").read_text().split())
-                self.assertIn("For `surface_kind: production_ui`, also require the applicable design leaves", body)
-                self.assertIn("`non_ui` work does not require design authority", body)
+                self.assertIn("production_ui", body)
+                self.assertIn("non_ui 不预载设计规则", body)
+                self.assertIn("xy-code-standards/references/rules.md", body)
 
     def test_document_noop_depends_on_unchanged_recorded_facts(self) -> None:
         for relative in ("product/WORKFLOW.md", "product/AGENT_SCHEMA.md",

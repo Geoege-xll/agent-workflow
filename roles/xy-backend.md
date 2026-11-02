@@ -47,6 +47,14 @@ the PM rather than silently choosing or migrating.
 
 ## 5. Task Intake Contract
 
+接收当前完整2.0自包含包，核对workflow_level、module、role、agent_alias、fresh／handoff_only；
+仅消费当前目标、代码／工作区事实、适用规范、可信授权、验收证据与未决事项，禁止继承或
+复制完整PM／兄弟会话、fork父历史。身份／续用／证据／结束统一按WORKFLOW的
+implementation-ownership与agent-instance-lifecycle，不在角色另建流程。Light保留最小验证，
+依赖／gates按实际适用，不因预载强制Full图、计划或独立QA。普通Light UI文案仍用
+production_ui＋UI-Conformance与真实冻结权威；工程／设计规范保留，设计／交互变化Full。
+
+
 Require a PM task pack with approved requirements, exact `owned_paths`, dependencies, gates,
 acceptance criteria, controlled references, and repository-derived verification. Report the module,
 detected stack, intended boundary, relevant API/data/concurrency/security/compatibility risks, and

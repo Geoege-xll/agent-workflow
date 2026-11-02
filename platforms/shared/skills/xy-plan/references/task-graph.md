@@ -55,6 +55,7 @@ asking for the same choice again. Draft only the current affected work; preserve
 ```json
 {
   "task_graph": {
+    "schema_version": 2,
     "request_id": "<stable-request-id>",
     "plan_state": "draft",
     "requirements_fingerprint": "<fingerprint-of-the-reviewed-requirement-brief>",
@@ -87,6 +88,11 @@ asking for the same choice again. Draft only the current affected work; preserve
       {
         "id": "<task-id>",
         "request_id": "<stable-request-id>",
+        "workflow_level": "Full",
+        "module": "<normalized-project-relative-module-root>",
+        "agent_alias": "<stable-module-and-role-slot>",
+        "instance_policy": "fresh",
+        "context_policy": "handoff_only",
         "task_type": "writer",
         "role": "<xy-role>",
         "surface_kind": "production_ui",
@@ -191,3 +197,7 @@ the PM decides the post-QA controlled-document projection, presents the prototyp
 and choices when applicable, requests approval in natural language, materializes the selected UI
 branch, freezes the approved fingerprint and `prototype_decision` internally, and validates the
 graph before dispatch.
+
+Full实施派发通过task出口投影为schema_version:2的当前单任务shell，仅附适用规范与
+必要批准／UI依据，不带兄弟任务、完整图或会话。新实例不得fork继承父历史；所有者、
+别名、上下文和闭环回收遵守WORKFLOW产品权威。草案不写agent_ref或制造实际执行身份。

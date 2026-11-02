@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from lib import task_graph_records as records
 from lib.task_graph_cli import _execute
+from tests.test_scheduler_boundaries import v2_graph, v2_task, with_builtin_standards
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -25,7 +26,7 @@ def graph():
         "mode": "full", "reason": "实现当前功能时遵守适用规范", "sections_or_queries": [],
         "content_fingerprint": "e" * 64, "applies_to": ["src/one"], "rule_ids": [],
     }
-    return {
+    return with_builtin_standards(v2_graph({
         "request_id": "request-1", "approved_gates": ["requirements_approved"],
         "active_paths": ["external/"], "active_semantic_locks": ["external-lock"], "capacity": 2,
         "standards_contract": {
@@ -40,6 +41,8 @@ def graph():
             "surface_kind": "non_ui", "qa_scope": "request", "depends_on": [], "blocks": [],
             "gates": ["requirements_approved"], "owned_paths": ["src/one"], "semantic_locks": ["api"],
             "state": "DECLARED", "audit_surfaces": ["standards-conformance"],
+            "goal": "实现当前模块已确认行为", "input_contracts": ["保留当前输入协议"],
+            "acceptance_evidence": ["关键入口真实验证"],
             "verification_commands": ["project-scoped-build-and-smoke"],
             "output_contracts": ["可编译、可运行，并交独立 QA"],
             "controlled_document_access": {"adapter": "project.yaml", "documents": [
@@ -47,7 +50,7 @@ def graph():
                 {**copy.deepcopy(document), "path": "docs/standards/GENERAL.md", "rule_ids": ["eng-common-001"]},
             ]},
         }],
-    }
+    }))
 
 
 def isolated_graph(root: Path):
@@ -70,6 +73,55 @@ class RecordUpdateTest(unittest.TestCase):
 
     def update(self, change, source=None, root=None):
         return records.update(source or self.original, change, root, _execute)
+
+    def test_v2_rejects_old_or_inherited_context_and_module_drift(self):
+        """版本/上下文声明是新合同边界，别名和模块根不能扩大精确写范围。"""
+        for field, value in (("instance_policy", "reuse"), ("context_policy", "fork"),
+                             ("module", "src/../outside"), ("module", "other")):
+            source = copy.deepcopy(self.original)
+            source["tasks"][0][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                _execute("validate", source)
+        for version in (None, 1, True, "2"):
+            source = copy.deepcopy(self.original)
+            source["schema_version"] = version
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, "schema_version"):
+                _execute("validate", source)
+        source = copy.deepcopy(self.original)
+        other = v2_task({"id": "other", "request_id": "request-2", "task_type": "read_only",
+                         "state": "DECLARED", "depends_on": [], "blocks": [], "gates": [],
+                         "owned_paths": [], "semantic_locks": []})
+        other.update(agent_alias=source["tasks"][0]["agent_alias"], role="xy-web")
+        source["tasks"].append(other)
+        with self.assertRaisesRegex(ValueError, "alias"):
+            _execute("validate", source)
+
+    def test_retirement_is_irreversible_blocks_execution_and_keeps_live_locks(self):
+        """退役仅禁止调度；不能把仍可能运行的原生任务伪装为已结束并释放锁。"""
+        running = self.update({"tasks": {"api": {"set": {"state": "RUNNING"}}}})
+        retired = self.update({"tasks": {"api": {"set": {"agent_retired": True}}}}, running)
+        self.assertEqual(running["active_paths"], retired["active_paths"])
+        self.assertEqual(running["active_semantic_locks"], retired["active_semantic_locks"])
+        with self.assertRaisesRegex(ValueError, "retired"):
+            self.update({"tasks": {"api": {"set": {"agent_retired": False}}}}, retired)
+        done = self.update({"tasks": {"api": {"set": {"state": "BUILD_VERIFIED"}}}}, retired)
+        with self.assertRaisesRegex(ValueError, "retired"):
+            self.update({"tasks": {"api": {"set": {"state": "RUNNING"}}}}, done)
+        pending = self.update({"tasks": {"api": {"set": {"agent_retired": True}}}})
+        self.assertEqual([], _execute("ready", pending)["ready"])
+
+    def test_v2_general_is_only_a_project_supplement_and_full_cannot_waive_qa(self):
+        """项目规则仍完整保留，但不能以GENERAL恢复2.0已删除的内置底线替代。"""
+        source = copy.deepcopy(self.original)
+        source["standards_contract"]["leaves"] = [leaf for leaf in source["standards_contract"]["leaves"] if not leaf["path"].startswith("platforms/")]
+        source["tasks"][0]["controlled_document_access"]["documents"] = [document for document in source["tasks"][0]["controlled_document_access"]["documents"] if not document["path"].startswith("platforms/")]
+        with self.assertRaisesRegex(ValueError, "builtin engineering baseline"):
+            _execute("validate", source)
+        self.assertEqual({"status": "valid"}, _execute("validate", self.original))
+        with self.assertRaisesRegex(ValueError, "cannot waive"):
+            self.update({"tasks": {"api": {"set": {"handoff_assessment": {
+                "independent_qa": "not_required", "documentation": "not_required", "reason": "范围很小",
+            }}}}})
 
     def test_agent_binding_requires_observed_running_task_and_is_immutable(self):
         """原生身份只能补记到已运行任务；完成态引用可保留但不能换绑。"""
@@ -94,7 +146,7 @@ class RecordUpdateTest(unittest.TestCase):
             self.update({"tasks": {"api": {"append": {"agent_ref": [reference]}}}}, running)
 
     def test_agent_reference_shape_and_active_identity_collision(self):
-        """真实 ID 由 PM 核实；图只校验结构、边界与同宿主活动身份的独占。"""
+        """真实ID由PM核实；图拒绝不同任务共享同一宿主身份，包括历史记录。"""
         source = self.update({"tasks": {"api": {"set": {"state": "RUNNING"}}}})
         for reference in (None, [], {}, {"host": "other", "agent_id": "a"},
                           {"host": "codex", "agent_id": ""}, {"host": "codex", "agent_id": " a"},
@@ -106,14 +158,17 @@ class RecordUpdateTest(unittest.TestCase):
                 _execute("validate", invalid)
         reference = {"host": "codex", "agent_id": "/fixture/agent-a"}
         source["tasks"][0]["agent_ref"] = reference
-        source["tasks"].append({"id": "read", "request_id": "request-1", "task_type": "read_only",
+        source["tasks"].append(v2_task({"id": "read", "request_id": "request-1", "task_type": "read_only",
                                 "state": "RUNNING", "depends_on": [], "blocks": [], "gates": [],
-                                "owned_paths": [], "semantic_locks": []})
+                                "owned_paths": [], "semantic_locks": []}))
         bind = {"tasks": {"read": {"set": {"agent_ref": reference}}}}
-        with self.assertRaisesRegex(ValueError, "agent_ref.*active|active.*agent_ref"):
+        with self.assertRaisesRegex(ValueError, "agent_ref.*tasks"):
             self.update(bind, source)
         source["tasks"][0]["state"] = "BUILD_VERIFIED"
-        self.assertEqual(reference, self.update(bind, source)["tasks"][1]["agent_ref"])
+        with self.assertRaisesRegex(ValueError, "agent_ref.*tasks"):
+            self.update(bind, source)
+        fresh = {"host": "codex", "agent_id": "/fixture/agent-new"}
+        self.assertEqual(fresh, self.update({"tasks": {"read": {"set": {"agent_ref": fresh}}}}, source)["tasks"][1]["agent_ref"])
         # 历史任务引用不会自动授权一个尚未运行的新任务。
         source["tasks"][1]["state"] = "DECLARED"
         with self.assertRaisesRegex(ValueError, "RUNNING|QA"):
@@ -122,9 +177,9 @@ class RecordUpdateTest(unittest.TestCase):
     def test_explicit_qa_binding_preserves_existing_qa_barrier(self):
         source = copy.deepcopy(self.original)
         source["tasks"][0]["blocks"] = ["qa"]
-        source["tasks"].append({"id": "qa", "request_id": "request-1", "task_type": "qa",
+        source["tasks"].append(v2_task({"id": "qa", "request_id": "request-1", "task_type": "qa",
                                 "state": "DECLARED", "depends_on": ["api"], "blocks": [],
-                                "gates": [], "owned_paths": [], "semantic_locks": []})
+                                "gates": [], "owned_paths": [], "semantic_locks": []}))
         with self.assertRaisesRegex(ValueError, "QA barrier"):
             self.update({"tasks": {"qa": {"set": {"state": "QA"}}}}, source)
         source["tasks"][0]["state"] = "BUILD_VERIFIED"
@@ -148,7 +203,7 @@ class RecordUpdateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cover"):
             self.update(change)
         change["tasks"]["api"]["documents"] = {
-            "docs/STANDARDS.md": ["src/two"], "docs/standards/GENERAL.md": ["src/two"],
+            document["path"]: ["src/two"] for document in self.original["tasks"][0]["controlled_document_access"]["documents"]
         }
         updated = self.update(change)
         self.assertEqual(["src/one", "src/two"], updated["tasks"][0]["owned_paths"])
@@ -160,8 +215,7 @@ class RecordUpdateTest(unittest.TestCase):
             operation = {"append": fields}
             if "owned_paths" in fields:
                 operation["documents"] = {
-                    "docs/STANDARDS.md": fields["owned_paths"],
-                    "docs/standards/GENERAL.md": fields["owned_paths"],
+                    document["path"]: fields["owned_paths"] for document in self.original["tasks"][0]["controlled_document_access"]["documents"]
                 }
             with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, "blocked"):
                 self.update({"tasks": {"api": operation}}, running)
@@ -174,10 +228,10 @@ class RecordUpdateTest(unittest.TestCase):
     def test_qa_running_uses_existing_request_barrier_and_lock_checks(self):
         source = copy.deepcopy(self.original)
         source["tasks"][0]["blocks"] = ["qa"]
-        source["tasks"].append({
+        source["tasks"].append(v2_task({
             "id": "qa", "request_id": "request-1", "task_type": "qa", "state": "DECLARED",
             "depends_on": ["api"], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [],
-        })
+        }))
         for state in ("RUNNING", "QA"):
             with self.subTest(state=state):
                 source["tasks"][0]["state"] = "DECLARED"
@@ -208,10 +262,10 @@ class RecordUpdateTest(unittest.TestCase):
         source = copy.deepcopy(self.original)
         source["tasks"][0]["blocks"] = ["evidence", "read", "writer-b"]
         for task_id, kind in (("evidence", "evidence"), ("read", "read_only")):
-            source["tasks"].append({
+            source["tasks"].append(v2_task({
                 "id": task_id, "request_id": "request-1", "task_type": kind, "state": "DECLARED",
                 "depends_on": ["api"], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [],
-            })
+            }))
         other = copy.deepcopy(self.original["tasks"][0])
         other.update(id="writer-b", request_id="request-b", depends_on=["api"],
                      owned_paths=["src/two"], semantic_locks=["api-b"])
@@ -235,7 +289,7 @@ class RecordUpdateTest(unittest.TestCase):
         source["tasks"].append(other)
         change = {"tasks": {"api": {
             "append": {"owned_paths": ["src/two"]},
-            "documents": {"docs/STANDARDS.md": ["src/two"], "docs/standards/GENERAL.md": ["src/two"]},
+            "documents": {document["path"]: ["src/two"] for document in self.original["tasks"][0]["controlled_document_access"]["documents"]},
         }}}
         with self.assertRaisesRegex(ValueError, "overlapping"):
             self.update(change, source)
@@ -454,8 +508,160 @@ class RecordCliTest(unittest.TestCase):
                                str(PACK / "lib/task_graph_cli.py"), *map(str, args)],
                               input=input, text=True, capture_output=True, check=False, timeout=15)
 
+    def test_light_single_pack_validates_updates_and_retires_without_a_graph(self):
+        """通过实际CLI走Light自包含交接、首绑和退役，不输出额外DAG或旁账。"""
+        from lib.task_graph_cli import export_task_pack
+        value = export_task_pack(graph(), "api")
+        task = value["task"]
+        task.update(workflow_level="Light", goal="修复本模块一个已确认行为",
+                    input_contracts=["当前授权范围"], acceptance_evidence=["关键入口冒烟"])
+        for field in ("depends_on", "blocks", "qa_scope", "semantic_locks", "gates"):
+            task.pop(field, None)
+        value["approved_gates"] = []
+        self.source.write_text(json.dumps(value), encoding="utf-8")
+        result = self.invoke("task", "--input", self.source)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(value, json.loads(result.stdout))
+        self.assertNotIn("tasks", json.loads(result.stdout))
+        reference = {"host": "codex", "agent_id": "fixture-light"}
+        for fields in ({"state": "RUNNING"}, {"agent_ref": reference}):
+            result = self.invoke("update", "--input", self.source, "--expect-sha256",
+                                 records.digest(self.source.read_bytes()), "--patch", "-",
+                                 input=json.dumps({"tasks": {"api": {"set": fields}}}))
+            self.assertEqual(0, result.returncode, result.stderr)
+        query = ("continuation", "--input", self.source, "--task-id", "api", "--host", "codex", "--observed-state", "idle")
+        result = self.invoke(*query)
+        self.assertTrue(json.loads(result.stdout)["reuse_allowed"])
+        result = self.invoke("update", "--input", self.source, "--expect-sha256",
+                             records.digest(self.source.read_bytes()), "--patch", "-",
+                             input=json.dumps({"tasks": {"api": {"set": {"agent_retired": True}}}}))
+        self.assertEqual(0, result.returncode, result.stderr)
+        result = self.invoke(*query)
+        self.assertEqual("agent_retired", json.loads(result.stdout)["reason"])
+        stored = json.loads(self.source.read_text(encoding="utf-8"))
+        self.assertEqual("RUNNING", stored["task"]["state"])
+        self.assertNotIn("depends_on", stored["task"])
+        self.assertEqual({"graph.json"}, {path.name for path in self.root.iterdir()})
+
+    def test_export_projects_only_current_standards_approval_and_scope(self):
+        from lib.task_graph_cli import export_task_pack
+        source = graph()
+        source["ui_contract"] = {"prototype_paths": ["docs/standards/prototype"]}
+        source["standards_contract"]["leaves"].append({"path": "docs/standards/DESIGN_FOUNDATIONS.md",
+            "domain": "design", "content_fingerprint": "d" * 64, "rule_ids": ["des-unrelated"]})
+        source["standards_contract"]["required_design_rule_ids"] = ["des-unrelated"]
+        source["standards_contract"]["protected_paths"] = [{"path": "another-module/vendor", "rule_id": "eng-common-001",
+            "direct_edit": "forbidden_without_exception", "allowed_paths": []}]
+        source["approved_gates"].append("platform_security_prompt")
+        source["tasks"].append(v2_task({"id": "sibling", "request_id": "other", "task_type": "read_only",
+            "state": "DECLARED", "owned_paths": [], "depends_on": [], "blocks": [], "gates": [],
+            "semantic_locks": [], "goal": "不应复制给当前实例的兄弟任务"}))
+        result = export_task_pack(source, "api")
+        self.assertNotIn("tasks", result)
+        self.assertNotIn("ui_contract", result)
+        self.assertEqual(["requirements_approved"], result["approved_gates"])
+        self.assertEqual([], result["standards_contract"]["required_design_rule_ids"])
+        self.assertEqual([], result["standards_contract"]["protected_paths"])
+        self.assertTrue(all(leaf["domain"] == "engineering" for leaf in result["standards_contract"]["leaves"]))
+        self.assertNotIn("兄弟任务", json.dumps(result, ensure_ascii=False))
+        # 缺UI对象不削弱固定规范根/原型路径的写入保护。
+        result["task"]["owned_paths"] = ["docs/standards/prototype/page.html"]
+        with self.assertRaises(ValueError):
+            _execute("validate", result)
+
+    def test_qa_export_keeps_request_approval_and_protection_without_siblings(self):
+        from lib.task_graph_cli import export_task_pack
+        source = graph()
+        writer = source["tasks"][0]
+        writer.update(state="BUILD_VERIFIED", blocks=["qa"])
+        writer["gates"].append("exceptional:current-fix")
+        writer["standards_exceptions"] = [{"rule_id": "eng-common-001", "gate": "exceptional:current-fix",
+            "reason": "当前请求明确批准的受保护补丁", "patch_surface": ["src/one"],
+            "rollback_plan": "恢复已保护版本", "verification_commands": ["current-build-and-smoke"]}]
+        source["standards_contract"]["protected_paths"] = [
+            {"path": path, "rule_id": "eng-common-001", "direct_edit": "forbidden_without_exception", "allowed_paths": []}
+            for path in ("src/one", "other-module/vendor")]
+        source["approved_gates"] += ["exceptional:current-fix", "exceptional:unrelated-fix"]
+        source["tasks"] += [v2_task({"id": "qa", "request_id": "request-1", "task_type": "qa", "state": "QA",
+            "depends_on": ["api"], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [],
+            "agent_ref": {"host": "codex", "agent_id": "current-qa"}}),
+            v2_task({"id": "other", "request_id": "other-request", "task_type": "read_only", "state": "DECLARED",
+            "depends_on": [], "blocks": [], "gates": ["exceptional:unrelated-fix"], "owned_paths": [],
+            "semantic_locks": [], "goal": "不属于当前审查的兄弟请求"})]
+        result = export_task_pack(source, "qa")
+        self.assertEqual("qa", result["task"]["id"])
+        self.assertEqual(["requirements_approved", "exceptional:current-fix"], result["approved_gates"])
+        self.assertEqual(["src/one"], [policy["path"] for policy in result["standards_contract"]["protected_paths"]])
+        self.assertNotIn("兄弟请求", json.dumps(result, ensure_ascii=False))
+        self.assertNotIn("tasks", result)
+
+    def test_pack_cannot_import_parent_history_or_skip_minimum_verification(self):
+        from lib.task_graph_cli import export_task_pack
+        value = export_task_pack(graph(), "api")
+        value["task"].update(workflow_level="Light", goal="当前工作", input_contracts=["当前合同"],
+                             acceptance_evidence=["当前证据"])
+        for key in ("parent_history", "sibling_tasks", "fork_turns"):
+            bad = copy.deepcopy(value)
+            bad[key] = "all"
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                _execute("validate", bad)
+        value["task"]["verification_commands"] = []
+        with self.assertRaisesRegex(ValueError, "verification_commands"):
+            _execute("validate", value)
+
+    def test_light_ui_copy_keeps_design_authority_without_full_confirmation(self):
+        """真实CLI证明Light文案保留UI/规范边界，却无需Full确认、原型或QA图。"""
+        from lib.task_graph_cli import export_task_pack
+        value = export_task_pack(graph(), "api")
+        task = value["task"]
+        task.update(workflow_level="Light", role="xy-web", surface_kind="production_ui",
+                    goal="按当前已确认文案纠正保存按钮拼写", input_contracts=["当前保存按钮含义与行为不变"],
+                    acceptance_evidence=["真实加载入口、键与占位符一致"], gates=[],
+                    audit_surfaces=["standards-conformance", "ui", "accessibility"],
+                    ui_change={"route": "UI-Conformance", "design_delta": "none",
+                               "prototype_policy": "not_applicable", "prototype_decision": None,
+                               "design_authority_refs": [{"kind": "production_baseline", "authority_id": "save-copy",
+                                  "path": "src/one", "anchor": "save-label", "content_fingerprint": "a" * 64,
+                                  "resolution_state": "resolved"}],
+                               "affected_surfaces": ["save-label"], "justification": "只纠正明确拼写，不改变语义"})
+        for field in ("qa_scope", "depends_on", "blocks"):
+            task.pop(field, None)
+        value["approved_gates"] = []
+        value["ui_contract"] = {"prototype_paths": ["docs/standards/prototype"]}
+        value["standards_contract"]["required_design_rule_ids"] = ["des-copy"]
+        value["standards_contract"]["leaves"].append({"path": "docs/standards/DESIGN_FOUNDATIONS.md",
+            "domain": "design", "content_fingerprint": "d" * 64, "rule_ids": ["des-copy"]})
+        task["controlled_document_access"]["documents"].append({
+            "path": "docs/standards/DESIGN_FOUNDATIONS.md", "mode": "full", "reason": "适用设计底线",
+            "sections_or_queries": [], "content_fingerprint": "d" * 64, "rule_ids": ["des-copy"],
+            "applies_to": task["owned_paths"],
+        })
+        value = with_builtin_standards({**value, "tasks": [task]})
+        value.pop("tasks")
+        self.source.write_text(json.dumps(value), encoding="utf-8")
+        result = self.invoke("task", "--input", self.source)
+        self.assertEqual(0, result.returncode, result.stderr)
+        for defect in ("missing-authority", "unresolved", "missing-design", "non-ui", "design-change"):
+            bad = copy.deepcopy(value)
+            item = bad["task"]
+            if defect == "missing-authority":
+                item["ui_change"]["design_authority_refs"] = []
+            elif defect == "unresolved":
+                item["ui_change"]["design_authority_refs"][0]["resolution_state"] = "unknown"
+            elif defect == "missing-design":
+                item["controlled_document_access"]["documents"] = [document for document in item["controlled_document_access"]["documents"] if "/xy-ui-design/" not in document["path"] and "DESIGN_FOUNDATIONS" not in document["path"]]
+            elif defect == "non-ui":
+                item["surface_kind"] = "non_ui"
+            else:
+                item["ui_change"].update(route="UI-Patch", design_delta="changed")
+            self.source.write_text(json.dumps(bad), encoding="utf-8")
+            with self.subTest(defect=defect):
+                rejected = self.invoke("task", "--input", self.source)
+                self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                self.assertNotIn("Traceback", rejected.stderr)
+
     def test_continuation_cli_is_read_only_and_requires_current_host_observation(self):
-        """通过真实 CLI 验证旧图、绑定、CAS、活动观察及阻塞建议，查询不发布文件。"""
+        """通过真实CLI验证2.0图、绑定、CAS、当前观察及阻塞建议，查询不发布文件。"""
         query = ("continuation", "--input", self.source, "--task-id", "api", "--host", "codex")
         before = self.source.read_bytes()
         result = self.invoke(*query, "--observed-state", "idle")
@@ -507,7 +713,11 @@ class RecordCliTest(unittest.TestCase):
         target = self.root / "api-task.json"
         result = self.invoke("task", "--input", self.source, "--task-id", "api", "--output", target, "--expect-sha256", "missing")
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(json.loads(self.source.read_text(encoding="utf-8"))["tasks"][0], json.loads(target.read_text(encoding="utf-8")))
+        exported = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(self.source.read_text(encoding="utf-8"))["tasks"][0], exported["task"])
+        self.assertEqual(2, exported["schema_version"])
+        self.assertNotIn("tasks", exported)
+        self.assertEqual(graph()["standards_contract"], exported["standards_contract"])
         self.assertEqual({"graph.json", "api-task.json"}, {p.name for p in self.root.iterdir()})
         result = self.invoke("qa-ready", "--input", self.source)
         self.assertFalse(json.loads(result.stdout)["qa_ready"])

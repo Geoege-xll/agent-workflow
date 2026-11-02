@@ -1,6 +1,6 @@
 {
   "name": "@geoege-xll/agent-workflow",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Offline Windows x64 project workflow installer (local, unpublished)",
   "private": true,
   "bin": {

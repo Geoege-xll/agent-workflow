@@ -24,7 +24,7 @@ rule changes only retrieval; it does not remove this Skill or its post-QA closeo
 |---|---|---|
 | Project entry | `project.yaml` -> `docs.project` (also `memory.portable_checkpoint`) | Current verified scope and links to active feature truth |
 | Feature truth and rationale | `project.yaml` -> `docs.features` | Current requirements, acceptance, functional/architectural solution and necessary reasons; shared architecture may have one detail here |
-| Requirement plans | `project.yaml` -> `docs.plans` | Decided changes and concise recovery state, saved by Trivial/Light/Full policy; not current feature truth |
+| Requirement plans | `project.yaml` -> `docs.plans` | Decided changes and concise recovery state, saved by Light/Full policy; not current feature truth |
 | Engineering and design truth | `project.yaml` -> remaining `docs.*` paths | Effective engineering, design-system, and UI evidence; paths are an index, not a preload list |
 | UI design evidence | `project.yaml` -> `docs.standards_root/prototype` | Stable concrete pages, in-page contracts, and shared prototype CSS |
 | Working memory | agentmemory | Cross-session observations and retrieval hints |
@@ -103,12 +103,10 @@ hits or save secrets, credentials, PII, or user-sensitive data.
 
 ## Closeout after QA PASS
 
-This procedure is not needed for any Trivial task, including Trivial UI copy, with no current-truth or durable-knowledge
-change. If loaded for such a task, leave documents and memory unchanged; do not require QA, fabricate
-QA PASS or create empty closeout records just to finish. Its local verification and scoped commit
-assessment follow `.agent-workflow/product/WORKFLOW.md` -> `General Trivial early exit`, with the
-additional `Trivial UI copy` safeguards when applicable. A local verification result does not require
-a fabricated QA PASS, and a recalled lesson alone does not trigger document or memory writes.
+Light在交接时按实际风险和持久知识价值评估文档／记忆；无需要时保持不变，不强制QA、
+Full图或空收口记录，不制造QA PASS。Full沿用有效PASS后的收口链；选定必需独立审计的
+Light也须先完成该审计。当前任务包、成果和必要完整证据接收后按WORKFLOW生命周期
+结束或退役实例，不能因历史会话不可用而丢失唯一日志。
 
 Design-standard adoption is distinct from PROJECT/feature projection. Apply the lifecycle in
 `.agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant;
@@ -116,14 +114,15 @@ do not defer needed design authority until after production QA, treat a feature-
 a standards no-op, or save agentmemory automatically because a standard changed. Record production
 migration facts only for verified scope; do not duplicate the standard or page contract in memory.
 
-Follow `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`.
-- Treat `docs.project` and active feature documents as the last QA-verified project truth. Planned,
+Full遵守 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`；
+Light只执行实际评估需要的投影／记忆，不把局部验证写成QA已通过。
+- Treat `docs.project` and active feature documents as the last verified project truth under applicable acceptance. Planned,
   running, failed, or not-yet-verified work stays in task state and, when required by task level, the
   same saved plan. Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`
   for recovery or updates; plans are not canonical intermediate feature status or automatic approval.
 - The PM is the sole writer for `docs.project` and `docs.features`. Implementers and QA return a
   proposed projection and evidence; they do not directly mutate those authorities.
-- Apply a required controlled-document projection only after integrated QA returns PASS. Update
+- Full投影只在集成QA PASS后；Light在最小验证、实际所需独立审计接收及文档评估完成后更新。Update
   existing entries in place: never append task chronology, full QA reports, scheduler state, raw
   logs, ticket history, or implementation transcripts.
 - Do not impose a line or byte cap on `PROJECT.md`. Its size follows the number of currently active

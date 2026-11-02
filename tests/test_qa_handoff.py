@@ -8,6 +8,28 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tests.test_scheduler_boundaries import v2_task
+
+
+def qa_task_pack(host: str = "codex") -> dict:
+    """创建自包含当前Reviewer包；身份是测试数据，不声称真实原生执行。"""
+    return {"schema_version": 2, "standards_contract": {
+                "index_path": "docs/STANDARDS.md", "root": "docs/standards", "index_fingerprint": "e" * 64,
+                "required_engineering_rule_ids": ["eng-source-boundary"], "required_design_rule_ids": [],
+                "leaves": [{"path": "docs/standards/GENERAL.md", "domain": "engineering",
+                            "content_fingerprint": "f" * 64, "rule_ids": ["eng-source-boundary"]}], "protected_paths": [],
+            },
+            "approved_gates": [], "task": v2_task({
+                "id": "qa", "request_id": "qa-request", "task_type": "qa", "state": "QA",
+                "depends_on": [], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [],
+                "agent_ref": {"host": host, "agent_id": "fixture-reviewer"},
+            })}
+
+
+def handoff_ref(pack: dict, body: bytes) -> dict:
+    task = pack["task"]
+    return {"request_id": task["request_id"], "task_id": task["id"], "agent_alias": task["agent_alias"],
+            "agent_ref": task["agent_ref"], "task_pack_sha256": hashlib.sha256(body).hexdigest()}
 
 
 class QAHandoffValidationTest(unittest.TestCase):
@@ -16,6 +38,9 @@ class QAHandoffValidationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.cli = Path(__file__).resolve().parents[1] / "lib/qa_handoff_cli.py"
         self.payload = {
+            "schema_version": 2,
+            "skill_evidence": {"skills_used": ["xy-qa-review"], "unavailable_required_skills": [],
+                               "uncovered_audit_surfaces": []},
             "audit_result": "PASS",
             "review_method": {
                 "selected": "internal-xy-qa-procedure",
@@ -68,13 +93,18 @@ class QAHandoffValidationTest(unittest.TestCase):
                 ],
             },
         }
+        self.task_pack = qa_task_pack()
+        self.task_pack_body = json.dumps(self.task_pack, ensure_ascii=False).encode("utf-8")
+        self.payload["handoff_ref"] = handoff_ref(self.task_pack, self.task_pack_body)
 
-    def invoke(self, payload: dict[str, object]) -> subprocess.CompletedProcess[str]:
+    def invoke(self, payload: dict[str, object], *, task_pack_body: bytes | None = None) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="qa-handoff-") as raw:
             source = Path(raw) / "handoff.json"
             source.write_text(json.dumps(payload), encoding="utf-8")
+            current_pack = Path(raw).resolve() / "qa-task-pack.json"
+            current_pack.write_bytes(self.task_pack_body if task_pack_body is None else task_pack_body)
             return subprocess.run(
-                [sys.executable, str(self.cli), "validate", "--input", str(source)],
+                [sys.executable, str(self.cli), "validate", "--input", str(source), "--task-pack", str(current_pack)],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -85,6 +115,25 @@ class QAHandoffValidationTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual({"status": "valid"}, json.loads(result.stdout))
 
+    def test_v2_result_cannot_reuse_old_pass_identity_or_reencoded_pack(self):
+        """每个身份维度和真正交接包的字节都必须匹配，FAIL也不能换Reviewer。"""
+        for outcome in ("PASS", "FAIL"):
+            for field, value in (("request_id", "old-request"), ("task_id", "other-task"),
+                                 ("agent_alias", "other-alias"), ("task_pack_sha256", "0" * 64),
+                                 ("agent_ref", {"host": "codex", "agent_id": "replacement-reviewer"})):
+                candidate = json.loads(json.dumps(self.payload))
+                candidate["audit_result"] = outcome
+                candidate["handoff_ref"][field] = value
+                with self.subTest(outcome=outcome, field=field):
+                    result = self.invoke(candidate)
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("handoff_ref", result.stderr)
+        reencoded = json.dumps(self.task_pack, indent=2).encode("utf-8")
+        self.assertEqual(2, self.invoke(self.payload, task_pack_body=reencoded).returncode)
+        for version in (None, 1, True, "2"):
+            candidate = {**self.payload, "schema_version": version}
+            self.assertEqual(2, self.invoke(candidate).returncode)
+
     def builtin_payload(self):
         payload = json.loads(json.dumps(self.payload))
         path = "platforms/shared/skills/xy-code-standards/references/rules.md"
@@ -93,7 +142,25 @@ class QAHandoffValidationTest(unittest.TestCase):
         coverage.update(index_fingerprint=None, task_pack_rule_ids=["eng-common-005"], required_engineering_rule_ids=["eng-common-005"])
         coverage["path_checks"][0]["applicable_rule_ids"] = ["eng-common-005"]
         coverage["rule_checks"][0].update(rule_id="eng-common-005", source_path=path, source_fingerprint=digest, source_anchor="配置、错误和维护")
+        self.task_pack["standards_contract"].update(index_fingerprint=None, required_engineering_rule_ids=["eng-common-005"],
+            leaves=[{"path": path, "domain": "engineering", "content_fingerprint": digest, "rule_ids": ["eng-common-005"]}])
+        self.task_pack_body = json.dumps(self.task_pack, ensure_ascii=False).encode("utf-8")
+        payload["handoff_ref"] = handoff_ref(self.task_pack, self.task_pack_body)
         return payload
+
+    def test_current_pack_prevents_stale_standards_or_inactive_reviewer(self):
+        candidate = json.loads(json.dumps(self.payload))
+        candidate["standards_policy_coverage"]["rule_checks"][0]["source_fingerprint"] = "0" * 64
+        result = self.invoke(candidate)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("current task pack", result.stderr)
+        for state, retired in (("DECLARED", False), ("QA_PASSED", False), ("QA", True)):
+            pack = json.loads(self.task_pack_body)
+            pack["task"].update(state=state, agent_retired=retired)
+            body = json.dumps(pack).encode("utf-8")
+            candidate = {**self.payload, "handoff_ref": handoff_ref(pack, body)}
+            with self.subTest(state=state, retired=retired):
+                self.assertEqual(2, self.invoke(candidate, task_pack_body=body).returncode)
 
     def test_builtin_coverage_accepts_missing_project_index_and_exact_installed_source(self):
         payload = self.builtin_payload()
@@ -315,6 +382,10 @@ class NativeQAHandoffTest(unittest.TestCase):
         fixture.setUp()
         self.cli = fixture.cli
         self.payload = fixture.payload
+        temporary = tempfile.TemporaryDirectory(prefix="qa-current-pack-")
+        self.addCleanup(temporary.cleanup)
+        self.pack_file = Path(temporary.name).resolve() / "qa-pack.json"
+        self.pack_file.write_bytes(fixture.task_pack_body)
         self.payload["skill_evidence"] = {
             "skills_used": ["xy-qa-review"],
             "unavailable_required_skills": [],
@@ -323,6 +394,10 @@ class NativeQAHandoffTest(unittest.TestCase):
 
     def envelope(self, host: str, payload: dict[str, object]) -> dict[str, object]:
         """各宿主只使用已确定的最终 JSON 形态，不给事件流猜测完成状态。"""
+        pack = qa_task_pack(host)
+        body = json.dumps(pack, ensure_ascii=False).encode("utf-8")
+        self.pack_file.write_bytes(body)
+        payload["handoff_ref"] = handoff_ref(pack, body)
         if host == "codex":
             return payload
         if host == "claude":
@@ -334,7 +409,8 @@ class NativeQAHandoffTest(unittest.TestCase):
 
     def invoke_path(self, host: str, source: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, str(self.cli), "extract", "--host", host, "--input", str(source)],
+            [sys.executable, str(self.cli), "extract", "--host", host, "--input", str(source),
+             "--task-pack", str(self.pack_file)],
             text=True, capture_output=True, check=False,
         )
 
@@ -364,7 +440,7 @@ class NativeQAHandoffTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         schema = json.loads(result.stdout)
         self.assertEqual("object", schema["type"])
-        self.assertEqual({"audit_result", "review_method", "standards_policy_coverage", "skill_evidence"},
+        self.assertEqual({"schema_version", "handoff_ref", "audit_result", "review_method", "standards_policy_coverage", "skill_evidence"},
                          set(schema["properties"]))
         self.assertEqual(["PASS", "FAIL"], schema["properties"]["audit_result"]["enum"])
         method = schema["properties"]["review_method"]["properties"]

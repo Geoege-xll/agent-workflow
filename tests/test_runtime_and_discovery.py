@@ -182,13 +182,14 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
         # 只读任务无需生产规范合同，用最小合法图隔离命令依赖语义；不伪造 Writer。
         # 禁用隐式 UTF-8，并让任务 ID 真的包含中文，覆盖 CLI 输出而非仅内联生成。
         self.environment.update(LC_ALL="C", PYTHONCOERCECLOCALE="0", PYTHONUTF8="0")
-        payload = {
+        from tests.test_scheduler_boundaries import v2_graph
+        payload = v2_graph({
             "tasks": [{"id": "中文任务", "request_id": "req-helper", "task_type": "read_only",
                        "owned_paths": [], "state": "DECLARED", "depends_on": [], "blocks": [],
                        "gates": [], "semantic_locks": []}],
             "request_id": "req-helper", "capacity": 1, "approved_gates": [],
             "active_paths": [], "active_semantic_locks": [],
-        }
+        })
         for stage in ("ready", "qa-ready"):
             with self.subTest(stage=stage):
                 command = self.documented_scheduler(stage)

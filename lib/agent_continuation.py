@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 import unicodedata
+import re
+from pathlib import PurePosixPath
 
 try:
     from .task_graph import TaskGraphError
@@ -18,6 +20,50 @@ except ImportError:
 HOSTS = ("codex", "claude", "antigravity")
 OBSERVED_STATES = ("running", "idle", "cancelled", "missing", "unknown")
 MAX_AGENT_ID_LENGTH = 256
+IDENTITY_FIELDS = frozenset({"workflow_level", "module", "role", "agent_alias", "instance_policy", "context_policy"})
+ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
+ROLE_RE = re.compile(r"xy-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+
+
+def validate_identity(task: dict[str, Any]) -> None:
+    """绑定职责别名与模块根；声明只约束交接，不证明宿主已隔离上下文。
+
+    根模块`.`不是整个仓库写许可，实际授权仍由owned_paths及原有保护门禁限定。
+    不接收继承/复制历史的替代策略，也不替调用方推断实际原生身份。
+    """
+    missing = IDENTITY_FIELDS - set(task)
+    if missing:
+        raise TaskGraphError("task is missing 2.0 identity field(s): " + ", ".join(sorted(missing)))
+    if task["workflow_level"] not in ("Light", "Full"):
+        raise TaskGraphError("workflow_level must be Light or Full")
+    if task["instance_policy"] != "fresh" or task["context_policy"] != "handoff_only":
+        raise TaskGraphError("2.0 requires instance_policy fresh and context_policy handoff_only")
+    for field, pattern in (("agent_alias", ALIAS_RE), ("role", ROLE_RE)):
+        if not isinstance(task[field], str) or not pattern.fullmatch(task[field]):
+            raise TaskGraphError(f"task {field} must be a bounded canonical identifier")
+    module = task["module"]
+    if (not isinstance(module, str) or not module.strip() or "\\" in module
+            or PurePosixPath(module).is_absolute() or ".." in module.split("/")
+            or any(char in module for char in "*?[]")
+            or any(unicodedata.category(char).startswith("C") for char in module)
+            or module != PurePosixPath(module).as_posix()):
+        raise TaskGraphError("module must be a normalized project-relative module root (or .)")
+    for path in task.get("owned_paths", []):
+        if isinstance(path, str) and module != "." and not (
+                path.rstrip("/") == module or path.startswith(module + "/")):
+            raise TaskGraphError(f"owned_paths must stay inside module {module}: {path}")
+    if "agent_retired" in task and not isinstance(task["agent_retired"], bool):
+        raise TaskGraphError("agent_retired must be a boolean")
+    if "handoff_assessment" in task:
+        assessment = task["handoff_assessment"]
+        if (not isinstance(assessment, dict)
+                or set(assessment) != {"independent_qa", "documentation", "reason"}
+                or any(assessment.get(key) not in ("required", "not_required")
+                       for key in ("independent_qa", "documentation"))
+                or not isinstance(assessment.get("reason"), str) or not assessment["reason"].strip()):
+            raise TaskGraphError("handoff_assessment requires independent_qa, documentation and a non-empty reason")
+        if task["workflow_level"] == "Full" and assessment["independent_qa"] != "required":
+            raise TaskGraphError("Full handoff_assessment cannot waive independent QA")
 
 
 def active(task: dict[str, Any]) -> bool:
@@ -45,21 +91,25 @@ def validate_reference(value: Any, label: str = "agent_ref") -> dict[str, str]:
 
 
 def validate_references(tasks: list[dict[str, Any]]) -> None:
-    """兼容未绑定旧图；同宿主同 ID 不能同时代表两个活动任务。
+    """别名稳定对应模块/角色，不同任务不能复用同宿主原生ID，包括历史引用。
 
     已完成历史引用只作追溯，不能据此证明另一个任务已获派发或角色授权。
     该不变量在整个更新结果上校验，避免多任务补丁或重入 RUNNING 绕过冲突。
     """
     owners: dict[tuple[str, str], str] = {}
+    aliases: dict[str, tuple[str, str]] = {}
     for task in tasks:
+        validate_identity(task)
+        binding = (task["module"], task["role"])
+        if aliases.setdefault(task["agent_alias"], binding) != binding:
+            raise TaskGraphError("agent_alias cannot drift between module or role bindings")
         if "agent_ref" not in task:
             continue
         reference = validate_reference(task["agent_ref"], f"task {task.get('id')}.agent_ref")
-        if active(task):
-            key = (reference["host"], reference["agent_id"])
-            if key in owners:
-                raise TaskGraphError(f"agent_ref is shared by active tasks: {owners[key]}, {task.get('id')}")
-            owners[key] = task.get("id", "")
+        key = (reference["host"], reference["agent_id"])
+        if key in owners:
+            raise TaskGraphError(f"agent_ref is shared across tasks (including history): {owners[key]}, {task.get('id')}")
+        owners[key] = task.get("id", "")
 
 
 def check_binding(before: dict[str, Any], reference: Any) -> None:
@@ -72,7 +122,7 @@ def check_binding(before: dict[str, Any], reference: Any) -> None:
     if "agent_ref" in before:
         if before["agent_ref"] != reference:
             raise TaskGraphError("existing agent_ref cannot be replaced or cleared")
-    elif not active(before):
+    elif before.get("agent_retired") or not active(before):
         raise TaskGraphError("first agent_ref binding requires an existing RUNNING task or explicit qa task in QA")
 
 
@@ -84,15 +134,19 @@ def continuation(task: dict[str, Any], host: str, observed_state: str) -> dict[s
     reason = "unbound"
     if reference is not None:
         validate_reference(reference)
-        if reference["host"] != host:
+        if task.get("agent_retired"):
+            reason = "agent_retired"
+        elif reference["host"] != host:
             reason = "host_mismatch"
         elif not active(task):
             reason = "task_not_active"
         else:
             reason = observed_state
+    elif task.get("agent_retired"):
+        reason = "agent_retired"
     allowed = reason in {"running", "idle"}
     return {
-        "task_id": task["id"], "agent_ref": reference, "observed_state": observed_state,
+        "task_id": task["id"], "agent_alias": task["agent_alias"], "agent_ref": reference, "observed_state": observed_state,
         "reuse_allowed": allowed, "reason": reason,
         "action": "wait" if reason == "running" else "followup" if reason == "idle" else "blocked",
         "handoff_required": True,

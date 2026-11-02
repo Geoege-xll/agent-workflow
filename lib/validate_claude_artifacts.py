@@ -627,7 +627,7 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
             "`internal-xy-qa-procedure`",
             "unrelated project work.",
             "After QA PASS, activate `xy-project-memory` in closeout mode",
-            "report to the user",
+            "最后报告用户",
         ) + STRICT_MEMORY_FIELDS
         for phrase in required:
             if phrase not in body:
@@ -643,7 +643,7 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
                 errors.append(message)
         qa = body.find("After QA PASS")
         closeout = body.find("xy-project-memory", qa + 1)
-        report = body.find("report to the user", closeout + 1)
+        report = body.find("最后报告用户", closeout + 1)
         if min(qa, closeout, report) < 0 or not qa < closeout < report:
             errors.append("xy-workflow must order QA PASS -> memory closeout -> user report")
 
@@ -787,7 +787,9 @@ def validate_agent(path: Path, role: str, project_root: Path, errors: list[str],
         errors.append(f"missing managed Agent marker: {path}")
     if body.count("## PM task-pack boundary (generated)") != 1:
         errors.append(f"Agent must contain exactly one PM task-pack boundary: {path}")
-    for phrase in ("ProjectProfile routing evidence", "exact `owned_paths`"):
+    # 2.0 生成角色必须保留独立任务身份与上下文政策；旧资源归属识别不经过此当前产物检查。
+    for phrase in ("ProjectProfile routing evidence", "exact `owned_paths`", "schema_version: 2",
+                   "instance_policy: fresh", "context_policy: handoff_only", "agent_alias"):
         if phrase not in body:
             errors.append(f"Agent task-pack boundary missing {phrase!r}: {path}")
     for fragment in FORBIDDEN_GENERATED_AGENT_FRAGMENTS:

@@ -546,6 +546,38 @@ def validate_business_confirmation_texts(
     return errors
 
 
+def validate_v2_execution_texts(sources: Iterable[tuple[Path, str]]) -> list[str]:
+    """三宿主共用当前执行合同检查，不为旧等级或旧交接保留运行分支。
+
+    规范与宿主入口都可能独立残留旧路由，因此每个实际来源分别拒绝旧等级；身份字段
+    则在两份权威合同检查，避免要求所有薄入口复制整段正文。磁盘所有权识别不在此处，
+    安装器仍可凭历史签名安全替换资源，但这种证明不能让旧内容通过当前源检查。
+    """
+    errors: list[str] = []
+    required = (
+        "Light", "Full", "schema_version: 2", "workflow_level", "module", "role",
+        "agent_alias", "instance_policy: fresh", "context_policy: handoff_only", "agent_retired",
+    )
+    host_required = {
+        "AGENTS.codex.tpl": ('fork_turns: "none"', "agent_retired", "interrupt_agent"),
+        "AGENTS.claude.tpl": ("Agent(xy-*)", "SendMessage", "TaskStop", "agent_retired"),
+        "AGENTS.antigravity.tpl": ("invoke_subagent", "worktree", "agent_retired"),
+    }
+    for path, body in sources:
+        # 等级名大小写固定为 Trivial；普通英文形容词 trivial 不是一条执行路由。
+        if re.search(r"\bTrivial\b", body):
+            errors.append(f"2.0 execution contract contains retired Trivial routing: {path}")
+        normalized = " ".join(body.split())
+        anchors = required if path.name in {"WORKFLOW.md", "AGENT_SCHEMA.md"} else ()
+        if path.name in host_required:
+            anchors = ("schema_version: 2", "instance_policy: fresh", "context_policy: handoff_only",
+                       *host_required[path.name])
+        for anchor in anchors:
+            if anchor not in normalized:
+                errors.append(f"2.0 execution contract missing {anchor!r}: {path}")
+    return errors
+
+
 def validate_business_confirmation_pack(pack: Path, host: str) -> list[str]:
     if host not in HOST_SOURCES:
         return [f"unsupported business confirmation host: {host}"]
@@ -574,6 +606,7 @@ def validate_business_confirmation_pack(pack: Path, host: str) -> list[str]:
             )
 
     errors.extend(validate_business_confirmation_texts(sources))
+    errors.extend(validate_v2_execution_texts(sources))
     # 三个宿主都调用这个只读源检查，因此验证范围策略只维护一套，且缺失/反向
     # 规则在实际项目写入之前拒绝，不依赖安装后的模型自行发现冲突。
     verification = next((body for path, body in sources

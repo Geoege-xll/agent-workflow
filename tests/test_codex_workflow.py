@@ -398,7 +398,7 @@ developer_instructions = "Audit security without editing files."
         text = self.read("AGENTS.md")
         managed = managed_agents_text(text)
         self.assertLessEqual(len(managed.encode("utf-8")), 8 * 1024)
-        for anchor in ("PM is the sole orchestrator", "requirements_approved", "visual_approved", "xy-qa", "$xy-workflow"):
+        for anchor in ("PM负责协调", "requirements_approved", "visual_approved", "schema_version:2", "$xy-workflow"):
             self.assertIn(anchor, text)
         self.assertLessEqual(text.count("Standard closed loop"), 1)
         self.assertLessEqual(text.count("Memory gates"), 1)
@@ -541,7 +541,7 @@ developer_instructions = "Audit security without editing files."
         self.assertIn("$grill-me", body)
         self.assertIn("Every `Full` request performs a **Grill Me coverage check**", body)
         self.assertIn("full_interview", body)
-        self.assertIn("Clear Trivial or Light work", body)
+        self.assertIn("Clear Light work", body)
         self.assertIn("fallback", body.lower())
         self.assertNotIn("every task must use $grill-me", body.lower())
 
@@ -795,7 +795,7 @@ developer_instructions = "Audit security without editing files."
             "Run `task_graph_cli.py qa-ready` for the request",
             "dispatch exactly one integrated read-only `xy-qa` reviewer for this request",
             "activate `xy-project-memory` in closeout mode",
-            "report to the user",
+            "最后报告用户",
         )
         for anchor in anchors:
             self.assertIn(anchor, body)
@@ -905,8 +905,8 @@ developer_instructions = "Audit security without editing files."
         self.assertNotIn("qa_requires_provider: true", sources)
         root_bootstrap = self.read("AGENTS.md")
         normalized_root = " ".join(root_bootstrap.split())
-        self.assertIn("strict project isolation", normalized_root)
-        self.assertIn("do not call provider recall or save", normalized_root)
+        # 根入口保留中文隔离边界；完整 provider 协议仍由上面的实际 Skill 来源核对。
+        self.assertRegex(normalized_root, r"没有严格\s*项目隔离与来源时不调用provider recall／save")
 
     def test_setup_rejects_ambiguous_or_incomplete_memory_config(self) -> None:
         mutations = (
@@ -1876,7 +1876,7 @@ managed-looking text without an end marker
                 "pm-global-inversion",
                 "agent_workflow/platforms/shared/skills/xy-workflow/SKILL.md",
                 ".agents/skills/xy-workflow/SKILL.md",
-                "Clear Trivial or Light work does not run this merely because the Skill is installed.",
+                "Clear Light work does not run this merely because the Skill is installed.",
                 "Every task must run Grill Me because the Skill is installed.",
             ),
             (

@@ -2,7 +2,7 @@
 
 仅在维护现有内部任务快照、导出变化后的完整 Task Pack、生成／核对文件指纹，或需要
 有界读取长文时使用本说明。它不增加任务等级、状态、业务确认、QA 阶段、强制报告，
-也不要求 Trivial 工作创建快照。
+Light 可直接维护同形单任务包，不要求创建Full图或第二账本。仅接受schema_version:2。
 
 ## Prefer the existing tool
 
@@ -31,10 +31,11 @@
 
 ## 初始化任务图
 
-`init` 将 PM 已明确的精简决定机械组装为现有格式的新图；旧图仍使用 `update`，原有
+`init` 将PM已明确的决定机械组装为schema_version:2的新图；已有2.0图仍使用`update`，原有
 读取、查询与校验合同不变。输入必须给出 `request_id`、`capacity`、`standards` 和非空
 `tasks`，通过 `--input <file>` 或 stdin 提供。以下调用复用当前 scratch 中已准备好的
-决定文件，不另外建立第二份任务状态：
+决定文件，不另外建立第二份任务状态。输入顶层声明schema_version:2，每个task给出
+workflow_level、规范化module、role、agent_alias、instance_policy:fresh与context_policy:handoff_only：
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py init \
@@ -80,8 +81,8 @@ The patch supports:
 - `tasks`: an object keyed by existing task ID. Each operation may contain `set`, `append`,
   `documents`, and `checkpoint`. `set` accepts `state`, `owned_paths`, `semantic_locks`, `input_contracts`,
   `output_contracts`, `acceptance_evidence`, `verification_commands`, and
-  `controlled_document_access` and optional `agent_ref`; `append` supports their existing arrays,
-  except the non-array fields `state`, `controlled_document_access` and `agent_ref`.
+  `controlled_document_access`、可选`agent_ref`、`agent_retired`与`handoff_assessment`; `append` supports their existing arrays,
+  except non-array fields; agent_ref、agent_retired、handoff_assessment不能append。
 - `documents`: within a task operation, map an existing document path to the owned paths that
   should be appended to its `applies_to`. Select actual applicable documents; the tool does not
   silently broaden every document. Existing standards coverage and write-boundary validation apply.
@@ -149,7 +150,19 @@ An explicit `--output <task-pack.json> --expect-sha256 missing` safely creates a
 for an existing output, pass its observed digest instead of `missing`. The graph cannot be the output.
 No pack or revision archive is created by default. A scope/contract change requires complete affected
 handoff under the plan lifecycle; a state-only change does not require rebuilding every Task Pack.
-Export preserves the recorded state; it never resets work, changes acceptance or messages a worker.
+导出外壳为schema_version:2、当前task、适用standards_contract与必要批准／UI依据；
+不含兄弟任务、完整图或PM／兄弟历史。Export preserves the recorded state; it never resets work,
+changes acceptance or messages a worker.
+
+Light使用同形单包：`task --input PACK`不带--task-id，校验并返回当前shell；明确写出时
+沿用--output与--expect-sha256。`update --input PACK --expect-sha256 SHA --patch PATCH`
+沿用`{tasks:{当前id:{set/append/...}}}`补丁，只更新本任务，不改其他任务或批准。Light保留
+当前task.state，但不要求Full图、依赖、规划与QA字段。continuation仍带当前--task-id。
+
+可选`handoff_assessment`只记录实际交接判断：
+`{independent_qa: required|not_required, documentation: required|not_required, reason: <非空依据>}`。
+不需要评估记录就省略，不为Light新增必填账本；Full不得以not_required跳过独立QA。
+记忆是否值得保存仍按现有按需原则，不创建空记忆。
 
 接收方宿主可读取导出文件时，交接确切的完整文件引用、当前文件 SHA-256 和简短变化
 摘要；接收方核对版本并完整读取当前 Task Pack，不能用摘要或差量代替。宿主无法读取
@@ -157,7 +170,7 @@ Export preserves the recorded state; it never resets work, changes acceptance or
 
 ## 原生能力观察、用量与同 Agent 续用
 
-以下入口都按需使用，不为普通只读或 Trivial 工作增加快照、验证、报告或门禁。
+以下入口都按需使用，不为普通只读或Light新增Full图、报告或门禁。
 它们复用当前宿主能力，不启动 runner、daemon、MCP 或第二套 Agent 调度器；原生
 能力、boost、teamwork 和其他可选模式不因安装或诊断自动启用。
 
@@ -200,32 +213,38 @@ Claude 使用终端 result 的原生字段与身份。AGY result 的 usage 是�
 推理子项不再加进原生 total，不计算费用或 token 节省百分比。只说明实际采样的会话、
 响应与完成轮范围；主会话样本不代表子 Agent，未采样宿主不以零值冒充基线。
 
-任务图可选 `agent_ref: {host: codex|claude|antigravity, agent_id: <真实原生 ID>}`
-只保存原生引用，不存另一份 Agent 状态。旧图省略字段继续合法，`init` 拒绝导入该
-执行身份。PM 先从实际已授权的原生派发结果核对 ID，再经 `update` 的
-`set.agent_ref` 补记到补丁前已经 `RUNNING` 或显式 `task_type: qa` 的 `QA` 任务；
-不能把首次派发状态与身份一次补丁合并，不能用 `append` 绕过类型校验。
-ID 为 1..256 字符，无空白或控制字符，形状合法不证明身份真实。已有引用只能同值
-幂等，不能静默替换／清空；同 `(host, agent_id)` 不能占用两个活动任务。完成任务
-可保留历史引用，但不能据此自动授权新任务。写入仍走原 CAS、协作锁与全部原校验。
+### 任务身份、同任务续用与退役
 
-PM 当前通过已暴露原生工具观察身份后，同样从实际业务项目根运行安装态只读查询：
+2.0任务的module／role／agent_alias绑定长期职责，instance_policy固定fresh、context_policy
+固定handoff_only；新独立任务按需创建新实例，不预热全部别名、不复制完整父／兄弟历史。
+生命周期权威在WORKFLOW的agent-instance-lifecycle，本文只说明既有记录工具，不另建池。
+
+`agent_ref: {host: codex|claude|antigravity, agent_id: <真实原生ID>}`只在PM从实际已授权
+派发结果核对后补记。先让任务实际进入RUNNING（显式qa也可QA），再独立update绑定ID，
+不能与首次执行态合并。引用首次绑定后只允许同值幂等，不可覆盖／清空；同图不同任务
+包括历史完成任务不能共用身份。ID形状合法不证明真实存活、角色、批准或完成。
+
+`agent_retired`可选bool，缺省false；只能由缺失／false变为true，不能撤销。退役阻止
+误派，不能改变仍执行任务的状态或释放路径／语义锁，不等于原生close已成功。原生结束
+缺工具／失败时在现有任务记录这一事实；取消／未知仍先核实已有成果与恢复边界。
+
+PM通过已暴露工具观察真实状态后，从业务项目根运行安装态只读查询：
 
 ```bash
-cd "${project_root:?请设置实际业务项目根}"
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py continuation \
-  --input "${workflow_graph:?set actual graph path}" --task-id "${task_id:?set existing ID}" \
+  --input "${workflow_record:?set current 2.0 graph or Light pack}" --task-id "${task_id:?set existing ID}" \
   --host codex --observed-state idle
 ```
 
-`running` 建议 `action: wait`，`idle` 建议 `action: followup`，两者可复用图中同一 ID；
-跨宿主、`cancelled`、`missing`、`unknown`、未绑定或非活动任务返回
-`reuse_allowed: false`、`action: blocked`，先由 PM 解决真实恢复缺口。阻塞建议是正常
-查询结果（退出 0），输入错误退出 2。查询不探测存活、不派发、不发消息、不改状态，
-也不创建替代 Worker 或 Reviewer。后续原生动作只由当前 host 的已暴露且已授权工具
-执行；取消不能自动恢复，未知不能当作 idle，ID 存在不证明批准、角色权限或完成。
-执行前仍须交接并核对当前完整 Task Pack 和 scope；摘要与引用不能替代完整输入。
-READY、QA-ready、BUILD_VERIFIED、QA_PASSED 和同一独立 Reviewer 的返工规则保持原约束。
+同任务running建议wait，idle建议followup；短期返工可续同一实例，同轮QA原Reviewer差量复查。
+独立任务、跨宿主、cancelled／missing／unknown、未绑定、已完成或已退役任务禁止自动续用。
+查询不探测、不派发、不发消息、不解锁或清空上下文。阻塞建议是正常查询结果（退出0），
+输入错误退出2。当前完整包与scope仍须交接并完整读取，resume／compact不证明历史清空。
+
+围绕当前交付单元的反馈窗口保留实例；闭环、接收与必要证据保护后及时原生结束。
+容量不足优先已验收且交接充分者，不按LRU淘汰仍执行、证据未交付或必要复查实例；
+按宿主真实运行／打开线程口径安排后续QA／集成容量。缺可靠结束工具只退役，不宣称
+已销毁或释放容量。AGY kill前保护临时worktree与唯一日志；不删除仍被引用的证据。
 
 QA 原生结构化输出的 schema／extract 操作见
 [`xy-qa-review` 的输入合同](../../xy-qa-review/references/inputs.md#原生结构化交接)。

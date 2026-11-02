@@ -1,4 +1,4 @@
-# Standardized Subagent Role Schema (xy Team)
+# Standardized Subagent Role Schema 2.0 (xy Team)
 
 This schema adapts the [agency-agents](https://github.com/msitarzewski/agency-agents) model of
 "narrow specialization + deliverables + workflow + success criteria" to this pack's
@@ -120,18 +120,24 @@ invent SLOs, coverage targets, architecture migrations, or technology upgrades.
 
 ## 4. Relationship to Orchestration (Already Provided by This Pack)
 
-All Trivial work, including the existing Trivial UI copy route, is main-session work with local verification, not a scheduled
-Agent task. Do not materialize this schema or relabel it UI-Conformance merely because it touches UI.
-No classifier bypass is added to the task-graph CLI: once non-Trivial work is scheduled, all existing
-authority, path, approval and QA contracts below remain intact.
+2.0只接受Light／Full和schema_version:2。两等级默认原生实施者；PM例外必须覆盖用户
+明确指定的当前范围。Light交接当前自包含单包与最小验证，不强制DAG、Full规划或QA，
+按实际风险评估独立审计及文档。Full保留已批准规划、请求调度和唯一独立QA。
+任何当前包都不携带完整PM或兄弟会话历史。
 
 ### Scheduling Fields (Machine-Readable Task-Pack Contract)
 
-Every task pack that requires scheduling declares these fields:
+每个2.0任务携带下列身份／上下文字段。依赖与图调度字段用于Full；Light保留当前task.state，
+无需为派发创建DAG：
 
 ```yaml
 id: <stable-id>
 request_id: <stable-request-id>
+workflow_level: Light | Full
+module: .  # normalized project-relative module root
+agent_alias: <stable-module-and-role-slot>
+instance_policy: fresh
+context_policy: handoff_only
 task_type: writer | evidence | read_only | qa
 role: <canonical xy-* role>
 surface_kind: production_ui | design_ui | non_ui
@@ -143,23 +149,30 @@ owned_paths: []      # Normalized project-relative ownership; ordered handoff ma
 semantic_locks: []   # Shared contracts that cannot be changed concurrently
 state: DECLARED      # Runtime dispatch state; saved plan keeps concise recoverable progress, not a second scheduler
 qa_scope: request    # Current request dependency closure, not the entire project
-# 可选计划元数据：仅 PM 从真实原生派发结果补记；init 不接受执行身份。
+# 派发后仅PM核对真实原生结果补记，首次绑定后不可改／清空。
 # agent_ref: {host: codex, agent_id: <actual-native-id>}
 ```
 
-`agent_ref` 不进入最小 Task 调度模型，也不保存另一份 Agent／任务状态。对象仅接受
-`host`（codex／claude／antigravity）和 `agent_id`（1..256 字符，无空白或控制字符）；
-形状合法不证明真实身份。旧图可省略；PM 通过既有 `update` 的 `set.agent_ref`，只向
-补丁前已经 RUNNING 或显式 qa 的 QA 任务首次绑定真实 ID；不可 append、清空或换绑，
-同值幂等。两个活动任务不能共享同一 host／ID，历史完成引用可保留但不授权新任务。
-CAS、锁、READY、QA-ready、BUILD_VERIFIED 和 QA_PASSED 沿用原约束。只读
-`continuation --input GRAPH --task-id ID --host HOST --observed-state running|idle|cancelled|missing|unknown`
-返回当前观察下的 wait／followup 或 blocked 建议，不探测、不派发、不发消息或改状态。
-跨宿主、取消、未知、失效和非活动任务不可自动续用。ID 不证明批准、角色权限、存活
-或完成；PM 仍交接当前完整 Task Pack／scope，原生执行路径见当前 host pm-integration，
-操作细节见 `xy-workflow/references/runtime-records.md`。
+`agent_ref`只接受host（codex／claude／antigravity）与agent_id（1..256字符，无空白／
+控制字符）。PM先确认任务真实进入RUNNING或显式QA，再通过update补记实际ID；同值幂等，
+不可替换／清空。同图不同任务包括历史完成任务不能共享ID。agent_retired可选bool、缺省
+false，只能变true，禁止复用但不释放仍活动锁，也不证明原生进程已结束。
 
-`role`, `surface_kind`, and `qa_scope` are mandatory together for planned Agent tasks. The runtime
+agent_alias绑定规范化module与规范role；独立任务可重用职责别名，但实例／ID必须新建。
+同任务短返工、同轮原Reviewer差量复查可续用可用原实例。完整生命周期统一见WORKFLOW
+的agent-instance-lifecycle：禁止父／兄弟完整历史、不fork继承、不预热、不建池，并在
+实际原生结束或退役前保护成果、日志与worktree。
+`continuation --input PACK_OR_GRAPH --task-id ID --host HOST --observed-state running|idle|cancelled|missing|unknown`
+只返回建议，不探测、派发、恢复取消、清空历史或创建批准。
+
+派发shell为schema_version:2、task、适用standards_contract和必要批准／UI依据。Full使用
+`task --input GRAPH --task-id ID`只导出本任务；Light用`task --input PACK`校验／返回同形
+shell，不要求Full图。update／continuation沿用唯一当前记录，不创建第二Agent账本。
+接收者仍核对当前文件并完整读取必需规范。具体CLI参数见xy-workflow/references/runtime-records.md。
+
+Full计划任务同时要求role、surface_kind与qa_scope；Light保留规范role及实际surface_kind，
+不为派发强加Full闭包字段。Light UI仅允许普通低风险文案的UI-Conformance与当前真实
+已解析权威，生产UI仍有工程／设计覆盖；设计／交互变化使用Full。 The runtime
 snapshot also carries typed `ui_contract.prototype_paths` and derives the design-standard boundary
 from `standards_contract.root/DESIGN_*.md` whenever any task is `production_ui` or `design_ui`; this makes both
 the forbidden production boundary and allowed design-writer boundary deterministic CLI checks.
@@ -305,7 +318,7 @@ retains `requirements_approved`, standards authority, build verification, and fu
 accessibility QA. Existing prototype bytes remain untouched and are not current authority for the
 waived scope.
 
-Every implementation task pack also declares the projection decision:
+Full任务包在规划阶段声明投影决定；Light在交接时按实际需要评估，不强制预填Full投影记录：
 
 ```yaml
 controlled_document_projection:
@@ -316,7 +329,7 @@ controlled_document_projection:
   reason: <why current verified project or feature truth changes or remains unchanged>
 ```
 
-Use `required` when QA-verified current feature truth or the active PROJECT index must change. A
+已验证的当前功能事实或PROJECT索引需要变化时才用required；Full必须QA PASS，Light完成其实际必需的验证／审计接收。 A
 major behavior-preserving rewrite may use `reimplemented`; routine refactors, dependency upgrades,
 internal performance work, and pure visual styling use `not_required` with `change_type: none`
 only when recorded current facts remain unchanged. A changed documented runtime/dependency baseline,
@@ -327,15 +340,14 @@ pages; `UI-Conformance` tasks carry frozen `design_authority_refs`; `waived_by_u
 scope-bound `prototype_decision` and no prototype authority. Required-prototype tasks carry the same
 decision record plus concrete page authority.
 
-After integrated QA PASS, the PM applies the smallest current-truth projection. Active feature docs
+Full集成QA PASS后，或Light完成实际必需验证／审计接收并评估需要后，PM才做最小当前事实投影。 Active feature docs
 hold current requirements, acceptance, functional/architectural solution and necessary rationale;
 `PROJECT.md` holds the current directory and active links without a line/byte cap or task history.
 For `removed`, one closeout operation removes the active PROJECT row, renames the detail to
 `*.removed.md`, marks it historical with reason/date/replacement, and repairs current links.
 Cross-feature rationale may have one shared detail in the same features directory; no separate ADR.
 
-Plan storage is separate from verified feature truth: Trivial does not save by default; Light saves
-only for actual pause/recovery/handoff or explicit request; Full is saved by PM in `docs.plans` after
+Plan storage is separate from verified feature truth: Light saves only for actual pause/recovery/handoff or explicit request; Full is saved by PM in `docs.plans` after
 requirements approval and before first design/implementation dispatch. One independent requirement,
 one current plan. Existing `input_contracts` carry its reference and current applicable scope; changes
 replace affected complete task inputs and QA acceptance, not merely append amendments. Preserve
@@ -358,7 +370,7 @@ commit_decision:
       reason: <repository-specific evidence>
 ```
 
-The PM commits only request-owned, QA-verified paths plus its validated controlled-document
+PM只提交本请求拥有、按当前等级验证／验收的路径，加已验证的controlled-document
 projection, using exact pathspecs and complete staged-diff inspection. It must not stage unrelated or unverified changes,
 must not use `git add -A` or `git add .`, and must preserve pre-existing user work. Unsafe overlap
 yields `action: blocked`, not whole-file staging. Nested repositories are assessed independently
@@ -419,7 +431,7 @@ Task Pack 仍用任务图 `task` 机械导出，不为转换 JSON 额外调用�
 
 The implementation-acceptance handoff below does not apply to WORKFLOW's `Standalone read-only
 audit` branch. An audit-only conclusion creates no writer/BUILD_VERIFIED or implementation QA PASS;
-actual non-Trivial implementation still requires the existing writer barrier and validated handoff.
+Full implementation and Light acceptance requiring independent QA still use the writer barrier and validated handoff.
 On rework, the same reviewer checks findings and the affected delta, reuses unchanged conclusions,
 and refreshes the latest complete scope and affected standards/evidence without restarting the full audit.
 
@@ -429,12 +441,15 @@ same reviewer's prompt. No nested Reviewer is spawned, and Grill Me remains requ
 Findings and `FAIL` are valid review results, not fallback reasons. An explicit high-risk
 multi-review escalation is outside this ordinary method enum and requires PM-owned orchestration.
 
+QA result 使用 `schema_version: 2`，并以 `handoff_ref: {request_id, task_id, agent_alias,
+agent_ref: {host, agent_id}, task_pack_sha256}` 绑定当前完整 QA 包。validate／extract 必须
+传 `--task-pack`，身份、请求、别名或包 SHA 不符即拒绝，旧 PASS 不能绑定新任务。
 QA PASS另携带内部standards_policy_coverage，绑定受管内置来源、实际项目叶及存在时的索引指纹（无叶且缺索引为null），
 Task Pack rule IDs, independently resolved engineering/design rule IDs, one classification for every
 fixed changed path, and rule checks containing source paths/anchors, `hard | advisory` severity,
 `pass | fail | not_applicable`, affected paths, and evidence references. If QA discovers an
 applicable rule omitted from the Task Pack, it returns FAIL instead of silently repairing the
-contract. The PM runs `qa_handoff_cli.py validate`; incomplete coverage,
+contract. The PM runs `qa_handoff_cli.py validate --input RESULT --task-pack CURRENT_QA_PACK`; incomplete coverage,
 evidence-free applicable rules, scope mismatch, or any hard-rule failure makes PASS invalid. This
 machine projection is never shown to the user as raw JSON or YAML.
 

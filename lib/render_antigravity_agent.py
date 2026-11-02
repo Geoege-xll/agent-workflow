@@ -78,6 +78,8 @@ def execution_contract(role: str) -> str:
 You are `{role}`; PM owns routing.
 Execute only the PM task pack. Its `controlled_document_access`, discovered facts, exact owned paths,
 gates, and native verification commands are authoritative; ProjectProfile is routing only. Never delegate or contact Agents.
+只接收 schema_version: 2 的当前单任务外壳；核对 module、role、agent_alias、instance_policy: fresh、
+context_policy: handoff_only。新独立任务使用新原生 ID，不复制完整 PM／兄弟会话；当前必需规范仍完整读取。
 Return the result to the PM only. Do not report completion directly to the user.
 Block on missing authority/evidence/gates.
 When execution_workspace is present, verify the actual root/base and keep edits and commands there.

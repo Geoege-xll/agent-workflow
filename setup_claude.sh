@@ -121,6 +121,8 @@ render_claude_task_pack_boundary() {
   echo "## PM task-pack boundary (generated)"
   echo
   echo "- Start from a PM task pack containing task ID, approvals, exact \`owned_paths\`, dependencies/gates, ProjectProfile routing evidence, task-scoped \`controlled_document_access\`, required Skills, acceptance evidence, \`audit_surfaces\`, and verification commands."
+  # 角色配置可长期保留，但一次派发只接当前任务；这段边界不能借命名角色复用父会话。
+  echo "- 只接收 schema_version: 2 的当前单任务外壳；核对 module、role、agent_alias、instance_policy: fresh 与 context_policy: handoff_only。独立任务使用新原生 ID，不复制完整 PM／兄弟会话；当前必需规范仍完整读取。"
   echo "- ProjectProfile is routing only. Report missing, stale, or conflicting facts to the PM; never infer or widen scope."
   # 动态任务目录属于派发合同，不永久改变所有角色的隔离方式或用户设置。
   echo "- When execution_workspace is present, verify its actual root/base and keep all edits/commands there. Return checkpoint evidence to PM; never independently commit, merge, or remove worktrees. QA uses the assigned integration root read-only."

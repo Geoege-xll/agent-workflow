@@ -15,7 +15,7 @@ from lib.task_graph_cli import _execute
 from lib.worktree_cli import DeliveryError, create, git, head, merge, merge_check, scope, target_branch
 from lib.worktree_policy import WorktreePolicyError, settings
 from tests import test_qa_handoff as qa_fixtures
-from tests.test_scheduler_boundaries import _writer_payload
+from tests.test_scheduler_boundaries import _writer_payload, v2_graph, v2_task
 from tests.test_unified_host_workflow import HOSTS, UnifiedHostFixture
 
 
@@ -55,11 +55,15 @@ class GitDeliveryTest(unittest.TestCase):
         (self.repo / "docs/STANDARDS.md").write_text("# Standards\n[General](standards/GENERAL.md)\n")
         (self.repo / "docs/standards/GENERAL.md").write_text(
             "# General\n- Domain: engineering\n[eng-source-boundary] [hard] Preserve ownership.\n")
+        builtin_path = "platforms/shared/skills/xy-code-standards/references/rules.md"
+        builtin = self.repo / builtin_path
+        builtin.parent.mkdir(parents=True)
+        builtin.write_bytes((PACK / builtin_path).read_bytes())
         (self.repo / "docs/features").mkdir()
         (self.repo / "docs/features/baseline.md").write_text("# Baseline\n- Feature ID: baseline\n- Status: active\n")
         (self.repo / "docs/PROJECT.md").write_text("# Project\n[Baseline](features/baseline.md)\n")
         git(self.repo, "add", "agent_workflow/project.yaml", "src/a.py", "src/b.py",
-            "docs/STANDARDS.md", "docs/standards/GENERAL.md", "docs/PROJECT.md", "docs/features/baseline.md")
+            "docs/STANDARDS.md", "docs/standards/GENERAL.md", "docs/PROJECT.md", "docs/features/baseline.md", builtin_path)
         git(self.repo, "commit", "-m", "fixture baseline")
         self.base = head(self.repo)
         template = _writer_payload()
@@ -87,7 +91,7 @@ class GitDeliveryTest(unittest.TestCase):
             for document in task["controlled_document_access"]["documents"]:
                 if document["path"] == "docs/STANDARDS.md":
                     document["content_fingerprint"] = standards["index_fingerprint"]
-                else:
+                elif document["path"] == "docs/standards/GENERAL.md":
                     document["rule_ids"] = ["eng-source-boundary"]
                     document["content_fingerprint"] = standards["leaves"][0]["content_fingerprint"]
             self.tasks.append(task)
@@ -104,8 +108,12 @@ class GitDeliveryTest(unittest.TestCase):
         checked = subprocess.run([sys.executable, "-c", "from src.a import a; from src.b import b; assert a == b == 1"],
                                  cwd=self.integration, capture_output=True, check=False)
         self.assertEqual(0, checked.returncode, checked.stderr)
-        self.graph = {"request_id": "req", "tasks": self.tasks, "approved_gates": ["requirements_approved"],
-                      "worktree_integrations": {"req": self.record}, "standards_contract": standards}
+        self.qa_task = v2_task({"id": "qa", "request_id": "req", "task_type": "qa", "state": "QA_PASSED",
+                               "depends_on": [], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [],
+                               "agent_ref": {"host": "codex", "agent_id": "current-reviewer"}})
+        self.tasks.append(self.qa_task)
+        self.graph = v2_graph({"request_id": "req", "tasks": self.tasks, "approved_gates": ["requirements_approved"],
+                               "worktree_integrations": {"req": self.record}, "standards_contract": standards})
         fixture = qa_fixtures.QAHandoffValidationTest()
         fixture.setUp()
         qa = copy.deepcopy(fixture.payload)
@@ -118,7 +126,19 @@ class GitDeliveryTest(unittest.TestCase):
         coverage["rule_checks"][0]["affected_paths"] = actual["changed_paths"]
         coverage["rule_checks"][0]["source_fingerprint"] = hashlib.sha256(
             (self.repo / "docs/standards/GENERAL.md").read_bytes()).hexdigest()
-        self.payload = {"task_graph": self.graph, "qa_handoff": qa, "authorization": {
+        coverage["task_pack_rule_ids"].append("eng-common-005")
+        coverage["required_engineering_rule_ids"].append("eng-common-005")
+        coverage["rule_checks"].append({**copy.deepcopy(coverage["rule_checks"][0]), "rule_id": "eng-common-005",
+            "source_path": builtin_path, "source_fingerprint": hashlib.sha256(builtin.read_bytes()).hexdigest(),
+            "source_anchor": "配置、错误和维护"})
+        current_pack = {"schema_version": 2, "task": copy.deepcopy(self.qa_task),
+                        "standards_contract": copy.deepcopy(standards), "approved_gates": []}
+        current_pack["task"]["state"] = "QA"
+        body = json.dumps(current_pack).encode("utf-8")
+        self.qa_pack_file = self.root / "current-qa-pack.json"
+        self.qa_pack_file.write_bytes(body)
+        qa["handoff_ref"] = qa_fixtures.handoff_ref(current_pack, body)
+        self.payload = {"task_graph": self.graph, "qa_handoff": qa, "qa_task_pack": str(self.qa_pack_file), "authorization": {
             "mode": "confirm", "source": "user:approve-current-merge", "request_id": "req",
             "target_branch": "main", "target_base": self.base, "head_revision": self.tip,
             "diff_fingerprint": actual["diff_fingerprint"]}}
@@ -147,14 +167,13 @@ class GitDeliveryTest(unittest.TestCase):
         coverage = self.payload["qa_handoff"]["standards_policy_coverage"]
         coverage["path_checks"] = [{"path": path, "applicable_rule_ids": ["eng-source-boundary"],
                                     "reason": "fixture source"} for path in actual["changed_paths"]]
-        coverage["rule_checks"][0]["affected_paths"] = actual["changed_paths"]
+        for check in coverage["rule_checks"]:
+            check["affected_paths"] = actual["changed_paths"]
         self.payload["authorization"].update(target_base=self.record["target_base"], head_revision=self.tip,
                                               diff_fingerprint=actual["diff_fingerprint"])
 
     def test_running_or_failed_qa_cannot_be_overridden_by_a_cached_pass(self) -> None:
-        reviewer = {"id": "qa", "request_id": "req", "task_type": "qa", "depends_on": [],
-                    "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [], "state": "QA_PASSED"}
-        self.tasks.append(reviewer)
+        reviewer = self.qa_task
         for mode in ("confirm", "auto"):
             self.payload["authorization"].update(mode=mode, source=("user:approved" if mode == "confirm"
                                                                   else "project:parallel_worktrees.merge"))
@@ -218,9 +237,9 @@ class GitDeliveryTest(unittest.TestCase):
     def test_transitive_writer_dependency_cannot_be_hidden_behind_evidence(self) -> None:
         self.tasks[0]["blocks"] = ["evidence"]
         self.tasks[1]["depends_on"] = ["evidence"]
-        self.tasks.append({"id": "evidence", "request_id": "req", "task_type": "evidence", "depends_on": ["a"],
+        self.tasks.append(v2_task({"id": "evidence", "request_id": "req", "task_type": "evidence", "depends_on": ["a"],
                            "blocks": ["b"], "gates": [], "owned_paths": [], "semantic_locks": [],
-                           "state": "QA_SCOPE_READY"})
+                           "state": "QA_SCOPE_READY"}))
         with self.assertRaises(DeliveryError):
             merge(self.repo, self.config, self.payload)
         self.assertEqual(self.base, head(self.repo))
@@ -360,16 +379,16 @@ class GitDeliveryTest(unittest.TestCase):
             _execute("qa-ready", graph)
 
     def test_incomplete_nonwriter_also_blocks_final_delivery(self) -> None:
-        self.tasks.append({"id": "acceptance", "request_id": "req", "task_type": "evidence",
+        self.tasks.append(v2_task({"id": "acceptance", "request_id": "req", "task_type": "evidence",
                            "depends_on": [], "blocks": [], "gates": [], "owned_paths": [],
-                           "semantic_locks": [], "state": "RUNNING"})
+                           "semantic_locks": [], "state": "RUNNING"}))
         with self.assertRaisesRegex(DeliveryError, "not complete"):
             merge(self.repo, self.config, self.payload)
 
     def test_unrelated_request_does_not_block_delivery(self) -> None:
-        self.tasks.append({"id": "other", "request_id": "unrelated", "task_type": "evidence",
+        self.tasks.append(v2_task({"id": "other", "request_id": "unrelated", "task_type": "evidence",
                            "depends_on": [], "blocks": [], "gates": [], "owned_paths": [],
-                           "semantic_locks": [], "state": "RUNNING"})
+                           "semantic_locks": [], "state": "RUNNING"}))
         self.assertEqual("merged", merge(self.repo, self.config, self.payload)["status"])
 
     def test_qa_failure_or_wrong_scope_blocks_delivery(self) -> None:

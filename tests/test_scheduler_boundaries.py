@@ -3,9 +3,69 @@
 from __future__ import annotations
 
 import unittest
+import hashlib
+import re
+from pathlib import Path
 
 from lib.task_graph import Task, TaskGraphError, effective_dispatch_capacity, ready_tasks
 from lib.task_graph_cli import _execute
+
+
+def v2_task(task: dict, *, level: str = "Full") -> dict:
+    """为既有行为夹具明确提供2.0身份；仅用于测试，不迁移生产旧记录。
+
+    Writer故意缺少role的反例必须保留；非Writer旧夹具则补其真实只读职责。
+    """
+    if task.get("task_type") != "writer":
+        task.setdefault("role", "xy-qa" if task.get("task_type") == "qa" else "xy-backend")
+        task.setdefault("surface_kind", "non_ui")
+        task.setdefault("qa_scope", "request")
+        task.setdefault("audit_surfaces", [])
+    task_id = str(task["id"])
+    alias_key = task_id if re.fullmatch(r"[a-z0-9._-]{1,100}", task_id) else hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:16]
+    task.update(workflow_level=level, module=".", agent_alias=f"fixture-{alias_key}",
+                instance_policy="fresh", context_policy="handoff_only")
+    return task
+
+
+def v2_graph(payload: dict) -> dict:
+    """统一当前图夹具版本，规则、权限和故意制造的错误均由原用例保留。"""
+    payload["schema_version"] = 2
+    for task in payload.get("tasks", []):
+        v2_task(task)
+    return payload
+
+
+def with_builtin_standards(payload: dict) -> dict:
+    """在基础测试夹具中采用当前真实内置来源，项目规则仍作为独立补充叶。
+
+    只在构造基础夹具时调用，之后再制造反例；绝不在生产解析时补齐缺失来源。
+    已有来源不覆盖，以保留测试故意制造的陈旧指纹、错误规则或读取缺口。
+    """
+    contract = payload.get("standards_contract")
+    if not isinstance(contract, dict):
+        return payload
+    definitions = {
+        "engineering": ("platforms/shared/skills/xy-code-standards/references/rules.md", "eng-common-005"),
+        "design": ("platforms/shared/skills/xy-ui-design/references/foundations-rules.md", "des-baseline-001"),
+    }
+    for task in payload["tasks"]:
+        if task.get("task_type") != "writer":
+            continue
+        domains = ("design",) if task.get("surface_kind") == "design_ui" else (
+            "engineering", "design") if task.get("surface_kind") == "production_ui" else ("engineering",)
+        for domain in domains:
+            path, rule = definitions[domain]
+            fingerprint = hashlib.sha256((Path(__file__).resolve().parents[1] / path).read_bytes()).hexdigest()
+            if not any(leaf["path"] == path for leaf in contract["leaves"]):
+                contract["leaves"].append({"path": path, "domain": domain, "content_fingerprint": fingerprint, "rule_ids": [rule]})
+            access = task.get("controlled_document_access")
+            if isinstance(access, dict) and isinstance(access.get("documents"), list) and not any(
+                    document["path"] == path for document in access["documents"]):
+                access["documents"].append({"path": path, "mode": "full", "reason": "读取当前2.0内置底线",
+                    "sections_or_queries": [], "content_fingerprint": fingerprint, "rule_ids": [rule],
+                    "applies_to": list(task["owned_paths"])})
+    return payload
 
 
 def _writer_payload(owned_path: str = "backend/service.py") -> dict:
@@ -29,7 +89,7 @@ def _writer_payload(owned_path: str = "backend/service.py") -> dict:
                 "rule_ids": rules,
             }
         )
-    return {
+    return with_builtin_standards(v2_graph({
         "standards_contract": {
             "index_path": "docs/STANDARDS.md",
             "root": "docs/standards",
@@ -78,7 +138,7 @@ def _writer_payload(owned_path: str = "backend/service.py") -> dict:
         "active_paths": [],
         "active_semantic_locks": [],
         "capacity": 1,
-    }
+    }))
 
 
 def _add_exception(payload: dict, patch_path: str) -> None:

@@ -3,6 +3,10 @@
 Read this branch only for production UI or design-standard work. For `standards_only`, use the
 design-standard checks below; do not activate production-page/prototype checks without that scope.
 
+普通Light文案只在PM实际选择独立QA时进入本审查；仍核对production_ui、零设计差量和
+真实冻结UI-Conformance权威，不伪装non_ui。此读取不强制Light的Full规划、重复确认或
+原型，任何实际设计／交互变化均交PM改走Full。
+
 For `UI-Conformance`:
 
 1. Require `surface_kind: production_ui`, `qa_scope: request`, `route: UI-Conformance`,
