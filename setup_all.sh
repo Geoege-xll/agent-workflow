@@ -82,7 +82,9 @@ run antigravity
 
 if [[ "${CHECK}" -eq 1 ]]; then
   FAIL=0
-  for key in standards project; do
+  # 项目特有规范可以不存在。每个已选宿主的 --check 已调用 validate_project_docs，
+  # 它负责有规则时索引必存、叶/链接/领域及内置来源校验；不把配置路径再当占位必存项。
+  for key in project; do
     f=$(py_yaml "${DIR}/project.yaml" docs "${key}" 2>/dev/null || true)
     if [[ -n "${f}" && ! -f "${PROJECT_ROOT}/${f}" ]]; then
       echo "[ERROR] missing docs.${key} → ${f} (run setup without --check to scaffold)"
@@ -91,13 +93,6 @@ if [[ "${CHECK}" -eq 1 ]]; then
       echo "[OK]    docs.${key} → ${f:-"(empty)"}"
     fi
   done
-  standards_root=$(py_yaml "${DIR}/project.yaml" docs standards_root 2>/dev/null || true)
-  if [[ -n "${standards_root}" && -d "${PROJECT_ROOT}/${standards_root}" ]]; then
-    echo "[OK]    docs.standards_root → ${standards_root}"
-  else
-    echo "[ERROR] missing docs.standards_root → ${standards_root:-"(empty)"}"
-    FAIL=1
-  fi
   feature_dir=$(py_yaml "${DIR}/project.yaml" docs features 2>/dev/null || true)
   if [[ -n "${feature_dir}" && -d "${PROJECT_ROOT}/${feature_dir}" ]]; then
     echo "[OK]    docs.features → ${feature_dir}"

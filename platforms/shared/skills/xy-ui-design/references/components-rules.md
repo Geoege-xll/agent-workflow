@@ -1,6 +1,7 @@
-# Component and Interaction Standards — {{PROJECT_NAME}}
+# 通用组件与交互规则
 
 - Domain: design
+- Scope: UI 原型设计与生产 UI 的适用设计约束；standards_only 仅在授权范围采用或维护项目特有规则，纯 non_ui 不强制读取。平台、控件和外观条款按实际支持范围适用。
 
 > Record durable component composition and interaction rules here; page-specific states stay in the
 > concrete prototype page contract.
@@ -17,7 +18,6 @@
 
 - `[des-component-001] [hard]` Reuse an approved production component when it already satisfies the
   required behavior and accessibility contract.
-- Component variants and extension rules: **TODO**
 - `[des-component-002] [hard]` 同语义控件复用相同组件及适用变体。出现差异先判断是状态、
   尺寸或平台变体；确需新增才说明原因和范围，不能用页面专属 CSS 暗建第二套基础控件。
   原型复用共享样式与行为约定；生产端复用项目组件，不复制原型运行时代码。
@@ -63,7 +63,6 @@
 
 ## States and feedback
 
-- Required loading, empty, error, disabled, success, and partial-data patterns: **TODO**
 - `[des-state-001] [hard]` Every user-triggered asynchronous action exposes a perceivable progress,
   success, or failure state appropriate to the platform.
 - `[des-state-002] [hard]` 对实际控件检查适用的 default、hover、focus、pressed、selected、
@@ -73,7 +72,6 @@
 
 ## Responsive and adaptive behavior
 
-- Breakpoints, size classes, window constraints, and content-priority rules: **TODO**
 - `[des-responsive-001] [hard]` Preserve essential actions and information across every supported
   viewport or platform size class.
 - `[des-responsive-002] [hard]` Web 使用项目约定的响应式规则，导航、表单和操作区按空间

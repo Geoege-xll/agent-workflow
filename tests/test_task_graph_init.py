@@ -16,7 +16,7 @@ from lib.task_graph_init import initialize
 
 
 PACK = Path(__file__).resolve().parents[1]
-GENERAL = "docs/standards/GENERAL.md"
+BUILTIN_ENGINEERING = "platforms/shared/skills/xy-code-standards/references/rules.md"
 MINI = "docs/standards/MINI_PROGRAM.md"
 ADAPTER = """docs:
   standards: docs/STANDARDS.md
@@ -36,7 +36,7 @@ def decisions():
             "required_engineering_rule_ids": ["eng-common-005", "eng-mini-001"],
             "required_design_rule_ids": [],
             "leaves": [
-                {"path": GENERAL, "domain": "engineering", "rule_ids": ["eng-common-005"]},
+                {"path": BUILTIN_ENGINEERING, "domain": "engineering", "rule_ids": ["eng-common-005"]},
                 {"path": MINI, "domain": "engineering", "rule_ids": ["eng-mini-001"]},
             ],
             "protected_paths": [],
@@ -47,7 +47,7 @@ def decisions():
             "goal": "修复已确认接口", "input_contracts": ["需求与错误合同由 PM 明示"],
             "output_contracts": ["保留既有接口"], "acceptance_evidence": ["正常与失败边界"],
             "verification_commands": [{"run": "项目已存在的定向构建和运行命令", "expected": "退出 0"}],
-            "selected_standards": [GENERAL, MINI],
+            "selected_standards": [BUILTIN_ENGINEERING, MINI],
         }],
     }
 
@@ -60,7 +60,10 @@ class TaskGraphInitTest(unittest.TestCase):
         (self.root / "docs/standards").mkdir(parents=True)
         (self.root / "project.yaml").write_text(ADAPTER, encoding="utf-8")
         (self.root / "docs/STANDARDS.md").write_text("# 规范索引\n", encoding="utf-8")
-        (self.root / GENERAL).write_text("- Domain: engineering\n[eng-common-005] [hard] 中文注释\n", encoding="utf-8")
+        # 只提供真实规则资源，不复制旧源码包；init必须读取实际字节并生成当前指纹。
+        builtin = self.root / BUILTIN_ENGINEERING
+        builtin.parent.mkdir(parents=True)
+        builtin.write_bytes((PACK / BUILTIN_ENGINEERING).read_bytes())
         (self.root / MINI).write_text("- Domain: engineering\n[eng-mini-001] [hard] 小程序边界\n", encoding="utf-8")
         self.target = self.root / "task-graph.json"
 
@@ -112,6 +115,80 @@ class TaskGraphInitTest(unittest.TestCase):
         checked = self.invoke("qa-ready", "--input", self.target)
         self.assertFalse(json.loads(checked.stdout)["qa_ready"])
 
+    def test_builtin_only_init_has_no_project_general_or_phantom_index(self):
+        source = decisions()
+        source["standards"]["leaves"] = source["standards"]["leaves"][:1]
+        source["standards"]["required_engineering_rule_ids"] = ["eng-common-005"]
+        source["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+        (self.root / MINI).unlink()
+        (self.root / "docs/standards").rmdir()
+        (self.root / "docs/STANDARDS.md").unlink()
+        result = self.init(source)
+        self.assertEqual(0, result.returncode, result.stderr)
+        graph = json.loads(self.target.read_text(encoding="utf-8"))
+        self.assertIsNone(graph["standards_contract"]["index_fingerprint"])
+        self.assertEqual([BUILTIN_ENGINEERING], [item["path"] for item in graph["tasks"][0]["controlled_document_access"]["documents"]])
+        self.assertFalse((self.root / "docs/STANDARDS.md").exists())
+        self.assertFalse((self.root / "docs/standards").exists())
+        self.assertEqual(0, self.invoke("validate", "--input", self.target).returncode)
+
+    def test_new_init_rejects_legacy_only_and_hidden_project_rules(self):
+        legacy = decisions()
+        old_path = "docs/standards/GENERAL.md"
+        (self.root / old_path).write_bytes((self.root / BUILTIN_ENGINEERING).read_bytes())
+        legacy["standards"]["leaves"][0]["path"] = old_path
+        legacy["tasks"][0]["selected_standards"][0] = old_path
+        self.assert_rejected(legacy, contains="new init requires a selected builtin engineering")
+        # 不能从声明中藏起真实项目叶，再用null指纹假称没有项目规范。
+        (self.root / old_path).unlink()
+        (self.root / "docs/STANDARDS.md").unlink()
+        source = decisions()
+        source["standards"]["leaves"] = source["standards"]["leaves"][:1]
+        source["standards"]["required_engineering_rule_ids"] = ["eng-common-005"]
+        source["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+        self.assert_rejected(source, contains="existing project standards rules")
+
+    def test_absent_index_appearing_before_publication_is_preserved(self):
+        source = decisions()
+        source["standards"]["leaves"] = source["standards"]["leaves"][:1]
+        source["standards"]["required_engineering_rule_ids"] = ["eng-common-005"]
+        source["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+        (self.root / MINI).unlink()
+        index = self.root / "docs/STANDARDS.md"
+        index.unlink()
+
+        def validate(command, graph):
+            result = _execute(command, graph)
+            if not index.exists():
+                index.write_bytes(b"external index writer\n")
+            return result
+
+        with self.assertRaisesRegex(ValueError, "absent standards index changed"):
+            initialize(source, self.root, self.target, validate)
+        self.assertEqual(b"external index writer\n", index.read_bytes())
+        self.assertFalse(self.target.exists())
+
+    def test_standards_only_init_uses_builtin_design_without_project_index_or_prototype(self):
+        source = decisions()
+        design = "platforms/shared/skills/xy-ui-design/references/foundations-rules.md"
+        target = self.root / design
+        target.parent.mkdir(parents=True)
+        target.write_bytes((PACK / design).read_bytes())
+        source["standards"].update(required_engineering_rule_ids=[], required_design_rule_ids=["des-baseline-001"],
+                                   leaves=[{"path": design, "domain": "design", "rule_ids": ["des-baseline-001"]}])
+        source["tasks"][0].update(role="xy-uiux", surface_kind="design_ui", design_mode="standards_only",
+                                   owned_paths=["docs/standards/DESIGN_PROJECT.md"], selected_standards=[design])
+        source["tasks"][0]["audit_surfaces"] = ["ui", "accessibility", "standards-conformance"]
+        (self.root / MINI).unlink()
+        (self.root / "docs/STANDARDS.md").unlink()
+        result = self.init(source)
+        self.assertEqual(0, result.returncode, result.stderr)
+        graph = json.loads(self.target.read_text(encoding="utf-8"))
+        self.assertIsNone(graph["standards_contract"]["index_fingerprint"])
+        self.assertEqual([design], [doc["path"] for doc in graph["tasks"][0]["controlled_document_access"]["documents"]])
+        self.assertNotIn("visual_approved", graph["tasks"][0]["gates"])
+        self.assertFalse((self.root / "docs/standards/prototype").exists())
+
     def test_explicit_approval_input_file_and_existing_task_update_interfaces(self):
         source = decisions()
         source["approved_gates"] = ["requirements_approved"]
@@ -148,7 +225,7 @@ class TaskGraphInitTest(unittest.TestCase):
         self.assert_rejected(source, contains="together")
 
     def test_missing_required_mini_program_rules_and_baseline_are_not_inferred(self):
-        for selected in ([GENERAL], [MINI], []):
+        for selected in ([BUILTIN_ENGINEERING], [MINI], []):
             source = decisions()
             source["tasks"][0]["selected_standards"] = selected
             with self.subTest(selected=selected):
@@ -216,11 +293,11 @@ class TaskGraphInitTest(unittest.TestCase):
                 self.assert_rejected(value)
 
     def test_unsafe_input_documents_adapter_and_output_links_are_rejected(self):
-        original = (self.root / GENERAL).read_bytes()
+        original = (self.root / BUILTIN_ENGINEERING).read_bytes()
         other = self.root / "outside.md"
         other.write_bytes(original)
         for kind in ("symlink", "hardlink"):
-            leaf = self.root / GENERAL
+            leaf = self.root / BUILTIN_ENGINEERING
             leaf.unlink()
             if kind == "symlink":
                 leaf.symlink_to(other)
@@ -268,7 +345,7 @@ class TaskGraphInitTest(unittest.TestCase):
             decision_path = self.root / "decisions.json"
             body = json.dumps(source).encode("utf-8")
             decision_path.write_bytes(body)
-            original_leaf = (self.root / GENERAL).read_bytes()
+            original_leaf = (self.root / BUILTIN_ENGINEERING).read_bytes()
             changed_once = False
 
             def validate(command, graph):
@@ -277,7 +354,7 @@ class TaskGraphInitTest(unittest.TestCase):
                 if not changed_once:
                     changed_once = True
                     if changed == "standard":
-                        (self.root / GENERAL).write_bytes(original_leaf + b"changed\n")
+                        (self.root / BUILTIN_ENGINEERING).write_bytes(original_leaf + b"changed\n")
                     elif changed == "decision":
                         decision_path.write_bytes(body + b"\n")
                     else:
@@ -292,7 +369,7 @@ class TaskGraphInitTest(unittest.TestCase):
                 self.target.unlink()
             else:
                 self.assertFalse(self.target.exists())
-            (self.root / GENERAL).write_bytes(original_leaf)
+            (self.root / BUILTIN_ENGINEERING).write_bytes(original_leaf)
             self.assertFalse(list(self.root.glob(".task-graph.json.workflow-*")))
 
     def test_duplicate_adapter_docs_cannot_silently_select_an_authority(self):

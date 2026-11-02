@@ -217,11 +217,13 @@ feature truth, then follows only task-relevant feature or other controlled-docum
 `targeted` is the default and
 requires heading or keyword selection before detailed-body reading. `full` requires an explicit
 whole-document justification. `skip` means the body must not be opened. Shared architecture details
-and recovery plans are read only when relevant. Every Writer reads the compact `docs.standards` index and only
-applicable non-`skip` leaves under `docs.standards_root`: non-UI implementation uses engineering,
-production UI uses engineering/design, and `xy-uiux + design_ui` uses design. Each selected entry
-carries a current SHA-256, covers every owned path, and identifies every applicable stable rule ID.
-Workers return stale or incomplete authority to PM instead of preloading the standards tree.
+and recovery plans are read only when relevant.
+每位Writer独立读取适用内置工程/UI来源与项目特有规范，存在项目索引才沿链接读取。
+non_ui用工程，production_ui用两领域，xy-uiux + design_ui用设计。每个选定来源绑定当前SHA、
+适用ID和拥有路径；缺失/过期/覆盖不足仍回PM。index_path/root保持配置值；无项目规则叶且
+索引物理缺失时index_fingerprint为null，已有索引绑定真实SHA；无需新建空索引或GENERAL。
+只有三个精确内置路径及其.agent-workflow/前缀可作为内置来源，项目写权限边界不扩大。
+init/文档校验检查实际存在性，纯JSON图校验只检查结构。
 
 The runtime graph freezes one unified standards authority and any explicit protected upstream boundary:
 
@@ -229,11 +231,11 @@ The runtime graph freezes one unified standards authority and any explicit prote
 standards_contract:
   index_path: docs/STANDARDS.md
   root: docs/standards
-  index_fingerprint: <64-lowercase-hex-sha256>
+  index_fingerprint: <actual-index-sha256-or-null-when-absent>
   required_engineering_rule_ids: []
   required_design_rule_ids: []
   leaves:
-    - path: <standards-root/GENERAL.md or standards-root/DESIGN_RELEVANT.md>
+    - path: <exact-built-in-source or project-specific-leaf>
       domain: engineering | design
       content_fingerprint: <64-lowercase-hex-sha256>
       rule_ids: []
@@ -427,7 +429,7 @@ same reviewer's prompt. No nested Reviewer is spawned, and Grill Me remains requ
 Findings and `FAIL` are valid review results, not fallback reasons. An explicit high-risk
 multi-review escalation is outside this ordinary method enum and requires PM-owned orchestration.
 
-QA PASS also carries an internal `standards_policy_coverage` with the STANDARDS index fingerprint,
+QA PASS另携带内部standards_policy_coverage，绑定受管内置来源、实际项目叶及存在时的索引指纹（无叶且缺索引为null），
 Task Pack rule IDs, independently resolved engineering/design rule IDs, one classification for every
 fixed changed path, and rule checks containing source paths/anchors, `hard | advisory` severity,
 `pass | fail | not_applicable`, affected paths, and evidence references. If QA discovers an
@@ -493,6 +495,9 @@ and do not themselves require user confirmation. `UI-Conformance`, non-UI, and a
 `waived_by_user` request have no business confirmation after `requirements_approved` by default.
 This describes development gates; selected worktree delivery separately follows its configured final
 confirm/auto local-merge policy without creating another prerequisite for implementation.
+原型由设计 Agent 自检需求覆盖、规范符合性和交付一致性，复用现有 prototype_verify 的
+static_checks、blocking_findings 与 result；不新增原型 QA 角色、报告、审批或浏览器/截图要求。
+用户最终确认具体页面，后续生产实现的统一功能 QA 保留。
 For prototypes, `prototype_verified` means deterministic structure, local-dependency, contract, and
 fingerprint validation; it does not claim Computer Use, browser automation, rendered visual review,
 or user approval. Before `visual_review_ready`, the PM separately compares all five contract sections

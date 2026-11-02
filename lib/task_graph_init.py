@@ -16,10 +16,14 @@ try:
     from . import task_graph_records as records
     from .task_graph import TaskGraphError
     from .validate_project_config import validate_docs
+    from .standard_paths import builtin_source_path, source_domain
+    from .validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
 except ImportError:
     import task_graph_records as records
     from task_graph import TaskGraphError
     from validate_project_config import validate_docs
+    from standard_paths import builtin_source_path, source_domain
+    from validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
 
 
 INPUT_FIELDS = {
@@ -137,7 +141,6 @@ def initialize(decisions: Any, root: Path, output: Path,
         standards.update(index_path=docs["standards"], root=docs["standards_root"].rstrip("/"))
     elif "adapter_path" in source:
         raise TaskGraphError("adapter_path cannot be combined with explicit standards.index_path/root")
-    standards["index_fingerprint"] = fingerprint(standards["index_path"])
     leaves = standards["leaves"]
     if not isinstance(leaves, list):
         raise TaskGraphError("standards.leaves must be an array")
@@ -150,7 +153,41 @@ def initialize(decisions: Any, root: Path, output: Path,
         if path in indexed_leaves:
             raise TaskGraphError("standards.leaves must not duplicate paths")
         leaf["content_fingerprint"] = fingerprint(path)
+        if builtin_source_path(path) is None:
+            # 保留说明文件不产生规范权威；init拥有真实root，须核对选定项目叶确有
+            # 相同domain及规则ID，而不能只给任意备注文件贴一组规则编号。
+            body_bytes = records.read_record(root / path)
+            if records.digest(body_bytes) != leaf["content_fingerprint"]:
+                raise TaskGraphError(f"init project standards changed while reading: {path}")
+            text = body_bytes.decode("utf-8")
+            errors: list[str] = []
+            validate_rule_definitions(text, path, errors)
+            matches = STANDARD_RULE_RE.findall(text)
+            if errors or not matches or re.findall(r"(?im)^- Domain: (engineering|design)\s*$", text) != [leaf["domain"]]:
+                raise TaskGraphError(f"selected project standards must contain valid rules and matching domain: {path}")
+            if set(_strings(leaf["rule_ids"], f"{label}.rule_ids")) - {rule_id for rule_id, _severity in matches}:
+                raise TaskGraphError(f"selected project standards claims unknown rule IDs: {path}")
         indexed_leaves[path] = leaf
+    # 缺失索引只在没有项目规则叶时合法。保留配置路径用于以后新增专项规范；
+    # 不创建空索引、不以占位SHA冒充已读取。实际缺失事实仅由有root的init确认。
+    try:
+        standards["index_fingerprint"] = fingerprint(standards["index_path"])
+    except FileNotFoundError:
+        if any(builtin_source_path(path) is None for path in indexed_leaves):
+            raise TaskGraphError("project standards leaves require an existing standards index")
+        relative_root = Path(standards["root"])
+        if relative_root.is_absolute() or ".." in relative_root.parts or relative_root.as_posix() != standards["root"]:
+            raise TaskGraphError("standards.root must be a normalized project-relative directory")
+        project_standards = root / relative_root
+        if not project_standards.resolve().is_relative_to(root) or any(parent.is_symlink() for parent in (project_standards, *project_standards.parents) if parent != root and root in parent.parents):
+            raise TaskGraphError("standards.root must not use symlinks or escape the project")
+        errors: list[str] = []
+        documents = collect_standard_leaves(project_standards, errors) if project_standards.exists() else {}
+        if errors:
+            raise TaskGraphError("invalid project standards: " + "; ".join(errors))
+        if any(STANDARD_RULE_RE.search(body) for body in documents.values()):
+            raise TaskGraphError("existing project standards rules require a standards index")
+        standards["index_fingerprint"] = None
     policies = standards["protected_paths"]
     if not isinstance(policies, list):
         raise TaskGraphError("standards.protected_paths must be an array")
@@ -200,7 +237,12 @@ def initialize(decisions: Any, root: Path, output: Path,
         if task["task_type"] == "writer" or selection:
             # 选择一条叶引用即显式采用该叶中 PM 已列明的规则集；不按文件后缀、
             # 技术栈或角色选择叶子，也不把 required_* 自动补进选择集合。
-            documents = [{"path": standards["index_path"], "rule_ids": []}]
+            if task["task_type"] == "writer":
+                domains = ("design",) if task["surface_kind"] == "design_ui" else ("engineering", "design") if task["surface_kind"] == "production_ui" else ("engineering",)
+                for domain in domains:
+                    if not any(builtin_source_path(path) is not None and source_domain(path, standards["root"]) == domain for path in selection):
+                        raise TaskGraphError(f"{label} new init requires a selected builtin {domain} standards source")
+            documents = [{"path": standards["index_path"], "rule_ids": []}] if standards["index_fingerprint"] is not None else []
             for path in selection:
                 if path not in indexed_leaves:
                     raise TaskGraphError(f"{label} selects a leaf absent from standards: {path}")
@@ -221,6 +263,13 @@ def initialize(decisions: Any, root: Path, output: Path,
     for relative, expected in sources.items():
         if records.file_digest(root, relative) != expected:
             raise TaskGraphError(f"init source fingerprint changed: {relative}")
+    if standards["index_fingerprint"] is None:
+        try:
+            (root / standards["index_path"]).lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise TaskGraphError("init absent standards index changed before publication")
     if input_path is not None and records.read_record(input_path) != input_body:
         raise TaskGraphError("init decision record changed before publication")
     body = (json.dumps(graph, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")

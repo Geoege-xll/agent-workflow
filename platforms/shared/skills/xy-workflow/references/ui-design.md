@@ -56,7 +56,9 @@
   `visual_review_ready`.
 - With `prototype_policy: required`, `UI-Page` and `UI-Flow`: automatic `ia_ready`, prototype work, then explicit
   `xy-prototype-verify`, `prototype_verified`, and `visual_review_ready`.
-- The `xy-uiux` task owns deterministic static prototype-verification coverage. The PM reviews
+- The `xy-uiux` task owns deterministic static prototype-verification coverage. 设计 Agent 在同一交接
+  自检需求覆盖、规范符合性与交付一致性，写入既有 static_checks/blocking_findings/result；
+  不派独立原型 QA、不新建报告或审批，用户最终确认，生产实现后的功能 QA 保留。The PM reviews
   current scope, evidence freshness and consistency, fingerprints, and the approval handoff. Before
   user handoff, independently compare all five in-page contract sections with the frozen approved
   requirements and acceptance criteria; return missing, invented, broadened, or conflicting

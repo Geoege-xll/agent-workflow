@@ -83,12 +83,10 @@ Canonical standard leaves are not prohibited companion design documents.
 
 ## 6. Execution Workflow
 
-1. Read current requirements, task authority, its non-`skip` `controlled_document_access` entries,
-   the current STANDARDS index, selected design-standard leaves, and real product evidence; do not
-   preload unrelated project, feature, or engineering leaves. A pure `xy-uiux + design_ui`
-   prototype task uses `standards-conformance` with design leaves but may omit engineering leaves;
-   return any production
-   source, build, dependency, or deployment write to the PM for a separate implementation task.
+1. 阅读当前需求、任务授权、非skip的controlled_document_access、适用内置设计规则，以及
+   存在时的项目索引、特有设计叶和真实产品证据。不预读无关功能/项目/工程规范；纯
+   xy-uiux + design_ui使用standards-conformance和设计来源，可省略工程叶。生产源码、构建、
+   依赖或部署写入一律交PM另派生产实现任务。
 2. 激活 `$xy-ui-design`，复用其中的设计分析方法；确定最小稳定页面、共享样式或规范叶边界。
    For `standards_only`, maintain only the authorized normative text, preserve unaffected rules and
    stable IDs, and return the rule delta, approval basis, scope, and document-validation evidence.
@@ -101,6 +99,9 @@ Canonical standard leaves are not prohibited companion design documents.
    states, contracts, and dependency fingerprints.
 7. Trace every contract navigation, interaction, state, validation, and exception to the frozen
    approved requirements and acceptance criteria; invented, omitted, or conflicting behavior is FAIL.
+   在同一交接完成需求覆盖、规范符合性和交付一致性三维自检，沿用既有static_checks、
+   blocking_findings与result；页面/契约/控件/样式不一致同样为FAIL。
+   不新增独立原型QA或报告，用户最终确认；生产实现后的统一功能QA保留。
 8. Return direct page links and static evidence to the PM for the existing `visual_approved`
    workflow gate. Do not request browser evidence as a condition of handoff.
 

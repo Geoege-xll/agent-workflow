@@ -50,6 +50,10 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
 - 默认从根内 `project.yaml` 读取规范索引／根目录；安装态顶层显式设置
   `adapter_path: ".agent-workflow/project.yaml"`。源包等明确场景可在 `standards` 成对设置
   `index_path`／`root`，此时不再提供 `adapter_path`。不扫描整个规范目录。
+- leaves/selected_standards 使用精确内置来源或实际项目特有叶；安装态只给三份受管来源加
+  .agent-workflow/ 前缀，不把项目 standards_root 改成运行时目录。index_path/root 始终保留配置值，
+  无项目规则叶且索引物理不存在时 index_fingerprint 为 null，已有说明索引仍取真实 SHA。
+  init 和文档校验检查真实存在/缺失，纯 JSON 校验不声称检查了文件系统；不新增字段或审批。
 - 每个 Writer 保留实际 `id`、`task_type`、`role`、`surface_kind`、`goal`、`gates`、
   `owned_paths`、输入／输出合同、验收证据和 `verification_commands`，用
   `selected_standards: [叶路径]` 明确该任务采用的已列叶。依赖、锁及其他适用业务字段

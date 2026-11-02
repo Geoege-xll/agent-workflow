@@ -386,76 +386,20 @@ class AntigravityGeneratedArtifactTest(
             with self.subTest(retired=retired):
                 self.assertNotIn(retired, sources)
 
-    def test_antigravity_initializes_only_an_unowned_engineering_leaf(self) -> None:
+    def test_antigravity_keeps_builtin_rules_and_preserves_project_owned_material(self) -> None:
         self.run_setup()
-        engineering = self.read("docs/standards/GENERAL.md")
-        self.assertIn("## Observed repository baseline", engineering)
-        for anchor in (
-            "`apps/web`",
-            "`apps/desktop`",
-            "`services/api`",
-            "`apps/apple`",
-            "`apps/android`",
-            "not upgrade targets",
-        ):
-            with self.subTest(anchor=anchor):
-                self.assertIn(anchor, engineering)
-
-        with tempfile.TemporaryDirectory(
-            prefix="antigravity-empty-engineering-"
-        ) as temp:
-            project = Path(temp) / "Project"
-            pack = project / "agent_workflow"
-            project.mkdir()
-            shutil.copytree(self.pack, pack, symlinks=True)
-            target = project / "docs/standards/GENERAL.md"
-            target.parent.mkdir(parents=True)
-            target.touch(mode=0o604)
-            result = subprocess.run(
-                ["bash", "agent_workflow/setup_antigravity.sh"],
-                cwd=project,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=60,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn(
-                "## Observed repository baseline",
-                target.read_text(encoding="utf-8"),
-            )
-            self.assertEqual(0o604, stat.S_IMODE(target.stat().st_mode))
-
-        template = (self.pack / "templates/docs/standards/GENERAL.md").read_text(
-            encoding="utf-8"
-        )
-        neutral_values = {
-            "PROJECT_NAME": "MyProject",
-            "DOC_PROJECT": "docs/PROJECT.md",
-            "DOC_FEATURES_DIR": "docs/features",
-            "OBSERVED_BASELINE": (
-                "- Not initialized. Setup replaces this exact template-only line with "
-                "read-only repository observations."
-            ),
-        }
-        neutral = re.sub(
-            r"\{\{([A-Z_]+)\}\}",
-            lambda match: neutral_values[match.group(1)],
-            template,
-        ).encode("utf-8")
+        self.assertFalse((self.project / "docs/standards/GENERAL.md").exists())
+        self.assertFalse((self.project / "docs/STANDARDS.md").exists())
+        engineering = self.read(".agents/skills/xy-code-standards/references/rules.md")
+        self.assertIn("[eng-verification-002] [hard]", engineering)
+        self.assertIn("[eng-common-030] [hard]", engineering)
         fixtures = (
-            ("raw-template", template.encode("utf-8"), 0o604),
-            ("old-neutral-baseline", neutral, 0o640),
-            (
-                "project-contract",
-                b"# Engineering\n\n- Domain: engineering\n\n## Required project constraints\n\n- `[eng-java-001] [hard]` Java 21.\n",
-                0o600,
-            ),
+            ("empty", b"", 0o604),
+            ("project-notes", "# 项目说明\n保留用户原始资料及尾部 空格  ".encode(), 0o640),
+            ("project-contract", b"# Engineering\n- Domain: engineering\n- `[eng-java-001] [hard]` Java 21.\n", 0o600),
         )
         for state, original, mode in fixtures:
-            with self.subTest(state=state), tempfile.TemporaryDirectory(
-                prefix="antigravity-owned-engineering-"
-            ) as temp:
+            with self.subTest(state=state), tempfile.TemporaryDirectory(prefix="antigravity-project-rules-") as temp:
                 project = Path(temp) / "Project"
                 pack = project / "agent_workflow"
                 project.mkdir()
@@ -464,15 +408,9 @@ class AntigravityGeneratedArtifactTest(
                 target.parent.mkdir(parents=True)
                 target.write_bytes(original)
                 target.chmod(mode)
-                result = subprocess.run(
-                    ["bash", "agent_workflow/setup_antigravity.sh"],
-                    cwd=project,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=60,
-                )
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                result = subprocess.run(["bash", "agent_workflow/setup_antigravity.sh"], cwd=project,
+                                        text=True, capture_output=True, check=False, timeout=60)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertEqual(original, target.read_bytes())
                 self.assertEqual(mode, stat.S_IMODE(target.stat().st_mode))
 

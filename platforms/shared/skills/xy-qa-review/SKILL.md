@@ -33,6 +33,11 @@ QA must not generate screenshots or dispatch another reviewer. Communicate only 
   through PM. For a code-review audit, prefer safe available native review without imposing
   implementation intake or records. Actual non-Trivial implementation acceptance uses the contract below.
 
+适用规则从受管内置来源与实际项目特有叶选择，项目索引存在才读取并绑定真实SHA；
+无特有叶且索引缺失时使用配置路径/null指纹，不制造GENERAL或空索引。
+原型阶段由设计 Agent 自检三维并经用户最终确认，不由本Skill新增独立原型QA；
+生产实现后的功能验收继续执行以下唯一独立审查。
+
 ## Implementation acceptance
 
 Final QA outcome: PASS | FAIL

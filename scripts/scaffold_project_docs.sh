@@ -36,7 +36,6 @@ python3 --workflow-paths=1,2,3 - \
 from __future__ import annotations
 
 import os
-import posixpath
 import re
 import stat
 import sys
@@ -63,12 +62,8 @@ pack_root = Path(pack_root_raw).resolve()
 template_root = Path(template_root_raw).resolve()
 sys.path.insert(0, str(pack_root / "lib"))
 from platform_fs import os, publish_exclusive
-from standards_baseline import (
-    common_span, ensure_general_link, merge_general, validate_planned_rule_ids,
-    render_template as render_standards_baseline,
-)
+from standards_baseline import plan_standard_updates
 from validate_project_config import validate_with_profile
-from validate_project_docs import MARKDOWN_LINK_RE, normalized_link_target
 
 validation = validate_with_profile(
     pack_root / "project.yaml", project_root, pack_root / "roles"
@@ -212,7 +207,7 @@ def inject_test_race(
     fsync_parent(target)
 
 
-def publish(target: Path, body: bytes, before: tuple, original: bytes | None = None) -> str:
+def publish(target: Path, body: bytes | None, before: tuple, original: bytes | None = None) -> str:
     if os.name != "nt":
         return _publish(target, body, before, original)
     from windows_fs import Directory
@@ -223,7 +218,7 @@ def publish(target: Path, body: bytes, before: tuple, original: bytes | None = N
 
 def _publish(
     target: Path,
-    body: bytes,
+    body: bytes | None,
     before: tuple[str, int, int, int, int, int],
     original: bytes | None = None,
 ) -> str:
@@ -244,7 +239,7 @@ def _publish(
     temporary = Path(temporary_raw)
     try:
         with os.fdopen(descriptor, "wb") as handle:
-            handle.write(body)
+            handle.write(body or b"")
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, mode, follow_symlinks=False)
@@ -272,6 +267,16 @@ def _publish(
                 os.replace(backup, target)
                 fsync_parent(target)
             raise SystemExit(f"scaffold target changed during publish: {target}")
+        if body is None:
+            # 只有迁移计划证明为纯默认副本才可删除。先移到本次事务的精确备份，
+            # 再核对原始字节，避免同大小并发编辑被删除；用户重建同名文件时保留它。
+            if inspect_target(target)[0] != "missing":
+                raise SystemExit(f"scaffold target appeared during delete: {target}")
+            if inspect_target(backup) != before or not original_matches(backup):
+                raise SystemExit(f"scaffold target changed during delete: {target}")
+            os.unlink(backup)
+            fsync_parent(target)
+            return "deleted"
         if os.name == "nt":
             from windows_fs import copy_permissions
             copy_permissions(backup, temporary)
@@ -315,83 +320,25 @@ values = {
     "DOC_PLANS_DIR": doc_plans_dir,
     "DOC_NOTES_DIR": doc_notes_dir,
     "DOC_DESIGN_DIR": doc_design_dir,
-    # Markdown 链接必须相对 STANDARDS.md 自身计算，不能直接复用项目根相对路径；
-    # 否则位于 docs/ 下的索引会错误解析成 docs/docs/standards/。
-    "ENGINEERING_STANDARDS_INDEX": (
-        f"- [General engineering rules]({posixpath.relpath(f'{doc_standards_root}/GENERAL.md', posixpath.dirname(doc_standards))})\n"
-        f"- [Upstream and second-development boundaries]({posixpath.relpath(f'{doc_standards_root}/UPSTREAM.md', posixpath.dirname(doc_standards))})"
-    ),
-    # 索引只链接当前项目实际启用的设计规范叶文档，非 UI 项目不生成空设计权威。
-    "DESIGN_STANDARDS_INDEX": (
-        f"- [Design foundations]({posixpath.relpath(f'{doc_standards_root}/DESIGN_FOUNDATIONS.md', posixpath.dirname(doc_standards))})\n"
-        f"- [Component and interaction standards]({posixpath.relpath(f'{doc_standards_root}/DESIGN_COMPONENTS.md', posixpath.dirname(doc_standards))})"
-        if ui_enabled
-        else "- No design standards are configured for the discovered project profile."
-    ),
 }
 
+# 规则正文只在内置 Skill 维护。先得到全部规范候选再发布任何文档，重复 ID、损坏
+# 标记或未知差异会在此失败，不把项目材料变成占位规则或按文件名删除。
 try:
-    general_engineering_text = regular_source(
-        template_root / "standards/GENERAL.md"
-    ).decode(
-        "utf-8", errors="strict"
+    standard_inputs: dict[Path, bytes | None] = {}
+    standard_updates = plan_standard_updates(
+        pack_root, project_root,
+        docs={"standards": doc_standards, "standards_root": doc_standards_root,
+              "project": doc_project, "features": doc_features_dir},
+        profile=profile,
+        expected_inputs=standard_inputs,
     )
-except UnicodeDecodeError as exc:
-    raise SystemExit("general engineering standards template must be UTF-8") from exc
-try:
-    general_engineering_body = render_standards_baseline(
-        general_engineering_text, values, profile=profile
-    ).encode("utf-8")
 except ValueError as exc:
     raise SystemExit(str(exc)) from exc
-
-candidates: list[tuple[Path, bytes]] = [
-    (within_project(doc_standards), render(template_root / "STANDARDS.md", values)),
-    (
-        within_project(f"{doc_standards_root}/GENERAL.md"),
-        general_engineering_body,
-    ),
-    (
-        within_project(f"{doc_standards_root}/UPSTREAM.md"),
-        render(template_root / "standards/UPSTREAM.md", values),
-    ),
+candidates: list[tuple[Path, bytes | None]] = [
+    *standard_updates.items(),
     (within_project(doc_project), render(template_root / "PROJECT.md", values)),
 ]
-# GENERAL 是默认基础规范；其他工程叶仍由项目目录决定，不能在自定义索引旁
-# 补出一个未被收录的 UPSTREAM.md，导致仅补通用入口也无法通过目录校验。
-standards_index = within_project(doc_standards)
-if inspect_target(standards_index)[0] == "file":
-    index_body = regular_source(standards_index).decode("utf-8")
-    if index_body.strip():
-        indexed = {normalized_link_target(standards_index, raw)
-                   for raw in MARKDOWN_LINK_RE.findall(index_body)}
-        upstream_target = within_project(f"{doc_standards_root}/UPSTREAM.md")
-        candidates = [(path, body) for path, body in candidates
-                      if path != upstream_target or path.resolve() in indexed]
-if ui_enabled:
-    # 仅设计模板受自定义设计索引限制；项目入口等核心候选保留在独立列表中。
-    # 不能用目标文件名的 DESIGN_ 前缀推断类型，否则合法的自定义入口会被漏生成。
-    design_candidates = [
-        (
-            within_project(f"{doc_standards_root}/DESIGN_FOUNDATIONS.md"),
-            render(template_root / "standards/DESIGN_FOUNDATIONS.md", values),
-        ),
-        (
-            within_project(f"{doc_standards_root}/DESIGN_COMPONENTS.md"),
-            render(template_root / "standards/DESIGN_COMPONENTS.md", values),
-        ),
-    ]
-    # 既有自定义索引是项目的规范目录；新增角色/模块不能自动注入未被目录收录的
-    # 设计模板。首次安装或空索引由上面的完整模板负责，仍会补齐默认设计规范。
-    standards_index = within_project(doc_standards)
-    if inspect_target(standards_index)[0] == "file":
-        index_body = regular_source(standards_index).decode("utf-8")
-        if index_body.strip():
-            indexed = {normalized_link_target(standards_index, raw)
-                       for raw in MARKDOWN_LINK_RE.findall(index_body)}
-            design_candidates = [(path, body) for path, body in design_candidates
-                                 if path.resolve() in indexed]
-    candidates.extend(design_candidates)
 
 if ui_enabled:
     prototype_root = within_project(f"{doc_design_dir}/prototype")
@@ -426,36 +373,14 @@ snapshots: dict[Path, tuple[str, int, int, int, int, int]] = {}
 for target, _body in candidates:
     snapshots[target] = inspect_target(target)
 
-# 只有 GENERAL 的明确受管区与索引补链可更新非空文件。先规划所有变化，
-# 标记损坏或规则冲突时尚未发布任何文档；无法识别的项目规范仅保留并提示。
-originals: dict[Path, bytes] = {}
-planned: list[tuple[Path, bytes]] = []
-general_target = within_project(f"{doc_standards_root}/GENERAL.md")
-index_target = within_project(doc_standards)
-for target, body in candidates:
-    before = snapshots[target]
-    if target in (general_target, index_target) and before[0] == "file" and before[4] > 0:
-        current = regular_source(target)
-        try:
-            if target == general_target:
-                body = merge_general(current, body)
-                if common_span(current) is None:
-                    print(f"[WARN] {target}: common region is unmarked; preserved unchanged; controlled adoption required")
-            else:
-                body = ensure_general_link(current, index_target, general_target)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-        if body != current:
-            originals[target] = current
-    planned.append((target, body))
-candidates = planned
-try:
-    validate_planned_rule_ids(within_project(doc_standards_root), {
-        target: body for target, body in candidates
-        if snapshots[target][0] == "missing" or snapshots[target][4] == 0 or target in originals
-    })
-except ValueError as exc:
-    raise SystemExit(str(exc)) from exc
+# 规范候选已经由共享计划完成归属检查；非空项目入口继续原样保留。
+originals = {}
+for target, expected in standard_inputs.items():
+    actual = regular_source(target) if snapshots[target][0] == "file" else None
+    if actual != expected:
+        raise SystemExit(f"scaffold target changed after migration planning: {target}")
+    if actual is not None:
+        originals[target] = actual
 
 # features/ 只保存真实功能文档，不用 README 或 .gitkeep 伪造一个功能条目。这里先验证
 # 该路径不是符号链接或普通文件，全部受控文件发布成功后再创建空目录。
@@ -478,4 +403,4 @@ PY
 
 python3 "${PACK_DIR}/lib/validate_project_docs.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
 
-log_info "Document scaffold complete; managed common rules refreshed, project sections preserved."
+log_info "Document scaffold complete; builtin rules remain in Skills, project-specific content preserved."

@@ -264,15 +264,13 @@ Windows 尚无经过原生验收的 ACL 权限指纹，旧运行时备份暂不�
 （例如 `/path/to/ParentsKit` → `ParentsKit`），保留原大小写、中文和空格；已明确配置的其他名称保持不变。
 名称初始化不修改源包配置或已有的 `memory.project_id`；新生成的文档使用真实名称，已有非空项目文档不批量改写。
 
-默认文档结构仍为 `docs/PROJECT.md`、`docs/STANDARDS.md` 与 `docs/standards/GENERAL.md`
-（实际路径由项目适配器配置）。安装器自动补齐通用规范的索引链接，不重排或覆盖项目的其他规范入口。
-`GENERAL.md` 的 `agent-workflow:general-common:begin/end` 标记区是内置共通开发规范，
-升级时只刷新该区；标题、仓库观察、验证策略及 `Project-specific rules` 等区外内容与文件权限保留。
-项目补充写在区外，不在受管区编辑；内容相同不重写文件。已有非空文件没有完整可识别边界时，
-无标记的原文保留并提示受控整理，残缺／重复／倒置标记则停止更新，不按旧标题猜测并覆盖。
-`--check` 只读检查受管区是否与当前运行时一致；更新改变的规范指纹沿现有任务交接规则处理，
-不会增加业务确认阶段或自动触发全量测试。升级验收失败时，仅对仍为本轮精确产物的通用区更新和索引补链回滚；
-出现并发项目修改则保留现场并报错，不覆盖用户内容。
+通用规则正文统一随运行时内置 Skill 安装：工程规则在 `xy-code-standards/references/rules.md`，
+设计规则在 `xy-ui-design/references/foundations-rules.md`、`components-rules.md`。
+项目只维护已批准的特有规范；存在实际特有叶时才维护有内容的 `docs/STANDARDS.md` 薄索引，
+无特有叶时不生成 GENERAL、默认设计叶、UPSTREAM 占位或空索引。既有说明索引可原样保留。
+迁移仅整理可精确识别的旧通用内容，保留项目特有规则、修改、权限及并发/回滚保护；
+无法确认归属或语义冲突时报告受影响项，不把用户规范当模板覆盖或用近似语义放过重复ID。
+规则来源变化须刷新当前指纹和任务包，不增加业务确认或无依据的全量测试。
 
 项目内也可独立复核：`bash .agent-workflow/setup_all.sh --check`。
 新入口不迁移旧的项目内 `agent_workflow/` 安装包；检测到旧包时会停止。
@@ -377,8 +375,8 @@ auxiliary information sources at task intake. The PM reads or queries only the s
 scope when a current feature fact, durable decision, engineering or design constraint, cross-session
 background, or historical lesson is needed. Sufficient task information requires no document
 retrieval or agentmemory start retrieval. `project.yaml` remains the workflow adapter. Every Writer
-reads the compact STANDARDS index plus only applicable leaves: non-UI implementation uses
-engineering, production UI uses engineering/design, and prototype design uses design.
+读取适用内置规则及项目特有叶，项目索引存在才读；non_ui使用工程规则，
+production_ui使用工程/设计，原型使用设计规则。不因索引物理缺失而跳过内置规则。
 
 Every Full request runs the self-contained `grill-me` coverage check. Complete requirements produce
 no artificial questions; unresolved material gaps receive a bounded interview. The self-contained
@@ -408,9 +406,8 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
 查询仍只读，更新不自动派发、批准或判断完成；构建成功、可运行和独立 QA 要求不变。
 宿主可读导出的完整 Task Pack 文件时，可交接确切文件引用、SHA 与简短变化摘要，接收方
 必须完整读取；宿主不可读时仍发送完整包，不能仅发差量。
-Every Writer carries a fingerprinted `STANDARDS.md` index plus targeted leaves covering its owned
-paths and applicable hard rules. QA independently resolves applicable leaves from the index and
-actual diff; `qa_handoff_cli.py validate` prevents PASS when the Task Pack omitted a rule, fixed diff
+每位Writer携带覆盖拥有路径的当前内置来源、适用规则ID及项目特有规范，索引存在时绑定真实SHA。
+无项目叶且索引缺失时保留配置路径/null指纹；QA按当前内置来源、存在的项目索引及实际差异独立判定； `qa_handoff_cli.py validate` prevents PASS when the Task Pack omitted a rule, fixed diff
 scope is incomplete, or changed-path/rule evidence is missing. These machine
 records remain internal; users receive concise natural-language decisions.
 
@@ -497,7 +494,9 @@ fingerprints. Prototype verification does not invoke Computer Use or browser aut
 only an explicit user request to automate the prototype, or diagnosis of a concrete prototype failure
 reported by the user, permits the smallest scoped browser operation. The PM reviews current evidence
 and, before user handoff, compares all five contract sections with the frozen approved requirements
-and acceptance criteria. Omitted, invented, broadened, or conflicting behavior returns to the
+and acceptance criteria. 设计Agent先在同一交接完成需求覆盖、规范符合性、交付一致性自检，
+沿用static_checks/blocking_findings/result；不新增独立原型QA、报告、审批或默认浏览器/截图步骤，
+用户最终确认，生产功能QA保留。Omitted, invented, broadened, or conflicting behavior returns to the
 designer. This semantic review does not invoke a browser; the PM does not repeat proven static checks
 or supplement missing browser evidence.
 After implementation, deterministic QA tooling may scan complete dependency bytes and recompute the
@@ -546,8 +545,8 @@ instead of a repeated copy of the PM's entire global procedure; model and reason
 under user control.
 
 `xy-code-standards` 提供实现判断和只读审查方法，`xy-ui-design` 提供规范落实、一致性与
-高保真交付方法。项目 GENERAL 的稳定规则、已批准设计规范和当前指纹仍是权威；参考项目
-的满意评价不构成通用颜色、材质或审美授权。Trivial 同样适用代码方法，仍按原早退路线完成。
+高保真交付方法与通用规范正文。三份内置来源、已批准项目特有规则及当前指纹构成适用权威；
+参考项目的满意评价不构成通用颜色、材质或审美授权。Trivial 同样适用代码方法，仍按原早退路线完成。
 角色常驻职责与权限保留，条件细节从 Skill 读取；字符／字节体积变化不等于真实 token 节省。
 
 Codex 角色中的发现上下文复用原发现器，将相同技术栈／证据和命令模板分组，再保留
@@ -760,9 +759,9 @@ Every host setup and `setup_all.sh` creates only missing or empty current-profil
 
 | Path | Purpose |
 |------|---------|
-| `docs/STANDARDS.md` | Concise index of enforceable engineering/design rules |
-| `docs/standards/*.md` | Direct engineering leaves, including repository baseline and upstream boundaries |
-| `docs/standards/DESIGN_*.md` | Direct design foundations/components or platform leaves; UI profile only |
+| `docs/STANDARDS.md` | 存在实际项目特有规范时维护的薄索引；既有说明索引保留 |
+| `docs/standards/*.md` | 实际项目特有工程规范、保护边界等，不复制内置通用正文 |
+| `docs/standards/DESIGN_*.md` | 实际采用的项目设计值、组件变体与平台差异；无差异不创建 |
 | `docs/PROJECT.md` | Current verified project directory and active feature links |
 | `docs/features/` | Current detailed feature truth; `*.removed.md` is historical only |
 | `docs/plans/` | Lazy PM-owned plans by task level, not placeholder files or implemented feature truth |
@@ -777,10 +776,11 @@ instead of installing a compatibility bridge or retaining dual truth.
 Plans and notes are lazy: setup preserves existing content but does not create empty placeholder
 trees or plans. `templates/docs/PLAN.md` is an optional writing aid, not a mandatory form for small work.
 
-Normative leaves are direct children of `docs.standards_root`. Design leaves use the `DESIGN_`
-filename prefix and `- Domain: design`; engineering leaves declare `- Domain: engineering`.
-The index groups applicable leaves, and runtime/QA contracts bind their domain, rule IDs and hashes.
-The shallow layout does not reduce required standards reads or upstream protection.
+项目特有叶仍直接位于 `docs.standards_root`：设计叶保留 DESIGN_ 前缀及 Domain: design，
+工程叶声明 engineering；通用正文从三份精确内置来源读取，内置路径不扩大项目写权限。
+配置的 index_path/root 始终保留；无项目规则叶且索引物理缺失时 index_fingerprint 为 null，
+索引实际存在则记录真实SHA。init/文档校验检查文件系统，纯JSON图校验不冒称已核对文件存在性。
+来源、领域、稳定ID、覆盖和指纹检查继续执行，不能把可选索引解释成可跳过规范。
 
 This is a direct schema upgrade: replace `docs.adr` with `docs.plans`; consolidate useful ADR rationale
 into the related feature or shared architecture detail. Move engineering leaves to the standards root,

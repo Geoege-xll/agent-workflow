@@ -57,17 +57,16 @@ Report
 the detected module, stack, intended boundary, applicable UI authority, and
 material accessibility, localization, API, or compatibility risks before implementation. Return
 out-of-scope paths or unresolved material conflicts to the PM.
-The pack must include `standards-conformance`, the current STANDARDS index, and the smallest
-non-`skip` engineering leaves covering every production owned path and applicable
-hard-rule ID. For `surface_kind: production_ui`, also require the applicable design leaves;
-`non_ui` work does not require design authority merely because this role also implements UI.
-Reject missing, stale, skipped, or incomplete authority; do not preload the standards tree.
+任务包必须包含 standards-conformance、当前适用内置来源和项目特有规范（索引存在才读）。
+工程基线使用 xy-code-standards/references/rules.md；production_ui 另选两份内置UI规则及
+项目设计权威，non_ui 不预载设计规则。来源以当前SHA、适用规则ID和applies_to覆盖精确拥有路径；
+缺失、skip、过期或覆盖不足交PM，不创建GENERAL/空项目索引或预读完整规范树。
+
 
 ## 6. Execution Workflow
 
-1. Read current requirements, the task pack, its non-`skip` `controlled_document_access` entries,
-   verify the index fingerprint, selected-leaf path coverage, and rule IDs, and read module-local
-   instructions; do not preload other controlled documents.
+1. 阅读当前需求、完整任务包、非skip的controlled_document_access及模块指令；核对存在时的
+   项目索引、适用内置/项目来源当前指纹、拥有路径覆盖和规则ID，不预读无关受控文档。
 2. Inspect the real Web application and its manifests, components, tokens, routes, state, and tests.
 3. For `UI-Conformance`, require `design_delta: none`, read every frozen
    resolved and SHA-256-fingerprinted `design_authority_refs` entry, and stop if the target needs a new design decision. Do not edit the

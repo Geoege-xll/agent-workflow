@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from tests.skill_contract_helpers import read_contract
 
-from lib.standard_paths import canonical_standard_path, standard_domain
+from lib.standard_paths import canonical_standard_path, standard_domain, source_domain, canonical_standard_source_path
 from lib.validate_project_config import validate_docs
 from lib.validate_project_docs import validate as validate_documents
 from lib.validate_prototype_workspace import ValidationError, validate_workspace
@@ -88,6 +88,49 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         leaf = self.standards / "DESIGN_FOUNDATIONS.md"
         leaf.write_text(leaf.read_text().replace("Domain: design", "Domain: engineering"))
         self.assertTrue(any("Domain: design" in item for item in validate_documents(self.config, self.root)))
+
+    def test_builtin_sources_do_not_expand_project_write_paths(self) -> None:
+        source = "platforms/shared/skills/xy-code-standards/references/rules.md"
+        for path in (source, ".agent-workflow/" + source):
+            self.assertEqual("engineering", source_domain(path, "docs/standards"))
+            self.assertTrue(canonical_standard_source_path(path, "docs/standards"))
+            self.assertIsNone(standard_domain(path, "docs/standards"))
+            self.assertFalse(canonical_standard_path(path, "docs/standards"))
+        for path in (source.upper(), source.replace("rules.md", "other.md"),
+                     ".agents/skills/xy-code-standards/references/rules.md",
+                     ".claude/skills/xy-code-standards/references/rules.md"):
+            for root in ("docs/standards", path.rsplit("/", 1)[0]):
+                self.assertIsNone(source_domain(path, root))
+                self.assertFalse(canonical_standard_source_path(path, root))
+
+    def test_project_standards_are_optional_and_notes_do_not_become_rules(self) -> None:
+        for path in self.standards.glob("*.md"):
+            path.unlink()
+        (self.docs / "STANDARDS.md").unlink()
+        self.standards.rmdir()
+        self.assertEqual([], validate_documents(self.config, self.root))
+        self.standards.mkdir()
+        note = self.standards / "GENERAL.md"
+        original = "# 项目历史说明\n\n仅保留项目背景，未声明通用规范。\n".encode("utf-8")
+        note.write_bytes(original)
+        self.assertEqual([], validate_documents(self.config, self.root))
+        (self.docs / "STANDARDS.md").write_text("# 项目资料\n[保留说明](standards/GENERAL.md)\n", encoding="utf-8")
+        self.assertEqual([], validate_documents(self.config, self.root))
+        self.assertEqual(original, note.read_bytes())
+
+    def test_project_rule_requires_index_and_cannot_shadow_builtin_or_bad_severity(self) -> None:
+        index = self.docs / "STANDARDS.md"
+        original = index.read_bytes()
+        index.unlink()
+        self.assertTrue(any("require a standards index" in item for item in validate_documents(self.config, self.root)))
+        index.write_bytes(original)
+        leaf = self.standards / "GENERAL.md"
+        for text, message in (("[eng-common-005] [hard] 修改内置规则", "duplicate standards rule ID"),
+                              ("[eng-common-005] [HARD] 伪装成说明", "invalid standards severity"),
+                              ("| [eng-common-005] [CRITICAL] | 表格伪装 |", "invalid standards severity"),
+                              ("保留说明中的 [eng-common-005] [unknown]", "invalid standards severity")):
+            leaf.write_text("# 保留项目内容\n- Domain: engineering\n- `" + text + "`\n", encoding="utf-8")
+            self.assertTrue(any(message in item for item in validate_documents(self.config, self.root)))
 
     def test_old_nested_standards_are_not_hidden_from_validation(self) -> None:
         (self.standards / "design/references").mkdir(parents=True)

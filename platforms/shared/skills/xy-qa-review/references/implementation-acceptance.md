@@ -26,8 +26,9 @@ integration, packaging, signing, notarization, updater and release evidence.
 
 ## Independent standards coverage
 
-Start from the fingerprinted STANDARDS index and actual changed paths. Independently resolve the
-smallest applicable leaves rather than trusting the Writer's selection or preloading the tree.
+从实际变更路径独立选择适用内置规则及项目特有规范，索引存在时沿链接读取并核对真实SHA。
+没有特有叶且索引物理缺失时保留配置路径/null索引指纹；内置来源与全部适用ID仍须覆盖，
+不能因缺少项目GENERAL而跳过通用工程底线，也不靠预读全树修补任务包。
 Classify every fixed changed path and record each required/applicable engineering or design rule's
 source path, fingerprint, anchor, severity, disposition, affected paths and direct evidence in
 `standards_policy_coverage`. Engineering leaves apply to non-UI implementation, both domains to

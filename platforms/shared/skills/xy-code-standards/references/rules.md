@@ -1,21 +1,17 @@
-# General Engineering Standards — {{PROJECT_NAME}}
+# 通用工程规则
 
 - Domain: engineering
+- Scope: 代码实现与只读审查，包括 Trivial 的适用工程约束；条款按实际能力、依赖和风险生效，上游例外规则仅在项目明确声明相应保护边界时适用。
 
-> 工作流预置跨项目通用的开发规范；技术栈、架构和业务特有约束在本项目补充。
-> 仓库观察结果只用于发现现状，不自动成为必须升级到的目标。
+本文件是内置通用工程规则的唯一正文。项目只维护技术栈、业务合同、保护路径和已批准例外等特有规范；
+仓库观察不是升级目标，不把通用规则复制到项目 GENERAL。规则 ID、强弱级别及适用条件保持稳定。
 
-## Required project constraints
+## 规则编写与合同变化
 
-- Record only requirements explicitly approved for this project, such as a required toolchain,
-  compatibility floor, deployment target, or prohibited dependency.
-- **No additional project-specific constraint has been recorded yet.**
-
-## Observed repository baseline
-
-{{OBSERVED_BASELINE}}
-
-These observations guide routing and verification; they are not upgrade targets or project rules.
+Add enforceable rules with a stable lowercase ID and explicit severity. Use `hard` only for a true
+blocking contract; use `advisory` for a preferred practice whose justified deviation may still pass.
+不创建占位规则；只有实际已批准的项目特有约束才进入项目叶。
+Breaking contract changes use the Full workflow and return cross-module routing to the PM.
 
 ## Verification policy
 
@@ -31,22 +27,12 @@ These observations guide routing and verification; they are not upgrade targets 
   不额外生成只复述低风险修改的测试。完整策略见已安装 `xy-build-verify` 的
   `references/verification-scope.md`，不豁免独立审查、强制 CI／Hook 或必要集成验证。
 
-## Environment and secrets
+## 秘密管理
 
 - `[eng-secrets-001] [hard]` Never commit secrets, credentials, private keys, tokens, or raw private
   data; use the project-approved environment or secret manager.
-- Required environment variables and safe local defaults: **TODO**
 
-## Contracts and changes
-
-- Current project and feature index: `{{DOC_PROJECT}}`
-- Detailed feature contracts: `{{DOC_FEATURES_DIR}}/`
-- Breaking contract changes use the Full workflow and return cross-module routing to the PM.
-
-<!-- agent-workflow:general-common:begin -->
 ## 共通开发规范
-
-本区由工作流安装器维护，升级时仅更新此标记区块；项目专属要求写在区块外的 Project-specific rules 中。
 
 以下规则在实现相应能力时生效。新项目首次需要某种能力时建立清晰入口；初始化时无需预建尚未使用的空层、工具类或接口。项目专项规范负责写明实际框架、目录、类名、返回协议和特殊业务状态。
 
@@ -103,11 +89,15 @@ These observations guide routing and verification; they are not upgrade targets 
 - `[eng-common-019] [hard]` 新增或改变可观察业务行为、修复缺陷时，先复用现有针对性覆盖；只有实际覆盖缺口或用户／项目强制要求才补测试，优先扩展现有文件，确有独立职责或项目约定需要时才新建。已有覆盖充分时可以不新增测试；不得以新增测试文件、用例数量或测试代码行数作为 QA 验收依据。按实际风险选择关键正常、边界、失败及必要的精度、模型映射、并发或重试恢复用例，不凑齐全部类别或在多层复制相同保障。断言对真实合同有意义，不能只证明 mock 被调用或让错误实现也能通过；替身测试不冒充真实依赖的运行证据。测试保持清晰、可维护；必需验证通过且证据仍有效即停止，QA／PM 核对后复用，不因交接或收尾重复跑一轮。仓库缺少可运行测试入口时报告限制和已做的替代验证，不虚构通过结果。
 - `[eng-common-020] [hard]` 变更应围绕当前需求保持可审查：不混入无关格式化、依赖升级或大范围重构；保留未获批准的公开、持久化与运行合同。实际改变构建、配置、对外用法或运维行为时更新对应说明；小修复不要求补写与本次变化无关的文档。规范与说明优先更新现有适用主题，已有规则覆盖时不重复新增；确有独立维护边界或项目约定需要时才新建，不按每项需求／约束建一份，也不把所有专项规则堆入 GENERAL。专项引用共通权威、仅补实际差异，引用仍须完整读取和覆盖。依 WORKFLOW 的 `Standards document granularity and maintenance` 维护；归并不得削弱合同、丢失适用范围或破坏稳定编号与引用。
 - `[eng-common-030] [hard]` 开发、回归与验收默认复用唯一的共享开发数据库、运行环境及系统全局构建／依赖缓存（Maven、Gradle、npm、pnpm、Cargo、uv、DerivedData 等），结构与测试数据通过迁移或增量同步落实到该单一基线；不得为每轮修复、重试、QA 或阶段验收新建平行测试库、隔离父库、容器、私有依赖仓库，或按日期／轮次／候选复制源码树、构建产物与运行时目录（如 `-v2`、`-r1`、`replay`、`frozen-replay`、`packages-qa*`）。改动前版本保护优先依托 Git 中实际可恢复的版本，不在仓库或临时目录按轮次手工复制 `before`／`.bak` 源码快照；不得假定 Git 能恢复未提交、未跟踪内容或非 Git 项目的原始资料，必要时先沿用现有可恢复输入或保存一份有明确范围的必要恢复副本，无法保护时停止受影响的覆盖／删除；确需破坏性数据操作保护时只保留单一固定名称的滚动快照并在验证通过后清理。仅在并发写入冲突、破坏性实验或用户明确要求时启用环境／数据库隔离且同一任务复用单一实例，用户指示不隔离或直改主分支时立即遵守；任务收口时必须合并有效数据并清理本任务新建的临时目录、隔离库、容器与过程产物，只保留任务记录中的精简证据摘要。
-<!-- agent-workflow:general-common:end -->
 
-## Project-specific rules
+## 上游与二次开发适用边界
 
-Add enforceable rules with a stable lowercase ID and explicit severity. Use `hard` only for a true
-blocking contract; use `advisory` for a preferred practice whose justified deviation may still pass.
+项目特有规范声明实际受保护根、允许扩展路径、直改政策和同步策略；没有嵌入上游源时明确不适用，不虚构保护路径。
+通用例外条款不自行创建保护边界，也不增加默认业务确认阶段。
 
-Replace this guidance with real, approved project rules; do not create placeholder rule IDs.
+## Exceptional change contract
+
+- `[eng-upstream-001] [hard]` A protected upstream write requires the matching exceptional approval,
+  exact patch surface, reason, rollback plan, upstream-sync impact, and verification commands.
+- `[eng-upstream-002] [hard]` An exception authorizes only its declared paths and does not weaken
+  unrelated engineering or design rules.

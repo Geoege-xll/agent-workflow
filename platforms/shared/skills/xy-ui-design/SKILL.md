@@ -24,10 +24,15 @@ PM 已选择的 `design_mode` 决定适用阶段；预加载不等于必须执�
 
 以下设计操作用于 `xy-uiux` 的授权任务；生产实现与 QA 只对照既有 authority 消费适用规则，
 不执行设计阶段或触发原型验证。
-按当前规范索引实际解析到的路径读取适用设计叶、相关产品证据、组件/token 和当前页面，
+通用规则读取 [设计基础](references/foundations-rules.md) 与
+[组件交互](references/components-rules.md) 的适用条款；项目只保留实际采用的 token、风格、尺寸、
+平台映射和业务差异。存在项目特有规范索引时沿实际链接读取，再核对相关产品证据和当前页面，
 复用完整读过且未变的上下文，不假定叶文件名或预读全部项目。已批准需求与项目规则优先。
 复用 `ui-ux-pro-max` 做设计分析，按其说明选择最小相关查询；结果只作建议，
 不持久化另一份设计系统、不调用安装或构建流程，不让通用风格替换项目基线。
+
+<!-- workflow-contract: references/foundations-rules.md -->
+<!-- workflow-contract: references/components-rules.md -->
 
 ## 按阶段读取
 
@@ -43,7 +48,9 @@ PM 已选择的 `design_mode` 决定适用阶段；预加载不等于必须执�
 
 ## 验证与交接
 
-`prototype` 复用 `xy-prototype-verify` 的现有静态验证和五节页内契约；不另造验证器。
+`prototype` 由设计 Agent 完成需求覆盖、规范符合性、交付一致性三维自检，复用
+`xy-prototype-verify` 的静态验证和五节页内契约；结果沿已有 `static_checks`、
+`blocking_findings` 与 `result` 交接，不新建独立原型 QA、报告或审批。用户仍最终确认。
 只向 PM 交接具体页面、范围、操作、共享影响、真实证据与未验证项；静态通过不代表
 视觉满意或全部交互已合格，用户视觉确认仍由 PM 按现有路线处理。不得生成、保存、
 附加或呈现截图。原型浏览器默认不自动操作，仅沿用现有验证合同的用户请求/故障诊断例外；

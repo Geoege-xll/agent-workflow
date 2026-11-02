@@ -7,7 +7,7 @@ description: "编排非 Trivial 项目实施、多功能开发、重构、UI 变
 
 # xy-workflow
 
-代码修改沿用 `xy-code-standards` 的适用方法和项目工程规范；Trivial 仍局部验证后早退，
+代码修改沿用 `xy-code-standards` 的适用方法、内置工程规则和项目特有规范（索引存在才读）；Trivial 仍局部验证后早退，
 PM 获明确亲自实施授权时仍保留原等级路线。读取专业方法不触发本 Skill 的完整编排或 QA。
 
 ## Standalone read-only audit

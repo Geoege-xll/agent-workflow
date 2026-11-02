@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -83,6 +84,54 @@ class QAHandoffValidationTest(unittest.TestCase):
         result = self.invoke(self.payload)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual({"status": "valid"}, json.loads(result.stdout))
+
+    def builtin_payload(self):
+        payload = json.loads(json.dumps(self.payload))
+        path = "platforms/shared/skills/xy-code-standards/references/rules.md"
+        digest = hashlib.sha256((self.cli.parents[1] / path).read_bytes()).hexdigest()
+        coverage = payload["standards_policy_coverage"]
+        coverage.update(index_fingerprint=None, task_pack_rule_ids=["eng-common-005"], required_engineering_rule_ids=["eng-common-005"])
+        coverage["path_checks"][0]["applicable_rule_ids"] = ["eng-common-005"]
+        coverage["rule_checks"][0].update(rule_id="eng-common-005", source_path=path, source_fingerprint=digest, source_anchor="配置、错误和维护")
+        return payload
+
+    def test_builtin_coverage_accepts_missing_project_index_and_exact_installed_source(self):
+        payload = self.builtin_payload()
+        for prefix in ("", ".agent-workflow/"):
+            candidate = json.loads(json.dumps(payload))
+            candidate["standards_policy_coverage"]["rule_checks"][0]["source_path"] = prefix + payload["standards_policy_coverage"]["rule_checks"][0]["source_path"]
+            result = self.invoke(candidate)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_builtin_rule_identity_severity_and_fingerprint_cannot_be_forged(self):
+        for field, value, message in (("severity", "advisory", "ID/severity"),
+                                      ("source_fingerprint", "a" * 64, "fingerprint is stale"),
+                                      ("rule_id", "eng-does-not-exist", "ID/severity"),
+                                      ("domain", "design", "direct design"),
+                                      ("source_path", ".claude/skills/xy-code-standards/references/rules.md", "direct engineering")):
+            payload = self.builtin_payload()
+            payload["standards_policy_coverage"]["rule_checks"][0][field] = value
+            with self.subTest(field=field):
+                result = self.invoke(payload)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(message, result.stderr)
+
+    def test_missing_project_index_cannot_hide_project_rule_sources(self):
+        payload = json.loads(json.dumps(self.payload))
+        payload["standards_policy_coverage"]["index_fingerprint"] = None
+        result = self.invoke(payload)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("no project standards rule sources", result.stderr)
+
+    def test_native_skill_copy_cannot_become_project_authority_with_forged_root(self):
+        payload = self.builtin_payload()
+        coverage = payload["standards_policy_coverage"]
+        path = ".claude/skills/xy-code-standards/references/rules.md"
+        coverage.update(root=path.rsplit("/", 1)[0], index_fingerprint="a" * 64)
+        coverage["rule_checks"][0]["source_path"] = path
+        result = self.invoke(payload)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("direct engineering", result.stderr)
 
     def test_legal_review_methods_preserve_pass_and_fail_handoffs(self) -> None:
         """三种方法都可交接；FAIL 表示真实发现，不需要为了换方法而伪造技术故障。"""
@@ -328,6 +377,7 @@ class NativeQAHandoffTest(unittest.TestCase):
         self.assertIn("repositories", method["scope_ref"]["properties"])
         coverage = schema["properties"]["standards_policy_coverage"]["properties"]
         self.assertIn("rule_checks", coverage)
+        self.assertIn("null", coverage["index_fingerprint"]["type"])
         self.assertIn("path_checks", coverage)
 
         def check_objects(value: object) -> None:

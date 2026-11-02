@@ -119,9 +119,9 @@ The following planning, graph and QA route applies only after both Trivial early
 Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低原等级或省略门槛。
 
 1. `project.yaml` is the fixed workflow-adapter read for paths, limits, and routing configuration.
-   Its `docs.*` values are discoverable indexes, not a static preload list. The compact
-   `docs.standards` index is mandatory only when planning, executing, or auditing a Writer; the PM,
-   Writer, and QA each use it to select the smallest applicable leaves under `docs.standards_root`.
+   Its `docs.*` values are discoverable indexes, not a static preload list.
+   PM、Writer、QA 按实际领域选取内置来源，并在项目索引存在时沿链接补充适用特有叶；
+   项目索引/叶不是安装必建副本，内置来源仍为必需规则底线。
    Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are
    auxiliary information sources. Read or query only the smallest task-relevant scope when the PM
    needs to supplement or verify an existing feature, durable decision, engineering or design
@@ -146,13 +146,13 @@ Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低
    current feature truth, follow only task-relevant links, inspect headings or search task terms,
    then read only matching feature and decision sections. Use `full` only when the whole detailed document is materially required and
    state why. `skip` means do not open the body. Read design standards only for UI work and shared
-   architecture details or plans only for a relevant missing fact. Every Writer receives the current fingerprinted STANDARDS
-   index plus non-`skip` leaves covering all owned paths and applicable stable hard-rule IDs:
-   every production-code Writer includes the current `docs.standards_root/GENERAL.md` baseline;
-   non-UI implementation also uses other applicable engineering leaves, production UI uses engineering and design leaves,
-   and `xy-uiux + design_ui` uses design leaves. Put the resulting access plan in every worker and
-   QA task pack. Missing, stale, or incomplete authority blocks dispatch; it never authorizes
-   preloading the complete standards tree.
+   architecture details or plans only for a relevant missing fact.
+   每位生产代码 Writer 的基线是内置 xy-code-standards/references/rules.md；生产 UI 另选
+   xy-ui-design/references/foundations-rules.md、components-rules.md 的适用设计规则，
+   xy-uiux + design_ui 只选适用设计来源。三源均以实际源包路径或安装态 .agent-workflow/ 前缀绑定，
+   再加入适用项目特有叶。项目索引存在时绑定真实SHA；无项目叶且索引缺失时不生成空索引，
+   index_path/root仍取配置，index_fingerprint为null。每个来源按现有字段覆盖owned_paths及适用ID，
+   写入当前完整worker/QA包；缺失、过期或覆盖不足仍阻塞，不预载全部规范目录。
 2. Classify production scope from the current request and available facts. If classification,
    requirement coverage, or planning materially depends on a missing project fact, apply the
    auxiliary-source policy above and retrieve only that fact before finalizing the classification:

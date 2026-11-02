@@ -1,6 +1,7 @@
-# Design Foundations — {{PROJECT_NAME}}
+# 通用设计基础规则
 
 - Domain: design
+- Scope: UI 原型设计与生产 UI 的适用设计约束；standards_only 仅在授权范围采用或维护项目特有规则，纯 non_ui 不强制读取。平台、控件和外观条款按实际支持范围适用。
 
 > Long-lived visual, interaction, platform, token, and accessibility rules. Concrete page behavior
 > remains in each approved prototype page contract.
@@ -12,12 +13,6 @@
   retain unaffected platform/accessibility constraints and stable rule IDs.
 - Keep semantic token roles consistent with shared prototype styles and production token mapping.
   Target design adoption is not proof that production migration is complete.
-
-## Product principles
-
-- Product character and interaction priorities: **TODO**
-- Information-density and hierarchy rules: **TODO**
-- Existing production patterns to preserve: **TODO**
 
 ## 项目基线与适用范围
 
@@ -43,8 +38,6 @@
 
 ## Platform constraints
 
-- Supported platforms, viewports, input methods, and appearance modes: **TODO**
-- Native platform conventions that must not be replaced: **TODO**
 - `[des-platform-001] [hard]` Web 原型默认采用响应式内容区和自然文档流；iOS／PC 原型
   使用项目选定的固定设备／窗口预览。只有明确需要视口对比时，Web 才使用固定预览。
   顶部说明、返回原型目录和页底契约属于展示外壳；产品导航、业务提示和组件属于产品区。

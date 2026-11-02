@@ -3,8 +3,9 @@
 - approved task contract, request dependency closure, and exact owned paths;
 - implementation diff and real source/components/tokens;
 - implementer evidence summaries and resolvable complete-log references;
-- the current fingerprinted STANDARDS index and the task pack's selected non-`skip`
-  `controlled_document_access` leaves. Non-UI implementation contributes engineering leaves,
+- 当前指纹绑定的适用内置来源，存在时的项目特有规范索引，以及任务包选定的非skip
+  controlled_document_access 来源/叶。索引无特有叶且物理缺失时按配置路径+null指纹处理，
+  不能因而省略内置规则，也不为了QA生成空索引。 Non-UI implementation contributes engineering leaves,
   production UI contributes engineering and design leaves, and prototype design contributes design
   leaves. Missing, `skip`, stale, or incomplete authority is FAIL; QA must not preload every
   `project.yaml` -> `docs.*` document to repair a broken task pack;
@@ -68,7 +69,7 @@
   strings do not prove that a command ran or that a capability was available.
 
 - an internal standards coverage record for PM validation. QA derives applicable rules independently
-  from the index and actual changed paths; `task_pack_rule_ids` records what PM dispatched:
+  from the registered built-in sources, optional existing project index and actual changed paths; `task_pack_rule_ids` records what PM dispatched:
 
   ```yaml
   standards_policy_coverage:

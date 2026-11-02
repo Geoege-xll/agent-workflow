@@ -17,11 +17,13 @@ from typing import Any
 try:
     from .native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
     from .qa_review_policy import METHODS
-    from .standard_paths import canonical_standard_path, standard_domain
+    from .standard_paths import builtin_source_path, source_domain, canonical_standard_source_path
+    from .validate_project_docs import builtin_standard_rule_catalog
 except ImportError:
     from native_handoff import HOSTS, NativeHandoffError, extract_native_handoff
     from qa_review_policy import METHODS
-    from standard_paths import canonical_standard_path, standard_domain
+    from standard_paths import builtin_source_path, source_domain, canonical_standard_source_path
+    from validate_project_docs import builtin_standard_rule_catalog
 
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -124,7 +126,7 @@ def qa_handoff_schema() -> dict[str, Any]:
     })
     coverage = obj(STANDARDS_COVERAGE_FIELDS, {
         "index_path": {"type": "string"}, "root": {"type": "string"},
-        "index_fingerprint": {"type": "string"}, "task_pack_rule_ids": strings(),
+        "index_fingerprint": {"type": ["string", "null"]}, "task_pack_rule_ids": strings(),
         "required_engineering_rule_ids": strings(), "required_design_rule_ids": strings(),
         "path_checks": {"type": "array", "items": path_check},
         "rule_checks": {"type": "array", "items": rule_check},
@@ -353,9 +355,9 @@ def _validate_standards_coverage(
             "standards_policy_coverage.index_path must stay outside its root"
         )
     index_fingerprint = coverage["index_fingerprint"]
-    if not isinstance(index_fingerprint, str) or not SHA256_RE.fullmatch(
+    if index_fingerprint is not None and (not isinstance(index_fingerprint, str) or not SHA256_RE.fullmatch(
         index_fingerprint
-    ):
+    )):
         raise QAHandoffError(
             "standards_policy_coverage.index_fingerprint must be lowercase SHA-256"
         )
@@ -389,6 +391,7 @@ def _validate_standards_coverage(
         coverage["rule_checks"], "standards_policy_coverage.rule_checks"
     )
     rule_checks: dict[str, dict[str, Any]] = {}
+    builtin_catalog = None
     for position, raw_check in enumerate(raw_rule_checks):
         label = f"standards_policy_coverage.rule_checks[{position}]"
         check = _object(raw_check, label)
@@ -417,7 +420,7 @@ def _validate_standards_coverage(
         if not isinstance(domain, str) or domain not in {"engineering", "design"}:
             raise QAHandoffError(f"{label}.domain must be engineering or design")
         # 扁平路径仍保留类型约束，不能通过改写 domain 将工程规范伪装成设计规范。
-        if not canonical_standard_path(source_path, standards_root) or standard_domain(source_path, standards_root) != domain:
+        if not canonical_standard_source_path(source_path, standards_root) or source_domain(source_path, standards_root) != domain:
             raise QAHandoffError(
                 f"{label}.source_path must be a direct {domain} Markdown leaf inside {standards_root}"
             )
@@ -425,6 +428,19 @@ def _validate_standards_coverage(
         severity = check["severity"]
         if not isinstance(severity, str) or severity not in {"hard", "advisory"}:
             raise QAHandoffError(f"{label}.severity must be hard or advisory")
+        builtin = builtin_source_path(source_path)
+        if builtin is not None:
+            # 内置规则的严重性和SHA来自当前运行时，不接受把hard改报advisory的降级。
+            try:
+                if builtin_catalog is None:
+                    builtin_catalog = builtin_standard_rule_catalog(Path(__file__).resolve().parents[1])
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise QAHandoffError(f"invalid builtin standards sources: {exc}") from exc
+            current = builtin_catalog[builtin]
+            if source_fingerprint != current["content_fingerprint"]:
+                raise QAHandoffError(f"{label} builtin standards fingerprint is stale")
+            if current["rules"].get(rule_id) != severity:
+                raise QAHandoffError(f"{label} builtin rule ID/severity does not match its source")
         disposition = check["disposition"]
         if not isinstance(disposition, str) or disposition not in {"pass", "fail", "not_applicable"}:
             raise QAHandoffError(
@@ -468,6 +484,9 @@ def _validate_standards_coverage(
             "disposition": disposition,
             "affected_paths": affected_paths,
         }
+
+    if index_fingerprint is None and any(builtin_source_path(rule["source_path"]) is None for rule in rule_checks.values()):
+        raise QAHandoffError("null index_fingerprint requires no project standards rule sources")
 
     missing_required = sorted(required_rule_ids - set(rule_checks))
     if missing_required:

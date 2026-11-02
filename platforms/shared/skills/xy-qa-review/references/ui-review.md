@@ -36,7 +36,8 @@ For every scoped design-change UI page with `prototype_policy: required`:
    `prototype_contract` must map exactly to
    `visual_approved:<authority_id>@<content_fingerprint>`; a mismatch makes approval stale and is FAIL.
 2. When the fingerprint matches, consume the designer's frozen verification evidence and read the
-   exact in-page contract. Open only the smallest relevant source slice—such as a selector, inline
+   exact in-page contract. 复用设计 Agent 在既有交接中对需求覆盖、规范符合性和交付一致性的
+   自检证据；这是生产实现后的功能QA，不另派原型QA。Open only the smallest relevant source slice—such as a selector, inline
    handler, or dependency—needed to resolve a concrete production-mapping question. Do not read all
    shared CSS, JavaScript, pages, or unrelated dependencies by default.
 3. Verify that the contract and designer evidence cover stable control IDs, matching

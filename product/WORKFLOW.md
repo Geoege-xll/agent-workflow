@@ -277,8 +277,7 @@ commit_decision:
 ### General Trivial early exit
 
 Classify a clear, small, one-file non-UI correction with no shared contract as Trivial only after
-checking its real scope and risk. The main session reads the STANDARDS index and applicable
-engineering/module rules, performs the bounded edit, and runs the smallest relevant reproduction,
+checking its real scope and risk. 主会话读取内置工程规则、适用模块规则及项目特有规范（索引存在时沿链接读取）, performs the bounded edit, and runs the smallest relevant reproduction,
 regression and diff checks. The explicit request authorizes that scope; do not request the same
 approval again or enter Grill Me, full planning, DAG dispatch, independent QA or the post-QA pipeline
 merely because the task fixes a bug. After local verification, assess a scoped commit and report the
@@ -317,7 +316,7 @@ make it Full. The main session handles it directly; no new role, task mode or sc
 - Exclude pricing/fees, consent/privacy, permissions, destructive-operation promises, or wording that
   changes an explicit product contract. A short diff does not establish low risk. Check shared-key
   consumers; unknown or broad impact must be resolved before editing, not assumed local.
-- Read the STANDARDS index and only applicable engineering/design leaves and module instructions.
+- 读取适用内置工程/设计规则与模块指令；项目特有规范索引存在时沿链接读取相关叶。
   Protected upstream paths and other hard rules remain binding; Trivial is not an exception authority.
 - An explicit replacement request already authorizes that bounded edit. Do not ask for the same
   approval again, run Grill Me/xy-plan, create a DAG/Task Pack, request a prototype choice, dispatch
@@ -404,8 +403,10 @@ non-Trivial work; this early classification is not UI-Conformance or a prototype
 `standards_only` 和生产／QA 按既有设计权威消费的条件分支。五个实施角色固定绑定代码方法
 与 `xy-build-verify`，`xy-uiux` 绑定设计方法与原有专业／原型 Skill；QA 固定仍只绑定
 `xy-qa-review`，按实际代码或 UI 审查面读取相应方法。生产 UI 实现按 `surface_kind: production_ui`
-读取设计规则，后端不预载 UI。项目 GENERAL 稳定规则 ID、当前规范叶和指纹仍拥有权威；
-Skill 不复制或替代这些规则。Trivial 和获明确授权的 PM 亲自编写代码同样适用代码方法，
+读取设计规则，后端不预载 UI。通用工程规则正文在 `xy-code-standards/references/rules.md`，
+通用设计规则正文在 `xy-ui-design/references/foundations-rules.md` 与 `components-rules.md`。
+项目只补特有规范；来源、稳定规则 ID 和当前指纹共同构成适用权威，不在项目复制通用正文。
+Trivial 和获明确授权的 PM 亲自编写代码同样适用代码方法，
 但读取不创建 Task Pack、原型、确认、写入权或 QA 阶段，原路线与验证停止条件保持不变。
 
 ```yaml
@@ -650,7 +651,7 @@ the current-state baseline automatically before final visual approval:
 ```text
 inspect the real screens/components/assets/interactions
   -> extract the compatible visual baseline into docs/standards/prototype/prototype.css
-  -> record only durable principles in exact leaves under docs.standards_root/DESIGN_*.md
+  -> only actual project-specific adopted values/variants go to exact leaves under docs.standards_root/DESIGN_*.md
   -> update or create the relevant stable interactive page
   -> record baseline_ready in workflow task state
   -> enter the feature IA / prototype workflow
@@ -687,7 +688,9 @@ draft
   only after the PM's evidence review; this is an automatic readiness gate, not visual approval or
   another user confirmation.
 - The `xy-uiux` task owns static prototype-verification coverage for workspace structure, local
-  dependencies, in-page contracts, stable controls, and page fingerprints. The PM reviews current
+  dependencies, in-page contracts, stable controls, and page fingerprints. 设计 Agent 同时完成需求覆盖、
+  规范符合性、交付一致性自检，沿用 prototype_verify 的 static_checks/blocking_findings/result；
+  不新增原型独立 QA、报告、审批或默认浏览器/截图步骤，用户最终确认，生产功能 QA 保留。The PM reviews current
   scope, evidence freshness and consistency, fingerprints, and the visual-approval handoff. Before
   user handoff, the PM independently compares all five in-page contract sections with the frozen
   approved requirements and acceptance criteria. Missing, invented, broadened, or conflicting
@@ -1097,16 +1100,19 @@ when the task needs the current feature directory, then follows only task-releva
 controlled-document links. Use `targeted` by default after inspecting headings or searching task
 terms; use `full` only when the whole detailed document is materially required and record why; use
 `skip` without opening the body when the request has no relevant surface. Read shared architecture
-details or a recovery plan only when relevant. Every Writer must read the compact `docs.standards` index and only
-the applicable non-`skip` leaves under `docs.standards_root`. Non-UI implementation uses engineering
-leaves; production UI uses engineering and design leaves; `xy-uiux + design_ui` uses design leaves.
-Each selected leaf names its headings or queries, carries a current fingerprint, covers every task
-`owned_path`, and includes every applicable stable hard-rule ID. Workers return missing, stale, or
-incomplete authority to the PM instead of silently widening scope or preloading the standards tree.
+details or a recovery plan only when relevant.
+每位 Writer 独立读取任务适用的内置来源，以及非 skip 的项目特有规范；项目索引存在才读。
+非 UI 实施使用内置工程规则及适用工程差异，生产 UI 另使用内置设计规则和项目实际设计权威，
+`xy-uiux + design_ui` 使用适用设计规则。每个选定来源携带当前指纹、规则 ID、读取范围及
+`applies_to`，覆盖全部拥有路径。缺少必需内置来源或适用项目规则仍阻塞派发；
+没有项目特有叶时，不因配置的项目索引物理缺失而创建空索引、GENERAL 或默认设计叶。
+索引存在时即使只有保留说明也绑定真实 SHA。来源缺失、过期或覆盖不足交 PM，不靠预读全树补救。
 
 ### Standards document granularity and maintenance
 
-Before adding reusable constraints, inspect the STANDARDS index and the relevant existing topics.
+通用规则维护内置 Skill 来源；项目叶只承载明确的项目差异，不为每个项目生成通用副本。
+项目索引只在有实际特有叶时创建/补链；已有说明、用户规则和已批准 token/风格/尺寸原样保护。
+新增可复用约束前先核对内置规则与相关主题；项目索引存在时再检查适用特有叶。
 Already sufficient rules need no duplicate; a real delta normally updates the existing topic's
 section. A new rule ID does not require a new file.
 
@@ -1143,22 +1149,28 @@ still follow the existing approval, risk, verification and independent-review bo
 
 The PM freezes the unified standards authority once per runtime snapshot:
 
-Normative Markdown files are direct children of `docs.standards_root`. Use `DESIGN_*.md` with
-`- Domain: design` for design leaves; other leaves declare `- Domain: engineering`. STANDARDS groups
-them by domain and applicable module/path. Do not create engineering/design/references subtrees;
-page-specific proposals belong in plans or verified feature details. Prototype HTML lives directly
-under `docs.standards_root/prototype`, with resource subfolders only when needed. This shallow naming
-contract preserves deterministic role ownership and audit typing without preloading every file.
+通用正文只接受三个内置精确来源：`platforms/shared/skills/xy-code-standards/references/rules.md`、
+`platforms/shared/skills/xy-ui-design/references/foundations-rules.md`、
+`platforms/shared/skills/xy-ui-design/references/components-rules.md`；安装态仅加 `.agent-workflow/` 前缀。
+内置来源声明 Domain/Scope，保留稳定 ID、hard/advisory、适用条件及例外；它们是受管只读权威，
+不因进入 leaves 或被 UI 任务读取而获得项目写入权。项目特有规范仍直接放在 `docs.standards_root`，
+设计叶使用 `DESIGN_*.md` 与 `- Domain: design`，其余叶声明 engineering；不要建空叶或复制通用正文。
+项目索引只链接实际特有叶；页面特例留在契约，原型仍位于 `docs.standards_root/prototype`。
+
+`index_path` 始终保留适配器配置的相对路径，`root` 始终是项目特有规范根。无项目规则叶且
+配置索引物理不存在时，`index_fingerprint` 为 null；索引实际存在则记录真实 SHA，不能把
+保留说明索引伪装缺失。init/文档校验核对文件系统；纯 JSON 图校验只证明结构，不冒称实际文件已验证。
+leaves 与 controlled_document_access 沿用原字段，绑定内置来源和适用项目叶及其当前 SHA/规则 ID。
 
 ```yaml
 standards_contract:
   index_path: docs/STANDARDS.md
   root: docs/standards
-  index_fingerprint: <64-lowercase-hex-sha256>
+  index_fingerprint: <actual-index-sha256-or-null-when-absent>
   required_engineering_rule_ids: []
   required_design_rule_ids: []
   leaves:
-    - path: <standards-root/GENERAL.md or standards-root/DESIGN_RELEVANT.md>
+    - path: <exact-built-in-source or project-specific-leaf>
       domain: engineering | design
       content_fingerprint: <64-lowercase-hex-sha256>
       rule_ids: []
@@ -1392,9 +1404,9 @@ including nested repositories and submodules, with its repository-relative path,
 head revision, complete changed-path list, and SHA-256 diff fingerprint. A current worktree diff is
 not a substitute for an explicit base/head range when implementation commits already exist.
 
-QA also returns an internal `standards_policy_coverage` projection. Starting from the STANDARDS
-index and actual changed paths, QA independently resolves applicable leaves instead of trusting the
-Task Pack selection. It classifies every changed path, records every required or applicable rule as
+QA also returns an internal `standards_policy_coverage` projection. QA 从适用内置来源、存在时的
+项目薄索引及实际变更路径独立解析规则，不只信任 Task Pack 的选择；无项目索引不省略内置规则。
+It classifies every changed path, records every required or applicable rule as
 `pass | fail | not_applicable`, and binds each non-N/A conclusion to source, diff, command, or
 complete-log evidence. If the PM omitted an applicable rule, QA may read it to prove the omission
 but returns FAIL for task correction/rework rather than silently repairing the contract. The PM validates that internal
@@ -1427,8 +1439,8 @@ approval evidence; there is no screenshot artifact on disk.
 
 ## 11. Standards Discipline
 
-1. Before editing, every Writer verifies the fingerprinted STANDARDS index and mandatory non-`skip`
-   leaves, then reads only targeted rules plus other issued controlled-document entries.
+1. 每位Writer修改前核对适用内置来源、存在时的项目索引及必需非skip特有叶的当前指纹，
+   独立读取选定规则和已派发受控文档；无项目索引不能豁免内置规则覆盖。
 2. Do not commit credentials or execute unauthorized destructive actions.
 3. Do not perform unauthorized cross-path refactors or drive-by edits.
 4. Never fabricate real validation results.

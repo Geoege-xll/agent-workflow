@@ -15,7 +15,6 @@ if __package__:
     from .platform_fs import os, publish_exclusive
 else:
     from platform_fs import os, publish_exclusive
-import posixpath
 import re
 import secrets
 import shutil
@@ -24,10 +23,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from standards_baseline import (
-    common_span, ensure_general_link, merge_general, validate_planned_rule_ids,
-    render_template as render_standards_baseline,
-)
+from standards_baseline import plan_standard_updates, remove_created_standard
 from project_discovery import ProjectProfile
 from shared_core_skills import (
     SharedCoreSkillError,
@@ -52,7 +48,6 @@ from validate_antigravity_artifacts import (
     validate_artifact_tree,
 )
 from validate_project_config import parse_project_name, validate_with_profile
-from validate_project_docs import MARKDOWN_LINK_RE, normalized_link_target
 from workflow_hook_install import plan_hooks
 
 
@@ -77,11 +72,13 @@ class Fingerprint:
 @dataclass
 class FileChange:
     target: Path
-    body: bytes
+    body: bytes | None
     mode: int
     before: Fingerprint
     backup: Path | None = None
     published: bool = False
+    # 仅本次新建薄索引使用条件撤回，不改变既有入口/原型等历史文件恢复机制。
+    created_standard_index: bool = False
 
 
 @dataclass
@@ -290,118 +287,23 @@ def _render_doc_candidates(
         for key, value in values.items()
         if key.startswith("docs.")
     }
-    # 先计算索引相对路径，既避免嵌套格式化字符串难以审阅，也确保自定义 docs
-    # 位置仍能生成正确链接。
-    standards_root = docs["standards_root"].rstrip("/")
-    standards_index_parent = posixpath.dirname(docs["standards"])
-    engineering_general_link = posixpath.relpath(
-        f"{standards_root}/GENERAL.md", standards_index_parent
-    )
-    engineering_upstream_link = posixpath.relpath(
-        f"{standards_root}/UPSTREAM.md", standards_index_parent
-    )
-    design_foundations_link = posixpath.relpath(
-        f"{standards_root}/DESIGN_FOUNDATIONS.md", standards_index_parent
-    )
-    design_components_link = posixpath.relpath(
-        f"{standards_root}/DESIGN_COMPONENTS.md", standards_index_parent
-    )
+    # 仅生成项目事实入口；通用工程和设计规则不再投影为项目文档。
     substitutions = {
         "PROJECT_NAME": project_name,
-        "DATE": __import__("datetime").date.today().isoformat(),
-        "DOC_STANDARDS": docs["standards"],
-        "DOC_STANDARDS_ROOT": docs["standards_root"].rstrip("/"),
         "DOC_PROJECT": docs["project"],
         "DOC_FEATURES_DIR": docs["features"].rstrip("/"),
-        # 规范使用根目录直接叶；原型单独保留 prototype/ 一层。
-        "DOC_DESIGN_DIR": standards_root,
+        "DOC_STANDARDS": docs["standards"],
+        "DOC_STANDARDS_ROOT": docs["standards_root"].rstrip("/"),
+        "DOC_DESIGN_DIR": docs["standards_root"].rstrip("/"),
         "DOC_PLANS_DIR": docs["plans"].rstrip("/"),
         "DOC_NOTES_DIR": docs["notes"].rstrip("/"),
-        # Markdown 链接相对 STANDARDS.md 自身生成；直接写项目根相对路径会在
-        # docs/ 下形成错误的 docs/docs/... 链接。
-        "ENGINEERING_STANDARDS_INDEX": (
-            f"- [General engineering rules]({engineering_general_link})\n"
-            f"- [Upstream and second-development boundaries]({engineering_upstream_link})"
-        ),
-        # Antigravity 的事务发布器与共享脚手架必须生成同一份目录内容，避免三宿主
-        # 因 UI 角色发现结果不同而得到不一致的规范索引。
-        "DESIGN_STANDARDS_INDEX": (
-            f"- [Design foundations]({design_foundations_link})\n"
-            f"- [Component and interaction standards]({design_components_link})"
-            if ui_enabled
-            else "- No design standards are configured for the discovered project profile."
-        ),
     }
-    candidates: list[tuple[Path, bytes]] = []
-    template_root = pack / "templates/docs"
-    # 统一入口和工程叶文档始终存在；设计叶文档仅在发现 UI 角色时生成。
-    document_specs = [
-        (docs["standards"], Path("STANDARDS.md"), False),
-        (
-            f"{docs['standards_root'].rstrip('/')}/GENERAL.md",
-            Path("standards/GENERAL.md"),
-            True,
-        ),
-        (
-            f"{docs['standards_root'].rstrip('/')}/UPSTREAM.md",
-            Path("standards/UPSTREAM.md"),
-            False,
-        ),
-        (docs["project"], Path("PROJECT.md"), False),
-    ]
-    if ui_enabled:
-        document_specs.extend(
-            [
-                (
-                    f"{docs['standards_root'].rstrip('/')}/DESIGN_FOUNDATIONS.md",
-                    Path("standards/DESIGN_FOUNDATIONS.md"),
-                    False,
-                ),
-                (
-                    f"{docs['standards_root'].rstrip('/')}/DESIGN_COMPONENTS.md",
-                    Path("standards/DESIGN_COMPONENTS.md"),
-                    False,
-                ),
-            ]
-        )
-    # 与共享脚手架一致：GENERAL 必须挂入目录，其余可选工程/设计叶不擅自注入。
-    index_path = project / docs["standards"]
-    if index_path.exists():
-        index_body = _read_regular(index_path, "standards index").decode("utf-8")
-        if index_body.strip():
-            indexed = {normalized_link_target(index_path, raw)
-                       for raw in MARKDOWN_LINK_RE.findall(index_body)}
-            document_specs = [spec for spec in document_specs
-                              if (not spec[1].name.startswith("DESIGN_")
-                                  and spec[1].name != "UPSTREAM.md")
-                              or (project / spec[0]).resolve() in indexed]
-    for target_relative, template_relative, uses_baseline in document_specs:
-        source = _read_regular(template_root / template_relative, "document template")
-        text = source.decode("utf-8", errors="strict")
-        placeholders = set(re.findall(r"\{\{([A-Z_]+)\}\}", text))
-        allowed = set(substitutions)
-        if uses_baseline:
-            allowed.add("OBSERVED_BASELINE")
-        unknown = sorted(placeholders - allowed)
-        if unknown:
-            raise ApplyError(
-                f"unknown document template placeholders: {', '.join(unknown)}"
-            )
-        if uses_baseline:
-            try:
-                rendered = render_standards_baseline(
-                    text, substitutions, profile=profile
-                ).encode("utf-8")
-            except ValueError as exc:
-                raise ApplyError(str(exc)) from exc
-        else:
-            rendered = re.sub(
-                r"\{\{([A-Z_]+)\}\}",
-                lambda match: substitutions[match.group(1)],
-                text,
-            ).encode("utf-8")
-        candidates.append((project / target_relative, rendered))
-    return candidates
+    text = _read_regular(pack / "templates/docs/PROJECT.md", "project template").decode("utf-8")
+    unknown = set(re.findall(r"\{\{([A-Z_]+)\}\}", text)) - substitutions.keys()
+    if unknown:
+        raise ApplyError("unknown document template placeholders: " + ", ".join(sorted(unknown)))
+    rendered = re.sub(r"\{\{([A-Z_]+)\}\}", lambda match: substitutions[match[1]], text).encode("utf-8")
+    return [(project / docs["project"], rendered)]
 
 
 def _prototype_candidates(
@@ -784,7 +686,14 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         pack, project, ui_enabled=ui_enabled
     )
     plan.prototype_scaffold = prototype_scaffold
+    configured_docs = {key.removeprefix("docs."): value
+                       for key, value in _parse_project_values(pack / "project.yaml").items()
+                       if key.startswith("docs.")}
+    standard_inputs: dict[Path, bytes | None] = {}
+    standard_updates = plan_standard_updates(
+        pack, project, docs=configured_docs, profile=profile, expected_inputs=standard_inputs)
     document_candidates = [
+        *standard_updates.items(),
         *_render_doc_candidates(
             pack, project, ui_enabled=ui_enabled, profile=profile
         ),
@@ -802,9 +711,6 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
             f"feature document root must be a real directory: {feature_target}"
         )
     plan.feature_docs_root = (feature_target, feature_before)
-    docs = _parse_project_values(pack / "project.yaml")
-    general_target = project / docs["docs.standards_root"] / "GENERAL.md"
-    index_target = project / docs["docs.standards"]
     for target, body in document_candidates:
         before = _fingerprint(target)
         if before.kind not in {"missing", "file"}:
@@ -814,15 +720,12 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         current_body = (
             b"" if before.kind == "missing" else _read_regular(target, "managed document")
         )
-        # 复用共享的所有权规则；FileChange 保留原完整指纹，由现有事务发布器
-        # 负责竞态复核及失败回滚，不再另写一套按标题替换的实现。
-        if current_body and target == general_target:
-            body = merge_general(current_body, body)
-            if common_span(current_body) is None:
-                print(f"[WARN] {target}: common region is unmarked; preserved unchanged; controlled adoption required")
-        elif current_body and target == index_target:
-            body = ensure_general_link(current_body, index_target, general_target)
-        elif current_body:
+        if target in standard_inputs:
+            actual = None if before.kind == "missing" else current_body
+            if actual != standard_inputs[target]:
+                raise ApplyError(f"managed document changed after migration planning: {target}")
+        # 规范计划已经证明归属；其他非空文档仍按原合同保留，不因升级被接管。
+        if current_body and target not in standard_updates:
             body = current_body
         if before.kind == "missing" or body != current_body:
             plan.doc_changes.append(
@@ -831,11 +734,9 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
                     body,
                     before.mode if before.kind == "file" else 0o644,
                     before,
+                    created_standard_index=target in standard_updates and before.kind == "missing",
                 )
             )
-    validate_planned_rule_ids(general_target.parent, {
-        change.target: change.body for change in plan.doc_changes
-    })
     return plan
 
 
@@ -940,8 +841,12 @@ def _write_temp(target: Path, body: bytes, mode: int, nonce: str) -> Path:
 
 def _publish_file(change: FileChange, plan: Plan) -> None:
     _assert_unchanged(change.target, change.before)
+    # 删除同样参与原事务，不把缺失文件当成空文档发布，也不绕过回滚和归属复核。
+    deleting = change.body is None
+    if deleting and change.before.kind == "missing":
+        return
     _ensure_directories(plan, change.target.parent)
-    temporary = _write_temp(change.target, change.body, change.mode, plan.nonce)
+    temporary = None if deleting else _write_temp(change.target, change.body, change.mode, plan.nonce)
     if change.before.kind == "missing":
         try:
             publish_exclusive(temporary, change.target)
@@ -954,15 +859,24 @@ def _publish_file(change: FileChange, plan: Plan) -> None:
         return
     backup = _temp_path(change.target, plan.nonce, "backup")
     if _fingerprint(backup, read_file=False).kind != "missing":
-        temporary.unlink()
+        if temporary is not None:
+            temporary.unlink()
         raise ApplyError(f"owned backup path already exists: {backup}")
     os.replace(change.target, backup)
     if _fingerprint(backup) != change.before:
         if _fingerprint(change.target, read_file=False).kind == "missing":
             os.replace(backup, change.target)
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
         raise ApplyError(f"managed file changed during publish: {change.target}")
     change.backup = backup
+    if deleting:
+        # 备份保留到生成物验收结束；同名新文件属于并发用户，失败回滚不得覆盖。
+        if _fingerprint(change.target, read_file=False).kind != "missing":
+            raise ApplyError(f"managed document appeared during deletion: {change.target}")
+        change.published = True
+        _fsync_directory(change.target.parent)
+        return
     if change in plan.doc_changes:
         # 原文件移入备份后，编辑器可能立即重建同名文档；排他创建避免覆盖这个
         # 间隙产生的项目内容。失败时交由事务回滚保留并发文档及原始备份。
@@ -1056,7 +970,10 @@ def _rollback(plan: Plan) -> None:
                 # 备份的条目没有可撤销动作；已发布条目须仍是本轮精确配置和权限。
                 if not change.published and change.backup is None:
                     continue
-                if change.published or current.kind != "missing":
+                if change.body is None:
+                    if current.kind != "missing":
+                        raise ApplyError(f"Document changed after deletion; preserved current file and backup: {change.target}")
+                elif change.published or current.kind != "missing":
                     if change in plan.doc_changes:
                         # 文档沿用本发布器的安全读取与既有路径快照，避免把 macOS
                         # 合法的 /var 临时目录别名误当成另一个宿主的入口路径碰撞。
@@ -1070,6 +987,22 @@ def _rollback(plan: Plan) -> None:
                         )
                 if change.backup is not None:
                     _assert_unchanged(change.backup, change.before)
+                if change in plan.doc_changes and change.body is None and change.backup is not None:
+                    # current 的 missing 只是先前采样。排他发布把“仍缺失”保留到
+                    # 真正恢复动作，间隙用户重建时保留当前文件和原始备份并报冲突。
+                    try:
+                        publish_exclusive(change.backup, change.target)
+                    except OSError as exc:
+                        raise ApplyError(
+                            f"Document changed after deletion; preserved current file and backup: {change.target}"
+                        ) from exc
+                    _fsync_directory(change.target.parent)
+                    continue
+                if change in plan.doc_changes and change.created_standard_index:
+                    remove_created_standard(change.target, change.body, change.mode,
+                                            (current.device, current.inode))
+                    _fsync_directory(change.target.parent)
+                    continue
             if change.backup is not None and _fingerprint(change.backup, read_file=False).kind != "missing":
                 if current.kind != "missing":
                     if current.kind == "directory":

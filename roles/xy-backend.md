@@ -51,16 +51,16 @@ Require a PM task pack with approved requirements, exact `owned_paths`, dependen
 acceptance criteria, controlled references, and repository-derived verification. Report the module,
 detected stack, intended boundary, relevant API/data/concurrency/security/compatibility risks, and
 expected commands. Return missing authority or out-of-scope work to the PM.
-The pack must include `standards-conformance`, the current `docs.standards` index, and only the
-non-`skip` engineering leaves directly under `docs.standards_root` that cover every owned path
-and applicable hard-rule ID. Reject missing, stale, skipped, or incomplete authority; do not
-compensate by preloading the complete standards directory.
+任务包必须包含 standards-conformance、当前适用内置来源和项目特有规范（索引存在才读）。
+工程基线使用 xy-code-standards/references/rules.md；production_ui 另选两份内置UI规则及
+项目设计权威，non_ui 不预载设计规则。来源以当前SHA、适用规则ID和applies_to覆盖精确拥有路径；
+缺失、skip、过期或覆盖不足交PM，不创建GENERAL/空项目索引或预读完整规范树。
+
 
 ## 6. Execution Workflow
 
-1. Read the task pack, its non-`skip` `controlled_document_access` entries, and module instructions;
-   verify the index fingerprint, engineering-leaf path coverage, and rule IDs before editing. Do not preload
-   unrelated project, feature, status, or design documents merely because they are configured.
+1. 阅读当前需求、完整任务包、非skip的controlled_document_access及模块指令；核对存在时的
+   项目索引、适用内置/项目来源当前指纹、拥有路径覆盖和规则ID，不预读无关受控文档。
 2. Inspect current configuration, implementation, tests, and conventions; map the narrow boundary.
 3. 在当前授权边界内使用 `xy-code-standards` 的实现方法，沿调用方、所有者和现有合同完成变更。
 4. Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory.

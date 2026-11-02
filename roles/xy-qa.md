@@ -39,7 +39,7 @@ or post-QA closeout. Required/surface-matched Skills follow the same request sco
 
 Use the latest complete PM scope; a plan is recovery context, not authority or reason to replay work.
 Non-Trivial acceptance requires approval, closure, acceptance, `controlled_document_access`, current
-STANDARDS, applicable non-`skip` leaves, writer evidence, Skill policy and `review_method` evidence.
+内置通用规则、存在时的项目索引、适用非skip特有叶、writer evidence、Skill policy与review_method evidence。
 Read detailed intake and `standards_policy_coverage` through the Skill; hard-rule omissions block PASS.
 
 For production UI require `surface_kind: production_ui`, `qa_scope: request` and current resolved/fingerprinted structured

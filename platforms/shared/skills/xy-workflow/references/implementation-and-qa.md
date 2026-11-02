@@ -28,6 +28,10 @@ implementation acceptance still follows this loop and its full handoff requireme
   Receiving and reviewing that delivery/evidence is not progress polling. Self-reported completion
   never substitutes for build verification, independent QA or validated acceptance.
 
+原型阶段由设计 Agent 三维自检并经用户最终确认，不进入独立原型 QA；下述统一 QA 仍审查
+生产实现的功能、适用内置规则、项目特有规范与真实证据。项目索引物理不存在但无特有叶时，
+按配置路径及 null 指纹绑定，不为 QA 新建 GENERAL/空索引或重复通用规则。
+
 ### Execution and acceptance
 
 1. Establish successful snapshot validation, then run `task_graph_cli.py ready`. Reuse a successful

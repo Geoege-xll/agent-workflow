@@ -17,7 +17,8 @@ from typing import Any
 try:
     from .agent_continuation import HOSTS, OBSERVED_STATES, continuation, validate_references
     from .worktree_policy import WorktreePolicyError, integration_ready, validate_execution
-    from .standard_paths import canonical_standard_path, standard_domain
+    from .standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
+    from .validate_project_docs import builtin_standard_rule_catalog
     from .task_graph import (
         Task,
         TaskGraphError,
@@ -29,7 +30,8 @@ try:
 except ImportError:
     from agent_continuation import HOSTS, OBSERVED_STATES, continuation, validate_references
     from worktree_policy import WorktreePolicyError, integration_ready, validate_execution
-    from standard_paths import canonical_standard_path, standard_domain
+    from standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
+    from validate_project_docs import builtin_standard_rule_catalog
     from task_graph import (  # type: ignore[no-redef]
         Task,
         TaskGraphError,
@@ -274,7 +276,7 @@ def _resolved_standards_contract(payload: dict[str, Any]) -> dict[str, Any] | No
             "standards_contract.index_path must stay outside standards_contract.root"
         )
     fingerprint = value["index_fingerprint"]
-    if not isinstance(fingerprint, str) or not SHA256_RE.fullmatch(fingerprint):
+    if fingerprint is not None and (not isinstance(fingerprint, str) or not SHA256_RE.fullmatch(fingerprint)):
         raise TaskGraphError(
             "standards_contract.index_fingerprint must be lowercase SHA-256"
         )
@@ -294,6 +296,8 @@ def _resolved_standards_contract(payload: dict[str, Any]) -> dict[str, Any] | No
         "engineering": set(),
         "design": set(),
     }
+    builtin_catalog = None
+    source_identities: set[str] = set()
     for position, raw_leaf in enumerate(raw_leaves):
         label = f"standards_contract.leaves[{position}]"
         if not isinstance(raw_leaf, dict):
@@ -309,13 +313,15 @@ def _resolved_standards_contract(payload: dict[str, Any]) -> dict[str, Any] | No
                 f"{label} has unsupported field(s): {', '.join(sorted(unknown_leaf))}"
             )
         leaf_path = _safe_relative_path(raw_leaf["path"], f"{label}.path")
-        if leaf_path.casefold() in {path.casefold() for path in leaves}:
+        identity = builtin_source_path(leaf_path) or leaf_path
+        if identity.casefold() in source_identities:
             raise TaskGraphError("standards_contract.leaves must not duplicate paths")
+        source_identities.add(identity.casefold())
         domain = raw_leaf["domain"]
         if domain not in {"engineering", "design"}:
             raise TaskGraphError(f"{label}.domain must be engineering or design")
-        if not canonical_standard_path(leaf_path, root) or standard_domain(leaf_path, root) != domain:
-            raise TaskGraphError(f"{label}.path must be a direct {domain} Markdown leaf inside {root}")
+        if not canonical_standard_source_path(leaf_path, root) or source_domain(leaf_path, root) != domain:
+            raise TaskGraphError(f"{label}.path must be an exact builtin source or direct {domain} Markdown leaf inside {root}")
         leaf_fingerprint = raw_leaf["content_fingerprint"]
         if not isinstance(leaf_fingerprint, str) or not SHA256_RE.fullmatch(
             leaf_fingerprint
@@ -324,6 +330,19 @@ def _resolved_standards_contract(payload: dict[str, Any]) -> dict[str, Any] | No
         leaf_rule_ids = _stable_id_list(raw_leaf["rule_ids"], f"{label}.rule_ids")
         if not leaf_rule_ids:
             raise TaskGraphError(f"{label}.rule_ids must not be empty")
+        builtin = builtin_source_path(leaf_path)
+        if builtin is not None:
+            # 固定内置来源可以由当前运行时直接核对；任意伪ID/陈旧SHA不能冒充平台底线。
+            try:
+                if builtin_catalog is None:
+                    builtin_catalog = builtin_standard_rule_catalog(Path(__file__).resolve().parents[1])
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise TaskGraphError(f"invalid builtin standards sources: {exc}") from exc
+            current = builtin_catalog[builtin]
+            if leaf_fingerprint != current["content_fingerprint"]:
+                raise TaskGraphError(f"{label} builtin standards fingerprint is stale")
+            if set(leaf_rule_ids) - set(current["rules"]):
+                raise TaskGraphError(f"{label} builtin standards source claims unknown rule(s)")
         duplicate_rule_ids = domain_contract_rule_ids[domain].intersection(leaf_rule_ids)
         if duplicate_rule_ids:
             raise TaskGraphError(
@@ -337,6 +356,8 @@ def _resolved_standards_contract(payload: dict[str, Any]) -> dict[str, Any] | No
             "content_fingerprint": leaf_fingerprint,
             "rule_ids": leaf_rule_ids,
         }
+    if fingerprint is None and any(builtin_source_path(path) is None for path in leaves):
+        raise TaskGraphError("null index_fingerprint requires no project standards leaves")
     for domain, required_ids in (
         ("engineering", required_engineering_rule_ids),
         ("design", required_design_rule_ids),
@@ -580,14 +601,16 @@ def _validate_standards_access(
         if len(set(applies_to)) != len(applies_to):
             raise TaskGraphError(f"{label}.applies_to must not contain duplicates")
         rule_ids = _stable_id_list(document["rule_ids"], f"{label}.rule_ids")
+        if rule_ids and path not in standards_contract["leaves"]:
+            raise TaskGraphError(f"{label} standards rule source is absent from contract: {path!r}")
         # 每条规范读取都必须验证，不能因领域不在 required_domains 中便静默过滤。
         # 原型是单独的证据分支；其余旧目录/未知叶子不允许假装普通文档加入读集合。
         standards_root = standards_contract["root"]
-        if _is_within(path.casefold(), standards_root.casefold()):
+        if builtin_source_path(path) is not None or _is_within(path.casefold(), standards_root.casefold()):
             prototype_root = f"{standards_root}/prototype"
             if not _is_within(path, prototype_root):
                 leaf = standards_contract["leaves"].get(path)
-                if not canonical_standard_path(path, standards_root) or leaf is None:
+                if not canonical_standard_source_path(path, standards_root) or leaf is None:
                     raise TaskGraphError(f"{label} standards leaf is absent from contract or not canonical: {path!r}")
                 if fingerprint != leaf["content_fingerprint"]:
                     raise TaskGraphError(f"tasks[{index}] {leaf['domain']} standards leaf fingerprint is stale: {path!r}")
@@ -612,16 +635,17 @@ def _validate_standards_access(
         for document in normalized_documents
         if document["path"] == standards_contract["index_path"]
     ]
-    if len(index_documents) != 1:
+    index_required = standards_contract["index_fingerprint"] is not None
+    if len(index_documents) != int(index_required):
         raise TaskGraphError(
-            f"tasks[{index}] must include configured STANDARDS index exactly once"
+            f"tasks[{index}] must include configured STANDARDS index exactly once when present, and omit it when absent"
         )
-    index_document = index_documents[0]
-    if index_document["mode"] == "skip":
+    index_document = index_documents[0] if index_required else None
+    if index_document is not None and index_document["mode"] == "skip":
         raise TaskGraphError(f"tasks[{index}] must not skip the STANDARDS index")
-    if index_document["content_fingerprint"] != standards_contract["index_fingerprint"]:
+    if index_document is not None and index_document["content_fingerprint"] != standards_contract["index_fingerprint"]:
         raise TaskGraphError(f"tasks[{index}] STANDARDS index fingerprint does not match contract")
-    if index_document["rule_ids"]:
+    if index_document is not None and index_document["rule_ids"]:
         raise TaskGraphError(f"tasks[{index}] STANDARDS index must not claim leaf rule IDs")
 
     owned_paths = tuple(
@@ -631,7 +655,7 @@ def _validate_standards_access(
         )
     )
     for owned_path in owned_paths:
-        if not any(
+        if index_document is not None and not any(
             _is_within(owned_path, access_path)
             for access_path in index_document["applies_to"]
         ):
@@ -652,7 +676,7 @@ def _validate_standards_access(
         domain_documents = [
             document
             for document in normalized_documents
-            if standard_domain(document["path"], standards_contract["root"]) == domain
+            if source_domain(document["path"], standards_contract["root"]) == domain
         ]
         if not domain_documents:
             raise TaskGraphError(
@@ -713,25 +737,27 @@ def _validate_standards_access(
             )
         domain_rule_ids[domain] = selected_rule_ids
 
-    # GENERAL 是生产代码任务的基础工程叶；只验证其他工程叶的路径与规则覆盖，
-    # 会让任务包绕过通用规范。原型设计任务仍仅使用设计叶。
+    # 旧纯项目合同继续要求完整 GENERAL 输入，避免在运行中换版导致已批准图失效。
+    # 一旦图采用内置来源，生产写入必须选择内置工程底线；专项叶不能代替它。
     if "engineering" in required_domains:
-        baseline_path = f"{standards_contract['root']}/GENERAL.md"
-        if baseline_path not in standards_contract["leaves"]:
+        uses_builtin = any(builtin_source_path(path) is not None for path in standards_contract["leaves"])
+        baseline_paths = [path for path in standards_contract["leaves"]
+                          if builtin_source_path(path) is not None and source_domain(path, standards_contract["root"]) == "engineering"] if uses_builtin else [f"{standards_contract['root']}/GENERAL.md"]
+        if not baseline_paths or any(path not in standards_contract["leaves"] for path in baseline_paths):
             raise TaskGraphError(
-                f"tasks[{index}] production writer requires GENERAL.md baseline in standards_contract"
+                f"tasks[{index}] production writer requires {'builtin engineering' if uses_builtin else 'GENERAL.md'} baseline in standards_contract"
             )
         baseline_document = next(
             (
                 document
                 for document in normalized_documents
-                if document["path"] == baseline_path and document["mode"] != "skip"
+                if document["path"] in baseline_paths and document["mode"] != "skip"
             ),
             None,
         )
         if baseline_document is None:
             raise TaskGraphError(
-                f"tasks[{index}] production writer requires selected GENERAL.md baseline"
+                f"tasks[{index}] production writer requires selected {'builtin engineering' if uses_builtin else 'GENERAL.md'} baseline"
             )
         for owned_path in owned_paths:
             if not any(

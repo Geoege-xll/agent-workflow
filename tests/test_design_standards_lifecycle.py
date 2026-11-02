@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import hashlib
 import subprocess
 import sys
 import unittest
@@ -14,6 +15,31 @@ PACK = Path(__file__).resolve().parents[1]
 
 
 class DesignStandardsLifecycleTest(unittest.TestCase):
+    def test_builtin_design_and_production_keep_independent_domain_coverage(self):
+        payload = self.fixture(production=True)
+        mapping = {
+            "docs/standards/GENERAL.md": ("platforms/shared/skills/xy-code-standards/references/rules.md", "engineering", "eng-common-005"),
+            "docs/standards/DESIGN_FOUNDATIONS.md": ("platforms/shared/skills/xy-ui-design/references/foundations-rules.md", "design", "des-baseline-001"),
+        }
+        leaves = []
+        for old, (path, domain, rule) in mapping.items():
+            digest = hashlib.sha256((PACK / path).read_bytes()).hexdigest()
+            leaves.append({"path": path, "domain": domain, "rule_ids": [rule], "content_fingerprint": digest})
+            for task in payload["tasks"]:
+                for doc in task["controlled_document_access"]["documents"]:
+                    if doc["path"] == old:
+                        doc.update(path=path, rule_ids=[rule], content_fingerprint=digest)
+        payload["standards_contract"].update(index_fingerprint=None, leaves=leaves,
+                                                required_engineering_rule_ids=["eng-common-005"], required_design_rule_ids=["des-baseline-001"])
+        for task in payload["tasks"]:
+            task["controlled_document_access"]["documents"] = [doc for doc in task["controlled_document_access"]["documents"] if doc["path"] != "docs/STANDARDS.md"]
+        result = self.invoke(payload, "ready")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"ready": ["web"]}, json.loads(result.stdout))
+        # 免原型不免设计规范；工程源与设计源不能互相补足对写路径的覆盖。
+        payload["tasks"][1]["controlled_document_access"]["documents"] = [doc for doc in payload["tasks"][1]["controlled_document_access"]["documents"] if doc["path"] != mapping["docs/standards/DESIGN_FOUNDATIONS.md"][0]]
+        self.assertIn("selected design standards leaf", self.invoke(payload).stderr)
+
     def fixture(self, *, production: bool = False) -> dict:
         """直接构造当前合同，保证纯规范任务的可用性不依赖旧格式迁移助手。"""
         def document(path, fingerprint, rules, owned):

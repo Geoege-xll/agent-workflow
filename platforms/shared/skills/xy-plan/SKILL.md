@@ -31,11 +31,11 @@ plan_state: draft
 
 1. Map the affected modules, exact owned paths, existing interfaces, repository verification
    commands, and controlled-document reads before drawing task boundaries.
-   Resolve `docs.standards` and `docs.standards_root` once. For every Writer, fingerprint the compact
-   STANDARDS index, select only applicable leaf documents, and map stable hard-rule IDs to all owned
-   paths. Non-UI implementation selects engineering leaves; production UI selects engineering and
-   design leaves; `xy-uiux + design_ui` selects design leaves. Never preload the complete standards
-   tree. Extract a protected-path rule only when an engineering leaf states it explicitly.
+   一次解析配置的 docs.standards/docs.standards_root；为每位Writer选择适用内置来源，
+   再补项目特有叶并绑定当前SHA、稳定规则ID和拥有路径。项目索引存在时绑定真实SHA；
+   无项目叶且索引物理缺失时保留配置路径，以null索引指纹记录，不创建空文件。
+   non_ui用工程，production_ui用工程/设计，xy-uiux + design_ui用设计；不预载全部规范树。
+   上游保护根、允许扩展和例外依据必须来自实际项目规范，不能由通用来源或仓库形状推断。
    For standards maintenance, follow WORKFLOW's `Standards document granularity and maintenance`:
    locate the existing topic and actual rule delta before proposing a new leaf; do not attach
    automatic documentation cleanup or a new rule document to every implementation task.

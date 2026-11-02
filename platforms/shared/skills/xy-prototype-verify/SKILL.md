@@ -66,10 +66,10 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    may carry non-material changes forward after the documented old/new-delta review and retained user
    approval; uncertain or material changes return to the existing scoped visual-confirmation step.
    The verifier never grants approval or decides visual equivalence.
-7. Compare the five contract sections with the frozen approved requirements and acceptance criteria.
-   Every declared navigation, interaction, state, validation, and exception must be traceable to
-   those requirements; missing required behavior, invented behavior, or a conflicting outcome is
-   FAIL. This is a semantic text review and does not require rendering the page.
+7. 由设计 Agent 在同一交接完成三维自检：需求覆盖核对五节契约与冻结需求/验收；
+   规范符合性核对适用内置规则和项目特有规范；交付一致性核对页面、控件、导航、声明结果、
+   共享样式与当前依赖指纹。遗漏、擅加、冲突或未解决的不一致为 FAIL。
+   自检按当前范围进行，说明例外及未验证行为，不要求渲染或浏览器，不产生独立原型 QA。
 8. Confirm that every concrete changed page can be handed to the user through its direct absolute
    HTML path, and that the handoff names the changed scope and declared operation sequence. Static
    validation proves file readiness; it does not claim that an Agent rendered or operated the page.
@@ -98,7 +98,9 @@ default gate, does not replace user visual approval, and must not create persist
 ## Verification ownership and PM review
 
 The `xy-uiux` task owns the deterministic static prototype-verification coverage defined above and
-returns current, internally consistent evidence. A host without browser capability is fully capable
+returns current, internally consistent evidence. 需求覆盖、规范符合性、交付一致性的自检说明
+沿用下方 `static_checks`，问题沿用 `blocking_findings`，结论沿用 `result`；不新增报告或审批。
+用户仍最终确认具体页面，生产实现后的功能 QA 保留。A host without browser capability is fully capable
 of completing the default procedure; browser evidence is not required and the PM must not supplement
 it merely because the host could not render or operate the prototype.
 
@@ -148,7 +150,7 @@ prototype_verify:
   validator:
     command: <exact-command>
     exit_code: <integer>
-  static_checks: []
+  static_checks: [] # 复用此列表记录需求覆盖、规范符合性、交付一致性及各自证据/限制
   blocking_findings: []
   pending_business_gate: none | visual_approved
 ```

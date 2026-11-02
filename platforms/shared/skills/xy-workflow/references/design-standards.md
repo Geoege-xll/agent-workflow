@@ -97,16 +97,16 @@ Standard updates never automatically save agentmemory; assess durable non-obviou
 
 ## Single Source and Replacement Boundaries
 
-- FOUNDATIONS: visual direction, semantic tokens, typography/spacing, platform and accessibility rules.
-- COMPONENTS and applicable platform leaves: reusable component, state, interaction and layout constraints.
+- 内置 foundations-rules.md / components-rules.md：通用设计基础、组件、状态及适用平台规则的唯一正文。
+- 项目 DESIGN_ 叶及实际 token/组件源：已批准的项目方向、值、映射、允许变体和业务差异；无差异不创建空叶。
 - prototype.css: shared prototype style implementation; implementation Agents own production tokens/components.
 - Concrete HTML: page contract and confirmation material. index.html is a thin directory, not another full standard.
 
-默认设计规范已提供语义颜色、尺度和常用组件行为要求。接入项目时沿用现有 token／组件
-定义，只补当前设计范围缺失的映射、变体与平台差异；有模板不等于已有批准的项目基线。
+内置设计规则提供语义颜色、尺度和常用组件行为的适用约束。项目索引存在才沿链接读取；
+项目只记录自身已批准的 token/组件值、映射、变体与平台差异，不复制内置正文或生成占位规范。
 UI Agent 负责专业内容，PM 按已有决策采用，相关实现 Agent 和 QA 使用同一套适用规则。
 首次设计或全新视觉的候选值经现有确认后写回授权规范；未改变规则的小任务无需更新。
-官方来源放在两份设计叶文档末尾供按需核对，不要求每次联网、全文重读或新增报告。
+官方来源放在两份内置设计规则末尾供按需核对，不要求每次联网、全文重读或新增报告。
 原型展示 token 与产品 token 分开；Web 默认响应式产品区，iOS／PC 默认固定画板。
 两种展示方式共用页头说明、返回目录和页底契约，不影响原型可选分支。
 

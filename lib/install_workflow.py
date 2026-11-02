@@ -8,10 +8,10 @@ from contextlib import nullcontext
 import hashlib
 import json
 if __package__:
-    from .platform_fs import os, project_install_lock
+    from .platform_fs import os, project_install_lock, publish_exclusive
     from .platform_process import setup_command
 else:
-    from platform_fs import os, project_install_lock
+    from platform_fs import os, project_install_lock, publish_exclusive
     from platform_process import setup_command
 from pathlib import Path
 import re
@@ -26,16 +26,16 @@ import uuid
 # CLI 直接执行与测试按包导入使用同一入口读写逻辑，避免恢复路径另造安全规则。
 if __package__:
     from .claude_instructions import CLAUDE_IMPORT, atomic_write, read_file
-    from .validate_project_config import parse_project_name, strip_inline_comment
+    from .validate_project_config import parse_project_name, strip_inline_comment, validate_with_profile
     from .workflow_hook_install import plan_hooks
-    from .standards_baseline import ensure_general_link, merge_general
+    from .standards_baseline import plan_standard_updates, remove_created_standard
     from .validate_project_docs import parse_docs
     from .install_process import ACTIVE_RUNNER, SetupRunner, SetupRunError
 else:
     from claude_instructions import CLAUDE_IMPORT, atomic_write, read_file
-    from validate_project_config import parse_project_name, strip_inline_comment
+    from validate_project_config import parse_project_name, strip_inline_comment, validate_with_profile
     from workflow_hook_install import plan_hooks
-    from standards_baseline import ensure_general_link, merge_general
+    from standards_baseline import plan_standard_updates, remove_created_standard
     from validate_project_docs import parse_docs
     from install_process import ACTIVE_RUNNER, SetupRunner, SetupRunError
 
@@ -396,43 +396,77 @@ def _restore_hook_configs(snapshots: list[tuple[Path, bytes | None, bytes, int]]
         atomic_write(path, before, mode)
 
 
-def _standard_update_snapshots(pack: Path, project: Path) -> list[tuple[Path, bytes, bytes, int]]:
-    """记录本轮可能更新的两个非空规范文件，供宿主安装失败时精确撤回。
+def _standard_update_snapshots(pack: Path, project: Path) -> list[tuple[Path, bytes | None, bytes | None, int]]:
+    """冻结共享规范计划的原始输入与产物，供三宿主升级整体失败时恢复。
 
-    只接管已标记的通用区和索引补链；其他文档仍由原有的缺失/空文件策略处理。
-    预检后才调用，且再次核对路径和普通文件归属，不假定文件名等于写入授权。
+    创建、替换和删除采用同一份计划；不能只恢复 GENERAL 而留下损坏的索引，也不能
+    把删除后的缺失当成读取错误。原字节只存当前事务内存，不制造历史源码树副本。
     """
 
+    # 安装入口已经验证根目录；与共享规划器使用同一物理根，避免合法 /var 别名
+    # 在 is_relative_to 中被误判为项目外路径。内部规范路径仍按配置逐级安全读取。
+    if not stat.S_ISDIR(project.lstat().st_mode):
+        raise InstallError(f"规范迁移根必须是实际目录：{project}")
+    project = project.resolve()
     docs = parse_docs(pack / "project.yaml")
-    general = project / docs["standards_root"] / "GENERAL.md"
-    index = project / docs["standards"]
+    discovered = validate_with_profile(pack / "project.yaml", project, pack / "roles")
+    if discovered.errors or discovered.profile is None:
+        raise InstallError("无法规划规范迁移：" + "; ".join(discovered.errors))
+    expected_inputs: dict[Path, bytes | None] = {}
+    updates = plan_standard_updates(pack, project, docs=docs, profile=discovered.profile,
+                                    expected_inputs=expected_inputs)
     result = []
-    for path in (general, index):
+    for path, after in updates.items():
         if not path.resolve().is_relative_to(project):
             raise InstallError("规范路径必须位于项目内")
         before = read_file(path)
-        if not before:
-            continue
-        after = (merge_general(before, (pack / "templates/docs/standards/GENERAL.md").read_bytes())
-                 if path == general else ensure_general_link(before, index, general))
+        if before != expected_inputs[path]:
+            raise InstallError(f"规范在迁移规划后发生变更，已保留：{path}")
         if after != before:
-            result.append((path, before, after, stat.S_IMODE(path.stat().st_mode)))
+            mode = stat.S_IMODE(path.stat().st_mode) if before is not None else 0o644
+            result.append((path, before, after, mode))
     return result
 
 
-def _restore_standard_updates(snapshots: list[tuple[Path, bytes, bytes, int]]) -> None:
+def _restore_standard_updates(snapshots: list[tuple[Path, bytes | None, bytes | None, int]]) -> None:
     """只恢复仍等于本轮产物的规范，不能覆盖安装期间的项目专项并发修改。"""
 
     errors: list[str] = []
     for path, before, published, mode in reversed(snapshots):
         try:
+            try:
+                sampled = os.lstat(path)
+            except FileNotFoundError:
+                sampled = None
             current = read_file(path)
             if current == before:
                 continue
             # 权限本身也是项目修改；不能只因内容相同就把并发 chmod 一起撤回。
-            if current != published or stat.S_IMODE(path.stat().st_mode) != mode:
+            if current != published or (current is not None and stat.S_IMODE(path.stat().st_mode) != mode):
                 raise InstallError(f"规范在升级期间发生其他变更，已保留现状：{path}")
-            atomic_write(path, before, mode)
+            if published is None:
+                # 删除后的恢复只能发布到仍缺失的名字。原 atomic_write 会在最后一步
+                # 无条件 replace，覆盖 read_file 之后刚重建的用户文件。
+                descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.restore-", dir=path.parent)
+                temporary = Path(temporary_name)
+                try:
+                    with os.fdopen(descriptor, "wb") as stream:
+                        stream.write(before)
+                        os.fchmod(stream.fileno(), mode)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    publish_exclusive(temporary, path)
+                finally:
+                    if temporary.exists():
+                        os.unlink(temporary)
+            elif before is None:
+                # 新建薄索引的撤回须绑定读取前的身份；即使用户替换成相同字节，
+                # 也不能把新 inode 追认为本轮产物。普通既有文档恢复维持原机制。
+                if sampled is None:
+                    raise InstallError(f"规范在恢复采样期间发生变更，已保留：{path}")
+                remove_created_standard(path, published, mode, (sampled.st_dev, sampled.st_ino))
+            else:
+                atomic_write(path, before, mode)
         except (InstallError, OSError, ValueError) as exc:
             errors.append(str(exc))
     # 一个项目文件有并发冲突，不阻止撤回其他仍精确属于本轮的独立规范文件。

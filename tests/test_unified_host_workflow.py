@@ -956,121 +956,44 @@ class EngineeringBaselineContractTest(UnifiedHostFixture, unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(body, encoding="utf-8")
 
-    @staticmethod
-    def neutral_engineering(pack: Path) -> bytes:
-        body = (
-            pack / "templates/docs/standards/GENERAL.md"
-        ).read_text(encoding="utf-8")
-        values = {
-            "PROJECT_NAME": "MyProject",
-            "DOC_PROJECT": "docs/PROJECT.md",
-            "DOC_FEATURES_DIR": "docs/features",
-            "OBSERVED_BASELINE": (
-                "- Not initialized. Setup replaces this exact template-only line with "
-                "read-only repository observations."
-            ),
-        }
-        return re.sub(
-            r"\{\{([A-Z_]+)\}\}",
-            lambda match: values[match.group(1)],
-            body,
-        ).encode("utf-8")
-
-    def assert_observational_baseline(self, body: str) -> None:
-        self.assertIn("## Observed repository baseline", body)
-        self.assertIn("`apps/web`", body)
-        self.assertIn("`services/api`", body)
-        self.assertIn("`xy-web`", body)
-        self.assertIn("`xy-backend`", body)
-        self.assertIn("framework:react", body)
-        self.assertIn('["npm", "run", "build"]', body)
-        self.assertIn('["go", "test", "./..."]', body)
-        self.assertIn("not upgrade targets", body.lower())
-        self.assertIn("## Required project constraints", body)
-        required = body.split("## Required project constraints", 1)[1].split(
-            "## Observed repository baseline", 1
-        )[0]
-        observed = body.split("## Observed repository baseline", 1)[1].split(
-            "## Verification policy", 1
-        )[0]
-        self.assertNotIn("Java 21", required)
-        self.assertNotIn("Java 21", observed)
-        self.assertNotRegex(body, r"(?i)manifest")
-
-    def test_missing_and_empty_engineering_receive_observations(self) -> None:
+    def test_missing_and_empty_engineering_do_not_receive_placeholder_rules(self) -> None:
         for state in ("missing", "empty"):
             with self.subTest(state=state):
                 temporary, project, pack = self.make_fixture()
                 self.addCleanup(temporary.cleanup)
                 self.add_observed_modules(project)
                 target = project / "docs/standards/GENERAL.md"
-                if state != "missing":
+                if state == "empty":
                     target.parent.mkdir(parents=True)
                     target.write_bytes(b"")
                 result = self.run_script(project, "scripts/scaffold_project_docs.sh")
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                generated = target.read_text(encoding="utf-8")
-                self.assert_observational_baseline(generated)
-                # 通过真实脚手架检查整段规范无损落位，避免只更新源模板却遗漏
-                # 最终交给实现者/QA 的新条款。已有非空文档仍由下面的测试保护。
-                def common_section(body: str) -> str:
-                    return body.split("## 共通开发规范", 1)[1].split(
-                        "## Project-specific rules", 1
-                    )[0]
-
-                source = (pack / "templates/docs/standards/GENERAL.md").read_text(encoding="utf-8")
-                self.assertEqual(common_section(source), common_section(generated))
-                common_rules = re.findall(
-                    r"\[(eng-common-\d{3})\] \[(hard|advisory)\]", common_section(generated)
-                )
-                expected_rules = {
-                    f"eng-common-{number:03d}": "advisory" if number in (12, 18) else "hard"
-                    for number in range(1, 31)
-                }
-                # 同时检查稳定编号、严重性和重复规则；验证器再核对实际目录与索引。
-                self.assertEqual(len(expected_rules), len(common_rules))
-                self.assertEqual(expected_rules, dict(common_rules))
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                if state == "missing":
+                    self.assertFalse(target.exists())
+                else:
+                    self.assertEqual(b"", target.read_bytes())
+                self.assertFalse((project / "docs/STANDARDS.md").exists())
                 self.assertEqual([], validate_project_docs(pack / "project.yaml", project))
-                # 在真实脚手架产物中保护职责审查的边界，而非只检查源模板：
-                # 禁止按行数验收的规则保留为 hard；维护性建议不再提供长度或数值提示。
-                review_rules = {
-                    rule_id: (severity, text)
-                    for rule_id, severity, text in re.findall(
-                        r"^- `\[(eng-common-01[12])\] \[(hard|advisory)\]` (.+)$",
-                        generated, re.MULTILINE,
-                    )
-                }
-                self.assertEqual("hard", review_rules["eng-common-011"][0])
-                self.assertIn("不得以代码行数或文件／函数长度", review_rules["eng-common-011"][1])
-                self.assertIn("QA 验收依据", review_rules["eng-common-011"][1])
-                severity, review = review_rules["eng-common-012"]
-                self.assertEqual("advisory", severity)
-                self.assertNotRegex(review, r"行数|长度|提示值|阈值|\d")
-                self.assertIn("具体代码问题及实际影响", review)
+                # 仓库发现仍是路由事实，规范迁移不应把观察重新变成项目硬约束。
+                profile = discover_project(project)
+                self.assertTrue({"apps/web", "services/api"}.issubset({module.root for module in profile.modules}))
 
-    def test_nonempty_template_bodies_are_byte_for_byte_preserved(self) -> None:
-        for state, original, mode in (
-            (
-                "raw-template",
-                (PACK / "templates/docs/standards/GENERAL.md").read_bytes(),
-                0o640,
-            ),
-            ("old-neutral-baseline", self.neutral_engineering(PACK), 0o604),
-        ):
-            with self.subTest(state=state):
-                temporary, project, _pack = self.make_fixture()
-                self.addCleanup(temporary.cleanup)
-                self.add_observed_modules(project)
-                target = project / "docs/standards/GENERAL.md"
-                target.parent.mkdir(parents=True)
-                target.write_bytes(original)
-                target.chmod(mode)
-
-                result = self.run_script(project, "scripts/scaffold_project_docs.sh")
-
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(original, target.read_bytes())
-                self.assertEqual(mode, stat.S_IMODE(target.stat().st_mode))
+    def test_managed_common_migration_preserves_project_tail(self) -> None:
+        from tests.test_managed_general import legacy_template
+        from lib.standards_baseline import common_block
+        temporary, project, pack = self.make_fixture()
+        self.addCleanup(temporary.cleanup)
+        target = project / "docs/standards/GENERAL.md"
+        target.parent.mkdir(parents=True)
+        prefix = b"# Project rules\n- Domain: engineering\n"
+        suffix = b"\n- `[eng-local-fixture] [hard]` Keep project policy.\n"
+        target.write_bytes(prefix + common_block(legacy_template("GENERAL.md")) + suffix)
+        target.chmod(0o604)
+        result = self.run_script(project, "scripts/scaffold_project_docs.sh")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(prefix + suffix, target.read_bytes())
+        self.assertEqual(0o604, stat.S_IMODE(target.stat().st_mode))
+        self.assertEqual([], validate_project_docs(pack / "project.yaml", project))
 
     def test_nonempty_user_engineering_contract_is_byte_for_byte_preserved(self) -> None:
         temporary, project, _pack = self.make_fixture()
@@ -6912,9 +6835,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         files, directories = self.docs_inventory(project)
         self.assertEqual(
             {
-                Path("docs/STANDARDS.md"),
-                Path("docs/standards/GENERAL.md"),
-                Path("docs/standards/UPSTREAM.md"),
                 Path("docs/PROJECT.md"),
             },
             files,
@@ -6923,7 +6843,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             {
                 Path("docs"),
                 Path("docs/features"),
-                Path("docs/standards"),
             },
             directories,
         )
@@ -6947,11 +6866,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         files, directories = self.docs_inventory(project)
         self.assertEqual(
             {
-                Path("docs/STANDARDS.md"),
-                Path("docs/standards/GENERAL.md"),
-                Path("docs/standards/UPSTREAM.md"),
-                Path("docs/standards/DESIGN_FOUNDATIONS.md"),
-                Path("docs/standards/DESIGN_COMPONENTS.md"),
                 Path("docs/PROJECT.md"),
                 Path("docs/standards/prototype/index.html"),
                 Path("docs/standards/prototype/prototype.css"),
@@ -7026,9 +6940,8 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.assertTrue((PACK / "templates/docs/PROJECT.md").is_file())
         self.assertTrue((PACK / "templates/docs/FEATURE.md").is_file())
         self.assertTrue((PACK / "templates/docs/STANDARDS.md").is_file())
-        self.assertTrue(
-            (PACK / "templates/docs/standards/GENERAL.md").is_file()
-        )
+        self.assertFalse((PACK / "templates/docs/standards/GENERAL.md").exists())
+        self.assertTrue((PACK / "platforms/shared/skills/xy-code-standards/references/rules.md").is_file())
         self.assertFalse((PACK / "templates/docs/ENGINEERING.md").exists())
         self.assertFalse((PACK / "templates/docs/DESIGN_SYSTEM.md").exists())
         self.assertFalse((PACK / "templates/docs/design/README.md").exists())
@@ -7089,7 +7002,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         ):
             self.assertNotIn(forbidden, after)
 
-    def test_scaffold_replaces_an_empty_core_target_atomically(self) -> None:
+    def test_scaffold_preserves_an_empty_unowned_standard(self) -> None:
         temporary, project, _ = self.make_docs_profile_fixture(ui_enabled=False)
         self.addCleanup(temporary.cleanup)
         target = project / "docs/standards/GENERAL.md"
@@ -7100,10 +7013,12 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         result = self.run_script(project, "scripts/scaffold_project_docs.sh")
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(target.read_bytes())
-        self.assertNotEqual(before_inode, target.stat().st_ino)
+        self.assertEqual(b"", target.read_bytes())
+        self.assertEqual(before_inode, target.stat().st_ino)
         self.assertEqual(0o640, stat.S_IMODE(target.stat().st_mode))
         self.assertEqual(1, target.stat().st_nlink)
+
+        self.assertFalse((project / "docs/STANDARDS.md").exists())
 
     def test_scaffold_restores_an_empty_project_index(self) -> None:
         temporary, project, _ = self.make_docs_profile_fixture(ui_enabled=False)
@@ -7160,7 +7075,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         environment = os.environ.copy()
         environment["AGENT_WORKFLOW_PACK_TEST_SCAFFOLD_RACE"] = (
-            "missing:docs/standards/GENERAL.md"
+            "missing:docs/PROJECT.md"
         )
 
         result = subprocess.run(
@@ -7176,19 +7091,19 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             b"concurrent user content\n",
-            (project / "docs/standards/GENERAL.md").read_bytes(),
+            (project / "docs/PROJECT.md").read_bytes(),
         )
-        self.assertFalse((project / "docs/PROJECT.md").exists())
+        self.assertFalse((project / "docs/features").exists())
 
     def test_scaffold_restores_an_empty_target_modified_at_publish(self) -> None:
         temporary, project, _ = self.make_docs_profile_fixture(ui_enabled=False)
         self.addCleanup(temporary.cleanup)
-        target = project / "docs/standards/GENERAL.md"
+        target = project / "docs/PROJECT.md"
         target.parent.mkdir(parents=True)
         target.touch(mode=0o640)
         environment = os.environ.copy()
         environment["AGENT_WORKFLOW_PACK_TEST_SCAFFOLD_RACE"] = (
-            "empty:docs/standards/GENERAL.md"
+            "empty:docs/PROJECT.md"
         )
 
         result = subprocess.run(
@@ -7205,7 +7120,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.assertEqual(b"concurrent user content\n", target.read_bytes())
         self.assertEqual(0o640, stat.S_IMODE(target.stat().st_mode))
         self.assertEqual(1, target.stat().st_nlink)
-        self.assertFalse((project / "docs/PROJECT.md").exists())
+        self.assertFalse((project / "docs/features").exists())
 
     def test_direct_antigravity_ui_setup_scaffolds_exact_minimal_docs_inventory(self) -> None:
         temporary, project, pack = self.make_docs_profile_fixture(ui_enabled=True)
@@ -7217,11 +7132,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         files, directories = self.docs_inventory(project)
         self.assertEqual(
             {
-                Path("docs/STANDARDS.md"),
-                Path("docs/standards/GENERAL.md"),
-                Path("docs/standards/UPSTREAM.md"),
-                Path("docs/standards/DESIGN_FOUNDATIONS.md"),
-                Path("docs/standards/DESIGN_COMPONENTS.md"),
                 Path("docs/PROJECT.md"),
                 Path("docs/standards/prototype/index.html"),
                 Path("docs/standards/prototype/prototype.css"),
@@ -7253,6 +7163,9 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         result = self.run_script(project, "scripts/scaffold_project_docs.sh")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         index = project / "docs/STANDARDS.md"
+        index.write_text("# Project design\n\n[Foundations](standards/DESIGN_FOUNDATIONS.md)\n[Components](standards/DESIGN_COMPONENTS.md)\n", encoding="utf-8")
+        (project / "docs/standards/DESIGN_FOUNDATIONS.md").write_text("# Project design\n- Domain: design\n- `[des-project-only] [hard]` Project-specific tokens.\n", encoding="utf-8")
+        (project / "docs/standards/DESIGN_COMPONENTS.md").write_text("# Project components\n- Domain: design\n- `[des-component-local] [hard]` Project-specific variants.\n", encoding="utf-8")
         body = "".join(line for line in index.read_text().splitlines(keepends=True)
                        if "DESIGN_COMPONENTS.md" not in line)
         index.write_text(body)
@@ -7279,6 +7192,9 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                     self.assertEqual(0, initial.returncode, initial.stdout + initial.stderr)
                     # 真实的非空自定义目录不收录组件规范；刷新不得再注入该设计叶。
                     index = project / "docs/STANDARDS.md"
+                    index.write_text("# Project design\n\n[Foundations](standards/DESIGN_FOUNDATIONS.md)\n[Components](standards/DESIGN_COMPONENTS.md)\n", encoding="utf-8")
+                    (project / "docs/standards/DESIGN_FOUNDATIONS.md").write_text("# Project design\n- Domain: design\n- `[des-project-only] [hard]` Project-specific tokens.\n", encoding="utf-8")
+                    (project / "docs/standards/DESIGN_COMPONENTS.md").write_text("# Project components\n- Domain: design\n- `[des-component-local] [hard]` Project-specific variants.\n", encoding="utf-8")
                     index.write_text("".join(line for line in index.read_text().splitlines(keepends=True)
                                              if "DESIGN_COMPONENTS.md" not in line), encoding="utf-8")
                     component = project / "docs/standards/DESIGN_COMPONENTS.md"
@@ -7313,9 +7229,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         files, directories = self.docs_inventory(project)
         self.assertEqual(
             {
-                Path("docs/STANDARDS.md"),
-                Path("docs/standards/GENERAL.md"),
-                Path("docs/standards/UPSTREAM.md"),
                 Path("docs/PROJECT.md"),
             },
             files,
@@ -7324,7 +7237,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             {
                 Path("docs"),
                 Path("docs/features"),
-                Path("docs/standards"),
             },
             directories,
         )

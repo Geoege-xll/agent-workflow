@@ -66,13 +66,13 @@ asking for the same choice again. Draft only the current affected work; preserve
       "required_design_rule_ids": ["<applicable-design-rule-id>"],
       "leaves": [
         {
-          "path": "<standards_contract.root/relevant-leaf.md>",
+          "path": ".agent-workflow/platforms/shared/skills/xy-code-standards/references/rules.md",
           "domain": "engineering",
           "content_fingerprint": "<leaf-sha256>",
           "rule_ids": ["<applicable-engineering-rule-id>"]
         },
         {
-          "path": "<standards_contract.root/DESIGN_RELEVANT.md>",
+          "path": ".agent-workflow/platforms/shared/skills/xy-ui-design/references/foundations-rules.md",
           "domain": "design",
           "content_fingerprint": "<leaf-sha256>",
           "rule_ids": ["<applicable-design-rule-id>"]
@@ -116,7 +116,7 @@ asking for the same choice again. Draft only the current affected work; preserve
               "rule_ids": []
             },
             {
-              "path": "<standards_contract.root/relevant-leaf.md>",
+              "path": ".agent-workflow/platforms/shared/skills/xy-code-standards/references/rules.md",
               "mode": "targeted",
               "reason": "<why these engineering rules apply>",
               "sections_or_queries": ["<relevant-heading-or-rule-id>"],
@@ -125,7 +125,7 @@ asking for the same choice again. Draft only the current affected work; preserve
               "rule_ids": ["<applicable-engineering-rule-id>"]
             },
             {
-              "path": "<standards_contract.root/DESIGN_RELEVANT.md>",
+              "path": ".agent-workflow/platforms/shared/skills/xy-ui-design/references/foundations-rules.md",
               "mode": "targeted",
               "reason": "<why these design rules apply>",
               "sections_or_queries": ["<relevant-heading-or-rule-id>"],
@@ -162,11 +162,14 @@ asking for the same choice again. Draft only the current affected work; preserve
 }
 ```
 
+示例展示索引存在的安装态；物理不存在且无项目规则叶时仍保留配置 index_path/root，
+index_fingerprint设null并省略索引读取条目。内置来源使用三个精确受管路径（源包态不带.agent-workflow/），
+按实际组件规则补components-rules.md，按实际项目差异补特有叶；不得把示例当成完整默认规则清单。
 This example is a `production_ui` task. Use `surface_kind: design_ui` for `xy-uiux`; use
 `surface_kind: non_ui` and omit `ui_change` for non-UI work. Every dependency must have the matching
 reverse `blocks` edge. Every writer must have exact owned paths, a role, concrete acceptance
-evidence, and verification. Every Writer carries the STANDARDS index plus the matching smallest
-domain leaves and `standards-conformance`; `xy-uiux + design_ui` uses design leaves without
+evidence, and verification. Every Writer carries applicable fingerprinted built-in sources,
+存在时的项目索引与适用项目特有叶，以及 standards-conformance； `xy-uiux + design_ui` uses design leaves without
 engineering leaves. Protected upstream writes require a documented allowed path or a complete `standards_exceptions`
 record bound to an exceptional Gate. `xy-uiux` and `design_ui` are a mandatory pair. Bind every
 `prototype_contract` authority to `ui_contract.prototype_paths` and every `design_standard`

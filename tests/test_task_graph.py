@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,22 @@ from lib.task_graph import (
     request_closure,
     validate_graph,
 )
+
+
+def _builtin_standards_payload(prefix: str = "") -> dict:
+    """沿用已有Writer夹具，只切换真实内置源；不依赖被删除的项目通用模板。"""
+    from tests.test_scheduler_boundaries import _writer_payload
+    payload = _writer_payload()
+    path = "platforms/shared/skills/xy-code-standards/references/rules.md"
+    digest = hashlib.sha256((Path(__file__).resolve().parents[1] / path).read_bytes()).hexdigest()
+    leaf = {"path": prefix + path, "domain": "engineering", "content_fingerprint": digest, "rule_ids": ["eng-common-005"]}
+    payload["standards_contract"].update(index_fingerprint=None, required_engineering_rule_ids=["eng-common-005"], leaves=[leaf], protected_paths=[])
+    payload["tasks"][0]["controlled_document_access"]["documents"] = [{
+        "path": leaf["path"], "content_fingerprint": digest, "rule_ids": ["eng-common-005"],
+        "mode": "full", "reason": "读取真实内置工程底线", "sections_or_queries": [],
+        "applies_to": payload["tasks"][0]["owned_paths"],
+    }]
+    return payload
 
 
 def _standards_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -139,6 +156,65 @@ def _standards_payload(payload: dict[str, object]) -> dict[str, object]:
                 }
             )
     return upgraded
+
+
+class BuiltinSourceContractTest(unittest.TestCase):
+    def invoke(self, payload):
+        cli = Path(__file__).resolve().parents[1] / "lib/task_graph_cli.py"
+        return subprocess.run([sys.executable, str(cli), "validate"], input=json.dumps(payload),
+                              text=True, capture_output=True, check=False)
+
+    def test_builtin_only_and_installed_sources_validate_while_legacy_stays_valid(self):
+        from tests.test_scheduler_boundaries import _writer_payload
+        for payload in (_builtin_standards_payload(), _builtin_standards_payload(".agent-workflow/"), _writer_payload()):
+            result = self.invoke(payload)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_project_specialist_cannot_replace_general_or_builtin_engineering_floor(self):
+        payload = _builtin_standards_payload()
+        standards = payload["standards_contract"]
+        project = {"path": "docs/standards/BACKEND.md", "domain": "engineering", "content_fingerprint": "b" * 64, "rule_ids": ["eng-specific"]}
+        standards.update(index_fingerprint="a" * 64, required_engineering_rule_ids=["eng-specific"])
+        original = payload["tasks"][0]["controlled_document_access"]["documents"][0]
+        index = {**original, "path": standards["index_path"], "content_fingerprint": "a" * 64, "rule_ids": []}
+        payload["tasks"][0]["controlled_document_access"]["documents"] = [index, {**original, **{key: value for key, value in project.items() if key != "domain"}}]
+        standards["leaves"].append(project)
+        result = self.invoke(payload)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("selected builtin engineering baseline", result.stderr)
+        # 旧格式也不能通过只删GENERAL、仅留专项叶来绕过基础工程输入。
+        standards["leaves"] = [project]
+        result = self.invoke(payload)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("GENERAL.md baseline in standards_contract", result.stderr)
+
+    def test_builtin_sources_reject_stale_ids_wrong_domains_and_missing_path_coverage(self):
+        for mutation, message in (("stale", "fingerprint is stale"), ("unknown-id", "unknown rule"),
+                                  ("wrong-domain", "direct design"), ("path-coverage", "do not cover"),
+                                  ("skip", "must not skip"), ("native-copy", "exact builtin source"),
+                                  ("native-root", "exact builtin source")):
+            payload = _builtin_standards_payload()
+            leaf = payload["standards_contract"]["leaves"][0]
+            document = payload["tasks"][0]["controlled_document_access"]["documents"][0]
+            if mutation == "stale":
+                leaf["content_fingerprint"] = document["content_fingerprint"] = "a" * 64
+            elif mutation == "unknown-id":
+                leaf["rule_ids"] = ["eng-does-not-exist"]
+            elif mutation == "wrong-domain":
+                leaf["domain"] = "design"
+            elif mutation == "path-coverage":
+                document["applies_to"] = ["other"]
+            elif mutation == "skip":
+                document["mode"] = "skip"
+            else:
+                leaf["path"] = document["path"] = ".agents/skills/xy-code-standards/references/rules.md"
+                if mutation == "native-root":
+                    payload["standards_contract"]["root"] = leaf["path"].rsplit("/", 1)[0]
+                    payload["standards_contract"]["index_fingerprint"] = "b" * 64
+            with self.subTest(mutation=mutation):
+                result = self.invoke(payload)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(message, result.stderr)
 
 
 class TaskGraphTest(unittest.TestCase):
@@ -755,7 +831,8 @@ class TaskGraphTest(unittest.TestCase):
         )
         wrong_path = invoke(wrong_path_task)
         self.assertEqual(2, wrong_path.returncode)
-        self.assertIn("requires at least one selected engineering standards leaf", wrong_path.stderr)
+        # 非注册文档携带规则编号会在来源检查处提前失败，不能再作为普通文档绕过规范。
+        self.assertIn("standards rule source is absent from contract", wrong_path.stderr)
 
         stale_task = json.loads(json.dumps(task))
         stale_task["controlled_document_access"]["documents"][0][

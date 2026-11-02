@@ -574,9 +574,9 @@ developer_instructions = "Audit security without editing files."
             self.assertIn(phrase, body)
 
     def test_design_standards_template_keeps_only_durable_product_rules(self) -> None:
-        body = self.read("docs/standards/DESIGN_FOUNDATIONS.md")
+        body = self.read(".agents/skills/xy-ui-design/references/foundations-rules.md")
         for phrase in (
-            "Product principles",
+            "项目基线与适用范围",
             "Accessibility",
             "Platform constraints",
             "Token policy",
@@ -1397,6 +1397,10 @@ default_subagent_reasoning_effort = "low"
             for old, new in replacements.items():
                 content = content.replace(old, new)
             config.write_text(content, encoding="utf-8")
+            # 使用真实项目专有叶验证自定义根/薄索引路径，安装器不再生成通用叶。
+            project_leaf = project / "docs/rules/tree/LOCAL.md"
+            project_leaf.parent.mkdir(parents=True)
+            project_leaf.write_text("# Local project rules\n- Domain: engineering\n- `[eng-custom-root] [hard]` Preserve the configured project boundary.\n", encoding="utf-8")
             setup = run_project_setup(project)
             self.assertEqual(setup.returncode, 0, setup.stdout + setup.stderr)
             check = run_project_setup(project, "--check")
@@ -1414,12 +1418,11 @@ default_subagent_reasoning_effort = "low"
             for hardcoded in ("docs/STANDARDS.md", "docs/standards/", "docs/PROJECT.md", "docs/features/", "docs/notes/", "docs/plans/", "docs/design/"):
                 self.assertNotIn(hardcoded, generated_contract)
             generated_docs = "\n".join(
-                path.read_text(encoding="utf-8")
+                path.relative_to(project).as_posix() + "\n" + path.read_text(encoding="utf-8")
                 for path in (
                     project / "docs/state/CURRENT.md",
                     project / "docs/rules/INDEX.md",
-                    project / "docs/rules/tree/GENERAL.md",
-                    project / "docs/rules/tree/DESIGN_FOUNDATIONS.md",
+                    project / "docs/rules/tree/LOCAL.md",
                 )
             )
             for configured in (
@@ -1561,7 +1564,7 @@ default_subagent_reasoning_effort = "low"
     def test_provider_neutral_memory_and_no_nested_delegation_reach_generated_agents(self) -> None:
         self.assertNotIn(
             "agentmemory",
-            self.read("docs/standards/GENERAL.md").lower(),
+            self.read(".agents/skills/xy-code-standards/references/rules.md").lower(),
         )
         for role_path in managed_role_paths(self.project / ".codex/agents"):
             body = tomllib.loads(role_path.read_text(encoding="utf-8"))[
@@ -2202,7 +2205,7 @@ description: Obsolete managed behavior.
             ]
             for phrase in banned:
                 self.assertNotIn(phrase, body, role_path.name)
-        engineering = self.read("docs/standards/GENERAL.md")
+        engineering = self.read(".agents/skills/xy-code-standards/references/rules.md")
         for phrase in banned + ("`build-verify`",):
             self.assertNotIn(phrase, engineering)
 

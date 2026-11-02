@@ -257,6 +257,11 @@ class ArbitraryProjectIntegrationMatrixTest(unittest.TestCase):
                     target = project / "docs/standards/GENERAL.md"
                     self.assertEqual(engineering, target.read_bytes())
                     self.assertEqual(0o640, stat.S_IMODE(target.stat().st_mode))
+                    self.assertIn("standards/GENERAL.md", (project / "docs/STANDARDS.md").read_text(encoding="utf-8"))
+                else:
+                    # 发现语言/框架只决定角色，不再生成通用规范副本或空项目索引。
+                    self.assertFalse((project / "docs/standards/GENERAL.md").exists())
+                    self.assertFalse((project / "docs/STANDARDS.md").exists())
                 leftovers = [
                     path.relative_to(project).as_posix()
                     for path in project.iterdir()

@@ -20,6 +20,6 @@ its row and rename its detail document to `<feature>.removed.md` in `{{DOC_FEATU
 
 - Feature details and current architectural rationale: `{{DOC_FEATURES_DIR}}/`
 - Requirement plans (intended changes, not implemented facts): `{{DOC_PLANS_DIR}}/`
-- Engineering and design standards index: `{{DOC_STANDARDS}}`
+- 项目特有规范索引（存在时）：`{{DOC_STANDARDS}}`；通用工程/UI 规则来自内置 `xy-code-standards` / `xy-ui-design`。
 - Prototype evidence, when configured: `{{DOC_DESIGN_DIR}}/prototype/`
 - Optional memory fallback: `{{DOC_NOTES_DIR}}/`
