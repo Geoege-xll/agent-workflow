@@ -7,7 +7,9 @@ without the implementation/QA closeout loop; actual implementation acceptance ke
 
 Use `/xy-workflow` for non-Trivial implementation; roles are `.agents/agents/xy-*.md`, Skills are
 `.agents/skills/xy-*/SKILL.md`. Only the PM may use `invoke_subagent`; role Agents never delegate and
-`max_depth` is `1`. Dispatch READY tasks: `inherit` stays `inherit`, `worktree` becomes `branch`
+`max_depth` is `1`。Light／Full 默认派对应 subagent；PM 亲自实施例外及恢复边界见
+`.agent-workflow/product/WORKFLOW.md#implementation-ownership`，原等级门槛不变。
+Dispatch READY tasks: `inherit` stays `inherit`, `worktree` becomes `branch`
 only when the actual runtime proves a distinct registered worktree root and the required base;
 `share` is forbidden. A branch name alone is not filesystem isolation. For multi-feature selection,
 integration and confirm/auto local main delivery, read `/xy-workflow`'s `references/worktree-delivery.md`.

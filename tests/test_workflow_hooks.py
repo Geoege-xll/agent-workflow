@@ -303,14 +303,16 @@ class HookTest(unittest.TestCase):
 
     def test_activation_does_not_classify_or_force_qa_for_any_user_request(self):
         requests = ("解释代码", "把提交改成保存", "不走工作流直接修改", "主会话亲自实现",
-                    "不更新原型", "任务A已完成，接着做B", "开发五个模块")
+                    "不更新原型", "任务A已完成，接着做B", "开发五个模块", "开始优化",
+                    "功能不变，代码少，只改 CSS", "角色缺失或失败了，继续")
         for host in ("codex", "claude"):
             for request in requests:
                 payload = self.payload(host, prompt=request)
                 data = hooks.response(host, "UserPromptSubmit", payload, self.project)
                 self.assertEqual(hooks.ENTRY, data["hookSpecificOutput"]["additionalContext"])
                 self.assertFalse({"decision", "continue", "permissionDecision"} & set(data))
-        # 提示词不经过关键词分类，且提醒不含原始用户内容或复制的正文。
+        # 提示词不经过关键词分类，且提醒不含原始用户内容或复制的正文；
+        # 这里只核对回调合同，不把提醒文本匹配当成模型服从或用户授权的证据。
         self.assertIn("用户明确跳过", hooks.ENTRY)
         self.assertIn("已完成", hooks.ENTRY)
         self.assertLess(len(hooks.ENTRY), 250)

@@ -5559,9 +5559,24 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                     (pack / "platforms/claude/skills" / name / "SKILL.md").exists(),
                     f"duplicate Claude core Skill source: {name}",
                 )
-        # 新的按需生命周期说明必须完整安装到两种 Skill 目录；Codex/Antigravity
+        # 此夹具直接运行源包 setup，源包本身承担运行时目录；不能假定已经执行
+        # install.sh 并创建 .agent-workflow。沿用现有展开器读取实际生成入口，
+        # 再把安装根相对引用映射回同一源包，确认集中规则的锚点真实存在。
+        bootstrap = read_bootstrap_contract(project / "AGENTS.md", pack)
+        authority_refs = set(re.findall(
+            r"\.agent-workflow/(product/WORKFLOW\.md)#([a-z][a-z0-9-]*)", bootstrap,
+        ))
+        self.assertTrue(authority_refs, "生成入口缺少 WORKFLOW 权威章节引用")
+        for relative, anchor in authority_refs:
+            self.assertIn(
+                f'<a id="{anchor}"></a>',
+                (pack / relative).read_text(encoding="utf-8"),
+            )
+
+        # 路由和恢复引用必须完整安装到两种 Skill 目录；Codex/Antigravity
         # 共享 .agents，Claude 使用 .claude，不能只同步 SKILL.md 而遗漏引用内容。
-        for reference in ("design-standards.md", "plan-lifecycle.md"):
+        # 这是资源分发验证，不宣称已经验证模型实际服从实施者或恢复边界。
+        for reference in ("design-standards.md", "dispatch.md", "plan-lifecycle.md"):
             lifecycle = Path("xy-workflow/references") / reference
             original = (pack / "platforms/shared/skills" / lifecycle).read_bytes()
             for skill_root in (".agents/skills", ".claude/skills"):

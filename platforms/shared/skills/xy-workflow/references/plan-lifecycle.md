@@ -150,6 +150,9 @@ Treat recorded completion and approval as evidence to verify, not as self-execut
 Reuse completed work whose scope/artifacts/evidence remain valid; recheck or rework only affected or
 uncertain parts. Do not replay the old plan from its first step, restart live workers, reconstruct stale
 locks as active, or mark prior work failed just because its Agent session is no longer active.
+实施者、分级及例外来源按 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`
+核对；沿用可用的原 Agent 和有效证据，压缩摘要或旧状态不创造 PM 实施授权，也不把
+未完成的 Light／Full 改走 Trivial 早退。原生续用能力与取消／失效边界见当前宿主集成细则。
 Restore the current remaining graph from verified facts; the transient CLI snapshot is not the only
 carrier of outstanding decisions or work. Report the smallest missing approval or fact when needed.
 

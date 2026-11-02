@@ -115,6 +115,8 @@ These are command-execution boundaries within existing steps, not additional wor
 ## Route
 
 The following planning, graph and QA route applies only after both Trivial early exits are ruled out.
+实施者与恢复边界统一见 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`：
+Light／Full 默认派对应 subagent；明确的 PM 亲自实施例外不降低原等级或省略门槛。
 
 1. `project.yaml` is the fixed workflow-adapter read for paths, limits, and routing configuration.
    Its `docs.*` values are discoverable indexes, not a static preload list. The compact

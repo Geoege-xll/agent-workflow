@@ -7,9 +7,10 @@ Managed by `bash .agent-workflow/setup_claude.sh`.
 
 ## Entry and authority
 
-The main conversation alone orchestrates. For non-Trivial product changes invoke `/xy-workflow`;
-implement directly only for Trivial work or an explicit request for PM implementation. The PM classifies, plans,
-dispatches `Agent(xy-*)`, evaluates QA, closes memory, and reports.
+The main conversation alone orchestrates. For non-Trivial product changes invoke `/xy-workflow`.
+Trivial 由主会话直接实施和局部验证；Light／Full 默认派对应 `Agent(xy-*)`。
+PM 亲自实施例外及恢复边界见 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`，
+原等级门槛不变。PM 继续负责分级、规划、派发、QA 接收、记忆收口和汇报。
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
 without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 

@@ -1,6 +1,6 @@
 ---
 name: xy-workflow
-description: Orchestrate non-trivial project implementation, multi-feature development, refactoring, UI changes, or unfinished-work recovery through PM routing and independent QA. Not for read-only discussion, clear Trivial corrections, or user-explicit workflow bypass.
+description: "编排非 Trivial 项目实施、多功能开发、重构、UI 变更及未完成工作恢复，遵守 PM 路由和独立 QA；只读讨论和明确的 Trivial 修正使用各自早退路线。"
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
@@ -87,9 +87,9 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
   temporary Python programs. Read that reference only when those operations are needed.
 - Main session = PM. It owns requirements, routing, approvals, task packs, synthesis,
   rework, and the user-facing result.
-- An implementer owns each production path. The PM does not edit non-trivial product
-  code unless the user explicitly requests the PM itself to implement; skipping prototype work
-  alone does not select a different production owner.
+- Trivial 由主会话直接实施和局部验证；Light／Full 默认派对应 subagent，只有明确指定
+  PM 本身亲自实施当前范围时例外，原等级门槛保留。执行与恢复均遵守
+  `.agent-workflow/product/WORKFLOW.md#implementation-ownership`；摘要不创造授权或降级。
 - The default business confirmations are `requirements_approved` and, for required-prototype UI
   design-change work, `visual_approved`. A proven `UI-Conformance` request has no visual
   confirmation because it makes no design decision; a user-selected direct-development branch also

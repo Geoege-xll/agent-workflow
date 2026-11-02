@@ -10,6 +10,8 @@
 - Plan revision/recovery: `$xy-workflow`'s `references/plan-lifecycle.md`.
 - The main-session PM dispatches independent READY tasks in parallel through Codex-native
   custom Agents and keeps nested delegation disabled.
+  Light／Full 默认派对应 subagent；PM 亲自实施例外及恢复边界见
+  `.agent-workflow/product/WORKFLOW.md#implementation-ownership`，原等级门槛不变。
 - Superpowers planning, execution, TDD, branch-finishing, and Subagent orchestration remain
   disabled by default.
 - 测试与交付沿用已安装 `xy-build-verify/references/verification-scope.md`：派发时选最小

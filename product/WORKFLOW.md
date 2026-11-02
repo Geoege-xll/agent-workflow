@@ -247,9 +247,32 @@ commit_decision:
 
 | Type | Definition | Workflow |
 |---|---|---|
-| Trivial | Small change to one non-UI file with no shared contract, or bounded low-risk UI copy as defined below | Handle directly; verify in proportion to risk, without mandatory independent QA |
-| Light | One delivery surface, with no UI, database, or shared-contract change | Align -> implement -> QA -> archive |
-| Full | Multiple roles, a shared contract/database/root configuration, or non-Trivial UI | Apply applicable gates and independent QA |
+| Trivial | Small change to one non-UI file with no shared contract, or bounded low-risk UI copy as defined below | 主会话直接实施和局部验证；不默认派发或独立 QA |
+| Light | One delivery surface, with no UI, database, or shared-contract change | 默认派对应实施 subagent；保留需求确认、验证和独立 QA |
+| Full | Multiple roles, a shared contract/database/root configuration, or non-Trivial UI | 默认派对应实施 subagent；保留 Full 规划、适用门禁和独立 QA |
+
+<a id="implementation-ownership"></a>
+
+### 实施所有权与 PM 例外
+
+- 先按实际影响确定 Trivial／Light／Full，再确定实施者。功能不变、代码少或仅 CSS
+  都不能自动判为 Trivial；工作流指令、Skill、生成模板及配置等按其实际合同和消费者判断，
+  不能因文档后缀跳过分级与所有权。Trivial 继续使用下文主会话直接实施、局部验证的早退路线。
+- Light／Full 默认由对应角色的 subagent 实施；只有用户明确指定 PM 本身亲自实施当前范围，
+  才改变该范围的实施者。普通“你来优化”“开始”“继续”是任务执行指令，不能据此推断该例外；
+  跳过原型也不改变生产实施者。依据必须能追溯到可信原始用户指令及其当前范围；需要交接或恢复时，
+  沿用现有 Task Pack 的 `input_contracts`／当前计划引用来源和范围，不新增字段、审批账本或确认门禁。
+- PM 亲自实施例外只改变实施者：原等级的需求审批、适用规范、构建／可运行验证、独立 QA、
+  原型选择及适用视觉门禁均保留。PM 可以维护自己负责的计划、交接和已验收受控文档投影；
+  这些职责不能扩大到其他实现者拥有的指令资源或文件。
+- 对应角色缺失、运行失败或上下文恢复不自动授权 PM 接管。按既有派发／恢复方式处理受影响任务，
+  未解决的角色或工具能力缺口报为阻塞；保留已有修改、有效证据和独立分支，不伪装完成。
+- 压缩、交接和恢复沿用可信原指令、现有计划与当前文件，核对原分级、实施者及已完成证据；
+  按现有宿主续用规则优先复用可用的原 Agent。摘要、旧状态或临时快照不能创造 PM 实施授权，
+  不能把尚未完成的 Light／Full 降为 Trivial，也不能重启仍有效的已完成工作。
+
+本节是实施者边界的权威规则；具体计划恢复见
+`xy-workflow/references/plan-lifecycle.md`，宿主工具及权限仍由对应集成细则约束。
 
 ### General Trivial early exit
 

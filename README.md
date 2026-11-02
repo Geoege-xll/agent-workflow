@@ -359,6 +359,11 @@ The main session is the PM. It dispatches all currently `READY` tasks within the
 agent, writer, path, and semantic-conflict limits; task completion immediately unlocks
 eligible downstream work. A capacity delay never becomes a semantic dependency.
 
+Trivial 由主会话直接实施并做局部验证；Light／Full 默认派对应 subagent。只有明确指定
+PM 本身亲自实施当前范围时才改变实施者，原等级审批、验证、独立 QA 和原型规则保留。
+普通“你来优化／开始／继续”和压缩摘要不产生该例外，也不使 Light／Full 降级；恢复时
+复用有效进度与可用的原 Agent。完整规则见 [实施所有权与 PM 例外](product/WORKFLOW.md#implementation-ownership)。
+
 Bounded low-risk UI copy uses the existing Trivial route before UI classification: direct main-session
 edit, applicable standards, local verification and scoped commit assessment. No repeated approval,
 Grill Me, full plan/DAG, prototype choice, independent QA or document/memory churn is required.
