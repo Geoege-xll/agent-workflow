@@ -157,11 +157,16 @@ Export preserves the recorded state; it never resets work, changes acceptance or
 它们复用当前宿主能力，不启动 runner、daemon、MCP 或第二套 Agent 调度器；原生
 能力、boost、teamwork 和其他可选模式不因安装或诊断自动启用。
 
-在源包根或安装态 `.agent-workflow` 根，能力诊断使用现有管理器：
+能力诊断从中央管理工具的源包根运行；业务项目的安装态 `.agent-workflow` 不包含
+`manager`，不能从该运行时目录执行管理器模块。`--project` 指向实际业务项目根：
 
 ```bash
-bash lib/python_runtime.sh -X utf8 -m manager.cli doctor --platform antigravity \
-  --project "${project_root:?set actual project root}"
+# 子 shell 只为本次诊断切换目录，不影响后续安装态命令的工作目录。
+(
+  cd "${workflow_manager_source_root:?请设置中央管理工具源包根}"
+  bash lib/python_runtime.sh -X utf8 -m manager.cli doctor --platform antigravity \
+    --project "${project_root:?请设置实际业务项目根}"
+)
 ```
 
 `documented` 仅表示文档能力，`source_observed` 仅表示明确来源字节已观察，
@@ -174,9 +179,11 @@ AGY 只检查明确项目路径 `.agents/skills/grill-me/SKILL.md`，
 AGY 原生 `/grill-me` 与本包的自包含 requirements coverage check 要核对实际来源和
 适用合同，不能自动替换、改别名或省略本包的 Full 需求覆盖；也不扫描个人技能目录。
 
-显式导出当前授权范围的原生用量元数据后，复用只读适配器：
+显式导出当前授权范围的原生用量元数据后，从实际业务项目根运行安装态只读适配器，
+不是从中央管理工具源包根或 `.agent-workflow` 目录运行：
 
 ```bash
+cd "${project_root:?请设置实际业务项目根}"
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/native_usage.py \
   --host codex --input "${native_usage_input:?set explicit exported JSON or JSONL}"
 ```
@@ -198,9 +205,10 @@ ID 为 1..256 字符，无空白或控制字符，形状合法不证明身份真
 幂等，不能静默替换／清空；同 `(host, agent_id)` 不能占用两个活动任务。完成任务
 可保留历史引用，但不能据此自动授权新任务。写入仍走原 CAS、协作锁与全部原校验。
 
-PM 当前通过已暴露原生工具观察身份后，运行只读查询：
+PM 当前通过已暴露原生工具观察身份后，同样从实际业务项目根运行安装态只读查询：
 
 ```bash
+cd "${project_root:?请设置实际业务项目根}"
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py continuation \
   --input "${workflow_graph:?set actual graph path}" --task-id "${task_id:?set existing ID}" \
   --host codex --observed-state idle
