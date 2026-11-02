@@ -2209,6 +2209,19 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                                     target.parent / "references", dirs_exist_ok=True)
             self.assertEqual((), validate_pack_qa_review_policy(fixture))
 
+            # 验收正文搬入按需引用后，入口存在不能掩盖规则丢失；真实源校验必须拒绝
+            # 缺失分支，而不是只验证仍留在 SKILL.md 的方法顺序。内存保留原字节供同一
+            # 夹具恢复，不创建源码备份树，后续负向场景继续复用这一个夹具。
+            acceptance = fixture / "platforms/shared/skills/xy-qa-review/references/implementation-acceptance.md"
+            acceptance_bytes = acceptance.read_bytes()
+            acceptance.unlink()
+            try:
+                errors = validate_pack_qa_review_policy(fixture)
+                self.assertTrue(errors)
+                self.assertTrue(any("implementation-acceptance.md" in error for error in errors), errors)
+            finally:
+                acceptance.write_bytes(acceptance_bytes)
+
             host = fixture / "platforms/codex/references/pm-integration.md"
             original = host.read_text(encoding="utf-8")
             glossary = " -> ".join(QA_REVIEW_METHODS)

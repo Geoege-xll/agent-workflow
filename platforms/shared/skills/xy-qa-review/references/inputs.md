@@ -45,7 +45,7 @@
   review_method:
     selected: host-native-review | installed-code-review-skill | internal-xy-qa-procedure
     external_skill: null | <host-exposed installed code-review Skill identifier>
-    capability_evidence: []
+    capability_evidence: [<actual-capability-and-execution-evidence-reference>]
     fallback_reason: null | missing | launch-failed | timeout | malformed-output | unsafe-mutation | recursive-delegation
     scope_ref:
       repositories:
@@ -55,6 +55,17 @@
           diff_fingerprint: <64-lowercase-hex-sha256>
           changed_paths: []
   ```
+
+- Every `review_method` field shown above is required. `selected` accepts only the three listed
+  methods. `external_skill` is a non-empty host-exposed Skill identifier only for
+  `installed-code-review-skill`; it is `null` for native/internal methods. `capability_evidence`
+  is a non-empty list of unique non-empty evidence references for every selected method.
+  Native selection requires `fallback_reason: null`; either later method requires one listed
+  technical reason and evidence explaining the preceding methods' unavailability. An unpinned
+  response is `malformed-output`, not permission to shrink the request scope. Method findings/FAIL
+  never qualify as a fallback reason. The handoff validator checks these shapes and combinations;
+  PM/QA still inspect the referenced execution, permissions, model/effort and actual scope. Valid
+  strings do not prove that a command ran or that a capability was available.
 
 - an internal standards coverage record for PM validation. QA derives applicable rules independently
   from the index and actual changed paths; `task_pack_rule_ids` records what PM dispatched:

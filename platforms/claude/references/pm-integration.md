@@ -79,6 +79,38 @@ and capable, then `internal-xy-qa-procedure`, moving forward only on technical u
 Superpowers fallback is its installed `requesting-code-review/code-reviewer.md` prompt. Findings or
 `FAIL` never switch review method or reviewer.
 
+### Native review method
+
+Claude's bundled `/code-review` (also `/review`) supplies general code-review evidence. Confirm the
+current session exposes the genuine bundled entry: a same-named installed Skill can replace
+`/code-review`, while `/review` remains the bundled alias on supporting clients. Check exposed
+capability and effective disabling/override settings without scanning personal Skill directories.
+The managed GitHub Code Review service and `REVIEW.md` are separate; local review follows the
+project's `CLAUDE.md`. Do not enable cloud review or add another rules document for this method.
+
+Default interactive review runs as a background subagent, which does not fit QA's no-nested-Agent
+boundary. Where supported and already permitted, use the native non-interactive `-p` foreground
+entry with an explicit fixed review target, such as `/review <fixed-base>..<fixed-head>`, and wait
+for its actual result in the same reviewer's execution. Keep exactly one reviewer; do not alter
+global background/fork settings, weaken disallowed tools or spawn another reviewer to obtain it.
+Without a safe available foreground entry, record technical unavailability and use the next method.
+
+Use only an already trusted workspace and verified effective project/role configuration: `-p`
+skips workspace-trust dialogs and is not proof of trust or read-only permissions. Invalid settings
+may be ignored by the host, so establish that its actual tool/permission boundary excludes writes,
+external posting and Agent delegation before invocation. Do not use safe/restricted modes to drop
+project rules, or change settings to force a launch. Run report-only review without `--fix`,
+`--comment`, `--post` or `ultra`; a prompt requesting read-only behavior is not a permission boundary.
+
+Preserve the effective QA model and effort through supported current-host invocation options,
+including native override layers and review effort reuse; do not introduce a new default. Pin every
+root/nested repository and verify exact base/head, changed paths and dirty-diff fingerprints before
+and after review. The default current-branch target is insufficient when it omits committed request
+changes; reject output with a changed/unrepresentable scope. Put actual invocation, capability,
+permissions, scope and result references in `review_method`; static help is not runtime verification.
+The same QA verifies findings and supplements uncovered project acceptance, not another full generic
+review. Findings/FAIL still go to PM for bounded rework, never trigger a different method.
+
 ### Background execution and recovery
 
 Current clients start main-conversation subagents in the background by default. Wait for their actual

@@ -17,6 +17,12 @@ class QAHandoffValidationTest(unittest.TestCase):
             "audit_result": "PASS",
             "review_method": {
                 "selected": "internal-xy-qa-procedure",
+                "external_skill": None,
+                "capability_evidence": [
+                    "capability:native-review-unavailable",
+                    "capability:installed-review-skill-unavailable",
+                ],
+                "fallback_reason": "missing",
                 "scope_ref": {
                     "repositories": [
                         {
@@ -76,6 +82,92 @@ class QAHandoffValidationTest(unittest.TestCase):
         result = self.invoke(self.payload)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual({"status": "valid"}, json.loads(result.stdout))
+
+    def test_legal_review_methods_preserve_pass_and_fail_handoffs(self) -> None:
+        """三种方法都可交接；FAIL 表示真实发现，不需要为了换方法而伪造技术故障。"""
+
+        methods = (
+            {
+                "selected": "host-native-review",
+                "external_skill": None,
+                "capability_evidence": ["capability:read-only-native-review"],
+                "fallback_reason": None,
+            },
+            {
+                "selected": "installed-code-review-skill",
+                "external_skill": "requesting-code-review/code-reviewer.md",
+                "capability_evidence": [
+                    "capability:native-review-unavailable",
+                    "capability:installed-read-only-review-prompt",
+                ],
+                "fallback_reason": "missing",
+            },
+            {key: value for key, value in self.payload["review_method"].items() if key != "scope_ref"},
+        )
+        for method in methods:
+            for outcome in ("PASS", "FAIL"):
+                with self.subTest(method=method["selected"], outcome=outcome):
+                    payload = json.loads(json.dumps(self.payload))
+                    payload["audit_result"] = outcome
+                    payload["review_method"].update(method)
+                    result = self.invoke(payload)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_missing_review_method_fields_are_rejected(self) -> None:
+        """显式 null 与字段缺失不同：不能用未记录的方法证据接受历史不完整 PASS。"""
+
+        for field in ("selected", "external_skill", "capability_evidence", "fallback_reason", "scope_ref"):
+            with self.subTest(field=field):
+                payload = json.loads(json.dumps(self.payload))
+                del payload["review_method"][field]
+                result = self.invoke(payload)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("review_method", result.stderr)
+                self.assertIn(field, result.stderr)
+
+    def test_invalid_review_method_values_are_rejected(self) -> None:
+        """从真实 CLI 检查非法 JSON 类型、空证据及去空白后的重复引用，避免只测私有函数。"""
+
+        invalid_values = {
+            "selected": ("unsupported-review-method", "", None, [], True),
+            "capability_evidence": (None, {}, "capability:one", [], [""], [7], ["capability:one", " capability:one "]),
+            "fallback_reason": (None, "", "findings", "FAIL", [], True),
+            "external_skill": ("unexpected-skill", [], False),
+        }
+        for field, values in invalid_values.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    payload = json.loads(json.dumps(self.payload))
+                    payload["review_method"][field] = value
+                    result = self.invoke(payload)
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertIn("review_method." + field, result.stderr)
+
+    def test_method_skill_and_fallback_reason_must_agree(self) -> None:
+        """原生无回退、外部方法有技能、内部无外部技能，三者不能互相冒用身份。"""
+
+        cases = (
+            ("host-native-review", None, "missing"),
+            ("host-native-review", "requesting-code-review", None),
+            ("installed-code-review-skill", None, "missing"),
+            ("installed-code-review-skill", "", "missing"),
+            ("installed-code-review-skill", [], "missing"),
+            ("installed-code-review-skill", "requesting-code-review", None),
+            ("internal-xy-qa-procedure", "requesting-code-review", "missing"),
+        )
+        for selected, external_skill, fallback_reason in cases:
+            for outcome in ("PASS", "FAIL"):
+                with self.subTest(selected=selected, skill=external_skill, reason=fallback_reason, outcome=outcome):
+                    payload = json.loads(json.dumps(self.payload))
+                    payload["audit_result"] = outcome
+                    payload["review_method"].update(
+                        selected=selected, external_skill=external_skill, fallback_reason=fallback_reason
+                    )
+                    result = self.invoke(payload)
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertIn("review_method.", result.stderr)
 
     def test_missing_required_rule_blocks_pass(self) -> None:
         payload = json.loads(json.dumps(self.payload))

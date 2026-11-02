@@ -60,6 +60,10 @@ implementation acceptance still follows this loop and its full handoff requireme
    `internal-xy-qa-procedure`, moving forward only on technical unavailability. The allowed
    Superpowers option is only its installed `requesting-code-review/code-reviewer.md` prompt;
    Grill Me remains requirements-only. Findings or `FAIL` never switch review method or reviewer.
+   Native review supplies general code-review evidence; QA verifies findings and source/evidence,
+   then supplements uncovered project-acceptance constraints without another complete generic review.
+   Keep actual method capability, fixed scope, effective model/effort, read-only permissions and any
+   preceding-method technical unavailability in the existing `review_method` evidence.
    Do not wait for
    unrelated project work.
    QA receives the approved contract, applicable concrete page links and fingerprints, diff,

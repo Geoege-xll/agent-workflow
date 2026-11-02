@@ -369,7 +369,7 @@ qa_review_policy:
 review_method:
   selected: host-native-review | installed-code-review-skill | internal-xy-qa-procedure
   external_skill: null | <host-exposed installed code-review Skill identifier>
-  capability_evidence: []
+  capability_evidence: [<actual-capability-and-execution-evidence-reference>]
   fallback_reason: null | missing | launch-failed | timeout | malformed-output | unsafe-mutation | recursive-delegation
   scope_ref:
     repositories:
@@ -379,6 +379,14 @@ review_method:
         diff_fingerprint: <64-lowercase-hex-sha256>
         changed_paths: []
 ```
+
+All shown `review_method` fields are required. The handoff validator restricts `selected` to the
+three methods, requires non-empty unique `capability_evidence` references, and permits a non-empty
+`external_skill` only for the installed method; native/internal methods use `null`. Native selection
+has `fallback_reason: null`; installed/internal selection needs one listed technical reason and
+evidence explaining preceding methods' unavailability. Unpinned output is `malformed-output`;
+findings or FAIL never justify fallback. PM/QA still verify referenced actual capabilities,
+effective permissions/model/effort, fixed scope and execution: schema validity is not runtime proof.
 
 The implementation-acceptance handoff below does not apply to WORKFLOW's `Standalone read-only
 audit` branch. An audit-only conclusion creates no writer/BUILD_VERIFIED or implementation QA PASS;

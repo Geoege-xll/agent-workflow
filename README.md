@@ -523,7 +523,7 @@ platforms/shared/skills/          # authoritative one shared source
   xy-plan/                        # self-contained exact draft planning + task graph
   xy-project-memory/              # optional agentmemory + docs fallback
   xy-build-verify/                # implementer evidence
-  xy-qa-review/                   # independent QA base
+  xy-qa-review/                   # native-review-first project acceptance
   xy-prototype-verify/            # UI prototype and approval evidence
 
 .agents/skills/xy-*/SKILL.md      # Codex and Antigravity generated copies
@@ -588,6 +588,12 @@ internal and useful recovery facts stay in the existing plan, not a second workt
   `xy-qa-review`.
 - Additional QA specialist Skills are matched on demand from their descriptions. There is
   no local-Skill inventory scan or extra selection phase.
+- QA uses the host's native code-review capability first, then one proven installed review Skill,
+  then the internal procedure only on technical unavailability. The same reviewer verifies native
+  findings and supplements project acceptance; it does not repeat a complete generic review.
+  `review_method` binds actual capability, permissions, model/effort, fixed scope and fallback
+  evidence. Its validation does not prove execution by itself. Current-host invocation constraints
+  live in `platforms/<host>/references/pm-integration.md`; UI and design checks load only when applicable.
 - A missing `ui-ux-pro-max` blocks UI design. Optional QA specialist gaps remain explicit;
   missing task-declared required Skills block QA PASS.
 - `setup_claude.sh` merges only signed assist Hook entries in `.claude/settings.json`.

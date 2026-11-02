@@ -29,5 +29,31 @@
   workspace and still-valid task authority; copied conversation context does not authorize another
   writer or repeat completed work. Do not add a second PostCompact reminder for the same recovery.
 
+## Native review method
+
+Use an exposed `/review` capability or `codex review` only when the unique QA reviewer can invoke
+it without nested Agent delegation. Merely having a CLI binary or an installed third-party review
+Skill does not prove native method availability. Resolve the selected project's effective QA
+model/effort and native override layers; preserve them through supported invocation options rather
+than introducing review-specific defaults or silently using another CLI profile.
+
+For a CLI whose current help confirms the options, read-only invocation has the form
+`codex --sandbox read-only --ask-for-approval never review <scope-options>`.
+This invocation must remain inside existing host/project permissions and trust; do not widen them
+to make review launch. `--uncommitted` covers staged, unstaged and untracked changes; `--commit`
+covers that commit's introduced change; `--base` compares against the selected base branch's
+merge-base semantics. Select only an option whose actual diff equals the frozen request scope.
+A base argument alone is not an arbitrary pinned base/head pair, and a clean worktree does not
+remove already committed request changes. Do not assume optional scope flags combine with custom
+instructions: use the installed version's supported syntax and reject scope mismatches.
+
+Bind root/nested-repository base/head, complete changed paths and dirty-diff fingerprints before and
+after review. Discard output if inputs changed, a nested repository was omitted or the native range
+cannot represent the request. Preserve native findings as general review evidence; the same QA
+verifies findings and adds only uncovered project-acceptance checks. Record actual capability,
+effective invocation, scope and result references in the existing `review_method`. Help output is
+capability discovery, never proof of a completed model review. If the current tool surface cannot
+invoke native review safely, record the technical reason and continue the existing method order.
+
 Regenerate with `bash .agent-workflow/setup_codex.sh`; validate with
 `bash .agent-workflow/setup_codex.sh --check`.

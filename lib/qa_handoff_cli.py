@@ -15,13 +15,22 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 try:
+    from .qa_review_policy import METHODS
     from .standard_paths import canonical_standard_path, standard_domain
 except ImportError:
+    from qa_review_policy import METHODS
     from standard_paths import canonical_standard_path, standard_domain
 
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 STABLE_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
+REVIEW_METHOD_FIELDS = {
+    "selected", "external_skill", "capability_evidence", "fallback_reason", "scope_ref"
+}
+REVIEW_FALLBACK_REASONS = {
+    "missing", "launch-failed", "timeout", "malformed-output", "unsafe-mutation",
+    "recursive-delegation",
+}
 REPOSITORY_FIELDS = {
     "path",
     "base_revision",
@@ -144,10 +153,55 @@ def _stable_ids(value: Any, label: str, *, allow_empty: bool = True) -> tuple[st
     return values
 
 
+def _validate_review_method(review_method: dict[str, Any]) -> None:
+    """验证唯一 QA 采用的方法及技术回退合同，不替 QA 宣布能力或执行成功。
+
+    枚举复用源包策略，避免文档规定原生优先、交接却接受任意非空方法名。
+    能力引用必须显式存在，但这里只校验引用的结构与方法间一致性；PM／QA 仍须
+    读取真实能力及执行证据，并确认非原生方法的证据解释了前序方法为何技术不可用。
+    """
+
+    missing = REVIEW_METHOD_FIELDS - set(review_method)
+    if missing:
+        raise QAHandoffError(
+            "review_method is missing field(s): " + ", ".join(sorted(missing))
+        )
+    selected = _nonempty_string(review_method["selected"], "review_method.selected")
+    if selected not in METHODS:
+        raise QAHandoffError("review_method.selected must be a supported QA review method")
+    _string_list(
+        review_method["capability_evidence"], "review_method.capability_evidence",
+        allow_empty=False,
+    )
+
+    external_skill = review_method["external_skill"]
+    if selected == "installed-code-review-skill":
+        _nonempty_string(external_skill, "review_method.external_skill")
+    elif external_skill is not None:
+        raise QAHandoffError(
+            "review_method.external_skill must be null unless using installed-code-review-skill"
+        )
+
+    # 缺字段已在上面拒绝：显式 null 只用于首选原生方法，不能掩盖未记录的回退。
+    # 发现缺陷／FAIL 是审查结果，不属于技术不可用原因；FAIL 交接也遵守同一方法合同。
+    fallback_reason = review_method["fallback_reason"]
+    if selected == "host-native-review":
+        if fallback_reason is not None:
+            raise QAHandoffError(
+                "review_method.fallback_reason must be null for host-native-review"
+            )
+    elif (
+        not isinstance(fallback_reason, str)
+        or fallback_reason not in REVIEW_FALLBACK_REASONS
+    ):
+        raise QAHandoffError(
+            "review_method.fallback_reason must name technical unavailability for a fallback method"
+        )
+
+
 def _validate_scope(review_method: dict[str, Any]) -> tuple[str, ...]:
     """冻结每个仓库自己的 base/head 与 diff 指纹，避免子仓库已提交改动从 QA 消失。"""
 
-    _nonempty_string(review_method.get("selected"), "review_method.selected")
     scope_ref = _object(review_method.get("scope_ref"), "review_method.scope_ref")
     repositories = _array(
         scope_ref.get("repositories"), "review_method.scope_ref.repositories"
@@ -442,6 +496,7 @@ def validate_qa_handoff(payload: dict[str, Any]) -> None:
     if audit_result not in {"PASS", "FAIL"}:
         raise QAHandoffError("audit_result must be PASS or FAIL")
     review_method = _object(payload.get("review_method"), "review_method")
+    _validate_review_method(review_method)
     changed_paths = _validate_scope(review_method)
     if "engineering_policy_coverage" in payload:
         raise QAHandoffError(

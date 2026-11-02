@@ -1,3 +1,8 @@
+# UI and design acceptance
+
+Read this branch only for production UI or design-standard work. For `standards_only`, use the
+design-standard checks below; do not activate production-page/prototype checks without that scope.
+
 For `UI-Conformance`:
 
 1. Require `surface_kind: production_ui`, `qa_scope: request`, `route: UI-Conformance`,
@@ -71,3 +76,23 @@ waive a gate or request prototype synchronization merely to restore an obsolete 
 4. Missing prototype work alone is not a finding. A scope expansion, stale requirement fingerprint,
    invented decision, production defect, accessibility failure, or standards violation is FAIL.
    Otherwise QA may return PASS, permitting controlled-document projection and PM commit assessment.
+
+## Design-standard and artifact boundaries
+
+For design-standard establishment, incremental changes or visual replacement, follow installed
+`xy-workflow/references/design-standards.md`. Compare the authorized rule delta with its prior basis
+and approved scope, not just newly edited rules. Verify replacement boundaries, preserved nonvisual
+constraints, stable rule IDs, index links and current consumer fingerprints. Adopted rules are not
+proof of completed migration. For `standards_only`, audit normative text and applicable constraints
+without demanding HTML, prototype verification or browser evidence. With production changes, audit
+against the adopted scope-specific rules; self-authored weakening cannot convert a defect into PASS.
+
+Material divergence from an approved required-prototype page or frozen UI-Conformance authority is
+FAIL. Only PM may dispatch rework, reopen the scoped visual gate or upgrade the design-change route.
+Prototype review MUST NOT invoke Computer Use or browser automation. Only when risk-based testing of
+the real production implementation requires browser inspection may QA view a rendered frame
+ephemerally in memory. QA must not persist, save, write, attach, present or use that frame as approval evidence;
+there is no screenshot artifact on disk.
+
+The QA workflow MUST NOT generate, persist, attach, or present screenshots. It creates no companion
+QA, baseline, mapping or design Markdown; no Manifest, visual-capture directory or other design metadata.

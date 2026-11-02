@@ -1298,7 +1298,17 @@ installed `requesting-code-review/code-reviewer.md` prompt is one allowed extern
 not a second reviewer or permission to activate any other Superpowers workflow. Grill Me remains a
 requirements interview and is never treated as a code-review method without authoritative support.
 `internal-xy-qa-procedure` means the same reviewer applies this pack's QA procedure with no external
-review Skill.
+review Skill. Native review supplies general code-review evidence; QA independently verifies its
+findings, source and evidence, then supplements uncovered project-acceptance constraints. Do not
+start a second complete generic review merely because `xy-qa-review` is active. No findings does
+not imply QA PASS. Preserve the selected project's effective model/effort, permissions and trust.
+Resolve safe native invocation only through the current host's integration reference.
+
+The existing `review_method` records selected method, concrete external Skill when applicable,
+non-empty unique capability/execution evidence references and the actual fallback reason. Native
+selection has no fallback reason; either later method explains preceding technical unavailability.
+The handoff validator rejects unsupported methods, missing evidence and contradictory fields;
+valid references still require PM/QA inspection of actual execution, fixed scope and permissions.
 
 Moving to the next method is allowed only when the current method is missing, cannot launch
 read-only, times out, mutates the workspace, returns malformed output, cannot pin the requested
