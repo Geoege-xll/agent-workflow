@@ -128,16 +128,12 @@ missing existing-feature fact, durable decision, engineering or design constrain
 background, or historical lesson. When available task information is sufficient, do not force
 document retrieval or agentmemory start retrieval.
 
-Reuse task-relevant material already fully read, unchanged and still available in the same Agent's
-context. After compaction, handoff or a file change, recover the actual missing/changed context,
-not the entire document tree. This is not a read-once rule: every worker and QA independently reads
-its applicable standards, and explicit host/Skill reread requirements still apply.
-Read selected Skills and their required instructions completely. For long instruction files, use
-separate reads or contiguous pages through EOF, with output sized to avoid truncation; do not mix
-several long documents into one response. If a read is truncated, recover every missing portion
-before relying on it; a partial Skill read does not satisfy activation. Ordinary project documents
-remain targeted. Deterministic validation may still read complete bytes and return fingerprints or
-concise results; this is not the same as loading full file bodies into model context.
+每位 Agent 独立满足当前任务包、必需 Skill／指令及适用规范的完整读取。同一实例上下文
+中已完整可用且版本未变的内容直接复用，正文与同版本文件切换传输方式不要求再读一遍。
+缺失、截断、压缩或实际变化时恢复受影响内容；完整读取、长文分页与版本核对的详细边界
+统一见 `xy-workflow/references/runtime-records.md#完整读取必需长文`，保留显式宿主／Skill
+重读要求。普通业务资料仍按相关标题／查询读取，不因必需规范完整读取而预载全树。
+机器完整字节核验可只返回指纹或简要结果；它不能代替模型读取必需正文。
 
 1. Read `project.yaml` when the workflow needs its paths, limits, or routing configuration. Treat
    every `docs.*` value as a discoverable index, not a command to open that document body.
@@ -292,7 +288,8 @@ commit_decision:
 - **任何新实现者或 QA 都不得继承、复制完整 PM 或兄弟会话，不使用复制父历史的 fork。**
   只交接当前自包含任务包：目标与精确范围、当前代码／工作区依据、适用规范及读取入口、
   可信授权来源、验收与必要证据、未决事项。Full 的本任务包可携带当前请求审查所需的范围
-  与证据，不携带兄弟完整任务、会话或无关状态。接收者必须完整读取当前包及必需规范；
+  与证据，不携带兄弟完整任务、会话或无关状态。接收者按上述读取复用规则独立完整读取
+  当前包及必需规范；
   摘要、字段声明、指纹或其他 Agent 已读不证明自己已读或宿主实际隔离。
 - `agent_ref` 只接受 `{host, agent_id}`，PM 核对真实派发结果后首次绑定，不可覆盖或清空。
   原生 ID 不是存活、角色、批准或完成证明；同名别名的新任务仍需新 ID 与新上下文。
@@ -388,6 +385,8 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   task-scoped workflow opt-out and save/no-save requests prevail. Saving Light never invokes Full Skills.
   For persistence, visual changes, scope replacement or resumption, read
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
+  当前恢复／交接简报原地替换为剩余工作与下一步，必要完成基线链接现有计划、功能与证据；
+  不逐批累加完成细节，原始批准与唯一历史／完整日志按该生命周期先保全再收敛。
   Replaced or withdrawn discussion/proposal material follows that lifecycle's current-input cutover
   and superseded-document handling too; discussion alone does not require a saved document or plan.
 - After Full coverage is complete, activate the self-contained `xy-plan` Skill. It creates a
@@ -1060,6 +1059,8 @@ configured maximum is currently available.
 Every implementer in this Full loop must complete `$xy-build-verify` before delivery.
 PM、实现者和 QA 共用已安装 `xy-build-verify/references/verification-scope.md` 的范围与
 停止规则：选择最小充分验证，全量或重跑须有实际依据，有效证据可以复用。
+补缺按实际测试节点／子场景选择，负控或修复后失败分支不使其他有效覆盖自动失效；
+混合命令的最小入口、不可拆原因及预期红边界均按该策略核对，不新增固定测试清单。
 沿原 Task Pack 的 Validation、input/output 合同与 acceptance_evidence 说明三个判断：
 新增测试补哪项真实覆盖缺口，再次执行增加哪项覆盖、处理哪项具体风险或失效证据，
 继续失败返工有什么新定位、可检验假设或有效修复进展及预期证据。无进展提前停止当前

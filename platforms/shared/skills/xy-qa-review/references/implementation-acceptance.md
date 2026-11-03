@@ -20,6 +20,8 @@ to the changed target. Proposed commands, stale logs, summaries and unavailable 
 not current success. New execution needs a specific gap, failure, changed input or unresolved risk.
 按该策略的三个信息增量判断，核对新增测试是否补真实合同缺口、再次执行是否取得新覆盖
 或处理具体风险／失效证据，以及继续失败返工是否有新定位、可检验假设或有效修复进展。
+按实际测试节点／子场景核对覆盖：补负控或修复失败分支时复用其余有效分支，混合入口
+不可拆须有具体说明；预期红与夹具／执行失败的区分沿用该策略，不要求整组再跑一次。
 不能用测试文件数、重复绿色结果或一次字节核验代替真实覆盖与证据有效性；需要补测试
 或修改实现时交 PM 派回原作者，QA 保持只读。
 
@@ -34,6 +36,8 @@ integration, packaging, signing, notarization, updater and release evidence.
 临时物。核对必需完整证据有可读持久引用，或已明确精确保留的必要文件；摘要不足以替代。
 沿本需求相关当前计划、功能与规范引用检查唯一当前权威及受影响链接，保护原始批准、
 历史计划与唯一证据，不按文件数、长度或目录位置判定重复，不新增全仓扫描或报告。
+当前恢复／交接简报是否原地反映剩余工作、并以可恢复引用保留必要完成基线，按
+`xy-workflow/references/plan-lifecycle.md` 核对，不以累加完成批次代替当前状态。
 清理执行仍由 PM 按现有收口合同完成，QA 不删除资源，也不为收口再审未变范围。
 
 ## Independent standards coverage

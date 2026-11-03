@@ -411,7 +411,8 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
 [runtime-records.md](platforms/shared/skills/xy-workflow/references/runtime-records.md)。
 查询仍只读，更新不自动派发、批准或判断完成；构建成功、可运行和独立 QA 要求不变。
 宿主可读导出的完整 Task Pack 文件时，可交接确切文件引用、SHA 与简短变化摘要，接收方
-必须完整读取；宿主不可读时仍发送完整包，不能仅发差量。
+独立完整读取当前包；同一实例已读完同版本正文时直接复用，文件只是另一种传输方式。
+宿主不可读时仍发送完整包，不能仅发差量。
 每位Writer携带覆盖拥有路径的当前内置来源、适用规则ID及项目特有规范，索引存在时绑定真实SHA。
 无项目叶且索引缺失时保留配置路径/null指纹；QA按当前内置来源、存在的项目索引及实际差异独立判定； `qa_handoff_cli.py validate --input RESULT --task-pack CURRENT_QA_PACK` prevents PASS when the Task Pack omitted a rule, fixed diff
 scope is incomplete, or changed-path/rule evidence is missing. These machine
@@ -573,6 +574,8 @@ only for a concrete change, failure, evidence gap, unresolved concern or explici
 按各自类型验证。验证策略区分局部修改、受影响模块和必要的全量回归；必需检查通过且证据仍有效后
 停止，不在 Writer、QA、PM 或提交环节分别重复测试。保留强制 CI／Hook、独立 QA 与
 worktree 集成验证；最终只汇报实际覆盖范围、结果和相关限制，不宣称未运行的全量通过。
+补负控或修复失败分支时按已有最小测试节点／子场景执行，复用其他有效分支；混合入口
+不可拆须说明原因，预期红不能掩盖夹具／执行失败。详细判断沿用上述验证策略。
 Normal feedback stays concise; when a Skill causes a pause or extra confirmation, identify its exact
 rule and practical effect rather than hiding the reason or dumping internal workflow records.
 
@@ -654,7 +657,8 @@ worktree 流程以及 Codex、Antigravity 的入口均不变。
 带读取条件的流程索引。详细共用流程复用现有 `xy-workflow` 与其 references；
 各平台 PM 细则位于 `.agent-workflow/platforms/<host>/references/pm-integration.md`，
 当前PM首次编排时只读自己的平台细则；Light只读适用分支，不预读整套Full流程。
-同一上下文已完整读取且未改变的内容可复用；上下文缺失或规则变更时恢复所需部分。
+同一实例上下文已完整读取、版本未变且仍可用的任务包／Skill／规范直接复用；缺失、
+截断、压缩或变化时只恢复受影响内容，保留显式重读要求。完整边界见下述长文读取说明。
 
 每位 Agent 仍须独立完整读取其必需 Skill、指令及适用规范。长文应分开读取，使用连续
 页直到 EOF，避免把多个长返回挤进一个被截断的工具结果。可选只读工具
@@ -782,6 +786,10 @@ instead of installing a compatibility bridge or retaining dual truth.
 
 Plans and notes are lazy: setup preserves existing content but does not create empty placeholder
 trees or plans. `templates/docs/PLAN.md` is an optional writing aid, not a mandatory form for small work.
+当前恢复／交接简报按[计划生命周期](platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)
+原地替换为当前状态与下一步，不逐批累加完成明细；必要基线引用现有计划、功能和完整证据。
+先确认原始批准、完整日志与唯一历史可恢复并修复引用，无法安全移交则保留原文及历史边界；
+不新增归档树、简报副本或硬长度门槛。
 
 项目特有叶仍直接位于 `docs.standards_root`：设计叶保留 DESIGN_ 前缀及 Domain: design，
 工程叶声明 engineering；通用正文从三份精确内置来源读取，内置路径不扩大项目写权限。

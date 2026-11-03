@@ -62,15 +62,11 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
   Hooks do not disable this Skill. Continue related work using current context and valid evidence;
   do not restart an earlier completed task just because this Skill or a Hook is invoked again.
 
-- Reuse fully read, unchanged material still available in this Agent's context. Restore only
-  missing or changed context; another Agent's reading does not replace your required standards audit.
-  Honor explicit host/Skill reread requirements. Read selected Skills and their required instructions
-  completely, using separate reads or contiguous pages through EOF for long files. Avoid batching
-  long documents into a truncated response; recover every missing portion before relying on it.
-  Ordinary project documents remain targeted. 必需长文可选用
-  [记录工具](references/runtime-records.md#完整读取必需长文)中的单文件分页器，返回有界正文、
-  连续位置和文件 SHA；这不是必跑门禁。机器侧完整字节核验／指纹检查无需返回全文，
-  也不能证明当前 Agent 已读取必需 Skill 或规范。
+- 每位 Agent 独立完整读取当前任务包、必需 Skill／指令及适用规范；同一实例中已完整
+  可用且版本未变的正文直接复用，不因同版本包改用文件传输而重读。缺失、截断、压缩
+  或变化时恢复受影响内容，显式宿主／Skill 重读要求仍保留。详细复用边界及可选分页器见
+  [完整读取必需长文](references/runtime-records.md#完整读取必需长文)；不新增读取账本或
+  必跑门禁。普通业务资料仍按需；机器字节核验／指纹不代替当前 Agent 读取必需正文。
 - Resolve existing paths from current context, configured directory links or a scoped file listing;
   do not invent filenames. Choose filters appropriate to the requested resource; no match proves
   absence only within those filters, not a task failure. Before affected dispatch, assess whether

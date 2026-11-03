@@ -23,8 +23,11 @@ and applicable verification. A Light recovery note needs only the information ne
 
 ## Current progress and next step
 
-<Verified work and evidence references; implemented-but-unverified work; remaining or affected rework;
-blocking decisions and the next safe step. Update on meaningful transitions, not every tool call.>
+<已验证成果及证据引用、已实现但未验证内容、剩余工作／受影响返工、阻塞决定和下一步。
+在有意义的状态变化时原地替换当前恢复状态，不逐批追加完成明细；只保留必要完成基线，
+链接现有计划／功能／证据详情。收敛唯一历史、批准或完整日志前先确认可恢复并修复引用；
+否则保留原文并明确历史边界。详细边界沿用 xy-workflow/references/plan-lifecycle.md，
+不新建简报副本或归档树。>
 
 ## Current design and result references
 

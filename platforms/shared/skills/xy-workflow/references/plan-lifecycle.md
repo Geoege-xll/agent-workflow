@@ -36,6 +36,17 @@ unverified work; remaining work/blockers and next safe action. Reference applica
 instead of copying them. Persist only information needed to restore the approved work, not full logs,
 conversation transcripts, every command or another serialized DAG.
 
+当前计划中的恢复状态和已有启动／交接简报都原地更新：保留当前批准范围、必要已完成
+基线、未验证内容、剩余工作、阻塞及下一步，替换已被新事实取代的状态；不要每完成一批
+就追加一段完成明细，使启动简报成为累计历史。必要完成基线可简述并链接现有计划、
+功能真相与完整证据，读者无需遍历旧批次才能确认下一步；不另建简报副本或归档树，
+也不设硬行数／token 门槛。计划仍由 PM 独占维护，简报不成为第二份任务状态或功能规范。
+
+收敛前先确认完整日志、原始批准及唯一历史能从现有证据落点或真实版本历史恢复，并
+修复受影响引用；摘要不能替代完整证据。Git 不保护未提交／未跟踪内容或非 Git 原始资料。
+不能安全移交或确认可恢复时保留原文，明确标出其历史边界与当前恢复入口，不删除用户
+文档或唯一历史，也不为整理新增 QA 报告、账本或确认阶段。
+
 Record the requirement confirmation source and scope, prototype choice, and any still-pending UI
 decisions. When a concrete prototype is approved, retain its page/scope, approval source and dependency
 fingerprint in this same plan; do not create a companion approval record. If approval evidence is not
