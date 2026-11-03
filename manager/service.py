@@ -266,6 +266,8 @@ def role_settings(project: Path, host: str, role: str) -> dict[str, str]:
 
 
 def validate_selection(host: str, value: dict, catalog: Catalog) -> dict:
+    # 先由宿主合同校验标准值（其中不含 ultra）。只有目录给出明确能力时才收窄；
+    # 空 efforts 表示未知，允许独立设置宿主档位，但不会据此补写模型能力证据。
     value = role_models.validate(host, value)
     model = next((row for row in catalog.models if row.id == value["model"]), None)
     if model is None:

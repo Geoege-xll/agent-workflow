@@ -10,11 +10,12 @@ import subprocess
 import sys
 
 from .catalog import clean, discover
-from . import service
+from . import release, service
 
 
 def parser() -> argparse.ArgumentParser:
     root=argparse.ArgumentParser(prog="awf-cli",description="工作流项目与角色模型管理，不改变原有编排。")
+    root.add_argument("--version",action="store_true",help="只读显示构建版本或源码未打包标识，以及实际中央源根")
     root.add_argument("--state-dir",help="独立管理状态目录；默认 ~/.config/agent-workflow")
     root.add_argument("--scan-root",default=str(Path.home()/"Desktop"),help="只扫描该目录的直接子项目")
     commands=root.add_subparsers(dest="command")
@@ -54,9 +55,12 @@ def main(argv: list[str] | None = None) -> int:
     caller=os.environ.pop("AGENT_WORKFLOW_CALLER_DIR",None)
     if caller:os.chdir(caller)
     args=parser().parse_args(argv)
-    state=service.state_root(args.state_dir)
-    scan=Path(args.scan_root).expanduser()
     try:
+        # 版本诊断不启动 curses、不读取宿主配置，也不创建管理状态；坏元数据仍走 CLI 错误出口。
+        if args.version:
+            print(release.describe());return 0
+        state=service.state_root(args.state_dir)
+        scan=Path(args.scan_root).expanduser()
         if args.command in {None,"tui"}:
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 raise ValueError("TUI 需要交互终端。可使用 --help、projects list 或 models 等无交互命令。")

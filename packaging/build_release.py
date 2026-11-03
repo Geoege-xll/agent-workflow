@@ -7,6 +7,7 @@ import argparse
 import gzip
 import hashlib
 import io
+import json
 from pathlib import Path
 import re
 import sys
@@ -21,6 +22,7 @@ RELEASE_FILES = (
 RELEASE_DIRECTORIES = ("manager", "lib", "product", "roles", "platforms", "scripts", "templates")
 OPTIONAL_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
 EXCLUDED = {".git", ".sync-backups", "__pycache__", ".DS_Store", ".pytest_cache"}
+RELEASE_METADATA = "manager/release.json"
 
 
 def payload(source: Path) -> list[Path]:
@@ -37,6 +39,9 @@ def payload(source: Path) -> list[Path]:
         children = (entry, *sorted(entry.rglob("*"))) if entry.is_dir() else (entry,)
         for path in children:
             relative = path.relative_to(source)
+            # 元数据只能在本次归档生成，拒绝源码遗留标记，防止旧版本被意外带进新发行包。
+            if relative.as_posix() == RELEASE_METADATA:
+                raise ValueError(f"Generated release metadata must not exist in source: {path}")
             if EXCLUDED.intersection(relative.parts) or path.suffix in {".pyc", ".pyo"}:
                 continue
             if path.is_symlink() or not (path.is_file() or path.is_dir()):
@@ -66,6 +71,13 @@ def archive_bytes(source: Path, version: str) -> bytes:
                     info.mode = 0o755 if path.stat().st_mode & 0o111 else 0o644
                     info.size = len(data)
                     archive.addfile(info, io.BytesIO(data))
+            # 仅记录调用者明确构建的版本，不写入时间、绝对源码路径或未核实的发布状态。
+            # 固定字节与权限保留可重复构建；manager 内的普通文件会随 Formula 安装进入 libexec。
+            metadata = json.dumps({"schema_version": 1, "version": version}, sort_keys=True).encode("utf-8") + b"\n"
+            info = tarfile.TarInfo(f"{prefix}/{RELEASE_METADATA}")
+            info.mode = 0o644
+            info.size = len(metadata)
+            archive.addfile(info, io.BytesIO(metadata))
     return stream.getvalue()
 
 

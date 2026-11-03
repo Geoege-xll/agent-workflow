@@ -1,6 +1,7 @@
 # Agent Workflow Pack 2.0
 
-面向项目的原生多Agent工作流，当前发布合同为 **2.0.1**。仅Light／Full及schema_version:2，
+面向项目的原生多Agent工作流，当前公开发行版为 **2.0.1**，本轮源码准备 **2.0.2** 离线候选。
+候选产物尚未发布或更新公共 Tap，不会自动替换已安装的旧入口。仅Light／Full及schema_version:2，
 不兼容旧任务／交接格式；用户文件、已有成果和必要证据保护继续有效。
 Keep this installer folder anywhere and select a project when launching it — works with
 **Claude Code / Codex / Antigravity**.
@@ -28,7 +29,7 @@ npx @geoege-xll/agent-workflow init
 
 ### Homebrew 安装
 
-完成[首次发行及 Tap 发布](docs/homebrew.md#首次发布)后，可通过 Homebrew 安装：
+可通过公共 Tap 安装其当前声明的版本；新版本需完成[发行及 Tap 更新](docs/homebrew.md#首次发布)：
 
 ```bash
 brew install Geoege-xll/tap/awf-cli
@@ -41,6 +42,12 @@ brew upgrade Geoege-xll/tap/awf-cli
 Homebrew 管理完整程序及 Python 依赖，不需要再注册 `--install-cli`，不修改 PATH 或用户
 shell 配置。现有同名用户命令不会被移除；请先用 `type -a awf-cli` 核对来源。
 仅创建 GitHub 源码仓库还不能安装，发布包、Formula 生成及验收见 [Homebrew 说明](docs/homebrew.md)。
+
+新版入口支持只读来源诊断：`awf-cli --version` 显示构建版本和实际中央源根，未打包源码显示
+`源码未打包`，不会根据 README 或目录名宣称已发布版本。可同时运行
+`bash /path/to/agent_workflow/workflow.sh --version` 与 `type -a awf-cli` 核对是否仍启动旧程序。
+旧版入口若不认识 `--version`，请按 [Homebrew 说明](docs/homebrew.md) 检查链接和已安装版本；
+更新源码不会改变既有二进制、Cellar 载荷或公共 Tap。
 
 ### 源包直接安装
 
@@ -112,10 +119,15 @@ CLI 的 `projects add` 仍只登记；自动安装通过 TUI 添加入口或 `in
   默认 `models_cache.json` 的真实身份为不透明摘要；不读取凭据猜归属，未确认时只提供继承与当前已配置模型，
   缓存标为未确认来源，不将其中模型及能力当成当前提供方的可用性证据。
   不读取废弃的 `profile` / `[profiles.*]`；独立 profile 会话需明确目录来源，不自动推断。
-  推理级别按目录能力提供，不启用涉及自动委派的 `ultra`。
+  已有明确推理能力时按目录限制档位，不启用涉及自动委派的 `ultra`。
 - Claude Code 读取当前模型、别名映射及代理工具写入的 `modelPicker.options`。
-  缓存中的 `modelSettings` 仅为偏好，不能推断推理能力；第一版未知时保留继承。
+  缓存中的 `modelSettings` 仅为偏好，不能推断模型推理能力。
 - Antigravity 静态角色使用官方 `inherit / flash / pro` 档位，不猜测内部模型 ID。
+
+模型与推理档位可独立修改。模型能力未知时，Codex 可写入 `none / minimal / low / medium /
+high / xhigh / max`，Claude Code 可写入 `low / medium / high / xhigh / max`，也可选择继承。
+这些是宿主允许的配置值，不代表所选模型已支持、模型 API 调用成功或已经通过服务验收。
+损坏或嵌套过深的来源显示读取失败；CLI 只返回安全投影，TUI 保留其他项目和宿主的未应用草稿。
 
 角色模型偏好写入现有 `.agent-workflow/project.yaml` 的 `role_models` 区块，升级会保留。
 模型应用只更新该区块与选中角色的模型字段，保留角色正文、工具权限、Hooks 和编排规则；

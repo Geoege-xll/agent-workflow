@@ -1,12 +1,13 @@
 # Homebrew 安装与发布
 
-源码仓库：<https://github.com/Geoege-xll/agent-workflow>。建议独立 Tap 仓库为
-`Geoege-xll/homebrew-tap`，对应 Formula 名称 `Geoege-xll/tap/awf-cli`。
-只有源码仓库、没有公开发行包和 Tap 时，以下安装命令还不能使用。
+源码仓库：<https://github.com/Geoege-xll/agent-workflow>，公开 Tap 为
+`Geoege-xll/homebrew-tap`，Formula 名称为 `Geoege-xll/tap/awf-cli`。
+本轮审计时 GitHub 正式 latest 为 `2.0.1`，公共 Tap 与被审计本机仍为 `0.1.0`。
+本次只离线准备 `2.0.2` 的归档、校验文件与 Formula，尚未发布或更新 Tap；本地源码修复不更新旧入口。
 
 ## 用户安装
 
-首次发布及 Tap 推送完成后：
+按公共 Tap 当前声明的版本安装或升级：
 
 ```bash
 brew install Geoege-xll/tap/awf-cli
@@ -27,12 +28,22 @@ Homebrew 将完整程序装入当前版本的 `libexec`，并在 Homebrew 的 `b
 
 ```bash
 type -a awf-cli
-"$(brew --prefix)/bin/awf-cli" --help
+"$(brew --prefix)/bin/awf-cli" --version
+brew list --versions awf-cli
 ```
 
 如果旧的 `~/.local/bin/awf-cli` 优先，核对后自行决定是否移除旧链接；不要自动覆盖，
 也不要使用 `brew link --overwrite` 解决来源不明的同名入口。本方案不安装或调整
 Homebrew 自身；若 Homebrew 的 `bin` 不在现有 PATH，使用以上完整路径启动。
+
+新版 `--version` 不启动 TUI、不读取模型来源，也不创建管理状态。源码入口显示
+`awf-cli 源码未打包`；实际构建的发行包显示其生成元数据中的版本，并显示物理载荷根。
+版本元数据仅写入归档中的 `manager/release.json`，随 Formula 复制到 `libexec`，源码不保留发行标记。
+源码、归档与 Cellar 的中央源根可以据此直接比较。
+
+旧 `0.1.0` 入口可能不认识 `--version`，该错误不表示正在运行新版；先用 `type -a awf-cli`、
+`readlink` 和 `brew list --versions awf-cli` 核对入口，再用明确的源码脚本路径运行新版诊断。
+`brew upgrade` 只采用 Tap 已声明的版本；GitHub 上另有较新的 Release 或本地候选，不会让旧 Formula 自动升级。
 
 `brew upgrade` 只升级中央程序，不自动安装、升级或同步任何项目。项目升级仍由现有
 TUI 或显式 `install --apply` 完成。`brew uninstall awf-cli` 不删除项目内工作流、
@@ -40,17 +51,17 @@ TUI 或显式 `install --apply` 完成。`brew uninstall awf-cli` 不删除项�
 
 ## 本地构建（不联网、不安装、不发布）
 
-在源码根目录使用现有 Python 选择器，首次版本示例为 `0.1.0`：
+在源码根目录使用现有 Python 选择器，当前离线候选版本为 `2.0.2`：
 
 ```bash
 bash lib/python_runtime.sh -I -B -m unittest discover -s tests -p test_homebrew_packaging.py -v
-bash lib/python_runtime.sh -I -B packaging/build_release.py 0.1.0
+bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2
 ```
 
 生成：
 
-- `dist/agent-workflow-0.1.0.tar.gz`
-- `dist/agent-workflow-0.1.0.tar.gz.sha256`
+- `dist/agent-workflow-2.0.2.tar.gz`
+- `dist/agent-workflow-2.0.2.tar.gz.sha256`
 - `dist/Formula/awf-cli.rb`
 
 发行包使用运行所需文件/目录白名单，不包含 `.sync-backups`、Git 元数据、发行输出、
@@ -63,12 +74,13 @@ bash lib/python_runtime.sh -I -B packaging/build_release.py 0.1.0
 已有输出一律保留，重建请用新的空目录：
 
 ```bash
-bash lib/python_runtime.sh -I -B packaging/build_release.py 0.1.0 --output-dir /path/to/new-output
+bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2 --output-dir /path/to/new-output
 ```
 
 离线测试在独立临时目录中验证发行包及实际 Formula 的安装方法、模拟 Cellar 启动器、
 路径含空格、相对项目参数、CDPATH/PATH 保留和显式解释器约束；测试不改 PATH、
 不运行 `brew install`、不操作真实项目。模拟安装不等于真实 Homebrew 验收。
+生成 Formula 的测试还会通过安装后的入口核对 `--version` 与 `libexec`，不只检查 Formula 的版本字符串。
 
 ## 首次发布
 

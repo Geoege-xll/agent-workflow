@@ -338,10 +338,10 @@ class TuiTest(unittest.TestCase):
     def test_effort_options_selectable_levels_for_hosts(self):
         self.app.host_index=1;self.app.scratch={"model":"inherit","effort":"inherit"}
         self.app.modal="effort"
-        # When catalog model has explicit efforts ("high", "max"):
+        # 已知模型能力时只提供证实的档位，继承仍始终可选。
         model_levels=[v for _,v in self.app.options()]
         self.assertEqual(model_levels,["inherit","high","max"])
-        # When catalog model has empty efforts, standard host levels are provided:
+        # 未知模型能力时提供宿主允许写入的标准值，不能把后备选项回填成模型能力证据。
         with patch.object(self.app,"catalog",return_value=Catalog("claude",[Model("inherit","继承","f",())])):
             claude_levels=[v for _,v in self.app.options()]
             self.assertEqual(claude_levels,["inherit","low","medium","high","xhigh","max"])

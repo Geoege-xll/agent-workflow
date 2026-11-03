@@ -57,6 +57,19 @@ class ReleaseArchiveTest(unittest.TestCase):
                 self.assertEqual((member.uid, member.gid, member.mtime), (0, 0, 0))
             self.assertEqual(stream.getmember("agent-workflow-0.1.0/workflow.sh").mode, 0o755)
             self.assertEqual(stream.getmember("agent-workflow-0.1.0/project.yaml").mode, 0o644)
+            metadata=stream.extractfile("agent-workflow-0.1.0/manager/release.json").read()
+            self.assertEqual(json.loads(metadata), {"schema_version": 1, "version": "0.1.0"})
+            self.assertEqual(stream.getmember("agent-workflow-0.1.0/manager/release.json").mode, 0o644)
+        self.assertFalse((self.source / "manager/release.json").exists())
+
+    def test_source_release_metadata_is_rejected_without_output(self):
+        # 不允许把源码中的旧发行标记当成可信输入，也不能静默覆盖它制造双重版本来源。
+        metadata=self.source / "manager/release.json"
+        metadata.write_text('{"schema_version":1,"version":"9.9.9"}',encoding="utf-8")
+        original=metadata.read_bytes()
+        with self.assertRaisesRegex(ValueError,"Generated release metadata"):
+            release.build(self.source,"0.1.0",self.root / "out")
+        self.assertFalse((self.root / "out").exists());self.assertEqual(metadata.read_bytes(),original)
 
     def test_payload_allowlist_excludes_backups_tooling_and_caches(self):
         for name in (".sync-backups/private", "dist/old", "docs/draft", "tests/private", "lib/__pycache__/old.pyc", "lib/.DS_Store"):
@@ -182,6 +195,20 @@ class HomebrewLauncherTest(unittest.TestCase):
 
     def run_cli(self, *arguments):
         return subprocess.run([str(self.entry), *arguments], cwd=self.caller, env=self.env, capture_output=True, text=True, timeout=15)
+
+    def test_version_reads_archive_metadata_after_formula_install(self):
+        # 真实归档→Formula#install→短链接入口；不使用 README 或 Cellar 目录名推断版本。
+        result=self.run_cli("--state-dir","state","--version")
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout.splitlines(),["awf-cli 0.1.0",f"中央源根：{self.prefix / 'libexec'}"])
+        self.assertFalse((self.caller / "state").exists())
+
+    def test_invalid_packaged_metadata_reports_safe_error(self):
+        metadata=self.prefix / "libexec/manager/release.json"
+        metadata.write_text('{"schema_version":1,"version":"PRIVATE-INVALID-METADATA"}',encoding="utf-8")
+        result=self.run_cli("--version")
+        self.assertEqual(result.returncode,2);self.assertIn("发行元数据",result.stderr)
+        self.assertNotIn("PRIVATE-INVALID-METADATA",result.stdout+result.stderr);self.assertNotIn("Traceback",result.stderr)
 
     def test_formula_syntax_payload_and_default_interpreter_without_duplicate_probe(self):
         syntax = subprocess.run([shutil.which("ruby"), "-c", str(self.formula)], capture_output=True, text=True, timeout=15)

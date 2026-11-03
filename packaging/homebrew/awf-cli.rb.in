@@ -21,6 +21,10 @@ class AwfCli < Formula
 
   test do
     assert_match "usage: awf-cli", shell_output("#{bin}/awf-cli --help")
+    # 从已安装入口验证归档元数据与实际载荷根，避免仅凭 Formula 自身版本宣告成功。
+    diagnostic = shell_output("#{bin}/awf-cli --version")
+    assert_match "awf-cli #{version}", diagnostic
+    assert_match "中央源根：#{libexec.realpath}", diagnostic
     assert_path_exists libexec/"lib/python_runtime.sh"
     assert_path_exists libexec/"setup_all.sh"
     assert_path_exists libexec/"platforms"

@@ -7,10 +7,10 @@ import curses
 from dataclasses import dataclass, replace
 import locale
 from pathlib import Path
-import shlex
 from threading import Event
 import time
 
+from lib.install_workflow import InstallError, _target_path
 from .catalog import Catalog, clean, discover
 from . import service
 from .tui_support import Layout, TextInput, Theme, cell_width, clip, draw_box, draw_scrollbar, ellipsize, padded, wrapped
@@ -166,6 +166,8 @@ class App:
         if self.modal == "effort":
             current_model_id=self.scratch.get("model") if self.scratch else None
             model=next((row for row in self.catalog().models if row.id == current_model_id),None)
+            # 明确的模型能力优先限制档位；没有能力证据时仍可独立写入宿主标准值，
+            # 这些后备选项只表示配置合同允许，不能当作该模型已支持或调用成功的证明。
             if model and model.efforts:
                 levels=model.efforts
             elif self.host == "claude":
@@ -406,12 +408,11 @@ class App:
         elif action == "commands":self.show_view("commands");self.input="";self.sync_selection()
         elif action == "add":self.show_view("add");self.input=""
         elif action == "add-confirm":
-            raw=self.input.strip()
-            # Path('') 指向当前目录，空回车必须拒绝；路径正文绝不交给 shell。
-            if not raw:raise ValueError("请先拖入项目根目录，再按回车安装")
-            direct=Path(raw).expanduser();values=[raw] if direct.is_dir() else shlex.split(raw)
-            if len(values) != 1:raise ValueError("请拖入一个项目目录")
-            project=service.project_path(values[0])
+            # 空格可以属于真实目录名：把完整输入交给唯一安装器解析，禁止先 strip。
+            # 该入口同时保留原样优先、引号/反斜杠拖入、单目录及源包包含保护，绝不执行 shell。
+            try:project=_target_path(self.input,service.SOURCE)
+            except InstallError as exc:raise ValueError(str(exc)) from exc
+            project=service.project_path(project)
             self.install_project(project,select_after=True)
         elif action == "preview":
             if not self.pending():self.notify("当前项目 / 宿主没有待应用变更");return

@@ -48,7 +48,12 @@ def read_data(path: Path, *, toml: bool = False) -> dict:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError(f"模型来源不是有界普通文件：{path}")
     text = path.read_text(encoding="utf-8")
-    value = tomllib.loads(text) if toml else json.loads(text)
+    try:
+        value = tomllib.loads(text) if toml else json.loads(text)
+    except RecursionError as exc:
+        # Python 3.11 会在 JSON 解码阶段拒绝过深输入；在来源边界转为正常失败合同，
+        # 让 discover、CLI 和 TUI 共用诊断并保留草稿，不展示解析器消息或来源正文。
+        raise ValueError(f"模型来源嵌套过深，无法解析：{path}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"模型来源必须是对象：{path}")
     return value
@@ -125,7 +130,8 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict) -> Non
     _append(catalog, config.get("model"), config.get("model"), "当前 Codex 配置；推理能力待确认")
     selected=next((row for row in catalog.models if row.id == config.get("model")),None)
     if selected:
-        # 继承模型仍可指定角色 effort，但只提供当前模型有能力证据的档位。
+        # 继承项只携带当前模型已有的能力证据；未知能力由选择器提供宿主标准档位，
+        # 不能把可写入的后备值填进 efforts，伪装成模型已证实的能力。
         catalog.models[0]=Model("inherit","继承宿主配置",selected.source,selected.efforts)
     if directory.is_dir():
         for alternative in sorted(directory.glob("*model*catalog*.json"))[:20]:
@@ -196,7 +202,7 @@ def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> No
     _append(catalog, current_model, current_model, "当前 Claude 配置 / 显式环境模型")
     if changed_provider:
         catalog.notes.append("提供方已切换，旧 model 偏好不作为新目录的可用性证据。")
-    catalog.notes.append("代理菜单及别名来自本地配置；modelSettings 中的偏好不能证明支持的推理档位，未知时保留继承。")
+    catalog.notes.append("代理菜单及别名来自本地配置；modelSettings 中的偏好不能证明模型支持的推理档位。")
     controls = project_controls(execution_sources, env)
     catalog.execution = {"status": "projected", "controls": controls, "write_scope_guard": project_write_scope_guard(execution_sources),
                          "runtime_verified": False}
@@ -232,6 +238,8 @@ def discover(host: str, home: Path | None = None, project: Path | None = None, e
             catalog.execution = {"status": "unavailable", "controls": {}, "runtime_verified": False,
                                  "write_scope_guard": {"status": "unknown", "value": None,
                                                        "source": None, "runtime_verified": False}}
+    if host in {"codex","claude"}:
+        catalog.notes.append("推理档位可独立修改；模型能力未知时可写入宿主标准值，但不代表模型已支持或 API 调用已验收。")
     # 仅持有摘要，供预览和发布前检测提供方、目录、身份与能力是否变化。
     material=[host,catalog._inputs,[{"id":row.id,"efforts":row.efforts} for row in catalog.models]]
     catalog.stamp=hashlib.sha256(json.dumps(material,sort_keys=True,default=str).encode()).hexdigest()

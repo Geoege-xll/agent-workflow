@@ -17,6 +17,7 @@ import shlex
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -48,6 +49,20 @@ def codex_agent(model=None,effort="high"):
     return f'# agent-workflow-pack:managed-codex-agent:v1 sha256={hashlib.sha256(payload.encode()).hexdigest()}\n{payload}'.encode()
 
 
+def deep_json_source(home: Path, host: str) -> bool:
+    """写入真实深层 JSON；探测当前解析器，不用 mock 或全局递归上限制造异常。"""
+    text='{"private_payload":"DEEP-SOURCE-SECRET","padding":'+'['*2000+'0'+']'*2000+'}'
+    directory=home/('.codex' if host == 'codex' else '.claude');directory.mkdir(parents=True,exist_ok=True)
+    if host == 'codex':
+        (directory/'config.toml').write_text('model_catalog_json="models.json"\n',encoding='utf-8')
+    (directory/('models.json' if host == 'codex' else 'settings.json')).write_text(text,encoding='utf-8')
+    try:json.loads(text)
+    except RecursionError:return True
+    # Python 3.14 的 JSON 解析器可接受同一输入；3.11 必须确实命中被修复的异常路径。
+    if sys.version_info[:2] == (3,11):raise AssertionError('真实 Python 3.11 未触发深 JSON 回归所需的 RecursionError')
+    return False
+
+
 class TemporaryProject(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix="workflow-manager-test-")
@@ -71,6 +86,17 @@ class TemporaryProject(unittest.TestCase):
 
 
 class ModelContractTest(unittest.TestCase):
+    def test_unknown_capabilities_allow_standard_host_effort_without_claiming_support(self):
+        for host,levels in (('codex',('none','minimal','low','medium','high','xhigh','max')),
+                            ('claude',('low','medium','high','xhigh','max'))):
+            catalog=Catalog(host,[Model('inherit','继承','fixture')])
+            for effort in levels:
+                with self.subTest(host=host,effort=effort):
+                    self.assertEqual(service.validate_selection(host,{'model':'inherit','effort':effort},catalog)['effort'],effort)
+            # 可写入宿主标准值不等于模型能力证据，且不能放开 ultra 的自动委派语义。
+            self.assertEqual(catalog.as_dict()['models'][0]['efforts'],())
+            with self.assertRaises(ValueError):service.validate_selection(host,{'model':'inherit','effort':'ultra'},catalog)
+
     def test_config_update_preserves_unrelated_text_and_crlf(self):
         original="project_name: test\r\n# 保留原配置\r\nworkspace:\r\n  discovery: auto\r\n"
         updated=role_models.update(original,{"codex":{"xy-backend":{"model":"custom/model","effort":"max"}}})
@@ -124,6 +150,17 @@ class CatalogTest(unittest.TestCase):
     def tearDown(self):self.temp.cleanup()
     def write(self,name,value):
         path=self.home/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value if isinstance(value,str) else json.dumps(value));return path
+
+    def test_deep_json_source_uses_safe_failure_projection(self):
+        for host in ('codex','claude'):
+            with self.subTest(host=host):
+                rejected=deep_json_source(self.home,host)
+                catalog=discover(host,self.home,env={});output=json.dumps(catalog.as_dict(),ensure_ascii=False)
+                self.assertNotIn('DEEP-SOURCE-SECRET',output);self.assertNotIn('private_payload',output)
+                if rejected:
+                    self.assertTrue(any('模型来源读取失败' in note for note in catalog.notes))
+                    self.assertEqual([row.id for row in catalog.models],['inherit'])
+                    if host == 'claude':self.assertEqual(catalog.execution['status'],'unavailable')
 
     def test_codex_visible_current_cache_and_efforts(self):
         self.write('.codex/config.toml','model="visible"\nmodel_catalog_json="models_cache.json"\n')
@@ -570,6 +607,24 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
 
 
 class TransactionTest(TemporaryProject):
+    def test_deep_json_source_keeps_all_project_and_host_drafts(self):
+        home=self.root/'home';rejected=deep_json_source(home,'codex')
+        env={'HOME':str(home),'CODEX_HOME':str(home/'.codex'),'CLAUDE_CONFIG_DIR':str(home/'.claude')}
+        with patch.dict(os.environ,env,clear=True):
+            app=App(self.state,self.root,self.project)
+            keys=(app.scope(),(str(self.root/'other-project'),'codex','xy-qa'),(str(self.project),'claude','xy-qa'))
+            for key in keys:
+                app.drafts[key]=dict(self.value);app.expected[key]={'model':'inherit','effort':'high'};app.source_stamps[key]='original-stamp'
+            drafts={key:dict(value) for key,value in app.drafts.items()}
+            expected={key:dict(value) for key,value in app.expected.items()};stamps=dict(app.source_stamps)
+            # 走真实 dispatch→来源页→discover，确认来源失败不会逃出事件边界或丢掉其他范围草稿。
+            app.dispatch('g');app.index=3;app.dispatch('enter')
+            self.assertEqual(app.modal,'sources');self.assertFalse(app.done)
+            if rejected:self.assertIn('模型来源读取失败',app.text)
+            self.assertNotIn('DEEP-SOURCE-SECRET',app.text)
+            self.assertEqual(app.drafts,drafts);self.assertEqual(app.expected,expected);self.assertEqual(app.source_stamps,stamps)
+        self.assertFalse(self.state.exists())
+
     def test_tui_restore_confirmation_keeps_original_version_guard(self):
         """实际走 TUI 的恢复确认回调，防止容器转换把 RestorePlan 的保护丢掉。"""
         changes=self.prepare();path=self.project/changes[0].relative
@@ -897,6 +952,18 @@ class TransactionTest(TemporaryProject):
 
 class AddInstallTest(TemporaryProject):
     """只在临时目录验证“选择添加、拖入、回车安装”，不登记真实项目。"""
+    def test_trailing_space_directory_is_not_replaced_by_trimmed_sibling(self):
+        sibling=self.root/'Project';sibling.mkdir();target=self.root/'Project ';target.mkdir()
+        # 原样、带引号和反斜杠拖入都必须保留目录名末尾的空格，不能选中已存在的同名邻居。
+        escaped=str(target).replace('\\','\\\\').replace(' ','\\ ')
+        for raw in (str(target),shlex.quote(str(target)),escaped):
+            with self.subTest(raw=raw):
+                app=App(self.state,self.root,self.project)
+                with patch.object(app,'install_project') as install:
+                    app.dispatch('a');app.input=raw;app.dispatch('enter')
+                    install.assert_called_once_with(target,select_after=True)
+        self.assertFalse(self.state.exists())
+
     def test_empty_list_and_project_list_both_offer_install_entry(self):
         app=App(self.state,self.root/'empty-scan')
         self.assertEqual(app.pane,'projects');self.assertIsNone(app.project)
@@ -937,7 +1004,9 @@ class AddInstallTest(TemporaryProject):
 
     def test_invalid_input_stays_editable_without_starting_installer(self):
         app=App(self.state,self.root,self.project)
-        for value in ('',str(self.root/'missing'),"'unclosed",shlex.quote(str(self.root))+' '+shlex.quote(str(self.project))):
+        # 空输入、多目录以及源包本身/子目录/包含源包的父目录均不得触发安装或状态写入。
+        for value in ('',' \t',str(self.root/'missing'),"'unclosed",shlex.quote(str(self.root))+' '+shlex.quote(str(self.project)),
+                      str(PACK),str(PACK/'manager'),str(PACK.parent)):
             with self.subTest(value=value),patch.object(service,'install') as install:
                 app.dispatch('a');app.input=value;app.dispatch('enter')
                 self.assertEqual(app.modal,'add');self.assertIsNone(app.future);install.assert_not_called()
@@ -1061,6 +1130,14 @@ class InstallerBoundaryTest(unittest.TestCase):
 
 class CliLauncherTest(TemporaryProject):
     """命令入口只安装到临时 bin，验证真实 PATH 查找，不修改本机命令或 shell 设置。"""
+    def test_source_version_reports_unpacked_source_and_real_root(self):
+        directory=self.root/'bin';install_cli(directory)
+        result=subprocess.run([str(directory/'awf-cli'),'--state-dir',str(self.state),'--version'],
+                              cwd=self.root,capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout.splitlines(),['awf-cli 源码未打包',f'中央源根：{PACK}'])
+        self.assertFalse((PACK/'manager/release.json').exists());self.assertFalse(self.state.exists())
+
     def test_cdpath_does_not_redirect_relative_links_or_pollute_source_directory(self):
         """覆盖 cd 的附加输出及搜索同名目录，直接源脚本也必须按调用位置定位。"""
         directory=self.root/'bin';directory.mkdir()
@@ -1197,6 +1274,18 @@ class CliLauncherTest(TemporaryProject):
 
 
 class TerminalAndCliTest(TemporaryProject):
+    def test_deep_json_model_source_cli_has_safe_projection(self):
+        home=self.root/'home';rejected=deep_json_source(home,'codex')
+        env={**os.environ,'HOME':str(home),'CODEX_HOME':str(home/'.codex'),'CLAUDE_CONFIG_DIR':str(home/'.claude')}
+        result=subprocess.run(['bash',str(PACK/'workflow.sh'),'--state-dir',str(self.state),'models','--platform','codex'],
+                              cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertNotIn('Traceback',result.stderr);self.assertNotIn('DEEP-SOURCE-SECRET',result.stdout+result.stderr)
+        output=json.loads(result.stdout)
+        self.assertEqual([row['id'] for row in output['models']],['inherit'])
+        if rejected:self.assertTrue(any('模型来源读取失败' in note for note in output['notes']))
+        self.assertFalse(self.state.exists())
+
     def test_tui_interrupt_reaches_installer_and_waits_until_lock_released(self):
         """真实安装子进程接收取消后模拟恢复；TUI 继续重绘，锁到恢复完成才释放。"""
         ready=self.root/'ready';cancelled=self.root/'cancelled';finished=self.root/'finished'
