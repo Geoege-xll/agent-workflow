@@ -1,6 +1,6 @@
 # 2.0.1 验证信息增量与 QA 停止规则
 
-状态：实施与独立审计完成，发行交付中。
+状态：已完成。
 
 ## 已批准的目标与边界
 
@@ -55,5 +55,11 @@ eng-verification-003 已精化并完成规范采用，实施者已确认读取�
 正式 release 目录只生成一次，170 个 tar 成员逐项匹配当前源白名单字节／规范化权限，构建前后载荷不变；校验文件、Formula 版本／URL／同 tar 摘要及 Ruby 语法均通过。release-receipt.json 绑定源码、三资产及完整原始日志。
 唯一独立 QA 已核对完整 15 路径、适用规则、五情境及正式三资产，结果 PASS、零阻断；PM 已用当前原始 QA 包验证交接绑定，返回 valid。QA 复用已有证据，没有增加测试或重建候选。
 release 原始命令为 -I -B，未带 -X utf8 的事实原样保留；实际 Unicode 路径检查及日志已成功，无编码证据缺口，不补写旗标或重复执行。后续 PM 调用显式使用 UTF-8。
-已确认 GitHub 无 v2.0.1 Release，远端也无同名标签。下一步精确提交、发布新标签和三资产、同步三个项目，最后按现有合同收口。
+实现提交 76c78ff77a2df32ac8dbf22b282a6e13262b17d3 已精确核对并推送，v2.0.1 标签指向该提交；GitHub 正式 Release 已发布，三份远端资产 SHA256 与唯一审计候选一致。
+mt-shop、TeachingAssistant、ParentsKit 均经原安装器同步成功，各自 Codex／Claude／AGY 安装检查通过；每项目原适配配置与本批 8 个受管来源共 9 项指纹匹配，配置和模型选择保留。安装器按原始指纹轮换可证明归属的更早运行时备份。
+README 属于发行载荷、不在项目安装器清单；PM 首次核对误包含它导致一次退出 2，已保留诊断并只修正预期映射，未重装或重跑业务测试。
+本轮精确保留 23 份仍被引用的验收、发布与恢复文件，删除已无用的独立 QA 索引 1 个，统计 22483 逻辑字节，不宣称物理回收量。三资产虽已发布，原验收仍引用本地确切候选，故按精确路径保留，不保留额外源码树或轮次目录。
+三位实施／QA实例在反馈窗口结束后已逻辑退役，当前原生工具不支持可靠 close／kill，原生关闭及上下文清空未确认，不再复用这些实例，未删除原始历史。
+发行地址：https://github.com/Geoege-xll/agent-workflow/releases/tag/v2.0.1 。同版本资产不覆盖；本轮普通计划收口不重启 QA 或追加已有效检查。
+必要本地证据位于 `/private/var/folders/w9/cgyn8nj14fs91j8rrc220l3w0000gn/T/agent-workflow-request-scratch/agent_workflow-65c9b3d90960/request-67613b9a82cec2989ae2ebaec067f8dd75c682804e2665e3c77d9668363484ff`：qa-handoff.json 与原 qa-task.json 保留原始身份／包绑定，delivery-verification.json 记录远端三资产摘要、三项目实际安装／核对及清单诊断修正；完整原始日志和唯一正式候选同处保留。恢复时只读取需要的证据，不重派已完成工作。
 源包没有 PROJECT／features 当前特性树，不为本轮生成占位索引。memory.project_id 为占位值，不进行无法证明项目隔离的记忆调用。
