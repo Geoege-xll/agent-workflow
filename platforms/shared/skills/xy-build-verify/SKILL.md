@@ -41,8 +41,10 @@ Do not paste a long raw log into the PM handoff. The full reference must be reso
 by QA. If a command fails, include the exit code, a short failure excerpt, the full-log
 reference, and `Status: BLOCKED`. After two failed repair attempts, stop and report to
 the PM. Never invent, paraphrase away, or claim unexecuted validation.
-现有 Validation 中说明扩大／重跑的触发原因以及仍未验证的相关范围；没有缺口不新增
-验证报告或测试文件。局部通过只能支持该范围，不写成“全部测试通过”。
+现有 Validation 中说明本次新增覆盖、失效证据／具体风险，或继续失败返工的新定位、
+可检验假设／修复进展及预期证据；仍未验证的相关范围保持明确。无进展时按上述策略
+提前停止当前重复失败路径并交 PM，不重置既有上限，也不视为通过。没有缺口不新增
+验证报告或测试文件；局部通过只能支持该范围，不写成“全部测试通过”。
 
 `BUILD_VERIFIED` is evidence, not a QA result or user-facing completion state. For Full work, preserve the order
 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`;

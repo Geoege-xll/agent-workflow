@@ -289,7 +289,9 @@ def prepare(source: Path, archive: Path, output: Path) -> Path:
     bundled["manifest.json"] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     startup = {name: regular_bytes(source / "npm" / name) for name in STARTUP_FILES}
     package = json.loads(startup["package.json"])
-    if (not isinstance(package, dict) or package.get("name") != "@geoege-xll/agent-workflow" or package.get("version") != "2.0.0"
+    # 只准备与当前工作流版本一致的本地未发布包；升版时须同步 package.json，
+    # 并保留私有包、单一离线入口及无生命周期脚本／依赖的发布边界。
+    if (not isinstance(package, dict) or package.get("name") != "@geoege-xll/agent-workflow" or package.get("version") != "2.0.1"
             or package.get("bin") != {"agent-workflow": "bin/agent-workflow.cjs"}
             or package.get("private") is not True or package.get("scripts")
             or any(package.get(field) for field in ("dependencies", "optionalDependencies", "devDependencies"))):

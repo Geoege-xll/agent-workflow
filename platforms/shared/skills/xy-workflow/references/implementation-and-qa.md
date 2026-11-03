@@ -54,11 +54,10 @@ Light 使用当前单任务包、默认原生实施者及最小充分验证；�
    exit code, concise relevant output, and a complete-log reference.
    生产实现须有受影响目标构建／编译成功及可运行证据。按其中的 `verification-scope.md`
    先选最小充分范围，明确需要新执行或可复用的证据。
-   必需项通过即交接；扩大或重跑需说明具体缺口，不能每个实现者默认全仓测试。
-   Reuse the single shared development database, runtime environment and system-wide build/package
-   caches by default, syncing schema and test data incrementally; do not create per-round isolated
-   databases, private package caches or duplicate candidate directories (`packages-qa*`,
-   `runtime-v2`, `replay`, `before`).
+   必需项通过即交接；新增测试、再次执行与继续失败返工均按该策略的三个判断说明信息
+   增量，不能每个实现者默认全仓测试。无进展时提前交 PM，原自行修复上限不重置或叠加。
+   配置、环境、数据与缓存复用，以及实际新增资源的归属与收口，沿该策略及内置
+   `eng-common-030`，不在此另造资源规则。
 4. Run `task_graph_cli.py qa-ready` for the request. Only `task_type: writer` tasks participate in
    this barrier; `evidence`, `read_only`, and `qa` tasks do not create a circular wait. When it
    returns true, dispatch exactly one integrated read-only `xy-qa` reviewer for this request. That same reviewer tries
@@ -96,12 +95,14 @@ Light 使用当前单任务包、默认原生实施者及最小充分验证；�
    performs full production ui and accessibility QA. Risk-based browser testing of the real
    production implementation remains available.
 5. QA PASS permits closeout only after that validation succeeds. QA FAIL or an invalid PASS returns
-   only to the PM, which issues bounded rework to the appropriate implementer. The same independent
+   only to the PM. PM 沿现有恢复边界把有界返工派回所属原作者。The same independent
    reviewer rechecks the findings, repair delta and actually affected contracts; it does not restart
    the unchanged full audit. Bind the latest complete request scope, refresh affected rule checks
    and evidence, reuse unaffected conclusions, and run the existing handoff validation again.
    Expand only for a concrete new risk, invalidated evidence or explicit user/project requirement;
    after three failed rework rounds, escalate to the user rather than looping.
+   继续返工要有新定位、可检验假设或有效修复进展及预期证据；缺少进展先停当前重复失败
+   路径并交 PM，不等同通过，也不因新进展重置或叠加上述三轮上限。
 6. After QA PASS, activate `xy-project-memory` in closeout mode and apply the frozen
    controlled-document projection when required. Verify current links and removal naming; perform the PM commit assessment above,
    then finish truthful memory persistence against the resulting

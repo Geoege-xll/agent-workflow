@@ -120,6 +120,10 @@ These are command-execution boundaries within existing steps, not additional wor
 
 派发前先按 WORKFLOW 的 Light／Full 定义判断当前风险与实际消费者。两等级默认使用
 对应原生实施者，只有明确的 PM 亲自实施授权例外；文档后缀不能扩大所有权。
+两等级都沿原 Validation、input/output 合同与 acceptance_evidence，依
+`xy-build-verify/references/verification-scope.md` 的三个判断说明真实测试缺口、再次执行
+理由与失败返工进展，不增加字段、固定表或审批。精简交接已验证且仍适用的项目命令、
+必要前置与环境限制及其来源，避免重复试错；不以经验替代当前证据或传递完整历史。
 
 ### Light：自包含单任务派发
 

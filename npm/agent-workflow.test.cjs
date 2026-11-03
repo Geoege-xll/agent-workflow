@@ -76,7 +76,7 @@ for (const arguments_ of [[], ['--help'], ['-h'], ['init', '--help'], ['init', '
   test(`help/version are read-only on every platform: ${arguments_.join(' ')}`, async () => {
     const f = fixture({ platform: 'darwin', arch: 'arm64', fs: new Proxy({}, { get() { throw new Error('No filesystem access'); } }) });
     assert.equal(await cli.main(arguments_, f.options), 0);
-    assert.match(f.output.stdout, arguments_.some((arg) => ['--version', '-v'].includes(arg)) ? /^2\.0\.0\n$/ : /^Usage: agent-workflow/);
+    assert.match(f.output.stdout, arguments_.some((arg) => ['--version', '-v'].includes(arg)) ? /^2\.0\.1\n$/ : /^Usage: agent-workflow/);
     assert.equal(f.calls.length, 0);
     assert.equal(f.signals.listenerCount('SIGINT'), 0);
   });

@@ -1,7 +1,7 @@
 # Windows npx 项目安装（本地、未发布）
 
 目标是在 **Windows 10/11 x64、本地 NTFS、普通用户**环境，从项目目录安装现有工作流，
-不是安装 Windows 管理器。当前 npm 包是 `@geoege-xll/agent-workflow` 的本地 `2.0.0`
+不是安装 Windows 管理器。当前 npm 包是 `@geoege-xll/agent-workflow` 的本地 `2.0.1`
 准备版本，`private: true`，**尚未发布，也尚未完成原生 Windows 安全/恢复与端到端验收**。
 macOS 上的打包和模拟测试通过，不能视为 Windows 已支持。
 
@@ -38,8 +38,8 @@ npx @geoege-xll/agent-workflow init
 ```powershell
 # 只进入一个专门创建的临时测试项目，不操作真实项目。
 cd 'C:\awf-test\临时项目 with spaces'
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.0.tgz' agent-workflow --help
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.0.tgz' agent-workflow init
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz' agent-workflow --help
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz' agent-workflow init
 ```
 
 完整包在本地可取得时，`--offline --ignore-scripts` 不影响首次运行时部署。
@@ -62,7 +62,7 @@ agent-workflow init [--project PATH] [--timeout SECONDS]
 
 ```powershell
 # 使用已缓存的同一个本地包入口时，也可显式选择其他临时目录。
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.0.tgz' agent-workflow init --project '..\另一个临时项目' --timeout 120
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz' agent-workflow init --project '..\另一个临时项目' --timeout 120
 ```
 
 `--timeout` 交给 Python 安装事务处理，不是 Node 强杀计时器。Ctrl+C 会通知受控 Python
@@ -208,7 +208,7 @@ CLI 参数、无写入预检、Git/Python 显式选择、cwd/Unicode/参数数�
 在原生 Windows 源码目录中，给测试进程指定完整本地包后运行端到端夹具：
 
 ```powershell
-$env:AGENT_WORKFLOW_NPX_TGZ = 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.0.tgz'
+$env:AGENT_WORKFLOW_NPX_TGZ = 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz'
 python -I -B -m unittest discover -s tests -p test_windows_npx_e2e.py -v
 ```
 

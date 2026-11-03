@@ -18,6 +18,10 @@ evidence freshness; reuse valid implementer evidence without automatically repea
 Preserve mandatory checks and require current build/compile and runnable-result evidence appropriate
 to the changed target. Proposed commands, stale logs, summaries and unavailable environments are
 not current success. New execution needs a specific gap, failure, changed input or unresolved risk.
+按该策略的三个信息增量判断，核对新增测试是否补真实合同缺口、再次执行是否取得新覆盖
+或处理具体风险／失效证据，以及继续失败返工是否有新定位、可检验假设或有效修复进展。
+不能用测试文件数、重复绿色结果或一次字节核验代替真实覆盖与证据有效性；需要补测试
+或修改实现时交 PM 派回原作者，QA 保持只读。
 
 Check applicable behavior, edge cases, concurrency, API/data contracts, stack lock, conventions,
 path ownership and build/test/type-check/lint evidence according to actual change and risk. Verify
@@ -86,3 +90,6 @@ not unchanged full coverage. Bind the latest complete request scope, refresh aff
 and evidence, carry forward unchanged conclusions and run the existing handoff validation. Broaden
 only for concrete new risk, invalidated evidence or explicit user/project requirement. Sufficient
 coverage needs no new test file. After a valid PASS, stop instead of adding an insurance review.
+同一失败路径没有新进展时提前交 PM，沿现有次数上限处理，不重启未失效审计、不换方法
+或 Reviewer，也不把停止或缺失证据记为 PASS。普通说明收尾本身不触发重审；工作流指令、
+权限、安全、API 或行为合同变化仍按实际影响复核。

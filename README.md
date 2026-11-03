@@ -1,6 +1,6 @@
 # Agent Workflow Pack 2.0
 
-面向项目的原生多Agent工作流，当前发布合同为 **2.0.0**。仅Light／Full及schema_version:2，
+面向项目的原生多Agent工作流，当前发布合同为 **2.0.1**。仅Light／Full及schema_version:2，
 不兼容旧任务／交接格式；用户文件、已有成果和必要证据保护继续有效。
 Keep this installer folder anywhere and select a project when launching it — works with
 **Claude Code / Codex / Antigravity**.

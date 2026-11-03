@@ -1060,6 +1060,11 @@ configured maximum is currently available.
 Every implementer in this Full loop must complete `$xy-build-verify` before delivery.
 PM、实现者和 QA 共用已安装 `xy-build-verify/references/verification-scope.md` 的范围与
 停止规则：选择最小充分验证，全量或重跑须有实际依据，有效证据可以复用。
+沿原 Task Pack 的 Validation、input/output 合同与 acceptance_evidence 说明三个判断：
+新增测试补哪项真实覆盖缺口，再次执行增加哪项覆盖、处理哪项具体风险或失效证据，
+继续失败返工有什么新定位、可检验假设或有效修复进展及预期证据。无进展提前停止当前
+重复失败路径并交 PM，不等于通过、不重置或叠加原上限；详细适用边界统一见上述策略，
+不增加字段、固定表、报告或审批。
 生产代码交付必须保留受影响目标构建／编译成功和最小可运行验证的真实证据。
 必需验证通过后进入下面的既有 QA／收口；不在每次角色交接或提交时另起一轮测试。
 The PM runs `qa-ready` and
@@ -1112,6 +1117,10 @@ Every implementation task pack includes at least:
 - exact verification commands;
 - actual dependencies and conflict conclusions; Full includes graph scheduling fields;
 - the delivery-report format and the location of complete evidence.
+
+作为复用经验交接的项目命令、必要前置与环境限制，只保留当前任务有关、已验证且仍
+适用的事实及其来源；沿原合同复用有效证据与诊断进展，不复制完整会话或以历史成功
+代替当前验收。新选验证命令仍按仓库事实与实际缺口确定，不伪装成已执行的经验。
 
 实际新增临时目录、环境、数据库、容器或过程产物时，沿用 `input_contracts` 说明已有资源与
 复用入口，`output_contracts` 说明新增资源的目的、落点、所有者和保留／回收条件，并在
