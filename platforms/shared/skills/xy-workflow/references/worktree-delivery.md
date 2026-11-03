@@ -155,9 +155,10 @@ only when warranted; do not save merely because worktrees were used.
 工具缺失只退役，不能声称销毁或解锁仍活动任务。AGY kill前先保护临时worktree与唯一日志。 Remove only identified task-owned worktrees after proving
 their commits are preserved in the delivered main history and no dirty, untracked, ignored needed
 files or active users remain. Prefer the host's safe cleanup; otherwise use non-force `git worktree
-remove` for an exact registered path. Keep any uncertain or unfinished worktree. Also tear down any
-task-created isolated database, container, rolling pre-operation snapshot, and managed task scratch
-directory (`task_graph_cli.py cleanup-scratch`) after syncing verified data to the shared baseline.
+remove` for an exact registered path. Keep any uncertain or unfinished worktree. 其他本任务新增的
+隔离库、容器、滚动快照与 scratch 按[原资源收口合同](closeout.md)处理：有效数据与完整
+证据先移交相应项目／服务的持久落点，核查归属、活跃使用和必要引用；scratch 使用同目标
+的只读预览、必要保留项与快照指纹执行清理，不直接无指纹删除，也不默认使用 `--all`。
 Never recursively delete a workspace root, force removal, delete user branches, or treat the final
-merge as cleanup consent for unrelated work. Briefly report what was removed, reclaimed space, and
+merge as cleanup consent for unrelated work. Briefly report what was removed, removed logical bytes (not physical disk release), and
 where the committed work remains recoverable.

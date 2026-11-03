@@ -14,11 +14,12 @@ if __package__:
     from .platform_fs import os
 else:
     from platform_fs import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 import tempfile
 from typing import Any, Callable
+import unicodedata
 
 try:
     from .agent_continuation import active as _running, check_binding
@@ -451,78 +452,252 @@ def scratch_workspace(root: Path, request_id: str | None = None) -> dict[str, An
     }
 
 
-def _remove_scratch_tree(parent: int, name: str) -> tuple[int, int]:
-    """沿目录描述符递归清理，检查和打开之间发生链接替换时停止而不跟随。"""
-    removed_files = 0
-    reclaimed_bytes = 0
+SCRATCH_SAMPLE_LIMIT = 20
+
+
+class ScratchCleanupError(TaskGraphError):
+    """保留原始失败原因及实际成功计数；递归删除失败不能伪报整批未发生。"""
+
+    def __init__(self, cause: Exception, report: dict[str, Any]):
+        super().__init__(str(cause))
+        self.report = {**report, "status": "failed", "cleaned": False, "error": str(cause)}
+
+
+def _scratch_keep_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
+    """仅接受精确的跨宿主相对文件名，不把用户保留项解释为 glob 或目录授权。"""
+    for value in paths:
+        if (not isinstance(value, str) or not value.strip() or value != PurePosixPath(value).as_posix()
+                or PurePosixPath(value).is_absolute() or PureWindowsPath(value).drive
+                or value == "." or ".." in value.split("/") or "\\" in value
+                or any(char in value for char in "*?[]")
+                or any(unicodedata.category(char).startswith("C") for char in value)):
+            raise TaskGraphError(f"scratch keep path must be a normalized relative file: {value!r}")
+    return tuple(sorted(set(paths)))
+
+
+def _scratch_metadata(info) -> tuple[int, ...]:
+    """只描述元数据身份，不读取内容，也不把摘要称为文件内容 SHA。
+
+    Windows 后端的 ctime 是创建时间；它只是快照中的一个字段，不能充当 NTFS
+    changeTime。双方均依赖调用者先停止写者；保留时间戳的非协作写入不在保证内。
+    """
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns, getattr(info, "st_file_attributes", 0))
+
+
+def _scratch_snapshot(parent: int, name: str, relative: str,
+                      entries: dict[str, dict[str, Any]]) -> None:
+    """只在已固定父目录中扫描当前请求，预览不创建目录、不改权限、不跟随链接。"""
     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
-    if stat.S_ISLNK(info.st_mode):
-        # POSIX unlink 只移除链接本身；Windows 后端对重解析点拒绝操作并保留现场。
-        os.unlink(name, dir_fd=parent)
-        return 1, 0
+    metadata = _scratch_metadata(info)
+    entry: dict[str, Any] = {"metadata": metadata}
+    entries[relative] = entry
     if not stat.S_ISDIR(info.st_mode):
-        reclaimed_bytes += info.st_size
-        # 不为删除而 chmod 文件：硬链接可能与临时目录外的原文件共用权限。
-        os.unlink(name, dir_fd=parent)
-        return 1, reclaimed_bytes
+        return
+    with _scratch_directory(name, parent=parent) as descriptor:
+        if _scratch_metadata(os.fstat(descriptor)) != metadata:
+            raise TaskGraphError(f"scratch directory changed while opening: {relative or '.'}")
+        names = sorted(os.listdir(descriptor))
+        entry["children"] = names
+        for child in names:
+            _scratch_snapshot(descriptor, child, f"{relative}/{child}" if relative else child, entries)
+        # 扫描不是事务；扫描中可见的新增、替换或写入应让预览失败，不能生成混合快照。
+        if (sorted(os.listdir(descriptor)) != names
+                or _scratch_metadata(os.fstat(descriptor)) != metadata
+                or _scratch_metadata(os.stat(name, dir_fd=parent, follow_symlinks=False)) != metadata):
+            raise TaskGraphError(f"scratch directory changed while scanning: {relative or '.'}")
+
+
+def _check_scratch_entry(info, expected: tuple[int, ...], relative: str,
+                         removed_links: dict[tuple[int, int], int]) -> None:
+    actual = _scratch_metadata(info)
+    removed = removed_links.get(expected[:2], 0)
+    if removed:
+        # 同一 inode 在本槽内可能有多个硬链接。我们已成功 unlink 的别名会改变
+        # 剩余别名的 nlink/ctime；只豁免这两个可解释的自身效果，仍核对身份、大小、
+        # 权限、mtime 等字段。普通文件绝不为删除而 chmod 或改写内容。
+        expected = (*expected[:3], expected[3] - removed, *expected[4:6], actual[6], expected[7])
+    if actual != expected:
+        raise TaskGraphError(f"scratch entry changed before removal: {relative or '.'}")
+
+
+def _check_scratch_names(descriptor: int, expected: set[str], relative: str) -> None:
+    if set(os.listdir(descriptor)) != expected:
+        raise TaskGraphError(f"scratch directory entries changed while cleaning: {relative or '.'}")
+
+
+def _remove_scratch_item(parent: int, name: str, info, report: dict[str, Any], *, directory: bool = False) -> None:
+    """成功后立即记账；Windows 后置 flush 失败时也核对名字是否已真正消失。"""
+    def count() -> None:
+        if directory:
+            report["removed_directories"] += 1
+        else:
+            report["removed_files"] += 1
+            if stat.S_ISREG(info.st_mode):
+                report["removed_logical_bytes"] += info.st_size
+
+    try:
+        (os.rmdir if directory else os.unlink)(name, dir_fd=parent)
+    except (OSError, ValueError):
+        # 不把删除后的持久化错误说成没有删除。这里只确认精确名字缺失，不能改用
+        # 路径递归补救，也不尝试删除任何同名替换项。
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            count()
+        raise
+    count()
+
+
+def _remove_scratch_tree(parent: int, name: str, relative: str,
+                         entries: dict[str, dict[str, Any]], keep: set[str],
+                         report: dict[str, Any], removed_links: dict[tuple[int, int], int]) -> bool:
+    """按预览的固定集合删除，并返回此名字是否已移除；不吸收执行中新增的项。
+
+    目录描述符固定遍历身份，逐项核对只能检测可见竞态，不提供原子的 POSIX
+    compare-and-unlink。调用者必须先停止本任务写者；非协作恶意竞争不在保证内。
+    """
+    entry = entries[relative]
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    _check_scratch_entry(info, entry["metadata"], relative, removed_links)
+    if not stat.S_ISDIR(info.st_mode):
+        if relative in keep:
+            return False
+        # POSIX 只 unlink 符号链接本项；Windows 继续由原安全后端拒绝重解析点／硬链接。
+        _remove_scratch_item(parent, name, info, report)
+        if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+            identity = (info.st_dev, info.st_ino)
+            removed_links[identity] = removed_links.get(identity, 0) + 1
+        return True
     with _scratch_directory(name, parent=parent) as descriptor:
         opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-            raise TaskGraphError(f"scratch directory changed while opening: {name}")
-        if os.name != "nt" and (stat.S_IMODE(opened.st_mode) & 0o700) != 0o700:
-            os.fchmod(descriptor, stat.S_IMODE(opened.st_mode) | 0o700)
-        for child in os.listdir(descriptor):
-            files, size = _remove_scratch_tree(descriptor, child)
-            removed_files += files
-            reclaimed_bytes += size
-        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
-            raise TaskGraphError(f"scratch directory changed while cleaning: {name}")
-    # Windows 的目录句柄不共享删除权限，故先释放子句柄，再相对仍固定的父目录删除。
-    os.rmdir(name, dir_fd=parent)
-    return removed_files, reclaimed_bytes
+        _check_scratch_entry(opened, entry["metadata"], relative, removed_links)
+        original_mode = stat.S_IMODE(opened.st_mode)
+        widened = False
+        remaining = set(entry["children"])
+        try:
+            if os.name != "nt" and (original_mode & 0o700) != 0o700:
+                os.fchmod(descriptor, original_mode | 0o700)
+                widened = True
+            # 每个目录只在遍历前后枚举集合，避免 N 个文件触发 N 次全目录扫描。
+            # 遍历仅消费快照里的名字，逐项仍核对元数据；中途新增项始终不被删除，
+            # 结束核对发现后报部分失败。静默前提并不变成可任意并发写入的许可。
+            _check_scratch_names(descriptor, remaining, relative)
+            for child in entry["children"]:
+                child_path = f"{relative}/{child}" if relative else child
+                if _remove_scratch_tree(descriptor, child, child_path, entries, keep, report, removed_links):
+                    remaining.remove(child)
+            _check_scratch_names(descriptor, remaining, relative)
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise TaskGraphError(f"scratch directory changed while cleaning: {relative or '.'}")
+        finally:
+            # 保留祖先和失败后仍存在的目录都恢复原权限；只对已打开身份操作，不能
+            # 用路径 chmod 恢复权限而误伤替换目录或链接指向的外部资源。
+            if widened:
+                os.fchmod(descriptor, original_mode)
+    if remaining:
+        return False
+    # Windows 目录句柄不共享删除权限，先关闭子句柄，再相对仍固定的父目录删除。
+    _remove_scratch_item(parent, name, info, report, directory=True)
+    return True
 
 
-def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bool = False) -> dict[str, Any]:
-    """收口时清理指定请求或整个项目的受管临时目录，返回实际回收空间。"""
+def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bool = False,
+                    dry_run: bool = False, keep: tuple[str, ...] = (), expected: str | None = None) -> dict[str, Any]:
+    """预览／清理明确归属且已静默的请求；摘要绑定元数据，不承诺物理磁盘回收。
+
+    --all 只供已核实全部归属及静默的显式人工管理；普通任务收口必须使用自己的
+    request_id。该工具不从目录名推导授权，不更新图、QA 或实例生命周期状态。
+    """
     if remove_all and request_id is not None:
         raise TaskGraphError("cleanup-scratch accepts either --request-id or --all, not both")
     if not remove_all and request_id is None:
         raise TaskGraphError("cleanup-scratch requires --request-id <id> or --all")
+    if remove_all and keep:
+        raise TaskGraphError("cleanup-scratch --all cannot be combined with --keep")
+    if dry_run and expected is not None:
+        raise TaskGraphError("cleanup-scratch --dry-run cannot be combined with --expect-sha256")
+    if not dry_run and (not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)):
+        raise TaskGraphError("cleanup-scratch deletion requires --expect-sha256 from a prior --dry-run")
+    kept = _scratch_keep_paths(keep)
     base = _project_scratch_base(root)
     target = base if remove_all else base / _validated_scratch_slot(request_id)
-    with ExitStack() as stack:
-        # --all 同样逐个清理项目根内的子项，项目根始终由打开的描述符固定。
-        # 保留空项目根可避免关闭最后一个句柄后再按路径清理所产生的新竞态。
-        try:
-            parent = stack.enter_context(_scratch_base_directory(base))
-            if not remove_all:
-                info = os.stat(target.name, dir_fd=parent, follow_symlinks=False)
+    report: dict[str, Any] = {
+        "target": str(target), "dry_run": dry_run, "snapshot_kind": "metadata",
+        "kept_files": list(kept), "cleaned": False,
+        "removed_files": 0, "removed_directories": 0, "removed_logical_bytes": 0,
+        "planned_files": 0, "planned_directories": 0, "planned_logical_bytes": 0,
+        "candidate_sample": [], "candidate_sample_truncated": False,
+    }
+    try:
+        with ExitStack() as stack:
+            entries: dict[str, dict[str, Any]] = {}
+            names: list[str] = []
+            exists = False
+            # 只有初始目标不存在才是幂等空操作；扫描中丢失文件必须作为冲突失败。
+            try:
+                parent = stack.enter_context(_scratch_base_directory(base))
+                info = os.fstat(parent) if remove_all else os.stat(target.name, dir_fd=parent, follow_symlinks=False)
+                exists = True
+            except FileNotFoundError:
+                parent = None
+            if exists:
                 if not stat.S_ISDIR(info.st_mode):
                     raise TaskGraphError(f"scratch cleanup target must be a directory, not a link: {target}")
-        except FileNotFoundError:
-            return {
-                "cleaned": False,
-                "reclaimed_bytes": 0,
-                "removed_files": 0,
-                "target": str(target),
-            }
-        # 只把开始前不存在的任务目录视作幂等空操作；递归中断应报告错误，不能伪报未清理。
-        if remove_all:
-            removed_files = reclaimed_bytes = 0
-            for name in os.listdir(parent):
-                # 新容器中也只处理本工具生成的槽名，不扩大到人工放入的其他目录。
-                if not SCRATCH_SLOT_RE.fullmatch(name):
-                    continue
-                files, size = _remove_scratch_tree(parent, name)
-                removed_files += files
-                reclaimed_bytes += size
-        else:
-            removed_files, reclaimed_bytes = _remove_scratch_tree(parent, target.name)
-    return {
-        "cleaned": True,
-        "reclaimed_bytes": reclaimed_bytes,
-        "removed_files": removed_files,
-        "target": str(target),
-    }
+                if remove_all:
+                    names = sorted(os.listdir(parent))
+                    entries[""] = {"metadata": _scratch_metadata(info), "children": names}
+                    selected = [name for name in names if SCRATCH_SLOT_RE.fullmatch(name)]
+                    for name in selected:
+                        _scratch_snapshot(parent, name, name, entries)
+                    if (sorted(os.listdir(parent)) != names
+                            or _scratch_metadata(os.fstat(parent)) != entries[""]["metadata"]):
+                        raise TaskGraphError("project scratch root changed while scanning")
+                else:
+                    selected = [target.name]
+                    _scratch_snapshot(parent, target.name, "", entries)
+            else:
+                selected = []
+            for relative in kept:
+                entry = entries.get(relative)
+                if entry is None or not stat.S_ISREG(entry["metadata"][2]):
+                    raise TaskGraphError(f"scratch keep path must be an existing regular file without linked ancestors: {relative}")
+            retained = set(kept)
+            for relative in kept:
+                retained.update(str(path) if str(path) != "." else "" for path in PurePosixPath(relative).parents)
+            candidates = [path for path in sorted(entries) if path not in retained and not (remove_all and path == "")]
+            for path in candidates:
+                metadata = entries[path]["metadata"]
+                if stat.S_ISDIR(metadata[2]):
+                    report["planned_directories"] += 1
+                else:
+                    report["planned_files"] += 1
+                    if stat.S_ISREG(metadata[2]):
+                        report["planned_logical_bytes"] += metadata[4]
+            report["candidate_sample"] = [path or "." for path in candidates[:SCRATCH_SAMPLE_LIMIT]]
+            report["candidate_sample_truncated"] = len(candidates) > SCRATCH_SAMPLE_LIMIT
+            snapshot = {"target": str(target), "request_id": request_id, "all": remove_all,
+                        "keep": kept, "exists": exists, "entries": entries}
+            report["exists"] = exists
+            report["snapshot_sha256"] = digest(json.dumps(snapshot, sort_keys=True, ensure_ascii=False,
+                                                         separators=(",", ":")).encode("utf-8"))
+            if dry_run:
+                return {**report, "status": "preview"}
+            if report["snapshot_sha256"] != expected:
+                raise TaskGraphError("scratch metadata snapshot changed; run --dry-run again before deletion")
+            removed_links: dict[tuple[int, int], int] = {}
+            remaining = set(names)
+            if remove_all and exists:
+                _check_scratch_names(parent, remaining, "")
+            for name in selected:
+                if _remove_scratch_tree(parent, name, name if remove_all else "", entries,
+                                        set(kept), report, removed_links) and remove_all:
+                    remaining.remove(name)
+            if remove_all and exists:
+                _check_scratch_names(parent, remaining, "")
+            # 项目根始终保留；不在释放最后一个固定句柄后再按路径删除它。
+            return {**report, "status": "applied", "cleaned": exists}
+    except (OSError, ValueError) as exc:
+        raise ScratchCleanupError(exc, report) from exc
 

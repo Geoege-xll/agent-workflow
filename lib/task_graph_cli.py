@@ -250,7 +250,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--input", type=Path, help="JSON graph or explicit init decisions; omit to read UTF-8 JSON from stdin")
     parser.add_argument("--patch", help="update patch JSON file, or - for stdin")
-    parser.add_argument("--expect-sha256", help="required old output fingerprint for writes; missing for new task output")
+    parser.add_argument("--expect-sha256", help="old output fingerprint for writes, or prior metadata snapshot for scratch deletion")
     parser.add_argument("--task-id", help="existing task to export")
     parser.add_argument("--host", choices=HOSTS, help="current native host, only for continuation")
     parser.add_argument("--observed-state", choices=OBSERVED_STATES, help="PM's current native observation, only for continuation")
@@ -259,6 +259,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--select", action="append", default=[], help="select an existing receipt fingerprint-map field")
     parser.add_argument("--request-id", help="request identifier for deterministic scratch workspace allocation/cleanup")
     parser.add_argument("--all", action="store_true", help="clean all managed scratch workspaces for the project root")
+    parser.add_argument("--dry-run", action="store_true", help="preview scratch cleanup without creating, changing or removing files")
+    parser.add_argument("--keep", action="append", default=[], help="retain an exact existing scratch-relative regular file; repeat as needed")
     return parser
 
 
@@ -1763,6 +1765,8 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     args = _parser().parse_args()
     try:
+        if args.command != "cleanup-scratch" and (args.dry_run or args.keep):
+            raise TaskGraphError("--dry-run and --keep apply only to cleanup-scratch")
         if args.command == "continuation":
             if (not args.input or not args.task_id or not args.host or not args.observed_state
                     or any((args.patch, args.expect_sha256, args.output, args.root, args.select, args.request_id, args.all))):
@@ -1784,6 +1788,10 @@ def main() -> int:
     except (TaskGraphError, WorktreePolicyError, OSError, UnicodeError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
+    if args.command == "cleanup-scratch" and result.get("status") == "failed":
+        # 删除可能已部分发生；保留完整的实际成功计数，并让调用者收到非零退出码。
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     if args.command == "fingerprints" and not result["matched"]:
         return 1
@@ -1801,9 +1809,13 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
             raise TaskGraphError("scratch requires --root and accepts only --request-id")
         return records.scratch_workspace(args.root, args.request_id)
     if args.command == "cleanup-scratch":
-        if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select)):
-            raise TaskGraphError("cleanup-scratch requires --root and accepts only --request-id or --all")
-        return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all)
+        if args.root is None or any((args.input, args.patch, args.task_id, args.output, args.select)):
+            raise TaskGraphError("cleanup-scratch requires --root and accepts --request-id/--all, --dry-run, --keep and --expect-sha256")
+        try:
+            return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all,
+                                           dry_run=args.dry_run, keep=tuple(args.keep), expected=args.expect_sha256)
+        except records.ScratchCleanupError as exc:
+            return exc.report
     if args.request_id or args.all:
         raise TaskGraphError("--request-id and --all apply only to scratch and cleanup-scratch")
     if args.command == "init":

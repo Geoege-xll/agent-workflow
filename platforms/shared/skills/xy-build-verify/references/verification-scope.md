@@ -22,8 +22,10 @@ Light 使用当前自包含任务包及最小充分验证，不因引用本策�
 - 缺少必要环境、权限或依赖时说明阻塞，
   不交付为“编译通过／程序可运行”，也不据此标记 `BUILD_VERIFIED` 或 QA PASS。
   验证须在授权范围执行，不擅自部署或修改真实业务数据。
-- 默认复用项目唯一的共享开发数据库、运行环境及系统全局依赖／构建缓存（Maven、Gradle、npm、
-  pnpm、Cargo、uv、DerivedData 等），结构与测试数据通过迁移或增量同步落实到单一基线；
+- 默认复用所属项目／服务已有配置、开发数据库、运行环境及系统依赖／构建缓存（Maven、Gradle、
+  npm、pnpm、Cargo、uv、DerivedData 等），各项目的数据与配置继续隔离，需保留的数据按授权
+  迁移或增量同步到相应基线，不为本次验证清理共享资源；实际新增资源沿原 input/output 合同
+  与 acceptance_evidence 说明目的、落点、所有者、复用入口及保留／回收条件。
   确需任务临时目录时使用 `task_graph_cli.py scratch --root <project-root> --request-id <request-id>`
   并在整个任务周期原地复用，不得按轮次新建隔离测试库、私有包仓库或复制源码／产物目录（如
   `-v2`、`-r1`、`replay`、`before`、`packages-qa*`）。

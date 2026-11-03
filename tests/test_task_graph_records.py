@@ -812,6 +812,7 @@ class RecordCliTest(unittest.TestCase):
     def test_scratch_workspace_reuses_deterministic_slot_and_cleans_up_at_closeout(self):
         first = self.invoke("scratch", "--root", self.root, "--request-id", "req-audit-01")
         self.assertEqual(0, first.returncode, first.stderr)
+        self.addCleanup(lambda: self._remove_cli_scratch("req-audit-01"))
         payload1 = json.loads(first.stdout)
         self.assertFalse(payload1["reused"])
         self.assertEqual("req-audit-01", payload1["request_id"])
@@ -832,12 +833,27 @@ class RecordCliTest(unittest.TestCase):
         self.assertTrue(payload2["reused"])
         self.assertEqual("round 1\n", (scratch_dir / "evidence.log").read_text(encoding="utf-8"))
 
-        cleaned = self.invoke("cleanup-scratch", "--root", self.root, "--request-id", "req-audit-01")
+        cleanup_args = ("cleanup-scratch", "--root", self.root, "--request-id", "req-audit-01")
+        preview = self.invoke(*cleanup_args, "--dry-run", "--keep", "evidence.log")
+        self.assertEqual(0, preview.returncode, preview.stderr)
+        preview_payload = json.loads(preview.stdout)
+        self.assertEqual("metadata", preview_payload["snapshot_kind"])
+        self.assertEqual(0, preview_payload["removed_files"])
+        self.assertEqual(["evidence.log"], preview_payload["kept_files"])
+        self.assertEqual(len(b"readonly-artifact"), preview_payload["planned_logical_bytes"])
+        cleaned = self.invoke(*cleanup_args, "--keep", "evidence.log", "--expect-sha256", preview_payload["snapshot_sha256"])
         self.assertEqual(0, cleaned.returncode, cleaned.stderr)
         cleaned_payload = json.loads(cleaned.stdout)
         self.assertTrue(cleaned_payload["cleaned"])
-        self.assertEqual(2, cleaned_payload["removed_files"])
-        self.assertGreater(cleaned_payload["reclaimed_bytes"], 0)
+        self.assertEqual(1, cleaned_payload["removed_files"])
+        self.assertEqual(len(b"readonly-artifact"), cleaned_payload["removed_logical_bytes"])
+        self.assertNotIn("reclaimed_bytes", cleaned_payload)
+        self.assertEqual("round 1\n", (scratch_dir / "evidence.log").read_text(encoding="utf-8"))
+        self.assertFalse(readonly_dir.exists())
+        final_preview = self.invoke(*cleanup_args, "--dry-run")
+        self.assertEqual(0, final_preview.returncode, final_preview.stderr)
+        final = self.invoke(*cleanup_args, "--expect-sha256", json.loads(final_preview.stdout)["snapshot_sha256"])
+        self.assertEqual(0, final.returncode, final.stderr)
         self.assertFalse(scratch_dir.exists())
 
         for bad_id in ("", " ", "\t"):
@@ -845,6 +861,47 @@ class RecordCliTest(unittest.TestCase):
                 invalid = self.invoke("scratch", "--root", self.root, "--request-id", bad_id)
                 self.assertEqual(2, invalid.returncode)
                 self.assertIn("error", json.loads(invalid.stderr))
+
+    def test_cleanup_options_are_scoped_and_deletion_requires_a_matching_preview(self):
+        """真实 CLI 拒绝绕过预览，以及把删除选项误交给图操作／只读查询。"""
+        scratch = self.invoke("scratch", "--root", self.root, "--request-id", "cli-contract")
+        target = Path(json.loads(scratch.stdout)["scratch_dir"])
+        self.addCleanup(lambda: self._remove_cli_scratch("cli-contract"))
+        evidence = target / "keep.log"
+        evidence.write_bytes(b"needed")
+        args = ("cleanup-scratch", "--root", self.root, "--request-id", "cli-contract")
+        invalid = (
+            args,
+            (*args, "--dry-run", "--expect-sha256", "0" * 64),
+            ("cleanup-scratch", "--root", self.root, "--all", "--dry-run", "--keep", "keep.log"),
+            (*args, "--all", "--dry-run"),
+            ("cleanup-scratch", "--root", self.root, "--dry-run"),
+        )
+        for command in invalid:
+            with self.subTest(command=command):
+                result = self.invoke(*command)
+                self.assertEqual(2, result.returncode, result.stdout)
+                self.assertEqual(b"needed", evidence.read_bytes())
+        for command in ("validate", "ready", "qa-ready", "capacity", "init", "update", "task", "fingerprints", "scratch", "continuation"):
+            for option in (("--dry-run",), ("--keep", "keep.log")):
+                with self.subTest(command=command, option=option):
+                    result = self.invoke(command, *option)
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn("only to cleanup-scratch", json.loads(result.stderr)["error"])
+        preview = self.invoke(*args, "--dry-run")
+        evidence.write_bytes(b"changed after preview")
+        result = self.invoke(*args, "--expect-sha256", json.loads(preview.stdout)["snapshot_sha256"])
+        self.assertEqual(2, result.returncode)
+        failure = json.loads(result.stderr)
+        self.assertEqual("failed", failure["status"])
+        self.assertEqual(0, failure["removed_files"])
+        self.assertEqual(0, failure["removed_logical_bytes"])
+        self.assertEqual(b"changed after preview", evidence.read_bytes())
+
+    def _remove_cli_scratch(self, request_id):
+        """夹具也使用当前预览合同清理，避免留下本测试新建的请求目录。"""
+        preview = records.cleanup_scratch(self.root, request_id, dry_run=True)
+        records.cleanup_scratch(self.root, request_id, expected=preview["snapshot_sha256"])
 
 
 class ScratchWorkspaceTest(unittest.TestCase):
@@ -859,6 +916,12 @@ class ScratchWorkspaceTest(unittest.TestCase):
         temp_root_patch = patch.object(records.tempfile, "gettempdir", return_value=str(self.home))
         temp_root_patch.start()
         self.addCleanup(temp_root_patch.stop)
+
+    def clean(self, request_id=None, *, remove_all=False, keep=()):
+        preview = records.cleanup_scratch(self.project, request_id, remove_all=remove_all,
+                                          keep=keep, dry_run=True)
+        return records.cleanup_scratch(self.project, request_id, remove_all=remove_all,
+                                       keep=keep, expected=preview["snapshot_sha256"])
 
     def test_existing_graph_ids_map_to_safe_distinct_directories(self):
         ids = ("需求-文档复用", "issue:123", "feature/reuse", "../escape", "CON", "r" * 129,
@@ -880,7 +943,7 @@ class ScratchWorkspaceTest(unittest.TestCase):
         evidence = paths[-2] / "active.log"
         evidence.write_text("keep active request", encoding="utf-8")
         self.assertFalse(paths[-2].samefile(paths[-1]))
-        records.cleanup_scratch(self.project, ids[-1])
+        self.clean(ids[-1])
         self.assertEqual("keep active request", evidence.read_text(encoding="utf-8"))
 
     def test_directory_swapped_before_open_never_follows_external_link(self):
@@ -892,19 +955,28 @@ class ScratchWorkspaceTest(unittest.TestCase):
         victim = external / "important.txt"
         victim.write_bytes(b"keep outside data")
         original_open = records.os.open
+        original_remove = records._remove_scratch_tree
         swapped = False
+        applying = False
+        preview = records.cleanup_scratch(self.project, "race", dry_run=True)
+
+        def mark_apply(parent, name, relative, *args):
+            nonlocal applying
+            applying = applying or relative == "build"
+            return original_remove(parent, name, relative, *args)
 
         def replace_before_open(name, flags, *args, **kwargs):
             nonlocal swapped
-            if name == "build" and not swapped:
+            if name == "build" and applying and not swapped:
                 swapped = True
                 nested.rename(self.home / "original-build")
                 nested.symlink_to(external, target_is_directory=True)
             return original_open(name, flags, *args, **kwargs)
 
-        with patch.object(records.os, "open", side_effect=replace_before_open):
+        with patch.object(records.os, "open", side_effect=replace_before_open), \
+                patch.object(records, "_remove_scratch_tree", side_effect=mark_apply):
             with self.assertRaises((OSError, ValueError)):
-                records.cleanup_scratch(self.project, "race")
+                records.cleanup_scratch(self.project, "race", expected=preview["snapshot_sha256"])
         self.assertTrue(swapped)
         self.assertEqual(b"keep outside data", victim.read_bytes())
 
@@ -919,19 +991,28 @@ class ScratchWorkspaceTest(unittest.TestCase):
         victim = external / "important.txt"
         victim.write_bytes(b"keep outside data")
         original_listdir = records.os.listdir
+        original_remove = records._remove_scratch_tree
         swapped = False
+        applying = False
+        preview = records.cleanup_scratch(self.project, "opened-race", dry_run=True)
+
+        def mark_apply(parent, name, relative, *args):
+            nonlocal applying
+            applying = applying or relative == "build"
+            return original_remove(parent, name, relative, *args)
 
         def replace_before_listdir(descriptor):
             nonlocal swapped
-            if records.os.fstat(descriptor).st_ino == nested_identity and not swapped:
+            if applying and records.os.fstat(descriptor).st_ino == nested_identity and not swapped:
                 swapped = True
                 nested.rename(self.home / "original-build")
                 nested.symlink_to(external, target_is_directory=True)
             return original_listdir(descriptor)
 
-        with patch.object(records.os, "listdir", side_effect=replace_before_listdir):
+        with patch.object(records.os, "listdir", side_effect=replace_before_listdir), \
+                patch.object(records, "_remove_scratch_tree", side_effect=mark_apply):
             with self.assertRaisesRegex(ValueError, "changed while cleaning"):
-                records.cleanup_scratch(self.project, "opened-race")
+                records.cleanup_scratch(self.project, "opened-race", expected=preview["snapshot_sha256"])
         self.assertTrue(swapped)
         self.assertEqual(b"keep outside data", victim.read_bytes())
 
@@ -944,11 +1025,18 @@ class ScratchWorkspaceTest(unittest.TestCase):
         victim.chmod(0o444)
         (target / "external-directory").symlink_to(external, target_is_directory=True)
         os.link(victim, target / "hardlink")
-        records.cleanup_scratch(self.project, "links")
+        if os.name == "nt":
+            # Windows 原后端拒绝链接，不把 POSIX 解绑策略冒充为原生平台的保证。
+            with self.assertRaises(records.ScratchCleanupError):
+                self.clean("links")
+        else:
+            result = self.clean("links")
+            self.assertEqual(len(b"keep outside data"), result["removed_logical_bytes"])
         self.assertEqual(b"keep outside data", victim.read_bytes())
         self.assertEqual(0o444, stat.S_IMODE(victim.stat().st_mode))
-        self.assertFalse(target.exists())
-        self.assertFalse(records.cleanup_scratch(self.project, "links")["cleaned"])
+        if os.name != "nt":
+            self.assertFalse(target.exists())
+            self.assertFalse(self.clean("links")["cleaned"])
 
     def test_target_symlink_is_rejected_and_all_cleanup_preserves_other_projects(self):
         target = Path(records.scratch_workspace(self.project, "linked-target")["scratch_dir"])
@@ -957,7 +1045,7 @@ class ScratchWorkspaceTest(unittest.TestCase):
         target.rmdir()
         target.symlink_to(external, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "not a link"):
-            records.cleanup_scratch(self.project, "linked-target")
+            records.cleanup_scratch(self.project, "linked-target", dry_run=True)
         self.assertTrue(target.is_symlink())
         target.unlink()
         other_project = self.home / "other-project"
@@ -969,7 +1057,7 @@ class ScratchWorkspaceTest(unittest.TestCase):
         legacy = own.parent / "legacy-request"
         legacy.mkdir()
         (legacy / "keep.log").write_bytes(b"unadopted legacy data")
-        self.assertTrue(records.cleanup_scratch(self.project, remove_all=True)["cleaned"])
+        self.assertTrue(self.clean(remove_all=True)["cleaned"])
         self.assertFalse(own.exists())
         self.assertEqual(b"unadopted legacy data", (legacy / "keep.log").read_bytes())
         self.assertEqual(b"other project", (other / "keep.log").read_bytes())
@@ -984,7 +1072,7 @@ class ScratchWorkspaceTest(unittest.TestCase):
         current = records.scratch_workspace(self.project, "current")
         self.assertFalse(current["reused"])
         self.assertFalse(legacy.samefile(current["scratch_dir"]))
-        records.cleanup_scratch(self.project, remove_all=True)
+        self.clean(remove_all=True)
         self.assertEqual(b"unfinished legacy task", evidence.read_bytes())
 
     @unittest.skipIf(os.name == "nt" or getattr(os, "geteuid", lambda: 0)() == 0,
@@ -998,11 +1086,216 @@ class ScratchWorkspaceTest(unittest.TestCase):
         evidence.write_bytes(b"keep inaccessible artifacts")
         nested.chmod(0o100)
         try:
-            with self.assertRaises(PermissionError):
-                records.cleanup_scratch(self.project, "unreadable")
+            with self.assertRaises(records.ScratchCleanupError) as failure:
+                records.cleanup_scratch(self.project, "unreadable", dry_run=True)
+            self.assertIsInstance(failure.exception.__cause__, PermissionError)
+            self.assertEqual(0, failure.exception.report["removed_files"])
         finally:
             nested.chmod(0o700)
         self.assertEqual(b"keep inaccessible artifacts", evidence.read_bytes())
+
+    def test_preview_is_read_only_missing_target_is_not_created_and_sample_is_bounded(self):
+        """预览无需先分配资源，也不为读取只读目录扩权或把完整清单输出到终端。"""
+        base = records._project_scratch_base(self.project)
+        missing = records.cleanup_scratch(self.project, "missing", dry_run=True)
+        self.assertFalse(missing["exists"])
+        self.assertFalse(base.exists())
+        self.assertEqual(0, missing["planned_logical_bytes"])
+        applied = records.cleanup_scratch(self.project, "missing", expected=missing["snapshot_sha256"])
+        self.assertFalse(applied["cleaned"])
+        self.assertFalse(base.exists())
+        target = Path(records.scratch_workspace(self.project, "preview")["scratch_dir"])
+        for index in range(records.SCRATCH_SAMPLE_LIMIT + 3):
+            (target / f"{index:02d}.bin").write_bytes(b"abc")
+        target.chmod(0o500)
+        before = target.stat()
+        with patch.object(records.os, "fchmod", side_effect=AssertionError("preview must not chmod")):
+            preview = records.cleanup_scratch(self.project, "preview", dry_run=True)
+        after = target.stat()
+        self.assertEqual((before.st_mode, before.st_mtime_ns, before.st_ctime_ns),
+                         (after.st_mode, after.st_mtime_ns, after.st_ctime_ns))
+        self.assertEqual(records.SCRATCH_SAMPLE_LIMIT + 3, preview["planned_files"])
+        self.assertEqual(3 * preview["planned_files"], preview["planned_logical_bytes"])
+        self.assertEqual(records.SCRATCH_SAMPLE_LIMIT, len(preview["candidate_sample"]))
+        self.assertTrue(preview["candidate_sample_truncated"])
+        self.assertEqual("metadata", preview["snapshot_kind"])
+        self.assertEqual(0, preview["removed_files"])
+        self.clean("preview")
+
+    def test_keep_precise_nested_files_removes_siblings_and_restores_ancestor_modes(self):
+        target = Path(records.scratch_workspace(self.project, "keep")["scratch_dir"])
+        logs = target / "logs"
+        logs.mkdir()
+        evidence = logs / "accepted.log"
+        evidence.write_bytes(b"complete evidence")
+        (logs / "round.tmp").write_bytes(b"remove sibling")
+        (target / "build.tmp").write_bytes(b"remove build")
+        logs.chmod(0o500)
+        target.chmod(0o500)
+        keep = ("logs/accepted.log",)
+        preview = records.cleanup_scratch(self.project, "keep", keep=keep, dry_run=True)
+        self.assertEqual(2, preview["planned_files"])
+        self.assertEqual(0, preview["planned_directories"])
+        result = records.cleanup_scratch(self.project, "keep", keep=keep, expected=preview["snapshot_sha256"])
+        self.assertEqual(b"complete evidence", evidence.read_bytes())
+        self.assertEqual(["accepted.log"], sorted(path.name for path in logs.iterdir()))
+        self.assertEqual(["logs"], sorted(path.name for path in target.iterdir()))
+        self.assertEqual(0o500, stat.S_IMODE(logs.stat().st_mode))
+        self.assertEqual(0o500, stat.S_IMODE(target.stat().st_mode))
+        self.assertEqual(len(b"remove siblingremove build"), result["removed_logical_bytes"])
+        self.clean("keep")
+
+    def test_keep_rejects_missing_directories_links_and_unnormalized_paths_before_deletion(self):
+        target = Path(records.scratch_workspace(self.project, "bad-keep")["scratch_dir"])
+        ordinary = target / "ordinary.log"
+        ordinary.write_bytes(b"must survive")
+        (target / "directory").mkdir()
+        external = self.home / "external"
+        external.mkdir()
+        (external / "outside.log").write_bytes(b"outside")
+        (target / "linked").symlink_to(external, target_is_directory=True)
+        (target / "file-link").symlink_to(ordinary)
+        bad_paths = ("missing.log", "directory", "linked/outside.log", "file-link", ".", "../ordinary.log",
+                     "./ordinary.log", "ordinary.log/", "/ordinary.log", "C:/ordinary.log", "a\\b",
+                     "directory//file", "*.log", "[ordinary].log", "bad\0name")
+        for keep_path in bad_paths:
+            with self.subTest(keep=keep_path):
+                with self.assertRaises(ValueError):
+                    records.cleanup_scratch(self.project, "bad-keep", dry_run=True, keep=(keep_path,))
+                self.assertEqual(b"must survive", ordinary.read_bytes())
+                self.assertTrue((target / "linked").is_symlink())
+
+    def test_snapshot_binds_request_keep_and_visible_metadata_changes(self):
+        """只读预览的摘要绑定完整集合；任何可见变化都不能沿用旧删除许可。"""
+        for mutation in ("new", "replacement", "append", "same-size", "keep-set", "other-target"):
+            request_id = "changed-" + mutation
+            target = Path(records.scratch_workspace(self.project, request_id)["scratch_dir"])
+            evidence = target / "evidence.log"
+            evidence.write_bytes(b"original")
+            disposable = target / "disposable.tmp"
+            disposable.write_bytes(b"scratch")
+            preview = records.cleanup_scratch(self.project, request_id, dry_run=True)
+            kwargs = {}
+            if mutation == "new":
+                (target / "late.log").write_bytes(b"late")
+            elif mutation == "replacement":
+                replacement = target / "replacement"
+                replacement.write_bytes(b"new inode")
+                replacement.replace(evidence)
+            elif mutation == "append":
+                with evidence.open("ab") as output:
+                    output.write(b" appended")
+            elif mutation == "same-size":
+                before = evidence.stat()
+                evidence.write_bytes(b"modified")
+                # 明确制造可见 mtime 差异，不依赖文件系统的时钟粒度或 Windows ctime 语义。
+                os.utime(evidence, ns=(before.st_atime_ns, before.st_mtime_ns + 1000000000))
+            elif mutation == "keep-set":
+                kwargs["keep"] = ("evidence.log",)
+            else:
+                request_id = "different-request"
+                Path(records.scratch_workspace(self.project, request_id)["scratch_dir"]).joinpath("keep").write_bytes(b"other")
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(records.ScratchCleanupError, "snapshot changed") as failure:
+                records.cleanup_scratch(self.project, request_id, expected=preview["snapshot_sha256"], **kwargs)
+            self.assertEqual(0, failure.exception.report["removed_files"])
+            self.assertEqual(b"scratch", disposable.read_bytes())
+            self.assertTrue(evidence.exists())
+
+    def test_inflight_new_file_is_preserved_and_failure_counts_successful_deletions(self):
+        target = Path(records.scratch_workspace(self.project, "late-file")["scratch_dir"])
+        (target / "00-first").write_bytes(b"first")
+        (target / "01-next").write_bytes(b"next")
+        preview = records.cleanup_scratch(self.project, "late-file", dry_run=True)
+        original_unlink = records.os.unlink
+
+        def add_after_unlink(name, **kwargs):
+            original_unlink(name, **kwargs)
+            if name == "00-first":
+                (target / "new.log").write_bytes(b"do not adopt")
+
+        with patch.object(records.os, "unlink", side_effect=add_after_unlink):
+            with self.assertRaisesRegex(records.ScratchCleanupError, "entries changed") as failure:
+                records.cleanup_scratch(self.project, "late-file", expected=preview["snapshot_sha256"])
+        self.assertEqual(2, failure.exception.report["removed_files"])
+        self.assertEqual(len(b"firstnext"), failure.exception.report["removed_logical_bytes"])
+        self.assertEqual(b"do not adopt", (target / "new.log").read_bytes())
+        self.assertFalse((target / "01-next").exists())
+
+    def test_inflight_file_change_is_not_unlinked_and_failed_ancestors_restore_permissions(self):
+        target = Path(records.scratch_workspace(self.project, "late-write")["scratch_dir"])
+        (target / "00-first").write_bytes(b"first")
+        next_file = target / "01-next"
+        next_file.write_bytes(b"next")
+        target.chmod(0o500)
+        preview = records.cleanup_scratch(self.project, "late-write", dry_run=True)
+        original_remove = records._remove_scratch_tree
+
+        def write_before_remove(parent, name, relative, *args):
+            if relative == "01-next":
+                next_file.write_bytes(b"active writer")
+            return original_remove(parent, name, relative, *args)
+
+        with patch.object(records, "_remove_scratch_tree", side_effect=write_before_remove):
+            with self.assertRaisesRegex(records.ScratchCleanupError, "entry changed") as failure:
+                records.cleanup_scratch(self.project, "late-write", expected=preview["snapshot_sha256"])
+        self.assertEqual(1, failure.exception.report["removed_files"])
+        self.assertEqual(b"active writer", next_file.read_bytes())
+        self.assertEqual(0o500, stat.S_IMODE(target.stat().st_mode))
+        self.clean("late-write")
+
+    def test_deletion_failures_report_exact_counts_including_post_delete_errors(self):
+        for after_delete in (False, True):
+            request_id = f"delete-error-{after_delete}"
+            target = Path(records.scratch_workspace(self.project, request_id)["scratch_dir"])
+            (target / "00-first").write_bytes(b"first")
+            (target / "01-failure").write_bytes(b"failure")
+            preview = records.cleanup_scratch(self.project, request_id, dry_run=True)
+            original_unlink = records.os.unlink
+
+            def fail(name, **kwargs):
+                if name == "01-failure":
+                    if after_delete:
+                        original_unlink(name, **kwargs)
+                    raise PermissionError("simulated delete/flush failure")
+                original_unlink(name, **kwargs)
+
+            with self.subTest(after_delete=after_delete), patch.object(records.os, "unlink", side_effect=fail):
+                with self.assertRaises(records.ScratchCleanupError) as failure:
+                    records.cleanup_scratch(self.project, request_id, expected=preview["snapshot_sha256"])
+            report = failure.exception.report
+            self.assertEqual("failed", report["status"])
+            self.assertEqual(2 if after_delete else 1, report["removed_files"])
+            self.assertEqual(len(b"firstfailure") if after_delete else len(b"first"), report["removed_logical_bytes"])
+            self.assertEqual(not after_delete, (target / "01-failure").exists())
+
+    @unittest.skipIf(os.name == "nt", "Windows 原后端明确拒绝硬链接")
+    def test_multiple_hardlinks_allow_own_unlinks_and_preserve_a_retained_alias(self):
+        target = Path(records.scratch_workspace(self.project, "hardlinks")["scratch_dir"])
+        evidence = target / "keep.log"
+        evidence.write_bytes(b"one inode")
+        evidence.chmod(0o444)
+        os.link(evidence, target / "00-alias")
+        os.link(evidence, target / "01-alias")
+        result = self.clean("hardlinks", keep=("keep.log",))
+        self.assertEqual(2, result["removed_files"])
+        self.assertEqual(2 * len(b"one inode"), result["removed_logical_bytes"])
+        self.assertEqual(b"one inode", evidence.read_bytes())
+        self.assertEqual(0o444, stat.S_IMODE(evidence.stat().st_mode))
+        self.assertEqual(1, evidence.stat().st_nlink)
+
+    def test_large_sparse_file_uses_metadata_without_content_reads_or_size_limit(self):
+        target = Path(records.scratch_workspace(self.project, "large")["scratch_dir"])
+        sparse = target / "large.bin"
+        logical_size = 128 * 1024 * 1024 + 17
+        with sparse.open("wb") as output:
+            output.truncate(logical_size)
+        # 文件确实大于旧条件删除 helper 的上限；清理不读取内容，因此不调用该 helper。
+        with patch.object(records.os, "read", side_effect=AssertionError("cleanup must not read file contents")):
+            preview = records.cleanup_scratch(self.project, "large", dry_run=True)
+            result = records.cleanup_scratch(self.project, "large", expected=preview["snapshot_sha256"])
+        self.assertEqual(logical_size, preview["planned_logical_bytes"])
+        self.assertEqual(logical_size, result["removed_logical_bytes"])
+        self.assertFalse(target.exists())
 
 
 class RecordInstalledRuntimeTest(unittest.TestCase):
@@ -1049,6 +1342,42 @@ class RecordInstalledRuntimeTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual("followup", json.loads(result.stdout)["action"])
             self.assertEqual(before, source.read_bytes())
+            # 从已安装且脱离源码工作目录的入口实际消费新参数，证明复制出的运行时
+            # 能完成精确保留与最终收口；中央仓库的测试函数不能替代这个消费者证据。
+            runtime_cli = ["bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8",
+                           str(runtime / "lib/task_graph_cli.py")]
+
+            def invoke_cleanup(*options):
+                return subprocess.run([*runtime_cli, "cleanup-scratch", "--root", str(project),
+                                       "--request-id", "installed-cleanup", *options],
+                                      cwd=project, text=True, capture_output=True, check=False, timeout=15)
+
+            allocated = subprocess.run([*runtime_cli, "scratch", "--root", str(project),
+                                        "--request-id", "installed-cleanup"],
+                                       cwd=project, text=True, capture_output=True, check=False, timeout=15)
+            self.assertEqual(0, allocated.returncode, allocated.stderr)
+            scratch = Path(json.loads(allocated.stdout)["scratch_dir"])
+            try:
+                (scratch / "keep.log").write_bytes(b"complete installed evidence")
+                (scratch / "build.tmp").write_bytes(b"temporary build")
+                preview = invoke_cleanup("--dry-run", "--keep", "keep.log")
+                self.assertEqual(0, preview.returncode, preview.stderr)
+                preview_body = json.loads(preview.stdout)
+                cleaned = invoke_cleanup("--keep", "keep.log", "--expect-sha256", preview_body["snapshot_sha256"])
+                self.assertEqual(0, cleaned.returncode, cleaned.stderr)
+                self.assertEqual(len(b"temporary build"), json.loads(cleaned.stdout)["removed_logical_bytes"])
+                self.assertEqual(b"complete installed evidence", (scratch / "keep.log").read_bytes())
+                self.assertFalse((scratch / "build.tmp").exists())
+                final_preview = invoke_cleanup("--dry-run")
+                self.assertEqual(0, final_preview.returncode, final_preview.stderr)
+                final = invoke_cleanup("--expect-sha256", json.loads(final_preview.stdout)["snapshot_sha256"])
+                self.assertEqual(0, final.returncode, final.stderr)
+                self.assertFalse(scratch.exists())
+            finally:
+                # 只处理本夹具刚创建的请求，不使用 --all，也不清理安装器或其他任务资源。
+                if scratch.exists():
+                    pending = records.cleanup_scratch(project, "installed-cleanup", dry_run=True)
+                    records.cleanup_scratch(project, "installed-cleanup", expected=pending["snapshot_sha256"])
             self.assertEqual(b"module example.test/records\n", business.read_bytes())
 
 

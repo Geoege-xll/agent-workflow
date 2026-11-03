@@ -14,20 +14,17 @@ Light 可直接维护同形单任务包，不要求创建Full图或第二账本�
   justify a temporary helper. Keep it task-scoped, reuse it during that task, and do not turn it
   into a default deliverable or an additional acceptance gate.
 - Internal records stay in the current resolved execution workspace, not the business source tree
-  or a new controlled-document layer. Allocate the task scratch directory with `task_graph_cli.py
-  scratch --root <project-root> --request-id <request-id>` and reuse that single path in place across
-  retries, rework and QA rounds. Do not invent dated or random `/tmp/<project>-*` folders, clone source
-  trees (`work/`, `replay/`, `before/`, `packages-qa*`), or redirect global dependency/build caches
-  (`Maven`, `Gradle`, `npm`, `Cargo`, `DerivedData`) into task scratch directories. Reuse the current
-  graph and available receipts. Do not create a second task-state source, a receipt per step, or a new
-  checkpoint script just to update metadata.
-- Clean up the task's scratch workspace at closeout with `task_graph_cli.py cleanup-scratch` after
-  the task and references are finished, retaining only distilled evidence in the task record. Never
-  delete active task files, another Agent's temporary workspace, or evidence still needed while
-  implementation/QA is in flight. Before cleanup, ensure complete logs still referenced by a plan,
-  handoff or recovery path have a readable persistent reference, such as the original Agent chat.
-  A summary or a path into the directory being deleted is not a replacement for required full evidence;
-  retain the needed artifacts when no persistent reference exists.
+  or a new controlled-document layer. 仅实际需要临时文件时，使用下文 `scratch` 分配本请求
+  唯一路径，跨重试、返工与 QA 原地复用；无此需要的 Light 不创建 scratch 或空记录。
+  Do not invent dated or random `/tmp/<project>-*` folders, clone source trees (`work/`, `replay/`,
+  `before/`, `packages-qa*`), or redirect global dependency/build caches (`Maven`, `Gradle`, `npm`,
+  `Cargo`, `DerivedData`) into task scratch directories. Reuse the current graph and available
+  receipts. Do not create a second task-state source, a receipt per step, or a new checkpoint script
+  just to update metadata.
+- 有待回收临时资源时，按下文的只读预览、选择保留及快照绑定清理；调用方先停止相关
+  写者并核实归属、活跃使用和必要引用。必需完整日志先移交到可读持久落点并修复引用，
+  否则精确保留必要文件。摘要或即将删除目录中的路径不能代替完整证据；工具不推断
+  语义引用，也不授权清理共享环境、数据库、系统缓存、用户材料或其他任务资源。
 
 ## 初始化任务图
 
@@ -313,8 +310,9 @@ Matching bytes alone never proves that a command ran, tests passed, the program 
 
 ## Allocate and clean up the task scratch workspace
 
-Use `scratch` to resolve one deterministic scratch directory per project/request instead of creating
-ad-hoc `/tmp/<project>-<date>` folders, and `cleanup-scratch` at closeout to reclaim disk space:
+仅实际需要临时文件时用 `scratch` 解析每个项目／请求的唯一目录，原地复用到任务收口；
+不创建按日期、轮次或候选命名的副本。新增资源的目的、所有者、复用入口及保留／回收
+条件留在原 Task Pack 合同与验收证据，不另建目录清单、资源台账或报告。
 
 Request IDs retain the task graph's non-empty string contract, including Unicode and punctuation.
 The directory name uses the full ID's SHA-256, keeping case-distinct requests separate even on a
@@ -328,7 +326,36 @@ are preserved with an error; do not fall back to changing permissions through an
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py scratch \
   --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}"
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py cleanup-scratch \
-  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}"
 ```
+
+`cleanup-scratch` 必须先只读预览，再按相同目标与保留项执行：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py cleanup-scratch \
+  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" --dry-run
+# 核对归属、使用和引用后，将预览返回的 snapshot_sha256 设为 scratch_snapshot_sha256。
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py cleanup-scratch \
+  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" \
+  --expect-sha256 "${scratch_snapshot_sha256:?use the reviewed preview snapshot SHA}"
+```
+
+需要保留仍被引用的唯一文件时，两次命令都添加相同的 `--keep <relative-file>`，多文件可
+重复该参数。它只接受目标 scratch 内已存在的规范相对普通文件，保留其必要祖先目录；
+拒绝缺失文件、链接祖先、通配符和路径穿越。先移交并修复引用可以减少保留范围，不因
+一个文件有引用保留整个候选目录。无法证明归属或无活跃使用的目标不执行删除。
+
+预览不创建、chmod 或删除文件；返回总计及最多 20 项的 `candidate_sample`，
+`candidate_sample_truncated` 明示是否截断。`snapshot_kind: metadata` 与 `snapshot_sha256`
+绑定完整目标与保留项的元数据，不读取大文件内容、不引入文件大小上限；它不是内容
+指纹，也不证明任务已结束或引用已移交。执行要求当前快照匹配 `--expect-sha256` 并逐项
+复核，变化时拒绝；先停止本任务写者仍是调用方责任，不承诺最终 unlink 前对非协作恶意
+并发的原子安全。`--dry-run` 与 `--expect-sha256` 互斥，旧式无指纹删除不再接受。
+
+默认只收口本 `--request-id`。`--all` 仅用于已显式授权、全部目标归属明确且无活跃使用的
+管理清理，同样先预览再绑定快照，且不能与 `--keep` 共用；它不是每轮任务的默认动作。
+POSIX 不跟随链接，普通硬链接仅 unlink 本任务归属项，不修改外部内容或权限；Windows
+保留原安全后端与链接拒绝策略，不将其 ctime 声称为 changeTime。权限或部分删除失败
+返回非零并如实保留已成功计数，恢复为保留必要目录而临时调整的权限。
+`planned_logical_bytes`／`removed_logical_bytes` 按文件逻辑长度统计待删／已删项，
+不表示实际物理磁盘回收量，也不再使用误导的 `reclaimed_bytes`。
 

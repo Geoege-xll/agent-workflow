@@ -82,13 +82,16 @@ Light 完成最小验证后按实际风险评估独立审计、文档与记忆�
   The selected [worktree delivery](worktree-delivery.md) branch separately grants bounded PM-local
   checkpoint/integration authority before final QA and confirm/auto delivery after all work completes.
   It never grants workers commit/merge authority or implies a remote operation.
-- Before the final report, clean up task-owned temporary artifacts: run `task_graph_cli.py
-  cleanup-scratch --root <project-root> --request-id <request-id>`, drop any task-created temporary
-  test databases, containers or rolling pre-operation snapshots after verified changes are synced to
-  the single baseline, and keep only distilled evidence references in the task record. First ensure
-  required complete logs have readable persistent references; preserve the necessary artifacts if
-  a plan, handoff or recovery reference still depends on their only copy in scratch. Report
-  reclaimed temporary resources concisely when cleanup removed task artifacts.
+- 最终报告前，仅在确有本任务临时资源时按原合同收口。先停止相关写者，核对任务归属、
+  活跃使用及当前计划／交接／恢复引用；共享配置、项目环境、数据库、系统缓存与用户材料
+  继续按其职责复用。将按授权需保留的有效数据与成果移交相应项目／服务基线，必需完整
+  日志及批准／恢复证据先取得可读持久落点并修复当前引用，不能用摘要代替唯一完整证据。
+  无法移交时仅保留必要文件及祖先目录，不因单个引用保留全部候选。
+  scratch 按[记录工具的预览与清理合同](runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace)
+  先以本 `request-id` 只读预览，携带相同的必要 `--keep`，核对后用预览快照指纹执行；
+  快照失效先重新核实，`--all` 不作默认收口。隔离库、容器、滚动快照同样只回收可证明
+  归属且无活跃使用与必要引用的本任务资源。确有清理时在原任务中简述结果与剩余限制；
+  `removed_logical_bytes` 仅为已移除文件的逻辑字节统计，不声称实际物理磁盘释放量。
 
 ## 实例与证据收口
 

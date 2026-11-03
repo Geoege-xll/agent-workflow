@@ -57,6 +57,10 @@ dispatch, not a new business gate, QA stage or full test run; Hooks never auto-i
 - Reuse the existing [record tools](runtime-records.md) for common snapshot updates, Task Pack
   export and selected fingerprint checks. Prefer existing project verification commands for behavior.
   Do not create a one-off program or extra receipt for each routine PM metadata operation.
+- 实际新增资源时，按 WORKFLOW 的 Task Packs 合同，在原 `input_contracts`、`output_contracts`
+  与 `acceptance_evidence` 明确目的、落点、所有者、复用入口和保留／回收条件。先复用所属
+  项目／服务的配置、环境、数据与系统缓存；临时文件确有需要才分配本请求唯一 scratch。
+  无新增资源不创建空记录，也不因此给 Light 增加 Full 图、计划或 QA。
 - 必需 Skill 或指令无法在一次可靠回包中完整返回时，可选用
   [单文件分页器](runtime-records.md#完整读取必需长文)。每次回包读取一页，以同一 SHA
   连续跟进每个 `next_offset` 直到 `eof`，为完整 JSON 预留宿主输出预算；字符预算不是

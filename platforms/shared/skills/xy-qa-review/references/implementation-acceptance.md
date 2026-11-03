@@ -25,6 +25,13 @@ method findings against source before deciding; no findings never establishes ac
 For desktop changes, cover affected desktop renderer/core trust boundaries, IPC/capabilities, native
 integration, packaging, signing, notarization, updater and release evidence.
 
+资源与文档检查并入本次审查：仅对实际新增资源核对原 input/output 合同中的目的、落点、
+所有者、复用入口和保留／回收条件，确认共享配置、环境、数据库与系统缓存未被当作任务
+临时物。核对必需完整证据有可读持久引用，或已明确精确保留的必要文件；摘要不足以替代。
+沿本需求相关当前计划、功能与规范引用检查唯一当前权威及受影响链接，保护原始批准、
+历史计划与唯一证据，不按文件数、长度或目录位置判定重复，不新增全仓扫描或报告。
+清理执行仍由 PM 按现有收口合同完成，QA 不删除资源，也不为收口再审未变范围。
+
 ## Independent standards coverage
 
 从实际变更路径独立选择适用内置规则及项目特有规范，索引存在时沿链接读取并核对真实SHA。

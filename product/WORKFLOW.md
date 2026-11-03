@@ -1113,6 +1113,12 @@ Every implementation task pack includes at least:
 - actual dependencies and conflict conclusions; Full includes graph scheduling fields;
 - the delivery-report format and the location of complete evidence.
 
+实际新增临时目录、环境、数据库、容器或过程产物时，沿用 `input_contracts` 说明已有资源与
+复用入口，`output_contracts` 说明新增资源的目的、落点、所有者和保留／回收条件，并在
+`acceptance_evidence` 交回实际结果与必要完整证据落点。资源复用与归属按内置
+`eng-common-030`，不另建资源台账或默认报告；没有新增资源的 Light 不因此创建 scratch、
+Full 图或空记录，Full 的原有规划与唯一 QA 要求保持。
+
 For Full work, these packs originate from the approved and frozen `xy-plan` draft. The PM may correct
 the draft before approval, but must not silently change the approved requirement fingerprint,
 acceptance boundary, or graph afterward. A material change returns to Grill Me coverage as needed,
@@ -1188,6 +1194,12 @@ before-content; do not leave competing old/new current authorities or treat a re
 that a task read new content. Purely organizational changes do not themselves require another business
 confirmation, full business regression or review of unchanged contracts. Actual rule/contract changes
 still follow the existing approval, risk, verification and independent-review boundaries.
+
+PM 更新或收口时，沿本需求现有索引与引用定位当前计划、功能与规范主题，核对受影响的
+当前链接及是否出现重复当前权威，并纳入原 QA 的适用文档检查；不增加全仓扫描、报告或
+第二次审查。目录位置不能单独证明内容已过时，`docs.plans` 仍可包含当前恢复依据。
+原始批准、历史计划和唯一证据按现有计划生命周期保全；不把它们当作重复当前权威自动
+删除，也不按固定文件数或长度合并有独立维护边界的主题。
 
 ### Standards authority snapshot
 
