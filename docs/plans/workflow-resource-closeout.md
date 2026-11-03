@@ -1,6 +1,6 @@
 # 任务资源复用、选择性清理与文档收口
 
-状态：实施与独立审计完成，交付中。
+状态：已完成。
 
 ## 已批准的目标与边界
 
@@ -51,6 +51,11 @@ planned_logical_bytes、removed_logical_bytes 只表示文件逻辑字节，不�
 唯一独立 QA 已对组合候选的 12 条路径、36 条工程规则及完整证据给出 PASS，零阻断；PM 已使用当前 QA 包校验结构化交接，结果 valid。
 原生 review 无法安全绑定本次固定范围，同一 Reviewer 直接应用已安装审查提示完成审查；未新增 Reviewer 或复跑既有行为测试。
 源包没有 PROJECT／features 当前特性树；已审计的 WORKFLOW 与直接 Skill 参考就是本批当前权威，不生成占位特性文档。
-下一步：按已有交付授权精确提交、推送，并通过原安装器同步 mt-shop、TeachingAssistant、ParentsKit 的受管工作流，核对原项目适配配置及本批源码指纹；不移动既有发布标签和资产。
-普通文档进度收口不重新运行已有有效检查。
-完整运行证据使用本请求既有受管 scratch；收口只保留仍需引用的确切证据。
+实现提交为 ef45f9615e5788dd0da2fa450537c2145d387818，精确 12 路径，提交补丁与已检查暂存快照一致；交付分支为 GitHub main，既有 v2.0.0 标签及资产保持。
+mt-shop、TeachingAssistant、ParentsKit 均经原安装器同步成功，各自 Codex／Claude／AGY 检查通过；每项目原适配配置与本批 10 份运行时源码共 11 项指纹匹配，配置与模型选择保留。
+本轮按预览指纹实际清理 committed.diff、staged.diff 和独立临时索引 3 个可恢复过程文件，共 188995 逻辑字节；不是物理磁盘回收量。21 份仍被引用的验收、同步与恢复文件精确保留。
+三个实施／QA实例在反馈窗口结束后已逻辑退役，当前工具不支持可靠 close／kill，原生关闭及上下文清空未确认；不再复用这些实例，未删除原始聊天历史。
+源包 memory.project_id 仍为占位值，无法证明严格项目隔离，未调用记忆检索或保存；耐久规则已在既有权威位置更新。
+普通计划进度收口只核对实际文档差异，不重新运行已有有效检查或重启 QA。
+
+必要本地证据位于 `/private/var/folders/w9/cgyn8nj14fs91j8rrc220l3w0000gn/T/agent-workflow-request-scratch/agent_workflow-65c9b3d90960/request-92b56c3e62851299a7f8d0b188c4784c8490dcb4d84dc8e62f013d24aa6de63a`：qa-handoff.json 与原 qa-task.json 保留原始身份和包绑定；sync-verification.json 记录三个项目的实际命令、配置及源码核对结果，完整原始日志同处保留。恢复时只读取所需证据，不重新派发已完成任务。
