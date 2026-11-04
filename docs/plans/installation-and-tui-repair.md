@@ -1,6 +1,6 @@
 # 安装渠道与 TUI 审计修复
 
-状态：源码修复、必要验证与唯一独立 QA 已通过；用户已确认发布 v2.0.2，发行交付执行中。
+状态：已完成。源码独立 QA、GitHub v2.0.2 发布、Homebrew Tap 更新与本机升级验收均通过。
 
 ## 已批准目标与边界
 
@@ -33,21 +33,24 @@ Python 3.11 的深 JSON 回归须取得真实证据；其他受支持解释器�
 说明在 README 与已有 Homebrew 专题原地更新，不新增通用规范或项目索引。
 无配置的项目特有规范叶，无需创建 GENERAL／空索引；不启动跨会话记忆检索。
 
-## 当前恢复入口
+## 交付与证据
 
-唯一本请求 scratch 的 request-id 为 `installation-tui-repair-20261103`，
-用现有 `task_graph_cli.py scratch` 定位；图、当前任务包、完整日志及发行产物在同一目录复用。
-当前实现及原离线候选已冻结并完成独立验收。发布前仅更新说明中的候选状态，README
-作为归档输入变化，因此刷新正式发行包，核对其与原包仅有 README 差异，并由真实 Homebrew
-链路消费最终产物；不重复代码回归。保留必需完整证据及原审查候选、正式发行产物，
-仅清理可证明归属且无使用的合成夹具；不因此再次运行已有效的验证。
+正式发行：[v2.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v2.0.2)，
+标签指向 `a9a528f9ebfb0dd0d384b6ce42616d4b853fb58a`。
+Tap 提交为 `50e68c8cc101f093c0434a70c21160826cd0ecae`，Formula 来自该 Release。
+正式归档 SHA-256 为 `a9e4ac8c395d3c1b1bd66b0707828bba619ae93d5565d3b7cd48c9237965e41d`。
 
-实现交付入口为同一 scratch 内的 `implementation-receipt.json`，包含源码、三份发行产物
-指纹和全部原始验证日志。默认 Python 33 项定向检查、真实 3.11 回归 4 项、真实 PTY 与
-三平台安装消费者各 1 项通过。独立 QA 覆盖 13 条变更路径及 47 条规则，36 条通过、
-11 条不适用，无阻断项；`qa-handoff.json` 与 `qa-task.json` 的绑定校验通过。
-原批准计划保存在 `approved-plan.md`，完整审查范围保存在 `request.diff`。
+唯一本请求 scratch 的 request-id 为 `installation-tui-repair-20261103`，用现有
+`task_graph_cli.py scratch` 定位。`implementation-receipt.json`、`qa-task.json` 与
+`qa-handoff.json` 保留原实现与独立审查证据；`delivery-verification.json` 的 publication
+部分记录正式发行、本机验收及必要完整日志。原批准计划与冻结范围继续保留。
 
-剩余工作：提交发行说明，推送已验收修复、发布 2.0.2 并更新匹配的 Tap Formula，
-完成本机真实 Homebrew 升级验收；这些动作不自动同步业务项目。
-发布前基线：公共 Tap 与本机为 0.1.0；当前 GitHub 无 v2.0.2 标签或 Release。
+源码阶段默认 Python 33 项定向检查、真实 3.11 回归 4 项、PTY 与三平台安装消费者各 1 项
+通过；独立 QA 覆盖 13 条路径及 47 条规则，36 条通过、11 条不适用，无阻断项，绑定校验有效。
+发布前仅修改说明状态，新旧归档 172 个条目只有 README 不同，代码证据继续复用。
+真实 Homebrew 从 0.1.0 升级至 2.0.2，brew test、默认入口版本、TUI 键盘／缩放、临时项目
+首次安装与再次升级均通过；安装器内置三平台 --check 已通过，不再重复执行。
+
+本需求无剩余实施工作，不默认重放已完成任务。完整证据与原审查候选、正式资产保留，
+临时消费项目按快照清理；Homebrew 测试临时开启的开发者模式已恢复关闭。
+本次未同步业务项目。
