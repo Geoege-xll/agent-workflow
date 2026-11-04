@@ -18,7 +18,6 @@ python3 "${PACK_DIR}/lib/validate_project_config.py" \
 DOC_STANDARDS=$(py_yaml "${PROJECT_YAML}" docs standards)
 DOC_STANDARDS_ROOT=$(py_yaml "${PROJECT_YAML}" docs standards_root)
 DOC_PROJECT=$(py_yaml "${PROJECT_YAML}" docs project)
-DOC_FEATURES_DIR=$(py_yaml "${PROJECT_YAML}" docs features)
 DOC_PLANS_DIR=$(py_yaml "${PROJECT_YAML}" docs plans)
 DOC_NOTES_DIR=$(py_yaml "${PROJECT_YAML}" docs notes)
 # 规范直接放在 standards_root，原型仅保留一层子目录。
@@ -30,7 +29,7 @@ log_info "Project: ${PROJECT_NAME}  root: ${PROJECT_ROOT}"
 python3 --workflow-paths=1,2,3 - \
   "${PROJECT_ROOT}" "${PACK_DIR}" "${TEMPLATES}" \
   "${PROJECT_NAME}" "${DATE_STR}" \
-  "${DOC_STANDARDS}" "${DOC_STANDARDS_ROOT%/}" "${DOC_PROJECT}" "${DOC_FEATURES_DIR%/}" \
+  "${DOC_STANDARDS}" "${DOC_STANDARDS_ROOT%/}" "${DOC_PROJECT}" \
   "${DOC_PLANS_DIR%/}" "${DOC_NOTES_DIR%/}" \
   "${DOC_DESIGN_DIR%/}" <<'PY'
 from __future__ import annotations
@@ -51,7 +50,6 @@ from pathlib import Path
     doc_standards,
     doc_standards_root,
     doc_project,
-    doc_features_dir,
     doc_plans_dir,
     doc_notes_dir,
     doc_design_dir,
@@ -316,7 +314,6 @@ values = {
     "DOC_STANDARDS": doc_standards,
     "DOC_STANDARDS_ROOT": doc_standards_root,
     "DOC_PROJECT": doc_project,
-    "DOC_FEATURES_DIR": doc_features_dir,
     "DOC_PLANS_DIR": doc_plans_dir,
     "DOC_NOTES_DIR": doc_notes_dir,
     "DOC_DESIGN_DIR": doc_design_dir,
@@ -329,7 +326,7 @@ try:
     standard_updates = plan_standard_updates(
         pack_root, project_root,
         docs={"standards": doc_standards, "standards_root": doc_standards_root,
-              "project": doc_project, "features": doc_features_dir},
+              "project": doc_project, "plans": doc_plans_dir},
         profile=profile,
         expected_inputs=standard_inputs,
     )
@@ -356,18 +353,9 @@ if ui_enabled:
             )
         prototype_active = any(prototype_root.iterdir())
     if not prototype_active:
-        candidates.append(
-            (
-                prototype_root / "index.html",
-                regular_source(pack_root / "templates/prototype/index.html"),
-            )
-        )
-        candidates.append(
-            (
-                prototype_root / "prototype.css",
-                regular_source(pack_root / "templates/prototype/prototype.css"),
-            )
-        )
+        # 初始化才发布工作区控制器与页面桥接；非空旧项目仍保留原索引、样式和业务页。
+        for name in ("index.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js"):
+            candidates.append((prototype_root / name, regular_source(pack_root / "templates/prototype" / name)))
 
 snapshots: dict[Path, tuple[str, int, int, int, int, int]] = {}
 for target, _body in candidates:
@@ -382,23 +370,11 @@ for target, expected in standard_inputs.items():
     if actual is not None:
         originals[target] = actual
 
-# features/ 只保存真实功能文档，不用 README 或 .gitkeep 伪造一个功能条目。这里先验证
-# 该路径不是符号链接或普通文件，全部受控文件发布成功后再创建空目录。
-features_root = within_project(doc_features_dir)
-inspect_parent(features_root)
-try:
-    features_info = features_root.lstat()
-except FileNotFoundError:
-    pass
-else:
-    if stat.S_ISLNK(features_info.st_mode) or not stat.S_ISDIR(features_info.st_mode):
-        raise SystemExit(f"feature document root must be a real directory: {features_root}")
+# plans 按真实主题惰性创建，安装不制造空目录或需求占位。
 for target, body in candidates:
     result = publish(target, body, snapshots[target], originals.get(target))
     print(f"{result}: {target.relative_to(project_root)}")
 
-ensure_directory(features_root)
-print(f"ready: {features_root.relative_to(project_root)}/")
 PY
 
 python3 "${PACK_DIR}/lib/validate_project_docs.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"

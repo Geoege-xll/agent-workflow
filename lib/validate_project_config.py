@@ -60,7 +60,7 @@ CANONICAL_DOC_FILE_KEYS = {
     "project",
 }
 UI_DOC_FILE_KEYS: set[str] = set()
-CANONICAL_DOC_DIR_KEYS = {"standards_root", "features", "plans", "notes"}
+CANONICAL_DOC_DIR_KEYS = {"standards_root", "plans", "notes"}
 DOC_FILE_KEYS = CANONICAL_DOC_FILE_KEYS | UI_DOC_FILE_KEYS
 DOC_DIR_KEYS = CANONICAL_DOC_DIR_KEYS
 DOC_KEYS = DOC_FILE_KEYS | DOC_DIR_KEYS
@@ -173,19 +173,19 @@ def validate_docs(lines: list[str], root: Path, errors: list[str]) -> dict[str, 
             continue
         seen.add(key)
         if key not in DOC_KEYS:
-            errors.append(f"unsupported docs key: {key}")
+            hint = ("; use migrate_project_docs.py with an explicit mapping before reinstalling"
+                    if key == "features" else "")
+            errors.append(f"unsupported docs key: {key}{hint}")
             continue
         if not value:
             errors.append(f"docs.{key} must not be empty")
             continue
         docs[key] = value
 
-    # PROJECT.md 与 STANDARDS.md 分别是“当前项目事实”和“当前项目规范”的唯一入口；
-    # features/ 与 standards_root/ 保存可按需读取的详细叶文档。旧 engineering /
-    # design_system 双入口不再接受，避免同一规则出现两份权威。
+    # PROJECT 只索引 plans 中明确验收的基线，plans 同时承载该主题的后续执行状态。
+    # 旧 features 键必须经显式单次迁移删除，运行时不能把它别名到 plans。
     required = CANONICAL_DOC_FILE_KEYS | {
         "standards_root",
-        "features",
         "plans",
         "notes",
     }

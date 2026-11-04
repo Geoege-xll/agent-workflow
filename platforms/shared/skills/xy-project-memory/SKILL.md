@@ -11,7 +11,7 @@ Agentmemory is an optional working-memory enhancement. Use it only with enforced
 and matching provenance. Controlled documents, stable concrete page references, and explicit user
 approvals remain the portable and auditable authority.
 
-Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are
+Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are
 auxiliary information sources at task intake. Invoke start retrieval only when the PM needs to
 supplement or verify current feature truth, a durable decision, cross-session background, or a
 historical lesson. When available task information is sufficient, do not open those document bodies,
@@ -22,9 +22,8 @@ rule changes only retrieval; it does not remove this Skill or its post-QA closeo
 
 | Layer | Source | Use |
 |---|---|---|
-| Project entry | `project.yaml` -> `docs.project` (also `memory.portable_checkpoint`) | Current verified scope and links to active feature truth |
-| Feature truth and rationale | `project.yaml` -> `docs.features` | Current requirements, acceptance, functional/architectural solution and necessary reasons; shared architecture may have one detail here |
-| Requirement plans | `project.yaml` -> `docs.plans` | Decided changes and concise recovery state, saved by Light/Full policy; not current feature truth |
+| Project entry | `project.yaml` -> `docs.project` (also `memory.portable_checkpoint`) | Current verified scope and links to accepted plan baselines |
+| 主题生命周期与已验收基线 | `project.yaml` -> `docs.plans` | 同主题单一 Markdown／派生 HTML；本次执行与上次已验收行为分开，PROJECT 仅链接明确基线 |
 | Engineering and design truth | `project.yaml` -> remaining `docs.*` paths | Effective engineering, design-system, and UI evidence; paths are an index, not a preload list |
 | UI design evidence | `project.yaml` -> `docs.standards_root/prototype` | Stable concrete pages, in-page contracts, and shared prototype CSS |
 | Working memory | agentmemory | Cross-session observations and retrieval hints |
@@ -59,10 +58,10 @@ verifiable matching-project provenance. If the provider is missing or unreachabl
 Run this section only after the PM identifies a concrete missing fact or historical query.
 
 1. Read the adapter and task contract. Read the project entry only when it is needed to locate or
-   verify current feature truth. Open only task-relevant feature documents authorized by
-   `controlled_document_access`; never preload the complete `docs.features` tree or all other
+   verify current feature truth. Open only task-relevant topic plans authorized by
+   `controlled_document_access`; never preload the complete `docs.plans` tree or all other
    `docs.*` paths.
-2. Search task-relevant feature/architecture details, plans, concrete prototype pages, or the configured fallback location only
+2. Search task-relevant topic plans and shared architectural rationale, concrete prototype pages, or the configured fallback location only
    when the missing fact can reasonably be answered there.
 3. Query agentmemory only when cross-session or historical recall is materially needed. Apply the
    strict capability gate first; only on success, run project-filtered `memory_smart_search`, and use
@@ -108,7 +107,7 @@ Full图或空收口记录，不制造QA PASS。Full沿用有效PASS后的收口�
 Light也须先完成该审计。当前任务包、成果和必要完整证据接收后按WORKFLOW生命周期
 结束或退役实例，不能因历史会话不可用而丢失唯一日志。
 
-Design-standard adoption is distinct from PROJECT/feature projection. Apply the lifecycle in
+Design-standard adoption is distinct from PROJECT/plans 基线投影. Apply the lifecycle in
 `.agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant;
 do not defer needed design authority until after production QA, treat a feature-document no-op as
 a standards no-op, or save agentmemory automatically because a standard changed. Record production
@@ -116,32 +115,18 @@ migration facts only for verified scope; do not duplicate the standard or page c
 
 Full遵守 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`；
 Light只执行实际评估需要的投影／记忆，不把局部验证写成QA已通过。
-- Treat `docs.project` and active feature documents as the last verified project truth under applicable acceptance. Planned,
-  running, failed, or not-yet-verified work stays in task state and, when required by task level, the
-  same saved plan. Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`
-  for recovery or updates; plans are not canonical intermediate feature status or automatic approval.
-- The PM is the sole writer for `docs.project` and `docs.features`. Implementers and QA return a
-  proposed projection and evidence; they do not directly mutate those authorities.
-- Full投影只在集成QA PASS后；Light在最小验证、实际所需独立审计接收及文档评估完成后更新。Update
-  existing entries in place: never append task chronology, full QA reports, scheduler state, raw
-  logs, ticket history, or implementation transcripts.
-- Do not impose a line or byte cap on `PROJECT.md`. Its size follows the number of currently active
-  features. It may contain only current project facts, controlled document links, and active feature
-  links; task state stays in task state/the applicable saved plan, and completed or obsolete rows
-  are replaced or removed. PROJECT may link the plans directory, not accumulate per-task progress.
-- Put current behavior, acceptance and necessary functional/architectural rationale in the affected
-  feature document. Replace obsolete content; do not append milestones or task history.
-- For a QA-verified complete feature removal, perform one closeout operation: remove the active
-  feature row from `PROJECT.md`; rename `<feature>.md` to `<feature>.removed.md` in the configured
-  feature directory; mark the document `removed` with the removal reason, date, and replacement;
-  label its former requirements as historical only; and repair current controlled-document links.
-  Before QA PASS, do not add `removal_pending`, rename the file, or change canonical project truth.
-- Do not create ADRs. Cross-feature rationale may have one shared architecture detail in the same
-  features directory, referenced by related features. Ordinary removal reasons stay in the feature.
-- After any PROJECT/feature projection, run
-  `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .` and require exit
-  code 0. This validates current links, stable feature IDs, active/removed status, removal metadata,
-  and the absence of legacy authorities; it deliberately enforces no line or byte limit.
+- PROJECT 与主题稿的已验收行为节只描述适用验收后的基线；本次目标和执行阶段放在同稿的
+  需求／恢复节，不能从 completed、取消或页签状态推断交付。恢复与更新见
+  `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`。
+- PM 是 `docs.project` 和 `docs.plans` 的唯一写者。实施者／QA 只返回有界结果与证据。
+- Full 在集成 QA PASS 后、Light 在最小验证及实际必要独立审计接收后，才替换同主题已验收版本、
+  已交付行为和必要证据。没有事实变化不新建文档或 PROJECT 条目，不追加批次日志。
+- PROJECT 不设行数／字节上限，只存当前概况、规范入口与 plans 明确已验收基线的普通链接。
+  active／paused／cancelled 期间仍可引用旧基线；无基线、removed 和旧未索引执行稿不得列为当前事实。
+- 已验收删除在同一主题稿标记 removed，保留删除原因／日期／替代和必要历史，移除 PROJECT 当前链接。
+  不另写 feature／ADR 文档，不改名为 removed 副本；QA 失败保留已有基线。
+- 投影后运行 `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`，要求 exit 0；
+  校验稳定主题、当前索引与明确基线，不能把标签视为真实批准。
 - Return control to the main-session PM for its scoped commit assessment. Do not stage, commit,
   push, merge, tag, or release from this memory Skill. Resume only after the PM records whether a
   safe request-owned commit was created, skipped, or blocked.
@@ -161,8 +146,6 @@ Light只执行实际评估需要的投影／记忆，不把局部验证写成QA�
   memory_projection:
     memories_saved: []
     project_updated: false
-    features_updated: []
-    features_removed: []
     plans_updated: []
     prototype_refs: []
     fallback_note:

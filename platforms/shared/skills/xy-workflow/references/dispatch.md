@@ -153,7 +153,7 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    Its `docs.*` values are discoverable indexes, not a static preload list.
    PM、Writer、QA 按实际领域选取内置来源，并在项目索引存在时沿链接补充适用特有叶；
    项目索引/叶不是安装必建副本，内置来源仍为必需规则底线。
-   Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are
+   Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are
    auxiliary information sources. Read or query only the smallest task-relevant scope when the PM
    needs to supplement or verify an existing feature, durable decision, engineering or design
    constraint, cross-session background, or historical experience. When available task information
@@ -255,14 +255,14 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    requirements and any applicable prototype choice are resolved. Materialize only the selected
    graph branch and bind its
    `prototype_decision` to the frozen requirement fingerprint and exact affected surfaces. Do not
-   edit `PROJECT.md` or an active feature document before explicit approval, and do not project the
+   edit `PROJECT.md` or a topic plan’s accepted baseline before explicit approval, and do not project the
    planned result into canonical documents until integrated QA returns PASS. After approval, freeze
    the requirement fingerprint, approved plan, selected decision, and proposed projection;
    implementation tasks consume that frozen contract directly. A material requirement,
    affected-surface, or plan-boundary change returns the plan to draft and reopens approval.
    The PM now saves the Full plan in adapter-resolved `docs.plans`, before any design/implementation
    dispatch, then renders its same-name HTML from the single Markdown. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
-   write PROJECT/feature truth just to save intended work. Merge subsequent effective changes into
+   write PROJECT/plans 已验收基线 just to save intended work. Merge subsequent effective changes into
    this same plan and replace affected complete Task Packs, including in-flight worker/QA inputs,
    before accepting their results. Preserve unaffected work; apply the linked plan lifecycle.
 8. Build schema_version: 2 implementation task packs from that frozen plan with exact owned paths, dependencies,

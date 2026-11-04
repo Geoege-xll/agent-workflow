@@ -93,13 +93,7 @@ if [[ "${CHECK}" -eq 1 ]]; then
       echo "[OK]    docs.${key} → ${f:-"(empty)"}"
     fi
   done
-  feature_dir=$(py_yaml "${DIR}/project.yaml" docs features 2>/dev/null || true)
-  if [[ -n "${feature_dir}" && -d "${PROJECT_ROOT}/${feature_dir}" ]]; then
-    echo "[OK]    docs.features → ${feature_dir}"
-  else
-    echo "[ERROR] missing docs.features → ${feature_dir:-"(empty)"}"
-    FAIL=1
-  fi
+
   # UI/UX 是所有项目均可用的基础角色，不等于纯后端项目需要原型目录。
   # 直接消费与两套脚手架一致的 ProjectProfile 判断；命令替换也让发现失败
   # 按 set -e 退出，不能像进程替换那样隐藏错误后跳过必要检查。

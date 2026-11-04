@@ -272,10 +272,10 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
         errors: list[str] = []
         docs = validate_docs(lines, integration, errors)
         allowed_files = {docs.get("project")}
-        allowed_roots = [docs.get(key, "") for key in ("features", "plans")]
+        allowed_roots = [docs.get(key, "") for key in ("plans",)]
         if errors or any(path not in allowed_files and not any(root and within(path, root) for root in allowed_roots)
                          for path in projection):
-            raise DeliveryError("PM projection must stay within configured PROJECT/features/plans")
+            raise DeliveryError("PM projection must stay within configured PROJECT/plans")
         errors = validate_documents(config, integration)
         if errors:
             raise DeliveryError("controlled-document projection is invalid: " + "; ".join(errors))

@@ -294,7 +294,7 @@ TASK5_SHARED_SKILL_MATRIX = {
         "stable concrete page references",
         "approval remains in workflow task state",
         "prototype_refs:",
-        "`docs.project` and active feature documents",
+        "PROJECT 与主题稿的已验收行为节",
     ),
     "platforms/shared/skills/xy-qa-review/SKILL.md": (
         "Page design and interaction contract",
@@ -1953,12 +1953,11 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
 
         workflow = re.sub(r"\s+", " ", self._text("product/WORKFLOW.md"))
         self.assertIn(
-            "For `change_type: removed`, closeout removes the active PROJECT row, renames the "
-            "feature detail to `<feature>.removed.md`",
+            "`change_type: removed` 在同一原稿标记 `removed`",
             workflow,
         )
         self.assertIn(
-            "QA failure leaves the canonical documents unchanged.",
+            "QA 失败保留原已验收事实。",
             workflow,
         )
 
@@ -2327,8 +2326,8 @@ class ProjectDocumentModelContractTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.docs = self.root / "docs"
-        self.features = self.docs / "features"
-        self.features.mkdir(parents=True)
+        self.plans = self.docs / "plans"
+        self.plans.mkdir(parents=True)
         standards_engineering = self.docs / "standards"
         standards_engineering.mkdir(parents=True)
         (self.docs / "STANDARDS.md").write_text(
@@ -2345,60 +2344,58 @@ class ProjectDocumentModelContractTest(unittest.TestCase):
             "  standards: docs/STANDARDS.md\n"
             "  standards_root: docs/standards/\n"
             "  project: docs/PROJECT.md\n"
-            "  features: docs/features/\n",
+            "  plans: docs/plans/\n"
+            "  notes: docs/notes/\n",
             encoding="utf-8",
         )
 
     @staticmethod
     def active_feature(feature_id: str) -> str:
-        return (
-            f"# Active\n\n- Feature ID: `{feature_id}`\n"
-            "- Status: `active`\n\n## Current requirements\n\n- Verified behavior.\n"
-        )
+        # 当前事实必须有明确基线和已有证据；completed 不能代替验收。
+        return (f"# 主题\n- 主题 ID: `{feature_id}`\n- 阶段: `active`\n- 模块: `.`\n"
+                "- 任务等级: `Full`\n- 已验收版本: `v1`\n\n"
+                "## 目标与范围\n当前目标。\n## 需求与验收\n明确验收。\n"
+                "## 方案与原型关联\n现有方案。\n## 当前进展与恢复入口\n无剩余工作。\n"
+                "## 验收结果与当前已交付行为\n已有查询行为。\n"
+                "## 批准依据与必要证据\n- 批准依据: 既有用户批准记录\n- 验收证据: 既有验收记录\n")
 
-    @staticmethod
-    def removed_feature(feature_id: str) -> str:
-        return (
-            f"# Removed\n\n- Feature ID: `{feature_id}`\n"
-            "- Status: `removed`\n"
-            "- Removal date: 2026-08-15\n"
-            "- Removal reason: Replaced by the active feature.\n\n"
-            "## Historical requirements\n\nHistorical only; do not reimplement.\n"
-        )
+    @classmethod
+    def removed_feature(cls, feature_id: str) -> str:
+        return cls.active_feature(feature_id).replace("阶段: `active`", "阶段: `removed`").replace(
+            "已有查询行为。", "历史查询行为；2026-08-15已验收删除，替代为新查询。")
 
     def test_active_links_and_unlinked_removed_tombstones_are_valid(self) -> None:
-        (self.features / "open-chat.md").write_text(
+        (self.plans / "open-chat.md").write_text(
             self.active_feature("FEATURE-OPENCHAT"), encoding="utf-8"
         )
-        (self.features / "legacy-search.removed.md").write_text(
+        (self.plans / "legacy-search.md").write_text(
             self.removed_feature("FEATURE-LEGACY-SEARCH"), encoding="utf-8"
         )
         (self.docs / "PROJECT.md").write_text(
-            "# Project\n\n[OpenChat](features/open-chat.md)\n", encoding="utf-8"
+            "# Project\n\n[OpenChat](plans/open-chat.md)\n", encoding="utf-8"
         )
 
         self.assertEqual([], validate_project_docs(self.config, self.root))
 
-    def test_unlinked_active_or_linked_removed_feature_fails(self) -> None:
-        (self.features / "open-chat.md").write_text(
+    def test_unlinked_topic_is_allowed_but_linked_removed_baseline_fails(self) -> None:
+        (self.plans / "open-chat.md").write_text(
             self.active_feature("FEATURE-OPENCHAT"), encoding="utf-8"
         )
-        (self.features / "legacy.removed.md").write_text(
+        (self.plans / "legacy.md").write_text(
             self.removed_feature("FEATURE-LEGACY"), encoding="utf-8"
         )
         (self.docs / "PROJECT.md").write_text(
-            "# Project\n\n[Legacy](features/legacy.removed.md)\n", encoding="utf-8"
+            "# Project\n\n[Legacy](plans/legacy.md)\n", encoding="utf-8"
         )
 
         errors = validate_project_docs(self.config, self.root)
-        self.assertTrue(any("must not link removed feature" in item for item in errors))
-        self.assertTrue(any("active feature is not linked" in item for item in errors))
+        self.assertTrue(any("只能链接明确的当前已验收基线" in item for item in errors))
 
     def test_project_size_is_not_a_validation_rule(self) -> None:
-        (self.features / "open-chat.md").write_text(
+        (self.plans / "open-chat.md").write_text(
             self.active_feature("FEATURE-OPENCHAT"), encoding="utf-8"
         )
-        body = "# Project\n\n[OpenChat](features/open-chat.md)\n" + (
+        body = "# Project\n\n[OpenChat](plans/open-chat.md)\n" + (
             "\nCurrent verified project fact.\n" * 5000
         )
         (self.docs / "PROJECT.md").write_text(body, encoding="utf-8")
@@ -2482,7 +2479,6 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
             "  standards: docs/STANDARDS.md\n"
             "  standards_root: docs/standards/\n"
             "  project: docs/PROJECT.md\n"
-            "  features: docs/features/\n"
             "  plans: docs/plans/\n"
             "  notes: docs/notes/\n"
         )
@@ -2554,6 +2550,7 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
             "contracts": "docs/LEGACY-SPEC.md",
             "progress": "docs/LEGACY-STATUS.md",
             "ops": "docs/OPERATIONS.md",
+            "features": "docs/features/",
         }
         for key, value in aliases.items():
             with self.subTest(key=key):
@@ -6868,7 +6865,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.assertEqual(
             {
                 Path("docs"),
-                Path("docs/features"),
             },
             directories,
         )
@@ -6895,13 +6891,15 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 Path("docs/PROJECT.md"),
                 Path("docs/standards/prototype/index.html"),
                 Path("docs/standards/prototype/prototype.css"),
+                Path("docs/standards/prototype/workspace.css"),
+                Path("docs/standards/prototype/workspace.js"),
+                Path("docs/standards/prototype/page-shell.js"),
             },
             files,
         )
         self.assertEqual(
             {
                 Path("docs"),
-                Path("docs/features"),
                 Path("docs/standards"),
                 Path("docs/standards/prototype"),
             },
@@ -6923,8 +6921,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             "prototype-contract",
             "manifest",
             "screenshot",
-            "<iframe",
-            "<script",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, index.casefold())
@@ -6946,13 +6942,12 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             with self.subTest(relative=relative):
                 body = read_contract(PACK / relative)
                 # 直接升级不接受 STATUS/SPEC 对应的旧键，也不提供别名兼容。
-                for legacy_key in ("dev_rules", "project_status", "contracts", "progress", "ops"):
+                for legacy_key in ("dev_rules", "project_status", "contracts", "progress", "ops", "features"):
                     self.assertNotRegex(body, rf"(?m)^  {legacy_key}:")
                 for canonical_key in (
                     "standards",
                     "standards_root",
                     "project",
-                    "features",
                     "plans",
                     "notes",
                 ):
@@ -6964,7 +6959,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.assertFalse((PACK / "templates/docs/SPEC.md").exists())
         self.assertFalse((PACK / "templates/docs/STATUS.md").exists())
         self.assertTrue((PACK / "templates/docs/PROJECT.md").is_file())
-        self.assertTrue((PACK / "templates/docs/FEATURE.md").is_file())
+        self.assertFalse((PACK / "templates/docs/FEATURE.md").exists())
         self.assertTrue((PACK / "templates/docs/STANDARDS.md").is_file())
         self.assertFalse((PACK / "templates/docs/standards/GENERAL.md").exists())
         self.assertTrue((PACK / "platforms/shared/skills/xy-code-standards/references/rules.md").is_file())
@@ -6984,7 +6979,8 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             "docs/OPERATIONS.md": b"legacy operations\n",
             "docs/design/README.md": b"legacy design readme\n",
             "docs/design/baseline/current-ui-audit.md": b"baseline bytes\x00\xff",
-            "docs/plans/architecture.md": b"adr bytes\x00\xfe",
+            # 非 UTF-8 历史 ADR 属于未迁移旧树，不能伪装成新 plans 中的规范 Markdown。
+            "docs/ADR/architecture.md": b"adr bytes\x00\xfe",
             "docs/notes/recall.md": b"notes bytes\x00\xfd",
             "docs/plans/current-ui.md": b"# Current UI proposal\n",
             "docs/standards/prototype/index.html": b"<p>legacy prototype</p>\n",
@@ -7161,13 +7157,15 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 Path("docs/PROJECT.md"),
                 Path("docs/standards/prototype/index.html"),
                 Path("docs/standards/prototype/prototype.css"),
+                Path("docs/standards/prototype/workspace.css"),
+                Path("docs/standards/prototype/workspace.js"),
+                Path("docs/standards/prototype/page-shell.js"),
             },
             files,
         )
         self.assertEqual(
             {
                 Path("docs"),
-                Path("docs/features"),
                 Path("docs/standards"),
                 Path("docs/standards/prototype"),
             },
@@ -7262,7 +7260,6 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.assertEqual(
             {
                 Path("docs"),
-                Path("docs/features"),
             },
             directories,
         )

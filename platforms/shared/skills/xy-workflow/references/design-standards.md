@@ -100,7 +100,7 @@ Standard updates never automatically save agentmemory; assess durable non-obviou
 - 内置 foundations-rules.md / components-rules.md：通用设计基础、组件、状态及适用平台规则的唯一正文。
 - 项目 DESIGN_ 叶及实际 token/组件源：已批准的项目方向、值、映射、允许变体和业务差异；无差异不创建空叶。
 - prototype.css: shared prototype style implementation; implementation Agents own production tokens/components.
-- Concrete HTML: page contract and confirmation material. index.html is a thin directory, not another full standard.
+- Concrete HTML: page contract and confirmation material. index.html is the single-page browsing workspace, not another full standard.
 
 内置设计规则提供语义颜色、尺度和常用组件行为的适用约束。项目索引存在才沿链接读取；
 项目只记录自身已批准的 token/组件值、映射、变体与平台差异，不复制内置正文或生成占位规范。
@@ -108,7 +108,7 @@ UI Agent 负责专业内容，PM 按已有决策采用，相关实现 Agent 和 
 首次设计或全新视觉的候选值经现有确认后写回授权规范；未改变规则的小任务无需更新。
 官方来源放在两份内置设计规则末尾供按需核对，不要求每次联网、全文重读或新增报告。
 原型展示 token 与产品 token 分开；Web 默认响应式产品区，iOS／PC 默认固定画板。
-两种展示方式共用页头说明、返回目录和页底契约，不影响原型可选分支。
+两种展示方式共用当前页名称/简述、返回当前导航、画面后的说明及默认折叠契约，不影响原型可选分支。
 
 A new visual system replaces only authorized platform/module rules. Preserve applicable accessibility,
 engineering, security and upstream boundaries; redesign is not permission to relax other constraints.

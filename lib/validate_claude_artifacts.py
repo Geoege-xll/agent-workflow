@@ -607,7 +607,7 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
         required = (
             PRECEDENCE,
             # 三宿主共享 Skill 必须保留同一条“辅助信息按需读取”语义，不能只修改 Claude 模板。
-            "Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are",
+            "Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are",
             "Activate `xy-project-memory` in start mode only when bounded cross-session recall or historical",
             "When no start retrieval ran, omit `memory_context`",
             "Claude Auto Memory",
@@ -698,7 +698,7 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
             "post-QA controlled-document projection",
             "last QA-verified state until integrated QA PASS",
             "`PROJECT.md` is the current verified project directory",
-            "`*.removed.md`",
+            "`removed`",
             "Superpowers is disabled by default",
             "exactly one `xy-qa` reviewer",
             "installed-code-review-skill",

@@ -75,7 +75,7 @@
   contradictory, or fingerprints mismatch. The PM does not supplement missing browser evidence,
   repeat completed static verification, or create a new confirmation gate.
 - The active concrete page and its in-page `Page design and interaction contract` are the design evidence.
-  The thin root index is navigation context only.
+  The root index is the single-page browsing workspace; registration and navigation context do not replace a concrete page's evidence.
 - For `UI-Patch`, `UI-Page`, or `UI-Flow` with `prototype_policy: required`, at `visual_review_ready`, ask once for
   `visual_approved` bound to the concrete changed pages,
   changed scope, declared operation sequence, and verified page dependency fingerprints. Reopen

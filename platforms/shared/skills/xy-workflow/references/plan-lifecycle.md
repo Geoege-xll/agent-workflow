@@ -20,14 +20,18 @@ Full 正式审阅用 HTML：批准前由 PM 在当前请求 scratch 形成唯一
 [需求 HTML 交付](../../xy-plan/references/requirement-html.md)。Light 按已有保存/复杂度/用户
 要求选用，不因生成 HTML 升级流程。页面、勾选或新鲜度检查均不产生批准。
 
-One independent requirement has one plan. Multiple independent requirements may have separate plans;
-subagent tasks, visual iterations and QA rework do not create additional plans. Continue an existing
-unfinished requirement in its existing file when relevant. An unrelated small fix to a previously
-completed feature is classified on its own, not inherited as Full from the old plan.
+一个稳定主题只维护一份生命周期 Markdown 及其派生 HTML。再次迭代、视觉调整、实施分工或
+QA 返工原地更新，不创建版本副本；独立主题才各有文档。Light 是否保存仍按实际必要性，
+旧主题曾用 Full 不会令本次无关小修自动继承 Full。
 
-`templates/docs/PLAN.md` is a writing aid, not a mandatory field-heavy schema. Create the directory
-only when saving a real plan; setup must not create placeholder plans. Use stable descriptive names,
-not per-revision copies. A plan records a decided change, not an automatically actionable idea backlog.
+标准模板在 `templates/docs/PLAN.md`，使用普通 Markdown 元信息（不使用 frontmatter）：
+`主题 ID`、`阶段`、`模块`、`任务等级`、`已验收版本`。阶段仅取 draft／active／paused／
+completed／cancelled／removed；任务等级为 Full／Light；未有真实基线的已验收版本为 `none`。
+Full 六节依次为“目标与范围”“需求与验收”“方案与原型关联”“当前进展与恢复入口”
+“验收结果与当前已交付行为”“批准依据与必要证据”。最后一节的“批准依据”“验收证据”
+引用真实可恢复来源，不能将模板、非空清单或阶段标签当成授权。Light 无基线恢复稿按必要性简化，
+不额外建文档或确认；被 PROJECT 当作当前基线引用时仍须明确版本、已交付行为和既有证据。
+只在保存实际主题时创建目录；安装不制造需求页、空索引或 plans／features 占位目录。
 
 Discussion alone requires neither a saved document nor a plan. When persistence is needed, keep
 necessary questions and conclusions in the relevant existing plan or authorized requirement/proposal
@@ -122,7 +126,7 @@ its non-current scope in the authorized current basis. Physical cleanup is not a
 when the replacement basis is clear; add no cleanup approval gate. If the current execution basis or
 necessary authority is still unresolved, return only that affected work to existing clarification.
 Pending discussion never silently withdraws an approved baseline. Planned goals remain intended work;
-feature/PROJECT truth still changes only through the existing post-QA projection below.
+已验收基线／PROJECT 仍只通过 the existing post-QA projection below.
 
 ### Production-only cutover
 
@@ -177,17 +181,13 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
 
 ## Closeout and document boundaries
 
-- PROJECT remains a directory of current verified feature details plus stable plan/standards entry
-  points; do not append task statuses or one index row per plan revision.
-- Features contain current verified behavior, acceptance and necessary functional/architectural
-  rationale. Cross-feature rationale may have one shared detail in the same directory. No separate
-  ADR category, duplicate decision document or chronology is required.
-- After applicable QA passes, assess feature/PROJECT projection. Update only changed current truth.
-  Mark the plan completed only when the approved work and required closeout are genuinely done; link
-  the result and stop maintaining the plan as a second current feature specification. Paused or
-  cancelled plans remain non-current work, never evidence that implementation exists.
-- Keep completed plans available as historical execution context, clearly marked and not dispatched
-  by default. Do not auto-delete user plans or create a growing recap in PROJECT.
-- 同名 HTML 与计划一起保持历史边界，不能继续充当第二份当前功能规范。
-- Standards adoption keeps its existing lifecycle. Plan writes alone do not trigger feature,
-  STANDARDS, PROJECT or agentmemory updates; evaluate each actual change separately.
+- PROJECT 是当前概况与已验收基线目录；同主题只有一份 plans 原稿，不按修订追加索引。
+- 正在迭代时更新前四节与当前阶段，保留第五节上次已验收行为、已验收版本和对应证据。
+  active／paused／cancelled 均不能把本次新目标冒充交付；`completed` 本身不授信。
+- Full 在适用 QA PASS 后、Light 在实际必要验证接收后才替换基线；无事实变化不制造文档投影。
+  只有明确已验收版本和真实依据的稿件可列入 PROJECT；验收失败保留原基线。
+- 已验收删除在同稿标记 removed，保留必要日期、原因、替代与历史，移除当前索引，不改名或另写 feature／ADR。
+- 未索引旧执行稿保持历史边界；不按 completed 自动索引，不批改历史，不默认重放旧任务。
+  同名 HTML 是原稿投影，不能成为第二份规范或批准来源。
+- 旧 `docs.features` 和 FEATURE 模板不在新运行时合同中；已有项目先按 README 的显式单次迁移路径
+  保全正文、批准／证据和索引引用，冲突或不明主题关系先停。标准与记忆仍各按实际变化处理。

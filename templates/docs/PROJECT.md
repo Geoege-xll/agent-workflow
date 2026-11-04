@@ -1,25 +1,21 @@
-# Project — {{PROJECT_NAME}}
+# 项目 — {{PROJECT_NAME}}
 
-> Canonical project directory. Keep only current scope and links; replace
-> entries in place and never append task chronicles, QA transcripts, scheduler state, or raw logs.
+> 只保留当前项目概况与已验收基线链接；原地替换，不能追加任务日志、调度状态或命令输出。
+> 安装不会创建需求页或基线占位条目。主题正在迭代时仍链接其上次已验收基线。
 
-## Current project
+## 当前项目
 
-- Product purpose and current scope: **TODO**
+按真实项目填写当前用途与范围。
 
-## Active features
+## 当前已验收基线
 
-| Feature | Current summary | Detail |
-|---|---|---|
-| None recorded | Initialize after the first feature passes QA | — |
+仅在实际验收后添加普通 Markdown 链接，目标为 `{{DOC_PLANS_DIR}}/` 下同一主题的 `.md`。
+被链接稿件须明确记录真实已验收版本、已交付行为、批准依据和验收证据；
+`completed` 阶段或 HTML 存在不能代替验收。已验收删除后移除当前链接，原稿保留必要历史。
 
-Only QA-verified active features belong here. After QA verifies a complete feature removal, delete
-its row and rename its detail document to `<feature>.removed.md` in `{{DOC_FEATURES_DIR}}/`.
+## 受控资料入口
 
-## Controlled documents
-
-- Feature details and current architectural rationale: `{{DOC_FEATURES_DIR}}/`
-- Requirement plans (唯一可编辑 `.md` + 同名派生 `.html`；意图/恢复及历史，非当前功能事实): `{{DOC_PLANS_DIR}}/`
-- 项目特有规范索引（存在时）：`{{DOC_STANDARDS}}`；通用工程/UI 规则来自内置 `xy-code-standards` / `xy-ui-design`。
-- Prototype evidence, when configured: `{{DOC_DESIGN_DIR}}/prototype/`
-- Optional memory fallback: `{{DOC_NOTES_DIR}}/`
+- 主题生命周期文档：`{{DOC_PLANS_DIR}}/`（唯一可编辑 `.md` 与同名派生 `.html`）
+- 项目特有规范索引（实际存在时）：`{{DOC_STANDARDS}}`；通用工程/UI 规则使用内置 Skill。
+- 原型证据（实际配置时）：`{{DOC_DESIGN_DIR}}/prototype/`
+- 可选记忆回退：`{{DOC_NOTES_DIR}}/`

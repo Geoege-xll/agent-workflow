@@ -159,3 +159,6 @@ review_method、规则覆盖与证据语义校验；成功只证明这些机械�
 `task_graph_cli.py task` 导出，不套 QA schema。原生命令须核对当前 help 和实际会话能力，
 不能由静态文档或成功提取推断模型运行成功。AGY 的 diff／Artifact 人工批准是人工审阅，
 不能冒充 `host-native-review` 或独立 AI QA；原审批、读写边界与 method 顺序保持不变。
+
+文档验收核对同主题 plans 的本次目标／执行阶段与真实已验收版本分别成立；PROJECT 只链接明确基线。
+completed、HTML存在或清单非空不产生批准或交付；再次迭代与取消时保留旧基线，无依据不得自动索引旧历史稿。

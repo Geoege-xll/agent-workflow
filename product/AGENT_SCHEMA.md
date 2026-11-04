@@ -199,7 +199,7 @@ leaf contract; prototype dependency fingerprints retain their separate meaning.
 For Full work, the task graph comes from `xy-plan` with `plan_state: draft`. Before asking for
 `requirements_approved`, the PM reviews that draft and records the post-QA controlled-document
 projection. After approval the PM freezes the requirements fingerprint, graph, and proposed
-projection; canonical PROJECT/feature truth is not changed until integrated QA PASS. The PM then
+projection; canonical PROJECT/plans accepted-baseline truth is not changed until integrated QA PASS. The PM then
 invokes:
 
 ```text
@@ -340,16 +340,17 @@ pages; `UI-Conformance` tasks carry frozen `design_authority_refs`; `waived_by_u
 scope-bound `prototype_decision` and no prototype authority. Required-prototype tasks carry the same
 decision record plus concrete page authority.
 
-Full集成QA PASS后，或Light完成实际必需验证／审计接收并评估需要后，PM才做最小当前事实投影。 Active feature docs
-hold current requirements, acceptance, functional/architectural solution and necessary rationale;
-`PROJECT.md` holds the current directory and active links without a line/byte cap or task history.
-For `removed`, one closeout operation removes the active PROJECT row, renames the detail to
-`*.removed.md`, marks it historical with reason/date/replacement, and repairs current links.
-Cross-feature rationale may have one shared detail in the same features directory; no separate ADR.
+Full 集成 QA PASS 后，或 Light 完成实际必需验证／审计接收并评估需要后，PM 才投影当前基线。
+同一稳定主题在 `docs.plans` 只有一份 Markdown 及同名派生 HTML，分开记录本次目标／执行阶段和
+上次真实已验收版本／行为／批准与验收证据。`PROJECT.md` 是当前目录，只链接明确已验收基线，不设大小上限或任务日志。
+再次迭代、暂停或取消本次目标不能抹掉旧基线；completed 不产生批准或交付。已验收删除在同稿
+标记 `removed`、保留原因／日期／替代与必要历史，移除当前索引；不另建 feature／ADR 或改名副本。
+未索引旧执行稿保持历史边界，不能按完成标签认定当前事实。
 
-Plan storage is separate from verified feature truth: Light saves only for actual pause/recovery/handoff or explicit request; Full is saved by PM in `docs.plans` after
-requirements approval and before first design/implementation dispatch. One independent requirement,
-one current plan. Existing `input_contracts` carry its reference and current applicable scope; changes
+Light 仅为实际暂停／恢复／交接或明确请求保存；Full 由 PM 在需求批准后、首次设计／实施派发前
+保存到 `docs.plans`。同主题复用原稿，模板普通中文元信息及六节合同见 plan-lifecycle；
+Light 按必要性简化，不添加确认字段或必建文档。旧 docs.features 仅能通过显式单次迁移删除，运行时无别名。
+Existing `input_contracts` carry its reference and current applicable scope; changes
 replace affected complete task inputs and QA acceptance, not merely append amendments. Preserve
 unaffected results and verify saved evidence on resumption. Follow the plan-lifecycle reference.
 

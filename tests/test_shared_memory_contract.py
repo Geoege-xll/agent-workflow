@@ -146,9 +146,9 @@ class SharedMemoryContractTest(unittest.TestCase):
         self.assertIn("only when concrete page references actually changed", normalized)
         self.assertIn("approval remains in workflow task state", normalized.casefold())
         # 新模型必须把 PROJECT/feature 当成 QA 后的当前事实，不能退回 STATUS 流水账。
-        self.assertIn("`docs.project` and active feature documents", normalized)
-        self.assertIn("integrated QA returns PASS", normalized)
-        self.assertIn("<feature>.removed.md", normalized)
+        self.assertIn("PROJECT 与主题稿的已验收行为节", normalized)
+        self.assertIn("Full 在集成 QA PASS 后", normalized)
+        self.assertIn("同一主题稿标记 removed", normalized)
         projection = body.split("memory_projection:", 1)[1].split("```", 1)[0]
         fields = {
             line.strip().split(":", 1)[0]
@@ -159,8 +159,6 @@ class SharedMemoryContractTest(unittest.TestCase):
             {
                 "memories_saved",
                 "project_updated",
-                "features_updated",
-                "features_removed",
                 "plans_updated",
                 "prototype_refs",
                 "fallback_note",

@@ -33,6 +33,8 @@ else:
 
 VENDOR = Path(__file__).absolute().parent / "vendor/answer-me-with-html"
 BUNDLE_SHA256 = "c98ee6480fededc57b67ef160b348e915068b92aa10ad33fc1a17ff4e612ef83"
+PROJECT_REPOSITORY = "https://github.com/Geoege-xll/agent-workflow"
+UPSTREAM_REPOSITORY = "https://github.com/QingYunA/answer-me-with-html"
 MARKER = b"<!-- agent-workflow:requirement-html:v1 "
 LINK = re.compile(r"\[[^\]\n]*\]\(([^)\n]*)\)")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
@@ -239,7 +241,33 @@ def renderer_identity() -> str:
     if digest(bundle) != BUNDLE_SHA256:
         raise RequirementHtmlError("内置渲染器字节与固定上游不匹配，请恢复安装载荷")
     helper, _ = snapshot(Path(__file__).absolute())
-    return "answer-me-with-html/0.5.10:" + BUNDLE_SHA256 + ":adapter:" + digest(helper)
+    return ("answer-me-with-html/0.5.10:" + BUNDLE_SHA256 + ":brand:" + PROJECT_REPOSITORY
+            + ":adapter:" + digest(helper))
+
+
+def project_branding(page: bytes) -> bytes:
+    """仅适配生成页的固定展示区；正文、脚本、法律来源和 vendored 原件均不替换。
+
+    固定 bundle 若改变页脚结构则明确失败，不能全局替换正文中合法的上游引用。
+    适配器字节、项目仓库与最终 HTML 摘要都属于现有 renderer/page 身份校验。
+    """
+    text = page.decode("utf-8")
+    matches = list(re.finditer(r'<p class="am-colophon">.*?</p>', text, re.S))
+    if len(matches) != 1:
+        raise RequirementHtmlError("固定渲染器的品牌区域不匹配，原页保留")
+    match = matches[0]
+    footer = match.group()
+    old_link = f'href="{UPSTREAM_REPOSITORY}"'
+    if footer.count(old_link) != 2 or ">Answer me with HTML</a>" not in footer:
+        raise RequirementHtmlError("固定渲染器的项目链接不匹配，原页保留")
+    footer = footer.replace(old_link, f'href="{PROJECT_REPOSITORY}"').replace(
+        ">Answer me with HTML</a>", ">agent-workflow</a>")
+    footer = footer[:-4] + (f' · 渲染器来源：<a href="{UPSTREAM_REPOSITORY}" '
+                            'target="_blank" rel="noopener">Answer me with HTML</a></p>')
+    text = text[:match.start()] + footer + text[match.end():]
+    text = text.replace('<meta name="generator" content="Answer me with HTML 0.5.10">',
+                        '<meta name="generator" content="agent-workflow (Answer me with HTML 0.5.10)">', 1)
+    return text.encode("utf-8")
 
 
 def page_record(page: bytes, binding: dict) -> tuple[dict, bytes]:
@@ -300,7 +328,7 @@ def run_renderer(stage: Path, markdown: bytes) -> bytes:
         html, _ = snapshot(output_path)
         if b"<html" not in html or b"am-source" not in html:
             raise RequirementHtmlError("内置 render 未返回完整 HTML，原页保留")
-        return html
+        return project_branding(html)
     except subprocess.TimeoutExpired:
         raise RequirementHtmlError("Node 渲染超时并已结束，原稿和原 HTML 保留") from None
     except subprocess.CalledProcessError:

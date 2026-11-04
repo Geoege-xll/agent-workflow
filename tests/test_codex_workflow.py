@@ -1326,7 +1326,7 @@ default_subagent_reasoning_effort = "low"
             setup = run_project_setup(project)
             self.assertEqual(setup.returncode, 0, setup.stdout + setup.stderr)
             project_index = (project / "docs/PROJECT.md").read_text(encoding="utf-8")
-            self.assertIn(f"# Project — {literal_name}", project_index)
+            self.assertIn(f"# 项目 — {literal_name}", project_index)
 
     def test_setup_rejects_retired_role_reads_before_project_writes(self) -> None:
         for name in ("parent", "absolute", "symlink"):
@@ -1390,7 +1390,6 @@ default_subagent_reasoning_effort = "low"
                 "docs/STANDARDS.md": "docs/rules/INDEX.md",
                 "docs/standards/": "docs/rules/tree/",
                 "docs/PROJECT.md": "docs/state/CURRENT.md",
-                "docs/features/": "docs/product-features/",
                 "docs/notes/": "docs/memory-notes/",
                 "docs/plans/": "docs/decisions/",
             }
@@ -1406,7 +1405,8 @@ default_subagent_reasoning_effort = "low"
             check = run_project_setup(project, "--check")
             self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
             self.assertTrue((project / "docs/state/CURRENT.md").exists())
-            self.assertTrue((project / "docs/product-features").is_dir())
+            self.assertFalse((project / "docs/product-features").exists())
+            self.assertFalse((project / "docs/features").exists())
             self.assertFalse((project / "docs/memory-notes").exists())
             self.assertFalse((project / "docs/decisions").exists())
             self.assertTrue(
@@ -1427,7 +1427,6 @@ default_subagent_reasoning_effort = "low"
             )
             for configured in (
                 "docs/state/CURRENT.md",
-                "docs/product-features",
                 "docs/memory-notes/",
                 "docs/decisions/",
             ):

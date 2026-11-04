@@ -3,66 +3,46 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>页面原型模板</title>
+  <title>页面原型</title>
   <link rel="stylesheet" href="prototype.css">
+  <script src="page-shell.js" defer></script>
 </head>
-<body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive">
-  <!-- 统一展示页头：返回目录、尺寸和模拟说明都在产品画板之外，不作为产品导航或横幅。 -->
+<body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive" data-prototype-plan-source="">
+  <!-- 当前页拥有自己的名称、简述和返回；嵌入工作区时不重复添加外层标题。 -->
   <header class="prototype-header prototype-shell">
-    <a id="prototype-back-index" class="prototype-back-link" href="index.html">返回原型目录</a>
-    <h1>页面原型模板</h1>
-    <p class="prototype-meta">平台：Web · 响应式内容区 · 模板示例，非已批准的产品设计</p>
-    <div class="prototype-description" aria-label="原型说明">
-      <p><strong>演示说明：</strong>本页只演示统一原型外壳，没有真实业务数据或业务操作。创建产品页面时，在这里说明虚构数据、会话模拟、刷新重置和未实现的范围。</p>
-      <p><strong>设计说明：</strong>页面名称、平台和布局范围需按项目规范填写；设计基线、候选视觉及待确认事项写在这里，不放进产品区，也不将模板示例视为项目批准结果。</p>
-    </div>
+    <a id="prototype-back-index" class="prototype-back-link" href="index.html" aria-label="返回当前页面导航" title="返回当前页面导航"><span class="prototype-back-chevron" aria-hidden="true"></span></a>
+    <div class="prototype-heading-copy"><h1 id="prototype-page-title" tabindex="-1">页面原型</h1><p class="prototype-description">在此填写当前页面的职责与紧凑简述。</p></div>
+    <!-- 独立页不显示无效开关；父子认证后只发送意图，状态仍归 index 所有。 -->
+    <button id="prototype-page-sidebar-toggle" class="prototype-sidebar-toggle" type="button" aria-expanded="true" hidden><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg><span id="prototype-page-sidebar-toggle-label">收起侧栏</span></button>
   </header>
-
-  <!-- 三功能区共用同一骨架：Web 默认自然展开，无固定宽高或客户端窗口装饰。
-       iOS／PC：把 body 的显示模式改为 fixed，填写实际平台，再给下方容器设置
-       --prototype-frame-width / --prototype-frame-height（CSS px），同步顶部及 purpose。
-       fixed 画布可滚动时为 prototype-stage 加 tabindex="0"，提供键盘滚动入口。
-       产品 token 与共享组件来自项目规范；外壳的 --prototype-* 不是产品主题。 -->
+  <!-- Web 保持自然流；iOS／PC 改为 fixed，填写 --prototype-frame-width /
+       --prototype-frame-height（CSS px），同步页底尺寸与 purpose，并为 fixed stage
+       加 tabindex="0"。产品导航、浮层和滚动只属于下方画板内部。 -->
   <div class="prototype-stage" role="region" aria-label="当前页面原型">
     <div class="prototype-frame">
-      <!-- 产品设计插槽：保留此边界，替换占位内容；产品导航、系统栏和页面交互只放在这里。 -->
       <main class="prototype-content" data-prototype-page-content>
-        <div class="prototype-placeholder">
-          <h2>页面标题</h2>
-          <p>页面内容</p>
-        </div>
+        <!-- 用已批准的设计替换占位内容，不复制工作区样稿的虚构业务。 -->
+        <div class="prototype-placeholder"><p>产品页面内容</p></div>
       </main>
     </div>
   </div>
-
-  <!-- 页底契约默认折叠，完整保留五个章节；不参与产品窗口布局。 -->
-  <details class="prototype-contract" lang="en">
-    <summary>Page design and interaction contract</summary>
-
-    <section data-contract-section="purpose">
-      <h2>Page purpose</h2>
-      <p>This starter demonstrates the shared HTML presentation shell, not an approved product design. Its platform is Web in responsive mode: content follows available width and natural document flow, without a fixed preview viewport. Replace this purpose with the current page's approved responsibility and layout scope; for a fixed device or desktop preview, specify its platform, dimensions in CSS pixels, and display-scale policy.</p>
-    </section>
-
-    <section data-contract-section="navigation">
-      <h2>Navigation</h2>
-      <p>Open this independent HTML directly or from the prototype index. The shared header's directory link opens index.html; it is prototype navigation, not a product navigation item.</p>
-    </section>
-
-    <section data-contract-section="interactions">
-      <h2>Interaction contract</h2>
-      <p data-contract-for="prototype-back-index">The header's directory link opens index.html without relying on browser history. This starter has no product controls; add one concrete mapping for every material product control introduced.</p>
-    </section>
-
-    <section data-contract-section="states">
-      <h2>Required states</h2>
-      <p>The initial shell has responsive content and a natively expandable contract. Loading, empty, error, success, and dialog product states are not applicable because this starter reads no business data and runs no business actions. Implement the approved states in this same HTML when designing a real page.</p>
-    </section>
-
-    <section data-contract-section="exceptions">
-      <h2>Page-specific exceptions</h2>
-      <p>No page-specific exceptions. Follow the shared prototype styles and current controlled documents.</p>
-    </section>
+  <!-- 信息排在画面后。绑定时把 body 来源设为配置 plans 下项目相对 .md 路径，
+       并在唯一导航槽填写同 stem 的两个真实锚点。文档独立打开，不替换受控预览。
+       <a href="真实相对路径.html" data-prototype-document="html" target="_blank" rel="noopener">阅读需求 HTML</a>
+       <a href="真实相对路径.md" data-prototype-document="markdown" target="_blank" rel="noopener">需求原稿 Markdown</a>
+       源模板未绑定时保留空槽；真实交付页必须绑定，不使用 # 或虚构文件充当需求链接。 -->
+  <footer class="prototype-page-information prototype-shell">
+    <div class="prototype-information-row"><nav class="prototype-requirement-links" aria-label="关联需求文档"><span>尚未绑定需求文档</span></nav><p class="prototype-meta">Web · 响应式内容区 · CSS px</p></div>
+    <p class="prototype-demo-note"><strong>演示说明</strong> 此模板尚无业务数据和业务操作。实际页面应在这里简述模拟数据、刷新重置及未实现范围。</p>
+  </footer>
+  <!-- 五节为本产品正式协议，默认折叠，始终在产品插槽之外。 -->
+  <details class="prototype-contract">
+    <summary id="prototype-contract-toggle">Page design and interaction contract</summary>
+    <section data-contract-section="purpose"><h2>页面职责</h2><p>此源模板提供独立页面外壳，不代表已批准的业务设计。Platform: Web. Display: responsive. 内容按可用宽度自然展开，使用 CSS px，无固定窗口。创建实际页面时替换为批准的职责与范围；iOS／PC 固定预览须记录实际平台、宽高和显示比例。</p></section>
+    <section data-contract-section="navigation"><h2>导航</h2><p>实际页面只在 index.html 的唯一 nav#prototype-pages 登记一次，可从工作区或独立 HTML 进入。工作区只承载当前登记页；圆形返回展开侧栏和当前分组并聚焦当前入口。独立打开时通过 index.html 的登记页深链返回，不依赖浏览器历史。</p><p>画面后的唯一需求槽尚未绑定。实际交付须声明配置 plans 下的 Markdown 来源，并提供同名 HTML/Markdown 两个普通相对链接；文档导航不属于画面渲染依赖。</p></section>
+    <section data-contract-section="interactions"><h2>交互</h2><p data-contract-for="prototype-back-index">圆形返回：点击或 Enter。受控工作区内发送本页返回意图，展开侧栏和当前分组并聚焦当前导航项，保留当前画面；独立打开则进入 index.html 并恢复当前登记页。</p><p data-contract-for="prototype-page-sidebar-toggle">侧栏开关：认证为当前承载页后显示；点击或 Enter/Space 向父工作区发送收放意图，由父级更新侧栏及按钮的名称、aria-expanded。它只改变布局，不改变当前页或分组状态，独立打开本页时隐藏。</p><p data-contract-for="prototype-contract-toggle">页面契约：原生 summary 通过点击、Enter 或 Space 展开和折叠此五节，初始折叠，不覆盖产品画面。实际页面新增的重要产品操作须在此逐项映射稳定 ID。</p></section>
+    <section data-contract-section="states"><h2>状态</h2><p>初始显示响应式产品插槽，五节契约折叠。标题、简述、圆形返回、画面、需求与平台说明依次可读。工作区选择和分组展开分别维护；侧栏开关不改变当前页，返回才定位当前入口。源模板没有业务请求或提交，因此业务加载、成功、错误和弹窗状态不适用；实际页面需在本 HTML 实现获准状态。</p></section>
+    <section data-contract-section="exceptions"><h2>页面特例</h2><p>此源模板允许未绑定需求的空槽；真实交付页必须绑定正式需求。没有其他页面特例。复用中性共享外壳，产品 token 来自实际项目规范，不将外壳颜色当作产品主题或业务视觉批准。</p></section>
   </details>
 </body>
 </html>

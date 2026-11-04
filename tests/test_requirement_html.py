@@ -90,6 +90,10 @@ class RequirementHtmlTest(unittest.TestCase):
             self.assertEqual(hashlib.sha256(body).hexdigest(), facts["sha256"])
             blob = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
             self.assertEqual(blob, facts["git_blob"])
+        # 固定 scratch 复用失败夹具时更新同一源的验证版本，保留原页与 engine.log，
+        # 让本测试仍覆盖一次真实渲染；fresh 分支在下文单独验证。
+        if self.target.exists():
+            self.source.write_text(SAMPLE + "\n验证输入版本：" + renderer.digest(self.target.read_bytes()), encoding="utf-8")
         before = renderer.snapshot(self.source)
         calls = []
         actual_run = subprocess.run
@@ -108,6 +112,10 @@ class RequirementHtmlTest(unittest.TestCase):
         self.assertTrue(result["rendered"])
         self.assertEqual(before, renderer.snapshot(self.source))
         page = Page(self.target.read_bytes())
+        self.assertEqual(2, page.hrefs.count(renderer.PROJECT_REPOSITORY))
+        self.assertIn(renderer.UPSTREAM_REPOSITORY, page.hrefs)
+        self.assertIn('content="agent-workflow (Answer me with HTML 0.5.10)"', self.target.read_text())
+        self.assertIn("渲染器来源", self.target.read_text())
         self.assertIn("table", page.tags)
         self.assertIn("svg", page.tags)
         self.assertIn("当前需求只有这一份", self.target.read_text())
@@ -115,7 +123,7 @@ class RequirementHtmlTest(unittest.TestCase):
         self.assertIn("--no-open", command)
         self.assertEqual(options["env"]["AM_NO_UPDATE_CHECK"], "1")
         self.assertEqual(options["env"]["AM_NO_OPEN"], "1")
-        self.assertTrue(Path(options["env"]["AM_HOME"]).is_relative_to(Path(tempfile.gettempdir())))
+        self.assertTrue(Path(options["env"]["AM_HOME"]).is_relative_to(Path(tempfile.gettempdir()).resolve()))
         self.assertNotIn("NODE_OPTIONS", options["env"])
         self.assertNotIn("OPENAI_API_KEY", options["env"])
         self.assertEqual(command[2], "render")
@@ -306,10 +314,14 @@ class RequirementHtmlTest(unittest.TestCase):
         reference = "xy-plan/references/requirement-html.md"
         for host in (project / ".agents/skills", project / ".claude/skills", project / ".agent-workflow/platforms/shared/skills"):
             self.assertEqual((host / reference).read_bytes(), (PACK / "platforms/shared/skills" / reference).read_bytes())
-        for relative in ("lib/requirement_html.py", "lib/vendor/answer-me-with-html/am.mjs",
+        for relative in ("lib/requirement_html.py", "lib/plan_documents.py", "lib/migrate_project_docs.py",
+                         "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
+                         *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
+                         "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
                          "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt"):
             self.assertEqual((runtime / relative).read_bytes(), (PACK / relative).read_bytes())
         plans = project / "docs/plans"
+        self.assertFalse((project / "docs/features").exists())
         self.assertFalse(plans.exists())
         plans.mkdir()
         (plans / "installed.md").write_text(SAMPLE, encoding="utf-8")

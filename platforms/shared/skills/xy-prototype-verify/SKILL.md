@@ -24,6 +24,9 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    ```text
    docs/standards/prototype/index.html
    docs/standards/prototype/prototype.css
+   docs/standards/prototype/workspace.css
+   docs/standards/prototype/workspace.js
+   docs/standards/prototype/page-shell.js
    docs/standards/prototype/<stable-page>.html
    ```
 
@@ -51,6 +54,21 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
    Each material interactive control needs a stable `id`, exactly one matching
    `data-contract-for`, and executable declared outcomes.
+   原生折叠控件可把 `details` 的第一个直属 `summary` 的稳定 ID 映射到交互契约；
+   普通容器中的同名标签或第二个 summary 不视为可执行折叠控件。目录可在唯一
+   `nav#prototype-pages` 中使用原生 `details/summary` 分组，登记来源仍是具体页面的普通相对链接。
+   index 可通过唯一 `iframe#prototype-preview` 直接承载已登记的具体页，并提供可访问名称；
+   静态 src 须精确使用规范本地页名，禁止 srcdoc、外部/越界/未登记目标、自嵌套和额外 frame。
+   该 iframe 仍验证实际具体页及渲染资源闭包，不能套用下述文档导航豁免；产品页不获得 frame 权限。
+   生产入口只由本地 workspace.js 从唯一登记导航派生加载；未初始化时 iframe hidden 且无 src，
+   空登记显示明确空状态。静态设计入口没有控制器时仍须显式 src 命中登记页。索引不接受
+   meta refresh、任意脚本或内联路由；workspace.css/js 仅属于 index，具体页使用最小 page-shell.js。
+   已绑定需求的具体页用 `body[data-prototype-plan-source]` 声明配置 plans 下的规范 Markdown
+   路径，并在唯一 `nav.prototype-requirement-links` 提供分别标为
+   `data-prototype-document="html"` 和 `"markdown"` 的同名文件对。只有这个槽位允许跨原型根导航；
+   未绑定源模板可留空，不伪造链接。校验器核对文件安全、来源绑定及 HTML 完整性，不回扫
+   Markdown 里的反向原型链接、不要求历史 renderer 身份最新，也不把文档加入页面渲染依赖。
+   当前交付需求 HTML 的 fresh 检查仍由文档交付流程负责。
 4. Confirm every changed prototype path is under the configured
    `docs.standards_root/prototype`, except a separately task-authorized design-standard leaf
    update under `docs.standards_root/DESIGN_*.md`. Reject revision-suffixed, dated, `final`, `new`, or

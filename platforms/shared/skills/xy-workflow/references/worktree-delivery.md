@@ -104,7 +104,7 @@ revalidates only affected evidence. There is no new implementation DAG gate or r
 interview. Local candidate commits and default commit assessment do not by themselves authorize a merge.
 
 - PM builds one internal delivery object with `task_graph`, `qa_handoff`, `qa_task_pack` and optional exact
-  `projection_paths` (only configured PROJECT/features/plans), and `authorization`.
+  `projection_paths` (only configured PROJECT/plans), and `authorization`.
   Projection entries are unique actual changed Markdown file paths, including deletions, never directories.
   `qa_task_pack`是当前完整2.0 QA包的绝对路径；合并入口按同包核对handoff_ref身份与字节SHA，
   不能仅凭内联旧PASS或另一任务包交付。包必须是当前xy-qa任务并绑定真实agent_ref。

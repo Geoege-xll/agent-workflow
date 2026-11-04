@@ -131,8 +131,12 @@ class NpmPreparationTest(unittest.TestCase):
             self.assertFalse(name.startswith("scripts/test_"), name)
         self.assertIn("lib/install_workflow.py", actual)
         self.assertIn("lib/windows_runtime.py", actual)
+        self.assertNotIn("templates/docs/FEATURE.md", actual)
         # npm 载荷沿现有白名单完整传递投影器依赖，不额外依赖 npx 缓存或全局上游安装。
-        for relative in ("lib/requirement_html.py", "lib/vendor/answer-me-with-html/am.mjs",
+        for relative in ("lib/requirement_html.py", "lib/plan_documents.py", "lib/migrate_project_docs.py",
+                         "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
+                         *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
+                         "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
                          "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt",
                          "platforms/shared/skills/xy-plan/references/requirement-html.md"):
             self.assertIn(relative, actual)

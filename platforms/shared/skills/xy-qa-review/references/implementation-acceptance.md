@@ -100,3 +100,6 @@ coverage needs no new test file. After a valid PASS, stop instead of adding an i
 同一失败路径没有新进展时提前交 PM，沿现有次数上限处理，不重启未失效审计、不换方法
 或 Reviewer，也不把停止或缺失证据记为 PASS。普通说明收尾本身不触发重审；工作流指令、
 权限、安全、API 或行为合同变化仍按实际影响复核。
+
+文档验收核对同主题 plans 的本次目标／执行阶段与真实已验收版本分别成立；PROJECT 只链接明确基线。
+completed、HTML存在或清单非空不产生批准或交付；再次迭代与取消时保留旧基线，无依据不得自动索引旧历史稿。

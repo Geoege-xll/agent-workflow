@@ -157,8 +157,14 @@ Dir.chdir(ARGV.fetch(1)) { AwfCli.new.install }
 @unittest.skipUnless(shutil.which("ruby"), "Ruby is required for the Formula install simulation")
 class HomebrewLauncherTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="awf-cellar-test-")
-        self.root = Path(self.temp.name).resolve()
+        supplied = os.environ.get("AWF_TEST_SCRATCH")
+        self.temp = None
+        if supplied:
+            self.root = Path(supplied) / "model-packaging" / self._testMethodName
+            self.root.mkdir(parents=True, exist_ok=True)
+        else:
+            self.temp = tempfile.TemporaryDirectory(prefix="awf-cellar-test-")
+            self.root = Path(self.temp.name).resolve()
         archive, _, self.formula = release.build(PACK, "0.1.0", self.root / "dist")
         extracted = self.root / "extracted"
         extracted.mkdir()
@@ -192,7 +198,8 @@ class HomebrewLauncherTest(unittest.TestCase):
         self.env.pop("AGENT_WORKFLOW_PYTHON", None)
 
     def tearDown(self):
-        self.temp.cleanup()
+        if self.temp is not None:
+            self.temp.cleanup()
 
     def run_cli(self, *arguments):
         return subprocess.run([str(self.entry), *arguments], cwd=self.caller, env=self.env, capture_output=True, text=True, timeout=15)
@@ -217,10 +224,14 @@ class HomebrewLauncherTest(unittest.TestCase):
         for name in (*release.RELEASE_FILES, *release.RELEASE_DIRECTORIES):
             self.assertTrue((self.prefix / "libexec" / name).exists(), name)
         # 真实归档与 Formula 安装后的消费者必须持有同一 helper、原样引擎和许可证。
-        for relative in ("lib/requirement_html.py", "lib/vendor/answer-me-with-html/am.mjs",
+        for relative in ("lib/requirement_html.py", "lib/plan_documents.py", "lib/migrate_project_docs.py",
+                         "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
+                         *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
+                         "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
                          "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt",
                          "platforms/shared/skills/xy-plan/references/requirement-html.md"):
             self.assertEqual((self.prefix / "libexec" / relative).read_bytes(), (PACK / relative).read_bytes())
+        self.assertFalse((self.prefix / "libexec/templates/docs/FEATURE.md").exists())
         result = self.run_cli("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(result.stdout.startswith("usage: awf-cli"))

@@ -40,7 +40,7 @@ Finish the brief before the single approval choice; add no material details afte
 - Full: classify → optional relevant facts → Grill Me coverage check via `/grill-me` → `/xy-plan`
   with `plan_state: draft` → PM
   post-QA controlled-document projection decision → ask once for `requirements_approved` → freeze and run.
-  Keep PROJECT/feature truth at its last QA-verified state until integrated QA PASS. Clear
+  Keep PROJECT/plans 已验收基线 at its last QA-verified state until integrated QA PASS. Clear
   Light work may skip the two Skills when facts are complete.
 - Grill Me remains requirements-only. Superpowers is disabled by default except the bounded reviewer
   fallback below; `xy-plan` is the local planner. Reopen approval only for material scope change.
@@ -172,8 +172,9 @@ record. Current controlled documents and explicit user approvals win over recall
 `/xy-project-memory` start retrieval is on demand and requires provider-enforced project isolation
 and matching provenance; otherwise call neither recall nor save.
 
-`PROJECT.md` is the current verified project directory, not task history; details live in `docs.features`.
-QA-verified removal deletes its active row, renames the detail `*.removed.md`, and marks it historical.
+`PROJECT.md` is the current verified project directory, not task history; details and accepted baselines live in the same topic under `docs.plans`.
+QA 验收通过的完整删除只移除 `PROJECT.md` 当前链接，在同一主题原稿中将阶段标记为 `removed`，
+保留必要历史与依据；原稿保持原路径，不改名、不另建副本。
 Feature details include current architectural rationale; no separate ADR category.
 Plan storage follows the current levels: Light only for actual
 pause/recovery/handoff or user request; Full saved by PM after requirements confirmation before

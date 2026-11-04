@@ -980,7 +980,7 @@ def validate_semantic_sources(
         paths["workflow"],
         workflow,
         (
-            "Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are",
+            "Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are",
             "Activate `xy-project-memory` in start mode only when bounded cross-session recall or historical",
             "When no start retrieval ran, omit `memory_context`",
             "requirements_approved",

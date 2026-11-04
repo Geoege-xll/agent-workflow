@@ -435,7 +435,7 @@ class ClaudeSourceContractTest(unittest.TestCase):
             "post-QA controlled-document projection",
             "last QA-verified state until integrated QA PASS",
             "`PROJECT.md` is the current verified project directory",
-            "`*.removed.md`",
+            "`removed`",
             "Superpowers is disabled by default",
             "exactly one `xy-qa` reviewer",
             "installed-code-review-skill",

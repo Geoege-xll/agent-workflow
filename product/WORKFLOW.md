@@ -113,16 +113,15 @@ Current facts, historical decisions, design evidence, and working memory must re
 
 | Type | Path or capability | Rule |
 |---|---|---|
-| Project entry | `project.yaml` -> `docs.project` (also `memory.portable_checkpoint`) | Store the current verified project directory and active feature links; no task state, chronology, or arbitrary size cap |
-| Feature truth and rationale | `project.yaml` -> `docs.features` | Current requirements, acceptance, functional/architectural solution and necessary reasons; shared architecture has one detail here; no separate ADR or chronology; `*.removed.md` is historical only |
-| Requirement plans | `project.yaml` -> `docs.plans` | One editable Markdown and same-name derived HTML; decided changes/recovery, not current implemented truth |
+| Project entry | `project.yaml` -> `docs.project`（同 `memory.portable_checkpoint`） | 当前项目概况与已验收基线链接；不放任务状态或历史日志，不设行数／字节上限 |
+| 主题生命周期 | `project.yaml` -> `docs.plans` | 一个稳定主题一份可编辑 Markdown 及同名派生 HTML；分开记录本次目标、执行恢复和上次已验收行为，Git 保留完整历史 |
 | Other current facts | `project.yaml` -> remaining `docs.*` paths | Store currently effective engineering, design-system, and UI evidence; paths are an index, not an instruction to preload every file |
 | Active UI contract | `project.yaml` -> `docs.standards_root/prototype` | Keep stable interactive pages, their in-page contracts, and shared prototype CSS; approval remains in workflow task state |
 | Working memory | agentmemory | Optional cross-session observation and retrieval hints; it must never be the sole carrier of mandatory rules |
 
 ### On-Demand Auxiliary Retrieval
 
-Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are
+Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are
 auxiliary information sources at task intake. The PM uses them only when the current task needs a
 missing existing-feature fact, durable decision, engineering or design constraint, cross-session
 background, or historical lesson. When available task information is sufficient, do not force
@@ -138,10 +137,10 @@ document retrieval or agentmemory start retrieval.
 1. Read `project.yaml` when the workflow needs its paths, limits, or routing configuration. Treat
    every `docs.*` value as a discoverable index, not a command to open that document body.
 2. When current feature truth must be located or verified, read `docs.project`, build a task-scoped
-   `controlled_document_access` plan, and follow only relevant active feature links. Do not preload
-   the whole feature directory.
-3. Search headings and task terms before reading a detailed body. Search only the relevant feature
-   documents (including shared architecture), relevant plans, controlled prototype pages, or configured fallback notes that can
+   `controlled_document_access` plan, and follow only relevant accepted-plan baseline links. Do not preload
+   the whole plans directory.
+3. Search headings and task terms before reading a detailed body. Search only the relevant topic
+   plans (including shared architecture), controlled prototype pages, or configured fallback notes that can
    answer the identified missing fact.
 4. Invoke `xy-project-memory` start retrieval only for a concrete cross-session or historical query.
    Use `memory_smart_search` (or `memory_recall` for narrow queries) only when the provider is
@@ -168,23 +167,18 @@ empty record, and its absence alone is not a QA finding.
 本节的强制QA后投影顺序适用于Full；Light按最小验证、实际必需独立审计和文档评估
 完成接收后更新必要事实，不把未审计结论称QA已通过。没有事实变化就不投影。
 
-- `PROJECT.md` and active feature documents describe only the last verified project truth under the applicable Full／Light acceptance. They
-  never expose `pending`, `running`, `removal_pending`, failed, or other task execution states.
+- PROJECT 与主题稿的“验收结果与当前已交付行为”只描述最后真实验收基线。主题稿的
+  “阶段”和“当前进展与恢复入口”可记录本次 active、paused 或 cancelled，但不能把其目标
+  冒充已交付；再次迭代保留旧已验收版本，直至本次实际验收后替换。
 - PM独占受控文档投影：Full必须等集成QA PASS；Light等最小验证及其实际选定的必要独立审计接收。
-  It updates existing current facts in place; full history remains in Git.
-- Do not cap `PROJECT.md` by line count or bytes. Its growth may reflect more active features, but
-  completed work, removed features, QA reports, logs, and task history must not accumulate there.
-- An added or changed feature updates its detail document and only the necessary current index row.
-  A major behavior-preserving rewrite may record `reimplemented`; routine refactors do not create
-  document churn.
-- A verified complete removal is projected once: delete the active row from `PROJECT.md`, rename the
-  detail to `<feature>.removed.md`, mark it historical with reason/date/replacement, and repair
-  current links. QA failure leaves all canonical documents unchanged.
-- After a PROJECT/feature projection, run
-  `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .` and require exit
-  code 0. The validator checks semantic links and active/removed contracts, never document size.
-- Keep current functional and architectural rationale in feature details. A cross-feature solution
-  has one shared detail in the same directory, linked from PROJECT and related features. Do not create ADRs.
+  原地更新本主题基线与必要 PROJECT 链接；没有当前事实变化就不制造文档变更或新条目。
+- PROJECT 不设行数／字节限制，只保留当前概况和已验收主题链接；执行与日志留在原职责位置。
+- 已验收完整删除后从 PROJECT 移除当前链接，在同一主题稿标记 `removed`、真实删除原因、
+  日期和替代关系；必要旧行为明确标为历史。不重命名为 `.removed.md` 或另建功能／ADR 文档。
+  QA 失败不改变原有已验收基线。
+- 投影后运行 `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`，要求 exit 0。
+  校验器核对稳定主题、唯一基线、当前索引与规范边界；不从 `completed` 或 HTML 新鲜度推断批准。
+- 功能、架构方案与必要取舍留在相同主题稿；跨主题共享方案可有独立稳定主题，相关稿件引用它。
 - Keep design-change UI approval in workflow task state, bound to the approved concrete pages, changed scope,
   declared operation sequence, and verified page dependency fingerprints. Do not duplicate approval
   into a companion document. When a plan is persisted, preserve recoverable approval references and
@@ -198,7 +192,7 @@ empty record, and its absence alone is not a QA finding.
   to `memory.fallback_dir`. Fallback notes must not contain secrets, credentials, PII, raw user
   data, complete logs, or absolute user paths.
 - Closeout must report a truthful `memory_projection` (`memories_saved`, `project_updated`,
-  `features_updated`, `features_removed`, `plans_updated`, `prototype_pages_updated`, and
+  `plans_updated`, `prototype_pages_updated`, and
   `fallback_note`).
 
 ### PM commit assessment after QA and document projection
@@ -381,7 +375,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
 - Plan persistence follows task classification, not file count or the number of workers: Light
   saves only for an actual pause/recovery/handoff or explicit request;
   Full saves after requirements approval and before first design/implementation dispatch. PM writes
-  one plan per independent requirement, not per Agent, visual iteration or QA rework. Explicit
+  同一稳定主题复用一份生命周期文档，不按 Agent、迭代或 QA 返工复制。 Explicit
   task-scoped workflow opt-out and save/no-save requests prevail. Saving Light never invokes Full Skills.
   For persistence, visual changes, scope replacement or resumption, read
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
@@ -392,7 +386,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
 - After Full coverage is complete, activate the self-contained `xy-plan` Skill. It creates a
   `plan_state: draft` plan with exact paths, contracts, task packs, verification commands, expected
   evidence, semantic locks, and a machine-readable `task_graph`. The plan is a proposal: it must not
-  edit files, dispatch Agents, update PROJECT/feature truth, or request approval.
+  edit files, dispatch Agents, update PROJECT/plans 已验收基线, or request approval.
 - The PM reviews that draft, decides the post-QA controlled-document projection, and then requests
   `requirements_approved`. For design-change UI, the draft carries the route, affected surfaces,
   PM prototype recommendation, and both conditional consequences; it must not treat either branch
@@ -413,8 +407,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   check 均不产生需求批准、原型选择或视觉批准。设计 Agent 在原交接返回稳定 REQ 编号到
   具体原型页/实际状态锚点的覆盖，PM 写回同一原稿并重渲染；不新增映射报告或原型独立 QA。
   HTML 新鲜度、requirements_fingerprint 和原型依赖指纹职责分开；纯进度/链接/呈现变化
-  不自动重开需求批准。实施者仍取得完整当前 Markdown/任务包。已完成计划及 HTML 保持
-  历史边界，当前已验收事实仍只属于 features/PROJECT。
+  不自动重开需求批准。实施者仍取得完整当前 Markdown/任务包。同稿保留已验收基线，已完成／取消的执行明细和旧 HTML 仍有历史边界；只有明确基线可被 PROJECT 索引。
 - The PM must not inventory or manually enumerate locally installed specialist Skills. Task packs
   declare only mandatory `required_skills` and task-fact `audit_surfaces`; Codex matches installed
   Skills on demand from their descriptions.
@@ -791,6 +784,21 @@ filters evidence, not workspace safety validation. Navigation links remain valid
 couple otherwise independent page fingerprints. This command does not activate the designer's
 complete procedure or require a browser, and its machine output stays internal.
 
+页面登记来源是 `index.html` 唯一 `nav#prototype-pages` 内的普通相对页面链接；原生
+`details/summary` 可按模块或业务逻辑分组，不另建 Manifest 或脚本登记副本。原生折叠的
+第一个直属 summary 可通过稳定 ID 和 `data-contract-for` 记录交互结果。
+工作区 index 可由唯一 `iframe#prototype-preview` 直接显示一个已登记的本地具体页，保留
+可访问名称，静态 src 精确使用规范页名；拒绝 srcdoc、外部/越界/未登记路径、自嵌套及额外 frame。
+iframe 属于真实渲染资源，仍验证具体页和本地闭包；此能力只属于 index，产品页不得嵌入 frame。
+具体页用 `body[data-prototype-plan-source]` 绑定配置 `docs.plans` 下的规范 Markdown 路径，
+唯一 `nav.prototype-requirement-links` 中的 HTML/Markdown 锚点分别设置
+`data-prototype-document="html"` / `"markdown"`，并指向同名文件对；源模板尚未绑定时可留空。
+这只是明确槽位的文档导航权限，其他资源、嵌入和普通链接仍受原型根边界约束。
+验证核对安全普通文件、来源路径/内容绑定及 HTML 完整性，不调用完整 render/check、
+不回扫文档反向原型关联、不要求历史 renderer 身份最新，也不建立文档渲染依赖边。
+当前交付 HTML 的新鲜度由文档交付流程单独保证，renderer 代码或版本变化本身不触发
+全项目原型重验或视觉重批；任何静态检查均不创造批准。
+
 A fingerprint change first requires a scoped evidence refresh, not automatically another user
 confirmation. To carry an existing visual approval forward after a non-material edit, the PM must
 retain the original user approval and scope, compare the exact old/new dependency delta, and record
@@ -819,7 +827,7 @@ prototype may reuse existing project assets.
 
 For initial design adoption, reusable rule changes, complete visual replacement, or standard
 maintenance, read [the design-standard lifecycle procedure](../platforms/shared/skills/xy-workflow/references/design-standards.md).
-PM assesses design-standard updates independently from PROJECT/feature projection, including after
+PM assesses design-standard updates independently from PROJECT/plans 基线投影, including after
 the first visual confirmation. No reusable rule change means no document update. UI Agent writes
 authorized standard leaves; PM owns scope/adoption, directory links and affected
 task-fingerprint refresh; implementers own production tokens/components; QA independently audits.
@@ -843,17 +851,27 @@ The active prototype workspace is intentionally small:
 docs/standards/prototype/
 ├── index.html
 ├── prototype.css
+├── workspace.css
+├── workspace.js
+├── page-shell.js
 └── <stable-page>.html
 ```
 
 The stable root entry is `docs/standards/prototype/index.html`; shared prototype styles live in
 `docs/standards/prototype/prototype.css`.
 
-`index.html` is a thin page-link directory, not full project design context. One product page has
+`index.html` directly opens the browsing workspace and shows one registered page at a time, without
+a separate directory landing page or extra outer header. It is not full project design context. One product page has
 one stable HTML path: update an existing page in place and create a file only for a genuinely new
 product page. Use ordinary relative links. Every page must load directly through `file://` without
 package installation, a build, framework, router, external CDN, live API, database, account,
 credential, or real user data.
+
+workspace.css/js 只由 index 加载；prototype.css 和最小 page-shell.js 属于具体页。空登记显示
+明确空状态且 iframe hidden/无 src；登记后由唯一本地控制器从 nav 链接派生加载，不批量预载。
+当前页名称和紧凑简述后先展示高保真画面，再放需求 HTML/Markdown、平台/尺寸与必要演示说明，
+最后是默认折叠的五节契约。浅底细边黑 chevron 圆形返回定位当前分组/页面，与侧栏收放分开；
+产品导航、浮层和滚动只属于画板。已有非空业务原型不随源模板更新批量重做。
 
 `prototype.js` is not part of the standard tree. Create it only when two or more pages genuinely
 share the same native interaction; otherwise keep trivial behavior page-local.
@@ -1166,7 +1184,7 @@ controlled_document_access:
 
 `project.yaml` is the fixed workflow-adapter read for paths, limits, and routing configuration; its
 `docs.*` values are indexes, not a static body preload list. The PM resolves and reads `docs.project` only
-when the task needs the current feature directory, then follows only task-relevant feature or other
+when the task needs the current accepted-baseline directory, then follows only task-relevant plan or other
 controlled-document links. Use `targeted` by default after inspecting headings or searching task
 terms; use `full` only when the whole detailed document is materially required and record why; use
 `skip` without opening the body when the request has no relevant surface. Read shared architecture
@@ -1300,18 +1318,13 @@ performance work, and pure visual styling use `not_required` with `change_type: 
 they leave recorded current facts unchanged. Assess the actual delta, not its task category: if an
 existing feature records a changed runtime version, dependency baseline, architecture rationale or
 applicable scope, replace that fact in place after applicable verification. This does not require a
-new feature document, a PROJECT entry, or a change chronology.
+new topic document, a PROJECT entry, or a change chronology.
 
-After QA PASS, update only the resulting current truth. Active feature documents contain current
-requirements, acceptance and necessary functional/architectural rationale; `PROJECT.md`
-contains the current project directory and active feature links. Neither contains task chronology,
-complete QA output, tickets, scheduler state, or implementation transcripts. Git owns full history.
+验收后只投影实际变化的当前基线：同一主题稿保留需求、方案、恢复入口、验收行为及必要批准／证据；
+PROJECT 仅链接其中真实已验收版本。不得按任务阶段推定交付，不另写 feature 文档或 ADR。
+`change_type: removed` 在同一原稿标记 `removed`，移除 PROJECT 当前链接并修复引用，
+保留必要删除依据与历史；不改名、不制造中间删除状态。QA 失败保留原已验收事实。
 
-For `change_type: removed`, closeout removes the active PROJECT row, renames the feature detail to
-`<feature>.removed.md`, records removal reason/date/replacement and historical-only status, and
-repairs current links. Do not create an intermediate removal document state. QA failure leaves the
-canonical documents unchanged. This projection creates neither another approval nor another
-companion document.
 
 Every Full task pack and applicable Light task pack also includes:
 

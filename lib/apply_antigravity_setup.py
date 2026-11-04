@@ -107,7 +107,6 @@ class Plan:
     skill_changes: list[DirectoryChange] = field(default_factory=list)
     doc_changes: list[FileChange] = field(default_factory=list)
     hook_changes: list[FileChange] = field(default_factory=list)
-    feature_docs_root: tuple[Path, Fingerprint] | None = None
     prototype_scaffold: PrototypeScaffold | None = None
     agents_md: FileChange | None = None
     stale_agents: list[tuple[Path, Fingerprint]] = field(default_factory=list)
@@ -291,7 +290,6 @@ def _render_doc_candidates(
     substitutions = {
         "PROJECT_NAME": project_name,
         "DOC_PROJECT": docs["project"],
-        "DOC_FEATURES_DIR": docs["features"].rstrip("/"),
         "DOC_STANDARDS": docs["standards"],
         "DOC_STANDARDS_ROOT": docs["standards_root"].rstrip("/"),
         "DOC_DESIGN_DIR": docs["standards_root"].rstrip("/"),
@@ -328,21 +326,9 @@ def _prototype_candidates(
         raise ApplyError(f"prototype workspace must be a real directory: {root}")
     return (
         PrototypeScaffold(root, root_before),
-        [
-            (
-                root / "index.html",
-                _read_regular(
-                    pack / "templates/prototype/index.html", "prototype index template"
-                ),
-            ),
-            (
-                root / "prototype.css",
-                _read_regular(
-                    pack / "templates/prototype/prototype.css",
-                    "prototype CSS template",
-                ),
-            ),
-        ],
+        # 仅初始化缺失/空工作区，五个运行资产随同一候选事务发布；已有业务工作区原样保留。
+        [(root / name, _read_regular(pack / "templates/prototype" / name, f"prototype {name} template"))
+         for name in ("index.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")],
     )
 
 
@@ -699,18 +685,7 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         ),
         *prototype_candidates,
     ]
-    # features/ 是受控目录但不包含安装器制造的 README/.gitkeep。单独记录目录快照，
-    # 既能在直接 Antigravity 安装中创建它，也不会把占位文件误认为真实功能文档。
-    feature_value = _parse_project_values(pack / "project.yaml").get(
-        "docs.features", "docs/features/"
-    )
-    feature_target = project / feature_value
-    feature_before = _fingerprint(feature_target, read_file=False)
-    if feature_before.kind not in {"missing", "directory"}:
-        raise ApplyError(
-            f"feature document root must be a real directory: {feature_target}"
-        )
-    plan.feature_docs_root = (feature_target, feature_before)
+    # 主题文档只在实际保存时创建；安装不建立空需求目录。
     for target, body in document_candidates:
         before = _fingerprint(target)
         if before.kind not in {"missing", "file"}:
@@ -792,16 +767,6 @@ def _prepare_prototype_scaffold(plan: Plan) -> None:
         raise ApplyError(
             f"prototype workspace changed during directory publication: {scaffold.root}"
         )
-
-
-def _prepare_feature_docs_root(plan: Plan) -> None:
-    """创建空的 features/ 权威目录，同时拒绝预检后发生的类型替换。"""
-
-    if plan.feature_docs_root is None:
-        return
-    target, before = plan.feature_docs_root
-    _assert_unchanged(target, before)
-    _ensure_directories(plan, target)
 
 
 def _temp_path(target: Path, nonce: str, kind: str) -> Path:
@@ -1087,7 +1052,6 @@ def apply_plan(plan: Plan) -> None:
     for path, expected in plan.root_fingerprints.items():
         _assert_unchanged(path, expected)
     try:
-        _prepare_feature_docs_root(plan)
         _prepare_prototype_scaffold(plan)
         for change in plan.doc_changes:
             _publish_file(change, plan)
@@ -1140,6 +1104,37 @@ def apply_plan(plan: Plan) -> None:
         print(f"[WARN] Antigravity cleanup deferred after commit: {exc}", file=sys.stderr)
 
 
+def publish_document_changes(project: Path, updates: dict[Path, bytes | None],
+                             expected_inputs: dict[Path, bytes | None], validate_after,
+                             *, desired_modes: dict[Path, int] | None = None) -> None:
+    """显式文档迁移复用现有文档事务，不建立另一套文件发布／回滚原语。
+
+    调用方持有项目安装锁并提供规划时原字节；这里沿用单链接检查、条件发布、
+    精确备份及并发内容保全。同步失败回滚，跨文件断电原子性不在既有保证范围内。
+    """
+    from claude_instructions import read_file
+    plan = Plan(Path(__file__).absolute().parents[1], project, project, secrets.token_hex(12))
+    for path, body in updates.items():
+        if not path.is_relative_to(project) or read_file(path) != expected_inputs[path]:
+            raise ApplyError(f"document migration input changed: {path}")
+        before = _fingerprint(path)
+        mode = (desired_modes or {}).get(path, before.mode if before.kind == "file" else 0o644)
+        plan.doc_changes.append(FileChange(path, body, mode, before,
+            created_standard_index=before.kind == "missing"))
+    try:
+        for change in plan.doc_changes:
+            _publish_file(change, plan)
+        validate_after()
+        # 外部编辑器也可能继续写原 inode；清理备份前再核实，冲突保持可诊断原件。
+        for change in plan.doc_changes:
+            if change.backup is not None:
+                _assert_unchanged(change.backup, change.before)
+    except BaseException:
+        _rollback(plan)
+        raise
+    _cleanup_committed(plan)
+
+
 def _content_signature(
     tree: tuple[tuple[str, Fingerprint], ...]
 ) -> tuple[tuple[str, str, int, str], ...]:
@@ -1155,10 +1150,6 @@ def check_plan(plan: Plan) -> None:
         raise ApplyError("controlled project documents are missing, empty, or need a managed common/index update")
     if plan.hook_changes:
         raise ApplyError("managed Antigravity assist Hooks drift from source")
-    if plan.feature_docs_root is None or _fingerprint(
-        plan.feature_docs_root[0], read_file=False
-    ).kind != "directory":
-        raise ApplyError("controlled feature document directory is missing")
     if plan.stale_agents or plan.stale_skills:
         raise ApplyError("stale managed Antigravity artifacts are present")
 

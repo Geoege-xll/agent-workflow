@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the PROJECT/features current truth and STANDARDS directory model."""
+"""校验 PROJECT 的 plans 已验收基线与独立 STANDARDS 规范入口。"""
 
 from __future__ import annotations
 
@@ -16,25 +16,16 @@ sys.dont_write_bytecode = True
 try:
     from .standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from .business_confirmation_policy import read_instruction_contract
-    from .validate_project_config import section_lines, strip_inline_comment
+    from .validate_project_config import section_lines, strip_inline_comment, validate_docs
+    from .plan_documents import validate_plan_index
 except ImportError:
     from standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from business_confirmation_policy import read_instruction_contract
-    from validate_project_config import section_lines, strip_inline_comment  # type: ignore[no-redef]
+    from validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
+    from plan_documents import validate_plan_index
 
 
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-FEATURE_ID_RE = re.compile(
-    r"(?im)^\s*-\s*(?:Feature ID|功能 ID)\s*[:：]\s*`?([A-Za-z0-9._-]+)`?\s*$"
-)
-ACTIVE_STATUS_RE = re.compile(
-    r"(?im)^\s*-\s*(?:Status|状态)\s*[:：]\s*`?active`?\s*$"
-)
-REMOVED_STATUS_RE = re.compile(
-    r"(?im)^\s*-\s*(?:Status|状态)\s*[:：]\s*`?removed`?\s*$"
-)
-REMOVAL_DATE_RE = re.compile(r"(?im)^\s*-\s*(?:Removal date|删除日期)\s*[:：]\s*\S+")
-REMOVAL_REASON_RE = re.compile(r"(?im)^\s*-\s*(?:Removal reason|删除原因)\s*[:：]\s*\S+")
 STANDARD_RULE_RE = re.compile(r"\[([a-z0-9][a-z0-9._-]*)\]\s*\[(hard|advisory)\]")
 RULE_DEFINITION_RE = re.compile(
     r"(?m)(?:^\s*(?:[-*+]\s+)?`?|\|\s*`?|(?=\[(?:eng|des)-))"
@@ -94,10 +85,11 @@ def builtin_standard_rule_catalog(pack_root: Path) -> dict[str, dict[str, object
     }
 
 
-def parse_docs(config: Path) -> dict[str, str]:
+def parse_docs(config: Path, *, body: bytes | None = None) -> dict[str, str]:
     """只解析受控 docs 段；完整路径安全性仍由 validate_project_config 负责。"""
 
-    lines = config.read_text(encoding="utf-8").splitlines()
+    # 迁移规划可绑定已经安全采样的配置字节，避免再次读取时把并发配置误作同一输入。
+    lines = (config.read_bytes() if body is None else body).decode("utf-8").splitlines()
     result: dict[str, str] = {}
     for raw in section_lines(lines, "docs"):
         match = re.match(r"^  ([A-Za-z0-9_]+):\s*(.*?)\s*$", raw)
@@ -147,7 +139,7 @@ def collect_standard_leaves(root: Path, errors: list[str]) -> dict[Path, str]:
     规范是所有实现 Agent 与 QA 的强制输入，所以目录中任何符号链接、特殊节点或
     多硬链接文件都可能把项目外内容伪装成规则权威；这里逐层 ``lstat``，不跟随它们。
     ``prototype`` 是 HTML/CSS 设计证据，不是规范叶；完整节点与依赖安全由
-    ``validate_prototype_workspace.py`` 独立负责。功能方案归 plans/features，
+    ``validate_prototype_workspace.py`` 独立负责。主题方案归 plans，
     不再以 references 子目录混入规范树。
     """
 
@@ -188,26 +180,29 @@ def validate(config: Path, project_root: Path) -> list[str]:
     """检查语义边界，不对 PROJECT.md 设置行数或字节数限制。"""
 
     errors: list[str] = []
-    docs = parse_docs(config)
+    root = project_root.resolve()
+    docs = validate_docs(config.read_text(encoding="utf-8").splitlines(), root, errors)
+    if errors:
+        return errors
     standards_value = docs.get("standards")
     standards_root_value = docs.get("standards_root")
     project_value = docs.get("project")
-    features_value = docs.get("features")
-    if not standards_value or not standards_root_value or not project_value or not features_value:
-        return ["docs.standards, docs.standards_root, docs.project and docs.features are required"]
+    plans_value = docs.get("plans")
+    if not standards_value or not standards_root_value or not project_value or not plans_value:
+        return ["docs.standards, docs.standards_root, docs.project and docs.plans are required"]
 
     root = project_root.resolve()
     standards_path = root / standards_value
     standards_root_path = root / standards_root_value
     project_path = root / project_value
-    features_path = root / features_value
+    plans_path = root / plans_value
     standards_doc = standards_path.resolve()
     standards_root = standards_root_path.resolve()
     project_doc = project_path.resolve()
-    features_root = features_path.resolve()
+    plans_root = plans_path.resolve()
     if not all(
         path.is_relative_to(root)
-        for path in (standards_doc, standards_root, project_doc, features_root)
+        for path in (standards_doc, standards_root, project_doc, plans_root)
     ):
         return ["controlled document paths must stay within project root"]
     if standards_doc.is_relative_to(standards_root):
@@ -215,7 +210,7 @@ def validate(config: Path, project_root: Path) -> list[str]:
 
     # 本次升级明确不保留旧 STATUS/SPEC 权威层。这里检查的是固定遗留位置，
     # 即使 PROJECT.md 没有链接它们，也必须移除，防止 Agent 或人工搜索时继续
-    # 把旧文件误当成第二份当前事实。历史内容由 Git 和迁移后的 feature 文档保留。
+    # 把旧文件误当成第二份当前事实。历史内容由 Git 和迁移后的主题文档保留。
     for legacy_name in ("STATUS.md", "SPEC.md", "ENGINEERING.md", "DESIGN_SYSTEM.md"):
         legacy_path = root / "docs" / legacy_name
         try:
@@ -298,69 +293,13 @@ def validate(config: Path, project_root: Path) -> list[str]:
                 linked_leaves.add(target)
         for path in sorted(set(standards_leaves) - linked_leaves):
             errors.append(f"standards leaf is not linked from STANDARDS.md: {path}")
-    try:
-        features_info = features_path.lstat()
-    except FileNotFoundError:
-        errors.append(f"missing feature document directory: {features_root}")
-        return errors
-    if stat.S_ISLNK(features_info.st_mode) or not stat.S_ISDIR(features_info.st_mode):
-        errors.append(f"feature document root must be a real directory: {features_root}")
-        return errors
     if project_body is None:
         return errors
-
-    # 直接升级后，旧文件名也不得以文字或链接重新进入唯一入口，否则会恢复双重真相。
+    # 固定遗留权威不能通过唯一入口重新成为事实；无索引旧计划则保留历史边界。
     for legacy in ("STATUS.md", "SPEC.md", "ENGINEERING.md", "DESIGN_SYSTEM.md"):
         if legacy in project_body:
             errors.append(f"PROJECT.md must not reference legacy authority {legacy}")
-
-    active_docs: set[Path] = set()
-    removed_docs: set[Path] = set()
-    feature_ids: dict[str, Path] = {}
-    for path in sorted(features_root.rglob("*.md")):
-        body = read_single_link_regular(path, "feature document", errors)
-        if body is None:
-            continue
-        is_removed = path.name.endswith(".removed.md")
-        (removed_docs if is_removed else active_docs).add(path.resolve())
-
-        feature_id_match = FEATURE_ID_RE.search(body)
-        if feature_id_match is None:
-            errors.append(f"feature document missing stable Feature ID: {path}")
-        else:
-            feature_id = feature_id_match.group(1).casefold()
-            previous = feature_ids.get(feature_id)
-            if previous is not None:
-                errors.append(f"duplicate Feature ID {feature_id}: {previous} and {path}")
-            else:
-                feature_ids[feature_id] = path
-
-        if is_removed:
-            if REMOVED_STATUS_RE.search(body) is None:
-                errors.append(f"removed feature must declare Status: removed: {path}")
-            if REMOVAL_DATE_RE.search(body) is None:
-                errors.append(f"removed feature missing removal date: {path}")
-            if REMOVAL_REASON_RE.search(body) is None:
-                errors.append(f"removed feature missing removal reason: {path}")
-            if "historical" not in body.casefold() and "历史" not in body:
-                errors.append(f"removed feature must label former requirements as historical: {path}")
-        elif ACTIVE_STATUS_RE.search(body) is None:
-            errors.append(f"active feature must declare Status: active: {path}")
-
-    linked_active: set[Path] = set()
-    for raw in MARKDOWN_LINK_RE.findall(project_body):
-        target = normalized_link_target(project_doc, raw)
-        if target is None or not target.is_relative_to(features_root):
-            continue
-        if target in removed_docs or target.name.endswith(".removed.md"):
-            errors.append(f"PROJECT.md must not link removed feature: {target}")
-        elif target not in active_docs:
-            errors.append(f"PROJECT.md links missing or non-regular active feature: {target}")
-        else:
-            linked_active.add(target)
-
-    for path in sorted(active_docs - linked_active):
-        errors.append(f"active feature is not linked from PROJECT.md: {path}")
+    errors.extend(validate_plan_index(root, plans_path, project_path, project_body))
     return errors
 
 
@@ -373,7 +312,7 @@ def main() -> int:
         for error in errors:
             print(f"[ERROR] {error}", file=sys.stderr)
         return 1
-    print("[OK] PROJECT/features and STANDARDS directory contracts")
+    print("[OK] PROJECT/plans baseline and STANDARDS directory contracts")
     return 0
 
 

@@ -21,7 +21,7 @@ plan_state: draft
 - Work only after `grill_result.readiness: ready_for_planning` for a Full request.
   Light不因本Skill可用而强制计划／DAG；2.0草案与task只表达当前Full授权范围。
 - Produce a draft for PM review; the draft is not approval or execution authorization.
-- This Skill must not edit files, dispatch Agents, update PROJECT/feature truth, or request approval.
+- This Skill must not edit files, dispatch Agents, update PROJECT/plans 已验收基线, or request approval.
 - Do not create worktrees, commits, implementation branches, nested Agents, or another workflow.
 - Identify controlled-document candidates, but leave the post-QA projection decision to the PM.
 - This draft Skill does not persist files. After requirements approval PM saves Full plans under

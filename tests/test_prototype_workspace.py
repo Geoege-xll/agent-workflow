@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -16,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from lib import validate_prototype_workspace as validator_module
+from lib import requirement_html as requirement_renderer
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -82,6 +85,14 @@ INDEX_HTML = """<!doctype html>
 </html>
 """
 
+# 只扩展真实索引的当前单页承载形状，页面登记依然来自 nav 中的普通链接。
+PREVIEW_INDEX_HTML = INDEX_HTML.replace(
+    '<nav aria-label="Prototype pages">',
+    '<nav id="prototype-pages" aria-label="Prototype pages" hidden>',
+).replace(
+    '</body>', '<iframe id="prototype-preview" src="settings.html" title="Settings preview"></iframe></body>',
+)
+
 PAGE_HTML = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -137,6 +148,44 @@ def write_valid_project(parent: Path) -> Path:
     (prototype / "prototype.css").write_text(PROTOTYPE_CSS, encoding="utf-8")
     (pages / "settings.html").write_text(PAGE_HTML, encoding="utf-8")
     return project
+
+
+def bind_requirement_documents(project: Path, *, source_body: str | None = None) -> tuple[Path, Path]:
+    """建立文档记录消费夹具；真实渲染另由展示项目和 requirement_html 集成证据覆盖。
+
+    使用旧 renderer 标识是有意的：原型导航只承诺来源/产物完整性，不授予或刷新文档批准，
+    也不能把 helper 代码变动当作要求所有历史原型重验的理由。
+    """
+    (project / "project.yaml").write_bytes((PACK / "project.yaml").read_bytes())
+    plans = project / "docs/plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    source = plans / "settings.md"
+    text = source_body or (
+        "# 设置需求\n\n- 主题 ID：settings\n- 阶段：active\n- 模块：settings\n"
+        "- 任务等级：Full\n- 已验收版本：none\n\n"
+        "## 目标与范围\n保留设置。\n\n## 需求与验收\nREQ-001：打开设置。\n\n"
+        "## 方案与原型关联\n[设置弹窗](../standards/prototype/settings.html#open-settings-dialog)\n\n"
+        "## 当前进展与恢复入口\n等待确认。\n\n## 验收结果与当前已交付行为\n暂无基线。\n\n"
+        "## 批准依据与必要证据\n本夹具不授予批准。\n"
+    )
+    source.write_text(text, encoding="utf-8")
+    payload = b"<!doctype html><html><head><title>Requirement</title></head><body>Review</body></html>"
+    record = {
+        "project": str(project.absolute()), "source": "docs/plans/settings.md", "draft": False,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "renderer": "retained-renderer-version", "html_sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    html = source.with_suffix(".html")
+    html.write_bytes(requirement_renderer.MARKER + json.dumps(record, sort_keys=True).encode() + b" -->\n" + payload)
+    page = project / PROTOTYPE_RELATIVE / "settings.html"
+    body = PAGE_HTML.replace('<body>', '<body data-prototype-plan-source="docs/plans/settings.md">', 1)
+    body = body.replace("</main>", (
+        '</main><nav class="prototype-requirement-links" aria-label="关联需求">'
+        '<a data-prototype-document="html" href="../../plans/settings.html">需求 HTML</a>'
+        '<a data-prototype-document="markdown" href="../../plans/settings.md">需求 Markdown</a></nav>'
+    ), 1)
+    page.write_text(body, encoding="utf-8")
+    return source, html
 
 
 def tree_snapshot(root: Path) -> tuple[tuple[object, ...], ...]:
@@ -268,7 +317,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         css_path = TEMPLATE_ROOT / "prototype.css"
         missing = [
             path.name
-            for path in (index_path, page_path, css_path)
+            for path in (index_path, page_path, css_path, *(TEMPLATE_ROOT / name for name in ("workspace.css", "workspace.js", "page-shell.js")))
             if not path.is_file()
         ]
         self.assertEqual([], missing, f"missing prototype templates: {missing}")
@@ -277,8 +326,8 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         page = page_path.read_text(encoding="utf-8")
         self.assertIn('aria-label="Prototype pages"', index)
         self.assertNotIn("prototype-contract", index)
-        self.assertNotIn("<iframe", index.casefold())
-        self.assertNotIn("<script", index.casefold())
+        self.assertEqual(1, index.count('<iframe id="prototype-preview"'))
+        self.assertIn('<script src="workspace.js" defer></script>', index)
         self.assertIn('href="prototype.css"', page)
         self.assertIn('href="index.html"', page)
         self.assertEqual(1, page.count('class="prototype-contract"'))
@@ -286,7 +335,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             list(MANDATORY_SECTIONS),
             re.findall(r'data-contract-section="([^"]+)"', page),
         )
-        self.assertNotIn("<script", page.casefold())
+        self.assertIn('<script src="page-shell.js" defer></script>', page)
 
     def test_page_template_separates_header_frame_content_and_contract(self) -> None:
         """三功能区保持独立；普通 Web 默认不带固定尺寸或多余的滚动焦点入口。"""
@@ -363,7 +412,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         self.assertNotIn("position", declarations(".prototype-contract"))
 
     def test_directory_template_remains_a_thin_page_link_directory(self) -> None:
-        """统一外观不能把目录变成多画板汇总页，也不能生成额外合同。"""
+        """入口只有一个当前页承载器，不汇总多个产品画板或复制页面契约。"""
         parser = PrototypeTemplateParser()
         parser.feed((TEMPLATE_ROOT / "index.html").read_text(encoding="utf-8"))
         self.assertEqual(1, sum(tag == "nav" and attrs.get("aria-label") == "Prototype pages"
@@ -382,6 +431,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                 project = write_valid_project(Path(temporary))
                 shutil.copy2(TEMPLATE_ROOT / "page.html", self.page(project))
                 shutil.copy2(TEMPLATE_ROOT / "prototype.css", self.prototype(project) / "prototype.css")
+                shutil.copy2(TEMPLATE_ROOT / "page-shell.js", self.prototype(project) / "page-shell.js")
                 if mode == "fixed":
                     # 按模板声明的扩展点切换为一个测试窗口，不把该尺寸写成项目默认规范。
                     self.replace_once(self.page(project), 'data-prototype-display="responsive"',
@@ -396,12 +446,9 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                     self.replace_once(self.page(project), '· 响应式内容区 ·',
                                       '· 固定预览：1200 × 800 CSS px ·')
                     self.replace_once(self.page(project),
-                                      'Its platform is Web in responsive mode: content follows '
-                                      'available width and natural document flow, without a fixed preview viewport.',
-                                      'Its platform is Web in fixed mode with a 1200 × 800 CSS-pixel '
-                                      'preview viewport at unscaled size.')
-                    self.replace_once(self.page(project), 'The initial shell has responsive content',
-                                      'The initial shell has fixed-viewport content')
+                                      'Display: responsive. 内容按可用宽度自然展开，使用 CSS px，无固定窗口。',
+                                      'Display: fixed. 固定预览 1200 × 800 CSS px，按原尺寸显示。')
+                    self.replace_once(self.page(project), '初始显示响应式产品插槽', '初始显示固定尺寸产品插槽')
                 before = tree_snapshot(project)
                 result = self.run_validator(project)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -417,6 +464,274 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             self.assertEqual(before, tree_snapshot(project))
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertNotIn("Traceback", result.stdout + result.stderr)
+
+    def test_navigation_groups_are_native_and_stay_inside_the_unique_directory(self) -> None:
+        """折叠只改变目录呈现，不能提供第二套登记来源或绕过原目录负控。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-navigation-groups-") as temporary:
+            project = write_valid_project(Path(temporary))
+            index = self.prototype(project) / "index.html"
+            grouped = INDEX_HTML.replace(
+                '<nav aria-label="Prototype pages">',
+                '<nav id="prototype-pages" aria-label="Prototype pages">',
+            ).replace(
+                '<a href="settings.html">Settings</a>',
+                '<details open><summary>设置模块</summary><a href="settings.html">Settings</a></details>',
+            )
+            index.write_text(grouped, encoding="utf-8")
+            before = tree_snapshot(project)
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(before, tree_snapshot(project))
+            cases = {
+                "group outside navigation": grouped.replace('<details open>', '</nav><details open>').replace('</details></nav>', '</details>'),
+                "missing summary": grouped.replace('<summary>设置模块</summary>', ''),
+                "duplicate summary": grouped.replace('</summary>', '</summary><summary>重复分组</summary>'),
+                "unclosed group": grouped.replace('</details>', ''),
+                "standalone summary": INDEX_HTML.replace('</nav>', '</nav><summary>孤立说明</summary>'),
+                "group without canonical registry": grouped.replace(' id="prototype-pages"', ''),
+                "summary without native parent": grouped.replace('<summary>设置模块</summary>', '<div><summary>设置模块</summary></div>'),
+            }
+            for case, body in cases.items():
+                with self.subTest(case=case):
+                    index.write_text(body, encoding="utf-8")
+                    self.assert_rejected_without_mutation(project, case)
+
+    def test_native_summary_accepts_an_exact_contract_mapping(self) -> None:
+        """支持真实原生折叠目标，静态文字与重复映射继续按原合同拒绝。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-summary-mapping-") as temporary:
+            project = write_valid_project(Path(temporary))
+            body = PAGE_HTML.replace(
+                '</main>', '<details><summary id="toggle-help">页面说明</summary><p>说明内容。</p></details></main>',
+            ).replace(
+                OPEN_MAPPING_HTML,
+                OPEN_MAPPING_HTML + '<p data-contract-for="toggle-help">原生折叠或展开说明。</p>',
+            )
+            self.page(project).write_text(body, encoding="utf-8")
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            cases = {
+                "summary without a details owner": body.replace('<details><summary id="toggle-help">', '<div><summary id="toggle-help">').replace('<p>说明内容。</p></details>', '<p>说明内容。</p></div>'),
+                "summary inside an ordinary child": body.replace('<summary id="toggle-help">页面说明</summary>', '<div><summary id="toggle-help">页面说明</summary></div>'),
+                "second summary is ordinary content": body.replace('<details><summary id="toggle-help">', '<details><summary>首个折叠标题</summary><summary id="toggle-help">'),
+            }
+            for case, invalid in cases.items():
+                with self.subTest(case=case):
+                    self.page(project).write_text(invalid, encoding="utf-8")
+                    self.assert_rejected_without_mutation(project, case)
+
+    def test_index_preview_accepts_one_registered_page_and_checks_its_render_resources(self) -> None:
+        """iframe按嵌入资源检查具体页闭包，不能只把src当作免检查的文档导航。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-index-preview-") as temporary:
+            project = write_valid_project(Path(temporary))
+            index = self.prototype(project) / 'index.html'
+            index.write_text(PREVIEW_INDEX_HTML, encoding='utf-8')
+            before = tree_snapshot(project)
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(before, tree_snapshot(project))
+            assets = self.prototype(project) / 'assets'
+            assets.mkdir()
+            stylesheet = assets / 'embedded.css'
+            stylesheet.write_text('@import "https://example.test/hidden.css";', encoding='utf-8')
+            self.replace_once(self.page(project), '</head>', '<link rel="stylesheet" href="assets/embedded.css"></head>')
+            self.assert_rejected_without_mutation(project, 'external transitive resource of the embedded page')
+
+    def test_production_workspace_accepts_empty_and_registered_controller_startup(self) -> None:
+        """消费真实生产五资产：空登记不加载假页面，有登记时由唯一控制器派生加载。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-controller-startup-") as temporary:
+            project = write_valid_project(Path(temporary)).resolve()
+            self.page(project).unlink()
+            for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js'):
+                shutil.copy2(TEMPLATE_ROOT / name, self.prototype(project) / name)
+            self.assertEqual({'pages': []}, validator_module.validate_workspace(project, PROTOTYPE_RELATIVE.as_posix()))
+            shutil.copy2(TEMPLATE_ROOT / 'page.html', self.page(project))
+            index = self.prototype(project) / 'index.html'
+            self.replace_once(index, '</nav>', '<a href="settings.html">设置</a></nav>')
+            before = tree_snapshot(project)
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(before, tree_snapshot(project))
+            index_body = index.read_text(encoding='utf-8')
+            page_body = self.page(project).read_text(encoding='utf-8')
+            for case, body in {
+                'foreign controller': index_body.replace('src="workspace.js"', 'src="other.js"'),
+                'duplicate controller': index_body.replace('</head>', '<script src="workspace.js"></script></head>'),
+                'inline controller body': index_body.replace('src="workspace.js" defer></script>', 'src="workspace.js" defer>alert(1)</script>'),
+                'visible uninitialized frame': index_body.replace('referrerpolicy="no-referrer" hidden', 'referrerpolicy="no-referrer"'),
+            }.items():
+                with self.subTest(case=case):
+                    index.write_text(body, encoding='utf-8')
+                    self.assert_rejected_without_mutation(project, case)
+            index.write_text(index_body, encoding='utf-8')
+            for asset in ('workspace.js', 'workspace.css'):
+                with self.subTest(asset=asset):
+                    reference = f'<script src="{asset}"></script>' if asset.endswith('.js') else f'<link rel="stylesheet" href="{asset}">'
+                    self.page(project).write_text(page_body.replace('</head>', reference + '</head>'), encoding='utf-8')
+                    self.assert_rejected_without_mutation(project, 'index-only asset loaded by a business page')
+
+    def test_index_rejects_meta_refresh_redirects(self) -> None:
+        """refresh会在登记路由之外离开入口，外部和任意本地目标都不获得此权限。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-meta-refresh-") as temporary:
+            project = write_valid_project(Path(temporary))
+            index = self.prototype(project) / 'index.html'
+            for target in ('https://example.test/escape', '../outside.html', 'settings.html'):
+                with self.subTest(target=target):
+                    index.write_text(INDEX_HTML.replace('</head>', f'<meta http-equiv=" Refresh " content="0;url={target}"></head>'), encoding='utf-8')
+                    self.assert_rejected_without_mutation(project, 'meta refresh redirect')
+            # 同一受控 iframe 的具体页也必须拒绝外部和越界声明；不能只保护 index。
+            index.write_text(PREVIEW_INDEX_HTML, encoding='utf-8')
+            for target in ('https://example.test/outside', '../../plans/settings.html'):
+                with self.subTest(page_target=target):
+                    self.page(project).write_text(PAGE_HTML.replace('</head>', f'<meta http-equiv=" Refresh " content="0;url={target}"></head>'), encoding='utf-8')
+                    self.assert_rejected_without_mutation(project, 'concrete page meta refresh redirect')
+
+    def test_index_preview_rejects_unregistered_unsafe_and_additional_frames(self) -> None:
+        """src只接受登记的规范具体页，额外frame、srcdoc和内联路由不能扩大权限。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-index-preview-routes-") as temporary:
+            project = write_valid_project(Path(temporary))
+            index = self.prototype(project) / 'index.html'
+            frame = '<iframe id="prototype-preview" src="settings.html" title="Settings preview"></iframe>'
+            cases = {
+                'missing src': PREVIEW_INDEX_HTML.replace(' src="settings.html"', ''),
+                'empty src': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src=""'),
+                'external src': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src="https://example.test/settings.html"'),
+                'protocol-relative src': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src="//example.test/settings.html"'),
+                'escaping src': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src="../settings.html"'),
+                'document navigation impersonation': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'data-prototype-document="html" src="../../plans/settings.html"'),
+                'unregistered src': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src="reports.html"'),
+                'self-embedding index': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src="index.html"'),
+                'noncanonical relative src': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src="./settings.html"'),
+                'fragment src': PREVIEW_INDEX_HTML.replace('src="settings.html"', 'src="settings.html#dialog"'),
+                'srcdoc even when empty': PREVIEW_INDEX_HTML.replace('<iframe ', '<iframe srcdoc="" '),
+                'inline route mutation': PREVIEW_INDEX_HTML.replace('<iframe ', '<iframe onload="this.src=\'reports.html\'" '),
+                'inline external style': PREVIEW_INDEX_HTML.replace('<iframe ', '<iframe style="background:url(https://example.test/x.png)" '),
+                'wrong frame id': PREVIEW_INDEX_HTML.replace('id="prototype-preview"', 'id="another-preview"'),
+                'reserved id impersonation': PREVIEW_INDEX_HTML.replace('</body>', '<div id="prototype-preview"></div></body>'),
+                'missing accessible name': PREVIEW_INDEX_HTML.replace(' title="Settings preview"', ''),
+                'extra iframe': PREVIEW_INDEX_HTML.replace('</body>', frame + '</body>'),
+                'legacy frame': PREVIEW_INDEX_HTML.replace('</body>', '<frame src="settings.html"></body>'),
+                'legacy frameset': PREVIEW_INDEX_HTML.replace('</body>', '<frameset></frameset></body>'),
+                'preview nested in registry': PREVIEW_INDEX_HTML.replace(frame, '').replace('</nav>', frame + '</nav>'),
+                'preview in head': PREVIEW_INDEX_HTML.replace(frame, '').replace('</head>', frame + '</head>'),
+                'missing canonical registry': PREVIEW_INDEX_HTML.replace(' id="prototype-pages"', ''),
+                'unclosed iframe': PREVIEW_INDEX_HTML.replace('</iframe>', ''),
+                'self-closing iframe': PREVIEW_INDEX_HTML.replace('></iframe>', '/>'),
+            }
+            for case, body in cases.items():
+                with self.subTest(case=case):
+                    index.write_text(body, encoding='utf-8')
+                    self.assert_rejected_without_mutation(project, case)
+
+    def test_product_pages_cannot_reuse_the_index_frame_permission(self) -> None:
+        """产品页即使照抄指定ID/本地目标，也不能成为另一个嵌入工作区。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-product-frame-") as temporary:
+            project = write_valid_project(Path(temporary))
+            for frame in (
+                '<iframe id="prototype-preview" src="settings.html" title="Nested"></iframe>',
+                '<iframe src="index.html" title="Workspace"></iframe>',
+                '<frame src="settings.html">', '<frameset></frameset>',
+            ):
+                with self.subTest(frame=frame):
+                    self.page(project).write_text(PAGE_HTML.replace('</main>', frame + '</main>'), encoding='utf-8')
+                    self.assert_rejected_without_mutation(project, 'frame in a concrete product page')
+
+    def test_index_preview_target_cannot_bypass_safe_regular_file_checks(self) -> None:
+        """实际嵌入的目标仍拒绝链接与特殊节点，FIFO检查及时返回且不改输入。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-preview-nodes-") as temporary:
+            project = write_valid_project(Path(temporary))
+            (self.prototype(project) / 'index.html').write_text(PREVIEW_INDEX_HTML, encoding='utf-8')
+            page = self.page(project)
+            body = page.read_bytes()
+            unrelated = project / 'unrelated-page.txt'
+            unrelated.write_bytes(body)
+            for kind in ('symlink', 'hardlink', 'fifo', 'directory', 'missing'):
+                with self.subTest(kind=kind):
+                    page.unlink()
+                    if kind == 'symlink':
+                        page.symlink_to(unrelated)
+                    elif kind == 'hardlink':
+                        os.link(unrelated, page)
+                    elif kind == 'fifo':
+                        os.mkfifo(page)
+                    elif kind == 'directory':
+                        page.mkdir()
+                    self.assert_rejected_without_mutation(project, kind)
+                    if kind == 'directory':
+                        page.rmdir()
+                    elif kind != 'missing':
+                        page.unlink()
+                    page.write_bytes(body)
+
+    def test_requirement_navigation_only_allows_the_explicit_matching_document_pair(self) -> None:
+        """普通链接、资源引用和伪装槽位不能继承 plans 导航的窄权限。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-requirement-navigation-") as temporary:
+            project = write_valid_project(Path(temporary)).resolve()
+            source, html = bind_requirement_documents(project)
+            page = self.page(project)
+            valid_page, valid_source, valid_html = page.read_bytes(), source.read_bytes(), html.read_bytes()
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            text = valid_page.decode()
+            cases = {
+                "ordinary cross-root href": text.replace('class="prototype-requirement-links"', 'class="ordinary-links"').replace(' data-prototype-document="html"', '').replace(' data-prototype-document="markdown"', ''),
+                "resource cross-root src": text.replace('</main>', '<iframe src="../../plans/settings.html"></iframe></main>'),
+                "missing source declaration": text.replace(' data-prototype-plan-source="docs/plans/settings.md"', ''),
+                "noncanonical source declaration": text.replace('docs/plans/settings.md', 'docs/plans/../plans/settings.md'),
+                "source outside configured plans": text.replace('data-prototype-plan-source="docs/plans/settings.md"', 'data-prototype-plan-source="docs/notes/settings.md"'),
+                "mismatched html target": text.replace('../../plans/settings.html', '../../plans/other.html'),
+                "html target outside configured plans": text.replace('../../plans/settings.html', '../../notes/settings.html'),
+                "external target": text.replace('../../plans/settings.html', 'https://example.test/settings.html'),
+                "project-escaping target": text.replace('../../plans/settings.html', '../../../../settings.html'),
+                "query target": text.replace('../../plans/settings.html', '../../plans/settings.html?copy=1'),
+                "duplicate type": text.replace('data-prototype-document="markdown"', 'data-prototype-document="html"'),
+                "untyped anchor": text.replace(' data-prototype-document="markdown"', ''),
+                "duplicate slot": text.replace('</body>', '<nav class="prototype-requirement-links"></nav></body>'),
+                "wrong slot element": text.replace('<nav class="prototype-requirement-links"', '<div class="prototype-requirement-links"').replace('</nav>', '</div>'),
+            }
+            for case, body in cases.items():
+                with self.subTest(case=case):
+                    page.write_text(body, encoding="utf-8")
+                    self.assert_rejected_without_mutation(project, case)
+            page.write_bytes(valid_page)
+            for case, source_bytes, html_bytes in (
+                ("stale source binding", valid_source + b"\nchanged", valid_html),
+                ("modified html payload", valid_source, valid_html + b"\nchanged"),
+                ("manual html", valid_source, b"<!doctype html><html>Manual</html>"),
+                ("different source binding", valid_source, valid_html.replace(b'docs/plans/settings.md', b'docs/plans/another.md')),
+                ("draft binding", valid_source, valid_html.replace(b'"draft": false', b'"draft": true')),
+            ):
+                with self.subTest(case=case):
+                    source.write_bytes(source_bytes)
+                    html.write_bytes(html_bytes)
+                    self.assert_rejected_without_mutation(project, case)
+
+    def test_requirement_navigation_refuses_linked_and_special_document_nodes(self) -> None:
+        """新导航入口复用单链接普通文件检查；FIFO 负控必须及时返回，不能阻塞读取。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-requirement-nodes-") as temporary:
+            project = write_valid_project(Path(temporary)).resolve()
+            source, html = bind_requirement_documents(project)
+            for target in (source, html):
+                body = target.read_bytes()
+                unrelated = project / "unrelated-document.txt"
+                unrelated.write_bytes(body)
+                for kind in ("symlink", "hardlink", "fifo", "directory", "missing"):
+                    with self.subTest(target=target.suffix, kind=kind):
+                        target.unlink()
+                        if kind == "symlink":
+                            target.symlink_to(unrelated)
+                        elif kind == "hardlink":
+                            os.link(unrelated, target)
+                        elif kind == "fifo":
+                            os.mkfifo(target)
+                        elif kind == "directory":
+                            target.mkdir()
+                        self.assert_rejected_without_mutation(project, kind)
+                        if kind == "directory":
+                            target.rmdir()
+                        elif kind != "missing":
+                            target.unlink()
+                        target.write_bytes(body)
+                unrelated.unlink()
 
     def test_page_links_outside_the_thin_index_directory_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="prototype-index-scope-") as temporary:

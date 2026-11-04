@@ -29,7 +29,7 @@ review is technically unavailable. `xy-plan` adapts writing-plans methodology lo
 activating a Superpowers workflow. Grill Me remains requirements-only. The PM uses the deterministic
 READY DAG and host-native Agents for parallel work; workers never delegate nested Agents.
 
-Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are
+Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are
 auxiliary information sources. At task intake, the PM reads or queries only the smallest relevant
 scope needed to supplement or verify a missing feature fact, durable decision, engineering or design
 constraint, cross-session background, or historical lesson. When available task information is
@@ -42,7 +42,7 @@ For Full work, the mandatory PM order is: classify Full using available facts �
 materially needed auxiliary facts → Grill Me coverage check → `xy-plan` with `plan_state: draft` → PM decides the post-QA controlled-document projection →
 request `requirements_approved` and, for design-change UI, present a recommendation and obtain the
 user's prototype choice → freeze and persist the approved Full plan in `docs.plans` → validate and dispatch →
-integrated QA. `PROJECT.md` and active feature documents remain the last verified truth during
+integrated QA. `PROJECT.md` and accepted plan baselines remain the last verified truth during
 execution; only the PM applies a required projection after applicable verified acceptance. Light saves only for actual pause/recovery/handoff or explicit request. Saving never upgrades
 Light or adds gates. Follow `xy-workflow/references/plan-lifecycle.md` for revisions, complete task
 replacement and selective recovery without repeating valid completed work.
@@ -59,12 +59,12 @@ The default commit assessment alone never grants merge authority. Workers stay i
 retain the same logical project memory ID and owned_paths, and never independently commit, merge or
 clean up worktrees. Development confirmations remain unchanged; confirm delivery asks only at the end.
 
-The post-QA projection updates current facts in place. `PROJECT.md` is the active project directory
-without a line/byte cap or historical task log; detailed feature truth lives in `docs.features`.
-A verified removal is one closeout action: remove the active PROJECT row, rename the feature detail
-to `*.removed.md`, mark it historical with reason/date/replacement, and repair current links.
-Feature details include functional/architectural rationale; shared architecture may have one detail
-in the same directory. No separate ADR category or task chronology is maintained.
+受控文档采用唯一 plans 生命周期：同一稳定主题一份 Markdown 与同名派生 HTML，PROJECT 只链接
+真实已验收基线。主题稿的本次目标、执行阶段与上次已验收行为分开；新目标未验收／取消时保留旧基线，
+completed 不证明批准或交付。Full 验收后、Light 按实际必要验证接收后，PM 才更新基线与当前索引。
+完整删除在同稿标记 removed、保留必要依据并移除当前链接，不另写功能文档或改名归档；不设 PROJECT 大小上限。
+旧 features 配置只能通过显式、保全原文及引用的单次迁移删除；运行时不保留别名，新安装不创建空需求页／索引。
+
 
 Internal orchestration records are not user-facing output. Never paste raw workflow YAML or DAG JSON into user messages.
 Keep internal coverage, memory, projection, Task Pack, fingerprint, gate, state, and scheduler data

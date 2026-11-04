@@ -8,8 +8,10 @@ import hashlib
 import json
 if __package__:
     from .platform_fs import os
+    from .prototype_navigation import RequirementNavigation
 else:
     from platform_fs import os
+    from prototype_navigation import RequirementNavigation
 import re
 import stat
 import sys
@@ -35,6 +37,7 @@ MANDATORY_SECTIONS = (
     "exceptions",
 )
 BUTTON_INPUT_TYPES = {"button", "submit", "reset", "image"}
+HTML_VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 TEXT_DEPENDENCY_SUFFIXES = {
     ".css",
     ".js",
@@ -273,26 +276,23 @@ class IndexParser(HTMLParser):
     """Collect the thin index structure without executing or rendering it."""
 
     FORBIDDEN_TAGS = {
-        "button",
         "base",
-        "details",
         "dialog",
         "embed",
         "form",
-        "iframe",
+        "frame",
+        "frameset",
         "img",
         "input",
         "manifest",
         "object",
         "source",
-        "script",
         "style",
         "video",
         "audio",
         "main",
         "section",
         "article",
-        "aside",
     }
 
     def __init__(self) -> None:
@@ -304,6 +304,19 @@ class IndexParser(HTMLParser):
         self.doctype_count = 0
         self.document_counts: Counter[str] = Counter()
         self.document_depths: Counter[str] = Counter()
+        self.group_summaries: list[int] = []
+        self.group_summary_depth = 0
+        self.navigation_id = ""
+        self.element_stack: list[str] = []
+        self.preview_target: str | None = None
+        self.preview_depth = 0
+        self.preview_count = 0
+        self.preview_hidden = False
+        self.controller_count = 0
+        self.script_depth = 0
+        self.inline_script: list[str] = []
+        self.workspace_tags: set[str] = set()
+        self.empty_state_count = 0
 
     def handle_decl(self, declaration: str) -> None:
         if declaration.strip().casefold() != "doctype html":
@@ -315,11 +328,30 @@ class IndexParser(HTMLParser):
     ) -> None:
         tag = tag.casefold()
         attrs = _attrs(attributes, "prototype index")
+        if tag == "meta" and attrs.get("http-equiv", "").strip().casefold() == "refresh":
+            raise ValidationError("prototype index must not redirect through meta refresh")
+        if any(name.startswith("on") for name in attrs):
+            raise ValidationError("prototype index must use its local controller instead of inline event handlers")
+        if attrs.get("id") == "prototype-preview" and tag != "iframe":
+            raise ValidationError("prototype-preview id is reserved for the controlled index iframe")
         if tag in {"html", "head", "body"}:
             self.document_counts[tag] += 1
             self.document_depths[tag] += 1
         if tag in self.FORBIDDEN_TAGS:
             raise ValidationError(f"thin prototype index must not contain <{tag}>")
+        if tag in {"aside", "button"}:
+            self.workspace_tags.add(tag)
+        if attrs.get("id") == "prototype-empty":
+            self.empty_state_count += 1
+        if tag == "script":
+            # 工作区只加载真实共享控制器，不开放任意 index 脚本或内联程序。
+            if attrs.get("src") != "workspace.js" or self.controller_count:
+                raise ValidationError("prototype index permits only its one local workspace.js controller")
+            if attrs.get("type", "").casefold() not in {"", "text/javascript"}:
+                raise ValidationError("prototype workspace controller must use its supported classic script type")
+            self.controller_count += 1
+            self.script_depth += 1
+            self.references.append(("src", "workspace.js"))
         if "prototype-contract" in _classes(attrs.get("class", "")):
             raise ValidationError("thin prototype index must not contain a page contract")
         if "data-contract-section" in attrs or "data-contract-for" in attrs:
@@ -340,6 +372,43 @@ class IndexParser(HTMLParser):
                 )
             self.prototype_nav_count += 1
             self.nav_depth += 1
+            self.navigation_id = attrs.get("id", "")
+        if tag == "details":
+            # 分组只扩展唯一页面导航，不能借原生折叠容器在目录中塞入另一份产品说明。
+            if not self.nav_depth or self.group_summary_depth or self.navigation_id != "prototype-pages":
+                raise ValidationError("prototype index groups must stay inside the page navigation")
+            self.group_summaries.append(0)
+        if tag == "summary":
+            if (not self.group_summaries or self.group_summary_depth
+                    or not self.element_stack or self.element_stack[-1] != "details"):
+                raise ValidationError("prototype index summary must belong to a navigation group")
+            self.group_summaries[-1] += 1
+            if self.group_summaries[-1] != 1:
+                raise ValidationError("prototype index group must contain exactly one summary")
+            self.group_summary_depth += 1
+        if tag == "iframe":
+            # 这里只开放已批准的 index 单页承载，不把普通产品页或任意 HTML 当成嵌入工作区。
+            # src 必须是登记页的原始规范文件名；不接受重定向、文档路径或脚本内联变更来源。
+            if self.preview_count or attrs.get("id") != "prototype-preview":
+                raise ValidationError("prototype index permits only one iframe with id prototype-preview")
+            if self.nav_depth or self.document_depths["body"] != 1 or self.document_depths["head"]:
+                raise ValidationError("controlled prototype preview must be inside the index body, outside navigation")
+            if any(name in attrs for name in ("srcdoc", "style", "srcset")) or any(name.startswith("on") for name in attrs):
+                raise ValidationError("controlled prototype preview forbids inline content, styles and event handlers")
+            target = attrs.get("src")
+            if target is not None and (target == "index.html" or not re.fullmatch(r"[a-z0-9][a-z0-9-]*\.html", target)):
+                raise ValidationError("controlled prototype preview src must name a registered concrete local page")
+            if target is None and "hidden" not in attrs:
+                raise ValidationError("uninitialized prototype preview must be hidden without src")
+            if not (attrs.get("title", "").strip() or attrs.get("aria-label", "").strip()):
+                raise ValidationError("controlled prototype preview needs an accessible name")
+            self.preview_target = target
+            self.preview_count += 1
+            self.preview_hidden = "hidden" in attrs
+            self.preview_depth = 1
+            # iframe 是真实渲染资源，而非需求文档导航；沿原闭包入口验证具体页和全部依赖。
+            if target is not None:
+                self.references.append(("src", target))
         if tag == "a" and "href" in attrs:
             if not self.nav_depth:
                 raise ValidationError(
@@ -367,6 +436,8 @@ class IndexParser(HTMLParser):
                 if not fields:
                     raise ValidationError("empty srcset candidate in prototype index")
                 self.references.append(("srcset", fields[0]))
+        if tag not in HTML_VOID_ELEMENTS:
+            self.element_stack.append(tag)
 
     def handle_startendtag(
         self, tag: str, attributes: list[tuple[str, str | None]]
@@ -375,14 +446,38 @@ class IndexParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.casefold()
+        if tag == "summary":
+            if not self.group_summary_depth:
+                raise ValidationError("unexpected closing summary in prototype index")
+            self.group_summary_depth -= 1
+        if tag == "details":
+            if not self.group_summaries or self.group_summaries.pop() != 1 or self.group_summary_depth:
+                raise ValidationError("prototype index group must contain one closed summary")
+        if tag == "iframe":
+            if not self.preview_depth:
+                raise ValidationError("unexpected closing iframe in prototype index")
+            self.preview_depth -= 1
+        if tag == "script":
+            if not self.script_depth:
+                raise ValidationError("unexpected closing script in prototype index")
+            self.script_depth -= 1
         if tag == "nav":
             if not self.nav_depth:
                 raise ValidationError("unexpected closing navigation tag in prototype index")
+            if self.group_summaries:
+                raise ValidationError("prototype index navigation group must be closed")
             self.nav_depth -= 1
         if tag in {"html", "head", "body"}:
             if not self.document_depths[tag]:
                 raise ValidationError(f"unexpected closing <{tag}> in prototype index")
             self.document_depths[tag] -= 1
+        if tag in self.element_stack:
+            position = len(self.element_stack) - 1 - self.element_stack[::-1].index(tag)
+            del self.element_stack[position:]
+
+    def handle_data(self, data: str) -> None:
+        if self.script_depth:
+            self.inline_script.append(data)
 
 
 class PageParser(HTMLParser):
@@ -415,6 +510,13 @@ class PageParser(HTMLParser):
         self.doctype_count = 0
         self.document_counts: Counter[str] = Counter()
         self.document_depths: Counter[str] = Counter()
+        self.details_depth = 0
+        self.plan_source = ""
+        self.requirement_nav_count = 0
+        self.navigation_stack: list[bool] = []
+        self.requirement_links: list[tuple[str, str]] = []
+        self.element_stack: list[str] = []
+        self.details_summary_seen: list[bool] = []
 
     def handle_decl(self, declaration: str) -> None:
         if declaration.strip().casefold() != "doctype html":
@@ -426,10 +528,44 @@ class PageParser(HTMLParser):
     ) -> None:
         tag = tag.casefold()
         attrs = _attrs(attributes, self.label)
+        # 具体页被承载后也不能用声明式刷新绕过唯一登记路由；该入口不属于普通文档导航。
+        if tag == "meta" and attrs.get("http-equiv", "").strip().casefold() == "refresh":
+            raise ValidationError(f"prototype page must not redirect through meta refresh in {self.label}")
+        if tag in {"iframe", "frame", "frameset"}:
+            raise ValidationError(f"embedded frames are supported only by the controlled prototype index, not {self.label}")
         classes = _classes(attrs.get("class", ""))
         if tag in {"html", "head", "body"}:
             self.document_counts[tag] += 1
             self.document_depths[tag] += 1
+        if "data-prototype-plan-source" in attrs:
+            if tag != "body":
+                raise ValidationError(f"requirement source must be declared on body in {self.label}")
+            self.plan_source = attrs["data-prototype-plan-source"]
+        if "prototype-requirement-links" in classes:
+            if tag != "nav":
+                raise ValidationError(f"requirement links must use a nav element in {self.label}")
+            self.requirement_nav_count += 1
+            if self.requirement_nav_count != 1 or any(self.navigation_stack):
+                raise ValidationError(f"requirement navigation must be unique in {self.label}")
+        if tag == "nav":
+            self.navigation_stack.append("prototype-requirement-links" in classes)
+        in_requirement_navigation = any(self.navigation_stack)
+        if "data-prototype-document" in attrs and (tag != "a" or not in_requirement_navigation):
+            raise ValidationError(f"requirement document link is outside its explicit navigation in {self.label}")
+        if tag == "a" and in_requirement_navigation:
+            kind = attrs.get("data-prototype-document", "")
+            if kind not in {"html", "markdown"} or not attrs.get("href"):
+                raise ValidationError(f"requirement navigation needs typed HTML/Markdown anchors in {self.label}")
+            self.requirement_links.append((kind, attrs["href"]))
+        if tag == "details":
+            self.details_depth += 1
+            self.details_summary_seen.append(False)
+        # 只有 details 的第一个直属 summary 才有浏览器原生折叠行为；同名标签藏在普通
+        # 容器里或同一 details 的第二个 summary，均不能靠契约映射伪装成真实控件。
+        is_native_summary = tag == "summary" and bool(self.element_stack) and self.element_stack[-1] == "details"
+        if is_native_summary:
+            is_native_summary = not self.details_summary_seen[-1]
+            self.details_summary_seen[-1] = True
 
         if "prototype-contract" in classes:
             if tag != "details":
@@ -476,6 +612,8 @@ class PageParser(HTMLParser):
         )
         if (
             is_material or is_interactive_input or tag in {"a", "select", "textarea"}
+            # summary 自带键盘与折叠语义；有稳定 ID 时可被契约映射，普通文本不能冒充。
+            or is_native_summary
         ) and attrs.get("id", "").strip():
             self.interactive_ids.append(attrs["id"].strip())
         submits_dialog_form = (
@@ -519,6 +657,9 @@ class PageParser(HTMLParser):
 
         for attribute in ("href", "src"):
             if attribute in attrs:
+                if tag == "a" and attribute == "href" and in_requirement_navigation:
+                    # 跨原型根的唯一例外在专用文档边界核验，绝不进入渲染资源闭包。
+                    continue
                 # 导航仍须通过本地路径和文件安全检查，但不是渲染资源。
                 # 不把互链页面或薄目录纳入当前页指纹，避免无关页面修改污染证据。
                 kind = "navigation href" if tag in {"a", "area"} and attribute == "href" else attribute
@@ -539,6 +680,8 @@ class PageParser(HTMLParser):
             self.script_depth += 1
         if tag == "style":
             self.style_depth += 1
+        if tag not in HTML_VOID_ELEMENTS:
+            self.element_stack.append(tag)
 
     def handle_startendtag(
         self, tag: str, attributes: list[tuple[str, str | None]]
@@ -556,6 +699,13 @@ class PageParser(HTMLParser):
             self.summary_depth -= 1
         if tag == "details" and self.contract_depth:
             self.contract_depth -= 1
+        if tag == "details" and self.details_depth:
+            self.details_depth -= 1
+            self.details_summary_seen.pop()
+        if tag == "nav":
+            if not self.navigation_stack:
+                raise ValidationError(f"unexpected closing navigation in {self.label}")
+            self.navigation_stack.pop()
         if tag == "script" and self.script_depth:
             self.script_depth -= 1
         if tag == "style" and self.style_depth:
@@ -572,6 +722,10 @@ class PageParser(HTMLParser):
             if not self.document_depths[tag]:
                 raise ValidationError(f"unexpected closing <{tag}> in {self.label}")
             self.document_depths[tag] -= 1
+        if tag in self.element_stack:
+            # 祖先记录只用于识别原生 summary，不把这里扩写成第二个 HTML 标准解析器。
+            position = len(self.element_stack) - 1 - self.element_stack[::-1].index(tag)
+            del self.element_stack[position:]
 
     def handle_data(self, data: str) -> None:
         if self.summary_depth:
@@ -609,6 +763,33 @@ def _validate_document_structure(
             )
 
 
+def _validate_index_structure(parser: IndexParser) -> None:
+    """索引安全始终检查；单 iframe 只引用唯一导航中的既有页面，不创建第二份登记。"""
+    _validate_document_structure(
+        parser.doctype_count, parser.document_counts, parser.document_depths, "prototype index",
+    )
+    if parser.prototype_nav_count != 1:
+        raise ValidationError("prototype index must contain exactly one Prototype pages navigation region")
+    if parser.nav_depth or parser.group_summaries:
+        raise ValidationError("prototype index navigation region must be closed")
+    if parser.preview_depth:
+        raise ValidationError("controlled prototype preview iframe must be closed")
+    if parser.script_depth or _normalized_text(parser.inline_script):
+        raise ValidationError("prototype index controller must be closed and contain no inline code")
+    if parser.controller_count or parser.workspace_tags:
+        if parser.controller_count != 1 or parser.preview_count != 1 or parser.navigation_id != "prototype-pages":
+            raise ValidationError("prototype workspace structure needs one local controller, registration nav and preview")
+    if parser.preview_count and parser.preview_target is None:
+        # 无 src 不是通用 iframe 豁免：只有真实控制器可从唯一 nav 派生加载目标。
+        if not parser.controller_count or not parser.preview_hidden:
+            raise ValidationError("only a controlled workspace may initialize a hidden preview without src")
+        if not parser.page_links and parser.empty_state_count != 1:
+            raise ValidationError("empty prototype workspace needs its explicit empty state")
+    if parser.preview_target is not None:
+        if parser.navigation_id != "prototype-pages" or parser.preview_target not in parser.page_links:
+            raise ValidationError("controlled prototype preview must target a page registered in nav#prototype-pages")
+
+
 def _validate_page_structure(parser: PageParser) -> None:
     label = parser.label
     _validate_document_structure(
@@ -628,6 +809,8 @@ def _validate_page_structure(parser: PageParser) -> None:
         or parser.style_depth
         or parser.dialog_stack
         or parser.dialog_form_stack
+        or parser.details_depth
+        or parser.navigation_stack
     ):
         raise ValidationError(f"unclosed page contract structure in {label}")
     if _normalized_text(parser.summary_parts) != "Page design and interaction contract":
@@ -752,13 +935,51 @@ def _javascript_lexical_views(body: str, label: str) -> tuple[str, str]:
     index = 0
     expect_operand = True
     property_access = False
+    # None 表示模板文字，整数表示当前 ${...} 的普通花括号深度；嵌套模板沿同一词法器
+    # 处理，文字被遮蔽而插值代码保留，因此动态 import 不能藏在模板表达式里。
+    templates: list[int | None] = []
     # 这些保留字之后可以明确开始一个表达式；不能加入 of / await 等可能是变量名
     # 的词，否则会把合法除法误认为正则，并可能掩盖后续真正的模块声明。
     regex_prefix_keywords = {"return", "throw", "case", "delete", "void", "typeof", "new", "in", "instanceof", "else", "do", "default"}
     while index < len(body):
         current = body[index]
         following = body[index + 1] if index + 1 < len(body) else ""
+        if state == "template":
+            replacement = "\n" if current == "\n" else " "
+            source.append(replacement)
+            code.append(replacement)
+            if current == "\\" and following:
+                replacement = "\n" if following == "\n" else " "
+                source.append(replacement)
+                code.append(replacement)
+                index += 2
+                continue
+            if current == "`":
+                templates.pop()
+                state = "code"
+                expect_operand = False
+                property_access = False
+            elif current == "$" and following == "{":
+                source.append(" ")
+                code.append(" ")
+                templates[-1] = 0
+                state = "code"
+                expect_operand = True
+                property_access = False
+                index += 2
+                continue
+            index += 1
+            continue
         if state == "code":
+            if templates and templates[-1] is not None and current in {"{", "}"}:
+                if current == "}" and templates[-1] == 0:
+                    source.append(" ")
+                    code.append(" ")
+                    templates[-1] = None
+                    state = "template"
+                    index += 1
+                    continue
+                templates[-1] += 1 if current == "{" else -1
             if current == "/" and following == "/":
                 source.extend((" ", " "))
                 code.extend((" ", " "))
@@ -780,9 +1001,12 @@ def _javascript_lexical_views(body: str, label: str) -> tuple[str, str]:
                 index = end
                 continue
             if current == "`":
-                raise ValidationError(
-                    f"template-literal JavaScript is unsupported in controlled prototype code: {label}"
-                )
+                source.append(" ")
+                code.append(" ")
+                templates.append(None)
+                state = "template"
+                index += 1
+                continue
             if current in {"'", '"'}:
                 quote = current
                 source.append(current)
@@ -852,7 +1076,7 @@ def _javascript_lexical_views(body: str, label: str) -> tuple[str, str]:
         if current == quote:
             state = "code"
         index += 1
-    if state in {"block-comment", "string"}:
+    if state in {"block-comment", "string", "template"} or templates:
         raise ValidationError(f"unterminated JavaScript token in {label}")
     return "".join(source), "".join(code)
 
@@ -1077,8 +1301,9 @@ def _validate_dialog_wiring(parser: PageParser) -> None:
 class DependencyValidator:
     """Validate a bounded graph of descriptor-anchored local dependencies."""
 
-    def __init__(self, prototype_fd: int) -> None:
+    def __init__(self, prototype_fd: int, *, navigation: RequirementNavigation | None = None) -> None:
         self.prototype_fd = prototype_fd
+        self.navigation = navigation
         self.visited: set[PurePosixPath] = set()
         self.total_size = 0
         self.contents: dict[PurePosixPath, bytes] = {}
@@ -1133,6 +1358,10 @@ class DependencyValidator:
     ) -> PurePosixPath | None:
         target = _resolve_local_reference(source, raw, label)
         if target is not None:
+            if resource and source != PurePosixPath("index.html") and target in {
+                PurePosixPath("workspace.js"), PurePosixPath("workspace.css"),
+            }:
+                raise ValidationError("workspace controller and stylesheet may only be loaded by index.html")
             if resource:
                 self.edges.setdefault(source, set()).add(target)
                 self.validate_path(target, depth=depth + 1)
@@ -1167,10 +1396,18 @@ class DependencyValidator:
             if target == PurePosixPath("index.html"):
                 index_parser = IndexParser()
                 _parse_html(index_parser, body, str(target))
+                _validate_index_structure(index_parser)
                 _validate_references(self, target, index_parser.references, depth=depth)
             else:
                 parser = PageParser(str(target))
                 _parse_html(parser, body, str(target))
+                if parser.plan_source or parser.requirement_links:
+                    if self.navigation is None:
+                        raise ValidationError("requirement navigation needs the configured project context")
+                    try:
+                        self.navigation.validate(target, parser.plan_source, parser.requirement_links)
+                    except (OSError, ValueError) as exc:
+                        raise ValidationError(f"{target} requirement navigation: {exc}") from exc
                 _validate_references(self, target, parser.references, depth=depth)
                 self.validate_css_body(target, "\n".join(parser.style_parts), depth=depth)
                 self.validate_javascript_body(target, "\n".join(parser.script_parts), depth=depth)
@@ -1289,7 +1526,8 @@ def validate_workspace(
     pages_fd = -1
     try:
         prototype_fd = _walk_directory(project_fd, prototype_relative, "prototype root")
-        dependencies = DependencyValidator(prototype_fd)
+        navigation = RequirementNavigation(Path(project_root), prototype_relative)
+        dependencies = DependencyValidator(prototype_fd, navigation=navigation)
         index_body = dependencies.text(PurePosixPath("index.html"), size_limit=MAX_TEXT_FILE_SIZE)
         try:
             prototype_entries = set(os.listdir(prototype_fd))
@@ -1326,18 +1564,7 @@ def validate_workspace(
 
         index_parser = IndexParser()
         _parse_html(index_parser, index_body, "prototype index")
-        _validate_document_structure(
-            index_parser.doctype_count,
-            index_parser.document_counts,
-            index_parser.document_depths,
-            "prototype index",
-        )
-        if index_parser.prototype_nav_count != 1:
-            raise ValidationError(
-                "prototype index must contain exactly one Prototype pages navigation region"
-            )
-        if index_parser.nav_depth:
-            raise ValidationError("prototype index navigation region must be closed")
+        _validate_index_structure(index_parser)
         _validate_references(
             dependencies,
             PurePosixPath("index.html"),
@@ -1374,6 +1601,10 @@ def validate_workspace(
             name: dependencies.fingerprint(PurePosixPath(name)) for name in page_names
         }
         dependencies.require_current_identities()
+        try:
+            navigation.require_current_inputs()
+        except (OSError, ValueError) as exc:
+            raise ValidationError(f"requirement navigation changed during validation: {exc}") from exc
         # --page 只缩小证据输出，不缩小安全验证。薄目录不是用户确认的具体页面。
         selected = sorted(set(page_names if pages is None else pages))
         if any(name not in page_names for name in selected):

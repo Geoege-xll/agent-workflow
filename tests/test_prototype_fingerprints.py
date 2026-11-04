@@ -13,11 +13,15 @@ from pathlib import Path
 from unittest import mock
 
 from lib import validate_prototype_workspace as validator
+from lib import prototype_navigation
+from lib import requirement_html
 from tests.test_prototype_workspace import (
     PAGE_HTML,
     PROTOTYPE_RELATIVE,
+    PREVIEW_INDEX_HTML,
     tree_snapshot,
     write_valid_project,
+    bind_requirement_documents,
 )
 
 
@@ -356,6 +360,88 @@ class PrototypeFingerprintTest(unittest.TestCase):
         self.assertEqual(2, len(after))
         for page in before:
             self.assertNotEqual(before[page], after[page])
+
+    def test_requirement_documents_are_checked_without_joining_the_render_fingerprint(self) -> None:
+        """真实导航绑定与资源闭包分开；历史 renderer 和反向链接不触发全图扫描。"""
+        source, _ = bind_requirement_documents(self.project)
+        with mock.patch.object(requirement_html, "renderer_identity", side_effect=AssertionError("导航不校验 renderer 身份")), \
+                mock.patch.object(requirement_html, "stage_markdown", side_effect=AssertionError("导航不回扫文档链接")):
+            before = self.fingerprints()
+            # 这代表文档按自己的流程更新且保持来源绑定；失效的反向原型链接由文档交付负责，
+            # 页面导航不能因此制造计划↔原型校验循环或重算无关页面的视觉证据。
+            bind_requirement_documents(self.project, source_body=source.read_text(encoding="utf-8") +
+                                       "\n[历史关联](../standards/prototype/removed-page.html)\n")
+            after = self.fingerprints()
+        self.assertEqual(before, after)
+
+    def test_requirement_document_replacement_before_success_is_rejected(self) -> None:
+        """单独核对新加入的导航输入竞态，现有资源节点身份覆盖不包含 plans 文件。"""
+        source, _ = bind_requirement_documents(self.project)
+        original = prototype_navigation.RequirementNavigation.require_current_inputs
+
+        def replace_before_result(navigation) -> None:
+            source.write_bytes(source.read_bytes() + b"\nconcurrent edit")
+            original(navigation)
+
+        with mock.patch.object(prototype_navigation.RequirementNavigation, "require_current_inputs", replace_before_result):
+            code, stdout, stderr = self.run_cli("--json")
+        self.assertEqual(1, code)
+        self.assertEqual("", stdout)
+        self.assertIn("requirement navigation changed during validation", stderr)
+
+    def test_index_preview_preserves_independent_page_fingerprints_and_workspace_safety(self) -> None:
+        """index承载选中页不反向成为业务页资源；缩小输出也不能绕过嵌入页安全扫描。"""
+        self.add_page()
+        before = self.fingerprints()
+        index = self.prototype / 'index.html'
+        index.write_text(PREVIEW_INDEX_HTML.replace('</nav>', '<a href="reports.html">Reports</a></nav>'), encoding='utf-8')
+        self.assertEqual(before, self.fingerprints())
+        self.rewrite('index.html', 'src="settings.html"', 'src="reports.html"')
+        self.assertEqual(before, self.fingerprints())
+        self.rewrite('reports.html', '<h1>Settings</h1>', '<h1>Reports</h1>')
+        after = self.fingerprints()
+        settings = (PROTOTYPE_RELATIVE / 'settings.html').as_posix()
+        reports = (PROTOTYPE_RELATIVE / 'reports.html').as_posix()
+        self.assertEqual(before[settings], after[settings])
+        self.assertNotEqual(before[reports], after[reports])
+        self.rewrite('reports.html', '</head>', '<script src="https://example.test/unsafe.js"></script></head>')
+        code, stdout, stderr = self.run_cli('--json', '--page', 'settings.html')
+        self.assertEqual(1, code)
+        self.assertEqual('', stdout)
+        self.assertIn('external dependency', stderr)
+
+    def test_template_literals_mask_text_but_keep_interpolation_imports_visible(self) -> None:
+        """仅模板文字不是代码；嵌套插值里的真实动态导入和后续静态声明不能被吞掉。"""
+        self.add_script('const text = `import("https://example.test/text") ${`nested ${({x: "ok"}).x}`}`;\nimport "feature.js";')
+        (self.prototype / 'feature.js').write_text('export const value = 1;', encoding='utf-8')
+        before = self.fingerprints()
+        self.rewrite('feature.js', '1', '2')
+        self.assertNotEqual(before, self.fingerprints())
+        for source in (
+            'const text = `value ${import("feature.js")}`;',
+            'const text = `value ${`nested ${import("feature.js")}`}`;',
+            'const text = `safe`;\nimport "https://example.test/real.js";',
+            'const text = `unclosed ${({x: 1}).x;',
+        ):
+            with self.subTest(source=source):
+                (self.prototype / 'page.js').write_text(source, encoding='utf-8')
+                code, stdout, stderr = self.run_cli('--json')
+                self.assertEqual(1, code)
+                self.assertEqual('', stdout)
+                self.assertIn('[ERROR]', stderr)
+
+    def test_real_workspace_assets_do_not_invalidate_the_concrete_page(self) -> None:
+        """真实生产控制器/侧栏样式仅由index承载，修改它们不改变产品页资源闭包。"""
+        templates = Path(__file__).resolve().parents[1] / 'templates/prototype'
+        for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js'):
+            (self.prototype / name).write_bytes((templates / name).read_bytes())
+        (self.prototype / 'settings.html').write_bytes((templates / 'page.html').read_bytes())
+        self.rewrite('index.html', '</nav>', '<a href="settings.html">设置</a></nav>')
+        before = self.fingerprints()
+        for name in ('workspace.css', 'workspace.js'):
+            path = self.prototype / name
+            path.write_bytes(path.read_bytes() + b'\n/* sidebar-only update */\n')
+        self.assertEqual(before, self.fingerprints())
 
     def test_cyclic_dependencies_are_finite_and_stable(self) -> None:
         self.add_script('import "feature.js";\n')

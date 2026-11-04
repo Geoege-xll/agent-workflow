@@ -1,8 +1,8 @@
 # 需求 Markdown 与 HTML 交付
 
 模型和 PM 只维护一份需求 Markdown；HTML 是固定版本 `answer-me-with-html` CLI 的离线投影。
-正式文件放在适配器 `docs.plans` 下，使用同名 `.md` + `.html`。当前功能事实仍属于
-`features/`，PROJECT 仍是当前事实目录，设计原型仍在配置 `docs.standards_root/prototype/`。
+正式文件放在适配器 `docs.plans` 下，使用同名 `.md` + `.html`。同稿的已验收版本与“验收结果与当前已交付行为”
+保留当前功能基线，PROJECT 只索引明确已验收主题，设计原型仍在配置 `docs.standards_root/prototype/`。
 不要增加需求副本、映射报告、模板 HTML、空目录或批量转换历史计划。
 
 Full 正式需求审阅交付 HTML。`xy-plan` 只返回草案，不写文件、派发或请求批准；PM 可在
@@ -87,5 +87,8 @@ HTML 内的版本记录绑定规范原稿路径、原稿字节 SHA、固定引�
 渲染在当前 request-id 的固定 scratch 舞台完成，成功后复用现有条件原子发布入口；错误、
 超时或检测到生成期间原稿/目标并发修改都保留正式原件。与既有发布入口一样，协作目录锁
 不承诺阻止外部编辑器在最后检查和替换之间的非协作写入，也不宣称断电事务持久性。
-已完成/取消的计划及同名 HTML 保持历史执行边界；当前功能规则仍只投影到验收后的
-features/PROJECT，不能把历史 HTML 当成第二份当前规范或自动恢复执行依据。
+同稿分开记录执行与已验收基线；取消本次目标不撤销旧基线，completed 不产生验收。
+未索引旧执行稿及派生 HTML 保持历史边界，不能成为第二份规范或自动恢复执行依据。
+
+生成页主品牌与项目 GitHub 指向 `https://github.com/Geoege-xll/agent-workflow`；固定渲染器来源仍在页脚明确标出。
+品牌适配属于 renderer 身份与 HTML 完整性；不修改上游 bundle、许可或来源文件。

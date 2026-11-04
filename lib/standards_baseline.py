@@ -184,6 +184,7 @@ def _legacy_template(name: str, body: bytes, values: Mapping[str, str], profile:
         text = text.replace(engineering, "{{ENGINEERING_STANDARDS_INDEX}}")
         for content in (design, "- No design standards are configured for the discovered project profile."):
             text = text.replace(content, "{{DESIGN_STANDARDS_INDEX}}")
+    # 旧 features 路径仅用于已提交模板的归属指纹，不是运行时配置别名。
     for key in ("DOC_FEATURES_DIR", "DOC_PROJECT", "DOC_DESIGN_DIR"):
         # 只还原明确反引号引用，不抹掉用户普通正文中的路径子串。
         for slash in ("/", ""):
@@ -264,7 +265,7 @@ def plan_standard_updates(pack: Path, project: Path, *, docs: Mapping[str, str],
         raise ValueError("project.yaml is missing project_name")
     values = {"PROJECT_NAME": parse_project_name(name_match[1]), "DOC_STANDARDS": docs["standards"],
               "DOC_STANDARDS_ROOT": docs["standards_root"].rstrip("/"), "DOC_PROJECT": docs["project"],
-              "DOC_FEATURES_DIR": docs["features"].rstrip("/"), "DOC_DESIGN_DIR": docs["standards_root"].rstrip("/")}
+              "DOC_FEATURES_DIR": "docs/features", "DOC_DESIGN_DIR": docs["standards_root"].rstrip("/")}
     root, index = project / docs["standards_root"], project / docs["standards"]
     index_body = read_file(index)
     originals = {index: index_body}

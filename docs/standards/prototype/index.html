@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>原型浏览工作区</title>
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body class="prototype-entry">
+  <!-- 页面登记仍只有此处；隐藏登记导航不会产生额外目录画面或不可见的键盘焦点项。 -->
+  <nav id="prototype-pages" class="prototype-page-list" aria-label="Prototype pages" hidden>
+    <details open>
+      <summary id="prototype-workflow-group">工作流工具</summary>
+      <a id="prototype-workspace-entry" href="prototype-workspace.html">原型浏览工作区</a>
+    </details>
+  </nav>
+  <!-- 当前只承载唯一已登记的本地独立页，不增加另一层侧栏、头部、脚本或重定向。 -->
+  <iframe id="prototype-preview" src="prototype-workspace.html" title="原型浏览工作区"></iframe>
+</body>
+</html>

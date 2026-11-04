@@ -40,7 +40,7 @@ fork。同一任务连续实现、短返工及同轮原 Reviewer 的差量复查
 
 For initial/revised design standards or a visual-system replacement, read
 [design-standards.md](references/design-standards.md). PM assesses standard updates separately from
-PROJECT/feature projection; UI Agent writes authorized leaves, PM adopts scope and refreshes affected
+PROJECT/plans 基线投影; UI Agent writes authorized leaves, PM adopts scope and refreshes affected
 authority, implementation roles own production tokens/components, and QA audits independently.
 No reusable rule change means no update. `xy-uiux + design_ui` supports `design_mode: standards_only`
 for exact normative Markdown leaves without prototype writes, `xy-prototype-verify`, or visual gates.
@@ -242,7 +242,7 @@ Read [plan lifecycle](references/plan-lifecycle.md) when saving, revising or res
 
 For the PM projection decision before requirements approval, or after verified QA for document
 projection and commit assessment, read [closeout decisions](references/closeout.md). Assess first; do not update
-PROJECT/features merely to finish. Current truth changes only after verified implementation.
+PROJECT/plans merely to finish. Current truth changes only after verified implementation.
 
 <!-- workflow-contract: references/closeout.md -->
 

@@ -59,11 +59,13 @@ class GitDeliveryTest(unittest.TestCase):
         builtin = self.repo / builtin_path
         builtin.parent.mkdir(parents=True)
         builtin.write_bytes((PACK / builtin_path).read_bytes())
-        (self.repo / "docs/features").mkdir()
-        (self.repo / "docs/features/baseline.md").write_text("# Baseline\n- Feature ID: baseline\n- Status: active\n")
-        (self.repo / "docs/PROJECT.md").write_text("# Project\n[Baseline](features/baseline.md)\n")
+        (self.repo / "docs/plans").mkdir()
+        (self.repo / "docs/plans/baseline.md").write_text("# 已验收基线\n- 主题 ID: baseline\n- 阶段: active\n- 模块: .\n- 任务等级: Light\n- 已验收版本: v1\n"
+            "## 验收结果与当前已交付行为\n已有行为。\n## 批准依据与必要证据\n"
+            "- 批准依据: 既有用户批准\n- 验收证据: 既有验收记录\n")
+        (self.repo / "docs/PROJECT.md").write_text("# Project\n[Baseline](plans/baseline.md)\n")
         git(self.repo, "add", "agent_workflow/project.yaml", "src/a.py", "src/b.py",
-            "docs/STANDARDS.md", "docs/standards/GENERAL.md", "docs/PROJECT.md", "docs/features/baseline.md", builtin_path)
+            "docs/STANDARDS.md", "docs/standards/GENERAL.md", "docs/PROJECT.md", "docs/plans/baseline.md", builtin_path)
         git(self.repo, "commit", "-m", "fixture baseline")
         self.base = head(self.repo)
         template = _writer_payload()
@@ -225,7 +227,7 @@ class GitDeliveryTest(unittest.TestCase):
 
     def test_exact_validated_pm_projection_merges_with_refreshed_full_qa_scope(self) -> None:
         document = self.integration / "docs/plans/features.md"
-        document.parent.mkdir()
+        document.parent.mkdir(exist_ok=True)
         document.write_text("# Feature delivery\n- Status: awaiting merge\nBoth feature units verified.\n")
         git(self.integration, "add", "docs/plans/features.md")
         git(self.integration, "commit", "-m", "PM assessed recovery projection")

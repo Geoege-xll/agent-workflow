@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>原型浏览工作区 · 交互设计样稿</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script src="workspace-design.js" defer></script>
+</head>
+<body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive" data-prototype-plan-source="docs/plans/workflow-document-lifecycle.md">
+  <!-- 工作区直接作为首屏，名称、简述和返回只保留在内部当前页头部，不再叠加展示头部。 -->
+  <div class="prototype-stage" role="region" aria-label="原型浏览工作区高保真设计样稿">
+    <div class="prototype-frame">
+      <!-- 产品插槽模拟未来工作区本身。示例画面是本页状态，不是另一份页面注册表或生产承载器。 -->
+      <main class="prototype-content workspace-layout" data-prototype-page-content id="workspace-design">
+        <aside class="workspace-sidebar" id="workspace-sidebar" aria-label="页面侧栏">
+          <div class="workspace-brand">
+            <span class="workspace-brand-icon" aria-hidden="true"><span></span><span></span></span>
+            <div><strong>原型工作区</strong><span>示例项目</span></div>
+          </div>
+          <div class="workspace-sidebar-label">页面导航 <span>3 页</span></div>
+          <nav class="workspace-page-tree" aria-label="虚构示例页面">
+            <details class="workspace-group" open>
+              <summary id="workspace-group-documents"><span class="group-chevron" aria-hidden="true"></span><span>文档中心</span><span class="workspace-group-count">2</span></summary>
+              <div class="workspace-group-pages">
+                <a id="workspace-page-overview" class="workspace-page-link" href="#demo-overview" data-demo-page aria-current="page"><span class="page-outline-icon" aria-hidden="true"></span><span>文档概览</span><span class="workspace-current-marker" data-current-marker>当前</span></a>
+                <a id="workspace-page-requirement" class="workspace-page-link" href="#demo-requirement" data-demo-page><span class="page-outline-icon" aria-hidden="true"></span><span>需求详情</span><span class="workspace-current-marker" data-current-marker hidden>当前</span></a>
+              </div>
+            </details>
+            <details class="workspace-group" open>
+              <summary id="workspace-group-reference"><span class="group-chevron" aria-hidden="true"></span><span>原型浏览</span><span class="workspace-group-count">1</span></summary>
+              <div class="workspace-group-pages">
+                <a id="workspace-page-guidance" class="workspace-page-link" href="#demo-guidance" data-demo-page><span class="page-outline-icon" aria-hidden="true"></span><span>页面说明</span><span class="workspace-current-marker" data-current-marker hidden>当前</span></a>
+              </div>
+            </details>
+          </nav>
+          <div class="workspace-sidebar-foot"><span class="sidebar-project-mark" aria-hidden="true"></span><span>示例项目的原型页面</span></div>
+        </aside>
+
+        <div class="workspace-view">
+          <header class="workspace-page-heading">
+            <!-- 返回负责定位当前页；侧栏开关只改变布局。两个动作始终使用独立控件。 -->
+            <button id="workspace-back-to-navigation" class="workspace-back-button" type="button" aria-label="返回当前页面导航" title="返回当前页面导航"><span class="back-chevron" aria-hidden="true"></span></button>
+            <div class="workspace-heading-copy">
+              <p class="workspace-breadcrumb" id="workspace-current-group">文档中心</p>
+              <h1 id="workspace-page-title" tabindex="-1">文档概览</h1>
+              <p id="workspace-page-description">集中查看项目文档的名称、用途与当前阶段。</p>
+            </div>
+            <button id="workspace-sidebar-toggle" class="workspace-sidebar-toggle" type="button" aria-controls="workspace-sidebar" aria-expanded="true"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg><span id="workspace-sidebar-toggle-label">收起侧栏</span></button>
+          </header>
+
+          <section class="workspace-preview" aria-label="当前示例页面高保真画面">
+            <div class="workspace-preview-caption"><span>高保真预览</span><span class="workspace-preview-current"><span aria-hidden="true"></span>当前页面</span></div>
+
+            <!-- 下列三块仅是同一设计页内互斥的只读示例。只显示当前块，不请求或预载独立页面。 -->
+            <section class="demo-page" id="demo-overview" data-demo-screen data-screen-title="文档概览" data-screen-description="集中查看项目文档的名称、用途与当前阶段。" data-screen-group="文档中心" aria-label="文档概览虚构画面">
+              <div class="demo-topline"><span class="demo-project-name"><span class="demo-project-logo" aria-hidden="true"></span>示例项目</span><span class="demo-context">文档中心</span></div>
+              <div class="demo-document-body">
+                <div class="demo-page-intro"><div><p class="demo-eyebrow">项目文档</p><h3>把项目共识，放在同一处。</h3><p>从需求到设计，查看每份文档的用途与当前阶段。</p></div><span class="demo-readonly-label">只读示例</span></div>
+                <div class="demo-featured-document"><span class="demo-file-icon" aria-hidden="true"><span></span></span><div><p class="demo-featured-kicker">当前主题</p><h4>原型浏览工作区</h4><p>分组浏览、画面优先与需求关联</p></div><span class="demo-status demo-status-progress">设计中</span></div>
+                <div class="demo-list-heading"><h4>文档列表</h4><span>3 份示例文档</span></div>
+                <div class="demo-document-table" role="table" aria-label="示例文档列表">
+                  <div class="demo-document-row demo-table-head" role="row"><span role="columnheader">文档名称</span><span role="columnheader">阶段</span><span role="columnheader">类型</span></div>
+                  <div class="demo-document-row" role="row"><span role="cell"><strong>项目需求说明</strong><small>目标、范围与验收依据</small></span><span role="cell"><span class="demo-status demo-status-confirmed">需求确认</span></span><span class="demo-document-kind" role="cell">需求文档</span></div>
+                  <div class="demo-document-row" role="row"><span role="cell"><strong>原型浏览工作区</strong><small>布局、导航与演示行为</small></span><span role="cell"><span class="demo-status demo-status-progress">设计中</span></span><span class="demo-document-kind" role="cell">设计原型</span></div>
+                  <div class="demo-document-row" role="row"><span role="cell"><strong>界面设计规范</strong><small>共享组件与页面约定</small></span><span role="cell"><span class="demo-status">参考</span></span><span class="demo-document-kind" role="cell">设计规范</span></div>
+                </div>
+                <p class="demo-page-footnote">示例内容 · 用于展示文档界面的信息层级</p>
+              </div>
+            </section>
+
+            <section class="demo-page" id="demo-requirement" data-demo-screen data-screen-title="需求详情" data-screen-description="先阅读主题与目标，再核对具体需求和验收条件。" data-screen-group="文档中心" aria-label="需求详情虚构画面" hidden>
+              <div class="demo-topline"><span class="demo-project-name"><span class="demo-project-logo" aria-hidden="true"></span>示例项目</span><span class="demo-context">文档中心 / 需求详情</span></div>
+              <div class="demo-document-body demo-reader">
+                <p class="demo-eyebrow">需求说明</p><h3>原型浏览工作区</h3><p class="demo-reader-description">让页面浏览、设计画面与对应需求形成连续的阅读路径。</p>
+                <div class="demo-reader-meta"><span class="demo-status demo-status-progress">设计中 · 示例</span><span>主题文档</span></div>
+                <section class="demo-reader-section"><h4>目标与范围</h4><p>通过左侧分组查找页面，在右侧查看当前画面，再按需阅读需求与交互约定。</p></section>
+                <section class="demo-reader-section"><h4>需求与验收</h4><div class="demo-requirement-row"><span>01</span><div><strong>页面集中浏览</strong><p>分组可以折叠；当前页面有明确选中状态。</p></div></div><div class="demo-requirement-row"><span>02</span><div><strong>优先展示设计画面</strong><p>名称与简述之后直接呈现高保真内容。</p></div></div><div class="demo-requirement-row"><span>03</span><div><strong>需求就近可达</strong><p>在画面下方提供需求 HTML 和 Markdown 入口。</p></div></div></section>
+                <p class="demo-page-footnote">虚构阅读界面 · 正式需求入口位于预览下方</p>
+              </div>
+            </section>
+
+            <section class="demo-page" id="demo-guidance" data-demo-screen data-screen-title="页面说明" data-screen-description="查看原型页面的阅读顺序，以及导航、预览和说明的边界。" data-screen-group="原型浏览" aria-label="页面说明虚构画面" hidden>
+              <div class="demo-topline"><span class="demo-project-name"><span class="demo-project-logo" aria-hidden="true"></span>示例项目</span><span class="demo-context">原型浏览 / 页面说明</span></div>
+              <div class="demo-document-body demo-reader">
+                <p class="demo-eyebrow">阅读指南</p><h3>从画面开始，按需深入。</h3><p class="demo-reader-description">导航保持清楚，说明留在画面之外，让每个页面都容易核对。</p>
+                <ol class="demo-reading-steps"><li><span>01</span><div><h4>选择一个页面</h4><p>左侧按模块分组，页面名称与当前选中项保持一致。</p></div></li><li><span>02</span><div><h4>先看高保真画面</h4><p>产品自己的导航、内容和滚动属于预览画面。</p></div></li><li><span>03</span><div><h4>再读需求与契约</h4><p>需求、平台及演示说明紧随画面，详细契约按需展开。</p></div></li></ol>
+                <div class="demo-guidance-note"><span class="demo-note-mark" aria-hidden="true">i</span><p>此处为只读示例页面。可交互的工作区导航与侧栏开关位于画面之外。</p></div>
+              </div>
+            </section>
+          </section>
+
+          <!-- 这是一份真实的需求导航槽位：目标必须是同一 plans 主题的现有文件对；不作为渲染资源。 -->
+          <footer class="workspace-page-information">
+            <div class="workspace-information-top"><nav class="prototype-requirement-links" aria-label="关联需求文档"><span class="workspace-info-label">关联需求</span><a id="workspace-requirement-html" href="../../plans/workflow-document-lifecycle.html" data-prototype-document="html"><span class="document-format">HTML</span>阅读需求<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a><a id="workspace-requirement-markdown" href="../../plans/workflow-document-lifecycle.md" data-prototype-document="markdown"><span class="document-format">MD</span>需求原稿<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a></nav><p class="workspace-display-label"><span>Web</span><span>响应式 · CSS px</span></p></div>
+            <p class="workspace-demo-note"><strong>演示说明</strong> 左侧三页为虚构内容，在本页模拟切换；正式需求链接可直接打开。刷新恢复侧栏默认展开；页面锚点保留当前选择。</p>
+          </footer>
+
+          <!-- 折叠内容模拟被浏览页面的说明，不重复使用外层五节契约的结构属性。 -->
+          <details class="workspace-page-contract" id="workspace-demo-contract">
+            <summary id="workspace-demo-contract-toggle"><span class="group-chevron" aria-hidden="true"></span><span>页面设计与交互契约</span><span class="workspace-contract-hint">按需展开</span></summary>
+            <div class="workspace-page-contract-copy"><h3>页面职责</h3><p>展示当前选中的虚构示例页面；目标平台为 Web，采用响应式内容区。</p><h3>导航</h3><p>通过左侧分组切换页面，选中项、名称和预览同步更新。</p><h3>交互</h3><p>分组可折叠，侧栏可收起；圆形返回按钮展开侧栏并定位当前页面入口。</p><h3>状态</h3><p>只有一个当前页面。页面选择与分组展开状态分别保留，侧栏收起不会改变当前选择。</p><h3>例外</h3><p>本设计样稿的预览内容为只读模拟，未实现生产页面承载器；没有其他页面特例。</p></div>
+          </details>
+          <p id="workspace-status" class="visually-hidden" role="status" aria-live="polite">当前预览：文档概览。</p>
+          <noscript><p class="workspace-noscript">页面切换与侧栏开关需要本地 JavaScript；当前仍可阅读默认画面、展开原生分组和打开正式需求。</p></noscript>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- 外层契约描述这份独立设计样稿；它位于产品插槽之外，默认折叠，不冒充示例页的生产实现。 -->
+  <details class="prototype-contract">
+    <summary id="prototype-contract-toggle">Page design and interaction contract</summary>
+    <section data-contract-section="purpose">
+      <h2>页面职责</h2>
+      <p>本页是“原型浏览工作区”这一产品界面的虚构高保真交互设计样稿，覆盖 REQ-004、REQ-005 和 REQ-006 的可见设计范围。Platform: Web. Display: responsive. 页面按可用宽度自然展开，使用 CSS px，不采用固定设备窗口；窄空间将侧栏移到内容之前，列表保留可读顺序。</p>
+      <p>候选产品 token 集中在 prototype.css 的 --workspace-*，仅适用于本样稿；外层 --prototype-* 复用模板中性展示基线，不宣称项目已采用新主题。真实需求为 docs/plans/workflow-document-lifecycle.md 及其同名 HTML。</p>
+    </section>
+    <section data-contract-section="navigation">
+      <h2>导航</h2>
+      <p>index.html 的唯一 nav#prototype-pages 登记本独立页面，隐藏登记导航后以唯一 iframe#prototype-preview 直接承载本页，不展示独立目录或附加头部。本页也可按独立 HTML 路径直接打开。</p>
+      <p>产品区三个锚点只是本页的虚构预览状态，未登记额外独立页面，也不代表生产模板的文件导航协议；同页状态不拆新文件。工作区圆形返回负责展开侧栏并聚焦当前入口，与侧栏开关独立，不再提供外层目录返回。</p>
+      <p>右侧画面后的 nav.prototype-requirement-links 只提供已绑定主题的 HTML/Markdown 两个普通相对导航链接；没有脚本读取文档、跨文档 DOM 或资源预载。具体页不含 iframe；入口的静态本地承载仍须验证登记目标与既有资源闭包，生产多页面切换与安全路由由后续实现者完成。</p>
+    </section>
+    <section data-contract-section="interactions">
+      <h2>交互</h2>
+      <p data-contract-for="workspace-back-to-navigation">返回当前页面导航：展开侧栏及当前页面所在原生分组，保留当前预览，并将焦点移到当前页面链接；状态区宣布当前定位结果。</p>
+      <p data-contract-for="workspace-sidebar-toggle">收起/展开侧栏：点击或 Enter/Space 切换侧栏可见性，aria-expanded 与按钮名称同步更新，右侧预览扩展或恢复；不改变当前页面和分组状态。</p>
+      <p data-contract-for="workspace-group-documents">文档中心分组：原生 summary 通过点击、Enter 或 Space 切换 details 的展开状态，不切换当前页面。</p>
+      <p data-contract-for="workspace-page-overview">文档概览：点击或 Enter 选择 demo-overview，同步标题、简述、分组名称、唯一 aria-current 和“当前”文字标记；显示对应画面并聚焦页面标题。</p>
+      <p data-contract-for="workspace-page-requirement">需求详情：点击或 Enter 选择 demo-requirement，按同一规则更新当前页面与预览，其他示例画面隐藏。</p>
+      <p data-contract-for="workspace-group-reference">原型浏览分组：按原生 details/summary 方式折叠或展开，不改变当前预览。</p>
+      <p data-contract-for="workspace-page-guidance">页面说明：点击或 Enter 选择 demo-guidance，同步选中反馈、页头与只读说明画面。</p>
+      <p data-contract-for="workspace-requirement-html">阅读需求：打开现有 ../../plans/workflow-document-lifecycle.html；它是正式需求导航，不是预览依赖。</p>
+      <p data-contract-for="workspace-requirement-markdown">需求原稿：打开同主题 ../../plans/workflow-document-lifecycle.md；由浏览器按本地 Markdown 支持方式展示或交给关联应用。</p>
+      <p data-contract-for="workspace-demo-contract-toggle">页面设计与交互契约：原生 summary 展开或折叠样稿内的页面说明，不覆盖预览或占用浏览器固定浮层。</p>
+      <p data-contract-for="prototype-contract-toggle">本页契约：原生 summary 展开或折叠这五节实际设计契约，默认折叠；位于产品插槽之外。</p>
+    </section>
+    <section data-contract-section="states">
+      <h2>状态</h2>
+      <p>初始状态为侧栏展开、两个分组展开、文档概览选中，内外契约均折叠。合法的本页示例锚点可恢复对应选择；未知锚点不会成为页面路径或加载目标，回到默认示例。</p>
+      <p>切换页面时只有一块示例画面可见，标题与导航一致；选中既有颜色也有“当前”文字，键盘焦点独立显示。收起侧栏后右上角保留展开按钮；返回当前导航会恢复侧栏、展开对应分组并移交焦点。</p>
+      <p>控件具有默认、hover、pressed 和 focus-visible 状态，链接有当前选中状态；遵循 reduced-motion。此样稿没有异步请求、提交、真实账户或业务写入，因此加载、提交成功、业务错误、空列表、禁用和弹窗状态不适用，不制造假成功反馈。</p>
+      <p>窄屏通过自然换行和单列布局保留必要操作；没有固定页面高度、远程字体或图像。静态检查不能证明实际渲染、键盘实操或辅助技术效果，默认没有调用浏览器及截图。</p>
+    </section>
+    <section data-contract-section="exceptions">
+      <h2>例外</h2>
+      <p>本页按当前批准的设计任务在产品插槽中模拟未来工作区；三个预览状态不是业务项目交付页。设计入口只实现单登记页的静态本地承载，不实现生产模板的多页面控制器，不修改源模板，不新增搜索、编辑器、拖拽或截图功能。样稿内页面说明与产品区外实际五节契约分离；除此之外没有页面特例。</p>
+      <p>当前只呈现候选视觉，用户最终视觉确认由 PM 处理；静态验证或演示内容不代表需求已实施或项目已验收。</p>
+    </section>
+  </details>
+</body>
+</html>

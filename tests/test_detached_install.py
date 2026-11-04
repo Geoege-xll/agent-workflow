@@ -347,7 +347,7 @@ class DetachedInstallTest(unittest.TestCase):
 
             runtime = project / ".agent-workflow"
             self.assertIn('project_name: "Project With Spaces"', (runtime / "project.yaml").read_text())
-            self.assertIn("# Project — Project With Spaces", (project / "docs/PROJECT.md").read_text())
+            self.assertIn("# 项目 — Project With Spaces", (project / "docs/PROJECT.md").read_text())
             self.assertEqual(source_config, (source / "project.yaml").read_bytes())
             self.assertTrue((runtime / "setup_all.sh").is_file())
             self.assertTrue((runtime / ".install-manifest.json").is_file())

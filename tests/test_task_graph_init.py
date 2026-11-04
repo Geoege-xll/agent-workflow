@@ -23,7 +23,6 @@ ADAPTER = """docs:
   standards: docs/STANDARDS.md
   standards_root: docs/standards/
   project: docs/PROJECT.md
-  features: docs/features/
   plans: docs/plans/
   notes: docs/notes/
 """

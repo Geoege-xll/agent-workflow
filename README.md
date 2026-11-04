@@ -388,7 +388,7 @@ Light派发前判断目标、消费者、范围与风险，使用当前自包含
 不预热全部别名、不填满上限，也不按简单LRU淘汰仍执行／未交证据／必要复查实例。
 AGY kill前保护临时worktree与唯一日志；完整规则见[实例生命周期](product/WORKFLOW.md#agent-instance-lifecycle)。
 
-Project documents (`PROJECT.md`, feature details, and requirement plans) and agentmemory are
+Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are
 auxiliary information sources at task intake. The PM reads or queries only the smallest relevant
 scope when a current feature fact, durable decision, engineering or design constraint, cross-session
 background, or historical lesson is needed. Sufficient task information requires no document
@@ -402,7 +402,7 @@ no artificial questions; unresolved material gaps receive a bounded interview. T
 results, semantic locks, and a machine-readable graph. It borrows the exactness and self-review
 methodology of Superpowers writing-plans without activating its execution, worktree, commit, or
 Subagent workflows. Before requesting `requirements_approved`, the PM decides whether QA-verified
-project or feature truth will need a closeout projection. `PROJECT.md` and active feature documents
+project or feature truth will need a closeout projection. `PROJECT.md` and accepted plan baselines
 remain the last QA-verified truth until integrated QA passes.
 
 The PM validates and drives the same transient JSON snapshot using `task_graph_cli.py validate`,
@@ -477,24 +477,19 @@ A material requirement or affected-UI-scope change invalidates the prototype cho
 `requirements_approved`, while a material final
 page dependency fingerprint change reopens only `visual_approved`.
 
-The document model has one human entry point: `docs/PROJECT.md`. It lists current verified project
-facts and active feature links without a line/byte cap or historical task log. Detailed current
-feature truth lives under `docs/features/`; full revision history stays in Git. After QA verifies a
-complete feature removal, PM performs one closeout update: remove its PROJECT row, rename its detail
-to `*.removed.md`, mark the document historical with removal metadata, and repair current links.
-Feature details include current functional and architectural rationale; a cross-feature solution may
-have one shared detail in the same directory. There is no separate ADR category and no chronological
-decision log. Replace obsolete explanations in place.
+文档使用一个人类入口：`docs/PROJECT.md`。它保留当前项目概况并只链接 plans 中的明确已验收基线，
+不设行数／字节限制，不追加任务日志。一个稳定主题只有一份 Markdown 与同名派生 HTML；
+当前需求、方案、执行恢复、已验收行为和必要依据放在同一稿中，Git 保留完整修订历史。
+再次迭代在原路径更新本次目标与进度，保留上次已验收版本；未验收或取消的本次目标不能冒充交付，
+`completed` 标签本身不证明批准、QA 或当前事实。已验收删除在同稿标记 `removed`、保留必要依据并移除 PROJECT 当前链接。
 
-`docs/plans/` holds decided changes and enough current progress to resume unfinished work. Light saves only for actual pause/recovery/handoff or explicit user
-request; Full is saved by PM after requirements confirmation (including applicable prototype choice)
-and before first design/implementation dispatch. Saving Light does not invoke Full planning Skills.
-One independent requirement owns one plan, updated in place for effective visual changes or QA rework.
+Light 只为实际暂停／恢复／交接或明确用户要求保存；Full 由 PM 在需求确认和适用原型选择后、
+首次设计／实施派发前保存。模板面向 Full 六节完整形状，Light 按必要性简化；保存或渲染不升级等级、增加审批。
 
 Full 正式需求审阅使用 HTML：模型只维护 `docs.plans/<name>.md`，同目录 `.html` 由固定
 `answer-me-with-html` CLI 生成。批准前草案只放当前请求 scratch；批准后保存正式原稿再生成。
 需求用稳定 REQ 编号链接具体原型页/状态，设计交接后 PM 写回同一原稿并重渲染；页面状态
-不构成批准，历史 MD/HTML 不成为当前功能真相。用法、受控语法及草案链接基准见
+不构成批准；已验收基线与历史执行明细分开，历史 HTML 不成为第二份当前规范。用法、受控语法及草案链接基准见
 [需求 HTML 交付](platforms/shared/skills/xy-plan/references/requirement-html.md)。适配器需现有
 Node.js >= 20，三个宿主共用安装态 `lib/requirement_html.py`，无需安装上游 Skill 或全局依赖。
 PM replaces affected complete worker/QA inputs and reuses unaffected verified work; a recorded status
@@ -792,19 +787,21 @@ Every host setup and `setup_all.sh` creates only missing or empty current-profil
 | `docs/STANDARDS.md` | 存在实际项目特有规范时维护的薄索引；既有说明索引保留 |
 | `docs/standards/*.md` | 实际项目特有工程规范、保护边界等，不复制内置通用正文 |
 | `docs/standards/DESIGN_*.md` | 实际采用的项目设计值、组件变体与平台差异；无差异不创建 |
-| `docs/PROJECT.md` | Current verified project directory and active feature links |
-| `docs/features/` | Current detailed feature truth; `*.removed.md` is historical only |
-| `docs/plans/` | Lazy PM-owned Markdown + same-name derived HTML; intended changes/recovery/history, not feature truth |
+| `docs/PROJECT.md` | 当前项目概况与 plans 明确已验收基线链接 |
+| `docs/plans/` | 实际保存才创建；同主题单一 Markdown／派生 HTML，分清本次执行与上次已验收行为 |
 | `docs/standards/prototype/` | Lightweight `index.html`, `prototype.css`, and direct `<page>.html`; resource directories only when needed |
 
-`templates/docs/FEATURE.md` is the PM-owned shape for a newly approved feature document. The legacy
-`docs.contracts` / `docs.progress` schema and its `SPEC.md` / `STATUS.md` authorities, plus the old
-single-file `ENGINEERING.md` / `DESIGN_SYSTEM.md` authorities, are unsupported:
-upgrade current truth directly into `PROJECT.md` plus feature documents and remove the old authorities
-instead of installing a compatibility bridge or retaining dual truth.
+`templates/docs/PLAN.md` 是 Full 生命周期写作形状：普通 Markdown 元信息为主题 ID、阶段、模块、
+任务等级和已验收版本，六节为目标与范围、需求与验收、方案与原型关联、当前进展与恢复入口、
+验收结果与当前已交付行为、批准依据与必要证据。阶段 token 为 draft／active／paused／completed／
+cancelled／removed，已验收版本为真实标识或 `none`；已有版本的批准依据与验收证据须真实可恢复。
+模板示例不产生批准或事实。Light 无基线恢复稿可简化；PROJECT 不能将无明确基线的稿件索引为当前功能。
 
-Plans and notes are lazy: setup preserves existing content but does not create empty placeholder
-trees or plans. `templates/docs/PLAN.md` is an optional writing aid, not a mandatory form for small work.
+新 schema 删除 `docs.features` 与独立 FEATURE 模板；不把 features 配到 plans，也不保留运行时别名。
+安装不创建 features／plans／notes 空目录、不创建需求页或基线占位条目。源包未索引历史计划保持原样，
+不能按 completed 自动转为当前事实。旧 STATUS／SPEC／ENGINEERING／DESIGN_SYSTEM 权威仍不兼容，
+必要项目内容、批准和历史先安全迁入相应主题，再移除旧权威；不恢复双重事实。
+
 当前恢复／交接简报按[计划生命周期](platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)
 原地替换为当前状态与下一步，不逐批累加完成明细；必要基线引用现有计划、功能和完整证据。
 先确认原始批准、完整日志与唯一历史可恢复并修复引用，无法安全移交则保留原文及历史边界；
@@ -816,13 +813,39 @@ trees or plans. `templates/docs/PLAN.md` is an optional writing aid, not a manda
 索引实际存在则记录真实SHA。init/文档校验检查文件系统，纯JSON图校验不冒称已核对文件存在性。
 来源、领域、稳定ID、覆盖和指纹检查继续执行，不能把可选索引解释成可跳过规范。
 
-This is a direct schema upgrade: replace `docs.adr` with `docs.plans`; consolidate useful ADR rationale
-into the related feature or shared architecture detail. Move engineering leaves to the standards root,
-design leaves to `DESIGN_*.md`, and prototype pages to `standards/prototype/`; repair relative URLs,
-index links and fingerprints. Classify old design reference content as actual rules, an unfinished
-plan, or verified feature truth before moving it. Do not infer implementation from an old proposal.
-Setup never deletes or overwrites populated project documents; migrate old project content explicitly
-with a backup before reinstalling. Keeping old/new authorities active together is unsupported.
+已有 features 的项目先执行单次显式迁移，再升级安装；安装／--check 遇到旧 key 会清楚拒绝。
+使用本源包 helper 操作目标项目（它会选择该项目现有 `.agent-workflow/project.yaml`，未安装时用根配置）：
+
+```bash
+bash lib/python_runtime.sh -X utf8 -B lib/migrate_project_docs.py --project /absolute/project --mapping /absolute/request/migration.json
+bash lib/python_runtime.sh -X utf8 -B lib/migrate_project_docs.py --project /absolute/project --mapping /absolute/request/migration.json --apply
+```
+
+第一条只预检；第二条复用现有安装锁与文档条件发布／回滚事务。迁移输入只用于本次实际操作，
+不是日常受控目录台账。JSON 顶层为 `schema_version: 1`、`documents` 列表和可选的 `reference_updates` Markdown 路径列表。
+每个 documents 项精确包含 `source`、`target`、`source_sha256`、`content`：源／目标是规范项目相对路径，
+source_sha256 绑定真实旧源；content 是人工按真实归属准备的新生命周期 Markdown，必须出现一次 `{{原文}}`。
+工具将完整旧正文放到该明确位置，仅重定位必要相对链接，修复 PROJECT、实际 STANDARDS 及明确列出的当前引用。
+所有旧 Markdown 必须一对一列出；不从标题、同名或状态猜主题合并。未知资产、目标／HTML 冲突、重复主题、
+不安全／失效链接和不明归属先停，不覆盖现有计划。原有未索引 plans 不批改。
+
+若旧源已在 PROJECT 当前索引，新稿必须保留真实原基线；已验收行为节只使用 `{{原文}}`，
+旧源还须有合法 Feature ID／Status，不能把删除墓碑重新授信为当前行为；
+版本、批准依据与验收证据须逐项匹配旧正文中已存在的 `Current version`／`当前版本`／`已验收版本`、
+`Approval basis`／`批准依据`、`Acceptance evidence`／`验收证据` 明确条目。无法从旧来源证明时停止，
+先找回真实批准和证据；不能在清单里填非空文字创造 QA 或批准。旧未索引材料只能按非当前历史保全，
+不能因 completed 变成基线。迁移成功删除旧配置键与已保全源，保留完整目标正文与索引文字；
+删除／重定位前逐文件核对真实 Git HEAD 的原字节和可恢复权限；Git 仅记录执行位，0600 等权限不算完整恢复依据。
+有未提交／未跟踪内容或权限缺口时，先在映射同目录以私有权限保留固定单份 `migration-recovery.json`，
+也可用 `--recovery /absolute/request/migration-recovery.json` 明确其位置。它只包含本次实际变动的原件／配置／索引前像、
+必要 Git 引用和迁移产物条件，不复制项目树，也不是日常台账。已有不同／不安全副本先停；相同输入复用同份，
+成功后不能清理唯一原件，直到相关原稿、批准和必要历史已进入真实可恢复版本／受保护证据落点并修复引用。
+可先用同一 helper 的 `--project TARGET --restore SNAPSHOT` 预检，另加 `--apply` 才按原字节和权限恢复；
+任何迁移后用户修改都会阻止恢复，保留当前文件与快照。恢复旧配置后新模型仍拒绝旧键，需按明确意图重新迁移或使用可恢复旧版本，
+不能把恢复动作变成运行时兼容别名。纯 Git 已完整保护的输入沿输出精确提交恢复，不制造额外副本。
+同步失败沿现有事务回滚，检测到并发编辑时保留可诊断冲突及原件，不承诺跨文件断电原子性。
+再次运行会拒绝已迁移配置，不能重复导入；人工恢复必须依据真实版本／唯一历史，不能盲目覆盖目标。
+最后按实际配置对本主题执行 `requirement_html.py render/check` 生成同名页，再使用正常安装入口升级并 --check。
 
 New project: launch `install.sh` → drag or pass the project path → inspect the automatic
 preflight and `--check` result → fill the scaffolded docs. Normal setup automatically

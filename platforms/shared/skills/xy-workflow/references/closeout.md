@@ -40,23 +40,18 @@ Light 完成最小验证后按实际风险评估独立审计、文档与记忆�
   visual styling use `not_required` with `change_type: none` only when recorded current facts remain
   unchanged. Update an existing runtime/dependency baseline, rationale or scope in place when it
   changes; do not add a document or chronology merely for the task. A durable UI behavior change updates the
-  affected feature document. Approved concrete HTML remains visual and interaction authority for
+  affected topic plan. Approved concrete HTML remains visual and interaction authority for
   current required-prototype work, or when an unchanged concrete page is explicitly frozen as valid
   `UI-Conformance` authority. If a production-only revision makes an existing document's
   prototype link misleading, project the verified production truth and scoped authority boundary;
   do not synchronize the historical prototype during closeout.
 
-  Full 在 integrated QA PASS 后投影；Light 依据实际接收、必要独立审计和文档评估更新，
-  不把未审计结果写成QA-verified。The PM applies the smallest current-truth projection. `PROJECT.md` keeps
-  only the current project directory and active feature links; each active feature document keeps
-  current requirements, acceptance and functional/architectural rationale. Git owns full history;
-  update obsolete text in place, not as a chronology. Cross-feature rationale may have one shared
-  detail in the same features directory. Do not create an independent ADR category.
-
-  A verified removal is one closeout operation: delete the active feature row from `PROJECT.md`,
-  rename `<feature>.md` to `<feature>.removed.md`, mark it removed with reason/date/replacement and
-  historical-only requirements, then repair current links. Before QA PASS there is no
-  `removal_pending` projection. If QA fails, canonical documents remain unchanged.
+  Full 在 integrated QA PASS 后投影；Light 依据实际最小验证和必要独立审计接收更新，
+  不把未审计结果写成 QA-verified。PM 原地更新同主题 plans 的已验收版本、已交付行为与必要证据，
+  PROJECT 只保留当前基线链接，不追加执行状态或一行一修订。再次迭代保留旧基线，取消本次目标也不抹掉旧交付。
+  completed 不证明验收，旧未索引稿不自动成为事实；没有变化不另建 feature 文档或 ADR。
+  已验收完整删除在同稿标记 removed、保留原因／日期／替代与必要历史，移除当前 PROJECT 链接并修复引用；
+  QA 失败不投影。Markdown 是唯一编辑权威，相关 HTML 在同路径重渲染。
 - Full 在 QA PASS 后、Light 在最小验证与实际必需审计接收后，连同已验证文档投影执行 PM 提交评估。
   Keep the result internal:
 
