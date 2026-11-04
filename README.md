@@ -1,7 +1,7 @@
 # Agent Workflow Pack 2.0
 
-面向项目的原生多Agent工作流，当前公开发行版为 **2.0.1**，本轮源码准备 **2.0.2** 离线候选。
-候选产物尚未发布或更新公共 Tap，不会自动替换已安装的旧入口。仅Light／Full及schema_version:2，
+面向项目的原生多Agent工作流，发行版本为 **2.0.2**。使用 `awf-cli --version` 核对实际中央程序
+版本与源码位置；项目工作流通过原安装入口显式升级。仅Light／Full及schema_version:2，
 不兼容旧任务／交接格式；用户文件、已有成果和必要证据保护继续有效。
 Keep this installer folder anywhere and select a project when launching it — works with
 **Claude Code / Codex / Antigravity**.

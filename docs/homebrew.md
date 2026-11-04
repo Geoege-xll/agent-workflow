@@ -2,8 +2,8 @@
 
 源码仓库：<https://github.com/Geoege-xll/agent-workflow>，公开 Tap 为
 `Geoege-xll/homebrew-tap`，Formula 名称为 `Geoege-xll/tap/awf-cli`。
-本轮审计时 GitHub 正式 latest 为 `2.0.1`，公共 Tap 与被审计本机仍为 `0.1.0`。
-本次只离线准备 `2.0.2` 的归档、校验文件与 Formula，尚未发布或更新 Tap；本地源码修复不更新旧入口。
+发行归档、校验文件与 Formula 来自同一次构建。Tap 使用对应 Release 的 Formula，
+安装时核对归档 SHA-256；用已安装入口的 `--version` 核对实际版本和中央程序位置。
 
 ## 用户安装
 
@@ -51,7 +51,7 @@ TUI 或显式 `install --apply` 完成。`brew uninstall awf-cli` 不删除项�
 
 ## 本地构建（不联网、不安装、不发布）
 
-在源码根目录使用现有 Python 选择器，当前离线候选版本为 `2.0.2`：
+在源码根目录使用现有 Python 选择器，以下以 `2.0.2` 为例：
 
 ```bash
 bash lib/python_runtime.sh -I -B -m unittest discover -s tests -p test_homebrew_packaging.py -v
@@ -89,7 +89,7 @@ bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2 --output-dir /
 
 1. 核对源码上传清单和授权方式，将审阅过的源文件推送到
    `Geoege-xll/agent-workflow`。`.gitignore` 排除本地备份、缓存及 `dist/`。
-2. 在源码仓库的 **Actions → Prepare release → Run workflow** 输入版本 `0.1.0`
+2. 在源码仓库的 **Actions → Prepare release → Run workflow** 输入版本 `2.0.2`
    （不带 `v`），并选择希望发布的分支。工作流先运行离线打包测试，再构建三份产物，
    然后创建 **Draft Release**；它不会自动公开 Release，也不会推送 Tap。
 3. 核对 Draft 的目标提交、压缩包、校验文件和 `awf-cli.rb` 后，再手动发布 Release。
@@ -110,7 +110,7 @@ bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2 --output-dir /
 
 ## 后续升级
 
-对新的源代码提交手动运行相同工作流，输入未使用的新版本（例如 `0.1.1`），审核并
+对新的源代码提交手动运行相同工作流，输入未使用的新版本（例如 `2.0.3`），审核并
 公开 Release，再将该版本附带的 Formula 更新到 Tap。用户随后运行 `brew update`
 及 `brew upgrade` 即可。不要覆盖同版本 Release 资产：旧 Formula 的校验值和已安装
 版本应继续对应原发行包；需要修正时发布新版本。
