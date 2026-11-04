@@ -44,8 +44,8 @@ def validate_runtime(runtime: Path) -> None:
 
 
 def ensure_source(catalog: Catalog, project: Path) -> None:
-    """确认前仅重查本地来源，不调用模型，不重复执行宿主安装检查。"""
-    if catalog.stamp and discover(catalog.host,project=project).stamp != catalog.stamp:
+    """锁内仅重查本地来源与身份失效信号，复用 native 快照，避免外部进程阻塞配置事务。"""
+    if catalog.stamp and discover(catalog.host,project=project,_snapshot=catalog).stamp != catalog.stamp:
         raise ValueError("模型来源或能力已变化；草稿已保留，请刷新并重新选择后再应用")
 
 

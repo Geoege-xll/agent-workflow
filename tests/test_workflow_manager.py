@@ -31,6 +31,7 @@ from lib import install_workflow
 from lib.install_process import SetupRunner, SetupRunError
 from lib.install_workflow import _managed_files
 from manager.catalog import Catalog, Model, discover
+from manager.codex_models import NativeModel, NativeModels
 from manager.claude_execution import effective_role
 from manager.capabilities import diagnose
 from manager.cli import main as cli_main
@@ -150,6 +151,185 @@ class CatalogTest(unittest.TestCase):
     def tearDown(self):self.temp.cleanup()
     def write(self,name,value):
         path=self.home/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value if isinstance(value,str) else json.dumps(value));return path
+
+    def native_fixture(self, pages, mode="ok", cache_identity=None):
+        """用真实 stdio 子进程提供可控宿主协议；环境只指向本测试目录，不借用真实账户。"""
+        fixture=self.write('native-fixture.json',{'pages':pages,'mode':mode,'cache_identity':cache_identity})
+        program=self.write('bin/codex', '#!'+sys.executable+'\n'+'''import json, os, signal, subprocess, sys, time
+from pathlib import Path
+root=Path(os.environ["HOME"])
+fixture=json.loads(Path(os.environ["NATIVE_FIXTURE"]).read_text())
+(root/"native-pid").write_text(str(os.getpid()))
+page=0
+for line in sys.stdin:
+    request=json.loads(line)
+    with (root/"native-calls").open("a") as log:
+        log.write(json.dumps(request)+"\\n")
+    method=request["method"]
+    if method == "initialized": continue
+    mode=fixture["mode"]
+    if mode == "exit":
+        sys.stderr.write("NATIVE-PRIVATE-SECRET");sys.stderr.flush();raise SystemExit(3)
+    if mode == "timeout":
+        signal.signal(signal.SIGTERM,signal.SIG_IGN)
+        child="import os,signal,sys,time;from pathlib import Path;signal.signal(signal.SIGTERM,lambda *_:(Path(os.environ['HOME']+'/native-child-ended').write_text(str(os.getpid())),sys.exit(0)));Path(os.environ['HOME']+'/native-child').write_text(str(os.getpid()));time.sleep(30)"
+        subprocess.Popen([sys.executable,"-c",child])
+        while not (root/"native-child").exists(): time.sleep(.005)
+        time.sleep(30)
+    if mode == "flood":
+        sys.stderr.buffer.write(b"NATIVE-PRIVATE-SECRET"+b"x"*(4*1024*1024+1));sys.stderr.flush();time.sleep(30)
+    if mode == "json": print("invalid NATIVE-PRIVATE-SECRET",flush=True);continue
+    if method == "initialize": result={"userAgent":"fixture"}
+    else:
+        if method != "model/list": raise SystemExit(4)
+        result=fixture["pages"][min(page,len(fixture["pages"])-1)];page+=1
+        if fixture["cache_identity"] is not None:
+            target=Path(os.environ["CODEX_HOME"])/"models_cache.json";target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_text(json.dumps({"identity":fixture["cache_identity"],"models":[{"slug":"stale-cache-only"}]}))
+    reply={"id": "wrong" if mode == "id" else request["id"],"result":result}
+    if mode == "error": reply={"id":request["id"],"error":{"message":"NATIVE-PRIVATE-SECRET"}}
+    print(json.dumps(reply),flush=True)
+''')
+        program.chmod(0o700)
+        return {'HOME':str(self.home),'CODEX_HOME':str(self.home/'.codex'),
+                'PATH':str(program.parent),'NATIVE_FIXTURE':str(fixture)}
+
+    def native_row(self, model, **extra):
+        return {'id':'opaque-'+model,'model':model,'displayName':'名称 '+model,'hidden':False,
+                'supportedReasoningEfforts':[{'reasoningEffort':level} for level in ('high','max','ultra')],
+                'defaultReasoningEffort':'high',**extra}
+
+    def test_codex_native_pages_map_model_values_visibility_and_efforts(self):
+        self.write('.codex/config.toml','model="dynamic-a"\n')
+        self.write('.codex/models_cache.json','broken default cache')
+        pages=[{'data':[self.native_row('dynamic-a'),self.native_row('hidden',hidden=True)],'nextCursor':'second'},
+               {'data':[self.native_row('dynamic-b',displayName='动态'+chr(27)+'模型')],'nextCursor':None}]
+        env=self.native_fixture(pages)
+        catalog=discover('codex',self.home,self.home,env)
+        self.assertEqual([row.id for row in catalog.models],['inherit','dynamic-a','dynamic-b'])
+        self.assertEqual(catalog.models[0].efforts,('high','max'))
+        self.assertEqual(catalog.models[2].label,'动态模型')
+        calls=[json.loads(line) for line in (self.home/'native-calls').read_text().splitlines()]
+        self.assertEqual([row['method'] for row in calls],['initialize','initialized','model/list','model/list'])
+        self.assertEqual([row['params']['cursor'] for row in calls[2:]],[None,'second'])
+        self.assertTrue(all(row['params']['includeHidden'] is False for row in calls[2:]))
+        self.assertEqual(service.validate_selection('codex',{'model':'dynamic-b','effort':'max'},catalog)['model'],'dynamic-b')
+        with self.assertRaises(ValueError):service.validate_selection('codex',{'model':'dynamic-b','effort':'ultra'},catalog)
+        # CLI 是同一 discover 的直接消费者，输出必须保留真正可写的 model，而非目录 id。
+        output=io.StringIO()
+        with patch.dict(os.environ,env,clear=True),redirect_stdout(output):
+            self.assertEqual(cli_main(['models','--platform','codex']),0)
+        self.assertEqual([row['id'] for row in json.loads(output.getvalue())['models']],['inherit','dynamic-a','dynamic-b'])
+
+    def test_codex_native_protocol_failures_reap_process_and_keep_safe_fallback(self):
+        self.write('.codex/config.toml','model="current"\n')
+        self.write('.codex/models_cache.json',{'identity':'old-provider','models':[{'slug':'stale-only'}]})
+        for mode,pages in (('exit',[]),('id',[]),('json',[]),('error',[]),('flood',[]),
+                           ('ok',[{'data':[self.native_row('partial')],'nextCursor':'repeat'}]),
+                           ('ok',[{'data':[{'model':'invalid'}],'nextCursor':None}])):
+            with self.subTest(mode=mode,pages=pages):
+                env=self.native_fixture(pages,mode)
+                processes=[];popen=subprocess.Popen
+                def spawn(*args,**kwargs):
+                    process=popen(*args,**kwargs);processes.append(process);return process
+                with patch('manager.codex_models.subprocess.Popen',side_effect=spawn):
+                    catalog=discover('codex',self.home,env=env)
+                self.assertEqual([row.id for row in catalog.models],['inherit','current'])
+                output=json.dumps(catalog.as_dict(),ensure_ascii=False)
+                self.assertIn('原生目录获取失败',output);self.assertNotIn('NATIVE-PRIVATE-SECRET',output)
+                self.assertTrue(processes);self.assertTrue(all(row.returncode is not None for row in processes))
+        # 启动失败也由目录边界投影，不能把可执行文件错误正文当模型候选或秘密诊断。
+        env=self.native_fixture([],"ok")
+        (self.home/'bin/codex').write_text('#!/nonexistent-native-interpreter\n')
+        catalog=discover('codex',self.home,env=env)
+        self.assertEqual([row.id for row in catalog.models],['inherit','current'])
+        self.assertTrue(any('无法启动' in note for note in catalog.notes))
+        diagnostic=' '.join(catalog.notes)
+        self.assertIn('阶段：spawn',diagnostic);self.assertIn('异常：FileNotFoundError',diagnostic)
+        self.assertIn('errno：2',diagnostic)
+
+    def test_codex_native_timeout_reaps_owned_process_group(self):
+        env=self.native_fixture([],"timeout")
+        start=time.monotonic()
+        processes=[];popen=subprocess.Popen
+        def spawn(*args,**kwargs):
+            process=popen(*args,**kwargs);processes.append(process);return process
+        with patch('manager.codex_models.TIMEOUT_SECONDS',.35),patch('manager.codex_models.subprocess.Popen',side_effect=spawn):
+            catalog=discover('codex',self.home,env=env)
+        self.assertLess(time.monotonic()-start,3)
+        self.assertTrue(any('超时' in note for note in catalog.notes))
+        # 父进程忽略 TERM，必须已被 KILL 并 wait；后代通过退出处理确认收到组取消。
+        self.assertEqual([process.returncode for process in processes],[-signal.SIGKILL])
+        self.assertEqual((self.home/'native-child').read_text(),(self.home/'native-child-ended').read_text())
+
+    def test_codex_native_result_is_discarded_when_stable_sources_change_during_query(self):
+        # 直接控制查询返回前的真实来源写入，覆盖身份、有效提供方和可执行文件这三类竞态。
+        # query 只用内存替身；auth 正文的读取仍被明确禁止，不触碰真实宿主或账户。
+        for changed in ('auth','provider','binary'):
+            with self.subTest(changed=changed):
+                self.write('.codex/config.toml','model="current"\n')
+                auth=self.write('.codex/auth.json','AUTH-PRIVATE-SECRET')
+                env=self.native_fixture([])
+                read_text=Path.read_text
+                def safe_read(path,*args,**kwargs):
+                    if path == auth:raise AssertionError('禁止读取 auth 正文')
+                    return read_text(path,*args,**kwargs)
+                def query_before_source_change(*args):
+                    if changed == 'auth':auth.write_text('NEW-AUTH-PRIVATE-SECRET')
+                    elif changed == 'provider':self.write('.codex/config.toml','model="new-current"\nmodel_provider="new-provider"\n')
+                    else:self.write('bin/codex','changed executable bytes')
+                    return NativeModels((NativeModel('old-account-visible','旧身份模型',('high',),'high'),))
+                with patch.object(Path,'read_text',safe_read):
+                    with patch('manager.catalog.codex_models.query',side_effect=query_before_source_change) as native:
+                        first=discover('codex',self.home,self.home,env)
+                    self.assertEqual(native.call_count,1)
+                    self.assertEqual([row.id for row in first.models],['inherit'])
+                    self.assertTrue(any('查询期间' in note and '已丢弃' in note for note in first.notes))
+                    with patch('manager.catalog.codex_models.query',side_effect=AssertionError('拒绝后不得自动重查')):
+                        recheck=discover('codex',self.home,self.home,env,_snapshot=first)
+                    self.assertNotIn('old-account-visible',[row.id for row in recheck.models])
+                    self.assertNotEqual(first.stamp,recheck.stamp)
+                    self.assertNotIn('PRIVATE-SECRET',json.dumps(first.as_dict()))
+
+    def test_codex_native_snapshot_rechecks_sources_without_requery_or_auth_read(self):
+        self.write('.codex/config.toml','model="dynamic"\n')
+        auth=self.write('.codex/auth.json','AUTH-PRIVATE-SECRET')
+        self.write('.codex/models_cache.json',{'identity':'before-query'})
+        env=self.native_fixture([{'data':[self.native_row('dynamic')],'nextCursor':None}],cache_identity='after-query')
+        read_text=Path.read_text
+        def safe_read(path,*args,**kwargs):
+            if path == auth:raise AssertionError('禁止读取 auth 正文')
+            return read_text(path,*args,**kwargs)
+        with patch.object(Path,'read_text',safe_read):
+            first=discover('codex',self.home,self.home,env)
+            self.assertEqual([row.id for row in first.models],['inherit','dynamic'])
+            with patch('manager.codex_models.query',side_effect=AssertionError('来源校验不得启动原生进程')):
+                same=discover('codex',self.home,self.home,env,_snapshot=first)
+                self.assertEqual(first.stamp,same.stamp)
+                self.write('.codex/models_cache.json',{'identity':'after-query','models':[{'slug':'unrelated'}]})
+                self.assertEqual(first.stamp,discover('codex',self.home,self.home,env,_snapshot=first).stamp)
+                with patch.dict(os.environ,env,clear=True):
+                    service.ensure_source(first,self.home)
+                    auth.write_text('NEW-AUTH-PRIVATE-SECRET')
+                    with self.assertRaisesRegex(ValueError,'来源'):service.ensure_source(first,self.home)
+                changed=discover('codex',self.home,self.home,env,_snapshot=first)
+                self.assertNotEqual(first.stamp,changed.stamp)
+                self.assertTrue(all(not row.efforts for row in changed.models))
+                self.assertNotIn('PRIVATE-SECRET',json.dumps(changed.as_dict()))
+
+    def test_codex_explicit_catalog_precedes_native_and_provider_changes_reject_snapshot(self):
+        env=self.native_fixture([{'data':[self.native_row('native-only')],'nextCursor':None}])
+        with patch('manager.codex_models.query',side_effect=AssertionError('显式目录不得被 native 合并')):
+            self.write('.codex/config.toml','model_provider="proxy"\nmodel_catalog_json="catalog.json"\n')
+            self.write('.codex/catalog.json',{'models':[{'slug':'proxy-only'}]})
+            self.assertEqual([row.id for row in discover('codex',self.home,env=env).models],['inherit','proxy-only'])
+        self.write('.codex/config.toml','model="native-only"\n')
+        before=discover('codex',self.home,env=env)
+        self.write('.codex/config.toml','model="new-current"\nmodel_provider="new-provider"\n')
+        with patch('manager.codex_models.query',side_effect=AssertionError('失效检测不得重新查询')):
+            after=discover('codex',self.home,env=env,_snapshot=before)
+        self.assertNotEqual(before.stamp,after.stamp)
+        self.assertEqual([row.id for row in after.models],['inherit','new-current'])
 
     def test_deep_json_source_uses_safe_failure_projection(self):
         for host in ('codex','claude'):

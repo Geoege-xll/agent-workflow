@@ -181,6 +181,19 @@ class TuiTest(unittest.TestCase):
         with patch("manager.tui.service.roles",return_value=["xy-qa"]):
             self.app.dispatch("3");self.assertEqual(self.app.role,"xy-qa")
 
+    def test_catalog_scope_reuses_result_and_refresh_reloads_only_current_host(self):
+        other=(str(self.project),"claude")
+        self.app.catalogs[other]=Catalog("claude")
+        refreshed=Catalog("codex",[Model("inherit","继承","native"),Model("dynamic","动态模型","native",("high",))])
+        with patch("manager.tui.discover",side_effect=[self.catalog,refreshed]) as query:
+            self.app.dispatch("enter");self.draw();self.draw()
+            self.app.dispatch("esc");self.app.role_index=1;self.app.dispatch("enter");self.draw()
+            self.assertEqual(query.call_count,1)
+            self.app.dispatch("esc");self.app.dispatch("r");self.app.dispatch("enter");self.draw();self.draw()
+            self.assertEqual(query.call_count,2)
+            self.assertEqual(self.app.catalogs[other].host,"claude")
+            self.assertIn(("动态模型","dynamic"),self.app.options())
+
     def test_removed_role_draft_stays_selectable_and_individually_discardable(self):
         key=self.app.scope();other=(str(self.project),"claude","xy-qa")
         self.app.drafts[key]={"model":"local-model","effort":"high"}

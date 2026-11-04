@@ -416,7 +416,8 @@ class App:
             self.install_project(project,select_after=True)
         elif action == "preview":
             if not self.pending():self.notify("当前项目 / 宿主没有待应用变更");return
-            cached=self.catalog();fresh=discover(self.host,project=self.project) if cached.stamp else cached
+            # 预览复核有效来源而不重新启动 native；r 才替换本项目/宿主拥有的目录快照。
+            cached=self.catalog();fresh=discover(self.host,project=self.project,_snapshot=cached) if cached.stamp else cached
             self.catalogs[(str(self.project),self.host)]=fresh
             if fresh.stamp and any(self.source_stamps.get(self.scope(role)) != fresh.stamp for role in self.pending()):
                 raise ValueError("模型来源或能力已变化；草稿保留，请重新选择模型，或按 u 丢弃当前角色草稿")
@@ -427,6 +428,7 @@ class App:
             self.show_view("preview");self.changes=changes;self.text=text
         elif action == "refresh":
             role=self.role
+            # 丢弃当前 scope 的快照；下一次正常展示只查询一次，不影响其他项目/平台目录。
             self.catalogs.pop((str(self.project),self.host),None);self.roles_cache.pop((str(self.project),self.host),None)
             for cache_key in list(self.settings_cache):
                 if cache_key[:2] == self.scope()[:2]:self.settings_cache.pop(cache_key)

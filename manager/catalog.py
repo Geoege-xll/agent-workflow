@@ -11,6 +11,7 @@ import tomllib
 
 from lib.role_models import EFFORTS, MODEL_ID
 from .claude_execution import project_controls, project_write_scope_guard
+from . import codex_models
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,8 @@ class Catalog:
     stamp: str = ""
     _inputs: list = field(default_factory=list, repr=False)
     execution: dict = field(default_factory=dict)
+    _native: codex_models.NativeModels | None = field(default=None, repr=False)
+    _native_scope: tuple[str, str | None] | None = field(default=None, repr=False)
 
     def as_dict(self) -> dict:
         return {"host":self.host,"models":[asdict(row) for row in self.models],
@@ -74,10 +77,36 @@ def _append(catalog: Catalog, identifier: object, label: object, source: str, le
     catalog.models.append(Model(identifier, clean(label or identifier), clean(source), supported))
 
 
-def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict) -> None:
+def _stat_signal(path: Path) -> tuple | None:
+    """身份文件只取元数据，连同链接目标变化一起守卫，绝不读取 auth 正文或凭据。"""
+    try:
+        link, target = path.lstat(), path.stat()
+        return tuple((item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+                     for item in (link, target))
+    except OSError:
+        return None
+
+
+def _codex_native_scope(catalog: Catalog, directory: Path, cwd: Path, command: str | None) -> tuple[str, str | None]:
+    # 默认缓存只提供不透明身份的失效信号，不能贡献候选；损坏/缺失也不能覆盖 native 成功结果。
+    identity = None
+    try:
+        value = read_data(directory / "models_cache.json").get("identity")
+        if isinstance(value, str) and value:
+            identity = hashlib.sha256(value.encode()).hexdigest()
+    except (OSError, ValueError, TypeError):
+        pass
+    material = {"inputs": catalog._inputs, "cwd": str(cwd.absolute()), "executable": command,
+                "binary": _stat_signal(Path(command)) if command else None,
+                "auth_metadata": _stat_signal(directory / "auth.json")}
+    # 身份/有效来源必须跨查询稳定；cache identity 则允许由本次宿主查询自行刷新。
+    return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest(), identity
+
+
+def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict, snapshot: Catalog | None) -> None:
     directory = Path(env.get("CODEX_HOME", home / ".codex")).expanduser()
     config = read_data(directory / "config.toml", toml=True)
-    keys=("model","model_catalog_json","model_provider","model_reasoning_effort")
+    keys=("model","model_catalog_json","model_provider","model_reasoning_effort","cli_auth_credentials_store")
     layers={key:str((directory/"config.toml").absolute()) for key in keys if key in config}
     local={}
     catalog_directory=directory
@@ -96,10 +125,10 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict) -> Non
     path = Path(explicit).expanduser() if isinstance(explicit, str) else directory / "models_cache.json"
     if not path.is_absolute():
         path = catalog_directory / path
-    # 默认缓存不作为模型证据，也不读取其正文触发无关失效或解析拒绝。
+    # 默认缓存不作为模型证据；只有不透明身份摘要可在 native 快照建立后充当失效信号。
     # 独立 CPA/CC-Switch 目录不能因“文件存在”就混进当前提供方的可选模型。
     # 宿主真实 identity 是不透明字符串摘要，不是可直接读取 model_provider 的对象。
-    # 不读取账户凭据来猜摘要；只有明确配置的目录才作为当前来源与能力证据。
+    # 不读取账户凭据来猜摘要；显式目录沿原有声明层优先，其他目录由原生宿主确认。
     matches = isinstance(explicit,str) and bool(explicit)
     endpoint={};endpoint_layers={}
     # 仅投影当前提供方的有效字段，项目层同名字段覆盖全局，未使用的提供方不参与摘要。
@@ -125,7 +154,38 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict) -> Non
             _append(catalog, row.get("slug", row.get("id")), row.get("display_name"), str(path),
                     [item.get("effort") if isinstance(item, dict) else item for item in levels] if isinstance(levels, list) else [])
     else:
-        catalog.notes.append("默认缓存的身份摘要无法确认当前提供方/账户归属，仅提供继承与当前配置模型；显式模型目录按声明层读取。")
+        cwd = project or Path.cwd()
+        command = codex_models.executable(env)
+        scope = _codex_native_scope(catalog, directory, cwd, command)
+        if snapshot is None:
+            # 只在首次发现或显式刷新时启动进程；保留真实 HOME/配置/提供方与项目信任边界。
+            native_env = dict(env)
+            native_env.setdefault("HOME", str(home))
+            native_env["CODEX_HOME"] = str(directory.absolute())
+            result = codex_models.query(command, cwd, native_env)
+            # 复用已有 _snapshot 路径重新读取有效配置/身份/可执行文件，不启动第二次查询。
+            # 不能把查询期间的新身份绑定给此前返回的旧结果；变化时连配置后备项也保守丢弃。
+            checked = discover("codex", home, project, env, _snapshot=catalog)
+            if checked._native_scope is None or checked._native_scope[0] != scope[0]:
+                raise ValueError("原生目录查询期间身份或有效来源已变化；本次结果已丢弃，请按 r 刷新")
+            # 只有稳定守卫一致，才采用宿主自己更新后的 cache identity，防止快照立即误失效。
+            scope = checked._native_scope
+        elif snapshot.host == "codex" and snapshot._native_scope == scope:
+            result = snapshot._native
+        else:
+            result = None
+        catalog._native, catalog._native_scope = result, scope
+        remember(catalog, {"native_scope": scope})
+        if result is None:
+            catalog.notes.append("原生目录来源已变化；按 r 刷新后重新选择，当前仅保留明确配置。")
+        elif result.failure:
+            catalog.notes.append("Codex 原生目录获取失败：" + result.failure + "；已回退到继承与当前明确配置。")
+        else:
+            remember(catalog, {"native_models": [{"model": row.model, "efforts": row.efforts,
+                                                  "default_effort": row.default_effort} for row in result.models]})
+            for row in result.models:
+                _append(catalog, row.model, row.label, "当前 Codex 原生 app-server model/list", row.efforts)
+            catalog.notes.append("目录来自当前 Codex 原生 model/list；按 r 重新获取，默认缓存不提供候选模型。")
         if path.is_file():catalog.inactive.append(clean(str(path))+"（缓存归属未确认）")
     _append(catalog, config.get("model"), config.get("model"), "当前 Codex 配置；推理能力待确认")
     selected=next((row for row in catalog.models if row.id == config.get("model")),None)
@@ -137,7 +197,7 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict) -> Non
         for alternative in sorted(directory.glob("*model*catalog*.json"))[:20]:
             if alternative != path:
                 catalog.inactive.append(clean(str(alternative)) + "（未被当前配置引用）")
-    catalog.notes.append("目录可见不等于调用成功；不请求上游服务。ultra 涉及自动委派，不提供该选项。")
+    catalog.notes.append("目录可见不等于推理调用成功；未启动推理会话。ultra 涉及自动委派，不提供该选项。")
 
 
 def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> None:
@@ -216,13 +276,14 @@ def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> No
     catalog.notes.append("以上为普通本地设置投影；组织策略、调用时覆盖及运行中会话值未核验。角色 model: inherit 高于普通子 Agent 默认模型。")
 
 
-def discover(host: str, home: Path | None = None, project: Path | None = None, env: dict | None = None) -> Catalog:
+def discover(host: str, home: Path | None = None, project: Path | None = None, env: dict | None = None,
+             *, _snapshot: Catalog | None = None) -> Catalog:
     home = home or Path.home()
     env = dict(os.environ) if env is None else env
     catalog = Catalog(host, [Model("inherit", "继承宿主配置", "宿主原生继承")])
     try:
         if host == "codex":
-            _codex(catalog, home, project, env)
+            _codex(catalog, home, project, env, _snapshot)
         elif host == "claude":
             _claude(catalog, home, project, env)
         elif host == "antigravity":
