@@ -30,6 +30,9 @@ Light 使用当前单任务包、默认原生实施者及最小充分验证；�
 原型阶段由设计 Agent 三维自检并经用户最终确认，不进入独立原型 QA；下述统一 QA 仍审查
 生产实现的功能、适用内置规则、项目特有规范与真实证据。项目索引物理不存在但无特有叶时，
 按配置路径及 null 指纹绑定，不为 QA 新建 GENERAL/空索引或重复通用规则。
+需求审阅 HTML 由唯一 Markdown 投影；实施者消费完整当前原稿/任务包，无需预载整份 HTML。
+QA 按 [需求 HTML 交付](../../xy-plan/references/requirement-html.md) 核对受影响页新鲜度和
+本稿实际原型引用，复用有效证据；不重扫原型树、增加批准或独立原型 QA。
 
 ### Execution and acceptance
 

@@ -1,0 +1,25 @@
+{
+  "repository": "https://github.com/QingYunA/answer-me-with-html",
+  "commit": "46fc8e8fc0edcdebfad8227d1eb849ca34e13fdc",
+  "version": "0.5.10",
+  "node": ">=20",
+  "files": {
+    "am.mjs": {
+      "upstream_path": "skills/answer-me-with-html/scripts/am.mjs",
+      "git_blob": "77be2073ff6ecaa3e20f73c4d10e7a28a19c942a",
+      "size": 1024470,
+      "sha256": "c98ee6480fededc57b67ef160b348e915068b92aa10ad33fc1a17ff4e612ef83"
+    },
+    "LICENSE": {
+      "upstream_path": "LICENSE",
+      "git_blob": "17eca290eefa4fa9d5594edcad845be8df899eb0",
+      "sha256": "752a1a34b40ae8e64e86f546ec699a691aff573179e1f96997e82757b2ee5d3f"
+    },
+    "OFL-Bangers.txt": {
+      "upstream_path": "skills/answer-me-with-html/licenses/OFL-Bangers.txt",
+      "git_blob": "4db15c822a57083086037bc9c84d1f4fe4eef8f1",
+      "sha256": "09ef36fcae68a2ba21cc319fd44c09ba40f43163076bcafc14fdfe4cc033e7a2"
+    }
+  },
+  "policy": "原样 bundled CLI 与附带声明；窄适配仅调用 render，不安装上游 Skill、全局配置或后台更新。MIT 与字体 OFL 原文随包保留。"
+}

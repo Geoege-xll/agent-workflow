@@ -27,6 +27,9 @@ plan_state: draft
 - This draft Skill does not persist files. After requirements approval PM saves Full plans under
   adapter-resolved `docs.plans` before first dispatch, following
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
+- Full 需求正式审阅使用单一 Markdown 的 HTML 投影；PM 负责批准前 scratch 草案及批准后
+  同名 `.md`/`.html` 保存，详见 [需求 HTML 交付](references/requirement-html.md)。本 Skill
+  仍只返回草案；用稳定 REQ 编号预留具体原型页/状态覆盖，不能把页面状态当作批准。
 
 ## Drafting procedure
 
@@ -89,3 +92,4 @@ unless requested. The PM, not this Skill, decides projection, resolves user choi
 approved plan and dispatches.
 
 <!-- workflow-contract: references/task-graph.md -->
+<!-- workflow-contract: references/requirement-html.md -->

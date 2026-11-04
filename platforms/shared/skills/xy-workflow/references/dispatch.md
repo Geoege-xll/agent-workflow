@@ -232,7 +232,9 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    Antigravity CLI: `/xy-plan`). It returns a self-contained proposal with `plan_state: draft`,
    exact paths, interfaces, task packs, verification commands and expected results, semantic locks,
    and a machine-readable `task_graph`. The graph is internal scheduler input, not user-visible
-   output. `xy-plan` does not edit files or dispatch Agents.
+   output. `xy-plan` does not edit files or dispatch Agents. PM 按
+   [需求 HTML 交付](../../xy-plan/references/requirement-html.md) 在本请求 scratch 渲染唯一
+   Markdown 草案供 Full 正式审阅；尚未批准时不写入正式 plans。
 7. The PM reviews the draft and decides the post-QA controlled-document projection:
 
    ```yaml
@@ -259,7 +261,7 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    implementation tasks consume that frozen contract directly. A material requirement,
    affected-surface, or plan-boundary change returns the plan to draft and reopens approval.
    The PM now saves the Full plan in adapter-resolved `docs.plans`, before any design/implementation
-   dispatch. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
+   dispatch, then renders its same-name HTML from the single Markdown. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
    write PROJECT/feature truth just to save intended work. Merge subsequent effective changes into
    this same plan and replace affected complete Task Packs, including in-flight worker/QA inputs,
    before accepting their results. Preserve unaffected work; apply the linked plan lifecycle.

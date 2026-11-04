@@ -115,7 +115,7 @@ Current facts, historical decisions, design evidence, and working memory must re
 |---|---|---|
 | Project entry | `project.yaml` -> `docs.project` (also `memory.portable_checkpoint`) | Store the current verified project directory and active feature links; no task state, chronology, or arbitrary size cap |
 | Feature truth and rationale | `project.yaml` -> `docs.features` | Current requirements, acceptance, functional/architectural solution and necessary reasons; shared architecture has one detail here; no separate ADR or chronology; `*.removed.md` is historical only |
-| Requirement plans | `project.yaml` -> `docs.plans` | Decided changes and concise recoverable progress, saved by task level; not current implemented truth |
+| Requirement plans | `project.yaml` -> `docs.plans` | One editable Markdown and same-name derived HTML; decided changes/recovery, not current implemented truth |
 | Other current facts | `project.yaml` -> remaining `docs.*` paths | Store currently effective engineering, design-system, and UI evidence; paths are an index, not an instruction to preload every file |
 | Active UI contract | `project.yaml` -> `docs.standards_root/prototype` | Keep stable interactive pages, their in-page contracts, and shared prototype CSS; approval remains in workflow task state |
 | Working memory | agentmemory | Optional cross-session observation and retrieval hints; it must never be the sole carrier of mandatory rules |
@@ -405,6 +405,16 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   pending. Later effective changes update the same plan and affected complete Task Packs before
   dispatch. Existing running workers and QA must acknowledge their updated scope before their results
   can satisfy it; preserve unaffected completed work and approvals.
+- Full 正式需求审阅使用 HTML，模型只维护一份 Markdown。批准前 PM 可把工作草案放入当前
+  请求 scratch 并渲染；批准后保存 `docs.plans/<name>.md` 并生成同名 `.html`。详细调用、
+  受控语法、草案链接基准和原子发布边界只在
+  `.agent-workflow/platforms/shared/skills/xy-plan/references/requirement-html.md` 维护。
+  Light 按复杂度/用户要求选用，不因渲染增加 Full 计划或 QA。页面存在、勾选、复制原稿和
+  check 均不产生需求批准、原型选择或视觉批准。设计 Agent 在原交接返回稳定 REQ 编号到
+  具体原型页/实际状态锚点的覆盖，PM 写回同一原稿并重渲染；不新增映射报告或原型独立 QA。
+  HTML 新鲜度、requirements_fingerprint 和原型依赖指纹职责分开；纯进度/链接/呈现变化
+  不自动重开需求批准。实施者仍取得完整当前 Markdown/任务包。已完成计划及 HTML 保持
+  历史边界，当前已验收事实仍只属于 features/PROJECT。
 - The PM must not inventory or manually enumerate locally installed specialist Skills. Task packs
   declare only mandatory `required_skills` and task-fact `audit_surfaces`; Codex matches installed
   Skills on demand from their descriptions.

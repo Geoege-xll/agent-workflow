@@ -39,6 +39,9 @@ integration, packaging, signing, notarization, updater and release evidence.
 当前恢复／交接简报是否原地反映剩余工作、并以可恢复引用保留必要完成基线，按
 `xy-workflow/references/plan-lifecycle.md` 核对，不以累加完成批次代替当前状态。
 清理执行仍由 PM 按现有收口合同完成，QA 不删除资源，也不为收口再审未变范围。
+需求 HTML 相关交付按 [唯一原稿方法](../../xy-plan/references/requirement-html.md) 检查当前
+Markdown/同名 HTML 新鲜度及本稿实际引用的原型页/锚点；复用仍有效的检查，不预载整份
+HTML 或原型依赖树。页面/勾选/check 成功不产生批准；历史 plans/HTML 不成为当前功能真相。
 
 ## Independent standards coverage
 

@@ -19,7 +19,7 @@ its row and rename its detail document to `<feature>.removed.md` in `{{DOC_FEATU
 ## Controlled documents
 
 - Feature details and current architectural rationale: `{{DOC_FEATURES_DIR}}/`
-- Requirement plans (intended changes, not implemented facts): `{{DOC_PLANS_DIR}}/`
+- Requirement plans (唯一可编辑 `.md` + 同名派生 `.html`；意图/恢复及历史，非当前功能事实): `{{DOC_PLANS_DIR}}/`
 - 项目特有规范索引（存在时）：`{{DOC_STANDARDS}}`；通用工程/UI 规则来自内置 `xy-code-standards` / `xy-ui-design`。
 - Prototype evidence, when configured: `{{DOC_DESIGN_DIR}}/prototype/`
 - Optional memory fallback: `{{DOC_NOTES_DIR}}/`

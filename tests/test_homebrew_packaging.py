@@ -50,6 +50,7 @@ class ReleaseArchiveTest(unittest.TestCase):
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         self.assertEqual(checksum.read_text(), f"{digest}  {archive.name}\n")
         self.assertIn(f'sha256 "{digest}"', formula.read_text())
+        self.assertIn('depends_on "node"', formula.read_text())
         self.assertIn("/releases/download/v0.1.0/agent-workflow-0.1.0.tar.gz", formula.read_text())
         self.assertNotIn("@VERSION@", formula.read_text())
         with tarfile.open(archive) as stream:
@@ -215,6 +216,11 @@ class HomebrewLauncherTest(unittest.TestCase):
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         for name in (*release.RELEASE_FILES, *release.RELEASE_DIRECTORIES):
             self.assertTrue((self.prefix / "libexec" / name).exists(), name)
+        # 真实归档与 Formula 安装后的消费者必须持有同一 helper、原样引擎和许可证。
+        for relative in ("lib/requirement_html.py", "lib/vendor/answer-me-with-html/am.mjs",
+                         "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt",
+                         "platforms/shared/skills/xy-plan/references/requirement-html.md"):
+            self.assertEqual((self.prefix / "libexec" / relative).read_bytes(), (PACK / relative).read_bytes())
         result = self.run_cli("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(result.stdout.startswith("usage: awf-cli"))

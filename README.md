@@ -490,6 +490,13 @@ decision log. Replace obsolete explanations in place.
 request; Full is saved by PM after requirements confirmation (including applicable prototype choice)
 and before first design/implementation dispatch. Saving Light does not invoke Full planning Skills.
 One independent requirement owns one plan, updated in place for effective visual changes or QA rework.
+
+Full 正式需求审阅使用 HTML：模型只维护 `docs.plans/<name>.md`，同目录 `.html` 由固定
+`answer-me-with-html` CLI 生成。批准前草案只放当前请求 scratch；批准后保存正式原稿再生成。
+需求用稳定 REQ 编号链接具体原型页/状态，设计交接后 PM 写回同一原稿并重渲染；页面状态
+不构成批准，历史 MD/HTML 不成为当前功能真相。用法、受控语法及草案链接基准见
+[需求 HTML 交付](platforms/shared/skills/xy-plan/references/requirement-html.md)。适配器需现有
+Node.js >= 20，三个宿主共用安装态 `lib/requirement_html.py`，无需安装上游 Skill 或全局依赖。
 PM replaces affected complete worker/QA inputs and reuses unaffected verified work; a recorded status
 alone cannot revive approval or prove completion. See
 [plan lifecycle](platforms/shared/skills/xy-workflow/references/plan-lifecycle.md).
@@ -787,7 +794,7 @@ Every host setup and `setup_all.sh` creates only missing or empty current-profil
 | `docs/standards/DESIGN_*.md` | 实际采用的项目设计值、组件变体与平台差异；无差异不创建 |
 | `docs/PROJECT.md` | Current verified project directory and active feature links |
 | `docs/features/` | Current detailed feature truth; `*.removed.md` is historical only |
-| `docs/plans/` | Lazy PM-owned plans by task level, not placeholder files or implemented feature truth |
+| `docs/plans/` | Lazy PM-owned Markdown + same-name derived HTML; intended changes/recovery/history, not feature truth |
 | `docs/standards/prototype/` | Lightweight `index.html`, `prototype.css`, and direct `<page>.html`; resource directories only when needed |
 
 `templates/docs/FEATURE.md` is the PM-owned shape for a newly approved feature document. The legacy

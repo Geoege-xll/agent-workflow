@@ -14,6 +14,12 @@ applicable project constraints and permission boundaries still apply.
   current plan under adapter-resolved `docs.plans` before the first design or implementation dispatch.
   xy-plan still only drafts; PM owns persistence. Do not wait for visual approval to save the plan.
 
+Full 正式审阅用 HTML：批准前由 PM 在当前请求 scratch 形成唯一 Markdown 草案并渲染；
+批准后才保存 `docs.plans/<name>.md` 并生成同名 `.html`。Markdown 是唯一编辑权威，
+变动后在同路径重渲染；具体命令、草案链接基准与失败保护见
+[需求 HTML 交付](../../xy-plan/references/requirement-html.md)。Light 按已有保存/复杂度/用户
+要求选用，不因生成 HTML 升级流程。页面、勾选或新鲜度检查均不产生批准。
+
 One independent requirement has one plan. Multiple independent requirements may have separate plans;
 subagent tasks, visual iterations and QA rework do not create additional plans. Continue an existing
 unfinished requirement in its existing file when relevant. An unrelated small fix to a previously
@@ -57,6 +63,9 @@ PM is the sole plan writer. Workers and QA return scoped results/evidence; they 
 plan. Update on meaningful decisions, completed deliverables, blockers, rework or pause/handoff, not
 every tool call. Preserve an accurate checkpoint during long work; do not rely solely on a final save
 that may never run. File persistence does not imply permission to commit, publish, or execute it.
+设计 Agent 在原交接返回 REQ 编号到具体原型页/实际状态锚点的覆盖，PM 写回这份原稿并
+重渲染；不另建映射表文件或原型 QA。纯进度/链接/呈现变化不自动重开需求批准，
+HTML 字节新鲜度、requirements_fingerprint 和原型依赖指纹分别保持原职责。
 
 ## Visual iteration and task replacement
 
@@ -179,5 +188,6 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
   cancelled plans remain non-current work, never evidence that implementation exists.
 - Keep completed plans available as historical execution context, clearly marked and not dispatched
   by default. Do not auto-delete user plans or create a growing recap in PROJECT.
+- 同名 HTML 与计划一起保持历史边界，不能继续充当第二份当前功能规范。
 - Standards adoption keeps its existing lifecycle. Plan writes alone do not trigger feature,
   STANDARDS, PROJECT or agentmemory updates; evaluate each actual change separately.

@@ -115,6 +115,17 @@ bootstrap 及其部署依赖不留在 npx 缓存；项目运行辅助命令和 H
 node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/project_profile_cli.py check-roles codex .agent-workflow .
 ```
 
+需求 HTML 使用同一持久 Python 与现有 Node 22，无需全局 npm 依赖：
+
+```powershell
+node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
+node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/requirement_html.py check --project . --source docs/plans/change.md
+```
+
+`docs.plans` 按项目配置替换；模型只改 Markdown，HTML 同名派生。草案、原型链接和安全
+边界见 [需求 HTML 方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)。
+源码/载荷验证与 macOS 实测不冒充原生 Windows 运行验收。
+
 其他文档中的 `bash .agent-workflow/lib/python_runtime.sh` 可在 Windows 替换成
 `node .agent-workflow/lib/python_runtime.cjs`，后续参数保持不变；inline Python 的 stdin
 须使用当前 shell 的语法，不能把 Bash heredoc 原样放进 PowerShell。helper 读取受管的

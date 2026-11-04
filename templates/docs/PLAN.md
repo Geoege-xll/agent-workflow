@@ -2,6 +2,9 @@
 
 > PM-owned current execution plan. Update this file in place; do not record conversation or command
 > logs. This is intended change and resumable work, not verified feature truth or automatic approval.
+> 本 Markdown 是唯一编辑原稿；Full 正式审阅使用同名派生 HTML，修改后在原路径重渲染。
+> 批准前仅在请求 scratch 渲染草案；页面勾选/存在/check 不构成批准。调用见 xy-plan 的
+> references/requirement-html.md；完成后的 MD/HTML 保持历史边界。
 
 - Task level: Full | Light
 - Status: active | paused | completed | cancelled
@@ -33,3 +36,6 @@ and applicable verification. A Light recovery note needs only the information ne
 
 <When relevant: exact approved prototype pages, scope, approval reference and dependency fingerprint.
 After completion: verified feature/result references. Do not keep a second current feature specification here.>
+
+<需要时在本稿使用稳定 REQ 编号、验收条件、具体原型页及实际状态锚点的普通 Markdown 链接。
+设计 Agent 通过原交接返回覆盖，PM 写回此处再渲染；不另建映射/批准报告。>

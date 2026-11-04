@@ -49,6 +49,10 @@ Existing user confirmation stages are unchanged; adopted design rules do not imp
 Use `.agent-workflow/product/WORKFLOW.md` as the canonical product procedure and
 `.agent-workflow/project.yaml` as the project adapter.
 
+Full 需求以 HTML 正式审阅，模型只维护一份 Markdown；PM 按
+[需求 HTML 交付](../xy-plan/references/requirement-html.md) 处理批准前 scratch 草案、批准后
+plans 同名 `.md`/`.html` 与原型覆盖回写。HTML 新鲜度不创建批准，也不替代需求/原型指纹。
+
 Use host-native aliases only when explicit activation is needed. Examples:
 `xy-project-memory` (Codex: `$xy-project-memory`; Claude Code: `/xy-project-memory`;
 Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
