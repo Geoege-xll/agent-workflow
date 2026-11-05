@@ -659,6 +659,11 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
         ) + STRICT_MEMORY_FIELDS:
             if phrase not in body:
                 errors.append(f"xy-project-memory missing contract phrase: {phrase}")
+        # 不允许同步后的旧 Skill 与新配置一起通过检查；文档降级只归入既有主题/规范，
+        # 不能重新启用长期 notes 写入口或把已退役字段当作可选兼容别名。
+        for retired in ("memory.fallback_dir", "docs.notes", "fallback_note:"):
+            if retired in body:
+                errors.append(f"xy-project-memory retains retired notes contract: {retired}")
 
     qa = skill_source(pack, "xy-qa-review")
     if qa.is_file():

@@ -40,7 +40,7 @@ workflow task state; memory can reference its current evidence but cannot grant 
 ## Adapter and strict capability gate
 
 Read `memory.provider`, `memory.mode`, `memory.isolation`, `memory.project_id`,
-`memory.portable_checkpoint`, and `memory.fallback_dir` from `project.yaml`. Resolve all paths from
+and `memory.portable_checkpoint` from `project.yaml`. Resolve all paths from
 the adapter instead of assuming machine-specific locations.
 
 Worktrees of one logical project retain this same project ID; a different checkout path is not a new
@@ -61,7 +61,7 @@ Run this section only after the PM identifies a concrete missing fact or histori
    verify current feature truth. Open only task-relevant topic plans authorized by
    `controlled_document_access`; never preload the complete `docs.plans` tree or all other
    `docs.*` paths.
-2. Search task-relevant topic plans and shared architectural rationale, concrete prototype pages, or the configured fallback location only
+2. Search task-relevant existing topic plans, applicable existing project-standard sections, and concrete prototype pages only
    when the missing fact can reasonably be answered there.
 3. Query agentmemory only when cross-session or historical recall is materially needed. Apply the
    strict capability gate first; only on success, run project-filtered `memory_smart_search`, and use
@@ -136,10 +136,11 @@ Light只执行实际评估需要的投影／记忆，不把局部验证写成QA�
   truthful current scoped evidence. If the capability gate fails, call neither recall nor save.
 - Report `prototype_refs` only when concrete page references actually changed. A page reference is
   not an approval record and must not copy page-contract content into memory.
-- If strict provider use is unavailable and a reusable conclusion matters, write one distilled
-  note only under the authorized `memory.fallback_dir`.
-- Fallback notes contain no secrets, credentials, PII, raw user data, complete logs, or absolute
-  user paths.
+- 严格 provider 不可用时，PM 仅将确有长期价值的结论原地归入已有相关主题稿，或经实际适用性
+  与批准核对后归入已有项目规范章节；没有合适既有归属则在当前交接中保留待决依据，不新建杂记
+  目录、替代 notes、空索引或占位主题，不把每条经验自动升级为强制规范。
+- 长期正文只保留必要结论和可恢复证据引用；完整日志与原始批准留在本请求既有证据位置，
+  不写入秘密、凭据、PII、原始用户数据、完整日志或用户绝对路径。
 - Record only actions that occurred in the internal closeout handoff:
 
   ```yaml
@@ -148,7 +149,6 @@ Light只执行实际评估需要的投影／记忆，不把局部验证写成QA�
     project_updated: false
     plans_updated: []
     prototype_refs: []
-    fallback_note:
   ```
 
 The PM must not emit raw `memory_projection` YAML. The final user report mentions only a real

@@ -335,23 +335,18 @@ def run_renderer(stage: Path, markdown: bytes) -> bytes:
         raise RequirementHtmlError("无法取得 Node 版本，原稿和原 HTML 保留") from None
 
 
-def process(action: str, project: Path, source_raw: str, request_id: str | None = None,
-            *, draft: bool = False) -> dict:
-    root, source, body, before_identity, base, prototype = resolve_inputs(project, source_raw, draft, request_id)
+def render_candidate(root: Path, source: Path, body: bytes, base: Path, prototype: Path,
+                     request_id: str, *, draft: bool = False) -> bytes:
+    """只在当前请求 scratch 渲染候选字节，绝不发布/替换原稿或正式 HTML。
+
+    普通投影和多文件迁移共用相同输入校验、固定渲染器、隔离环境与版本记录。
+    调用者保有原稿/页面前像，并在自己的条件发布边界重新核对；这里不假定跨文件
+    原子性，也不让迁移先写 Markdown 再以补渲染掩盖失败或覆盖用户原页。
+    """
     staged = stage_markdown(body, root, source, base, prototype)
     binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
                "draft": draft}
     expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity()}
-    target = source.with_suffix(".html")
-    old, target_identity = snapshot(target, required=False)
-    if old is not None:
-        record, _ = page_record(old, binding)
-        if all(record.get(key) == value for key, value in expected.items()):
-            if snapshot(source) != (body, before_identity) or snapshot(target) != (old, target_identity):
-                raise RequirementHtmlError("检查期间原稿或目标被并发修改")
-            return {"status": "fresh", "source": str(source), "html": str(target), "rendered": False}
-    if action == "check":
-        raise RequirementHtmlError("需求 HTML 缺失或已过期，请对同一 Markdown 执行 render")
     if not request_id:
         raise RequirementHtmlError("render 必须提供 --request-id")
     scratch = Path(scratch_workspace(root, request_id)["scratch_dir"])
@@ -365,15 +360,35 @@ def process(action: str, project: Path, source_raw: str, request_id: str | None 
             pass
     with directory_lock(stage, "requirement-html"):
         html = run_renderer(stage, staged)
-        # 生成期间原稿/正式目标发生任何节点或字节变化都拒绝发布；绝不修改原稿。
-        # publish 继续复用既有协作锁、旧摘要条件和同目录原子替换，不另造文件协议。
-        if snapshot(source) != (body, before_identity) or snapshot(target, required=False) != (old, target_identity):
-            raise RequirementHtmlError("生成期间原稿或目标被并发修改，原稿和原 HTML 保留")
         expected["html_sha256"] = digest(html)
         # 路径属于外部输入；转义尖括号，避免特殊文件名提前结束 HTML 注释。
         header = json.dumps(expected, ensure_ascii=True, sort_keys=True).replace("<", "\\u003c").replace(">", "\\u003e")
-        page = MARKER + header.encode() + b" -->\n" + html
-        publish(target, page, "missing" if old is None else digest(old))
+        return MARKER + header.encode() + b" -->\n" + html
+
+
+def process(action: str, project: Path, source_raw: str, request_id: str | None = None,
+            *, draft: bool = False) -> dict:
+    root, source, body, before_identity, base, prototype = resolve_inputs(project, source_raw, draft, request_id)
+    stage_markdown(body, root, source, base, prototype)
+    binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
+               "draft": draft}
+    expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity()}
+    target = source.with_suffix(".html")
+    old, target_identity = snapshot(target, required=False)
+    if old is not None:
+        record, _ = page_record(old, binding)
+        if all(record.get(key) == value for key, value in expected.items()):
+            if snapshot(source) != (body, before_identity) or snapshot(target) != (old, target_identity):
+                raise RequirementHtmlError("检查期间原稿或目标被并发修改")
+            return {"status": "fresh", "source": str(source), "html": str(target), "rendered": False}
+    if action == "check":
+        raise RequirementHtmlError("需求 HTML 缺失或已过期，请对同一 Markdown 执行 render")
+    page = render_candidate(root, source, body, base, prototype, request_id, draft=draft)
+    # 候选准备完成后再复核原稿与原页；publish 继续以旧摘要条件原子替换，
+    # 多文件迁移则直接消费候选字节并由既有文档事务统一发布，不调用本入口补渲染。
+    if snapshot(source) != (body, before_identity) or snapshot(target, required=False) != (old, target_identity):
+        raise RequirementHtmlError("生成期间原稿或目标被并发修改，原稿和原 HTML 保留")
+    publish(target, page, "missing" if old is None else digest(old))
     return {"status": "fresh", "source": str(source), "html": str(target), "rendered": True}
 
 

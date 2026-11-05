@@ -53,14 +53,13 @@ MEMORY_KEYS = {
     "project_id",
     "qa_requires_provider",
     "portable_checkpoint",
-    "fallback_dir",
 }
 CANONICAL_DOC_FILE_KEYS = {
     "standards",
     "project",
 }
 UI_DOC_FILE_KEYS: set[str] = set()
-CANONICAL_DOC_DIR_KEYS = {"standards_root", "plans", "notes"}
+CANONICAL_DOC_DIR_KEYS = {"standards_root", "plans"}
 DOC_FILE_KEYS = CANONICAL_DOC_FILE_KEYS | UI_DOC_FILE_KEYS
 DOC_DIR_KEYS = CANONICAL_DOC_DIR_KEYS
 DOC_KEYS = DOC_FILE_KEYS | DOC_DIR_KEYS
@@ -173,8 +172,9 @@ def validate_docs(lines: list[str], root: Path, errors: list[str]) -> dict[str, 
             continue
         seen.add(key)
         if key not in DOC_KEYS:
+            # 旧目录仅由显式单次迁移解释；运行时拒绝别名，防止安装继续产生杂记入口。
             hint = ("; use migrate_project_docs.py with an explicit mapping before reinstalling"
-                    if key == "features" else "")
+                    if key in {"features", "notes"} else "")
             errors.append(f"unsupported docs key: {key}{hint}")
             continue
         if not value:
@@ -187,7 +187,6 @@ def validate_docs(lines: list[str], root: Path, errors: list[str]) -> dict[str, 
     required = CANONICAL_DOC_FILE_KEYS | {
         "standards_root",
         "plans",
-        "notes",
     }
     missing = sorted(required - docs.keys())
     if missing:
@@ -416,11 +415,23 @@ def validate_with_profile(
     yaml_path: str | PathLike[str],
     project_root: str | PathLike[str],
     roles_dir: str | PathLike[str],
+    *,
+    config_bytes: bytes | None = None,
 ) -> ValidationResult:
+    """校验真实适配器或调用方已捕获的实际正文，所有后续语义检查完全共用。
+
+    config_bytes 仅解决中央无写入预览中新生成配置尚未落盘的边界；不改变默认
+    文件读取方式，也不豁免项目输出路径的符号/硬链接、退役旧键等原检查。
+    显式字节输入必须有界且为 UTF-8，调用方负责其文件前像/事务条件。
+    """
     yaml_path = Path(yaml_path)
     project_root = Path(project_root)
     roles_dir = Path(roles_dir)
-    if os.name == "nt":
+    if config_bytes is not None:
+        if not isinstance(config_bytes, bytes) or len(config_bytes) > 1024 * 1024:
+            raise ValueError("config_bytes 必须是不超过 1 MiB 的原始配置字节")
+        text = config_bytes.decode("utf-8", errors="strict")
+    elif os.name == "nt":
         if __package__:
             from .windows_fs import read_file
         else:
@@ -483,7 +494,9 @@ def validate_with_profile(
             continue
         seen_memory_keys.add(key)
         if key not in MEMORY_KEYS:
-            errors.append(f"unsupported memory key: {key}")
+            hint = ("; use migrate_project_docs.py with an explicit notes mapping before reinstalling"
+                    if key == "fallback_dir" else "")
+            errors.append(f"unsupported memory key: {key}{hint}")
             continue
         memory[key] = value.strip('"\'')
     required_memory = set(MEMORY_KEYS)
@@ -517,25 +530,17 @@ def validate_with_profile(
             errors.append(f"discovered role has no canonical role file: {role}")
     docs = validate_docs(lines, root, errors)
     checkpoint = memory.get("portable_checkpoint")
-    fallback_dir = memory.get("fallback_dir")
-    for key, value in (
-        ("portable_checkpoint", checkpoint),
-        ("fallback_dir", fallback_dir),
-    ):
-        if value is None:
-            continue
-        relative = Path(value)
+    if checkpoint is not None:
+        relative = Path(checkpoint)
         resolved = (root / relative).resolve()
         if (
             relative.is_absolute()
             or ".." in relative.parts
             or not resolved.is_relative_to(root)
         ):
-            errors.append(f"memory.{key} must stay within project root: {value}")
+            errors.append(f"memory.portable_checkpoint must stay within project root: {checkpoint}")
     if checkpoint is not None and checkpoint != docs.get("project"):
         errors.append("memory.portable_checkpoint must match docs.project")
-    if fallback_dir is not None and fallback_dir != docs.get("notes"):
-        errors.append("memory.fallback_dir must match docs.notes")
 
     orchestration: dict[str, int] = {}
     for raw in section_lines(lines, "orchestration"):

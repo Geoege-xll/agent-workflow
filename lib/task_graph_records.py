@@ -25,10 +25,14 @@ try:
     from .agent_continuation import active as _running, check_binding
     from .claude_instructions import read_file
     from .task_graph import TaskGraphError
+    from .runtime_pins import project_root, read_builtin_source, record_binding
+    from .standard_paths import builtin_source_path
 except ImportError:
     from agent_continuation import active as _running, check_binding
     from claude_instructions import read_file
     from task_graph import TaskGraphError
+    from runtime_pins import project_root, read_builtin_source, record_binding
+    from standard_paths import builtin_source_path
 
 
 SET_FIELDS = frozenset({
@@ -188,9 +192,21 @@ def file_digest(root: Path, relative: str) -> str:
     return hasher.hexdigest()
 
 
+def document_digest(root: Path, relative: str, *, binding: dict | None = None) -> str:
+    """受控文档才可读取固定内置源，普通指纹 API 保持项目根和链接拒绝边界。
+
+    判断顺序必须先做精确内置来源分类；不能凭 .agent-workflow 前缀、项目软链或
+    外部 core_root 获得读取权限。项目索引、专项叶及其他文档仍使用 file_digest。
+    """
+    project_root(root)
+    if binding is not None and builtin_source_path(relative) is not None:
+        return digest(read_builtin_source(binding, relative))
+    return file_digest(root, relative)
+
+
 def fingerprints(root: Path, manifest: Any, selected: list[str]) -> dict[str, Any]:
     """列表生成指纹，已有映射核对指纹；可直接选择既有回执字段而无需改写回执。"""
-    root = root.resolve(strict=True)
+    root = project_root(root)
     if selected:
         document = _object(manifest, "fingerprint receipt")
         manifest = {}
@@ -247,6 +263,8 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
            validate: Callable[[str, dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
     """只更新明确选定的现有任务；批准、依赖、角色和 QA 策略不由本工具改写。"""
     patch = _object(patch, "update patch")
+    # update 从原记录读取 pin，补丁白名单不允许添加／替换它；刷新也不能偷用项目当前版。
+    binding = record_binding(payload, root=root)
     if set(patch) - {"tasks", "capacity", "refresh_documents", "integrations"}:
         raise TaskGraphError("update patch supports only tasks, capacity, refresh_documents and integrations")
     result = copy.deepcopy(payload)
@@ -317,7 +335,7 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         matches = [doc for task in result["tasks"] for doc in _documents(task) if doc["path"] == name]
         if not matches:
             raise TaskGraphError(f"no existing controlled-document reference: {name}")
-        value = file_digest(root.resolve(strict=True), name)
+        value = document_digest(project_root(root), name, binding=binding)
         for doc in matches:
             doc["content_fingerprint"] = value
     if "capacity" in patch:

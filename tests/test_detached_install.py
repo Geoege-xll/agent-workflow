@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -309,143 +310,33 @@ class DetachedInstallTest(unittest.TestCase):
             self.assertTrue((project / ".agent-workflow/setup_all.sh").is_file())
             self.assertEqual([], list(project.glob(".agent-workflow-failed-*")))
 
-    def test_terminal_drag_install_survives_source_removal(self) -> None:
-        """拖入带空格的目录后，三平台产物只依赖项目内隐藏运行时。"""
-
-        with tempfile.TemporaryDirectory(prefix="workflow-detached-install-") as raw:
-            workspace = Path(raw)
-            source = workspace / "downloaded workflow pack"
+    def test_terminal_drag_install_uses_central_runtime(self) -> None:
+        """真实公共交互入口生成薄桥和中央链接；可删除来源的执行证据由桥测试复用。"""
+        from lib import runtime_store
+        from manager import runtime_service
+        with tempfile.TemporaryDirectory(prefix="workflow-central-install-") as raw:
+            workspace = Path(raw).resolve()
             project = workspace / "Project With Spaces"
-            shutil.copytree(
-                PACK,
-                source,
-                ignore=shutil.ignore_patterns("tests", "__pycache__", "*.pyc"),
-            )
+            state = workspace / "state"
             project.mkdir()
-            (project / "package.json").write_text(
-                '{"name":"detached-fixture","dependencies":{"react":"19"},'
-                '"scripts":{"build":"echo build"}}\n',
-                encoding="utf-8",
-            )
-            (project / "src").mkdir()
-            (project / "src/App.jsx").write_text(
-                "export function App() { return null; }\n", encoding="utf-8"
-            )
-            source_config = (source / "project.yaml").read_bytes()
-
-            # 终端拖入目录通常粘贴反斜杠转义的空格；通过 stdin 验证交互入口。
+            source_config = (PACK / "project.yaml").read_bytes()
             dragged = str(project).replace(" ", "\\ ") + "\n"
-            installed = subprocess.run(
-                ["bash", str(source / "install.sh")],
-                input=dragged,
-                text=True,
-                capture_output=True,
-                cwd=workspace,
-                check=False,
-            )
-            self.assertEqual(0, installed.returncode, installed.stdout + installed.stderr)
-
+            result = subprocess.run(["bash", str(PACK / "install.sh"), "--state-dir", str(state)],
+                                    input=dragged, text=True, capture_output=True,
+                                    cwd=workspace, timeout=60)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             runtime = project / ".agent-workflow"
+            self.assertTrue((runtime / "runtime.py").is_file())
+            self.assertFalse((runtime / "product").exists())
+            self.assertFalse((runtime / ".install-manifest.json").exists())
+            self.assertEqual(source_config, (PACK / "project.yaml").read_bytes())
             self.assertIn('project_name: "Project With Spaces"', (runtime / "project.yaml").read_text())
-            self.assertIn("# 项目 — Project With Spaces", (project / "docs/PROJECT.md").read_text())
-            self.assertEqual(source_config, (source / "project.yaml").read_bytes())
-            self.assertTrue((runtime / "setup_all.sh").is_file())
-            self.assertTrue((runtime / ".install-manifest.json").is_file())
-            # UI Agent 从受管运行时读取模板；源包删除后不能丢失 HTML 或共享样式。
-            for name in ("page.html", "prototype.css", "index.html"):
-                self.assertEqual((source / "templates/prototype" / name).read_bytes(),
-                                 (runtime / "templates/prototype" / name).read_bytes())
-            self.assertFalse((runtime / "tests").exists())
-            self.assertFalse((runtime / "lib/install_workflow.py").exists())
-            self.assertTrue((project / "AGENTS.md").is_file())
-            self.assertEqual((project / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
-            self.assertTrue((project / ".agents/skills/xy-workflow/SKILL.md").is_file())
-            self.assertTrue((project / ".claude/skills/xy-workflow/SKILL.md").is_file())
-            self.assertTrue((project / ".codex/agents/xy-qa.toml").is_file())
-            self.assertTrue((project / ".codex/agents/xy-web.toml").is_file())
-            # 三个宿主的设计角色都必须指向留下来的模板，而不是可删除的源包目录。
-            codex_ui = tomllib.loads((project / ".codex/agents/xy-uiux.toml").read_text())
-            ui_bodies = {
-                "codex": codex_ui["developer_instructions"],
-                "claude": (project / ".claude/agents/xy-uiux.md").read_text(),
-                "antigravity": (project / ".agents/agents/xy-uiux.md").read_text(),
-            }
-            for host, body in ui_bodies.items():
-                with self.subTest(host=host):
-                    self.assertIn(".agent-workflow/templates/prototype/page.html", body)
-            for relative in (
-                "AGENTS.md",
-                "CLAUDE.md",
-                ".agents/skills/xy-workflow/SKILL.md",
-                ".claude/skills/xy-workflow/SKILL.md",
-                ".codex/agents/xy-qa.toml",
-            ):
-                body = (project / relative).read_text(encoding="utf-8")
-                self.assertNotIn("agent_workflow/", body, relative)
-
-            # 同一入口也可升级已安装项目；项目专属配置保留，旧运行时留作备份。
-            project_config_path = runtime / "project.yaml"
-            project_config_path.write_bytes(
-                project_config_path.read_bytes() + b"\n# project-owned setting\n"
-            )
-            project_config = project_config_path.read_bytes()
-            # 模拟上一版仅含 AGENTS.md 的安装：升级应只补薄入口，正文保持一致。
-            original_agents = (project / "AGENTS.md").read_bytes()
-            (project / "CLAUDE.md").unlink()
-            upgraded = subprocess.run(
-                ["bash", str(source / "install.sh"), str(project)],
-                text=True,
-                capture_output=True,
-                cwd=workspace,
-                check=False,
-            )
-            self.assertEqual(0, upgraded.returncode, upgraded.stdout + upgraded.stderr)
-            self.assertEqual(project_config, project_config_path.read_bytes())
-            self.assertEqual(original_agents, (project / "AGENTS.md").read_bytes())
-            self.assertEqual((project / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
-            self.assertEqual(1, len(list(project.glob(".agent-workflow-backup-*"))))
-
-            # 项目手工修改过受管运行时后，升级必须拒绝覆盖并保留现状。
-            workflow = runtime / "product/WORKFLOW.md"
-            original_workflow = workflow.read_bytes()
-            workflow.write_bytes(original_workflow + b"\n# local edit\n")
-            blocked = subprocess.run(
-                ["bash", str(source / "install.sh"), str(project)],
-                text=True,
-                capture_output=True,
-                cwd=workspace,
-                check=False,
-            )
-            self.assertEqual(2, blocked.returncode)
-            self.assertIn("受管文件", blocked.stderr)
-            self.assertEqual(original_workflow + b"\n# local edit\n", workflow.read_bytes())
-            workflow.write_bytes(original_workflow)
-
-            shutil.rmtree(source)
-            checked = subprocess.run(
-                ["bash", str(runtime / "setup_all.sh"), "--check"],
-                text=True,
-                capture_output=True,
-                cwd=project,
-                check=False,
-            )
-            self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
-            self.assertTrue((runtime / "templates/prototype/page.html").is_file())
-            for cli in ("task_graph_cli.py", "qa_handoff_cli.py"):
-                with self.subTest(cli=cli):
-                    result = subprocess.run(
-                        [
-                            "bash",
-                            str(runtime / "lib/python_runtime.sh"),
-                            str(runtime / "lib" / cli),
-                            "--help",
-                        ],
-                        text=True,
-                        capture_output=True,
-                        cwd=project,
-                        check=False,
-                    )
-                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertTrue((project / ".agents/skills/xy-workflow").is_symlink())
+            checked = runtime_service.status(state, project)
+            self.assertTrue(checked["enabled"])
+            core = runtime_store.load_core(checked["runtime_binding"], state)
+            self.assertEqual((PACK / "product/WORKFLOW.md").read_bytes(),
+                             runtime_store.read_core_source(core, "product/WORKFLOW.md"))
 
     def test_failed_upgrade_restores_entry_before_running_original_setup(self) -> None:
         """验收失败后先恢复升级前的入口字节和权限，不能让旧生成器处理新产物。"""
@@ -509,6 +400,177 @@ class DetachedInstallTest(unittest.TestCase):
             self.assertEqual(calls, [("--preflight",), ()])
             self.assertEqual(entry.read_bytes(), b"user concurrent instructions\n")
             self.assertTrue((project / ".agent-workflow/setup_all.sh").is_file())
+
+
+class CentralLegacyConversionTest(unittest.TestCase):
+    """只为真实旧目录归档/并发恢复创建必要夹具；核心库在类内共享一次导入。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from lib import runtime_store
+        from tests.test_central_project import make_alternate_source
+        cls.temporary = tempfile.TemporaryDirectory(prefix="workflow-central-migration-")
+        cls.workspace = Path(cls.temporary.name).resolve()
+        cls.state = cls.workspace / "state"
+        cls.core = runtime_store.import_core(PACK, cls.state)
+        cls.source = cls.workspace / "minimal-version-source"
+        make_alternate_source(cls.source)
+        cls.alternate = runtime_store.import_core(cls.source, cls.state)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def legacy_project(self, name):
+        project = self.workspace / name
+        project.mkdir()
+        # 这是被迁移的真实旧安装，不是为本轮重试复制源码候选。两个场景分别
+        # 验证可恢复成功和不可覆盖的手改冲突，必须各有自己的旧目录/inode。
+        install_workflow._install(project, PACK)
+        return project
+
+    def test_explicit_conversion_validates_preserves_and_rolls_back(self):
+        from manager import runtime_service
+        project = self.legacy_project("legacy-project")
+        runtime = project / ".agent-workflow"
+        config = runtime / "project.yaml"
+        config.write_bytes(config.read_bytes() + b'\nrole_models:\n  codex:\n    xy-qa: {"model":"fixture-codex","effort":"high"}\n  claude:\n    xy-qa: {"model":"fixture-proxy","effort":"high"}\n')
+        install_workflow._run_setup(runtime, project)
+        config.chmod(0o640)
+        original_config = config.read_bytes()
+        settings = project / ".claude/settings.json"
+        native = json.loads(settings.read_bytes())
+        native["permissions"] = {"allow": ["Read"]}
+        native["mcpServers"] = {"fixture": {"command": "fixture-command"}}
+        settings.write_text(json.dumps(native, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        original_settings = settings.read_bytes()
+        codex_config = project / ".codex/config.toml"
+        codex_config.write_bytes(b'model = "parent-model"\n' + codex_config.read_bytes() + b'\n[mcp_servers.fixture]\ncommand = "fixture-command"\n')
+        original_codex = codex_config.read_bytes()
+        original_runtime_inode = runtime.stat().st_ino
+        skill = project / ".agents/skills/xy-workflow"
+        original_skill_inode = skill.stat().st_ino
+        document = (project / "docs/PROJECT.md").read_bytes()
+
+        blocked = runtime_service.preview(self.state, project, "enable", binding=self.core.binding())
+        self.assertFalse(blocked.summary["can_apply"])
+        self.assertFalse((runtime / "runtime.json").exists())
+        before = install_workflow.legacy_tree_snapshot(project)
+        install_workflow.legacy_preflight(runtime, project, config)
+        from manager.service import check
+        self.assertIn("旧", check(project, state=self.state))
+        self.assertEqual(before, install_workflow.legacy_tree_snapshot(project))
+
+        role = project / ".claude/agents/xy-qa.md"
+        role_before = role.read_bytes()
+        role.write_bytes(role_before + b"\n# user edit must stop conversion\n")
+        with self.assertRaisesRegex(ValueError, "手改"):
+            runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), migrate_legacy=True)
+        role.write_bytes(role_before)
+        old_config = config.read_bytes()
+        config.write_bytes(old_config.replace(b"  plans: docs/plans/", b"  plans: docs/plans/\n  notes: docs/notes/"))
+        with self.assertRaisesRegex(ValueError, "notes"):
+            runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), migrate_legacy=True)
+        config.write_bytes(old_config)
+
+        plan = runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), migrate_legacy=True)
+        original_publish = runtime_service._publish
+        def fail_at_entry(tree, row, core, save):
+            if row["path"] == "AGENTS.md":
+                raise OSError("fixture conversion failure")
+            return original_publish(tree, row, core, save)
+        with patch.object(runtime_service, "_publish", side_effect=fail_at_entry), self.assertRaises(OSError):
+            runtime_service.apply(plan)
+        self.assertEqual(original_runtime_inode, runtime.stat().st_ino)
+        self.assertEqual(original_skill_inode, skill.stat().st_ino)
+        self.assertEqual(original_config, config.read_bytes())
+        self.assertEqual(original_settings, settings.read_bytes())
+        self.assertEqual(original_codex, codex_config.read_bytes())
+        self.assertEqual("legacy", runtime_service.status(self.state, project)["state"])
+
+        plan = runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), migrate_legacy=True)
+        self.assertTrue(plan.summary["can_apply"], plan.summary["conflicts"])
+        result = runtime_service.apply(plan)
+        self.assertTrue(result["enabled"], result["conflicts"])
+        archive = project / result["legacy_archive"]
+        self.assertEqual(original_runtime_inode, (archive / "runtime").stat().st_ino)
+        self.assertEqual(original_config, (archive / "runtime/project.yaml").read_bytes())
+        self.assertTrue((archive / "runtime/product/WORKFLOW.md").is_file())
+        skill_archive = next(move["archive"] for move in json.loads(plan.legacy_json)["moves"]
+                             if move["path"] == ".agents/skills/xy-workflow")
+        self.assertEqual(original_skill_inode, (project / skill_archive).stat().st_ino)
+        self.assertTrue(skill.is_symlink())
+        self.assertEqual(original_config, config.read_bytes())
+        self.assertEqual(0o640, stat.S_IMODE(config.stat().st_mode))
+        self.assertEqual(original_settings, settings.read_bytes())
+        self.assertEqual(original_codex, codex_config.read_bytes())
+        self.assertEqual(document, (project / "docs/PROJECT.md").read_bytes())
+        self.assertFalse((runtime / "product").exists())
+        self.assertTrue((runtime / "lib/workflow_hooks.py").is_file())
+        self.assertEqual("fixture-codex", tomllib.loads((project / ".codex/agents/xy-qa.toml").read_text())["model"])
+        self.assertIn("fixture-proxy", (project / ".claude/agents/xy-qa.md").read_text())
+        runtime_service.apply(runtime_service.preview(self.state, project, "disable"))
+        self.assertTrue((archive / "runtime/product/WORKFLOW.md").is_file())
+        self.assertFalse((project / ".claude/agents/xy-qa.md").exists())
+
+    def test_conversion_failure_keeps_later_edit_and_old_archive(self):
+        from manager import runtime_service
+        project = self.legacy_project("legacy-edit-conflict")
+        runtime = project / ".agent-workflow"
+        original = (runtime / "project.yaml").read_bytes()
+        plan = runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), migrate_legacy=True)
+        original_publish = runtime_service._publish
+        def fail_after_new_config(tree, row, core, save):
+            result = original_publish(tree, row, core, save)
+            if row["path"] == ".agent-workflow/project.yaml":
+                (runtime / "project.yaml").write_bytes(b"user saved while conversion was failing\n")
+                raise OSError("fixture simultaneous edit")
+            return result
+        with patch.object(runtime_service, "_publish", side_effect=fail_after_new_config), self.assertRaisesRegex(ValueError, "后续手改"):
+            runtime_service.apply(plan)
+        self.assertEqual(b"user saved while conversion was failing\n", (runtime / "project.yaml").read_bytes())
+        archived = project / plan.summary["legacy_archive"] / "runtime"
+        self.assertEqual(original, (archived / "project.yaml").read_bytes())
+        self.assertTrue((archived / "product/WORKFLOW.md").is_file())
+        self.assertIsNone(runtime_service.read_binding_record(self.state, project)[1])
+
+    def test_converted_binding_keeps_old_helper_after_version_switch(self):
+        """只补归档 metadata 下的真正旧 helper；不重复前述旧安装负控/恢复场景。"""
+        from manager import runtime_service
+        project = self.legacy_project("legacy-pinned-helper")
+        runtime = project / ".agent-workflow"
+        installed = runtime_service.apply(runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), migrate_legacy=True))
+        self.assertTrue(installed["enabled"], installed["conflicts"])
+        switched = runtime_service.apply(runtime_service.preview(self.state, project, "use", binding=self.alternate.binding()))
+        self.assertTrue(switched["enabled"], switched["conflicts"])
+        self.assertIsNotNone(switched["legacy_archive"])
+        # -- 分隔确保 --help 交给真正的旧 context_read，而非被外层桥的帮助
+        # 提前消费；机器记录仍包含归档 metadata 与当前新版本绑定。
+        old_helper = subprocess.run(["bash", str(runtime / "lib/python_runtime.sh"), "-B", "-X", "utf8", str(runtime / "runtime.py"),
+                                     "--binding", json.dumps(self.core.binding()), "helper", "lib/context_read.py", "--", "--help"],
+                                    cwd=project, env={**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(self.state),
+                                                      "AGENT_WORKFLOW_PROJECT_ROOT": str(project)},
+                                    capture_output=True, text=True, timeout=40)
+        self.assertEqual(0, old_helper.returncode, old_helper.stdout + old_helper.stderr)
+        self.assertIn("context_read.py", old_helper.stdout)
+
+    def test_unsupported_skill_backend_rejects_public_entry_before_writes(self):
+        from lib import platform_fs
+        project = self.workspace / "unsupported-project"
+        project.mkdir()
+        state = self.workspace / "unsupported-state"
+        # 只证明当前真实入口的能力拒绝，不把 POSIX 夹具冒称 Windows 原生验收。
+        with patch.object(platform_fs.os, "supports_dir_fd", set()), self.assertRaisesRegex(ValueError, "受管 Skill 软链"):
+            install_workflow.install_central(project, PACK, state=state)
+        # 直接覆盖公共入口实际判断的 Windows 分支；此处只模拟能力拒绝，不
+        # 声称 Windows 原生安装验收。中央模块导入前即失败，旧打包入口也能
+        # 给出相同明确诊断，不会先触发缺模块异常或进入任何发布流程。
+        with patch.object(platform_fs.os, "name", "nt"), patch.object(install_workflow, "_central_imports") as imports:
+            with self.assertRaisesRegex(ValueError, "受管 Skill 软链"):
+                install_workflow.install_central(project, PACK, state=state)
+            imports.assert_not_called()
+        self.assertEqual([], list(project.iterdir()))
+        self.assertFalse(state.exists())
 
 
 if __name__ == "__main__":

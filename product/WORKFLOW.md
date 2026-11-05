@@ -14,6 +14,27 @@ entry points required by each host. They must not copy and rewrite a parallel wo
 4. Role boundaries and technology stacks in `roles/xy-*.md`
 5. Platform default behavior
 
+### 中央固定版本与项目适配器
+
+中央模式的 `.agent-workflow/runtime.json` 只标识项目选版；能发现宿主 Skill 软链不证明
+本机已经启用。每次启动新工作流先通过项目薄入口 `runtime.py check` 验证本机启用；
+克隆项目缺机器 binding 时停止自动编排，不自行安装或猜测版本。源包和旧自包含安装
+继续使用原入口；中央模式不把整个 `.agent-workflow` 换成外部目录软链。
+
+中央 schema 2 图／单包顶层固定 `runtime_binding`，其对象只允许 `protocol_version: 1`、
+`content_id`、`manifest_sha256` 三字段，不携带机器路径。新图从已验证桥上下文或明确
+的已验证 binding 冻结，导出原样保留，update 不改已有 pin。项目以后换版只影响新任务；
+缺 pin、执行版本冲突、未知或损坏核心均失败，不能用项目当前版补全旧包。
+
+运行中每次 helper 调用都按当前 Task Pack 的 pin 经薄入口选择核心并导出独立进程环境，
+不依赖跨工具调用的 shell 环境。统一执行方法见
+[helper 执行边界](../platforms/shared/skills/xy-workflow/references/dispatch.md#workflow-helper-execution)，
+图／单包、规范和分页消费者见
+[运行记录工具](../platforms/shared/skills/xy-workflow/references/runtime-records.md)。中央项目配置
+只从该物理项目 `.agent-workflow/project.yaml` 读取；项目根、配置根和核心根不可互相推导。
+内置正文／规则 ID／严重性／指纹都由任务 pin 对应核心取得，项目专项叶和索引仍安全读取
+项目实文件。不存在的项目索引保持 null，不创建 GENERAL 或空索引。
+
 ## 2. PM and Roles
 
 - **PM (main session)**: retains requirements, decisions, approvals, task decomposition,
@@ -139,8 +160,8 @@ document retrieval or agentmemory start retrieval.
 2. When current feature truth must be located or verified, read `docs.project`, build a task-scoped
    `controlled_document_access` plan, and follow only relevant accepted-plan baseline links. Do not preload
    the whole plans directory.
-3. Search headings and task terms before reading a detailed body. Search only the relevant topic
-   plans (including shared architecture), controlled prototype pages, or configured fallback notes that can
+3. Search headings and task terms before reading a detailed body. Search only relevant existing
+   topic plans (including shared architecture), applicable existing project-standard sections, or controlled prototype pages that can
    answer the identified missing fact.
 4. Invoke `xy-project-memory` start retrieval only for a concrete cross-session or historical query.
    Use `memory_smart_search` (or `memory_recall` for narrow queries) only when the provider is
@@ -188,12 +209,12 @@ empty record, and its absence alone is not a QA finding.
   project concepts, relevant files, and the resulting commit revision when one was created; otherwise
   retain the truthful non-commit reason and current scoped evidence. Do not create empty memories to
   populate a field.
-- If agentmemory is unavailable or isolation is insufficient, write necessary conclusions only
-  to `memory.fallback_dir`. Fallback notes must not contain secrets, credentials, PII, raw user
-  data, complete logs, or absolute user paths.
+- agentmemory 不可用或隔离不足时，PM 将必要结论原地归入已有相关主题稿，或经适用性与批准
+  核对后归入已有项目规范章节；无既有归属时在当前交接保留待决依据，不创建 notes、替代杂记
+  目录、空索引或占位主题，不把每条经验自动升级为强制规则。长期正文不含秘密、凭据、PII、
+  原始用户数据、完整日志或用户绝对路径；完整日志与原始批准继续保存在本请求证据位置。
 - Closeout must report a truthful `memory_projection` (`memories_saved`, `project_updated`,
-  `plans_updated`, `prototype_pages_updated`, and
-  `fallback_note`).
+  `plans_updated`, and `prototype_refs`).
 
 ### PM commit assessment after QA and document projection
 

@@ -19,7 +19,6 @@ DOC_STANDARDS=$(py_yaml "${PROJECT_YAML}" docs standards)
 DOC_STANDARDS_ROOT=$(py_yaml "${PROJECT_YAML}" docs standards_root)
 DOC_PROJECT=$(py_yaml "${PROJECT_YAML}" docs project)
 DOC_PLANS_DIR=$(py_yaml "${PROJECT_YAML}" docs plans)
-DOC_NOTES_DIR=$(py_yaml "${PROJECT_YAML}" docs notes)
 # 规范直接放在 standards_root，原型仅保留一层子目录。
 DOC_DESIGN_DIR="${DOC_STANDARDS_ROOT%/}"
 
@@ -30,7 +29,7 @@ python3 --workflow-paths=1,2,3 - \
   "${PROJECT_ROOT}" "${PACK_DIR}" "${TEMPLATES}" \
   "${PROJECT_NAME}" "${DATE_STR}" \
   "${DOC_STANDARDS}" "${DOC_STANDARDS_ROOT%/}" "${DOC_PROJECT}" \
-  "${DOC_PLANS_DIR%/}" "${DOC_NOTES_DIR%/}" \
+  "${DOC_PLANS_DIR%/}" \
   "${DOC_DESIGN_DIR%/}" <<'PY'
 from __future__ import annotations
 
@@ -51,7 +50,6 @@ from pathlib import Path
     doc_standards_root,
     doc_project,
     doc_plans_dir,
-    doc_notes_dir,
     doc_design_dir,
 ) = sys.argv[1:]
 
@@ -315,7 +313,6 @@ values = {
     "DOC_STANDARDS_ROOT": doc_standards_root,
     "DOC_PROJECT": doc_project,
     "DOC_PLANS_DIR": doc_plans_dir,
-    "DOC_NOTES_DIR": doc_notes_dir,
     "DOC_DESIGN_DIR": doc_design_dir,
 }
 

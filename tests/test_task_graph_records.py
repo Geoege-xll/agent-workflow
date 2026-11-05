@@ -503,10 +503,10 @@ class RecordCliTest(unittest.TestCase):
         self.source = self.root / "graph.json"
         self.source.write_text(json.dumps(graph(), ensure_ascii=False), encoding="utf-8")
 
-    def invoke(self, *args, input=None):
+    def invoke(self, *args, input=None, env=None):
         return subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-X", "utf8",
                                str(PACK / "lib/task_graph_cli.py"), *map(str, args)],
-                              input=input, text=True, capture_output=True, check=False, timeout=15)
+                              input=input, text=True, capture_output=True, check=False, timeout=15, env=env)
 
     def test_light_single_pack_validates_updates_and_retires_without_a_graph(self):
         """通过实际CLI走Light自包含交接、首绑和退役，不输出额外DAG或旁账。"""
@@ -859,6 +859,23 @@ class RecordCliTest(unittest.TestCase):
         self.assertEqual({"graph.json": records.digest(self.source.read_bytes())}, json.loads(result.stdout)["fingerprints"])
         result = self.invoke("fingerprints", "--root", self.root, input='["../private"]')
         self.assertEqual(2, result.returncode)
+        # pin 分支不能扩大普通 file_digest 权限：符号／硬链接仍在真实 CLI 被拒绝。
+        symbolic = self.root / "symbolic.json"
+        symbolic.symlink_to(self.source)
+        hard = self.root / "hard.json"
+        os.link(self.source, hard)
+        for relative in (symbolic.name, hard.name, self.source.name):
+            with self.subTest(relative=relative):
+                rejected = self.invoke("fingerprints", "--root", self.root, input=json.dumps([relative]))
+                self.assertEqual(2, rejected.returncode)
+        other = self.root / "other-project"
+        other.mkdir()
+        env = {**os.environ, "AGENT_WORKFLOW_PROJECT_ROOT": str(self.root)}
+        for command in ("fingerprints", "scratch", "cleanup-scratch"):
+            with self.subTest(command=command):
+                rejected = self.invoke(command, "--root", other, input='["graph.json"]', env=env)
+                self.assertEqual(2, rejected.returncode)
+                self.assertIn("项目根", rejected.stderr)
 
     def test_scratch_workspace_reuses_deterministic_slot_and_cleans_up_at_closeout(self):
         first = self.invoke("scratch", "--root", self.root, "--request-id", "req-audit-01")

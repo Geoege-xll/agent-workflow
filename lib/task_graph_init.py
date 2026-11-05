@@ -18,16 +18,18 @@ try:
     from .validate_project_config import validate_docs
     from .standard_paths import builtin_source_path, source_domain
     from .validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
+    from .runtime_pins import adapter_path, project_root, record_binding
 except ImportError:
     import task_graph_records as records
     from task_graph import TaskGraphError
     from validate_project_config import validate_docs
     from standard_paths import builtin_source_path, source_domain
     from validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
+    from runtime_pins import adapter_path, project_root, record_binding
 
 
 INPUT_FIELDS = {
-    "schema_version",
+    "schema_version", "runtime_binding",
     "request_id", "requirements_fingerprint", "capacity", "approved_gates",
     "active_paths", "active_semantic_locks", "adapter_path", "standards", "tasks",
 }
@@ -119,10 +121,12 @@ def initialize(decisions: Any, root: Path, output: Path,
     if root.is_symlink():
         raise TaskGraphError("init root must not be a symlink")
     root = root.resolve(strict=True)
+    root = project_root(root)
     if not root.is_dir():
         raise TaskGraphError("init root must be an existing directory")
     if output.exists() or output.is_symlink():
         raise TaskGraphError("init output must be a new file; update existing graphs with update")
+    binding = record_binding(source, root=root, initialize=True)
 
     sources: dict[str, str] = {}
 
@@ -130,7 +134,7 @@ def initialize(decisions: Any, root: Path, output: Path,
         """每个显式文件只首次取指纹；不因同一叶被多任务使用而重复读取正文。"""
         _text(relative, "init fingerprint path")
         if relative not in sources:
-            sources[relative] = records.file_digest(root, relative)
+            sources[relative] = records.document_digest(root, relative, binding=binding)
         return sources[relative]
 
     raw_standards = _object(source["standards"], "standards", STANDARDS_FIELDS,
@@ -138,8 +142,18 @@ def initialize(decisions: Any, root: Path, output: Path,
     standards = copy.deepcopy(raw_standards)
     if ("index_path" in standards) != ("root" in standards):
         raise TaskGraphError("standards.index_path and standards.root must be provided together")
-    if "index_path" not in standards:
-        adapter = source.get("adapter_path", "project.yaml")
+    if binding is not None:
+        # 中央配置归项目所有者；即使 PM 显式给出索引／根，也只能核对同一适配器的
+        # 当前值，不能借 source 模式的快捷输入绕过项目配置或改读 core/project.yaml。
+        adapter = adapter_path(root, source.get("adapter_path"), binding)
+        docs, adapter_fingerprint = _adapter_docs(root, adapter)
+        sources[adapter] = adapter_fingerprint
+        configured = {"index_path": docs["standards"], "root": docs["standards_root"].rstrip("/")}
+        if any(key in standards and standards[key] != value for key, value in configured.items()):
+            raise TaskGraphError("central standards paths must match the verified project adapter")
+        standards.update(configured)
+    elif "index_path" not in standards:
+        adapter = adapter_path(root, source.get("adapter_path"), binding)
         docs, adapter_fingerprint = _adapter_docs(root, adapter)
         sources[adapter] = adapter_fingerprint
         standards.update(index_path=docs["standards"], root=docs["standards_root"].rstrip("/"))
@@ -202,6 +216,8 @@ def initialize(decisions: Any, root: Path, output: Path,
 
     graph = {key: copy.deepcopy(source[key]) for key in
              ("schema_version", "request_id", "capacity", "requirements_fingerprint") if key in source}
+    if binding is not None:
+        graph["runtime_binding"] = binding
     if "requirements_fingerprint" in graph and (
             not isinstance(graph["requirements_fingerprint"], str)
             or not SHA256_RE.fullmatch(graph["requirements_fingerprint"])):
@@ -265,7 +281,7 @@ def initialize(decisions: Any, root: Path, output: Path,
     validate("validate", graph)
     validate("ready", graph)  # 同时复用容量、批准与活动锁的现有输入校验；不写 READY 状态。
     for relative, expected in sources.items():
-        if records.file_digest(root, relative) != expected:
+        if records.document_digest(root, relative, binding=binding) != expected:
             raise TaskGraphError(f"init source fingerprint changed: {relative}")
     if standards["index_fingerprint"] is None:
         try:

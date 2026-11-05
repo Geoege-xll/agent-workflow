@@ -20,6 +20,7 @@ try:
     from .worktree_policy import WorktreePolicyError, integration_ready, validate_execution
     from .standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
     from .validate_project_docs import builtin_standard_rule_catalog
+    from .runtime_pins import project_root, record_binding
     from .task_graph import (
         Task,
         TaskGraphError,
@@ -34,6 +35,7 @@ except ImportError:
     from worktree_policy import WorktreePolicyError, integration_ready, validate_execution
     from standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
     from validate_project_docs import builtin_standard_rule_catalog
+    from runtime_pins import project_root, record_binding
     from task_graph import (  # type: ignore[no-redef]
         Task,
         TaskGraphError,
@@ -152,13 +154,14 @@ AUTHORITY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 EXCEPTIONAL_GATE_RE = re.compile(r"exceptional:[a-z0-9][a-z0-9._-]*\Z")
 USER_CHOICE_REF_RE = re.compile(r"user:[a-z0-9][a-z0-9._:/-]*\Z")
 PACK_FIELDS = {"schema_version", "task", "standards_contract", "approved_gates",
-               "requirements_fingerprint", "ui_contract"}
+               "requirements_fingerprint", "ui_contract", "runtime_binding"}
 
 
 def _require_version(payload: dict[str, Any]) -> None:
     """2.0直接拒绝旧格式；不会把缺版本、布尔或字符串版本静默升级。"""
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != 2:
         raise TaskGraphError("schema_version must be integer 2; old formats are not accepted")
+    record_binding(payload)
 
 
 def pack_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
@@ -203,6 +206,8 @@ def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
         raise TaskGraphError(f"unknown task ID: {task_id}")
     task = matches[0]
     result = {"schema_version": 2, "task": copy.deepcopy(task)}
+    if "runtime_binding" in payload:
+        result["runtime_binding"] = copy.deepcopy(payload["runtime_binding"])
     if "requirements_fingerprint" in payload:
         result["requirements_fingerprint"] = payload["requirements_fingerprint"]
     # 规范仍以原图为唯一权威；导出只投影当前任务已声明的读取来源。QA审查本请求
@@ -431,7 +436,8 @@ def _resolved_standards_contract(payload: dict[str, Any]) -> dict[str, Any] | No
             # 固定内置来源可以由当前运行时直接核对；任意伪ID/陈旧SHA不能冒充平台底线。
             try:
                 if builtin_catalog is None:
-                    builtin_catalog = builtin_standard_rule_catalog(Path(__file__).resolve().parents[1])
+                    builtin_catalog = builtin_standard_rule_catalog(
+                        Path(__file__).resolve().parents[1], binding=payload.get("runtime_binding"))
             except (OSError, UnicodeError, ValueError) as exc:
                 raise TaskGraphError(f"invalid builtin standards sources: {exc}") from exc
             current = builtin_catalog[builtin]
@@ -1804,6 +1810,9 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
         from . import task_graph_records as records
     else:
         import task_graph_records as records
+    if args.root is not None:
+        # scratch／普通文件指纹同样不能误用另一项目；检查一致性不授予核心读取权。
+        project_root(args.root)
     if args.command == "scratch":
         if args.root is None or any((args.input, args.patch, args.expect_sha256, args.task_id, args.output, args.select, args.all)):
             raise TaskGraphError("scratch requires --root and accepts only --request-id")

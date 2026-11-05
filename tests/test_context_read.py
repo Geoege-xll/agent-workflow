@@ -11,6 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from lib import context_read
+from lib import runtime_store
+from tests.test_task_graph_init import pinned_environment, pinned_fixture
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -181,6 +183,68 @@ class ContextReadTest(unittest.TestCase):
         names = sorted(self.root.iterdir())
         context_read.read_page(self.path, limit=3)
         self.assertEqual(names, sorted(self.root.iterdir()))
+
+    def test_frozen_helper_reads_task_pin_pages_and_project_adapter_after_upgrade(self) -> None:
+        source, state, old = pinned_fixture(self.root)
+        original = (source / "product/WORKFLOW.md").read_bytes()
+        (source / "product/WORKFLOW.md").write_bytes("新版项目当前工作流\n".encode())
+        new = runtime_store.import_core(source, state)
+        installed = self.root / ".agent-workflow"
+        installed.mkdir()
+        (installed / "runtime.json").write_text(json.dumps({
+            "schema_version": 1, "kind": "central", "runtime_binding": new.binding()}))
+        (installed / "project.yaml").write_bytes(b"actual project adapter\n")
+        (installed / "product").symlink_to(new.root / "product", target_is_directory=True)
+        task_pack = self.root / "current-task.json"
+        pack = {"schema_version": 2, "task": {}, "runtime_binding": old.binding()}
+        task_pack.write_text(json.dumps(pack))
+        env = pinned_environment(self.root, state, old)
+
+        def frozen_cli(path, *args, selected_env=env):
+            # 真正执行已导入的固定核心 helper；每个独立进程显式携带同一 pin。
+            return subprocess.run([sys.executable, "-B", "-X", "utf8",
+                                   str(old.root / "lib/context_read.py"), str(path),
+                                   "--task-pack", str(task_pack), "--root", str(self.root), *args],
+                                  cwd=self.root, env=selected_env, capture_output=True, text=True,
+                                  encoding="utf-8", timeout=15, check=False)
+
+        offset, fragments, digest = 0, [], None
+        while True:
+            options = ["--offset", str(offset), "--limit", "3"]
+            if offset:
+                options += ["--expect-sha256", digest]
+            result = frozen_cli(".agent-workflow/product/WORKFLOW.md", *options)
+            self.assertEqual(0, result.returncode, result.stderr)
+            page = json.loads(result.stdout)
+            fragments.append(page["text"])
+            digest = digest or page["sha256"]
+            self.assertEqual(digest, page["sha256"])
+            if page["eof"]:
+                break
+            offset = page["next_offset"]
+        self.assertEqual(original, "".join(fragments).encode())
+        adapter = frozen_cli(".agent-workflow/project.yaml")
+        self.assertEqual(0, adapter.returncode, adapter.stderr)
+        self.assertEqual("actual project adapter\n", json.loads(adapter.stdout)["text"])
+        # 非受管正文的软链仍拒绝，Task Pack 不扩大普通文件／scratch 的权限。
+        self.write(b"ordinary project body")
+        alias = self.root / "ordinary-link.md"
+        alias.symlink_to(self.path)
+        self.assertEqual(2, frozen_cli(alias).returncode)
+        conflict = frozen_cli(".agent-workflow/product/WORKFLOW.md",
+                              selected_env=pinned_environment(self.root, state, new))
+        self.assertEqual(2, conflict.returncode)
+        self.assertIn("冲突", conflict.stderr)
+        task_pack.write_text(json.dumps({"schema_version": 2, "task": {}}))
+        missing = frozen_cli(".agent-workflow/product/WORKFLOW.md")
+        self.assertEqual(2, missing.returncode)
+        self.assertIn("缺少 runtime_binding", missing.stderr)
+        task_pack.write_text(json.dumps(pack))
+        damaged = old.root / "product/WORKFLOW.md"
+        damaged.chmod(0o600)
+        damaged.write_bytes(b"damaged core body\n")
+        damaged.chmod(0o444)
+        self.assertEqual(2, frozen_cli(".agent-workflow/product/WORKFLOW.md").returncode)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,14 @@
 有界读取长文时使用本说明。它不增加任务等级、状态、业务确认、QA 阶段、强制报告，
 Light 可直接维护同形单任务包，不要求创建Full图或第二账本。仅接受schema_version:2。
 
+中央项目先遵守 [统一 helper 执行边界](dispatch.md#workflow-helper-execution)：每次调用
+通过项目薄入口并显式传入当前包 `runtime_binding`，不假定 shell 环境跨工具调用持续。
+下列 `.agent-workflow/lib/<helper>.py` 命令保留为源包／旧自包含示例；中央模式把 helper
+及其参数交给同一 pin 的 `runtime.py --binding '<三字段 JSON>' helper lib/<helper>.py`。
+新工作流先做本机 enabled 检查；新图从已验证桥环境或明确已验证 binding 冻结顶层
+pin，任务导出原样投影，update／refresh 不改变它。旧包缺 pin、与桥冲突或核心损坏
+均拒绝，不从项目 locator 补当前版，不接受任意 `core_root` 路径。
+
 ## Prefer the existing tool
 
 - Use the installed `task_graph_cli.py` commands below instead of creating fresh `prepare-*`,
@@ -45,13 +53,18 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
   `leaves: [{path, domain, rule_ids}]` 及 `protected_paths`；保护项包含 `path`、`rule_id`、
   `allowed_paths`，省略 `direct_edit` 时固定补 `forbidden_without_exception`，其他值拒绝。
   PM 必须列明全部适用必需规则、叶和保护边界，不能只列一条示例规则或让工具猜测。
-- 默认从根内 `project.yaml` 读取规范索引／根目录；安装态顶层显式设置
+- 源包默认从根内 `project.yaml` 读取规范索引／根目录；旧自包含安装态顶层显式设置
   `adapter_path: ".agent-workflow/project.yaml"`。源包等明确场景可在 `standards` 成对设置
   `index_path`／`root`，此时不再提供 `adapter_path`。不扫描整个规范目录。
+  中央桥上下文自动使用已验证物理项目 `.agent-workflow/project.yaml`，不能读核心中的
+  配置；显式索引／根也必须与该配置一致，`--root` 与桥项目根不同则拒绝。
+  显式传入 pin 的新图同样使用项目中央适配器。
 - leaves/selected_standards 使用精确内置来源或实际项目特有叶；安装态只给三份受管来源加
   .agent-workflow/ 前缀，不把项目 standards_root 改成运行时目录。index_path/root 始终保留配置值，
   无项目规则叶且索引物理不存在时 index_fingerprint 为 null，已有说明索引仍取真实 SHA。
   init 和文档校验检查真实存在/缺失，纯 JSON 校验不声称检查了文件系统；不新增字段或审批。
+  中央内置来源只从任务 pin 的核心读取正文、ID、严重性和指纹，规范分类仍只接受三份
+  精确来源及既有别名；普通 `file_digest` 不因此取得越界或跟随符号／硬链接的权限。
 - 每个 Writer 保留实际 `id`、`task_type`、`role`、`surface_kind`、`goal`、`gates`、
   `owned_paths`、输入／输出合同、验收证据和 `verification_commands`，用
   `selected_standards: [叶路径]` 明确该任务采用的已列叶。依赖、锁及其他适用业务字段
@@ -251,7 +264,8 @@ Task Pack 仍使用上面的 `task` 机械导出，不为把自然语言转成 J
 
 ## 完整读取必需长文
 
-`context_read.py <file> [--offset <n>] [--limit <n>] [--expect-sha256 <sha>]` 是可选的标准库
+`context_read.py <file> [--offset <n>] [--limit <n>] [--expect-sha256 <sha>] [--task-pack <当前包>]`
+是可选的标准库
 只读单文件分页器，不增加必跑命令、门禁、回执或读取记录。读取与复用按以下边界执行：
 
 - 每位 Agent 独立完整读取当前自包含任务包、必需 Skill／指令及适用规范；其他 Agent
@@ -287,6 +301,14 @@ Claude 使用实际 `.claude/skills/` 路径，其他宿主同样复用当前已
 `next_offset` 连续读取，直到 `eof: true` 且 `next_offset: null`。空文件或显式等于总字符
 数的位置返回空 EOF 页。使用全文前须补齐所有缺失或截断区间；文件指纹只证明字节／
 版本匹配，不能证明模型已读。
+
+上述宿主发现路径示例用于源包／旧自包含安装。中央读取必须按开头链接的桥调用，
+同时给分页器 `--task-pack`，受管资源使用固定逻辑路径，例如
+`.agent-workflow/platforms/shared/skills/xy-workflow/SKILL.md` 或
+`.agent-workflow/product/WORKFLOW.md`。分页器从当前包取 pin 后直接读内容库清单内原文，
+项目已换版的 Skill／目录软链不能改变正文；续页仍校验同一完整 SHA。`.agent-workflow/project.yaml`、
+locator、业务文件与普通 scratch 文档继续由项目安全实文件读取器处理，不能借 pin
+跟随任意项目软链或把整个 `.agent-workflow` 改成链接。无中央上下文的旧调用保持原语义。
 
 每次调用都对完整原始字节计算 SHA，并严格解码 UTF-8、不归一化 CRLF，允许超长单行
 跨字符页。将各页解码后的 `text` 按顺序拼接可还原原始 UTF-8 字节。所有 `offset > 0`

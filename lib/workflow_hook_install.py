@@ -145,22 +145,34 @@ def json_object(raw: bytes | None) -> dict:
     return data
 
 
+def merge_claude_write_guard(data: dict, local_settings: dict | None = None) -> dict:
+    """纯函数：只收紧已显式选择的项目写入保护，不触碰 Hooks 或其他权限。
+
+    local 层高于 project 层；任一层显式 false、非布尔值或无效 permissions
+    容器都必须拒绝，不能覆盖后再声称保护已生效。调用方负责判断 true/inherit，
+    本函数不读取磁盘、不修改原对象、不撤销已经存在的保护。
+    """
+    if not isinstance(data, dict) or (local_settings is not None and not isinstance(local_settings, dict)):
+        raise ValueError("Claude 项目与本地设置必须为对象；保留原配置")
+    result = copy.deepcopy(data)
+    key = "blockWritesOutsideWorkingDirectories"
+    for settings in (result, local_settings if local_settings is not None else {}):
+        permissions = settings.get("permissions", {})
+        if not isinstance(permissions, dict):
+            raise ValueError("Claude permissions 必须为对象；保留原配置")
+        if key in permissions and permissions[key] is not True:
+            raise ValueError("Claude 写入保护与现有原生设置冲突；保留原配置")
+    result.setdefault("permissions", {})[key] = True
+    return result
+
+
 def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
                claude_options: dict | None = None, local_settings: dict | None = None) -> dict:
     """只替换可证明归属的 Hook；Claude 可选保护独立收紧，不隐式放宽权限。"""
     result = copy.deepcopy(data)
     if host == "claude":
         if (claude_options or {}).get("block_writes_outside_working_directories") is True:
-            # local 层覆盖项目层；显式 false 或无效容器必须拒绝，不能声称启用后实际被盖掉。
-            # 不读取或改写用户全局权限；此处只把项目配置与本地冲突变成可审阅的预检错误。
-            key = "blockWritesOutsideWorkingDirectories"
-            for settings in (result, local_settings if local_settings is not None else {}):
-                permissions = settings.get("permissions", {})
-                if not isinstance(permissions, dict):
-                    raise ValueError("Claude permissions 必须为对象；保留原配置")
-                if key in permissions and permissions[key] is not True:
-                    raise ValueError("Claude 写入保护与现有原生设置冲突；保留原配置")
-            result.setdefault("permissions", {})[key] = True
+            result = merge_claude_write_guard(result, local_settings)
     if host == "antigravity":
         current = result.get(OWNER)
         enabled = True

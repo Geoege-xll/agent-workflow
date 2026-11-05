@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from tests.test_scheduler_boundaries import v2_task
+from tests.test_task_graph_init import BUILTIN_ENGINEERING, PACK, pinned_environment, pinned_fixture
+from lib import runtime_store
 
 
 def qa_task_pack(host: str = "codex") -> dict:
@@ -97,7 +99,8 @@ class QAHandoffValidationTest(unittest.TestCase):
         self.task_pack_body = json.dumps(self.task_pack, ensure_ascii=False).encode("utf-8")
         self.payload["handoff_ref"] = handoff_ref(self.task_pack, self.task_pack_body)
 
-    def invoke(self, payload: dict[str, object], *, task_pack_body: bytes | None = None) -> subprocess.CompletedProcess[str]:
+    def invoke(self, payload: dict[str, object], *, task_pack_body: bytes | None = None,
+               env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="qa-handoff-") as raw:
             source = Path(raw) / "handoff.json"
             source.write_text(json.dumps(payload), encoding="utf-8")
@@ -108,7 +111,53 @@ class QAHandoffValidationTest(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=False,
+                env=env,
             )
+
+    def test_central_qa_uses_task_pin_for_rule_bytes_and_severity_after_project_upgrade(self):
+        with tempfile.TemporaryDirectory(prefix="qa-pinned-core-") as raw:
+            root = Path(raw).resolve()
+            # 固定旧核心故意与本机源码有不同严重性，证明真实 QA 消费 pin 正文。
+            old_body = (PACK / BUILTIN_ENGINEERING).read_bytes().replace(
+                b"[eng-common-005] [hard]", b"[eng-common-005] [advisory]")
+            source, state, old = pinned_fixture(root, engineering_body=old_body)
+            payload = self.builtin_payload()
+            fingerprint = hashlib.sha256(old_body).hexdigest()
+            self.task_pack["runtime_binding"] = old.binding()
+            self.task_pack["standards_contract"]["leaves"][0]["content_fingerprint"] = fingerprint
+            coverage = payload["standards_policy_coverage"]["rule_checks"][0]
+            coverage.update(source_fingerprint=fingerprint, severity="advisory")
+            self.task_pack_body = json.dumps(self.task_pack, ensure_ascii=False).encode()
+            payload["handoff_ref"] = handoff_ref(self.task_pack, self.task_pack_body)
+            (source / BUILTIN_ENGINEERING).write_bytes((PACK / BUILTIN_ENGINEERING).read_bytes())
+            new = runtime_store.import_core(source, state)
+            (root / ".agent-workflow").mkdir()
+            (root / ".agent-workflow/runtime.json").write_text(json.dumps({
+                "schema_version": 1, "kind": "central", "runtime_binding": new.binding()}))
+            env = pinned_environment(root, state, old)
+            accepted = self.invoke(payload, env=env)
+            self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
+            forged = json.loads(json.dumps(payload))
+            forged["standards_policy_coverage"]["rule_checks"][0]["severity"] = "hard"
+            rejected = self.invoke(forged, env=env)
+            self.assertEqual(2, rejected.returncode)
+            self.assertIn("ID/severity", rejected.stderr)
+            conflict = self.invoke(payload, env=pinned_environment(root, state, new))
+            self.assertEqual(2, conflict.returncode)
+            self.assertIn("冲突", conflict.stderr)
+            missing = {key: value for key, value in self.task_pack.items() if key != "runtime_binding"}
+            missing_body = json.dumps(missing).encode()
+            rejected = self.invoke({**payload, "handoff_ref": handoff_ref(missing, missing_body)},
+                                   task_pack_body=missing_body, env=env)
+            self.assertEqual(2, rejected.returncode)
+            self.assertIn("缺少 runtime_binding", rejected.stderr)
+            damaged = old.root / BUILTIN_ENGINEERING
+            damaged.chmod(0o600)
+            damaged.write_bytes(b"damaged frozen standards\n")
+            damaged.chmod(0o444)
+            rejected = self.invoke(payload, env=env)
+            self.assertEqual(2, rejected.returncode)
+            self.assertIn("invalid current QA task pack", rejected.stderr)
 
     def test_complete_standards_coverage_can_pass(self) -> None:
         result = self.invoke(self.payload)

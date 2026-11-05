@@ -12,8 +12,10 @@ import sys
 
 if __package__:
     from .claude_instructions import read_file
+    from .runtime_pins import project_root, read_source, record_binding, resource_path, task_pack_binding
 else:
     from claude_instructions import read_file
+    from runtime_pins import project_root, read_source, record_binding, resource_path, task_pack_binding
 
 
 # 预算只约束返回的文本字符数，不假定不同宿主／模型的 token 编码相同。
@@ -38,6 +40,8 @@ def read_page(
     offset: int = 0,
     limit: int = DEFAULT_LIMIT,
     expect_sha256: str | None = None,
+    task_pack: Path | None = None,
+    root: Path | None = None,
 ) -> dict[str, str | int | bool | None]:
     """返回连续的半开字符区间，完整重组须按 next_offset 读取到 eof。
 
@@ -64,31 +68,44 @@ def read_page(
     # 拒绝 .. 也避免其路径折叠掩盖中间父目录的真实节点。
     if ".." in path.parts:
         raise ContextReadError("path 不得包含父目录跳转 ..")
-    path = path.absolute()
     try:
-        before = path.lstat()
-        body = read_file(path)
-        after = path.lstat()
+        # 中央读取只采用当前包的 pin，不能从项目 locator 或桥的当前环境补旧包。
+        # 未提供任务包时 source 保持原行为；中央上下文则由 record_binding 明确拒绝。
+        selected_root = project_root(root)
+        binding = (task_pack_binding(task_pack, root=selected_root) if task_pack is not None
+                   else record_binding({}, root=selected_root))
+        logical = resource_path(path, selected_root) if binding is not None else None
+        if logical is not None:
+            body = read_source(binding, logical)
+            if len(body) > 4 * 1024 * 1024:
+                raise ContextReadError("核心文档超过 4 MiB 分页输入上限")
+        else:
+            # 普通业务／scratch 文档仍使用原读取器，不跟随任意项目软链。
+            path = (selected_root / path if root is not None or binding is not None else path).absolute()
+            before = path.lstat()
+            body = read_file(path)
+            after = path.lstat()
+            if body is None or _identity(before) != _identity(after) or len(body) != before.st_size:
+                raise ContextReadError("文件在读取期间发生变化，请从 offset 0 重新读取")
+        text = body.decode("utf-8", errors="strict")
+    except ContextReadError:
+        raise
     except UnicodeError:
         # UnicodeDecodeError 的默认说明可能包含坏字节；CLI 不回显任何正文片段。
         raise ContextReadError("文件必须是完整、有效的 UTF-8 文本") from None
     except FileNotFoundError:
         raise ContextReadError("文件不存在或在读取期间消失") from None
-    except ValueError:
+    except ValueError as exc:
         raise ContextReadError(
-            "文件不符合安全读取要求：须为单链接普通文件、无符号链接父目录且不超过 4 MiB"
-        ) from None
+            "文件或固定版本不符合安全读取要求：须为单链接普通文件、无符号链接父目录且不超过 4 MiB；"
+            + str(exc)
+        ) from exc
     except OSError:
         raise ContextReadError("无法安全读取文件，请检查路径、节点类型与读取权限") from None
-    # read_file 校验打开时的文件身份；这里补上读取结束后的变化与完整长度检查。
-    # 即使变动后的文本恰好还可解码，也不能把它作为一次稳定的完整文件读取。
-    if body is None or _identity(before) != _identity(after) or len(body) != before.st_size:
-        raise ContextReadError("文件在读取期间发生变化，请从 offset 0 重新读取")
     digest = hashlib.sha256(body).hexdigest()
     if expect_sha256 is not None and digest != expect_sha256:
         raise ContextReadError("文件 SHA-256 已变化，拒绝续读；请从 offset 0 重新读取")
 
-    text = body.decode("utf-8", errors="strict")
     if offset > len(text):
         raise ContextReadError("offset 超出文件总字符数")
     end = min(offset + limit, len(text))
@@ -113,10 +130,12 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
                         help=f"返回的最大字符数，默认 {DEFAULT_LIMIT}，最多 {MAX_LIMIT}")
     parser.add_argument("--expect-sha256", help="首次页的 sha256；offset > 0 时必填")
+    parser.add_argument("--task-pack", type=Path, help="当前自包含包；中央逻辑资源必须使用其固定 pin")
+    parser.add_argument("--root", type=Path, help="明确项目根；必须与桥环境中的物理项目一致")
     args = parser.parse_args()
     try:
         page = read_page(args.path, offset=args.offset, limit=args.limit,
-                         expect_sha256=args.expect_sha256)
+                         expect_sha256=args.expect_sha256, task_pack=args.task_pack, root=args.root)
     except ContextReadError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 2

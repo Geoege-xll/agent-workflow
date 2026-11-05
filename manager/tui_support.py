@@ -9,6 +9,99 @@ import unicodedata
 from .catalog import clean
 
 
+PROJECT_ACTION_LABELS = {
+    "add": "登记项目", "del": "停用并解除登记", "enable": "启用工作流",
+    "disable": "停用工作流", "use": "选择固定版本", "rollback": "回退前次版本",
+    "repair": "修复受管资源",
+}
+
+
+def binding_id(binding) -> str:
+    """展示完整内容 ID；缺失值明确为空，不能用来源标签或 latest 代替 pin。"""
+    return str(binding["content_id"]) if binding else "无"
+
+
+def project_state(row: dict | None) -> str:
+    """只投影服务已经确认的状态；缓存缺失不表示未管理或已停用。"""
+    if row is None:return "待刷新"
+    if row.get("conflicts"):return "冲突"
+    return {"enabled": "已启用", "disabled": "已停用", "unmanaged": "未管理",
+            "legacy": "旧安装", "prepared": "待恢复", "conflict": "冲突"}.get(row.get("state"), "未知状态")
+
+
+def project_badge(row: dict | None) -> str:
+    state = project_state(row)
+    identifier = binding_id(row.get("runtime_binding")) if row else "无"
+    return state + (" · " + identifier[:8] if identifier != "无" else "")
+
+
+def status_text(row: dict, host_labels: dict[str, str]) -> str:
+    """完整详情允许滚动，保留长路径、完整 ID 和三宿主的实际受管范围。"""
+    lines = ["项目  " + str(row["project"]), "状态  " + project_state(row),
+             "登记  " + ("未读取，请刷新" if row.get("registered") is None else "已登记" if row["registered"] else "未登记"),
+             "当前内容 ID  " + binding_id(row.get("runtime_binding")),
+             "前次内容 ID  " + binding_id(row.get("previous_binding")), "", "三宿主状态："]
+    managed = set(row.get("hosts", []))
+    for host, label in host_labels.items():
+        # 服务只返回项目级一致性与受管宿主集合，不能杜撰逐宿主模型加载或探测结果。
+        state = project_state(row) if host in managed else "未管理"
+        lines.append(f"  {label}  {state}" + ("（在受管范围内）" if host in managed else ""))
+    lines += ["", "受管路径：", *["  " + str(path) for path in row.get("managed_paths", [])]]
+    if not row.get("managed_paths"):lines.append("  无受管路径")
+    if row.get("pending_transaction"):lines += ["", "待结算事务  " + str(row["pending_transaction"])]
+    if row.get("legacy_archive"):lines += ["", "旧安装恢复归档  " + str(row["legacy_archive"])]
+    if row.get("conflicts"):
+        lines += ["", "冲突：", *[f"  {item['path']} · {item['reason']}" for item in row["conflicts"]]]
+        lines.append("先检查上述路径；存在未完成事务时预览“修复受管资源”，手工修改应先核对并保留。")
+    return "\n".join(lines)
+
+
+def project_plan_text(summary: dict) -> str:
+    """只渲染公共计划，不重新计算写集、业务状态或确认权限。"""
+    native = summary.get("runtime") or {}
+    before = summary["status_before"]
+    current = native.get("runtime_binding") or before.get("runtime_binding")
+    lines = ["动作  " + PROJECT_ACTION_LABELS[summary["action"]], "项目  " + summary["project"],
+             "状态目录  " + summary["state_dir"],
+             "登记  " + ("已登记" if summary["registered_before"] else "未登记") + " → " + ("已登记" if summary["registered_after"] else "未登记"),
+             "当前状态  " + project_state(before), "目标内容 ID  " + binding_id(current),
+             "前次内容 ID  " + binding_id(native.get("previous_binding") or before.get("previous_binding"))]
+    if native:
+        lines.append("工作流  " + ("已启用" if native["enabled_before"] else "未启用") + " → " + ("启用" if native["enabled_after"] else "停用"))
+        lines.append("受管宿主  " + " / ".join(native.get("hosts", [])))
+    if summary["action"] == "add" and not native:lines.append("仅登记项目；本次不会启用工作流或导入中央核心。")
+    if summary["action"] in {"disable", "del"}:
+        lines.append("停用新工作流入口；保留项目文件、配置、资料与历史，已运行任务不被终止。")
+    if summary["action"] == "del":lines.append("停用成功后解除登记；项目将从本列表隐藏，不删除项目目录。")
+    changes = summary["changes"]
+    lines += ["", f"受管变更  {len(changes)} 项："]
+    lines += [f"  {item['operation']}  {item['path']} · {item['purpose']}" for item in changes] or ["  无受管文件变更"]
+    if native.get("warnings"):lines += ["", "提示：", *native["warnings"]]
+    if native.get("legacy_archive"):lines += ["", "旧安装恢复归档  " + str(native["legacy_archive"])]
+    conflicts = summary["conflicts"]
+    if conflicts:
+        lines += ["", "不能应用；冲突：", *[f"  {item['path']} · {item['reason']}" for item in conflicts],
+                  "请核对冲突路径；未完成事务可返回预览修复，其他手工修改需保留并核对后重试。"]
+    else:lines += ["", "Enter 确认应用上述计划；Esc 返回，不写入项目或状态目录。"]
+    return "\n".join(lines)
+
+
+def project_result_text(result: dict, host_labels: dict[str, str]) -> str:
+    lines = ["操作已结算。"]
+    if result.get("cancel_requested"):
+        lines.append("已收到取消请求；事务已开始并完成结算，以下为真实结果。")
+    return "\n".join([*lines, "", status_text(result, host_labels)])
+
+
+def operation_error(exc: Exception) -> str:
+    """保留服务的安全冲突诊断和恢复提示，不把错误页误报为取消或完成。"""
+    lines = [str(exc)]
+    conflicts = getattr(exc, "conflicts", ())
+    lines += [f"{item['path']} · {item['reason']}" for item in conflicts]
+    lines.append("操作未完成。输入和模型草稿保留；返回后可刷新状态，核对冲突或预览修复。")
+    return "\n".join(lines)
+
+
 def cell_width(text: str) -> int:
     return sum(0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in {"W","F"} else 1 for char in text)
 

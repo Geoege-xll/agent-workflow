@@ -12,17 +12,15 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
 import stat
-import subprocess
-import sys
 import tomllib
 import uuid
 
 from lib.claude_instructions import read_file
 from lib.install_workflow import InstallError, _validate_existing
-from lib import role_models
+from lib import role_models, runtime_store
 from .catalog import Catalog, clean, discover
+from . import runtime_service
 
 LOCATIONS = {"codex": (".codex/agents", ".toml"), "claude": (".claude/agents", ".md"), "antigravity": (".agents/agents", ".md")}
 SOURCE = Path(__file__).resolve().parents[1]
@@ -37,8 +35,24 @@ class PreservedEdit(ValueError):
         super().__init__("检测到旧文件版本的后续保存或权限变化，保留版本："+str(path))
 
 
-def validate_runtime(runtime: Path) -> None:
-    """把安装器的正常拒绝统一为界面可展示的业务错误。"""
+def validate_runtime(runtime: Path, *, state: Path | None = None) -> None:
+    """只读验证实际中央绑定，旧自包含安装仍使用原有严格 manifest 校验。
+
+    中央 core 不位于项目目录；项目身份始终由传入的 .agent-workflow 父目录
+    得到，不能从固定 core.parent 推导。无本机记录的 clone 也不能借 locator
+    自动获得启用权，缺失/损坏绑定必须直接拒绝，不回退到其他版本。
+    """
+    from lib.runtime_project import LOCATOR
+    project = project_path(runtime.parent)
+    status = runtime_service.status(state_root(state), project)
+    if status["runtime_binding"] is not None:
+        if status["conflicts"] or status["pending_transaction"]:
+            raise ValueError("中央项目存在受管资源冲突或未完成事务，请先查看 status / repair")
+        core = runtime_store.load_core(status["runtime_binding"], state_root(state))
+        runtime_store.read_core_source(core, "lib/role_models.py")
+        return
+    if secure_path(project, LOCATOR).exists():
+        raise ValueError("中央项目缺少当前状态目录的本机绑定，请显式启用；不能继承 clone 的启用状态")
     try:_validate_existing(runtime)
     except InstallError as exc:raise ValueError(str(exc)) from exc
 
@@ -166,7 +180,8 @@ def project_path(raw: str | Path) -> Path:
 
 
 def state_root(raw: str | Path | None = None) -> Path:
-    return Path(raw or os.environ.get("AGENT_WORKFLOW_STATE_DIR", Path.home()/".config/agent-workflow")).expanduser().absolute()
+    """沿用中央库唯一状态目录解析；只解析，查询和预览不会创建状态。"""
+    return runtime_store.state_root(raw)
 
 
 def writable_directory(path: Path) -> None:
@@ -179,7 +194,11 @@ def writable_directory(path: Path) -> None:
 
 def registry(state: Path) -> dict:
     path = secure_path(state, "projects.json")
-    raw = read_file(path)
+    return _registry_data(read_file(path))
+
+
+def _registry_data(raw: bytes | None) -> dict:
+    """登记快照与列表共用形状校验，避免计划校验和实际写入各解一份合同。"""
     data=json.loads(raw) if raw else {"schema":1,"registered":[],"hidden":[]}
     if not isinstance(data,dict) or data.get("schema") != 1 or any(not isinstance(data.get(key),list) or not all(isinstance(value,str) for value in data[key]) for key in ("registered","hidden")):
         raise ValueError("项目列表格式无效")
@@ -204,14 +223,173 @@ def projects(state: Path, scan: Path | None = None) -> list[Path]:
 
 
 def register(state: Path, project: Path, remove: bool = False) -> None:
-    writable_directory(state)
-    with lock(state, "registry"):
-        data=registry(state)
-        rows=set(data["registered"]);hidden=set(data["hidden"])
-        rows.discard(str(project)) if remove else rows.add(str(project))
-        hidden.add(str(project)) if remove else hidden.discard(str(project))
-        data.update(registered=sorted(rows),hidden=sorted(hidden))
-        write_state(state,"projects.json",(json.dumps(data, ensure_ascii=False, indent=2)+"\n").encode())
+    # 旧公开签名保留；登记/删除与新入口消费相同计划和条件发布规则。
+    apply_project(preview_project(state, project, "del" if remove else "add"))
+
+
+class ProjectResolutionError(ValueError):
+    """短名称拒绝携带明确路径候选，JSON 出口不必展示其他底层错误原文。"""
+    def __init__(self, message: str, candidates):
+        self.candidates = tuple(str(value) for value in candidates)
+        super().__init__(message)
+
+
+def resolve_project(state: Path, raw: str | Path) -> Path:
+    """接受已存在路径或唯一登记短名称；重名和未知名称都明确拒绝。
+
+    短名称只来自显式登记表，不把扫描到的同名目录自动视为用户目标。
+    路径存在时仍沿原 project_path 解析，保留调用目录和物理根身份语义。
+    """
+    candidate = Path(raw).expanduser()
+    # 单段裸名称可能同时是 cwd 中的目录和登记名称；先解决登记歧义，不能因为
+    # 当前目录偶然存在同名项就绕过重名拒绝。./name 等显式路径仍沿旧路径语义。
+    named = not candidate.is_absolute() and "/" not in str(raw) and str(raw) not in {".", ".."}
+    if not named:
+        return project_path(candidate)
+    registered = registry(state)["registered"]
+    matches = sorted({project_path(value) for value in registered
+                      if Path(value).name == str(raw) and Path(value).is_dir()})
+    if len(matches) == 1:
+        return matches[0]
+    if not matches and (candidate.exists() or candidate.is_symlink()):
+        return project_path(candidate)
+    candidates = matches or sorted({Path(value) for value in registered})
+    detail = "、".join(clean(value, 1000) for value in candidates) or "无登记项目"
+    raise ProjectResolutionError(("项目名称重名，请使用完整路径。候选：" if matches else "未知项目名称。已登记候选：") + detail,
+                                 candidates)
+
+
+def project_status(state: Path, project: Path) -> dict:
+    """CLI 与 TUI 共用只读状态；state 字段沿原生合同表示业务状态。"""
+    return runtime_service.status(state_root(state), project_path(project))
+
+
+def project_summaries(state: Path, scan: Path | None = None) -> list[dict]:
+    """每行展示本机实际版本、前次版、宿主和冲突；单个坏项目不隐藏其余项目。"""
+    registered = set(registry(state)["registered"])
+    result = []
+    for project in projects(state, scan):
+        try:
+            row = project_status(state, project)
+        except (OSError, ValueError):
+            # 坏配置可能包含秘密；列表只给固定诊断，单项目操作仍从原生边界拒绝。
+            row = {"schema_version": 1, "project": str(project), "state": "conflict", "enabled": False,
+                   "runtime_binding": None, "previous_binding": None, "hosts": [], "managed_paths": [],
+                   "conflicts": [{"path": ".", "reason": "状态读取失败，请单独检查项目绑定和受管资源"}],
+                   "pending_transaction": None}
+        result.append({**row, "registered": str(project) in registered})
+    return result
+
+
+def runtime_binding(state: Path, content_id: str) -> dict:
+    """内容 ID 必须完整匹配已验证核心；不接受前缀、版本标签或 latest 回退。"""
+    binding = runtime_store.validate_binding({"protocol_version": runtime_store.PROTOCOL_VERSION,
+                                              "content_id": content_id, "manifest_sha256": content_id})
+    return runtime_store.load_core(binding, state_root(state)).binding()
+
+
+@dataclass(frozen=True)
+class ProjectPlan:
+    """项目登记组合计划；原生启停/换版仍只有 runtime_service 一份实现。
+
+    registry_before 仅在当前进程用于条件发布，不进入 summary。apply 持登记锁
+    并核对原始字节，避免手改或并发登记被覆盖；原生计划自行重查项目和核心。
+    """
+    state: Path
+    project: Path
+    action: str
+    registry_before: bytes | None
+    registered_before: bool
+    registered_after: bool
+    runtime_plan: runtime_service.ActivationPlan | None
+    status_before: dict
+
+    @property
+    def summary(self) -> dict:
+        native = self.runtime_plan.summary if self.runtime_plan else None
+        return {"schema_version": 1, "action": self.action, "project": str(self.project),
+                "state_dir": str(self.state), "registered_before": self.registered_before,
+                "registered_after": self.registered_after, "runtime_action": native["action"] if native else None,
+                "runtime": native, "status_before": self.status_before,
+                "can_apply": native["can_apply"] if native else True,
+                "conflicts": native["conflicts"] if native else [],
+                "changes": native["changes"] if native else []}
+
+
+def preview_project(state: Path, project: Path, action: str, *, enable: bool = False,
+                    source_root: Path | None = None, content_id: str | None = None,
+                    hosts=None, migrate_legacy: bool = False) -> ProjectPlan:
+    """只读生成 add/del/启停/版本计划；首次启用默认使用当前 SOURCE。
+
+    重开已绑定项目默认沿用其精确版本；显式 source_root 才导入指定来源，
+    content_id 只选择已存在且验证成功的中央版本。所有原生业务限制交给所有者。
+    """
+    state, project = state_root(state), project_path(project)
+    if action not in {"add", "del", "enable", "disable", "use", "rollback", "repair"}:
+        raise ValueError("未知项目管理动作")
+    if (type(enable) is not bool or (enable and action != "add")
+            or (source_root is not None and content_id is not None)
+            or (action == "use" and content_id is None)
+            or (content_id is not None and action not in {"add", "enable", "use"})
+            or (source_root is not None and action not in {"add", "enable"})
+            or (action == "add" and not enable and (source_root is not None or content_id is not None))):
+        raise ValueError("项目管理动作与启用/来源/固定版本参数不匹配")
+    snapshot = read_file(secure_path(state, "projects.json"))
+    data = _registry_data(snapshot)
+    registered = str(project) in data["registered"]
+    before = project_status(state, project)
+    native_action = "enable" if action == "add" and enable else "disable" if action == "del" else action
+    native = None
+    if native_action != "add":
+        selected = runtime_binding(state, content_id) if content_id is not None else None
+        source = source_root
+        if native_action == "enable" and source is None and selected is None and before["runtime_binding"] is None:
+            source = SOURCE
+        native = runtime_service.preview(state, project, native_action, source_root=source,
+                                         binding=selected, hosts=hosts, migrate_legacy=migrate_legacy)
+    return ProjectPlan(state, project, action, snapshot, registered,
+                       True if action == "add" else False if action == "del" else registered, native, before)
+
+
+def apply_project(plan: ProjectPlan, *, cancel=None) -> dict:
+    """应用同一条件计划；删除先停用成功才解除登记，任何失败都正常抛出。
+
+    登记与项目是跨资源操作，不能宣称原子提交：原生操作已成功而登记写失败时
+    保留真实状态并报错，status 仍可查看。取消在开始前无副作用；同步原生事务
+    开始后等待结算，并用 cancel_requested 报告迟到请求，不把成功伪报取消。
+    """
+    if not isinstance(plan, ProjectPlan):
+        raise ValueError("需要同一进程生成的项目管理计划")
+    if not plan.summary["can_apply"]:
+        raise runtime_service.ActivationError("项目预览含冲突，不能应用", plan.summary["conflicts"])
+    if cancel is not None and cancel.is_set():
+        raise ValueError("操作已取消，尚未应用项目计划")
+    registration = plan.action in {"add", "del"}
+    with ExitStack() as stack:
+        if registration:
+            stack.enter_context(lock(plan.state, "registry"))
+            if read_file(secure_path(plan.state, "projects.json")) != plan.registry_before:
+                raise ValueError("项目登记表在预览后发生变化，请刷新后重试")
+        result = runtime_service.apply(plan.runtime_plan) if plan.runtime_plan else project_status(plan.state, plan.project)
+        if registration:
+            # 持锁不等于可覆盖外部编辑器的保存；发布前仍比较精确前像。
+            if read_file(secure_path(plan.state, "projects.json")) != plan.registry_before:
+                raise ValueError("原生项目操作已结算，但登记表已有其他修改；未覆盖登记，请查看 status")
+            data = _registry_data(plan.registry_before)
+            rows, hidden = set(data["registered"]), set(data["hidden"])
+            if plan.action == "add":
+                rows.add(str(plan.project)); hidden.discard(str(plan.project))
+            else:
+                rows.discard(str(plan.project)); hidden.add(str(plan.project))
+            data.update(registered=sorted(rows), hidden=sorted(hidden))
+            payload = (json.dumps(data, ensure_ascii=False, indent=2)+"\n").encode()
+            with AnchoredFile(plan.state, "projects.json") as target:
+                previous = target.read()
+                if previous[0] != plan.registry_before:
+                    raise ValueError("原生项目操作已结算，但登记表在发布前变化；已停止覆盖，请查看 status")
+                target.write(payload, 0o600, previous)
+        return {**result, "action": plan.action, "registered": plan.registered_after,
+                "cancel_requested": bool(cancel is not None and cancel.is_set())}
 
 
 @contextmanager
@@ -338,16 +516,22 @@ def _reserve_backup_capacity(record: dict,changes,project: Path,versions_relativ
     _record_payload({**record,"status":"rolled_back","previous_files":versions,"retained_files":retained})
 
 
-def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog, expected: dict | None = None) -> list[Change]:
+def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog, expected: dict | None = None,
+            *, state: Path | None = None) -> list[Change]:
     runtime = secure_path(project, ".agent-workflow")
-    if not (runtime/"lib/role_models.py").is_file():
+    central = project_status(state_root(state), project)["runtime_binding"] is not None
+    if not central and not (runtime/"lib/role_models.py").is_file():
         raise ValueError("当前项目尚未安装模型配置合同，请先通过管理入口升级工作流")
-    validate_runtime(runtime)
+    validate_runtime(runtime, state=state)
     config_path = secure_path(project, ".agent-workflow/project.yaml")
     config = read_file(config_path)
     if config is None:
         raise ValueError("项目缺少工作流配置")
-    all_choices = role_models.parse(config.decode())
+    try:
+        all_choices = role_models.parse(config.decode())
+    except (ValueError, UnicodeError) as exc:
+        # 旧解析器的部分诊断携带不合法整行；管理入口不能把适配器中的秘密回显。
+        raise ValueError("项目 role_models 配置无效，请先显式修复；未显示配置原文") from exc
     changes = []
     for role, raw_value in sorted(choices.items()):
         value = validate_selection(host, raw_value, catalog)
@@ -367,16 +551,33 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
     return changes
 
 
-def check(project: Path, host: str | None = None) -> str:
-    name = f"setup_{host}.sh" if host else "setup_all.sh"
-    script = secure_path(project, f".agent-workflow/{name}")
-    if not script.is_file():
-        raise ValueError("项目未安装工作流")
-    result = subprocess.run(["bash", str(script), "--check"], cwd=project, capture_output=True, text=True,
-                            env={**os.environ,"AGENT_WORKFLOW_PYTHON":sys.executable,"PYTHONDONTWRITEBYTECODE":"1"}, timeout=180)
-    if result.returncode:
-        raise ValueError("安装检查未通过：\n"+(result.stdout+result.stderr)[-6000:])
-    return result.stdout[-6000:]
+def check(project: Path, host: str | None = None, *, state: Path | None = None) -> str:
+    """只读验证中央受管资源或旧 manifest，不运行 setup 的潜在修复路径。
+
+    这里证明项目原生文件与固定核心一致，不能证明宿主已加载配置或运行模型。
+    旧自包含项目继续逐项验证原 manifest，未安装项目不会被查询自动补装。
+    """
+    if host is not None and host not in LOCATIONS:
+        raise ValueError("未知宿主")
+    checked = project_status(state_root(state), project)
+    if checked["runtime_binding"] is not None:
+        validate_runtime(secure_path(project, ".agent-workflow"), state=state)
+        if host is not None and host not in checked["hosts"]:
+            raise ValueError("该宿主不在项目当前中央绑定中")
+        binding = checked["runtime_binding"]["content_id"]
+        return (f"中央项目只读校验通过；状态：{checked['state']}；固定内容 ID：{binding}；"
+                "宿主原生资源已校验，宿主运行加载尚未验证。")
+    # 复用旧安装所有者的纯 preflight，保留 manifest、原生正文、权限与 Skill
+    # 完整归属校验。该公开入口只使用受控纯 render，不执行 setup --check，
+    # 也不把“检查旧安装”当作旧任务已收尾或允许迁移的声明。
+    from lib.install_workflow import legacy_preflight
+    try:
+        legacy = legacy_preflight(project/".agent-workflow", project, project/".agent-workflow/project.yaml")
+    except InstallError as exc:
+        raise ValueError(str(exc)) from exc
+    if host is not None and host not in legacy["hosts"]:
+        raise ValueError("该宿主尚未安装旧自包含原生资源")
+    return "旧自包含运行时 manifest、原生角色与 Skill 只读归属校验通过；宿主运行加载尚未验证。"
 
 
 def _backup_path(state: Path, project: Path) -> Path:
@@ -390,6 +591,11 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
     with lock(state, str(project)), ExitStack() as stack:
         if before_write:before_write()
         if isinstance(changes,RestorePlan):changes.validate(project)
+        receipt = None
+        if project_status(state, project)["runtime_binding"] is not None:
+            # 中央锁由唯一原生收据上下文持有；现有模型锁仍只保护备份/配置事务。
+            # 收据在任何项目写入前校验声明范围，退出异常时在原事务撤回后恢复前像。
+            receipt = stack.enter_context(runtime_service.native_edit_receipt(state, project, changes))
         targets={row.relative:stack.enter_context(AnchoredFile(project,row.relative)) for row in changes}
         for change in changes:
             if targets[change.relative].read() != (change.before,change.mode):
@@ -446,6 +652,10 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
                     raise ValueError(f"文件发生并发修改，停止写入：{row.relative}")
                 written.append(row)
                 target.write(row.after,row.mode,(row.before,row.mode))
+            if receipt is not None:
+                # check 读取中央 expected；先发布仅含模型白名单的收据，随后现有
+                # 验证回调才会看到合法新产物。回调/备份失败仍走原精确回滚路径。
+                receipt.publish()
             if verify:
                 verify()
             # 宿主验收期间旧编辑器也可能保存；在成功记录前检查保留版本。
@@ -564,50 +774,25 @@ def prepare_restore(state: Path, project: Path, identifier: str) -> RestorePlan:
     return RestorePlan(project,tuple(changes),tuple(dict(row) for row in record["previous_files"]))
 
 
-def install_preview(project: Path) -> str:
-    """只读说明安装范围；实际发布、备份和失败恢复仍交给唯一安装器。"""
-    from lib.install_workflow import _target_path
-    try:_target_path(str(project), SOURCE)
-    except InstallError as exc:raise ValueError(str(exc)) from exc
-    runtime=secure_path(project,".agent-workflow")
-    if runtime.exists():
-        validate_runtime(runtime)
-    return (f"项目：{project}\n操作：{'升级' if runtime.exists() else '首次安装'}\n"
-            "范围：项目内隐藏运行时、三平台受管入口、角色与核心技能。\n"
-            "项目配置保留；文档仅补缺失及更新已标记通用区。\n"
-            "升级前保存旧运行时；失败由现有安装器恢复。\n"
-            "不修改业务代码、全局宿主配置、Git 分支或 worktree。")
+def install_preview(project: Path, *, state: Path | None = None, source_root: Path | None = None) -> str:
+    """兼容旧 TUI 的文本预览；新交互应保留 preview_project 返回的条件计划。"""
+    plan = preview_project(state_root(state), project, "enable", source_root=source_root or SOURCE)
+    summary = plan.summary
+    binding = summary["runtime"]["runtime_binding"]
+    conflicts = "\n".join(f"冲突：{clean(row['path'])}；{clean(row['reason'])}" for row in summary["conflicts"])
+    return (f"项目：{project}\n操作：启用当前来源的固定中央核心\n"
+            f"固定内容 ID：{binding['content_id'] if binding else '无可应用版本'}\n"
+            f"状态目录：{plan.state}\n受管变更：{len(summary['changes'])} 项\n"
+            "项目仅保留配置、原生入口与薄桥；Skill 链接到不可变中央核心。\n"
+            "同步事务开始后等待结算，取消不会强杀或伪报已经撤回。" + ("\n"+conflicts if conflicts else ""))
 
 
-def install(project: Path,cancel=None) -> str:
-    install_preview(project)
-    if cancel is not None and cancel.is_set():raise ValueError("安装已取消，尚未启动安装器")
-    # 超时由安装器内部处理；外层等待恢复结束，不能用 timeout 强杀唯一事务进程。
-    process=subprocess.Popen(["bash",str(SOURCE/"install.sh"),str(project),"--timeout","600"],cwd=project,
-                             stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True,
-                             env={**os.environ,"AGENT_WORKFLOW_PYTHON":sys.executable,"PYTHONDONTWRITEBYTECODE":"1"})
-    cancelled=False
-    try:
-        while True:
-            # TUI 的 SIGINT 只到主线程；显式事件把取消请求传给实际持锁的安装线程。
-            if cancel is not None and cancel.is_set() and not cancelled:
-                cancelled=True
-                try:process.send_signal(signal.SIGINT)
-                except ProcessLookupError:pass
-            try:
-                output,error=process.communicate(timeout=.1 if cancel is not None else None)
-                break
-            except subprocess.TimeoutExpired:continue
-    except KeyboardInterrupt:
-        # CLI 取消时通知安装器做恢复，仍等待其退出后才让调用方释放项目锁。
-        try:process.send_signal(signal.SIGINT)
-        except ProcessLookupError:pass
-        while True:
-            try:process.communicate();break
-            except KeyboardInterrupt:continue
-        raise
-    if cancelled:
-        raise ValueError("安装取消请求已处理，已等待安装器退出；请核对安装器结果：\n"+(output+error)[-6000:])
-    if process.returncode:
-        raise ValueError("安装未完成，原安装器已报告状态：\n"+(output+error)[-6000:])
-    return output[-6000:]
+def install(project: Path, cancel=None, *, state: Path | None = None, source_root: Path | None = None) -> str:
+    """保留既有调用位置参数，把安装调用方接到同一中央启用业务服务。"""
+    if cancel is not None and cancel.is_set():
+        raise ValueError("安装已取消，尚未生成或应用计划")
+    plan = preview_project(state_root(state), project, "enable", source_root=source_root or SOURCE)
+    result = apply_project(plan, cancel=cancel)
+    return (f"中央启用已结算；项目：{result['project']}；状态：{result['state']}；"
+            f"固定内容 ID：{result['runtime_binding']['content_id']}。" +
+            ("取消请求到达时事务已开始，已等待其完整结算。" if result["cancel_requested"] else ""))

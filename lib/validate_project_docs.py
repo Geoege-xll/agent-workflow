@@ -18,11 +18,13 @@ try:
     from .business_confirmation_policy import read_instruction_contract
     from .validate_project_config import section_lines, strip_inline_comment, validate_docs
     from .plan_documents import validate_plan_index
+    from .runtime_pins import read_builtin_source, record_binding
 except ImportError:
     from standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from business_confirmation_policy import read_instruction_contract
     from validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
     from plan_documents import validate_plan_index
+    from runtime_pins import read_builtin_source, record_binding
 
 
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
@@ -44,7 +46,7 @@ def validate_rule_definitions(body: str, label: str, errors: list[str]) -> None:
             errors.append(f"invalid standards severity {severity!r} for {rule_id}: {label}")
 
 
-def read_builtin_standard_sources(pack_root: Path) -> dict[str, str]:
+def read_builtin_standard_sources(pack_root: Path, *, binding: dict | None = None) -> dict[str, str]:
     """安全读取固定的三份内置权威，供安装候选视图和最终项目校验共同消费。
 
     返回源包相对路径到原正文的映射，不扫描个人 Skill 或宿主分发目录；复用现有
@@ -54,7 +56,9 @@ def read_builtin_standard_sources(pack_root: Path) -> dict[str, str]:
     owners: dict[str, str] = {}
     errors: list[str] = []
     for relative, domain in BUILTIN_STANDARD_SOURCES.items():
-        body = read_instruction_contract(pack_root, relative)
+        # 显式 pin 时只信内容库原字节；旧 source 调用仍走原安全本地读取，互不回退。
+        body = (read_builtin_source(binding, relative).decode("utf-8") if binding is not None
+                else read_instruction_contract(pack_root, relative))
         validate_rule_definitions(body, relative, errors)
         if re.findall(r"(?im)^- Domain: (engineering|design)\s*$", body) != [domain]:
             errors.append(f"builtin standards source must declare Domain: {domain}: {relative}")
@@ -73,7 +77,7 @@ def read_builtin_standard_sources(pack_root: Path) -> dict[str, str]:
     return sources
 
 
-def builtin_standard_rule_catalog(pack_root: Path) -> dict[str, dict[str, object]]:
+def builtin_standard_rule_catalog(pack_root: Path, *, binding: dict | None = None) -> dict[str, dict[str, object]]:
     """从同一次安全读取取得内置规则元数据，任务图与 QA 共用同一字节/ID/严重性事实。"""
     return {
         path: {
@@ -81,7 +85,7 @@ def builtin_standard_rule_catalog(pack_root: Path) -> dict[str, dict[str, object
             "content_fingerprint": hashlib.sha256(body.encode("utf-8")).hexdigest(),
             "rules": dict(STANDARD_RULE_RE.findall(body)),
         }
-        for path, body in read_builtin_standard_sources(pack_root).items()
+        for path, body in read_builtin_standard_sources(pack_root, binding=binding).items()
     }
 
 
@@ -176,12 +180,26 @@ def collect_standard_leaves(root: Path, errors: list[str]) -> dict[Path, str]:
     return leaves
 
 
-def validate(config: Path, project_root: Path) -> list[str]:
-    """检查语义边界，不对 PROJECT.md 设置行数或字节数限制。"""
+def validate(config: Path, project_root: Path, *, body: bytes | None = None,
+             binding: dict | None = None) -> list[str]:
+    """检查语义边界，不对 PROJECT.md 设置行数或字节数限制。
+
+    显式迁移可传入已绑定前像的候选配置正文；普通运行时仍从真实配置读取并拒绝
+    所有退役键。该参数只替换配置输入，不改变对磁盘中主题与规范的严格校验。
+    """
 
     errors: list[str] = []
     root = project_root.resolve()
-    docs = validate_docs(config.read_text(encoding="utf-8").splitlines(), root, errors)
+    try:
+        # 此入口没有任务包参数，中央 helper 由桥逐进程传入固定 pin；source 默认兼容。
+        selected_binding = record_binding({"runtime_binding": binding} if binding is not None else {},
+                                          root=root, initialize=True)
+        if selected_binding is not None and config.absolute() != root / ".agent-workflow/project.yaml":
+            raise ValueError("中央文档校验只能读取本项目 .agent-workflow/project.yaml")
+    except (OSError, ValueError) as exc:
+        return [f"invalid runtime binding: {exc}"]
+    text = config.read_text(encoding="utf-8") if body is None else body.decode("utf-8")
+    docs = validate_docs(text.splitlines(), root, errors)
     if errors:
         return errors
     standards_value = docs.get("standards")
@@ -252,7 +270,8 @@ def validate(config: Path, project_root: Path) -> list[str]:
         errors.append(f"project standards leaves require a standards index: {standards_doc}")
     rule_owners: dict[str, Path] = {}
     try:
-        for relative, body in read_builtin_standard_sources(Path(__file__).resolve().parents[1]).items():
+        for relative, body in read_builtin_standard_sources(
+                Path(__file__).resolve().parents[1], binding=selected_binding).items():
             for rule_id, _severity in STANDARD_RULE_RE.findall(body):
                 rule_owners[rule_id] = Path(relative)
     except (OSError, UnicodeError, ValueError) as exc:

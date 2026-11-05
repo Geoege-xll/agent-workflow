@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import base64
+import contextlib
+import io
 import stat
 import hashlib
 import importlib
@@ -164,16 +166,413 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         path.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
         return source, old, path
 
-    def migrate(self, mapping, *, apply=False, restore=False):
+    def migrate(self, mapping, *, apply=False, restore=False, recovery=None, request_id=None):
         command = ["bash", str(PACK / "lib/python_runtime.sh"), "-X", "utf8", "-B",
                    str(PACK / "lib/migrate_project_docs.py"), "--project", str(self.root), "--restore" if restore else "--mapping", str(mapping)]
         if apply:
             command.append("--apply")
+        if recovery is not None:
+            command.extend(("--recovery", str(recovery)))
+        if request_id is not None:
+            command.extend(("--request-id", request_id))
         result = subprocess.run(command, cwd=PACK, capture_output=True, text=True, timeout=30)
         with (self.root / "migration.log").open("a", encoding="utf-8") as log:
             log.write(json.dumps({"argv": command, "cwd": str(PACK), "exit": result.returncode}, ensure_ascii=False)
                       + "\n" + result.stdout + result.stderr)
         return result
+
+    def notes_fixture(self):
+        """两份含历史/日志的旧原稿归入同一既有主题，其中一份同时归入既有规范。
+
+        目标是人工给定的完整最终正文；测试明确区别归纳后的长期结论与恢复包中的
+        原字节，不能靠简单把整篇 note 包进新 plan 取得通过。
+        """
+        notes = self.docs / "notes"
+        notes.mkdir(exist_ok=True)
+        first, second = notes / "first.md", notes / "second.md"
+        first.write_bytes("# 旧经验甲\r\ncompleted / QA PASS 只是历史文字。\r\n完整原始日志 A。\r\n".encode())
+        second.write_bytes("# 旧经验乙\n完整原始日志 B。\n".encode())
+        first.chmod(0o600)
+        second.chmod(0o640)
+        target = self.write_plan(self.lifecycle(topic="TOPIC-NOTES"), "existing.md")
+        target.chmod(0o640)
+        standard = self.standards / "GENERAL.md"
+        reader = self.root / "README.md"
+        reader.write_text("# 既有项目说明\n[经验甲](docs/notes/first.md#旧经验甲)\n[经验乙](docs/notes/second.md)\n", encoding="utf-8")
+        self.config.write_text(self.config.read_text().replace("memory:\n", "memory:\n  fallback_dir: docs/notes/\n")
+                               + "  notes: docs/notes/\n", encoding="utf-8")
+        manifest = {
+            "schema_version": 2, "mode": "notes", "documents": [
+                {"source": "docs/notes/first.md", "source_sha256": hashlib.sha256(first.read_bytes()).hexdigest(),
+                 "targets": ["docs/plans/existing.md#方案与原型关联", "docs/standards/GENERAL.md"]},
+                {"source": "docs/notes/second.md", "source_sha256": hashlib.sha256(second.read_bytes()).hexdigest(),
+                 "targets": ["docs/plans/existing.md#当前进展与恢复入口"]},
+            ], "target_updates": [
+                {"path": "docs/plans/existing.md", "before_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                 "content": target.read_text().replace("现有方案，无原型。", "现有方案，无原型。\n必要结论甲与乙。")},
+                {"path": "docs/standards/GENERAL.md", "before_sha256": hashlib.sha256(standard.read_bytes()).hexdigest(),
+                 "content": standard.read_text() + "\n既有规则的适用说明甲。\n"},
+            ], "reference_updates": [
+                {"path": "README.md", "before_sha256": hashlib.sha256(reader.read_bytes()).hexdigest(),
+                 "content": "# 既有项目说明\n[经验甲主题](docs/plans/existing.md#方案与原型关联)\n"
+                            "[经验甲规范](docs/standards/GENERAL.md)\n[经验乙](docs/plans/existing.md#当前进展与恢复入口)\n"},
+            ],
+        }
+        mapping = self.root / "notes-mapping.json"
+        mapping.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        return (first, second), target, standard, reader, mapping
+
+    def test_notes_multitarget_preflight_apply_and_full_raw_restore(self) -> None:
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        originals = {path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+                     for path in (*sources, target, standard, reader, self.config)}
+        checked = self.migrate(mapping)
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        self.assertFalse((self.root / "migration-recovery.json").exists())
+        for path, (body, mode) in originals.items():
+            self.assertEqual((body, mode), (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)))
+        applied = self.migrate(mapping, apply=True)
+        self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+        self.assertTrue(all(not path.exists() for path in sources))
+        self.assertIn("必要结论甲与乙", target.read_text())
+        self.assertNotIn("完整原始日志", target.read_text() + standard.read_text())
+        self.assertEqual({target}, set((self.docs / "plans").glob("*.md")))
+        self.assertNotIn("docs/notes/", reader.read_text() + self.config.read_text())
+        self.assertEqual([], validate_documents(self.config, self.root))
+        recovery = self.root / "migration-recovery.json"
+        snapshot = json.loads(recovery.read_text())
+        self.assertEqual(0o600, stat.S_IMODE(recovery.stat().st_mode))
+        for path in sources:
+            self.assertEqual(originals[path][0], base64.b64decode(snapshot["files"][path.relative_to(self.root).as_posix()]["body_base64"]))
+        # 正文编辑和仅权限变化都属于后续用户状态；恢复不得覆盖任何一种变化。
+        published = target.read_bytes()
+        for change in ("content", "permission"):
+            with self.subTest(change=change):
+                if change == "content":
+                    target.write_bytes(published + "后续真实编辑。\n".encode())
+                else:
+                    target.chmod(0o600)
+                refused = self.migrate(recovery, apply=True, restore=True)
+                self.assertNotEqual(0, refused.returncode)
+                self.assertIn("迁移后文件已变化", refused.stderr)
+                self.assertFalse(sources[0].exists())
+                target.write_bytes(published)
+                target.chmod(0o640)
+        restored = self.migrate(recovery, apply=True, restore=True)
+        self.assertEqual(0, restored.returncode, restored.stdout + restored.stderr)
+        for path, (body, mode) in originals.items():
+            self.assertEqual((body, mode), (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)))
+
+    def test_notes_reference_definitions_full_collapsed_and_shortcut_cannot_keep_old_links(self) -> None:
+        """引用定义是 full/collapsed/shortcut 的共同目标，不能只扫描 inline href。"""
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        controlled = self.write_plan("# 既有引用所有者\n", "references.md")
+        originals = {path: path.read_bytes() for path in (*sources, target, standard, reader, self.config)}
+        variants = (
+            "[旧经验][legacy]\n[legacy]: ../notes/first.md\n",
+            "[legacy][]\n[legacy]: ../notes/first.md\n",
+            "[legacy]\n[legacy]: ../notes/first.md\n",
+            "[旧经验][LEGACY]\n[legacy]: <../notes/first.md> \"旧经验\"\n",
+            "[旧经验][legacy]\n[legacy]:\n  ../notes/first.md\n",
+            "[legacy]: ../notes/first.md\n",
+            "[旧经验][legacy]\n> [legacy]: ../notes/first.md\n",
+            "[旧经验][legacy]\n- [legacy]: ../notes/first.md\n",
+            "[旧经验][legacy]\n[legacy]: ../note&#115;/first.md\n",
+            "[旧经验](../note&#115;/first.md)\n",
+        )
+        for body in variants:
+            with self.subTest(body=body):
+                controlled.write_text("# 既有引用所有者\n" + body, encoding="utf-8")
+                refused = self.migrate(mapping)
+                self.assertNotEqual(0, refused.returncode, refused.stdout + refused.stderr)
+                self.assertIn("notes 入站引用", refused.stderr)
+                self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+                self.assertFalse((self.root / "migration-recovery.json").exists())
+        # 合法外部定义不应一律被当作旧 notes；无法解释的定义也不能静默当作已修复。
+        controlled.write_text("# 既有引用所有者\n[参考][safe]\n[safe]: <https://example.invalid/reference> \"说明\"\n", encoding="utf-8")
+        safe = self.migrate(mapping)
+        self.assertEqual(0, safe.returncode, safe.stdout + safe.stderr)
+        controlled.write_text("# 既有引用所有者\n[旧经验][legacy]\n[legacy]:\n", encoding="utf-8")
+        unknown = self.migrate(mapping)
+        self.assertNotEqual(0, unknown.returncode)
+        self.assertIn("无法安全解析引用式", unknown.stderr)
+
+    @staticmethod
+    def html_renderer():
+        # 迁移脚本采用顶层 lib 导入；补丁与真实被调用模块一致，不用另一个包实例掩盖分支。
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            return importlib.import_module("requirement_html")
+
+    def render_existing_notes_plan(self, target):
+        renderer = self.html_renderer()
+        legacy = self.config.read_bytes()
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            migration = importlib.import_module("migrate_project_docs")
+        # 夹具先模拟在旧键加入前真实生成过的配对页；不放宽渲染器的运行时配置合同。
+        self.config.write_bytes(migration.notes_config_view(legacy)[0])
+        try:
+            renderer.process("render", self.root, target.relative_to(self.root).as_posix(), "notes-html-migration")
+        finally:
+            self.config.write_bytes(legacy)
+        return renderer
+
+    def test_notes_existing_html_is_prepared_published_and_restored_with_markdown(self) -> None:
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        renderer = self.render_existing_notes_plan(target)
+        page = target.with_suffix(".html")
+        page.chmod(0o640)
+        originals = {path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+                     for path in (*sources, target, page, standard, reader, self.config)}
+        missing_request = self.migrate(mapping)
+        self.assertNotEqual(0, missing_request.returncode)
+        self.assertIn("--request-id", missing_request.stderr)
+        checked = self.migrate(mapping, request_id="notes-html-migration")
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        changed = {item["path"] for item in json.loads(checked.stdout)["changes"]}
+        self.assertIn("docs/plans/existing.html", changed)
+        for path, (body, mode) in originals.items():
+            self.assertEqual((body, mode), (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)))
+        applied = self.migrate(mapping, apply=True, request_id="notes-html-migration")
+        self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+        self.assertEqual("fresh", renderer.process("check", self.root, "docs/plans/existing.md")["status"])
+        recovery = self.root / "migration-recovery.json"
+        self.assertIn("docs/plans/existing.html", json.loads(recovery.read_text())["files"])
+        self.assertEqual(0o640, stat.S_IMODE(page.stat().st_mode))
+        published = page.read_bytes()
+        page.write_bytes(published + b"\n<!-- user edit -->\n")
+        refused = self.migrate(recovery, apply=True, restore=True)
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("迁移后文件已变化", refused.stderr)
+        self.assertFalse(sources[0].exists())
+        page.write_bytes(published)
+        restored = self.migrate(recovery, apply=True, restore=True)
+        self.assertEqual(0, restored.returncode, restored.stdout + restored.stderr)
+        for path, (body, mode) in originals.items():
+            self.assertEqual((body, mode), (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)))
+
+    def test_notes_unknown_or_modified_html_stops_before_any_source_delete(self) -> None:
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        renderer = self.render_existing_notes_plan(target)
+        page = target.with_suffix(".html")
+        managed = page.read_bytes()
+        originals = {path: path.read_bytes() for path in (*sources, target, standard, reader, self.config)}
+        for body in (b"<html>user-owned</html>\n", managed + b"\n<!-- user edit -->\n"):
+            with self.subTest(body=body[:40]):
+                page.write_bytes(body)
+                refused = self.migrate(mapping, request_id="notes-html-migration")
+                self.assertNotEqual(0, refused.returncode, refused.stdout + refused.stderr)
+                self.assertIn("保留原页", refused.stderr)
+                self.assertEqual(body, page.read_bytes())
+                self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+                self.assertFalse((self.root / "migration-recovery.json").exists())
+
+    def test_notes_html_render_failure_stops_before_any_source_delete(self) -> None:
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        renderer = self.render_existing_notes_plan(target)
+        originals = {path: path.read_bytes() for path in (*sources, target, target.with_suffix(".html"), standard, reader, self.config)}
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            migration = importlib.import_module("migrate_project_docs")
+        output = io.StringIO()
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]), \
+                patch.object(renderer.shutil, "which", return_value=None), contextlib.redirect_stderr(output):
+            code = migration.main(["--project", str(self.root), "--mapping", str(mapping),
+                                   "--request-id", "notes-html-migration", "--apply"])
+        self.assertEqual(2, code)
+        self.assertIn("Node.js >= 20", output.getvalue())
+        self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+        self.assertFalse((self.root / "migration-recovery.json").exists())
+
+    def test_notes_html_concurrent_edit_during_candidate_render_is_preserved(self) -> None:
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        renderer = self.render_existing_notes_plan(target)
+        page = target.with_suffix(".html")
+        originals = {path: path.read_bytes() for path in (*sources, target, standard, reader, self.config)}
+        actual = renderer.run_renderer
+        def edit_target(*args):
+            candidate = actual(*args)
+            page.write_bytes(b"concurrent user HTML\n")
+            return candidate
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            migration = importlib.import_module("migrate_project_docs")
+        output = io.StringIO()
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]), \
+                patch.object(renderer, "run_renderer", side_effect=edit_target), contextlib.redirect_stderr(output):
+            code = migration.main(["--project", str(self.root), "--mapping", str(mapping),
+                                   "--request-id", "notes-html-migration", "--apply"])
+        self.assertEqual(2, code)
+        self.assertIn("并发变化", output.getvalue())
+        self.assertEqual(b"concurrent user HTML\n", page.read_bytes())
+        self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+        self.assertFalse((self.root / "migration-recovery.json").exists())
+
+    def test_notes_html_publish_conflict_is_checked_before_source_deletion(self) -> None:
+        """候选完成后的页面编辑仍必须先遇到条件发布拒绝，不能先删除原稿。"""
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        self.render_existing_notes_plan(target)
+        page = target.with_suffix(".html")
+        originals = {path: path.read_bytes() for path in (*sources, target, standard, reader, self.config)}
+        applier = self.document_applier()
+        publish_file = applier._publish_file
+        seen = []
+        def change_html_before_publish(change, plan, **kwargs):
+            if change.target == page:
+                seen.append(page)
+                self.assertTrue(all(path.exists() for path in sources))
+                page.write_bytes(b"user edit after candidate render\n")
+            return publish_file(change, plan, **kwargs)
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            migration = importlib.import_module("migrate_project_docs")
+        output = io.StringIO()
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]), \
+                patch.object(applier, "_publish_file", side_effect=change_html_before_publish), contextlib.redirect_stderr(output):
+            code = migration.main(["--project", str(self.root), "--mapping", str(mapping),
+                                   "--request-id", "notes-html-migration", "--apply"])
+        self.assertEqual(2, code)
+        self.assertEqual([page], seen)
+        self.assertEqual(b"user edit after candidate render\n", page.read_bytes())
+        self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+
+    def test_notes_reject_stale_preimages_unknown_assets_and_unassigned_sources(self) -> None:
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        manifest = json.loads(mapping.read_text())
+        originals = {path: path.read_bytes() for path in (*sources, target, standard, reader, self.config)}
+        mutations = (
+            ("source-before", lambda value: value["documents"][0].update(source_sha256="0" * 64), "原稿摘要"),
+            ("target-before", lambda value: value["target_updates"][0].update(before_sha256="0" * 64), "前像摘要"),
+            ("reference-before", lambda value: value["reference_updates"][0].update(before_sha256="0" * 64), "前像摘要"),
+            ("unmapped-source", lambda value: value["documents"].pop(), "精确覆盖"),
+            ("empty-targets", lambda value: value["documents"][0].update(targets=[]), "非空显式"),
+            ("new-target", lambda value: value["target_updates"][0].update(path="docs/plans/new.md"), "不创建目标"),
+            ("missing-fragment", lambda value: value["documents"][0].update(targets=["docs/plans/existing.md#missing"]), "目标片段不存在"),
+            ("invent-acceptance", lambda value: value["target_updates"][0].update(
+                content=self.lifecycle(version="v1")), "不能创造主题"),
+            ("missing-inbound-owner", lambda value: value["reference_updates"].clear(), "未使用"),
+        )
+        # README 是显式引用所有者；另外构造真实受控 reader 来证明漏报不能通过。
+        controlled_reader = self.write_plan("# 既有执行稿\n[经验](../notes/first.md)\n", "reader.md")
+        for name, mutate, expected in mutations:
+            with self.subTest(name=name):
+                value = copy.deepcopy(manifest)
+                mutate(value)
+                if name != "missing-inbound-owner":
+                    controlled_reader.write_text("# 既有执行稿\n", encoding="utf-8")
+                else:
+                    controlled_reader.write_text("# 既有执行稿\n[经验](../notes/first.md)\n", encoding="utf-8")
+                    expected = "仍有 notes 入站引用"
+                mapping.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+                result = self.migrate(mapping, apply=True)
+                self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn(expected, result.stderr)
+                self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+                self.assertFalse((self.root / "migration-recovery.json").exists())
+        mapping.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        asset = self.docs / "notes/unknown.bin"
+        asset.write_bytes(b"unknown asset; preserve")
+        refused = self.migrate(mapping, apply=True)
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("未明确迁移的资产", refused.stderr)
+        self.assertEqual(b"unknown asset; preserve", asset.read_bytes())
+        self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+
+    def test_notes_gap_conflicts_keep_raw_protection_without_deleting_sources(self) -> None:
+        """真实恢复包写入后注入外部编辑/新增文件，验证发布前第二次核对的实际边界。"""
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            migration = importlib.import_module("migrate_project_docs")
+        preserve = migration.preserve_originals
+        for conflict in ("target-edit", "new-source"):
+            with self.subTest(conflict=conflict):
+                before = target.read_bytes()
+                extra = self.docs / "notes/late.md"
+                def mutate_after_protection(*args, **kwargs):
+                    result = preserve(*args, **kwargs)
+                    if conflict == "target-edit":
+                        target.write_bytes(before + "并发用户编辑。\n".encode())
+                    else:
+                        extra.write_text("# 后到原稿\n", encoding="utf-8")
+                    return result
+                output = io.StringIO()
+                # main 的延迟导入也使用与真实脚本一致的 lib 路径，不能依赖此前其他
+                # 测试恰好把发布器载入 sys.modules，保证此竞态节点可独立执行。
+                with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]), \
+                        patch.object(migration, "preserve_originals", side_effect=mutate_after_protection), contextlib.redirect_stderr(output):
+                    code = migration.main(["--project", str(self.root), "--mapping", str(mapping), "--apply"])
+                with (self.root / "migration.log").open("a", encoding="utf-8") as log:
+                    log.write(f"notes gap {conflict}, exit={code}\n" + output.getvalue())
+                self.assertEqual(2, code)
+                self.assertIn("变化", output.getvalue())
+                self.assertTrue(all(path.exists() for path in sources))
+                snapshot = json.loads((self.root / "migration-recovery.json").read_text())
+                self.assertEqual(sources[0].read_bytes(), base64.b64decode(snapshot["files"]["docs/notes/first.md"]["body_base64"]))
+                # 夹具所有者撤回自己的竞态输入，工具本身必须保留该并发内容。
+                if extra.exists():
+                    extra.unlink()
+                target.write_bytes(before)
+
+    def test_features_with_notes_remain_explicit_sequential_migrations(self) -> None:
+        sources, target, standard, reader, notes_mapping = self.notes_fixture()
+        feature, _old, feature_mapping = self.migration_fixture()
+        early = self.migrate(notes_mapping)
+        self.assertNotEqual(0, early.returncode)
+        self.assertIn("先完成显式 features", early.stderr)
+        features = self.migrate(feature_mapping, apply=True)
+        self.assertEqual(0, features.returncode, features.stdout + features.stderr)
+        self.assertFalse(feature.exists())
+        self.assertIn("  notes: docs/notes/", self.config.read_text())
+        self.assertIn("  fallback_dir: docs/notes/", self.config.read_text())
+        self.assertTrue(any("unsupported docs key: notes" in error for error in validate_documents(self.config, self.root)))
+        notes = self.migrate(notes_mapping, apply=True, recovery=self.root / "notes-recovery.json")
+        self.assertEqual(0, notes.returncode, notes.stdout + notes.stderr)
+        self.assertEqual([], validate_documents(self.config, self.root))
+        self.assertTrue(all(not path.exists() for path in sources))
+
+    def test_notes_late_source_during_publication_rolls_back_without_erasing_it(self) -> None:
+        """发布结果验收时出现后到原稿，恢复本轮前像但保留该外部新增文件。"""
+        sources, target, standard, reader, mapping = self.notes_fixture()
+        originals = {path: path.read_bytes() for path in (*sources, target, standard, reader, self.config)}
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            migration = importlib.import_module("migrate_project_docs")
+        validate_current = migration.validate
+        extra = self.docs / "notes/late.md"
+        def add_late_source(*args, **kwargs):
+            errors = validate_current(*args, **kwargs)
+            extra.write_text("# 发布中的外部新原稿\n", encoding="utf-8")
+            return errors
+        output = io.StringIO()
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]), \
+                patch.object(migration, "validate", side_effect=add_late_source), contextlib.redirect_stderr(output):
+            code = migration.main(["--project", str(self.root), "--mapping", str(mapping), "--apply"])
+        with (self.root / "migration.log").open("a", encoding="utf-8") as log:
+            log.write(f"notes publication late source, exit={code}\n" + output.getvalue())
+        self.assertEqual(2, code)
+        self.assertIn("新增未映射原稿", output.getvalue())
+        self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+        self.assertEqual("# 发布中的外部新原稿\n", extra.read_text())
+        self.assertFalse(list(self.root.glob(".agent-workflow-pack-antigravity--*")))
+
+    def test_notes_directory_presence_never_grants_retirement_authority(self) -> None:
+        notes = self.docs / "notes"
+        notes.mkdir()
+        source = notes / "old.md"
+        source.write_text("# 没有旧配置授权的原稿\n", encoding="utf-8")
+        mapping = self.root / "notes-empty-mapping.json"
+        mapping.write_text(json.dumps({"schema_version": 2, "mode": "notes", "documents": [],
+            "target_updates": [], "reference_updates": []}), encoding="utf-8")
+        before = source.read_bytes(), self.config.read_bytes()
+        refused = self.migrate(mapping, apply=True)
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("不会再次迁移或从目录存在", refused.stderr)
+        self.assertEqual(before, (source.read_bytes(), self.config.read_bytes()))
+        # 仅夹具所有者撤去自己构造的未授权原稿；显式空清单才能处理真实缺失的旧目录。
+        source.unlink()
+        notes.rmdir()
+        self.config.write_text(self.config.read_text().replace("memory:\n", "memory:\n  fallback_dir: docs/notes/\n")
+                               + "  notes: docs/notes/\n", encoding="utf-8")
+        applied = self.migrate(mapping, apply=True)
+        self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+        self.assertFalse(notes.exists())
+        self.assertNotIn("fallback_dir:", self.config.read_text())
+        self.assertNotIn("  notes:", self.config.read_text())
 
     def test_explicit_single_migration_preserves_body_index_and_noop_preflight(self) -> None:
         source, old, mapping = self.migration_fixture()

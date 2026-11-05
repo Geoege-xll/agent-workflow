@@ -769,7 +769,6 @@ developer_instructions = "Audit security without editing files."
             "memory.isolation",
             "memory.project_id",
             "memory.portable_checkpoint",
-            "memory.fallback_dir",
         ):
             self.assertIn(phrase, normalized)
         self.assertNotIn("`docs/PROJECT.md`", body)
@@ -887,7 +886,6 @@ developer_instructions = "Audit security without editing files."
             "  project_id: sampleproject\n"
             "  qa_requires_provider: false\n"
             "  portable_checkpoint: docs/PROJECT.md\n"
-            "  fallback_dir: docs/notes/"
         )
         self.assertIn(expected, config)
         sources = "\n".join(
@@ -951,8 +949,8 @@ developer_instructions = "Audit security without editing files."
                 ),
             ),
             (
-                "empty-fallback-dir",
-                lambda text: text.replace("  fallback_dir: docs/notes/\n", "  fallback_dir: \n"),
+                "retired-fallback-dir",
+                lambda text: text.replace("memory:\n", "memory:\n  fallback_dir: docs/notes/\n"),
             ),
         )
         for name, mutate in mutations:
@@ -989,10 +987,7 @@ developer_instructions = "Audit security without editing files."
             ("mode", "  mode: required\n", "mode"),
             ("qa-required", "  qa_requires_provider: true\n", "provider"),
             ("absolute-checkpoint", "  portable_checkpoint: /tmp/status.md\n", "root"),
-            ("escaping-fallback", "  fallback_dir: ../outside/\n", "root"),
             ("sensitive-checkpoint", "  portable_checkpoint: .env\n", "docs"),
-            ("metadata-fallback", "  fallback_dir: .git/\n", "docs"),
-            ("agent-fallback", "  fallback_dir: .codex/agents/\n", "docs"),
         )
         for name, replacement, marker in mutations:
             with self.subTest(name=name), tempfile.TemporaryDirectory(
@@ -1023,11 +1018,6 @@ developer_instructions = "Audit security without editing files."
                 "  portable_checkpoint: docs/PROJECT.md\n",
                 "  portable_checkpoint: docs/OTHER.md\n",
             ),
-            (
-                "fallback-not-controlled-notes",
-                "  fallback_dir: docs/notes/\n",
-                "  fallback_dir: docs/fallback/\n",
-            ),
         )
         for name, old, new in mutations:
             with self.subTest(name=name), tempfile.TemporaryDirectory(
@@ -1045,9 +1035,9 @@ developer_instructions = "Audit security without editing files."
 
         with tempfile.TemporaryDirectory(prefix="agent-workflow-memory-file-dir-") as temp:
             project, _ = copy_fixture_project(Path(temp), "MemoryFileDirProject")
-            notes = project / "docs/notes"
-            notes.parent.mkdir(parents=True)
-            notes.write_text("not a directory\n", encoding="utf-8")
+            plans = project / "docs/plans"
+            plans.parent.mkdir(parents=True)
+            plans.write_text("not a directory\n", encoding="utf-8")
             result = run_project_setup(project)
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertFalse((project / "AGENTS.md").exists())
@@ -1390,7 +1380,6 @@ default_subagent_reasoning_effort = "low"
                 "docs/STANDARDS.md": "docs/rules/INDEX.md",
                 "docs/standards/": "docs/rules/tree/",
                 "docs/PROJECT.md": "docs/state/CURRENT.md",
-                "docs/notes/": "docs/memory-notes/",
                 "docs/plans/": "docs/decisions/",
             }
             for old, new in replacements.items():
@@ -1427,7 +1416,6 @@ default_subagent_reasoning_effort = "low"
             )
             for configured in (
                 "docs/state/CURRENT.md",
-                "docs/memory-notes/",
                 "docs/decisions/",
             ):
                 self.assertIn(configured, generated_docs)
@@ -1538,7 +1526,7 @@ default_subagent_reasoning_effort = "low"
             config = pack / "project.yaml"
             config.write_text(
                 config.read_text(encoding="utf-8").replace(
-                    "  notes: docs/notes/", "  notes: docs/PROJECT.md", 1
+                    "  plans: docs/plans/", "  plans: docs/PROJECT.md", 1
                 ),
                 encoding="utf-8",
             )

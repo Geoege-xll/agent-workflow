@@ -9,7 +9,6 @@ memory:
   project_id: replace-with-unique-project-id
   qa_requires_provider: false
   portable_checkpoint: docs/PROJECT.md
-  fallback_dir: docs/notes/
 
 orchestration:
   max_concurrent_subagents: 8
@@ -47,4 +46,3 @@ docs:
   standards_root: docs/standards/
   project: docs/PROJECT.md
   plans: docs/plans/
-  notes: docs/notes/

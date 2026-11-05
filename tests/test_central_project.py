@@ -1,0 +1,722 @@
+"""中央项目服务的真实文件系统、三宿主资源与独立 Python 桥验证。
+
+整个测试类只导入一次真实核心并共享只读库；每例仅新建短命项目，物理根隔离
+也是被验证的业务合同。第二份核心使用最小协议夹具提供版本差异，不复制整仓
+候选，不碰真实业务项目、用户全局配置或宿主模型。
+"""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+import unittest
+from unittest.mock import patch
+import uuid
+
+from lib import runtime_bridge as bridge
+from lib import runtime_project as resources
+from lib import runtime_store as store
+from lib.claude_instructions import read_file
+from manager import runtime_service as service
+
+
+PACK = Path(__file__).resolve().parents[1]
+
+
+def make_alternate_source(root: Path) -> None:
+    """两份测试共用最小固定版本来源，仅列出实际桥/资源 helper 的依赖。
+
+    转换后的旧 pin helper 来自先前真实完整核心；本最小版本提供切版目标和
+    必要桥协议，不复制完整 lib/产品/模板，也不构造每轮源码候选。
+    """
+    def put(relative, content):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    for directory in store.CORE_DIRECTORIES:
+        (root / directory).mkdir(parents=True, exist_ok=True)
+    for name in store.SETUP_FILES:
+        put(name, b"#!/bin/sh\nexit 0\n")
+    for name in ("lib/platform_fs.py", "lib/runtime_store.py", "lib/runtime_project.py", "lib/runtime_bridge.py",
+                 "lib/runtime_pins.py", "lib/standard_paths.py", "lib/claude_instructions.py", "lib/context_read.py",
+                 "lib/shared_core_skills.py", "lib/role_models.py", "lib/claude_options.py", "lib/validate_antigravity_artifacts.py",
+                 "lib/python_runtime.sh", "manager/runtime_service.py", "manager/__init__.py",
+                 "templates/project.yaml.example", "templates/docs/PROJECT.md",
+                 "roles/xy-qa.md", "roles/xy-uiux.md", "platforms/shared/core-skills.txt"):
+        put(name, (PACK / name).read_bytes())
+    put("product/WORKFLOW.md", "# 第二个固定版本\n".encode())
+    put("product/GLOBAL_CONSTRAINTS.md", b"# fixture constraints\n")
+    for name in (PACK / "platforms/shared/core-skills.txt").read_text().splitlines():
+        if name and not name.startswith("#"):
+            put(f"platforms/shared/skills/{name}/SKILL.md",
+                f"---\nname: {name}\ndescription: fixture skill\n---\n<!-- agent-workflow-pack:managed-skill -->\n# {name}\n".encode())
+    put("lib/probe.py", b'import json, os\nprint(json.dumps({key: os.environ[key] for key in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CORE_ROOT", "AGENT_WORKFLOW_CONFIG_PATH")}, sort_keys=True))\n')
+    put("lib/wait_probe.py", b'import subprocess,sys,time\nfrom pathlib import Path\nchild=subprocess.Popen([sys.executable,"-c","import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print(1,flush=True); time.sleep(30)"],stdout=subprocess.PIPE,text=True)\nchild.stdout.readline()\nPath(sys.argv[1]).write_text(str(child.pid))\ntime.sleep(30)\n')
+
+
+class CentralProjectTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix="central-project-")
+        cls.workspace = Path(cls.temporary.name).resolve()
+        cls.state = cls.workspace / "state"
+        # 一次共享真实导入覆盖正式载荷、Skill 正文与真实桥的自举，不按用例复制源码。
+        cls.core = store.import_core(PACK, cls.state)
+        cls.source = cls.workspace / "minimal-source"
+        make_alternate_source(cls.source)
+        cls.alternate = store.import_core(cls.source, cls.state)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    @staticmethod
+    def put(root, relative, body):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body)
+
+    def setUp(self):
+        self.project = self.workspace / ("project-" + uuid.uuid4().hex[:10])
+        self.project.mkdir()
+
+    def enable(self, *, core=None):
+        plan = service.preview(self.state, self.project, "enable", binding=(core or self.core).binding())
+        self.assertTrue(plan.summary["can_apply"], plan.summary["conflicts"])
+        result = service.apply(plan)
+        self.assertTrue(result["enabled"], result)
+        return result
+
+    def invoke(self, *args, env=None, project=None):
+        root = project or self.project
+        environment = dict(os.environ)
+        for name in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"):
+            environment.pop(name, None)
+        environment["AGENT_WORKFLOW_STATE_DIR"] = str(self.state)
+        environment.update(env or {})
+        return subprocess.run(["bash", str(root / resources.PYTHON_ENTRY), "-B", "-X", "utf8",
+                               str(root / resources.LAUNCHER), *args], cwd=root,
+                              env=environment, capture_output=True, text=True, timeout=40)
+
+    def test_enable_native_resources_and_read_only_preview(self):
+        before = sorted(str(path) for path in self.project.rglob("*"))
+        binding_paths = sorted((self.state / "bindings").glob("*")) if (self.state / "bindings").exists() else []
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertEqual(before, sorted(str(path) for path in self.project.rglob("*")))
+        self.assertEqual(binding_paths, sorted((self.state / "bindings").glob("*")) if (self.state / "bindings").exists() else [])
+        self.assertNotIn("body", json.dumps(plan.summary))
+        self.assertEqual(18, sum(row["kind"] == "link" for row in plan.summary["changes"]))
+        result = service.apply(plan)
+        self.assertTrue(result["enabled"])
+        self.assertEqual([], result["conflicts"])
+        locator = json.loads((self.project / resources.LOCATOR).read_bytes())
+        self.assertEqual({"schema_version": 1, "kind": "central", "runtime_binding": self.core.binding()}, locator)
+        for directory in ("product", "roles", "platforms", "templates", "manager"):
+            self.assertFalse((self.project / ".agent-workflow" / directory).exists())
+        self.assertEqual(["python_runtime.sh"], sorted(path.name for path in (self.project / ".agent-workflow/lib").iterdir()))
+        names = resources.skill_names(resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core))
+        with resources.Tree(self.project) as tree:
+            for root in (".agents/skills", ".claude/skills"):
+                for name in names:
+                    relative = root + "/" + name
+                    self.assertTrue((self.project / relative).is_symlink())
+                    node = tree.read(relative, skill_link=True)
+                    resources.validate_skill_link(tree, relative, node, self.core)
+        self.assertFalse((self.project / "docs/STANDARDS.md").exists())
+        self.assertFalse((self.project / "docs/standards/GENERAL.md").exists())
+        # 使用真实标准 TOML 消费器解析 Codex；其他宿主 frontmatter 是已生成的原生薄元数据。
+        role = tomllib.loads((self.project / ".codex/agents/xy-qa.toml").read_text())
+        self.assertEqual("xy-qa", role["name"])
+        self.assertNotIn("sandbox_mode", role)
+        self.assertIn(self.core.content_id, role["developer_instructions"])
+        self.assertTrue(tomllib.loads((self.project / ".codex/config.toml").read_text())["agents"]["enabled"])
+        for path in (".claude/agents/xy-qa.md", ".agents/agents/xy-qa.md"):
+            text = (self.project / path).read_text()
+            self.assertTrue(text.startswith("---\nname: xy-qa\n"))
+            self.assertIn("runtime_binding=", text)
+            self.assertIn(self.core.content_id, text)
+        parser_code = '''import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from validate_claude_artifacts import parse_frontmatter
+from validate_antigravity_artifacts import parse_agent_frontmatter
+project = Path(sys.argv[2])
+errors = []
+qa, _ = parse_frontmatter(project / ".claude/agents/xy-qa.md", errors)
+writer, _ = parse_frontmatter(project / ".claude/agents/xy-uiux.md", errors)
+# 实际消费已发布的原生字段，不能以角色提示词或 permissionMode 冒充工具限制。
+assert qa.get("tools") == "Read, Grep, Glob, Bash, Skill", qa
+assert writer.get("tools") == "Read, Grep, Glob, Bash, Edit, Write, Skill", writer
+assert qa.get("disallowedTools") == writer.get("disallowedTools") == "Agent"
+assert qa.get("permissionMode") == writer.get("permissionMode") == "default"
+path = project / ".agents/agents/xy-qa.md"
+parse_agent_frontmatter(path.read_text(encoding="utf-8"), path, errors)
+assert not errors, errors
+print("native role parsers OK")
+'''
+        parsed = subprocess.run([sys.executable, "-B", "-X", "utf8", "-c", parser_code,
+                                 str(self.core.root / "lib"), str(self.project)],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(0, parsed.returncode, parsed.stdout + parsed.stderr)
+        self.assertIn("native role parsers OK", parsed.stdout)
+        checked = self.invoke("check")
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        self.assertEqual(self.core.binding(), json.loads(checked.stdout)["runtime_binding"])
+
+    def test_claude_tools_reject_unknown_source_policy_before_writes(self):
+        source = store.read_core_source(self.core, "roles/xy-qa.md")
+        original_read = resources.Resources.read
+        # 只替换本次只读资源的策略声明，复用已导入核心与项目，不复制核心候选；
+        # 缺失、重复、未知及混合策略都不得触发旧 Shell 的默认 write 回退。
+        invalid = (
+            source.replace(b"toolsets: [read]", b"toolsets: [unknown-mcp]"),
+            source.replace(b"toolsets: [read]", b"toolsets: [read, write]"),
+            source.replace(b"toolsets: [read]", b"toolsets: [read]\ntoolsets: [write]"),
+            source.replace(b"toolsets: [read]\n", b""),
+        )
+        for body in invalid:
+            with self.subTest(policy=body.split(b"workspace:", 1)[0]):
+                def replaced(reader, relative):
+                    return body if relative == "roles/xy-qa.md" else original_read(reader, relative)
+                with patch.object(resources.Resources, "read", new=replaced), self.assertRaisesRegex(ValueError, "Claude.*toolsets"):
+                    service.preview(self.state, self.project, "enable", binding=self.core.binding())
+                self.assertEqual([], list(self.project.iterdir()))
+                self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+
+    def test_claude_model_commit_keeps_tools_and_rejects_tool_edits(self):
+        from lib import role_models
+        from manager.service import Change, commit
+        self.enable()
+        relative = ".claude/agents/xy-qa.md"
+        path = self.project / relative
+        before = path.read_bytes()
+        tools = b"tools: Read, Grep, Glob, Bash, Skill\n"
+        self.assertIn(tools, before)
+        selected = {"model": "fixture-claude-model", "effort": "high"}
+        after = role_models.patch_artifact(before, "claude", selected)
+        config = (self.project / resources.CONFIG).read_bytes()
+        updated = role_models.update(config.decode(), {"claude": {"xy-qa": selected}}).encode()
+        # 使用唯一自动收据入口提交真实模型补丁；工具、权限和其余元数据保持。
+        commit(self.state, self.project, [Change(relative, before, after, 0o644),
+                                         Change(resources.CONFIG, config, updated, 0o644)])
+        self.assertEqual(after, path.read_bytes())
+        self.assertIn(tools, after)
+        self.assertIn(b"permissionMode: default\n", after)
+        self.assertIn(b"disallowedTools: Agent\n", after)
+        self.assertTrue(service.status(self.state, self.project)["enabled"])
+
+        # 工具变更即使夹带合法模型变化也不能登记为模型收据，更不能由 repair
+        # 重新渲染后洗掉未知手改；未知 MCP 与 Edit/Write 均不属于 QA 的工具集。
+        broadened = after.replace(tools, b"tools: Read, Grep, Glob, Bash, Edit, Write, Skill, mcp__unknown__tool\n")
+        forged = role_models.patch_artifact(broadened, "claude", {"model": "forged-model", "effort": "low"})
+        with self.assertRaisesRegex(ValueError, "模型字段以外"):
+            commit(self.state, self.project, [Change(relative, after, forged, 0o644)])
+        self.assertEqual(after, path.read_bytes())
+        path.write_bytes(broadened)
+        self.assertFalse(service.preview(self.state, self.project, "repair").summary["can_apply"])
+        next_model = role_models.patch_artifact(broadened, "claude", {"model": "second-model", "effort": "low"})
+        with self.assertRaisesRegex(ValueError, "未知编辑"):
+            commit(self.state, self.project, [Change(relative, broadened, next_model, 0o644)])
+        self.assertEqual(broadened, path.read_bytes())
+
+    def test_config_models_permissions_mcp_memory_and_user_text_preserved(self):
+        config = resources.initial_config(resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core), self.project)
+        config += b'\nrole_models:\n  codex:\n    xy-qa: {"model":"custom-model","effort":"high"}\n'
+        self.put(self.project, resources.CONFIG, config)
+        originals = {".codex/config.toml": b'model = "private-model"\n[mcp_servers.private]\ncommand = "user command"\n',
+                     ".claude/settings.json": b'{"permissions":{"allow":["Read"]},"mcpServers":{"private":{"token":"fixture-secret"}}}\n',
+                     "AGENTS.md": "用户自己的中文规则，不得覆盖。\n".encode(),
+                     "CLAUDE.md": "用户自己的 Claude 指令。\n".encode(),
+                     "docs/PROJECT.md": "现有项目正文。\n".encode()}
+        for relative, body in originals.items():
+            self.put(self.project, relative, body)
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertNotIn("fixture-secret", json.dumps(plan.summary))
+        service.apply(plan)
+        self.assertEqual(config, (self.project / resources.CONFIG).read_bytes())
+        self.assertEqual(originals[".claude/settings.json"], (self.project / ".claude/settings.json").read_bytes())
+        self.assertEqual(originals["docs/PROJECT.md"], (self.project / "docs/PROJECT.md").read_bytes())
+        self.assertTrue((self.project / "AGENTS.md").read_bytes().startswith(originals["AGENTS.md"]))
+        self.assertEqual("custom-model", tomllib.loads((self.project / ".codex/agents/xy-qa.toml").read_text())["model"])
+        native = tomllib.loads((self.project / ".codex/config.toml").read_text())
+        self.assertEqual("private-model", native["model"])
+        self.assertEqual("user command", native["mcp_servers"]["private"]["command"])
+        service.apply(service.preview(self.state, self.project, "disable"))
+        for relative in ("AGENTS.md", "CLAUDE.md", ".codex/config.toml"):
+            self.assertEqual(originals[relative], (self.project / relative).read_bytes())
+
+    def test_disable_preserves_pin_documents_config_and_core(self):
+        self.enable()
+        config = (self.project / resources.CONFIG).read_bytes()
+        document = (self.project / "docs/PROJECT.md").read_bytes()
+        result = service.apply(service.preview(self.state, self.project, "disable"))
+        self.assertFalse(result["enabled"])
+        self.assertEqual("disabled", result["state"])
+        self.assertEqual(config, (self.project / resources.CONFIG).read_bytes())
+        self.assertEqual(document, (self.project / "docs/PROJECT.md").read_bytes())
+        self.assertFalse((self.project / ".agents/skills/xy-workflow").exists())
+        self.assertFalse((self.project / ".claude/agents/xy-qa.md").exists())
+        self.assertTrue((self.project / resources.LAUNCHER).is_file())
+        self.assertTrue(self.core.root.exists())
+        self.assertEqual(store.read_core_source(self.core, "roles/xy-qa.md"),
+                         bridge.read_resource(self.state, self.project, "roles/xy-qa.md", binding=self.core.binding()))
+        with self.assertRaisesRegex(ValueError, "不能创建新任务"):
+            bridge.resolve_runtime(self.state, self.project, new_task=True)
+        self.assertNotEqual(0, self.invoke("check").returncode)
+
+    def test_use_rollback_old_pin_and_env_helper_survive_source_removal(self):
+        self.enable()
+        changed = service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+        self.assertEqual(self.core.binding(), changed["previous_binding"])
+        self.assertEqual(self.alternate.binding(), changed["runtime_binding"])
+        self.assertEqual(store.read_core_source(self.core, "product/WORKFLOW.md"),
+                         bridge.read_resource(self.state, self.project, "product/WORKFLOW.md", binding=self.core.binding()))
+        with patch.dict(os.environ, {"AGENT_WORKFLOW_RUNTIME_BINDING": json.dumps(self.core.binding())}):
+            self.assertEqual(self.core.binding(), bridge.resolve_runtime(self.state, self.project).runtime_binding)
+            self.assertEqual(self.alternate.binding(), bridge.resolve_runtime(self.state, self.project, binding=self.alternate.binding()).runtime_binding)
+        # 移走最小来源模拟 Homebrew keg 删除；已安装桥及 Python helper 只依赖持久库。
+        detached = self.workspace / "detached-source"
+        self.source.rename(detached)
+        try:
+            ran = self.invoke("helper", "lib/probe.py", env={"AGENT_WORKFLOW_RUNTIME_BINDING": json.dumps(self.alternate.binding())})
+            self.assertEqual(0, ran.returncode, ran.stdout + ran.stderr)
+            value = json.loads(ran.stdout)
+            self.assertEqual(self.alternate.binding(), json.loads(value["AGENT_WORKFLOW_RUNTIME_BINDING"]))
+            self.assertEqual(str(self.project), value["AGENT_WORKFLOW_PROJECT_ROOT"])
+            self.assertEqual(str(self.project / resources.CONFIG), value["AGENT_WORKFLOW_CONFIG_PATH"])
+            self.assertEqual(str(self.alternate.root), value["AGENT_WORKFLOW_CORE_ROOT"])
+            read = self.invoke("--binding", json.dumps(self.core.binding()), "read", "product/WORKFLOW.md")
+            self.assertEqual(0, read.returncode, read.stderr)
+            self.assertEqual(store.read_core_source(self.core, "product/WORKFLOW.md").decode("utf-8"), read.stdout)
+        finally:
+            detached.rename(self.source)
+        rolled = service.apply(service.preview(self.state, self.project, "rollback"))
+        self.assertEqual(self.core.binding(), rolled["runtime_binding"])
+        self.assertEqual(self.alternate.binding(), rolled["previous_binding"])
+
+    def test_missing_pin_foreign_pin_clone_and_project_env_are_rejected(self):
+        self.enable()
+        with self.assertRaisesRegex(ValueError, "缺少 runtime_binding"):
+            bridge.read_resource(self.state, self.project, "roles/xy-qa.md")
+        with self.assertRaisesRegex(ValueError, "曾经使用"):
+            bridge.read_resource(self.state, self.project, "roles/xy-qa.md", binding=self.alternate.binding())
+        with patch.dict(os.environ, {"AGENT_WORKFLOW_RUNTIME_BINDING": '{"root":"/private"}'}):
+            with self.assertRaises(ValueError):
+                bridge.resolve_runtime(self.state, self.project)
+        with patch.dict(os.environ, {"AGENT_WORKFLOW_RUNTIME_BINDING": "null"}):
+            with self.assertRaises(ValueError):
+                bridge.resolve_runtime(self.state, self.project, new_task=True)
+        self.assertNotEqual(0, self.invoke("--binding", "null", "check").returncode)
+        with patch.dict(os.environ, {"AGENT_WORKFLOW_PROJECT_ROOT": str(self.workspace)}):
+            with self.assertRaisesRegex(ValueError, "项目根"):
+                bridge.resolve_runtime(self.state, self.project, binding=self.core.binding())
+        clone = self.workspace / ("clone-" + uuid.uuid4().hex[:10])
+        shutil.copytree(self.project, clone, symlinks=True)
+        checked = self.invoke("check", project=clone)
+        self.assertNotEqual(0, checked.returncode)
+        self.assertIn("尚未在本机启用", checked.stderr)
+        self.assertEqual("unmanaged", service.status(self.state, clone)["state"])
+
+    def test_preview_file_directory_and_source_changes_are_rejected(self):
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.put(self.project, "AGENTS.md", b"saved after preview\n")
+        with self.assertRaisesRegex(ValueError, "预览后变化"):
+            service.apply(plan)
+        self.assertEqual(b"saved after preview\n", (self.project / "AGENTS.md").read_bytes())
+        second = service.preview(self.state, self.project, "enable", source_root=self.source)
+        original = (self.source / "product/WORKFLOW.md").read_bytes()
+        self.put(self.source, "product/WORKFLOW.md", b"source changed after preview\n")
+        try:
+            with self.assertRaisesRegex(ValueError, "来源与预览版本不符"):
+                service.apply(second)
+        finally:
+            self.put(self.source, "product/WORKFLOW.md", original)
+        fresh = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        (self.project / ".codex").mkdir()
+        with self.assertRaisesRegex(ValueError, "父目录身份"):
+            service.apply(fresh)
+
+    def test_generated_long_name_config_is_validated_before_publish(self):
+        project = self.workspace / ("long-project-name-" * 7)
+        project.mkdir()
+        plan = service.preview(self.state, project, "enable", binding=self.core.binding())
+        self.assertTrue(plan.summary["can_apply"])
+        service.apply(plan)
+        body = (project / resources.CONFIG).read_bytes()
+        expected = "project-" + hashlib.sha256(project.name.encode()).hexdigest()[:12]
+        self.assertIn(("project_id: " + expected).encode(), body)
+        self.assertTrue(service.preview(self.state, project, "disable").summary["can_apply"])
+        invalid = body.replace(expected.encode(), b"x" * 80)
+        with patch.object(resources, "initial_config", return_value=invalid), self.assertRaisesRegex(ValueError, "项目配置需要先显式处理"):
+            service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertEqual([], list(self.project.iterdir()))
+
+    def test_source_repository_roots_are_protected_for_source_and_binding_enable(self):
+        with self.assertRaises(ValueError):
+            service.preview(self.state, self.source, "enable", source_root=self.source)
+        with self.assertRaises(ValueError):
+            service.preview(self.state, self.workspace, "enable", source_root=self.source)
+        # 模拟已从不可变核心运行的程序位置，以最小来源夹具验证 binding 模式
+        # 同样保护程序根；不需要读取、更不写真实仓库作为负控目标。
+        with patch.object(service, "__file__", str(self.source / "manager/runtime_service.py")):
+            with self.assertRaises(ValueError):
+                service.preview(self.state, self.source, "enable", binding=self.core.binding())
+
+    def test_collision_unknown_links_and_plain_readers_remain_closed(self):
+        self.put(self.project, ".codex/agents/xy-qa.toml", b"user owned\n")
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertFalse(plan.summary["can_apply"])
+        with self.assertRaisesRegex(ValueError, "预览含冲突"):
+            service.apply(plan)
+        self.assertEqual(b"user owned\n", (self.project / ".codex/agents/xy-qa.toml").read_bytes())
+        outside = self.workspace / "outside-link-target"
+        outside.mkdir(exist_ok=True)
+        (self.project / ".agents/skills").mkdir(parents=True)
+        (self.project / ".agents/skills/xy-workflow").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        with self.assertRaises(ValueError):
+            read_file(self.project / ".agents/skills/xy-workflow/SKILL.md")
+
+    def test_repair_missing_owned_resource_and_reject_changed_role_or_link(self):
+        self.enable()
+        role = self.project / ".codex/agents/xy-qa.toml"
+        role.unlink()
+        repaired = service.apply(service.preview(self.state, self.project, "repair"))
+        self.assertTrue(repaired["enabled"])
+        self.assertTrue(role.is_file())
+        link = self.project / ".agents/skills/xy-workflow"
+        original = os.readlink(link)
+        link.unlink()
+        link.symlink_to(original, target_is_directory=True)
+        plan = service.preview(self.state, self.project, "repair")
+        self.assertFalse(plan.summary["can_apply"])
+        self.assertTrue(any("替换" in item["reason"] for item in plan.summary["conflicts"]))
+        role.write_bytes(role.read_bytes() + b"# unknown handwritten edit\n")
+        self.assertFalse(service.status(self.state, self.project)["enabled"])
+
+    def test_shared_entry_preserves_later_user_text(self):
+        self.enable()
+        path = self.project / "AGENTS.md"
+        path.write_bytes(path.read_bytes() + "\n启用后的用户新增规则。\n".encode())
+        result = service.apply(service.preview(self.state, self.project, "disable"))
+        self.assertFalse(result["enabled"])
+        self.assertIn("启用后的用户新增规则", path.read_text())
+        self.assertNotIn(resources.CENTRAL_BEGIN, path.read_text())
+
+    def test_failure_rolls_back_exact_outputs_and_never_enables(self):
+        original = service._publish
+        def fail(tree, row, core, save):
+            if row["path"] == "AGENTS.md":
+                raise OSError("fixture synchronous failure")
+            return original(tree, row, core, save)
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        with patch.object(service, "_publish", side_effect=fail), self.assertRaises(OSError):
+            service.apply(plan)
+        self.assertFalse((self.project / resources.LOCATOR).exists())
+        self.assertFalse((self.project / ".agents/skills/xy-workflow").exists())
+        self.assertFalse(service.status(self.state, self.project)["enabled"])
+        journal = service._journal(self.state, self.project)[1]
+        self.assertEqual("rolled_back", journal["phase"])
+        self.assertTrue(journal["retained_nodes"])
+
+    def test_recovery_refuses_post_failure_edit(self):
+        original = service._publish
+        def fail(tree, row, core, save):
+            if row["path"] == "AGENTS.md":
+                raise OSError("fixture interrupted installation")
+            return original(tree, row, core, save)
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        with patch.object(service, "_publish", side_effect=fail), patch.object(service, "_restore", return_value=([{"path": ".", "reason": "fixture leaves prepared state"}], [])):
+            with self.assertRaises(service.ActivationError):
+                service.apply(plan)
+        changed = self.project / resources.LOCATOR
+        changed.write_bytes(b"user saved after failure\n")
+        recovery = service.preview(self.state, self.project, "repair")
+        self.assertTrue(recovery.summary["recovery"])
+        with self.assertRaisesRegex(ValueError, "恢复含后续手改"):
+            service.apply(recovery)
+        self.assertEqual(b"user saved after failure\n", changed.read_bytes())
+
+    def test_old_inode_later_save_is_retained_and_blocks_overwrite(self):
+        self.enable()
+        path = self.project / ".codex/agents/xy-qa.toml"
+        with path.open("r+b") as old_inode:
+            service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+            old_inode.seek(0)
+            old_inode.write(b"late save into old inode\n")
+            old_inode.truncate()
+            old_inode.flush()
+            os.fsync(old_inode.fileno())
+        plan = service.preview(self.state, self.project, "disable")
+        self.assertFalse(plan.summary["can_apply"])
+        self.assertTrue(any("旧 inode" in row["reason"] for row in plan.summary["conflicts"]))
+        self.assertIn(self.alternate.content_id, path.read_text())
+
+    def test_prepared_recovery_restores_machine_binding_after_process_exit(self):
+        # 真实子进程在最终 enabled 已写、applied 日志未写时退出，验证跨 FS 协议
+        # 的恢复责任；它不是成功模拟，也没有启动任何宿主/模型。
+        code = '''import json, os, sys
+from pathlib import Path
+from manager import runtime_service as service
+original = service._write_private
+def interrupted(tree, relative, body):
+    if relative.startswith("transactions/") and json.loads(body).get("phase") == "applied":
+        os._exit(73)
+    return original(tree, relative, body)
+service._write_private = interrupted
+service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", binding=json.loads(sys.argv[3])))
+'''
+        interrupted = subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-c", code,
+                                      str(self.state), str(self.project), json.dumps(self.core.binding())],
+                                     cwd=PACK, capture_output=True, text=True, timeout=40)
+        self.assertEqual(73, interrupted.returncode, interrupted.stdout + interrupted.stderr)
+        self.assertEqual("prepared", service.status(self.state, self.project)["state"])
+        self.assertIsNotNone(service.read_binding_record(self.state, self.project)[1])
+        result = service.apply(service.preview(self.state, self.project, "repair"))
+        self.assertTrue(result["recovered"])
+        self.assertFalse(result["enabled"])
+        self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+        self.assertFalse((self.project / resources.LOCATOR).exists())
+
+    def test_old_pin_bootstraps_without_the_current_core(self):
+        self.enable()
+        service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+        version = self.alternate.root.parent
+        unavailable = self.workspace / "unavailable-current-core"
+        # macOS 移动只读目录需在夹具边界暂时开放该目录 owner 写位；没有修改
+        # 核心正文，测试完成后按不可变库的 0555 合同恢复，不能泛化为生产修复。
+        version.chmod(0o700)
+        version.rename(unavailable)
+        unavailable.chmod(0o555)
+        try:
+            read = self.invoke("--binding", json.dumps(self.core.binding()), "read", "roles/xy-qa.md")
+            self.assertEqual(0, read.returncode, read.stderr)
+            self.assertEqual(store.read_core_source(self.core, "roles/xy-qa.md").decode("utf-8"), read.stdout)
+        finally:
+            unavailable.chmod(0o700)
+            unavailable.rename(version)
+            version.chmod(0o555)
+
+    def test_parent_directory_swap_never_writes_outside(self):
+        outside = self.workspace / ("outside-" + uuid.uuid4().hex[:10])
+        outside.mkdir()
+        self.put(outside, "project.yaml", b"outside must survive\n")
+        original = service._publish
+        swapped = False
+        def swap(tree, row, core, save):
+            nonlocal swapped
+            result = original(tree, row, core, save)
+            if not swapped and row["path"].startswith(".agent-workflow/"):
+                swapped = True
+                (self.project / ".agent-workflow").rename(self.project / "retained-runtime-parent")
+                (self.project / ".agent-workflow").symlink_to(outside, target_is_directory=True)
+            return result
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        with patch.object(service, "_publish", side_effect=swap), self.assertRaises(ValueError):
+            service.apply(plan)
+        self.assertEqual(["project.yaml"], sorted(path.name for path in outside.iterdir()))
+        self.assertEqual(b"outside must survive\n", (outside / "project.yaml").read_bytes())
+        self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+
+    def test_legacy_notes_are_not_silently_migrated(self):
+        config = resources.initial_config(resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core), self.project)
+        config = config.replace(b"  plans: docs/plans/", b"  plans: docs/plans/\n  notes: docs/notes/")
+        self.put(self.project, resources.CONFIG, config)
+        with self.assertRaisesRegex(ValueError, "notes"):
+            service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertEqual(config, (self.project / resources.CONFIG).read_bytes())
+        self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+
+    def test_legacy_runtime_default_is_validated_retained_and_not_switched(self):
+        self.put(self.project, ".agent-workflow/product/WORKFLOW.md", b"legacy\n")
+        self.put(self.project, ".agent-workflow/.install-manifest.json",
+                 resources.json_bytes({"schema_version": 1, "managed_files": {"product/WORKFLOW.md": hashlib.sha256(b"legacy\n").hexdigest()}}))
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertFalse(plan.summary["can_apply"])
+        self.assertIn("暂不切换", plan.summary["conflicts"][0]["reason"])
+        self.assertEqual(b"legacy\n", (self.project / ".agent-workflow/product/WORKFLOW.md").read_bytes())
+        self.assertFalse((self.project / resources.LOCATOR).exists())
+
+    def test_helper_timeout_reaps_only_its_own_process(self):
+        self.enable()
+        service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+        pid_file = self.project / "owned-helper-child.pid"
+        invocation = bridge.python_helper(self.state, self.project, "lib/wait_probe.py", [str(pid_file)], binding=self.alternate.binding())
+        with self.assertRaisesRegex(ValueError, "超时并终止"):
+            bridge.run_helper(invocation, timeout=1)
+        child = int(pid_file.read_text())
+        # 只观察本夹具子进程状态；父进程先退出也不能留下忽略 TERM 的孙进程。
+        # kill(pid, 0) 仅探测本次已登记 PID，无须读取宿主进程清单，也不发送
+        # 实际信号；父进程回收之后给系统短暂时间完成已终止孙进程的清理。
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            if time.monotonic() >= deadline:
+                os.kill(child, 9)  # 测试失败也只回收已记录归属的夹具进程，避免泄漏。
+                self.fail("helper 超时后仍有本次孙进程运行")
+            time.sleep(0.02)
+        self.assertTrue(service.status(self.state, self.project)["enabled"])
+
+    def model_changes(self):
+        from lib import role_models
+        from manager.service import Change
+        relative = ".codex/agents/xy-qa.toml"
+        before = (self.project / relative).read_bytes()
+        selected = {"model": "receipt-model", "effort": "high"}
+        config = (self.project / resources.CONFIG).read_bytes()
+        updated = role_models.update(config.decode(), {"codex": {"xy-qa": selected}}).encode()
+        return [Change(relative, before, role_models.patch_artifact(before, "codex", selected), 0o644),
+                Change(resources.CONFIG, config, updated, 0o644)]
+
+    def test_model_receipt_syncs_real_existing_commit(self):
+        from manager.service import commit, prepare_restore
+        self.enable()
+        changes = self.model_changes()
+        identifier = commit(self.state, self.project, changes)
+        self.assertTrue(identifier)
+        self.assertTrue(service.status(self.state, self.project)["enabled"])
+        self.assertEqual("receipt-model", tomllib.loads((self.project / changes[0].relative).read_text())["model"])
+        # 真实逆补丁还原最初没有 role_models 区块的配置，不能用空 YAML 结构
+        # 或归一空白替代精确原字节；恢复仍经同一 commit 自动收据入口。
+        commit(self.state, self.project, prepare_restore(self.state, self.project, identifier))
+        self.assertEqual(changes[1].before, (self.project / resources.CONFIG).read_bytes())
+        self.assertTrue(service.status(self.state, self.project)["enabled"])
+        service.apply(service.preview(self.state, self.project, "disable"))
+        self.assertEqual(changes[1].before, (self.project / resources.CONFIG).read_bytes())
+
+    def test_model_receipt_rejects_body_edits_and_reverts_with_commit_failure(self):
+        from manager.service import Change, commit
+        self.enable()
+        changes = self.model_changes()
+        forged = [Change(changes[0].relative, changes[0].before, changes[0].after + b"# unowned body edit\n", 0o644)]
+        with self.assertRaisesRegex(ValueError, "模型字段以外"):
+            with service.native_edit_receipt(self.state, self.project, forged):
+                self.fail("非法正文变化不能进入 commit")
+        config = changes[1]
+        forged_config = [Change(resources.CONFIG, config.before, config.after + b"\n# non-model private edit\n", config.mode)]
+        with self.assertRaisesRegex(ValueError, "role_models"):
+            with service.native_edit_receipt(self.state, self.project, forged_config):
+                self.fail("逆变换也不能接受模型区块以外的字节变化")
+        original = service.read_binding_record(self.state, self.project)[0].payload
+        with self.assertRaises(OSError):
+            def fail_after_publish():
+                raise OSError("fixture model verification failure")
+            commit(self.state, self.project, changes, verify=fail_after_publish)
+        self.assertEqual(original, service.read_binding_record(self.state, self.project)[0].payload)
+        self.assertEqual(changes[0].before, (self.project / changes[0].relative).read_bytes())
+        self.assertTrue(service.status(self.state, self.project)["enabled"])
+
+    def configure_claude_guard(self):
+        selected = resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core)
+        body = resources.initial_config(selected, self.project)
+        body = body.replace(b"block_writes_outside_working_directories: inherit", b"block_writes_outside_working_directories: true")
+        self.put(self.project, resources.CONFIG, body)
+        return body
+
+    def test_explicit_claude_guard_merges_one_key_and_survives_inherit_disable(self):
+        config = self.configure_claude_guard()
+        original = {"permissions": {"allow": ["Read"]}, "hooks": {"CustomEvent": [{"command": "user hook"}]},
+                    "mcpServers": {"fixture": {"token": "fixture-private-value"}}, "trust": {"native": "preserve"}}
+        before = (json.dumps(original, ensure_ascii=False, indent=4) + "\n").encode()
+        self.put(self.project, ".claude/settings.json", before)
+        self.put(self.project, ".claude/settings.local.json", b'{"permissions":{"blockWritesOutsideWorkingDirectories":true},"user":"local"}\n')
+        settings = self.project / ".claude/settings.json"
+        settings.chmod(0o640)
+        local = (self.project / ".claude/settings.local.json").read_bytes()
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertEqual(before, settings.read_bytes())
+        self.assertNotIn("fixture-private-value", json.dumps(plan.summary))
+        self.assertTrue(any(row["path"] == ".claude/settings.json" and row["purpose"] == "guard" for row in plan.summary["changes"]))
+        result = service.apply(plan)
+        self.assertTrue(result["enabled"], result["conflicts"])
+        checked = self.invoke("check")
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        expected = json.loads(json.dumps(original))
+        expected["permissions"]["blockWritesOutsideWorkingDirectories"] = True
+        self.assertEqual(expected, json.loads(settings.read_bytes()))
+        self.assertEqual(0o640, settings.stat().st_mode & 0o7777)
+        self.assertEqual(local, (self.project / ".claude/settings.local.json").read_bytes())
+        record = service.read_binding_record(self.state, self.project)[1]
+        self.assertNotIn(".claude/settings.json", record["managed"])
+        self.assertNotIn("legacy_archive", record)
+        self.put(self.project, ".claude/settings.local.json", b'{"permissions":{"blockWritesOutsideWorkingDirectories":false}}\n')
+        self.assertFalse(service.status(self.state, self.project)["enabled"])
+        with self.assertRaisesRegex(ValueError, "不能创建新任务"):
+            bridge.resolve_runtime(self.state, self.project, new_task=True)
+        self.put(self.project, ".claude/settings.local.json", local)
+        # 用户后续修改其他设置不被中央“整文件归属”阻止，也不会被 repair 清回旧值。
+        expected["mcpServers"]["second"] = {"command": "user-added"}
+        settings.write_bytes((json.dumps(expected, indent=2) + "\n").encode())
+        self.assertTrue(service.status(self.state, self.project)["enabled"])
+        (self.project / resources.CONFIG).write_bytes(config.replace(b"block_writes_outside_working_directories: true", b"block_writes_outside_working_directories: inherit"))
+        retained = settings.read_bytes()
+        service.apply(service.preview(self.state, self.project, "repair"))
+        service.apply(service.preview(self.state, self.project, "disable"))
+        self.assertEqual(retained, settings.read_bytes())
+        self.assertIs(json.loads(settings.read_bytes())["permissions"]["blockWritesOutsideWorkingDirectories"], True)
+
+    def test_claude_guard_rejects_conflicts_and_local_after_preview_change(self):
+        self.configure_claude_guard()
+        key = "blockWritesOutsideWorkingDirectories"
+        for project_data, local_data in (({"permissions": {key: False}}, {}), ({"permissions": []}, {}),
+                                         ({}, {"permissions": {key: False}}), ({}, {"permissions": "invalid"})):
+            with self.subTest(project=project_data, local=local_data):
+                before = json.dumps(project_data).encode()
+                local = json.dumps(local_data).encode()
+                self.put(self.project, ".claude/settings.json", before)
+                self.put(self.project, ".claude/settings.local.json", local)
+                with self.assertRaises(ValueError):
+                    service.preview(self.state, self.project, "enable", binding=self.core.binding())
+                self.assertEqual(before, (self.project / ".claude/settings.json").read_bytes())
+                self.assertEqual(local, (self.project / ".claude/settings.local.json").read_bytes())
+        self.put(self.project, ".claude/settings.json", b'{"permissions":{"allow":["Read"]}}\n')
+        self.put(self.project, ".claude/settings.local.json", b"{}\n")
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        before = (self.project / ".claude/settings.json").read_bytes()
+        self.put(self.project, ".claude/settings.local.json", json.dumps({"permissions": {key: False}}).encode())
+        with self.assertRaisesRegex(ValueError, "预览后变化"):
+            service.apply(plan)
+        self.assertEqual(before, (self.project / ".claude/settings.json").read_bytes())
+        self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+
+    def test_inherit_does_not_read_or_change_claude_settings(self):
+        self.put(self.project, ".claude/settings.json", b"user-owned invalid JSON is preserved under inherit\n")
+        before = (self.project / ".claude/settings.json").read_bytes()
+        read = resources.Tree.read
+        def reject_settings(tree, relative, **kwargs):
+            if relative in {".claude/settings.json", ".claude/settings.local.json"}:
+                raise AssertionError("inherit 不应读取原生设置")
+            return read(tree, relative, **kwargs)
+        with patch.object(resources.Tree, "read", reject_settings):
+            self.enable()
+        self.assertEqual(before, (self.project / ".claude/settings.json").read_bytes())
+
+    def test_incompatible_fixed_bridge_is_rolled_back_before_enabled(self):
+        source = self.source / "lib/runtime_bridge.py"
+        original = source.read_bytes()
+        source.write_bytes(original + b'\nraise ValueError("fixture incompatible bridge protocol")\n')
+        try:
+            incompatible = store.import_core(self.source, self.state)
+        finally:
+            source.write_bytes(original)
+        plan = service.preview(self.state, self.project, "enable", binding=incompatible.binding())
+        with self.assertRaisesRegex(ValueError, "无法消费本机项目协议"):
+            service.apply(plan)
+        self.assertFalse(service.status(self.state, self.project)["enabled"])
+        self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+        self.assertFalse((self.project / resources.LOCATOR).exists())
+        self.assertEqual("rolled_back", service._journal(self.state, self.project)[1]["phase"])
+
+
+if __name__ == "__main__":
+    unittest.main()

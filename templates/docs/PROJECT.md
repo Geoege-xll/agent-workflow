@@ -18,4 +18,3 @@
 - 主题生命周期文档：`{{DOC_PLANS_DIR}}/`（唯一可编辑 `.md` 与同名派生 `.html`）
 - 项目特有规范索引（实际存在时）：`{{DOC_STANDARDS}}`；通用工程/UI 规则使用内置 Skill。
 - 原型证据（实际配置时）：`{{DOC_DESIGN_DIR}}/prototype/`
-- 可选记忆回退：`{{DOC_NOTES_DIR}}/`

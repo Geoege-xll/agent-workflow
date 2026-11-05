@@ -113,6 +113,10 @@ class SharedMemoryContractTest(unittest.TestCase):
             )
             self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
             self.assertNotIn("Traceback", check.stdout + check.stderr)
+            self.assertFalse((project / "docs/notes").exists())
+            installed_memory = (project / ".claude/skills/xy-project-memory/SKILL.md").read_text(encoding="utf-8")
+            for retired in ("memory.fallback_dir", "docs.notes", "fallback_note:"):
+                self.assertNotIn(retired, installed_memory)
 
     def test_shared_skills_keep_memory_below_pages_and_controlled_docs(self) -> None:
         for relative in SHARED_AUTHORITY_SOURCES:
@@ -161,7 +165,6 @@ class SharedMemoryContractTest(unittest.TestCase):
                 "project_updated",
                 "plans_updated",
                 "prototype_refs",
-                "fallback_note",
             },
             fields,
         )

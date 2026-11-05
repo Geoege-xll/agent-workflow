@@ -341,7 +341,8 @@ def _validate_scope(review_method: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _validate_standards_coverage(
-    coverage: dict[str, Any], changed_paths: tuple[str, ...], audit_result: str
+    coverage: dict[str, Any], changed_paths: tuple[str, ...], audit_result: str,
+    *, binding: dict | None = None,
 ) -> None:
     """逐条验证规范索引、叶规则、变更路径和证据的闭合关系。
 
@@ -451,7 +452,8 @@ def _validate_standards_coverage(
             # 内置规则的严重性和SHA来自当前运行时，不接受把hard改报advisory的降级。
             try:
                 if builtin_catalog is None:
-                    builtin_catalog = builtin_standard_rule_catalog(Path(__file__).resolve().parents[1])
+                    builtin_catalog = builtin_standard_rule_catalog(
+                        Path(__file__).resolve().parents[1], binding=binding)
             except (OSError, UnicodeError, ValueError) as exc:
                 raise QAHandoffError(f"invalid builtin standards sources: {exc}") from exc
             current = builtin_catalog[builtin]
@@ -640,7 +642,8 @@ def validate_qa_handoff(payload: dict[str, Any], task_pack_body: bytes) -> None:
     coverage = _object(
         payload.get("standards_policy_coverage"), "standards_policy_coverage"
     )
-    _validate_standards_coverage(coverage, changed_paths, audit_result)
+    # 版本来自已经验证的当前 Task Pack；QA 结果自报路径或字段不能选择另一份核心。
+    _validate_standards_coverage(coverage, changed_paths, audit_result, binding=pack.get("runtime_binding"))
     # 身份绑定不能掩盖旧覆盖表：当前包冻结的规范来源同样必须一致。QA可在FAIL中
     # 报告PM漏选的新规则，但PASS不能自报一组当前包根本没有采用的规则或旧来源。
     contract = pack["standards_contract"]

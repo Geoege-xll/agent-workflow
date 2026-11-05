@@ -54,6 +54,53 @@ dispatch, not a new business gate, QA stage or full test run; Hooks never auto-i
 
 ## Workflow helper execution
 
+### 中央项目：每次按当前任务 pin 运行
+
+本节是所有 Skill／角色共享的执行边界。存在 `.agent-workflow/runtime.json` 的中央项目
+不能直接执行下文旧自包含示例中的 `.agent-workflow/lib/<helper>.py`，也不能凭宿主发现
+软链选当前核心。新工作流（包括没有 init 步骤的 Light）先执行本机启用检查：
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py check
+```
+
+检查成功才用返回的严格三字段 binding 创建新图／单包；`init` 本身也经桥检查 enabled。
+缺机器记录的克隆、未启用项目或资源冲突不能自动开始；不以自动安装绕过失败。
+新任务采用此时已验证的项目选版，运行中只用当前 Task Pack 顶层 `runtime_binding`。
+
+每个独立工具／shell 调用都从当前包原样取出该三字段 JSON，作为显式 `--binding` 传入
+项目薄入口；下面的占位 JSON 必须替换为当前包的实际值，不能把上一次 shell 变量的
+存在当作前置事实。桥只执行该 pin 的 `lib/*.py`，为本次子进程重新导出
+`AGENT_WORKFLOW_RUNTIME_BINDING`、`AGENT_WORKFLOW_STATE_DIR`、
+`AGENT_WORKFLOW_PROJECT_ROOT`、`AGENT_WORKFLOW_CONFIG_PATH` 和
+`AGENT_WORKFLOW_CORE_ROOT`。后三项由可信机器 binding 计算，包或项目不能自报任意核心路径。
+
+```bash
+bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py \
+  --binding '<当前 Task Pack 的完整三字段 runtime_binding JSON>' \
+  helper lib/task_graph_cli.py validate --input '<当前图或单包路径>'
+bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py \
+  --binding '<同一当前 Task Pack 的完整三字段 runtime_binding JSON>' \
+  helper lib/context_read.py .agent-workflow/product/WORKFLOW.md \
+  --task-pack '<当前单包路径>' --limit 6000
+```
+
+`ready`、`qa-ready`、export、update、规范校验、QA handoff 和其他 helper 均使用相同
+替换方法；普通业务构建／测试命令仍用项目自己的环境。必须读完整的 Skill／角色等
+受管正文也通过该 pin 的 `read` 或带 `--task-pack` 的分页器取得，不能直接沿已换版的
+宿主 Skill 软链拼接新旧正文。项目配置读取 `.agent-workflow/project.yaml`，不读
+`core/project.yaml` 或由 `core.parent` 推出的路径。
+
+显式 `--binding` 优先于调用桥时的环境值；桥选定后，helper 中的包 pin 必须与其导出的
+环境 pin 相同。已有合法任务可按本项目 `used_bindings` 继续读取旧版本；禁用后不创建
+新任务。缺 pin、跨项目根、未知或损坏版本都立即拒绝，没有“最新版本”回退。
+此处仅规定调用合同，不证明任何宿主实际加载或 Agent 已执行。
+
+### 源包与旧自包含安装
+
+没有中央标记／桥上下文的源包与旧安装保留下列 Python 入口和既有无 pin 合同。
+本引用其他旧路径示例均属于此分支；中央项目一律按上节替换成固定核心的桥调用。
+
 - Reuse the existing [record tools](runtime-records.md) for common snapshot updates, Task Pack
   export and selected fingerprint checks. Prefer existing project verification commands for behavior.
   Do not create a one-off program or extra receipt for each routine PM metadata operation.

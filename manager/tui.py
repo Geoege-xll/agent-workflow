@@ -11,14 +11,18 @@ from threading import Event
 import time
 
 from lib.install_workflow import InstallError, _target_path
+from lib import runtime_store
 from .catalog import Catalog, clean, discover
 from . import service
-from .tui_support import Layout, TextInput, Theme, cell_width, clip, draw_box, draw_scrollbar, ellipsize, padded, wrapped
+from .tui_support import (Layout, TextInput, Theme, PROJECT_ACTION_LABELS, binding_id, cell_width, clip,
+                          draw_box, draw_scrollbar, ellipsize, operation_error, padded, project_badge,
+                          project_plan_text, project_result_text, status_text, wrapped)
 
 HOSTS=("codex","claude","antigravity")
 HOST_LABELS=("Codex","Claude Code","Antigravity")
 ROLE_LABELS={"xy-backend":"后端开发","xy-web":"前端开发","xy-desktop":"桌面开发","xy-apple":"Apple 开发","xy-android":"Android 开发","xy-uiux":"UI 设计","xy-qa":"独立 QA"}
-LIST_MODALS={"model","effort","manage","backups","commands"}
+LIST_MODALS={"model","effort","manage","backups","commands","add_mode","versions"}
+HOST_NAMES=dict(zip(HOSTS,HOST_LABELS))
 
 
 @dataclass(frozen=True)
@@ -34,16 +38,24 @@ COMMANDS=(Binding("Enter","编辑模型","edit","edit model"),
           Binding("s","预览变更","preview","preview diff apply"),
           Binding("u","丢弃当前角色草稿","discard","discard undo draft"),
           Binding("g","工作流管理","manage","manage workflow"),
-          Binding("a","添加并安装","add","add init project"),
-          Binding("r","刷新来源","refresh","refresh reload"),
-          Binding("","安装 / 升级工作流","install","install upgrade"),
-          Binding("","检查安装","check","check verify"),
+          Binding("a","登记项目","add","add register init project"),
+          Binding("r","刷新状态与来源","refresh","refresh reload"),
+          Binding("","启用工作流","enable","open enable workflow"),
+          Binding("","停用工作流","disable","close disable workflow"),
+          Binding("","导入当前来源并启用","install","install upgrade import source"),
+          Binding("","中央版本列表 / 选择","versions","versions use pin"),
+          Binding("","回退前次版本","rollback","rollback previous"),
+          Binding("","检查工作流","check","check verify"),
+          Binding("","修复受管资源","repair","repair recover"),
+          Binding("","项目 / 三宿主详情","details","status hosts details"),
+          Binding("","停用并解除登记","del","del delete unregister project"),
           Binding("","模型配置备份 / 恢复","backups","backup restore"),
           Binding("","本地模型来源","sources","source catalog"),
           Binding("?","帮助","help","help shortcuts"),
           Binding("q","退出","quit","quit exit"))
 COMMAND_BY_ACTION={row.action:row for row in COMMANDS}
-MANAGE=tuple((action,COMMAND_BY_ACTION[action].label) for action in ("install","check","backups","sources"))
+MANAGE=tuple((action,COMMAND_BY_ACTION[action].label) for action in
+             ("enable","disable","install","versions","rollback","check","repair","details","del","backups","sources"))
 
 
 class App:
@@ -59,6 +71,8 @@ class App:
         self.drafts={};self.expected={};self.catalogs={};self.settings_cache={};self.roles_cache={}
         self.source_stamps={};self.roles_errors={};self.page_lines=10
         self.scratch=None;self.changes=[];self.backup_rows=[]
+        self.project_rows={};self.project_plan=None;self.version_rows=[];self.add_target=None
+        self.status_error="";self.on_job_result=None;self.job_frames=[]
         self.toast="Enter/m 编辑模型 · e 修改推理 · ←→ 选列 · / 搜索";self.toast_kind="info"
         self.done=False;self.future=None;self.after_job=None;self.show_job_result=True
         self.cancel_job=Event();self.job_cancellable=False;self.job_name="管理操作";self.job_started=0;self.job_return=None
@@ -123,26 +137,36 @@ class App:
         return replace(row,label=label) if label else row
 
     def unavailable(self,action):
-        if action in {"edit","effort","preview","discard","manage","refresh","install","check","backups","sources"} and not self.project:return "请先选择项目"
+        if action in {"edit","effort","preview","discard","manage","install","check","backups","sources",
+                      "enable","disable","versions","rollback","repair","details","del"} and not self.project:return "请先选择项目"
         if action in {"edit","effort"} and not self.role:return "当前宿主没有已安装角色"
         if action in {"edit","effort"} and self.role not in self.installed_roles():return "角色已移除；u 可单独丢弃此角色草稿，其他草稿保留"
         if action == "effort" and self.host == "antigravity":return "Antigravity 静态角色仅支持继承"
         if action == "preview" and not self.pending():return "当前范围没有待应用变更"
         if action == "discard" and self.scope() not in self.drafts:return "当前角色没有草稿"
+        if action == "rollback":
+            row=self.project_rows.get(str(self.project))
+            if row is not None and not row.get("previous_binding"):return "当前项目没有前次中央版本"
         return ""
 
     def bindings(self):
         # 帮助、底栏、命令面板与派发共用动作定义，提示不能承诺后端不支持的能力。
         if self.future:
-            return [Binding("Ctrl+C","请求取消并等待","interrupt")] if self.job_cancellable else [Binding("等待","操作完成后继续","wait")]
+            return [Binding("Ctrl+C","请求取消并等待结算","interrupt")] if self.job_cancellable else [Binding("等待","操作完成后继续","wait")]
         if self.searching:
             return [Binding("↑↓","选择匹配项","move"),Binding("PgUp/PgDn","翻页","move"),Binding("Enter","接受筛选","accept-search"),Binding("Esc","取消搜索","back")]
         if self.modal == "add":
-            return [Binding("Enter","安装到此项目","add-confirm"),Binding("Esc","取消","back"),Binding("←→","移动光标","input"),Binding("Home/End","行首 / 行尾","input"),Binding("Ctrl+U","清空输入","input")]
+            return [Binding("Enter","选择登记方式","add-confirm"),Binding("Esc","取消","back"),Binding("←→","移动光标","input"),Binding("Home/End","行首 / 行尾","input"),Binding("Ctrl+U","清空输入","input")]
         if self.modal in LIST_MODALS:
             rows=[Binding("↑↓","选择","move"),Binding("Home/End","首项 / 末项","move"),Binding("PgUp/PgDn","翻页","move"),Binding("Enter","执行操作" if self.modal == "commands" else "确认选择","confirm"),Binding("Esc","返回","back")]
             if self.modal != "commands":rows+=[Binding("/","搜索","search"),self.command("help")]
             if self.modal == "manage":rows.append(Binding(":","命令","commands"))
+            if self.modal == "versions":rows.append(Binding("i","完整版本详情","version-details"))
+            return rows
+        if self.modal == "project_plan":
+            rows=[Binding("↑↓","滚动","scroll"),Binding("PgUp/PgDn","翻页","scroll"),Binding("Home/End","页首 / 页尾","scroll"),Binding("Esc","返回不写入","back")]
+            if self.project_plan and self.project_plan.summary["can_apply"]:
+                rows.insert(0,Binding("Enter","确认"+PROJECT_ACTION_LABELS[self.project_plan.action],"confirm"))
             return rows
         if self.modal in {"preview","install","restore","quit"}:
             labels={"preview":"备份并应用","install":"确认安装 / 升级","restore":"确认恢复","quit":"放弃草稿并退出"}
@@ -178,7 +202,12 @@ class App:
                 levels=()
             labels={"inherit":"继承宿主","none":"none (关闭推理)","minimal":"minimal (极低)","low":"low (低)","medium":"medium (中)","high":"high (高)","xhigh":"xhigh (极高)","max":"max (最大)"}
             return [("继承宿主","inherit")]+[(labels.get(level,level),level) for level in levels]
-        if self.modal == "manage":return [(label,action) for action,label in MANAGE]
+        if self.modal == "manage":return [(label+(" · "+reason if (reason:=self.unavailable(action)) else ""),action) for action,label in MANAGE]
+        if self.modal == "add_mode":return [("仅登记项目（默认，不启用工作流）","register"),("登记并启用三宿主工作流","register_enable")]
+        if self.modal == "versions":
+            row=self.project_rows.get(str(self.project),{})
+            current=binding_id(row.get("runtime_binding"))
+            return [(item["content_id"][:12]+(" · 当前" if item["content_id"] == current else "")+" · "+item["label"],item["content_id"]) for item in self.version_rows]
         if self.modal == "backups":return [(f'{row["id"]} · {row["status"]}',row["id"]) for row in self.backup_rows]
         if self.modal == "commands":
             return [(row.label+(f"  [{row.key}]" if row.key else "")+(" · "+reason if (reason:=self.unavailable(row.action)) else ""),row.action) for row in COMMANDS]
@@ -189,8 +218,8 @@ class App:
     def visible_rows(self,kind=None):
         kind=kind or self.list_kind()
         if kind == "projects":
-            rows=[(i,project.name,str(project),str(project)) for i,project in enumerate(self.projects)]
-            rows.append((len(self.projects),"+ 添加并安装项目","", ""))
+            rows=[(i,project_badge(self.project_rows.get(str(project)))+" · "+project.name,str(project),str(project)) for i,project in enumerate(self.projects)]
+            rows.append((len(self.projects),"+ 登记项目","", ""))
         elif kind == "roles":
             installed=set(self.installed_roles())
             rows=[(i,("已移除 · " if role not in installed else "")+ROLE_LABELS.get(role,role),role,role) for i,role in enumerate(self.role_list())]
@@ -215,7 +244,10 @@ class App:
         if rows and self.selection() not in [row[0] for row in rows]:self.select(rows[0][0])
 
     def view_frame(self):
-        return {key:getattr(self,key) for key in ("modal","index","scroll","text","pane","filter_text","project_index","host_index","role_index","role_column")}
+        frame={key:getattr(self,key) for key in ("modal","index","scroll","text","pane","filter_text","project_index","host_index","role_index","role_column")}
+        # 输入属于触发视图，预览/错误返回不能丢失路径，也不能被命令面板搜索覆盖。
+        frame["editor"]=replace(self.editor)
+        return frame
 
     def restore_view(self,frame):
         for key,value in frame.items():setattr(self,key,value)
@@ -252,50 +284,121 @@ class App:
         while self.modal in {"model","effort"}:self.close_view()
         self.scratch=None;self.notify("已暂存；s 预览后才写入当前项目 / 宿主","warning")
 
-    def start_job(self,operation,after=None,*,show_result=True,name="管理操作",cancellable=False):
+    def start_job(self,operation,after=None,*,show_result=True,name="管理操作",cancellable=False,
+                  on_result=None,preserve_view=False):
+        if self.future:
+            self.notify("已有操作执行中，请等待真实结果","warning");return
         # 返回帧只保留有效入口，不让结果页返回可重复提交的旧确认页。
         candidates=[self.view_frame(),*reversed(self.frames)]
-        self.job_return=next((dict(frame) for frame in candidates if frame["modal"] == "manage"),None)
-        if self.job_return is None:
-            self.job_return=next((dict(frame) for frame in candidates if frame["modal"] is None),self.view_frame())
-            self.job_return.update(modal=None,scroll=0,text="")
+        if preserve_view:
+            self.job_return=self.view_frame();self.job_frames=list(self.frames)
+        else:
+            self.job_frames=[]
+            self.job_return=next((dict(frame) for frame in candidates if frame["modal"] in {"manage","add_mode"}),None)
+            if self.job_return is None:
+                self.job_return=next((dict(frame) for frame in candidates if frame["modal"] is None),self.view_frame())
+                self.job_return.update(modal=None,scroll=0,text="")
+            elif self.job_return["modal"] == "add_mode":
+                self.job_frames=next((list(self.frames[:index]) for index,frame in enumerate(self.frames)
+                                      if frame["modal"] == "add_mode"),list(self.frames))
         self.cancel_job.clear();self.job_cancellable=cancellable;self.job_name=name;self.job_started=time.monotonic()
         self.show_job_result=show_result;self.modal=None;self.frames=[];self.filter_text="";self.searching=False
-        self.future=self.executor.submit(operation);self.after_job=after
-        self.notify("正在"+name+"；"+("Ctrl+C 可请求取消并等待恢复" if cancellable else "请等待完成，此操作不支持中途取消"),"warning")
+        self.future=self.executor.submit(operation);self.after_job=after;self.on_job_result=on_result
+        self.notify("正在"+name+"；"+("Ctrl+C 可请求取消；已开始的事务等待结算" if cancellable else "请等待完成，此操作不支持中途取消"),"warning")
 
     def poll_job(self):
         if not self.future or not self.future.done():return
         future,self.future=self.future,None
+        self.restore_view(self.job_return);self.frames=list(self.job_frames)
         try:
             result=future.result()
             if self.after_job:self.after_job()
-            self.text=str(result or "完成");self.modal="result" if self.show_job_result else None;self.scroll=0
-            self.notify("操作完成" if self.show_job_result else "安装完成；Enter 配置角色模型，1/2/3 切换宿主","success")
+            self.notify("已读取预览 / 状态，尚未写入" if self.on_job_result and not self.show_job_result else "操作完成","success")
+            if self.on_job_result:self.on_job_result(result)
+            elif self.show_job_result:
+                self.show_view("result");self.text=str(result or "完成")
         except Exception as exc:
-            self.text=str(exc);self.modal="error";self.scroll=0;self.notify("操作未完成；请查看诊断及保留的恢复信息","error")
-        self.frames=[self.job_return] if self.modal and self.job_return else []
-        self.after_job=None;self.job_cancellable=False
+            # 失败可能发生在跨资源结算之后，旧状态失效；保留草稿，要求显式刷新，绝不假报回滚成功。
+            self.project_rows.pop(str(self.project),None)
+            self.status_error="状态需刷新；上次操作未完成"
+            self.show_view("error");self.text=operation_error(exc)
+            self.notify("操作未完成；请查看诊断及保留的恢复信息","error")
+        self.after_job=None;self.on_job_result=None;self.job_cancellable=False
 
-    def install_project(self,project,*,select_after=False):
-        """仅成功后登记；安装预检、互斥、取消和恢复仍由原服务负责。"""
-        def install():
-            with service.lock(self.state,str(project)):result=service.install(project,self.cancel_job)
-            service.register(self.state,project);return result
-        def after():
-            if select_after:
-                if project not in self.projects:self.projects.append(project)
-                self.project_index=self.projects.index(project);self.role_index=0;self.pane="roles"
+    def query_project_rows(self,include=None):
+        rows=service.project_summaries(self.state,self.scan)
+        if include and not any(row["project"] == str(include) for row in rows):
+            rows.append({**service.project_status(self.state,include),"registered":False})
+        return rows
+
+    def accept_project_rows(self,rows,*,selected=None):
+        """缓存仅用于展示；列表身份跟随权威结果，删除后选相邻项且不复活隐藏项目。"""
+        old_index=self.project_index;old_project=self.project;old_role=self.role
+        selected=selected or old_project
+        self.project_rows={row["project"]:row for row in rows};self.status_error=""
+        self.projects=[Path(row["project"]) for row in rows]
+        self.project_index=self.projects.index(selected) if selected in self.projects else min(old_index,max(0,len(self.projects)-1))
+        if not self.projects:self.pane="projects"
+        roles=self.role_list() if self.project else []
+        self.role_index=roles.index(old_role) if self.project == old_project and old_role in roles else 0
+        self.filter_text=""
+
+    def refresh_project_status(self):
+        selected=self.project
+        self.start_job(lambda:self.query_project_rows(selected),show_result=False,name="读取项目与固定版本状态",
+                       on_result=lambda rows:self.accept_project_rows(rows,selected=selected),preserve_view=True)
+
+    def preview_project(self,project,action,**options):
+        def ready(plan):
+            self.project_rows[str(project)]={**plan.status_before,"registered":plan.registered_before}
+            self.project_plan=plan;self.show_view("project_plan");self.text=project_plan_text(plan.summary)
+            if not plan.summary["can_apply"]:self.notify("预览发现冲突，不能应用；查看冲突路径或返回预览修复","warning")
+        self.start_job(lambda:service.preview_project(self.state,project,action,**options),show_result=False,
+                       name="预览"+PROJECT_ACTION_LABELS[action],on_result=ready,preserve_view=True)
+
+    def apply_project(self):
+        plan=self.project_plan
+        if plan is None or not plan.summary["can_apply"]:
+            self.notify("计划含冲突，不能确认；请返回核对冲突或预览修复","warning");return
+        def apply():
+            # 服务拥有组合锁、条件前像与停用后解除登记；UI 不外套锁或追加 register 事务。
+            result=service.apply_project(plan,cancel=self.cancel_job)
+            return result,self.query_project_rows(None if plan.action == "del" else plan.project)
+        def ready(value):
+            result,rows=value
+            self.accept_project_rows(rows,selected=plan.project)
             for cache in (self.settings_cache,self.roles_cache,self.roles_errors,self.catalogs):
                 for key in list(cache):
-                    if key[0] == str(project):cache.pop(key)
-        self.start_job(install,after,show_result=not select_after,name="安装 / 升级 "+clean(project,180),cancellable=True)
+                    if key[0] == str(plan.project):cache.pop(key)
+            if plan.action == "del":
+                # 列表变化后清除旧入口帧，结果页返回当前相邻项。其他范围的模型草稿原样保留。
+                self.modal=None;self.frames=[];self.pane="projects"
+            elif plan.action == "add":
+                self.modal=None;self.frames=[];self.pane="roles" if result["enabled"] else "projects"
+            self.show_view("result");self.text=project_result_text(result,HOST_NAMES)
+            if result.get("cancel_requested"):self.notify("取消请求到达时事务已经开始；已完成结算，请查看真实结果","warning")
+            self.project_plan=None
+        self.start_job(apply,name=PROJECT_ACTION_LABELS[plan.action],on_result=ready,cancellable=True)
 
     def manage_action(self,action):
         if not self.project:raise ValueError("请先按 a 添加项目")
-        if action == "install":
-            text=service.install_preview(self.project);self.show_view("install");self.text=text
-        elif action == "check":self.start_job(lambda:service.check(self.project),name="检查安装")
+        project=self.project
+        if reason:=self.unavailable(action):raise ValueError(reason)
+        if action in {"enable","disable","rollback","repair","del"}:self.preview_project(project,action)
+        elif action == "install":self.preview_project(project,"enable",source_root=service.SOURCE)
+        elif action == "check":self.start_job(lambda:service.check(project,state=self.state),name="检查工作流",preserve_view=True)
+        elif action == "versions":
+            def ready(rows):
+                self.version_rows=rows;self.show_view("versions")
+                if not rows:self.notify("中央内容库没有已导入版本；先启用项目或导入当前来源","warning")
+            self.start_job(lambda:runtime_store.list_cores(self.state),show_result=False,name="校验中央版本列表",on_result=ready,preserve_view=True)
+        elif action == "details":
+            def ready(row):
+                cached=self.project_rows.get(str(project),{})
+                row={**row,"registered":cached.get("registered")}
+                self.project_rows[str(project)]=row;self.show_view("details");self.text=status_text(row,HOST_NAMES)
+                if row.get("conflicts"):self.notify("项目存在冲突；详情保留完整路径与修复方向","warning")
+            self.start_job(lambda:service.project_status(self.state,project),show_result=False,name="读取三宿主详情",on_result=ready,preserve_view=True)
         elif action == "sources":
             catalog=self.catalog();text="\n".join([f"{row.id} · {row.source}" for row in catalog.models]+catalog.notes+catalog.inactive)
             self.show_view("sources");self.text=text
@@ -325,27 +428,29 @@ class App:
             else:self.scratch["effort"]="inherit";self.stage()
         elif self.modal == "effort":self.scratch["effort"]=self.options()[self.index][1];self.stage()
         elif self.modal == "manage":self.manage_action(self.options()[self.index][1])
+        elif self.modal == "add_mode":self.preview_project(self.add_target,"add",enable=self.options()[self.index][1] == "register_enable")
+        elif self.modal == "versions":self.preview_project(project,"use",content_id=self.options()[self.index][1])
+        elif self.modal == "project_plan":self.apply_project()
         elif self.modal == "preview":
             changes=list(self.changes);keys=[self.scope(role) for role in self.pending()];catalog=self.catalog()
             def after():
                 for key in keys:
                     self.drafts.pop(key,None);self.expected.pop(key,None);self.settings_cache.pop(key,None);self.source_stamps.pop(key,None)
             def apply():
-                identifier=service.commit(self.state,project,changes,lambda:service.check(project,host),before_write=lambda:service.ensure_source(catalog,project))
+                identifier=service.commit(self.state,project,changes,lambda:service.check(project,host,state=self.state),before_write=lambda:service.ensure_source(catalog,project))
                 return service.backup_summary(project,identifier)
             self.start_job(apply,after,name="备份并应用模型配置")
-        elif self.modal == "install":self.install_project(project)
+        elif self.modal == "install":self.preview_project(project,"enable",source_root=service.SOURCE)
         elif self.modal == "backups":
             if not self.backup_rows:return
             changes=service.prepare_restore(self.state,project,self.options()[self.index][1])
             self.show_view("restore");self.changes=changes
             self.text="恢复以下配置；恢复前会再保存一份备份：\n"+"\n".join(row.relative for row in self.changes)
         elif self.modal == "restore":
-            from .cli import check_changed_hosts
             # 恢复计划携带原版本指纹，不可转成普通 list 丢失发布前/验收后复核。
             changes=self.changes
             def restore():
-                identifier=service.commit(self.state,project,changes,lambda:check_changed_hosts(project,changes))
+                identifier=service.commit(self.state,project,changes,lambda:service.check(project,state=self.state))
                 return service.backup_summary(project,identifier)
             self.start_job(restore,lambda:self.settings_cache.clear(),name="恢复模型配置")
         elif self.modal == "quit":
@@ -369,7 +474,7 @@ class App:
     def interrupt(self):
         if self.future:
             if self.job_cancellable:
-                self.cancel_job.set();self.notify("已请求取消；正在等待当前管理操作退出及必要恢复完成","warning")
+                self.cancel_job.set();self.notify("已请求取消；执行前可拒绝，已开始的事务等待真实结果与必要恢复","warning")
             else:self.notify("此操作不支持中途取消；请等待完成，事务与锁仍受保护","warning")
         else:self.quit(interrupted=True)
 
@@ -404,7 +509,14 @@ class App:
         elif action == "manage":
             if not self.project:raise ValueError("请先按 a 添加项目")
             self.show_view("manage")
-        elif action in {"install","check","backups","sources"}:self.manage_action(action)
+        elif action in {"install","check","backups","sources","enable","disable","versions","rollback","repair","details","del"}:self.manage_action(action)
+        elif action == "version-details":
+            if not self.version_rows:raise ValueError("中央内容库没有已导入版本")
+            row=self.version_rows[self.index]
+            self.show_view("version_details")
+            self.text="\n".join(["完整内容 ID  "+row["content_id"],"清单 SHA256  "+row["manifest_sha256"],
+                                  "来源标签（仅说明，不作为版本身份）  "+row["label"],"中央核心路径  "+row["root"],
+                                  "", "Esc 返回版本列表；Enter 仅在列表中预览选择版本。"])
         elif action == "commands":self.show_view("commands");self.input="";self.sync_selection()
         elif action == "add":self.show_view("add");self.input=""
         elif action == "add-confirm":
@@ -413,7 +525,7 @@ class App:
             try:project=_target_path(self.input,service.SOURCE)
             except InstallError as exc:raise ValueError(str(exc)) from exc
             project=service.project_path(project)
-            self.install_project(project,select_after=True)
+            self.add_target=project;self.show_view("add_mode")
         elif action == "preview":
             if not self.pending():self.notify("当前项目 / 宿主没有待应用变更");return
             # 预览复核有效来源而不重新启动 native；r 才替换本项目/宿主拥有的目录快照。
@@ -422,7 +534,7 @@ class App:
             if fresh.stamp and any(self.source_stamps.get(self.scope(role)) != fresh.stamp for role in self.pending()):
                 raise ValueError("模型来源或能力已变化；草稿保留，请重新选择模型，或按 u 丢弃当前角色草稿")
             expected={role:self.expected[self.scope(role)] for role in self.pending()}
-            changes=service.prepare(self.project,self.host,self.pending(),fresh,expected)
+            changes=service.prepare(self.project,self.host,self.pending(),fresh,expected,state=self.state)
             text="\n\n".join(f'{ROLE_LABELS.get(role,role)}  /  {role}\n  原配置  {expected[role]["model"]} / {expected[role]["effort"]}\n  待应用  {value["model"]} / {value["effort"]}' for role,value in self.pending().items())
             text+="\n\n变更文件：\n"+"\n".join(row.relative for row in changes)
             self.show_view("preview");self.changes=changes;self.text=text
@@ -435,6 +547,7 @@ class App:
             rows=self.role_list();self.role_index=rows.index(role) if role in rows else 0
             self.filter_text="";self.sync_selection()
             self.notify("本地来源已刷新，草稿保留；冲突时按 u 丢弃当前角色草稿后重新编辑")
+            if hasattr(self,"executor"):self.refresh_project_status()
         elif action == "discard":
             key=self.scope()
             self.drafts.pop(key,None);self.expected.pop(key,None);self.source_stamps.pop(key,None);self.settings_cache.pop(key,None)
@@ -443,7 +556,7 @@ class App:
         elif action == "help":
             text="当前视图\n"+"\n".join(f"{row.key:12} {row.label}" for row in self.bindings())
             text+="\n\n主界面命令（: 可按名称搜索）\n"+"\n".join(f"{row.key or '命令面板':12} {row.label}" for row in COMMANDS)
-            text+="\n\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认。\n鼠标单击只选中，Enter 确认。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
+            text+="\n\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认。\n鼠标单击只选中，Enter 确认。\na 输入目录后可选仅登记（默认）或登记并启用；所有写操作先预览，Esc 不写入。\ng 管理启停、中央版本、回退、检查、修复、三宿主详情和停用并解除登记。\n版本列表 i 查看完整 ID，Enter 只读预览；完整 ID 才是版本身份。\nCtrl+C 在执行前可请求取消，事务已经开始后等待结算；不会终止已运行任务。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
             self.show_view("help");self.text=text
         elif action == "quit":self.quit()
         elif action == "search":
@@ -462,6 +575,7 @@ class App:
                     if previous in {"model","effort"}:
                         self.scratch=None
                 if previous == "quit":self.quit_code=0
+                if previous == "project_plan":self.project_plan=None
 
     def dispatch(self,key):
         if key == "ctrl-c":self.interrupt();return
@@ -526,8 +640,11 @@ class App:
         self.put(3,x,"◈ 项目" if active else "  项目",width,self.theme.focus if active else self.theme.title)
         query=self.search_input.text if self.searching and active else self.filter_text if active else ""
         if self.searching and active:self.draw_input(4,x,width,self.search_input)
-        else:self.put(4,x,ellipsize("/ "+query if query else f"{len(self.projects)} 个本地项目",width),width,self.theme.muted)
-        end=layout.bottom-layout.details-(1 if query else 0);available=max(1,end-5)
+        else:self.put(4,x,ellipsize("/ "+query if query else self.status_error or f"{len(self.projects)} 个本地项目",width),width,self.theme.warning if self.status_error else self.theme.muted)
+        end=layout.bottom-layout.details-(1 if query else 0)
+        # 窄侧栏把项目名与状态/pin分行，避免长ID挤掉身份；翻页仍按项目项而不是物理行计数。
+        row_height=2 if layout.sidebar else 1
+        available=max(1,(end-5)//row_height)
         rows=self.visible_rows("projects");selected=next((i for i,row in enumerate(rows) if row[0] == self.project_index),0)
         start=max(0,selected-available+1)
         if active:self.page_lines=available
@@ -537,13 +654,18 @@ class App:
             attr=self.theme.selected if active and is_sel else self.theme.inactive if is_sel else self.theme.text
             marker="▌ " if (active and is_sel) else "› " if is_sel else "  "
             dot="● " if pending else ""
-            self.row(5+offset,x,width,marker+dot+label,attr)
-            self.hits.append((5+offset,x,width,"project",index))
+            y=5+offset*row_height
+            display=self.projects[index].name if row_height == 2 and index<len(self.projects) else label
+            self.row(y,x,width,marker+dot+display,attr)
+            self.hits.append((y,x,width,"project",index))
+            if row_height == 2 and index<len(self.projects):
+                self.row(y+1,x,width,"  "+project_badge(self.project_rows.get(str(self.projects[index]))),attr)
+                self.hits.append((y+1,x,width,"project",index))
         if not rows:self.put(5,x,"无匹配 · Esc 清除",width,self.theme.warning)
-        if query:self.put(end,x,"+ 添加并安装 · a",width,self.theme.focus)
+        if query:self.put(end,x,"+ 登记项目 · a",width,self.theme.focus)
         if len(rows)>available:
             sb_x=layout.sidebar-1 if layout.sidebar else layout.width-2
-            draw_scrollbar(self.put,5,sb_x,available,len(rows),start,available,self.theme.border)
+            draw_scrollbar(self.put,5,sb_x,available*row_height,len(rows),start,available,self.theme.border)
 
     def draw_roles(self,layout):
         x=layout.sidebar+2 if layout.sidebar else 1;width=layout.width-x-2
@@ -562,7 +684,11 @@ class App:
         if active:self.page_lines=available
         selected=next((i for i,row in enumerate(rows) if row[0] == self.role_index),0);start=max(0,selected-available+1)
         if not rows:
-            hint="无匹配 · Esc 清除筛选" if self.filter_text and active else "没有已安装角色 · a 添加 / g 安装" if self.project else "Tab 选择项目，或按 a 添加并安装"
+            row=self.project_rows.get(str(self.project))
+            if not self.project:hint="尚无项目 · a 登记项目"
+            elif self.filter_text and active:hint="无匹配 · Esc 清除筛选"
+            elif row and row["state"] in {"unmanaged","disabled"}:hint="工作流未启用 · g 预览启用"
+            else:hint="没有已安装角色 · g 查看状态 / 启用"
             self.put(7,x,ellipsize(self.roles_errors.get((str(self.project),self.host),hint),width),width,self.theme.warning)
         for offset,(index,label,role) in enumerate(rows[start:start+available]):
             try:value=self.current(role)
@@ -579,7 +705,7 @@ class App:
             draw_scrollbar(self.put,6,layout.width-2,available,len(rows),start,available,self.theme.border)
 
     def draw_modal(self,layout):
-        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"变更预览","install":"安装 / 升级确认","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"添加并安装项目","result":"操作结果","error":"操作未完成","commands":"命令面板"}
+        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"变更预览","install":"安装 / 升级确认","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板"}
         modal_title=titles.get(self.modal,self.modal)
         x=max(1,(layout.width-92)//2);width=layout.width-2*x-1
         box_h=layout.bottom-2+1
@@ -601,7 +727,8 @@ class App:
         inner_x=x+inner_pad
         inner_w=width-2*inner_pad
 
-        sub_info=ellipsize(f"{self.project or '未选择项目'} / {HOST_LABELS[self.host_index]}",inner_w,tail=True)
+        target=self.project_plan.project if self.modal == "project_plan" and self.project_plan else self.add_target if self.modal == "add_mode" else self.project
+        sub_info=ellipsize(f"{target or '未选择项目'} / {HOST_LABELS[self.host_index]}",inner_w,tail=True)
         self.put(3,inner_x,sub_info,inner_w,self.theme.muted)
         self.put(4,inner_x,"─"*inner_w,inner_w,self.theme.border)
 
@@ -613,13 +740,15 @@ class App:
             available=max(1,layout.bottom-details-6);self.page_lines=available
             rows=self.visible_rows();selected=next((i for i,row in enumerate(rows) if row[0] == self.index),0);start=max(0,selected-available+1)
             for offset,(index,label,_) in enumerate(rows[start:start+available]):
-                disabled=self.unavailable(COMMANDS[index].action) if self.modal == "commands" else ""
+                disabled=self.unavailable(COMMANDS[index].action) if self.modal == "commands" else self.unavailable(MANAGE[index][0]) if self.modal == "manage" else ""
                 is_sel=index == self.index
                 attr=self.theme.selected if is_sel else self.theme.muted if disabled else self.theme.text
                 marker="▌ " if is_sel else "  "
                 self.row(6+offset,inner_x,inner_w,marker+label,attr)
                 self.hits.append((6+offset,inner_x,inner_w,"option",index))
-            if not rows:self.put(6,inner_x,"没有匹配项 · Esc 返回，或重新输入搜索",inner_w,self.theme.warning)
+            if not rows:
+                empty="中央内容库尚无已导入版本 · Esc 返回" if self.modal == "versions" and not self.version_rows else "没有匹配项 · Esc 返回，或重新输入搜索"
+                self.put(6,inner_x,empty,inner_w,self.theme.warning)
             if details and rows:
                 model=next((row for row in self.catalog().models if row.id == self.options()[self.index][1]),None)
                 if model:
@@ -629,9 +758,9 @@ class App:
             if len(rows)>available:
                 draw_scrollbar(self.put,6,x+width-1,available,len(rows),start,available,self.theme.border)
         elif self.modal == "add":
-            self.put(5,inner_x,"拖入项目根目录，回车直接安装三平台工作流。",inner_w)
+            self.put(5,inner_x,"输入或拖入现有项目根目录，再选择登记方式。",inner_w)
             self.put(6,inner_x,"项目目录",inner_w,self.theme.muted);self.draw_input(7,inner_x,inner_w,self.editor)
-            self.put(9,inner_x,"已有工作流将升级；保留项目配置，失败由安装器恢复。",inner_w,self.theme.muted)
+            self.put(9,inner_x,"默认仅登记；所有操作先预览，确认后才写入。",inner_w,self.theme.muted)
             if self.toast_kind == "error":self.put(10,inner_x,ellipsize("! "+self.toast,inner_w),inner_w,self.theme.error)
         else:
             lines=wrapped(self.text,inner_w);available=max(1,layout.bottom-6);self.page_lines=available
@@ -677,7 +806,7 @@ class App:
                 self.put(layout.bottom-3,1,"─"*(w-3),w-3,self.theme.border)
                 if layout.sidebar:
                     self.put(layout.bottom-3,layout.sidebar,"┴",1,self.theme.border)
-                self.put(layout.bottom-2,1,ellipsize(str(self.project or "选择项目，或按 a 添加并安装"),w-3,tail=True),w-3,self.theme.muted)
+                self.put(layout.bottom-2,1,ellipsize(str(self.project or "选择项目，或按 a 登记项目"),w-3,tail=True),w-3,self.theme.muted)
                 if self.role:
                     try:
                         value=self.current(self.role);detail=f'{self.role}  ·  {value["model"]} / {value["effort"]}'
@@ -690,7 +819,7 @@ class App:
         status=self.toast;kind=self.toast_kind
         if self.future:
             elapsed=max(0,int(time.monotonic()-self.job_started));spinner="|/-\\"[(elapsed*3)%4]
-            status=f"{spinner} {self.job_name} · {elapsed}s · "+("已请求取消，等待退出及必要恢复" if self.cancel_job.is_set() else "执行中");kind="warning"
+            status=f"{spinner} {self.job_name} · {elapsed}s · "+("已请求取消，等待真实结果与必要恢复" if self.cancel_job.is_set() else "执行中");kind="warning"
         prefix={"error":"✖ ","warning":"▲ ","success":"✔ ","info":"● "}.get(kind,"· ")
         self.put(layout.status,1,ellipsize(prefix+status,w-3),w-3,getattr(self.theme,kind,self.theme.text))
         for offset,line in enumerate(self.footer_lines(w-3)):self.put(layout.hints+offset,1,line,w-3,self.theme.focus)
@@ -703,6 +832,8 @@ class App:
         try:curses.mousemask(curses.BUTTON1_CLICKED)
         except curses.error:pass
         with ThreadPoolExecutor(max_workers=1) as self.executor:
+            # 验证核心摘要可能耗时，首次状态也放到既有作业线程；绘制帧只消费缓存。
+            self.refresh_project_status()
             while not self.done:
                 try:self.poll_job();self.draw();self.read_input(screen)
                 except KeyboardInterrupt:

@@ -294,7 +294,6 @@ def _render_doc_candidates(
         "DOC_STANDARDS_ROOT": docs["standards_root"].rstrip("/"),
         "DOC_DESIGN_DIR": docs["standards_root"].rstrip("/"),
         "DOC_PLANS_DIR": docs["plans"].rstrip("/"),
-        "DOC_NOTES_DIR": docs["notes"].rstrip("/"),
     }
     text = _read_regular(pack / "templates/docs/PROJECT.md", "project template").decode("utf-8")
     unknown = set(re.findall(r"\{\{([A-Z_]+)\}\}", text)) - substitutions.keys()

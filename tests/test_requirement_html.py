@@ -302,6 +302,20 @@ class RequirementHtmlTest(unittest.TestCase):
                 self.process("check")
         self.assertEqual(before, {p.relative_to(self.root): p.stat().st_mtime_ns for p in self.root.rglob("*")})
 
+    def test_candidate_render_binds_new_bytes_without_publishing_source_or_html(self):
+        """候选入口只提供给同事务消费者，不能为了渲染先覆盖正式 Markdown/HTML。"""
+        self.process()
+        source_before, page_before = renderer.snapshot(self.source), renderer.snapshot(self.target)
+        body = SAMPLE.encode() + "\n迁移候选中已明确归属的结论。\n".encode()
+        candidate = renderer.render_candidate(self.root, self.source, body, self.source,
+            self.root / "docs/standards/prototype", REQUEST)
+        self.assertEqual(source_before, renderer.snapshot(self.source))
+        self.assertEqual(page_before, renderer.snapshot(self.target))
+        binding = {"project": str(self.root), "source": "docs/plans/change.md", "draft": False}
+        record, _ = renderer.page_record(candidate, binding)
+        self.assertEqual(renderer.digest(body), record["source_sha256"])
+        self.assertIn("迁移候选中已明确归属的结论", candidate.decode())
+
     def test_installed_runtime_distributes_three_hosts_and_runs_without_source_imports(self):
         project = self.work / "installed-project"
         project.mkdir(exist_ok=True)

@@ -2344,8 +2344,7 @@ class ProjectDocumentModelContractTest(unittest.TestCase):
             "  standards: docs/STANDARDS.md\n"
             "  standards_root: docs/standards/\n"
             "  project: docs/PROJECT.md\n"
-            "  plans: docs/plans/\n"
-            "  notes: docs/notes/\n",
+            "  plans: docs/plans/\n",
             encoding="utf-8",
         )
 
@@ -2468,7 +2467,6 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
             "  project_id: fixture-project\n"
             "  qa_requires_provider: false\n"
             "  portable_checkpoint: docs/PROJECT.md\n"
-            "  fallback_dir: docs/notes/\n\n"
             "orchestration:\n"
             "  max_concurrent_subagents: 2\n"
             "  max_parallel_writers: 2\n"
@@ -2480,7 +2478,6 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
             "  standards_root: docs/standards/\n"
             "  project: docs/PROJECT.md\n"
             "  plans: docs/plans/\n"
-            "  notes: docs/notes/\n"
         )
 
     def _invoke(self) -> subprocess.CompletedProcess[str]:
@@ -5296,6 +5293,53 @@ class ProjectDiscoveryContractTest(unittest.TestCase):
 
 
 class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
+    def test_notes_retirement_reaches_all_hosts_and_legacy_keys_fail_closed(self) -> None:
+        """通过三宿主真实安装/检查证明新配置可运行，旧字段在写入之前明确拒绝。
+
+        使用已有短命安装夹具与统一入口；不创建业务环境，也不把仅匹配 Skill 文案
+        的断言扩写成安装消费者已通过；旧字段负控复用同一已生成项目。
+        """
+        temporary, project, pack = self.make_fixture()
+        self.addCleanup(temporary.cleanup)
+        def run(script: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+            result = self.run_script(project, script, *arguments)
+            scratch = os.environ.get("AWF_TEST_SCRATCH")
+            if scratch:
+                # 此节点承担真实安装证据，保留嵌套 shell 的完整原始输出供 PM/QA 查阅；
+                # 无任务 scratch 时沿普通单测生命周期运行，不另造证据目录。
+                with (Path(scratch) / "notes-source-validation.log").open("a", encoding="utf-8") as log:
+                    log.write(f"\n三宿主真实消费者：bash agent_workflow/{script} {' '.join(arguments)}\n"
+                              f"cwd={project}\n" + result.stdout + result.stderr + f"\n退出码：{result.returncode}\n")
+            return result
+        installed = run("setup_all.sh")
+        self.assertEqual(0, installed.returncode, installed.stdout + installed.stderr)
+        checked = run("setup_all.sh", "--check")
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        self.assertFalse((project / "docs/notes").exists())
+        self.assertFalse((project / "docs/plans").exists())
+        for path in (project / ".agents/skills/xy-project-memory/SKILL.md",
+                     project / ".claude/skills/xy-project-memory/SKILL.md"):
+            body = path.read_text(encoding="utf-8")
+            for retired in ("memory.fallback_dir", "docs.notes", "fallback_note:"):
+                self.assertNotIn(retired, body)
+        project_body = (project / "docs/PROJECT.md").read_text(encoding="utf-8")
+        self.assertNotIn("记忆回退", project_body)
+        self.assertNotIn("docs/notes", project_body)
+        config = pack / "project.yaml"
+        current = config.read_text(encoding="utf-8")
+        legacy = current.replace("memory:\n", "memory:\n  fallback_dir: docs/notes/\n") + "  notes: docs/notes/\n"
+        config.write_text(legacy, encoding="utf-8")
+        # 生成物已与当前共享 Skill 一致，负控应来自真实配置退休，而非未安装/漂移错误。
+        for host in HOSTS:
+            for mode in ("--preflight", "--check"):
+                with self.subTest(host=host, mode=mode):
+                    refused = run(f"setup_{host}.sh", mode)
+                    self.assertNotEqual(0, refused.returncode)
+                    output = refused.stdout + refused.stderr
+                    self.assertIn("migrate_project_docs.py", output)
+                    self.assertIn("unsupported", output)
+                    self.assertFalse((project / "docs/notes").exists())
+
     def test_new_builtin_reference_drift_is_rejected_by_each_host(self) -> None:
         temporary, project, _ = self.install_all()
         self.addCleanup(temporary.cleanup)
@@ -6942,18 +6986,17 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             with self.subTest(relative=relative):
                 body = read_contract(PACK / relative)
                 # 直接升级不接受 STATUS/SPEC 对应的旧键，也不提供别名兼容。
-                for legacy_key in ("dev_rules", "project_status", "contracts", "progress", "ops", "features"):
+                for legacy_key in ("dev_rules", "project_status", "contracts", "progress", "ops", "features", "notes", "fallback_dir"):
                     self.assertNotRegex(body, rf"(?m)^  {legacy_key}:")
                 for canonical_key in (
                     "standards",
                     "standards_root",
                     "project",
                     "plans",
-                    "notes",
                 ):
                     self.assertRegex(body, rf"(?m)^  {canonical_key}:")
                 self.assertIn("portable_checkpoint: docs/PROJECT.md", body)
-                self.assertIn("fallback_dir: docs/notes/", body)
+                self.assertNotIn("fallback_dir:", body)
 
         self.assertFalse((PACK / "templates/docs/OPERATIONS.md").exists())
         self.assertFalse((PACK / "templates/docs/SPEC.md").exists())

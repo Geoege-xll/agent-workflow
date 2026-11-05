@@ -49,6 +49,13 @@ Existing user confirmation stages are unchanged; adopted design rules do not imp
 Use `.agent-workflow/product/WORKFLOW.md` as the canonical product procedure and
 `.agent-workflow/project.yaml` as the project adapter.
 
+中央模式先按 WORKFLOW 的“中央固定版本与项目适配器”验证本机启用；宿主 Skill 软链
+只能帮助发现入口，克隆后缺机器 binding 不能自动编排。新图／单包固定严格三字段
+`runtime_binding`，现有任务换版、缺 pin、冲突或损坏不回退。每次读取受管正文或执行
+helper 都按当前包 pin 使用下面链接的统一桥执行边界，不能因项目当前 Skill 已换版
+而改读或执行新版；不假定上一工具调用留下的 shell 环境仍存在。源包／旧自包含入口
+保留原用法，中央适配器始终属于实际项目 `.agent-workflow/project.yaml`。
+
 Full 需求以 HTML 正式审阅，模型只维护一份 Markdown；PM 按
 [需求 HTML 交付](../xy-plan/references/requirement-html.md) 处理批准前 scratch 草案、批准后
 plans 同名 `.md`/`.html` 与原型覆盖回写。HTML 新鲜度不创建批准，也不替代需求/原型指纹。

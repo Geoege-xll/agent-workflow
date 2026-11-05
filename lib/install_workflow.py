@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把可删除的安装包发布为项目内自包含的隐藏运行时。"""
+"""公共中央安装入口，以及旧自包含安装的受管校验、归档和恢复所有者。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 # CLI 直接执行与测试按包导入使用同一入口读写逻辑，避免恢复路径另造安全规则。
@@ -54,6 +55,218 @@ PACK_DIRECTORIES = ("product", "roles", "platforms", "lib", "scripts", "template
 
 class InstallError(Exception):
     """安装前置条件或受管运行时校验失败。"""
+
+
+def _central_imports():
+    """脚本入口只加入安装器自身可信根，不从当前业务目录导入同名模块。"""
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from lib import runtime_project
+    return runtime_project
+
+
+def legacy_tree_snapshot(root: Path) -> dict:
+    """完整、有界地指纹目录及所有普通文件，归档靠 rename 保留 inode 而非复制。
+
+    这里不使用 rglob/resolve 跟随链接；每个文件和目录都经已锚定父描述符。
+    摘要不保存旧核心正文，恢复所需的原 inode 仍在同文件系统归档中。
+    """
+    runtime = _central_imports()
+    rows = {}
+    with runtime.Tree(root) as tree:
+        def visit(relative):
+            directory = tree.directory(relative)
+            info = os.fstat(directory)
+            rows[relative] = {"kind": "directory", "identity": list(runtime.identity(info))}
+            for name in sorted(os.listdir(directory)):
+                child = relative + "/" + name if relative else name
+                runtime.relative_path(child)
+                if len(rows) >= 10000 or len(Path(child).parts) > 32:
+                    raise InstallError("旧运行时目录超过有界迁移指纹范围")
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    visit(child)
+                else:
+                    node = tree.read(child)
+                    rows[child] = {"kind": "file", "identity": list(node.identity),
+                                   "sha256": hashlib.sha256(node.payload).hexdigest()}
+        visit("")
+    return rows
+
+
+def _capture_legacy(command: list[str], *, env: dict | None = None, body: bytes | None = None):
+    """复用原安装器进程组回收边界，纯渲染也必须有有限超时和中断传播。"""
+    runner = ACTIVE_RUNNER.get()
+    remaining = 60.0 if runner is None or runner.deadline is None else min(60.0, runner.deadline - time.monotonic())
+    if remaining <= 0:
+        raise SetupRunError("安装预算已耗尽，未启动下一纯读取阶段")
+    env = dict(os.environ) if env is None else dict(env)
+    for key in ("BASH_ENV", "ENV", "CDPATH", "SHELLOPTS", "BASHOPTS"):
+        env.pop(key, None)
+    process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        output, error = process.communicate(body, timeout=remaining)
+    except BaseException:
+        SetupRunner.stop(process)
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, output, error)
+
+
+def _render_legacy_claude(renderer: Path, runtime: Path, project: Path, config: Path, role: str) -> bytes:
+    """仅调用原 Claude 生成函数，不运行其 setup main、恢复或 ID 初始化分支。
+
+    原脚本尚无独立 render CLI。取当前安装所有者脚本中已知 main 标记之前的
+    声明前缀，并以 --check 使唯一的早期初始化条件为假；三根在 source common
+    后立即显式覆盖。前缀从不写到磁盘，也不复制/改写另一套角色渲染规则。
+    """
+    body = (renderer / "setup_claude.sh").read_text(encoding="utf-8")
+    boundary = '\nif [[ "${PREFLIGHT_ONLY}" -eq 1 ]]; then'
+    common = 'source "${SCRIPT_DIR}/lib/common.sh"'
+    start = 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+    if body.count(boundary) != 1 or body.count(common) != 1 or body.count(start) != 1:
+        raise InstallError("当前 Claude 生成器缺少可证明纯读取的声明边界")
+    prefix = body.split(boundary, 1)[0].replace(start, "SCRIPT_DIR=" + shlex.quote(str(renderer)), 1)
+    values = {"PACK_DIR": runtime, "PACK_LIB_DIR": renderer / "lib", "PROJECT_ROOT": project,
+              "PROJECT_YAML": config, "PRODUCT_DIR": runtime / "product", "ROLES_DIR": runtime / "roles",
+              "PLATFORMS_DIR": runtime / "platforms", "SCRIPTS_DIR": runtime / "scripts",
+              "ROLES_YAML": runtime / "product/ROLES.yaml"}
+    assignments = "\n".join(name + "=" + shlex.quote(str(value)) for name, value in values.items())
+    prefix = prefix.replace(common, common + "\n" + assignments, 1)
+    # 执行代码固定来自当前安装所有者，旧目录只作为已经过清单验证的数据来源，
+    # 不通过旧可变 lib 路径执行另一份 Python helper。
+    prefix = prefix.replace('"${PACK_DIR}/lib/', '"${SCRIPT_DIR}/lib/')
+    # 原 Bash 生成函数在同一 local 声明里展开 ${role}，常规调用由外层循环
+    # 提供该动态作用域值。纯入口显式给同一个变量，避免 nounset 下误失败。
+    program = prefix + '\nrole="${AGENT_WORKFLOW_RENDER_ROLE}"\nrender_claude_agent "${role}"\n'
+    result = _capture_legacy(["bash", "-s", "--", "--check"], body=program.encode(),
+                            env={**os.environ, "AGENT_WORKFLOW_RENDER_ROLE": role,
+                                 "AGENT_WORKFLOW_PYTHON": sys.executable, "PYTHONDONTWRITEBYTECODE": "1"},
+                            )
+    if result.returncode:
+        raise InstallError("旧 Claude 原生输入不能按原来源纯渲染：" + role)
+    return result.stdout
+
+
+def legacy_preflight(old_runtime: Path, project_root: Path, config_path: Path) -> dict:
+    """显式旧安装迁移的纯读取合同；返回精确文件前像与待归档目录指纹。
+
+    不执行旧 setup --check，不恢复 Skill，不推断旧任务已结束。调用方只有在
+    migrate_legacy 明确声明后才可消费此结果，且 apply 前还要重查全部指纹。
+    """
+    runtime_api = _central_imports()
+    from lib.shared_core_skills import audit_managed_skill_root, compare_skill_trees, load_shared_core_skills
+    from lib.claude_instructions import intervals, PAIRS
+    project = runtime_api.canonical_project(project_root)
+    old_runtime, config_path = Path(old_runtime).absolute(), Path(config_path).absolute()
+    if old_runtime != project / RUNTIME_NAME or config_path != old_runtime / "project.yaml":
+        raise InstallError("旧安装迁移必须显式提供当前项目的运行时及配置路径")
+    _validate_existing(old_runtime)
+    before_core = legacy_tree_snapshot(old_runtime)
+    validation = validate_with_profile(config_path, project, old_runtime / "roles")
+    if validation.errors or validation.profile is None:
+        if any("notes" in item or "fallback_dir" in item for item in validation.errors):
+            raise InstallError("旧 notes 配置必须先显式归属迁移")
+        raise InstallError("旧项目配置未通过迁移前只读校验；未显示配置原文")
+    names = load_shared_core_skills(old_runtime)
+    renderer = Path(__file__).resolve().parents[1]
+    files, moves, hosts = {}, [{"path": RUNTIME_NAME, "snapshot": before_core}], []
+    with runtime_api.Tree(project) as tree:
+        for host, (directory, suffix) in runtime_api.ROLE_PATHS.items():
+            try:
+                descriptor = tree.directory(directory)
+            except FileNotFoundError:
+                continue
+            expected = {role + suffix for role in validation.profile.enabled_roles}
+            present = set(os.listdir(descriptor))
+            if not any(name.startswith("xy-") for name in present):
+                continue  # 仅有用户自定义角色的目录不等于已经安装本工作流宿主。
+            if not expected <= present or any(name.startswith("xy-") and name not in expected for name in present):
+                raise InstallError("旧原生角色集合存在缺失或未知资源：" + directory)
+            hosts.append(host)
+            for role in validation.profile.enabled_roles:
+                relative = directory + "/" + role + suffix
+                node = tree.read(relative)
+                if host == "codex":
+                    result = _capture_legacy(["bash", str(renderer / "setup_codex.sh"), "--render-agent=" + role,
+                                             "--render-runtime-root=" + str(old_runtime), "--render-project-root=" + str(project),
+                                             "--render-config-path=" + str(config_path)],
+                                            env={**os.environ, "AGENT_WORKFLOW_PYTHON": sys.executable, "PYTHONDONTWRITEBYTECODE": "1"},
+                                            )
+                    if result.returncode:
+                        raise InstallError("旧 Codex 原生输入不能按原来源纯渲染：" + role)
+                    expected_body = result.stdout
+                elif host == "claude":
+                    expected_body = _render_legacy_claude(renderer, old_runtime, project, config_path, role)
+                else:
+                    code = '''import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import render_antigravity_agent as renderer
+from validate_project_config import validate_with_profile
+runtime, project, config, role = Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]), sys.argv[5]
+checked = validate_with_profile(config, project, runtime / "roles")
+if checked.errors or checked.profile is None: raise ValueError("旧配置不合法")
+renderer.project_profile = lambda unused: checked.profile
+print(renderer.render(runtime, role), end="")
+'''
+                    result = _capture_legacy([sys.executable, "-B", "-X", "utf8", "-c", code, str(renderer / "lib"),
+                                             str(old_runtime), str(project), str(config_path), role])
+                    if result.returncode:
+                        raise InstallError("旧 Antigravity 原生输入不能按原来源纯渲染：" + role)
+                    expected_body = result.stdout
+                if node.kind != "file" or node.payload != expected_body:
+                    raise InstallError("旧受管原生角色含手改，停止转换：" + relative)
+                files[relative] = node.value()
+        skill_roots = {".claude/skills" if host == "claude" else ".agents/skills" for host in hosts}
+        for root in sorted(skill_roots):
+            audit_managed_skill_root(project / root, recover=False)
+            for name in names:
+                relative = root + "/" + name
+                compare_skill_trees(old_runtime / "platforms/shared/skills" / name, project / relative, name)
+                moves.append({"path": relative, "snapshot": legacy_tree_snapshot(project / relative)})
+        agents = tree.read("AGENTS.md")
+        spans = intervals(agents.payload)
+        text = agents.payload.decode("utf-8")
+        for begin, end in PAIRS:
+            if begin not in spans:
+                continue
+            host = "claude" if ":claude-begin" in begin else re.search(r"pack:([a-z]+)-begin", begin)[1]
+            source = old_runtime / ("platforms/shared/AGENTS.product.tpl" if host == "product" else f"platforms/{host}/AGENTS.{host}.tpl")
+            expected = begin + "\n" + source.read_text(encoding="utf-8").rstrip("\n") + "\n" + end + "\n"
+            start, stop = spans[begin]
+            if text[start:stop] != expected:
+                raise InstallError("旧共享入口含手改，停止转换：AGENTS.md")
+        if not spans:
+            raise InstallError("旧共享入口缺少可证明归属的标记")
+        remaining = text
+        for start, stop in sorted(spans.values(), reverse=True):
+            remaining = remaining[:start] + remaining[stop:]
+        files["AGENTS.md"] = agents.value()
+        bases = {"AGENTS.md": runtime_api.Node("file", remaining.encode(), agents.mode).value()}
+        if "claude" in hosts:
+            claude = tree.read("CLAUDE.md")
+            if claude.payload != CLAUDE_IMPORT:
+                raise InstallError("旧 CLAUDE.md 薄入口含未知手改，停止转换")
+            files["CLAUDE.md"] = claude.value()
+            bases["CLAUDE.md"] = runtime_api.Node().value()
+        if "codex" in hosts:
+            from lib.merge_codex_config import render
+            native = tree.read(".codex/config.toml")
+            config_body = tree.read(RUNTIME_NAME + "/project.yaml")
+            threads = re.search(rb"(?m)^  max_concurrent_subagents:\s*([1-9][0-9]*)", config_body.payload)
+            if render(native.payload.decode(), int(threads[1]) if threads else 8).encode() != native.payload:
+                raise InstallError("旧 Codex 原生配置含手改或受管漂移，停止转换")
+            files[".codex/config.toml"] = native.value()
+        config = tree.read(RUNTIME_NAME + "/project.yaml")
+    if not hosts:
+        raise InstallError("旧运行时没有可证明受管的原生宿主输入")
+    if legacy_tree_snapshot(old_runtime) != before_core:
+        raise InstallError("旧运行时在纯读取 preflight 期间发生变化")
+    return {"schema_version": 1, "moves": moves, "files": files, "entry_baselines": bases,
+            "config": config.value(), "hosts": hosts,
+            "hook_shim": (old_runtime / "lib/workflow_hooks.py").is_file()}
 
 
 def _target_path(raw: str, source_root: Path) -> Path:
@@ -742,10 +955,12 @@ def _prune_runtime_backups(project: Path, keep: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="install.sh",
-        description="将 agent_workflow 安装到指定项目，安装后原始安装包可移除。"
+        description="将项目接入固定版本中央工作流；原始安装包可移除。"
     )
     parser.add_argument("project", nargs="?", help="项目根目录；省略时可拖入终端")
     parser.add_argument("--timeout", type=float, help="安装事务的应用预算秒数；超时后停止 setup 并执行恢复")
+    parser.add_argument("--state-dir", type=Path, help="本机中央状态根；默认沿现有状态配置")
+    parser.add_argument("--migrate-legacy", action="store_true", help="显式声明旧任务已收尾，验证并保留归档后转换旧安装")
     args = parser.parse_args()
     source_root = Path(__file__).resolve().parent.parent
     try:
@@ -754,10 +969,9 @@ def main() -> int:
             raw = input("请将需要安装的项目文件夹拖入终端，然后按回车：")
         project = _target_path(raw, source_root)
         print(f"[目标] {project}", flush=True)
-        if args.timeout is None:
-            _install(project, source_root)
-        else:
-            _install(project, source_root, timeout=args.timeout)
+        installed = install_central(project, source_root, state=args.state_dir,
+                                    migrate_legacy=args.migrate_legacy, timeout=args.timeout)
+        print("[完成] 中央项目已启用；固定内容 ID：" + installed["runtime_binding"]["content_id"])
     except (EOFError, KeyboardInterrupt):
         print("\n[取消] 未安装。", file=sys.stderr)
         return 2
@@ -765,6 +979,41 @@ def main() -> int:
         print(f"[错误] {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def install_central(project: Path, source_root: Path, *, state: Path | None = None,
+                    migrate_legacy: bool = False, timeout: float | None = None) -> dict:
+    """源码/Homebrew/NPM 共用默认入口；不再默认复制完整核心到项目。
+
+    原 _install 低层仍归旧自包含恢复/夹具所有者，不由此默认调用。Windows
+    缺少安全软链后端时在导入、状态创建及项目写入之前明确拒绝，不回退复制。
+    """
+    if __package__:
+        from .platform_fs import require_skill_symlinks
+    else:
+        from platform_fs import require_skill_symlinks
+    # 此能力拒绝早于导入中央 manager/新增模块；旧 Windows 打包入口也必须给
+    # 出明确平台边界，不能因不含 manager 而先抛缺模块错误，更不能回退复制。
+    require_skill_symlinks()
+    _central_imports()
+    from lib.install_process import ACTIVE_RUNNER as central_runner
+    from lib import runtime_store
+    from manager import runtime_service
+    runner = SetupRunner(timeout)
+    token = central_runner.set(runner)
+    original = ACTIVE_RUNNER.set(runner)
+    try:
+        plan = runtime_service.preview(runtime_store.state_root(state), project, "enable",
+                                       source_root=source_root, migrate_legacy=migrate_legacy)
+        if not plan.summary["can_apply"]:
+            raise InstallError("；".join(item["reason"] for item in plan.summary["conflicts"]))
+        if runner.deadline is not None and runner.deadline <= time.monotonic():
+            raise SetupRunError("安装预算已耗尽，项目尚未发布")
+        return runtime_service.apply(plan)
+    finally:
+        ACTIVE_RUNNER.reset(original)
+        central_runner.reset(token)
+        runner.close()
 
 
 if __name__ == "__main__":
