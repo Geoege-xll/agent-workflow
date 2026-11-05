@@ -1,7 +1,7 @@
-# 通用设计基础规则
+# General Design Foundation Rules
 
 - Domain: design
-- Scope: UI 原型设计与生产 UI 的适用设计约束；standards_only 仅在授权范围采用或维护项目特有规则，纯 non_ui 不强制读取。平台、控件和外观条款按实际支持范围适用。
+- Scope: UI prototype design and applicable design constraints for production UI; standards_only adopts or maintains project-specific rules only within the authorized scope. Reading is not mandatory for purely non_ui work. Platform, control, and appearance clauses apply according to actual support.
 
 > Long-lived visual, interaction, platform, token, and accessibility rules. Concrete page behavior
 > remains in each approved prototype page contract.
@@ -14,65 +14,82 @@
 - Keep semantic token roles consistent with shared prototype styles and production token mapping.
   Target design adoption is not proof that production migration is complete.
 
-## 项目基线与适用范围
+## Project Baseline and Applicability
 
-- `[des-baseline-001] [hard]` 同一项目、平台和设计范围沿用一套已采用的视觉基线。
-  先复用已有规范、生产 token 和组件；首次建立或获准调整基线时提出候选，按已有确认流程采用。
-  不把本模板的默认规则、官方示例色值或单页视觉确认当作全项目换肤授权。
-- `[des-baseline-002] [hard]` 仅补齐当前任务使用的基础值；记录其适用平台／模块、已采用
-  依据和真实 token 来源路径或标识。已有定义可精确引用，无需复制整张主题表；缺失值
-  标为候选并交 PM 处理，不伪称已批准。不为未使用的组件或外观模式提前创建规范。
+- `[des-baseline-001] [hard]` Use one adopted visual baseline for the same project, platform, and
+  design scope. Reuse existing standards, production tokens, and components first; when establishing
+  a baseline for the first time or making an authorized adjustment, propose candidates and adopt them
+  through the existing confirmation process. Do not treat this template's defaults, official example
+  color values, or visual confirmation of one page as authorization to reskin the entire project.
+- `[des-baseline-002] [hard]` Add only the foundation values used by the current task; record their
+  applicable platforms/modules, adoption basis, and actual token source paths or identifiers. Existing
+  definitions may be referenced precisely without copying the entire theme table. Mark missing values
+  as candidates and return them to the PM; do not claim approval. Do not create standards in advance
+  for unused components or appearance modes.
 
 ## Accessibility
 
 - `[des-accessibility-001] [hard]` Meet WCAG AA unless the platform contract is stricter.
 - `[des-accessibility-002] [hard]` Verify applicable keyboard, focus, reduced-motion, contrast,
   Dynamic Type, and assistive-technology behavior.
-- `[des-accessibility-003] [hard]` Web 按 WCAG 2.2 AA 的适用条款设计：普通文本对比度至少
-  4.5:1，大文本至少 3:1；必要的控件边界和状态标识按非文本对比度条款检查至少 3:1。大文本定义
-  与禁用／装饰等例外依官方条款，不能把所有细线或禁用文本一律判为不合格。
-  可操作项有可访问名称和可见焦点，不能仅支持 hover；原生端同时遵循目标平台约定。
-- `[des-accessibility-004] [hard]` 触控目标、间距、文字缩放与安全区按目标平台选择并记录
-  依据，区分 iOS pt、Android dp 和 Web CSS px，不能把某个平台的数值当成通用硬门槛。
-  验证证据区分静态可检查项与尚未实际操作的行为，不以静态通过宣称完整无障碍认证。
+- `[des-accessibility-003] [hard]` Design Web interfaces to the applicable WCAG 2.2 AA clauses:
+  text contrast is at least 4.5:1 for normal text and 3:1 for large text; check necessary control
+  boundaries and state indicators for at least 3:1 under the non-text contrast clauses. Follow the
+  official definition of large text and exceptions for disabled/decorative content; do not classify
+  every thin line or disabled text as a failure. Actionable items have accessible names and visible
+  focus and cannot support only hover; native interfaces also follow the target platform's conventions.
+- `[des-accessibility-004] [hard]` Select touch targets, spacing, text scaling, and safe areas for
+  the target platform and record the basis. Distinguish iOS pt, Android dp, and Web CSS px; do not
+  turn one platform's values into universal hard thresholds. Distinguish statically checkable items
+  from behavior that has not actually been exercised in the evidence; static success does not establish
+  complete accessibility certification.
 
 ## Platform constraints
 
-- `[des-platform-001] [hard]` Web 原型默认采用响应式内容区和自然文档流；iOS／PC 原型
-  使用项目选定的固定设备／窗口预览。只有明确需要视口对比时，Web 才使用固定预览。
-  顶部说明、返回原型目录和页底契约属于展示外壳；产品导航、业务提示和组件属于产品区。
-  原型展示尺寸不限制真实产品的响应式、文字放大或窗口缩放能力。
+- `[des-platform-001] [hard]` Web prototypes default to a responsive content area and natural
+  document flow; iOS/PC prototypes use the project's selected fixed device/window preview. Web uses
+  a fixed preview only when viewport comparison is explicitly needed. Top explanations, navigation
+  back to the prototype directory, and the bottom page contract belong to the presentation shell;
+  product navigation, business messages, and components belong to the product area. Prototype preview
+  dimensions do not limit the real product's responsive layout, text scaling, or window resizing.
 
 ## Token policy
 
 - `[des-token-001] [hard]` Reuse approved production tokens before introducing new visual values.
 - A new semantic token requires a durable product-level reason and accessibility verification.
-- `[des-token-002] [hard]` 产品颜色按用途使用语义 token，不在每个页面重复硬编码品牌色、
-  文本色、控件色或状态色。基础色值允许集中定义于 token 源；原生系统色通过平台语义 API
-  映射，HTML 中的近似模拟不能冒充真实系统材质或生产实现。
-- `[des-token-003] [hard]` 下列角色按实际使用建立映射。沿用项目现有命名即可，不要求
-  再建同义 token；每个已用角色可定位到定义、适用外观模式及配对前景／背景。
+- `[des-token-002] [hard]` Use semantic tokens for product colors according to purpose; do not
+  repeatedly hardcode brand, text, control, or state colors on each page. Base color values may be
+  defined centrally in the token source; map native system colors through platform semantic APIs.
+  An HTML approximation must not be presented as actual system material or a production implementation.
+- `[des-token-003] [hard]` Map the following roles as actually used. Preserve the project's existing
+  names without creating synonymous tokens; each used role must resolve to its definition, applicable
+  appearance modes, and paired foreground/background.
 
-| 颜色角色 | 需要统一的内容 |
+| Color role | Content to keep consistent |
 | --- | --- |
-| 品牌与主操作 | 主色、主色上的文字／图标；链接与选中态按语义映射，不把所有强调都涂成主色 |
-| 背景与层级 | 页面背景、内容表面、浮层表面、遮罩；明确嵌套层级与前景色配对 |
-| 文字与图标 | 主文本、次文本、弱提示、反色内容、禁用内容；同语义同用途 |
-| 边界与焦点 | 分隔线、可操作边界、键盘焦点；装饰分隔与必要交互边界分别定义 |
-| 业务反馈 | 成功、警告、错误、信息的前景／背景／边界；有文字或图标辅助说明 |
-| 交互状态 | 适用的 hover、pressed、selected、focus、disabled；选中与焦点不得混为一态 |
+| Brand and primary actions | Primary color and its text/icons; map links and selected states by semantics instead of coloring every emphasis with the primary color |
+| Backgrounds and hierarchy | Page background, content surfaces, overlay surfaces, and scrims; define nesting levels and foreground color pairings |
+| Text and icons | Primary text, secondary text, subtle hints, inverse content, and disabled content; preserve the same semantics and purpose |
+| Boundaries and focus | Dividers, actionable boundaries, and keyboard focus; define decorative dividers separately from necessary interactive boundaries |
+| Business feedback | Foregrounds/backgrounds/boundaries for success, warning, error, and information; include supporting text or icons |
+| Interaction states | Applicable hover, pressed, selected, focus, and disabled states; selection and focus must remain distinct |
 
-- `[des-token-004] [hard]` 在支持的浅色／深色／高对比外观中验证实际前景与背景配对，
-  不用简单反色或全局透明度替代主题设计。全新视觉只替换获准的平台／模块及相关映射。
-  原型外壳的 `--prototype-*` 是展示用 token，不能充当产品已经确认的主题。
+- `[des-token-004] [hard]` Verify actual foreground/background pairings in supported light/dark/
+  high-contrast appearances; do not substitute simple color inversion or global opacity for theme
+  design. A new visual system replaces only the authorized platforms/modules and related mappings.
+  The prototype shell's `--prototype-*` tokens are for presentation and cannot represent a confirmed
+  product theme.
 
-## 排版、尺度与动效
+## Typography, Scale, and Motion
 
-- `[des-scale-001] [hard]` 当前范围共享字体栈、标题／正文／标签层级、字号、字重、行高、
-  间距阶梯、控件尺寸、圆角、边框、阴影／层级和图标尺寸。复用项目 token 或平台默认值，
-  不逐页另设一套；图标保持同一语义与风格来源，重要操作不能仅靠图标猜测。
-- `[des-motion-001] [hard]` 动效表达状态和空间关系，复用适用时长／曲线并尊重 reduced-motion；
-  不因装饰动画延迟必要操作。长文案、不同语言和文字放大不得隐藏关键内容或操作。
+- `[des-scale-001] [hard]` Share the font stack, heading/body/label hierarchy, font sizes, weights,
+  line heights, spacing scale, control sizes, corner radii, borders, shadows/elevation, and icon sizes
+  within the current scope. Reuse project tokens or platform defaults instead of defining a separate
+  set for each page. Icons retain consistent semantics and style sources; important actions must not
+  rely on users guessing from icons alone.
+- `[des-motion-001] [hard]` Motion communicates state and spatial relationships, reuses applicable
+  durations/curves, and respects reduced-motion; decorative animation must not delay necessary actions.
+  Long copy, different languages, and enlarged text must not hide critical content or actions.
 
 ## Prohibited patterns
 
@@ -80,14 +97,15 @@
   debug controls into production.
 - `[des-meaning-001] [hard]` Do not use color, motion, or iconography as the only carrier of meaning.
 
-## 官方依据（按需查阅）
+## Official Sources (Consult as Needed)
 
-以下是本工作流归纳规则的依据，查阅于 2026-10-13；不是要求混用各家视觉主题。
-优先读本项目已采用的规则，只在相关规则缺失、变更或需要核实时查对应官方章节，
-不要求每次任务联网或全文读取这些站点。
+The following sources informed this workflow's rules and were consulted on 2026-10-13; they do not
+require mixing their visual themes. Read the project's adopted rules first, and consult the relevant
+official sections only when a related rule is missing, changes, or needs verification. Network access
+and full-site reading are not required for every task.
 
-- [Apple HIG：Color](https://developer.apple.com/design/human-interface-guidelines/color)：语义色、外观适配与平台约定。
-- [Google Material：Color roles](https://m3.material.io/styles/color/roles)：按用途映射颜色及前景／背景配对。
-- [Microsoft Fluent：Design tokens](https://fluent2.microsoft.design/design-tokens)：以 token 统一颜色、排版、间距等基础值。
-- [Ant Design：定制主题](https://ant.design/docs/react/customize-theme-cn/)：全局主题与组件 token 的关系。
-- [W3C：文字对比度](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)与[非文本对比度](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html)：适用对象与例外。
+- [Apple HIG: Color](https://developer.apple.com/design/human-interface-guidelines/color): semantic colors, appearance adaptation, and platform conventions.
+- [Google Material: Color roles](https://m3.material.io/styles/color/roles): purpose-based color mapping and foreground/background pairings.
+- [Microsoft Fluent: Design tokens](https://fluent2.microsoft.design/design-tokens): consistent foundation values such as color, typography, and spacing through tokens.
+- [Ant Design: Customize Theme](https://ant.design/docs/react/customize-theme-cn/): the relationship between global themes and component tokens.
+- [W3C: Text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html) and [non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html): applicability and exceptions.

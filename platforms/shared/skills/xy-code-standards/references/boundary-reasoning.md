@@ -1,37 +1,43 @@
-# 边界推理
+# Boundary reasoning
 
-仅对当前代码实际涉及或改变的边界选择问题，结合适用项目规则作判断。本参考不要求
-预建能力、改变合法输入、增加固定限额或凑齐测试矩阵；已有充分证据可直接复用。
+Choose questions only for boundaries actually involved in or changed by current code, and judge them against
+applicable project rules. This reference does not require prebuilt capabilities, changed legal inputs, fixed
+limits or a complete test matrix. Reuse sufficient existing evidence directly.
 
-## 输入与合同
+## Inputs and contracts
 
-从真实生产者走到消费者：字段的类型、空值、单位、编码或规范化是否在某一步被改变？
-所谓“清理”是否会删除合法文字、精度或身份信息？找到权威解析、映射和错误出口，再
-判断当前缺口属于哪一层；少量显式映射不必升级成框架，信任边界也不能靠类型断言跨过。
+Follow real producers through to consumers: does any step change field types, nulls, units, encoding or
+normalization? Could so-called cleanup remove valid text, precision or identity information? Locate authoritative
+parsing, mapping and error exits, then identify which layer owns the gap. Small explicit mappings need not become
+a framework, and type assertions cannot cross a trust boundary.
 
-## 可变状态与异步结果
+## Mutable state and asynchronous results
 
-谁拥有状态，什么事件使旧结果失效？沿读取、等待、重试和提交的顺序，核对需要保持的
-身份、版本与业务上下文。锁、actor 或单线程本身不足以证明跨等待的不变量成立。
-确认操作是否有副作用及结果未知时的处理，再判断能否重放；不要仅凭方法名或 HTTP
-方法猜测安全，也不要把旧缓存或迟到结果当成本次权威结果。
+Who owns the state, and which event invalidates an old result? Follow reads, waits, retries and commits to check
+the identity, version and business context that must remain valid. A lock, actor or single thread alone does
+not prove invariants across waits. Establish whether an operation has side effects and what happens when its
+result is unknown before deciding whether replay is safe. Do not infer safety merely from method names or HTTP
+methods, or treat old cache/late results as the current authoritative result.
 
-## 资源与取消
+## Resources and cancellation
 
-沿资源取得、移交、正常结束、失败和取消追踪真实所有者。已有超时是否覆盖完整操作，
-取消是否实际结束底层工作，后代进程、流、文件或订阅是否仍存活？只针对实际风险选择
-可观察证据；取消等待者不证明外部副作用停止，关闭界面也不自动证明资源释放。
+Trace the actual owner through resource acquisition, transfer, normal completion, failure and cancellation.
+Does an existing timeout cover the entire operation? Does cancellation actually end underlying work, and do
+child processes, streams, files or subscriptions remain alive? Select observable evidence only for actual risks.
+Canceling a waiter does not prove that external side effects stopped; closing a UI does not prove resource release.
 
-## 写入与发布
+## Writes and publication
 
-标明准备、提交或发布的分界点：失败发生在之前还是之后，哪些旧数据必须保留，哪些
-临时资源确由当前操作拥有？检查异常、中断、同名替换和并发更新是否改变清理目标，
-避免清理误伤其他操作。数据库与外部系统各自完成一次提交，不等于跨边界天然原子。
-采用何种事务、文件发布或恢复机制仍由项目合同与现有实现决定。
+Identify preparation, commit and publication boundaries: did failure occur before or after them, which old data
+must survive, and which temporary resources does the current operation actually own? Check whether exceptions,
+interruptions, same-name replacement or concurrent updates change cleanup targets, so cleanup does not damage
+another operation. Separate commits to a database and an external system are not naturally atomic across that
+boundary. Project contracts and existing implementation still determine transactions, file publication and recovery.
 
-## 用证据区分结论
+## Distinguish conclusions with evidence
 
-把担忧写成一个具体失效场景及可观察后果，先检查现有覆盖是否已经证明相关不变量。
-替身适合控制时序和失败位置；若结论依赖真实框架、磁盘、进程或调用方，还需核对现有
-真实消费者证据。缺少证据就标明结论范围，不能把可能性写成已发生缺陷，也不因列出
-问题就扩展任务或自动增加测试阶段。
+Turn a concern into a concrete failure scenario and observable consequence; first check whether existing coverage
+already proves the relevant invariant. Test doubles can control timing and failure location. If a conclusion
+depends on a real framework, disk, process or caller, also check existing real-consumer evidence. Mark the limits
+of conclusions when evidence is absent. Do not describe a possibility as an observed defect, or expand scope/add
+a test stage automatically merely because questions were listed.

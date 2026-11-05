@@ -1009,7 +1009,7 @@ def validate_semantic_sources(
             "Do not wait for unrelated project work",
             "After QA PASS",
             "closeout mode",
-            "最后报告用户",
+            "Finally report to the user",
         ),
         errors,
     )
@@ -1024,7 +1024,7 @@ def validate_semantic_sources(
             "exactly one integrated read-only `xy-qa` reviewer for this request",
             "After QA PASS",
             "closeout mode",
-            "最后报告用户",
+            "Finally report to the user",
         ),
         "on-demand retrieval policy -> default business confirmations -> implementation -> QA -> closeout -> report",
         errors,
@@ -1251,14 +1251,14 @@ def validate_semantic_sources(
             "does not repeat deterministic checks already proven by current evidence",
             "handoff_ref",
             "QA PASS",
-            "最后报告用户",
+            "Finally report to the user",
         ),
         errors,
     )
     require_order(
         paths["product_template"],
         product_template,
-        ("After QA PASS", "closeout mode", "最后报告用户"),
+        ("After QA PASS", "closeout mode", "Finally report to the user"),
         "QA PASS -> memory closeout -> final user report",
         errors,
     )
@@ -1660,14 +1660,14 @@ def validate_staged_blocks(
                 "Platform security prompts",
                 "handoff_ref",
                 "QA PASS",
-                "最后报告用户",
+                "Finally report to the user",
             ),
             errors,
         )
         require_order(
             root / "AGENTS.product.block",
             product,
-            ("After QA PASS", "closeout mode", "最后报告用户"),
+            ("After QA PASS", "closeout mode", "Finally report to the user"),
             "QA PASS -> memory closeout -> final user report",
             errors,
         )

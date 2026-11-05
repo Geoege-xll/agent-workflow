@@ -23,24 +23,25 @@ else:
 OWNER = "agent-workflow-assist-v1"
 # 提醒只陈述分级和授权边界；脚本不能推导用户授权，也不能代替原等级的验证与 QA。
 ENTRY = (
-    "工作流辅助提醒：复用本会话已完成工作的有效批准和证据。只读讨论、用户明确跳过按原边界。"
-    "仅 Light/Full，启用 xy-workflow 默认委派；仅用户明确让 PM 亲自实现才例外。"
-    "Light 最小验证必做，交接评估 QA/文档，不强制 Full 规划/DAG；Full 门槛保留。"
-    "新任务新原生 ID，只给自包含当前任务包，不复制 PM/兄弟历史。"
-    "按需完整读取必需规范，保留不更新原型等选择，不增加额外阶段或记录。"
+    "Workflow assist reminder: reuse valid approvals and evidence for work already completed in this session. "
+    "Keep read-only discussion and explicit user opt-outs within existing boundaries. "
+    "Only Light/Full; activate xy-workflow with delegation by default, except when the user explicitly asks PM to implement personally. "
+    "Light requires minimum verification and QA/documentation assessment at handoff, without mandatory Full planning/DAG; Full gates remain. "
+    "New tasks use new native IDs and only self-contained current task packs, without copied PM/sibling history. "
+    "Read required standards completely as needed, preserve choices such as no prototype update, and add no extra stages or records."
 )
 # 恢复摘要只能帮助定位上下文，不能代替原始授权、改变等级或批准 PM 接管。
 RECOVERY = (
-    "工作流恢复提醒：结合可信原指令、现有计划核对任务等级与亲自实现授权，"
-    "延续当前任务及有效证据，勿重做已完成的关联任务。"
-    "当前仅 Light/Full，默认委派，仅用户明确指令可由 PM 亲自实现；Light 最小验证必做、"
-    "交接评估 QA/文档，Full 门槛保留。仅同任务连续工作和短返工可续用原 ID，退役禁止复用；"
-    "新独立任务不得继承完整 PM/兄弟历史，resume/compact 不等于上下文重置。摘要/旧状态不能创造例外；"
-    "仅补齐缺失或已变更的相关规则/计划，选用 Skill 的必读内容仍须完整读取。"
+    "Workflow recovery reminder: check task level and personal-implementation authority against trusted original instructions and existing plans; "
+    "continue the current task with valid evidence without repeating completed related work. "
+    "Only Light/Full, with delegation by default and PM personal implementation only by explicit user instruction; Light requires minimum verification "
+    "and QA/documentation assessment at handoff, while Full gates remain. Reuse original IDs only for continuous same-task work or short rework; retirement prohibits reuse. "
+    "New independent tasks never inherit complete PM/sibling history; resume/compact does not reset context. Summaries/old state create no exceptions. "
+    "Restore only missing or changed relevant rules/plans, while still reading selected Skills' mandatory content completely."
 )
 DISPATCH = (
-    "派发辅助提醒：普通进度问题询问原工作 Agent并等待简短汇报；不要另建 Explore/监督 Agent"
-    "或读私有历史查进度。用户明确要求具体检查时可按授权范围查看。"
+    "Dispatch assist reminder: ask the original working Agent for ordinary progress questions and wait for a brief report; do not create another Explore/supervisory Agent "
+    "or inspect private history for progress. Specific checks explicitly requested by the user may be inspected within the authorized scope."
 )
 
 
@@ -135,7 +136,7 @@ def response(host: str, event: str, payload: dict, project: Path) -> dict:
         skill_root = ".claude" if host == "claude" else ".agents"
         skill = root / skill_root / "skills/xy-workflow/SKILL.md"
         if not skill.is_file() or skill.is_symlink():
-            message += " 工作流入口资源缺失或为链接；请检查安装，不据此制造批准或 QA PASS。"
+            message += " Workflow entry resources are missing or linked; check installation without manufacturing approval or QA PASS from this result."
     elif host == "claude" and event == "PreToolUse" and payload.get("tool_name") == "Agent":
         tool_input = payload.get("tool_input")
         # 仅已发生的 Explore 派发获得条件提醒，不分析/保存用户提示词，也不阻塞原生探索。

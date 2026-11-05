@@ -19,7 +19,7 @@ class RuleBoundaryContractTest(unittest.TestCase):
     def test_standalone_audit_exits_before_implementation_acceptance(self) -> None:
         # 只保护新增分支的早退与防绕过边界，不把文本合同冒充模型行为测试。
         for relative, start_anchor, following in (
-            ("platforms/shared/skills/xy-workflow/SKILL.md", "## Standalone read-only audit", "## Light 与 Full"),
+            ("platforms/shared/skills/xy-workflow/SKILL.md", "## Standalone read-only audit", "## Light and Full"),
             ("platforms/shared/skills/xy-qa-review/SKILL.md", "- For an audit-only request", "## Implementation acceptance"),
         ):
             with self.subTest(source=relative):
@@ -76,12 +76,12 @@ class RuleBoundaryContractTest(unittest.TestCase):
     def test_role_standards_paths_are_shallow_and_design_is_surface_scoped(self) -> None:
         backend = (PACK / "roles/xy-backend.md").read_text()
         self.assertNotIn("docs.standards_root/engineering", backend)
-        self.assertIn("工程基线使用 xy-code-standards/references/rules.md", backend)
+        self.assertIn("Use xy-code-standards/references/rules.md as the engineering baseline", backend)
         for role in ("xy-web", "xy-apple", "xy-android", "xy-desktop"):
             with self.subTest(role=role):
                 body = " ".join((PACK / "roles" / f"{role}.md").read_text().split())
                 self.assertIn("production_ui", body)
-                self.assertIn("non_ui 不预载设计规则", body)
+                self.assertIn("non_ui does not preload design rules", body)
                 self.assertIn("xy-code-standards/references/rules.md", body)
 
     def test_document_noop_depends_on_unchanged_recorded_facts(self) -> None:

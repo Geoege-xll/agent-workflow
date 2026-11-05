@@ -1,56 +1,83 @@
-# HTML 原型统一画布格式（仅 `prototype` 模式）
+# Unified HTML Prototype Canvas Format (Only `prototype` Mode)
 
-仅用于当前获准的原型设计范围，承接 `xy-uiux` 原有画布合同。最终交付仍是高保真可交互 HTML；
-前期线框仅用于 IA，展示画布不替代产品设计，也不为其他分支创建原型或增加确认。
+Use only within the currently authorized prototype-design scope, carrying forward the existing
+`xy-uiux` canvas contract. Final delivery remains high-fidelity interactive HTML; early wireframes
+serve only IA. The presentation canvas does not replace product design, create prototypes for other
+branches, or add confirmation.
 
-- 交付物仍是可直接打开、可演示交互的 HTML 原型。Figma 只是画布展示形式的类比，
-  不改用设计工具交付，也不要求实现编辑工具、拖拽画板或工具栏。
-- 一个产品页面对应一个独立、稳定的 HTML；已有页面更新原文件，新页面才新增文件。
-  需要设计的不同平台页面分别输出，不在一个 HTML 中拼接多个产品页面或强制展示三端。
-  同一页面的弹窗、加载、空状态、错误和成功状态在该 HTML 内交互演示，不另建状态页面。
-  `index.html` 直接进入分组浏览工作区，只承载当前一个页面，没有独立目录落地层或额外总页头。
-  唯一 `nav#prototype-pages` 的普通相对链接是登记来源，分组使用原生 details/summary；
-  未登记实际页面时保持空状态，不登记 page.html 模板或虚构业务页。工作区使用独立的
-  workspace.css/js，具体页只加载 prototype.css 和最小 page-shell.js 桥接，避免导航样式污染页面指纹。
-- 新页面直接复用 `.agent-workflow/templates/prototype/page.html`，使用项目原型目录的
-  `prototype.css`，不重新生成展示外壳。保留统一页头、`.prototype-stage`、
-  `.prototype-frame`、产品插槽 `data-prototype-page-content` 和页底契约。
-  填写页面信息与说明，设置 `data-prototype-platform` 和 `data-prototype-display`；
-  Web 默认 `responsive`，iOS／PC 使用 `fixed` 并设置 `--prototype-frame-width` 和
-  `--prototype-frame-height`。替换占位内容并补齐契约；模板说明不是项目事实。
-  已有共享 CSS 缺少外壳样式时，只在明确拥有其写权限后，从运行时模板 CSS 补入缺少的
-  `--prototype-*` 展示 token 和配套外壳规则，不整文件覆盖产品样式；没有写权限则返回 PM
-  调整当前范围。页面顶部布局说明、实际显示模式／尺寸与契约记录必须一致。
-- 每个具体 HTML 按纵向顺序排列：当前页名称、紧凑简述和圆形返回 → 高保真产品画面
-  → 需求 HTML/Markdown、平台/尺寸及必要演示说明 → 默认折叠的五节契约。
-  需求链接使用唯一 nav.prototype-requirement-links 的 html/markdown 两个明确类型，body 的
-  data-prototype-plan-source 绑定配置 plans 下的同名 Markdown；未绑定模板留空，不造假链接。
-  iOS／PC 产品区是水平居中的固定画板；
-  Web 产品区默认是自然展开的响应式网页。契约区位于产品区之外、默认可折叠，
-  不占产品界面空间，也不固定覆盖在浏览器底部。
-- 外层采用简洁、中性的展示画布；背景、尺寸标签、展示导航和契约区均不属于产品界面。
-  不强制壁纸或生成背景图片。画板内部只呈现当前页面的产品界面及其交互。
-- 当前页顶部使用浅底细边、黑色左 chevron 的圆形返回，提供名称与可见焦点；不依赖浏览器历史。
-  工作区内返回只展开侧栏/当前组并聚焦当前链接，保留画面；独立页返回 index 的本页深链。
-  侧栏收放另用独立开关。演示数据、刷新重置、未实现范围和必要待确认事项位于画面后说明区；
-  真实业务提示仍留在画板内。产品自己的导航、滚动与浮层不进入工作区外层。
-- 先按当前任务和项目设计规范确定平台与布局范围。固定预览优先复用已有基准尺寸，
-  没有基准时选择并明确说明；响应式 Web 无需虚构固定尺寸。同一平台、同一设计范围
-  保持一致；预览使用逻辑尺寸（CSS px），不是设备物理像素。
-- iOS：使用选定 iPhone 的固定宽高画板，体现对应的安全区域、状态栏和底部手势区域。
-- PC 客户端：使用项目确定的固定基准窗口尺寸，按实际产品和目标平台呈现标题栏与
-  窗口控制区；macOS 可以体现红黄绿按钮，不把该外观套用到 Windows 或无边框客户端。
-- Web：默认 `responsive`，`.prototype-frame` 仅作无窗口装饰的内容容器；不固定宽高、
-  不添加设备边框、不强制内部滚动。内容按可用宽度和项目响应式规则布局，允许常规媒体
-  查询；产品自己的最大内容宽度与导航仍按项目规范，三个展示功能区保持独立。
-  只有明确要求固定视口对比时才采用 `fixed` 并记录基准尺寸。
-- `fixed` 模式下外层浏览器只是展示画布，不能改变画板内部基准布局；布局断点以画板
-  容器查询为准，外观／辅助功能媒体查询仍可保留。空间不足时允许画布滚动或
-  等比例缩放，不拉伸、不改变宽高比例、不裁掉必要操作。产品长内容在画板内部指定
-  区域滚动；顶栏、底栏和页面内浮层以画板为布局边界，不定位到整个浏览器窗口。
-- 契约保留现有五个章节；在 `purpose` 区域用英文记录目标平台和显示模式，固定预览再
-  记录基准机型／窗口、宽高和缩放说明，响应式 Web 记录适用布局范围。
-  产品文案遵循项目语言；不新增契约章节、独立说明文档或截图。
-- 固定尺寸仅约束原型预览，不限制实际产品的多设备适配、Web 响应式或客户端窗口缩放。
-  不新增确认环节、自动浏览器操作或 QA 流程。只作用当前授权的原型任务，不自动重做
-  全部已有原型；`standards_only` 和用户选择直接开发的分支不因此产生原型任务。
+- The deliverable remains a directly openable HTML prototype with demonstrable interactions. Figma
+  is only an analogy for the canvas presentation; do not switch delivery to a design tool or require
+  an editor, draggable artboards, or toolbars.
+- Each product page has one independent, stable HTML file; update existing pages in their original
+  files and add files only for new pages. Output separately the different platform pages that need
+  design; do not combine multiple product pages in one HTML or force presentation of all three
+  platforms. Demonstrate a page's dialogs, loading, empty, error, and success states interactively in
+  that HTML without separate state pages. `index.html` enters the grouped browsing workspace directly,
+  hosting only the current page, without a separate directory landing layer or extra global header.
+  Ordinary relative links in the single `nav#prototype-pages` are the registration source; groups use
+  native details/summary. Keep an empty state when no actual pages are registered; do not register
+  the page.html template or invented business pages. The workspace uses separate workspace.css/js;
+  concrete pages load only prototype.css and the minimal page-shell.js bridge to prevent navigation
+  styles from contaminating page fingerprints.
+- For new pages, directly reuse `.agent-workflow/templates/prototype/page.html` and the project
+  prototype directory's `prototype.css` without regenerating the presentation shell. Preserve the
+  unified page header, `.prototype-stage`, `.prototype-frame`, product slot
+  `data-prototype-page-content`, and bottom page contract. Fill in page information and explanations
+  and set `data-prototype-platform` and `data-prototype-display`; Web defaults to `responsive`, while
+  iOS/PC uses `fixed` with `--prototype-frame-width` and `--prototype-frame-height`. Replace placeholder
+  content and complete the contract; template explanations are not project facts. If existing shared
+  CSS lacks shell styles, add only missing `--prototype-*` presentation tokens and supporting shell
+  rules from the runtime template CSS after confirming explicit write authority; do not overwrite
+  product styles with an entire file. Without write authority, return to the PM to adjust current
+  scope. Top-of-page layout explanations, actual display mode/dimensions, and contract records must agree.
+- Arrange each concrete HTML vertically: current page name, compact summary, and circular back control
+  → high-fidelity product view → requirements HTML/Markdown, platform/dimensions, and necessary demo
+  explanations → a five-section contract collapsed by default. Requirements links use the two explicit
+  html/markdown types in the single nav.prototype-requirement-links; the body's
+  data-prototype-plan-source binds the same-named Markdown under the configured plans directory.
+  Leave unbound templates empty without fabricated links. The iOS/PC product area is a horizontally
+  centered fixed artboard; the Web product area defaults to a naturally expanding responsive webpage.
+  The contract area stays outside the product area and is collapsible by default; it does not consume
+  product-interface space or remain fixed over the bottom of the browser.
+- Use a simple, neutral outer presentation canvas; its background, dimension labels, presentation
+  navigation, and contract area are not part of the product interface. Do not require wallpaper or
+  generate background images. The artboard contains only the current page's product interface and
+  its interactions.
+- At the top of the current page, use a circular back control with a light background, thin border,
+  and black left chevron, providing a name and visible focus without relying on browser history.
+  Inside the workspace, back only expands the sidebar/current group and focuses the current link
+  while preserving the view; a standalone page returns to its page deep link in index. Use a separate
+  toggle to expand/collapse the sidebar. Demo data, reset-on-refresh behavior, unimplemented scope,
+  and necessary pending confirmations belong to the explanations after the view; actual business
+  messages remain inside the artboard. The product's own navigation, scrolling, and overlays do not
+  move into the outer workspace.
+- First determine platform and layout scope from the current task and project design standards.
+  For fixed previews, reuse existing baseline dimensions first; if no baseline exists, choose and
+  explicitly explain one. Responsive Web needs no invented fixed dimensions. Keep previews consistent
+  within the same platform and design scope; use logical dimensions (CSS px), not device physical pixels.
+- iOS: Use a fixed-width, fixed-height artboard for the selected iPhone, reflecting its safe areas,
+  status bar, and bottom gesture area.
+- PC clients: Use the project's selected fixed baseline window dimensions, presenting the title bar
+  and window controls according to the actual product and target platform. macOS may show red/yellow/
+  green buttons; do not apply that appearance to Windows or frameless clients.
+- Web: Default to `responsive`; `.prototype-frame` is only a content container without window
+  decoration. Do not fix its width/height, add device borders, or force internal scrolling. Lay out
+  content according to available width and project responsive rules, allowing ordinary media queries;
+  the product's own maximum content width and navigation still follow project standards, and the three
+  presentation areas remain independent. Use `fixed` only when fixed-viewport comparison is explicitly
+  required, and record baseline dimensions.
+- In `fixed` mode, the outer browser is only a presentation canvas and cannot alter the artboard's
+  internal baseline layout. Layout breakpoints follow artboard container queries; appearance/
+  accessibility media queries may remain. When space is insufficient, allow canvas scrolling or
+  proportional scaling without stretching, changing aspect ratio, or clipping necessary actions.
+  Long product content scrolls in designated areas inside the artboard; top bars, bottom bars, and
+  in-page overlays use the artboard as their layout boundary instead of the entire browser window.
+- Keep the contract's existing five sections. In `purpose`, record the target platform and display
+  mode in English; for fixed previews, also record the baseline device/window, width/height, and
+  scaling explanation; for responsive Web, record applicable layout scope. Product copy follows the
+  project language; do not add contract sections, separate explanatory documents, or screenshots.
+- Fixed dimensions constrain only the prototype preview, not the actual product's multi-device
+  adaptation, Web responsiveness, or client-window resizing. Add no confirmation stages, automated
+  browser operations, or QA process. Apply only to the currently authorized prototype task without
+  automatically reworking all existing prototypes; this creates no prototype tasks for
+  `standards_only` or user-selected direct-development branches.

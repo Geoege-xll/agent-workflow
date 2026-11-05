@@ -20,11 +20,7 @@ project-acceptance gaps without starting another complete generic review.
 
 ## 3. Repository-Driven Expertise
 
-使用`$xy-qa-review`的只读审计或实现验收分支，只读实际必需参考。Full保留唯一独立QA；
-Light按实际风险或明确要求选择独立审计，不因此要求Full计划／DAG。 Standalone audit stops at findings without implementation QA
-or post-QA closeout. Required/surface-matched Skills follow the same request scope.
-实际审查代码时只读使用 `xy-code-standards`；生产 UI 或设计规范审查再按实际审查面
-只读使用 `xy-ui-design` 的适用规则。固定入口仍仅为 `xy-qa-review`，不执行设计或写入分支。
+Use `$xy-qa-review`'s read-only audit or implementation-acceptance branch, reading only actually required references. Full retains exactly one independent QA; Light selects independent audit by actual risk or explicit requirement without thereby requiring a Full plan/DAG. Standalone audit stops at findings without implementation QA or post-QA closeout. Required/surface-matched Skills follow the same request scope. For actual code review, use `xy-code-standards` read-only; for production UI or design-standard review, also use applicable `xy-ui-design` rules read-only according to actual review surfaces. The only fixed entry remains `xy-qa-review`; do not execute design or write branches.
 
 ## 4. Critical Operating Rules
 
@@ -36,17 +32,11 @@ or post-QA closeout. Required/surface-matched Skills follow the same request sco
 
 ## 5. Task Intake Contract
 
-接收当前完整2.0自包含包，核对workflow_level、module、role、agent_alias、fresh／handoff_only；
-仅消费当前目标、代码／工作区事实、适用规范、可信授权、验收证据与未决事项，禁止继承或
-复制完整PM／兄弟会话、fork父历史。身份／续用／证据／结束统一按WORKFLOW的
-implementation-ownership与agent-instance-lifecycle，不在角色另建流程。Light保留最小验证，
-依赖／gates按实际适用，不因预载强制Full图、计划或独立QA。普通Light UI文案仍用
-production_ui＋UI-Conformance与真实冻结权威；工程／设计规范保留，设计／交互变化Full。
+Receive the complete current self-contained 2.0 pack and check workflow_level, module, role, agent_alias, and fresh/handoff_only. Consume only the current goal, code/workspace facts, applicable standards, trusted authorization, acceptance evidence, and unresolved matters; never inherit/copy complete PM or sibling conversations or fork parent history. Follow WORKFLOW's implementation-ownership and agent-instance-lifecycle for identity, continuation, evidence, and termination rather than creating another role-specific process. Light retains minimum verification with dependencies/gates only as applicable; preloading does not mandate a Full graph, plan, or independent QA. Ordinary Light UI copy still uses production_ui + UI-Conformance and actual frozen authority; engineering/design standards remain, and design/interaction changes are Full.
 
 
 Use the latest complete PM scope; a plan is recovery context, not authority or reason to replay work.
-Full与实际要求独立QA的Light验收使用当前2.0包、适用批准、范围、验收、`controlled_document_access`及current
-内置通用规则、存在时的项目索引、适用非skip特有叶、writer evidence、Skill policy与review_method evidence。
+Full acceptance and Light acceptance with an actual independent-QA requirement use the current 2.0 pack, applicable approvals, scope, acceptance, `controlled_document_access`, current built-in common rules, the project index when present, applicable non-skip specific leaves, writer evidence, Skill policy, and review_method evidence.
 Read detailed intake and `standards_policy_coverage` through the Skill; hard-rule omissions block PASS.
 
 For production UI require `surface_kind: production_ui`, `qa_scope: request` and current resolved/fingerprinted structured

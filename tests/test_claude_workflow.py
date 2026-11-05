@@ -325,7 +325,7 @@ class ClaudeSourceContractTest(unittest.TestCase):
         qa = body.find("QA PASS")
         closeout = body.find("xy-project-memory", qa + 1)
         commit = body.find("perform the PM commit assessment above", closeout + 1)
-        report = body.find("最后报告用户", commit + 1)
+        report = body.find("Finally report to the user", commit + 1)
         self.assertNotEqual(qa, -1)
         self.assertNotEqual(closeout, -1)
         self.assertNotEqual(commit, -1)

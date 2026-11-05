@@ -106,8 +106,9 @@ interview. Local candidate commits and default commit assessment do not by thems
 - PM builds one internal delivery object with `task_graph`, `qa_handoff`, `qa_task_pack` and optional exact
   `projection_paths` (only configured PROJECT/plans), and `authorization`.
   Projection entries are unique actual changed Markdown file paths, including deletions, never directories.
-  `qa_task_pack`是当前完整2.0 QA包的绝对路径；合并入口按同包核对handoff_ref身份与字节SHA，
-  不能仅凭内联旧PASS或另一任务包交付。包必须是当前xy-qa任务并绑定真实agent_ref。
+  `qa_task_pack` is the absolute path to the current complete 2.0 QA pack. The merge entry verifies
+  handoff_ref identity and byte SHA against that same pack; inline old PASS or another task pack cannot
+  authorize delivery. The pack must be the current xy-qa task and bind actual agent_ref.
 - `authorization` binds `request_id`, `target_branch`, `target_base`, `head_revision`, and
   `diff_fingerprint`, plus `mode` and `source`. In confirm mode, first show the user the completed
   features, resolved target branch, current QA/verification result, and any meaningful risk; ask one
@@ -151,14 +152,16 @@ Report local merged versus awaiting consent/blocked accurately. Pending delivery
 "main branch complete" in PROJECT, a plan or memory. Close memory against the actual delivered revision
 only when warranted; do not save merely because worktrees were used.
 
-完成当前交付单元的必要验证／QA和证据接收后，按WORKFLOW实例生命周期原生结束；
-工具缺失只退役，不能声称销毁或解锁仍活动任务。AGY kill前先保护临时worktree与唯一日志。 Remove only identified task-owned worktrees after proving
+After necessary verification/QA and evidence acceptance for the current delivery unit, close natively under
+WORKFLOW's instance lifecycle. Without tools, retire only; do not claim destruction or unlock active tasks.
+Protect temporary worktrees and sole logs before AGY kill. Remove only identified task-owned worktrees after proving
 their commits are preserved in the delivered main history and no dirty, untracked, ignored needed
 files or active users remain. Prefer the host's safe cleanup; otherwise use non-force `git worktree
-remove` for an exact registered path. Keep any uncertain or unfinished worktree. 其他本任务新增的
-隔离库、容器、滚动快照与 scratch 按[原资源收口合同](closeout.md)处理：有效数据与完整
-证据先移交相应项目／服务的持久落点，核查归属、活跃使用和必要引用；scratch 使用同目标
-的只读预览、必要保留项与快照指纹执行清理，不直接无指纹删除，也不默认使用 `--all`。
+remove` for an exact registered path. Keep any uncertain or unfinished worktree. Other task-created isolated
+databases, containers, rolling snapshots and scratch follow the [original resource closeout contract](closeout.md):
+first transfer valid data/complete evidence to the corresponding project/service's durable location and check
+ownership, active use and necessary references. Clean scratch with a read-only preview of the same target,
+necessary retained items and snapshot fingerprint, without direct unpinned deletion or default `--all`.
 Never recursively delete a workspace root, force removal, delete user branches, or treat the final
 merge as cleanup consent for unrelated work. Briefly report what was removed, removed logical bytes (not physical disk release), and
 where the committed work remains recoverable.

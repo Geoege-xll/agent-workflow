@@ -1,25 +1,29 @@
-## 验证证据与交付边界
+## Verification evidence and delivery boundaries
 
-收口沿用 `xy-build-verify/references/verification-scope.md`：PM 核对生产交付的构建／编译
-成功、可运行证据以及当前交付与已验证范围
-一致，不因准备提交、已有 QA PASS 或即将回复用户而再执行无信息增量的构建、测试或验收。
-新增覆盖、失效证据或具体风险的判断沿上述策略，普通说明收尾本身不构成重跑理由。
-真实输入变化只失效受影响的结论；强制 CI／Hook 和 worktree 候选集成验证保持原有要求。
-Light 完成最小验证后按实际风险评估独立审计、文档与记忆，不为应用本段补建 Full 图、
-计划或空收口记录；Full 仍需有效唯一 QA PASS。两等级都默认原生实施者，PM例外须有明确授权。
-最终反馈只说明实际验证范围、结果及相关限制，准确区分局部通过和全量通过。
-完整命令、日志及复用来源留在现有证据引用，不创建新的报告或审批环节。
-只读审计交付结论后不进入本实现收口链。QA 通过后的普通说明文档或低风险文案收尾，
-只检查实际变化的链接、语义、资源或运行输入；需要更新交付绑定时沿用现有机制，不能
-为收尾从头再审未变功能。工作流指令、权限、安全、API 或业务合同变化不因是 Markdown
-或文案而豁免；新风险、失效证据和用户／项目明确要求的复审仍按受影响范围执行。
+Closeout follows `xy-build-verify/references/verification-scope.md`: PM checks successful production
+build/compile and runnable evidence, and confirms current delivery matches the verified scope. Do not run
+builds, tests or acceptance without information gain merely because a commit is pending, QA PASS exists
+or a user reply is imminent. Judge added coverage, invalidated evidence and specific risks under that
+policy; ordinary explanatory closeout alone is no reason to rerun. Actual input changes invalidate only
+affected conclusions. Mandatory CI/Hooks and worktree-candidate integration checks retain their requirements.
+After minimum verification, Light assesses independent audit, documentation and memory by actual risk;
+do not create a Full graph, plan or empty closeout record to apply this section. Full still requires its
+single valid QA PASS. Both levels default to native implementers; a PM exception needs explicit authority.
+Final feedback states only actual verification scope, results and relevant limits, accurately distinguishing
+scoped success from full-suite success. Complete commands, logs and reuse provenance remain in existing
+evidence references, without a new report/approval step. Read-only audits do not enter this implementation
+closeout chain after delivering conclusions. Ordinary explanatory documentation/low-risk copy closeout after
+QA checks only changed links, semantics, resources or runtime inputs. Update delivery bindings through
+existing mechanisms when needed; do not restart review of unchanged functionality for closeout. Markdown/
+copy status does not exempt workflow instructions, permissions, security, APIs or business-contract changes.
+New risks, invalidated evidence and explicit user/project rereview requirements still apply to affected scope.
 
 - Every implementation task pack carries its approved goal, non-goals, constraints, acceptance
   evidence, and applicable UI authority. Required-prototype design tasks carry concrete pages;
   `UI-Conformance` tasks carry `design_authority_refs`; waived tasks carry the scope-bound
   `prototype_decision` and must not treat an old prototype as current authority. Required-prototype
-  tasks carry the same decision plus concrete page authority. Full包预先记录投影决定，Light在
-  交接时按实际需要评估，不强制预填下列Full投影记录：
+  tasks carry the same decision plus concrete page authority. Full packs record the projection decision
+  in advance; Light assesses actual needs at handoff without mandatory prefilled Full projection records:
 
   ```yaml
   controlled_document_projection:
@@ -46,13 +50,17 @@ Light 完成最小验证后按实际风险评估独立审计、文档与记忆�
   prototype link misleading, project the verified production truth and scoped authority boundary;
   do not synchronize the historical prototype during closeout.
 
-  Full 在 integrated QA PASS 后投影；Light 依据实际最小验证和必要独立审计接收更新，
-  不把未审计结果写成 QA-verified。PM 原地更新同主题 plans 的已验收版本、已交付行为与必要证据，
-  PROJECT 只保留当前基线链接，不追加执行状态或一行一修订。再次迭代保留旧基线，取消本次目标也不抹掉旧交付。
-  completed 不证明验收，旧未索引稿不自动成为事实；没有变化不另建 feature 文档或 ADR。
-  已验收完整删除在同稿标记 removed、保留原因／日期／替代与必要历史，移除当前 PROJECT 链接并修复引用；
-  QA 失败不投影。Markdown 是唯一编辑权威，相关 HTML 在同路径重渲染。
-- Full 在 QA PASS 后、Light 在最小验证与实际必需审计接收后，连同已验证文档投影执行 PM 提交评估。
+  Full projects after integrated QA PASS; Light updates on acceptance of actual minimum verification and
+  necessary independent audit, without calling unaudited results QA-verified. PM updates the topic plan's
+  accepted version, delivered behavior and necessary evidence in place. PROJECT retains only current baseline
+  links, without appended execution states or one entry per revision. Preserve the old baseline during
+  iteration; canceling the current goal does not erase old delivery. completed does not prove acceptance,
+  and unindexed old drafts do not automatically become facts. Without changes, add no feature document/ADR.
+  Mark accepted complete deletion as removed in the same source, retaining reason/date/replacement and
+  necessary history, removing the current PROJECT link and repairing references. Do not project after QA
+  failure. Markdown is the sole editing authority; rerender relevant HTML at the same path.
+- Full performs PM commit assessment after QA PASS, and Light after acceptance of minimum verification and
+  actually mandatory audit, including verified document projection.
   Keep the result internal:
 
   ```yaml
@@ -68,7 +76,8 @@ Light 完成最小验证后按实际风险评估独立审计、文档与记忆�
         reason: <repository-specific evidence>
   ```
 
-  只提交本请求拥有且按当前等级验证／验收的变更，加已验证的PM投影；Full必须有效QA PASS。 Use exact
+  Commit only request-owned changes verified/accepted for the current level, plus verified PM projection;
+  Full requires valid QA PASS. Use exact
   pathspecs and inspect the complete staged diff; the PM must not stage unrelated or unverified changes
   and must not use `git add -A` or `git add .`. Preserve pre-existing user edits. Unsafe overlap is
   `blocked`, not permission to stage a whole file. Assess nested repositories independently and
@@ -78,22 +87,28 @@ Light 完成最小验证后按实际风险评估独立审计、文档与记忆�
   The selected [worktree delivery](worktree-delivery.md) branch separately grants bounded PM-local
   checkpoint/integration authority before final QA and confirm/auto delivery after all work completes.
   It never grants workers commit/merge authority or implies a remote operation.
-- 最终报告前，仅在确有本任务临时资源时按原合同收口。先停止相关写者，核对任务归属、
-  活跃使用及当前计划／交接／恢复引用；共享配置、项目环境、数据库、系统缓存与用户材料
-  继续按其职责复用。将按授权需保留的有效数据与成果移交相应项目／服务基线，必需完整
-  日志及批准／恢复证据先取得可读持久落点并修复当前引用，不能用摘要代替唯一完整证据。
-  无法移交时仅保留必要文件及祖先目录，不因单个引用保留全部候选。
-  scratch 按[记录工具的预览与清理合同](runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace)
-  先以本 `request-id` 只读预览，携带相同的必要 `--keep`，核对后用预览快照指纹执行；
-  快照失效先重新核实，`--all` 不作默认收口。隔离库、容器、滚动快照同样只回收可证明
-  归属且无活跃使用与必要引用的本任务资源。确有清理时在原任务中简述结果与剩余限制；
-  `removed_logical_bytes` 仅为已移除文件的逻辑字节统计，不声称实际物理磁盘释放量。
+- Before the final report, close out actual task-temporary resources only under the original contract.
+  First stop relevant writers and verify task ownership, active use and current plan/handoff/recovery
+  references. Continue reusing shared configuration, project environments, databases, system caches and user
+  material for their intended roles. Transfer authorized retained valid data/results to the corresponding
+  project/service baseline. First place mandatory complete logs and approval/recovery evidence at a readable
+  durable location and repair current references; a summary cannot replace the sole complete evidence.
+  If transfer is impossible, retain only necessary files/ancestors, not an entire candidate for one reference.
+  For scratch, follow the [record-tool preview and cleanup contract](runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace):
+  preview this `request-id` read-only with the same necessary `--keep` values, then execute against its reviewed
+  snapshot fingerprint. Recheck an invalidated snapshot; `--all` is not default closeout. Likewise reclaim only
+  task-owned isolated databases, containers and rolling snapshots with proven ownership, no active use and no
+  necessary references. If cleanup occurs, briefly record results/remaining limits in the original task.
+  `removed_logical_bytes` counts removed files' logical bytes only; do not claim physical disk space released.
 
-## 实例与证据收口
+## Instance and evidence closure
 
-按 WORKFLOW 的 `agent-instance-lifecycle`：PM接收成果、必要验证／QA结束且证据已安全
-保存后，用实际暴露的原生结束能力回收。没有可靠工具时只在现有任务记agent_retired:true，
-阻止误派并说明结束未确认；不能声称物理清空、销毁或释放未确认容量，退役不解锁仍活动任务。
-保留当前交付单元必要短返工及原Reviewer差量复查窗口；压力时优先已验收且交接充分者，
-不能简单LRU淘汰仍执行、证据未交付或必要复查实例。AGY kill前保护临时worktree与唯一日志。
-取消／异常保留已有恢复边界；不让原生结束或scratch清理删除仍被引用的唯一证据。
+Follow WORKFLOW's `agent-instance-lifecycle`: after PM accepts results, necessary verification/QA ends and
+evidence is safely preserved, use actually exposed native close capabilities. Without a reliable tool,
+record agent_retired:true only in the existing task to prevent misdispatch, and state closure is unconfirmed.
+Do not claim physical erasure/destruction or released unconfirmed capacity; retirement does not unlock active
+tasks. Keep necessary short-rework/original-Reviewer delta-review windows for the current delivery unit.
+Under pressure, prefer accepted, sufficiently handed-off instances; do not simply LRU-evict executing,
+evidence-unreceived or necessary-review instances. Protect temporary worktrees/sole logs before AGY kill.
+Preserve existing recovery boundaries for cancellation/exceptions. Native closure/scratch cleanup must not
+delete still-referenced sole evidence.

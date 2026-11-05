@@ -18,8 +18,62 @@ from tests.test_unified_host_workflow import HOSTS, UnifiedHostFixture
 
 PACK = Path(__file__).resolve().parents[1]
 
+# 只豁免现有机器协议字面量、兼容 fragment，以及用户要求保留的示例中文代码注释/
+# 终端提示。按精确来源和完整片段列举；绝不忽略整段引号或围栏，避免漏翻自然语言。
+MODEL_PROTOCOL_EXCEPTIONS = {
+    "product/WORKFLOW.md": (
+        "#完整读取必需长文", "`验收结果与当前已交付行为`", "`阶段`", "`当前进展与恢复入口`",
+    ),
+    "platforms/shared/skills/xy-workflow/SKILL.md": ("#完整读取必需长文",),
+    "platforms/shared/skills/xy-qa-review/references/inputs.md": ('<a id="原生结构化交接"></a>',),
+    "platforms/shared/skills/xy-workflow/references/plan-lifecycle.md": (
+        "`主题 ID`", "`阶段`", "`模块`", "`任务等级`", "`已验收版本`", "`目标与范围`",
+        "`需求与验收`", "`方案与原型关联`", "`当前进展与恢复入口`", "`验收结果与当前已交付行为`",
+        "`批准依据与必要证据`", "`批准依据`", "`验收证据`",
+    ),
+    "platforms/shared/skills/xy-plan/references/requirement-html.md": ("`验收结果与当前已交付行为`",),
+    "platforms/shared/skills/xy-workflow/references/dispatch.md": (
+        "#完整读取必需长文", "# 上游快照生成失败时不要进入本段；校验失败时 && 会阻止依赖查询继续执行。",
+    ),
+    "platforms/shared/skills/xy-workflow/references/runtime-records.md": (
+        "# 子 shell 只为本次诊断切换目录，不影响后续安装态命令的工作目录。",
+        "${workflow_manager_source_root:?请设置中央管理工具源包根}",
+        "${project_root:?请设置实际业务项目根}", "#原生结构化交接",
+        '<a id="完整读取必需长文"></a>',
+        "# 首页：只指定当前必需的一个文件；安装态从项目根运行。",
+        "# 续页：填入上一完整回包的 next_offset 与首次页 sha256，不猜测位置。",
+        "# 核对归属、使用和引用后，将预览返回的 snapshot_sha256 设为 scratch_snapshot_sha256。",
+    ),
+    "platforms/shared/skills/xy-prototype-verify/SKILL.md": (
+        "# 复用此列表记录需求覆盖、规范符合性、交付一致性及各自证据/限制",
+    ),
+}
+
+
+def without_model_protocol_literals(body: str, relative: str) -> str:
+    """只去掉本来源明确保留的完整字面量；普通引号/代码围栏内仍检查语言。"""
+    for literal in MODEL_PROTOCOL_EXCEPTIONS.get(relative, ()):
+        body = body.replace(literal, "")
+    return body
+
 
 class ProgressiveContractTest(unittest.TestCase):
+    def test_builtin_model_visible_sources_are_english_with_exact_protocol_exceptions(self) -> None:
+        sources = [*(PACK / "product").glob("*.md"), *(PACK / "roles").glob("xy-*.md"),
+                   PACK / "platforms/shared/AGENTS.product.tpl", PACK / "platforms/codex/WORKER_CONSTRAINTS.md",
+                   *(PACK / "platforms").glob("*/references/pm-integration.md"),
+                   *(PACK / "platforms/shared/skills").rglob("*.md")]
+        for source in sources:
+            relative = source.relative_to(PACK).as_posix()
+            body = source.read_text(encoding="utf-8")
+            with self.subTest(source=relative):
+                for literal in MODEL_PROTOCOL_EXCEPTIONS.get(relative, ()):
+                    self.assertIn(literal, body)
+                self.assertNotRegex(without_model_protocol_literals(body, relative), r"[\u4e00-\u9fff]")
+        # 负控防止未来把“代码示例/引号”整体忽略，导致模型可见自然语言再次漏翻。
+        for body in ('"未翻译的模型指令"', '```text\n未翻译的模型指令\n```'):
+            self.assertRegex(without_model_protocol_literals(body, "product/WORKFLOW.md"), r"[\u4e00-\u9fff]")
+
     def test_verification_policy_keeps_mandatory_evidence_and_rejects_inversions(self) -> None:
         body = read_contract(PACK / "platforms/shared/skills/xy-build-verify/SKILL.md")
         self.assertEqual([], verification_scope_errors(body))
@@ -103,6 +157,15 @@ class ThreeHostAdaptationTest(UnifiedHostFixture, unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn(bootstrap.read_text(encoding="utf-8").strip(),
                       (project / "AGENTS.md").read_text(encoding="utf-8"))
+        # 发行模型正文与三宿主全部已生成角色均实际到达消费者，不能只筛查源模板。
+        generated = [(project / "AGENTS.md", "AGENTS.md")]
+        for directory in (".codex/agents", ".claude/agents", ".agents/agents"):
+            generated.extend((path, path.relative_to(project).as_posix())
+                             for path in (project / directory).glob("xy-*.*"))
+        self.assertGreater(len(generated), 3)
+        for path, relative in generated:
+            with self.subTest(english_generated=relative):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"[\u4e00-\u9fff]")
         for root in (".agents/skills", ".claude/skills"):
             # Codex/Antigravity 共用 .agents，Claude 独立安装；两处都必须替换旧副本。
             for source in changed_sources[1:]:

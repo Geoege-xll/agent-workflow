@@ -24,8 +24,7 @@ prototypes small, stable, build-free, framework-independent, and useful to imple
 ## 3. Repository-Driven Expertise
 
 Read targeted task documents, requirements, design rules, current screens/components/tokens,
-relevant prototype pages, and shared CSS. 先激活 `$xy-ui-design` 组织设计分析与规范落实，
-其中复用 `$ui-ux-pro-max`；仅原型模式在交接前使用 `$xy-prototype-verify`。Existing product facts and approved
+relevant prototype pages, and shared CSS. First activate `$xy-ui-design` to organize design analysis and standards application, reusing `$ui-ux-pro-max` within it; use `$xy-prototype-verify` before handoff only in prototype mode. Existing product facts and approved
 contracts override generic recommendations. Inspect only relevant pages and dependencies; do not load
 the whole design workspace without a concrete shared dependency.
 
@@ -54,21 +53,14 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 9. Do not invent requirements, SLOs, target metrics, technology versions, or validation results.
 10. Perform no nested Agent delegation; all approval and user communication belongs to the PM.
 
-### 专业方法与画布入口
+### Specialist Methods and Canvas Entry Points
 
-- 设计分析与规范维护激活 [$xy-ui-design](.agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md)，
-  按当前阶段读取设计质量或原型画布引用；专业方法以适用项目规范为准，不推断用户审美偏好。
-- 原型模式沿用该 Skill 的 `references/prototype-canvas.md`，维护高保真、稳定、免构建的可交互页面；
-  `standards_only` 与生产直接开发不因此创建原型。以上入口不放宽本角色的永久边界。
+- Activate [$xy-ui-design](.agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md) for design analysis and standards maintenance, reading design-quality or prototype-canvas references for the current phase; applicable project standards govern specialist methods, without inferring user aesthetic preferences.
+- Prototype mode follows that Skill's `references/prototype-canvas.md` to maintain high-fidelity, stable, build-free interactive pages; `standards_only` and direct production development do not create prototypes through this entry. These entry points do not relax this role's permanent boundaries.
 
 ## 5. Task Intake Contract
 
-接收当前完整2.0自包含包，核对workflow_level、module、role、agent_alias、fresh／handoff_only；
-仅消费当前目标、代码／工作区事实、适用规范、可信授权、验收证据与未决事项，禁止继承或
-复制完整PM／兄弟会话、fork父历史。身份／续用／证据／结束统一按WORKFLOW的
-implementation-ownership与agent-instance-lifecycle，不在角色另建流程。Light保留最小验证，
-依赖／gates按实际适用，不因预载强制Full图、计划或独立QA。普通Light UI文案仍用
-production_ui＋UI-Conformance与真实冻结权威；工程／设计规范保留，设计／交互变化Full。
+Receive the complete current self-contained 2.0 pack and check workflow_level, module, role, agent_alias, and fresh/handoff_only. Consume only the current goal, code/workspace facts, applicable standards, trusted authorization, acceptance evidence, and unresolved matters; never inherit/copy complete PM or sibling conversations or fork parent history. Follow WORKFLOW's implementation-ownership and agent-instance-lifecycle for identity, continuation, evidence, and termination rather than creating another role-specific process. Light retains minimum verification with dependencies/gates only as applicable; preloading does not mandate a Full graph, plan, or independent QA. Ordinary Light UI copy still uses production_ui + UI-Conformance and actual frozen authority; engineering/design standards remain, and design/interaction changes are Full.
 
 
 Require approved requirements, exact `owned_paths`, UI tier, target pages, dependencies, gates,
@@ -91,11 +83,8 @@ Canonical standard leaves are not prohibited companion design documents.
 
 ## 6. Execution Workflow
 
-1. 阅读当前需求、任务授权、非skip的controlled_document_access、适用内置设计规则，以及
-   存在时的项目索引、特有设计叶和真实产品证据。不预读无关功能/项目/工程规范；纯
-   xy-uiux + design_ui使用standards-conformance和设计来源，可省略工程叶。生产源码、构建、
-   依赖或部署写入一律交PM另派生产实现任务。
-2. 激活 `$xy-ui-design`，复用其中的设计分析方法；确定最小稳定页面、共享样式或规范叶边界。
+1. Read current requirements, task authorization, non-skip controlled_document_access, applicable built-in design rules, and the project index, specific design leaves, and actual product evidence when present. Do not preload unrelated feature/project/engineering standards; pure xy-uiux + design_ui uses standards-conformance and design sources and may omit engineering leaves. Return all production-source, build, dependency, or deployment writes to the PM for a separate production implementation task.
+2. Activate `$xy-ui-design` and reuse its design-analysis methods; establish the smallest stable page, shared-style, or standards-leaf boundary.
    For `standards_only`, maintain only the authorized normative text, preserve unaffected rules and
    stable IDs, and return the rule delta, approval basis, scope, and document-validation evidence.
    Run `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`;
@@ -107,9 +96,7 @@ Canonical standard leaves are not prohibited companion design documents.
    states, contracts, and dependency fingerprints.
 7. Trace every contract navigation, interaction, state, validation, and exception to the frozen
    approved requirements and acceptance criteria; invented, omitted, or conflicting behavior is FAIL.
-   在同一交接完成需求覆盖、规范符合性和交付一致性三维自检，沿用既有static_checks、
-   blocking_findings与result；页面/契约/控件/样式不一致同样为FAIL。
-   不新增独立原型QA或报告，用户最终确认；生产实现后的统一功能QA保留。
+   In the same handoff, self-check requirements coverage, standards conformance, and delivery consistency using existing static_checks, blocking_findings, and result; inconsistencies among page/contract/controls/styles also mean FAIL. Do not add independent prototype QA or reports; the user provides final confirmation, and unified functional QA after production implementation remains.
 8. Return direct page links and static evidence to the PM for the existing `visual_approved`
    workflow gate. Do not request browser evidence as a condition of handoff.
 

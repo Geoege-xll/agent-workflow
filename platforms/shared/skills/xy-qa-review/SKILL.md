@@ -17,28 +17,31 @@ QA must not generate screenshots or dispatch another reviewer. Communicate only 
 
 ## Select the review branch
 
-- Light 由PM在交接时依据实际风险评估是否需要独立审计；没有实际需要时不派QA，也不能
-  把局部验证改写成PASS。明确审查请求、项目强制项和实际风险仍可要求唯一独立审查；
-  不为审计Light强制创建Full计划或DAG。
+- PM assesses Light's independent-audit need at handoff by actual risk. Without a real need, do not dispatch
+  QA or relabel local verification as PASS. Explicit review requests, mandatory project checks and actual
+  risk may still require the single independent review; auditing Light does not force a Full plan or DAG.
 - For an audit-only request, follow WORKFLOW's `Standalone read-only audit`: inspect requested
   source/contracts, standards and necessary evidence; return findings, conclusion and limitations,
   then stop. Honor explicit full/independent re-review and mandatory checks. Missing evidence is a
   limitation or blocker. Do not fabricate writers, BUILD_VERIFIED, Task Packs or implementation QA
   PASS, audit the report again, or activate projection/commit/memory closeout. Authorized fixes route
   through PM. For a code-review audit, prefer safe available native review without imposing
-  implementation intake or records. Full 与实际要求独立QA的 Light 实现验收使用下列当前任务包合同。
+  implementation intake or records. Full and Light implementation acceptance that actually requires independent
+  QA use the current-task-pack contract below.
 
-适用规则从受管内置来源与实际项目特有叶选择，项目索引存在才读取并绑定真实SHA；
-无特有叶且索引缺失时使用配置路径/null指纹，不制造GENERAL或空索引。
-原型阶段由设计 Agent 自检三维并经用户最终确认，不由本Skill新增独立原型QA；
-生产实现后的功能验收继续执行以下唯一独立审查。
+Select applicable rules from managed built-in sources and actual project-specific leaves. Read/bind the
+real SHA of a project index only when it exists. With no specific leaves and a missing index, use configured
+paths/null fingerprints; create no GENERAL or empty index. At prototype stage, the design Agent performs
+three self-checks and the user gives final confirmation. This Skill adds no independent prototype QA;
+functional acceptance after production implementation still uses the single independent review below.
 
 ## Implementation acceptance
 
 Final QA outcome: PASS | FAIL
 
-Full 的相关Writer达BUILD_VERIFIED、或Light完成其必需验证且选定独立QA后，PM只派一位
-`xy-qa`。新的Reviewer只接收当前自包含2.0任务包，不复制完整PM／兄弟会话，不fork继承父历史。
+After relevant Full Writers reach BUILD_VERIFIED, or Light completes required verification with independent
+QA selected, PM dispatches only one `xy-qa`. A new Reviewer receives only the current self-contained 2.0
+task pack, without copying full PM/sibling conversations or forking parent history.
 That same reviewer uses one code-review method in this order:
 
 ```yaml
@@ -124,10 +127,11 @@ findings within PASS or blockers within FAIL, never a third outcome. Return FAIL
 Before accepting PASS, PM validates the internal `review_method.scope_ref` and
 `standards_policy_coverage` using
 `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
-Full 只有有效PASS才进入 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`。Light执行其实际选定的审计与收口判断。
+Only valid PASS lets Full enter `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`. Light performs its actually selected audit and closeout assessment.
 Keep raw records internal and stop after valid acceptance; ordinary closeout does not trigger another audit.
 
-结果使用schema_version:2，并以handoff_ref绑定当前QA包的request_id、task_id、agent_alias、
-真实agent_ref及task_pack_sha256。validate／extract都必须传当前--task-pack，不接受旧格式、
-旧身份或旧包PASS。收到返工时仍由本Reviewer按当前完整包差量复查；有效PASS后停止，
-PM接收证据并完成必要反馈窗口后原生结束或退役，不据退役推断物理清空或锁释放。
+Results use schema_version:2 and handoff_ref to bind the current QA pack's request_id, task_id, agent_alias,
+actual agent_ref and task_pack_sha256. Both validate/extract require current --task-pack; old formats,
+identities or old-pack PASS are rejected. The same Reviewer checks rework deltas under the current complete
+pack. Stop after valid PASS; close natively or retire after PM accepts evidence and the necessary feedback
+window ends. Retirement does not prove physical erasure or lock release.

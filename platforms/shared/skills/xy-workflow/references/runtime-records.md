@@ -1,16 +1,19 @@
 # Reuse runtime record tools
 
-仅在维护现有内部任务快照、导出变化后的完整 Task Pack、生成／核对文件指纹，或需要
-有界读取长文时使用本说明。它不增加任务等级、状态、业务确认、QA 阶段、强制报告，
-Light 可直接维护同形单任务包，不要求创建Full图或第二账本。仅接受schema_version:2。
+Use this reference only to maintain existing internal task snapshots, export changed complete Task Packs,
+generate/check file fingerprints or read long documents within bounds. It adds no task level, state,
+business confirmation, QA phase or mandatory report. Light may directly maintain a same-shape single-task
+pack without creating a Full graph or second ledger. Accept only schema_version:2.
 
-中央项目先遵守 [统一 helper 执行边界](dispatch.md#workflow-helper-execution)：每次调用
-通过项目薄入口并显式传入当前包 `runtime_binding`，不假定 shell 环境跨工具调用持续。
-下列 `.agent-workflow/lib/<helper>.py` 命令保留为源包／旧自包含示例；中央模式把 helper
-及其参数交给同一 pin 的 `runtime.py --binding '<三字段 JSON>' helper lib/<helper>.py`。
-新工作流先做本机 enabled 检查；新图从已验证桥环境或明确已验证 binding 冻结顶层
-pin，任务导出原样投影，update／refresh 不改变它。旧包缺 pin、与桥冲突或核心损坏
-均拒绝，不从项目 locator 补当前版，不接受任意 `core_root` 路径。
+Central projects first follow the [shared helper execution boundary](dispatch.md#workflow-helper-execution):
+each call goes through the project thin entry with explicit current-pack `runtime_binding`; do not assume
+shell environment persists across tool calls. The `.agent-workflow/lib/<helper>.py` commands below remain
+source-pack/old self-contained examples. Central mode passes the helper/arguments to the same pin's
+`runtime.py --binding '<three-field JSON>' helper lib/<helper>.py`. New workflows first check machine-local
+enabled state. New graphs freeze their top-level pin from the verified bridge environment or an explicitly
+verified binding. Task export projects it unchanged; update/refresh do not alter it. Reject old packs with
+missing pins, bridge conflicts or corrupt cores. Do not fill the current version from the project locator
+or accept arbitrary `core_root` paths.
 
 ## Prefer the existing tool
 
@@ -22,25 +25,29 @@ pin，任务导出原样投影，update／refresh 不改变它。旧包缺 pin�
   justify a temporary helper. Keep it task-scoped, reuse it during that task, and do not turn it
   into a default deliverable or an additional acceptance gate.
 - Internal records stay in the current resolved execution workspace, not the business source tree
-  or a new controlled-document layer. 仅实际需要临时文件时，使用下文 `scratch` 分配本请求
-  唯一路径，跨重试、返工与 QA 原地复用；无此需要的 Light 不创建 scratch 或空记录。
+  or a new controlled-document layer. Allocate this request's unique path with `scratch` below only when
+  temporary files are actually needed, reusing it in place across retries, rework and QA. Light without
+  that need creates no scratch or empty record.
   Do not invent dated or random `/tmp/<project>-*` folders, clone source trees (`work/`, `replay/`,
   `before/`, `packages-qa*`), or redirect global dependency/build caches (`Maven`, `Gradle`, `npm`,
   `Cargo`, `DerivedData`) into task scratch directories. Reuse the current graph and available
   receipts. Do not create a second task-state source, a receipt per step, or a new checkpoint script
   just to update metadata.
-- 有待回收临时资源时，按下文的只读预览、选择保留及快照绑定清理；调用方先停止相关
-  写者并核实归属、活跃使用和必要引用。必需完整日志先移交到可读持久落点并修复引用，
-  否则精确保留必要文件。摘要或即将删除目录中的路径不能代替完整证据；工具不推断
-  语义引用，也不授权清理共享环境、数据库、系统缓存、用户材料或其他任务资源。
+- For temporary resources needing reclamation, use the read-only preview, selective retention and
+  snapshot-bound cleanup below. The caller first stops relevant writers and verifies ownership, active
+  use and necessary references. First transfer mandatory complete logs to readable durable locations and
+  repair references; otherwise retain exactly necessary files. Summaries or paths inside a directory about
+  to be deleted cannot replace complete evidence. The tool neither infers semantic references nor authorizes
+  cleanup of shared environments, databases, system caches, user material or other tasks' resources.
 
-## 初始化任务图
+## Initialize a task graph
 
-`init` 将PM已明确的决定机械组装为schema_version:2的新图；已有2.0图仍使用`update`，原有
-读取、查询与校验合同不变。输入必须给出 `request_id`、`capacity`、`standards` 和非空
-`tasks`，通过 `--input <file>` 或 stdin 提供。以下调用复用当前 scratch 中已准备好的
-决定文件，不另外建立第二份任务状态。输入顶层声明schema_version:2，每个task给出
-workflow_level、规范化module、role、agent_alias、instance_policy:fresh与context_policy:handoff_only：
+`init` mechanically assembles PM's explicit decisions into a new schema_version:2 graph. Existing 2.0
+graphs still use `update`, retaining existing read/query/validation contracts. Input requires `request_id`,
+`capacity`, `standards` and non-empty `tasks`, supplied with `--input <file>` or stdin. The call below
+reuses a prepared decisions file in current scratch, without another task-state source. Declare top-level
+schema_version:2 and provide each task's workflow_level, normalized module, role, agent_alias,
+instance_policy:fresh and context_policy:handoff_only:
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py init \
@@ -49,37 +56,42 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
   --output "${workflow_graph:?set new graph path}"
 ```
 
-- `standards` 明示 `required_engineering_rule_ids`、`required_design_rule_ids`、
-  `leaves: [{path, domain, rule_ids}]` 及 `protected_paths`；保护项包含 `path`、`rule_id`、
-  `allowed_paths`，省略 `direct_edit` 时固定补 `forbidden_without_exception`，其他值拒绝。
-  PM 必须列明全部适用必需规则、叶和保护边界，不能只列一条示例规则或让工具猜测。
-- 源包默认从根内 `project.yaml` 读取规范索引／根目录；旧自包含安装态顶层显式设置
-  `adapter_path: ".agent-workflow/project.yaml"`。源包等明确场景可在 `standards` 成对设置
-  `index_path`／`root`，此时不再提供 `adapter_path`。不扫描整个规范目录。
-  中央桥上下文自动使用已验证物理项目 `.agent-workflow/project.yaml`，不能读核心中的
-  配置；显式索引／根也必须与该配置一致，`--root` 与桥项目根不同则拒绝。
-  显式传入 pin 的新图同样使用项目中央适配器。
-- leaves/selected_standards 使用精确内置来源或实际项目特有叶；安装态只给三份受管来源加
-  .agent-workflow/ 前缀，不把项目 standards_root 改成运行时目录。index_path/root 始终保留配置值，
-  无项目规则叶且索引物理不存在时 index_fingerprint 为 null，已有说明索引仍取真实 SHA。
-  init 和文档校验检查真实存在/缺失，纯 JSON 校验不声称检查了文件系统；不新增字段或审批。
-  中央内置来源只从任务 pin 的核心读取正文、ID、严重性和指纹，规范分类仍只接受三份
-  精确来源及既有别名；普通 `file_digest` 不因此取得越界或跟随符号／硬链接的权限。
-- 每个 Writer 保留实际 `id`、`task_type`、`role`、`surface_kind`、`goal`、`gates`、
-  `owned_paths`、输入／输出合同、验收证据和 `verification_commands`，用
-  `selected_standards: [叶路径]` 明确该任务采用的已列叶。依赖、锁及其他适用业务字段
-  仍由 PM 提供；UI、保护路径例外和确认照常受原校验器约束。
-- 可选顶层 `requirements_fingerprint`、`approved_gates`、`active_paths`、
-  `active_semantic_locks` 只接收 PM 已建立的事实，后三者缺省为空，不推导批准。
-  工具机械补当前 SHA、规范访问引用、`standards-conformance`、`DECLARED`、请求级
-  QA 及空依赖／阻塞／锁默认值；规范访问中的逻辑 `adapter` 仍为 `project.yaml`。
-  不接收完成态、执行身份或回执来制造已完成工作。
+- `standards` explicitly lists `required_engineering_rule_ids`, `required_design_rule_ids`,
+  `leaves: [{path, domain, rule_ids}]` and `protected_paths`. Protected entries include `path`, `rule_id`
+  and `allowed_paths`. Omitted `direct_edit` becomes fixed `forbidden_without_exception`; reject other values.
+  PM must list all applicable required rules, leaves and protected boundaries, not one sample rule or a guess
+  left to the tool.
+- Source-pack mode reads the standards index/root from root-local `project.yaml` by default. Old self-contained
+  installations explicitly set top-level `adapter_path: ".agent-workflow/project.yaml"`. Explicit source-pack
+  cases may set paired `index_path`/`root` in `standards`, then omit `adapter_path`. Do not scan the entire
+  standards directory. Central bridge context automatically uses the verified physical project's
+  `.agent-workflow/project.yaml`, never core configuration. Explicit index/root must match that configuration;
+  reject `--root` differing from the bridge project root. New graphs with an explicit pin also use the project's
+  central adapter.
+- leaves/selected_standards use exact built-in sources or actual project-specific leaves. Installed mode adds
+  .agent-workflow/ only to the three managed sources; do not change project standards_root into a runtime
+  directory. index_path/root always retain configured values. With no project rule leaves and a physically
+  absent index, index_fingerprint is null; an existing explanatory index still uses its real SHA. init/document
+  validation check real presence/absence; JSON-only validation does not claim filesystem checks. Add no fields
+  or approvals. Central built-in sources read text, IDs, severities and fingerprints only from the task-pinned
+  core. Standards classification still accepts only the three exact sources/existing aliases. Ordinary
+  `file_digest` gains no permission to escape boundaries or follow symbolic/hard links.
+- Each Writer retains its actual `id`, `task_type`, `role`, `surface_kind`, `goal`, `gates`, `owned_paths`,
+  input/output contracts, acceptance evidence and `verification_commands`. Use `selected_standards: [leaf-path]`
+  to identify listed leaves adopted by that task. PM still provides dependencies, locks and other applicable
+  business fields; UI, protected-path exceptions and confirmations remain subject to the original validator.
+- Optional top-level `requirements_fingerprint`, `approved_gates`, `active_paths` and `active_semantic_locks`
+  accept only PM-established facts. The last three default empty, without inferred approval. The tool
+  mechanically adds current SHA, standards-access references, `standards-conformance`, `DECLARED`, request-level
+  QA and empty dependency/block/lock defaults. The logical `adapter` in standards access remains `project.yaml`.
+  Completion states, execution identities and receipts are not accepted as a way to fabricate completed work.
 
-工具先复用原图／规范／READY 校验，再原子发布到明确的新文件；已存在的输出、非法
-授权、缺失规范覆盖、不安全路径或读取期间变化均失败且不发布。成功摘要为
-`initialized`、`path`、`sha256`、`task_count`，不返回整图。初始化已校验当前字节，
-无需紧接着重复 `validate`；需要派发时再查询 `ready`，QA 调度时仍单独查询 `qa-ready`。
-成功不代表任务已 READY、需求获批、验证通过或 QA PASS。
+The tool first reuses original graph/standards/READY validation, then atomically publishes to the explicit
+new file. Existing output, invalid authorization, missing standards coverage, unsafe paths or changes during
+reading fail without publication. Success returns only `initialized`, `path`, `sha256`, `task_count`, not
+the full graph. Initialization already validates current bytes; do not immediately repeat `validate`.
+Query `ready` when dispatch is needed and `qa-ready` separately when scheduling QA. Success does not mean
+a task is READY, requirements approved, verification passed or QA PASS.
 
 ## Update the current snapshot
 
@@ -91,8 +103,8 @@ The patch supports:
 - `tasks`: an object keyed by existing task ID. Each operation may contain `set`, `append`,
   `documents`, and `checkpoint`. `set` accepts `state`, `owned_paths`, `semantic_locks`, `input_contracts`,
   `output_contracts`, `acceptance_evidence`, `verification_commands`, and
-  `controlled_document_access`、可选`agent_ref`、`agent_retired`与`handoff_assessment`; `append` supports their existing arrays,
-  except non-array fields; agent_ref、agent_retired、handoff_assessment不能append。
+  `controlled_document_access`, and optional `agent_ref`, `agent_retired`, `handoff_assessment`; `append` supports their existing arrays,
+  except non-array fields; agent_ref, agent_retired and handoff_assessment cannot be appended.
 - `documents`: within a task operation, map an existing document path to the owned paths that
   should be appended to its `applies_to`. Select actual applicable documents; the tool does not
   silently broaden every document. Existing standards coverage and write-boundary validation apply.
@@ -160,33 +172,37 @@ An explicit `--output <task-pack.json> --expect-sha256 missing` safely creates a
 for an existing output, pass its observed digest instead of `missing`. The graph cannot be the output.
 No pack or revision archive is created by default. A scope/contract change requires complete affected
 handoff under the plan lifecycle; a state-only change does not require rebuilding every Task Pack.
-导出外壳为schema_version:2、当前task、适用standards_contract与必要批准／UI依据；
-不含兄弟任务、完整图或PM／兄弟历史。Export preserves the recorded state; it never resets work,
+The exported shell contains schema_version:2, current task, applicable standards_contract and necessary
+approval/UI authority, without sibling tasks, the full graph or PM/sibling history. Export preserves the recorded state; it never resets work,
 changes acceptance or messages a worker.
 
-Light使用同形单包：`task --input PACK`不带--task-id，校验并返回当前shell；明确写出时
-沿用--output与--expect-sha256。`update --input PACK --expect-sha256 SHA --patch PATCH`
-沿用`{tasks:{当前id:{set/append/...}}}`补丁，只更新本任务，不改其他任务或批准。Light保留
-当前task.state，但不要求Full图、依赖、规划与QA字段。continuation仍带当前--task-id。
+Light uses a same-shape single pack: `task --input PACK` without --task-id validates/returns the current
+shell. Explicit output retains --output/--expect-sha256. `update --input PACK --expect-sha256 SHA --patch PATCH`
+retains the `{tasks:{current-id:{set/append/...}}}` patch, updating only this task, without changing other
+tasks or approval. Light retains current task.state but does not require a Full graph, dependencies, planning
+or QA fields. continuation still includes current --task-id.
 
-可选`handoff_assessment`只记录实际交接判断：
-`{independent_qa: required|not_required, documentation: required|not_required, reason: <非空依据>}`。
-不需要评估记录就省略，不为Light新增必填账本；Full不得以not_required跳过独立QA。
-记忆是否值得保存仍按现有按需原则，不创建空记忆。
+Optional `handoff_assessment` records only an actual handoff judgment:
+`{independent_qa: required|not_required, documentation: required|not_required, reason: <non-empty grounds>}`.
+Omit it when no assessment record is needed; add no mandatory Light ledger. Full must not use not_required
+to skip independent QA. Memory persistence still follows existing on-demand principles; create no empty memory.
 
-接收方宿主可读取导出文件时，交接确切的完整文件引用、当前文件 SHA-256 和简短变化
-摘要；接收方按下文完整读取规则核对版本并读取当前 Task Pack，不能用摘要或差量代替。
-宿主无法读取该文件时，仍通过支持的通道交付完整包。同一实例已完整收到且读完同版本
-正文时，文件只是另一种传输方式，不再重复读取；合同未变时也不因此重新生成包。
+When the recipient's host can read the exported file, hand off the exact complete-file reference, current
+file SHA-256 and brief change summary. The recipient verifies version and reads the current Task Pack under
+the complete-reading rules below; summaries/deltas cannot replace it. If that host cannot read the file,
+deliver the complete pack through a supported channel. If the same instance already received/read that
+version completely, the file is merely another transport and needs no reread. An unchanged contract does
+not require pack regeneration merely for transport.
 
-## 原生能力观察、用量与同 Agent 续用
+## Native capability observations, usage and same-Agent continuation
 
-以下入口都按需使用，不为普通只读或Light新增Full图、报告或门禁。
-它们复用当前宿主能力，不启动 runner、daemon、MCP 或第二套 Agent 调度器；原生
-能力、boost、teamwork 和其他可选模式不因安装或诊断自动启用。
+Use the entries below on demand, without a new Full graph, report or gate for ordinary read-only/Light work.
+They reuse current-host capabilities without starting a runner, daemon, MCP or second Agent scheduler.
+Installation/diagnosis does not automatically enable native capabilities, boost, teamwork or other optional modes.
 
-能力诊断从中央管理工具的源包根运行；业务项目的安装态 `.agent-workflow` 不包含
-`manager`，不能从该运行时目录执行管理器模块。`--project` 指向实际业务项目根：
+Run capability diagnosis from the central management tool's source-pack root. A business project's installed
+`.agent-workflow` does not contain `manager`; do not execute manager modules from that runtime directory.
+`--project` points to the actual business-project root:
 
 ```bash
 # 子 shell 只为本次诊断切换目录，不影响后续安装态命令的工作目录。
@@ -197,18 +213,20 @@ Light使用同形单包：`task --input PACK`不带--task-id，校验并返回�
 )
 ```
 
-`documented` 仅表示文档能力，`source_observed` 仅表示明确来源字节已观察，
-`runtime_unverified` 表示尚未验证当前会话实际行为。默认不启动宿主进程；显式
-`--probe` 只运行该宿主 `--version`，不登录、不调用模型、不执行 `/skills`。
-AGY 只检查明确项目路径 `.agents/skills/grill-me/SKILL.md`，
-`customization_sources.grill_me.project_definition` 披露 `status`、`sha256`、
-`declared_name` 等；同名时 `same_name_risk: possible`，实际使用来源仍为
-`actual_source.status: unknown`。不能据文件存在断言当前会话加载了哪一份技能。
-AGY 原生 `/grill-me` 与本包的自包含 requirements coverage check 要核对实际来源和
-适用合同，不能自动替换、改别名或省略本包的 Full 需求覆盖；也不扫描个人技能目录。
+`documented` means only documented capability, `source_observed` only that explicit source bytes were
+observed, and `runtime_unverified` that current-session behavior remains unverified. By default no host
+process starts; explicit `--probe` runs only that host's `--version`, without login, model invocation or
+`/skills`. AGY checks only the explicit project path `.agents/skills/grill-me/SKILL.md`.
+`customization_sources.grill_me.project_definition` discloses `status`, `sha256`, `declared_name`, etc.
+A matching name yields `same_name_risk: possible`; the actual source remains `actual_source.status: unknown`.
+File existence does not establish which Skill the current session loaded. Check actual provenance/applicable
+contracts for AGY's native `/grill-me` and this pack's self-contained requirements coverage check. Do not
+automatically substitute, rename aliases or omit this pack's Full requirement coverage, or scan personal
+Skill directories.
 
-显式导出当前授权范围的原生用量元数据后，从实际业务项目根运行安装态只读适配器，
-不是从中央管理工具源包根或 `.agent-workflow` 目录运行：
+After explicitly exporting native usage metadata for the currently authorized scope, run the installed
+read-only adapter from the actual business-project root, not the central-management source-pack root or
+`.agent-workflow` directory:
 
 ```bash
 cd "${project_root:?请设置实际业务项目根}"
@@ -216,30 +234,37 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/native_us
   --host codex --input "${native_usage_input:?set explicit exported JSON or JSONL}"
 ```
 
-`--input` 可重复，按输入观察顺序读取，数据留在本地任务范围，不扫账户或其他会话。
-Codex 按 `(thread_id, response_id)` 去重响应，不能再混加其他口径的 turn 计数；
-Claude 使用终端 result 的原生字段与身份。AGY result 的 usage 是累计快照，初始
-基线未知须保留 `unknown`，输出 `last_cumulative` 与首末 `observed_delta`；单次快照
-差值为 null，不能逐条 sum 或把未知填零。缺失计数保持 null，真实零仍为 0，缓存／
-推理子项不再加进原生 total，不计算费用或 token 节省百分比。只说明实际采样的会话、
-响应与完成轮范围；主会话样本不代表子 Agent，未采样宿主不以零值冒充基线。
+`--input` is repeatable and reads in input-observation order. Data stays within the local task scope;
+do not scan accounts or other sessions. Codex deduplicates responses by `(thread_id, response_id)`;
+do not additionally mix turn counts using another accounting basis. Claude uses native terminal-result
+fields/identity. AGY result usage is a cumulative snapshot. Preserve `unknown` when the initial baseline
+is unknown, returning `last_cumulative` and first-to-last `observed_delta`. A single snapshot has null delta;
+do not sum entries or replace unknown with zero. Missing counts remain null; real zero remains 0. Do not
+add cache/reasoning subcounts into native total again or calculate cost/token-savings percentages. State
+only sampled session, response and completed-turn scope. Main-session samples do not represent sub-Agents;
+zero values from unsampled hosts cannot masquerade as a baseline.
 
-### 任务身份、同任务续用与退役
+### Task identity, same-task continuation and retirement
 
-2.0任务的module／role／agent_alias绑定长期职责，instance_policy固定fresh、context_policy
-固定handoff_only；新独立任务按需创建新实例，不预热全部别名、不复制完整父／兄弟历史。
-生命周期权威在WORKFLOW的agent-instance-lifecycle，本文只说明既有记录工具，不另建池。
+A 2.0 task's module／role／agent_alias bind ongoing responsibilities; instance_policy is fixed fresh and
+context_policy fixed handoff_only. Create new instances on demand for independent tasks, without prewarming
+all aliases or copying full parent/sibling history. WORKFLOW's agent-instance-lifecycle owns lifecycle
+authority. This file describes existing record tools only, without another pool.
 
-`agent_ref: {host: codex|claude|antigravity, agent_id: <真实原生ID>}`只在PM从实际已授权
-派发结果核对后补记。先让任务实际进入RUNNING（显式qa也可QA），再独立update绑定ID，
-不能与首次执行态合并。引用首次绑定后只允许同值幂等，不可覆盖／清空；同图不同任务
-包括历史完成任务不能共用身份。ID形状合法不证明真实存活、角色、批准或完成。
+Record `agent_ref: {host: codex|claude|antigravity, agent_id: <actual-native-ID>}` only after PM verifies
+actual authorized dispatch results. First put the task into actual RUNNING (an explicit qa may also use QA),
+then bind the ID in a separate update, never combined with first execution-state entry. After first binding,
+only same-value idempotent writes are allowed, without overwrite/clear. Different tasks in one graph,
+including historically completed tasks, cannot share identities. A valid ID shape proves neither actual
+liveness, role, approval nor completion.
 
-`agent_retired`可选bool，缺省false；只能由缺失／false变为true，不能撤销。退役阻止
-误派，不能改变仍执行任务的状态或释放路径／语义锁，不等于原生close已成功。原生结束
-缺工具／失败时在现有任务记录这一事实；取消／未知仍先核实已有成果与恢复边界。
+`agent_retired` is an optional bool, default false. It may move only from absent/false to true, irreversibly.
+Retirement prevents misdispatch; it cannot change an executing task's state or release path/semantic locks,
+and does not mean native close succeeded. Record missing/failed native-close capability in the existing
+task. For cancellation/unknown state, first verify existing results and recovery boundaries.
 
-PM通过已暴露工具观察真实状态后，从业务项目根运行安装态只读查询：
+After observing actual state through exposed tools, PM runs the installed read-only query from the
+business-project root:
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py continuation \
@@ -247,45 +272,56 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
   --host codex --observed-state idle
 ```
 
-同任务running建议wait，idle建议followup；短期返工可续同一实例，同轮QA原Reviewer差量复查。
-独立任务、跨宿主、cancelled／missing／unknown、未绑定、已完成或已退役任务禁止自动续用。
-查询不探测、不派发、不发消息、不解锁或清空上下文。阻塞建议是正常查询结果（退出0），
-输入错误退出2。当前完整包与scope仍须交接，按下文规则复用或补齐完整读取；
-resume／compact不证明历史清空。
+For the same task, running recommends wait and idle recommends followup. Short rework may continue on the
+same instance; the original same-round QA Reviewer performs delta review. No automatic continuation for
+independent tasks, cross-host work, cancelled／missing／unknown, unbound, completed or retired tasks. The query
+does not probe, dispatch, message, unlock or clear context. A blocking recommendation is a normal query result
+(exit 0); invalid input exits 2. Still hand off current complete pack/scope, reusing or restoring complete
+reading under the rules below. resume／compact does not prove history erasure.
 
-围绕当前交付单元的反馈窗口保留实例；闭环、接收与必要证据保护后及时原生结束。
-容量不足优先已验收且交接充分者，不按LRU淘汰仍执行、证据未交付或必要复查实例；
-按宿主真实运行／打开线程口径安排后续QA／集成容量。缺可靠结束工具只退役，不宣称
-已销毁或释放容量。AGY kill前保护临时worktree与唯一日志；不删除仍被引用的证据。
+Keep instances through the current delivery unit's feedback window. Close natively promptly after closure,
+acceptance and necessary evidence protection. When capacity is tight, prefer accepted/sufficiently handed-off
+instances; do not LRU-evict executing, evidence-unreceived or necessary-review instances. Reserve subsequent
+QA/integration capacity using actual host running/open-thread accounting. Without reliable close tools,
+retire only, without claiming destruction or capacity release. Protect temporary worktrees/sole logs before
+AGY kill; do not delete still-referenced evidence.
 
-QA 原生结构化输出的 schema／extract 操作见
-[`xy-qa-review` 的输入合同](../../xy-qa-review/references/inputs.md#原生结构化交接)。
-Task Pack 仍使用上面的 `task` 机械导出，不为把自然语言转成 JSON 额外调用模型。
+For schema/extract of native structured QA output, see
+[`xy-qa-review` input contracts](../../xy-qa-review/references/inputs.md#原生结构化交接).
+Task Packs still export mechanically with `task` above. Do not add model calls to convert natural language into JSON.
 
-## 完整读取必需长文
+<a id="完整读取必需长文"></a>
 
-`context_read.py <file> [--offset <n>] [--limit <n>] [--expect-sha256 <sha>] [--task-pack <当前包>]`
-是可选的标准库
-只读单文件分页器，不增加必跑命令、门禁、回执或读取记录。读取与复用按以下边界执行：
+## Read required long documents completely
 
-- 每位 Agent 独立完整读取当前自包含任务包、必需 Skill／指令及适用规范；其他 Agent
-  已读、字段声明、摘要或 SHA 不能替代本实例读取全文。新实例不继承旧实例的已读结论。
-- 同一实例上下文中已完整读取、版本未变且仍完整可用的材料直接复用，包括已通过正文
-  送达并读完的完整任务包；其同版本文件只是传输方式。只通过文件接收时也只需完整
-  读取一次，不把包全文夹带到后续 Skill／规范读取命令中反复加载。显式宿主／Skill
-  重读要求仍适用；不为证明复用新增读取账本或强制重读全部材料。
-- 缺失、工具截断或上下文压缩使内容不再完整可用时，补齐实际缺失部分；内容实际变化
-  时恢复受影响的必需内容并核对其余部分仍可用。不能因一次旧读取跳过新规则，也不因此
-  重载未变全树。合同变化仍按原生命周期交付最新完整自包含任务包，差量／摘要不能代替。
-- 长文分开读取或连续分页至 EOF，输出预算不足时缩小单次正文，补齐所有截断区间后再
-  依赖其结论。普通业务资料按任务相关标题／查询定位；必需规范完整读取不扩大到整个
-  业务目录或秘密。机器完整字节核验可只返回指纹／结果，不能证明模型已读正文。
+`context_read.py <file> [--offset <n>] [--limit <n>] [--expect-sha256 <sha>] [--task-pack <current-pack>]`
+is an optional standard-library, read-only single-file pager. It adds no mandatory command, gate, receipt
+or reading record. Apply these reading/reuse boundaries:
 
-JSON 包含 `text`、`sha256`、`offset`、`end_offset`、`next_offset`、`eof`、`total_chars` 和
-`total_bytes`。位置采用 Unicode 字符数，表示半开区间 `[offset, end_offset)`。默认
-`limit` 为 6000 字符、最多 24000 字符；它约束返回正文，不是精确 token 上限或总 JSON
-序列化体积，转义、元数据及各宿主 tokenizer 另有开销。为完整回包保留足够输出预算，
-否则降低 `--limit`。长文分开读取，每次工具回包只取一页。
+- Each Agent independently reads the complete current self-contained task pack, required Skills/instructions
+  and applicable standards. Another Agent's reading, field declarations, summaries or SHA do not replace
+  this instance's full reading. New instances do not inherit old instances' read status.
+- Directly reuse material fully read, unchanged and still completely available in the same instance context,
+  including a complete task pack received/read as body text. A same-version file is only another transport.
+  File-only receipt also needs only one complete read; do not repeatedly include the whole pack in later
+  Skill/standards read commands. Explicit host/Skill reread requirements still apply. Do not add reading
+  ledgers or force all-material rereads merely to prove reuse.
+- Restore actual missing portions when absence, tool truncation or context compaction removes complete
+  availability. For actual content changes, restore affected required content and check the rest remains
+  available. A previous read does not allow new rules to be skipped or require reloading the unchanged whole
+  tree. Contract changes still require the latest complete self-contained task pack under the original
+  lifecycle; deltas/summaries cannot replace it.
+- Read long documents separately or in contiguous pages through EOF. Reduce individual text size when output
+  budget is insufficient and restore all truncated ranges before relying on conclusions. Locate ordinary
+  business material by task-relevant headings/queries. Complete required-standards reading does not expand
+  to the entire business directory or secrets. Complete machine-byte checks may return only fingerprints/
+  results, but cannot prove model reading.
+
+JSON contains `text`, `sha256`, `offset`, `end_offset`, `next_offset`, `eof`, `total_chars` and `total_bytes`.
+Positions count Unicode characters and represent half-open `[offset, end_offset)` ranges. Default `limit`
+is 6000 characters, maximum 24000. It bounds returned text, not an exact token cap or total serialized-JSON
+size; escaping, metadata and host tokenizers add overhead. Reserve enough output budget for the complete
+response, or lower `--limit`. Read long documents separately, one page per tool response.
 
 ```bash
 # 首页：只指定当前必需的一个文件；安装态从项目根运行。
@@ -297,25 +333,29 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/context_r
   --limit 6000 --expect-sha256 "${document_sha:?use first page sha256}"
 ```
 
-Claude 使用实际 `.claude/skills/` 路径，其他宿主同样复用当前已知路径。严格按上一页
-`next_offset` 连续读取，直到 `eof: true` 且 `next_offset: null`。空文件或显式等于总字符
-数的位置返回空 EOF 页。使用全文前须补齐所有缺失或截断区间；文件指纹只证明字节／
-版本匹配，不能证明模型已读。
+Claude uses the actual `.claude/skills/` path; other hosts likewise reuse current known paths. Follow the
+previous page's `next_offset` strictly and continuously until `eof: true` and `next_offset: null`. Empty
+files or an explicit offset equal to total characters return an empty EOF page. Restore every missing/
+truncated range before using the whole text. File fingerprints prove only matching bytes/version, not
+model reading.
 
-上述宿主发现路径示例用于源包／旧自包含安装。中央读取必须按开头链接的桥调用，
-同时给分页器 `--task-pack`，受管资源使用固定逻辑路径，例如
-`.agent-workflow/platforms/shared/skills/xy-workflow/SKILL.md` 或
-`.agent-workflow/product/WORKFLOW.md`。分页器从当前包取 pin 后直接读内容库清单内原文，
-项目已换版的 Skill／目录软链不能改变正文；续页仍校验同一完整 SHA。`.agent-workflow/project.yaml`、
-locator、业务文件与普通 scratch 文档继续由项目安全实文件读取器处理，不能借 pin
-跟随任意项目软链或把整个 `.agent-workflow` 改成链接。无中央上下文的旧调用保持原语义。
+The host-discovery path examples above apply to source packs/old self-contained installations. Central
+reads must use the bridge linked at the start, also passing `--task-pack` to the pager. Managed resources
+use fixed logical paths such as `.agent-workflow/platforms/shared/skills/xy-workflow/SKILL.md` or
+`.agent-workflow/product/WORKFLOW.md`. The pager takes the pin from the current pack and reads original
+content directly from the content-store manifest. Changed project Skill/directory symlinks cannot alter
+that text; continuation pages still check the same complete SHA. `.agent-workflow/project.yaml`, locators,
+business files and ordinary scratch documents still use the project's safe real-file reader. A pin does
+not permit following arbitrary project symlinks or making all `.agent-workflow` a link. Old calls without
+central context retain their semantics.
 
-每次调用都对完整原始字节计算 SHA，并严格解码 UTF-8、不归一化 CRLF，允许超长单行
-跨字符页。将各页解码后的 `text` 按顺序拼接可还原原始 UTF-8 字节。所有 `offset > 0`
-均要求首次页的 `--expect-sha256`；正文变化时拒绝续读，须从 offset 0 重读。沿用安全
-读取器的 4 MiB 输入上限，拒绝符号链接、硬链接、FIFO 等特殊节点、不安全父目录、
-非法 UTF-8、不完整／变化中的读取、非法预算与越界位置。退出 0 返回一页；退出 2 在
-stderr 报告输入或读取错误，不回显正文。工具不写读取缓存或状态。
+Each call computes SHA over complete original bytes, decodes strict UTF-8 without CRLF normalization and
+allows very long single lines across character pages. Concatenating decoded `text` pages in order restores
+original UTF-8 bytes. Every `offset > 0` requires first-page `--expect-sha256`. A changed body rejects
+continuation and requires rereading from offset 0. Retain the safe reader's 4 MiB input limit. Reject
+symlinks, hard links, special nodes such as FIFOs, unsafe parents, invalid UTF-8, incomplete/changing reads,
+invalid budgets and out-of-bounds positions. Exit 0 returns one page; exit 2 reports input/read errors on
+stderr without echoing text. The tool writes no read cache/state.
 
 ## Generate or check selected fingerprints
 
@@ -344,9 +384,10 @@ Matching bytes alone never proves that a command ran, tests passed, the program 
 
 ## Allocate and clean up the task scratch workspace
 
-仅实际需要临时文件时用 `scratch` 解析每个项目／请求的唯一目录，原地复用到任务收口；
-不创建按日期、轮次或候选命名的副本。新增资源的目的、所有者、复用入口及保留／回收
-条件留在原 Task Pack 合同与验收证据，不另建目录清单、资源台账或报告。
+Use `scratch` to resolve each project/request's unique directory only when temporary files are actually
+needed; reuse it in place through closeout. Create no date-, round- or candidate-named copies. Keep new
+resources' purpose, owner, reuse entry point and retention/reclamation conditions in original Task Pack
+contracts/acceptance evidence, without a separate directory inventory, resource ledger or report.
 
 Request IDs retain the task graph's non-empty string contract, including Unicode and punctuation.
 The directory name uses the full ID's SHA-256, keeping case-distinct requests separate even on a
@@ -362,7 +403,7 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
   --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}"
 ```
 
-`cleanup-scratch` 必须先只读预览，再按相同目标与保留项执行：
+`cleanup-scratch` requires a read-only preview before execution with the same target and retained items:
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py cleanup-scratch \
@@ -373,23 +414,29 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_grap
   --expect-sha256 "${scratch_snapshot_sha256:?use the reviewed preview snapshot SHA}"
 ```
 
-需要保留仍被引用的唯一文件时，两次命令都添加相同的 `--keep <relative-file>`，多文件可
-重复该参数。它只接受目标 scratch 内已存在的规范相对普通文件，保留其必要祖先目录；
-拒绝缺失文件、链接祖先、通配符和路径穿越。先移交并修复引用可以减少保留范围，不因
-一个文件有引用保留整个候选目录。无法证明归属或无活跃使用的目标不执行删除。
+To retain a still-referenced sole file, add identical `--keep <relative-file>` values to both commands;
+repeat for multiple files. Only existing canonical relative regular files inside target scratch are
+accepted, preserving necessary ancestor directories. Reject missing files, linked ancestors, wildcards
+and traversal. Transferring evidence/repairing references first can narrow retention; one referenced file
+does not require the whole candidate directory. Do not delete targets without proven ownership and absence
+of active use.
 
-预览不创建、chmod 或删除文件；返回总计及最多 20 项的 `candidate_sample`，
-`candidate_sample_truncated` 明示是否截断。`snapshot_kind: metadata` 与 `snapshot_sha256`
-绑定完整目标与保留项的元数据，不读取大文件内容、不引入文件大小上限；它不是内容
-指纹，也不证明任务已结束或引用已移交。执行要求当前快照匹配 `--expect-sha256` 并逐项
-复核，变化时拒绝；先停止本任务写者仍是调用方责任，不承诺最终 unlink 前对非协作恶意
-并发的原子安全。`--dry-run` 与 `--expect-sha256` 互斥，旧式无指纹删除不再接受。
+Preview creates, chmods and deletes nothing. It returns totals and at most 20 `candidate_sample` items,
+with `candidate_sample_truncated` explicitly indicating truncation. `snapshot_kind: metadata` and
+`snapshot_sha256` bind metadata for the complete target/retained items, without reading large-file contents
+or imposing a file-size limit. This is not a content fingerprint or proof of task completion/reference
+transfer. Execution requires a current snapshot matching `--expect-sha256` and item-by-item rechecks, rejecting
+changes. The caller still must stop task writers first; no atomic safety against non-cooperative malicious
+concurrency before final unlink is promised. `--dry-run` and `--expect-sha256` are mutually exclusive;
+old unpinned deletion is no longer accepted.
 
-默认只收口本 `--request-id`。`--all` 仅用于已显式授权、全部目标归属明确且无活跃使用的
-管理清理，同样先预览再绑定快照，且不能与 `--keep` 共用；它不是每轮任务的默认动作。
-POSIX 不跟随链接，普通硬链接仅 unlink 本任务归属项，不修改外部内容或权限；Windows
-保留原安全后端与链接拒绝策略，不将其 ctime 声称为 changeTime。权限或部分删除失败
-返回非零并如实保留已成功计数，恢复为保留必要目录而临时调整的权限。
-`planned_logical_bytes`／`removed_logical_bytes` 按文件逻辑长度统计待删／已删项，
-不表示实际物理磁盘回收量，也不再使用误导的 `reclaimed_bytes`。
+By default, close out only this `--request-id`. `--all` is only for explicitly authorized administrative
+cleanup with known ownership of every target and no active use. It likewise requires preview/snapshot
+binding and cannot combine with `--keep`; it is not a default action per task round. POSIX does not follow
+links; ordinary hard links only unlink task-owned entries without changing external contents/permissions.
+Windows retains its existing safe backend/link-rejection policy and does not label ctime as changeTime.
+Permission/partial-deletion failure returns nonzero and truthfully retains successful counts, restoring
+permissions temporarily adjusted to preserve necessary directories. `planned_logical_bytes`/
+`removed_logical_bytes` count pending/removed entries by logical file length, not physical disk reclamation;
+the misleading `reclaimed_bytes` is no longer used.
 

@@ -26,8 +26,9 @@ shared standards do not copy page contracts or task history.
 
 - PM decides whether to update, replacement scope, approval basis and exact owned_paths, then reviews the result.
 - UI Agent is the primary author of design-standard content, limited to explicitly authorized leaves.
-- 规范叶的机械修改也默认由获准实施者负责；PM亲自实施须有明确覆盖当前范围的用户指令。
-  这不改变同一xy-uiux维护合同，主会话身份不绕过路径保护。
+- Mechanical leaf edits also default to an authorized implementer. PM implementation requires an explicit
+  user instruction covering the current scope. This preserves the same xy-uiux maintenance contract;
+  main-session identity does not bypass path protections.
 - PM updates the STANDARDS directory and links when files are added, removed or split. Never give a Writer the whole tree.
 - Implementation Agents own production tokens, shared components and layout, return exact mappings
   and constraints, and do not independently change the design direction.
@@ -97,18 +98,24 @@ Standard updates never automatically save agentmemory; assess durable non-obviou
 
 ## Single Source and Replacement Boundaries
 
-- 内置 foundations-rules.md / components-rules.md：通用设计基础、组件、状态及适用平台规则的唯一正文。
-- 项目 DESIGN_ 叶及实际 token/组件源：已批准的项目方向、值、映射、允许变体和业务差异；无差异不创建空叶。
+- Built-in foundations-rules.md / components-rules.md: the single source for general design foundations,
+  components, states and applicable platform rules.
+- Project DESIGN_ leaves and actual token/component sources: approved project direction, values, mappings,
+  allowed variants and business differences; create no empty leaf when there is no difference.
 - prototype.css: shared prototype style implementation; implementation Agents own production tokens/components.
 - Concrete HTML: page contract and confirmation material. index.html is the single-page browsing workspace, not another full standard.
 
-内置设计规则提供语义颜色、尺度和常用组件行为的适用约束。项目索引存在才沿链接读取；
-项目只记录自身已批准的 token/组件值、映射、变体与平台差异，不复制内置正文或生成占位规范。
-UI Agent 负责专业内容，PM 按已有决策采用，相关实现 Agent 和 QA 使用同一套适用规则。
-首次设计或全新视觉的候选值经现有确认后写回授权规范；未改变规则的小任务无需更新。
-官方来源放在两份内置设计规则末尾供按需核对，不要求每次联网、全文重读或新增报告。
-原型展示 token 与产品 token 分开；Web 默认响应式产品区，iOS／PC 默认固定画板。
-两种展示方式共用当前页名称/简述、返回当前导航、画面后的说明及默认折叠契约，不影响原型可选分支。
+Built-in design rules provide applicable constraints for semantic colors, scale and common component behavior.
+Follow project-index links only when the index exists. Projects record only their approved token/component
+values, mappings, variants and platform differences, without copying built-in text or generating placeholders.
+UI Agent owns professional content; PM adopts it under existing decisions. Relevant implementation Agents/QA
+use the same applicable rules. Write candidate values for initial/new visual design back to authorized standards
+after existing confirmation; small tasks with no rule changes need no update. Official sources at the end of
+the two built-in design-rule files support on-demand checks, without requiring network access, full rereads
+or new reports every time. Separate prototype-presentation tokens from product tokens. Web defaults to a
+responsive product area; iOS／PC default to fixed canvases. Both presentations share current-page name/summary,
+return to current navigation, post-canvas notes and a default-collapsed contract, without changing the optional
+prototype branches.
 
 A new visual system replaces only authorized platform/module rules. Preserve applicable accessibility,
 engineering, security and upstream boundaries; redesign is not permission to relax other constraints.

@@ -1,6 +1,7 @@
-- 普通低风险Light UI文案使用production_ui与现有UI-Conformance、零设计差量、真实已解析
-  冻结authority和工程／设计规范；最小验证与交接风险评估保留，不强制Full规划／确认／QA。
-  实际设计／交互变化均Full，不能标non_ui、用空权威或拆小改动绕过规范。
+- Ordinary low-risk Light UI copy uses production_ui with existing UI-Conformance, zero design delta,
+  real resolved/frozen authority and engineering/design standards. Retain minimum verification and
+  handoff risk assessment without forcing Full planning/confirmation/QA. Actual design/interaction
+  changes are Full; non_ui labels, empty authority or splitting changes must not bypass standards.
 - `project.yaml` → `docs.standards_root/prototype/` is the stable prototype workspace.
   It keeps one in-page `Page design and interaction contract` per page and its page dependency
   fingerprint. Required-prototype QA lets the machine read complete bytes; the QA Agent reads only
@@ -12,8 +13,8 @@
   and fingerprinted `design_authority_refs`, affected surfaces, and the objective justification in
   the task pack.
   It does not dispatch `xy-uiux`, does not mutate a prototype, and does not require
-  `visual_approved`。除上述已明确的Light文案外仍属Full，保留Grill coverage、xy-plan、
-  requirements_approved、xy-build-verify和集成QA；Light不能反向放宽其他UI变更。
+  `visual_approved`. Except for the explicit Light copy above, it remains Full, retaining Grill coverage,
+  xy-plan, requirements_approved, xy-build-verify and integrated QA; Light does not relax other UI changes.
 - A `UI-Conformance` task must not edit `docs.standards_root/DESIGN_*.md`. Its production writer
   uses the frozen authority references and declares both UI and accessibility audit surfaces.
   Missing, stale, contradictory, incomplete, or choice-requiring evidence stops the affected write:
@@ -59,9 +60,10 @@
   `visual_review_ready`.
 - With `prototype_policy: required`, `UI-Page` and `UI-Flow`: automatic `ia_ready`, prototype work, then explicit
   `xy-prototype-verify`, `prototype_verified`, and `visual_review_ready`.
-- The `xy-uiux` task owns deterministic static prototype-verification coverage. 设计 Agent 在同一交接
-  自检需求覆盖、规范符合性与交付一致性，写入既有 static_checks/blocking_findings/result；
-  不派独立原型 QA、不新建报告或审批，用户最终确认，生产实现后的功能 QA 保留。The PM reviews
+- The `xy-uiux` task owns deterministic static prototype-verification coverage. The design Agent self-checks
+  requirements coverage, standards conformance and delivery consistency in the same handoff, using existing
+  static_checks/blocking_findings/result. Add no independent prototype QA, report or approval. The user gives
+  final confirmation; functional QA after production implementation remains. The PM reviews
   current scope, evidence freshness and consistency, fingerprints, and the approval handoff. Before
   user handoff, independently compare all five in-page contract sections with the frozen approved
   requirements and acceptance criteria; return missing, invented, broadened, or conflicting

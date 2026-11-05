@@ -46,12 +46,7 @@ Gradle, SDK, architecture, or library version lock.
 
 ## 5. Task Intake Contract
 
-接收当前完整2.0自包含包，核对workflow_level、module、role、agent_alias、fresh／handoff_only；
-仅消费当前目标、代码／工作区事实、适用规范、可信授权、验收证据与未决事项，禁止继承或
-复制完整PM／兄弟会话、fork父历史。身份／续用／证据／结束统一按WORKFLOW的
-implementation-ownership与agent-instance-lifecycle，不在角色另建流程。Light保留最小验证，
-依赖／gates按实际适用，不因预载强制Full图、计划或独立QA。普通Light UI文案仍用
-production_ui＋UI-Conformance与真实冻结权威；工程／设计规范保留，设计／交互变化Full。
+Receive the complete current self-contained 2.0 pack and check workflow_level, module, role, agent_alias, and fresh/handoff_only. Consume only the current goal, code/workspace facts, applicable standards, trusted authorization, acceptance evidence, and unresolved matters; never inherit/copy complete PM or sibling conversations or fork parent history. Follow WORKFLOW's implementation-ownership and agent-instance-lifecycle for identity, continuation, evidence, and termination rather than creating another role-specific process. Light retains minimum verification with dependencies/gates only as applicable; preloading does not mandate a Full graph, plan, or independent QA. Ordinary Light UI copy still uses production_ui + UI-Conformance and actual frozen authority; engineering/design standards remain, and design/interaction changes are Full.
 
 
 Start from a PM task pack containing approved requirements, exact `owned_paths`, modules/variants,
@@ -66,16 +61,12 @@ prototype authority. Both branches require a scope-bound requirements-confirmati
 wrapper, modules, variants, stack, intended boundary,
 and material lifecycle, permission, data, compatibility, or signing risks. Return out-of-scope paths
 and unresolved material decisions to the PM.
-任务包必须包含 standards-conformance、当前适用内置来源和项目特有规范（索引存在才读）。
-工程基线使用 xy-code-standards/references/rules.md；production_ui 另选两份内置UI规则及
-项目设计权威，non_ui 不预载设计规则。来源以当前SHA、适用规则ID和applies_to覆盖精确拥有路径；
-缺失、skip、过期或覆盖不足交PM，不创建GENERAL/空项目索引或预读完整规范树。
+The task pack must include standards-conformance, currently applicable built-in sources, and project-specific standards (read the index only when present). Use xy-code-standards/references/rules.md as the engineering baseline; production_ui additionally selects both built-in UI rule sources and project design authority, while non_ui does not preload design rules. Sources cover exact owned paths through current SHA, applicable rule IDs, and applies_to; return missing, skip, stale, or insufficient coverage to the PM without creating GENERAL/empty project indexes or preloading the complete standards tree.
 
 
 ## 6. Execution Workflow
 
-1. 阅读当前需求、完整任务包、非skip的controlled_document_access及模块指令；核对存在时的
-   项目索引、适用内置/项目来源当前指纹、拥有路径覆盖和规则ID，不预读无关受控文档。
+1. Read current requirements, the complete task pack, non-skip controlled_document_access, and module instructions; check the project index when present, current fingerprints of applicable built-in/project sources, owned-path coverage, and rule IDs without preloading unrelated controlled documents.
 2. Inspect Gradle configuration, manifests, resources, nearby source, variants, and tests.
 3. Map the narrow UI/domain/data/lifecycle/platform boundary and security implications. For
    `UI-Conformance`, read the frozen authority, do not edit the design workspace, and stop if the
@@ -83,8 +74,8 @@ and unresolved material decisions to the PM.
    approved prototype authority from the task pack. For `waived_by_user`, verify its requirement
    fingerprint and exact surfaces, do not read or update the old prototype, and implement the
    approved production UI directly.
-   生产 UI 按既有授权分支只读消费 `xy-ui-design` 的实现指导，不获得原型或设计规范写入权。
-4. 在当前授权边界内使用 `xy-code-standards` 的实现方法，保留 Android 模块、变体和生命周期约束。
+   Production UI consumes `xy-ui-design` implementation guidance read-only under the existing authorized branch, without prototype or design-standard write authority.
+4. Use `xy-code-standards` implementation methods within current authorized boundaries, preserving Android module, variant, and lifecycle constraints.
 5. Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory;
    add focused unit, instrumentation, UI or integration tests for meaningful uncovered behavior/
    regression or explicit requirements, not mechanically for every edit.

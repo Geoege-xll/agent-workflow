@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
+import re
 import subprocess
 import sys
 import tempfile
@@ -52,6 +54,9 @@ def make_alternate_source(root: Path) -> None:
         put(name, (PACK / name).read_bytes())
     put("product/WORKFLOW.md", "# 第二个固定版本\n".encode())
     put("product/GLOBAL_CONSTRAINTS.md", b"# fixture constraints\n")
+    # 切版夹具只补导航实际消费的最小资源，以区分新旧 pin，不复制第二份完整核心正文。
+    for host in ("codex", "claude", "antigravity"):
+        put(f"platforms/{host}/references/pm-integration.md", f"# Alternate {host} integration\n".encode())
     for name in (PACK / "platforms/shared/core-skills.txt").read_text().splitlines():
         if name and not name.startswith("#"):
             put(f"platforms/shared/skills/{name}/SKILL.md",
@@ -130,6 +135,15 @@ class CentralProjectTest(unittest.TestCase):
                     resources.validate_skill_link(tree, relative, node, self.core)
         self.assertFalse((self.project / "docs/STANDARDS.md").exists())
         self.assertFalse((self.project / "docs/standards/GENERAL.md").exists())
+        # 真实中央生成的根入口与三宿主全部角色都应为英文；该夹具没有用户中文正文，
+        # 因而无需协议/围栏豁免。这里仍由后续原生解析器检查权限、工具与固定绑定。
+        generated_instructions = [self.project / "AGENTS.md"]
+        for directory in (".codex/agents", ".claude/agents", ".agents/agents"):
+            generated_instructions.extend(sorted((self.project / directory).glob("xy-*.*")))
+        self.assertGreater(len(generated_instructions), 3)
+        for path in generated_instructions:
+            with self.subTest(english_artifact=path.relative_to(self.project)):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"[\u4e00-\u9fff]")
         # 使用真实标准 TOML 消费器解析 Codex；其他宿主 frontmatter 是已生成的原生薄元数据。
         role = tomllib.loads((self.project / ".codex/agents/xy-qa.toml").read_text())
         self.assertEqual("xy-qa", role["name"])
@@ -168,6 +182,76 @@ print("native role parsers OK")
         checked = self.invoke("check")
         self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
         self.assertEqual(self.core.binding(), json.loads(checked.stdout)["runtime_binding"])
+
+    def test_workflow_navigation_reads_same_task_pin_across_switch_and_disable(self):
+        # 用户外段逐字保全；导航从真正 enable/repair 产物取得，不能以手写提示代替生成入口。
+        prefix = "# 用户规则\r\n中文沟通并保留尾部空格  \r\n".encode()
+        suffix = "\r\n用户尾注不得翻译。  ".encode()
+        self.put(self.project, "AGENTS.md", prefix)
+        self.enable()
+        agents = self.project / "AGENTS.md"
+        agents.write_bytes(agents.read_bytes() + suffix)
+        service.apply(service.preview(self.state, self.project, "repair"))
+        before = agents.read_bytes()
+        self.assertTrue(before.startswith(prefix))
+        self.assertTrue(before.endswith(suffix))
+        managed = before.decode().split(resources.CENTRAL_BEGIN, 1)[1].split(resources.CENTRAL_END, 1)[0]
+        self.assertNotRegex(managed, r"[\u4e00-\u9fff]")
+        self.assertIn("$xy-workflow", managed)
+        self.assertIn("/xy-workflow", managed)
+        self.assertIn("current host", managed)
+        self.assertIn("only", managed)
+        self.assertIn("runtime_binding", managed)
+        self.assertIn("discovery symlinks", managed)
+        # 从生成文案中提取两条真实桥命令，只代入已说明的 binding/宿主占位符；
+        # shell 不参与替换/执行，防止夹具意外扩大为模型启动或任意命令测试。
+        commands = re.findall(r"`(bash [^`]+ --binding '<task-three-field-JSON>' read [^`]+)`", managed)
+        skill_path = "platforms/shared/skills/xy-workflow/SKILL.md"
+        host_pattern = "platforms/<current-host>/references/pm-integration.md"
+        routes = {shlex.split(command)[-1]: command for command in commands}
+        self.assertIn(skill_path, routes)
+        self.assertIn(host_pattern, routes)
+        checked = self.invoke("check")
+        self.assertEqual(0, checked.returncode, checked.stderr)
+        self.assertEqual(self.core.binding(), json.loads(checked.stdout)["runtime_binding"])
+
+        def read_routes():
+            for host, path in (("codex", skill_path), *((host, host_pattern) for host in ("codex", "claude", "antigravity"))):
+                actual_path = path.replace("<current-host>", host)
+                argv = shlex.split(routes[path].replace("<task-three-field-JSON>", json.dumps(self.core.binding(), separators=(",", ":")))
+                                   .replace("<current-host>", host))
+                environment = dict(os.environ)
+                for key in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"):
+                    environment.pop(key, None)
+                environment["AGENT_WORKFLOW_STATE_DIR"] = str(self.state)
+                read = subprocess.run(argv, cwd=self.project, env=environment, text=True,
+                                      capture_output=True, timeout=40)
+                self.assertEqual(0, read.returncode, read.stdout + read.stderr)
+                self.assertEqual(store.read_core_source(self.core, actual_path).decode(), read.stdout)
+
+        read_routes()
+        # 当前项目换版及发现软链更新后，旧任务仍执行从其原入口取得的同 pin 读取命令。
+        service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+        self.assertEqual(self.alternate.binding(), bridge.resolve_runtime(self.state, self.project, new_task=True).runtime_binding)
+        self.assertNotEqual(store.read_core_source(self.core, skill_path), store.read_core_source(self.alternate, skill_path))
+        self.assertTrue(agents.read_bytes().startswith(prefix))
+        self.assertTrue(agents.read_bytes().endswith(suffix))
+        read_routes()
+        # 保留受管块外后加内容的失败分支，并记录实际前后字节与机器归属前像，
+        # 以区分夹具放错位置和真实停用数据丢失；原红例的外段保全断言继续保留。
+        before_disable = agents.read_bytes()
+        managed_record = service.read_binding_record(self.state, self.project)[1]["managed"]["AGENTS.md"]
+        baseline = resources.Node.from_value(managed_record["baseline"]).payload
+        expected = resources.Node.from_value(managed_record["expected"]).payload
+        service.apply(service.preview(self.state, self.project, "disable"))
+        self.assertNotEqual(0, self.invoke("check").returncode)
+        read_routes()
+        wanted = prefix + b"\n" + suffix
+        self.assertEqual(wanted, agents.read_bytes(),
+                         f"before_disable={before_disable!r}; baseline={baseline!r}; "
+                         f"expected_equals_current={expected == before_disable}; "
+                         f"suffix_is_outside_block={before_disable.endswith(suffix) and suffix not in resources.central_block(before_disable)}; "
+                         f"wanted={wanted!r}; actual={agents.read_bytes()!r}")
 
     def test_claude_tools_reject_unknown_source_policy_before_writes(self):
         source = store.read_core_source(self.core, "roles/xy-qa.md")
@@ -402,13 +486,60 @@ print("native role parsers OK")
         self.assertFalse(service.status(self.state, self.project)["enabled"])
 
     def test_shared_entry_preserves_later_user_text(self):
-        self.enable()
+        # 直接停用与中间 repair/use 都应保留块外新增内容；后两条会更新 expected，
+        # 必须验证它不能被当作“全部用户内容仍属于最初快照”的证明。
+        for intermediate in (None, "repair", "use"):
+            with self.subTest(intermediate=intermediate):
+                self.project = self.workspace / ("entry-user-" + uuid.uuid4().hex[:10])
+                self.project.mkdir()
+                self.enable()
+                path = self.project / "AGENTS.md"
+                suffix = "\r\n启用后的用户新增规则。  ".encode()
+                path.write_bytes(path.read_bytes() + suffix)
+                path.chmod(0o600)
+                if intermediate:
+                    kwargs = {"binding": self.alternate.binding()} if intermediate == "use" else {}
+                    service.apply(service.preview(self.state, self.project, intermediate, **kwargs))
+                result = service.apply(service.preview(self.state, self.project, "disable"))
+                self.assertFalse(result["enabled"])
+                self.assertEqual(suffix, path.read_bytes())
+                self.assertEqual(0o600, path.stat().st_mode & 0o7777)
+
+    def test_shared_entry_without_external_text_restores_exact_original_state(self):
+        # 新建入口、空用户文件、无末尾换行、CRLF/尾空格各有不同前像；经 repair/use
+        # 后仍须精确恢复，不以保全外段为由统一留下空文件或安装器分隔换行。
+        for original in (None, b"", b"user bytes without newline", "# 中文规则\r\n保留尾部空格  \r\n".encode()):
+            with self.subTest(original=original):
+                self.project = self.workspace / ("entry-baseline-" + uuid.uuid4().hex[:10])
+                self.project.mkdir()
+                path = self.project / "AGENTS.md"
+                if original is not None:
+                    path.write_bytes(original)
+                    path.chmod(0o640)
+                self.enable()
+                service.apply(service.preview(self.state, self.project, "repair"))
+                service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+                service.apply(service.preview(self.state, self.project, "disable"))
+                if original is None:
+                    self.assertFalse(path.exists())
+                else:
+                    self.assertEqual(original, path.read_bytes())
+                    self.assertEqual(0o640, path.stat().st_mode & 0o7777)
+
+    def test_shared_entry_preserves_changed_mode_without_text_delta(self):
+        # 用户只收紧权限、正文仍为初始外段时，也不能因 repair/use 更新 expected
+        # 而撤销 chmod；恢复原始字节与保留当前文件模式是同一受管块边界的两个维度。
+        original = "# 用户规则\r\n正文和尾部空格保持  \r\n".encode()
+        self.put(self.project, "AGENTS.md", original)
         path = self.project / "AGENTS.md"
-        path.write_bytes(path.read_bytes() + "\n启用后的用户新增规则。\n".encode())
-        result = service.apply(service.preview(self.state, self.project, "disable"))
-        self.assertFalse(result["enabled"])
-        self.assertIn("启用后的用户新增规则", path.read_text())
-        self.assertNotIn(resources.CENTRAL_BEGIN, path.read_text())
+        path.chmod(0o640)
+        self.enable()
+        path.chmod(0o600)
+        service.apply(service.preview(self.state, self.project, "repair"))
+        service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+        service.apply(service.preview(self.state, self.project, "disable"))
+        self.assertEqual(original, path.read_bytes())
+        self.assertEqual(0o600, path.stat().st_mode & 0o7777)
 
     def test_failure_rolls_back_exact_outputs_and_never_enables(self):
         original = service._publish

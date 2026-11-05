@@ -50,6 +50,84 @@ LEGACY_TEMPLATE_HASHES = {
         "f936d4cd96c46f737565b32ab9f612faa9a310ae3ad5c5ed46bc7a94ed2aef00",
     }),
 }
+# 85f84a70705550fd47feb68eed544c1f9f9c9b9d 中真实旧条目的完整摘要，只证明历史归属。
+# 英文化会改变当前正文，因此不能只与当前条目比较；也不能凭 ID、首句或相似度删除。
+# 摘要按既有规则仅统一 CRLF 并移除条目末尾换行，包含完整 ID、严重性、续段与附表。
+# 任何用户追加内容都会产生不同摘要；生产不保存第二份旧规则正文，原整模板/区块摘要不变。
+LEGACY_BUILTIN_ITEM_HASHES = frozenset({
+    # platforms/shared/skills/xy-code-standards/references/rules.md；原始来源 SHA256 5a022280b3800b2db40056441398dce3db4adb587e250aa0d10bf50a5d6db509。
+    "d8c29f42d287dd492a888ad2c43c3b14ec6efd08c3cfbea2d6812ee049679ef3",  # eng-verification-001
+    "2061b13fa2defd3d62bb45bc57bf12354707e6026ac1cf2a0a1381a63bf93fd5",  # eng-verification-002
+    "69231a5d19b2bd369c465c1445cf0c7a57318fbf7f4b5a529f1b471f8fe844cf",  # eng-verification-003
+    "bac10e43631e3b8e3103f3bfd804cba2be9ca087d00efd1c13b1203e95036f2a",  # eng-secrets-001
+    "08b504c9379641b12491494dd455ca374702b1fb4a21a5ccd8b621b2acd01b91",  # eng-common-001
+    "ac6fae3068995d814edba60ab97908309ddb47bb881ddc808e0844fadd5b4dd5",  # eng-common-006
+    "b5ae8198ed02bc93a34c02c3f71d4d3680b3d65978247c568db30154fda39d6b",  # eng-common-007
+    "f00e96bdbe3fb45cfdc4023c6a1c042e43f1dcb6292b09455062bff49456de4c",  # eng-common-014
+    "bf23e6d8dec15ae4ac6aad84cdf019211f92008fca488628e54beed5951834ae",  # eng-common-002
+    "21f44ceefcf3d1a35b582429d22bbfad5e269570474cd931d17fcd2319254b2a",  # eng-common-008
+    "baf20e6b0a7b1f4379e10256dda0d9690a3ca05f39d6e96cee79664a0112f08c",  # eng-common-010
+    "b99ba65053db24fd50d7f28703869c0a07fb1c543d723fdd793fd11d61e4aaeb",  # eng-common-011
+    "3e57415d099d20edd5d00b368facc4c6c90da76b02201894667cbd5f9bfb3b53",  # eng-common-012
+    "ee5b7587aece8ea282fe0ccba7a2b510384c1a760f20b349b52546c098c442db",  # eng-common-013
+    "e13132c72a7d2c3a2874761d3877bb44d31d9f3c9a8d5d610838f3aea2c2cc34",  # eng-common-021
+    "9b9600fab1de4589dc9033829868f409645406599978e346eeddf990e84f49a4",  # eng-common-022
+    "90ddda5604df305120af28c9d22aec6221be819b3ea5c1b786ca284453adb2ef",  # eng-common-023
+    "17352b2d7c20264ec977a2b4cf136db32bac1e7b33ffec105f8a3fcaefb07f45",  # eng-common-015
+    "a8dcbda78e799dec1906dd22113cdab10ef82f5c4b18e3ae5b2fd3b16ce2c869",  # eng-common-016
+    "30001dc705154ceffe35a8122ef2ecf0d33d8920e666917a0f84a72b63bb87fb",  # eng-common-017
+    "7b11ea4b5314d9f970d4f87d1d2aab46c5eff653ac6e071a1ee1aab5f4a8dac7",  # eng-common-018
+    "142ab0eabbb10b442d4981107d807a5c1b72f738dacd1936040bd540343d53dc",  # eng-common-024
+    "a276aaecdd124f450fe12ec3a69173ef155e3e25906f93f126aacde883516222",  # eng-common-025
+    "4e68895e65e041158236a215944cb8c8a7264a1e7ab72868ca89694c847aa417",  # eng-common-026
+    "358c357698222ce18c4b80a2b7c72bb9839a70f96ca18a208eec2ad2ed49446a",  # eng-common-027
+    "d1f533d0ab4395257b5149f5dba7b005c92de3e19dab627df5b6bcd25268408e",  # eng-common-028
+    "0335e205c7bc7f4724f71d927e8f2cd318aeda9b4656cc4f2ce3a7a0d3a88019",  # eng-common-029
+    "d03f72b93e40bb6c69b8eab795983288153c6f5f9998b66767e663641471b63f",  # eng-common-003
+    "0d9cf4b87ad9d2fe0fa0974dbdfa63b5bca7b6789f63b7bccf147221be0327c1",  # eng-common-004
+    "36231c391221a4a218c26325654bb2f5e4a71172efbe2f1504c16612f66890ea",  # eng-common-005
+    "cc4551d78365ee88e4069c2e3e7ebedbdc886aa19187d0a75ead476b223c4fe7",  # eng-common-009
+    "27e62dcca2895b46e32901e3a3d29c0a11c81f1b444babd533302ec31dd721ac",  # eng-common-019
+    "5ccfa58e9f64379df51300af524237345ca7e0593102788f9fa0defe24626903",  # eng-common-020
+    "4f4a72c9f63b2df5880fba9b4eecb09bc727505473deca4353b7292384cf8edf",  # eng-common-030
+    "64d664febe4a0968d0369372a2af5607d224831957201b05279986db80e731a2",  # eng-upstream-001
+    "ed63657a0d1aab46eb3f911e264f4b17d53776a80ce51299e1a551dc325538a5",  # eng-upstream-002
+    # platforms/shared/skills/xy-ui-design/references/foundations-rules.md；原始来源 SHA256 717904828357ae90b1ef8036d8e203c3496ee61b09af156b93165b7b9f4c514e。
+    "06bd2bf165cc442120c4e4e75bdbab1e2ba1b68601180b753834bc4f8babbe02",  # des-baseline-001
+    "347ca181fc210934bde4153cd19875c736c7f0d049838e00896528ce1a0e0bdd",  # des-baseline-002
+    "01063cb76058969a42edbb914c1985fe301920bafab73e70edf917d9a8856bcd",  # des-accessibility-001
+    "9f20941ef5a95864c533fbf1759cfa8c18bd033d4d45a1e826efae0d1a9ca5f2",  # des-accessibility-002
+    "dd04f5e27055cc372b6f1cd8e488e16d97d009a232541a8c557a695c19f344cc",  # des-accessibility-003
+    "7338cdee59ef794ed7b8d3466db8165da939e39702025edb6dde5c464c0fc384",  # des-accessibility-004
+    "8d6b4184079cf443ae0a477b582688d60f9883f9ddead43918f0495c47202708",  # des-platform-001
+    "78cebe8ae1f0cc81af44684ff784a01f975f8bdcd7236512826af03c0f2d4b80",  # des-token-001
+    "434defe5a4efa524e3ea238b39ccd9e5555fc69a2124a6cd372a01d019e36449",  # des-token-002
+    "73a89ccb429e508e085b2d9e17af278a7cc59fd0ffea63a59bb68a2c8669bf1e",  # des-token-003
+    "baadf2286fd7dca75c7ee7c013a3feff479823ac5e9d06439a558096812efc32",  # des-token-004
+    "94b83bf9e8ed6fe5a807a981721e7b10264f813bb6a796135ef2c14f8460f4cc",  # des-scale-001
+    "022ba836fb96c5b9e9c49630556562e6c397130eccf4e85d0ebfe62868bf38e6",  # des-motion-001
+    "db40f3a77b7850eb942d0e1a24299b70b025f4fbb5086e14c49e8090425ec7eb",  # des-prototype-001
+    "670de71cdaafe47a3b03568bc67232b02f9ea3a062fb5bdf0ae734aae8363b32",  # des-meaning-001
+    # platforms/shared/skills/xy-ui-design/references/components-rules.md；原始来源 SHA256 15ee6027d37df8b89fe02de037897188f43e4b1f4ab6340dca8f340467df291a。
+    "8f73995da9ebeb62265b122927012b85b8d7a00fa8bda0d57dcdf6696d50b744",  # des-component-001
+    "1601558fc3d343b55061885e47bf88949c7d351fa978135d4a193113f6fb99de",  # des-component-002
+    "790c84898c802e8c4b19603d73d04b936296484ba73834013b7b1440ac08d977",  # des-component-003
+    "fd51b933ee05b322a4e3e056cd23c119e3f722f195b26c2b1d75450d06fc2265",  # des-dialog-001
+    "0529d05586dd03acc3a7a23c200c94e864513c53464dbfb0daa077d7b18d0bfd",  # des-dialog-002
+    "42c80f79a966ad79c2db4e57022e8ca264f798d0c7524214d46568c9073295c8",  # des-dialog-003
+    "3261af26992f269b60662489814aedf1ee479074461a82b19886334126d1ff95",  # des-dialog-004
+    "684530b898aaf7564acafa495d71f03c24a0a596e0f7b06a96ebca74d72c1218",  # des-segment-001
+    "e3e201d0059f0e6edecd8ea58daa4e0d5d1196c7b51452e749a12ca5a4f0b6b6",  # des-segment-002
+    "e5f9f8479b17077c9c7eb9aac6c0b8a92604abfc904e8727e7c3fb9cdfa28fa3",  # des-segment-003
+    "656a784017d137b18dc660e33b6cc3d02fee43b0ae6641cf513720d0c749ea9c",  # des-control-001
+    "19494312dc1fec9bd88214dcc29ae0c2b4e7ea9982e539b6d841ca4dc1725b73",  # des-form-001
+    "d980d53c35ddd970c2b297a2ef5df7507acb5d8d2bf4ce940870bafe05c295e7",  # des-data-001
+    "e7d24e6273f81264c0e5000cfa1ffdeaee65dec5aede7eec850fcef379df2efb",  # des-state-001
+    "69a937c552e246fa6108d2c080a70340ebd3719e7c6255871dc755c10d195de8",  # des-state-002
+    "ebcc5ed9f8b763b939b438a90dad0903a75f7e9af7ad03e564dbf03685586bd5",  # des-responsive-001
+    "8841c5cb593c7cddec330a761b7b5a92be6fdc79382d7baccaba31b91da939dd",  # des-responsive-002
+    "2c183b4cffc7cf4d7aa8f04964ef4ff14834436362a1a716f95d32f05e2001d0",  # des-evidence-001
+})
 # 只支持已有规范的顶层规则条目，不扩成通用 Markdown 解析器。空行后的缩进续段、
 # 无缩进附表仍属于当前规则，直到同级条目或标题；项目扩展不能因首段相同而丢失 ID。
 RULE_ITEM_RE = re.compile(
@@ -195,9 +273,16 @@ def _legacy_template(name: str, body: bytes, values: Mapping[str, str], profile:
 
 def _without_builtin_items(body: bytes, paragraphs: Mapping[bytes, bytes]) -> bytes:
     """完整规则条目相同才剥离；项目续段或附表变化保留并交冲突校验拒绝。"""
-    removals = [(match.start(), match.start() + len(match.group().rstrip(b"\r\n")))
-                for match in RULE_ITEM_RE.finditer(body)
-                if paragraphs.get(match[1]) == match.group().replace(b"\r\n", b"\n").rstrip(b"\n")]
+    removals = []
+    for match in RULE_ITEM_RE.finditer(body):
+        item = match.group().replace(b"\r\n", b"\n").rstrip(b"\n")
+        # 必须仍是当前内置 ID，且完整字节匹配当前正文或已取证历史摘要。
+        # 条目扫描一直延伸到下一同级条目/标题，空行后用户续段和附表不能被前缀删除。
+        if match[1] in paragraphs and (
+            paragraphs[match[1]] == item
+            or hashlib.sha256(item).hexdigest() in LEGACY_BUILTIN_ITEM_HASHES
+        ):
+            removals.append((match.start(), match.start() + len(match.group().rstrip(b"\r\n"))))
     for start, end in reversed(removals):
         body = body[:start] + body[end:]
     return body

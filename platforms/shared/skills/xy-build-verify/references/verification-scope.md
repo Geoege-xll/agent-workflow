@@ -1,178 +1,212 @@
 # Verification scope and evidence reuse
 
-本策略供 PM 选择验证、实现 Agent 执行验证、QA 审核证据和 PM 收口时共用。只约束测试
-范围、证据复用与停止条件，不改变任务分级、业务确认、独立 QA、状态机或宿主权限。
-Light 使用当前自包含任务包及最小充分验证，不因引用本策略而强制 Full 规划、DAG 或
-独立 QA；Full 与实际要求的独立审查、强制检查仍保留。
+PMs selecting verification, implementation Agents executing it, QA reviewing evidence and PMs closing out share
+this policy. It governs only test scope, evidence reuse and stopping conditions; it does not change task levels,
+business confirmation, independent QA, state machines or host permissions. Light uses the current self-contained
+task pack and minimum sufficient verification. Referencing this policy does not force Full planning, a DAG or
+independent QA. Full and actually required independent review/mandatory checks remain in force.
 
-## 生产交付必须可构建、可运行
+## Production delivery must build and run
 
-- 每个生产代码实现者都对受影响目标的构建／编译成功负责，并提供与交付代码一致的
-  真实证据；缩小测试范围不能省略这一交付底线。使用项目现有增量构建、对应模块／目标
-  或必要的应用构建，不默认 clean build、全部平台／配置或发布打包。
-- 编译成功不等于程序已经可运行。使用项目支持的最小启动／冒烟或关键入口检查，
-  验证交付目标在声明的环境中可运行；库／公共模块使用实际消费者编译链接及相关执行
-  证据，不强迫它单独启动。一个既有命令确实同时覆盖构建和运行时，不必拆成两次执行。
-- 解释型项目不虚构编译命令，采用真实的导入／语法检查和启动或关键入口验证；只有
-  lint、类型检查、静态阅读或 mock 通过不能冒充真实构建和可运行结果。
-- 复用构建／运行证据前，核对该证据覆盖的目标、实际源码／产物、依赖、配置及相关环境
-  与当前交付一致，保留原命令、日志与来源。分支名或提交号变化本身既不使证据失效，
-  也不证明输入等价；无法确认仍适用时，只补受影响范围的验证，不能把旧成功直接改绑
-  当前版本。worktree 仍须验证实际组合候选，不能以单分支结果替代集成证据。
-- 缺少必要环境、权限或依赖时说明阻塞，
-  不交付为“编译通过／程序可运行”，也不据此标记 `BUILD_VERIFIED` 或 QA PASS。
-  验证须在授权范围执行，不擅自部署或修改真实业务数据。
-- 默认复用所属项目／服务已有配置、开发数据库、运行环境及系统依赖／构建缓存（Maven、Gradle、
-  npm、pnpm、Cargo、uv、DerivedData 等），各项目的数据与配置继续隔离，需保留的数据按授权
-  迁移或增量同步到相应基线，不为本次验证清理共享资源；实际新增资源沿原 input/output 合同
-  与 acceptance_evidence 说明目的、落点、所有者、复用入口及保留／回收条件。
-  确需任务临时目录时使用 `task_graph_cli.py scratch --root <project-root> --request-id <request-id>`
-  并在整个任务周期原地复用，不得按轮次新建隔离测试库、私有包仓库或复制源码／产物目录（如
-  `-v2`、`-r1`、`replay`、`before`、`packages-qa*`）。
-- 纯文档和静态原型按各自交付类型验证，不编造程序构建要求。Light 按下表区分实际
-  变更与验证输入，仍默认由原生实施者完成；不新增 Full 计划／DAG／重复确认，
-  交接时评估必要独立 QA。“只是文案”不豁免受影响生产目标的必要验证。
+- Every production-code implementer is responsible for successful build/compilation of the affected target,
+  with real evidence matching delivered code. Narrower tests cannot omit this delivery baseline. Use existing
+  incremental builds, the relevant module/target or a necessary application build; do not default to a clean
+  build, every platform/configuration or release packaging.
+- Compilation success does not prove the program runs. Use the minimum project-supported startup/smoke or
+  key-entry check to verify the target runs in the declared environment. Libraries/shared modules use actual
+  consumer compile/link and relevant execution evidence, without forcing a standalone launch. An existing
+  command that genuinely covers both build and run need not be split into two executions.
+- Do not invent compilation commands for interpreted projects. Use actual import/syntax and startup/key-entry
+  checks. Lint, type checking, static reading or mock-only success cannot stand in for real build/runnable results.
+- Before reusing build/run evidence, check that its target, actual source/artifacts, dependencies, configuration
+  and relevant environment match current delivery, retaining original commands, logs and provenance. A changed
+  branch name/commit ID alone neither invalidates evidence nor proves equivalent inputs. If applicability cannot
+  be established, verify only the affected scope; do not simply rebind old success to the current version.
+  Worktrees still require verification of the composed candidate, not single-branch results as integration proof.
+- Report a blocker when necessary environment, permissions or dependencies are missing. Do not deliver a claim
+  of successful compilation/runnability or mark `BUILD_VERIFIED` or QA PASS. Verify within authorization;
+  do not deploy or change real business data without authority.
+- By default, reuse the owning project/service's existing configuration, development database, runtime and
+  system dependency/build caches (Maven, Gradle, npm, pnpm, Cargo, uv, DerivedData, etc.). Keep project data and
+  configuration isolated. Migrate or incrementally synchronize retained data to the corresponding baseline as
+  authorized; do not clean shared resources for this verification. For actual new resources, use original
+  input/output contracts and `acceptance_evidence` to explain purpose, location, owner, reuse entry point and
+  retention/reclamation conditions. When a temporary directory is genuinely necessary, use
+  `task_graph_cli.py scratch --root <project-root> --request-id <request-id>` and reuse it in place throughout
+  the task. Do not create isolated test databases, private package repositories or copied source/artifact
+  directories per round (such as `-v2`, `-r1`, `replay`, `before`, `packages-qa*`).
+- Verify pure documentation/static prototypes by delivery type, without inventing program-build requirements.
+  Light distinguishes actual changes and verification inputs using the table below, still defaults to a native
+  implementer, adds no Full plan/DAG/repeated confirmation, and assesses necessary independent QA at handoff.
+  A change being only copy does not exempt necessary verification of an affected production target.
 
-## 先确定最小充分验证范围
+## Determine minimum sufficient verification first
 
 - Repository-discovered commands are candidates. Keep explicitly required checks.
-  根据实际变更行为、依赖、验收条件和项目强制规则选择检查。先核对仓库真实命令的
-  展开内容，避免一个聚合命令无意带起全部模块、平台、构建变体或串联的重复检查。
-  `ProjectProfile`、README 或可用脚本列出的命令是候选，不自动成为全部必跑的清单。
-- 在已有任务记录的 Validation 中简述“验证对象 → 选用命令／检查 → 预期证据”，
-  保留项目强制项的依据；沿用当前 Task Pack，不为 Light 额外新增 Full 计划或审批。
-  不改变验收与强制检查的前提下，可使用仓库支持的文件、用例、包或模块级调用；不要
-  臆造过滤参数。任务合同明确要求的检查不能由 Writer 静默删减，冲突或缺口交 PM 处理。
-- 将所需覆盖定位到实际测试节点／子场景，再选仓库已有且实际支持的最小执行入口。
-  同一文件、命令或测试组包含正常、负控及失败分支时，已有效覆盖的分支继续复用；
-  只为尚缺负控、修复后的失败分支或其他明确缺口执行所需范围，不因它们同属一组就
-  重跑其余分支。相关输入变化时仍须重新判断哪些结论失效，不能仅凭用例名相同复用。
-  优先使用已有的节点／场景选择能力；确实不可拆时，说明该入口会一并执行哪些必要
-  覆盖及不可拆的具体原因，不为缩小一次运行改造无关测试设施或另建固定测试清单。
+  Select checks from actual changed behavior, dependencies, acceptance and mandatory project rules. Inspect
+  the real command expansion first so an aggregate command does not unintentionally run every module, platform,
+  build variant or chained duplicate check. Commands listed by `ProjectProfile`, README or available scripts
+  are candidates, not an automatic must-run list.
+- Briefly state verification target → selected command/check → expected evidence in existing task Validation,
+  retaining the basis for mandatory project checks. Use the current Task Pack; add no Full plan/approval for
+  Light. Without changing acceptance or mandatory checks, use repository-supported file, case, package or module
+  invocations; do not invent filters. A Writer must not silently remove task-required checks; return conflicts
+  or gaps to PM.
+- Locate needed coverage at actual test-node/subscenario level, then choose the smallest existing, supported
+  entry point. If one file, command or test group contains normal, negative-control and failure branches,
+  reuse branches already validly covered. Execute only the missing negative control, repaired failing branch
+  or other explicit gap; shared grouping is not grounds to rerun the rest. Reassess invalidated conclusions
+  when relevant inputs change; a matching case name alone is not enough for reuse. Prefer existing node/scenario
+  selection. If genuinely indivisible, explain the necessary coverage run together and the specific reason it
+  cannot be separated. Do not refactor unrelated test infrastructure or create a fixed test checklist to narrow
+  one execution.
 
-| 实际变更 | 默认验证范围 |
+| Actual change | Default verification scope |
 | --- | --- |
-| 纯说明性文档、普通注释（不影响构建／运行输入） | 差异与适用的链接、格式、语法检查，不要求程序构建／启动。工作流指令、代码生成或编译指令等需按实际影响验证，不能仅按后缀或“注释”名称认定低风险 |
-| 仅运行时加载的文案／资源（不参与编译／打包） | 可复用仍有效的构建证据；检查键／占位符，并通过项目真实加载路径或关键入口验证更新后的资源。旧资源的运行结果或仅语法检查不能替代这部分运行证据 |
-| 参与编译／打包的源代码或文案资源 | 受影响目标构建／编译成功，并验证生成结果的最小启动／冒烟或关键入口；可复用本次相同输入已取得的有效证据，不能因改动只是文字而省略 |
-| 单个功能或局部缺陷 | 受影响目标构建／编译与最小可运行验证，加相关行为／回归用例和必要的直接调用方或接口检查；类型检查或 lint 按项目要求和实际风险选择 |
-| 公共组件、共享工具、构建配置 | 沿真实依赖扩大到受影响消费者；选择能覆盖其合同的测试或集成检查，不因“公共”二字自动跑整个仓库 |
-| 核心架构、跨模块迁移或广泛接口变化 | 明确影响边界和集成风险，再决定模块集合或全量回归；Full 任务等级本身不等于全量测试 |
+| Pure explanatory documentation or ordinary comments (not build/runtime inputs) | Diff and applicable link, format and syntax checks; no program build/start requirement. Workflow instructions and code-generation/compilation directives need verification by actual impact; suffixes or the label comment do not establish low risk |
+| Copy/resources loaded only at runtime (not compiled/packaged) | Reuse still-valid build evidence; check keys/placeholders and verify updated resources through the project's real loading path or key entry. Old-resource execution or syntax checks alone do not replace this runtime evidence |
+| Source code or copy/resources included in compilation/packaging | Successful affected-target build/compile and minimum generated-result startup/smoke or key-entry verification. Reuse valid evidence already obtained for the same inputs; a text-only change does not exempt it |
+| One feature or local defect | Affected-target build/compile, minimum runnable verification, relevant behavioral/regression cases and necessary direct-caller/interface checks. Choose type checks/lint by project requirements and actual risk |
+| Public component, shared utility or build configuration | Follow real dependencies to affected consumers; choose tests/integration checks covering their contracts, without automatically running the entire repository merely because the component is shared |
+| Core architecture, cross-module migration or broad interface change | Identify impact boundaries/integration risks before selecting modules or full regression. Full task level alone does not mean full-suite testing |
 
-生产交付保留上述构建／编译和可运行证据；额外测试、lint、类型检查和安装冒烟按实际
-需要选择，不固定凑齐。被组合命令覆盖的相同检查不再单独重跑。代码行数、测试数量
-或任务名称不能替代风险与覆盖判断。
+Production delivery retains the build/compile and runnable evidence above. Select additional tests, lint,
+type checks and installation smoke tests by actual need rather than requiring every category. Do not separately
+rerun checks already covered by a combined command. Line counts, test counts and task names do not replace
+risk/coverage judgment.
 
-文案的局部加载／运行验证不等于必须做浏览器或模拟器自动化。浏览器／模拟器检查仅
-用于具体渲染风险、无法由更小检查取得的必要运行证据或用户／项目显式要求；只验证
-受影响范围，不因此扩大到全页面、全流程或独立 QA。
+Local resource loading/runtime verification does not inherently require browser/simulator automation. Use it
+only for concrete rendering risk, necessary runnable evidence unobtainable through smaller checks, or explicit
+user/project requirements. Verify only the affected scope; do not expand to every page, flow or independent QA.
 
-## 继续工作的信息增量
+## Information gained from continued work
 
-沿当前 Task Pack 的原 Validation、`input_contracts`／`output_contracts` 和
-`acceptance_evidence` 说明判断与证据，只更新实际变化的信息，不增加字段、固定表、
-报告或审批。对当前准备执行的操作分别判断，不要求每个阶段凑齐三项：
+Explain judgments/evidence in the current Task Pack's original Validation, `input_contracts`/`output_contracts`
+and `acceptance_evidence`. Update only information that actually changed; add no fields, fixed tables, reports
+or approvals. Assess each contemplated action separately; every phase need not supply all three:
 
-- 新增测试：哪项真实行为、边界或回归保障尚未被已有覆盖证明，新增断言如何区分正确
-  与错误实现。仅有代码改动、缺少新文件或用例数少，不证明存在覆盖缺口。
-- 再次执行：会增加哪项覆盖、处理哪个具体未解决风险，或哪份证据因哪项实际源码／
-  产物、依赖、配置或相关环境变化而失效。只重验受影响的结论，交接角色、提交号或
-  “最后再看一次”不能单独提供依据。
-- 继续失败返工：已取得什么新定位、可检验假设或有效修复进展，下一步预期获得什么
-  证据。有证据地排除一个假设也是诊断进展，重复表述同一猜测不是。只因仍有次数
-  额度而重复当前失败路径，不构成继续理由。
+- Adding tests: which real behavior, boundary or regression protection lacks existing coverage, and how the new
+  assertion distinguishes correct from incorrect implementation. A code change, absence of a new file or small
+  case count does not establish a coverage gap.
+- Re-execution: what coverage will be added, which specific unresolved risk addressed, or which evidence was
+  invalidated by an actual source/artifact, dependency, configuration or relevant environment change. Recheck
+  only affected conclusions; handoff roles, commit IDs or a final look alone do not justify execution.
+- Continuing failed rework: which new diagnosis, testable hypothesis or effective repair progress exists, and
+  what evidence the next step should produce. Evidence that rules out a hypothesis is diagnostic progress;
+  repeating the same guess is not. Remaining attempt allowance alone does not justify repeating a failing path.
 
-用户／项目显式强制的 CI、Hook、构建和必要集成验证按原合同执行，不以没有新增覆盖
-取消。有效证据足以支持当前验收时直接复用；上述判断不改变独立 QA、权限或完成条件。
+Run explicitly mandatory user/project CI, Hooks, builds and necessary integration verification under the original
+contract; lack of added coverage does not cancel them. Reuse evidence sufficient for current acceptance directly.
+These judgments do not change independent QA, permissions or completion conditions.
 
-## 扩大或重跑需要具体依据
+## Expansion or repetition needs specific grounds
 
 Broaden or repeat only for changed inputs, failures, stale evidence, an uncovered requirement,
 a concrete unresolved risk, or an explicit user/project requirement.
 
-- 默认不执行仓库级测试发现／全套测试／全部平台矩阵。仅当用户或适用项目规则明确
-  要求，或实际影响与必要覆盖确实不能被更小范围满足时，才选全量。仓库只有一个无法
-  合理拆分的可用入口时，可将它作为最小可行验证，并说明原因；不要为缩小测试改造
-  无关测试基础设施。允许全量不意味着必须再增加一次用户确认。
-- 扩大范围前在已有验证记录中说明触发点和新覆盖：受影响的共享依赖、变更后的输入／
-  环境、失败线索、缺失的验收证据、已过期证据，或明确的未解决风险。先补最接近该缺口
-  的检查；某个测试失败并不自动要求全仓重跑。“更保险”“最后再检查一遍”不是依据。
-- 失败后先定位具体原因或提出可检验假设，有修复后再跑失败用例及受影响的检查。疑似
-  偶发失败的重试须有诊断目的，保留原失败记录；不能反复跑到一次绿色就忽略未解释的失败。
-- 区分缺陷复现的预期红与拒绝合同的负控：前者须由旧缺陷触发预先明确的回归断言失败，
-  输出能定位到目标缺陷即可作为有效复现，不要求旧实现已正确拒绝输入；它不是修复
-  通过，修复后该回归仍须转绿。后者须核对消费者按合同拒绝负输入的结果，预期拒绝
-  未出现仍是失败。夹具准备失败、依赖／环境缺失、执行器或命令错误两者均不算，
-  不能当作有效复现或拒绝覆盖。补齐该分支时保留原输出，复用其他仍有效的分支证据，
-  不把一次预期红当作整个测试组失效，也不将未解释的执行失败改写为成功。
-- 同一失败路径的相关输入、已知原因和证据未变，且没有新定位、可检验假设或有效修复
-  进展时，提前停止该重复路径，将具体阻塞、已尝试内容和原完整证据交回 PM。独立分支
-  继续，不从头重启任务、切换 Reviewer 或把阻塞记为通过。长耗时、同一命令、相同错误
-  文本或提交号变化都不能单独证明无进展；有诊断目的的调查、修复后用相同命令复验和
-  强制检查仍可执行。
-- 现有上限照常累计：实现者两次自行修复失败后交 PM，三轮失败返工后由 PM 升级用户。
-  无进展可以更早交回，但新假设、修复进展、换命令或恢复实例都不重置或叠加次数。
-- 保留显式强制检查和必要安全／兼容性证据，不用耗时或“减少测试”豁免它们。环境缺失、
-  没有命中测试或命令无法执行不是通过；说明实际完成的替代验证和剩余缺口。
-  Missing/failing mandatory evidence prevents BUILD_VERIFIED or QA PASS.
+- Do not default to repository-wide test discovery, full suites or all-platform matrices. Choose full scope
+  only for explicit user/applicable-project requirements or when actual impact and necessary coverage cannot
+  be satisfied more narrowly. A sole entry point that cannot reasonably be split may be the minimum feasible
+  verification; explain why and do not refactor unrelated infrastructure merely to narrow it.
+  Allowing full scope does not require another user confirmation.
+- Before expansion, state its trigger and added coverage in existing verification records: affected shared
+  dependency, changed input/environment, failure clue, missing acceptance evidence, stale evidence or an explicit
+  unresolved risk. Fill the nearest gap first. One failed test does not automatically require a whole-repository
+  rerun. General reassurance or one last check is not a basis.
+- After failure, identify a specific cause or testable hypothesis, then rerun the failing case and affected
+  checks after repair. A suspected flaky failure needs a diagnostic purpose for retry and retention of the
+  original failure. Do not repeatedly run until green and ignore an unexplained failure.
+- Distinguish expected red defect reproduction from a negative control of a rejection contract. For the former,
+  the old defect must trigger the predefined regression assertion; output locating the target defect is valid
+  reproduction, without requiring the old implementation to reject input correctly. It is not repair success;
+  the regression must become green after repair. For the latter, verify that the consumer rejects negative
+  input as contracted; absence of expected rejection is failure. Fixture preparation failure, missing dependency/
+  environment, executor failure or command error counts as neither reproduction nor rejection coverage. Retain
+  original output while filling that branch and reuse other valid branches. One expected red does not invalidate
+  a whole group, and unexplained execution failure must not be rewritten as success.
+- If relevant inputs, known cause and evidence for the same failing path are unchanged, with no new diagnosis,
+  testable hypothesis or effective repair progress, stop that repeated path early and return the specific blocker,
+  attempts and original full evidence to PM. Continue independent branches. Do not restart the task, replace the
+  Reviewer or mark the blocker passed. Long duration, the same command/error text or a changed commit ID alone
+  does not establish lack of progress. Diagnostic investigation, the same command after a repair and mandatory
+  checks remain permitted.
+- Existing limits accumulate normally: return to PM after two failed implementer repair attempts; PM escalates
+  to the user after three failed rework rounds. No progress may justify earlier return, but a new hypothesis,
+  repair progress, changed command or resumed instance does not reset or stack limits.
+- Preserve explicitly mandatory checks and necessary security/compatibility evidence; duration or reducing tests
+  does not exempt them. Missing environment, no matched tests or an unexecutable command is not success. State
+  actual alternative verification and remaining gaps. Missing/failing mandatory evidence prevents BUILD_VERIFIED
+  or QA PASS.
 
-## 新增测试与停止条件
+## New tests and stopping conditions
 
-- 新增／改变行为或修复缺陷时，先检查已有针对性测试能否覆盖当前合同；只有具体行为、
-  回归保障的覆盖缺口或用户／项目强制要求才补测试。已有覆盖充分时可以不新增用例，
-  没有新增测试文件本身不是 QA FAIL 的理由。需要补充时在已有 Validation 简述缺口即可，
-  不新增测试决策表、报告或审批。
-- 优先扩展现有测试文件，合并或参数化相近场景；只有独立测试职责、现有文件不适合承载
-  或项目约定确实需要时才新建文件。不按每个功能、每项规则、每类边界各建文件，也不
-  机械限制文件数量。新增文件、用例数量和测试代码行数都不是完成标准。
-- 单元、组件、集成及端到端验证应各自覆盖真实的风险或边界；已有检查已充分证明同一
-  合同时，不为凑层次再复制一套断言。不同层验证了不同失败模式时可以并存，不能为了
-  少测试删掉必要的安全、隔离、计费、精度、并发、重试恢复或兼容性保障。
-- 断言可观察行为、边界或合同，不机械新增只匹配修改文案、注释、指令措辞、mock 调用
-  或实现细节的测试。与真实合同有关的文案／结构断言仍可保留；纯 mock 通过不代替必要
-  的真实依赖、构建与运行证据。可逆低风险改动已有充分直接检查时，无需为了交付凑测试。
-- 选定且必需的检查已真实通过、验收证据充分、没有未解决的重要风险，且之后没有使
-  证据失效的变化，就停止执行测试，进入既有交接或收口。不要在 Writer 完成、QA 开始、
-  PM 接收、提交前后或最终回复前，各自再跑一轮“保险回归”。
-- 验证后又修改代码、依赖、配置或相关环境时，只重验受影响的结论；不能因为其他模块
-  变化或普通文档更新就作废全部证据。提交号变化本身既不证明内容相同，也不自动要求
-  重跑：核对实际输入、环境与来源，保留原证据并按现有合同更新当前范围绑定。
-- 用户或项目要求的 CI、提交 Hook、构建及集成验证照常执行；不为减少次数跳过、关闭
-  或修改它们。已有成功 CI／聚合命令可在范围与环境相符时复用，不能另起重复工作只为
-  获得同一份结果。
+- For new/changed behavior or defect repair, first inspect whether existing focused tests cover the current
+  contract. Add tests only for a concrete behavior/regression gap or mandatory user/project requirement.
+  Sufficient coverage needs no new case, and absence of a new test file alone is not QA FAIL. Briefly state a
+  necessary gap in existing Validation; do not add a test-decision table, report or approval.
+- Prefer extending existing test files and combining/parameterizing related scenarios. Create files only for
+  independent test responsibility, unsuitable existing files or a real project convention. Do not create one per
+  feature, rule or boundary type, or mechanically cap file count. New files, case counts and test-code lines are
+  not completion criteria.
+- Unit, component, integration and end-to-end verification each need a real risk/boundary to cover. Do not duplicate
+  assertions just to fill layers when existing checks prove the same contract. Different failure modes at different
+  layers may coexist. Reducing tests must not remove necessary security, isolation, billing, precision, concurrency,
+  retry/recovery or compatibility protection.
+- Assert observable behavior, boundaries or contracts; do not mechanically add tests matching only changed copy,
+  comments, instruction wording, mock calls or implementation details. Copy/structure assertions relevant to a real
+  contract may remain. Mock-only success does not replace necessary real-dependency, build and runtime evidence.
+  Reversible low-risk changes with sufficient direct checks need no tests merely for delivery.
+- Stop tests and enter existing handoff/closeout once selected mandatory checks actually pass, acceptance evidence
+  is sufficient, no material unresolved risk remains and nothing later invalidates evidence. Do not run a new
+  insurance regression at Writer completion, QA start, PM acceptance, before/after commit or before the final reply.
+- After later code, dependency, configuration or relevant environment changes, recheck only affected conclusions.
+  Another module's changes or ordinary documentation updates do not invalidate all evidence. A changed commit ID
+  neither proves identical content nor automatically requires a rerun: compare actual inputs, environment and
+  provenance, retain original evidence and update current scope bindings under the existing contract.
+- Required CI, commit Hooks, builds and integration verification remain. Do not skip, disable or modify them to
+  reduce execution count. Reuse successful CI/aggregate-command evidence when scope and environment match, rather
+  than starting duplicate work only to obtain the same result.
 
-## QA 独立审查与 PM 交付
+## Independent QA review and PM delivery
 
-- 选定字节证据的生成／复核可复用 `xy-workflow/references/runtime-records.md` 中的现有
-  `task_graph_cli.py fingerprints`，直接选择已有回执字段，避免再写一个临时核验程序或
-  重做整仓指纹。它只证明选定文件匹配；原命令、退出码、真实构建、可运行与 QA 证据
-  仍按本策略核对，不因工具返回成功而自动取得交付状态。
+- For selected-byte evidence generation/recheck, reuse existing `task_graph_cli.py fingerprints` from
+  `xy-workflow/references/runtime-records.md`, selecting existing receipt fields directly instead of writing
+  another temporary verifier or recomputing whole-repository fingerprints. It proves only selected-file matches.
+  Check original commands, exit codes, actual build/runnable and QA evidence under this policy; tool success
+  does not automatically grant a delivery state.
 - QA independently inspects the actual diff/source, relevant standards, command scope, exit codes
   and resolvable logs. It may reuse implementer evidence only after confirming the reviewed inputs,
-  dependencies and relevant environment still match. 独立审查不等于
-  无条件重新执行所有测试，也不能只信任 Writer 自报完成或旧 QA PASS。
-- 确需新执行时使用最小且获准的只读检查；新增测试或修复交 PM 派回实现者。后续相关
-  任务只失效受变化影响的证据，不能重做先前已完成且仍有效的全部验证。
-- worktree 合并仍须在实际组合候选上取得现有合同要求的集成验证，并绑定确切版本。
-  单分支测试不能冒充集成证据；集成验证也不等于重跑每个分支的所有测试。候选变化后
-  按既有规则刷新受影响验证、QA 和交付绑定，不放宽 `qa-ready` 或合并条件。
-- PM 收口核对证据与当前交付一致；通过后不另设测试阶段。文档投影仅验证实际变化的
-  文档／链接；若意外改变了行为或验证输入，回到对应的既有修复与 QA 分支。
-- 交付使用既有报告：简述“验证范围、结果、相关未验证项／限制”；内部保留准确命令、
-  退出码、适用输入与可解析完整日志引用，区分新执行和复用。没有执行全量就不能称
-  “全部测试通过”，不逐个罗列无关未运行项、不新建测试决策文档或用户可见 YAML／JSON。
+  dependencies and relevant environment still match. Independent review neither unconditionally reruns every
+  test nor trusts only Writer self-report or an old QA PASS.
+- When new execution is necessary, use the smallest authorized read-only checks. Return new tests/repairs to PM
+  for implementer dispatch. Later related tasks invalidate only evidence affected by actual changes; do not redo
+  all previously completed, still-valid verification.
+- Worktree merges still require the existing contract's integration verification on the actual composed candidate,
+  bound to its exact version. Single-branch tests cannot masquerade as integration evidence; integration also does
+  not mean rerunning every branch test. After candidate changes, refresh affected verification, QA and delivery
+  bindings under existing rules, without weakening `qa-ready` or merge conditions.
+- PM checks that evidence matches current delivery at closeout, without adding another test phase after success.
+  Document projection verifies only changed documents/links. If it unintentionally changes behavior or verification
+  inputs, return to the corresponding existing repair/QA branch.
+- Use existing delivery reports: briefly state verification scope, results and relevant unverified items/limits.
+  Retain exact commands, exit codes, applicable inputs and resolvable full-log references internally, distinguishing
+  new execution from reuse. Without a full-suite run, do not claim all tests passed. Do not list unrelated unrun
+  items one by one or create a test-decision document/user-facing YAML/JSON.
 
-## 已验证经验与采用边界
+## Verified lessons and adoption boundaries
 
-已验证且与后续任务有关的项目命令、必要前置条件和环境限制，可沿现有项目特有规范的
-归属与维护合同更新，或在当前任务包中精简交接，避免重复试错。保留事实来源与适用输入；
-遇到反证或相关目标、依赖、配置／环境变化时重新核对。未验证假设仅作待检验线索，
-经验不能替代当前源码、真实执行证据、批准或适用规范。不要为复用而读取旧会话、扫描
-个人 Skill 库存或新建经验账本，也不强制启动记忆检索。
+Verified project commands, necessary prerequisites and environment limitations relevant to later tasks may be
+updated under existing project-specific standards' ownership/maintenance contracts, or handed off concisely in
+the current task pack to avoid repeated trial and error. Retain factual provenance and applicable inputs; recheck
+when contrary evidence or relevant target, dependency, configuration/environment changes appear. Unverified
+hypotheses remain leads. Lessons cannot replace current source, real execution evidence, approval or applicable
+standards. Do not read old sessions, scan personal Skill inventories or create a lessons ledger for reuse, and
+do not force start-mode memory retrieval.
 
-方法来源为微软 [TokenEconomizer](https://github.com/microsoft/TokenEconomizer) 的经验复用
-与失败循环干预思路；其 [插件设计与限制](https://github.com/microsoft/TokenEconomizer/blob/main/docs/PLUGIN.md)
-说明插件用自行结束且最后编辑后没有验证失败的 green turn 学习，区别于实验的官方判分。
-该信号不能替代本包的构建／可运行证据或独立 QA PASS。本策略只采用上述判断方法，
-不安装插件、不新增 judge 模型、Hook、监督 Agent 或后台进程，不自动裁剪工具或修改权限，
-不声称 Antigravity 已原生接入，也不承诺 token、费用或通过率收益。
+The method draws on Microsoft's [TokenEconomizer](https://github.com/microsoft/TokenEconomizer) ideas for lesson
+reuse and intervention in failure loops. Its [plugin design and limits](https://github.com/microsoft/TokenEconomizer/blob/main/docs/PLUGIN.md)
+explain learning from self-terminated green turns with no verification failure after the last edit, distinct from
+official experimental scoring. That signal cannot replace this pack's build/runnable evidence or independent
+QA PASS. This policy adopts only those judgment methods: do not install the plugin, add a judge model, Hook,
+supervisory Agent or background process, automatically prune tools/change permissions, claim native Antigravity
+integration, or promise token, cost or pass-rate gains.

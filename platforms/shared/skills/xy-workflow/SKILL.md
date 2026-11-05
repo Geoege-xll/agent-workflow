@@ -1,15 +1,16 @@
 ---
 name: xy-workflow
-description: "编排2.0 Light／Full实施、UI变更与未完成工作恢复，按风险选择当前任务包、原生实施者和验收；只读审计使用独立分支。"
+description: "Orchestrate 2.0 Light／Full implementation, UI changes and recovery of unfinished work, selecting current task packs, native implementers and acceptance by risk; use a separate branch for read-only audits."
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-workflow
 
-仅接受 2.0 Light／Full 和 `schema_version: 2`。代码修改沿用 `xy-code-standards` 的
-适用方法与规范；两等级都默认原生实施者。PM 例外、独立上下文和实例收口统一遵守
-`.agent-workflow/product/WORKFLOW.md#implementation-ownership` 与 `#agent-instance-lifecycle`。
+Accept only 2.0 Light／Full and `schema_version: 2`. Code changes retain applicable methods and standards
+from `xy-code-standards`; both levels default to native implementers. PM exceptions, independent context
+and instance closure follow
+`.agent-workflow/product/WORKFLOW.md#implementation-ownership` and `#agent-instance-lifecycle`.
 
 ## Standalone read-only audit
 
@@ -20,27 +21,32 @@ report. Honor explicitly requested independent/full re-review and mandatory proj
 are authorized, route their actual implementation normally. QA being read-only does not exempt
 Full implementation or actual Light acceptance requiring QA from current scope/standards and handoff validation.
 
-## Light 与 Full
+## Light and Full
 
-派发前先判断目标、实际消费者、范围、风险与实施者。Light 使用当前自包含单任务包，
-默认派对应原生实施者并做最小充分验证；明确用户指令已授权当前范围时不重复确认。
-不强制 Grill Me、xy-plan、DAG、保存计划或独立 QA。交接时按实际风险评估独立审计、
-文档与记忆，执行选定必需项；未执行 QA 不能写 QA PASS。普通 UI 文案按 WORKFLOW 的
-`Light UI copy`核对真实消费者／语义／资源验证；使用production_ui＋UI-Conformance、
-零设计差量和当前已解析冻结权威，不标non_ui避过工程／设计规范。实际设计／交互变化Full。
-共享合同、数据、根配置、多角色或实际 UI 设计变化使用 Full，保留下面的完整路线。
-不能把危险工作拆成 Light 规避确认，不能以交接评估跳过 Full 唯一独立 QA。
+Before dispatch, assess the goal, actual consumers, scope, risk and implementer. Light uses the current
+self-contained single-task pack, defaults to the corresponding native implementer and minimum sufficient
+verification, and does not repeat confirmation when an explicit user instruction already authorizes the
+current scope. It does not force Grill Me, xy-plan, a DAG, a saved plan or independent QA. At handoff,
+assess independent audit, documentation and memory by actual risk and complete selected mandatory items;
+without actual QA, do not claim QA PASS. Ordinary UI copy follows WORKFLOW's `Light UI copy` real-consumer,
+semantic and resource checks. Use production_ui＋UI-Conformance, zero design delta and current resolved,
+frozen authority; do not label it non_ui to evade engineering/design standards. Actual design/interaction
+changes are Full. Shared contracts, data, root configuration, multiple roles or actual UI design changes
+use Full and retain the complete route below. Do not split risky work into Light to evade confirmation,
+or use handoff assessment to skip Full's single independent QA.
 
-每个新实现者或 QA 都只能接收当前任务包；禁止复制完整 PM／兄弟会话或使用继承父历史的
-fork。同一任务连续实现、短返工及同轮原 Reviewer 的差量复查可续用，独立任务使用新
-实例／ID。接收与证据保护后及时原生结束，缺能力只退役阻止误派；不声称清空历史或释放
-未确认容量。完整生命周期按上述产品权威，操作时再读当前宿主细则，不增加 Agent 池。
+Each new implementer/QA receives only the current task pack. Do not copy full PM/sibling conversations or
+fork parent history. Continuous implementation, short rework of the same task and same-round delta review
+by the original Reviewer may reuse the instance; independent tasks use new instances/IDs. Close natively
+promptly after acceptance/evidence protection. Without that capability, retire only to prevent misdispatch;
+do not claim erased history or released unconfirmed capacity. Follow the product authority above for the
+full lifecycle, reading current-host details when operating; add no Agent pool.
 
-## 适用专业分支
+## Applicable specialist branches
 
 For initial/revised design standards or a visual-system replacement, read
 [design-standards.md](references/design-standards.md). PM assesses standard updates separately from
-PROJECT/plans 基线投影; UI Agent writes authorized leaves, PM adopts scope and refreshes affected
+PROJECT/plans baseline projection; UI Agent writes authorized leaves, PM adopts scope and refreshes affected
 authority, implementation roles own production tokens/components, and QA audits independently.
 No reusable rule change means no update. `xy-uiux + design_ui` supports `design_mode: standards_only`
 for exact normative Markdown leaves without prototype writes, `xy-prototype-verify`, or visual gates.
@@ -49,16 +55,19 @@ Existing user confirmation stages are unchanged; adopted design rules do not imp
 Use `.agent-workflow/product/WORKFLOW.md` as the canonical product procedure and
 `.agent-workflow/project.yaml` as the project adapter.
 
-中央模式先按 WORKFLOW 的“中央固定版本与项目适配器”验证本机启用；宿主 Skill 软链
-只能帮助发现入口，克隆后缺机器 binding 不能自动编排。新图／单包固定严格三字段
-`runtime_binding`，现有任务换版、缺 pin、冲突或损坏不回退。每次读取受管正文或执行
-helper 都按当前包 pin 使用下面链接的统一桥执行边界，不能因项目当前 Skill 已换版
-而改读或执行新版；不假定上一工具调用留下的 shell 环境仍存在。源包／旧自包含入口
-保留原用法，中央适配器始终属于实际项目 `.agent-workflow/project.yaml`。
+In central mode, first verify machine-local enablement under WORKFLOW's “Centrally Pinned Versions and
+Project Adapters”. Host Skill symlinks aid discovery only; a clone without a machine binding cannot
+orchestrate automatically. New graphs/single packs pin a strict three-field `runtime_binding`. Running
+tasks do not switch versions, and missing pins, conflicts or corruption do not fall back. For each managed
+read/helper execution, use the linked shared bridge boundary with the current pack's pin. A changed project
+Skill version must not redirect reads/execution to a new version; do not assume shell environment survives
+from a previous tool call. Source-pack/old self-contained entries retain their usage. The central adapter
+always belongs to the actual project's `.agent-workflow/project.yaml`.
 
-Full 需求以 HTML 正式审阅，模型只维护一份 Markdown；PM 按
-[需求 HTML 交付](../xy-plan/references/requirement-html.md) 处理批准前 scratch 草案、批准后
-plans 同名 `.md`/`.html` 与原型覆盖回写。HTML 新鲜度不创建批准，也不替代需求/原型指纹。
+Formal Full requirements review uses HTML while the model maintains one Markdown source. PM follows
+[requirements HTML delivery](../xy-plan/references/requirement-html.md) for pre-approval scratch drafts,
+post-approval same-name plans `.md`/`.html`, and prototype-coverage writeback. HTML freshness creates no
+approval and replaces neither requirement nor prototype fingerprints.
 
 Use host-native aliases only when explicit activation is needed. Examples:
 `xy-project-memory` (Codex: `$xy-project-memory`; Claude Code: `/xy-project-memory`;
@@ -73,11 +82,12 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
   Hooks do not disable this Skill. Continue related work using current context and valid evidence;
   do not restart an earlier completed task just because this Skill or a Hook is invoked again.
 
-- 每位 Agent 独立完整读取当前任务包、必需 Skill／指令及适用规范；同一实例中已完整
-  可用且版本未变的正文直接复用，不因同版本包改用文件传输而重读。缺失、截断、压缩
-  或变化时恢复受影响内容，显式宿主／Skill 重读要求仍保留。详细复用边界及可选分页器见
-  [完整读取必需长文](references/runtime-records.md#完整读取必需长文)；不新增读取账本或
-  必跑门禁。普通业务资料仍按需；机器字节核验／指纹不代替当前 Agent 读取必需正文。
+- Each Agent independently reads the complete current task pack, required Skills/instructions and applicable
+  standards. Reuse unchanged text already fully available in the same instance; file transport of the same
+  pack version does not require rereading. Restore affected content when missing, truncated, compacted or
+  changed. Explicit host/Skill reread requirements remain. See [complete reading of required long documents](references/runtime-records.md#完整读取必需长文)
+  for reuse boundaries and the optional pager; add no reading ledger or mandatory gate. Ordinary business
+  material remains on demand. Machine byte checks/fingerprints do not replace this Agent's required reading.
 - Resolve existing paths from current context, configured directory links or a scoped file listing;
   do not invent filenames. Choose filters appropriate to the requested resource; no match proves
   absence only within those filters, not a task failure. Before affected dispatch, assess whether
@@ -91,14 +101,15 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
   temporary Python programs. Read that reference only when those operations are needed.
 - Main session = PM. It owns requirements, routing, approvals, task packs, synthesis,
   rework, and the user-facing result.
-- Light／Full 默认派对应原生 subagent；只有用户明确指定 PM 本身亲自实施当前范围时
-  例外。PM 只维护协调与其拥有的文档，例外不降低原等级门槛；摘要不创造授权或降级。
+- Light／Full default to the corresponding native subagent, except when the user explicitly instructs PM
+  itself to implement the current scope. PM maintains only coordination and its owned documents. The exception
+  does not lower the original level's requirements; summaries create neither authorization nor downgrades.
 - The default business confirmations are `requirements_approved` and, for required-prototype UI
   design-change work, `visual_approved`. A proven `UI-Conformance` request has no visual
   confirmation because it makes no design decision; a user-selected direct-development branch also
   has no visual gate for its exact surfaces. The PM recommends but never selects or invents either
   design-change branch. A task-scoped structured exception is allowed only under the policy below.
-- Full 与实际要求审计的 Light 使用唯一 `xy-qa` after implementation. It does not command implementers or edit
+- Full and Light actually requiring audit use the single `xy-qa` after implementation. It does not command implementers or edit
   production business code.
 
 ## User-facing feedback boundary
@@ -167,10 +178,10 @@ Neither mode bypasses Git safety checks or grants remote push. Ordinary tasks re
 
 <!-- workflow-contract: references/worktree-delivery.md -->
 
-进行 Light／Full 接收与派发时，读取 [dispatch procedure](references/dispatch.md)。
+For Light／Full intake and dispatch, read the [dispatch procedure](references/dispatch.md).
 It preserves Full Grill Me → xy-plan draft → PM projection decision → requirements approval →
 approved-plan storage → validated READY dispatch. Do not dispatch before reading the applicable
-contract. Light 使用该参考的轻量分支；文档与记忆仍按需，不进入 Full 图只是为了派发。
+contract. Light uses that reference's lightweight branch; documentation/memory remain on demand. Do not enter a Full graph merely to dispatch.
 
 <!-- workflow-contract: references/dispatch.md -->
 
@@ -214,8 +225,9 @@ native_bug_fix:
   - assess_task_level_closeout
 ```
 
-Light 缺陷完成最小验证后按风险交接评估；Full 使用 `request_unified_qa`。显式审查要求、
-项目强制规则或实际风险仍选择必要独立审查，缺陷标签本身不强制 Full。 The bug label alone does not
+After minimum verification, Light defects assess handoff by risk; Full uses `request_unified_qa`. Explicit
+review requests, mandatory project rules or actual risk still select necessary independent review. The defect
+label itself does not force Full. The bug label alone does not
 upgrade the task or require Full planning, another approval, a saved plan, or documentation churn.
 
 Review-feedback handling is not bug diagnosis. Treat external findings as advisory evidence: verify
@@ -223,7 +235,8 @@ them against current source, requirements, and tests before accepting or rejecti
 
 ## Default business confirmations and exceptions
 
-这些确认适用于 Full；Light 已有明确范围授权时不重复确认，实质缺口只澄清受影响决定。
+These confirmations apply to Full. Light with explicit scope authorization does not repeat confirmation;
+clarify only affected decisions when material gaps exist.
 
 - Ask once for `requirements_approved` after scope, non-goals, constraints, and acceptance
   evidence are clear. For Full work, first complete Grill coverage, create the `xy-plan` draft, and
@@ -269,10 +282,10 @@ PROJECT/plans merely to finish. Current truth changes only after verified implem
 
 ## Implementation and QA loop
 
-实施交接、返工或收口时，按当前等级读取
+For implementation handoff, rework or closeout, read the current level's applicable branch of
 [implementation and QA](references/implementation-and-qa.md). Use exactly one read-only request
 reviewer; preserve independent source/standards audit and valid evidence reuse. The same reviewer
-checks affected repairs without restarting unchanged coverage. Light 先按实际风险评估是否需要
-独立审计；只读审计交付结论后停止，不进入实现收口链。
+checks affected repairs without restarting unchanged coverage. Light first assesses independent-audit need
+by actual risk. Read-only audits stop after delivering conclusions, without entering implementation closeout.
 
 <!-- workflow-contract: references/implementation-and-qa.md -->

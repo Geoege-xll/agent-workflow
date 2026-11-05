@@ -398,7 +398,7 @@ developer_instructions = "Audit security without editing files."
         text = self.read("AGENTS.md")
         managed = managed_agents_text(text)
         self.assertLessEqual(len(managed.encode("utf-8")), 8 * 1024)
-        for anchor in ("PM负责协调", "requirements_approved", "visual_approved", "schema_version:2", "$xy-workflow"):
+        for anchor in ("PM owns coordination", "requirements_approved", "visual_approved", "schema_version:2", "$xy-workflow"):
             self.assertIn(anchor, text)
         self.assertLessEqual(text.count("Standard closed loop"), 1)
         self.assertLessEqual(text.count("Memory gates"), 1)
@@ -789,12 +789,13 @@ developer_instructions = "Audit security without editing files."
             "After Full coverage is complete, activate `xy-plan`",
             "The PM then gives the concise natural-language approval brief and requests confirmation",
             "Any explicit affirmative reply records `requirements_approved` internally",
-            "task_graph_cli.py validate",
+            # 中央桥示例也包含 validate；用实际图变量锁定批准后的派发校验阶段。
+            'task_graph_cli.py validate --input "${workflow_graph',
             "Activate `xy-build-verify` for every implementer",
             "Run `task_graph_cli.py qa-ready` for the request",
             "dispatch exactly one integrated read-only `xy-qa` reviewer for this request",
             "activate `xy-project-memory` in closeout mode",
-            "最后报告用户",
+            "Finally report to the user",
         )
         for anchor in anchors:
             self.assertIn(anchor, body)
@@ -903,8 +904,8 @@ developer_instructions = "Audit security without editing files."
         self.assertNotIn("qa_requires_provider: true", sources)
         root_bootstrap = self.read("AGENTS.md")
         normalized_root = " ".join(root_bootstrap.split())
-        # 根入口保留中文隔离边界；完整 provider 协议仍由上面的实际 Skill 来源核对。
-        self.assertRegex(normalized_root, r"没有严格\s*项目隔离与来源时不调用provider recall／save")
+        # 根入口英文仍保留严格隔离边界；完整 provider 协议由上面的实际 Skill 来源核对。
+        self.assertRegex(normalized_root, r"Without strict project isolation and provenance, call neither provider recall nor save")
 
     def test_setup_rejects_ambiguous_or_incomplete_memory_config(self) -> None:
         mutations = (

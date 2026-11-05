@@ -1,17 +1,19 @@
 ## Inputs
 
-只接收当前自包含2.0 QA包：`schema_version: 2`、本任务`task`、必要适用规范、批准／UI依据、
-当前审查范围与证据。task包含workflow_level、module、role、agent_alias、instance_policy:fresh、
-context_policy:handoff_only及实际agent_ref。新Reviewer不得继承／复制完整PM或兄弟历史。
-Full保持请求闭包审计；Light不要求Full图，但实际选择独立QA后同样需要当前身份与证据绑定。
+Receive only the current self-contained 2.0 QA pack: `schema_version: 2`, this task's `task`, necessary
+applicable standards, approval/UI authority, current review scope and evidence. The task includes
+workflow_level, module, role, agent_alias, instance_policy:fresh, context_policy:handoff_only and actual
+agent_ref. A new Reviewer must not inherit/copy full PM or sibling history. Full retains request-closure
+audit. Light requires no Full graph, but selected independent QA still needs current identity/evidence binding.
 
 
 - approved task contract, request dependency closure, and exact owned paths;
 - implementation diff and real source/components/tokens;
 - implementer evidence summaries and resolvable complete-log references;
-- 当前指纹绑定的适用内置来源，存在时的项目特有规范索引，以及任务包选定的非skip
-  controlled_document_access 来源/叶。索引无特有叶且物理缺失时按配置路径+null指纹处理，
-  不能因而省略内置规则，也不为了QA生成空索引。 Non-UI implementation contributes engineering leaves,
+- applicable built-in sources bound to current fingerprints, the project-specific standards index when
+  present, and non-skip controlled_document_access sources/leaves selected by the task pack. With no specific
+  leaves and a physically absent index, use configured paths + null fingerprint; do not omit built-in rules
+  or generate an empty index for QA. Non-UI implementation contributes engineering leaves,
   production UI contributes engineering and design leaves, and prototype design contributes design
   leaves. Missing, `skip`, stale, or incomplete authority is FAIL; QA must not preload every
   `project.yaml` -> `docs.*` document to repair a broken task pack;
@@ -105,9 +107,9 @@ Full保持请求闭包审计；Light不要求Full图，但实际选择独立QA�
 Do not substitute the root prototype index, task summary, recalled memory, claimed result, or
 potential Skill match for applicable design authority, current source, and real logs.
 
-## 2.0 结果绑定
+## 2.0 result binding
 
-QA结果顶层必须声明`schema_version: 2`，并包含：
+The QA result must declare top-level `schema_version: 2` and include:
 
 ```yaml
 handoff_ref:
@@ -118,19 +120,23 @@ handoff_ref:
   task_pack_sha256: <SHA-256-of-the-complete-current-QA-pack-bytes>
 ```
 
-`validate`与`extract`都必须传`--task-pack`；CLI对照当前包核对请求、任务、别名、原生身份、
-SHA与现有scope／规范语义，旧格式、身份错配和旧包PASS均拒绝。包SHA或结构有效不证明
-审查真实执行、模型已读或工具确实只读，PM／QA仍核实实际证据。不为适配旧交接保留fallback。
-执行中的QA包必须绑定实际RUNNING／QA且未退役的xy-qa任务。PASS后保留这份原包及字节SHA
-作为验收依据；图进入QA_PASSED不要求重导新包，不能将旧结果改绑到重导包。范围／规范变化
-才交接更新后的完整包并由原Reviewer差量复查，生成与新包绑定的新结果，保留未失效结论。
+Both `validate` and `extract` require `--task-pack`. CLI checks request, task, alias, native identity, SHA
+and existing scope/standards semantics against the current pack. It rejects old formats, identity mismatches
+and old-pack PASS. A valid pack SHA/structure does not prove actual review execution, model reading or read-only
+tools; PM/QA still verify real evidence. Retain no fallback for old handoffs. An executing QA pack must bind
+an actual RUNNING／QA, non-retired xy-qa task. After PASS, preserve that original pack and byte SHA as
+acceptance grounds. A graph entering QA_PASSED needs no re-export, and old results must not be rebound to
+a re-exported pack. Only scope/standards changes require an updated complete pack, delta review by the
+original Reviewer and a new result bound to that pack, retaining still-valid conclusions.
 
-## 原生结构化交接
+<a id="原生结构化交接"></a>
 
-当前宿主已提供且已获授权的 QA 调用支持 schema 时，先用
-`qa_handoff_cli.py schema` 获取本包当前 QA handoff 的 JSON Schema，将其交给同一次
-原生 QA 调用；不为将已有自然语言改成 JSON 额外开模型调用，不启动另一位 Reviewer。
-在安装态项目根使用以下只读入口：
+## Native structured handoff
+
+When the current host's available, authorized QA invocation supports a schema, first obtain this pack's
+current QA handoff JSON Schema with `qa_handoff_cli.py schema` and pass it to that same native QA call.
+Do not add a model call merely to convert existing prose into JSON or start another Reviewer. Use these
+read-only entries from the installed project root:
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py schema
@@ -139,26 +145,29 @@ bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handof
   --task-pack "${qa_task_pack:?set current complete QA task pack}"
 ```
 
-`extract` 读取 Codex 保存的最终 QA 对象，或从 Claude／AGY 终端成功 envelope 提取
-结构化对象后，直接复用原 `validate` 的范围、
-review_method、规则覆盖与证据语义校验；成功只证明这些机械合同满足，PM／QA 仍须
-核对真实审查执行、只读边界、固定 scope、model／effort 与证据，才能接受 QA PASS。
-失败、取消、半截流、非对象或无结构化结果不能伪装成有效 handoff。
+`extract` reads Codex's saved final QA object, or extracts a structured object from a successful Claude/AGY
+terminal envelope, then directly reuses existing `validate` checks for scope, review_method, rule coverage
+and evidence semantics. Success proves only those mechanical contracts. PM/QA still check actual review
+execution, read-only boundaries, pinned scope, model/effort and evidence before accepting QA PASS. Failure,
+cancellation, partial streams, non-objects or absent structured results must not masquerade as valid handoffs.
 
-- Codex 使用当前版本支持的 `exec --output-schema <schema-file>`；`codex review`
-  没有该旗标，不给 review 拼接它，也不为结构化输出绕过原 review_method 顺序。
-  用 `--output-last-message <native-result.json>` 保存最终 QA JSON 后再 extract，
-  不将 exec 事件流当作最终消息；还须核对该原生调用确实成功完成。
-- Claude 使用已支持且获授权的 `-p --json-schema <schema-json>`，成功终端 result
-  envelope 仍须符合 type／subtype／is_error 与 structured_output 合同。
-- AGY 使用已支持且获授权的 `--json-schema <schema-json>`，终端结果必须有
-  `conversation_id`、`status: SUCCESS` 和 `structured_output`；`response`、`usage`
-  可缺省，存在时校验结构和一致性，用量可见性不成为 QA 新门禁。
+- Codex uses the current version's supported `exec --output-schema <schema-file>`. `codex review` lacks
+  that flag; do not append it to review or bypass existing review_method order for structured output.
+  Save final QA JSON with `--output-last-message <native-result.json>` before extract. Do not treat the
+  exec event stream as a final message; also verify successful completion of the native call.
+- Claude uses supported, authorized `-p --json-schema <schema-json>`. A successful terminal result
+  envelope must still meet type／subtype／is_error and structured_output contracts.
+- AGY uses supported, authorized `--json-schema <schema-json>`. Terminal results require
+  `conversation_id`, `status: SUCCESS` and `structured_output`. `response`/`usage` may be absent;
+  validate structure/consistency when present. Usage visibility is not a new QA gate.
 
-普通 JSON handoff 使用 `validate --input <handoff.json> --task-pack <current-qa-task-pack.json>`。Task Pack 继续通过
-`task_graph_cli.py task` 导出，不套 QA schema。原生命令须核对当前 help 和实际会话能力，
-不能由静态文档或成功提取推断模型运行成功。AGY 的 diff／Artifact 人工批准是人工审阅，
-不能冒充 `host-native-review` 或独立 AI QA；原审批、读写边界与 method 顺序保持不变。
+Ordinary JSON handoffs use `validate --input <handoff.json> --task-pack <current-qa-task-pack.json>`.
+Task Packs still export through `task_graph_cli.py task`, without the QA schema. Check native commands
+against current help and actual session capabilities; static documentation/successful extraction do not
+prove successful model execution. AGY diff/Artifact human approval is human review, not `host-native-review`
+or independent AI QA. Existing approval, read/write boundaries and method order remain unchanged.
 
-文档验收核对同主题 plans 的本次目标／执行阶段与真实已验收版本分别成立；PROJECT 只链接明确基线。
-completed、HTML存在或清单非空不产生批准或交付；再次迭代与取消时保留旧基线，无依据不得自动索引旧历史稿。
+Document acceptance checks current goals/execution stage separately from the topic plan's genuinely accepted
+version. PROJECT links only explicit baselines. completed, HTML existence or non-empty lists do not create
+approval/delivery. Preserve old baselines during iteration/cancellation; do not automatically index old
+historical drafts without grounds.

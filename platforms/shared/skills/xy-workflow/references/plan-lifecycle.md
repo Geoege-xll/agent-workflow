@@ -14,24 +14,29 @@ applicable project constraints and permission boundaries still apply.
   current plan under adapter-resolved `docs.plans` before the first design or implementation dispatch.
   xy-plan still only drafts; PM owns persistence. Do not wait for visual approval to save the plan.
 
-Full 正式审阅用 HTML：批准前由 PM 在当前请求 scratch 形成唯一 Markdown 草案并渲染；
-批准后才保存 `docs.plans/<name>.md` 并生成同名 `.html`。Markdown 是唯一编辑权威，
-变动后在同路径重渲染；具体命令、草案链接基准与失败保护见
-[需求 HTML 交付](../../xy-plan/references/requirement-html.md)。Light 按已有保存/复杂度/用户
-要求选用，不因生成 HTML 升级流程。页面、勾选或新鲜度检查均不产生批准。
+Formal Full review uses HTML. Before approval, PM creates/renders the single Markdown draft in the current
+request scratch. Only after approval does PM save `docs.plans/<name>.md` and generate same-name `.html`.
+Markdown is the sole editing authority; rerender at the same path after changes. For exact commands, draft-link
+basis and failure protection, see [requirements HTML delivery](../../xy-plan/references/requirement-html.md).
+Light selects this by existing save needs, complexity or user requirements; generating HTML does not upgrade
+the workflow. Pages, checkbox selections and freshness checks do not create approval.
 
-一个稳定主题只维护一份生命周期 Markdown 及其派生 HTML。再次迭代、视觉调整、实施分工或
-QA 返工原地更新，不创建版本副本；独立主题才各有文档。Light 是否保存仍按实际必要性，
-旧主题曾用 Full 不会令本次无关小修自动继承 Full。
+Maintain one lifecycle Markdown and derived HTML per stable topic. Update in place for further iterations,
+visual adjustments, implementation assignments or QA rework, without version copies. Independent topics
+have separate documents. Light persistence still depends on actual need; an old topic's Full level does
+not automatically make an unrelated small correction Full.
 
-标准模板在 `templates/docs/PLAN.md`，使用普通 Markdown 元信息（不使用 frontmatter）：
-`主题 ID`、`阶段`、`模块`、`任务等级`、`已验收版本`。阶段仅取 draft／active／paused／
-completed／cancelled／removed；任务等级为 Full／Light；未有真实基线的已验收版本为 `none`。
-Full 六节依次为“目标与范围”“需求与验收”“方案与原型关联”“当前进展与恢复入口”
-“验收结果与当前已交付行为”“批准依据与必要证据”。最后一节的“批准依据”“验收证据”
-引用真实可恢复来源，不能将模板、非空清单或阶段标签当成授权。Light 无基线恢复稿按必要性简化，
-不额外建文档或确认；被 PROJECT 当作当前基线引用时仍须明确版本、已交付行为和既有证据。
-只在保存实际主题时创建目录；安装不制造需求页、空索引或 plans／features 占位目录。
+The standard template is `templates/docs/PLAN.md`, using ordinary Markdown metadata rather than frontmatter.
+Preserve these literal protocol fields: `主题 ID`, `阶段`, `模块`, `任务等级`, `已验收版本`.
+Stage accepts only draft／active／paused／completed／cancelled／removed; task level is Full／Light;
+the accepted version is `none` when no real baseline exists. Preserve the six Full section-title literals
+in this order: `目标与范围`, `需求与验收`, `方案与原型关联`, `当前进展与恢复入口`,
+`验收结果与当前已交付行为`, `批准依据与必要证据`. The final section's literal evidence keys
+`批准依据` and `验收证据` reference real recoverable sources. Templates, non-empty lists and stage labels
+are not authorization. Simplify a baseline-free Light recovery draft as needed without extra documents or
+confirmation. If PROJECT links it as a current baseline, it must still state the version, delivered behavior
+and existing evidence. Create directories only when saving an actual topic. Installation creates no
+requirements page, empty index or placeholder plans／features directories.
 
 Discussion alone requires neither a saved document nor a plan. When persistence is needed, keep
 necessary questions and conclusions in the relevant existing plan or authorized requirement/proposal
@@ -46,16 +51,20 @@ unverified work; remaining work/blockers and next safe action. Reference applica
 instead of copying them. Persist only information needed to restore the approved work, not full logs,
 conversation transcripts, every command or another serialized DAG.
 
-当前计划中的恢复状态和已有启动／交接简报都原地更新：保留当前批准范围、必要已完成
-基线、未验证内容、剩余工作、阻塞及下一步，替换已被新事实取代的状态；不要每完成一批
-就追加一段完成明细，使启动简报成为累计历史。必要完成基线可简述并链接现有计划、
-功能真相与完整证据，读者无需遍历旧批次才能确认下一步；不另建简报副本或归档树，
-也不设硬行数／token 门槛。计划仍由 PM 独占维护，简报不成为第二份任务状态或功能规范。
+Update recovery state in the current plan and existing start/handoff briefs in place. Retain current
+approved scope, necessary completed baselines, unverified content, remaining work, blockers and next steps,
+replacing state superseded by new facts. Do not append completion details for every batch and turn a start
+brief into cumulative history. Briefly describe necessary completed baselines with links to existing plans,
+feature truth and complete evidence, so readers find the next action without traversing old batches. Add
+no brief copies/archive tree or hard line/token threshold. PM remains the sole plan writer; a brief is not
+a second task-state source or feature standard.
 
-收敛前先确认完整日志、原始批准及唯一历史能从现有证据落点或真实版本历史恢复，并
-修复受影响引用；摘要不能替代完整证据。Git 不保护未提交／未跟踪内容或非 Git 原始资料。
-不能安全移交或确认可恢复时保留原文，明确标出其历史边界与当前恢复入口，不删除用户
-文档或唯一历史，也不为整理新增 QA 报告、账本或确认阶段。
+Before consolidation, confirm complete logs, original approvals and sole history are recoverable from existing
+evidence locations or actual version history, and repair affected references. Summaries cannot replace complete
+evidence. Git does not protect uncommitted/untracked content or original non-Git material. When safe transfer/
+recoverability cannot be established, preserve originals and explicitly mark their historical boundary and
+current recovery entry. Do not delete user documents/sole history or add QA reports, ledgers or confirmation
+stages for organization.
 
 Record the requirement confirmation source and scope, prototype choice, and any still-pending UI
 decisions. When a concrete prototype is approved, retain its page/scope, approval source and dependency
@@ -67,9 +76,10 @@ PM is the sole plan writer. Workers and QA return scoped results/evidence; they 
 plan. Update on meaningful decisions, completed deliverables, blockers, rework or pause/handoff, not
 every tool call. Preserve an accurate checkpoint during long work; do not rely solely on a final save
 that may never run. File persistence does not imply permission to commit, publish, or execute it.
-设计 Agent 在原交接返回 REQ 编号到具体原型页/实际状态锚点的覆盖，PM 写回这份原稿并
-重渲染；不另建映射表文件或原型 QA。纯进度/链接/呈现变化不自动重开需求批准，
-HTML 字节新鲜度、requirements_fingerprint 和原型依赖指纹分别保持原职责。
+The design Agent returns coverage from REQ IDs to concrete prototype pages/actual state anchors in the original
+handoff. PM writes it into this source and rerenders, without a separate mapping file or prototype QA. Progress,
+link or presentation-only changes do not automatically reopen requirements approval. HTML byte freshness,
+requirements_fingerprint and prototype dependency fingerprints retain their separate responsibilities.
 
 ## Visual iteration and task replacement
 
@@ -126,7 +136,7 @@ its non-current scope in the authorized current basis. Physical cleanup is not a
 when the replacement basis is clear; add no cleanup approval gate. If the current execution basis or
 necessary authority is still unresolved, return only that affected work to existing clarification.
 Pending discussion never silently withdraws an approved baseline. Planned goals remain intended work;
-已验收基线／PROJECT 仍只通过 the existing post-QA projection below.
+accepted baselines/PROJECT still change only through the existing post-QA projection below.
 
 ### Production-only cutover
 
@@ -172,22 +182,30 @@ Treat recorded completion and approval as evidence to verify, not as self-execut
 Reuse completed work whose scope/artifacts/evidence remain valid; recheck or rework only affected or
 uncertain parts. Do not replay the old plan from its first step, restart live workers, reconstruct stale
 locks as active, or mark prior work failed just because its Agent session is no longer active.
-实施者、分级及例外来源按 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`
-核对；只有同任务连续实现或短返工可沿用可用原实例和有效证据，独立任务新实例／ID。
-压缩摘要不创造PM实施授权或改变原等级，不复制PM／兄弟完整会话。原生结束／退役、
-取消／失效边界按WORKFLOW实例生命周期及当前宿主细则，保留已有成果与必要完整日志。
+Check implementer, classification and exception authority against
+`.agent-workflow/product/WORKFLOW.md#implementation-ownership`. Only continuous implementation or short rework
+of the same task may reuse the available original instance and valid evidence; independent tasks need new
+instances/IDs. Compacted summaries do not authorize PM implementation or change the original level. Do not
+copy full PM/sibling conversations. Native closure/retirement and cancellation/invalidation follow WORKFLOW's
+instance lifecycle and current-host details, preserving existing results and necessary complete logs.
 Restore the current remaining graph from verified facts; the transient CLI snapshot is not the only
 carrier of outstanding decisions or work. Report the smallest missing approval or fact when needed.
 
 ## Closeout and document boundaries
 
-- PROJECT 是当前概况与已验收基线目录；同主题只有一份 plans 原稿，不按修订追加索引。
-- 正在迭代时更新前四节与当前阶段，保留第五节上次已验收行为、已验收版本和对应证据。
-  active／paused／cancelled 均不能把本次新目标冒充交付；`completed` 本身不授信。
-- Full 在适用 QA PASS 后、Light 在实际必要验证接收后才替换基线；无事实变化不制造文档投影。
-  只有明确已验收版本和真实依据的稿件可列入 PROJECT；验收失败保留原基线。
-- 已验收删除在同稿标记 removed，保留必要日期、原因、替代与历史，移除当前索引，不改名或另写 feature／ADR。
-- 未索引旧执行稿保持历史边界；不按 completed 自动索引，不批改历史，不默认重放旧任务。
-  同名 HTML 是原稿投影，不能成为第二份规范或批准来源。
-- 旧 `docs.features` 和 FEATURE 模板不在新运行时合同中；已有项目先按 README 的显式单次迁移路径
-  保全正文、批准／证据和索引引用，冲突或不明主题关系先停。标准与记忆仍各按实际变化处理。
+- PROJECT is the current overview and accepted-baseline index. Each topic has one plans source; do not append
+  index entries per revision.
+- During iteration, update the first four sections/current stage and preserve the fifth section's last accepted
+  behavior, accepted version and corresponding evidence. active／paused／cancelled must not present new goals
+  as delivery; `completed` alone establishes no trust.
+- Replace baselines only after applicable QA PASS for Full or acceptance of actually necessary verification for
+  Light. Without factual changes, create no projection. PROJECT may list only sources with an explicit accepted
+  version and real grounds; failed acceptance preserves the original baseline.
+- Mark accepted deletion as removed in the same source, retaining necessary dates, reason, replacement and
+  history. Remove its current index entry; do not rename it or create a feature/ADR document.
+- Unindexed old execution drafts retain historical boundaries. Do not auto-index by completed, bulk-edit
+  history or replay old tasks by default. Same-name HTML projects the source; it is not a second standard or
+  approval source.
+- Old `docs.features` and FEATURE templates are outside the new runtime contract. Existing projects first
+  follow README's explicit one-time migration to preserve text, approvals/evidence and index references;
+  stop first for conflicts or unclear topic relationships. Standards and memory still follow actual changes.

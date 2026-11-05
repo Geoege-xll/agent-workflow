@@ -19,27 +19,30 @@ plan_state: draft
 ## Boundaries
 
 - Work only after `grill_result.readiness: ready_for_planning` for a Full request.
-  Light不因本Skill可用而强制计划／DAG；2.0草案与task只表达当前Full授权范围。
+  This Skill's availability does not force a plan/DAG on Light; 2.0 drafts/tasks express only the currently authorized Full scope.
 - Produce a draft for PM review; the draft is not approval or execution authorization.
-- This Skill must not edit files, dispatch Agents, update PROJECT/plans 已验收基线, or request approval.
+- This Skill must not edit files, dispatch Agents, update accepted PROJECT/plans baselines, or request approval.
 - Do not create worktrees, commits, implementation branches, nested Agents, or another workflow.
 - Identify controlled-document candidates, but leave the post-QA projection decision to the PM.
 - This draft Skill does not persist files. After requirements approval PM saves Full plans under
   adapter-resolved `docs.plans` before first dispatch, following
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
-- Full 需求正式审阅使用单一 Markdown 的 HTML 投影；PM 负责批准前 scratch 草案及批准后
-  同名 `.md`/`.html` 保存，详见 [需求 HTML 交付](references/requirement-html.md)。本 Skill
-  仍只返回草案；用稳定 REQ 编号预留具体原型页/状态覆盖，不能把页面状态当作批准。
+- Formal Full requirements review uses an HTML projection of one Markdown source. PM owns the pre-approval
+  scratch draft and post-approval same-name `.md`/`.html` persistence; see
+  [requirements HTML delivery](references/requirement-html.md). This Skill still returns only a draft.
+  Reserve concrete prototype page/state coverage with stable REQ IDs; page state is not approval.
 
 ## Drafting procedure
 
 1. Map the affected modules, exact owned paths, existing interfaces, repository verification
    commands, and controlled-document reads before drawing task boundaries.
-   一次解析配置的 docs.standards/docs.standards_root；为每位Writer选择适用内置来源，
-   再补项目特有叶并绑定当前SHA、稳定规则ID和拥有路径。项目索引存在时绑定真实SHA；
-   无项目叶且索引物理缺失时保留配置路径，以null索引指纹记录，不创建空文件。
-   non_ui用工程，production_ui用工程/设计，xy-uiux + design_ui用设计；不预载全部规范树。
-   上游保护根、允许扩展和例外依据必须来自实际项目规范，不能由通用来源或仓库形状推断。
+   Resolve configured docs.standards/docs.standards_root once. Select applicable built-in sources for each Writer,
+   then add project-specific leaves, binding current SHA, stable rule IDs and owned paths. Bind the real SHA
+   when the project index exists. With no project leaves and a physically missing index, retain configured
+   paths and record a null index fingerprint without creating an empty file. Use engineering for non_ui,
+   engineering/design for production_ui, and design for xy-uiux + design_ui; do not preload the whole tree.
+   Protected upstream roots, allowed extensions and exception grounds must come from actual project standards,
+   not general sources or repository shape.
    For standards maintenance, follow WORKFLOW's `Standards document granularity and maintenance`:
    locate the existing topic and actual rule delta before proposing a new leaf; do not attach
    automatic documentation cleanup or a new rule document to every implementation task.

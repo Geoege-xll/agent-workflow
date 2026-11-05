@@ -1,41 +1,47 @@
 ---
 name: xy-code-standards
-description: "在编写、重构或只读审查代码时，结合内置工程规则、项目特有规范、实际调用方和现有合同，选择最小完整改动或提出有证据的发现；用于执行质量判断，不替代项目规范、任务授权或验证流程。"
+description: "When writing, refactoring or reviewing code read-only, combine built-in engineering rules, project-specific standards, actual callers and existing contracts to choose the smallest complete change or report evidence-backed findings; supports quality judgment without replacing project standards, task authorization or verification procedures."
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-code-standards
 
-以当前用户授权、已有 Task Pack 和适用规则为依据。通用工程正文统一在
-[内置工程规则](references/rules.md)，按实际任务读取适用条款；项目只补充已批准的特有规范，
-项目索引存在时才读取。当前来源、规则 ID 与指纹都须完整绑定；本 Skill 不增加计划、派发、
-原型、审批、QA 或记录阶段。
+Use current user authorization, the existing Task Pack and applicable rules as the basis. The single source
+of general engineering text is the [built-in engineering rules](references/rules.md); read applicable clauses
+for the actual task. Projects add only approved specific standards, and read a project index only when it exists.
+Fully bind current sources, rule IDs and fingerprints. This Skill adds no planning, dispatch, prototype,
+approval, QA or record stage.
 
 <!-- workflow-contract: references/rules.md -->
 
-## 从事实选择实现
+## Choose implementation from facts
 
-- 沿实际调用链确认行为目标、入口、数据或状态所有者及消费者，结合附近代码、测试和
-  可执行配置区分事实、假设与缺口。先核实可查事实；影响合同、权限或副作用的未决取舍
-  交回原决策者，不把观察到的旧实现自动当作升级目标。
-- 复用前核对语义、输入输出、失败方式和依赖方向；抽取前说明真实共同职责、变化点或
-  隔离收益。语法相似、减少行数或预想未来扩展不足以支持合并或增加层次。
-- 比较方案时说明改变的行为、保留的合同及受影响消费者，选择完成当前需求的最小完整
-  变更。清理本次改动造成的冗余，其他问题按原任务边界反馈；用适用规范要求的注释说明
-  非显然取舍，并随行为更新。
+- Follow actual call chains to establish the behavioral goal, entry points, data/state owners and consumers.
+  Use nearby code, tests and executable configuration to distinguish facts, assumptions and gaps. Verify
+  discoverable facts first; return unresolved tradeoffs affecting contracts, permissions or side effects to
+  the original decision-maker. Do not automatically treat an observed old implementation as an upgrade target.
+- Before reuse, check semantics, inputs/outputs, failure modes and dependency direction. Before extraction,
+  identify the actual shared responsibility, variation point or isolation benefit. Similar syntax, fewer lines
+  or anticipated future extension does not justify consolidation or added layers.
+- Compare approaches by their changed behavior, preserved contracts and affected consumers; choose the smallest
+  complete change that meets current requirements. Remove redundancy caused by this change and report other
+  issues within the original task boundary. Explain non-obvious tradeoffs with comments required by applicable
+  standards and update those comments with behavior.
 
-## 只读审查与证据
+## Read-only review and evidence
 
-只读审查不写代码。发现应包含具体位置、触发条件、实际影响和支持证据；区分已证实
-缺陷、证据缺口及设计偏好，不能仅凭命名、行数或缺少某平台证据断言行为错误。
-实现与审查沿用既有验证合同：复用仍有效的覆盖，只补实际缺口，不把静态检查或替身
-结果扩写为真实消费者、其他平台或产品质量已经通过；实现交付仍按适用的
-`xy-build-verify` 分支处理。
+Read-only review does not write code. Findings include a concrete location, trigger, actual impact and supporting
+evidence. Distinguish proven defects, evidence gaps and design preferences; naming, line counts or missing evidence
+for a platform alone do not establish incorrect behavior. Implementation/review retain the existing verification
+contract: reuse still-valid coverage and fill only real gaps. Do not expand static checks or test-double results
+into claims about real consumers, other platforms or product quality. Implementation delivery still follows
+the applicable `xy-build-verify` branch.
 
-## 按实际边界读取
+## Read by actual boundary
 
-- 变更或审查涉及外部输入、可变状态、资源生命周期或持久发布时，只读
-  [边界推理](references/boundary-reasoning.md) 中相关部分；不为普通局部修改加载全部专项。
-- 维护本 Skill、核对归属或追溯取舍时再读
-  [来源与采用边界](references/sources.md)，普通实现和审查不预载。
+- When a change/review involves external input, mutable state, resource lifecycles or durable publication,
+  read only relevant parts of [boundary reasoning](references/boundary-reasoning.md); do not load every
+  specialist topic for an ordinary local change.
+- Read [sources and adoption boundaries](references/sources.md) only when maintaining this Skill,
+  checking attribution or tracing tradeoffs; do not preload it for ordinary implementation/review.

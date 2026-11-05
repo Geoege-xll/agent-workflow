@@ -294,7 +294,7 @@ TASK5_SHARED_SKILL_MATRIX = {
         "stable concrete page references",
         "approval remains in workflow task state",
         "prototype_refs:",
-        "PROJECT 与主题稿的已验收行为节",
+        "PROJECT and a topic source's accepted-behavior section",
     ),
     "platforms/shared/skills/xy-qa-review/SKILL.md": (
         "Page design and interaction contract",
@@ -1953,11 +1953,11 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
 
         workflow = re.sub(r"\s+", " ", self._text("product/WORKFLOW.md"))
         self.assertIn(
-            "`change_type: removed` 在同一原稿标记 `removed`",
+            "For `change_type: removed`, mark the same source `removed`",
             workflow,
         )
         self.assertIn(
-            "QA 失败保留原已验收事实。",
+            "QA failure preserves original accepted facts.",
             workflow,
         )
 
@@ -2268,10 +2268,10 @@ class ControlledDocumentAccessContractTest(unittest.TestCase):
             "`docs.project` (`PROJECT.md`) is needed",
             "Read design standards only for UI work",
             "shared architecture details or plans only for a relevant missing fact",
-            "每位生产代码 Writer 的基线是内置 xy-code-standards/references/rules.md",
-            "xy-uiux + design_ui 只选适用设计来源",
-            "项目索引存在时绑定真实SHA",
-            "无项目叶且索引缺失时不生成空索引",
+            "Each production-code Writer's baseline is built-in xy-code-standards/references/rules.md",
+            "xy-uiux + design_ui selects only applicable design sources",
+            "Bind the real SHA when the project index exists",
+            "With no project leaves and a missing index, create no empty index",
             "standards-conformance",
             "`skip` means do not open the body",
         ):
@@ -2295,16 +2295,16 @@ class ControlledDocumentAccessContractTest(unittest.TestCase):
             normalized = " ".join(body.split())
             with self.subTest(role=role):
                 self.assertIn("standards-conformance", body)
-                self.assertIn("当前适用内置来源", normalized)
-                self.assertIn("适用规则ID和applies_to覆盖精确拥有路径", normalized)
-                self.assertIn("缺失、skip、过期或覆盖不足交PM", normalized)
+                self.assertIn("currently applicable built-in sources", normalized)
+                self.assertIn("applicable rule IDs, and applies_to", normalized)
+                self.assertIn("return missing, skip, stale, or insufficient coverage to the PM", normalized)
 
     def test_roles_consume_only_the_pm_access_plan(self) -> None:
         for path in sorted((PACK / "roles").glob("xy-*.md")):
             body = path.read_text(encoding="utf-8")
             with self.subTest(role=path.stem):
                 self.assertIn("controlled_document_access", body)
-                self.assertIn("非skip", body)
+                self.assertIn("non-skip", body)
         active = "\n".join(
             path.read_text(encoding="utf-8")
             for path in (
@@ -5454,15 +5454,15 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             timeout=90,
         )
 
-    def test_chinese_skill_sources_keep_native_machine_identifiers(self) -> None:
+    def test_english_skill_sources_keep_native_machine_identifiers(self) -> None:
         from lib.shared_core_skills import parse_managed_skill
 
-        # 正文语言服从用户；稳定名称和受管 frontmatter 继续交给真实解析器验证。
+        # 发行模型指令使用英文；稳定名称和受管 frontmatter 仍由真实解析器验证。
         for name in ("xy-code-standards", "xy-ui-design"):
             path = PACK / "platforms/shared/skills" / name / "SKILL.md"
             metadata = parse_managed_skill(path, name)
             self.assertEqual(name, metadata["name"])
-            self.assertRegex(metadata["description"], r"[\u4e00-\u9fff]")
+            self.assertNotRegex(metadata["description"], r"[\u4e00-\u9fff]")
 
     def test_shared_pm_bootstrap_keeps_detailed_procedures_in_skills(self) -> None:
         body = (PACK / "platforms/shared/AGENTS.product.tpl").read_text(
@@ -5477,7 +5477,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             self.assertNotIn(skill_only_heading, body)
         self.assertNotIn("{{SCOPE_TABLE}}", body)
 
-    def test_generated_chinese_instructions_preserve_native_entries(self) -> None:
+    def test_generated_english_instructions_preserve_native_entries(self) -> None:
         temporary, project, pack = self.install_all()
         self.addCleanup(temporary.cleanup)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
@@ -5577,7 +5577,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         for relative in ("AGENTS.md",):
             body = (project / relative).read_text(encoding="utf-8")
             self.assertIn(
-                "内部YAML／DAG不直接输出给用户",
+                "Keep internal YAML/DAG out of user output",
                 body,
             )
 
@@ -5750,7 +5750,8 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             "After Full coverage is complete, activate `xy-plan`",
             "The PM then gives the concise natural-language approval brief and requests confirmation",
             "explicit affirmative reply records `requirements_approved` internally",
-            "task_graph_cli.py validate",
+            # 中央桥示例也包含 validate；用实际图变量锁定批准后的派发校验阶段。
+            'task_graph_cli.py validate --input "${workflow_graph',
             "Dispatch all currently ready independent tasks",
             "Re-evaluate downstream readiness after each completion",
             "## Default business confirmations and exceptions",
@@ -5762,7 +5763,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             # 使用应用动作作为锚点，避免 `str.index` 错把前置决定当成提前写文档。
             "apply the frozen",
             "perform the PM commit assessment above",
-            "最后报告用户",
+            "Finally report to the user",
         )
         for host, path in workflows.items():
             with self.subTest(host=host):
@@ -5856,6 +5857,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                     )
                 )
                 self.assertEqual(role, agent["name"])
+                self.assertNotRegex(agent["developer_instructions"], r"[\u4e00-\u9fff]")
                 for boundary in task_boundaries:
                     self.assertIn(boundary, agent["developer_instructions"])
         codex_qa = tomllib.loads(
@@ -5869,6 +5871,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 body = (project / ".claude/agents" / f"{role}.md").read_text(
                     encoding="utf-8"
                 )
+                self.assertNotRegex(body, r"[\u4e00-\u9fff]")
                 frontmatter = body.split("---", 2)[1]
                 self.assertIn(f"name: {role}", frontmatter)
                 self.assertIn("Skill", frontmatter)
@@ -5891,6 +5894,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 body = (project / ".agents/agents" / f"{role}.md").read_text(
                     encoding="utf-8"
                 )
+                self.assertNotRegex(body, r"[\u4e00-\u9fff]")
                 frontmatter = body.split("---", 2)[1]
                 self.assertIn(f"name: {role}", frontmatter)
                 self.assertIn("mainAgent: false", frontmatter)
@@ -6062,9 +6066,9 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         for phrase in (
             "requirements_approved",
             "xy-build-verify",
-            "集成只读QA保留",
-            "除上文已明确的普通低风险Light文案外",
-            "Light文案使用相同当前已解析权威与工程／设计约束",
+            "integrated read-only QA",
+            "Except for the ordinary low-risk Light copy explicitly defined above",
+            "Light copy uses the same current resolved authority and engineering/design constraints",
         ):
             with self.subTest(required_full_evidence=phrase):
                 self.assertIn(phrase, active_contract)
@@ -6631,10 +6635,10 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         )
 
         # 根入口承担常驻边界和路由；详细规则由真实引用审计，不再强制全量重复。
-        for anchor in ("PM负责协调、计划、交接", "requirements_approved", "visual_approved",
-                       "UI-Conformance", "唯一只读请求QA", "schema_version:2",
+        for anchor in ("PM owns coordination, plans, handoffs", "requirements_approved", "visual_approved",
+                       "UI-Conformance", "one read-only request QA", "schema_version:2",
                        "instance_policy:fresh", "context_policy:handoff_only",
-                       "validate／extract必须传当前--task-pack"):
+                       "validate/extract must receive current"):
             self.assertIn(anchor, bootstrap)
         contract = read_contract(PACK / "platforms/shared/AGENTS.product.tpl")
         for anchor in ("frozen approved requirements and acceptance criteria",

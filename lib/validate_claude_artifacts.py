@@ -627,7 +627,7 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
             "`internal-xy-qa-procedure`",
             "unrelated project work.",
             "After QA PASS, activate `xy-project-memory` in closeout mode",
-            "最后报告用户",
+            "Finally report to the user",
         ) + STRICT_MEMORY_FIELDS
         for phrase in required:
             if phrase not in body:
@@ -643,7 +643,7 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
                 errors.append(message)
         qa = body.find("After QA PASS")
         closeout = body.find("xy-project-memory", qa + 1)
-        report = body.find("最后报告用户", closeout + 1)
+        report = body.find("Finally report to the user", closeout + 1)
         if min(qa, closeout, report) < 0 or not qa < closeout < report:
             errors.append("xy-workflow must order QA PASS -> memory closeout -> user report")
 

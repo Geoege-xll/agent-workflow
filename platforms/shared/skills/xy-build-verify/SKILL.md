@@ -1,26 +1,29 @@
 ---
 name: xy-build-verify
-description: "验证Light／Full当前交付的构建、可运行结果与相关测试，按实际风险交接真实证据。"
+description: "Verify the build, runnable results and relevant tests for the current Light／Full delivery, handing off real evidence according to actual risk."
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-build-verify
 
-Light／Full 都执行与实际交付类型相符的最小充分验证。生产代码保留受影响目标构建／
-编译成功和最小启动／冒烟或关键入口证据；文档与静态原型按各自类型验证。Light
-默认原生实施者，使用当前自包含任务包；加载本 Skill 不强制 Full 计划、DAG 或独立 QA。
-完成后由 PM 依据实际风险评估独立审计、文档和记忆。Full 及选定的必需独立 QA 不得省略。
-普通文案使用 WORKFLOW 的 `Light UI copy` 消费者与资源检查，不能按后缀豁免实际构建输入。
+Both Light／Full use minimum sufficient verification appropriate to the actual delivery type. Production
+code retains evidence of a successful affected-target build/compile and minimum startup/smoke or key entry;
+verify documentation/static prototypes by type. Light defaults to a native implementer with the current
+self-contained task pack; loading this Skill does not force a Full plan, DAG or independent QA. At handoff,
+PM assesses independent audit, documentation and memory by actual risk. Full and selected mandatory
+independent QA must not be omitted. Ordinary copy uses WORKFLOW's `Light UI copy` consumer/resource checks;
+file suffixes do not exempt actual build inputs.
 
-验证前读取 [verification scope](references/verification-scope.md)。
+Before verification, read [verification scope](references/verification-scope.md).
 Select proportionate commands from the task pack, adapter and repository evidence; discovered
 commands are candidates, not a mandatory full-suite list. Preserve required checks, run selected
 commands for real, and record every exit code. Reuse valid evidence and stop when coverage is
 sufficient; expand or repeat only for a specific gap identified by the linked policy.
-执行前确定最小充分范围；仓库级全量测试必须有实际覆盖需要或显式要求，不能仅因任务
-进入交付而执行。生产目标的构建／编译与可运行证据是必需项；覆盖充分且证据仍有效
-即交接，不再追加无依据的重复构建／回归。
+Determine the minimum sufficient scope before execution. Repository-wide tests require an actual coverage
+need or explicit requirement, not merely entry into delivery. Production-target build/compile and runnable
+evidence are mandatory. Hand off when coverage is sufficient and evidence remains valid; do not append
+unsupported repeated builds/regressions.
 
 <!-- workflow-contract: references/verification-scope.md -->
 
@@ -41,17 +44,18 @@ Do not paste a long raw log into the PM handoff. The full reference must be reso
 by QA. If a command fails, include the exit code, a short failure excerpt, the full-log
 reference, and `Status: BLOCKED`. After two failed repair attempts, stop and report to
 the PM. Never invent, paraphrase away, or claim unexecuted validation.
-现有 Validation 中说明本次新增覆盖、失效证据／具体风险，或继续失败返工的新定位、
-可检验假设／修复进展及预期证据；仍未验证的相关范围保持明确。无进展时按上述策略
-提前停止当前重复失败路径并交 PM，不重置既有上限，也不视为通过。没有缺口不新增
-验证报告或测试文件；局部通过只能支持该范围，不写成“全部测试通过”。
+In existing Validation, explain added coverage, invalidated evidence/specific risk, or the new diagnosis,
+testable hypothesis/repair progress and expected evidence for continued failed rework. Keep relevant
+unverified scope explicit. Without progress, stop the current repeated failing path early and return it to
+PM under the policy above; do not reset existing limits or treat stopping as success. Without a gap, add
+no verification report/test file. A scoped pass supports only that scope, not a claim that all tests passed.
 
 `BUILD_VERIFIED` is evidence, not a QA result or user-facing completion state. For Full work, preserve the order
 `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`;
 this Skill creates no QA report, design artifact,
-approval record, or metadata file. Light 按实际交接评估收口，未审计不得称 QA PASS。
-PM 接收证据并完成必要反馈窗口后，按 WORKFLOW 的实例生命周期结束或退役；完整日志
-须保留可读引用，不能因结束原生实例失去唯一证据。
+approval record, or metadata file. Light assesses closeout at the actual handoff; an unaudited result is not QA PASS.
+After PM accepts evidence and the necessary feedback window ends, close or retire the instance under WORKFLOW's
+instance lifecycle. Retain readable full-log references; ending a native instance must not lose the sole evidence.
 
 For isolated tasks, hand evidence back with the exact worktree/base/checkpoint identity; only PM
 creates scoped local transport checkpoints. Follow `xy-workflow/references/worktree-delivery.md` for

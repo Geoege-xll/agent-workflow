@@ -546,11 +546,19 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
                 if after_enabled:
                     base = Node.from_value(legacy["entry_baselines"][relative]) if legacy and relative in legacy["entry_baselines"] else current
                     after = Node("file", merge_central_block(base.payload, after.payload), current.mode or 0o644)
-                elif old and current.same_content(Node.from_value(old["expected"])):
-                    after = Node.from_value(old["baseline"])
                 else:
-                    remaining = merge_central_block(current.payload, b"")
-                    after = Node("file", remaining, current.mode or 0o644) if remaining else Node()
+                    baseline = Node.from_value(old["baseline"]) if old else Node()
+                    # repair/use 会把块外新增用户内容写进最新 expected，因此整文件等于
+                    # expected 只能证明最近生成结果，不能证明可用最初 baseline 覆盖。
+                    # 只在“最初用户字节 + 当前已归属块”能精确重建现文件时还原原字节/
+                    # 缺失状态；已有文件沿用当前权限，避免撤销用户后续 chmod。
+                    rebuilt = Node("file", merge_central_block(baseline.payload, central_block(current.payload) or b""), current.mode)
+                    if old and current.same_content(rebuilt):
+                        after = Node("file", baseline.payload, current.mode) if baseline.kind == "file" else baseline
+                    else:
+                        # 无法证明块外仍为最初内容时，只删除已归属块，保留完整外段与模式。
+                        remaining = merge_central_block(current.payload, b"")
+                        after = Node("file", remaining, current.mode or 0o644) if remaining else Node()
             if purpose == "persistent" and current.kind != "missing":
                 continue
             if purpose not in {"persistent", "guard"}:

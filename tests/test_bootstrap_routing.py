@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import base64
+import hashlib
+import zlib
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +23,51 @@ from tests.test_unified_host_workflow import HOSTS, UnifiedHostFixture
 
 PACK = Path(__file__).resolve().parents[1]
 TARGET = BOOTSTRAP_TARGETS["platforms/codex/AGENTS.codex.tpl"]
+
+
+# 翻译前 85f84a7 的真实共享入口，仅作升级测试输入；不是模型规则来源。
+# 完整字节摘要绑定历史输入，运行测试无需 Git 历史，用户中文区块另行逐字保全。
+LEGACY_BOOTSTRAP_SHA256 = "801f43171c6ae6f04180c577560fb3afc9cee6721811e11d4644152741a5434f"
+LEGACY_BOOTSTRAP = zlib.decompress(base64.b85decode(
+    b"c-oa%TTfe88hz(ic+{7f2ZvD~tI<ekI&GsSYA%YRsv0G(ITTNfO>IMp)CUu=vB5WjZEgl*FqeebhJ=9e@#VjyXYX^)Q~tuNZ-2+e"
+    b"bBoj$@MWL9zsvg8THBww#(vTQ5!d5j=-Grn_}umRtv|bd3<e|NNXRoiGGgY>pL%G;ljqKgr)It^6S<G=Z9DqHj-|!s$;bBA(_3nl"
+    b"yT595Iu!h;=8fE%^Gx}l{uX^PGV<AHF42qGrKr`tHVdhd5x2|GV|RQ%O-4SpvtP~l{YEnr_D*V3o+q<fDC`RczWDrOJ7qM}MsLR~"
+    b"Y|8axvz9bl$5?LYx>&9lt*Xo%idb9JuW`n`yVgb7x;PN&taY~VTXf#4S483^UhqP^7;(8|aY<GV%<a196vWGvxO!{9PRabGTrP;t"
+    b"Ikpk?U0Lkd`i51n%8RaOT#Hs-WXec9JoBT<6WNRGYgtN~`4gGAk{cPbQn%`_?%kE8H&*M^XuY+TUSlIOb0#`#BALd)R%$_PU&!@K"
+    b"qq`!iMWjZXs*J3od3pW<ncACaL?Acoc694Qv?SV5alC?jP5s!^Ym|6<L!^oyqB{s(u5RE#s!!_}!SS|KYqyKy&aUEIk*LaI4UyQJ"
+    b"F%AG#ke3PT;@XPFP;vVpV{g8~Q>qh2r-zg{WXd2F6S-3^HeS=CrKmW|idak};;5U|m`5!Tf@rry;u2X>Bdy~_uKSl`UsLsaJEFER"
+    b"XokI%7S*&WSXCy9=E@uMbmjgSLf|%`LRMqZXrBQt$dA7l^$Iqi095-BxK+o3IHk*nGDrYQBmk75o_qx1U??6uDe?`Y8ASuFhHf>k"
+    b"u=4&Gb@V)HFPv~v$jDmgi1_CHG1tAZhYz``P9buqeV9M-YqOf4PoV0iic`Vy8NY^4LP7P<Jb5STTRcJ@zt0oKXTCr<;t6=QC(}W{"
+    b"&pY?UL`VxyGB~}#Kt%f`(*I`C6BrLpOgsq&{Bwkh;u&KKtpgVBk5S>f>i~yL_E1Wc6-^NJlq_7_yNeYfwkX<VqrGJ{c6gK~5V?sp"
+    b"nYhTl#YZ@kkc_J5FS+fQ47s;7z>1+Cn0xcI*VUoXDT!3eXrUXsgQW37WE)1WA~OlOLvMMWP(_)p6HH65Mf@F}vMblzF4@Q$oirbc"
+    b"R5)NXg98B2s7cHf>IlRsQ%h#+n&vfu>1ttWu^#!zjRxWL>YP8JLpL(qEo(kSWRN%&xwKvA$x@jig54NX+)kNF5?oYiF+#``uWx@z"
+    b"fXJnIiPhW1^l|B_r{$W}%Tqn{Ly=v^GOJU^EI-g@ecE#^L^Zvt+e=yWLzc0mfv15=LO2?hZOHsJH-K>w(k2|9(+>fKnJEoHc!N{Z"
+    b"9&bd{56t5;*^HU5S|C7vjH^g=vA<|8)I{tAz~w}#V>qL7D)oxdT(&oJs(49J?-@<qER~Uk)yr9x6eXHm1H+iDo_Vq&vInBOXf#_q"
+    b"bu<xKdpi!Q7xkpfyadG}Bd#npERo~>QTx>seKr6r(I)Ob3NDwcB9~$MH1##PQ$}Uw`X0(BVpj^Z=hg*^^qOm9N8@%hDmvE$qzzrx"
+    b"_N_((bjDbvHL4<J@|Bs3b6qIXd{pAZMA2SamiaCq$HUK2<5}L5N~RVVdRktfwI_Cdo+v-FB9^y_nnACz#6S~_W}Z2TTB<m&50Vr!"
+    b"gjtV@bm7i}NAhYzo}bC&F)C{`Yl<mf<5{i)rKyU<hydns=-AiayPo;{en6h<WHd<~h+85dO;g!ATqV~JMQ>fHP7&ly)7X9?noUO-"
+    b"=l8KM%PL1E5_|S$6-iqAr=nc|_ROtCYT0fH&vH!MN@7mH<H6s@zWiR4P8c9uH4%@oj0{hU+COStH56E)k3+tQ7NWrVT}01BW!Gq~"
+    b"$YzryPHhF16Wth(D=A^4W?UzY?vC}I^op6786G7w^bG*Ts<#L?^Ccj_NeV)&*2v{UvAQhcfI@{Tn}8MB<LUf2x~ANacS!qr#uw72"
+    b"Flyl^o@qFfS#6x=Hd7Y6D|R#~S6<1tJv<FTS5g6r*nV`|{kLEMbU8&-?dW1$SCMroh@Ay-GS8?4oUP-yb)2-<Ps}4yL|!AZB-Zdy"
+    b"Y!mn>K9+<JW&rL55}#eAN-0C(1Ut^F#Qv^W-kbG>XFUEv=!5Aeh03my`54+B8`BWyQnGePrl56f^y(lSQr%pGx5W+|pfZ0(GimA<"
+    b"U{QGxC3a&=Q;M2;!Wp7|t*CY9^CIRLGHTuRJCOx*Cc#0d2<Qgm0KD)ZP*#eS0AxoyYwNQ9o`8@^7_9`DmY?E=K_Ezdl)?k2iXEr4"
+    b"sbFXhPSL6mVHlk?6IP>o&MHL6W7XoQ`x3;erNk#G3kipf)NqrIzOCSMqj@Oz+Q^BIwYT!-5hNuecMfGMM`VB!pDkc#s=IGo3%Np?"
+    b"*W>piw6JGZBge@u7yl-FehnQI&AM2Ah4Dbs8MT}!oWyXV&iv>ZFpXJ094IRMwArbf7yB4m)ySxPQ(-Bl($=>`V%@5o;05%P_cv1|"
+    b"6wJ^siB=Dyq&KXhitrud_kIx>F&Z7sud0fv;-GuhL5xe}OxpGybtaoLt1WhGyoMTnbqKLQ1s>gIZ6^8LkBf4d;YZ@C!iVDnpGerq"
+    b"hVGa$Rc4XByrFXCS73E1mf8XGzzJr%h-z^IvH1_qtKzkMS0F-E0q~gq<B$J!?eKddG_&E+@T3Q0G#Vy`4UhgZ=k^B2H8&ZraZhMG"
+    b"Jo@n4+js8Vni~HTcckw^hYc|9LhMCIw{}b9>-7#&fB4Oqsjs35NMshKZrl?g#fEPSkz&KRRCJ@g$D6p_5l{G;8(RMC#;e+umS|-$"
+    b"rw(6zh`(gi^Cbjtag)gAlzxyCrtg(aVbe=*)qFA&qVvkUvn+GV(G3NcxXd^BT;@0S=?oOM<`5o+BPqF3o4$|1+|w1OkYYFEc%J^~"
+    b"qiA$%#IoEfqGe825wLPA703|87PDY`tG6v$M+o)aUCIL&9<urS_BuHy-pDaQ-4##=2|_K$&UM)IK$PHhz8|}L2NhR#KFvI8b=SmF"
+    b"%hWfS35Xcd1x$}aVHk*50^hRNget(2nzf?UxM08dO)&T@OhVL+VSrJ4JN|NjQ+AaDav5ZKe~jcuIRYAF$K9x@hn?Kt4b21sS_lgj"
+    b"&&u;XGAQa^DYp0Rjj}wch<3JrJ0_Q=AS2h(aN1OXY;k0SucH)wAD51o+gb#w`^cy1FTD{lNbrHZ)+J%dkx~z2ip5uCkMJR2j2<|X"
+    b"y}W02I%E&t<FZ21Fv8e*NRvYY7rSIH4hwGR)f=;(Ez+Uts>-8HG*jFp(%q?mkQjW*dn!b#u9F*8c7<7-oQ$F+Wnk59Zsb?ja2Z^`"
+    b"!Y&+{dYnhz^((%2yWKA5FWwFRgaGm&ud2#`B|i*R=y#FDV9kIg)KLS=%eQ7kjLSRT^7y3-pbND4<_gT<Bd4v56e4;$yg7`&7SdoZ"
+    b"!lUE9@U$o5oy1X3)lrXb)9&Xw;cdvM(A&dRvvq_rGt$|4@JXLIV8-Vj*TTM^0)rDoVn-aW(1!cF7;gkFw|g?Z&(?t1{ZkRE-EJ6l"
+    b"urFWq`O>c_hU^C!V%2v-l!B0R`%*`K;uth3;P(3_H1C|(uMH02+lIP(rtPD|;1)u6;><8#ePV0h)U;pOLQljO47ibp`)AKhd8%7t"
+    b"xlA5kNkiY3Q}fleNRitcQ92`;RZwT|`iTSkd!Q43->epz8yq(9JWTMk_YnOn&QUDWzgW?2T_ODc9p&{0!&-1AGB|<7Of=eHNxHlD"
+    b"#f-0}bcIqkBoG0G&?)f!>=P$|+#<dy%?(c!9Bw}xr&yb3-cik_!1;1QyZw(J3dd)>k<rKBJ^1#kJKsH~eGtTd^d|TmL>iv-P4{h~"
+    b"yZ<A~4K{H4$Y1^dQW*Sx>877kNRz*C{hnC|v;1}BUp?RN+W"
+))
 
 
 class BootstrapReferenceTest(unittest.TestCase):
@@ -106,6 +155,27 @@ class BootstrapInstallTest(UnifiedHostFixture, unittest.TestCase):
                 entry = (project / "AGENTS.md").read_text(encoding="utf-8")
                 self.assertIn("<!-- pack:product-begin -->", entry)
                 self.assertIn((pack / "platforms/shared/AGENTS.product.tpl").read_text().strip(), entry)
+                # 用真实旧中文受管正文模拟同一安装的升级，前后中文用户字节必须完全保留。
+                self.assertEqual(LEGACY_BOOTSTRAP_SHA256, hashlib.sha256(LEGACY_BOOTSTRAP).hexdigest())
+                begin, end = "<!-- pack:product-begin -->", "<!-- pack:product-end -->"
+                prefix, remaining = entry.split(begin, 1)
+                _managed, suffix = remaining.split(end, 1)
+                user_prefix = "# 用户规则\r\n中文沟通并保留尾部空格  \r\n" + prefix
+                user_suffix = suffix + "\r\n用户尾注不得英文化。  "
+                (project / "AGENTS.md").chmod(0o640)
+                (project / "AGENTS.md").write_bytes(
+                    (user_prefix + begin + "\n" + LEGACY_BOOTSTRAP.decode().rstrip("\n")
+                     + "\n" + end + user_suffix).encode("utf-8"))
+                updated = self.run_script(project, f"setup_{host}.sh")
+                self.assertEqual(0, updated.returncode, updated.stdout + updated.stderr)
+                refreshed = (project / "AGENTS.md").read_bytes().decode("utf-8")
+                self.assertTrue(refreshed.startswith(user_prefix))
+                self.assertTrue(refreshed.endswith(user_suffix),
+                                f"wanted_suffix={user_suffix.encode()!r}; actual_tail={refreshed.encode()[-len(user_suffix.encode())-4:]!r}")
+                self.assertEqual(0o640, (project / "AGENTS.md").stat().st_mode & 0o7777)
+                managed = refreshed.split(begin, 1)[1].split(end, 1)[0]
+                self.assertEqual((pack / "platforms/shared/AGENTS.product.tpl").read_text().strip(), managed.strip())
+                self.assertNotRegex(managed, r"[\u4e00-\u9fff]")
                 checked = self.run_script(project, f"setup_{host}.sh", "--check")
                 self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
 
@@ -134,8 +204,13 @@ class BootstrapInstallTest(UnifiedHostFixture, unittest.TestCase):
             (project / "AGENTS.md").write_text(user_rules, encoding="utf-8")
             sentinel = project / "business.txt"
             sentinel.write_bytes(b"user-owned business bytes\n")
-            result = subprocess.run(["bash", str(PACK / "install.sh"), str(project)],
-                                    text=True, capture_output=True, check=False, timeout=90)
+            # 本节点验证旧自包含安装的路由/更新，不是默认中央 CLI；沿用显式低层
+            # legacy 安装 fixture，防止把测试状态写到用户默认中央库。中央 CLI 合同另测。
+            result = subprocess.run(
+                [sys.executable, "-B", "-X", "utf8", "-c",
+                 "from pathlib import Path; from lib.install_workflow import _install; import sys; "
+                 "_install(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())", str(project), str(PACK)],
+                cwd=PACK, text=True, capture_output=True, check=False, timeout=90)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             entry = (project / "AGENTS.md").read_text(encoding="utf-8")
             self.assertTrue(entry.startswith(user_rules))

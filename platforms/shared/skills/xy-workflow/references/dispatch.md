@@ -36,10 +36,11 @@ Refresh when required native resources are missing/invalid, or installation inpu
   scaffolds are complete, refresh only the current task-pack facts; do not reinstall for a module
   path, stack or command change alone. Missing or changed installation inputs still require setup.
 
-Codex 的发现上下文按相同事实组／命令组去重，每个模块仍保留确切 root、命令 cwd 及
-证据基点映射；不同参数、用途或证据不会因表面相似被合并。需要核查某角色的完整
-映射时，可只读运行 `project_profile_cli.py context .agent-workflow . <role>`，并沿用下文
-Python 入口；它复用发现器、不执行候选命令、不写状态或刷新宿主，也不改变上述刷新条件。
+Codex discovery context deduplicates identical fact/command groups, while retaining each module's exact root,
+command cwd and evidence-base mapping. Different arguments, purposes or evidence are not merged for superficial
+similarity. To inspect a role's full mapping, run read-only `project_profile_cli.py context .agent-workflow . <role>`
+with the Python entry below. It reuses the discoverer without executing candidate commands, writing state or
+refreshing the host, and does not change the refresh conditions above.
 
 For a required refresh, run the current host's normal `setup_<host>.sh`, then `--check` once. Normal
 setup already performs its mandatory preflight; do not prepend another standalone `--preflight`
@@ -54,64 +55,72 @@ dispatch, not a new business gate, QA stage or full test run; Hooks never auto-i
 
 ## Workflow helper execution
 
-### 中央项目：每次按当前任务 pin 运行
+### Central projects: use the current task pin on every call
 
-本节是所有 Skill／角色共享的执行边界。存在 `.agent-workflow/runtime.json` 的中央项目
-不能直接执行下文旧自包含示例中的 `.agent-workflow/lib/<helper>.py`，也不能凭宿主发现
-软链选当前核心。新工作流（包括没有 init 步骤的 Light）先执行本机启用检查：
+This section is the execution boundary shared by all Skills/roles. A central project with
+`.agent-workflow/runtime.json` must not directly execute `.agent-workflow/lib/<helper>.py` from the old
+self-contained examples below, or select the current core through host-discovery symlinks. A new workflow,
+including Light without an init step, first checks machine-local enablement:
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py check
 ```
 
-检查成功才用返回的严格三字段 binding 创建新图／单包；`init` 本身也经桥检查 enabled。
-缺机器记录的克隆、未启用项目或资源冲突不能自动开始；不以自动安装绕过失败。
-新任务采用此时已验证的项目选版，运行中只用当前 Task Pack 顶层 `runtime_binding`。
+Only after success, create a new graph/single pack with the returned strict three-field binding. `init`
+itself also checks enabled through the bridge. Clones lacking machine records, disabled projects or resource
+conflicts cannot start automatically; automatic installation must not bypass failure. New tasks adopt the
+project version verified now; running tasks use only top-level `runtime_binding` from the current Task Pack.
 
-每个独立工具／shell 调用都从当前包原样取出该三字段 JSON，作为显式 `--binding` 传入
-项目薄入口；下面的占位 JSON 必须替换为当前包的实际值，不能把上一次 shell 变量的
-存在当作前置事实。桥只执行该 pin 的 `lib/*.py`，为本次子进程重新导出
+For every independent tool/shell call, take the three-field JSON unchanged from the current pack and pass
+it as explicit `--binding` to the project's thin entry. Replace the placeholder JSON below with actual
+current-pack values; do not assume a variable from a previous shell exists. The bridge executes only that
+pin's `lib/*.py` and freshly exports for this child process
 `AGENT_WORKFLOW_RUNTIME_BINDING`、`AGENT_WORKFLOW_STATE_DIR`、
-`AGENT_WORKFLOW_PROJECT_ROOT`、`AGENT_WORKFLOW_CONFIG_PATH` 和
-`AGENT_WORKFLOW_CORE_ROOT`。后三项由可信机器 binding 计算，包或项目不能自报任意核心路径。
+`AGENT_WORKFLOW_PROJECT_ROOT`, `AGENT_WORKFLOW_CONFIG_PATH` and
+`AGENT_WORKFLOW_CORE_ROOT`. The last three are computed from the trusted machine binding; packs/projects
+cannot self-declare an arbitrary core path.
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py \
-  --binding '<当前 Task Pack 的完整三字段 runtime_binding JSON>' \
-  helper lib/task_graph_cli.py validate --input '<当前图或单包路径>'
+  --binding '<complete three-field runtime_binding JSON from current Task Pack>' \
+  helper lib/task_graph_cli.py validate --input '<current graph or single-pack path>'
 bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py \
-  --binding '<同一当前 Task Pack 的完整三字段 runtime_binding JSON>' \
+  --binding '<complete three-field runtime_binding JSON from the same current Task Pack>' \
   helper lib/context_read.py .agent-workflow/product/WORKFLOW.md \
-  --task-pack '<当前单包路径>' --limit 6000
+  --task-pack '<current single-pack path>' --limit 6000
 ```
 
-`ready`、`qa-ready`、export、update、规范校验、QA handoff 和其他 helper 均使用相同
-替换方法；普通业务构建／测试命令仍用项目自己的环境。必须读完整的 Skill／角色等
-受管正文也通过该 pin 的 `read` 或带 `--task-pack` 的分页器取得，不能直接沿已换版的
-宿主 Skill 软链拼接新旧正文。项目配置读取 `.agent-workflow/project.yaml`，不读
-`core/project.yaml` 或由 `core.parent` 推出的路径。
+Use the same substitution for `ready`, `qa-ready`, export, update, standards checks, QA handoff and other
+helpers; ordinary business build/test commands retain the project's own environment. Obtain complete required
+managed text such as Skills/roles through that pin's `read` or a pager with `--task-pack`; do not assemble old/new
+text through a host Skill symlink whose version changed. Read project configuration from `.agent-workflow/project.yaml`,
+not `core/project.yaml` or a path derived from `core.parent`.
 
-显式 `--binding` 优先于调用桥时的环境值；桥选定后，helper 中的包 pin 必须与其导出的
-环境 pin 相同。已有合法任务可按本项目 `used_bindings` 继续读取旧版本；禁用后不创建
-新任务。缺 pin、跨项目根、未知或损坏版本都立即拒绝，没有“最新版本”回退。
-此处仅规定调用合同，不证明任何宿主实际加载或 Agent 已执行。
+Explicit `--binding` takes precedence over the environment at bridge invocation. After bridge selection,
+the helper's pack pin must match the exported environment pin. Existing valid tasks may continue reading
+old versions under this project's `used_bindings`; disabling prevents new tasks. Missing pins, cross-project
+roots and unknown/corrupt versions fail immediately, without latest-version fallback. This defines only the
+invocation contract; it does not prove host loading or Agent execution.
 
-### 源包与旧自包含安装
+### Source pack and old self-contained installations
 
-没有中央标记／桥上下文的源包与旧安装保留下列 Python 入口和既有无 pin 合同。
-本引用其他旧路径示例均属于此分支；中央项目一律按上节替换成固定核心的桥调用。
+Source packs/old installations without a central marker/bridge context retain the Python entries below
+and existing unpinned contract. Other old-path examples in this reference belong to this branch. Central
+projects always replace them with pinned-core bridge calls under the preceding section.
 
 - Reuse the existing [record tools](runtime-records.md) for common snapshot updates, Task Pack
   export and selected fingerprint checks. Prefer existing project verification commands for behavior.
   Do not create a one-off program or extra receipt for each routine PM metadata operation.
-- 实际新增资源时，按 WORKFLOW 的 Task Packs 合同，在原 `input_contracts`、`output_contracts`
-  与 `acceptance_evidence` 明确目的、落点、所有者、复用入口和保留／回收条件。先复用所属
-  项目／服务的配置、环境、数据与系统缓存；临时文件确有需要才分配本请求唯一 scratch。
-  无新增资源不创建空记录，也不因此给 Light 增加 Full 图、计划或 QA。
-- 必需 Skill 或指令无法在一次可靠回包中完整返回时，可选用
-  [单文件分页器](runtime-records.md#完整读取必需长文)。每次回包读取一页，以同一 SHA
-  连续跟进每个 `next_offset` 直到 `eof`，为完整 JSON 预留宿主输出预算；字符预算不是
-  精确 token 上限，必要时减小页大小。每位 Agent 仍独立完成必需读取，指纹不是已读证据。
+- For actual new resources, follow WORKFLOW's Task Packs contract: state purpose, location, owner, reuse
+  entry point and retention/reclamation conditions in original `input_contracts`, `output_contracts` and
+  `acceptance_evidence`. First reuse the owning project/service's configuration, environment, data and
+  system caches; allocate this request's unique scratch only when temporary files are necessary. Without
+  new resources, create no empty records or additional Full graph, plan or QA for Light.
+- When a required Skill/instruction cannot fit completely in one reliable response, optionally use the
+  [single-file pager](runtime-records.md#完整读取必需长文). Read one page per response, following each
+  `next_offset` continuously with the same SHA until `eof`. Reserve host output budget for complete JSON;
+  a character budget is not an exact token cap, so reduce page size when necessary. Each Agent still
+  completes required reading independently; a fingerprint is not evidence of reading.
 - Use `bash .agent-workflow/lib/python_runtime.sh` for all workflow-owned Python, including
   temporary/inline helpers that generate DAG snapshots, Task Packs or fingerprints, not just bundled
   CLIs. For these workflow calls, pass `-X utf8` before the script path (or `-` for stdin), including
@@ -165,41 +174,50 @@ These are command-execution boundaries within existing steps, not additional wor
 
 ## Route
 
-派发前先按 WORKFLOW 的 Light／Full 定义判断当前风险与实际消费者。两等级默认使用
-对应原生实施者，只有明确的 PM 亲自实施授权例外；文档后缀不能扩大所有权。
-两等级都沿原 Validation、input/output 合同与 acceptance_evidence，依
-`xy-build-verify/references/verification-scope.md` 的三个判断说明真实测试缺口、再次执行
-理由与失败返工进展，不增加字段、固定表或审批。精简交接已验证且仍适用的项目命令、
-必要前置与环境限制及其来源，避免重复试错；不以经验替代当前证据或传递完整历史。
+Before dispatch, judge current risk and actual consumers under WORKFLOW's Light／Full definitions. Both
+levels default to the corresponding native implementer; only explicit authority for PM itself to implement
+creates an exception. A document suffix cannot expand ownership. Both levels use original Validation,
+input/output contracts and acceptance_evidence to explain real test gaps, re-execution grounds and failed-
+rework progress under the three judgments in `xy-build-verify/references/verification-scope.md`, without
+new fields, fixed tables or approvals. Concisely hand off verified, still-applicable project commands,
+necessary prerequisites/environment limits and provenance to avoid repeated trial and error. Lessons do
+not replace current evidence or justify passing full history.
 
-### Light：自包含单任务派发
+### Light: self-contained single-task dispatch
 
-明确当前目标、精确拥有路径、验收、规范与最小验证后，使用 `schema_version: 2` 单包，
-其 `task` 保留当前 `state`，带 `workflow_level: Light`、规范化 `module`（根为 `.`）、
-`role`、稳定 `agent_alias`、`instance_policy: fresh`、`context_policy: handoff_only`。
-当前目标／范围、代码与工作区依据、适用规范、可信授权来源、验收与必要证据、未决事项
-必须完整。包不能携带完整 PM／兄弟会话；新实例不继承父历史，每位接收者仍完整读取必需
-规范。实际原生参数只按当前宿主细则，不因声明 handoff_only 就声称运行时隔离已实测。
+Once the current goal, exact owned paths, acceptance, standards and minimum verification are clear, use
+a `schema_version: 2` single pack whose `task` retains current `state`, with `workflow_level: Light`,
+normalized `module` (root is `.`), `role`, stable `agent_alias`, `instance_policy: fresh` and
+`context_policy: handoff_only`. Current goal/scope, code/workspace basis, applicable standards, trusted
+authorization sources, acceptance/necessary evidence and unresolved items must be complete. Packs cannot
+carry full PM/sibling conversations; new instances do not inherit parent history, and each recipient still
+reads required standards completely. Actual native arguments follow only current-host details. Declaring
+handoff_only does not prove runtime isolation was tested.
 
-普通Light UI文案仍使用production_ui＋现有UI-Conformance，design_delta:none、
-prototype_policy:not_applicable，当前已解析冻结design_authority_refs及工程／设计覆盖。
-缺权威先补真实依据，实际设计／交互变化改Full；不得标non_ui或用空权威避过规范。
+Ordinary Light UI copy still uses production_ui＋existing UI-Conformance, design_delta:none,
+prototype_policy:not_applicable, current resolved/frozen design_authority_refs and engineering/design
+coverage. Fill missing authority with real grounds first; actual design/interaction changes become Full.
+Do not use non_ui or empty authority to evade standards.
 
-Light 不强制下述 Full Grill Me、xy-plan、图、计划保存、独立 QA 或再次确认。已有明确
-用户范围授权可直接派发；实质未决合同和平台权限依原边界处理。执行最小充分验证，
-交接时评估是否需要独立 QA、文档与记忆；选定后完成必需项，没有需要就不创建空记录。
-Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工具](runtime-records.md)。
+Light does not force the Full Grill Me, xy-plan, graph, plan persistence, independent QA or repeated
+confirmation below. Explicit user scope authority permits direct dispatch; material unresolved contracts
+and platform permissions follow their original boundaries. Run minimum sufficient verification and assess
+independent QA, documentation and memory at handoff. Complete selected mandatory items; create no empty
+records without a need. Full cannot use this to downgrade. See [record tools](runtime-records.md) for pack
+export, state and identity binding.
 
-### Full：规划、批准与图派发
+### Full: planning, approval and graph dispatch
 
-下面的完整规划、图与 QA 路线适用于 Full；共享规范选择和最小充分验证原则也适用于 Light。
-实施所有权、别名／实例与闭环收口统一遵守 `.agent-workflow/product/WORKFLOW.md` 的
-`implementation-ownership` 和 `agent-instance-lifecycle`，本参考不另建实例状态来源。
+The complete planning, graph and QA route below applies to Full. Shared standards selection and minimum
+sufficient verification also apply to Light. Implementation ownership, aliases/instances and lifecycle
+closure follow `.agent-workflow/product/WORKFLOW.md`'s `implementation-ownership` and `agent-instance-lifecycle`;
+this reference creates no separate instance-state source.
 
 1. `project.yaml` is the fixed workflow-adapter read for paths, limits, and routing configuration.
    Its `docs.*` values are discoverable indexes, not a static preload list.
-   PM、Writer、QA 按实际领域选取内置来源，并在项目索引存在时沿链接补充适用特有叶；
-   项目索引/叶不是安装必建副本，内置来源仍为必需规则底线。
+   PM, Writer and QA select built-in sources by actual domain and follow project-index links when present
+   to add applicable specific leaves. Project indexes/leaves are not mandatory installation copies;
+   built-in sources remain the required rule baseline.
    Project documents (`PROJECT.md` and topic lifecycle plans) and agentmemory are
    auxiliary information sources. Read or query only the smallest task-relevant scope when the PM
    needs to supplement or verify an existing feature, durable decision, engineering or design
@@ -225,19 +243,22 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    then read only matching feature and decision sections. Use `full` only when the whole detailed document is materially required and
    state why. `skip` means do not open the body. Read design standards only for UI work and shared
    architecture details or plans only for a relevant missing fact.
-   每位生产代码 Writer 的基线是内置 xy-code-standards/references/rules.md；生产 UI 另选
-   xy-ui-design/references/foundations-rules.md、components-rules.md 的适用设计规则，
-   xy-uiux + design_ui 只选适用设计来源。三源均以实际源包路径或安装态 .agent-workflow/ 前缀绑定，
-   再加入适用项目特有叶。项目索引存在时绑定真实SHA；无项目叶且索引缺失时不生成空索引，
-   index_path/root仍取配置，index_fingerprint为null。每个来源按现有字段覆盖owned_paths及适用ID，
-   写入当前完整worker/QA包；缺失、过期或覆盖不足仍阻塞，不预载全部规范目录。
+   Each production-code Writer's baseline is built-in xy-code-standards/references/rules.md. Production UI
+   also selects applicable design rules from xy-ui-design/references/foundations-rules.md and
+   components-rules.md; xy-uiux + design_ui selects only applicable design sources. Bind all three sources
+   through actual source-pack paths or installed .agent-workflow/ prefixes, then add applicable project-specific
+   leaves. Bind the real SHA when the project index exists. With no project leaves and a missing index,
+   create no empty index: retain configured index_path/root and null index_fingerprint. Each source covers
+   owned_paths and applicable IDs through existing fields in the complete current worker/QA pack. Missing,
+   stale or insufficient coverage still blocks; do not preload the whole standards directory.
 2. Classify production scope from the current request and available facts. If classification,
    requirement coverage, or planning materially depends on a missing project fact, apply the
    auxiliary-source policy above and retrieve only that fact before finalizing the classification:
-   - Light: 范围明确、风险可控的单一交付面，含普通低风险文案；转上面的单包分支。
-   - Full: 多角色、共享合同／数据库／根配置，或超出低风险文案边界的生产 UI。
-   Light 仅在真实暂停／恢复／交接或明确要求时保存简短计划；Full 在批准后首次派发前保存。
-   需要保存、修改或恢复时读取 [计划生命周期](plan-lifecycle.md)，保存 Light 不激活 Full Skills。
+   - Light: one clear, bounded-risk delivery surface, including ordinary low-risk copy; use the single-pack branch above.
+   - Full: multiple roles, shared contracts/database/root configuration, or production UI beyond low-risk copy.
+   Light saves a brief plan only for actual pause/recovery/handoff or explicit request. Full saves after
+   approval and before first dispatch. Read [plan lifecycle](plan-lifecycle.md) when saving, revising or
+   recovering; saving Light does not activate Full Skills.
 3. Activate `xy-project-memory` in start mode only when bounded cross-session recall or historical
    context is materially needed (Codex: `$xy-project-memory`; Claude Code and Antigravity CLI:
    `/xy-project-memory`). Do not invoke it merely because a new request started. When start retrieval
@@ -279,9 +300,9 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    Antigravity CLI: `/xy-plan`). It returns a self-contained proposal with `plan_state: draft`,
    exact paths, interfaces, task packs, verification commands and expected results, semantic locks,
    and a machine-readable `task_graph`. The graph is internal scheduler input, not user-visible
-   output. `xy-plan` does not edit files or dispatch Agents. PM 按
-   [需求 HTML 交付](../../xy-plan/references/requirement-html.md) 在本请求 scratch 渲染唯一
-   Markdown 草案供 Full 正式审阅；尚未批准时不写入正式 plans。
+   output. `xy-plan` does not edit files or dispatch Agents. PM follows
+   [requirements HTML delivery](../../xy-plan/references/requirement-html.md) to render the single Markdown
+   draft in this request's scratch for formal Full review, without writing formal plans before approval.
 7. The PM reviews the draft and decides the post-QA controlled-document projection:
 
    ```yaml
@@ -309,7 +330,7 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    affected-surface, or plan-boundary change returns the plan to draft and reopens approval.
    The PM now saves the Full plan in adapter-resolved `docs.plans`, before any design/implementation
    dispatch, then renders its same-name HTML from the single Markdown. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
-   write PROJECT/plans 已验收基线 just to save intended work. Merge subsequent effective changes into
+   write accepted PROJECT/plans baselines just to save intended work. Merge subsequent effective changes into
    this same plan and replace affected complete Task Packs, including in-flight worker/QA inputs,
    before accepting their results. Preserve unaffected work; apply the linked plan lifecycle.
 8. Build schema_version: 2 implementation task packs from that frozen plan with exact owned paths, dependencies,
@@ -333,9 +354,10 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    inspect; do not copy or manually enumerate the user's installed specialist Skills. Every
    Writer adds `standards-conformance` as a mandatory base audit surface.
 
-   每个 task 带 workflow_level、module、role、agent_alias、instance_policy: fresh 和
-   context_policy: handoff_only。原生派发只交当前任务 shell 与必要规范、批准／UI依据，
-   不复制完整 PM／兄弟会话、不 fork 继承父历史。独立任务新实例，同任务短返工才可续用。
+   Each task carries workflow_level, module, role, agent_alias, instance_policy: fresh and
+   context_policy: handoff_only. Native dispatch supplies only the current task shell and necessary standards,
+   approval/UI authority, without full PM/sibling conversations or a parent-history fork. Independent tasks
+   use new instances; only short rework of the same task may reuse one.
 
    Include a brief reporting/reading instruction in every worker and QA task pack: report completion
    and blockers to PM, give meaningful milestones for long work, and answer progress requests at a
@@ -345,11 +367,13 @@ Full 不可借此降级。具体包导出、状态与身份绑定见 [记录工�
    missing/changed parts as needed. Each Agent still reads its applicable standards independently.
    Honor explicit host/Skill reread requirements. Read selected Skills and required instructions
    completely, separately or in contiguous pages through EOF; avoid truncation from batching long
-   documents, and recover every missing portion before relying on a partial read. 宿主可读完整
-   Task Pack 文件时，可交接确切文件引用、SHA 和简短变化摘要，接收方必须完整读取当前
-   包；宿主不可读时仍通过支持的通道发送完整包，不能仅发差量。No new report file is needed.
-9. Read `orchestration` limits from `project.yaml`，并按当前宿主真实运行／打开线程口径观察
-   容量；按需创建，不预热全部别名，不为填满上限启动实例，为必要 QA／集成安排容量。 One path has one writer. Run
+   documents, and recover every missing portion before relying on a partial read. When the host can read
+   complete Task Pack files, hand off the exact file reference, SHA and brief change summary; the recipient
+   must read the complete current pack. Otherwise send the complete pack through a supported channel,
+   not just deltas. No new report file is needed.
+9. Read `orchestration` limits from `project.yaml` and observe capacity using the current host's actual
+   running/open-thread accounting. Create on demand, without prewarming all aliases or launching instances
+   merely to fill capacity. Reserve capacity for necessary QA/integration. One path has one writer. Run
    conflict detection before two or more writers. Do not allow nested delegation.
 10. Materialize the approved graph into a transient JSON snapshot. Freeze the configured STANDARDS
     index/root, current index fingerprint, domain-specific applicable hard-rule IDs, and any explicitly

@@ -355,6 +355,36 @@ write_codex_block() {
   } > "${destination}"
 }
 
+upsert_codex_root_block() {
+  # 根指令含用户 UTF-8/CRLF/无末尾换行内容；awk 的逐行 print 会偷偷补 LF。
+  # 直接复用 Claude 已有的安全读取、精确标记区替换和原子写入，只修改本轮临时候选，
+  # 发布仍由既有 Codex 事务负责；不复制第二套正文解析或放宽受管标记/文件边界。
+  python3 - "${SCRIPT_DIR}" "$@" <<'PYCODE'
+import stat
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]).resolve()))
+from lib.claude_instructions import PAIRS, atomic_write, read_file, replace_block
+
+# 只归一化 mktemp 的系统祖先别名，保留叶节点 no-follow 验证，不能 resolve 未知叶链接。
+def temporary_path(raw):
+    path = Path(raw)
+    return path.parent.resolve() / path.name
+
+target = temporary_path(sys.argv[2])
+begin, end = sys.argv[3:5]
+content_path = temporary_path(sys.argv[5])
+if (begin, end) not in PAIRS:
+    raise ValueError("unsupported Codex root managed marker pair")
+before, content = read_file(target), read_file(content_path)
+if before is None or content is None:
+    raise ValueError("Codex root temporary input is missing")
+after = replace_block(before, begin, content)
+if after != before:
+    atomic_write(target, after, stat.S_IMODE(target.stat().st_mode))
+PYCODE
+}
+
 upsert_root_agents() {
   local product_block codex_block candidate size
   product_block=$(mktemp)
@@ -362,9 +392,9 @@ upsert_root_agents() {
   candidate=$(mktemp)
   write_product_block "${product_block}"
   write_codex_block "${codex_block}"
-  [[ -f "${ROOT_AGENTS_MD}" ]] && cp "${ROOT_AGENTS_MD}" "${candidate}"
-  upsert_marked_block "${candidate}" "${PROD_BEGIN}" "${PROD_END}" "${product_block}"
-  upsert_marked_block "${candidate}" "${CODEX_BEGIN}" "${CODEX_END}" "${codex_block}"
+  [[ -f "${ROOT_AGENTS_MD}" ]] && cp -p "${ROOT_AGENTS_MD}" "${candidate}"
+  upsert_codex_root_block "${candidate}" "${PROD_BEGIN}" "${PROD_END}" "${product_block}"
+  upsert_codex_root_block "${candidate}" "${CODEX_BEGIN}" "${CODEX_END}" "${codex_block}"
   size=$(wc -c < "${candidate}" | tr -d ' ')
   if [[ "${size}" -gt 32768 ]]; then
     rm -f "${product_block}" "${codex_block}" "${candidate}"
@@ -383,9 +413,9 @@ preflight_root_agents_size() {
   candidate=$(mktemp)
   write_product_block "${product_block}"
   write_codex_block "${codex_block}"
-  [[ -f "${ROOT_AGENTS_MD}" ]] && cp "${ROOT_AGENTS_MD}" "${candidate}"
-  upsert_marked_block "${candidate}" "${PROD_BEGIN}" "${PROD_END}" "${product_block}"
-  upsert_marked_block "${candidate}" "${CODEX_BEGIN}" "${CODEX_END}" "${codex_block}"
+  [[ -f "${ROOT_AGENTS_MD}" ]] && cp -p "${ROOT_AGENTS_MD}" "${candidate}"
+  upsert_codex_root_block "${candidate}" "${PROD_BEGIN}" "${PROD_END}" "${product_block}"
+  upsert_codex_root_block "${candidate}" "${CODEX_BEGIN}" "${CODEX_END}" "${codex_block}"
   size=$(wc -c < "${candidate}" | tr -d ' ')
   rm -f "${product_block}" "${codex_block}" "${candidate}"
   if [[ "${size}" -gt 32768 ]]; then
@@ -644,9 +674,9 @@ check_managed_outputs_match_sources() {
   candidate=$(mktemp)
   write_product_block "${product_block}"
   write_codex_block "${codex_block}"
-  cp "${ROOT_AGENTS_MD}" "${candidate}"
-  upsert_marked_block "${candidate}" "${PROD_BEGIN}" "${PROD_END}" "${product_block}"
-  upsert_marked_block "${candidate}" "${CODEX_BEGIN}" "${CODEX_END}" "${codex_block}"
+  cp -p "${ROOT_AGENTS_MD}" "${candidate}"
+  upsert_codex_root_block "${candidate}" "${PROD_BEGIN}" "${PROD_END}" "${product_block}"
+  upsert_codex_root_block "${candidate}" "${CODEX_BEGIN}" "${CODEX_END}" "${codex_block}"
   if ! cmp -s "${candidate}" "${ROOT_AGENTS_MD}"; then
     rm -f "${product_block}" "${codex_block}" "${candidate}"
     log_err "managed AGENTS.md blocks differ from pack sources"
@@ -843,7 +873,7 @@ if agents_md_path.exists():
     managed = "\n".join(blocks)
     # 不再把本包自设的 8 KiB 目标当作平台限制；用可发现路由和完整契约校验
     # 保护入口质量，32 KiB 仅沿用上方针对 Codex 官方默认配置的安装保护。
-    for anchor in ("PM负责协调", "requirements_approved", "visual_approved", "schema_version:2", "$xy-workflow"):
+    for anchor in ("PM owns coordination", "requirements_approved", "visual_approved", "schema_version:2", "$xy-workflow"):
         require(anchor in managed, f"AGENTS.md missing {anchor}")
     # Markdown 路径里的 /xy-workflow/ 是目录名，不是 Claude/Antigravity 命令。
     # 只拒绝独立出现的 slash alias，保留对错误宿主调用的检查。
@@ -1088,7 +1118,7 @@ lifecycle_anchors = (
     "Run `task_graph_cli.py qa-ready` for the request",
     "dispatch exactly one integrated read-only `xy-qa` reviewer for this request",
     "activate `xy-project-memory` in closeout mode",
-    "最后报告用户",
+    "Finally report to the user",
 )
 require(
     all(anchor in workflow_contract for anchor in lifecycle_anchors),

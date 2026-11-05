@@ -1,93 +1,134 @@
-# 设计质量与完成标准
+# Design Quality and Completion Criteria
 
-本说明用于设计判断和细化，不替代当前需求、项目设计规范或原型验证合同。
-对参考项目的满意应按用户明确评价的范围理解；本技能只提炼规范落实、组件一致性和高保真
-交付方法，不据此推断暖色、柔和质感或任何审美偏好，也不认定全部交互、数据语义均合格。
-具体颜色、材质、风格和尺寸由各项目已批准规范决定，业务/心理模型也留在项目内。
+This guidance supports design judgment and refinement; it does not replace current requirements,
+project design standards, or the prototype-verification contract. Interpret satisfaction with a
+reference project only within the scope explicitly evaluated by the user. This Skill distills methods
+for applying standards, keeping components consistent, and delivering high fidelity; it does not infer
+a preference for warm colors, soft textures, or any aesthetic, or establish that all interactions and
+data semantics are correct. Each project's approved standards determine colors, materials, styles,
+and dimensions; business and mental models also remain project-specific.
 
-## 先确定当前基线与主要任务
+## Establish the Current Baseline and Main Task First
 
-- 先读取内置 `foundations-rules.md`、`components-rules.md` 的适用规则；项目索引存在时，
-  再沿链接读取当前特有基础值、组件与平台差异。查相关 token、页面和依赖即可；
-  官方指南与 `ui-ux-pro-max` 提供参考，不能覆盖已批准需求。
-- 确定目标用户、使用情境、主要任务、内容密度、平台/模块、现有基线、颜色与尺度 token
-  来源、可复用组件和允许变体。缺少基线时只提出本任务所需候选值，经已有确认流程采用；
-  模板默认值和搜索结果都不是已批准的项目事实。
-- 先组织内容与行动优先级：主要任务能被发现，关键信息能被扫读，次要说明按需要展开。
-  用贴近实际任务的代表性文案与数据长度推敲结构，不用重复占位卡片或装饰填补内容空缺；
-  演示数据不得冒充真实业务结果，也不因设计需要新增未经批准的功能、指标或承诺。
-- 前期按既有 UI 路线用线框比较 IA、流程和信息关系；确定方向后继续细化到高保真页面，
-  不把灰框、文字线框或静态图片当作完成的可交互原型，也不额外增加规划/审批阶段。
+- First read applicable rules from the built-in `foundations-rules.md` and `components-rules.md`;
+  when a project index exists, follow its links to current project-specific foundation values,
+  components, and platform differences. Inspect only relevant tokens, pages, and dependencies.
+  Official guidance and `ui-ux-pro-max` are references and cannot override approved requirements.
+- Determine target users, use contexts, main tasks, content density, platform/module, existing
+  baseline, color and scale token sources, reusable components, and allowed variants. If a baseline
+  is missing, propose only the candidate values needed by this task and adopt them through the existing
+  confirmation process; template defaults and search results are not approved project facts.
+- Organize content and action priorities first: make the main task discoverable, critical information
+  scannable, and secondary explanations expandable as needed. Refine the structure with representative
+  copy and data lengths close to actual tasks, rather than filling content gaps with repeated
+  placeholder cards or decoration. Demo data must not pretend to be actual business results; design
+  needs do not authorize new features, metrics, or promises.
+- Early in the existing UI route, use wireframes to compare IA, flows, and information relationships;
+  once direction is established, continue refinement to high-fidelity pages. Gray boxes, text
+  wireframes, and static images are not completed interactive prototypes; add no planning/approval stage.
 
-## 让视觉细节服务内容
+## Make Visual Details Serve Content
 
-- 按项目字阶处理标题、正文、辅助信息和数字，结合文案长度、行高、字重、对齐和内容宽度
-  建立清楚层级。用一致的间距节奏与分组表达关系，不把所有内容做成同等权重的卡片。
-- 颜色按语义及前景/背景配对使用；排版、间距、圆角、层级、图标和适用外观共用现有尺度。
-  产品区使用项目产品 token，不逐页硬编码第二套基础值；`--prototype-*` 只服务展示外壳。
-- 在项目允许的方向内处理边框、投影、材质和图形，控制主次、密度和装饰数量。
-  精致不等于固定使用渐变、玻璃、大圆角或大面积留白；原生平台、品牌与内容需求决定取舍。
-- 图标和视觉素材沿用项目体系，保持语义、笔画/尺寸及对齐一致；装饰不代替操作文字或状态。
-  未获明确授权不生成图片资产，也不引入远程字体、CDN 或包依赖来追求某种风格。
+- Apply the project's type scale to headings, body text, supporting information, and numbers,
+  establishing clear hierarchy through copy length, line height, weight, alignment, and content width.
+  Express relationships through consistent spacing rhythm and grouping; do not give every piece of
+  content an equally weighted card.
+- Use colors by semantics and foreground/background pairing; typography, spacing, radii, elevation,
+  icons, and applicable appearances share existing scales. The product area uses project product
+  tokens without hardcoding a second set of foundation values per page; `--prototype-*` serves only
+  the presentation shell.
+- Handle borders, shadows, materials, and graphics within the project's allowed direction, controlling
+  hierarchy, density, and decoration. Refinement does not prescribe gradients, glass, large radii, or
+  extensive whitespace; the native platform, brand, and content needs determine these choices.
+- Preserve the project's icon and visual-asset system, keeping semantics, strokes/sizes, and alignment
+  consistent; decoration does not replace action text or states. Without explicit authorization, do
+  not generate image assets or introduce remote fonts, CDNs, or package dependencies to pursue a style.
 
-## 组件、状态与平台适用性
+## Components, States, and Platform Applicability
 
-- 复用项目实际使用的按钮、表单、弹窗、分段控件、Tabs 等组件，统一变体、尺寸、
-  状态与行为；同一平台同一语义保持一致，平台原生行为不必机械相同。
-- 根据当前需求展示必要的初始、选中、加载、空、错误、禁用和成功等状态，不机械要求
-  每页凑齐全部类别。关键操作有清楚反馈和可理解的下一步；失败、取消和未完成不伪装成功。
-  可演示交互与页内契约一同更新，不能只把控件画得像能操作。
-- 明确导航去向、返回、弹窗退出与焦点、表单校验及分段选择/面板切换语义。
-  按目标平台处理触控、键盘、可访问名称、焦点可见性、前景/背景对比和不只依赖颜色的状态。
-  设计超出既有权威、存在歧义或需要扩大范围时交 PM，不自行决定业务规则。
-- 用实际内容长度考虑窄空间、长文本、多语言和文字放大，避免关键文案被无说明截断。
-  响应式页面与固定原型画板分别遵循画布规则；固定预览不限制真实产品适配。
-- 动效用于解释变化与反馈，时机和幅度服从平台、组件、性能及减少动效偏好；
-  不把单一时长、弹簧曲线、骨架屏或级联动画强制套到所有任务。
+- Reuse components actually used by the project, such as buttons, forms, dialogs, segmented controls,
+  and Tabs, with consistent variants, sizes, states, and behavior. Preserve the same semantics on the
+  same platform; native platform behavior need not be mechanically identical.
+- Show necessary initial, selected, loading, empty, error, disabled, and success states according to
+  current requirements; do not mechanically require every page to include every category. Critical
+  actions provide clear feedback and an understandable next step; failure, cancellation, and
+  incompletion must not appear successful. Update demonstrable interactions together with the in-page
+  contract; drawing controls that merely look operable is insufficient.
+- Clarify navigation destinations, back behavior, dialog exits and focus, form validation, and
+  segmented-selection/panel-switching semantics. Handle touch, keyboard, accessible names, visible
+  focus, foreground/background contrast, and states that do not rely solely on color for the target
+  platform. Return designs that exceed existing authority, are ambiguous, or need broader scope to
+  the PM; do not decide business rules independently.
+- Use actual content lengths to account for narrow spaces, long text, multiple languages, and enlarged
+  text; avoid unexplained truncation of critical copy. Responsive pages and fixed prototype artboards
+  each follow their canvas rules; a fixed preview does not limit real product adaptation.
+- Use motion to explain change and feedback; timing and amplitude follow platform, component,
+  performance, and reduced-motion preferences. Do not force one duration, spring curve, skeleton
+  screen, or staggered animation onto all tasks.
 
-## 完成判断与规范维护
+## Completion Judgment and Standards Maintenance
 
-- 原型完成时，产品区应呈现与项目基线一致的高保真内容、排版、组件细节和必要状态，
-  在声明的平台与布局范围内形成可直接演示的主要流程；展示说明、模拟限制与页内契约在产品区外。
-  区分外观、交互/契约和规范符合性：某一方面通过不能替其他方面背书。
-- 多页共用基线，共享 CSS/规范由明确的单一 Writer 维护。已有模式兼容时复用，
-  只补当前范围的真实缺口，不顺手重新设计无关页面或覆盖既有共享样式。
-- 首次确认、增量规则变化或全新视觉获准后，沿用
-  `xy-workflow/references/design-standards.md` 维护授权叶与共享样式；没有新规则就不改文档。
-  页面特例留在现有契约，通用规则留在内置来源；项目叶只记录实际特有差异，
-  不复制通用正文、不创建第二份设计系统、组件展示页或报告。
-- `standards_only` 只改当前授权规则，保留稳定 ID、未变约束及平台适用范围，说明依据与差异；
-  候选、已采用规则和生产迁移完成状态分开。单页获准不表示全项目采用，也不证明生产已经迁移。
-- 在现有交接中简述所用规则/组件、实际变化、共享影响和未验证项。复用现有静态验证，
-  PM 对照批准需求审查五节契约，QA 按当前范围审查规范；不额外增加截图、浏览器自动操作、
-  确认环节或全量回归。视觉确认仍由 PM 按用户已选的原型分支处理。
+- At prototype completion, the product area should show high-fidelity content, typography, component
+  details, and necessary states consistent with the project baseline, forming a directly demonstrable
+  main flow within the declared platforms and layout scope. Presentation explanations, simulation
+  limits, and the in-page contract remain outside the product area. Distinguish appearance,
+  interaction/contract, and standards conformance: success in one does not establish the others.
+- Pages share a baseline, and shared CSS/standards have an explicit single Writer. Reuse compatible
+  existing patterns and fill only real gaps in the current scope; do not redesign unrelated pages
+  or overwrite existing shared styles along the way.
+- After initial confirmation, incremental rule changes, or approval of a new visual system, maintain
+  authorized leaves and shared styles under `xy-workflow/references/design-standards.md`; do not
+  update documents without new rules. Page exceptions remain in the existing contract and general
+  rules in built-in sources; project leaves record only actual project-specific differences. Do not
+  copy general text or create a second design system, component showcase page, or report.
+- `standards_only` changes only currently authorized rules, preserves stable IDs, unchanged constraints,
+  and platform applicability, and explains the basis and differences. Keep candidates, adopted rules,
+  and completed production migration distinct. Approval of one page does not establish project-wide
+  adoption or prove production migration.
+- Briefly state rules/components used, actual changes, shared impact, and unverified items in the
+  existing handoff. Reuse existing static verification; the PM checks the five-section contract against
+  approved requirements, and QA reviews standards within the current scope. Add no screenshots,
+  automated browser operations, confirmation stages, or full regression runs. The PM continues to
+  handle visual confirmation according to the user's selected prototype branch.
 
-## 原型三维自检
+## Three-Dimensional Prototype Self-Check
 
-设计 Agent 在现有原型交接前自检，不新增独立原型 QA；用户通过具体页面最终确认。
+The design Agent self-checks before the existing prototype handoff without adding independent
+prototype QA; the user gives final confirmation through concrete pages.
 
-- 需求覆盖：将批准范围和验收映射到页面导航、操作、状态、校验及五节契约，检查遗漏、
-  擅加和冲突；无关或已豁免的原型工作不因自检恢复。
-- 规范符合性：按当前内置规则与项目特有规范核对适用 ID、组件/token、平台和可访问性，
-  说明例外及未实际操作的部分；不以用户满意或静态通过代替全部符合。
-- 交付一致性：核对具体 HTML、契约、稳定控件、相对导航、声明结果与共享样式的一致性，
-  并确认当前页面及依赖指纹匹配交接范围；高保真内容和必要状态不能只停留在线框中。
+- Requirement coverage: Map approved scope and acceptance to page navigation, operations, states,
+  validation, and the five-section contract; check omissions, unauthorized additions, and conflicts.
+  Self-checking does not restore unrelated or waived prototype work.
+- Standards conformance: Check applicable IDs, components/tokens, platforms, and accessibility against
+  current built-in rules and project-specific standards, explaining exceptions and parts not actually
+  exercised. User satisfaction or static success does not establish complete conformance.
+- Delivery consistency: Check consistency among concrete HTML, contracts, stable controls, relative
+  navigation, declared results, and shared styles. Confirm that current page and dependency
+  fingerprints match the handoff scope; high-fidelity content and necessary states cannot remain
+  merely in wireframes.
 
-用既有 `prototype_verify.static_checks` 简述三个维度和证据，问题写入 `blocking_findings`，
-由既有 `result` 表明结论。缺口交同一设计 Agent 补齐后仅重查受影响部分；不创建报告、
-审批文件、新状态或默认浏览器/截图步骤。PM 核对当前交接和批准依据，不重复有效静态检查；
-生产实现后的统一功能 QA 继续按原路线进行。
+Briefly record the three dimensions and evidence in the existing `prototype_verify.static_checks`,
+put issues in `blocking_findings`, and state the conclusion through the existing `result`. Return gaps
+to the same design Agent and recheck only affected parts after correction; create no reports, approval
+files, new states, or default browser/screenshot steps. The PM checks the current handoff and approval
+basis without repeating valid static checks; unified functional QA after production implementation
+continues through the original route.
 
-## 参考来源与未采用流程
+## Reference Sources and Processes Not Adopted
 
-本文独立编写中文方法，不复制外部 Skill 正文或数据库。来源用于按需核对，不要求每任务联网。
+This independently authored guidance is provided in English; it does not copy external Skill bodies
+or databases. Sources support checks as needed; network access is not required for every task.
 
-- Anthropic [frontend-design](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md)，
-  其目录 [Apache-2.0 许可](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/LICENSE.txt)。
-  借鉴围绕真实主题形成视觉意图、内容驱动排版及克制自查；不采用其截图自查或新增确认流程。
-- Next Level Builder [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)，
-  [MIT 许可](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill/blob/main/LICENSE)，
-  版权声明为 Copyright (c) 2024 Next Level Builder。复用已安装 Skill 的针对性分析，
-  不运行其安装/构建、不引入外部字体/CDN，不用 `--persist`/`--force` 建立另一份 MASTER 权威。
+- Anthropic [frontend-design](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/SKILL.md),
+  with the directory's [Apache-2.0 license](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/LICENSE.txt).
+  It informs visual intent around a real subject, content-driven typography, and restrained
+  self-review; its screenshot self-review and any additional confirmation process are not adopted.
+- Next Level Builder [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill),
+  [MIT license](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill/blob/main/LICENSE),
+  with the copyright notice Copyright (c) 2024 Next Level Builder. Reuse the installed Skill's targeted
+  analysis; do not run its installation/build, introduce external fonts/CDNs, or use
+  `--persist`/`--force` to establish another MASTER authority.
 
-如以后复制实质源码或文本，先按相应许可保留所需声明与许可材料；本引用不授予资产、品牌或数据的额外使用权。
+If substantive source code or text is copied in the future, first preserve the required notices and
+license materials under the applicable license; these references grant no additional rights to use
+assets, brands, or data.

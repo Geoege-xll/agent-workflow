@@ -1,106 +1,111 @@
-# 通用工程规则
+# General Engineering Rules
 
 - Domain: engineering
-- Scope: Light／Full 代码实现与只读审查；条款按实际能力、依赖和风险生效，上游例外规则仅在项目明确声明相应保护边界时适用。
+- Scope: Light／Full code implementation and read-only review; clauses apply according to actual capabilities, dependencies and risks. Upstream exception rules apply only when the project explicitly declares the corresponding protected boundary.
 
-本文件是内置通用工程规则的唯一正文。项目只维护技术栈、业务合同、保护路径和已批准例外等特有规范；
-仓库观察不是升级目标，不把通用规则复制到项目 GENERAL。规则 ID、强弱级别及适用条件保持稳定。
+This file is the single source of built-in general engineering rules. Projects maintain only specific standards such as
+their stack, business contracts, protected paths and approved exceptions. Repository observations are not upgrade targets;
+do not copy general rules into a project GENERAL. Keep rule IDs, severity levels and applicability conditions stable.
 
-## 规则编写与合同变化
+## Rule authoring and contract changes
 
 Add enforceable rules with a stable lowercase ID and explicit severity. Use `hard` only for a true
 blocking contract; use `advisory` for a preferred practice whose justified deviation may still pass.
-不创建占位规则；只有实际已批准的项目特有约束才进入项目叶。
+Do not create placeholder rules; only actual approved project-specific constraints belong in project leaves.
 Breaking contract changes use the Full workflow and return cross-module routing to the PM.
 
 ## Verification policy
 
-- `[eng-verification-001] [hard]` 使用仓库证据支持的验证方式；发现到的命令是候选，可选用
-  仓库实际支持的用例、文件、包或模块范围。保留用户／项目强制项，不默认执行全部命令。
-- `[eng-verification-002] [hard]` 每个生产代码实现者交付受影响目标构建／编译成功且可运行
-  的结果，附真实构建与最小启动／冒烟或关键入口证据；解释型项目使用对应的可执行验证。
-  两个等级都通过 `xy-build-verify` 的适用分支交接；Light 不因此强制 Full 图、规划或
-  独立 QA，纯文档／静态原型按各自类型验证。可复用当前输入仍有效的证据，缺少必需
-  证据不能声称完成。
-- `[eng-verification-003] [hard]` 按实际行为、依赖和验收选择最小充分验证；先复用有效覆盖，
-  仅为真实行为、边界或回归保障的覆盖缺口或用户／项目强制要求补测试，优先扩展现有文件。
-  全量、扩大或重跑须说明新增覆盖、具体风险、实际输入／环境变化导致的证据失效，或显式要求；
-  继续失败返工须有新定位、可检验假设或有效修复进展。无进展时先停当前重复失败路径并交 PM，
-  不重置或叠加既有次数上限；必需验证通过且证据仍有效就停止，QA／PM 核对后复用。
-  不额外生成只复述低风险修改的测试。三个判断与无进展适用边界见已安装 `xy-build-verify` 的
-  `references/verification-scope.md`，不豁免 Full 或实际要求的独立审查、强制 CI／Hook
-  或必要集成验证。
+- `[eng-verification-001] [hard]` Use verification supported by repository evidence. Discovered commands are candidates;
+  use case, file, package or module scopes actually supported by the repository. Preserve mandatory user/project checks;
+  do not run every command by default.
+- `[eng-verification-002] [hard]` Every production-code implementer delivers a successfully built/compiled and runnable
+  affected target, with real build evidence and minimum startup/smoke or key-entry evidence. Interpreted projects use
+  the corresponding executable verification. Both levels hand off through the applicable `xy-build-verify` branch;
+  this does not force a Full graph, planning or independent QA on Light. Verify pure documentation/static prototypes
+  according to their delivery type. Reuse evidence still valid for current inputs; do not claim completion without
+  mandatory evidence.
+- `[eng-verification-003] [hard]` Select minimum sufficient verification from actual behavior, dependencies and acceptance.
+  Reuse valid coverage first; add tests only for a concrete coverage gap in behavior, boundaries or regression protection,
+  or an explicit user/project requirement, preferring to extend existing files. Full-suite, expanded or repeated execution
+  requires an explanation of added coverage, a specific risk, evidence invalidated by actual input/environment changes,
+  or an explicit requirement. Continued failed rework needs a new diagnosis, testable hypothesis or effective repair progress.
+  Without progress, first stop the current repeated failing path and return it to PM; do not reset or stack existing attempt
+  limits. Stop when mandatory verification passes and evidence remains valid; QA/PM reuse it after checking. Do not add
+  tests that merely restate a low-risk change. See `references/verification-scope.md` in the installed `xy-build-verify` for
+  the three judgments and the limits of the no-progress rule. This does not exempt Full or actually required independent
+  review, mandatory CI/Hooks, or necessary integration verification.
 
-## 秘密管理
+## Secret management
 
 - `[eng-secrets-001] [hard]` Never commit secrets, credentials, private keys, tokens, or raw private
   data; use the project-approved environment or secret manager.
 
-## 共通开发规范
+## Common development standards
 
-以下规则在实现相应能力时生效。新项目首次需要某种能力时建立清晰入口；初始化时无需预建尚未使用的空层、工具类或接口。项目专项规范负责写明实际框架、目录、类名、返回协议和特殊业务状态。
+The following rules apply when implementing the corresponding capability. Establish a clear entry point when a new project first needs a capability; initialization need not prebuild unused empty layers, utility classes or interfaces. Project-specific standards define the actual framework, directories, class names, response protocol and special business states.
 
-### 统一请求和 API 边界
+### Unified requests and API boundaries
 
-- `[eng-common-001] [hard]` 生产代码首次实现 HTTP 客户端或服务端对外 HTTP 调用时，先复用项目已有请求层；没有合适入口时，建立由所属模块维护的统一请求客户端或适配层。基础地址、鉴权、超时、适用的取消机制、序列化、响应解析和底层错误转换在该边界集中处理；响应解包层级由合同确定，不在调用方重复剥离。页面、控制器及业务用例不得各自直接调用底层 HTTP 库并重复这些处理；上传、流式请求等特殊协议可有明确职责的专用入口。
-- `[eng-common-006] [hard]` 业务接口按业务域封装端点、参数和请求/响应模型；有类型系统时使用类型模型，动态语言使用明确的字段合同或校验边界。外部数据先解析和校验，不以强制类型转换、无约束动态类型或禁用检查代替验证。调用方使用业务 API 或应用服务，不拼接路径、不手工解析同一响应结构，也不依赖底层 HTTP 库的私有错误类型。传输、持久化和业务模型按实际边界映射，不用万能模型混承不同合同；自动字段复制后仍须核对字段授权、派生值和单位，少量局部映射不强制增加转换框架。接口封装只负责协议和数据映射；页面跳转、按钮状态与业务流程由相应业务层处理。
-- `[eng-common-007] [hard]` 新建服务端入站 API 时，先确定本项目一致的成功响应、失败响应、稳定错误码及异常映射入口；已有项目沿用现有合同。Controller/Route 负责协议校验与调用，业务规则放在应用或领域服务，不在每个接口重复构造响应外壳、复制鉴权规则或直接向调用方暴露数据库和框架异常。
-- `[eng-common-014] [hard]` 新增或修改供其他模块调用的 API 时，以调用处能理解为准命名并明确输入、输出、失败语义和副作用；遵循项目及语言既有惯例，不用含混缩写、无说明的布尔开关或与实际行为不符的名称。公共合同发生变化时，同步更新受影响调用方、测试和必要的使用说明；不因这一规则批量重命名无关旧代码。
+- `[eng-common-001] [hard]` When production code first implements an HTTP client or outbound server HTTP calls, reuse the project's existing request layer first. If no suitable entry exists, establish a unified request client or adapter maintained by its owning module. Centralize the base address, authentication, timeout, applicable cancellation, serialization, response parsing and low-level error conversion at that boundary. The contract determines response unwrapping depth; callers must not repeat unwrapping. Pages, controllers and business use cases must not each call the low-level HTTP library directly and duplicate this handling. Special protocols such as uploads or streaming may have dedicated entry points with explicit responsibilities.
+- `[eng-common-006] [hard]` Encapsulate endpoints, parameters and request/response models by business domain. Use typed models where a type system exists, and explicit field contracts or validation boundaries in dynamic languages. Parse and validate external data first; casts, unconstrained dynamic types or disabled checks do not replace validation. Callers use business APIs or application services, without assembling paths, manually parsing the same response structure or depending on private error types from the low-level HTTP library. Map transport, persistence and business models at actual boundaries; do not mix different contracts into a universal model. Even after automatic field copying, check field authorization, derived values and units. Small local mappings do not require a conversion framework. Interface wrappers handle only protocol and data mapping; the corresponding business layer handles navigation, button state and business flow.
+- `[eng-common-007] [hard]` When creating inbound server APIs, first determine the project's consistent success responses, failure responses, stable error codes and exception-mapping entry point. Existing projects retain their current contracts. Controllers/routes handle protocol validation and invocation, while application or domain services own business rules. Do not reconstruct response envelopes, copy authorization rules or expose database/framework exceptions directly to callers in each endpoint.
+- `[eng-common-014] [hard]` When adding or changing an API used by other modules, name it so callers can understand it, and specify inputs, outputs, failure semantics and side effects. Follow existing project/language conventions; avoid ambiguous abbreviations, unexplained Boolean switches or names that contradict actual behavior. When a public contract changes, update affected callers, tests and necessary usage documentation together. This rule does not authorize bulk renaming of unrelated old code.
 
-### 公共能力与语言扩展
+### Shared capabilities and language extensions
 
-- `[eng-common-002] [hard]` 实现前查找项目已有组件、工具、扩展、服务和框架能力，尤其是金额与日期处理、标识符解析、日志、存储和权限入口；同一业务规则、权限判断或数据转换只保留一个权威实现。已有封装满足当前输入、输出和错误语义时直接复用，缺口在原边界扩展；调用方不得各写一套格式化、鉴权或转换逻辑，也不为仅语法相似但语义不同的场景强行共用实现。
-- `[eng-common-008] [hard]` 同一稳定语义需要供多个调用方使用，且输入、输出、错误语义及所属职责一致时，应在重复实现出现前封装到职责明确的公共边界：Swift 可用按类型或命名空间组织的扩展，Web 可用纯工具函数、组件或 composable，后端可用服务或适配器。命名与目录遵循项目惯例，不强制全局单例或额外命名空间包装。无副作用的通用转换与依赖生命周期、事务或业务状态的逻辑分开；仅有语法相似或单次使用的简单代码保留在业务模块，不为形式统一创建万能 `Utils`、`Helper` 或空转包装层。
+- `[eng-common-002] [hard]` Before implementation, find existing project components, utilities, extensions, services and framework capabilities, especially for money/date handling, identifier parsing, logging, storage and permission entry points. Keep one authoritative implementation of each business rule, permission decision or data conversion. Reuse an existing wrapper directly when it meets current input, output and error semantics; extend gaps at the original boundary. Callers must not each implement formatting, authorization or conversion logic, and must not force semantically different cases into one implementation merely because their syntax is similar.
+- `[eng-common-008] [hard]` When multiple callers need the same stable semantics with matching inputs, outputs, error semantics and ownership, encapsulate them at a clearly responsible shared boundary before duplicate implementations appear: Swift may use extensions organized by type or namespace, Web may use pure utility functions, components or composables, and backends may use services or adapters. Follow project naming/directory conventions; do not force global singletons or extra namespace wrappers. Separate side-effect-free general conversions from logic dependent on lifecycles, transactions or business state. Keep simple one-use code or merely syntactically similar code in its business module; do not create universal `Utils`, `Helper` or empty forwarding layers for formal consistency.
 
-### 职责、文件结构与设计模式
+### Responsibilities, file structure and design patterns
 
-- `[eng-common-010] [hard]` 按项目已有架构维持清晰的职责与依赖方向：展示和交互、协议与数据映射、业务规则与流程、持久化或外部集成由各自的合适边界承担。跨模块通过所有者公开的业务合同协作，不越过所有者直接操作其私有存储或实现；通用能力不反向依赖具体页面或业务实现。一个文件、类型或函数应有可说明的主要职责；不得把互不相关的业务流程、独立状态与副作用持续堆积到同一页面、控制器、服务或工具文件，也不得将业务规则塞进仅负责传输或存取数据的边界。具体分层名称和目录由项目专项规范决定。
-- `[eng-common-011] [hard]` 修改范围出现多项无关职责、反复因不同原因共同改动、状态或副作用难以隔离、依赖方向混乱或难以独立验证时，应审查实际边界；确认存在可分离职责后，沿业务语义、生命周期或稳定合同拆分，并保持原有对外行为。不得以代码行数或文件／函数长度作为拆分、重构或 QA 验收依据，也不得机械制造碎片组件、空转转发层、重复状态或循环依赖；小范围修复不强制重写无关旧代码。
-- `[eng-common-012] [advisory]` 维护性复核关注职责内聚、依赖方向、变更耦合、状态与副作用边界及可独立验证性。审查意见应指出具体代码问题及实际影响，不把主观偏好变成验收门禁；职责清晰、验证充分的实现可以保留现有组织形式。
-- `[eng-common-013] [hard]` 优先复用项目已有抽象和简单组合；只在真实的变化点、多种实现、跨模块合同或可验证的隔离需求存在时引入相应设计模式。接口、工厂、策略或包装层必须有明确职责与收益；不得仅为套用模式或预想的扩展建立单一实现的层层转发结构。
+- `[eng-common-010] [hard]` Maintain clear responsibilities and dependency direction within the project's existing architecture: presentation/interaction, protocol/data mapping, business rules/flows, persistence and external integration each belong at suitable boundaries. Modules cooperate through the owner's public business contracts, without bypassing the owner to manipulate private storage or implementation. General capabilities must not depend back on specific pages or business implementations. Each file, type or function needs an explainable primary responsibility. Do not continually accumulate unrelated business flows, independent state and side effects in one page, controller, service or utility file, or insert business rules into a boundary responsible only for transport or data access. Project-specific standards determine concrete layer names and directories.
+- `[eng-common-011] [hard]` Review actual boundaries when the changed scope contains unrelated responsibilities, repeatedly changes together for different reasons, has state/side effects that are hard to isolate, has confused dependency direction or is hard to verify independently. After confirming separable responsibilities, split by business semantics, lifecycle or stable contract while preserving external behavior. Do not use line counts or file/function length as a basis for splitting, refactoring or QA acceptance. Do not mechanically create fragmented components, empty forwarding layers, duplicate state or dependency cycles. A narrow fix does not require rewriting unrelated old code.
+- `[eng-common-012] [advisory]` Maintainability review focuses on responsibility cohesion, dependency direction, change coupling, state/side-effect boundaries and independent verifiability. Review comments should identify specific code problems and actual impact, without turning subjective preferences into acceptance gates. An implementation with clear responsibilities and sufficient verification may retain its existing organization.
+- `[eng-common-013] [hard]` Prefer existing project abstractions and simple composition. Introduce a design pattern only for a real variation point, multiple implementations, cross-module contract or verifiable isolation need. Interfaces, factories, strategies and wrappers must have clear responsibilities and benefits; do not build layers of single-implementation forwarding merely to apply a pattern or anticipate future extension.
 
-### 数据语义与精度
+### Data semantics and precision
 
-- `[eng-common-021] [hard]` 标识符按合同保持类型和精度，跨语言或序列化边界不得因隐式数值转换丢失信息；未经合同定义，不按标识符数值推断状态、顺序或归属。合法零值、空值、缺失值和未知状态须明确区分；持久化枚举值保持稳定，不以声明顺序代替业务值，不把未知值默认解释为成功、启用或已完成。
-- `[eng-common-022] [hard]` 涉及金额、比率或其他精确数量时，明确单位、精度、上下限和舍入规则，并按合同选用整数、定点或十进制表示；不得用二进制浮点完成要求精确的金额计算，也不得静默溢出或截断。计算、传输与展示分开，用于展示的格式化字符串不参与计算或回写，转换与格式化复用既有入口；不统一强制货币单位或小数位数。
-- `[eng-common-023] [hard]` 时间字段区分时间点、自然日期、时长和区间，明确序列化格式、适用时区及起止边界。跨边界转换和展示复用已有时间入口，不依赖机器隐式时区、字符串截断或任意拼接推导业务时间；无时区的自然日期不擅自当作瞬时时间转换。具体时区、精度和区间约定由项目合同决定。
+- `[eng-common-021] [hard]` Preserve identifier types and precision according to contract; implicit numeric conversions across language/serialization boundaries must not lose information. Do not infer state, order or ownership from identifier values unless the contract defines it. Distinguish valid zero, null, missing and unknown states explicitly. Keep persisted enum values stable, without substituting declaration order for business values or interpreting unknown values as success, enabled or completed by default.
+- `[eng-common-022] [hard]` For money, ratios or other exact quantities, specify units, precision, lower/upper bounds and rounding rules, then select integer, fixed-point or decimal representation according to contract. Do not use binary floating point for money calculations requiring exactness, or silently overflow/truncate. Separate calculation, transport and display. Display-formatted strings do not participate in calculations or writeback; reuse existing conversion/formatting entry points. Do not mandate one currency unit or decimal scale everywhere.
+- `[eng-common-023] [hard]` Distinguish instants, calendar dates, durations and intervals in time fields, and specify serialization format, applicable time zone and start/end boundaries. Reuse existing time entry points for cross-boundary conversion and display; do not derive business time from implicit machine time zones, string truncation or arbitrary concatenation. Do not convert a calendar date without a time zone as if it were an instant. Project contracts determine the concrete time zone, precision and interval conventions.
 
-### 安全、依赖与运行可靠性
+### Security, dependencies and operational reliability
 
-- `[eng-common-015] [hard]` 将网络输入、持久化数据、文件、回调和跨进程消息等外部数据视为不可信；在实际信任边界校验格式、范围和权限，不以页面隐藏按钮或客户端判断替代服务端授权。权限按最小需要授予；处理敏感数据时遵守项目隐私规则，不把凭据、令牌或个人数据写入日志和错误展示。
-- `[eng-common-016] [hard]` 增加第三方依赖、生成器或构建插件前，先确认现有框架与项目依赖不能满足需求，并检查来源、许可、安全风险、版本及维护成本；遵守项目既有统一版本管理、锁定与升级策略，不为解决局部问题私自覆盖公共版本，不为小功能引入重复能力或顺手升级无关依赖。不能完成必要检查时说明风险，不把未经验证的依赖当作已批准。
-- `[eng-common-017] [hard]` 新增外部调用或异步任务时，明确超时、取消、资源释放与失败传播的责任边界；请求、订阅、计时器和连接随所属生命周期结束而取消、释放或移交明确的新所有者。可被新操作替代的查询必须处理竞态，迟到响应不得覆盖更新结果，正常取消不伪装成业务失败。需要重试时只在合适的一层处理可重试且安全的操作，限制次数或总时长，并核对幂等性，避免重复副作用和多层重试放大负载；不以吞错或无限等待伪装稳定。
-- `[eng-common-018] [advisory]` 对生产中需要定位的重要失败或跨边界流程，复用项目现有日志与遥测入口，保留足够的错误上下文和可关联信息；不为简单本地逻辑强制新增监控框架，也不记录敏感载荷或输出无结构的调试噪声。
+- `[eng-common-015] [hard]` Treat external data, including network input, persisted data, files, callbacks and cross-process messages, as untrusted. Validate format, range and permission at actual trust boundaries; hiding UI buttons or client-side checks does not replace server authorization. Grant only necessary permissions. Follow project privacy rules for sensitive data, and do not write credentials, tokens or personal data into logs or error displays.
+- `[eng-common-016] [hard]` Before adding third-party dependencies, generators or build plugins, confirm that existing framework/project dependencies cannot meet the need, and inspect provenance, license, security risks, version and maintenance cost. Follow existing centralized version management, locking and upgrade policies. Do not privately override shared versions for a local issue, introduce duplicate capabilities for a small feature or upgrade unrelated dependencies incidentally. If necessary checks cannot be completed, report the risk rather than treating an unverified dependency as approved.
+- `[eng-common-017] [hard]` When adding external calls or asynchronous tasks, specify responsibility for timeouts, cancellation, resource release and failure propagation. Cancel, release or explicitly transfer ownership of requests, subscriptions, timers and connections when their lifecycle ends. Queries superseded by new operations must handle races; late responses must not overwrite newer results, and normal cancellation must not masquerade as business failure. Retry only safely retryable operations at one suitable layer, bound attempts or total duration, and check idempotency to avoid duplicate side effects and load amplification from layered retries. Do not disguise swallowed errors or infinite waiting as stability.
+- `[eng-common-018] [advisory]` For important production failures or cross-boundary flows that require diagnosis, reuse existing project logging/telemetry entry points and retain sufficient error context and correlation information. Do not mandate a monitoring framework for simple local logic, record sensitive payloads or emit unstructured debug noise.
 
-### 身份、状态与一致性
+### Identity, state and consistency
 
-- `[eng-common-024] [hard]` 实现认证会话或自动续期时，由统一认证与请求边界维护凭据；同一会话与凭据的并发刷新应合并，刷新与重发有明确终止条件，并遵守操作可重放与幂等合同。退出登录或切换身份时，使关联凭据、缓存及未完成结果失效，防止旧响应或刷新任务恢复旧身份、泄漏数据或覆盖新身份状态；不要求清除与身份无关的偏好。
-- `[eng-common-025] [hard]` 可变状态须有明确所有者和权威来源；局部状态不无条件提升为全局状态，派生值优先由权威数据计算，确需缓存或物化时明确更新和失效机制，不维护无治理的平行可变副本。业务结果由合同指定的权威方确认，原型或测试替身不得充当生产成功依据；乐观更新仅在可安全回退、失败可见且不绕过权威校验时使用。缓存的作用域和身份隔离须明确，缓存命中不能代替授权。
-- `[eng-common-026] [hard]` 涉及多步持久化或关键状态写入时，由业务所有者确定事务、合法状态迁移和不变量边界；依据实际并发范围，使用约束、条件更新、版本检查、适当锁或幂等标识防止重复副作用和竞争覆盖。先查后写、按钮防抖或局部进程锁不能单独证明跨实例一致性；受影响结果不符合预期时须识别冲突、重复或不存在，不假报成功。事务只覆盖必要数据操作，避免持锁等待不可控外部操作；具体机制按项目合同选择。
-- `[eng-common-027] [hard]` 数据库提交与消息发布、外部调用等跨资源副作用不得假定为天然原子；存在此类一致性需求时，优先复用项目已有可靠投递、可重试状态或补偿机制，明确重复、乱序、部分失败和恢复语义，并验证相关边界。不为无此需求的功能预建消息中间件或分布式事务框架。
+- `[eng-common-024] [hard]` When implementing authenticated sessions or automatic renewal, let the unified authentication/request boundary maintain credentials. Coalesce concurrent refreshes for the same session and credentials, give refresh/replay explicit termination conditions, and follow replayability/idempotency contracts. On logout or identity change, invalidate associated credentials, caches and pending results so old responses/refresh tasks cannot restore an old identity, leak data or overwrite new-identity state. Identity-independent preferences need not be cleared.
+- `[eng-common-025] [hard]` Give mutable state an explicit owner and authoritative source. Do not promote local state to global unconditionally. Prefer deriving values from authoritative data; when caching/materialization is necessary, define update and invalidation mechanisms rather than maintaining unmanaged parallel mutable copies. The contract-designated authority confirms business outcomes; prototypes/test doubles cannot prove production success. Use optimistic updates only when safe rollback and visible failure are available and authoritative validation is preserved. Define cache scope and identity isolation; a cache hit does not replace authorization.
+- `[eng-common-026] [hard]` For multistep persistence or critical-state writes, the business owner determines transaction boundaries, legal state transitions and invariants. Use constraints, conditional updates, version checks, suitable locks or idempotency identifiers according to actual concurrency to prevent duplicate side effects and racing overwrites. Read-then-write, button debouncing or a local process lock alone do not prove consistency across instances. Detect conflicts, duplicates or absence when affected results differ from expectations; do not falsely report success. Limit transactions to necessary data operations and avoid holding locks while waiting for uncontrolled external work. Select concrete mechanisms according to project contracts.
+- `[eng-common-027] [hard]` Do not assume database commits and cross-resource side effects such as message publishing or external calls are naturally atomic. When this consistency is required, prefer existing project reliable-delivery, retryable-state or compensation mechanisms; define duplicate, out-of-order, partial-failure and recovery semantics, and verify relevant boundaries. Do not prebuild messaging middleware or distributed-transaction frameworks for features that have no such need.
 
-### 合同演进与二次开发
+### Contract evolution and downstream development
 
-- `[eng-common-028] [hard]` API、持久化结构、消息、错误码、枚举、缓存格式、配置和导入导出格式均可能是可观察合同；修改时识别实际生产者、消费者及兼容影响。不得静默改变字段含义、默认值、空值、单位、时区、分页排序或既有错误语义；不兼容变更沿用现有确认与交付流程，提供适用的版本化、兼容窗口或迁移方案，明确回退或恢复方式，并验证受影响消费者。不因本规则额外增加确认阶段或无关全量回归。
-- `[eng-common-029] [hard]` 基于开源项目或外部框架二次开发时，遵守项目已确认的可写与受保护路径，优先通过公开 API、配置、扩展点或窄适配层实现，保持通用底座不被具体业务反向侵入。只有项目允许时才直接修改上游，保持满足需求的最小差异，可追溯来源、目的、合同影响、验证与回退方式；不统一禁止直改，也不承诺后续合并必然无冲突。具体路径与同步策略由项目专项规范补充。
+- `[eng-common-028] [hard]` APIs, persisted structures, messages, error codes, enums, cache formats, configuration and import/export formats may all be observable contracts. Identify actual producers, consumers and compatibility impact when changing them. Do not silently change field meanings, defaults, nulls, units, time zones, pagination/sorting or existing error semantics. Incompatible changes follow existing confirmation/delivery procedures, with applicable versioning, compatibility windows or migration plans, explicit rollback/recovery and verification of affected consumers. This rule adds no confirmation stage or unrelated full regression.
+- `[eng-common-029] [hard]` When extending an open-source project or external framework, follow confirmed writable/protected paths and prefer public APIs, configuration, extension points or narrow adapters, preserving the general foundation from reverse dependency on specific business code. Modify upstream directly only when project policy permits, keep the smallest sufficient diff, and make provenance, purpose, contract impact, verification and rollback traceable. Do not universally forbid direct edits or promise conflict-free future merges. Project-specific standards supply concrete paths and synchronization policy.
 
-### 配置、错误和维护
+### Configuration, errors and maintenance
 
-- `[eng-common-003] [hard]` 凭据遵守上文秘密管理规则；环境地址、部署差异及需要统一调整的值由项目配置入口管理，业务代码不散落这些字面量。启用国际化或设计令牌时，使用项目的文案和语义变量入口；协议固定值、具名业务常量和必要默认值按已确认合同保留。
-- `[eng-common-004] [hard]` 统一请求层保留项目定义的成功、失败、认证失效、权限不足及需业务流转的特殊状态，不把它们全部变成同一种通用提示。业务层决定相应恢复或页面流转；只在能够恢复或转换为稳定错误合同的边界捕获，保留可诊断的原因链与必要上下文，不重复提示或向用户展示敏感底层错误。不得吞掉异常、用旧缓存冒充本次新结果或把失败伪装成成功；允许的缓存降级应明确告知结果来源与时效。公共响应或错误语义变化时检查所有已知调用方。
-- `[eng-common-005] [hard]` 新增或优化代码时，用中文注释解释非显然的业务规则、权限与安全边界、并发、资源释放、兼容性和异常策略，并随实现更新；清晰代码无需逐行翻译。
-- `[eng-common-009] [hard]` 新增或改变公共请求层、业务 API 或复用封装时，按影响验证正常结果、失败与特殊状态、参数/响应映射，以及相关调用方的行为；使用仓库实际具备的测试或构建方式，报告未验证部分，不因文档规则自动运行无关模块的全量测试。
-- `[eng-common-019] [hard]` 新增或改变可观察业务行为、修复缺陷时，先复用现有针对性覆盖；只有实际覆盖缺口或用户／项目强制要求才补测试，优先扩展现有文件，确有独立职责或项目约定需要时才新建。已有覆盖充分时可以不新增测试；不得以新增测试文件、用例数量或测试代码行数作为 QA 验收依据。按实际风险选择关键正常、边界、失败及必要的精度、模型映射、并发或重试恢复用例，不凑齐全部类别或在多层复制相同保障。断言对真实合同有意义，不能只证明 mock 被调用或让错误实现也能通过；替身测试不冒充真实依赖的运行证据。测试保持清晰、可维护；必需验证通过且证据仍有效即停止，QA／PM 核对后复用，不因交接或收尾重复跑一轮。仓库缺少可运行测试入口时报告限制和已做的替代验证，不虚构通过结果。
-- `[eng-common-020] [hard]` 变更应围绕当前需求保持可审查：不混入无关格式化、依赖升级或大范围重构；保留未获批准的公开、持久化与运行合同。实际改变构建、配置、对外用法或运维行为时更新对应说明；小修复不要求补写与本次变化无关的文档。规范与说明优先更新现有适用主题，已有规则覆盖时不重复新增；确有独立维护边界或项目约定需要时才新建，不按每项需求／约束建一份，也不把所有专项规则堆入 GENERAL。专项引用共通权威、仅补实际差异，引用仍须完整读取和覆盖。依 WORKFLOW 的 `Standards document granularity and maintenance` 维护；归并不得削弱合同、丢失适用范围或破坏稳定编号与引用。
-- `[eng-common-030] [hard]` 开发、回归与验收复用所属项目／服务已有的配置入口、开发数据库、运行环境及系统构建／依赖缓存（Maven、Gradle、npm、pnpm、Cargo、uv、DerivedData 等）；结构与需保留的数据按授权迁移或增量同步到相应基线，各项目的数据与配置隔离，不要求所有项目共用一个数据库。不得为每轮修复、重试、QA 或阶段验收新建平行测试库、隔离父库、容器、私有依赖仓库，或按日期／轮次／候选复制源码树、构建产物与运行时目录（如 `-v2`、`-r1`、`replay`、`frozen-replay`、`packages-qa*`）。
-  仅在并发写入冲突、破坏性实验或用户明确要求时启用必要的环境／数据库隔离，同一任务复用该实例；用户指示不隔离或直改主分支时遵守。实际新增资源时，在现有 Task Pack 的 `input_contracts`、`output_contracts` 与 `acceptance_evidence` 写明目的、落点、所有者、复用入口及保留／回收条件，不另建资源台账；没有新增资源不因本条额外创建临时目录、Full 图或空记录。
-  改动前版本保护优先依托 Git 中实际可恢复的版本，不按轮次手工复制 `before`／`.bak` 源码快照；不得假定 Git 能恢复未提交、未跟踪内容或非 Git 原始资料。必要时沿用可恢复输入或保存一份范围明确的恢复副本，无法保护时停止受影响的覆盖／删除；破坏性数据操作保护使用单一固定名称的滚动快照。
-  收口时按合同移交需保留的有效数据与成果，仅回收可证明归属本任务、无活跃使用及必要引用的临时目录、隔离库、容器、快照与过程产物；共享配置、项目环境、数据库、系统缓存及用户材料不因本任务结束而清理。先将必需完整日志、原始批准与恢复证据移交到可读持久落点并修复当前引用，无法移交时精确保留必要文件；摘要不能替代完整证据，单个引用也不意味着保留整个候选目录。沿用现有派发、验证、QA 与 PM 收口，不新增阶段或报告。
+- `[eng-common-003] [hard]` Credentials follow the secret-management rule above. Project configuration entry points manage environment addresses, deployment differences and values requiring coordinated changes; do not scatter these literals through business code. When localization or design tokens are enabled, use project copy and semantic-variable entry points. Preserve protocol literals, named business constants and necessary defaults according to confirmed contracts.
+- `[eng-common-004] [hard]` The unified request layer preserves project-defined success, failure, expired authentication, insufficient permission and special states requiring business flow, rather than converting them all to one generic message. The business layer decides recovery/navigation. Catch errors only at boundaries able to recover or convert them into a stable error contract, retaining a diagnosable cause chain and necessary context without duplicate messages or sensitive low-level errors shown to users. Do not swallow exceptions, present old cache as a new result or disguise failure as success. Permitted cache fallback must disclose source and freshness. Check all known callers when shared response/error semantics change.
+- `[eng-common-005] [hard]` When adding or optimizing code, use detailed Chinese comments to explain non-obvious business rules, permission/security boundaries, concurrency, resource release, compatibility and exception strategies, and update them with the implementation. Clear code does not need line-by-line translation.
+- `[eng-common-009] [hard]` When adding or changing a shared request layer, business API or reusable wrapper, verify normal results, failures/special states, parameter/response mapping and relevant caller behavior according to impact. Use tests/build methods actually available in the repository and report unverified portions. This documentation rule does not automatically require full tests of unrelated modules.
+- `[eng-common-019] [hard]` When adding/changing observable business behavior or fixing a defect, reuse existing targeted coverage first. Add tests only for actual coverage gaps or mandatory user/project requirements; prefer extending existing files, creating a new one only for an independent responsibility or genuine project convention. Sufficient existing coverage needs no new test. Do not use new test files, case counts or test-code line counts as QA acceptance criteria. Select meaningful normal, boundary, failure and necessary precision, model-mapping, concurrency or retry/recovery cases by actual risk, without filling every category or duplicating the same protection across layers. Assertions must matter to the real contract, not merely prove a mock call or allow an incorrect implementation to pass. Test doubles do not replace runnable evidence for real dependencies. Keep tests clear and maintainable. Stop when mandatory verification passes and evidence remains valid; QA/PM reuse it after checking, without repeating a round for handoff/closeout. If the repository lacks a runnable test entry point, report limitations and completed alternative verification; do not invent passing results.
+- `[eng-common-020] [hard]` Keep changes reviewable around the current requirement. Do not mix unrelated formatting, dependency upgrades or broad refactoring; preserve public, persistence and operational contracts whose change is unapproved. Update corresponding documentation when build, configuration, external usage or operational behavior actually changes. Small fixes need not add documentation unrelated to the change. Prefer updating existing applicable topics for standards/documentation, without duplicating rules already covered. Create new documents only for a genuinely independent maintenance boundary or project convention, not one per requirement/constraint, and do not pile every specialized rule into GENERAL. Specialized documents reference common authority and add only actual differences; references still require complete reading and coverage. Follow WORKFLOW's `Standards document granularity and maintenance`; consolidation must not weaken contracts, lose applicability or break stable numbering/references.
+- `[eng-common-030] [hard]` Development, regression and acceptance reuse the owning project/service's existing configuration entry points, development database, runtime environment and system build/dependency caches (Maven, Gradle, npm, pnpm, Cargo, uv, DerivedData, etc.). Migrate or incrementally synchronize structure and retained data to the corresponding baseline as authorized. Isolate each project's data/configuration; this does not require every project to share one database. Do not create parallel test databases, isolated parent databases, containers or private dependency repositories per repair, retry, QA or staged acceptance, or copy source trees, build outputs or runtime directories by date/round/candidate (such as `-v2`, `-r1`, `replay`, `frozen-replay`, `packages-qa*`).
+  Use necessary environment/database isolation only for concurrent-write conflicts, destructive experiments or an explicit user request, and reuse the same instance for the task. Honor user instructions against isolation or for direct main-branch edits. For actual new resources, record purpose, location, owner, reuse entry point and retention/reclamation conditions in the existing Task Pack's `input_contracts`, `output_contracts` and `acceptance_evidence`, without creating a resource ledger. Without new resources, this rule does not require temporary directories, a Full graph or empty records.
+  Prefer actually recoverable Git versions for pre-change protection, rather than manually copying `before`/`.bak` source snapshots per round. Do not presume Git can recover uncommitted/untracked content or original non-Git material. When necessary, reuse recoverable inputs or save one bounded recovery copy; if protection is impossible, stop affected overwrite/deletion. Protect destructive data operations with a single fixed-name rolling snapshot.
+  At closeout, hand off valid data/results that must be retained according to contract. Reclaim only temporary directories, isolated databases, containers, snapshots and process artifacts demonstrably owned by this task, without active use or necessary references. Do not clean shared configuration, project environments, databases, system caches or user material merely because the task ends. First transfer mandatory complete logs, original approvals and recovery evidence to a readable durable location and repair current references; if transfer is impossible, preserve exactly the necessary files. Summaries do not replace complete evidence, and one reference does not require retaining the entire candidate directory. Use existing dispatch, verification, QA and PM closeout without new stages/reports.
 
-## 上游与二次开发适用边界
+## Applicability to upstream and downstream development
 
-项目特有规范声明实际受保护根、允许扩展路径、直改政策和同步策略；没有嵌入上游源时明确不适用，不虚构保护路径。
-通用例外条款不自行创建保护边界，也不增加默认业务确认阶段。
+Project-specific standards declare actual protected roots, allowed extension paths, direct-edit policy and synchronization strategy. Explicitly mark this inapplicable when no upstream source is embedded; do not invent protected paths.
+General exception clauses do not create protected boundaries themselves or add a default business-confirmation stage.
 
 ## Exceptional change contract
 

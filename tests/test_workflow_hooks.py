@@ -313,12 +313,15 @@ class HookTest(unittest.TestCase):
                 self.assertFalse({"decision", "continue", "permissionDecision"} & set(data))
         # 提示词不经过关键词分类，且提醒不含原始用户内容或复制的正文；
         # 这里只核对回调合同，不把提醒文本匹配当成模型服从或用户授权的证据。
-        self.assertIn("用户明确跳过", hooks.ENTRY)
-        self.assertIn("已完成", hooks.ENTRY)
+        self.assertIn("explicit user opt-outs", hooks.ENTRY)
+        self.assertIn("already completed", hooks.ENTRY)
         self.assertIn("Light/Full", hooks.ENTRY)
         self.assertNotIn("Trivial", hooks.ENTRY + hooks.RECOVERY)
-        self.assertIn("退役禁止复用", hooks.RECOVERY)
-        self.assertLess(len(hooks.ENTRY), 250)
+        self.assertIn("retirement prohibits reuse", hooks.RECOVERY)
+        # 提醒是模型可见串，必须英文；不筛查整个 Python 文件，中文实现注释继续保留。
+        self.assertNotRegex(hooks.ENTRY + hooks.RECOVERY + hooks.DISPATCH, r"[\u4e00-\u9fff]")
+        # 英文说明保持同一有限提醒职责；按实际英文长度约束，不能复用中文字符预算。
+        self.assertLess(len(hooks.ENTRY), 1000)
 
     def test_recovery_only_restores_missing_context_and_startup_is_quiet(self):
         for host in ("codex", "claude"):
@@ -531,8 +534,13 @@ class InstalledCallbackTest(unittest.TestCase):
             source, project = base / "source", base / "项目 with spaces"
             shutil.copytree(PACK, source, ignore=shutil.ignore_patterns("tests", "__pycache__", ".DS_Store"))
             project.mkdir()
-            result = subprocess.run(["bash", str(source / "install.sh"), str(project)],
-                                    capture_output=True, text=True, timeout=120)
+            # 这里需要真实旧自包含 Hooks，显式沿用已有 legacy 低层安装 fixture；
+            # 默认 install.sh 已走中央模式，不能为这个旧合同去读写用户全局 state。
+            result = subprocess.run(
+                [sys.executable, "-B", "-X", "utf8", "-c",
+                 "from pathlib import Path; from lib.install_workflow import _install; import sys; "
+                 "_install(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())", str(project), str(source)],
+                cwd=source, capture_output=True, text=True, timeout=120)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             shutil.rmtree(source)
             for host, relative in (("codex", ".codex/hooks.json"), ("claude", ".claude/settings.json"),

@@ -3,9 +3,7 @@
 - The PM is the sole orchestrator; workers do not delegate nested Agents. Follow the latest complete
   task pack and exact `owned_paths`. Discovered modules are soft routing preferences, never write
   authority. Return missing authority, scope changes and cross-role work to PM; preserve other work.
-- 仅接收 schema_version: 2 的当前自包含任务包；核对 module、role、agent_alias、
-  instance_policy: fresh 和 context_policy: handoff_only。独立新任务使用新原生 ID，
-  不复制完整 PM／兄弟会话，不读取私有转录补齐背景；必要当前文件与规范仍须完整读取。
+- Receive only current self-contained schema_version: 2 task packs; check module, role, agent_alias, instance_policy: fresh, and context_policy: handoff_only. Independent new tasks use new native IDs; do not copy complete PM/sibling conversations or read private transcripts for background. Still read required current files and standards completely.
 - If `execution_workspace` is present, verify the assigned actual root/base and keep every edit and
   command there; do not redirect into the main checkout. Return exact revision/evidence to PM.
   Workers never independently create commits, merge branches or remove worktrees; PM owns scoped
@@ -31,9 +29,7 @@
   are candidates, not a requirement to run every suite. Preserve mandatory checks and report exact
   commands, exit codes, relevant output and complete-log references; never invent evidence. After
   two failed repair attempts, escalate to PM. On PM stop/kill, stop editing immediately.
-  生产代码交付必须有受影响目标构建／编译成功和可运行证据，缩小测试范围不能豁免。
-  默认最小充分验证；不要仅因“功能已改完”运行全仓测试发现或全部测试文件。全量／
-  重跑须有明确覆盖需要或强制要求；选定必需检查通过且证据有效即交接，停止追加测试。
+  Production delivery requires successful affected-target build/compile and runnable evidence; narrowing tests cannot waive this. Default to minimum sufficient verification; do not run repository-wide test discovery or all test files merely because implementation is complete. Full/repeated runs require concrete coverage needs or mandatory requirements; hand off and stop adding tests once selected mandatory checks pass with valid evidence.
 - When independent QA is required, QA is exactly one read-only reviewer. Implementation owners provide evidence; QA independently
   audits source, rules and evidence without automatically repeating successful tests. QA cannot
   write tests, dispatch fixes or close the request. Only PM assesses document projection, local
@@ -52,6 +48,5 @@ return the scoped conclusion without fabricated writers/build evidence or a seco
 report. Full implementation acceptance requires the existing QA handoff; Light requires minimum
 verification and a risk-based QA/documentation assessment. On
 bounded rework, reuse unchanged conclusions and refresh only affected checks under the latest full scope.
-同任务连续实现与短期返工可续用；本轮 QA 仍由原 Reviewer 差量复查。闭环后由 PM 在
-成果和证据安全时结束实例，结束能力缺失或失败只记录退役、禁止复用，不声称清空或销毁。
+Continuous same-task implementation and short rework may reuse the instance; the original Reviewer still performs delta review in this QA round. After closeout, PM ends the instance when results and evidence are safe; if termination capability is absent or fails, record retirement and prohibit reuse without claiming context clearing or destruction.
 The complete role contract below and the current task pack determine the applicable execution branch.

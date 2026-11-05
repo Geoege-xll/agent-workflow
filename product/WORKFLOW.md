@@ -3,8 +3,7 @@
 This document defines the portable product workflow. Platform adapters only expose the
 entry points required by each host. They must not copy and rewrite a parallel workflow.
 
-2.0 只接受 `Light | Full` 和 `schema_version: 2` 的当前任务／交接合同；不解析旧等级、
-旧格式或兼容别名。版本切换不授权删除用户历史、成果或仍需保留的证据。
+2.0 accepts only `Light | Full` and the current `schema_version: 2` task/handoff contract; it does not parse old levels, old formats, or compatibility aliases. A version switch does not authorize deleting user history, results, or evidence that must still be retained.
 
 ## 1. Instruction Priority
 
@@ -14,26 +13,13 @@ entry points required by each host. They must not copy and rewrite a parallel wo
 4. Role boundaries and technology stacks in `roles/xy-*.md`
 5. Platform default behavior
 
-### 中央固定版本与项目适配器
+### Centrally Pinned Versions and Project Adapters
 
-中央模式的 `.agent-workflow/runtime.json` 只标识项目选版；能发现宿主 Skill 软链不证明
-本机已经启用。每次启动新工作流先通过项目薄入口 `runtime.py check` 验证本机启用；
-克隆项目缺机器 binding 时停止自动编排，不自行安装或猜测版本。源包和旧自包含安装
-继续使用原入口；中央模式不把整个 `.agent-workflow` 换成外部目录软链。
+In central mode, `.agent-workflow/runtime.json` identifies only the project's selected version; discovering host Skill symlinks does not prove local activation. Before starting each new workflow, verify local activation through the project's thin entry point with `runtime.py check`; if a cloned project lacks a machine binding, stop automatic orchestration without installing or guessing a version. Source packs and legacy self-contained installations keep their original entry points; central mode does not replace the entire `.agent-workflow` with a symlink to an external directory.
 
-中央 schema 2 图／单包顶层固定 `runtime_binding`，其对象只允许 `protocol_version: 1`、
-`content_id`、`manifest_sha256` 三字段，不携带机器路径。新图从已验证桥上下文或明确
-的已验证 binding 冻结，导出原样保留，update 不改已有 pin。项目以后换版只影响新任务；
-缺 pin、执行版本冲突、未知或损坏核心均失败，不能用项目当前版补全旧包。
+Central schema 2 graphs/single-task packs freeze top-level `runtime_binding`, whose object permits only `protocol_version: 1`, `content_id`, and `manifest_sha256`, with no machine paths. Freeze a new graph from verified bridge context or an explicitly verified binding, preserve it unchanged on export, and never change an existing pin on update. A later project version switch affects only new tasks; fail on a missing pin, execution-version conflict, or unknown/damaged core rather than filling an old pack from the project's current version.
 
-运行中每次 helper 调用都按当前 Task Pack 的 pin 经薄入口选择核心并导出独立进程环境，
-不依赖跨工具调用的 shell 环境。统一执行方法见
-[helper 执行边界](../platforms/shared/skills/xy-workflow/references/dispatch.md#workflow-helper-execution)，
-图／单包、规范和分页消费者见
-[运行记录工具](../platforms/shared/skills/xy-workflow/references/runtime-records.md)。中央项目配置
-只从该物理项目 `.agent-workflow/project.yaml` 读取；项目根、配置根和核心根不可互相推导。
-内置正文／规则 ID／严重性／指纹都由任务 pin 对应核心取得，项目专项叶和索引仍安全读取
-项目实文件。不存在的项目索引保持 null，不创建 GENERAL 或空索引。
+For every helper invocation during execution, select the core through the thin entry point using the current Task Pack's pin and export an independent process environment; do not rely on shell environment surviving across tool calls. See [helper execution boundaries](../platforms/shared/skills/xy-workflow/references/dispatch.md#workflow-helper-execution) for the shared invocation method, and [runtime record tools](../platforms/shared/skills/xy-workflow/references/runtime-records.md) for graph/single-pack, standards, and pagination consumers. Read central project configuration only from that physical project's `.agent-workflow/project.yaml`; do not infer project, configuration, and core roots from one another. Obtain built-in text, rule IDs, severity, and fingerprints from the core pinned by the task; continue safely reading project-specific leaves and indexes from actual project files. Keep an absent project index null; do not create GENERAL or an empty index.
 
 ## 2. PM and Roles
 
@@ -71,9 +57,7 @@ alignment and classification with on-demand auxiliary retrieval
   -> FAIL: QA reports to PM -> PM dispatches bounded rework -> same reviewer checks affected delta
 ```
 
-Light 先判断当前范围和风险，默认派对应原生实施者，完成最小充分验证后向 PM 交接。
-PM 按实际风险评估独立审计、文档与记忆；不强制 Full 规划、DAG、保存计划或重复确认。
-没有执行独立 QA 时只能报告真实验证结果，不能制造 QA PASS。
+For Light, assess the current scope and risk first, dispatch the corresponding native implementer by default, and hand off to the PM after minimum sufficient verification. The PM assesses actual independent-audit, documentation, and memory needs; Full planning, DAGs, saved plans, or duplicate confirmation are not mandatory. Without independent QA, report only actual verification results and never fabricate QA PASS.
 
 ### Standalone read-only audit
 
@@ -134,8 +118,8 @@ Current facts, historical decisions, design evidence, and working memory must re
 
 | Type | Path or capability | Rule |
 |---|---|---|
-| Project entry | `project.yaml` -> `docs.project`（同 `memory.portable_checkpoint`） | 当前项目概况与已验收基线链接；不放任务状态或历史日志，不设行数／字节上限 |
-| 主题生命周期 | `project.yaml` -> `docs.plans` | 一个稳定主题一份可编辑 Markdown 及同名派生 HTML；分开记录本次目标、执行恢复和上次已验收行为，Git 保留完整历史 |
+| Project entry | `project.yaml` -> `docs.project` (same as `memory.portable_checkpoint`) | Current project overview and accepted-baseline links; no task state or historical logs, and no line/byte limit |
+| Topic lifecycle | `project.yaml` -> `docs.plans` | One editable Markdown document and same-name derived HTML per stable topic; separately record the current goal, execution recovery, and last accepted behavior, with complete history in Git |
 | Other current facts | `project.yaml` -> remaining `docs.*` paths | Store currently effective engineering, design-system, and UI evidence; paths are an index, not an instruction to preload every file |
 | Active UI contract | `project.yaml` -> `docs.standards_root/prototype` | Keep stable interactive pages, their in-page contracts, and shared prototype CSS; approval remains in workflow task state |
 | Working memory | agentmemory | Optional cross-session observation and retrieval hints; it must never be the sole carrier of mandatory rules |
@@ -148,12 +132,7 @@ missing existing-feature fact, durable decision, engineering or design constrain
 background, or historical lesson. When available task information is sufficient, do not force
 document retrieval or agentmemory start retrieval.
 
-每位 Agent 独立满足当前任务包、必需 Skill／指令及适用规范的完整读取。同一实例上下文
-中已完整可用且版本未变的内容直接复用，正文与同版本文件切换传输方式不要求再读一遍。
-缺失、截断、压缩或实际变化时恢复受影响内容；完整读取、长文分页与版本核对的详细边界
-统一见 `xy-workflow/references/runtime-records.md#完整读取必需长文`，保留显式宿主／Skill
-重读要求。普通业务资料仍按相关标题／查询读取，不因必需规范完整读取而预载全树。
-机器完整字节核验可只返回指纹或简要结果；它不能代替模型读取必需正文。
+Every Agent independently reads the complete current task pack, required Skills/instructions, and applicable standards. Reuse content already fully available at the same unchanged version in the same instance context; switching between inline text and a file of the same version does not require reading it again. Restore affected content if missing, truncated, compacted, or actually changed. Detailed complete-reading, long-document pagination, and version-check boundaries are centralized in `xy-workflow/references/runtime-records.md#完整读取必需长文`; preserve explicit host/Skill rereading requirements. Continue reading ordinary business materials by relevant heading/query rather than preloading the whole tree because mandatory standards require complete reading. Machine verification of complete bytes may return only a fingerprint or concise result; it cannot replace the model reading required text.
 
 1. Read `project.yaml` when the workflow needs its paths, limits, or routing configuration. Treat
    every `docs.*` value as a discoverable index, not a command to open that document body.
@@ -185,21 +164,14 @@ empty record, and its absence alone is not a QA finding.
 
 ### Controlled-document projection after QA passes
 
-本节的强制QA后投影顺序适用于Full；Light按最小验证、实际必需独立审计和文档评估
-完成接收后更新必要事实，不把未审计结论称QA已通过。没有事实变化就不投影。
+This section's mandatory post-QA projection order applies to Full. Light updates necessary facts after acceptance of minimum verification, any actually required independent audit, and the documentation assessment; do not label unaudited conclusions as QA passed. Without a fact change, do not project.
 
-- PROJECT 与主题稿的“验收结果与当前已交付行为”只描述最后真实验收基线。主题稿的
-  “阶段”和“当前进展与恢复入口”可记录本次 active、paused 或 cancelled，但不能把其目标
-  冒充已交付；再次迭代保留旧已验收版本，直至本次实际验收后替换。
-- PM独占受控文档投影：Full必须等集成QA PASS；Light等最小验证及其实际选定的必要独立审计接收。
-  原地更新本主题基线与必要 PROJECT 链接；没有当前事实变化就不制造文档变更或新条目。
-- PROJECT 不设行数／字节限制，只保留当前概况和已验收主题链接；执行与日志留在原职责位置。
-- 已验收完整删除后从 PROJECT 移除当前链接，在同一主题稿标记 `removed`、真实删除原因、
-  日期和替代关系；必要旧行为明确标为历史。不重命名为 `.removed.md` 或另建功能／ADR 文档。
-  QA 失败不改变原有已验收基线。
-- 投影后运行 `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`，要求 exit 0。
-  校验器核对稳定主题、唯一基线、当前索引与规范边界；不从 `completed` 或 HTML 新鲜度推断批准。
-- 功能、架构方案与必要取舍留在相同主题稿；跨主题共享方案可有独立稳定主题，相关稿件引用它。
+- PROJECT and the topic's fixed section `验收结果与当前已交付行为` describe only the last genuinely accepted baseline. The topic's fixed `阶段` and `当前进展与恢复入口` fields/sections may record current active, paused, or cancelled work, but must not present its goals as delivered; retain the previous accepted version through the next iteration until actual acceptance replaces it.
+- Only the PM projects controlled documents: Full waits for integrated QA PASS; Light waits for acceptance of minimum verification and its actually selected necessary independent audit. Update the topic baseline and necessary PROJECT links in place; do not manufacture document changes or new entries without current fact changes.
+- PROJECT has no line/byte limit and retains only the current overview and accepted-topic links; execution and logs stay in their assigned locations.
+- After an accepted complete removal, remove the current PROJECT link and mark the same topic `removed`, with the actual reason, date, and replacement relationship; explicitly label any necessary old behavior as historical. Do not rename it to `.removed.md` or create separate feature/ADR documents. QA failure preserves the existing accepted baseline.
+- After projection, run `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .` and require exit 0. The validator checks stable topics, unique baselines, current indexes, and standards boundaries; it does not infer approval from `completed` or HTML freshness.
+- Keep functionality, architecture solutions, and necessary tradeoffs in the same topic. A cross-topic shared solution may have an independent stable topic referenced by related documents.
 - Keep design-change UI approval in workflow task state, bound to the approved concrete pages, changed scope,
   declared operation sequence, and verified page dependency fingerprints. Do not duplicate approval
   into a companion document. When a plan is persisted, preserve recoverable approval references and
@@ -209,18 +181,14 @@ empty record, and its absence alone is not a QA finding.
   project concepts, relevant files, and the resulting commit revision when one was created; otherwise
   retain the truthful non-commit reason and current scoped evidence. Do not create empty memories to
   populate a field.
-- agentmemory 不可用或隔离不足时，PM 将必要结论原地归入已有相关主题稿，或经适用性与批准
-  核对后归入已有项目规范章节；无既有归属时在当前交接保留待决依据，不创建 notes、替代杂记
-  目录、空索引或占位主题，不把每条经验自动升级为强制规则。长期正文不含秘密、凭据、PII、
-  原始用户数据、完整日志或用户绝对路径；完整日志与原始批准继续保存在本请求证据位置。
+- If agentmemory is unavailable or insufficiently isolated, the PM places necessary conclusions into an existing relevant topic in place, or an existing project-standard section after checking applicability and approval. With no existing home, retain pending evidence in the current handoff; do not create notes, substitute miscellaneous directories, empty indexes, or placeholder topics, or automatically promote every lesson into a mandatory rule. Durable text excludes secrets, credentials, PII, raw user data, complete logs, and user absolute paths; complete logs and original approvals remain in this request's evidence location.
 - Closeout must report a truthful `memory_projection` (`memories_saved`, `project_updated`,
   `plans_updated`, and `prototype_refs`).
 
 ### PM commit assessment after QA and document projection
 
 For Full work, the canonical closeout order is `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`.
-Light 完成最小充分验证并由 PM 接收后，按交接时的风险评估执行必要独立审计、文档或记忆；
-无需独立 QA 的 Light 可直接做精确范围的提交评估，不为允许提交制造 QA PASS。
+After minimum sufficient verification and PM acceptance, Light performs any necessary independent audit, documentation, or memory work selected by its handoff risk assessment. Light without an independent-QA requirement may proceed directly to an exact-scope commit assessment; never manufacture QA PASS to permit a commit.
 The same exact-path, unrelated-change protection and no-remote-mutation rules still apply.
 After the applicable acceptance and any required current-truth projection, the PM evaluates once whether the
 request should create local Git commits. This automatic assessment does not create a third business-confirmation stage
@@ -268,98 +236,50 @@ commit_decision:
 
 | Type | Definition | Workflow |
 |---|---|---|
-| Light | 范围明确、风险可控的单一交付面，包括低风险局部修正与下述普通 UI 文案 | 默认派对应原生实施者；最小充分验证必做，交接时评估独立审计、文档与记忆，不强制 Full 计划或 DAG |
-| Full | 多角色、共享合同、数据库、根配置，或超出低风险文案边界的生产 UI | 默认派对应原生实施者；保留 Full 规划、适用确认、DAG 与唯一独立 QA |
+| Light | One delivery surface with clear scope and controlled risk, including low-risk local corrections and ordinary UI copy below | Dispatch the corresponding native implementer by default; minimum sufficient verification is mandatory, with independent-audit, documentation, and memory needs assessed at handoff; no mandatory Full plan or DAG |
+| Full | Multiple roles, shared contracts, databases, root configuration, or production UI beyond the low-risk copy boundary | Dispatch the corresponding native implementer by default; retain Full planning, applicable confirmation, DAG, and exactly one independent QA |
 
 <a id="implementation-ownership"></a>
 
-### 实施所有权与 PM 例外
+### Implementation Ownership and the PM Exception
 
-- 先按实际影响确定 Light／Full，再判断风险和实施者。功能不变、代码少或仅 CSS
-  不能自动判为 Light；工作流指令、Skill、生成模板及配置按实际合同和消费者判断。
-- Light／Full 默认由对应原生 subagent 实施。PM 负责协调、计划、交接、文档目录与已验收
-  受控文档投影；只有用户明确指定 PM 本身亲自实施当前范围，才改变该范围的实施者。
-  普通“你来优化”“开始”“继续”、短摘要或跳过原型均不产生例外。依据必须能追溯到可信
-  原始用户指令及当前范围，通过现有 `input_contracts`／当前计划引用，不新建审批账本。
-- PM 例外只改变实施者，原等级的适用确认、规范、构建／可运行验证、风险判断、独立 QA
-  和原型选择仍保留。文档后缀或“机械修改”不能扩大 PM 对其他实现者资源的写入权限。
-- 角色缺失、运行失败或恢复不授权 PM 接管。按实际工具能力恢复受影响任务，保留有效
-  成果、证据及独立分支；未解决的能力缺口如实报告，不伪装完成。
-- 压缩、交接和恢复核对可信原指令、当前任务与代码事实。只有同一任务连续实现或短期
-  返工可续用可用原实例；独立任务须新实例。摘要不能创造授权、降低原等级或重启有效成果。
+- Determine Light/Full from actual impact before assessing risk and the implementer. Unchanged functionality, little code, or CSS-only changes do not automatically mean Light; judge workflow instructions, Skills, generation templates, and configuration by actual contracts and consumers.
+- Light/Full implementation defaults to the corresponding native subagent. The PM owns coordination, plans, handoffs, document directories, and accepted controlled-document projection; change the implementer for a scope only when the user explicitly asks the PM itself to implement that current scope. Ordinary requests to optimize, start, or continue, short summaries, and skipping prototypes do not create an exception. Evidence must trace to the trusted original user instruction and current scope through existing `input_contracts`/current-plan references; do not create an approval ledger.
+- The PM exception changes only the implementer. Preserve the level's applicable confirmation, standards, build/runnable verification, risk assessment, independent QA, and prototype choice. A document suffix or a mechanical edit does not broaden PM write authority over another implementer's resources.
+- A missing role, execution failure, or recovery does not authorize PM takeover. Recover affected tasks using actual tool capabilities, retaining valid results, evidence, and independent branches; report unresolved capability gaps truthfully rather than claiming completion.
+- During compaction, handoff, and recovery, check trusted original instructions, the current task, and code facts. Reuse an available original instance only for continuous work or short rework on the same task; independent tasks require new instances. Summaries cannot create authority, lower the original level, or restart valid results.
 
 <a id="agent-instance-lifecycle"></a>
 
-### 职责别名、独立上下文与原生实例生命周期
+### Responsibility Aliases, Independent Contexts, and Native Instance Lifecycle
 
-- `agent_alias` 稳定绑定项目内规范化 `module` 根与规范 `role`，允许同模块同角色有多个
-  独立职责槽位；它不授予路径、工具或批准权限。角色静态昵称不是实际执行身份。
-  别名长期保留，实例按当前独立交付单元需要创建；不预热全部别名，也不为填满宿主上限派发。
-- 每个独立任务使用新原生实例和新 ID，固定 `instance_policy: fresh`、
-  `context_policy: handoff_only`。同图不同任务不能复用同一原生身份，已完成任务不复活。
-  同任务连续实现及短期返工可以续用；同一轮 QA 的原 Reviewer 复查发现、差量与受影响合同，
-  不重做未失效的完整审计。原生实例失效时保留历史 `agent_ref`，由 PM 核实恢复边界，
-  通过新任务表达必要替代，不覆盖、清空旧引用或挪用旧 PASS。
-- **任何新实现者或 QA 都不得继承、复制完整 PM 或兄弟会话，不使用复制父历史的 fork。**
-  只交接当前自包含任务包：目标与精确范围、当前代码／工作区依据、适用规范及读取入口、
-  可信授权来源、验收与必要证据、未决事项。Full 的本任务包可携带当前请求审查所需的范围
-  与证据，不携带兄弟完整任务、会话或无关状态。接收者按上述读取复用规则独立完整读取
-  当前包及必需规范；
-  摘要、字段声明、指纹或其他 Agent 已读不证明自己已读或宿主实际隔离。
-- `agent_ref` 只接受 `{host, agent_id}`，PM 核对真实派发结果后首次绑定，不可覆盖或清空。
-  原生 ID 不是存活、角色、批准或完成证明；同名别名的新任务仍需新 ID 与新上下文。
-  `resume`／`compact` 没有可靠的清空合同，不能称为 `prepareForReuse` 或已重置历史。
-- 围绕当前交付单元的反馈窗口保留必要实例，为后续 QA／集成安排容量。运行数、打开线程数
-  和平台上限按宿主真实口径观察，不能假定相同。容量不足时优先处理已验收且交接充分的实例；
-  不能按简单 LRU 淘汰仍执行、证据未交付或必要复查者，也不增加 Agent 池或第二状态机。
-- PM 接收交付、必要验证／QA 完成且成果与所需完整日志已安全保存后，使用当前实际暴露且
-  获授权的原生结束能力。能力缺失或失败时在现有任务记 `agent_retired: true` 并阻止误派，
-  如实记录原生结束未确认；退役不可逆，**不释放仍在执行任务的路径锁或语义锁**。
-  只有核实执行已停且原任务状态满足原锁规则后才能移交。退役不等于物理销毁、清空内存
-  或删除历史，不能宣称已释放未确认的宿主容量。
-- 取消、异常、失效或未知状态保留现有恢复边界，不自动复活、重复执行或删除成果。
-  AGY 原生结束／kill 前必须先保护临时 worktree 中未移交修改及唯一日志；先保存必要证据
-  再回收。清理 scratch 也不能删除仍被任务、QA、计划或恢复引用的唯一证据。
+- `agent_alias` stably binds a normalized project-relative `module` root and canonical `role`, allowing multiple independent responsibility slots for the same module/role; it grants no path, tool, or approval authority. A static role nickname is not an actual execution identity. Retain aliases over time, creating instances only as the current independent delivery unit needs them; do not warm all aliases or dispatch merely to fill the host limit.
+- Every independent task uses a new native instance and ID with `instance_policy: fresh` and `context_policy: handoff_only`. Different tasks in the same graph cannot reuse a native identity, and completed tasks do not revive. Continuous implementation and short rework on the same task may reuse its instance; the original Reviewer in the same QA round checks findings, deltas, and affected contracts without repeating a still-valid full audit. If a native instance becomes invalid, preserve historical `agent_ref`; the PM verifies recovery boundaries and expresses any necessary replacement as a new task, without replacing/clearing old references or reusing old PASS.
+- **No new implementer or QA may inherit or copy complete PM or sibling conversations, or use a fork that copies parent history.** Hand off only the current self-contained task pack: goal and exact scope, current code/workspace evidence, applicable standards and reading entry points, trusted authorization sources, acceptance and necessary evidence, and unresolved matters. A Full task pack may include scope and evidence needed to review the current request, never complete sibling tasks, conversations, or unrelated state. The receiver independently reads the complete current pack and required standards under the reading/reuse rules above; summaries, field declarations, fingerprints, or another Agent's reading prove neither its own reading nor actual host isolation.
+- `agent_ref` accepts only `{host, agent_id}`. The PM binds it once after checking the actual dispatch result, without replacement or clearing. A native ID proves neither liveness, role, approval, nor completion; a new task using the same alias still needs a new ID and context. `resume`/`compact` has no reliable context-clearing contract and cannot be described as `prepareForReuse` or reset history.
+- Retain necessary instances during the current delivery unit's feedback window and reserve capacity for later QA/integration. Observe running counts, open-thread counts, and platform limits using actual host definitions, without assuming they are identical. Under capacity pressure, handle accepted instances with sufficient handoff first; do not apply simple LRU eviction to running instances, undelivered evidence, or necessary reviewers, and do not add an Agent pool or second state machine.
+- After PM acceptance, necessary verification/QA, and safe preservation of results and required complete logs, use the currently exposed and authorized native termination capability. If unavailable or failing, record `agent_retired: true` in the existing task, prevent accidental redispatch, and truthfully record that native termination is unconfirmed. Retirement is irreversible and **does not release path or semantic locks for still-running tasks**. Transfer only after confirming execution has stopped and the original task state satisfies existing lock rules. Retirement does not mean physical destruction, cleared memory, or deleted history; do not claim unconfirmed host capacity has been released.
+- Preserve existing recovery boundaries for cancelled, abnormal, invalid, or unknown states; do not automatically revive, reexecute, or delete results. Before AGY native termination/kill, protect untransferred temporary-worktree changes and unique logs; preserve necessary evidence before reclamation. Scratch cleanup must not delete unique evidence still referenced by tasks, QA, plans, or recovery.
 
-本节是跨宿主权威规则；具体调用只读当前宿主 `pm-integration.md`。不新增 runner、守护进程、
-默认团队模式或另一套调度器，不承诺缓存命中、费用或幻觉率改善。
+This section is the cross-host authority; read only the current host's `pm-integration.md` for concrete calls. Do not add a runner, daemon, default team mode, or another scheduler, or promise better cache hits, cost, or hallucination rates.
 
 ### Light delivery
 
-PM 派发前确认当前目标、范围、实际消费者、风险与验收，发出自包含 2.0 单任务包。
-明确用户指令已授权该范围时不重复确认；缺少影响合同、权限或不可逆操作的实质决定时，
-只澄清该缺口。Light 不强制 Grill Me、xy-plan、DAG、保存计划或独立 QA，仍默认由原生
-实施者执行适用规范和最小充分验证。生产目标保留真实构建／编译及最小可运行证据；
-文档与静态原型按各自交付类型验证。
+Before dispatch, the PM confirms the current goal, scope, actual consumers, risk, and acceptance, then issues a self-contained 2.0 single-task pack. Do not repeat confirmation when an explicit user instruction already authorizes that scope; clarify only a missing material decision affecting contracts, permissions, or irreversible actions. Light does not mandate Grill Me, xy-plan, a DAG, saved plans, or independent QA; the native implementer still applies relevant standards and minimum sufficient verification by default. Production targets retain real build/compile and minimum runnable evidence; verify documents and static prototypes according to their delivery type.
 
-交接时由 PM 依据实际变化和证据判断是否需要独立审计、文档及记忆；选定后执行必需项，
-无需时不创建空记录。显式审查请求、项目强制要求或实际风险仍可要求唯一独立 QA；Full
-不能通过交接评估降级。只做局部验证时报告真实结果，不能编造 QA PASS。完成所需接收、
-提交评估和证据保护后按上文结束或退役实例。实际范围超出 Light 边界则改走 Full，不能
-拆小风险工作以规避审批或审查。
+At handoff, the PM decides whether independent audit, documentation, or memory is needed from actual changes and evidence; perform selected mandatory work, without empty records when unnecessary. Explicit review requests, mandatory project requirements, or actual risks may still require exactly one independent QA; Full cannot be downgraded by a handoff assessment. Report real results of partial verification without fabricating QA PASS. After necessary acceptance, commit assessment, and evidence protection, end or retire instances as above. If actual scope exceeds Light boundaries, use Full; do not split risky work to evade approval or review.
 
 ### Light UI copy
 
-普通可见文案的明确、局部、低风险修正可用 Light，包括匹配的多语言文件。先核对真实
-消费者和共享键，保持业务含义、行为、导航、状态、布局、token、API 和可访问性语义。
-价格／费用、同意与隐私、权限、破坏操作承诺、强制合同文字及未决共享影响不在此边界。
-文件数量或 UI 后缀本身不决定 Full，短 diff 也不能证明低风险。
+Clear, local, low-risk corrections to ordinary visible copy may use Light, including matching localization files. First check real consumers and shared keys; preserve business meaning, behavior, navigation, state, layout, tokens, APIs, and accessibility semantics. Pricing/fees, consent/privacy, permissions, promises about destructive operations, mandatory contract text, and unresolved shared impact fall outside this boundary. File count or a UI suffix does not itself determine Full, and a short diff does not prove low risk.
 
-实施者读取适用工程／设计规范，检查准确替换、diff、键与占位符、真实加载路径和必要的
-显示风险。参与构建／打包的输入需受影响目标构建及生成结果的最小可运行证据；运行时
-资源可复用未失效构建证据，但须验证更新后的真实入口。有具体渲染风险、必要运行缺口
-或明确要求才检查受影响浏览器／模拟器，不默认 clean build、全平台或全量测试。
+The implementer reads applicable engineering/design standards and checks exact replacements, diff, keys/placeholders, real loading paths, and necessary display risks. Inputs used by build/packaging require the affected target's build and minimum runnable evidence for the generated result; runtime resources may reuse valid build evidence but must verify the updated real entry point. Check an affected browser/simulator only for a concrete rendering risk, necessary runtime-evidence gap, or explicit requirement; do not default to clean builds, all platforms, or full suites.
 
-Light生产文案仍标`surface_kind: production_ui`，使用现有`UI-Conformance`、`design_delta: none`、
-`prototype_policy: not_applicable`，绑定真实已解析并冻结的`design_authority_refs`和工程／设计规则。
-不标成non_ui绕过规范；缺少当前权威先补明确依据，无法证明零设计差量则改走Full。
-Light不强制Full的requirements_approved／规划／QA字段，但仍需当前精确用户授权与实际验证。
+Light production copy still declares `surface_kind: production_ui`, uses existing `UI-Conformance`, `design_delta: none`, and `prototype_policy: not_applicable`, and binds actual resolved/frozen `design_authority_refs` plus engineering/design rules. Do not label it non_ui to bypass standards; establish explicit current authority if missing, and use Full if zero design delta cannot be proven. Light does not mandate Full's requirements_approved/planning/QA fields, but still requires current exact user authorization and real verification.
 
-Light 文案不自动要求原型选择、设计 Agent、视觉确认、独立 QA 或文档／记忆写入；交接时
-仍评估实际需要。发现行为、业务或设计合同变化后改走 Full 的适用 UI 分支，而非伪装成
-低风险文案或原型豁免。保护路径及项目强制要求始终有效。
+Light copy does not automatically require prototype choice, a design Agent, visual confirmation, independent QA, or documentation/memory writes; assess actual needs at handoff. If behavior, business, or design contracts change, switch to the applicable Full UI branch rather than presenting it as low-risk copy or a prototype waiver. Protected paths and mandatory project requirements always apply.
 
-其他生产 UI 变更属于 Full，先区分零设计差量的实现纠正与实际设计决策：
+Other production UI changes are Full. First distinguish implementation corrections with zero design delta from actual design decisions:
 
 | UI route | Workflow |
 |---|---|
@@ -396,18 +316,17 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
 - Plan persistence follows task classification, not file count or the number of workers: Light
   saves only for an actual pause/recovery/handoff or explicit request;
   Full saves after requirements approval and before first design/implementation dispatch. PM writes
-  同一稳定主题复用一份生命周期文档，不按 Agent、迭代或 QA 返工复制。 Explicit
+  one lifecycle document per stable topic, without copies for Agents, iterations, or QA rework. Explicit
   task-scoped workflow opt-out and save/no-save requests prevail. Saving Light never invokes Full Skills.
   For persistence, visual changes, scope replacement or resumption, read
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
-  当前恢复／交接简报原地替换为剩余工作与下一步，必要完成基线链接现有计划、功能与证据；
-  不逐批累加完成细节，原始批准与唯一历史／完整日志按该生命周期先保全再收敛。
+  Replace the current recovery/handoff brief in place with remaining work and next steps, linking existing plans, features, and evidence for necessary completed baselines; do not accumulate completion details batch by batch. Preserve original approvals and unique history/complete logs under that lifecycle before consolidation.
   Replaced or withdrawn discussion/proposal material follows that lifecycle's current-input cutover
   and superseded-document handling too; discussion alone does not require a saved document or plan.
 - After Full coverage is complete, activate the self-contained `xy-plan` Skill. It creates a
   `plan_state: draft` plan with exact paths, contracts, task packs, verification commands, expected
   evidence, semantic locks, and a machine-readable `task_graph`. The plan is a proposal: it must not
-  edit files, dispatch Agents, update PROJECT/plans 已验收基线, or request approval.
+  edit files, dispatch Agents, update accepted PROJECT/plans baselines, or request approval.
 - The PM reviews that draft, decides the post-QA controlled-document projection, and then requests
   `requirements_approved`. For design-change UI, the draft carries the route, affected surfaces,
   PM prototype recommendation, and both conditional consequences; it must not treat either branch
@@ -420,30 +339,14 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   pending. Later effective changes update the same plan and affected complete Task Packs before
   dispatch. Existing running workers and QA must acknowledge their updated scope before their results
   can satisfy it; preserve unaffected completed work and approvals.
-- Full 正式需求审阅使用 HTML，模型只维护一份 Markdown。批准前 PM 可把工作草案放入当前
-  请求 scratch 并渲染；批准后保存 `docs.plans/<name>.md` 并生成同名 `.html`。详细调用、
-  受控语法、草案链接基准和原子发布边界只在
-  `.agent-workflow/platforms/shared/skills/xy-plan/references/requirement-html.md` 维护。
-  Light 按复杂度/用户要求选用，不因渲染增加 Full 计划或 QA。页面存在、勾选、复制原稿和
-  check 均不产生需求批准、原型选择或视觉批准。设计 Agent 在原交接返回稳定 REQ 编号到
-  具体原型页/实际状态锚点的覆盖，PM 写回同一原稿并重渲染；不新增映射报告或原型独立 QA。
-  HTML 新鲜度、requirements_fingerprint 和原型依赖指纹职责分开；纯进度/链接/呈现变化
-  不自动重开需求批准。实施者仍取得完整当前 Markdown/任务包。同稿保留已验收基线，已完成／取消的执行明细和旧 HTML 仍有历史边界；只有明确基线可被 PROJECT 索引。
+- Formal Full requirements review uses HTML while the model maintains one Markdown source. Before approval, the PM may render a working draft in the current request scratch; after approval, save `docs.plans/<name>.md` and generate same-name `.html`. Detailed invocation, controlled syntax, draft link bases, and atomic publishing boundaries live only in `.agent-workflow/platforms/shared/skills/xy-plan/references/requirement-html.md`. Light selects this by complexity/user request, without adding Full planning or QA because of rendering. Page existence, checkboxes, source copying, and check do not create requirements approval, prototype choice, or visual approval. In the existing handoff, the design Agent returns coverage from stable REQ IDs to concrete prototype pages/actual state anchors; the PM writes it into the same source and rerenders, without a new mapping report or independent prototype QA. HTML freshness, requirements_fingerprint, and prototype dependency fingerprints have separate responsibilities; progress/link/presentation-only changes do not automatically reopen requirements approval. Implementers still receive complete current Markdown/task packs. Preserve the accepted baseline in the same document; completed/cancelled execution details and old HTML retain historical boundaries, and PROJECT may index only explicit baselines.
 - The PM must not inventory or manually enumerate locally installed specialist Skills. Task packs
   declare only mandatory `required_skills` and task-fact `audit_surfaces`; Codex matches installed
   Skills on demand from their descriptions.
 - A missing `required_skills` entry blocks the corresponding phase. A missing optional specialist
   Skill does not block the base workflow, but QA must report the uncovered surface.
 
-内置 `xy-code-standards` 提供代码实现与只读审查的方法；`xy-ui-design` 提供高保真原型、
-`standards_only` 和生产／QA 按既有设计权威消费的条件分支。五个实施角色固定绑定代码方法
-与 `xy-build-verify`，`xy-uiux` 绑定设计方法与原有专业／原型 Skill；QA 固定仍只绑定
-`xy-qa-review`，按实际代码或 UI 审查面读取相应方法。生产 UI 实现按 `surface_kind: production_ui`
-读取设计规则，后端不预载 UI。通用工程规则正文在 `xy-code-standards/references/rules.md`，
-通用设计规则正文在 `xy-ui-design/references/foundations-rules.md` 与 `components-rules.md`。
-项目只补特有规范；来源、稳定规则 ID 和当前指纹共同构成适用权威，不在项目复制通用正文。
-Light 和获明确授权的 PM 亲自编写代码同样适用代码方法；读取不创造写入权、额外确认
-或 QA 阶段，沿用当前等级的任务包、验证与停止条件。
+Built-in `xy-code-standards` supplies code implementation and read-only review methods; `xy-ui-design` supplies conditional branches for high-fidelity prototypes, `standards_only`, and production/QA consumption of existing design authority. The five implementation roles are statically bound to the code method and `xy-build-verify`; `xy-uiux` is bound to the design method and existing specialist/prototype Skills. QA remains statically bound only to `xy-qa-review`, reading the relevant method for actual code or UI review surfaces. Production UI implementation reads design rules under `surface_kind: production_ui`; backend work does not preload UI. Common engineering rule text lives in `xy-code-standards/references/rules.md`; common design rule text lives in `xy-ui-design/references/foundations-rules.md` and `components-rules.md`. Projects add only specific standards; source, stable rule IDs, and current fingerprints together establish applicable authority, without copying common text into projects. The code method also applies to Light and explicitly authorized PM code implementation; reading creates no write authority, extra confirmation, or QA stage, and uses the current level's task-pack, verification, and stop conditions.
 
 ```yaml
 external_workflow_policy:
@@ -600,10 +503,7 @@ freeze time. For `prototype_contract`, it is the verified page dependency finger
 fingerprint-less reference is not design authority.
 
 A valid `UI-Conformance` request does not dispatch `xy-uiux`, does not run a prototype mutation
-phase, and does not require `visual_approved`. 除上文已明确的普通低风险Light文案外，
-UI-Conformance仍属Full：完整Grill Me、xy-plan、requirements_approved、构建验证和唯一
-集成只读QA保留。Light文案使用相同当前已解析权威与工程／设计约束，不继承Full规划、
-重复确认或强制QA；任何设计／交互变化均Full。 Its implementation task carries `audit_surfaces: [ui, accessibility]` as
+phase, and does not require `visual_approved`. Except for the ordinary low-risk Light copy explicitly defined above, UI-Conformance remains Full: retain complete Grill Me, xy-plan, requirements_approved, build verification, and exactly one integrated read-only QA. Light copy uses the same current resolved authority and engineering/design constraints without inheriting Full planning, duplicate confirmation, or mandatory QA; every design/interaction change is Full. Its implementation task carries `audit_surfaces: [ui, accessibility]` as
 applicable and QA verifies both regression behavior and conformance with `design_authority_refs`.
 
 If the authority is missing, stale, contradictory, incomplete, or the implementation exposes any
@@ -726,9 +626,7 @@ draft
   only after the PM's evidence review; this is an automatic readiness gate, not visual approval or
   another user confirmation.
 - The `xy-uiux` task owns static prototype-verification coverage for workspace structure, local
-  dependencies, in-page contracts, stable controls, and page fingerprints. 设计 Agent 同时完成需求覆盖、
-  规范符合性、交付一致性自检，沿用 prototype_verify 的 static_checks/blocking_findings/result；
-  不新增原型独立 QA、报告、审批或默认浏览器/截图步骤，用户最终确认，生产功能 QA 保留。The PM reviews current
+  dependencies, in-page contracts, stable controls, and page fingerprints. The design Agent also self-checks requirements coverage, standards conformance, and delivery consistency using existing prototype_verify static_checks/blocking_findings/result; do not add independent prototype QA, reports, approvals, or default browser/screenshot steps. The user provides final confirmation, and production functional QA remains. The PM reviews current
   scope, evidence freshness and consistency, fingerprints, and the visual-approval handoff. Before
   user handoff, the PM independently compares all five in-page contract sections with the frozen
   approved requirements and acceptance criteria. Missing, invented, broadened, or conflicting
@@ -805,22 +703,10 @@ filters evidence, not workspace safety validation. Navigation links remain valid
 couple otherwise independent page fingerprints. This command does not activate the designer's
 complete procedure or require a browser, and its machine output stays internal.
 
-页面登记来源是 `index.html` 唯一 `nav#prototype-pages` 内的普通相对页面链接；原生
-`details/summary` 可按模块或业务逻辑分组，不另建 Manifest 或脚本登记副本。原生折叠的
-第一个直属 summary 可通过稳定 ID 和 `data-contract-for` 记录交互结果。
-工作区 index 可由唯一 `iframe#prototype-preview` 直接显示一个已登记的本地具体页，保留
-可访问名称，静态 src 精确使用规范页名；拒绝 srcdoc、外部/越界/未登记路径、自嵌套及额外 frame。
-iframe 属于真实渲染资源，仍验证具体页和本地闭包；此能力只属于 index，产品页不得嵌入 frame。
-具体页用 `body[data-prototype-plan-source]` 绑定配置 `docs.plans` 下的规范 Markdown 路径，
-唯一 `nav.prototype-requirement-links` 中的 HTML/Markdown 锚点分别设置
-`data-prototype-document="html"` / `"markdown"`，并指向同名文件对；两个锚点均使用
-`target="_blank"` 与含 `noopener` 的 `rel`，独立打开文档并保留当前工作区，拒绝相关重复属性。
-源模板尚未绑定时可留空。
-这只是明确槽位的文档导航权限，其他资源、嵌入和普通链接仍受原型根边界约束。
-验证核对安全普通文件、来源路径/内容绑定及 HTML 完整性，不调用完整 render/check、
-不回扫文档反向原型关联、不要求历史 renderer 身份最新，也不建立文档渲染依赖边。
-当前交付 HTML 的新鲜度由文档交付流程单独保证，renderer 代码或版本变化本身不触发
-全项目原型重验或视觉重批；任何静态检查均不创造批准。
+Page registration comes from ordinary relative page links inside the unique `nav#prototype-pages` in `index.html`; native `details/summary` may group modules or business logic, without a separate Manifest or script registration copy. The first direct summary in a native disclosure may record interaction results with a stable ID and `data-contract-for`.
+The workspace index may directly display one registered local concrete page through the unique `iframe#prototype-preview`, preserving an accessible name and using the exact canonical page name as static src; reject srcdoc, external/out-of-boundary/unregistered paths, self-nesting, and extra frames. The iframe is a real rendering resource, so still verify the concrete page and local dependency closure; this capability belongs only to the index, and product pages must not embed frames.
+Concrete pages bind the canonical Markdown path under configured `docs.plans` through `body[data-prototype-plan-source]`. HTML/Markdown anchors in the unique `nav.prototype-requirement-links` set `data-prototype-document="html"` / `"markdown"` respectively and target the same-name file pair; both use `target="_blank"` and `rel` containing `noopener` to open documents independently while preserving the workspace, with related duplicate attributes rejected. The source template may leave the binding empty until configured.
+This grants document-navigation permission only in explicit slots; other resources, embeds, and ordinary links remain subject to the prototype-root boundary. Verification checks safe regular files, source path/content binding, and HTML integrity without invoking complete render/check, scanning reverse prototype references from documents, requiring a current historical renderer identity, or creating document-render dependency edges. Document delivery separately ensures current delivered HTML freshness; a renderer code/version change alone does not trigger project-wide prototype reverification or visual reapproval. Static checks never create approval.
 
 A fingerprint change first requires a scoped evidence refresh, not automatically another user
 confirmation. To carry an existing visual approval forward after a non-material edit, the PM must
@@ -850,7 +736,7 @@ prototype may reuse existing project assets.
 
 For initial design adoption, reusable rule changes, complete visual replacement, or standard
 maintenance, read [the design-standard lifecycle procedure](../platforms/shared/skills/xy-workflow/references/design-standards.md).
-PM assesses design-standard updates independently from PROJECT/plans 基线投影, including after
+PM assesses design-standard updates independently from PROJECT/plans baseline projection, including after
 the first visual confirmation. No reusable rule change means no document update. UI Agent writes
 authorized standard leaves; PM owns scope/adoption, directory links and affected
 task-fingerprint refresh; implementers own production tokens/components; QA independently audits.
@@ -890,11 +776,7 @@ product page. Use ordinary relative links. Every page must load directly through
 package installation, a build, framework, router, external CDN, live API, database, account,
 credential, or real user data.
 
-workspace.css/js 只由 index 加载；prototype.css 和最小 page-shell.js 属于具体页。空登记显示
-明确空状态且 iframe hidden/无 src；登记后由唯一本地控制器从 nav 链接派生加载，不批量预载。
-当前页名称和紧凑简述后先展示高保真画面，再放需求 HTML/Markdown、平台/尺寸与必要演示说明，
-最后是默认折叠的五节契约。浅底细边黑 chevron 圆形返回定位当前分组/页面，与侧栏收放分开；
-产品导航、浮层和滚动只属于画板。已有非空业务原型不随源模板更新批量重做。
+Only the index loads workspace.css/js; prototype.css and minimal page-shell.js belong to concrete pages. Empty registration shows an explicit empty state with the iframe hidden and no src; once registered, the single local controller derives loading from nav links without bulk preloading. After the current page name and compact brief, show the high-fidelity canvas first, followed by requirements HTML/Markdown, platform/size, necessary demo guidance, and finally the five contract sections collapsed by default. A circular back control with a light background, fine border, and black chevron locates the current group/page, separately from sidebar toggling; product navigation, overlays, and scrolling belong only to the canvas. Source-template updates do not bulk-rebuild existing nonempty business prototypes.
 
 `prototype.js` is not part of the standard tree. Create it only when two or more pages genuinely
 share the same native interaction; otherwise keep trivial behavior page-local.
@@ -1066,9 +948,7 @@ canonical `role`, stable `agent_alias`, `instance_policy: fresh`, and `context_p
   `base_revision` and PM checkpoint `head_revision` (null while pending). The graph's
   `worktree_integrations` maps each isolated request to its separate root, resolved target branch/base,
   candidate head and revision-bound verification. No independent ledger or user-visible JSON is added.
-- `agent_ref`:派发后真实原生引用 `{host: codex|claude|antigravity, agent_id: <真实ID>}`。
-  通过现有 `update` 补记到已进入执行态的任务，首次绑定后不可改／清空；不同任务不能
-  共享身份，历史引用不授权新任务。`agent_retired: true` 不可逆且不释放仍活动的锁。
+- `agent_ref`: actual native reference after dispatch, `{host: codex|claude|antigravity, agent_id: <actual-ID>}`. Record it through existing `update` after the task enters execution; once bound, it cannot be changed/cleared. Different tasks cannot share identities, and historical references do not authorize new tasks. `agent_retired: true` is irreversible and does not release active locks.
 - `state`: the scheduler's single state source: `DECLARED`, `BLOCKED`, `READY`, `RUNNING`,
   `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, or `FAILED`.
 - `qa_scope`: required for tasks with a `role` and exactly `request`, meaning the current request's
@@ -1092,33 +972,14 @@ An explicit `task_type: qa` node uses `QA_PASSED` only after its current handoff
 reset it to `QA`/`RUNNING` on re-review and `FAILED` on failure. It cannot replace writer verification.
 Worktree delivery rejects unfinished or failed relevant QA nodes even when an old PASS is still present.
 
-同 Agent 续用、原生用量与来源诊断按需使用
-`xy-workflow/references/runtime-records.md`；QA 结构化 schema／extract 使用
-`xy-qa-review/references/inputs.md` 及当前宿主 pm-integration。`continuation` 只根据 PM
-当前 running／idle 观察建议等待／续发；取消、未知、失效、跨宿主或非活动任务阻塞
-自动续用，原生动作仍由当前已暴露且获授权的工具执行。ID 不证明存活、角色、批准或
-完成，须核对当前完整 Task Pack／scope；不新增 runner、状态台账或 Reviewer。
-诊断只区分 documented／source_observed／runtime_unverified；原生累计用量不逐条求和，
-未采样保持未知，不计算费用或节省百分比。AGY 原生 grill-me 来源须核对，不自动替换
-本包覆盖检查；diff／Artifact 人工审阅不等于独立 AI QA。以上均不新增普通只读或
-Light 的额外门禁，也不自动启用 native／boost／teamwork 模式。
+Use `xy-workflow/references/runtime-records.md` on demand for same-Agent continuation, native usage, and provenance diagnostics; use `xy-qa-review/references/inputs.md` and the current host pm-integration for structured QA schema/extract. `continuation` only recommends waiting/follow-up from the PM's current running/idle observation; cancelled, unknown, invalid, cross-host, or inactive tasks block automatic continuation, and native actions still require currently exposed authorized tools. An ID proves neither liveness, role, approval, nor completion; check the complete current Task Pack/scope, without adding a runner, state ledger, or Reviewer. Diagnostics distinguish only documented/source_observed/runtime_unverified; do not sum native cumulative usage per record, keep unsampled values unknown, and calculate no costs or savings percentages. Verify the provenance of AGY native grill-me rather than automatically replacing this pack's coverage check; human diff/Artifact review is not independent AI QA. None of this adds gates to ordinary read-only or Light work, or automatically enables native/boost/teamwork modes.
 
 Effective dispatch capacity is the minimum of configured remaining subagent slots, configured
 remaining writer slots, and the host's currently available subagent slots. The PM never assumes the
 configured maximum is currently available.
 
 Every implementer in this Full loop must complete `$xy-build-verify` before delivery.
-PM、实现者和 QA 共用已安装 `xy-build-verify/references/verification-scope.md` 的范围与
-停止规则：选择最小充分验证，全量或重跑须有实际依据，有效证据可以复用。
-补缺按实际测试节点／子场景选择，负控或修复后失败分支不使其他有效覆盖自动失效；
-混合命令的最小入口、不可拆原因及预期红边界均按该策略核对，不新增固定测试清单。
-沿原 Task Pack 的 Validation、input/output 合同与 acceptance_evidence 说明三个判断：
-新增测试补哪项真实覆盖缺口，再次执行增加哪项覆盖、处理哪项具体风险或失效证据，
-继续失败返工有什么新定位、可检验假设或有效修复进展及预期证据。无进展提前停止当前
-重复失败路径并交 PM，不等于通过、不重置或叠加原上限；详细适用边界统一见上述策略，
-不增加字段、固定表、报告或审批。
-生产代码交付必须保留受影响目标构建／编译成功和最小可运行验证的真实证据。
-必需验证通过后进入下面的既有 QA／收口；不在每次角色交接或提交时另起一轮测试。
+The PM, implementers, and QA share scope and stop rules from installed `xy-build-verify/references/verification-scope.md`: choose minimum sufficient verification, justify full/repeated runs with actual evidence, and reuse valid results. Fill gaps by actual test nodes/subscenarios; negative controls or repaired failing branches do not automatically invalidate other valid coverage. Check minimum entries for mixed commands, concrete indivisibility reasons, and expected-red boundaries under that policy without adding a fixed test checklist. Use the original Task Pack's Validation, input/output contracts, and acceptance_evidence to explain three judgments: the real coverage gap filled by a new test; added coverage, concrete risk, or invalidated evidence addressed by another execution; and new localization, a testable hypothesis, or effective repair progress plus expected evidence for continued failing rework. Without progress, stop the current repeated failing path early and return it to the PM; this is not a pass and does not reset or stack existing limits. Detailed applicability remains in that policy, without new fields, fixed tables, reports, or approvals. Production delivery retains real successful affected-target build/compile and minimum runnable evidence. After mandatory checks pass, proceed to existing QA/closeout below rather than starting another test round at each role handoff or commit.
 The PM runs `qa-ready` and
 dispatches one unified `xy-qa` only after every relevant `task_type: writer` in this request's
 `qa_scope: request` reaches `BUILD_VERIFIED`. Evidence, read-only, and QA tasks do not create a
@@ -1133,7 +994,7 @@ rework. Failures block only downstream dependents; independent branches continue
 
 ## 8. Task Packs
 
-2.0 的图和任务包均声明 `schema_version: 2`，旧格式直接拒绝。派发单包使用统一外壳：
+2.0 graphs and task packs both declare `schema_version: 2`, rejecting old formats directly. Dispatched single-task packs use this common envelope:
 
 ```yaml
 schema_version: 2
@@ -1150,13 +1011,9 @@ task:
 standards_contract: <only-current-applicable-authority>
 ```
 
-可选`handoff_assessment`为`{independent_qa: required|not_required, documentation: required|not_required,
-reason: <非空实际依据>}`；不要求每个Light都创建记录，Full的independent_qa不得not_required。
+Optional `handoff_assessment` is `{independent_qa: required|not_required, documentation: required|not_required, reason: <nonempty actual evidence>}`; not every Light task needs a record, and Full cannot set independent_qa to not_required.
 
-其余只携带当前任务实际需要的批准／UI 依据。Full 通过 `task_graph_cli.py task` 导出指定
-任务及必要权威，不导出兄弟任务或完整 PM 历史。Light 直接使用同形单包，保留任务
-`state`，不要求 `tasks`、DAG、Full 规划字段或未适用的批准／UI 字段；现有 `task`、
-`update`、`continuation` 可处理该单包。可选交接评估只记录实际判断，不是新的必填账本。
+Include only other approval/UI evidence actually needed by the current task. Full uses `task_graph_cli.py task` to export the selected task and necessary authority, never sibling tasks or complete PM history. Light directly uses the same-shaped single-task pack, retaining task `state` without requiring `tasks`, a DAG, Full planning fields, or inapplicable approval/UI fields; existing `task`, `update`, and `continuation` handle this pack. Optional handoff assessment records only actual judgments and is not a new mandatory ledger.
 
 Every implementation task pack includes at least:
 
@@ -1170,15 +1027,9 @@ Every implementation task pack includes at least:
 - actual dependencies and conflict conclusions; Full includes graph scheduling fields;
 - the delivery-report format and the location of complete evidence.
 
-作为复用经验交接的项目命令、必要前置与环境限制，只保留当前任务有关、已验证且仍
-适用的事实及其来源；沿原合同复用有效证据与诊断进展，不复制完整会话或以历史成功
-代替当前验收。新选验证命令仍按仓库事实与实际缺口确定，不伪装成已执行的经验。
+When handing off project commands, necessary prerequisites, and environment limits as reusable experience, retain only verified, still-applicable facts relevant to the current task and their provenance. Reuse valid evidence and diagnostic progress under the original contract; do not copy complete conversations or replace current acceptance with historical success. Select new verification commands from repository facts and actual gaps rather than presenting them as already-executed experience.
 
-实际新增临时目录、环境、数据库、容器或过程产物时，沿用 `input_contracts` 说明已有资源与
-复用入口，`output_contracts` 说明新增资源的目的、落点、所有者和保留／回收条件，并在
-`acceptance_evidence` 交回实际结果与必要完整证据落点。资源复用与归属按内置
-`eng-common-030`，不另建资源台账或默认报告；没有新增资源的 Light 不因此创建 scratch、
-Full 图或空记录，Full 的原有规划与唯一 QA 要求保持。
+When actually adding a temporary directory, environment, database, container, or process artifact, use existing `input_contracts` to describe existing resources and reuse entry points, `output_contracts` for the new resource's purpose, location, owner, and retention/reclamation conditions, and `acceptance_evidence` for actual results and necessary complete-evidence locations. Resource reuse and attribution follow built-in `eng-common-030`; do not create a resource ledger or default report. Light without new resources does not create scratch, a Full graph, or empty records for this rule; Full's existing planning and exactly-one-QA requirements remain.
 
 For Full work, these packs originate from the approved and frozen `xy-plan` draft. The PM may correct
 the draft before approval, but must not silently change the approved requirement fingerprint,
@@ -1189,8 +1040,7 @@ regenerates the draft, re-decides the post-QA document projection, and reopens
 Every implementation task pack still carries the approved goal, non-goals, constraints, acceptance
 evidence, and applicable UI evidence even when no controlled document changes. Design-change tasks
 carry approved concrete prototype pages; `UI-Conformance` tasks carry their frozen
-`design_authority_refs`. Full由PM在规划阶段记录投影决定；Light在交接时评估实际需要，
-不强制预填下列Full记录：
+`design_authority_refs`. The PM records the projection decision during Full planning; Light assesses actual needs at handoff without mandating the Full record below in advance:
 
 ```yaml
 controlled_document_access:
@@ -1212,18 +1062,11 @@ controlled-document links. Use `targeted` by default after inspecting headings o
 terms; use `full` only when the whole detailed document is materially required and record why; use
 `skip` without opening the body when the request has no relevant surface. Read shared architecture
 details or a recovery plan only when relevant.
-每位 Writer 独立读取任务适用的内置来源，以及非 skip 的项目特有规范；项目索引存在才读。
-非 UI 实施使用内置工程规则及适用工程差异，生产 UI 另使用内置设计规则和项目实际设计权威，
-`xy-uiux + design_ui` 使用适用设计规则。每个选定来源携带当前指纹、规则 ID、读取范围及
-`applies_to`，覆盖全部拥有路径。缺少必需内置来源或适用项目规则仍阻塞派发；
-没有项目特有叶时，不因配置的项目索引物理缺失而创建空索引、GENERAL 或默认设计叶。
-索引存在时即使只有保留说明也绑定真实 SHA。来源缺失、过期或覆盖不足交 PM，不靠预读全树补救。
+Every Writer independently reads task-applicable built-in sources and non-skip project-specific standards; read the project index only when it exists. Non-UI implementation uses built-in engineering rules and applicable engineering differences; production UI also uses built-in design rules and actual project design authority; `xy-uiux + design_ui` uses applicable design rules. Every selected source carries its current fingerprint, rule IDs, reading scope, and `applies_to`, covering all owned paths. Missing required built-in sources or applicable project rules still blocks dispatch; without project-specific leaves, do not create an empty index, GENERAL, or default design leaf merely because the configured project index is physically absent. Bind an existing index's actual SHA even if it contains only retained explanations. Return missing, stale, or insufficient source coverage to the PM rather than preloading the entire tree.
 
 ### Standards document granularity and maintenance
 
-通用规则维护内置 Skill 来源；项目叶只承载明确的项目差异，不为每个项目生成通用副本。
-项目索引只在有实际特有叶时创建/补链；已有说明、用户规则和已批准 token/风格/尺寸原样保护。
-新增可复用约束前先核对内置规则与相关主题；项目索引存在时再检查适用特有叶。
+Maintain common rules in their built-in Skill sources; project leaves contain only explicit project differences, without generic copies for every project. Create/add project-index links only for actual specific leaves; preserve existing explanations, user rules, and approved tokens/styles/sizes unchanged. Before adding reusable constraints, check built-in rules and relevant topics first, then applicable specific leaves if a project index exists.
 Already sufficient rules need no duplicate; a real delta normally updates the existing topic's
 section. A new rule ID does not require a new file.
 
@@ -1256,28 +1099,15 @@ that a task read new content. Purely organizational changes do not themselves re
 confirmation, full business regression or review of unchanged contracts. Actual rule/contract changes
 still follow the existing approval, risk, verification and independent-review boundaries.
 
-PM 更新或收口时，沿本需求现有索引与引用定位当前计划、功能与规范主题，核对受影响的
-当前链接及是否出现重复当前权威，并纳入原 QA 的适用文档检查；不增加全仓扫描、报告或
-第二次审查。目录位置不能单独证明内容已过时，`docs.plans` 仍可包含当前恢复依据。
-原始批准、历史计划和唯一证据按现有计划生命周期保全；不把它们当作重复当前权威自动
-删除，也不按固定文件数或长度合并有独立维护边界的主题。
+When updating or closing out, the PM locates current plan, feature, and standards topics through this requirement's existing indexes/references, checks affected current links and duplicate current authority, and includes this in the original QA's applicable document checks; do not add repository-wide scans, reports, or a second review. Directory location alone does not prove staleness; `docs.plans` may still contain current recovery evidence. Preserve original approvals, historical plans, and unique evidence under the existing plan lifecycle rather than automatically deleting them as duplicate current authority, or merging topics with independent maintenance boundaries based on fixed file counts or length.
 
 ### Standards authority snapshot
 
 The PM freezes the unified standards authority once per runtime snapshot:
 
-通用正文只接受三个内置精确来源：`platforms/shared/skills/xy-code-standards/references/rules.md`、
-`platforms/shared/skills/xy-ui-design/references/foundations-rules.md`、
-`platforms/shared/skills/xy-ui-design/references/components-rules.md`；安装态仅加 `.agent-workflow/` 前缀。
-内置来源声明 Domain/Scope，保留稳定 ID、hard/advisory、适用条件及例外；它们是受管只读权威，
-不因进入 leaves 或被 UI 任务读取而获得项目写入权。项目特有规范仍直接放在 `docs.standards_root`，
-设计叶使用 `DESIGN_*.md` 与 `- Domain: design`，其余叶声明 engineering；不要建空叶或复制通用正文。
-项目索引只链接实际特有叶；页面特例留在契约，原型仍位于 `docs.standards_root/prototype`。
+Common text accepts only three exact built-in sources: `platforms/shared/skills/xy-code-standards/references/rules.md`, `platforms/shared/skills/xy-ui-design/references/foundations-rules.md`, and `platforms/shared/skills/xy-ui-design/references/components-rules.md`; installed paths add only the `.agent-workflow/` prefix. Built-in sources declare Domain/Scope, retaining stable IDs, hard/advisory severity, applicability, and exceptions. They are managed read-only authority; inclusion in leaves or UI-task reading grants no project write authority. Project-specific standards still live directly in `docs.standards_root`; design leaves use `DESIGN_*.md` and `- Domain: design`, and other leaves declare engineering. Do not create empty leaves or copy common text. Project indexes link only actual specific leaves; page exceptions remain in contracts, and prototypes stay in `docs.standards_root/prototype`.
 
-`index_path` 始终保留适配器配置的相对路径，`root` 始终是项目特有规范根。无项目规则叶且
-配置索引物理不存在时，`index_fingerprint` 为 null；索引实际存在则记录真实 SHA，不能把
-保留说明索引伪装缺失。init/文档校验核对文件系统；纯 JSON 图校验只证明结构，不冒称实际文件已验证。
-leaves 与 controlled_document_access 沿用原字段，绑定内置来源和适用项目叶及其当前 SHA/规则 ID。
+`index_path` always retains the adapter-configured relative path, and `root` remains the project-specific standards root. With no project rule leaves and a physically absent configured index, `index_fingerprint` is null; if the index exists, record its actual SHA, without presenting an explanatory retained index as absent. init/document validation checks the filesystem; JSON-only graph validation proves structure, not actual-file verification. leaves and controlled_document_access retain existing fields, binding built-in sources and applicable project leaves with their current SHA/rule IDs.
 
 ```yaml
 standards_contract:
@@ -1343,10 +1173,7 @@ existing feature records a changed runtime version, dependency baseline, archite
 applicable scope, replace that fact in place after applicable verification. This does not require a
 new topic document, a PROJECT entry, or a change chronology.
 
-验收后只投影实际变化的当前基线：同一主题稿保留需求、方案、恢复入口、验收行为及必要批准／证据；
-PROJECT 仅链接其中真实已验收版本。不得按任务阶段推定交付，不另写 feature 文档或 ADR。
-`change_type: removed` 在同一原稿标记 `removed`，移除 PROJECT 当前链接并修复引用，
-保留必要删除依据与历史；不改名、不制造中间删除状态。QA 失败保留原已验收事实。
+After acceptance, project only actual changes to the current baseline: the same topic retains requirements, solutions, recovery entry points, accepted behavior, and necessary approvals/evidence; PROJECT links only genuinely accepted versions. Never infer delivery from task phase or create separate feature documents or ADRs. For `change_type: removed`, mark the same source `removed`, remove the current PROJECT link, and repair references while retaining necessary deletion rationale and history; do not rename it or manufacture intermediate removal states. QA failure preserves original accepted facts.
 
 
 Every Full task pack and applicable Light task pack also includes:
@@ -1393,10 +1220,7 @@ An "entire sandbox" without exact declared paths is a high-risk write scope.
 
 ## 9. Build Evidence and Context Control
 
-生产代码实现者交付受影响目标构建／编译成功、在声明环境中可运行的结果。
-依已安装 `xy-build-verify/references/verification-scope.md` 选择目标、增量构建和最小
-可运行检查，复用仍有效的证据；减少无关测试不豁免编译或运行证据。解释型项目及
-文档／静态原型按各自交付类型验证，缺失必需证据不得声称完成。
+Production implementers deliver affected targets that build/compile successfully and run in the declared environment. Select targets, incremental builds, and minimum runnable checks under installed `xy-build-verify/references/verification-scope.md`, reusing valid evidence; reducing unrelated tests does not waive compile/run evidence. Verify interpreted projects, documents, and static prototypes according to their delivery type; do not claim completion with missing mandatory evidence.
 
 Implementers deliver:
 
@@ -1520,8 +1344,7 @@ Every implementation QA result uses `schema_version: 2` and carries `handoff_ref
 QA task pack's `request_id`, `task_id`, `agent_alias`, exact `{host, agent_id}` `agent_ref`, and
 `task_pack_sha256`. PM validates/extracts against that complete current QA pack using mandatory
 `--task-pack`; mismatched identities, bytes or an old PASS cannot close the current review.
-QA also returns an internal `standards_policy_coverage` projection. QA 从适用内置来源、存在时的
-项目薄索引及实际变更路径独立解析规则，不只信任 Task Pack 的选择；无项目索引不省略内置规则。
+QA also returns an internal `standards_policy_coverage` projection. QA independently resolves rules from applicable built-in sources, the thin project index when present, and actual changed paths, rather than trusting only the Task Pack selection; absence of a project index does not waive built-in rules.
 It classifies every changed path, records every required or applicable rule as
 `pass | fail | not_applicable`, and binds each non-N/A conclusion to source, diff, command, or
 complete-log evidence. If the PM omitted an applicable rule, QA may read it to prove the omission
@@ -1555,8 +1378,7 @@ approval evidence; there is no screenshot artifact on disk.
 
 ## 11. Standards Discipline
 
-1. 每位Writer修改前核对适用内置来源、存在时的项目索引及必需非skip特有叶的当前指纹，
-   独立读取选定规则和已派发受控文档；无项目索引不能豁免内置规则覆盖。
+1. Before editing, every Writer checks current fingerprints for applicable built-in sources, the project index when present, and required non-skip specific leaves, and independently reads selected rules and dispatched controlled documents; absence of a project index does not waive built-in rule coverage.
 2. Do not commit credentials or execute unauthorized destructive actions.
 3. Do not perform unauthorized cross-path refactors or drive-by edits.
 4. Never fabricate real validation results.

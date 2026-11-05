@@ -54,21 +54,27 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
    Each material interactive control needs a stable `id`, exactly one matching
    `data-contract-for`, and executable declared outcomes.
-   原生折叠控件可把 `details` 的第一个直属 `summary` 的稳定 ID 映射到交互契约；
-   普通容器中的同名标签或第二个 summary 不视为可执行折叠控件。目录可在唯一
-   `nav#prototype-pages` 中使用原生 `details/summary` 分组，登记来源仍是具体页面的普通相对链接。
-   index 可通过唯一 `iframe#prototype-preview` 直接承载已登记的具体页，并提供可访问名称；
-   静态 src 须精确使用规范本地页名，禁止 srcdoc、外部/越界/未登记目标、自嵌套和额外 frame。
-   该 iframe 仍验证实际具体页及渲染资源闭包，不能套用下述文档导航豁免；产品页不获得 frame 权限。
-   生产入口只由本地 workspace.js 从唯一登记导航派生加载；未初始化时 iframe hidden 且无 src，
-   空登记显示明确空状态。静态设计入口没有控制器时仍须显式 src 命中登记页。索引不接受
-   meta refresh、任意脚本或内联路由；workspace.css/js 仅属于 index，具体页使用最小 page-shell.js。
-   已绑定需求的具体页用 `body[data-prototype-plan-source]` 声明配置 plans 下的规范 Markdown
-   路径，并在唯一 `nav.prototype-requirement-links` 提供分别标为
-   `data-prototype-document="html"` 和 `"markdown"` 的同名文件对。只有这个槽位允许跨原型根导航；
-   未绑定源模板可留空，不伪造链接。校验器核对文件安全、来源绑定及 HTML 完整性，不回扫
-   Markdown 里的反向原型链接、不要求历史 renderer 身份最新，也不把文档加入页面渲染依赖。
-   当前交付需求 HTML 的 fresh 检查仍由文档交付流程负责。
+   Native disclosure controls may map the stable ID of a `details` element's first direct-child `summary`
+   to the interaction contract. Same-name tags in ordinary containers or a second summary do not count as
+   executable disclosure controls. The index may group pages with native `details/summary` inside the single
+   `nav#prototype-pages`; ordinary relative links to concrete pages remain the registration source.
+   The index may directly host registered concrete pages through one `iframe#prototype-preview` with an
+   accessible name. Static src must use the exact canonical local page name; prohibit srcdoc, external/
+   out-of-bounds/unregistered targets, self-nesting and extra frames. The iframe still validates the actual
+   concrete page and rendering-resource closure; the document-navigation exemption below does not apply,
+   and product pages gain no frame permission. The production entry loads pages only through local workspace.js,
+   derived from the single registered navigation. Before initialization, the iframe is hidden with no src;
+   empty registration shows an explicit empty state. A static design entry without a controller still needs
+   an explicit src pointing to a registered page. The index rejects meta refresh, arbitrary scripts and inline
+   routing. workspace.css/js belong only to the index; concrete pages use minimal page-shell.js.
+   Requirements-bound concrete pages declare the canonical Markdown path under configured plans with
+   `body[data-prototype-plan-source]`, and provide the same-name file pair in a single
+   `nav.prototype-requirement-links`, marked `data-prototype-document="html"` and `"markdown"` respectively.
+   Only this slot allows navigation across the prototype root. An unbound source template may leave it empty;
+   do not fabricate links. The validator checks file safety, source binding and HTML integrity. It does not
+   scan Markdown's reverse prototype links, require historical renderer identities to be current, or add
+   documents to page-rendering dependencies. The document-delivery procedure still owns fresh checks for
+   currently delivered requirements HTML.
 4. Confirm every changed prototype path is under the configured
    `docs.standards_root/prototype`, except a separately task-authorized design-standard leaf
    update under `docs.standards_root/DESIGN_*.md`. Reject revision-suffixed, dated, `final`, `new`, or
@@ -84,10 +90,12 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    may carry non-material changes forward after the documented old/new-delta review and retained user
    approval; uncertain or material changes return to the existing scoped visual-confirmation step.
    The verifier never grants approval or decides visual equivalence.
-7. 由设计 Agent 在同一交接完成三维自检：需求覆盖核对五节契约与冻结需求/验收；
-   规范符合性核对适用内置规则和项目特有规范；交付一致性核对页面、控件、导航、声明结果、
-   共享样式与当前依赖指纹。遗漏、擅加、冲突或未解决的不一致为 FAIL。
-   自检按当前范围进行，说明例外及未验证行为，不要求渲染或浏览器，不产生独立原型 QA。
+7. The design Agent performs three self-checks in the same handoff: requirements coverage compares the five
+   contract sections with frozen requirements/acceptance; standards conformance checks applicable built-in
+   rules and project-specific standards; delivery consistency checks pages, controls, navigation, declared
+   outcomes, shared styles and current dependency fingerprints. Omissions, unauthorized additions, conflicts
+   or unresolved inconsistency are FAIL. Check only current scope and state exceptions/unverified behavior.
+   This requires neither rendering nor a browser and creates no independent prototype QA.
 8. Confirm that every concrete changed page can be handed to the user through its direct absolute
    HTML path, and that the handoff names the changed scope and declared operation sequence. Static
    validation proves file readiness; it does not claim that an Agent rendered or operated the page.
@@ -116,9 +124,10 @@ default gate, does not replace user visual approval, and must not create persist
 ## Verification ownership and PM review
 
 The `xy-uiux` task owns the deterministic static prototype-verification coverage defined above and
-returns current, internally consistent evidence. 需求覆盖、规范符合性、交付一致性的自检说明
-沿用下方 `static_checks`，问题沿用 `blocking_findings`，结论沿用 `result`；不新增报告或审批。
-用户仍最终确认具体页面，生产实现后的功能 QA 保留。A host without browser capability is fully capable
+returns current, internally consistent evidence. Record requirements-coverage, standards-conformance and
+delivery-consistency self-checks in existing `static_checks` below, issues in `blocking_findings`, and the
+conclusion in `result`; add no report or approval. The user still gives final confirmation of concrete pages,
+and functional QA after production implementation remains. A host without browser capability is fully capable
 of completing the default procedure; browser evidence is not required and the PM must not supplement
 it merely because the host could not render or operate the prototype.
 

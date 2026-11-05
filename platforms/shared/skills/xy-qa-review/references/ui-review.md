@@ -3,9 +3,10 @@
 Read this branch only for production UI or design-standard work. For `standards_only`, use the
 design-standard checks below; do not activate production-page/prototype checks without that scope.
 
-普通Light文案只在PM实际选择独立QA时进入本审查；仍核对production_ui、零设计差量和
-真实冻结UI-Conformance权威，不伪装non_ui。此读取不强制Light的Full规划、重复确认或
-原型，任何实际设计／交互变化均交PM改走Full。
+Ordinary Light copy enters this review only when PM actually selects independent QA. Still verify
+production_ui, zero design delta and real frozen UI-Conformance authority; do not disguise it as non_ui.
+Reading this branch does not force Full planning, repeated confirmation or a prototype on Light. Return
+any actual design/interaction change to PM for Full routing.
 
 For `UI-Conformance`:
 
@@ -40,8 +41,9 @@ For every scoped design-change UI page with `prototype_policy: required`:
    `prototype_contract` must map exactly to
    `visual_approved:<authority_id>@<content_fingerprint>`; a mismatch makes approval stale and is FAIL.
 2. When the fingerprint matches, consume the designer's frozen verification evidence and read the
-   exact in-page contract. 复用设计 Agent 在既有交接中对需求覆盖、规范符合性和交付一致性的
-   自检证据；这是生产实现后的功能QA，不另派原型QA。Open only the smallest relevant source slice—such as a selector, inline
+   exact in-page contract. Reuse the design Agent's existing handoff self-check evidence for requirements
+   coverage, standards conformance and delivery consistency. This is functional QA after production
+   implementation; do not dispatch separate prototype QA. Open only the smallest relevant source slice—such as a selector, inline
    handler, or dependency—needed to resolve a concrete production-mapping question. Do not read all
    shared CSS, JavaScript, pages, or unrelated dependencies by default.
 3. Verify that the contract and designer evidence cover stable control IDs, matching

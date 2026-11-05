@@ -508,14 +508,14 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
     selected = json.dumps(binding, sort_keys=True, separators=(",", ":"))
     command = f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"
     instructions = (
-        f"中央项目角色 {role}。仅执行 PM 的当前任务包，不启动其他 Agent。\n"
-        f"无本机启用记录时停止并提示未启用；新任务先运行 `{command} check`。\n"
-        f"本入口固定 runtime_binding={selected}。已有任务必须优先采用任务包中的 runtime_binding，"
-        "不能在项目换版后改读当前版本；中央任务缺少 pin 时停止。\n"
-        f"使用 `{command} --binding '<所选三字段JSON>' read roles/{role}.md` 完整读取角色原文，"
-        "以同一绑定读取 product/WORKFLOW.md、product/GLOBAL_CONSTRAINTS.md 和所需 Skill。\n"
-        f"配置路径显式为 {CONFIG}，业务根为当前项目；核心根仅由本机桥解析。\n"
-        "角色字段不证明父会话的权限、provider 或 MCP 隔离；遵守原生边界，不伪造隔离。\n"
+        f"Central project role {role}. Execute only the PM's current task pack; do not launch other Agents.\n"
+        f"Without a local activation record, stop and report inactive; first run `{command} check` for new tasks.\n"
+        f"This entry pins runtime_binding={selected}. Existing tasks must prioritize their task pack's runtime_binding, "
+        "without reading the current project version after a switch; stop if a central task lacks a pin.\n"
+        f"Use `{command} --binding '<selected-three-field-JSON>' read roles/{role}.md` to read the complete role source, "
+        "and the same binding to read product/WORKFLOW.md, product/GLOBAL_CONSTRAINTS.md, and required Skills.\n"
+        f"The configuration path is explicitly {CONFIG}, and the business root is the current project; only the local bridge resolves the core root.\n"
+        "Role fields do not prove parent-session permission, provider, or MCP isolation; respect native boundaries without fabricating isolation.\n"
     )
     if host == "codex":
         fields = [f'name = {json.dumps(role)}', f'description = {json.dumps(description, ensure_ascii=False)}']
@@ -703,11 +703,18 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
     if config.kind == "missing":
         desired[CONFIG] = (Node("file", body, 0o644), "persistent")
     command = f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"
+    # 中央薄入口必须保留自包含安装既有的实施 Skill/宿主细则导航，但真实正文始终
+    # 经同一任务 pin 由桥读取。宿主发现软链会随项目换版变化，不能作为旧任务权威；
+    # 这里仅声明当前操作的按需入口，不执行模型、不改 startup 事件或默认触发范围。
+    pinned_read = command + " --binding '<task-three-field-JSON>' read "
     block = (CENTRAL_BEGIN + "\n" +
-             "本项目使用中央工作流。每次新任务先执行 `" + command + " check`；未在本机启用时停止并提示未启用。\n" +
-             "项目换版不改变已有任务的 runtime_binding；中央任务缺少固定绑定时停止，不猜当前版。\n" +
-             "读取公共核心使用 `" + command + " --binding '<任务三字段JSON>' read product/WORKFLOW.md`；项目配置为 `" + CONFIG + "`。\n" +
-             "业务根、配置和核心根必须分开，角色权限字段不代表父会话 provider/MCP 隔离。\n" + CENTRAL_END + "\n").encode()
+             "This project uses the central workflow. For every new task, first run `" + command + " check`; stop and report inactive if not enabled locally.\n" +
+             "Project version switches do not change existing tasks' runtime_binding; stop if a central task lacks a fixed binding rather than guessing the current version.\n" +
+             "For an existing task, use runtime_binding from its complete current Task Pack; for a new task, freeze the binding verified by check. Use that same binding for every read below rather than following mutable project Skill discovery symlinks.\n" +
+             "For Light/Full implementation, activate the current host's workflow entry: Codex `$xy-workflow`; Claude Code/Antigravity `/xy-workflow`. Read its complete instructions with `" + pinned_read + "platforms/shared/skills/xy-workflow/SKILL.md`. Read-only discussion and audit retain the existing workflow branches.\n" +
+             "Read only the current host's integration with `" + pinned_read + "platforms/<current-host>/references/pm-integration.md`, replacing <current-host> with codex, claude, or antigravity for the actual host; do not preload the other hosts' details.\n" +
+             "Read the shared core with `" + pinned_read + "product/WORKFLOW.md`; project configuration is `" + CONFIG + "`.\n" +
+             "Keep business, configuration, and core roots separate; role permission fields do not imply parent-session provider/MCP isolation.\n" + CENTRAL_END + "\n").encode()
     desired["AGENTS.md"] = (Node("file", block, 0o644), "block")
     if "claude" in hosts:
         desired["CLAUDE.md"] = (Node("file", (CENTRAL_BEGIN + "\n@AGENTS.md\n" + CENTRAL_END + "\n").encode(), 0o644), "block")

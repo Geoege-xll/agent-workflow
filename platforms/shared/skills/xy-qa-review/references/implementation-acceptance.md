@@ -1,13 +1,14 @@
 # Implementation acceptance checks
 
-本分支用于Full或实际要求独立QA的Light实现验收。 The role defines identity and
+This branch accepts Full or Light implementation that actually requires independent QA. The role defines identity and
 permissions; the selected review method supplies general code-review evidence. These checks add the
 project acceptance constraints and do not start another complete generic code review.
 
 ## Scope, source and verification
 
-先完整读取当前2.0 QA任务包并核对handoff_ref所需身份／SHA；只消费当前请求权威、选定规范、
-实际source／diff与必要完整日志，不继承或复制PM／兄弟会话。
+First read the complete current 2.0 QA task pack and verify identity/SHA needed by handoff_ref. Consume only
+current request authority, selected standards, actual source/diff and necessary complete logs, without
+inheriting/copying PM or sibling conversations.
 Pin every root, nested repository and submodule independently to an explicit base/head range and
 SHA-256 diff fingerprint; a clean worktree does not exclude already committed request changes.
 Verify the native/installed method's actual scope against that binding before consuming its output.
@@ -18,12 +19,14 @@ evidence freshness; reuse valid implementer evidence without automatically repea
 Preserve mandatory checks and require current build/compile and runnable-result evidence appropriate
 to the changed target. Proposed commands, stale logs, summaries and unavailable environments are
 not current success. New execution needs a specific gap, failure, changed input or unresolved risk.
-按该策略的三个信息增量判断，核对新增测试是否补真实合同缺口、再次执行是否取得新覆盖
-或处理具体风险／失效证据，以及继续失败返工是否有新定位、可检验假设或有效修复进展。
-按实际测试节点／子场景核对覆盖：补负控或修复失败分支时复用其余有效分支，混合入口
-不可拆须有具体说明；预期红与夹具／执行失败的区分沿用该策略，不要求整组再跑一次。
-不能用测试文件数、重复绿色结果或一次字节核验代替真实覆盖与证据有效性；需要补测试
-或修改实现时交 PM 派回原作者，QA 保持只读。
+Apply the policy's three information-gain judgments: do new tests fill a real contract gap, does re-execution
+add coverage or address specific risk/invalid evidence, and does continued failed rework have a new diagnosis,
+testable hypothesis or effective repair progress? Check coverage at actual test-node/subscenario level.
+Reuse other valid branches when adding a negative control or repairing a failing branch; specifically explain
+an indivisible mixed entry point. Follow that policy's distinction between expected red and fixture/execution
+failure, without requiring a whole-group rerun. Test-file counts, repeated green results or one byte check
+cannot replace real coverage/evidence validity. Return necessary tests/implementation edits to PM for the
+original author; QA remains read-only.
 
 Check applicable behavior, edge cases, concurrency, API/data contracts, stack lock, conventions,
 path ownership and build/test/type-check/lint evidence according to actual change and risk. Verify
@@ -31,23 +34,29 @@ method findings against source before deciding; no findings never establishes ac
 For desktop changes, cover affected desktop renderer/core trust boundaries, IPC/capabilities, native
 integration, packaging, signing, notarization, updater and release evidence.
 
-资源与文档检查并入本次审查：仅对实际新增资源核对原 input/output 合同中的目的、落点、
-所有者、复用入口和保留／回收条件，确认共享配置、环境、数据库与系统缓存未被当作任务
-临时物。核对必需完整证据有可读持久引用，或已明确精确保留的必要文件；摘要不足以替代。
-沿本需求相关当前计划、功能与规范引用检查唯一当前权威及受影响链接，保护原始批准、
-历史计划与唯一证据，不按文件数、长度或目录位置判定重复，不新增全仓扫描或报告。
-当前恢复／交接简报是否原地反映剩余工作、并以可恢复引用保留必要完成基线，按
-`xy-workflow/references/plan-lifecycle.md` 核对，不以累加完成批次代替当前状态。
-清理执行仍由 PM 按现有收口合同完成，QA 不删除资源，也不为收口再审未变范围。
-需求 HTML 相关交付按 [唯一原稿方法](../../xy-plan/references/requirement-html.md) 检查当前
-Markdown/同名 HTML 新鲜度及本稿实际引用的原型页/锚点；复用仍有效的检查，不预载整份
-HTML 或原型依赖树。页面/勾选/check 成功不产生批准；历史 plans/HTML 不成为当前功能真相。
+Include resource/document checks in this review. Only for actual new resources, check purpose, location,
+owner, reuse entry point and retention/reclamation conditions in original input/output contracts. Confirm
+shared configuration, environments, databases and system caches were not treated as task-temporary. Verify
+readable durable references to mandatory complete evidence, or explicitly identified necessary files retained;
+summaries are insufficient. Follow this request's relevant current plan, feature and standards references to
+check the single current authority and affected links. Protect original approvals, historical plans and sole
+evidence. Do not infer duplication from file count, length or directory, or add whole-repository scans/reports.
+Check that current recovery/handoff briefs reflect remaining work in place and preserve necessary completed
+baselines through recoverable references under `xy-workflow/references/plan-lifecycle.md`; accumulated batch
+completion notes do not replace current state. PM still performs cleanup under existing closeout contracts;
+QA deletes no resources and does not rereview unchanged scope for closeout. For requirements HTML delivery,
+follow the [single-source method](../../xy-plan/references/requirement-html.md) to check current Markdown/
+same-name HTML freshness and prototype pages/anchors actually linked by this source. Reuse valid checks;
+do not preload all HTML or the prototype dependency tree. Page existence/checkboxes/successful check do not
+create approval; historical plans/HTML are not current feature truth.
 
 ## Independent standards coverage
 
-从实际变更路径独立选择适用内置规则及项目特有规范，索引存在时沿链接读取并核对真实SHA。
-没有特有叶且索引物理缺失时保留配置路径/null索引指纹；内置来源与全部适用ID仍须覆盖，
-不能因缺少项目GENERAL而跳过通用工程底线，也不靠预读全树修补任务包。
+Independently select applicable built-in rules and project-specific standards from actual changed paths.
+When the index exists, follow its links and verify real SHA. With no specific leaves and a physically missing
+index, retain configured paths/null index fingerprint. Built-in sources/all applicable IDs must still cover
+the work; absence of a project GENERAL does not waive general engineering baselines, and preloading the whole
+tree does not repair a Task Pack.
 Classify every fixed changed path and record each required/applicable engineering or design rule's
 source path, fingerprint, anchor, severity, disposition, affected paths and direct evidence in
 `standards_policy_coverage`. Engineering leaves apply to non-UI implementation, both domains to
@@ -61,12 +70,14 @@ authority, source/diff or complete-log references is FAIL.
 
 ## Specialist checks and memory
 
-审查实际代码变更时，只读应用已安装 `xy-code-standards`，仅为命中的边界读取其相关参考。
-生产 UI 或设计规范任务含实际 `ui`／`accessibility` 审查面时，再读取 `xy-ui-design`
-入口的使用边界与 `references/design-quality.md` 中适用规则，沿用当前已采用的 authority；
-不运行其设计、规范写作或原型验证分支，也不为 QA 加载原型画布、来源或全部引用。
-纯说明性文档无需代码方法，纯后端审查无需 UI 方法。上述读取不改变独立审查方法顺序、
-只读权限、任务等级、用户原型选择、UI-Conformance 或 standards_only，也不启动第二次审查。
+For actual code changes, apply installed `xy-code-standards` read-only and read relevant references only for
+matched boundaries. For production UI/design-standard tasks with actual `ui`/`accessibility` audit surfaces,
+also read the `xy-ui-design` entry's usage boundaries and applicable `references/design-quality.md` rules,
+retaining currently adopted authority. Do not execute its design, standards-writing or prototype-verification
+branches, or load prototype canvases, sources or all references for QA. Pure explanatory documentation needs
+no code method; pure backend review needs no UI method. These reads do not change independent-review method
+order, read-only permissions, task level, user prototype choice, UI-Conformance or standards_only, or start a
+second review.
 
 Match locally available specialist Skills progressively by description only when they improve a
 declared `audit_surface`; use host-exposed capabilities, not a scan, preload, enumeration or saved
@@ -97,9 +108,12 @@ not unchanged full coverage. Bind the latest complete request scope, refresh aff
 and evidence, carry forward unchanged conclusions and run the existing handoff validation. Broaden
 only for concrete new risk, invalidated evidence or explicit user/project requirement. Sufficient
 coverage needs no new test file. After a valid PASS, stop instead of adding an insurance review.
-同一失败路径没有新进展时提前交 PM，沿现有次数上限处理，不重启未失效审计、不换方法
-或 Reviewer，也不把停止或缺失证据记为 PASS。普通说明收尾本身不触发重审；工作流指令、
-权限、安全、API 或行为合同变化仍按实际影响复核。
+Return the same failing path to PM early when there is no new progress, applying existing attempt limits.
+Do not restart still-valid audit coverage, switch method/Reviewer or record stopping/missing evidence as PASS.
+Ordinary explanatory closeout alone does not trigger rereview; changes to workflow instructions, permissions,
+security, APIs or behavioral contracts still require review by actual impact.
 
-文档验收核对同主题 plans 的本次目标／执行阶段与真实已验收版本分别成立；PROJECT 只链接明确基线。
-completed、HTML存在或清单非空不产生批准或交付；再次迭代与取消时保留旧基线，无依据不得自动索引旧历史稿。
+Document acceptance checks current goals/execution stage separately from the topic plan's genuinely accepted
+version. PROJECT links only explicit baselines. completed, HTML existence or non-empty lists do not create
+approval/delivery. Preserve old baselines during iteration/cancellation; do not automatically index old
+historical drafts without grounds.

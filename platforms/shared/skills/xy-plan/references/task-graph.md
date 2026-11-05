@@ -168,14 +168,16 @@ asking for the same choice again. Draft only the current affected work; preserve
 }
 ```
 
-示例展示索引存在的安装态；物理不存在且无项目规则叶时仍保留配置 index_path/root，
-index_fingerprint设null并省略索引读取条目。内置来源使用三个精确受管路径（源包态不带.agent-workflow/），
-按实际组件规则补components-rules.md，按实际项目差异补特有叶；不得把示例当成完整默认规则清单。
+The example shows an installed project with an existing index. If the index is physically absent and no
+project rule leaves exist, retain configured index_path/root, set index_fingerprint to null and omit the
+index-read entry. Built-in sources use the three exact managed paths (without .agent-workflow/ in source-pack
+mode). Add components-rules.md for actual component rules and specific leaves for actual project differences;
+do not treat this example as a complete default rule list.
 This example is a `production_ui` task. Use `surface_kind: design_ui` for `xy-uiux`; use
 `surface_kind: non_ui` and omit `ui_change` for non-UI work. Every dependency must have the matching
 reverse `blocks` edge. Every writer must have exact owned paths, a role, concrete acceptance
 evidence, and verification. Every Writer carries applicable fingerprinted built-in sources,
-存在时的项目索引与适用项目特有叶，以及 standards-conformance； `xy-uiux + design_ui` uses design leaves without
+the project index when present, applicable project-specific leaves, and standards-conformance; `xy-uiux + design_ui` uses design leaves without
 engineering leaves. Protected upstream writes require a documented allowed path or a complete `standards_exceptions`
 record bound to an exceptional Gate. `xy-uiux` and `design_ui` are a mandatory pair. Bind every
 `prototype_contract` authority to `ui_contract.prototype_paths` and every `design_standard`
@@ -198,6 +200,7 @@ and choices when applicable, requests approval in natural language, materializes
 branch, freezes the approved fingerprint and `prototype_decision` internally, and validates the
 graph before dispatch.
 
-Full实施派发通过task出口投影为schema_version:2的当前单任务shell，仅附适用规范与
-必要批准／UI依据，不带兄弟任务、完整图或会话。新实例不得fork继承父历史；所有者、
-别名、上下文和闭环回收遵守WORKFLOW产品权威。草案不写agent_ref或制造实际执行身份。
+Full implementation dispatch projects the current single-task shell through the task output with schema_version:2,
+attaching only applicable standards and necessary approval/UI authority, without sibling tasks, the full graph
+or conversations. New instances must not fork parent history. Ownership, aliases, context and lifecycle closure
+follow WORKFLOW product authority. Drafts do not write agent_ref or fabricate an actual execution identity.

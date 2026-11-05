@@ -8,9 +8,7 @@ Managed by `bash .agent-workflow/setup_claude.sh`.
 ## Entry and authority
 
 The main conversation alone orchestrates. Light and Full product changes invoke `/xy-workflow`.
-Light／Full 默认派对应原生 `Agent(xy-*)`，只使用普通命名角色，不使用会复制父历史的 fork。
-PM 亲自实施例外及恢复边界见 `.agent-workflow/product/WORKFLOW.md#implementation-ownership`，
-原等级门槛不变。PM 继续负责分级、规划、派发、QA 接收、记忆收口和汇报。
+Light/Full defaults to the corresponding native `Agent(xy-*)`, using only ordinary named roles without forks that copy parent history. See `.agent-workflow/product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates. PM retains classification, planning, dispatch, QA acceptance, memory closeout, and reporting.
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
 without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 
@@ -21,8 +19,7 @@ Keep role isolation dynamic rather than setting every role permanently to `isola
 PM-local integration and confirm/auto local main delivery use the shared contract; do not rewrite
 global worktree settings, permissions or user hooks, or create new user-visible sessions as a fallback.
 
-Light 先判断当前目标、风险、范围和实施者，最小充分验证必做；交接评估独立 QA、
-文档及记忆。不强制 Full 规划、DAG、保存计划或重复确认；Full 和实际必要 QA 的门槛保留。
+Light first assesses the current goal, risk, scope, and implementer, with mandatory minimum sufficient verification; assess independent QA, documentation, and memory at handoff. Do not mandate Full planning, DAGs, saved plans, or duplicate confirmation; retain Full and actually necessary QA gates.
 
 Read paths and limits from `.agent-workflow/project.yaml`. ProjectProfile is routing context, never
 write authority. Each task pack fixes current facts, `owned_paths`, reads/Skills, dependencies,
@@ -40,15 +37,14 @@ Finish the brief before the single approval choice; add no material details afte
 - Full: classify → optional relevant facts → Grill Me coverage check via `/grill-me` → `/xy-plan`
   with `plan_state: draft` → PM
   post-QA controlled-document projection decision → ask once for `requirements_approved` → freeze and run.
-  Keep PROJECT/plans 已验收基线 at its last QA-verified state until integrated QA PASS. Clear
+  Keep accepted PROJECT/plans baselines at its last QA-verified state until integrated QA PASS. Clear
   Light work may skip the two Skills when facts are complete.
 - Grill Me remains requirements-only. Superpowers is disabled by default except the bounded reviewer
   fallback below; `xy-plan` is the local planner. Reopen approval only for material scope change.
 - Full `UI-Conformance` requires `design_delta: none` and has no visual gate. It also requires
   `surface_kind: production_ui`, `qa_scope: request`, `prototype_policy: not_applicable`, structured
   resolved/fingerprinted `design_authority_refs`, zero design writes, and full UI/accessibility QA.
-  普通 Light 文案沿共享 `Light UI copy` 分支，仍保留真实冻结设计权威、工程／设计规范与
-  最小验证；独立 QA 依交接时的实际风险评估，不因同用 UI-Conformance 而强制 Full。
+  Ordinary Light copy follows the shared `Light UI copy` branch, retaining actual frozen design authority, engineering/design standards, and minimum verification; independent QA follows actual handoff risk assessment, without mandating Full merely because it also uses UI-Conformance.
 - UI design-change work requires `visual_approved` per exact page dependency fingerprint when
   the user selects `prototype_policy: required`, plus `xy-uiux` and `/xy-prototype-verify`. A
   scope-bound `prototype_decision` captured inside `requirements_approved` applies to both
@@ -114,10 +110,7 @@ an Agent ID or an empty active panel is not completion evidence. Avoid busy poll
 sleep loops. Use native background waiting/monitoring only when available, without creating another
 supervisor Agent. Never alter fork/background settings merely to obtain foreground waiting.
 
-2.0 派发仅传 schema_version: 2 的当前任务外壳：task、适用 standards_contract、必要
-批准／UI 依据，不复制完整 PM／兄弟会话。核对 module、规范 role、稳定 agent_alias、
-instance_policy: fresh 与 context_policy: handoff_only；新独立任务重新调用命名 `xy-*`
-角色，取得新原生 ID，不预建所有别名或填满容量。接收者仍须完整读取当前必需规范。
+2.0 dispatch passes only the current schema_version: 2 task envelope: task, applicable standards_contract, and necessary approval/UI evidence, without complete PM/sibling conversations. Check module, canonical role, stable agent_alias, instance_policy: fresh, and context_policy: handoff_only; invoke the named `xy-*` role again for each new independent task to obtain a new native ID, without precreating all aliases or filling capacity. The receiver still reads all current required standards completely.
 
 Keep the returned native Agent ID in the existing task handoff, and in an existing recovery plan only
 when needed. Use `SendMessage` to that verified ID only for the same task's follow-ups and bounded QA rework; a completed
@@ -125,24 +118,9 @@ agent resumes in the background without another Agent call. After restart, resto
 and use the ID if its name no longer resolves. If the user cancelled the agent, respect cancellation;
 do not auto-resume it. A missing/expired ID is a recovery gap, not permission to invent a prior PASS.
 
-续用前按 `xy-workflow/references/runtime-records.md` 通过现有 update 补记真实
-`agent_ref`，用 `continuation --host claude --observed-state <当前观察>` 取得 wait／followup
-或阻塞建议；只由当前已暴露且获授权的原生工具执行，完整 Task Pack／scope 仍须核对。
-旧 ID、缺失名称或历史完成引用都不自动授权新任务；保留同一 Reviewer 及既有返工边界。
-交付反馈窗口内保留必要实例，PM 接收且必要验证／QA 完成、成果日志安全后及时结束。
-`TaskStop` 只停止当前执行；它可能仍可被 SendMessage 恢复，不能记成清空上下文或永久关闭。
-普通子 Agent 未提供可验证关闭能力时，记录 agent_retired、禁止续用和“原生结束未确认”。
-不启用 Teams 或借 shutdown_request 协议替代关闭，也不默认删除历史；退役不解锁仍执行的任务。
-运行数和打开线程数分开按宿主实际口径观察；压力优先回收已验收且交接充分的实例，保留
-正在执行、证据未交付及必要复查者，为后续必要 QA／集成安排容量。resume／compact 不重置
-实例；没有独立初始上下文能力时报告阻塞，不用 fork 降级，不引入 Agent 池或第二状态机。
-同一参考中的 doctor 默认无进程，`--probe` 仅 `--version`；documented/source_observed
-与 runtime_unverified 不能冒充实际会话执行。用量只读取显式导出，保留原生字段与未知值。
+Before continuation, record actual `agent_ref` through existing update under `xy-workflow/references/runtime-records.md`, then use `continuation --host claude --observed-state <current-observation>` for wait/followup or blocker advice; execute only through currently exposed authorized native tools and still check the complete Task Pack/scope. Old IDs, missing names, or historical completion references do not automatically authorize new tasks; retain the same Reviewer and existing rework boundaries. Retain necessary instances during the delivery feedback window, then end promptly after PM acceptance, necessary verification/QA, and safe results/logs. `TaskStop` stops only current execution and may still allow SendMessage recovery; do not record cleared context or permanent closure. If ordinary subagents expose no verifiable closure capability, record agent_retired, prohibit continuation, and state native termination is unconfirmed. Do not enable Teams or substitute shutdown_request for closure, or delete history by default; retirement unlocks no still-running task. Observe running/open-thread counts separately using actual host definitions; under pressure reclaim accepted instances with sufficient handoff first, retain executing instances, undelivered evidence, and necessary reviewers, and reserve later necessary QA/integration capacity. resume/compact does not reset instances; if independent initial context is unavailable, report a blocker without fork fallback, an Agent pool, or a second state machine. doctor in the same reference starts no process by default and `--probe` invokes only `--version`; documented/source_observed and runtime_unverified cannot impersonate actual session execution. Read usage only from explicit exports, preserving native fields and unknown values.
 
-QA 结构化输出见 `xy-qa-review/references/inputs.md`：当前支持且已授权时，同次
-`-p --json-schema <schema-json>` 调用的成功终端 result 通过
-`qa_handoff_cli.py extract --host claude --input <native-result.json> --task-pack <current-qa-pack.json>` 解包后按当前包身份与 SHA 校验。
-不额外调用模型转 JSON，不另建 Reviewer，不改原权限、model／effort 或 method 顺序。
+See `xy-qa-review/references/inputs.md` for structured QA output: when currently supported and authorized, unpack the successful terminal result from the same `-p --json-schema <schema-json>` invocation through `qa_handoff_cli.py extract --host claude --input <native-result.json> --task-pack <current-qa-pack.json>`, then validate identity/SHA against the current pack. Do not call an extra model for JSON conversion, add a Reviewer, or change original permissions, model/effort, or method order.
 
 Conversation forks inherit the main session's history, tools and model. Use the named `xy-*` role
 definitions for production writers and the independent read-only `xy-qa`; do not substitute a fork
@@ -173,8 +151,7 @@ record. Current controlled documents and explicit user approvals win over recall
 and matching provenance; otherwise call neither recall nor save.
 
 `PROJECT.md` is the current verified project directory, not task history; details and accepted baselines live in the same topic under `docs.plans`.
-QA 验收通过的完整删除只移除 `PROJECT.md` 当前链接，在同一主题原稿中将阶段标记为 `removed`，
-保留必要历史与依据；原稿保持原路径，不改名、不另建副本。
+An accepted complete removal removes only the current `PROJECT.md` link and marks the phase `removed` in the same topic source, retaining necessary history and rationale at the original path without renaming or copies.
 Feature details include current architectural rationale; no separate ADR category.
 Plan storage follows the current levels: Light only for actual
 pause/recovery/handoff or user request; Full saved by PM after requirements confirmation before
@@ -190,13 +167,6 @@ assist Hook entries in project settings; Auto Memory, plugins, MCP and agentmemo
 connection remain user-owned. Hooks remind at intake/recovery and Explore dispatch, never force QA
 or continuation. See `.agent-workflow/platforms/shared/HOOKS.md` only for Hook setup or diagnostics.
 
-可选 `claude_options.auto_compact_windows` 按角色生成原生 `autoCompactWindow`：要求
-2.1.296+、100000..1000000 完整整数，只降低继承窗口；全局窗口环境变量通常覆盖角色字段，
-作为 `--agent` 主会话时不适用。恢复指令仍走 SessionStart(compact)，不将压缩摘要当成
-批准、写入权或完成证据，也不为 PreCompact/PostCompact 增加重复注入或门禁。
+Optional `claude_options.auto_compact_windows` generates native `autoCompactWindow` by role: require 2.1.296+, full integers in 100000..1000000, and only reduce the inherited window. Global window environment variables usually override role fields, and the setting does not apply when used as a `--agent` main session. Recovery instructions still use SessionStart(compact); compaction summaries are not approval, write authority, or completion evidence, and PreCompact/PostCompact receives no duplicate injection or gates.
 
-用户权限默认继承；只有显式选择
-`claude_options.block_writes_outside_working_directories: true` 才合并原生写入保护（2.1.314+），
-冲突时停止，保留其他权限。off/inherit 不撤销保护；它只约束 Write/Edit/NotebookEdit 的
-工作目录外路径，不覆盖 Bash，也不替代任务 owned_paths。实际 worktree 工作目录和原生
-执行效果应在目标会话核验。模型管理只改 model/effort，保留窗口与权限。
+User permissions inherit by default; merge native write protection (2.1.314+) only with an explicit `claude_options.block_writes_outside_working_directories: true` choice, stopping on conflict and preserving other permissions. off/inherit does not revoke protection; it covers only Write/Edit/NotebookEdit paths outside working directories, not Bash, and does not replace task owned_paths. Verify the actual worktree working directory and native execution effect in the target session. Model management changes only model/effort, preserving windows and permissions.
