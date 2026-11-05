@@ -1,7 +1,7 @@
 # Requirement Plans, Recovery and Change Handoff
 
 Use when deciding whether to save a plan, revising an approved request, or resuming related unfinished
-work. This supports the 2.0 Light/Full routes; it adds no role, confirmation gate or
+work. This supports the current Light/Full routes with schema 2 task packs; it adds no role, confirmation gate or
 automatic memory call. Explicit task-scoped workflow opt-out and save/no-save instructions prevail;
 applicable project constraints and permission boundaries still apply.
 
@@ -206,6 +206,7 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
 - Unindexed old execution drafts retain historical boundaries. Do not auto-index by completed, bulk-edit
   history or replay old tasks by default. Same-name HTML projects the source; it is not a second standard or
   approval source.
-- Old `docs.features` and FEATURE templates are outside the new runtime contract. Existing projects first
-  follow README's explicit one-time migration to preserve text, approvals/evidence and index references;
-  stop first for conflicts or unclear topic relationships. Standards and memory still follow actual changes.
+- Old `docs.features` and FEATURE templates are outside the current runtime contract, and version 2.1
+  provides no old-document conversion CLI. Preserve complete text, approvals/evidence and index references
+  under README's document-protection boundary before removing rejected old keys; stop for conflicts or
+  unclear topic relationships. Standards and memory still follow actual changes.

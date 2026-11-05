@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import re
 import stat
+import tomllib
 
 from .platform_fs import os
 from . import runtime_store as store
@@ -227,18 +228,6 @@ class Tree:
             if node_id(actual) != expected or not stat.S_ISDIR(actual.st_mode):
                 raise ProjectRuntimeError("受管父目录在事务中被替换，保留原目录中的恢复资料")
 
-    def reset_after_legacy_moves(self):
-        """仅供已经登记的旧目录 rename 后重新锚定，不沿旧缓存写入归档核心。
-
-        项目物理根描述符与祖先守卫仍保留。调用者必须先验证/持久登记全部旧
-        目录移动；普通文件事务从不调用此方法，不能用它绕过目录换链检查。
-        """
-        for relative, descriptor in reversed(list(self.directories.items())):
-            if relative:
-                os.close(descriptor)
-        self.directories = {"": self.directories[""]}
-        self.links.clear()
-
     def directory(self, relative: str, *, create: bool = False, created: list | None = None) -> int:
         if relative in self.directories:
             return self.directories[relative]
@@ -320,22 +309,143 @@ def managed_path(relative: str, purpose: str) -> bool:
     return False
 
 
-def legacy_hook_source() -> bytes:
-    """保留旧 Hook 的精确命令/信任配置，用薄转发替代被归档的本地 helper。"""
-    return '''"""旧受管 Hook 的薄入口；不改宿主命令/信任，不猜进行中任务版本。"""
+def hook_bridge_source() -> bytes:
+    """当前受管 Hook 的固定版本薄入口；不加载项目代码或猜已有任务的 pin。"""
+    return '''"""当前受管 Hook 的薄入口；不改宿主命令/信任，不猜进行中任务版本。"""
 import os
 from pathlib import Path
 import runpy
+import json
+import subprocess
 import sys
 
-if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
-    # Hook 只是辅助提醒；缺任务 pin 时不进入中央工作流，也不阻断宿主操作。
-    print("[INFO] 中央 Hook 未收到任务固定绑定，本次只保留宿主原生行为。", file=sys.stderr)
-    raise SystemExit(0)
 entry = Path(__file__).absolute().parent.parent / "runtime.py"
+if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
+    # 无任务 pin 时只选择已启用项目的当前提醒脚本，不创建或改写任何任务 pin。
+    # 真实 check 拒绝未知/损坏版本和停用项目；辅助层失败始终保持宿主协议中性。
+    try:
+        checked = subprocess.run([sys.executable, "-B", "-X", "utf8", str(entry), "check"],
+                                 capture_output=True, timeout=2, check=False)
+        if checked.returncode != 0:
+            raise ValueError("inactive workflow")
+        os.environ["AGENT_WORKFLOW_RUNTIME_BINDING"] = json.dumps(json.loads(checked.stdout)["runtime_binding"])
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        print("{}")
+        raise SystemExit(0)
 sys.argv = [str(entry), "helper", "lib/workflow_hooks.py", *sys.argv[1:]]
 runpy.run_path(str(entry), run_name="__main__")
 '''.encode("utf-8")
+
+
+def native_projection(body: bytes) -> tuple:
+    """Codex 只拥有三个 agents 默认键及有签名 Hook 区；其他字段可由用户继续编辑。"""
+    from .workflow_hook_install import managed_inline
+    data = tomllib.loads(body.decode("utf-8"))
+    agents = data.get("agents", {})
+    if not isinstance(agents, dict):
+        raise ProjectRuntimeError("Codex agents 必须为配置表")
+    keys = ("enabled", "max_concurrent_threads_per_session", "interrupt_message")
+    return tuple((key, key in agents, agents.get(key)) for key in keys), managed_inline(body)
+
+
+def restore_native(current: Node, baseline: Node, expected: Node) -> Node:
+    """停用时仅撤回工作流 agents 键和签名 Hook；保留后来添加的用户字段和权限。"""
+    from .merge_codex_config import AGENTS_BEGIN, AGENTS_END, TABLE_RE, render
+    from .workflow_hook_install import managed_inline, merge_inline
+    if current.kind == "missing":
+        return current  # 已停用且缺失的原生容器保持幂等，不能补出一个空配置。
+    expected_agents = tomllib.loads(expected.payload.decode("utf-8")).get("agents", {})
+    threads = expected_agents.get("max_concurrent_threads_per_session", 8)
+    rebuilt = render(baseline.payload.decode("utf-8"), threads).encode()
+    block = managed_inline(expected.payload)
+    if block:
+        rebuilt += block + b"\n"
+    # expected 会在 repair/use 后刷新，不能据“当前等于 expected”还原整个最初
+    # baseline，否则会吞掉已经纳入 expected 的后加用户字段。只有最初用户
+    # 字节经过当前生成器能精确重建现状时，才允许恢复其原格式或缺失状态。
+    if current.payload == rebuilt:
+        return Node("file", baseline.payload, current.mode) if baseline.kind == "file" else baseline
+    original = tomllib.loads(baseline.payload.decode("utf-8")) if baseline.kind == "file" else {}
+    prior = original.get("agents", {})
+    keys = {"enabled", "max_concurrent_threads_per_session", "interrupt_message"}
+    text = merge_inline(current.payload, Path("/"), Path("/"), "off").decode("utf-8")
+    lines = []
+    in_agents = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped in {AGENTS_BEGIN, AGENTS_END}:
+            continue
+        if stripped.startswith("["):
+            table = TABLE_RE.match(line)
+            in_agents = bool(table and table[1].strip() == "agents")
+        match = re.match(r"\s*([a-z_]+)\s*=", line) if in_agents else None
+        if match and match[1] in keys:
+            if match[1] in prior:
+                lines.append(match[1] + " = " + json.dumps(prior[match[1]]) + "\n")
+            continue
+        lines.append(line)
+    restored = "".join(lines)
+    # 空表可保留，避免删除同一表下用户注释；语义与 TOML 有效性在发布前复核。
+    tomllib.loads(restored)
+    return Node("file", restored.encode("utf-8"), current.mode or 0o644)
+
+
+def hook_resources(project: Path, config: bytes, hosts: tuple[str, ...], *,
+                   enabled: bool = True, check_only: bool = False,
+                   codex_after: Node | None = None) -> dict[str, tuple[Node, str]]:
+    """内存配置驱动的当前 Hook 资源计划；仅签名条目归工作流，原生容器始终共享。
+
+    guard 行由普通条件事务发布但不登记整文件独占；后续 repair/use/disable
+    每次重新合并当前用户设置。watch 行绑定只读输入，防止预览后本地层变化。
+    """
+    from .workflow_hook_install import (BEGIN, json_object, managed_inline, managed_json,
+                                        merge_inline, merge_json)
+    from .workflow_hook_settings import hook_mode
+    from .claude_options import parse
+    mode = hook_mode(config.decode("utf-8")) if enabled else "off"
+    options = parse(config.decode("utf-8"))
+    desired = {}
+    pack = project / ".agent-workflow"
+    with Tree(project) as tree:
+        for host in hosts:
+            if host == "codex":
+                native = tree.read(".codex/config.toml")
+                existing = tree.read(".codex/hooks.json")
+                data = json_object(existing.payload if existing.kind == "file" else None)
+                parsed = tomllib.loads(native.payload.decode("utf-8"))
+                signed = managed_json(data, host)
+                if ("hooks" in parsed or BEGIN.encode() in native.payload) and not signed:
+                    source = codex_after if codex_after is not None else native
+                    after = merge_inline(source.payload, pack, project, mode)
+                    if check_only:
+                        if managed_inline(native.payload) != managed_inline(after):
+                            raise ProjectRuntimeError("Codex 受管 Hook 缺失或偏离当前配置")
+                    else:
+                        desired[".codex/config.toml"] = (Node("file", after, native.mode or 0o644), "native-config")
+                    desired[".codex/hooks.json"] = (existing, "watch")
+                    continue
+                relative = ".codex/hooks.json"
+            else:
+                relative = ".claude/settings.json" if host == "claude" else ".agents/hooks.json"
+                existing = tree.read(relative)
+                data = json_object(existing.payload if existing.kind == "file" else None)
+            local = None
+            if host == "claude" and options["block_writes_outside_working_directories"] is True:
+                local_node = tree.read(".claude/settings.local.json")
+                local = json_object(local_node.payload if local_node.kind == "file" else None)
+                desired[".claude/settings.local.json"] = (local_node, "watch")
+            merged = merge_json(data, pack, project, host, mode, claude_options=options if host == "claude" else None,
+                                local_settings=local)
+            if check_only:
+                guard_missing = (host == "claude" and local is not None
+                                 and data.get("permissions", {}).get("blockWritesOutsideWorkingDirectories") is not True)
+                if managed_json(data, host) != managed_json(merged, host) or guard_missing:
+                    raise ProjectRuntimeError(host + " 受管 Hook 或显式写入保护缺失")
+                continue
+            after = existing if merged == data else Node("file", (json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode(), existing.mode or 0o644, existing.identity)
+            # off 且从未创建容器时保持真正无操作；不制造空的 JSON 文件。
+            desired[relative] = (after, "guard")
+    return desired
 
 
 def claude_write_guard(project: Path, config: bytes, *, check_only: bool = False) -> dict[str, tuple[Node, str]]:
@@ -478,7 +588,7 @@ def configuration(resources: Resources, project: Path, config: Node, *, owned_li
         # 原验证器的部分错误含用户原始标量（例如错误模型 JSON），不能直接转发
         # 给 CLI/TUI 或预览日志。这里只投影安全类别；原文仍留在项目适配器中。
         if any("unsupported docs key: notes" in error or "unsupported memory key: fallback_dir" in error for error in errors):
-            raise ProjectRuntimeError("旧 notes 配置需要先显式归属迁移，不能在 enable 时静默删除")
+            raise ProjectRuntimeError("已废弃的文档配置必须先明确处理，enable 不会静默删除用户配置")
         raise ProjectRuntimeError(f"项目配置需要先显式处理：{len(errors)} 项校验错误；未显示适配器正文")
     lines = body.decode("utf-8", errors="strict").splitlines()
     docs_errors = []
@@ -699,6 +809,7 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
         LOCATOR: (Node("file", json_bytes({"schema_version": 1, "kind": "central", "runtime_binding": selected}), 0o644), "locator"),
         LAUNCHER: (Node("file", launcher_source(), 0o644), "bridge"),
         PYTHON_ENTRY: (Node("file", resources.read("lib/python_runtime.sh"), 0o755), "bridge"),
+        ".agent-workflow/lib/workflow_hooks.py": (Node("file", hook_bridge_source(), 0o644), "bridge"),
     }
     if config.kind == "missing":
         desired[CONFIG] = (Node("file", body, 0o644), "persistent")
@@ -726,6 +837,9 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
         threads = re.search(rb"(?m)^  max_concurrent_subagents:\s*([1-9][0-9]*)", body)
         rendered = render_codex_config(native.payload.decode("utf-8"), int(threads[1]) if threads else 8).encode()
         desired[".codex/config.toml"] = (Node("file", rendered, native.mode or 0o644), "native-config")
+    # 配置尚未落盘也能生成 fresh Hooks；JSON 容器不成为整文件独占资源。
+    desired.update(hook_resources(project, body, hosts,
+                                  codex_after=desired.get(".codex/config.toml", (None,))[0]))
     for host in hosts:
         directory, suffix = ROLE_PATHS[host]
         for role in profile.enabled_roles:

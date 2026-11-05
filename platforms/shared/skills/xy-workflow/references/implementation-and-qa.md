@@ -81,7 +81,7 @@ instance identity, context and closure boundaries, without a separate pool.
    Do not wait for
    unrelated project work.
    QA receives the approved contract, applicable concrete page links/fingerprints, diff, current self-contained
-   2.0 QA pack and necessary approval/standards authority, without full sibling tasks or conversations.
+   schema 2 QA pack and necessary approval/standards authority, without full sibling tasks or conversations.
    A new Reviewer must not inherit parent history. Bind the current QA pack's request/task/alias/agent_ref
    and byte SHA through schema_version:2 and handoff_ref. QA also receives evidence references,
    any task-relevant start-mode `memory_context` that actually exists, and the

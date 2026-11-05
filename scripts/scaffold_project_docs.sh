@@ -363,7 +363,7 @@ originals = {}
 for target, expected in standard_inputs.items():
     actual = regular_source(target) if snapshots[target][0] == "file" else None
     if actual != expected:
-        raise SystemExit(f"scaffold target changed after migration planning: {target}")
+        raise SystemExit(f"scaffold target changed after document planning: {target}")
     if actual is not None:
         originals[target] = actual
 

@@ -16,6 +16,7 @@ from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
 from lib import requirement_html as renderer
+from lib import runtime_pins, runtime_store
 from lib.task_graph_records import scratch_workspace
 
 
@@ -252,6 +253,105 @@ class RequirementHtmlTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scratch"):
             renderer.process("render", self.root, str(other), REQUEST, draft=True)
 
+    def central_cores(self):
+        """仅给逻辑链接准备两份最小清单资源；不是可执行核心或宿主模型 E2E。"""
+        source = self.work / "link-core-source"
+        for directory in runtime_store.CORE_DIRECTORIES:
+            (source / directory).mkdir(parents=True, exist_ok=True)
+        for name in runtime_store.SETUP_FILES:
+            (source / name).write_bytes(b"#!/bin/sh\nexit 0\n")
+        logical = "platforms/shared/skills/xy-code-standards/references/rules.md"
+        rules = source / logical
+        rules.parent.mkdir(parents=True, exist_ok=True)
+        (source / "product/WORKFLOW.md").write_bytes(b"# fixture workflow\n")
+        state = self.work / "link-core-state"
+        rules.write_bytes(b"# first pinned rules\n")
+        first = runtime_store.import_core(source, state)
+        # 原地更新同一最小来源获得另一内容 ID，避免复制完整 runtime 候选。
+        rules.write_bytes(b"# second pinned rules\n")
+        second = runtime_store.import_core(source, state)
+        adapter = self.root / runtime_pins.CENTRAL_ADAPTER
+        adapter.parent.mkdir(exist_ok=True)
+        adapter.write_bytes((self.root / "project.yaml").read_bytes())
+        (self.root / runtime_pins.CENTRAL_MARKER).write_bytes(b"{}\n")
+
+        def environment(core):
+            return {"AGENT_WORKFLOW_STATE_DIR": str(state), runtime_pins.BINDING_ENV: json.dumps(core.binding()),
+                    runtime_pins.PROJECT_ENV: str(self.root), runtime_pins.CONFIG_ENV: str(adapter),
+                    runtime_pins.CORE_ENV: str(core.root)}
+
+        return first, second, logical, environment
+
+    def test_central_pinned_links_navigation_and_freshness(self):
+        first, second, logical, environment = self.central_cores()
+        body = ("# 中央链接测试夹具\n\n[工程规则](../../.agent-workflow/" + logical + ")\n").encode()
+        self.source.write_bytes(body)
+        skill = self.root / ".agents/skills/xy-code-standards"
+        skill.parent.mkdir(parents=True)
+        skill.symlink_to(first.root / "platforms/shared/skills/xy-code-standards")
+        with patch.dict(os.environ, environment(first)):
+            self.assertTrue(self.process()["rendered"])
+            self.assertEqual("fresh", self.process("check")["status"])
+            href = next(h for h in Page(self.target.read_bytes()).hrefs if "rules.md" in h)
+            self.assertEqual(first.root / logical, Path(os.path.normpath(self.target.parent / unquote(href))))
+            # 宿主发现链接换版不能改变旧任务固定 pin 的实际导航或新鲜度。
+            skill.unlink()
+            skill.symlink_to(second.root / "platforms/shared/skills/xy-code-standards")
+            self.assertFalse(self.process("check")["rendered"])
+            old = self.target.read_bytes()
+        with patch.dict(os.environ, environment(second)):
+            with self.assertRaisesRegex(ValueError, "过期"):
+                self.process("check")
+            self.assertTrue(self.process()["rendered"])
+            self.assertNotEqual(old, self.target.read_bytes())
+            href = next(h for h in Page(self.target.read_bytes()).hrefs if "rules.md" in h)
+            self.assertEqual(second.root / logical, Path(os.path.normpath(self.target.parent / unquote(href))))
+            # 草案使用相同逻辑原稿；只有舞台/派生页导航使用机器上已验证的固定核心。
+            draft = Path(scratch_workspace(self.root, REQUEST)["scratch_dir"]) / "central-link.md"
+            draft.write_bytes(body)
+            result = renderer.process("render", self.root, str(draft), REQUEST, draft=True)
+            href = next(h for h in Page(Path(result["html"]).read_bytes()).hrefs if "rules.md" in h)
+            self.assertEqual(second.root / logical, Path(os.path.normpath(draft.parent / unquote(href))))
+            self.assertEqual(body, draft.read_bytes())
+            self.target.write_bytes(self.target.read_bytes() + b"\nmanual edit\n")
+            before = self.target.read_bytes()
+            with self.assertRaisesRegex(ValueError, "已被修改"):
+                self.process()
+            self.assertEqual(before, self.target.read_bytes())
+        self.assertEqual(body, self.source.read_bytes())
+
+    def test_central_pin_failures_and_project_symlinks_are_refused(self):
+        first, second, logical, environment = self.central_cores()
+        body = ("# 拒绝夹具\n\n[x](../../.agent-workflow/" + logical + ")\n").encode()
+        self.source.write_bytes(body)
+        valid = environment(first)
+        missing = {key: value for key, value in valid.items() if key != runtime_pins.BINDING_ENV}
+        unknown = dict(valid)
+        unknown[runtime_pins.BINDING_ENV] = json.dumps({"protocol_version": 1, "content_id": "f" * 64,
+                                                      "manifest_sha256": "f" * 64})
+        mismatch = {**valid, runtime_pins.CORE_ENV: str(second.root)}
+        for env in (missing, unknown, mismatch, {**valid, runtime_pins.BINDING_ENV: "broken"}):
+            with self.subTest(env_keys=sorted(env)), patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(ValueError):
+                    self.process()
+                self.assertFalse(self.target.exists())
+        with patch.dict(os.environ, valid):
+            linked = self.plans / "alias.md"
+            linked.symlink_to(first.root / logical)
+            self.source.write_text("# 项目链接负控\n\n[x](alias.md)\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "安全普通文件"):
+                self.process()
+            self.assertFalse(self.target.exists())
+            # 已有固定核心损坏也必须拒绝；不能回退另一个完整版本或宿主发现链接。
+            rules = first.root / logical
+            rules.chmod(0o644)
+            rules.write_bytes(b"corrupted pinned rules\n")
+            rules.chmod(0o444)
+            self.source.write_bytes(body)
+            with self.assertRaises(ValueError):
+                self.process()
+            self.assertFalse(self.target.exists())
+
     def test_missing_old_failed_timed_out_node_preserves_old_html(self):
         self.process()
         old = renderer.snapshot(self.target)
@@ -319,31 +419,36 @@ class RequirementHtmlTest(unittest.TestCase):
     def test_installed_runtime_distributes_three_hosts_and_runs_without_source_imports(self):
         project = self.work / "installed-project"
         project.mkdir(exist_ok=True)
+        state = self.work / "installed-state"
         command = ["bash", str(PACK / "lib/python_runtime.sh"), "-X", "utf8", "-B",
-                   str(PACK / "lib/install_workflow.py"), str(project)]
+                   str(PACK / "lib/install_workflow.py"), str(project), "--state-dir", str(state)]
         installed = subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=120)
         (self.work / "install.log").write_text(json.dumps(command) + "\n" + installed.stdout + installed.stderr, encoding="utf-8")
         self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
         runtime = project / ".agent-workflow"
         reference = "xy-plan/references/requirement-html.md"
-        for host in (project / ".agents/skills", project / ".claude/skills", project / ".agent-workflow/platforms/shared/skills"):
+        from manager import runtime_service
+        binding = runtime_service.status(state, project)["runtime_binding"]
+        core = runtime_store.load_core(binding, state)
+        for host in (project / ".agents/skills", project / ".claude/skills"):
             self.assertEqual((host / reference).read_bytes(), (PACK / "platforms/shared/skills" / reference).read_bytes())
-        for relative in ("lib/requirement_html.py", "lib/plan_documents.py", "lib/migrate_project_docs.py",
+        for relative in ("lib/requirement_html.py", "lib/plan_documents.py",
                          "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
                          *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
                          "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
                          "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt"):
-            self.assertEqual((runtime / relative).read_bytes(), (PACK / relative).read_bytes())
+            self.assertEqual(runtime_store.read_core_source(core, relative), (PACK / relative).read_bytes())
         plans = project / "docs/plans"
         self.assertFalse((project / "docs/features").exists())
         self.assertFalse(plans.exists())
         plans.mkdir()
         (plans / "installed.md").write_text(SAMPLE, encoding="utf-8")
         # 使用安装态 wrapper、cwd 与清空的 PYTHONPATH；没有源包参数或源目录导入路径。
-        env = {**os.environ, "PYTHONPATH": ""}
+        env = {**os.environ, "PYTHONPATH": "", "AGENT_WORKFLOW_STATE_DIR": str(state)}
         for action in ("render", "check"):
             command = ["bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", "-B",
-                       str(runtime / "lib/requirement_html.py"), action, "--project", str(project),
+                       str(runtime / "runtime.py"), "--binding", json.dumps(binding), "helper",
+                       "lib/requirement_html.py", "--", action, "--project", str(project),
                        "--source", "docs/plans/installed.md"]
             if action == "render":
                 command.extend(["--request-id", REQUEST])

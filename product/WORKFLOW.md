@@ -1,9 +1,9 @@
-# Agent Workflow 2.0 — Product Discipline and Workflow (Cross-Platform Source of Truth)
+# Agent Workflow 2.1 — Product Discipline and Workflow (Cross-Platform Source of Truth)
 
 This document defines the portable product workflow. Platform adapters only expose the
 entry points required by each host. They must not copy and rewrite a parallel workflow.
 
-2.0 accepts only `Light | Full` and the current `schema_version: 2` task/handoff contract; it does not parse old levels, old formats, or compatibility aliases. A version switch does not authorize deleting user history, results, or evidence that must still be retained.
+Version 2.1 accepts only `Light | Full` and the current `schema_version: 2` task/handoff contract; it does not parse old levels, old formats, or compatibility aliases. A version switch does not authorize deleting user history, results, or evidence that must still be retained.
 
 ## 1. Instruction Priority
 
@@ -15,7 +15,7 @@ entry points required by each host. They must not copy and rewrite a parallel wo
 
 ### Centrally Pinned Versions and Project Adapters
 
-In central mode, `.agent-workflow/runtime.json` identifies only the project's selected version; discovering host Skill symlinks does not prove local activation. Before starting each new workflow, verify local activation through the project's thin entry point with `runtime.py check`; if a cloned project lacks a machine binding, stop automatic orchestration without installing or guessing a version. Source packs and legacy self-contained installations keep their original entry points; central mode does not replace the entire `.agent-workflow` with a symlink to an external directory.
+In central mode, `.agent-workflow/runtime.json` identifies only the project's selected version; discovering host Skill symlinks does not prove local activation. Before starting each new workflow, verify local activation through the project's thin entry point with `runtime.py check`; if a cloned project lacks a machine binding, stop automatic orchestration without installing or guessing a version. Source-pack development retains its source entry points; version 2.1 provides no legacy self-contained execution or upgrade branch. Central mode does not replace the entire `.agent-workflow` with a symlink to an external directory.
 
 Central schema 2 graphs/single-task packs freeze top-level `runtime_binding`, whose object permits only `protocol_version: 1`, `content_id`, and `manifest_sha256`, with no machine paths. Freeze a new graph from verified bridge context or an explicitly verified binding, preserve it unchanged on export, and never change an existing pin on update. A later project version switch affects only new tasks; fail on a missing pin, execution-version conflict, or unknown/damaged core rather than filling an old pack from the project's current version.
 
@@ -265,7 +265,7 @@ This section is the cross-host authority; read only the current host's `pm-integ
 
 ### Light delivery
 
-Before dispatch, the PM confirms the current goal, scope, actual consumers, risk, and acceptance, then issues a self-contained 2.0 single-task pack. Do not repeat confirmation when an explicit user instruction already authorizes that scope; clarify only a missing material decision affecting contracts, permissions, or irreversible actions. Light does not mandate Grill Me, xy-plan, a DAG, saved plans, or independent QA; the native implementer still applies relevant standards and minimum sufficient verification by default. Production targets retain real build/compile and minimum runnable evidence; verify documents and static prototypes according to their delivery type.
+Before dispatch, the PM confirms the current goal, scope, actual consumers, risk, and acceptance, then issues a self-contained schema 2 single-task pack. Do not repeat confirmation when an explicit user instruction already authorizes that scope; clarify only a missing material decision affecting contracts, permissions, or irreversible actions. Light does not mandate Grill Me, xy-plan, a DAG, saved plans, or independent QA; the native implementer still applies relevant standards and minimum sufficient verification by default. Production targets retain real build/compile and minimum runnable evidence; verify documents and static prototypes according to their delivery type.
 
 At handoff, the PM decides whether independent audit, documentation, or memory is needed from actual changes and evidence; perform selected mandatory work, without empty records when unnecessary. Explicit review requests, mandatory project requirements, or actual risks may still require exactly one independent QA; Full cannot be downgraded by a handoff assessment. Report real results of partial verification without fabricating QA PASS. After necessary acceptance, commit assessment, and evidence protection, end or retire instances as above. If actual scope exceeds Light boundaries, use Full; do not split risky work to evade approval or review.
 
@@ -919,7 +919,7 @@ Across the entire graph, any Writer whose ownership overlaps either typed design
 the `xy-uiux` task with `surface_kind: design_ui`; changing the role label, omitting the role, using
 a broad ancestor path, or hiding that Writer behind a transitive dependency never bypasses this rule.
 
-Every Full graph task provides these scheduling fields. Every 2.0 task, including a Light single-task
+Every Full graph task provides these scheduling fields. Every schema 2 task, including a Light single-task
 pack, first carries `workflow_level: Light | Full`, normalized project-relative `module` (`.` for root),
 canonical `role`, stable `agent_alias`, `instance_policy: fresh`, and `context_policy: handoff_only`:
 
@@ -994,7 +994,7 @@ rework. Failures block only downstream dependents; independent branches continue
 
 ## 8. Task Packs
 
-2.0 graphs and task packs both declare `schema_version: 2`, rejecting old formats directly. Dispatched single-task packs use this common envelope:
+Schema 2 graphs and task packs both declare `schema_version: 2`, rejecting old formats directly. Dispatched single-task packs use this common envelope:
 
 ```yaml
 schema_version: 2
@@ -1382,6 +1382,7 @@ approval evidence; there is no screenshot artifact on disk.
 2. Do not commit credentials or execute unauthorized destructive actions.
 3. Do not perform unauthorized cross-path refactors or drive-by edits.
 4. Never fabricate real validation results.
-5. Treat project `.agent-workflow/` as installer-managed runtime. Change workflow sources in a
-   standalone installer pack and reinstall; regenerate host artifacts through setup instead of
-   hand-editing them. A project-local runtime edit must be reconciled before the next upgrade.
+5. Treat project `.agent-workflow/` as managed adapter and thin bridge resources. Change workflow
+   sources in the standalone source pack, then explicitly import/select the verified central version;
+   preview `repair` for managed-resource regeneration instead of hand-editing host artifacts.
+   Preserve project configuration and user-owned content when reconciling resource conflicts.

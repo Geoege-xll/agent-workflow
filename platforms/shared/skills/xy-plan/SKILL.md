@@ -19,7 +19,7 @@ plan_state: draft
 ## Boundaries
 
 - Work only after `grill_result.readiness: ready_for_planning` for a Full request.
-  This Skill's availability does not force a plan/DAG on Light; 2.0 drafts/tasks express only the currently authorized Full scope.
+  This Skill's availability does not force a plan/DAG on Light; schema 2 drafts/tasks express only the currently authorized Full scope.
 - Produce a draft for PM review; the draft is not approval or execution authorization.
 - This Skill must not edit files, dispatch Agents, update accepted PROJECT/plans baselines, or request approval.
 - Do not create worktrees, commits, implementation branches, nested Agents, or another workflow.

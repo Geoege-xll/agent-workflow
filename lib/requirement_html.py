@@ -22,6 +22,8 @@ if __package__:
         _project_scratch_base, _validated_scratch_slot, publish, scratch_workspace,
     )
     from .validate_project_config import validate_docs
+    from .runtime_pins import read_source, record_binding, resource_path
+    from .runtime_store import load_core
 else:
     from claude_instructions import atomic_write, read_file
     from platform_fs import directory_lock, os
@@ -29,6 +31,8 @@ else:
         _project_scratch_base, _validated_scratch_slot, publish, scratch_workspace,
     )
     from validate_project_config import validate_docs
+    from runtime_pins import read_source, record_binding, resource_path
+    from runtime_store import load_core
 
 
 VENDOR = Path(__file__).absolute().parent / "vendor/answer-me-with-html"
@@ -132,7 +136,8 @@ class Anchors(HTMLParser):
         self.ids.update(value for name, value in attrs if name == "id" and value is not None)
 
 
-def checked_link(root: Path, base: Path, prototype: Path, raw: str, line: int) -> Path | None:
+def checked_link(root: Path, base: Path, prototype: Path, raw: str, line: int,
+                 *, binding: dict | None = None) -> Path | None:
     """只读取本稿实际引用的本地文件/状态锚点，不调用全原型树验证或改变原型导航合同。"""
     label = f"第 {line} 行链接 {raw!r}"
     split = urlsplit(raw)
@@ -161,7 +166,21 @@ def checked_link(root: Path, base: Path, prototype: Path, raw: str, line: int) -
     if target.suffix == ".html" and (target.parent != prototype or target.name == "index.html"):
         raise RequirementHtmlError(f"{label}：必须指向配置原型目录内的具体页面")
     try:
-        body, _ = snapshot(target)
+        # 中央薄桥不携带旧核心的物理副本。只把既有受管 namespace 中的精确
+        # 逻辑资源交给 runtime_pins；它会验证三字段 pin、桥根和冻结清单。
+        # 不读取 locator 猜当前版本，也不 resolve 项目 symlink 来扩大普通读取权。
+        selected = binding if binding is not None else record_binding({}, root=root, initialize=True)
+        logical = resource_path(target, root) if selected is not None else None
+        if logical is not None:
+            body = read_source(selected, logical)
+            if len(body) > 4 * 1024 * 1024:
+                raise RequirementHtmlError("核心链接目标超过 4 MiB 读取上限")
+            body.decode("utf-8", errors="strict")
+            # 导航使用同一个已验证 pin 的真实文件；仅改舞台/派生 HTML，
+            # 项目 Markdown 保留可移植逻辑路径，宿主 Skill 发现软链不参与选择。
+            target = load_core(selected).root / logical
+        else:
+            body, _ = snapshot(target)
     except (OSError, ValueError) as exc:
         raise RequirementHtmlError(f"{label}：目标不存在或不是安全普通文件：{target}") from exc
     if target.suffix == ".html" and split.fragment:
@@ -175,6 +194,9 @@ def checked_link(root: Path, base: Path, prototype: Path, raw: str, line: int) -
 def stage_markdown(body: bytes, root: Path, source: Path, base: Path, prototype: Path) -> bytes:
     """校验受控 Markdown；草案仅在舞台副本重定位链接，唯一原稿字节始终不写。"""
     text = body.decode("utf-8")
+    # 每次消费重新验证桥上下文。中央项目缺 pin 即拒绝，不能仅因本页没有
+    # 内置链接而绕过；源包/旧自包含安装没有中央上下文时仍保持原行为。
+    binding = record_binding({}, root=root, initialize=True)
     # 嵌入权限不能依赖自写的 Markdown 代码跨度识别：转义反引号并不一定构成代码，
     # HTML 标签也允许换行。此入口有意只接收更窄的子集，在整稿上拒绝资源/标签起始串，
     # 即使它们看起来位于代码中也不豁免；因此不必重造解析器或先运行可能读取图片的 CLI。
@@ -218,13 +240,13 @@ def stage_markdown(body: bytes, root: Path, source: Path, base: Path, prototype:
             raw = match.group(1)
             if not raw or any(char.isspace() for char in raw):
                 raise RequirementHtmlError(f"第 {number} 行：链接目标不得为空或带标题/空白")
-            target = checked_link(root, base, prototype, raw, number)
-            if target is not None and source != base:
+            target = checked_link(root, base, prototype, raw, number, binding=binding)
+            if target is not None:
                 split = urlsplit(raw)
                 try:
                     relative = Path(os.path.relpath(target, source.parent)).as_posix()
                 except ValueError:
-                    raise RequirementHtmlError(f"第 {number} 行链接 {raw!r}：草案链接跨文件系统根，无法安全重定位") from None
+                    raise RequirementHtmlError(f"第 {number} 行链接 {raw!r}：链接跨文件系统根，无法安全重定位") from None
                 replacements.append((match.start(1), match.end(1),
                                      quote(relative, safe="/.-_") + ("#" + split.fragment if split.fragment else "")))
         # 在原行的匹配位置替换，不能全局替换而污染正文或相同文本的行内代码。
@@ -236,13 +258,16 @@ def stage_markdown(body: bytes, root: Path, source: Path, base: Path, prototype:
     return "".join(output).encode("utf-8")
 
 
-def renderer_identity() -> str:
+def renderer_identity(staged: bytes) -> str:
     bundle, _ = snapshot(VENDOR / "am.mjs")
     if digest(bundle) != BUNDLE_SHA256:
         raise RequirementHtmlError("内置渲染器字节与固定上游不匹配，请恢复安装载荷")
     helper, _ = snapshot(Path(__file__).absolute())
+    # 同一原稿在不同任务 pin 下会产生不同导航。复用既有 renderer 身份绑定
+    # 最终舞台字节，防止源码摘要相同就把旧核心导航误判为新版 fresh；无需另建
+    # pin/缓存协议，也不影响 page_record 对已有配对页归属及正文手改的严格拒绝。
     return ("answer-me-with-html/0.5.10:" + BUNDLE_SHA256 + ":brand:" + PROJECT_REPOSITORY
-            + ":adapter:" + digest(helper))
+            + ":adapter:" + digest(helper) + ":navigation:" + digest(staged))
 
 
 def project_branding(page: bytes) -> bytes:
@@ -346,7 +371,7 @@ def render_candidate(root: Path, source: Path, body: bytes, base: Path, prototyp
     staged = stage_markdown(body, root, source, base, prototype)
     binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
                "draft": draft}
-    expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity()}
+    expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity(staged)}
     if not request_id:
         raise RequirementHtmlError("render 必须提供 --request-id")
     scratch = Path(scratch_workspace(root, request_id)["scratch_dir"])
@@ -369,10 +394,10 @@ def render_candidate(root: Path, source: Path, body: bytes, base: Path, prototyp
 def process(action: str, project: Path, source_raw: str, request_id: str | None = None,
             *, draft: bool = False) -> dict:
     root, source, body, before_identity, base, prototype = resolve_inputs(project, source_raw, draft, request_id)
-    stage_markdown(body, root, source, base, prototype)
+    staged = stage_markdown(body, root, source, base, prototype)
     binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
                "draft": draft}
-    expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity()}
+    expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity(staged)}
     target = source.with_suffix(".html")
     old, target_identity = snapshot(target, required=False)
     if old is not None:

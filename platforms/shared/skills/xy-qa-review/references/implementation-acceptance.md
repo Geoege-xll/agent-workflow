@@ -6,7 +6,7 @@ project acceptance constraints and do not start another complete generic code re
 
 ## Scope, source and verification
 
-First read the complete current 2.0 QA task pack and verify identity/SHA needed by handoff_ref. Consume only
+First read the complete current schema 2 QA task pack and verify identity/SHA needed by handoff_ref. Consume only
 current request authority, selected standards, actual source/diff and necessary complete logs, without
 inheriting/copying PM or sibling conversations.
 Pin every root, nested repository and submodule independently to an explicit base/head range and

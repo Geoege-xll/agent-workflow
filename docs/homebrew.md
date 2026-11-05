@@ -1,9 +1,13 @@
-# Homebrew 安装与发布
+# Homebrew 安装与本地 2.1 构建
 
 源码仓库：<https://github.com/Geoege-xll/agent-workflow>，公开 Tap 为
 `Geoege-xll/homebrew-tap`，Formula 名称为 `Geoege-xll/tap/awf-cli`。
 发行归档、校验文件与 Formula 来自同一次构建。Tap 使用对应 Release 的 Formula，
 安装时核对归档 SHA-256；用已安装入口的 `--version` 核对实际版本和中央程序位置。
+
+当前源码版本为 **2.1.0**，唯一人工维护值在 `product/VERSION`。
+本次变更尚未发布 Release 或更新公共 Tap；下面的公共安装命令只安装 Tap 已声明的版本，
+不能据此认定已经取得 2.1.0。
 
 ## 用户安装
 
@@ -39,32 +43,31 @@ brew list --versions awf-cli
 也不要使用 `brew link --overwrite` 解决来源不明的同名入口。本方案不安装或调整
 Homebrew 自身；若 Homebrew 的 `bin` 不在现有 PATH，使用以上完整路径启动。
 
-新版 `--version` 不启动 TUI、不读取模型来源，也不创建管理状态。源码入口显示
-`awf-cli 源码未打包`；实际构建的发行包显示其生成元数据中的版本，并显示物理载荷根。
-版本元数据仅写入归档中的 `manager/release.json`，随 Formula 复制到 `libexec`，源码不保留发行标记。
+`--version` 不启动 TUI、不读取模型来源，也不创建管理状态。源码入口读取 `product/VERSION`，
+明确显示源码身份；构建发行载荷使用与该值一致的生成元数据，并显示物理载荷根。
+发行元数据仅写入归档中的 `manager/release.json`，随 Formula 复制到 `libexec`，源码不保留发行标记。
 源码、归档与 Cellar 的中央源根可以据此直接比较。
 
-旧 `0.1.0` 入口可能不认识 `--version`，该错误不表示正在运行新版；先用 `type -a awf-cli`、
-`readlink` 和 `brew list --versions awf-cli` 核对入口，再用明确的源码脚本路径运行新版诊断。
 `brew upgrade` 只采用 Tap 已声明的版本；GitHub 上另有较新的 Release 或本地候选，不会让旧 Formula 自动升级。
 
-`brew upgrade` 只升级中央程序，不自动安装、升级或同步任何项目。项目升级仍由现有
-TUI 或显式 `install --apply` 完成。`brew uninstall awf-cli` 不删除项目内工作流、
+`brew upgrade` 只更新中央程序，不自动安装、选版或同步任何项目。项目使用 `add` / `list` /
+`del` / `open` / `close` 及 `use` / `rollback` / `repair` 管理，写入前可用 `--dry-run` 预览。
+2.1 采用普通中央安装，不提供旧版本兼容升级；旧工作流须在任务收尾和文档、专有配置保全后，
+按明确受管归属单独移除，再运行 `open`。`brew uninstall awf-cli` 不删除项目内工作流、
 项目配置或 `~/.config/agent-workflow` 中的用户数据。
 
 ## 本地构建（不联网、不安装、不发布）
 
-在源码根目录使用现有 Python 选择器，以下以 `2.0.2` 为例：
+在源码根目录使用现有 Python 选择器；构建版本必须与 `product/VERSION` 一致：
 
 ```bash
-bash lib/python_runtime.sh -I -B -m unittest discover -s tests -p test_homebrew_packaging.py -v
-bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2
+bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.0
 ```
 
 生成：
 
-- `dist/agent-workflow-2.0.2.tar.gz`
-- `dist/agent-workflow-2.0.2.tar.gz.sha256`
+- `dist/agent-workflow-2.1.0.tar.gz`
+- `dist/agent-workflow-2.1.0.tar.gz.sha256`
 - `dist/Formula/awf-cli.rb`
 
 发行包使用运行所需文件/目录白名单，不包含 `.sync-backups`、Git 元数据、发行输出、
@@ -77,7 +80,7 @@ bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2
 已有输出一律保留，重建请用新的空目录：
 
 ```bash
-bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2 --output-dir /path/to/new-output
+bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.0 --output-dir /path/to/new-output
 ```
 
 离线测试在独立临时目录中验证发行包及实际 Formula 的安装方法、模拟 Cellar 启动器、
@@ -85,14 +88,14 @@ bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2 --output-dir /
 不运行 `brew install`、不操作真实项目。模拟安装不等于真实 Homebrew 验收。
 生成 Formula 的测试还会通过安装后的入口核对 `--version` 与 `libexec`，不只检查 Formula 的版本字符串。
 
-## 首次发布
+## 发布边界
 
 所有创建远端仓库、上传代码、发布资产和推送 Tap 的操作均需明确确认后执行。
 本地构建器不执行这些操作；当前源包也不自动初始化 Git 或同步项目。
 
 1. 核对源码上传清单和授权方式，将审阅过的源文件推送到
    `Geoege-xll/agent-workflow`。`.gitignore` 排除本地备份、缓存及 `dist/`。
-2. 在源码仓库的 **Actions → Prepare release → Run workflow** 输入版本 `2.0.2`
+2. 在源码仓库的 **Actions → Prepare release → Run workflow** 输入与 `product/VERSION` 一致的版本 `2.1.0`
    （不带 `v`），并选择希望发布的分支。工作流先运行离线打包测试，再构建三份产物，
    然后创建 **Draft Release**；它不会自动公开 Release，也不会推送 Tap。
 3. 核对 Draft 的目标提交、压缩包、校验文件和 `awf-cli.rb` 后，再手动发布 Release。
@@ -111,9 +114,9 @@ bash lib/python_runtime.sh -I -B packaging/build_release.py 2.0.2 --output-dir /
 工作流仅使用当前仓库的 `GITHUB_TOKEN` 创建草稿，权限限制为该发布任务的
 `contents: write`；无需提供能写其他仓库的个人令牌。GitHub Actions 固定到不可变提交。
 
-## 后续升级
+## 后续中央程序版本
 
-对新的源代码提交手动运行相同工作流，输入未使用的新版本（例如 `2.0.3`），审核并
+对新的源代码提交先更新唯一版本源，再手动运行相同工作流并输入一致的未使用版本，审核并
 公开 Release，再将该版本附带的 Formula 更新到 Tap。用户随后运行 `brew update`
 及 `brew upgrade` 即可。不要覆盖同版本 Release 资产：旧 Formula 的校验值和已安装
 版本应继续对应原发行包；需要修正时发布新版本。

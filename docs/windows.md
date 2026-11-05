@@ -1,15 +1,15 @@
 # Windows npx 项目安装（本地、未发布）
 
 目标是在 **Windows 10/11 x64、本地 NTFS、普通用户**环境，从项目目录安装现有工作流，
-不是安装 Windows 管理器。当前 npm 包是 `@geoege-xll/agent-workflow` 的本地 `2.0.1`
+不是安装 Windows 管理器。当前 npm 包是 `@geoege-xll/agent-workflow` 的本地 `2.1.0`
 准备版本，`private: true`，**尚未发布，也尚未完成原生 Windows 安全/恢复与端到端验收**。
-macOS 上的打包和模拟测试通过，不能视为 Windows 已支持。
+版本唯一来源为 `product/VERSION`，npm 元数据与构建器须保持一致；既有 macOS 打包和模拟证据不能视为本版本 Windows 已支持。
 
 默认源码、打包与 npx 项目安装入口现在共用中央运行时服务。当前 Windows 安全文件系统
 后端尚未实现受管 Skill 的锚定软链发布，因此默认入口会在创建项目资源或中央状态前明确
 拒绝，不会自动退回完整复制安装。本轮保留既有 Win32 文件系统、私有 Python 部署和恢复
-实现，但没有扩展软链安全后端，也没有取得 Windows 中央安装验收。下文的本地包构建与
-旧底层部署/恢复资料不表示当前默认 `init` 可以成功安装；远程 npx 包仍未发布、不可据此使用。
+实现，但没有扩展软链安全后端，也没有取得 Windows 中央安装验收。下文的本地包构建和保留的部署/恢复模块说明不表示当前默认 `init` 可以成功安装；
+远程 npx 包仍未发布、不可据此使用。
 
 未来通过完整验收并获准公开发布后，拟用命令才是：
 
@@ -44,8 +44,8 @@ npx @geoege-xll/agent-workflow init
 ```powershell
 # 只进入一个专门创建的临时测试项目，不操作真实项目。
 cd 'C:\awf-test\临时项目 with spaces'
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz' agent-workflow --help
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz' agent-workflow init
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz' agent-workflow --help
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz' agent-workflow init
 ```
 
 完整包在本地可取得时，`--offline --ignore-scripts` 不影响首次运行时部署。
@@ -68,7 +68,7 @@ agent-workflow init [--project PATH] [--timeout SECONDS]
 
 ```powershell
 # 使用已缓存的同一个本地包入口时，也可显式选择其他临时目录。
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz' agent-workflow init --project '..\另一个临时项目' --timeout 120
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz' agent-workflow init --project '..\另一个临时项目' --timeout 120
 ```
 
 `--timeout` 交给 Python 安装事务处理，不是 Node 强杀计时器。Ctrl+C 会通知受控 Python
@@ -90,7 +90,7 @@ helper 必须返回持久私有控制目录下的绝对 `cancel` 路径；缺失
 安装器只把已经验证的绝对解释器、Git Bash 和稳定 bootstrap/control 路径放入受控子进程
 环境，不修改调用者环境，也不添加 PATH。宿主自身的批准/信任步骤仍由用户完成。
 
-## 持久运行时与重复 init
+## 持久 Python 载荷与中央安装边界
 
 首次 `init` 完成平台、项目、Git、包完整性及显式解释器预检后，由可信 Windows helper
 验证整个运行时并部署到系统已知的 LocalAppData 下：
@@ -108,47 +108,20 @@ bootstrap 及其部署依赖不留在 npx 缓存；项目运行辅助命令和 H
 可能仍引用它。来源未知或损坏的目录不会被自动覆盖/修复。项目安装失败可以保留已经验证的
 运行时。取消控制目录仅由可信 helper 回收，不让 Node 对 helper 返回的目录递归删除。
 
-项目安装复用 `lib/install_workflow.py`，将受管内容放入项目 `.agent-workflow`，保留
-`project.yaml` 的用户配置。重复 `init` 是显式升级操作；未知同名内容或用户改过的受管文件
-会报冲突，而不是直接覆盖。删除 npx 缓存不等于卸载项目或持久 Python；不提供自动全局清理。
+项目安装入口复用 `lib/install_workflow.py` 和当前中央服务，不再复制完整项目内运行时，
+并保留 `.agent-workflow/project.yaml` 的专有配置。2.1 不提供旧版本兼容升级；不兼容残留
+须先确认旧任务收尾、保全文档与配置、核对受管范围并单独移除，再进行普通中央安装预览。
+未知同名内容或用户手改会报冲突，不能直接覆盖。当前 Windows 后端仍在中央发布前明确拒绝。
+删除 npx 缓存不等于卸载项目或持久 Python；不提供自动全局清理。
 
-## 安装后的原生辅助命令
+## 项目辅助命令边界
 
-在 PowerShell/cmd 中，工作流 Python CLI 使用项目内 Node helper，不要求 `bash` 或 Python
-出现在全局 PATH，也不依赖已删除的 npx 缓存：
-
-```powershell
-node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/project_profile_cli.py check-roles codex .agent-workflow .
-```
-
-需求 HTML 使用同一持久 Python 与现有 Node 22，无需全局 npm 依赖：
-
-```powershell
-node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
-node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/requirement_html.py check --project . --source docs/plans/change.md
-```
-
-`docs.plans` 按项目配置替换；模型只改 Markdown，HTML 同名派生。草案、原型链接和安全
-边界见 [需求 HTML 方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)。
-源码/载荷验证与 macOS 实测不冒充原生 Windows 运行验收。
-
-其他文档中的 `bash .agent-workflow/lib/python_runtime.sh` 可在 Windows 替换成
-`node .agent-workflow/lib/python_runtime.cjs`，后续参数保持不变；inline Python 的 stdin
-须使用当前 shell 的语法，不能把 Bash heredoc 原样放进 PowerShell。helper 读取受管的
-`.agent-workflow/lib/windows-runtime.paths` 两行记录，以隔离、UTF-8 模式启动持久 Python/bootstrap，
-保留 cwd、参数和退出码。损坏、链接、缓存内或非本地绝对路径记录会报错，不自动选择其他解释器。
-
-仅在原有工作流要求当前宿主刷新时，运行现有 setup，然后验收一次：
-
-```powershell
-node .agent-workflow/lib/python_runtime.cjs .agent-workflow/lib/platform_process.py --host codex
-# 上一条成功后才执行；不要让 check 的成功掩盖 setup 失败。
-node .agent-workflow/lib/python_runtime.cjs .agent-workflow/lib/platform_process.py --host codex --check
-```
-
-当前宿主为 Claude 或 Antigravity 时分别使用 `claude` / `antigravity`。该入口只通过已验证的
-Git for Windows 调用原 `setup_all.sh --only=<host>`，不是 Windows manager，也不在每个任务自动重装。
-独立写入前预览可用 `--preflight`；正常 setup 已有预检，不额外前置重复预检。
+中央项目的辅助命令通过 `.agent-workflow/runtime.py` 和当前任务的三字段 pin 选择固定核心；
+项目不包含完整 `.agent-workflow/lib/` helper 树或本地 setup 脚本。不要使用旧自包含安装的
+Node helper 路径或把源码直接复制到项目来绕过 Windows 安全拒绝。
+由于本版本尚未完成 Windows 中央安装，当前没有可据此宣称已通过的安装后辅助命令或真实
+宿主 Hook 验收。需求 HTML 仍遵循[现有方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)，
+源码/载荷验证与 macOS 实测均不替代原生 Windows 证据。
 
 ## 离线构建（不执行下载的二进制）
 
@@ -195,12 +168,12 @@ npm.cmd pack --offline --ignore-scripts --pack-destination 'C:\awf-build\tgz'
 
 在源码目录可以运行：
 
-```text
-python3.11 -I -B -m unittest discover -s tests -p test_npm_packaging.py
+```bash
+bash lib/python_runtime.sh -I -B -X utf8 -m unittest discover -s tests -p test_npm_packaging.py
 node --test npm/*.test.cjs
-python3.11 -I -B -m unittest discover -s tests -p test_platform_bridge.py
-python3.11 -I -B -m unittest discover -s tests -p test_windows_fs_contract.py
-python3.11 -I -B -m unittest discover -s tests -p test_windows_runtime_boundaries.py
+bash lib/python_runtime.sh -I -B -X utf8 -m unittest discover -s tests -p test_platform_bridge.py
+bash lib/python_runtime.sh -I -B -X utf8 -m unittest discover -s tests -p test_windows_fs_contract.py
+bash lib/python_runtime.sh -I -B -X utf8 -m unittest discover -s tests -p test_windows_runtime_boundaries.py
 ```
 
 覆盖离线 pack、白名单/依赖、完整哈希、恶意 ZIP、来源链接/特殊文件、可重复构建，以及
@@ -225,12 +198,12 @@ CLI 参数、无写入预检、Git/Python 显式选择、cwd/Unicode/参数数�
 在原生 Windows 源码目录中，给测试进程指定完整本地包后运行端到端夹具：
 
 ```powershell
-$env:AGENT_WORKFLOW_NPX_TGZ = 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.0.1.tgz'
+$env:AGENT_WORKFLOW_NPX_TGZ = 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz'
 python -I -B -m unittest discover -s tests -p test_windows_npx_e2e.py -v
 ```
 
 此变量只供当前测试会话使用，不要写入用户/系统环境。夹具始终新建临时项目和私有 npm 缓存，
-通过离线 npm JS CLI 安装、重复升级、超时失败，再删除本测试缓存和来源副本，执行项目 helper
+覆盖离线 npm JS CLI 安装、重复调用和超时失败分支，再删除本测试缓存和来源副本，执行项目 helper
 及真实 cmd → PowerShell → Python SessionStart 恢复事件；对 PATH 注册项、profile、ExecutionPolicy
 和 Git 全局配置仅取快照对比，不写这些配置。另含已有合法 `.agents/hooks.json` 且
 `TMPDIR=/tmp` 的首次安装回归，覆盖不执行整树重置的路径。未设置 tgz 或在非 Windows
@@ -241,7 +214,7 @@ python -I -B -m unittest discover -s tests -p test_windows_npx_e2e.py -v
 目录 flush 能力失败会直接阻塞，不跳过为成功。该文件尚未推送或远程执行；托管 runner 的
 管理员令牌结果也不能替代普通用户实测，完整并发/故障恢复矩阵仍须另外完成。
 
-公开支持/发布前，必须在原生 Windows 用本地 tgz 验证实际安装/重复升级、完整 Git 探测、
+公开支持/发布前，必须在原生 Windows 用本地 tgz 验证实际中央安装/重复调用、完整 Git 探测、
 断网与 `--ignore-scripts`、特殊路径、运行时/项目并发、junction/硬链接/目录替换、占用、
 Ctrl+C/超时后代树停止与精确恢复、用户配置保留，以及清空 npm 缓存后的真实宿主 Hook。
 还须比较 PATH/profile/ExecutionPolicy/Git 全局配置前后不变，并通过现有 macOS 回归。

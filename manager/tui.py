@@ -42,7 +42,7 @@ COMMANDS=(Binding("Enter","编辑模型","edit","edit model"),
           Binding("r","刷新状态与来源","refresh","refresh reload"),
           Binding("","启用工作流","enable","open enable workflow"),
           Binding("","停用工作流","disable","close disable workflow"),
-          Binding("","导入当前来源并启用","install","install upgrade import source"),
+          Binding("","导入当前来源并启用","install","install import source"),
           Binding("","中央版本列表 / 选择","versions","versions use pin"),
           Binding("","回退前次版本","rollback","rollback previous"),
           Binding("","检查工作流","check","check verify"),
@@ -86,7 +86,7 @@ class App:
 
     @property
     def project(self):
-        # 列表末尾的安装入口不是项目路径，也不能变成默认安装目标。
+        # 列表末尾的登记入口不是项目路径，也不能变成默认启用目标。
         return self.projects[self.project_index] if 0<=self.project_index<len(self.projects) else None
 
     @property
@@ -168,8 +168,8 @@ class App:
             if self.project_plan and self.project_plan.summary["can_apply"]:
                 rows.insert(0,Binding("Enter","确认"+PROJECT_ACTION_LABELS[self.project_plan.action],"confirm"))
             return rows
-        if self.modal in {"preview","install","restore","quit"}:
-            labels={"preview":"备份并应用","install":"确认安装 / 升级","restore":"确认恢复","quit":"放弃草稿并退出"}
+        if self.modal in {"preview","restore","quit"}:
+            labels={"preview":"备份并应用","restore":"确认恢复","quit":"放弃草稿并退出"}
             scrolling=[] if self.modal == "quit" else [Binding("↑↓","滚动","scroll"),Binding("PgUp/PgDn","翻页","scroll"),Binding("Home/End","页首 / 页尾","scroll")]
             return [*scrolling,Binding("Enter",labels[self.modal],"confirm"),Binding("Esc","返回","back")]
         if self.modal:
@@ -385,7 +385,10 @@ class App:
         project=self.project
         if reason:=self.unavailable(action):raise ValueError(reason)
         if action in {"enable","disable","rollback","repair","del"}:self.preview_project(project,action)
-        elif action == "install":self.preview_project(project,"enable",source_root=service.SOURCE)
+        elif action == "install":
+            # “导入当前来源”仍走当前中央启用计划：来源校验、只读预览和条件发布
+            # 均由服务层负责；确认写入统一使用中央计划页，不保留已不可达的旧弹窗。
+            self.preview_project(project,"enable",source_root=service.SOURCE)
         elif action == "check":self.start_job(lambda:service.check(project,state=self.state),name="检查工作流",preserve_view=True)
         elif action == "versions":
             def ready(rows):
@@ -404,7 +407,7 @@ class App:
             self.show_view("sources");self.text=text
         elif action == "backups":
             rows=service.backups(self.state,self.project);self.show_view("backups");self.backup_rows=rows
-            if not rows:self.notify("当前项目还没有模型配置备份；安装器的旧运行时备份保留在项目目录")
+            if not rows:self.notify("当前项目还没有模型配置备份；应用模型配置后可在此查看和恢复")
 
     def can_confirm_quit(self):
         if not self.screen:return True
@@ -440,7 +443,6 @@ class App:
                 identifier=service.commit(self.state,project,changes,lambda:service.check(project,host,state=self.state),before_write=lambda:service.ensure_source(catalog,project))
                 return service.backup_summary(project,identifier)
             self.start_job(apply,after,name="备份并应用模型配置")
-        elif self.modal == "install":self.preview_project(project,"enable",source_root=service.SOURCE)
         elif self.modal == "backups":
             if not self.backup_rows:return
             changes=service.prepare_restore(self.state,project,self.options()[self.index][1])
@@ -705,7 +707,7 @@ class App:
             draw_scrollbar(self.put,6,layout.width-2,available,len(rows),start,available,self.theme.border)
 
     def draw_modal(self,layout):
-        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"变更预览","install":"安装 / 升级确认","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板"}
+        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"变更预览","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板"}
         modal_title=titles.get(self.modal,self.modal)
         x=max(1,(layout.width-92)//2);width=layout.width-2*x-1
         box_h=layout.bottom-2+1

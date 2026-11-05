@@ -1,7 +1,8 @@
-# Agent Workflow Pack 2.0
+# Agent Workflow Pack 2.1
 
-面向项目的原生多Agent工作流，发行版本为 **2.0.2**。使用 `awf-cli --version` 核对实际中央程序
-版本与源码位置；项目工作流通过原安装入口显式升级。仅Light／Full及schema_version:2，
+面向项目的原生多Agent工作流，当前源码版本为 **2.1.0**，本次变更尚未发布到 Homebrew 或 npm。
+版本唯一来源为 `product/VERSION`；使用 `awf-cli --version` 核对实际中央程序的版本与来源。
+2.1 采用普通中央安装，不提供旧版本兼容升级。仅Light／Full及schema_version:2，
 不兼容旧任务／交接格式；用户文件、已有成果和必要证据保护继续有效。
 Keep this installer folder anywhere and select a project when launching it — works with
 **Claude Code / Codex / Antigravity**.
@@ -31,7 +32,8 @@ npx @geoege-xll/agent-workflow init
 
 ### Homebrew 安装
 
-可通过公共 Tap 安装其当前声明的版本；新版本需完成[发行及 Tap 更新](docs/homebrew.md#首次发布)：
+可通过公共 Tap 安装其当前声明的版本；本地 2.1.0 尚未发布，Tap 不会因此自动改变。
+发行流程见 [Homebrew 说明](docs/homebrew.md#发布边界)：
 
 ```bash
 brew install Geoege-xll/tap/awf-cli
@@ -45,8 +47,8 @@ Homebrew 管理完整程序及 Python 依赖，不需要再注册 `--install-cli
 shell 配置。现有同名用户命令不会被移除；请先用 `type -a awf-cli` 核对来源。
 仅创建 GitHub 源码仓库还不能安装，发布包、Formula 生成及验收见 [Homebrew 说明](docs/homebrew.md)。
 
-新版入口支持只读来源诊断：`awf-cli --version` 显示构建版本和实际中央源根，未打包源码显示
-`源码未打包`，不会根据 README 或目录名宣称已发布版本。可同时运行
+入口支持只读来源诊断：`awf-cli --version` 从唯一版本源显示版本和实际中央源根，并区分源码与
+构建发行载荷；源码版本不代表远端已发布。可同时运行
 `bash /path/to/agent_workflow/workflow.sh --version` 与 `type -a awf-cli` 核对是否仍启动旧程序。
 旧版入口若不认识 `--version`，请按 [Homebrew 说明](docs/homebrew.md) 检查链接和已安装版本；
 更新源码不会改变既有二进制、Cellar 载荷或公共 Tap。
@@ -95,7 +97,7 @@ TUI 按 `a` 输入目录，回车后选择默认“仅登记”或“登记并�
 | 1 / 2 / 3 | 切换 Codex、Claude Code、Antigravity |
 | s | 预览当前项目及平台的变更，Enter 确认后备份应用 |
 | u | 丢弃当前角色草稿，重新读取基线；保留其他角色和项目的草稿 |
-| g | 启停、安装当前来源、中央版本、条件恢复、项目/三宿主详情、删除登记、模型备份及本地来源 |
+| g | 启停、导入当前来源并启用、中央版本、条件恢复、项目/三宿主详情、删除登记、模型备份及本地来源 |
 | a | 登记项目：输入目录，选择登记方式，读取预览后再确认；默认仅登记 |
 | r | 按需刷新本地模型目录及角色设置，保留未应用草稿 |
 | Esc | 取消搜索输入并恢复原选择；已有筛选时先清除，再逐层返回 |
@@ -114,9 +116,9 @@ TUI 按 `a` 输入目录，回车后选择默认“仅登记”或“登记并�
 每次模型写入还会将旧文件 inode 保留到项目同文件系统的 `.agent-workflow-backup-models-<ID>/`，
 路径记入备份并在操作结果中展示；旧编辑器后续保存仍可找回。恢复前会检查这些版本是否有后续变更。
 恢复预览会保留原版本指纹；确认发布前及验收结束后再次核对，期间发生后续保存或权限变化会停止并保留冲突版本。
-该目录使用现有运行时备份排除前缀，不参与项目模块发现，也不生成第二份工作流。
-列表、目录和预览命令只读；`add` 与兼容命令 `projects add` 默认只登记。
-`del` 和 `projects remove` 必须先成功停用新任务入口才解除登记，绝不删除项目目录或业务文件。
+该目录不参与项目模块发现，也不生成第二份工作流。
+列表、目录和预览命令只读；`add` 默认只登记。
+`del` 必须先成功停用新任务入口才解除登记，绝不删除项目目录或业务文件。
 登记表发生并发修改时拒绝覆盖；若原生动作已结算而登记保存失败，会明确报错，实际状态可由 `status` 查看。
 
 中央状态中保存不可变内容库，每个核心由完整 SHA256 内容 ID 固定。项目内仅保留
@@ -145,9 +147,9 @@ high / xhigh / max`，Claude Code 可写入 `low / medium / high / xhigh / max`�
 这些是宿主允许的配置值，不代表所选模型已支持、模型 API 调用成功或已经通过服务验收。
 损坏或嵌套过深的来源显示读取失败；CLI 只返回安全投影，TUI 保留其他项目和宿主的未应用草稿。
 
-角色模型偏好写入现有 `.agent-workflow/project.yaml` 的 `role_models` 区块，升级会保留。
+角色模型偏好写入现有 `.agent-workflow/project.yaml` 的 `role_models` 区块，启停、选版和修复均保留。
 模型应用只更新该区块与选中角色的模型字段，保留角色正文、工具权限、Hooks 和编排规则；
-成功前只读校验受管资源；旧自包含安装会核验其全部已安装宿主的原生归属。已有 Agent 不会被重启，
+成功前只读校验中央受管资源及其原生归属。已有 Agent 不会被重启，
 宿主的显式调用及强制设置仍有自身优先级。
 预览和最终发布前均核对本地来源摘要；提供方、目录或能力变化时保留草稿并要求重选。
 摘要只绑定影响当前来源的有效模型、提供方、声明层、映射和能力证据；无关权限、Hooks、废弃 profiles 和其他平台配置不使草稿失效。
@@ -204,9 +206,9 @@ awf-cli --state-dir STATE add PROJECT --enable --source SOURCE
 
 `open` / `enable`、`close` / `disable` 分别同义。首次启用默认使用当前中央源码，重开默认保持
 原绑定；显式 `--source` 才从所选来源导入，`use` 只接受已验证的完整内容 ID，不接受前缀或版本标签。
-`runtime install` 只导入中央核心，不启用或切换任何项目。旧自包含安装默认保留，显式
-`--migrate-legacy` 仅声明旧任务已收尾，仍须通过原生迁移的配置、manifest 与受管输入安全校验。
-旧 notes 必须先完成下文的显式归属迁移；冲突会停止，不会自动删除旧安装。
+`runtime install` 只导入中央核心，不启用或切换任何项目。旧自包含安装不在 2.1 安装合同内；
+检测到不兼容残留会明确拒绝。旧工作流须先确认任务收尾、保全项目文档和专有配置，并按已核对的
+受管归属清单单独移除，再使用普通 `open`。本版本不提供自动转换或旧版本运行分支。
 
 新命令的 JSON 成功结构为 `{"schema_version":1,"command":"…","dry_run":false,"result":…}`。
 状态结果含 `state`、`enabled`、当前 `runtime_binding`、`previous_binding`、`hosts` 和 `conflicts`；
@@ -215,11 +217,11 @@ JSON 拒绝结构为 `{"schema_version":1,"error":{"code":"…","message":"…"}
 退出码：正常完成或可应用预览为 `0`，业务/参数拒绝及含冲突预览为 `2`，键盘取消为 `130`。
 短名称拒绝另给 `candidates`，原生冲突另给安全 `conflicts`；其他解析错误不会投影配置正文。
 
-兼容命令继续可用：`projects list/add/remove` 保留路径数组输出；旧 `set`、`install`、`restore`
-仍默认预览，必须添加 `--apply` 才写入，不能套用新直接动词的执行语义。
+模型配置的 `set` 和 `restore` 默认只预览，必须添加 `--apply` 才写入。
+它们沿用模型备份/恢复的确认合同；项目登记和启停使用前述直接动作。
 
 ```bash
-awf-cli projects add /path/to/project
+awf-cli add /path/to/project
 awf-cli models --platform codex --project /path/to/project
 awf-cli roles --platform codex --project /path/to/project
 # Claude 已知配置覆盖关系；保留配置值与来源，不冒充实际会话运行结果。
@@ -230,7 +232,6 @@ awf-cli doctor --platform claude --project /path/to/project --probe
 # 默认仅预览；确认后添加 --apply。
 awf-cli set --project /path/to/project --platform codex \
   --role xy-backend --model your-local-model --effort high
-awf-cli install --project /path/to/project
 awf-cli check --project /path/to/project
 awf-cli backups --project /path/to/project
 awf-cli restore --project /path/to/project BACKUP_ID
@@ -266,7 +267,7 @@ claude_options:
 中央项目修改角色窗口后先运行 `awf-cli repair /path/to/project --dry-run`，核对后运行
 `awf-cli repair /path/to/project`，再用 `awf-cli check --project /path/to/project` 只读检查。
 未注册短命令时，用 `bash /中央源码/workflow.sh` 替换 `awf-cli`。
-`bash .agent-workflow/setup_claude.sh` 及其 `--check` 仅适用于旧自包含安装；中央项目没有本地 setup 脚本。
+中央项目没有本地 setup 脚本；源包开发模式的 setup 仅在源包根目录使用。
 角色窗口要求 Claude Code 2.1.296+，只接受 100000..1000000 的完整整数，角色字段不能写
 `200k`。它仅能降低原本继承的窗口，作为 `--agent` 主会话角色时不生效；全局
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 通常优先（环境变量缩写要求 2.1.304+）。
@@ -311,13 +312,13 @@ selector rather than assuming the system `python3` meets the requirement. Workfl
 `-X utf8` for UTF-8 input/output, and helpers use explicit UTF-8 text-file I/O; business build/test
 toolchains remain unchanged:
 
-以下直接 Python 路径用于源包/旧自包含安装。中央项目通过 `.agent-workflow/runtime.py`
+以下直接 Python 路径用于源包开发模式。中央项目通过 `.agent-workflow/runtime.py`
 的 `helper` 入口执行固定核心中的 Python helper，显式传入任务 `runtime_binding`；项目根、
 配置与核心根由同一薄桥分别校验，不能把 core 的父目录当作项目。
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/project_profile_cli.py \
-  json .agent-workflow .
+bash /path/to/agent_workflow/lib/python_runtime.sh -B -X utf8 /path/to/agent_workflow/lib/project_profile_cli.py \
+  json /path/to/agent_workflow /path/to/project
 ```
 
 Dependent commands run only after upstream success: snapshot generation/update → validation → the
@@ -334,11 +335,10 @@ bash /path/to/agent_workflow/install.sh
 
 默认安装通过同一中央服务完成只读配置/发现预检，再将来源导入不可变内容库并条件发布项目原生资源。
 项目只保存适配器、薄桥与原生入口，Skill 软链指向固定中央核心；`install.sh` 和
-`awf-cli install --apply` 均不再默认完整复制 core。状态目录可由 `--state-dir` 或
+`awf-cli open /path/to/project` 均使用同一中央事务。状态目录可由 `--state-dir` 或
 `AGENT_WORKFLOW_STATE_DIR` 显式选择，后续命令必须使用同一目录。
-项目专属配置和已有非空文档保留；未知受管手改会停止覆盖。旧自包含安装默认保留，只有显式
-`--migrate-legacy` 且通过旧输入归属核验才转换，完整旧安装保留到结果中显示的 `legacy_archive`。
-中央核心及旧版本不自动清理，不能沿用旧完整复制分支的备份轮换规则删除中央版本。
+项目专属配置和已有非空文档保留；未知受管手改会停止覆盖。不兼容残留须先保全并按明确归属
+处理，再重新预览普通安装；没有旧版本兼容升级入口。中央核心及旧版本不自动清理。
 首次生成配置使用实际项目名，并派生符合合同的项目 ID；已有名称和 ID 不自动改写。
 原始导入源移除后仍可读取已验证核心，但中央状态目录与项目薄桥必须保留。
 
@@ -346,15 +346,14 @@ bash /path/to/agent_workflow/install.sh
 设计规则在 `xy-ui-design/references/foundations-rules.md`、`components-rules.md`。
 项目只维护已批准的特有规范；存在实际特有叶时才维护有内容的 `docs/STANDARDS.md` 薄索引，
 无特有叶时不生成 GENERAL、默认设计叶、UPSTREAM 占位或空索引。既有说明索引可原样保留。
-迁移仅整理可精确识别的旧通用内容，保留项目特有规则、修改、权限及并发/回滚保护；
-无法确认归属或语义冲突时报告受影响项，不把用户规范当模板覆盖或用近似语义放过重复ID。
+规范补齐保留项目特有规则、修改、权限及并发/回滚保护；无法确认归属或语义冲突时报告
+受影响项，不把用户规范当模板覆盖或用近似语义放过重复ID。
 规则来源变化须刷新当前指纹和任务包，不增加业务确认或无依据的全量测试。
 
 中央项目复核使用 `awf-cli check --project /path/to/project`，缺失受管资源使用 `repair` 先预览再应用。
 中央项目没有 `.agent-workflow/setup_*.sh`，四个 setup 的 `--preflight` 不适用于中央项目。
-旧自包含项目仍保留其原 setup 文件；管理器的 `check` 通过只读 preflight 核验其原生归属。
-新入口不迁移旧的项目内 `agent_workflow/` 安装包；检测到旧包时会停止。
-请先自行备份并移除旧包，再安装，避免两个工作流同时生效。
+检测到旧的项目内 `agent_workflow/` 安装包或旧自包含运行时会停止；先确认旧任务收尾，
+保全项目文档和专有配置，核对受管范围后单独移除旧工作流，再普通安装。
 
 The portable default is `workspace.discovery: auto`. The preview reports the exact selected
 roles, module roots, stack evidence, and repository-native verification commands before setup
@@ -367,9 +366,9 @@ UI/UX and QA are baseline available roles even in a requirements/prototype-only 
 roles remain discovered from source manifests. Availability does not require UI work. Pure backend
 projects retain their engineering-only document scaffold. After cloning/adding modules or changing
 the stack, assess actual current-host resource changes using `xy-workflow/references/dispatch.md`.
-源包/旧自包含项目仅在角色可用性未知时，通过 Python 选择器调用 `project_profile_cli.py check-roles`。
+源包开发模式仅在角色可用性未知时，通过 Python 选择器调用 `project_profile_cli.py check-roles`。
 中央项目用 `check` 查看状态，并用 `repair --dry-run` 预览发现后的资源变化，确认后应用。
-原有源包/旧自包含 host setup 自带 preflight，完成后只需检查一次。Codex refreshes changed persisted module/command context;
+源包 host setup 自带 preflight，完成后只需检查一次。Codex refreshes changed persisted module/command context;
 Claude/Antigravity may update task-pack facts without reinstalling when installation inputs and
 verified resources remain unchanged. Reuse valid evidence instead of probing each new task.
 Host-managed `.claude`, `.codex`, and `.agents` directories are excluded at every scan depth, so
@@ -400,8 +399,8 @@ migration, and the prototype index remains a page directory rather than a second
 | Path | Meaning |
 |:-----|:--------|
 | `project.yaml` | Minimal auto-discovery policy and exceptional safe overrides |
-| `install.sh` | 从任意位置选择目标项目并安装或升级 |
-| `.agent-workflow/` | 中央项目的适配器、locator 与薄桥；旧自包含安装保留其原结构 |
+| `install.sh` | 从任意位置选择已有目标项目并执行普通中央安装 |
+| `.agent-workflow/` | 中央项目的适配器、locator 与薄桥 |
 | `~/.config/agent-workflow/runtimes/<ID>/core/` | 默认中央不可变核心；自定义状态目录下保持相同相对结构 |
 | `product/` | Cross-platform product discipline |
 | `roles/xy-*.md` | Role technical baselines |
@@ -409,10 +408,10 @@ migration, and the prototype index remains a page directory rather than a second
 | `platforms/shared/skills/` | 九个宿主共用的内置 Skill；三宿主使用同一份源资源 |
 | `platforms/shared/HOOKS.md` | 三平台辅助 Hooks、开关、所有权与原生信任说明 |
 | `scripts/` | guard (soft) / portable conflict-marker lint |
-| `setup_claude.sh` | 源包/旧自包含 setup：Claude 入口、角色与 Skill |
-| `setup_codex.sh` | 源包/旧自包含 setup：Codex 入口与 `.codex/**` |
-| `setup_antigravity.sh` | 源包/旧自包含 setup：Antigravity 入口、角色与 Skill |
-| `setup_all.sh` | 源包/旧自包含聚合 setup；中央项目使用统一管理命令 |
+| `setup_claude.sh` | 源包开发模式：Claude 入口、角色与 Skill |
+| `setup_codex.sh` | 源包开发模式：Codex 入口与 `.codex/**` |
+| `setup_antigravity.sh` | 源包开发模式：Antigravity 入口、角色与 Skill |
+| `setup_all.sh` | 源包开发模式的聚合 setup；中央项目使用统一管理命令 |
 
 Generated prompt budgets use UTF-8 bytes and word count as conservative anti-bloat guards while
 each host's frontmatter, tool, permission, and managed-artifact schema remains authoritative.
@@ -442,7 +441,7 @@ Light／Full默认派对应原生subagent。只有用户明确指定PM本身亲�
 PM正常职责限于协调和其拥有的文档。普通“优化／开始／继续”及摘要不产生例外，原等级要求保留。
 见[实施所有权与PM例外](product/WORKFLOW.md#implementation-ownership)。
 
-Light派发前判断目标、消费者、范围与风险，使用当前自包含2.0单任务包并做最小充分验证；
+Light派发前判断目标、消费者、范围与风险，使用当前自包含schema 2单任务包并做最小充分验证；
 不强制Full规划、DAG、保存计划、重复确认或独立QA。交接时评估必要独立审计、文档与记忆，
 没有需要不制造记录或QA PASS。普通低风险UI文案可用此分支，多语言文件数量不自动升级；
 实际UI文案仍用production_ui＋UI-Conformance及真实已解析冻结权威，工程／设计规范不省略；
@@ -763,11 +762,11 @@ Claude 的 `@path` 和 Antigravity 的 `@[label](path)` 都会展开正文，不
 行数裁剪规则，也不再把原有的 8 KiB 自设目标当成平台限制。Codex 的 32 KiB 保护对应
 官方默认配置，而非不可调整的模型上下文上限；真实会话加载及 Agent 判断需使用反馈验证。
 
-旧自包含 Claude setup 与官方本地诊断（`claude doctor`）：
+源包开发模式的 Claude setup 与官方本地诊断（`claude doctor`）：
 
 ```bash
-bash .agent-workflow/setup_claude.sh
-bash .agent-workflow/setup_claude.sh --check
+bash /path/to/agent_workflow/setup_claude.sh
+bash /path/to/agent_workflow/setup_claude.sh --check
 claude doctor
 ```
 
@@ -789,11 +788,11 @@ GUARD_STRICT=1 bash .agent-workflow/scripts/guard.sh
 按需复用原生能力的操作路径集中在
 [运行记录工具](platforms/shared/skills/xy-workflow/references/runtime-records.md#原生能力观察用量与同-agent-续用)：
 doctor 区分文档、明确来源观察和运行未验证；native_usage 读取显式本地导出并保留原生
-计数语义；2.0图／单包按模块职责绑定agent_alias，派发后agent_ref绑定真实ID且不可覆盖；
+计数语义；schema 2图／单包按模块职责绑定agent_alias，派发后agent_ref绑定真实ID且不可覆盖；
 continuation只建议同任务等待／续用，退役／取消／未知／失效／跨宿主不得自动恢复。ID不证明
 批准、存活或完成；不新增Agent池、runner或第二状态账本。
 [QA 输入合同](platforms/shared/skills/xy-qa-review/references/inputs.md#原生结构化交接)
-提供2.0 schema／extract；validate与extract必须传当前--task-pack，以handoff_ref绑定当前
+提供schema 2合同／extract；validate与extract必须传当前--task-pack，以handoff_ref绑定当前
 QA任务、别名、原生ID和包SHA。Full只导出本任务及必要权威，Light同形单包无需DAG。
 各宿主差异见下列PM integration，不因工具存在新增门禁或自动启用可选模式。
 
@@ -809,7 +808,7 @@ official static Agent frontmatter and native tools. None of the three hosts requ
 browser automation for normal visual handoff; the PM retains approval orchestration, while each
 `xy-qa` Agent remains strictly read-only.
 
-下列独立 setup 命令只适用于源包/旧自包含安装，中央项目使用前文的 `check` / `repair`：
+下列独立 setup 命令只用于源包开发模式，在源包根目录执行；中央项目使用前文的 `check` / `repair`：
 
 原有 setup 可接入可关闭的轻量辅助 Hooks；中央启停和 repair 仅按显式 `true` 收紧上述写入保护
 单键，保留其他权限、Hooks、MCP 与信任字段，不新增 Hook 体系或重签已有 Hooks。不新增审批/QA门禁或状态台账。配置/回调通过
@@ -817,15 +816,15 @@ browser automation for normal visual handoff; the PM retains approval orchestrat
 详见 [Hooks 开关与验证边界](platforms/shared/HOOKS.md)。
 
 ```bash
-bash .agent-workflow/setup_codex.sh --preflight
-bash .agent-workflow/setup_codex.sh
-bash .agent-workflow/setup_codex.sh --check
-bash .agent-workflow/setup_claude.sh --preflight
-bash .agent-workflow/setup_claude.sh
-bash .agent-workflow/setup_claude.sh --check
-bash .agent-workflow/setup_antigravity.sh --preflight
-bash .agent-workflow/setup_antigravity.sh
-bash .agent-workflow/setup_antigravity.sh --check
+bash setup_codex.sh --preflight
+bash setup_codex.sh
+bash setup_codex.sh --check
+bash setup_claude.sh --preflight
+bash setup_claude.sh
+bash setup_claude.sh --check
+bash setup_antigravity.sh --preflight
+bash setup_antigravity.sh
+bash setup_antigravity.sh --check
 ```
 
 Aggregate setup preflights every selected host before the first project write. Limit it
@@ -843,8 +842,8 @@ to one host with `--only=claude`, `--only=codex`, or `--only=antigravity`.
   `bash lib/python_runtime.sh -m unittest discover -s tests -v`.
   Discovery includes scheduler, runtime, standards, prototype and installation regressions;
   individual `scripts/test_*.sh` entries are focused checks, not the complete suite.
-- 要把已验证的源包变更应用到项目时，再对用户指定并授权同步的目标运行 `install.sh`；
-  仅优化源包不自动重装或同步项目。
+- 要把已验证的源包变更应用到项目时，对用户指定并授权同步的目标显式导入并选版，
+  或预览 `repair` 处理受管资源；仅优化源包不自动重装或同步项目。
 
 ## Portable docs scaffold
 
@@ -867,7 +866,7 @@ cancelled／removed，已验收版本为真实标识或 `none`；已有版本的
 模板示例不产生批准或事实。Light 无基线恢复稿可简化；PROJECT 不能将无明确基线的稿件索引为当前功能。
 
 新 schema 删除 `docs.features`、`docs.notes`、`memory.fallback_dir` 与独立 FEATURE 模板；
-旧键明确拒绝并提示显式迁移，不保留运行时别名。
+旧键明确拒绝，不保留运行时别名或旧数据转换工具。
 安装不创建 features／plans／notes 空目录、不创建需求页或基线占位条目。源包未索引历史计划保持原样，
 不能按 completed 自动转为当前事实。旧 STATUS／SPEC／ENGINEERING／DESIGN_SYSTEM 权威仍不兼容，
 必要项目内容、批准和历史先安全迁入相应主题，再移除旧权威；不恢复双重事实。
@@ -883,39 +882,10 @@ cancelled／removed，已验收版本为真实标识或 `none`；已有版本的
 索引实际存在则记录真实SHA。init/文档校验检查文件系统，纯JSON图校验不冒称已核对文件存在性。
 来源、领域、稳定ID、覆盖和指纹检查继续执行，不能把可选索引解释成可跳过规范。
 
-已有 features 的项目先执行单次显式迁移，再升级安装；安装／--check 遇到旧 key 会清楚拒绝。
-使用本源包 helper 操作目标项目（它会选择该项目现有 `.agent-workflow/project.yaml`，未安装时用根配置）：
-
-```bash
-bash lib/python_runtime.sh -X utf8 -B lib/migrate_project_docs.py --project /absolute/project --mapping /absolute/request/migration.json
-bash lib/python_runtime.sh -X utf8 -B lib/migrate_project_docs.py --project /absolute/project --mapping /absolute/request/migration.json --apply
-```
-
-第一条只预检；第二条复用现有安装锁与文档条件发布／回滚事务。迁移输入只用于本次实际操作，
-不是日常受控目录台账。JSON 顶层为 `schema_version: 1`、`documents` 列表和可选的 `reference_updates` Markdown 路径列表。
-每个 documents 项精确包含 `source`、`target`、`source_sha256`、`content`：源／目标是规范项目相对路径，
-source_sha256 绑定真实旧源；content 是人工按真实归属准备的新生命周期 Markdown，必须出现一次 `{{原文}}`。
-工具将完整旧正文放到该明确位置，仅重定位必要相对链接，修复 PROJECT、实际 STANDARDS 及明确列出的当前引用。
-所有旧 Markdown 必须一对一列出；不从标题、同名或状态猜主题合并。未知资产、目标／HTML 冲突、重复主题、
-不安全／失效链接和不明归属先停，不覆盖现有计划。原有未索引 plans 不批改。
-
-若旧源已在 PROJECT 当前索引，新稿必须保留真实原基线；已验收行为节只使用 `{{原文}}`，
-旧源还须有合法 Feature ID／Status，不能把删除墓碑重新授信为当前行为；
-版本、批准依据与验收证据须逐项匹配旧正文中已存在的 `Current version`／`当前版本`／`已验收版本`、
-`Approval basis`／`批准依据`、`Acceptance evidence`／`验收证据` 明确条目。无法从旧来源证明时停止，
-先找回真实批准和证据；不能在清单里填非空文字创造 QA 或批准。旧未索引材料只能按非当前历史保全，
-不能因 completed 变成基线。迁移成功删除旧配置键与已保全源，保留完整目标正文与索引文字；
-删除／重定位前逐文件核对真实 Git HEAD 的原字节和可恢复权限；Git 仅记录执行位，0600 等权限不算完整恢复依据。
-有未提交／未跟踪内容或权限缺口时，先在映射同目录以私有权限保留固定单份 `migration-recovery.json`，
-也可用 `--recovery /absolute/request/migration-recovery.json` 明确其位置。它只包含本次实际变动的原件／配置／索引前像、
-必要 Git 引用和迁移产物条件，不复制项目树，也不是日常台账。已有不同／不安全副本先停；相同输入复用同份，
-成功后不能清理唯一原件，直到相关原稿、批准和必要历史已进入真实可恢复版本／受保护证据落点并修复引用。
-可先用同一 helper 的 `--project TARGET --restore SNAPSHOT` 预检，另加 `--apply` 才按原字节和权限恢复；
-任何迁移后用户修改都会阻止恢复，保留当前文件与快照。恢复旧配置后新模型仍拒绝旧键，需按明确意图重新迁移或使用可恢复旧版本，
-不能把恢复动作变成运行时兼容别名。纯 Git 已完整保护的输入沿输出精确提交恢复，不制造额外副本。
-同步失败沿现有事务回滚，检测到并发编辑时保留可诊断冲突及原件，不承诺跨文件断电原子性。
-再次运行会拒绝已迁移配置，不能重复导入；人工恢复必须依据真实版本／唯一历史，不能盲目覆盖目标。
-最后按实际配置对本主题执行 `requirement_html.py render/check` 生成同名页，再使用正常安装入口升级并 --check。
+2.1 不提供旧 features／notes 的转换入口。处理旧资料前必须先证明完整原文、批准、验收证据、
+权限和必要引用可恢复，再按真实归属保留在现有主题或适用规范；归属未知或存在并发修改时停止。
+旧键须在资料与引用已经安全处理后移除；不能靠删除配置键绕过文档保护，也不能将历史执行状态
+直接认定为当前基线。已完成的资料整理结果和恢复证据继续保留。
 
 New project: launch `install.sh` → drag or pass the project path → inspect the automatic
 preflight and `--check` result → fill the scaffolded docs. Normal setup automatically
@@ -923,25 +893,6 @@ derives `memory.project_id` from the project directory name when the template pl
 is still present.
 
 See also `templates/project.yaml.example`.
-
-旧 notes 仅通过 `lib/migrate_project_docs.py` 的显式 `schema_version: 2`、`mode: notes` 映射单次迁移。
-每篇原稿绑定 SHA256 与非空既有主题／规范片段引用，可多对多归属；目标和入站引用更新分别用
-`target_updates`、`reference_updates` 声明既有路径、`before_sha256` 与完整最终 `content`。
-不会根据目录存在、标题或 completed／QA 标签猜归属，不把整篇杂记改名为 plan，不创建空主题。
-更新目标已有同名派生 HTML 时，另传 `--request-id <当前请求ID>`，先在该请求 scratch
-渲染候选，再与 Markdown 同事务发布/恢复；原页手改、归属未知或渲染失败都会在删源前停止。
-
-```bash
-# 默认只读预检；映射与恢复包使用当前请求既有 scratch，不写入长期文档。
-bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/lib/migrate_project_docs.py \
-  --project . --mapping <当前请求映射.json>
-# 明确应用前，单份私有恢复包保全完整原稿、目标和配置的实际前像。
-bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/lib/migrate_project_docs.py \
-  --project . --mapping <当前请求映射.json> --recovery <当前请求恢复包.json> --apply
-# 恢复也默认预检；只有当前字节和权限仍匹配迁移后像，才允许加 --apply 恢复。
-bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/lib/migrate_project_docs.py \
-  --project . --restore <当前请求恢复包.json>
-```
 
 完整日志保留在请求证据位置；长期正文仅归纳必要结论并引用证据。记忆服务不可用时，PM 继续
 在已有相关主题稿或经适用性与批准核对后的已有项目规范章节中记录必要结论；没有既有归属时

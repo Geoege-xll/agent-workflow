@@ -1,13 +1,13 @@
 ---
 name: xy-workflow
-description: "Orchestrate 2.0 Light／Full implementation, UI changes and recovery of unfinished work, selecting current task packs, native implementers and acceptance by risk; use a separate branch for read-only audits."
+description: "Orchestrate current Light／Full implementation, UI changes and recovery of unfinished work, selecting schema 2 task packs, native implementers and acceptance by risk; use a separate branch for read-only audits."
 ---
 
 <!-- agent-workflow-pack:managed-skill -->
 
 # xy-workflow
 
-Accept only 2.0 Light／Full and `schema_version: 2`. Code changes retain applicable methods and standards
+Accept only Light／Full and `schema_version: 2`. Code changes retain applicable methods and standards
 from `xy-code-standards`; both levels default to native implementers. PM exceptions, independent context
 and instance closure follow
 `.agent-workflow/product/WORKFLOW.md#implementation-ownership` and `#agent-instance-lifecycle`.
@@ -61,7 +61,8 @@ orchestrate automatically. New graphs/single packs pin a strict three-field `run
 tasks do not switch versions, and missing pins, conflicts or corruption do not fall back. For each managed
 read/helper execution, use the linked shared bridge boundary with the current pack's pin. A changed project
 Skill version must not redirect reads/execution to a new version; do not assume shell environment survives
-from a previous tool call. Source-pack/old self-contained entries retain their usage. The central adapter
+from a previous tool call. Source-pack development retains its source entry points; version 2.1 has no
+old self-contained execution branch. The central adapter
 always belongs to the actual project's `.agent-workflow/project.yaml`.
 
 Formal Full requirements review uses HTML while the model maintains one Markdown source. PM follows

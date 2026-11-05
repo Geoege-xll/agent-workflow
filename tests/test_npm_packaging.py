@@ -50,10 +50,13 @@ class NpmPreparationTest(unittest.TestCase):
             (self.source / name).write_text(f"fixture {name}\n")
         for name in directories:
             (self.source / name).mkdir()
+        (self.source / "product/VERSION").write_text("2.1.0\n", encoding="ascii")
         # A top-level exception must never execute while reading installer constants.
         (self.source / "lib/install_workflow.py").write_text(
             f"PACK_FILES = {files!r}\nPACK_DIRECTORIES = {directories!r}\nraise AssertionError('do not import')\n"
         )
+        for name in release.CENTRAL_MANAGER_FILES:
+            (self.source / name).write_text('"""minimal central fixture"""\n')
         for name in release.RUNTIME_HELPERS:
             (self.source / "lib" / name).write_text("import os\nfrom pathlib import Path\n")
         for name in release.SCRIPTS:
@@ -121,19 +124,28 @@ class NpmPreparationTest(unittest.TestCase):
         self.assertTrue((first / "payload/lib/install_workflow.py").is_file())
         self.assertEqual(stat.S_IMODE((first / "bin/agent-workflow.cjs").stat().st_mode), 0o755)
         self.assertEqual((first / "bin/agent-workflow.cjs").stat().st_mtime, 0)
+        # 直接消费已生成的离线载荷验证版本和帮助；不创建 npm 私有缓存或执行假 Windows EXE。
+        for argument, expected in (("--version", "2.1.0\n"), ("--help", "Usage: agent-workflow")):
+            result = subprocess.run([shutil.which("node"), str(first / "bin/agent-workflow.cjs"), argument],
+                                    cwd=self.root, capture_output=True, text=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue(result.stdout.startswith(expected), result.stdout)
 
     def test_real_source_allowlist_and_dependency_closure_excludes_executable_test_helpers(self):
         actual = release.payload(PACK)
         for script in release.SCRIPTS:
             self.assertIn(f"scripts/{script}", actual)
         for name in actual:
-            self.assertFalse(name.startswith(("manager/", "tests/", "npm/", "packaging/")), name)
+            self.assertFalse(name.startswith(("tests/", "npm/", "packaging/")), name)
+            if name.startswith("manager/"):
+                self.assertIn(name, release.CENTRAL_MANAGER_FILES)
             self.assertFalse(name.startswith("scripts/test_"), name)
         self.assertIn("lib/install_workflow.py", actual)
         self.assertIn("lib/windows_runtime.py", actual)
+        self.assertTrue(release.CENTRAL_MANAGER_FILES.issubset(actual))
         self.assertNotIn("templates/docs/FEATURE.md", actual)
         # npm 载荷沿现有白名单完整传递投影器依赖，不额外依赖 npx 缓存或全局上游安装。
-        for relative in ("lib/requirement_html.py", "lib/plan_documents.py", "lib/migrate_project_docs.py",
+        for relative in ("lib/requirement_html.py", "lib/plan_documents.py",
                          "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
                          *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
                          "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
@@ -299,7 +311,9 @@ class NpmPreparationTest(unittest.TestCase):
         self.assertIn("bin/agent-workflow.cjs", names)
         self.assertIn("runtime/LICENSE.txt", names)
         self.assertIn("payload/lib/install_workflow.py", names)
-        self.assertFalse(any("test_" in name or "manager/" in name or "__pycache__" in name for name in names))
+        self.assertFalse(any("test_" in name or "__pycache__" in name for name in names))
+        self.assertEqual({"payload/" + name for name in release.CENTRAL_MANAGER_FILES},
+                         {name for name in names if name.startswith("payload/manager/")})
         archives = []
         for destination in (self.root / "pack-one", self.root / "pack-two"):
             destination.mkdir()
@@ -315,7 +329,7 @@ class NpmPreparationTest(unittest.TestCase):
         project.mkdir()
         execute = [*npm_command(), "exec", "--offline", "--ignore-scripts", "--yes", "--cache", str(cache),
                    "--package", str(tgz), "--", "agent-workflow"]
-        for arguments, expected in ((["--help"], "Usage: agent-workflow"), (["--version"], "2.0.1")):
+        for arguments, expected in ((["--help"], "Usage: agent-workflow"), (["--version"], "2.1.0")):
             result = subprocess.run([*execute, *arguments], cwd=project, env=env,
                                     capture_output=True, text=True, timeout=45)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -727,7 +741,7 @@ class NpmMetadataTest(unittest.TestCase):
         package = json.loads((PACK / "npm/package.json").read_text())
         self.assertTrue(package["private"])
         self.assertEqual(package["name"], "@geoege-xll/agent-workflow")
-        self.assertEqual(package["version"], "2.0.1")
+        self.assertEqual(package["version"], (PACK / "product/VERSION").read_text().strip())
         self.assertNotIn("scripts", package)
         self.assertNotIn("license", package)
         self.assertNotIn("dependencies", package)

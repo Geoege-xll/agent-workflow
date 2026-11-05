@@ -177,9 +177,9 @@ def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
         current = result.get(OWNER)
         enabled = True
         if current is not None:
-            # 历史事件仅用于磁盘归属证明后替换为当前 SessionStart，不接受旧事件运行。
-            # 保留用户关闭状态，不接管同名用户条目；不能为 2.0 同步删去这层内容签名保护。
-            if not isinstance(current, dict) or set(current) - {"enabled", "PreInvocation", "SessionStart"}:
+            # 当前只认 SessionStart；历史事件残留必须先由明确授权的安装管理清理。
+            # enabled 属于用户原生开关，重建签名条目时保持其值。
+            if not isinstance(current, dict) or set(current) - {"enabled", "SessionStart"}:
                 raise ValueError("user-owned Antigravity Hook name collision")
             events = set(current) - {"enabled"}
             if not events:
@@ -199,22 +199,71 @@ def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
     hooks = result.get("hooks", {})
     if not isinstance(hooks, dict):
         raise ValueError("hooks must be an event mapping")
+    desired = dict(EVENTS[host]) if mode == "assist" else {}
+    replaced = set()
     for event, groups in list(hooks.items()):
         if not isinstance(groups, list):
             raise ValueError(f"hooks.{event} must be a list")
-        retained = [group for group in groups if not owned_group(group)]
+        retained = []
+        had_owned = False
+        for group in groups:
+            if not owned_group(group):
+                retained.append(group)
+                continue
+            had_owned = True
+            # 受管组原位更新，不能每次挪到列表末尾，改变后来追加的用户 Hook
+            # 与辅助提醒之间的执行顺序。只替换验签后的本组，其余位置保持不变。
+            if event in desired and event not in replaced:
+                retained.append(signed_group(pack, project, host, event, desired[event]))
+                replaced.add(event)
         if retained:
             hooks[event] = retained
-        elif retained != groups:
+        elif had_owned:
             hooks.pop(event)
-    if mode == "assist":
-        for event, matcher in EVENTS[host]:
+    for event, matcher in desired.items():
+        if event not in replaced:
             hooks.setdefault(event, []).append(signed_group(pack, project, host, event, matcher))
     if hooks:
         result["hooks"] = hooks
     else:
         result.pop("hooks", None)
     return result
+
+
+def managed_json(data: dict, host: str) -> dict:
+    """只投影验签后的工作流条目，用户 Hook、权限、MCP 和启用状态不计入所有权。"""
+    if host == "antigravity":
+        current = data.get(OWNER)
+        if current is None:
+            return {}
+        if (not isinstance(current, dict) or set(current) - {"enabled", "SessionStart"}
+                or not isinstance(current.get("enabled", True), bool)
+                or not isinstance(current.get("SessionStart"), list)
+                or len(current["SessionStart"]) != 1 or not owned_group(current["SessionStart"][0])):
+            raise ValueError("unproven Antigravity Hook name collision")
+        return {"SessionStart": current["SessionStart"]}
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError("hooks must be an event mapping")
+    result = {}
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            raise ValueError("Hook groups must be lists")
+        signed = [group for group in groups if owned_group(group)]
+        if signed:
+            result[event] = signed
+    return result
+
+
+def managed_inline(raw: bytes) -> bytes:
+    """通过既有移除器验证 TOML 签名，只返回受管区作为一致性投影。"""
+    text = raw.decode("utf-8")
+    if BEGIN not in text and END not in text:
+        tomllib.loads(text)
+        return b""
+    # off 只在内存中移除区块，同时复用完整边界、唯一性和摘要检查。
+    merge_inline(raw, Path("/"), Path("/"), "off")
+    return text[text.index(BEGIN):text.index(END) + len(END)].encode("utf-8")
 
 
 def merge_inline(raw: bytes | None, pack: Path, project: Path, mode: str) -> bytes:

@@ -140,6 +140,24 @@ class RuntimeStoreTest(unittest.TestCase):
             self.imported()
         self.assertEqual(1, len(store.list_cores(self.state)))
 
+    def test_product_version_is_authority_and_old_frozen_labels_remain_valid(self):
+        """新核心以 VERSION 为唯一版本源；既有缺 VERSION 的 pin 标签不能被重标。"""
+        old = self.imported()
+        self.write("product/VERSION", b"2.1.0\n")
+        current = self.imported()
+        self.assertEqual("2.1.0", current.label)
+        self.assertEqual("source", store.load_core(old.binding(), self.state).label)
+        self.write("manager/release.json", b'{"schema_version":1,"version":"2.1.0"}\n')
+        release = self.imported()
+        self.assertEqual("2.1.0", release.label)
+        self.write("manager/release.json", b'{"schema_version":1,"version":"2.0.1"}\n')
+        with self.assertRaisesRegex(store.RuntimeStoreError, "发行标签"):
+            self.imported()
+        self.assertEqual("2.1.0", store.load_core(current.binding(), self.state).label)
+        self.write("product/VERSION", b"02.1.0\n")
+        with self.assertRaisesRegex(store.RuntimeStoreError, "product/VERSION"):
+            self.imported()
+
     def test_state_resolution_and_empty_listing_are_read_only(self):
         expected = self.workspace / "missing" / "state"
         with patch.dict(os.environ, {"AGENT_WORKFLOW_STATE_DIR": str(expected)}):

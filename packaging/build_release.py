@@ -15,6 +15,9 @@ import tarfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# 仅导入本构建器所属的受信源码解析器；待打包 source 只作为数据读取。
+sys.path.insert(0, str(ROOT))
+from manager.release import source_version
 RELEASE_FILES = (
     "workflow.sh", "install.sh", "setup_all.sh", "setup_claude.sh",
     "setup_codex.sh", "setup_antigravity.sh", "project.yaml", "README.md",
@@ -51,6 +54,8 @@ def payload(source: Path) -> list[Path]:
 
 
 def archive_bytes(source: Path, version: str) -> bytes:
+    if source_version(source) != version:
+        raise ValueError("Requested release version must match product/VERSION")
     stream = io.BytesIO()
     prefix = f"agent-workflow-{version}"
     # Stable ordering, gzip headers, ownership, modes and timestamps make rebuilds identical.
@@ -85,6 +90,8 @@ def build(source: Path, version: str, output: Path) -> tuple[Path, Path, Path]:
     if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version, re.ASCII):
         raise ValueError("Version must be X.Y.Z without a leading v (for example 2.0.0)")
     source = source.resolve(strict=True)
+    if source_version(source) != version:
+        raise ValueError("Requested release version must match product/VERSION")
     output = output.expanduser().resolve()
     if output == source or any(
         output.is_relative_to(source / name)

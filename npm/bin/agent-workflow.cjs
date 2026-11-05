@@ -20,7 +20,7 @@ init                 Install or safely upgrade the workflow in the current proje
 
 init requires Windows 10/11 x64, Node.js LTS and full Git for Windows (not WSL).
 Python is bundled; init does not download or modify PATH, profiles or policy.
-This package is local and unpublished. No manager or TUI is included.
+This package is local and unpublished. No interactive manager or TUI is included.
 `;
 const PYTHON_FLAGS = ['-I', '-B', '-X', 'utf8'];
 const GIT_TOOLS = ['bash', 'sh', 'env', 'cygpath', 'awk', 'sed', 'grep', 'find',

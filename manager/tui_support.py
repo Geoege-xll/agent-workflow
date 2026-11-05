@@ -26,7 +26,7 @@ def project_state(row: dict | None) -> str:
     if row is None:return "待刷新"
     if row.get("conflicts"):return "冲突"
     return {"enabled": "已启用", "disabled": "已停用", "unmanaged": "未管理",
-            "legacy": "旧安装", "prepared": "待恢复", "conflict": "冲突"}.get(row.get("state"), "未知状态")
+            "prepared": "待恢复", "conflict": "冲突"}.get(row.get("state"), "未知状态")
 
 
 def project_badge(row: dict | None) -> str:
@@ -49,7 +49,6 @@ def status_text(row: dict, host_labels: dict[str, str]) -> str:
     lines += ["", "受管路径：", *["  " + str(path) for path in row.get("managed_paths", [])]]
     if not row.get("managed_paths"):lines.append("  无受管路径")
     if row.get("pending_transaction"):lines += ["", "待结算事务  " + str(row["pending_transaction"])]
-    if row.get("legacy_archive"):lines += ["", "旧安装恢复归档  " + str(row["legacy_archive"])]
     if row.get("conflicts"):
         lines += ["", "冲突：", *[f"  {item['path']} · {item['reason']}" for item in row["conflicts"]]]
         lines.append("先检查上述路径；存在未完成事务时预览“修复受管资源”，手工修改应先核对并保留。")
@@ -77,7 +76,6 @@ def project_plan_text(summary: dict) -> str:
     lines += ["", f"受管变更  {len(changes)} 项："]
     lines += [f"  {item['operation']}  {item['path']} · {item['purpose']}" for item in changes] or ["  无受管文件变更"]
     if native.get("warnings"):lines += ["", "提示：", *native["warnings"]]
-    if native.get("legacy_archive"):lines += ["", "旧安装恢复归档  " + str(native["legacy_archive"])]
     conflicts = summary["conflicts"]
     if conflicts:
         lines += ["", "不能应用；冲突：", *[f"  {item['path']} · {item['reason']}" for item in conflicts],

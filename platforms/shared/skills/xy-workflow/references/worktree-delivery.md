@@ -106,7 +106,7 @@ interview. Local candidate commits and default commit assessment do not by thems
 - PM builds one internal delivery object with `task_graph`, `qa_handoff`, `qa_task_pack` and optional exact
   `projection_paths` (only configured PROJECT/plans), and `authorization`.
   Projection entries are unique actual changed Markdown file paths, including deletions, never directories.
-  `qa_task_pack` is the absolute path to the current complete 2.0 QA pack. The merge entry verifies
+  `qa_task_pack` is the absolute path to the current complete schema 2 QA pack. The merge entry verifies
   handoff_ref identity and byte SHA against that same pack; inline old PASS or another task pack cannot
   authorize delivery. The pack must be the current xy-qa task and bind actual agent_ref.
 - `authorization` binds `request_id`, `target_branch`, `target_base`, `head_revision`, and

@@ -33,6 +33,7 @@ class ReleaseArchiveTest(unittest.TestCase):
         for name in release.RELEASE_DIRECTORIES:
             (self.source / name).mkdir()
         (self.source / "workflow.sh").chmod(0o755)
+        (self.source / "product/VERSION").write_text("0.1.0\n", encoding="ascii")
         template = self.source / "packaging/homebrew/awf-cli.rb.in"
         template.parent.mkdir(parents=True)
         shutil.copyfile(PACK / "packaging/homebrew/awf-cli.rb.in", template)
@@ -165,12 +166,12 @@ class HomebrewLauncherTest(unittest.TestCase):
         else:
             self.temp = tempfile.TemporaryDirectory(prefix="awf-cellar-test-")
             self.root = Path(self.temp.name).resolve()
-        archive, _, self.formula = release.build(PACK, "0.1.0", self.root / "dist")
+        archive, _, self.formula = release.build(PACK, "2.1.0", self.root / "dist")
         extracted = self.root / "extracted"
         extracted.mkdir()
         with tarfile.open(archive) as stream:
             stream.extractall(extracted, filter="data")
-        self.prefix = self.root / "Homebrew Cellar/awf-cli/0.1.0"
+        self.prefix = self.root / "Homebrew Cellar/awf-cli/2.1.0"
         self.python_bin = self.root / "Python opt/bin"
         self.python_bin.mkdir(parents=True)
         self.log = self.root / "python-calls"
@@ -183,7 +184,7 @@ class HomebrewLauncherTest(unittest.TestCase):
         harness = self.root / "formula_harness.rb"
         harness.write_text(FORMULA_HARNESS)
         result = subprocess.run(
-            [shutil.which("ruby"), str(harness), str(self.formula), str(extracted / "agent-workflow-0.1.0"), str(self.prefix), str(self.python_bin)],
+            [shutil.which("ruby"), str(harness), str(self.formula), str(extracted / "agent-workflow-2.1.0"), str(self.prefix), str(self.python_bin)],
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -208,8 +209,21 @@ class HomebrewLauncherTest(unittest.TestCase):
         # 真实归档→Formula#install→短链接入口；不使用 README 或 Cellar 目录名推断版本。
         result=self.run_cli("--state-dir","state","--version")
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(result.stdout.splitlines(),["awf-cli 0.1.0",f"中央源根：{self.prefix / 'libexec'}"])
+        self.assertEqual(result.stdout.splitlines(),["awf-cli 2.1.0",f"中央源根：{self.prefix / 'libexec'}"])
         self.assertFalse((self.caller / "state").exists())
+        help_result = self.run_cli("--help")
+        self.assertEqual(0, help_result.returncode, help_result.stderr)
+        self.assertNotIn("projects", help_result.stdout)
+        self.assertNotIn("--migrate-legacy", self.run_cli("open", "--help").stdout)
+        # 同一真实载荷原地验证坏元数据及不匹配版本，避免再创建一套安装候选。
+        metadata = self.prefix / "libexec/manager/release.json"
+        for body in ('{"schema_version":1,"version":"PRIVATE-INVALID-METADATA"}',
+                     '{"schema_version":1,"version":"2.0.1"}'):
+            metadata.write_text(body, encoding="utf-8")
+            invalid = self.run_cli("--version")
+            self.assertEqual(2, invalid.returncode)
+            self.assertIn("发行元数据", invalid.stderr)
+            self.assertNotIn("PRIVATE-INVALID-METADATA", invalid.stdout + invalid.stderr)
 
     def test_invalid_packaged_metadata_reports_safe_error(self):
         metadata=self.prefix / "libexec/manager/release.json"
@@ -224,7 +238,7 @@ class HomebrewLauncherTest(unittest.TestCase):
         for name in (*release.RELEASE_FILES, *release.RELEASE_DIRECTORIES):
             self.assertTrue((self.prefix / "libexec" / name).exists(), name)
         # 真实归档与 Formula 安装后的消费者必须持有同一 helper、原样引擎和许可证。
-        for relative in ("lib/requirement_html.py", "lib/plan_documents.py", "lib/migrate_project_docs.py",
+        for relative in ("lib/requirement_html.py", "lib/plan_documents.py",
                          "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
                          *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
                          "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",

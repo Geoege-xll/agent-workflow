@@ -196,46 +196,6 @@ class BootstrapInstallTest(UnifiedHostFixture, unittest.TestCase):
                          for p in project.rglob("*") if p.is_file()}
                 self.assertEqual(before, after)
 
-    def test_detached_install_resolves_routes_preserves_user_rules_and_checks_all_hosts(self):
-        with tempfile.TemporaryDirectory(prefix="workflow-bootstrap-routing-") as raw:
-            project = Path(raw) / "项目 With Spaces"
-            project.mkdir()
-            user_rules = "# 用户规则\n\n中文沟通；不要改动业务代码。\n"
-            (project / "AGENTS.md").write_text(user_rules, encoding="utf-8")
-            sentinel = project / "business.txt"
-            sentinel.write_bytes(b"user-owned business bytes\n")
-            # 本节点验证旧自包含安装的路由/更新，不是默认中央 CLI；沿用显式低层
-            # legacy 安装 fixture，防止把测试状态写到用户默认中央库。中央 CLI 合同另测。
-            result = subprocess.run(
-                [sys.executable, "-B", "-X", "utf8", "-c",
-                 "from pathlib import Path; from lib.install_workflow import _install; import sys; "
-                 "_install(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())", str(project), str(PACK)],
-                cwd=PACK, text=True, capture_output=True, check=False, timeout=90)
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            entry = (project / "AGENTS.md").read_text(encoding="utf-8")
-            self.assertTrue(entry.startswith(user_rules))
-            self.assertEqual(b"@AGENTS.md\n", (project / "CLAUDE.md").read_bytes())
-            self.assertEqual(b"user-owned business bytes\n", sentinel.read_bytes())
-            targets = re.findall(r"\[[^]\n]+\]\((\.agent-workflow/[^)]+)\)", entry)
-            # 必需四个bootstrap路由必须齐全；普通专业方法链接也可以存在，不按链接总数
-            # 限制渐进读取入口。后续逐条检查真实目标，仍拒绝丢失或悬空的分发资源。
-            expected_routes = {".agent-workflow/" + target for target in BOOTSTRAP_TARGETS.values()}
-            self.assertTrue(expected_routes.issubset(targets))
-            for target in targets:
-                self.assertTrue((project / target).is_file(), target)
-            # 入口不再常驻三平台完整细则，也不以机械行数/字节目标定义规范。
-            detail_bytes = sum((project / ".agent-workflow" / target).stat().st_size
-                               for relative, target in BOOTSTRAP_TARGETS.items()
-                               if "/shared/" not in relative)
-            self.assertLess(len(entry.encode()), detail_bytes)
-            self.assertNotIn("installed-code-review-skill", entry)
-            for host in HOSTS:
-                checked = subprocess.run(
-                    ["bash", str(project / ".agent-workflow" / f"setup_{host}.sh"), "--check"],
-                    cwd=project, text=True, capture_output=True, check=False, timeout=90)
-                self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
-            self.check_installed_light_handoff(project, "shared")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -974,22 +974,6 @@ class EngineeringBaselineContractTest(UnifiedHostFixture, unittest.TestCase):
                 profile = discover_project(project)
                 self.assertTrue({"apps/web", "services/api"}.issubset({module.root for module in profile.modules}))
 
-    def test_managed_common_migration_preserves_project_tail(self) -> None:
-        from tests.test_managed_general import legacy_template
-        from lib.standards_baseline import common_block
-        temporary, project, pack = self.make_fixture()
-        self.addCleanup(temporary.cleanup)
-        target = project / "docs/standards/GENERAL.md"
-        target.parent.mkdir(parents=True)
-        prefix = b"# Project rules\n- Domain: engineering\n"
-        suffix = b"\n- `[eng-local-fixture] [hard]` Keep project policy.\n"
-        target.write_bytes(prefix + common_block(legacy_template("GENERAL.md")) + suffix)
-        target.chmod(0o604)
-        result = self.run_script(project, "scripts/scaffold_project_docs.sh")
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertEqual(prefix + suffix, target.read_bytes())
-        self.assertEqual(0o604, stat.S_IMODE(target.stat().st_mode))
-        self.assertEqual([], validate_project_docs(pack / "project.yaml", project))
 
     def test_nonempty_user_engineering_contract_is_byte_for_byte_preserved(self) -> None:
         temporary, project, _pack = self.make_fixture()
@@ -5336,7 +5320,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                     refused = run(f"setup_{host}.sh", mode)
                     self.assertNotEqual(0, refused.returncode)
                     output = refused.stdout + refused.stderr
-                    self.assertIn("migrate_project_docs.py", output)
+                    self.assertIn("deprecated", output)
                     self.assertIn("unsupported", output)
                     self.assertFalse((project / "docs/notes").exists())
 
@@ -5936,7 +5920,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             "request dependency closure",
             "one integrated QA",
             "QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report",
-            "bash .agent-workflow/setup_antigravity.sh --check",
+            "bash setup_antigravity.sh --check",
             "--only=claude",
             "--only=codex",
             "--only=antigravity",

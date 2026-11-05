@@ -3,24 +3,70 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
+import stat
+
+
+VERSION_PATTERN = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", re.ASCII)
+
+
+def _regular_bytes(path: Path, limit: int) -> bytes:
+    """只读有界单链接普通文件；拒绝链接、替换和读取期间的并发保存。
+
+    版本诊断发生在正常服务启动之前，不能借错误元数据回退为另一个来源。
+    根目录由调用者明确传入，且每一级祖先都拒绝符号链接。
+    """
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise ValueError("版本文件祖先不能是符号链接")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    before = path.lstat()
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        actual = os.fstat(stream.fileno())
+        if not stat.S_ISREG(actual.st_mode) or actual.st_nlink != 1 or actual.st_size > limit:
+            raise ValueError("版本文件不是有界单链接普通文件")
+        body = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+    stamp = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                          info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    if (len(body) > limit or stamp(before) != stamp(actual) or stamp(after) != stamp(actual)
+            or stamp(path.lstat()) != stamp(actual)):
+        raise ValueError("版本文件在读取期间变化")
+    return body
+
+
+def source_version(root: Path) -> str:
+    """product/VERSION 是唯一人工版本源；构建器与源码诊断使用同一解析边界。"""
+    raw = _regular_bytes(Path(root) / "product/VERSION", 128)
+    version = raw.decode("ascii", errors="strict").removesuffix("\n")
+    if not VERSION_PATTERN.fullmatch(version):
+        raise ValueError("product/VERSION 必须为不带前导 v 的 X.Y.Z")
+    return version
 
 
 def describe() -> str:
     module = Path(__file__).resolve()
     metadata = module.with_suffix(".json")
-    label = "源码未打包"
+    version = source_version(module.parents[1])
+    label = version + "（源码未打包）"
     if metadata.exists() or metadata.is_symlink():
         try:
             # release.json 仅由构建器写入归档，放在 manager 内确保 Formula 复制目录时保留。
             # 不从 README、目录名或 Git 标签猜版本；异常标记明确失败，不能回退冒充源码。
-            if metadata.is_symlink() or not metadata.is_file() or metadata.stat().st_size > 4096:
-                raise ValueError("发行元数据不是有界普通文件")
-            data = json.loads(metadata.read_text(encoding="utf-8"))
-            if (not isinstance(data, dict) or data.get("schema_version") != 1
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("发行元数据字段重复")
+                    result[key] = value
+                return result
+            data = json.loads(_regular_bytes(metadata, 4096), object_pairs_hook=unique)
+            if (not isinstance(data, dict) or set(data) != {"schema_version", "version"}
+                    or type(data.get("schema_version")) is not int or data["schema_version"] != 1
                     or not isinstance(data.get("version"), str)
-                    or not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", data["version"], re.ASCII)):
+                    or not VERSION_PATTERN.fullmatch(data["version"]) or data["version"] != version):
                 raise ValueError("发行元数据格式无效")
             label = data["version"]
         except (OSError, ValueError, RecursionError) as exc:

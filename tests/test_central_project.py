@@ -24,6 +24,7 @@ import uuid
 from lib import runtime_bridge as bridge
 from lib import runtime_project as resources
 from lib import runtime_store as store
+from lib import workflow_hook_install as hook_install
 from lib.claude_instructions import read_file
 from manager import runtime_service as service
 
@@ -48,7 +49,8 @@ def make_alternate_source(root: Path) -> None:
     for name in ("lib/platform_fs.py", "lib/runtime_store.py", "lib/runtime_project.py", "lib/runtime_bridge.py",
                  "lib/runtime_pins.py", "lib/standard_paths.py", "lib/claude_instructions.py", "lib/context_read.py",
                  "lib/shared_core_skills.py", "lib/role_models.py", "lib/claude_options.py", "lib/validate_antigravity_artifacts.py",
-                 "lib/python_runtime.sh", "manager/runtime_service.py", "manager/__init__.py",
+                 "lib/python_runtime.sh", "lib/workflow_hook_install.py", "lib/workflow_hook_settings.py",
+                 "lib/workflow_hooks.py", "lib/windows_hook_command.py", "lib/merge_codex_config.py", "manager/runtime_service.py", "manager/__init__.py",
                  "templates/project.yaml.example", "templates/docs/PROJECT.md",
                  "roles/xy-qa.md", "roles/xy-uiux.md", "platforms/shared/core-skills.txt"):
         put(name, (PACK / name).read_bytes())
@@ -124,7 +126,7 @@ class CentralProjectTest(unittest.TestCase):
         self.assertEqual({"schema_version": 1, "kind": "central", "runtime_binding": self.core.binding()}, locator)
         for directory in ("product", "roles", "platforms", "templates", "manager"):
             self.assertFalse((self.project / ".agent-workflow" / directory).exists())
-        self.assertEqual(["python_runtime.sh"], sorted(path.name for path in (self.project / ".agent-workflow/lib").iterdir()))
+        self.assertEqual(["python_runtime.sh", "workflow_hooks.py"], sorted(path.name for path in (self.project / ".agent-workflow/lib").iterdir()))
         names = resources.skill_names(resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core))
         with resources.Tree(self.project) as tree:
             for root in (".agents/skills", ".claude/skills"):
@@ -324,7 +326,9 @@ print("native role parsers OK")
         self.assertNotIn("fixture-secret", json.dumps(plan.summary))
         service.apply(plan)
         self.assertEqual(config, (self.project / resources.CONFIG).read_bytes())
-        self.assertEqual(originals[".claude/settings.json"], (self.project / ".claude/settings.json").read_bytes())
+        shared = json.loads((self.project / ".claude/settings.json").read_bytes())
+        shared.pop("hooks")
+        self.assertEqual(json.loads(originals[".claude/settings.json"]), shared)
         self.assertEqual(originals["docs/PROJECT.md"], (self.project / "docs/PROJECT.md").read_bytes())
         self.assertTrue((self.project / "AGENTS.md").read_bytes().startswith(originals["AGENTS.md"]))
         self.assertEqual("custom-model", tomllib.loads((self.project / ".codex/agents/xy-qa.toml").read_text())["model"])
@@ -660,20 +664,21 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         config = resources.initial_config(resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core), self.project)
         config = config.replace(b"  plans: docs/plans/", b"  plans: docs/plans/\n  notes: docs/notes/")
         self.put(self.project, resources.CONFIG, config)
-        with self.assertRaisesRegex(ValueError, "notes"):
+        with self.assertRaisesRegex(ValueError, "已废弃的文档配置"):
             service.preview(self.state, self.project, "enable", binding=self.core.binding())
         self.assertEqual(config, (self.project / resources.CONFIG).read_bytes())
         self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
 
-    def test_legacy_runtime_default_is_validated_retained_and_not_switched(self):
+    def test_old_runtime_residue_is_retained_and_not_switched(self):
         self.put(self.project, ".agent-workflow/product/WORKFLOW.md", b"legacy\n")
         self.put(self.project, ".agent-workflow/.install-manifest.json",
                  resources.json_bytes({"schema_version": 1, "managed_files": {"product/WORKFLOW.md": hashlib.sha256(b"legacy\n").hexdigest()}}))
         plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
         self.assertFalse(plan.summary["can_apply"])
-        self.assertIn("暂不切换", plan.summary["conflicts"][0]["reason"])
+        self.assertIn("旧自包含安装残留", plan.summary["conflicts"][0]["reason"])
         self.assertEqual(b"legacy\n", (self.project / ".agent-workflow/product/WORKFLOW.md").read_bytes())
         self.assertFalse((self.project / resources.LOCATOR).exists())
+
 
     def test_helper_timeout_reaps_only_its_own_process(self):
         self.enable()
@@ -774,7 +779,9 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
         expected = json.loads(json.dumps(original))
         expected["permissions"]["blockWritesOutsideWorkingDirectories"] = True
-        self.assertEqual(expected, json.loads(settings.read_bytes()))
+        observed = json.loads(settings.read_bytes())
+        expected["hooks"] = observed["hooks"]
+        self.assertEqual(expected, observed)
         self.assertEqual(0o640, settings.stat().st_mode & 0o7777)
         self.assertEqual(local, (self.project / ".claude/settings.local.json").read_bytes())
         record = service.read_binding_record(self.state, self.project)[1]
@@ -787,13 +794,18 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         self.put(self.project, ".claude/settings.local.json", local)
         # 用户后续修改其他设置不被中央“整文件归属”阻止，也不会被 repair 清回旧值。
         expected["mcpServers"]["second"] = {"command": "user-added"}
+        later_hook = {"hooks": [{"type": "command", "command": "echo later-user"}]}
+        expected["hooks"]["UserPromptSubmit"].append(later_hook)
         settings.write_bytes((json.dumps(expected, indent=2) + "\n").encode())
         self.assertTrue(service.status(self.state, self.project)["enabled"])
         (self.project / resources.CONFIG).write_bytes(config.replace(b"block_writes_outside_working_directories: true", b"block_writes_outside_working_directories: inherit"))
         retained = settings.read_bytes()
         service.apply(service.preview(self.state, self.project, "repair"))
-        service.apply(service.preview(self.state, self.project, "disable"))
         self.assertEqual(retained, settings.read_bytes())
+        service.apply(service.preview(self.state, self.project, "disable"))
+        removed = hook_install.merge_json(json.loads(retained), self.project / ".agent-workflow", self.project, "claude", "off")
+        self.assertEqual(removed, json.loads(settings.read_bytes()))
+        self.assertEqual([later_hook], json.loads(settings.read_bytes())["hooks"]["UserPromptSubmit"])
         self.assertIs(json.loads(settings.read_bytes())["permissions"]["blockWritesOutsideWorkingDirectories"], True)
 
     def test_claude_guard_rejects_conflicts_and_local_after_preview_change(self):
@@ -820,17 +832,125 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         self.assertEqual(before, (self.project / ".claude/settings.json").read_bytes())
         self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
 
-    def test_inherit_does_not_read_or_change_claude_settings(self):
-        self.put(self.project, ".claude/settings.json", b"user-owned invalid JSON is preserved under inherit\n")
-        before = (self.project / ".claude/settings.json").read_bytes()
-        read = resources.Tree.read
-        def reject_settings(tree, relative, **kwargs):
-            if relative in {".claude/settings.json", ".claude/settings.local.json"}:
-                raise AssertionError("inherit 不应读取原生设置")
-            return read(tree, relative, **kwargs)
-        with patch.object(resources.Tree, "read", reject_settings):
-            self.enable()
-        self.assertEqual(before, (self.project / ".claude/settings.json").read_bytes())
+    def test_assist_refuses_invalid_shared_settings_without_writes(self):
+        """Hooks 与权限共享容器；即使保护选项为 inherit 也不能覆盖无效用户 JSON。"""
+        original = b"user-owned invalid JSON must survive\n"
+        self.put(self.project, ".claude/settings.json", original)
+        with self.assertRaises(ValueError):
+            service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        self.assertEqual(original, (self.project / ".claude/settings.json").read_bytes())
+        self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+
+    def test_fresh_hooks_preserve_user_fields_run_protocol_and_follow_off_disable(self):
+        """补足 fresh 中央路径的真实 Hook 消费，用户后续设置与签名所有权分别验证。"""
+        native = ('# user native trust\n[features]\nhooks = false\n'
+                  '[agents] # keep user table comment\nenabled = false\nuser_owned = true\n'
+                  '[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'
+                  'type = "command"\ncommand = "echo user"\n').encode()
+        self.put(self.project, ".codex/config.toml", native)
+        user_claude = {"permissions": {"allow": ["Read"]}, "mcpServers": {"own": {"command": "user"}},
+                       "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo user"}]}]}}
+        self.put(self.project, ".claude/settings.json", json.dumps(user_claude).encode())
+        self.put(self.project, ".agents/hooks.json", b'{"user":{"enabled":false,"Stop":[{"command":"echo keep"}]}}\n')
+        self.enable()
+        codex = tomllib.loads((self.project / ".codex/config.toml").read_text())
+        claude = json.loads((self.project / ".claude/settings.json").read_bytes())
+        antigravity = json.loads((self.project / ".agents/hooks.json").read_bytes())
+        self.assertFalse(codex["features"]["hooks"])
+        groups = {"codex": hook_install.managed_json(codex, "codex"),
+                  "claude": hook_install.managed_json(claude, "claude"),
+                  "antigravity": hook_install.managed_json(antigravity, "antigravity")}
+        self.assertEqual([2, 3, 1], [sum(map(len, value.values())) for value in groups.values()])
+        # 无任务 pin 时只为辅助提醒检查当前启用版；不会生成或替换任务记录。
+        for host, events in groups.items():
+            for event, rows in events.items():
+                group = rows[0]
+                command = group.get("hooks", [group])[0]["command"]
+                payload = {"cwd": str(self.project), "hook_event_name": event, "source": "resume",
+                           "tool_name": "Agent", "tool_input": {"subagent_type": "Explore"},
+                           "workspacePaths": [str(self.project)], "conversationId": "fixture-session"}
+                env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(self.state)}
+                env.pop("AGENT_WORKFLOW_RUNTIME_BINDING", None)
+                result = subprocess.run(shlex.split(command), input=json.dumps(payload), text=True,
+                                        capture_output=True, env=env, cwd=self.project, timeout=8)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertTrue(json.loads(result.stdout), (host, event, result.stdout, result.stderr))
+        # 新增用户配置继续生效；切版、repair 和 disable 不能回退整个原生容器。
+        claude["mcpServers"]["later"] = {"command": "later-user"}
+        self.put(self.project, ".claude/settings.json", json.dumps(claude).encode())
+        antigravity[hook_install.OWNER]["enabled"] = False
+        antigravity["later-user"] = {"enabled": False}
+        self.put(self.project, ".agents/hooks.json", json.dumps(antigravity).encode())
+        with (self.project / ".codex/config.toml").open("ab") as stream:
+            stream.write(b'\n[user_later]\nkeep = true\n')
+        self.assertTrue(service.status(self.state, self.project)["enabled"])
+        service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+        service.apply(service.preview(self.state, self.project, "repair"))
+        self.assertFalse(json.loads((self.project / ".agents/hooks.json").read_bytes())[hook_install.OWNER]["enabled"])
+        config = self.project / resources.CONFIG
+        config.write_bytes(config.read_bytes().replace(b"mode: assist", b"mode: off"))
+        service.apply(service.preview(self.state, self.project, "repair"))
+        self.assertEqual({}, hook_install.managed_json(json.loads((self.project / ".claude/settings.json").read_bytes()), "claude"))
+        self.assertEqual(b"", hook_install.managed_inline((self.project / ".codex/config.toml").read_bytes()))
+        config.write_bytes(config.read_bytes().replace(b"mode: off", b"mode: assist"))
+        service.apply(service.preview(self.state, self.project, "repair"))
+        service.apply(service.preview(self.state, self.project, "disable"))
+        after = json.loads((self.project / ".claude/settings.json").read_bytes())
+        self.assertEqual({"command": "later-user"}, after["mcpServers"]["later"])
+        self.assertEqual(user_claude["hooks"], after["hooks"])
+        self.assertEqual({"enabled": False}, json.loads((self.project / ".agents/hooks.json").read_bytes())["later-user"])
+        restored_native = tomllib.loads((self.project / ".codex/config.toml").read_text())
+        self.assertTrue(restored_native["user_later"]["keep"])
+        self.assertTrue(restored_native["agents"]["user_owned"])
+        self.assertFalse(restored_native["agents"]["enabled"])
+        self.assertEqual(store.read_core_source(self.core, "product/WORKFLOW.md"),
+                         bridge.read_resource(self.state, self.project, "product/WORKFLOW.md", binding=self.core.binding()))
+        # fresh + off 不能先创建再撤回 JSON 容器；用户原权限配置保持原始字节。
+        off_project = self.workspace / ("off-" + uuid.uuid4().hex[:10])
+        off_project.mkdir()
+        off_config = resources.initial_config(resources.Resources(self.core.root, resources.json_bytes(self.core.binding()),
+                                                                 self.core.label, self.core), off_project)
+        self.put(off_project, resources.CONFIG, off_config.replace(b"mode: assist", b"mode: off"))
+        permission = b'{ "permissions": { "deny": ["Bash(rm *)"] }, "user": true }\n'
+        self.put(off_project, ".claude/settings.json", permission)
+        off_plan = service.preview(self.state, off_project, "enable", binding=self.core.binding())
+        self.assertEqual(permission, (off_project / ".claude/settings.json").read_bytes())
+        off_result = service.apply(off_plan)
+        self.assertTrue(off_result["enabled"], off_result["conflicts"])
+        self.assertEqual(permission, (off_project / ".claude/settings.json").read_bytes())
+        for relative in (".codex/hooks.json", ".agents/hooks.json"):
+            self.assertFalse((off_project / relative).exists())
+
+    def test_failed_fresh_enable_keeps_later_user_settings_and_usable_neutral_hook_bridge(self):
+        """共享配置后加字段必须保留；失败不能顺手移除其中签名命令依赖的薄桥。"""
+        self.put(self.project, ".claude/settings.json", b'{"permissions":{"allow":["Read"]}}\n')
+        publish = service._publish
+        command = []
+        def user_save_then_fail(tree, row, core, save):
+            result = publish(tree, row, core, save)
+            if row["path"] == ".claude/settings.json":
+                target = self.project / row["path"]
+                data = json.loads(target.read_bytes())
+                command.extend(shlex.split(data["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]))
+                data["mcpServers"] = {"later-user": {"command": "preserve"}}
+                target.write_bytes(json.dumps(data).encode())
+                raise OSError("fixture failure after user shared settings save")
+            return result
+        plan = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        with patch.object(service, "_publish", side_effect=user_save_then_fail), self.assertRaisesRegex(ValueError, "后续手改"):
+            service.apply(plan)
+        data = json.loads((self.project / ".claude/settings.json").read_bytes())
+        self.assertEqual({"command": "preserve"}, data["mcpServers"]["later-user"])
+        self.assertEqual(["Read"], data["permissions"]["allow"])
+        self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
+        self.assertEqual("conflict", service.status(self.state, self.project)["state"])
+        # 原生命令仍可真正启动；未启用的项目只给中性协议结果，不创建任务或猜 pin。
+        environment = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(self.state)}
+        environment.pop("AGENT_WORKFLOW_RUNTIME_BINDING", None)
+        result = subprocess.run(command, input="{}", text=True, env=environment, capture_output=True,
+                                cwd=self.project, timeout=8)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({}, json.loads(result.stdout))
 
     def test_incompatible_fixed_bridge_is_rolled_back_before_enabled(self):
         source = self.source / "lib/runtime_bridge.py"

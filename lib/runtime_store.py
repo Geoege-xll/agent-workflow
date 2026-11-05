@@ -300,14 +300,29 @@ def _json(raw: bytes):
 
 
 def _label(root: int, files: list[dict]) -> str:
-    if not any(row["path"] == "manager/release.json" for row in files):
-        return "source"
+    # 此函数也由薄桥在完整核心验证前使用。只能解析已锚定的数据文件，不能
+    # 为共用版本函数提前 import 核心中的新模块。缺 VERSION 的既有冻结核心
+    # 仍按原 source/release.json 标签验证；这不会改写或重标已有内容 ID。
+    paths = {row["path"] for row in files}
+    version = None
+    if "product/VERSION" in paths:
+        with _relative_parent(root, "product/VERSION") as (parent, name):
+            raw, _ = _read_regular(parent, name, limit=128)
+        try:
+            version = raw.decode("ascii", errors="strict").removesuffix("\n")
+        except UnicodeError as exc:
+            raise RuntimeStoreError("product/VERSION 不是有效产品版本") from exc
+        if not _VERSION.fullmatch(version):
+            raise RuntimeStoreError("product/VERSION 不是有效产品版本")
+    if "manager/release.json" not in paths:
+        return version if version is not None else "source"
     with _relative_parent(root, "manager/release.json") as (parent, name):
         raw, _ = _read_regular(parent, name, limit=4096)
     data = _json(raw)
     if (not isinstance(data, dict) or set(data) != {"schema_version", "version"}
             or type(data["schema_version"]) is not int or data["schema_version"] != 1
-            or not isinstance(data["version"], str) or not _VERSION.fullmatch(data["version"])):
+            or not isinstance(data["version"], str) or not _VERSION.fullmatch(data["version"])
+            or (version is not None and data["version"] != version)):
         raise RuntimeStoreError("manager/release.json 的正式发行标签无效")
     return data["version"]
 

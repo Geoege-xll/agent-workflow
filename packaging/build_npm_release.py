@@ -23,8 +23,11 @@ import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from manager.release import source_version
 EXCLUDED = {".git", ".sync-backups", "__pycache__", ".DS_Store", ".pytest_cache", "node_modules",
-            "tests", "__tests__", "backups", ".cache", "manager", "tui"}
+            "tests", "__tests__", "backups", ".cache", "tui"}
+CENTRAL_MANAGER_FILES = {"manager/__init__.py", "manager/runtime_service.py"}
 SCRIPTS = {"guard.sh", "lint_rules.sh", "scaffold_project_docs.sh"}
 STARTUP_FILES = ("package.json", "bin/agent-workflow.cjs", "THIRD_PARTY_NOTICES.txt")
 RUNTIME_HELPERS = ("windows_bootstrap.py", "windows_fs.py", "windows_runtime.py")
@@ -115,7 +118,7 @@ def installer_allowlist(source: Path) -> tuple[tuple[str, ...], tuple[str, ...]]
                     raise ValueError(f"Installer allowlist must be a literal tuple: {target.id}")
                 for name in value:
                     safe_name(name)
-                    if "/" in name or name in {"manager", "tests", "npm", "packaging", "docs"}:
+                    if "/" in name or name in {"tests", "npm", "packaging", "docs"}:
                         raise ValueError(f"Installer allowlist includes unsupported entry: {name}")
                 constants[target.id] = value
     if set(constants) != {"PACK_FILES", "PACK_DIRECTORIES"}:
@@ -133,6 +136,10 @@ def payload(source: Path) -> dict[str, bytes]:
 
     def visit(path: Path) -> None:
         relative = path.relative_to(source).as_posix()
+        # 当前安装器真正消费中央服务；只携带其直接服务入口，不捎带交互 TUI、
+        # 模型目录或机器管理 UI。Windows 写前软链能力拒绝仍由公共安装入口负责。
+        if relative.startswith("manager/") and relative not in CENTRAL_MANAGER_FILES:
+            return
         if (EXCLUDED.intersection(PurePosixPath(relative).parts)
                 or path.suffix in {".pyc", ".pyo", ".bak", ".backup", ".orig", ".rej", ".tmp"}
                 or path.name.endswith("~") or path.name.startswith("test_")):
@@ -157,6 +164,8 @@ def payload(source: Path) -> dict[str, bytes]:
         visit(source / name)
     if "lib/install_workflow.py" not in result:
         raise ValueError("Installer itself must be included in the npm payload")
+    if not CENTRAL_MANAGER_FILES.issubset(result):
+        raise ValueError("Current central installer service files must be included in the npm payload")
     for name in SCRIPTS:
         if f"scripts/{name}" not in result:
             raise ValueError(f"Required runtime script is missing: {name}")
@@ -168,6 +177,10 @@ def payload(source: Path) -> dict[str, bytes]:
 def check_dependencies(files: dict[str, bytes], *, runtime: bool = False) -> None:
     """Fail closed on missing local imports or shell script references, without imports."""
     modules = {PurePosixPath(name).stem for name in files if name.endswith(".py")}
+    # Python 命名空间包也可没有 __init__.py；实际包含 Python 文件的顶层目录
+    # 即为本载荷中的包，不能把 from lib / from manager 误判成第三方依赖。
+    modules.update(PurePosixPath(name).parts[0] for name in files
+                   if name.endswith(".py") and len(PurePosixPath(name).parts) > 1)
     for name, data in files.items():
         if name.endswith(".py"):
             tree = ast.parse(data, filename=name)
@@ -291,7 +304,7 @@ def prepare(source: Path, archive: Path, output: Path) -> Path:
     package = json.loads(startup["package.json"])
     # 只准备与当前工作流版本一致的本地未发布包；升版时须同步 package.json，
     # 并保留私有包、单一离线入口及无生命周期脚本／依赖的发布边界。
-    if (not isinstance(package, dict) or package.get("name") != "@geoege-xll/agent-workflow" or package.get("version") != "2.0.1"
+    if (not isinstance(package, dict) or package.get("name") != "@geoege-xll/agent-workflow" or package.get("version") != source_version(source)
             or package.get("bin") != {"agent-workflow": "bin/agent-workflow.cjs"}
             or package.get("private") is not True or package.get("scripts")
             or any(package.get(field) for field in ("dependencies", "optionalDependencies", "devDependencies"))):

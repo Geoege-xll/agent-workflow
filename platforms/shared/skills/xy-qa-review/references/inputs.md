@@ -1,6 +1,6 @@
 ## Inputs
 
-Receive only the current self-contained 2.0 QA pack: `schema_version: 2`, this task's `task`, necessary
+Receive only the current self-contained schema 2 QA pack: `schema_version: 2`, this task's `task`, necessary
 applicable standards, approval/UI authority, current review scope and evidence. The task includes
 workflow_level, module, role, agent_alias, instance_policy:fresh, context_policy:handoff_only and actual
 agent_ref. A new Reviewer must not inherit/copy full PM or sibling history. Full retains request-closure
@@ -107,7 +107,7 @@ audit. Light requires no Full graph, but selected independent QA still needs cur
 Do not substitute the root prototype index, task summary, recalled memory, claimed result, or
 potential Skill match for applicable design authority, current source, and real logs.
 
-## 2.0 result binding
+## Schema 2 result binding
 
 The QA result must declare top-level `schema_version: 2` and include:
 

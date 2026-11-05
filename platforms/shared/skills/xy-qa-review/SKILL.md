@@ -40,7 +40,7 @@ functional acceptance after production implementation still uses the single inde
 Final QA outcome: PASS | FAIL
 
 After relevant Full Writers reach BUILD_VERIFIED, or Light completes required verification with independent
-QA selected, PM dispatches only one `xy-qa`. A new Reviewer receives only the current self-contained 2.0
+QA selected, PM dispatches only one `xy-qa`. A new Reviewer receives only the current self-contained schema 2
 task pack, without copying full PM/sibling conversations or forking parent history.
 That same reviewer uses one code-review method in this order:
 

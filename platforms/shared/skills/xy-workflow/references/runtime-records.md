@@ -8,7 +8,7 @@ pack without creating a Full graph or second ledger. Accept only schema_version:
 Central projects first follow the [shared helper execution boundary](dispatch.md#workflow-helper-execution):
 each call goes through the project thin entry with explicit current-pack `runtime_binding`; do not assume
 shell environment persists across tool calls. The `.agent-workflow/lib/<helper>.py` commands below remain
-source-pack/old self-contained examples. Central mode passes the helper/arguments to the same pin's
+source-pack development examples, resolved against the actual source root. Central mode passes the helper/arguments to the same pin's
 `runtime.py --binding '<three-field JSON>' helper lib/<helper>.py`. New workflows first check machine-local
 enabled state. New graphs freeze their top-level pin from the verified bridge environment or an explicitly
 verified binding. Task export projects it unchanged; update/refresh do not alter it. Reject old packs with
@@ -42,7 +42,7 @@ or accept arbitrary `core_root` paths.
 
 ## Initialize a task graph
 
-`init` mechanically assembles PM's explicit decisions into a new schema_version:2 graph. Existing 2.0
+`init` mechanically assembles PM's explicit decisions into a new schema_version:2 graph. Existing schema 2
 graphs still use `update`, retaining existing read/query/validation contracts. Input requires `request_id`,
 `capacity`, `standards` and non-empty `tasks`, supplied with `--input <file>` or stdin. The call below
 reuses a prepared decisions file in current scratch, without another task-state source. Declare top-level
@@ -246,7 +246,7 @@ zero values from unsampled hosts cannot masquerade as a baseline.
 
 ### Task identity, same-task continuation and retirement
 
-A 2.0 task's module／role／agent_alias bind ongoing responsibilities; instance_policy is fixed fresh and
+A schema 2 task's module／role／agent_alias bind ongoing responsibilities; instance_policy is fixed fresh and
 context_policy fixed handoff_only. Create new instances on demand for independent tasks, without prewarming
 all aliases or copying full parent/sibling history. WORKFLOW's agent-instance-lifecycle owns lifecycle
 authority. This file describes existing record tools only, without another pool.
@@ -268,7 +268,7 @@ business-project root:
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py continuation \
-  --input "${workflow_record:?set current 2.0 graph or Light pack}" --task-id "${task_id:?set existing ID}" \
+  --input "${workflow_record:?set current schema 2 graph or Light pack}" --task-id "${task_id:?set existing ID}" \
   --host codex --observed-state idle
 ```
 
@@ -339,15 +339,15 @@ files or an explicit offset equal to total characters return an empty EOF page. 
 truncated range before using the whole text. File fingerprints prove only matching bytes/version, not
 model reading.
 
-The host-discovery path examples above apply to source packs/old self-contained installations. Central
+The host-discovery path examples above apply to source-pack development. Central
 reads must use the bridge linked at the start, also passing `--task-pack` to the pager. Managed resources
 use fixed logical paths such as `.agent-workflow/platforms/shared/skills/xy-workflow/SKILL.md` or
 `.agent-workflow/product/WORKFLOW.md`. The pager takes the pin from the current pack and reads original
 content directly from the content-store manifest. Changed project Skill/directory symlinks cannot alter
 that text; continuation pages still check the same complete SHA. `.agent-workflow/project.yaml`, locators,
 business files and ordinary scratch documents still use the project's safe real-file reader. A pin does
-not permit following arbitrary project symlinks or making all `.agent-workflow` a link. Old calls without
-central context retain their semantics.
+not permit following arbitrary project symlinks or making all `.agent-workflow` a link. Source calls without
+central context retain their source semantics; version 2.1 has no old self-contained compatibility branch.
 
 Each call computes SHA over complete original bytes, decodes strict UTF-8 without CRLF normalization and
 allows very long single lines across character pages. Concatenating decoded `text` pages in order restores

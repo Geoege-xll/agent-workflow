@@ -242,7 +242,9 @@ class TuiTest(unittest.TestCase):
         for fails in (False,True):
             with self.subTest(fails=fails),ThreadPoolExecutor(max_workers=1) as executor:
                 self.app.frames=[];self.app.modal=None
-                self.app.dispatch("g");self.app.show_view("install");self.app.executor=executor
+                # 当前中央写操作使用统一计划确认页，结果或错误返回管理菜单，
+                # 不复活已经消费的确认页，以免用户重复提交同一事务。
+                self.app.dispatch("g");self.app.show_view("project_plan");self.app.executor=executor
                 def operation():
                     if fails:raise ValueError("fixture failure")
                     return "fixture result"
@@ -571,8 +573,11 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         def put(relative,body):
             path=cls.source/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(body)
         for name in runtime_store.SETUP_FILES:put(name,b"#!/bin/sh\nexit 0\n")
-        # apply现在通过固定核心的真实reader验收发布；该链会导入claude_options，夹具须带真实依赖。
+        # apply 通过固定核心的真实 reader 验收发布；中央启停现在还要校验签名 Hook。
+        # 只补齐这条真实消费链的直接依赖，不复制完整源包、宿主环境或独立运行时。
         for name in ("lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py","lib/claude_options.py",
+                     "lib/claude_instructions.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
+                     "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py",
                      "lib/shared_core_skills.py","lib/role_models.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
                      "manager/runtime_service.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
                      "roles/xy-qa.md","roles/xy-uiux.md","platforms/shared/core-skills.txt"):
@@ -628,7 +633,9 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         self.apply();self.assertFalse(service.project_status(self.state,self.project)["enabled"])
         self.assertIn(str(self.project),service.registry(self.state)["registered"])
         before=self.snapshot(self.root)
-        self.menu("enable");self.assertIn(self.core.content_id,self.app.text)
+        # 当前来源导入与普通启用共用真实中央服务；先验证导入预览取消无写入，
+        # 再从普通启用完成后续生命周期，避免仅用模拟调用证明消费者仍可达。
+        self.menu("install");self.assertIn(self.core.content_id,self.app.text)
         self.app.dispatch("esc");self.assertEqual("manage",self.app.modal);self.assertEqual(before,self.snapshot(self.root))
         self.menu("enable");self.apply();self.assertTrue(service.project_status(self.state,self.project)["enabled"])
         self.menu("details");self.assertEqual("details",self.app.modal)
@@ -742,6 +749,13 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             choose_menu("三宿主详情","项目 / 三宿主详情")
             self.assertTrue(all(name in terminal.text() for name in ("Codex","Claude Code","Antigravity")))
             close_to_main()
+            # 更新后的空备份提示必须从真实管理动作显示，并在最小支持宽度中
+            # 保留返回键；它只说明模型备份，不再把用户引向已移除的旧运行时备份。
+            choose_menu("模型配置备份","模型配置备份");visible("当前项目还没有模型配置备份")
+            terminal.resize(16,55);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",16,55,0,0));os.kill(process.pid,signal.SIGWINCH)
+            view("模型配置备份");visible("Esc")
+            terminal.resize(30,100);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",30,100,0,0));os.kill(process.pid,signal.SIGWINCH)
+            view("模型配置备份");close_to_main()
             choose_menu("中央版本","中央版本列表 / 选择");send("i");view("完整版本详情")
             # 64位ID可能跨行，去除字符格换行后验证完整身份仍可达。
             self.assertTrue(any(value in terminal.text().replace("\n","").replace(" ","") for value in (self.core.content_id,self.alternate.content_id)))
@@ -761,7 +775,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             terminal.resize(12,45);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",12,45,0,0));os.kill(process.pid,signal.SIGWINCH)
             visible("请调整至至少");send("q");process.wait(timeout=10)
             self.assertEqual(0,process.returncode)
-            print("真实 PTY 已验证：登记预览取消/确认、启用/停用、版本完整ID/选择预览、三宿主详情、手改冲突、表单错误、12×45 resize退出；exit=0")
+            print("真实 PTY 已验证：登记预览取消/确认、启用/停用、版本完整ID/选择预览、三宿主详情、空模型备份及16×55返回键、手改冲突、表单错误、12×45 resize退出；exit=0")
         finally:
             if process.poll() is None:
                 # 仅回收本测试独占的短命夹具进程；正常路径必须q退出，此清理不作为取消能力证据。

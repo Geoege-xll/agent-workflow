@@ -1,4 +1,4 @@
-"""中央运行时统一命令入口；新直接动词执行，旧写命令保留显式 --apply。"""
+"""中央运行时统一命令入口；项目直接动词与模型显式 --apply 共享业务服务。"""
 
 from __future__ import annotations
 
@@ -29,17 +29,13 @@ def output_options(command, *, dry_run=False):
 
 def parser() -> argparse.ArgumentParser:
     root=CommandParser(prog="awf-cli",description="中央工作流项目、固定版本与角色模型管理。项目参数只接受已存在路径或唯一登记名。")
-    root.add_argument("--version",action="store_true",help="只读显示构建版本或源码未打包标识，以及实际中央源根")
+    root.add_argument("--version",action="store_true",help="只读显示产品版本及源码/构建性质，以及实际中央源根")
     root.add_argument("--state-dir",help="独立管理状态目录；默认 ~/.config/agent-workflow")
     root.add_argument("--scan-root",default=str(Path.home()/"Desktop"),help="只扫描该目录的直接子项目")
     root.add_argument("--json",action="store_true",help="机器输出模式；--state-dir 等全局参数放在命令之前")
     commands=root.add_subparsers(dest="command")
     tui=commands.add_parser("tui",help="启动终端界面（默认命令）")
     tui.add_argument("--project",help="初始选中项目")
-    project=commands.add_parser("projects",help="列出或登记项目")
-    project.add_argument("action",choices=["list","add","remove"],default="list",nargs="?")
-    project.add_argument("path",nargs="?")
-    output_options(project)
     for name in ("add", "del", "list", "status", "enable", "disable", "use", "rollback", "repair"):
         aliases={"enable":["open"], "disable":["close"]}.get(name, [])
         command=commands.add_parser(name, aliases=aliases, help={
@@ -56,7 +52,6 @@ def parser() -> argparse.ArgumentParser:
             source=command.add_mutually_exclusive_group()
             source.add_argument("--source", type=Path, help="显式导入该来源；首次启用默认当前中央源码")
             source.add_argument("--content-id", help="精确选择已导入的完整 SHA256 内容 ID")
-            command.add_argument("--migrate-legacy", action="store_true", help="声明旧任务已收尾；迁移仍由原生服务安全校验")
         if name == "use":command.add_argument("content_id", help="完整 64 位小写 SHA256；不接受前缀或 latest")
         output_options(command, dry_run=name not in {"list", "status"})
     runtime=commands.add_parser("runtime",help="管理不可变中央核心；不会自动切换或清理项目版本")
@@ -89,12 +84,11 @@ def parser() -> argparse.ArgumentParser:
     change.add_argument("--effort",default="inherit")
     change.add_argument("--apply",action="store_true",help="确认先备份，再写入并检查目标平台")
     output_options(change)
-    for name in ("install","check","backups","restore"):
-        command=commands.add_parser(name,help={"install":"预览或执行安装升级","check":"只读检查三平台安装","backups":"列出模型配置备份","restore":"预览或恢复模型配置备份"}[name])
+    for name in ("check","backups","restore"):
+        command=commands.add_parser(name,help={"check":"只读检查三平台安装","backups":"列出模型配置备份","restore":"预览或恢复模型配置备份"}[name])
         command.add_argument("--project",required=True)
-        if name == "install":command.add_argument("--source",type=Path,help="显式中央核心来源；默认当前中央源码")
         if name == "restore":command.add_argument("backup")
-        if name in {"install","restore"}:command.add_argument("--apply",action="store_true")
+        if name == "restore":command.add_argument("--apply",action="store_true")
         output_options(command)
     return root
 
@@ -122,8 +116,6 @@ def print_result(command: str, result, *, json_mode: bool, dry_run=False) -> Non
         print("前次内容 ID："+(previous["content_id"] if previous else "无"))
         if "registered" in row:print("已登记："+("是" if row["registered"] else "否"))
         if "registered_after" in row:print("登记前后："+str(row["registered_before"])+" → "+str(row["registered_after"]))
-        archive=row.get("legacy_archive") or (row.get("runtime") or {}).get("legacy_archive")
-        if archive:print("旧安装保留目录："+clean(archive,1000))
         if dry_run:print(f"只读预览；可应用：{row.get('can_apply',True)}；受管变更：{len(row.get('changes',[]))} 项")
         for conflict in row.get("conflicts",[]):
             print("冲突："+clean(conflict["path"])+"；"+clean(conflict["reason"]))
@@ -154,8 +146,7 @@ def project_command(args, state: Path, scan: Path) -> int | None:
         return None
     project=(service.project_path(args.project) if action == "add" else service.resolve_project(state,args.project))
     plan=service.preview_project(state,project,action,enable=getattr(args,"enable",False),
-                                 source_root=getattr(args,"source",None), content_id=getattr(args,"content_id",None),
-                                 migrate_legacy=getattr(args,"migrate_legacy",False))
+                                 source_root=getattr(args,"source",None), content_id=getattr(args,"content_id",None))
     result=plan.summary if args.dry_run else service.apply_project(plan)
     print_result(args.command,result,json_mode=args.json,dry_run=args.dry_run)
     # 预览冲突仍是业务拒绝，调用方不能把不可应用计划误判为成功。
@@ -181,16 +172,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in {None,"tui"}:
             if json_mode:raise ValueError("TUI 交互输出不支持 --json，请使用无交互命令")
             if not sys.stdin.isatty() or not sys.stdout.isatty():
-                raise ValueError("TUI 需要交互终端。可使用 --help、projects list 或 models 等无交互命令。")
+                raise ValueError("TUI 需要交互终端。可使用 --help、list 或 models 等无交互命令。")
             from .tui import run
             project=service.project_path(args.project) if getattr(args,"project",None) else None
             return run(state,scan,project)
-        if args.command == "projects":
-            if args.action != "list":
-                if not args.path:raise ValueError("请提供项目路径")
-                service.register(state,service.project_path(args.path),remove=args.action == "remove")
-            print(json.dumps([str(path) for path in service.projects(state,scan)],ensure_ascii=False,indent=2))
-            return 0
         direct=project_command(args,state,scan)
         if direct is not None:return direct
         project=service.project_path(args.project) if args.project else None
@@ -228,14 +213,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"项目：{clean(project)}\n平台：{args.platform}\n角色：{args.role}\n模型：{clean(args.model)}\n推理：{args.effort}")
                 print("变更文件："+", ".join(row.relative for row in changes))
                 print("已应用；"+service.backup_summary(project,identifier) if args.apply else "只读预览；添加 --apply 才会备份并写入。")
-        elif args.command == "install":
-            plan=service.preview_project(state,project,"add",enable=True,source_root=args.source or service.SOURCE)
-            result=plan.summary
-            if args.apply:
-                result=service.apply_project(plan)
-            print_result("install",result,json_mode=json_mode,dry_run=not args.apply)
-            if not json_mode and not args.apply:print("添加 --apply 确认中央安装或升级。")
-            if not plan.summary["can_apply"]:return 2
         elif args.command == "check":
             result=service.check(project,state=state)
             if json_mode:print_result("check",{"project":str(project),"diagnostic":result},json_mode=True)

@@ -110,7 +110,7 @@ an Agent ID or an empty active panel is not completion evidence. Avoid busy poll
 sleep loops. Use native background waiting/monitoring only when available, without creating another
 supervisor Agent. Never alter fork/background settings merely to obtain foreground waiting.
 
-2.0 dispatch passes only the current schema_version: 2 task envelope: task, applicable standards_contract, and necessary approval/UI evidence, without complete PM/sibling conversations. Check module, canonical role, stable agent_alias, instance_policy: fresh, and context_policy: handoff_only; invoke the named `xy-*` role again for each new independent task to obtain a new native ID, without precreating all aliases or filling capacity. The receiver still reads all current required standards completely.
+Dispatch passes only the current schema_version: 2 task envelope: task, applicable standards_contract, and necessary approval/UI evidence, without complete PM/sibling conversations. Check module, canonical role, stable agent_alias, instance_policy: fresh, and context_policy: handoff_only; invoke the named `xy-*` role again for each new independent task to obtain a new native ID, without precreating all aliases or filling capacity. The receiver still reads all current required standards completely.
 
 Keep the returned native Agent ID in the existing task handoff, and in an existing recovery plan only
 when needed. Use `SendMessage` to that verified ID only for the same task's follow-ups and bounded QA rework; a completed

@@ -76,7 +76,6 @@ class ActivationPlan:
     conflicts: tuple[dict, ...] = ()
     warnings: tuple[str, ...] = ()
     recovery: bool = False
-    legacy_json: bytes | None = None
 
     @property
     def summary(self) -> dict:
@@ -90,8 +89,7 @@ class ActivationPlan:
                 "changes": [{"path": row.relative, "operation": "remove" if row.after.kind == "missing" else "create" if row.before.kind == "missing" else "update",
                              "kind": row.after.kind, "purpose": row.purpose} for row in self.changes],
                 "conflicts": list(self.conflicts), "warnings": list(self.warnings),
-                "can_apply": not self.conflicts, "recovery": self.recovery,
-                "legacy_archive": unique_json(self.legacy_json)["root"] if self.legacy_json else record.get("legacy_archive", {}).get("root") if record.get("legacy_archive") else None}
+                "can_apply": not self.conflicts, "recovery": self.recovery}
 
 
 def _state_relative(project: Path, kind: str) -> str:
@@ -114,7 +112,7 @@ def read_binding_record(state: Path, project: Path) -> tuple[Node, dict | None]:
     record = unique_json(snapshot.payload)
     required = {"schema_version", "project_root", "project_identity", "runtime_binding", "enabled",
                 "hosts", "previous_binding", "used_bindings", "managed", "retained_nodes", "generation"}
-    if (not isinstance(record, dict) or set(record) not in (required, required | {"legacy_archive"})
+    if (not isinstance(record, dict) or set(record) != required
             or type(record["schema_version"]) is not int or record["schema_version"] != 1
             or record["project_root"] != str(project)
             or record["project_identity"] != list(node_id(project.stat()))
@@ -144,8 +142,6 @@ def read_binding_record(state: Path, project: Path) -> tuple[Node, dict | None]:
             value = Node.from_value(managed[key])
             if value.kind == "link" and not skill_parts(relative):
                 raise ActivationError("机器记录不能授权精确 Skill 以外的链接")
-    if record.get("legacy_archive") is not None:
-        _legacy_validate(record["legacy_archive"])
     return snapshot, record
 
 
@@ -176,8 +172,8 @@ def _journal(state: Path, project: Path) -> tuple[Node, dict | None]:
         if after.kind == "link" and not skill_parts(relative):
             raise ActivationError("事务恢复不能授权普通路径链接")
     Node.from_value(record["binding_before"])
-    if record.get("legacy") is not None:
-        _legacy_validate(record["legacy"])
+    if "legacy" in record:
+        raise ActivationError("不支持旧安装转换恢复记录；请先处理原安装残留")
     return snapshot, record
 
 
@@ -213,6 +209,10 @@ def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool) -> tuple[
             actual = tree.read(relative, skill_link=managed["purpose"] == "skill")
             if managed["purpose"] == "block":
                 same = central_block(actual.payload) == central_block(expected.payload)
+            elif managed["purpose"] == "native-config":
+                # 只对工作流实际拥有的键/签名区作归属判断，新增用户字段不能
+                # 因整文件比较而被吞掉，也不能授权覆盖已修改的受管默认键。
+                same = project_files.native_projection(actual.payload) == project_files.native_projection(expected.payload)
             else:
                 same = actual.same_content(expected)
             if actual.kind == "missing" and expected.kind != "missing" and repair:
@@ -231,7 +231,7 @@ def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool) -> tuple[
     return conflicts, links
 
 
-def _legacy(project: Path) -> bool:
+def _has_install_residue(project: Path) -> bool:
     with Tree(project) as tree:
         return tree.read(".agent-workflow/.install-manifest.json").kind != "missing"
 
@@ -253,156 +253,17 @@ def _protect_project(project: Path, source_root: Path | None) -> None:
             raise ActivationError("发现旧工作流目录 agent_workflow；先显式处理原安装，保留该目录")
 
 
-def _legacy_validate(data: dict) -> None:
-    """归档路径来自机器日志时仍只接受本协议精确命名和原始受管边界。"""
-    if (not isinstance(data, dict) or not isinstance(data.get("root"), str)
-            or not re.fullmatch(r"\.agent-workflow-legacy-[0-9a-f]{32}", data["root"])
-            or not isinstance(data.get("moves"), list) or not data["moves"]):
-        raise ActivationError("旧安装归档记录无效")
-    seen = set()
-    for index, move in enumerate(data["moves"]):
-        path = relative_path(move["path"])
-        expected = data["root"] + ("/runtime" if index == 0 else f"/skill-{index}")
-        if (path in seen or (path != ".agent-workflow" if index == 0 else not skill_parts(path))
-                or move.get("archive") != expected or not isinstance(move.get("snapshot"), dict)):
-            raise ActivationError("旧安装目录归档越过精确受管边界")
-        seen.add(path)
-
-
-def _legacy_snapshot(project: Path, relative: str) -> dict:
-    from lib.install_workflow import legacy_tree_snapshot
-    return legacy_tree_snapshot(project / relative)
-
-
-def _legacy_same_after_move(actual: dict, expected: dict) -> bool:
-    # rename 会改变根目录 ctime，不能因此把本事务自己的归档误认手改。其余节点
-    # 与根目录的 inode、模式、大小、mtime 均逐项保持；正文恢复仍靠原 inode。
-    left, right = unique_json(json_bytes(actual)), unique_json(json_bytes(expected))
-    if "" in left and "" in right:
-        left[""]["identity"][-1] = right[""]["identity"][-1]
-    return left == right
-
-
-def _legacy_receipt_conflicts(project: Path, data: dict | None) -> list[dict]:
-    if not data:
-        return []
-    _legacy_validate(data)
-    conflicts = []
-    for move in data["moves"]:
-        try:
-            expected = move.get("archived_snapshot", move["snapshot"])
-            if _legacy_snapshot(project, move["archive"]) != expected:
-                raise ActivationError("归档旧目录发生后续保存或身份变化")
-        except (OSError, ValueError) as exc:
-            conflicts.append({"path": move["archive"], "reason": str(exc)})
-    return conflicts
-
-
-def _legacy_apply(tree: Tree, data: dict, save) -> None:
-    """prepared 已持久化后才 rename 旧目录；项目目录锁覆盖全部归档/发布。"""
-    _legacy_validate(data)
-    try:
-        archive = tree.directory(data["root"], create=True)
-        for move in data["moves"]:
-            _application_budget()
-            if _legacy_snapshot(tree.root, move["path"]) != move["snapshot"]:
-                raise ActivationError("旧目录在预览后变化：" + move["path"])
-            parent, name = tree.parent(move["path"])
-            leaf = Path(move["archive"]).name
-            try:
-                os.stat(leaf, dir_fd=archive, follow_symlinks=False)
-            except FileNotFoundError:
-                pass
-            else:
-                raise ActivationError("旧目录归档位置发生碰撞")
-            os.rename(name, leaf, src_dir_fd=parent, dst_dir_fd=archive)
-            os.fsync(parent)
-            os.fsync(archive)
-            move["moved"] = True
-            actual = _legacy_snapshot(tree.root, move["archive"])
-            if not _legacy_same_after_move(actual, move["snapshot"]):
-                raise ActivationError("旧目录在归档时发生手改，已保留：" + move["archive"])
-            move["archived_snapshot"] = actual
-            save()
-    finally:
-        # 即使部分归档失败，后续补偿也不能沿旧 .agent-workflow 的缓存 fd 把
-        # 新薄入口写进已归档的旧核心。物理项目根与其祖先身份仍由 Tree 守卫。
-        tree.reset_after_legacy_moves()
-    os.mkdir(".agent-workflow", 0o700, dir_fd=tree.directories[""])
-    descriptor = tree.directory(".agent-workflow")
-    data["new_runtime_inode"] = list(node_id(os.fstat(descriptor)))
-    os.fsync(tree.directories[""])
-    save()
-
-
-def _legacy_restore(tree: Tree, data: dict, retained: list[dict]) -> tuple[list[dict], list[dict]]:
-    """恢复失败转换；未知新内容留原处，旧核心/Skill 归档始终保留可读。"""
-    _legacy_validate(data)
-    conflicts = []
-    for move in reversed(data["moves"]):
-        try:
-            archived = _legacy_snapshot(tree.root, move["archive"])
-        except FileNotFoundError:
-            continue  # 本轮尚未移动，或已经由上次补偿恢复；下面普通前像仍有守卫。
-        try:
-            if not _legacy_same_after_move(archived, move.get("archived_snapshot", move["snapshot"])):
-                raise ActivationError("归档旧 inode 已有后续编辑，拒绝恢复")
-            parent, name = tree.parent(move["path"])
-            try:
-                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            except FileNotFoundError:
-                current = None
-            if current is not None:
-                if move["path"] != ".agent-workflow" or not stat.S_ISDIR(current.st_mode) or list(node_id(current)) != data.get("new_runtime_inode"):
-                    raise ActivationError("旧目录原位置出现未知后续节点，保留归档")
-                # 普通补偿后，新薄目录只允许包含已登记的 rollback inode 及其父目录。
-                # 任意新增文件/空目录也视为手改，绝不为恢复旧目录而删除或移动它们。
-                snapshot = _legacy_snapshot(tree.root, move["path"])
-                allowed = {item["path"].removeprefix(".agent-workflow/") for item in retained
-                           if item["path"].startswith(".agent-workflow/")}
-                allowed_dirs = {"", "lib"}
-                for path in allowed:
-                    allowed_dirs.update(str(parent) if str(parent) != "." else "" for parent in Path(path).parents)
-                if any((row["kind"] == "file" and path not in allowed)
-                       or (row["kind"] == "directory" and path not in allowed_dirs) for path, row in snapshot.items()):
-                    raise ActivationError("新薄运行时含未知后续内容，保留双方目录")
-                failed = data["root"] + "/failed-central-runtime"
-                destination, leaf = tree.parent(failed)
-                try:
-                    os.stat(leaf, dir_fd=destination, follow_symlinks=False)
-                except FileNotFoundError:
-                    pass
-                else:
-                    raise ActivationError("失败薄运行时保留位置已存在，停止覆盖")
-                os.rename(name, leaf, src_dir_fd=parent, dst_dir_fd=destination)
-                for item in retained:
-                    if item["path"].startswith(".agent-workflow/"):
-                        item["path"] = failed + item["path"][len(".agent-workflow"):]
-                tree.reset_after_legacy_moves()
-                parent, name = tree.parent(move["path"])
-            source_parent, source_name = tree.parent(move["archive"])
-            os.rename(source_name, name, src_dir_fd=source_parent, dst_dir_fd=parent)
-            os.fsync(parent)
-            os.fsync(source_parent)
-        except (OSError, ValueError) as exc:
-            conflicts.append({"path": move["path"], "reason": str(exc)})
-    tree.reset_after_legacy_moves()
-    return conflicts, retained
-
-
 def preview(state: Path, project: Path, action: str, *, source_root: Path | None = None,
-            binding: dict | None = None, hosts: tuple | None = None,
-            migrate_legacy: bool = False) -> ActivationPlan:
+            binding: dict | None = None, hosts: tuple | None = None) -> ActivationPlan:
     """生成无写入条件预览；可预见冲突进入 summary，参数/损坏记录正常抛错。
 
-    use 仅接受已验证内容 ID；source_root 只用于 enable 的显式导入。旧自包含
-    安装默认保留并返回冲突，只有 migrate_legacy 明确声明旧任务已收尾后，才
-    纯读取原生前像并准备同盘归档转换；归档始终保留，不擅自删除旧核心。
+    use 仅接受已验证内容 ID；source_root 只用于 enable 的显式导入。
+    旧自包含残留始终只读拒绝，必须由有明确授权的安装管理任务先移除受管范围。
     """
     state, project = store.state_root(state), canonical_project(project)
     _protect_project(project, source_root)
-    if action not in ACTIONS or type(migrate_legacy) is not bool:
-        raise ActivationError("未知项目动作或旧安装迁移参数")
+    if action not in ACTIONS:
+        raise ActivationError("未知项目动作")
     if source_root is not None and (action != "enable" or binding is not None):
         raise ActivationError("来源导入仅供 enable 使用，不能同时传入 binding")
     if action in {"disable", "rollback", "repair"} and binding is not None:
@@ -425,29 +286,12 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
             return ActivationPlan(state, project, action, None, json_bytes(record["runtime_binding"]) if record else None,
                                   None, chosen_hosts, before_enabled, before_enabled, (), (), (), machine,
                                   journal_node, json_bytes(record["managed"] if record else {}), recovery=True)
-    legacy = None
-    if _legacy(project):
-        # 原 manifest 校验与 native 输入验证未完成时绝不能将中央入口叠到旧安装上。
-        # 显式声明只表示旧任务已收尾，不授予删除未知路径或迁移 notes 的权限。
-        from lib.install_workflow import InstallError, _validate_existing
-        try:
-            _validate_existing(project / ".agent-workflow")
-        except InstallError as exc:
-            raise ActivationError(str(exc)) from exc
-        if not migrate_legacy or action != "enable" or record is not None:
-            conflicts.append({"path": ".agent-workflow", "reason": "已保留经原 manifest 验证的旧自包含运行时，暂不切换；需要显式 migrate_legacy 收尾声明"})
-            return ActivationPlan(state, project, action, None, None, None, chosen_hosts, before_enabled,
-                                  before_enabled, (), (), (), machine, journal_node, json_bytes({}),
-                                  tuple(conflicts), tuple(warnings))
-        from lib.install_workflow import legacy_preflight
-        try:
-            legacy = legacy_preflight(project / ".agent-workflow", project, project / CONFIG)
-        except InstallError as exc:
-            raise ActivationError(str(exc)) from exc
-        legacy["root"] = ".agent-workflow-legacy-" + uuid.uuid4().hex
-        for index, move in enumerate(legacy["moves"]):
-            move["archive"] = legacy["root"] + ("/runtime" if index == 0 else f"/skill-{index}")
-        warnings.append("显式旧任务收尾转换：旧核心及旧 Skill 目录按原 inode 保留在项目归档中")
+    if _has_install_residue(project):
+        conflicts.append({"path": ".agent-workflow/.install-manifest.json",
+                          "reason": "发现旧自包含安装残留；保留原配置和文档，先明确移除旧受管工作流后再普通启用"})
+        return ActivationPlan(state, project, action, None, None, None, chosen_hosts, before_enabled,
+                              before_enabled, (), (), (), machine, journal_node, json_bytes({}),
+                              tuple(conflicts), tuple(warnings))
     resources = None
     selected = None
     source = None
@@ -483,18 +327,12 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
         if record:
             found, owned_links = _ownership(tree, record, state, repair=action == "repair")
             conflicts.extend(found)
-            conflicts.extend(_legacy_receipt_conflicts(project, record.get("legacy_archive")))
         config = tree.read(CONFIG)
         desired = {}
         if after_enabled and resources:
             require_skill_symlinks()
             if not conflicts:
                 desired, _ = project_files.prepare(resources, project, config, chosen_hosts, owned_links=owned_links)
-                if legacy:
-                    old_config = Node.from_value(legacy["config"])
-                    desired[CONFIG] = (Node("file", old_config.payload, old_config.mode), "persistent")
-                if (legacy and legacy["hook_shim"]) or (record and record.get("legacy_archive")):
-                    desired[".agent-workflow/lib/workflow_hooks.py"] = (Node("file", project_files.legacy_hook_source(), 0o644), "bridge")
                 names = project_files.skill_names(resources)
                 fixed_root = state / "runtimes" / selected["content_id"] / "core"
                 skill_roots = set()
@@ -510,6 +348,9 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
                 expected = Node.from_value(managed["expected"])
                 desired[relative] = ((expected if managed["purpose"] in {"bridge", "locator"}
                                       else Node.from_value(managed["baseline"])), managed["purpose"])
+            if config.kind != "file":
+                raise ActivationError("项目配置缺失，不能安全撤下当前受管 Hooks")
+            desired.update(project_files.hook_resources(project, config.payload, chosen_hosts, enabled=False))
         managed_next = dict(record["managed"]) if record else {}
         changes = []
         observed = {CONFIG: config}
@@ -517,14 +358,11 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
         for relative in all_paths:
             old = managed_next.get(relative)
             try:
-                virtual_missing = bool(legacy and (relative.startswith(".agent-workflow/")
-                                       or any(relative == move["path"] for move in legacy["moves"][1:])))
-                current = Node() if virtual_missing else tree.read(relative, skill_link=bool(skill_parts(relative)))
+                current = tree.read(relative, skill_link=bool(skill_parts(relative)))
             except (OSError, ValueError) as exc:
                 conflicts.append({"path": relative, "reason": "目标边界冲突：" + str(exc)})
                 continue
-            if not virtual_missing:
-                observed[relative] = current
+            observed[relative] = current
             if relative in desired:
                 after, purpose = desired[relative]
             else:
@@ -536,7 +374,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
             if purpose == "guard" and current.identity != after.identity:
                 conflicts.append({"path": relative, "reason": "项目原生设置在保护预览读取期间变化"})
                 continue
-            if old is None and current.kind != "missing" and purpose not in {"block", "persistent", "native-config", "guard"} and not (legacy and relative in legacy["files"]):
+            if old is None and current.kind != "missing" and purpose not in {"block", "persistent", "native-config", "guard"}:
                 conflicts.append({"path": relative, "reason": "已存在未归属本机中央记录的资源，停止覆盖"})
                 continue
             if purpose == "block":
@@ -544,7 +382,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
                     conflicts.append({"path": relative, "reason": "已有中央标记但无本机归属，停止认领"})
                     continue
                 if after_enabled:
-                    base = Node.from_value(legacy["entry_baselines"][relative]) if legacy and relative in legacy["entry_baselines"] else current
+                    base = current
                     after = Node("file", merge_central_block(base.payload, after.payload), current.mode or 0o644)
                 else:
                     baseline = Node.from_value(old["baseline"]) if old else Node()
@@ -559,14 +397,13 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
                         # 无法证明块外仍为最初内容时，只删除已归属块，保留完整外段与模式。
                         remaining = merge_central_block(current.payload, b"")
                         after = Node("file", remaining, current.mode or 0o644) if remaining else Node()
+            if purpose == "native-config" and not after_enabled and old:
+                after = project_files.restore_native(current, Node.from_value(old["baseline"]),
+                                                     Node.from_value(old["expected"]))
             if purpose == "persistent" and current.kind != "missing":
                 continue
             if purpose not in {"persistent", "guard"}:
                 baseline = current
-                if legacy and purpose == "role":
-                    baseline = Node()
-                elif legacy and relative in legacy["entry_baselines"]:
-                    baseline = Node.from_value(legacy["entry_baselines"][relative])
                 managed_next[relative] = {"purpose": purpose,
                                           "baseline": old["baseline"] if old else baseline.value(),
                                           "expected": after.value()}
@@ -578,8 +415,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
     return ActivationPlan(state, project, action, source, json_bytes(selected) if selected else None,
                           resources.label if resources else None, chosen_hosts, before_enabled, after_enabled,
                           tuple(changes), tuple(sorted(observed.items())), directories, machine,
-                          journal_node, json_bytes(managed_next), tuple(conflicts), tuple(warnings),
-                          legacy_json=json_bytes(legacy) if legacy else None)
+                          journal_node, json_bytes(managed_next), tuple(conflicts), tuple(warnings))
 
 
 def _write_private(tree: Tree, relative: str, body: bytes) -> None:
@@ -655,13 +491,13 @@ def _verify_installed_bridge(state: Path, project: Path, core: store.FrozenCore)
     真实旧/新核心 reader 对同一机器 schema 的消费，不能仅由当前进程的解析器
     代替；stdout 与清单正文逐字节比较，错误不回显项目私有载荷。
     """
-    from lib.install_workflow import _capture_legacy
+    from lib.install_workflow import capture_process
     expected = store.read_core_source(core, "product/GLOBAL_CONSTRAINTS.md")
     if len(expected) > project_files.LIMIT:
         raise ActivationError("中央公共约束超过桥接有界读取范围")
     env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state),
            "AGENT_WORKFLOW_PROJECT_ROOT": str(project), "PYTHONDONTWRITEBYTECODE": "1"}
-    result = _capture_legacy([sys.executable, "-B", "-X", "utf8", str(project / project_files.LAUNCHER),
+    result = capture_process([sys.executable, "-B", "-X", "utf8", str(project / project_files.LAUNCHER),
                               "--binding", json_bytes(core.binding()).decode(), "read", "product/GLOBAL_CONSTRAINTS.md"], env=env)
     if result.returncode or result.stdout != expected:
         raise ActivationError("所选固定核心无法消费本机项目协议，已停止启用；不回退其他版本")
@@ -774,8 +610,29 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
     """逐项补偿，不覆盖后来写入；每个被撤下的产物 inode 也保留可找回位置。"""
     retained = list(journal.get("retained_nodes", []))
     conflicts = _retained(tree, retained)
+    keep_hook_bridge = False
+    # 首次启用失败时，共享 Hook 容器可能已收到用户后续保存。普通补偿必须
+    # 保留该 inode，不能用最初整文件前像吞掉新权限/MCP/用户 Hook。若其中仍
+    # 有可验签的当前命令，同步保留无本机 binding 时只返回中性结果的薄桥，
+    # 避免恢复流程把用户保留的命令变成缺文件错误；现状仍明确标为 conflict。
+    from lib.workflow_hook_install import json_object, managed_inline, managed_json
+    shared = {".codex/hooks.json": "codex", ".claude/settings.json": "claude", ".agents/hooks.json": "antigravity"}
+    for row in journal["changes"]:
+        if row["path"] not in shared and row["path"] != ".codex/config.toml":
+            continue
+        try:
+            actual = tree.read(row["path"])
+            after = Node.from_value(row["after"])
+            if actual.kind == "file" and not actual.same_content(after):
+                owned = (managed_inline(actual.payload) if row["path"] == ".codex/config.toml"
+                         else managed_json(json_object(actual.payload), shared[row["path"]]))
+                keep_hook_bridge = keep_hook_bridge or bool(owned)
+        except (OSError, ValueError):
+            pass  # 普通逐行补偿负责报告该容器冲突，不凭解析失败扩大删除权。
     for row in reversed(journal["changes"]):
         before, after = Node.from_value(row["before"]), Node.from_value(row["after"])
+        if keep_hook_bridge and before.kind == "missing" and managed_path(row["path"], "bridge"):
+            continue
         try:
             backup = _raw(tree, row["backup"])
             if backup.kind == "missing" and not any(key in row for key in ("stage_inode", "published_inode", "installed")):
@@ -840,16 +697,6 @@ def _check_plan(plan: ActivationPlan, tree: Tree) -> None:
     previous_journal = unique_json(plan.journal_before.payload) if plan.journal_before.kind == "file" else {}
     if _retained(tree, old.get("retained_nodes", []) + previous_journal.get("retained_nodes", [])):
         raise ActivationError("保留的旧 inode 在预览后发生保存")
-    if plan.legacy_json:
-        legacy = unique_json(plan.legacy_json)
-        _legacy_validate(legacy)
-        for move in legacy["moves"]:
-            if _legacy_snapshot(plan.project, move["path"]) != move["snapshot"]:
-                raise ActivationError("旧目录在预览后发生变化：" + move["path"])
-        for relative, node in legacy["files"].items():
-            if tree.read(relative) != Node.from_value(node):
-                raise ActivationError("旧原生输入在预览后发生变化：" + relative)
-
 
 def apply(plan: ActivationPlan) -> dict:
     """应用已预览计划；返回 status 字段及 transaction_id，绝不自动运行 Agent。"""
@@ -894,9 +741,6 @@ def apply(plan: ActivationPlan) -> dict:
             if not own_generation and not current_node.same_content(binding_before):
                 raise ActivationError("机器绑定已有后续修改，拒绝用旧事务覆盖")
             conflicts, retained = _restore(tree, journal)
-            if not conflicts and journal.get("legacy"):
-                legacy_conflicts, retained = _legacy_restore(tree, journal["legacy"], retained)
-                conflicts.extend(legacy_conflicts)
             try:
                 tree.check()
             except (OSError, ValueError) as exc:
@@ -927,8 +771,6 @@ def apply(plan: ActivationPlan) -> dict:
         journal = {"schema_version": 1, "project_root": str(plan.project), "id": identifier,
                    "phase": "prepared", "action": plan.action,
                    "binding_before": plan.machine_before.value(), "changes": [], "conflicts": []}
-        if plan.legacy_json:
-            journal["legacy"] = unique_json(plan.legacy_json)
         for index, change in enumerate(plan.changes):
             parent = str(Path(change.relative).parent)
             prefix = (parent + "/") if parent != "." else ""
@@ -942,8 +784,6 @@ def apply(plan: ActivationPlan) -> dict:
             _write_private(machine_tree, _state_relative(plan.project, "transactions"), json_bytes(journal))
         save()
         try:
-            if journal.get("legacy"):
-                _legacy_apply(tree, journal["legacy"], save)
             for row in journal["changes"]:
                 _publish(tree, row, core, save)
             tree.check()
@@ -980,11 +820,6 @@ def apply(plan: ActivationPlan) -> dict:
                       "hosts": list(plan.hosts), "previous_binding": previous,
                       "used_bindings": used, "managed": managed,
                       "retained_nodes": retained, "generation": identifier}
-            legacy_archive = old.get("legacy_archive") if old else None
-            if journal.get("legacy"):
-                legacy_archive = {"root": journal["legacy"]["root"], "moves": journal["legacy"]["moves"]}
-            if legacy_archive is not None:
-                record["legacy_archive"] = legacy_archive
             # 普通项目省略可空扩展键，保持已用首版 reader 的原封闭字段集合。
             # 先发布 enabled=False 的 prepared 候选，由真实选版桥消费；若实际
             # reader 不兼容字段/入口，则回滚候选和项目，不能假报启用成功。
@@ -997,9 +832,6 @@ def apply(plan: ActivationPlan) -> dict:
             save()
         except BaseException as failure:
             conflicts, retained = _restore(tree, journal)
-            if not conflicts and journal.get("legacy"):
-                legacy_conflicts, retained = _legacy_restore(tree, journal["legacy"], retained)
-                conflicts.extend(legacy_conflicts)
             try:
                 tree.check()
             except (OSError, ValueError) as exc:
@@ -1046,7 +878,6 @@ def status(state: Path, project: Path) -> dict:
         with Tree(project) as tree:
             found, _ = _ownership(tree, record, state, repair=False)
             conflicts.extend(found)
-            conflicts.extend(_legacy_receipt_conflicts(project, record.get("legacy_archive")))
             if record["enabled"] and "claude" in record["hosts"]:
                 try:
                     config = tree.read(CONFIG)
@@ -1055,7 +886,15 @@ def status(state: Path, project: Path) -> dict:
                     project_files.claude_write_guard(project, config.payload, check_only=True)
                 except (OSError, ValueError) as exc:
                     conflicts.append({"path": ".claude/settings.json", "reason": str(exc)})
-    elif _legacy(project):
+            try:
+                config = tree.read(CONFIG)
+                if config.kind != "file":
+                    raise ActivationError("项目配置缺失，不能核验当前受管 Hooks")
+                project_files.hook_resources(project, config.payload, tuple(record["hosts"]),
+                                             enabled=record["enabled"], check_only=True)
+            except (OSError, ValueError) as exc:
+                conflicts.append({"path": "workflow_hooks", "reason": str(exc)})
+    elif _has_install_residue(project):
         phase = "legacy"
     return {"schema_version": 1, "project": str(project), "state": phase,
             "enabled": bool(record and record["enabled"] and not conflicts and phase == "enabled"),
@@ -1064,7 +903,6 @@ def status(state: Path, project: Path) -> dict:
             "hosts": list(record["hosts"]) if record else [],
             "managed_paths": sorted(record["managed"]) if record else [],
             "conflicts": conflicts,
-            "legacy_archive": record["legacy_archive"]["root"] if record and record.get("legacy_archive") else None,
             "pending_transaction": journal["id"] if journal and journal["phase"] in {"prepared", "conflict"} else None}
 
 

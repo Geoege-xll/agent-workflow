@@ -1,6 +1,6 @@
-# 辅助 Hooks：安装与边界
+# 辅助 Hooks：2.1 安装与边界
 
-这是可关闭的本地脚本辅助层，沿用2.0 Light／Full。两等级默认委派原生实施者，只有用户
+这是可关闭的本地脚本辅助层，沿用2.1 Light／Full 与 schema 2 任务合同。两等级默认委派原生实施者，只有用户
 明确让PM本身亲自实现当前范围才例外；普通“优化／开始／继续”、角色缺失或失败不授权接管。
 Light先判断风险并用当前自包含包、最小验证，交接时评估审计／文档／记忆；不强制Full规划、
 DAG、保存计划、重复确认或独立QA。Full保留适用确认、原型选择及唯一请求QA。
@@ -19,9 +19,9 @@ DAG、保存计划、重复确认或独立QA。Full保留适用确认、原型�
 | Claude Code | `.claude/settings.json` 的 hooks 字段 | 同上；Agent/Explore 派发时提醒进度询问原工作 Agent |
 | Antigravity App/CLI/IDE | `.agents/hooks.json` 中单独命名的配置 | 原生 SessionStart 在新会话启动时给出短入口提醒，不在每次模型调用重复 |
 
-AGY 接入依据为当前官方 SessionStart 合同，不再写临时去重标记或注册 PreInvocation。
-升级只迁移签名仍完整的本包旧事件，保留 enabled:false 和用户其他 Hooks；用户修改过的
-同名条目停止升级并保留。旧去重缓存不再使用，也不在安装时扫描或删除它们。
+AGY 接入依据为当前 SessionStart 合同，只生成当前事件，不注册 PreInvocation 或自动转换旧事件。
+原生 enabled:false 和用户其他 Hooks 保留；未知事件或用户修改过的同名条目会明确拒绝并保留。
+旧去重缓存不再使用，也不在安装时扫描或删除它们。
 SessionStart 只代表新会话开始，不代表新的用户轮次或压缩恢复；本包仍不根据 invocationNum、
 initialNumSteps、用户消息或 transcriptPath 猜任务/批准。各客户端逐步发布，官方未标明
 SessionStart 的最早支持版本；生成与 --check 通过不能替代目标客户端的实际事件验收。
@@ -47,9 +47,20 @@ PreToolUse allow/deny，也不修改工具参数。脚本故障返回中性结�
 
 ## 开关与所有权
 
-安装前在包内、安装后在项目 `.agent-workflow/project.yaml` 的 `workflow_hooks.mode`
-选择 `assist`（默认）或 `off`。改为 off 后运行 `bash .agent-workflow/setup_all.sh`，
-只撤下可证明属于本包的 Hook 条目，保留用户其他配置与 Hook；不兼容旧工作流格式。
+中央项目在 `.agent-workflow/project.yaml` 的 `workflow_hooks.mode` 选择 `assist`（默认）或
+`off`。改动后使用启用项目时的同一中央状态目录，先预览受管资源，再应用并只读检查：
+
+```bash
+awf-cli repair /path/to/project --dry-run
+awf-cli repair /path/to/project
+awf-cli check --project /path/to/project
+```
+
+使用自定义状态目录时，在命令前传入原来的 `--state-dir`。`off` 只撤下可证明属于本包的
+Hook 条目，保留用户其他配置与 Hook；不兼容旧工作流格式。中央项目没有本地 setup 脚本。
+源包开发模式单独使用源包根目录的 `project.yaml`，setup 脚本以源包的父目录为目标项目根，
+不按调用时的工作目录另选项目。确认该目标后，在源包根目录运行 `bash setup_all.sh`，成功后
+运行一次 `bash setup_all.sh --check`；这套入口不用于中央项目。
 临时关闭脚本提醒可在启动宿主前设置环境变量 `AGENT_WORKFLOW_HOOKS=off`。
 原生禁用开关也保留，不强制开启 Codex features.hooks、Claude disableAllHooks，或 AGY
 条目的 enabled。本包只拥有内容签名一致的条目/块；签名是覆盖保护，不是安全认证。
@@ -64,14 +75,15 @@ Claude 的 `claude_options` 是独立的可选原生能力，并非 Hook 门禁�
 仍依各自合同。安装事务复用现有配置快照，不另造权限备份或审批台账。
 
 Codex 的项目配置和精确 Hook 定义必须经过原生信任审查。CLI 可在 `/hooks` 查看；
-桌面使用原生审查入口。升级后的定义可能需要重新审查。安装器不预写信任记录、不
+桌面使用原生审查入口。定义变更后可能需要重新审查。安装器不预写信任记录、不
 使用 dangerously-bypass-hook-trust；安装成功不等于 Hook 已获信任或实际执行。
 本地命令 Hooks 不适用于 Codex 云端编排，不能将本地验收结论套用到云端。
 
 ## 验证范围
 
-`setup_all.sh --preflight` 只预检，`--check` 校验生成的受管配置与安装源一致，不能证明
-模型服从流程。测试覆盖三平台 JSON 输入输出、失败中性处理、开关、项目/会话/worktree
+中央项目的 `repair --dry-run` 只预览，`check` 只读校验当前固定核心对应的受管资源。
+源包开发模式的 `setup_all.sh --preflight` 只预检，`--check` 校验生成的受管配置与源码一致；
+这些检查均不能证明模型服从流程。测试覆盖三平台 JSON 输入输出、失败中性处理、开关、项目/会话/worktree
 隔离、重复注入抑制、用户配置保护，以及真实安装命令的回调契约。
 
 宿主实际行为仍应使用少量代表性任务验证：只读问答、改字、明确跳过流程、Full 多模块、

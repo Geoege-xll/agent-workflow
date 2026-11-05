@@ -17,7 +17,6 @@ import tomllib
 import uuid
 
 from lib.claude_instructions import read_file
-from lib.install_workflow import InstallError, _validate_existing
 from lib import role_models, runtime_store
 from .catalog import Catalog, clean, discover
 from . import runtime_service
@@ -36,7 +35,7 @@ class PreservedEdit(ValueError):
 
 
 def validate_runtime(runtime: Path, *, state: Path | None = None) -> None:
-    """只读验证实际中央绑定，旧自包含安装仍使用原有严格 manifest 校验。
+    """只读验证实际中央绑定；旧自包含残留不能冒充当前中央安装。
 
     中央 core 不位于项目目录；项目身份始终由传入的 .agent-workflow 父目录
     得到，不能从固定 core.parent 推导。无本机记录的 clone 也不能借 locator
@@ -53,8 +52,7 @@ def validate_runtime(runtime: Path, *, state: Path | None = None) -> None:
         return
     if secure_path(project, LOCATOR).exists():
         raise ValueError("中央项目缺少当前状态目录的本机绑定，请显式启用；不能继承 clone 的启用状态")
-    try:_validate_existing(runtime)
-    except InstallError as exc:raise ValueError(str(exc)) from exc
+    raise ValueError("项目尚无当前本机中央绑定；先处理旧受管残留，再普通启用")
 
 
 def ensure_source(catalog: Catalog, project: Path) -> None:
@@ -318,7 +316,7 @@ class ProjectPlan:
 
 def preview_project(state: Path, project: Path, action: str, *, enable: bool = False,
                     source_root: Path | None = None, content_id: str | None = None,
-                    hosts=None, migrate_legacy: bool = False) -> ProjectPlan:
+                    hosts=None) -> ProjectPlan:
     """只读生成 add/del/启停/版本计划；首次启用默认使用当前 SOURCE。
 
     重开已绑定项目默认沿用其精确版本；显式 source_root 才导入指定来源，
@@ -346,7 +344,7 @@ def preview_project(state: Path, project: Path, action: str, *, enable: bool = F
         if native_action == "enable" and source is None and selected is None and before["runtime_binding"] is None:
             source = SOURCE
         native = runtime_service.preview(state, project, native_action, source_root=source,
-                                         binding=selected, hosts=hosts, migrate_legacy=migrate_legacy)
+                                         binding=selected, hosts=hosts)
     return ProjectPlan(state, project, action, snapshot, registered,
                        True if action == "add" else False if action == "del" else registered, native, before)
 
@@ -519,10 +517,6 @@ def _reserve_backup_capacity(record: dict,changes,project: Path,versions_relativ
 def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog, expected: dict | None = None,
             *, state: Path | None = None) -> list[Change]:
     runtime = secure_path(project, ".agent-workflow")
-    central = project_status(state_root(state), project)["runtime_binding"] is not None
-    if not central and not (runtime/"lib/role_models.py").is_file():
-        raise ValueError("当前项目尚未安装模型配置合同，请先通过管理入口升级工作流")
-    validate_runtime(runtime, state=state)
     config_path = secure_path(project, ".agent-workflow/project.yaml")
     config = read_file(config_path)
     if config is None:
@@ -532,6 +526,9 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
     except (ValueError, UnicodeError) as exc:
         # 旧解析器的部分诊断携带不合法整行；管理入口不能把适配器中的秘密回显。
         raise ValueError("项目 role_models 配置无效，请先显式修复；未显示配置原文") from exc
+    # 先经模型合同的安全错误出口解析适配器；随后验证当前中央归属。不存在旧
+    # lib 文件探测或兼容升级分支，任意本地 helper 都不能替代本机有效绑定。
+    validate_runtime(runtime, state=state)
     changes = []
     for role, raw_value in sorted(choices.items()):
         value = validate_selection(host, raw_value, catalog)
@@ -552,10 +549,10 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
 
 
 def check(project: Path, host: str | None = None, *, state: Path | None = None) -> str:
-    """只读验证中央受管资源或旧 manifest，不运行 setup 的潜在修复路径。
+    """只读验证当前中央受管资源，不执行 setup 或安装转换。
 
     这里证明项目原生文件与固定核心一致，不能证明宿主已加载配置或运行模型。
-    旧自包含项目继续逐项验证原 manifest，未安装项目不会被查询自动补装。
+    未启用项目直接拒绝，查询不创建绑定或补装资源。
     """
     if host is not None and host not in LOCATIONS:
         raise ValueError("未知宿主")
@@ -567,17 +564,7 @@ def check(project: Path, host: str | None = None, *, state: Path | None = None) 
         binding = checked["runtime_binding"]["content_id"]
         return (f"中央项目只读校验通过；状态：{checked['state']}；固定内容 ID：{binding}；"
                 "宿主原生资源已校验，宿主运行加载尚未验证。")
-    # 复用旧安装所有者的纯 preflight，保留 manifest、原生正文、权限与 Skill
-    # 完整归属校验。该公开入口只使用受控纯 render，不执行 setup --check，
-    # 也不把“检查旧安装”当作旧任务已收尾或允许迁移的声明。
-    from lib.install_workflow import legacy_preflight
-    try:
-        legacy = legacy_preflight(project/".agent-workflow", project, project/".agent-workflow/project.yaml")
-    except InstallError as exc:
-        raise ValueError(str(exc)) from exc
-    if host is not None and host not in legacy["hosts"]:
-        raise ValueError("该宿主尚未安装旧自包含原生资源")
-    return "旧自包含运行时 manifest、原生角色与 Skill 只读归属校验通过；宿主运行加载尚未验证。"
+    raise ValueError("项目尚无本机中央绑定；旧安装仅作残留诊断，不执行兼容检查或升级")
 
 
 def _backup_path(state: Path, project: Path) -> Path:
@@ -772,27 +759,3 @@ def prepare_restore(state: Path, project: Path, identifier: str) -> RestorePlan:
             raise ValueError("备份内容指纹不一致")
         changes.append(Change(relative,raw,restored,row["mode"]))
     return RestorePlan(project,tuple(changes),tuple(dict(row) for row in record["previous_files"]))
-
-
-def install_preview(project: Path, *, state: Path | None = None, source_root: Path | None = None) -> str:
-    """兼容旧 TUI 的文本预览；新交互应保留 preview_project 返回的条件计划。"""
-    plan = preview_project(state_root(state), project, "enable", source_root=source_root or SOURCE)
-    summary = plan.summary
-    binding = summary["runtime"]["runtime_binding"]
-    conflicts = "\n".join(f"冲突：{clean(row['path'])}；{clean(row['reason'])}" for row in summary["conflicts"])
-    return (f"项目：{project}\n操作：启用当前来源的固定中央核心\n"
-            f"固定内容 ID：{binding['content_id'] if binding else '无可应用版本'}\n"
-            f"状态目录：{plan.state}\n受管变更：{len(summary['changes'])} 项\n"
-            "项目仅保留配置、原生入口与薄桥；Skill 链接到不可变中央核心。\n"
-            "同步事务开始后等待结算，取消不会强杀或伪报已经撤回。" + ("\n"+conflicts if conflicts else ""))
-
-
-def install(project: Path, cancel=None, *, state: Path | None = None, source_root: Path | None = None) -> str:
-    """保留既有调用位置参数，把安装调用方接到同一中央启用业务服务。"""
-    if cancel is not None and cancel.is_set():
-        raise ValueError("安装已取消，尚未生成或应用计划")
-    plan = preview_project(state_root(state), project, "enable", source_root=source_root or SOURCE)
-    result = apply_project(plan, cancel=cancel)
-    return (f"中央启用已结算；项目：{result['project']}；状态：{result['state']}；"
-            f"固定内容 ID：{result['runtime_binding']['content_id']}。" +
-            ("取消请求到达时事务已开始，已等待其完整结算。" if result["cancel_requested"] else ""))

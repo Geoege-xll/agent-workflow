@@ -172,8 +172,8 @@ def validate_docs(lines: list[str], root: Path, errors: list[str]) -> dict[str, 
             continue
         seen.add(key)
         if key not in DOC_KEYS:
-            # 旧目录仅由显式单次迁移解释；运行时拒绝别名，防止安装继续产生杂记入口。
-            hint = ("; use migrate_project_docs.py with an explicit mapping before reinstalling"
+            # 废弃配置始终拒绝；当前运行时不解释历史别名或自动移动项目文档。
+            hint = ("; deprecated document configuration must be explicitly removed while preserving project documents"
                     if key in {"features", "notes"} else "")
             errors.append(f"unsupported docs key: {key}{hint}")
             continue
@@ -494,7 +494,7 @@ def validate_with_profile(
             continue
         seen_memory_keys.add(key)
         if key not in MEMORY_KEYS:
-            hint = ("; use migrate_project_docs.py with an explicit notes mapping before reinstalling"
+            hint = ("; deprecated memory configuration must be explicitly removed while preserving project documents"
                     if key == "fallback_dir" else "")
             errors.append(f"unsupported memory key: {key}{hint}")
             continue

@@ -697,7 +697,7 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         if target in standard_inputs:
             actual = None if before.kind == "missing" else current_body
             if actual != standard_inputs[target]:
-                raise ApplyError(f"managed document changed after migration planning: {target}")
+                raise ApplyError(f"managed document changed after document planning: {target}")
         # 规范计划已经证明归属；其他非空文档仍按原合同保留，不因升级被接管。
         if current_body and target not in standard_updates:
             body = current_body
@@ -1139,7 +1139,7 @@ def apply_plan(plan: Plan) -> None:
 def publish_document_changes(project: Path, updates: dict[Path, bytes | None],
                              expected_inputs: dict[Path, bytes | None], validate_after,
                              *, desired_modes: dict[Path, int] | None = None) -> None:
-    """显式文档迁移复用现有文档事务，不建立另一套文件发布／回滚原语。
+    """受控文档发布复用现有事务，不建立另一套文件发布／回滚原语。
 
     调用方持有项目安装锁并提供规划时原字节；这里沿用单链接检查、条件发布、
     精确备份及并发内容保全。同步失败回滚，跨文件断电原子性不在既有保证范围内。
@@ -1149,7 +1149,7 @@ def publish_document_changes(project: Path, updates: dict[Path, bytes | None],
     backup_root = _require_real_directory(project, "document transaction backup root")
     for path, body in updates.items():
         if not path.is_relative_to(project) or read_file(path) != expected_inputs[path]:
-            raise ApplyError(f"document migration input changed: {path}")
+            raise ApplyError(f"document input changed: {path}")
         before = _fingerprint(path)
         if before.kind == "file":
             # 严格规范目录只能包含合法叶文档，验收期间的原件备份统一留在项目根。

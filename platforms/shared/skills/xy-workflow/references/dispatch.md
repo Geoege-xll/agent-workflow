@@ -58,8 +58,8 @@ dispatch, not a new business gate, QA stage or full test run; Hooks never auto-i
 ### Central projects: use the current task pin on every call
 
 This section is the execution boundary shared by all Skills/roles. A central project with
-`.agent-workflow/runtime.json` must not directly execute `.agent-workflow/lib/<helper>.py` from the old
-self-contained examples below, or select the current core through host-discovery symlinks. A new workflow,
+`.agent-workflow/runtime.json` must not directly execute `.agent-workflow/lib/<helper>.py` from source-pack
+examples below, or select the current core through host-discovery symlinks. A new workflow,
 including Light without an init step, first checks machine-local enablement:
 
 ```bash
@@ -102,11 +102,12 @@ old versions under this project's `used_bindings`; disabling prevents new tasks.
 roots and unknown/corrupt versions fail immediately, without latest-version fallback. This defines only the
 invocation contract; it does not prove host loading or Agent execution.
 
-### Source pack and old self-contained installations
+### Source-pack development
 
-Source packs/old installations without a central marker/bridge context retain the Python entries below
-and existing unpinned contract. Other old-path examples in this reference belong to this branch. Central
-projects always replace them with pinned-core bridge calls under the preceding section.
+Source-pack development without a central marker/bridge context uses the Python entries below
+and the existing unpinned source contract. Resolve these examples against the actual source-pack root;
+central projects always use pinned-core bridge calls under the preceding section. Version 2.1 does not
+provide a compatibility execution or upgrade branch for old self-contained installations.
 
 - Reuse the existing [record tools](runtime-records.md) for common snapshot updates, Task Pack
   export and selected fingerprint checks. Prefer existing project verification commands for behavior.
@@ -147,28 +148,12 @@ projects always replace them with pinned-core bridge calls under the preceding s
   to rediscover a working interpreter. Diagnose the script only when evidence points to it. Missing
   support is a reported environment limitation, not permission to install Python or alter global PATH.
 
-On a Windows project installed through npx, use the native Node helper from PowerShell or cmd
-instead of assuming `bash` or Python is on PATH:
-
-```powershell
-node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/project_profile_cli.py check-roles codex .agent-workflow .
-```
-
-For other workflow Python examples, replace only `bash .agent-workflow/lib/python_runtime.sh` with
-`node .agent-workflow/lib/python_runtime.cjs` and preserve the arguments. For inline Python, pass
-`-` and supply source on stdin using the current shell's syntax; Bash here-doc syntax is not
-PowerShell syntax. This helper reads the installed persistent runtime record, not npx's cache,
-and retains the caller's cwd and explicit interpreter constraint. Do not infer that arbitrary
-Bash commands become PowerShell commands; required host setup/check still runs through the
-verified Git for Windows executable, without adding it to global PATH. When a refresh is required,
-use the installed helper below for the current host, then run the same command with `--check` once:
-
-```powershell
-node .agent-workflow/lib/python_runtime.cjs .agent-workflow/lib/platform_process.py --host codex
-```
-
-Use `claude` or `antigravity` for that host. This invokes the existing host setup, not npx init,
-a new installation workflow, or an automatic refresh at every task.
+The local Windows npx 2.1 preparation shares the central installation service. Its current filesystem
+backend rejects managed Skill symlink publication before project resources or central state are created;
+it has no accepted installed-project helper path. Do not revive old self-contained Node/helper examples
+or copy a runtime into the project to bypass that boundary. Human-facing local packaging and native
+verification notes are in the standalone source repository's `docs/windows.md`; that document is not
+shipped in the pinned core. Simulated checks do not prove Windows support.
 
 These are command-execution boundaries within existing steps, not additional workflow gates.
 

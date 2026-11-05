@@ -1,4 +1,4 @@
-# Standardized Subagent Role Schema 2.0 (xy Team)
+# Standardized Subagent Role Schema 2 (xy Team)
 
 This schema adapts the [agency-agents](https://github.com/msitarzewski/agency-agents) model of
 "narrow specialization + deliverables + workflow + success criteria" to this pack's
@@ -117,11 +117,11 @@ invent SLOs, coverage targets, architecture migrations, or technology upgrades.
 
 ## 4. Relationship to Orchestration (Already Provided by This Pack)
 
-2.0 accepts only Light/Full and schema_version:2. Both levels default to native implementers; a PM exception must cover the current scope explicitly named by the user. Light hands off the current self-contained single-task pack and minimum verification, without mandatory DAGs, Full planning, or QA; assess independent audit and documentation by actual risk. Full retains approved planning, request scheduling, and exactly one independent QA. No current pack carries complete PM or sibling conversation history.
+The current workflow accepts only Light/Full and schema_version:2. Both levels default to native implementers; a PM exception must cover the current scope explicitly named by the user. Light hands off the current self-contained single-task pack and minimum verification, without mandatory DAGs, Full planning, or QA; assess independent audit and documentation by actual risk. Full retains approved planning, request scheduling, and exactly one independent QA. No current pack carries complete PM or sibling conversation history.
 
 ### Scheduling Fields (Machine-Readable Task-Pack Contract)
 
-Every 2.0 task carries the identity/context fields below. Dependency and graph-scheduling fields apply to Full; Light retains current task.state without creating a DAG for dispatch:
+Every schema 2 task carries the identity/context fields below. Dependency and graph-scheduling fields apply to Full; Light retains current task.state without creating a DAG for dispatch:
 
 ```yaml
 id: <stable-id>

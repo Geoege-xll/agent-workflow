@@ -29,7 +29,6 @@ from unittest.mock import patch
 from lib import role_models
 from lib import install_workflow
 from lib.install_process import SetupRunner, SetupRunError
-from lib.install_workflow import _managed_files
 from manager.catalog import Catalog, Model, discover
 from manager.codex_models import NativeModel, NativeModels
 from manager.claude_execution import effective_role
@@ -65,15 +64,46 @@ def deep_json_source(home: Path, host: str) -> bool:
 
 
 class TemporaryProject(unittest.TestCase):
+    central_fixture = False
+
+    @classmethod
+    def setUpClass(cls):
+        if cls.central_fixture:
+            from lib import runtime_store
+            cls.central_temp = tempfile.TemporaryDirectory(prefix="model-current-central-")
+            root = Path(cls.central_temp.name).resolve()
+            source = CentralCliIntegrationTest.create_source(root)
+            cls.central_state = root / "state"
+            cls.central_core = runtime_store.import_core(source, cls.central_state)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.central_fixture:
+            cls.central_temp.cleanup()
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix="workflow-manager-test-")
         self.root=Path(self.temp.name).resolve();self.project=self.root/"项目 A";self.project.mkdir()
         self.state=self.root/"state"
         self.write(".agent-workflow/project.yaml","project_name: test\nworkspace: auto\n")
         self.write(".agent-workflow/lib/role_models.py","# fixture\n")
-        runtime=self.project/".agent-workflow"
-        self.write(".agent-workflow/.install-manifest.json",json.dumps({"schema_version":1,"managed_files":_managed_files(runtime)}))
         self.write(".codex/agents/xy-backend.toml",codex_agent())
+        if self.central_fixture:
+            from lib.runtime_project import Node, project_key, json_bytes
+            self.state = self.central_state
+            self.write(".agent-workflow/project.yaml", "project_name: test\nworkflow_hooks:\n  mode: off\n")
+            role = self.project / ".codex/agents/xy-backend.toml"
+            info = self.project.stat()
+            # 单元事务使用当前机器记录合同及唯一共享最小核心；不重建旧 manifest。
+            record = {"schema_version": 1, "project_root": str(self.project),
+                      "project_identity": [info.st_dev, info.st_ino], "runtime_binding": self.central_core.binding(),
+                      "enabled": True, "hosts": ["codex"], "previous_binding": None,
+                      "used_bindings": [self.central_core.binding()], "retained_nodes": [], "generation": "1" * 32,
+                      "managed": {".codex/agents/xy-backend.toml": {"purpose": "role", "baseline": Node().value(),
+                                   "expected": Node("file", role.read_bytes(), 0o644).value()}}}
+            target = self.state / "bindings" / (project_key(self.project) + ".json")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(json_bytes(record)); target.chmod(0o600)
         self.catalog=Catalog("codex",[Model("inherit","继承","fixture",("high","max")),Model("local-model","本地模型","fixture",("high","max"))])
         self.value={"model":"local-model","effort":"max"}
 
@@ -787,11 +817,12 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
 
 
 class TransactionTest(TemporaryProject):
+    central_fixture = True
     def test_invalid_model_config_does_not_echo_adapter_secrets(self):
         self.write('.agent-workflow/project.yaml','project_name: test\nrole_models:\n  PRIVATE-ADAPTER-SECRET\n')
         with self.assertRaisesRegex(ValueError,'未显示配置原文') as raised:
             self.prepare()
-        self.assertNotIn('PRIVATE-ADAPTER-SECRET',str(raised.exception));self.assertFalse(self.state.exists())
+        self.assertNotIn('PRIVATE-ADAPTER-SECRET',str(raised.exception));self.assertEqual([],service.backups(self.state,self.project))
 
     def test_deep_json_source_keeps_all_project_and_host_drafts(self):
         home=self.root/'home';rejected=deep_json_source(home,'codex')
@@ -809,7 +840,7 @@ class TransactionTest(TemporaryProject):
             if rejected:self.assertIn('模型来源读取失败',app.text)
             self.assertNotIn('DEEP-SOURCE-SECRET',app.text)
             self.assertEqual(app.drafts,drafts);self.assertEqual(app.expected,expected);self.assertEqual(app.source_stamps,stamps)
-        self.assertFalse(self.state.exists())
+        self.assertEqual([],service.backups(self.state,self.project))
 
     def test_tui_restore_confirmation_keeps_original_version_guard(self):
         """实际走 TUI 的恢复确认回调，防止容器转换把 RestorePlan 的保护丢掉。"""
@@ -864,10 +895,10 @@ class TransactionTest(TemporaryProject):
         changes=self.prepare();initial=service._record_payload
         sizes=[]
         def observe(record):sizes.append((len(json.dumps(record,ensure_ascii=False,indent=2).encode())+1,bool(record.get('previous_files'))));return initial(record)
-        with patch('manager.service._record_payload',side_effect=observe):service.commit(self.state,self.project,changes)
+        with patch('manager.service._record_payload',side_effect=observe):identifier=service.commit(self.state,self.project,changes)
         base=next(size for size,versions in sizes if not versions)
-        # 重置到应用前状态，用略高于初始快照的预算验证容量预留，而非制作大量临时脚本。
-        for row in changes:(self.project/row.relative).write_bytes(row.before)
+        # 通过当前正式恢复同步原生 expected 收据；手写旧字节会被中央归属正确拒绝。
+        service.commit(self.state,self.project,service.prepare_restore(self.state,self.project,identifier))
         count=len(service.backups(self.state,self.project));directories=list(self.project.glob('.agent-workflow-backup-models-*'))
         with patch.object(service,'MAX_RECORD_BYTES',base+100),self.assertRaisesRegex(ValueError,'有界读取'):
             service.commit(self.state,self.project,changes)
@@ -963,11 +994,8 @@ class TransactionTest(TemporaryProject):
         for row in changes:self.assertEqual((self.project/row.relative).read_bytes(),row.before)
         self.assertEqual(service.backups(self.state,self.project),[])
 
-    def test_bad_manifest_and_role_directory_stay_inside_ui_error_boundary(self):
+    def test_role_directory_stays_inside_ui_error_boundary(self):
         app=App(self.state,self.root,self.project)
-        self.write('.agent-workflow/.install-manifest.json','[]')
-        app.dispatch('g');app.dispatch('enter')
-        self.assertEqual(app.modal,'manage');self.assertIn('安装记录',app.toast)
         outside=self.root/'outside';outside.mkdir()
         role=self.project/'.codex/agents';role.rename(self.project/'.codex/original');role.symlink_to(outside,target_is_directory=True)
         app.roles_cache.clear();self.assertEqual(app.role_list(),[])
@@ -1000,16 +1028,16 @@ class TransactionTest(TemporaryProject):
 
     def test_confirmation_views_scroll_without_applying(self):
         app=App(self.state,self.root,self.project)
-        for modal in ('preview','install','restore'):
+        for modal in ('preview','restore'):
             with self.subTest(modal=modal):
                 app.modal=modal;app.scroll=0;app.page_lines=6
                 app.dispatch('down');self.assertEqual(app.scroll,1)
                 app.dispatch('pagedown');self.assertEqual(app.scroll,7)
                 app.dispatch('pageup');self.assertEqual(app.scroll,1)
                 app.dispatch('up');self.assertEqual(app.scroll,0)
-        self.assertFalse(self.state.exists())
+        self.assertEqual([],service.backups(self.state,self.project))
     def test_preview_is_read_only_then_apply_and_restore_exact_bytes(self):
-        changes=self.prepare();self.assertFalse(self.state.exists())
+        changes=self.prepare();self.assertEqual([],service.backups(self.state,self.project))
         identifier=service.commit(self.state,self.project,changes)
         self.assertEqual(service.role_settings(self.project,'codex','xy-backend'),self.value)
         restore=service.prepare_restore(self.state,self.project,identifier)
@@ -1108,7 +1136,7 @@ class TransactionTest(TemporaryProject):
     def test_project_registry_is_deduplicated_and_does_not_touch_project(self):
         # 本例只验证登记语义，使用未安装目录；旧自包含安装的删除另受原生迁移边界约束。
         self.project=self.root/'仅登记项目';self.project.mkdir()
-        self.assertEqual(service.projects(self.state),[]);self.assertFalse(self.state.exists())
+        self.assertEqual(service.projects(self.state),[]);self.assertEqual([],service.backups(self.state,self.project))
         service.register(self.state,self.project);service.register(self.state,self.project)
         self.assertEqual(service.projects(self.state),[self.project])
         service.register(self.state,self.project,True);self.assertEqual(service.projects(self.state),[])
@@ -1132,7 +1160,7 @@ class TransactionTest(TemporaryProject):
         app.dispatch('enter')
         self.write('.codex/agents/xy-backend.toml',codex_agent(effort='medium'))
         app.dispatch('down');app.dispatch('enter');app.dispatch('down');app.dispatch('down');app.dispatch('enter');app.dispatch('s')
-        self.assertIn('编辑期间',app.toast);self.assertIsNone(app.modal)
+        self.assertIn('冲突',app.toast);self.assertIsNone(app.modal)
 
     def test_unicode_cells_are_bounded(self):
         self.assertEqual(cell_width('中文A'),5);self.assertEqual(clip('中文A',4),'中文')
@@ -1246,8 +1274,8 @@ class InstalledProjectIntegrationTest(unittest.TestCase):
             service.commit(state,project,service.prepare_restore(state,project,identifier),lambda:service.check(project,'codex',state=state))
             (source/'product/WORKFLOW.md').write_text('# 新固定版本\n',encoding='utf-8')
             environment={**os.environ,'HOME':str(root/'home'),'AGENT_WORKFLOW_PYTHON':sys.executable}
-            result=subprocess.run(['bash',str(PACK/'workflow.sh'),'--state-dir',str(state),'install','--project',str(project),
-                                   '--source',str(source),'--apply'],env=environment,capture_output=True,text=True,timeout=30)
+            result=subprocess.run(['bash',str(PACK/'workflow.sh'),'--state-dir',str(state),'open',str(project),
+                                   '--source',str(source)],env=environment,capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout[-3500:]+result.stderr[-3500:])
             self.assertEqual(service.role_settings(project,'codex','xy-backend')['effort'],'max')
             self.assertEqual(service.role_settings(project,'claude','xy-backend')['model'],'fixture/model')
@@ -1259,55 +1287,10 @@ class InstallerBoundaryTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='workflow-installer-boundary-')
         self.root=Path(self.temp.name).resolve();self.project=self.root/'project';self.project.mkdir()
-        self.source=self.root/'source';self.source.mkdir();self.version='old';self.late=self.root/'late-write'
-        child=f'import time;from pathlib import Path;time.sleep(.6);Path({str(self.late)!r}).write_text("late")'
-        self.script=('set -eu\n'
-            'if [[ "${1:-}" == "--preflight" || "${1:-}" == "--check" ]]; then exit 0; fi\n'
-            'version=$(cat "$(dirname "$0")/version.txt")\nprintf "%s" "$version" > AGENTS.md\n'
-            f'if [[ "$version" == "new" ]]; then {shlex.quote(os.sys.executable)} -c {shlex.quote(child)} &\n sleep 30\nfi\n')
+        self.late=self.root/'late-write'
 
     def tearDown(self):self.temp.cleanup()
 
-    def copy(self,source,stage):
-        (stage/'project.yaml').write_text((PACK/'project.yaml').read_text().replace('MyProject','Fixture'))
-        # 本类只替换可控的进程脚本；规范迁移预检仍使用真实当前角色和内置规则。
-        # 缺少这些资源会在注入超时/中断前退出，无法证明子进程取消和目录回滚边界。
-        for relative in ('roles', 'platforms/shared/skills/xy-code-standards',
-                         'platforms/shared/skills/xy-ui-design', 'templates/docs'):
-            shutil.copytree(PACK/relative, stage/relative)
-        (stage/'version.txt').write_text(self.version)
-        (stage/'setup_all.sh').write_text(self.script)
-
-    def hooks(self,runtime,project,host,**kwargs):return project/f'.{host}-settings.json',None,b'{}'
-
-    def install(self,**kwargs):
-        with patch.object(install_workflow,'_copy_runtime',self.copy),patch.object(install_workflow,'plan_hooks',self.hooks),redirect_stdout(io.StringIO()):
-            install_workflow._install(self.project,self.source,**kwargs)
-
-    def test_timeout_waits_for_descendants_and_restores_old_runtime(self):
-        self.install();self.version='new';before_handler=signal.getsignal(signal.SIGINT)
-        with service.lock(self.root/'state',str(self.project)):
-            with self.assertRaisesRegex(install_workflow.InstallError,'超时'):self.install(timeout=.25)
-        self.assertEqual((self.project/'.agent-workflow/version.txt').read_text(),'old')
-        self.assertEqual((self.project/'AGENTS.md').read_text(),'old')
-        self.assertEqual(signal.getsignal(signal.SIGINT),before_handler)
-        time.sleep(.65);self.assertFalse(self.late.exists())
-        with service.lock(self.root/'state',str(self.project)):pass
-
-    def test_interrupt_after_either_replace_restores_runtime(self):
-        self.install();self.version='new';original=os.replace
-        for phase in ('backup','publish'):
-            fired=[]
-            def interrupt(source,target,*args,**kwargs):
-                result=original(source,target,*args,**kwargs)
-                matching=(Path(source) == self.project/'.agent-workflow' if phase == 'backup'
-                          else Path(source).name.startswith('.agent-workflow-stage-') and Path(target) == self.project/'.agent-workflow')
-                if matching and not fired:fired.append(True);raise KeyboardInterrupt()
-                return result
-            with self.subTest(phase=phase),patch('lib.install_workflow.os.replace',side_effect=interrupt):
-                with self.assertRaises(install_workflow.InstallError):self.install()
-            self.assertTrue(fired);self.assertEqual((self.project/'.agent-workflow/version.txt').read_text(),'old')
-            self.assertEqual((self.project/'AGENTS.md').read_text(),'old')
 
     def test_runner_cancel_stops_real_child_group(self):
         original=subprocess.Popen.wait;interrupted=[]
@@ -1347,7 +1330,8 @@ class CentralCliIntegrationTest(unittest.TestCase):
         selected=("lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py",
                   "lib/runtime_pins.py","lib/standard_paths.py","lib/claude_instructions.py","lib/context_read.py",
                   "lib/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/claude_options.py",
-                  "lib/validate_antigravity_artifacts.py","manager/runtime_service.py","manager/__init__.py",
+                  "lib/validate_antigravity_artifacts.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
+                  "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py","manager/runtime_service.py","manager/__init__.py",
                   "templates/project.yaml.example","templates/docs/PROJECT.md","platforms/shared/core-skills.txt")
         for relative in selected:cls.put(source,relative,(PACK/relative).read_bytes())
         for role in role_models.ROLES:cls.put(source,f"roles/{role}.md",(PACK/f"roles/{role}.md").read_bytes())
@@ -1412,10 +1396,13 @@ class CentralCliIntegrationTest(unittest.TestCase):
         self.assertEqual(status["state"],"unmanaged");self.assertFalse((self.project/".agent-workflow").exists())
         listed=self.cli("list")["result"]
         self.assertTrue(any(row["project"] == str(self.project) and row["registered"] for row in listed))
-        legacy=json.loads(self.cli("projects","list",json_mode=False));self.assertIn(str(self.project),legacy)
+        current=self.cli("list")["result"];self.assertIn(str(self.project),[row["project"] for row in current])
+        for arguments in (("projects", "list"), ("install", "--project", self.project),
+                          ("open", self.project, "--migrate-legacy")):
+            self.cli(*arguments, expected=2)
         unknown=self.cli("status","unknown-project",expected=2)
         self.assertEqual(unknown["error"]["code"],"project_resolution");self.assertIn(str(self.project),unknown["error"]["candidates"])
-        alias=self.root/"nested"/self.project.name;alias.mkdir(parents=True);self.cli("projects","add",alias)
+        alias=self.root/"nested"/self.project.name;alias.mkdir(parents=True);self.cli("add",alias)
         repeated=self.cli("del",self.project.name,expected=2)
         self.assertEqual(repeated["error"]["code"],"project_resolution");self.assertIn(str(alias),repeated["error"]["candidates"])
         refused=self.cli("status","--private-secret-do-not-echo",expected=2)
@@ -1536,24 +1523,6 @@ class CentralCliIntegrationTest(unittest.TestCase):
             code=cli_main(["--state-dir",str(self.state),"--json","list"])
         self.assertEqual(code,130);self.assertEqual(json.loads(output.getvalue())["error"]["code"],"cancelled");self.assertEqual(error.getvalue(),"")
 
-    def test_old_install_explicit_apply_and_read_only_service_check(self):
-        arguments=("install","--project",self.project,"--source",self.source)
-        preview=self.cli(*arguments)
-        self.assertTrue(preview["dry_run"]);self.assertFalse((self.project/".agent-workflow").exists())
-        installed=self.cli(*arguments,"--apply")["result"]
-        self.assertTrue(installed["enabled"]);self.assertTrue(installed["registered"])
-        # 新发布条件先由候选固定桥读取公共约束，再发布 enabled；这里同时消费
-        # 真正冻结 core 的新任务检查，不能只证明当前源码里的 status 能解析记录。
-        self.assertEqual(json.loads(self.bridge("check").stdout)["runtime_binding"],self.second.binding())
-        before={path.relative_to(self.project):path.lstat().st_mtime_ns for path in self.project.rglob("*")}
-        with patch("subprocess.run",side_effect=AssertionError("只读检查不应启动setup或宿主")):
-            diagnostic=service.check(self.project,state=self.state)
-            service.install_preview(self.project,state=self.state,source_root=self.source)
-        self.assertIn(self.second.content_id,diagnostic)
-        self.assertEqual(before,{path.relative_to(self.project):path.lstat().st_mtime_ns for path in self.project.rglob("*")})
-        cancelled=Event();cancelled.set()
-        with self.assertRaisesRegex(ValueError,"已取消"):
-            service.install(self.project,cancelled,state=self.state,source_root=self.source)
 
     def test_delete_preserves_registry_edits_after_native_disable(self):
         self.enable();plan=service.preview_project(self.state,self.project,"del")
@@ -1585,7 +1554,7 @@ class CliLauncherTest(TemporaryProject):
         result=subprocess.run([str(directory/'awf-cli'),'--state-dir',str(self.state),'--version'],
                               cwd=self.root,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(result.stdout.splitlines(),['awf-cli 源码未打包',f'中央源根：{PACK}'])
+        self.assertEqual(result.stdout.splitlines(),['awf-cli 2.1.0（源码未打包）',f'中央源根：{PACK}'])
         self.assertFalse((PACK/'manager/release.json').exists());self.assertFalse(self.state.exists())
 
     def test_cdpath_does_not_redirect_relative_links_or_pollute_source_directory(self):
@@ -1615,7 +1584,7 @@ class CliLauncherTest(TemporaryProject):
                            '\nexec '+shlex.quote(os.sys.executable)+' "$@"\n');wrapper.chmod(0o755)
         env={**os.environ,'CDPATH':'.:kept-relative','AGENT_WORKFLOW_PYTHON':str(wrapper),
              'PATH':str(directory)+os.pathsep+os.environ['PATH']}
-        result=subprocess.run(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root),'projects','add',self.project.name],
+        result=subprocess.run(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root),'--json','add',self.project.name],
                               cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr);self.assertIn(str(self.project),json.loads(result.stdout))
         # 一次版本探测、一次模块执行；两个子进程的环境均应保留原值。
@@ -1694,7 +1663,7 @@ class CliLauncherTest(TemporaryProject):
         target=directory/'awf-cli';self.assertEqual(target.resolve(),PACK/'workflow.sh');inode=target.lstat().st_ino
         result=subprocess.run(['awf-cli','--help'],cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr);self.assertIn('usage: awf-cli',result.stdout)
-        result=subprocess.run(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root),'projects','add',self.project.name],
+        result=subprocess.run(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root),'--json','add',self.project.name],
                               cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr);self.assertIn(str(self.project),json.loads(result.stdout))
         result=subprocess.run(['awf-cli','--install-cli','--bin-dir',directory.name],cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
@@ -1748,7 +1717,7 @@ class TerminalAndCliTest(TemporaryProject):
                 paused.append(True);ready.set()
                 if not finish.wait(5):raise AssertionError('测试未释放同步中央事务')
             return result
-        app=App(self.state,self.root,self.project);app.modal='install'
+        app=App(self.state,self.root,self.project);app.modal='manage'
         app.drafts[app.scope()]={'model':'inherit','effort':'inherit'}
         locked_during_settlement=[];painted=[];deadline=time.monotonic()+15
         class Screen:
@@ -1757,7 +1726,9 @@ class TerminalAndCliTest(TemporaryProject):
             def getmaxyx(self):return 30,100
             def get_wch(screen):
                 if time.monotonic()>deadline:raise AssertionError('取消测试超时')
-                if app.modal in {'install','project_plan'} and not app.future:
+                if app.modal == 'manage' and not app.future:
+                    app.manage_action('install');return -1
+                if app.modal == 'project_plan' and not app.future:
                     app.confirm();return -1
                 if ready.is_set() and not app.cancel_job.is_set():raise KeyboardInterrupt()
                 if ready.is_set() and app.cancel_job.is_set() and not finish.is_set():
@@ -1777,10 +1748,10 @@ class TerminalAndCliTest(TemporaryProject):
         with directory_lock(self.project,'install'):pass
 
     def test_launcher_preserves_relative_project_paths(self):
-        command=['bash',str(PACK/'workflow.sh'),'--state-dir',str(self.state),'--scan-root',str(self.root),'projects','add',self.project.name]
+        command=['bash',str(PACK/'workflow.sh'),'--state-dir',str(self.state),'--scan-root',str(self.root),'--json','add',self.project.name]
         result=subprocess.run(command,cwd=self.root,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertIn(str(self.project),json.loads(result.stdout))
+        self.assertEqual(str(self.project),json.loads(result.stdout)['result']['project'])
 
     def test_real_terminal_keyboard_and_resize_smoke(self):
         import fcntl
