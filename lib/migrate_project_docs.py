@@ -17,7 +17,7 @@ import sys
 from urllib.parse import quote, urlsplit
 
 from claude_instructions import read_file
-from platform_fs import project_install_lock
+from platform_fs import os as secure_os, project_install_lock
 from plan_documents import LINK, SECTIONS, collect_plans, local_target, parse_plan, scalar
 from validate_project_config import validate_docs
 from validate_project_docs import parse_docs, validate
@@ -179,6 +179,33 @@ def legacy_files(directory: Path) -> set[Path]:
     return result
 
 
+def navigation_metadata(root: Path, destination: Path) -> None:
+    """媒体/目录只检查项目内安全节点，不读取正文、套用文本限额或搬移资源。
+
+    路径已由 local_target 归一并限制在项目内；再逐级以 no-follow 目录句柄定位，
+    末节点只 stat。复用平台文件系统后端以拒绝符号链接/reparse、硬链接和特殊节点，
+    不能为允许普通二进制导航而读取 FIFO、媒体内容或跟随危险祖先。
+    """
+    parts = destination.relative_to(root).parts
+    flags = (secure_os.O_RDONLY | secure_os.O_DIRECTORY | secure_os.O_NOFOLLOW
+             | getattr(secure_os, "O_CLOEXEC", 0))
+    descriptor = secure_os.open(root, flags)
+    try:
+        for component in parts[:-1]:
+            child = secure_os.open(component, flags, dir_fd=descriptor)
+            secure_os.close(descriptor)
+            descriptor = child
+        try:
+            info = (secure_os.stat(parts[-1], dir_fd=descriptor, follow_symlinks=False)
+                    if parts else secure_os.fstat(descriptor))
+        except FileNotFoundError as exc:
+            raise ValueError(f"迁移链接目标不存在：{destination}") from exc
+        if not (stat.S_ISDIR(info.st_mode) or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)):
+            raise ValueError(f"迁移导航目标须为真实目录或单链接普通文件：{destination}")
+    finally:
+        secure_os.close(descriptor)
+
+
 def rewrite_links(body: str, root: Path, source: Path, target: Path,
                   mapping: dict[Path, Path], *, only_mapped: bool = False) -> str:
     """仅重定位普通 Markdown 链接，正文原样保留；不丢弃标题、批准或历史。
@@ -198,12 +225,22 @@ def rewrite_links(body: str, root: Path, source: Path, target: Path,
             return match.group()
         if only_mapped and destination not in mapping:
             return match.group()
-        data = read_file(destination)
-        if data is None:
-            raise ValueError(f"迁移链接目标不存在：{source}: {raw}")
+        # Markdown 属于可解析原稿，仍保留共用 UTF-8、单链接及文本大小限制；
+        # 普通媒体和真实目录只是导航目标，安全元数据足够，不能把资源正文当文本读。
+        if destination.suffix == ".md":
+            if read_file(destination) is None:
+                raise ValueError(f"迁移链接目标不存在：{source}: {raw}")
+        else:
+            navigation_metadata(root, destination)
         destination = mapping.get(destination, destination)
-        suffix = "#" + urlsplit(raw).fragment if urlsplit(raw).fragment else ""
-        href = quote(Path(os.path.relpath(destination, target.parent)).as_posix(), safe="/.-_") + suffix
+        split = urlsplit(raw)
+        suffix = "#" + split.fragment if split.fragment else ""
+        href = quote(Path(os.path.relpath(destination, target.parent)).as_posix(), safe="/.-_")
+        # Path/relpath 会消去目录末尾斜杠；重定位仍须保留原 URI 的目录导航形状，
+        # 再沿既有规则追加 fragment。query 仍在 local_target 拒绝，不在此扩权。
+        if split.path.endswith("/"):
+            href += "/"
+        href += suffix
         return match.group().replace("(" + raw + ")", "(" + href + ")", 1)
 
     return LINK.sub(replace, body)

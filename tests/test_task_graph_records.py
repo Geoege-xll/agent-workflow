@@ -543,6 +543,57 @@ class RecordCliTest(unittest.TestCase):
         self.assertNotIn("depends_on", stored["task"])
         self.assertEqual({"graph.json"}, {path.name for path in self.root.iterdir()})
 
+    def test_light_qa_single_pack_starts_and_recovers_without_full_barrier(self):
+        """Light 独立 QA 不需要兄弟 Writer，但仍通过同一身份、批准与 CAS 边界。"""
+        from lib.task_graph_cli import export_task_pack
+        value = export_task_pack(graph(), "api")
+        task = value["task"]
+        task.update(workflow_level="Light", task_type="qa", role="xy-qa")
+        for field in ("depends_on", "blocks"):
+            task.pop(field, None)
+
+        def update(fields, expected=None):
+            return self.invoke("update", "--input", self.source, "--expect-sha256",
+                               expected or records.digest(self.source.read_bytes()), "--patch", "-",
+                               input=json.dumps({"tasks": {"api": {"set": fields}}}))
+
+        for state in ("DECLARED", "FAILED"):
+            with self.subTest(state=state):
+                task["state"] = state
+                self.source.write_text(json.dumps(value), encoding="utf-8")
+                before = self.source.read_bytes()
+                result = update({"state": "RUNNING"})
+                self.assertEqual(0, result.returncode, result.stderr)
+                stored = json.loads(self.source.read_text(encoding="utf-8"))
+                self.assertEqual(("RUNNING", "qa"), (stored["task"]["state"], stored["task"]["task_type"]))
+                self.assertNotIn("tasks", stored)
+                self.assertNotIn("depends_on", stored["task"])
+                # 首次执行和失败恢复都不能以刚才成功的状态更新绕过旧字节 CAS。
+                current = self.source.read_bytes()
+                self.assertNotEqual(0, update({"state": "FAILED"}, records.digest(before)).returncode)
+                self.assertEqual(current, self.source.read_bytes())
+                reference = {"host": "codex", "agent_id": "fixture-light-qa"}
+                self.assertEqual(0, update({"agent_ref": reference}).returncode)
+                current = self.source.read_bytes()
+                self.assertNotEqual(0, update({"agent_ref": {**reference, "agent_id": "other-qa"}}).returncode)
+                self.assertEqual(current, self.source.read_bytes())
+
+        # 同一完整 Light 包仍有合法身份、退役和批准门禁；不是直接修改状态文件。
+        for case in ("missing-gate", "retired", "invalid-identity"):
+            invalid = copy.deepcopy(value)
+            invalid["task"]["state"] = "FAILED"
+            if case == "missing-gate":
+                invalid["approved_gates"] = []
+            elif case == "retired":
+                invalid["task"]["agent_retired"] = True
+            else:
+                invalid["task"]["agent_ref"] = {"host": "codex", "agent_id": ""}
+            self.source.write_text(json.dumps(invalid), encoding="utf-8")
+            before = self.source.read_bytes()
+            with self.subTest(case=case):
+                self.assertNotEqual(0, update({"state": "RUNNING"}).returncode)
+                self.assertEqual(before, self.source.read_bytes())
+
     def test_export_projects_only_current_standards_approval_and_scope(self):
         from lib.task_graph_cli import export_task_pack
         source = graph()

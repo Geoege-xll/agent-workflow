@@ -6,12 +6,16 @@ import copy
 import base64
 import stat
 import hashlib
+import importlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 from tests.skill_contract_helpers import read_contract
 
 from lib.standard_paths import canonical_standard_path, standard_domain, source_domain, canonical_standard_source_path
@@ -236,6 +240,75 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         self.assertEqual("# 既有项目说明\n[查询](../plans/archive/query.md#历史)\n保留专有文字。\n", reader.read_text())
         self.assertIn("(plans/archive/query.md)", (self.docs / "PROJECT.md").read_text())
 
+    def test_migration_rebases_binary_and_directory_navigation_without_moving_assets(self) -> None:
+        """导航目标只需安全元数据；微型合成媒体不是 Markdown 原稿，也不迁入 plans。"""
+        source, old, mapping_path = self.migration_fixture()
+        assets = self.root / "assets"
+        assets.mkdir(exist_ok=True)
+        media = assets / "sample.mp4"
+        media.write_bytes(b"\x00\xff\x80synthetic-media")
+        directory = self.root / "services/creation-service"
+        directory.mkdir(parents=True, exist_ok=True)
+        old += "[媒体](../../assets/sample.mp4#preview)\n[服务目录](../../services/creation-service/)\n"
+        source.write_text(old, encoding="utf-8")
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        mapping["documents"][0].update(target="docs/plans/archive/query.md",
+                                       source_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+        mapping_path.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+        # 读取合成资产本身可能更新 atime；只比较能证明未发布/替换/改权的稳定元数据。
+        def asset_identity(path):
+            info = path.stat()
+            return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns
+
+        media_before = media.read_bytes(), asset_identity(media)
+        directory_before = directory.stat()
+        originals = {path: path.read_bytes() for path in (source, self.config, self.docs / "PROJECT.md")}
+        result = self.migrate(mapping_path, apply=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        target = self.docs / "plans/archive/query.md"
+        self.assertIn("[媒体](../../../assets/sample.mp4#preview)", target.read_text(encoding="utf-8"))
+        self.assertIn("[服务目录](../../../services/creation-service/)", target.read_text(encoding="utf-8"))
+        self.assertEqual([target], list((self.docs / "plans").rglob("*.*")))
+        self.assertEqual(media_before, (media.read_bytes(), asset_identity(media)))
+        self.assertEqual(directory_before, directory.stat())
+        # 原件保护和精确恢复继续由既有迁移协议负责，导航资源不成为恢复写入对象。
+        recovery = self.root / "migration-recovery.json"
+        self.assertNotIn("assets/sample.mp4", json.loads(recovery.read_text(encoding="utf-8"))["files"])
+        restored = self.migrate(recovery, apply=True, restore=True)
+        self.assertEqual(0, restored.returncode, restored.stdout + restored.stderr)
+        for path, body in originals.items():
+            self.assertEqual(body, path.read_bytes())
+        self.assertEqual(media_before, (media.read_bytes(), asset_identity(media)))
+        self.assertEqual(directory_before, directory.stat())
+
+    def test_migration_navigation_keeps_missing_link_and_special_node_rejections(self) -> None:
+        """不读媒体不等于放行危险节点；Markdown 仍须完整安全 UTF-8 读取。"""
+        source, old, mapping_path = self.migration_fixture()
+        assets = self.root / "assets"
+        assets.mkdir(exist_ok=True)
+        media = assets / "sample.bin"
+        media.write_bytes(b"\x00\xffsynthetic-media")
+        (assets / "linked.bin").symlink_to(media)
+        os.link(media, assets / "hardlinked.bin")
+        os.mkfifo(assets / "pipe.bin")
+        (assets / "bad.md").write_bytes(b"\xffinvalid-markdown")
+        (self.root / "linked-assets").symlink_to(assets, target_is_directory=True)
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
+        before = self.config.read_bytes(), (self.docs / "PROJECT.md").read_bytes()
+        for href in ("../../assets/missing.bin", "../../assets/linked.bin", "../../assets/hardlinked.bin",
+                     "../../assets/pipe.bin", "../../assets/bad.md", "../../linked-assets/sample.bin",
+                     "../../assets/sample.bin/child", "../../../outside.bin"):
+            with self.subTest(href=href):
+                body = old + f"[导航]({href})\n"
+                source.write_text(body, encoding="utf-8")
+                mapping["documents"][0]["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+                mapping_path.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+                result = self.migrate(mapping_path, apply=True)
+                self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(body, source.read_text(encoding="utf-8"))
+                self.assertEqual(before, (self.config.read_bytes(), (self.docs / "PROJECT.md").read_bytes()))
+                self.assertFalse((self.docs / "plans").exists())
+
     def test_failed_final_validation_rolls_back_all_migration_files(self) -> None:
         source, old, mapping = self.migration_fixture()
         self.write_plan("# 旧执行历史\n- Status: completed\n", "unverified.md")
@@ -250,6 +323,246 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         self.assertEqual(project_before, project.read_bytes())
         self.assertFalse((self.docs / "plans/query.md").exists())
         self.assertFalse(list(self.docs.rglob(".agent-workflow-pack-antigravity--*")))
+
+    @staticmethod
+    def document_applier():
+        # 通过真实脚本采用的 lib 搜索路径加载事务，避免复制发布器或用替身绕过磁盘行为。
+        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
+            return importlib.import_module("apply_antigravity_setup")
+
+    def test_document_transaction_validates_standard_leaves_with_backups_retained(self) -> None:
+        applier = self.document_applier()
+        general = self.standards / "GENERAL.md"
+        design = self.standards / "DESIGN_FOUNDATIONS.md"
+        index = self.docs / "STANDARDS.md"
+        general.chmod(0o640)
+        design.chmod(0o600)
+        updates = {
+            general: general.read_bytes() + "项目专有约束继续保留。\n".encode(),
+            design: None,
+            index: b"# Standards\n\n[General](standards/GENERAL.md)\n",
+        }
+        inputs = {path: path.read_bytes() for path in updates}
+        originals = {(body, stat.S_IMODE(path.stat().st_mode), path.stat().st_ino)
+                     for path, body in inputs.items()}
+
+        def validate_after():
+            # 关键回归入口必须调用严格真实校验：合法规范叶不能被本轮仍可回滚的
+            # 两个旧 inode 备份污染；同时验收前不允许靠删除唯一原件来取得绿色。
+            self.assertEqual([], validate_documents(self.config, self.root))
+            backups = list(self.root.rglob(applier.TRANSACTION_PREFIX + "backup--*"))
+            self.assertEqual(originals, {
+                (path.read_bytes(), stat.S_IMODE(path.stat().st_mode), path.stat().st_ino)
+                for path in backups
+            })
+            self.assertTrue(all(path.stat().st_nlink == 1 for path in backups))
+
+        applier.publish_document_changes(self.root, updates, inputs, validate_after)
+        self.assertEqual(updates[general], general.read_bytes())
+        self.assertEqual(0o640, stat.S_IMODE(general.stat().st_mode))
+        self.assertFalse(design.exists())
+        self.assertEqual(updates[index], index.read_bytes())
+        self.assertFalse(list(self.root.rglob(applier.TRANSACTION_PREFIX + "*")))
+
+    def test_document_transaction_strict_failure_restores_bytes_modes_and_rejects_forgery(self) -> None:
+        applier = self.document_applier()
+        general = self.standards / "GENERAL.md"
+        design = self.standards / "DESIGN_FOUNDATIONS.md"
+        index = self.docs / "STANDARDS.md"
+        created = self.standards / "PROJECT_NOTES.md"
+        general.chmod(0o640)
+        design.chmod(0o600)
+        originals = {path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode), path.stat().st_ino)
+                     for path in (general, design, index)}
+        forged = self.standards / (applier.TRANSACTION_PREFIX + "backup--forged--unknown")
+        for reason in ("invalid-domain", "unknown-entry", "forged-backup"):
+            with self.subTest(reason=reason):
+                unknown = self.standards / "unknown.bin" if reason == "unknown-entry" else forged
+                updates = {
+                    general: originals[general][0] + "合法的项目专有补充。\n".encode(),
+                    design: None,
+                    index: b"# Standards\n\n[General](standards/GENERAL.md)\n",
+                    created: "# 仅本轮创建的项目说明\n".encode(),
+                }
+                inputs = {path: originals[path][0] if path in originals else None for path in updates}
+                if reason == "invalid-domain":
+                    updates[general] = updates[general].replace(b"Domain: engineering", b"Domain: design")
+                    expected_error = "standards leaf must declare Domain: engineering"
+                else:
+                    unknown.write_bytes(b"foreign entry; the transaction must preserve it\n")
+                    unknown.chmod(0o600)
+                    expected_error = "standards tree contains unsupported entry: " + str(unknown)
+
+                def validate_after():
+                    # 失败必须来自真实规范边界；未知条目即使伪造事务前缀也不能获豁免。
+                    errors = validate_documents(self.config, self.root)
+                    self.assertTrue(any(expected_error in error for error in errors), errors)
+                    raise ValueError("strict docs validation: " + "; ".join(errors))
+
+                with self.assertRaisesRegex(ValueError, "strict docs validation"):
+                    applier.publish_document_changes(self.root, updates, inputs, validate_after,
+                                                    desired_modes={general: 0o600})
+                for path, original in originals.items():
+                    self.assertEqual(original, (path.read_bytes(), stat.S_IMODE(path.stat().st_mode),
+                                                path.stat().st_ino))
+                self.assertFalse(created.exists())
+                if reason != "invalid-domain":
+                    self.assertEqual(b"foreign entry; the transaction must preserve it\n", unknown.read_bytes())
+                    self.assertEqual(0o600, stat.S_IMODE(unknown.stat().st_mode))
+                    # 仅夹具所有者在断言后撤去自己构造的陌生条目，事务不能代为清理。
+                    unknown.unlink()
+                self.assertFalse(list(self.root.rglob(applier.TRANSACTION_PREFIX + "*")))
+
+    def test_document_transaction_preserves_concurrent_content_and_changed_backup(self) -> None:
+        applier = self.document_applier()
+        for moment, target in (("published-document", self.standards / "GENERAL.md"),
+                               ("late-backup", self.docs / "STANDARDS.md")):
+            with self.subTest(moment=moment):
+                original = target.read_bytes()
+                original_inode = target.stat().st_ino
+                published = original + "事务发布的合法补充。\n".encode()
+                concurrent = (published if moment == "published-document" else original) + "并发用户保存。\n".encode()
+                prior_backups = set(self.root.rglob(applier.TRANSACTION_PREFIX + "backup--*"))
+                retained = []
+
+                def validate_after():
+                    self.assertEqual([], validate_documents(self.config, self.root))
+                    backups = set(self.root.rglob(applier.TRANSACTION_PREFIX + "backup--*")) - prior_backups
+                    self.assertEqual(1, len(backups))
+                    backup = backups.pop()
+                    retained.append(backup)
+                    if moment == "published-document":
+                        target.write_bytes(concurrent)
+                        raise ValueError("验收期间发生外部修改")
+                    # 编辑器持有旧 inode 时可能迟到写入；即使真实校验已通过，后置指纹
+                    # 仍必须阻止提交清理，回滚也不得覆盖已变化的唯一原件。
+                    backup.write_bytes(concurrent)
+
+                with self.assertRaisesRegex(applier.ApplyError, "rollback failed"):
+                    applier.publish_document_changes(self.root, {target: published}, {target: original}, validate_after)
+                self.assertEqual(1, len(retained))
+                backup = retained[0]
+                self.assertEqual(concurrent if moment == "published-document" else published, target.read_bytes())
+                self.assertEqual(original if moment == "published-document" else concurrent, backup.read_bytes())
+                self.assertEqual(original_inode, backup.stat().st_ino)
+                self.assertEqual(1, backup.stat().st_nlink)
+
+    def test_document_transaction_rejects_unsafe_backup_destination_before_any_write(self) -> None:
+        applier = self.document_applier()
+        target = self.standards / "GENERAL.md"
+        created = self.standards / "PROJECT_NOTES.md"
+        original = target.read_bytes(), stat.S_IMODE(target.stat().st_mode), target.stat().st_ino
+        updates = {created: b"# New note\n", target: target.read_bytes() + b"New rule note.\n"}
+        inputs = {created: None, target: original[0]}
+        fingerprint = applier._fingerprint
+
+        def different_device(path, *, read_file=True):
+            node = fingerprint(path, read_file=read_file)
+            return replace(node, device=node.device + 1) if path == target else node
+
+        # 用设备身份反例覆盖无挂载权限时的跨卷拒绝分支；第二个原件不合格时，
+        # 排在它前面的新文档也不得先被发布，磁盘断言区分真正预检与事后补偿。
+        with patch.object(applier, "_fingerprint", side_effect=different_device):
+            with self.assertRaisesRegex(applier.ApplyError, "project filesystem"):
+                applier.publish_document_changes(self.root, updates, inputs,
+                    lambda: self.fail("预检失败不得进入结果验收"))
+        self.assertFalse(created.exists())
+        self.assertEqual(original, (target.read_bytes(), stat.S_IMODE(target.stat().st_mode), target.stat().st_ino))
+        self.assertFalse(list(self.root.rglob(applier.TRANSACTION_PREFIX + "*")))
+
+        nonce = "occupied-backup-test"
+        occupied = self.root / applier._temp_path(target, nonce, "backup").name
+        occupied.write_bytes(b"foreign backup destination\n")
+        occupied.chmod(0o600)
+        with patch.object(applier.secrets, "token_hex", return_value=nonce):
+            with self.assertRaisesRegex(applier.ApplyError, "owned backup path already exists"):
+                applier.publish_document_changes(self.root, updates, inputs,
+                    lambda: self.fail("备份归属冲突不得进入结果验收"))
+        self.assertFalse(created.exists())
+        self.assertEqual(original, (target.read_bytes(), stat.S_IMODE(target.stat().st_mode), target.stat().st_ino))
+        self.assertEqual(b"foreign backup destination\n", occupied.read_bytes())
+        self.assertEqual(0o600, stat.S_IMODE(occupied.stat().st_mode))
+
+    def test_document_transaction_backup_root_fsync_failure_removes_owned_temp(self) -> None:
+        applier = self.document_applier()
+        target = self.standards / "GENERAL.md"
+        target.chmod(0o640)
+        original = target.read_bytes(), stat.S_IMODE(target.stat().st_mode), target.stat().st_ino
+        published = original[0] + "仅此夹具的发布补充。\n".encode()
+        fsync = applier._fsync_directory
+        captured = []
+
+        def fail_backup_root_fsync(path):
+            if path == self.root and not captured:
+                temporary, = self.standards.glob(applier.TRANSACTION_PREFIX + "temp--*")
+                node = applier._fingerprint(temporary)
+                captured.append((temporary, (node.device, node.inode)))
+                raise OSError("injected backup-root fsync failure")
+            fsync(path)
+
+        def cleanup_own_red_fixture():
+            # 仅测试所有者在断言结束后撤去旧实现遗留的本例原 temp，复用固定夹具。
+            # 此处同样按采样身份/完整内容/权限条件撤回，绝不触碰 QA 的独立现场。
+            if captured:
+                temporary, identity = captured[0]
+                if applier._fingerprint(temporary, read_file=False).kind != "missing":
+                    applier.remove_created_standard(temporary, published, 0o640, identity)
+
+        self.addCleanup(cleanup_own_red_fixture)
+        with patch.object(applier, "_fsync_directory", side_effect=fail_backup_root_fsync):
+            with self.assertRaisesRegex(OSError, "injected backup-root fsync failure"):
+                applier.publish_document_changes(self.root, {target: published}, {target: original[0]},
+                    lambda: self.fail("备份根刷新失败不得进入结果验收"))
+        self.assertEqual(1, len(captured))
+        self.assertEqual(original, (target.read_bytes(), stat.S_IMODE(target.stat().st_mode), target.stat().st_ino))
+        # 回归断言必须发生在夹具清理前：原文恢复之外，严格规范扫描也要能立即再用。
+        self.assertEqual([], validate_documents(self.config, self.root))
+        self.assertFalse(list(self.root.rglob(applier.TRANSACTION_PREFIX + "*")))
+
+    def test_document_transaction_backup_root_fsync_failure_preserves_changed_temp(self) -> None:
+        applier = self.document_applier()
+        target = self.standards / "GENERAL.md"
+        target.chmod(0o640)
+        original = target.read_bytes(), stat.S_IMODE(target.stat().st_mode), target.stat().st_ino
+        published = original[0] + "本例待发布的正文。\n".encode()
+        fsync = applier._fsync_directory
+        for mutation in ("rewritten", "replaced-with-same-bytes", "permissions"):
+            with self.subTest(mutation=mutation):
+                prior_temps = set(self.standards.glob(applier.TRANSACTION_PREFIX + "temp--*"))
+                captured = []
+
+                def fail_after_concurrent_change(path):
+                    if path == self.root and not captured:
+                        temporary, = set(self.standards.glob(applier.TRANSACTION_PREFIX + "temp--*")) - prior_temps
+                        if mutation == "rewritten":
+                            temporary.write_bytes("并发用户已经改写临时路径。\n".encode())
+                        elif mutation == "replaced-with-same-bytes":
+                            # 字节和权限相同仍不是本轮 inode；如果身份在 fd 关闭后
+                            # 才按路径取得，这个反例会暴露误删并发替换的问题。
+                            replacement = self.root / "concurrent-temp-replacement"
+                            replacement.write_bytes(published)
+                            replacement.chmod(0o640)
+                            os.replace(replacement, temporary)
+                        else:
+                            temporary.chmod(0o600)
+                        info = temporary.stat()
+                        captured.append((temporary, (temporary.read_bytes(), stat.S_IMODE(info.st_mode), info.st_ino)))
+                        raise OSError("injected backup-root fsync failure")
+                    fsync(path)
+
+                with patch.object(applier, "_fsync_directory", side_effect=fail_after_concurrent_change):
+                    with self.assertRaisesRegex(applier.ApplyError, "document temporary preserved at"):
+                        applier.publish_document_changes(self.root, {target: published}, {target: original[0]},
+                            lambda: self.fail("备份根刷新失败不得进入结果验收"))
+                self.assertEqual(1, len(captured))
+                temporary, concurrent = captured[0]
+                self.assertEqual(concurrent, (temporary.read_bytes(), stat.S_IMODE(temporary.stat().st_mode),
+                                               temporary.stat().st_ino))
+                self.assertEqual(original, (target.read_bytes(), stat.S_IMODE(target.stat().st_mode), target.stat().st_ino))
+                self.assertFalse(list(self.root.glob(applier.TRANSACTION_PREFIX + "backup--*")))
+                # 并发 temp 保留供诊断，严格校验继续拒绝它；不能为取得绿色隐藏残留。
+                self.assertIn("standards tree contains unsupported entry: " + str(temporary),
+                              validate_documents(self.config, self.root))
 
     def test_migration_cannot_promote_removed_or_unindexed_old_material(self) -> None:
         source, old, mapping_path = self.migration_fixture()

@@ -774,7 +774,8 @@ def _temp_path(target: Path, nonce: str, kind: str) -> Path:
     return target.parent / f"{TRANSACTION_PREFIX}{kind}--{nonce}--{digest}"
 
 
-def _write_temp(target: Path, body: bytes, mode: int, nonce: str) -> Path:
+def _write_temp(target: Path, body: bytes, mode: int, nonce: str, *,
+                identity_out: list[tuple[int, int]] | None = None) -> Path:
     temporary = _temp_path(target, nonce, "temp")
     flags = (
         os.O_WRONLY
@@ -795,6 +796,10 @@ def _write_temp(target: Path, body: bytes, mode: int, nonce: str) -> Path:
             output.write(body)
             output.flush()
             os.fsync(output.fileno())
+            if identity_out is not None:
+                # 只在仍持有本轮创建 fd 时交出身份，不能关闭后再按路径采样，
+                # 否则并发替换成相同字节/权限的文件会被误认成可撤回的原 temp。
+                identity_out.append((info.st_dev, info.st_ino))
         _fsync_directory(target.parent)
         return temporary
     except OSError as exc:
@@ -804,14 +809,21 @@ def _write_temp(target: Path, body: bytes, mode: int, nonce: str) -> Path:
             os.close(descriptor)
 
 
-def _publish_file(change: FileChange, plan: Plan) -> None:
+def _publish_file(change: FileChange, plan: Plan, *, backup_directory: Path | None = None) -> None:
     _assert_unchanged(change.target, change.before)
     # 删除同样参与原事务，不把缺失文件当成空文档发布，也不绕过回滚和归属复核。
     deleting = change.body is None
     if deleting and change.before.kind == "missing":
         return
     _ensure_directories(plan, change.target.parent)
-    temporary = None if deleting else _write_temp(change.target, change.body, change.mode, plan.nonce)
+    temporary_identity: list[tuple[int, int]] = []
+    temporary = None
+    if not deleting:
+        if backup_directory is None:
+            temporary = _write_temp(change.target, change.body, change.mode, plan.nonce)
+        else:
+            temporary = _write_temp(change.target, change.body, change.mode, plan.nonce,
+                                    identity_out=temporary_identity)
     if change.before.kind == "missing":
         try:
             publish_exclusive(temporary, change.target)
@@ -823,6 +835,10 @@ def _publish_file(change: FileChange, plan: Plan) -> None:
             raise ApplyError(f"cannot atomically create managed file {change.target}: {exc}") from exc
         return
     backup = _temp_path(change.target, plan.nonce, "backup")
+    if backup_directory is not None:
+        # 仅显式文档事务选择已预检的同卷目录；名称仍绑定原目标和本轮 nonce，
+        # 回滚继续持有原 inode，不把备份改写成正文副本或放松消费者的目录校验。
+        backup = backup_directory / backup.name
     if _fingerprint(backup, read_file=False).kind != "missing":
         if temporary is not None:
             temporary.unlink()
@@ -835,6 +851,23 @@ def _publish_file(change: FileChange, plan: Plan) -> None:
             temporary.unlink(missing_ok=True)
         raise ApplyError(f"managed file changed during publish: {change.target}")
     change.backup = backup
+    if backup.parent != change.target.parent:
+        # 跨目录移动仍在同一文件系统；先登记回滚归属再刷新新目录，刷新失败也能
+        # 按 change.backup 恢复原件，不能留下已移走原件但事务尚不知情的窗口。
+        try:
+            _fsync_directory(backup.parent)
+        except BaseException as exc:
+            if temporary is not None:
+                try:
+                    # 正文尚未发布，外层只会按备份恢复旧文；这里复用既有条件撤回
+                    # 原语收口本轮 temp。它先排他移名再核对 inode/字节/权限，避免
+                    # “先检查再 unlink”误删间隙替换；已变文件原样保留并报告路径。
+                    remove_created_standard(temporary, change.body, change.mode, temporary_identity[0])
+                except BaseException as cleanup_exc:
+                    raise ApplyError(
+                        f"{exc}; document temporary preserved at {temporary}: {cleanup_exc}"
+                    ) from exc
+            raise
     if deleting:
         # 备份保留到生成物验收结束；同名新文件属于并发用户，失败回滚不得覆盖。
         if _fingerprint(change.target, read_file=False).kind != "missing":
@@ -1114,16 +1147,27 @@ def publish_document_changes(project: Path, updates: dict[Path, bytes | None],
     """
     from claude_instructions import read_file
     plan = Plan(Path(__file__).absolute().parents[1], project, project, secrets.token_hex(12))
+    backup_root = _require_real_directory(project, "document transaction backup root")
     for path, body in updates.items():
         if not path.is_relative_to(project) or read_file(path) != expected_inputs[path]:
             raise ApplyError(f"document migration input changed: {path}")
         before = _fingerprint(path)
+        if before.kind == "file":
+            # 严格规范目录只能包含合法叶文档，验收期间的原件备份统一留在项目根。
+            # 必须在任何目标写入前确认同卷和空闲落点；跨卷不能退化为复制/删除，
+            # 否则无法沿用既有原 inode 备份和精确回滚保证。
+            if before.device != backup_root.device:
+                raise ApplyError(f"document backup must stay on the project filesystem: {path}")
+            backup = project / _temp_path(path, plan.nonce, "backup").name
+            if _fingerprint(backup, read_file=False).kind != "missing":
+                raise ApplyError(f"owned backup path already exists: {backup}")
         mode = (desired_modes or {}).get(path, before.mode if before.kind == "file" else 0o644)
         plan.doc_changes.append(FileChange(path, body, mode, before,
             created_standard_index=before.kind == "missing"))
     try:
+        _assert_unchanged(project, backup_root)
         for change in plan.doc_changes:
-            _publish_file(change, plan)
+            _publish_file(change, plan, backup_directory=project)
         validate_after()
         # 外部编辑器也可能继续写原 inode；清理备份前再核实，冲突保持可诊断原件。
         for change in plan.doc_changes:

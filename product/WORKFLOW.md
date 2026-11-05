@@ -792,7 +792,9 @@ complete procedure or require a browser, and its machine output stays internal.
 iframe 属于真实渲染资源，仍验证具体页和本地闭包；此能力只属于 index，产品页不得嵌入 frame。
 具体页用 `body[data-prototype-plan-source]` 绑定配置 `docs.plans` 下的规范 Markdown 路径，
 唯一 `nav.prototype-requirement-links` 中的 HTML/Markdown 锚点分别设置
-`data-prototype-document="html"` / `"markdown"`，并指向同名文件对；源模板尚未绑定时可留空。
+`data-prototype-document="html"` / `"markdown"`，并指向同名文件对；两个锚点均使用
+`target="_blank"` 与含 `noopener` 的 `rel`，独立打开文档并保留当前工作区，拒绝相关重复属性。
+源模板尚未绑定时可留空。
 这只是明确槽位的文档导航权限，其他资源、嵌入和普通链接仍受原型根边界约束。
 验证核对安全普通文件、来源路径/内容绑定及 HTML 完整性，不调用完整 render/check、
 不回扫文档反向原型关联、不要求历史 renderer 身份最新，也不建立文档渲染依赖边。

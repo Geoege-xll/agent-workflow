@@ -181,8 +181,8 @@ def bind_requirement_documents(project: Path, *, source_body: str | None = None)
     body = PAGE_HTML.replace('<body>', '<body data-prototype-plan-source="docs/plans/settings.md">', 1)
     body = body.replace("</main>", (
         '</main><nav class="prototype-requirement-links" aria-label="关联需求">'
-        '<a data-prototype-document="html" href="../../plans/settings.html">需求 HTML</a>'
-        '<a data-prototype-document="markdown" href="../../plans/settings.md">需求 Markdown</a></nav>'
+        '<a data-prototype-document="html" href="../../plans/settings.html" target="_blank" rel="noopener">需求 HTML</a>'
+        '<a data-prototype-document="markdown" href="../../plans/settings.md" target="_blank" rel="noopener">需求 Markdown</a></nav>'
     ), 1)
     page.write_text(body, encoding="utf-8")
     return source, html
@@ -704,6 +704,35 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                     source.write_bytes(source_bytes)
                     html.write_bytes(html_bytes)
                     self.assert_rejected_without_mutation(project, case)
+
+    def test_requirement_navigation_requires_independent_safe_browsing_context(self) -> None:
+        """无 page-shell 的合法页也须保护工作区上下文，两个文档锚点逐一校验。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-requirement-context-") as temporary:
+            project = write_valid_project(Path(temporary)).resolve()
+            bind_requirement_documents(project)
+            page = self.page(project)
+            text = page.read_text(encoding="utf-8")
+            self.assertNotIn("page-shell.js", text)
+            # rel 是不区分大小写的 token 集合；附加 noreferrer 不改变独立打开合同。
+            page.write_text(text.replace('target="_blank" rel="noopener"',
+                                         'target="_BLANK" rel="noreferrer NOOPENER"'), encoding="utf-8")
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            for kind, extension in (("html", "html"), ("markdown", "md")):
+                anchor = (f'<a data-prototype-document="{kind}" href="../../plans/settings.{extension}"'
+                          ' target="_blank" rel="noopener">')
+                cases = {"missing target": anchor.replace(' target="_blank"', ""),
+                         "missing rel": anchor.replace(' rel="noopener"', ""),
+                         "unsafe rel": anchor.replace('rel="noopener"', 'rel="noreferrer"'),
+                         "non-HTML rel separator": anchor.replace('rel="noopener"', 'rel="noreferrer\u00a0noopener"'),
+                         "duplicate target": anchor.replace('target="_blank"', 'target="_blank" TARGET="_self"'),
+                         "duplicate rel": anchor.replace('rel="noopener"', 'rel="noopener" REL="opener"')}
+                for target in ("_self", "_top", "_parent", "review-window", " _blank ", "_BLAN\u212a"):
+                    cases[target] = anchor.replace('target="_blank"', f'target="{target}"')
+                for case, replacement in cases.items():
+                    with self.subTest(kind=kind, case=case):
+                        page.write_text(text.replace(anchor, replacement, 1), encoding="utf-8")
+                        self.assert_rejected_without_mutation(project, case)
 
     def test_requirement_navigation_refuses_linked_and_special_document_nodes(self) -> None:
         """新导航入口复用单链接普通文件检查；FIFO 负控必须及时返回，不能阻塞读取。"""

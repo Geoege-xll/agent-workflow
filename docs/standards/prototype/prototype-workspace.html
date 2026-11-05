@@ -90,9 +90,9 @@
             </section>
           </section>
 
-          <!-- 这是一份真实的需求导航槽位：目标必须是同一 plans 主题的现有文件对；不作为渲染资源。 -->
+          <!-- 需求导航只指向同一 plans 主题的现有文件对，不作为渲染资源；独立打开保留工作区，noopener 隔离新文档对来源窗口的访问。 -->
           <footer class="workspace-page-information">
-            <div class="workspace-information-top"><nav class="prototype-requirement-links" aria-label="关联需求文档"><span class="workspace-info-label">关联需求</span><a id="workspace-requirement-html" href="../../plans/workflow-document-lifecycle.html" data-prototype-document="html"><span class="document-format">HTML</span>阅读需求<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a><a id="workspace-requirement-markdown" href="../../plans/workflow-document-lifecycle.md" data-prototype-document="markdown"><span class="document-format">MD</span>需求原稿<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a></nav><p class="workspace-display-label"><span>Web</span><span>响应式 · CSS px</span></p></div>
+            <div class="workspace-information-top"><nav class="prototype-requirement-links" aria-label="关联需求文档"><span class="workspace-info-label">关联需求</span><a id="workspace-requirement-html" href="../../plans/workflow-document-lifecycle.html" target="_blank" rel="noopener" data-prototype-document="html"><span class="document-format">HTML</span>阅读需求<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a><a id="workspace-requirement-markdown" href="../../plans/workflow-document-lifecycle.md" target="_blank" rel="noopener" data-prototype-document="markdown"><span class="document-format">MD</span>需求原稿<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a></nav><p class="workspace-display-label"><span>Web</span><span>响应式 · CSS px</span></p></div>
             <p class="workspace-demo-note"><strong>演示说明</strong> 左侧三页为虚构内容，在本页模拟切换；正式需求链接可直接打开。刷新恢复侧栏默认展开；页面锚点保留当前选择。</p>
           </footer>
 
@@ -120,7 +120,7 @@
       <h2>导航</h2>
       <p>index.html 的唯一 nav#prototype-pages 登记本独立页面，隐藏登记导航后以唯一 iframe#prototype-preview 直接承载本页，不展示独立目录或附加头部。本页也可按独立 HTML 路径直接打开。</p>
       <p>产品区三个锚点只是本页的虚构预览状态，未登记额外独立页面，也不代表生产模板的文件导航协议；同页状态不拆新文件。工作区圆形返回负责展开侧栏并聚焦当前入口，与侧栏开关独立，不再提供外层目录返回。</p>
-      <p>右侧画面后的 nav.prototype-requirement-links 只提供已绑定主题的 HTML/Markdown 两个普通相对导航链接；没有脚本读取文档、跨文档 DOM 或资源预载。具体页不含 iframe；入口的静态本地承载仍须验证登记目标与既有资源闭包，生产多页面切换与安全路由由后续实现者完成。</p>
+      <p>右侧画面后的 nav.prototype-requirement-links 只提供已绑定主题的 HTML/Markdown 两个普通相对导航链接；两者以 target="_blank" 在独立标签页或窗口打开，并用 rel="noopener" 隔离来源窗口访问，不替换当前预览或顶层工作区。没有脚本读取文档、跨文档 DOM 或资源预载。具体页不含 iframe；入口的静态本地承载仍须验证登记目标与既有资源闭包，生产多页面切换与安全路由由后续实现者完成。</p>
     </section>
     <section data-contract-section="interactions">
       <h2>交互</h2>
@@ -131,15 +131,15 @@
       <p data-contract-for="workspace-page-requirement">需求详情：点击或 Enter 选择 demo-requirement，按同一规则更新当前页面与预览，其他示例画面隐藏。</p>
       <p data-contract-for="workspace-group-reference">原型浏览分组：按原生 details/summary 方式折叠或展开，不改变当前预览。</p>
       <p data-contract-for="workspace-page-guidance">页面说明：点击或 Enter 选择 demo-guidance，同步选中反馈、页头与只读说明画面。</p>
-      <p data-contract-for="workspace-requirement-html">阅读需求：打开现有 ../../plans/workflow-document-lifecycle.html；它是正式需求导航，不是预览依赖。</p>
-      <p data-contract-for="workspace-requirement-markdown">需求原稿：打开同主题 ../../plans/workflow-document-lifecycle.md；由浏览器按本地 Markdown 支持方式展示或交给关联应用。</p>
+      <p data-contract-for="workspace-requirement-html">阅读需求：点击或 Enter 在独立标签页或窗口打开现有 ../../plans/workflow-document-lifecycle.html，保留当前工作区；它是正式需求导航，不是预览依赖，新文档不能通过 opener 访问来源窗口。</p>
+      <p data-contract-for="workspace-requirement-markdown">需求原稿：点击或 Enter 在独立标签页或窗口打开同主题 ../../plans/workflow-document-lifecycle.md，保留当前工作区并隔离 opener；由浏览器按本地 Markdown 支持方式展示、下载或交给关联应用。</p>
       <p data-contract-for="workspace-demo-contract-toggle">页面设计与交互契约：原生 summary 展开或折叠样稿内的页面说明，不覆盖预览或占用浏览器固定浮层。</p>
       <p data-contract-for="prototype-contract-toggle">本页契约：原生 summary 展开或折叠这五节实际设计契约，默认折叠；位于产品插槽之外。</p>
     </section>
     <section data-contract-section="states">
       <h2>状态</h2>
       <p>初始状态为侧栏展开、两个分组展开、文档概览选中，内外契约均折叠。合法的本页示例锚点可恢复对应选择；未知锚点不会成为页面路径或加载目标，回到默认示例。</p>
-      <p>切换页面时只有一块示例画面可见，标题与导航一致；选中既有颜色也有“当前”文字，键盘焦点独立显示。收起侧栏后右上角保留展开按钮；返回当前导航会恢复侧栏、展开对应分组并移交焦点。</p>
+      <p>切换页面时只有一块示例画面可见，标题与导航一致；选中既有颜色也有“当前”文字，键盘焦点独立显示。收起侧栏后右上角保留展开按钮；返回当前导航会恢复侧栏、展开对应分组并移交焦点。打开任一关联需求文档不会替换当前预览或顶层工作区，当前页面选择、分组及侧栏状态保留。</p>
       <p>控件具有默认、hover、pressed 和 focus-visible 状态，链接有当前选中状态；遵循 reduced-motion。此样稿没有异步请求、提交、真实账户或业务写入，因此加载、提交成功、业务错误、空列表、禁用和弹窗状态不适用，不制造假成功反馈。</p>
       <p>窄屏通过自然换行和单列布局保留必要操作；没有固定页面高度、远程字体或图像。静态检查不能证明实际渲染、键盘实操或辅助技术效果，默认没有调用浏览器及截图。</p>
     </section>

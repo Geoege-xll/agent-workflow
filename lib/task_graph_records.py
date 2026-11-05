@@ -346,11 +346,14 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             if task["id"] == task_id:
                 task["state"] = "DECLARED"
                 if task["task_type"] == "qa":
-                    # QA 先过原请求级 barrier，再在仅供就绪检查的副本中按只读任务
-                    # 核对依赖/批准/锁；正式记录仍是 QA，不更改其角色或调度流程。
-                    candidate["request_id"] = task["request_id"]
-                    if not validate("qa-ready", candidate)["qa_ready"]:
-                        raise TaskGraphError("QA running-state update is blocked by the existing request QA barrier")
+                    # 只有 Full 图能证明请求内 Writer 已完成；Light 独立 QA 的完整单包
+                    # 不携带兄弟任务，不能用该 barrier 逼它虚构 Full 图或手工改状态。
+                    # 两分支仍先校验原合同/身份/退役，再在临时副本中复用 ready 的
+                    # 依赖、批准和锁检查；正式记录始终保持 QA，发布仍由原 CAS 保护。
+                    if task["workflow_level"] == "Full":
+                        candidate["request_id"] = task["request_id"]
+                        if not validate("qa-ready", candidate)["qa_ready"]:
+                            raise TaskGraphError("QA running-state update is blocked by the existing request QA barrier")
                     task["task_type"] = "read_only"
         for key, field in (("active_paths", "owned_paths"), ("active_semantic_locks", "semantic_locks")):
             candidate[key] = sorted((set(payload.get(key, [])) - {

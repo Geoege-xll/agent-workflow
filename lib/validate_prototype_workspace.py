@@ -556,6 +556,14 @@ class PageParser(HTMLParser):
             kind = attrs.get("data-prototype-document", "")
             if kind not in {"html", "markdown"} or not attrs.get("href"):
                 raise ValidationError(f"requirement navigation needs typed HTML/Markdown anchors in {self.label}")
+            # 在提取 kind/href 之前保留并校验浏览上下文属性；没有 page-shell.js 的
+            # 合法页同样不能通过默认、_self、_top 或命名窗口替换受控工作区。
+            # target 是 ASCII 保留字，不裁掉空白或做 Unicode 折叠，避免把真实命名
+            # 上下文误认成 _blank；rel 也只按 HTML 的 ASCII 空白拆分 token。
+            target = attrs.get("target", "")
+            relations = {value.lower() for value in re.split(r"[ \t\n\f\r]+", attrs.get("rel", ""))}
+            if not target.isascii() or target.lower() != "_blank" or "noopener" not in relations:
+                raise ValidationError(f"requirement navigation needs target=_blank and rel=noopener in {self.label}")
             self.requirement_links.append((kind, attrs["href"]))
         if tag == "details":
             self.details_depth += 1
