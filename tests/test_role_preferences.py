@@ -48,7 +48,8 @@ class RolePreferencesTest(unittest.TestCase):
             {"id": "fixture-model", "supported_reasoning_levels": ["high", "max"]},
             {"id": "project-model", "supported_reasoning_levels": ["high", "max"]}]}))
         (self.home / ".claude").mkdir()
-        (self.home / ".claude/settings.json").write_text('{"modelPicker":{"options":["fixture-model","project-model"]}}')
+        (self.home / ".claude/settings.json").write_text(json.dumps({"modelPicker": {"options": [
+            {"model": "fixture-model"}, {"model": "project-model"}]}}))
         # 本例验证各平台自身的来源层，剔除父进程实际账户/提供方覆盖，避免把
         # 用户 ANTHROPIC_* 环境解释成 fixture 的菜单换源；不读取或输出其值。
         inherited = {key: value for key, value in os.environ.items()
@@ -775,6 +776,209 @@ class RolePreferencesTest(unittest.TestCase):
             print("App原生全局组合：实际导航/双项目保存/零隐式native/换源拒绝/旧授权保留；"
                   "已结算子进程=" + str([(process.pid, process.returncode) for process in processes]))
         print("App原生全局组合：真实executor已shutdown/wait，独占fixture随后由tearDownClass清理。")
+
+    def test_claude_app_save_and_source_conflicts_keep_original_authorization(self):
+        """真实 App/executor/文件服务验证来源链；只替换屏幕与 curses 设备适配。"""
+        from tests.test_manager_tui import RecordingScreen
+
+        first, second = self.project("first"), self.project("second")
+        config_path = self.home / ".claude/settings.json"
+        settings = {"model": "masked-top-model", "env": {
+            "ANTHROPIC_MODEL": "fixture-model", "ANTHROPIC_BASE_URL": "file-endpoint",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "file-opus", "CLAUDE_CODE_USE_VERTEX": "",
+            "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-east-1",
+            "AWS_ENDPOINT_URL": "https://sdk-first.example.com"},
+            "modelPicker": {"options": [{"model": "fixture-model"}, {"model": "project-model"}]}}
+        config_path.write_text(json.dumps(settings))
+        for project in (first, second):
+            # 安装器已在此共享文件放入受管 Hooks。测试只追加菜单，保留原 Hook
+            # 前像，避免把“破坏已安装资源”的 fixture 冲突误判为模型来源问题。
+            project_settings_path = project / ".claude/settings.json"
+            project_settings = json.loads(project_settings_path.read_text())
+            project_settings["modelPicker"] = {"options": [{"model": "ignored-project-menu"}]}
+            project_settings_path.write_text(json.dumps(project_settings))
+        # 复用原生可执行 fixture 作为零调用哨兵。它只会在真实 Popen 时生成 pid，
+        # 无需 mock 目录或业务函数；若错误调用，也由现有 query 的 close/wait 结算。
+        fixture = fixtures.CatalogTest()
+        fixture.home = self.home
+        environment = fixture.native_fixture([{"data": [], "nextCursor": None}])
+        environment.update(ANTHROPIC_MODEL="shell-model", ANTHROPIC_BASE_URL="shell-endpoint",
+                           ANTHROPIC_DEFAULT_OPUS_MODEL="shell-opus", CLAUDE_CODE_USE_VERTEX="1")
+        with patch.dict(os.environ, environment), ThreadPoolExecutor(max_workers=1) as executor:
+            app = fixtures.App(self.state, self.case, first)
+            app.executor = executor
+            app.screen = RecordingScreen()
+
+            def settle():
+                self.assertIsNotNone(app.future, app.toast)
+                result = app.future.result(timeout=20)
+                app.poll_job()
+                self.assertIsNone(app.future)
+                self.assertNotEqual(app.modal, "error", app.text)
+                return result
+
+            def draw_without_native():
+                with patch("manager.tui.curses.curs_set"):
+                    app.draw()
+                    app.draw()
+                self.assertFalse((self.home / "native-pid").exists(), "Claude 本地绘制/预览/守卫不得调用 native")
+
+            def choose(value):
+                position = next(index for index, (_, item) in enumerate(app.options()) if item == value)
+                app.dispatch("home")
+                for _ in range(position):
+                    app.dispatch("down")
+                app.dispatch("enter")
+
+            def scope(project):
+                app.dispatch("left")
+                app.dispatch("home")
+                if project is not None:
+                    for _ in range(1 + app.projects.index(project)):
+                        app.dispatch("down")
+                app.dispatch("right")
+                self.assertEqual(app.project, project)
+                app.dispatch("home")
+                for _ in range(app.role_list().index("xy-backend")):
+                    app.dispatch("down")
+
+            def save_pending():
+                app.dispatch("s")
+                self.assertEqual(app.modal, "preview", app.toast)
+                self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
+                draw_without_native()
+                app.dispatch("enter")
+                result = settle()
+                self.assertTrue(result["applied"])
+                self.assertFalse(app.pending())
+                app.dispatch("esc")
+                return result
+
+            app.dispatch("2")
+            self.assertEqual(app.host, "claude")
+            scope(None)
+            draw_without_native()
+            app.dispatch("m")
+            settle()
+            self.assertIn("fixture-model", [row.id for row in app.catalog().models])
+            self.assertNotIn("shell-model", [row.id for row in app.catalog().models])
+            self.assertNotIn("ignored-project-menu", [row.id for row in app.catalog().models])
+            choose("fixture-model")
+            choose("max")
+            global_path = self.state / role_preferences.RELATIVE
+            before = {project: service.role_path(project, "claude", "xy-backend").read_bytes()
+                      for project in (first, second)}
+            app.dispatch("s")
+            self.assertEqual(app.modal, "preview", app.toast)
+            self.assertTrue(app.preference_plan.summary["can_apply"], app.preference_plan.summary)
+            self.assertEqual({row["project"] for row in app.preference_plan.summary["affected_projects"]},
+                             {str(first), str(second)})
+            draw_without_native()
+            app.dispatch("esc")
+            self.assertFalse(global_path.exists(), "取消预览不得发布全局偏好")
+            self.assertEqual(before, {project: service.role_path(project, "claude", "xy-backend").read_bytes()
+                                      for project in (first, second)})
+            result = save_pending()
+            self.assertEqual(len(result["backups"]), 2)
+            for project in (first, second):
+                self.assertEqual(self.native(project, "claude"), {"model": "fixture-model", "effort": "max"})
+
+            # 项目覆盖、明确 inherit、reset 都消费同一真实目录与偏好服务；未编辑
+            # 的 effort 仍跟随全局，另一个项目不受项目范围的保存影响。
+            scope(first)
+            for model in ("project-model", "inherit"):
+                app.dispatch("m")
+                settle()
+                choose(model)
+                choose(None)
+                save_pending()
+                view = preferences.view(self.state, first, "claude", "xy-backend")
+                self.assertEqual(view["overrides"], {"model": model})
+                self.assertEqual(view["sources"]["model"], "host" if model == "inherit" else "project")
+                self.assertEqual(self.native(second, "claude"), {"model": "fixture-model", "effort": "max"})
+            app.manage_action("reset-model")
+            if app.future is not None:
+                settle()
+            save_pending()
+            self.assertEqual(preferences.view(self.state, first, "claude", "xy-backend")["sources"],
+                             {"model": "global", "effort": "global"})
+
+            scope(None)
+            app.dispatch("e")
+            settle()
+            choose("high")
+            key = app.scope()
+            original_expected = json.loads(json.dumps(app.expected[key]))
+            original_stamp = app.source_stamps[key]
+            original_draft = dict(app.drafts[key])
+            persisted = {global_path: global_path.read_bytes(), **{
+                service.role_path(project, "claude", "xy-backend"):
+                service.role_path(project, "claude", "xy-backend").read_bytes() for project in (first, second)}}
+            os.environ.update(ANTHROPIC_MODEL="masked-shell-changed", ANTHROPIC_BASE_URL="masked-shell-endpoint",
+                              ANTHROPIC_DEFAULT_OPUS_MODEL="masked-shell-opus", CLAUDE_CODE_USE_VERTEX="0")
+            app.dispatch("s")
+            self.assertEqual(app.modal, "preview", app.toast)
+            self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
+            app.dispatch("esc")
+            for changed_source in ("file-model", "provider-route", "sdk-endpoint"):
+                with self.subTest(changed_source=changed_source):
+                    if changed_source == "sdk-endpoint":
+                        # 上一分支结束已恢复文件，但缓存仍持有换源后的目录；显式
+                        # 重开编辑只刷新显示，不续期原草稿，再用原来源形成真实预览。
+                        app.dispatch("e")
+                        settle()
+                        app.dispatch("esc")
+                    if changed_source in {"file-model", "sdk-endpoint"}:
+                        # 先形成可应用的真实预览，再换源并确认，直接覆盖 apply 的
+                        # 二次守卫；只在预览入口拒绝不足以证明这一竞态不会落盘。
+                        app.dispatch("s")
+                        self.assertEqual(app.modal, "preview", app.toast)
+                        self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
+                    changed = json.loads(json.dumps(settings))
+                    if changed_source == "file-model":
+                        changed["env"]["ANTHROPIC_MODEL"] = "project-model"
+                    elif changed_source == "sdk-endpoint":
+                        changed["env"]["AWS_ENDPOINT_URL"] = "https://sdk-second.example.com"
+                    else:
+                        changed["env"]["CLAUDE_CODE_USE_BEDROCK"] = ""
+                        changed["env"]["CLAUDE_CODE_USE_VERTEX"] = "1"
+                    config_path.write_text(json.dumps(changed))
+                    if changed_source in {"file-model", "sdk-endpoint"}:
+                        app.dispatch("enter")
+                        self.assertIsNotNone(app.future)
+                        with self.assertRaisesRegex(ValueError, "来源"):
+                            app.future.result(timeout=20)
+                        app.poll_job()
+                        self.assertIsNone(app.future)
+                        self.assertEqual(app.modal, "error")
+                        self.assertIn("来源", app.text)
+                        self.assertEqual({path: path.read_bytes() for path in persisted}, persisted)
+                        app.dispatch("esc")
+                        self.assertIsNone(app.modal, "失败不得复活已失效的确认页")
+                    app.dispatch("s")
+                    self.assertIsNone(app.modal)
+                    self.assertIn("来源", app.toast)
+                    draw_without_native()
+                    app.dispatch("r")
+                    settle()
+                    app.dispatch("e")
+                    settle()
+                    self.assertEqual(app.modal, "effort")
+                    self.assertNotEqual(app.catalog().stamp, original_stamp)
+                    app.dispatch("esc")
+                    app.dispatch("s")
+                    self.assertIsNone(app.modal)
+                    self.assertIn("来源", app.toast)
+                    self.assertEqual(app.expected[key], original_expected)
+                    self.assertEqual(app.source_stamps[key], original_stamp)
+                    self.assertEqual(app.drafts[key], original_draft)
+                    self.assertEqual({path: path.read_bytes() for path in persisted}, persisted)
+                    config_path.write_text(json.dumps(settings))
+            draw_without_native()
+            self.assertIsNone(app.future)
+            print("Claude真实App：全局取消不写/确认双落盘/项目覆盖-inherit-reset/遮住shell不误伤/"
+                  "文件env与路由换源拒绝/预览后文件env及SDK端点换源apply拒绝/刷新不续期；native启动数=0。")
+        print("Claude真实App：executor已shutdown/wait，无自有native进程；fixture由tearDownClass关闭清理。")
 
     def test_real_cli_global_project_single_fields_resets_and_safe_refusals(self):
         project = self.project("cli")

@@ -441,16 +441,239 @@ for line in sys.stdin:
         self.assertEqual([row.id for row in discover('codex',self.home,env={}).models],['inherit','current'])
 
     def test_claude_proxy_menu_and_mapping_without_secrets_or_guessed_effort(self):
-        self.write('.claude/settings.json',{'env':{'ANTHROPIC_AUTH_TOKEN':'TOP-SECRET','ANTHROPIC_DEFAULT_OPUS_MODEL':'custom/model'},'modelPicker':{'options':[{'value':'custom/model','label':'自定义'}]},'modelSettings':{'custom/model':{'effortLevel':'max'}}})
+        self.write('.claude/settings.json',{'env':{'ANTHROPIC_AUTH_TOKEN':'TOP-SECRET','ANTHROPIC_DEFAULT_OPUS_MODEL':'custom/model'},'modelPicker':{'options':[{'model':'custom/model','label':'自定义'}]},'modelSettings':{'custom/model':{'effortLevel':'max'}}})
         catalog=discover('claude',self.home,env={});output=json.dumps(catalog.as_dict())
         self.assertNotIn('TOP-SECRET',output);self.assertNotIn('AUTH_TOKEN',output)
         self.assertTrue(any(row.id == 'custom/model' for row in catalog.models));self.assertTrue(all(not row.efforts for row in catalog.models))
         self.assertIn('custom/model',next(row.label for row in catalog.models if row.id == 'opus'))
 
-    def test_project_provider_change_does_not_reuse_old_menu(self):
-        self.write('.claude/settings.json',{'model':'old-model','env':{'ANTHROPIC_BASE_URL':'old'},'modelPicker':{'options':['old-model']}})
+    def test_claude_settings_env_precedes_shell_and_tracks_effective_sources(self):
+        """同名 env 先按文件层合并；环境模型再独立覆盖顶层 model。"""
+        shell = {'ANTHROPIC_MODEL': 'shell-model', 'ANTHROPIC_BASE_URL': 'shell-endpoint',
+                 'ANTHROPIC_DEFAULT_OPUS_MODEL': 'shell-opus'}
+        settings = {'model': 'top-model', 'env': {
+            'ANTHROPIC_MODEL': 'file-model', 'ANTHROPIC_BASE_URL': 'file-endpoint',
+            'ANTHROPIC_DEFAULT_OPUS_MODEL': 'file-opus'},
+            'modelPicker': {'options': [{'model': 'menu-model', 'label': '合法用户菜单'}]}}
+        self.write('.claude/settings.json', settings)
+        first = discover('claude', self.home, env=shell)
+        self.assertEqual(first._status, 'ready')
+        self.assertIn('file-model', [row.id for row in first.models])
+        self.assertNotIn('shell-model', [row.id for row in first.models])
+        self.assertNotIn('top-model', [row.id for row in first.models])
+        self.assertIn('file-opus', next(row.label for row in first.models if row.id == 'opus'))
+        # 被文件遮住的 shell 和顶层 model 不再是当前来源，变化不能废弃草稿。
+        masked_shell = {key: value + '-changed' for key, value in shell.items()}
+        self.assertEqual(first.stamp, discover('claude', self.home, env=masked_shell).stamp)
+        settings['model'] = 'masked-top-model'
+        self.write('.claude/settings.json', settings)
+        self.assertEqual(first.stamp, discover('claude', self.home, env=shell).stamp)
+        for key in shell:
+            with self.subTest(effective_file_variable=key):
+                settings['env'][key] += '-changed'
+                self.write('.claude/settings.json', settings)
+                changed = discover('claude', self.home, env=shell)
+                self.assertEqual(changed._status, 'ready')
+                self.assertNotEqual(first.stamp, changed.stamp)
+                first = changed
+        # local > project > user 的规则只作用于同名 env；不同变量保留各自来源。
+        project = self.home / 'project'
+        self.write('project/.claude/settings.json', {'env': {'ANTHROPIC_MODEL': 'project-model'}})
+        self.write('project/.claude/settings.local.json', {'env': {'ANTHROPIC_MODEL': 'local-model'}})
+        local = discover('claude', self.home, project, shell)
+        self.assertIn('local-model', [row.id for row in local.models])
+        self.assertNotIn('project-model', [row.id for row in local.models])
+        settings['env'].pop('ANTHROPIC_MODEL')
+        self.write('.claude/settings.json', settings)
+        self.assertIn('shell-model', [row.id for row in discover('claude', self.home, env=shell).models])
+
+    def test_claude_provider_routes_invalidate_authorized_catalogs(self):
+        """路由切换废弃旧授权，但当前显式设置仍是新目录的证据。"""
+        settings = {'model': 'configured-model', 'modelPicker': {
+            'options': [{'model': 'configured-menu', 'label': '当前用户菜单'}]}}
+        self.write('.claude/settings.json', settings)
+        previous = discover('claude', self.home, env={})
+        for selector, route in (
+                ('CLAUDE_CODE_USE_BEDROCK', {'ANTHROPIC_BEDROCK_BASE_URL': 'bedrock-endpoint', 'AWS_REGION': 'us-east-1'}),
+                ('CLAUDE_CODE_USE_VERTEX', {'ANTHROPIC_VERTEX_PROJECT_ID': 'fixture-project', 'CLOUD_ML_REGION': 'us-east5'}),
+                ('CLAUDE_CODE_USE_FOUNDRY', {'ANTHROPIC_FOUNDRY_RESOURCE': 'fixture-resource'}),
+                ('CLAUDE_CODE_USE_ANTHROPIC_AWS', {'ANTHROPIC_AWS_WORKSPACE_ID': 'fixture-workspace'}),
+                ('CLAUDE_CODE_USE_MANTLE', {'ANTHROPIC_BEDROCK_MANTLE_BASE_URL': 'mantle-endpoint'})):
+            with self.subTest(provider=selector):
+                environment = {selector: '1', **route}
+                current = discover('claude', self.home, env=environment)
+                self.assertEqual(current._status, 'ready')
+                self.assertNotEqual(previous.stamp, current.stamp)
+                self.assertIn('configured-model', [row.id for row in current.models])
+                self.assertIn('configured-menu', [row.id for row in current.models])
+                for key in route:
+                    changed = discover('claude', self.home, env={**environment, key: route[key] + '-changed'})
+                    self.assertNotEqual(current.stamp, changed.stamp)
+                self.assertEqual(current.stamp, discover('claude', self.home, env={
+                    **environment, 'ANTHROPIC_AUTH_TOKEN': 'PRIVATE-TOKEN',
+                    'AWS_SECRET_ACCESS_KEY': 'PRIVATE-KEY'}).stamp)
+                previous = current
+        # 文件明确关闭 shell 中的 Vertex；关闭的路由与被遮住的开关均不生效。
+        settings['env'] = {'CLAUDE_CODE_USE_VERTEX': ''}
+        self.write('.claude/settings.json', settings)
+        first = discover('claude', self.home, env={'CLAUDE_CODE_USE_VERTEX': '1'})
+        self.assertEqual(first.stamp, discover('claude', self.home, env={
+            'CLAUDE_CODE_USE_VERTEX': '0', 'ANTHROPIC_VERTEX_PROJECT_ID': 'inactive'}).stamp)
+        settings['env']['CLAUDE_CODE_USE_VERTEX'] = '0'
+        self.write('.claude/settings.json', settings)
+        self.assertEqual(first.stamp, discover('claude', self.home, env={}).stamp)
+        settings['env']['CLAUDE_CODE_USE_VERTEX'] = '1'
+        self.write('.claude/settings.json', settings)
+        self.assertNotEqual(first.stamp, discover('claude', self.home, env={}).stamp)
+        # 同一提供方的低优先级/非法 region 不构成当前路由；真实首选值变化仍失效。
+        self.write('.claude/settings.json', {'model': 'configured-model'})
+        regions = {'CLAUDE_CODE_USE_BEDROCK': '1', 'AWS_REGION': 'us-east-1', 'AWS_DEFAULT_REGION': 'us-west-2'}
+        first = discover('claude', self.home, env=regions)
+        self.assertEqual(first.stamp, discover('claude', self.home, env={**regions, 'AWS_DEFAULT_REGION': 'eu-west-1'}).stamp)
+        invalid = {**regions, 'AWS_REGION': 'invalid/region'}
+        fallback = discover('claude', self.home, env=invalid)
+        self.assertEqual(fallback.stamp, discover('claude', self.home, env={**invalid, 'AWS_REGION': 'still invalid'}).stamp)
+        self.assertNotEqual(fallback.stamp, discover('claude', self.home, env={**invalid, 'AWS_DEFAULT_REGION': 'eu-west-1'}).stamp)
+
+    def _assert_claude_source_transition(self, before_env, after_env, *, changed):
+        """真实磁盘配置与业务守卫必须对同一次来源变化给出一致结果。
+
+        此处不 mock discover/check_catalogs/_guard，也不加载账户或启动宿主；
+        缺失的私有 state 只读投影为 Node()，目录/预览检查不能顺手创建它。
+        先收齐全部观察再断言，旧源行为红也能保留真实守卫是否误接受的证据。
+        """
+        from lib.runtime_project import Node
+        from manager import model_preferences
+
+        state, project = self.home / 'state', self.home / 'project'
+        # check_catalogs 的真实入口要求项目目录存在；先建立本例空项目，避免
+        # “项目不存在”提前拒绝掩盖本测试真正要观察的来源守卫结果。
+        project.mkdir(exist_ok=True)
+        common = {'HOME': str(self.home), 'CLAUDE_CONFIG_DIR': str(self.home / '.claude')}
+        with patch.dict(os.environ, {**common, **before_env}, clear=True):
+            before = discover('claude', project=project)
+        with patch.dict(os.environ, {**common, **after_env}, clear=True):
+            after = discover('claude', project=project)
+            accepted = model_preferences.check_catalogs(state, project, 'claude', before)
+            plan = model_preferences.ModelPreferencePlan(state, project, 'claude', Node(), b'{}',
+                                                         None, before, (), b'{}')
+            refused = False
+            try:
+                model_preferences._guard(plan)
+            except ValueError as exc:
+                self.assertIn('来源', str(exc))
+                refused = True
+        observed = (before._status, after._status, before.stamp == after.stamp, accepted, refused)
+        self.assertEqual(observed, ('ready', 'ready', not changed, not changed, changed))
+        self.assertFalse(state.exists())
+
+    def test_claude_bedrock_sdk_endpoints_follow_effective_precedence(self):
+        """SDK运行/控制端点各自选择有效值，忽略层不误伤，换有效端点拒旧授权。"""
+        self.write('.claude/settings.json', {'model': 'configured-model', 'modelPicker': {
+            'options': [{'model': 'configured-model'}]}})
+        base = {'CLAUDE_CODE_USE_BEDROCK': '1', 'AWS_REGION': 'us-east-1'}
+        endpoint_keys = ('AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_BEDROCK', 'AWS_ENDPOINT_URL_BEDROCK_RUNTIME')
+        for key in endpoint_keys:
+            with self.subTest(effective_sdk_endpoint=key):
+                self._assert_claude_source_transition(
+                    {**base, key: 'https://first.example.com'},
+                    {**base, key: 'https://second.example.com'}, changed=True)
+        services = {**base, 'AWS_ENDPOINT_URL_BEDROCK': 'https://control.example.com',
+                    'AWS_ENDPOINT_URL_BEDROCK_RUNTIME': 'https://runtime.example.com',
+                    'AWS_ENDPOINT_URL': 'https://masked.example.com'}
+        with self.subTest(both_services_mask_global=True):
+            self._assert_claude_source_transition(services, {**services, 'AWS_ENDPOINT_URL': 'https://ignored.example.com'},
+                                                 changed=False)
+        # 只覆盖一种服务时，global 对另一种服务仍生效；不能把三变量取成一个
+        # “优先级最高端点”而丢掉控制面或运行面的独立路由身份。
+        for service in endpoint_keys[1:]:
+            with self.subTest(global_still_used_by_other_service=service):
+                first = {**base, service: 'https://service.example.com', 'AWS_ENDPOINT_URL': 'https://first.example.com'}
+                self._assert_claude_source_transition(first, {**first, 'AWS_ENDPOINT_URL': 'https://second.example.com'},
+                                                     changed=True)
+        with self.subTest(ignore_configured_endpoints=True):
+            first = {**services, 'AWS_IGNORE_CONFIGURED_ENDPOINT_URLS': 'true'}
+            second = {**first, **{key: 'https://ignored-change.example.com' for key in endpoint_keys}}
+            self._assert_claude_source_transition(first, second, changed=False)
+            self._assert_claude_source_transition(first, {**first, 'AWS_IGNORE_CONFIGURED_ENDPOINT_URLS': 'false'},
+                                                 changed=True)
+        with self.subTest(explicit_client_masks_sdk_and_ignore=True):
+            first = {**services, 'ANTHROPIC_BEDROCK_BASE_URL': 'https://client.example.com'}
+            second = {**first, **{key: 'https://masked-change.example.com' for key in endpoint_keys},
+                      'AWS_IGNORE_CONFIGURED_ENDPOINT_URLS': 'true'}
+            self._assert_claude_source_transition(first, second, changed=False)
+            self._assert_claude_source_transition(second, {**second, 'ANTHROPIC_BEDROCK_BASE_URL': 'https://client-new.example.com'},
+                                                 changed=True)
+        with self.subTest(provider_disabled=True):
+            first = {**services, 'CLAUDE_CODE_USE_BEDROCK': ''}
+            second = {**first, **{key: 'https://inactive.example.com' for key in endpoint_keys},
+                      'AWS_IGNORE_CONFIGURED_ENDPOINT_URLS': 'true'}
+            self._assert_claude_source_transition(first, second, changed=False)
+
+    def test_claude_ignored_auxiliary_and_invalid_vertex_regions_keep_authorization(self):
+        """辅助region须满足原生生效条件；非法Vertex位置按未设置回退。"""
+        self.write('.claude/settings.json', {'model': 'configured-model'})
+        region_key = 'ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION'
+        bedrock = {'CLAUDE_CODE_USE_BEDROCK': '1', 'AWS_REGION': 'us-east-1'}
+        for model in ({}, {'ANTHROPIC_DEFAULT_HAIKU_MODEL': '', 'ANTHROPIC_SMALL_FAST_MODEL': ''}):
+            with self.subTest(unused_small_fast_model=model):
+                self._assert_claude_source_transition(
+                    {**bedrock, **model, region_key: 'us-west-1'},
+                    {**bedrock, **model, region_key: 'eu-west-1'}, changed=False)
+        for model_key in ('ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL'):
+            with self.subTest(explicit_small_fast_model=model_key):
+                self._assert_claude_source_transition(
+                    {**bedrock, model_key: 'haiku-fixture', region_key: 'us-west-1'},
+                    {**bedrock, model_key: 'haiku-fixture', region_key: 'eu-west-1'}, changed=True)
+        with self.subTest(unrelated_anthropic_aws_provider=True):
+            first = {'CLAUDE_CODE_USE_ANTHROPIC_AWS': '1', region_key: 'us-west-1'}
+            self._assert_claude_source_transition(first, {**first, region_key: 'eu-west-1'}, changed=False)
+        with self.subTest(mantle_haiku_region_documented_separately=True):
+            first = {'CLAUDE_CODE_USE_MANTLE': '1', region_key: 'us-west-1'}
+            self._assert_claude_source_transition(first, {**first, region_key: 'eu-west-1'}, changed=True)
+        vertex = {'CLAUDE_CODE_USE_VERTEX': '1', 'ANTHROPIC_VERTEX_PROJECT_ID': 'fixture-project'}
+        for key in ('CLOUD_ML_REGION', 'VERTEX_REGION_CLAUDE_HAIKU_4_5'):
+            with self.subTest(invalid_vertex_region=key):
+                first = {**vertex, key: 'invalid/region'}
+                self._assert_claude_source_transition(first, {**first, key: 'still invalid'}, changed=False)
+                self._assert_claude_source_transition(first, vertex, changed=False)
+            for before, after in (('global', 'eu'), ('eu', 'us'), ('us-east5', 'europe-west1')):
+                with self.subTest(valid_vertex_region=key, before=before, after=after):
+                    self._assert_claude_source_transition({**vertex, key: before}, {**vertex, key: after}, changed=True)
+        with self.subTest(invalid_model_region_falls_back_to_global=True):
+            first = {**vertex, 'CLOUD_ML_REGION': 'us-east5', 'VERTEX_REGION_CLAUDE_HAIKU_4_5': 'invalid/region'}
+            self._assert_claude_source_transition(first, {**first, 'CLOUD_ML_REGION': 'europe-west1'}, changed=True)
+
+    def test_claude_project_model_picker_is_ignored(self):
+        """原生只允许用户等可信层提供菜单；项目仍能明确设置顶层模型。"""
+        settings = {'modelPicker': {'options': [{'model': 'user-menu', 'label': '用户菜单'}]}}
+        self.write('.claude/settings.json', settings)
+        project = self.home / 'project'
+        self.write('project/.claude/settings.json', {'model': 'project-current', 'modelPicker': {
+            'options': [{'model': 'project-menu', 'label': '项目无效菜单'}]}})
+        self.write('project/.claude/settings.local.json', {'modelPicker': {
+            'options': [{'model': 'local-menu', 'label': '本地无效菜单'}]}})
+        first = discover('claude', self.home, project, {})
+        self.assertIn('user-menu', [row.id for row in first.models])
+        self.assertIn('project-current', [row.id for row in first.models])
+        self.assertNotIn('project-menu', [row.id for row in first.models])
+        self.assertNotIn('local-menu', [row.id for row in first.models])
+        self.write('project/.claude/settings.local.json', {'modelPicker': {
+            'options': [{'model': 'changed-ignored-menu'}]}})
+        self.assertEqual(first.stamp, discover('claude', self.home, project, {}).stamp)
+        self.write('.claude/settings.json', {})
+        self.assertNotIn('changed-ignored-menu', [row.id for row in discover('claude', self.home, project, {}).models])
+
+    def test_project_provider_change_preserves_explicit_user_configuration_but_invalidates_stamp(self):
+        # Claude 当前用户字段不是历史目录缓存：新 provider 仍读取它们。真正需要
+        # 拒绝的是换源前的授权快照，不能通过清空有效菜单/model 假装修复隔离。
+        self.write('.claude/settings.json',{'model':'configured-model','env':{'ANTHROPIC_BASE_URL':'old'},
+            'modelPicker':{'options':[{'model':'configured-menu'}]}})
         project=self.home/'project';self.write('project/.claude/settings.json',{'env':{'ANTHROPIC_BASE_URL':'new'}})
-        self.assertNotIn('old-model',[row.id for row in discover('claude',self.home,project,{}).models])
+        before=discover('claude',self.home,env={});after=discover('claude',self.home,project,{})
+        self.assertIn('configured-model',[row.id for row in after.models])
+        self.assertIn('configured-menu',[row.id for row in after.models])
+        self.assertNotEqual(before.stamp,after.stamp)
 
     def test_mismatched_codex_cache_identity_is_not_trusted(self):
         self.write('.codex/config.toml','model_provider="openai"\n')
@@ -516,7 +739,10 @@ for line in sys.stdin:
         self.write('.claude/settings.json',{'env':{'ANTHROPIC_MODEL':'overridden-first'}})
         before=discover('claude',self.home,env={'ANTHROPIC_MODEL':'selected'})
         self.write('.claude/settings.json',{'env':{'ANTHROPIC_MODEL':'overridden-second'}})
-        self.assertEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_MODEL':'selected'}).stamp)
+        # 同根因旧断言曾将 shell 当成最高来源；实际生效的是 settings.env。
+        self.assertNotEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_MODEL':'selected'}).stamp)
+        after=discover('claude',self.home,env={'ANTHROPIC_MODEL':'selected'})
+        self.assertEqual(after.stamp,discover('claude',self.home,env={'ANTHROPIC_MODEL':'masked-shell-change'}).stamp)
 
     def test_effective_provider_layer_mapping_and_capability_still_invalidate(self):
         self.write('.codex/config.toml','model="same"\nmodel_provider="proxy"\nmodel_catalog_json="catalog.json"\n[model_providers.proxy]\nbase_url="first"\n')
@@ -535,8 +761,10 @@ for line in sys.stdin:
         self.assertNotEqual(before.stamp,discover('codex',self.home,self.home/'project',{}).stamp)
         self.write('.claude/settings.json',{'env':{'ANTHROPIC_BASE_URL':'first','ANTHROPIC_DEFAULT_OPUS_MODEL':'first-model'}})
         before=discover('claude',self.home,env={})
-        self.assertNotEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_BASE_URL':'second'}).stamp)
-        self.assertNotEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_DEFAULT_OPUS_MODEL':'second-model'}).stamp)
+        self.assertEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_BASE_URL':'second'}).stamp)
+        self.assertEqual(before.stamp,discover('claude',self.home,env={'ANTHROPIC_DEFAULT_OPUS_MODEL':'second-model'}).stamp)
+        self.write('.claude/settings.json',{'env':{'ANTHROPIC_BASE_URL':'second','ANTHROPIC_DEFAULT_OPUS_MODEL':'second-model'}})
+        self.assertNotEqual(before.stamp,discover('claude',self.home,env={}).stamp)
 
 
 class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):

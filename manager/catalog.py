@@ -7,10 +7,11 @@ import json
 import hashlib
 import os
 from pathlib import Path
+import re
 import tomllib
 
 from lib.role_models import EFFORTS, MODEL_ID
-from .claude_execution import project_controls, project_write_scope_guard
+from .claude_execution import project_controls, project_environment, project_write_scope_guard
 from . import codex_models
 
 
@@ -211,48 +212,130 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict, snapsh
     catalog.notes.append("目录可见不等于推理调用成功；未启动推理会话。ultra 涉及自动委派，不提供该选项。")
 
 
+CLAUDE_PROVIDER_ROUTES = {
+    "CLAUDE_CODE_USE_BEDROCK": ("ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_BEDROCK_REGION_PREFIX"),
+    "CLAUDE_CODE_USE_MANTLE": ("ANTHROPIC_BEDROCK_MANTLE_BASE_URL",),
+    "CLAUDE_CODE_USE_VERTEX": ("ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION"),
+    "CLAUDE_CODE_USE_FOUNDRY": ("ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE"),
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS": ("ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_AWS_WORKSPACE_ID"),
+}
+CLAUDE_BEDROCK_SDK_ENDPOINTS = (
+    "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_BEDROCK", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME",
+    "AWS_IGNORE_CONFIGURED_ENDPOINT_URLS",
+)
+
+
+def _claude_route_inputs(effective: dict) -> dict:
+    """摘要明确的非敏感路由输入；关闭的提供方专属字段不参与当前授权。
+
+    只读取白名单值和来源，不读取 AWS/GCP/Azure 凭据文件或 token；显式 region、
+    endpoint、project/workspace/resource 改动需要重选，但不能宣称已验证实际账户可用。
+    多提供方也可能按模型分流（例如 Bedrock + Mantle），因此不猜一个互斥的提供方。
+    """
+    # 0/false/空串都表示关闭；只改变关闭的拼写不改变提供方。仍保留来源层，
+    # 以区分文件明确禁用 shell 开关与没有文件覆盖这两种授权前像。
+    routes = {key: (isinstance(effective[key][0], str)
+                    and effective[key][0].lower() in {"1", "true", "yes", "on"}, effective[key][1])
+              for key in CLAUDE_PROVIDER_ROUTES if key in effective}
+    enabled = {key for key, (active, _) in routes.items() if active}
+    keys = {"ANTHROPIC_BASE_URL"}
+    for selector in enabled:
+        keys.update(CLAUDE_PROVIDER_ROUTES[selector])
+    if "CLAUDE_CODE_USE_BEDROCK" in enabled:
+        # Claude 的显式 Bedrock client 端点也用于 token counting/profile listing，
+        # 并非仅运行面（官方 changelog 2.0.71）。它优先于 SDK 端点，且不受
+        # AWS_IGNORE_CONFIGURED_ENDPOINT_URLS 影响；空串则继续向 SDK 层回退。
+        keys.discard("ANTHROPIC_BEDROCK_BASE_URL")
+        explicit = effective.get("ANTHROPIC_BEDROCK_BASE_URL", (None,))
+        if isinstance(explicit[0], str) and explicit[0]:
+            routes["bedrock_endpoints"] = {"client": explicit}
+        else:
+            ignored = effective.get("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS", ("false", "sdk_default"))
+            ignore_value = isinstance(ignored[0], str) and ignored[0].lower() == "true"
+            endpoints = {"ignore_configured": (ignore_value, ignored[1])}
+            if not ignore_value:
+                # SDK 的两个 service 分别消费控制面与运行面端点。仅当两个都
+                # 覆盖 global 时，global 才完全不生效；不能把三者当作一条覆盖链。
+                # 此处只选择已读 env，不读取 SDK profile/config 或凭据正文。
+                for client, service_key in (("control", "AWS_ENDPOINT_URL_BEDROCK"),
+                                            ("runtime", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME")):
+                    for key in (service_key, "AWS_ENDPOINT_URL"):
+                        value = effective.get(key, (None,))
+                        if isinstance(value[0], str) and value[0]:
+                            endpoints[client] = {key: value}
+                            break
+            routes["bedrock_endpoints"] = endpoints
+    if enabled & {"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_ANTHROPIC_AWS"}:
+        keys.add("AWS_PROFILE")
+        # 宿主忽略形状非法的 region，再按 AWS_REGION → AWS_DEFAULT_REGION
+        # 查找；只纳入首个有效显式值。SDK profile/凭据文件的实际 region 未读取，
+        # 不冒充已解析，也不读取凭据正文来猜账户可见性。
+        for key in ("AWS_REGION", "AWS_DEFAULT_REGION"):
+            region = effective.get(key, (None,))[0]
+            if isinstance(region, str) and re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+", region):
+                keys.add(key)
+                break
+    # Bedrock 未明确选用 Haiku 时，背景请求使用主会话/默认 Sonnet 的 region，
+    # small-fast region 不生效。SMALL_FAST_MODEL 虽已弃用，当前宿主仍承认它，
+    # 这里只遵守现行原生谓词，不增加 AWF 的旧版兼容分支。官方 env-vars 对
+    # Mantle 单独允许 Haiku region；Anthropic AWS 不消费这一变量。
+    has_small_model = any(isinstance(effective.get(key, (None,))[0], str) and effective[key][0]
+                          for key in ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"))
+    if "CLAUDE_CODE_USE_MANTLE" in enabled or "CLAUDE_CODE_USE_BEDROCK" in enabled and has_small_model:
+        keys.add("ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION")
+    if "CLAUDE_CODE_USE_VERTEX" in enabled:
+        # Vertex 接受 global、eu/us 等多区域和 us-east5 等区域形状；斜杠、点、
+        # 空格等非法值按 unset，不因两个不同非法拼写废弃草稿。每模型非法值
+        # 回退 CLOUD_ML_REGION，再回退宿主 us-east5；只摘要真实有效的显式层。
+        keys.discard("CLOUD_ML_REGION")
+        for key in ("CLOUD_ML_REGION", *(key for key in effective if key.startswith("VERTEX_REGION_CLAUDE_"))):
+            value = effective.get(key, (None,))[0]
+            if isinstance(value, str) and re.fullmatch(r"[a-z0-9-]+", value):
+                keys.add(key)
+    if "CLAUDE_CODE_USE_FOUNDRY" in enabled and effective.get("ANTHROPIC_FOUNDRY_BASE_URL", (None,))[0]:
+        keys.discard("ANTHROPIC_FOUNDRY_RESOURCE")
+    routes.update({key: effective[key] for key in keys if key in effective})
+    return routes
+
+
 def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> None:
     directory = Path(env.get("CLAUDE_CONFIG_DIR", home / ".claude")).expanduser()
-    config = read_data(directory / "settings.json")
-    # 后面会更新合并用的 config，先固定此层 env/permissions，避免把项目值误标成用户来源。
-    execution_sources = [(str(directory / "settings.json"), {"env": config.get("env", {}),
-                                                           "permissions": config.get("permissions", {})})]
-    layers={key:str((directory/"settings.json").absolute()) for key in ("model","modelPicker") if key in config}
-    env_layers={key:str((directory/"settings.json").absolute()) for key in config.get("env",{})}
-    effective_env = dict(config.get("env", {}))
-    menu = config.get("modelPicker", {})
-    # 只有提供方一致时才沿用已有菜单，防止项目或环境换代理后展示旧提供方模型。
-    provider = effective_env.get("ANTHROPIC_BASE_URL")
-    changed_provider = False
-    current_model=config.get("model")
+    user_path = directory / "settings.json"
+    config = read_data(user_path)
+    sources = [(str(user_path.absolute()), config)]
     if project:
         for name in ("settings.json", "settings.local.json"):
-            local = read_data(project / ".claude" / name)
-            execution_sources.append((str(project / ".claude" / name), local))
-            updates = local.get("env", {})
-            if "ANTHROPIC_BASE_URL" in updates and updates["ANTHROPIC_BASE_URL"] != provider:
-                effective_env = {}; menu = {}; provider = updates["ANTHROPIC_BASE_URL"]; changed_provider = True
-                current_model=None
-                layers={};env_layers={}
-            effective_env.update(updates)
-            env_layers.update({key:str((project/".claude"/name).absolute()) for key in updates})
-            if "modelPicker" in local:
-                menu = local["modelPicker"]
-                layers["modelPicker"]=str((project/".claude"/name).absolute())
-            config.update(local)
-            # 提供方切换只清继承的旧模型，同层或更高层明确指定的新模型必须保留。
-            if "model" in local:current_model=local["model"];layers["model"]=str((project/".claude"/name).absolute())
-    if env.get("ANTHROPIC_BASE_URL", provider) != provider:
-        effective_env = {}; menu = {}; changed_provider = True
-        current_model=None
-        layers={};env_layers={}
-        catalog.notes.append("环境变量切换了提供方，未沿用旧模型菜单。")
-    for name, value in env.items():
-        if name.startswith("ANTHROPIC_DEFAULT_") and name.endswith("_MODEL"):
-            effective_env[name] = value
-            env_layers[name]="environment"
+            path = project / ".claude" / name
+            sources.append((str(path.absolute()), read_data(path)))
+    aliases = ("opus", "sonnet", "haiku", "fable")
+    mapping_keys = tuple(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL" for alias in aliases)
+    route_keys = tuple(dict.fromkeys(key for keys in CLAUDE_PROVIDER_ROUTES.values() for key in keys))
+    # Vertex 文档为每模型 region 定义了这一专用变量族；只枚举它的变量名，
+    # 不把任意 ANTHROPIC_/CLAUDE_CODE_ 或完整 shell/env 纳入来源摘要。
+    vertex_regions = {key for key in env if key.startswith("VERTEX_REGION_CLAUDE_")}
+    for _, settings in sources:
+        entries = settings.get("env", {})
+        if not isinstance(entries, dict):
+            raise ValueError("Claude env 必须为对象")
+        vertex_regions.update(key for key in entries if key.startswith("VERTEX_REGION_CLAUDE_"))
+    keys = ("ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE",
+            "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION", "ANTHROPIC_SMALL_FAST_MODEL", *CLAUDE_BEDROCK_SDK_ENDPOINTS,
+            *mapping_keys, *CLAUDE_PROVIDER_ROUTES,
+            *route_keys, *sorted(vertex_regions))
+    effective = project_environment(sources, env, keys)
+    current_model = None
+    model_source = None
+    for source, settings in sources:
+        if "model" in settings:
+            current_model, model_source = settings["model"], source
+    if "ANTHROPIC_MODEL" in effective:
+        current_model, model_source = effective["ANTHROPIC_MODEL"]
+    # modelPicker 是原生 user/--settings/managed 专用字段，项目/local 即使合法也
+    # 必须忽略。本工具只读取 user；当前显式菜单/模型不是旧缓存，换路由也不清空。
+    # 路由变化由 stamp 使已发布授权失效，不能靠删除有效配置来代替来源守卫。
+    menu = config.get("modelPicker", {})
     for alias in ("opus", "sonnet", "haiku", "fable"):
-        target = effective_env.get(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL")
+        target = effective.get(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL", (None,))[0]
         _append(catalog, alias, f"{alias} → {clean(target)}" if target else alias, "Claude 宿主别名 / 当前配置映射")
     options = menu.get("options", []) if isinstance(menu, dict) else []
     for row in options if isinstance(options, list) else []:
@@ -260,22 +343,15 @@ def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> No
             _append(catalog, row, row, "Claude modelPicker 本地菜单")
         elif isinstance(row, dict):
             _append(catalog, row.get("value", row.get("model", row.get("id"))), row.get("label", row.get("name")), "Claude modelPicker 本地菜单")
-    current_model=env.get("ANTHROPIC_MODEL",effective_env.get("ANTHROPIC_MODEL",current_model))
-    if "ANTHROPIC_MODEL" in env:layers["model"]="environment"
-    elif "ANTHROPIC_MODEL" in effective_env:layers["model"]=env_layers.get("ANTHROPIC_MODEL")
-    selected_keys={f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL" for alias in ("opus","sonnet","haiku","fable")}
     # 使用原始映射摘要，避免超长目标被展示清理截断后无法发现真实模型切换。
-    remember(catalog,{"directory":str(directory.absolute()),"provider":env.get("ANTHROPIC_BASE_URL",provider),
-                      "provider_layer":"environment" if "ANTHROPIC_BASE_URL" in env else env_layers.get("ANTHROPIC_BASE_URL"),
-                      "current":current_model,"layers":layers,
-                      "mapping":{key:value for key,value in effective_env.items() if key in selected_keys},
-                      "env_layers":{key:value for key,value in env_layers.items() if key in selected_keys}})
+    remember(catalog, {"directory": str(directory.absolute()), "routes": _claude_route_inputs(effective),
+                       "current": current_model, "model_source": model_source,
+                       "menu_source": str(user_path.absolute()) if "modelPicker" in config else None,
+                       "mapping": {key: effective[key] for key in mapping_keys if key in effective}})
     _append(catalog, current_model, current_model, "当前 Claude 配置 / 显式环境模型")
-    if changed_provider:
-        catalog.notes.append("提供方已切换，旧 model 偏好不作为新目录的可用性证据。")
     catalog.notes.append("代理菜单及别名来自本地配置；modelSettings 中的偏好不能证明模型支持的推理档位。")
-    controls = project_controls(execution_sources, env)
-    catalog.execution = {"status": "projected", "controls": controls, "write_scope_guard": project_write_scope_guard(execution_sources),
+    controls = project_controls(sources, env)
+    catalog.execution = {"status": "projected", "controls": controls, "write_scope_guard": project_write_scope_guard(sources),
                          "runtime_verified": False}
     # 只有模型/effort 覆盖变化影响来源校验；窗口、权限、fork/后台模式不会废弃模型草稿。
     remember(catalog, {key: value for key, value in controls.items()

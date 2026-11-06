@@ -17,6 +17,26 @@ CONTROL_KEYS = (
 BOOLEAN_KEYS = {CONTROL_KEYS[1], CONTROL_KEYS[4], CONTROL_KEYS[5]}
 
 
+def project_environment(sources: list[tuple[str, dict]], environment: dict,
+                        keys: tuple[str, ...]) -> dict:
+    """仅投影调用方声明的非敏感变量，保留最终值与真正生效的来源。
+
+    普通本地会话先继承 shell，再由 user／project／local 的同名 env 依次覆盖；
+    这与 ANTHROPIC_MODEL 对顶层 model 的优先级是两件事，不能混成“shell 优先”。
+    本函数不处理被白名单排除的目录、凭据、遥测或宿主身份变量，也不推断 Desktop、
+    runner、组织策略和运行中会话。目录与 controls 共用此边界，避免来源戳和展示分歧。
+    """
+    values = {key: (environment[key], "environment") for key in keys if key in environment}
+    for source, settings in sources:
+        entries = settings.get("env", {})
+        if not isinstance(entries, dict):
+            raise ValueError("Claude env 必须为对象")
+        for key in keys:
+            if key in entries:
+                values[key] = (entries[key], source)
+    return values
+
+
 def project_controls(sources: list[tuple[str, dict]], environment: dict) -> dict:
     """白名单读取进程环境和三层设置；设置 env 通常覆盖启动 shell 的同名值。
 
@@ -24,14 +44,7 @@ def project_controls(sources: list[tuple[str, dict]], environment: dict) -> dict
     运行中 /model 与 /effort、特殊会话对 env 的处理均不可从这些文件推断。
     非法值只输出状态，不回显可能误填的密钥或任意文本。
     """
-    values = {key: (environment[key], "environment") for key in CONTROL_KEYS if key in environment}
-    for source, settings in sources:
-        entries = settings.get("env", {})
-        if not isinstance(entries, dict):
-            raise ValueError("Claude env 必须为对象")
-        for key in CONTROL_KEYS:
-            if key in entries:
-                values[key] = (entries[key], source)
+    values = project_environment(sources, environment, CONTROL_KEYS)
     result = {}
     for key, (raw, source) in values.items():
         value = None
