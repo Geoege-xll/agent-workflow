@@ -1213,6 +1213,36 @@ def _is_tauri_config(parsed: Any) -> bool:
     return isinstance(parsed, dict) and bool(TAURI_CONFIG_KEYS & parsed.keys())
 
 
+def _inactive_gradle_plugin(suffix: str) -> bool:
+    """在清洗后的插件声明尾部识别可选版本及 apply false。"""
+    return bool(re.match(
+        r'\s*(?:\.?\s*version\s*(?:\(\s*[\'"]x*[\'"]\s*\)|[\'"]x*[\'"])\s*)?'
+        r'\.?\s*apply\s*(?:\(\s*false\s*\)|false\b)', suffix
+    ))
+
+
+def _gradle_top_level_statement(block: str, start: int) -> bool:
+    """仅接受插件块自身的独立语句，排除嵌套、字符串和表达式。"""
+    prefix = block[:start]
+    return (prefix.count("{") == prefix.count("}")
+            and not re.split(r'[;\r\n]', prefix)[-1].strip())
+
+
+def _gradle_deferred_only(text: str) -> bool:
+    """仅在根构建文件完全由禁用插件声明组成时证明其自身没有构建逻辑。"""
+    block = re.fullmatch(r'\s*plugins\s*\{([^{}]*)\}\s*', _clean_gradle(text))
+    if block is None:
+        return False
+    declaration = re.compile(
+        r'(?:alias\s*\(\s*libs\.plugins\.[A-Za-z_][A-Za-z0-9_.]*\s*\)'
+        r'|(?:id|kotlin)\s*(?:\(\s*[\'"]x+[\'"]\s*\)|\s+[\'"]x+[\'"]))'
+        r'\s*(?:\.?\s*version\s*(?:\(\s*[\'"]x*[\'"]\s*\)|[\'"]x*[\'"])\s*)?'
+        r'\.?\s*apply\s*(?:\(\s*false\s*\)|false\b)'
+    )
+    remaining, count = declaration.subn('', block.group(1))
+    return count > 0 and not remaining.strip(' \t\r\n;')
+
+
 def _gradle_plugin_ids(text: str) -> frozenset[str]:
     """Return literal plugin IDs from executable top-level Gradle plugin syntax."""
 
@@ -1244,7 +1274,23 @@ def _gradle_plugin_ids(text: str) -> frozenset[str]:
             if closing < 0:
                 return frozenset(plugin_ids)
             block = cleaned[cursor + 1 : closing]
+            # 只在 plugins 块本身的一层识别字面量 kotlin("jvm")；清洗后的文本
+            # 保留位置但遮盖字符串及注释，因此再用原文核对参数，避免把伪代码
+            # 或其他 Kotlin 插件当作已启用的 JVM 插件。apply false 不产生任务。
+            for declaration in re.finditer(r'\bkotlin\s*\(\s*([\'"])xxx\1\s*\)', block):
+                if not _gradle_top_level_statement(block, declaration.start()):
+                    continue
+                absolute = cursor + 1 + declaration.start()
+                literal = re.match(r'kotlin\s*\(\s*([\'"])jvm\1\s*\)', text[absolute:closing])
+                if literal is None:
+                    continue
+                suffix = block[declaration.end():]
+                if _inactive_gradle_plugin(suffix):
+                    continue
+                plugin_ids.add("org.jetbrains.kotlin.jvm")
             for declaration in re.finditer(r"\bid\s*(?:\(\s*|\s+)", block):
+                if not _gradle_top_level_statement(block, declaration.start()):
+                    continue
                 absolute = cursor + 1 + declaration.start()
                 source = text[absolute:closing]
                 literal = re.match(
@@ -1252,6 +1298,11 @@ def _gradle_plugin_ids(text: str) -> frozenset[str]:
                     source,
                 )
                 if literal is not None:
+                    # 字面量 ID 与别名一样，声明 apply false 只登记版本，不应用插件。
+                    end = declaration.start() + literal.end()
+                    suffix = re.sub(r'^\s*\)', '', block[end:], count=1)
+                    if _inactive_gradle_plugin(suffix):
+                        continue
                     plugin_ids.add(literal.group(2))
             index = closing + 1
             continue
@@ -1298,15 +1349,17 @@ def _gradle_plugin_aliases(text: str) -> frozenset[str]:
             if closing < 0:
                 return frozenset(aliases)
             block = cleaned[cursor + 1 : closing]
-            aliases.update(
-                match.group(1)
-                for match in re.finditer(
+            for match in re.finditer(
                     r"\balias\s*\(\s*libs\.plugins\."
                     r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
                     r"\s*\)",
                     block,
-                )
-            )
+                ):
+                # 版本目录只解析此模块真正应用的声明，聚合根的 apply false
+                # 不得借子模块或目录中的插件 ID 获得 Android/JVM 身份。
+                if (_gradle_top_level_statement(block, match.start())
+                        and not _inactive_gradle_plugin(block[match.end():])):
+                    aliases.add(match.group(1))
             index = closing + 1
             continue
         index = cursor if cursor > index else index + 1
@@ -1658,6 +1711,23 @@ def _classify(
                     collapse_into_desktop=True,
                 )
             else:
+                # 同时存在 settings、下级 Gradle 项目，且根没有任何生效插件或
+                # 主源码时，它只是聚合配置；根 wrapper 仍由子模块命令发现复用。
+                # 未解析的生效别名不能当作空插件，避免误丢真实独立服务。
+                has_settings = any(_join(root, filename) in regular_paths
+                                   for filename in ("settings.gradle", "settings.gradle.kts"))
+                has_child = any(
+                    other.path != candidate.path
+                    and PurePosixPath(other.path).name in {"build.gradle", "build.gradle.kts"}
+                    and _parent(other.path) != root and _is_under(_parent(other.path), root)
+                    for other in candidates
+                )
+                source_prefix = _join(root, "src/main/")
+                has_main_source = any(path.startswith(source_prefix) and path.endswith((".java", ".kt", ".kts"))
+                                      for path in regular_paths)
+                if (has_settings and has_child and _gradle_deferred_only(text) and not plugin_ids
+                        and not _gradle_plugin_aliases(text) and not has_main_source):
+                    continue
                 language = (
                     "language:kotlin"
                     if "kotlin" in text or name.endswith(".kts")

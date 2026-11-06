@@ -3838,6 +3838,88 @@ class ProjectVerificationCommandContractTest(unittest.TestCase):
             for command in module.verification_commands
         )
 
+    def test_kotlin_jvm_and_maven_same_module_with_inactive_negatives(self):
+        # 同一物理模块的两个构建系统各自保留工作目录和真实证据。
+        files = {"service/pom.xml": "<project><modelVersion>4.0.0</modelVersion></project>",
+                 "service/build.gradle.kts": 'plugins { kotlin("jvm") version "2.2.0" }\n',
+                 "service/gradlew": "#!/bin/sh\n", "service/mvnw": "#!/bin/sh\n"}
+        profile = self._discover_files(files)
+        module = next(item for item in profile.modules if item.root == "service")
+        commands = module.verification_commands
+        self.assertEqual({("./gradlew", "build"), ("./gradlew", "test"),
+                          ("./mvnw", "package"), ("./mvnw", "test")},
+                         {command.argv for command in commands})
+        # 画像合同以模块根作为所有候选命令的工作目录。
+        self.assertEqual("service", module.root)
+        self.assertTrue(all("service/build.gradle.kts" in command.evidence_paths
+                            for command in commands if command.argv[0] == "./gradlew"))
+        for body in ('plugins { // kotlin("jvm")\n id("other") }',
+                     'plugins { val sample = "kotlin(\\"jvm\\")"; id("other") }',
+                     'plugins { nested { kotlin("jvm") }; id("other") }',
+                     'plugins { kotlin("jvm") version "2.2.0" apply false }',
+                     'plugins { kotlin("jvm").version("2.2.0").apply(false) }'):
+            with self.subTest(body=body):
+                negative = dict(files, **{"service/build.gradle.kts": body})
+                commands = self._commands(self._discover_files(negative), "service")
+                self.assertFalse(any(argv[0] == "./gradlew" for _, argv, _ in commands))
+
+    def test_android_aggregate_deferred_plugins_do_not_create_backend(self):
+        # settings 只作为聚合线索，不假称已解析 include；子模块继续使用根 wrapper。
+        files = {
+            "client/settings.gradle.kts": 'include(":app")\n',
+            "client/build.gradle.kts": (
+                '// alias(libs.plugins.java)\nplugins {\n'
+                ' alias(libs.plugins.android.application) apply false\n'
+                ' alias(libs.plugins.kotlin.jvm).apply(false)\n'
+                ' id("java") apply false\n}\n'
+            ),
+            "client/gradle/libs.versions.toml": (
+                '[plugins]\nandroid-application = { id = "com.android.application", version = "9" }\n'
+                'kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version = "2" }\n'
+            ),
+            "client/gradlew": "#!/bin/sh\n",
+            "client/app/build.gradle.kts": 'plugins { alias(libs.plugins.android.application) }\n',
+            "client/app/src/main/AndroidManifest.xml": '<manifest package="example.fixture"/>',
+            "server/build.gradle.kts": 'plugins { kotlin("jvm") version "2" }\n',
+            "java/build.gradle": "plugins { id 'java' }\n",
+        }
+        profile = self._discover_files(files)
+        modules = {module.root: module for module in profile.modules}
+        self.assertNotIn("client", modules)
+        self.assertEqual("xy-android", modules["client/app"].primary_role)
+        self.assertEqual("xy-backend", modules["server"].primary_role)
+        self.assertEqual("xy-backend", modules["java"].primary_role)
+        self.assertEqual({("../gradlew", "assembleDebug"), ("../gradlew", "testDebugUnitTest")},
+                         {command.argv for command in modules["client/app"].verification_commands})
+        for body in (
+            'plugins { alias(libs.plugins.android.application) apply false; id("java") }',
+            'plugins { alias(libs.plugins.kotlin.jvm); id("com.android.application") apply false }',
+            'plugins { id("java") apply false }\nval text = "ordinary build logic"',
+        ):
+            with self.subTest(body=body):
+                changed = dict(files, **{"client/build.gradle.kts": body})
+                roots = {module.root: module for module in self._discover_files(changed).modules}
+                self.assertEqual("xy-backend", roots["client"].primary_role)
+                self.assertFalse(any("assembleDebug" in command.argv
+                                     for command in roots["client"].verification_commands))
+        # 伪造的注释、字符串和嵌套声明不能让带 manifest 的 JVM 模块变成 Android。
+        for body in (
+            '// alias(libs.plugins.android.application)\nplugins { id("java") }',
+            'plugins { val fake = "alias(libs.plugins.android.application)"; id("java") }',
+            'plugins { nested { alias(libs.plugins.android.application) }; id("java") }',
+            'plugins { alias(libs.plugins.android.application) apply false; id("java") }',
+        ):
+            with self.subTest(fake_android=body):
+                changed = dict(files, **{"client/app/build.gradle.kts": body})
+                app = next(module for module in self._discover_files(changed).modules
+                           if module.root == "client/app")
+                self.assertEqual("xy-backend", app.primary_role)
+                self.assertEqual({("../gradlew", "build"), ("../gradlew", "test")},
+                                 {command.argv for command in app.verification_commands})
+        # 即使插件都是延迟声明，只要根含自身主源码便不能判成纯聚合根。
+        with_source = dict(files, **{"client/src/main/kotlin/Server.kt": "class Server\n"})
+        self.assertIn("client", {module.root for module in self._discover_files(with_source).modules})
+
     def test_javascript_managers_expose_only_real_named_scripts(self) -> None:
         profile = self._discover_files(
             {

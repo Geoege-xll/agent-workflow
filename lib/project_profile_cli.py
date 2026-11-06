@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -42,6 +43,44 @@ def check_roles(profile, project: Path, host: str) -> int:
 
 
 def load(pack: Path, project: Path):
+    # 薄桥传入的是项目适配器目录，不是核心目录；只要出现中央上下文就必须
+    # 完整验证，不能因缺字段或伪造路径而退回宽松的源码包分支。
+    central_keys = ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
+                    "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT")
+    if any(key in os.environ for key in central_keys):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from lib import runtime_bridge, runtime_project, runtime_store
+        from manager import runtime_service
+
+        if not all(key in os.environ for key in central_keys):
+            raise ValueError("中央画像缺少完整任务上下文")
+        root = runtime_project.canonical_project(project)
+        state = runtime_store.state_root(None)
+        context = runtime_bridge.resolve_runtime(state, root)
+        # 环境只作为一致性检查；核心、配置和项目身份均由机器记录及 pin 推导。
+        if (pack.absolute() != context.config_path.parent
+                or Path(os.environ["AGENT_WORKFLOW_CONFIG_PATH"]) != context.config_path
+                or Path(os.environ["AGENT_WORKFLOW_CORE_ROOT"]) != context.core.root
+                or Path(__file__).resolve() != context.core.root / "lib/project_profile_cli.py"):
+            raise ValueError("中央画像路径与已验证项目或固定核心不一致")
+        _, record = runtime_service.read_binding_record(state, root)
+        if record is None or not record["enabled"]:
+            raise ValueError("中央项目未启用")
+        with runtime_project.Tree(root) as tree:
+            conflicts, owned_links = runtime_service._ownership(tree, record, state, repair=False)
+            if conflicts:
+                raise ValueError("中央项目受管资源验证失败")
+            config = tree.read(runtime_project.CONFIG)
+            if config.kind != "file":
+                raise ValueError("中央项目配置缺失")
+            resources = runtime_project.Resources(context.core.root, runtime_project.json_bytes(context.runtime_binding),
+                                                  context.core.label, context.core)
+            _, profile, _ = runtime_project.configuration(resources, root, config, owned_links=owned_links)
+            # 画像扫描期间若资源或配置被替换，不能继续使用先前批准的链接集合。
+            conflicts_after, links_after = runtime_service._ownership(tree, record, state, repair=False)
+            if conflicts_after or links_after != owned_links or tree.read(runtime_project.CONFIG) != config:
+                raise ValueError("中央画像读取期间项目资源发生变化")
+            return profile
     result = validate_with_profile(
         pack / "project.yaml", project, pack / "roles"
     )

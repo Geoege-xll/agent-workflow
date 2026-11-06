@@ -111,6 +111,63 @@ class CentralProjectTest(unittest.TestCase):
                                str(root / resources.LAUNCHER), *args], cwd=root,
                               env=environment, capture_output=True, text=True, timeout=40)
 
+    def test_profile_helper_uses_verified_project_and_pinned_core(self):
+        self.enable()
+        binding = json.dumps(self.core.binding())
+        def profile(*args, env=None):
+            return self.invoke("--binding", binding, "helper", "lib/project_profile_cli.py", *args, env=env)
+
+        # 通过真正的自举薄桥调用各公开模式，并检查原始 JSON/角色合同。
+        for args in (("context", ".agent-workflow", ".", "xy-qa"),
+                     ("json", ".agent-workflow", "."), ("roles", ".agent-workflow", "."),
+                     ("design-scaffold", ".agent-workflow", "."),
+                     ("check-roles", "codex", ".agent-workflow", ".")):
+            result = profile(*args)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            if args[0] == "json":
+                self.assertIn("xy-qa", json.loads(result.stdout)["enabled_roles"])
+        self.assertNotEqual(0, profile("roles", ".agent-workflow", str(self.workspace)).returncode)
+        # 切版后仍从旧 pin 运行旧 helper，当前受管链接则由机器记录验证新核心。
+        plan = service.preview(self.state, self.project, "use", binding=self.alternate.binding())
+        self.assertTrue(plan.summary["can_apply"], plan.summary["conflicts"])
+        service.apply(plan)
+        result = profile("roles", ".agent-workflow", ".")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        bad = dict(self.core.binding(), content_id="0" * 64, manifest_sha256="0" * 64)
+        result = self.invoke("--binding", json.dumps(bad), "helper", "lib/project_profile_cli.py", "roles", ".agent-workflow", ".")
+        self.assertNotEqual(0, result.returncode)
+
+    def test_profile_helper_rejects_replaced_managed_skill(self):
+        self.enable()
+        link = self.project / ".agents/skills/xy-workflow"
+        target = os.readlink(link)
+        link.unlink()
+        link.symlink_to(target)
+        result = self.invoke("--binding", json.dumps(self.core.binding()), "helper", "lib/project_profile_cli.py",
+                             "roles", ".agent-workflow", ".")
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("", result.stdout)
+
+    def test_profile_helper_rejects_foreign_link_and_missing_role(self):
+        for scenario in ("target", "foreign", "role"):
+            with self.subTest(scenario=scenario):
+                self.project = self.workspace / ("profile-" + uuid.uuid4().hex[:10])
+                self.project.mkdir()
+                self.enable()
+                if scenario == "target":
+                    link = self.project / ".agents/skills/xy-workflow"
+                    link.unlink()
+                    link.symlink_to(self.workspace)
+                elif scenario == "foreign":
+                    # 文档路径不是受管 Skill，不能因存在合法 Skill 而获得豁免。
+                    (self.project / "docs/standards").symlink_to(self.workspace)
+                else:
+                    (self.project / ".codex/agents/xy-qa.toml").unlink()
+                result = self.invoke("--binding", json.dumps(self.core.binding()), "helper",
+                                     "lib/project_profile_cli.py", "roles", ".agent-workflow", ".")
+                self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual("", result.stdout)
+
     def test_enable_native_resources_and_read_only_preview(self):
         before = sorted(str(path) for path in self.project.rglob("*"))
         binding_paths = sorted((self.state / "bindings").glob("*")) if (self.state / "bindings").exists() else []
