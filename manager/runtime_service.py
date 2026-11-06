@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
 import re
 import stat
@@ -24,23 +23,24 @@ from lib import runtime_store as store
 from lib import role_preferences
 from lib.platform_fs import directory_lock, os, publish_skill_symlink, require_skill_symlinks
 from lib.runtime_project import (
-    CONFIG, HOSTS, LOCATOR, Node, ProjectRuntimeError, Resources, Tree,
+    CONFIG, HOSTS, LOCATOR, Node, Resources, Tree,
     absolute_directory, canonical_project, central_block, identity, json_bytes,
-    managed_path, merge_central_block, node_id, project_key, read_at, relative_path, skill_parts,
+    managed_path, merge_central_block, node_id, read_at, relative_path, skill_parts,
     unique_json, validate_skill_link,
 )
 
 
 ACTIONS = frozenset({"enable", "disable", "use", "rollback", "repair"})
-_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 
 
-class ActivationError(ProjectRuntimeError):
-    """预览不能应用，或事务需要人工核对；conflicts 仅包含路径和安全诊断。"""
-
-    def __init__(self, message: str, conflicts=()):
-        self.conflicts = tuple(conflicts)
-        super().__init__(message)
+# 私有记录只有一个权威边界；重导出原入口和同一错误类型，保留现有桥、CLI、
+# TUI 及故障注入消费者。事务编排、锁序和不同业务补偿仍由本模块负责。
+from .runtime_state import (
+    ActivationError, read_binding_record, read_journal as _journal,
+    read_state as _read_state, retained_conflicts as _retained,
+    retained_record as _retained_record, state_relative as _state_relative,
+    write_private as _write_private,
+)
 
 
 @dataclass(frozen=True)
@@ -94,111 +94,12 @@ class ActivationPlan:
                 "can_apply": not self.conflicts, "recovery": self.recovery}
 
 
-def _state_relative(project: Path, kind: str) -> str:
-    return f"{kind}/{project_key(project)}.json"
-
-
-def _read_state(state: Path, relative: str) -> Node:
-    try:
-        with Tree(state) as tree:
-            return tree.read(relative)
-    except FileNotFoundError:
-        return Node()
-
-
-def read_binding_record(state: Path, project: Path) -> tuple[Node, dict | None]:
-    """桥也使用同一机器记录校验，物理根复制后不能继承另一项目的启用权。"""
-    snapshot = _read_state(state, _state_relative(project, "bindings"))
-    if snapshot.kind == "missing":
-        return snapshot, None
-    record = unique_json(snapshot.payload)
-    required = {"schema_version", "project_root", "project_identity", "runtime_binding", "enabled",
-                "hosts", "previous_binding", "used_bindings", "managed", "retained_nodes", "generation"}
-    if (not isinstance(record, dict) or set(record) != required
-            or type(record["schema_version"]) is not int or record["schema_version"] != 1
-            or record["project_root"] != str(project)
-            or record["project_identity"] != list(node_id(project.stat()))
-            or type(record["enabled"]) is not bool
-            or not isinstance(record["hosts"], list) or not record["hosts"]
-            or any(host not in HOSTS for host in record["hosts"])
-            or len(set(record["hosts"])) != len(record["hosts"])
-            or not isinstance(record["managed"], dict)
-            or not isinstance(record["used_bindings"], list)
-            or not isinstance(record["retained_nodes"], list)
-            or not isinstance(record["generation"], str) or not _NONCE.fullmatch(record["generation"])):
-        raise ActivationError("本机项目绑定结构或物理目录身份无效")
-    if os.name != "nt" and snapshot.mode != 0o600:
-        raise ActivationError("本机项目绑定必须保持私有 0600 权限")
-    binding = store.validate_binding(record["runtime_binding"])
-    if record["previous_binding"] is not None:
-        store.validate_binding(record["previous_binding"])
-    used = [store.validate_binding(item) for item in record["used_bindings"]]
-    if binding not in used or (record["previous_binding"] is not None and record["previous_binding"] not in used):
-        raise ActivationError("本机当前或前次绑定不在项目已用版本历史中")
-    for relative, managed in record["managed"].items():
-        relative_path(relative)
-        if (not isinstance(managed, dict) or set(managed) != {"purpose", "baseline", "expected"}
-                or not isinstance(managed["purpose"], str) or not managed_path(relative, managed["purpose"])):
-            raise ActivationError("受管项目资源记录无效")
-        for key in ("baseline", "expected"):
-            value = Node.from_value(managed[key])
-            if value.kind == "link" and not skill_parts(relative):
-                raise ActivationError("机器记录不能授权精确 Skill 以外的链接")
-    return snapshot, record
-
-
-def _journal(state: Path, project: Path) -> tuple[Node, dict | None]:
-    snapshot = _read_state(state, _state_relative(project, "transactions"))
-    if snapshot.kind == "missing":
-        return snapshot, None
-    if os.name != "nt" and snapshot.mode != 0o600:
-        raise ActivationError("中央恢复记录必须保持私有 0600 权限")
-    record = unique_json(snapshot.payload)
-    if (not isinstance(record, dict) or record.get("schema_version") != 1
-            or record.get("project_root") != str(project)
-            or not isinstance(record.get("id"), str) or not _NONCE.fullmatch(record["id"])
-            or record.get("phase") not in {"prepared", "applied", "rolled_back", "conflict"}
-            or not isinstance(record.get("changes"), list)):
-        raise ActivationError("中央项目事务恢复记录无效")
-    for index, row in enumerate(record["changes"]):
-        relative = relative_path(row["path"])
-        parent, _, name = relative.rpartition("/")
-        prefix = f"{parent}/" if parent else ""
-        expected = prefix + f".agent-workflow-central-{record['id']}-{index}"
-        if (row.get("backup") != expected + ".previous"
-                or row.get("stage") != expected + ".stage"
-                or row.get("rollback") != expected + ".rollback"):
-            raise ActivationError("事务恢复路径不属于本次精确节点")
-        Node.from_value(row["before"])
-        after = Node.from_value(row["after"])
-        if after.kind == "link" and not skill_parts(relative):
-            raise ActivationError("事务恢复不能授权普通路径链接")
-    Node.from_value(record["binding_before"])
-    if "legacy" in record:
-        raise ActivationError("不支持旧安装转换恢复记录；请先处理原安装残留")
-    return snapshot, record
-
-
 def _raw(tree: Tree, relative: str) -> Node:
     try:
         directory, name = tree.parent(relative)
     except FileNotFoundError:
         return Node()
     return read_at(directory, name, allow_link=True)
-
-
-def _retained(tree: Tree, records: list[dict]) -> list[dict]:
-    conflicts = []
-    for item in records:
-        relative = relative_path(item["path"])
-        if not re.search(r"/\.agent-workflow-central-[0-9a-f]{32}-[0-9]+\.(?:previous|rollback)$", "/" + relative):
-            raise ActivationError("保留 inode 路径不属于中央事务")
-        node = _raw(tree, relative)
-        if (node.kind != item["kind"] or node.mode != item["mode"]
-                or hashlib.sha256(node.payload).hexdigest() != item["sha256"]
-                or list(node.identity[:2]) != item["inode"]):
-            conflicts.append({"path": relative, "reason": "保留的旧 inode 已有后续保存或身份变化"})
-    return conflicts
 
 
 def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool) -> tuple[list[dict], set[str]]:
@@ -421,55 +322,6 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
                           tuple(changes), tuple(sorted(observed.items())), directories, machine,
                           journal_node, json_bytes(managed_next), tuple(conflicts), tuple(warnings),
                           preferences_before=preferences_before)
-
-
-def _write_private(tree: Tree, relative: str, body: bytes) -> None:
-    """机器私有日志在状态锁内条件发布；不接受链接/硬链或并发替换。"""
-    parent, name = tree.parent(relative, create=True)
-    before = read_at(parent, name)
-    temporary = ".central-state-" + uuid.uuid4().hex
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
-    held = None
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(body)
-            stream.flush()
-            os.fchmod(stream.fileno(), 0o600)
-            os.fsync(stream.fileno())
-        if read_at(parent, name) != before:
-            raise ActivationError("机器记录在发布前被修改")
-        if before.kind != "missing":
-            held = ".central-state-previous-" + uuid.uuid4().hex
-            os.rename(name, held, src_dir_fd=parent, dst_dir_fd=parent)
-            if not read_at(parent, held).same_content(before):
-                raise ActivationError("机器记录在隔离时被修改，保留旧记录")
-        os.link(temporary, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-        os.unlink(temporary, dir_fd=parent)
-        os.fsync(parent)
-        if held is not None:
-            # 此处仅移除服务自有状态记录旧 inode；项目正文的 inode 始终另外保留。
-            if not read_at(parent, held).same_content(before):
-                raise ActivationError("机器旧记录发生后续保存，已保留")
-            os.unlink(held, dir_fd=parent)
-            held = None
-    except BaseException:
-        if held is not None:
-            try:
-                os.link(held, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-                os.unlink(held, dir_fd=parent)
-            except FileExistsError:
-                pass
-        raise
-    finally:
-        try:
-            os.unlink(temporary, dir_fd=parent)
-        except FileNotFoundError:
-            pass
-
-
-def _retained_record(path: str, node: Node) -> dict:
-    return {"path": path, "kind": node.kind, "mode": node.mode,
-            "sha256": hashlib.sha256(node.payload).hexdigest(), "inode": list(node.identity[:2])}
 
 
 def _same_moved(actual: Node, expected: Node) -> bool:

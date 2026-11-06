@@ -4,44 +4,57 @@
 - 阶段: `completed`
 - 模块: `.`
 - 任务等级: `Full`
-- 已验收版本: `local-2.1.0-preferences-bbf0ac3c92f1`
+- 已验收版本: `local-2.1.0-stability-41eddbc3b5ee`
 
 ## 目标与范围
 
-已完成用户“开始升级优化”要求的真实 TUI 样式和全局角色模型／推理默认设置。采用用户已满意的布局：独立工作流管理条、统一两栏标题和辅助信息、项目条目轻虚线，按钮明确“启用工作流／停用工作流”。终端辅助文字用普通字重、短文案和留白；curses 内不能单独缩小一段文字的字号。
+本轮对既有2.1工作流管理实现进行适当内部重构。功能、TUI布局与键位、CLI参数和JSON形状、项目资料、既定PM委派和独立QA流程作为固定合同。来源获取、草稿授权、后台结算和私有状态发布现有清楚的职责与可重复验证边界。
 
-全局默认按平台／角色管理，只影响工作流 subagent；项目直接修改某字段就形成该字段覆盖，不增加“本项目指定”模式。支持按字段恢复跟随全局，保留显式 inherit 的宿主继承含义。CLI 是统一入口，TUI 调同一业务服务。用户已明确选择新增全局入口复用已确认界面直接实现，不再补原型；先前停止原型审查的指令继续有效，生产验证与独立 QA 按原要求执行。
+范围限于三包：来源与编辑上下文、TUI会话状态与作业结算、中央私有记录边界。Codex全局保存问题是首要验收用例。保留全局／项目按字段来源、reset与显式inherit区别、预览确认、失败条件补偿、Skill源包及三平台软链接、不可变核心与旧任务pin。
 
-升级限于源码及必要测试／文档；测试使用隔离状态和最小项目，不实际修改三个业务项目、用户全局默认、账户、信任或中央固定版本，不执行安装／切版／推送／发行。保留已接受原型资产及其他 Agent 的修改，不新增兼容旧版本的迁移分支。
+不新增功能或改变业务工作流；不重写store、薄桥、pin、项目inode发布及模型事务；不做老版兼容迁移、核心自动切版、真实账户写入、三业务项目同步或远端发行。外部七条未提交修改保持原归属，不混入本轮交付。用户已明确回复“开始实施”，批准上述三包及固定功能边界；原已验收基线和批准输入已保全，本稿现投影本轮实际验收结果。
 
 ## 需求与验收
 
-| 需求 | 生产验收边界 |
+| 需求 | 完成标准 |
 |---|---|
-| REQ-001 样式与命名 | 按已确认原型实现管理条及其下横线、统一项目列表／角色模型两级栏头、轻虚线项目条目分隔；启用／停用工作流先进入变更预览，再确认／取消；主界面、等待、弹层、窄屏坐标连贯 |
-| REQ-002 全局默认 | 用户级中央状态保存平台×角色的模型／推理默认，位于不可变核心外；空配置只读不创建状态，不改主会话模型或核心 pin；未覆盖字段依次取全局、宿主 |
-| REQ-003 项目覆盖 | 修改哪个字段就覆盖哪个，未改字段继续跟随全局；恢复某字段清除对应项目覆盖，显式 inherit 继续指宿主，不偷换含义；已有明确项目设置保留，不猜测为全局跟随 |
-| REQ-004 CLI 与统一服务 | roles／set 支持项目或全局范围，模型和推理均可单独修改；set 支持按字段 reset，默认只读预览，--apply 才应用。CLI/TUI 调用相同计划及应用服务，不各自实现配置写入 |
-| REQ-005 TUI 全局范围 | 项目列表上方独立“全局默认”入口，复用右侧角色表与平台切换；显示字段实际来源，项目编辑自动覆盖，提供恢复跟随全局；全局范围不展示项目启停操作，草稿按范围隔离 |
-| REQ-006 应用与后续启用 | 全局保存列出受影响的已登记项目及冲突，确认后更新实际跟随字段；明确覆盖和显式宿主继承保留，停用／未管理项目不自动安装，后续启用／换版采用当前有效值；保留原核心绑定和已有运行任务 |
-| REQ-007 事务保护 | 沿用备份、原生受管收据、精确前像及来源守卫；全局／项目配置在预览后变化要拒绝旧计划；失败条件回滚或明确保留冲突和可恢复明细，不假报所有项目成功；只写模型／推理相关字段 |
-| REQ-008 目录与编辑反馈 | 保留目录失败／失效重进编辑恢复和旧草稿保护；绘制、普通保存预览、事务守卫不启动原生目录进程；全局影响项目的模型能力不静默猜测，读取与拒绝边界清楚。无改动、暂存、取消、保存成功／失败明确 |
-| REQ-009 可达与验证 | Tab／Shift+Tab 切平台、左右定向区域、上下选择，输入／弹层／忙态隔离；55×16、长中文、单色、鼠标及缩放保持。必要服务／CLI集成、真实PTY与唯一独立QA覆盖全局和项目来源／覆盖／恢复／取消／保存／失败，不跑无信息增益整仓回归 |
-| REQ-010 资料保全 | 原型六资产按当前已接受字节保留，不同步或重审原型；其他 Agent 的修改保持原归属。PM 原位更新本主题及同名HTML，生产验收前保留既有基线，不创建空PROJECT/STANDARDS或旁路报告 |
+| REQ-STAB-001 功能固定 | CLI/TUI现有参数、结果形状、布局、键位、角色职责、项目启停／选版／恢复流程保持；内部抽取不引入第二套业务逻辑 |
+| REQ-STAB-002 编辑快照 | 一次编辑的范围、角色值／来源／跟随值、目录和目标集合由偏好服务提供完整上下文；正常原生目录连续获取不得自我废弃；真正provider、auth元数据、能力、登记集合或发布后来源变化仍拒绝旧授权；刷新不静默重绑旧草稿 |
+| REQ-STAB-003 TUI生命周期 | 草稿及其前像作为同一生命周期单元，显示缓存与授权状态分开；绘制只读已取回投影，不读易失败的实时配置或启动native；弹层期间外部配置异常不退出工作台，草稿可保留、取消、刷新或丢弃 |
+| REQ-STAB-004 作业结算 | 每个后台作业有明确作用范围、返回入口和结算结果；区分写入失败与写入已成功但列表刷新失败；按所有受影响范围失效显示缓存，保留未应用草稿，不复活旧确认页，不重复提交；取消等待真实结算 |
+| REQ-STAB-005 中央私有记录 | 同一内部边界先完整校验binding／journal／retained，再交动作编排；坏结构稳定拒绝且诊断不含正文；进程在私有发布中途退出后不得把不确定状态当作从未管理；精确归属恢复或安全拒绝，不猜测随机残留、不删除未知保存 |
+| REQ-STAB-006 验证与保全 | 隔离假Codex真实stdio、双项目保存、来源变更、弹层与作业失败、真实进程中断、CLI／收据／pin和离线载荷依赖均有实际证据；必要集成PTY及唯一独立QA；复用未失效结论，不以显式JSON或mock替代原生来源合同；外部修改与业务资料保留 |
 
 ## 方案与原型关联
 
-用户已对 docs/standards/prototype/tui-workbench.html 的整体布局表示满意，并要求项目分隔使用虚线；当前作为样式依据。新增“全局默认”入口的原型选择由用户明确回复“复用已确认界面，直接实现（推荐）”，采用 UI-Patch 的直接开发分支，保留完整生产 UI／可访问性 QA，不写或重开原型评审。
+采用UI-Conformance：零设计变化，视觉与交互依据为当前已验收行为和现有布局；不再制作、同步或审查原型。三包按职责交fresh／handoff_only生产实例，生产实例不复制PM或兄弟会话。各包在同一代码树按依赖顺序完成并冻结，避免共享测试夹具或服务接口交叉修改；本轮不是多个独立功能，不为并行数创建额外worktree。
 
-配置来源按字段解析：项目显式字段优先于全局显式字段，最后为宿主；inherit 是显式宿主继承，不是恢复全局。全局配置归中央用户状态，项目配置只保留明确覆盖。原生角色文件由共享服务物化有效值，启停／换版同样消费该规则，不创建第二套模型业务逻辑。默认只读计划明确影响项目，应用复用已有备份和并发保护；多项目失败必须报告真实恢复／冲突结果。
+| 包 | 明确职责与文件 | 依赖与完成边界 |
+|---|---|---|
+| P1 来源与编辑上下文 | manager/catalog.py、manager/model_preferences.py、manager/cli.py及tests/test_role_preferences.py、tests/test_workflow_manager.py。目录层明确权威来源、原生结果与共享缓存提示；偏好服务拥有批次快照、一致性检查和编辑投影；CLI仅必要适配，不自取计划内部target | 首先实施。保留既有roles/view/preview/apply等入口及CLI形状；不新增持久化缓存，不简单删除identity校验或事后盲绑旧结果。冻结供P2消费的上下文、失效含义与保留旧授权规则 |
+| P2 TUI会话与作业 | manager/tui.py、新manager/tui_state.py、tests/test_manager_tui.py。状态模块只管理范围、草稿／前像、显示失效和一次作业的结算；App保留输入路由、视图与渲染，继续调用原服务 | 依赖P1合同冻结；所有入口按生命周期统一收尾。保留tui_support布局／字符格，不引入通用状态机框架或大量控制器，不把业务写入移进状态模块 |
+| P3 中央私有记录 | manager/runtime_service.py、新manager/runtime_state.py、新tests/test_runtime_state.py、tests/test_central_project.py；tests/test_workflow_manager.py仅最小核心依赖清单；packaging/build_npm_release.py和tests/test_npm_packaging.py仅必要载荷依赖闭合 | P1/P2之后实施并验证，避免共享夹具并发写入。runtime_service保留动作编排；现有读取入口可转调内部记录边界。先固定崩溃验收再选择发布实现，不用裸replace取消并发守卫，不统一apply/repair或模型收据的不同结算语义 |
 
-生产职责分为共享偏好／CLI服务与 TUI 两路，依据当前明确服务接口并行实现，接口变更须先经 PM 同步完整合同；TUI 的集成验证等待实际服务存在。最终由唯一独立 QA 审核合并后完整范围和真实证据。模型能力和宿主继承沿用平台限制，不新增型号、推理档位或原生协议猜测。
+三包均保留preferences→registry/model→install→central-state锁序、完整RestorePlan类型、精确前像、旧inode及条件补偿。P3新模块属于真正核心依赖，必须同时纳入最小测试核心与npm精确白名单，不能仅在源码树可导入就认为安装态可用。
+
+验证顺序为每包最小回归、真实直接消费者、三包整合后必要集成、唯一QA。首次必要通过后不为提交重跑未失效测试；发生修复仅重跑受影响结论。实际命令与完整日志进入同一请求证据位置，用户反馈仅说明有意义结果。
+
+| 包／阶段 | 验证内容与现有入口 |
+|---|---|
+| P1 | 将已完成的稳定identity／按scope刷新identity对照纳入长期原生stdio回归；补获取中与发布后真正换源拒绝、旧草稿授权不重绑。直接消费RolePreferencesTest，以及CatalogTest的native_snapshot_rechecks_sources_without_requery_or_auth_read、native_result_is_discarded_when_stable_sources_change_during_query、tui_failed_and_invalidated_native_catalog_recovers_only_on_editor_entry和TransactionTest的stale_source_draft_requires_reselection_before_preview等既有节点 |
+| P2 | TuiTest覆盖完整状态路由；新增弹层打开后全局配置异常、重复绘制无来源IO、应用成功但刷新失败、全局失败多范围显示失效、回调失败作业清理。保留job_results_never_return_to_old_confirmation、tui_restore_confirmation_keeps_original_version_guard和tui_interrupt_waits_for_synchronous_central_settlement直接消费者 |
+| P3 | 新runtime_state测试涵盖嵌套坏结构、精确前像、后续保存、描述符／锁释放；真实子进程在发布关键点退出，重启后读取／repair必须明确。复核CentralProjectTest现有failure_rolls_back_exact_outputs_and_never_enables、recovery_refuses_post_failure_edit、prepared_recovery_restores_machine_binding_after_process_exit、old_inode_later_save_is_retained_and_blocks_overwrite及model_receipt消费者；离线npm的real_source_allowlist_and_dependency_closure_excludes_executable_test_helpers核依赖，不下载或发布 |
+| 整合 | 在最终候选上运行已失效的CLI／TUI／中央收据／pin关键消费者；现有ProjectTuiIntegrationTest真实PTY一次覆盖导航、全局／项目编辑保存、取消、启停、冲突与缩放；原生stdio覆盖补足PTY显式目录边界。随后唯一独立QA审完整组合范围、来源、故障与证据；不得以模型调用或Windows原生未执行的检查冒充通过 |
+
+必要文档投影在唯一QA PASS后，原位更新本主题及同名HTML，保留当前已验事实到那时。不存在的PROJECT／STANDARDS不新建空索引；不新增重构报告、ADR或替代notes。PM只精确提交本轮已验代码和文档，不push/tag/release或替业务项目切核心。
 
 ## 当前进展与恢复入口
 
-当前请求 tui-global-upgrade-20261106 已完成，源码基线为 66db86bc2637200ec721304448d006e3e46ecfd1。唯一独立 Reviewer 对完整候选及一次有界返工正式 PASS；PM 已核验原生结果及范围。恢复证据使用同一 request-id 的 scratch：保留完整执行包、源图、范围、精确差量、原 FAIL 和最终 PASS、作者完整日志及真实 PTY 原流／字符格。
+三包重构及最终组合验证已完成。来源与编辑上下文、TUI会话状态／作业结算、中央私有记录各有明确内部边界，CLI公共参数／JSON、TUI布局与键位、角色职责和核心pin合同保持。Codex全局保存已在真实App与按scope刷新identity的stdio假宿主中完成双项目落盘；真正provider换源后旧授权仍拒绝，显示刷新和重新取目录不会续期旧草稿。
 
-共享偏好／CLI 和 TUI 分别由 fresh／handoff_only 生产实例完成，不复制完整 PM 会话；原型设计实例未承担生产代码。已确认原型六资产保持原字节纳入本地交付，其余八路径及混合归属测试中的原有 57 行修改不纳入。此次源码升级没有替用户设置全局偏好或切换三个业务项目的固定核心；管理入口重开后可查看新版 TUI。
+中央私有记录已用真实进程固定中断边界，完整codec、精确恢复、后续保存保护和最小核心／npm依赖均有直接消费者证据。唯一独立QA初审发现F-001：两个裸fd取得后到stream接管前异常可泄漏；由原P3作者仅在记录模块和对应测试内修复，四真实fd故障子场景先红后绿，再以正常发布／晚保存／四真实退出检查受影响边界。同一Reviewer复核后正式PASS，无新增阻断。
+
+当前无待重做实现或验收阻断。继续使用现有awf-cli与README入口；本轮没有切换三业务项目的核心版本或修改真实偏好。后续独立需求按新范围处理，不重放本轮已完成任务。下方描述当前已验收行为；前次布局与全局默认基线可从24d0059的本稿及原请求证据恢复。
 
 ## 验收结果与当前已交付行为
 
@@ -55,11 +68,17 @@
 
 全局默认按平台×角色保存在中央状态的 preferences/role-models.json，不属于不可变核心。空配置只读查询不创建文件。每个字段依次取项目覆盖、全局默认、宿主；项目直接修改模型只覆盖模型，单独修改推理只覆盖推理。项目选择器明确区分“跟随全局”和显式“继承宿主”：前者清除对应覆盖，后者保留 inherit；即使当前有效值相同，也按用户选择的来源处理。模型选择后进入推理选择器时，未修改的推理继续保持原来源。
 
-g 管理菜单或冒号命令可暂存恢复模型／推理跟随全局，全局范围则恢复跟随宿主；u 只丢弃当前角色草稿。s 先预览保存范围，全局预览列出受影响登记项目及冲突，Enter 确认后才备份保存，取消不写入。应用成功后反馈备份及真实结果；失败保留草稿和安全诊断。明确项目覆盖和显式宿主继承保留，停用／未管理项目不自动安装，后续启用／选版使用当前有效值，核心绑定与旧任务 pin 保持。
+g 管理菜单或冒号命令可暂存恢复模型／推理跟随全局，全局范围则恢复跟随宿主；u 只丢弃当前角色草稿。s 先预览保存范围，全局预览列出受影响登记项目及冲突，Enter 确认后才备份保存，取消不写入。应用成功后反馈备份及真实结果；写入失败保留草稿和安全诊断；业务已经完成而显示刷新失败时，按实际完成结果结算并清除已应用草稿。明确项目覆盖和显式宿主继承保留，停用／未管理项目不自动安装，后续启用／选版使用当前有效值，核心绑定与旧任务 pin 保持。
 
 CLI 的 roles／set 必须选择互斥的全局或项目范围。模型、推理可独立设置；reset 清除指定字段，all 清两字段，未传字段保持当前来源。set 默认只读预览，--apply 才调用共享计划。CLI／TUI 共用偏好解析、目录来源检查、协调锁和事务；全局先准备全部目标，失败按精确前像条件补偿，存在并发编辑则保留冲突和恢复明细。
 
 模型目录按范围／宿主复用，失败或失效后重进编辑可有界恢复；绘制、保存预览和事务守卫不启动原生目录进程。旧草稿来源基线保留，必须重新确认或丢弃后才能应用。恢复备份时，按拟恢复项目配置与当前全局默认核对原生模型／推理；仅恢复原生或仅恢复配置导致来源不一致的计划均在写入前拒绝，不自动制造项目覆盖或改全局。确认前及验收后检查配置来源、未改角色和原版本前像，正常明确项目恢复及失败补偿仍有效。
+
+来源层保留每次原生查询的前后收据，只对同一未发布批次内连续、稳定的自身缓存刷新归一共享提示。偏好服务一次取回角色值、字段来源、跟随值和目录上下文；旧草稿的expected与来源戳独立保留。普通绘制、预览、guard与保存后显示刷新均不启动原生目录查询。
+
+TUI的Session集中保存每个范围的草稿／前像及显示缓存，后台Job单独记录业务是否已完成、刷新与回调是否成功。实际写入成功而后置刷新失败时，结果仍说明已完成的动作并清除已应用草稿；失败不复活旧确认页，相关显示按真实影响范围失效，busy、回调与输入状态最终结算。
+
+中央私有记录统一校验binding、journal与retained后再交动作编排。发布中以私有marker明确标识未完成边界，使用原有精确前像、旧inode与无覆盖发布；进程中断或外部晚保存时安全拒绝并保留必要恢复材料，不凭随机残留猜测恢复或删除未知写入。新增runtime_state已接入最小核心和npm精确载荷。
 
 真实 PTY 覆盖平台／区域导航、全局入口、来源与覆盖选择、暂存／保存／取消、并发失败、项目启停、输入隔离及窄屏缩放。键盘、焦点、单色与字符格检查通过；实际账户模型推理、屏幕阅读器认证及 Windows 原生运行不在本次验收范围。候选模型始终来自当前来源，不把历史现场数量写成固定菜单。角色正文、权限、Hooks、软链接内置 Skill 和编排职责保持。
 
@@ -76,10 +95,14 @@ awf-cli tui --project .
 
 ## 批准依据与必要证据
 
-- 批准依据: 用户已满意整体布局，明确要求项目分隔用虚线、增加全局角色模型／推理默认，项目直接编辑即对应字段覆盖，并回复“开始升级优化”和“复用已确认界面，直接实现（推荐）”。保留当前 curses、真实 PTY 与完整生产 UI／可访问性 QA，不重审原型，不增加立项入口或老版兼容。
-- 验收证据: 同一 Reviewer /root/global_preferences_qa 最终正式 PASS，关闭唯一 F-001，无新增阻断，28 条工程／23 条设计规则与完整 22 路径分类有效。qa-handoff.json 为 81181 字节，SHA256 为 9fb31dc200123133b1b464ec089b2d4b4b14285a6f546317be34f2567d92dd0a，绑定 QA 包 3a48b34516c7b2b8e3bf4a5fe925f6cfefbdc696c6a5295e806af946eabc7aac。PM 正式 validate 退出 0／valid；qa-source-graph.json SHA 为 32ea08b073a814920e769a4efeafdb541fdc49cd23dcda79be4578b8a17e4203，实际 verify-ui-scope 退出 0／valid。
-- 冻结范围: base commit 为 66db86bc2637200ec721304448d006e3e46ecfd1，QA head 为真实 Git tree bbf0ac3c92f1416d8783620e8c46e944f1676c24，request.patch 为 343028 字节、SHA256 3fb5c2ffee13970446256dabbc5312efcc6a85f0a2106f1ac1d4e084a36bdfaf。scope.json SHA 为 e8d38afab9e7e81c0c2b7b6a254f49274dbec64977250dbe9fe8468288452f08。混合归属 tests/test_central_project.py 仅取加入 lib/role_preferences.py 的一行依赖补丁，其他 57 行保全；其余八路径排除。QA 后只有本稿及同名 HTML 作普通完成态投影，不改变生产或原型已审字节，不重绑原 QA 包。
-- 完整验证: 后端必要服务／CLI、字段覆盖／清除／inherit、两个项目全局物化、停启／选版、来源失效、并发锁与故障补偿均有真实证据。backend-handoff.json SHA 为 afe2d5e043df39886904893f6d096c0fdbd948e530554cc41e586167b839921a，backend.log SHA 为 7c5c5c810104da9e2212c9729b66adb62b82a89649b48f30f5b5108ac50076db。初始中断、失败、夹具修正及定向成功均保留，不宣称一次整套全绿或全仓通过。
-- UI 验证: tui-handoff.json SHA 为 aa77772c91f0328f07c02c647019436b463fc7ee896734a538a600104e60fb2e；39 项基线、13 项来源定向及辅助字体单节点通过，最终唯一真实 PTY 退出 0／25.592 秒，pid 24288 经 q／wait 正常退出，临时根已清理。tui.log SHA 为 11583b9031c878dd703ed8fdaf7f37e16e8b76dab6defcad6a5c2c406e9a128b，tui-pty.raw SHA 为 06b9f01ff39d6760036c0e122b67d434d820f948f89618df3fb57eaf3281223e，tui-pty-cells.txt SHA 为 d07749b27c52d1eac6067d45031bb6dab34ec5e098351ee1a90e249de1f2f722。独立 QA 补核 18 个稳定帧通过，返工后复用有效 UI／PTY 结论。
-- 必要返工: 原 FAIL qa-handoff-initial.json 为 73587 字节、SHA256 a9d51a8bc0237587b6998a4462cbe875626c3de82ba8404b3f6bec7035688477，原包／源图／候选／交接也完整保全。仅三路径修复恢复来源守卫及定向测试；获批 8 个精确节点一次执行退出 0／25.586 秒，包含仅原生／仅配置拒绝、正常项目恢复、来源在确认前和验收期变化、全局补偿和 TUI 原版本守卫。backend.log 原 126131 字节前缀及其 SHA a24881683b1fa073b25a5fb57bacd85e91a040995a3d2c47f4364d167824d904 严格保留，不重跑其他有效组。
-- 保存与历史边界: 本轮只精确提交已验 22 路径及两文档的完成态差量，其他 Agent 修改及业务资料保留。前次粗框／导航验收基线与必要历史可由 66db86b 的本稿及原请求证据恢复；当前主题原位更新，不创建空索引、规范、替代 notes 或批次报告。源码仓 project.yaml 仍为示例，PROJECT／STANDARDS 实际不存在；本主题按 required 解析及 HTML freshness 核查，不制造全仓文档校验结论。
+- 批准依据: 用户明确要求对已基本定版的流程和TUI进行适当重构以获得稳定可靠版本，并回复“开始实施”。三包范围、固定功能／布局／键位／CLI合同、fresh／handoff_only生产委派与唯一独立QA均按该批准执行。采用UI-Conformance零设计变化，保留既有curses、软链接内置Skill、旧任务pin和项目资料，不新增立项入口或旧版兼容。
+- 验收证据: 唯一Reviewer /root/stability_final_qa 使用同一installed-code-review-skill完成初审与F-001 delta，最终正式PASS。qa-handoff.json原102102字节，SHA256 713f4e21de869b1c03e5cb0c8154dc4510b11bfc4763d344dc1ad4501c6282b5，绑定当前QA包74eb13ae441be232a29e66a5c4431c1f50b746948ba7df554be0e03549663b2a；PM正式validate退出0／valid，16路径、28工程与23设计规则闭合，唯一F-001关闭。qa-source-graph.json SHA6d24ab03a7df37c6586c6282485add9c513fed47d52ce8b0aacde653dff96687，verify-ui-scope退出0／valid。
+- 冻结范围: base commit24d0059caa6b11b00877db1bd2d45421a2f703df，QA候选为真实Git tree41eddbc3b5eeb7cb8e9fce0c73b1fd244e99183e；request.patch226581字节，SHAe36bf4c9b509cc564948825b8fe14b125244a85f342cf511361cc6ba9349fc1b，scope.json SHAccce1ab341d90596015d0f1f6771344bbfa13c8338847a68d02b6a46f17a1f2d。29原件绑定完整，7条外部修改排除。QA后仅本稿及同名HTML作普通完成态投影，生产字节保持，不重导或重绑原执行QA包。
+- 来源与App证据: p1-handoff.json SHAae493eb543e0fd28040dcdfd1262304d43946357ef79562d9a58a288075e14fd，p1.log SHA0c008fe0c1ba20ae9388efcb87197ec2f5440f654eaf28ad58a8d15e07816a07。组件必要25节点的原fixture失败与定向修正完整保留，未重复已有成功集合。最终真实App导航／executor／stdio按scope刷新共享identity的单节点首次通过0／3.987秒，双项目模型与推理保存、零隐式native及真实provider换源旧授权拒绝均成立；9个自有native进程TERM／wait、executor和fixture关闭。原组件日志前36529字节严格保留。
+- TUI与PTY证据: p2-handoff.json SHAb5ee1b58e15cf4fd8be73ecfd960d6408732e840490131ca8b7fa43d317688c8，p2.log SHA1d661b515b53cf463d417fedf884d400bd97c499326fd54cbc95b332eddcd9b1。48个必要组件节点分批验证及夹具修正证据保留，最终3个实际App来源／旧草稿消费者加唯一真实PTY共4节点通过0／27.032秒，18个稳定帧覆盖导航、全局／项目编辑、启停、取消、冲突与缩放；pid69365经q／wait退出0，fixture和fd关闭。p2-pty.raw SHA98c190a875c90f492a6aceae5ee0ff1cb4c3906542e0a054c02350c03fe8b412，cells SHAdc5d09b3bf12e8b5cbb735599c038fc883e38cb9648ed7b22682c1523ac15287；原日志前55422字节保持，返工复用有效UI／可访问性结论。
+- 私有记录与返工证据: p3-handoff.json SHA865257f346cfb11aed37fa69b8d677b4db84c2bddcfb86180846e4612f56dac7，p3.log43625字节SHAa01994bf6c17cf3b76d79e1f06a2419f07bfbdb190d3f250f481a5bdd136963e。旧公开入口坏结构／真实中断红证、6个中央消费者与隔离-I npm真实载荷消费者成功均保留。初审qa-handoff-initial.json89827字节SHAf8dd94a75268201076b84c3144ae728deba4077efb49cbb9470dbc19766dead0及原包／源图／scope／patch保全。F-001仅改runtime_state和test_runtime_state：四子场景旧源红exit1，修复后真实fd均EBADF且EIO／KeyboardInterrupt按原类型传播，未知inode／marker保留安全拒绝；新故障节点、正常精确恢复、晚保存final_guard及四真实exit73节点合4项通过0／0.286秒，fd／锁／子进程／fixture关闭。原22954字节日志前缀严格保留，其他14源和7外部字节未变，不重跑P1／P2／PTY／中央／npm整组。
+- 实际边界与恢复资料: 现有ParentsKit、TeachingAssistant、mt-shop机器binding／journal经新codec只读核对，均valid且检查前后一致，无安装、切版或账户写入。实际账户推理、屏幕阅读器认证和Windows原生运行未验，不宣称全仓一次全绿。完整批准输入、组件原件、失败／成功日志、PTY原流、QA原字节与补丁继续保留在本请求既有scratch中，可用下方现有命令定位；不新增报告、ADR、替代notes或空索引。PROJECT／STANDARDS在source-pack中实际不存在，本主题仅执行required解析、当前链接与HTML freshness核查，不制造全仓文档通过结论。
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/task_graph_cli.py scratch --root . --request-id fix-global-codex-save-20261106
+```

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from copy import deepcopy
 import curses
 import codecs
 import errno
@@ -25,10 +26,11 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from lib import runtime_store
+from lib import runtime_store, role_models
 from manager import service, model_preferences
 from manager.catalog import Catalog, Model
 from manager.tui import App, HOSTS, cell_width
+from manager.tui_state import Impact
 from manager.tui_support import Layout, TextInput, Theme, ellipsize, project_plan_text, status_text
 
 
@@ -100,10 +102,16 @@ class TuiTest(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(prefix="awf-tui-");self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name).resolve();self.project=self.root/"中文项目"
         self.projects=[self.project,self.root/"另一个项目"]
+        self.allow_state=False
+        # 布局/输入仍使用轻量目录，但偏好显示现在实际消费 P1 load_context 的
+        # 只读文件及守卫；不再用 view mock 掩盖刷新和损坏来源的 IO 边界。
+        for project in self.projects:
+            (project/".agent-workflow").mkdir(parents=True)
+            choices={host:{role:{"effort":"high"} for role in ("xy-backend","xy-web")} for host in ("codex","claude")}
+            (project/".agent-workflow/project.yaml").write_text(role_models.update("project_name: fixture\n",choices),encoding="utf-8")
         self.catalog=Catalog("codex",[Model("inherit","继承宿主","fixture",("high","max")),Model("local-model","本地模型","fixture",("high","max"))])
         for target,value in (("manager.tui.service.projects",self.projects),
                              ("manager.tui.model_preferences.roles",["xy-backend","xy-web"]),
-                             ("manager.tui.model_preferences.view",{"model":"inherit","effort":"high","sources":{"model":"host","effort":"project"},"overrides":{"effort":"high"},"revision":"fixture-revision"}),
                              ("manager.tui.model_preferences.load_catalogs",model_preferences.PreferenceCatalogs(self.catalog,{})),
                              ("manager.tui.discover",self.catalog)):
             patcher=patch(target,return_value=value);patcher.start();self.addCleanup(patcher.stop)
@@ -148,8 +156,18 @@ class TuiTest(unittest.TestCase):
     def preference_plan(self,scope="project",conflicts=None):
         return SimpleNamespace(summary={"scope":scope,"platform":"codex","project":str(self.project) if scope == "project" else None,
                               "changes":[{"role":"xy-backend","field":"model","before":"inherit","after":"local-model"}],
-                              "affected_projects":[str(self.project)] if scope == "global" else [],
+                              "affected_projects":[{"project":str(self.project)}] if scope == "global" else [],
                               "conflicts":conflicts or [],"can_apply":not conflicts,"notes":[]})
+
+    def display_roles(self,roles,host=None):
+        """只为滚动/布局布置投影行；该类测试不声称这些虚构角色能通过业务校验。"""
+        host=host or self.app.host
+        context=model_preferences.load_context(self.app.state,self.app.project,host)
+        values=context.role_values;following=context.following_values
+        baseline=next(iter(values.values()));inherited=next(iter(following.values()))
+        context=model_preferences.PreferenceContext(context.state,context.project,host,None,
+                json.dumps(dict.fromkeys(roles,baseline)).encode(),json.dumps(dict.fromkeys(roles,inherited)).encode())
+        self.app.session.accept_context((self.app.scope_id,host),context)
 
     def test_global_scope_sources_field_drafts_and_reset_are_isolated(self):
         self.app.role_index=1
@@ -194,11 +212,14 @@ class TuiTest(unittest.TestCase):
         for defaults in ({},{'model':'inherit','effort':'inherit'},{'model':'local-model','effort':'high'}):
             with self.subTest(defaults=defaults):
                 values={field:defaults.get(field,'inherit') for field in ('model','effort')}
-                def observed(state,project,host,role):
-                    return {**values,'sources':{field:'host' if value == 'inherit' else 'global' for field,value in values.items()},
-                            'overrides':dict(defaults) if project is None else {},'revision':'same-value-fixture'}
-                with patch('manager.tui.model_preferences.view',side_effect=observed):
-                    self.app.settings_cache.clear();self.app.drafts.clear();self.app.expected.clear()
+                def observed(state,project,host,*,catalogs=None):
+                    value={**values,'sources':{field:'host' if val == 'inherit' else 'global' for field,val in values.items()},
+                           'overrides':dict(defaults) if project is None else {},'revision':'same-value-fixture'}
+                    return model_preferences.PreferenceContext(state,project,host,catalogs,
+                        json.dumps({'xy-backend':value,'xy-web':value}).encode(),
+                        json.dumps({'xy-backend':values,'xy-web':values}).encode())
+                with patch('manager.tui.model_preferences.load_context',side_effect=observed):
+                    self.app.session.entries.clear();self.app.load_display(force=True)
                     self.app.dispatch('m');self.assertIsNone(self.app.options()[self.app.index][1])
                     self.assertNotIn('inherit',self.app.options()[0][0])
                     self.app.dispatch('enter');self.assertIsNone(self.app.options()[self.app.index][1])
@@ -213,11 +234,16 @@ class TuiTest(unittest.TestCase):
                     self.app.act('reset-effort');self.assertFalse(self.app.pending())
         baseline={'model':'inherit','effort':'inherit','sources':{'model':'host','effort':'host'},
                   'overrides':{'model':'inherit'},'revision':'explicit-host-fixture'}
-        with patch('manager.tui.model_preferences.view',return_value=baseline):
-            self.app.settings_cache.clear();self.app.expected.clear();self.app.act('reset-model')
+        context=model_preferences.PreferenceContext(self.app.state,self.project,'codex',None,
+                json.dumps({'xy-backend':baseline,'xy-web':baseline}).encode(),
+                json.dumps({'xy-backend':baseline,'xy-web':baseline}).encode())
+        with patch('manager.tui.model_preferences.load_context',side_effect=lambda *args,**kwargs:
+                   model_preferences.PreferenceContext(context.state,context.project,context.host,kwargs.get('catalogs'),context._values_json,context._following_json)):
+            self.app.session.entries.clear();self.app.load_display(force=True);self.app.act('reset-model')
             self.assertEqual({self.app.role:{'model':None}},self.app.pending())
 
     def test_render_size_and_modal_matrix(self):
+        self.app.read_catalog(lambda:None)
         for height,width in ((40,140),(30,110),(30,100),(24,80),(24,79),(16,55),(12,45),(3,18)):
             for modal in (None,"model","effort","manage","backups","preview","sources","help","quit","add","result","error","commands","add_mode","project_plan","versions","version_details","details","preference_details"):
                 with self.subTest(size=(height,width),modal=modal):
@@ -286,7 +312,7 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch("a");self.assertEqual(self.app.modal,"add")
 
     def test_home_end_and_paging_use_visible_entries(self):
-        self.app.roles_cache[(str(self.project),"codex")]=[f"role-{i:02}" for i in range(40)]
+        self.display_roles([f"role-{i:02}" for i in range(40)])
         self.draw();self.app.dispatch("end");self.assertEqual(self.app.role_index,39)
         self.app.dispatch("home");self.assertEqual(self.app.role_index,0)
         self.app.dispatch("pagedown");self.assertGreater(self.app.role_index,1)
@@ -305,8 +331,8 @@ class TuiTest(unittest.TestCase):
 
     def test_platform_tab_cycle_preserves_project_pane_role_and_cross_scope_drafts(self):
         self.app.role_index=1
-        self.app.roles_cache[(str(self.project),"claude")]=["xy-web","xy-qa"]
-        self.app.roles_cache[(str(self.project),"antigravity")]=["xy-qa","xy-web"]
+        self.display_roles(["xy-web","xy-qa"],"claude")
+        self.display_roles(["xy-qa","xy-web"],"antigravity")
         for project in self.projects:
             for host in HOSTS:
                 scope=(str(project),host,"xy-web")
@@ -394,11 +420,18 @@ class TuiTest(unittest.TestCase):
         self.assertEqual(self.app.project_index,index);self.assertIsNone(self.app.modal)
 
     def test_removed_role_draft_stays_selectable_and_individually_discardable(self):
+        # 显式预读换了角色排序，原数字行号不再代表原角色，仍须编辑触发项。
+        self.app.role_index=1
+        with patch('manager.tui.model_preferences.roles',return_value=['xy-web','xy-backend']):
+            self.app.dispatch('m');self.assertEqual(self.app.role,'xy-web');self.app.dispatch('esc')
+        self.app.load_display(force=True);self.app.role_index=0
         key=self.app.scope();other=(str(self.project),"claude","xy-qa")
         self.app.drafts[key]={"model":"local-model","effort":"high"}
         self.app.expected[key]={"model":"inherit","effort":"high"}
         self.app.drafts[other]={"model":"inherit","effort":"inherit"}
         with patch("manager.tui.model_preferences.roles",return_value=["xy-web"]):
+            # 预读中移除当前角色时拒绝打开其他角色，旧草稿/前像依旧保留。
+            self.app.dispatch('enter');self.assertIsNone(self.app.modal);self.assertIn(key,self.app.expected)
             self.app.dispatch("r")
             self.assertEqual(self.app.role,"xy-backend")
             self.assertIn("已移除",self.draw().text())
@@ -410,7 +443,7 @@ class TuiTest(unittest.TestCase):
             self.assertNotIn("已移除",self.draw().line(6))
 
     def test_paging_while_searching_moves_selection_without_accepting(self):
-        self.app.roles_cache[(str(self.project),"codex")]=[f"role-{i:02}" for i in range(40)]
+        self.display_roles([f"role-{i:02}" for i in range(40)])
         self.app.dispatch("/");self.type("role-");self.draw()
         self.app.dispatch("pagedown")
         self.assertGreater(self.app.role_index,1);self.assertTrue(self.app.searching)
@@ -432,6 +465,127 @@ class TuiTest(unittest.TestCase):
                 self.app.poll_job();self.assertEqual(self.app.modal,"error" if fails else "result")
                 self.app.dispatch("esc");self.assertEqual(self.app.modal,"manage")
                 self.app.dispatch("esc");self.assertIsNone(self.app.modal)
+
+    def test_editor_redraw_survives_broken_global_preferences_without_source_io(self):
+        """真实配置在弹层打开后损坏/变成链接；绘制与跟随选择不得重新读取。"""
+        self.allow_state=True
+        preferences=self.app.state/'preferences';preferences.mkdir(parents=True)
+        path=preferences/'role-models.json'
+        outside=self.root/'不安全来源.json';outside.write_text('PRIVATE-GLOBAL-SECRET')
+        self.app.dispatch('e');self.app.dispatch('end');self.app.dispatch('enter')
+        self.assertTrue(self.app.pending())
+        key=self.app.scope();before=deepcopy(dict(self.app.expected));stamps=dict(self.app.source_stamps)
+        for unsafe in (False,True):
+            with self.subTest(unsafe=unsafe):
+                self.app.dispatch('m');self.assertEqual(self.app.modal,'model')
+                path.unlink(missing_ok=True)
+                if unsafe:path.symlink_to(outside)
+                else:path.write_text('{"PRIVATE-GLOBAL-SECRET":')
+                # 把易失败的来源入口全部设成硬失败：即使测试数据恰好仍可读，
+                # 重绘、模型→推理和详情路由只要触发任何来源 IO 就会立即失败。
+                with patch('manager.tui.model_preferences.load_context',side_effect=AssertionError('绘制重读上下文')), \
+                     patch('manager.tui.model_preferences.view',side_effect=AssertionError('绘制逐角色读取')), \
+                     patch('manager.tui.model_preferences.load_catalogs',side_effect=AssertionError('绘制加载目录')), \
+                     patch('manager.catalog.codex_models.query',side_effect=AssertionError('绘制启动 native')):
+                    self.draw();self.draw();self.app.dispatch('enter');self.draw(16,55)
+                    self.assertEqual(self.app.modal,'effort')
+                    self.app.dispatch('esc');self.app.dispatch('esc');self.assertIsNone(self.app.modal)
+                    self.app.dispatch('v');self.draw();self.app.dispatch('esc');self.draw()
+                self.assertFalse(self.app.done);self.assertIn(key,self.app.drafts)
+                self.app.dispatch('r')
+                self.assertEqual(self.app.toast_kind,'error');self.assertNotIn('PRIVATE-GLOBAL-SECRET',self.app.toast)
+                self.assertIn((self.app.scope_id,self.app.host),self.app.roles_errors)
+                self.assertEqual(dict(self.app.expected),before);self.assertEqual(dict(self.app.source_stamps),stamps)
+                # 显式修复/刷新展示可以看到新值，旧草稿原始 revision 仍不能续期。
+                path.unlink();path.write_text(json.dumps({'schema_version':1,'role_models':{'codex':{'xy-backend':{'model':'local-model'}}}}))
+                self.app.dispatch('r');self.assertEqual(self.app.current('xy-backend')['model'],'local-model')
+                self.assertEqual(dict(self.app.expected),before);self.assertEqual(dict(self.app.source_stamps),stamps)
+
+    def test_project_apply_success_survives_status_refresh_failure(self):
+        """实际登记已落盘后列表查询失败，结果保留完成事实、草稿和安全返回入口。"""
+        self.allow_state=True
+        target=self.root/'登记成功项目';target.mkdir()
+        self.app.dispatch('e');self.app.dispatch('end');self.app.dispatch('enter')
+        self.assertTrue(self.app.pending())
+        drafts=deepcopy(dict(self.app.drafts));expected=deepcopy(dict(self.app.expected))
+        with ThreadPoolExecutor(max_workers=1) as self.app.executor:
+            self.app.preview_project(target,'add');self.app.future.result(timeout=5);self.app.poll_job()
+            self.assertEqual(self.app.modal,'project_plan')
+            with patch.object(self.app,'query_project_rows',side_effect=OSError('fixture post-commit refresh failure')), \
+                 patch('manager.tui.service.apply_project',wraps=service.apply_project) as apply:
+                self.app.confirm()
+                with self.assertRaisesRegex(OSError,'post-commit'):self.app.future.result(timeout=5)
+                self.app.poll_job()
+                registry=json.loads((self.app.state/'projects.json').read_text())
+                self.assertIn(str(target),registry['registered'])
+                self.assertEqual(self.app.modal,'result');self.assertIn('操作已结算',self.app.text)
+                self.assertIn('业务操作已完成；后续状态刷新未完成',self.app.text)
+                self.assertIn('post-commit refresh failure',self.app.text)
+                self.assertIsNone(self.app.project_plan);self.assertIsNone(self.app.future)
+                self.assertNotIn(str(target),self.app.project_rows)
+                self.assertEqual(dict(self.app.drafts),drafts);self.assertEqual(dict(self.app.expected),expected)
+                self.app.poll_job();self.app.dispatch('esc')
+                self.assertIsNone(self.app.modal);self.assertFalse(any(frame['modal']=='project_plan' for frame in self.app.frames))
+                self.app.apply_project();self.assertEqual(apply.call_count,1)
+        with service.lock(self.app.state,str(target)):pass
+
+    def test_global_failure_invalidates_all_affected_projections_and_keeps_authorizations(self):
+        """真实全局前像守卫失败；同宿主全部显示失效，所有草稿授权仍保持原值。"""
+        self.allow_state=True;self.app.state.mkdir()
+        (self.app.state/'projects.json').write_text(json.dumps({'schema':1,'registered':[str(project) for project in self.projects],'hidden':[]}))
+        for project in self.projects:
+            for host in ('codex','claude'):
+                key=(str(project),host)
+                self.app.session.accept_context(key,model_preferences.load_context(self.app.state,project,host))
+                self.app.catalogs[key]=model_preferences.PreferenceCatalogs(Catalog(host,self.catalog.models),{})
+                draft_key=(*key,'xy-web');self.app.session.begin(draft_key)
+                self.app.session.stage(draft_key,{'model':'local-model'},'original-'+host)
+            self.app.project_rows[str(project)]={'project':str(project),'state':'disabled'}
+        self.app.dispatch('left');self.app.dispatch('home');self.app.dispatch('right')
+        self.app.dispatch('m');self.app.dispatch('down');self.app.dispatch('enter');self.app.dispatch('enter')
+        drafts=deepcopy(dict(self.app.drafts));expected=deepcopy(dict(self.app.expected));stamps=dict(self.app.source_stamps)
+        unaffected={key:value for key,value in self.app.session.displays.items() if key[1]=='claude'}
+        self.app.dispatch('s');self.assertEqual(self.app.modal,'preview');self.assertTrue(self.app.preference_plan.summary['can_apply'])
+        self.assertEqual({row['project'] for row in self.app.preference_plan.summary['affected_projects']},{str(project) for project in self.projects})
+        preferences=self.app.state/'preferences';preferences.mkdir()
+        (preferences/'role-models.json').write_text('{"PRIVATE-GLOBAL-SECRET":')
+        with ThreadPoolExecutor(max_workers=1) as self.app.executor,patch('manager.tui.model_preferences.apply',wraps=model_preferences.apply) as apply:
+            self.app.confirm()
+            with self.assertRaisesRegex(ValueError,'全局角色偏好'):self.app.future.result(timeout=5)
+            self.app.poll_job();self.assertEqual(self.app.modal,'error')
+            self.assertNotIn('PRIVATE-GLOBAL-SECRET',self.app.text)
+            self.assertFalse(any(key[1]=='codex' for key in self.app.session.displays))
+            self.assertFalse(any(key[1]=='codex' for key in self.app.catalogs))
+            self.assertEqual({key:value for key,value in self.app.session.displays.items() if key[1]=='claude'},unaffected)
+            self.assertFalse(self.app.project_rows)
+            self.assertEqual(dict(self.app.drafts),drafts);self.assertEqual(dict(self.app.expected),expected);self.assertEqual(dict(self.app.source_stamps),stamps)
+            self.assertIsNone(self.app.preference_plan);self.app.dispatch('esc');self.assertIsNone(self.app.modal)
+            self.app.poll_job();self.assertEqual(apply.call_count,1)
+
+    def test_job_callback_failures_always_release_busy_state_and_consume_confirmation(self):
+        """after 和结果回调异常均须收尾；已成功的业务结果不能被误报为失败。"""
+        for callback in ('after','on_result'):
+            with self.subTest(callback=callback),ThreadPoolExecutor(max_workers=1) as self.app.executor:
+                self.app.modal=None;self.app.frames=[];self.app.load_display(force=True)
+                key=self.app.scope();self.app.session.begin(key);self.app.session.stage(key,{'model':'local-model'},'original-stamp')
+                marker=self.root/(callback+'.result')
+                def operation():
+                    marker.write_text('settled');return {'marker':marker.name}
+                def broken(*args):
+                    self.app.show_view('project_plan')
+                    raise ValueError('fixture '+callback+' callback failure')
+                self.app.dispatch('g');self.app.show_view('project_plan')
+                self.app.start_job(operation,writes=True,draft_keys=(key,),impact=Impact(frozenset({self.app.scope_id})),
+                                   result_text=lambda result:'已写入 '+result['marker'],**{callback:broken})
+                self.app.future.result(timeout=5);job=self.app.session.job;self.app.poll_job()
+                self.assertEqual(marker.read_text(),'settled');self.assertTrue(job.operation_completed)
+                self.assertEqual(job.result,{'marker':marker.name});self.assertIsNone(self.app.future)
+                self.assertIsNone(job.after);self.assertIsNone(job.on_result);self.assertIsNone(job.refresh)
+                self.assertIsNone(job.return_view);self.assertFalse(job.return_frames);self.assertFalse(job.cancellable)
+                self.assertNotIn(key,self.app.drafts);self.assertNotIn(key,self.app.expected);self.assertNotIn(key,self.app.source_stamps)
+                self.assertEqual(self.app.modal,'result');self.assertIn('业务操作已完成',self.app.text);self.assertIn(callback+' callback failure',self.app.text)
+                self.app.poll_job();self.app.dispatch('esc');self.assertEqual(self.app.modal,'manage')
+                self.app.dispatch('esc');self.assertIsNone(self.app.modal)
 
     def test_text_views_home_end_and_paging(self):
         self.app.modal="preview";self.app.text="\n".join(str(i) for i in range(150))
@@ -484,6 +638,13 @@ class TuiTest(unittest.TestCase):
             self.assertEqual([call.args for call in cursor.call_args_list],[(1,),(0,)])
 
     def test_palette_reuses_preview_and_never_bypasses_confirmation(self):
+        # 从管理页中的命令面板进入编辑后取消，入口仍是一个modal，也必须清理
+        # 未暂存前像；否则之后刷新重进会继承一次已经取消的旧编辑授权。
+        self.app.dispatch('g');self.app.dispatch(':');self.type('edit model');self.app.dispatch('enter')
+        key=self.app.scope();self.assertEqual(self.app.modal,'model');self.assertIn(key,self.app.expected)
+        self.app.dispatch('esc');self.assertEqual(self.app.modal,'manage')
+        self.assertNotIn(key,self.app.expected);self.assertIsNone(self.app.scratch)
+        self.app.dispatch('esc')
         self.app.drafts[self.app.scope()]={"model":"local-model","effort":"high"}
         self.app.dispatch(":");self.type("预览")
         with patch.object(self.app,"act",wraps=self.app.act) as act,patch("manager.tui.model_preferences.preview",return_value=self.preference_plan()),patch("manager.tui.model_preferences.apply") as commit:
@@ -535,9 +696,9 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch("esc");self.assertIsNone(self.app.modal)
 
     def test_busy_only_reports_supported_cancellation(self):
-        self.app.future=Future();self.app.job_cancellable=False
+        self.app.future=Future();self.app.session.job.cancellable=False
         self.app.interrupt();self.assertFalse(self.app.cancel_job.is_set());self.assertFalse(self.app.done)
-        self.app.job_cancellable=True;self.app.interrupt();self.app.interrupt()
+        self.app.session.job.cancellable=True;self.app.interrupt();self.app.interrupt()
         self.assertTrue(self.app.cancel_job.is_set());self.assertIsNotNone(self.app.future)
         self.assertIn("等待",self.app.toast)
 
@@ -575,7 +736,9 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch("enter");self.assertEqual(self.app.modal,"effort")
 
     def test_effort_options_selectable_levels_for_hosts(self):
+        self.app.catalogs[(str(self.project),'claude')]=Catalog('claude',self.catalog.models)
         self.app.host_index=1;self.app.scratch={"model":"inherit","effort":"inherit"}
+        self.app.load_display()
         self.app.modal="effort"
         # 已知模型能力时只提供证实的档位，继承仍始终可选。
         model_levels=[v for _,v in self.app.options()]
@@ -589,6 +752,7 @@ class TuiTest(unittest.TestCase):
             codex_levels=[v for _,v in self.app.options()]
             self.assertEqual(codex_levels,[None,"inherit","none","minimal","low","medium","high","xhigh","max"])
         self.app.host_index=2
+        self.app.load_display()
         self.assertEqual(self.app.unavailable("effort"),"Antigravity 静态角色仅支持继承")
         self.assertEqual(self.app.unavailable("reset-effort"),"")
 
@@ -606,18 +770,18 @@ class TuiTest(unittest.TestCase):
         self.assertEqual(self.app.role_column,"model")
 
     def test_add_plan_cancel_preserves_path_and_does_not_write(self):
-        self.project.mkdir()
+        target=self.root/'待登记项目';target.mkdir()
         with ThreadPoolExecutor(max_workers=1) as self.app.executor:
-            self.app.dispatch("a");self.type(str(self.project));self.app.dispatch("enter")
+            self.app.dispatch("a");self.type(str(target));self.app.dispatch("enter")
             self.assertEqual(self.app.modal,"add_mode")
             self.assertEqual(self.app.index,0)
             self.app.dispatch("enter");self.app.future.result(timeout=5);self.app.poll_job()
             self.assertEqual(self.app.modal,"project_plan")
             self.assertIn("仅登记项目",self.app.text)
-            self.assertFalse((self.root/"state").exists());self.assertEqual([],list(self.project.iterdir()))
+            self.assertFalse((self.root/"state").exists());self.assertEqual([],list(target.iterdir()))
             self.app.dispatch("esc");self.assertEqual(self.app.modal,"add_mode")
             self.app.dispatch("esc");self.assertEqual(self.app.modal,"add")
-            self.assertEqual(self.app.input,str(self.project))
+            self.assertEqual(self.app.input,str(target))
             self.app.dispatch("esc");self.assertIsNone(self.app.modal)
 
     def test_conflicting_plan_has_readable_reason_and_no_confirm_binding(self):
@@ -688,7 +852,7 @@ class TuiTest(unittest.TestCase):
         self.assertEqual(self.app.modal,"manage");self.assertIn("没有前次中央版本",self.app.toast)
 
     def tearDown(self):
-        self.assertFalse((self.root/"state").exists())
+        if not self.allow_state:self.assertFalse((self.root/"state").exists())
 
 
 class TerminalCells:
@@ -848,7 +1012,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                      "lib/claude_instructions.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
                      "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py",
                      "lib/shared_core_skills.py","lib/role_models.py","lib/role_preferences.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
-                     "manager/runtime_service.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
+                     "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
                      "roles/xy-qa.md","roles/xy-uiux.md","platforms/shared/core-skills.txt"):
             put(name,(PACK/name).read_bytes())
         put("product/WORKFLOW.md","# TUI 固定版本甲\n".encode());put("product/GLOBAL_CONSTRAINTS.md",b"# fixture\n")

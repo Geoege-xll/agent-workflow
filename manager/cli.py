@@ -218,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             # 保留既有 set 的 model/effort 结果字段；现在取计划解析后的有效值，
             # 既不把缺省参数写成覆盖，也不让旧 JSON 消费者丢失原有字段。
             result={**plan.summary,**plan.summary["values"][args.role],"role":args.role,"applied":False,
-                    "changed_paths":[row.relative for target in plan.targets for row in target.changes]}
+                    "changed_paths":plan.changed_paths}
             identifier=None
             if args.apply:
                 result.update(model_preferences.apply(plan))

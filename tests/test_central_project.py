@@ -50,7 +50,7 @@ def make_alternate_source(root: Path) -> None:
                  "lib/runtime_pins.py", "lib/standard_paths.py", "lib/claude_instructions.py", "lib/context_read.py",
                  "lib/shared_core_skills.py", "lib/role_models.py", "lib/role_preferences.py", "lib/claude_options.py", "lib/validate_antigravity_artifacts.py",
                  "lib/python_runtime.sh", "lib/workflow_hook_install.py", "lib/workflow_hook_settings.py",
-                 "lib/workflow_hooks.py", "lib/windows_hook_command.py", "lib/merge_codex_config.py", "manager/runtime_service.py", "manager/__init__.py",
+                 "lib/workflow_hooks.py", "lib/windows_hook_command.py", "lib/merge_codex_config.py", "manager/runtime_service.py", "manager/runtime_state.py", "manager/__init__.py",
                  "templates/project.yaml.example", "templates/docs/PROJECT.md",
                  "roles/xy-qa.md", "roles/xy-uiux.md", "platforms/shared/core-skills.txt"):
         put(name, (PACK / name).read_bytes())

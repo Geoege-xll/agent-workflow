@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 from manager.release import source_version
 EXCLUDED = {".git", ".sync-backups", "__pycache__", ".DS_Store", ".pytest_cache", "node_modules",
             "tests", "__tests__", "backups", ".cache", "tui"}
-CENTRAL_MANAGER_FILES = {"manager/__init__.py", "manager/runtime_service.py"}
+CENTRAL_MANAGER_FILES = {"manager/__init__.py", "manager/runtime_service.py", "manager/runtime_state.py"}
 SCRIPTS = {"guard.sh", "lint_rules.sh", "scaffold_project_docs.sh"}
 STARTUP_FILES = ("package.json", "bin/agent-workflow.cjs", "THIRD_PARTY_NOTICES.txt")
 RUNTIME_HELPERS = ("windows_bootstrap.py", "windows_fs.py", "windows_runtime.py")
@@ -136,7 +136,7 @@ def payload(source: Path) -> dict[str, bytes]:
 
     def visit(path: Path) -> None:
         relative = path.relative_to(source).as_posix()
-        # 当前安装器真正消费中央服务；只携带其直接服务入口，不捎带交互 TUI、
+        # 当前安装器真正消费中央服务；只携带其服务入口与私有记录依赖，不捎带交互 TUI、
         # 模型目录或机器管理 UI。Windows 写前软链能力拒绝仍由公共安装入口负责。
         if relative.startswith("manager/") and relative not in CENTRAL_MANAGER_FILES:
             return

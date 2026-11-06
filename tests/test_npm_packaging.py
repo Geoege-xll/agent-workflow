@@ -143,6 +143,42 @@ class NpmPreparationTest(unittest.TestCase):
         self.assertIn("lib/install_workflow.py", actual)
         self.assertIn("lib/windows_runtime.py", actual)
         self.assertTrue(release.CENTRAL_MANAGER_FILES.issubset(actual))
+        # 精确核对真实 runtime 依赖；TUI 会话状态只属于完整管理器，不能为了
+        # 让源码可导入就把 App/目录/交互模块夹带进离线薄桥载荷。
+        self.assertEqual({"manager/__init__.py", "manager/runtime_service.py", "manager/runtime_state.py"},
+                         {name for name in actual if name.startswith("manager/")})
+        self.assertNotIn("manager/tui_state.py", actual)
+        # 从实际白名单提取的字节运行新的核心消费者，隔离 sys.path 后不能悄悄
+        # 回退到仓库里的 manager/runtime_state.py；不下载或执行 Windows EXE。
+        runtime = self.root / "runtime-consumer"
+        for name, body in actual.items():
+            if (name.startswith("lib/") and name.endswith(".py")) or name in release.CENTRAL_MANAGER_FILES:
+                target = runtime / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(body)
+        code = '''import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from manager import runtime_service, runtime_state
+from lib.runtime_project import Tree, json_bytes, node_id
+root = Path(sys.argv[2]); project = root / "project"; project.mkdir()
+state = root / "state"; (state / "bindings").mkdir(parents=True)
+binding = {"protocol_version": 1, "content_id": "b" * 64, "manifest_sha256": "b" * 64}
+record = {"schema_version": 1, "project_root": str(project), "project_identity": list(node_id(project.stat())),
+          "runtime_binding": binding, "enabled": False, "hosts": ["codex"], "previous_binding": None,
+          "used_bindings": [binding], "managed": {}, "retained_nodes": [], "generation": "a" * 32}
+with Tree(state) as tree:
+    runtime_service._write_private(tree, runtime_service._state_relative(project, "bindings"), json_bytes(record))
+assert runtime_service.read_binding_record(state, project)[1] == record
+assert runtime_service.ActivationError is runtime_state.ActivationError
+assert Path(runtime_state.__file__).is_relative_to(Path(sys.argv[1]))
+assert not any(name in sys.modules for name in ("manager.tui", "manager.tui_state", "manager.catalog"))
+print("isolated npm runtime codec/publication/read: OK")
+'''
+        result = subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-I", "-B", "-X", "utf8", "-c", code,
+                                 str(runtime), str(self.root)], cwd=self.root, capture_output=True, text=True, timeout=15)
+        self.assertEqual((0, "isolated npm runtime codec/publication/read: OK\n", ""),
+                         (result.returncode, result.stdout, result.stderr))
         self.assertNotIn("templates/docs/FEATURE.md", actual)
         # npm 载荷沿现有白名单完整传递投影器依赖，不额外依赖 npx 缓存或全局上游安装。
         for relative in ("lib/requirement_html.py", "lib/plan_documents.py",

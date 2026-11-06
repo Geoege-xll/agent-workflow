@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -24,6 +24,26 @@ class PreferenceCatalogs:
     project_catalogs: dict[str, Catalog]
     _scope: tuple | None = field(default=None, repr=False)
     _registry: Node | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class PreferenceContext:
+    """一次只读的显示及编辑前像；JSON 属性隔离调用方的草稿修改。"""
+
+    state: Path
+    project: Path | None
+    host: str
+    catalogs: PreferenceCatalogs | None
+    _values_json: bytes = field(repr=False)
+    _following_json: bytes = field(repr=False)
+
+    @property
+    def role_values(self) -> dict:
+        return json.loads(self._values_json)
+
+    @property
+    def following_values(self) -> dict:
+        return json.loads(self._following_json)
 
 
 def _read(root: Path, relative: str) -> Node:
@@ -77,6 +97,11 @@ def view(state, project, host, role) -> dict:
         choices = _config(config)
         native = _read(project, service.role_path(project, host, role).relative_to(project).as_posix())
         machine, _ = runtime_service.read_binding_record(state, project)
+    return _view(defaults, choices, host, role, project, global_node, config, native, machine)
+
+
+def _view(defaults, choices, host, role, project, global_node, config, native, machine) -> dict:
+    """以调用方已固定的同一组来源推导字段，避免上下文逐角色重读全局配置。"""
     values, sources = role_preferences.resolve(defaults, choices, host, role)
     explicit = (defaults if project is None else choices).get(host, {}).get(role, {})
     return {**values, "sources": sources, "overrides": dict(explicit),
@@ -84,6 +109,47 @@ def view(state, project, host, role) -> dict:
                          "project": role_preferences.revision(config),
                          "native": role_preferences.revision(native),
                          "binding": role_preferences.revision(machine)}}
+
+
+def load_context(state: Path, project: Path | None, host: str, *,
+                 catalogs: PreferenceCatalogs | None = None) -> PreferenceContext:
+    """只读角色、来源和 reset 跟随值，绝不发现目录或启动原生宿主。
+
+    新上下文仅供显示或新编辑使用；调用方必须保留已有草稿的旧 role_values，
+    不能用刷新后的投影替换 expected。附带目录只检查其归属，不自动刷新或续期。
+    """
+    state = service.state_root(state)
+    project = service.project_path(project) if project is not None else None
+    if host not in role_models.HOSTS:
+        raise ValueError("未知平台")
+    scope = (str(state), str(project) if project else None, host)
+    if catalogs is not None and (not isinstance(catalogs, PreferenceCatalogs) or
+                                catalogs._scope is not None and catalogs._scope != scope):
+        raise ValueError("编辑上下文与模型目录范围不一致")
+    global_node, defaults = role_preferences.snapshot(state)
+    config = _read(project, CONFIG) if project is not None else Node()
+    choices = _config(config)
+    machine = runtime_service.read_binding_record(state, project)[0] if project is not None else Node()
+    selected_roles = roles(state, project, host)
+    native = {role: _read(project, service.role_path(project, host, role).relative_to(project).as_posix())
+              if project is not None else Node() for role in selected_roles}
+    values = {role: _view(defaults, choices, host, role, project, global_node, config, native[role], machine)
+              for role in selected_roles}
+    following = {}
+    for role in selected_roles:
+        inherited, sources = role_preferences.resolve(defaults if project is not None else {}, {}, host, role)
+        following[role] = {**inherited, "sources": sources}
+    # 读取不持创建型锁；用完整节点及角色集合的前后核对拒绝撕裂快照。异常原样
+    # 交服务边界处理，已有显示/草稿由 TUI 生命周期保留，不能伪装成空配置成功。
+    if (role_preferences.snapshot(state)[0] != global_node or
+            roles(state, project, host) != selected_roles or
+            project is not None and (
+                _read(project, CONFIG) != config or
+                runtime_service.read_binding_record(state, project)[0] != machine or
+                any(_read(project, service.role_path(project, host, role).relative_to(project).as_posix()) != native[role]
+                    for role in selected_roles))):
+        raise ValueError("角色偏好来源或配置在读取上下文期间变化，请重新读取")
+    return PreferenceContext(state, project, host, catalogs, json_bytes(values), json_bytes(following))
 
 
 def _active_projects(state: Path, host: str) -> tuple[Node, tuple[Path, ...]]:
@@ -100,15 +166,56 @@ def _active_projects(state: Path, host: str) -> tuple[Node, tuple[Path, ...]]:
 
 
 def load_catalogs(state: Path, project: Path | None, host: str) -> PreferenceCatalogs:
-    """仅显式编辑/刷新调用：每个真实来源单独读取，原生查询沿现有有界实现。"""
+    """仅显式编辑/刷新调用：固定整个批次后逐范围查询，最后发布一致快照。"""
     state = service.state_root(state)
     project = service.project_path(project) if project is not None else None
     if host not in role_models.HOSTS:
         raise ValueError("未知平台")
-    catalog = discover(host, project=project)
     registry, targets = _active_projects(state, host) if project is None else (None, ())
-    snapshots = {str(target): discover(host, project=target) for target in targets}
-    return PreferenceCatalogs(catalog, snapshots, (str(state), str(project) if project else None, host), registry)
+    scopes = (project, *targets)
+    # 在任何 native 之前固定所有有效来源与登记/活跃集合。此处空快照强制只读，
+    # 默认共享缓存只贡献不透明提示，不贡献候选或能力；不能边查边接受新提供方。
+    before = [discover(host, project=target, _snapshot=Catalog(host)) for target in scopes]
+    identities = {}
+    for baseline in before:
+        if baseline._native_scope is not None:
+            key, identity = baseline._native_cache, baseline._native_scope[1]
+            if key in identities and identities[key] != identity:
+                raise ValueError("模型目录批次准备期间缓存来源已变化，请重新进入编辑")
+            identities[key] = identity
+    acquired = []
+    for target, baseline in zip(scopes, before):
+        current = discover(host, project=target)
+        if current._native_query is not None:
+            start, end = current._native_query
+            key = current._native_cache
+            if (baseline._native_scope is None or start[0] != baseline._native_scope[0] or
+                    key != baseline._native_cache or key not in identities or start[1] != identities[key]):
+                raise ValueError("模型目录批次获取期间身份或有效来源已变化，本次结果已丢弃")
+            identities[key] = end[1]
+        elif current._native_scope is None and current.stamp != baseline.stamp:
+            raise ValueError("模型目录批次获取期间有效来源或能力已变化，本次结果已丢弃")
+        acquired.append(current)
+    # 只有尚未交付、每次 before→after 连续且稳定来源仍等于基底的本轮结果可
+    # 归一到最终共享提示。使用独立副本重新投影，不修改此前发布的目录/草稿；
+    # 查询间外部刷新及最后查询之后的变化都无法通过这个精确 identity 守卫。
+    sealed = []
+    for target, baseline, current in zip(scopes, before, acquired):
+        snapshot = current
+        if current._native_query is not None:
+            expected = (baseline._native_scope[0], identities[current._native_cache])
+            snapshot = replace(current, _native_scope=expected)
+        checked = discover(host, project=target, _snapshot=snapshot)
+        if current._native_query is not None:
+            if checked._native_scope != expected or checked._status != current._status:
+                raise ValueError("模型目录批次发布前身份或有效来源已变化，本次结果已丢弃")
+        elif checked.stamp != current.stamp:
+            raise ValueError("模型目录批次发布前有效来源或能力已变化，本次结果已丢弃")
+        sealed.append(checked)
+    if project is None and _active_projects(state, host) != (registry, targets):
+        raise ValueError("登记项目或活跃范围在目录获取期间变化，请重新进入编辑")
+    return PreferenceCatalogs(sealed[0], {str(target): value for target, value in zip(targets, sealed[1:])},
+                              (str(state), str(project) if project else None, host), registry)
 
 
 def check_catalogs(state: Path, project: Path | None, host: str,
@@ -195,6 +302,11 @@ class ModelPreferencePlan:
     def summary(self) -> dict:
         # 调用方获得独立 JSON 投影，修改弹层字典不会修改已授权计划。
         return json.loads(self.summary_json)
+
+    @property
+    def changed_paths(self) -> list[str]:
+        """只读 CLI 投影，顺序与现有按目标展开一致，不泄漏事务内部目标结构。"""
+        return [row.relative for target in self.targets for row in target.changes]
 
 
 def _edit(choices: dict, host: str, edits: dict) -> dict:

@@ -7,13 +7,13 @@ import curses
 from dataclasses import dataclass, replace
 import locale
 from pathlib import Path
-from threading import Event
 import time
 
 from lib.install_workflow import InstallError, _target_path
 from lib import runtime_store
 from .catalog import Catalog, clean, discover
 from . import service, model_preferences
+from .tui_state import Impact, Session
 from .tui_support import (Layout, TextInput, Theme, PROJECT_ACTION_LABELS, binding_id, cell_width, clip,
                           draw_box, draw_divider, draw_frame, draw_scrollbar, ellipsize, operation_error, padded, project_badge,
                           project_plan_text, project_result_text, project_state, preference_plan_text, preference_result_text, status_text, wrapped)
@@ -71,15 +71,38 @@ class App:
         self.modal=None;self.index=0;self.scroll=0;self.text="";self.editor=TextInput()
         self.filter_text="";self.searching=False;self.search_input=TextInput();self.search_before=None
         self.frames=[];self.quit_code=0;self.exit_code=0
-        self.drafts={};self.expected={};self.catalogs={};self.settings_cache={};self.roles_cache={}
-        self.source_stamps={};self.roles_errors={};self.page_lines=10
+        self.session=Session()
+        self.drafts=self.session.drafts;self.expected=self.session.expected;self.source_stamps=self.session.source_stamps
+        self.catalogs=self.session.catalogs;self.roles_errors=self.session.display_errors;self.page_lines=10
         self.scratch=None;self.scratch_choices={};self.scratch_fields={};self.preference_plan=None;self.changes=[];self.backup_rows=[]
-        self.project_rows={};self.project_plan=None;self.version_rows=[];self.add_target=None
-        self.status_error="";self.on_job_result=None;self.job_frames=[]
+        self.project_plan=None;self.version_rows=[];self.add_target=None
         self.toast="m 选择模型 · e 选择推理 · s 保存预览";self.toast_kind="info"
-        self.done=False;self.future=None;self.after_job=None;self.show_job_result=True
-        self.cancel_job=Event();self.job_cancellable=False;self.job_name="管理操作";self.job_started=0;self.job_return=None
+        self.done=False
         self.hits=[];self.screen=None;self.theme=Theme();self.cursor_visible=None
+        # 首次显示只取 P1 的只读上下文；此入口没有目录参数，绝不启动 native。
+        # 后续绘制、帮助和选择器只消费 Session 内已接收的稳定投影。
+        self.load_display()
+
+    @property
+    def project_rows(self):return self.session.project_rows
+
+    @project_rows.setter
+    def project_rows(self,value):self.session.project_rows=value
+
+    @property
+    def status_error(self):return self.session.status_error
+
+    @status_error.setter
+    def status_error(self,value):self.session.status_error=value
+
+    @property
+    def future(self):return self.session.job.future
+
+    @future.setter
+    def future(self,value):self.session.job.future=value
+
+    @property
+    def cancel_job(self):return self.session.job.cancel
 
     @property
     def input(self):return self.editor.text
@@ -107,17 +130,16 @@ class App:
     def notify(self,text,kind="info"):
         self.toast=clean(text,500);self.toast_kind=kind
 
-    def installed_roles(self):
-        if not self.global_scope and not self.project:return []
+    def load_display(self,*,force=False):
+        """仅在首次显示、范围切换或显式刷新入口读取配置，失败由 UI 保留诊断。"""
+        if not self.global_scope and not self.project:return
         key=(self.scope_id,self.host)
-        if key not in self.roles_cache:
-            try:
-                self.roles_cache[key]=model_preferences.roles(self.state,self.project,self.host)
-                self.roles_errors.pop(key,None)
-            except (OSError,ValueError) as exc:
-                self.roles_cache[key]=[];self.roles_errors[key]=clean(str(exc),500)
-                self.notify(exc,"error")
-        return self.roles_cache[key]
+        if not force and (key in self.session.displays or key in self.roles_errors):return
+        try:self.session.accept_context(key,model_preferences.load_context(self.state,self.project,self.host))
+        except (OSError,ValueError) as exc:
+            self.session.fail_display(key,clean(str(exc),500));self.notify(exc,"error")
+
+    def installed_roles(self):return self.session.installed_roles((self.scope_id,self.host))
 
     def role_list(self):
         rows=list(self.installed_roles())
@@ -132,50 +154,40 @@ class App:
     def scope(self,role=None):return (self.scope_id,self.host,role or self.role)
 
     def catalog(self) -> Catalog:
-        key=(self.scope_id,self.host)
-        # 绘制只读取已取回的主目录；未编辑时的空快照不会启动宿主或创建用户状态。
-        if key not in self.catalogs:
-            self.catalogs[key]=discover(self.host,project=self.project,_snapshot=Catalog(self.host))
-        stored=self.catalogs[key]
+        # 空占位也不读取来源文件；真实目录只由显式 read_catalog 入口取得。
+        stored=self.catalogs.get((self.scope_id,self.host),Catalog(self.host,_status="stale"))
         return stored.catalog if isinstance(stored,model_preferences.PreferenceCatalogs) else stored
 
     def read_catalog(self,ready):
         """显式进入编辑/来源页时预读本范围及受影响项目目录，失效最多恢复一次。"""
         project,host=self.project,self.host;key=(self.scope_id,host)
-        self.catalog()
-        cached=self.catalogs[key]
-        if model_preferences.check_catalogs(self.state,project,host,cached):ready();return
-        def accept(bundle):
-            self.catalogs[key]=bundle
+        cached=self.catalogs.get(key)
+        def read():
+            # 先完成显式目录批次，再取同一范围的 P1 上下文。已有草稿的 expected
+            # 不参与这次显示替换，重开菜单本身也不更新旧来源 stamp。
+            bundle=cached if cached is not None and model_preferences.check_catalogs(self.state,project,host,cached) else model_preferences.load_catalogs(self.state,project,host)
+            if isinstance(bundle,Catalog):bundle=model_preferences.PreferenceCatalogs(bundle,{})
+            return model_preferences.load_context(self.state,project,host,catalogs=bundle)
+        def accept(context):
+            self.session.accept_context(key,context)
             ready()
-            if bundle.catalog._status != "ready":
+            if context.catalogs.catalog._status != "ready":
                 self.notify("模型目录读取未完成；当前仅显示安全后备项，退出后重新进入可重试，或按 r 刷新","warning")
         if hasattr(self,"executor"):
-            self.start_job(lambda:model_preferences.load_catalogs(self.state,project,host),show_result=False,
-                           name="读取 "+HOST_NAMES[host]+" 模型目录",on_result=accept,preserve_view=True)
-        else:accept(model_preferences.load_catalogs(self.state,project,host))
+            self.start_job(read,show_result=False,name="读取 "+HOST_NAMES[host]+" 模型目录",on_result=accept,
+                           preserve_view=True,impact=Impact(frozenset({key[0]}),host))
+        else:
+            try:accept(read())
+            except (OSError,ValueError) as exc:
+                self.session.invalidate(Impact(frozenset({key[0]}),host),clean(str(exc),500));raise
 
     def base_value(self,role):
-        """缓存服务的完整字段来源与 revision；编辑期不重绑旧草稿的并发基线。"""
-        key=self.scope(role)
-        if key not in self.settings_cache:
-            self.settings_cache[key]=model_preferences.view(self.state,self.project,self.host,role)
-        return self.settings_cache[key]
+        return self.session.base_value(self.scope(role))
 
     def current(self,role):
-        value=dict(self.base_value(role));value["sources"]=dict(value.get("sources",{}))
-        for field,choice in self.drafts.get(self.scope(role),{}).items():
-            if choice is None:
-                # reset 的本地投影只展示下一级服务读值；真正清除覆盖及物化由计划服务负责。
-                fallback=model_preferences.view(self.state,None,self.host,role) if not self.global_scope else {}
-                value[field]=fallback.get(field,"inherit")
-                value["sources"][field]=fallback.get("sources",{}).get(field,"host")
-            else:
-                value[field]=choice
-                value["sources"][field]="host" if choice == "inherit" else "global" if self.global_scope else "project"
-        return value
+        return self.session.current(self.scope(role))
 
-    def pending(self):return {role:value for (scope,host,role),value in self.drafts.items() if scope == self.scope_id and host == self.host}
+    def pending(self):return self.session.pending((self.scope_id,self.host))
 
     def action_label(self,action):
         if action in {"reset-model","reset-effort"} and self.global_scope:
@@ -213,7 +225,7 @@ class App:
     def bindings(self):
         # 帮助、底栏、命令面板与派发共用动作定义，提示不能承诺后端不支持的能力。
         if self.future:
-            return [Binding("Ctrl+C","请求取消并等待结算","interrupt")] if self.job_cancellable else [Binding("等待","操作完成后继续","wait")]
+            return [Binding("Ctrl+C","请求取消并等待结算","interrupt")] if self.session.job.cancellable else [Binding("等待","操作完成后继续","wait")]
         if self.searching:
             return [Binding("↑↓","选择匹配项","move"),Binding("PgUp/PgDn","翻页","move"),Binding("Enter","接受筛选","accept-search"),Binding("Esc","取消搜索","back")]
         if self.modal == "add":
@@ -283,7 +295,7 @@ class App:
 
     def follow_option(self,field):
         if self.global_scope or not self.project or not self.role:return []
-        inherited=model_preferences.view(self.state,None,self.host,self.role)[field]
+        inherited=self.session.following_value(self.scope())[field]
         # 跟随项的标签不包含 inherit，搜索 inherit/继承宿主只会命中明确宿主选项。
         return [("跟随全局（"+("宿主默认" if inherited == "inherit" else inherited)+"）",None)]
 
@@ -320,6 +332,7 @@ class App:
             if index != self.project_index:
                 self.role_selections[(self.scope_id,self.host)]=self.role
                 self.project_index=index
+                self.load_display()
                 roles=self.role_list();previous=self.role_selections.get((self.scope_id,self.host))
                 self.role_index=roles.index(previous) if previous in roles else 0
         else:self.role_index=index
@@ -348,10 +361,10 @@ class App:
 
     def open_model(self):
         if reason:=self.unavailable("edit"):raise ValueError(reason)
-        self.scratch=dict(self.current(self.role));self.scratch_choices=dict(self.drafts.get(self.scope(),{}));self.scratch_fields={}
-        # 编辑基线只能来自用户开始编辑时看到的版本，不能在暂存时悄悄更新。
-        if self.scope() not in self.expected:self.expected[self.scope()]=dict(self.base_value(self.role))
+        role=self.role
         def ready():
+            self.prepare_editor(role)
+            self.scratch=self.current(self.role);self.scratch_choices=dict(self.drafts.get(self.scope(),{}));self.scratch_fields={}
             self.show_view("model")
             rows=self.options();self.index=next((i for i,(_,identifier) in enumerate(rows) if identifier == self.edit_choice("model")),0)
             self.notify("选择模型后 Enter 继续选择推理；尚未暂存或保存，Esc 取消")
@@ -359,30 +372,27 @@ class App:
 
     def open_effort(self):
         if reason:=self.unavailable("effort"):raise ValueError(reason)
-        self.scratch=dict(self.current(self.role));self.scratch_choices=dict(self.drafts.get(self.scope(),{}));self.scratch_fields={}
-        if self.scope() not in self.expected:self.expected[self.scope()]=dict(self.base_value(self.role))
+        role=self.role
         def ready():
+            self.prepare_editor(role)
+            self.scratch=self.current(self.role);self.scratch_choices=dict(self.drafts.get(self.scope(),{}));self.scratch_fields={}
             self.show_view("effort")
             rows=self.options();self.index=next((i for i,(_,val) in enumerate(rows) if val == self.edit_choice("effort")),0)
             self.notify("选择推理后 Enter 暂存，尚未保存；Esc 取消")
         self.read_catalog(ready)
 
+    def prepare_editor(self,role):
+        # 目录预读期间角色集合可能改变。必须仍定位用户触发的角色，不能让
+        # 新投影的同一个数字行号悄悄改成另一个角色，更不能为旧草稿换前像。
+        if role not in self.installed_roles():raise ValueError("角色已移除；已有草稿保留，请刷新后核对或按 u 丢弃")
+        self.role_index=self.role_list().index(role)
+        self.session.begin(self.scope(role))
+
     def stage(self):
         key=self.scope()
-        # 比较字段的来源和值：None清覆盖，inherit明确指宿主。即使有效值相同，
-        # 明确选择宿主/具体值仍应形成项目覆盖；沿用跟随项则不能顺带固化推理。
-        baseline=self.expected.setdefault(key,dict(self.base_value(self.role)))
-        choices=dict(self.scratch_choices)
-        overrides=baseline.get("overrides",{})
-        for field,selected in self.scratch_fields.items():
-            if self.global_scope:
-                unchanged=selected == baseline[field]
-            else:
-                unchanged=(selected is None and field not in overrides) or (field in overrides and selected == overrides[field])
-            if unchanged:choices.pop(field,None)
-            else:choices[field]=selected
-        if choices:self.drafts[key]=choices;self.source_stamps[key]=self.catalog().stamp
-        else:self.drafts.pop(key,None);self.expected.pop(key,None);self.source_stamps.pop(key,None)
+        # Session 按原前像比较来源和值；只确认过的字段能改变草稿及来源授权。
+        self.session.stage(key,self.scratch_fields,self.catalog().stamp)
+        choices=self.drafts.get(key,{})
         self.close_view()
         while self.modal in {"model","effort"}:self.close_view()
         self.scratch=None;self.scratch_choices={};self.scratch_fields={}
@@ -391,58 +401,65 @@ class App:
     def reset_field(self,field):
         """恢复跟随与 u 丢弃草稿是两种动作；None 明确交给共享服务清除该范围覆盖。"""
         if reason:=self.unavailable("reset-"+field):raise ValueError(reason)
-        key=self.scope();baseline=self.expected.setdefault(key,dict(self.base_value(self.role)))
+        key=self.scope()
         def ready():
-            choices=dict(self.drafts.get(key,{}))
-            if field in baseline.get("overrides",{}):choices[field]=None
-            else:choices.pop(field,None)
-            if choices:self.drafts[key]=choices;self.source_stamps[key]=self.catalog().stamp
-            else:self.drafts.pop(key,None);self.expected.pop(key,None);self.source_stamps.pop(key,None)
+            self.prepare_editor(key[2])
+            self.session.reset(key,field,self.catalog().stamp)
+            choices=self.drafts.get(key,{})
             target="宿主" if self.global_scope else "全局"
             self.notify(("已暂存恢复跟随"+target+"；尚未保存，按 s 预览") if choices else "无改动；此字段已跟随"+target,"warning" if choices else "info")
         # reset 也是显式编辑入口，需要完整预读当前范围的来源，不能让保存预览补跑宿主。
         self.read_catalog(ready)
 
     def start_job(self,operation,after=None,*,show_result=True,name="管理操作",cancellable=False,
-                  on_result=None,preserve_view=False):
+                  on_result=None,preserve_view=False,impact=None,writes=False,draft_keys=(),refresh=None,result_text=None):
         if self.future:
             self.notify("已有操作执行中，请等待真实结果","warning");return
-        # 返回帧只保留有效入口，不让结果页返回可重复提交的旧确认页。
-        candidates=[self.view_frame(),*reversed(self.frames)]
-        if preserve_view:
-            self.job_return=self.view_frame();self.job_frames=list(self.frames)
-        else:
-            self.job_frames=[]
-            self.job_return=next((dict(frame) for frame in candidates if frame["modal"] in {"manage","add_mode"}),None)
-            if self.job_return is None:
-                self.job_return=next((dict(frame) for frame in candidates if frame["modal"] is None),self.view_frame())
-                self.job_return.update(modal=None,scroll=0,text="")
-            elif self.job_return["modal"] == "add_mode":
-                self.job_frames=next((list(self.frames[:index]) for index,frame in enumerate(self.frames)
-                                      if frame["modal"] == "add_mode"),list(self.frames))
-        self.cancel_job.clear();self.job_cancellable=cancellable;self.job_name=name;self.job_started=time.monotonic()
-        self.show_job_result=show_result;self.modal=None;self.frames=[];self.filter_text="";self.searching=False
-        self.future=self.executor.submit(operation);self.after_job=after;self.on_job_result=on_result
+        impact=impact or Impact(frozenset({self.scope_id}),self.host,
+                               frozenset({str(self.project)}) if self.project else frozenset())
+        job=self.session.prepare_job(self.view_frame(),self.frames,preserve_view=preserve_view,impact=impact,
+                                     after=after,on_result=on_result,show_result=show_result,name=name,
+                                     cancellable=cancellable,writes=writes,draft_keys=tuple(draft_keys),
+                                     refresh=refresh,result_text=result_text)
+        self.modal=None;self.frames=[];self.filter_text="";self.searching=False
+        try:job.future=self.executor.submit(job.execute,operation)
+        except Exception:
+            self.restore_view(job.return_view);self.frames=list(job.return_frames)
+            self.session.finish_job(job);raise
         self.notify("正在"+name+"；"+("Ctrl+C 可请求取消；已开始的事务等待结算" if cancellable else "请等待完成，此操作不支持中途取消"),"warning")
 
     def poll_job(self):
         if not self.future or not self.future.done():return
-        future,self.future=self.future,None
-        self.restore_view(self.job_return);self.frames=list(self.job_frames)
+        job=self.session.job;failure=None
         try:
-            result=future.result()
-            if self.after_job:self.after_job()
-            self.notify("已读取预览 / 状态，尚未写入" if self.on_job_result and not self.show_job_result else "操作完成","success")
-            if self.on_job_result:self.on_job_result(result)
-            elif self.show_job_result:
-                self.show_view("result");self.text=str(result or "完成")
+            try:job.future.result()
+            except Exception as exc:failure=exc
+            diagnostic="状态需刷新；上次操作未完成" if failure else ""
+            self.session.settle_job(job,diagnostic)
+            self.restore_view(job.return_view);self.frames=list(job.return_frames)
+            if failure is None:
+                if job.after:job.after()
+                self.notify("已读取预览 / 状态，尚未写入" if job.on_result and not job.show_result else "操作完成","success")
+                if job.on_result:job.on_result(job.result)
+                elif job.show_result:
+                    self.show_view("result");self.text=job.result_text(job.result) if job.result_text else str(job.result or "完成")
+            else:raise failure
         except Exception as exc:
-            # 失败可能发生在跨资源结算之后，旧状态失效；保留草稿，要求显式刷新，绝不假报回滚成功。
-            self.project_rows.pop(str(self.project),None)
-            self.status_error="状态需刷新；上次操作未完成"
-            self.show_view("error");self.text=operation_error(exc)
-            self.notify("操作未完成；请查看诊断及保留的恢复信息","error")
-        self.after_job=None;self.on_job_result=None;self.job_cancellable=False
+            # 回调也属于作业的收尾边界：恢复已清洗的入口后再显示诊断，不能让
+            # 部分回调留下的确认页重新可提交。写入结算事实独立于刷新/回调成败。
+            self.session.invalidate(job.impact,"状态需刷新；请查看上次操作诊断")
+            self.restore_view(job.return_view);self.frames=list(job.return_frames)
+            if job.writes and job.operation_completed:
+                self.show_view("result")
+                try:result=job.result_text(job.result) if job.result_text else str(job.result or "完成")
+                except Exception:result="业务操作已完成；结果显示未完成，请刷新状态核对。"
+                stage="状态刷新" if job.phase == "refresh" else "结果显示"
+                self.text=result+"\n\n业务操作已完成；后续"+stage+"未完成，请刷新核对，勿重复提交。\n"+operation_error(exc)
+                self.notify("业务操作已完成；"+stage+"未完成，请刷新核对","warning")
+            else:
+                self.show_view("error");self.text=operation_error(exc)
+                self.notify("操作未完成；请查看诊断及保留的恢复信息","error")
+        finally:self.session.finish_job(job)
 
     def query_project_rows(self,include=None):
         rows=service.project_summaries(self.state,self.scan)
@@ -465,7 +482,8 @@ class App:
     def refresh_project_status(self):
         selected=self.project
         self.start_job(lambda:self.query_project_rows(selected),show_result=False,name="读取项目与固定版本状态",
-                       on_result=lambda rows:self.accept_project_rows(rows,selected=selected),preserve_view=True)
+                       on_result=lambda rows:self.accept_project_rows(rows,selected=selected),preserve_view=True,
+                       impact=Impact(frozenset(),projects=None))
 
     def preview_project(self,project,action,**options):
         def ready(plan):
@@ -479,16 +497,19 @@ class App:
         plan=self.project_plan
         if plan is None or not plan.summary["can_apply"]:
             self.notify("计划含冲突，不能确认；请返回核对冲突或预览修复","warning");return
-        def apply():
-            # 服务拥有组合锁、条件前像与停用后解除登记；UI 不外套锁或追加 register 事务。
-            result=service.apply_project(plan,cancel=self.cancel_job)
-            return result,self.query_project_rows(None if plan.action == "del" else plan.project)
-        def ready(value):
-            result,rows=value
+        host=self.host;old_index=self.project_index;old_project=self.project;old_role=self.role
+        def refresh(result):
+            rows=self.query_project_rows(None if plan.action == "del" else plan.project)
+            paths=[Path(row["project"]) for row in rows]
+            selected=plan.project if plan.project in paths else paths[min(max(0,old_index),len(paths)-1)] if paths else None
+            context=model_preferences.load_context(self.state,selected,host) if selected is not None else None
+            return rows,selected,context
+        def ready(result):
+            rows,selected,context=self.session.job.refreshed
             self.accept_project_rows(rows,selected=plan.project)
-            for cache in (self.settings_cache,self.roles_cache,self.roles_errors,self.catalogs):
-                for key in list(cache):
-                    if key[0] == str(plan.project):cache.pop(key)
+            if context is not None:self.session.accept_context((str(selected),host),context)
+            roles=self.role_list()
+            if self.project == old_project and old_role in roles:self.role_index=roles.index(old_role)
             if plan.action == "del":
                 # 列表变化后清除旧入口帧，结果页返回当前相邻项。其他范围的模型草稿原样保留。
                 self.modal=None;self.frames=[];self.pane="projects"
@@ -496,8 +517,13 @@ class App:
                 self.modal=None;self.frames=[];self.pane="roles" if result["enabled"] else "projects"
             self.show_view("result");self.text=project_result_text(result,HOST_NAMES)
             if result.get("cancel_requested"):self.notify("取消请求到达时事务已经开始；已完成结算，请查看真实结果","warning")
-            self.project_plan=None
-        self.start_job(apply,name=PROJECT_ACTION_LABELS[plan.action],on_result=ready,cancellable=True)
+        # 服务拥有组合锁、条件前像与停用后解除登记；UI 仅把只读刷新独立成
+        # 后置阶段。计划在提交时即消费，后置刷新失败也不能再提交同一计划。
+        self.start_job(lambda:service.apply_project(plan,cancel=self.cancel_job),name=PROJECT_ACTION_LABELS[plan.action],
+                       on_result=ready,cancellable=True,writes=True,refresh=refresh,
+                       impact=Impact(frozenset({str(plan.project)}),projects=frozenset({str(plan.project)})),
+                       result_text=lambda result:project_result_text(result,HOST_NAMES))
+        self.project_plan=None
 
     def manage_action(self,action):
         if action in {"reset-model","reset-effort"}:self.reset_field(action.split("-",1)[1]);return
@@ -545,14 +571,14 @@ class App:
             self.close_view();self.act(action)
         elif self.modal == "model":
             selected=self.options()[self.index][1];self.scratch_fields["model"]=selected
-            self.scratch["model"]=selected if selected is not None else model_preferences.view(self.state,None,host,self.role)["model"]
+            self.scratch["model"]=selected if selected is not None else self.session.following_value(self.scope())["model"]
             if host in {"codex","claude"}:
                 self.show_view("effort");self.index=next((i for i,(_,value) in enumerate(self.options()) if value == self.edit_choice("effort")),0)
                 self.notify("已选择模型，尚未暂存或保存；选择推理后 Enter 暂存，Esc 返回")
             else:self.stage()
         elif self.modal == "effort":
             selected=self.options()[self.index][1];self.scratch_fields["effort"]=selected
-            self.scratch["effort"]=selected if selected is not None else model_preferences.view(self.state,None,host,self.role)["effort"]
+            self.scratch["effort"]=selected if selected is not None else self.session.following_value(self.scope())["effort"]
             self.stage()
         elif self.modal == "manage":self.manage_action(self.options()[self.index][1])
         elif self.modal == "add_mode":self.preview_project(self.add_target,"add",enable=self.options()[self.index][1] == "register_enable")
@@ -563,20 +589,24 @@ class App:
             if plan is None or not plan.summary["can_apply"]:
                 self.notify("计划含冲突，不能保存；请核对诊断后重新预览","warning");return
             keys=[self.scope(role) for role in self.pending()];scope_id=self.scope_id;label=self.scope_label
-            def saved(result):
+            message=f"已保存模型配置 · {label} / {HOST_NAMES[host]}"
+            def apply():
+                result=model_preferences.apply(plan)
                 if not result["applied"]:raise ValueError(result.get("diagnostic") or "配置未应用；草稿保留")
-                for key in keys:
-                    self.drafts.pop(key,None);self.expected.pop(key,None);self.source_stamps.pop(key,None)
-                # 全局保存会更新其他项目的跟随字段，因此只读投影整体失效；草稿的旧基线不动。
-                if result["scope"] == "global":self.settings_cache.clear()
-                else:
-                    for key in list(self.settings_cache):
-                        if key[:2] == (scope_id,host):self.settings_cache.pop(key)
-                self.catalogs.pop((scope_id,host),None);self.preference_plan=None
-                message=f"已保存模型配置 · {label} / {HOST_NAMES[host]}"
+                return result
+            def saved(result):
+                self.session.accept_context((scope_id,host),self.session.job.refreshed)
                 self.show_view("result");self.text=message+"\n"+preference_result_text(result)
                 self.notify(message,"success")
-            self.start_job(lambda:model_preferences.apply(plan),name="备份并保存模型配置",on_result=saved)
+            # 全局权威能影响所有项目的跟随字段；失败也按同一宿主的全部显示
+            # 范围失效。其他草稿的 expected/stamp 始终保留，只有本次成功项结算。
+            affected=frozenset(row["project"] for row in plan.summary.get("affected_projects",[]))
+            impact=Impact(None if self.global_scope else frozenset({scope_id}),host,
+                          affected if self.global_scope else frozenset({str(project)}))
+            self.start_job(apply,name="备份并保存模型配置",on_result=saved,writes=True,draft_keys=keys,
+                           impact=impact,refresh=lambda result:model_preferences.load_context(self.state,project,host),
+                           result_text=lambda result:message+"\n"+preference_result_text(result))
+            self.preference_plan=None
         elif self.modal == "backups":
             if not self.backup_rows:return
             changes=service.prepare_restore(self.state,project,self.options()[self.index][1])
@@ -588,7 +618,14 @@ class App:
             def restore():
                 identifier=service.commit(self.state,project,changes,lambda:service.check(project,state=self.state))
                 return service.backup_summary(project,identifier)
-            self.start_job(restore,lambda:self.settings_cache.clear(),name="恢复模型配置")
+            def restored(result):
+                self.session.accept_context((str(project),host),self.session.job.refreshed)
+                self.show_view("result");self.text=str(result or "完成")
+            self.start_job(restore,name="恢复模型配置",writes=True,
+                           impact=Impact(frozenset({str(project)}),projects=frozenset({str(project)})),
+                           refresh=lambda result:model_preferences.load_context(self.state,project,host),
+                           on_result=restored)
+            self.changes=[]
         elif self.modal == "quit":
             if not self.can_confirm_quit():self.notify("请放大窗口后确认，草稿仍保留","warning");return
             self.exit_code=self.quit_code;self.done=True
@@ -609,7 +646,7 @@ class App:
 
     def interrupt(self):
         if self.future:
-            if self.job_cancellable:
+            if self.session.job.cancellable:
                 self.cancel_job.set();self.notify("已请求取消；执行前可拒绝，已开始的事务等待真实结果与必要恢复","warning")
             else:self.notify("此操作不支持中途取消；请等待完成，事务与锁仍受保护","warning")
         else:self.quit(interrupted=True)
@@ -638,6 +675,7 @@ class App:
             # Tab 与数字/鼠标共用平台切换合同，保留项目、区域、角色身份和全部范围草稿。
             role=self.role
             self.host_index=(self.host_index+(-1 if key == "backtab" else 1))%len(HOSTS) if key in {"tab","backtab"} else int(key)-1
+            self.load_display()
             rows=self.role_list()
             self.role_index=rows.index(role) if role in rows else 0;self.filter_text=""
         elif action == "confirm":self.confirm()
@@ -676,9 +714,9 @@ class App:
             self.add_target=project;self.show_view("add_mode")
         elif action == "preview":
             if not self.pending():self.notify("无改动；当前范围没有待保存草稿，未写入配置");return
-            cached=self.catalog();bundle=self.catalogs[(self.scope_id,self.host)]
+            cached=self.catalog();bundle=self.catalogs.get((self.scope_id,self.host))
             # 普通预览只读校验预读bundle；影响项目任一来源变化都不能借预览重启native。
-            if not model_preferences.check_catalogs(self.state,self.project,self.host,bundle):
+            if bundle is None or not model_preferences.check_catalogs(self.state,self.project,self.host,bundle):
                 raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
             if cached.stamp and any(self.source_stamps.get(self.scope(role)) != cached.stamp for role in self.pending()):
                 raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
@@ -689,16 +727,16 @@ class App:
         elif action == "refresh":
             role=self.role
             # 丢弃当前 scope 的快照；下一次显式编辑按需查询，不影响其他项目/平台目录。
-            self.catalogs.pop((self.scope_id,self.host),None);self.roles_cache.pop((self.scope_id,self.host),None)
-            for cache_key in list(self.settings_cache):
-                if cache_key[:2] == self.scope()[:2]:self.settings_cache.pop(cache_key)
+            self.session.invalidate(Impact(frozenset({self.scope_id}),self.host))
+            self.load_display(force=True)
             rows=self.role_list();self.role_index=rows.index(role) if role in rows else 0
             self.filter_text="";self.sync_selection()
-            self.notify("本地来源已刷新，草稿保留；冲突时按 u 丢弃当前角色草稿后重新编辑")
+            if (self.scope_id,self.host) not in self.roles_errors:
+                self.notify("本地来源已刷新，草稿保留；冲突时按 u 丢弃当前角色草稿后重新编辑")
             if hasattr(self,"executor"):self.refresh_project_status()
         elif action == "discard":
             key=self.scope()
-            self.drafts.pop(key,None);self.expected.pop(key,None);self.source_stamps.pop(key,None);self.settings_cache.pop(key,None)
+            self.session.discard(key)
             self.sync_selection()
             self.notify("已丢弃当前角色草稿；下次编辑使用当前配置，其他草稿保留")
         elif action == "help":
@@ -717,16 +755,17 @@ class App:
             else:
                 previous=self.modal
                 self.close_view()
-                if self.modal is None:
-                    if previous in {"model","effort"} and self.scope() not in self.drafts:
-                        self.expected.pop(self.scope(),None)
-                    if previous in {"model","effort"}:
-                        self.scratch=None
+                left_editor=previous in {"model","effort"} and self.modal not in {"model","effort"}
+                if left_editor:
+                    # 编辑入口也可能来自管理页中的命令面板；回到该入口同样是
+                    # 取消，不能因 modal 仍非空就残留未暂存的旧授权和 scratch。
+                    self.session.cancel_edit(self.scope())
+                    self.scratch=None;self.scratch_choices={};self.scratch_fields={}
                 if previous == "quit":self.quit_code=0
                 if previous == "project_plan":self.project_plan=None
                 if previous == "preview":self.preference_plan=None;self.notify("已取消保存预览；草稿保留，尚未写入配置","warning")
                 elif previous in {"model","effort"}:
-                    self.notify("已取消本次选择；已有草稿保留，未写入配置" if self.modal is None else "已返回模型选择，尚未保存")
+                    self.notify("已取消本次选择；已有草稿保留，未写入配置" if left_editor else "已返回模型选择，尚未保存")
 
     def dispatch(self,key):
         if key == "ctrl-c":self.interrupt();return
@@ -1007,8 +1046,8 @@ class App:
                     self.put(layout.bottom-1,layout.left,ellipsize(detail,layout.span),layout.span)
         status=self.toast;kind=self.toast_kind
         if self.future:
-            elapsed=max(0,int(time.monotonic()-self.job_started));spinner="|/-\\"[(elapsed*3)%4]
-            status=f"{spinner} {self.job_name} · {elapsed}s · "+("已请求取消，等待真实结果与必要恢复" if self.cancel_job.is_set() else "执行中");kind="warning"
+            elapsed=max(0,int(time.monotonic()-self.session.job.started));spinner="|/-\\"[(elapsed*3)%4]
+            status=f"{spinner} {self.session.job.name} · {elapsed}s · "+("已请求取消，等待真实结果与必要恢复" if self.cancel_job.is_set() else "执行中");kind="warning"
         prefix={"error":"✖ ","warning":"▲ ","success":"✔ ","info":"● "}.get(kind,"· ")
         self.put(layout.status,layout.left,ellipsize(prefix+status,layout.span),layout.span,getattr(self.theme,kind,self.theme.text))
         draw_divider(self.put,layout,layout.status_divider,self.theme.border)

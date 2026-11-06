@@ -140,6 +140,136 @@ class RolePreferencesTest(unittest.TestCase):
             self.assertFalse(service.project_status(self.state, project)["conflicts"])
             self.assertEqual(preferences.view(self.state, project, "codex", "xy-backend")["sources"], {"model": "global", "effort": "global"})
 
+    def test_native_batch_scope_refresh_keeps_global_save_and_readonly_guards(self):
+        """真实原生宿主逐 cwd 刷新共享提示时，同一批次仍能保存到两个项目。"""
+        first, second = self.project("first"), self.project("second")
+        (self.home / ".codex/config.toml").write_text('model="fixture-model"\n')
+        fixture = fixtures.CatalogTest()
+        fixture.home = self.home
+        native_env = fixture.native_fixture(
+            [{"data": [fixture.native_row("fixture-model")], "nextCursor": None}],
+            mode="scope", cache_identity="opaque-scope")
+        with patch.dict(os.environ, native_env):
+            catalogs = preferences.load_catalogs(self.state, None, "codex")
+            self.assertTrue(preferences.check_catalogs(self.state, None, "codex", catalogs))
+            calls = (self.home / "native-calls").read_bytes()
+            with patch("manager.codex_models.query", side_effect=AssertionError("预览/守卫不得启动 native")):
+                plan = preferences.preview(self.state, None, "codex", {"xy-backend": {"model": "fixture-model", "effort": "max"}}, catalogs)
+                self.assertTrue(plan.summary["can_apply"], plan.summary)
+                result = preferences.apply(plan)
+            self.assertTrue(result["applied"])
+            self.assertEqual(len(result["backups"]), 2)
+            self.assertEqual((self.home / "native-calls").read_bytes(), calls)
+            self.assertEqual(sum(json.loads(line)["method"] == "model/list" for line in calls.splitlines()), 3)
+            for project in (first, second):
+                self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "max"})
+            self.assertNotIn("stale-cache-only", [row.id for row in catalogs.catalog.models])
+            # 发布后的身份变化仍须拒绝；已经交付的原目录不获得新的授权。
+            (self.home / ".codex/models_cache.json").write_text('{"identity":"external-after-publication"}')
+            self.assertFalse(preferences.check_catalogs(self.state, None, "codex", catalogs))
+
+    def test_native_batch_rejects_chain_source_capability_and_registry_changes(self):
+        """保留真实 stdio，仅在相邻查询间或后序查询时注入确切的外部来源写入。"""
+        project = self.project("project")
+        config = self.home / ".codex/config.toml"
+        auth = self.home / ".codex/auth.json"
+        cache = self.home / ".codex/models_cache.json"
+        fixture = fixtures.CatalogTest()
+        fixture.home = self.home
+        native_env = fixture.native_fixture(
+            [{"data": [fixture.native_row("fixture-model")], "nextCursor": None}],
+            mode="scope", cache_identity="opaque-scope")
+        executable = self.home / "bin/codex"
+        original_binary = executable.read_bytes()
+        registry = self.state / "projects.json"
+        original_registry = registry.read_bytes()
+        explicit = self.home / ".codex/models.json"
+        original_models = explicit.read_bytes()
+        original_discover = preferences.discover
+        for change in ("identity", "provider", "auth", "binary", "registry", "capability"):
+            with self.subTest(change=change):
+                config.write_text('model_catalog_json="models.json"\n' if change == "capability" else 'model="fixture-model"\n')
+                auth.write_text("PRIVATE-AUTH-NEVER-READ")
+                cache.write_text('{"identity":"initial"}')
+                calls = []
+                def acquire(host, *, project=None, _snapshot=None):
+                    result = original_discover(host, project=project, _snapshot=_snapshot)
+                    if _snapshot is None:
+                        calls.append(project)
+                        # identity 在前次返回后改动，应与下次 before 不连续；其余在
+                        # 后序查询后改变全局基底，证明不能结束时盲绑旧结果。
+                        if (change == "identity" and len(calls) == 1 or
+                                change != "identity" and len(calls) == 2):
+                            if change == "identity":cache.write_text('{"identity":"external-between-queries"}')
+                            elif change == "provider":config.write_text('model_provider="external-provider"\n')
+                            elif change == "auth":auth.write_text("CHANGED-PRIVATE-AUTH")
+                            elif change == "binary":executable.write_bytes(original_binary + b"\n# changed\n")
+                            elif change == "registry":registry.write_bytes(original_registry + b" ")
+                            else:explicit.write_text('{"models":[{"id":"fixture-model","supported_reasoning_levels":["high"]}]}')
+                    return result
+                read_text = Path.read_text
+                def safe_read(path, *args, **kwargs):
+                    if path == auth:raise AssertionError("禁止读取 auth 正文")
+                    return read_text(path, *args, **kwargs)
+                try:
+                    with patch.dict(os.environ, native_env), patch.object(Path, "read_text", safe_read), \
+                            patch("manager.model_preferences.discover", side_effect=acquire):
+                        with self.assertRaisesRegex(ValueError, "变化|丢弃"):
+                            preferences.load_catalogs(self.state, None, "codex")
+                    self.assertEqual(calls, [None, project])
+                    self.assertFalse((self.state / role_preferences.RELATIVE).exists())
+                    self.assertEqual(self.native(project)["model"], "inherit")
+                finally:
+                    executable.write_bytes(original_binary)
+                    registry.write_bytes(original_registry)
+                    explicit.write_bytes(original_models)
+
+    def test_context_is_readonly_stable_and_preserves_old_authorization(self):
+        project = self.project("context")
+        self.save(None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+        self.save(project, {"xy-backend": {"model": "project-model", "effort": "inherit"}})
+        catalogs = preferences.load_catalogs(self.state, project, "codex")
+        with patch("manager.codex_models.query", side_effect=AssertionError("上下文不得启动 native")):
+            context = preferences.load_context(self.state, project, "codex", catalogs=catalogs)
+            self.assertIs(context.catalogs, catalogs)
+            self.assertIsNone(preferences.load_context(self.state, None, "codex").catalogs)
+        baseline = context.role_values
+        self.assertEqual(baseline["xy-backend"], preferences.view(self.state, project, "codex", "xy-backend"))
+        self.assertEqual(context.following_values["xy-backend"],
+                         {"model": "fixture-model", "effort": "high", "sources": {"model": "global", "effort": "global"}})
+        copy = context.role_values
+        copy["xy-backend"]["sources"]["model"] = "mutated"
+        following = context.following_values
+        following["xy-backend"]["model"] = "mutated"
+        self.assertEqual(context.role_values, baseline)
+        self.assertEqual(context.following_values["xy-backend"]["model"], "fixture-model")
+        with self.assertRaisesRegex(ValueError, "范围"):
+            preferences.load_context(self.state, None, "codex", catalogs=catalogs)
+        self.save(None, {"xy-backend": {"effort": "max"}})
+        refreshed = preferences.load_context(self.state, project, "codex")
+        self.assertEqual(refreshed.following_values["xy-backend"]["effort"], "max")
+        self.assertEqual(context.role_values, baseline)
+        with self.assertRaisesRegex(ValueError, "来源或配置"):
+            preferences.preview(self.state, project, "codex", {"xy-backend": {"model": "fixture-model"}},
+                                catalogs, expected=baseline)
+
+    def test_context_refuses_global_changes_during_role_projection(self):
+        project = self.project("torn-context")
+        original_roles = preferences.roles
+        reads = []
+        def change_during_read(*args):
+            result = original_roles(*args)
+            reads.append(True)
+            if len(reads) == 1:
+                path = self.state / role_preferences.RELATIVE
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes(role_preferences.payload({"codex": {"xy-backend": {"effort": "high"}}}))
+            return result
+        with patch("manager.model_preferences.roles", side_effect=change_during_read), \
+                patch("manager.codex_models.query", side_effect=AssertionError("上下文不得启动 native")):
+            with self.assertRaisesRegex(ValueError, "上下文期间变化"):
+                preferences.load_context(self.state, project, "codex")
+
     def test_partial_project_override_reset_and_explicit_host_inherit(self):
         project = self.project("partial")
         self.save(None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
@@ -498,6 +628,153 @@ class RolePreferencesTest(unittest.TestCase):
             self.assertEqual(waited, child)
             self.assertEqual(os.waitstatus_to_exitcode(status), 0)
             self.assertEqual(message, b"refused")
+
+    def test_native_global_app_edit_previews_and_saves_without_self_invalidation(self):
+        """最终组合走真实 App/executor/stdio；只用屏幕适配器替代终端设备。"""
+        from tests.test_manager_tui import RecordingScreen
+
+        first, second = self.project("first"), self.project("second")
+        native_config = self.home / ".codex/config.toml"
+        native_config.write_text('model="fixture-model"\n')
+        fixture = fixtures.CatalogTest()
+        fixture.home = self.home
+        native_env = fixture.native_fixture(
+            [{"data": [fixture.native_row("fixture-model"), fixture.native_row("project-model")],
+              "nextCursor": None}], mode="scope", cache_identity="opaque-app-scope")
+        calls_path = self.home / "native-calls"
+        processes = []
+        original_popen = subprocess.Popen
+
+        def spawn(*args, **kwargs):
+            # 记录真实句柄而非替换查询结果；native 的生产 close/wait 必须结算，
+            # 即使后续断言失败，executor 上下文仍负责等待已提交的实际作业。
+            process = original_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        def calls():
+            return calls_path.read_bytes() if calls_path.exists() else b""
+
+        with patch.dict(os.environ, native_env), \
+                patch("manager.codex_models.subprocess.Popen", side_effect=spawn), \
+                ThreadPoolExecutor(max_workers=1) as executor:
+            app = fixtures.App(self.state, self.case, first)
+            app.executor = executor
+            app.screen = RecordingScreen()
+
+            def settle():
+                self.assertIsNotNone(app.future, app.toast)
+                result = app.future.result(timeout=20)
+                app.poll_job()
+                self.assertIsNone(app.future)
+                self.assertNotEqual(app.modal, "error", app.text)
+                return result
+
+            def draw_without_native():
+                before = calls()
+                with patch("manager.tui.curses.curs_set"):
+                    app.draw()
+                    app.draw()
+                self.assertEqual(calls(), before, "普通绘制不得启动或补跑原生目录")
+
+            def choose(value):
+                options = app.options()
+                position = next(index for index, (_, item) in enumerate(options) if item == value)
+                app.dispatch("home")
+                for _ in range(position):
+                    app.dispatch("down")
+                app.dispatch("enter")
+
+            # 通过用户真实导航进入全局，触发受控 load_display；禁止直接改索引
+            # 绕过 P2 的显示上下文，角色与选择器同样使用实际键盘动作定位。
+            app.dispatch("left")
+            app.dispatch("home")
+            app.dispatch("right")
+            self.assertTrue(app.global_scope)
+            self.assertIsNone(app.project)
+            app.dispatch("home")
+            for _ in range(app.role_list().index("xy-backend")):
+                app.dispatch("down")
+            self.assertEqual(app.role, "xy-backend")
+            draw_without_native()
+            self.assertEqual(calls(), b"")
+
+            app.dispatch("m")
+            settle()
+            self.assertEqual(app.modal, "model", app.toast)
+            bundle = app.catalogs[(app.scope_id, app.host)]
+            self.assertTrue(preferences.check_catalogs(self.state, None, "codex", bundle))
+            acquired = calls()
+            self.assertEqual(sum(json.loads(line)["method"] == "model/list" for line in acquired.splitlines()), 3)
+            self.assertNotIn("stale-cache-only", [row.id for row in app.catalog().models])
+            draw_without_native()
+            choose("fixture-model")
+            self.assertEqual(app.modal, "effort")
+            choose("max")
+            self.assertIsNone(app.modal)
+            self.assertEqual(app.pending(), {"xy-backend": {"model": "fixture-model", "effort": "max"}})
+            draw_without_native()
+            app.dispatch("s")
+            self.assertEqual(app.modal, "preview", app.toast)
+            self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
+            self.assertEqual({row["project"] for row in app.preference_plan.summary["affected_projects"]},
+                             {str(first), str(second)})
+            draw_without_native()
+            app.dispatch("enter")
+            result = settle()
+            self.assertTrue(result["applied"])
+            self.assertEqual(len(result["backups"]), 2)
+            self.assertEqual(app.modal, "result", app.text)
+            self.assertFalse(app.pending())
+            self.assertEqual(calls(), acquired, "暂存、预览、应用守卫及保存后刷新不得补跑 native")
+            for project in (first, second):
+                self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "max"})
+            draw_without_native()
+            app.dispatch("esc")
+
+            # 保存后另起真实草稿，再改变已经发布的提供方来源。显示刷新与显式
+            # 重取新目录均不能给旧草稿续期，s 必须保留原 expected/stamp 拒绝。
+            app.dispatch("e")
+            settle()
+            choose("high")
+            key = app.scope()
+            original_expected = json.loads(json.dumps(app.expected[key]))
+            original_stamp = app.source_stamps[key]
+            original_draft = dict(app.drafts[key])
+            saved_global = (self.state / role_preferences.RELATIVE).read_bytes()
+            native_config.write_text('model="fixture-model"\nmodel_provider="external-provider"\n')
+            before_refusal = calls()
+            app.dispatch("s")
+            self.assertIsNone(app.modal)
+            self.assertIn("来源", app.toast)
+            draw_without_native()
+            app.dispatch("r")
+            settle()
+            self.assertEqual(calls(), before_refusal, "失效拒绝及显示刷新不得补跑 native")
+            app.dispatch("e")
+            settle()
+            self.assertEqual(app.modal, "effort")
+            self.assertNotEqual(app.catalog().stamp, original_stamp)
+            draw_without_native()
+            app.dispatch("esc")
+            after_explicit_reload = calls()
+            app.dispatch("s")
+            self.assertIsNone(app.modal)
+            self.assertIn("来源", app.toast)
+            self.assertEqual(calls(), after_explicit_reload)
+            self.assertEqual(app.expected[key], original_expected)
+            self.assertEqual(app.source_stamps[key], original_stamp)
+            self.assertEqual(app.drafts[key], original_draft)
+            self.assertEqual((self.state / role_preferences.RELATIVE).read_bytes(), saved_global)
+            for project in (first, second):
+                self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "max"})
+            self.assertEqual(sum(json.loads(line)["method"] == "model/list" for line in calls().splitlines()), 9)
+            self.assertTrue(processes)
+            self.assertTrue(all(process.returncode is not None for process in processes))
+            self.assertIsNone(app.future)
+            print("App原生全局组合：实际导航/双项目保存/零隐式native/换源拒绝/旧授权保留；"
+                  "已结算子进程=" + str([(process.pid, process.returncode) for process in processes]))
+        print("App原生全局组合：真实executor已shutdown/wait，独占fixture随后由tearDownClass清理。")
 
     def test_real_cli_global_project_single_fields_resets_and_safe_refusals(self):
         project = self.project("cli")

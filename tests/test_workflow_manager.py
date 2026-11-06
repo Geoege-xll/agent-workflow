@@ -215,7 +215,9 @@ for line in sys.stdin:
         result=fixture["pages"][min(page,len(fixture["pages"])-1)];page+=1
         if fixture["cache_identity"] is not None:
             target=Path(os.environ["CODEX_HOME"])/"models_cache.json";target.parent.mkdir(parents=True,exist_ok=True)
-            target.write_text(json.dumps({"identity":fixture["cache_identity"],"models":[{"slug":"stale-cache-only"}]}))
+            identity=fixture["cache_identity"]
+            if mode == "scope": identity += ":" + str(Path.cwd())
+            target.write_text(json.dumps({"identity":identity,"models":[{"slug":"stale-cache-only"}]}))
     reply={"id": "wrong" if mode == "id" else request["id"],"result":result}
     if mode == "error": reply={"id":request["id"],"error":{"message":"NATIVE-PRIVATE-SECRET"}}
     print(json.dumps(reply),flush=True)
@@ -361,8 +363,10 @@ for line in sys.stdin:
         with patch('manager.tui.service.projects',return_value=[self.home]), \
              patch('manager.tui.service.roles',return_value=['xy-backend']), \
              patch('manager.tui.service.role_settings',return_value={'model':'inherit','effort':'high'}), \
+             patch.dict(os.environ,env,clear=True), \
              patch('manager.tui.discover',side_effect=source), \
              patch('manager.service.discover',side_effect=source), \
+             patch('manager.model_preferences.discover',side_effect=source), \
              patch('manager.catalog.codex_models.query',side_effect=lambda *_:outcome['result']) as query:
             app=App(self.home/'state',self.home/'scan',self.home)
             self.assertEqual(app.catalog()._status,'stale');query.assert_not_called()
@@ -379,7 +383,8 @@ for line in sys.stdin:
             other=(str(self.home),'claude','xy-qa');app.drafts[other]={'model':'inherit','effort':'high'}
             selected_catalog=app.catalog();auth.write_text('new-private-fixture-auth')
             app.dispatch('s')
-            self.assertIn('来源',app.toast);self.assertEqual(app.catalog()._status,'stale')
+            # 失效守卫只读拒绝；已发布目录仍是原查询结果，不能改写其状态或来源。
+            self.assertIn('来源',app.toast);self.assertIs(app.catalog(),selected_catalog)
             self.assertEqual(query.call_count,2)
             with self.assertRaisesRegex(ValueError,'来源'):service.ensure_source(selected_catalog,self.home)
             self.assertEqual(query.call_count,2)
@@ -1060,7 +1065,7 @@ class TransactionTest(TemporaryProject):
         app=App(self.state,self.root,self.project)
         outside=self.root/'outside';outside.mkdir()
         role=self.project/'.codex/agents';role.rename(self.project/'.codex/original');role.symlink_to(outside,target_is_directory=True)
-        app.roles_cache.clear();self.assertEqual(app.role_list(),[])
+        app.dispatch('r');self.assertEqual(app.role_list(),[])
         self.assertIn('符号链接',app.toast)
 
     def test_discard_conflicted_draft_rebuilds_only_its_baseline(self):
@@ -1275,7 +1280,6 @@ class AddInstallTest(TemporaryProject):
         app=App(self.state,self.root,self.project);key=app.scope()
         app.drafts[key]=dict(self.value);app.expected[key]={'model':'inherit','effort':'high'}
         other_key=(str(self.project),'codex');app.catalogs[other_key]=self.catalog
-        app.roles_cache[(str(target),'codex')]=[]
         with ThreadPoolExecutor(max_workers=1) as executor:
             app.executor=executor;app.dispatch('a');app.input=shlex.quote(str(target));app.dispatch('enter')
             self.assertEqual(app.modal,'add_mode');self.assertEqual(app.index,0)
@@ -1407,7 +1411,7 @@ class CentralCliIntegrationTest(unittest.TestCase):
                   "lib/runtime_pins.py","lib/standard_paths.py","lib/claude_instructions.py","lib/context_read.py",
                   "lib/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/role_preferences.py","lib/claude_options.py",
                   "lib/validate_antigravity_artifacts.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
-                  "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py","manager/runtime_service.py","manager/__init__.py",
+                  "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py","manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py",
                   "templates/project.yaml.example","templates/docs/PROJECT.md","platforms/shared/core-skills.txt")
         for relative in selected:cls.put(source,relative,(PACK/relative).read_bytes())
         for role in role_models.ROLES:cls.put(source,f"roles/{role}.md",(PACK/f"roles/{role}.md").read_bytes())

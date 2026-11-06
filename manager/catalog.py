@@ -33,6 +33,10 @@ class Catalog:
     execution: dict = field(default_factory=dict)
     _native: codex_models.NativeModels | None = field(default=None, repr=False)
     _native_scope: tuple[str, str | None] | None = field(default=None, repr=False)
+    _native_cache: str | None = field(default=None, repr=False)
+    # 只由真实查询填写的前后来源收据；偏好服务以它证明同一批次内的缓存刷新链。
+    # 已发布目录的校验不消费此收据，更不能用它自动续期旧草稿授权。
+    _native_query: tuple[tuple[str, str | None], tuple[str, str | None]] | None = field(default=None, repr=False)
     # stamp 只证明来源投影，不证明目录读取成功。此内部状态供交互入口决定是否
     # 需要重新获取，不能由提示文案推断，也不改变 as_dict 的公开输出合同。
     _status: str = field(default="ready", repr=False)
@@ -160,6 +164,7 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict, snapsh
         cwd = project or Path.cwd()
         command = codex_models.executable(env)
         scope = _codex_native_scope(catalog, directory, cwd, command)
+        catalog._native_cache = str((directory / "models_cache.json").absolute())
         if snapshot is None:
             # 只在首次发现或显式刷新时启动进程；保留真实 HOME/配置/提供方与项目信任边界。
             native_env = dict(env)
@@ -171,6 +176,7 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict, snapsh
             checked = discover("codex", home, project, env, _snapshot=catalog)
             if checked._native_scope is None or checked._native_scope[0] != scope[0]:
                 raise ValueError("原生目录查询期间身份或有效来源已变化；本次结果已丢弃，请按 r 刷新")
+            catalog._native_query = (scope, checked._native_scope)
             # 只有稳定守卫一致，才采用宿主自己更新后的 cache identity，防止快照立即误失效。
             scope = checked._native_scope
         elif snapshot.host == "codex" and snapshot._native_scope == scope:
