@@ -215,6 +215,53 @@ class TuiTest(unittest.TestCase):
             self.assertEqual(self.app.catalogs[other].host,"claude")
             self.assertIn(("动态模型","dynamic"),self.app.options())
 
+    def test_save_staging_cancel_and_success_clear_only_the_applied_scope(self):
+        # 检查草稿/确认与副作用边界，真实落盘和失败冲突另由同文件PTY消费者验证。
+        with patch('manager.tui.service.commit') as commit:
+            self.app.dispatch('m');self.app.dispatch('enter');self.app.dispatch('enter')
+            self.assertFalse(self.app.pending());self.assertIn('无改动',self.app.toast)
+            self.assertNotIn('已同步',self.draw().line(0));commit.assert_not_called()
+            self.app.dispatch('m');self.app.dispatch('down');self.app.dispatch('enter')
+            self.assertFalse(self.app.pending());commit.assert_not_called()
+            self.app.dispatch('end');self.app.dispatch('enter')
+            self.assertTrue(self.app.pending());self.assertIn('尚未保存',self.app.toast)
+            other=(str(self.projects[1]),'claude','xy-qa')
+            self.app.drafts[other]={'model':'inherit','effort':'high'}
+            self.app.catalogs[other[:2]]=Catalog('claude')
+            with patch('manager.tui.service.prepare',return_value=[service.Change('fixture',b'a',b'b',0o600)]):
+                self.app.dispatch('s');self.assertEqual(self.app.modal,'preview');commit.assert_not_called()
+                self.app.dispatch('esc');self.assertTrue(self.app.pending());commit.assert_not_called()
+                self.app.dispatch('s')
+            with ThreadPoolExecutor(max_workers=1) as self.app.executor, \
+                 patch('manager.tui.service.backup_summary',return_value='fixture backup'):
+                commit.return_value='fixture-id'
+                self.app.dispatch('enter');self.app.future.result(timeout=2);self.app.poll_job()
+            self.assertFalse(self.app.pending());self.assertIn(other,self.app.drafts)
+            self.assertNotIn((str(self.project),'codex'),self.app.catalogs)
+            self.assertIn(other[:2],self.app.catalogs)
+            self.assertIn(self.project.name,self.app.toast);self.assertIn('Codex',self.app.toast)
+            self.app.dispatch('esc');self.assertIn('已保存',self.app.toast)
+
+    def test_project_dividers_scroll_and_mouse_identity_in_narrow_monochrome(self):
+        self.app.projects=[self.root/f'中文项目-{index:02}' for index in range(12)]
+        self.app.project_index=0;self.app.pane='projects';self.app.theme=Theme()
+        screen=self.draw(16,55)
+        first=next(hit for hit in self.app.hits if hit[3]=='project' and hit[4]==0)
+        self.assertIn('中文项目-00',screen.line(first[0]))
+        self.assertIn('待刷新',screen.line(first[0]+1))
+        self.assertIn('──',screen.line(first[0]+2))
+        self.assertFalse(any(hit[0]==first[0]+2 and hit[3]=='project' for hit in self.app.hits))
+        self.assertTrue(all(key in screen.line(2) for key in ('待刷新','[o]','[p]')))
+        self.app.dispatch('pagedown');self.assertGreater(self.app.project_index,0)
+        self.app.dispatch('end');screen=self.draw(16,55)
+        self.assertEqual(self.app.project_index,len(self.app.projects))
+        # 仅当前视口的名称/状态行可以命中，鼠标不依赖项目条目的物理行号。
+        hit=next(hit for hit in self.app.hits if hit[3]=='project' and hit[4]<len(self.app.projects))
+        y,x,width,_,index=hit;self.screen.keys=[curses.KEY_MOUSE]
+        with patch('manager.tui.curses.getmouse',return_value=(0,x,y+1,0,curses.BUTTON1_CLICKED)):
+            self.app.read_input(self.screen)
+        self.assertEqual(self.app.project_index,index);self.assertIsNone(self.app.modal)
+
     def test_removed_role_draft_stays_selectable_and_individually_discardable(self):
         key=self.app.scope();other=(str(self.project),"claude","xy-qa")
         self.app.drafts[key]={"model":"local-model","effort":"high"}
@@ -262,9 +309,9 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch("pagedown");self.assertGreater(self.app.scroll,0)
 
     def test_search_text_has_priority_over_all_letter_shortcuts(self):
-        self.app.dispatch("enter");self.app.dispatch("/");self.type("qsug123?:")
+        self.app.dispatch("enter");self.app.dispatch("/");self.type("qsug123?:op")
         self.assertEqual(self.app.modal,"model");self.assertFalse(self.app.done)
-        self.assertEqual(self.app.search_input.text,"qsug123?:")
+        self.assertEqual(self.app.search_input.text,"qsug123?:op")
 
     def test_path_editing_and_read_input_keys(self):
         self.app.dispatch("a");self.type("/tmp/项目")
@@ -273,8 +320,8 @@ class TuiTest(unittest.TestCase):
         self.screen.keys=[curses.KEY_END,curses.KEY_BACKSPACE,curses.KEY_LEFT,curses.KEY_DC]
         for _ in range(4):self.app.read_input(self.screen)
         self.assertEqual(self.app.input,"/xtmp/")
-        self.app.dispatch("\x15");self.type("qsug123?:")
-        self.assertEqual(self.app.input,"qsug123?:");self.assertEqual(self.app.modal,"add")
+        self.app.dispatch("\x15");self.type("qsug123?:op")
+        self.assertEqual(self.app.input,"qsug123?:op");self.assertEqual(self.app.modal,"add")
 
     def test_long_path_cursor_is_visible(self):
         self.app.dispatch("a");self.app.input="/prefix/"+"中文"*60+"/项目"
@@ -691,9 +738,16 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix","真实 PTY 键盘与 resize 需要 POSIX 终端")
     def test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize(self):
-        master,slave=pty.openpty();terminal=TerminalCells();raw=bytearray()
+        master,slave=pty.openpty();terminal=TerminalCells();raw=bytearray();checkpoints=[]
         fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack("HHHH",30,100,0,0))
         host=self.root/("isolated-host-"+uuid.uuid4().hex[:8]);host.mkdir()
+        # 只给本测试独占宿主声明显式目录，不触发真实Codex/账户或网络。
+        # 模型保存仍通过生产App/service/中央收据和真实角色文件完成。
+        (host/'codex').mkdir()
+        (host/'codex/config.toml').write_text('model="fixture-current"\nmodel_catalog_json="models.json"\n')
+        (host/'codex/models.json').write_text(json.dumps({'models':[
+            {'slug':name,'display_name':name,'supported_reasoning_levels':[{'effort':'high'},{'effort':'max'}]}
+            for name in ('fixture-current','fixture-other')]}))
         environment={key:value for key,value in os.environ.items() if not key.startswith("AGENT_WORKFLOW_")}
         environment.update(HOME=str(host),XDG_CONFIG_HOME=str(host/"config"),CLAUDE_CONFIG_DIR=str(host/"claude"),
                            CODEX_HOME=str(host/"codex"),TERM="xterm-256color",LANG="en_US.UTF-8")
@@ -701,6 +755,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         program="from pathlib import Path; import sys; from manager import service; from manager.tui import run; service.SOURCE=Path(sys.argv[4]); raise SystemExit(run(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3])))"
         process=subprocess.Popen([*PYTHON,"-c",program,str(self.state),str(self.root/"empty-scan"),str(self.project),str(self.source)],
                                  cwd=PACK,env=environment,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)
+        checkpoints.append(f'\n=== PTY进程 {process.pid} · 测试项目 {self.project} ===\n')
         os.close(slave)
         def pump(timeout=0.05):
             if select.select([master],[],[],timeout)[0]:
@@ -718,6 +773,11 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             self.fail(f"PTY 未到达 {description}；exit={process.poll()}\n当前字符格：\n{terminal.text()}\n原始输出末段：{bytes(raw[-2000:])!r}")
         def visible(text):wait_for(lambda:text in terminal.text(),text)
         def view(title):wait_for(lambda:title in "".join(terminal.cells[2]),"视图标题 "+title)
+        def checkpoint(name):
+            # ncurses一帧可能分多个PTY块到达；排空后再保存字符格，避免把新标题
+            # 和上一帧“执行中”拼成最终结果。原始字节仍完整保留供独立复核。
+            for _ in range(3):pump(.03)
+            checkpoints.append(f'\n--- {name} ({terminal.height}x{terminal.width}) ---\n'+terminal.text()+'\n')
         def send(value):
             os.write(master,value.encode("utf-8"))
             # ESC需要等 ncurses 的转义序列窗口关闭；同时持续排空PTY，不能积压绘制字节。
@@ -744,8 +804,12 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             send("\r");view("项目管理 · 只读预览");send("\r");view("操作结果")
             self.assertIn(str(self.project),service.registry(self.state)["registered"])
             self.assertFalse(service.project_status(self.state,self.project)["enabled"]);send("\x1b")
-            choose_menu("启用工作流","项目管理 · 只读预览");send("\r");view("操作结果")
+            # 主界面启停不能依靠隐藏菜单或过期状态直接写入；先取消一次启用预览。
+            close_to_main();visible('[o]启用预览');send('o');view('项目管理 · 只读预览')
+            send('\x1b');self.assertFalse(service.project_status(self.state,self.project)['enabled'])
+            send('o');view('项目管理 · 只读预览');send('\r');view('操作结果')
             self.assertTrue(service.project_status(self.state,self.project)["enabled"]);close_to_main()
+            visible('项目工作流 已启用');checkpoint('主界面启用真实成功')
             choose_menu("三宿主详情","项目 / 三宿主详情")
             self.assertTrue(all(name in terminal.text() for name in ("Codex","Claude Code","Antigravity")))
             close_to_main()
@@ -756,17 +820,47 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             view("模型配置备份");visible("Esc")
             terminal.resize(30,100);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",30,100,0,0));os.kill(process.pid,signal.SIGWINCH)
             view("模型配置备份");close_to_main()
+            terminal.resize(16,55);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',16,55,0,0));os.kill(process.pid,signal.SIGWINCH)
+            visible('[p]停用预览')
+            if '◈ 项目' not in ''.join(terminal.cells[3]):send('\t')
+            send('/'+self.project.name[-8:]+'\r')
+            visible('项目工作流 已启用');checkpoint('55x16项目筛选分隔和启停入口')
+            # 启用操作保留原触发面板，不能假定Tab总会进入角色；Enter明确打开项目。
+            send('\x1b');send('\r')
+            terminal.resize(30,100);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0));os.kill(process.pid,signal.SIGWINCH)
+            # Esc取消选择和保存预览都必须无写入；跨宿主返回保留当前范围草稿。
+            target=self.project/'.codex/agents/xy-qa.toml';original=target.read_bytes()
+            send('m');view('选择模型');send('\x1b');self.assertEqual(original,target.read_bytes())
+            send('m');view('选择模型');send('/fixture-other\r');send('\r');view('选择推理级别')
+            send('/max\r');send('\r');visible('已暂存，尚未保存')
+            self.assertEqual(original,target.read_bytes());checkpoint('模型推理暂存未写入')
+            send('s');view('保存预览');self.assertEqual(original,target.read_bytes())
+            send('\x1b');visible('已取消保存预览');self.assertEqual(original,target.read_bytes())
+            send('2');visible('Claude Code');send('1');send('s');view('保存预览')
+            send('\r');view('操作结果');visible('已保存模型配置')
+            self.assertEqual({'model':'fixture-other','effort':'max'},service.role_settings(self.project,'codex','xy-qa'))
+            checkpoint('模型保存服务验收成功');close_to_main();visible('已保存模型配置')
+            send('m');view('选择模型');send('\r');view('选择推理级别');send('\r');visible('无改动')
+            self.assertNotIn('已同步',''.join(terminal.cells[0]))
+            saved=target.read_bytes()
+            send('e');view('选择推理级别');send('/high\r');send('\r');visible('已暂存，尚未保存')
+            send('s');view('保存预览');target.write_bytes(saved+b'\n# concurrent fixture save\n')
+            concurrent=target.read_bytes();send('\r');view('操作未完成');visible('草稿保留')
+            self.assertEqual(concurrent,target.read_bytes());checkpoint('保存失败保留草稿和并发字节')
+            close_to_main();visible('1 项未保存');target.write_bytes(saved)
+            send('u');visible('已丢弃当前角色草稿');send('r');visible('已读取预览 / 状态')
             choose_menu("中央版本","中央版本列表 / 选择");send("i");view("完整版本详情")
             # 64位ID可能跨行，去除字符格换行后验证完整身份仍可达。
             self.assertTrue(any(value in terminal.text().replace("\n","").replace(" ","") for value in (self.core.content_id,self.alternate.content_id)))
             send("\x1b");view("中央版本列表 / 选择");send("\r");view("项目管理 · 只读预览")
             send("\x1b");view("中央版本列表 / 选择");close_to_main()
-            choose_menu("停用工作流","项目管理 · 只读预览");send("\r");view("操作结果")
+            close_to_main();send('p');view('项目管理 · 只读预览');send("\r");view("操作结果")
             self.assertFalse(service.project_status(self.state,self.project)["enabled"]);close_to_main()
+            visible('项目工作流 已停用');checkpoint('主界面停用真实成功')
             # 在停用后的受管目标放入手改，真实预览必须显示冲突，Enter也不能发布。
             target=self.project/".codex/agents/xy-qa.toml";target.parent.mkdir(parents=True,exist_ok=True);target.write_text("user hand edit\n")
             # xterm keypad启用后使用应用模式End（kend），CSI F会被部分ncurses当作Esc返回。
-            choose_menu("启用工作流","项目管理 · 只读预览");send("\x1bOF");visible("不能应用；冲突")
+            send('o');view('项目管理 · 只读预览');send("\x1bOF");visible("不能应用；冲突")
             before=self.snapshot(self.project);send("\r");self.assertEqual(before,self.snapshot(self.project))
             self.assertFalse(service.project_status(self.state,self.project)["enabled"]);close_to_main()
             # 表单错误保留输入，取消后缩小真实终端并从窄屏安全退出。
@@ -775,7 +869,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             terminal.resize(12,45);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",12,45,0,0));os.kill(process.pid,signal.SIGWINCH)
             visible("请调整至至少");send("q");process.wait(timeout=10)
             self.assertEqual(0,process.returncode)
-            print("真实 PTY 已验证：登记预览取消/确认、启用/停用、版本完整ID/选择预览、三宿主详情、空模型备份及16×55返回键、手改冲突、表单错误、12×45 resize退出；exit=0")
+            print("真实 PTY 已验证：登记预览取消/确认、主界面启用/停用、模型/推理暂存与取消、跨宿主返回、真实保存/无改动/并发失败保留草稿、版本完整ID、三宿主详情、55×16项目筛选/分隔/启停入口、手改冲突、表单错误、12×45退出；exit=0")
         finally:
             if process.poll() is None:
                 # 仅回收本测试独占的短命夹具进程；正常路径必须q退出，此清理不作为取消能力证据。
@@ -788,7 +882,11 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             if evidence:=os.environ.get("AGENT_WORKFLOW_TUI_EVIDENCE_LOG"):
                 # 完整原始字节原样追加，不剥ANSI、不声称这是最终屏幕录制。
                 with Path(evidence).open("ab") as output:
-                    output.write(b"\n--- REAL PTY RAW BYTES BEGIN (not a screen recording) ---\n"+bytes(raw)+b"\n--- REAL PTY RAW BYTES END ---\n")
+                    header=f'\n--- REAL PTY RAW BYTES BEGIN pid={process.pid} exit={process.returncode} (not a screen recording) ---\n'.encode()
+                    output.write(header+bytes(raw)+b"\n--- REAL PTY RAW BYTES END ---\n")
+            if evidence:=os.environ.get('AGENT_WORKFLOW_TUI_CELLS_LOG'):
+                with Path(evidence).open('a',encoding='utf-8') as output:
+                    output.write(''.join(checkpoints)+'\n--- 最终字符格 ---\n'+terminal.text()+'\n')
 
 
 if __name__ == "__main__":unittest.main()

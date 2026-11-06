@@ -33,6 +33,9 @@ class Catalog:
     execution: dict = field(default_factory=dict)
     _native: codex_models.NativeModels | None = field(default=None, repr=False)
     _native_scope: tuple[str, str | None] | None = field(default=None, repr=False)
+    # stamp 只证明来源投影，不证明目录读取成功。此内部状态供交互入口决定是否
+    # 需要重新获取，不能由提示文案推断，也不改变 as_dict 的公开输出合同。
+    _status: str = field(default="ready", repr=False)
 
     def as_dict(self) -> dict:
         return {"host":self.host,"models":[asdict(row) for row in self.models],
@@ -177,8 +180,10 @@ def _codex(catalog: Catalog, home: Path, project: Path | None, env: dict, snapsh
         catalog._native, catalog._native_scope = result, scope
         remember(catalog, {"native_scope": scope})
         if result is None:
-            catalog.notes.append("原生目录来源已变化；按 r 刷新后重新选择，当前仅保留明确配置。")
+            catalog._status = "stale"
+            catalog.notes.append("原生目录来源已变化；重新进入编辑或按 r 刷新后重选，当前仅保留明确配置。")
         elif result.failure:
+            catalog._status = "failed"
             catalog.notes.append("Codex 原生目录获取失败：" + result.failure + "；已回退到继承与当前明确配置。")
         else:
             remember(catalog, {"native_models": [{"model": row.model, "efforts": row.efforts,
@@ -293,6 +298,7 @@ def discover(host: str, home: Path | None = None, project: Path | None = None, e
         else:
             raise ValueError("未知平台")
     except (OSError, ValueError, TypeError, AttributeError) as exc:
+        catalog._status = "failed"
         catalog.notes.append("模型来源读取失败：" + clean(str(exc)))
         if host == "claude":
             # 读取失败与“没有覆盖”是不同状态；不保留部分层结果以免输出确定的有效值。

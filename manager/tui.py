@@ -16,7 +16,7 @@ from .catalog import Catalog, clean, discover
 from . import service
 from .tui_support import (Layout, TextInput, Theme, PROJECT_ACTION_LABELS, binding_id, cell_width, clip,
                           draw_box, draw_scrollbar, ellipsize, operation_error, padded, project_badge,
-                          project_plan_text, project_result_text, status_text, wrapped)
+                          project_plan_text, project_result_text, project_state, status_text, wrapped)
 
 HOSTS=("codex","claude","antigravity")
 HOST_LABELS=("Codex","Claude Code","Antigravity")
@@ -35,13 +35,13 @@ class Binding:
 
 COMMANDS=(Binding("Enter","编辑模型","edit","edit model"),
           Binding("e","修改推理","effort","effort reasoning level"),
-          Binding("s","预览变更","preview","preview diff apply"),
+          Binding("s","保存预览","preview","preview diff apply save"),
           Binding("u","丢弃当前角色草稿","discard","discard undo draft"),
           Binding("g","工作流管理","manage","manage workflow"),
           Binding("a","登记项目","add","add register init project"),
           Binding("r","刷新状态与来源","refresh","refresh reload"),
-          Binding("","启用工作流","enable","open enable workflow"),
-          Binding("","停用工作流","disable","close disable workflow"),
+          Binding("o","启用工作流","enable","open enable workflow"),
+          Binding("p","停用工作流","disable","close disable workflow"),
           Binding("","导入当前来源并启用","install","install import source"),
           Binding("","中央版本列表 / 选择","versions","versions use pin"),
           Binding("","回退前次版本","rollback","rollback previous"),
@@ -73,7 +73,7 @@ class App:
         self.scratch=None;self.changes=[];self.backup_rows=[]
         self.project_rows={};self.project_plan=None;self.version_rows=[];self.add_target=None
         self.status_error="";self.on_job_result=None;self.job_frames=[]
-        self.toast="Enter/m 编辑模型 · e 修改推理 · ←→ 选列 · / 搜索";self.toast_kind="info"
+        self.toast="m 选择模型 · e 选择推理 · Enter 按列编辑 · s 保存预览";self.toast_kind="info"
         self.done=False;self.future=None;self.after_job=None;self.show_job_result=True
         self.cancel_job=Event();self.job_cancellable=False;self.job_name="管理操作";self.job_started=0;self.job_return=None
         self.hits=[];self.screen=None;self.theme=Theme();self.cursor_visible=None
@@ -121,8 +121,30 @@ class App:
 
     def catalog(self) -> Catalog:
         key=(str(self.project),self.host)
-        if key not in self.catalogs:self.catalogs[key]=discover(self.host,project=self.project)
+        # 渲染、options 和预览只消费本地投影。首次没有快照时传入空快照，
+        # Codex 因缺少原生证据只返回后备项；进程只能由下面的显式读取入口启动。
+        if key not in self.catalogs:
+            self.catalogs[key]=discover(self.host,project=self.project,_snapshot=Catalog(self.host))
         return self.catalogs[key]
+
+    def read_catalog(self,ready):
+        """显式进入编辑/来源页时复核；失败或失效最多重新获取一次，绘制不重试。"""
+        project,host=self.project,self.host;key=(str(project),host)
+        cached=self.catalog()
+        checked=discover(host,project=project,_snapshot=cached) if cached.stamp else cached
+        self.catalogs[key]=checked
+        if checked._status == "ready":ready();return
+        def accept(catalog):
+            self.catalogs[key]=catalog
+            ready()
+            if catalog._status != "ready":
+                self.notify("模型目录读取未完成；当前仅显示安全后备项，退出后重新进入可重试，或按 r 刷新","warning")
+        # 原生目录可能耗时，复用已有工作线程和真实读取状态。测试/非loop消费者
+        # 没有 executor 时同步调用同一获取逻辑；身份和来源仍由 discover 守卫。
+        if hasattr(self,"executor"):
+            self.start_job(lambda:discover(host,project=project),show_result=False,
+                           name="读取 "+HOST_NAMES[host]+" 模型目录",on_result=accept,preserve_view=True)
+        else:accept(discover(host,project=project))
 
     def current(self,role):
         key=self.scope(role)
@@ -142,7 +164,7 @@ class App:
         if action in {"edit","effort"} and not self.role:return "当前宿主没有已安装角色"
         if action in {"edit","effort"} and self.role not in self.installed_roles():return "角色已移除；u 可单独丢弃此角色草稿，其他草稿保留"
         if action == "effort" and self.host == "antigravity":return "Antigravity 静态角色仅支持继承"
-        if action == "preview" and not self.pending():return "当前范围没有待应用变更"
+        if action == "preview" and not self.pending():return "无改动；当前范围没有待保存草稿，未写入配置"
         if action == "discard" and self.scope() not in self.drafts:return "当前角色没有草稿"
         if action == "rollback":
             row=self.project_rows.get(str(self.project))
@@ -169,7 +191,7 @@ class App:
                 rows.insert(0,Binding("Enter","确认"+PROJECT_ACTION_LABELS[self.project_plan.action],"confirm"))
             return rows
         if self.modal in {"preview","restore","quit"}:
-            labels={"preview":"备份并应用","restore":"确认恢复","quit":"放弃草稿并退出"}
+            labels={"preview":"确认备份并保存","restore":"确认恢复","quit":"放弃草稿并退出"}
             scrolling=[] if self.modal == "quit" else [Binding("↑↓","滚动","scroll"),Binding("PgUp/PgDn","翻页","scroll"),Binding("Home/End","页首 / 页尾","scroll")]
             return [*scrolling,Binding("Enter",labels[self.modal],"confirm"),Binding("Esc","返回","back")]
         if self.modal:
@@ -180,9 +202,9 @@ class App:
                 Binding("Tab","切换项目 / 角色","pane"),Binding("Shift+Tab","反向切换","pane"),
                 *([Binding("←→","选列","column"),role_binding,Binding("m","修改模型","edit"),self.command("effort")] if self.pane == "roles" else [role_binding]),
                 Binding("1/2/3","切换宿主","host"),Binding("/","搜索","search"),Binding(":","命令","commands"),
-                self.command("preview",f"预览变更 ({len(self.pending())})"),
+                self.command("preview",f"保存预览 ({len(self.pending())})"),
                 *([self.command("discard")] if self.scope() in self.drafts else []),
-                self.command("manage"),self.command("add"),self.command("refresh"),self.command("help"),self.command("quit"),
+                self.command("enable"),self.command("disable"),self.command("manage"),self.command("add"),self.command("refresh"),self.command("help"),self.command("quit"),
                 *([Binding("Esc","清除筛选","back")] if self.filter_text else [])]
 
     def options(self):
@@ -263,26 +285,36 @@ class App:
 
     def open_model(self):
         if reason:=self.unavailable("edit"):raise ValueError(reason)
-        self.scratch=dict(self.current(self.role));self.show_view("model")
+        self.scratch=dict(self.current(self.role))
         # 编辑基线只能来自用户开始编辑时看到的版本，不能在暂存时悄悄更新。
         if self.scope() not in self.expected:self.expected[self.scope()]=dict(self.settings_cache[self.scope()])
-        rows=self.options();self.index=next((i for i,(_,identifier) in enumerate(rows) if identifier == self.scratch.get("model")),0)
+        def ready():
+            self.show_view("model")
+            rows=self.options();self.index=next((i for i,(_,identifier) in enumerate(rows) if identifier == self.scratch.get("model")),0)
+            self.notify("选择模型后 Enter 继续选择推理；尚未暂存或保存，Esc 取消")
+        self.read_catalog(ready)
 
     def open_effort(self):
         if reason:=self.unavailable("effort"):raise ValueError(reason)
-        self.scratch=dict(self.current(self.role));self.show_view("effort")
+        self.scratch=dict(self.current(self.role))
         if self.scope() not in self.expected:self.expected[self.scope()]=dict(self.settings_cache[self.scope()])
-        rows=self.options();self.index=next((i for i,(_,val) in enumerate(rows) if val == self.scratch.get("effort")),0)
+        def ready():
+            self.show_view("effort")
+            rows=self.options();self.index=next((i for i,(_,val) in enumerate(rows) if val == self.scratch.get("effort")),0)
+            self.notify("选择推理后 Enter 暂存，尚未保存；Esc 取消")
+        self.read_catalog(ready)
 
     def stage(self):
         key=self.scope()
         if key not in self.expected:self.expected[key]=dict(service.role_settings(self.project,self.host,self.role))
-        if self.scratch == self.expected[key]:
+        unchanged=self.scratch == self.expected[key]
+        if unchanged:
             self.drafts.pop(key,None);self.expected.pop(key,None);self.source_stamps.pop(key,None)
         else:self.drafts[key]=dict(self.scratch);self.source_stamps[key]=self.catalog().stamp
         self.close_view()
         while self.modal in {"model","effort"}:self.close_view()
-        self.scratch=None;self.notify("已暂存；s 预览后才写入当前项目 / 宿主","warning")
+        self.scratch=None
+        self.notify("无改动；当前角色没有待保存草稿，未写入配置" if unchanged else "已暂存，尚未保存；按 s 保存预览，再按 Enter 确认写入", "info" if unchanged else "warning")
 
     def start_job(self,operation,after=None,*,show_result=True,name="管理操作",cancellable=False,
                   on_result=None,preserve_view=False):
@@ -403,8 +435,10 @@ class App:
                 if row.get("conflicts"):self.notify("项目存在冲突；详情保留完整路径与修复方向","warning")
             self.start_job(lambda:service.project_status(self.state,project),show_result=False,name="读取三宿主详情",on_result=ready,preserve_view=True)
         elif action == "sources":
-            catalog=self.catalog();text="\n".join([f"{row.id} · {row.source}" for row in catalog.models]+catalog.notes+catalog.inactive)
-            self.show_view("sources");self.text=text
+            def ready():
+                catalog=self.catalog()
+                self.show_view("sources");self.text="\n".join([f"{row.id} · {row.source}" for row in catalog.models]+catalog.notes+catalog.inactive)
+            self.read_catalog(ready)
         elif action == "backups":
             rows=service.backups(self.state,self.project);self.show_view("backups");self.backup_rows=rows
             if not rows:self.notify("当前项目还没有模型配置备份；应用模型配置后可在此查看和恢复")
@@ -428,6 +462,7 @@ class App:
                 if model_obj and model_obj.efforts and self.scratch.get("effort") not in model_obj.efforts and self.scratch.get("effort") != "inherit":
                     self.scratch["effort"]="inherit"
                 self.show_view("effort");self.index=next((i for i,(_,value) in enumerate(self.options()) if value == self.scratch.get("effort")),0)
+                self.notify("已选择模型，尚未暂存或保存；选择推理后 Enter 暂存，Esc 返回")
             else:self.scratch["effort"]="inherit";self.stage()
         elif self.modal == "effort":self.scratch["effort"]=self.options()[self.index][1];self.stage()
         elif self.modal == "manage":self.manage_action(self.options()[self.index][1])
@@ -439,10 +474,17 @@ class App:
             def after():
                 for key in keys:
                     self.drafts.pop(key,None);self.expected.pop(key,None);self.settings_cache.pop(key,None);self.source_stamps.pop(key,None)
+                # 只有服务真实提交并验收成功才失效本范围；下次显式编辑再获取目录，
+                # 不在事务、poll_job或绘制中重启宿主，也不清其他项目/平台的快照。
+                self.catalogs.pop((str(project),host),None)
             def apply():
                 identifier=service.commit(self.state,project,changes,lambda:service.check(project,host,state=self.state),before_write=lambda:service.ensure_source(catalog,project))
                 return service.backup_summary(project,identifier)
-            self.start_job(apply,after,name="备份并应用模型配置")
+            def saved(summary):
+                message=f"已保存模型配置 · {project.name} / {HOST_NAMES[host]}"
+                self.show_view("result");self.text=f"{message}\n项目  {project}\n\n{summary}"
+                self.notify(message,"success")
+            self.start_job(apply,after,name="备份并保存模型配置",on_result=saved)
         elif self.modal == "backups":
             if not self.backup_rows:return
             changes=service.prepare_restore(self.state,project,self.options()[self.index][1])
@@ -529,20 +571,23 @@ class App:
             project=service.project_path(project)
             self.add_target=project;self.show_view("add_mode")
         elif action == "preview":
-            if not self.pending():self.notify("当前项目 / 宿主没有待应用变更");return
-            # 预览复核有效来源而不重新启动 native；r 才替换本项目/宿主拥有的目录快照。
+            if not self.pending():self.notify("无改动；当前项目 / 宿主没有待保存草稿，未写入配置");return
+            # 预览仅复核有效来源；失败/失效快照留给下一次显式编辑入口恢复，
+            # 不能为生成预览重启native，更不能自动重绑已有草稿的来源。
             cached=self.catalog();fresh=discover(self.host,project=self.project,_snapshot=cached) if cached.stamp else cached
             self.catalogs[(str(self.project),self.host)]=fresh
             if fresh.stamp and any(self.source_stamps.get(self.scope(role)) != fresh.stamp for role in self.pending()):
-                raise ValueError("模型来源或能力已变化；草稿保留，请重新选择模型，或按 u 丢弃当前角色草稿")
+                raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
             expected={role:self.expected[self.scope(role)] for role in self.pending()}
             changes=service.prepare(self.project,self.host,self.pending(),fresh,expected,state=self.state)
             text="\n\n".join(f'{ROLE_LABELS.get(role,role)}  /  {role}\n  原配置  {expected[role]["model"]} / {expected[role]["effort"]}\n  待应用  {value["model"]} / {value["effort"]}' for role,value in self.pending().items())
             text+="\n\n变更文件：\n"+"\n".join(row.relative for row in changes)
+            text+="\n\n尚未写入配置。Enter 确认备份并保存；Esc 返回，保留草稿。"
             self.show_view("preview");self.changes=changes;self.text=text
+            self.notify("保存预览已生成，尚未写入；Enter 确认备份并保存，Esc 返回保留草稿","warning")
         elif action == "refresh":
             role=self.role
-            # 丢弃当前 scope 的快照；下一次正常展示只查询一次，不影响其他项目/平台目录。
+            # 丢弃当前 scope 的快照；下一次显式编辑按需查询，不影响其他项目/平台目录。
             self.catalogs.pop((str(self.project),self.host),None);self.roles_cache.pop((str(self.project),self.host),None)
             for cache_key in list(self.settings_cache):
                 if cache_key[:2] == self.scope()[:2]:self.settings_cache.pop(cache_key)
@@ -558,7 +603,7 @@ class App:
         elif action == "help":
             text="当前视图\n"+"\n".join(f"{row.key:12} {row.label}" for row in self.bindings())
             text+="\n\n主界面命令（: 可按名称搜索）\n"+"\n".join(f"{row.key or '命令面板':12} {row.label}" for row in COMMANDS)
-            text+="\n\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认。\n鼠标单击只选中，Enter 确认。\na 输入目录后可选仅登记（默认）或登记并启用；所有写操作先预览，Esc 不写入。\ng 管理启停、中央版本、回退、检查、修复、三宿主详情和停用并解除登记。\n版本列表 i 查看完整 ID，Enter 只读预览；完整 ID 才是版本身份。\nCtrl+C 在执行前可请求取消，事务已经开始后等待结算；不会终止已运行任务。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
+            text+="\n\n模型保存：m 选择模型，再 Enter 选择推理、Enter 暂存；e 可只改推理。\n角色表 Enter 按当前选中列编辑，左右键切换模型/推理列。\n已选择/已暂存均尚未保存；无改动不写入。按 s 查看保存预览，Enter 确认后才备份保存。\nEsc 取消选择或保存预览；已有草稿保留。失败/冲突保留草稿，核对诊断后重选或 u 丢弃。\n目录失败/来源变化后重新进入模型或推理编辑可重试；旧来源草稿须重新确认选择。\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认。\n鼠标单击只选中，Enter 确认。\na 输入目录后可选仅登记（默认）或登记并启用；所有写操作先预览，Esc 不写入。\n主界面 o 预览启用、p 预览停用选中项目；再次 Enter 确认。状态待刷新/冲突时以服务预览为准。\ng 管理中央版本、回退、检查、修复、三宿主详情和停用并解除登记。\n版本列表 i 查看完整 ID，Enter 只读预览；完整 ID 才是版本身份。\nCtrl+C 在执行前可请求取消，事务已经开始后等待结算；不会终止已运行任务。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
             self.show_view("help");self.text=text
         elif action == "quit":self.quit()
         elif action == "search":
@@ -578,6 +623,9 @@ class App:
                         self.scratch=None
                 if previous == "quit":self.quit_code=0
                 if previous == "project_plan":self.project_plan=None
+                if previous == "preview":self.notify("已取消保存预览；草稿保留，尚未写入配置","warning")
+                elif previous in {"model","effort"}:
+                    self.notify("已取消本次选择；已有草稿保留，未写入配置" if self.modal is None else "已返回模型选择，尚未保存")
 
     def dispatch(self,key):
         if key == "ctrl-c":self.interrupt();return
@@ -644,8 +692,9 @@ class App:
         if self.searching and active:self.draw_input(4,x,width,self.search_input)
         else:self.put(4,x,ellipsize("/ "+query if query else self.status_error or f"{len(self.projects)} 个本地项目",width),width,self.theme.warning if self.status_error else self.theme.muted)
         end=layout.bottom-layout.details-(1 if query else 0)
-        # 窄侧栏把项目名与状态/pin分行，避免长ID挤掉身份；翻页仍按项目项而不是物理行计数。
-        row_height=2 if layout.sidebar else 1
+        # 名称、状态/pin和分隔各占一行，单色和窄屏也能区分相邻项目。
+        # 翻页、滚动条均按项目计数；分隔线不进入鼠标命中区，避免点击到相邻条目。
+        row_height=3
         available=max(1,(end-5)//row_height)
         rows=self.visible_rows("projects");selected=next((i for i,row in enumerate(rows) if row[0] == self.project_index),0)
         start=max(0,selected-available+1)
@@ -657,12 +706,13 @@ class App:
             marker="▌ " if (active and is_sel) else "› " if is_sel else "  "
             dot="● " if pending else ""
             y=5+offset*row_height
-            display=self.projects[index].name if row_height == 2 and index<len(self.projects) else label
+            display=self.projects[index].name if index<len(self.projects) else label
             self.row(y,x,width,marker+dot+display,attr)
             self.hits.append((y,x,width,"project",index))
-            if row_height == 2 and index<len(self.projects):
-                self.row(y+1,x,width,"  "+project_badge(self.project_rows.get(str(self.projects[index]))),attr)
-                self.hits.append((y+1,x,width,"project",index))
+            detail=project_badge(self.project_rows.get(str(self.projects[index]))) if index<len(self.projects) else "a 输入现有项目目录"
+            self.row(y+1,x,width,"  "+detail,attr)
+            self.hits.append((y+1,x,width,"project",index))
+            if y+2<end:self.put(y+2,x,"─"*width,width,self.theme.border)
         if not rows:self.put(5,x,"无匹配 · Esc 清除",width,self.theme.warning)
         if query:self.put(end,x,"+ 登记项目 · a",width,self.theme.focus)
         if len(rows)>available:
@@ -676,7 +726,7 @@ class App:
         self.put(3,x,ellipsize(title,width),width,self.theme.focus if active else self.theme.title)
         if self.searching and active:self.draw_input(4,x,width,self.search_input)
         else:
-            subtitle="/ "+self.filter_text if active and self.filter_text else f"{HOST_LABELS[self.host_index]} · {len(self.pending())} 项待应用"+(" · Tab 切换项目/角色" if not layout.sidebar else "")
+            subtitle="/ "+self.filter_text if active and self.filter_text else f"{HOST_LABELS[self.host_index]} · {len(self.pending())} 项未保存"+(" · Tab 切换项目/角色" if not layout.sidebar else "")
             self.put(4,x,ellipsize(subtitle,width),width,self.theme.muted)
         role_width=18 if width>=65 else 14;effort_width=10;model_width=max(5,width-role_width-effort_width-2)
         model_hdr="模型 [m]" if width>=55 else "模型"
@@ -689,8 +739,8 @@ class App:
             row=self.project_rows.get(str(self.project))
             if not self.project:hint="尚无项目 · a 登记项目"
             elif self.filter_text and active:hint="无匹配 · Esc 清除筛选"
-            elif row and row["state"] in {"unmanaged","disabled"}:hint="工作流未启用 · g 预览启用"
-            else:hint="没有已安装角色 · g 查看状态 / 启用"
+            elif row and row["state"] in {"unmanaged","disabled"}:hint="工作流未启用 · o 预览启用"
+            else:hint="没有已安装角色 · o 预览启用 / g 查看状态"
             self.put(7,x,ellipsize(self.roles_errors.get((str(self.project),self.host),hint),width),width,self.theme.warning)
         for offset,(index,label,role) in enumerate(rows[start:start+available]):
             try:value=self.current(role)
@@ -707,7 +757,7 @@ class App:
             draw_scrollbar(self.put,6,layout.width-2,available,len(rows),start,available,self.theme.border)
 
     def draw_modal(self,layout):
-        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"变更预览","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板"}
+        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"保存预览","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板"}
         modal_title=titles.get(self.modal,self.modal)
         x=max(1,(layout.width-92)//2);width=layout.width-2*x-1
         box_h=layout.bottom-2+1
@@ -784,7 +834,8 @@ class App:
             elif self.future:self.put(0,0,"任务仍在执行，请等待");self.put(2,0,self.toast)
             else:self.put(0,0,"请调整至至少 55 列 × 16 行");self.put(2,0,"q 安全退出；草稿仍保留")
             self.finish_draw();return
-        count=f"● {len(self.drafts)} 项待应用" if self.drafts else "✔ 配置已同步"
+        # 空草稿只能说明没有待保存编辑，不能代替服务验收或宣称配置已经同步。
+        count=f"● {len(self.drafts)} 项未保存" if self.drafts else "无待保存草稿"
         self.put(0,1,"◈ awf-cli │ 角色模型",max(1,w-cell_width(count)-4),self.theme.title)
         self.put(0,w-cell_width(count)-2,count,cell_width(count),self.theme.warning if self.drafts else self.theme.muted)
         x=1
@@ -795,9 +846,12 @@ class App:
             self.put(1,x,text,cell_width(text),attr)
             if not self.modal:self.hits.append((1,x,cell_width(text),"host",i))
             x+=cell_width(text)+1
-        self.put(2,1,"─"*(w-3),w-3,self.theme.border)
-        if layout.sidebar and not self.modal:
-            self.put(2,layout.sidebar,"┬",1,self.theme.border)
+        if self.modal:self.put(2,1,"─"*(w-3),w-3,self.theme.border)
+        else:
+            # 固定两个只读预览入口，不根据可能过期/未知的缓存状态猜测执行动作。
+            # 即使窄屏收起侧栏和详情，当前项目状态与启停按键仍始终可见。
+            state=project_state(self.project_rows.get(str(self.project))) if self.project else "未选择项目"
+            self.put(2,1,ellipsize(f"项目工作流 {state} · [o]启用预览 [p]停用预览",w-3),w-3,self.theme.focus)
         if self.modal:self.draw_modal(layout)
         else:
             if layout.sidebar or self.pane == "projects":self.draw_projects(layout)

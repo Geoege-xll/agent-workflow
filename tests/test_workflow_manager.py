@@ -347,6 +347,53 @@ for line in sys.stdin:
                 self.assertTrue(all(not row.efforts for row in changed.models))
                 self.assertNotIn('PRIVATE-SECRET',json.dumps(changed.as_dict()))
 
+    def test_tui_failed_and_invalidated_native_catalog_recovers_only_on_editor_entry(self):
+        # 真实来源读取和 App 状态机保持生产路径；只替换跨进程目录返回，
+        # 准确区分可恢复失败、身份失效及已有草稿来源，不借用真实账户。
+        self.write('.codex/config.toml','model="current"\n')
+        auth=self.write('.codex/auth.json','private-fixture-auth')
+        env={'HOME':str(self.home),'CODEX_HOME':str(self.home/'.codex'),'PATH':''}
+        native=NativeModels((NativeModel('current','当前',('high','max'),'high'),
+                             NativeModel('dynamic','动态',('high','max'),'high')))
+        outcome={'result':NativeModels(failure='原生 model/list 查询超时')}
+        def source(host,*,project=None,_snapshot=None):
+            return discover(host,self.home,project,env,_snapshot=_snapshot)
+        with patch('manager.tui.service.projects',return_value=[self.home]), \
+             patch('manager.tui.service.roles',return_value=['xy-backend']), \
+             patch('manager.tui.service.role_settings',return_value={'model':'inherit','effort':'high'}), \
+             patch('manager.tui.discover',side_effect=source), \
+             patch('manager.service.discover',side_effect=source), \
+             patch('manager.catalog.codex_models.query',side_effect=lambda *_:outcome['result']) as query:
+            app=App(self.home/'state',self.home/'scan',self.home)
+            self.assertEqual(app.catalog()._status,'stale');query.assert_not_called()
+            app.open_model();self.assertEqual(app.catalog()._status,'failed')
+            self.assertEqual(query.call_count,1)
+            app.options();app.options();self.assertEqual(query.call_count,1)
+            app.dispatch('esc');outcome['result']=native
+            app.act('host','2');app.act('host','1');app.open_effort()
+            self.assertEqual(app.catalog()._status,'ready');self.assertEqual(query.call_count,2)
+            self.assertEqual([row.id for row in app.catalog().models],['inherit','current','dynamic'])
+            self.assertNotIn('_status',app.catalog().as_dict())
+            app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'max')
+            app.confirm();key=app.scope();stamp=app.source_stamps[key];baseline=dict(app.expected[key])
+            other=(str(self.home),'claude','xy-qa');app.drafts[other]={'model':'inherit','effort':'high'}
+            selected_catalog=app.catalog();auth.write_text('new-private-fixture-auth')
+            app.dispatch('s')
+            self.assertIn('来源',app.toast);self.assertEqual(app.catalog()._status,'stale')
+            self.assertEqual(query.call_count,2)
+            with self.assertRaisesRegex(ValueError,'来源'):service.ensure_source(selected_catalog,self.home)
+            self.assertEqual(query.call_count,2)
+            app.act('host','2');app.act('host','1');app.open_model()
+            self.assertEqual(query.call_count,3);self.assertEqual(app.catalog()._status,'ready')
+            self.assertEqual(app.source_stamps[key],stamp);self.assertEqual(app.expected[key],baseline)
+            app.dispatch('esc');app.dispatch('s')
+            self.assertIsNone(app.modal);self.assertIn('来源',app.toast)
+            self.assertIn(other,app.drafts)
+            # 用户重新确认选择后才更新该草稿来源；稳定成功快照不再次查询。
+            app.open_effort();app.confirm();self.assertEqual(query.call_count,3)
+            self.assertNotEqual(app.source_stamps[key],stamp)
+            self.assertEqual(app.expected[key],baseline);self.assertIn(other,app.drafts)
+
     def test_codex_explicit_catalog_precedes_native_and_provider_changes_reject_snapshot(self):
         env=self.native_fixture([{'data':[self.native_row('native-only')],'nextCursor':None}])
         with patch('manager.codex_models.query',side_effect=AssertionError('显式目录不得被 native 合并')):
@@ -1017,14 +1064,16 @@ class TransactionTest(TemporaryProject):
         app=App(self.state,self.root,self.project)
         first=Catalog('codex',self.catalog.models,stamp='first');second=Catalog('codex',self.catalog.models,stamp='second')
         app.catalogs[(str(self.project),'codex')]=first
-        app.dispatch('enter');app.dispatch('down');app.dispatch('enter');app.dispatch('down');app.dispatch('enter')
-        with patch('manager.tui.discover',return_value=second):app.dispatch('s')
-        self.assertIsNone(app.modal);self.assertIn('来源',app.toast);self.assertTrue(app.pending())
-        with patch('manager.tui.discover',return_value=second):app.dispatch('s')
-        self.assertIsNone(app.modal)
-        app.dispatch('enter');app.dispatch('enter');app.dispatch('enter')
-        with patch('manager.tui.discover',return_value=second):app.dispatch('s')
-        self.assertEqual(app.modal,'preview')
+        # 显式编辑现在也复核来源，整个交互均使用本测试的来源提供者，
+        # 不能让虚拟stamp的首次复核落到开发机真实宿主目录。
+        current={'catalog':first}
+        with patch('manager.tui.discover',side_effect=lambda *args,**kwargs:current['catalog']):
+            app.dispatch('enter');app.dispatch('down');app.dispatch('enter');app.dispatch('down');app.dispatch('enter')
+            current['catalog']=second;app.dispatch('s')
+            self.assertIsNone(app.modal);self.assertIn('来源',app.toast);self.assertTrue(app.pending())
+            app.dispatch('s');self.assertIsNone(app.modal)
+            app.dispatch('enter');app.dispatch('enter');app.dispatch('enter');app.dispatch('s')
+            self.assertEqual(app.modal,'preview')
 
     def test_confirmation_views_scroll_without_applying(self):
         app=App(self.state,self.root,self.project)
