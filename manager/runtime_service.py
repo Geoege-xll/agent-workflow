@@ -21,6 +21,7 @@ import uuid
 
 from lib import runtime_project as project_files
 from lib import runtime_store as store
+from lib import role_preferences
 from lib.platform_fs import directory_lock, os, publish_skill_symlink, require_skill_symlinks
 from lib.runtime_project import (
     CONFIG, HOSTS, LOCATOR, Node, ProjectRuntimeError, Resources, Tree,
@@ -76,6 +77,7 @@ class ActivationPlan:
     conflicts: tuple[dict, ...] = ()
     warnings: tuple[str, ...] = ()
     recovery: bool = False
+    preferences_before: Node | None = None
 
     @property
     def summary(self) -> dict:
@@ -261,6 +263,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
     旧自包含残留始终只读拒绝，必须由有明确授权的安装管理任务先移除受管范围。
     """
     state, project = store.state_root(state), canonical_project(project)
+    preferences_before, preferences = role_preferences.snapshot(state)
     _protect_project(project, source_root)
     if action not in ACTIONS:
         raise ActivationError("未知项目动作")
@@ -332,7 +335,8 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
         if after_enabled and resources:
             require_skill_symlinks()
             if not conflicts:
-                desired, _ = project_files.prepare(resources, project, config, chosen_hosts, owned_links=owned_links)
+                desired, _ = project_files.prepare(resources, project, config, chosen_hosts, owned_links=owned_links,
+                                                  preferences=preferences)
                 names = project_files.skill_names(resources)
                 fixed_root = state / "runtimes" / selected["content_id"] / "core"
                 skill_roots = set()
@@ -415,7 +419,8 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
     return ActivationPlan(state, project, action, source, json_bytes(selected) if selected else None,
                           resources.label if resources else None, chosen_hosts, before_enabled, after_enabled,
                           tuple(changes), tuple(sorted(observed.items())), directories, machine,
-                          journal_node, json_bytes(managed_next), tuple(conflicts), tuple(warnings))
+                          journal_node, json_bytes(managed_next), tuple(conflicts), tuple(warnings),
+                          preferences_before=preferences_before)
 
 
 def _write_private(tree: Tree, relative: str, body: bytes) -> None:
@@ -681,6 +686,10 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _check_plan(plan: ActivationPlan, tree: Tree) -> None:
+    # enable/use/rollback 必须拒绝预览之后变化的全局默认，不能把旧物化值发布为
+    # 当前设置。只读快照不会运行模型目录进程，也不触碰运行任务的固定绑定。
+    if plan.preferences_before is not None and role_preferences.snapshot(plan.state)[0] != plan.preferences_before:
+        raise ActivationError("全局角色偏好在预览后变化，请重新预览项目操作")
     if canonical_project(plan.project) != plan.project:
         raise ActivationError("项目物理根在预览后变化")
     _protect_project(plan.project, plan.source_root)
@@ -714,6 +723,7 @@ def apply(plan: ActivationPlan) -> dict:
         else:
             core = store.load_core(selected, plan.state)
     with ExitStack() as stack:
+        stack.enter_context(role_preferences.coordination(plan.state))
         tree = stack.enter_context(Tree(plan.project))
         stack.enter_context(directory_lock(plan.project, "install"))
         if not plan.recovery:

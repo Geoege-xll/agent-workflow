@@ -1,0 +1,527 @@
+"""独立全局偏好/统一 CLI 合同；只使用请求 scratch 内最小中央 fixture。"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+import unittest
+from unittest.mock import patch
+
+from lib import role_models, role_preferences, runtime_store
+from manager import model_preferences as preferences, runtime_service, service
+from tests import test_workflow_manager as fixtures
+
+PACK = fixtures.PACK
+
+
+class RolePreferencesTest(unittest.TestCase):
+    """复用既有最小来源构造器和一份 core，独占状态/项目在关闭时整体回收。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix="role-preferences-", dir=os.environ.get("AWF_TEST_SCRATCH"))
+        cls.root = Path(cls.temporary.name).resolve()
+        cls.source = fixtures.CentralCliIntegrationTest.create_source(cls.root)
+        cls.state = cls.root / "state"
+        cls.core = runtime_store.import_core(cls.source, cls.state)
+
+    @classmethod
+    def tearDownClass(cls):
+        location = cls.root
+        cls.temporary.cleanup()
+        print("已关闭全局偏好独占 fixture：" + str(location) + "；存在=" + str(location.exists()))
+
+    def setUp(self):
+        self.case = self.root / self._testMethodName
+        self.case.mkdir()
+        self.home = self.case / "home"
+        (self.home / ".codex").mkdir(parents=True)
+        (self.home / ".codex/config.toml").write_text('model_catalog_json="models.json"\n')
+        self.models = self.home / ".codex/models.json"
+        self.models.write_text(json.dumps({"models": [
+            {"id": "fixture-model", "supported_reasoning_levels": ["high", "max"]},
+            {"id": "project-model", "supported_reasoning_levels": ["high", "max"]}]}))
+        (self.home / ".claude").mkdir()
+        (self.home / ".claude/settings.json").write_text('{"modelPicker":{"options":["fixture-model","project-model"]}}')
+        # 本例验证各平台自身的来源层，剔除父进程实际账户/提供方覆盖，避免把
+        # 用户 ANTHROPIC_* 环境解释成 fixture 的菜单换源；不读取或输出其值。
+        inherited = {key: value for key, value in os.environ.items()
+                     if not key.startswith(("ANTHROPIC_", "CLAUDE_CODE_"))}
+        self.environment = {**inherited, "HOME": str(self.home), "CODEX_HOME": str(self.home / ".codex"),
+                            "CLAUDE_CONFIG_DIR": str(self.home / ".claude"), "AGENT_WORKFLOW_PYTHON": sys.executable,
+                            "AGENT_WORKFLOW_STATE_DIR": str(self.state), "PYTHONDONTWRITEBYTECODE": "1"}
+        self.environment_patch = patch.dict(os.environ, self.environment, clear=True)
+        self.environment_patch.start()
+        self.addCleanup(self.environment_patch.stop)
+        # 核心与状态目录在本类复用；每例只清理自己上一例的全局偏好/登记入口。
+        # 项目/收据仍在该独占 fixture 内，绝不探测或清理用户根及业务目录。
+        (self.state / role_preferences.RELATIVE).unlink(missing_ok=True)
+        (self.state / "projects.json").unlink(missing_ok=True)
+        directory = self.state / "preferences/transactions"
+        self.transactions_before = set(directory.glob("*.json")) if directory.exists() else set()
+
+    def recovery_records(self):
+        """只检查本例新产生事务，不依赖共享目录的文件枚举/UUID排序。"""
+        records = [json.loads(path.read_bytes()) for path in (self.state / "preferences/transactions").glob("*.json")
+                   if path not in self.transactions_before and service.BACKUP_ID.fullmatch(path.stem)]
+        return [record for record in records if "id" in record]
+
+    def project(self, name, *, enabled=True, config=None):
+        project = self.case / name
+        project.mkdir()
+        (project / "pyproject.toml").write_text('[project]\nname="fixture"\nversion="0.1.0"\n')
+        if config is not None:
+            (project / ".agent-workflow").mkdir()
+            (project / ".agent-workflow/project.yaml").write_text(config)
+        plan = service.preview_project(self.state, project, "add", enable=enabled,
+                                       content_id=self.core.content_id if enabled else None)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        service.apply_project(plan)
+        return project
+
+    def plan(self, project, changes, host="codex", *, expected=None):
+        catalogs = preferences.load_catalogs(self.state, project, host)
+        return preferences.preview(self.state, project, host, changes, catalogs, expected)
+
+    def save(self, project, changes, host="codex"):
+        plan = self.plan(project, changes, host)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        return preferences.apply(plan)
+
+    def native(self, project, host="codex"):
+        return service.role_settings(project, host, "xy-backend")
+
+    def cli(self, *arguments, expected=0):
+        command = ["bash", str(PACK / "workflow.sh"), "--state-dir", str(self.state), "--json", *map(str, arguments)]
+        result = subprocess.run(command, cwd=self.case, env=self.environment,
+                                text=True, capture_output=True, timeout=35)
+        print("真实 CLI：" + " ".join(command) + "\n" + result.stdout + result.stderr + "退出=" + str(result.returncode))
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
+        return json.loads(result.stdout)
+
+    def test_empty_reads_create_no_state_and_private_global_save(self):
+        empty = self.case / "empty-state"
+        with patch("manager.codex_models.query", side_effect=AssertionError("只读查询不应启动原生目录")):
+            value = preferences.view(empty, None, "codex", "xy-backend")
+            self.assertEqual(value["sources"], {"model": "host", "effort": "host"})
+            catalogs = preferences.load_catalogs(empty, None, "codex")
+            plan = preferences.preview(empty, None, "codex", {"xy-backend": {"model": "fixture-model"}}, catalogs)
+            self.assertTrue(preferences.check_catalogs(empty, None, "codex", catalogs))
+            self.assertFalse(empty.exists())
+            result = preferences.apply(plan)
+        self.assertTrue(result["applied"])
+        self.assertEqual(stat.S_IMODE((empty / role_preferences.RELATIVE).stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE((empty / "preferences").stat().st_mode), 0o700)
+        self.assertEqual(role_preferences.snapshot(empty)[1], {"codex": {"xy-backend": {"model": "fixture-model"}}})
+        self.assertTrue((empty / "preferences/transactions" / (result["backup_id"] + ".json")).is_file())
+
+    def test_global_updates_two_projects_without_config_or_pin_changes(self):
+        first, second = self.project("first"), self.project("second")
+        configs = {project: (project / ".agent-workflow/project.yaml").read_bytes() for project in (first, second)}
+        bindings = {project: service.project_status(self.state, project)["runtime_binding"] for project in (first, second)}
+        plan = self.plan(None, {"xy-backend": {"model": "fixture-model", "effort": "max"}})
+        self.assertEqual({row["project"] for row in plan.summary["affected_projects"]}, {str(first), str(second)})
+        self.assertFalse((self.state / role_preferences.RELATIVE).exists())
+        with patch("manager.codex_models.query", side_effect=AssertionError("普通预览/守卫不得启动原生查询")):
+            self.assertTrue(preferences.check_catalogs(self.state, None, "codex", plan.catalog))
+            result = preferences.apply(plan)
+        self.assertEqual(len(result["backups"]), 2)
+        for project in (first, second):
+            self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "max"})
+            self.assertEqual((project / ".agent-workflow/project.yaml").read_bytes(), configs[project])
+            self.assertEqual(service.project_status(self.state, project)["runtime_binding"], bindings[project])
+            self.assertFalse(service.project_status(self.state, project)["conflicts"])
+            self.assertEqual(preferences.view(self.state, project, "codex", "xy-backend")["sources"], {"model": "global", "effort": "global"})
+
+    def test_partial_project_override_reset_and_explicit_host_inherit(self):
+        project = self.project("partial")
+        self.save(None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+        self.save(project, {"xy-backend": {"model": "project-model"}})
+        config_path = project / ".agent-workflow/project.yaml"
+        self.assertEqual(role_models.parse(config_path.read_text())["codex"]["xy-backend"], {"model": "project-model"})
+        self.save(None, {"xy-backend": {"effort": "max"}})
+        self.assertEqual(self.native(project), {"model": "project-model", "effort": "max"})
+        value = preferences.view(self.state, project, "codex", "xy-backend")
+        self.assertEqual(value["sources"], {"model": "project", "effort": "global"})
+        self.save(project, {"xy-backend": {"model": None}})
+        self.assertEqual(preferences.view(self.state, project, "codex", "xy-backend")["overrides"], {})
+        self.assertEqual(self.native(project)["model"], "fixture-model")
+        self.save(project, {"xy-backend": {"effort": "inherit"}})
+        self.save(None, {"xy-backend": {"effort": "high"}})
+        self.assertEqual(self.native(project)["effort"], "inherit")
+        value = preferences.view(self.state, project, "codex", "xy-backend")
+        self.assertEqual(value["overrides"], {"effort": "inherit"})
+        self.assertEqual(value["sources"]["effort"], "host")
+        self.save(None, {"xy-backend": {"model": None}})
+        self.assertEqual(self.native(project), {"model": "inherit", "effort": "inherit"})
+
+    def test_existing_explicit_fields_and_other_hosts_are_preserved(self):
+        # 启用消费者需要完整适配器合同；复用现有模板补一个明确字段，不能用
+        # 缺少 memory/workspace/docs 的局部 YAML 误报偏好功能失败。
+        config = role_models.update((PACK / "templates/project.yaml.example").read_text().replace(
+            "replace-with-unique-project-id", "fixture-existing"), {"codex": {"xy-backend": {"model": "inherit"}}})
+        project = self.project("existing", config=config)
+        self.save(None, {"xy-backend": {"model": "fixture-model", "effort": "max"}})
+        self.assertEqual(self.native(project), {"model": "inherit", "effort": "max"})
+        codex = service.role_path(project, "codex", "xy-backend").read_bytes()
+        self.save(None, {"xy-backend": {"model": "project-model", "effort": "high"}}, "claude")
+        self.assertEqual(self.native(project, "claude"), {"model": "project-model", "effort": "high"})
+        self.assertEqual(service.role_path(project, "codex", "xy-backend").read_bytes(), codex)
+        self.save(None, {"xy-backend": {"model": "pro"}}, "antigravity")
+        self.assertEqual(self.native(project, "antigravity")["model"], "pro")
+        with self.assertRaises(ValueError):
+            self.plan(None, {"xy-backend": {"effort": "high"}}, "antigravity")
+
+    def test_disabled_unmanaged_and_later_enable_use_rollback_materialize_defaults(self):
+        disabled = self.project("disabled")
+        service.apply_project(service.preview_project(self.state, disabled, "disable"))
+        unmanaged = self.project("unmanaged", enabled=False)
+        plan = self.plan(None, {"xy-backend": {"model": "fixture-model", "effort": "max"}})
+        self.assertEqual(len(plan.summary["affected_projects"]), 2)
+        self.assertTrue(all(not row["changed_paths"] for row in plan.summary["affected_projects"]))
+        preferences.apply(plan)
+        self.assertFalse(service.role_path(disabled, "codex", "xy-backend").exists())
+        self.assertFalse((unmanaged / ".agent-workflow").exists())
+        for project in (disabled, unmanaged):
+            service.apply_project(service.preview_project(self.state, project, "enable", content_id=self.core.content_id))
+            self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "max"})
+        # 同一最小来源只改一个产品正文产生第二个真实固定版本，检查 use/rollback
+        # 仍消费当前默认，同时保留旧任务可读取的原内容 ID。
+        workflow = self.source / "product/WORKFLOW.md"
+        workflow.write_text("# 固定版本二\n")
+        second = runtime_store.import_core(self.source, self.state)
+        service.apply_project(service.preview_project(self.state, disabled, "use", content_id=second.content_id))
+        self.assertEqual(self.native(disabled)["model"], "fixture-model")
+        service.apply_project(service.preview_project(self.state, disabled, "rollback"))
+        self.assertEqual(self.native(disabled)["effort"], "max")
+        self.assertEqual(service.project_status(self.state, disabled)["runtime_binding"], self.core.binding())
+
+    def test_stale_plan_config_registry_native_and_catalog_are_rejected(self):
+        project = self.project("stale")
+        cases = ("global", "config", "registry", "native", "catalog")
+        for kind in cases:
+            with self.subTest(kind=kind):
+                plan = self.plan(None, {"xy-backend": {"model": "fixture-model"}})
+                if kind == "global":
+                    path = self.state / role_preferences.RELATIVE
+                    path.write_bytes(role_preferences.payload({"codex": {"xy-qa": {"model": "inherit"}}}))
+                elif kind == "config":
+                    path = project / ".agent-workflow/project.yaml"
+                elif kind == "registry":
+                    path = self.state / "projects.json"
+                elif kind == "native":
+                    path = service.role_path(project, "codex", "xy-backend")
+                else:
+                    path = self.models
+                before = path.read_bytes()
+                changed = before
+                if kind == "catalog":
+                    data = json.loads(before)
+                    data["models"].append({"id": "new-model"})
+                    changed = json.dumps(data).encode()
+                elif kind != "global":
+                    changed = before + (b" " if kind == "registry" else b"\n# concurrent\n")
+                if kind != "global":path.write_bytes(changed)
+                with self.assertRaisesRegex(ValueError, "变化"):
+                    preferences.apply(plan)
+                self.assertEqual(path.read_bytes(), changed)
+                if kind == "global":path.unlink()
+                else:path.write_bytes(before)
+        # 完整 view 的来源身份也绑定草稿；原生值即使相同，全局来源前像变化也拒绝。
+        expected = {"xy-backend": preferences.view(self.state, project, "codex", "xy-backend")}
+        self.save(None, {"xy-qa": {"effort": "high"}})
+        with self.assertRaisesRegex(ValueError, "来源或配置"):
+            self.plan(project, {"xy-backend": {"model": "fixture-model"}}, expected=expected)
+
+    def test_global_per_project_provider_capability_refusal_and_no_native_guard(self):
+        project = self.project("provider")
+        local = project / ".codex/limited.json"
+        local.write_text('{"models":[{"id":"project-model","supported_reasoning_levels":["high"]}]}')
+        native_config = project / ".codex/config.toml"
+        native_config.write_text('model_catalog_json="limited.json"\n' + native_config.read_text())
+        catalogs = preferences.load_catalogs(self.state, None, "codex")
+        with patch("manager.codex_models.query", side_effect=AssertionError("预览不应获取原生目录")):
+            plan = preferences.preview(self.state, None, "codex", {"xy-backend": {"model": "fixture-model"}}, catalogs)
+            self.assertFalse(plan.summary["can_apply"])
+            self.assertTrue(plan.summary["conflicts"])
+            with self.assertRaises(ValueError):preferences.apply(plan)
+        self.assertFalse((self.state / role_preferences.RELATIVE).exists())
+        self.assertEqual(self.native(project)["model"], "inherit")
+
+    def test_global_failure_compensates_projects_and_records_recovery(self):
+        first, second = self.project("first"), self.project("second")
+        originals = {project: service.role_path(project, "codex", "xy-backend").read_bytes() for project in (first, second)}
+        plan = self.plan(None, {"xy-backend": {"model": "fixture-model"}})
+        original_check = service.check
+        def fail_second(project, host=None, *, state=None):
+            if project == second:raise ValueError("fixture validation failure")
+            return original_check(project, host, state=state)
+        with patch.object(service, "check", fail_second), self.assertRaisesRegex(ValueError, "已条件撤回"):
+            preferences.apply(plan)
+        self.assertFalse((self.state / role_preferences.RELATIVE).exists())
+        for project in (first, second):
+            self.assertEqual(service.role_path(project, "codex", "xy-backend").read_bytes(), originals[project])
+            self.assertFalse(service.project_status(self.state, project)["conflicts"])
+        records = self.recovery_records()
+        self.assertEqual(records[-1]["status"], "rolled_back")
+        self.assertTrue(any(row.get("rollback_backup_id") for row in records[-1]["projects"]))
+
+    def test_failure_retains_concurrent_project_edit_and_reports_conflict(self):
+        first, second = self.project("first"), self.project("second")
+        plan = self.plan(None, {"xy-backend": {"model": "fixture-model"}})
+        original_check = service.check
+        changed = []
+        def fail_with_edit(project, host=None, *, state=None):
+            if project == second:
+                path = service.role_path(first, "codex", "xy-backend")
+                path.write_bytes(path.read_bytes() + b"# external PRIVATE-MARKER\n")
+                changed.append(path.read_bytes())
+                raise ValueError("fixture failure")
+            return original_check(project, host, state=state)
+        with patch.object(service, "check", fail_with_edit), self.assertRaisesRegex(ValueError, "存在恢复冲突") as refused:
+            preferences.apply(plan)
+        self.assertNotIn("PRIVATE-MARKER", str(refused.exception))
+        self.assertEqual(service.role_path(first, "codex", "xy-backend").read_bytes(), changed[-1])
+        self.assertFalse((self.state / role_preferences.RELATIVE).exists())
+        records = self.recovery_records()
+        self.assertEqual(records[-1]["status"], "conflict")
+        self.assertTrue(records[-1]["conflicts"])
+
+    def test_global_publication_log_failure_restores_missing_state(self):
+        project = self.project("publication")
+        original = service.role_path(project, "codex", "xy-backend").read_bytes()
+        plan = self.plan(None, {"xy-backend": {"model": "fixture-model"}})
+        write_state = service.write_state
+        failed = []
+        def fail_applied(root, relative, data):
+            if relative.startswith("preferences/transactions/") and json.loads(data)["status"] == "applied" and not failed:
+                failed.append(True)
+                raise OSError("fixture log publication failure")
+            return write_state(root, relative, data)
+        with patch.object(service, "write_state", fail_applied), self.assertRaisesRegex(ValueError, "已条件撤回"):
+            preferences.apply(plan)
+        self.assertTrue(failed)
+        self.assertFalse((self.state / role_preferences.RELATIVE).exists())
+        self.assertEqual(service.role_path(project, "codex", "xy-backend").read_bytes(), original)
+        self.assertFalse(service.project_status(self.state, project)["conflicts"])
+
+    def test_global_native_backup_restore_is_refused_when_sources_disagree(self):
+        """全局物化与配置单独恢复均不得让当前权威和实际原生字段分歧。"""
+        project = self.project("restore-sources")
+        global_result = self.save(None, {"xy-backend": {"model": "fixture-model", "effort": "max"}})
+        native_backup = next(row["backup_id"] for row in global_result["backups"] if row["project"] == str(project))
+        config = project / ".agent-workflow/project.yaml"
+        native = service.role_path(project, "codex", "xy-backend")
+        global_path = self.state / role_preferences.RELATIVE
+        before = {path: path.read_bytes() for path in (config, native, global_path)}
+        binding = runtime_service.read_binding_record(self.state, project)[0]
+        count = len(service.backups(self.state, project))
+        with self.assertRaisesRegex(ValueError, "偏好来源不一致"):
+            service.prepare_restore(self.state, project, native_backup)
+        self.cli("restore", "--project", project, native_backup, "--apply", expected=2)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertEqual(runtime_service.read_binding_record(self.state, project)[0], binding)
+        self.assertEqual(len(service.backups(self.state, project)), count)
+
+        # 正常项目备份含适配器：按拟恢复适配器解析后仍等于备份原生字段，
+        # 即使当前存在全局默认也能恢复，不能把安全拒绝扩成禁用所有 restore。
+        changed = self.save(project, {"xy-backend": {"model": "project-model", "effort": "high"}})
+        restore = service.prepare_restore(self.state, project, changed["backup_id"])
+        service.commit(self.state, project, restore, lambda: service.check(project, "codex", state=self.state))
+        self.assertEqual(config.read_bytes(), before[config])
+        self.assertEqual(native.read_bytes(), before[native])
+        self.assertEqual(global_path.read_bytes(), before[global_path])
+        self.assertFalse(service.project_status(self.state, project)["conflicts"])
+
+        # 明确覆盖的值恰好等于当时全局值时，项目保存只产生 CONFIG 备份。
+        # 全局后来变化后恢复这个 CONFIG 会移除覆盖；没有 native 行也必须
+        # 检查受影响角色，安全拒绝而非制造“来源新值、文件旧值”的反向旁路。
+        same = self.save(project, {"xy-backend": {"model": "fixture-model", "effort": "max"}})
+        record = next(row for row in service.backups(self.state, project) if row["id"] == same["backup_id"])
+        self.assertEqual(record["files"], [".agent-workflow/project.yaml"])
+        self.save(None, {"xy-backend": {"model": "project-model"}})
+        after = {path: path.read_bytes() for path in (config, native, global_path)}
+        with self.assertRaisesRegex(ValueError, "偏好来源不一致"):
+            service.prepare_restore(self.state, project, same["backup_id"])
+        self.assertEqual({path: path.read_bytes() for path in after}, after)
+        self.assertEqual(preferences.view(self.state, project, "codex", "xy-backend")["model"], self.native(project)["model"])
+
+    def test_restore_preview_rejects_changed_preference_sources(self):
+        """确认前/验收期都检查来源，包含不在恢复目标列表中的项目配置。"""
+        for source, phase in (("global", "before"), ("global", "verify"),
+                              ("project-target", "before"), ("project-target", "verify"),
+                              ("project-unrestored", "before"), ("project-unrestored", "verify")):
+            with self.subTest(source=source, phase=phase):
+                project = self.project(source + "-" + phase)
+                config = project / ".agent-workflow/project.yaml"
+                native = service.role_path(project, "codex", "xy-backend")
+                if source == "project-unrestored":
+                    # 复用真实全局事务使用的低层 native-only 物化器，截取其尚未
+                    # 发布全局权威的中间状态；其备份 before 与当前宿主继承权威
+                    # 相符，可以安全恢复。没有修改/伪造备份结构或旧版本兼容。
+                    catalog = preferences.load_catalogs(self.state, project, "codex").catalog
+                    changes = service.prepare(project, "codex", {"xy-backend": {"model": "fixture-model", "effort": "high"}},
+                                              catalog, state=self.state, global_preferences={}, persist=False)
+                    identifier = service.commit(self.state, project, changes)
+                    self.assertTrue(all(row.relative != ".agent-workflow/project.yaml" for row in changes))
+                else:
+                    identifier = self.save(project, {"xy-backend": {"model": "fixture-model", "effort": "high"}})["backup_id"]
+                plan = service.prepare_restore(self.state, project, identifier)
+                count = len(service.backups(self.state, project))
+                native_before = native.read_bytes()
+                external = []
+                global_path = self.state / role_preferences.RELATIVE
+                def edit_source():
+                    if source == "global":
+                        # 不改变当前后端角色值，也必须使原先固定的全局来源身份
+                        # 失效；fixture 写入的是测试全局文件，不触及用户配置。
+                        service.write_state(self.state, role_preferences.RELATIVE,
+                                            role_preferences.payload({"codex": {"xy-qa": {"effort": "high"}}}))
+                        external.append((global_path, global_path.read_bytes()))
+                    else:
+                        config.write_bytes(config.read_bytes() + b"\n# concurrent preference source\n")
+                        external.append((config, config.read_bytes()))
+                if phase == "before":edit_source()
+                with self.assertRaises(ValueError):
+                    service.commit(self.state, project, plan, edit_source if phase == "verify" else None)
+                self.assertEqual(native.read_bytes(), native_before)
+                self.assertEqual(external[0][0].read_bytes(), external[0][1])
+                backups = service.backups(self.state, project)
+                if phase == "before":
+                    self.assertEqual(len(backups), count)
+                else:
+                    self.assertEqual(len(backups), count + 1)
+                    self.assertTrue(any(row["status"] in {"rolled_back", "conflict"} for row in backups))
+                if global_path.exists():global_path.unlink()
+
+    def test_activation_plan_rejects_changed_global_and_unsafe_private_paths(self):
+        project = self.project("activation", enabled=False)
+        activation = service.preview_project(self.state, project, "enable", content_id=self.core.content_id)
+        self.save(None, {"xy-backend": {"model": "fixture-model"}})
+        with self.assertRaisesRegex(ValueError, "全局角色偏好"):
+            service.apply_project(activation)
+        self.assertFalse((project / ".agent-workflow").exists())
+        path = self.state / role_preferences.RELATIVE
+        path.unlink()
+        outside = self.case / "outside"
+        outside.write_bytes(b"PRIVATE-CONFIG")
+        path.symlink_to(outside)
+        with self.assertRaises(ValueError):preferences.view(self.state, None, "codex", "xy-backend")
+        self.assertEqual(outside.read_bytes(), b"PRIVATE-CONFIG")
+        path.unlink()
+        os.link(outside, path)
+        with self.assertRaises(ValueError):preferences.view(self.state, None, "codex", "xy-backend")
+        path.unlink()
+
+    def test_global_old_descriptor_save_is_retained_and_refused(self):
+        self.save(None, {"xy-backend": {"model": "fixture-model"}})
+        path = self.state / role_preferences.RELATIVE
+        original = path.read_bytes()
+        plan = self.plan(None, {"xy-backend": {"effort": "max"}})
+        write = service.AnchoredFile.write
+        triggered = []
+        with path.open("r+b") as old:
+            def edit_after_publication(target, data, mode, expected=None):
+                result = write(target, data, mode, expected)
+                if target.path == path and data == plan.global_after and not triggered:
+                    triggered.append(True)
+                    old.seek(0);old.write(b"PRIVATE-LATE-GLOBAL-SAVE");old.truncate();old.flush()
+                return result
+            with patch.object(service.AnchoredFile, "write", edit_after_publication), self.assertRaisesRegex(ValueError, "存在恢复冲突") as rejected:
+                preferences.apply(plan)
+        self.assertTrue(triggered)
+        self.assertNotIn("PRIVATE-LATE", str(rejected.exception))
+        self.assertEqual(path.read_bytes(), original)
+        records = [record for record in self.recovery_records() if record["status"] == "conflict"]
+        self.assertEqual(len(records), 1)
+        retained = Path(records[0]["conflicts"][0]["retained_path"])
+        self.assertEqual(retained.read_bytes(), b"PRIVATE-LATE-GLOBAL-SAVE")
+
+    def test_direct_commit_shares_cross_thread_coordination(self):
+        project = self.project("coordination")
+        catalog = preferences.load_catalogs(self.state, project, "codex").catalog
+        changes = service.prepare(project, "codex", {"xy-backend": {"model": "fixture-model"}}, catalog, state=self.state)
+        original = service.role_path(project, "codex", "xy-backend").read_bytes()
+        registered = self.case / "registered-only"
+        registered.mkdir()
+        registration = service.preview_project(self.state, registered, "add")
+        registry_before = (self.state / "projects.json").read_bytes()
+        with role_preferences.coordination(self.state):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(service.commit, self.state, project, changes)
+                with self.assertRaisesRegex(ValueError, "正在由另一管理操作"):
+                    future.result(timeout=5)
+                # 仅登记同样会改变全局影响集合，必须先取 preferences 再取 registry；
+                # 拒绝后既不能写登记表，也不能创建目标项目工作流目录。
+                registration_future = executor.submit(service.apply_project, registration)
+                with self.assertRaisesRegex(ValueError, "正在由另一管理操作"):
+                    registration_future.result(timeout=5)
+            self.assertEqual((self.state / "projects.json").read_bytes(), registry_before)
+            self.assertFalse((registered / ".agent-workflow").exists())
+            self.assertEqual(service.role_path(project, "codex", "xy-backend").read_bytes(), original)
+            # 当前线程同栈重入允许全局事务复用原提交器，且仍持有跨进程目录锁。
+            self.assertIsNotNone(service.commit(self.state, project, changes))
+            self.assertTrue(service.apply_project(registration)["registered"])
+        self.assertEqual(self.native(project)["model"], "fixture-model")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "当前平台没有 fork 进程语义")
+    def test_fork_cannot_reenter_parent_coordination(self):
+        """真实子进程不能把复制到的线程局部集合当作父进程的重入凭据。"""
+        with role_preferences.coordination(self.state):
+            reader, writer = os.pipe()
+            child = os.fork()
+            if child == 0:
+                os.close(reader)
+                status = 1
+                try:
+                    with role_preferences.coordination(self.state):
+                        message = b"entered"
+                except ValueError:
+                    status, message = 0, b"refused"
+                except BaseException:
+                    status, message = 2, b"unexpected"
+                os.write(writer, message);os.close(writer)
+                os._exit(status)
+            os.close(writer)
+            try:
+                message = os.read(reader, 32)
+                waited, status = os.waitpid(child, 0)
+            finally:
+                os.close(reader)
+            self.assertEqual(waited, child)
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+            self.assertEqual(message, b"refused")
+
+    def test_real_cli_global_project_single_fields_resets_and_safe_refusals(self):
+        project = self.project("cli")
+        args = ("set", "--global", "--platform", "codex", "--role", "xy-backend")
+        result = self.cli(*args, "--model", "fixture-model")["result"]
+        self.assertFalse(result["applied"])
+        self.assertEqual((result["model"], result["effort"]), ("fixture-model", "inherit"))
+        self.assertFalse((self.state / role_preferences.RELATIVE).exists())
+        self.cli(*args, "--model", "fixture-model", "--apply")
+        self.cli("set", "--project", project, "--platform", "codex", "--role", "xy-backend", "--effort", "max", "--apply")
+        values = self.cli("roles", "--project", project, "--platform", "codex")
+        self.assertEqual(values["xy-backend"]["overrides"], {"effort": "max"})
+        self.cli("set", "--project", project, "--platform", "codex", "--role", "xy-backend", "--reset", "all", "--apply")
+        self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "inherit"})
+        self.cli(*args, "--reset", "model", "--apply")
+        self.assertEqual(self.native(project)["model"], "inherit")
+        self.cli(*args, expected=2)
+        self.cli(*args, "--model", "fixture-model", "--reset", "model", expected=2)
+        self.cli(*args, "--project", project, "--effort", "max", expected=2)
+        path = self.state / role_preferences.RELATIVE
+        path.write_text('{"private":"DO-NOT-ECHO"}')
+        refused = self.cli("roles", "--global", "--platform", "codex", expected=2)
+        self.assertNotIn("DO-NOT-ECHO", json.dumps(refused))
+
+
+if __name__ == "__main__":
+    unittest.main()

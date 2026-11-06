@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作台 · 头部管理条原型</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script src="page-shell.js" defer></script>
+  <style>
+    /* 下列值只近似用户截图中的终端，语义映射自 manager/tui_support.py 的 Theme。
+       curses 仍使用终端默认背景；本页配色不是新全局主题，也不覆盖旧样稿 token。
+       每个拉丁字符一格、中文两格，字符格固定 9×22 CSS px，不用缩放模拟窄屏。 */
+    .tui-canvas {
+      --tui-bg: #393535;
+      --tui-text: #eee9e4;
+      --tui-muted: #c2b9b2;
+      --tui-border: #a49a93;
+      --tui-focus: #a3d0cb;
+      --tui-inverse: #23312f;
+      --tui-warning: #e9cc92;
+      --tui-cell: 9px;
+      --tui-row: 22px;
+    }
+    .tui-canvas .prototype-frame { border: 0; border-radius: 0; outline: 0; box-shadow: none; background: transparent; }
+    .tui-canvas .prototype-stage { background: transparent; margin-block-end: 12px; }
+    .tui-canvas .prototype-content { overflow: visible; }
+    .tui-example-caption { margin: 18px auto 0; width: min(100%, 1600px); color: var(--prototype-muted); font-size: 12px; font-weight: 500; }
+    .tui-example-caption span { margin-inline-start: 12px; font-weight: 400; }
+    .tui-terminal {
+      position: relative;
+      flex: 0 0 auto;
+      width: calc(var(--tui-columns) * var(--tui-cell));
+      height: calc(var(--tui-rows) * var(--tui-row));
+      background: var(--tui-bg);
+      color: var(--tui-text);
+      font: 15px / var(--tui-row) "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-variant-ligatures: none;
+      letter-spacing: 0;
+      isolation: isolate;
+      overflow: hidden;
+    }
+    /* 浏览器焦点与 TUI 内部焦点分别表达：外轮廓表示键盘位于此画板，反色行表示选中条目。 */
+    .tui-terminal:focus-visible { outline: 2px solid var(--tui-focus); outline-offset: -3px; }
+    .tui-terminal[data-keyboard="true"]:focus-visible { outline-style: dashed; }
+    .tui-base, .tui-raster, .tui-management { position: absolute; inset: 0; }
+    .tui-raster, .tui-management { pointer-events: none; }
+    .tui-text, .tui-control {
+      position: absolute;
+      height: var(--tui-row);
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      white-space: pre;
+      overflow: hidden;
+    }
+    .tui-control { pointer-events: auto; cursor: pointer; }
+    .tui-glyph { position: absolute; top: 0; height: var(--tui-row); text-align: center; }
+    .tui-border { color: var(--tui-border); }
+    .tui-muted { color: var(--tui-muted); }
+    .tui-title { font-weight: 700; }
+    .tui-accent { color: var(--tui-focus); font-weight: 700; }
+    .tui-warning { color: var(--tui-warning); font-weight: 700; }
+    .tui-control[aria-pressed="true"] { font-weight: 700; }
+    .tui-control[data-selected="active"] { background: var(--tui-focus); color: var(--tui-inverse); font-weight: 700; }
+    .tui-control[data-selected="inactive"] { font-weight: 700; }
+    .tui-control:hover { outline: 1px dotted var(--tui-focus); outline-offset: -1px; }
+    .tui-control:active { background: var(--tui-text); color: var(--tui-bg); }
+    .tui-control:focus-visible { outline: 2px solid var(--tui-text); outline-offset: -2px; }
+    /* 预览留在所属终端内。遮罩只处理取消，不把点击传给底层管理动作。 */
+    .tui-modal { position: absolute; z-index: 2; inset: calc(3 * var(--tui-row)) var(--tui-cell) var(--tui-row); display: grid; place-items: center; background: var(--tui-bg); }
+    .tui-dialog { width: calc(78 * var(--tui-cell)); max-width: calc(100% - 2 * var(--tui-cell)); padding: var(--tui-row) calc(2 * var(--tui-cell)); border: 1px solid var(--tui-border); background: var(--tui-bg); color: var(--tui-text); }
+    .tui-dialog h3 { margin: 0 0 var(--tui-row); color: var(--tui-focus); font: inherit; font-weight: 700; }
+    .tui-dialog p { margin: 0; font: inherit; line-height: var(--tui-row); }
+    .tui-dialog-context { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tui-dialog-note { color: var(--tui-warning); }
+    .tui-dialog-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--tui-cell); margin-block-start: var(--tui-row); }
+    .tui-dialog-actions button { padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--tui-focus); font: inherit; font-weight: 700; }
+    .tui-dialog-actions button:hover { text-decoration: underline; }
+    .tui-dialog-actions button:focus-visible { outline: 1px solid var(--tui-focus); outline-offset: 3px; }
+    .tui-guide { width: min(100%, 1600px); margin: 0 auto 24px; color: var(--prototype-muted); font-size: 12px; line-height: 1.8; }
+    .tui-guide strong { color: var(--prototype-text); font-weight: 550; }
+    .tui-canvas .prototype-contract a { text-underline-offset: 3px; }
+    /* 紧凑画板没有缩放；管理条改成两行，正文只显示当前区域及当前选择。 */
+    .tui-terminal[data-size="compact"] .tui-dialog { padding: 11px var(--tui-cell); }
+    .tui-terminal[data-size="compact"] .tui-dialog h3 { margin-block-end: 11px; }
+    .tui-terminal[data-size="compact"] .tui-dialog-actions { margin-block-start: 11px; }
+    @media (forced-colors: active) {
+      .tui-terminal { --tui-bg: Canvas; --tui-text: CanvasText; --tui-muted: CanvasText; --tui-border: CanvasText; --tui-focus: Highlight; --tui-inverse: HighlightText; --tui-warning: CanvasText; }
+      .tui-control[data-selected="active"] { forced-color-adjust: none; }
+    }
+  </style>
+</head>
+<body class="prototype-canvas tui-canvas" data-prototype-platform="terminal" data-prototype-display="fixed" data-prototype-plan-source="docs/plans/workflow-manager-tui.md">
+  <!-- 复用 page.html 的页头与页面桥接；外层文案和尺寸标注不属于终端产品画面。 -->
+  <header class="prototype-header prototype-shell">
+    <a id="prototype-back-index" class="prototype-back-link" href="index.html" aria-label="返回当前页面导航" title="返回当前页面导航"><span class="prototype-back-chevron" aria-hidden="true"></span></a>
+    <div class="prototype-heading-copy"><h1 id="prototype-page-title" tabindex="-1">工作台 · 头部管理条</h1><p class="prototype-description">将当前项目的工作流状态与启停入口独立成区，再以完整横线衔接下方项目和角色内容。</p></div>
+    <button id="prototype-page-sidebar-toggle" class="prototype-sidebar-toggle" type="button" aria-expanded="true" hidden><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg><span id="prototype-page-sidebar-toggle-label">收起侧栏</span></button>
+  </header>
+  <main class="prototype-content" data-prototype-page-content>
+    <h2 id="normal-example" class="tui-example-caption">常规终端 · 100 列 × 30 行<span>左右栏并列 · 初始已启用示例</span></h2>
+    <div class="prototype-stage" role="region" aria-labelledby="normal-example" tabindex="0">
+      <div class="prototype-frame" style="--prototype-frame-width:900px;--prototype-frame-height:660px">
+        <div id="normal-terminal" class="tui-terminal" data-size="normal" data-keyboard="false" style="--tui-columns:100;--tui-rows:30" role="group" tabindex="0" aria-label="常规终端，按 Enter 进入终端按键模式" aria-describedby="normal-guide">
+          <div id="normal-base" class="tui-base">
+            <div id="normal-raster" class="tui-raster" aria-hidden="true"></div>
+            <button id="normal-platform-codex" class="tui-control" type="button" tabindex="-1" data-action="platform" data-value="0">[1 Codex]</button>
+            <button id="normal-platform-claude" class="tui-control" type="button" tabindex="-1" data-action="platform" data-value="1">2 Claude Code</button>
+            <button id="normal-platform-antigravity" class="tui-control" type="button" tabindex="-1" data-action="platform" data-value="2">3 Antigravity</button>
+            <section id="normal-management-bar" class="tui-management" aria-label="当前项目工作流管理条">
+              <div id="normal-management-status" class="tui-text tui-accent"></div>
+              <div id="normal-project-context" class="tui-text"></div>
+              <button id="normal-enable-preview" class="tui-control tui-accent" type="button" tabindex="-1" data-action="enable" aria-label="启用工作流" aria-haspopup="dialog">[o]启用工作流</button>
+              <button id="normal-disable-preview" class="tui-control tui-accent" type="button" tabindex="-1" data-action="disable" aria-label="停用工作流" aria-haspopup="dialog">[p]停用工作流</button>
+            </section>
+            <div id="normal-content-divider" class="tui-text tui-border" aria-hidden="true"></div>
+            <button id="normal-project-workbench" class="tui-control" type="button" tabindex="-1" data-action="project" data-value="0">演示工作台</button>
+            <button id="normal-project-long" class="tui-control" type="button" tabindex="-1" data-action="project" data-value="1">示例项目-跨平台角色与模型协作工作台</button>
+            <button id="normal-project-library" class="tui-control" type="button" tabindex="-1" data-action="project" data-value="2">演示资料库</button>
+            <button id="normal-role-pm" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="0">项目经理</button>
+            <button id="normal-role-design" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="1">原型设计</button>
+            <button id="normal-role-code" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="2">代码实施</button>
+            <button id="normal-role-qa" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="3">质量验证</button>
+            <div id="normal-simulation-result" class="tui-text" role="status" aria-live="polite"></div>
+          </div>
+          <div id="normal-preview-modal" class="tui-modal" hidden>
+            <section class="tui-dialog" role="dialog" aria-modal="true" aria-labelledby="normal-preview-title" aria-describedby="normal-preview-note">
+              <h3 id="normal-preview-title">工作流变更预览 · 页面模拟</h3>
+              <p id="normal-preview-project" class="tui-dialog-context"></p>
+              <p id="normal-preview-platform" class="tui-muted"></p>
+              <p id="normal-preview-change"></p>
+              <p id="normal-preview-note" class="tui-dialog-note">仅改变本页示例；不写文件，不停止运行中的任务。</p>
+              <div class="tui-dialog-actions"><button id="normal-preview-cancel" type="button" data-action="cancel">[Esc] 取消</button><button id="normal-preview-confirm" type="button" data-action="confirm">[Enter] 确认模拟</button></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p id="normal-guide" class="tui-guide"><strong>进入与退出</strong> 先聚焦终端，按 Enter 进入按键模式；点击终端控件也会进入。此时 Tab／Shift+Tab 切换平台，←／→ 定向切换区域，↑／↓ 选择；Esc、F6 或 q 释放终端按键，随后 Tab 继续浏览网页。预览内 Esc 只取消预览。</p>
+    <h2 id="compact-example" class="tui-example-caption">紧凑终端 · 55 列 × 16 行<span>管理条两行 · 单区域 · 初始长名称已停用示例</span></h2>
+    <div class="prototype-stage" role="region" aria-labelledby="compact-example" tabindex="0">
+      <div class="prototype-frame" style="--prototype-frame-width:495px;--prototype-frame-height:352px">
+        <div id="compact-terminal" class="tui-terminal" data-size="compact" data-keyboard="false" style="--tui-columns:55;--tui-rows:16" role="group" tabindex="0" aria-label="紧凑终端，按 Enter 进入终端按键模式" aria-describedby="compact-guide">
+          <div id="compact-base" class="tui-base">
+            <div id="compact-raster" class="tui-raster" aria-hidden="true"></div>
+            <button id="compact-platform-codex" class="tui-control" type="button" tabindex="-1" data-action="platform" data-value="0">[1 Codex]</button>
+            <button id="compact-platform-claude" class="tui-control" type="button" tabindex="-1" data-action="platform" data-value="1">2 Claude Code</button>
+            <button id="compact-platform-antigravity" class="tui-control" type="button" tabindex="-1" data-action="platform" data-value="2">3 Antigravity</button>
+            <section id="compact-management-bar" class="tui-management" aria-label="当前项目工作流管理条">
+              <div id="compact-management-status" class="tui-text tui-accent"></div>
+              <div id="compact-project-context" class="tui-text"></div>
+              <button id="compact-enable-preview" class="tui-control tui-accent" type="button" tabindex="-1" data-action="enable" aria-label="启用工作流" aria-haspopup="dialog">[o]启用工作流</button>
+              <button id="compact-disable-preview" class="tui-control tui-accent" type="button" tabindex="-1" data-action="disable" aria-label="停用工作流" aria-haspopup="dialog">[p]停用工作流</button>
+            </section>
+            <div id="compact-content-divider" class="tui-text tui-border" aria-hidden="true"></div>
+            <button id="compact-project-workbench" class="tui-control" type="button" tabindex="-1" data-action="project" data-value="0">演示工作台</button>
+            <button id="compact-project-long" class="tui-control" type="button" tabindex="-1" data-action="project" data-value="1">示例项目-跨平台角色与模型协作工作台</button>
+            <button id="compact-project-library" class="tui-control" type="button" tabindex="-1" data-action="project" data-value="2">演示资料库</button>
+            <button id="compact-role-pm" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="0">项目经理</button>
+            <button id="compact-role-design" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="1">原型设计</button>
+            <button id="compact-role-code" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="2">代码实施</button>
+            <button id="compact-role-qa" class="tui-control" type="button" tabindex="-1" data-action="role" data-value="3">质量验证</button>
+            <div id="compact-simulation-result" class="tui-text" role="status" aria-live="polite"></div>
+          </div>
+          <div id="compact-preview-modal" class="tui-modal" hidden>
+            <section class="tui-dialog" role="dialog" aria-modal="true" aria-labelledby="compact-preview-title" aria-describedby="compact-preview-note">
+              <h3 id="compact-preview-title">工作流变更预览 · 页面模拟</h3>
+              <p id="compact-preview-project" class="tui-dialog-context"></p>
+              <p id="compact-preview-platform" class="tui-muted"></p>
+              <p id="compact-preview-change"></p>
+              <p id="compact-preview-note" class="tui-dialog-note">仅改变本页示例；不写文件，不停止运行中的任务。</p>
+              <div class="tui-dialog-actions"><button id="compact-preview-cancel" type="button" data-action="cancel">[Esc] 取消</button><button id="compact-preview-confirm" type="button" data-action="confirm">[Enter] 确认模拟</button></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p id="compact-guide" class="tui-guide"><strong>紧凑布局</strong> 与常规画板使用同一字符尺寸，保留全部平台和管理入口；← 显示项目，→ 显示角色内容，↑／↓ 改变当前条目。正文仅显示当前项目或当前角色，计数提示所在位置，长名称按字符格截断，完整名称保留在可访问名称与悬停提示中。</p>
+  </main>
+  <footer id="prototype-demo-scope" class="prototype-page-information prototype-shell">
+    <div class="prototype-information-row">
+      <nav class="prototype-requirement-links" aria-label="关联需求文档"><a id="tui-requirement-html" href="../../plans/workflow-manager-tui.html" data-prototype-document="html" target="_blank" rel="noopener">阅读需求 HTML</a><a id="tui-requirement-markdown" href="../../plans/workflow-manager-tui.md" data-prototype-document="markdown" target="_blank" rel="noopener">需求原稿 Markdown</a></nav>
+      <p class="prototype-meta">终端 curses · fixed · 900×660／495×352 CSS px · 1:1 字符格</p>
+    </div>
+    <p class="prototype-demo-note"><strong>演示数据</strong> 两个画板各自维护 3 个静态示例项目，互不联动；常规初始选中已启用项目，紧凑初始选中已停用长名称项目。平台选项沿用 Codex、Claude Code、Antigravity。项目工作流状态属于当前项目，切换平台保留项目和区域；确认只改变所属画板的该项目模拟状态，刷新全部重置。</p>
+    <p class="prototype-demo-note"><strong>当前边界</strong> 此页只演示平台／项目／区域／角色选择，以及 o／p 启停入口的变更预览、取消和确认。m／e 模型编辑、s 保存、搜索、登记、管理、帮助等既有流程未在本原型实现；相关按键只提示该边界，不伪造保存或执行成功。q 释放网页中的按键模式。没有输入字段、真实进程、账户、项目读取、网络请求或持久化。</p>
+    <p class="prototype-demo-note"><strong>待确认</strong> 页面仅作头部分区与密度确认，本次按反馈直接修改，未执行新增检查，视觉效果待用户查看确认。暖灰背景是原截图的局部近似，生产继续沿用终端默认背景与现有 Theme。</p>
+  </footer>
+  <details class="prototype-contract">
+    <summary id="prototype-contract-toggle">Page design and interaction contract</summary>
+    <section data-contract-section="purpose">
+      <h2>页面职责</h2>
+      <p>对应 REQ-001 至 REQ-006。只细化当前项目工作流管理条与正文分隔；复用 manager/tui_support.py 的粗外框、轻横线／轻竖线、Theme 青色焦点／反色选择／文字状态，以及 manager/tui.py 的平台和区域语义。Platform: terminal (curses). Display: fixed. 常规基准 100 columns × 30 rows，900×660 CSS px；紧凑基准 55 columns × 16 rows，495×352 CSS px。两者均为每格 9×22 CSS px、1:1、15px 本地等宽字体；外层不足时横向滚动画布，不做比例缩放。</p>
+      <p>常规管理行位于第 4 行（从 0 起）：左为“项目工作流＋文字状态”，中为当前项目，上下文独立限宽，右为固定的 [o]启用工作流／[p]停用工作流入口；第 5 行完整轻横线以“┠／┨”连接粗框，第 6 行统一显示“项目列表／角色模型”主标题，第 7 行为数量、当前项目及平台／未保存信息，第 8 行在两栏内加轻分隔，之后开始项目列表与角色表。紧凑管理条占第 4、5 行，第 6 行完整分隔，第 7 行合并当前区域主标题、辅助信息和计数，不另占分隔行；正文保留当前条目。角色内容与其它旧流程仅提供必要背景。</p>
+    </section>
+    <section data-contract-section="navigation">
+      <h2>导航</h2>
+      <p>本具体页只在 index.html 的唯一 nav#prototype-pages 登记一次；旧 prototype-workspace.html 入口保留。工作区仅承载当前页；圆形返回展开侧栏和当前分组、聚焦当前入口并保留页面。独立打开时返回本页登记深链。侧栏开关仅改变外部展示工作区。需求对由唯一文档导航另开窗口，不替换预览。</p>
+      <p>浏览器默认保留正常 Tab 顺序。聚焦任一终端并按 Enter／Space，或点击其产品控件后，才进入该终端按键模式；Tab／Shift+Tab 循环切换下／上平台，1／2／3 也可直达。← 固定聚焦项目、→ 固定聚焦右侧内容，重复同方向不反转；↑／↓ 在当前区域选择并在边界停留。项目 Enter 进入角色区；角色 Enter 仅说明未演示模型编辑。Esc、F6、q 释放按键，焦点留在终端，后续 Tab 回到普通网页导航；预览内 Esc 只取消当前预览。</p>
+    </section>
+    <section data-contract-section="interactions">
+      <h2>交互</h2>
+      <p data-contract-for="prototype-back-index">圆形返回：点击／Enter；受控工作区展开当前导航并聚焦当前入口，独立打开则返回 index.html#page=tui-workbench.html。</p>
+      <p data-contract-for="prototype-page-sidebar-toggle">侧栏开关：工作区握手后显示，点击／Enter／Space 请求父工作区收放侧栏；独立打开时隐藏。</p>
+      <p data-contract-for="prototype-contract-toggle">原生契约 summary：点击／Enter／Space 展开或折叠这五节，默认折叠，不覆盖产品画面。</p>
+      <p data-contract-for="tui-requirement-html">打开同名正式需求 HTML，新窗口阅读，不改变当前原型。</p>
+      <p data-contract-for="tui-requirement-markdown">打开绑定的正式需求 Markdown，新窗口阅读，不改变当前原型。</p>
+      <p data-contract-for="normal-platform-codex">常规平台 Codex：点击或按键模式 1 选中；Tab／Shift+Tab 可循环到此项。更新角色上下文，保留当前项目、区域和对应平台的角色选择。</p>
+      <p data-contract-for="normal-platform-claude">常规平台 Claude Code：点击或按键模式 2 选中；与另外平台共用导航和保留规则。</p>
+      <p data-contract-for="normal-platform-antigravity">常规平台 Antigravity：点击或按键模式 3 选中；切换不改变项目工作流状态。</p>
+      <p data-contract-for="normal-project-workbench">常规“演示工作台”：点击选中并聚焦项目区；该区 ↑／↓ 也能选中，管理条、状态和角色内容随当前项目更新。</p>
+      <p data-contract-for="normal-project-long">常规长名称项目：点击或项目区 ↑／↓ 选中；初始已停用，项目名称按字符格省略，管理动作完整保留。</p>
+      <p data-contract-for="normal-project-library">常规“演示资料库”：点击或项目区 ↑／↓ 选中；其状态独立于其它项目，切换回来保留本页模拟结果。</p>
+      <p data-contract-for="normal-role-pm">常规“项目经理”：点击选中并聚焦角色区；角色区 ↑／↓ 亦可选择，仅改变可见选择和只读详情。</p>
+      <p data-contract-for="normal-role-design">常规“原型设计”：点击或角色区 ↑／↓ 选中，模型编辑和保存不在本次演示范围。</p>
+      <p data-contract-for="normal-role-code">常规“代码实施”：点击或角色区 ↑／↓ 选中，焦点与当前选择分别表达。</p>
+      <p data-contract-for="normal-role-qa">常规“质量验证”：点击或角色区 ↑／↓ 选中；停用项目没有可选角色，显示明确空内容原因。</p>
+      <p data-contract-for="normal-enable-preview">常规启用工作流入口：点击或按键模式 o 打开所属终端内的预览，冻结当前项目／平台／目标状态；此时尚未改变项目示例状态。</p>
+      <p data-contract-for="normal-disable-preview">常规停用工作流入口：点击或按键模式 p 打开同一预览容器，明确目标为停用；不停止真实任务。</p>
+      <p data-contract-for="normal-preview-cancel">常规取消：点击、Esc 或遮罩取消；不改变示例状态，关闭后恢复触发控件焦点，原有按键模式继续。</p>
+      <p data-contract-for="normal-preview-confirm">常规确认：点击或 Enter 仅更新冻结项目在此画板的示例状态；状态条明确“页面模拟”，同状态确认明确“状态维持”；关闭并恢复焦点。</p>
+      <p data-contract-for="compact-platform-codex">紧凑平台 Codex：点击或按键模式 1 选中，Tab／Shift+Tab 循环切换；保持项目和当前区域。</p>
+      <p data-contract-for="compact-platform-claude">紧凑平台 Claude Code：点击或按键模式 2 选中；角色上下文随之变化。</p>
+      <p data-contract-for="compact-platform-antigravity">紧凑平台 Antigravity：点击或按键模式 3 选中；项目状态保持。</p>
+      <p data-contract-for="compact-project-workbench">紧凑“演示工作台”：项目区 ↑／↓ 选择到此项目后可点击；正文只显示当前项目的名称／状态，计数反映位置。</p>
+      <p data-contract-for="compact-project-long">紧凑长名称项目：初始选中且已停用；点击或项目区 ↑／↓ 选择，截断不侵占 o／p 动作，完整名称在可访问名称及 title 中保留。</p>
+      <p data-contract-for="compact-project-library">紧凑“演示资料库”：项目区 ↑／↓ 可选择并点击；所有项目状态各自保留。</p>
+      <p data-contract-for="compact-role-pm">紧凑“项目经理”：已启用项目且 → 切换内容区后显示；↑／↓ 选择角色，正文仅显示当前一行。</p>
+      <p data-contract-for="compact-role-design">紧凑“原型设计”：角色区 ↑／↓ 选中后显示并可点击，未演示模型修改。</p>
+      <p data-contract-for="compact-role-code">紧凑“代码实施”：角色区 ↑／↓ 选中后显示并可点击，保留角色计数。</p>
+      <p data-contract-for="compact-role-qa">紧凑“质量验证”：角色区 ↑／↓ 选中后显示并可点击；← 返回项目区，不切换平台。</p>
+      <p data-contract-for="compact-enable-preview">紧凑启用工作流入口：点击或按键模式 o，打开适配 55×16 的同类预览；冻结当前项目上下文，无底层透传。</p>
+      <p data-contract-for="compact-disable-preview">紧凑停用工作流入口：点击或按键模式 p；始终保留固定入口，已停用项目也可预览“维持已停用”。</p>
+      <p data-contract-for="compact-preview-cancel">紧凑取消：点击、Esc 或遮罩关闭，不改变状态，恢复触发控件焦点；确认和取消不会相互触发。</p>
+      <p data-contract-for="compact-preview-confirm">紧凑确认：点击或 Enter，仅更新此画板当前冻结项目，明确显示页面模拟结果；随后可按 → 核对角色内容。</p>
+      <p>两个预览都在打开时将焦点移到明确标注“模拟”的确认按钮，将其它页面内容设为 inert；Tab／Shift+Tab 只在取消／确认间移动，Enter 激活当前按钮（确认初始聚焦，切到取消后 Enter 则取消），平台／箭头／o／p 不传到底层。关闭恢复原 inert 值与触发焦点。无表单输入，无异步业务请求；没有加载或真实执行成功状态。</p>
+    </section>
+    <section data-contract-section="states">
+      <h2>状态</h2>
+      <p id="contract-enabled-state">已启用示例：#normal-management-status 初始显示“项目工作流 已启用”，#normal-project-context 指明当前演示项目，#normal-content-divider 是管理条下完整轻线；#normal-simulation-result 明示页面模拟。左栏反色为活动选择，角色区非活动选择仅以“›”和字重提示；→ 后切换为角色反色。</p>
+      <p id="contract-disabled-state">已停用／长名称示例：#compact-management-status 初始显示“项目工作流 已停用”，#compact-project-context 按剩余字符格截断，#compact-content-divider 留出独立横线。→ 内容区显示“工作流未启用 · o 启用工作流”，解释空内容而非加载失败；← 恢复项目选择。</p>
+      <p id="contract-preview-state">工作流变更预览：#normal-preview-modal／#compact-preview-modal 初始 hidden，o／p 打开时以 #normal-preview-change／#compact-preview-change 展示原状态与目标状态，取消不变，确认仅更新本页示例。#normal-simulation-result／#compact-simulation-result 始终返回“页面模拟”反馈。相同状态仍可预览，确认提示状态维持；无隐藏的实际执行。</p>
+      <p>两画板状态彼此独立。切换项目、平台与区域不会修改其它项目状态；角色选择按项目／平台在页面内保留。刷新重置。控件具有默认、hover、pressed、selected 和可见焦点；选中靠反色和文字标记，停用靠文字。当前静态数据不涉及权限、加载、网络错误、提交中或部分数据，故不添加虚构状态；旧流程按键给出未演示提示，不清空模拟状态。</p>
+    </section>
+    <section data-contract-section="exceptions">
+      <h2>页面特例与限制</h2>
+      <p>没有额外业务特例。两个固定画板用于同页比较终端尺寸，不代表两张产品页。紧凑区压缩辅助标题并显示当前条目，保留平台、当前项目、工作流文字状态、启停入口、区域切换、正文和底部键位；外部画布可滚动，不缩放。固定模式只约束原型，实际 curses 后续仍按终端尺寸绘制。</p>
+      <p>为让浏览器可退出，Esc／F6／q 在无预览时释放本页按键模式；生产 q 仍遵循既有退出语义。m／e／s 等旧流程只提示未演示，模型名称“继承／演示模型甲”为静态示例，未读取实际候选目录。暖灰／青色为截图与 Theme 的 HTML 近似，未设立新产品 token 或终端背景要求。</p>
+      <p>本次微调只修改本页，已有 index 登记与本地外壳依赖保留；未改生产源码、旧工作区样稿或实际数据。没有网络／CDN／外部字体图片、构建、服务、账户、持久化及截图。本次按用户要求直接交页，未执行新增检查；浏览器、辅助技术及真实终端行为未在此演示中操作验证。用户视觉确认待直接查看后给出。</p>
+    </section>
+  </details>
+  <noscript><p class="prototype-shell">此原型需要本地 JavaScript 绘制字符格并演示操作；未启用时不能确认交互效果，不会读取或修改项目。</p></noscript>
+  <script>
+    (() => {
+      "use strict";
+
+      // 数据完全写死于本页。每个画板创建独立副本，保证比较场景不会互改，刷新即重置。
+      const platforms = ["Codex", "Claude Code", "Antigravity"];
+      const samples = [
+        { name: "演示工作台", enabled: true },
+        { name: "示例项目-跨平台角色与模型协作工作台", enabled: false },
+        { name: "演示资料库", enabled: true }
+      ];
+      const roles = ["项目经理", "原型设计", "代码实施", "质量验证"];
+
+      // 只处理本页静态内容实际使用的字符：中日韩文字占两格，线框／拉丁／符号占一格。
+      // 不依赖浏览器字体测量，截断始终预留一格省略号，避免长名称挤掉右侧动作。
+      function glyphWidth(char) {
+        const code = char.codePointAt(0);
+        return (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7af)
+          || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xff01 && code <= 0xff60) ? 2 : 1;
+      }
+      const textWidth = (text) => Array.from(text).reduce((sum, char) => sum + glyphWidth(char), 0);
+      function fit(text, width) {
+        if (textWidth(text) <= width) return text;
+        let result = "", used = 0;
+        for (const char of text) {
+          const step = glyphWidth(char);
+          if (used + step > width - 1) break;
+          result += char;
+          used += step;
+        }
+        return result + "…";
+      }
+
+      // 一行由真实字符格组成。每个字形单独占其格数，中文不会使后面的框线或控件漂移。
+      function paint(element, text, width) {
+        const fragment = document.createDocumentFragment();
+        let column = 0;
+        for (const char of fit(text, width)) {
+          const span = document.createElement("span");
+          const cells = glyphWidth(char);
+          span.className = "tui-glyph";
+          span.style.left = `calc(${column} * var(--tui-cell))`;
+          span.style.width = `calc(${cells} * var(--tui-cell))`;
+          span.textContent = char;
+          fragment.append(span);
+          column += cells;
+        }
+        element.replaceChildren(fragment);
+      }
+      function place(element, x, y, width, text) {
+        element.style.left = `calc(${x} * var(--tui-cell))`;
+        element.style.top = `calc(${y} * var(--tui-row))`;
+        element.style.width = `calc(${width} * var(--tui-cell))`;
+        paint(element, text, width);
+      }
+
+      function createTerminal(prefix, compact) {
+        const root = document.getElementById(`${prefix}-terminal`);
+        const raster = document.getElementById(`${prefix}-raster`);
+        const modal = document.getElementById(`${prefix}-preview-modal`);
+        const cancel = document.getElementById(`${prefix}-preview-cancel`);
+        const confirm = document.getElementById(`${prefix}-preview-confirm`);
+        const status = document.getElementById(`${prefix}-simulation-result`);
+        const state = {
+          projects: samples.map((project) => ({ ...project })), project: compact ? 1 : 0,
+          platform: 0, pane: "projects", roleByScope: new Map(), keyboard: false,
+          message: "页面模拟 · 未连接实际项目", preview: null, returnFocus: null, inertNodes: []
+        };
+        const columns = compact ? 55 : 100, rows = compact ? 16 : 30;
+        const projectButtons = Array.from(root.querySelectorAll('[data-action="project"]'));
+        const roleButtons = Array.from(root.querySelectorAll('[data-action="role"]'));
+        const platformButtons = Array.from(root.querySelectorAll('[data-action="platform"]'));
+        const scope = () => `${state.project}:${state.platform}`;
+        const selectedRole = () => state.roleByScope.get(scope()) || 0;
+        const stateText = (enabled) => enabled ? "已启用" : "已停用";
+        const divider = (junction = -1, bottom = false) => {
+          const chars = Array.from("┠" + "─".repeat(columns - 2) + "┨");
+          if (junction >= 0) chars[junction] = bottom ? "┴" : "┬";
+          return chars.join("");
+        };
+        const line = (x, y, text, width, tone = "") => {
+          const element = document.createElement("div");
+          element.className = `tui-text ${tone}`;
+          place(element, x, y, width, text);
+          raster.append(element);
+        };
+        const markSelected = (button, selected, active) => {
+          button.setAttribute("aria-pressed", String(selected));
+          button.dataset.selected = selected ? (active ? "active" : "inactive") : "false";
+        };
+
+        function render() {
+          const project = state.projects[state.project];
+          const roleIndex = selectedRole();
+          raster.replaceChildren();
+          // 行 0/末行与列 0/末列专供粗框，正文不在框上绘制；横线接头与真实竖线同坐标。
+          line(0, 0, "┏" + "━".repeat(columns - 2) + "┓", columns);
+          line(0, rows - 1, "┗" + "━".repeat(columns - 2) + "┛", columns);
+          for (let row = 1; row < rows - 1; row++) {
+            line(0, row, "┃", 1);
+            line(columns - 1, row, "┃", 1);
+          }
+          line(2, 1, "◈ awf-cli │ 角色模型", compact ? 30 : 65, "tui-accent");
+          line(compact ? 40 : 82, 1, compact ? "0项未保存" : "无待保存草稿", compact ? 13 : 16, "tui-muted");
+          let hostX = 2;
+          platformButtons.forEach((button, index) => {
+            const selected = state.platform === index;
+            const label = selected ? `[${index + 1} ${platforms[index]}]` : ` ${index + 1} ${platforms[index]} `;
+            const width = textWidth(label) + 1;
+            place(button, hostX, 2, width, label);
+            button.setAttribute("aria-label", `切换平台：${platforms[index]}${selected ? "，当前平台" : ""}`);
+            markSelected(button, selected, true);
+            hostX += width + 1;
+          });
+          line(0, 3, divider(), columns, "tui-border");
+
+          // 仅当前项目属于管理条；状态与上下文各自限宽，动作的位置不随项目名变化。
+          const stateSlot = document.getElementById(`${prefix}-management-status`);
+          stateSlot.className = `tui-text ${project.enabled ? "tui-accent" : "tui-warning"}`;
+          place(stateSlot, 2, 4, 20, `项目工作流 ${stateText(project.enabled)}`);
+          stateSlot.setAttribute("aria-label", `${project.name}的项目工作流${stateText(project.enabled)}`);
+          const context = document.getElementById(`${prefix}-project-context`);
+          context.title = `当前项目：${project.name}`;
+          context.setAttribute("aria-label", context.title);
+          place(context, compact ? 24 : 26, 4, compact ? 29 : 34, `当前 ${project.name}`);
+          const enableControl = document.getElementById(`${prefix}-enable-preview`);
+          const disableControl = document.getElementById(`${prefix}-disable-preview`);
+          place(enableControl, compact ? 2 : 64, compact ? 5 : 4, 14, "[o]启用工作流");
+          place(disableControl, compact ? 18 : 80, compact ? 5 : 4, 14, "[p]停用工作流");
+          enableControl.setAttribute("aria-label", `${project.name}：启用工作流`);
+          disableControl.setAttribute("aria-label", `${project.name}：停用工作流`);
+          if (compact) line(35, 5, "←项目／→内容", 18, "tui-muted");
+          place(document.getElementById(`${prefix}-content-divider`), 0, compact ? 6 : 5, columns, divider(compact ? -1 : 24));
+
+          if (!compact) {
+            for (let row = 6; row < 21; row++) line(24, row, "│", 1, "tui-border");
+            // 两栏共用主标题字重与活动标记；项目名称只放在辅助层，不再挤进角色主标题。
+            line(2, 6, `${state.pane === "projects" ? "◈" : " "} 项目列表`, 20, state.pane === "projects" ? "tui-title tui-accent" : "tui-title");
+            line(26, 6, `${state.pane === "roles" ? "◈" : " "} 角色模型`, 71, state.pane === "roles" ? "tui-title tui-accent" : "tui-title");
+            line(2, 7, "3 个示例项目", 20, "tui-muted");
+            // 当前项目与平台状态各有固定宽度，中间留三格；长名称只截断自己的区域。
+            line(26, 7, `当前 ${project.name}`, 37, "tui-muted");
+            line(66, 7, `${platforms[state.platform]} · 0 项未保存`, 31, "tui-muted");
+            // 轻线只占栏内内容宽度，与管理条完整横线形成层级，不增加第二道粗框。
+            line(2, 8, "─".repeat(20), 20, "tui-border");
+            line(26, 8, "─".repeat(71), 71, "tui-border");
+            line(26, 9, "角色               模型                          推理", 71, "tui-muted");
+          } else {
+            // 55×16 合并数量／平台信息到标题同行，不为装饰线占用实际内容行。
+            const title = state.pane === "projects" ? "◈ 项目列表" : "◈ 角色模型";
+            line(2, 7, title, 20, "tui-title tui-accent");
+            line(24, 7, state.pane === "projects" ? "3 个示例项目" : `${platforms[state.platform]} · 0未保存`, 22, "tui-muted");
+            line(48, 7, `${state.pane === "projects" ? state.project + 1 : project.enabled ? roleIndex + 1 : 0}/${state.pane === "projects" ? 3 : project.enabled ? 4 : 0}`, 5, "tui-muted");
+            if (state.pane === "roles") line(2, 8, "角色           模型                    推理", 50, "tui-muted");
+          }
+
+          projectButtons.forEach((button, index) => {
+            const selected = state.project === index;
+            button.hidden = compact && (state.pane !== "projects" || !selected);
+            if (button.hidden) return;
+            const item = state.projects[index], active = state.pane === "projects";
+            const row = compact ? 8 : 9 + index * 3, width = compact ? 50 : 20;
+            const marker = selected ? (active ? "▌ " : "› ") : "  ";
+            button.title = item.name;
+            button.setAttribute("aria-label", `${item.name}，${stateText(item.enabled)}${selected ? "，当前项目" : ""}`);
+            markSelected(button, selected, active);
+            place(button, 2, row, width, marker + item.name);
+            line(2, row + 1, `  ${stateText(item.enabled)} · 示例固定版`, width, "tui-muted");
+            // 只把项目条目之间的横线改为轻虚线，结构线继续保留；紧凑视图仅显示一项，不另占内容行。
+            if (!compact) line(2, row + 2, "┄".repeat(20), 20, "tui-border");
+          });
+
+          roleButtons.forEach((button, index) => {
+            button.hidden = !project.enabled || (compact && (state.pane !== "roles" || roleIndex !== index));
+            if (button.hidden) return;
+            const selected = roleIndex === index, active = state.pane === "roles";
+            const marker = selected ? (active ? "▌ " : "› ") : "  ";
+            const model = state.platform === 0 && index === 0 ? "演示模型甲" : "继承";
+            const label = marker + roles[index] + " ".repeat(compact ? 5 : 9) + model + " ".repeat(compact ? (model === "继承" ? 20 : 14) : (model === "继承" ? 26 : 20)) + "继承";
+            markSelected(button, selected, active);
+            button.setAttribute("aria-label", `${roles[index]}，模型${model}，推理继承${selected ? "，当前角色" : ""}`);
+            place(button, compact ? 2 : 26, compact ? 9 : 10 + index, compact ? 50 : 71, label);
+          });
+          if (!project.enabled && (!compact || state.pane === "roles")) line(compact ? 2 : 26, compact ? 9 : 10, "工作流未启用 · o 启用工作流", compact ? 50 : 71, "tui-warning");
+
+          if (!compact) {
+            line(0, 21, divider(24, true), columns, "tui-border");
+            line(2, 22, `/演示目录/${project.name}`, 95, "tui-muted");
+            line(2, 23, project.enabled ? `${roles[roleIndex]} · 只读模型示例 · ${platforms[state.platform]}` : "该项目已停用；角色区保留明确原因", 95);
+          }
+          line(0, compact ? 10 : 24, divider(), columns, "tui-border");
+          place(status, 2, compact ? 11 : 25, columns - 4, state.message);
+          status.setAttribute("aria-label", state.message);
+          line(0, compact ? 12 : 26, divider(), columns, "tui-border");
+          line(2, compact ? 13 : 27, compact ? "Tab/Shift+Tab平台 ←→区域 ↑↓选择" : "Tab/Shift+Tab 平台  ←项目 / →内容  ↑↓选择  1/2/3平台  Enter进入", columns - 4, "tui-accent");
+          line(2, compact ? 14 : 28, compact ? "o/p启停工作流 m/e编辑 s保存 ?帮助 q退出" : "o启用工作流  p停用工作流  m/e编辑  s保存  /搜索  ?帮助  q退出", columns - 4, "tui-accent");
+          root.dataset.keyboard = String(state.keyboard);
+        }
+
+        function announce(message) { state.message = `页面模拟 · ${message}`; render(); }
+        function engage() { state.keyboard = true; root.dataset.keyboard = "true"; root.focus({ preventScroll: true }); }
+        function release() {
+          state.keyboard = false;
+          announce("已释放终端按键，Tab 继续浏览网页");
+          root.focus({ preventScroll: true });
+        }
+        function choosePlatform(index) { state.platform = index; announce(`当前平台 ${platforms[index]}`); }
+        function chooseProject(index) { state.project = index; announce(`当前项目 ${state.projects[index].name}`); }
+
+        // 自定义终端内模态层需要同时隔离背景及外部说明。记录旧值，关闭时逐项恢复，
+        // 不覆盖页面外壳本来就有的 inert 状态；父工作区始终由自己的消息桥接控制。
+        function isolateModal() {
+          state.inertNodes = [];
+          for (let node = modal; node.parentElement; node = node.parentElement) {
+            for (const sibling of node.parentElement.children) {
+              if (sibling === node || sibling.tagName === "SCRIPT" || sibling.tagName === "STYLE") continue;
+              state.inertNodes.push([sibling, sibling.inert]);
+              sibling.inert = true;
+            }
+            if (node.parentElement === document.body) break;
+          }
+        }
+        function openPreview(enabled, trigger) {
+          if (state.preview) return;
+          const project = state.projects[state.project];
+          state.preview = { project: state.project, platform: state.platform, before: project.enabled, enabled };
+          state.returnFocus = trigger || root;
+          document.getElementById(`${prefix}-preview-title`).textContent = `${enabled ? "启用" : "停用"}工作流 · 变更预览 · 页面模拟`;
+          const projectLine = document.getElementById(`${prefix}-preview-project`);
+          projectLine.textContent = `项目：${project.name}`;
+          projectLine.title = project.name;
+          document.getElementById(`${prefix}-preview-platform`).textContent = `当前平台：${platforms[state.platform]}`;
+          document.getElementById(`${prefix}-preview-change`).textContent = `工作流：${stateText(project.enabled)} → ${stateText(enabled)}${project.enabled === enabled ? "（状态维持）" : ""}`;
+          confirm.textContent = `[Enter] 确认模拟${enabled ? "启用" : "停用"}工作流`;
+          modal.hidden = false;
+          isolateModal();
+          // 本页只做模拟，初始聚焦明确的确认按钮，保持 TUI 的 Enter 确认语义；
+          // 用户切到取消后，Enter 必须服从按钮本身的取消语义，不能误确认。
+          confirm.focus({ preventScroll: true });
+        }
+        function closePreview(accepted) {
+          if (!state.preview) return;
+          const preview = state.preview;
+          if (accepted) state.projects[preview.project].enabled = preview.enabled;
+          modal.hidden = true;
+          state.preview = null;
+          for (const [node, wasInert] of state.inertNodes) node.inert = wasInert;
+          state.inertNodes = [];
+          const result = accepted ? `已确认${preview.enabled ? "启用" : "停用"}工作流${preview.before === preview.enabled ? "，状态维持" : ""}` : "已取消变更，状态未改变";
+          announce(result);
+          const target = state.returnFocus;
+          state.returnFocus = null;
+          (target && !target.hidden ? target : root).focus({ preventScroll: true });
+        }
+
+        root.addEventListener("click", (event) => {
+          if (state.preview) {
+            // 所有预览点击在此终止，不会继续选择平台、项目或二次发起启停。
+            event.stopPropagation();
+            const action = event.target.closest("button")?.dataset.action;
+            if (action === "confirm") closePreview(true);
+            else if (action === "cancel" || event.target === modal) closePreview(false);
+            return;
+          }
+          const button = event.target.closest("button[data-action]");
+          if (!button || !root.contains(button)) return;
+          engage();
+          const index = Number(button.dataset.value);
+          if (button.dataset.action === "platform") choosePlatform(index);
+          if (button.dataset.action === "project") { state.pane = "projects"; chooseProject(index); }
+          if (button.dataset.action === "role") { state.pane = "roles"; state.roleByScope.set(scope(), index); announce(`当前角色 ${roles[index]}`); }
+          if (button.dataset.action === "enable") openPreview(true, button);
+          if (button.dataset.action === "disable") openPreview(false, button);
+        });
+        root.addEventListener("keydown", (event) => {
+          if (state.preview) {
+            event.stopPropagation();
+            if (event.key === "Tab") {
+              event.preventDefault();
+              (document.activeElement === cancel ? confirm : cancel).focus();
+            } else if (event.key === "Escape") { event.preventDefault(); closePreview(false); }
+            else if (event.key === "Enter") { event.preventDefault(); closePreview(document.activeElement !== cancel); }
+            // 其余键全部留在弹层，尤其不让平台与 o/p 落入下方主界面处理。
+            return;
+          }
+          if (!state.keyboard) {
+            if (event.target === root && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); engage(); announce("终端按键已进入，Esc/F6 释放"); }
+            return;
+          }
+          if (event.ctrlKey || event.altKey || event.metaKey) return;
+          const key = event.key;
+          if (["Escape", "F6", "q"].includes(key)) { event.preventDefault(); release(); return; }
+          if (key === "Tab") { event.preventDefault(); choosePlatform((state.platform + (event.shiftKey ? 2 : 1)) % 3); return; }
+          if (["1", "2", "3"].includes(key)) { event.preventDefault(); choosePlatform(Number(key) - 1); return; }
+          if (key === "ArrowLeft" || key === "ArrowRight") {
+            event.preventDefault();
+            state.pane = key === "ArrowLeft" ? "projects" : "roles";
+            announce(state.pane === "projects" ? "焦点：项目" : "焦点：右侧内容");
+            return;
+          }
+          if (key === "ArrowUp" || key === "ArrowDown") {
+            event.preventDefault();
+            const delta = key === "ArrowUp" ? -1 : 1;
+            if (state.pane === "projects") chooseProject(Math.max(0, Math.min(samples.length - 1, state.project + delta)));
+            else if (state.projects[state.project].enabled) { const index = Math.max(0, Math.min(roles.length - 1, selectedRole() + delta)); state.roleByScope.set(scope(), index); announce(`当前角色 ${roles[index]}`); }
+            else announce("工作流未启用，按 o 启用工作流");
+            return;
+          }
+          if (key === "o" || key === "p") { event.preventDefault(); openPreview(key === "o", root); return; }
+          if (key === "Enter" && state.pane === "projects") { event.preventDefault(); state.pane = "roles"; announce("焦点：右侧内容"); return; }
+          if (["Enter", "m", "e", "s", "u", "g", "a", "r", "/", ":", "?"].includes(key)) { event.preventDefault(); announce("该旧流程未演示；本页仅确认头部分区"); }
+        });
+        // 鼠标移到网页其它区域后自然释放捕获，下一次仅聚焦画板不会悄悄截走 Tab。
+        root.addEventListener("focusout", () => {
+          // 预览关闭会短暂隐藏当前焦点；等同一轮恢复焦点后再判断，避免误释放按键模式。
+          queueMicrotask(() => {
+            if (!state.preview && !root.contains(document.activeElement)) { state.keyboard = false; root.dataset.keyboard = "false"; }
+          });
+        });
+        render();
+      }
+      createTerminal("normal", false);
+      createTerminal("compact", true);
+    })();
+  </script>
+</body>
+</html>

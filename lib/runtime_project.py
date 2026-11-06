@@ -606,15 +606,19 @@ def configuration(resources: Resources, project: Path, config: Node, *, owned_li
     return body, result.profile, {"docs": docs, "project_name": name, "memory": memory}
 
 
-def role_resource(resources: Resources, config: bytes, host: str, role: str, binding: dict) -> bytes:
+def role_resource(resources: Resources, config: bytes, host: str, role: str, binding: dict,
+                  *, preferences: dict | None = None) -> bytes:
     from .role_models import parse as parse_models
+    from .role_preferences import resolve
     from .claude_options import parse as parse_claude
     from .role_skills import ROLE_SKILLS
     source = resources.read(f"roles/{role}.md").decode("utf-8", errors="strict")
     match = re.search(r"(?m)^description:\s*(.+)$", source)
     description = match[1].strip().strip('"') if match else role
     models = parse_models(config.decode())
-    settings = models.get(host, {}).get(role, {})
+    # 全局默认属于可变用户状态，不写回项目适配器，更不写入固定核心。这里仅
+    # 物化按字段解析后的模型/推理值；原有正文、工具白名单和任务 pin 继续原样生成。
+    settings, _ = resolve(preferences or {}, models, host, role)
     selected = json.dumps(binding, sort_keys=True, separators=(",", ":"))
     command = f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"
     instructions = (
@@ -796,7 +800,8 @@ if __name__ == "__main__":
 '''.encode()
 
 
-def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str, ...], *, owned_links: set[str]) -> tuple[dict[str, tuple[Node, str]], object]:
+def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str, ...], *, owned_links: set[str],
+            preferences: dict | None = None) -> tuple[dict[str, tuple[Node, str]], object]:
     """纯读取生成资源；返回 desired 节点及用途，不创建任何目录或正文副本。"""
     body, profile, settings = configuration(resources, project, config, owned_links=owned_links)
     # 通用 store 协议也可保存不含中央项目能力的旧来源，不能只因有内容 ID 就
@@ -843,7 +848,7 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
     for host in hosts:
         directory, suffix = ROLE_PATHS[host]
         for role in profile.enabled_roles:
-            desired[f"{directory}/{role}{suffix}"] = (Node("file", role_resource(resources, body, host, role, selected), 0o644), "role")
+            desired[f"{directory}/{role}{suffix}"] = (Node("file", role_resource(resources, body, host, role, selected, preferences=preferences), 0o644), "role")
     # Resources.root 在来源预览中仍是下载源；实际链接目标由服务明确注入中央定位，
     # 所以此处只返回角色/普通资源，Skill 目标不得猜测为源码根。
     docs = settings["docs"]

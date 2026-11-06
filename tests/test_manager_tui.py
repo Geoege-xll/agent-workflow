@@ -19,13 +19,14 @@ import subprocess
 import tempfile
 import termios
 from threading import Event
+from types import SimpleNamespace
 import time
 import unittest
 from unittest.mock import patch
 import uuid
 
 from lib import runtime_store
-from manager import service
+from manager import service, model_preferences
 from manager.catalog import Catalog, Model
 from manager.tui import App, HOSTS, cell_width
 from manager.tui_support import Layout, TextInput, Theme, ellipsize, project_plan_text, status_text
@@ -101,10 +102,12 @@ class TuiTest(unittest.TestCase):
         self.projects=[self.project,self.root/"另一个项目"]
         self.catalog=Catalog("codex",[Model("inherit","继承宿主","fixture",("high","max")),Model("local-model","本地模型","fixture",("high","max"))])
         for target,value in (("manager.tui.service.projects",self.projects),
-                             ("manager.tui.service.roles",["xy-backend","xy-web"]),
-                             ("manager.tui.service.role_settings",{"model":"inherit","effort":"high"}),
+                             ("manager.tui.model_preferences.roles",["xy-backend","xy-web"]),
+                             ("manager.tui.model_preferences.view",{"model":"inherit","effort":"high","sources":{"model":"host","effort":"project"},"overrides":{"effort":"high"},"revision":"fixture-revision"}),
+                             ("manager.tui.model_preferences.load_catalogs",model_preferences.PreferenceCatalogs(self.catalog,{})),
                              ("manager.tui.discover",self.catalog)):
             patcher=patch(target,return_value=value);patcher.start();self.addCleanup(patcher.stop)
+        patcher=patch("manager.tui.model_preferences.check_catalogs",side_effect=lambda state,project,host,catalog:isinstance(catalog,model_preferences.PreferenceCatalogs));patcher.start();self.addCleanup(patcher.stop)
         self.app=App(self.root/"state",self.root/"scan",self.project)
         self.app.theme=Theme(focus=11,selected=12,inactive=13,warning=14,error=15,muted=16,success=17,title=18)
         self.screen=RecordingScreen();self.app.screen=self.screen
@@ -142,9 +145,81 @@ class TuiTest(unittest.TestCase):
                     self.assertLess(x+hit_width,layout.modal_x+layout.modal_width-1)
         return self.screen
 
+    def preference_plan(self,scope="project",conflicts=None):
+        return SimpleNamespace(summary={"scope":scope,"platform":"codex","project":str(self.project) if scope == "project" else None,
+                              "changes":[{"role":"xy-backend","field":"model","before":"inherit","after":"local-model"}],
+                              "affected_projects":[str(self.project)] if scope == "global" else [],
+                              "conflicts":conflicts or [],"can_apply":not conflicts,"notes":[]})
+
+    def test_global_scope_sources_field_drafts_and_reset_are_isolated(self):
+        self.app.role_index=1
+        self.app.dispatch('e');self.app.dispatch('end');self.app.dispatch('enter')
+        project_key=self.app.scope();self.assertEqual(self.app.drafts[project_key],{'effort':'max'})
+        self.app.dispatch('left');self.app.dispatch('home')
+        self.assertTrue(self.app.global_scope);self.assertIsNone(self.app.project)
+        self.assertEqual(self.app.scope_id,'<global>');self.assertEqual(len(self.app.projects),2)
+        self.app.dispatch('right');screen=self.draw()
+        self.assertIn('全局默认',screen.text());self.assertNotIn('[o]',screen.text());self.assertNotIn('[p]',screen.text())
+        self.assertFalse(any(row.action in {'enable','disable'} for row in self.app.bindings()))
+        self.app.dispatch('m');self.app.dispatch('down');self.app.dispatch('enter');self.app.dispatch('enter')
+        global_key=self.app.scope();self.assertEqual(self.app.drafts[global_key],{'model':'local-model'})
+        self.app.dispatch('v');self.assertIn('来源  全局',self.app.text);self.app.dispatch('esc')
+        self.app.dispatch('g');self.assertTrue(all(action not in {'enable','disable'} for _,action in self.app.options()))
+        self.app.dispatch('esc');self.app.dispatch(':')
+        self.assertTrue(all(action not in {'enable','disable'} for _,action in self.app.options()))
+        self.app.dispatch('esc');self.app.dispatch('left');self.app.dispatch('down');self.app.dispatch('right')
+        self.assertEqual(self.app.role,'xy-web');self.assertIn(project_key,self.app.drafts);self.assertIn(global_key,self.app.drafts)
+        self.app.act('reset-effort');self.assertEqual(self.app.drafts[project_key],{'effort':None})
+        self.assertIn('恢复跟随全局',self.app.toast)
+        self.app.dispatch('u');self.assertNotIn(project_key,self.app.drafts);self.assertIn(global_key,self.app.drafts)
+        self.assertNotIn('尚未保存',self.app.toast)
+        self.app.dispatch('left');self.app.dispatch('home')
+        self.app.accept_project_rows([{'project':str(project)} for project in self.projects],selected=self.projects[1])
+        self.assertEqual(self.app.project,self.projects[1]);self.assertFalse(self.app.global_scope)
+
+    def test_global_preview_lists_affected_projects_and_refuses_conflicts(self):
+        self.app.dispatch('left');self.app.dispatch('home');self.app.dispatch('right')
+        self.app.dispatch('e');self.app.dispatch('end');self.app.dispatch('enter')
+        with patch('manager.tui.model_preferences.preview',return_value=self.preference_plan('global',[{'project':str(self.project),'reason':'来源已经变化'}])), \
+             patch('manager.tui.model_preferences.apply') as apply:
+            self.app.dispatch('s');self.assertEqual(self.app.modal,'preview')
+            self.assertIn('保存范围  全局默认',self.app.text);self.assertIn('受影响项目  1 项',self.app.text)
+            self.assertIn('来源已经变化',self.app.text);self.assertFalse(any(row.action == 'confirm' for row in self.app.bindings()))
+            self.app.dispatch('enter');apply.assert_not_called()
+            self.draw(16,55);self.assertIn('Esc',self.screen.text())
+            self.app.dispatch('esc');self.assertTrue(self.app.pending())
+
+    def test_same_effective_value_preserves_follow_or_explicit_source(self):
+        # 无全局值、全局inherit以及具体值均需按来源比较，不能只比较有效字符串。
+        for defaults in ({},{'model':'inherit','effort':'inherit'},{'model':'local-model','effort':'high'}):
+            with self.subTest(defaults=defaults):
+                values={field:defaults.get(field,'inherit') for field in ('model','effort')}
+                def observed(state,project,host,role):
+                    return {**values,'sources':{field:'host' if value == 'inherit' else 'global' for field,value in values.items()},
+                            'overrides':dict(defaults) if project is None else {},'revision':'same-value-fixture'}
+                with patch('manager.tui.model_preferences.view',side_effect=observed):
+                    self.app.settings_cache.clear();self.app.drafts.clear();self.app.expected.clear()
+                    self.app.dispatch('m');self.assertIsNone(self.app.options()[self.app.index][1])
+                    self.assertNotIn('inherit',self.app.options()[0][0])
+                    self.app.dispatch('enter');self.assertIsNone(self.app.options()[self.app.index][1])
+                    self.app.dispatch('enter');self.assertFalse(self.app.pending())
+                    self.app.dispatch('m')
+                    self.app.index=next(i for i,(_,value) in enumerate(self.app.options()) if value == values['model'])
+                    self.app.dispatch('enter');self.app.dispatch('enter')
+                    self.assertEqual({self.app.role:{'model':values['model']}},self.app.pending())
+                    self.app.dispatch('u');self.app.dispatch('e')
+                    self.app.index=next(i for i,(_,value) in enumerate(self.app.options()) if value == values['effort'])
+                    self.app.dispatch('enter');self.assertEqual({self.app.role:{'effort':values['effort']}},self.app.pending())
+                    self.app.act('reset-effort');self.assertFalse(self.app.pending())
+        baseline={'model':'inherit','effort':'inherit','sources':{'model':'host','effort':'host'},
+                  'overrides':{'model':'inherit'},'revision':'explicit-host-fixture'}
+        with patch('manager.tui.model_preferences.view',return_value=baseline):
+            self.app.settings_cache.clear();self.app.expected.clear();self.app.act('reset-model')
+            self.assertEqual({self.app.role:{'model':None}},self.app.pending())
+
     def test_render_size_and_modal_matrix(self):
         for height,width in ((40,140),(30,110),(30,100),(24,80),(24,79),(16,55),(12,45),(3,18)):
-            for modal in (None,"model","effort","manage","backups","preview","sources","help","quit","add","result","error","commands","add_mode","project_plan","versions","version_details","details"):
+            for modal in (None,"model","effort","manage","backups","preview","sources","help","quit","add","result","error","commands","add_mode","project_plan","versions","version_details","details","preference_details"):
                 with self.subTest(size=(height,width),modal=modal):
                     self.app.modal=modal;self.app.scratch={"model":"local-model","effort":"high"}
                     self.app.text=("长诊断 é 中文 "+"a"*180+"\n")*30
@@ -157,14 +232,14 @@ class TuiTest(unittest.TestCase):
 
     def test_only_focused_panel_has_strong_full_row_selection(self):
         screen=self.draw()
-        project_hit=next(hit for hit in self.app.hits if hit[3]=="project")
+        project_hit=next(hit for hit in self.app.hits if hit[3]=="project" and hit[4]==0)
         role_hit=next(hit for hit in self.app.hits if hit[3]=="role")
         y,x,width,_,_=project_hit
         self.assertNotEqual(screen.attrs[y][x],self.app.theme.selected)
         y,x,width,_,_=role_hit
         self.assertTrue(all(attr==self.app.theme.selected for attr in screen.attrs[y][x:x+width]))
         self.app.dispatch("left");screen=self.draw()
-        y,x,width,_,_=next(hit for hit in self.app.hits if hit[3]=="project")
+        y,x,width,_,_=next(hit for hit in self.app.hits if hit[3]=="project" and hit[4]==0)
         self.assertTrue(all(attr==self.app.theme.selected for attr in screen.attrs[y][x:x+width]))
 
     def test_footer_is_bounded_and_matches_available_bindings(self):
@@ -180,11 +255,11 @@ class TuiTest(unittest.TestCase):
     def test_model_search_accepts_without_confirming_and_preserves_real_index(self):
         self.app.dispatch("enter");self.app.dispatch("/");self.type("local")
         self.app.dispatch("enter")
-        self.assertEqual(self.app.modal,"model");self.assertEqual(self.app.index,1)
+        self.assertEqual(self.app.modal,"model");self.assertEqual(self.app.options()[self.app.index][1],"local-model")
         self.assertFalse(self.app.drafts)
         self.app.dispatch("enter");self.assertEqual(self.app.modal,"effort")
         self.app.dispatch("esc");self.assertEqual(self.app.modal,"model")
-        self.assertEqual(self.app.index,1)
+        self.assertEqual(self.app.options()[self.app.index][1],"local-model")
 
     def test_search_cancel_restores_selection_and_zero_results_do_not_confirm(self):
         self.app.dispatch("enter");self.app.dispatch("/");self.type("not-a-model")
@@ -221,11 +296,11 @@ class TuiTest(unittest.TestCase):
 
     def test_refresh_and_host_switch_preserve_role_identity(self):
         self.app.role_index=1;self.assertEqual(self.app.role,"xy-web")
-        with patch("manager.tui.service.roles",return_value=["xy-web","xy-qa","xy-backend"]):
+        with patch("manager.tui.model_preferences.roles",return_value=["xy-web","xy-qa","xy-backend"]):
             self.app.dispatch("r");self.assertEqual(self.app.role,"xy-web")
-        with patch("manager.tui.service.roles",return_value=["xy-qa","xy-web"]):
+        with patch("manager.tui.model_preferences.roles",return_value=["xy-qa","xy-web"]):
             self.app.dispatch("2");self.assertEqual(self.app.role,"xy-web")
-        with patch("manager.tui.service.roles",return_value=["xy-qa"]):
+        with patch("manager.tui.model_preferences.roles",return_value=["xy-qa"]):
             self.app.dispatch("3");self.assertEqual(self.app.role,"xy-qa")
 
     def test_platform_tab_cycle_preserves_project_pane_role_and_cross_scope_drafts(self):
@@ -252,7 +327,7 @@ class TuiTest(unittest.TestCase):
         other=(str(self.project),"claude")
         self.app.catalogs[other]=Catalog("claude")
         refreshed=Catalog("codex",[Model("inherit","继承","native"),Model("dynamic","动态模型","native",("high",))])
-        with patch("manager.tui.discover",side_effect=[self.catalog,refreshed]) as query:
+        with patch("manager.tui.model_preferences.load_catalogs",side_effect=[model_preferences.PreferenceCatalogs(self.catalog,{}),model_preferences.PreferenceCatalogs(refreshed,{})]) as query:
             self.app.dispatch("enter");self.draw();self.draw()
             self.app.dispatch("esc");self.app.role_index=1;self.app.dispatch("enter");self.draw()
             self.assertEqual(query.call_count,1)
@@ -263,7 +338,7 @@ class TuiTest(unittest.TestCase):
 
     def test_save_staging_cancel_and_success_clear_only_the_applied_scope(self):
         # 检查草稿/确认与副作用边界，真实落盘和失败冲突另由同文件PTY消费者验证。
-        with patch('manager.tui.service.commit') as commit:
+        with patch('manager.tui.model_preferences.apply') as commit:
             self.app.dispatch('m');self.app.dispatch('enter');self.app.dispatch('enter')
             self.assertFalse(self.app.pending());self.assertIn('无改动',self.app.toast)
             self.assertNotIn('已同步',self.draw().line(0));commit.assert_not_called()
@@ -274,13 +349,13 @@ class TuiTest(unittest.TestCase):
             other=(str(self.projects[1]),'claude','xy-qa')
             self.app.drafts[other]={'model':'inherit','effort':'high'}
             self.app.catalogs[other[:2]]=Catalog('claude')
-            with patch('manager.tui.service.prepare',return_value=[service.Change('fixture',b'a',b'b',0o600)]):
+            with patch('manager.tui.model_preferences.preview',return_value=self.preference_plan()):
                 self.app.dispatch('s');self.assertEqual(self.app.modal,'preview');commit.assert_not_called()
                 self.app.dispatch('esc');self.assertTrue(self.app.pending());commit.assert_not_called()
                 self.app.dispatch('s')
             with ThreadPoolExecutor(max_workers=1) as self.app.executor, \
                  patch('manager.tui.service.backup_summary',return_value='fixture backup'):
-                commit.return_value='fixture-id'
+                commit.return_value={'applied':True,'scope':'project','backup_id':'fixture-id','backups':[],'affected_projects':[],'diagnostic':''}
                 self.app.dispatch('enter');self.app.future.result(timeout=2);self.app.poll_job()
             self.assertFalse(self.app.pending());self.assertIn(other,self.app.drafts)
             self.assertNotIn((str(self.project),'codex'),self.app.catalogs)
@@ -291,28 +366,30 @@ class TuiTest(unittest.TestCase):
     def test_project_dividers_scroll_and_mouse_identity_in_narrow_monochrome(self):
         self.app.projects=[self.root/f'中文项目-{index:02}' for index in range(12)]
         self.app.project_index=0;self.app.pane='projects';self.app.theme=Theme()
-        screen=self.draw(16,55)
+        screen=self.draw()
         first=next(hit for hit in self.app.hits if hit[3]=='project' and hit[4]==0)
-        self.assertIn('中文项目-00',screen.line(first[0]))
-        self.assertIn('待刷新',screen.line(first[0]+1))
-        self.assertIn('──',screen.line(first[0]+2))
+        self.assertIn('┄┄',screen.line(first[0]+2))
+        self.assertTrue(all(not (attr & curses.A_BOLD) for attr in screen.attrs[first[0]+1][first[1]:first[1]+first[2]]))
         self.assertFalse(any(hit[0]==first[0]+2 and hit[3]=='project' for hit in self.app.hits))
-        self.assertTrue(all(key in screen.line(Layout(16,55).workflow) for key in ('待刷新','[o]','[p]')))
-        # 点击项目分隔和外边框不应更改选择，不能扩大条目命中范围来补偿新布局。
-        for y,x in ((first[0]+2,first[1]),(first[0],0),(Layout(16,55).bottom,first[1])):
+        # 最小终端将名称与状态并排压缩，固定全局入口与项目条目仍各有独立命中行。
+        screen=self.draw(16,55);first=next(hit for hit in self.app.hits if hit[3]=='project' and hit[4]==0)
+        self.assertIn('中文项目-00',screen.line(first[0]));self.assertIn('待刷新',screen.line(first[0]))
+        layout=Layout(16,55)
+        self.assertIn('待刷新',screen.line(layout.workflow))
+        self.assertTrue(all(key in screen.line(layout.workflow_actions) for key in ('[o]启用工作流','[p]停用工作流')))
+        self.assertIn('全局默认',screen.line(layout.global_entry))
+        for y,x in ((first[0],0),(layout.bottom,first[1])):
             self.screen.keys=[curses.KEY_MOUSE]
             with patch('manager.tui.curses.getmouse',return_value=(0,x,y,0,curses.BUTTON1_CLICKED)):
                 self.app.read_input(self.screen)
             self.assertEqual(self.app.project_index,0)
         self.app.dispatch('pagedown');self.assertGreater(self.app.project_index,0)
-        self.app.dispatch('end');screen=self.draw(16,55)
+        self.app.dispatch('end');self.draw(16,55)
         self.assertEqual(self.app.project_index,len(self.app.projects))
-        # 仅当前视口的名称/状态行可以命中，鼠标不依赖项目条目的物理行号。
-        # 最小尺寸只容纳一项；先从末尾登记入口返回最后一个项目再检查详情行命中。
         self.app.dispatch('up');self.draw(16,55)
-        hit=next(hit for hit in self.app.hits if hit[3]=='project' and hit[4]<len(self.app.projects))
-        y,x,width,_,index=hit;self.screen.keys=[curses.KEY_MOUSE]
-        with patch('manager.tui.curses.getmouse',return_value=(0,x,y+1,0,curses.BUTTON1_CLICKED)):
+        y,x,width,_,index=next(hit for hit in self.app.hits if hit[3]=='project' and 0<=hit[4]<len(self.app.projects))
+        self.screen.keys=[curses.KEY_MOUSE]
+        with patch('manager.tui.curses.getmouse',return_value=(0,x,y,0,curses.BUTTON1_CLICKED)):
             self.app.read_input(self.screen)
         self.assertEqual(self.app.project_index,index);self.assertIsNone(self.app.modal)
 
@@ -321,7 +398,7 @@ class TuiTest(unittest.TestCase):
         self.app.drafts[key]={"model":"local-model","effort":"high"}
         self.app.expected[key]={"model":"inherit","effort":"high"}
         self.app.drafts[other]={"model":"inherit","effort":"inherit"}
-        with patch("manager.tui.service.roles",return_value=["xy-web"]):
+        with patch("manager.tui.model_preferences.roles",return_value=["xy-web"]):
             self.app.dispatch("r")
             self.assertEqual(self.app.role,"xy-backend")
             self.assertIn("已移除",self.draw().text())
@@ -409,8 +486,9 @@ class TuiTest(unittest.TestCase):
     def test_palette_reuses_preview_and_never_bypasses_confirmation(self):
         self.app.drafts[self.app.scope()]={"model":"local-model","effort":"high"}
         self.app.dispatch(":");self.type("预览")
-        with patch.object(self.app,"act",wraps=self.app.act) as act,patch("manager.tui.service.prepare",return_value=[]),patch("manager.tui.service.commit") as commit:
-            self.app.expected[self.app.scope()]={"model":"inherit","effort":"high"}
+        with patch.object(self.app,"act",wraps=self.app.act) as act,patch("manager.tui.model_preferences.preview",return_value=self.preference_plan()),patch("manager.tui.model_preferences.apply") as commit:
+            self.app.expected[self.app.scope()]=dict(self.app.base_value(self.app.role))
+            self.app.catalogs[self.app.scope()[:2]]=model_preferences.PreferenceCatalogs(self.catalog,{})
             self.app.dispatch("enter")
             self.assertEqual(self.app.modal,"preview");commit.assert_not_called()
             self.assertTrue(any(call.args[0]=="preview" for call in act.call_args_list))
@@ -424,7 +502,7 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch("enter");self.app.dispatch("/");self.type("local");self.app.dispatch("enter")
         self.app.dispatch("?");self.assertEqual(self.app.modal,"help")
         self.app.dispatch("esc");self.assertEqual(self.app.modal,"model")
-        self.assertEqual(self.app.filter_text,"local");self.assertEqual(self.app.index,1)
+        self.assertEqual(self.app.filter_text,"local");self.assertEqual(self.app.options()[self.app.index][1],"local-model")
 
     def test_mouse_only_selects_including_add_and_menu(self):
         for menu,kind in ((None,"role"),("manage","option")):
@@ -490,7 +568,7 @@ class TuiTest(unittest.TestCase):
         self.app.index=len(options)-1;val=options[-1][1]
         self.app.dispatch("enter");self.assertIsNone(self.app.modal)
         self.assertEqual(self.app.drafts[self.app.scope()]["effort"],val)
-        self.assertEqual(self.app.drafts[self.app.scope()]["model"],"inherit")
+        self.assertNotIn("model",self.app.drafts[self.app.scope()])
         self.app.role_column="effort"
         for key in ("left","left","right","right"):self.app.dispatch(key)
         self.assertEqual(self.app.role_column,"effort")
@@ -501,17 +579,18 @@ class TuiTest(unittest.TestCase):
         self.app.modal="effort"
         # 已知模型能力时只提供证实的档位，继承仍始终可选。
         model_levels=[v for _,v in self.app.options()]
-        self.assertEqual(model_levels,["inherit","high","max"])
+        self.assertEqual(model_levels,[None,"inherit","high","max"])
         # 未知模型能力时提供宿主允许写入的标准值，不能把后备选项回填成模型能力证据。
         with patch.object(self.app,"catalog",return_value=Catalog("claude",[Model("inherit","继承","f",())])):
             claude_levels=[v for _,v in self.app.options()]
-            self.assertEqual(claude_levels,["inherit","low","medium","high","xhigh","max"])
+            self.assertEqual(claude_levels,[None,"inherit","low","medium","high","xhigh","max"])
         self.app.host_index=0;self.app.scratch={"model":"inherit","effort":"inherit"}
         with patch.object(self.app,"catalog",return_value=Catalog("codex",[Model("inherit","继承","f",())])):
             codex_levels=[v for _,v in self.app.options()]
-            self.assertEqual(codex_levels,["inherit","none","minimal","low","medium","high","xhigh","max"])
+            self.assertEqual(codex_levels,[None,"inherit","none","minimal","low","medium","high","xhigh","max"])
         self.app.host_index=2
         self.assertEqual(self.app.unavailable("effort"),"Antigravity 静态角色仅支持继承")
+        self.assertEqual(self.app.unavailable("reset-effort"),"")
 
     def test_mouse_selects_role_column_model_or_effort(self):
         self.draw()
@@ -768,7 +847,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         for name in ("lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py","lib/claude_options.py",
                      "lib/claude_instructions.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
                      "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py",
-                     "lib/shared_core_skills.py","lib/role_models.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
+                     "lib/shared_core_skills.py","lib/role_models.py","lib/role_preferences.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
                      "manager/runtime_service.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
                      "roles/xy-qa.md","roles/xy-uiux.md","platforms/shared/core-skills.txt"):
             put(name,(PACK/name).read_bytes())
@@ -781,7 +860,9 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         put("product/WORKFLOW.md","# TUI 固定版本甲\n".encode())
 
     @classmethod
-    def tearDownClass(cls):cls.temporary.cleanup()
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+        print(f"TUI 最小协议夹具已清理：{cls.root}；exists={cls.root.exists()}")
 
     def setUp(self):
         self.project=self.root/("中文 é 项目-"+uuid.uuid4().hex[:8]);self.project.mkdir()
@@ -895,7 +976,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         environment.update(HOME=str(host),XDG_CONFIG_HOME=str(host/"config"),CLAUDE_CONFIG_DIR=str(host/"claude"),
                            CODEX_HOME=str(host/"codex"),TERM="xterm-256color",LANG="en_US.UTF-8")
         # 唯一注入是最小真实来源路径；run/App/服务/文件系统和所有按键均为生产实现。
-        program="from pathlib import Path; import sys; from manager import service; from manager.tui import run; service.SOURCE=Path(sys.argv[4]); raise SystemExit(run(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3])))"
+        program="from pathlib import Path; import sys; from manager import service, model_preferences; from manager.tui import run; service.SOURCE=Path(sys.argv[4]); raise SystemExit(run(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3])))"
         process=subprocess.Popen([*PYTHON,"-c",program,str(self.state),str(self.root/"empty-scan"),str(self.project),str(self.source)],
                                  cwd=PACK,env=environment,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)
         checkpoints.append(f'\n=== PTY进程 {process.pid} · 测试项目 {self.project} ===\n')
@@ -955,7 +1036,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             checkpoint('Tab双向循环平台与左箭头幂等项目焦点')
             for _ in range(2):
                 send('\x1bOC')
-                wait_for(lambda:'◈ '+self.project.name in ''.join(terminal.cells[5]),'右箭头内容焦点')
+                wait_for(lambda:'◈ 角色模型' in ''.join(terminal.cells[Layout(terminal.height,terminal.width).pane_title]),'右箭头内容焦点')
             send('?');view('快捷键帮助');checkpoint('帮助弹层粗框与返回提示');send('\x1b')
             # 首次登记只走预览并取消，验证项目/registry均无写入，且输入能逐层返回。
             send("a");view("登记项目 · 输入目录");send(str(self.project))
@@ -973,7 +1054,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             self.assertIn(str(self.project),service.registry(self.state)["registered"])
             self.assertFalse(service.project_status(self.state,self.project)["enabled"]);send("\x1b")
             # 主界面启停不能依靠隐藏菜单或过期状态直接写入；先取消一次启用预览。
-            close_to_main();visible('[o]启用预览');send('o');view('项目管理 · 只读预览')
+            close_to_main();visible('[o]启用工作流');send('o');view('项目管理 · 只读预览')
             send('\x1b');self.assertFalse(service.project_status(self.state,self.project)['enabled'])
             send('o');view('项目管理 · 只读预览');send('\r');view('操作结果')
             self.assertTrue(service.project_status(self.state,self.project)["enabled"]);close_to_main()
@@ -989,13 +1070,60 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             terminal.resize(30,100);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",30,100,0,0));os.kill(process.pid,signal.SIGWINCH)
             view("模型配置备份");close_to_main()
             terminal.resize(16,55);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',16,55,0,0));os.kill(process.pid,signal.SIGWINCH)
-            visible('[p]停用预览')
+            visible('[p]停用工作流')
             send('\x1bOD');visible('◈ 项目')
             send('/'+self.project.name[-8:]+'\r')
             visible('项目工作流 已启用');checkpoint('55x16项目筛选分隔和启停入口')
             # 启用操作保留原触发区域；Enter明确打开项目，Tab只切平台。
             send('\x1b');send('\r')
             terminal.resize(30,100);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0));os.kill(process.pid,signal.SIGWINCH)
+            # 同一真实PTY覆盖全局/项目草稿隔离；仅编辑测试夹具，不写真实用户默认。
+            # 先保留项目推理草稿，再去全局选择模型/推理并取消预览，两范围都不得提前落盘。
+            send('e');view('选择推理级别');send('/max\r');send('\r');visible('已暂存，尚未保存')
+            project_before=self.snapshot(self.project)
+            send('\x1bOD');send('\x1bOH');send('\x1bOC');visible('全局默认 · 工作流子 Agent')
+            self.assertNotIn('[o]',terminal.text());self.assertNotIn('[p]',terminal.text())
+            send('/xy-qa\r');send('m');view('选择模型');send('/fixture-current\r');send('\r');view('选择推理级别')
+            send('/high\r');send('\r');visible('已暂存，尚未保存')
+            global_file=self.state/'preferences/role-models.json'
+            self.assertFalse(global_file.exists())
+            send('s');view('保存预览');visible('保存范围  全局默认');visible('受影响项目')
+            checkpoint('全局保存预览列出范围与受影响项目')
+            send('\x1b');visible('已取消保存预览')
+            self.assertFalse(global_file.exists());self.assertEqual(project_before,self.snapshot(self.project))
+            send('\x1bOD');send('\x1bOB');send('\x1bOC');visible('2 项未保存')
+            # 返回项目保留原角色及草稿，u只丢弃该项目项，全局草稿仍可返回保存。
+            send('u');visible('已丢弃当前角色草稿');visible('1 项未保存')
+            send('\x1bOD');send('\x1bOH');send('\x1bOC');send('s');view('保存预览');send('\r');view('操作结果')
+            visible('已保存模型配置 · 全局默认');self.assertTrue(global_file.exists())
+            observed=model_preferences.view(self.state,self.project,'codex','xy-qa')
+            self.assertEqual({'model':'fixture-current','effort':'high'},
+                             {key:observed[key] for key in ('model','effort')})
+            self.assertEqual(self.core.content_id,service.project_status(self.state,self.project)['runtime_binding']['content_id'])
+            checkpoint('全局保存成功并物化跟随项目');close_to_main()
+            send('\x1bOD');send('\x1bOB');send('\x1bOC');send('v');view('当前角色值与来源');visible('来源  全局')
+            checkpoint('项目模型推理均显示全局来源');send('\x1b')
+            send('e');view('选择推理级别');send('/max\r');send('\r');visible('已暂存，尚未保存')
+            send('s');view('保存预览');send('\r');view('操作结果');visible('已保存模型配置')
+            observed=model_preferences.view(self.state,self.project,'codex','xy-qa')
+            self.assertEqual({'effort':'max'},observed['overrides']);self.assertEqual({'model':'global','effort':'project'},observed['sources'])
+            checkpoint('项目仅推理字段形成覆盖');close_to_main()
+            send(':恢复推理跟随全局\r');visible('已暂存恢复跟随全局')
+            saved_override=self.snapshot(self.project)
+            send('s');view('保存预览');send('\x1b');visible('已取消保存预览');self.assertEqual(saved_override,self.snapshot(self.project))
+            send('s');view('保存预览');send('\r');view('操作结果');visible('已保存模型配置')
+            observed=model_preferences.view(self.state,self.project,'codex','xy-qa')
+            self.assertEqual({},observed['overrides']);self.assertEqual({'model':'global','effort':'global'},observed['sources'])
+            checkpoint('清除推理覆盖恢复全局且取消不落盘');close_to_main()
+            # 显式inherit保留宿主含义，再reset模型才恢复全局；两者不能互相替代。
+            send('m');view('选择模型');send('/继承宿主\r');send('\r');view('选择推理级别');send('\r');visible('已暂存，尚未保存')
+            send('s');view('保存预览');send('\r');view('操作结果');visible('已保存模型配置')
+            observed=model_preferences.view(self.state,self.project,'codex','xy-qa')
+            self.assertEqual({'model':'inherit'},observed['overrides']);self.assertEqual('host',observed['sources']['model'])
+            close_to_main();send('v');view('当前角色值与来源');visible('来源  宿主');checkpoint('显式inherit模型来源仍为宿主');send('\x1b')
+            send(':恢复模型跟随全局\r');visible('已暂存恢复跟随全局')
+            send('s');view('保存预览');send('\r');view('操作结果');visible('已保存模型配置');close_to_main()
+            self.assertEqual({},model_preferences.view(self.state,self.project,'codex','xy-qa')['overrides'])
             # Esc取消选择和保存预览都必须无写入；跨宿主返回保留当前范围草稿。
             target=self.project/'.codex/agents/xy-qa.toml';original=target.read_bytes()
             send('m');view('选择模型');checkpoint('模型选择弹层粗框与内部层次')
@@ -1051,7 +1179,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             terminal.resize(12,45);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",12,45,0,0));os.kill(process.pid,signal.SIGWINCH)
             visible("请调整至至少");send("q");process.wait(timeout=10)
             self.assertEqual(0,process.returncode)
-            print(f"真实 PTY 已验证：完整粗框/内部分区、Tab/Shift+Tab双向循环、左右幂等焦点、路径/选择弹层隔离、登记预览取消/确认、主界面启用/停用、模型/推理暂存与取消、跨平台草稿返回、真实保存/无改动/并发失败保留草稿、版本完整ID、三宿主详情、55×16项目筛选/分隔/启停入口、手改冲突、表单错误、12×45退出；pid={process.pid} exit=0")
+            print(f"真实 PTY 已验证：完整粗框/内部分区、Tab/Shift+Tab双向循环、左右幂等焦点、路径/选择弹层隔离、登记预览取消/确认、主界面启用/停用、全局预览取消/保存/影响项目、跨scope草稿、项目仅字段覆盖/reset、全局/项目/宿主来源、模型/推理暂存与取消、跨平台草稿返回、真实保存/无改动/并发失败保留草稿、版本完整ID、三宿主详情、55×16项目筛选/启停入口、手改冲突、表单错误、12×45退出；pid={process.pid} exit=0")
         finally:
             if process.poll() is None:
                 # 仅回收本测试独占的短命夹具进程；正常路径必须q退出，此清理不作为取消能力证据。

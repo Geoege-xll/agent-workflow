@@ -30,6 +30,16 @@ def validate(host: str, value: dict) -> dict[str, str]:
     return {"model": model, "effort": effort}
 
 
+def explicit(host: str, value: dict) -> dict[str, str]:
+    """校验明确配置但保留字段存在性；缺省与显式 inherit 的业务含义不同。
+
+    validate 仍负责原生完整设置的宿主校验；配置读取/写回只留下调用方实际
+    提供的字段，避免编辑 model 时顺手把 effort 固化为宿主继承。
+    """
+    checked = validate(host, value)
+    return {field: checked[field] for field in value}
+
+
 def block_span(lines: list[str]) -> tuple[int, int] | None:
     """读取与替换共用边界：顶格注释不结束映射，末尾外部注释留给后续章节。"""
     starts = [i for i,line in enumerate(lines) if re.match(r"^role_models:",line)]
@@ -93,7 +103,7 @@ def parse(text: str) -> dict[str, dict[str, dict[str, str]]]:
                     raise ValueError(f"重复模型字段：{name}")
                 obj[name] = value
             return obj
-        result[host][role] = validate(host, json.loads(match[2], object_pairs_hook=unique))
+        result[host][role] = explicit(host, json.loads(match[2], object_pairs_hook=unique))
     return result
 
 
@@ -104,7 +114,7 @@ def load(pack: Path) -> dict:
 def settings(pack: Path, host: str, role: str, default_effort: str = "inherit") -> dict[str, str]:
     if host not in HOSTS or role not in ROLES:
         raise ValueError("未知平台或角色")
-    return load(pack).get(host, {}).get(role, {"model": "inherit", "effort": default_effort})
+    return {"model": "inherit", "effort": default_effort, **load(pack).get(host, {}).get(role, {})}
 
 
 def update(text: str, choices: dict[str, dict[str, dict]]) -> str:
@@ -119,7 +129,9 @@ def update(text: str, choices: dict[str, dict[str, dict]]) -> str:
         for role, value in sorted(choices[host].items()):
             if role not in ROLES:
                 raise ValueError(f"未知角色：{role}")
-            lines.append(f"    {role}: {json.dumps(validate(host, value), ensure_ascii=False)}")
+            fields = explicit(host, value)
+            if fields:
+                lines.append(f"    {role}: {json.dumps(fields, ensure_ascii=False)}")
     block = newline.join(lines) + newline
     # 按保留换行的实际行定位，最后一行没有换行也必须完整替换，不能留下重复角色。
     original = text.splitlines(keepends=True)

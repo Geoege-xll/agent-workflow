@@ -91,6 +91,56 @@ def project_result_text(result: dict, host_labels: dict[str, str]) -> str:
     return "\n".join([*lines, "", status_text(result, host_labels)])
 
 
+def preference_project_text(item) -> str:
+    """预览和结果共用项目摘要文案；不把服务内部键名直接作为产品正文。"""
+    if not isinstance(item, dict):return str(item)
+    materialization = {"update": "更新跟随字段", "on_enable": "后续启用时采用", "unchanged": "当前无需物化"}.get(item.get("materialization"), "")
+    return str(item.get("project", "")) + (" · " + materialization if materialization else "")
+
+
+def preference_plan_text(summary: dict, host_labels: dict[str, str]) -> str:
+    """展示唯一偏好服务给出的范围、受影响项目及冲突，不读取或拼接配置正文。"""
+    scope = "全局默认" if summary["scope"] == "global" else "项目覆盖"
+    lines = ["保存范围  " + scope, "平台  " + host_labels.get(summary["platform"], summary["platform"])]
+    if summary.get("project"):lines.append("项目  " + str(summary["project"]))
+    lines += ["", "字段变更："]
+    for change in summary.get("changes", []):
+        if isinstance(change, dict):
+            # 公共摘要使用 None 表示没有该范围覆盖；用户看到的是跟随关系，
+            # 不能把 reset 的 None 展示成可选模型名或显式 inherit。
+            field = {"model": "模型", "effort": "推理"}.get(change.get("field"), change.get("field", ""))
+            before = "无覆盖" if change.get("before") is None else str(change["before"])
+            after = "恢复跟随" + ("宿主" if summary["scope"] == "global" else "全局") if change.get("after") is None else str(change["after"])
+            lines.append(f"  {change.get('role', '')} · {field} · {before} → {after}")
+        else:lines.append("  " + str(change))
+    if not summary.get("changes"):lines.append("  无文件变更")
+    affected = summary.get("affected_projects", [])
+    lines += ["", f"受影响项目  {len(affected)} 项："]
+    lines += ["  " + preference_project_text(item) for item in affected]
+    if not affected:lines.append("  无；停用或未管理项目不会自动启用")
+    conflicts = summary.get("conflicts", [])
+    if conflicts:
+        lines += ["", "不能保存；冲突："]
+        for item in conflicts:
+            lines.append("  " + (" · ".join(str(item[key]) for key in ("project", "path", "reason") if key in item)
+                                if isinstance(item, dict) else str(item)))
+    lines += ["", *[str(note) for note in summary.get("notes", [])]]
+    lines.append("Enter 确认备份并保存；Esc 返回保留草稿。" if summary["can_apply"] else "Esc 返回；草稿保留，请核对冲突后重新预览。")
+    return "\n".join(lines)
+
+
+def preference_result_text(result: dict) -> str:
+    """只以服务的 applied 结果宣告成功，并保留真实备份和逐项目结算反馈。"""
+    lines = ["范围  " + ("全局默认" if result["scope"] == "global" else "项目覆盖")]
+    if result.get("backup_id"):lines += ["", "备份：" + str(result["backup_id"])]
+    for backup in result.get("backups", []):
+        lines.append("  " + (str(backup.get("project", "")) + " · " + str(backup.get("backup_id", "")) if isinstance(backup, dict) else str(backup)))
+    if result.get("affected_projects"):
+        lines += ["", "受影响项目：", *["  " + preference_project_text(item) for item in result["affected_projects"]]]
+    if result.get("diagnostic"):lines += ["", str(result["diagnostic"])]
+    return "\n".join(lines)
+
+
 def operation_error(exc: Exception) -> str:
     """保留服务的安全冲突诊断和恢复提示，不把错误页误报为取消或完成。"""
     lines = [str(exc)]
@@ -206,15 +256,25 @@ class Layout:
     @property
     def workflow(self):return 4
     @property
-    def pane_title(self):return 5
+    def compact(self):return self.height<22 or self.width<80
     @property
-    def pane_subtitle(self):return 6
+    def workflow_actions(self):return 5 if self.compact else self.workflow
     @property
-    def project_start(self):return 7
+    def workflow_divider(self):return 6 if self.compact else 5
     @property
-    def role_header(self):return 7
+    def pane_title(self):return 7 if self.compact else 6
     @property
-    def role_start(self):return 8
+    def pane_subtitle(self):return self.pane_title if self.compact else 7
+    @property
+    def pane_divider(self):return None if self.compact else 8
+    @property
+    def global_entry(self):return 8 if self.compact else 9
+    @property
+    def project_start(self):return 9 if self.compact else 11
+    @property
+    def role_header(self):return 8 if self.compact else 9
+    @property
+    def role_start(self):return 9 if self.compact else 10
     @property
     def sidebar(self):return min(28,max(24,self.width//5))+2 if self.width>=110 else 24 if self.width>=80 else 0
     @property
@@ -263,7 +323,8 @@ def draw_divider(put, layout: Layout, y: int, attr: int, *, junction: int = 0, e
 @dataclass(frozen=True)
 class Theme:
     text: int = 0
-    muted: int = curses.A_DIM
+    # 辅助信息保持普通字重；终端无法局部缩字号，层级由短文案与留白表达。
+    muted: int = 0
     title: int = curses.A_BOLD
     focus: int = curses.A_BOLD
     selected: int = curses.A_REVERSE | curses.A_BOLD

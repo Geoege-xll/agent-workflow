@@ -17,7 +17,8 @@ import tomllib
 import uuid
 
 from lib.claude_instructions import read_file
-from lib import role_models, runtime_store
+from lib import role_models, role_preferences, runtime_store
+from lib.runtime_project import CONFIG, Node, Tree
 from .catalog import Catalog, clean, discover
 from . import runtime_service
 
@@ -364,6 +365,9 @@ def apply_project(plan: ProjectPlan, *, cancel=None) -> dict:
         raise ValueError("操作已取消，尚未应用项目计划")
     registration = plan.action in {"add", "del"}
     with ExitStack() as stack:
+        # 组合登记入口也先取偏好协调锁，再取 registry / install / central-state。
+        # 仅登记项目同样会改变全局计划的影响集合，不能绕过全局来源守卫。
+        stack.enter_context(role_preferences.coordination(plan.state))
         if registration:
             stack.enter_context(lock(plan.state, "registry"))
             if read_file(secure_path(plan.state, "projects.json")) != plan.registry_before:
@@ -471,14 +475,36 @@ class RestorePlan:
     project: Path
     changes: tuple[Change, ...]
     versions: tuple[dict, ...]
+    state: Path
+    global_before: Node
+    config_before: Node
+    unchanged_roles: tuple[tuple[str, Node], ...]
 
     def __iter__(self):return iter(self.changes)
     def __len__(self):return len(self.changes)
     def __getitem__(self,index):return self.changes[index]
 
-    def validate(self,project: Path) -> None:
+    def validate(self,project: Path, *, applied: bool = False) -> None:
         if project != self.project:raise ValueError("恢复计划不属于当前项目")
         _check_versions(project,self.versions)
+        # 原生备份只是物化产物，不能独立于逻辑来源恢复。确认前固定全局和项目
+        # 配置前像；验收后，配置若在恢复目标中则核对授权 after，否则仍核对原
+        # Node 身份，避免另一保存/换文件被当作原先已确认的来源。
+        if role_preferences.snapshot(self.state)[0] != self.global_before:
+            raise ValueError("全局角色偏好来源在恢复预览后变化，已停止恢复")
+        with Tree(project) as tree:
+            config = tree.read(CONFIG)
+        config_change = next((row for row in self.changes if row.relative == CONFIG), None)
+        if applied and config_change is not None:
+            unchanged = config.same_content(Node("file", config_change.after, config_change.mode))
+        else:
+            unchanged = config == self.config_before
+        if not unchanged:
+            raise ValueError("项目角色偏好来源在恢复预览后变化，已停止恢复")
+        with Tree(project) as tree:
+            for relative, before in self.unchanged_roles:
+                if tree.read(relative) != before:
+                    raise ValueError("项目未恢复角色在预览后变化，已停止恢复：" + relative)
 
 
 def _check_versions(project: Path,versions) -> None:
@@ -515,7 +541,8 @@ def _reserve_backup_capacity(record: dict,changes,project: Path,versions_relativ
 
 
 def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog, expected: dict | None = None,
-            *, state: Path | None = None) -> list[Change]:
+            *, state: Path | None = None, global_preferences: dict | None = None,
+            persist: bool = True) -> list[Change]:
     runtime = secure_path(project, ".agent-workflow")
     config_path = secure_path(project, ".agent-workflow/project.yaml")
     config = read_file(config_path)
@@ -523,15 +550,32 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
         raise ValueError("项目缺少工作流配置")
     try:
         all_choices = role_models.parse(config.decode())
+        original_choices = json.loads(json.dumps(all_choices))
     except (ValueError, UnicodeError) as exc:
         # 旧解析器的部分诊断携带不合法整行；管理入口不能把适配器中的秘密回显。
         raise ValueError("项目 role_models 配置无效，请先显式修复；未显示配置原文") from exc
     # 先经模型合同的安全错误出口解析适配器；随后验证当前中央归属。不存在旧
     # lib 文件探测或兼容升级分支，任意本地 helper 都不能替代本机有效绑定。
     validate_runtime(runtime, state=state)
+    defaults = role_preferences.snapshot(state_root(state))[1] if global_preferences is None else global_preferences
     changes = []
     for role, raw_value in sorted(choices.items()):
-        value = validate_selection(host, raw_value, catalog)
+        if not isinstance(raw_value,dict) or set(raw_value)-set(role_preferences.FIELDS):
+            raise ValueError("角色编辑只接受 model / effort 字段")
+        # 只修改传入字段；None 表示清除此范围的覆盖。全局批量物化 persist=False
+        # 时传入的完整有效值只用于原生补丁，绝不把它扩写进项目 role_models。
+        fields = dict(all_choices.get(host,{}).get(role,{}))
+        for field, selected in raw_value.items():
+            if selected is None:fields.pop(field,None)
+            else:fields[field]=selected
+        fields = role_models.explicit(host,fields)
+        if persist:
+            if fields:all_choices.setdefault(host,{})[role]=fields
+            else:all_choices.get(host,{}).pop(role,None)
+            value,_ = role_preferences.resolve(defaults,all_choices,host,role)
+        else:
+            value = role_models.validate(host,raw_value)
+        value = validate_selection(host,value,catalog)
         path = role_path(project, host, role)
         raw = read_file(path)
         if raw is None:
@@ -541,8 +585,8 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
         updated = role_models.patch_artifact(raw, host, value)
         if updated != raw:
             changes.append(Change(path.relative_to(project).as_posix(), raw, updated, stat.S_IMODE(path.stat().st_mode)))
-        all_choices.setdefault(host, {})[role] = value
-    updated_config = role_models.update(config.decode(), all_choices).encode()
+    updated_config = (role_models.update(config.decode(), all_choices).encode()
+                      if persist and all_choices != original_choices else config)
     if updated_config != config:
         changes.append(Change(".agent-workflow/project.yaml", config, updated_config, stat.S_IMODE(config_path.stat().st_mode)))
     return changes
@@ -575,7 +619,9 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
     """先备份再写入；失败只撤回仍等于本轮精确产物的文件，绝不覆盖并发修改。"""
     if not changes:
         return None
-    with lock(state, str(project)), ExitStack() as stack:
+    # restore 与旧直接调用也必须参与同一全局协调，不能在跨项目计划最后核查
+    # 后插入原生变更；外层偏好事务的同线程重入继续由原真实目录锁保护。
+    with role_preferences.coordination(state), lock(state, str(project)), ExitStack() as stack:
         if before_write:before_write()
         if isinstance(changes,RestorePlan):changes.validate(project)
         receipt = None
@@ -647,7 +693,7 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
                 verify()
             # 宿主验收期间旧编辑器也可能保存；在成功记录前检查保留版本。
             _check_versions(project,record["previous_files"])
-            if isinstance(changes,RestorePlan):changes.validate(project)
+            if isinstance(changes,RestorePlan):changes.validate(project,applied=True)
             record["status"]="applied"; save()
         except BaseException as failure:
             conflicts=[]
@@ -758,4 +804,56 @@ def prepare_restore(state: Path, project: Path, identifier: str) -> RestorePlan:
         if hashlib.sha256(restored).hexdigest() != row["before_sha"]:
             raise ValueError("备份内容指纹不一致")
         changes.append(Change(relative,raw,restored,row["mode"]))
-    return RestorePlan(project,tuple(changes),tuple(dict(row) for row in record["previous_files"]))
+    state = state_root(state)
+    global_before, defaults = role_preferences.snapshot(state)
+    with Tree(project) as tree:
+        config_before = tree.read(CONFIG)
+    if config_before.kind != "file":
+        raise ValueError("项目缺少有效角色偏好来源，不能恢复模型备份")
+    config_change = next((row for row in changes if row.relative == CONFIG), None)
+    if config_change is not None and not config_before.same_content(Node("file", config_change.before, config_change.mode)):
+        raise ValueError("项目配置在准备恢复期间变化，已停止恢复")
+    # 含适配器的项目备份以其拟恢复 after 为权威；仅 native 的全局物化备份
+    # 则必须继续服从当前项目覆盖和全局默认。不能为迁就旧产物擅自创建覆盖、
+    # 改全局，或只更新 expected 收据后把来源分歧伪报为合法恢复。
+    prospective = config_change.after if config_change is not None else config_before.payload
+    try:
+        choices = role_models.parse(prospective.decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("项目角色偏好来源无效，不能核对恢复；未显示配置原文") from exc
+    restored_roles = {}
+    for change in changes:
+        if change.relative == CONFIG:
+            continue
+        restored_roles[change.relative] = change.after
+    unchanged_roles = []
+    if config_change is not None:
+        # 项目覆盖变化有时不改变当时的有效值，因此其备份可能只有 CONFIG。
+        # 后续全局默认已变化时恢复该配置仍会影响现存角色：未列入备份的原生
+        # 文件也必须与 prospective 来源相符，且保留其前像，不能漏出第二条
+        # “只恢复配置、原生仍是另一有效值”的旁路。这里只读当前已安装角色。
+        with Tree(project) as tree:
+            for host in LOCATIONS:
+                for role in roles(project, host):
+                    relative = role_path(project, host, role).relative_to(project).as_posix()
+                    if relative not in restored_roles:
+                        current = tree.read(relative)
+                        restored_roles[relative] = current.payload
+                        unchanged_roles.append((relative,current))
+    for relative, after in restored_roles.items():
+        host = next(host for host, (directory, suffix) in LOCATIONS.items()
+                    if relative.startswith(directory + "/") and relative.endswith(suffix))
+        role = Path(relative).stem
+        try:
+            restored = native_settings(after, host)
+        except (ValueError, UnicodeError, TypeError, RecursionError) as exc:
+            raise ValueError("备份角色模型字段无效，已停止恢复；未显示角色正文") from exc
+        effective, _ = role_preferences.resolve(defaults, choices, host, role)
+        if restored != effective:
+            raise ValueError("备份角色模型与当前全局/项目偏好来源不一致，已停止恢复：" + host + "/" + role)
+    plan = RestorePlan(project,tuple(changes),tuple(dict(row) for row in record["previous_files"]),
+                       state,global_before,config_before,tuple(unchanged_roles))
+    # 解析/比对期间也可能出现外部编辑；返回弹层前再次核对刚才绑定的来源，
+    # 后续 commit 会在协调锁内和验收结束前分别复用同一份计划守卫。
+    plan.validate(project)
+    return plan

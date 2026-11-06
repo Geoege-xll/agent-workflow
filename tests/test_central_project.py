@@ -48,7 +48,7 @@ def make_alternate_source(root: Path) -> None:
         put(name, b"#!/bin/sh\nexit 0\n")
     for name in ("lib/platform_fs.py", "lib/runtime_store.py", "lib/runtime_project.py", "lib/runtime_bridge.py",
                  "lib/runtime_pins.py", "lib/standard_paths.py", "lib/claude_instructions.py", "lib/context_read.py",
-                 "lib/shared_core_skills.py", "lib/role_models.py", "lib/claude_options.py", "lib/validate_antigravity_artifacts.py",
+                 "lib/shared_core_skills.py", "lib/role_models.py", "lib/role_preferences.py", "lib/claude_options.py", "lib/validate_antigravity_artifacts.py",
                  "lib/python_runtime.sh", "lib/workflow_hook_install.py", "lib/workflow_hook_settings.py",
                  "lib/workflow_hooks.py", "lib/windows_hook_command.py", "lib/merge_codex_config.py", "manager/runtime_service.py", "manager/__init__.py",
                  "templates/project.yaml.example", "templates/docs/PROJECT.md",

@@ -318,3 +318,25 @@ details[open] > summary > .group-chevron { transform: rotate(45deg); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* 补齐 page.html 模板外壳中尚缺的规则；这些类未用于既有工作区产品样稿。
+   不覆盖上方 --workspace-* 候选产品 token，也不改变旧页的响应式画板。 */
+:root { --prototype-control-border: #7c8796; }
+@media (prefers-color-scheme: dark) { :root { --prototype-control-border: #8b9bad; } }
+.prototype-header { display: flex; align-items: flex-start; gap: 15px; margin-block-end: 22px; }
+.prototype-heading-copy { min-width: 0; flex: 1 1 auto; }
+.prototype-description { margin: 5px 0 0; color: var(--prototype-muted); font-size: 13px; overflow-wrap: anywhere; }
+.prototype-back-chevron { width: 9px; height: 9px; margin-inline-start: 4px; border-inline-start: 1.8px solid currentColor; border-block-end: 1.8px solid currentColor; transform: rotate(45deg); }
+.prototype-sidebar-toggle { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 7px; min-height: 44px; padding: 9px 11px; border: 1px solid var(--prototype-control-border); border-radius: 6px; background: var(--prototype-surface); color: var(--prototype-muted); font: inherit; font-size: 12px; white-space: nowrap; }
+.prototype-sidebar-toggle svg { width: 17px; height: 17px; }
+.prototype-sidebar-toggle:hover { background: var(--prototype-canvas-bg); }
+.prototype-sidebar-toggle:active { box-shadow: inset 0 0 0 1px currentColor; }
+.prototype-page-information { color: var(--prototype-muted); font-size: 12px; }
+.prototype-information-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; }
+.prototype-demo-note { margin: 8px 0 0; line-height: 1.8; overflow-wrap: anywhere; }
+.prototype-demo-note strong { margin-inline-end: 6px; font-weight: 550; }
+/* fixed 只用于明确声明尺寸的预览；空间不足时滚动画布，不缩小终端字符格。 */
+[data-prototype-display="fixed"] .prototype-stage { display: flex; padding: 24px; overflow: auto; }
+[data-prototype-display="fixed"] .prototype-frame { display: flex; flex-direction: column; flex: 0 0 auto; width: var(--prototype-frame-width); height: var(--prototype-frame-height); margin: auto; container-type: inline-size; contain: layout; overflow: hidden; }
+.prototype-stage:focus-visible, .prototype-sidebar-toggle:focus-visible { outline: 2px solid var(--prototype-focus); outline-offset: 3px; }
+@media (max-width: 680px) { .prototype-header { gap: 10px; } .prototype-sidebar-toggle { width: 44px; padding: 10px; } .prototype-sidebar-toggle > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } }

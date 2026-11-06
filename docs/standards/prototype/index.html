@@ -3,18 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>原型浏览工作区</title>
-  <link rel="stylesheet" href="prototype.css">
+  <title>原型工作区</title>
+  <link rel="stylesheet" href="workspace.css">
+  <script src="workspace.js" defer></script>
 </head>
-<body class="prototype-entry">
-  <!-- 页面登记仍只有此处；隐藏登记导航不会产生额外目录画面或不可见的键盘焦点项。 -->
-  <nav id="prototype-pages" class="prototype-page-list" aria-label="Prototype pages" hidden>
-    <details open>
-      <summary id="prototype-workflow-group">工作流工具</summary>
-      <a id="prototype-workspace-entry" href="prototype-workspace.html">原型浏览工作区</a>
-    </details>
-  </nav>
-  <!-- 当前只承载唯一已登记的本地独立页，不增加另一层侧栏、头部、脚本或重定向。 -->
-  <iframe id="prototype-preview" src="prototype-workspace.html" title="原型浏览工作区"></iframe>
+<body class="prototype-workspace">
+  <!-- 直接复用模板工作区；登记仍只来自下方普通相对链接，不维护第二份页面清单。 -->
+  <div id="prototype-workspace" class="workspace-layout">
+    <aside id="prototype-sidebar" class="workspace-sidebar" aria-label="页面侧栏">
+      <div class="workspace-brand"><span class="workspace-brand-icon" aria-hidden="true"></span><strong>原型工作区</strong></div>
+      <p class="workspace-sidebar-label">页面导航 <span id="prototype-page-count">0 页</span></p>
+      <nav id="prototype-pages" class="workspace-page-tree" aria-label="Prototype pages">
+        <details open>
+          <summary id="prototype-workflow-group">工作流工具</summary>
+          <a id="prototype-tui-entry" href="tui-workbench.html">工作台 · 头部管理条</a>
+          <a id="prototype-workspace-entry" href="prototype-workspace.html">原型浏览工作区</a>
+        </details>
+      </nav>
+    </aside>
+    <div class="workspace-view">
+      <button id="prototype-sidebar-toggle" class="workspace-sidebar-toggle" type="button" aria-controls="prototype-sidebar" aria-expanded="true" hidden>
+        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg>
+        <span id="prototype-sidebar-toggle-label">收起侧栏</span>
+      </button>
+      <!-- 初始化之前不加载文档；控制器仅以唯一登记表选择当前具体页。 -->
+      <iframe id="prototype-preview" title="当前原型页面" referrerpolicy="no-referrer" hidden></iframe>
+      <div id="prototype-empty" class="workspace-empty" role="status"><p>暂无原型页面</p><span>添加实际页面后，可在此分组浏览。</span></div>
+    </div>
+  </div>
+  <p id="prototype-workspace-status" class="workspace-visually-hidden" role="status" aria-live="polite"></p>
+  <noscript><p class="workspace-noscript">页面预览和侧栏开关需要本地 JavaScript；可通过左侧链接独立打开页面，原生分组仍可展开。</p></noscript>
 </body>
 </html>

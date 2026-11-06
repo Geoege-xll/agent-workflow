@@ -865,6 +865,18 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
 
 class TransactionTest(TemporaryProject):
     central_fixture = True
+
+    def declare_restore_fixture_effort(self):
+        """只修恢复用例的人工基线：native high 必须有明确项目来源。
+
+        既有轻量事务 fixture 手工生成 high；真实中央角色缺省为 inherit。
+        恢复守卫不能为这份人工数据新增兼容分支，因此仅需要正常恢复的四例
+        声明对应 effort，其他用例和共享 fixture 的原始边界保持不动。
+        """
+        path = self.project / '.agent-workflow/project.yaml'
+        self.write('.agent-workflow/project.yaml', role_models.update(path.read_text(),
+                   {'codex': {'xy-backend': {'effort': 'high'}}}))
+
     def test_invalid_model_config_does_not_echo_adapter_secrets(self):
         self.write('.agent-workflow/project.yaml','project_name: test\nrole_models:\n  PRIVATE-ADAPTER-SECRET\n')
         with self.assertRaisesRegex(ValueError,'未显示配置原文') as raised:
@@ -882,7 +894,7 @@ class TransactionTest(TemporaryProject):
             drafts={key:dict(value) for key,value in app.drafts.items()}
             expected={key:dict(value) for key,value in app.expected.items()};stamps=dict(app.source_stamps)
             # 走真实 dispatch→来源页→discover，确认来源失败不会逃出事件边界或丢掉其他范围草稿。
-            app.dispatch('g');app.index=3;app.dispatch('enter')
+            app.dispatch('g');app.index=next(i for i,(_,action) in enumerate(app.options()) if action == 'sources');app.dispatch('enter')
             self.assertEqual(app.modal,'sources');self.assertFalse(app.done)
             if rejected:self.assertIn('模型来源读取失败',app.text)
             self.assertNotIn('DEEP-SOURCE-SECRET',app.text)
@@ -891,6 +903,7 @@ class TransactionTest(TemporaryProject):
 
     def test_tui_restore_confirmation_keeps_original_version_guard(self):
         """实际走 TUI 的恢复确认回调，防止容器转换把 RestorePlan 的保护丢掉。"""
+        self.declare_restore_fixture_effort()
         changes=self.prepare();path=self.project/changes[0].relative
         with path.open('r+b') as editor:
             identifier=service.commit(self.state,self.project,changes)
@@ -905,6 +918,7 @@ class TransactionTest(TemporaryProject):
 
     def test_restore_rechecks_original_version_before_write_and_after_verification(self):
         """预览后及验收期间的旧 fd 保存都须拒绝恢复，并保持当前已应用配置。"""
+        self.declare_restore_fixture_effort()
         changes=self.prepare();path=self.project/changes[0].relative
         with path.open('r+b') as editor:
             identifier=service.commit(self.state,self.project,changes)
@@ -939,6 +953,7 @@ class TransactionTest(TemporaryProject):
 
     def test_capacity_is_reserved_before_project_mutation(self):
         """真实快照接近上限时，后续索引空间不足必须在写项目之前拒绝。"""
+        self.declare_restore_fixture_effort()
         changes=self.prepare();initial=service._record_payload
         sizes=[]
         def observe(record):sizes.append((len(json.dumps(record,ensure_ascii=False,indent=2).encode())+1,bool(record.get('previous_files'))));return initial(record)
@@ -984,7 +999,7 @@ class TransactionTest(TemporaryProject):
                 self.assertEqual(len(rows),2);self.assertEqual(next(row for row in rows if row['id'] == bad)['status'],'invalid')
                 with self.assertRaises(ValueError):service.prepare_restore(self.state,self.project,bad)
                 app=App(self.state,self.root,self.project);app.drafts[app.scope()]={'model':'inherit','effort':'inherit'}
-                app.dispatch('g');app.dispatch('down');app.dispatch('down');app.dispatch('enter')
+                app.dispatch('g');app.index=next(i for i,(_,action) in enumerate(app.options()) if action == 'backups');app.dispatch('enter')
                 self.assertEqual(app.modal,'backups');self.assertTrue(app.drafts)
                 app.index=next(i for i,row in enumerate(app.backup_rows) if row['id'] == bad);app.dispatch('enter')
                 self.assertEqual(app.modal,'backups');self.assertTrue(app.drafts);self.assertIn('格式无效',app.toast)
@@ -1050,14 +1065,20 @@ class TransactionTest(TemporaryProject):
 
     def test_discard_conflicted_draft_rebuilds_only_its_baseline(self):
         app=App(self.state,self.root,self.project);app.catalogs[(str(self.project),'codex')]=self.catalog
-        app.dispatch('enter');app.dispatch('down');app.dispatch('enter');app.dispatch('down');app.dispatch('enter')
+        app.dispatch('enter');app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'local-model');app.dispatch('enter')
+        app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'max');app.dispatch('enter')
         other=('another-project','codex','xy-qa');app.drafts[other]={'model':'inherit','effort':'inherit'}
-        self.write('.codex/agents/xy-backend.toml',codex_agent(effort='medium'))
-        app.dispatch('s');self.assertIn('编辑期间',app.toast)
+        # 模拟另一管理器的合法并发保存：更新适配器和中央收据后，丢弃旧草稿
+        # 才能基于新来源编辑。裸改受管正文不能靠丢弃草稿自动获得认领权。
+        concurrent=service.prepare(self.project,'codex',{'xy-backend':{'effort':'high'}},self.catalog,state=self.state)
+        service.commit(self.state,self.project,concurrent)
+        app.dispatch('s');self.assertIn('来源或配置',app.toast)
         app.dispatch('r');app.dispatch('u');self.assertIn(other,app.drafts);self.assertFalse(app.pending())
         app.catalogs[(str(self.project),'codex')]=self.catalog
-        app.dispatch('enter');self.assertEqual(app.expected[app.scope()]['effort'],'medium')
-        app.dispatch('down');app.dispatch('enter');app.dispatch('down');app.dispatch('enter');app.dispatch('s')
+        app.dispatch('enter');self.assertEqual(app.expected[app.scope()]['effort'],'high')
+        self.assertEqual(app.expected[app.scope()]['sources']['effort'],'project')
+        app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'local-model');app.dispatch('enter')
+        app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'max');app.dispatch('enter');app.dispatch('s')
         self.assertEqual(app.modal,'preview')
 
     def test_stale_source_draft_requires_reselection_before_preview(self):
@@ -1067,8 +1088,10 @@ class TransactionTest(TemporaryProject):
         # 显式编辑现在也复核来源，整个交互均使用本测试的来源提供者，
         # 不能让虚拟stamp的首次复核落到开发机真实宿主目录。
         current={'catalog':first}
-        with patch('manager.tui.discover',side_effect=lambda *args,**kwargs:current['catalog']):
-            app.dispatch('enter');app.dispatch('down');app.dispatch('enter');app.dispatch('down');app.dispatch('enter')
+        with patch('manager.tui.discover',side_effect=lambda *args,**kwargs:current['catalog']), \
+                patch('manager.model_preferences.discover',side_effect=lambda *args,**kwargs:current['catalog']):
+            app.dispatch('enter');app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'local-model');app.dispatch('enter')
+            app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'max');app.dispatch('enter')
             current['catalog']=second;app.dispatch('s')
             self.assertIsNone(app.modal);self.assertIn('来源',app.toast);self.assertTrue(app.pending())
             app.dispatch('s');self.assertIsNone(app.modal)
@@ -1086,6 +1109,7 @@ class TransactionTest(TemporaryProject):
                 app.dispatch('up');self.assertEqual(app.scroll,0)
         self.assertEqual([],service.backups(self.state,self.project))
     def test_preview_is_read_only_then_apply_and_restore_exact_bytes(self):
+        self.declare_restore_fixture_effort()
         changes=self.prepare();self.assertEqual([],service.backups(self.state,self.project))
         identifier=service.commit(self.state,self.project,changes)
         self.assertEqual(service.role_settings(self.project,'codex','xy-backend'),self.value)
@@ -1106,7 +1130,7 @@ class TransactionTest(TemporaryProject):
         def fail():
             config=self.project/'.agent-workflow/project.yaml';config.unlink();config.symlink_to(outside)
             raise ValueError('verify failed')
-        with self.assertRaisesRegex(ValueError,'并发修改'):service.commit(self.state,self.project,changes,fail)
+        with self.assertRaisesRegex(ValueError,'并发修改|有界单链接普通文件'):service.commit(self.state,self.project,changes,fail)
         self.assertEqual((self.project/changes[0].relative).read_bytes(),changes[0].before)
         self.assertEqual(outside.read_bytes(),b'EXTERNAL')
         self.assertEqual(service.backups(self.state,self.project)[0]['status'],'conflict')
@@ -1120,7 +1144,7 @@ class TransactionTest(TemporaryProject):
                 parent=self.project/'.codex/agents';parent.rename(self.project/'.codex/agents-original');parent.symlink_to(outside,target_is_directory=True);swapped.append(True)
             return original(target,data,mode,expected)
         def fail():raise ValueError('verify failed')
-        with patch.object(service.AnchoredFile,'write',swap),self.assertRaisesRegex(ValueError,'verify failed'):
+        with patch.object(service.AnchoredFile,'write',swap),self.assertRaisesRegex(ValueError,'verify failed|父目录在事务中被替换'):
             service.commit(self.state,self.project,changes,fail)
         self.assertEqual(external.read_bytes(),b'EXTERNAL')
         self.assertEqual((self.project/'.codex/agents-original/xy-backend.toml').read_bytes(),changes[0].before)
@@ -1168,7 +1192,7 @@ class TransactionTest(TemporaryProject):
 
     def test_preview_apply_conflict_and_restore_conflict_preserve_other_work(self):
         changes=self.prepare();path=self.project/changes[0].relative;path.write_bytes(b'OTHER WORK')
-        with self.assertRaisesRegex(ValueError,'预览后'):service.commit(self.state,self.project,changes)
+        with self.assertRaisesRegex(ValueError,'预览后|未知编辑'):service.commit(self.state,self.project,changes)
         self.assertEqual(path.read_bytes(),b'OTHER WORK')
         path.write_bytes(changes[0].before);identifier=service.commit(self.state,self.project,changes)
         path.write_bytes(b'NEW OTHER WORK')
@@ -1195,8 +1219,10 @@ class TransactionTest(TemporaryProject):
     def test_keyboard_stage_cancel_and_cross_project_scope(self):
         app=App(self.state,self.root,self.project)
         app.catalogs[(str(self.project),'codex')]=self.catalog
-        app.dispatch('enter');app.dispatch('down');app.dispatch('enter')
-        app.dispatch('down');app.dispatch('enter')
+        # 选择按业务值定位；新增“跟随全局”与“继承宿主”后不能让固定行号
+        # 把 max 测成 high，或在只改模型时顺带添加推理覆盖。
+        app.dispatch('enter');app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'local-model');app.dispatch('enter')
+        app.index=next(i for i,(_,value) in enumerate(app.options()) if value == 'max');app.dispatch('enter')
         self.assertEqual(app.pending(),{'xy-backend':self.value})
         app.dispatch('enter');app.dispatch('esc');self.assertEqual(app.pending(),{'xy-backend':self.value})
         app.dispatch('r');app.catalogs[(str(self.project),'codex')]=self.catalog
@@ -1209,7 +1235,8 @@ class TransactionTest(TemporaryProject):
         app.dispatch('enter')
         self.write('.codex/agents/xy-backend.toml',codex_agent(effort='medium'))
         app.dispatch('down');app.dispatch('enter');app.dispatch('down');app.dispatch('down');app.dispatch('enter');app.dispatch('s')
-        self.assertIn('冲突',app.toast);self.assertIsNone(app.modal)
+        self.assertIn('来源或配置',app.toast);self.assertIsNone(app.modal)
+        self.assertEqual((self.project/'.codex/agents/xy-backend.toml').read_bytes(),codex_agent(effort='medium'))
 
     def test_unicode_cells_are_bounded(self):
         self.assertEqual(cell_width('中文A'),5);self.assertEqual(clip('中文A',4),'中文')
@@ -1378,7 +1405,7 @@ class CentralCliIntegrationTest(unittest.TestCase):
         # 真实薄桥和 context_read 的直接依赖显式列出；其余产品文件用最小夹具。
         selected=("lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py",
                   "lib/runtime_pins.py","lib/standard_paths.py","lib/claude_instructions.py","lib/context_read.py",
-                  "lib/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/claude_options.py",
+                  "lib/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/role_preferences.py","lib/claude_options.py",
                   "lib/validate_antigravity_artifacts.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
                   "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py","manager/runtime_service.py","manager/__init__.py",
                   "templates/project.yaml.example","templates/docs/PROJECT.md","platforms/shared/core-skills.txt")

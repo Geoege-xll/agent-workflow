@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from .catalog import clean, discover
-from . import release, service
+from . import model_preferences, release, service
 
 
 class CommandParser(argparse.ArgumentParser):
@@ -66,8 +66,10 @@ def parser() -> argparse.ArgumentParser:
     model.add_argument("--platform",choices=service.LOCATIONS,required=True)
     model.add_argument("--project")
     output_options(model)
-    roles=commands.add_parser("roles",help="只读查看项目已安装角色的当前模型")
-    roles.add_argument("--project",required=True)
+    roles=commands.add_parser("roles",help="只读查看项目覆盖或全局角色默认及字段来源")
+    scope=roles.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--project")
+    scope.add_argument("--global",dest="global_scope",action="store_true",help="查看用户级工作流角色默认")
     roles.add_argument("--platform",choices=service.LOCATIONS,required=True)
     roles.add_argument("--effective",action="store_true",help="显示 Claude 具名角色的已知配置覆盖关系；不冒充运行时实测")
     output_options(roles)
@@ -77,11 +79,14 @@ def parser() -> argparse.ArgumentParser:
     doctor.add_argument("--probe",action="store_true",help="显式执行宿主 --version；不登录、不调用模型、不修改配置")
     output_options(doctor)
     change=commands.add_parser("set",help="预览或应用一个角色的模型设置")
-    change.add_argument("--project",required=True)
+    scope=change.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--project")
+    scope.add_argument("--global",dest="global_scope",action="store_true",help="编辑用户级工作流角色默认")
     change.add_argument("--platform",choices=service.LOCATIONS,required=True)
     change.add_argument("--role",required=True)
-    change.add_argument("--model",required=True)
-    change.add_argument("--effort",default="inherit")
+    change.add_argument("--model")
+    change.add_argument("--effort")
+    change.add_argument("--reset",choices=("model","effort","all"),help="清除对应范围覆盖；项目恢复跟随全局，全局恢复宿主")
     change.add_argument("--apply",action="store_true",help="确认先备份，再写入并检查目标平台")
     output_options(change)
     for name in ("check","backups","restore"):
@@ -178,13 +183,14 @@ def main(argv: list[str] | None = None) -> int:
             return run(state,scan,project)
         direct=project_command(args,state,scan)
         if direct is not None:return direct
-        project=service.project_path(args.project) if args.project else None
+        project=service.resolve_project(state,args.project) if args.project else None
         if args.command == "models":
             print(json.dumps(discover(args.platform,project=project).as_dict(),ensure_ascii=False,indent=2))
         elif args.command == "roles":
-            values={role:service.role_settings(project,args.platform,role) for role in service.roles(project,args.platform)}
+            values={role:model_preferences.view(state,project,args.platform,role)
+                    for role in model_preferences.roles(state,project,args.platform)}
             if args.effective:
-                if args.platform != "claude":raise ValueError("--effective 当前只解析 Claude 的具名非 fork 角色")
+                if args.platform != "claude" or project is None:raise ValueError("--effective 当前只解析项目 Claude 的具名非 fork 角色")
                 from .claude_execution import effective_role
                 from lib.claude_options import frontmatter_window
                 catalog=discover("claude",project=project)
@@ -192,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("Claude 配置来源读取失败，无法推导有效角色设置；请用 doctor 检查来源")
                 controls=catalog.execution["controls"]
                 # 诊断读取已安装原生角色；不将模型事务的可写范围扩展到窗口或权限字段。
-                values={role:effective_role(value,controls,frontmatter_window(service.read_file(service.role_path(project,"claude",role))))
+                values={role:effective_role(service.role_settings(project,"claude",role),controls,frontmatter_window(service.read_file(service.role_path(project,"claude",role))))
                         for role,value in values.items()}
             print(json.dumps(values,ensure_ascii=False,indent=2))
         elif args.command == "doctor":
@@ -200,19 +206,28 @@ def main(argv: list[str] | None = None) -> int:
             hosts=service.LOCATIONS if args.platform == "all" else (args.platform,)
             print(json.dumps([diagnose(host,project=project,probe=args.probe) for host in hosts],ensure_ascii=False,indent=2))
         elif args.command == "set":
-            catalog=discover(args.platform,project=project)
-            changes=service.prepare(project,args.platform,{args.role:{"model":args.model,"effort":args.effort}},catalog,state=state)
-            result={"project":str(project),"platform":args.platform,"role":args.role,"model":args.model,
-                    "effort":args.effort,"changed_paths":[row.relative for row in changes],"applied":False}
+            # CLI 只映射本次实际编辑字段；缺省参数不能暗中变成另一字段的 inherit
+            # 覆盖。reset 与同字段赋值互斥，跨字段的修改与恢复可在一次事务完成。
+            fields={field:getattr(args,field) for field in ("model","effort") if getattr(args,field) is not None}
+            resets=("model","effort") if args.reset == "all" else (args.reset,) if args.reset else ()
+            if set(fields)&set(resets):raise ValueError("同一字段不能同时赋值与 reset")
+            fields.update({field:None for field in resets})
+            if not fields:raise ValueError("set 至少需要 --model、--effort 或 --reset")
+            catalog=model_preferences.load_catalogs(state,project,args.platform)
+            plan=model_preferences.preview(state,project,args.platform,{args.role:fields},catalog)
+            # 保留既有 set 的 model/effort 结果字段；现在取计划解析后的有效值，
+            # 既不把缺省参数写成覆盖，也不让旧 JSON 消费者丢失原有字段。
+            result={**plan.summary,**plan.summary["values"][args.role],"role":args.role,"applied":False,
+                    "changed_paths":[row.relative for target in plan.targets for row in target.changes]}
+            identifier=None
             if args.apply:
-                identifier=service.commit(state,project,changes,lambda:service.check(project,args.platform,state=state),
-                                          before_write=lambda:service.ensure_source(catalog,project))
-                result.update(applied=True,backup_id=identifier)
+                result.update(model_preferences.apply(plan))
+                identifier=result["backup_id"]
             if json_mode:print_result("set",result,json_mode=True,dry_run=not args.apply)
             else:
-                print(f"项目：{clean(project)}\n平台：{args.platform}\n角色：{args.role}\n模型：{clean(args.model)}\n推理：{args.effort}")
-                print("变更文件："+", ".join(row.relative for row in changes))
-                print("已应用；"+service.backup_summary(project,identifier) if args.apply else "只读预览；添加 --apply 才会备份并写入。")
+                print(json.dumps(result,ensure_ascii=False,indent=2))
+                print(result.get("diagnostic","已应用。") if args.apply else "只读预览；添加 --apply 才会备份并写入。")
+            return 0 if plan.summary["can_apply"] else 2
         elif args.command == "check":
             result=service.check(project,state=state)
             if json_mode:print_result("check",{"project":str(project),"diagnostic":result},json_mode=True)
