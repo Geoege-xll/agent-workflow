@@ -1240,7 +1240,7 @@ class AddInstallTest(TemporaryProject):
             self.assertIn('登记',app.bindings()[0].label)
             app.dispatch('esc');apply.assert_not_called()
         self.assertFalse(self.state.exists())
-        app=App(self.state,self.root,self.project);app.dispatch('tab');app.dispatch('down')
+        app=App(self.state,self.root,self.project);app.dispatch('left');app.dispatch('down')
         self.assertIsNone(app.project);app.dispatch('enter');self.assertEqual(app.modal,'add')
 
     def test_dragged_path_registers_after_preview_and_keeps_other_drafts(self):

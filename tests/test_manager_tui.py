@@ -28,7 +28,7 @@ from lib import runtime_store
 from manager import service
 from manager.catalog import Catalog, Model
 from manager.tui import App, HOSTS, cell_width
-from manager.tui_support import TextInput, Theme, ellipsize, project_plan_text, status_text
+from manager.tui_support import Layout, TextInput, Theme, ellipsize, project_plan_text, status_text
 
 
 PACK=Path(__file__).resolve().parents[1]
@@ -54,7 +54,8 @@ class RecordingScreen:
         raise curses.error()
     def addstr(self,y,x,text,attr=0):
         assert 0<=y<self.height and 0<=x<self.width,(y,x,text)
-        assert x+cell_width(text)<self.width,(y,x,text)
+        # 允许真实右边框落在最后一列；光标的可达范围仍由 move 单独断言。
+        assert x+cell_width(text)<=self.width,(y,x,text)
         for char in text:
             size=cell_width(char)
             if not size:
@@ -115,9 +116,30 @@ class TuiTest(unittest.TestCase):
         self.screen=RecordingScreen(height,width);self.app.screen=self.screen
         with patch("manager.tui.curses.curs_set"):
             self.app.draw()
-        for y,x,width,_,_ in self.app.hits:
+        for y,x,hit_width,_,_ in self.app.hits:
             self.assertGreaterEqual(y,0);self.assertLess(y,height)
-            self.assertGreaterEqual(x,0);self.assertLessEqual(x+width,self.screen.width-1)
+            self.assertGreaterEqual(x,0);self.assertLessEqual(x+hit_width,self.screen.width-1)
+        if height>=16 and width>=55:
+            # 外框先绘制，任何后续文字、滚动条或高亮越界都会破坏这些格子。
+            self.assertEqual(self.screen.line(0),"┏"+"━"*(width-2)+"┓")
+            self.assertEqual(self.screen.line(height-1),"┗"+"━"*(width-2)+"┛")
+            for y in range(1,height-1):
+                self.assertIn(self.screen.cells[y][0],{"┃","┠"})
+                self.assertIn(self.screen.cells[y][-1],{"┃","┨"})
+            if self.app.cursor:
+                y,x=self.app.cursor
+                self.assertTrue(0<y<height-1 and 1<x<width-2,(y,x))
+            if self.app.modal:
+                layout=Layout(height,width)
+                self.assertEqual(self.screen.cells[layout.bottom][layout.modal_x],"┴")
+                self.assertEqual(self.screen.cells[layout.bottom][layout.modal_x+layout.modal_width-1],"┴")
+                for y in range(layout.modal_top+1,layout.bottom):
+                    self.assertIn(self.screen.cells[y][layout.modal_x],{"│","├"})
+                    self.assertIn(self.screen.cells[y][layout.modal_x+layout.modal_width-1],{"│","┤"})
+                for y,x,hit_width,_,_ in self.app.hits:
+                    self.assertGreater(y,layout.modal_top);self.assertLess(y,layout.bottom)
+                    self.assertGreater(x,layout.modal_x)
+                    self.assertLess(x+hit_width,layout.modal_x+layout.modal_width-1)
         return self.screen
 
     def test_render_size_and_modal_matrix(self):
@@ -128,6 +150,10 @@ class TuiTest(unittest.TestCase):
                     self.app.text=("长诊断 é 中文 "+"a"*180+"\n")*30
                     self.app.input="/长目录/"+"中文"*60;self.app.backup_rows=[]
                     self.draw(height,width)
+            if height>=16 and width>=55:
+                self.app.modal=None;self.app.future=Future()
+                self.draw(height,width);self.assertIn("执行中",self.screen.line(Layout(height,width).status))
+                self.app.future=None
 
     def test_only_focused_panel_has_strong_full_row_selection(self):
         screen=self.draw()
@@ -137,7 +163,7 @@ class TuiTest(unittest.TestCase):
         self.assertNotEqual(screen.attrs[y][x],self.app.theme.selected)
         y,x,width,_,_=role_hit
         self.assertTrue(all(attr==self.app.theme.selected for attr in screen.attrs[y][x:x+width]))
-        self.app.dispatch("tab");screen=self.draw()
+        self.app.dispatch("left");screen=self.draw()
         y,x,width,_,_=next(hit for hit in self.app.hits if hit[3]=="project")
         self.assertTrue(all(attr==self.app.theme.selected for attr in screen.attrs[y][x:x+width]))
 
@@ -202,6 +228,26 @@ class TuiTest(unittest.TestCase):
         with patch("manager.tui.service.roles",return_value=["xy-qa"]):
             self.app.dispatch("3");self.assertEqual(self.app.role,"xy-qa")
 
+    def test_platform_tab_cycle_preserves_project_pane_role_and_cross_scope_drafts(self):
+        self.app.role_index=1
+        self.app.roles_cache[(str(self.project),"claude")]=["xy-web","xy-qa"]
+        self.app.roles_cache[(str(self.project),"antigravity")]=["xy-qa","xy-web"]
+        for project in self.projects:
+            for host in HOSTS:
+                scope=(str(project),host,"xy-web")
+                self.app.drafts[scope]={"model":"inherit","effort":"high"}
+                self.app.expected[scope]={"model":"inherit","effort":"inherit"}
+                self.app.source_stamps[scope]="fixture-"+host
+        before=(dict(self.app.drafts),dict(self.app.expected),dict(self.app.source_stamps))
+        for pane in ("roles","projects"):
+            self.app.pane=pane
+            for key,host in (("tab","claude"),("tab","antigravity"),("tab","codex"),
+                             ("backtab","antigravity"),("backtab","claude"),("backtab","codex")):
+                self.app.dispatch(key)
+                self.assertEqual((self.app.host,self.app.pane,self.app.project,self.app.role),
+                                 (host,pane,self.project,"xy-web"))
+                self.assertEqual((self.app.drafts,self.app.expected,self.app.source_stamps),before)
+
     def test_catalog_scope_reuses_result_and_refresh_reloads_only_current_host(self):
         other=(str(self.project),"claude")
         self.app.catalogs[other]=Catalog("claude")
@@ -251,11 +297,19 @@ class TuiTest(unittest.TestCase):
         self.assertIn('待刷新',screen.line(first[0]+1))
         self.assertIn('──',screen.line(first[0]+2))
         self.assertFalse(any(hit[0]==first[0]+2 and hit[3]=='project' for hit in self.app.hits))
-        self.assertTrue(all(key in screen.line(2) for key in ('待刷新','[o]','[p]')))
+        self.assertTrue(all(key in screen.line(Layout(16,55).workflow) for key in ('待刷新','[o]','[p]')))
+        # 点击项目分隔和外边框不应更改选择，不能扩大条目命中范围来补偿新布局。
+        for y,x in ((first[0]+2,first[1]),(first[0],0),(Layout(16,55).bottom,first[1])):
+            self.screen.keys=[curses.KEY_MOUSE]
+            with patch('manager.tui.curses.getmouse',return_value=(0,x,y,0,curses.BUTTON1_CLICKED)):
+                self.app.read_input(self.screen)
+            self.assertEqual(self.app.project_index,0)
         self.app.dispatch('pagedown');self.assertGreater(self.app.project_index,0)
         self.app.dispatch('end');screen=self.draw(16,55)
         self.assertEqual(self.app.project_index,len(self.app.projects))
         # 仅当前视口的名称/状态行可以命中，鼠标不依赖项目条目的物理行号。
+        # 最小尺寸只容纳一项；先从末尾登记入口返回最后一个项目再检查详情行命中。
+        self.app.dispatch('up');self.draw(16,55)
         hit=next(hit for hit in self.app.hits if hit[3]=='project' and hit[4]<len(self.app.projects))
         y,x,width,_,index=hit;self.screen.keys=[curses.KEY_MOUSE]
         with patch('manager.tui.curses.getmouse',return_value=(0,x,y+1,0,curses.BUTTON1_CLICKED)):
@@ -312,6 +366,14 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch("enter");self.app.dispatch("/");self.type("qsug123?:op")
         self.assertEqual(self.app.modal,"model");self.assertFalse(self.app.done)
         self.assertEqual(self.app.search_input.text,"qsug123?:op")
+        self.app.dispatch("left");cursor=self.app.search_input.cursor
+        for key in ("tab","backtab"):self.app.dispatch(key)
+        self.assertEqual(self.app.search_input.cursor,cursor)
+        self.app.dispatch("right");self.assertEqual(self.app.search_input.cursor,len(self.app.search_input.text))
+        self.assertEqual((self.app.host,self.app.pane),("codex","roles"))
+        self.app.dispatch("esc")
+        for key in ("tab","backtab","left","right"):self.app.dispatch(key)
+        self.assertEqual((self.app.modal,self.app.host,self.app.pane),("model","codex","roles"))
 
     def test_path_editing_and_read_input_keys(self):
         self.app.dispatch("a");self.type("/tmp/项目")
@@ -322,6 +384,13 @@ class TuiTest(unittest.TestCase):
         self.assertEqual(self.app.input,"/xtmp/")
         self.app.dispatch("\x15");self.type("qsug123?:op")
         self.assertEqual(self.app.input,"qsug123?:op");self.assertEqual(self.app.modal,"add")
+        for modal in ("add","commands"):
+            self.app.modal=modal;self.app.input="中文路径"
+            self.app.dispatch("left");cursor=self.app.editor.cursor
+            for key in ("tab","backtab"):self.app.dispatch(key)
+            self.assertEqual(self.app.editor.cursor,cursor)
+            self.app.dispatch("right");self.assertEqual(self.app.editor.cursor,len(self.app.input))
+            self.assertEqual((self.app.modal,self.app.host,self.app.pane),(modal,"codex","roles"))
 
     def test_long_path_cursor_is_visible(self):
         self.app.dispatch("a");self.app.input="/prefix/"+"中文"*60+"/项目"
@@ -401,12 +470,17 @@ class TuiTest(unittest.TestCase):
             theme=Theme.create();self.assertNotEqual(theme.selected,theme.text)
         self.app.theme=theme;self.draw()
 
-    def test_independent_model_and_effort_modification_and_column_toggling(self):
+    def test_directional_panes_are_idempotent_and_model_effort_stay_independent(self):
         self.assertEqual(self.app.role_column,"model")
-        self.app.dispatch("right");self.assertEqual(self.app.role_column,"effort")
-        self.app.dispatch("enter");self.assertEqual(self.app.modal,"effort")
-        self.app.dispatch("esc");self.assertIsNone(self.app.modal)
-        self.app.dispatch("left");self.assertEqual(self.app.role_column,"model")
+        for _ in range(2):
+            self.app.dispatch("left");self.assertEqual(self.app.pane,"projects")
+        self.app.dispatch("down");self.assertEqual(self.app.project_index,1)
+        self.app.dispatch("up");self.assertEqual(self.app.project_index,0)
+        for _ in range(2):
+            self.app.dispatch("right");self.assertEqual(self.app.pane,"roles")
+        self.app.dispatch("down");self.assertEqual(self.app.role_index,1)
+        self.app.dispatch("up");self.assertEqual(self.app.role_index,0)
+        self.assertEqual(self.app.role_column,"model")
         self.app.dispatch("enter");self.assertEqual(self.app.modal,"model")
         self.app.dispatch("esc");self.assertIsNone(self.app.modal)
         self.app.dispatch("m");self.assertEqual(self.app.modal,"model")
@@ -417,6 +491,10 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch("enter");self.assertIsNone(self.app.modal)
         self.assertEqual(self.app.drafts[self.app.scope()]["effort"],val)
         self.assertEqual(self.app.drafts[self.app.scope()]["model"],"inherit")
+        self.app.role_column="effort"
+        for key in ("left","left","right","right"):self.app.dispatch(key)
+        self.assertEqual(self.app.role_column,"effort")
+        self.app.dispatch("enter");self.assertEqual(self.app.modal,"effort")
 
     def test_effort_options_selectable_levels_for_hosts(self):
         self.app.host_index=1;self.app.scratch={"model":"inherit","effort":"inherit"}
@@ -510,6 +588,9 @@ class TuiTest(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=1) as self.app.executor:
             self.app.start_job(operation,name="测试事务",cancellable=True)
             self.assertTrue(started.wait(2));future=self.app.future
+            host,pane=self.app.host,self.app.pane
+            for key in ("tab","backtab","left","right","2"):self.app.dispatch(key)
+            self.assertEqual((self.app.host,self.app.pane),(host,pane))
             self.app.dispatch("a");self.app.dispatch("enter");self.app.start_job(lambda:"不应执行")
             self.assertIs(self.app.future,future)
             self.app.interrupt();self.assertTrue(self.app.cancel_job.is_set());self.assertFalse(self.app.done)
@@ -534,7 +615,7 @@ class TuiTest(unittest.TestCase):
 class TerminalCells:
     """读取真实 PTY 的 curses 字节流，以字符格断言当前屏幕，不把历史文本冒充当前视图。
 
-    这里只实现本终端测试实际使用的光标、擦除和重复字符序列；属性序列被忽略，
+    这里只实现本终端测试实际使用的光标、擦除、滚动区和重复字符序列；属性序列被忽略，
     颜色/反色的语义由 RecordingScreen 补充验证。它不替代完整终端或屏幕阅读器。
     """
     def __init__(self,height=30,width=100):
@@ -543,7 +624,22 @@ class TerminalCells:
 
     def resize(self,height,width):
         self.height,self.width=height,width;self.row=self.col=0
+        self.scroll_top=0;self.scroll_bottom=height-1
         self.cells=[[" " for _ in range(width)] for _ in range(height)]
+
+    def scroll_up(self,count=1):
+        # ncurses 通过滚动区优化局部重绘，不能把它当成整屏清空。
+        # 只移动上下边界内的完整字符格行，保留框线及区域外正文；每个补行独立创建。
+        count=min(count,self.scroll_bottom-self.scroll_top+1)
+        self.cells[self.scroll_top:self.scroll_bottom+1]=(
+            self.cells[self.scroll_top+count:self.scroll_bottom+1]+
+            [[" "]*self.width for _ in range(count)])
+
+    def linefeed(self):
+        # LF 保持当前列；到滚动区底部时上滚区域，不能仅把光标夹在物理屏幕底部，
+        # 否则上一选择器的正文会残留，未来 visible() 也可能误认历史内容仍在当前帧。
+        if self.row == self.scroll_bottom:self.scroll_up()
+        else:self.row=min(self.height-1,self.row+1)
 
     def write_char(self,char):
         size=cell_width(char)
@@ -567,6 +663,14 @@ class TerminalCells:
         elif command == "d":self.row=n-1
         elif command == "E":self.row+=n;self.col=0
         elif command == "F":self.row-=n;self.col=0
+        elif command == "r":
+            top=(first or 1)-1
+            bottom=(values[1] if len(values)>1 and values[1] else self.height)-1
+            if 0<=top<bottom<self.height:
+                # DECSTBM 的缺省范围是整屏，成功设置边界后光标归位；
+                # 无效范围不改变当前区域，不能把终端参数当成任意列表切片。
+                self.scroll_top,self.scroll_bottom=top,bottom;self.row=self.col=0
+        elif command == "S":self.scroll_up(n)
         elif command == "J":
             if first in {2,3}:self.cells=[[" " for _ in range(self.width)] for _ in range(self.height)]
             elif first == 0:
@@ -603,11 +707,50 @@ class TerminalCells:
                 self.pending=self.pending[2:];continue
             self.pending=self.pending[1:]
             if char == "\r":self.col=0
-            elif char == "\n":self.row=min(self.height-1,self.row+1)
+            elif char == "\n":self.linefeed()
             elif char == "\b":self.col=max(0,self.col-1)
             elif char.isprintable():self.write_char(char)
 
     def text(self):return "\n".join("".join(row) for row in self.cells)
+
+
+class TerminalCellsTest(unittest.TestCase):
+    """直接覆盖真实流曾漏解的滚动语义，不启动额外项目或终端夹具。"""
+
+    def populated(self):
+        terminal=TerminalCells(6,12)
+        for row,text in enumerate(("页头","甲中文","乙","丙","旧正文","页脚"),1):
+            terminal.feed(f"\x1b[{row};1H{text}".encode())
+        return terminal
+
+    def test_scroll_region_csi_scroll_preserves_outside_and_cursor(self):
+        terminal=self.populated()
+        # CSI 可以跨 PTY 块到达，完整参数到达前不能提前改变区域。
+        terminal.feed(b"\x1b[2;");self.assertEqual((terminal.scroll_top,terminal.scroll_bottom),(0,5))
+        terminal.feed(b"5r");self.assertEqual((terminal.scroll_top,terminal.scroll_bottom,terminal.row,terminal.col),(1,4,0,0))
+        terminal.feed(b"\x1b[4;3H\x1b[2S")
+        self.assertEqual(["".join(row).rstrip() for row in terminal.cells],["页头","丙","旧正文","","","页脚"])
+        self.assertEqual((terminal.row,terminal.col),(3,2))
+        terminal.feed(b"\x1b[S\x1b[99S")
+        self.assertEqual(["".join(row).rstrip() for row in terminal.cells],["页头","","","","","页脚"])
+        self.assertNotIn("旧正文",terminal.text())
+        self.assertEqual((terminal.row,terminal.col),(3,2))
+        terminal.feed(b"\x1b[4;2r")
+        self.assertEqual((terminal.scroll_top,terminal.scroll_bottom),(1,4))
+        terminal.feed(b"\x1b[r")
+        self.assertEqual((terminal.scroll_top,terminal.scroll_bottom,terminal.row,terminal.col),(0,5,0,0))
+        terminal.resize(3,8);self.assertEqual((terminal.scroll_top,terminal.scroll_bottom),(0,2))
+
+    def test_bottom_linefeed_scrolls_region_and_keeps_column(self):
+        terminal=self.populated();terminal.feed(b"\x1b[2;5r\x1b[5;3H\n")
+        self.assertEqual(["".join(row).rstrip() for row in terminal.cells],["页头","乙","丙","旧正文","","页脚"])
+        self.assertEqual((terminal.row,terminal.col),(4,2))
+        terminal.feed(b"Z");self.assertEqual("".join(terminal.cells[4]).rstrip(),"  Z")
+        # 区域外的物理屏幕底部 LF 不滚动该区域；恢复整屏边界后才滚动整屏。
+        before=[list(row) for row in terminal.cells]
+        terminal.feed(b"\x1b[6;1H\n");self.assertEqual(terminal.cells,before)
+        terminal.feed(b"\x1b[r\x1b[6;1H\n")
+        self.assertEqual(["".join(row).rstrip() for row in terminal.cells],["乙","丙","旧正文","  Z","页脚",""])
 
 
 class ProjectTuiIntegrationTest(unittest.TestCase):
@@ -772,11 +915,20 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                 if process.poll() is not None:break
             self.fail(f"PTY 未到达 {description}；exit={process.poll()}\n当前字符格：\n{terminal.text()}\n原始输出末段：{bytes(raw[-2000:])!r}")
         def visible(text):wait_for(lambda:text in terminal.text(),text)
-        def view(title):wait_for(lambda:title in "".join(terminal.cells[2]),"视图标题 "+title)
+        def view(title):wait_for(lambda:title in "".join(terminal.cells[4]),"视图标题 "+title)
         def checkpoint(name):
             # ncurses一帧可能分多个PTY块到达；排空后再保存字符格，避免把新标题
             # 和上一帧“执行中”拼成最终结果。原始字节仍完整保留供独立复核。
             for _ in range(3):pump(.03)
+            if terminal.height>=16 and terminal.width>=55:
+                self.assertEqual(''.join(terminal.cells[0]),"┏"+"━"*(terminal.width-2)+"┓")
+                self.assertEqual(''.join(terminal.cells[-1]),"┗"+"━"*(terminal.width-2)+"┛")
+                for row in terminal.cells[1:-1]:
+                    self.assertIn(row[0],{"┃","┠"});self.assertIn(row[-1],{"┃","┨"})
+                layout=Layout(terminal.height,terminal.width)
+                if terminal.cells[layout.modal_top][layout.modal_x] == '╭':
+                    self.assertEqual(terminal.cells[layout.bottom][layout.modal_x],'┴')
+                    self.assertEqual(terminal.cells[layout.bottom][layout.modal_x+layout.modal_width-1],'┴')
             checkpoints.append(f'\n--- {name} ({terminal.height}x{terminal.width}) ---\n'+terminal.text()+'\n')
         def send(value):
             os.write(master,value.encode("utf-8"))
@@ -785,7 +937,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             while time.monotonic()<until:pump(min(0.02,max(0,until-time.monotonic())))
         def close_to_main():
             for _ in range(6):
-                if "╭" not in "".join(terminal.cells[2]):return
+                if "╭" not in "".join(terminal.cells[4]):return
                 send("\x1b")
             self.fail("PTY 无法返回主界面\n"+terminal.text())
         def choose_menu(label,expected):
@@ -793,9 +945,25 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             send("/"+label+"\r");send("\r");view(expected)
         try:
             visible("未管理")
+            checkpoint('主界面完整粗框与分区')
+            # 使用真实终端的 Tab/反向 Tab 和应用模式箭头验证路由，
+            # 选中平台用方括号、焦点用文字标记表达，单色也不依赖颜色判断。
+            for key,index,label in (("\t",2,"Claude Code"),("\t",3,"Antigravity"),("\t",1,"Codex"),
+                                    ("\x1b[Z",3,"Antigravity"),("\x1b[Z",2,"Claude Code"),("\x1b[Z",1,"Codex")):
+                send(key);visible(f'[{index} {label}]')
+            for _ in range(2):send('\x1bOD');visible('◈ 项目')
+            checkpoint('Tab双向循环平台与左箭头幂等项目焦点')
+            for _ in range(2):
+                send('\x1bOC')
+                wait_for(lambda:'◈ '+self.project.name in ''.join(terminal.cells[5]),'右箭头内容焦点')
+            send('?');view('快捷键帮助');checkpoint('帮助弹层粗框与返回提示');send('\x1b')
             # 首次登记只走预览并取消，验证项目/registry均无写入，且输入能逐层返回。
-            send("a");view("登记项目 · 输入目录");send(str(self.project)+"\r");view("选择登记方式")
+            send("a");view("登记项目 · 输入目录");send(str(self.project))
+            send('\x1bOD');send('\x1bOC');send('\t');send('\x1b[Z')
+            checkpoint('路径输入光标与平台区域隔离')
+            send("\r");view("选择登记方式")
             send("\r");view("项目管理 · 只读预览")
+            checkpoint('登记只读预览弹层')
             self.assertNotIn(str(self.project),service.registry(self.state)["registered"])
             self.assertEqual([],list(self.project.iterdir()))
             send("\x1b");view("选择登记方式");send("\x1b");view("登记项目 · 输入目录")
@@ -822,24 +990,38 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             view("模型配置备份");close_to_main()
             terminal.resize(16,55);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',16,55,0,0));os.kill(process.pid,signal.SIGWINCH)
             visible('[p]停用预览')
-            if '◈ 项目' not in ''.join(terminal.cells[3]):send('\t')
+            send('\x1bOD');visible('◈ 项目')
             send('/'+self.project.name[-8:]+'\r')
             visible('项目工作流 已启用');checkpoint('55x16项目筛选分隔和启停入口')
-            # 启用操作保留原触发面板，不能假定Tab总会进入角色；Enter明确打开项目。
+            # 启用操作保留原触发区域；Enter明确打开项目，Tab只切平台。
             send('\x1b');send('\r')
             terminal.resize(30,100);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0));os.kill(process.pid,signal.SIGWINCH)
             # Esc取消选择和保存预览都必须无写入；跨宿主返回保留当前范围草稿。
             target=self.project/'.codex/agents/xy-qa.toml';original=target.read_bytes()
-            send('m');view('选择模型');send('\x1b');self.assertEqual(original,target.read_bytes())
+            send('m');view('选择模型');checkpoint('模型选择弹层粗框与内部层次')
+            send('\t');send('\x1b[Z');send('\x1bOD');send('\x1bOC');view('选择模型')
+            send('\x1b');self.assertEqual(original,target.read_bytes())
             send('m');view('选择模型');send('/fixture-other\r');send('\r');view('选择推理级别')
             send('/max\r');send('\r');visible('已暂存，尚未保存')
             self.assertEqual(original,target.read_bytes());checkpoint('模型推理暂存未写入')
+            # 暂存返回主界面后，登记行应只包含登记入口和留白。
+            # 检查完整正文区域可发现滚动漏解，不能仅凭四边闭合或状态文字判定稳定帧正确。
+            layout=Layout(terminal.height,terminal.width)
+            registration=next(row for row in terminal.cells if '+ 登记项目' in ''.join(row))
+            self.assertEqual(''.join(registration[layout.left:layout.sidebar]).strip(),'+ 登记项目')
             send('s');view('保存预览');self.assertEqual(original,target.read_bytes())
             send('\x1b');visible('已取消保存预览');self.assertEqual(original,target.read_bytes())
-            send('2');visible('Claude Code');send('1');send('s');view('保存预览')
+            send('\t');visible('[2 Claude Code]');send('\x1b[Z');visible('[1 Codex]');send('s');view('保存预览')
             send('\r');view('操作结果');visible('已保存模型配置')
             self.assertEqual({'model':'fixture-other','effort':'max'},service.role_settings(self.project,'codex','xy-qa'))
-            checkpoint('模型保存服务验收成功');close_to_main();visible('已保存模型配置')
+            checkpoint('模型保存服务验收成功')
+            # 结果正文在项目路径与备份说明之间有一行留白，必须验证整行为空，
+            # 以免标题/成功状态已更新时，解析器仍把上一弹层残字当成当前结果。
+            layout=Layout(terminal.height,terminal.width)
+            backup_row=next(index for index,row in enumerate(terminal.cells) if '备份：' in ''.join(row))
+            self.assertEqual(''.join(terminal.cells[backup_row-1][layout.modal_inner_x:
+                             layout.modal_inner_x+layout.modal_inner_width]).strip(),'')
+            close_to_main();visible('已保存模型配置')
             send('m');view('选择模型');send('\r');view('选择推理级别');send('\r');visible('无改动')
             self.assertNotIn('已同步',''.join(terminal.cells[0]))
             saved=target.read_bytes()
@@ -869,7 +1051,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             terminal.resize(12,45);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack("HHHH",12,45,0,0));os.kill(process.pid,signal.SIGWINCH)
             visible("请调整至至少");send("q");process.wait(timeout=10)
             self.assertEqual(0,process.returncode)
-            print("真实 PTY 已验证：登记预览取消/确认、主界面启用/停用、模型/推理暂存与取消、跨宿主返回、真实保存/无改动/并发失败保留草稿、版本完整ID、三宿主详情、55×16项目筛选/分隔/启停入口、手改冲突、表单错误、12×45退出；exit=0")
+            print(f"真实 PTY 已验证：完整粗框/内部分区、Tab/Shift+Tab双向循环、左右幂等焦点、路径/选择弹层隔离、登记预览取消/确认、主界面启用/停用、模型/推理暂存与取消、跨平台草稿返回、真实保存/无改动/并发失败保留草稿、版本完整ID、三宿主详情、55×16项目筛选/分隔/启停入口、手改冲突、表单错误、12×45退出；pid={process.pid} exit=0")
         finally:
             if process.poll() is None:
                 # 仅回收本测试独占的短命夹具进程；正常路径必须q退出，此清理不作为取消能力证据。

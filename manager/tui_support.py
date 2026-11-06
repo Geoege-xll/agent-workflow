@@ -189,16 +189,75 @@ class Layout:
     height: int
     width: int
 
+    # 外框独占四周一格，文字再内缩一格；所有视图与命中区共用这些坐标，
+    # 不能在旧内容上覆盖边框，否则中文宽字符、输入光标和底部提示会相互挤占。
     @property
-    def sidebar(self):return min(28,max(24,self.width//5)) if self.width>=110 else 22 if self.width>=80 else 0
+    def left(self):return 2
     @property
-    def bottom(self):return self.height-4
+    def right(self):return self.width-3
+    @property
+    def span(self):return self.width-4
+    @property
+    def title(self):return 1
+    @property
+    def tabs(self):return 2
+    @property
+    def header_divider(self):return 3
+    @property
+    def workflow(self):return 4
+    @property
+    def pane_title(self):return 5
+    @property
+    def pane_subtitle(self):return 6
+    @property
+    def project_start(self):return 7
+    @property
+    def role_header(self):return 7
+    @property
+    def role_start(self):return 8
+    @property
+    def sidebar(self):return min(28,max(24,self.width//5))+2 if self.width>=110 else 24 if self.width>=80 else 0
+    @property
+    def bottom(self):return self.height-6
     @property
     def details(self):return 3 if self.height>=22 else 0
     @property
-    def status(self):return self.height-3
+    def list_bottom(self):return self.bottom-self.details
     @property
-    def hints(self):return self.height-2
+    def status(self):return self.height-5
+    @property
+    def status_divider(self):return self.height-4
+    @property
+    def hints(self):return self.height-3
+    @property
+    def modal_top(self):return self.workflow
+    @property
+    def modal_x(self):return max(self.left,(self.width-94)//2)
+    @property
+    def modal_width(self):return self.width-2*self.modal_x
+    @property
+    def modal_inner_x(self):return self.modal_x+2
+    @property
+    def modal_inner_width(self):return self.modal_width-4
+    @property
+    def modal_body(self):return self.modal_top+3
+    @property
+    def modal_list(self):return self.modal_top+4
+
+
+def draw_frame(put, layout: Layout, border_attr: int):
+    """粗外框只占预留字符格；细分隔通过轻横重竖接头连接外框。"""
+    put(0,0,"┏"+"━"*(layout.width-2)+"┓",layout.width,border_attr)
+    for row in range(1,layout.height-1):
+        put(row,0,"┃",1,border_attr)
+        put(row,layout.width-1,"┃",1,border_attr)
+    put(layout.height-1,0,"┗"+"━"*(layout.width-2)+"┛",layout.width,border_attr)
+
+
+def draw_divider(put, layout: Layout, y: int, attr: int, *, junction: int = 0, end: bool = False):
+    """只连接真实存在的面板分隔；状态和按键区使用同一条轻分隔。"""
+    put(y,0,"┠"+"─"*(layout.width-2)+"┨",layout.width,attr)
+    if junction:put(y,junction,"┴" if end else "┬",1,attr)
 
 
 @dataclass(frozen=True)

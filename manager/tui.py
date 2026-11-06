@@ -15,7 +15,7 @@ from lib import runtime_store
 from .catalog import Catalog, clean, discover
 from . import service
 from .tui_support import (Layout, TextInput, Theme, PROJECT_ACTION_LABELS, binding_id, cell_width, clip,
-                          draw_box, draw_scrollbar, ellipsize, operation_error, padded, project_badge,
+                          draw_box, draw_divider, draw_frame, draw_scrollbar, ellipsize, operation_error, padded, project_badge,
                           project_plan_text, project_result_text, project_state, status_text, wrapped)
 
 HOSTS=("codex","claude","antigravity")
@@ -73,7 +73,7 @@ class App:
         self.scratch=None;self.changes=[];self.backup_rows=[]
         self.project_rows={};self.project_plan=None;self.version_rows=[];self.add_target=None
         self.status_error="";self.on_job_result=None;self.job_frames=[]
-        self.toast="m 选择模型 · e 选择推理 · Enter 按列编辑 · s 保存预览";self.toast_kind="info"
+        self.toast="m 选择模型 · e 选择推理 · s 保存预览";self.toast_kind="info"
         self.done=False;self.future=None;self.after_job=None;self.show_job_result=True
         self.cancel_job=Event();self.job_cancellable=False;self.job_name="管理操作";self.job_started=0;self.job_return=None
         self.hits=[];self.screen=None;self.theme=Theme();self.cursor_visible=None
@@ -199,8 +199,8 @@ class App:
         role_binding=Binding("Enter","修改推理" if self.role_column == "effort" else "修改模型","confirm") if self.pane == "roles" else Binding("Enter","打开角色表","confirm")
         return [Binding("↑↓","选择项目" if self.pane == "projects" else "选择角色","move"),
                 Binding("Home/End","首项 / 末项","move"),Binding("PgUp/PgDn","翻页","move"),
-                Binding("Tab","切换项目 / 角色","pane"),Binding("Shift+Tab","反向切换","pane"),
-                *([Binding("←→","选列","column"),role_binding,Binding("m","修改模型","edit"),self.command("effort")] if self.pane == "roles" else [role_binding]),
+                Binding("Tab/Shift+Tab","下 / 上个平台","host"),Binding("←→","项目 / 内容","pane"),
+                *([role_binding,Binding("m","修改模型","edit"),self.command("effort")] if self.pane == "roles" else [role_binding]),
                 Binding("1/2/3","切换宿主","host"),Binding("/","搜索","search"),Binding(":","命令","commands"),
                 self.command("preview",f"保存预览 ({len(self.pending())})"),
                 *([self.command("discard")] if self.scope() in self.drafts else []),
@@ -538,18 +538,19 @@ class App:
             else:
                 delta=-self.page_lines if key == "pageup" else self.page_lines if key == "pagedown" else -1 if key == "up" else 1
                 self.scroll=max(0,self.scroll+delta)
-        elif action == "pane":self.pane="projects" if self.pane == "roles" else "roles";self.filter_text=""
+        elif action == "pane":
+            # 方向键设置目标区域，而不是反复切换；同方向重复输入不会跳回另一侧。
+            target="projects" if key == "left" else "roles"
+            if self.pane != target:self.pane=target;self.filter_text=""
         elif action == "host":
-            role=self.role;self.host_index=int(key)-1;rows=self.role_list()
+            # Tab 与数字/鼠标共用平台切换合同，保留项目、区域、角色身份和全部范围草稿。
+            role=self.role
+            self.host_index=(self.host_index+(-1 if key == "backtab" else 1))%len(HOSTS) if key in {"tab","backtab"} else int(key)-1
+            rows=self.role_list()
             self.role_index=rows.index(role) if role in rows else 0;self.filter_text=""
         elif action == "confirm":self.confirm()
         elif action == "edit":self.open_model()
         elif action == "effort":self.open_effort()
-        elif action == "column":
-            if self.pane == "roles":
-                if key == "left":self.role_column="model"
-                elif key == "right":self.role_column="effort"
-                else:self.role_column="effort" if self.role_column == "model" else "model"
         elif action == "manage":
             if not self.project:raise ValueError("请先按 a 添加项目")
             self.show_view("manage")
@@ -603,7 +604,7 @@ class App:
         elif action == "help":
             text="当前视图\n"+"\n".join(f"{row.key:12} {row.label}" for row in self.bindings())
             text+="\n\n主界面命令（: 可按名称搜索）\n"+"\n".join(f"{row.key or '命令面板':12} {row.label}" for row in COMMANDS)
-            text+="\n\n模型保存：m 选择模型，再 Enter 选择推理、Enter 暂存；e 可只改推理。\n角色表 Enter 按当前选中列编辑，左右键切换模型/推理列。\n已选择/已暂存均尚未保存；无改动不写入。按 s 查看保存预览，Enter 确认后才备份保存。\nEsc 取消选择或保存预览；已有草稿保留。失败/冲突保留草稿，核对诊断后重选或 u 丢弃。\n目录失败/来源变化后重新进入模型或推理编辑可重试；旧来源草稿须重新确认选择。\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认。\n鼠标单击只选中，Enter 确认。\na 输入目录后可选仅登记（默认）或登记并启用；所有写操作先预览，Esc 不写入。\n主界面 o 预览启用、p 预览停用选中项目；再次 Enter 确认。状态待刷新/冲突时以服务预览为准。\ng 管理中央版本、回退、检查、修复、三宿主详情和停用并解除登记。\n版本列表 i 查看完整 ID，Enter 只读预览；完整 ID 才是版本身份。\nCtrl+C 在执行前可请求取消，事务已经开始后等待结算；不会终止已运行任务。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
+            text+="\n\n主界面 Tab 下一平台，Shift+Tab 上一平台，首尾循环；1/2/3 和顶部点击也可切换。\n左箭头聚焦项目，右箭头聚焦右侧内容；重复同方向保持当前区域，上下选择。\n模型保存：m 选择模型，再 Enter 选择推理、Enter 暂存；e 可只改推理。\n角色表 Enter 按当前选中列编辑；鼠标可选模型/推理列，m/e 随时独立进入对应编辑。\n已选择/已暂存均尚未保存；无改动不写入。按 s 查看保存预览，Enter 确认后才备份保存。\nEsc 取消选择或保存预览；已有草稿保留。失败/冲突保留草稿，核对诊断后重选或 u 丢弃。\n目录失败/来源变化后重新进入模型或推理编辑可重试；旧来源草稿须重新确认选择。\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认；输入中的左右键移动光标。\n弹层和输入中的 Tab/左右不切换底层平台或区域。\n鼠标单击只选中，Enter 确认。\na 输入目录后可选仅登记（默认）或登记并启用；所有写操作先预览，Esc 不写入。\n主界面 o 预览启用、p 预览停用选中项目；再次 Enter 确认。状态待刷新/冲突时以服务预览为准。\ng 管理中央版本、回退、检查、修复、三宿主详情和停用并解除登记。\n版本列表 i 查看完整 ID，Enter 只读预览；完整 ID 才是版本身份。\nCtrl+C 在执行前可请求取消，事务已经开始后等待结算；不会终止已运行任务。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
             self.show_view("help");self.text=text
         elif action == "quit":self.quit()
         elif action == "search":
@@ -636,7 +637,7 @@ class App:
             return
         if self.searching and key not in {"enter","esc","up","down","pageup","pagedown"}:
             self.search_input.edit(key);self.sync_selection();return
-        groups={"↑↓":{"up","down"},"PgUp/PgDn":{"pageup","pagedown"},"Home/End":{"home","end"},"1/2/3":{"1","2","3"},"Shift+Tab":{"backtab"},"←→":{"left","right"}}
+        groups={"↑↓":{"up","down"},"PgUp/PgDn":{"pageup","pagedown"},"Home/End":{"home","end"},"1/2/3":{"1","2","3"},"Tab/Shift+Tab":{"tab","backtab"},"←→":{"left","right"}}
         for row in self.bindings():
             if key in groups.get(row.key,set()) or row.key.lower() == key:
                 try:self.act(row.action,key)
@@ -646,7 +647,9 @@ class App:
     def put(self,y,x,text,width=None,attr=0):
         h,w=self.screen.getmaxyx()
         if y<0 or y>=h or x<0 or x>=w:return
-        available=min(w-x-1,width if width is not None else w-x-1)
+        # 右边框必须能写入最后一列。ncurses 写入右下角后可能报告 ERR，
+        # 该格已绘制且未开启滚屏；沿用下面的异常边界，不让框架少一条边。
+        available=min(w-x,width if width is not None else w-x)
         if available<=0:return
         try:self.screen.addstr(y,x,clip(text,available),attr)
         except curses.error:pass
@@ -654,7 +657,7 @@ class App:
     def row(self,y,x,width,text,attr=0):self.put(y,x,padded(text,width),width,attr)
 
     def footer_lines(self,width):
-        priority=("confirm","effort","add-confirm","accept-search","search","commands","back","help","preview","pane","interrupt","wait")
+        priority=("host","pane","confirm","add-confirm","accept-search","commands","help","back","search","preview","effort","interrupt","wait")
         bindings=self.bindings();chosen=[]
         for action in priority:
             match=next((row for row in bindings if row.action == action),None)
@@ -685,17 +688,17 @@ class App:
         self.screen.refresh()
 
     def draw_projects(self,layout):
-        width=layout.sidebar-2 if layout.sidebar else layout.width-3;x=1
+        x=layout.left;width=layout.sidebar-x-2 if layout.sidebar else layout.span-2
         active=self.pane == "projects"
-        self.put(3,x,"◈ 项目" if active else "  项目",width,self.theme.focus if active else self.theme.title)
+        self.put(layout.pane_title,x,"◈ 项目" if active else "  项目",width,self.theme.focus if active else self.theme.title)
         query=self.search_input.text if self.searching and active else self.filter_text if active else ""
-        if self.searching and active:self.draw_input(4,x,width,self.search_input)
-        else:self.put(4,x,ellipsize("/ "+query if query else self.status_error or f"{len(self.projects)} 个本地项目",width),width,self.theme.warning if self.status_error else self.theme.muted)
-        end=layout.bottom-layout.details-(1 if query else 0)
+        if self.searching and active:self.draw_input(layout.pane_subtitle,x,width,self.search_input)
+        else:self.put(layout.pane_subtitle,x,ellipsize("/ "+query if query else self.status_error or f"{len(self.projects)} 个本地项目",width),width,self.theme.warning if self.status_error else self.theme.muted)
+        end=layout.list_bottom-(1 if query else 0)
         # 名称、状态/pin和分隔各占一行，单色和窄屏也能区分相邻项目。
         # 翻页、滚动条均按项目计数；分隔线不进入鼠标命中区，避免点击到相邻条目。
         row_height=3
-        available=max(1,(end-5)//row_height)
+        available=max(1,(end-layout.project_start)//row_height)
         rows=self.visible_rows("projects");selected=next((i for i,row in enumerate(rows) if row[0] == self.project_index),0)
         start=max(0,selected-available+1)
         if active:self.page_lines=available
@@ -705,7 +708,7 @@ class App:
             attr=self.theme.selected if active and is_sel else self.theme.inactive if is_sel else self.theme.text
             marker="▌ " if (active and is_sel) else "› " if is_sel else "  "
             dot="● " if pending else ""
-            y=5+offset*row_height
+            y=layout.project_start+offset*row_height
             display=self.projects[index].name if index<len(self.projects) else label
             self.row(y,x,width,marker+dot+display,attr)
             self.hits.append((y,x,width,"project",index))
@@ -713,26 +716,26 @@ class App:
             self.row(y+1,x,width,"  "+detail,attr)
             self.hits.append((y+1,x,width,"project",index))
             if y+2<end:self.put(y+2,x,"─"*width,width,self.theme.border)
-        if not rows:self.put(5,x,"无匹配 · Esc 清除",width,self.theme.warning)
+        if not rows:self.put(layout.project_start,x,"无匹配 · Esc 清除",width,self.theme.warning)
         if query:self.put(end,x,"+ 登记项目 · a",width,self.theme.focus)
         if len(rows)>available:
-            sb_x=layout.sidebar-1 if layout.sidebar else layout.width-2
-            draw_scrollbar(self.put,5,sb_x,available*row_height,len(rows),start,available,self.theme.border)
+            sb_x=layout.sidebar-1 if layout.sidebar else layout.right
+            draw_scrollbar(self.put,layout.project_start,sb_x,min(available*row_height,end-layout.project_start),len(rows),start,available,self.theme.border)
 
     def draw_roles(self,layout):
-        x=layout.sidebar+2 if layout.sidebar else 1;width=layout.width-x-2
+        x=layout.sidebar+2 if layout.sidebar else layout.left;width=layout.right-x-1
         active=self.pane == "roles"
         title=("◈ " if active else "  ")+(self.project.name if self.project else "未选择项目")+" · 角色模型"
-        self.put(3,x,ellipsize(title,width),width,self.theme.focus if active else self.theme.title)
-        if self.searching and active:self.draw_input(4,x,width,self.search_input)
+        self.put(layout.pane_title,x,ellipsize(title,width),width,self.theme.focus if active else self.theme.title)
+        if self.searching and active:self.draw_input(layout.pane_subtitle,x,width,self.search_input)
         else:
-            subtitle="/ "+self.filter_text if active and self.filter_text else f"{HOST_LABELS[self.host_index]} · {len(self.pending())} 项未保存"+(" · Tab 切换项目/角色" if not layout.sidebar else "")
-            self.put(4,x,ellipsize(subtitle,width),width,self.theme.muted)
+            subtitle="/ "+self.filter_text if active and self.filter_text else f"{HOST_LABELS[self.host_index]} · {len(self.pending())} 项未保存"+(" · ←项目 / →内容" if not layout.sidebar else "")
+            self.put(layout.pane_subtitle,x,ellipsize(subtitle,width),width,self.theme.muted)
         role_width=18 if width>=65 else 14;effort_width=10;model_width=max(5,width-role_width-effort_width-2)
         model_hdr="模型 [m]" if width>=55 else "模型"
         effort_hdr="推理 [e]" if width>=55 else "推理"
-        self.put(5,x,padded("角色",role_width)+" "+padded(model_hdr,model_width)+" "+padded(effort_hdr,effort_width),width,self.theme.title)
-        rows=self.visible_rows("roles");available=max(1,layout.bottom-layout.details-6)
+        self.put(layout.role_header,x,padded("角色",role_width)+" "+padded(model_hdr,model_width)+" "+padded(effort_hdr,effort_width),width,self.theme.title)
+        rows=self.visible_rows("roles");available=max(1,layout.list_bottom-layout.role_start)
         if active:self.page_lines=available
         selected=next((i for i,row in enumerate(rows) if row[0] == self.role_index),0);start=max(0,selected-available+1)
         if not rows:
@@ -741,7 +744,7 @@ class App:
             elif self.filter_text and active:hint="无匹配 · Esc 清除筛选"
             elif row and row["state"] in {"unmanaged","disabled"}:hint="工作流未启用 · o 预览启用"
             else:hint="没有已安装角色 · o 预览启用 / g 查看状态"
-            self.put(7,x,ellipsize(self.roles_errors.get((str(self.project),self.host),hint),width),width,self.theme.warning)
+            self.put(layout.role_start,x,ellipsize(self.roles_errors.get((str(self.project),self.host),hint),width),width,self.theme.warning)
         for offset,(index,label,role) in enumerate(rows[start:start+available]):
             try:value=self.current(role)
             except (OSError,ValueError):value={"model":"配置异常","effort":"?"}
@@ -751,56 +754,58 @@ class App:
             raw_model="继承" if value["model"] == "inherit" else value["model"];raw_effort="继承" if value["effort"] == "inherit" else value["effort"]
             disp_model=("▸" if active and is_sel and self.role_column == "model" else "")+raw_model
             disp_effort=("▸" if active and is_sel and self.role_column == "effort" else "")+raw_effort
-            self.row(6+offset,x,width,padded(prefix+label,role_width)+" "+padded(disp_model,model_width)+" "+padded(disp_effort,effort_width),attr)
-            self.hits.append((6+offset,x,width,"role",index))
+            self.row(layout.role_start+offset,x,width,padded(prefix+label,role_width)+" "+padded(disp_model,model_width)+" "+padded(disp_effort,effort_width),attr)
+            self.hits.append((layout.role_start+offset,x,width,"role",index))
         if len(rows)>available:
-            draw_scrollbar(self.put,6,layout.width-2,available,len(rows),start,available,self.theme.border)
+            draw_scrollbar(self.put,layout.role_start,layout.right,available,len(rows),start,available,self.theme.border)
 
     def draw_modal(self,layout):
         titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"保存预览","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板"}
         modal_title=titles.get(self.modal,self.modal)
-        x=max(1,(layout.width-92)//2);width=layout.width-2*x-1
-        box_h=layout.bottom-2+1
+        x=layout.modal_x;width=layout.modal_width
+        inner_x=layout.modal_inner_x;inner_w=layout.modal_inner_width
+        box_h=layout.bottom-layout.modal_top+1
         count=""
         if self.modal in LIST_MODALS:
             rows=self.visible_rows()
             selected=next((i for i,row in enumerate(rows) if row[0] == self.index),0)
             count=f" {selected+1 if rows else 0} / {len(rows)} "
         elif self.modal not in {"add"}:
-            lines=wrapped(self.text,width)
-            available=max(1,layout.bottom-6)
+            lines=wrapped(self.text,inner_w)
+            available=max(1,layout.bottom-layout.modal_body)
+            self.scroll=min(self.scroll,max(0,len(lines)-available))
             if len(lines)>available:
                 count=f" {self.scroll+1}–{min(len(lines),self.scroll+available)} / {len(lines)} "
 
         title_attr=self.theme.error if self.modal in {"error","quit"} else self.theme.focus
-        draw_box(self.put,2,x,box_h,width,title=modal_title,count=count,border_attr=self.theme.border,title_attr=title_attr,count_attr=self.theme.muted)
-
-        inner_pad=1 if width>=30 else 0
-        inner_x=x+inner_pad
-        inner_w=width-2*inner_pad
+        draw_box(self.put,layout.modal_top,x,box_h,width,title=modal_title,count=count,border_attr=self.theme.border,title_attr=title_attr,count_attr=self.theme.muted)
+        # 弹层底边并入全宽状态分隔，圆角在这一行会留下断口；
+        # 两端使用向上的 T 形接头，让弹层竖边与轻分隔连续相接。
+        self.put(layout.bottom,x,"┴",1,self.theme.border)
+        self.put(layout.bottom,x+width-1,"┴",1,self.theme.border)
 
         target=self.project_plan.project if self.modal == "project_plan" and self.project_plan else self.add_target if self.modal == "add_mode" else self.project
         sub_info=ellipsize(f"{target or '未选择项目'} / {HOST_LABELS[self.host_index]}",inner_w,tail=True)
-        self.put(3,inner_x,sub_info,inner_w,self.theme.muted)
-        self.put(4,inner_x,"─"*inner_w,inner_w,self.theme.border)
+        self.put(layout.modal_top+1,inner_x,sub_info,inner_w,self.theme.muted)
+        self.put(layout.modal_top+2,x,"├"+"─"*(width-2)+"┤",width,self.theme.border)
 
         if self.modal in LIST_MODALS:
-            if self.modal == "commands":self.draw_input(5,inner_x,inner_w,self.editor)
-            elif self.searching:self.draw_input(5,inner_x,inner_w,self.search_input)
-            else:self.put(5,inner_x,ellipsize("/ "+self.filter_text if self.filter_text else "↑↓ 选择 · / 搜索 · Enter 确认",inner_w),inner_w,self.theme.muted)
+            if self.modal == "commands":self.draw_input(layout.modal_body,inner_x,inner_w,self.editor)
+            elif self.searching:self.draw_input(layout.modal_body,inner_x,inner_w,self.search_input)
+            else:self.put(layout.modal_body,inner_x,ellipsize("/ "+self.filter_text if self.filter_text else "↑↓ 选择 · / 搜索 · Enter 确认",inner_w),inner_w,self.theme.muted)
             details=3 if self.modal == "model" and layout.details else 0
-            available=max(1,layout.bottom-details-6);self.page_lines=available
+            available=max(1,layout.bottom-details-layout.modal_list);self.page_lines=available
             rows=self.visible_rows();selected=next((i for i,row in enumerate(rows) if row[0] == self.index),0);start=max(0,selected-available+1)
             for offset,(index,label,_) in enumerate(rows[start:start+available]):
                 disabled=self.unavailable(COMMANDS[index].action) if self.modal == "commands" else self.unavailable(MANAGE[index][0]) if self.modal == "manage" else ""
                 is_sel=index == self.index
                 attr=self.theme.selected if is_sel else self.theme.muted if disabled else self.theme.text
                 marker="▌ " if is_sel else "  "
-                self.row(6+offset,inner_x,inner_w,marker+label,attr)
-                self.hits.append((6+offset,inner_x,inner_w,"option",index))
+                self.row(layout.modal_list+offset,inner_x,inner_w,marker+label,attr)
+                self.hits.append((layout.modal_list+offset,inner_x,inner_w,"option",index))
             if not rows:
                 empty="中央内容库尚无已导入版本 · Esc 返回" if self.modal == "versions" and not self.version_rows else "没有匹配项 · Esc 返回，或重新输入搜索"
-                self.put(6,inner_x,empty,inner_w,self.theme.warning)
+                self.put(layout.modal_list,inner_x,empty,inner_w,self.theme.warning)
             if details and rows:
                 model=next((row for row in self.catalog().models if row.id == self.options()[self.index][1]),None)
                 if model:
@@ -808,20 +813,21 @@ class App:
                     self.put(layout.bottom-2,inner_x,ellipsize("ID  "+model.id,inner_w),inner_w)
                     self.put(layout.bottom-1,inner_x,ellipsize("来源  "+model.source,inner_w),inner_w,self.theme.muted)
             if len(rows)>available:
-                draw_scrollbar(self.put,6,x+width-1,available,len(rows),start,available,self.theme.border)
+                draw_scrollbar(self.put,layout.modal_list,x+width-2,available,len(rows),start,available,self.theme.border)
         elif self.modal == "add":
-            self.put(5,inner_x,"输入或拖入现有项目根目录，再选择登记方式。",inner_w)
-            self.put(6,inner_x,"项目目录",inner_w,self.theme.muted);self.draw_input(7,inner_x,inner_w,self.editor)
-            self.put(9,inner_x,"默认仅登记；所有操作先预览，确认后才写入。",inner_w,self.theme.muted)
-            if self.toast_kind == "error":self.put(10,inner_x,ellipsize("! "+self.toast,inner_w),inner_w,self.theme.error)
+            self.put(layout.modal_body,inner_x,"项目目录 · 输入或拖入现有根目录",inner_w,self.theme.muted)
+            self.draw_input(layout.modal_body+1,inner_x,inner_w,self.editor)
+            self.put(layout.modal_body+2,inner_x,"默认仅登记；先预览，确认后才写入。",inner_w,self.theme.muted)
+            if self.toast_kind == "error" and layout.modal_body+3<layout.bottom:
+                self.put(layout.modal_body+3,inner_x,ellipsize("! "+self.toast,inner_w),inner_w,self.theme.error)
         else:
-            lines=wrapped(self.text,inner_w);available=max(1,layout.bottom-6);self.page_lines=available
+            lines=wrapped(self.text,inner_w);available=max(1,layout.bottom-layout.modal_body);self.page_lines=available
             self.scroll=min(self.scroll,max(0,len(lines)-available))
             for offset,line in enumerate(lines[self.scroll:self.scroll+available]):
                 attr=self.theme.error if self.modal == "error" else self.theme.warning if self.modal == "quit" else self.theme.text
-                self.put(6+offset,inner_x,line,inner_w,attr)
+                self.put(layout.modal_body+offset,inner_x,line,inner_w,attr)
             if len(lines)>available:
-                draw_scrollbar(self.put,6,x+width-1,available,len(lines),self.scroll,available,self.theme.border)
+                draw_scrollbar(self.put,layout.modal_body,x+width-2,available,len(lines),self.scroll,available,self.theme.border)
 
     def draw(self):
         self.screen.erase();self.hits=[];self.cursor=None;h,w=self.screen.getmaxyx();layout=Layout(h,w)
@@ -834,51 +840,55 @@ class App:
             elif self.future:self.put(0,0,"任务仍在执行，请等待");self.put(2,0,self.toast)
             else:self.put(0,0,"请调整至至少 55 列 × 16 行");self.put(2,0,"q 安全退出；草稿仍保留")
             self.finish_draw();return
+        draw_frame(self.put,layout,self.theme.title)
         # 空草稿只能说明没有待保存编辑，不能代替服务验收或宣称配置已经同步。
         count=f"● {len(self.drafts)} 项未保存" if self.drafts else "无待保存草稿"
-        self.put(0,1,"◈ awf-cli │ 角色模型",max(1,w-cell_width(count)-4),self.theme.title)
-        self.put(0,w-cell_width(count)-2,count,cell_width(count),self.theme.warning if self.drafts else self.theme.muted)
-        x=1
+        self.put(layout.title,layout.left,"◈ awf-cli │ 角色模型",max(1,layout.span-cell_width(count)-2),self.theme.title)
+        self.put(layout.title,layout.right-cell_width(count)+1,count,cell_width(count),self.theme.warning if self.drafts else self.theme.muted)
+        x=layout.left
         for i,label in enumerate(HOST_LABELS):
             active=i == self.host_index
             text=f" [{i+1} {label}] " if active else f"  {i+1} {label}  "
             attr=self.theme.tab_active if active else self.theme.tab_inactive
-            self.put(1,x,text,cell_width(text),attr)
-            if not self.modal:self.hits.append((1,x,cell_width(text),"host",i))
+            self.put(layout.tabs,x,text,cell_width(text),attr)
+            if not self.modal:self.hits.append((layout.tabs,x,cell_width(text),"host",i))
             x+=cell_width(text)+1
-        if self.modal:self.put(2,1,"─"*(w-3),w-3,self.theme.border)
-        else:
+        draw_divider(self.put,layout,layout.header_divider,self.theme.border,
+                     junction=layout.sidebar if not self.modal else 0)
+        # 弹层底边与内容/状态分区共享这一行，先画分区再画弹层，
+        # 由弹层绘制自身接头与边；正文始终止于该行之前，不覆盖边界。
+        draw_divider(self.put,layout,layout.bottom,self.theme.border,
+                     junction=layout.sidebar if not self.modal and not layout.details else 0,end=True)
+        if not self.modal:
             # 固定两个只读预览入口，不根据可能过期/未知的缓存状态猜测执行动作。
             # 即使窄屏收起侧栏和详情，当前项目状态与启停按键仍始终可见。
             state=project_state(self.project_rows.get(str(self.project))) if self.project else "未选择项目"
-            self.put(2,1,ellipsize(f"项目工作流 {state} · [o]启用预览 [p]停用预览",w-3),w-3,self.theme.focus)
+            if layout.sidebar:
+                self.put(layout.workflow,layout.left,ellipsize(f"项目工作流 {state}",layout.sidebar-layout.left-2),layout.sidebar-layout.left-2,self.theme.focus)
+                self.put(layout.workflow,layout.sidebar+2,"[o]启用预览  [p]停用预览",layout.right-layout.sidebar-1,self.theme.focus)
+            else:self.put(layout.workflow,layout.left,ellipsize(f"项目工作流 {state} · [o]启用预览 [p]停用预览",layout.span),layout.span,self.theme.focus)
         if self.modal:self.draw_modal(layout)
         else:
             if layout.sidebar or self.pane == "projects":self.draw_projects(layout)
             if layout.sidebar:
-                for row in range(3,layout.bottom-layout.details):self.put(row,layout.sidebar,"│",1,self.theme.border)
+                for row in range(layout.workflow,layout.list_bottom):self.put(row,layout.sidebar,"│",1,self.theme.border)
             if layout.sidebar or self.pane == "roles":self.draw_roles(layout)
             if layout.details:
-                self.put(layout.bottom-3,1,"─"*(w-3),w-3,self.theme.border)
-                if layout.sidebar:
-                    self.put(layout.bottom-3,layout.sidebar,"┴",1,self.theme.border)
-                self.put(layout.bottom-2,1,ellipsize(str(self.project or "选择项目，或按 a 登记项目"),w-3,tail=True),w-3,self.theme.muted)
+                draw_divider(self.put,layout,layout.list_bottom,self.theme.border,junction=layout.sidebar,end=True)
+                self.put(layout.bottom-2,layout.left,ellipsize(str(self.project or "选择项目，或按 a 登记项目"),layout.span,tail=True),layout.span,self.theme.muted)
                 if self.role:
                     try:
                         value=self.current(self.role);detail=f'{self.role}  ·  {value["model"]} / {value["effort"]}'
                     except (OSError,ValueError):detail="角色配置异常，请检查本地文件"
-                    self.put(layout.bottom-1,1,ellipsize(detail,w-3),w-3)
-        if not self.modal:
-            self.put(layout.bottom,1,"─"*(w-3),w-3,self.theme.border)
-            if layout.sidebar and not layout.details:
-                self.put(layout.bottom,layout.sidebar,"┴",1,self.theme.border)
+                    self.put(layout.bottom-1,layout.left,ellipsize(detail,layout.span),layout.span)
         status=self.toast;kind=self.toast_kind
         if self.future:
             elapsed=max(0,int(time.monotonic()-self.job_started));spinner="|/-\\"[(elapsed*3)%4]
             status=f"{spinner} {self.job_name} · {elapsed}s · "+("已请求取消，等待真实结果与必要恢复" if self.cancel_job.is_set() else "执行中");kind="warning"
         prefix={"error":"✖ ","warning":"▲ ","success":"✔ ","info":"● "}.get(kind,"· ")
-        self.put(layout.status,1,ellipsize(prefix+status,w-3),w-3,getattr(self.theme,kind,self.theme.text))
-        for offset,line in enumerate(self.footer_lines(w-3)):self.put(layout.hints+offset,1,line,w-3,self.theme.focus)
+        self.put(layout.status,layout.left,ellipsize(prefix+status,layout.span),layout.span,getattr(self.theme,kind,self.theme.text))
+        draw_divider(self.put,layout,layout.status_divider,self.theme.border)
+        for offset,line in enumerate(self.footer_lines(layout.span)):self.put(layout.hints+offset,layout.left,line,layout.span,self.theme.focus)
         self.finish_draw()
 
     def loop(self,screen):
@@ -912,7 +922,7 @@ class App:
                         if self.pane != pane:self.filter_text=""
                         self.pane=pane;self.select(index)
                         if kind == "role":
-                            self.role_column="effort" if x>=col+width-12 else "model"
+                            self.role_column="effort" if x>=col+width-10 else "model"
                     else:self.index=index
                     break
             return
