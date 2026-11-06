@@ -1871,13 +1871,14 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
             "superpowers:finishing-a-development-branch",
             "superpowers:code-reviewer",
         )
+        # 现用规则以工作流、角色和宿主模板为准；历史执行计划只记录实施过程。
+        # 已完成计划由 Git 历史保留，清理旧计划不应影响现用规则的禁用短语检查。
         active_sources = LIGHTWEIGHT_SKILL_POLICY_SOURCES + (
             "roles/xy-qa.md",
             "platforms/shared/AGENTS.product.tpl",
             "platforms/claude/AGENTS.claude.tpl",
             "platforms/codex/AGENTS.codex.tpl",
             "platforms/antigravity/AGENTS.antigravity.tpl",
-            "docs/plans/2026-08-12-portable-role-convergence-auto-discovery.md",
         )
         for relative in active_sources:
             text = self._text(relative)
