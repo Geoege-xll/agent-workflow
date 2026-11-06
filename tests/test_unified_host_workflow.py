@@ -3129,6 +3129,74 @@ class ProjectClassificationContractTest(unittest.TestCase):
             (module.root, module.primary_role) for module in profile.modules
         )
 
+    def test_wechat_miniprogram_requires_config_manifest_and_entry(self) -> None:
+        files = {
+            "client/package.json": '{"devDependencies":{"typescript":"5"}}',
+            "client/project.config.json": '{"compileType":"miniprogram","miniprogramRoot":"miniprogram/"}',
+            "client/miniprogram/app.json": '{}',
+            "client/miniprogram/app.ts": 'App({});',
+        }
+        module = self._discover_files(files).modules[0]
+        self.assertEqual(("client", "xy-web"), (module.root, module.primary_role))
+        self.assertIn("platform:wechat-miniprogram", module.stack_facts)
+        self.assertIn("language:typescript", module.stack_facts)
+        self.assertEqual(set(files), set(module.evidence_paths))
+
+        # 不完整示例、普通 TS 包及越界入口都不能冒充原生小程序。
+        for missing in files:
+            with self.subTest(missing=missing):
+                self.assertEqual((), self._discover_files(
+                    {path: body for path, body in files.items() if path != missing}
+                ).modules)
+        for config in (
+            '{"compileType":"plugin","miniprogramRoot":"miniprogram/"}',
+            '{"compileType":"miniprogram","miniprogramRoot":"../outside"}',
+            '{"compileType":"miniprogram","miniprogramRoot":"/outside"}',
+        ):
+            with self.subTest(config=config):
+                self.assertEqual((), self._discover_files(
+                    dict(files, **{"client/project.config.json": config})
+                ).modules)
+        root_app = {
+            "package.json": '{}', "project.config.json": '{"compileType":"miniprogram"}',
+            "app.json": '{}', "app.js": 'App({});',
+        }
+        js_profile = self._discover_files(root_app)
+        self.assertEqual(((".", "xy-web"),), self._module_pairs(js_profile))
+        self.assertIn("language:javascript", js_profile.modules[0].stack_facts)
+        # 生成的 JS 与 TS 源码并存时，应保留两个入口证据并识别源语言。
+        both = self._discover_files(dict(root_app, **{"app.ts": "App({});"})).modules[0]
+        self.assertIn("language:typescript", both.stack_facts)
+        self.assertNotIn("language:javascript", both.stack_facts)
+        self.assertIn("app.js", both.evidence_paths)
+        self.assertIn("app.ts", both.evidence_paths)
+
+    def test_optional_same_name_config_does_not_break_other_projects(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="project-optional-config-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name) / "project"
+        root.mkdir()
+        (root / "package.json").write_text(
+            '{"dependencies":{"react":"19"}}', encoding="utf-8"
+        )
+        (root / "app.json").write_text('{}', encoding="utf-8")
+        (root / "app.js").write_text('App({});', encoding="utf-8")
+        config = root / "project.config.json"
+        # 同名文件即使存在原生入口，也不能让损坏或超限配置中断普通画像。
+        for body in ("{invalid", " " * (1024 * 1024 + 1)):
+            with self.subTest(kind="malformed" if body[0] == "{" else "oversized"):
+                config.write_text(body, encoding="utf-8")
+                module = discover_project(root).modules[0]
+                self.assertEqual((".", "xy-web"), (module.root, module.primary_role))
+                self.assertNotIn("platform:wechat-miniprogram", module.stack_facts)
+        config.unlink()
+        outside = Path(temporary.name) / "outside.json"
+        outside.write_text('{"compileType":"miniprogram"}', encoding="utf-8")
+        config.symlink_to(outside)
+        # 即使链接目标恰为有效小程序配置，也不得跟随它或据此分类。
+        module = discover_project(root).modules[0]
+        self.assertNotIn("platform:wechat-miniprogram", module.stack_facts)
+
     def test_browser_node_and_tooling_packages_require_positive_runtime_evidence(
         self,
     ) -> None:
@@ -3836,6 +3904,27 @@ class ProjectVerificationCommandContractTest(unittest.TestCase):
         return tuple(
             (command.purpose, command.argv, command.evidence_paths)
             for command in module.verification_commands
+        )
+
+    def test_miniprogram_commands_use_real_scripts_at_module_root(self) -> None:
+        files = {
+            "client/package.json": '{"scripts":{"typecheck":"tsc --noEmit","build":"tsc","test":"node --test"}}',
+            "client/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+            "client/project.config.json": '{"compileType":"miniprogram","miniprogramRoot":"miniprogram/"}',
+            "client/miniprogram/app.json": '{}',
+            "client/miniprogram/app.ts": 'App({});',
+        }
+        profile = self._discover_files(files)
+        self.assertEqual("client", profile.modules[0].root)
+        self.assertEqual(
+            {("pnpm", "run", "typecheck"), ("pnpm", "run", "build"), ("pnpm", "run", "test")},
+            {argv for _, argv, _ in self._commands(profile, "client")},
+        )
+        # 缺少脚本时仍可识别应用，但不得凭常见约定编造验证命令。
+        files["client/package.json"] = '{"scripts":{"test":"node --test","build":""}}'
+        self.assertEqual(
+            {("pnpm", "run", "test")},
+            {argv for _, argv, _ in self._commands(self._discover_files(files), "client")},
         )
 
     def test_kotlin_jvm_and_maven_same_module_with_inactive_negatives(self):

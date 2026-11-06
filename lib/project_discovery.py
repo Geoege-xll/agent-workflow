@@ -86,6 +86,7 @@ IGNORED_DIRECTORY_NAMES = frozenset(
 JSON_MANIFESTS = frozenset(
     {
         "package.json",
+        "project.config.json",
         "composer.json",
         "openapi.json",
         "tauri.conf.json",
@@ -939,13 +940,18 @@ class _Scanner:
             except OSError as exc:
                 raise DiscoveryError(f"cannot inspect repository entry {relative}: {exc}") from exc
 
-            candidate = _is_candidate_name(name, parent_parts)
+            # project.config.json 也可能是其他工具的同名文件。只有与包清单
+            # 同目录的普通文件才可提供小程序线索，不能改变其他清单的严格合同。
+            optional_mini_config = name == "project.config.json"
+            candidate = _is_candidate_name(name, parent_parts) and (
+                not optional_mini_config or "package.json" in names
+            )
             if stat.S_ISLNK(info.st_mode):
-                if candidate:
+                if candidate and not optional_mini_config:
                     raise DiscoveryError(f"candidate manifest must not be a symlink: {relative}")
                 continue
             if stat.S_ISDIR(info.st_mode):
-                if candidate:
+                if candidate and not optional_mini_config:
                     raise DiscoveryError(
                         f"candidate manifest must be a real regular file: {relative}"
                     )
@@ -984,6 +990,10 @@ class _Scanner:
             if stat.S_ISREG(info.st_mode):
                 self.regular_paths.add(relative)
                 if candidate:
+                    # 超限的可选配置不是可信证据，也不读取其内容；真实小程序
+                    # 只能在配置、清单和入口都安全可用时被识别。
+                    if optional_mini_config and info.st_size > MAX_MANIFEST_SIZE:
+                        continue
                     self.candidate_count += 1
                     if self.candidate_count > MAX_CANDIDATE_MANIFESTS:
                         raise DiscoveryError(
@@ -999,11 +1009,15 @@ class _Scanner:
                     body = _read_regular_at(
                         directory_fd, name, relative, info
                     )
-                    self.candidates.append(
-                        _Candidate(relative, _parse_candidate(relative, body))
-                    )
+                    try:
+                        parsed = _parse_candidate(relative, body)
+                    except DiscoveryError:
+                        if optional_mini_config:
+                            continue
+                        raise
+                    self.candidates.append(_Candidate(relative, parsed))
                 continue
-            if candidate:
+            if candidate and not optional_mini_config:
                 raise DiscoveryError(
                     f"candidate manifest must be a real regular file: {relative}"
                 )
@@ -1637,6 +1651,39 @@ def _classify(
         name = path.name
         root = _parent(candidate.path)
         if name == "package.json":
+            config = by_path.get(_join(root, "project.config.json"))
+            if config is not None and config.parsed.get("compileType") == "miniprogram":
+                # 配置中的入口目录是不可信的项目输入，只允许模块内的相对路径；
+                # 文件必须是扫描器已确认的普通文件，不能借符号链接越出工作区。
+                configured_root = config.parsed.get("miniprogramRoot", ".")
+                try:
+                    mini_root = _normalize_relative(
+                        configured_root, "miniprogramRoot", allow_root=True
+                    )
+                except DiscoveryError:
+                    mini_root = None
+                if mini_root is not None:
+                    app_root = root if mini_root == "." else _join(root, mini_root)
+                    manifest = _join(app_root, "app.json")
+                    entries = tuple(
+                        _join(app_root, filename) for filename in ("app.js", "app.ts")
+                        if _join(app_root, filename) in regular_paths
+                    )
+                    # 仅依赖描述文字或 TypeScript 依赖不足以证明原生应用；
+                    # 应用清单和实际入口同时存在时才产生模块画像。
+                    if manifest in regular_paths and entries:
+                        # TypeScript 源码可能与编译生成的 JavaScript 入口并存；
+                        # 只要存在 TS 入口，就按源语言标识而非取首个文件。
+                        language = (
+                            "language:typescript"
+                            if any(entry.endswith(".ts") for entry in entries)
+                            else "language:javascript"
+                        )
+                        add_classification(
+                            root, "xy-web", (candidate.path, config.path, manifest, *entries),
+                            ("platform:wechat-miniprogram", language),
+                            collapse_into_desktop=True,
+                        )
             dependencies = _package_dependencies(
                 candidate.parsed, RUNTIME_PACKAGE_DEPENDENCY_SECTIONS
             )
