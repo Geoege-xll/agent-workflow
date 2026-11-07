@@ -9,7 +9,7 @@ import uuid
 
 from lib import runtime_store as store
 from lib.central.runtime_project import json_bytes
-from manager import runtime_lifecycle as lifecycle, runtime_service as projects
+from manager import central_runtime as central, runtime_lifecycle as lifecycle, runtime_service as projects
 from manager.runtime_state import read_state
 from tests.test_central_runtime import RuntimeFixture
 
@@ -80,6 +80,16 @@ class RuntimeLifecycleTest(RuntimeFixture, unittest.TestCase):
         self.assertTrue(store.load_core(self.alternate.binding(), self.state))
 
     def test_explicit_archive_inventory_drift_and_interruption_resume(self):
+        empty_state = self.workspace / ("empty-lifecycle-status-" + uuid.uuid4().hex)
+        empty = lifecycle.status(empty_state)
+        self.assertEqual({"schema_version", "state_dir", "transaction_id", "phase", "pending", "can_recover", "conflicts", "counts"}, set(empty))
+        self.assertEqual("none", empty["phase"])
+        self.assertIsNone(empty["transaction_id"])
+        self.assertFalse(empty["pending"])
+        self.assertFalse(empty["can_recover"])
+        self.assertEqual([], empty["conflicts"])
+        self.assertTrue(all(count == 0 for count in empty["counts"].values()))
+        self.assertFalse(empty_state.exists())
         root = self.workspace / ".sync-backups" / ("old-" + uuid.uuid4().hex)
         root.mkdir(parents=True)
         (root / "old.txt").write_bytes(b"unique historical bytes")
@@ -93,6 +103,21 @@ class RuntimeLifecycleTest(RuntimeFixture, unittest.TestCase):
             lifecycle.apply(plan)
         self.assertTrue((root / "old.txt").exists())
         self.assertTrue((root / "later.txt").exists())
+        legacy = json.loads((self.state / lifecycle.RELATIVE).read_bytes())
+        legacy["conflicts"][0].pop("code")
+        legacy["conflicts"][0]["raw_preimage"] = {"body": "PRIVATE-PREIMAGE-MUST-NOT-LEAK"}
+        (self.state / lifecycle.RELATIVE).write_bytes(json_bytes(legacy))
+        before_status = read_state(self.state, lifecycle.RELATIVE)
+        conflicted = lifecycle.status(self.state)
+        self.assertEqual("conflict", conflicted["phase"])
+        self.assertTrue(conflicted["pending"])
+        self.assertTrue(conflicted["can_recover"])
+        self.assertEqual("lifecycle_conflict", conflicted["conflicts"][0]["code"])
+        self.assertEqual({"code", "path", "reason"}, set(conflicted["conflicts"][0]))
+        self.assertNotIn("PRIVATE-PREIMAGE-MUST-NOT-LEAK", json.dumps(conflicted))
+        self.assertFalse(central.status(self.state)["management_write_allowed"])
+        self.assertTrue(central.status(self.state)["new_task_allowed"])
+        self.assertEqual(before_status, read_state(self.state, lifecycle.RELATIVE))
         # 失败计划必须先结算；此例用另一精确归档验证真实删除中断，不把未知
         # 新文件移走或认领为原授权快照。旧冲突资料仍留在本例独占state中。
         (self.state / lifecycle.RELATIVE).unlink()
@@ -105,9 +130,28 @@ class RuntimeLifecycleTest(RuntimeFixture, unittest.TestCase):
         with patch.object(lifecycle, "_delete_snapshot", side_effect=interrupted), self.assertRaises(KeyboardInterrupt):
             lifecycle.apply(plan)
         self.assertEqual("prepared", json.loads((self.state / lifecycle.RELATIVE).read_bytes())["phase"])
+        before_status = read_state(self.state, lifecycle.RELATIVE)
+        interrupted_status = lifecycle.status(self.state)
+        self.assertEqual("prepared", interrupted_status["phase"])
+        self.assertTrue(interrupted_status["pending"])
+        self.assertTrue(interrupted_status["can_recover"])
+        self.assertEqual(1, interrupted_status["counts"]["archives_total"])
+        self.assertEqual(0, interrupted_status["counts"]["archives_done"])
+        central_status = central.status(self.state)
+        self.assertEqual(interrupted_status, central_status["lifecycle"])
+        self.assertFalse(central_status["management_write_allowed"])
+        self.assertTrue(central_status["new_task_allowed"])
+        self.assertEqual(before_status, read_state(self.state, lifecycle.RELATIVE))
         with self.assertRaisesRegex(ValueError, "生命周期事务尚未结算"):
             projects.preview(self.state, self.project, "enable", binding=self.core.binding())
         lifecycle.recover(self.state)
+        settled = lifecycle.status(self.state)
+        self.assertEqual("applied", settled["phase"])
+        self.assertFalse(settled["pending"])
+        self.assertFalse(settled["can_recover"])
+        self.assertEqual(interrupted_status["transaction_id"], settled["transaction_id"])
+        self.assertEqual(1, settled["counts"]["archives_done"])
+        self.assertTrue(central.status(self.state)["management_write_allowed"])
         self.assertFalse(other.exists())
         self.assertTrue(newer.exists())
         self.assertTrue(root.exists())

@@ -111,9 +111,11 @@ def _registered(state: Path, raw: bytes | None) -> tuple[Path, ...]:
 
 
 def status(state: Path) -> dict:
+    from . import runtime_lifecycle
     state = store.state_root(state)
     _, current = policy.current_snapshot(state)
     pending = policy.pending(state)
+    lifecycle = runtime_lifecycle.status(state)
     if current:
         store.load_core(current["runtime_binding"], state)
     return {"schema_version": 1, "state_dir": str(state),
@@ -121,8 +123,11 @@ def status(state: Path) -> dict:
             "previous_binding": current["previous_binding"] if current else None,
             "generation": current["generation"] if current else None,
             "pending_activation": {"id": pending["id"], "phase": pending["phase"]} if pending else None,
+            "lifecycle": lifecycle,
             "new_task_allowed": pending is None and current is not None,
-            "management_write_allowed": pending is None}
+            # 清理的固定引用前像必须先恢复再允许管理写；当前资源/任务读取
+            # 不因cleanup一概禁用，仍沿既有activation及项目自身准入边界。
+            "management_write_allowed": pending is None and not lifecycle["pending"]}
 
 
 def preview(state: Path, action: str = "activate", *, binding: dict | None = None,
