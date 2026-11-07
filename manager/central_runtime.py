@@ -48,9 +48,28 @@ class CentralPlan:
         for capture in self.captures:
             item = capture.runtime_plan.summary if capture.runtime_plan else None
             conflicts.extend(item["conflicts"] if item else [])
+            # 处置是本次提案的固定事实，不能为了绘制预览再调用status或读取
+            # 可变policy/current。原始机器前像已经在preview中完成完整codec；
+            # 这里只解码快照并返回独立pin，避免展示消费者改写计划内部目标。
+            record = unique_json(capture.binding_before.payload) if capture.binding_before.kind == "file" else None
+            captured_policy = unique_json(capture.policy_before.payload) if capture.policy_before.kind == "file" else None
+            declared_enabled = bool(record and record["enabled"])
+            effective = captured_policy["runtime_binding"] if capture.mode == "pinned" else self.binding
+            if item is not None:
+                disposition, reason = "apply", "已启用且跟随中央版本，本次应用目标版本"
+            elif record is None:
+                disposition, reason = "not_enabled", "项目尚无本机绑定，本次不启用；首次启用采用有效策略版本"
+            elif capture.mode == "pinned":
+                disposition, reason = "skipped_pinned", "项目已锁版，保留既定版本并跳过本次中央激活"
+            else:
+                disposition, reason = "on_enable", "项目已停用且跟随中央版本，保持停用，下次启用采用目标版本"
             rows.append({"project": str(capture.project), "policy": capture.mode,
-                         "affected": item is not None, "runtime": item})
-        return {"schema_version": 1, "action": self.action, "runtime_binding": self.binding,
+                         "affected": item is not None, "runtime": item,
+                         "declared_enabled": declared_enabled,
+                         "applied_binding": record["runtime_binding"] if record else None,
+                         "effective_after": store.validate_binding(effective),
+                         "disposition": disposition, "reason": reason})
+        return {"schema_version": 1, "action": self.action, "runtime_binding": store.validate_binding(self.binding),
                 "previous_binding": unique_json(self.current_before.payload)["runtime_binding"] if self.current_before.kind == "file" else None,
                 "projects": rows, "native": native, "conflicts": conflicts,
                 "can_apply": not conflicts and native.get("can_apply", True)}
