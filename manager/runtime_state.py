@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
+import stat
 import uuid
 
 from lib import runtime_store as store
@@ -223,7 +224,7 @@ def read_journal(state: Path, project: Path) -> tuple[Node, dict | None]:
     return snapshot, None if snapshot.kind == "missing" else _decode(snapshot, project, "transactions")
 
 
-def retained_conflicts(tree: Tree, records: list[dict]) -> list[dict]:
+def retained_conflicts(tree: Tree, records: list[dict], *, typed: bool = False) -> list[dict]:
     try:
         validate_retained(records)
     except (ValueError, TypeError, KeyError) as exc:
@@ -249,7 +250,12 @@ def retained_conflicts(tree: Tree, records: list[dict]) -> list[dict]:
             reason = "保留的旧 inode 身份已变化"
         else:
             continue
-        conflicts.append({"path": item["path"], "reason": reason})
+        # 消费者必须根据稳定类型判断影响层级；中文诊断只供展示，不能作为
+        # 新任务许可或管理写许可的分支条件。历史缺失不会破坏当前有效资源。
+        issue = {"path": item["path"], "reason": reason}
+        if typed:
+            issue.update(code="history_missing" if node.kind == "missing" else "history_modified", layer="history")
+        conflicts.append(issue)
     return conflicts
 
 
@@ -282,6 +288,39 @@ def write_private(tree: Tree, relative: str, body: bytes, *, expected: Node | No
         _decode(Node("file", body, 0o600), project, kind)
     except (ValueError, TypeError, KeyError) as exc:
         raise ActivationError("待发布中央私有记录无效") from exc
+    _publish_private(tree, relative, body, expected=expected)
+
+
+def write_control(tree: Tree, relative: str, body: bytes, *, expected: Node) -> None:
+    """发布中央旁路记录；业务 codec 在调用前校验，基础边界限定私有命名空间。
+
+    current、策略、全局事务及生命周期记录不能进入封闭 binding 或任务 pin。
+    路径白名单阻止业务层把这个安全发布原语用作任意项目文件写入器；全部
+    调用都必须显式给出前像，不能把发布时重新读取的外部保存自动认作授权。
+    """
+    relative_path(relative)
+    allowed = relative in {"central/current.json", "central/activation.json", "central/lifecycle.json"}
+    allowed = allowed or bool(re.fullmatch(r"policies/[0-9a-f]{64}\.json", relative))
+    if not allowed or not isinstance(expected, Node):
+        raise ActivationError("中央旁路记录路径或前像无效")
+    raw = unique_json(body)
+    if not isinstance(raw, dict) or type(raw.get("schema_version")) is not int or raw["schema_version"] != 1:
+        raise ActivationError("中央旁路记录结构无效")
+    namespace = relative.split("/", 1)[0]
+    root_descriptor = tree.directories[""]
+    try:
+        os.mkdir(namespace, 0o700, dir_fd=root_descriptor)
+        os.fsync(root_descriptor)
+    except FileExistsError:
+        pass
+    descriptor = tree.directory(namespace)
+    if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o700:
+        raise ActivationError("中央旁路记录目录必须保持私有 0700 权限")
+    _publish_private(tree, relative, body, expected=expected)
+
+
+def _publish_private(tree: Tree, relative: str, body: bytes, *, expected: Node | None) -> None:
+    """在固定父目录上执行同一套见证、前像比较和 inode 保全发布。"""
     parent, name = tree.parent(relative, create=True)
     _check_marker(parent, name, relative)
     before = read_at(parent, name)

@@ -1,0 +1,344 @@
+"""中央版本激活的持久协调者；项目事务仍由 runtime_service 独占。
+
+登记表、策略和原始前像共同固定一次影响集合。prepared 先封闭新任务入口，
+子事务按预分配 ID 结算，current 最后 CAS；恢复依靠原 inode 条件补偿，
+不会借用“切换前次版”覆盖后续用户修改，也不宣称跨文件系统原子性。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import uuid
+
+from lib import runtime_store as store
+from lib.central.runtime_project import Node, Tree, canonical_project, json_bytes, unique_json
+from lib.hosts.claude_instructions import read_file
+from . import runtime_policy as policy, runtime_service as projects, state_files
+from .runtime_state import ActivationError, read_state, write_control
+
+
+@dataclass(frozen=True)
+class ProjectCapture:
+    project: Path
+    policy_before: Node
+    binding_before: Node
+    journal_before: Node
+    runtime_plan: projects.ActivationPlan | None
+    mode: str
+
+
+@dataclass(frozen=True)
+class CentralPlan:
+    state: Path
+    action: str
+    binding: dict
+    current_before: Node
+    activation_before: Node
+    registry_before: bytes | None
+    captures: tuple[ProjectCapture, ...]
+    native_plan: object
+    native_context: object
+
+    @property
+    def summary(self) -> dict:
+        native = self.native_plan.summary
+        conflicts = list(native.get("conflicts", []))
+        rows = []
+        for capture in self.captures:
+            item = capture.runtime_plan.summary if capture.runtime_plan else None
+            conflicts.extend(item["conflicts"] if item else [])
+            rows.append({"project": str(capture.project), "policy": capture.mode,
+                         "affected": item is not None, "runtime": item})
+        return {"schema_version": 1, "action": self.action, "runtime_binding": self.binding,
+                "previous_binding": unique_json(self.current_before.payload)["runtime_binding"] if self.current_before.kind == "file" else None,
+                "projects": rows, "native": native, "conflicts": conflicts,
+                "can_apply": not conflicts and native.get("can_apply", True)}
+
+
+@dataclass(frozen=True)
+class RecoveryPlan:
+    state: Path
+    before: Node
+    record: dict
+    native_context: object
+
+    @property
+    def summary(self) -> dict:
+        _, current = policy.current_snapshot(self.state)
+        published = bool(current and current["generation"] == self.record["id"])
+        return {"schema_version": 1, "action": "recover", "transaction_id": self.record["id"],
+                "phase": self.record["phase"], "current_published": published,
+                "recovery": "complete" if published else "compensate", "can_apply": True}
+
+
+def _native_context(state: Path, context):
+    if context is not None:
+        return context
+    from lib.hosts.native_context import NativeContext
+    return NativeContext.for_state(state)
+
+
+def _registry_bytes(state: Path) -> bytes | None:
+    return read_file(state_files.secure_path(state, "projects.json"))
+
+
+def _registered(state: Path, raw: bytes | None) -> tuple[Path, ...]:
+    from .project_service import parse_registry
+    data = parse_registry(raw)
+    # 使用 raw registry 的完整登记集合；隐藏、失效目录不能借 UI 列表过滤偷偷
+    # 逃离激活前像检查。重复物理目录只执行一次，任何无效登记明确拒绝。
+    return tuple(sorted({canonical_project(Path(value)) for value in data["registered"]}, key=str))
+
+
+def status(state: Path) -> dict:
+    state = store.state_root(state)
+    _, current = policy.current_snapshot(state)
+    pending = policy.pending(state)
+    if current:
+        store.load_core(current["runtime_binding"], state)
+    return {"schema_version": 1, "state_dir": str(state),
+            "runtime_binding": current["runtime_binding"] if current else None,
+            "previous_binding": current["previous_binding"] if current else None,
+            "generation": current["generation"] if current else None,
+            "pending_activation": {"id": pending["id"], "phase": pending["phase"]} if pending else None,
+            "new_task_allowed": pending is None and current is not None,
+            "management_write_allowed": pending is None}
+
+
+def preview(state: Path, action: str = "activate", *, binding: dict | None = None,
+            source_root: Path | None = None, native_context=None) -> CentralPlan:
+    """预览只激活已导入核心；来源导入、中央激活和程序升级是三个独立动作。"""
+    from . import native_agents
+    state = store.state_root(state)
+    policy.ensure_settled(state)
+    if action not in {"activate", "rollback"} or (action == "rollback" and (binding is not None or source_root is not None)):
+        raise ActivationError("中央动作或版本参数无效")
+    current_node, current = policy.current_snapshot(state)
+    if source_root is not None:
+        if binding is not None:
+            raise ActivationError("中央来源与固定版本不能同时指定")
+        inspected = store.inspect_core(source_root)
+        binding = {key: inspected[key] for key in ("protocol_version", "content_id", "manifest_sha256")}
+    selected = (current["previous_binding"] if current else None) if action == "rollback" else binding
+    if selected is None:
+        raise ActivationError("中央激活需要已导入的固定版本，回退需要前次 current")
+    selected = store.load_core(store.validate_binding(selected), state).binding()
+    context = _native_context(state, native_context)
+    native = native_agents.preview_global(state, selected, context=context)
+    raw = _registry_bytes(state)
+    captures = []
+    for project in _registered(state, raw):
+        policy_node, project_policy = policy.snapshot(state, project)
+        binding_node, record = projects.read_binding_record(state, project)
+        journal_node, _ = projects._journal(state, project)
+        affected = bool(record and record["enabled"] and project_policy["mode"] == "follow")
+        runtime = projects.preview(state, project, "use", binding=selected, native_context=context,
+                                   native_ready_hosts=tuple(native.hosts)) if affected else None
+        captures.append(ProjectCapture(project, policy_node, binding_node, journal_node, runtime, project_policy["mode"]))
+    return CentralPlan(state, action, selected, current_node, read_state(state, policy.ACTIVATION), raw,
+                       tuple(captures), native, context)
+
+
+def _validate_journal(value: dict) -> dict:
+    try:
+        return _validate_journal_data(value)
+    except ActivationError:
+        raise
+    except (TypeError, KeyError, RecursionError, OverflowError) as exc:
+        raise ActivationError("中央激活恢复记录嵌套结构无效") from exc
+
+
+def _validate_journal_data(value: dict) -> dict:
+    keys = {"schema_version", "id", "phase", "action", "runtime_binding", "current_before", "registry_before",
+            "native_ref", "native_receipt", "projects", "conflicts"}
+    if (not isinstance(value, dict) or set(value) != keys or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or not isinstance(value["phase"], str) or value["phase"] not in policy.PENDING_PHASES | {"applied", "compensated"}
+            or not isinstance(value["action"], str) or value["action"] not in {"activate", "rollback"}):
+        raise ActivationError("中央激活恢复记录结构无效")
+    # 借 current 的完整 codec 校验共享 nonce 与 pin，而不扩展已有 binding。
+    policy.validate_current({"schema_version": 1, "runtime_binding": value["runtime_binding"],
+                             "previous_binding": None, "generation": value["id"]})
+    Node.from_value(value["current_before"])
+    if value["registry_before"] is not None and not isinstance(value["registry_before"], str):
+        raise ActivationError("中央激活登记前像无效")
+    if not isinstance(value["projects"], list) or not isinstance(value["conflicts"], list):
+        raise ActivationError("中央激活项目清单无效")
+    seen = set()
+    for row in value["projects"]:
+        if not isinstance(row, dict) or set(row) != {"project", "policy_before", "binding_before", "journal_before", "transaction_id", "phase"}:
+            raise ActivationError("中央项目恢复前像无效")
+        project = canonical_project(Path(row["project"]))
+        if str(project) != row["project"] or str(project) in seen or row["phase"] not in {"queued", "applying", "applied", "compensated"}:
+            raise ActivationError("中央项目恢复身份无效")
+        seen.add(str(project))
+        for key in ("policy_before", "binding_before", "journal_before"):
+            Node.from_value(row[key])
+        policy.validate_current({"schema_version": 1, "runtime_binding": value["runtime_binding"],
+                                 "previous_binding": None, "generation": row["transaction_id"]})
+    return value
+
+
+def _save(state: Path, journal: dict, expected: Node) -> Node:
+    _validate_journal(journal)
+    with Tree(state) as tree:
+        write_control(tree, policy.ACTIVATION, json_bytes(journal), expected=expected)
+    return read_state(state, policy.ACTIVATION)
+
+
+def _check_plan(plan: CentralPlan) -> None:
+    if _registry_bytes(plan.state) != plan.registry_before:
+        raise ActivationError("项目登记表在中央预览后变化")
+    if policy.current_snapshot(plan.state)[0] != plan.current_before or read_state(plan.state, policy.ACTIVATION) != plan.activation_before:
+        raise ActivationError("中央 current 或激活记录在预览后变化")
+    for capture in plan.captures:
+        if (policy.snapshot(plan.state, capture.project)[0] != capture.policy_before
+                or projects.read_binding_record(plan.state, capture.project)[0] != capture.binding_before
+                or projects._journal(plan.state, capture.project)[0] != capture.journal_before):
+            raise ActivationError("中央预览中的项目策略或前像已变化：" + str(capture.project))
+        if capture.runtime_plan:
+            with Tree(capture.project) as tree:
+                projects._check_plan(capture.runtime_plan, tree)
+    store.load_core(plan.binding, plan.state)
+
+
+def apply(plan: CentralPlan, *, cancel=None) -> dict:
+    """应用同一提案；取消在 prepared 前零写，之后必须完成结算再返回。"""
+    from . import native_agents
+    if not isinstance(plan, CentralPlan) or not plan.summary["can_apply"]:
+        raise ActivationError("中央预览含冲突，不能应用")
+    if cancel is not None and cancel.is_set():
+        raise ActivationError("操作已取消，尚未应用中央计划")
+    with policy.coordination(plan.state):
+        policy.ensure_settled(plan.state)
+        _check_plan(plan)
+        identifier = uuid.uuid4().hex
+        journal = {"schema_version": 1, "id": identifier, "phase": "prepared", "action": plan.action,
+                   "runtime_binding": plan.binding, "current_before": plan.current_before.value(),
+                   "registry_before": plan.registry_before.decode("utf-8") if plan.registry_before is not None else None,
+                   "native_ref": plan.native_plan.recovery_ref, "native_receipt": None,
+                   "projects": [{"project": str(capture.project), "policy_before": capture.policy_before.value(),
+                                 "binding_before": capture.binding_before.value(), "journal_before": capture.journal_before.value(),
+                                 "transaction_id": uuid.uuid4().hex, "phase": "queued"}
+                                for capture in plan.captures if capture.runtime_plan], "conflicts": []}
+        snapshot = _save(plan.state, journal, plan.activation_before)
+        with policy.activation_scope(plan.state, identifier):
+            try:
+                journal["native_receipt"] = native_agents.apply_global(plan.native_plan)
+                journal["phase"] = "applying"
+                snapshot = _save(plan.state, journal, snapshot)
+                affected = [capture for capture in plan.captures if capture.runtime_plan]
+                for capture, row in zip(affected, journal["projects"]):
+                    row["phase"] = "applying"
+                    snapshot = _save(plan.state, journal, snapshot)
+                    native_issues = native_agents.verify_global(journal["native_ref"], context=plan.native_context)
+                    if native_issues:
+                        raise ActivationError("全局原生产物在项目应用前发生变化", native_issues)
+                    projects.apply(capture.runtime_plan, transaction_id=row["transaction_id"])
+                    row["phase"] = "applied"
+                    snapshot = _save(plan.state, journal, snapshot)
+                # current 发布前再次核对 raw registry 及全部策略，不能只信持锁。
+                if _registry_bytes(plan.state) != plan.registry_before or any(
+                        policy.snapshot(plan.state, capture.project)[0] != capture.policy_before for capture in plan.captures):
+                    raise ActivationError("中央发布前登记表或策略发生变化")
+                journal["phase"] = "publishing"
+                snapshot = _save(plan.state, journal, snapshot)
+                before = unique_json(plan.current_before.payload) if plan.current_before.kind == "file" else None
+                current = {"schema_version": 1, "runtime_binding": plan.binding,
+                           "previous_binding": before["runtime_binding"] if before and before["runtime_binding"] != plan.binding else before["previous_binding"] if before else None,
+                           "generation": identifier}
+                policy.validate_current(current)
+                with Tree(plan.state) as tree:
+                    write_control(tree, policy.CURRENT, json_bytes(current), expected=plan.current_before)
+                # 若在此后中断，不能恢复旧项目却留下新 current；recover 会验证
+                # 已发布批次并补终态。此异常分支仅补偿 current 尚未发布的批次。
+                journal["phase"] = "applied"
+                snapshot = _save(plan.state, journal, snapshot)
+            except BaseException:
+                _, actual = policy.current_snapshot(plan.state)
+                if actual and actual["generation"] == identifier:
+                    raise ActivationError("中央 current 已发布，结算中断；请恢复全局事务以核验并完成")
+                _compensate(plan.state, journal, snapshot, plan.native_context)
+                raise
+        return {**status(plan.state), "transaction_id": identifier, "projects_applied": len(journal["projects"]),
+                "cancel_requested": bool(cancel is not None and cancel.is_set())}
+
+
+def _compensate(state: Path, journal: dict, snapshot: Node, context) -> dict:
+    from . import native_agents
+    journal["phase"] = "compensating"
+    snapshot = _save(state, journal, snapshot)
+    conflicts = []
+    for row in reversed(journal["projects"]):
+        try:
+            projects.compensate(state, Path(row["project"]), row["transaction_id"],
+                                Node.from_value(row["binding_before"]), Node.from_value(row["journal_before"]))
+            row["phase"] = "compensated"
+            snapshot = _save(state, journal, snapshot)
+        except (OSError, ValueError) as exc:
+            conflicts.append({"path": row["project"], "reason": str(exc), "code": "project_compensation_conflict"})
+    try:
+        native_agents.compensate_global(journal["native_ref"], context=context)
+    except (OSError, ValueError) as exc:
+        conflicts.append({"path": "native", "reason": str(exc), "code": "native_compensation_conflict"})
+    journal.update(phase="conflict" if conflicts else "compensated", conflicts=conflicts)
+    _save(state, journal, snapshot)
+    if conflicts:
+        raise ActivationError("中央激活补偿遇到冲突，保留待结算门与全部恢复资料", conflicts)
+    return {"compensated": True, "transaction_id": journal["id"]}
+
+
+def preview_recovery(state: Path, *, native_context=None) -> RecoveryPlan:
+    state = store.state_root(state)
+    node = read_state(state, policy.ACTIVATION)
+    if node.kind != "file" or node.mode != 0o600:
+        raise ActivationError("没有可恢复的中央激活记录")
+    record = _validate_journal(unique_json(node.payload))
+    if record["phase"] not in policy.PENDING_PHASES:
+        raise ActivationError("中央激活已经结算")
+    return RecoveryPlan(state, node, record, _native_context(state, native_context))
+
+
+def recover(plan: RecoveryPlan) -> dict:
+    from . import native_agents
+    if not isinstance(plan, RecoveryPlan):
+        raise ActivationError("需要同一进程预览的恢复计划")
+    with policy.coordination(plan.state), policy.activation_scope(plan.state, plan.record["id"]):
+        if read_state(plan.state, policy.ACTIVATION) != plan.before:
+            raise ActivationError("中央恢复记录在预览后变化")
+        journal = unique_json(plan.before.payload)
+        _, current = policy.current_snapshot(plan.state)
+        if current and current["generation"] == journal["id"]:
+            if current["runtime_binding"] != journal["runtime_binding"]:
+                raise ActivationError("已发布 current 与激活记录不一致")
+            for row in journal["projects"]:
+                _, record = projects.read_binding_record(plan.state, Path(row["project"]))
+                _, project_journal = projects._journal(plan.state, Path(row["project"]))
+                checked = projects.status(plan.state, Path(row["project"]))
+                if (not record or record["generation"] != row["transaction_id"] or record["runtime_binding"] != journal["runtime_binding"]
+                        or not project_journal or project_journal["id"] != row["transaction_id"] or project_journal["phase"] != "applied"
+                        or not checked["resources_healthy"]):
+                    raise ActivationError("已发布中央批次含后续项目变化，保留待结算门")
+            native_issues = native_agents.verify_global(journal["native_ref"], context=plan.native_context)
+            if native_issues:
+                raise ActivationError("已发布中央批次含后续全局原生变化，保留待结算门", native_issues)
+            journal.update(phase="applied", conflicts=[])
+            _save(plan.state, journal, plan.before)
+            return {**status(plan.state), "recovered": True, "transaction_id": journal["id"]}
+        before = Node.from_value(journal["current_before"])
+        if policy.current_snapshot(plan.state)[0] != before:
+            raise ActivationError("中央 current 已被其他修改，拒绝条件补偿")
+        return _compensate(plan.state, journal, plan.before, plan.native_context)
+
+
+def new_task_gate(state: Path, project: Path, binding: dict | None = None) -> dict:
+    """只读新任务许可；旧任务 read/helper 不调用此门，也不读取 current。"""
+    state, project = store.state_root(state), canonical_project(project)
+    policy.ensure_settled(state)
+    checked = projects.status(state, project)
+    selected = checked["effective_binding"]
+    if not checked["new_task_allowed"] or selected is None:
+        raise ActivationError("项目未启用、当前资源冲突或有效策略未结算，不能创建新任务")
+    if binding is not None and store.validate_binding(binding) != selected:
+        raise ActivationError("新任务显式 pin 不是项目有效策略版本，不能创建新任务")
+    return store.load_core(selected, state).binding()
