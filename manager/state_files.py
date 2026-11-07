@@ -171,4 +171,3 @@ def lock(state: Path, identifier: str):
         yield
     finally:
         os.close(descriptor)
-

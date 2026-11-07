@@ -54,4 +54,3 @@ def target_path(raw: str, source_root: Path) -> Path:
             raise InstallError("目标目录不能包含当前安装包；请选择具体项目根目录。")
         return resolved
     raise InstallError(f"项目目录不存在或不是文件夹：{value}")
-

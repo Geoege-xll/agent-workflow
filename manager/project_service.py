@@ -226,4 +226,3 @@ def apply_project(plan: ProjectPlan, *, cancel=None) -> dict:
                 target.write(payload, 0o600, previous)
         return {**result, "action": plan.action, "registered": plan.registered_after,
                 "cancel_requested": bool(cancel is not None and cancel.is_set())}
-
