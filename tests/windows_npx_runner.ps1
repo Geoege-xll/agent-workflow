@@ -1,7 +1,7 @@
 # 此脚本仅在一次性 GitHub Windows runner 中验证真实账户能力。
 # 产品安装器不会调用此脚本、创建账户或修改任何账户权限。
 param(
-    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup', 'native-backend')]
+    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup', 'native-backend', 'native-backend-rename')]
     [string]$Mode = 'native-capabilities'
 )
 
@@ -390,7 +390,7 @@ if ($Mode -in @('native-negative-fixture', 'native-negative-cleanup')) {
 
 # 正向后端也由默认 acceptance 消费，允许 main 上同一 hosted/仓库/HEAD
 # 绑定；只有会修改 registry 的负向 fixture 和 cleanup 才限制临时分支。
-if ($Mode -eq 'native-backend') { Assert-HostedEnvironment $false }
+if ($Mode -in @('native-backend', 'native-backend-rename')) { Assert-HostedEnvironment $false }
 
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
@@ -410,9 +410,10 @@ try {
     & "$env:SystemRoot\System32\icacls.exe" $root /grant ('*' + $sid + ':(OI)(CI)F') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw '测试 SID 的 fixture ACL 设置失败' }
     Write-Host "宿主管理员 SID: $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
-    if ($Mode -eq 'native-backend') {
-        # 只运行当前新增真实后端消费者；不重复已经通过的能力/目录矩阵。
-        Invoke-OrdinaryProbe 'backend-native' $credential
+    if ($Mode -in @('native-backend', 'native-backend-rename')) {
+        # 修复模式只选择两个原失败节点；不重复已绿硬链/junction/能力矩阵。
+        $stage = if ($Mode -eq 'native-backend-rename') { 'backend-rename' } else { 'backend-native' }
+        Invoke-OrdinaryProbe $stage $credential
     } else {
         & $python -I -B -X utf8 $probe --probe host-directory --root $root
         if ($LASTEXITCODE -ne 0) { $failures.Add("host-directory exit=$LASTEXITCODE") }

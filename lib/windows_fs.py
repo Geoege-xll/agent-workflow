@@ -812,11 +812,15 @@ class _WindowsOS:
                                 _close(old)
                 # Rename the opened identity, not a checked-then-reopened source
                 # pathname. Destination ancestry stays pinned throughout the call.
-                encoded = target.name.encode("utf-16-le")
+                # 本次 Win32 的相对 RootDirectory/文件名封送返回 ERROR_INVALID_PARAMETER。
+                # 使用公开接口的常规 NULL 根与绝对目的名；目标所有祖先仍由上面的
+                # Directory 句柄拒绝删除共享，所以不回落为可换链的裸路径检查。
+                # 长度是 UTF-16 字节数；额外终止 WCHAR 不计入 FileNameLength。
+                encoded = str(target).encode("utf-16-le")
                 buffer = ctypes.create_string_buffer(max(ctypes.sizeof(_RenameInfo),
-                                                         _RenameInfo.name.offset + len(encoded)))
+                                                         _RenameInfo.name.offset + len(encoded) + 2))
                 rename = _RenameInfo.from_buffer(buffer)
-                rename.flags, rename.root, rename.length = int(replace), destination.handle, len(encoded)
+                rename.flags, rename.root, rename.length = int(replace), None, len(encoded)
                 ctypes.memmove(ctypes.addressof(buffer) + _RenameInfo.name.offset, encoded, len(encoded))
                 _check(_api().kernel.SetFileInformationByHandle(handle, 3, buffer, len(buffer)), target)
             finally:

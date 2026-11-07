@@ -136,7 +136,7 @@ class WindowsBackendNativeTest(unittest.TestCase):
         self.platform, self.fs = platform_fs, windows_fs
         self.backend = platform_fs.os
         self.assertIs(self.backend, windows_fs.secure_os)
-        if PROBE_MODE == "backend-native":
+        if PROBE_MODE in {"backend-native", "backend-rename"}:
             shell = ctypes.WinDLL("shell32", use_last_error=True)
             shell.IsUserAnAdmin.restype = ctypes.c_int32
             self.assertFalse(shell.IsUserAnAdmin(), "显式后端 CI 必须使用真实标准用户")
@@ -233,7 +233,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", required=True,
                         choices=("host-directory", "ordinary-denied", "ordinary-allowed",
-                                 "ordinary-denied-only", "ordinary-restored", "backend-native"))
+                                 "ordinary-denied-only", "ordinary-restored", "backend-native", "backend-rename"))
     parser.add_argument("--root", required=True)
     args = parser.parse_args()
     PROBE_ROOT, PROBE_MODE = Path(args.root).resolve(strict=True), args.probe
@@ -243,8 +243,12 @@ if __name__ == "__main__":
                else ["test_directory_durability_uses_real_backend"])
     if PROBE_MODE != "host-directory":
         methods.append("test_ordinary_token_and_directory_symlink_capability")
-    suite = (unittest.defaultTestLoader.loadTestsFromTestCase(WindowsBackendNativeTest)
-             if PROBE_MODE == "backend-native" else
+    backend_names = (("test_directory_symlink_read_rename_unlink_never_follows_target",
+                      "test_exclusive_publication_moves_one_identity_without_hardlink_window")
+                     if PROBE_MODE == "backend-rename" else
+                     unittest.defaultTestLoader.getTestCaseNames(WindowsBackendNativeTest))
+    suite = (unittest.TestSuite(WindowsBackendNativeTest(name) for name in backend_names)
+             if PROBE_MODE in {"backend-native", "backend-rename"} else
              unittest.TestSuite(WindowsCapabilityProbe(name) for name in methods))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)

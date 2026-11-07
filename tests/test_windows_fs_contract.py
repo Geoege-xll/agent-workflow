@@ -135,6 +135,30 @@ class WindowsRenameDurabilityContractTest(unittest.TestCase):
 
 
 
+    def test_absolute_rename_buffer_uses_null_root_and_utf16_byte_length(self):
+        target = Path("/project/目标🙂")
+        encoded = str(target).encode("utf-16-le")
+        captured = []
+        def rename(handle, kind, buffer, size):
+            data = fs._RenameInfo.from_buffer(buffer)
+            captured.append((kind, data.flags, data.root, data.length,
+                             ctypes.string_at(ctypes.addressof(buffer) + fs._RenameInfo.name.offset,
+                                              data.length + 2), size))
+            return True
+        api = SimpleNamespace(kernel=SimpleNamespace(SetFileInformationByHandle=rename))
+        backend = fs._WindowsOS()
+        with patch.object(fs, "Directory", side_effect=lambda p: nullcontext(SimpleNamespace(handle=10))), \
+                patch.object(fs, "flush_directory"), patch.object(fs, "_open_handle", return_value=20), \
+                patch.object(fs, "_information", return_value=SimpleNamespace(volume=7,index_high=0,index_low=9)), \
+                patch.object(fs, "_api", return_value=api), patch.object(fs, "_close"), \
+                patch.object(backend, "lstat", return_value=SimpleNamespace(st_mode=stat.S_IFREG)):
+            backend._rename(Path("/project/stage"), target, False)
+        self.assertEqual(captured[0][:4], (3, 0, None, len(encoded)))
+        self.assertEqual(captured[0][4], encoded + b"\0\0")
+        self.assertGreaterEqual(captured[0][5], fs._RenameInfo.name.offset + len(encoded) + 2)
+
+
+
 class WindowsSymlinkReparseContractTest(unittest.TestCase):
     def payload(self, substitute=r"\??\C:\core\xy-workflow", shown=r"C:\core\xy-workflow",
                 *, tag=0xA000000C, flags=0):
