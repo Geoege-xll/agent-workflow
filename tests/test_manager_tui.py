@@ -1122,9 +1122,11 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         from manager import runtime_policy
         from manager.runtime_state import read_state, write_control
         from lib.central.runtime_project import Tree, json_bytes
-        # 最小投影测试沿用既有核心，但显式建立中央 current 控制前提。
+        # 最小投影测试沿用既有核心，并用完整五字段current建立local控制前提。
+        # native_roots=[]明确不授权任何全局根；真实globals须由显式原生事务
+        # 安装和发布，不能凭本夹具或上下文路径宣称全局资源已就绪。
         with runtime_policy.coordination(self.state), Tree(self.state) as tree:
-            write_control(tree,runtime_policy.CURRENT,json_bytes({"schema_version":1,"runtime_binding":self.core.binding(),"previous_binding":None,"generation":uuid.uuid4().hex}),expected=read_state(self.state,runtime_policy.CURRENT))
+            write_control(tree,runtime_policy.CURRENT,json_bytes({"schema_version":1,"runtime_binding":self.core.binding(),"previous_binding":None,"generation":uuid.uuid4().hex,"native_roots":[]}),expected=read_state(self.state,runtime_policy.CURRENT))
         self.context=NativeContext.for_state(self.state,host_paths=HostPaths.for_home(self.root/"host",environment={}))
         self.app=App(self.state,self.root/"empty-scan",self.project,native_context=self.context)
         self.executor=ThreadPoolExecutor(max_workers=1);self.app.executor=self.executor

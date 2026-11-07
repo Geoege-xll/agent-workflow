@@ -65,13 +65,15 @@ def deep_json_source(home: Path, host: str) -> bool:
 
 
 def select_fixture_current(state, binding):
-    """只初始化既有最小投影夹具的中央控制前提，不生成全局原生资源替代local测试。"""
+    """仅初始化完整local投影夹具的中央控制前提；空native_roots不授权任何全局根。"""
     from manager import runtime_policy
     from manager.runtime_state import read_state, write_control
     from lib.central.runtime_project import Tree, json_bytes
     with runtime_policy.coordination(state), Tree(state) as tree:
+        # 五字段current必须显式声明原生根授权。此处仅为完整local夹具提供
+        # 控制版本，不安装globals；不能用虚构根或缺字段冒充原生资源已就绪。
         write_control(tree,runtime_policy.CURRENT,json_bytes({"schema_version":1,"runtime_binding":binding,
-                      "previous_binding":None,"generation":uuid.uuid4().hex}),expected=read_state(state,runtime_policy.CURRENT))
+                      "previous_binding":None,"generation":uuid.uuid4().hex,"native_roots":[]}),expected=read_state(state,runtime_policy.CURRENT))
 
 
 class TemporaryProject(unittest.TestCase):
