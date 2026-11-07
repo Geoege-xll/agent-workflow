@@ -220,13 +220,17 @@ Dir.chdir(ARGV.fetch(1)) { AwfCli.new.install }
 class HomebrewLauncherTest(unittest.TestCase):
     def setUp(self):
         supplied = os.environ.get("AWF_TEST_SCRATCH")
-        self.temp = None
-        if supplied:
-            self.root = Path(supplied) / "model-packaging" / self._testMethodName
-            self.root.mkdir(parents=True, exist_ok=True)
-        else:
-            self.temp = tempfile.TemporaryDirectory(prefix="awf-cellar-test-")
-            self.root = Path(self.temp.name).resolve()
+        parent = Path(supplied) / "model-packaging" if supplied else None
+        if parent is not None:
+            parent.mkdir(parents=True, exist_ok=True)
+        # 同一请求的多次单元/CI调用共用既有父目录，但每次TestCase实例拥有
+        # 唯一短命目录，避免再次构建撞上上次保留的发行产物。只回收本次实例
+        # 的TemporaryDirectory，绝不删除/覆盖父目录中既有的历史输出或证据。
+        self.temp = tempfile.TemporaryDirectory(prefix=self._testMethodName + "-", dir=parent)
+        # setUp中的真实打包/Formula安装也可能失败；立即登记清理，使尚未进入
+        # tearDown的失败实例同样自行回收。TemporaryDirectory清理可安全重入。
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
         # 真实源码消费者跟随唯一版本源，旧版本的纯打包夹具仍独立保留。
         self.version = (PACK / "product/VERSION").read_text(encoding="ascii").strip()
         archive, _, self.formula = release.build(PACK, self.version, self.root / "dist")
