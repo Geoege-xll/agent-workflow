@@ -78,6 +78,8 @@ class ActivationPlan:
     warnings: tuple[str, ...] = ()
     recovery: bool = False
     preferences_before: Node | None = None
+    native_context: object | None = None
+    required_global_hosts: tuple[str, ...] = ()
 
     @property
     def summary(self) -> dict:
@@ -102,8 +104,15 @@ def _raw(tree: Tree, relative: str) -> Node:
     return read_at(directory, name, allow_link=True)
 
 
-def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool) -> tuple[list[dict], set[str]]:
-    conflicts = _retained(tree, record["retained_nodes"])
+def _history_writes(tree: Tree, records: list[dict]) -> list[dict]:
+    """历史缺失只降低恢复能力，仍存在但被修改的旧 inode 才阻止管理覆盖。"""
+    return [{"path": row["path"], "reason": row["reason"]}
+            for row in _retained(tree, records, typed=True) if row["code"] == "history_modified"]
+
+
+def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool,
+               include_history: bool = True) -> tuple[list[dict], set[str]]:
+    conflicts = _history_writes(tree, record["retained_nodes"]) if include_history else []
     links = set()
     core = None
     for relative, managed in record["managed"].items():
@@ -157,13 +166,16 @@ def _protect_project(project: Path, source_root: Path | None) -> None:
 
 
 def preview(state: Path, project: Path, action: str, *, source_root: Path | None = None,
-            binding: dict | None = None, hosts: tuple | None = None) -> ActivationPlan:
+            binding: dict | None = None, hosts: tuple | None = None,
+            native_context=None, native_ready_hosts: tuple = ()) -> ActivationPlan:
     """生成无写入条件预览；可预见冲突进入 summary，参数/损坏记录正常抛错。
 
     use 仅接受已验证内容 ID；source_root 只用于 enable 的显式导入。
     旧自包含残留始终只读拒绝，必须由有明确授权的安装管理任务先移除受管范围。
     """
     state, project = store.state_root(state), canonical_project(project)
+    from . import runtime_policy
+    runtime_policy.ensure_settled(state)
     preferences_before, preferences = role_preferences.snapshot(state)
     _protect_project(project, source_root)
     if action not in ACTIONS:
@@ -227,7 +239,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
     with Tree(project) as tree:
         owned_links = set()
         if journal:
-            conflicts.extend(_retained(tree, journal.get("retained_nodes", [])))
+            conflicts.extend(_history_writes(tree, journal.get("retained_nodes", [])))
         if record:
             found, owned_links = _ownership(tree, record, state, repair=action == "repair")
             conflicts.extend(found)
@@ -236,8 +248,9 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
         if after_enabled and resources:
             require_skill_symlinks()
             if not conflicts:
+                context_args = {"native_context": native_context, "native_ready_hosts": native_ready_hosts} if native_context is not None else {}
                 desired, _ = project_files.prepare(resources, project, config, chosen_hosts, owned_links=owned_links,
-                                                  preferences=preferences)
+                                                  preferences=preferences, **context_args)
                 names = project_files.skill_names(resources)
                 fixed_root = state / "runtimes" / selected["content_id"] / "core"
                 skill_roots = set()
@@ -321,7 +334,8 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
                           resources.label if resources else None, chosen_hosts, before_enabled, after_enabled,
                           tuple(changes), tuple(sorted(observed.items())), directories, machine,
                           journal_node, json_bytes(managed_next), tuple(conflicts), tuple(warnings),
-                          preferences_before=preferences_before)
+                          preferences_before=preferences_before, native_context=native_context,
+                          required_global_hosts=tuple(native_ready_hosts))
 
 
 def _same_moved(actual: Node, expected: Node) -> bool:
@@ -556,13 +570,15 @@ def _check_plan(plan: ActivationPlan, tree: Tree) -> None:
         raise ActivationError("项目事务记录在预览后变化")
     old = unique_json(plan.machine_before.payload) if plan.machine_before.kind == "file" else {}
     previous_journal = unique_json(plan.journal_before.payload) if plan.journal_before.kind == "file" else {}
-    if _retained(tree, old.get("retained_nodes", []) + previous_journal.get("retained_nodes", [])):
+    if _history_writes(tree, old.get("retained_nodes", []) + previous_journal.get("retained_nodes", [])):
         raise ActivationError("保留的旧 inode 在预览后发生保存")
 
-def apply(plan: ActivationPlan) -> dict:
+def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
     """应用已预览计划；返回 status 字段及 transaction_id，绝不自动运行 Agent。"""
     if not isinstance(plan, ActivationPlan) or plan.conflicts:
         raise ActivationError("预览含冲突，不能应用", plan.conflicts if isinstance(plan, ActivationPlan) else ())
+    if transaction_id is not None and (not isinstance(transaction_id, str) or not re.fullmatch(r"[0-9a-f]{32}", transaction_id)):
+        raise ActivationError("项目事务 ID 必须是预分配的完整 nonce")
     core = None
     if plan.binding_json and not plan.recovery:
         selected = store.validate_binding(unique_json(plan.binding_json))
@@ -576,6 +592,13 @@ def apply(plan: ActivationPlan) -> dict:
             core = store.load_core(selected, plan.state)
     with ExitStack() as stack:
         stack.enter_context(role_preferences.coordination(plan.state))
+        from . import runtime_policy
+        runtime_policy.ensure_settled(plan.state)
+        if plan.required_global_hosts:
+            from . import native_agents
+            verified = native_agents.verified_hosts(plan.state, context=plan.native_context)
+            if not set(plan.required_global_hosts) <= set(verified):
+                raise ActivationError("全局原生角色尚未完整归属，拒绝撤下项目角色")
         tree = stack.enter_context(Tree(plan.project))
         stack.enter_context(directory_lock(plan.project, "install"))
         if not plan.recovery:
@@ -628,7 +651,7 @@ def apply(plan: ActivationPlan) -> dict:
         old = unique_json(plan.machine_before.payload) if plan.machine_before.kind == "file" else None
         if plan.binding_json is None:
             return status(plan.state, plan.project)  # 从未启用项目的 disable 为真正幂等空操作。
-        identifier = uuid.uuid4().hex
+        identifier = transaction_id or uuid.uuid4().hex
         managed = unique_json(plan.managed_json)
         journal = {"schema_version": 1, "project_root": str(plan.project), "id": identifier,
                    "phase": "prepared", "action": plan.action,
@@ -659,7 +682,7 @@ def apply(plan: ActivationPlan) -> dict:
                     if not _same_moved(prior, before):
                         raise ActivationError("保留的旧 inode 在安装检查期间变化")
                     retained.append(_retained_record(row["backup"], prior))
-            conflicts = _retained(tree, retained)
+            conflicts = _history_writes(tree, retained)
             if conflicts:
                 raise ActivationError("旧 inode 已有后续保存", conflicts)
             for relative, row in managed.items():
@@ -722,12 +745,59 @@ def apply(plan: ActivationPlan) -> dict:
         return {**result, "transaction_id": identifier, "recovered": False}
 
 
+def compensate(state: Path, project: Path, transaction_id: str, binding_before: Node,
+               journal_before: Node) -> dict:
+    """条件撤销一个已知项目子事务，绝不把 rollback 换版冒充全局补偿。
+
+    全局 prepared 在子事务开始前记录 ID，因此应用返回前中断也能定位原 inode。
+    只认同一事务的 journal 与 binding generation；后续管理或手工保存均保留。
+    repeated recovery 使用 rolled_back 终态，既不二次安装也不扩大覆盖范围。
+    """
+    if not isinstance(transaction_id, str) or not re.fullmatch(r"[0-9a-f]{32}", transaction_id):
+        raise ActivationError("补偿需要精确项目事务 ID")
+    state, project = store.state_root(state), canonical_project(project)
+    with ExitStack() as stack:
+        stack.enter_context(role_preferences.coordination(state))
+        tree = stack.enter_context(Tree(project))
+        stack.enter_context(directory_lock(project, "install"))
+        stack.enter_context(directory_lock(state / "bindings", "central-project-state"))
+        machine_tree = stack.enter_context(Tree(state))
+        current, record = read_binding_record(state, project)
+        journal_node, journal = _journal(state, project)
+        if current == binding_before and journal_node == journal_before:
+            return {"compensated": True, "untouched": True, "transaction_id": transaction_id}
+        if journal is None or journal["id"] != transaction_id:
+            raise ActivationError("项目事务已被后续记录取代，拒绝补偿")
+        original_matches = current.same_content(binding_before) and current.mode == binding_before.mode
+        own_generation = bool(record and record["generation"] == transaction_id)
+        if not own_generation and not original_matches:
+            raise ActivationError("项目绑定含后续变更，拒绝补偿")
+        if journal["phase"] == "rolled_back" and original_matches:
+            return {"compensated": True, "untouched": False, "transaction_id": transaction_id}
+        conflicts, retained = _restore(tree, journal)
+        tree.check()
+        if not conflicts and own_generation:
+            if binding_before.kind == "file":
+                _write_private(machine_tree, _state_relative(project, "bindings"), binding_before.payload, expected=current)
+            else:
+                parent, name = machine_tree.parent(_state_relative(project, "bindings"))
+                if read_at(parent, name) != current:
+                    raise ActivationError("项目绑定在撤回前变化")
+                os.unlink(name, dir_fd=parent)
+                os.fsync(parent)
+        journal.update(phase="conflict" if conflicts else "rolled_back", conflicts=conflicts, retained_nodes=retained)
+        _write_private(machine_tree, _state_relative(project, "transactions"), json_bytes(journal), expected=journal_node)
+        if conflicts:
+            raise ActivationError("项目条件补偿遇到后续手改，已保留恢复资料", conflicts)
+        return {"compensated": True, "untouched": False, "transaction_id": transaction_id}
+
+
 def status(state: Path, project: Path) -> dict:
     """只读本机状态与资源一致性；不会导入来源、创建目录或自动修复。"""
     state, project = store.state_root(state), canonical_project(project)
     _, record = read_binding_record(state, project)
     _, journal = _journal(state, project)
-    conflicts = []
+    conflicts, history = [], []
     phase = "unmanaged" if record is None else "enabled" if record["enabled"] else "disabled"
     if journal and journal["phase"] in {"prepared", "conflict"}:
         phase = journal["phase"]
@@ -738,8 +808,14 @@ def status(state: Path, project: Path) -> dict:
         except (OSError, ValueError) as exc:
             conflicts.append({"path": "runtime_binding", "reason": str(exc)})
         with Tree(project) as tree:
-            found, _ = _ownership(tree, record, state, repair=False)
+            found, _ = _ownership(tree, record, state, repair=False, include_history=False)
             conflicts.extend(found)
+            history_records = record["retained_nodes"] + (journal.get("retained_nodes", []) if journal else [])
+            history = _retained(tree, history_records, typed=True)
+            from .runtime_lifecycle import retired_history
+            retired = retired_history(state, project)
+            active_records = {row["path"]: row for row in history_records}
+            history = [row for row in history if not (row["code"] == "history_missing" and retired.get(row["path"]) == active_records.get(row["path"]))]
             if record["enabled"] and "claude" in record["hosts"]:
                 try:
                     config = tree.read(CONFIG)
@@ -758,8 +834,31 @@ def status(state: Path, project: Path) -> dict:
                 conflicts.append({"path": "workflow_hooks", "reason": str(exc)})
     elif _has_install_residue(project):
         phase = "legacy"
+    from . import runtime_policy
+    global_pending = runtime_policy.pending(state)
+    _, policy = runtime_policy.snapshot(state, project)
+    effective = runtime_policy.effective_binding(state, project, fallback=record["runtime_binding"] if record else None)
+    # 当前资源、历史恢复和发布许可分别计算，禁止从“历史丢失”推断项目停用，
+    # 也不让资源仍可用掩盖全局 prepared 门。所有机器分支使用稳定 code/layer。
+    issues = [{**row, "code": "current_resource_invalid", "layer": "current"} for row in conflicts]
+    issues.extend(history)
+    if global_pending:
+        issues.append({"path": runtime_policy.ACTIVATION, "reason": "中央激活尚未结算",
+                       "code": "activation_pending", "layer": "admission"})
+    drift = bool(record and effective is not None and record["runtime_binding"] != effective)
+    if drift:
+        issues.append({"path": "runtime_binding", "reason": "项目实际绑定与有效策略版本不一致",
+                       "code": "policy_drift", "layer": "admission"})
+    resources_healthy = bool(record and not conflicts and phase in {"enabled", "disabled"})
+    new_task_allowed = bool(record and record["enabled"] and resources_healthy and not global_pending and not drift)
     return {"schema_version": 1, "project": str(project), "state": phase,
             "enabled": bool(record and record["enabled"] and not conflicts and phase == "enabled"),
+            "declared_enabled": bool(record and record["enabled"]),
+            "resources_healthy": resources_healthy,
+            "history_recoverable": not history,
+            "new_task_allowed": new_task_allowed,
+            "management_write_allowed": not conflicts and not global_pending and not any(row["code"] == "history_modified" for row in history),
+            "policy": policy["mode"], "effective_binding": effective, "issues": issues,
             "runtime_binding": record["runtime_binding"] if record else None,
             "previous_binding": record["previous_binding"] if record else None,
             "hosts": list(record["hosts"]) if record else [],
@@ -805,8 +904,13 @@ class NativeEditReceipt:
         record = unique_json(json_bytes(self.record))
         for change in self.changes:
             current = self.tree.read(change.relative)
-            if not current.same_content(Node("file", change.after, change.mode)):
+            expected = Node() if change.after is None else Node("file", change.after, change.mode)
+            if not current.same_content(expected) or current.mode != expected.mode:
                 raise ActivationError("模型事务产物与已声明 after 不符：" + change.relative)
+            if change.after is None:
+                record["managed"].pop(change.relative, None)
+            elif change.before is None:
+                record["managed"][change.relative] = {"purpose": "role", "baseline": Node().value(), "expected": current.value()}
             if change.relative in record["managed"]:
                 record["managed"][change.relative]["expected"] = current.value()
         conflicts, _ = _ownership(self.tree, record, self.state, repair=False)
@@ -824,7 +928,7 @@ class NativeEditReceipt:
 
 
 @contextmanager
-def native_edit_receipt(state: Path, project: Path, changes):
+def native_edit_receipt(state: Path, project: Path, changes, *, native_context=None, global_preferences=None):
     """桥接既有模型 commit 与中央受管前像，不引入第二份模型业务规则。
 
     由 manager.service.commit 唯一自动包裹；外部调用方直接调用 commit，不能
@@ -837,6 +941,9 @@ def native_edit_receipt(state: Path, project: Path, changes):
     state, project = store.state_root(state), canonical_project(project)
     changes = tuple(changes)
     with ExitStack() as stack:
+        stack.enter_context(role_preferences.coordination(state))
+        from . import runtime_policy
+        runtime_policy.ensure_settled(state)
         tree = stack.enter_context(Tree(project))
         stack.enter_context(directory_lock(project, "install"))
         before, record = read_binding_record(state, project)
@@ -850,17 +957,36 @@ def native_edit_receipt(state: Path, project: Path, changes):
         conflicts, _ = _ownership(tree, record, state, repair=False)
         if conflicts:
             raise ActivationError("当前资源含未知编辑，不能登记模型收据", conflicts)
+        config_change = next((change for change in changes if change.relative == CONFIG), None)
+        config_before = tree.read(CONFIG)
+        if config_before.kind != "file" or (config_change is not None and config_change.after is None):
+            raise ActivationError("模型收据必须保留有效项目配置")
+        config_after = config_change.after if config_change is not None else config_before.payload
+        preferences = role_preferences.snapshot(state)[1] if global_preferences is None else global_preferences
+        role_preferences.payload(preferences)
+        core = store.load_core(record["runtime_binding"], state)
+        resources = Resources(core.root, json_bytes(core.binding()), core.label, core)
+        profile = None
+        verified = ()
+        if native_context is not None:
+            from . import native_agents
+            verified = native_agents.verified_hosts(state, context=native_context)
         seen = set()
         for change in changes:
             relative = relative_path(change.relative)
-            if (relative in seen or not isinstance(change.before, bytes) or not isinstance(change.after, bytes)
+            if (relative in seen or change.before is not None and not isinstance(change.before, bytes)
+                    or change.after is not None and not isinstance(change.after, bytes)
+                    or change.before is None and change.after is None
                     or type(change.mode) is not int):
                 raise ActivationError("模型收据变化列表无效或重复")
             seen.add(relative)
             current = tree.read(relative)
-            if not current.same_content(Node("file", change.before, change.mode)):
+            expected_before = Node() if change.before is None else Node("file", change.before, change.mode)
+            if not current.same_content(expected_before) or current.mode != expected_before.mode:
                 raise ActivationError("模型收据前像与当前文件不符：" + relative)
             if relative == CONFIG:
+                if change.before is None or change.after is None:
+                    raise ActivationError("模型收据不能创建或删除项目配置")
                 parsed = role_models.parse(change.after.decode("utf-8"))
                 forward = role_models.update(change.before.decode("utf-8"), parsed).encode() == change.after
                 # 精确恢复到原先没有 role_models 的模板时，空 update 会保留映射
@@ -871,10 +997,36 @@ def native_edit_receipt(state: Path, project: Path, changes):
                     raise ActivationError("模型收据只能修改项目 role_models 区块")
                 continue
             managed = record["managed"].get(relative)
+            selected_role = next(((host, role) for host, (directory, suffix) in project_files.ROLE_PATHS.items()
+                                  for role in role_models.ROLES if relative == f"{directory}/{role}{suffix}"), None)
+            if selected_role is None:
+                raise ActivationError("模型收据只能修改精确的原生角色路径")
+            host, role = selected_role
+            if change.before is None or change.after is None:
+                # 稀疏投影的增删不是普通 model 补丁：必须由固定核心编译结果
+                # 证明完整正文、权限与角色策略；删除还要求宿主全部七角色归属，
+                # 不能因单个同名全局文件存在就撤掉唯一可发现的项目角色。
+                if profile is None:
+                    _, profile, _ = project_files.configuration(resources, project, Node("file", config_after, config_before.mode),
+                                                                owned_links={path for path, entry in record["managed"].items() if entry["purpose"] == "skill"})
+                if host not in record["hosts"] or role not in profile.enabled_roles or not record["enabled"]:
+                    raise ActivationError("稀疏角色不属于项目已启用的宿主和角色")
+                if change.before is None:
+                    compiled = project_files.role_resource(resources, config_after, host, role, record["runtime_binding"], preferences=preferences)
+                    if managed is not None or change.mode != 0o644 or change.after != compiled:
+                        raise ActivationError("稀疏角色创建必须等于固定核心完整编译结果")
+                else:
+                    from lib.hosts import claude_options
+                    overrides = role_models.parse(config_after.decode()).get(host, {})
+                    claude_override = host == "claude" and role in claude_options.parse(config_after.decode())["auto_compact_windows"]
+                    compiled_before = project_files.role_resource(resources, config_before.payload, host, role, record["runtime_binding"],
+                                                                  preferences=role_preferences.snapshot(state)[1])
+                    if (not managed or managed["purpose"] != "role" or Node.from_value(managed["baseline"]).kind != "missing"
+                            or host not in verified or role in overrides or claude_override or change.before != compiled_before):
+                        raise ActivationError("稀疏角色删除缺少完整全局归属或仍有项目覆盖")
+                continue
             if not managed or managed["purpose"] != "role":
                 raise ActivationError("模型收据只能修改已登记的原生角色")
-            host = next((host for host, (directory, suffix) in project_files.ROLE_PATHS.items()
-                         if relative.startswith(directory + "/") and relative.endswith(suffix)), None)
             selected = _model_fields(change.after, host)
             if role_models.patch_artifact(change.before, host, selected) != change.after:
                 raise ActivationError("模型收据包含模型字段以外的变化")
@@ -891,7 +1043,8 @@ def native_edit_receipt(state: Path, project: Path, changes):
                 # 原 commit 应先撤回项目文件再抛错；若文件已有第三方保存，则保留
                 # 新收据使 status 显示冲突，不用旧快照掩盖未能安全撤回的事实。
                 for change in changes:
-                    if not tree.read(change.relative).same_content(Node("file", change.before, change.mode)):
+                    expected_before = Node() if change.before is None else Node("file", change.before, change.mode)
+                    if not tree.read(change.relative).same_content(expected_before):
                         raise ActivationError("模型事务失败且项目仍有后续变化，已保留收据")
                 _write_private(machine_tree, _state_relative(project, "bindings"), before.payload)
             raise
