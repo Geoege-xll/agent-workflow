@@ -117,11 +117,69 @@ class NpxFixture(unittest.TestCase):
                 # 先捕获原始字节，失败输出才容错解码，避免错误码页再次遮蔽
                 # 真实诊断；成功路径仍严格 UTF-8，且绝不继续/skip 非零结果。
                 label = "execution-policy" if code.startswith("Get-ExecutionPolicy ") else "profile-paths"
-                def context(body):
-                    return repr(body[:4096].decode("utf-8", errors="backslashreplace"))
+                def context(body, limit=4096):
+                    return repr(body[:limit].decode("utf-8", errors="backslashreplace"))
+                detail = ""
+                if label == "execution-policy":
+                    # 三个消费者可能在同一前置查询处失败；本进程只执行一次
+                    # 固定诊断并复用其文字，不能连续枚举/尝试替代模块制造绿。
+                    case = type(self)
+                    if not hasattr(case, "_security_module_diagnostic"):
+                        diagnostic_code = r"""
+[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
+function Bound($value, [int]$limit=512) {
+    $text=[string]$value
+    if ($text.Length -gt $limit) { return $text.Substring(0,$limit) }
+    return $text
+}
+function ImportFailure($phase, $record) {
+    [Console]::Error.WriteLine(('MODULE_DIAG {0} FQID={1} Category={2}' -f $phase,(Bound $record.FullyQualifiedErrorId 256),(Bound $record.CategoryInfo.Category 128)))
+    $errorObject=$record.Exception
+    for ($depth=0; $null -ne $errorObject -and $depth -lt 4; $depth++) {
+        [Console]::Error.WriteLine(('MODULE_DIAG {0} exception[{1}]={2}: {3}' -f $phase,$depth,(Bound ($errorObject.GetType().FullName) 256),(Bound $errorObject.Message 1024)))
+        $errorObject=$errorObject.InnerException
+    }
+}
+[Console]::Error.WriteLine(('MODULE_DIAG PSVersion={0}' -f (Bound $PSVersionTable.PSVersion 64)))
+$bad=$false
+try {
+    $count=0
+    foreach ($candidate in @(Get-Module -ListAvailable -Name 'Microsoft.PowerShell.Security' -ErrorAction Stop)) {
+        if ($count -ge 8) { break }
+        $count++
+        [Console]::Error.WriteLine(('MODULE_DIAG candidate Name={0} Version={1} PowerShellVersion={2} Path={3}' -f (Bound $candidate.Name 64),(Bound $candidate.Version 64),(Bound $candidate.PowerShellVersion 64),(Bound $candidate.Path 512)))
+    }
+    [Console]::Error.WriteLine(('MODULE_DIAG candidates_printed={0}' -f $count))
+} catch { ImportFailure 'discovery' $_; $bad=$true }
+$manifest=[IO.Path]::Combine($PSHOME,'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')
+[Console]::Error.WriteLine(('MODULE_DIAG fixed_system_manifest={0}' -f (Bound $manifest 512)))
+try {
+    $loaded=Import-Module -Name $manifest -PassThru -ErrorAction Stop
+    [Console]::Error.WriteLine(('MODULE_DIAG fixed_system_import=OK Name={0} Version={1} Path={2}' -f (Bound $loaded.Name 64),(Bound $loaded.Version 64),(Bound $loaded.Path 512)))
+} catch { ImportFailure 'fixed-system-import' $_; $bad=$true }
+if ($bad) { exit 1 }
+exit 0
+"""
+                        try:
+                            # 沿原系统宿主、令牌与环境，只查询这一个模块名；
+                            # 搜索候选只读元数据，导入限定为固定系统绝对路径。
+                            diagnostic = subprocess.run(
+                                [str(self.powershell), "-NoLogo", "-NoProfile", "-NonInteractive",
+                                 "-Command", diagnostic_code], capture_output=True, timeout=30)
+                            detail = (f"module_diagnostic_exit={diagnostic.returncode}; "
+                                      f"stdout={context(diagnostic.stdout, 24576)} "
+                                      f"stderr={context(diagnostic.stderr, 24576)}")
+                        except (OSError, subprocess.TimeoutExpired) as error:
+                            # 诊断自身失败也不能替换原 query 的非零事实；不把
+                            # 完整命令或个人环境放入异常文字，不继续安装。
+                            detail = (f"module_diagnostic_error={type(error).__name__}; "
+                                      f"errno={getattr(error, 'errno', None)} "
+                                      f"winerror={getattr(error, 'winerror', None)}")
+                        case._security_module_diagnostic = detail
+                    detail = case._security_module_diagnostic
                 self.fail(f"PowerShell只读快照query={label} exit={result.returncode}; "
                           f"stdout_bytes={len(result.stdout)} stderr_bytes={len(result.stderr)}; "
-                          f"stdout={context(result.stdout)} stderr={context(result.stderr)}")
+                          f"stdout={context(result.stdout)} stderr={context(result.stderr)}; {detail}")
             return result.stdout.decode("utf-8")
         policies = query("Get-ExecutionPolicy -List | ConvertTo-Json -Compress")
         profiles = query("@($PROFILE.AllUsersAllHosts,$PROFILE.AllUsersCurrentHost,"

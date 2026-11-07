@@ -42,9 +42,9 @@ QA后PM原位更新本主题及同名HTML，使用实际required生命周期解�
 
 ## 当前进展与恢复入口
 
-准备审计已完成，当前npm init只接受win32/x64，但install_central先调用的require_skill_symlinks对nt无条件拒绝；Windows伪fd后端还缺readlink／link／symlink，既有E2E仍调用旧项目lib路径。已有单例确认拒绝早于中央导入和项目／state写入；该通过仅证明安全拒绝，不是安装支持。
+准备审计的e2c981b基线中，npm init只接受win32/x64，但require_skill_symlinks对nt无条件拒绝，Windows后端缺中央所需链接接口，E2E仍调用旧项目lib。该历史拒绝单例只证明写前拒绝；后续已按下述检查点补齐后端与真实中央消费者，不能把旧基线描述当作当前源码行为。
 
-普通npm账号尚未注册／登录，当前不发布。发布准备记录在request-id publish-tap-npm-2.1.0-20261107的既有scratch；本实现请求使用request-id windows-central-npm-2.1.1-20261107的唯一scratch及其中单一graph和作者／CI完整日志。来源分支main基线e2c981b，5处外部修改留在原检出；实现工作树windows-fs，后续集成工作树windows-integration，当前无已验收Windows候选。
+用户尚未告知npm账号注册／登录完成，本轮不发布。发布准备记录在request-id publish-tap-npm-2.1.0-20261107的既有scratch；本实现请求使用request-id windows-central-npm-2.1.1-20261107的唯一scratch及其中单一graph和作者／CI完整日志。来源分支main基线e2c981b，5处外部修改留在原检出；实现工作树windows-fs，后续集成工作树windows-integration，当前无已验收Windows候选。
 
 底层能力及四个后端消费者已完成原生补证：目录fsync、软链正反能力与恢复、真硬链及普通文件守卫、junction拒绝、软链读建移删和普通文件排他移动／碰撞保全均有真实普通用户证据。当前检查点2549d8e9已包含中央事务、私有记录叶DACL、项目ACL保全、薄桥自举与Job helper；本地中央／补偿、私有发布、未确认Job保留现场、探针创建后失败、全新进程的pkgutil影子拒绝已通过。
 
@@ -54,7 +54,13 @@ QA后PM原位更新本主题及同名HTML，使用实际required生命周期解�
 
 中央验收初始失败及三轮返工的记录保留。用户在明确获知helper路径诊断错配、当前失败上限及剩余验收后回复“继续”，授权恢复该已定位修复并完成原Full剩余目标；此前停写决定已结束，累计失败历史不清零，不把本次授权理解为无限重试或放宽校验。当前继续npm持久embedded／当前E2E与缓存独立真实Hook／产品缺能力写前拒绝、2.1.1元数据、必要macOS消费者和唯一独立QA。有新故障须有新诊断或可验证进展，无进展先停止该路径返回PM。
 
-实现及临时CI分支均保留，集成工作树尚未推进。完整历史输出持续保存在本请求windows-capabilities.log（当前484376字节，SHA3b913cc436c47996a06644a99a0625e9c88906abaf7712d7b5ae92500d6fa1bb），同windows-handoff.json原位更新并保留各次实际执行输入快照，原失败未覆盖。npm继续暂不发布，既有公开2.1.0、原仓五处修改与三个业务项目不变；剩余验收完成前不标记整体BUILD_VERIFIED或QA PASS。
+2.1.1 tgz切片40ab293已迁移当前薄桥／三字段pin、持久embedded校验、普通用户与缓存后helper写读／真实Hook入口，VERSION及直接消费者统一。实际Node帮助版本7节点、包／锁／离线pack／Homebrew安装后版本／能力传播／macOS交互中央6 tests／3.457s通过。当前仍private:true，产品公开元数据尚未切换。
+
+首轮native-npx run42343690163／40ab293的可信archive准备及离线pack通过，但3 tests／3.860s全在产品执行前的只读PowerShell快照失败，未显示已捕获的两流。仅补失败上下文的检查点00072b1224da882baaa43c3b8b53b53df55dc585／run42344194095取得新诊断：3 tests／8.886s，Get-ExecutionPolicy已找到Microsoft.PowerShell.Security模块但无法加载，exit1／stderr564字节。模块内部原因尚未确认，不能归因到策略、权限、编码或搜索路径；init／持久embedded／真实Hook尚未执行，两轮finally均收回账户／profile／进程及fixture。当前只读核对进程边界和必要主源，下一步须取得最小模块加载诊断或有依据的修复，不盲重跑、不跳过快照或修改用户设置。
+
+产品缺能力负向仍未触发。默认acceptance的原生Job／Hook／NTFS检查、真实控制台Ctrl+C、持久Python和项目并发、Windows中央补偿／晚保存等仍缺必要证据；cancellation-file、模拟SIGINT与macOS补偿不能冒充这些结果。完成真实tgz入口后按具体缺口补验，再做公开元数据和唯一独立QA。
+
+实现及临时CI分支均保留，集成工作树尚未推进。完整历史输出持续保存在本请求windows-capabilities.log（当前901083字节，SHAb6ea9d4ac736d3fdfb802df4b598aa601a084b34ee6fe210e56d712ead9cd05e），同windows-handoff.json原位更新并保留各次实际执行输入快照，原失败未覆盖。npm继续暂不发布，既有公开2.1.0、原仓五处修改与三个业务项目不变；剩余验收完成前不标记整体BUILD_VERIFIED或QA PASS。
 
 ## 验收结果与当前已交付行为
 
