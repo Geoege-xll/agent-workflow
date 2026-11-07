@@ -97,7 +97,9 @@ function Invoke-OrdinaryProbe([string]$Stage, [pscredential]$Credential) {
     try {
         # 每阶段都重新登录；先无权限、后赋权后的新令牌，不能复用缓存令牌。
         # 参数只含本轮路径与固定枚举；凭证只经 Credential API 传递。
-        $arguments = '-I -B "' + $probe + '" --probe ' + $Stage + ' --root "' + $root + '"'
+        # -I 忽略环境开关；重定向的普通用户 stdout 必须显式 UTF-8，
+        # 否则中文诊断会在调用能力 API 前因默认 cp1252 失败。
+        $arguments = '-I -B -X utf8 "' + $probe + '" --probe ' + $Stage + ' --root "' + $root + '"'
         $process = Start-Process -FilePath $python -ArgumentList $arguments -Credential $Credential -LoadUserProfile -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
         if (-not $process.WaitForExit(120000)) {
             # 只终止当前脚本持有的测试子进程树；不枚举或终止其他用户进程。
@@ -138,7 +140,7 @@ try {
     & "$env:SystemRoot\System32\icacls.exe" $root /grant ('*' + $sid + ':(OI)(CI)F') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw '测试 SID 的 fixture ACL 设置失败' }
     Write-Host "宿主管理员 SID: $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
-    & $python -I -B $probe --probe host-directory --root $root
+    & $python -I -B -X utf8 $probe --probe host-directory --root $root
     if ($LASTEXITCODE -ne 0) { $failures.Add("host-directory exit=$LASTEXITCODE") }
     Invoke-OrdinaryProbe 'ordinary-denied' $credential
     [AwfProbeRights]::Set($sid, $true)
