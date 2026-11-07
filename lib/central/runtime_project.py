@@ -813,9 +813,11 @@ def start():
     control = arguments[:1] in (["check"], ["new_task"]) or helper_creates_task(arguments)
     if control:
         # 新任务必须运行当前控制桥，由它检查 supplied/effective pin 与启用状态。
-        # 这里只选择经清单逐字节验证的控制代码，不在薄入口重写 gate 规则或持锁。
+        # 这里只检查current的封闭五字段外壳并选择经清单验证的控制代码。
+        # native_roots的宿主/路径语义须交完整load_core后的唯一中央codec，
+        # 不能提前import manager、复制根授权规则或接受缺字段的旧current。
         current = json.loads(read_regular(state / "central/current.json"))
-        if (not isinstance(current, dict) or set(current) != {"schema_version", "runtime_binding", "previous_binding", "generation"}
+        if (not isinstance(current, dict) or set(current) != {"schema_version", "runtime_binding", "previous_binding", "generation", "native_roots"}
                 or type(current["schema_version"]) is not int or current["schema_version"] != 1
                 or not isinstance(current["generation"], str) or not re.fullmatch("[0-9a-f]{32}", current["generation"])):
             raise ValueError("中央当前版本记录无效")

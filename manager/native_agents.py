@@ -896,18 +896,14 @@ def has_records(state: Path) -> bool:
 
 
 def current_binding(state: Path) -> dict:
-    node = native.read_node(state, "central/current.json")
-    if node.kind != "file":
+    # current是中央owner维护的封闭记录，偏好入口必须复用同一严格codec，
+    # 同时核验私有文件权限及显式native_roots；不能复制旧字段集合后漂移，
+    # 也不能忽略新增授权字段、从native归属或HOME推定一个当前版本。
+    from .runtime_policy import current_snapshot
+    _, current = current_snapshot(state)
+    if current is None:
         raise ValueError("已安装全局原生角色缺少中央当前版本记录")
-    value = unique_json(node.payload)
-    if (not isinstance(value, dict) or set(value) != {"schema_version", "runtime_binding", "previous_binding", "generation"}
-            or type(value["schema_version"]) is not int or value["schema_version"] != 1
-            or not isinstance(value["generation"], str) or len(value["generation"]) != 32
-            or any(char not in "0123456789abcdef" for char in value["generation"])):
-        raise ValueError("中央当前版本记录无效")
-    if value["previous_binding"] is not None:
-        runtime_store.validate_binding(value["previous_binding"])
-    return runtime_store.validate_binding(value["runtime_binding"])
+    return runtime_store.validate_binding(current["runtime_binding"])
 
 
 def referenced_bindings(state: Path) -> tuple:
