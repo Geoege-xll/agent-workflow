@@ -33,7 +33,7 @@ from manager import service, model_preferences, project_service, state_files
 from manager.catalog import Catalog, Model
 from manager.tui import App, HOSTS, cell_width
 from manager.tui_state import Impact
-from manager.tui_support import Layout, TextInput, Theme, ellipsize, project_plan_text, status_text
+from manager.tui_support import Layout, TextInput, Theme, ellipsize, project_plan_text, runtime_status_text, status_text
 
 
 PACK=Path(__file__).resolve().parents[1]
@@ -209,6 +209,18 @@ class TuiTest(unittest.TestCase):
         self.app.modal=None;self.app.project_index=-1
         self.assertNotIn("reset-platform",[action for action,_ in self.app.manage_rows()])
         self.assertIn("全局默认",self.app.unavailable("reset-platform"))
+
+    def test_runtime_status_keeps_cleanup_gate_separate_from_new_task_permission(self):
+        # 清理pending只阻止相应管理写入，不能由UI把服务允许的新任务也推成停用；
+        # 激活恢复和清理恢复是不同入口，摘要必须明确给出原事务恢复方向。
+        row={"runtime_binding":{"content_id":"a"*64},"previous_binding":None,
+             "pending_activation":None,"new_task_allowed":True,"management_write_allowed":False,
+             "lifecycle":{"transaction_id":"b"*32,"phase":"prepared","pending":True}}
+        text=runtime_status_text(row)
+        for expected in ("允许新任务  是","允许管理写入  否","清理状态  待恢复","未结算清理  是", "runtime cleanup --recover", "激活恢复：runtime recover"):
+            self.assertIn(expected,text)
+        row.pop("lifecycle")
+        self.assertIn("未结算清理  未读取",runtime_status_text(row))
 
     def test_runtime_actions_use_captured_context_and_modal_focus(self):
         summary={"action":"rollback","can_apply":True,"runtime_binding":{"content_id":"a"*64},"projects":[],"conflicts":[]}
