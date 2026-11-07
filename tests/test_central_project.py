@@ -947,6 +947,104 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         self.assertEqual(original, (self.project / ".claude/settings.json").read_bytes())
         self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
 
+    def delayed_hook_check(self, seconds):
+        """只延迟真实thin check；受管shim/core保持原字节，不制造check结果。"""
+        native = ('# user native trust\n[features]\nhooks = false\n'
+                  '[agents] # keep user table comment\nenabled = false\nuser_owned = true\n'
+                  '[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'
+                  'type = "command"\ncommand = "echo user"\n').encode()
+        self.put(self.project, ".codex/config.toml", native)
+        self.enable()
+        group = hook_install.managed_json(tomllib.loads((self.project / ".codex/config.toml").read_text()), "codex")["SessionStart"][0]
+        command = shlex.split(group.get("hooks", [group])[0]["command"])
+        shim = self.project / ".agent-workflow/lib/workflow_hooks.py"
+        tail = command[command.index(str(shim)) + 1:]
+        scratch = self.workspace / ("hook-check-" + uuid.uuid4().hex[:10])
+        scratch.mkdir()
+        home = scratch / "home"
+        home.mkdir()
+        observed = scratch / "check-process.json"
+        binding_out = scratch / "checked-binding.json"
+        entry = self.project / resources.LAUNCHER
+        delayed = scratch / "delayed-python-check"
+        # Python包装器先经同一解释器入口运行，仅实际runtime.py check延迟；
+        # helper保持原样执行。exec不留下shell/睡眠子孙，timeout必须回收这个PID。
+        delay_code = ("import json,os,sys,time; from pathlib import Path; "
+                      "args=sys.argv[1:]; "
+                      "delayed=args == " + repr(["-B", "-X", "utf8", str(entry), "check"]) + "; "
+                      "Path(" + repr(str(observed)) + ").write_text(json.dumps({'pid':os.getpid(),'argv':args})) if delayed else None; "
+                      "time.sleep(" + repr(seconds) + ") if delayed else None; "
+                      "os.execv(sys.executable,[sys.executable,*args])")
+        delayed.write_text("#!/usr/bin/env bash\nexec bash " + shlex.quote(str(PACK / "lib/python_runtime.sh"))
+                           + " -B -X utf8 -c " + shlex.quote(delay_code) + ' "$@"\n')
+        delayed.chmod(0o700)
+        environment = {key: value for key, value in os.environ.items() if key not in {
+            "AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"}}
+        environment.update({"HOME": str(home), "CODEX_HOME": str(home / ".codex"),
+                            "CLAUDE_CONFIG_DIR": str(home / ".claude"), "AGENT_WORKFLOW_STATE_DIR": str(self.state),
+                            "AGENT_WORKFLOW_PYTHON": sys.executable})
+        # driver只替换shim用于check的解释器路径；finally观察shim实际从check
+        # 输出取得的pin，不提前设置pin，也不替换run/subprocess或任何资格校验。
+        driver = """import json,os,runpy,sys
+from pathlib import Path
+wrapper,shim,binding_out = sys.argv[1:4]
+sys.executable = wrapper
+sys.argv = [shim,*sys.argv[4:]]
+try:
+    runpy.run_path(shim,run_name='__main__')
+finally:
+    Path(binding_out).write_text(json.dumps(os.environ.get('AGENT_WORKFLOW_RUNTIME_BINDING')))
+"""
+        hook_command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-c", driver,
+                        str(delayed), str(shim), str(binding_out), *tail]
+        payload = json.dumps({"cwd": str(self.project), "hook_event_name": "SessionStart", "source": "resume"})
+        return delayed, entry, shim, observed, binding_out, environment, hook_command, payload
+
+    def test_fresh_hook_waits_for_slow_valid_unpinned_check(self):
+        delayed, entry, shim, observed, binding_out, env, command, payload = self.delayed_hook_check(2.5)
+        before = shim.read_bytes()
+        started = time.monotonic()
+        checked = subprocess.run([str(delayed), "-B", "-X", "utf8", str(entry), "check"],
+                                 cwd=self.project, env=env, capture_output=True, text=True, timeout=20)
+        print("SLOW_VALID_CHECK", json.dumps({"elapsed": time.monotonic() - started, "returncode": checked.returncode,
+                                             "stdout": checked.stdout, "stderr": checked.stderr}), flush=True)
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        self.assertEqual(self.core.binding(), json.loads(checked.stdout)["runtime_binding"])
+        self.assertGreaterEqual(time.monotonic() - started, 2.5)
+        print("SLOW_VALID_HOOK_COMMAND", json.dumps(command), flush=True)
+        started = time.monotonic()
+        result = subprocess.run(command, input=payload, cwd=self.project, env=env, capture_output=True, text=True, timeout=22)
+        print("SLOW_VALID_HOOK", json.dumps({"elapsed": time.monotonic() - started, "returncode": result.returncode,
+                                            "stdout": result.stdout, "stderr": result.stderr}), flush=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("", result.stderr)
+        self.assertTrue(json.loads(result.stdout), result.stdout)
+        self.assertEqual("SessionStart", json.loads(result.stdout)["hookSpecificOutput"]["hookEventName"])
+        self.assertEqual(self.core.binding(), json.loads(json.loads(binding_out.read_bytes())))
+        self.assertEqual(["-B", "-X", "utf8", str(entry), "check"], json.loads(observed.read_bytes())["argv"])
+        self.assertEqual(before, shim.read_bytes())
+
+    def test_fresh_hook_timeout_is_neutral_and_reaps_check_process(self):
+        _, entry, shim, observed, binding_out, env, command, payload = self.delayed_hook_check(30)
+        before = shim.read_bytes()
+        print("TIMEOUT_HOOK_COMMAND", json.dumps(command), flush=True)
+        started = time.monotonic()
+        result = subprocess.run(command, input=payload, cwd=self.project, env=env, capture_output=True, text=True, timeout=22)
+        elapsed = time.monotonic() - started
+        print("TIMEOUT_HOOK", json.dumps({"elapsed": elapsed, "returncode": result.returncode,
+                                         "stdout": result.stdout, "stderr": result.stderr}), flush=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({}, json.loads(result.stdout))
+        self.assertEqual("", result.stderr)
+        self.assertIsNone(json.loads(binding_out.read_bytes()))
+        self.assertGreaterEqual(elapsed, 9.5)
+        self.assertLess(elapsed, 20)
+        process = json.loads(observed.read_bytes())
+        self.assertEqual(["-B", "-X", "utf8", str(entry), "check"], process["argv"])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(process["pid"], 0)
+        self.assertEqual(before, shim.read_bytes())
+
     def test_fresh_hooks_preserve_user_fields_run_protocol_and_follow_off_disable(self):
         """补足 fresh 中央路径的真实 Hook 消费，用户后续设置与签名所有权分别验证。"""
         native = ('# user native trust\n[features]\nhooks = false\n'
@@ -977,10 +1075,38 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
                            "workspacePaths": [str(self.project)], "conversationId": "fixture-session"}
                 env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(self.state)}
                 env.pop("AGENT_WORKFLOW_RUNTIME_BINDING", None)
+                started = time.monotonic()
+                # 黑盒外层预算覆盖shim自己的十秒上限，不先于生产超时逻辑中断。
                 result = subprocess.run(shlex.split(command), input=json.dumps(payload), text=True,
-                                        capture_output=True, env=env, cwd=self.project, timeout=8)
+                                        capture_output=True, env=env, cwd=self.project, timeout=20)
+                elapsed = time.monotonic() - started
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                self.assertTrue(json.loads(result.stdout), (host, event, result.stdout, result.stderr))
+                response = json.loads(result.stdout)
+                if not response:
+                    # 只在原非空断言失败后做一次只读诊断，不预热或重试Hook。
+                    # 输出仅fixture身份/耗时/返回码和许可binding，不转储环境、
+                    # 凭据或任意check正文；原失败断言仍执行，诊断不能掩盖失败。
+                    diagnostic = {"host": host, "event": event, "project": str(self.project), "hook_elapsed": elapsed}
+                    try:
+                        checked = subprocess.run(["bash", str(self.project / resources.PYTHON_ENTRY), "-B", "-X", "utf8",
+                                                  str(self.project / resources.LAUNCHER), "check"], cwd=self.project, env=env,
+                                                 capture_output=True, text=True, timeout=15)
+                        diagnostic["check_returncode"] = checked.returncode
+                        try:
+                            data = json.loads(checked.stdout)
+                            diagnostic["check_enabled"] = data.get("enabled") is True
+                            binding = data.get("runtime_binding")
+                            if isinstance(binding, dict):
+                                diagnostic["runtime_binding"] = {key: binding.get(key) for key in
+                                                                ("protocol_version", "content_id", "manifest_sha256")}
+                        except (ValueError, AttributeError):
+                            diagnostic["check_invalid_response"] = True
+                    except subprocess.TimeoutExpired:
+                        diagnostic["check_timeout"] = True
+                    except OSError:
+                        diagnostic["check_launch_failed"] = True
+                    print("FRESH_HOOK_FAILURE_DIAGNOSTIC", json.dumps(diagnostic), flush=True)
+                self.assertTrue(response, (host, event, result.stdout, result.stderr))
         # 新增用户配置继续生效；切版、repair 和 disable 不能回退整个原生容器。
         claude["mcpServers"]["later"] = {"command": "later-user"}
         self.put(self.project, ".claude/settings.json", json.dumps(claude).encode())
