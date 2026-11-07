@@ -25,6 +25,8 @@ from . import runtime_store as store
 LOCATOR = ".agent-workflow/runtime.json"
 LAUNCHER = ".agent-workflow/runtime.py"
 PYTHON_ENTRY = ".agent-workflow/lib/python_runtime.sh"
+WINDOWS_ENTRY = ".agent-workflow/lib/python_runtime.cjs"
+WINDOWS_PATHS = ".agent-workflow/lib/windows-runtime.paths"
 CONFIG = ".agent-workflow/project.yaml"
 CENTRAL_BEGIN = "<!-- agent-workflow-pack:central-begin -->"
 CENTRAL_END = "<!-- agent-workflow-pack:central-end -->"
@@ -75,6 +77,11 @@ def relative_path(raw: str) -> str:
 
 def canonical_project(project: Path) -> Path:
     path = Path(project).expanduser().absolute()
+    if os.name == "nt":
+        from .windows_fs import Directory
+        # resolve 可能擦掉 junction/祖先重解析点，必须先按原路径逐段拒绝。
+        with Directory(path):
+            pass
     if path.is_symlink() or not path.is_dir():
         raise ProjectRuntimeError("项目必须是已存在的真实目录")
     # 物理根是机器隔离键；memory.project_id 仍只是项目的可移植记忆身份。
@@ -156,7 +163,9 @@ class Node:
         # macOS 的新软链模式受 umask 影响，Linux 通常固定 0777；链接模式不
         # 决定目标访问权限，期望资源只比较目标。真实前像仍保存并比较完整 mode/
         # inode，归属与恢复另显式检查已经发布节点的实际模式，不能豁免换链。
-        if self.kind == other.kind == "link":
+        # Windows 普通文件只按正文匹配期望资源；其 mode 是只读属性投影，
+        # 私有性另核真实 DACL，发布/补偿仍保留完整前像身份与原叶权限。
+        if self.kind == other.kind == "link" or (os.name == "nt" and self.kind == other.kind == "file"):
             return self.payload == other.payload
         return (self.kind, self.payload, self.mode) == (other.kind, other.payload, other.mode)
 
@@ -187,6 +196,9 @@ def absolute_directory(path: Path, *, create: bool = False):
                 raise ProjectRuntimeError("目录在打开时被替换")
             chain.append((parent, name, node_id(before)))
             parent = child
+        if create and os.name == "nt":
+            from .windows_fs import assert_private
+            assert_private(path)
         yield parent
         for parent, name, expected in chain:
             if node_id(os.stat(name, dir_fd=parent, follow_symlinks=False)) != expected:
@@ -299,7 +311,7 @@ def managed_path(relative: str, purpose: str) -> bool:
     relative_path(relative)
     if purpose == "skill":
         return skill_parts(relative) is not None
-    fixed = {"locator": {LOCATOR}, "bridge": {LAUNCHER, PYTHON_ENTRY, ".agent-workflow/lib/workflow_hooks.py"},
+    fixed = {"locator": {LOCATOR}, "bridge": {LAUNCHER, PYTHON_ENTRY, WINDOWS_ENTRY, WINDOWS_PATHS, ".agent-workflow/lib/workflow_hooks.py"},
              "block": {"AGENTS.md", "CLAUDE.md"}, "native-config": {".codex/config.toml"}}
     if purpose in fixed:
         return relative in fixed[purpose]
@@ -313,6 +325,16 @@ def hook_bridge_source() -> bytes:
     """当前受管 Hook 的固定版本薄入口；不加载项目代码或猜已有任务的 pin。"""
     return '''"""当前受管 Hook 的薄入口；不改宿主命令/信任，不猜进行中任务版本。"""
 import os
+import sys
+if os.name == "nt":
+    _capabilities = {key: globals().get(key) for key in
+                     ("__agent_workflow_windows_fs__", "__agent_workflow_trusted_path__")}
+    if _capabilities["__agent_workflow_windows_fs__"] is None:
+        print("{}")
+        raise SystemExit(0)
+    sys.path[:] = _capabilities["__agent_workflow_trusted_path__"]
+else:
+    _capabilities = {}
 from pathlib import Path
 import runpy
 import json
@@ -324,7 +346,10 @@ if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
     # 无任务 pin 时只选择已启用项目的当前提醒脚本，不创建或改写任何任务 pin。
     # 真实 check 拒绝未知/损坏版本和停用项目；辅助层失败始终保持宿主协议中性。
     try:
-        checked = subprocess.run([sys.executable, "-B", "-X", "utf8", str(entry), "check"],
+        prefix = [sys.executable, "-B", "-X", "utf8"]
+        if os.name == "nt":
+            prefix = [sys.executable, "-I", "-B", "-X", "utf8", os.environ["AGENT_WORKFLOW_BOOTSTRAP"], "--script"]
+        checked = subprocess.run([*prefix, str(entry), "check"],
                                  capture_output=True, timeout=2, check=False)
         if checked.returncode != 0:
             raise ValueError("inactive workflow")
@@ -333,7 +358,7 @@ if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
         print("{}")
         raise SystemExit(0)
 sys.argv = [str(entry), "helper", "lib/workflow_hooks.py", *sys.argv[1:]]
-runpy.run_path(str(entry), run_name="__main__")
+runpy.run_path(str(entry), run_name="__main__", init_globals=_capabilities)
 '''.encode("utf-8")
 
 
@@ -689,18 +714,30 @@ def launcher_source() -> bytes:
     """
     return '''#!/usr/bin/env python3
 """中央项目薄入口；通过 lib/python_runtime.sh 选择已有受支持解释器。"""
+import os
+import sys
+if os.name == "nt":
+    _safe_fs = globals().get("__agent_workflow_windows_fs__")
+    _trusted = globals().get("__agent_workflow_trusted_path__")
+    if _safe_fs is None or not isinstance(_trusted, tuple):
+        raise ValueError("Windows 薄入口必须通过持久私有 Python bootstrap 执行")
+    sys.path[:] = _trusted
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import re
 import stat
-import sys
 
 sys.dont_write_bytecode = True
 
 def read_regular(path):
+    if os.name == "nt":
+        # 不从项目导入后端，不依赖 Windows stdlib 缺失的 dir_fd/O_NOFOLLOW。
+        body = _safe_fs.read_file(path)
+        if body is None:
+            raise FileNotFoundError(str(path))
+        return body
     # 自举尚不能加载核心模块，先逐段 no-follow 读取有界普通文件；完整核心验证随后进行。
     opened = []
     chain = []
@@ -776,16 +813,34 @@ def start():
         raise ValueError("中央核心清单已损坏")
     files = {row["path"]: row for row in json.loads(manifest)["files"]}
     root = version / "core"
-    # 仅这两个文件会在完整 load_core 前执行，故必须先逐个核对固定清单中的字节。
-    for relative in ("lib/platform_fs.py", "lib/runtime_store.py"):
+    # 完整 load_core 前执行的模块先逐个核对清单字节；Windows 从已核字节
+    # 编译，不在校验后重新读取路径；后端以独立名称隔离于私有 bootstrap 版。
+    bootstrap_files = ("lib/platform_fs.py", "lib/runtime_store.py")
+    if os.name == "nt":
+        _safe_fs.assert_private(state)
+        _safe_fs.assert_private(state / "bindings")
+        _safe_fs.assert_private(state / "bindings" / (key + ".json"), directory=False)
+        bootstrap_files += ("lib/windows_fs.py",)
+    verified = {}
+    for relative in bootstrap_files:
+        if os.name == "nt":
+            _safe_fs.assert_private(root / relative, directory=False)
         body = read_regular(root / relative)
         if relative not in files or hashlib.sha256(body).hexdigest() != files[relative]["sha256"]:
             raise ValueError("中央自举校验器已损坏")
+        verified[relative] = body
     sys.path.insert(0, str(root / "lib"))
+    if os.name == "nt":
+        for relative in ("lib/windows_fs.py", "lib/platform_fs.py"):
+            name = Path(relative).stem
+            dependency_spec = importlib.util.spec_from_file_location(name, root / relative)
+            dependency = importlib.util.module_from_spec(dependency_spec)
+            sys.modules[name] = dependency
+            exec(compile(verified[relative], str(root / relative), "exec"), dependency.__dict__)
     spec = importlib.util.spec_from_file_location("_agent_workflow_store", root / "lib/runtime_store.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    exec(compile(verified["lib/runtime_store.py"], str(root / "lib/runtime_store.py"), "exec"), module.__dict__)
     module.load_core(binding, state)
     sys.path.insert(0, str(root))
     from lib.runtime_bridge import main
@@ -816,6 +871,14 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
         PYTHON_ENTRY: (Node("file", resources.read("lib/python_runtime.sh"), 0o755), "bridge"),
         ".agent-workflow/lib/workflow_hooks.py": (Node("file", hook_bridge_source(), 0o644), "bridge"),
     }
+    if os.name == "nt":
+        from .windows_hook_command import runtime_paths
+        python, bootstrap = runtime_paths()
+        if any(char in python + bootstrap for char in "\r\n"):
+            raise ProjectRuntimeError("Windows 持久运行时路径不能含换行")
+        # 项目只保存两个持久路径和既有薄入口，不复制 CPython 或中央实现。
+        desired[WINDOWS_ENTRY] = (Node("file", resources.read("lib/python_runtime.cjs"), 0o644), "bridge")
+        desired[WINDOWS_PATHS] = (Node("file", (python + "\n" + bootstrap + "\n").encode("utf-8"), 0o644), "bridge")
     if config.kind == "missing":
         desired[CONFIG] = (Node("file", body, 0o644), "persistent")
     command = f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"

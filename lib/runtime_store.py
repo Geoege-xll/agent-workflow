@@ -129,6 +129,16 @@ def _included(relative: str) -> bool:
     return parts[0] in CORE_DIRECTORIES or relative in SETUP_FILES
 
 
+def _private_node(parent, name, *, directory=False):
+    """Windows 冻结库逐叶核验 ACL；祖先私有不能阻止绕过 traverse 的叶访问。"""
+    if os.name == "nt":
+        if __package__:
+            from .windows_fs import assert_private_at
+        else:
+            from windows_fs import assert_private_at
+        assert_private_at(parent, name, directory=directory)
+
+
 def _check_directory(info, display: str, *, frozen: bool = False) -> None:
     if not stat.S_ISDIR(info.st_mode):
         raise RuntimeStoreError(f"核心目录不能是链接或特殊节点：{display}")
@@ -182,6 +192,12 @@ def _absolute_directory(path: Path, *, create: bool = False):
                 raise RuntimeStoreError("核心路径在打开期间被替换")
             links.append((descriptor, name, _node_identity(before)))
             descriptor = child
+        if create and os.name == "nt":
+            if __package__:
+                from .windows_fs import assert_private
+            else:
+                from windows_fs import assert_private
+            assert_private(path)
         yield descriptor
         for parent, name, expected in links:
             if _node_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != expected:
@@ -253,6 +269,8 @@ def _scan(root: int, *, source: bool) -> tuple[list[str], list[dict], dict]:
             raise RuntimeStoreError(f"核心载荷包含链接、硬链或特殊节点：{relative}")
         if source and not _included(relative):
             return
+        if not source:
+            _private_node(parent, name, directory=stat.S_ISDIR(info.st_mode))
         folded = relative.casefold()
         if folded in seen:
             raise RuntimeStoreError(f"核心载荷路径存在跨平台重名：{relative}")
@@ -396,6 +414,16 @@ def _validated_entry(version: Path, binding: dict):
     with _absolute_directory(version) as root:
         version_info = os.fstat(root)
         _check_directory(version_info, str(version), frozen=True)
+        if os.name == "nt":
+            if __package__:
+                from .windows_fs import assert_private
+            else:
+                from windows_fs import assert_private
+            assert_private(version.parent.parent)
+            assert_private(version.parent)
+            assert_private(version)
+        _private_node(root, "manifest.json")
+        _private_node(root, "core", directory=True)
         if set(os.listdir(root)) != {"core", "manifest.json"}:
             raise RuntimeStoreError("核心版本目录的节点集合已改变")
         raw, info = _read_regular(root, "manifest.json", limit=_MANIFEST_LIMIT)

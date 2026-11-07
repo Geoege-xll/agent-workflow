@@ -41,6 +41,8 @@ def capture_process(command: list[str], *, env: dict | None = None, body: bytes 
     env = dict(os.environ) if env is None else dict(env)
     for key in ("BASH_ENV", "ENV", "CDPATH", "SHELLOPTS", "BASHOPTS"):
         env.pop(key, None)
+    if os.name == "nt":
+        return _capture_windows(command, env, body, remaining, runner)
     process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
@@ -49,6 +51,66 @@ def capture_process(command: list[str], *, env: dict | None = None, body: bytes 
         SetupRunner.stop(process)
         raise
     return subprocess.CompletedProcess(command, process.returncode, output, error)
+
+
+def _capture_windows(command, env, body, remaining, parent_runner):
+    """用既有 Windows Job 运行真实薄桥；临时私有流在 Job 收割后才读取和删除。"""
+    import tempfile
+    import uuid
+    if __package__:
+        from .windows_hook_command import runtime_paths
+        from .windows_fs import assert_private, read_file
+        from .windows_process import WindowsJobCleanupError
+    else:
+        from windows_hook_command import runtime_paths
+        from windows_fs import assert_private, read_file
+        from windows_process import WindowsJobCleanupError
+    # 不接受任意 shell 命令；唯一消费者传入当前解释器及显式脚本。
+    if command[:4] != [sys.executable, "-B", "-X", "utf8"] or len(command) < 5:
+        raise SetupRunError("Windows 捕获入口只接受当前解释器的显式 UTF-8 脚本")
+    python, bootstrap = runtime_paths()
+    root = Path(tempfile.gettempdir()) / ("agent-workflow-capture-" + uuid.uuid4().hex)
+    os.mkdir(root, 0o700)
+    child_runner = SetupRunner(remaining)
+    child_runner.cancel_file = None if parent_runner and parent_runner.recovering else (
+        parent_runner.cancel_file if parent_runner else child_runner.cancel_file)
+    created = []
+    unconfirmed_job = False
+    try:
+        assert_private(root)
+        for name, payload in (("stdin", body or b""), ("stdout", b""), ("stderr", b"")):
+            fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            created.append(name)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        wrapped = [python, "-I", "-B", "-X", "utf8", bootstrap, "--capture-dir", str(root),
+                   "--script", *command[4:]]
+        code = 0
+        try:
+            child_runner.run(wrapped, cwd=Path.cwd(), env=env)
+        except subprocess.CalledProcessError as failure:
+            code = failure.returncode
+        except WindowsJobCleanupError as failure:
+            # fatal 表示未确认写进程已停止。任何 unlink/rmdir 或普通清理异常
+            # 都不能把它降为可补偿错误，更不能交还一个仍可能写入的目录。
+            # 结构化属性和 JSON note 只记录本调用创建的路径，不包含捕获正文。
+            import json
+            unconfirmed_job = True
+            failure.capture_directory = str(root)
+            failure.add_note(json.dumps({"capture_directory": str(root), "job_stopped": False},
+                                        ensure_ascii=False, sort_keys=True))
+            raise
+        return subprocess.CompletedProcess(command, code, read_file(root / "stdout"), read_file(root / "stderr"))
+    finally:
+        if not unconfirmed_job:
+            child_runner.close()
+            for name in created:
+                os.unlink(root / name)
+            os.rmdir(root)
+        # SetupRunner.close 只恢复 signal，不证明 Job 已停止。fatal 分支保持
+        # 原异常及全部自有捕获现场，等待外层明确报告后由人工/受控恢复处理。
 
 
 def _target_path(raw: str, source_root: Path) -> Path:
@@ -123,7 +185,7 @@ def install_central(project: Path, source_root: Path, *, state: Path | None = No
                     timeout: float | None = None) -> dict:
     """源码/Homebrew/NPM 共用默认入口；不再默认复制完整核心到项目。
 
-    Windows 缺少安全软链后端时在导入、状态创建及项目写入之前明确拒绝；
+    Windows 以当前令牌真实检查安全软链能力，失败在导入、状态及项目写入前拒绝；
     旧自包含残留只由当前预览拒绝，安装器不复制整包或执行历史转换。
     """
     if __package__:

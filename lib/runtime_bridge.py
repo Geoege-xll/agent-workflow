@@ -143,7 +143,12 @@ def python_helper(state: Path, project: Path, logical_path: str, args: tuple | l
                 "AGENT_WORKFLOW_PROJECT_ROOT": str(context.project_root),
                 "AGENT_WORKFLOW_CONFIG_PATH": str(context.config_path),
                 "AGENT_WORKFLOW_CORE_ROOT": str(context.core.root)})
-    return HelperInvocation((sys.executable, "-B", "-X", "utf8", str(context.core.root / relative), *args),
+    prefix = (sys.executable, "-B", "-X", "utf8")
+    if os.name == "nt":
+        from .windows_hook_command import runtime_paths
+        python, bootstrap = runtime_paths()
+        prefix = (python, "-I", "-B", "-X", "utf8", bootstrap, "--script")
+    return HelperInvocation((*prefix, str(context.core.root / relative), *args),
                             env, context.project_root, context.runtime_binding)
 
 
@@ -157,7 +162,20 @@ def run_helper(invocation: HelperInvocation, *, timeout: float = 120) -> int:
     if not isinstance(invocation, HelperInvocation) or type(timeout) not in {int, float} or not 0 < timeout <= 3600:
         raise RuntimeBridgeError("helper 需要有效调用值及 0..3600 秒的有限超时")
     if os.name == "nt":
-        raise RuntimeBridgeError("当前中央 helper 缺少已验证的 Windows 进程组后端")
+        from .install_process import SetupRunner, SetupRunError
+        # 与安装器共用唯一 Job/绝对预算/取消后收割边界，不降级为 taskkill
+        # 或仅杀父进程。只有完整 Job 停止后才把超时/中断交还调用者。
+        runner = SetupRunner(timeout)
+        try:
+            try:
+                runner.run(invocation.command, invocation.cwd, invocation.environment)
+            except subprocess.CalledProcessError as failure:
+                return failure.returncode
+            except SetupRunError as failure:
+                raise RuntimeBridgeError(str(failure)) from failure
+            return 0
+        finally:
+            runner.close()
     child = subprocess.Popen(invocation.command, cwd=invocation.cwd, env=invocation.environment,
                              start_new_session=True)
     try:

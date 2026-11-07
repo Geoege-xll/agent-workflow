@@ -21,7 +21,7 @@ import uuid
 from lib import runtime_project as project_files
 from lib import runtime_store as store
 from lib import role_preferences
-from lib.platform_fs import directory_lock, os, publish_skill_symlink, require_skill_symlinks
+from lib.platform_fs import directory_lock, os, publish_exclusive_at, publish_skill_symlink, require_skill_symlinks
 from lib.runtime_project import (
     CONFIG, HOSTS, LOCATOR, Node, Resources, Tree,
     absolute_directory, canonical_project, central_block, identity, json_bytes,
@@ -417,13 +417,20 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
                     stream.flush()
                     os.fchmod(stream.fileno(), after.mode)
                     os.fsync(stream.fileno())
+                if os.name == "nt" and before.kind == "file":
+                    # 临时产物先保持私有；替换用户文件时精确保留旧 DACL/
+                    # 继承策略，不能用 chmod 的投影位覆盖真实访问权限。
+                    from lib.windows_fs import copy_permissions
+                    copy_permissions(tree.root / row["path"], tree.root / row["stage"] / name)
             else:
                 if core is None:
                     raise ActivationError("发布 Skill 缺少已验证固定核心")
                 publish_skill_symlink(stage, name, Path(os.fsdecode(after.payload)), core_root=core.root)
             staged = read_at(stage, name, allow_link=after.kind == "link")
-            if after.kind == "link":
-                after = Node("link", after.payload, staged.mode)
+            if after.kind == "link" or os.name == "nt":
+                # Windows 普通节点的 mode 只是实际属性投影；归属仍保留真实
+                # identity，私有记录权限另由 DACL 核验，绝不伪造 POSIX chmod。
+                after = Node(after.kind, after.payload, staged.mode)
                 row["after"] = after.value()
             row["published_inode"] = list(staged.identity[:2])
             os.fsync(stage)
@@ -442,8 +449,7 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
             if not _same_moved(moved, before):
                 raise ActivationError("旧 inode 在隔离时发生保存，已保留：" + row["backup"])
         if after.kind != "missing":
-            os.link(name, name, src_dir_fd=stage, dst_dir_fd=parent, follow_symlinks=False)
-            os.unlink(name, dir_fd=stage)
+            publish_exclusive_at(name, name, src_dir_fd=stage, dst_dir_fd=parent)
         os.fsync(parent)
         current = read_at(parent, name, allow_link=bool(skill_parts(row["path"])))
         if not current.same_content(after):
@@ -501,8 +507,7 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
                 raise ActivationError("旧 inode 已有后续保存，拒绝恢复")
             if actual.kind == "missing":
                 if backup.kind != "missing":
-                    os.link(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-                    os.unlink(Path(row["backup"]).name, dir_fd=parent)
+                    publish_exclusive_at(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent)
                 elif before.kind != "missing":
                     raise ActivationError("原文件和旧 inode 均缺失")
             elif _same_moved(actual, before) and backup.kind == "missing":
@@ -520,8 +525,7 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
                 if before.kind != "missing":
                     if backup.kind == "missing":
                         raise ActivationError("原 inode 缺失，拒绝用正文副本冒充恢复")
-                    os.link(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-                    os.unlink(Path(row["backup"]).name, dir_fd=parent)
+                    publish_exclusive_at(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent)
             else:
                 raise ActivationError("目标已有后续手改或 inode 已替换，拒绝恢复")
             os.fsync(parent)
@@ -574,6 +578,11 @@ def apply(plan: ActivationPlan) -> dict:
                 raise ActivationError("核心来源与预览版本不符")
         else:
             core = store.load_core(selected, plan.state)
+    if os.name == "nt":
+        # 实际项目卷的目录屏障也必须在首次中央状态写入前成立，临时能力
+        # 目录的成功不能代替项目所在卷。API 失败直接拒绝，不设 no-op 回退。
+        with absolute_directory(plan.project) as project_directory:
+            os.fsync(project_directory)
     with ExitStack() as stack:
         stack.enter_context(role_preferences.coordination(plan.state))
         tree = stack.enter_context(Tree(plan.project))

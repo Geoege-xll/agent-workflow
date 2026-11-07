@@ -13,10 +13,10 @@ import re
 import uuid
 
 from lib import runtime_store as store
-from lib.platform_fs import os
+from lib.platform_fs import os, publish_exclusive_at
 from lib.runtime_project import (
     HOSTS, Node, ProjectRuntimeError, Tree, json_bytes, managed_path, node_id,
-    project_key, read_at, relative_path, skill_parts, unique_json,
+    project_key, read_at as read_project_at, relative_path, skill_parts, unique_json,
 )
 
 
@@ -32,6 +32,22 @@ class ActivationError(ProjectRuntimeError):
     def __init__(self, message: str, conflicts=()):
         self.conflicts = tuple(conflicts)
         super().__init__(message)
+
+
+def read_at(parent: int, name: str) -> Node:
+    """私有机器记录专用读取；项目普通节点仍使用原 read_at。
+
+    Windows 的 chmod 位不能证明保密性。只有真实 owner/受保护 DACL 合同
+    成立，才采用 schema 中既有的 0600 语义；否则拒绝，不修补未知旧 ACL。
+    """
+    snapshot = read_project_at(parent, name)
+    if os.name == "nt" and snapshot.kind == "file":
+        from lib.windows_fs import assert_private_at
+        assert_private_at(parent, name)
+        if read_project_at(parent, name) != snapshot:
+            raise ActivationError("私有机器记录在权限核验期间变化")
+        return Node(snapshot.kind, snapshot.payload, 0o600, snapshot.identity)
+    return snapshot
 
 
 def state_relative(project: Path, kind: str) -> str:
@@ -330,8 +346,7 @@ def write_private(tree: Tree, relative: str, body: bytes) -> None:
             os.rename(name, held, src_dir_fd=parent, dst_dir_fd=parent)
             if not _same_inode(read_at(parent, held), before):
                 raise ActivationError("机器记录在隔离时被修改，保留旧记录")
-        os.link(temporary, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-        os.unlink(temporary, dir_fd=parent)
+        publish_exclusive_at(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
         os.fsync(parent)
         if held is not None:
             if not _same_inode(read_at(parent, held), before):
@@ -350,11 +365,10 @@ def write_private(tree: Tree, relative: str, body: bytes) -> None:
             # 若已有第三方节点或旧 inode 后续保存，就保留两边与标记等待核对。
             if _same_inode(read_at(parent, held), before):
                 try:
-                    os.link(held, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                    publish_exclusive_at(held, name, src_dir_fd=parent, dst_dir_fd=parent)
                 except FileExistsError:
                     pass
                 else:
-                    os.unlink(held, dir_fd=parent)
                     held = None
                     os.fsync(parent)
         raise

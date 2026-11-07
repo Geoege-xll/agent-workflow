@@ -478,6 +478,30 @@ class WindowsBootstrapPortableTest(unittest.TestCase):
         self.assertFalse((self.scripts / "__pycache__").exists())
         self.assertFalse((self.caller / "__pycache__").exists())
 
+    def test_thin_entries_do_not_expose_project_pkgutil_before_runpy(self):
+        for relative in (".agent-workflow/runtime.py", ".agent-workflow/lib/workflow_hooks.py"):
+            with self.subTest(entry=relative):
+                script = self.caller / relative
+                script.parent.mkdir(parents=True, exist_ok=True)
+                # --msys 原本会加入 PROJECT_RUNTIME/lib，两个精确薄入口及这
+                # 个预先注入路径都放同名影子；每次调用是独立 -I 进程。
+                shadow_dirs = {script.parent, self.caller / ".agent-workflow/lib"}
+                for directory in shadow_dirs:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    (directory / "pkgutil.py").write_text(
+                        "from pathlib import Path\n"
+                        "Path(__file__).with_name('pkgutil-executed').write_text('executed')\n"
+                        "raise AssertionError('project pkgutil executed before thin entry')\n", encoding="utf-8")
+                script.write_text("import json, pkgutil, sys\n"
+                                  "print(json.dumps({'pkgutil':pkgutil.__file__,'first_path':sys.path[0]}))\n", encoding="utf-8")
+                environment = {**self.env, "AGENT_WORKFLOW_PROJECT_RUNTIME": str(self.caller / ".agent-workflow")}
+                for prefix in (["--script"], ["--msys", "--script"]):
+                    with self.subTest(prefix=prefix):
+                        actual = self.run_bootstrap([*prefix, str(script)], env=environment)
+                        self.assertFalse(Path(actual["pkgutil"]).is_relative_to(self.caller))
+                        self.assertNotIn(actual["first_path"], {str(directory) for directory in shadow_dirs})
+                        self.assertFalse(any((directory / "pkgutil-executed").exists() for directory in shadow_dirs))
+
     def test_c_and_stdin_modes_preserve_source_and_argv_without_cwd_imports(self):
         source = ("import importlib.util,json,sys\n"
                   "print(json.dumps({'argv':sys.argv,'caller':importlib.util.find_spec('caller_only') is not None,"

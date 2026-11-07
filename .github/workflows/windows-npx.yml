@@ -15,6 +15,7 @@ on:
           - native-negative-fixture
           - native-backend
           - native-backend-rename
+          - native-central
 
 permissions:
   contents: read
@@ -73,6 +74,10 @@ jobs:
         run: |
           $mode = if ('${{ inputs.validation_mode }}' -eq 'native-backend-rename') { 'native-backend-rename' } else { 'native-backend' }
           & ./tests/windows_npx_runner.ps1 -Mode $mode
+      - name: Native central install and pinned thin bridge under an ordinary account
+        if: inputs.validation_mode == 'native-central' || inputs.validation_mode == 'acceptance'
+        run: |
+          & ./tests/windows_npx_runner.ps1 -Mode native-central
       - name: Portable contracts and native Job and Hook protocol checks
         if: inputs.validation_mode == 'acceptance'
         run: |

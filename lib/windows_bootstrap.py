@@ -7,6 +7,8 @@ explicit script/package directory is added, matching normal Python CLI imports.
 from __future__ import annotations
 
 import os
+import importlib.util
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path, PureWindowsPath
 import runpy
 import subprocess
@@ -72,11 +74,32 @@ def _convert(argv: list[str], indices: tuple[int, ...]) -> list[str]:
     return result
 
 
-def main(arguments: list[str] | None = None) -> int:
+def _filesystem():
+    """仅加载 bootstrap 同目录的私有后端；别名避免污染固定核心的模块命名空间。"""
+    name = "_agent_workflow_bootstrap_windows_fs"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).absolute().with_name("windows_fs.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def _execute(arguments: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if arguments is None else arguments)
     msys = arguments[:1] == ["--msys"]
     if msys:
         arguments.pop(0)
+    # 在加入任何显式项目/脚本路径前冻结解释器自身路径。中央薄入口在首个
+    # 非 builtin import 前恢复这组路径，并只接收本进程注入的安全读取能力。
+    # 不占用 windows_fs / platform_fs 名字，否则后续 pin 可能误用当前私有版。
+    trusted_paths = tuple(sys.path)
+    capabilities = {}
+    if os.name == "nt":
+        fs = _filesystem()
+        os.environ["AGENT_WORKFLOW_BOOTSTRAP"] = str(Path(__file__).absolute())
+        capabilities = {"__agent_workflow_windows_fs__": fs,
+                        "__agent_workflow_trusted_path__": trusted_paths}
     path_indices = ()
     if arguments and arguments[0].startswith("--workflow-paths="):
         raw = arguments.pop(0).partition("=")[2]
@@ -122,12 +145,54 @@ def main(arguments: list[str] | None = None) -> int:
         raise ValueError(f"unsupported runtime option: {arguments[0]}")
     else:
         script = Path(_native_path(arguments[0])).absolute()
-        # This is the explicit script directory, not the project working dir.
-        sys.path.insert(0, str(script.parent))
+        # runpy.run_path 会在目标第一行前 import pkgutil，因此薄入口不能
+        # 先加入项目目录再依赖脚本恢复 sys.path。只识别两个固定项目入口；
+        # 已验证核心 helper 等普通显式脚本保留原 script.parent 导入语义。
+        thin_entry = (
+            script.name.casefold() == "runtime.py" and script.parent.name.casefold() == ".agent-workflow"
+        ) or (
+            script.name.casefold() == "workflow_hooks.py" and script.parent.name.casefold() == "lib"
+            and script.parent.parent.name.casefold() == ".agent-workflow"
+        )
+        if thin_entry:
+            # --msys 可能已为通用 inline helper 加入 PROJECT_RUNTIME/lib；
+            # 薄入口在 runpy 自身导入前一并撤下它，不能只省略 script.parent。
+            sys.path[:] = trusted_paths
+        else:
+            sys.path.insert(0, str(script.parent))
         argv = [str(script), *arguments[1:]]
         sys.argv = _convert(argv, _script_paths(str(script), argv) + path_indices) if msys else argv
-        runpy.run_path(str(script), run_name="__main__")
+        runpy.run_path(str(script), run_name="__main__", init_globals=capabilities)
     return 0
+
+
+def main(arguments: list[str] | None = None) -> int:
+    """内部有界捕获不另建进程后端；整个解释器仍由调用方 Job 控制并收割。"""
+    arguments = list(sys.argv[1:] if arguments is None else arguments)
+    if arguments[:1] != ["--capture-dir"]:
+        return _execute(arguments)
+    if os.name != "nt" or len(arguments) < 3:
+        raise ValueError("capture-dir requires native Windows and an explicit command")
+    fs = _filesystem()
+    root = fs.absolute_path(arguments[1])
+    # 父进程先排他创建私有目录及三个普通文件。这里不创建文件、不接受项目
+    # 提供的路径或共享 fixture；任何未知 owner/DACL/重解析点都拒绝。
+    fs.assert_private(root)
+    with ExitStack() as stack:
+        streams = []
+        for name, flags, mode in (("stdin", os.O_RDONLY, "rb"),
+                                  ("stdout", os.O_WRONLY | os.O_TRUNC, "w"),
+                                  ("stderr", os.O_WRONLY | os.O_TRUNC, "w")):
+            fs.assert_private(root / name, directory=False)
+            fd = fs.secure_os.open(root / name, flags)
+            options = {} if mode == "rb" else {"encoding": "utf-8", "newline": ""}
+            streams.append(stack.enter_context(fs.secure_os.fdopen(fd, mode, **options)))
+        previous = sys.stdin
+        # 仅调整当前解释器的 Python 流；不改系统标准句柄，不影响宿主进程。
+        sys.stdin = streams[0]
+        stack.callback(setattr, sys, "stdin", previous)
+        with redirect_stdout(streams[1]), redirect_stderr(streams[2]):
+            return _execute(arguments[2:])
 
 
 if __name__ == "__main__":

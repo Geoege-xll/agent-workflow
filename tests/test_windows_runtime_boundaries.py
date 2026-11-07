@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 
 
 PACK = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PACK))
 sys.path.insert(0, str(PACK / "lib"))
 import apply_antigravity_setup as publisher
 import shared_core_skills as skills
@@ -246,6 +247,168 @@ class ConfigurationReadTest(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "validation reached"):
                 config.validate_with_profile(path, root, root / "roles")
             read.assert_called_once_with(path)
+
+
+class CentralCaptureFatalTest(unittest.TestCase):
+    def test_unconfirmed_job_preserves_files_and_original_fatal(self):
+        import json
+        from lib import install_workflow
+        from lib.windows_process import WindowsJobCleanupError
+        from lib import windows_fs as capture_fs, windows_hook_command
+        # 使用真实临时文件，只注入“Job未确认停止”这一结果；不伪造原生 Job
+        # 成功，不要求本机具有 Windows API。删除一旦被调用就立即失败。
+        fatal = WindowsJobCleanupError("fixture: job still unconfirmed")
+        runner = SimpleNamespace(cancel_file=None, run=Mock(side_effect=fatal), close=Mock())
+        backend = Backend()
+        backend.unlink = Mock(side_effect=OSError("must not unlink live-writer output"))
+        backend.rmdir = Mock(side_effect=OSError("must not rmdir live-writer output"))
+        with tempfile.TemporaryDirectory() as raw:
+            with patch.object(install_workflow, "os", backend), \
+                    patch.object(install_workflow, "SetupRunner", return_value=runner), \
+                    patch.object(windows_hook_command, "runtime_paths", return_value=(sys.executable, "fixture-bootstrap")), \
+                    patch.object(capture_fs, "assert_private"), \
+                    patch("tempfile.gettempdir", return_value=raw), \
+                    self.assertRaises(WindowsJobCleanupError) as caught:
+                install_workflow._capture_windows(
+                    [sys.executable, "-B", "-X", "utf8", "fixture-runtime.py"], {}, None, 1, None)
+            self.assertIs(caught.exception, fatal)
+            root = Path(fatal.capture_directory)
+            self.assertEqual(root.parent, Path(raw))
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["stderr", "stdin", "stdout"])
+            self.assertEqual(json.loads(fatal.__notes__[-1]), {"capture_directory": str(root), "job_stopped": False})
+            backend.unlink.assert_not_called()
+            backend.rmdir.assert_not_called()
+            runner.close.assert_not_called()
+        print("capture_fatal original_object=True unlink=0 rmdir=0 retained=3 controller_fixture_reclaimed=True")
+
+
+class CapabilityPostCreateFailureTest(unittest.TestCase):
+    class Filesystem:
+        """仅供 portable 故障定位的有界目录模型；不把模型结果声称为 NTFS 验收。"""
+        name = "nt"
+        O_RDONLY = platform_os.O_RDONLY
+        O_DIRECTORY = platform_os.O_DIRECTORY
+        O_NOFOLLOW = platform_os.O_NOFOLLOW
+
+        def __init__(self, base, stage, primary, cleanup_failure=False):
+            import stat
+            self.base, self.stage, self.primary = Path(base), stage, primary
+            self.cleanup_failure = cleanup_failure
+            self.nodes = {self.base: SimpleNamespace(st_dev=1, st_ino=1, st_mode=stat.S_IFDIR | 0o700, st_nlink=1)}
+            self.targets, self.fds = {}, {}
+            self.sequence = 1
+            self.deleted, self.closed = [], []
+            self.sync_calls = 0
+            self.supports_dir_fd = {self.symlink, self.readlink}
+
+        def path(self, path, dir_fd=None):
+            return self.fds[dir_fd] / path if dir_fd is not None else Path(path)
+
+        def open(self, path, flags, *, dir_fd=None):
+            node = self.path(path, dir_fd)
+            self.stat(node)
+            descriptor = max(self.fds, default=10) + 1
+            self.fds[descriptor] = node
+            return descriptor
+
+        def close(self, fd):
+            self.closed.append(fd)
+            del self.fds[fd]
+
+        def fstat(self, fd):
+            return self.nodes[self.fds[fd]]
+
+        def stat(self, path, *, dir_fd=None, follow_symlinks=False):
+            node = self.path(path, dir_fd)
+            if node not in self.nodes:
+                raise FileNotFoundError(str(node))
+            return self.nodes[node]
+
+        def mkdir(self, path, mode=0o777, *, dir_fd=None):
+            import stat
+            node = self.path(path, dir_fd)
+            self.sequence += 1
+            self.nodes[node] = SimpleNamespace(st_dev=1, st_ino=self.sequence,
+                                              st_mode=stat.S_IFDIR | mode, st_nlink=1)
+            if self.stage == ("target-mkdir" if node.name == "target" else "root-mkdir"):
+                raise self.primary
+
+        def symlink(self, source, target, target_is_directory=False, *, dir_fd=None):
+            import stat
+            node = self.path(target, dir_fd)
+            self.sequence += 1
+            self.nodes[node] = SimpleNamespace(st_dev=1, st_ino=self.sequence,
+                                              st_mode=stat.S_IFLNK | 0o777, st_nlink=1)
+            self.targets[node] = source
+            if self.stage == "symlink":
+                raise self.primary
+
+        def readlink(self, path, *, dir_fd=None):
+            return self.targets[self.path(path, dir_fd)]
+
+        def listdir(self, fd):
+            return sorted(path.name for path in self.nodes if path.parent == self.fds[fd])
+
+        def unlink(self, path, *, dir_fd=None):
+            node = self.path(path, dir_fd)
+            self.deleted.append(("unlink", node))
+            del self.nodes[node]
+
+        def rmdir(self, path, *, dir_fd=None):
+            node = self.path(path, dir_fd)
+            if any(path.parent == node for path in self.nodes):
+                raise OSError("directory contains unknown content")
+            self.deleted.append(("rmdir", node))
+            del self.nodes[node]
+
+        def fsync(self, fd):
+            self.sync_calls += 1
+            if self.cleanup_failure and self.sync_calls == 2:
+                raise OSError("fixture cleanup directory flush failure")
+
+    def invoke(self, stage, *, cleanup_failure=False):
+        from lib import platform_fs
+        import json
+        primary = OSError(5, "fixture post-create failure")
+        # 不创建磁盘节点，独立模型精确表达“已创建后才抛错”的状态。
+        base = Path(tempfile.gettempdir()).absolute()
+        filesystem = self.Filesystem(base, stage, primary, cleanup_failure)
+        with patch.object(platform_fs, "os", filesystem), \
+                patch.object(platform_fs.tempfile, "gettempdir", return_value=str(base)), \
+                self.assertRaises(OSError) as caught:
+            platform_fs.require_skill_symlinks()
+        self.assertIs(caught.exception, primary)
+        self.assertFalse(filesystem.fds, "所有本次锚定描述符均应关闭")
+        return base, filesystem, primary
+
+    def test_created_symlink_is_reclaimed_after_backend_postcondition_failure(self):
+        base, filesystem, primary = self.invoke("symlink")
+        self.assertEqual(set(filesystem.nodes), {base})
+        self.assertEqual([kind for kind, _ in filesystem.deleted], ["unlink", "rmdir", "rmdir"])
+        self.assertFalse(getattr(primary, "__notes__", []))
+        print("probe_post_symlink original_object=True owned_nodes_reclaimed=True handles_closed=True")
+
+    def test_failed_mkdir_keeps_unknown_created_identity_and_original_error(self):
+        import json
+        for stage in ("root-mkdir", "target-mkdir"):
+            with self.subTest(stage=stage):
+                base, filesystem, primary = self.invoke(stage)
+                self.assertGreater(len(filesystem.nodes), 1)
+                self.assertFalse(filesystem.deleted)
+                retained = json.loads(primary.__notes__[-1])
+                self.assertEqual(Path(retained["capability_directory"]).parent, base)
+                self.assertTrue(retained["cleanup_errors"])
+        print("probe_post_mkdir unknown_identity_retained=True original_object=True handles_closed=True")
+
+    def test_cleanup_flush_failure_is_visible_without_masking_primary(self):
+        import json
+        base, filesystem, primary = self.invoke("symlink", cleanup_failure=True)
+        retained = json.loads(primary.__notes__[-1])
+        root = Path(retained["capability_directory"])
+        self.assertIn(root, filesystem.nodes)
+        self.assertEqual(set(filesystem.nodes), {base, root})
+        self.assertIn("cleanup directory flush failure", retained["cleanup_errors"][0])
+        print("probe_cleanup_flush original_object=True cleanup_error_visible=True owned_root_retained=True")
 
 
 if __name__ == "__main__":

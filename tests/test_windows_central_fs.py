@@ -229,11 +229,104 @@ class WindowsBackendNativeTest(unittest.TestCase):
             os.rmdir(junction)
 
 
+@unittest.skipUnless(os.name == "nt" and __name__ == "__main__", "中央普通用户消费者需要显式 CLI")
+class WindowsCentralInstallTest(unittest.TestCase):
+    """在全新真实普通用户中走产品安装和项目薄桥，不重复底层能力矩阵。"""
+
+    def test_real_install_prepared_bridge_and_pinned_helper(self):
+        import json
+        import shutil
+        import subprocess
+        from unittest.mock import patch
+        shell = ctypes.WinDLL("shell32", use_last_error=True)
+        shell.IsUserAnAdmin.restype = ctypes.c_int32
+        self.assertFalse(shell.IsUserAnAdmin(), "中央消费者必须是真实普通用户")
+        # 该小切片采用 setup-python + 源 bootstrap；完整离线 tgz E2E 另验真正
+        # 部署的私有 embedded Python，不能以此节点替代 npm 最终安装验收。
+        sys.path.insert(0, str(PACK))
+        from lib.install_workflow import install_central
+        from lib import runtime_project as project_files, runtime_store
+        from lib.windows_fs import assert_private
+        from manager import runtime_service
+        with tempfile.TemporaryDirectory(prefix="central-native-", dir=PROBE_ROOT) as temporary:
+            root = Path(temporary)
+            project, state = root / "真实项目", root / "private-state"
+            project.mkdir()
+            sentinel = project / "user-owned.txt"
+            sentinel.write_bytes(b"preserve ordinary user data")
+            before = sentinel.stat()
+            bootstrap = PACK / "lib/windows_bootstrap.py"
+            clean = {key: value for key, value in os.environ.items() if key not in {
+                "AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
+                "AGENT_WORKFLOW_CORE_ROOT", "AGENT_WORKFLOW_CONFIG_PATH"}}
+            clean.update({"AGENT_WORKFLOW_BOOTSTRAP": str(bootstrap),
+                          "AGENT_WORKFLOW_STATE_DIR": str(state)})
+            from lib import install_workflow
+            real_capture = install_workflow.capture_process
+            def observed_capture(*arguments, **options):
+                # 仅记录本轮自有 fixture 的真实子进程失败输出，保留生产执行/
+                # 字节比较/预算，不 mock 成功结果。便于首次 native 失败定位。
+                actual = real_capture(*arguments, **options)
+                print(f"prepared桥 exit={actual.returncode} stdout_bytes={len(actual.stdout)} stderr_bytes={len(actual.stderr)}", flush=True)
+                if actual.returncode:
+                    print(actual.stderr.decode("utf-8", errors="backslashreplace"), flush=True)
+                return actual
+            with patch.dict(os.environ, clean, clear=True), patch.object(install_workflow, "capture_process", observed_capture):
+                result = install_central(project, PACK, state=state, timeout=600)
+                self.assertTrue(result["enabled"], result)
+                self.assertFalse(result["conflicts"], result)
+                assert_private(state)
+                assert_private(state / "bindings")
+                _, record = runtime_service.read_binding_record(state, project)
+                self.assertTrue(record["enabled"])
+                pin = record["runtime_binding"]
+                self.assertEqual(set(pin), {"protocol_version", "content_id", "manifest_sha256"})
+                core = runtime_store.load_core(pin, state)
+                assert_private(state / "bindings" / (project_files.project_key(project) + ".json"), directory=False)
+                for directory in ("lib", "product", "roles", "platforms", "templates", "manager"):
+                    if directory == "lib":
+                        self.assertEqual(sorted(path.name for path in (project / ".agent-workflow/lib").iterdir()),
+                                         ["python_runtime.cjs", "python_runtime.sh", "windows-runtime.paths", "workflow_hooks.py"])
+                    else:
+                        self.assertFalse((project / ".agent-workflow" / directory).exists())
+                names = project_files.skill_names(project_files.Resources(
+                    core.root, project_files.json_bytes(pin), core.label, core))
+                with project_files.Tree(project) as tree:
+                    for host in (".agents/skills", ".claude/skills"):
+                        for name in names:
+                            relative = host + "/" + name
+                            self.assertEqual(os.lstat(project / relative).st_reparse_tag, 0xA000000C)
+                            project_files.validate_skill_link(tree, relative, tree.read(relative, skill_link=True), core)
+                node = shutil.which("node.exe")
+                self.assertIsNotNone(node)
+                def invoke(*arguments):
+                    return subprocess.run([node, str(project / project_files.WINDOWS_ENTRY),
+                                           str(project / project_files.LAUNCHER), *arguments],
+                                          cwd=project, env=clean, capture_output=True, timeout=120)
+                checked = invoke("check")
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                self.assertEqual(json.loads(checked.stdout)["runtime_binding"], pin)
+                read = invoke("--binding", json.dumps(pin), "read", "product/GLOBAL_CONSTRAINTS.md")
+                self.assertEqual(read.returncode, 0, read.stdout + read.stderr)
+                self.assertEqual(read.stdout, runtime_store.read_core_source(core, "product/GLOBAL_CONSTRAINTS.md"))
+                helper = invoke("--binding", json.dumps(pin), "helper", "lib/project_profile_cli.py",
+                                "roles", ".agent-workflow", ".")
+                self.assertEqual(helper.returncode, 0, helper.stdout + helper.stderr)
+                self.assertIn(b"xy-qa", helper.stdout)
+                # 再次真实安装消费私有记录、既有软链和同内容核心，不只是首次新建。
+                repeated = install_central(project, PACK, state=state, timeout=600)
+                self.assertTrue(repeated["enabled"], repeated)
+                self.assertEqual(repeated["runtime_binding"], pin)
+            self.assertEqual(sentinel.read_bytes(), b"preserve ordinary user data")
+            self.assertEqual((sentinel.stat().st_dev, sentinel.stat().st_ino), (before.st_dev, before.st_ino))
+            print("真实中央 install/prepared桥/check/固定pin读取/Job helper/重复安装通过", flush=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", required=True,
                         choices=("host-directory", "ordinary-denied", "ordinary-allowed",
-                                 "ordinary-denied-only", "ordinary-restored", "backend-native", "backend-rename"))
+                                 "ordinary-denied-only", "ordinary-restored", "backend-native", "backend-rename", "central-install"))
     parser.add_argument("--root", required=True)
     args = parser.parse_args()
     PROBE_ROOT, PROBE_MODE = Path(args.root).resolve(strict=True), args.probe
@@ -250,5 +343,7 @@ if __name__ == "__main__":
     suite = (unittest.TestSuite(WindowsBackendNativeTest(name) for name in backend_names)
              if PROBE_MODE in {"backend-native", "backend-rename"} else
              unittest.TestSuite(WindowsCapabilityProbe(name) for name in methods))
+    if PROBE_MODE == "central-install":
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(WindowsCentralInstallTest)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)

@@ -1,7 +1,7 @@
 # 此脚本仅在一次性 GitHub Windows runner 中验证真实账户能力。
 # 产品安装器不会调用此脚本、创建账户或修改任何账户权限。
 param(
-    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup', 'native-backend', 'native-backend-rename')]
+    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup', 'native-backend', 'native-backend-rename', 'native-central')]
     [string]$Mode = 'native-capabilities'
 )
 
@@ -107,7 +107,10 @@ function Invoke-OrdinaryProbe([string]$Stage, [pscredential]$Credential) {
         # 否则中文诊断会在调用能力 API 前因默认 cp1252 失败。
         $arguments = '-I -B -X utf8 "' + $probe + '" --probe ' + $Stage + ' --root "' + $root + '"'
         $process = Start-Process -FilePath $python -ArgumentList $arguments -Credential $Credential -LoadUserProfile -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-        if (-not $process.WaitForExit(120000)) {
+        # 中央导入+prepared真实桥+helper 是一个完整消费者，独立上限15分钟；
+        # 旧能力/后端节点保留2分钟上限，不扩大其他阶段的预算。
+        $stageTimeout = if ($Stage -eq 'central-install') { 900000 } else { 120000 }
+        if (-not $process.WaitForExit($stageTimeout)) {
             # 只终止当前脚本持有的测试子进程树；不枚举或终止其他用户进程。
             & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Host
             if (-not $process.WaitForExit(30000)) { throw "测试子进程终止失败：$Stage" }
@@ -390,7 +393,7 @@ if ($Mode -in @('native-negative-fixture', 'native-negative-cleanup')) {
 
 # 正向后端也由默认 acceptance 消费，允许 main 上同一 hosted/仓库/HEAD
 # 绑定；只有会修改 registry 的负向 fixture 和 cleanup 才限制临时分支。
-if ($Mode -in @('native-backend', 'native-backend-rename')) { Assert-HostedEnvironment $false }
+if ($Mode -in @('native-backend', 'native-backend-rename', 'native-central')) { Assert-HostedEnvironment $false }
 
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
@@ -410,9 +413,9 @@ try {
     & "$env:SystemRoot\System32\icacls.exe" $root /grant ('*' + $sid + ':(OI)(CI)F') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw '测试 SID 的 fixture ACL 设置失败' }
     Write-Host "宿主管理员 SID: $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
-    if ($Mode -in @('native-backend', 'native-backend-rename')) {
+    if ($Mode -in @('native-backend', 'native-backend-rename', 'native-central')) {
         # 修复模式只选择两个原失败节点；不重复已绿硬链/junction/能力矩阵。
-        $stage = if ($Mode -eq 'native-backend-rename') { 'backend-rename' } else { 'backend-native' }
+        $stage = if ($Mode -eq 'native-central') { 'central-install' } elseif ($Mode -eq 'native-backend-rename') { 'backend-rename' } else { 'backend-native' }
         Invoke-OrdinaryProbe $stage $credential
     } else {
         & $python -I -B -X utf8 $probe --probe host-directory --root $root

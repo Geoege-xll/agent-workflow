@@ -378,11 +378,11 @@ def restrict_handle(handle):
             raise ctypes.WinError(error)
 
 
-def assert_private(path):
-    """Verify owner and protected current-user/SYSTEM ACL, not an owner marker."""
+def assert_private(path, *, directory=True):
+    """核验当前 owner 与受保护的当前用户/SYSTEM 叶 DACL；父目录不能代替叶权限。"""
     api = _api()
-    with Directory(path):
-        handle = _open_handle(path, 0x20080, directory=True)
+    with Directory(path if directory else Path(path).parent):
+        handle = _open_handle(path, 0x20080, directory=directory)
         descriptor, owner, acl = HANDLE(), HANDLE(), HANDLE()
         user, system = HANDLE(), HANDLE()
         try:
@@ -427,6 +427,15 @@ def assert_private(path):
             _close(handle)
 
 
+def assert_private_at(parent, name, *, directory=False):
+    """在已锚定目录中核验私有普通记录；不把 POSIX mode 位当成 Windows 权限。"""
+    path = secure_os._path(name, parent)
+    before = secure_os.stat(name, dir_fd=parent, follow_symlinks=False)
+    assert_private(path, directory=directory)
+    if secure_os.stat(name, dir_fd=parent, follow_symlinks=False) != before:
+        raise ValueError("私有 Windows 记录在 ACL 核验期间被替换")
+
+
 def _copy_permissions(source, destination):
     descriptor, acl = HANDLE(), HANDLE()
     api = _api()
@@ -458,6 +467,7 @@ def copy_permissions(source: Path, destination: Path) -> None:
             new = _open_handle(destination, READ | WRITE | 0x40000)
             try:
                 _copy_permissions(old, new)
+                _check(_api().kernel.FlushFileBuffers(new), destination)
             finally:
                 _close(new)
         finally:
@@ -984,17 +994,23 @@ def remove_file_if_unchanged(path: Path, digest: str, identity=None, *, limit=12
 
 
 def read_file(path: Path, limit=4 * 1024 * 1024) -> bytes | None:
+    """逐段锚定父目录读取普通文件；读取前后及最终路径必须属于同一完整身份。"""
+    path = absolute_path(path)
     try:
-        descriptor = secure_os.open(path, _os.O_RDONLY | NOFOLLOW)
+        with Directory(path.parent):
+            descriptor = secure_os.open(path, _os.O_RDONLY | NOFOLLOW)
+            with secure_os.fdopen(descriptor, "rb") as stream:
+                before = secure_os.fstat(stream.fileno())
+                if before.st_size > limit:
+                    raise ValueError(f"file exceeds safe read limit: {path}")
+                body = stream.read(limit + 1)
+                after = secure_os.fstat(stream.fileno())
+            stamp = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                                  info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            current = secure_os.stat(path, follow_symlinks=False)
+            if (len(body) != before.st_size or len(body) > limit
+                    or stamp(before) != stamp(after) or stamp(before) != stamp(current)):
+                raise ValueError(f"file changed during safe read: {path}")
+            return body
     except FileNotFoundError:
         return None
-    with secure_os.fdopen(descriptor, "rb") as stream:
-        before = secure_os.fstat(stream.fileno())
-        if before.st_size > limit:
-            raise ValueError(f"file exceeds safe read limit: {path}")
-        body = stream.read(limit + 1)
-        after = secure_os.fstat(stream.fileno())
-    if (len(body) > limit or (before.st_ino, before.st_size, before.st_mtime_ns)
-            != (after.st_ino, after.st_size, after.st_mtime_ns)):
-        raise ValueError(f"file changed during safe read: {path}")
-    return body
