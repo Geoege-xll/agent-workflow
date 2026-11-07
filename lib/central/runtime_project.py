@@ -330,9 +330,12 @@ entry = Path(__file__).absolute().parent.parent / "runtime.py"
 if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
     # 无任务 pin 时只选择已启用项目的当前提醒脚本，不创建或改写任何任务 pin。
     # 真实 check 拒绝未知/损坏版本和停用项目；辅助层失败始终保持宿主协议中性。
+    # 完整核心与中央状态校验可能在较慢机器上超过两秒，需在有限预算内允许
+    # 合法检查完成。十秒只是等待上限，正常成功立即继续，不预热、重试或缓存；
+    # 持续超时仍回收check进程并返回中性响应，不能绕过新任务准入或猜测pin。
     try:
         checked = subprocess.run([sys.executable, "-B", "-X", "utf8", str(entry), "check"],
-                                 capture_output=True, timeout=2, check=False)
+                                 capture_output=True, timeout=10, check=False)
         if checked.returncode != 0:
             raise ValueError("inactive workflow")
         os.environ["AGENT_WORKFLOW_RUNTIME_BINDING"] = json.dumps(json.loads(checked.stdout)["runtime_binding"])
