@@ -141,8 +141,13 @@ class CentralProjectTest(unittest.TestCase):
         self.enable()
         link = self.project / ".agents/skills/xy-workflow"
         target = os.readlink(link)
-        link.unlink()
+        # 先把原链接移到项目外的同一临时工作区保留，防止 Linux 在 unlink 后
+        # 立即复用 inode，使同目标重建仍满足生产归属检查的 (dev, inode)。
+        # lstat 只比较链接节点本身，确保下面的拒绝断言确实针对不同身份的链接。
+        retained_link = self.workspace / (self.project.name + "-original-workflow-link")
+        link.rename(retained_link)
         link.symlink_to(target)
+        self.assertNotEqual(retained_link.lstat().st_ino, link.lstat().st_ino)
         result = self.invoke("--binding", json.dumps(self.core.binding()), "helper", "lib/project/project_profile_cli.py",
                              "roles", ".agent-workflow", ".")
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
@@ -565,8 +570,13 @@ print("最小冻结核心新 owner 独立加载成功")
         self.assertTrue(role.is_file())
         link = self.project / ".agents/skills/xy-workflow"
         original = os.readlink(link)
-        link.unlink()
+        # repair 负控同样保活旧链接，避免 unlink 后立即重建被 Linux 分配原 inode。
+        # 保留位置在项目外且仍属本例临时工作区；用 lstat 确认只替换链接身份，
+        # 不把相同目标目录的身份当作变化，也不改变原有的拒绝修复合同。
+        retained_link = self.workspace / (self.project.name + "-original-workflow-link")
+        link.rename(retained_link)
         link.symlink_to(original, target_is_directory=True)
+        self.assertNotEqual(retained_link.lstat().st_ino, link.lstat().st_ino)
         plan = service.preview(self.state, self.project, "repair")
         self.assertFalse(plan.summary["can_apply"])
         self.assertTrue(any("替换" in item["reason"] for item in plan.summary["conflicts"]))
