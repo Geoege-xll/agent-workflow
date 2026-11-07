@@ -48,9 +48,11 @@ QA后PM原位更新本主题及同名HTML，使用实际required生命周期解�
 
 底层能力及四个后端消费者已完成原生补证：目录fsync、软链正反能力与恢复、真硬链及普通文件守卫、junction拒绝、软链读建移删和普通文件排他移动／碰撞保全均有真实普通用户证据。当前检查点2549d8e9已包含中央事务、私有记录叶DACL、项目ACL保全、薄桥自举与Job helper；本地中央／补偿、私有发布、未确认Job保留现场、探针创建后失败、全新进程的pkgutil影子拒绝已通过。
 
-LF修正已在abe710f1／run42338668219原生证明：新VM实际system autocrlf=true，检出仍与LF blob逐字节一致，VERSION及角色预览通过。中央消费者继续进入apply后，在创建私有状态路径时被后端mkdir的前置flush拒绝C盘根写权限；原因是上层对既存祖先用mkdir捕EEXIST，而后端在判断已存在之前就要求父目录写权限。本轮只修这个实际语义：已存在节点无修改地返回EEXIST，真正创建继续完整的前后持久化及ACL检查，不要求普通用户对卷根有写权。该轮未进入核心导入／prepared，finally资源清理成功。
+当前生产检查点a152ebc3／原生run42339751782已经通过真实普通用户中央安装启用、prepared桥exit0、私有记录／核心DACL、Skill真目录软链、Node薄入口check及固定pin读取。原LF与既存目录根写权限、journal逻辑路径问题均已越过。整次消费者仍失败：真实Job helper的ProjectProfile报告18项配置校验错误，重复安装尚未执行，finally账户／profile／fixture全部回收；不能将这些局部结果记为完整BUILD_VERIFIED或QA PASS。
 
-完整历史输出持续保存在本请求windows-capabilities.log，含首轮VERSION失败及其旧VM配置未记录边界，原失败未覆盖。剩余为当前中央消费者原生通过、npm持久embedded／当前E2E与真实Hook／产品负向、2.1.1元数据、必要macOS消费者及唯一独立QA；此前绿色均不作为完整BUILD_VERIFIED或QA PASS。
+只读诊断确认helper参数roles .agent-workflow .符合当前中央合同。验证器以本机Path渲染诊断，而中央configuration用规范斜杠的已验证owned_links逐字匹配；9个Skill目录及各SKILL.md在Windows下共18条无法匹配，与原生计数一致。原18项受安全错误投影隐藏，尚未逐项观测。建议只在runtime_project.configuration边界将已验证的精确链接路径渲染为验证器诊断格式，保留未知链接、普通文件、文档／角色守卫及逻辑协议；该后续修复尚未实施。
+
+中央验收已经初始失败及三轮返工，当前按内置返工上限停止生产写入和CI重试，等待用户对上述具体继续方案的决定；未撤销原Full目标，也未伪报完成。实现及临时CI分支均保留，集成工作树尚未推进。完整历史输出持续保存在本请求windows-capabilities.log（当前末段结束436668字节），同windows-handoff.json为停止后的只读交接，原失败未覆盖。剩余为该helper与重复安装通过、npm持久embedded／当前E2E与真实Hook／产品负向、2.1.1元数据、必要macOS消费者和唯一独立QA；npm继续暂不发布，既有公开2.1.0与三个业务项目不变。
 
 ## 验收结果与当前已交付行为
 
