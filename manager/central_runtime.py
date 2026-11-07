@@ -317,7 +317,10 @@ def _compensate(state: Path, journal: dict, snapshot: Node, context) -> dict:
             conflicts.append({"path": row["project"], "reason": str(exc), "code": "project_compensation_conflict"})
     try:
         receipt = native_agents.compensate_global(journal["native_ref"], context=context)
-        if not isinstance(receipt, dict) or receipt.get("status") not in {"compensated", "not_started"} or receipt.get("conflicts"):
+        # noop是原生服务复核本批持久ref中的witness后确认“未写原生产物”的合法
+        # 结算，不需要再撤回全局文件；不能把它误判为冲突，使项目已补偿的批次
+        # 永久卡在pending。仅接纳明确成功状态，任何conflicts或未知状态仍关门。
+        if not isinstance(receipt, dict) or receipt.get("status") not in {"compensated", "not_started", "noop"} or receipt.get("conflicts"):
             conflicts.append({"path": "native", "reason": "原生服务返回未完成的条件补偿结果",
                               "code": "native_compensation_conflict"})
     except (OSError, ValueError) as exc:
