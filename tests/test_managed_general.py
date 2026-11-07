@@ -17,8 +17,8 @@ import unittest
 import zlib
 from unittest.mock import patch
 
-from lib import install_workflow
-from lib.validate_project_config import validate_with_profile
+from lib.install import install_workflow
+from lib.project.validate_project_config import validate_with_profile
 from lib.validate_project_docs import validate as validate_documents
 from tests import test_unified_host_workflow as host_cases
 
@@ -82,8 +82,8 @@ class GeneralPublisherTest(host_cases.UnifiedHostFixture, unittest.TestCase):
 class GeneralAtomicPublicationTest(unittest.TestCase):
     def test_current_index_plan_keeps_rule_bytes_and_publishes_missing_links(self):
         """当前 source setup 仍消费规范规划器；只补索引，规则正文没有自动剥离权限。"""
-        from lib.project_discovery import discover_project
-        from lib.standards_baseline import plan_standard_updates
+        from lib.project.project_discovery import discover_project
+        from lib.documents.standards_baseline import plan_standard_updates
         with tempfile.TemporaryDirectory(prefix="current-standard-index-") as raw:
             project = Path(raw).resolve()
             leaf = project / "docs/standards/LOCAL.md"
@@ -110,8 +110,8 @@ class GeneralAtomicPublicationTest(unittest.TestCase):
     @staticmethod
     def applier():
         # 发布器也是直接脚本入口，按它实际使用的 lib 搜索路径加载，不修改全局环境。
-        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
-            return importlib.import_module("apply_antigravity_setup")
+        with patch.object(sys, "path", [str(PACK), *sys.path]):
+            return importlib.import_module("lib.hosts.apply_antigravity_setup")
 
     def test_antigravity_document_publication_and_rollback_preserve_concurrent_content(self):
         applier = self.applier()

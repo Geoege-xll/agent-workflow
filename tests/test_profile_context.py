@@ -12,8 +12,8 @@ import tempfile
 import unicodedata
 import unittest
 
-from lib.profile_context import render_context
-from lib.project_discovery import ModuleProfile, ProjectProfile, UI_ROLES, VerificationCommand, discover_project
+from lib.project.profile_context import render_context
+from lib.project.project_discovery import ModuleProfile, ProjectProfile, UI_ROLES, VerificationCommand, discover_project
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -252,7 +252,7 @@ class ProfileContextTest(unittest.TestCase):
 
             def cli(*arguments):
                 return subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-X", "utf8",
-                                       str(PACK / "lib/project_profile_cli.py"), *arguments],
+                                       str(PACK / "lib/project/project_profile_cli.py"), *arguments],
                                       capture_output=True, text=True, check=False, timeout=20)
 
             before = snapshot()

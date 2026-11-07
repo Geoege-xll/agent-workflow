@@ -46,9 +46,13 @@ def pinned_fixture(workspace: Path, *, engineering_body: bytes | None = None):
         body = (engineering_body if relative == BUILTIN_ENGINEERING and engineering_body is not None
                 else (PACK / relative).read_bytes())
         target.write_bytes(body)
-    for module in ("context_read", "runtime_pins", "runtime_store", "standard_paths",
-                   "claude_instructions", "platform_fs"):
-        (source / f"lib/{module}.py").write_bytes((PACK / f"lib/{module}.py").read_bytes())
+    # 冻结真正运行的所属模块和纯文档包标识，不能再用旧平铺名称拼出不存在的路径。
+    for relative in ("lib/__init__.py", "lib/documents/__init__.py", "lib/documents/context_read.py",
+                     "lib/runtime_pins.py", "lib/runtime_store.py", "lib/standard_paths.py",
+                     "lib/hosts/__init__.py", "lib/hosts/claude_instructions.py", "lib/platform_fs.py"):
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((PACK / relative).read_bytes())
     (source / "product/WORKFLOW.md").write_bytes("固定旧版工作流正文\n".encode())
     return source, state, runtime_store.import_core(source, state)
 

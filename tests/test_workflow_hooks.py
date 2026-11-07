@@ -17,10 +17,10 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from lib import install_workflow
-from lib import workflow_hook_install as installer
+from lib.install import install_workflow
+from lib.hosts import workflow_hook_install as installer
 from lib import workflow_hooks as hooks
-from lib.workflow_hook_settings import hook_mode
+from lib.hosts.workflow_hook_settings import hook_mode
 
 PACK = Path(__file__).resolve().parents[1]
 
@@ -164,7 +164,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(user, path.read_text())
 
     def test_codex_agents_and_inline_hooks_stable_and_snapshot_projects_limit_change(self):
-        from lib.merge_codex_config import merge
+        from lib.hosts.merge_codex_config import merge
         path = self.project / ".codex/config.toml"
         path.parent.mkdir()
         path.write_text('[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'
@@ -183,7 +183,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(predicted, path.read_bytes())
 
     def test_native_codex_and_inline_hook_are_published_once_with_no_intermediate_state(self):
-        from lib.merge_codex_config import merge
+        from lib.hosts.merge_codex_config import merge
         path = self.project / ".codex/config.toml"
         path.parent.mkdir()
         path.write_text('[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'
@@ -366,10 +366,10 @@ class HookTest(unittest.TestCase):
 
     def test_agy_hook_rollback_does_not_overwrite_published_concurrent_edit(self):
         # applier 采用原有按路径事务接口；只构造配置变化，避免昂贵且无关的模块发现。
-        library = str(PACK / "lib")
+        library = str(PACK)
         sys.path.insert(0, library)
         self.addCleanup(lambda: sys.path.remove(library))
-        import apply_antigravity_setup as applier
+        import lib.hosts.apply_antigravity_setup as applier
         path = self.project / ".agents/hooks.json"
         path.write_bytes(b'{"user":true}\n')
         plan = applier.Plan(self.pack, self.project, self.project, "rollback-test")
@@ -385,10 +385,10 @@ class HookTest(unittest.TestCase):
         self.assertEqual(b'{"user":true}\n', change.backup.read_bytes())
 
     def test_agy_unpublished_hook_does_not_delete_concurrent_new_file(self):
-        library = str(PACK / "lib")
+        library = str(PACK)
         sys.path.insert(0, library)
         self.addCleanup(lambda: sys.path.remove(library))
-        import apply_antigravity_setup as applier
+        import lib.hosts.apply_antigravity_setup as applier
         path = self.project / ".agents/hooks.json"
         plan = applier.Plan(self.pack, self.project, self.project, "unpublished-test")
         plan.hook_changes.append(applier.FileChange(path, b'{"managed":true}\n', 0o644,
@@ -404,8 +404,8 @@ class InstalledCallbackTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="workflow-hook-user-config-") as raw:
             project = Path(raw).resolve() / "project"
             project.mkdir()
-            source = Path(raw).resolve() / "source"
-            shutil.copytree(PACK, source, ignore=shutil.ignore_patterns("tests", "__pycache__", ".DS_Store"))
+            source = PACK
+            state = Path(raw).resolve() / "state"
             (project / ".codex").mkdir()
             codex = project / ".codex/config.toml"
             codex.write_text('[features]\nhooks = false\n[[hooks.SessionStart]]\n'
@@ -418,12 +418,13 @@ class InstalledCallbackTest(unittest.TestCase):
             (project / ".claude").mkdir()
             claude = project / ".claude/settings.json"
             claude.write_text('{"autoMemoryEnabled":false,"disableAllHooks":true}')
-            installed = subprocess.run(["bash", str(source / "install.sh"), str(project)],
+            # 同一用例复用自己的内容库；不访问默认用户状态，也不复制另一份源码。
+            installed = subprocess.run(["bash", str(source / "install.sh"), str(project), "--state-dir", str(state)],
                                        capture_output=True, text=True, timeout=120)
             self.assertEqual(0, installed.returncode, installed.stdout + installed.stderr)
             runtime = project / ".agent-workflow"
             for attempt in range(2):
-                result = subprocess.run(["bash", str(runtime / "setup_all.sh")],
+                result = subprocess.run(["bash", str(source / "install.sh"), str(project), "--state-dir", str(state)],
                                         capture_output=True, text=True, timeout=120)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertFalse((project / ".codex/hooks.json").exists())
@@ -434,13 +435,37 @@ class InstalledCallbackTest(unittest.TestCase):
                 self.assertTrue(json.loads(claude.read_text())["disableAllHooks"])
                 self.assertFalse(json.loads(claude.read_text())["autoMemoryEnabled"])
             before = agy.read_bytes()
-            agents = {path.name: path.read_bytes() for path in (project / ".agents/agents").iterdir()}
-            result = subprocess.run(["bash", str(runtime / "setup_antigravity.sh")],
-                                    env=os.environ | {"AGENT_WORKFLOW_PACK_TEST_FAILPOINT": "antigravity-generated-validator-failure"},
-                                    capture_output=True, text=True, timeout=120)
-            self.assertNotEqual(0, result.returncode)
+            agents = {path.name: path.read_bytes() for path in (project / ".agents/agents").glob("xy-*.md")}
+            from manager import runtime_service as central_service
+            (project / "go.mod").write_text("module example.test/hook-rollback\n")
+            binding = json.loads((runtime / "runtime.json").read_bytes())["runtime_binding"]
+            plan = central_service.preview(state, project, "enable", binding=binding)
+            target = ".agents/agents/xy-backend.md"
+            self.assertIn(target, {change.relative for change in plan.changes})
+            original = central_service._publish
+            published = []
+
+            def fail_after_native_publish(tree, row, core, save):
+                # 先真正发布新 AGY 角色并登记 journal，再模拟失败；这样验证的是
+                # 原生中央事务的条件回滚，而不是一个尚未写入就返回失败的替身。
+                result = original(tree, row, core, save)
+                published.append(row["path"])
+                if row["path"] == target:
+                    raise OSError("fixture native publication interrupted")
+                return result
+
+            with patch.object(central_service, "_publish", side_effect=fail_after_native_publish):
+                with self.assertRaisesRegex(OSError, "native publication interrupted"):
+                    central_service.apply(plan)
+            self.assertIn(target, published)
+            self.assertFalse((project / target).exists())
             self.assertEqual(before, agy.read_bytes())
-            self.assertEqual(agents, {path.name: path.read_bytes() for path in (project / ".agents/agents").iterdir()})
+            # 原生角色正文必须逐字节恢复；中央事务为保护旧 inode 保留的私有条目
+            # 由机器记录和 ownership 验证，不把它们误当作新 Agent 或删除这些恢复资料。
+            self.assertEqual(agents, {path.name: path.read_bytes() for path in (project / ".agents/agents").glob("xy-*.md")})
+            restored = central_service.status(state, project)
+            self.assertTrue(restored["enabled"], restored)
+            self.assertEqual([], restored["conflicts"])
 
 
 if __name__ == "__main__":

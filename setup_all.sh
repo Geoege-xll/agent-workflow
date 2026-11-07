@@ -39,7 +39,7 @@ if [[ "${CHECK}" -eq 1 && "${PREFLIGHT}" -eq 1 ]]; then
 fi
 
 if [[ "${CHECK}" -eq 0 && "${PREFLIGHT}" -eq 0 ]]; then
-  python3 "${DIR}/lib/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
+  python3 "${DIR}/lib/project/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
 fi
 
 selected() {
@@ -51,7 +51,7 @@ selected() {
 if [[ "${CHECK}" -eq 0 ]]; then
   if [[ -z "${ONLY}" ]]; then
     # 三平台入口合并后先预检最终大小与所有权边界，避免单平台分别通过后局部安装失败。
-    python3 "${DIR}/lib/claude_instructions.py" preflight-all "${DIR}" "${PROJECT_ROOT}"
+    python3 "${DIR}/lib/hosts/claude_instructions.py" preflight-all "${DIR}" "${PROJECT_ROOT}"
   fi
   for host in claude codex antigravity; do
     selected "${host}" || continue
@@ -98,7 +98,7 @@ if [[ "${CHECK}" -eq 1 ]]; then
   # 直接消费与两套脚手架一致的 ProjectProfile 判断；命令替换也让发现失败
   # 按 set -e 退出，不能像进程替换那样隐藏错误后跳过必要检查。
   DESIGN_SCAFFOLD_REQUIRED=$(
-    python3 "${DIR}/lib/project_profile_cli.py" design-scaffold \
+    python3 "${DIR}/lib/project/project_profile_cli.py" design-scaffold \
       "${DIR}" "${PROJECT_ROOT}"
   )
   if [[ "${DESIGN_SCAFFOLD_REQUIRED}" == "1" ]]; then

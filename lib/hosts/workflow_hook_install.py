@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""合并三平台项目 Hooks：只拥有带内容签名的条目，保留用户设置和原生信任。"""
+
+from __future__ import annotations
+
+# 直接脚本只信任自身物理位置确定的核心根，避免异 cwd 或 PYTHONPATH 中的
+# 同名模块劫持内部依赖；正常包导入沿用调用方已选择的固定核心。
+if not __package__:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+
+import argparse
+import copy
+import hashlib
+import json
+import os
+import ntpath
+from pathlib import Path
+import re
+import shlex
+import stat
+import sys
+import tomllib
+
+sys.dont_write_bytecode = True
+if __package__:
+    from lib.hosts.claude_instructions import atomic_write, read_file
+    from lib.hosts.workflow_hook_settings import hook_mode
+    from lib.workflow_hooks import OWNER
+    from lib.hosts.claude_options import parse as parse_claude_options
+    from lib.hosts import windows_hook_command
+else:
+    from lib.hosts.claude_instructions import atomic_write, read_file
+    from lib.hosts.workflow_hook_settings import hook_mode
+    from lib.workflow_hooks import OWNER
+    from lib.hosts.claude_options import parse as parse_claude_options
+    import lib.hosts.windows_hook_command as windows_hook_command
+
+BEGIN = "# agent-workflow-pack:assist-hooks-begin"
+END = "# agent-workflow-pack:assist-hooks-end"
+SIGNATURE = "WORKFLOW_SIGNATURE_PLACEHOLDER"
+EVENTS = {
+    "codex": (("SessionStart", "startup|resume|clear|compact|fork"), ("UserPromptSubmit", "")),
+    "claude": (("SessionStart", "startup|resume|clear|compact"),
+               ("UserPromptSubmit", ""), ("PreToolUse", "^Agent$")),
+    "antigravity": (("SessionStart", ""),),
+}
+
+
+def canonical(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def _hook_command(pack: Path, project: Path, host: str, event: str) -> str:
+    tail = ["--host", host, "--event", event, "--project", str(project),
+            "--owner", OWNER, "--signature", SIGNATURE]
+    if os.name == "nt":
+        python, bootstrap = windows_hook_command.runtime_paths()
+        script = windows_hook_command.persistent_path(str(pack / "lib/workflow_hooks.py"), "project runtime")
+        windows_hook_command.persistent_path(str(project), "project")
+        return windows_hook_command.encode_command([
+            python, "-I", "-B", "-X", "utf8", bootstrap, "--script", script, *tail])
+    return shlex.join([sys.executable, "-B", str(pack / "lib/workflow_hooks.py"), *tail])
+
+
+def signed_group(pack: Path, project: Path, host: str, event: str, matcher: str) -> dict:
+    """POSIX v1 保持原命令；Windows v2 使用可逆原生协议及持久运行时。"""
+    command = _hook_command(pack, project, host, event)
+    handler = {"type": "command", "command": command, "timeout": 3}
+    if host == "codex":
+        handler["additionalContextLimit"] = 512
+    group = {"hooks": [handler]}
+    if matcher:
+        group["matcher"] = matcher
+    if host == "antigravity":
+        group = handler
+    digest = hashlib.sha256(canonical(group)).hexdigest()
+    if command.startswith(windows_hook_command.PREFIX):
+        args = windows_hook_command.decode_command(command)
+        args[-1] = digest
+        handler["command"] = windows_hook_command.encode_command(args)
+    else:
+        handler["command"] = command[:-len(SIGNATURE)] + digest
+    return group
+
+
+def owned_group(group: object) -> bool:
+    """标记不是充分证据：用户改过任何条目字段都必须停止覆盖。"""
+    if not isinstance(group, dict):
+        return False
+    handlers = group.get("hooks", [group])
+    if not isinstance(handlers, list):
+        return False
+    candidates = [item for item in handlers if isinstance(item, dict)
+                  and isinstance(item.get("command"), str)
+                  and windows_hook_command.looks_managed(item["command"], OWNER)]
+    if not candidates:
+        return False
+    if len(handlers) != 1 or len(candidates) != 1:
+        raise ValueError("mixed or modified managed Hook group; preserve it and resolve explicitly")
+    command = candidates[0]["command"]
+    windows = (command.startswith("powershell.exe ") or windows_hook_command.ENCODED_MARKER in command)
+    if windows:
+        args = windows_hook_command.decode_command(command)
+        if len(args) == 18:
+            for index, label in ((0, "Python executable"), (5, "bootstrap"),
+                                 (7, "project runtime"), (13, "project")):
+                windows_hook_command.persistent_path(args[index], label)
+        if (len(args) != 18 or args[1:5] != ["-I", "-B", "-X", "utf8"]
+                or ntpath.basename(args[5]).casefold() != "windows_bootstrap.py"
+                or not ntpath.isabs(args[5]) or args[6] != "--script"
+                or not ntpath.isabs(args[7]) or not args[7].replace("\\", "/").endswith("/lib/workflow_hooks.py")
+                or args[8] != "--host" or args[9] not in EVENTS or args[10] != "--event"
+                or args[12] != "--project" or not ntpath.isabs(args[13])
+                or args[14:17] != ["--owner", OWNER, "--signature"]
+                or not re.fullmatch(r"[0-9a-f]{64}", args[17])):
+            raise ValueError("unproven managed Windows Hook command; preserve it and resolve explicitly")
+        signature = args[-1]
+        args[-1] = SIGNATURE
+        unsigned_command = windows_hook_command.encode_command(args)
+    else:
+        args = shlex.split(command)
+        if (len(args) != 13 or args[1] != "-B" or not args[2].endswith("/lib/workflow_hooks.py")
+                or args[3] != "--host" or args[4] not in EVENTS or args[5] != "--event"
+                or args[7] != "--project" or args[9:12] != ["--owner", OWNER, "--signature"]
+                or not re.fullmatch(r"[0-9a-f]{64}", args[12])):
+            raise ValueError("unproven managed Hook command; preserve it and resolve explicitly")
+        signature = args[12]
+        # 只替换末尾参数而非任意路径中的同名内容，防止签名校验产生歧义。
+        unsigned_command = command[:-64] + SIGNATURE
+    unsigned = copy.deepcopy(group)
+    handler = unsigned.get("hooks", [unsigned])[0]
+    handler["command"] = unsigned_command
+    if hashlib.sha256(canonical(unsigned)).hexdigest() != signature:
+        raise ValueError("modified managed Hook signature; preserve it and resolve explicitly")
+    return True
+
+
+def json_object(raw: bytes | None) -> dict:
+    """拒绝重复 JSON 键，避免解析时静默丢掉原来的用户权限或 Hook。"""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    data = {} if raw is None else json.loads(raw, object_pairs_hook=pairs)
+    if not isinstance(data, dict):
+        raise ValueError("project Hook settings must be a JSON object")
+    return data
+
+
+def merge_claude_write_guard(data: dict, local_settings: dict | None = None) -> dict:
+    """纯函数：只收紧已显式选择的项目写入保护，不触碰 Hooks 或其他权限。
+
+    local 层高于 project 层；任一层显式 false、非布尔值或无效 permissions
+    容器都必须拒绝，不能覆盖后再声称保护已生效。调用方负责判断 true/inherit，
+    本函数不读取磁盘、不修改原对象、不撤销已经存在的保护。
+    """
+    if not isinstance(data, dict) or (local_settings is not None and not isinstance(local_settings, dict)):
+        raise ValueError("Claude 项目与本地设置必须为对象；保留原配置")
+    result = copy.deepcopy(data)
+    key = "blockWritesOutsideWorkingDirectories"
+    for settings in (result, local_settings if local_settings is not None else {}):
+        permissions = settings.get("permissions", {})
+        if not isinstance(permissions, dict):
+            raise ValueError("Claude permissions 必须为对象；保留原配置")
+        if key in permissions and permissions[key] is not True:
+            raise ValueError("Claude 写入保护与现有原生设置冲突；保留原配置")
+    result.setdefault("permissions", {})[key] = True
+    return result
+
+
+def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
+               claude_options: dict | None = None, local_settings: dict | None = None) -> dict:
+    """只替换可证明归属的 Hook；Claude 可选保护独立收紧，不隐式放宽权限。"""
+    result = copy.deepcopy(data)
+    if host == "claude":
+        if (claude_options or {}).get("block_writes_outside_working_directories") is True:
+            result = merge_claude_write_guard(result, local_settings)
+    if host == "antigravity":
+        current = result.get(OWNER)
+        enabled = True
+        if current is not None:
+            # 当前只认 SessionStart；历史事件残留必须先由明确授权的安装管理清理。
+            # enabled 属于用户原生开关，重建签名条目时保持其值。
+            if not isinstance(current, dict) or set(current) - {"enabled", "SessionStart"}:
+                raise ValueError("user-owned Antigravity Hook name collision")
+            events = set(current) - {"enabled"}
+            if not events:
+                raise ValueError("unproven Antigravity Hook name collision")
+            for event in events:
+                groups = current[event]
+                if not isinstance(groups, list) or len(groups) != 1 or not owned_group(groups[0]):
+                    raise ValueError("unproven Antigravity Hook name collision")
+            enabled = current.get("enabled", True)
+            if not isinstance(enabled, bool):
+                raise ValueError("invalid Antigravity Hook enabled value")
+            result.pop(OWNER)
+        if mode == "assist":
+            result[OWNER] = {"enabled": enabled, "SessionStart": [
+                signed_group(pack, project, host, "SessionStart", "")]}
+        return result
+    hooks = result.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError("hooks must be an event mapping")
+    desired = dict(EVENTS[host]) if mode == "assist" else {}
+    replaced = set()
+    for event, groups in list(hooks.items()):
+        if not isinstance(groups, list):
+            raise ValueError(f"hooks.{event} must be a list")
+        retained = []
+        had_owned = False
+        for group in groups:
+            if not owned_group(group):
+                retained.append(group)
+                continue
+            had_owned = True
+            # 受管组原位更新，不能每次挪到列表末尾，改变后来追加的用户 Hook
+            # 与辅助提醒之间的执行顺序。只替换验签后的本组，其余位置保持不变。
+            if event in desired and event not in replaced:
+                retained.append(signed_group(pack, project, host, event, desired[event]))
+                replaced.add(event)
+        if retained:
+            hooks[event] = retained
+        elif had_owned:
+            hooks.pop(event)
+    for event, matcher in desired.items():
+        if event not in replaced:
+            hooks.setdefault(event, []).append(signed_group(pack, project, host, event, matcher))
+    if hooks:
+        result["hooks"] = hooks
+    else:
+        result.pop("hooks", None)
+    return result
+
+
+def managed_json(data: dict, host: str) -> dict:
+    """只投影验签后的工作流条目，用户 Hook、权限、MCP 和启用状态不计入所有权。"""
+    if host == "antigravity":
+        current = data.get(OWNER)
+        if current is None:
+            return {}
+        if (not isinstance(current, dict) or set(current) - {"enabled", "SessionStart"}
+                or not isinstance(current.get("enabled", True), bool)
+                or not isinstance(current.get("SessionStart"), list)
+                or len(current["SessionStart"]) != 1 or not owned_group(current["SessionStart"][0])):
+            raise ValueError("unproven Antigravity Hook name collision")
+        return {"SessionStart": current["SessionStart"]}
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError("hooks must be an event mapping")
+    result = {}
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            raise ValueError("Hook groups must be lists")
+        signed = [group for group in groups if owned_group(group)]
+        if signed:
+            result[event] = signed
+    return result
+
+
+def managed_inline(raw: bytes) -> bytes:
+    """通过既有移除器验证 TOML 签名，只返回受管区作为一致性投影。"""
+    text = raw.decode("utf-8")
+    if BEGIN not in text and END not in text:
+        tomllib.loads(text)
+        return b""
+    # off 只在内存中移除区块，同时复用完整边界、唯一性和摘要检查。
+    merge_inline(raw, Path("/"), Path("/"), "off")
+    return text[text.index(BEGIN):text.index(END) + len(END)].encode("utf-8")
+
+
+def merge_inline(raw: bytes | None, pack: Path, project: Path, mode: str) -> bytes:
+    """Codex 已使用 TOML Hooks 时沿用该来源，不再制造同层双配置。
+
+    用户 TOML 字节不重排；受管块必须具有精确边界和字节签名。原生 features.hooks
+    等开关不属于本模块，既不强制启用，也不迁移用户自己的旧设置。
+    """
+    original = (raw or b"").decode("utf-8")
+    text = original
+    if BEGIN in text or END in text:
+        pattern = re.compile(re.escape(BEGIN) + r" sha256=([0-9a-f]{64})\n(.*?)"
+                             + re.escape(END) + r"\n", re.S)
+        matches = list(pattern.finditer(text))
+        if len(matches) != 1 or text.count(BEGIN) != 1 or text.count(END) != 1:
+            raise ValueError("malformed managed Codex Hook block")
+        match = matches[0]
+        if hashlib.sha256(match.group(2).encode()).hexdigest() != match.group(1):
+            raise ValueError("modified managed Codex Hook block")
+        text = text[:match.start()] + text[match.end():]
+    tomllib.loads(text)
+    if mode == "off":
+        return text.encode()
+    chunks = []
+    for event, matcher in EVENTS["codex"]:
+        group = signed_group(pack, project, "codex", event, matcher)
+        chunks.append(f"[[hooks.{event}]]\n")
+        if matcher:
+            chunks.append(f"matcher = {json.dumps(matcher)}\n")
+        chunks.append(f"[[hooks.{event}.hooks]]\n")
+        for key, value in group["hooks"][0].items():
+            chunks.append(f"{key} = {json.dumps(value, ensure_ascii=False)}\n")
+    body = "".join(chunks)
+    separator = "" if not text or text.endswith("\n") else "\n"
+    rendered = (text + separator + BEGIN + " sha256="
+                + hashlib.sha256(body.encode()).hexdigest() + "\n" + body + END + "\n")
+    tomllib.loads(rendered)
+    return rendered.encode()
+
+
+def project_codex_config(config: bytes, before: bytes | None) -> bytes:
+    """纯推演原生 agents 字段，供快照与原子发布共同使用。"""
+    if __package__:
+        from lib.hosts.merge_codex_config import render
+        from lib.project.validate_project_config import section_lines
+    else:
+        from lib.hosts.merge_codex_config import render
+        from lib.project.validate_project_config import section_lines
+    matches = [re.fullmatch(r"  max_concurrent_subagents:\s*([1-9][0-9]*)\s*(?:#.*)?", line)
+               for line in section_lines(config.decode().splitlines(), "orchestration")]
+    limits = [int(match.group(1)) for match in matches if match is not None]
+    return render((before or b"").decode(), limits[0] if limits else 8).encode()
+
+
+def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bool = False) -> tuple[Path, bytes | None, bytes]:
+    """预检、发布、验收共用生成结果；预检不会创建项目目录或配置。"""
+    # macOS /var、/tmp 等系统别名先解析为真实根；配置文件自身仍保持 no-follow 校验。
+    pack, project = pack.resolve(strict=True), project.resolve(strict=True)
+    config = read_file(pack / "project.yaml")
+    if config is None:
+        raise ValueError("missing project.yaml")
+    mode = hook_mode(config.decode())
+    if host == "codex":
+        toml = project / ".codex/config.toml"
+        original_toml = read_file(toml)
+        parsed = tomllib.loads((original_toml or b"").decode())
+        existing_json = read_file(project / ".codex/hooks.json")
+        json_hooks = json_object(existing_json).get("hooks", {})
+        if not isinstance(json_hooks, dict):
+            raise ValueError("Codex JSON hooks must be an event mapping")
+        has_owned_json = any(owned_group(group) for groups in json_hooks.values()
+                             if isinstance(groups, list) for group in groups)
+        if ("hooks" in parsed or BEGIN in (original_toml or b"").decode()) and not has_owned_json:
+            projected = original_toml
+            if simulate_codex_setup:
+                # 同文件先由原生 agents 合并器更新，再合并 Hooks。快照需包含这两个
+                # 受管步骤的真实结果，不能将合法并发数更新误认成用户并发修改。
+                projected = project_codex_config(config, original_toml)
+            return toml, original_toml, merge_inline(projected, pack, project, mode)
+    relative = {"codex": ".codex/hooks.json", "claude": ".claude/settings.json",
+                "antigravity": ".agents/hooks.json"}[host]
+    path = project / relative
+    before = read_file(path)
+    data = json_object(before)
+    # 文件读取集中在预检入口；纯合并函数不访问磁盘，Windows 命令编解码也可独立验证。
+    options = parse_claude_options(config.decode("utf-8")) if host == "claude" else None
+    local = (json_object(read_file(project / ".claude/settings.local.json"))
+             if options and options["block_writes_outside_working_directories"] is True else None)
+    merged = merge_json(data, pack, project, host, mode, claude_options=options, local_settings=local)
+    # 没有语义变化时保留用户格式；off 且从未安装则不创建空宿主配置。
+    after = before if data == merged and before is not None else (
+        json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode()
+    if before is None and not merged:
+        after = b""
+    return path, before, after
+
+
+def process(pack: Path, project: Path, host: str, action: str) -> None:
+    native_publish = action == "apply-codex-config"
+    if native_publish and host != "codex":
+        raise ValueError("apply-codex-config is Codex-only")
+    path, before, after = plan_hooks(pack, project, host, simulate_codex_setup=native_publish)
+    if native_publish and path.name != "config.toml":
+        # JSON Hooks 与原生配置分属两个文件，没有共享容器的中间态覆盖风险。
+        # 本步骤只发布原生配置；JSON Hook 仍在角色与 Skill 同步之后发布。
+        path = project.resolve(strict=True) / ".codex/config.toml"
+        before = read_file(path)
+        config = read_file(pack.resolve(strict=True) / "project.yaml")
+        if config is None:
+            raise ValueError("missing project.yaml")
+        after = project_codex_config(config, before)
+    if action == "check":
+        if before != after and not (before is None and not after):
+            raise ValueError(f"managed {host} Hook configuration differs from source: {path}")
+    elif action in {"apply", "apply-codex-config"} and before != after and not (before is None and not after):
+        mode = stat.S_IMODE(path.stat().st_mode) if before is not None else 0o644
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if read_file(path) != before:
+            raise ValueError("Hook settings changed after preflight; preserve concurrent edit")
+        atomic_write(path, after, mode)
+    print(f"[OK] {host} project Hooks / optional settings {action} (native trust preserved)")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("preflight", "apply", "check", "apply-codex-config"))
+    parser.add_argument("pack", type=Path)
+    parser.add_argument("project", type=Path)
+    parser.add_argument("host", choices=tuple(EVENTS))
+    args = parser.parse_args()
+    try:
+        process(args.pack, args.project, args.host, args.action)
+    except (OSError, ValueError, UnicodeError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

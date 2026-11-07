@@ -208,8 +208,9 @@ def parse2(lines):
             elif k == "project_name" and indent == 0:
                 # 自动项目名会使用带转义的 YAML 字符串，必须与安装器、Antigravity
                 # 共用解码规则，不能把引号/反斜杠原样带入项目文档。
-                sys.path.insert(0, lib_dir)
-                from validate_project_config import parse_project_name
+                from pathlib import Path
+                sys.path.insert(0, str(Path(lib_dir).resolve().parent))
+                from lib.project.validate_project_config import parse_project_name
                 parent[k] = parse_project_name(v)
             else:
                 parent[k] = v.strip("\"'")
@@ -243,8 +244,9 @@ import shlex
 import sys
 
 lib_dir, config_path, project_root, roles_dir, query, role = sys.argv[1:]
-sys.path.insert(0, lib_dir)
-from validate_project_config import validate_with_profile
+from pathlib import Path
+sys.path.insert(0, str(Path(lib_dir).resolve().parent))
+from lib.project.validate_project_config import validate_with_profile
 
 result = validate_with_profile(config_path, project_root, roles_dir)
 if result.errors or result.profile is None:

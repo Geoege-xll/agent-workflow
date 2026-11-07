@@ -9,7 +9,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
-from lib.project_discovery import discover_project
+from lib.project.project_discovery import discover_project
 from tests.test_profile_context import expanded_context, module_facts
 from tests.skill_contract_helpers import read_bootstrap_contract, read_contract, contract_file_containing
 
@@ -576,7 +576,7 @@ developer_instructions = "Audit security without editing files."
     def test_design_standards_template_keeps_only_durable_product_rules(self) -> None:
         body = self.read(".agents/skills/xy-ui-design/references/foundations-rules.md")
         for phrase in (
-            "项目基线与适用范围",
+            "Project Baseline and Applicability",
             "Accessibility",
             "Platform constraints",
             "Token policy",
@@ -822,7 +822,7 @@ developer_instructions = "Audit security without editing files."
             "expand owned paths",
             "change approval state",
             "reduce validation",
-            "secrets, credentials, PII, raw user data, complete logs, or absolute user paths",
+            "secrets, credentials, PII, raw user data, full logs or users' absolute paths",
         ):
             self.assertIn(phrase, normalized_memory)
         for body in (qa, workflow):

@@ -120,7 +120,7 @@ interview. Local candidate commits and default commit assessment do not by thems
   stricter repository policy. All task, QA, scope and Git checks still apply.
 - Use `worktree_cli.py merge-ready --repo <main-checkout> --config <project.yaml> --input <delivery.json>`
   for a read-only final check, then `worktree_cli.py merge` with the same arguments. Prefix all commands
-  here with `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/` at the calling project.
+  here with `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/delivery/` at the calling project.
   The command accepts only a clean checkout already on the resolved target branch and a fast-forward
   from the pinned target base to the exact reviewed candidate. It never checks out another branch,
   creates a speculative merge commit, resolves conflicts, pushes, force-updates or overwrites ignored files.

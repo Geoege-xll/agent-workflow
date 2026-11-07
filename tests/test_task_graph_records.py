@@ -1375,54 +1375,68 @@ class RecordInstalledRuntimeTest(unittest.TestCase):
             project.mkdir()
             business = project / "go.mod"
             business.write_bytes(b"module example.test/records\n")
-            result = subprocess.run(["bash", str(PACK / "install.sh"), str(project)],
+            state = root / "state"
+            env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state)}
+            result = subprocess.run(["bash", str(PACK / "install.sh"), str(project), "--state-dir", str(state)],
                                     cwd=root, text=True, capture_output=True, check=False, timeout=120)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             runtime = project / ".agent-workflow"
-            self.assertEqual((PACK / "lib/task_graph_records.py").read_bytes(), (runtime / "lib/task_graph_records.py").read_bytes())
-            self.assertEqual((PACK / "lib/agent_continuation.py").read_bytes(), (runtime / "lib/agent_continuation.py").read_bytes())
+            binding = json.loads((runtime / "runtime.json").read_bytes())["runtime_binding"]
+            bridge_cli = ["bash", str(runtime / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                          str(runtime / "runtime.py"), "--binding", json.dumps(binding)]
+            runtime_cli = [*bridge_cli, "helper", "lib/task_graph_cli.py"]
+            # 薄桥读取真实固定 core，并逐字节检查 helper 载荷；项目不再复制完整运行时。
+            for relative in ("lib/task_graph_records.py", "lib/agent_continuation.py"):
+                read = subprocess.run([*bridge_cli, "read", relative], cwd=project, env=env,
+                                      capture_output=True, check=False, timeout=15)
+                self.assertEqual(0, read.returncode, read.stderr)
+                self.assertEqual((PACK / relative).read_bytes(), read.stdout)
+            checked = subprocess.run([*bridge_cli, "check"], cwd=project, env=env,
+                                     capture_output=True, text=True, check=False, timeout=15)
+            self.assertEqual(0, checked.returncode, checked.stderr)
+            self.assertTrue(json.loads(checked.stdout)["enabled"])
+            from manager import runtime_service
+            self.assertEqual({"codex", "claude", "antigravity"}, set(runtime_service.status(state, project)["hosts"]))
             reference = "xy-workflow/references/runtime-records.md"
             for directory in (".claude/skills", ".agents/skills"):
                 self.assertEqual((PACK / "platforms/shared/skills" / reference).read_bytes(), (project / directory / reference).read_bytes())
-            for host in ("Claude", "Codex", "Antigravity"):
-                self.assertIn(f"{host} --check", result.stdout)
             source = root / "graph.json"
-            source.write_text(json.dumps(graph()), encoding="utf-8")
+            payload = graph()
+            payload["runtime_binding"] = binding
+            source.write_text(json.dumps(payload), encoding="utf-8")
             result = subprocess.run([
-                "bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", str(runtime / "lib/task_graph_cli.py"),
+                *runtime_cli,
                 "update", "--input", str(source), "--expect-sha256", records.digest(source.read_bytes()), "--patch", "-",
             ], input='{"tasks":{"api":{"set":{"state":"RUNNING"}}}}',
-                cwd=project, text=True, capture_output=True, check=False, timeout=15)
+                cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual("RUNNING", json.loads(source.read_text(encoding="utf-8"))["tasks"][0]["state"])
             # 安装态从业务根加载新 helper，并经原 CAS 绑定后实际运行只读查询。
             result = subprocess.run([
-                "bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", str(runtime / "lib/task_graph_cli.py"),
+                *runtime_cli,
                 "update", "--input", str(source), "--expect-sha256", records.digest(source.read_bytes()), "--patch", "-",
             ], input='{"tasks":{"api":{"set":{"agent_ref":{"host":"codex","agent_id":"fixture-installed-agent"}}}}}',
-                cwd=project, text=True, capture_output=True, check=False, timeout=15)
+                cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
             self.assertEqual(0, result.returncode, result.stderr)
             before = source.read_bytes()
             result = subprocess.run([
-                "bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", str(runtime / "lib/task_graph_cli.py"),
+                *runtime_cli,
                 "continuation", "--input", str(source), "--task-id", "api", "--host", "codex", "--observed-state", "idle",
-            ], cwd=project, text=True, capture_output=True, check=False, timeout=15)
+            ], cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual("followup", json.loads(result.stdout)["action"])
             self.assertEqual(before, source.read_bytes())
-            # 从已安装且脱离源码工作目录的入口实际消费新参数，证明复制出的运行时
-            # 能完成精确保留与最终收口；中央仓库的测试函数不能替代这个消费者证据。
-            runtime_cli = ["bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8",
-                           str(runtime / "lib/task_graph_cli.py")]
+            # 从业务项目的固定 pin 薄桥实际消费 CAS、续用和 scratch 收口参数；
+            # 源码目录中的测试函数不能替代这个真实安装消费者证据。
 
             def invoke_cleanup(*options):
                 return subprocess.run([*runtime_cli, "cleanup-scratch", "--root", str(project),
                                        "--request-id", "installed-cleanup", *options],
-                                      cwd=project, text=True, capture_output=True, check=False, timeout=15)
+                                      cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
 
             allocated = subprocess.run([*runtime_cli, "scratch", "--root", str(project),
                                         "--request-id", "installed-cleanup"],
-                                       cwd=project, text=True, capture_output=True, check=False, timeout=15)
+                                       cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
             self.assertEqual(0, allocated.returncode, allocated.stderr)
             scratch = Path(json.loads(allocated.stdout)["scratch_dir"])
             try:

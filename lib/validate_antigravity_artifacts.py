@@ -8,6 +8,13 @@ silently accept.
 
 from __future__ import annotations
 
+# 直接脚本只信任自身物理位置确定的核心根，避免异 cwd 或 PYTHONPATH 中的
+# 同名模块劫持内部依赖；正常包导入沿用调用方已选择的固定核心。
+if not __package__:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import hashlib
 import json
 if __package__:
@@ -22,11 +29,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from business_confirmation_policy import read_instruction_contract, validate_business_confirmation_pack
-from qa_review_policy import validate_pack_qa_review_policy
-from validate_project_config import validate_with_profile
-from skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract, expand_skill_contract
-from role_skills import (
+from lib.skills.business_confirmation_policy import read_instruction_contract, validate_business_confirmation_pack
+from lib.skills.qa_review_policy import validate_pack_qa_review_policy
+from lib.project.validate_project_config import validate_with_profile
+from lib.skills.skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract, expand_skill_contract
+from lib.skills.role_skills import (
     CORE_SKILLS,
     IMPLEMENTER_ROLES,
     LEGACY_CORE_SKILLS,
@@ -34,7 +41,7 @@ from role_skills import (
     LEGACY_ANTIGRAVITY_ROLE_SKILLS,
 )
 
-from shared_core_skills import (
+from lib.skills.shared_core_skills import (
     SharedCoreSkillError,
     audit_managed_skill_root,
     load_shared_core_skills,
@@ -1900,7 +1907,7 @@ def _validate_owned_native_root(root: Path) -> None:
     hook_bytes = files.pop("hooks.json", None)
     if hook_bytes is not None:
         try:
-            from workflow_hook_install import json_object
+            from lib.hosts.workflow_hook_install import json_object
             json_object(hook_bytes)
         except (ValueError, UnicodeError) as exc:
             raise SecureReadError(f"invalid native Hook configuration: {exc}") from exc

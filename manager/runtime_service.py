@@ -18,11 +18,11 @@ import tomllib
 import time
 import uuid
 
-from lib import runtime_project as project_files
+from lib.central import runtime_project as project_files
 from lib import runtime_store as store
-from lib import role_preferences
+from lib.central import role_preferences
 from lib.platform_fs import directory_lock, os, publish_skill_symlink, require_skill_symlinks
-from lib.runtime_project import (
+from lib.central.runtime_project import (
     CONFIG, HOSTS, LOCATOR, Node, Resources, Tree,
     absolute_directory, canonical_project, central_block, identity, json_bytes,
     managed_path, merge_central_block, node_id, read_at, relative_path, skill_parts,
@@ -141,7 +141,7 @@ def _has_install_residue(project: Path) -> bool:
 
 def _protect_project(project: Path, source_root: Path | None) -> None:
     """统一复用原安装器的源码根/子树/包含关系拒绝，binding 启用也不能绕过。"""
-    from lib.project_paths import InstallError, target_path
+    from lib.install.project_paths import InstallError, target_path
     sources = [Path(__file__).resolve().parents[1]]
     if source_root is not None:
         sources.append(Path(source_root).expanduser().resolve())
@@ -331,7 +331,7 @@ def _same_moved(actual: Node, expected: Node) -> bool:
 
 def _application_budget() -> None:
     """沿已有安装器预算/取消通道，只在正向发布边界检查，恢复不继承过期预算。"""
-    from lib.install_process import ACTIVE_RUNNER, SetupRunError
+    from lib.install.install_process import ACTIVE_RUNNER, SetupRunError
     runner = ACTIVE_RUNNER.get()
     if runner is None or runner.recovering:
         return
@@ -348,7 +348,7 @@ def _verify_installed_bridge(state: Path, project: Path, core: store.FrozenCore)
     真实旧/新核心 reader 对同一机器 schema 的消费，不能仅由当前进程的解析器
     代替；stdout 与清单正文逐字节比较，错误不回显项目私有载荷。
     """
-    from lib.install_process import capture_process
+    from lib.install.install_process import capture_process
     expected = store.read_core_source(core, "product/GLOBAL_CONSTRAINTS.md")
     if len(expected) > project_files.LIMIT:
         raise ActivationError("中央公共约束超过桥接有界读取范围")
@@ -472,7 +472,7 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
     # 保留该 inode，不能用最初整文件前像吞掉新权限/MCP/用户 Hook。若其中仍
     # 有可验签的当前命令，同步保留无本机 binding 时只返回中性结果的薄桥，
     # 避免恢复流程把用户保留的命令变成缺文件错误；现状仍明确标为 conflict。
-    from lib.workflow_hook_install import json_object, managed_inline, managed_json
+    from lib.hosts.workflow_hook_install import json_object, managed_inline, managed_json
     shared = {".codex/hooks.json": "codex", ".claude/settings.json": "claude", ".agents/hooks.json": "antigravity"}
     for row in journal["changes"]:
         if row["path"] not in shared and row["path"] != ".codex/config.toml":

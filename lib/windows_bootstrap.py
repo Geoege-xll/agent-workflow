@@ -92,7 +92,7 @@ def main(arguments: list[str] | None = None) -> int:
                 os.environ[name] = _native_path(os.environ[name])
         runtime = os.environ.get("AGENT_WORKFLOW_PROJECT_RUNTIME")
         if runtime:
-            sys.path.insert(0, str(Path(runtime) / "lib"))
+            sys.path.insert(0, str(Path(runtime)))
     if arguments[:1] == ["--script"]:
         arguments.pop(0)
     while arguments:

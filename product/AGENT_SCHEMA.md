@@ -62,7 +62,7 @@ Claude generation rules:
   Preloading does not execute an inapplicable branch: `standards_only` never runs prototype verification.
 - `xy-qa` preloads `xy-qa-review`; other local specialist Skills are matched on demand from
   `audit_surfaces` and are not written into the role manifest.
-- QA consumes the same specialist methods read-only for actual code or UI review surfaces; pure-document/backend tasks do not preload complete UI text. Static bindings come from `lib/role_skills.py`; metadata and current artifacts across all three hosts must match. Reading creates no new permissions or stages.
+- QA consumes the same specialist methods read-only for actual code or UI review surfaces; pure-document/backend tasks do not preload complete UI text. Static bindings come from `lib/skills/role_skills.py`; metadata and current artifacts across all three hosts must match. Reading creates no new permissions or stages.
 - Generated Claude Agents always use `permissionMode: default`, preserving the parent session's
   normal permission prompts. The sandbox remains a soft role scope.
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from lib.role_models import MODEL_ID
-from lib.claude_options import validate_window
+from lib.hosts.claude_options import validate_window
 import re
 
 

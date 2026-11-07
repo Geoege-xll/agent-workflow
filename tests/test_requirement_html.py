@@ -15,8 +15,9 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
-from lib import requirement_html as renderer
-from lib import runtime_pins, runtime_store
+from lib.documents import requirement_html as renderer
+from lib import runtime_pins
+from lib import runtime_store
 from lib.task_graph_records import scratch_workspace
 
 
@@ -421,7 +422,7 @@ class RequirementHtmlTest(unittest.TestCase):
         project.mkdir(exist_ok=True)
         state = self.work / "installed-state"
         command = ["bash", str(PACK / "lib/python_runtime.sh"), "-X", "utf8", "-B",
-                   str(PACK / "lib/install_workflow.py"), str(project), "--state-dir", str(state)]
+                   str(PACK / "lib/install/install_workflow.py"), str(project), "--state-dir", str(state)]
         installed = subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=120)
         (self.work / "install.log").write_text(json.dumps(command) + "\n" + installed.stdout + installed.stderr, encoding="utf-8")
         self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
@@ -432,8 +433,8 @@ class RequirementHtmlTest(unittest.TestCase):
         core = runtime_store.load_core(binding, state)
         for host in (project / ".agents/skills", project / ".claude/skills"):
             self.assertEqual((host / reference).read_bytes(), (PACK / "platforms/shared/skills" / reference).read_bytes())
-        for relative in ("lib/requirement_html.py", "lib/plan_documents.py",
-                         "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
+        for relative in ("lib/documents/requirement_html.py", "lib/documents/plan_documents.py",
+                         "lib/documents/prototype_navigation.py", "lib/documents/validate_prototype_workspace.py",
                          *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
                          "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
                          "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt"):
@@ -448,7 +449,7 @@ class RequirementHtmlTest(unittest.TestCase):
         for action in ("render", "check"):
             command = ["bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", "-B",
                        str(runtime / "runtime.py"), "--binding", json.dumps(binding), "helper",
-                       "lib/requirement_html.py", "--", action, "--project", str(project),
+                       "lib/documents/requirement_html.py", "--", action, "--project", str(project),
                        "--source", "docs/plans/installed.md"]
             if action == "render":
                 command.extend(["--request-id", REQUEST])

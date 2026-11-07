@@ -24,7 +24,7 @@ if [[ "${CHECK_ONLY}" -eq 1 && "${PREFLIGHT_ONLY}" -eq 1 ]]; then
   exit 2
 fi
 if [[ "${CHECK_ONLY}" -eq 0 && "${PREFLIGHT_ONLY}" -eq 0 ]]; then
-  python3 "${PACK_DIR}/lib/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
+  python3 "${PACK_DIR}/lib/project/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
 fi
 
 ROOT_AGENTS_MD="${PROJECT_ROOT}/AGENTS.md"
@@ -36,17 +36,17 @@ END="<!-- agent-workflow-pack:claude-end -->"
 MANAGED_SKILL_MARKER="<!-- agent-workflow-pack:managed-skill -->"
 MANAGED_AGENT_MARKER="<!-- agent-workflow-pack:managed-agent -->"
 TPL="${PLATFORMS_DIR}/claude/AGENTS.claude.tpl"
-INSTRUCTIONS_CLI="${PACK_DIR}/lib/claude_instructions.py"
+INSTRUCTIONS_CLI="${PACK_DIR}/lib/hosts/claude_instructions.py"
 SHARED_SKILLS_SRC="${PLATFORMS_DIR}/shared/skills"
-CLAUDE_VALIDATOR="${PACK_DIR}/lib/validate_claude_artifacts.py"
-PROJECT_PROFILE_CLI="${PACK_DIR}/lib/project_profile_cli.py"
+CLAUDE_VALIDATOR="${PACK_DIR}/lib/hosts/validate_claude_artifacts.py"
+PROJECT_PROFILE_CLI="${PACK_DIR}/lib/project/project_profile_cli.py"
 
 CLAUDE_CORE_SKILLS=()
 
 load_claude_project_skills() {
   local output name
   [[ "${#CLAUDE_CORE_SKILLS[@]}" -eq 0 ]] || return 0
-  output=$(python3 "${PACK_DIR}/lib/shared_core_skills.py" list "${PACK_DIR}")
+  output=$(python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" list "${PACK_DIR}")
   while IFS= read -r name; do
     [[ -n "${name}" ]] || continue
     CLAUDE_CORE_SKILLS+=("${name}")
@@ -156,7 +156,7 @@ render_claude_agent() {
     # 模型偏好仅生成宿主支持的字段；不改权限、技能或角色正文。
     python3 "${PACK_DIR}/lib/role_models.py" "${PACK_DIR}" claude "${role}" || return 1
     # 压缩窗口独立于模型偏好；必须输出完整整数，不能让宿主把 200k 误读成 200。
-    python3 "${PACK_DIR}/lib/claude_options.py" "${PACK_DIR}" "${role}" || return 1
+    python3 "${PACK_DIR}/lib/hosts/claude_options.py" "${PACK_DIR}" "${role}" || return 1
     echo "tools: ${tools}"
     [[ -n "${disallowed}" ]] && echo "disallowedTools: ${disallowed}"
     # Keep project Custom Agents inside the caller's normal permission prompts.
@@ -201,8 +201,9 @@ import stat
 import sys
 
 library, path, expected_name, marker = sys.argv[1:]
-sys.path.insert(0, library)
-from platform_fs import os
+from pathlib import Path
+sys.path.insert(0, str(Path(library).resolve().parent))
+from lib.platform_fs import os
 try:
     descriptor = os.open(
         path,
@@ -263,9 +264,10 @@ import sys
 from pathlib import Path
 
 library, directory, name, marker = sys.argv[1:]
-sys.path.insert(0, library)
-from platform_fs import os
-from shared_core_skills import (  # noqa: E402
+from pathlib import Path
+sys.path.insert(0, str(Path(library).resolve().parent))
+from lib.platform_fs import os
+from lib.skills.shared_core_skills import (  # noqa: E402
     SharedCoreSkillError,
     parse_managed_skill_bytes,
     validate_stale_managed_skill_directory,
@@ -338,7 +340,7 @@ PY
 preflight_claude_collisions() {
   # 先验证当前统一入口；旧正文和用户内容都不自动迁移，在写项目产物前停止。
   python3 "${INSTRUCTIONS_CLI}" preflight "${PACK_DIR}" "${PROJECT_ROOT}"
-  python3 "${PACK_DIR}/lib/workflow_hook_install.py" preflight "${PACK_DIR}" "${PROJECT_ROOT}" claude
+  python3 "${PACK_DIR}/lib/hosts/workflow_hook_install.py" preflight "${PACK_DIR}" "${PROJECT_ROOT}" claude
   validate_claude_markers
   local name src dest tmp role agent_name path skill_dir stem enabled_names=" "
   for name in "${CLAUDE_CORE_SKILLS[@]}"; do
@@ -347,7 +349,7 @@ preflight_claude_collisions() {
       return 1
     }
     dest="${CLAUDE_SKILLS}/${name}"
-    python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+    python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
       target-safe "$(dirname "${src}")" "${dest}" "${name}" || return 1
   done
 
@@ -407,7 +409,7 @@ sync_claude_skills() {
   for name in "${CLAUDE_CORE_SKILLS[@]}"; do
     src=$(resolve_skill_src "${name}")
     dest="${CLAUDE_SKILLS}/${name}/SKILL.md"
-    python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+    python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
       sync-tree "$(dirname "${src}")" "$(dirname "${dest}")" "${name}"
     log_ok ".claude/skills/${name}/SKILL.md"
   done
@@ -422,7 +424,7 @@ sync_claude_skills() {
     name=$(basename "$(dirname "${path}")")
     if ! array_contains "${name}" "${CLAUDE_CORE_SKILLS[@]}" \
       && stale_claude_skill_is_managed "${name}"; then
-      python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+      python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
         remove-installed "${skill_dir}" "${name}"
       log_ok "removed stale managed Claude Skill: ${name}"
     fi
@@ -508,7 +510,7 @@ check_agent_outputs_match() {
 check_claude_contract() {
   local block name src
   python3 "${INSTRUCTIONS_CLI}" check "${PACK_DIR}" "${PROJECT_ROOT}"
-  python3 "${PACK_DIR}/lib/workflow_hook_install.py" check "${PACK_DIR}" "${PROJECT_ROOT}" claude
+  python3 "${PACK_DIR}/lib/hosts/workflow_hook_install.py" check "${PACK_DIR}" "${PROJECT_ROOT}" claude
   python3 "${CLAUDE_VALIDATOR}" generated "${PACK_DIR}" "${PROJECT_ROOT}"
   block=$(mktemp)
   build_claude_block "${block}"
@@ -517,7 +519,7 @@ check_claude_contract() {
   check_agent_outputs_match
   for name in "${CLAUDE_CORE_SKILLS[@]}"; do
     src=$(resolve_skill_src "${name}")
-    python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+    python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
       tree-match "$(dirname "${src}")" "${CLAUDE_SKILLS}/${name}" "${name}"
   done
   log_ok "Claude generated artifacts match sources"
@@ -527,7 +529,7 @@ validate_rendered_staging() {
   local stage role agent_name
   stage=$(mktemp -d)
   mkdir -p "${stage}/.claude/agents" "${stage}/.claude/skills"
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     stage-copy "${PACK_DIR}" "${stage}/.claude/skills"
   # 暂存校验使用真实入口生成器，保证预检和正式安装验证同一对文件，
   # 避免仅复制 AGENTS.md 而漏掉新的 CLAUDE.md 薄入口合同。
@@ -550,7 +552,7 @@ validate_rendered_staging() {
 
 validate_inputs() {
   require_pack_layout
-  python3 "${PACK_DIR}/lib/validate_project_config.py" \
+  python3 "${PACK_DIR}/lib/project/validate_project_config.py" \
     "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}"
   python3 "${CLAUDE_VALIDATOR}" sources "${PACK_DIR}" "${PROJECT_ROOT}"
   validate_rendered_staging
@@ -590,6 +592,6 @@ sync_claude_skills
 write_claude_agents
 
 # 只合并可证明归属的 Hooks 和显式选择的写入保护；其余权限、Auto Memory、用户 Hooks 保留。
-python3 "${PACK_DIR}/lib/workflow_hook_install.py" apply "${PACK_DIR}" "${PROJECT_ROOT}" claude
+python3 "${PACK_DIR}/lib/hosts/workflow_hook_install.py" apply "${PACK_DIR}" "${PROJECT_ROOT}" claude
 
 echo -e "${GREEN}${BOLD}✅ Claude setup complete${NC}"

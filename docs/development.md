@@ -22,12 +22,18 @@
 | `manager/service.py` | 模型配置应用、备份／恢复、收据与精确回滚事务 |
 | `manager/runtime_service.py` | 中央启停、选版、回滚与修复的唯一事务编排 |
 | `manager/state_files.py` | 管理状态普通文件的有界读取、前像核对与安全发布 |
-| `lib/project_paths.py` | 规范项目路径与目录身份边界，供实际服务调用者复用 |
+| `lib/install/project_paths.py` | 规范项目路径与目录身份边界，供实际服务调用者复用 |
 | `manager/catalog.py`、`manager/codex_models.py`、`manager/model_preferences.py` | 模型来源、能力与字段偏好 |
 | `manager/runtime_state.py` | 中央绑定及事务日志的私有记录读写边界 |
-| `lib/runtime_store.py`、`lib/runtime_project.py`、`lib/runtime_bridge.py` | 不可变核心、项目受管资源与 pin 薄桥 |
-| `lib/install_workflow.py`、`lib/install_process.py` | 安装编排与 setup 子进程超时／取消／资源回收 |
-| `lib/` 其余模块 | 发现、配置、规范、任务图、交接、原型等各自职责；按调用链定位 |
+| `lib/runtime_store.py`、`lib/central/runtime_project.py`、`lib/runtime_bridge.py` | 不可变核心、项目受管资源与 pin 薄桥 |
+| `lib/install/` | 安装编排、项目路径及平台子进程的超时／取消／资源回收 |
+| `lib/project/` | 项目发现、画像、配置验证及项目记忆身份初始化 |
+| `lib/documents/` | 计划与需求文档、原型导航、规范基线和有界分页读取 |
+| `lib/hosts/` | 三宿主指令、原生产物、配置及 Hook 安装适配 |
+| `lib/skills/` | Skill 绑定与共用正文合同、业务确认和 QA 策略的 Python 工具；Skill 正文仍在 `platforms/shared/skills/` |
+| `lib/delivery/` | 原生交接／用量、QA 交接与 worktree 交付入口 |
+| `lib/central/` | 中央项目受管资源及角色偏好字段解析；事务编排仍归 `manager/runtime_service.py` |
+| `lib/` 固定根文件 | 解释器、自举及存储安全边界、任务图、固定 Hook 与模型／AST 合同；`__init__.py` 仅标识可信普通包 |
 | `scripts/` | 统一验证入口、guard、冲突标记 lint 与宿主检查薄委派 |
 | `packaging/` | 离线归档构建器和 Homebrew Formula 模板，不进入运行时发行载荷 |
 | `tests/` | 行为、合同与真实消费者验证，不进入运行时发行载荷 |
@@ -40,6 +46,77 @@
 中央核心按完整内容 ID 固定，模型偏好和机器状态位于核心之外。项目根、配置根与核心根由薄桥分别验证，
 不能把 core 父目录当项目。中央状态或核心损坏应明确拒绝，不回退其他版本；已有任务 pin 保持，
 受管归属、用户内容保护、并发冲突与精确回滚是安全合同，不能作为“历史兼容”删除。
+
+### lib 文件归属与迁移路径
+
+下表是本次职责归组唯一的旧路径到当前实现路径对照。修复时先确定当前 owner，再同步检查实际 imports、字符串命令、patch 目标和最小冻结白名单；旧路径只用于说明迁移，不再提供转发或回退。
+当前源包使用表中的所属路径；既有任务仍通过自己的固定 pin 读取该旧 core 清单内的路径，不能按当前源码目录猜测旧任务路径。Skill 正文始终归 `platforms/shared/skills/`，`lib/skills/` 只放 Python 合同工具。
+
+| 当前职责 | 旧路径（已移除） | 当前实现路径 |
+| --- | --- | --- |
+| `install`：安装与平台进程 | `lib/install_workflow.py` | [lib/install/install_workflow.py](../lib/install/install_workflow.py) |
+| `install`：安装与平台进程 | `lib/install_process.py` | [lib/install/install_process.py](../lib/install/install_process.py) |
+| `install`：安装与平台进程 | `lib/project_paths.py` | [lib/install/project_paths.py](../lib/install/project_paths.py) |
+| `install`：安装与平台进程 | `lib/platform_process.py` | [lib/install/platform_process.py](../lib/install/platform_process.py) |
+| `install`：安装与平台进程 | `lib/windows_process.py` | [lib/install/windows_process.py](../lib/install/windows_process.py) |
+| `project`：项目发现与配置 | `lib/project_discovery.py` | [lib/project/project_discovery.py](../lib/project/project_discovery.py) |
+| `project`：项目发现与配置 | `lib/profile_context.py` | [lib/project/profile_context.py](../lib/project/profile_context.py) |
+| `project`：项目发现与配置 | `lib/project_profile_cli.py` | [lib/project/project_profile_cli.py](../lib/project/project_profile_cli.py) |
+| `project`：项目发现与配置 | `lib/ensure_project_id.py` | [lib/project/ensure_project_id.py](../lib/project/ensure_project_id.py) |
+| `project`：项目发现与配置 | `lib/validate_project_config.py` | [lib/project/validate_project_config.py](../lib/project/validate_project_config.py) |
+| `documents`：文档与原型工具 | `lib/plan_documents.py` | [lib/documents/plan_documents.py](../lib/documents/plan_documents.py) |
+| `documents`：文档与原型工具 | `lib/requirement_html.py` | [lib/documents/requirement_html.py](../lib/documents/requirement_html.py) |
+| `documents`：文档与原型工具 | `lib/prototype_navigation.py` | [lib/documents/prototype_navigation.py](../lib/documents/prototype_navigation.py) |
+| `documents`：文档与原型工具 | `lib/validate_prototype_workspace.py` | [lib/documents/validate_prototype_workspace.py](../lib/documents/validate_prototype_workspace.py) |
+| `documents`：文档与原型工具 | `lib/standards_baseline.py` | [lib/documents/standards_baseline.py](../lib/documents/standards_baseline.py) |
+| `documents`：文档与原型工具 | `lib/context_read.py` | [lib/documents/context_read.py](../lib/documents/context_read.py) |
+| `hosts`：宿主适配 | `lib/apply_antigravity_setup.py` | [lib/hosts/apply_antigravity_setup.py](../lib/hosts/apply_antigravity_setup.py) |
+| `hosts`：宿主适配 | `lib/render_antigravity_agent.py` | [lib/hosts/render_antigravity_agent.py](../lib/hosts/render_antigravity_agent.py) |
+| `hosts`：宿主适配 | `lib/validate_claude_artifacts.py` | [lib/hosts/validate_claude_artifacts.py](../lib/hosts/validate_claude_artifacts.py) |
+| `hosts`：宿主适配 | `lib/claude_instructions.py` | [lib/hosts/claude_instructions.py](../lib/hosts/claude_instructions.py) |
+| `hosts`：宿主适配 | `lib/claude_options.py` | [lib/hosts/claude_options.py](../lib/hosts/claude_options.py) |
+| `hosts`：宿主适配 | `lib/merge_codex_config.py` | [lib/hosts/merge_codex_config.py](../lib/hosts/merge_codex_config.py) |
+| `hosts`：宿主适配 | `lib/workflow_hook_install.py` | [lib/hosts/workflow_hook_install.py](../lib/hosts/workflow_hook_install.py) |
+| `hosts`：宿主适配 | `lib/workflow_hook_settings.py` | [lib/hosts/workflow_hook_settings.py](../lib/hosts/workflow_hook_settings.py) |
+| `hosts`：宿主适配 | `lib/windows_hook_command.py` | [lib/hosts/windows_hook_command.py](../lib/hosts/windows_hook_command.py) |
+| `skills`：Skill 合同工具 | `lib/role_skills.py` | [lib/skills/role_skills.py](../lib/skills/role_skills.py) |
+| `skills`：Skill 合同工具 | `lib/shared_core_skills.py` | [lib/skills/shared_core_skills.py](../lib/skills/shared_core_skills.py) |
+| `skills`：Skill 合同工具 | `lib/skill_contracts.py` | [lib/skills/skill_contracts.py](../lib/skills/skill_contracts.py) |
+| `skills`：Skill 合同工具 | `lib/business_confirmation_policy.py` | [lib/skills/business_confirmation_policy.py](../lib/skills/business_confirmation_policy.py) |
+| `skills`：Skill 合同工具 | `lib/qa_review_policy.py` | [lib/skills/qa_review_policy.py](../lib/skills/qa_review_policy.py) |
+| `delivery`：交接与交付 | `lib/native_handoff.py` | [lib/delivery/native_handoff.py](../lib/delivery/native_handoff.py) |
+| `delivery`：交接与交付 | `lib/native_usage.py` | [lib/delivery/native_usage.py](../lib/delivery/native_usage.py) |
+| `delivery`：交接与交付 | `lib/qa_handoff_cli.py` | [lib/delivery/qa_handoff_cli.py](../lib/delivery/qa_handoff_cli.py) |
+| `delivery`：交接与交付 | `lib/worktree_cli.py` | [lib/delivery/worktree_cli.py](../lib/delivery/worktree_cli.py) |
+| `central`：中央项目资源与偏好 | `lib/runtime_project.py` | [lib/central/runtime_project.py](../lib/central/runtime_project.py) |
+| `central`：中央项目资源与偏好 | `lib/role_preferences.py` | [lib/central/role_preferences.py](../lib/central/role_preferences.py) |
+
+以下 20 个固定根文件继续保留真实实现，原因来自现有直接入口、薄桥生成字节、预校验链或固定依赖合同。
+
+| 固定根实现 | 保留理由 |
+| --- | --- |
+| [lib/python_runtime.sh](../lib/python_runtime.sh) | 源码、薄项目及工具共享的受支持解释器入口；现有命令固定引用此路径。 |
+| [lib/python_runtime.cjs](../lib/python_runtime.cjs) | 保留的项目本地 Windows 启动器，只消费已配置解释器与显式运行时记录。 |
+| [lib/windows_bootstrap.py](../lib/windows_bootstrap.py) | 保留的跨平台启动边界，按公开 CLI 的类型化参数位置转换路径。 |
+| [lib/common.sh](../lib/common.sh) | 根 setup 脚本共享的 Shell 配置、解释器与预检入口。 |
+| [lib/platform_fs.py](../lib/platform_fs.py) | 薄桥完整验证 core 前必须先校验并加载的文件系统边界。 |
+| [lib/runtime_store.py](../lib/runtime_store.py) | 薄桥预校验链中的内容清单、固定版本加载与完整性验证实现。 |
+| [lib/windows_fs.py](../lib/windows_fs.py) | 固定 platform_fs 的 Windows 后端，保持预校验依赖链和拒绝边界。 |
+| [lib/runtime_bridge.py](../lib/runtime_bridge.py) | 生成的 launcher 固定导入的资源／helper 分发实现。 |
+| [lib/agent_continuation.py](../lib/agent_continuation.py) | 固定任务图 CLI 的原生身份、续用状态和错误类型依赖。 |
+| [lib/worktree_policy.py](../lib/worktree_policy.py) | 固定任务图入口共享的 worktree 验证合同；交付命令实现归 delivery。 |
+| [lib/standard_paths.py](../lib/standard_paths.py) | 固定任务图与 pin 工具共用的规范来源路径和领域合同。 |
+| [lib/validate_project_docs.py](../lib/validate_project_docs.py) | 固定任务图 CLI 直接导入的项目文档、规范目录与规则目录验证器。 |
+| [lib/runtime_pins.py](../lib/runtime_pins.py) | 固定图记录与薄桥的任务 pin、逻辑资源和项目身份读取边界。 |
+| [lib/workflow_hooks.py](../lib/workflow_hooks.py) | 生成 Hook 薄桥的固定 helper 目标；生成字节与原生 Hook 行为保持。 |
+| [lib/role_models.py](../lib/role_models.py) | 角色模型字段、原生产物映射和固定角色集合的真实合同。 |
+| [lib/validate_antigravity_artifacts.py](../lib/validate_antigravity_artifacts.py) | 中央角色生成器按固定路径读取 AST 工具源，宿主验证也直接使用。 |
+| [lib/task_graph_cli.py](../lib/task_graph_cli.py) | 公开任务图命令入口，含直接脚本导入合同，本轮受保护且保持原字节。 |
+| [lib/task_graph.py](../lib/task_graph.py) | 固定任务图 CLI 与记录工具共享的图模型、合法状态及错误合同。 |
+| [lib/task_graph_records.py](../lib/task_graph_records.py) | 固定任务图记录的 CAS、指纹和请求 scratch 真实读写入口。 |
+| [lib/task_graph_init.py](../lib/task_graph_init.py) | 固定任务图 CLI 惰性加载的初始图组装入口。 |
+
+[lib/__init__.py](../lib/__init__.py) 是额外的普通 Python 包标识，仅含文档字符串，不导入、不重导出 API、不设置路径或执行其他副作用。它确保可信 core 根先加入搜索路径后，项目自己的普通 `lib` 包不能取代核心。七个职责目录的 `__init__.py` 同样只含文档；固定根实现仍是上列 20 项。
 
 ## 普通入口与源包开发生成器
 
@@ -115,7 +192,7 @@ QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口�
 # 直接选择真实 unittest 节点仍可用；不必为了单个节点运行整组。
 bash lib/python_runtime.sh -B -X utf8 -m unittest -v \
   tests.test_homebrew_packaging.ReleaseArchiveTest.test_real_archive_manual_links_resolve_without_private_docs
-bash lib/python_runtime.sh -B -X utf8 lib/project_profile_cli.py json /path/to/agent_workflow /path/to/project
+bash lib/python_runtime.sh -B -X utf8 lib/project/project_profile_cli.py json /path/to/agent_workflow /path/to/project
 ```
 
 中央项目通过 `.agent-workflow/runtime.py` 的 `helper` 入口调用固定核心 helper，显式传任务 `runtime_binding`；

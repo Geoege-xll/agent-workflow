@@ -30,7 +30,7 @@ Homebrew 将完整程序装入当前版本的 `libexec`，并在 Homebrew 的 `b
 不修改 PATH、CDPATH 或 shell 配置。非空的 `AGENT_WORKFLOW_PYTHON` 显式设置仍被保留：
 相对解释器仍按调用目录解析，无效解释器仍报错，不自动回退。
 现有 `workflow.sh`、共享 Python 选择器及项目安装编排均不改变。
-同一运行时载荷包含 `lib/requirement_html.py`、原样 bundled CLI/许可证和
+同一运行时载荷包含 `lib/documents/requirement_html.py`、原样 bundled CLI/许可证和
 [需求 HTML 方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)。它按需渲染，
 setup 不启动渲染器；不需要全局 npm 安装，缺失 Node 只阻塞需要重新生成的需求页。
 

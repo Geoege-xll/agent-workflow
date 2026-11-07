@@ -28,7 +28,7 @@ class AwfCli < Formula
     assert_match "awf-cli #{version}", diagnostic
     assert_match "中央源根：#{libexec.realpath}", diagnostic
     assert_path_exists libexec/"lib/python_runtime.sh"
-    assert_path_exists libexec/"lib/requirement_html.py"
+    assert_path_exists libexec/"lib/documents/requirement_html.py"
     assert_path_exists libexec/"lib/vendor/answer-me-with-html/am.mjs"
     assert_path_exists libexec/"setup_all.sh"
     assert_path_exists libexec/"platforms"

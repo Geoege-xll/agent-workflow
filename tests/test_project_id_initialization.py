@@ -13,12 +13,12 @@ from pathlib import Path
 
 
 PACK = Path(__file__).resolve().parents[1]
-HELPER = PACK / "lib/ensure_project_id.py"
+HELPER = PACK / "lib/project/ensure_project_id.py"
 
 
 def load_helper():
     # 以真实包名加载，沿用生产代码的相对导入；不能伪装为单文件而漏掉平台文件系统依赖。
-    spec = importlib.util.spec_from_file_location("lib.ensure_project_id", HELPER)
+    spec = importlib.util.spec_from_file_location("lib.project.ensure_project_id", HELPER)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

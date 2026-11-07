@@ -33,7 +33,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 2. Run the repository validator from the project root:
 
    ```bash
-   bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_prototype_workspace.py \
+   bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/documents/validate_prototype_workspace.py \
      <project-root> docs/standards/prototype --json --page <stable-page>.html
    ```
 

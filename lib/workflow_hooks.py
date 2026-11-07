@@ -3,6 +3,13 @@
 
 from __future__ import annotations
 
+# 直接脚本只信任自身物理位置确定的核心根，避免异 cwd 或 PYTHONPATH 中的
+# 同名模块劫持内部依赖；正常包导入沿用调用方已选择的固定核心。
+if not __package__:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import argparse
 import json
 if __package__:
@@ -16,9 +23,9 @@ import sys
 
 sys.dont_write_bytecode = True
 if __package__:
-    from .workflow_hook_settings import hook_mode
+    from lib.hosts.workflow_hook_settings import hook_mode
 else:
-    from workflow_hook_settings import hook_mode
+    from lib.hosts.workflow_hook_settings import hook_mode
 
 OWNER = "agent-workflow-assist-v1"
 # 提醒只陈述分级和授权边界；脚本不能推导用户授权，也不能代替原等级的验证与 QA。

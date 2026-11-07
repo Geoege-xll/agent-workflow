@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from lib import validate_prototype_workspace as validator
-from lib import prototype_navigation
-from lib import requirement_html
+from lib.documents import validate_prototype_workspace as validator
+from lib.documents import prototype_navigation
+from lib.documents import requirement_html
 from tests.test_prototype_workspace import (
     PAGE_HTML,
     PROTOTYPE_RELATIVE,

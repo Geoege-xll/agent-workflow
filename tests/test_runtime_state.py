@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from lib.platform_fs import directory_lock
-from lib.runtime_project import Node, Tree, json_bytes, node_id
+from lib.central.runtime_project import Node, Tree, json_bytes, node_id
 from manager import runtime_service as service
 
 
@@ -112,7 +112,7 @@ class RuntimeStateTest(unittest.TestCase):
                     self.put("bindings", self.binding)
                 code = '''import json, os, sys
 from pathlib import Path
-from lib.runtime_project import Tree, json_bytes
+from lib.central.runtime_project import Tree, json_bytes
 from manager import runtime_service as service
 state, project, point = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 relative = service._state_relative(project, "bindings")

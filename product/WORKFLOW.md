@@ -693,7 +693,7 @@ task state. Web implementation and QA recompute it; a mismatch invalidates use o
 Use the same machine entry from the project root; repeat `--page` and `--expect` for scoped pages:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_prototype_workspace.py \
+bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/documents/validate_prototype_workspace.py \
   . <docs.standards_root>/prototype --json --page <page>.html --expect <page>.html=<approved-sha256>
 ```
 
@@ -1352,7 +1352,7 @@ but returns FAIL for task correction/rework rather than silently repairing the c
 result with:
 
 ```text
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>
 ```
 
 Missing changed-path classification, missing required rules, evidence-free conclusions, stale

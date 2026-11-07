@@ -126,7 +126,7 @@ List only Skills actually applied; unavailable required Skills block PASS. Sugge
 findings within PASS or blockers within FAIL, never a third outcome. Return FAIL to PM for rework.
 Before accepting PASS, PM validates the internal `review_method.scope_ref` and
 `standards_policy_coverage` using
-`bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
+`bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
 Only valid PASS lets Full enter `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`. Light performs its actually selected audit and closeout assessment.
 Keep raw records internal and stop after valid acceptance; ordinary closeout does not trigger another audit.
 

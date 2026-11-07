@@ -11,7 +11,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lib import install_workflow, project_paths
+from lib.install import install_workflow
+from lib.install import project_paths
 
 
 PACK = Path(__file__).resolve().parents[1]

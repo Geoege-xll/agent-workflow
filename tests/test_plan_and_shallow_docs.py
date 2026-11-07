@@ -21,10 +21,10 @@ from unittest.mock import patch
 from tests.skill_contract_helpers import read_contract
 
 from lib.standard_paths import canonical_standard_path, standard_domain, source_domain, canonical_standard_source_path
-from lib.validate_project_config import validate_docs
+from lib.project.validate_project_config import validate_docs
 from lib.validate_project_docs import validate as validate_documents
-from lib.plan_documents import SECTIONS, parse_plan
-from lib.validate_prototype_workspace import ValidationError, validate_workspace
+from lib.documents.plan_documents import SECTIONS, parse_plan
+from lib.documents.validate_prototype_workspace import ValidationError, validate_workspace
 from tests import test_design_standards_lifecycle as design_cases
 from tests import test_prototype_workspace as prototype_cases
 from tests import test_qa_handoff as qa_cases
@@ -147,8 +147,8 @@ class PlanAndShallowDocsTest(unittest.TestCase):
     @staticmethod
     def document_applier():
         # 通过真实脚本采用的 lib 搜索路径加载事务，避免复制发布器或用替身绕过磁盘行为。
-        with patch.object(sys, "path", [str(PACK / "lib"), *sys.path]):
-            return importlib.import_module("apply_antigravity_setup")
+        with patch.object(sys, "path", [str(PACK), *sys.path]):
+            return importlib.import_module("lib.hosts.apply_antigravity_setup")
 
     def test_document_transaction_validates_standard_leaves_with_backups_retained(self) -> None:
         applier = self.document_applier()

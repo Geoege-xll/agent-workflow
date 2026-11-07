@@ -13,8 +13,9 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from lib import install_process, windows_process as win
-from lib.install_process import CANCEL_FILE_ENV, SetupRunError, SetupRunner
+from lib.install import install_process
+from lib.install import windows_process as win
+from lib.install.install_process import CANCEL_FILE_ENV, SetupRunError, SetupRunner
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -617,7 +618,7 @@ class NativeWindowsJobTest(unittest.TestCase):
             outer = (
                 "import os,sys;"
                 f"sys.path.insert(0,{str(ROOT)!r});"
-                "from lib.install_process import SetupRunner;"
+                "from lib.install.install_process import SetupRunner;"
                 "env=dict(os.environ,AW_TEST='环境值');"
                 f"SetupRunner(timeout=15).run([sys.executable,'-B','-X','utf8','-c',{child!r},*{arguments!r}],{str(root)!r},env=env)"
             )

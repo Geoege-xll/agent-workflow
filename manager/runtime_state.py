@@ -14,7 +14,7 @@ import uuid
 
 from lib import runtime_store as store
 from lib.platform_fs import os
-from lib.runtime_project import (
+from lib.central.runtime_project import (
     HOSTS, Node, ProjectRuntimeError, Tree, json_bytes, managed_path, node_id,
     project_key, read_at, relative_path, skill_parts, unique_json,
 )

@@ -22,10 +22,10 @@ from unittest.mock import patch
 import uuid
 
 from lib import runtime_bridge as bridge
-from lib import runtime_project as resources
+from lib.central import runtime_project as resources
 from lib import runtime_store as store
-from lib import workflow_hook_install as hook_install
-from lib.claude_instructions import read_file
+from lib.hosts import workflow_hook_install as hook_install
+from lib.hosts.claude_instructions import read_file
 from manager import runtime_service as service
 
 
@@ -46,11 +46,11 @@ def make_alternate_source(root: Path) -> None:
         (root / directory).mkdir(parents=True, exist_ok=True)
     for name in store.SETUP_FILES:
         put(name, b"#!/bin/sh\nexit 0\n")
-    for name in ("lib/project_paths.py", "lib/install_process.py", "lib/windows_process.py", "lib/platform_fs.py", "lib/runtime_store.py", "lib/runtime_project.py", "lib/runtime_bridge.py",
-                 "lib/runtime_pins.py", "lib/standard_paths.py", "lib/claude_instructions.py", "lib/context_read.py",
-                 "lib/shared_core_skills.py", "lib/role_models.py", "lib/role_preferences.py", "lib/claude_options.py", "lib/validate_antigravity_artifacts.py",
-                 "lib/python_runtime.sh", "lib/workflow_hook_install.py", "lib/workflow_hook_settings.py",
-                 "lib/workflow_hooks.py", "lib/windows_hook_command.py", "lib/merge_codex_config.py", "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py", "manager/runtime_state.py", "manager/__init__.py",
+    for name in ("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py", "lib/runtime_store.py", "lib/central/runtime_project.py", "lib/runtime_bridge.py",
+                 "lib/runtime_pins.py", "lib/standard_paths.py", "lib/hosts/claude_instructions.py", "lib/documents/context_read.py",
+                 "lib/skills/shared_core_skills.py", "lib/role_models.py", "lib/central/role_preferences.py", "lib/hosts/claude_options.py", "lib/validate_antigravity_artifacts.py",
+                 "lib/python_runtime.sh", "lib/hosts/workflow_hook_install.py", "lib/hosts/workflow_hook_settings.py",
+                 "lib/workflow_hooks.py", "lib/hosts/windows_hook_command.py", "lib/hosts/merge_codex_config.py", "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py", "manager/runtime_state.py", "manager/__init__.py",
                  "templates/project.yaml.example", "templates/docs/PROJECT.md",
                  "roles/xy-qa.md", "roles/xy-uiux.md", "platforms/shared/core-skills.txt"):
         put(name, (PACK / name).read_bytes())
@@ -115,7 +115,7 @@ class CentralProjectTest(unittest.TestCase):
         self.enable()
         binding = json.dumps(self.core.binding())
         def profile(*args, env=None):
-            return self.invoke("--binding", binding, "helper", "lib/project_profile_cli.py", *args, env=env)
+            return self.invoke("--binding", binding, "helper", "lib/project/project_profile_cli.py", *args, env=env)
 
         # 通过真正的自举薄桥调用各公开模式，并检查原始 JSON/角色合同。
         for args in (("context", ".agent-workflow", ".", "xy-qa"),
@@ -134,7 +134,7 @@ class CentralProjectTest(unittest.TestCase):
         result = profile("roles", ".agent-workflow", ".")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         bad = dict(self.core.binding(), content_id="0" * 64, manifest_sha256="0" * 64)
-        result = self.invoke("--binding", json.dumps(bad), "helper", "lib/project_profile_cli.py", "roles", ".agent-workflow", ".")
+        result = self.invoke("--binding", json.dumps(bad), "helper", "lib/project/project_profile_cli.py", "roles", ".agent-workflow", ".")
         self.assertNotEqual(0, result.returncode)
 
     def test_profile_helper_rejects_replaced_managed_skill(self):
@@ -143,7 +143,7 @@ class CentralProjectTest(unittest.TestCase):
         target = os.readlink(link)
         link.unlink()
         link.symlink_to(target)
-        result = self.invoke("--binding", json.dumps(self.core.binding()), "helper", "lib/project_profile_cli.py",
+        result = self.invoke("--binding", json.dumps(self.core.binding()), "helper", "lib/project/project_profile_cli.py",
                              "roles", ".agent-workflow", ".")
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual("", result.stdout)
@@ -164,7 +164,7 @@ class CentralProjectTest(unittest.TestCase):
                 else:
                     (self.project / ".codex/agents/xy-qa.toml").unlink()
                 result = self.invoke("--binding", json.dumps(self.core.binding()), "helper",
-                                     "lib/project_profile_cli.py", "roles", ".agent-workflow", ".")
+                                     "lib/project/project_profile_cli.py", "roles", ".agent-workflow", ".")
                 self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertEqual("", result.stdout)
 
@@ -217,8 +217,8 @@ class CentralProjectTest(unittest.TestCase):
         parser_code = '''import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from validate_claude_artifacts import parse_frontmatter
-from validate_antigravity_artifacts import parse_agent_frontmatter
+from lib.hosts.validate_claude_artifacts import parse_frontmatter
+from lib.validate_antigravity_artifacts import parse_agent_frontmatter
 project = Path(sys.argv[2])
 errors = []
 qa, _ = parse_frontmatter(project / ".claude/agents/xy-qa.md", errors)
@@ -234,7 +234,7 @@ assert not errors, errors
 print("native role parsers OK")
 '''
         parsed = subprocess.run([sys.executable, "-B", "-X", "utf8", "-c", parser_code,
-                                 str(self.core.root / "lib"), str(self.project)],
+                                 str(self.core.root), str(self.project)],
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(0, parsed.returncode, parsed.stdout + parsed.stderr)
         self.assertIn("native role parsers OK", parsed.stdout)
@@ -252,11 +252,12 @@ print("native role parsers OK")
 from pathlib import Path
 root = Path(sys.argv[1])
 sys.path.insert(0, str(root))
-from lib import project_paths, install_process
+from lib.install import project_paths
+from lib.install import install_process
 from manager import project_service, state_files
 for module in (project_paths, install_process, project_service, state_files):
     assert Path(module.__file__).is_relative_to(root), module.__file__
-assert "lib.install_workflow" not in sys.modules
+assert "lib.install.install_workflow" not in sys.modules
 assert "manager.service" not in sys.modules
 assert project_service.parse_registry(None) == {"schema": 1, "registered": [], "hidden": []}
 assert project_paths.target_path(sys.argv[2], root) == Path(sys.argv[2])

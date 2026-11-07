@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from lib import claude_instructions as entry
+from lib.hosts import claude_instructions as entry
 
 
 class ClaudeInstructionsTest(unittest.TestCase):

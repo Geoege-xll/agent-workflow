@@ -10,10 +10,10 @@ import re
 import shutil
 import subprocess
 
-from lib.claude_instructions import read_file
-from lib.workflow_hook_install import EVENTS
-from lib.workflow_hook_settings import hook_mode
-from lib.claude_options import parse as parse_claude_options
+from lib.hosts.claude_instructions import read_file
+from lib.hosts.workflow_hook_install import EVENTS
+from lib.hosts.workflow_hook_settings import hook_mode
+from lib.hosts.claude_options import parse as parse_claude_options
 from .catalog import discover
 
 

@@ -13,13 +13,13 @@ from unittest.mock import Mock, patch
 
 
 PACK = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PACK / "lib"))
-import apply_antigravity_setup as publisher
-import shared_core_skills as skills
-import validate_project_config as config
-import windows_bootstrap as bootstrap
-import windows_fs
-from platform_fs import os as platform_os
+sys.path.insert(0, str(PACK))
+import lib.hosts.apply_antigravity_setup as publisher
+import lib.skills.shared_core_skills as skills
+import lib.project.validate_project_config as config
+import lib.windows_bootstrap as bootstrap
+import lib.windows_fs as windows_fs
+from lib.platform_fs import os as platform_os
 
 
 class Backend:

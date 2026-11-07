@@ -9,7 +9,7 @@ import locale
 from pathlib import Path
 import time
 
-from lib.project_paths import InstallError, target_path
+from lib.install.project_paths import InstallError, target_path
 from lib import runtime_store
 from .catalog import Catalog, clean, discover
 from . import service, model_preferences, project_service, state_files

@@ -15,9 +15,11 @@ import stat
 import tomllib
 import uuid
 
-from lib.claude_instructions import read_file
-from lib import role_models, role_preferences, runtime_store
-from lib.runtime_project import CONFIG, Node, Tree
+from lib.hosts.claude_instructions import read_file
+from lib import role_models
+from lib.central import role_preferences
+from lib import runtime_store
+from lib.central.runtime_project import CONFIG, Node, Tree
 from .catalog import Catalog, clean, discover
 from . import runtime_service, state_files
 
@@ -33,7 +35,7 @@ def validate_runtime(runtime: Path, *, state: Path | None = None) -> None:
     得到，不能从固定 core.parent 推导。无本机记录的 clone 也不能借 locator
     自动获得启用权，缺失/损坏绑定必须直接拒绝，不回退到其他版本。
     """
-    from lib.runtime_project import LOCATOR
+    from lib.central.runtime_project import LOCATOR
     project = state_files.project_path(runtime.parent)
     status = runtime_service.status(state_files.state_root(state), project)
     if status["runtime_binding"] is not None:

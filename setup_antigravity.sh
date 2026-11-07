@@ -24,7 +24,7 @@ if [[ "${CHECK_ONLY}" -eq 1 && "${PREFLIGHT_ONLY}" -eq 1 ]]; then
   exit 2
 fi
 if [[ "${CHECK_ONLY}" -eq 0 && "${PREFLIGHT_ONLY}" -eq 0 ]]; then
-  python3 "${PACK_DIR}/lib/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
+  python3 "${PACK_DIR}/lib/project/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
 fi
 
 ROOT_AGENTS_MD="${PROJECT_ROOT}/AGENTS.md"
@@ -39,8 +39,8 @@ ANTI_BEGIN="<!-- pack:antigravity-begin -->"
 ANTI_END="<!-- pack:antigravity-end -->"
 ANTI_TPL="${PLATFORMS_DIR}/antigravity/AGENTS.antigravity.tpl"
 VALIDATOR="${PACK_DIR}/lib/validate_antigravity_artifacts.py"
-RENDERER="${PACK_DIR}/lib/render_antigravity_agent.py"
-APPLIER="${PACK_DIR}/lib/apply_antigravity_setup.py"
+RENDERER="${PACK_DIR}/lib/hosts/render_antigravity_agent.py"
+APPLIER="${PACK_DIR}/lib/hosts/apply_antigravity_setup.py"
 STAGING_ROOT=""
 RESET_BACKUP=""
 RESET_ACTIVE=0
@@ -200,7 +200,7 @@ stage_native_artifacts() {
   STAGING_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/agent-workflow-antigravity-stage.XXXXXX")
   mkdir -p "${STAGING_ROOT}/agents" "${STAGING_ROOT}/skills"
 
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     stage-copy "${PACK_DIR}" "${STAGING_ROOT}/skills"
 
   while IFS= read -r role; do
@@ -259,7 +259,7 @@ basic_check() {
 }
 
 require_pack_layout
-python3 "${PACK_DIR}/lib/validate_project_config.py" \
+python3 "${PACK_DIR}/lib/project/validate_project_config.py" \
   "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}"
 python3 "${VALIDATOR}" sources "${PACK_DIR}"
 validate_all_roles
@@ -274,7 +274,7 @@ fi
 python3 "${APPLIER}" preflight "${PACK_DIR}" "${PROJECT_ROOT}" "${STAGING_ROOT}"
 
 if [[ "${PREFLIGHT_ONLY}" -eq 1 ]]; then
-  python3 "${PACK_DIR}/lib/project_profile_cli.py" \
+  python3 "${PACK_DIR}/lib/project/project_profile_cli.py" \
     preview "${PACK_DIR}" "${PROJECT_ROOT}"
   log_ok "Antigravity source and staging preflight"
   exit 0

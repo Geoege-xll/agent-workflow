@@ -6,6 +6,13 @@
 
 from __future__ import annotations
 
+# 直接脚本只信任自身物理位置确定的核心根，避免异 cwd 或 PYTHONPATH 中的
+# 同名模块劫持内部依赖；正常包导入沿用调用方已选择的固定核心。
+if not __package__:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import copy
 from contextlib import ExitStack, contextmanager
 import hashlib
@@ -23,13 +30,13 @@ import unicodedata
 
 try:
     from .agent_continuation import active as _running, check_binding
-    from .claude_instructions import read_file
+    from lib.hosts.claude_instructions import read_file
     from .task_graph import TaskGraphError
     from .runtime_pins import project_root, read_builtin_source, record_binding
     from .standard_paths import builtin_source_path
 except ImportError:
     from agent_continuation import active as _running, check_binding
-    from claude_instructions import read_file
+    from lib.hosts.claude_instructions import read_file
     from task_graph import TaskGraphError
     from runtime_pins import project_root, read_builtin_source, record_binding
     from standard_paths import builtin_source_path
