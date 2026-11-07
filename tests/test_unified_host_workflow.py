@@ -5,6 +5,7 @@ import os
 import re
 import stat
 import shutil
+import shlex
 import subprocess
 import sys
 # 子进程使用 sys.executable，保持与统一运行时入口选择的解释器一致。
@@ -5665,6 +5666,55 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         result = self.run_script(project, "setup_all.sh")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        # 同一已选发行节点继续覆盖真实私有stage的alias语义，复用当前安装与
+        # 源包，不复制另一整套fixture。只包装mktemp目录输出，解释器、生成器、
+        # validator和下方全部角色/Skill断言均沿正式调用链，绝不伪造成功内容。
+        native_mktemp = shutil.which("mktemp")
+        self.assertIsNotNone(native_mktemp)
+        for linked_leaf in (False, True):
+            with self.subTest(stage="linked-leaf" if linked_leaf else "alias-parent"):
+                control = project.parent / ("mktemp-leaf" if linked_leaf else "mktemp-alias")
+                binary = control / "bin"
+                stages = control / "physical"
+                binary.mkdir(parents=True)
+                stages.mkdir(mode=0o700)
+                alias = control / "alias"
+                alias.symlink_to(stages, target_is_directory=True)
+                trace = control / "created-stages"
+                target = control / "preserved-target"
+                target.mkdir()
+                (target / "marker").write_bytes(b"untouched user target\n")
+                action = ("mv \"${made}\" \"${made}.owned\"\nln -s " + shlex.quote(str(target)) + ' "${made}"\n') if linked_leaf else ""
+                wrapper = binary / "mktemp"
+                wrapper.write_text(
+                    "#!/usr/bin/env bash\nset -euo pipefail\n"
+                    'if [[ "$#" -eq 1 && "$1" == "-d" ]]; then\n'
+                    + "made=$(" + shlex.quote(native_mktemp) + " -d " + shlex.quote(str(stages / "stage.XXXXXXXX")) + ")\n"
+                    + '[[ -d "${made}" && ! -L "${made}" ]]\n'
+                    + 'printf \'%s\\n\' "${made}" >> ' + shlex.quote(str(trace)) + "\n"
+                    + action
+                    + "printf '%s/%s\\n' " + shlex.quote(str(alias)) + ' "${made##*/}"\n'
+                    + "else\nexec " + shlex.quote(native_mktemp) + ' "$@"\nfi\n',
+                    encoding="utf-8",
+                )
+                wrapper.chmod(0o700)
+                with mock.patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ["PATH"]}), \
+                        mock.patch.object(tempfile, "gettempdir", return_value=str(stages)):
+                    checked = self.run_script(project, "setup_all.sh", "--check")
+                created = [Path(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+                self.assertTrue(created)
+                if linked_leaf:
+                    # 目录叶已被替换，不能跟随它写产物或把未知叶/其目标当作
+                    # 本批暂存资料删除；原mktemp目录仍独立保留供fixture精确清理。
+                    self.assertNotEqual(0, checked.returncode)
+                    self.assertEqual(["marker"], sorted(path.name for path in target.iterdir()))
+                    self.assertEqual(b"untouched user target\n", (target / "marker").read_bytes())
+                    self.assertTrue(all(path.is_symlink() and Path(str(path) + ".owned").is_dir() for path in created))
+                    self.assertIn("unsafe private Claude stage leaf", checked.stdout + checked.stderr)
+                else:
+                    self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+                    self.assertTrue(all(not path.exists() for path in created), "private stages must be cleaned after validation")
 
         names = tuple(
             line.strip()
