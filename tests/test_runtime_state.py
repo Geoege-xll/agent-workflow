@@ -103,6 +103,57 @@ class RuntimeStateTest(unittest.TestCase):
                     service.read_binding_record(self.state, self.project)
                 self.assertNotIn("PRIVATE-BODY-MUST-NOT-LEAK", str(raised.exception))
 
+    def test_retained_conflicts_report_actual_difference_in_priority_order(self):
+        cases = (
+            ("unchanged", None),
+            ("missing", "保留的旧 inode 路径已缺失"),
+            ("missing_parent", "保留的旧 inode 路径已缺失"),
+            ("content", "保留的旧 inode 内容或类型已变化"),
+            ("type", "保留的旧 inode 内容或类型已变化"),
+            ("permissions", "保留的旧 inode 权限已变化"),
+            ("identity", "保留的旧 inode 身份已变化"),
+            ("permissions_and_identity", "保留的旧 inode 权限已变化"),
+            ("content_permissions_and_identity", "保留的旧 inode 内容或类型已变化"),
+        )
+        for difference, reason in cases:
+            with self.subTest(difference=difference):
+                relative = f"{difference}/.agent-workflow-central-{NONCE}-0.previous"
+                target = self.project / relative
+                target.parent.mkdir()
+                target.write_bytes(b"retained-fixture")
+                target.chmod(0o600)
+                with Tree(self.project) as tree:
+                    record = service._retained_record(relative, service._raw(tree, relative))
+                record_before = copy.deepcopy(record)
+                if difference in {"missing", "missing_parent", "type"}:
+                    target.unlink()
+                    if difference == "missing_parent":
+                        target.parent.rmdir()
+                    elif difference == "type":
+                        # 链接正文与原文件字节相同，仍必须按类型变化阻断；
+                        # reader 只取链接自身，不访问不存在的目标。
+                        target.symlink_to("retained-fixture")
+                elif difference == "content":
+                    target.write_bytes(b"saved-after-record")
+                elif difference == "permissions":
+                    target.chmod(0o640)
+                elif "identity" in difference:
+                    # 新旧文件同时存在后再替换，保证真实 inode 不同；组合
+                    # 差异约束诊断优先级，而非依赖系统碰巧复用 inode。
+                    replacement = target.with_name("replacement")
+                    replacement.write_bytes(b"saved-after-record" if "content" in difference else b"retained-fixture")
+                    replacement.chmod(0o640 if "permissions" in difference else 0o600)
+                    replacement.replace(target)
+                    self.assertNotEqual(record["inode"], list(node_id(target.stat())))
+                with Tree(self.project) as tree:
+                    before = service._raw(tree, relative)
+                    self.assertEqual([] if reason is None else [{"path": relative, "reason": reason}],
+                                     service._retained(tree, [record]))
+                    # 诊断不能修复缺失、改写记录或清理后续保存；核对完整真实
+                    # 节点前后像，避免仅检查 reason 而漏掉数据保留合同。
+                    self.assertEqual(before, service._raw(tree, relative))
+                    self.assertEqual(record_before, record)
+
     def test_process_exit_during_private_publication_is_explicitly_rejected(self):
         # 真实磁盘调用完成后 os._exit，finally 不会运行。重启只通过旧 reader
         # 与 repair 入口判断：不得把隔离窗口读成从未管理或普通多硬链错误。

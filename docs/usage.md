@@ -7,7 +7,7 @@ Homebrew 的安装、升级与发行构建见 [Homebrew 说明](homebrew.md)。
 
 ## 支持范围与安装保护
 
-当前源码版本为 **2.1.1**，仍是未公开发布的本地稳定候选，唯一版本源为 `product/VERSION`。
+当前源码版本为 **2.1.1**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
 GitHub 与 Tap 的公开版本以各自发布声明为准；源码更新不会改变既有二进制、Cellar 载荷或 Tap。
 
 当前安装通过 macOS/Linux 源包或 Homebrew 使用中央运行时。未发布的 npm／npx Windows
@@ -275,18 +275,8 @@ Claude 的 `CLAUDE.md` 仅为一行 `@AGENTS.md`，共用精简指令入口，�
 压缩恢复继续复用 `SessionStart(compact)`，不重复注入完整指令。辅助 Hooks 可通过 `workflow_hooks.mode: off` 关闭，
 其所有权、信任及验证边界见 [Hooks 说明](../platforms/shared/HOOKS.md) 和[Claude 平台细则](../platforms/claude/references/pm-integration.md)。
 
-可选严格 guard 沿用已有脚本，默认仅提示模块归属并退出 0：
-
-```yaml
-# .agent-workflow/project.yaml（可选）
-deny_prefixes:
-  - secrets/
-  - production-keys/
-```
-
-```bash
-GUARD_STRICT=1 bash .agent-workflow/scripts/guard.sh
-```
+可选严格 guard 是源包开发工具，其布局要求、`deny_prefixes` 和真实调用入口见
+[开发手册](development.md#源包可选-guard)；普通中央薄项目不包含该脚本。
 
 ## 项目文档与可选记忆
 

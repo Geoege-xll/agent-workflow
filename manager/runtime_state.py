@@ -236,10 +236,20 @@ def retained_conflicts(tree: Tree, records: list[dict]) -> list[dict]:
             node = Node()
         else:
             node = read_at(parent, name, allow_link=True)
-        if (node.kind != item["kind"] or node.mode != item["mode"]
-                or hashlib.sha256(node.payload).hexdigest() != item["sha256"]
-                or list(node.identity[:2]) != item["inode"]):
-            conflicts.append({"path": item["path"], "reason": "保留的旧 inode 已有后续保存或身份变化"})
+        # 同一节点可能同时改变多项；按缺失、内容/类型、权限、inode 身份的
+        # 优先级报告最直接的事实，不能把缺失推断成后续保存。这里只细分诊断，
+        # 任一差异仍保留原有冲突阻断，不认领、修复或删除恢复资料。
+        if node.kind == "missing":
+            reason = "保留的旧 inode 路径已缺失"
+        elif node.kind != item["kind"] or hashlib.sha256(node.payload).hexdigest() != item["sha256"]:
+            reason = "保留的旧 inode 内容或类型已变化"
+        elif node.mode != item["mode"]:
+            reason = "保留的旧 inode 权限已变化"
+        elif list(node.identity[:2]) != item["inode"]:
+            reason = "保留的旧 inode 身份已变化"
+        else:
+            continue
+        conflicts.append({"path": item["path"], "reason": reason})
     return conflicts
 
 
