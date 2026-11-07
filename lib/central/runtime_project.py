@@ -614,11 +614,10 @@ def configuration(resources: Resources, project: Path, config: Node, *, owned_li
 
 
 def role_resource(resources: Resources, config: bytes, host: str, role: str, binding: dict,
-                  *, preferences: dict | None = None) -> bytes:
+                  *, preferences: dict | None = None, global_role: bool = False) -> bytes:
     from lib.role_models import parse as parse_models
     from lib.central.role_preferences import resolve
     from lib.hosts.claude_options import parse as parse_claude
-    from lib.skills.role_skills import ROLE_SKILLS
     source = resources.read(f"roles/{role}.md").decode("utf-8", errors="strict")
     match = re.search(r"(?m)^description:\s*(.+)$", source)
     description = match[1].strip().strip('"') if match else role
@@ -626,24 +625,35 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
     # 全局默认属于可变用户状态，不写回项目适配器，更不写入固定核心。这里仅
     # 物化按字段解析后的模型/推理值；原有正文、工具白名单和任务 pin 继续原样生成。
     settings, _ = resolve(preferences or {}, models, host, role)
-    selected = json.dumps(binding, sort_keys=True, separators=(",", ":"))
     command = f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"
+    # 全局入口故意不固定当前安装版本。已有任务先读取完整 Task Pack 的 pin，
+    # 即使项目已换版/停用也沿旧 pin 读取；只有无 pin 的新任务才调用当前 gate。
     instructions = (
-        f"Central project role {role}. Execute only the PM's current task pack; do not launch other Agents.\n"
-        f"Without a local activation record, stop and report inactive; first run `{command} check` for new tasks.\n"
-        f"This entry pins runtime_binding={selected}. Existing tasks must prioritize their task pack's runtime_binding, "
-        "without reading the current project version after a switch; stop if a central task lacks a pin.\n"
-        f"Use `{command} --binding '<selected-three-field-JSON>' read roles/{role}.md` to read the complete role source, "
-        "and the same binding to read product/WORKFLOW.md, product/GLOBAL_CONSTRAINTS.md, and required Skills.\n"
-        f"The configuration path is explicitly {CONFIG}, and the business root is the current project; only the local bridge resolves the core root.\n"
-        "Role fields do not prove parent-session permission, provider, or MCP isolation; respect native boundaries without fabricating isolation.\n"
+        f"Workflow role {role}. First read the complete current schema_version: 2 Task Pack.\n"
+        "Require instance_policy: fresh and context_policy: handoff_only; never inherit PM/sibling history or delegate.\n"
+        "Use only its exact owned_paths, execution_workspace, approved gates, and requiredSkills.\n"
+        "Before any project check, take runtime_binding from that Task Pack. For an existing task, never substitute the current project/global version.\n"
+        f"From the explicit business project root, use `{command} --binding '<task-three-field-JSON>' read roles/{role}.md` "
+        "to read the complete role, then product/WORKFLOW.md, product/GLOBAL_CONSTRAINTS.md, "
+        f"platforms/{host}/references/pm-integration.md and each required Skill using the same pin.\n"
+        f"Only a genuinely new task without a pin may run `{command} check` to freeze the admitted binding. "
+        "Stop if inactive, cloned without a local activation record, host-disabled, or the role is absent from the validated ProjectProfile.\n"
+        "Global discovery is not activation. Missing pins never authorize guessing a version.\n"
+        f"Project configuration is {CONFIG}; keep business, configuration and immutable core roots separate.\n"
+        "Native role permissions do not prove parent/provider/MCP isolation or actual model execution.\n"
     )
+    front, separator, _ = source.partition("\n---\n")
+    declared = re.findall(r"(?m)^toolsets:[ \t]*(.*)$", front)
+    toolset = re.fullmatch(r"\[\s*(read|write)\s*\]", declared[0]) if len(declared) == 1 else None
+    if not source.startswith("---\n") or not separator or toolset is None:
+        raise ProjectRuntimeError("角色缺少唯一受支持的 toolsets 声明")
     if host == "codex":
         fields = [f'name = {json.dumps(role)}', f'description = {json.dumps(description, ensure_ascii=False)}']
         if settings.get("model", "inherit") != "inherit":
             fields.append(f'model = {json.dumps(settings["model"])}')
         if settings.get("effort", "inherit") != "inherit":
             fields.append(f'model_reasoning_effort = {json.dumps(settings["effort"])}')
+        fields.append("sandbox_mode = " + json.dumps("read-only" if toolset[1] == "read" else "workspace-write"))
         fields.append("developer_instructions = " + json.dumps(instructions, ensure_ascii=False))
         payload = ("\n".join(fields) + "\n").encode()
         # 沿现有 role_models.patch_artifact 的受管载荷摘要合同，让合法模型修改
@@ -682,8 +692,7 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
             raise ProjectRuntimeError("核心缺少可验证的原生角色工具白名单")
         fields.extend(["tools:", *("  - " + tool for tool in tools), "mainAgent: false", "subagent: true",
                        "model: " + settings.get("model", "inherit"), "commandExecutionPolicy: sandbox"])
-    fields.append("skills:")
-    fields.extend("  - " + ("skills/" if host == "antigravity" else "") + skill for skill in ROLE_SKILLS[role])
+    # Skill 发现软链仍由项目事务维护；静态预载会跟随换版，故正文只能按任务 pin 读取。
     fields.extend(["---", "", "<!-- " + MARKER + " -->", "", instructions])
     return "\n".join(fields).encode()
 
@@ -768,7 +777,27 @@ def start():
     elif "AGENT_WORKFLOW_RUNTIME_BINDING" in os.environ:
         has_requested = True
         requested = json.loads(os.environ["AGENT_WORKFLOW_RUNTIME_BINDING"])
-    if has_requested:
+    arguments = list(sys.argv[1:])
+    if arguments[:1] == ["--binding"]:
+        arguments = arguments[2:]
+    elif arguments and arguments[0].startswith("--binding="):
+        arguments = arguments[1:]
+    helper_args = arguments[2:] if arguments[:1] == ["helper"] else []
+    if helper_args[:1] == ["--"]:
+        helper_args = helper_args[1:]
+    control = (arguments[:1] in (["check"], ["new_task"]) or
+               arguments[:2] == ["helper", "lib/task_graph_init.py"] or
+               arguments[:2] == ["helper", "lib/task_graph_cli.py"] and helper_args[:1] == ["init"])
+    if control:
+        # 新任务必须运行当前控制桥，由它检查 supplied/effective pin 与启用状态。
+        # 这里只选择经清单逐字节验证的控制代码，不在薄入口重写 gate 规则或持锁。
+        current = json.loads(read_regular(state / "central/current.json"))
+        if (not isinstance(current, dict) or set(current) != {"schema_version", "runtime_binding", "previous_binding", "generation"}
+                or type(current["schema_version"]) is not int or current["schema_version"] != 1
+                or not isinstance(current["generation"], str) or not re.fullmatch("[0-9a-f]{32}", current["generation"])):
+            raise ValueError("中央当前版本记录无效")
+        binding = current["runtime_binding"]
+    elif has_requested:
         if requested not in record.get("used_bindings", []):
             raise ValueError("任务 pin 不是当前物理项目曾用版本")
         binding = requested
@@ -808,7 +837,7 @@ if __name__ == "__main__":
 
 
 def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str, ...], *, owned_links: set[str],
-            preferences: dict | None = None) -> tuple[dict[str, tuple[Node, str]], object]:
+            preferences: dict | None = None, native_context=None, native_ready_hosts: tuple = ()) -> tuple[dict[str, tuple[Node, str]], object]:
     """纯读取生成资源；返回 desired 节点及用途，不创建任何目录或正文副本。"""
     body, profile, settings = configuration(resources, project, config, owned_links=owned_links)
     # 通用 store 协议也可保存不含中央项目能力的旧来源，不能只因有内容 ID 就
@@ -852,10 +881,23 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
     # 配置尚未落盘也能生成 fresh Hooks；JSON 容器不成为整文件独占资源。
     desired.update(hook_resources(project, body, hosts,
                                   codex_after=desired.get(".codex/config.toml", (None,))[0]))
+    from lib.role_models import parse as parse_models
+    from lib.hosts.claude_options import parse as parse_claude
+    overrides = parse_models(body.decode("utf-8"))
+    windows = parse_claude(body.decode("utf-8"))["auto_compact_windows"]
+    ready_hosts = set(native_ready_hosts)
+    if ready_hosts - set(hosts) or ready_hosts and native_context is None:
+        raise ProjectRuntimeError("预检宿主范围必须属于当前显式原生上下文")
+    if native_context is not None:
+        from manager.native_agents import verified_hosts
+        ready_hosts.update(verified_hosts(native_context.state, context=native_context))
     for host in hosts:
         directory, suffix = ROLE_PATHS[host]
         for role in profile.enabled_roles:
-            desired[f"{directory}/{role}{suffix}"] = (Node("file", role_resource(resources, body, host, role, selected, preferences=preferences), 0o644), "role")
+            # 宿主同名角色是全文件替换，单字段覆盖也必须编译完整权限/引导描述符。
+            # 无覆盖时不制造 local shadow；runtime 事务会撤下此前已归属的同名产物。
+            if host not in ready_hosts or overrides.get(host, {}).get(role) or host == "claude" and role in windows:
+                desired[f"{directory}/{role}{suffix}"] = (Node("file", role_resource(resources, body, host, role, selected, preferences=preferences), 0o644), "role")
     # Resources.root 在来源预览中仍是下载源；实际链接目标由服务明确注入中央定位，
     # 所以此处只返回角色/普通资源，Skill 目标不得猜测为源码根。
     docs = settings["docs"]
