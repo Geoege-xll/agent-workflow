@@ -1,6 +1,7 @@
 # Agent Workflow Pack 2.1
 
-面向项目的原生多Agent工作流，当前源码版本为 **2.1.0**，本次变更尚未发布到 Homebrew 或 npm。
+面向项目的原生多Agent工作流，当前源码版本为 **2.1.0**。
+GitHub 发行版本与资产见 [Releases](https://github.com/Geoege-xll/agent-workflow/releases)；Homebrew 以公共 Tap 声明为准，npm 尚未发布。
 版本唯一来源为 `product/VERSION`；使用 `awf-cli --version` 核对实际中央程序的版本与来源。
 2.1 采用普通中央安装，不提供旧版本兼容升级。仅Light／Full及schema_version:2，
 不兼容旧任务／交接格式；用户文件、已有成果和必要证据保护继续有效。
@@ -32,7 +33,7 @@ npx @geoege-xll/agent-workflow init
 
 ### Homebrew 安装
 
-可通过公共 Tap 安装其当前声明的版本；本地 2.1.0 尚未发布，Tap 不会因此自动改变。
+可通过公共 Tap 安装其当前声明的版本；GitHub 发布新版本不会自动更新 Tap。
 发行流程见 [Homebrew 说明](docs/homebrew.md#发布边界)：
 
 ```bash

@@ -1,4 +1,4 @@
-# Homebrew 安装与本地 2.1 构建
+# Homebrew 安装与 2.1 发行构建
 
 源码仓库：<https://github.com/Geoege-xll/agent-workflow>，公开 Tap 为
 `Geoege-xll/homebrew-tap`，Formula 名称为 `Geoege-xll/tap/awf-cli`。
@@ -6,7 +6,8 @@
 安装时核对归档 SHA-256；用已安装入口的 `--version` 核对实际版本和中央程序位置。
 
 当前源码版本为 **2.1.0**，唯一人工维护值在 `product/VERSION`。
-本次变更尚未发布 Release 或更新公共 Tap；下面的公共安装命令只安装 Tap 已声明的版本，
+GitHub 已公开的版本与资产以 [Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
+下面的公共安装命令只安装 Tap 已声明的版本；发布 GitHub Release 不会自动更新公共 Tap，
 不能据此认定已经取得 2.1.0。
 
 ## 用户安装
