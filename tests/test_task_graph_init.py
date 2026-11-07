@@ -35,21 +35,34 @@ workflow_hooks:
 def activate_fixture_pin(root: Path, state: Path, core, *, used=()):
     """为最小规则库建立真实本机启用前置，不再只靠伪造桥环境猜测新任务许可。
 
-    此夹具不安装宿主角色；本文件只验证规则图初始化，受管资源精确限定到
-    已存在locator。完整安装/角色/原生桥消费者由central_project测试承担。
+    此夹具通过正式role_resource建立Codex两角色完整local投影和locator，
+    避免把缺少全局角色的稀疏目录冒充可用项目。完整安装/原生宿主消费者由
+    central_project测试承担，本文件只验证规则图初始化与固定来源读取。
     """
+    from lib.central import runtime_project as project_files
     from lib.central.runtime_project import Node, Tree, absolute_directory, json_bytes, node_id
     from manager import runtime_policy
     from manager.runtime_state import read_state, state_relative, write_control, write_private
     with runtime_policy.coordination(state), absolute_directory(state / "bindings", create=True), Tree(root) as project, Tree(state) as machine:
         marker = project.read(".agent-workflow/runtime.json")
         binding = core.binding()
+        resources = project_files.Resources(core.root, json_bytes(binding), core.label, core)
+        config = project_files.initial_config(resources, root).replace(b"mode: assist", b"mode: off")
+        (root / ".agent-workflow/project.yaml").write_bytes(config)
+        managed = {".agent-workflow/runtime.json": {"purpose": "locator", "baseline": Node().value(), "expected": marker.value()}}
+        for role in ("xy-qa", "xy-uiux"):
+            relative = f".codex/agents/{role}.toml"
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(project_files.role_resource(resources, config, "codex", role, binding))
+            target.chmod(0o644)
+            managed[relative] = {"purpose": "role", "baseline": Node().value(), "expected": project.read(relative).value()}
         history = list(used)
         if binding not in history:
             history.append(binding)
         record = {"schema_version": 1, "project_root": str(root), "project_identity": list(node_id(root.stat())),
                   "runtime_binding": binding, "enabled": True, "hosts": ["codex"], "previous_binding": None,
-                  "used_bindings": history, "managed": {".agent-workflow/runtime.json": {"purpose": "locator", "baseline": Node().value(), "expected": marker.value()}},
+                  "used_bindings": history, "managed": managed,
                   "retained_nodes": [], "generation": uuid.uuid4().hex}
         write_private(machine, state_relative(root, "bindings"), json_bytes(record))
         write_control(machine, runtime_policy.CURRENT, json_bytes({"schema_version": 1, "runtime_binding": binding,
@@ -76,7 +89,8 @@ def pinned_fixture(workspace: Path, *, engineering_body: bytes | None = None):
     # 冻结真正运行的所属模块和纯文档包标识，不能再用旧平铺名称拼出不存在的路径。
     for relative in ("lib/__init__.py", "lib/documents/__init__.py", "lib/documents/context_read.py",
                      "lib/runtime_pins.py", "lib/runtime_store.py", "lib/standard_paths.py",
-                     "lib/hosts/__init__.py", "lib/hosts/claude_instructions.py", "lib/platform_fs.py"):
+                     "lib/hosts/__init__.py", "lib/hosts/claude_instructions.py", "lib/platform_fs.py",
+                     "templates/project.yaml.example", "roles/xy-qa.md", "roles/xy-uiux.md"):
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((PACK / relative).read_bytes())
