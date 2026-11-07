@@ -16,6 +16,7 @@ import tomllib
 import uuid
 
 from lib.hosts.claude_instructions import read_file
+from lib.hosts.native_agents import native_settings
 from lib import role_models
 from lib.central import role_preferences
 from lib import runtime_store
@@ -55,10 +56,36 @@ def ensure_source(catalog: Catalog, project: Path) -> None:
         raise ValueError("模型来源或能力已变化；草稿已保留，请刷新并重新选择后再应用")
 
 
-def roles(project: Path, host: str) -> list[str]:
-    directory, suffix = LOCATIONS[host]
-    path = state_files.secure_path(project, directory)
-    return sorted(row.stem for row in path.glob("xy-*"+suffix) if row.stem in role_models.ROLES and row.is_file() and not row.is_symlink()) if path.is_dir() else []
+def roles(project: Path, host: str, *, state: Path | None = None, native_context=None) -> list[str]:
+    """角色可用性来自当前绑定宿主与已验证画像，稀疏角色不以文件存在判定。"""
+    if host not in LOCATIONS:
+        raise ValueError("未知宿主")
+    state = state_files.state_root(state)
+    _, record = runtime_service.read_binding_record(state, project)
+    if not record or not record["enabled"] or host not in record["hosts"]:
+        return []
+    from lib.central.runtime_project import Resources, configuration, json_bytes
+    core = runtime_store.load_core(record["runtime_binding"], state)
+    with Tree(project) as tree:
+        conflicts, links = runtime_service._ownership(tree, record, state, repair=False)
+        if conflicts:
+            raise ValueError("项目原生角色归属冲突：文件被修改、缺失或路径包含符号链接")
+        config = tree.read(CONFIG)
+    _, profile, _ = configuration(Resources(core.root, json_bytes(core.binding()), core.label, core),
+                                   project, config, owned_links=links)
+    global_ready = False
+    if native_context is not None:
+        from .native_agents import verified_hosts
+        global_ready = host in verified_hosts(state, context=native_context)
+    available = []
+    for role in profile.enabled_roles:
+        relative = role_path(project, host, role).relative_to(project).as_posix()
+        local = record["managed"].get(relative)
+        if local is not None and local["purpose"] == "role" or global_ready:
+            available.append(role)
+        elif role_path(project, host, role).exists():
+            raise ValueError("项目同名原生角色缺少精确归属")
+    return sorted(available)
 
 
 def role_path(project: Path, host: str, role: str) -> Path:
@@ -68,23 +95,17 @@ def role_path(project: Path, host: str, role: str) -> Path:
     return state_files.secure_path(project, f"{directory}/{role}{suffix}")
 
 
-def native_settings(raw: bytes, host: str) -> dict[str, str]:
-    if host == "codex":
-        data = tomllib.loads(raw.decode())
-        return role_models.validate(host, {"model": data.get("model", "inherit"), "effort": data.get("model_reasoning_effort", "inherit")})
-    front = raw.decode().split("\n---\n", 1)[0]
-    model = re.findall(r"^model: (.+)$", front, re.MULTILINE)
-    effort = re.findall(r"^effort: (.+)$", front, re.MULTILINE)
-    if len(model) != 1 or len(effort) > 1:
-        raise ValueError("角色模型字段缺失或重复")
-    return role_models.validate(host, {"model":model[0].strip('"\''), "effort":effort[0] if effort else "inherit"})
-
-
-def role_settings(project: Path, host: str, role: str) -> dict[str, str]:
+def role_settings(project: Path, host: str, role: str, *, state: Path | None = None, native_context=None) -> dict[str, str]:
     raw = read_file(role_path(project, host, role))
-    if raw is None:
-        raise ValueError("角色尚未安装，请先安装或升级工作流")
-    return native_settings(raw, host)
+    if raw is not None:
+        return native_settings(raw, host)
+    state = state_files.state_root(state)
+    if role not in roles(project, host, state=state, native_context=native_context):
+        raise ValueError("角色不在当前启用宿主的已验证画像中")
+    config = read_file(project / CONFIG)
+    if config is None:
+        raise ValueError("项目缺少角色偏好配置")
+    return role_preferences.resolve(role_preferences.snapshot(state)[1], role_models.parse(config.decode()), host, role)[0]
 
 
 def validate_selection(host: str, value: dict, catalog: Catalog) -> dict:
@@ -102,8 +123,8 @@ def validate_selection(host: str, value: dict, catalog: Catalog) -> dict:
 @dataclass(frozen=True)
 class Change:
     relative: str
-    before: bytes
-    after: bytes
+    before: bytes | None
+    after: bytes | None
     mode: int
 
 
@@ -185,7 +206,7 @@ def _reserve_backup_capacity(record: dict,changes,project: Path,versions_relativ
 
 def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog, expected: dict | None = None,
             *, state: Path | None = None, global_preferences: dict | None = None,
-            persist: bool = True) -> list[Change]:
+            persist: bool = True, native_context=None, metadata_roles: tuple = ()) -> list[Change]:
     runtime = state_files.secure_path(project, ".agent-workflow")
     config_path = state_files.secure_path(project, ".agent-workflow/project.yaml")
     config = read_file(config_path)
@@ -202,36 +223,65 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
     validate_runtime(runtime, state=state)
     defaults = role_preferences.snapshot(state_files.state_root(state))[1] if global_preferences is None else global_preferences
     changes = []
+    effective = {}
     for role, raw_value in sorted(choices.items()):
-        if not isinstance(raw_value,dict) or set(raw_value)-set(role_preferences.FIELDS):
-            raise ValueError("角色编辑只接受 model / effort 字段")
-        # 只修改传入字段；None 表示清除此范围的覆盖。全局批量物化 persist=False
-        # 时传入的完整有效值只用于原生补丁，绝不把它扩写进项目 role_models。
-        fields = dict(all_choices.get(host,{}).get(role,{}))
+        if role not in role_models.ROLES or not isinstance(raw_value, dict) or set(raw_value) - set(role_preferences.FIELDS):
+            raise ValueError("角色编辑只接受已知角色的 model / effort 字段")
+        fields = dict(all_choices.get(host, {}).get(role, {}))
         for field, selected in raw_value.items():
-            if selected is None:fields.pop(field,None)
-            else:fields[field]=selected
-        fields = role_models.explicit(host,fields)
+            if selected is None:
+                fields.pop(field, None)
+            else:
+                fields[field] = selected
+        fields = role_models.explicit(host, fields)
         if persist:
-            if fields:all_choices.setdefault(host,{})[role]=fields
-            else:all_choices.get(host,{}).pop(role,None)
-            value,_ = role_preferences.resolve(defaults,all_choices,host,role)
+            if fields:
+                all_choices.setdefault(host, {})[role] = fields
+            else:
+                all_choices.get(host, {}).pop(role, None)
+            value, _ = role_preferences.resolve(defaults, all_choices, host, role)
         else:
-            value = role_models.validate(host,raw_value)
-        value = validate_selection(host,value,catalog)
-        path = role_path(project, host, role)
-        raw = read_file(path)
-        if raw is None:
-            raise ValueError(f"尚未安装角色：{role}")
-        if expected and native_settings(raw, host) != expected[role]:
-            raise ValueError(f"{role} 在编辑期间被其他操作修改，请丢弃该角色草稿后重新编辑")
-        updated = role_models.patch_artifact(raw, host, value)
-        if updated != raw:
-            changes.append(Change(path.relative_to(project).as_posix(), raw, updated, stat.S_IMODE(path.stat().st_mode)))
+            value = role_models.validate(host, raw_value)
+        if role in metadata_roles:
+            effective[role] = value
+        elif catalog is None:
+            raise ValueError("原生角色物化需要当前模型目录快照")
+        else:
+            effective[role] = validate_selection(host, value, catalog)
     updated_config = (role_models.update(config.decode(), all_choices).encode()
                       if persist and all_choices != original_choices else config)
+    sparse = False
+    if native_context is not None:
+        from .native_agents import verified_hosts
+        sparse = host in verified_hosts(state_files.state_root(state), context=native_context)
+    from lib.hosts.claude_options import parse as parse_claude
+    windows = parse_claude(updated_config.decode())["auto_compact_windows"]
+    for role, value in effective.items():
+        if role in metadata_roles:
+            continue
+        path = role_path(project, host, role)
+        raw = read_file(path)
+        mode = stat.S_IMODE(path.stat().st_mode) if raw is not None else 0o644
+        needed = not sparse or bool(all_choices.get(host, {}).get(role)) or host == "claude" and role in windows
+        if expected and (native_settings(raw, host) if raw is not None else role_settings(project, host, role, state=state,
+                                                                                       native_context=native_context)) != expected[role]:
+            raise ValueError(f"{role} 在编辑期间被其他操作修改，请丢弃该角色草稿后重新编辑")
+        if not needed:
+            updated = None
+        elif raw is not None:
+            updated = role_models.patch_artifact(raw, host, value)
+        else:
+            if role not in roles(project, host, state=state, native_context=native_context):
+                raise ValueError("该角色不属于当前已验证画像")
+            from lib.central.runtime_project import Resources, json_bytes, role_resource
+            _, record = runtime_service.read_binding_record(state_files.state_root(state), project)
+            core = runtime_store.load_core(record["runtime_binding"], state_files.state_root(state))
+            updated = role_resource(Resources(core.root, json_bytes(core.binding()), core.label, core),
+                                    updated_config, host, role, core.binding(), preferences=defaults)
+        if updated != raw:
+            changes.append(Change(path.relative_to(project).as_posix(), raw, updated, mode))
     if updated_config != config:
-        changes.append(Change(".agent-workflow/project.yaml", config, updated_config, stat.S_IMODE(config_path.stat().st_mode)))
+        changes.append(Change(CONFIG, config, updated_config, stat.S_IMODE(config_path.stat().st_mode)))
     return changes
 
 
@@ -258,7 +308,46 @@ def _backup_path(state: Path, project: Path) -> Path:
     return state_files.secure_path(state, "backups/"+hashlib.sha256(str(project).encode()).hexdigest()[:20])
 
 
-def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, verify=None, before_write=None) -> str | None:
+def _expected(body: bytes | None, mode: int) -> tuple:
+    return (body, mode) if body is not None else (None, None)
+
+
+def _fingerprint(body: bytes | None) -> str | None:
+    return hashlib.sha256(body).hexdigest() if body is not None else None
+
+
+def _replace_optional(target, body: bytes | None, mode: int, expected: tuple) -> None:
+    """普通发布复用既有原语；删除隔离精确旧 inode，绝不 unlink 后建用户文件。"""
+    if body is not None:
+        target.write(body, mode, expected)
+        return
+    if target.read() != expected:
+        raise ValueError("删除前原生文件已变化")
+    held = ".workflow-models-previous-" + uuid.uuid4().hex + ".tmp"
+    try:
+        os.rename(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory)
+        if target.read(held) != expected:
+            raise state_files.PreservedEdit(target.path.parent / held)
+    finally:
+        # rename可能已经移动inode后才被取消/报错。无论正向删除是否返回成功，
+        # 都要登记真实旧inode，不能仅靠正文备份掩盖旧fd稍后保存的用户编辑。
+        try:
+            os.stat(held, dir_fd=target.directory, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if target.retainer is not None:
+                target.retainer(target, held, expected)
+            elif target.read(held) == expected:
+                os.unlink(held, dir_fd=target.directory)
+            else:
+                raise state_files.PreservedEdit(target.path.parent / held)
+    if target.read() != (None, None):
+        raise ValueError("删除期间目标被外部重新创建，已保留新文件")
+
+
+def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, verify=None, before_write=None,
+           *, native_context=None, global_preferences=None) -> str | None:
     """先备份再写入；失败只撤回仍等于本轮精确产物的文件，绝不覆盖并发修改。"""
     if not changes:
         return None
@@ -271,18 +360,22 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
         if runtime_service.status(state, project)["runtime_binding"] is not None:
             # 中央锁由唯一原生收据上下文持有；现有模型锁仍只保护备份/配置事务。
             # 收据在任何项目写入前校验声明范围，退出异常时在原事务撤回后恢复前像。
-            receipt = stack.enter_context(runtime_service.native_edit_receipt(state, project, changes))
+            receipt_options = ({"native_context": native_context, "global_preferences": global_preferences}
+                               if native_context is not None else {})
+            receipt = stack.enter_context(runtime_service.native_edit_receipt(state, project, changes, **receipt_options))
+        for row in changes:
+            state_files.writable_directory((project / row.relative).parent)
         targets={row.relative:stack.enter_context(state_files.AnchoredFile(project,row.relative)) for row in changes}
         for change in changes:
-            if targets[change.relative].read() != (change.before,change.mode):
+            if targets[change.relative].read() != _expected(change.before,change.mode):
                 raise ValueError(f"文件在预览后发生变化，已停止：{change.relative}")
         directory = _backup_path(state, project)
         state_files.writable_directory(directory)
         identifier = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"-"+uuid.uuid4().hex[:8]
         backup_path = directory/(identifier+".json")
         record = {"schema":1,"project":str(project),"status":"prepared","files":[{
-            "path":row.relative,"before":base64.b64encode(row.before).decode(),
-            "before_sha":hashlib.sha256(row.before).hexdigest(),"after_sha":hashlib.sha256(row.after).hexdigest(),"mode":row.mode
+            "path":row.relative,"before":base64.b64encode(row.before).decode() if row.before is not None else None,
+            "before_sha":_fingerprint(row.before),"after_sha":_fingerprint(row.after),"mode":row.mode
         } for row in changes]}
         versions_relative=f".agent-workflow-backup-models-{identifier}"
         versions_root=state_files.secure_path(project,versions_relative)
@@ -324,10 +417,10 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
         try:
             for row in changes:
                 target=targets[row.relative]
-                if target.read() != (row.before,row.mode):
+                if target.read() != _expected(row.before,row.mode):
                     raise ValueError(f"文件发生并发修改，停止写入：{row.relative}")
                 written.append(row)
-                target.write(row.after,row.mode,(row.before,row.mode))
+                _replace_optional(target,row.after,row.mode,_expected(row.before,row.mode))
             if receipt is not None:
                 # check 读取中央 expected；先发布仅含模型白名单的收据，随后现有
                 # 验证回调才会看到合法新产物。回调/备份失败仍走原精确回滚路径。
@@ -347,8 +440,8 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
                 try:
                     target=targets[row.relative]
                     current=target.read()
-                    if current == (row.after,row.mode):target.write(row.before,row.mode,(row.after,row.mode))
-                    elif current != (row.before,row.mode):conflicts.append(row.relative)
+                    if current == _expected(row.after,row.mode):_replace_optional(target,row.before,row.mode,_expected(row.after,row.mode))
+                    elif current != _expected(row.before,row.mode):conflicts.append(row.relative)
                 except (OSError,ValueError) as exc:
                     conflicts.append(row.relative)
                     if isinstance(exc,state_files.PreservedEdit):retained.append(exc.retained_path)
@@ -389,7 +482,11 @@ def _load_backup(path: Path,project: Path) -> dict:
         relative=row.get("path")
         allowed=relative == ".agent-workflow/project.yaml" or any(relative == f"{directory}/{role}{suffix}" for directory,suffix in LOCATIONS.values() for role in role_models.ROLES)
         if not isinstance(relative,str) or not allowed or relative in seen:invalid()
-        if not isinstance(row.get("before"),str) or not fingerprint(row.get("before_sha")) or not fingerprint(row.get("after_sha")) or not mode(row.get("mode")):invalid()
+        if (row.get("before") is not None and not isinstance(row.get("before"),str)
+                or (row.get("before_sha") is not None and not fingerprint(row.get("before_sha")))
+                or (row.get("after_sha") is not None and not fingerprint(row.get("after_sha")))
+                or (row.get("before") is None) != (row.get("before_sha") is None)
+                or not mode(row.get("mode"))):invalid()
         seen.add(relative)
     indexed=set()
     for row in versions:
@@ -401,7 +498,7 @@ def _load_backup(path: Path,project: Path) -> dict:
             if row["source"] in indexed or row["expected_sha"] != source["before_sha"] or row["mode"] != source["mode"]:invalid()
             if not row["path"].startswith(f".agent-workflow-backup-models-{path.stem}/"):invalid()
             indexed.add(row["source"])
-    if record["status"] == "applied" and indexed != seen:invalid()
+    if record["status"] == "applied" and indexed != {row["path"] for row in files if row["before"] is not None}:invalid()
     return record
 
 
@@ -441,10 +538,10 @@ def prepare_restore(state: Path, project: Path, identifier: str) -> RestorePlan:
     for row in record["files"]:
         relative=row["path"]
         target=state_files.secure_path(project,relative); raw=read_file(target)
-        restored=base64.b64decode(row["before"],validate=True)
-        if raw is None or hashlib.sha256(raw).hexdigest() != row["after_sha"] or stat.S_IMODE(target.stat().st_mode) != row["mode"]:
+        restored=base64.b64decode(row["before"],validate=True) if row["before"] is not None else None
+        if _fingerprint(raw) != row["after_sha"] or raw is not None and stat.S_IMODE(target.stat().st_mode) != row["mode"]:
             raise ValueError("应用后文件已有其他更改，已停止恢复："+relative)
-        if hashlib.sha256(restored).hexdigest() != row["before_sha"]:
+        if _fingerprint(restored) != row["before_sha"]:
             raise ValueError("备份内容指纹不一致")
         changes.append(Change(relative,raw,restored,row["mode"]))
     state = state_files.state_root(state)
@@ -477,16 +574,20 @@ def prepare_restore(state: Path, project: Path, identifier: str) -> RestorePlan:
         # “只恢复配置、原生仍是另一有效值”的旁路。这里只读当前已安装角色。
         with Tree(project) as tree:
             for host in LOCATIONS:
-                for role in roles(project, host):
+                for role in roles(project, host, state=state):
                     relative = role_path(project, host, role).relative_to(project).as_posix()
                     if relative not in restored_roles:
                         current = tree.read(relative)
-                        restored_roles[relative] = current.payload
+                        if current.kind == "file":
+                            restored_roles[relative] = current.payload
                         unchanged_roles.append((relative,current))
     for relative, after in restored_roles.items():
         host = next(host for host, (directory, suffix) in LOCATIONS.items()
                     if relative.startswith(directory + "/") and relative.endswith(suffix))
         role = Path(relative).stem
+        if after is None:
+            # 撤下local后由全局描述符承担值；最终收据还会核验全局七角色归属。
+            continue
         try:
             restored = native_settings(after, host)
         except (ValueError, UnicodeError, TypeError, RecursionError) as exc:

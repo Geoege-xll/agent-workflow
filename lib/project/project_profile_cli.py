@@ -34,6 +34,37 @@ def check_roles(profile, project: Path, host: str) -> int:
     使用现有的有界项目发现器得到当前所需角色，避免沿用克隆源码之前的名单。
     这里只证明资源存在且不是链接；内容、所有权及宿主配置由原 setup --check 验证。
     """
+    if os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
+        # 中央稀疏资源通过已验证画像+本机绑定+原生归属投影核对，不能要求
+        # 每个角色都有同名local文件；旧固定core仍沿其原check逻辑正常拒绝稀疏。
+        from lib import runtime_store
+        from lib.central.runtime_project import Node, Tree
+        from lib.hosts.native_context import HostPaths, NativeContext
+        from manager import native_agents, runtime_service
+        state = runtime_store.state_root(None)
+        _, record = runtime_service.read_binding_record(state, project)
+        if not record or not record["enabled"] or host not in record["hosts"]:
+            print(f"[ERROR] {host} is not enabled in the local project binding", file=sys.stderr)
+            return 1
+        sparse = []
+        directory, suffix = ROLE_LOCATIONS[host]
+        with Tree(project) as tree:
+            conflicts, _ = runtime_service._ownership(tree, record, state, repair=False)
+            if conflicts:
+                raise ValueError("中央角色受管资源存在冲突")
+            for role in profile.enabled_roles:
+                path = f"{directory}/{role}{suffix}"
+                node = tree.read(path)
+                if node.kind == "missing":
+                    sparse.append(role)
+                elif path not in record["managed"] or record["managed"][path]["purpose"] != "role":
+                    raise ValueError("项目同名角色缺少精确原生归属")
+        if sparse:
+            context = NativeContext(state, HostPaths.for_home(Path.home(), environment=dict(os.environ)))
+            if host not in native_agents.verified_hosts(state, context=context):
+                raise ValueError("稀疏角色缺少完整全局原生归属")
+        print(f"[OK] {host} required roles match the validated profile and native ownership")
+        return 0
     directory, suffix = ROLE_LOCATIONS[host]
     root = project / directory
     # .codex/.claude/.agents 父目录也属于资源路径，不能经链接借用另一个项目的角色。

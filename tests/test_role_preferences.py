@@ -109,6 +109,216 @@ class RolePreferencesTest(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         return json.loads(result.stdout)
 
+    def native_scope(self):
+        """本例独占state与HOME；全局归属不会污染本类其他旧消费者的共享fixture。"""
+        from lib.hosts.native_context import HostPaths, NativeContext
+        from manager import native_agents, central_runtime
+        self.state = self.case / "native-state"
+        self.core = runtime_store.import_core(self.source, self.state)
+        os.environ["AGENT_WORKFLOW_STATE_DIR"] = str(self.state)
+        context = NativeContext(self.state, HostPaths.for_home(self.home, environment={}))
+        central_runtime.apply(central_runtime.preview(self.state, binding=self.core.binding(), native_context=context))
+        return context
+
+    def native_save(self, context, project, edits, host="codex"):
+        catalogs = preferences.load_catalogs(self.state, project, host, native_context=context)
+        plan = preferences.preview(self.state, project, host, edits, catalogs, native_context=context)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        return preferences.apply(plan)
+
+    def sparse_project(self, context, name):
+        project = self.project(name, enabled=False)
+        plan = runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), hosts=("codex",),
+                                       native_context=context)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        runtime_service.apply(plan)
+        self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
+        return project
+
+    def test_native_sparse_create_single_field_global_following_explicit_inherit_and_final_reset(self):
+        context = self.native_scope()
+        self.native_save(context, None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+        project = self.sparse_project(context, "native-sparse")
+        self.assertIn("xy-backend", preferences.roles(self.state, project, "codex", native_context=context))
+        self.native_save(context, project, {"xy-backend": {"model": "project-model"}})
+        local = project / ".codex/agents/xy-backend.toml"
+        self.assertEqual(service.native_settings(local.read_bytes(), "codex"), {"model": "project-model", "effort": "high"})
+        self.assertIn(b"Before any project check", local.read_bytes())
+        self.native_save(context, None, {"xy-backend": {"effort": "max"}})
+        from manager import native_agents, central_runtime
+        self.assertEqual(native_agents.admission_issues(self.state, hosts=("codex",)), [])
+        self.assertTrue(runtime_service.status(self.state, project)["new_task_allowed"])
+        self.assertEqual(central_runtime.new_task_gate(self.state, project), self.core.binding())
+        self.assertEqual(service.native_settings(local.read_bytes(), "codex"), {"model": "project-model", "effort": "max"})
+        self.native_save(context, project, {"xy-backend": {"model": "inherit"}})
+        self.assertEqual(preferences.view(self.state, project, "codex", "xy-backend")["sources"],
+                         {"model": "host", "effort": "global"})
+        self.native_save(context, None, {"xy-backend": {"model": "project-model"}})
+        self.assertEqual(service.native_settings(local.read_bytes(), "codex")["model"], "inherit")
+        plan = preferences.reset_platform(self.state, project, "codex", native_context=context)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        self.assertIn(".codex/agents/xy-backend.toml", plan.changed_paths)
+        preferences.apply(plan)
+        self.assertFalse(local.exists())
+        self.assertEqual(service.role_settings(project, "codex", "xy-backend", state=self.state, native_context=context),
+                         {"model": "project-model", "effort": "max"})
+        backups = service.backups(self.state, project)
+        self.assertFalse(preferences.apply(preferences.reset_platform(self.state, project, "codex", native_context=context))["applied"])
+        self.assertEqual(service.backups(self.state, project), backups)
+        self.native_save(context, None, {"xy-backend": {"effort": "high"}})
+        self.assertFalse(local.exists())
+        self.assertEqual(preferences.view(self.state, project, "codex", "xy-backend")["effort"], "high")
+
+    def test_native_platform_reset_disabled_host_is_metadata_only_and_contextless_write_refuses(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "disabled-host")
+        config = project / ".agent-workflow/project.yaml"
+        choices = {"claude": {"xy-apple": {"model": "project-model", "effort": "high"}}}
+        config.write_text(role_models.update(config.read_text(), choices))
+        plan = preferences.reset_platform(self.state, project, "claude", native_context=context)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        self.assertEqual(plan.changed_paths, [".agent-workflow/project.yaml"])
+        preferences.apply(plan)
+        self.assertFalse(role_models.parse(config.read_text()).get("claude"))
+        self.assertFalse((project / ".claude/agents").exists())
+        self.assertEqual(runtime_service.read_binding_record(self.state, project)[1]["hosts"], ["codex"])
+        with self.assertRaisesRegex(ValueError, "NativeContext"):
+            preferences.preview(self.state, None, "codex", {"xy-backend": {"effort": "high"}},
+                                fixtures.Catalog("codex", [fixtures.Model("inherit", "inherit", "fixture")]))
+
+    def test_sparse_delete_rename_failure_retains_old_inode_and_index(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "delete-rename-failure")
+        self.native_save(context, project, {"xy-backend": {"model": "project-model"}})
+        local = project / ".codex/agents/xy-backend.toml"
+        original_body = local.read_bytes()
+        descriptor = os.open(local, os.O_WRONLY | os.O_APPEND)
+        self.addCleanup(os.close, descriptor)
+        plan = preferences.reset_platform(self.state, project, "codex", native_context=context)
+        original_rename = service.os.rename
+        failed = False
+        def fail_after_rename(source, target, **kwargs):
+            nonlocal failed
+            result = original_rename(source, target, **kwargs)
+            if source == "xy-backend.toml" and str(target).startswith(".workflow-models-previous-") and not failed:
+                failed = True
+                raise OSError("fixture after-delete-rename")
+            return result
+        with patch.object(service.os, "rename", side_effect=fail_after_rename):
+            with self.assertRaisesRegex(OSError, "after-delete-rename"):
+                preferences.apply(plan)
+        self.assertTrue(failed)
+        self.assertEqual(local.read_bytes(), original_body)
+        record = next(row for row in service.backups(self.state, project) if row["status"] == "rolled_back")
+        self.assertTrue(record["previous_files"])
+        version = next(row for row in record["previous_files"] if row["source"].endswith("xy-backend.toml"))
+        retained = project / version["path"]
+        self.assertEqual(retained.read_bytes(), original_body)
+        os.write(descriptor, b"\n# late old fd edit\n")
+        self.assertIn(b"late old fd edit", retained.read_bytes())
+        with self.assertRaises(ValueError):
+            service.check_versions(project, record["previous_files"])
+        self.assertEqual(local.read_bytes(), original_body)
+
+    def test_sparse_delete_rechecks_global_ownership_before_publishing_receipt(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "delete-global-race")
+        self.native_save(context, project, {"xy-backend": {"model": "project-model"}})
+        local = project / ".codex/agents/xy-backend.toml"
+        original_body = local.read_bytes()
+        original_config = (project / ".agent-workflow/project.yaml").read_bytes()
+        global_role = context.host_paths.codex / "agents/xy-backend.toml"
+        plan = preferences.reset_platform(self.state, project, "codex", native_context=context)
+        original_replace = service._replace_optional
+        removed = False
+        def remove_global_after_local(target, body, mode, expected):
+            nonlocal removed
+            result = original_replace(target, body, mode, expected)
+            if target.path == local and body is None and not removed:
+                removed = True
+                global_role.unlink()
+            return result
+        with patch.object(service, "_replace_optional", side_effect=remove_global_after_local):
+            with self.assertRaises(ValueError):
+                preferences.apply(plan)
+        self.assertTrue(removed)
+        self.assertFalse(global_role.exists())
+        self.assertEqual(local.read_bytes(), original_body)
+        self.assertEqual((project / ".agent-workflow/project.yaml").read_bytes(), original_config)
+
+    def test_native_platform_reset_preserves_managed_manual_delete_conflict(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "manual-delete")
+        self.native_save(context, project, {"xy-backend": {"model": "project-model"}})
+        local = project / ".codex/agents/xy-backend.toml"
+        local.unlink()
+        plan = preferences.reset_platform(self.state, project, "codex", native_context=context)
+        self.assertFalse(plan.summary["can_apply"])
+        with self.assertRaises(ValueError):
+            preferences.apply(plan)
+        self.assertFalse(local.exists())
+        self.assertEqual(role_models.parse((project / ".agent-workflow/project.yaml").read_text())["codex"]["xy-backend"],
+                         {"model": "project-model"})
+
+    def test_reset_platform_cleans_disabled_host_and_uninstalled_roles_without_native_install(self):
+        config = ('project_name: reset\nworkflow_hooks:\n  mode: off\nrole_models:\n'
+                  '  codex:\n    xy-apple: {"model":"project-model","effort":"max"}\n'
+                  '    xy-backend: {"model":"inherit"}\n'
+                  '  claude:\n    xy-backend: {"model":"project-model"}\n')
+        project = self.project("reset-disabled", enabled=False, config=config)
+        before = set(project.rglob("*"))
+        plan = preferences.reset_platform(self.state, project, "codex")
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        self.assertEqual(set(project.rglob("*")), before)
+        self.assertEqual(plan.changed_paths, [".agent-workflow/project.yaml"])
+        result = preferences.apply(plan)
+        self.assertTrue(result["applied"])
+        choices = role_models.parse((project / ".agent-workflow/project.yaml").read_text())
+        self.assertFalse(choices.get("codex"))
+        self.assertEqual(choices["claude"]["xy-backend"], {"model": "project-model"})
+        self.assertFalse((project / ".codex").exists())
+        self.assertFalse(runtime_service.read_binding_record(self.state, project)[1])
+        backups = service.backups(self.state, project)
+        noop = preferences.reset_platform(self.state, project, "codex")
+        self.assertFalse(preferences.apply(noop)["applied"])
+        self.assertEqual(service.backups(self.state, project), backups)
+
+    def test_reset_platform_global_cleans_all_fields_and_noop_does_not_write(self):
+        self.save(None, {"xy-apple": {"model": "project-model", "effort": "max"},
+                         "xy-backend": {"model": "inherit"}})
+        plan = preferences.reset_platform(self.state, None, "codex")
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        self.assertEqual(len(plan.summary["changes"]), 3)
+        preferences.apply(plan)
+        self.assertFalse(role_preferences.snapshot(self.state)[1].get("codex"))
+        before = {(str(path), path.stat().st_mtime_ns) for path in (self.state / "preferences").rglob("*")}
+        self.assertFalse(preferences.apply(preferences.reset_platform(self.state, None, "codex"))["applied"])
+        self.assertEqual(before, {(str(path), path.stat().st_mtime_ns) for path in (self.state / "preferences").rglob("*")})
+
+    def test_reset_platform_concurrent_fixed_plans_cleanup_once(self):
+        self.save(None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+        plans = [preferences.reset_platform(self.state, None, "codex") for _ in range(2)]
+        before = len(self.recovery_records())
+        def apply(plan):
+            try:
+                return preferences.apply(plan)["applied"]
+            except ValueError:
+                return False
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            self.assertEqual(sum(executor.map(apply, plans)), 1)
+        self.assertFalse(role_preferences.snapshot(self.state)[1].get("codex"))
+        self.assertEqual(len(self.recovery_records()), before + 1)
+
+    def test_reset_platform_rejects_unknown_schema_and_stale_preview(self):
+        self.save(None, {"xy-backend": {"model": "fixture-model"}})
+        plan = preferences.reset_platform(self.state, None, "codex")
+        self.save(None, {"xy-backend": {"effort": "high"}})
+        with self.assertRaises(ValueError):
+            preferences.apply(plan)
+        (self.state / role_preferences.RELATIVE).write_text('{"schema_version":99,"role_models":{}}')
+        with self.assertRaises(ValueError):
+            preferences.reset_platform(self.state, None, "codex")
+
     def test_empty_reads_create_no_state_and_private_global_save(self):
         empty = self.case / "empty-state"
         with patch("manager.codex_models.query", side_effect=AssertionError("只读查询不应启动原生目录")):
@@ -260,8 +470,8 @@ class RolePreferencesTest(unittest.TestCase):
         project = self.project("torn-context")
         original_roles = preferences.roles
         reads = []
-        def change_during_read(*args):
-            result = original_roles(*args)
+        def change_during_read(*args, **kwargs):
+            result = original_roles(*args, **kwargs)
             reads.append(True)
             if len(reads) == 1:
                 path = self.state / role_preferences.RELATIVE

@@ -356,7 +356,7 @@ def _claude(catalog: Catalog, home: Path, project: Path | None, env: dict) -> No
     # 只有模型/effort 覆盖变化影响来源校验；窗口、权限、fork/后台模式不会废弃模型草稿。
     remember(catalog, {key: value for key, value in controls.items()
                        if key in {"CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
-                                  "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_SUBAGENT_EFFORT"}})
+                                  "CLAUDE_CODE_EFFORT_LEVEL"}})
     for key, entry in controls.items():
         display = entry["value"] if entry["status"] == "configured" else "无效值（已隐藏）"
         catalog.notes.append(f"{key} = {display} · {clean(entry['source'])}")

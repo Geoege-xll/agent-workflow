@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
+import base64
+import re
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -16,6 +19,44 @@ from lib.hosts import native_agents as native
 from lib.hosts.native_context import HostPaths, NativeContext
 from lib.platform_fs import directory_lock, os
 from . import state_files
+
+
+_PREFERENCE_PROJECTION: ContextVar[tuple | None] = ContextVar("native_preference_projection", default=None)
+
+
+@contextmanager
+def preference_projection(state: Path, transaction_id: str, payload: bytes):
+    """仅真实prepared偏好事务在本调用栈校验将要发布的全局模型投影。
+
+    全局事务先更新native/project、最后发布prefs；中间的自身健康检查必须看到
+    已授权的future值。入口验证实际持久prepared记录、精确前像及after，不使用
+    环境变量；其他线程/进程仍读取持久prefs，中间态不能据此获得新任务许可。
+    """
+    state = state_files.state_root(state)
+    if not isinstance(transaction_id, str) or not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}", transaction_id):
+        raise ValueError("偏好活动投影缺少有效事务ID")
+    role_preferences.validate(unique_json(payload))
+    node = native.read_node(state, "preferences/transactions/" + transaction_id + ".json")
+    record = unique_json(node.payload)
+    if (node.kind != "file" or node.mode != 0o600 or not isinstance(record, dict)
+            or record.get("schema_version") != 1 or record.get("id") != transaction_id
+            or record.get("status") != "prepared"
+            or base64.b64decode(record.get("global_after", ""), validate=True) != payload
+            or Node.from_value(record.get("global_before")) != role_preferences.snapshot(state)[0]):
+        raise ValueError("偏好活动投影不属于当前真实prepared事务")
+    token = _PREFERENCE_PROJECTION.set((str(state), transaction_id, bytes(payload), os.getpid()))
+    try:
+        yield
+    finally:
+        _PREFERENCE_PROJECTION.reset(token)
+
+
+def _projected_preferences(state: Path) -> tuple[Node, dict]:
+    before, defaults = role_preferences.snapshot(state)
+    active = _PREFERENCE_PROJECTION.get()
+    if active is not None and active[0] == str(state) and active[3] == os.getpid():
+        defaults = role_preferences.validate(unique_json(active[2]))
+    return before, defaults
 
 
 @dataclass(frozen=True)
@@ -197,6 +238,10 @@ def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node,
     journal["writes"].append(row)
     _save(state, journal)
     with Tree(root) as tree:
+        root_info = os.fstat(tree.directories[""])
+        root_identity = journal["root_identities"].get(str(root))
+        if root_identity is not None and [root_info.st_dev, root_info.st_ino] != root_identity:
+            raise ValueError("原生宿主物理根在固定预览后被替换")
         parent, name = tree.parent(relative, create=True)
         if read_at(parent, name) != expected:
             raise ValueError("原生文件在打开父目录后发生变化")
@@ -245,6 +290,8 @@ def apply_global(plan: GlobalNativePlan) -> dict:
         return {"schema_version": 1, "transaction_id": plan.transaction_id, "recovery_ref": plan.recovery_ref,
                 "status": "noop", "applied": False, "artifacts": [], "conflicts": []}
     with role_preferences.coordination(plan.state), ExitStack() as stack:
+        from . import runtime_policy
+        runtime_policy.ensure_management_settled(plan.state)
         _guard(plan)
         journal = {"schema_version": 1, "transaction_id": plan.transaction_id, "recovery_ref": plan.recovery_ref,
                    "status": "prepared", "writes": [], "conflicts": [], "applied_evidence": None, "root_identities": {},
@@ -500,8 +547,17 @@ def _root_issues(journal: dict) -> list[dict]:
     allowed = {target["native_root"] for target in journal["recovery_ref"]["targets"]}
     if set(identities) - allowed:
         raise ValueError("原生恢复根身份越界")
-    return [{"type": "native_root_conflict", "path": root, "reason": "宿主物理根已替换或删除"}
-            for root, identity in identities.items() if list(native.root_identity(Path(root)) or ()) != identity]
+    issues = []
+    for root, identity in identities.items():
+        if not isinstance(identity, list) or len(identity) != 2 or any(type(item) is not int for item in identity):
+            raise ValueError("原生恢复根身份格式无效")
+        try:
+            actual = list(native.root_identity(Path(root)) or ())
+        except (OSError, ValueError):
+            actual = []
+        if actual != identity:
+            issues.append({"type": "native_root_conflict", "path": root, "reason": "宿主物理根已替换、链接化或删除"})
+    return issues
 
 
 def _clean_stage(row: dict) -> None:
@@ -535,8 +591,13 @@ def _verify_witness(reference: dict, context: NativeContext) -> list[dict]:
             raise ValueError("no-op原生见证范围无效")
         host = witness["host"]
         seen.add(host)
-        before = _observe(context.state, context.host_paths, host)
-        record, conflicts = _ownership(context.state, before)
+        try:
+            before = _observe(context.state, context.host_paths, host)
+            record, conflicts = _ownership(context.state, before)
+        except (OSError, ValueError):
+            issues.append({"type": "native_noop_witness_conflict", "path": targets[host],
+                           "reason": "no-op见证中的归属或宿主路径已损坏、替换或链接化"})
+            continue
         current = {path: _revision(node) for path, node, _ in before.discovery if path in witness["files"]}
         if (record is None or conflicts or list(before.identity or ()) != witness["root_identity"]
                 or _revision(before.owner) != witness["owner"] or _revision(before.record) != witness["record"]
@@ -570,8 +631,12 @@ def verify_global(recovery_ref, *, context: NativeContext) -> list[dict]:
         raise ValueError("原生事务缺少完整目标清单")
     for desired in journal["desired"]:
         root = context.host_paths.root(desired["host"])
-        if (desired["path"] not in {native.role_relative(desired["host"], role) for role in role_models.ROLES}
-                or not native.read_node(root, desired["path"]).same_content(Node.from_value(desired["after"]))):
+        try:
+            complete = (desired["path"] in {native.role_relative(desired["host"], role) for role in role_models.ROLES}
+                        and native.read_node(root, desired["path"]).same_content(Node.from_value(desired["after"])))
+        except (OSError, ValueError):
+            complete = False
+        if not complete:
             issues.append({"type": "native_desired_incomplete", "path": str(root / desired["path"]),
                            "reason": "原生完整目标尚未发布"})
     for target in recovery_ref["targets"]:
@@ -635,3 +700,108 @@ def referenced_bindings(state: Path) -> tuple:
         except FileNotFoundError:
             pass
     return ()
+
+
+def admission_issues(state: Path, *, hosts: tuple) -> list[dict]:
+    """只读从当前有效中央激活定位原生根，再核验最新归属与合法模型投影。
+
+    native_ref仅证明本generation授权的根，后续合法模型保存会改变同根产物；
+    不拿旧事务的产物快照作长期expected，不扫描旧root索引或猜测HOME。
+    当前真实activation_scope可验证本批已准备的native根；外部pending请求仍
+    由中央gate拒绝，环境变量不能制造该调用栈授权。
+    """
+    state = state_files.state_root(state)
+    if not isinstance(hosts, tuple) or len(set(hosts)) != len(hosts) or set(hosts) - set(role_models.HOSTS):
+        raise ValueError("原生准入宿主必须是无重复的已知tuple")
+    if not hosts:
+        return []
+    from . import runtime_policy as policy
+    from .central_runtime import _validate_journal
+    try:
+        current_node, current = policy.current_snapshot(state)
+        authority_node = native.read_node(state, policy.ACTIVATION)
+        if authority_node.kind != "file" or authority_node.mode != 0o600:
+            return [{"code": "native_authority_missing", "path": policy.ACTIVATION,
+                     "reason": "稀疏角色缺少当前generation对应的原生根授权记录"}]
+        authority = _validate_journal(unique_json(authority_node.payload))
+        active_reader = getattr(policy, "active_activation", None)
+        active = active_reader(state) if active_reader is not None else None
+        if active is not None:
+            if active != authority or active.get("native_receipt") is None:
+                raise ValueError("当前活动激活尚未完成原生发布")
+        elif (current is None or authority["phase"] != "applied" or authority["id"] != current["generation"]
+              or authority["runtime_binding"] != current["runtime_binding"]):
+            raise ValueError("原生根授权不属于当前已结算generation")
+        reference = authority["native_ref"]
+        keys = {"schema_version", "state", "transaction_id", "targets"}
+        if (not isinstance(reference, dict) or set(reference) not in (keys, keys | {"witness"})
+                or type(reference["schema_version"]) is not int or reference["schema_version"] != 1
+                or reference["state"] != str(state) or not isinstance(reference["targets"], list)):
+            raise ValueError("当前原生根引用无效")
+        _journal_relative(reference["transaction_id"])
+        roots = {}
+        for target in reference["targets"]:
+            if (not isinstance(target, dict) or set(target) != {"host", "native_root"}
+                    or target["host"] not in role_models.HOSTS or target["host"] in roots
+                    or not isinstance(target["native_root"], str)):
+                raise ValueError("同宿主原生根权威不唯一")
+            root = Path(target["native_root"])
+            if not root.is_absolute() or ".." in root.parts or str(root) != target["native_root"] or root in roots.values():
+                raise ValueError("原生根授权路径不规范或混用")
+            roots[target["host"]] = root
+        receipt = authority["native_receipt"]
+        if (not isinstance(receipt, dict) or receipt.get("recovery_ref") != reference
+                or receipt.get("transaction_id") != reference["transaction_id"]
+                or receipt.get("status") not in {"applied", "noop"}):
+            raise ValueError("当前激活缺少对应原生结算收据")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return [{"code": "native_authority_invalid", "path": policy.ACTIVATION,
+                 "reason": "不能确认唯一当前有效的原生宿主根，已拒绝稀疏准入"}]
+    try:
+        preference_before, defaults = _projected_preferences(state)
+    except (OSError, ValueError, TypeError):
+        return [{"code": "native_preferences_invalid", "path": role_preferences.RELATIVE,
+                 "reason": "全局角色偏好无效，不能核验原生模型投影"}]
+    issues, observations = [], []
+    for host in hosts:
+        root = roots.get(host)
+        if root is None:
+            issues.append({"code": "native_authority_missing", "path": policy.ACTIVATION,
+                           "reason": host + "缺少当前有效的唯一原生根授权"})
+            continue
+        try:
+            before = _Observation(host, root, native.root_identity(root), native.read_node(root, native.OWNER),
+                                  native.read_node(state, native.record_relative(root)), native.discover(root, host))
+            record, conflicts = _ownership(state, before)
+            observations.append(before)
+            if record is None:
+                conflicts.append({"path": str(root), "reason": "缺少完整七角色原生归属"})
+            issues.extend({"code": "native_ownership_conflict", "path": row["path"], "reason": row["reason"]}
+                          for row in conflicts)
+            if not conflicts:
+                for path, node, role in before.discovery:
+                    if path not in record["files"]:
+                        continue
+                    role = Path(path).stem
+                    expected = role_preferences.resolve(defaults, {}, host, role)[0]
+                    if native.native_settings(node.payload, host) != expected:
+                        issues.append({"code": "native_model_projection_conflict", "path": str(root / path),
+                                       "reason": "原生模型字段偏离当前合法全局偏好投影"})
+        except (OSError, ValueError, TypeError, KeyError):
+            issues.append({"code": "native_ownership_conflict", "path": str(root),
+                           "reason": "原生归属、七角色文件或物理根无效"})
+    # 查询不持创建型锁；在同一组逻辑来源与精确节点前后稳定时才发布健康结论。
+    try:
+        if (policy.current_snapshot(state)[0] != current_node or native.read_node(state, policy.ACTIVATION) != authority_node
+                or role_preferences.snapshot(state)[0] != preference_before):
+            raise ValueError("准入来源读取期间变化")
+        for before in observations:
+            after = _Observation(before.host, before.root, native.root_identity(before.root),
+                                 native.read_node(before.root, native.OWNER),
+                                 native.read_node(state, native.record_relative(before.root)), native.discover(before.root, before.host))
+            if after != before:
+                raise ValueError("原生准入资源读取期间变化")
+    except (OSError, ValueError):
+        issues.append({"code": "native_admission_changed", "path": "native-agents",
+                       "reason": "原生准入来源或精确产物在读取期间变化"})
+    return issues

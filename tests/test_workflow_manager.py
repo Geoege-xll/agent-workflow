@@ -91,7 +91,10 @@ class TemporaryProject(unittest.TestCase):
         if self.central_fixture:
             from lib.central.runtime_project import Node, project_key, json_bytes
             self.state = self.central_state
-            self.write(".agent-workflow/project.yaml", "project_name: test\nworkflow_hooks:\n  mode: off\n")
+            from lib.central.runtime_project import Resources, initial_config
+            self.write("pyproject.toml", '[project]\nname="fixture"\nversion="0.1.0"\n')
+            self.write(".agent-workflow/project.yaml", initial_config(Resources(self.central_core.root,
+                       json_bytes(self.central_core.binding()), self.central_core.label, self.central_core), self.project).replace(b"  mode: assist", b"  mode: off"))
             role = self.project / ".codex/agents/xy-backend.toml"
             info = self.project.stat()
             # 单元事务使用当前机器记录合同及唯一共享最小核心；不重建旧 manifest。
@@ -860,7 +863,7 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
         self.write('project/.claude/settings.local.json', {'env': {'CLAUDE_CODE_EFFORT_LEVEL': 'xhigh'}})
         catalog = discover('claude', self.home, project, {'CLAUDE_CODE_EFFORT_LEVEL': 'high'})
         controls = catalog.execution['controls']
-        self.assertEqual('low', controls['CLAUDE_CODE_SUBAGENT_EFFORT']['value'])
+        self.assertNotIn('CLAUDE_CODE_SUBAGENT_EFFORT', controls)
         self.assertEqual('xhigh', controls['CLAUDE_CODE_EFFORT_LEVEL']['value'])
         self.assertTrue(controls['CLAUDE_CODE_EFFORT_LEVEL']['source'].endswith('settings.local.json'))
         result = effective_role({'model': 'opus', 'effort': 'high'}, controls)
@@ -868,9 +871,9 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
         self.assertEqual('role.model', result['model']['source'])
         self.assertFalse(result['runtime_verified'])
         self.assertEqual('>=2.1.251', result['version_requirements']['model_definition_precedence'])
-        defaults = {'CLAUDE_CODE_SUBAGENT_EFFORT': controls['CLAUDE_CODE_SUBAGENT_EFFORT']}
+        defaults = {'CLAUDE_CODE_SUBAGENT_EFFORT': {'status': 'configured', 'value': 'low'}}
         self.assertEqual('high', effective_role({'model': 'opus', 'effort': 'high'}, defaults)['effort']['value'])
-        self.assertEqual('low', effective_role({'model': 'opus', 'effort': 'inherit'}, defaults)['effort']['value'])
+        self.assertIsNone(effective_role({'model': 'opus', 'effort': 'inherit'}, defaults)['effort']['value'])
 
     def test_model_force_and_explicit_inherit_do_not_guess_main_session(self):
         configured = {'model': 'inherit', 'effort': 'inherit'}
@@ -893,7 +896,7 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
         for secret in ('TOP-SECRET', 'SECRET', 'DO-NOT-ECHO', 'AUTH_TOKEN'):
             self.assertNotIn(secret, output)
         controls = catalog.execution['controls']
-        self.assertEqual('invalid', controls['CLAUDE_CODE_SUBAGENT_EFFORT']['status'])
+        self.assertNotIn('CLAUDE_CODE_SUBAGENT_EFFORT', controls)
         self.assertIsNone(effective_role({'model': 'opus', 'effort': 'inherit'}, controls)['model']['value'])
 
     def test_only_effective_model_controls_invalidate_source_stamp(self):
@@ -1058,7 +1061,7 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
             with self.subTest(version=version), patch('manager.capabilities.shutil.which', return_value='/fixture/claude'), \
                     patch('manager.capabilities.subprocess.run', return_value=completed):
                 result = diagnose('claude', probe=True, home=self.home, environment={})
-            row = next(item for item in result['documented_capabilities'] if item['name'] == 'subagent_default_effort')
+            row = next(item for item in result['documented_capabilities'] if item['name'] == 'block_writes_outside_working_directories')
             self.assertEqual(eligible, row['version_meets_minimum'])
             self.assertFalse(row['runtime_verified'])
             self.assertNotIn('SECRET', json.dumps(result))
@@ -1083,11 +1086,8 @@ class ClaudeExecutionAndDiagnosticsTest(unittest.TestCase):
         output = io.StringIO()
         with patch('pathlib.Path.home', return_value=self.home), patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
             self.assertEqual(0, cli_main(['roles', '--project', str(project), '--platform', 'claude', '--effective']))
-        result = json.loads(output.getvalue())['xy-backend']
-        self.assertEqual('high', result['configured']['effort'])
-        self.assertEqual('max', result['effort']['value'])
-        self.assertTrue(result['controls']['CLAUDE_CODE_EFFORT_LEVEL']['source'].endswith('/.claude/settings.json'))
-        self.assertEqual(200000, result['auto_compact_window']['configured_role'])
+        self.assertEqual({}, json.loads(output.getvalue()))
+        self.assertEqual(service.native_settings(before, 'claude'), {'model': 'opus', 'effort': 'high'})
         self.assertEqual(before, role.read_bytes())
         output = io.StringIO()
         with patch('pathlib.Path.home', return_value=self.home), patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
@@ -1572,7 +1572,7 @@ class InstalledProjectIntegrationTest(unittest.TestCase):
                 app.future.result(timeout=30);app.poll_job();self.assertEqual(app.modal,'project_plan')
                 self.assertFalse(state.exists());app.dispatch('enter');app.future.result(timeout=30);app.poll_job()
             self.assertEqual(app.modal,'result');self.assertEqual(app.project,project);self.assertEqual(app.pane,'roles')
-            for host in service.LOCATIONS:self.assertTrue(service.roles(project,host))
+            for host in service.LOCATIONS:self.assertTrue(service.roles(project,host,state=state))
             for host,model,effort in [('codex','fixture-model','max'),('claude','fixture/model','inherit'),('antigravity','pro','inherit')]:
                 catalog=Catalog(host,[Model(model,model,'fixture',('max',))])
                 changes=service.prepare(project,host,{'xy-backend':{'model':model,'effort':effort}},catalog,state=state)
@@ -1637,11 +1637,11 @@ class CentralCliIntegrationTest(unittest.TestCase):
         for directory in runtime_store.CORE_DIRECTORIES:(source/directory).mkdir(parents=True)
         for relative in runtime_store.SETUP_FILES:cls.put(source,relative,b"#!/bin/sh\nexit 0\n")
         # 真实薄桥和 context_read 的直接依赖显式列出；其余产品文件用最小夹具。
-        selected=("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/central/runtime_project.py","lib/runtime_bridge.py",
+        selected=("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/central/runtime_project.py","lib/hosts/native_context.py","lib/hosts/native_agents.py","manager/native_agents.py","lib/runtime_bridge.py",
                   "lib/runtime_pins.py","lib/standard_paths.py","lib/hosts/claude_instructions.py","lib/documents/context_read.py",
                   "lib/skills/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/central/role_preferences.py","lib/hosts/claude_options.py",
                   "lib/validate_antigravity_artifacts.py","lib/hosts/workflow_hook_install.py","lib/hosts/workflow_hook_settings.py",
-                  "lib/workflow_hooks.py","lib/hosts/windows_hook_command.py","lib/hosts/merge_codex_config.py","manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py",
+                  "lib/workflow_hooks.py","lib/hosts/windows_hook_command.py","lib/hosts/merge_codex_config.py","manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/runtime_policy.py","manager/central_runtime.py","manager/runtime_lifecycle.py","manager/__init__.py",
                   "templates/project.yaml.example","templates/docs/PROJECT.md","platforms/shared/core-skills.txt")
         for relative in selected:cls.put(source,relative,(PACK/relative).read_bytes())
         for role in role_models.ROLES:cls.put(source,f"roles/{role}.md",(PACK/f"roles/{role}.md").read_bytes())
@@ -1860,12 +1860,14 @@ class CentralCliIntegrationTest(unittest.TestCase):
 class CliLauncherTest(TemporaryProject):
     """命令入口只安装到临时 bin，验证真实 PATH 查找，不修改本机命令或 shell 设置。"""
     def test_source_version_reports_unpacked_source_and_real_root(self):
-        directory=self.root/'bin';install_cli(directory)
-        result=subprocess.run([str(directory/'awf-cli'),'--state-dir',str(self.state),'--version'],
+        directory=self.root/'bin';entry=install_cli(directory)
+        self.assertEqual(entry.name,'awf-dev');self.assertFalse((directory/'awf-cli').exists())
+        result=subprocess.run([str(entry),'--state-dir',str(self.state),'--version'],
                               cwd=self.root,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
         version=(PACK/'product/VERSION').read_text(encoding='ascii').strip()
-        self.assertEqual(result.stdout.splitlines(),[f'awf-cli {version}（源码未打包）',f'中央源根：{PACK}'])
+        self.assertEqual(result.stdout.splitlines(),[f'awf-cli {version}（源码未打包）',f'中央源根：{PACK}',
+                                                  '入口来源：source（显式源码开发）',f'物理载荷根：{PACK}'])
         self.assertFalse((PACK/'manager/release.json').exists());self.assertFalse(self.state.exists())
 
     def test_cdpath_does_not_redirect_relative_links_or_pollute_source_directory(self):
@@ -1904,7 +1906,7 @@ class CliLauncherTest(TemporaryProject):
     def test_install_reports_actual_path_precedence_and_cwd_dependence(self):
         """真实 PATH 查询需区分被遮蔽、仅当前目录可用和稳定的绝对命令入口。"""
         directory=self.root/'commands';early=self.root/'earlier';early.mkdir()
-        foreign=early/'awf-cli';original=b'#!/bin/sh\nprintf "FOREIGN COMMAND\\n"\n'
+        foreign=early/'awf-dev';original=b'#!/bin/sh\nprintf "FOREIGN COMMAND\\n"\n'
         foreign.write_bytes(original);foreign.chmod(0o755)
         system='/usr/bin:/bin'
         cases=[
@@ -1912,8 +1914,8 @@ class CliLauncherTest(TemporaryProject):
             ('relative','commands'+os.pathsep+system,'相对或空目录项',False),
             ('empty',os.pathsep+str(directory)+os.pathsep+system,'相对或空目录项',False),
             ('relative_before_absolute','missing'+os.pathsep+str(directory)+os.pathsep+system,'相对或空目录项',False),
-            ('absolute_before_relative',str(directory)+os.pathsep+'missing'+os.pathsep+system,'在任意目录输入 awf-cli',True),
-            ('missing',system,'PATH 找不到 awf-cli',False),
+            ('absolute_before_relative',str(directory)+os.pathsep+'missing'+os.pathsep+system,'在任意目录输入 awf-dev',True),
+            ('missing',system,'PATH 找不到 awf-dev',False),
         ]
         inode=None
         for name,path,message,ready in cases:
@@ -1922,9 +1924,9 @@ class CliLauncherTest(TemporaryProject):
                 result=subprocess.run(['/bin/bash',str(PACK/'workflow.sh'),'--install-cli','--bin-dir',str(directory)],
                                       cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
                 self.assertEqual(result.returncode,0,result.stderr);self.assertIn(message,result.stdout)
-                self.assertEqual('在任意目录输入 awf-cli' in result.stdout,ready)
+                self.assertEqual('在任意目录输入 awf-dev' in result.stdout,ready)
                 self.assertEqual(foreign.read_bytes(),original)
-                observed=(directory/'awf-cli').lstat().st_ino
+                observed=(directory/'awf-dev').lstat().st_ino
                 if inode is None:inode=observed
                 self.assertEqual(observed,inode)
 
@@ -1971,20 +1973,20 @@ class CliLauncherTest(TemporaryProject):
         command=['bash',str(PACK/'workflow.sh'),'--install-cli','--bin-dir',directory.name]
         result=subprocess.run(command,cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
-        target=directory/'awf-cli';self.assertEqual(target.resolve(),PACK/'workflow.sh');inode=target.lstat().st_ino
-        result=subprocess.run(['awf-cli','--help'],cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
+        target=directory/'awf-dev';self.assertEqual(target.resolve(),PACK/'workflow.sh');inode=target.lstat().st_ino
+        result=subprocess.run(['awf-dev','--help'],cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr);self.assertIn('usage: awf-cli',result.stdout)
-        result=subprocess.run(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root),'--json','add',self.project.name],
+        result=subprocess.run(['awf-dev','--state-dir',str(self.state),'--scan-root',str(self.root),'--json','add',self.project.name],
                               cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(str(self.project),json.loads(result.stdout)['result']['project'])
-        result=subprocess.run(['awf-cli','--install-cli','--bin-dir',directory.name],cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
+        result=subprocess.run(['awf-dev','--install-cli','--bin-dir',directory.name],cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(target.lstat().st_ino,inode)
 
     def test_existing_command_or_foreign_links_are_never_overwritten(self):
         outside=self.root/'outside-command';outside.write_bytes(b'EXISTING COMMAND')
         for kind in ('file','foreign','dangling','cycle'):
             with self.subTest(kind=kind):
-                directory=self.root/kind;directory.mkdir();target=directory/'awf-cli'
+                directory=self.root/kind;directory.mkdir();target=directory/'awf-dev'
                 if kind == 'file':target.write_bytes(b'USER COMMAND')
                 else:target.symlink_to(outside if kind == 'foreign' else (directory/'missing' if kind == 'dangling' else target))
                 before=os.readlink(target) if target.is_symlink() else target.read_bytes()
@@ -2069,14 +2071,15 @@ class TerminalAndCliTest(TemporaryProject):
         master,slave=pty.openpty()
         fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0))
         # 从源包之外通过真实短命令默认打开 TUI；宿主目录指向临时夹具，不读本机账户配置。
-        directory=self.root/'bin';install_cli(directory)
+        directory=self.root/'bin';entry=install_cli(directory)
+        scan=self.root/'empty-scan';scan.mkdir()
         codex=self.root/'codex-home';codex.mkdir()
         (codex/'config.toml').write_text('model_catalog_json = "models.json"\n')
         (codex/'models.json').write_text(json.dumps({'models':[{'slug':'fixture-model','display_name':'Fixture Model','supported_reasoning_levels':['high','max']}]}))
         original={str(path.relative_to(self.project)):path.read_bytes() for path in self.project.rglob('*') if path.is_file()}
         env={**os.environ,'PATH':str(directory)+os.pathsep+os.environ['PATH'],'TERM':'xterm-256color','ESCDELAY':'25',
              'HOME':str(self.root/'home'),'CODEX_HOME':str(codex),'CLAUDE_CONFIG_DIR':str(self.root/'claude-home')}
-        process=subprocess.Popen(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root)],cwd=self.root,
+        process=subprocess.Popen([str(entry),'--state-dir',str(self.state),'--scan-root',str(scan)],cwd=self.root,
                                  stdin=slave,stdout=slave,stderr=slave,env=env)
         os.close(slave);captured=bytearray()
         def until(text,*,existing=False):
@@ -2099,7 +2102,8 @@ class TerminalAndCliTest(TemporaryProject):
             os.write(master,b'\x1b');time.sleep(.1)
             os.write(master,b'g');until('工作流管理')
             os.write(master,b'\x1b');time.sleep(.1)
-            os.write(master,b'\r');until('选择模型')
+            # 无binding的项目不再凭local文件提供角色；本例在全局默认范围检验键盘/弹层。
+            os.write(master,b'\r\r');until('选择模型')
             os.write(master,b'/fixture\r');until('/ fixture')
             self.assertIsNone(process.poll())
             os.write(master,b'\r');until('推理级别')
