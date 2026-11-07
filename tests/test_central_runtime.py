@@ -379,6 +379,82 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.register(self.project, second)
         return central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
 
+    def noop_pair(self):
+        """以完整核心和真实原生归属构造noop，不伪造原生服务返回的收据。
+
+        项目先保留完整local投影，预先安装的七角色全局产物来自同一完整核心。
+        后续中央激活不需改原生产物，但仍会撤下项目local角色；第二项目失败
+        因而必须真实补偿第一项目，不能仅用空项目计划掩盖跨资源结算。
+        """
+        from manager import native_agents
+        self.enable()
+        second = self.workspace / ("noop-second-" + uuid.uuid4().hex[:8]); second.mkdir(); self.enable(second)
+        self.register(self.project, second)
+        installed = native_agents.apply_global(native_agents.preview_global(self.state, self.core.binding(), context=self.context))
+        self.assertEqual("applied", installed["status"])
+        plan = central.preview(self.state, binding=self.core.binding(), native_context=self.context)
+        self.assertEqual([], plan.native_plan.summary["changes"])
+        self.assertIn("witness", plan.native_plan.recovery_ref)
+        self.assertTrue(all(capture.runtime_plan.changes for capture in plan.captures))
+        receipt = native_agents.compensate_global(plan.native_plan.recovery_ref, context=self.context)
+        self.assertEqual("noop", receipt["status"])
+        self.assertEqual([], receipt["conflicts"])
+        return plan
+
+    def test_native_noop_after_project_failure_settles_compensation(self):
+        from manager import native_agents
+        plan = self.noop_pair()
+        before = {capture.project: capture.binding_before.payload for capture in plan.captures}
+        applied, calls = projects.apply, []
+        def fail_second(runtime_plan, **kwargs):
+            calls.append(runtime_plan.project)
+            if len(calls) == 2:
+                raise OSError("fixture second project failed after native noop")
+            return applied(runtime_plan, **kwargs)
+        with patch.object(projects, "apply", side_effect=fail_second), self.assertRaisesRegex(OSError, "second project"):
+            central.apply(plan)
+        journal = json.loads(read_state(self.state, policy.ACTIVATION).payload)
+        self.assertEqual("noop", journal["native_receipt"]["status"])
+        self.assertEqual("compensated", journal["phase"])
+        self.assertEqual([], journal["conflicts"])
+        self.assertIsNone(policy.pending(self.state))
+        self.assertEqual(plan.current_before, policy.current_snapshot(self.state)[0])
+        self.assertTrue(central.status(self.state)["management_write_allowed"])
+        for project, payload in before.items():
+            self.assertEqual(payload, projects.read_binding_record(self.state, project)[0].payload)
+            self.assertTrue(projects.status(self.state, project)["resources_healthy"])
+        self.assertEqual([], native_agents.verify_global(journal["native_ref"], context=self.context))
+
+    def test_native_noop_pending_recovery_settles_after_project_failure(self):
+        from manager import native_agents
+        plan = self.noop_pair()
+        before = {capture.project: capture.binding_before.payload for capture in plan.captures}
+        applied, calls = projects.apply, []
+        def fail_second(runtime_plan, **kwargs):
+            calls.append(runtime_plan.project)
+            if len(calls) == 2:
+                raise OSError("fixture second project failed before recovery")
+            return applied(runtime_plan, **kwargs)
+        # 只在父事务进入补偿前模拟中断；原生apply/noop、首项目apply以及后面的
+        # recover均运行真实服务，让持久native_ref与witness接受相同恢复合同。
+        with patch.object(projects, "apply", side_effect=fail_second), \
+                patch.object(central, "_compensate", side_effect=KeyboardInterrupt("fixture interrupted before compensation")), \
+                self.assertRaises(KeyboardInterrupt):
+            central.apply(plan)
+        pending = policy.pending(self.state)
+        self.assertEqual("noop", pending["native_receipt"]["status"])
+        with self.assertRaisesRegex(ValueError, "尚未结算"):
+            central.new_task_gate(self.state, self.project)
+        result = central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertTrue(result["compensated"])
+        self.assertIsNone(policy.pending(self.state))
+        self.assertEqual(plan.current_before, policy.current_snapshot(self.state)[0])
+        self.assertTrue(central.status(self.state)["management_write_allowed"])
+        for project, payload in before.items():
+            self.assertEqual(payload, projects.read_binding_record(self.state, project)[0].payload)
+            self.assertTrue(projects.status(self.state, project)["resources_healthy"])
+        self.assertEqual([], native_agents.verify_global(pending["native_ref"], context=self.context))
+
     def test_native_conflict_receipt_keeps_global_pending_gate(self):
         from manager import native_agents
         plan = self.pair()
