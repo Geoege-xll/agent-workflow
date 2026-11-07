@@ -1,0 +1,194 @@
+# 开发手册
+
+本手册说明源包结构、开发生成器、维护和验证入口。日常项目操作见[使用手册](usage.md)，
+发行构建与发布边界见 [Homebrew 说明](homebrew.md)，快速开始见 [README](../README.md)。
+
+## 权威与源码职责
+
+用户操作说明放在三份手册；产品语义、角色权限和 Skill 规则仍由对应源文件维护，
+手册只说明入口与边界，不作为第二份完整规则。修改当前规则时应同时检查实际生成器、调用者与合同测试。
+
+| 路径 | 职责 |
+| --- | --- |
+| `product/WORKFLOW.md` | 产品工作流权威，含 Light／Full、确认、所有权、QA 与收口 |
+| `product/VERSION` | 唯一人工维护版本值；当前 2.1.1 仍未公开发布 |
+| `roles/xy-*.md` | 各角色技术职责与权限 |
+| `platforms/shared/skills/` | 九个内置 Skill 的唯一共用源（one shared source）及按需 references |
+| `platforms/codex/`、`platforms/claude/`、`platforms/antigravity/` | 三宿主模板、适配和 PM 平台细则 |
+| `platforms/shared/HOOKS.md` | 辅助 Hooks 开关、所有权与原生信任合同 |
+| `templates/` | 项目配置、文档、原型等实际生成输入 |
+| `manager/cli.py`、`manager/tui.py` | 命令协议与 curses 交互，调用业务服务，不复制业务规则 |
+| `manager/project_service.py` | 项目扫描、登记、添加／删除计划与登记发布 |
+| `manager/service.py` | 模型配置应用、备份／恢复、收据与精确回滚事务 |
+| `manager/runtime_service.py` | 中央启停、选版、回滚与修复的唯一事务编排 |
+| `manager/state_files.py` | 管理状态普通文件的有界读取、前像核对与安全发布 |
+| `lib/project_paths.py` | 规范项目路径与目录身份边界，供实际服务调用者复用 |
+| `manager/catalog.py`、`manager/codex_models.py`、`manager/model_preferences.py` | 模型来源、能力与字段偏好 |
+| `manager/runtime_state.py` | 中央绑定及事务日志的私有记录读写边界 |
+| `lib/runtime_store.py`、`lib/runtime_project.py`、`lib/runtime_bridge.py` | 不可变核心、项目受管资源与 pin 薄桥 |
+| `lib/install_workflow.py`、`lib/install_process.py` | 安装编排与 setup 子进程超时／取消／资源回收 |
+| `lib/` 其余模块 | 发现、配置、规范、任务图、交接、原型等各自职责；按调用链定位 |
+| `scripts/` | 统一验证入口、guard、冲突标记 lint 与宿主检查薄委派 |
+| `packaging/` | 离线归档构建器和 Homebrew Formula 模板，不进入运行时发行载荷 |
+| `tests/` | 行为、合同与真实消费者验证，不进入运行时发行载荷 |
+
+`service` 仅负责模型事务，`runtime_service` 保持中央事务的单一所有者；项目登记归 `project_service`，
+状态文件和项目路径共用边界分别归 `state_files`、`project_paths`。下游通过所属模块调用，
+不增加兼容空转发层，也不绕过所有者直接改私有记录。`install_process` 管理外部 setup 进程，
+取消／超时须先停止写入并回收进程，再交回安装恢复；它不承担中央版本选取或模型事务。
+
+中央核心按完整内容 ID 固定，模型偏好和机器状态位于核心之外。项目根、配置根与核心根由薄桥分别验证，
+不能把 core 父目录当项目。中央状态或核心损坏应明确拒绝，不回退其他版本；已有任务 pin 保持，
+受管归属、用户内容保护、并发冲突与精确回滚是安全合同，不能作为“历史兼容”删除。
+
+## 普通入口与源包开发生成器
+
+`install.sh` 从任意位置选择已有项目，`workflow.sh`／`awf-cli` 是普通中央管理入口。
+中央项目内仅有 `.agent-workflow/` 配置、locator、薄桥和原生资源，没有 `.agent-workflow/setup_*.sh`。
+检查／修复中央项目分别用 `check` 和先预览的 `repair`，不在项目内执行根 setup。
+
+根 `setup_codex.sh`、`setup_claude.sh`、`setup_antigravity.sh` 和 `setup_all.sh` 是源包开发生成器。
+仅在源包开发模式下从源包根运行；生成前先完成所选宿主预检，保留用户文件及原生设置。
+聚合 setup 在首次项目写入前预检所有选中宿主，可用 `--only=claude`、`--only=codex`、`--only=antigravity` 限定：
+
+```bash
+bash setup_codex.sh --preflight
+bash setup_codex.sh
+bash setup_codex.sh --check
+bash setup_claude.sh --preflight
+bash setup_claude.sh
+bash setup_claude.sh --check
+bash setup_antigravity.sh --preflight
+bash setup_antigravity.sh
+bash setup_antigravity.sh --check
+bash setup_all.sh --only=codex
+```
+
+三平台都消费 `platforms/shared/skills/` 的同一份源包；普通中央安装的受管 Skill 通过锚定软链指向固定核心，
+不在项目维护另一份规则源。宿主发现目录和角色格式各自保持：
+
+| 宿主 | 指令／入口 | 角色 | Skill 目录 |
+| --- | --- | --- | --- |
+| Codex | `AGENTS.md`／`$xy-workflow` | `.codex/agents/xy-*.toml` | `.agents/skills/` |
+| Claude Code | `CLAUDE.md` → `AGENTS.md`／`/xy-workflow` | `.claude/agents/xy-*.md` | `.claude/skills/` |
+| Antigravity | `AGENTS.md`／`/xy-workflow` | `.agents/agents/xy-*.md` | `.agents/skills/` |
+
+### Claude 原生生成合同
+
+`AGENTS.md` 是精简共用入口，`CLAUDE.md` 固定为一行 `@AGENTS.md`，不复制全文。
+导入会去重，但被导入正文仍占上下文，不承诺省 token，也不绕过 managed-only 等组织策略。
+根导入不递归合并子目录规则。SessionStart 仅提醒恢复，不重复注入指令或项目全文。
+实际加载须在 Claude 会话用 `/context` 核对，磁盘 `--check` 不能证明加载和模型执行效果。
+
+每个生成 Custom Agent 使用原生 Skill 工具；实施者预载 `xy-code-standards`、`xy-build-verify`，
+UI 按职责预载 `xy-ui-design`、`ui-ux-pro-max`、`xy-prototype-verify`，QA 预载 `xy-qa-review`。
+其他 QA 专项 Skill 按描述匹配、按需读取，不扫描个人 Skill 全库存。缺失任务声明的必需 Skill 会阻止相应交付，
+缺失 `ui-ux-pro-max` 阻止 UI 设计；读取与预载不授予额外写权限，也不自动启用原型阶段。
+`xy-project-memory` 提供可选记忆方法，实际隔离和离线边界见[使用手册](usage.md#项目文档与可选记忆)。
+
+`setup_claude.sh` 仅合并 `.claude/settings.json` 中带签名的辅助 Hook 条目；用户权限、其他 Hooks、
+MCP、插件和 Claude Auto Memory 设置保留。原生写入保护只按显式 true 合并单键，不独占 settings 或重签 Hooks。
+只接受缺失或精确薄入口，未知正文不自动迁移；用户自有同名 Agent／Skill 保留。
+`--check` 对比受管产物与当前来源，拒绝过期或矛盾输出。必要时可运行本机 `claude doctor`，
+工具配置或回调成功不等于模型行为验收；Hooks 详细合同见 [Hooks 说明](../platforms/shared/HOOKS.md)。
+
+## 维护工作流与验证
+
+Light／Full、任务分派、确认、独立 QA 和收口以[产品工作流](../product/WORKFLOW.md)为准。
+Full 使用确定性任务依赖图（task dependency graph），PM 在容量与所有权边界内推进当前可执行任务，
+请求依赖闭包完成后进行一次集成 QA；任务完成不会自动构成批准或可交付证明。
+QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口、最终报告。
+完整实例、图、原生交接与 worktree 方法分别按[工作流 Skill](../platforms/shared/skills/xy-workflow/SKILL.md)
+的读取条件进入，手册不复制规则全文。
+
+角色职责与权限维护在 `roles/`；工程方法与规则维护在
+[代码规范 Skill](../platforms/shared/skills/xy-code-standards/SKILL.md)，设计方法与规则维护在
+[设计 Skill](../platforms/shared/skills/xy-ui-design/SKILL.md)。根指令只保留关键边界和条件索引，
+各 Agent 独立完整读其必需文档；长文分开分页至 EOF，未变且完整可用的已读内容直接复用，
+截断或变化只恢复受影响内容。[运行记录工具](../platforms/shared/skills/xy-workflow/references/runtime-records.md)
+含 `context_read.py` 有界只读入口和图工具用法，机器指纹不证明模型已读。
+
+工作流自有 Python 调用及临时／内联 helper 都使用同一现有解释器选择器，UTF-8 文本显式读写，
+不改变业务项目原工具链：
+
+```bash
+# 直接选择真实 unittest 节点仍可用；不必为了单个节点运行整组。
+bash lib/python_runtime.sh -B -X utf8 -m unittest -v \
+  tests.test_homebrew_packaging.ReleaseArchiveTest.test_real_archive_manual_links_resolve_without_private_docs
+bash lib/python_runtime.sh -B -X utf8 lib/project_profile_cli.py json /path/to/agent_workflow /path/to/project
+```
+
+中央项目通过 `.agent-workflow/runtime.py` 的 `helper` 入口调用固定核心 helper，显式传任务 `runtime_binding`；
+不要把源包相对路径命令直接当作中央项目命令。上下游操作必须前一步成功才继续，具体调用见
+[helper 执行边界](../platforms/shared/skills/xy-workflow/references/dispatch.md#workflow-helper-execution)。
+
+先定位现有测试节点、真实消费者和受影响调用链，再选择最小充分验证。生产代码须有受影响目标成功构建／编译与
+最小可运行证据；解释型项目用实际导入／语法和关键入口执行，纯说明文档用差异与链接检查。
+候选验证命令不等于必须全部运行，通过且无新缺口后停止；保留原始失败、真实退出码和完整日志，
+不在 Writer、QA、PM、提交各阶段重复“保险回归”。新增覆盖、重跑、失败返工的依据沿用
+[验证范围策略](../platforms/shared/skills/xy-build-verify/references/verification-scope.md)。
+
+### 统一验证入口与风险分组
+
+`scripts/test_workflow.sh` 统一选择源包物理根、现有 Python 解释器与 UTF-8／禁字节码参数，
+保留 unittest 的真实输出和失败／中断状态，不重试、不下载依赖。无参数只显示帮助，不默认跑全套；
+先用 `--list` 校验并查看实际目标，再按变更风险选择组或完整节点：
+
+```bash
+bash scripts/test_workflow.sh
+bash scripts/test_workflow.sh --list ci
+# 以下是独立选择示例，按受影响范围选用，不要求逐条执行。
+bash scripts/test_workflow.sh service
+bash scripts/test_workflow.sh central
+bash scripts/test_workflow.sh tui
+bash scripts/test_workflow.sh pty
+bash scripts/test_workflow.sh packaging
+# 也可传入现有 unittest 模块、类或方法，并与组组合。
+bash scripts/test_workflow.sh tests.test_runtime_store
+```
+
+| 组 | 适用风险与范围 |
+| --- | --- |
+| `service` | 模型来源／偏好、模型事务、登记／安装边界、管理器 CLI 与启动器等服务行为 |
+| `central` | 中央项目启停、固定核心／绑定、状态记录和中央 CLI／安装消费者 |
+| `tui` | 输入、终端单元格、草稿交互及选定项目流程；不隐式启动 PTY |
+| `pty` | 真实伪终端键盘、窗口缩放与项目生命周期；需要 POSIX |
+| `packaging` | 离线归档、手册、启动器和 Ruby Formula 安装模拟；Formula 消费者需要 Ruby |
+| `ci` | 已明确的入口、中央 pin／模型收据、三宿主共享源、需求 HTML、PTY 和离线发行组合；需要 Node、Ruby 与 POSIX |
+
+`codex`、`claude`、`antigravity`、`prototype` 保留各自聚焦范围，`hosts` 覆盖三宿主及其共享合同。
+旧四个 `scripts/test_codex.sh`、`test_claude.sh`、`test_antigravity.sh`、`test_prototype.sh`
+仅薄委派到统一入口的对应组，保留原测试范围。分组不会改变直接 unittest 节点的调用方式；
+入口先校验完整计划、折叠已被父模块／类覆盖的子节点并去重，未知组或节点明确拒绝，不退回全套发现。
+
+只有广泛影响确需或明确要求时，才显式选择完整回归：
+
+```bash
+bash scripts/test_workflow.sh full
+```
+
+`full` 覆盖现有全部 `test_*.py` 模块，`ci` 是明确组合而非全套别名。完整范围包含调度、运行时、规范、原型与安装，
+不能把单个风险组通过描述为全套通过。
+源包优化不会自动重装／同步真实项目；仅对用户明确授权目标显式导入、选版或预览修复。
+本地构建、模拟 Cellar 或某平台通过，不能扩大为远端发布、真实 Homebrew 或其他平台已经验收。
+
+## 文档归属与历史保留
+
+- `README.md` 只保留快速开始、版本和手册导航。
+- `docs/usage.md` 维护用户操作、CLI／TUI、支持范围与恢复说明。
+- `docs/development.md` 维护源码职责、开发生成器与维护入口。
+- `docs/homebrew.md` 维护 Homebrew、离线发行和远程发布边界。
+- `product/`、`roles/`、Skill 与 references 保持指令权威，项目模板不复制内置通用规则。
+
+业务项目文档仍遵循已配置的 `docs/PROJECT.md`、规范和同主题计划归属；当前源包没有 PROJECT／STANDARDS 实体时，
+不为说明而新建空索引。源包 `docs/plans/` 的历史 Markdown、同名 HTML 和已批准原型保留在原位，
+用于恢复批准、设计与验收依据；未索引计划或历史状态不自动成为当前功能事实。
+完整日志留在请求证据位置，长期正文仅归纳必要结论并引用现有证据，不新建归档树或杂记副本。
+
+`.sync-backups` 是既有恢复材料，`dist/` 保存本地发行产物与历史；不进入运行时载荷，不因本轮结构整理批量删除。
+本轮仅由 PM 在重新核对完整字节、固定 SHA、保留归档校验且确认无进程占用后，精确移除了
+`dist/github-v0.1.0/` 内归档、校验与 Formula 的三份重复文件及四个空目录；`dist/` 根产物、Tap 独立历史、
+release-notes 和全部 `.sync-backups` 仍保留。后续清理须先证明恢复输入与必要引用安全，归属未知或并发修改时保留。
+
+离线发行显式加入且仅加入三份手册，禁止把整个 `docs/` 打包，避免历史计划、原型和私有材料泄入用户载荷。
+手册及 README 内部链接须在实际归档／安装后的目录结构解析；构建与真实消费者验证见 [Homebrew 说明](homebrew.md#本地构建不联网不安装不发布)。

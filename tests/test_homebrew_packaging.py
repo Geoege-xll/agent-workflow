@@ -7,6 +7,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import posixpath
+import re
 import shlex
 import shutil
 import subprocess
@@ -14,12 +16,38 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from urllib.parse import unquote, urlsplit
 
 
 PACK = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("build_release", PACK / "packaging/build_release.py")
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+
+
+MANUAL_FILES = ("README.md", "docs/usage.md", "docs/development.md", "docs/homebrew.md")
+
+
+def assert_offline_manual_links(test, documents, available_paths):
+    """检查真实载荷的文档链接，避免源码可打开而离线发行包缺少目标。
+
+    只读取本次归档／安装后的字节与成员集合，不借用源码目录补齐缺失文件；
+    外部 URL 保持外部链接，内部目标必须在载荷中，Markdown 锚点必须命中标题。
+    """
+    for relative in MANUAL_FILES:
+        body = documents[relative].decode("utf-8")
+        for target in re.findall(r"(?<!!)\[[^\]]+\]\(([^)\s]+)\)", body):
+            url = urlsplit(target)
+            if url.scheme or url.netloc:
+                continue
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(relative), unquote(url.path))) if url.path else relative
+            with test.subTest(document=relative, target=target):
+                test.assertFalse(resolved.startswith("../") or resolved.startswith("/"), target)
+                test.assertIn(resolved, available_paths)
+                if url.fragment and resolved.endswith(".md"):
+                    headings = re.findall(r"(?m)^#{1,6} (.+)$", documents[resolved].decode("utf-8"))
+                    anchors = {re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-") for heading in headings}
+                    test.assertIn(unquote(url.fragment), anchors)
 
 
 class ReleaseArchiveTest(unittest.TestCase):
@@ -29,6 +57,8 @@ class ReleaseArchiveTest(unittest.TestCase):
         self.source = self.root / "source"
         self.source.mkdir()
         for name in release.RELEASE_FILES:
+            # 手册是显式嵌套文件，夹具必须建立父目录，不能把 docs 改成递归载荷。
+            (self.source / name).parent.mkdir(parents=True, exist_ok=True)
             (self.source / name).write_text(f"fixture: {name}\n", encoding="utf-8")
         for name in release.RELEASE_DIRECTORIES:
             (self.source / name).mkdir()
@@ -74,7 +104,9 @@ class ReleaseArchiveTest(unittest.TestCase):
         self.assertFalse((self.root / "out").exists());self.assertEqual(metadata.read_bytes(),original)
 
     def test_payload_allowlist_excludes_backups_tooling_and_caches(self):
-        for name in (".sync-backups/private", "dist/old", "docs/draft", "tests/private", "lib/__pycache__/old.pyc", "lib/.DS_Store"):
+        for name in (".sync-backups/private", "dist/old", "docs/draft", "docs/plans/private.md",
+                     "docs/standards/prototype/index.html", "docs/private/secret.md", "tests/private",
+                     "lib/__pycache__/old.pyc", "lib/.DS_Store"):
             path = self.source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("not a release file")
@@ -84,8 +116,37 @@ class ReleaseArchiveTest(unittest.TestCase):
             names = stream.getnames()
         self.assertIn("agent-workflow-0.1.0/LICENSE", names)
         self.assertIn("agent-workflow-0.1.0/lib", names)
+        # 只准三份手册进入 docs，不能用“允许 docs”掩盖 plans／原型／私有资料泄漏。
+        prefix = "agent-workflow-0.1.0/"
+        self.assertEqual({prefix + name for name in MANUAL_FILES[1:]},
+                         {name for name in names if name.startswith(prefix + "docs/")})
         for name in names:
-            self.assertFalse(any(part in {".sync-backups", "dist", "docs", "tests", "packaging", "__pycache__", ".DS_Store"} for part in Path(name).parts), name)
+            self.assertFalse(any(part in {".sync-backups", "dist", "tests", "packaging", "__pycache__", ".DS_Store"} for part in Path(name).parts), name)
+
+    def test_real_archive_manual_links_resolve_without_private_docs(self):
+        # 使用当前源码的真实归档，而非只有占位正文的最小夹具，覆盖离线导航合同。
+        version = (PACK / "product/VERSION").read_text(encoding="ascii").strip()
+        archive, _, _ = release.build(PACK, version, self.root / "real-output")
+        prefix = f"agent-workflow-{version}/"
+        with tarfile.open(archive) as stream:
+            available = {member.name.removeprefix(prefix) for member in stream if member.name.startswith(prefix)}
+            documents = {relative: stream.extractfile(prefix + relative).read()
+                         for relative in available if relative.endswith(".md")}
+            self.assertEqual(set(MANUAL_FILES[1:]), {name for name in available if name.startswith("docs/")})
+            for relative in MANUAL_FILES:
+                self.assertEqual(documents[relative], (PACK / relative).read_bytes())
+            assert_offline_manual_links(self, documents, available)
+
+    def test_manual_parent_symlink_is_rejected_without_output(self):
+        # 文件本身是普通文件也不能沿 docs 父目录链接读取源包外材料。
+        original = self.source / "docs"
+        retained = self.root / "manuals"
+        original.rename(retained)
+        original.symlink_to(retained, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "symlinks"):
+            release.build(self.source, "0.1.0", self.root / "out")
+        self.assertFalse((self.root / "out").exists())
+        self.assertTrue((retained / "usage.md").is_file())
 
     def test_invalid_versions_and_unsafe_output_do_not_write(self):
         output = self.root / "out"
@@ -248,6 +309,14 @@ class HomebrewLauncherTest(unittest.TestCase):
                          "platforms/shared/skills/xy-plan/references/requirement-html.md"):
             self.assertEqual((self.prefix / "libexec" / relative).read_bytes(), (PACK / relative).read_bytes())
         self.assertFalse((self.prefix / "libexec/templates/docs/FEATURE.md").exists())
+        # Formula 也要保留同一离线手册；从实际安装载荷解析链接，不借用源包补目标。
+        installed = self.prefix / "libexec"
+        available = {path.relative_to(installed).as_posix() for path in installed.rglob("*")}
+        documents = {relative: (installed / relative).read_bytes()
+                     for relative in available if relative.endswith(".md") and (installed / relative).is_file()}
+        for relative in MANUAL_FILES:
+            self.assertEqual(documents[relative], (PACK / relative).read_bytes())
+        assert_offline_manual_links(self, documents, available)
         result = self.run_cli("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(result.stdout.startswith("usage: awf-cli"))
