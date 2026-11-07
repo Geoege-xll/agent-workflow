@@ -849,8 +849,16 @@ def start():
     spec.loader.exec_module(module)
     module.load_core(binding, state)
     sys.path.insert(0, str(root))
-    from lib.runtime_bridge import main
-    return main(project=project, state=state)
+    from lib import runtime_bridge
+    if control:
+        # current控制器必须实际实现中央pending门与协调协议。完整核心已经
+        # 通过清单核验，此处只核验已加载桥的明确运行时声明，不执行候选
+        # AST资格探测或适配旧控制器；bool不能借Python的True == 1混入。
+        # 旧pin read/普通helper仍调用原桥，不要求它具备新任务控制资格。
+        protocol = getattr(runtime_bridge, "CENTRAL_CONTROL_PROTOCOL", None)
+        if type(protocol) is not int or protocol != 1:
+            raise ValueError("中央当前核心不支持控制协议1，不能执行控制动作")
+    return runtime_bridge.main(project=project, state=state)
 
 if __name__ == "__main__":
     try:
