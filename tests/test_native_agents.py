@@ -5,6 +5,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -364,6 +366,74 @@ class NativeAgentsTest(unittest.TestCase):
         desired, _ = prepare(resources, project, Node("file", body, 0o644), ("codex",), owned_links=set(),
                              native_context=self.context, preferences={"codex": {"xy-backend": {"effort": "max"}}})
         self.assertIn(b'model_reasoning_effort = "max"', desired[".codex/agents/xy-backend.toml"][0].payload)
+
+
+class NativeProfileConsumerTest(unittest.TestCase):
+    def test_sparse_profile_helper_uses_state_authority_over_ambient_host_paths(self):
+        """真实薄桥读取显式state的稀疏角色，不能随进程HOME重选宿主根。"""
+        from manager import central_runtime, runtime_service, runtime_policy
+        from lib.central.runtime_project import LAUNCHER, PYTHON_ENTRY, project_key, identity
+        pack = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix="native-profile-", dir=os.environ.get("AWF_TEST_SCRATCH")) as raw:
+            root = Path(raw).resolve()
+            state = root / "custom-state"
+            # 此消费者必须运行完整固定core中的真实profile依赖；不复制/补丁
+            # 核心文件，也不以工作树的import替代真实薄入口执行。
+            core = runtime_store.import_core(pack, state)
+            context = NativeContext(state, HostPaths.for_home(root / "installed-host-home", environment={}))
+            central_runtime.apply(central_runtime.preview(state, binding=core.binding(), native_context=context))
+            project = root / "project"
+            project.mkdir()
+            (project / "pyproject.toml").write_text('[project]\nname="fixture"\nversion="0.1.0"\n')
+            runtime_service.apply(runtime_service.preview(state, project, "enable", binding=core.binding(),
+                                                         hosts=("codex",), native_context=context))
+            self.assertFalse((project / ".codex/agents/xy-qa.toml").exists())
+            decoy = root / "ambient-home"
+            decoy.mkdir()
+            environment = dict(os.environ)
+            for key in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
+                        "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"):
+                environment.pop(key, None)
+            environment.update({"HOME": str(decoy), "CODEX_HOME": str(decoy / "wrong-codex"),
+                                "CLAUDE_CONFIG_DIR": str(decoy / "wrong-claude"),
+                                "AGENT_WORKFLOW_STATE_DIR": str(state), "AGENT_WORKFLOW_PYTHON": sys.executable})
+            def invoke(mode):
+                command = ["bash", str(project / PYTHON_ENTRY), "-B", "-X", "utf8", str(project / LAUNCHER),
+                           "--binding", json.dumps(core.binding()), "helper", "lib/project/project_profile_cli.py"]
+                command.extend(("check-roles", "codex", ".agent-workflow", ".") if mode == "check-roles"
+                               else (mode, ".agent-workflow", "."))
+                result = subprocess.run(command, cwd=project, env=environment, capture_output=True, text=True, timeout=40)
+                print("ISOLATED_PROFILE_HELPER", mode, "exit=" + str(result.returncode))
+                print(result.stdout, end="")
+                print(result.stderr, end="")
+                return result
+            paths = (runtime_policy.CURRENT, runtime_policy.ACTIVATION, "bindings/" + project_key(project) + ".json")
+            state_before = tuple(native.read_node(state, path) for path in paths)
+            role = context.host_paths.codex / "agents/xy-qa.toml"
+            owner_before = native.read_node(context.host_paths.codex, native.OWNER)
+            role_before = native.read_node(context.host_paths.codex, "agents/xy-qa.toml")
+            # 普通读取允许系统更新atime；复用生产节点identity核对inode、mode、
+            # size、mtime、ctime，既不误报读取，也不豁免实际文件/目录修改。
+            project_before = {path.relative_to(project).as_posix(): identity(path.lstat()) for path in project.rglob("*")}
+            result = invoke("check-roles")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("native ownership", result.stdout)
+            self.assertEqual(tuple(native.read_node(state, path) for path in paths), state_before)
+            self.assertEqual(native.read_node(context.host_paths.codex, native.OWNER), owner_before)
+            self.assertEqual(native.read_node(context.host_paths.codex, "agents/xy-qa.toml"), role_before)
+            self.assertEqual({path.relative_to(project).as_posix(): identity(path.lstat()) for path in project.rglob("*")}, project_before)
+            self.assertEqual(list(decoy.iterdir()), [])
+            # 全局手删仍是冲突，不退回ambient HOME补资源；普通旧pin画像读取
+            # 保持只读可用，不把check-roles的健康要求扩散到roles读取路径。
+            role.unlink()
+            result = invoke("check-roles")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            result = invoke("roles")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("xy-qa", result.stdout.splitlines())
+            self.assertFalse(role.exists())
+            self.assertEqual(list(decoy.iterdir()), [])
 
 
 if __name__ == "__main__":

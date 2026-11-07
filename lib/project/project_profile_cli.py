@@ -28,20 +28,22 @@ ROLE_LOCATIONS = {
 }
 
 
-def check_roles(profile, project: Path, host: str) -> int:
+def check_roles(profile, project: Path, host: str, *, runtime_context=None) -> int:
     """只读核对当前宿主的角色资源，不安装、派发或自动修改任何项目文件。
 
     使用现有的有界项目发现器得到当前所需角色，避免沿用克隆源码之前的名单。
     这里只证明资源存在且不是链接；内容、所有权及宿主配置由原 setup --check 验证。
     """
-    if os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
+    if runtime_context is not None or any(key in os.environ for key in CENTRAL_CONTEXT_KEYS):
         # 中央稀疏资源通过已验证画像+本机绑定+原生归属投影核对，不能要求
         # 每个角色都有同名local文件；旧固定core仍沿其原check逻辑正常拒绝稀疏。
-        from lib import runtime_store
-        from lib.central.runtime_project import Node, Tree
-        from lib.hosts.native_context import HostPaths, NativeContext
+        from lib.central.runtime_project import Tree
         from manager import native_agents, runtime_service
-        state = runtime_store.state_root(None)
+        # main沿用load刚验证的同一context；直接调用者则走同一桥校验，
+        # 不能再次用默认state/HOME改变已验证项目所属的机器状态身份。
+        context = runtime_context or _central_context(project / ".agent-workflow", project)
+        state = context.state
+        project = context.project_root
         _, record = runtime_service.read_binding_record(state, project)
         if not record or not record["enabled"] or host not in record["hosts"]:
             print(f"[ERROR] {host} is not enabled in the local project binding", file=sys.stderr)
@@ -60,9 +62,10 @@ def check_roles(profile, project: Path, host: str) -> int:
                 elif path not in record["managed"] or record["managed"][path]["purpose"] != "role":
                     raise ValueError("项目同名角色缺少精确原生归属")
         if sparse:
-            context = NativeContext(state, HostPaths.for_home(Path.home(), environment=dict(os.environ)))
-            if host not in native_agents.verified_hosts(state, context=context):
-                raise ValueError("稀疏角色缺少完整全局原生归属")
+            # 薄桥的state已有精确active/current原生根授权；宿主发现路径属于
+            # 该授权，不能让调用进程的HOME/CODEX_HOME重新选择另一套全局资源。
+            if native_agents.admission_issues(state, hosts=(host,)):
+                raise ValueError("稀疏角色缺少当前状态目录的完整全局原生归属")
         print(f"[OK] {host} required roles match the validated profile and native ownership")
         return 0
     directory, suffix = ROLE_LOCATIONS[host]
@@ -80,29 +83,43 @@ def check_roles(profile, project: Path, host: str) -> int:
     return 0
 
 
-def load(pack: Path, project: Path):
-    # 薄桥传入的是项目适配器目录，不是核心目录；只要出现中央上下文就必须
-    # 完整验证，不能因缺字段或伪造路径而退回宽松的源码包分支。
-    central_keys = ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
-                    "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT")
-    if any(key in os.environ for key in central_keys):
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-        from lib import runtime_bridge
-        from lib.central import runtime_project
-        from lib import runtime_store
-        from manager import runtime_service
+CENTRAL_CONTEXT_KEYS = ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
+                        "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT")
 
-        if not all(key in os.environ for key in central_keys):
-            raise ValueError("中央画像缺少完整任务上下文")
-        root = runtime_project.canonical_project(project)
-        state = runtime_store.state_root(None)
-        context = runtime_bridge.resolve_runtime(state, root)
-        # 环境只作为一致性检查；核心、配置和项目身份均由机器记录及 pin 推导。
-        if (pack.absolute() != context.config_path.parent
-                or Path(os.environ["AGENT_WORKFLOW_CONFIG_PATH"]) != context.config_path
-                or Path(os.environ["AGENT_WORKFLOW_CORE_ROOT"]) != context.core.root
-                or Path(__file__).resolve() != context.core.root / "lib/project/project_profile_cli.py"):
-            raise ValueError("中央画像路径与已验证项目或固定核心不一致")
+
+def _central_context(pack: Path, project: Path):
+    """只从完整薄桥上下文验证一次state/project/core，缺字段不回退HOME。"""
+    if not any(key in os.environ for key in CENTRAL_CONTEXT_KEYS):
+        return None
+    from lib import runtime_bridge, runtime_store
+    from lib.central import runtime_project
+    if (not all(key in os.environ for key in CENTRAL_CONTEXT_KEYS)
+            or not os.environ.get("AGENT_WORKFLOW_STATE_DIR")):
+        raise ValueError("中央画像缺少完整任务上下文或显式状态目录")
+    # 环境路径不是授权本身；显式state交给真实桥重验本机项目记录与任务pin。
+    # 即便固定core的旧state_root(None)实现忽略环境，显式参数也不能落回HOME。
+    state = runtime_store.state_root(os.environ["AGENT_WORKFLOW_STATE_DIR"])
+    root = runtime_project.canonical_project(project)
+    context = runtime_bridge.resolve_runtime(state, root)
+    if (pack.absolute() != context.config_path.parent
+            or Path(os.environ["AGENT_WORKFLOW_CONFIG_PATH"]) != context.config_path
+            or Path(os.environ["AGENT_WORKFLOW_CORE_ROOT"]) != context.core.root
+            or Path(__file__).resolve() != context.core.root / "lib/project/project_profile_cli.py"):
+        raise ValueError("中央画像路径与已验证项目或固定核心不一致")
+    return context
+
+
+def load(pack: Path, project: Path):
+    """保留公开profile返回合同；主入口另复用同一次加载取得的可信context。"""
+    return _load_profile(pack, project)[0]
+
+
+def _load_profile(pack: Path, project: Path):
+    context = _central_context(pack, project)
+    if context is not None:
+        from lib.central import runtime_project
+        from manager import runtime_service
+        root, state = context.project_root, context.state
         _, record = runtime_service.read_binding_record(state, root)
         if record is None or not record["enabled"]:
             raise ValueError("中央项目未启用")
@@ -120,15 +137,15 @@ def load(pack: Path, project: Path):
             conflicts_after, links_after = runtime_service._ownership(tree, record, state, repair=False)
             if conflicts_after or links_after != owned_links or tree.read(runtime_project.CONFIG) != config:
                 raise ValueError("中央画像读取期间项目资源发生变化")
-            return profile
+            return profile, context
     result = validate_with_profile(
         pack / "project.yaml", project, pack / "roles"
     )
     if result.errors or result.profile is None:
         for error in result.errors or ("ProjectProfile is missing",):
             print(f"[ERROR] {error}", file=sys.stderr)
-        return None
-    return result.profile
+        return None, None
+    return result.profile, None
 
 
 def render_preview(profile) -> str:
@@ -183,14 +200,18 @@ def main(argv: list[str] | None = None) -> int:
     pack = Path(pack_raw)
     project = Path(project_raw)
     try:
-        profile = load(pack, project)
+        profile, runtime_context = _load_profile(pack, project)
     except (OSError, UnicodeError, ValueError) as exc:
         print(f"[ERROR] cannot load ProjectProfile: {exc}", file=sys.stderr)
         return 1
     if profile is None:
         return 1
     if mode == "check-roles":
-        return check_roles(profile, project, host)
+        try:
+            return check_roles(profile, project, host, runtime_context=runtime_context)
+        except (OSError, UnicodeError, ValueError) as exc:
+            print(f"[ERROR] cannot check ProjectProfile roles: {exc}", file=sys.stderr)
+            return 1
     if mode == "context":
         try:
             sys.stdout.write(render_context(profile, role))
