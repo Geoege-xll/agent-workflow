@@ -226,6 +226,54 @@ with Tree(state) as tree:
                     self.assertTrue(marker.is_symlink() or marker.is_file())
                     marker.unlink()
 
+    def test_private_publication_expected_rejects_external_save_before_capture(self):
+        candidate = json_bytes({**self.binding, "generation": "c" * 32})
+        external = json_bytes({**self.binding, "generation": "d" * 32})
+        for operation, same_payload in (("save", True), ("save", False),
+                                        ("replace", True), ("replace", False), ("chmod", True)):
+            with self.subTest(operation=operation, same_payload=same_payload):
+                relative = self.put("bindings", self.binding)
+                target = self.state / relative
+                expected = service.read_binding_record(self.state, self.project)[0]
+                if operation == "replace":
+                    # 新旧节点同时存在后再替换，确保同字节保存也确有不同 inode；
+                    # 不依赖 unlink 后系统是否立即复用 inode。
+                    replacement = target.with_name("external-replacement")
+                    replacement.write_bytes(expected.payload if same_payload else external)
+                    replacement.chmod(0o600)
+                    replacement.replace(target)
+                elif operation == "save":
+                    target.write_bytes(expected.payload if same_payload else external)
+                    if same_payload:
+                        # 同字节、同权限、同 inode 的保存仍改变完整前像；显式推进
+                        # mtime 保证夹具在不同文件系统时间精度下也构成真实变化。
+                        info = target.stat()
+                        os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+                else:
+                    target.chmod(0o640)
+                with directory_lock(self.state / "bindings", "central-project-state"), Tree(self.state) as tree:
+                    actual = service._raw(tree, relative)
+                    self.assertNotEqual(expected, actual, "外部写入必须确实改变真实完整前像")
+                    self.assertEqual(expected.payload if same_payload else external, actual.payload)
+                    self.assertEqual(operation == "replace", expected.identity[:2] != actual.identity[:2])
+                    with self.assertRaisesRegex(service.ActivationError, "预期前像不符"):
+                        service._write_private(tree, relative, candidate, expected=expected)
+                    # 拒绝发生在 marker/临时名发布之前；必须保留外部节点的完整
+                    # 字节、权限及身份，不能把外部保存变成可自动清理的恢复资料。
+                    self.assertEqual(actual, service._raw(tree, relative))
+                self.assertEqual([target.name], [item.name for item in target.parent.iterdir()])
+
+    def test_private_publication_accepts_matching_complete_expected(self):
+        relative = service._state_relative(self.project, "bindings")
+        candidate = {**self.binding, "generation": "c" * 32}
+        with directory_lock(self.state / "bindings", "central-project-state"), Tree(self.state) as tree:
+            # Node() 明确表示已核对的缺失，不能与省略 expected 的 None 混同。
+            service._write_private(tree, relative, json_bytes(self.binding), expected=Node())
+            expected = service._raw(tree, relative)
+            service._write_private(tree, relative, json_bytes(candidate), expected=expected)
+        self.assertEqual(candidate, service.read_binding_record(self.state, self.project)[1])
+        self.assertEqual([Path(relative).name], [item.name for item in (self.state / "bindings").iterdir()])
+
     def test_private_publication_roundtrip_and_sync_failure_restore_exact_inode(self):
         from manager import runtime_state
         relative = self.put("bindings", self.binding)
