@@ -167,6 +167,7 @@ class DevelopmentEntryTest(unittest.TestCase):
         env = {**self.env, "PATH": str(self.bin) + os.pathsep + self.env["PATH"]}
         project = self.root / "project"
         project.mkdir()
+        host_home = self.root / "home"
         version = (PACK / "product/VERSION").read_text(encoding="ascii").strip()
         expected = [f"awf-cli {version}（源码未打包）", f"中央源根：{PACK}",
                     "入口来源：source（显式源码开发）", f"物理载荷根：{PACK}"]
@@ -175,11 +176,15 @@ class DevelopmentEntryTest(unittest.TestCase):
                 result = self.run_entry(command, "--state-dir", "state", "--version", env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), expected)
-                roles = self.run_entry(command, "--state-dir", "state", "roles", "--project", "project",
+                # 独立 state 的宿主读取必须显式绑定本夹具 HOME；不能仅依赖环境
+                # 覆盖来绕过隔离保护。project 仍保留相对路径以验证真实调用目录。
+                roles = self.run_entry(command, "--state-dir", "state", "--host-home", str(host_home),
+                                       "roles", "--project", "project",
                                        "--platform", "codex", env=env)
                 self.assertEqual(roles.returncode, 0, roles.stderr)
                 self.assertEqual(json.loads(roles.stdout), {})
         self.assertFalse((self.root / "state").exists())
+        self.assertFalse(host_home.exists())
 
 
 @unittest.skipUnless(shutil.which("ruby"), "Ruby is required for the existing Formula install simulation")
