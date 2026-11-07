@@ -802,11 +802,11 @@ def status(state: Path, project: Path) -> dict:
     state, project = store.state_root(state), canonical_project(project)
     _, record = read_binding_record(state, project)
     _, journal = _journal(state, project)
-    conflicts, history = [], []
+    conflicts, history, recovery_conflicts = [], [], []
     phase = "unmanaged" if record is None else "enabled" if record["enabled"] else "disabled"
     if journal and journal["phase"] in {"prepared", "conflict"}:
         phase = journal["phase"]
-        conflicts.extend(journal.get("conflicts", []))
+        recovery_conflicts.extend(journal.get("conflicts", []))
     if record:
         try:
             store.load_core(record["runtime_binding"], state)
@@ -860,6 +860,11 @@ def status(state: Path, project: Path) -> dict:
     # 当前资源、历史恢复和发布许可分别计算，禁止从“历史丢失”推断项目停用，
     # 也不让资源仍可用掩盖全局 prepared 门。所有机器分支使用稳定 code/layer。
     issues = [{**row, "code": "current_resource_invalid", "layer": "current"} for row in conflicts]
+    issues.extend({**row, "code": "project_recovery_conflict", "layer": "recovery"} for row in recovery_conflicts)
+    project_pending = bool(journal and journal["phase"] in {"prepared", "conflict"})
+    if project_pending:
+        issues.append({"path": _state_relative(project, "transactions"), "reason": "项目事务尚未结算",
+                       "code": "project_transaction_pending", "layer": "recovery"})
     issues.extend(history)
     from .runtime_lifecycle import _read_lifecycle
     _, lifecycle = _read_lifecycle(state)
@@ -876,21 +881,21 @@ def status(state: Path, project: Path) -> dict:
     if drift:
         issues.append({"path": "runtime_binding", "reason": "项目实际绑定与有效策略版本不一致",
                        "code": "policy_drift", "layer": "admission"})
-    resources_healthy = bool(record and not conflicts and phase in {"enabled", "disabled"})
-    new_task_allowed = bool(record and record["enabled"] and resources_healthy and current_control and not global_pending and not drift)
+    resources_healthy = bool(record and not conflicts)
+    new_task_allowed = bool(record and record["enabled"] and resources_healthy and current_control and not global_pending and not project_pending and not drift)
     return {"schema_version": 1, "project": str(project), "state": phase,
             "enabled": bool(record and record["enabled"] and not conflicts and phase == "enabled"),
             "declared_enabled": bool(record and record["enabled"]),
             "resources_healthy": resources_healthy,
             "history_recoverable": not history,
             "new_task_allowed": new_task_allowed,
-            "management_write_allowed": not conflicts and not global_pending and not lifecycle_pending and not any(row["code"] == "history_modified" for row in history),
+            "management_write_allowed": not conflicts and not global_pending and not project_pending and not lifecycle_pending and not any(row["code"] == "history_modified" for row in history),
             "policy": policy["mode"], "effective_binding": effective, "issues": issues,
             "runtime_binding": record["runtime_binding"] if record else None,
             "previous_binding": record["previous_binding"] if record else None,
             "hosts": list(record["hosts"]) if record else [],
             "managed_paths": sorted(record["managed"]) if record else [],
-            "conflicts": conflicts,
+            "conflicts": conflicts + recovery_conflicts,
             "pending_transaction": journal["id"] if journal and journal["phase"] in {"prepared", "conflict"} else None}
 
 
@@ -914,12 +919,13 @@ class NativeEditReceipt:
     """合法模型事务的条件收据；由 native_edit_receipt 上下文管理其生命周期。"""
 
     def __init__(self, state: Path, project: Path, tree: Tree, machine_tree: Tree,
-                 before: Node, record: dict, changes: tuple):
+                 before: Node, record: dict, changes: tuple, native_context=None):
         self.state, self.project = state, project
         self.tree, self.machine_tree = tree, machine_tree
         self.before, self.record, self.changes = before, record, changes
         self.generation = uuid.uuid4().hex
         self.published = False
+        self.native_context = native_context
 
     def publish(self) -> dict:
         """放在现有 manager.service.commit 的 verify 回调内调用，失败由原事务撤回。
@@ -929,6 +935,15 @@ class NativeEditReceipt:
         与这个收据交错，后续机器写入也必须通过 generation 条件才可撤回。
         """
         record = unique_json(json_bytes(self.record))
+        deleting_hosts = {host for change in self.changes if change.after is None
+                          for host, (directory, suffix) in project_files.ROLE_PATHS.items()
+                          if change.relative.startswith(directory + "/") and change.relative.endswith(suffix)}
+        if deleting_hosts:
+            from . import native_agents
+            if self.native_context is None or not deleting_hosts <= set(native_agents.verified_hosts(self.state, context=self.native_context)):
+                # 本地文件已由原commit修改但机器收据尚未发布；此处失败交回原
+                # 事务精确恢复local。不能仅靠入口时的全局快照承诺仍可发现角色。
+                raise ActivationError("稀疏角色删除后全局归属已变化，拒绝发布模型收据")
         for change in self.changes:
             current = self.tree.read(change.relative)
             expected = Node() if change.after is None else Node("file", change.after, change.mode)
@@ -1057,7 +1072,7 @@ def native_edit_receipt(state: Path, project: Path, changes, *, native_context=N
             selected = _model_fields(change.after, host)
             if role_models.patch_artifact(change.before, host, selected) != change.after:
                 raise ActivationError("模型收据包含模型字段以外的变化")
-        receipt = NativeEditReceipt(state, project, tree, machine_tree, before, record, changes)
+        receipt = NativeEditReceipt(state, project, tree, machine_tree, before, record, changes, native_context)
         try:
             yield receipt
             if changes and not receipt.published:
