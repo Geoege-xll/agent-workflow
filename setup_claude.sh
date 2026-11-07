@@ -528,6 +528,15 @@ check_claude_contract() {
 validate_rendered_staging() {
   local stage role agent_name
   stage=$(mktemp -d)
+  # mktemp可能返回系统临时目录的别名，即使TMPDIR已是物理路径。这里只对
+  # 本函数刚创建的私有stage取physical root，使后续严格no-follow读取与清理
+  # 使用同一路径；用户项目、目标文件和角色叶节点仍沿原有归属/安全校验。
+  # 先拒绝已替换的链接/非目录叶，不能借cd物理化它而写入或删除未知目标。
+  if [[ -L "${stage}" || ! -d "${stage}" ]]; then
+    log_err "unsafe private Claude stage leaf"
+    return 1
+  fi
+  stage=$(cd -P -- "${stage}" && pwd -P)
   mkdir -p "${stage}/.claude/agents" "${stage}/.claude/skills"
   python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     stage-copy "${PACK_DIR}" "${stage}/.claude/skills"
