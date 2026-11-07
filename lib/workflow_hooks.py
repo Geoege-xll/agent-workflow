@@ -28,20 +28,22 @@ else:
     from lib.hosts.workflow_hook_settings import hook_mode
 
 OWNER = "agent-workflow-assist-v1"
-# 提醒只陈述分级和授权边界；脚本不能推导用户授权，也不能代替原等级的验证与 QA。
+# 提醒先指向已有的独立只读审计分支，避免把查问题误当成实施任务；
+# 仅实施适用 Light/Full 与默认委派，脚本仍不推导授权或替代验证与 QA。
 ENTRY = (
     "Workflow assist reminder: reuse valid approvals and evidence for work already completed in this session. "
-    "Keep read-only discussion and explicit user opt-outs within existing boundaries. "
-    "Only Light/Full; activate xy-workflow with delegation by default, except when the user explicitly asks PM to implement personally. "
+    "First apply xy-workflow's Standalone read-only audit branch for findings-only requests; keep explicit user opt-outs within existing boundaries. "
+    "Light/Full implementation activates xy-workflow with delegation by default, except when the user explicitly asks PM to implement personally. "
     "Light requires minimum verification and QA/documentation assessment at handoff, without mandatory Full planning/DAG; Full gates remain. "
     "New tasks use new native IDs and only self-contained current task packs, without copied PM/sibling history. "
     "Read required standards completely as needed, preserve choices such as no prototype update, and add no extra stages or records."
 )
 # 恢复摘要只能帮助定位上下文，不能代替原始授权、改变等级或批准 PM 接管。
 RECOVERY = (
-    "Workflow recovery reminder: check task level and personal-implementation authority against trusted original instructions and existing plans; "
+    "Workflow recovery reminder: first apply xy-workflow's Standalone read-only audit branch for findings-only requests; "
+    "for implementation, check task level and personal-implementation authority against trusted original instructions and existing plans; "
     "continue the current task with valid evidence without repeating completed related work. "
-    "Only Light/Full, with delegation by default and PM personal implementation only by explicit user instruction; Light requires minimum verification "
+    "Light/Full implementation uses delegation by default and PM personal implementation only by explicit user instruction; Light requires minimum verification "
     "and QA/documentation assessment at handoff, while Full gates remain. Reuse original IDs only for continuous same-task work or short rework; retirement prohibits reuse. "
     "New independent tasks never inherit complete PM/sibling history; resume/compact does not reset context. Summaries/old state create no exceptions. "
     "Restore only missing or changed relevant rules/plans, while still reading selected Skills' mandatory content completely."

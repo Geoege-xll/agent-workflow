@@ -11,7 +11,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `product/WORKFLOW.md` | 产品工作流权威，含 Light／Full、确认、所有权、QA 与收口 |
-| `product/VERSION` | 唯一人工维护版本值；当前 2.1.1 仍未公开发布 |
+| `product/VERSION` | 唯一人工维护版本值；公开版本以 Release 与 Tap 各自声明为准 |
 | `roles/xy-*.md` | 各角色技术职责与权限 |
 | `platforms/shared/skills/` | 九个内置 Skill 的唯一共用源（one shared source）及按需 references |
 | `platforms/codex/`、`platforms/claude/`、`platforms/antigravity/` | 三宿主模板、适配和 PM 平台细则 |
@@ -149,6 +149,26 @@ bash setup_all.sh --only=codex
 | Codex | `AGENTS.md`／`$xy-workflow` | `.codex/agents/xy-*.toml` | `.agents/skills/` |
 | Claude Code | `CLAUDE.md` → `AGENTS.md`／`/xy-workflow` | `.claude/agents/xy-*.md` | `.claude/skills/` |
 | Antigravity | `AGENTS.md`／`/xy-workflow` | `.agents/agents/xy-*.md` | `.agents/skills/` |
+
+### 源包可选 guard
+
+`scripts/guard.sh` 仅适用于源包作为待审计 Git 项目一级子目录的开发布局：
+脚本固定以源包父目录为审计根，读取源包根的 `project.yaml`。普通中央薄项目没有该脚本，
+不能在其中运行 `.agent-workflow/scripts/guard.sh`，也不能把独立源码仓库根误当成审计根。
+默认仅提示已改文件的模块归属并退出 0；在源包 `project.yaml` 配置禁止前缀后，显式严格模式命中才退出 1：
+
+```yaml
+# /path/to/project/agent_workflow/project.yaml（源包配置，可选）
+deny_prefixes:
+  - secrets/
+  - production-keys/
+```
+
+```bash
+GUARD_STRICT=1 bash /path/to/project/agent_workflow/scripts/guard.sh
+```
+
+`deny_prefixes` 仅检查审计根中的已改路径，不是操作系统写入锁，也不代替任务 `owned_paths`。
 
 ### Claude 原生生成合同
 

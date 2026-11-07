@@ -1,7 +1,7 @@
 # Agent Workflow Pack 2.1
 
 面向项目的原生多 Agent 工作流，支持 **Claude Code、Codex、Antigravity**。
-当前源码版本为 **2.1.1**，唯一版本源为 `product/VERSION`；2.1.1 是本地稳定候选，尚未公开发布。
+当前源码版本为 **2.1.1**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
 公共版本与资产以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 和 Tap 声明为准。
 
 在 macOS/Linux 使用中央程序管理已有项目：项目仅保留配置、薄桥和宿主原生入口，

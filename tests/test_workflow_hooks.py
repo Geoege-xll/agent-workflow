@@ -261,7 +261,13 @@ class HookTest(unittest.TestCase):
         # 这里只核对回调合同，不把提醒文本匹配当成模型服从或用户授权的证据。
         self.assertIn("explicit user opt-outs", hooks.ENTRY)
         self.assertIn("already completed", hooks.ENTRY)
-        self.assertIn("Light/Full", hooks.ENTRY)
+        # 现有提醒由真实宿主回调加载；只读先分流，Light/Full 与默认委派
+        # 明确属于实施，避免将 findings-only 审计误导成实施依赖图。
+        for message in (hooks.ENTRY, hooks.RECOVERY):
+            self.assertIn("Standalone read-only audit branch for findings-only requests", message)
+            self.assertIn("Light/Full implementation", message)
+            self.assertLess(message.index("Standalone read-only audit"), message.index("Light/Full implementation"))
+            self.assertNotIn("Only Light/Full", message)
         self.assertNotIn("Trivial", hooks.ENTRY + hooks.RECOVERY)
         self.assertIn("retirement prohibits reuse", hooks.RECOVERY)
         # 提醒是模型可见串，必须英文；不筛查整个 Python 文件，中文实现注释继续保留。

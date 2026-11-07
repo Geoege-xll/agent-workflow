@@ -8,10 +8,10 @@
 安装时核对归档 SHA-256；用已安装入口的 `--version` 核对实际版本和中央程序位置。
 
 当前源码版本为 **2.1.1**，唯一人工维护值在 `product/VERSION`。
-2.1.1 当前仅为本地稳定候选；公开 GitHub／Tap 2.1.0 资产保持原样，本轮不发布。
-GitHub 已公开的版本与资产以 [Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
+源码版本不代表公开渠道已发布该版本；GitHub 已公开的版本与资产以
+[Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准，Homebrew 版本以 Tap 中的 Formula 为准。
 下面的公共安装命令只安装 Tap 已声明的版本；发布 GitHub Release 不会自动更新公共 Tap，
-不能据此认定已经取得 2.1.1。
+安装后应以 `awf-cli --version` 核对实际取得的版本与来源。
 
 ## 用户安装
 
@@ -78,7 +78,7 @@ bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1
 测试、发布工具或 Python 缓存。文档仅显式包含 `docs/usage.md`、`docs/development.md`、
 `docs/homebrew.md`，保留 README 的离线导航；不递归打包整个 docs，历史 plans、原型与私有材料仍排除。
 存在的根目录许可证会一并打包，但构建器不替作者选择
-或生成许可证。仓库首次公开发布前，请自行确定代码授权方式。
+或生成许可证。发行前应确认代码授权方式及适用许可证。
 
 归档固定排序、时间戳、所有者及权限；在源内容/可执行位及工具链一致时，重复构建得到
 相同字节。Formula 的 URL 指向同一版本的 **Release 资产**，SHA-256 来自本次构建的
@@ -107,8 +107,8 @@ bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1 --outp
    然后创建 **Draft Release**；它不会自动公开 Release，也不会推送 Tap。
 3. 核对 Draft 的目标提交、压缩包、校验文件和 `awf-cli.rb` 后，再手动发布 Release。
    同名标签若指向另一个提交则拒绝，已有 Release/资产也不会自动替换。
-4. 确认后创建公开仓库 `Geoege-xll/homebrew-tap`。从该 Release 下载
-   `awf-cli.rb`，将其作为 Tap 仓库的 `Formula/awf-cli.rb` 提交并推送。
+4. 从该 Release 下载 `awf-cli.rb`，将其作为公开仓库 `Geoege-xll/homebrew-tap`
+   的 `Formula/awf-cli.rb` 更新、提交并推送。
    应使用该 Release 同一次构建的 Formula，不混用其他本地构建的校验值。
 5. 在获准的机器上完成真实安装验收：
 
