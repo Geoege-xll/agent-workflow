@@ -56,15 +56,20 @@ class Page(HTMLParser):
 
 class RequirementHtmlTest(unittest.TestCase):
     def setUp(self):
-        # 当前任务可指定唯一 scratch，其他调用仍沿仓库普通临时夹具约定；没有私有依赖缓存。
         supplied = os.environ.get("AWF_TEST_SCRATCH")
-        if supplied:
-            self.work = Path(supplied) / "requirement-html-fixtures" / self._testMethodName
-            self.work.mkdir(parents=True, exist_ok=True)
-        else:
-            temporary = tempfile.TemporaryDirectory(prefix="requirement-html-")
-            self.addCleanup(temporary.cleanup)
-            self.work = Path(temporary.name).resolve()
+        parent = Path(supplied) / "requirement-html-fixtures" if supplied else None
+        if parent is not None:
+            parent.mkdir(parents=True, exist_ok=True)
+        # 同一请求仍复用既有父目录；每次TestCase实例拥有唯一短命目录，防止
+        # 前次合法负控留下的alias/hardlink、手改HTML、故损core或安装项目串入
+        # 下一次调用。既有固定名称历史目录及engine.log从不删除或覆盖。
+        temporary = tempfile.TemporaryDirectory(prefix=self._testMethodName + "-", dir=parent)
+        self.addCleanup(temporary.cleanup)
+        self.work = Path(temporary.name).resolve()
+        # cleanup按后进先出执行：先转移本次真实依赖的完整过程证据，再回收
+        # 本实例目录；setUp或测试中途失败也进入相同出口，不丢失唯一日志。
+        self.evidence_log = os.environ.get("AWF_TEST_EVIDENCE_LOG")
+        self.addCleanup(self.preserve_process_evidence)
         self.root = self.work / "project"
         self.root.mkdir(exist_ok=True)
         (self.root / "project.yaml").write_bytes((PACK / "project.yaml").read_bytes())
@@ -74,6 +79,18 @@ class RequirementHtmlTest(unittest.TestCase):
         self.source.write_text(SAMPLE, encoding="utf-8", newline="")
         self.source.chmod(0o640)
         self.target = self.source.with_suffix(".html")
+
+    def preserve_process_evidence(self):
+        """只追加本实例已知日志，不收集业务目录或把旧日志当成本轮证据。"""
+        if not self.evidence_log:
+            return
+        for name in ("engine.log", "install.log", "installed-render.log", "installed-check.log"):
+            path = self.work / name
+            if path.is_file():
+                with Path(self.evidence_log).open("ab") as output:
+                    output.write((f"\n--- REQUIREMENT HTML PROCESS EVIDENCE {self.id()} / {name} ---\n").encode("utf-8"))
+                    output.write(path.read_bytes())
+                    output.write(b"\n--- REQUIREMENT HTML PROCESS EVIDENCE END ---\n")
 
     def process(self, action="render", **kwargs):
         return renderer.process(action, self.root, "docs/plans/change.md", REQUEST, **kwargs)
@@ -92,10 +109,6 @@ class RequirementHtmlTest(unittest.TestCase):
             self.assertEqual(hashlib.sha256(body).hexdigest(), facts["sha256"])
             blob = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
             self.assertEqual(blob, facts["git_blob"])
-        # 固定 scratch 复用失败夹具时更新同一源的验证版本，保留原页与 engine.log，
-        # 让本测试仍覆盖一次真实渲染；fresh 分支在下文单独验证。
-        if self.target.exists():
-            self.source.write_text(SAMPLE + "\n验证输入版本：" + renderer.digest(self.target.read_bytes()), encoding="utf-8")
         before = renderer.snapshot(self.source)
         calls = []
         actual_run = subprocess.run
@@ -140,7 +153,8 @@ class RequirementHtmlTest(unittest.TestCase):
         self.source.write_text(SAMPLE + "\n新增已决定的验收。\n", encoding="utf-8")
         with self.assertRaisesRegex(renderer.RequirementHtmlError, "过期"):
             self.process("check")
-        self.assertTrue(self.process()["rendered"])
+        with patch.object(renderer.subprocess, "run", side_effect=capture):
+            self.assertTrue(self.process()["rendered"])
         self.assertEqual(Path(result["html"]), self.target)
         self.assertEqual(self.process("check")["status"], "fresh")
 
