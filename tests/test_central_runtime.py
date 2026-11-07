@@ -112,6 +112,56 @@ class CentralRuntimeTest(RuntimeFixture, unittest.TestCase):
         project_service.apply_project(project_service.preview_project(self.state, disabled, "enable"))
         self.assertEqual(self.alternate.binding(), projects.status(self.state, disabled)["runtime_binding"])
 
+    def test_first_enable_requires_explicit_install_and_activation_without_writes(self):
+        empty_state = self.workspace / ("empty-state-" + uuid.uuid4().hex)
+        before = sorted(self.project.iterdir())
+        for action, enable in (("enable", False), ("add", True)):
+            with self.subTest(action=action), self.assertRaisesRegex(ValueError, "runtime install.*runtime activate"):
+                project_service.preview_project(empty_state, self.project, action, enable=enable)
+            self.assertFalse(empty_state.exists())
+            self.assertEqual(before, sorted(self.project.iterdir()))
+        # 用户明确选择来源仍是受支持的独立合同；仅预览，不隐式创建state或导入。
+        explicit = project_service.preview_project(empty_state, self.project, "enable", source_root=self.source)
+        self.assertEqual(self.source, explicit.runtime_plan.source_root)
+        self.assertFalse(empty_state.exists())
+        self.assertEqual(before, sorted(self.project.iterdir()))
+
+    def test_summary_freezes_dispositions_and_effective_bindings(self):
+        self.enable()
+        pinned = self.workspace / ("pinned-summary-" + uuid.uuid4().hex[:8]); pinned.mkdir(); self.enable(pinned)
+        disabled = self.workspace / ("disabled-summary-" + uuid.uuid4().hex[:8]); disabled.mkdir(); self.enable(disabled)
+        unbound = self.workspace / ("unbound-summary-" + uuid.uuid4().hex[:8]); unbound.mkdir()
+        project_service.apply_project(project_service.preview_project(self.state, pinned, "use", content_id=self.core.content_id))
+        projects.apply(projects.preview(self.state, disabled, "disable"))
+        self.register(self.project, pinned, disabled, unbound)
+        plan = self.plan()
+        frozen = plan.summary
+        rows = {row["project"]: row for row in frozen["projects"]}
+        expected = ((self.project, "apply", True, self.core.binding(), self.alternate.binding()),
+                    (pinned, "skipped_pinned", True, self.core.binding(), self.core.binding()),
+                    (disabled, "on_enable", False, self.core.binding(), self.alternate.binding()),
+                    (unbound, "not_enabled", False, None, self.alternate.binding()))
+        for project, disposition, enabled, applied, effective in expected:
+            with self.subTest(project=project):
+                row = rows[str(project)]
+                self.assertEqual(disposition, row["disposition"])
+                self.assertEqual(enabled, row["declared_enabled"])
+                self.assertEqual(applied, row["applied_binding"])
+                self.assertEqual(effective, row["effective_after"])
+                self.assertTrue(row["reason"])
+        self.assertEqual("missing", read_state(self.state, policy.ACTIVATION).kind)
+        # 模拟确认前策略/current漂移；预览展示仍只反映本提案捕获的前像，真正
+        # apply的原有CAS会独立拒绝漂移。不得因重绘预览而混入另一时刻的数据。
+        path = self.state / policy.policy_relative(pinned)
+        path.write_bytes(json_bytes(policy.policy_value(pinned, "pinned", self.alternate.binding())))
+        self.set_current(self.alternate.binding())
+        with patch.object(projects, "status", side_effect=AssertionError("summary must not read live status")), \
+                patch.object(policy, "snapshot", side_effect=AssertionError("summary must not read live policy")):
+            self.assertEqual(frozen, plan.summary)
+        rows[str(self.project)]["effective_after"]["content_id"] = "0" * 64
+        self.assertEqual(self.alternate.binding(), plan.binding)
+        self.assertEqual(self.alternate.binding(), next(row for row in plan.summary["projects"] if row["project"] == str(self.project))["effective_after"])
+
     def test_preview_cancel_and_registry_drift_are_zero_project_writes(self):
         self.enable(); self.register(self.project)
         machine = projects.read_binding_record(self.state, self.project)[0]
