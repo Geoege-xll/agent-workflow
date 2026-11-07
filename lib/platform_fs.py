@@ -34,6 +34,20 @@ def publish_exclusive(source: Path, target: Path) -> None:
         os.unlink(source)
 
 
+def publish_exclusive_at(source: str, target: str, *, src_dir_fd: int, dst_dir_fd: int) -> None:
+    """在已锚定父目录中排他移动完整节点，保留 inode 及其原权限。
+
+    POSIX 复用原 no-follow link/unlink；Windows 用同卷句柄 rename，避免
+    临时双硬链窗口触发普通文件安全守卫。软链输入只允许已经由业务验证的叶，
+    不能借本函数跟随目标或复制正文；目标碰撞必须保留两边并报告失败。
+    """
+    if os.name == "nt":
+        os.rename(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+    else:
+        os.link(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, follow_symlinks=False)
+        os.unlink(source, dir_fd=src_dir_fd)
+
+
 @contextmanager
 def project_install_lock(project: Path):
     """Hold the same project identity until setup writers and recovery finish."""

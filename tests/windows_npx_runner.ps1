@@ -1,7 +1,7 @@
 # 此脚本仅在一次性 GitHub Windows runner 中验证真实账户能力。
 # 产品安装器不会调用此脚本、创建账户或修改任何账户权限。
 param(
-    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup')]
+    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup', 'native-backend')]
     [string]$Mode = 'native-capabilities'
 )
 
@@ -135,16 +135,17 @@ $negativeBranch = 'refs/heads/ci/windows-central-npm-2.1.1'
 $negativeSubkey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
 $negativeValue = 'AllowDevelopmentWithoutDevLicense'
 
-function Assert-NegativeEnvironment {
+function Assert-HostedEnvironment([bool]$RequireTemporaryBranch) {
     if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
-        $env:GITHUB_REPOSITORY -cne $negativeRepository -or $env:GITHUB_REF -cne $negativeBranch) {
-        throw '负向 fixture 仅授权本仓临时 CI 分支的 GitHub-hosted 一次性 VM'
+        $env:GITHUB_REPOSITORY -cne $negativeRepository -or
+        ($RequireTemporaryBranch -and $env:GITHUB_REF -cne $negativeBranch)) {
+        throw '原生 fixture 仅授权本仓 GitHub-hosted 一次性 VM；负向必须在临时 CI 分支'
     }
     $head = & git -C (Split-Path $PSScriptRoot -Parent) rev-parse HEAD
     if ($LASTEXITCODE -ne 0 -or $head -cne $env:GITHUB_SHA) {
         throw '实际 checkout HEAD 与本次 GitHub SHA 不符'
     }
-    Write-Host "负向 fixture 环境：$env:RUNNER_ENVIRONMENT $env:GITHUB_REPOSITORY $env:GITHUB_REF $head"
+    Write-Host "原生 fixture 环境：$env:RUNNER_ENVIRONMENT $env:GITHUB_REPOSITORY $env:GITHUB_REF $head"
 }
 
 function Open-NegativeRegistry {
@@ -381,11 +382,15 @@ function Invoke-NegativeFixture {
 }
 
 if ($Mode -in @('native-negative-fixture', 'native-negative-cleanup')) {
-    Assert-NegativeEnvironment
+    Assert-HostedEnvironment $true
     if ($Mode -eq 'native-negative-cleanup') { Complete-NegativeFixture $true }
     else { Invoke-NegativeFixture }
     return
 }
+
+# 正向后端也由默认 acceptance 消费，允许 main 上同一 hosted/仓库/HEAD
+# 绑定；只有会修改 registry 的负向 fixture 和 cleanup 才限制临时分支。
+if ($Mode -eq 'native-backend') { Assert-HostedEnvironment $false }
 
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
@@ -405,12 +410,17 @@ try {
     & "$env:SystemRoot\System32\icacls.exe" $root /grant ('*' + $sid + ':(OI)(CI)F') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw '测试 SID 的 fixture ACL 设置失败' }
     Write-Host "宿主管理员 SID: $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
-    & $python -I -B -X utf8 $probe --probe host-directory --root $root
-    if ($LASTEXITCODE -ne 0) { $failures.Add("host-directory exit=$LASTEXITCODE") }
-    Invoke-OrdinaryProbe 'ordinary-denied' $credential
-    [AwfProbeRights]::Set($sid, $true)
-    $rightsAssigned = $true
-    Invoke-OrdinaryProbe 'ordinary-allowed' $credential
+    if ($Mode -eq 'native-backend') {
+        # 只运行当前新增真实后端消费者；不重复已经通过的能力/目录矩阵。
+        Invoke-OrdinaryProbe 'backend-native' $credential
+    } else {
+        & $python -I -B -X utf8 $probe --probe host-directory --root $root
+        if ($LASTEXITCODE -ne 0) { $failures.Add("host-directory exit=$LASTEXITCODE") }
+        Invoke-OrdinaryProbe 'ordinary-denied' $credential
+        [AwfProbeRights]::Set($sid, $true)
+        $rightsAssigned = $true
+        Invoke-OrdinaryProbe 'ordinary-allowed' $credential
+    }
 } catch {
     $failures.Add("preparation: $($_.Exception.Message)")
 } finally {

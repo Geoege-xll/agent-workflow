@@ -133,5 +133,32 @@ class WindowsRenameDurabilityContractTest(unittest.TestCase):
             self.assertEqual(events, ["flush", "rename", "flush"])
 
 
+
+
+class WindowsSymlinkReparseContractTest(unittest.TestCase):
+    def payload(self, substitute=r"\??\C:\core\xy-workflow", shown=r"C:\core\xy-workflow",
+                *, tag=0xA000000C, flags=0):
+        import struct
+        substitute, shown = substitute.encode("utf-16-le"), shown.encode("utf-16-le")
+        return struct.pack("<IHHHHHHI", tag, 12 + len(substitute) + len(shown), 0,
+                           0, len(substitute), len(substitute), len(shown), flags) + substitute + shown
+
+    def test_real_substitute_target_is_authoritative_and_empty_display_is_allowed(self):
+        self.assertEqual(fs._decode_symlink_reparse(self.payload()), r"C:\core\xy-workflow")
+        self.assertEqual(fs._decode_symlink_reparse(self.payload(shown="")), r"C:\core\xy-workflow")
+
+    def test_other_tags_relative_targets_aliases_and_malformed_bounds_are_rejected(self):
+        import struct
+        odd = bytearray(self.payload())
+        struct.pack_into("<H", odd, 8, 1)
+        invalid = [self.payload(tag=0xA0000003), self.payload(flags=1),
+                   self.payload(shown=r"C:\other"), self.payload(substitute=r"\??\UNC\server\share"),
+                   self.payload(substitute=r"\??\C:\core\..\outside"), bytes(odd), self.payload()[:19],
+                   self.payload()[:-1]]
+        for data in invalid:
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                fs._decode_symlink_reparse(data)
+
+
 if __name__ == "__main__":
     unittest.main()

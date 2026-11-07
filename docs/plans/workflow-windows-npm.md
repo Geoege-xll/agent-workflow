@@ -44,7 +44,7 @@ QA后PM原位更新本主题及同名HTML，使用实际required生命周期解�
 
 普通npm账号尚未注册／登录，当前不发布。发布准备记录在request-id publish-tap-npm-2.1.0-20261107的既有scratch；本实现请求使用request-id windows-central-npm-2.1.1-20261107的唯一scratch及其中单一graph和作者／CI完整日志。来源分支main基线e2c981b，5处外部修改留在原检出；实现工作树windows-fs，后续集成工作树windows-integration，当前无已验收Windows候选。
 
-能力探针检查点52cb9e83／原生run42331944946已确认宿主及普通用户目录fsync通过、非管理员赋权后真实目录SYMLINK通过；整次run失败是无权限用户也能创建链接，缺能力fixture不成立。完整原日志在本请求windows-capabilities.log，前三次输出均保留，未进入中央安装验收。当前先补严格限定且可恢复的CI负向fixture，再继续生产适配与完整安装验证；不将探针通过记为BUILD_VERIFIED或QA PASS。
+能力前提已完成原生补证：检查点52cb9e83／run42331944946证明宿主和普通用户目录fsync、非管理员赋权后的真目录SYMLINK；c95029d8／run42333657776证明同flags3下真实无权限拒绝、无链接且sentinel不变，恢复DWORD1后的普通用户能力调用及finally／always清理均通过。原始四轮输出均保留在本请求windows-capabilities.log，前三轮失败未覆盖。当前继续生产Windows文件系统与中央事务适配，再迁移当前npx E2E、准备2.1.1元数据并进行完整安装验收；能力探针绿色不作为BUILD_VERIFIED或QA PASS。
 
 ## 验收结果与当前已交付行为
 

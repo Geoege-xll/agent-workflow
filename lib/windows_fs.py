@@ -73,6 +73,10 @@ def _api():
         "CreateFileW": (HANDLE, [ctypes.c_wchar_p, DWORD, DWORD, HANDLE, DWORD, DWORD, HANDLE]),
         "CloseHandle": (BOOL, [HANDLE]),
         "CreateDirectoryW": (BOOL, [ctypes.c_wchar_p, HANDLE]),
+        "CreateSymbolicLinkW": (ctypes.c_uint8, [ctypes.c_wchar_p, ctypes.c_wchar_p, DWORD]),
+        "CreateHardLinkW": (BOOL, [ctypes.c_wchar_p, ctypes.c_wchar_p, HANDLE]),
+        "DeviceIoControl": (BOOL, [HANDLE, DWORD, HANDLE, DWORD, HANDLE, DWORD,
+                                   ctypes.POINTER(DWORD), HANDLE]),
         "GetFileInformationByHandle": (BOOL, [HANDLE, ctypes.POINTER(_Info)]),
         "GetFileInformationByHandleEx": (BOOL, [HANDLE, ctypes.c_int, HANDLE, DWORD]),
         "GetVolumeInformationByHandleW": (BOOL, [HANDLE, ctypes.c_wchar_p, DWORD, HANDLE,
@@ -207,6 +211,78 @@ def _stat_info(info):
         {"st_atime_ns": accessed, "st_mtime_ns": modified, "st_ctime_ns": created,
          "st_file_attributes": info.attributes},
     )
+
+
+
+def _decode_symlink_reparse(data: bytes) -> str:
+    """只解码绝对本地目录 SYMLINK 的真实替代目标，不信任显示名称。"""
+    import struct
+    if len(data) < 20:
+        raise ValueError("truncated Windows symbolic-link reparse data")
+    tag, length, _, substitute_offset, substitute_length, print_offset, print_length, flags = (
+        struct.unpack_from("<IHHHHHHI", data))
+    if tag != 0xA000000C or flags != 0 or length < 12 or 8 + length > len(data):
+        raise ValueError("only absolute native symbolic links are supported")
+    paths = data[20:8 + length]
+
+    def text(offset, size):
+        if offset % 2 or size % 2 or offset + size > len(paths):
+            raise ValueError("invalid Windows symbolic-link string bounds")
+        value = paths[offset:offset + size].decode("utf-16-le", errors="strict")
+        if "\x00" in value:
+            raise ValueError("embedded NUL in Windows symbolic-link target")
+        return value
+
+    def local(value):
+        if value.startswith("\\??\\"):
+            value = value[4:]
+        path = PureWindowsPath(value)
+        if (not path.is_absolute() or len(path.drive) != 2 or path.drive[1] != ":"
+                or not path.drive[0].isascii() or not path.drive[0].isalpha()):
+            raise ValueError("symbolic-link target must be an absolute local drive path")
+        # PureWindowsPath 会折叠点分量；先检查原始字符串，防止别名被规范化掩盖。
+        for part in value[2:].replace("\\", "/").split("/"):
+            if part:
+                validate_component(part)
+        return str(path)
+
+    target = local(text(substitute_offset, substitute_length))
+    if print_length and local(text(print_offset, print_length)).casefold() != target.casefold():
+        raise ValueError("symbolic-link display and substitute targets disagree")
+    return target
+
+
+def _symlink_target(handle) -> str:
+    buffer = ctypes.create_string_buffer(16 * 1024)
+    returned = DWORD()
+    _check(_api().kernel.DeviceIoControl(
+        handle, 0x000900A8, None, 0, buffer, len(buffer), ctypes.byref(returned), None))
+    if returned.value > len(buffer):
+        raise ValueError("oversized Windows reparse result")
+    return _decode_symlink_reparse(buffer.raw[:returned.value])
+
+
+def _open_symlink_handle(path, access=0x80):
+    """锚定链接叶自身，拒绝 junction/相对链接/文件链接，不打开目标正文。
+
+    普通 _open_handle 永远拒绝重解析点。本分支仅供不跟随目标的链接元操作，
+    高层仍须验证精确 Skill 名、选定核心与事务身份，不能当普通文件读取入口。
+    """
+    path = absolute_path(path)
+    handle = _api().kernel.CreateFileW(
+        str(path), access, SHARE_READ, None, 3, BACKUP_SEMANTICS | OPEN_REPARSE_POINT, None)
+    if handle == INVALID_HANDLE:
+        _check(False, path)
+    try:
+        info = _information(handle)
+        if (info.attributes & (ATTR_DIRECTORY | ATTR_REPARSE) != (ATTR_DIRECTORY | ATTR_REPARSE)
+                or info.links != 1):
+            raise ValueError(f"single-link native directory symbolic link required: {path}")
+        _symlink_target(handle)
+    except BaseException:
+        _close(handle)
+        raise
+    return handle
 
 
 class Directory:
@@ -522,7 +598,8 @@ class _WindowsOS:
         self._directories = {}
         self._files = {}
         self._next = 1 << 30
-        self.supports_dir_fd = {self.open, self.stat, self.unlink, self.mkdir, self.replace, self.rename}
+        self.supports_dir_fd = {self.open, self.stat, self.unlink, self.mkdir, self.replace,
+                                self.rename, self.link, self.symlink, self.readlink}
         self.supports_follow_symlinks = {self.stat}
         self.supports_fd = {self.scandir, self.listdir}
 
@@ -709,9 +786,11 @@ class _WindowsOS:
                 flush_directory(parent)
             info = self.lstat(source)
             directory = _stat.S_ISDIR(info.st_mode)
-            handle = _open_handle(source, DELETE | READ | (0 if directory else 0x40000),
-                                  directory=directory,
-                                  sharing=SHARE_READ | (SHARE_WRITE if directory else 0))
+            symbolic = _stat.S_ISLNK(info.st_mode)
+            handle = (_open_symlink_handle(source, DELETE | 0x80) if symbolic else
+                      _open_handle(source, DELETE | READ | (0 if directory else 0x40000),
+                                   directory=directory,
+                                   sharing=SHARE_READ | (SHARE_WRITE if directory else 0)))
             try:
                 opened = _information(handle)
                 if identity is not None and identity != (opened.volume, opened.index_high << 32 | opened.index_low):
@@ -725,7 +804,7 @@ class _WindowsOS:
                         if (_stat.S_ISLNK(target_info.st_mode)
                                 or (not _stat.S_ISDIR(target_info.st_mode) and target_info.st_nlink != 1)):
                             raise ValueError(f"unsafe publication target: {target}")
-                        if not directory and _stat.S_ISREG(target_info.st_mode):
+                        if not directory and not symbolic and _stat.S_ISREG(target_info.st_mode):
                             old = _open_handle(target, READ)
                             try:
                                 _copy_permissions(old, handle)
@@ -747,6 +826,47 @@ class _WindowsOS:
             for parent in parents:
                 flush_directory(parent)
 
+    def readlink(self, path, *, dir_fd=None):
+        path = self._path(path, dir_fd)
+        with Directory(path.parent):
+            handle = _open_symlink_handle(path)
+            try:
+                return _symlink_target(handle)
+            finally:
+                _close(handle)
+
+    def symlink(self, source, target, target_is_directory=False, *, dir_fd=None):
+        if not target_is_directory:
+            raise ValueError("Windows managed symbolic links must target directories")
+        source, target = absolute_path(source), self._path(target, dir_fd)
+        # 创建地点和目标可在不同本地 NTFS 卷；目录软链不能错误地改用硬链接。
+        # 双边祖先和真实目标目录都在调用期间拒绝删除共享，不能换成 junction。
+        with Directory(source), Directory(target.parent):
+            flush_directory(target.parent)
+            _check(_api().kernel.CreateSymbolicLinkW(str(target), str(source), 0x1 | 0x2), target)
+            handle = _open_symlink_handle(target)
+            try:
+                if _symlink_target(handle).casefold() != str(source).casefold():
+                    raise ValueError("new Windows symbolic-link target changed")
+            finally:
+                _close(handle)
+            flush_directory(target.parent)
+
+    def link(self, source, target, *, src_dir_fd=None, dst_dir_fd=None, follow_symlinks=True):
+        source, target = self._path(source, src_dir_fd), self._path(target, dst_dir_fd)
+        with Directory(source.parent), Directory(target.parent) as destination:
+            # 这是真正的普通文件硬链接。保持源身份、拒绝既有多硬链和重解析点；
+            # 创建后两名会共同报告 nlink=2，普通读写守卫仍拒绝，绝不伪装 rename。
+            handle = _open_handle(source, READ, sharing=SHARE_READ)
+            try:
+                if _information(handle).volume != _information(destination.handle).volume:
+                    raise ValueError("hard links require the same local NTFS volume")
+                flush_directory(target.parent)
+                _check(_api().kernel.CreateHardLinkW(str(target), str(source), None), target)
+            finally:
+                _close(handle)
+            flush_directory(target.parent)
+
     def replace(self, source, target, *, src_dir_fd=None, dst_dir_fd=None):
         self._rename(self._path(source, src_dir_fd), self._path(target, dst_dir_fd), True)
 
@@ -759,7 +879,12 @@ class _WindowsOS:
     def _remove(self, path, *, directory=False):
         with Directory(path.parent):
             flush_directory(path.parent)
-            handle = _open_handle(path, DELETE | 0x80, directory=directory)
+            info = self.lstat(path)
+            # unlink 仅操作已验证的目录软链叶，不进入目标目录；rmdir 仍只
+            # 接受真实目录。普通文件的单硬链检查继续由 _open_handle 强制执行。
+            handle = (_open_symlink_handle(path, DELETE | 0x80)
+                      if not directory and _stat.S_ISLNK(info.st_mode) else
+                      _open_handle(path, DELETE | 0x80, directory=directory))
             try:
                 disposition = BOOL(True)
                 _check(_api().kernel.SetFileInformationByHandle(

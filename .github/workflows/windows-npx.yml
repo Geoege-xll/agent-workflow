@@ -13,6 +13,7 @@ on:
           - acceptance
           - native-capabilities
           - native-negative-fixture
+          - native-backend
 
 permissions:
   contents: read
@@ -66,6 +67,10 @@ jobs:
         if: always() && inputs.validation_mode == 'native-negative-fixture'
         run: |
           & ./tests/windows_npx_runner.ps1 -Mode native-negative-cleanup
+      - name: Native anchored backend consumers under an ordinary account
+        if: inputs.validation_mode == 'native-backend' || inputs.validation_mode == 'acceptance'
+        run: |
+          & ./tests/windows_npx_runner.ps1 -Mode native-backend
       - name: Portable contracts and native Job and Hook protocol checks
         if: inputs.validation_mode == 'acceptance'
         run: |

@@ -24,7 +24,9 @@ def native_fs():
     return module
 
 
-@unittest.skipUnless(os.name == "nt", "能力结论必须来自原生 Windows")
+# 能力 fixture 只能经显式 CLI 准备账户后执行；通常 unittest discovery
+# 只发现下面独立的后端消费者，不能把宿主管理员当无权限普通用户夹具。
+@unittest.skipUnless(os.name == "nt" and __name__ == "__main__", "能力探针需要显式原生 CLI")
 class WindowsCapabilityProbe(unittest.TestCase):
     """由受控 CI runner 分别用宿主令牌和两个真实标准用户登录令牌执行。"""
 
@@ -122,11 +124,116 @@ class WindowsCapabilityProbe(unittest.TestCase):
             self.fs._close(token)
 
 
+
+@unittest.skipUnless(os.name == "nt", "需要原生 Windows NTFS 后端消费者")
+class WindowsBackendNativeTest(unittest.TestCase):
+    """只验新后端行为；正常 discovery 不依赖能力探针的管理员/权限 fixture。"""
+
+    def setUp(self):
+        if str(PACK) not in sys.path:
+            sys.path.insert(0, str(PACK))
+        from lib import platform_fs, windows_fs
+        self.platform, self.fs = platform_fs, windows_fs
+        self.backend = platform_fs.os
+        self.assertIs(self.backend, windows_fs.secure_os)
+        if PROBE_MODE == "backend-native":
+            shell = ctypes.WinDLL("shell32", use_last_error=True)
+            shell.IsUserAnAdmin.restype = ctypes.c_int32
+            self.assertFalse(shell.IsUserAnAdmin(), "显式后端 CI 必须使用真实标准用户")
+        self.temp = tempfile.TemporaryDirectory(prefix="backend-", dir=PROBE_ROOT)
+        self.root = Path(self.temp.name).resolve()
+        self.addCleanup(self.temp.cleanup)
+        self.parent = self.backend.open(self.root, self.fs.DIRECTORY | self.fs.NOFOLLOW)
+        self.addCleanup(self.backend.close, self.parent)
+
+    def test_directory_symlink_read_rename_unlink_never_follows_target(self):
+        target = self.root / "真实目标"
+        target.mkdir()
+        (target / "sentinel").write_bytes(b"preserve target")
+        self.backend.symlink(target, "xy-workflow", dir_fd=self.parent, target_is_directory=True)
+        before = self.backend.stat("xy-workflow", dir_fd=self.parent, follow_symlinks=False)
+        self.assertEqual(self.backend.readlink("xy-workflow", dir_fd=self.parent), str(target))
+        with self.assertRaises(ValueError):
+            self.backend.open("xy-workflow", self.fs.DIRECTORY, dir_fd=self.parent)
+        with self.assertRaises(ValueError):
+            self.backend.open(target.parent / "xy-workflow" / "sentinel", os.O_RDONLY)
+        self.backend.rename("xy-workflow", "held", src_dir_fd=self.parent, dst_dir_fd=self.parent)
+        after = self.backend.stat("held", dir_fd=self.parent, follow_symlinks=False)
+        self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
+        (self.root / "collision").write_bytes(b"preserve collision")
+        with self.assertRaises(FileExistsError):
+            self.backend.rename("held", "collision", src_dir_fd=self.parent, dst_dir_fd=self.parent)
+        self.assertEqual(self.backend.readlink("held", dir_fd=self.parent), str(target))
+        self.backend.unlink("held", dir_fd=self.parent)
+        self.assertEqual((target / "sentinel").read_bytes(), b"preserve target")
+        self.assertEqual((self.root / "collision").read_bytes(), b"preserve collision")
+
+    def test_hardlink_is_real_and_ordinary_reads_writes_and_deletes_remain_guarded(self):
+        source = self.root / "source"
+        source.write_bytes(b"preserve hardlink")
+        self.backend.link("source", "alias", src_dir_fd=self.parent, dst_dir_fd=self.parent,
+                          follow_symlinks=False)
+        left, right = (self.backend.stat(name, dir_fd=self.parent) for name in ("source", "alias"))
+        self.assertEqual((left.st_dev, left.st_ino), (right.st_dev, right.st_ino))
+        self.assertEqual((left.st_nlink, right.st_nlink), (2, 2))
+        for name in ("source", "alias"):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    self.backend.open(name, os.O_RDONLY, dir_fd=self.parent)
+                with self.assertRaises(ValueError):
+                    self.backend.open(name, os.O_WRONLY | os.O_TRUNC, dir_fd=self.parent)
+                with self.assertRaises(ValueError):
+                    self.backend.unlink(name, dir_fd=self.parent)
+        self.assertEqual(source.read_bytes(), b"preserve hardlink")
+        # 原生 fixture 自己拆除硬链；生产普通文件删除不能为此放宽多硬链守卫。
+        os.unlink(self.root / "alias")
+        descriptor = self.backend.open("source", os.O_RDONLY, dir_fd=self.parent)
+        with self.backend.fdopen(descriptor, "rb") as stream:
+            self.assertEqual(stream.read(), b"preserve hardlink")
+
+    def test_exclusive_publication_moves_one_identity_without_hardlink_window(self):
+        (self.root / "candidate").write_bytes(b"complete file")
+        before = self.backend.stat("candidate", dir_fd=self.parent)
+        self.platform.publish_exclusive_at("candidate", "published",
+                                          src_dir_fd=self.parent, dst_dir_fd=self.parent)
+        after = self.backend.stat("published", dir_fd=self.parent)
+        self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
+        self.assertEqual(after.st_nlink, 1)
+        self.assertFalse((self.root / "candidate").exists())
+        (self.root / "candidate").write_bytes(b"later candidate")
+        with self.assertRaises(FileExistsError):
+            self.platform.publish_exclusive_at("candidate", "published",
+                                              src_dir_fd=self.parent, dst_dir_fd=self.parent)
+        self.assertEqual((self.root / "candidate").read_bytes(), b"later candidate")
+        self.assertEqual((self.root / "published").read_bytes(), b"complete file")
+
+    def test_junction_cannot_enter_symbolic_link_operations(self):
+        import subprocess
+        target = self.root / "junction-target"
+        target.mkdir()
+        (target / "sentinel").write_bytes(b"preserve junction target")
+        junction = self.root / "junction"
+        result = subprocess.run([str(Path(os.environ["SystemRoot"]) / "System32/cmd.exe"),
+                                 "/d", "/c", "mklink", "/J", str(junction), str(target)],
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        try:
+            for action in (lambda: self.backend.readlink("junction", dir_fd=self.parent),
+                           lambda: self.backend.unlink("junction", dir_fd=self.parent),
+                           lambda: self.backend.rename("junction", "moved",
+                                                       src_dir_fd=self.parent, dst_dir_fd=self.parent)):
+                with self.assertRaises(ValueError):
+                    action()
+            self.assertEqual((target / "sentinel").read_bytes(), b"preserve junction target")
+        finally:
+            os.rmdir(junction)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", required=True,
                         choices=("host-directory", "ordinary-denied", "ordinary-allowed",
-                                 "ordinary-denied-only", "ordinary-restored"))
+                                 "ordinary-denied-only", "ordinary-restored", "backend-native"))
     parser.add_argument("--root", required=True)
     args = parser.parse_args()
     PROBE_ROOT, PROBE_MODE = Path(args.root).resolve(strict=True), args.probe
@@ -136,6 +243,8 @@ if __name__ == "__main__":
                else ["test_directory_durability_uses_real_backend"])
     if PROBE_MODE != "host-directory":
         methods.append("test_ordinary_token_and_directory_symlink_capability")
-    suite = unittest.TestSuite(WindowsCapabilityProbe(name) for name in methods)
+    suite = (unittest.defaultTestLoader.loadTestsFromTestCase(WindowsBackendNativeTest)
+             if PROBE_MODE == "backend-native" else
+             unittest.TestSuite(WindowsCapabilityProbe(name) for name in methods))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)
