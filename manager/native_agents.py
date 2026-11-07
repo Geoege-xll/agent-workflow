@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import uuid
 
 from lib import role_models, runtime_store
 from lib.central import role_preferences
-from lib.central.runtime_project import Node, Resources, absolute_directory, json_bytes, unique_json
+from lib.central.runtime_project import Node, Resources, Tree, absolute_directory, json_bytes, unique_json, read_at
 from lib.hosts import native_agents as native
 from lib.hosts.native_context import HostPaths, NativeContext
 from lib.platform_fs import directory_lock, os
@@ -56,8 +57,22 @@ class GlobalNativePlan:
 
     @property
     def recovery_ref(self) -> dict:
-        return {"schema_version": 1, "state": str(self.state), "transaction_id": self.transaction_id,
-                "targets": [{"host": row.host, "native_root": str(row.root)} for row in self.observations]}
+        value = {"schema_version": 1, "state": str(self.state), "transaction_id": self.transaction_id,
+                 "targets": [{"host": row.host, "native_root": str(row.root)} for row in self.observations]}
+        if not self.summary["changes"]:
+            # no-op不创建native journal；中央事务会持久保存此不可变见证，恢复时
+            # 必须逐个比较精确文件身份，不能把“没有journal”泛化成已验证成功。
+            value["witness"] = [{"host": row.host, "root_identity": list(row.identity or ()),
+                                  "owner": _revision(row.owner), "record": _revision(row.record),
+                                  "files": {path: _revision(node) for path, node, _ in row.discovery
+                                            if path in {native.role_relative(row.host, role) for role in role_models.ROLES}}}
+                                 for row in self.observations]
+        return value
+
+
+def _revision(node: Node) -> dict:
+    return {"kind": node.kind, "sha256": hashlib.sha256(node.payload).hexdigest(),
+            "mode": node.mode, "identity": list(node.identity)}
 
 
 def _context(state, context) -> tuple[Path, NativeContext]:
@@ -155,32 +170,62 @@ def _save(state: Path, journal: dict) -> None:
     state_files.write_state(state, relative, json_bytes(journal))
 
 
-def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node) -> None:
-    """发布前记录固定前像，发布后记录实际 inode；旧 fd 的后续保存仍可找回。
+def _moved_matches(actual: Node, expected: Node) -> bool:
+    # rename/link会改变ctime；inode、正文、mode、size、mtime必须仍是授权前像。
+    return (actual.same_content(expected) and actual.identity[:2] == expected.identity[:2]
+            and actual.identity[4:6] == expected.identity[4:6])
 
-    原文件由既有 AnchoredFile 排他隔离；保留路径先加入持久日志而不删除旧
-    inode。若进程恰在发布与记录实际身份之间退出，恢复宁可报告待核对冲突，
-    也不凭相同正文猜测某个后建文件属于本次事务。
+
+def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node, *, expected: Node) -> None:
+    """从固定plan前像排他发布，绝不重新认领窗口中新出现的同内容inode。
+
+    stage身份及旧inode保留路径先写持久journal，再隔离/发布；即使进程在最后
+    产物身份记录前退出，恢复也能凭stage inode区分本轮产物与未知同内容文件。
+    所有文件操作沿同一Tree父fd进行；目录换链不会把发布带到授权根之外。
     """
     before = native.read_node(root, relative)
-    if before.same_content(after):
+    if before != expected:
+        raise ValueError("原生文件在固定预览后被替换或修改")
+    if expected.same_content(after):
         return
-    row = {"root": str(root), "path": relative, "before": before.value(), "after": after.value(),
-           "published": None, "retained": []}
+    token = journal["transaction_id"] + "-" + uuid.uuid4().hex
+    stage_name, held_name = ".awf-native-stage-" + token, ".workflow-models-previous-" + token + ".tmp"
+    parent_path = Path(relative).parent
+    stage_path = str(parent_path / stage_name)
+    row = {"root": str(root), "path": relative, "before": expected.value(), "after": after.value(),
+           "published": None, "retained": [], "stage": stage_path, "staged": None}
     journal["writes"].append(row)
     _save(state, journal)
-    with absolute_directory((root / relative).parent, create=True):
-        pass
-    with state_files.AnchoredFile(root, relative) as target:
-        def retain(original, previous, expected):
-            retained = str(Path(relative).parent / previous)
-            row["retained"].append({"path": retained, "expected": before.value()})
+    with Tree(root) as tree:
+        parent, name = tree.parent(relative, create=True)
+        if read_at(parent, name) != expected:
+            raise ValueError("原生文件在打开父目录后发生变化")
+        descriptor = os.open(stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(after.payload)
+            stream.flush()
+            os.fchmod(stream.fileno(), after.mode)
+            os.fsync(stream.fileno())
+        row["staged"] = read_at(parent, stage_name).value()
+        _save(state, journal)
+        # stage磁盘写入期间的同内容替换也必须拒绝，完整Node比较包含inode/ctime。
+        if read_at(parent, name) != expected:
+            raise ValueError("原生文件在最终隔离前发生变化")
+        if expected.kind == "file":
+            row["retained"].append({"path": str(parent_path / held_name), "expected": expected.value()})
             _save(state, journal)
-        target.retainer = retain
-        expected = (before.payload, before.mode) if before.kind == "file" else (None, None)
-        target.write(after.payload, after.mode, expected)
-    row["published"] = native.read_node(root, relative).value()
-    _save(state, journal)
+            os.rename(name, held_name, src_dir_fd=parent, dst_dir_fd=parent)
+            if not _moved_matches(read_at(parent, held_name), expected):
+                raise ValueError("原生旧inode在隔离窗口发生变化，已保全原像")
+        # exclusive link不覆盖隔离后被编辑器重建的目标；stage链接移除后恢复nlink=1。
+        os.link(stage_name, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+        os.unlink(stage_name, dir_fd=parent)
+        os.fsync(parent)
+        published = read_at(parent, name)
+        if not _moved_matches(published, Node.from_value(row["staged"])):
+            raise ValueError("原生产物在发布窗口被替换，已保全原像")
+        row["published"] = published.value()
+        _save(state, journal)
 
 
 def _receipt(journal: dict) -> dict:
@@ -202,7 +247,9 @@ def apply_global(plan: GlobalNativePlan) -> dict:
     with role_preferences.coordination(plan.state), ExitStack() as stack:
         _guard(plan)
         journal = {"schema_version": 1, "transaction_id": plan.transaction_id, "recovery_ref": plan.recovery_ref,
-                   "status": "prepared", "writes": [], "conflicts": [], "applied_evidence": None}
+                   "status": "prepared", "writes": [], "conflicts": [], "applied_evidence": None, "root_identities": {},
+                   "desired": [{"host": host, "path": path, "after": Node("file", body, 0o644).value()}
+                               for host, path, body in plan.desired]}
         _save(plan.state, journal)
         created = []
         try:
@@ -213,6 +260,8 @@ def apply_global(plan: GlobalNativePlan) -> dict:
                 # 锁键是宿主物理根 inode，与 state 无关；两个 state 不能同时接管同一根。
                 stack.enter_context(directory_lock(before.root, "native-roles"))
             _guard(plan, created_roots=created)
+            journal["root_identities"] = {str(row.root): list(native.root_identity(row.root)) for row in plan.observations}
+            _save(plan.state, journal)
             for before in plan.observations:
                 record, conflicts = _ownership(plan.state, _observe(plan.state, plan.context.host_paths, before.host))
                 if conflicts:
@@ -222,14 +271,15 @@ def apply_global(plan: GlobalNativePlan) -> dict:
                     if host != before.host:
                         continue
                     baseline = (record["files"][relative]["baseline"] if record else Node().value())
-                    _publish(plan.state, journal, before.root, relative, Node("file", body, 0o644))
+                    _publish(plan.state, journal, before.root, relative, Node("file", body, 0o644),
+                             expected=next((node for path, node, _ in before.discovery if path == relative), Node()))
                     entries[relative] = {"baseline": baseline,
                                          "expected": native.read_node(before.root, relative).value()}
                 payload = json_bytes({"schema_version": 1, "host": before.host, "native_root": str(before.root),
                                       "root_identity": list(native.root_identity(before.root)), "state": str(plan.state),
                                       "files": entries})
-                _publish(plan.state, journal, before.root, native.OWNER, Node("file", payload, 0o600))
-                _publish(plan.state, journal, plan.state, native.record_relative(before.root), Node("file", payload, 0o600))
+                _publish(plan.state, journal, before.root, native.OWNER, Node("file", payload, 0o600), expected=before.owner)
+                _publish(plan.state, journal, plan.state, native.record_relative(before.root), Node("file", payload, 0o600), expected=before.record)
             journal["status"] = "applied"
             journal["applied_evidence"] = _receipt(journal)
             _save(plan.state, journal)
@@ -243,7 +293,7 @@ def apply_global(plan: GlobalNativePlan) -> dict:
 
 
 def _load_ref(recovery_ref, context: NativeContext) -> tuple[Path, dict | None]:
-    if not isinstance(recovery_ref, dict) or set(recovery_ref) != {"schema_version", "state", "transaction_id", "targets"}:
+    if not isinstance(recovery_ref, dict) or set(recovery_ref) not in ({"schema_version", "state", "transaction_id", "targets"}, {"schema_version", "state", "transaction_id", "targets", "witness"}):
         raise ValueError("原生恢复引用无效")
     state, _ = _context(Path(recovery_ref["state"]), context)
     if recovery_ref["schema_version"] != 1 or not isinstance(recovery_ref["targets"], list):
@@ -257,7 +307,7 @@ def _load_ref(recovery_ref, context: NativeContext) -> tuple[Path, dict | None]:
     if node.kind == "missing":
         return state, None
     journal = unique_json(node.payload)
-    if (not isinstance(journal, dict) or set(journal) != {"schema_version", "transaction_id", "recovery_ref", "status", "writes", "conflicts", "applied_evidence"}
+    if (not isinstance(journal, dict) or set(journal) != {"schema_version", "transaction_id", "recovery_ref", "status", "writes", "conflicts", "applied_evidence", "root_identities", "desired"}
             or journal["schema_version"] != 1 or journal["recovery_ref"] != recovery_ref
             or journal["transaction_id"] != recovery_ref["transaction_id"]
             or journal["status"] not in {"prepared", "applied", "compensated", "conflict"}
@@ -270,7 +320,7 @@ def _load_ref(recovery_ref, context: NativeContext) -> tuple[Path, dict | None]:
         allowed.update((str(root), native.role_relative(target["host"], role)) for role in role_models.ROLES)
     seen = set()
     for row in journal["writes"]:
-        if (not isinstance(row, dict) or set(row) - {"root", "path", "before", "after", "published", "retained", "restored"}
+        if (not isinstance(row, dict) or set(row) - {"root", "path", "before", "after", "published", "retained", "restored", "stage", "staged"}
                 or (row.get("root"), row.get("path")) not in allowed
                 or (row["root"], row["path"]) in seen):
             raise ValueError("原生恢复日志包含未授权或重复目标")
@@ -285,15 +335,23 @@ def _load_ref(recovery_ref, context: NativeContext) -> tuple[Path, dict | None]:
                     or not Path(held["path"]).name.startswith(".workflow-models-previous-")
                     or not Path(held["path"]).name.endswith(".tmp") or held["expected"] != row["before"]):
                 raise ValueError("原生恢复旧 inode 路径无效")
+        if row.get("stage") is not None and (not isinstance(row["stage"], str)
+                or Path(row["stage"]).parent != Path(row["path"]).parent
+                or not Path(row["stage"]).name.startswith(".awf-native-stage-" + journal["transaction_id"] + "-")):
+            raise ValueError("原生恢复stage路径无效")
+        if row.get("staged") is not None:
+            Node.from_value(row["staged"])
         if row.get("published") is not None:
             Node.from_value(row["published"])
     return state, journal
 
 
-def _check_retained(row: dict) -> None:
+def _check_retained(row: dict, *, allow_missing: bool = False) -> None:
     for held in row["retained"]:
         node = native.read_node(Path(row["root"]), held["path"])
         before = Node.from_value(held["expected"])
+        if allow_missing and node.kind == "missing":
+            continue
         # rename 改变 ctime，但不改变 inode、mtime 和正文；保留旧 fd 后的保存
         # 或权限修改必须停止恢复，不能把后续用户编辑藏在一次成功补偿后面。
         if (not node.same_content(before) or node.identity[:2] != before.identity[:2]
@@ -305,7 +363,9 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
     """补偿是有条件且可重入的逆操作；不将相同正文的未知替换文件当成本轮产物。"""
     state, journal = _load_ref(recovery_ref, context)
     if journal is None:
-        return {"status": "not_started", "applied": False, "conflicts": [], "recovery_ref": recovery_ref}
+        issues = _verify_witness(recovery_ref, context) if "witness" in recovery_ref else []
+        return {"status": "conflict" if issues else "noop" if "witness" in recovery_ref else "not_started",
+                "applied": False, "conflicts": issues, "recovery_ref": recovery_ref}
     with role_preferences.coordination(state), ExitStack() as stack:
         for target in sorted(recovery_ref["targets"], key=lambda row: row["native_root"]):
             root = Path(target["native_root"])
@@ -313,10 +373,13 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
                 stack.enter_context(directory_lock(root, "native-roles"))
         # 等锁后重新读日志，避免同一 ref 的两个恢复者用旧中间态覆盖彼此。
         _, journal = _load_ref(recovery_ref, context)
-        conflicts = []
+        conflicts = _root_issues(journal)
+        if conflicts:
+            journal["conflicts"], journal["status"] = conflicts, "conflict"
+            _save(state, journal)
+            return _receipt(journal)
         for row in reversed(journal["writes"]):
             try:
-                _check_retained(row)
                 root, path = Path(row["root"]), row["path"]
                 current = native.read_node(root, path)
                 if row.get("restored") is not None:
@@ -326,7 +389,21 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
                 published = Node.from_value(row["published"]) if row.get("published") is not None else None
                 before = Node.from_value(row["before"])
                 if current == before:
+                    _check_retained(row, allow_missing=True)
+                    _clean_stage(row)
                     row["restored"] = current.value()
+                    _save(state, journal)
+                    continue
+                _check_retained(row)
+                if published is None and row.get("staged") is not None and _moved_matches(current, Node.from_value(row["staged"])):
+                    published = current
+                if published is None and current.kind == "missing" and before.kind == "file" and row["retained"]:
+                    # 进程可能在隔离旧inode后、排他发布前退出；日志已登记旧inode，
+                    # 当前目标仍缺失时可恢复原内容。新出现目标一律保留并报冲突。
+                    with state_files.AnchoredFile(root, path) as target:
+                        target.write(before.payload, before.mode, (None, None))
+                    _clean_stage(row)
+                    row["restored"] = native.read_node(root, path).value()
                     _save(state, journal)
                     continue
                 if published is None or current != published:
@@ -341,6 +418,7 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
                         if moved != (published.payload, published.mode):
                             raise state_files.PreservedEdit(target.path.parent / held)
                         os.unlink(held, dir_fd=target.directory)
+                _clean_stage(row)
                 row["restored"] = native.read_node(root, path).value()
                 _save(state, journal)
             except (OSError, ValueError):
@@ -415,13 +493,71 @@ def verified_hosts(state, *, context: NativeContext) -> tuple[str, ...]:
     return tuple(status_global(state, context=context)["verified_hosts"])
 
 
+def _root_issues(journal: dict) -> list[dict]:
+    identities = journal.get("root_identities")
+    if not isinstance(identities, dict):
+        raise ValueError("原生恢复根身份无效")
+    allowed = {target["native_root"] for target in journal["recovery_ref"]["targets"]}
+    if set(identities) - allowed:
+        raise ValueError("原生恢复根身份越界")
+    return [{"type": "native_root_conflict", "path": root, "reason": "宿主物理根已替换或删除"}
+            for root, identity in identities.items() if list(native.root_identity(Path(root)) or ()) != identity]
+
+
+def _clean_stage(row: dict) -> None:
+    if row.get("stage") is None:
+        return
+    root = Path(row["root"])
+    actual = native.read_node(root, row["stage"])
+    if actual.kind == "missing":
+        return
+    if row.get("staged") is None or actual != Node.from_value(row["staged"]):
+        raise ValueError("原生stage含未知后续编辑，已保留")
+    with Tree(root) as tree:
+        parent, name = tree.parent(row["stage"])
+        if read_at(parent, name) != actual:
+            raise ValueError("原生stage在清理前变化")
+        os.unlink(name, dir_fd=parent)
+        os.fsync(parent)
+
+
+def _verify_witness(reference: dict, context: NativeContext) -> list[dict]:
+    expected = reference.get("witness")
+    targets = {row["host"]: row["native_root"] for row in reference["targets"]}
+    if not isinstance(expected, list) or len(expected) != len(targets):
+        raise ValueError("no-op原生见证无效")
+    issues, seen = [], set()
+    for witness in expected:
+        if (not isinstance(witness, dict) or set(witness) != {"host", "root_identity", "owner", "record", "files"}
+                or witness["host"] not in targets or witness["host"] in seen
+                or not isinstance(witness["files"], dict)
+                or set(witness["files"]) != {native.role_relative(witness["host"], role) for role in role_models.ROLES}):
+            raise ValueError("no-op原生见证范围无效")
+        host = witness["host"]
+        seen.add(host)
+        before = _observe(context.state, context.host_paths, host)
+        record, conflicts = _ownership(context.state, before)
+        current = {path: _revision(node) for path, node, _ in before.discovery if path in witness["files"]}
+        if (record is None or conflicts or list(before.identity or ()) != witness["root_identity"]
+                or _revision(before.owner) != witness["owner"] or _revision(before.record) != witness["record"]
+                or current != witness["files"]):
+            issues.append({"type": "native_noop_witness_conflict", "path": targets[host],
+                           "reason": "no-op见证中的原生归属、根或精确产物身份已变化"})
+    return issues
+
+
 def verify_global(recovery_ref, *, context: NativeContext) -> list[dict]:
-    """已发布 current 的恢复结算只查精确产物，绝不在此回撤或补装原生角色。"""
+    """已发布current的结算纯查固定产物；no-op仅凭持久ref中的精确见证验真。"""
     state, journal = _load_ref(recovery_ref, context)
     if journal is None:
+        if "witness" in recovery_ref:
+            return _verify_witness(recovery_ref, context)
         return [{"type": "native_journal_missing", "path": _journal_relative(recovery_ref["transaction_id"]),
                  "reason": "预期原生事务尚无持久日志"}]
-    issues = []
+    issues = _root_issues(journal)
+    if journal["status"] in {"compensated", "conflict"}:
+        issues.append({"type": "native_transaction_not_applied", "path": _journal_relative(journal["transaction_id"]),
+                       "reason": "原生事务已补偿或存在冲突"})
     for row in journal["writes"]:
         try:
             _check_retained(row)
@@ -429,7 +565,15 @@ def verify_global(recovery_ref, *, context: NativeContext) -> list[dict]:
                 raise ValueError("精确产物身份不符")
         except (OSError, ValueError):
             issues.append({"type": "native_artifact_conflict", "path": str(Path(row["root"]) / row["path"]),
-                           "reason": "原生产物缺失、替换、手改或保留旧 inode 已变化"})
+                           "reason": "原生产物缺失、替换、手改或保留旧inode已变化"})
+    if not isinstance(journal.get("desired"), list):
+        raise ValueError("原生事务缺少完整目标清单")
+    for desired in journal["desired"]:
+        root = context.host_paths.root(desired["host"])
+        if (desired["path"] not in {native.role_relative(desired["host"], role) for role in role_models.ROLES}
+                or not native.read_node(root, desired["path"]).same_content(Node.from_value(desired["after"]))):
+            issues.append({"type": "native_desired_incomplete", "path": str(root / desired["path"]),
+                           "reason": "原生完整目标尚未发布"})
     for target in recovery_ref["targets"]:
         try:
             current = status(state, target["host"], context=context)
