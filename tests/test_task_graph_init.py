@@ -66,7 +66,7 @@ def activate_fixture_pin(root: Path, state: Path, core, *, used=()):
                   "retained_nodes": [], "generation": uuid.uuid4().hex}
         write_private(machine, state_relative(root, "bindings"), json_bytes(record))
         write_control(machine, runtime_policy.CURRENT, json_bytes({"schema_version": 1, "runtime_binding": binding,
-                      "previous_binding": None, "generation": uuid.uuid4().hex}), expected=read_state(state, runtime_policy.CURRENT))
+                      "previous_binding": None, "generation": uuid.uuid4().hex, "native_roots": []}), expected=read_state(state, runtime_policy.CURRENT))
 
 
 def pinned_fixture(workspace: Path, *, engineering_body: bytes | None = None):

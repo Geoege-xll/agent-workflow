@@ -150,6 +150,9 @@ def preview(state: Path, action: str = "activate", *, binding: dict | None = Non
     selected = store.load_core(store.validate_binding(selected), state).binding()
     context = _native_context(state, native_context)
     native = native_agents.preview_global(state, selected, context=context)
+    # 在只读预览期即拒绝不能写入current的根形状；不等项目已修改后才发现
+    # 明确授权路径不规范，也不从宿主环境或旧activation猜测替代根。
+    policy.validate_native_roots(native.recovery_ref["targets"])
     raw = _registry_bytes(state)
     captures = []
     for project in _registered(state, raw):
@@ -180,9 +183,10 @@ def _validate_journal_data(value: dict) -> dict:
             or not isinstance(value["phase"], str) or value["phase"] not in policy.PENDING_PHASES | {"applied", "compensated"}
             or not isinstance(value["action"], str) or value["action"] not in {"activate", "rollback"}):
         raise ActivationError("中央激活恢复记录结构无效")
-    # 借 current 的完整 codec 校验共享 nonce 与 pin，而不扩展已有 binding。
+    # 借current codec校验共享nonce与pin；这个临时对象不发布为生效权威，故
+    # 明确给空roots。真正current只使用已核验native_ref.targets，不扩展binding。
     policy.validate_current({"schema_version": 1, "runtime_binding": value["runtime_binding"],
-                             "previous_binding": None, "generation": value["id"]})
+                             "previous_binding": None, "generation": value["id"], "native_roots": []})
     Node.from_value(value["current_before"])
     if value["registry_before"] is not None and not isinstance(value["registry_before"], str):
         raise ActivationError("中央激活登记前像无效")
@@ -205,7 +209,7 @@ def _validate_journal_data(value: dict) -> dict:
             if row[key] is not None:
                 Node.from_value(row[key])
         policy.validate_current({"schema_version": 1, "runtime_binding": value["runtime_binding"],
-                                 "previous_binding": None, "generation": row["transaction_id"]})
+                                 "previous_binding": None, "generation": row["transaction_id"], "native_roots": []})
     return value
 
 
@@ -284,7 +288,12 @@ def apply(plan: CentralPlan, *, cancel=None) -> dict:
                 before = unique_json(plan.current_before.payload) if plan.current_before.kind == "file" else None
                 current = {"schema_version": 1, "runtime_binding": plan.binding,
                            "previous_binding": before["runtime_binding"] if before and before["runtime_binding"] != plan.binding else before["previous_binding"] if before else None,
-                           "generation": identifier}
+                           "generation": identifier,
+                           # 生效授权与current同一次CAS发布；activation只记录本批
+                           # 过程，失败或compensated日志不能夺走旧generation的根。
+                           # 上方已核验本批原生收据/产物，这里只冻结精确targets，
+                           # 不把庞大witness、receipt或历史恢复前像复制成第二权威。
+                           "native_roots": policy.validate_native_roots(journal["native_ref"]["targets"])}
                 policy.validate_current(current)
                 with Tree(plan.state) as tree:
                     write_control(tree, policy.CURRENT, json_bytes(current), expected=plan.current_before)
