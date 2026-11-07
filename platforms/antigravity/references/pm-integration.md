@@ -5,8 +5,9 @@ This entire managed section applies only in Antigravity; ignore other hosts' int
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
 without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 
-Use `/xy-workflow` for Light and Full implementation; roles are `.agents/agents/xy-*.md`, Skills are
-`.agents/skills/xy-*/SKILL.md`. Only the PM may use `invoke_subagent`; role Agents never delegate and
+Use `/xy-workflow` for Light and Full implementation. Central roles are in the configured user Antigravity root's `agents/` (normally `~/.gemini/config/agents/`), with only required sparse project overrides in `.agents/agents/xy-*.md`; Skills remain project discovery symlinks at `.agents/skills/xy-*/SKILL.md`. A missing local role file is not an unavailable-role verdict. Native discovery/precedence and actual role/model selection still require target-session evidence; parsed descriptors or task labels do not prove execution.
+
+Central maintenance uses shared `awf-cli runtime install`, `runtime activate ID --dry-run` / `runtime activate ID`, and `repair PROJECT --dry-run` / `repair PROJECT`. Thin central projects have no `.agent-workflow/setup_antigravity.sh`; only source-pack development runs `bash setup_antigravity.sh` / `bash setup_antigravity.sh --check` from the verified source-pack root. Only the PM may use `invoke_subagent`; role Agents never delegate and
 `max_depth` is `1`. Light/Full defaults to the corresponding subagent; see `.agent-workflow/product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates.
 For Full READY tasks: `inherit` stays `inherit`, `worktree` becomes `branch`
 only when the actual runtime proves a distinct registered worktree root and the required base;

@@ -23,6 +23,7 @@ import termios
 import time
 from threading import Event
 import tomllib
+import uuid
 import unittest
 from unittest.mock import patch
 
@@ -63,6 +64,16 @@ def deep_json_source(home: Path, host: str) -> bool:
     return False
 
 
+def select_fixture_current(state, binding):
+    """只初始化既有最小投影夹具的中央控制前提，不生成全局原生资源替代local测试。"""
+    from manager import runtime_policy
+    from manager.runtime_state import read_state, write_control
+    from lib.central.runtime_project import Tree, json_bytes
+    with runtime_policy.coordination(state), Tree(state) as tree:
+        write_control(tree,runtime_policy.CURRENT,json_bytes({"schema_version":1,"runtime_binding":binding,
+                      "previous_binding":None,"generation":uuid.uuid4().hex}),expected=read_state(state,runtime_policy.CURRENT))
+
+
 class TemporaryProject(unittest.TestCase):
     central_fixture = False
 
@@ -75,6 +86,7 @@ class TemporaryProject(unittest.TestCase):
             source = CentralCliIntegrationTest.create_source(root)
             cls.central_state = root / "state"
             cls.central_core = runtime_store.import_core(source, cls.central_state)
+            select_fixture_current(cls.central_state,cls.central_core.binding())
 
     @classmethod
     def tearDownClass(cls):
@@ -1574,13 +1586,15 @@ class InstalledProjectIntegrationTest(unittest.TestCase):
             (project/'pyproject.toml').write_text('[project]\nname="example"\nversion="0.1.0"\n')
             source=CentralCliIntegrationTest.create_source(root)
             # 添加先选择“登记并启用”，读取预览后再确认；两次作业均消费正式共享服务。
+            from lib import runtime_store
+            core=runtime_store.import_core(source,state);select_fixture_current(state,core.binding())
             app=App(state,root)
             with ThreadPoolExecutor(max_workers=1) as executor,patch.object(project_service,'SOURCE',source):
                 # 初始无项目时全局默认已占首项；直接用正式 a 键进入登记。
                 app.executor=executor;app.dispatch('a');app.input=str(project);app.dispatch('enter')
                 self.assertEqual(app.modal,'add_mode');app.index=1;app.dispatch('enter')
                 app.future.result(timeout=30);app.poll_job();self.assertEqual(app.modal,'project_plan')
-                self.assertFalse(state.exists());app.dispatch('enter');app.future.result(timeout=30);app.poll_job()
+                self.assertFalse((project/'.agent-workflow').exists());app.dispatch('enter');app.future.result(timeout=30);app.poll_job()
             self.assertEqual(app.modal,'result');self.assertEqual(app.project,project);self.assertEqual(app.pane,'roles')
             for host in service.LOCATIONS:self.assertTrue(service.roles(project,host,state=state))
             for host,model,effort in [('codex','fixture-model','max'),('claude','fixture/model','inherit'),('antigravity','pro','inherit')]:
@@ -1594,7 +1608,7 @@ class InstalledProjectIntegrationTest(unittest.TestCase):
             service.commit(state,project,service.prepare_restore(state,project,identifier),lambda:service.check(project,'codex',state=state))
             (source/'product/WORKFLOW.md').write_text('# 新固定版本\n',encoding='utf-8')
             environment={**os.environ,'HOME':str(root/'home'),'AGENT_WORKFLOW_PYTHON':sys.executable}
-            result=subprocess.run(['bash',str(PACK/'workflow.sh'),'--state-dir',str(state),'open',str(project),
+            result=subprocess.run(['bash',str(PACK/'workflow.sh'),'--state-dir',str(state),'--host-home',str(root/'home'),'open',str(project),
                                    '--source',str(source)],env=environment,capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout[-3500:]+result.stderr[-3500:])
             self.assertEqual(service.role_settings(project,'codex','xy-backend')['effort'],'max')
@@ -1638,6 +1652,7 @@ class CentralCliIntegrationTest(unittest.TestCase):
         cls.first=runtime_store.import_core(cls.source,cls.state)
         cls.put(cls.source,"product/WORKFLOW.md","# 固定版本二\n".encode())
         cls.second=runtime_store.import_core(cls.source,cls.state)
+        select_fixture_current(cls.state,cls.first.binding())
 
     @classmethod
     def create_source(cls,root):
@@ -1681,7 +1696,7 @@ class CentralCliIntegrationTest(unittest.TestCase):
         self.put(self.project,"pyproject.toml",b'[project]\nname="fixture"\nversion="0.1.0"\n')
 
     def cli(self,*args,state=None,expected=0,json_mode=True):
-        command=["bash",str(PACK/"workflow.sh"),"--state-dir",str(state or self.state),"--scan-root",str(self.scan)]
+        command=["bash",str(PACK/"workflow.sh"),"--state-dir",str(state or self.state),"--host-home",str(self.home),"--scan-root",str(self.scan)]
         if json_mode:command.append("--json")
         command.extend(str(value) for value in args)
         result=subprocess.run(command,cwd=self.root,env=self.environment,capture_output=True,text=True,timeout=35)
@@ -1699,6 +1714,75 @@ class CentralCliIntegrationTest(unittest.TestCase):
 
     def enable(self):
         return self.cli("add",self.project,"--enable","--content-id",self.first.content_id)["result"]
+
+    def test_runtime_current_follow_and_platform_reset_use_real_shared_services(self):
+        # 独立可变 state 只服务本例；核心源仍复用同一最小夹具，宿主根显式隔离。
+        state=self.root/(self._testMethodName+"-state")
+        self.cli("open",self.project,state=state,expected=2)
+        installed=self.cli("runtime","install",self.source,state=state)["result"]
+        self.cli("open",self.project,state=state,expected=2)
+        identifier=installed["runtime_binding"]["content_id"]
+        before=set(state.rglob("*"))
+        preview=self.cli("runtime","activate",identifier,"--dry-run",state=state)["result"]
+        self.assertTrue(preview["can_apply"]);self.assertEqual(before,set(state.rglob("*")))
+        self.assertIsNone(self.cli("runtime","status",state=state)["result"]["runtime_binding"])
+        activated=self.cli("runtime","activate",identifier,state=state)["result"]
+        self.assertEqual(installed["runtime_binding"],activated["runtime_binding"])
+        result=self.cli("add",self.project,"--enable",state=state)["result"]
+        self.assertTrue(result["declared_enabled"]);self.assertTrue(result["new_task_allowed"])
+        self.assertEqual("follow",result["policy"])
+        effective=self.cli("roles","--project",self.project,"--platform","claude","--effective",state=state)
+        self.assertIn("xy-backend",effective)
+        self.assertFalse((self.project/".claude/agents/xy-backend.md").exists())
+        # 显式 use 锁住旧版；中央激活只动 follow，follow 再单独清锁并物化 current。
+        from lib import runtime_store
+        runtime_store.import_core(self.first.root,state)
+        self.cli("use",self.project,self.first.content_id,state=state)
+        self.cli("runtime","activate",identifier,state=state)
+        pinned=self.cli("status",self.project,state=state)["result"]
+        self.assertEqual("pinned",pinned["policy"]);self.assertEqual(self.first.binding(),pinned["runtime_binding"])
+        followed=self.cli("follow",self.project,state=state)["result"]
+        self.assertEqual("follow",followed["policy"]);self.assertEqual(installed["runtime_binding"],followed["runtime_binding"])
+        created=self.cli("set","--project",self.project,"--platform","antigravity","--role","xy-backend","--model","pro","--apply",state=state)["result"]
+        arguments=("set","--project",self.project,"--platform","antigravity","--all-roles","--reset","all")
+        config=self.project/".agent-workflow/project.yaml";original=config.read_bytes()
+        reset=self.cli(*arguments,state=state)["result"]
+        self.assertTrue(reset["all_roles"]);self.assertTrue(reset["changes"]);self.assertEqual(original,config.read_bytes())
+        reset_result=self.cli(*arguments,"--apply",state=state)["result"]
+        self.assertTrue(reset_result["applied"])
+        sparse=self.project/".agents/agents/xy-backend.md"
+        self.assertFalse(sparse.exists())
+        # reset 备份还原会重新创建稀疏local；最初set备份还原则删除local。两条
+        # None/create/delete都必须经正式CLI透传同一NativeContext给原生收据。
+        self.cli("restore","--project",self.project,reset_result["backup_id"],"--apply",state=state)
+        self.assertTrue(sparse.is_file())
+        self.cli("restore","--project",self.project,created["backup_id"],"--apply",state=state)
+        self.assertFalse(sparse.exists())
+        noop=self.cli(*arguments,"--apply",state=state)["result"]
+        self.assertFalse(noop["applied"]);self.assertIsNone(noop["backup_id"])
+        self.cli("set","--global","--platform","antigravity","--all-roles","--reset","all",state=state,expected=2)
+        self.cli(*arguments,"--role","xy-backend",state=state,expected=2)
+        self.cli("runtime","recover",state=state,expected=2)
+        self.cli("close",self.project,state=state)
+        self.cli("runtime","activate",self.first.content_id,state=state)
+        disabled=self.cli("status",self.project,state=state)["result"]
+        self.assertFalse(disabled["declared_enabled"]);self.assertFalse(disabled["new_task_allowed"])
+        self.assertEqual(self.first.binding(),disabled["effective_binding"])
+        self.assertEqual(installed["runtime_binding"],disabled["runtime_binding"])
+        rolled=self.cli("runtime","rollback",state=state)["result"]
+        self.assertEqual(installed["runtime_binding"],rolled["runtime_binding"])
+
+    def test_custom_state_requires_host_home_and_explicit_home_ignores_root_overrides(self):
+        state=self.root/(self._testMethodName+"-state")
+        result=subprocess.run(["bash",str(PACK/"workflow.sh"),"--state-dir",str(state),"--json","models","--platform","codex"],
+                              cwd=self.root,env=self.environment,capture_output=True,text=True,timeout=15)
+        self.assertEqual(2,result.returncode);self.assertFalse(state.exists())
+        self.put(self.home,".codex/config.toml",b'model_catalog_json="models.json"\n')
+        self.put(self.home,".codex/models.json",b'{"models":[{"id":"explicit-home-model","display_name":"fixture"}]}')
+        self.environment["CODEX_HOME"]=str(self.root/"unrelated-host")
+        output=self.cli("models","--platform","codex",state=state)
+        # models 保留既有目录 JSON 形状，不能用另一个环境根替换显式选择的宿主。
+        self.assertIn("explicit-home-model",json.dumps(output));self.assertFalse(state.exists())
 
     def test_dry_run_registration_names_and_json_refusals(self):
         state=self.root/"dry-run-state"
@@ -2019,7 +2103,7 @@ class TerminalAndCliTest(TemporaryProject):
     def test_deep_json_model_source_cli_has_safe_projection(self):
         home=self.root/'home';rejected=deep_json_source(home,'codex')
         env={**os.environ,'HOME':str(home),'CODEX_HOME':str(home/'.codex'),'CLAUDE_CONFIG_DIR':str(home/'.claude')}
-        result=subprocess.run(['bash',str(PACK/'workflow.sh'),'--state-dir',str(self.state),'models','--platform','codex'],
+        result=subprocess.run(['bash',str(PACK/'workflow.sh'),'--state-dir',str(self.state),'--host-home',str(self.root/'home'),'models','--platform','codex'],
                               cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertNotIn('Traceback',result.stderr);self.assertNotIn('DEEP-SOURCE-SECRET',result.stdout+result.stderr)
@@ -2083,13 +2167,13 @@ class TerminalAndCliTest(TemporaryProject):
         # 从源包之外通过真实短命令默认打开 TUI；宿主目录指向临时夹具，不读本机账户配置。
         directory=self.root/'bin';entry=install_cli(directory)
         scan=self.root/'empty-scan';scan.mkdir()
-        codex=self.root/'codex-home';codex.mkdir()
+        codex=self.root/'home/.codex';codex.mkdir(parents=True)
         (codex/'config.toml').write_text('model_catalog_json = "models.json"\n')
         (codex/'models.json').write_text(json.dumps({'models':[{'slug':'fixture-model','display_name':'Fixture Model','supported_reasoning_levels':['high','max']}]}))
         original={str(path.relative_to(self.project)):path.read_bytes() for path in self.project.rglob('*') if path.is_file()}
         env={**os.environ,'PATH':str(directory)+os.pathsep+os.environ['PATH'],'TERM':'xterm-256color','ESCDELAY':'25',
              'HOME':str(self.root/'home'),'CODEX_HOME':str(codex),'CLAUDE_CONFIG_DIR':str(self.root/'claude-home')}
-        process=subprocess.Popen([str(entry),'--state-dir',str(self.state),'--scan-root',str(scan)],cwd=self.root,
+        process=subprocess.Popen([str(entry),'--state-dir',str(self.state),'--host-home',str(self.root/'home'),'--scan-root',str(scan)],cwd=self.root,
                                  stdin=slave,stdout=slave,stderr=slave,env=env)
         os.close(slave);captured=bytearray()
         def until(text,*,existing=False):

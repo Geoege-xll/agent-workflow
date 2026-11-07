@@ -27,7 +27,7 @@ GROUPS = {
     "antigravity": modules("antigravity_workflow"),
     "prototype": modules("prototype_workspace"),
     "packaging": modules("homebrew_packaging"),
-    "central": modules("central_project", "runtime_store", "runtime_state") + (
+    "central": modules("central_project", "runtime_store", "runtime_state", "central_runtime", "runtime_lifecycle") + (
         "tests.test_workflow_manager.CentralCliIntegrationTest",
         "tests.test_workflow_manager.InstalledProjectIntegrationTest",
     ),
@@ -37,7 +37,7 @@ GROUPS = {
         "TerminalAndCliTest.test_deep_json_model_source_cli_has_safe_projection",
         "TerminalAndCliTest.test_tui_interrupt_waits_for_synchronous_central_settlement",
         "TerminalAndCliTest.test_launcher_preserves_relative_project_paths",
-    )) + modules("role_preferences", "native_usage", "platform_bridge"),
+    )) + modules("role_preferences", "native_usage", "platform_bridge", "native_agents", "install_cli"),
     "tui": tuple("tests.test_manager_tui." + name for name in (
         "TextInputTest", "TuiTest", "TerminalCellsTest",
         "ProjectTuiIntegrationTest.test_real_project_lifecycle_versions_details_and_deletion_focus",
@@ -59,7 +59,9 @@ GROUPS["hosts"] = (
 GROUPS["ci"] = (
     modules("validation_runner")
     + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
-    + modules("central_project")
+    + modules("central_project", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli")
+    + ("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",
+       "tests.test_manager_tui.TuiTest.test_runtime_actions_use_captured_context_and_modal_focus")
     + ("tests.test_unified_host_workflow.UnifiedSetupContractTest.test_all_hosts_generate_core_skills_from_one_shared_source",)
     + modules("requirement_html") + GROUPS["pty"] + GROUPS["packaging"]
 )

@@ -246,7 +246,7 @@ class Session:
     def prepare_job(self, view: dict, frames: list, *, preserve_view: bool, **options) -> Job:
         # 消费过的确认页永远不能成为结果/错误的返回入口；只读预读也不能把
         # 夹在栈里的旧确认页带回来。导航帧由 App 提供，这里只管理其生命周期。
-        confirmations = {"project_plan", "preview", "restore", "quit"}
+        confirmations = {"project_plan", "runtime_plan", "preview", "restore", "quit"}
         safe_frames = [dict(frame) for frame in frames if frame["modal"] not in confirmations]
         candidates = [view, *reversed(safe_frames)]
         if preserve_view and view["modal"] not in confirmations:

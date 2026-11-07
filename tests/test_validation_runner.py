@@ -182,6 +182,15 @@ class ExampleTest(unittest.TestCase):
                 actual = {row["id"].split(".")[1].removeprefix("test_") for row in self.recorded_cases()}
                 self.assertEqual(modules, actual)
 
+    def test_real_central_service_ci_include_212_consumers_without_duplicates(self):
+        result=self.invoke("--list","central","service","ci",entry=PACK/"scripts/test_workflow.sh")
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        targets=result.stdout.splitlines();self.assertEqual(len(targets),len(set(targets)))
+        for name in ("central_runtime","runtime_lifecycle","native_agents","install_cli"):
+            self.assertEqual(1,targets.count("tests.test_"+name))
+        self.assertIn("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",targets)
+        self.assertIn("tests.test_manager_tui.ProjectTuiIntegrationTest.test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize",targets)
+
     def test_real_existing_node_runs_through_repository_entry(self):
         # 受控夹具只能证明调度边界；另经真实入口执行既有生产消费者，证明当前
         # 源根、真实 python_runtime.sh 和 unittest 节点能一起运行，而非仅录制 mock。

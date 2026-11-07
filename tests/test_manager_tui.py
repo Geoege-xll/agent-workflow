@@ -28,6 +28,7 @@ import uuid
 
 from lib import runtime_store
 from lib import role_models
+from lib.hosts.native_context import HostPaths, NativeContext
 from manager import service, model_preferences, project_service, state_files
 from manager.catalog import Catalog, Model
 from manager.tui import App, HOSTS, cell_width
@@ -116,8 +117,9 @@ class TuiTest(unittest.TestCase):
                              ("manager.tui.model_preferences.load_catalogs",model_preferences.PreferenceCatalogs(self.catalog,{})),
                              ("manager.tui.discover",self.catalog)):
             patcher=patch(target,return_value=value);patcher.start();self.addCleanup(patcher.stop)
-        patcher=patch("manager.tui.model_preferences.check_catalogs",side_effect=lambda state,project,host,catalog:isinstance(catalog,model_preferences.PreferenceCatalogs));patcher.start();self.addCleanup(patcher.stop)
-        self.app=App(self.root/"state",self.root/"scan",self.project)
+        patcher=patch("manager.tui.model_preferences.check_catalogs",side_effect=lambda state,project,host,catalog,**kwargs:isinstance(catalog,model_preferences.PreferenceCatalogs));patcher.start();self.addCleanup(patcher.stop)
+        self.context=NativeContext.for_state(self.root/"state",host_paths=HostPaths.for_home(self.root/"host",environment={}))
+        self.app=App(self.root/"state",self.root/"scan",self.project,native_context=self.context)
         self.app.theme=Theme(focus=11,selected=12,inactive=13,warning=14,error=15,muted=16,success=17,title=18)
         self.screen=RecordingScreen();self.app.screen=self.screen
 
@@ -170,6 +172,69 @@ class TuiTest(unittest.TestCase):
                 json.dumps(dict.fromkeys(roles,baseline)).encode(),json.dumps(dict.fromkeys(roles,inherited)).encode())
         self.app.session.accept_context((self.app.scope_id,host),context)
 
+    def test_platform_reset_is_independent_and_consumes_only_captured_keys(self):
+        self.allow_state=True
+        # 使用真实 metadata 恢复服务；此项目未启用，不会借恢复安装任何原生角色。
+        key=self.app.scope();other=(str(self.projects[1]),"claude","xy-qa")
+        self.app.session.stage(key,{"effort":"max"},"old-authorization")
+        self.app.drafts[other]={"model":"inherit"}
+        before=deepcopy(self.app.session.entries)
+        target=self.project/".agent-workflow/project.yaml";original=target.read_bytes()
+        def settle():
+            try:self.app.future.result(timeout=5)
+            except ValueError:pass
+            self.app.poll_job()
+        with ThreadPoolExecutor(max_workers=1) as self.app.executor:
+            self.app.act("reset-platform");settle()
+            self.assertEqual("preview",self.app.modal);self.assertTrue(self.app.preference_reset)
+            self.assertEqual(before,self.app.session.entries);self.assertEqual(original,target.read_bytes())
+            self.assertIn("全部角色",self.app.text)
+            self.app.dispatch("esc");self.assertEqual(before,self.app.session.entries)
+            self.app.act("reset-platform");settle()
+            with patch("manager.tui.model_preferences.apply",side_effect=ValueError("固定计划前像已变化")):
+                self.app.dispatch("enter");settle()
+            self.assertEqual("error",self.app.modal);self.assertEqual(before,self.app.session.entries)
+            self.assertEqual(original,target.read_bytes());self.app.dispatch("esc")
+            self.app.act("reset-platform");settle()
+            late=(str(self.project),"codex","xy-web");self.app.drafts[late]={"model":"inherit"}
+            self.app.dispatch("enter");settle()
+            self.assertEqual("result",self.app.modal);self.assertNotIn(key,self.app.drafts)
+            self.assertIn(other,self.app.drafts);self.assertIn(late,self.app.drafts)
+            self.assertEqual({},role_models.parse(target.read_text()).get("codex",{}))
+            self.app.dispatch("esc");self.app.act("reset-platform");settle()
+            self.assertFalse(self.app.preference_plan.summary["changes"])
+            self.assertIn("未创建备份",self.app.text)
+            self.app.dispatch("enter");settle()
+            self.assertIn("未写入配置，未创建备份",self.app.text);self.assertNotIn(late,self.app.drafts);self.assertIn(other,self.app.drafts)
+        self.app.modal=None;self.app.project_index=-1
+        self.assertNotIn("reset-platform",[action for action,_ in self.app.manage_rows()])
+        self.assertIn("全局默认",self.app.unavailable("reset-platform"))
+
+    def test_runtime_actions_use_captured_context_and_modal_focus(self):
+        summary={"action":"rollback","can_apply":True,"runtime_binding":{"content_id":"a"*64},"projects":[],"conflicts":[]}
+        plan=SimpleNamespace(summary=summary)
+        self.app.dispatch("g")
+        with ThreadPoolExecutor(max_workers=1) as self.app.executor, patch("manager.tui.central_runtime.preview",return_value=plan) as preview, patch("manager.tui.central_runtime.apply") as apply:
+            self.app.manage_action("runtime-rollback");self.app.future.result(timeout=5);self.app.poll_job()
+            self.assertEqual("runtime_plan",self.app.modal)
+            self.assertIs(preview.call_args.kwargs["native_context"],self.context)
+            position=(self.app.host_index,self.app.pane)
+            for key in ("tab","backtab","left","right"):self.app.dispatch(key)
+            self.assertEqual(position,(self.app.host_index,self.app.pane))
+            for size in ((16,55),(24,80),(30,100)):
+                self.draw(*size);self.assertIn("Esc",self.screen.text())
+            self.app.dispatch("esc");apply.assert_not_called();self.assertIsNone(self.app.runtime_plan)
+            self.assertEqual("manage",self.app.modal)
+            self.app.dispatch(":")
+            self.assertIn("runtime-status",[action for _,action in self.app.options()])
+            self.app.dispatch("esc");self.app.manage_action("runtime-rollback")
+            self.app.future.result(timeout=5);self.app.poll_job()
+            apply.return_value={"runtime_binding":summary["runtime_binding"],"projects_applied":0}
+            self.app.dispatch("enter");self.app.future.result(timeout=5);self.app.poll_job()
+            self.assertEqual("result",self.app.modal);self.assertIsNone(self.app.runtime_plan)
+            self.assertEqual(["xy-backend","xy-web"],self.app.installed_roles())
+            self.assertIn("逐项目实际状态",self.app.text)
+
     def test_global_scope_sources_field_drafts_and_reset_are_isolated(self):
         self.app.role_index=1
         self.app.dispatch('e');self.app.dispatch('end');self.app.dispatch('enter')
@@ -213,7 +278,7 @@ class TuiTest(unittest.TestCase):
         for defaults in ({},{'model':'inherit','effort':'inherit'},{'model':'local-model','effort':'high'}):
             with self.subTest(defaults=defaults):
                 values={field:defaults.get(field,'inherit') for field in ('model','effort')}
-                def observed(state,project,host,*,catalogs=None):
+                def observed(state,project,host,*,catalogs=None,native_context=None):
                     value={**values,'sources':{field:'host' if val == 'inherit' else 'global' for field,val in values.items()},
                            'overrides':dict(defaults) if project is None else {},'revision':'same-value-fixture'}
                     return model_preferences.PreferenceContext(state,project,host,catalogs,
@@ -1010,12 +1075,16 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         # apply 通过固定核心的真实 reader 验收发布；中央启停现在还要校验签名 Hook。
         # 只补齐这条真实消费链的直接依赖，不复制完整源包、宿主环境或独立运行时。
         for name in ("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/central/runtime_project.py","lib/runtime_bridge.py","lib/hosts/claude_options.py",
-                     "lib/hosts/claude_instructions.py","lib/hosts/workflow_hook_install.py","lib/hosts/workflow_hook_settings.py",
+                     "lib/hosts/native_context.py","lib/hosts/native_agents.py","manager/native_agents.py","manager/runtime_policy.py","manager/runtime_lifecycle.py","manager/central_runtime.py","lib/hosts/claude_instructions.py","lib/hosts/workflow_hook_install.py","lib/hosts/workflow_hook_settings.py",
                      "lib/workflow_hooks.py","lib/hosts/windows_hook_command.py","lib/hosts/merge_codex_config.py",
                      "lib/skills/shared_core_skills.py","lib/role_models.py","lib/central/role_preferences.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
                      "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
-                     "roles/xy-qa.md","roles/xy-uiux.md","platforms/shared/core-skills.txt"):
+                     "platforms/shared/core-skills.txt"):
             put(name,(PACK/name).read_bytes())
+        # global 初始化必须编译所有 canonical roles，不能以本项目画像的两个
+        # 角色冒充完整核心；只补精确清单，不复制整仓或绕过生产描述符校验。
+        for role in role_models.ROLES:put(f"roles/{role}.md",(PACK/f"roles/{role}.md").read_bytes())
+        assert all((cls.source/f"roles/{role}.md").is_file() for role in role_models.ROLES)
         put("product/WORKFLOW.md","# TUI 固定版本甲\n".encode());put("product/GLOBAL_CONSTRAINTS.md",b"# fixture\n")
         for name in (cls.source/"platforms/shared/core-skills.txt").read_text().splitlines():
             if name and not name.startswith("#"):
@@ -1038,7 +1107,14 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                 (self.state / relative).unlink(missing_ok=True)
         self.addCleanup(clear_mutable_fixture)
         self.project=self.root/("中文 é 项目-"+uuid.uuid4().hex[:8]);self.project.mkdir()
-        self.app=App(self.state,self.root/"empty-scan",self.project)
+        from manager import runtime_policy
+        from manager.runtime_state import read_state, write_control
+        from lib.central.runtime_project import Tree, json_bytes
+        # 最小投影测试沿用既有核心，但显式建立中央 current 控制前提。
+        with runtime_policy.coordination(self.state), Tree(self.state) as tree:
+            write_control(tree,runtime_policy.CURRENT,json_bytes({"schema_version":1,"runtime_binding":self.core.binding(),"previous_binding":None,"generation":uuid.uuid4().hex}),expected=read_state(self.state,runtime_policy.CURRENT))
+        self.context=NativeContext.for_state(self.state,host_paths=HostPaths.for_home(self.root/"host",environment={}))
+        self.app=App(self.state,self.root/"empty-scan",self.project,native_context=self.context)
         self.executor=ThreadPoolExecutor(max_workers=1);self.app.executor=self.executor
         self.addCleanup(self.executor.shutdown,wait=True)
         self.source_patch=patch("manager.tui.project_service.SOURCE",self.source);self.source_patch.start();self.addCleanup(self.source_patch.stop)
@@ -1118,7 +1194,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         record["used_bindings"].append(record["runtime_binding"])
         record_path.write_text(json.dumps(record))
         self.menu("details");self.assertIn("固定核心版本缺失",self.app.text)
-        self.menu("enable");self.assertEqual("error",self.app.modal);self.assertIn("固定核心版本缺失",self.app.text)
+        self.menu("enable");self.assertEqual("project_plan",self.app.modal);self.assertFalse(self.app.project_plan.summary["can_apply"]);self.assertIn("固定核心版本缺失",self.app.text)
         self.assertEqual("a"*64,project_service.project_status(self.state,self.project)["runtime_binding"]["content_id"])
 
     def test_damaged_version_list_fails_and_keeps_model_draft(self):
@@ -1148,7 +1224,17 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         environment.update(HOME=str(host),XDG_CONFIG_HOME=str(host/"config"),CLAUDE_CONFIG_DIR=str(host/"claude"),
                            CODEX_HOME=str(host/"codex"),TERM="xterm-256color",LANG="en_US.UTF-8")
         # 唯一注入是最小真实来源路径；run/App/服务/文件系统和所有按键均为生产实现。
-        program="from pathlib import Path; import sys; from manager import service, model_preferences, project_service, state_files; from manager.tui import run; project_service.SOURCE=Path(sys.argv[4]); raise SystemExit(run(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3])))"
+        program="""from pathlib import Path
+import sys, os
+from lib.hosts.native_context import HostPaths, NativeContext
+from manager import service, model_preferences, project_service, state_files
+from manager.tui import run
+project_service.SOURCE=Path(sys.argv[4])
+paths=HostPaths.for_home(Path(os.environ['HOME']),environment=dict(os.environ))
+context=NativeContext.for_state(Path(sys.argv[1]),host_paths=paths)
+raise SystemExit(run(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),native_context=context))
+"""
+        compile(program,"<isolated-pty-startup>","exec")
         process=subprocess.Popen([*PYTHON,"-c",program,str(self.state),str(self.root/"empty-scan"),str(self.project),str(self.source)],
                                  cwd=PACK,env=environment,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)
         checkpoints.append(f'\n=== PTY进程 {process.pid} · 测试项目 {self.project} ===\n')
@@ -1225,6 +1311,9 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             send("\r");view("项目管理 · 只读预览");send("\r");view("操作结果")
             self.assertIn(str(self.project),project_service.registry(self.state)["registered"])
             self.assertFalse(project_service.project_status(self.state,self.project)["enabled"]);send("\x1b")
+            choose_menu("中央运行时状态","操作结果");visible("中央 current");checkpoint("中央状态独立管理入口");close_to_main()
+            send(":runtime activate\r");view("选择中央激活版本");send("\r");view("中央运行时 · 只读预览")
+            checkpoint("命令面板中央激活预览取消");send("\x1b");view("选择中央激活版本");close_to_main()
             # 主界面启停不能依靠隐藏菜单或过期状态直接写入；先取消一次启用预览。
             close_to_main();visible('[o]启用工作流');send('o');view('项目管理 · 只读预览')
             send('\x1b');self.assertFalse(project_service.project_status(self.state,self.project)['enabled'])
@@ -1287,6 +1376,12 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             observed=model_preferences.view(self.state,self.project,'codex','xy-qa')
             self.assertEqual({},observed['overrides']);self.assertEqual({'model':'global','effort':'global'},observed['sources'])
             checkpoint('清除推理覆盖恢复全局且取消不落盘');close_to_main()
+            # 全角色恢复的独立提案不得覆盖已存在的项目草稿；取消也不消费它。
+            close_to_main();send("e");view("选择推理级别");send("/max\r");send("\r");visible("已暂存，尚未保存")
+            reset_before=self.snapshot(self.project)
+            choose_menu("全部角色恢复","保存预览");checkpoint("当前平台全部角色独立恢复提案")
+            self.assertEqual(reset_before,self.snapshot(self.project));send("\x1b");close_to_main();visible("1 项未保存")
+            send("u");visible("已丢弃当前角色草稿")
             # 显式inherit保留宿主含义，再reset模型才恢复全局；两者不能互相替代。
             send('m');view('选择模型');send('/继承宿主\r');send('\r');view('选择推理级别');send('\r');visible('已暂存，尚未保存')
             send('s');view('保存预览');send('\r');view('操作结果');visible('已保存模型配置')
@@ -1331,7 +1426,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             self.assertEqual(concurrent,target.read_bytes());checkpoint('保存失败保留草稿和并发字节')
             close_to_main();visible('1 项未保存');target.write_bytes(saved)
             send('u');visible('已丢弃当前角色草稿');send('r');visible('已读取预览 / 状态')
-            choose_menu("中央版本","中央版本列表 / 选择");send("i");view("完整版本详情")
+            choose_menu("中央版本列表","中央版本列表 / 选择");send("i");view("完整版本详情")
             # 64位ID可能跨行，去除字符格换行后验证完整身份仍可达。
             self.assertTrue(any(value in terminal.text().replace("\n","").replace(" ","") for value in (self.core.content_id,self.alternate.content_id)))
             send("\x1b");view("中央版本列表 / 选择");send("\r");view("项目管理 · 只读预览")
