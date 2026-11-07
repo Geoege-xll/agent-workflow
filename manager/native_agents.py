@@ -354,7 +354,8 @@ def _load_ref(recovery_ref, context: NativeContext) -> tuple[Path, dict | None]:
     if node.kind == "missing":
         return state, None
     journal = unique_json(node.payload)
-    if (not isinstance(journal, dict) or set(journal) != {"schema_version", "transaction_id", "recovery_ref", "status", "writes", "conflicts", "applied_evidence", "root_identities", "desired"}
+    journal_keys = {"schema_version", "transaction_id", "recovery_ref", "status", "writes", "conflicts", "applied_evidence", "root_identities", "desired"}
+    if (not isinstance(journal, dict) or set(journal) not in (journal_keys, journal_keys | {"compensations"})
             or journal["schema_version"] != 1 or journal["recovery_ref"] != recovery_ref
             or journal["transaction_id"] != recovery_ref["transaction_id"]
             or journal["status"] not in {"prepared", "applied", "compensated", "conflict"}
@@ -390,6 +391,34 @@ def _load_ref(recovery_ref, context: NativeContext) -> tuple[Path, dict | None]:
             Node.from_value(row["staged"])
         if row.get("published") is not None:
             Node.from_value(row["published"])
+    if not isinstance(journal.get("compensations", []), list):
+        raise ValueError("原生补偿节点记录无效")
+    for step in journal.get("compensations", []):
+        if (not isinstance(step, dict) or set(step) != {"root", "path", "expected", "after", "stage", "staged", "held", "isolated", "result", "returned"}
+                or not isinstance(step["root"], str) or not isinstance(step["path"], str)
+                or (step["root"], step["path"]) not in allowed or type(step["returned"]) is not bool):
+            raise ValueError("原生补偿节点范围或字段无效")
+        expected, after = Node.from_value(step["expected"]), Node.from_value(step["after"])
+        if (expected.kind not in {"file", "missing"} or after.kind not in {"file", "missing"}
+                or expected.kind == "file" and len(expected.identity) != 7):
+            raise ValueError("原生补偿仅允许普通文件及缺失节点")
+        for key, prefix in (("stage", ".awf-native-restore-"), ("held", ".native-rollback-")):
+            path = step[key]
+            if path is not None and (not isinstance(path, str) or str(Path(path)) != path or Path(path).parent != Path(step["path"]).parent
+                    or not re.fullmatch(re.escape(prefix + journal["transaction_id"] + "-") + r"[0-9a-f]{32}", Path(path).name)):
+                raise ValueError("原生补偿临时节点路径无效")
+        if (step["stage"] is None) != (after.kind == "missing") or (step["held"] is None) != (expected.kind == "missing"):
+            raise ValueError("原生补偿临时节点类型不符")
+        for key in ("staged", "isolated", "result"):
+            if step[key] is not None:
+                Node.from_value(step[key])
+        if step["staged"] is not None and not Node.from_value(step["staged"]).same_content(after):
+            raise ValueError("原生补偿stage内容不符")
+        if step["result"] is not None:
+            result = Node.from_value(step["result"])
+            if (step["returned"] or not result.same_content(after)
+                    or after.kind == "file" and (step["staged"] is None or not _moved_matches(result, Node.from_value(step["staged"])))):
+                raise ValueError("原生补偿结果不属于已登记stage")
     return state, journal
 
 
@@ -404,6 +433,104 @@ def _check_retained(row: dict, *, allow_missing: bool = False) -> None:
         if (not node.same_content(before) or node.identity[:2] != before.identity[:2]
                 or node.identity[5:6] != before.identity[5:6]):
             raise ValueError("保留的原生旧 inode 已有后续编辑")
+
+
+def _compensation_result(journal: dict, root: Path, path: str) -> Node | None:
+    for step in reversed(journal.get("compensations", [])):
+        if step["root"] == str(root) and step["path"] == path and step["result"] is not None:
+            return Node.from_value(step["result"])
+    return None
+
+
+def _check_compensation_history(journal: dict, root: Path, path: str) -> None:
+    for step in journal.get("compensations", []):
+        if step["root"] != str(root) or step["path"] != path:
+            continue
+        if step["returned"]:
+            raise ValueError("该补偿已保全未知inode，不能自动认领或清理")
+        for name, snapshot in (("stage", "staged"), ("held", "isolated")):
+            if step[name] is None:
+                continue
+            actual = native.read_node(root, step[name])
+            if actual.kind != "missing" and (step[snapshot] is None or actual != Node.from_value(step[snapshot])):
+                raise ValueError("补偿保留节点已有后续编辑，已停止恢复")
+
+
+def _compensate_node(state: Path, journal: dict, root: Path, path: str, *, expected: Node, after: Node) -> Node:
+    """在同一父fd内以完整Node授权补偿，不把授权降为正文/权限二元值。
+
+    先持久登记stage与隔离位置，再准备文件、重核完整前像、隔离并核验inode。
+    隔离后才发现的未知节点只返还/保全，永不进入发布或删除分支；其随机隔离
+    路径和实际Node留在原journal中，冲突重入也不会将它当作本轮产物回收。
+    """
+    token = journal["transaction_id"] + "-" + uuid.uuid4().hex
+    parent_path = Path(path).parent
+    stage = ".awf-native-restore-" + token if after.kind == "file" else None
+    held = ".native-rollback-" + token if expected.kind == "file" else None
+    step = {"root": str(root), "path": path, "expected": expected.value(), "after": after.value(),
+            "stage": str(parent_path / stage) if stage else None, "staged": None,
+            "held": str(parent_path / held) if held else None, "isolated": None,
+            "result": None, "returned": False}
+    with Tree(root) as tree:
+        root_info = os.fstat(tree.directories[""])
+        root_identity = journal["root_identities"].get(str(root))
+        if root_identity is not None and [root_info.st_dev, root_info.st_ino] != root_identity:
+            raise ValueError("补偿宿主物理根已变化")
+        parent, name = tree.parent(path)
+        if read_at(parent, name) != expected:
+            raise ValueError("补偿节点在打开父目录后变化")
+        journal.setdefault("compensations", []).append(step)
+        _save(state, journal)
+        if stage is not None:
+            descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(after.payload)
+                stream.flush()
+                os.fchmod(stream.fileno(), after.mode)
+                os.fsync(stream.fileno())
+            step["staged"] = read_at(parent, stage).value()
+            _save(state, journal)
+        if read_at(parent, name) != expected:
+            raise ValueError("补偿节点在最终隔离前变化")
+        if held is not None:
+            os.rename(name, held, src_dir_fd=parent, dst_dir_fd=parent)
+            isolated = read_at(parent, held)
+            step["isolated"] = isolated.value()
+            _save(state, journal)
+            if not _moved_matches(isolated, expected):
+                # 排他返还不覆盖隔离后新建的目标。未知inode的隔离别名永久保留，
+                # 即使返还后用户又重建目标，其旧fd后续保存仍有journal路径可找。
+                # 此冲突路径可能暂有两个硬链接；普通受管reader继续拒绝它，不能
+                # 通过放宽单链接合同将未知文件重新标为已管理。
+                step["returned"] = True
+                _save(state, journal)
+                try:
+                    os.link(held, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                    os.fsync(parent)
+                except FileExistsError:
+                    pass
+                raise state_files.PreservedEdit(root / step["held"])
+        if stage is not None:
+            os.link(stage, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+            os.unlink(stage, dir_fd=parent)
+            result = read_at(parent, name)
+            if not _moved_matches(result, Node.from_value(step["staged"])):
+                raise ValueError("补偿产物在发布窗口被替换")
+        else:
+            result = read_at(parent, name)
+            if result.kind != "missing":
+                raise ValueError("补偿删除期间目标被外部重建")
+        os.fsync(parent)
+        step["result"] = result.value()
+        _save(state, journal)
+        if held is not None:
+            # 删除的只有已隔离并再次核实的本轮产物；逻辑目标此后出现的新inode
+            # 不会被unlink触及。旧forward retained资料始终由_check_retained保全。
+            if read_at(parent, held) != Node.from_value(step["isolated"]):
+                raise state_files.PreservedEdit(root / step["held"])
+            os.unlink(held, dir_fd=parent)
+            os.fsync(parent)
+        return result
 
 
 def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
@@ -428,13 +555,20 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
         for row in reversed(journal["writes"]):
             try:
                 root, path = Path(row["root"]), row["path"]
+                _check_compensation_history(journal, root, path)
                 current = native.read_node(root, path)
+                before = Node.from_value(row["before"])
+                recovered = _compensation_result(journal, root, path)
+                if recovered is not None:
+                    if current != recovered:
+                        raise ValueError("补偿产物已有未知替换或编辑")
+                    row["restored"] = recovered.value()
                 if row.get("restored") is not None:
+                    _check_retained(row, allow_missing=current == before)
                     if current != Node.from_value(row["restored"]):
                         raise ValueError("补偿后的节点已有后续编辑")
                     continue
                 published = Node.from_value(row["published"]) if row.get("published") is not None else None
-                before = Node.from_value(row["before"])
                 if current == before:
                     _check_retained(row, allow_missing=True)
                     _clean_stage(row)
@@ -445,28 +579,15 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
                 if published is None and row.get("staged") is not None and _moved_matches(current, Node.from_value(row["staged"])):
                     published = current
                 if published is None and current.kind == "missing" and before.kind == "file" and row["retained"]:
-                    # 进程可能在隔离旧inode后、排他发布前退出；日志已登记旧inode，
-                    # 当前目标仍缺失时可恢复原内容。新出现目标一律保留并报冲突。
-                    with state_files.AnchoredFile(root, path) as target:
-                        target.write(before.payload, before.mode, (None, None))
-                    _clean_stage(row)
-                    row["restored"] = native.read_node(root, path).value()
-                    _save(state, journal)
-                    continue
-                if published is None or current != published:
-                    raise ValueError("原生产物身份不再属于本次事务")
-                with state_files.AnchoredFile(root, path) as target:
-                    if before.kind == "file":
-                        target.write(before.payload, before.mode, (published.payload, published.mode))
-                    else:
-                        held = ".native-rollback-" + journal["transaction_id"] + "-" + uuid.uuid4().hex
-                        os.rename(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory)
-                        moved = target.read(held)
-                        if moved != (published.payload, published.mode):
-                            raise state_files.PreservedEdit(target.path.parent / held)
-                        os.unlink(held, dir_fd=target.directory)
+                    restored = _compensate_node(state, journal, root, path, expected=current, after=before)
+                else:
+                    if published is None or current != published:
+                        raise ValueError("原生产物身份不再属于本次事务")
+                    restored = _compensate_node(state, journal, root, path, expected=published, after=before)
                 _clean_stage(row)
-                row["restored"] = native.read_node(root, path).value()
+                if native.read_node(root, path) != restored:
+                    raise ValueError("补偿完成后的节点又被替换")
+                row["restored"] = restored.value()
                 _save(state, journal)
             except (OSError, ValueError):
                 conflicts.append({"root": row["root"], "path": row["path"], "reason": "恢复身份或旧 inode 冲突，已保留文件和日志"})
@@ -477,30 +598,63 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
             for target in recovery_ref["targets"]:
                 root = Path(target["native_root"])
                 record_path = native.record_relative(root)
-                current_record = native.read_node(state, record_path)
-                if current_record.kind == "missing":
-                    continue
-                record = native.parse_record(current_record, state=state, root=root, host=target["host"],
-                                             identity=native.root_identity(root))
-                for path, entry in record["files"].items():
-                    current = native.read_node(root, path)
-                    if not current.same_content(Node.from_value(entry["expected"])):
-                        conflicts.append({"root": str(root), "path": path, "reason": "恢复后正文与原归属不一致"})
+                active_root, active_path = state, record_path
+                try:
+                    _check_compensation_history(journal, state, record_path)
+                    current_record = native.read_node(state, record_path)
+                    authorized = _compensation_result(journal, state, record_path)
+                    if authorized is not None and current_record != authorized:
+                        raise ValueError("归属索引在重建投影前被替换")
+                    if current_record.kind == "missing":
+                        continue
+                    record = native.parse_record(current_record, state=state, root=root, host=target["host"],
+                                                 identity=native.root_identity(root))
+                    for path, entry in record["files"].items():
+                        current = native.read_node(root, path)
+                        authorized = _compensation_result(journal, root, path)
+                        if authorized is None:
+                            restored_row = next((row for row in journal["writes"] if row["root"] == str(root) and row["path"] == path), None)
+                            authorized = Node.from_value(restored_row["restored"]) if restored_row and restored_row.get("restored") is not None else Node.from_value(entry["expected"])
+                        if current != authorized:
+                            conflicts.append({"root": str(root), "path": path, "reason": "恢复后精确节点与已授权归属不一致"})
+                            break
+                        entry["expected"] = current.value()
+                    if conflicts:
                         break
-                    entry["expected"] = current.value()
-                if conflicts:
+                    payload = json_bytes(record)
+                    for owner_root, owner_path in ((root, native.OWNER), (state, record_path)):
+                        active_root, active_path = owner_root, owner_path
+                        _check_compensation_history(journal, owner_root, owner_path)
+                        node = native.read_node(owner_root, owner_path)
+                        authorized = _compensation_result(journal, owner_root, owner_path)
+                        if authorized is not None and node != authorized:
+                            raise ValueError("归属投影在重写前被未知替换")
+                        if node.payload != payload:
+                            restored = _compensate_node(state, journal, owner_root, owner_path,
+                                                        expected=node, after=Node("file", payload, 0o600))
+                            for row in journal["writes"]:
+                                if row["root"] == str(owner_root) and row["path"] == owner_path:
+                                    row["restored"] = restored.value()
+                            _save(state, journal)
+                except (OSError, ValueError):
+                    conflicts.append({"root": str(active_root), "path": active_path,
+                                      "reason": "归属投影的精确Node或补偿保留资料冲突，已保全现状"})
                     break
-                payload = json_bytes(record)
-                for owner_root, owner_path in ((root, native.OWNER), (state, record_path)):
-                    node = native.read_node(owner_root, owner_path)
-                    if node.payload != payload:
-                        with state_files.AnchoredFile(owner_root, owner_path) as target_file:
-                            target_file.write(payload, 0o600, (node.payload, node.mode))
-                        restored = native.read_node(owner_root, owner_path)
-                        for row in journal["writes"]:
-                            if row["root"] == str(owner_root) and row["path"] == owner_path:
-                                row["restored"] = restored.value()
-                        _save(state, journal)
+        if not conflicts:
+            # metadata可能是在原发布中断后首次补偿产生，也必须核验它的精确
+            # 结果；不能只遍历原writes，漏掉没有forward行的owner/索引恢复。
+            results = {(row["root"], row["path"]): Node.from_value(row["restored"]) for row in journal["writes"]}
+            for step in journal.get("compensations", []):
+                if step["result"] is not None:
+                    results[(step["root"], step["path"])] = Node.from_value(step["result"])
+            for (root_raw, path), expected in results.items():
+                try:
+                    root = Path(root_raw)
+                    _check_compensation_history(journal, root, path)
+                    if native.read_node(root, path) != expected:
+                        raise ValueError("补偿结算前节点变化")
+                except (OSError, ValueError):
+                    conflicts.append({"root": root_raw, "path": path, "reason": "补偿结算前精确节点或保留资料变化"})
         journal["conflicts"] = conflicts
         journal["status"] = "conflict" if conflicts else "compensated"
         _save(state, journal)
