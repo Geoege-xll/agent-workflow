@@ -234,10 +234,13 @@ class ProjectIdSetupIntegrationTest(unittest.TestCase):
                     ["agent_workflow"], sorted(path.name for path in project.iterdir())
                 )
 
-    def test_readme_documents_automatic_and_read_only_behavior(self) -> None:
-        readme = (PACK / "README.md").read_text(encoding="utf-8")
-        self.assertIn("automatically derives `memory.project_id`", readme)
-        self.assertIn("`--check` and `--preflight` never initialize", readme)
+    def test_usage_documents_automatic_and_read_only_behavior(self) -> None:
+        # 安装行为仍须公开说明，文档位置迁移不能删除初始化／只读边界的保护。
+        self.assertIn("docs/usage.md", (PACK / "README.md").read_text(encoding="utf-8"))
+        usage = (PACK / "docs/usage.md").read_text(encoding="utf-8")
+        self.assertIn("自动派生 `memory.project_id` 并原子写入配置", usage)
+        self.assertIn("已配置 ID 不覆盖", usage)
+        self.assertIn("`--check` 和 `--preflight` 从不初始化", usage)
 
 
 if __name__ == "__main__":

@@ -1171,14 +1171,18 @@ class RetiredRuntimeCleanupContractTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse((PACK / "docs/plans" / name).exists())
 
-    def test_readme_uses_discovery_preflight_without_manual_adapter_edits(self) -> None:
+    def test_usage_uses_discovery_preflight_without_manual_adapter_edits(self) -> None:
         readme = (PACK / "README.md").read_text(encoding="utf-8")
+        usage = (PACK / "docs/usage.md").read_text(encoding="utf-8")
         self.assertIn("bash /path/to/agent_workflow/install.sh", readme)
-        self.assertIn("ProjectProfile preview", readme)
-        self.assertIn("workspace.discovery: auto", readme)
-        self.assertNotIn("Soft sandboxes", readme)
-        self.assertNotIn("adapt paths + commands", readme)
-        self.assertNotRegex(readme, r"(?i)edit .*role scope|manual .*role assignment")
+        self.assertIn("docs/usage.md", readme)
+        # 发现预检、默认策略与不手改映射的合同继续由真正承载正文的手册保护。
+        for phrase in ("ProjectProfile preview", "workspace.discovery: auto", "普通项目不必手改角色分配"):
+            self.assertIn(phrase, usage)
+        for text in (readme, usage):
+            self.assertNotIn("Soft sandboxes", text)
+            self.assertNotIn("adapt paths + commands", text)
+            self.assertNotRegex(text, r"(?i)edit .*role scope|manual .*role assignment")
 
     def test_runtime_does_not_name_or_special_case_retired_roles_or_skills(self) -> None:
         sources = [*PACK.glob("setup_*.sh"), *sorted((PACK / "lib").glob("*.py"))]
@@ -1684,6 +1688,9 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
             path
             for path in (
                 PACK / "README.md",
+                PACK / "docs/usage.md",
+                PACK / "docs/development.md",
+                PACK / "docs/homebrew.md",
                 PACK / "project.yaml",
                 PACK / "setup_all.sh",
                 PACK / "setup_codex.sh",
@@ -1953,8 +1960,11 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
             "QA PASS -> controlled-document projection -> PM commit assessment -> "
             "memory closeout -> final report"
         )
+        # 手册给出中文操作归属，完整机器化生命周期仍由以下权威源保持。
+        development = self._text("docs/development.md")
+        self.assertIn("QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口、最终报告", development)
+        self.assertIn("docs/development.md", self._text("README.md"))
         for relative in (
-            "README.md",
             "product/WORKFLOW.md",
             "product/AGENT_SCHEMA.md",
             "platforms/shared/skills/xy-workflow/SKILL.md",
@@ -6082,31 +6092,26 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
 
     def test_documentation_defines_the_unified_three_host_contract(self) -> None:
         readme = (PACK / "README.md").read_text(encoding="utf-8")
+        development = (PACK / "docs/development.md").read_text(encoding="utf-8")
         schema = (PACK / "product/AGENT_SCHEMA.md").read_text(encoding="utf-8")
+        self.assertIn("docs/development.md", readme)
+        # 共享源、三宿主生成与请求级 QA 的说明迁入开发手册，语义覆盖保持完整。
         for phrase in (
-            "platforms/shared/skills/",
-            "one shared source",
-            ".agents/agents/xy-*.md",
-            "task dependency graph",
-            "all currently `READY` tasks",
-            "request dependency closure",
-            "one integrated QA",
-            "QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report",
-            "bash setup_antigravity.sh --check",
-            "--only=claude",
-            "--only=codex",
-            "--only=antigravity",
+            "platforms/shared/skills/", "one shared source",
+            ".codex/agents/xy-*.toml", ".claude/agents/xy-*.md", ".agents/agents/xy-*.md",
+            "task dependency graph", "当前可执行任务", "请求依赖闭包", "一次集成 QA",
+            "QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口、最终报告",
+            "bash setup_antigravity.sh --check", "--only=claude", "--only=codex", "--only=antigravity",
         ):
-            self.assertIn(phrase, readme)
+            with self.subTest(source="docs/development.md", phrase=phrase):
+                self.assertIn(phrase, development)
         for phrase in (
             "platforms/shared/skills/",
             ".codex/agents/xy-*.toml",
             ".claude/agents/xy-*.md",
             ".agents/agents/xy-*.md",
             "QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report",
-            "Codex",
-            "Claude Code",
-            "Antigravity",
+            "Codex", "Claude Code", "Antigravity",
         ):
             self.assertIn(phrase, schema)
 

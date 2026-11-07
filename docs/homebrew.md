@@ -1,5 +1,7 @@
 # Homebrew 安装与 2.1 发行构建
 
+日常项目管理见[使用手册](usage.md)，源码结构与维护见[开发手册](development.md)，快速入口见 [README](../README.md)。
+
 源码仓库：<https://github.com/Geoege-xll/agent-workflow>，公开 Tap 为
 `Geoege-xll/homebrew-tap`，Formula 名称为 `Geoege-xll/tap/awf-cli`。
 发行归档、校验文件与 Formula 来自同一次构建。Tap 使用对应 Release 的 Formula，
@@ -73,7 +75,9 @@ bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1
 - `dist/Formula/awf-cli.rb`
 
 发行包使用运行所需文件/目录白名单，不包含 `.sync-backups`、Git 元数据、发行输出、
-测试、发布工具或 Python 缓存。存在的根目录许可证会一并打包，但构建器不替作者选择
+测试、发布工具或 Python 缓存。文档仅显式包含 `docs/usage.md`、`docs/development.md`、
+`docs/homebrew.md`，保留 README 的离线导航；不递归打包整个 docs，历史 plans、原型与私有材料仍排除。
+存在的根目录许可证会一并打包，但构建器不替作者选择
 或生成许可证。仓库首次公开发布前，请自行确定代码授权方式。
 
 归档固定排序、时间戳、所有者及权限；在源内容/可执行位及工具链一致时，重复构建得到
@@ -88,7 +92,8 @@ bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1 --outp
 离线测试在独立临时目录中验证发行包及实际 Formula 的安装方法、模拟 Cellar 启动器、
 路径含空格、相对项目参数、CDPATH/PATH 保留和显式解释器约束；测试不改 PATH、
 不运行 `brew install`、不操作真实项目。模拟安装不等于真实 Homebrew 验收。
-生成 Formula 的测试还会通过安装后的入口核对 `--version` 与 `libexec`，不只检查 Formula 的版本字符串。
+生成 Formula 的测试还会通过安装后的入口核对 `--version` 与 `libexec`，并检查实际归档及安装后手册的相对链接可解析，
+不只检查 Formula 的版本字符串。
 
 ## 发布边界
 

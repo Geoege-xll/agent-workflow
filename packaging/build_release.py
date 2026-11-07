@@ -21,6 +21,8 @@ from manager.release import source_version
 RELEASE_FILES = (
     "workflow.sh", "install.sh", "setup_all.sh", "setup_claude.sh",
     "setup_codex.sh", "setup_antigravity.sh", "project.yaml", "README.md",
+    # 用户离线入口只需要这三份手册；历史计划、原型及私有文档不进入载荷。
+    "docs/usage.md", "docs/development.md", "docs/homebrew.md",
 )
 RELEASE_DIRECTORIES = ("manager", "lib", "product", "roles", "platforms", "scripts", "templates")
 OPTIONAL_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
@@ -34,7 +36,9 @@ def payload(source: Path) -> list[Path]:
         entry = source / name
         if name in OPTIONAL_FILES and not entry.exists() and not entry.is_symlink():
             continue
-        if entry.is_symlink():
+        # 嵌套白名单文件也必须核对父目录：否则 docs 被换成软链时，
+        # 看似普通的手册会从源包外读入，绕过载荷的受信目录边界。
+        if entry.is_symlink() or any((source / parent).is_symlink() for parent in Path(name).parents):
             raise ValueError(f"Release payload cannot contain symlinks: {entry}")
         expected = entry.is_dir() if name in RELEASE_DIRECTORIES else entry.is_file()
         if not expected:

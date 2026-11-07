@@ -1428,20 +1428,24 @@ class ClaudeDocumentationTest(unittest.TestCase):
     def read(self, relative: str) -> str:
         return read_contract(PACK / relative)
 
-    def test_readme_documents_the_claude_native_runtime_contract(self) -> None:
-        body = self.read("README.md")
-        for phrase in (
-            "Claude-native generated layout",
-            "xy-project-memory",
-            "agentmemory is optional",
-            "Claude Auto Memory",
-            "merges only signed assist Hook entries in `.claude/settings.json`",
-            "`ui-ux-pro-max`",
-            "matched on demand",
-            "`claude doctor`",
-        ):
-            with self.subTest(phrase=phrase):
-                self.assertIn(phrase, body)
+    def test_manuals_document_the_claude_native_runtime_contract(self) -> None:
+        # README 负责发现入口，原生设置与记忆合同跟随实际手册归属，不能随精简丢失。
+        readme = self.read("README.md")
+        for relative in ("docs/usage.md", "docs/development.md"):
+            self.assertIn(relative, readme)
+        expected = {
+            "docs/usage.md": ("agentmemory 是可选服务", "Claude Auto Memory"),
+            "docs/development.md": (
+                "Claude 原生生成合同", "xy-project-memory",
+                "仅合并 `.claude/settings.json` 中带签名的辅助 Hook 条目",
+                "`ui-ux-pro-max`", "按描述匹配", "`claude doctor`",
+            ),
+        }
+        for relative, phrases in expected.items():
+            body = self.read(relative)
+            for phrase in phrases:
+                with self.subTest(source=relative, phrase=phrase):
+                    self.assertIn(phrase, body)
 
     def test_hook_notes_keep_settings_and_auto_memory_user_owned(self) -> None:
         body = self.read("platforms/claude/hooks/README.md")
