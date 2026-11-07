@@ -264,7 +264,7 @@ def _same_inode(actual: Node, expected: Node) -> bool:
     return actual.same_content(expected) and actual.mode == expected.mode and actual.identity[:2] == expected.identity[:2]
 
 
-def write_private(tree: Tree, relative: str, body: bytes) -> None:
+def write_private(tree: Tree, relative: str, body: bytes, *, expected: Node | None = None) -> None:
     """在调用方既有中央锁内条件发布，任何直接退出都留下确定性见证。
 
     保留 rename 旧 inode + no-replace link 的并发守卫，拒绝发布前像变化、
@@ -285,6 +285,12 @@ def write_private(tree: Tree, relative: str, body: bytes) -> None:
     parent, name = tree.parent(relative, create=True)
     _check_marker(parent, name, relative)
     before = read_at(parent, name)
+    # 调用方可绑定最终核对的完整前像，防止其 capture 与这里重新读取 before
+    # 之间发生的外部保存被认领为本次可覆盖版本。必须比较完整 Node（包含字节、
+    # 权限及时间/inode 身份），并在生成临时名、创建见证或发布任何记录前拒绝；
+    # 未显式传 expected 的既有调用仍沿用原内部条件发布与异常保全语义。
+    if expected is not None and before != expected:
+        raise ActivationError("机器记录与调用方预期前像不符，拒绝发布")
     temporary = ".central-state-" + uuid.uuid4().hex
     held_name = ".central-state-previous-" + uuid.uuid4().hex
     marker_name = _marker_name(name)
