@@ -188,6 +188,181 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertEqual(result["status"], "conflict")
         self.assertEqual(target.read_bytes(), body)
 
+    def _assert_compensation_window_keeps_replacement(self, *, before_file):
+        receipt = self.install(hosts=("codex",))
+        if before_file:
+            receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                        preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+        target = self.paths.codex / "agents/xy-backend.toml"
+        body = target.read_bytes()
+        expected_inode = target.stat().st_ino
+        original_rename = native_agents.os.rename
+        replaced = []
+        def replace_at_final_isolation(source, destination, **kwargs):
+            # 钩住真实rename系统调用边界；既不替换补偿业务函数，也不根据新
+            # 实现的辅助方法判断时机。旧二元CAS与完整Node方案都必须经历此窗口。
+            if source == target.name and not replaced:
+                replacement = target.with_name(".user-compensation-replacement")
+                with replacement.open("xb") as stream:
+                    stream.write(body)
+                replacement.chmod(target.stat().st_mode & 0o7777)
+                foreign = replacement.stat()
+                self.assertNotEqual(foreign.st_ino, expected_inode)
+                os.replace(replacement, target)
+                replaced.append((foreign.st_dev, foreign.st_ino))
+            return original_rename(source, destination, **kwargs)
+        with patch.object(native_agents.os, "rename", side_effect=replace_at_final_isolation):
+            result = native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+        print("COMPENSATION_REPLACEMENT_WINDOW", "file" if before_file else "missing", result["status"], replaced)
+        self.assertTrue(replaced)
+        self.assertTrue(target.exists(), "补偿不得删除窗口中出现的未知同内容inode")
+        self.assertEqual((target.stat().st_dev, target.stat().st_ino), replaced[0])
+        self.assertEqual(target.read_bytes(), body)
+        self.assertEqual(result["status"], "conflict")
+        journal_path = self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")
+        journal = json.loads(journal_path.read_bytes())
+        self.assertTrue(any(row.get("path") == "agents/xy-backend.toml" for row in journal["conflicts"]))
+        self.assertIn(str(replaced[0][1]), json.dumps(journal))
+        self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "conflict")
+        self.assertEqual((target.stat().st_dev, target.stat().st_ino), replaced[0])
+        self.assertEqual(target.read_bytes(), body)
+
+    def test_compensation_file_restore_rejects_same_content_inode_at_final_isolation(self):
+        self._assert_compensation_window_keeps_replacement(before_file=True)
+
+    def test_compensation_delete_rejects_same_content_inode_at_final_isolation(self):
+        self._assert_compensation_window_keeps_replacement(before_file=False)
+
+    def test_compensation_resumes_forward_interruption_before_publication(self):
+        self.install(hosts=("codex",))
+        target = self.paths.codex / "agents/xy-backend.toml"
+        original_body = target.read_bytes()
+        plan = self.preview(hosts=("codex",), preferences={"codex": {"xy-backend": {"model": "new-model"}}})
+        original_link = native_agents.os.link
+        interrupted = []
+        def stop_before_link(source, destination, **kwargs):
+            if str(source).startswith(".awf-native-stage-") and destination == target.name and not interrupted:
+                interrupted.append(True)
+                raise OSError("fixture native publication interrupted")
+            return original_link(source, destination, **kwargs)
+        with patch.object(native_agents.os, "link", side_effect=stop_before_link):
+            with self.assertRaisesRegex(OSError, "publication interrupted"):
+                native_agents.apply_global(plan)
+        self.assertTrue(interrupted)
+        self.assertFalse(target.exists())
+        result = native_agents.recover_global(plan.recovery_ref, context=self.context)
+        self.assertEqual(result["status"], "compensated", result)
+        self.assertEqual(target.read_bytes(), original_body)
+        self.assertEqual(native_agents.verified_hosts(self.state, context=self.context), ("codex",))
+        self.assertEqual(native_agents.recover_global(plan.recovery_ref, context=self.context)["status"], "compensated")
+
+    def test_compensation_owner_reconciliation_rejects_same_content_inode(self):
+        self.install(hosts=("codex",))
+        receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                  preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+        owner = self.paths.codex / native.OWNER
+        original_rename = native_agents.os.rename
+        visits, replacement = [], []
+        def replace_at_reconciliation(source, destination, **kwargs):
+            if source == native.OWNER:
+                visits.append(True)
+                if len(visits) == 2:
+                    body = owner.read_bytes()
+                    alternate = owner.with_name(".user-owner-replacement")
+                    with alternate.open("xb") as stream:
+                        stream.write(body)
+                    alternate.chmod(owner.stat().st_mode & 0o7777)
+                    info = alternate.stat()
+                    os.replace(alternate, owner)
+                    replacement.append((info.st_dev, info.st_ino, body))
+            return original_rename(source, destination, **kwargs)
+        with patch.object(native_agents.os, "rename", side_effect=replace_at_reconciliation):
+            result = native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+        self.assertEqual(len(replacement), 1)
+        self.assertEqual(result["status"], "conflict", result)
+        self.assertEqual((owner.stat().st_dev, owner.stat().st_ino), replacement[0][:2])
+        self.assertEqual(owner.read_bytes(), replacement[0][2])
+        self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "conflict")
+        self.assertEqual((owner.stat().st_dev, owner.stat().st_ino), replacement[0][:2])
+
+    def test_compensation_preserves_forward_retained_fd_edits(self):
+        self.install(hosts=("codex",))
+        target = self.paths.codex / "agents/xy-backend.toml"
+        descriptor = os.open(target, os.O_WRONLY | os.O_APPEND)
+        try:
+            receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                      preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+            published_body = target.read_bytes()
+            os.write(descriptor, b"\n# late original fd save\n")
+            result = native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+        finally:
+            os.close(descriptor)
+        self.assertEqual(result["status"], "conflict", result)
+        self.assertEqual(target.read_bytes(), published_body)
+        journal = json.loads((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
+        row = next(row for row in journal["writes"] if row["path"] == "agents/xy-backend.toml")
+        retained = self.paths.codex / row["retained"][0]["path"]
+        self.assertIn(b"late original fd save", retained.read_bytes())
+        self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "conflict")
+        self.assertIn(b"late original fd save", retained.read_bytes())
+
+    def test_compensation_resumes_persisted_exact_result_after_interruption(self):
+        for before_file in (False, True):
+            with self.subTest(before_file=before_file):
+                self.paths = HostPaths.for_home(self.case / ("file-home" if before_file else "missing-home"), environment={})
+                self.context = NativeContext(self.state, self.paths)
+                receipt = self.install(hosts=("codex",))
+                if before_file:
+                    receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                              preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+                target = self.paths.codex / "agents/xy-backend.toml"
+                original_save = native_agents._save
+                interrupted = []
+                def stop_after_exact_result(state, journal):
+                    result = original_save(state, journal)
+                    if not interrupted and any(step["path"] == "agents/xy-backend.toml" and step["result"] is not None
+                                               for step in journal.get("compensations", [])):
+                        interrupted.append(True)
+                        raise KeyboardInterrupt("fixture compensation after exact result")
+                    return result
+                with patch.object(native_agents, "_save", side_effect=stop_after_exact_result):
+                    with self.assertRaisesRegex(KeyboardInterrupt, "after exact result"):
+                        native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+                self.assertTrue(interrupted)
+                journal = json.loads((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
+                saved = next(step for step in reversed(journal["compensations"]) if step["path"] == "agents/xy-backend.toml")
+                self.assertEqual(native.read_node(self.paths.codex, "agents/xy-backend.toml"), Node.from_value(saved["result"]))
+                result = native_agents.recover_global(receipt["recovery_ref"], context=self.context)
+                self.assertEqual(result["status"], "compensated", result)
+                self.assertEqual(target.exists(), before_file)
+                before_noop = native.read_node(self.paths.codex, "agents/xy-backend.toml")
+                self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
+                self.assertEqual(native.read_node(self.paths.codex, "agents/xy-backend.toml"), before_noop)
+
+    def test_compensation_log_rejects_foreign_paths_and_incomplete_node_identity(self):
+        self.install(hosts=("codex",))
+        receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                  preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+        self.assertEqual(native_agents.compensate_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
+        journal_path = self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")
+        original = json.loads(journal_path.read_bytes())
+        outside = self.case / "outside.txt"
+        outside.write_bytes(b"preserve foreign bytes")
+        before = native.read_node(self.paths.codex, "agents/xy-backend.toml")
+        for invalid in ("path", "identity"):
+            with self.subTest(invalid=invalid):
+                journal = json.loads(json.dumps(original))
+                step = next(step for step in journal["compensations"] if step["stage"] is not None)
+                if invalid == "path":
+                    step["stage"] = "../../outside.txt"
+                else:
+                    step["expected"]["identity"] = []
+                journal_path.write_bytes(json_bytes(journal))
+                with self.assertRaises(ValueError):
+                    native_agents.recover_global(receipt["recovery_ref"], context=self.context)
+                self.assertEqual(outside.read_bytes(), b"preserve foreign bytes")
+                self.assertEqual(native.read_node(self.paths.codex, "agents/xy-backend.toml"), before)
+
     def test_update_compensation_restores_prior_ownership_and_preserves_applied_evidence(self):
         self.install(hosts=("codex",))
         target = self.paths.codex / "agents/xy-backend.toml"
