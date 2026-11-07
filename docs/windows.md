@@ -1,15 +1,17 @@
 # Windows npx 项目安装（本地、未发布）
 
 目标是在 **Windows 10/11 x64、本地 NTFS、普通用户**环境，从项目目录安装现有工作流，
-不是安装 Windows 管理器。当前 npm 包是 `@geoege-xll/agent-workflow` 的本地 `2.1.0`
-准备版本，`private: true`，**尚未发布，也尚未完成原生 Windows 安全/恢复与端到端验收**。
+不是安装 Windows 管理器。当前 npm 包是 `@geoege-xll/agent-workflow` 的本地 `2.1.1`
+候选版本，`private: true`，**尚未发布，完整本地 tgz 端到端验收仍在进行**。
 版本唯一来源为 `product/VERSION`，npm 元数据与构建器须保持一致；既有 macOS 打包和模拟证据不能视为本版本 Windows 已支持。
 
-默认源码、打包与 npx 项目安装入口现在共用中央运行时服务。当前 Windows 安全文件系统
-后端尚未实现受管 Skill 的锚定软链发布，因此默认入口会在创建项目资源或中央状态前明确
-拒绝，不会自动退回完整复制安装。本轮保留既有 Win32 文件系统、私有 Python 部署和恢复
-实现，但没有扩展软链安全后端，也没有取得 Windows 中央安装验收。下文的本地包构建和保留的部署/恢复模块说明不表示当前默认 `init` 可以成功安装；
-远程 npx 包仍未发布、不可据此使用。
+默认源码、打包与 npx 项目安装入口共用中央运行时服务。Windows 安全后端支持锚定的
+真目录 SYMLINK 发布和同卷排他移动，拒绝未知重解析点、junction 与普通文件硬链接。
+安装前用当前令牌在私有临时目录真实检查软链及目录持久化能力；能力不足时在项目资源和
+中央状态写入前明确拒绝，不复制 Skill 正文、不更改系统策略。一次性托管 Windows Server
+普通用户的中央安装、固定 pin 薄桥、Job helper 和重复安装已通过；该源码消费者使用
+独立解释器，不等于本地 tgz 的持久 embedded、缓存清理后 Hook 或 Windows 10/11 客户端
+已经通过。远程 npx 包仍未发布。
 
 未来通过完整验收并获准公开发布后，拟用命令才是：
 
@@ -44,8 +46,8 @@ npx @geoege-xll/agent-workflow init
 ```powershell
 # 只进入一个专门创建的临时测试项目，不操作真实项目。
 cd 'C:\awf-test\临时项目 with spaces'
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz' agent-workflow --help
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz' agent-workflow init
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.1.tgz' agent-workflow --help
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.1.tgz' agent-workflow init
 ```
 
 完整包在本地可取得时，`--offline --ignore-scripts` 不影响首次运行时部署。
@@ -68,7 +70,7 @@ agent-workflow init [--project PATH] [--timeout SECONDS]
 
 ```powershell
 # 使用已缓存的同一个本地包入口时，也可显式选择其他临时目录。
-npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz' agent-workflow init --project '..\另一个临时项目' --timeout 120
+npx.cmd --offline --ignore-scripts --package 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.1.tgz' agent-workflow init --project '..\另一个临时项目' --timeout 120
 ```
 
 `--timeout` 交给 Python 安装事务处理，不是 Node 强杀计时器。Ctrl+C 会通知受控 Python
@@ -111,17 +113,18 @@ bootstrap 及其部署依赖不留在 npx 缓存；项目运行辅助命令和 H
 项目安装入口复用 `lib/install_workflow.py` 和当前中央服务，不再复制完整项目内运行时，
 并保留 `.agent-workflow/project.yaml` 的专有配置。2.1 不提供旧版本兼容升级；不兼容残留
 须先确认旧任务收尾、保全文档与配置、核对受管范围并单独移除，再进行普通中央安装预览。
-未知同名内容或用户手改会报冲突，不能直接覆盖。当前 Windows 后端仍在中央发布前明确拒绝。
+未知同名内容或用户手改会报冲突，不能直接覆盖。缺少真实软链/持久化能力时，Windows 后端在中央发布前拒绝。
 删除 npx 缓存不等于卸载项目或持久 Python；不提供自动全局清理。
 
 ## 项目辅助命令边界
 
 中央项目的辅助命令通过 `.agent-workflow/runtime.py` 和当前任务的三字段 pin 选择固定核心；
 项目不包含完整 `.agent-workflow/lib/` helper 树或本地 setup 脚本。不要使用旧自包含安装的
-Node helper 路径或把源码直接复制到项目来绕过 Windows 安全拒绝。
-由于本版本尚未完成 Windows 中央安装，当前没有可据此宣称已通过的安装后辅助命令或真实
-宿主 Hook 验收。需求 HTML 仍遵循[现有方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)，
-源码/载荷验证与 macOS 实测均不替代原生 Windows 证据。
+Node helper 路径或把源码直接复制到项目来绕过 Windows 安全检查。项目仅保留 Node/POSIX
+Python 启动薄桥、持久 Python 路径、Hook 薄入口及专有配置，核心与 helper 从中央固定版本读取。
+当前源码消费者已通过真实 Job 画像 helper；本地 tgz 的独立 helper 写读和缓存清理后的
+真实宿主 Hook 仍待该候选的原生结果。需求 HTML 仍遵循[现有方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)，
+macOS 实测不替代原生 Windows 证据。
 
 ## 离线构建（不执行下载的二进制）
 
@@ -192,27 +195,37 @@ CLI 参数、无写入预检、Git/Python 显式选择、cwd/Unicode/参数数�
 刷新候选，再同卷原子重命名；不使用 `shutil.move` 跨卷回退。无法证明归属的半成品保留，
 不递归盲删。预检仍只使用独立暂存区，不提前向项目写候选。
 
-当前部分 Skill/Antigravity 清理仍按路径删除，目标检查与替换也尚未全部绑定同一文件身份；
-这些仍是发布前的安全阻塞项。上述便携测试不能证明全部 Windows 文件事务已满足安全合同。
+中央事务对受管节点保留身份、哈希、碰撞及持久化检查，未知变化时停止并保全现场。
+上述便携测试不能证明全部 Windows 文件事务和故障恢复已满足安全合同，最终仍取实际原生消费者结果。
 
-在原生 Windows 源码目录中，给测试进程指定完整本地包后运行端到端夹具：
+原生 E2E 由本仓一次性 GitHub-hosted VM 的控制器创建全新标准账户，随后交给该账户
+执行已有本地 tgz。管理员只准备和清理 fixture，不能把管理员安装结果当普通用户证据。
+在已准备的本仓临时 CI 分支上选择相应手动模式：
 
 ```powershell
-$env:AGENT_WORKFLOW_NPX_TGZ = 'C:\awf-build\tgz\geoege-xll-agent-workflow-2.1.0.tgz'
-python -I -B -m unittest discover -s tests -p test_windows_npx_e2e.py -v
+# 正向：可信构建→离线pack→真实普通用户安装/缓存清理后helper和Hook。
+gh workflow run windows-npx.yml --ref ci/windows-central-npm-2.1.1 -f validation_mode=native-npx
+# 负向：仅一次性CI VM暂设Developer Mode=off并恢复，验证产品真实1314/零项目和state写入。
+gh workflow run windows-npx.yml --ref ci/windows-central-npm-2.1.1 -f validation_mode=native-npx-negative
 ```
 
-此变量只供当前测试会话使用，不要写入用户/系统环境。夹具始终新建临时项目和私有 npm 缓存，
+本地 tgz 路径只传给当前测试进程，不写用户/系统环境。夹具始终新建临时项目和私有 npm 缓存，
 覆盖离线 npm JS CLI 安装、重复调用和超时失败分支，再删除本测试缓存和来源副本，执行项目 helper
 及真实 cmd → PowerShell → Python SessionStart 恢复事件；对 PATH 注册项、profile、ExecutionPolicy
 和 Git 全局配置仅取快照对比，不写这些配置。另含已有合法 `.agents/hooks.json` 且
-`TMPDIR=/tmp` 的首次安装回归，覆盖不执行整树重置的路径。未设置 tgz 或在非 Windows
-上跳过不算验收成功；临时目录和项目位于不同实际卷的验证仍须在相应 Windows 环境完成。
+`TMPDIR=/tmp` 的首次安装回归，覆盖不执行整树重置的路径。缺失 tgz、管理员令牌或任何 skip
+均不能作为此显式 E2E 的通过结果；临时目录和项目位于不同实际卷的验证仍须在相应 Windows 环境完成。
 
 `.github/workflows/windows-npx.yml` 提供独立、手动触发的只读权限 CI 配置，无发布/上传步骤。
 下载、可信构建器和准备输出分离；准备完成后才离线 pack 和执行本地 tgz。
-目录 flush 能力失败会直接阻塞，不跳过为成功。该文件尚未推送或远程执行；托管 runner 的
-管理员令牌结果也不能替代普通用户实测，完整并发/故障恢复矩阵仍须另外完成。
+目录 flush 能力失败会直接阻塞，不跳过为成功。已有托管 runner 原生能力和中央源码消费者
+成功证据；新 `native-npx` 与 `native-npx-negative` 结果仍待验证。默认 `acceptance` 保留
+全部适用 mandatory 检查，单个 probe 绿色不等于最终安装验收；托管 Server 也不替代 Windows 10/11 客户端实测。
+
+只有负向 CI fixture 可在已验证仓库/临时分支/精确 HEAD 的一次性 hosted VM 上把已有
+固定 DWORD `1` 临时改为 `0`，用无软链权限的新令牌执行产品，并在 finally 与 always
+恢复为原来的 `1`。私有快照不接受任意键/原值；未知状态停止。此机制不进入产品，
+不得在真实用户或开发机上运行；普通安装器始终不调整 Developer Mode、权限或系统设置。
 
 公开支持/发布前，必须在原生 Windows 用本地 tgz 验证实际中央安装/重复调用、完整 Git 探测、
 断网与 `--ignore-scripts`、特殊路径、运行时/项目并发、junction/硬链接/目录替换、占用、

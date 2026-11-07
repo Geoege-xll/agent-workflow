@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const path = require('node:path').win32;
 const cli = require('./bin/agent-workflow.cjs');
+// 当前源码版本只在 product/VERSION 人工维护；实际入口输出与包元数据分别
+// 在打包消费者核对，这里避免每次升版再维护一份固定正则表达式。
+const sourceVersion = require('node:fs').readFileSync(require('node:path').join(__dirname, '../product/VERSION'), 'utf8').trimEnd();
 
 function fixture(extra = {}) {
   const cwd = 'C:\\work\\项目 with spaces (a)&';
@@ -76,7 +79,11 @@ for (const arguments_ of [[], ['--help'], ['-h'], ['init', '--help'], ['init', '
   test(`help/version are read-only on every platform: ${arguments_.join(' ')}`, async () => {
     const f = fixture({ platform: 'darwin', arch: 'arm64', fs: new Proxy({}, { get() { throw new Error('No filesystem access'); } }) });
     assert.equal(await cli.main(arguments_, f.options), 0);
-    assert.match(f.output.stdout, arguments_.some((arg) => ['--version', '-v'].includes(arg)) ? /^2\.1\.0\n$/ : /^Usage: agent-workflow/);
+    if (arguments_.some((arg) => ['--version', '-v'].includes(arg))) {
+      assert.equal(f.output.stdout, `${sourceVersion}\n`);
+    } else {
+      assert.match(f.output.stdout, /^Usage: agent-workflow/);
+    }
     assert.equal(f.calls.length, 0);
     assert.equal(f.signals.listenerCount('SIGINT'), 0);
   });

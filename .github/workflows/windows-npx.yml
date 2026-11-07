@@ -16,6 +16,8 @@ on:
           - native-backend
           - native-backend-rename
           - native-central
+          - native-npx
+          - native-npx-negative
 
 permissions:
   contents: read
@@ -52,7 +54,7 @@ jobs:
           $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
           Write-Host "Elevated runner token: $($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
           Write-Host 'Hosted-runner results do not replace ordinary-user acceptance.'
-          python -I -B -c "import sys; sys.path.insert(0, 'lib'); from platform_process import locate_bash; print(locate_bash())"
+          python -I -B -X utf8 -c "import sys; sys.path.insert(0, 'lib'); from platform_process import locate_bash; print(locate_bash())"
           if ($LASTEXITCODE -ne 0) { throw 'Complete Git for Windows is required' }
       - name: Verify canonical LF checkout bytes without changing Git configuration
         run: |
@@ -94,7 +96,7 @@ jobs:
       - name: Minimal native capability probe
         if: inputs.validation_mode == 'native-capabilities'
         run: |
-          python -I -B -c "import sys,unittest; sys.path.insert(0,'tests'); suite=unittest.defaultTestLoader.loadTestsFromName('test_windows_runtime_boundaries.SkillBackendBoundaryTest.test_content_read_rejects_hardlink_swapped_after_metadata_check'); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)"
+          python -I -B -X utf8 -c "import sys,unittest; sys.path.insert(0,'tests'); suite=unittest.defaultTestLoader.loadTestsFromName('test_windows_runtime_boundaries.SkillBackendBoundaryTest.test_content_read_rejects_hardlink_swapped_after_metadata_check'); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)"
           if ($LASTEXITCODE -ne 0) { throw 'Hardlink rejection fixture failed' }
           & ./tests/windows_npx_runner.ps1 -Mode native-capabilities
       - name: Native missing-capability fixture on disposable hosted VM
@@ -122,16 +124,16 @@ jobs:
           node --test @tests
           if ($LASTEXITCODE -ne 0) { throw 'Node contracts failed' }
           foreach ($pattern in @('test_platform_bridge.py', 'test_windows_fs_contract.py', 'test_windows_runtime_boundaries.py', 'test_install_process_windows.py', 'test_windows_hook_command.py')) {
-            python -I -B -m unittest discover -s tests -p $pattern -v
+            python -I -B -X utf8 -m unittest discover -s tests -p $pattern -v
             if ($LASTEXITCODE -ne 0) { throw "Failed: $pattern" }
           }
       - name: Native NTFS safety and real directory durability
         if: inputs.validation_mode == 'acceptance'
         run: |
-          python -I -B -c "import sys,unittest; sys.path.insert(0,'tests'); import test_npm_packaging as t; names=('WindowsFilesystemNativeTest','WindowsRuntimeContractTest','WindowsBootstrapPortableTest'); suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(t,n)) for n in names); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)"
+          python -I -B -X utf8 -c "import sys,unittest; sys.path.insert(0,'tests'); import test_npm_packaging as t; names=('WindowsFilesystemNativeTest','WindowsRuntimeContractTest','WindowsBootstrapPortableTest'); suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(getattr(t,n)) for n in names); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)"
           if ($LASTEXITCODE -ne 0) { throw 'Native capability failure blocks acceptance; no skip/no-op fallback' }
       - name: Acquire locked archive into its own new directory
-        if: inputs.validation_mode == 'acceptance'
+        if: inputs.validation_mode == 'acceptance' || inputs.validation_mode == 'native-npx' || inputs.validation_mode == 'native-npx-negative'
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:RUNNER_TEMP ('awf-windows-' + [guid]::NewGuid().ToString('N'))
@@ -143,13 +145,13 @@ jobs:
           # GITHUB_ENV is scoped to subsequent CI processes, never user/system PATH.
           "AWF_VALIDATION_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Prepare complete offline payload using trusted isolated Python
-        if: inputs.validation_mode == 'acceptance'
+        if: inputs.validation_mode == 'acceptance' || inputs.validation_mode == 'native-npx' || inputs.validation_mode == 'native-npx-negative'
         run: |
           $ErrorActionPreference = 'Stop'
           $lock = Get-Content -LiteralPath packaging/windows/runtime.lock.json -Raw | ConvertFrom-Json
           $archive = Join-Path $env:AWF_VALIDATION_ROOT ('download/' + $lock.archive)
           $prepared = Join-Path $env:AWF_VALIDATION_ROOT 'build/prepared'
-          python -I -B packaging/build_npm_release.py --runtime-archive $archive --output $prepared
+          python -I -B -X utf8 packaging/build_npm_release.py --runtime-archive $archive --output $prepared
           if ($LASTEXITCODE -ne 0) { throw 'Archive validation or preparation failed' }
           Push-Location $prepared
           try {
@@ -163,7 +165,15 @@ jobs:
           if ($archives.Count -ne 1) { throw 'Expected one complete local tgz' }
           "AGENT_WORKFLOW_NPX_TGZ=$($archives[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Offline local-tgz install and cache-independent real Hook
-        if: inputs.validation_mode == 'acceptance'
+        if: inputs.validation_mode == 'acceptance' || inputs.validation_mode == 'native-npx'
         run: |
-          python -I -B -m unittest discover -s tests -p test_windows_npx_e2e.py -v
-          if ($LASTEXITCODE -ne 0) { throw 'Native local-tgz E2E failed' }
+          # 实际tgz交给全新标准用户；宿主管理员只负责自有fixture和账户收尾。
+          & ./tests/windows_npx_runner.ps1 -Mode native-npx
+      - name: Real npx missing-capability refusal on disposable hosted VM
+        if: inputs.validation_mode == 'native-npx-negative'
+        run: |
+          & ./tests/windows_npx_runner.ps1 -Mode native-npx-negative
+      - name: Always restore npx product negative fixture
+        if: always() && inputs.validation_mode == 'native-npx-negative'
+        run: |
+          & ./tests/windows_npx_runner.ps1 -Mode native-negative-cleanup

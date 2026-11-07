@@ -1,6 +1,6 @@
 # Agent Workflow Pack 2.1
 
-面向项目的原生多Agent工作流，当前源码版本为 **2.1.0**。
+面向项目的原生多Agent工作流，当前源码候选版本为 **2.1.1**。
 GitHub 发行版本与资产见 [Releases](https://github.com/Geoege-xll/agent-workflow/releases)；Homebrew 以公共 Tap 声明为准，npm 尚未发布。
 版本唯一来源为 `product/VERSION`；使用 `awf-cli --version` 核对实际中央程序的版本与来源。
 2.1 采用普通中央安装，不提供旧版本兼容升级。仅Light／Full及schema_version:2，
@@ -14,9 +14,11 @@ Windows 方案只做**在项目目录执行 `npx … init` 安装工作流**，�
 前置条件为 Windows 10/11 x64、本地 NTFS、Node.js LTS/npm 和完整 Git for Windows；不依赖 WSL，
 不需要预装 Python，不修改 PATH、profile、ExecutionPolicy 或 Git 全局配置。
 
-npm 包目前 `private: true`，**尚未发布，尚未通过原生 Windows 安全、恢复与端到端验收**。
-源码、打包与 npx 项目入口共用中央运行时服务；当前 Windows 安全文件系统后端尚不支持
-受管 Skill 的锚定软链发布，因此会在创建项目资源或中央状态前明确拒绝，不会自动退回完整复制。
+npm 包目前 `private: true`，**尚未发布，完整本地 tgz 端到端验收仍在进行**。
+源码、打包与 npx 项目入口共用中央运行时服务；Windows 后端以真实目录 SYMLINK 和持久化屏障
+发布受管 Skill，缺少能力时在项目资源或中央状态写入前拒绝。一次性托管 Windows Server
+普通用户的中央安装、固定版本薄桥、真实 helper 与重复安装已通过；该证据不替代
+Windows 10/11 客户端、本地 tgz 持久 Python 与清空 npm 缓存后的真实 Hook 验收。
 下面只是未来完成验收并获准发布后的目标用法，不是现在可用的远程安装命令：
 
 ```powershell

@@ -90,12 +90,16 @@ class DetachedInstallTest(unittest.TestCase):
         # 只证明当前真实入口的能力拒绝，不把 POSIX 夹具冒称 Windows 原生验收。
         with patch.object(platform_fs.os, "supports_dir_fd", set()), self.assertRaisesRegex(ValueError, "受管 Skill 软链"):
             install_workflow.install_central(project, PACK, state=state)
-        # 直接覆盖公共入口实际判断的 Windows 分支；此处只模拟能力拒绝，不
-        # 声称 Windows 原生安装验收。中央模块导入前即失败，旧打包入口也能
-        # 给出相同明确诊断，不会先触发缺模块异常或进入任何发布流程。
-        with patch.object(platform_fs.os, "name", "nt"), patch.object(install_workflow, "_central_imports") as imports:
-            with self.assertRaisesRegex(ValueError, "受管 Skill 软链"):
+        # 当前 Windows 已有安全后端，不能再以 os.name 假定所有 nt 必拒。
+        # 只注入真实能力检查的同类错误，验证公共入口原样传播且先于中央
+        # 导入；真正无权限令牌/1314/零项目写入由原生本地 tgz 消费者证明。
+        denied = OSError(1314, "fixture: CreateSymbolicLinkW 缺少权限")
+        with patch.object(platform_fs, "require_skill_symlinks", side_effect=denied) as capability, \
+                patch.object(install_workflow, "_central_imports") as imports:
+            with self.assertRaises(OSError) as caught:
                 install_workflow.install_central(project, PACK, state=state)
+            self.assertIs(caught.exception, denied)
+            capability.assert_called_once_with()
             imports.assert_not_called()
         self.assertEqual([], list(project.iterdir()))
         self.assertFalse(state.exists())

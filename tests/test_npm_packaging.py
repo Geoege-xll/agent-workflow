@@ -37,6 +37,9 @@ def npm_command():
 spec = importlib.util.spec_from_file_location("build_npm_release", PACK / "packaging/build_npm_release.py")
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+# 这个 fixture 复制真实 npm 元数据，故版本也取同一受信源码值；恶意版本/
+# 旧格式的独立拒绝 fixture 仍保留各自输入，不随候选版本机械替换。
+SOURCE_VERSION = release.source_version(PACK)
 
 
 class NpmPreparationTest(unittest.TestCase):
@@ -50,7 +53,7 @@ class NpmPreparationTest(unittest.TestCase):
             (self.source / name).write_text(f"fixture {name}\n")
         for name in directories:
             (self.source / name).mkdir()
-        (self.source / "product/VERSION").write_text("2.1.0\n", encoding="ascii")
+        (self.source / "product/VERSION").write_text(SOURCE_VERSION + "\n", encoding="ascii")
         # A top-level exception must never execute while reading installer constants.
         (self.source / "lib/install_workflow.py").write_text(
             f"PACK_FILES = {files!r}\nPACK_DIRECTORIES = {directories!r}\nraise AssertionError('do not import')\n"
@@ -125,7 +128,7 @@ class NpmPreparationTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE((first / "bin/agent-workflow.cjs").stat().st_mode), 0o755)
         self.assertEqual((first / "bin/agent-workflow.cjs").stat().st_mtime, 0)
         # 直接消费已生成的离线载荷验证版本和帮助；不创建 npm 私有缓存或执行假 Windows EXE。
-        for argument, expected in (("--version", "2.1.0\n"), ("--help", "Usage: agent-workflow")):
+        for argument, expected in (("--version", SOURCE_VERSION + "\n"), ("--help", "Usage: agent-workflow")):
             result = subprocess.run([shutil.which("node"), str(first / "bin/agent-workflow.cjs"), argument],
                                     cwd=self.root, capture_output=True, text=True, timeout=10)
             self.assertEqual(0, result.returncode, result.stderr)
@@ -365,7 +368,7 @@ print("isolated npm runtime codec/publication/read: OK")
         project.mkdir()
         execute = [*npm_command(), "exec", "--offline", "--ignore-scripts", "--yes", "--cache", str(cache),
                    "--package", str(tgz), "--", "agent-workflow"]
-        for arguments, expected in ((["--help"], "Usage: agent-workflow"), (["--version"], "2.1.0")):
+        for arguments, expected in ((["--help"], "Usage: agent-workflow"), (["--version"], SOURCE_VERSION)):
             result = subprocess.run([*execute, *arguments], cwd=project, env=env,
                                     capture_output=True, text=True, timeout=45)
             self.assertEqual(result.returncode, 0, result.stderr)

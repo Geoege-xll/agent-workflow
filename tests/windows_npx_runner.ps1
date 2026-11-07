@@ -1,7 +1,7 @@
 # 此脚本仅在一次性 GitHub Windows runner 中验证真实账户能力。
 # 产品安装器不会调用此脚本、创建账户或修改任何账户权限。
 param(
-    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup', 'native-backend', 'native-backend-rename', 'native-central')]
+    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup', 'native-backend', 'native-backend-rename', 'native-central', 'native-npx', 'native-npx-negative')]
     [string]$Mode = 'native-capabilities'
 )
 
@@ -105,11 +105,18 @@ function Invoke-OrdinaryProbe([string]$Stage, [pscredential]$Credential) {
         # 参数只含本轮路径与固定枚举；凭证只经 Credential API 传递。
         # -I 忽略环境开关；重定向的普通用户 stdout 必须显式 UTF-8，
         # 否则中文诊断会在调用能力 API 前因默认 cp1252 失败。
-        $arguments = '-I -B -X utf8 "' + $probe + '" --probe ' + $Stage + ' --root "' + $root + '"'
+        if ($Stage -in @('npx-e2e', 'npx-denied')) {
+            $case = if ($Stage -eq 'npx-denied') { 'denied' } else { 'positive' }
+            $npxProbe = Join-Path $PSScriptRoot 'test_windows_npx_e2e.py'
+            $archive = Join-Path $root 'candidate.tgz'
+            $arguments = '-I -B -X utf8 "' + $npxProbe + '" --case ' + $case + ' --root "' + $root + '" --tgz "' + $archive + '"'
+        } else {
+            $arguments = '-I -B -X utf8 "' + $probe + '" --probe ' + $Stage + ' --root "' + $root + '"'
+        }
         $process = Start-Process -FilePath $python -ArgumentList $arguments -Credential $Credential -LoadUserProfile -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-        # 中央导入+prepared真实桥+helper 是一个完整消费者，独立上限15分钟；
-        # 旧能力/后端节点保留2分钟上限，不扩大其他阶段的预算。
-        $stageTimeout = if ($Stage -eq 'central-install') { 900000 } else { 120000 }
+        # 离线npm包含真实部署/重复安装/多个独立helper及Hook，整个正向阶段
+        # 上限30分钟；产品负向15分钟。旧中央和能力阶段预算不变。
+        $stageTimeout = if ($Stage -eq 'npx-e2e') { 1800000 } elseif ($Stage -in @('central-install', 'npx-denied')) { 900000 } else { 120000 }
         if (-not $process.WaitForExit($stageTimeout)) {
             # 只终止当前脚本持有的测试子进程树；不枚举或终止其他用户进程。
             & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Host
@@ -129,6 +136,24 @@ function Invoke-OrdinaryProbe([string]$Stage, [pscredential]$Credential) {
         }
         if ($null -ne $process) { $process.Dispose() }
     }
+}
+
+function Copy-NpxArchive {
+    # 只接受本job已经prepare/pack的一个普通tgz，复制到自有fixture供新账户
+    # 读取；前后及副本摘要必须相同，不从npm registry获取另一个候选。
+    if ([string]::IsNullOrWhiteSpace($env:AGENT_WORKFLOW_NPX_TGZ)) { throw '缺少当前本地tgz' }
+    $archive = Get-Item -LiteralPath $env:AGENT_WORKFLOW_NPX_TGZ
+    if ($archive -isnot [IO.FileInfo] -or $archive.Extension -ine '.tgz' -or
+        ($archive.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '当前tgz必须是普通文件' }
+    $digest = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash
+    $target = Join-Path $root 'candidate.tgz'
+    if (Test-Path -LiteralPath $target) { throw 'fixture tgz目标已存在，拒绝覆盖' }
+    Copy-Item -LiteralPath $archive.FullName -Destination $target
+    if ((Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash -cne $digest -or
+        (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -cne $digest) {
+        throw '本地tgz在交给普通用户前变化'
+    }
+    Write-Host "普通用户本地tgz SHA256=$digest"
 }
 
 
@@ -308,7 +333,7 @@ function Complete-NegativeFixture([bool]$Final) {
     }
 }
 
-function Invoke-NegativeFixture {
+function Invoke-NegativeFixture([bool]$Product = $false) {
     $id = [guid]::NewGuid().ToString('N')
     $control = Join-Path $env:RUNNER_TEMP ('awf-negative-control-' + $id)
     $script:root = Join-Path ($env:SystemDrive + '\') ('awf-negative-' + $id)
@@ -351,6 +376,7 @@ function Invoke-NegativeFixture {
         try { $environment.Write($entry, 0, $entry.Length); $environment.Flush($true) } finally { $environment.Dispose() }
         $env:AWF_NEGATIVE_CONTROL = $control
         New-Item -ItemType Directory -Path $root | Out-Null
+        if ($Product) { Copy-NpxArchive }
         $password = 'Awf!a9-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
         Write-Host "::add-mask::$password"
         $secure = ConvertTo-SecureString $password -AsPlainText -Force
@@ -362,7 +388,8 @@ function Invoke-NegativeFixture {
         & "$env:SystemRoot\System32\icacls.exe" $root /grant ('*' + $account.SID.Value + ':(OI)(CI)F') | Out-Host
         if ($LASTEXITCODE -ne 0) { throw '负向测试 SID 的数据目录 ACL 设置失败' }
         Set-NegativeSwitch $false
-        Invoke-OrdinaryProbe 'ordinary-denied-only' $credential
+        if ($Product) { Invoke-OrdinaryProbe 'npx-denied' $credential }
+        else { Invoke-OrdinaryProbe 'ordinary-denied-only' $credential }
         if ($failures.Count) { throw '负向未成立，立即停止能力试探，仅执行恢复' }
         Set-NegativeSwitch $true
         # 此调用只证明恢复后的实际能力；不重跑目录或已赋权正向矩阵。
@@ -384,19 +411,20 @@ function Invoke-NegativeFixture {
     Write-Host '负向能力与恢复调用完成；仍不是中央安装或 npm 最终验收。'
 }
 
-if ($Mode -in @('native-negative-fixture', 'native-negative-cleanup')) {
+if ($Mode -in @('native-negative-fixture', 'native-negative-cleanup', 'native-npx-negative')) {
     Assert-HostedEnvironment $true
     if ($Mode -eq 'native-negative-cleanup') { Complete-NegativeFixture $true }
-    else { Invoke-NegativeFixture }
+    else { Invoke-NegativeFixture ($Mode -eq 'native-npx-negative') }
     return
 }
 
 # 正向后端也由默认 acceptance 消费，允许 main 上同一 hosted/仓库/HEAD
 # 绑定；只有会修改 registry 的负向 fixture 和 cleanup 才限制临时分支。
-if ($Mode -in @('native-backend', 'native-backend-rename', 'native-central')) { Assert-HostedEnvironment $false }
+if ($Mode -in @('native-backend', 'native-backend-rename', 'native-central', 'native-npx')) { Assert-HostedEnvironment $false }
 
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
+    if ($Mode -eq 'native-npx') { Copy-NpxArchive }
     # 使用密码学随机值并在任何账户 API 前登记 CI mask；不写源码/文件/交接。
     $password = 'Awf!a9-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
     Write-Host "::add-mask::$password"
@@ -413,9 +441,9 @@ try {
     & "$env:SystemRoot\System32\icacls.exe" $root /grant ('*' + $sid + ':(OI)(CI)F') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw '测试 SID 的 fixture ACL 设置失败' }
     Write-Host "宿主管理员 SID: $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
-    if ($Mode -in @('native-backend', 'native-backend-rename', 'native-central')) {
+    if ($Mode -in @('native-backend', 'native-backend-rename', 'native-central', 'native-npx')) {
         # 修复模式只选择两个原失败节点；不重复已绿硬链/junction/能力矩阵。
-        $stage = if ($Mode -eq 'native-central') { 'central-install' } elseif ($Mode -eq 'native-backend-rename') { 'backend-rename' } else { 'backend-native' }
+        $stage = if ($Mode -eq 'native-npx') { 'npx-e2e' } elseif ($Mode -eq 'native-central') { 'central-install' } elseif ($Mode -eq 'native-backend-rename') { 'backend-rename' } else { 'backend-native' }
         Invoke-OrdinaryProbe $stage $credential
     } else {
         & $python -I -B -X utf8 $probe --probe host-directory --root $root
