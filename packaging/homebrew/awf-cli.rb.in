@@ -12,7 +12,8 @@ class AwfCli < Formula
   def install
     libexec.install Dir["*"]
     bin.mkpath
-    # Pin the default runtime without changing PATH; preserve explicit user selections.
+    # 正式命令始终执行本 Formula 的绝对 libexec 载荷，不通过 PATH 查找
+    # awf-dev、源码 workflow.sh 或另一条 awf-cli；保留用户显式解释器选择。
     (bin/"awf-cli").write <<~SH
       #!/bin/bash
       export AGENT_WORKFLOW_PYTHON="${AGENT_WORKFLOW_PYTHON:-#{Formula["python@3.14"].opt_bin}/python3.14}"
@@ -27,6 +28,8 @@ class AwfCli < Formula
     diagnostic = shell_output("#{bin}/awf-cli --version")
     assert_match "awf-cli #{version}", diagnostic
     assert_match "中央源根：#{libexec.realpath}", diagnostic
+    assert_match "入口来源：formal（发行包）", diagnostic
+    assert_match "物理载荷根：#{libexec.realpath}", diagnostic
     assert_path_exists libexec/"lib/python_runtime.sh"
     assert_path_exists libexec/"lib/documents/requirement_html.py"
     assert_path_exists libexec/"lib/vendor/answer-me-with-html/am.mjs"

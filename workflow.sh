@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 从任意目录启动管理器；沿用现有 Python 选择器，不改 PATH 或全局宿主配置。
 set -euo pipefail
-# awf-cli 是安装在用户 bin 目录的符号链接；必须先找到源脚本，不能把 bin 当源包。
+# 源码 --install-cli 仅生成明确的 awf-dev 软链；正式 awf-cli 由 Homebrew
+# wrapper 固定到自身 libexec。两种入口都必须先定位脚本，不能把 bin 当源包。
 # 每段相对链接均按该链接所在目录解析；解析目录的 cd 位于子 shell，不改变调用目录。
 # 每次内部 cd 仅在命令执行期间清空 CDPATH，防止同名目录跳转和额外输出污染路径。
 # 命令级赋值结束后恢复原值，不改变调用者或随后 Python 进程使用的环境。
