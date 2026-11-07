@@ -88,8 +88,13 @@ class SkillBackendBoundaryTest(unittest.TestCase):
                     checked.unlink()
                     os.link(external, checked)
                     return info
+                # Windows 在 CreateFileW 句柄检查阶段即拒绝多硬链接，尚未
+                # 进入共享层的异常转换；POSIX 则由共享层拒绝。断言精确异常
+                # 与原因，不能通过放宽生产 single-link 守卫来修正夹具。
+                expected = ValueError if os.name == "nt" else skills.SharedCoreSkillError
+                reason = "single-link regular file required" if os.name == "nt" else "hard link is forbidden"
                 with patch.object(skills, "_require_regular_file", side_effect=checked_then_swapped), \
-                        self.assertRaises(skills.SharedCoreSkillError):
+                        self.assertRaisesRegex(expected, reason):
                     getattr(skills, name)(path, "xy-workflow")
                 self.assertEqual(external.read_bytes(), b"{}")
 
