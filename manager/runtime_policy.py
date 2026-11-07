@@ -124,6 +124,12 @@ def ensure_management_settled(state: Path) -> None:
         raise ActivationError("生命周期事务尚未结算；先恢复清理，暂不允许管理写入")
 
 
+def active_activation(state: Path) -> dict | None:
+    """供原生健康reader选择本调用栈已准备的精确ref，不授权任意环境重入。"""
+    value = pending(state)
+    return value if value is not None and _SCOPE.get() == (str(store.state_root(state)), value["id"]) else None
+
+
 @contextmanager
 def activation_scope(state: Path, identifier: str):
     """仅当前调用栈获准执行其 prepared 批次，环境变量不能伪造重入授权。"""

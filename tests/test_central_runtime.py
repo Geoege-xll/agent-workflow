@@ -397,3 +397,18 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.assertEqual(before_role, target.read_bytes())
         self.assertEqual(before_config, config.read_bytes())
         self.assertEqual(before_binding, projects.read_binding_record(self.state, self.project)[0].payload)
+
+    def test_installed_sparse_project_rejects_new_tasks_after_global_role_removed(self):
+        plan = self.pair()
+        central.apply(plan)
+        self.assertFalse((self.project / ".codex/agents/xy-qa.toml").exists())
+        self.assertTrue(projects.status(self.state, self.project)["new_task_allowed"])
+        (self.context.host_paths.codex / "agents/xy-qa.toml").unlink()
+        checked = projects.status(self.state, self.project)
+        self.assertFalse(checked["resources_healthy"])
+        self.assertFalse(checked["new_task_allowed"])
+        self.assertFalse(checked["management_write_allowed"])
+        with self.assertRaisesRegex(ValueError, "不能创建新任务"):
+            central.new_task_gate(self.state, self.project)
+        self.assertEqual(store.read_core_source(self.core, "product/WORKFLOW.md"),
+                         runtime_bridge.read_resource(self.state, self.project, "product/WORKFLOW.md", binding=self.core.binding()))

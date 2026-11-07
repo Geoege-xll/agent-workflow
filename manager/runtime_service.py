@@ -802,18 +802,19 @@ def status(state: Path, project: Path) -> dict:
     state, project = store.state_root(state), canonical_project(project)
     _, record = read_binding_record(state, project)
     _, journal = _journal(state, project)
-    conflicts, history, recovery_conflicts = [], [], []
+    conflicts, history, recovery_conflicts, native_issues = [], [], [], []
     phase = "unmanaged" if record is None else "enabled" if record["enabled"] else "disabled"
     if journal and journal["phase"] in {"prepared", "conflict"}:
         phase = journal["phase"]
         recovery_conflicts.extend(journal.get("conflicts", []))
     if record:
+        core = None
         try:
-            store.load_core(record["runtime_binding"], state)
+            core = store.load_core(record["runtime_binding"], state)
         except (OSError, ValueError) as exc:
             conflicts.append({"path": "runtime_binding", "reason": str(exc)})
         with Tree(project) as tree:
-            found, _ = _ownership(tree, record, state, repair=False, include_history=False)
+            found, owned_links = _ownership(tree, record, state, repair=False, include_history=False)
             conflicts.extend(found)
             history_records = record["retained_nodes"] + (journal.get("retained_nodes", []) if journal else [])
             history = _retained(tree, history_records, typed=True)
@@ -837,6 +838,30 @@ def status(state: Path, project: Path) -> dict:
                                              enabled=record["enabled"], check_only=True)
             except (OSError, ValueError) as exc:
                 conflicts.append({"path": "workflow_hooks", "reason": str(exc)})
+            if record["enabled"] and core is not None:
+                try:
+                    config = tree.read(CONFIG)
+                    resources = Resources(core.root, json_bytes(core.binding()), core.label, core)
+                    _, profile, _ = project_files.configuration(resources, project, config, owned_links=owned_links)
+                    required_hosts = []
+                    for host in record["hosts"]:
+                        directory, suffix = project_files.ROLE_PATHS[host]
+                        for role in profile.enabled_roles:
+                            relative = f"{directory}/{role}{suffix}"
+                            managed = record["managed"].get(relative)
+                            actual = tree.read(relative)
+                            if (managed is None or managed["purpose"] != "role"
+                                    or Node.from_value(managed["expected"]).kind != "file" or actual.kind != "file"):
+                                required_hosts.append(host)
+                                break
+                    if required_hosts:
+                        # 私有global引用由native owner按current generation或本批
+                        # activation_scope精确解析；这里绝不猜HOME，也不任取同host
+                        # 的历史root。完整local投影不额外依赖全局角色的健康。
+                        from . import native_agents
+                        native_issues = native_agents.admission_issues(state, hosts=tuple(required_hosts))
+                except (OSError, ValueError) as exc:
+                    conflicts.append({"path": CONFIG, "reason": "当前角色投影或项目Profile无法验证：" + str(exc)})
     elif _has_install_residue(project):
         phase = "legacy"
     from . import runtime_policy
@@ -860,6 +885,7 @@ def status(state: Path, project: Path) -> dict:
     # 当前资源、历史恢复和发布许可分别计算，禁止从“历史丢失”推断项目停用，
     # 也不让资源仍可用掩盖全局 prepared 门。所有机器分支使用稳定 code/layer。
     issues = [{**row, "code": "current_resource_invalid", "layer": "current"} for row in conflicts]
+    issues.extend({**row, "layer": "current"} for row in native_issues)
     issues.extend({**row, "code": "project_recovery_conflict", "layer": "recovery"} for row in recovery_conflicts)
     project_pending = bool(journal and journal["phase"] in {"prepared", "conflict"})
     if project_pending:
@@ -881,21 +907,21 @@ def status(state: Path, project: Path) -> dict:
     if drift:
         issues.append({"path": "runtime_binding", "reason": "项目实际绑定与有效策略版本不一致",
                        "code": "policy_drift", "layer": "admission"})
-    resources_healthy = bool(record and not conflicts)
+    resources_healthy = bool(record and not conflicts and not native_issues)
     new_task_allowed = bool(record and record["enabled"] and resources_healthy and current_control and not global_pending and not project_pending and not drift)
     return {"schema_version": 1, "project": str(project), "state": phase,
-            "enabled": bool(record and record["enabled"] and not conflicts and phase == "enabled"),
+            "enabled": bool(record and record["enabled"] and resources_healthy and phase == "enabled"),
             "declared_enabled": bool(record and record["enabled"]),
             "resources_healthy": resources_healthy,
             "history_recoverable": not history,
             "new_task_allowed": new_task_allowed,
-            "management_write_allowed": not conflicts and not global_pending and not project_pending and not lifecycle_pending and not any(row["code"] == "history_modified" for row in history),
+            "management_write_allowed": not conflicts and not native_issues and not global_pending and not project_pending and not lifecycle_pending and not any(row["code"] == "history_modified" for row in history),
             "policy": policy["mode"], "effective_binding": effective, "issues": issues,
             "runtime_binding": record["runtime_binding"] if record else None,
             "previous_binding": record["previous_binding"] if record else None,
             "hosts": list(record["hosts"]) if record else [],
             "managed_paths": sorted(record["managed"]) if record else [],
-            "conflicts": conflicts + recovery_conflicts,
+            "conflicts": conflicts + recovery_conflicts + native_issues,
             "pending_transaction": journal["id"] if journal and journal["phase"] in {"prepared", "conflict"} else None}
 
 
