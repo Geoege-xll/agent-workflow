@@ -100,7 +100,7 @@ class CentralProjectTest(unittest.TestCase):
             from manager.runtime_state import read_state, write_control
             write_control(tree, runtime_policy.CURRENT, resources.json_bytes({"schema_version": 1,
                           "runtime_binding": self.core.binding(), "previous_binding": None,
-                          "generation": uuid.uuid4().hex}), expected=read_state(self.state, runtime_policy.CURRENT))
+                          "generation": uuid.uuid4().hex, "native_roots": []}), expected=read_state(self.state, runtime_policy.CURRENT))
 
     def enable(self, *, core=None):
         plan = service.preview(self.state, self.project, "enable", binding=(core or self.core).binding())

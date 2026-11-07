@@ -4,10 +4,12 @@
 及条件补偿均运行生产代码，不把替身成功当作宿主真实模型执行证据。
 """
 
+import copy
 import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 from threading import Event
@@ -25,6 +27,33 @@ from manager.runtime_state import ActivationError, read_state, write_control
 from tests.test_central_project import make_alternate_source
 
 PACK = Path(__file__).resolve().parents[1]
+
+
+class CurrentRecordCodecTest(unittest.TestCase):
+    def test_native_roots_are_required_closed_canonical_and_readonly(self):
+        binding = {"protocol_version": 1, "content_id": "a" * 64, "manifest_sha256": "a" * 64}
+        value = {"schema_version": 1, "runtime_binding": binding, "previous_binding": None,
+                 "generation": "b" * 32, "native_roots": []}
+        self.assertEqual(value, policy.validate_current(value))
+        roots = [{"host": host, "native_root": "/uncreated-contract-root/" + host}
+                 for host in ("codex", "claude", "antigravity")]
+        with patch.object(Path, "stat", side_effect=AssertionError("current codec must not inspect host roots")):
+            self.assertEqual(roots, policy.validate_current({**value, "native_roots": roots})["native_roots"])
+        copied = policy.validate_native_roots(roots)
+        copied[0]["native_root"] = "/another-root"
+        self.assertEqual("/uncreated-contract-root/codex", roots[0]["native_root"])
+        missing = dict(value); missing.pop("native_roots")
+        for candidate in (missing, {**value, "native_ref": {}}, {**value, "native_roots": None},
+                          {**value, "native_roots": {}}, {**value, "native_roots": [{"host": "codex"}]},
+                          {**value, "native_roots": [{"host": "unknown", "native_root": "/unknown"}]},
+                          {**value, "native_roots": [roots[0], {"host": "codex", "native_root": "/other"}]},
+                          {**value, "native_roots": [roots[0], {"host": "claude", "native_root": roots[0]["native_root"]}]},
+                          {**value, "native_roots": [{**roots[0], "witness": {}}]}):
+            with self.subTest(candidate=candidate), self.assertRaises(ActivationError):
+                policy.validate_current(candidate)
+        for root in ("relative/root", "/absolute/../root", "/absolute/./root", "/absolute//root", "//absolute/root", "/absolute/root\n", None):
+            with self.subTest(root=root), self.assertRaises(ActivationError):
+                policy.validate_current({**value, "native_roots": [{"host": "codex", "native_root": root}]})
 
 
 class RuntimeFixture:
@@ -56,7 +85,7 @@ class RuntimeFixture:
     def set_current(self, binding):
         with policy.coordination(self.state), Tree(self.state) as tree:
             write_control(tree, policy.CURRENT, json_bytes({"schema_version": 1, "runtime_binding": binding,
-                          "previous_binding": None, "generation": uuid.uuid4().hex}),
+                          "previous_binding": None, "generation": uuid.uuid4().hex, "native_roots": []}),
                           expected=read_state(self.state, policy.CURRENT))
 
     def enable(self, project=None, core=None):
@@ -378,6 +407,114 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         second = self.workspace / ("second-" + uuid.uuid4().hex[:8]); second.mkdir(); self.enable(second)
         self.register(self.project, second)
         return central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+
+    def test_current_publishes_only_verified_exact_native_roots(self):
+        from manager import native_agents
+        plan = central.preview(self.state, binding=self.core.binding(), native_context=self.context)
+        central.apply(plan)
+        _, current = policy.current_snapshot(self.state)
+        self.assertEqual({"schema_version", "runtime_binding", "previous_binding", "generation", "native_roots"}, set(current))
+        self.assertEqual(plan.native_plan.recovery_ref["targets"], current["native_roots"])
+        self.assertTrue(current["native_roots"])
+        self.assertTrue(all(set(row) == {"host", "native_root"} for row in current["native_roots"]))
+        self.assertEqual([], native_agents.verify_global(plan.native_plan.recovery_ref, context=self.context))
+
+    def sparse_pair(self):
+        """先完成真实中央激活，让两个项目原本已经依赖明确全局根。
+
+        这与完整local项目失败不同：后续noop/换版失败时，原current的根授权
+        必须继续有效，不能因为最后一条activation变成compensated就撤销准入。
+        """
+        self.enable()
+        second = self.workspace / ("sparse-second-" + uuid.uuid4().hex[:8]); second.mkdir(); self.enable(second)
+        self.register(self.project, second)
+        central.apply(central.preview(self.state, binding=self.core.binding(), native_context=self.context))
+        for project in (self.project, second):
+            for relative in (".codex/agents/xy-qa.toml", ".claude/agents/xy-qa.md", ".agents/agents/xy-qa.md"):
+                self.assertFalse((project / relative).exists())
+            self.assertTrue(projects.status(self.state, project)["resources_healthy"])
+            self.assertEqual(self.core.binding(), central.new_task_gate(self.state, project))
+        # 两个core的全局bootstrap相同，项目locator/Skill目标却会换版；确保既
+        # 真实使用native noop，又有需要按原inode补偿的项目资源，而非仅改日志。
+        plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+        self.assertEqual([], plan.native_plan.summary["changes"])
+        self.assertIn("witness", plan.native_plan.recovery_ref)
+        self.assertTrue(all(capture.runtime_plan.changes for capture in plan.captures))
+        return plan
+
+    def assert_sparse_recovered(self, plan):
+        self.assertIsNone(policy.pending(self.state))
+        self.assertEqual(plan.current_before, policy.current_snapshot(self.state)[0])
+        for capture in plan.captures:
+            self.assertEqual(capture.binding_before.payload, projects.read_binding_record(self.state, capture.project)[0].payload)
+            self.assertFalse((capture.project / ".codex/agents/xy-qa.toml").exists())
+            checked = projects.status(self.state, capture.project)
+            self.assertTrue(checked["resources_healthy"], checked["issues"])
+            self.assertEqual(self.core.binding(), central.new_task_gate(self.state, capture.project))
+        # 从项目真实thin入口走新任务init，覆盖controller选择、固定pin及最终发布
+        # 锁；配置检查/原生文件存在本身不能替代可实际恢复的新任务许可。
+        from tests.test_task_graph_init import BUILTIN_ENGINEERING, decisions
+        value = decisions()
+        value["standards"].update(required_engineering_rule_ids=["eng-common-005"],
+                                   leaves=[{"path": BUILTIN_ENGINEERING, "domain": "engineering", "rule_ids": ["eng-common-005"]}])
+        value["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+        output = self.project / "recovered-sparse-task.json"
+        environment = dict(os.environ)
+        for field in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"):
+            environment.pop(field, None)
+        environment["AGENT_WORKFLOW_STATE_DIR"] = str(self.state)
+        initialized = subprocess.run(["bash", str(self.project / ".agent-workflow/lib/python_runtime.sh"), "-B", "-X", "utf8",
+                                      str(self.project / ".agent-workflow/runtime.py"), "helper", "lib/task_graph_cli.py", "init",
+                                      "--root", str(self.project), "--output", str(output)], input=json.dumps(value),
+                                     env=environment, cwd=self.project, capture_output=True, text=True, timeout=40)
+        self.assertEqual(0, initialized.returncode, initialized.stdout + initialized.stderr)
+        self.assertEqual(self.core.binding(), json.loads(output.read_bytes())["runtime_binding"])
+
+    def test_existing_sparse_projects_keep_admission_after_failed_activation(self):
+        plan = self.sparse_pair()
+        applied, calls = projects.apply, []
+        def fail_second(runtime_plan, **kwargs):
+            calls.append(runtime_plan.project)
+            if len(calls) == 2:
+                raise OSError("fixture existing sparse second project failure")
+            return applied(runtime_plan, **kwargs)
+        with patch.object(projects, "apply", side_effect=fail_second), self.assertRaisesRegex(OSError, "second project"):
+            central.apply(plan)
+        self.assert_sparse_recovered(plan)
+
+    def test_existing_sparse_projects_keep_admission_after_interrupted_recovery(self):
+        plan = self.sparse_pair()
+        applied, calls = projects.apply, []
+        def fail_second(runtime_plan, **kwargs):
+            calls.append(runtime_plan.project)
+            if len(calls) == 2:
+                raise OSError("fixture existing sparse failure before recovery")
+            return applied(runtime_plan, **kwargs)
+        with patch.object(projects, "apply", side_effect=fail_second), \
+                patch.object(central, "_compensate", side_effect=KeyboardInterrupt("fixture existing sparse recovery interrupted")), \
+                self.assertRaises(KeyboardInterrupt):
+            central.apply(plan)
+        with self.assertRaisesRegex(ValueError, "尚未结算"):
+            central.new_task_gate(self.state, self.project)
+        result = central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertTrue(result["compensated"])
+        self.assert_sparse_recovered(plan)
+
+    def test_sparse_projects_reject_empty_or_unknown_current_root_authorization(self):
+        self.sparse_pair()
+        node, current = policy.current_snapshot(self.state)
+        unknown = copy.deepcopy(current["native_roots"])
+        unknown[0]["native_root"] = str(self.workspace / "unowned-native-root")
+        for roots in ([], unknown):
+            with self.subTest(roots=roots):
+                altered = {**current, "native_roots": roots}
+                policy.validate_current(altered)
+                with Tree(self.state) as tree:
+                    write_control(tree, policy.CURRENT, json_bytes(altered), expected=node)
+                node = read_state(self.state, policy.CURRENT)
+                self.assertFalse(projects.status(self.state, self.project)["resources_healthy"])
+                with self.assertRaisesRegex(ValueError, "不能创建新任务"):
+                    central.new_task_gate(self.state, self.project)
 
     def noop_pair(self):
         """以完整核心和真实原生归属构造noop，不伪造原生服务返回的收据。

@@ -13,7 +13,7 @@ import re
 
 from lib import runtime_store as store
 from lib.central import role_preferences
-from lib.central.runtime_project import Node, Tree, canonical_project, json_bytes, node_id, project_key, unique_json
+from lib.central.runtime_project import HOSTS, Node, Tree, canonical_project, json_bytes, node_id, project_key, unique_json
 from .runtime_state import ActivationError, read_state, write_control
 
 CURRENT = "central/current.json"
@@ -34,14 +34,43 @@ def _private(node: Node) -> dict | None:
     return value
 
 
+def validate_native_roots(value: object) -> list[dict]:
+    """校验current的明确原生根授权，不stat、不resolve、不从HOME补全。
+
+    空列表是显式的“未授权任何全局根”，不能把缺字段或坏路径当空列表。
+    这里仅确认闭合结构与无歧义的绝对路径；实际目录身份和七角色归属仍由
+    原生owner验证。返回独立列表，避免调用方修改ref时连带改写待发布授权。
+    """
+    if not isinstance(value, list):
+        raise ActivationError("中央 current 原生根授权必须为显式列表")
+    hosts, roots, result = set(), set(), []
+    for row in value:
+        if (not isinstance(row, dict) or set(row) != {"host", "native_root"}
+                or not isinstance(row["host"], str) or row["host"] not in HOSTS
+                or not isinstance(row["native_root"], str)):
+            raise ActivationError("中央 current 原生根授权结构无效")
+        raw = row["native_root"]
+        root = Path(raw)
+        if (not root.is_absolute() or str(root) != raw or ".." in root.parts
+                or raw.startswith("//") or any(ord(char) < 32 for char in raw)):
+            raise ActivationError("中央 current 原生根必须为规范绝对路径")
+        if row["host"] in hosts or raw in roots:
+            raise ActivationError("中央 current 原生宿主或根路径重复")
+        hosts.add(row["host"])
+        roots.add(raw)
+        result.append({"host": row["host"], "native_root": raw})
+    return result
+
+
 def validate_current(value: dict) -> dict:
-    if (not isinstance(value, dict) or set(value) != {"schema_version", "runtime_binding", "previous_binding", "generation"}
+    if (not isinstance(value, dict) or set(value) != {"schema_version", "runtime_binding", "previous_binding", "generation", "native_roots"}
             or type(value["schema_version"]) is not int or value["schema_version"] != 1
             or not isinstance(value["generation"], str) or not re.fullmatch(r"[0-9a-f]{32}", value["generation"])):
         raise ActivationError("中央 current 记录结构无效")
     store.validate_binding(value["runtime_binding"])
     if value["previous_binding"] is not None:
         store.validate_binding(value["previous_binding"])
+    validate_native_roots(value["native_roots"])
     return value
 
 
