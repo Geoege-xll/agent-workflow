@@ -666,8 +666,19 @@ def parse_agent_frontmatter(
             fields[key] = raw_value
         index += 1
 
+    required_keys = AGENT_KEYS
+    if "agent-workflow-central-project" in body:
+        # central静态角色只保存完整权限与pin-first bootstrap；技术Skill正文必须
+        # 由Task Pack pin按需读取。仅精确新合同豁免预载字段，普通Agent不降级。
+        from lib.hosts.native_agents import validate_descriptor
+        try:
+            validate_descriptor(body.encode("utf-8"), "antigravity", str(fields.get("name", "")))
+        except (ValueError, KeyError):
+            errors.append(f"invalid complete central Antigravity descriptor: {path}")
+        else:
+            required_keys = AGENT_KEYS - {"skills"}
     unknown = sorted(set(fields) - AGENT_KEYS)
-    missing = sorted(AGENT_KEYS - set(fields))
+    missing = sorted(required_keys - set(fields))
     if unknown:
         errors.append(f"unknown Agent frontmatter keys in {path}: {', '.join(unknown)}")
     if missing:
@@ -1367,6 +1378,13 @@ def validate_agent(
     enforce_context_boundaries: bool = False,
     ownership_only: bool = False,
 ) -> None:
+    if "agent-workflow-central-project" in body:
+        from lib.hosts.native_agents import validate_descriptor
+        try:
+            validate_descriptor(body.encode("utf-8"), "antigravity", role)
+        except ValueError:
+            errors.append(f"invalid complete central Antigravity descriptor: {path}")
+        return
     fields, body = parse_agent_frontmatter(body, path, errors)
     if enforce_context_boundaries:
         # 校验常驻内容是否误复制了整份资料，不提供旧的“上下文预算”参数适配。
