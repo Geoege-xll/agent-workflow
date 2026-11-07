@@ -320,6 +320,15 @@ def preview(state: Path, *, task_records: tuple[Path, ...] = (), backup_roots: t
                 _, record = read_binding_record(state, project)
                 _, journal = read_journal(state, project)
                 protected = set()
+                # 一次失败事务会把当前journal结算为rolled_back，不能因此丢掉
+                # 上一个完整applied批次。binding.retained由成功事务按生成顺序
+                # 追加；补偿产物只用.rollback，因此最后一个.previous批次是
+                # 仍需保留的最近成功物理备份。nonce只用于分组，不用于推断时间。
+                latest_batch = next((match[1] for row in reversed(record["retained_nodes"])
+                                     if (match := re.search(r"\.agent-workflow-central-([0-9a-f]{32})-[0-9]+\.previous\Z", row["path"]))), None)
+                if latest_batch:
+                    protected.update(row["path"] for row in record["retained_nodes"]
+                                     if f".agent-workflow-central-{latest_batch}-" in row["path"])
                 # 旧中央核心的新任务入口仍可能检查全部历史 retained。按当前
                 # 实际版及有效策略版保留其物理依赖，不能仅因为新reader会忽略
                 # 已回收历史就破坏合法锁版旧核心的新任务能力。普通旧pin读取不

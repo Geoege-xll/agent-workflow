@@ -15,6 +15,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import argparse
+import ast
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -32,6 +33,38 @@ from lib.central.runtime_project import (
 
 class RuntimeBridgeError(ProjectRuntimeError):
     """项目未启用、任务缺 pin，或中央资源已损坏。"""
+
+
+def helper_creates_task(logical_path: str, args: tuple | list) -> bool:
+    """识别实际CLI command，不把参数值init误当初始化，也不漏掉前置选项。
+
+    这份自举语法与task_graph_cli._parser的已发布参数合同相同；薄launcher在
+    核心验证前无法import parser，使用相同静态协议。未知/歧义选项失败关闭，
+    唯一前缀沿argparse默认行为解析；正式参数验证仍由选版helper自身完成。
+    """
+    relative = logical_path.removeprefix(".agent-workflow/")
+    if relative == "lib/task_graph_init.py":
+        return True
+    if relative != "lib/task_graph_cli.py":
+        return False
+    class AdmissionParser(argparse.ArgumentParser):
+        def error(self, message):
+            # 参数可能含私有路径或payload，不回显argparse原始诊断。
+            raise RuntimeBridgeError("任务图helper参数无效或存在歧义")
+    parser = AdmissionParser(add_help=False)
+    parser.add_argument("command", nargs="?", choices=("validate", "ready", "qa-ready", "capacity", "init", "update", "task", "fingerprints", "scratch", "cleanup-scratch", "continuation"))
+    for option in ("--input", "--patch", "--expect-sha256", "--task-id", "--host", "--observed-state",
+                   "--output", "--root", "--select", "--request-id", "--keep"):
+        parser.add_argument(option)
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("-h", "--help", action="store_true")
+    selected = parser.parse_args(args)
+    if selected.help:
+        return False
+    if selected.command is None:
+        raise RuntimeBridgeError("任务图helper缺少command")
+    return selected.command == "init"
 
 
 @dataclass(frozen=True)
@@ -54,6 +87,8 @@ class HelperInvocation:
     environment: dict[str, str]
     cwd: Path
     runtime_binding: dict
+    initializes: bool = False
+    admission_protocol: int | None = None
 
 
 def resolve_runtime(state: Path, project: Path, *, binding: dict | None = None,
@@ -92,6 +127,8 @@ def resolve_runtime(state: Path, project: Path, *, binding: dict | None = None,
     if binding not in record["used_bindings"]:
         raise RuntimeBridgeError("任务 pin 不是当前物理项目曾经使用的中央版本")
     if new_task:
+        from manager.central_runtime import new_task_gate
+        binding = new_task_gate(state, project, binding)
         checked = status(state, project)
         if not checked["enabled"]:
             raise RuntimeBridgeError("本项目未在本机启用或资源存在冲突，不能创建新任务")
@@ -135,7 +172,7 @@ def python_helper(state: Path, project: Path, logical_path: str, args: tuple | l
         raise RuntimeBridgeError("helper 参数必须是无 NUL 的字符串序列")
     relative = logical_path.removeprefix(".agent-workflow/")
     # 即使调用方忘了声明 new_task，统一任务初始化入口也不能绕过 enabled 门。
-    initializes = relative in {"lib/task_graph_cli.py", "lib/task_graph_init.py"} and "init" in args
+    initializes = helper_creates_task(relative, args)
     context = resolve_runtime(state, project, binding=binding, new_task=new_task or initializes)
     relative_path(relative)
     if not relative.startswith("lib/") or not relative.endswith(".py"):
@@ -150,8 +187,31 @@ def python_helper(state: Path, project: Path, logical_path: str, args: tuple | l
                 "AGENT_WORKFLOW_PROJECT_ROOT": str(context.project_root),
                 "AGENT_WORKFLOW_CONFIG_PATH": str(context.config_path),
                 "AGENT_WORKFLOW_CORE_ROOT": str(context.core.root)})
+    protocol = _admission_protocol(context.core) if initializes else None
     return HelperInvocation((sys.executable, "-B", "-X", "utf8", str(context.core.root / relative), *args),
-                            env, context.project_root, context.runtime_binding)
+                            env, context.project_root, context.runtime_binding, initializes, protocol)
+
+
+def _admission_protocol(core: store.FrozenCore) -> int:
+    """只从清单校验过的 init 源码取静态能力，绝不执行代码探测或信任环境旗标。"""
+    body = store.read_core_source(core, "lib/task_graph_init.py")
+    try:
+        module = ast.parse(body)
+    except (SyntaxError, ValueError) as exc:
+        raise RuntimeBridgeError("所选核心任务初始化协议无效") from exc
+    declarations = []
+    writes = [node for node in ast.walk(module) if isinstance(node, ast.Name)
+              and node.id == "CENTRAL_ADMISSION_PROTOCOL" and isinstance(node.ctx, (ast.Store, ast.Del))]
+    for statement in module.body:
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target] if isinstance(statement, ast.AnnAssign) else []
+        if any(isinstance(target, ast.Name) and target.id == "CENTRAL_ADMISSION_PROTOCOL" for target in targets):
+            declarations.append(statement.value)
+    if not declarations and not writes:
+        return 0
+    if (len(writes) != 1 or len(declarations) != 1 or not isinstance(declarations[0], ast.Constant)
+            or type(declarations[0].value) is not int or declarations[0].value != 1):
+        raise RuntimeBridgeError("所选核心声明了未知或重复的任务初始化协议")
+    return 1
 
 
 def run_helper(invocation: HelperInvocation, *, timeout: float = 120) -> int:
@@ -165,6 +225,23 @@ def run_helper(invocation: HelperInvocation, *, timeout: float = 120) -> int:
         raise RuntimeBridgeError("helper 需要有效调用值及 0..3600 秒的有限超时")
     if os.name == "nt":
         raise RuntimeBridgeError("当前中央 helper 缺少已验证的 Windows 进程组后端")
+    if invocation.initializes and invocation.admission_protocol == 0:
+        from manager import runtime_policy
+        from manager.central_runtime import new_task_gate
+        state = Path(invocation.environment["AGENT_WORKFLOW_STATE_DIR"])
+        # 旧核心没有 child 发布锁，当前控制桥在相同短协调域内重验并执行其原
+        # helper。只涵盖机械 init，不执行模型；新协议 child 自持锁，parent
+        # 不能跨进程重入，否则会把合法初始化锁成死锁。
+        with runtime_policy.coordination(state):
+            new_task_gate(state, invocation.cwd, invocation.runtime_binding)
+            return _execute_helper(invocation, timeout)
+    if invocation.initializes and invocation.admission_protocol != 1:
+        raise RuntimeBridgeError("初始化 helper 缺少明确的协调锁协议")
+    return _execute_helper(invocation, timeout)
+
+
+def _execute_helper(invocation: HelperInvocation, timeout: float) -> int:
+    """执行已通过门禁的固定 helper，超时清理沿用原进程组所有权边界。"""
     child = subprocess.Popen(invocation.command, cwd=invocation.cwd, env=invocation.environment,
                              start_new_session=True)
     try:

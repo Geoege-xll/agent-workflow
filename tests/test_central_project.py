@@ -27,6 +27,7 @@ from lib import runtime_store as store
 from lib.hosts import workflow_hook_install as hook_install
 from lib.hosts.claude_instructions import read_file
 from manager import runtime_service as service
+from manager import runtime_policy, project_service
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -50,9 +51,10 @@ def make_alternate_source(root: Path) -> None:
                  "lib/runtime_pins.py", "lib/standard_paths.py", "lib/hosts/claude_instructions.py", "lib/documents/context_read.py",
                  "lib/skills/shared_core_skills.py", "lib/role_models.py", "lib/central/role_preferences.py", "lib/hosts/claude_options.py", "lib/validate_antigravity_artifacts.py",
                  "lib/python_runtime.sh", "lib/hosts/workflow_hook_install.py", "lib/hosts/workflow_hook_settings.py",
+                 "manager/runtime_policy.py", "manager/central_runtime.py", "manager/runtime_lifecycle.py",
                  "lib/workflow_hooks.py", "lib/hosts/windows_hook_command.py", "lib/hosts/merge_codex_config.py", "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py", "manager/runtime_state.py", "manager/__init__.py",
                  "templates/project.yaml.example", "templates/docs/PROJECT.md",
-                 "roles/xy-qa.md", "roles/xy-uiux.md", "platforms/shared/core-skills.txt"):
+                 "roles/xy-qa.md", "roles/xy-uiux.md", "roles/xy-web.md", "roles/xy-desktop.md", "roles/xy-backend.md", "roles/xy-apple.md", "roles/xy-android.md", "platforms/shared/core-skills.txt"):
         put(name, (PACK / name).read_bytes())
     put("product/WORKFLOW.md", "# 第二个固定版本\n".encode())
     put("product/GLOBAL_CONSTRAINTS.md", b"# fixture constraints\n")
@@ -92,6 +94,13 @@ class CentralProjectTest(unittest.TestCase):
     def setUp(self):
         self.project = self.workspace / ("project-" + uuid.uuid4().hex[:10])
         self.project.mkdir()
+        # 薄入口的新任务检查由中央current控制桥负责。项目事务夹具保留完整local
+        # 角色，但必须显式建立current，不能让旧测试借缺失中央记录绕过正式门。
+        with runtime_policy.coordination(self.state), resources.Tree(self.state) as tree:
+            from manager.runtime_state import read_state, write_control
+            write_control(tree, runtime_policy.CURRENT, resources.json_bytes({"schema_version": 1,
+                          "runtime_binding": self.core.binding(), "previous_binding": None,
+                          "generation": uuid.uuid4().hex}), expected=read_state(self.state, runtime_policy.CURRENT))
 
     def enable(self, *, core=None):
         plan = service.preview(self.state, self.project, "enable", binding=(core or self.core).binding())
@@ -212,13 +221,14 @@ class CentralProjectTest(unittest.TestCase):
         role = tomllib.loads((self.project / ".codex/agents/xy-qa.toml").read_text())
         self.assertEqual("xy-qa", role["name"])
         self.assertNotIn("sandbox_mode", role)
-        self.assertIn(self.core.content_id, role["developer_instructions"])
+        self.assertIn("<task-three-field-JSON>", role["developer_instructions"])
+        self.assertNotIn(self.core.content_id, role["developer_instructions"])
         self.assertTrue(tomllib.loads((self.project / ".codex/config.toml").read_text())["agents"]["enabled"])
         for path in (".claude/agents/xy-qa.md", ".agents/agents/xy-qa.md"):
             text = (self.project / path).read_text()
             self.assertTrue(text.startswith("---\nname: xy-qa\n"))
-            self.assertIn("runtime_binding=", text)
-            self.assertIn(self.core.content_id, text)
+            self.assertIn("runtime_binding from that Task Pack", text)
+            self.assertNotIn(self.core.content_id, text)
         parser_code = '''import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
@@ -322,7 +332,7 @@ print("最小冻结核心新 owner 独立加载成功")
 
         read_routes()
         # 当前项目换版及发现软链更新后，旧任务仍执行从其原入口取得的同 pin 读取命令。
-        service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
+        project_service.apply_project(project_service.preview_project(self.state, self.project, "use", content_id=self.alternate.content_id))
         self.assertEqual(self.alternate.binding(), bridge.resolve_runtime(self.state, self.project, new_task=True).runtime_binding)
         self.assertNotEqual(store.read_core_source(self.core, skill_path), store.read_core_source(self.alternate, skill_path))
         self.assertTrue(agents.read_bytes().startswith(prefix))
@@ -359,7 +369,7 @@ print("最小冻结核心新 owner 独立加载成功")
             with self.subTest(policy=body.split(b"workspace:", 1)[0]):
                 def replaced(reader, relative):
                     return body if relative == "roles/xy-qa.md" else original_read(reader, relative)
-                with patch.object(resources.Resources, "read", new=replaced), self.assertRaisesRegex(ValueError, "Claude.*toolsets"):
+                with patch.object(resources.Resources, "read", new=replaced), self.assertRaisesRegex(ValueError, "角色.*toolsets"):
                     service.preview(self.state, self.project, "enable", binding=self.core.binding())
                 self.assertEqual([], list(self.project.iterdir()))
                 self.assertIsNone(service.read_binding_record(self.state, self.project)[1])
@@ -675,7 +685,9 @@ print("最小冻结核心新 owner 独立加载成功")
 
     def test_old_inode_later_save_is_retained_and_blocks_overwrite(self):
         self.enable()
-        path = self.project / ".codex/agents/xy-qa.toml"
+        # 角色bootstrap现在跨core保持稳定；locator才是换版必变且有原inode归属
+        # 的资源，故旧fd负控使用真实被隔离的locator，不能误把当前角色当旧备份。
+        path = self.project / resources.LOCATOR
         with path.open("r+b") as old_inode:
             service.apply(service.preview(self.state, self.project, "use", binding=self.alternate.binding()))
             old_inode.seek(0)

@@ -15,7 +15,8 @@ from pathlib import Path
 from lib.hosts.claude_instructions import read_file
 from lib.central import role_preferences
 from lib import runtime_store
-from . import runtime_service, state_files
+from . import runtime_policy, runtime_service, state_files
+from lib.central.runtime_project import Node, json_bytes
 
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -137,6 +138,8 @@ class ProjectPlan:
     registered_after: bool
     runtime_plan: runtime_service.ActivationPlan | None
     status_before: dict
+    policy_before: Node | None = None
+    policy_after: bytes | None = None
 
     @property
     def summary(self) -> dict:
@@ -145,6 +148,7 @@ class ProjectPlan:
                 "state_dir": str(self.state), "registered_before": self.registered_before,
                 "registered_after": self.registered_after, "runtime_action": native["action"] if native else None,
                 "runtime": native, "status_before": self.status_before,
+                "policy_after": json.loads(self.policy_after) if self.policy_after else None,
                 "can_apply": native["can_apply"] if native else True,
                 "conflicts": native["conflicts"] if native else [],
                 "changes": native["changes"] if native else []}
@@ -152,14 +156,15 @@ class ProjectPlan:
 
 def preview_project(state: Path, project: Path, action: str, *, enable: bool = False,
                     source_root: Path | None = None, content_id: str | None = None,
-                    hosts=None) -> ProjectPlan:
+                    hosts=None, native_context=None) -> ProjectPlan:
     """只读生成 add/del/启停/版本计划；首次启用默认使用当前 SOURCE。
 
     重开已绑定项目默认沿用其精确版本；显式 source_root 才导入指定来源，
     content_id 只选择已存在且验证成功的中央版本。所有原生业务限制交给所有者。
     """
     state, project = state_files.state_root(state), state_files.project_path(project)
-    if action not in {"add", "del", "enable", "disable", "use", "rollback", "repair"}:
+    runtime_policy.ensure_management_settled(state)
+    if action not in {"add", "del", "enable", "disable", "use", "follow", "rollback", "repair"}:
         raise ValueError("未知项目管理动作")
     if (type(enable) is not bool or (enable and action != "add")
             or (source_root is not None and content_id is not None)
@@ -172,17 +177,38 @@ def preview_project(state: Path, project: Path, action: str, *, enable: bool = F
     data = parse_registry(snapshot)
     registered = str(project) in data["registered"]
     before = project_status(state, project)
+    policy_node, previous_policy = runtime_policy.snapshot(state, project)
+    next_policy = None
+    if action == "use" or (content_id is not None and action in {"enable", "add"}):
+        next_policy = runtime_policy.policy_value(project, "pinned", runtime_binding(state, content_id))
+    elif action == "follow":
+        next_policy = runtime_policy.policy_value(project, "follow")
     native_action = "enable" if action == "add" and enable else "disable" if action == "del" else action
     native = None
-    if native_action != "add":
+    if action == "follow":
+        # 清锁是独立策略变化；停用项目保持停用，下一次 enable 才物化 current。
+        if before["declared_enabled"]:
+            _, current = runtime_policy.current_snapshot(state)
+            if current is None:
+                raise ValueError("尚未选择中央 current，请先导入并激活版本")
+            native = runtime_service.preview(state, project, "use", binding=current["runtime_binding"],
+                                             hosts=hosts, native_context=native_context)
+    elif native_action != "add":
         selected = runtime_binding(state, content_id) if content_id is not None else None
         source = source_root
+        if native_action == "enable" and source is None and selected is None:
+            selected = runtime_policy.effective_binding(state, project, fallback=before["runtime_binding"])
         if native_action == "enable" and source is None and selected is None and before["runtime_binding"] is None:
             source = SOURCE
         native = runtime_service.preview(state, project, native_action, source_root=source,
-                                         binding=selected, hosts=hosts)
+                                         binding=selected, hosts=hosts, native_context=native_context)
+    if action == "rollback" and native and native.binding_json:
+        # 项目回退是显式版本选择，与中央 rollback 不同；锁定实际回退的版本，
+        # 后续全局激活不会把用户刚回退的项目再次推走。
+        next_policy = runtime_policy.policy_value(project, "pinned", json.loads(native.binding_json))
     return ProjectPlan(state, project, action, snapshot, registered,
-                       True if action == "add" else False if action == "del" else registered, native, before)
+                       True if action == "add" else False if action == "del" else registered, native, before,
+                       policy_node, json_bytes(next_policy) if next_policy is not None else None)
 
 
 def apply_project(plan: ProjectPlan, *, cancel=None) -> dict:
@@ -203,11 +229,17 @@ def apply_project(plan: ProjectPlan, *, cancel=None) -> dict:
         # 组合登记入口也先取偏好协调锁，再取 registry / install / central-state。
         # 仅登记项目同样会改变全局计划的影响集合，不能绕过全局来源守卫。
         stack.enter_context(role_preferences.coordination(plan.state))
+        runtime_policy.ensure_management_settled(plan.state)
+        if plan.policy_before is not None and runtime_policy.snapshot(plan.state, plan.project)[0] != plan.policy_before:
+            raise ValueError("项目版本策略在预览后变化，请刷新后重试")
         if registration:
             stack.enter_context(state_files.lock(plan.state, "registry"))
             if read_file(state_files.secure_path(plan.state, "projects.json")) != plan.registry_before:
                 raise ValueError("项目登记表在预览后发生变化，请刷新后重试")
         result = runtime_service.apply(plan.runtime_plan) if plan.runtime_plan else project_status(plan.state, plan.project)
+        if plan.policy_after is not None:
+            runtime_policy.write_policy(plan.state, plan.project, json.loads(plan.policy_after), plan.policy_before)
+            result = project_status(plan.state, plan.project)
         if registration:
             # 持锁不等于可覆盖外部编辑器的保存；发布前仍比较精确前像。
             if read_file(state_files.secure_path(plan.state, "projects.json")) != plan.registry_before:
