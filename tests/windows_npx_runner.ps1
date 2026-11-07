@@ -13,7 +13,18 @@ $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.Wind
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw '准备限定测试账户需要 runner 管理员令牌；测试本身另以标准用户执行'
 }
-$python = (Get-Command python -CommandType Application).Source
+# setup-python 已在当前 job 声明唯一解释器。Get-Command 可能一次返回
+# PATH 上多个 Application，不能把 Source 集合拼接成可执行文件名。
+# 仅采用该已配置目录中的单个真实文件，不回退 WindowsApps 或另一版本。
+if ([string]::IsNullOrWhiteSpace($env:pythonLocation)) {
+    throw '当前 job 未提供 setup-python 的 pythonLocation'
+}
+$pythonFile = Get-Item -LiteralPath (Join-Path $env:pythonLocation 'python.exe')
+if ($pythonFile -isnot [IO.FileInfo]) {
+    throw 'setup-python 的 python.exe 必须是一个已存在的普通文件'
+}
+[string]$python = $pythonFile.FullName
+Write-Host "已配置解释器：$python"
 $probe = Join-Path $PSScriptRoot 'test_windows_central_fs.py'
 $name = 'awfprobe' + [guid]::NewGuid().ToString('N').Substring(0, 10)
 $root = Join-Path ($env:SystemDrive + '\') ('awf-capabilities-' + [guid]::NewGuid().ToString('N'))
@@ -136,6 +147,7 @@ try {
 } catch {
     $failures.Add("preparation: $($_.Exception.Message)")
 } finally {
+    $beforeCleanupFailures = $failures.Count
     if ($created) {
         if ($rightsAssigned) {
             try { [AwfProbeRights]::Set($sid, $false) }
@@ -154,7 +166,13 @@ try {
     $credential = $null
     $secure = $null
     $password = $null
+    # 测试失败不等于清理失败。先输出 finally 的实际结果再抛测试错误，
+    # 避免失败路径把已经成功收尾的事实一起隐藏；清理错误仍保留并失败。
+    if ($failures.Count -eq $beforeCleanupFailures) {
+        Write-Host 'finally 清理完成：本轮测试账户、赋权、profile、进程句柄与 fixture 已回收。'
+    } else {
+        Write-Host 'finally 清理失败：具体错误保留在阶段失败记录中。'
+    }
 }
 if ($failures.Count) { throw ($failures -join '; ') }
-Write-Host '已回收本轮测试账户、赋权、profile、进程句柄与 fixture。'
 Write-Host '能力探针通过；此结果不是中央安装或 npm 最终验收。'
