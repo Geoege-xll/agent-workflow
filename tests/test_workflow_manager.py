@@ -91,10 +91,11 @@ class TemporaryProject(unittest.TestCase):
         if self.central_fixture:
             from lib.central.runtime_project import Node, project_key, json_bytes
             self.state = self.central_state
-            from lib.central.runtime_project import Resources, initial_config
+            from lib.central.runtime_project import Resources, initial_config, role_resource
             self.write("pyproject.toml", '[project]\nname="fixture"\nversion="0.1.0"\n')
-            self.write(".agent-workflow/project.yaml", initial_config(Resources(self.central_core.root,
-                       json_bytes(self.central_core.binding()), self.central_core.label, self.central_core), self.project).replace(b"  mode: assist", b"  mode: off"))
+            resources = Resources(self.central_core.root, json_bytes(self.central_core.binding()),
+                                  self.central_core.label, self.central_core)
+            self.write(".agent-workflow/project.yaml", initial_config(resources, self.project).replace(b"  mode: assist", b"  mode: off"))
             role = self.project / ".codex/agents/xy-backend.toml"
             info = self.project.stat()
             # 单元事务使用当前机器记录合同及唯一共享最小核心；不重建旧 manifest。
@@ -104,6 +105,15 @@ class TemporaryProject(unittest.TestCase):
                       "used_bindings": [self.central_core.binding()], "retained_nodes": [], "generation": "1" * 32,
                       "managed": {".codex/agents/xy-backend.toml": {"purpose": "role", "baseline": Node().value(),
                                    "expected": Node("file", role.read_bytes(), 0o644).value()}}}
+            # 健康投影要求完整profile角色；backend继续保留人工模型补丁前像，
+            # QA/UIUX由固定core编译为真实完整local，不能靠缺角色暗中借用global。
+            for selected_role in ("xy-qa", "xy-uiux"):
+                relative = f".codex/agents/{selected_role}.toml"
+                rendered = role_resource(resources, (self.project / ".agent-workflow/project.yaml").read_bytes(),
+                                         "codex", selected_role, self.central_core.binding())
+                self.write(relative, rendered)
+                record["managed"][relative] = {"purpose": "role", "baseline": Node().value(),
+                                                "expected": Node("file", rendered, 0o644).value()}
             target = self.state / "bindings" / (project_key(self.project) + ".json")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(json_bytes(record)); target.chmod(0o600)
