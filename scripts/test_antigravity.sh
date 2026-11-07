@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
+# 保留原测试范围；统一入口负责物理根、解释器选择和失败传播。
 set -euo pipefail
-export PYTHONDONTWRITEBYTECODE=1
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PACK_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
-cd "${PACK_DIR}"
-bash "${PACK_DIR}/lib/python_runtime.sh" -m unittest -v tests.test_antigravity_workflow
+SCRIPT_DIR="$(CDPATH= cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+exec bash "${SCRIPT_DIR}/test_workflow.sh" antigravity

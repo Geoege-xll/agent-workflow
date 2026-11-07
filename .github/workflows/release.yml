@@ -1,6 +1,7 @@
-name: Prepare release
+name: Validate and prepare release
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       version:
@@ -12,11 +13,44 @@ permissions:
   contents: read
 
 concurrency:
-  group: prepare-release
+  # PR 与手动发行、不同 ref 各自排队，避免互相占用同一个全局发行锁。
+  group: prepare-release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Check existing Node and Ruby consumers
+        # 需求 HTML 执行真实 Node 引擎；Formula 测试执行真实 Ruby。
+        # 使用托管 runner 已有运行时，缺失则明确失败，不能 skip 后冒充验证完成。
+        run: |
+          set -euo pipefail
+          command -v node
+          node --version
+          command -v ruby
+          ruby --version
+      - name: Show validation scope
+        run: bash scripts/test_workflow.sh --list ci
+      - name: Validate CLI, pins, shared skills, PTY and packaging
+        run: bash scripts/test_workflow.sh ci
+
   release:
+    # PR 只有上面的只读验证；发行仍须手动事件且两系统矩阵全部通过。
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
     runs-on: macos-latest
     permissions:
       contents: write
@@ -30,10 +64,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
-      - name: Test offline packaging and generated launcher
-        run: python -I -B -m unittest discover -s tests -p test_homebrew_packaging.py -v
+      # packaging 已由 needs 的同一 ci 入口验证，发行阶段仅生成并发布候选资产。
       - name: Build archive, checksum and Formula
-        run: python -I -B packaging/build_release.py "$RELEASE_VERSION"
+        run: bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py "$RELEASE_VERSION"
       - name: Create draft release without replacing published assets
         env:
           GH_TOKEN: ${{ github.token }}
