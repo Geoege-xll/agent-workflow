@@ -110,8 +110,19 @@ class NpxFixture(unittest.TestCase):
             result = subprocess.run(
                 [str(self.powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
                  "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); " + code],
-                capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
-            return result.stdout
+                capture_output=True, timeout=30)
+            if result.returncode:
+                # 只给这两条固定只读查询保留失败上下文；CalledProcessError 的
+                # 默认文字不显示已捕获的 stderr，不能据 exit1 猜测系统原因。
+                # 先捕获原始字节，失败输出才容错解码，避免错误码页再次遮蔽
+                # 真实诊断；成功路径仍严格 UTF-8，且绝不继续/skip 非零结果。
+                label = "execution-policy" if code.startswith("Get-ExecutionPolicy ") else "profile-paths"
+                def context(body):
+                    return repr(body[:4096].decode("utf-8", errors="backslashreplace"))
+                self.fail(f"PowerShell只读快照query={label} exit={result.returncode}; "
+                          f"stdout_bytes={len(result.stdout)} stderr_bytes={len(result.stderr)}; "
+                          f"stdout={context(result.stdout)} stderr={context(result.stderr)}")
+            return result.stdout.decode("utf-8")
         policies = query("Get-ExecutionPolicy -List | ConvertTo-Json -Compress")
         profiles = query("@($PROFILE.AllUsersAllHosts,$PROFILE.AllUsersCurrentHost,"
                          "$PROFILE.CurrentUserAllHosts,$PROFILE.CurrentUserCurrentHost) | ConvertTo-Json -Compress")
