@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from lib import install_workflow
+from lib import install_workflow, project_paths
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -24,7 +24,7 @@ class DetachedInstallTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="workflow-quoted-path-") as raw:
             project = Path(raw) / "Owner's Project"
             project.mkdir()
-            self.assertEqual(project.resolve(), install_workflow._target_path(str(project), PACK))
+            self.assertEqual(project.resolve(), project_paths.target_path(str(project), PACK))
 
     def test_dragged_path_preserves_escaped_trailing_space(self) -> None:
         """终端拖入路径时不能把文件夹名末尾的空格裁掉。"""
@@ -33,7 +33,7 @@ class DetachedInstallTest(unittest.TestCase):
             project = Path(raw) / "Project "
             project.mkdir()
             dragged = str(project).replace(" ", "\\ ")
-            self.assertEqual(project.resolve(), install_workflow._target_path(dragged, PACK))
+            self.assertEqual(project.resolve(), project_paths.target_path(dragged, PACK))
 
     def test_old_in_project_pack_requires_explicit_removal(self) -> None:
         """新入口拒绝和旧项目内安装包形成双工作流。"""

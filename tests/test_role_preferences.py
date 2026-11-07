@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from lib import role_models, role_preferences, runtime_store
-from manager import model_preferences as preferences, runtime_service, service
+from manager import model_preferences as preferences, project_service, runtime_service, service, state_files
 from tests import test_workflow_manager as fixtures
 
 PACK = fixtures.PACK
@@ -80,10 +80,10 @@ class RolePreferencesTest(unittest.TestCase):
         if config is not None:
             (project / ".agent-workflow").mkdir()
             (project / ".agent-workflow/project.yaml").write_text(config)
-        plan = service.preview_project(self.state, project, "add", enable=enabled,
+        plan = project_service.preview_project(self.state, project, "add", enable=enabled,
                                        content_id=self.core.content_id if enabled else None)
         self.assertTrue(plan.summary["can_apply"], plan.summary)
-        service.apply_project(plan)
+        project_service.apply_project(plan)
         return project
 
     def plan(self, project, changes, host="codex", *, expected=None):
@@ -126,7 +126,7 @@ class RolePreferencesTest(unittest.TestCase):
     def test_global_updates_two_projects_without_config_or_pin_changes(self):
         first, second = self.project("first"), self.project("second")
         configs = {project: (project / ".agent-workflow/project.yaml").read_bytes() for project in (first, second)}
-        bindings = {project: service.project_status(self.state, project)["runtime_binding"] for project in (first, second)}
+        bindings = {project: project_service.project_status(self.state, project)["runtime_binding"] for project in (first, second)}
         plan = self.plan(None, {"xy-backend": {"model": "fixture-model", "effort": "max"}})
         self.assertEqual({row["project"] for row in plan.summary["affected_projects"]}, {str(first), str(second)})
         self.assertFalse((self.state / role_preferences.RELATIVE).exists())
@@ -137,8 +137,8 @@ class RolePreferencesTest(unittest.TestCase):
         for project in (first, second):
             self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "max"})
             self.assertEqual((project / ".agent-workflow/project.yaml").read_bytes(), configs[project])
-            self.assertEqual(service.project_status(self.state, project)["runtime_binding"], bindings[project])
-            self.assertFalse(service.project_status(self.state, project)["conflicts"])
+            self.assertEqual(project_service.project_status(self.state, project)["runtime_binding"], bindings[project])
+            self.assertFalse(project_service.project_status(self.state, project)["conflicts"])
             self.assertEqual(preferences.view(self.state, project, "codex", "xy-backend")["sources"], {"model": "global", "effort": "global"})
 
     def test_native_batch_scope_refresh_keeps_global_save_and_readonly_guards(self):
@@ -312,7 +312,7 @@ class RolePreferencesTest(unittest.TestCase):
 
     def test_disabled_unmanaged_and_later_enable_use_rollback_materialize_defaults(self):
         disabled = self.project("disabled")
-        service.apply_project(service.preview_project(self.state, disabled, "disable"))
+        project_service.apply_project(project_service.preview_project(self.state, disabled, "disable"))
         unmanaged = self.project("unmanaged", enabled=False)
         plan = self.plan(None, {"xy-backend": {"model": "fixture-model", "effort": "max"}})
         self.assertEqual(len(plan.summary["affected_projects"]), 2)
@@ -321,18 +321,18 @@ class RolePreferencesTest(unittest.TestCase):
         self.assertFalse(service.role_path(disabled, "codex", "xy-backend").exists())
         self.assertFalse((unmanaged / ".agent-workflow").exists())
         for project in (disabled, unmanaged):
-            service.apply_project(service.preview_project(self.state, project, "enable", content_id=self.core.content_id))
+            project_service.apply_project(project_service.preview_project(self.state, project, "enable", content_id=self.core.content_id))
             self.assertEqual(self.native(project), {"model": "fixture-model", "effort": "max"})
         # 同一最小来源只改一个产品正文产生第二个真实固定版本，检查 use/rollback
         # 仍消费当前默认，同时保留旧任务可读取的原内容 ID。
         workflow = self.source / "product/WORKFLOW.md"
         workflow.write_text("# 固定版本二\n")
         second = runtime_store.import_core(self.source, self.state)
-        service.apply_project(service.preview_project(self.state, disabled, "use", content_id=second.content_id))
+        project_service.apply_project(project_service.preview_project(self.state, disabled, "use", content_id=second.content_id))
         self.assertEqual(self.native(disabled)["model"], "fixture-model")
-        service.apply_project(service.preview_project(self.state, disabled, "rollback"))
+        project_service.apply_project(project_service.preview_project(self.state, disabled, "rollback"))
         self.assertEqual(self.native(disabled)["effort"], "max")
-        self.assertEqual(service.project_status(self.state, disabled)["runtime_binding"], self.core.binding())
+        self.assertEqual(project_service.project_status(self.state, disabled)["runtime_binding"], self.core.binding())
 
     def test_stale_plan_config_registry_native_and_catalog_are_rejected(self):
         project = self.project("stale")
@@ -399,7 +399,7 @@ class RolePreferencesTest(unittest.TestCase):
         self.assertFalse((self.state / role_preferences.RELATIVE).exists())
         for project in (first, second):
             self.assertEqual(service.role_path(project, "codex", "xy-backend").read_bytes(), originals[project])
-            self.assertFalse(service.project_status(self.state, project)["conflicts"])
+            self.assertFalse(project_service.project_status(self.state, project)["conflicts"])
         records = self.recovery_records()
         self.assertEqual(records[-1]["status"], "rolled_back")
         self.assertTrue(any(row.get("rollback_backup_id") for row in records[-1]["projects"]))
@@ -429,19 +429,19 @@ class RolePreferencesTest(unittest.TestCase):
         project = self.project("publication")
         original = service.role_path(project, "codex", "xy-backend").read_bytes()
         plan = self.plan(None, {"xy-backend": {"model": "fixture-model"}})
-        write_state = service.write_state
+        write_state = state_files.write_state
         failed = []
         def fail_applied(root, relative, data):
             if relative.startswith("preferences/transactions/") and json.loads(data)["status"] == "applied" and not failed:
                 failed.append(True)
                 raise OSError("fixture log publication failure")
             return write_state(root, relative, data)
-        with patch.object(service, "write_state", fail_applied), self.assertRaisesRegex(ValueError, "已条件撤回"):
+        with patch.object(state_files, "write_state", fail_applied), self.assertRaisesRegex(ValueError, "已条件撤回"):
             preferences.apply(plan)
         self.assertTrue(failed)
         self.assertFalse((self.state / role_preferences.RELATIVE).exists())
         self.assertEqual(service.role_path(project, "codex", "xy-backend").read_bytes(), original)
-        self.assertFalse(service.project_status(self.state, project)["conflicts"])
+        self.assertFalse(project_service.project_status(self.state, project)["conflicts"])
 
     def test_global_native_backup_restore_is_refused_when_sources_disagree(self):
         """全局物化与配置单独恢复均不得让当前权威和实际原生字段分歧。"""
@@ -469,7 +469,7 @@ class RolePreferencesTest(unittest.TestCase):
         self.assertEqual(config.read_bytes(), before[config])
         self.assertEqual(native.read_bytes(), before[native])
         self.assertEqual(global_path.read_bytes(), before[global_path])
-        self.assertFalse(service.project_status(self.state, project)["conflicts"])
+        self.assertFalse(project_service.project_status(self.state, project)["conflicts"])
 
         # 明确覆盖的值恰好等于当时全局值时，项目保存只产生 CONFIG 备份。
         # 全局后来变化后恢复这个 CONFIG 会移除覆盖；没有 native 行也必须
@@ -513,7 +513,7 @@ class RolePreferencesTest(unittest.TestCase):
                     if source == "global":
                         # 不改变当前后端角色值，也必须使原先固定的全局来源身份
                         # 失效；fixture 写入的是测试全局文件，不触及用户配置。
-                        service.write_state(self.state, role_preferences.RELATIVE,
+                        state_files.write_state(self.state, role_preferences.RELATIVE,
                                             role_preferences.payload({"codex": {"xy-qa": {"effort": "high"}}}))
                         external.append((global_path, global_path.read_bytes()))
                     else:
@@ -534,10 +534,10 @@ class RolePreferencesTest(unittest.TestCase):
 
     def test_activation_plan_rejects_changed_global_and_unsafe_private_paths(self):
         project = self.project("activation", enabled=False)
-        activation = service.preview_project(self.state, project, "enable", content_id=self.core.content_id)
+        activation = project_service.preview_project(self.state, project, "enable", content_id=self.core.content_id)
         self.save(None, {"xy-backend": {"model": "fixture-model"}})
         with self.assertRaisesRegex(ValueError, "全局角色偏好"):
-            service.apply_project(activation)
+            project_service.apply_project(activation)
         self.assertFalse((project / ".agent-workflow").exists())
         path = self.state / role_preferences.RELATIVE
         path.unlink()
@@ -556,7 +556,7 @@ class RolePreferencesTest(unittest.TestCase):
         path = self.state / role_preferences.RELATIVE
         original = path.read_bytes()
         plan = self.plan(None, {"xy-backend": {"effort": "max"}})
-        write = service.AnchoredFile.write
+        write = state_files.AnchoredFile.write
         triggered = []
         with path.open("r+b") as old:
             def edit_after_publication(target, data, mode, expected=None):
@@ -565,7 +565,7 @@ class RolePreferencesTest(unittest.TestCase):
                     triggered.append(True)
                     old.seek(0);old.write(b"PRIVATE-LATE-GLOBAL-SAVE");old.truncate();old.flush()
                 return result
-            with patch.object(service.AnchoredFile, "write", edit_after_publication), self.assertRaisesRegex(ValueError, "存在恢复冲突") as rejected:
+            with patch.object(state_files.AnchoredFile, "write", edit_after_publication), self.assertRaisesRegex(ValueError, "存在恢复冲突") as rejected:
                 preferences.apply(plan)
         self.assertTrue(triggered)
         self.assertNotIn("PRIVATE-LATE", str(rejected.exception))
@@ -582,7 +582,7 @@ class RolePreferencesTest(unittest.TestCase):
         original = service.role_path(project, "codex", "xy-backend").read_bytes()
         registered = self.case / "registered-only"
         registered.mkdir()
-        registration = service.preview_project(self.state, registered, "add")
+        registration = project_service.preview_project(self.state, registered, "add")
         registry_before = (self.state / "projects.json").read_bytes()
         with role_preferences.coordination(self.state):
             with ThreadPoolExecutor(max_workers=1) as executor:
@@ -591,7 +591,7 @@ class RolePreferencesTest(unittest.TestCase):
                     future.result(timeout=5)
                 # 仅登记同样会改变全局影响集合，必须先取 preferences 再取 registry；
                 # 拒绝后既不能写登记表，也不能创建目标项目工作流目录。
-                registration_future = executor.submit(service.apply_project, registration)
+                registration_future = executor.submit(project_service.apply_project, registration)
                 with self.assertRaisesRegex(ValueError, "正在由另一管理操作"):
                     registration_future.result(timeout=5)
             self.assertEqual((self.state / "projects.json").read_bytes(), registry_before)
@@ -599,7 +599,7 @@ class RolePreferencesTest(unittest.TestCase):
             self.assertEqual(service.role_path(project, "codex", "xy-backend").read_bytes(), original)
             # 当前线程同栈重入允许全局事务复用原提交器，且仍持有跨进程目录锁。
             self.assertIsNotNone(service.commit(self.state, project, changes))
-            self.assertTrue(service.apply_project(registration)["registered"])
+            self.assertTrue(project_service.apply_project(registration)["registered"])
         self.assertEqual(self.native(project)["model"], "fixture-model")
 
     @unittest.skipUnless(hasattr(os, "fork"), "当前平台没有 fork 进程语义")

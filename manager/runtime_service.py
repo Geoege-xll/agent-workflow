@@ -141,13 +141,13 @@ def _has_install_residue(project: Path) -> bool:
 
 def _protect_project(project: Path, source_root: Path | None) -> None:
     """统一复用原安装器的源码根/子树/包含关系拒绝，binding 启用也不能绕过。"""
-    from lib.install_workflow import InstallError, _target_path
+    from lib.project_paths import InstallError, target_path
     sources = [Path(__file__).resolve().parents[1]]
     if source_root is not None:
         sources.append(Path(source_root).expanduser().resolve())
     try:
         for source in sources:
-            _target_path(str(project), source)
+            target_path(str(project), source)
     except InstallError as exc:
         raise ActivationError(str(exc)) from exc
     with Tree(project) as tree:
@@ -348,7 +348,7 @@ def _verify_installed_bridge(state: Path, project: Path, core: store.FrozenCore)
     真实旧/新核心 reader 对同一机器 schema 的消费，不能仅由当前进程的解析器
     代替；stdout 与清单正文逐字节比较，错误不回显项目私有载荷。
     """
-    from lib.install_workflow import capture_process
+    from lib.install_process import capture_process
     expected = store.read_core_source(core, "product/GLOBAL_CONSTRAINTS.md")
     if len(expected) > project_files.LIMIT:
         raise ActivationError("中央公共约束超过桥接有界读取范围")

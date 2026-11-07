@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from .catalog import clean, discover
-from . import model_preferences, release, service
+from . import model_preferences, project_service, release, runtime_service, service, state_files
 
 
 class CommandParser(argparse.ArgumentParser):
@@ -60,7 +60,7 @@ def parser() -> argparse.ArgumentParser:
     runtime_list=runtimes.add_parser("list",help="只读列出已验证固定核心")
     output_options(runtime_list)
     runtime_install=runtimes.add_parser("install",help="只向中央库导入核心，不修改项目")
-    runtime_install.add_argument("source",nargs="?",type=Path,default=service.SOURCE,help="来源目录，默认当前中央源码")
+    runtime_install.add_argument("source",nargs="?",type=Path,default=project_service.SOURCE,help="来源目录，默认当前中央源码")
     output_options(runtime_install,dry_run=True)
     model=commands.add_parser("models",help="只读查看本地模型目录及来源")
     model.add_argument("--platform",choices=service.LOCATIONS,required=True)
@@ -130,8 +130,8 @@ def project_command(args, state: Path, scan: Path) -> int | None:
     """把命令参数映射到共享服务；此层不自行拼接登记/停用或安装事务。"""
     action={"open":"enable", "close":"disable"}.get(args.command,args.command)
     if action in {"list", "status"}:
-        result=(service.project_status(state,service.resolve_project(state,args.project))
-                if action == "status" and args.project else service.project_summaries(state,scan))
+        result=(project_service.project_status(state,project_service.resolve_project(state,args.project))
+                if action == "status" and args.project else project_service.project_summaries(state,scan))
         print_result(args.command,result,json_mode=args.json)
         return 0
     if action == "runtime":
@@ -149,10 +149,10 @@ def project_command(args, state: Path, scan: Path) -> int | None:
         return 0
     if action not in {"add", "del", "enable", "disable", "use", "rollback", "repair"}:
         return None
-    project=(service.project_path(args.project) if action == "add" else service.resolve_project(state,args.project))
-    plan=service.preview_project(state,project,action,enable=getattr(args,"enable",False),
+    project=(state_files.project_path(args.project) if action == "add" else project_service.resolve_project(state,args.project))
+    plan=project_service.preview_project(state,project,action,enable=getattr(args,"enable",False),
                                  source_root=getattr(args,"source",None), content_id=getattr(args,"content_id",None))
-    result=plan.summary if args.dry_run else service.apply_project(plan)
+    result=plan.summary if args.dry_run else project_service.apply_project(plan)
     print_result(args.command,result,json_mode=args.json,dry_run=args.dry_run)
     # 预览冲突仍是业务拒绝，调用方不能把不可应用计划误判为成功。
     return 0 if plan.summary["can_apply"] else 2
@@ -172,18 +172,18 @@ def main(argv: list[str] | None = None) -> int:
             if json_mode:print_result("version",{"description":release.describe()},json_mode=True)
             else:print(release.describe())
             return 0
-        state=service.state_root(args.state_dir)
+        state=state_files.state_root(args.state_dir)
         scan=Path(args.scan_root).expanduser()
         if args.command in {None,"tui"}:
             if json_mode:raise ValueError("TUI 交互输出不支持 --json，请使用无交互命令")
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 raise ValueError("TUI 需要交互终端。可使用 --help、list 或 models 等无交互命令。")
             from .tui import run
-            project=service.project_path(args.project) if getattr(args,"project",None) else None
+            project=state_files.project_path(args.project) if getattr(args,"project",None) else None
             return run(state,scan,project)
         direct=project_command(args,state,scan)
         if direct is not None:return direct
-        project=service.resolve_project(state,args.project) if args.project else None
+        project=project_service.resolve_project(state,args.project) if args.project else None
         if args.command == "models":
             print(json.dumps(discover(args.platform,project=project).as_dict(),ensure_ascii=False,indent=2))
         elif args.command == "roles":
@@ -255,14 +255,14 @@ def main(argv: list[str] | None = None) -> int:
             # 配置解析异常可能携带原始秘密。JSON 只投影固定诊断；名称解析例外
             # 明确仅含路径候选，原生 ActivationError 的 conflicts 按公开安全合同传递。
             error={"code":"operation_refused","message":"操作被拒绝，请检查参数、项目状态或固定版本。"}
-            if isinstance(exc,service.ProjectResolutionError):
+            if isinstance(exc,project_service.ProjectResolutionError):
                 error.update(code="project_resolution",message=clean(str(exc),6000),candidates=list(exc.candidates))
-            if isinstance(exc,service.runtime_service.ActivationError):
+            if isinstance(exc,runtime_service.ActivationError):
                 error["conflicts"]=list(exc.conflicts)
             print(json.dumps({"schema_version":1,"error":error},ensure_ascii=False,indent=2))
         else:
             print("[错误] "+clean(str(exc),6000),file=sys.stderr)
-            if isinstance(exc,service.runtime_service.ActivationError):
+            if isinstance(exc,runtime_service.ActivationError):
                 for conflict in exc.conflicts:
                     print("冲突："+clean(conflict["path"])+"；"+clean(conflict["reason"]),file=sys.stderr)
         return 2

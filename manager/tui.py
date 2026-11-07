@@ -9,10 +9,10 @@ import locale
 from pathlib import Path
 import time
 
-from lib.install_workflow import InstallError, _target_path
+from lib.project_paths import InstallError, target_path
 from lib import runtime_store
 from .catalog import Catalog, clean, discover
-from . import service, model_preferences
+from . import service, model_preferences, project_service, state_files
 from .tui_state import Impact, Session
 from .tui_support import (Layout, TextInput, Theme, PROJECT_ACTION_LABELS, binding_id, cell_width, clip,
                           draw_box, draw_divider, draw_frame, draw_scrollbar, ellipsize, operation_error, padded, project_badge,
@@ -64,7 +64,7 @@ MANAGE=tuple((action,COMMAND_BY_ACTION[action].label) for action in
 class App:
     def __init__(self,state: Path,scan: Path,initial: Path | None=None):
         self.state,self.scan=state,scan
-        self.projects=service.projects(state,scan)
+        self.projects=project_service.projects(state,scan)
         if initial and initial not in self.projects:self.projects.append(initial)
         self.project_index=self.projects.index(initial) if initial else 0 if self.projects else -1
         self.host_index=0;self.role_index=0;self.role_selections={};self.role_column="model";self.pane="roles" if self.projects else "projects"
@@ -462,9 +462,9 @@ class App:
         finally:self.session.finish_job(job)
 
     def query_project_rows(self,include=None):
-        rows=service.project_summaries(self.state,self.scan)
+        rows=project_service.project_summaries(self.state,self.scan)
         if include and not any(row["project"] == str(include) for row in rows):
-            rows.append({**service.project_status(self.state,include),"registered":False})
+            rows.append({**project_service.project_status(self.state,include),"registered":False})
         return rows
 
     def accept_project_rows(self,rows,*,selected=None):
@@ -490,7 +490,7 @@ class App:
             self.project_rows[str(project)]={**plan.status_before,"registered":plan.registered_before}
             self.project_plan=plan;self.show_view("project_plan");self.text=project_plan_text(plan.summary)
             if not plan.summary["can_apply"]:self.notify("预览发现冲突，不能应用；查看冲突路径或返回预览修复","warning")
-        self.start_job(lambda:service.preview_project(self.state,project,action,**options),show_result=False,
+        self.start_job(lambda:project_service.preview_project(self.state,project,action,**options),show_result=False,
                        name="预览"+PROJECT_ACTION_LABELS[action],on_result=ready,preserve_view=True)
 
     def apply_project(self):
@@ -519,7 +519,7 @@ class App:
             if result.get("cancel_requested"):self.notify("取消请求到达时事务已经开始；已完成结算，请查看真实结果","warning")
         # 服务拥有组合锁、条件前像与停用后解除登记；UI 仅把只读刷新独立成
         # 后置阶段。计划在提交时即消费，后置刷新失败也不能再提交同一计划。
-        self.start_job(lambda:service.apply_project(plan,cancel=self.cancel_job),name=PROJECT_ACTION_LABELS[plan.action],
+        self.start_job(lambda:project_service.apply_project(plan,cancel=self.cancel_job),name=PROJECT_ACTION_LABELS[plan.action],
                        on_result=ready,cancellable=True,writes=True,refresh=refresh,
                        impact=Impact(frozenset({str(plan.project)}),projects=frozenset({str(plan.project)})),
                        result_text=lambda result:project_result_text(result,HOST_NAMES))
@@ -539,7 +539,7 @@ class App:
         elif action == "install":
             # “导入当前来源”仍走当前中央启用计划：来源校验、只读预览和条件发布
             # 均由服务层负责；确认写入统一使用中央计划页，不保留已不可达的旧弹窗。
-            self.preview_project(project,"enable",source_root=service.SOURCE)
+            self.preview_project(project,"enable",source_root=project_service.SOURCE)
         elif action == "check":self.start_job(lambda:service.check(project,state=self.state),name="检查工作流",preserve_view=True)
         elif action == "versions":
             def ready(rows):
@@ -552,7 +552,7 @@ class App:
                 row={**row,"registered":cached.get("registered")}
                 self.project_rows[str(project)]=row;self.show_view("details");self.text=status_text(row,HOST_NAMES)
                 if row.get("conflicts"):self.notify("项目存在冲突；详情保留完整路径与修复方向","warning")
-            self.start_job(lambda:service.project_status(self.state,project),show_result=False,name="读取三宿主详情",on_result=ready,preserve_view=True)
+            self.start_job(lambda:project_service.project_status(self.state,project),show_result=False,name="读取三宿主详情",on_result=ready,preserve_view=True)
         elif action == "backups":
             rows=service.backups(self.state,self.project);self.show_view("backups");self.backup_rows=rows
             if not rows:self.notify("当前项目还没有模型配置备份；应用模型配置后可在此查看和恢复")
@@ -708,9 +708,9 @@ class App:
         elif action == "add-confirm":
             # 空格可以属于真实目录名：把完整输入交给唯一安装器解析，禁止先 strip。
             # 该入口同时保留原样优先、引号/反斜杠拖入、单目录及源包包含保护，绝不执行 shell。
-            try:project=_target_path(self.input,service.SOURCE)
+            try:project=target_path(self.input,project_service.SOURCE)
             except InstallError as exc:raise ValueError(str(exc)) from exc
-            project=service.project_path(project)
+            project=state_files.project_path(project)
             self.add_target=project;self.show_view("add_mode")
         elif action == "preview":
             if not self.pending():self.notify("无改动；当前范围没有待保存草稿，未写入配置");return

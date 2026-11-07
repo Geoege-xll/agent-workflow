@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 import time
@@ -13,12 +12,11 @@ import time
 if __package__:
     from .platform_fs import os
     from .install_process import ACTIVE_RUNNER, SetupRunner, SetupRunError
+    from .project_paths import InstallError, target_path
 else:
     from platform_fs import os
     from install_process import ACTIVE_RUNNER, SetupRunner, SetupRunError
-
-class InstallError(Exception):
-    """中央安装前置条件或目标边界校验失败。"""
+    from project_paths import InstallError, target_path
 
 
 def _central_imports():
@@ -26,65 +24,6 @@ def _central_imports():
     root = str(Path(__file__).resolve().parents[1])
     if root not in sys.path:
         sys.path.insert(0, root)
-
-
-def capture_process(command: list[str], *, env: dict | None = None, body: bytes | None = None):
-    """真实薄桥消费的有界进程入口；沿用安装预算、进程组回收和中断传播。"""
-    runner = ACTIVE_RUNNER.get()
-    remaining = 60.0 if runner is None or runner.deadline is None else min(60.0, runner.deadline - time.monotonic())
-    if remaining <= 0:
-        raise SetupRunError("安装预算已耗尽，未启动下一纯读取阶段")
-    env = dict(os.environ) if env is None else dict(env)
-    for key in ("BASH_ENV", "ENV", "CDPATH", "SHELLOPTS", "BASHOPTS"):
-        env.pop(key, None)
-    process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-    try:
-        output, error = process.communicate(body, timeout=remaining)
-    except BaseException:
-        SetupRunner.stop(process)
-        raise
-    return subprocess.CompletedProcess(command, process.returncode, output, error)
-
-
-def _target_path(raw: str, source_root: Path) -> Path:
-    """兼容终端拖入的引号与反斜杠转义，但绝不通过 shell 执行路径。"""
-
-    value = raw.rstrip("\r\n")
-    if not value.strip():
-        raise InstallError("未提供项目目录。请拖入目录后按回车，或将目录作为参数传入。")
-    candidates = [value]
-    if value.strip() != value:
-        candidates.append(value.strip())
-    # 参数模式收到的是 shell 已解引用的真实路径，文件夹名本身可能含单引号；
-    # 只有原样和去除误输入空白的路径都不存在时，才解析终端拖入的转义形式。
-    if not any(Path(candidate).expanduser().is_dir() for candidate in candidates):
-        try:
-            tokens = shlex.split(value)
-        except ValueError as exc:
-            raise InstallError(f"项目路径的引号或转义不完整：{exc}") from exc
-        if len(tokens) == 1:
-            candidates.append(tokens[0])
-    for candidate in candidates:
-        path = Path(candidate).expanduser()
-        if not path.is_dir():
-            continue
-        if os.name == "nt":
-            if __package__:
-                from .windows_fs import Directory
-            else:
-                from windows_fs import Directory
-            # Reject junction ancestors before resolve can erase their identity.
-            with Directory(path):
-                resolved = path.resolve(strict=True)
-        else:
-            resolved = path.resolve(strict=True)
-        if resolved == source_root or resolved.is_relative_to(source_root):
-            raise InstallError("目标项目不能是安装包本身或其子目录。")
-        if source_root.is_relative_to(resolved):
-            raise InstallError("目标目录不能包含当前安装包；请选择具体项目根目录。")
-        return resolved
-    raise InstallError(f"项目目录不存在或不是文件夹：{value}")
 
 
 def main() -> int:
@@ -101,7 +40,7 @@ def main() -> int:
         raw = args.project
         if raw is None:
             raw = input("请将需要安装的项目文件夹拖入终端，然后按回车：")
-        project = _target_path(raw, source_root)
+        project = target_path(raw, source_root)
         print(f"[目标] {project}", flush=True)
         installed = install_central(project, source_root, state=args.state_dir,
                                     timeout=args.timeout)

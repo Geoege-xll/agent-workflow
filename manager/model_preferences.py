@@ -12,7 +12,7 @@ import uuid
 
 from lib import role_models, role_preferences
 from lib.runtime_project import CONFIG, Node, Tree, absolute_directory, json_bytes, skill_parts
-from . import service, runtime_service
+from . import project_service, service, runtime_service, runtime_state, state_files
 from .catalog import Catalog, discover
 
 
@@ -66,7 +66,7 @@ def _config(node: Node) -> dict:
 def _registered(state: Path) -> tuple[Node, tuple[Path, ...]]:
     node = _read(state, "projects.json")
     try:
-        data = service._registry_data(node.payload if node.kind == "file" else None)
+        data = project_service.parse_registry(node.payload if node.kind == "file" else None)
     except (ValueError, TypeError, RecursionError) as exc:
         raise ValueError("项目登记信息无效；未显示记录原文") from exc
     paths = []
@@ -82,17 +82,17 @@ def _registered(state: Path) -> tuple[Node, tuple[Path, ...]]:
 def roles(state: Path, project: Path | None, host: str) -> list[str]:
     if host not in role_models.HOSTS:
         raise ValueError("未知平台")
-    return sorted(role_models.ROLES) if project is None else service.roles(service.project_path(project), host)
+    return sorted(role_models.ROLES) if project is None else service.roles(state_files.project_path(project), host)
 
 
 def view(state, project, host, role) -> dict:
     """纯读取有效值和字段来源；明确 inherit 的来源为 host，覆盖仍保留在 overrides。"""
-    state = service.state_root(state)
+    state = state_files.state_root(state)
     global_node, defaults = role_preferences.snapshot(state)
     config, native, machine = Node(), Node(), Node()
     choices = {}
     if project is not None:
-        project = service.project_path(project)
+        project = state_files.project_path(project)
         config = _read(project, CONFIG)
         choices = _config(config)
         native = _read(project, service.role_path(project, host, role).relative_to(project).as_posix())
@@ -118,8 +118,8 @@ def load_context(state: Path, project: Path | None, host: str, *,
     新上下文仅供显示或新编辑使用；调用方必须保留已有草稿的旧 role_values，
     不能用刷新后的投影替换 expected。附带目录只检查其归属，不自动刷新或续期。
     """
-    state = service.state_root(state)
-    project = service.project_path(project) if project is not None else None
+    state = state_files.state_root(state)
+    project = state_files.project_path(project) if project is not None else None
     if host not in role_models.HOSTS:
         raise ValueError("未知平台")
     scope = (str(state), str(project) if project else None, host)
@@ -158,7 +158,7 @@ def _active_projects(state: Path, host: str) -> tuple[Node, tuple[Path, ...]]:
     for project in projects:
         # 这里只读取本机登记和宿主归属，不把停用/未管理项目装成活跃目标。损坏
         # 目标由 preview 投影为冲突；加载菜单也不能擅自跳过一个应更新的项目。
-        service.project_path(project)
+        state_files.project_path(project)
         _, record = runtime_service.read_binding_record(state, project)
         if record and record["enabled"] and host in record["hosts"] and service.roles(project, host):
             active.append(project)
@@ -167,8 +167,8 @@ def _active_projects(state: Path, host: str) -> tuple[Node, tuple[Path, ...]]:
 
 def load_catalogs(state: Path, project: Path | None, host: str) -> PreferenceCatalogs:
     """仅显式编辑/刷新调用：固定整个批次后逐范围查询，最后发布一致快照。"""
-    state = service.state_root(state)
-    project = service.project_path(project) if project is not None else None
+    state = state_files.state_root(state)
+    project = state_files.project_path(project) if project is not None else None
     if host not in role_models.HOSTS:
         raise ValueError("未知平台")
     registry, targets = _active_projects(state, host) if project is None else (None, ())
@@ -222,8 +222,8 @@ def check_catalogs(state: Path, project: Path | None, host: str,
                    catalog: Catalog | PreferenceCatalogs) -> bool:
     """只读失效检查，不启动 native；False 要求用户重新进入编辑/刷新后重选。"""
     try:
-        state = service.state_root(state)
-        project = service.project_path(project) if project is not None else None
+        state = state_files.state_root(state)
+        project = state_files.project_path(project) if project is not None else None
         bundle = catalog if isinstance(catalog, PreferenceCatalogs) else PreferenceCatalogs(catalog, {})
         if bundle._scope is not None and bundle._scope != (str(state), str(project) if project else None, host):
             return False
@@ -260,9 +260,9 @@ class _Observation:
 
 
 def _observe(state: Path, project: Path) -> tuple[_Observation, dict | None]:
-    project = service.project_path(project)
+    project = state_files.project_path(project)
     machine, record = runtime_service.read_binding_record(state, project)
-    journal = runtime_service._read_state(state, runtime_service._state_relative(project, "transactions"))
+    journal = runtime_state.read_state(state, runtime_state.state_relative(project, "transactions"))
     with Tree(project) as tree:
         config = tree.read(CONFIG)
         paths = {CONFIG}
@@ -334,8 +334,8 @@ def _edit(choices: dict, host: str, edits: dict) -> dict:
 
 def preview(state, project, host, choices, catalog, expected=None) -> ModelPreferencePlan:
     """只读构建全部目标；普通保存不发现新目录，不创建锁、备份或配置文件。"""
-    state = service.state_root(state)
-    project = service.project_path(project) if project is not None else None
+    state = state_files.state_root(state)
+    project = state_files.project_path(project) if project is not None else None
     if host not in role_models.HOSTS:
         raise ValueError("未知平台")
     global_node, defaults = role_preferences.snapshot(state)
@@ -426,16 +426,16 @@ def _restore_global(state: Path, before: Node, published: Node) -> None:
     """只撤回仍等于本轮产物的私有配置；后续编辑与换目录必须保留为冲突。"""
     if _read(state, role_preferences.RELATIVE) != published:
         raise ValueError("全局偏好已有后续修改，保留现状")
-    with service.AnchoredFile(state, role_preferences.RELATIVE) as target:
+    with state_files.AnchoredFile(state, role_preferences.RELATIVE) as target:
         if before.kind == "file":
             target.write(before.payload, before.mode, (published.payload, published.mode))
         else:
             held = ".role-preferences-rollback-" + uuid.uuid4().hex
-            service.os.rename(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory)
+            state_files.os.rename(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory)
             if target.read(held) != (published.payload, published.mode):
-                raise service.PreservedEdit(target.path.parent / held)
+                raise state_files.PreservedEdit(target.path.parent / held)
             # 排他隔离后仅删除本轮精确产物；目标被第三方重建时保持新文件。
-            service.os.unlink(held, dir_fd=target.directory)
+            state_files.os.unlink(held, dir_fd=target.directory)
 
 
 def apply(plan) -> dict:
@@ -475,7 +475,7 @@ def apply(plan) -> dict:
         with absolute_directory(plan.state / "preferences" / "transactions", create=True):
             pass
         def save():
-            service.write_state(plan.state, relative, service._record_payload(record))
+            state_files.write_state(plan.state, relative, service.record_payload(record))
         save()
         completed, observations = [], []
         published = None
@@ -500,25 +500,25 @@ def apply(plan) -> dict:
                 raise ValueError("模型目录来源在应用期间变化")
             for observation in observations:
                 _check_observation(plan.state, observation)
-            with service.AnchoredFile(plan.state, role_preferences.RELATIVE) as target:
+            with state_files.AnchoredFile(plan.state, role_preferences.RELATIVE) as target:
                 def retain_global(original, previous, expected):
                     # 私有全局文件也保留旧 inode。仅保存正文副本会遗漏仍持有旧
                     # fd 的编辑器随后写入；永久路径和摘要写入同一恢复明细。
                     archive_relative = record["global_previous"][0]["path"]
-                    with service.AnchoredFile(plan.state, archive_relative) as archive:
-                        service.os.rename(previous, archive.name, src_dir_fd=original.directory, dst_dir_fd=archive.directory)
+                    with state_files.AnchoredFile(plan.state, archive_relative) as archive:
+                        state_files.os.rename(previous, archive.name, src_dir_fd=original.directory, dst_dir_fd=archive.directory)
                         if archive.read() != expected:
-                            raise service.PreservedEdit(archive.path)
+                            raise state_files.PreservedEdit(archive.path)
                 target.retainer = retain_global
                 expected = ((plan.global_before.payload, plan.global_before.mode)
                             if plan.global_before.kind == "file" else (None, None))
                 target.write(plan.global_after, 0o600, expected)
             published = _read(plan.state, role_preferences.RELATIVE)
-            service._check_versions(plan.state, record["global_previous"])
+            service.check_versions(plan.state, record["global_previous"])
             record["status"] = "applied"
             save()
         except BaseException as failure:
-            if isinstance(failure, service.PreservedEdit):
+            if isinstance(failure, state_files.PreservedEdit):
                 record["conflicts"].append({"path": role_preferences.RELATIVE, "reason": "旧全局文件已有后续保存",
                                             "retained_path": failure.retained_path})
             # 发布函数可能完成文件发布后才失败，按实际可见字节判断是否需要撤回；
@@ -531,7 +531,7 @@ def apply(plan) -> dict:
                     record["conflicts"].append({"path": role_preferences.RELATIVE, "reason": "全局配置已有后续修改"})
             except (OSError, ValueError) as restoration_failure:
                 detail = {"path": role_preferences.RELATIVE, "reason": "全局配置不能安全撤回，保留现状"}
-                if isinstance(restoration_failure, service.PreservedEdit):
+                if isinstance(restoration_failure, state_files.PreservedEdit):
                     detail["retained_path"] = restoration_failure.retained_path
                 record["conflicts"].append(detail)
             for target in reversed(completed):

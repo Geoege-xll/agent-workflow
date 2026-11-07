@@ -48,7 +48,11 @@ class FakeWin32:
         return 200 if self.record("create_job") else None
 
     def SetInformationJobObject(self, job, kind, data, size):
-        self.limits = ctypes.cast(data, ctypes.POINTER(win.JOBOBJECT_EXTENDED_LIMIT_INFORMATION)).contents
+        # Win32 在调用时同步消费结构体；fake 也必须复制值，不能把 .contents
+        # 的借用视图保存到 _start 返回之后。生产局部缓冲区释放后该视图会读到
+        # 被复用的内存（本轮限值 8192 曾读成 103），造成与启动合同无关的随机失败。
+        self.limits = win.JOBOBJECT_EXTENDED_LIMIT_INFORMATION.from_buffer_copy(
+            ctypes.string_at(data, size))
         return self.record("set_limits")
 
     def GetCurrentProcess(self):
