@@ -175,7 +175,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
     """
     state, project = store.state_root(state), canonical_project(project)
     from . import runtime_policy
-    runtime_policy.ensure_settled(state)
+    runtime_policy.ensure_management_settled(state)
     preferences_before, preferences = role_preferences.snapshot(state)
     _protect_project(project, source_root)
     if action not in ACTIONS:
@@ -191,6 +191,11 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
             or any(host not in HOSTS for host in chosen_hosts)):
         raise ActivationError("hosts 必须为非空且不重复的三宿主子集")
     chosen_hosts = tuple(host for host in HOSTS if host in chosen_hosts)
+    ready_hosts = set(native_ready_hosts) & set(chosen_hosts)
+    if native_context is not None:
+        from . import native_agents
+        ready_hosts.update(set(native_agents.verified_hosts(state, context=native_context)) & set(chosen_hosts))
+    required_global_hosts = tuple(host for host in chosen_hosts if host in ready_hosts)
     conflicts, warnings = [], []
     before_enabled = bool(record and record["enabled"])
     after_enabled = action != "disable" if action in {"enable", "disable"} else before_enabled
@@ -248,7 +253,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
         if after_enabled and resources:
             require_skill_symlinks()
             if not conflicts:
-                context_args = {"native_context": native_context, "native_ready_hosts": native_ready_hosts} if native_context is not None else {}
+                context_args = {"native_context": native_context, "native_ready_hosts": required_global_hosts} if native_context is not None else {}
                 desired, _ = project_files.prepare(resources, project, config, chosen_hosts, owned_links=owned_links,
                                                   preferences=preferences, **context_args)
                 names = project_files.skill_names(resources)
@@ -335,7 +340,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
                           tuple(changes), tuple(sorted(observed.items())), directories, machine,
                           journal_node, json_bytes(managed_next), tuple(conflicts), tuple(warnings),
                           preferences_before=preferences_before, native_context=native_context,
-                          required_global_hosts=tuple(native_ready_hosts))
+                          required_global_hosts=required_global_hosts)
 
 
 def _same_moved(actual: Node, expected: Node) -> bool:
@@ -593,7 +598,7 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
     with ExitStack() as stack:
         stack.enter_context(role_preferences.coordination(plan.state))
         from . import runtime_policy
-        runtime_policy.ensure_settled(plan.state)
+        runtime_policy.ensure_management_settled(plan.state)
         if plan.required_global_hosts:
             from . import native_agents
             verified = native_agents.verified_hosts(plan.state, context=plan.native_context)
@@ -837,11 +842,33 @@ def status(state: Path, project: Path) -> dict:
     from . import runtime_policy
     global_pending = runtime_policy.pending(state)
     _, policy = runtime_policy.snapshot(state, project)
-    effective = runtime_policy.effective_binding(state, project, fallback=record["runtime_binding"] if record else None)
+    controller_issue = None
+    try:
+        _, current_control = runtime_policy.current_snapshot(state)
+        if current_control is not None:
+            store.load_core(current_control["runtime_binding"], state)
+        else:
+            controller_issue = {"path": runtime_policy.CURRENT, "reason": "尚无中央current，请先导入并激活版本",
+                                "code": "current_missing", "layer": "admission"}
+    except (OSError, ValueError):
+        current_control = None
+        controller_issue = {"path": runtime_policy.CURRENT, "reason": "中央current或控制核心无效",
+                            "code": "current_control_invalid", "layer": "admission"}
+    # fallback仅作迁移展示；缺失current不能成为可新建任务的权威。即使项目锁在
+    # 有效旧core，launcher也必须先加载current控制桥，因此二者许可须保持一致。
+    effective = policy["runtime_binding"] if policy["mode"] == "pinned" else current_control["runtime_binding"] if current_control else record["runtime_binding"] if record else None
     # 当前资源、历史恢复和发布许可分别计算，禁止从“历史丢失”推断项目停用，
     # 也不让资源仍可用掩盖全局 prepared 门。所有机器分支使用稳定 code/layer。
     issues = [{**row, "code": "current_resource_invalid", "layer": "current"} for row in conflicts]
     issues.extend(history)
+    from .runtime_lifecycle import _read_lifecycle
+    _, lifecycle = _read_lifecycle(state)
+    lifecycle_pending = bool(lifecycle and lifecycle["phase"] in {"prepared", "conflict"})
+    if lifecycle_pending:
+        issues.append({"path": "central/lifecycle.json", "reason": "生命周期清理尚未结算",
+                       "code": "lifecycle_pending", "layer": "management"})
+    if controller_issue:
+        issues.append(controller_issue)
     if global_pending:
         issues.append({"path": runtime_policy.ACTIVATION, "reason": "中央激活尚未结算",
                        "code": "activation_pending", "layer": "admission"})
@@ -850,14 +877,14 @@ def status(state: Path, project: Path) -> dict:
         issues.append({"path": "runtime_binding", "reason": "项目实际绑定与有效策略版本不一致",
                        "code": "policy_drift", "layer": "admission"})
     resources_healthy = bool(record and not conflicts and phase in {"enabled", "disabled"})
-    new_task_allowed = bool(record and record["enabled"] and resources_healthy and not global_pending and not drift)
+    new_task_allowed = bool(record and record["enabled"] and resources_healthy and current_control and not global_pending and not drift)
     return {"schema_version": 1, "project": str(project), "state": phase,
             "enabled": bool(record and record["enabled"] and not conflicts and phase == "enabled"),
             "declared_enabled": bool(record and record["enabled"]),
             "resources_healthy": resources_healthy,
             "history_recoverable": not history,
             "new_task_allowed": new_task_allowed,
-            "management_write_allowed": not conflicts and not global_pending and not any(row["code"] == "history_modified" for row in history),
+            "management_write_allowed": not conflicts and not global_pending and not lifecycle_pending and not any(row["code"] == "history_modified" for row in history),
             "policy": policy["mode"], "effective_binding": effective, "issues": issues,
             "runtime_binding": record["runtime_binding"] if record else None,
             "previous_binding": record["previous_binding"] if record else None,
@@ -943,7 +970,7 @@ def native_edit_receipt(state: Path, project: Path, changes, *, native_context=N
     with ExitStack() as stack:
         stack.enter_context(role_preferences.coordination(state))
         from . import runtime_policy
-        runtime_policy.ensure_settled(state)
+        runtime_policy.ensure_management_settled(state)
         tree = stack.enter_context(Tree(project))
         stack.enter_context(directory_lock(project, "install"))
         before, record = read_binding_record(state, project)

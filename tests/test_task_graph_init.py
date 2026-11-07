@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import uuid
 
 from lib import task_graph_records as records
 from lib import runtime_store
@@ -26,7 +27,33 @@ ADAPTER = """docs:
   standards_root: docs/standards/
   project: docs/PROJECT.md
   plans: docs/plans/
+workflow_hooks:
+  mode: off
 """
+
+
+def activate_fixture_pin(root: Path, state: Path, core, *, used=()):
+    """为最小规则库建立真实本机启用前置，不再只靠伪造桥环境猜测新任务许可。
+
+    此夹具不安装宿主角色；本文件只验证规则图初始化，受管资源精确限定到
+    已存在locator。完整安装/角色/原生桥消费者由central_project测试承担。
+    """
+    from lib.central.runtime_project import Node, Tree, absolute_directory, json_bytes, node_id
+    from manager import runtime_policy
+    from manager.runtime_state import read_state, state_relative, write_control, write_private
+    with runtime_policy.coordination(state), absolute_directory(state / "bindings", create=True), Tree(root) as project, Tree(state) as machine:
+        marker = project.read(".agent-workflow/runtime.json")
+        binding = core.binding()
+        history = list(used)
+        if binding not in history:
+            history.append(binding)
+        record = {"schema_version": 1, "project_root": str(root), "project_identity": list(node_id(root.stat())),
+                  "runtime_binding": binding, "enabled": True, "hosts": ["codex"], "previous_binding": None,
+                  "used_bindings": history, "managed": {".agent-workflow/runtime.json": {"purpose": "locator", "baseline": Node().value(), "expected": marker.value()}},
+                  "retained_nodes": [], "generation": uuid.uuid4().hex}
+        write_private(machine, state_relative(root, "bindings"), json_bytes(record))
+        write_control(machine, runtime_policy.CURRENT, json_bytes({"schema_version": 1, "runtime_binding": binding,
+                      "previous_binding": None, "generation": uuid.uuid4().hex}), expected=read_state(state, runtime_policy.CURRENT))
 
 
 def pinned_fixture(workspace: Path, *, engineering_body: bytes | None = None):
@@ -120,6 +147,7 @@ class TaskGraphInitTest(unittest.TestCase):
         (self.root / "project.yaml").write_text("not the central adapter\n", encoding="utf-8")
         marker = installed / "runtime.json"
         marker.write_text(json.dumps({"schema_version": 1, "kind": "central", "runtime_binding": old.binding()}))
+        activate_fixture_pin(self.root, state, old)
         (self.root / BUILTIN_ENGINEERING).unlink()
         (self.root / MINI).unlink()
         (self.root / "docs/STANDARDS.md").unlink()
@@ -187,8 +215,10 @@ class TaskGraphInitTest(unittest.TestCase):
                 self.assertFalse((self.root / "never-created.json").exists())
         wrong_adapter = copy.deepcopy(value)
         wrong_adapter["standards"].update(index_path="other/STANDARDS.md", root="other/standards")
+        # 新任务必须使用有效策略版；旧图的refresh/read已在上方证明继续固定旧pin。
+        activate_fixture_pin(self.root, state, new, used=(old.binding(),))
         rejected = self.invoke("init", "--root", self.root, "--output", self.root / "never-created.json",
-                               input=json.dumps(wrong_adapter), env=env)
+                               input=json.dumps(wrong_adapter), env=pinned_environment(self.root, state, new))
         self.assertEqual(2, rejected.returncode)
         self.assertIn("verified project adapter", rejected.stderr)
 

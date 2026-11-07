@@ -25,14 +25,14 @@ try:
     from lib.project.validate_project_config import validate_docs
     from .standard_paths import builtin_source_path, source_domain
     from .validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
-    from .runtime_pins import adapter_path, project_root, record_binding
+    from .runtime_pins import adapter_path, project_root, record_binding, new_task_publication
 except ImportError:
     import task_graph_records as records
     from task_graph import TaskGraphError
     from lib.project.validate_project_config import validate_docs
     from standard_paths import builtin_source_path, source_domain
     from validate_project_docs import collect_standard_leaves, STANDARD_RULE_RE, validate_rule_definitions
-    from runtime_pins import adapter_path, project_root, record_binding
+    from runtime_pins import adapter_path, project_root, record_binding, new_task_publication
 
 
 INPUT_FIELDS = {
@@ -52,6 +52,9 @@ TASK_FIELDS = {
     "required_skills", "audit_surfaces", "standards_exceptions", "selected_standards",
 }
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+# 当前控制桥只从已验证清单内源码读取这个静态协议常量。旧核心没有声明时由
+# parent 持锁；本协议由 child 在最终重验到图发布之间持锁，禁止双进程嵌套。
+CENTRAL_ADMISSION_PROTOCOL = 1
 
 
 def _object(value: Any, label: str, allowed: set[str], required: set[str]) -> dict[str, Any]:
@@ -134,6 +137,13 @@ def initialize(decisions: Any, root: Path, output: Path,
     if output.exists() or output.is_symlink():
         raise TaskGraphError("init output must be a new file; update existing graphs with update")
     binding = record_binding(source, root=root, initialize=True)
+    if binding is not None:
+        # record_binding.initialize仅表示允许从桥环境取得pin，文档校验等必要
+        # 旧任务reader也会使用它。真正新任务的门在这个唯一初始化业务入口，
+        # 不能把同名参数误扩成所有读取都依赖current的全局权限判断。
+        from manager.central_runtime import new_task_gate
+        from lib.runtime_store import state_root
+        new_task_gate(state_root(), root, binding)
 
     sources: dict[str, str] = {}
 
@@ -287,19 +297,20 @@ def initialize(decisions: Any, root: Path, output: Path,
 
     validate("validate", graph)
     validate("ready", graph)  # 同时复用容量、批准与活动锁的现有输入校验；不写 READY 状态。
-    for relative, expected in sources.items():
-        if records.document_digest(root, relative, binding=binding) != expected:
-            raise TaskGraphError(f"init source fingerprint changed: {relative}")
-    if standards["index_fingerprint"] is None:
-        try:
-            (root / standards["index_path"]).lstat()
-        except FileNotFoundError:
-            pass
-        else:
-            raise TaskGraphError("init absent standards index changed before publication")
-    if input_path is not None and records.read_record(input_path) != input_body:
-        raise TaskGraphError("init decision record changed before publication")
-    body = (json.dumps(graph, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
-    records.publish(output, body, "missing")
+    with new_task_publication(root, binding):
+        for relative, expected in sources.items():
+            if records.document_digest(root, relative, binding=binding) != expected:
+                raise TaskGraphError(f"init source fingerprint changed: {relative}")
+        if standards["index_fingerprint"] is None:
+            try:
+                (root / standards["index_path"]).lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise TaskGraphError("init absent standards index changed before publication")
+        if input_path is not None and records.read_record(input_path) != input_body:
+            raise TaskGraphError("init decision record changed before publication")
+        body = (json.dumps(graph, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
+        records.publish(output, body, "missing")
     return {"initialized": True, "path": str(output.absolute()), "sha256": records.digest(body),
             "task_count": len(tasks)}

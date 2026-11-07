@@ -14,6 +14,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import json
+from contextlib import contextmanager
 import os
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -107,6 +108,25 @@ def record_binding(record: dict[str, Any], *, root: Path | None = None,
     if supplied_config is not None and Path(supplied_config).absolute() != selected_root / CENTRAL_ADAPTER:
         raise RuntimePinError("桥配置路径不是当前项目的中央适配器")
     return binding
+
+
+@contextmanager
+def new_task_publication(root: Path, binding: dict | None):
+    """最终有效版重验到新图发布共用中央短锁，不持锁执行模型。
+
+    早期预览允许与激活并行；最终绑定发生漂移时拒绝发布。此锁的实际 owner
+    是新核心 child；旧核心没有此协议时由当前控制桥 parent 持锁执行旧 helper。
+    不接受环境字符串跳过锁，也不从业务 Task Pack 接收任意状态路径。
+    """
+    if binding is None:
+        yield
+        return
+    from manager import runtime_policy
+    from manager.central_runtime import new_task_gate
+    state = store.state_root()
+    with runtime_policy.coordination(state):
+        new_task_gate(state, project_root(root), binding)
+        yield
 
 
 def adapter_path(root: Path, requested: str | None, binding: dict | None) -> str:

@@ -115,6 +115,15 @@ def ensure_settled(state: Path) -> None:
         raise ActivationError("中央激活尚未结算；先恢复全局事务，暂不允许管理写入或新任务")
 
 
+def ensure_management_settled(state: Path) -> None:
+    """清理中断时冻结引用写入，保留其可恢复前像；当前任务读取仍可继续。"""
+    ensure_settled(state)
+    from .runtime_lifecycle import _read_lifecycle
+    _, lifecycle = _read_lifecycle(store.state_root(state))
+    if lifecycle and lifecycle["phase"] in {"prepared", "conflict"}:
+        raise ActivationError("生命周期事务尚未结算；先恢复清理，暂不允许管理写入")
+
+
 @contextmanager
 def activation_scope(state: Path, identifier: str):
     """仅当前调用栈获准执行其 prepared 批次，环境变量不能伪造重入授权。"""
