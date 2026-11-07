@@ -120,6 +120,111 @@ class CentralRuntimeTest(RuntimeFixture, unittest.TestCase):
     def plan(self, binding=None):
         return central.preview(self.state, binding=binding or self.alternate.binding(), native_context=self.context)
 
+    def test_controller_protocol_is_static_closed_and_independent_of_helper(self):
+        self.assertIs(type(runtime_bridge.CENTRAL_CONTROL_PROTOCOL), int)
+        self.assertEqual(1, runtime_bridge.CENTRAL_CONTROL_PROTOCOL)
+        for body, expected in ((b"# historical bridge without control capability\n", 0),
+                               (b"CENTRAL_CONTROL_PROTOCOL = 0\nCENTRAL_ADMISSION_PROTOCOL = 1\n", 0),
+                               (b"CENTRAL_CONTROL_PROTOCOL = 1\nCENTRAL_ADMISSION_PROTOCOL = 0\n", 1),
+                               (b"raise AssertionError('candidate code must not execute')\nCENTRAL_CONTROL_PROTOCOL: int = 1\n", 1)):
+            with self.subTest(body=body), patch.object(store, "read_core_source", return_value=body) as read:
+                self.assertEqual(expected, runtime_bridge.controller_protocol(self.core))
+                read.assert_called_once_with(self.core, "lib/runtime_bridge.py")
+        for body in (b"CENTRAL_CONTROL_PROTOCOL = True\n", b"CENTRAL_CONTROL_PROTOCOL = 2\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = -1\n", b"CENTRAL_CONTROL_PROTOCOL = int('1')\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\nCENTRAL_CONTROL_PROTOCOL = 1\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\nCENTRAL_CONTROL_PROTOCOL += 0\n",
+                     b"if True:\n CENTRAL_CONTROL_PROTOCOL = 1\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\ndel CENTRAL_CONTROL_PROTOCOL\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\ndef CENTRAL_CONTROL_PROTOCOL(): pass\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\nclass CENTRAL_CONTROL_PROTOCOL: pass\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\nimport sys as CENTRAL_CONTROL_PROTOCOL\n",
+                     b"from sys import version as CENTRAL_CONTROL_PROTOCOL\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\ntry: pass\nexcept Exception as CENTRAL_CONTROL_PROTOCOL: pass\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = 1\nmatch 1:\n case CENTRAL_CONTROL_PROTOCOL: pass\n",
+                     b"CENTRAL_CONTROL_PROTOCOL = (\n"):
+            with self.subTest(body=body), patch.object(store, "read_core_source", return_value=body), self.assertRaises(ValueError):
+                runtime_bridge.controller_protocol(self.core)
+
+    def test_unqualified_controller_is_rejected_before_native_preview_but_pin_remains_readable(self):
+        # 从现有有限来源精确去掉控制声明，再通过正式import建立无资格core。
+        # 该夹具验证缺声明的准入合同，不冒称真实历史安装；实际2.1.1复现证据
+        # 由独立QA保留，CI/解包源码不依赖历史Git对象，也不因此skip此负控。
+        source = self.source / "lib/runtime_bridge.py"
+        original = source.read_bytes()
+        declaration = b"\nCENTRAL_CONTROL_PROTOCOL = 1\n"
+        self.assertEqual(1, original.count(declaration))
+        old_body = original.replace(declaration, b"\n# Fixture controller without a control declaration.\n", 1)
+        source.write_bytes(old_body)
+        try:
+            legacy = store.import_core(self.source, self.state)
+        finally:
+            source.write_bytes(original)
+        self.assertEqual(old_body, store.read_core_source(legacy, "lib/runtime_bridge.py"))
+        self.assertEqual(0, runtime_bridge.controller_protocol(legacy))
+        self.enable(); self.register(self.project)
+        current_node, current = policy.current_snapshot(self.state)
+        with Tree(self.state) as tree:
+            write_control(tree, policy.CURRENT, json_bytes({**current, "previous_binding": legacy.binding()}), expected=current_node)
+        before = (read_state(self.state, policy.CURRENT), read_state(self.state, policy.ACTIVATION),
+                  projects.read_binding_record(self.state, self.project)[0], projects._journal(self.state, self.project)[0])
+        with patch.object(self.native, "preview_global", side_effect=AssertionError("unsupported controller reached native preview")) as native:
+            for action, binding in (("activate", legacy.binding()), ("rollback", None)):
+                with self.subTest(action=action), self.assertRaisesRegex(ValueError, "CENTRAL_CONTROL_PROTOCOL=1"):
+                    central.preview(self.state, action, binding=binding, native_context=self.context)
+            native.assert_not_called()
+        self.assertEqual(before, (read_state(self.state, policy.CURRENT), read_state(self.state, policy.ACTIVATION),
+                                 projects.read_binding_record(self.state, self.project)[0], projects._journal(self.state, self.project)[0]))
+        # 资格只约束current控制器。由合格控制器管理的显式无控制资格项目pin
+        # 仍可读取/新建；强写它为current只阻准入，保留资源和修复许可。
+        project_service.apply_project(project_service.preview_project(self.state, self.project, "use", content_id=legacy.content_id))
+        self.assertEqual(legacy.binding(), central.new_task_gate(self.state, self.project))
+        self.set_current(legacy.binding())
+        checked = projects.status(self.state, self.project)
+        self.assertTrue(checked["resources_healthy"], checked["issues"])
+        self.assertTrue(checked["management_write_allowed"], checked["issues"])
+        self.assertFalse(checked["new_task_allowed"])
+        self.assertIn("current_control_invalid", {row["code"] for row in checked["issues"]})
+        self.assertNotIn("policy_drift", {row["code"] for row in checked["issues"]})
+        controller = central.status(self.state)
+        self.assertFalse(controller["new_task_allowed"])
+        self.assertTrue(controller["management_write_allowed"])
+        self.assertIn("current_control_invalid", {row["code"] for row in controller["issues"]})
+        with self.assertRaisesRegex(ValueError, "不能创建新任务"):
+            central.new_task_gate(self.state, self.project)
+        self.assertEqual(store.read_core_source(legacy, "product/WORKFLOW.md"),
+                         runtime_bridge.read_resource(self.state, self.project, "product/WORKFLOW.md", binding=legacy.binding()))
+        # 旧current无资格不能把修复操作也堵住：真实激活新控制器之后，旧pin的
+        # 有效策略重新获得准入，且没有偷偷把它换成新core任务语义。
+        central.apply(central.preview(self.state, binding=self.core.binding(), native_context=self.context))
+        self.assertEqual(legacy.binding(), central.new_task_gate(self.state, self.project))
+
+    def test_unknown_controller_metadata_rejects_before_native_preview(self):
+        source = self.source / "lib/runtime_bridge.py"
+        original = source.read_bytes()
+        # 真正导入未知协议core；getter应静态拒绝，不能通过执行这个候选模块
+        # 的副作用探测能力，也不能等到native预检/持久事务开始后才拒绝。
+        source.write_bytes(b"CENTRAL_CONTROL_PROTOCOL = 2\nraise AssertionError('candidate must not execute')\n")
+        try:
+            unknown = store.import_core(self.source, self.state)
+        finally:
+            source.write_bytes(original)
+        before = read_state(self.state, policy.CURRENT), read_state(self.state, policy.ACTIVATION)
+        with patch.object(self.native, "preview_global", side_effect=AssertionError("unknown controller reached native preview")) as native, \
+                self.assertRaisesRegex(ValueError, "中央控制协议"):
+            central.preview(self.state, binding=unknown.binding(), native_context=self.context)
+        native.assert_not_called()
+        self.assertEqual(before, (read_state(self.state, policy.CURRENT), read_state(self.state, policy.ACTIVATION)))
+
+    def test_supported_controllers_activate_and_rollback(self):
+        self.enable(); self.register(self.project)
+        self.assertEqual(1, runtime_bridge.controller_protocol(self.alternate))
+        central.apply(self.plan())
+        result = central.apply(central.preview(self.state, "rollback", native_context=self.context))
+        self.assertEqual(self.core.binding(), result["runtime_binding"])
+        self.assertTrue(result["new_task_allowed"])
+        self.assertEqual(self.core.binding(), central.new_task_gate(self.state, self.project))
+
     def test_mixed_follow_pinned_disabled_and_follow_reenable(self):
         self.enable()
         pinned = self.workspace / ("pinned-" + uuid.uuid4().hex[:8]); pinned.mkdir()

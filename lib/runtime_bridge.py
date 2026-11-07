@@ -31,8 +31,48 @@ from lib.central.runtime_project import (
 )
 
 
+# current控制器负责全局待结算门和初始化协调；该资格与选版helper是否自行持
+# 发布锁完全独立。旧core仍可作为任务pin读取，但不能凭旧enabled检查接管current。
+CENTRAL_CONTROL_PROTOCOL = 1
+
+
 class RuntimeBridgeError(ProjectRuntimeError):
     """项目未启用、任务缺 pin，或中央资源已损坏。"""
+
+
+def controller_protocol(core: store.FrozenCore) -> int:
+    """静态读取已验证core的控制资格，不import或执行候选bridge探测能力。
+
+    清单验证只证明字节身份，不能证明旧bridge具有新中央门禁。声明必须是唯一
+    顶层字面整数；缺失或0表示无资格，1支持，其余值/动态/重复赋值失败关闭。
+    连嵌套或删除写入也计入，不能在一个表面合法声明后偷偷重赋协议常量。
+    """
+    body = store.read_core_source(core, "lib/runtime_bridge.py")
+    try:
+        module = ast.parse(body)
+    except (SyntaxError, ValueError) as exc:
+        raise RuntimeBridgeError("所选核心中央控制协议无效") from exc
+    declarations = []
+    writes = [node for node in ast.walk(module) if isinstance(node, ast.Name)
+              and node.id == "CENTRAL_CONTROL_PROTOCOL" and isinstance(node.ctx, (ast.Store, ast.Del))]
+    # Python的def/class/import及异常/模式绑定把名字保存在节点字段，未必产生
+    # Name(Store)。这些明确重绑定同样破坏“唯一字面声明”，不能漏成合法资格。
+    # 此处只校验协议声明语法；真正加载桥后仍由薄入口核验实际module值。
+    other_writes = [node for node in ast.walk(module)
+                    if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler,
+                                         ast.MatchAs, ast.MatchStar)) and node.name == "CENTRAL_CONTROL_PROTOCOL")
+                    or (isinstance(node, ast.MatchMapping) and node.rest == "CENTRAL_CONTROL_PROTOCOL")
+                    or (isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == "CENTRAL_CONTROL_PROTOCOL")]
+    for statement in module.body:
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target] if isinstance(statement, ast.AnnAssign) else []
+        if any(isinstance(target, ast.Name) and target.id == "CENTRAL_CONTROL_PROTOCOL" for target in targets):
+            declarations.append(statement.value)
+    if not declarations and not writes and not other_writes:
+        return 0
+    if (other_writes or len(writes) != 1 or len(declarations) != 1 or not isinstance(declarations[0], ast.Constant)
+            or type(declarations[0].value) is not int or declarations[0].value not in {0, 1}):
+        raise RuntimeBridgeError("所选核心声明了未知、动态或重复的中央控制协议")
+    return declarations[0].value
 
 
 def helper_creates_task(logical_path: str, args: tuple | list) -> bool:

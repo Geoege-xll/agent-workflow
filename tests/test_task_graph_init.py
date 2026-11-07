@@ -94,6 +94,9 @@ def pinned_fixture(workspace: Path, *, engineering_body: bytes | None = None):
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((PACK / relative).read_bytes())
+    # 该最小核心仅供规则图单元夹具使用，明确提供current静态资格元数据；真实
+    # 薄入口加载/调用完整bridge由中央项目消费者验证，不能借缺失声明放宽门禁。
+    (source / "lib/runtime_bridge.py").write_bytes(b"CENTRAL_CONTROL_PROTOCOL = 1\n")
     (source / "product/WORKFLOW.md").write_bytes("固定旧版工作流正文\n".encode())
     return source, state, runtime_store.import_core(source, state)
 

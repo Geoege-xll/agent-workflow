@@ -871,7 +871,10 @@ def status(state: Path, project: Path) -> dict:
     try:
         _, current_control = runtime_policy.current_snapshot(state)
         if current_control is not None:
-            store.load_core(current_control["runtime_binding"], state)
+            from lib.runtime_bridge import controller_protocol
+            controller = store.load_core(current_control["runtime_binding"], state)
+            if controller_protocol(controller) != 1:
+                raise ActivationError("中央current缺少受支持的控制协议")
         else:
             controller_issue = {"path": runtime_policy.CURRENT, "reason": "尚无中央current，请先导入并激活版本",
                                 "code": "current_missing", "layer": "admission"}
@@ -879,8 +882,9 @@ def status(state: Path, project: Path) -> dict:
         current_control = None
         controller_issue = {"path": runtime_policy.CURRENT, "reason": "中央current或控制核心无效",
                             "code": "current_control_invalid", "layer": "admission"}
-    # fallback仅作迁移展示；缺失current不能成为可新建任务的权威。即使项目锁在
-    # 有效旧core，launcher也必须先加载current控制桥，因此二者许可须保持一致。
+    # fallback仅作迁移展示；缺失或无资格current不能成为可新建任务的权威。
+    # 控制问题只进入admission层，不污染项目资源/历史，也不阻止用合格新core
+    # 修复中央current；显式旧pin读取和helper协议0父锁不受候选资格限制。
     effective = policy["runtime_binding"] if policy["mode"] == "pinned" else current_control["runtime_binding"] if current_control else record["runtime_binding"] if record else None
     # 当前资源、历史恢复和发布许可分别计算，禁止从“历史丢失”推断项目停用，
     # 也不让资源仍可用掩盖全局 prepared 门。所有机器分支使用稳定 code/layer。

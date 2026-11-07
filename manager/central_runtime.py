@@ -116,18 +116,32 @@ def status(state: Path) -> dict:
     _, current = policy.current_snapshot(state)
     pending = policy.pending(state)
     lifecycle = runtime_lifecycle.status(state)
+    controller_issues = []
     if current:
-        store.load_core(current["runtime_binding"], state)
+        try:
+            _require_controller(store.load_core(current["runtime_binding"], state))
+        except (OSError, ValueError):
+            controller_issues.append({"path": policy.CURRENT, "reason": "中央current或控制核心无效",
+                                      "code": "current_control_invalid", "layer": "admission"})
     return {"schema_version": 1, "state_dir": str(state),
             "runtime_binding": current["runtime_binding"] if current else None,
             "previous_binding": current["previous_binding"] if current else None,
             "generation": current["generation"] if current else None,
             "pending_activation": {"id": pending["id"], "phase": pending["phase"]} if pending else None,
             "lifecycle": lifecycle,
-            "new_task_allowed": pending is None and current is not None,
+            "issues": controller_issues,
+            "new_task_allowed": pending is None and current is not None and not controller_issues,
             # 清理的固定引用前像必须先恢复再允许管理写；当前资源/任务读取
             # 不因cleanup一概禁用，仍沿既有activation及项目自身准入边界。
             "management_write_allowed": pending is None and not lifecycle["pending"]}
+
+
+def _require_controller(core: store.FrozenCore) -> store.FrozenCore:
+    """候选资格在任何原生预览/写入之前检查，旧current不阻碍激活合格新core修复。"""
+    from lib.runtime_bridge import controller_protocol
+    if controller_protocol(core) != 1:
+        raise ActivationError("所选核心缺少 CENTRAL_CONTROL_PROTOCOL=1，不能作为中央current控制器")
+    return core
 
 
 def preview(state: Path, action: str = "activate", *, binding: dict | None = None,
@@ -147,7 +161,7 @@ def preview(state: Path, action: str = "activate", *, binding: dict | None = Non
     selected = (current["previous_binding"] if current else None) if action == "rollback" else binding
     if selected is None:
         raise ActivationError("中央激活需要已导入的固定版本，回退需要前次 current")
-    selected = store.load_core(store.validate_binding(selected), state).binding()
+    selected = _require_controller(store.load_core(store.validate_binding(selected), state)).binding()
     context = _native_context(state, native_context)
     native = native_agents.preview_global(state, selected, context=context)
     # 在只读预览期即拒绝不能写入current的根形状；不等项目已修改后才发现
@@ -255,7 +269,7 @@ def _check_plan(plan: CentralPlan) -> None:
         if capture.runtime_plan:
             with Tree(capture.project) as tree:
                 projects._check_plan(capture.runtime_plan, tree)
-    store.load_core(plan.binding, plan.state)
+    _require_controller(store.load_core(plan.binding, plan.state))
 
 
 def apply(plan: CentralPlan, *, cancel=None) -> dict:
