@@ -708,6 +708,105 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertIn(b'model_reasoning_effort = "max"', desired[".codex/agents/xy-backend.toml"][0].payload)
 
 
+class NativeControllerBoundaryTest(unittest.TestCase):
+    """通过真实清单导入和生成launcher验证调用边界，不伪造load_core结果。"""
+
+    def bridge_fixture(self, root, declaration):
+        from lib.central.runtime_project import LAUNCHER, launcher_source, project_key
+        source = fixtures.CentralCliIntegrationTest.create_source(root)
+        # 最小无gate桥故意会在main入口和init里写标记；若薄入口缺少资格门，
+        # 黑盒就会观察到越过调用边界。只改导入前source，不修改固定core/manifest。
+        body = (declaration + "\n" if declaration else "") + """from pathlib import Path
+import runpy
+import sys
+
+def main(*, project, state):
+    args = list(sys.argv[1:])
+    if args[:1] == ['--binding']:
+        args = args[2:]
+    core = Path(__file__).resolve().parents[1]
+    (project / 'bridge-main-called').write_text('called')
+    if args[:1] == ['read']:
+        print((core / args[1]).read_text(), end='')
+    elif args[:1] == ['helper']:
+        runpy.run_path(str(core / args[1]), run_name='__main__')
+    else:
+        print('fixture control called')
+    return 0
+"""
+        (source / "lib/runtime_bridge.py").write_text(body)
+        (source / "lib/task_graph_init.py").write_text("from pathlib import Path\nPath('fixture-init-called').write_text('called')\n")
+        (source / "lib/fixture_read.py").write_text("print('fixture ordinary helper read')\n")
+        state = root / "state"
+        core = runtime_store.import_core(source, state)
+        project = root / "project"
+        (project / ".agent-workflow").mkdir(parents=True)
+        (project / LAUNCHER).write_bytes(launcher_source())
+        (state / "bindings").mkdir()
+        (state / "bindings" / (project_key(project) + ".json")).write_bytes(json_bytes({
+            "schema_version": 1, "project_root": str(project), "runtime_binding": core.binding(),
+            "used_bindings": [core.binding()]}))
+        (state / "central").mkdir()
+        current = state / "central/current.json"
+        current.write_bytes(json_bytes({"schema_version": 1, "runtime_binding": core.binding(),
+                                      "previous_binding": None, "generation": "a" * 32, "native_roots": []}))
+        current.chmod(0o600)
+        environment = {key: value for key, value in os.environ.items() if key not in {
+            "PYTHONPATH", "PYTHONHOME", "AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
+            "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"}}
+        environment.update({"HOME": str(root / "home"), "AGENT_WORKFLOW_STATE_DIR": str(state),
+                            "AGENT_WORKFLOW_PYTHON": sys.executable})
+        def invoke(*arguments):
+            result = subprocess.run(["bash", str(Path(__file__).resolve().parents[1] / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                                     str(project / LAUNCHER), *arguments], cwd=project, env=environment,
+                                    capture_output=True, text=True, timeout=30)
+            print("CONTROLLER_BOUNDARY", repr(declaration), arguments[0], "exit=" + str(result.returncode))
+            print(result.stdout, end="")
+            print(result.stderr, end="")
+            return result
+        return project, core, current, invoke
+
+    def test_thin_control_refuses_unqualified_bridge_before_main_and_keeps_old_reads(self):
+        with tempfile.TemporaryDirectory(prefix="native-controller-", dir=os.environ.get("AWF_TEST_SCRATCH")) as raw:
+            for number, declaration in enumerate(("", "CENTRAL_CONTROL_PROTOCOL = 0", "CENTRAL_CONTROL_PROTOCOL = 2",
+                                                "CENTRAL_CONTROL_PROTOCOL = True", 'CENTRAL_CONTROL_PROTOCOL = "1"')):
+                with self.subTest(declaration=declaration):
+                    root = Path(raw).resolve() / str(number)
+                    root.mkdir()
+                    project, core, current, invoke = self.bridge_fixture(root, declaration)
+                    explicit = ("--binding", json.dumps(core.binding()))
+                    # 即使手工合法current指向无gate桥，check/new_task和两种init
+                    # 都必须在其main之前拒绝，不让旧桥执行任何任务创建逻辑。
+                    for arguments in (("check",), ("new_task",),
+                                      explicit + ("helper", "lib/task_graph_init.py"),
+                                      explicit + ("helper", "lib/task_graph_cli.py", "--input", "graph.json", "init")):
+                        result = invoke(*arguments)
+                        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertIn("控制协议", result.stderr)
+                        self.assertFalse((project / "bridge-main-called").exists())
+                        self.assertFalse((project / "fixture-init-called").exists())
+                    # 普通显式旧pin读与非init helper不依赖current/控制资格；
+                    # 损坏current也不能使这两个只读入口失去原pin可用性。
+                    current.write_bytes(b"broken current")
+                    result = invoke(*explicit, "read", "product/WORKFLOW.md")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("固定版本一", result.stdout)
+                    result = invoke(*explicit, "helper", "lib/fixture_read.py")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("fixture ordinary helper read", result.stdout)
+                    self.assertFalse((project / "fixture-init-called").exists())
+
+    def test_thin_control_protocol_one_fixture_allows_main_and_init(self):
+        with tempfile.TemporaryDirectory(prefix="native-controller-one-", dir=os.environ.get("AWF_TEST_SCRATCH")) as raw:
+            project, core, _, invoke = self.bridge_fixture(Path(raw).resolve(), "CENTRAL_CONTROL_PROTOCOL = 1")
+            result = invoke("check")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((project / "bridge-main-called").exists())
+            result = invoke("--binding", json.dumps(core.binding()), "helper", "lib/task_graph_init.py")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((project / "fixture-init-called").read_text(), "called")
+
+
 class NativeProfileConsumerTest(unittest.TestCase):
     def test_sparse_profile_helper_uses_state_authority_over_ambient_host_paths(self):
         """真实薄桥读取显式state的稀疏角色，不能随进程HOME重选宿主根。"""
