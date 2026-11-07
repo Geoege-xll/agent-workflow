@@ -48,7 +48,9 @@ QA后PM原位更新本主题及同名HTML，使用实际required生命周期解�
 
 底层能力及四个后端消费者已完成原生补证：目录fsync、软链正反能力与恢复、真硬链及普通文件守卫、junction拒绝、软链读建移删和普通文件排他移动／碰撞保全均有真实普通用户证据。当前检查点2549d8e9已包含中央事务、私有记录叶DACL、项目ACL保全、薄桥自举与Job helper；本地中央／补偿、私有发布、未确认Job保留现场、探针创建后失败、全新进程的pkgutil影子拒绝已通过。
 
-首个native-central（run42337806481）在preview来源VERSION校验失败，尚未中央导入或项目发布，finally资源清理成功。当前以真实Git过滤确认的LF／CRLF同因补仓库检出属性，并在下次原生CI记录实际字节；该旧VM实际autocrlf配置未被记录，仍不作事实断言。完整历史输出持续保存在本请求windows-capabilities.log，原失败未覆盖。剩余为当前中央消费者原生通过、npm持久embedded／当前E2E与真实Hook／产品负向、2.1.1元数据、必要macOS消费者及唯一独立QA；此前绿色均不作为完整BUILD_VERIFIED或QA PASS。
+LF修正已在abe710f1／run42338668219原生证明：新VM实际system autocrlf=true，检出仍与LF blob逐字节一致，VERSION及角色预览通过。中央消费者继续进入apply后，在创建私有状态路径时被后端mkdir的前置flush拒绝C盘根写权限；原因是上层对既存祖先用mkdir捕EEXIST，而后端在判断已存在之前就要求父目录写权限。本轮只修这个实际语义：已存在节点无修改地返回EEXIST，真正创建继续完整的前后持久化及ACL检查，不要求普通用户对卷根有写权。该轮未进入核心导入／prepared，finally资源清理成功。
+
+完整历史输出持续保存在本请求windows-capabilities.log，含首轮VERSION失败及其旧VM配置未记录边界，原失败未覆盖。剩余为当前中央消费者原生通过、npm持久embedded／当前E2E与真实Hook／产品负向、2.1.1元数据、必要macOS消费者及唯一独立QA；此前绿色均不作为完整BUILD_VERIFIED或QA PASS。
 
 ## 验收结果与当前已交付行为
 

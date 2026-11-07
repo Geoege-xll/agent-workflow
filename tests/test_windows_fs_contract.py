@@ -184,5 +184,92 @@ class WindowsSymlinkReparseContractTest(unittest.TestCase):
                 fs._decode_symlink_reparse(data)
 
 
+class WindowsMkdirExistingContractTest(unittest.TestCase):
+    """只验证无变更分支与原API顺序；普通用户NTFS结果由native-central另验。"""
+
+    def test_existing_nodes_raise_eexist_before_any_flush_or_write(self):
+        import errno
+        for mode in (stat.S_IFDIR | 0o700, stat.S_IFREG | 0o600, stat.S_IFLNK | 0o777):
+            with self.subTest(mode=mode):
+                backend = fs._WindowsOS()
+                path = PureWindowsPath("C:/existing")
+                with patch.object(backend, "_path", return_value=path), \
+                        patch.object(fs, "Directory", return_value=nullcontext()), \
+                        patch.object(backend, "stat", return_value=SimpleNamespace(st_mode=mode)) as lookup, \
+                        patch.object(fs, "flush_directory", side_effect=PermissionError("no volume-root write")) as flush, \
+                        patch.object(fs, "_api", side_effect=AssertionError("no create API for existing node")) as api, \
+                        patch.object(fs, "private_security", side_effect=AssertionError("no ACL writes")) as security:
+                    with self.assertRaises(FileExistsError) as caught:
+                        backend.mkdir(path, 0o700)
+                self.assertEqual(caught.exception.errno, errno.EEXIST)
+                lookup.assert_called_once_with(path, follow_symlinks=False)
+                flush.assert_not_called()
+                api.assert_not_called()
+                security.assert_not_called()
+
+    def test_missing_directory_keeps_parent_create_acl_and_both_flushes(self):
+        for mode in (0o700, 0o755):
+            with self.subTest(mode=mode):
+                calls = []
+                backend = fs._WindowsOS()
+                path = PureWindowsPath("C:/owned/new")
+                def missing(*args, **kwargs):
+                    calls.append("lookup-no-follow")
+                    raise FileNotFoundError()
+                def create(name, security):
+                    calls.append("create-private" if security is not None else "create")
+                    self.assertEqual(name, str(path))
+                    return 1
+                api = SimpleNamespace(kernel=SimpleNamespace(CreateDirectoryW=create))
+                with patch.object(backend, "_path", return_value=path), \
+                        patch.object(fs, "Directory", return_value=nullcontext()), \
+                        patch.object(backend, "stat", side_effect=missing), \
+                        patch.object(fs, "flush_directory", side_effect=lambda item: calls.append(("flush", item))), \
+                        patch.object(fs, "_api", return_value=api), \
+                        patch.object(fs, "private_security", return_value=nullcontext(42)), \
+                        patch.object(fs, "assert_private", side_effect=lambda item: calls.append(("acl", item))):
+                    backend.mkdir(path, mode)
+                expected = ["lookup-no-follow", ("flush", path.parent),
+                            "create-private" if mode == 0o700 else "create"]
+                if mode == 0o700:
+                    expected.append(("acl", path))
+                self.assertEqual(calls, [*expected, ("flush", path), ("flush", path.parent)])
+
+    def test_missing_directory_parent_flush_failure_cannot_create(self):
+        backend = fs._WindowsOS()
+        path = PureWindowsPath("C:/owned/new")
+        failure = PermissionError("fixture parent flush refused")
+        with patch.object(backend, "_path", return_value=path), \
+                patch.object(fs, "Directory", return_value=nullcontext()), \
+                patch.object(backend, "stat", side_effect=FileNotFoundError()), \
+                patch.object(fs, "flush_directory", side_effect=failure), \
+                patch.object(fs, "_api", side_effect=AssertionError("must not create after failed flush")) as api:
+            with self.assertRaises(PermissionError) as caught:
+                backend.mkdir(path, 0o700)
+        self.assertIs(caught.exception, failure)
+        api.assert_not_called()
+
+    def test_racing_creation_preserves_exclusive_api_failure(self):
+        backend = fs._WindowsOS()
+        path = PureWindowsPath("C:/owned/new")
+        collision = FileExistsError("fixture concurrent creator")
+        calls = []
+        api = SimpleNamespace(kernel=SimpleNamespace(CreateDirectoryW=lambda *args: 0))
+        def check(result, path=None):
+            if not result:
+                raise collision
+            return result
+        with patch.object(backend, "_path", return_value=path), \
+                patch.object(fs, "Directory", return_value=nullcontext()), \
+                patch.object(backend, "stat", side_effect=FileNotFoundError()), \
+                patch.object(fs, "flush_directory", side_effect=lambda item: calls.append(item)), \
+                patch.object(fs, "_api", return_value=api), patch.object(fs, "_check", side_effect=check), \
+                patch.object(fs, "assert_private", side_effect=AssertionError("cannot own concurrent directory")):
+            with self.assertRaises(FileExistsError) as caught:
+                backend.mkdir(path, 0o755)
+        self.assertIs(caught.exception, collision)
+        self.assertEqual(calls, [path.parent])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import ctypes
+import errno
 import hashlib
 import os as _os
 from pathlib import Path, PureWindowsPath
@@ -913,6 +914,17 @@ class _WindowsOS:
     def mkdir(self, path, mode=0o777, *, dir_fd=None):
         path = self._path(path, dir_fd)
         with Directory(path.parent):
+            # mkdir 对既存祖先没有命名空间变更，须在要求父目录写权限前返回
+            # EEXIST。只做 no-follow 查询，未知节点仍按“已存在”交给上层
+            # 类型校验，绝不跟随 junction 或放宽普通文件/重解析点守卫。
+            try:
+                self.stat(path, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise FileExistsError(errno.EEXIST, _os.strerror(errno.EEXIST), str(path))
+            # 只有确实缺失才进入创建；最终 CreateDirectoryW 仍排他，若查询后
+            # 有并发创建，原 API 错误继续传播，不认领他人目录或修改其 ACL。
             flush_directory(path.parent)
             if not mode & 0o077:
                 with private_security() as descriptor:
