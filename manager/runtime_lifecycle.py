@@ -47,6 +47,37 @@ def _read_lifecycle(state: Path) -> tuple[Node, dict | None]:
     return node, value
 
 
+def status(state: Path) -> dict:
+    """只读公开清理结算状态；不创建目录，也不返回恢复前像或删除快照。
+
+    pending表示管理写入仍需等待结算，can_recover只表示原恢复入口适用，
+    不承诺未知手改已能安全覆盖。计数以计划项为单位；部分删除的目录仍未
+    算作完成，避免把中断时已删若干叶文件误报为整个批次成功。
+    """
+    state = store.state_root(state)
+    _, record = _read_lifecycle(state)
+    phase = record["phase"] if record else "none"
+    pending = phase in {"prepared", "conflict"}
+    conflicts = []
+    for row in record["conflicts"] if record else []:
+        if (not isinstance(row, dict) or not isinstance(row.get("path"), str)
+                or not isinstance(row.get("reason"), str)
+                or not isinstance(row.get("code", "lifecycle_conflict"), str)):
+            raise ActivationError("生命周期冲突诊断结构无效")
+        # 兼容早期只有path/reason的诊断；明确投影三个公开字段，即使私有
+        # 旧日志另带恢复内容，也不能通过CLI/TUI状态查询泄露其raw前像。
+        conflicts.append({"code": row.get("code", "lifecycle_conflict"),
+                          "path": row["path"], "reason": row["reason"]})
+    counts = {}
+    for kind in ("backups", "archives", "cores"):
+        rows = record[kind] if record else []
+        counts[kind + "_total"] = len(rows)
+        counts[kind + "_done"] = sum(row["phase"] == "done" for row in rows)
+    return {"schema_version": 1, "state_dir": str(state),
+            "transaction_id": record["id"] if record else None, "phase": phase,
+            "pending": pending, "can_recover": pending, "conflicts": conflicts, "counts": counts}
+
+
 def _validate_snapshot(snapshot: dict) -> None:
     if (not isinstance(snapshot, dict) or "" not in snapshot or not isinstance(snapshot[""], dict)
             or not snapshot[""].get("directory")):
