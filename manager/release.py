@@ -51,6 +51,7 @@ def describe() -> str:
     metadata = module.with_suffix(".json")
     version = source_version(module.parents[1])
     label = version + "（源码未打包）"
+    origin = "source（显式源码开发）"
     if metadata.exists() or metadata.is_symlink():
         try:
             # release.json 仅由构建器写入归档，放在 manager 内确保 Formula 复制目录时保留。
@@ -69,7 +70,12 @@ def describe() -> str:
                     or not VERSION_PATTERN.fullmatch(data["version"]) or data["version"] != version):
                 raise ValueError("发行元数据格式无效")
             label = data["version"]
+            origin = "formal（发行包）"
         except (OSError, ValueError, RecursionError) as exc:
             raise ValueError(f"无法读取有效的发行元数据：{metadata}") from exc
     # __file__ 经过物理路径解析，短链接入口和调用目录都不会改变实际载荷根。
-    return f"awf-cli {label}\n中央源根：{module.parents[1]}"
+    # 来源由本载荷内通过严格校验的发行元数据决定；PATH、入口文件名、环境
+    # 变量及 Cellar 目录名都不是发行证明。formal 只声明本载荷已打包，不猜测
+    # Homebrew 的外部登记状态；物理根让开发入口和正式 wrapper 可直接对照。
+    root = module.parents[1]
+    return f"awf-cli {label}\n中央源根：{root}\n入口来源：{origin}\n物理载荷根：{root}"
