@@ -251,7 +251,9 @@ def retained_conflicts(tree: Tree, records: list[dict]) -> list[dict]:
         except FileNotFoundError:
             node = Node()
         else:
-            node = read_at(parent, name, allow_link=True)
+            # retained 是项目中的原 inode 恢复叶，保留其真实 mode/DACL；
+            # 不能走只供机器私有记录使用的 0600 归一，也不扩大该包装器权限。
+            node = read_project_at(parent, name, allow_link=True)
         if (node.kind != item["kind"] or node.mode != item["mode"]
                 or hashlib.sha256(node.payload).hexdigest() != item["sha256"]
                 or list(node.identity[:2]) != item["inode"]):

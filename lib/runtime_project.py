@@ -602,7 +602,10 @@ def configuration(resources: Resources, project: Path, config: Node, *, owned_li
     body = config.payload if config.kind == "file" else initial_config(resources, project)
     config_path = project / CONFIG
     result = validate_with_profile(config_path, project, resources.root / "roles", config_bytes=body)
-    allowed = {path for relative in owned_links for path in (relative, relative + "/SKILL.md")}
+    # owned_links 已由调用方逐叶核过归属/核心目标；这里只对齐旧验证器
+    # 使用 Path 显示的诊断格式。Windows 反斜杠只用于这两个精确错误的匹配，
+    # 不写入 binding/journal，也不规范化或豁免任意未知错误/子路径。
+    allowed = {str(Path(path)) for relative in owned_links for path in (relative, relative + "/SKILL.md")}
     errors = []
     for error in result.errors:
         if any(error == prefix + path for path in allowed for prefix in (

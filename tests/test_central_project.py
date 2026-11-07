@@ -1026,5 +1026,48 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         self.assertEqual("rolled_back", service._journal(self.state, self.project)[1]["phase"])
 
 
+class CentralConfigurationDiagnosticTest(unittest.TestCase):
+    """只覆盖诊断格式适配；真实归属/目标守卫仍由既有helper消费者验证。"""
+
+    def configuration(self, factory, errors):
+        from types import SimpleNamespace
+        from lib import validate_project_config as validator
+        # 配置使用既有真实合法源；只有 validator 的诊断列表是有界夹具。
+        # Path 类型仅替换本适配模块的显示格式，不全局 patch pathlib/os。
+        profile = object()
+        body = (PACK / "project.yaml").read_bytes()
+        with patch.object(resources, "Path", factory), \
+                patch.object(validator, "validate_with_profile",
+                             return_value=validator.ValidationResult(tuple(errors), profile)):
+            result = resources.configuration(SimpleNamespace(root=PACK), PACK,
+                                             resources.Node("file", body, 0o644),
+                                             owned_links={".agents/skills/xy-workflow"})
+        self.assertIs(result[1], profile)
+        return result
+
+    def test_verified_exact_skill_diagnostics_match_both_native_formats(self):
+        from pathlib import PurePosixPath, PureWindowsPath
+        for factory in (PurePosixPath, PureWindowsPath):
+            with self.subTest(format=factory.__name__):
+                errors = [prefix + str(factory(path))
+                          for path in (".agents/skills/xy-workflow", ".agents/skills/xy-workflow/SKILL.md")
+                          for prefix in ("managed output resolves outside project root: ",
+                                         "managed output must not use symlinks: ")]
+                self.configuration(factory, errors)
+
+    def test_unknown_paths_and_other_error_kinds_remain_rejected(self):
+        from pathlib import PureWindowsPath
+        prefix = "managed output resolves outside project root: "
+        # 父目录、未知Skill、额外子文件、文档和角色均不因合法Skill获得豁免；
+        # 同一已知叶的其他错误类别也不能被两条白名单吞掉。
+        errors = [prefix + str(PureWindowsPath(path)) for path in (
+            ".agents/skills", ".agents/skills/foreign", ".agents/skills/xy-workflow/OTHER.md",
+            "docs/standards", ".codex/agents/xy-qa.toml")]
+        errors.append("managed output must be a directory: " + str(PureWindowsPath(".agents/skills/xy-workflow")))
+        for error in errors:
+            with self.subTest(error=error), self.assertRaisesRegex(resources.ProjectRuntimeError, "1 项校验错误"):
+                self.configuration(PureWindowsPath, [error])
+
+
 if __name__ == "__main__":
     unittest.main()
