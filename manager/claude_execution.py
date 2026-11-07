@@ -10,11 +10,11 @@ import re
 EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
 CONTROL_KEYS = (
     "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
-    "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_SUBAGENT_EFFORT",
+    "CLAUDE_CODE_EFFORT_LEVEL",
     "CLAUDE_CODE_FORK_SUBAGENT", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
 )
-BOOLEAN_KEYS = {CONTROL_KEYS[1], CONTROL_KEYS[4], CONTROL_KEYS[5]}
+BOOLEAN_KEYS = {"CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_FORK_SUBAGENT", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"}
 
 
 def project_environment(sources: list[tuple[str, dict]], environment: dict,
@@ -115,13 +115,10 @@ def effective_role(configured: dict, controls: dict, auto_compact_window: int | 
         model = selection(None, "main_session_unobserved (role.model: inherit)")
 
     global_effort = control("CLAUDE_CODE_EFFORT_LEVEL")
-    default_effort = control("CLAUDE_CODE_SUBAGENT_EFFORT")
     if global_effort["status"] != "absent":
         effort = selection(global_effort["value"], "CLAUDE_CODE_EFFORT_LEVEL")
     elif configured["effort"] != "inherit":
         effort = selection(configured["effort"], "role.effort")
-    elif default_effort["status"] != "absent":
-        effort = selection(default_effort["value"], "CLAUDE_CODE_SUBAGENT_EFFORT (requires >=2.1.316)")
     else:
         effort = selection(None, "session_effort_unobserved")
     window = control("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
@@ -140,6 +137,5 @@ def effective_role(configured: dict, controls: dict, auto_compact_window: int | 
             "controls": controls,
             "auto_compact_window": compaction,
             "version_requirements": {"model_definition_precedence": ">=2.1.251", "model_force": ">=2.1.257",
-                                     "role_auto_compact_window": ">=2.1.296", "suffixed_window_env": ">=2.1.304",
-                                     "subagent_default_effort": ">=2.1.316"},
+                                     "role_auto_compact_window": ">=2.1.296", "suffixed_window_env": ">=2.1.304"},
             "assumption": "具名非 fork 角色；未计调用时覆盖、组织策略、模型能力上限及运行中会话设置"}

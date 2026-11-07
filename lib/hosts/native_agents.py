@@ -56,13 +56,31 @@ def declared_name(body: bytes, host: str) -> str | None:
             text = body.decode("utf-8")
             front, separator, _ = text.partition("\n---\n")
             rows = re.findall(r"(?m)^name:[ \t]*(.+)$", front)
-            if not text.startswith("---\n") or not separator or len(rows) != 1:
+            if not text.startswith("---\n") or not separator:
+                return None
+            if len(rows) > 1:
+                raise ValueError("原生角色含重复name声明，不能证明无同名冲突")
+            if not rows:
                 return None
             raw = rows[0].strip()
-            value = json.loads(raw) if raw.startswith('"') else raw.strip("'")
+            if raw.startswith('"'):
+                value, end = json.JSONDecoder().raw_decode(raw)
+                tail = raw[end:].strip()
+                if tail and not tail.startswith("#"):
+                    raise ValueError("原生角色name声明尾部无法确认")
+            elif raw.startswith("'"):
+                match = re.fullmatch(r"'((?:[^']|'')*)'\s*(?:#.*)?", raw)
+                if match is None:
+                    raise ValueError("原生角色name声明无法确认")
+                value = match[1].replace("''", "'")
+            else:
+                # YAML普通标量的空白+#是注释；不把合法注释误当作name的一部分。
+                value = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+                if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+                    raise ValueError("原生角色name声明不是可确认的单行标量")
         return value if isinstance(value, str) and value in role_models.ROLES else None
-    except (ValueError, UnicodeError, RecursionError):
-        return None
+    except (UnicodeError, RecursionError) as exc:
+        raise ValueError("原生角色声明无法安全解析") from exc
 
 
 def discover(root: Path, host: str) -> tuple[tuple[str, Node, str | None], ...]:
@@ -110,6 +128,19 @@ def compile_role(resources: Resources, host: str, role: str, preferences: dict) 
                          preferences=preferences, global_role=True)
 
 
+def native_settings(raw: bytes, host: str) -> dict[str, str]:
+    """统一读取完整原生描述符的模型投影，缺省字段仍表示宿主inherit。"""
+    if host == "codex":
+        data = tomllib.loads(raw.decode())
+        return role_models.validate(host, {"model": data.get("model", "inherit"), "effort": data.get("model_reasoning_effort", "inherit")})
+    front = raw.decode().split("\n---\n", 1)[0]
+    model = re.findall(r"^model: (.+)$", front, re.MULTILINE)
+    effort = re.findall(r"^effort: (.+)$", front, re.MULTILINE)
+    if len(model) != 1 or len(effort) > 1:
+        raise ValueError("角色模型字段缺失或重复")
+    return role_models.validate(host, {"model": model[0].strip("\"'"), "effort": effort[0] if effort else "inherit"})
+
+
 def validate_descriptor(body: bytes, host: str, role: str) -> None:
     """校验中央描述符完整权限及 pin-first 引导；不宣称宿主已加载或执行模型。"""
     if declared_name(body, host) != role or MARKER.encode() not in body:
@@ -119,23 +150,56 @@ def validate_descriptor(body: bytes, host: str, role: str) -> None:
         header, payload = text.split("\n", 1)
         expected = "# " + MARKER + ":v1 sha256=" + hashlib.sha256(payload.encode()).hexdigest()
         data = tomllib.loads(payload)
-        if header != expected or any(key in data for key in ("sandbox_mode", "approval_policy", "model_provider", "mcp_servers")):
+        allowed = {"name", "description", "model", "model_reasoning_effort", "developer_instructions"}
+        if header != expected or set(data) - allowed or not {"name", "description", "developer_instructions"} <= set(data):
             raise ValueError("Codex 中央角色摘要无效或含不能覆盖父会话的伪权限字段")
+        if (not isinstance(data.get("description"), str) or not data["description"].strip()
+                or not isinstance(data.get("developer_instructions"), str)):
+            raise ValueError("Codex中央角色缺少完整描述或引导正文")
         if role == "xy-qa" and "read-only review role" not in data.get("developer_instructions", ""):
             raise ValueError("QA 角色必须声明只读职责及父会话权限边界")
         role_models.validate(host, {"model": data.get("model", "inherit"),
                                     "effort": data.get("model_reasoning_effort", "inherit")})
     else:
         front = text.split("\n---\n", 1)[0]
-        if re.search(r"(?m)^skills:", front):
-            raise ValueError("中央角色不得预载可变内置 Skill")
+        names = re.findall(r"(?m)^([A-Za-z][A-Za-z0-9]*):", front)
+        required = {"name", "description", "model", "tools"}
+        allowed = required | ({"permissionMode", "disallowedTools", "effort", "autoCompactWindow"} if host == "claude"
+                              else {"mainAgent", "subagent", "commandExecutionPolicy"})
+        if len(names) != len(set(names)) or set(names) - allowed or not required <= set(names):
+            raise ValueError("中央角色frontmatter字段缺失、重复或未受支持")
+        model = re.findall(r"(?m)^model: (.+)$", front)
+        effort = re.findall(r"(?m)^effort: (.+)$", front)
+        if len(model) != 1 or len(effort) > 1:
+            raise ValueError("中央角色model/effort字段必须是完整单行值")
+        descriptions = re.findall(r"(?m)^description: (.+)$", front)
+        try:
+            description = json.loads(descriptions[0]) if len(descriptions) == 1 else None
+        except ValueError as exc:
+            raise ValueError("中央角色description必须是完整JSON/YAML安全字符串") from exc
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("中央角色缺少完整description")
+        role_models.validate(host, {"model": model[0].strip('"'), "effort": effort[0] if effort else "inherit"})
         if host == "claude":
-            if "disallowedTools: Agent" not in front or "permissionMode: default" not in front:
-                raise ValueError("Claude 中央角色必须禁止嵌套委派并保持默认权限")
-            if role == "xy-qa" and re.search(r"(?m)^tools:.*\b(?:Edit|Write)\b", front):
-                raise ValueError("QA 角色必须保持只读")
-        elif "mainAgent: false" not in front or "subagent: true" not in front:
-            raise ValueError("Antigravity 中央角色缺少子角色边界")
+            tools = "Read, Grep, Glob, Bash, Skill" if role == "xy-qa" else "Read, Grep, Glob, Bash, Edit, Write, Skill"
+            if (re.findall(r"(?m)^disallowedTools: (.+)$", front) != ["Agent"]
+                    or re.findall(r"(?m)^permissionMode: (.+)$", front) != ["default"]
+                    or re.findall(r"(?m)^tools: (.+)$", front) != [tools]):
+                raise ValueError("Claude中央角色工具白名单、委派或权限边界无效")
+            if "autoCompactWindow" in names:
+                from lib.hosts.claude_options import validate_window
+                window = re.findall(r"(?m)^autoCompactWindow: ([0-9]+)$", front)
+                if len(window) != 1:
+                    raise ValueError("Claude中央角色窗口必须是完整token整数")
+                validate_window(int(window[0]))
+        else:
+            from lib.validate_antigravity_artifacts import ROLE_TOOLS
+            tools = re.findall(r"(?m)^  - ([A-Za-z0-9_]+)$", front)
+            if (re.findall(r"(?m)^mainAgent: (.+)$", front) != ["false"]
+                    or re.findall(r"(?m)^subagent: (.+)$", front) != ["true"]
+                    or re.findall(r"(?m)^commandExecutionPolicy: (.+)$", front) != ["sandbox"]
+                    or tuple(tools) != ROLE_TOOLS[role]):
+                raise ValueError("Antigravity中央角色工具白名单或子角色边界无效")
     if (text.find("complete current schema_version: 2 Task Pack") < 0 or
             text.find("Before any project check") < 0 or "context_policy: handoff_only" not in text):
         raise ValueError("中央角色缺少完整 Task Pack 与 pin-first 引导")

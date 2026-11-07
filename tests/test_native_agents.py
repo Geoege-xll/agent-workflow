@@ -47,6 +47,51 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertTrue(plan.can_apply, plan.summary)
         return native_agents.apply_global(plan)
 
+    def test_admission_uses_current_authority_not_historical_roots_and_detects_deleted_global(self):
+        from manager import central_runtime
+        older = HostPaths.for_home(self.case / "older-home", environment={})
+        older_context = NativeContext(self.state, older)
+        native_agents.apply_global(native_agents.preview_global(self.state, self.core.binding(), context=older_context))
+        central_runtime.apply(central_runtime.preview(self.state, binding=self.core.binding(), native_context=self.context))
+        with patch("pathlib.Path.home", side_effect=AssertionError("准入不得猜HOME")):
+            self.assertEqual(native_agents.admission_issues(self.state, hosts=("codex",)), [])
+            (self.paths.codex / "agents/xy-backend.toml").unlink()
+            issues = native_agents.admission_issues(self.state, hosts=("codex",))
+        self.assertTrue(any(row["code"] == "native_ownership_conflict" for row in issues), issues)
+        self.assertEqual(native_agents.status(self.state, "codex", context=older_context)["roles"], sorted(role_models.ROLES))
+        self.assertTrue(all(set(row) == {"code", "path", "reason"} for row in issues))
+
+    def test_pending_lifecycle_refuses_global_native_and_preference_writes_without_project_targets(self):
+        from manager import central_runtime, runtime_lifecycle, model_preferences
+        from manager.catalog import Catalog, Model
+        central_runtime.apply(central_runtime.preview(self.state, binding=self.core.binding(), native_context=self.context))
+        native_plan = self.preview(hosts=("codex",), preferences={"codex": {"xy-backend": {"model": "planned-model"}}})
+        preference_plan = model_preferences.preview(self.state, None, "codex", {"xy-backend": {"effort": "high"}},
+                                                     Catalog("codex", [Model("inherit", "inherit", "fixture")]),
+                                                     native_context=self.context)
+        self.assertTrue(preference_plan.summary["can_apply"], preference_plan.summary)
+        archive = self.case / ".sync-backups/approved-archive"
+        archive.mkdir(parents=True)
+        (archive / "one.txt").write_text("owned archival bytes")
+        lifecycle_plan = runtime_lifecycle.preview(self.state, approved_backup_roots=(archive,), include_cores=False)
+        with patch.object(runtime_lifecycle, "_delete_snapshot", side_effect=KeyboardInterrupt("fixture lifecycle interruption")):
+            with self.assertRaises(KeyboardInterrupt):
+                runtime_lifecycle.apply(lifecycle_plan)
+        self.assertEqual(json.loads((self.state / runtime_lifecycle.RELATIVE).read_bytes())["phase"], "prepared")
+        native_before = (self.paths.codex / "agents/xy-backend.toml").read_bytes()
+        prefs_before = native.read_node(self.state, "preferences/role-models.json")
+        journals_before = tuple(sorted((self.state / "native-agents/transactions").glob("*.json")))
+        pref_journals_before = tuple(sorted((self.state / "preferences/transactions").glob("*.json")))
+        with self.assertRaisesRegex(ValueError, "生命周期事务尚未结算"):
+            native_agents.apply_global(native_plan)
+        with self.assertRaisesRegex(ValueError, "生命周期事务尚未结算"):
+            model_preferences.apply(preference_plan)
+        self.assertEqual((self.paths.codex / "agents/xy-backend.toml").read_bytes(), native_before)
+        self.assertEqual(native.read_node(self.state, "preferences/role-models.json"), prefs_before)
+        self.assertEqual(tuple(sorted((self.state / "native-agents/transactions").glob("*.json"))), journals_before)
+        self.assertEqual(tuple(sorted((self.state / "preferences/transactions").glob("*.json"))), pref_journals_before)
+        runtime_lifecycle.recover(self.state)
+
     def test_explicit_paths_ignore_ambient_environment_and_custom_state_requires_paths(self):
         with patch.dict(os.environ, {"CODEX_HOME": "/untrusted/codex", "CLAUDE_CONFIG_DIR": "/untrusted/claude"}):
             self.assertEqual(HostPaths.for_home(self.home), self.paths)
@@ -195,6 +240,56 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertEqual(native_agents.compensate_global(plan.recovery_ref, context=self.context)["status"], "conflict")
         self.assertEqual(target.read_bytes(), body)
 
+    def test_publish_rejects_same_content_replacement_between_guard_and_capture(self):
+        self.install(hosts=("codex",))
+        target = self.paths.codex / "agents/xy-backend.toml"
+        body = target.read_bytes()
+        plan = self.preview(hosts=("codex",), preferences={"codex": {"xy-backend": {"model": "new-model"}}})
+        original = native_agents._publish
+        replaced = False
+        def replace_before_capture(state, journal, root, relative, after, *, expected):
+            nonlocal replaced
+            if relative == "agents/xy-backend.toml" and not replaced:
+                replaced = True
+                target.unlink()
+                target.write_bytes(body)
+            return original(state, journal, root, relative, after, expected=expected)
+        with patch.object(native_agents, "_publish", side_effect=replace_before_capture):
+            with self.assertRaisesRegex(ValueError, "固定预览"):
+                native_agents.apply_global(plan)
+        self.assertTrue(replaced)
+        self.assertEqual(target.read_bytes(), body)
+
+    def test_declared_alias_with_yaml_comment_is_a_conflict(self):
+        root = self.paths.claude / "agents"
+        root.mkdir(parents=True)
+        (root / "alias.md").write_text('---\nname: "xy-backend" # user comment\n---\nuser\n')
+        self.assertFalse(self.preview(hosts=("claude",)).can_apply)
+
+    def test_publish_rejects_native_root_replacement_after_guard(self):
+        self.install(hosts=("codex",))
+        root = self.paths.codex
+        target = root / "agents/xy-backend.toml"
+        body = target.read_bytes()
+        plan = self.preview(hosts=("codex",), preferences={"codex": {"xy-backend": {"model": "new-model"}}})
+        original = native_agents._publish
+        replaced = False
+        def replace_root_before_capture(state, journal, native_root, relative, after, *, expected):
+            nonlocal replaced
+            if relative == "agents/xy-backend.toml" and not replaced:
+                replaced = True
+                moved = self.home / "moved-codex"
+                root.rename(moved)
+                root.mkdir()
+                for child in moved.iterdir():
+                    child.rename(root / child.name)
+            return original(state, journal, native_root, relative, after, expected=expected)
+        with patch.object(native_agents, "_publish", side_effect=replace_root_before_capture):
+            with self.assertRaisesRegex(ValueError, "物理根"):
+                native_agents.apply_global(plan)
+        self.assertTrue(replaced)
+        self.assertEqual(target.read_bytes(), body)
+
     def test_recovery_rejects_replaced_native_root_even_if_role_inodes_are_same(self):
         receipt = self.install(hosts=("codex",))
         original = self.paths.codex
@@ -217,6 +312,36 @@ class NativeAgentsTest(unittest.TestCase):
         classify = namespace["helper_creates_task"]
         self.assertTrue(classify(["helper", "lib/task_graph_cli.py", "--input", "graph.json", "init"]))
         self.assertFalse(classify(["helper", "lib/task_graph_cli.py", "validate", "--task-id", "init"]))
+
+    def test_native_descriptor_real_validators_accept_bootstrap_and_reject_permission_expansion(self):
+        from lib.hosts.validate_claude_artifacts import validate_agent as validate_claude
+        from lib.validate_antigravity_artifacts import parse_agent_frontmatter, validate_agent as validate_agy
+        self.install()
+        claude = self.paths.claude / "agents/xy-qa.md"
+        errors = []
+        validate_claude(claude, "xy-qa", self.case, errors)
+        self.assertEqual(errors, [])
+        agy = self.paths.antigravity / "agents/xy-qa.md"
+        body = agy.read_text()
+        fields, _ = parse_agent_frontmatter(body, agy, errors)
+        self.assertNotIn("skills", fields)
+        validate_agy(agy, body, "xy-qa", set(), errors)
+        self.assertEqual(errors, [])
+        unsafe = body.replace("  - view_file", "  - write_to_file", 1)
+        with self.assertRaises(ValueError):
+            native.validate_descriptor(unsafe.encode(), "antigravity", "xy-qa")
+        with self.assertRaises(ValueError):
+            native.validate_descriptor(body.replace("model: inherit", "model:").encode(), "antigravity", "xy-qa")
+        errors = []
+        parse_agent_frontmatter(unsafe, agy, errors)
+        self.assertTrue(errors)
+        # 旧/普通静态合同继续要求skills，不能靠移除marker将规则整体放宽。
+        errors = []
+        parse_agent_frontmatter(body.replace("agent-workflow-central-project", "user-agent"), agy, errors)
+        self.assertTrue(any("skills" in item for item in errors))
+        codex = (self.paths.codex / "agents/xy-qa.toml").read_bytes()
+        self.assertNotIn(b"sandbox_mode", codex)
+        self.assertIn(b"Parent native permissions still apply", codex)
 
     def test_project_sparse_only_after_verified_global_and_single_field_is_complete(self):
         project = self.case / "project"

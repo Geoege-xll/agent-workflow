@@ -757,6 +757,16 @@ def validate_sources(pack: Path, errors: list[str]) -> None:
 
 
 def validate_agent(path: Path, role: str, project_root: Path, errors: list[str], expected_window: int | None = None) -> None:
+    central = read_file(path)
+    if central is not None and b"agent-workflow-central-project" in central:
+        from lib.hosts.native_agents import validate_descriptor
+        try:
+            validate_descriptor(central, "claude", role)
+            if frontmatter_window(central) != expected_window:
+                errors.append(f"Agent autoCompactWindow differs from project configuration: {path}")
+        except ValueError:
+            errors.append(f"invalid complete central Claude descriptor: {path}")
+        return
     fields, all_after = parse_frontmatter(path, errors)
     expected_name = claude_agent_name(role)
     if fields.get("name") != expected_name:
