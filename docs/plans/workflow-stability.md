@@ -4,7 +4,7 @@
 - 阶段: `active`
 - 模块: `.`
 - 任务等级: `Full`
-- 已验收版本: `none`
+- 已验收版本: `v2.1.1`（结构、源码修正与公开发行；mt-shop 本机恢复待具体批准）
 
 ## 目标与范围
 
@@ -78,5 +78,11 @@ mt-shop 的当前阻断来自一个原 AGENTS baseline 的保留节点缺失，�
 
 ## 批准依据与必要证据
 
+截至 2026-11-07，当前源码及发行已交付：原唯一 Reviewer 对 246cdd46d36ef12b8efd29f5cbb957a229a3acd7 的完整 167 路径 PASS，交接实际 valid；真实 run 42365526185 的 Ubuntu／macOS 各 84 项及 release 全部 success。v2.1.1 标签精确指向该提交，GitHub Release 已公开，归档 SHA256 065b39c02ecbc95ec2b8ca6bd2bdaabfd08595b171389ccaf01325d06bbd6da9 与附带校验／Formula 一致；Tap c73a089 已推送相同 Formula，没有恢复 npm/npx。
+
+本机 Homebrew 已从 2.0.3 升到 2.1.1，真实 brew test 通过；其自动打开的 developer mode 已恢复关闭。原 ~/.local/bin 源码入口保持，当前源码与 Homebrew 入口版本均为 2.1.1。正式发行核心已导入 ~/.config/agent-workflow/runtimes/660e8e9bb7ca8172187af37c1466c00cdad591436980ecf5f6b0fca9114b179e/core；旧核心未删除。
+
+ParentsKit 与 TeachingAssistant 预览无冲突后，已实际切到该正式核心，均 enabled、无 conflicts／pending_transaction；previous_binding 保留原版，实际经各项目薄桥指定旧 pin 读取 product/VERSION 得到 2.1.0。三个项目 project.yaml 和全局角色模型偏好 SHA 均与同步前相同。mt-shop 未执行恢复或选版，绑定保持 be648cb…、明确诊断保留旧 inode 路径缺失；其 553B 备份重建及新 inode 登记的具体用户批准仍待回复。该项未完成，主题保持 active；不得绕过自动审批拒绝或把本机三项目同步报告为全部完成。对应实际结果保存在当前请求的 sync-verification.json、发行与本机验收原始记录中。
+
 - 批准依据: 用户本轮“开始优化，将历史无用的该清理的进行清理”，承接前一轮文件归属、lib 按职责分组、服务职责和固定回归建议；后续追问 lib 分组是否纳入，PM补齐原已批准目标的实施遗漏，不增加产品功能或设计选择，不重复需求确认。
-- 验收证据: none；实施输出、集成验证与唯一 QA 结果将在完成后于本主题原位补充，完整日志保留在本请求现有证据区。
+- 验收证据: 唯一 QA 当前 PASS、首次 FAIL 与修复闭合原件，真实双系统发行 run 42365526185、正式 v2.1.1 三资产及 Tap c73a089、Homebrew 实际升级／test、sync-verification.json；完整原始日志保留在本请求既有证据区。mt-shop 恢复 apply 未执行，不存在该操作的成功证据。
