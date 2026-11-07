@@ -63,6 +63,27 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertEqual(native_agents.status(self.state, "codex", context=older_context)["roles"], sorted(role_models.ROLES))
         self.assertTrue(all(set(row) == {"code", "path", "reason"} for row in issues))
 
+    def test_settled_admission_keeps_current_roots_after_failed_activation(self):
+        from manager import central_runtime, runtime_policy
+        central_runtime.apply(central_runtime.preview(self.state, binding=self.core.binding(), native_context=self.context))
+        current_node, current = runtime_policy.current_snapshot(self.state)
+        expected_roots = [{"host": host, "native_root": str(self.paths.root(host))} for host in role_models.HOSTS]
+        self.assertEqual(current["native_roots"], expected_roots)
+        plan = central_runtime.preview(self.state, binding=self.core.binding(), native_context=self.context)
+        # 真正运行prepared/native noop/compensate，只在current发布前注入失败；
+        # 不替换codec、current_snapshot、native收据或准入查询来模拟组合成功。
+        with patch.object(central_runtime, "_verify_applied", side_effect=OSError("fixture before current publication")):
+            with self.assertRaisesRegex(OSError, "before current publication"):
+                central_runtime.apply(plan)
+        authority = json.loads((self.state / runtime_policy.ACTIVATION).read_bytes())
+        self.assertEqual(authority["phase"], "compensated")
+        self.assertNotEqual(authority["id"], current["generation"])
+        self.assertEqual(runtime_policy.current_snapshot(self.state)[0], current_node)
+        with patch("pathlib.Path.home", side_effect=AssertionError("准入不得猜HOME")):
+            self.assertEqual(native_agents.admission_issues(self.state, hosts=("codex", "claude", "antigravity")), [])
+        (self.paths.codex / "agents/xy-backend.toml").unlink()
+        self.assertTrue(native_agents.admission_issues(self.state, hosts=("codex",)))
+
     def test_pending_lifecycle_refuses_global_native_and_preference_writes_without_project_targets(self):
         from manager import central_runtime, runtime_lifecycle, model_preferences
         from manager.catalog import Catalog, Model
@@ -333,11 +354,155 @@ class NativeAgentsTest(unittest.TestCase):
                 saved = next(step for step in reversed(journal["compensations"]) if step["path"] == "agents/xy-backend.toml")
                 self.assertEqual(native.read_node(self.paths.codex, "agents/xy-backend.toml"), Node.from_value(saved["result"]))
                 result = native_agents.recover_global(receipt["recovery_ref"], context=self.context)
-                self.assertEqual(result["status"], "compensated", result)
+                self.assertEqual(result["status"], "compensated", result["conflicts"])
                 self.assertEqual(target.exists(), before_file)
                 before_noop = native.read_node(self.paths.codex, "agents/xy-backend.toml")
                 self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
                 self.assertEqual(native.read_node(self.paths.codex, "agents/xy-backend.toml"), before_noop)
+
+    def test_compensation_resumes_owned_filesystem_boundaries_without_new_steps(self):
+        # 在实际系统调用完成后中断，保留磁盘中真实的隔离/双链接/发布状态。
+        # missing没有stage，分别验证隔离未落记录与隔离已落记录两条边界。
+        for before_file, boundary in ((False, "isolated"), (False, "isolated_saved"),
+                                      (True, "isolated"), (True, "linked"), (True, "stage_removed")):
+            with self.subTest(before_file=before_file, boundary=boundary):
+                self.paths = HostPaths.for_home(self.case / (str(before_file) + "-" + boundary), environment={})
+                self.context = NativeContext(self.state, self.paths)
+                receipt = self.install(hosts=("codex",))
+                original_body = (self.paths.codex / "agents/xy-backend.toml").read_bytes()
+                if before_file:
+                    receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                              preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+                target = self.paths.codex / "agents/xy-backend.toml"
+                interrupted = []
+                real_rename, real_link, real_unlink, real_save = native_agents.os.rename, native_agents.os.link, native_agents.os.unlink, native_agents._save
+                def stop(point):
+                    if point == boundary and not interrupted:
+                        interrupted.append(point)
+                        raise KeyboardInterrupt("fixture owned boundary " + point)
+                def rename(source, destination, **kwargs):
+                    result = real_rename(source, destination, **kwargs)
+                    if source == target.name and str(destination).startswith(".native-rollback-"):
+                        stop("isolated")
+                    return result
+                def link(source, destination, **kwargs):
+                    result = real_link(source, destination, **kwargs)
+                    if str(source).startswith(".awf-native-restore-") and destination == target.name:
+                        stop("linked")
+                    return result
+                def unlink(path, **kwargs):
+                    result = real_unlink(path, **kwargs)
+                    if str(path).startswith(".awf-native-restore-"):
+                        # 其他metadata也会使用stage；只在backend已恢复时中断。
+                        if target.exists() and target.read_bytes() == original_body:
+                            stop("stage_removed")
+                    return result
+                def save(state, journal):
+                    result = real_save(state, journal)
+                    if any(step["path"] == "agents/xy-backend.toml" and step["isolated"] is not None
+                           and step["result"] is None for step in journal.get("compensations", [])):
+                        stop("isolated_saved")
+                    return result
+                with patch.object(native_agents.os, "rename", side_effect=rename), patch.object(native_agents.os, "link", side_effect=link), patch.object(native_agents.os, "unlink", side_effect=unlink), patch.object(native_agents, "_save", side_effect=save):
+                    with self.assertRaisesRegex(KeyboardInterrupt, "owned boundary"):
+                        native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+                self.assertEqual(interrupted, [boundary])
+                journal_path = self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")
+                before = json.loads(journal_path.read_bytes())
+                backend_steps = [step for step in before["compensations"] if step["path"] == "agents/xy-backend.toml"]
+                self.assertEqual(len(backend_steps), 1)
+                self.assertIsNone(backend_steps[0]["result"])
+                result = native_agents.recover_global(receipt["recovery_ref"], context=self.context)
+                print("COMPENSATION_OWNED_BOUNDARY", before_file, boundary, result["status"])
+                self.assertEqual(result["status"], "compensated", result["conflicts"])
+                self.assertEqual(target.exists(), before_file)
+                if before_file:
+                    self.assertEqual(target.read_bytes(), original_body)
+                    self.assertEqual(native_agents.verified_hosts(self.state, context=self.context), ("codex",))
+                after = json.loads(journal_path.read_bytes())
+                self.assertEqual(len([step for step in after["compensations"] if step["path"] == "agents/xy-backend.toml"]), 1)
+                stable = native.read_node(self.paths.codex, "agents/xy-backend.toml")
+                self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
+                self.assertEqual(native.read_node(self.paths.codex, "agents/xy-backend.toml"), stable)
+
+    def test_compensation_recovery_preserves_unrecorded_stage_and_unknown_links(self):
+        for boundary in ("unrecorded_stage", "third_link", "replaced_result"):
+            with self.subTest(boundary=boundary):
+                self.paths = HostPaths.for_home(self.case / boundary, environment={})
+                self.context = NativeContext(self.state, self.paths)
+                self.install(hosts=("codex",))
+                receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                          preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+                target = self.paths.codex / "agents/xy-backend.toml"
+                real_link, real_unlink, real_save = native_agents.os.link, native_agents.os.unlink, native_agents._save
+                stopped = []
+                def stop():
+                    stopped.append(True)
+                    raise KeyboardInterrupt("fixture unowned boundary")
+                def save(state, journal):
+                    if boundary == "unrecorded_stage" and any(step["path"] == "agents/xy-backend.toml" and step["staged"] is not None
+                                                               for step in journal.get("compensations", [])):
+                        stop()  # stage已创建，但其完整Node尚未写进journal。
+                    return real_save(state, journal)
+                def link(source, destination, **kwargs):
+                    result = real_link(source, destination, **kwargs)
+                    if boundary == "third_link" and str(source).startswith(".awf-native-restore-") and destination == target.name:
+                        stop()
+                    return result
+                def unlink(path, **kwargs):
+                    result = real_unlink(path, **kwargs)
+                    if boundary == "replaced_result" and str(path).startswith(".awf-native-restore-") and target.exists() and b'new-model' not in target.read_bytes():
+                        stop()
+                    return result
+                with patch.object(native_agents, "_save", side_effect=save), patch.object(native_agents.os, "link", side_effect=link), patch.object(native_agents.os, "unlink", side_effect=unlink):
+                    with self.assertRaisesRegex(KeyboardInterrupt, "unowned boundary"):
+                        native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+                self.assertEqual(stopped, [True])
+                journal = json.loads((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
+                step = next(step for step in journal["compensations"] if step["path"] == "agents/xy-backend.toml")
+                if boundary == "unrecorded_stage":
+                    self.assertIsNone(step["staged"])
+                    protected = self.paths.codex / step["stage"]
+                elif boundary == "third_link":
+                    protected = self.case / "foreign-hardlink"
+                    os.link(target, protected)
+                    self.assertEqual(target.stat().st_nlink, 3)
+                else:
+                    replacement = target.with_name(".foreign-result")
+                    replacement.write_bytes(target.read_bytes())
+                    replacement.chmod(target.stat().st_mode & 0o7777)
+                    os.replace(replacement, target)
+                    protected = target
+                identity = (protected.stat().st_dev, protected.stat().st_ino, protected.stat().st_nlink)
+                body = protected.read_bytes()
+                for attempt in range(2):
+                    result = native_agents.recover_global(receipt["recovery_ref"], context=self.context)
+                    print("COMPENSATION_UNOWNED_BOUNDARY", boundary, attempt, result["status"])
+                    self.assertEqual(result["status"], "conflict", result["conflicts"])
+                    self.assertEqual((protected.stat().st_dev, protected.stat().st_ino, protected.stat().st_nlink), identity)
+                    self.assertEqual(protected.read_bytes(), body)
+
+    def test_compensation_resumes_owner_projection_isolation_before_result(self):
+        self.install(hosts=("codex",))
+        receipt = native_agents.apply_global(self.preview(hosts=("codex",),
+                  preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
+        real_rename = native_agents.os.rename
+        visits = []
+        def rename(source, destination, **kwargs):
+            result = real_rename(source, destination, **kwargs)
+            if source == native.OWNER:
+                visits.append(True)
+                if len(visits) == 2:
+                    # 第一轮恢复旧owner，第二轮重建恢复后角色inode的身份投影。
+                    raise KeyboardInterrupt("fixture owner projection isolated")
+            return result
+        with patch.object(native_agents.os, "rename", side_effect=rename):
+            with self.assertRaisesRegex(KeyboardInterrupt, "owner projection isolated"):
+                native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+        self.assertEqual(len(visits), 2)
+        self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
+        self.assertEqual(native_agents.verified_hosts(self.state, context=self.context), ("codex",))
+        self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
 
     def test_compensation_log_rejects_foreign_paths_and_incomplete_node_identity(self):
         self.install(hosts=("codex",))
