@@ -32,6 +32,8 @@
 
 实现使用原有ctypes／Win32和Python／Node／Git for Windows栈。非显然权限、并发、清理和异常策略加入详细中文注释。新增回归只覆盖本次缺失行为，优先扩展现有测试；真正独立的Windows中央原生矩阵可建一个测试模块。先用未修源码证明行为拒绝，再补有效后端与真实消费者。原生CI能力不足或新发现API无法满足原合同必须带具体失败返回PM，不能放宽守卫制造绿色。
 
+源码文本检出由仓库根.gitattributes声明text=auto及eol=lf，二进制保持Git自动识别；现有tracked blob均已为LF，不进行批量重写或renormalize，也不修改用户Git配置。真实Git的autocrlf转换已能复现VERSION及角色frontmatter的失败；原生CI需记录实际配置与检出字节并强制校验LF，随后继续原消费者，不能只放宽单字段解析掩盖同链差异。
+
 验证复用此前Claude／Codex／TUI与真实PTY未受影响结论。保留既有Windows CI的实际相关检查，随精确提交迁移当前E2E；新增普通用户正反能力验证使用自有临时账户／目录并收尾，绝不修改开发机或真实业务项目。首次基线CI可定位原生目录屏障等尚未知能力，已知init拒绝不反复整组重跑。实现者给出成功build／可运行消费者和完整命令、退出码、源SHA及日志，PM在隔离工作树生成仅本任务的CI检查点，只有当前候选的原生证据成立才进入唯一独立QA。
 
 托管Windows环境已证明无软链权限的普通用户仍可创建链接，原负向环境假设不成立。仅本任务的GitHub-hosted一次性虚拟机测试允许临时将已存在且类型为DWORD、值为1的AllowDevelopmentWithoutDevLicense设为0，构造一次真实缺能力检查；这不是产品行为，也不授权修改本机、共享runner或真实账户设置。测试须先记录精确前像，仅修改该一个值，使用全新普通用户令牌及相同flags3调用，以真实ERROR_PRIVILEGE_NOT_HELD、无链接及sentinel不变证明拒绝。finally和workflow always路径按前像恢复并验证，不覆盖未知并发值，取消后也保留明确清理结果。若写0后仍可创建链接，停止此方案而不换参数、重试或降低验收。已通过的目录和赋权正向证据继续复用，不为该补缺重跑整组。
@@ -44,7 +46,9 @@ QA后PM原位更新本主题及同名HTML，使用实际required生命周期解�
 
 普通npm账号尚未注册／登录，当前不发布。发布准备记录在request-id publish-tap-npm-2.1.0-20261107的既有scratch；本实现请求使用request-id windows-central-npm-2.1.1-20261107的唯一scratch及其中单一graph和作者／CI完整日志。来源分支main基线e2c981b，5处外部修改留在原检出；实现工作树windows-fs，后续集成工作树windows-integration，当前无已验收Windows候选。
 
-能力前提已完成原生补证：检查点52cb9e83／run42331944946证明宿主和普通用户目录fsync、非管理员赋权后的真目录SYMLINK；c95029d8／run42333657776证明同flags3下真实无权限拒绝、无链接且sentinel不变，恢复DWORD1后的普通用户能力调用及finally／always清理均通过。原始四轮输出均保留在本请求windows-capabilities.log，前三轮失败未覆盖。当前继续生产Windows文件系统与中央事务适配，再迁移当前npx E2E、准备2.1.1元数据并进行完整安装验收；能力探针绿色不作为BUILD_VERIFIED或QA PASS。
+底层能力及四个后端消费者已完成原生补证：目录fsync、软链正反能力与恢复、真硬链及普通文件守卫、junction拒绝、软链读建移删和普通文件排他移动／碰撞保全均有真实普通用户证据。当前检查点2549d8e9已包含中央事务、私有记录叶DACL、项目ACL保全、薄桥自举与Job helper；本地中央／补偿、私有发布、未确认Job保留现场、探针创建后失败、全新进程的pkgutil影子拒绝已通过。
+
+首个native-central（run42337806481）在preview来源VERSION校验失败，尚未中央导入或项目发布，finally资源清理成功。当前以真实Git过滤确认的LF／CRLF同因补仓库检出属性，并在下次原生CI记录实际字节；该旧VM实际autocrlf配置未被记录，仍不作事实断言。完整历史输出持续保存在本请求windows-capabilities.log，原失败未覆盖。剩余为当前中央消费者原生通过、npm持久embedded／当前E2E与真实Hook／产品负向、2.1.1元数据、必要macOS消费者及唯一独立QA；此前绿色均不作为完整BUILD_VERIFIED或QA PASS。
 
 ## 验收结果与当前已交付行为
 

@@ -54,6 +54,42 @@ jobs:
           Write-Host 'Hosted-runner results do not replace ordinary-user acceptance.'
           python -I -B -c "import sys; sys.path.insert(0, 'lib'); from platform_process import locate_bash; print(locate_bash())"
           if ($LASTEXITCODE -ne 0) { throw 'Complete Git for Windows is required' }
+      - name: Verify canonical LF checkout bytes without changing Git configuration
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 只读取与行尾有关的四个固定项，禁止打印完整配置或账号/凭证。
+          foreach ($key in @('core.autocrlf', 'core.eol', 'core.safecrlf', 'core.attributesfile')) {
+            Write-Host "Git source line-ending setting: $key"
+            & git config --show-origin --show-scope --get-all $key
+            if ($LASTEXITCODE -eq 1) { Write-Host '(unset)' }
+            elseif ($LASTEXITCODE -ne 0) { throw "Cannot inspect Git setting: $key" }
+          }
+          & git check-attr text eol -- .gitattributes product/VERSION roles/xy-backend.md lib/runtime_project.py
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect source line-ending attributes' }
+          & git ls-files --eol -- .gitattributes product/VERSION roles/xy-backend.md lib/runtime_project.py
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect checkout line endings' }
+          # 直接记录本轮 VM 的实际字节；旧 VM 没有记录的配置仍不当作事实。
+          # 不 strip/修补来源，不运行换行转换或 Git 配置写入。
+          $source = @'
+          import json, subprocess
+          from pathlib import Path
+          version = Path("product/VERSION").read_bytes()
+          role = Path("roles/xy-backend.md").read_bytes()
+          print("SOURCE_EOL " + json.dumps({
+              "version_hex": version.hex(), "version_crlf": version.count(b"\r\n"),
+              "version_cr": version.count(b"\r"), "role_crlf": role.count(b"\r\n"),
+              "role_cr": role.count(b"\r"), "role_lf": role.count(b"\n")
+          }, sort_keys=True))
+          for name, body in (("product/VERSION", version), ("roles/xy-backend.md", role)):
+              blob = subprocess.check_output(["git", "show", "HEAD:" + name])
+              if body != blob or b"\r" in body:
+                  raise SystemExit("Checkout differs from canonical LF blob: " + name)
+          if not role.startswith(b"---\n") or b"\n---\n" not in role:
+              raise SystemExit("Role frontmatter LF boundaries are absent")
+          print("Canonical LF source bytes and role frontmatter verified")
+          '@
+          python -I -B -X utf8 -c $source
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical LF source precondition failed' }
       # 探针只补未成立的原生能力证据；默认验收仍保留下面全部 mandatory 链。
       - name: Minimal native capability probe
         if: inputs.validation_mode == 'native-capabilities'

@@ -1,0 +1,3 @@
+# 固定本仓文本的 Git 检出行尾，避免 Windows autocrlf 改变版本与角色协议字节。
+# text=auto 保留二进制自动识别；不修改用户 Git 配置，也不批量重写现有文件。
+* text=auto eol=lf
