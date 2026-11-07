@@ -11,7 +11,7 @@ from tests.test_antigravity_workflow import AntigravityFixtureMixin
 
 class AntigravityUpgradeBoundaryTest(AntigravityFixtureMixin, unittest.TestCase):
     def test_managed_seven_skill_install_upgrades_to_nine(self) -> None:
-        from lib.shared_core_skills import remove_stale_skill_tree_transactionally
+        from lib.skills.shared_core_skills import remove_stale_skill_tree_transactionally
 
         self.run_setup()
         # 用真实安装产生受管清单，再构造上一版七技能/旧绑定资源；不复制旧源码包。

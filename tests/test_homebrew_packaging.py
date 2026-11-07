@@ -301,8 +301,8 @@ class HomebrewLauncherTest(unittest.TestCase):
         for name in (*release.RELEASE_FILES, *release.RELEASE_DIRECTORIES):
             self.assertTrue((self.prefix / "libexec" / name).exists(), name)
         # 真实归档与 Formula 安装后的消费者必须持有同一 helper、原样引擎和许可证。
-        for relative in ("lib/requirement_html.py", "lib/plan_documents.py",
-                         "lib/prototype_navigation.py", "lib/validate_prototype_workspace.py",
+        for relative in ("lib/documents/requirement_html.py", "lib/documents/plan_documents.py",
+                         "lib/documents/prototype_navigation.py", "lib/documents/validate_prototype_workspace.py",
                          *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
                          "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
                          "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt",

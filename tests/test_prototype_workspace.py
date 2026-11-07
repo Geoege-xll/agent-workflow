@@ -17,12 +17,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 from unittest import mock
 
-from lib import validate_prototype_workspace as validator_module
-from lib import requirement_html as requirement_renderer
+from lib.documents import validate_prototype_workspace as validator_module
+from lib.documents import requirement_html as requirement_renderer
 
 
 PACK = Path(__file__).resolve().parents[1]
-VALIDATOR = PACK / "lib/validate_prototype_workspace.py"
+VALIDATOR = PACK / "lib/documents/validate_prototype_workspace.py"
 TEMPLATE_ROOT = PACK / "templates/prototype"
 PROTOTYPE_RELATIVE = Path("docs/standards/prototype")
 MANDATORY_SECTIONS = (

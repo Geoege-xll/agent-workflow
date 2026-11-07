@@ -27,8 +27,8 @@ import unittest
 from unittest.mock import patch
 
 from lib import role_models
-from lib import install_workflow
-from lib.install_process import SetupRunner, SetupRunError
+from lib.install import install_workflow
+from lib.install.install_process import SetupRunner, SetupRunError
 from manager.catalog import Catalog, Model, discover
 from manager.codex_models import NativeModel, NativeModels
 from manager.claude_execution import effective_role
@@ -89,7 +89,7 @@ class TemporaryProject(unittest.TestCase):
         self.write(".agent-workflow/lib/role_models.py","# fixture\n")
         self.write(".codex/agents/xy-backend.toml",codex_agent())
         if self.central_fixture:
-            from lib.runtime_project import Node, project_key, json_bytes
+            from lib.central.runtime_project import Node, project_key, json_bytes
             self.state = self.central_state
             self.write(".agent-workflow/project.yaml", "project_name: test\nworkflow_hooks:\n  mode: off\n")
             role = self.project / ".codex/agents/xy-backend.toml"
@@ -542,7 +542,7 @@ for line in sys.stdin:
         缺失的私有 state 只读投影为 Node()，目录/预览检查不能顺手创建它。
         先收齐全部观察再断言，旧源行为红也能保留真实守卫是否误接受的证据。
         """
-        from lib.runtime_project import Node
+        from lib.central.runtime_project import Node
         from manager import model_preferences
 
         state, project = self.home / 'state', self.home / 'project'
@@ -1637,11 +1637,11 @@ class CentralCliIntegrationTest(unittest.TestCase):
         for directory in runtime_store.CORE_DIRECTORIES:(source/directory).mkdir(parents=True)
         for relative in runtime_store.SETUP_FILES:cls.put(source,relative,b"#!/bin/sh\nexit 0\n")
         # 真实薄桥和 context_read 的直接依赖显式列出；其余产品文件用最小夹具。
-        selected=("lib/project_paths.py", "lib/install_process.py", "lib/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py",
-                  "lib/runtime_pins.py","lib/standard_paths.py","lib/claude_instructions.py","lib/context_read.py",
-                  "lib/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/role_preferences.py","lib/claude_options.py",
-                  "lib/validate_antigravity_artifacts.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
-                  "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py","manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py",
+        selected=("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/central/runtime_project.py","lib/runtime_bridge.py",
+                  "lib/runtime_pins.py","lib/standard_paths.py","lib/hosts/claude_instructions.py","lib/documents/context_read.py",
+                  "lib/skills/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/central/role_preferences.py","lib/hosts/claude_options.py",
+                  "lib/validate_antigravity_artifacts.py","lib/hosts/workflow_hook_install.py","lib/hosts/workflow_hook_settings.py",
+                  "lib/workflow_hooks.py","lib/hosts/windows_hook_command.py","lib/hosts/merge_codex_config.py","manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py",
                   "templates/project.yaml.example","templates/docs/PROJECT.md","platforms/shared/core-skills.txt")
         for relative in selected:cls.put(source,relative,(PACK/relative).read_bytes())
         for role in role_models.ROLES:cls.put(source,f"roles/{role}.md",(PACK/f"roles/{role}.md").read_bytes())
@@ -1733,7 +1733,7 @@ class CentralCliIntegrationTest(unittest.TestCase):
         self.assertEqual(rolled["runtime_binding"],self.first.binding())
         # 当前任务包明确携带旧 pin；真实薄桥 helper 必须使用同一自定义 state。
         task=self.put(self.project,"task.json",json.dumps({"schema_version":2,"runtime_binding":self.first.binding(),"task":{}}).encode())
-        helper=["--binding",json.dumps(self.first.binding()),"helper","lib/context_read.py",
+        helper=["--binding",json.dumps(self.first.binding()),"helper","lib/documents/context_read.py",
                 ".agent-workflow/product/WORKFLOW.md","--task-pack",str(task),"--root",str(self.project)]
         first=json.loads(self.bridge(*helper).stdout);self.assertEqual(first["text"],"# 固定版本一\n")
         self.cli("use",self.project,self.second.content_id)

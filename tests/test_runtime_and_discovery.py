@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.project_discovery import DiscoveryOverrides, ModuleOverride, discover_project
+from lib.project.project_discovery import DiscoveryOverrides, ModuleOverride, discover_project
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -138,6 +138,9 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
         body = (PACK / "platforms/shared/skills/xy-workflow/references/dispatch.md").read_text(
             encoding="utf-8"
         )
+        # 本夹具没有中央标记或任务 pin，只消费明确的 source-pack 分支；中央示例
+        # 已由真实 pin 测试覆盖，不能把两种不同输入合同误算成重复调度示例。
+        body = body.split("### Source-pack development\n", 1)[1]
         examples = [block for block in re.findall(r"```bash\n(.*?)```", body, re.DOTALL)
                     if "task_graph_cli.py validate" in block]
         self.assertEqual(1, len(examples), "应有一个可复用的受保护调度示例")

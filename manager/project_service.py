@@ -12,8 +12,9 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-from lib.claude_instructions import read_file
-from lib import role_preferences, runtime_store
+from lib.hosts.claude_instructions import read_file
+from lib.central import role_preferences
+from lib import runtime_store
 from . import runtime_service, state_files
 
 SOURCE = Path(__file__).resolve().parents[1]

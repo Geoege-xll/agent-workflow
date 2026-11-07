@@ -139,8 +139,8 @@ Do not add a model call merely to convert existing prose into JSON or start anot
 read-only entries from the installed project root:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py schema
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/qa_handoff_cli.py extract \
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py schema
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py extract \
   --host codex --input "${native_qa_result:?set actual terminal native-result.json}" \
   --task-pack "${qa_task_pack:?set current complete QA task pack}"
 ```

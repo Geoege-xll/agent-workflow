@@ -26,7 +26,8 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from lib import runtime_store, role_models
+from lib import runtime_store
+from lib import role_models
 from manager import service, model_preferences, project_service, state_files
 from manager.catalog import Catalog, Model
 from manager.tui import App, HOSTS, cell_width
@@ -1008,10 +1009,10 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         for name in runtime_store.SETUP_FILES:put(name,b"#!/bin/sh\nexit 0\n")
         # apply 通过固定核心的真实 reader 验收发布；中央启停现在还要校验签名 Hook。
         # 只补齐这条真实消费链的直接依赖，不复制完整源包、宿主环境或独立运行时。
-        for name in ("lib/project_paths.py", "lib/install_process.py", "lib/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py","lib/claude_options.py",
-                     "lib/claude_instructions.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
-                     "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py",
-                     "lib/shared_core_skills.py","lib/role_models.py","lib/role_preferences.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
+        for name in ("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/central/runtime_project.py","lib/runtime_bridge.py","lib/hosts/claude_options.py",
+                     "lib/hosts/claude_instructions.py","lib/hosts/workflow_hook_install.py","lib/hosts/workflow_hook_settings.py",
+                     "lib/workflow_hooks.py","lib/hosts/windows_hook_command.py","lib/hosts/merge_codex_config.py",
+                     "lib/skills/shared_core_skills.py","lib/role_models.py","lib/central/role_preferences.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
                      "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
                      "roles/xy-qa.md","roles/xy-uiux.md","platforms/shared/core-skills.txt"):
             put(name,(PACK/name).read_bytes())
@@ -1111,7 +1112,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         before=self.snapshot(self.project);self.app.dispatch("enter")
         self.assertIsNone(self.app.future);self.assertEqual(before,self.snapshot(self.project));self.assertIn(".codex/agents/xy-qa.toml",self.app.text)
         self.menu("repair");self.assertFalse(self.app.project_plan.summary["can_apply"])
-        from lib.runtime_project import project_key
+        from lib.central.runtime_project import project_key
         record_path=self.state/"bindings"/(project_key(self.project)+".json")
         record=json.loads(record_path.read_bytes());record["runtime_binding"]={"protocol_version":1,"content_id":"a"*64,"manifest_sha256":"a"*64}
         record["used_bindings"].append(record["runtime_binding"])

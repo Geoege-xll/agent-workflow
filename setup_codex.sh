@@ -62,14 +62,14 @@ CODEX_BEGIN="<!-- pack:codex-begin -->"
 CODEX_END="<!-- pack:codex-end -->"
 PRODUCT_TPL="${PLATFORMS_DIR}/shared/AGENTS.product.tpl"
 CODEX_TPL="${PLATFORMS_DIR}/codex/AGENTS.codex.tpl"
-PROJECT_PROFILE_CLI="${PACK_LIB_DIR}/project_profile_cli.py"
+PROJECT_PROFILE_CLI="${PACK_LIB_DIR}/project/project_profile_cli.py"
 MANAGED_AGENT_MARKER="agent-workflow-pack:managed-agent"
 CORE_SKILLS=()
 
 load_core_skills_once() {
   local output skill
   [[ "${#CORE_SKILLS[@]}" -eq 0 ]] || return 0
-  if ! output=$(python3 "${PACK_DIR}/lib/shared_core_skills.py" list "${PACK_DIR}"); then
+  if ! output=$(python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" list "${PACK_DIR}"); then
     return 1
   fi
   while IFS= read -r skill; do
@@ -91,47 +91,47 @@ is_core_skill() {
 }
 
 is_pack_managed_skill() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     is-managed "$1" "$2"
 }
 
 stale_skill_directory_is_safe() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     stale-safe "$1" "$2"
 }
 
 managed_skill_tree_is_safe() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     target-safe "$1" "$2" "$3"
 }
 
 sync_managed_skill_tree() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     sync-tree "$1" "$2" "$3"
 }
 
 managed_skill_trees_match() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     tree-match "$1" "$2" "$3"
 }
 
 remove_stale_managed_skill_tree() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     remove-installed "$1" "$2"
 }
 
 recover_managed_skill_transactions() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     recover-root "${REPO_SKILLS}"
 }
 
 audit_managed_skill_transactions() {
-  python3 "${PACK_DIR}/lib/shared_core_skills.py" \
+  python3 "${PACK_DIR}/lib/skills/shared_core_skills.py" \
     audit-root "${REPO_SKILLS}"
 }
 
 validate_business_confirmations() {
-  python3 "${PACK_DIR}/lib/business_confirmation_policy.py" "${PACK_DIR}" codex
+  python3 "${PACK_DIR}/lib/skills/business_confirmation_policy.py" "${PACK_DIR}" codex
 }
 
 roles_field() {
@@ -215,8 +215,8 @@ render_codex_worker_constraints() {
 import sys
 from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
-from business_confirmation_policy import read_instruction_contract
+sys.path.insert(0, str(Path(sys.argv[1]).resolve().parent))
+from lib.skills.business_confirmation_policy import read_instruction_contract
 
 try:
     print(read_instruction_contract(Path(sys.argv[2]), "platforms/codex/WORKER_CONSTRAINTS.md"))
@@ -230,7 +230,7 @@ build_agent_instructions() {
   local role="$1" src="${ROLES_DIR}/${role}.md"
   local skill bound_skills
   # 只注入共用映射中的技能名，不复制 Skill/引用全文；读取失败必须阻止残缺角色发布。
-  bound_skills=$(python3 "${PACK_LIB_DIR}/role_skills.py" "${role}") || return 1
+  bound_skills=$(python3 "${PACK_LIB_DIR}/skills/role_skills.py" "${role}") || return 1
   {
     echo "# Global mandatory constraints"
     echo
@@ -364,7 +364,7 @@ import stat
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]).resolve()))
-from lib.claude_instructions import PAIRS, atomic_write, read_file, replace_block
+from lib.hosts.claude_instructions import PAIRS, atomic_write, read_file, replace_block
 
 # 只归一化 mktemp 的系统祖先别名，保留叶节点 no-follow 验证，不能 resolve 未知叶链接。
 def temporary_path(raw):
@@ -428,18 +428,18 @@ write_codex_config() {
   mkdir -p "${CODEX_DIR}"
   # 同一 TOML 容器内的原生 agents 与辅助 Hooks 一次合成、原子发布，
   # 避免后续角色同步失败时留下“agents 已改、Hook 未改”的未记录中间态。
-  python3 "${PACK_DIR}/lib/workflow_hook_install.py" apply-codex-config \
+  python3 "${PACK_DIR}/lib/hosts/workflow_hook_install.py" apply-codex-config \
     "${PACK_DIR}" "${PROJECT_ROOT}" codex
   log_ok "updated .codex/config.toml"
 }
 
 preflight_codex_config() {
-  python3 "${PACK_DIR}/lib/workflow_hook_install.py" preflight "${PACK_DIR}" "${PROJECT_ROOT}" codex || return 1
+  python3 "${PACK_DIR}/lib/hosts/workflow_hook_install.py" preflight "${PACK_DIR}" "${PROJECT_ROOT}" codex || return 1
   local max_threads candidate
   max_threads=$(positive_number_or_default max_concurrent_subagents 8)
   candidate=$(mktemp)
   [[ -f "${CODEX_CONFIG}" ]] && cp "${CODEX_CONFIG}" "${candidate}"
-  if ! python3 "${PACK_DIR}/lib/merge_codex_config.py" \
+  if ! python3 "${PACK_DIR}/lib/hosts/merge_codex_config.py" \
     "${candidate}" "${max_threads}"; then
     rm -f "${candidate}"
     return 1
@@ -765,11 +765,12 @@ from pathlib import Path
 expected_threads = int(sys.argv[6])
 lib_dir, project_root, roles_dir = sys.argv[7:10]
 expected_skills = set(sys.argv[10:])
-sys.path.insert(0, lib_dir)
-from qa_review_policy import validate_pack_qa_review_policy
-from business_confirmation_policy import read_instruction_contract
-from validate_project_config import validate_with_profile
-from role_skills import ROLE_SKILLS
+from pathlib import Path
+sys.path.insert(0, str(Path(lib_dir).resolve().parent))
+from lib.skills.qa_review_policy import validate_pack_qa_review_policy
+from lib.skills.business_confirmation_policy import read_instruction_contract
+from lib.project.validate_project_config import validate_with_profile
+from lib.skills.role_skills import ROLE_SKILLS
 
 errors: list[str] = []
 errors.extend(validate_pack_qa_review_policy(Path(lib_dir).parent))
@@ -1321,7 +1322,7 @@ PY
 if [[ -n "${READ_ROLE}" ]]; then
   # 只运行已有的纯读取配置/发现和 render 函数；不初始化 ID，不 audit/recover
   # Skill 事务，不创建临时入口，也不调用任何 setup/apply/Hook 写入函数。
-  python3 "${PACK_LIB_DIR}/validate_project_config.py" "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}" >/dev/null
+  python3 "${PACK_LIB_DIR}/project/validate_project_config.py" "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}" >/dev/null
   render_codex_agent "${READ_ROLE}"
   exit 0
 fi
@@ -1345,7 +1346,7 @@ if [[ "${CHECK_ONLY}" -eq 1 ]]; then
   load_core_skills_once
   validate_business_confirmations
   audit_managed_skill_transactions
-  python3 "${PACK_DIR}/lib/validate_project_config.py" \
+  python3 "${PACK_DIR}/lib/project/validate_project_config.py" \
     "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}"
   python3 "${PACK_DIR}/lib/validate_project_docs.py" \
     "${PROJECT_YAML}" "${PROJECT_ROOT}"
@@ -1353,7 +1354,7 @@ if [[ "${CHECK_ONLY}" -eq 1 ]]; then
   preflight_managed_path_collisions
   check_codex_contract
   check_managed_outputs_match_sources
-  python3 "${PACK_DIR}/lib/workflow_hook_install.py" check "${PACK_DIR}" "${PROJECT_ROOT}" codex
+  python3 "${PACK_DIR}/lib/hosts/workflow_hook_install.py" check "${PACK_DIR}" "${PROJECT_ROOT}" codex
   exit 0
 fi
 
@@ -1362,9 +1363,9 @@ require_pack_layout
 preflight_codex_config
 load_core_skills_once
 validate_business_confirmations
-python3 "${PACK_DIR}/lib/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
+python3 "${PACK_DIR}/lib/project/ensure_project_id.py" "${PROJECT_YAML}" "${PROJECT_ROOT}"
 recover_managed_skill_transactions
-python3 "${PACK_DIR}/lib/validate_project_config.py" \
+python3 "${PACK_DIR}/lib/project/validate_project_config.py" \
   "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}"
 preflight_managed_path_collisions
 preflight_root_agents_size
@@ -1374,5 +1375,5 @@ write_codex_config
 sync_codex_skills
 write_codex_agents
 # 保留原生项目/精确 Hook 信任审查；不写信任哈希，也不强制打开 features.hooks。
-python3 "${PACK_DIR}/lib/workflow_hook_install.py" apply "${PACK_DIR}" "${PROJECT_ROOT}" codex
+python3 "${PACK_DIR}/lib/hosts/workflow_hook_install.py" apply "${PACK_DIR}" "${PROJECT_ROOT}" codex
 echo -e "${GREEN}${BOLD}✅ Codex setup done${NC}"

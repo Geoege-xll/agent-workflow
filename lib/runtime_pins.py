@@ -6,19 +6,26 @@
 
 from __future__ import annotations
 
+# 直接脚本只信任自身物理位置确定的核心根，避免异 cwd 或 PYTHONPATH 中的
+# 同名模块劫持内部依赖；正常包导入沿用调用方已选择的固定核心。
+if not __package__:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import json
 import os
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 if __package__:
-    from . import runtime_store as store
+    from lib import runtime_store as store
     from .standard_paths import builtin_source_path
-    from .claude_instructions import read_file
+    from lib.hosts.claude_instructions import read_file
 else:
     import runtime_store as store
     from standard_paths import builtin_source_path
-    from claude_instructions import read_file
+    from lib.hosts.claude_instructions import read_file
 
 
 BINDING_ENV = "AGENT_WORKFLOW_RUNTIME_BINDING"

@@ -10,8 +10,9 @@ import json
 from pathlib import Path
 import uuid
 
-from lib import role_models, role_preferences
-from lib.runtime_project import CONFIG, Node, Tree, absolute_directory, json_bytes, skill_parts
+from lib import role_models
+from lib.central import role_preferences
+from lib.central.runtime_project import CONFIG, Node, Tree, absolute_directory, json_bytes, skill_parts
 from . import project_service, service, runtime_service, runtime_state, state_files
 from .catalog import Catalog, discover
 

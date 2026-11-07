@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 from lib.task_graph_cli import _execute
-from lib.worktree_cli import DeliveryError, create, git, head, merge, merge_check, scope, target_branch
+from lib.delivery.worktree_cli import DeliveryError, create, git, head, merge, merge_check, scope, target_branch
 from lib.worktree_policy import WorktreePolicyError, settings
 from tests import test_qa_handoff as qa_fixtures
 from tests.test_scheduler_boundaries import _writer_payload, v2_graph, v2_task
@@ -290,7 +290,7 @@ class GitDeliveryTest(unittest.TestCase):
                 merge(self.repo, self.config, payload)
 
     def test_cli_merges_exact_candidate_without_pushing(self) -> None:
-        result = subprocess.run([sys.executable, str(PACK / "lib/worktree_cli.py"), "merge", "--repo", str(self.repo),
+        result = subprocess.run([sys.executable, str(PACK / "lib/delivery/worktree_cli.py"), "merge", "--repo", str(self.repo),
                                  "--config", str(self.config)], input=json.dumps(self.payload), capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("merged", json.loads(result.stdout)["status"])
@@ -440,7 +440,7 @@ class GitDeliveryTest(unittest.TestCase):
         self.assertEqual(self.base, head(self.repo))
 
     def test_missing_cli_inputs_report_controlled_errors(self) -> None:
-        result = subprocess.run([sys.executable, str(PACK / "lib/worktree_cli.py"), "merge", "--repo", str(self.repo)],
+        result = subprocess.run([sys.executable, str(PACK / "lib/delivery/worktree_cli.py"), "merge", "--repo", str(self.repo)],
                                 capture_output=True, text=True)
         self.assertEqual(2, result.returncode)
         self.assertNotIn("Traceback", result.stderr)

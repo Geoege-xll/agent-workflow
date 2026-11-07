@@ -13,10 +13,10 @@ import unittest
 from unittest.mock import patch
 
 PACK = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PACK / "lib"))
-import platform_fs
-import platform_process
-import windows_bootstrap
+sys.path.insert(0, str(PACK))
+import lib.platform_fs as platform_fs
+import lib.install.platform_process as platform_process
+import lib.windows_bootstrap as windows_bootstrap
 
 
 class ExclusivePublicationTest(unittest.TestCase):
@@ -101,12 +101,12 @@ class SetupEnvironmentTest(unittest.TestCase):
 
 class HostMaintenanceCliTest(unittest.TestCase):
     def test_selected_host_and_mode_reuse_existing_setup(self):
-        runtime = Path(platform_process.__file__).absolute().parent.parent
+        runtime = Path(platform_process.__file__).resolve().parents[2]
         for host in ("claude", "codex", "antigravity"):
             for mode in (None, "--check", "--preflight"):
                 options = (f"--only={host}",) + ((mode,) if mode else ())
                 with self.subTest(host=host, mode=mode), \
-                        patch("install_process.SetupRunner") as factory, \
+                        patch("lib.install.install_process.SetupRunner") as factory, \
                         patch.object(platform_process, "setup_command", return_value=(["verified-bash"], {"child": "only"})) as setup:
                     args = ["--host", host] + ([mode] if mode else [])
                     self.assertEqual(platform_process.main(args), 0)
@@ -120,7 +120,7 @@ class HostMaintenanceCliTest(unittest.TestCase):
         import io
         for error, expected in ((subprocess.CalledProcessError(23, ["bash"]), 23),
                                 (OSError("missing dependency"), 2), (ValueError("invalid runtime"), 2)):
-            with self.subTest(error=error), patch("install_process.SetupRunner") as factory, \
+            with self.subTest(error=error), patch("lib.install.install_process.SetupRunner") as factory, \
                     patch.object(platform_process, "setup_command", side_effect=error), \
                     patch("sys.stderr", io.StringIO()):
                 self.assertEqual(platform_process.main(["--host", "claude"]), expected)
@@ -130,7 +130,7 @@ class HostMaintenanceCliTest(unittest.TestCase):
     def test_invalid_cli_never_starts_setup(self):
         import io
         for args in ([], ["--host", "unknown"], ["--host", "codex", "--check", "--preflight"]):
-            with self.subTest(args=args), patch("install_process.SetupRunner") as factory, \
+            with self.subTest(args=args), patch("lib.install.install_process.SetupRunner") as factory, \
                     patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as raised:
                 platform_process.main(args)
             self.assertEqual(raised.exception.code, 2)

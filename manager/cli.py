@@ -192,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.effective:
                 if args.platform != "claude" or project is None:raise ValueError("--effective 当前只解析项目 Claude 的具名非 fork 角色")
                 from .claude_execution import effective_role
-                from lib.claude_options import frontmatter_window
+                from lib.hosts.claude_options import frontmatter_window
                 catalog=discover("claude",project=project)
                 if catalog.execution.get("status") != "projected":
                     raise ValueError("Claude 配置来源读取失败，无法推导有效角色设置；请用 doctor 检查来源")

@@ -13,7 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 import unittest
 from unittest.mock import patch
 
-from lib import role_models, role_preferences, runtime_store
+from lib import role_models
+from lib.central import role_preferences
+from lib import runtime_store
 from manager import model_preferences as preferences, project_service, runtime_service, service, state_files
 from tests import test_workflow_manager as fixtures
 

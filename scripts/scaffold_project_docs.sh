@@ -12,7 +12,7 @@ PROJECT_YAML="${PACK_DIR}/project.yaml"
 PROJECT_NAME=$(py_yaml "${PROJECT_YAML}" project_name 2>/dev/null || echo "MyProject")
 DATE_STR=$(date +%Y-%m-%d)
 
-python3 "${PACK_DIR}/lib/validate_project_config.py" \
+python3 "${PACK_DIR}/lib/project/validate_project_config.py" \
   "${PROJECT_YAML}" "${PROJECT_ROOT}" "${ROLES_DIR}"
 
 DOC_STANDARDS=$(py_yaml "${PROJECT_YAML}" docs standards)
@@ -56,10 +56,11 @@ from pathlib import Path
 project_root = Path(project_root_raw).resolve()
 pack_root = Path(pack_root_raw).resolve()
 template_root = Path(template_root_raw).resolve()
-sys.path.insert(0, str(pack_root / "lib"))
-from platform_fs import os, publish_exclusive
-from standards_baseline import plan_standard_updates
-from validate_project_config import validate_with_profile
+# 所属模块统一从可信包根导入；不能把 lib 本身当搜索根，也不能借用业务项目的同名包。
+sys.path.insert(0, str(pack_root))
+from lib.platform_fs import os, publish_exclusive
+from lib.documents.standards_baseline import plan_standard_updates
+from lib.project.validate_project_config import validate_with_profile
 
 validation = validate_with_profile(
     pack_root / "project.yaml", project_root, pack_root / "roles"
@@ -76,7 +77,7 @@ ui_enabled = profile.design_scaffold_required
 
 def regular_source(path: Path) -> bytes:
     if os.name == "nt":
-        from windows_fs import read_file
+        from lib.windows_fs import read_file
         body = read_file(path)
         if body is None:
             raise SystemExit(f"template is missing: {path}")
@@ -206,7 +207,7 @@ def inject_test_race(
 def publish(target: Path, body: bytes | None, before: tuple, original: bytes | None = None) -> str:
     if os.name != "nt":
         return _publish(target, body, before, original)
-    from windows_fs import Directory
+    from lib.windows_fs import Directory
     ensure_directory(target.parent)
     with Directory(target.parent):
         return _publish(target, body, before, original)
@@ -274,7 +275,7 @@ def _publish(
             fsync_parent(target)
             return "deleted"
         if os.name == "nt":
-            from windows_fs import copy_permissions
+            from lib.windows_fs import copy_permissions
             copy_permissions(backup, temporary)
         try:
             publish_exclusive(temporary, target)

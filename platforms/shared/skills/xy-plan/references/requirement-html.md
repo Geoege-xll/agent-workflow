@@ -21,8 +21,8 @@ Prefer the target project's `.agent-workflow/project.yaml`; use that project's `
 configuration is absent.
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/requirement_html.py check --project . --source docs/plans/change.md
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/requirement_html.py check --project . --source docs/plans/change.md
 ```
 
 Replace `--source` with the actual `docs.plans` path; the sample default is not configuration. There is no arbitrary
@@ -34,7 +34,7 @@ permissions and node identity remain unchanged.
 On Windows, use the persistent in-project Python entry with the same arguments:
 
 ```powershell
-node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
+node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/documents/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
 ```
 
 Runtime requires existing Node.js >= 20 (the Windows installation route already has Node 22). Do not install global
@@ -48,8 +48,8 @@ PM obtains the unique request scratch with existing `task_graph_cli.py scratch -
 writes the draft at an authorized location inside it, then runs:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/requirement_html.py render --project . --source /absolute/current-request-scratch/change.md --request-id current-request --draft
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/requirement_html.py check --project . --source /absolute/current-request-scratch/change.md --request-id current-request --draft
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/requirement_html.py render --project . --source /absolute/current-request-scratch/change.md --request-id current-request --draft
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/requirement_html.py check --project . --source /absolute/current-request-scratch/change.md --request-id current-request --draft
 ```
 
 Draft output stays in the same scratch; do not write formal plans early. Interpret project-relative draft links

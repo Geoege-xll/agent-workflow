@@ -2,7 +2,7 @@
 
 import unittest
 
-from lib.claude_options import parse, frontmatter_window
+from lib.hosts.claude_options import parse, frontmatter_window
 from lib.role_models import patch_artifact
 
 

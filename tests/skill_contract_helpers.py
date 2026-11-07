@@ -6,8 +6,8 @@
 
 from pathlib import Path
 
-from lib.business_confirmation_policy import read_instruction_contract
-from lib.skill_contracts import BOOTSTRAP_TARGETS, INCLUDE
+from lib.skills.business_confirmation_policy import read_instruction_contract
+from lib.skills.skill_contracts import BOOTSTRAP_TARGETS, INCLUDE
 
 
 def read_contract(path: Path) -> str:
@@ -20,7 +20,7 @@ def read_contract(path: Path) -> str:
 
 def read_bootstrap_contract(path: Path, pack: Path) -> str:
     """检查生成入口的完整契约；不把展开文本当作宿主常驻内容或体积样本。"""
-    from lib.skill_contracts import expand_bootstrap_contract
+    from lib.skills.skill_contracts import expand_bootstrap_contract
     body = path.read_text(encoding="utf-8")
     # 分别展开受管区块，避免把别的宿主正文误用于当前宿主的语义断言。
     for relative, target in BOOTSTRAP_TARGETS.items():

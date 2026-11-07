@@ -3,4 +3,4 @@
 set -euo pipefail
 INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec bash "${INSTALLER_DIR}/lib/python_runtime.sh" \
-  "${INSTALLER_DIR}/lib/install_workflow.py" "$@"
+  "${INSTALLER_DIR}/lib/install/install_workflow.py" "$@"

@@ -18,8 +18,8 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from lib import windows_hook_command as codec
-from lib import workflow_hook_install as installer
+from lib.hosts import windows_hook_command as codec
+from lib.hosts import workflow_hook_install as installer
 
 
 ROOT = Path(__file__).resolve().parents[1]

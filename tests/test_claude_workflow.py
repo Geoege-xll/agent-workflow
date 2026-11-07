@@ -128,7 +128,7 @@ class ClaudeFixtureMixin:
         return subprocess.run(
             [
                 sys.executable,
-                "agent_workflow/lib/validate_claude_artifacts.py",
+                "agent_workflow/lib/hosts/validate_claude_artifacts.py",
                 "generated",
                 str(pack),
                 str(project),
@@ -401,9 +401,9 @@ class ClaudeSourceContractTest(unittest.TestCase):
 
     def test_claude_runtime_consumes_project_profile_without_manual_workspace_keys(self) -> None:
         setup = self.read("setup_claude.sh")
-        validator = self.read("lib/validate_claude_artifacts.py")
+        validator = self.read("lib/hosts/validate_claude_artifacts.py")
         self.assertIn("project_profile_cli.py", setup)
-        self.assertNotIn("from validate_project_config import validate_with_profile", setup)
+        self.assertNotIn("from lib.project.validate_project_config import validate_with_profile", setup)
         self.assertIn("validate_with_profile", validator)
         for body in (setup, validator):
             self.assertNotIn("project_sandboxes", body)
@@ -418,7 +418,7 @@ class ClaudeSourceContractTest(unittest.TestCase):
         runtime = "\n".join(
             (
                 self.read("setup_claude.sh"),
-                self.read("lib/validate_claude_artifacts.py"),
+                self.read("lib/hosts/validate_claude_artifacts.py"),
             )
         )
         self.assertNotIn("RETIRED_", runtime)
@@ -579,7 +579,7 @@ class ClaudeGeneratedAgentTest(ClaudeFixtureMixin, unittest.TestCase):
 
     def test_validator_has_no_arbitrary_word_or_byte_budget(self) -> None:
         # 官方建议是具体、简洁、结构化，而不是 650 词/6KB 之类的安装硬门槛。
-        validator = (PACK / "lib/validate_claude_artifacts.py").read_text(
+        validator = (PACK / "lib/hosts/validate_claude_artifacts.py").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("CLAUDE_MANAGED_LIMITS", validator)
@@ -976,7 +976,7 @@ class ClaudeOwnershipTest(ClaudeFixtureMixin, unittest.TestCase):
 class ClaudeThinEntryTest(ClaudeFixtureMixin, unittest.TestCase):
     def test_direct_validator_and_check_reject_missing_shared_bootstrap_without_writes(self) -> None:
         """共享边界必须实际存在于入口，详细源契约完整不能掩盖生成物遗漏。"""
-        from lib.claude_instructions import replace_block
+        from lib.hosts.claude_instructions import replace_block
         temp, project, pack = self.make_fixture()
         self.addCleanup(temp.cleanup)
         installed = self.run_setup(project)

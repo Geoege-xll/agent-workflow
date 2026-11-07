@@ -20,7 +20,7 @@ directly to refresh rather than running a redundant presence check. When role av
 unknown, perform one read-only resource check using the current host:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/project_profile_cli.py \
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/project/project_profile_cli.py \
   check-roles codex .agent-workflow .
 ```
 
@@ -86,7 +86,7 @@ bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py
   helper lib/task_graph_cli.py validate --input '<current graph or single-pack path>'
 bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py \
   --binding '<complete three-field runtime_binding JSON from the same current Task Pack>' \
-  helper lib/context_read.py .agent-workflow/product/WORKFLOW.md \
+  helper lib/documents/context_read.py .agent-workflow/product/WORKFLOW.md \
   --task-pack '<current single-pack path>' --limit 6000
 ```
 

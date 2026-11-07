@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 PACK = Path(__file__).resolve().parents[1]
 RUNTIME = PACK / "lib/python_runtime.sh"
-HELPER = PACK / "lib/native_usage.py"
+HELPER = PACK / "lib/delivery/native_usage.py"
 
 
 def codex(response="r1", thread="t1", turn="u1", usage=None):
@@ -64,7 +64,7 @@ class NativeUsageTest(unittest.TestCase):
         return path
 
     def summarize(self, host, *paths):
-        from lib import native_usage
+        from lib.delivery import native_usage
         return native_usage.summarize_usage(host, list(paths))
 
     def test_codex_native_response_dedup_and_subitems_are_not_double_added(self):
@@ -84,7 +84,7 @@ class NativeUsageTest(unittest.TestCase):
         self.assertEqual(2, len(report["groups"]))
 
     def test_codex_identity_conflicts_and_separate_threads(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         report = self.summarize("codex", self.write(codex(), codex(thread="t2")))
         self.assertEqual(26, report["totals"]["total_tokens"])
         for changed in (codex(usage={"input_tokens": 11}), codex(turn="changed")):
@@ -108,7 +108,7 @@ class NativeUsageTest(unittest.TestCase):
         self.assertEqual({"present": 0, "missing": 1}, report["field_coverage"]["input_tokens"])
 
     def test_codex_cli_turn_requires_native_identity_and_does_not_mix_modes(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         event = {"type": "turn.completed", "thread_id": "t1", "turn_id": "u1",
                  "usage": {"input_tokens": 5, "output_tokens": 2}}
         report = self.summarize("codex", self.write(event, event))
@@ -137,7 +137,7 @@ class NativeUsageTest(unittest.TestCase):
         self.assertNotIn("standard", json.dumps(report))
 
     def test_claude_duplicate_results_conflicts_and_unidentified_inputs(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         record = claude()
         report = self.summarize("claude", self.write(record), self.write(record, pretty=True))
         self.assertEqual(10, report["totals"]["input_tokens"])
@@ -156,7 +156,7 @@ class NativeUsageTest(unittest.TestCase):
             self.summarize("claude", self.write(record), self.write(record, pretty=True))
 
     def test_claude_failure_and_wrong_terminal_shape_rejected(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         for changes in ({"subtype": "error_max_turns"}, {"is_error": True},
                         {"is_error": 0}, {"subtype": None}):
             record = claude()
@@ -165,7 +165,7 @@ class NativeUsageTest(unittest.TestCase):
                 self.summarize("claude", self.write(record))
 
     def test_claude_cross_file_same_bytes_require_native_result_identity(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         for has_uuid in (False, True):
             record = claude()
             if not has_uuid:
@@ -228,7 +228,7 @@ class NativeUsageTest(unittest.TestCase):
         self.assertEqual("observed_zero", zero_report["initial_baseline"])
 
     def test_agy_conversations_are_isolated_and_rollback_is_rejected(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         report = self.summarize("antigravity", self.write_agy_stream(agy(10), agy(2, "c2"), agy(14)))
         self.assertEqual(2, len(report["groups"]))
         for snapshots in ((agy(10), agy(4)), (agy(10), agy(14), agy(10))):
@@ -236,7 +236,7 @@ class NativeUsageTest(unittest.TestCase):
                 self.summarize("antigravity", self.write_agy_stream(*snapshots))
 
     def test_agy_cross_input_duplicate_content_cannot_hide_rollback(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         for stream in (False, True):
             write = self.write_agy_stream if stream else self.write
             first, higher, copied_first = write(agy(10)), write(agy(14)), write(agy(10))
@@ -294,7 +294,7 @@ class NativeUsageTest(unittest.TestCase):
         self.assertEqual([], report["groups"])
 
     def test_agy_official_stream_ignores_step_fragments_and_rejects_failed_terminal(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         report = self.summarize("antigravity", self.write(
             {"event": "init", "conversation_id": "c1", "init": {}},
             {"event": "step_update", "usage": {"total_tokens": 99999}},
@@ -307,7 +307,7 @@ class NativeUsageTest(unittest.TestCase):
             self.summarize("antigravity", self.write(record))
 
     def test_invalid_counts_all_hosts_rejected_without_coercion(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         for host, make in (("codex", codex), ("claude", claude), ("antigravity", lambda: agy(1))):
             for value in (True, False, -1, 1.0, "1", None, [], {}):
                 record = make()
@@ -317,7 +317,7 @@ class NativeUsageTest(unittest.TestCase):
                     self.summarize(host, self.write(record))
 
     def test_invalid_json_duplicate_keys_utf8_and_root_rejected(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         path = self.root / "bad.json"
         for body in (b'{"type":"result","type":"secret"}', b'{"x":NaN}',
                      b'{"x":Infinity}', b'{"x":1e999}', b'{}\n{"x":-Infinity}', b'[]', b'42', b'{bad}',
@@ -328,7 +328,7 @@ class NativeUsageTest(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX 链接与 FIFO；Windows 节点边界由共用 reader 回归覆盖")
     def test_safe_reader_rejects_links_special_files_and_oversize(self):
-        from lib.native_usage import NativeUsageError
+        from lib.delivery.native_usage import NativeUsageError
         target = self.write(codex())
         link = self.root / "link.json"
         link.symlink_to(target)
@@ -343,7 +343,7 @@ class NativeUsageTest(unittest.TestCase):
                 self.summarize("codex", path)
 
     def test_limits_and_changed_file_fail_closed(self):
-        from lib import native_usage
+        from lib.delivery import native_usage
         path = self.write(codex())
         with patch.object(native_usage, "MAX_INPUTS", 1), self.assertRaises(native_usage.NativeUsageError):
             self.summarize("codex", path, path)

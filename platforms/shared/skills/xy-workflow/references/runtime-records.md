@@ -230,7 +230,7 @@ read-only adapter from the actual business-project root, not the central-managem
 
 ```bash
 cd "${project_root:?请设置实际业务项目根}"
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/native_usage.py \
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/native_usage.py \
   --host codex --input "${native_usage_input:?set explicit exported JSON or JSONL}"
 ```
 
@@ -325,10 +325,10 @@ response, or lower `--limit`. Read long documents separately, one page per tool 
 
 ```bash
 # 首页：只指定当前必需的一个文件；安装态从项目根运行。
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/context_read.py \
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/context_read.py \
   .agents/skills/xy-workflow/SKILL.md --limit 6000
 # 续页：填入上一完整回包的 next_offset 与首次页 sha256，不猜测位置。
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/context_read.py \
+bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/context_read.py \
   .agents/skills/xy-workflow/SKILL.md --offset "${document_offset:?use previous next_offset}" \
   --limit 6000 --expect-sha256 "${document_sha:?use first page sha256}"
 ```

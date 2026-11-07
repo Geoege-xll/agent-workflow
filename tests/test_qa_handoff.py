@@ -38,7 +38,7 @@ class QAHandoffValidationTest(unittest.TestCase):
     """验证 QA PASS 必须覆盖固定 diff 与独立识别出的适用规范。"""
 
     def setUp(self) -> None:
-        self.cli = Path(__file__).resolve().parents[1] / "lib/qa_handoff_cli.py"
+        self.cli = Path(__file__).resolve().parents[1] / "lib/delivery/qa_handoff_cli.py"
         self.payload = {
             "schema_version": 2,
             "skill_evidence": {"skills_used": ["xy-qa-review"], "unavailable_required_skills": [],
@@ -186,7 +186,7 @@ class QAHandoffValidationTest(unittest.TestCase):
     def builtin_payload(self):
         payload = json.loads(json.dumps(self.payload))
         path = "platforms/shared/skills/xy-code-standards/references/rules.md"
-        digest = hashlib.sha256((self.cli.parents[1] / path).read_bytes()).hexdigest()
+        digest = hashlib.sha256((self.cli.parents[2] / path).read_bytes()).hexdigest()
         coverage = payload["standards_policy_coverage"]
         coverage.update(index_fingerprint=None, task_pack_rule_ids=["eng-common-005"], required_engineering_rule_ids=["eng-common-005"])
         coverage["path_checks"][0]["applicable_rule_ids"] = ["eng-common-005"]

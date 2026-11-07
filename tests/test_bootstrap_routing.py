@@ -14,8 +14,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from lib.business_confirmation_policy import read_instruction_contract
-from lib.skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract
+from lib.skills.business_confirmation_policy import read_instruction_contract
+from lib.skills.skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract
 from lib.task_graph_cli import export_task_pack
 from tests.test_task_graph_records import graph
 from tests.test_unified_host_workflow import HOSTS, UnifiedHostFixture

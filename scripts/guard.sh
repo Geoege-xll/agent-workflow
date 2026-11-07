@@ -66,8 +66,9 @@ import re
 import sys
 
 lib_dir, config_path, project_root, roles_dir = sys.argv[1:]
-sys.path.insert(0, lib_dir)
-from validate_project_config import section_lines, strip_inline_comment, validate_with_profile
+from pathlib import Path
+sys.path.insert(0, str(Path(lib_dir).resolve().parent))
+from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_with_profile
 
 result = validate_with_profile(config_path, project_root, roles_dir)
 if result.errors or result.profile is None:

@@ -241,8 +241,8 @@ class AntigravityGeneratedArtifactTest(
     def discovered_roles(self) -> list[str]:
         command = (
             "import json,sys;"
-            f"sys.path.insert(0,{str(self.pack / 'lib')!r});"
-            "from validate_project_config import validate_with_profile;"
+            f"sys.path.insert(0,{str(self.pack)!r});"
+            "from lib.project.validate_project_config import validate_with_profile;"
             f"r=validate_with_profile({str(self.pack / 'project.yaml')!r},"
             f"{str(self.project)!r},{str(self.pack / 'roles')!r});"
             "assert not r.errors,r.errors;"
@@ -370,8 +370,8 @@ class AntigravityGeneratedArtifactTest(
             (self.pack / relative).read_text(encoding="utf-8")
             for relative in (
                 "setup_antigravity.sh",
-                "lib/apply_antigravity_setup.py",
-                "lib/render_antigravity_agent.py",
+                "lib/hosts/apply_antigravity_setup.py",
+                "lib/hosts/render_antigravity_agent.py",
                 "lib/validate_antigravity_artifacts.py",
             )
         )
@@ -439,7 +439,7 @@ class AntigravityGeneratedArtifactTest(
         result = subprocess.run(
             [
                 sys.executable,
-                str(self.pack / "lib/render_antigravity_agent.py"),
+                str(self.pack / "lib/hosts/render_antigravity_agent.py"),
                 str(self.pack),
                 role,
             ],
@@ -780,17 +780,17 @@ class AntigravityGeneratedArtifactTest(
         self.run_setup()
         root_agents = self.project / "AGENTS.md"
         body = root_agents.read_text(encoding="utf-8")
-        current = "只有required原型增加visual_approved。"
+        current = "only required prototypes add visual_approved."
         self.assertEqual(body.count(current), 1)
-        root_agents.write_text(
-            body.replace(
+        mutated = body.replace(
                 current,
                 current
                 + " The root prototype index is sufficient for visual confirmation.",
                 1,
-            ),
-            encoding="utf-8",
         )
+        # 先证明英文权威正文确已注入被禁止的旧语义，再验证真实 --check 拒绝它。
+        self.assertNotEqual(body, mutated)
+        root_agents.write_text(mutated, encoding="utf-8")
         result = self.invoke_setup("--check")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("[ERROR]", result.stdout + result.stderr)
@@ -937,7 +937,7 @@ class AntigravityGeneratedArtifactTest(
                     renderer = subprocess.run(
                         [
                             sys.executable,
-                            str(self.pack / "lib/render_antigravity_agent.py"),
+                            str(self.pack / "lib/hosts/render_antigravity_agent.py"),
                             str(self.pack),
                             "xy-web",
                         ],
@@ -1001,7 +1001,7 @@ class AntigravityGeneratedArtifactTest(
                     renderer = subprocess.run(
                         [
                             sys.executable,
-                            str(self.pack / "lib/render_antigravity_agent.py"),
+                            str(self.pack / "lib/hosts/render_antigravity_agent.py"),
                             str(self.pack),
                             "xy-web",
                         ],
@@ -1279,10 +1279,10 @@ class AntigravityOwnershipMigrationTest(
         self.run_setup()
         # Hooks 容器必须走路径级更新；该用例单独验证“不含 Hooks”的整树 reset 原语。
         (self.project / ".agents/hooks.json").unlink()
-        lib_path = str(PACK / "lib")
+        lib_path = str(PACK)
         sys.path.insert(0, lib_path)
         try:
-            validator = importlib.import_module("validate_antigravity_artifacts")
+            validator = importlib.import_module("lib.validate_antigravity_artifacts")
         finally:
             sys.path.remove(lib_path)
 
@@ -1382,7 +1382,7 @@ class AntigravityOwnershipMigrationTest(
         expected_agent = subprocess.run(
             [
                 sys.executable,
-                str(self.pack / "lib/render_antigravity_agent.py"),
+                str(self.pack / "lib/hosts/render_antigravity_agent.py"),
                 str(self.pack),
                 "xy-web",
             ],
@@ -1545,10 +1545,10 @@ class AntigravityOwnershipMigrationTest(
                 self.assertEqual("outside sentinel\n", outside.read_text())
 
     def test_publish_rechecks_target_after_same_directory_temp_write(self) -> None:
-        lib_path = str(PACK / "lib")
+        lib_path = str(PACK)
         sys.path.insert(0, lib_path)
         try:
-            applier = importlib.import_module("apply_antigravity_setup")
+            applier = importlib.import_module("lib.hosts.apply_antigravity_setup")
         finally:
             sys.path.remove(lib_path)
 
@@ -2195,7 +2195,7 @@ class AntigravityValidatorTest(AntigravityFixtureMixin, unittest.TestCase):
         renderer = subprocess.run(
             [
                 sys.executable,
-                str(self.pack / "lib/render_antigravity_agent.py"),
+                str(self.pack / "lib/hosts/render_antigravity_agent.py"),
                 str(self.pack),
                 "xy-web",
             ],
@@ -3247,7 +3247,7 @@ description: Managed stale Skill fixture.
     def test_antigravity_stage_copy_uses_one_descriptor_anchored_snapshot(
         self,
     ) -> None:
-        from lib import shared_core_skills
+        from lib.skills import shared_core_skills
 
         self.assertTrue(
             hasattr(shared_core_skills, "stage_shared_core_skills"),
@@ -3314,7 +3314,7 @@ description: Managed stale Skill fixture.
         result = subprocess.run(
             [
                 sys.executable,
-                str(self.pack / "lib/shared_core_skills.py"),
+                str(self.pack / "lib/skills/shared_core_skills.py"),
                 "stage-copy",
                 str(self.pack),
                 str(staged),
@@ -3362,7 +3362,7 @@ description: Managed stale Skill fixture.
     def test_loader_does_not_reopen_skill_after_validation(self) -> None:
         """A checked inode cannot be replaced before its frontmatter is read."""
 
-        from lib import shared_core_skills
+        from lib.skills import shared_core_skills
 
         source = (
             self.pack
@@ -3421,7 +3421,7 @@ description: Managed stale Skill fixture.
     def test_setup_codex_uses_only_the_shared_core_skill_source(self) -> None:
         legacy = "platforms/codex" + "/skills"
         setup_body = (PACK / "setup_codex.sh").read_text(encoding="utf-8")
-        validator_body = (PACK / "lib/validate_project_config.py").read_text(
+        validator_body = (PACK / "lib/project/validate_project_config.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
@@ -3431,7 +3431,7 @@ description: Managed stale Skill fixture.
         self.assertIn('shared_core_skills.py" list', setup_body)
         for relative, body in (
             ("setup_codex.sh", setup_body),
-            ("lib/validate_project_config.py", validator_body),
+            ("lib/project/validate_project_config.py", validator_body),
         ):
             with self.subTest(relative=relative):
                 self.assertNotIn(legacy, body)
@@ -3657,7 +3657,7 @@ xy-workflow
         self.assert_no_codex_project_writes()
 
     def test_manifest_loader_failure_is_not_swallowed(self) -> None:
-        loader = self.pack / "lib/shared_core_skills.py"
+        loader = self.pack / "lib/skills/shared_core_skills.py"
         loader.write_text("raise SystemExit(23)\n", encoding="utf-8")
 
         result = self.run_codex()

@@ -10,13 +10,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from lib import context_read
+from lib.documents import context_read
 from lib import runtime_store
 from tests.test_task_graph_init import pinned_environment, pinned_fixture
 
 
 PACK = Path(__file__).resolve().parents[1]
-HELPER = PACK / "lib/context_read.py"
+HELPER = PACK / "lib/documents/context_read.py"
 
 
 class ContextReadTest(unittest.TestCase):
@@ -39,6 +39,37 @@ class ContextReadTest(unittest.TestCase):
             [sys.executable, "-B", "-X", "utf8", str(HELPER), str(self.path), *args],
             capture_output=True, text=True, encoding="utf-8", check=False, timeout=10,
         )
+
+    def test_real_package_and_cli_ignore_a_project_owned_lib_package(self) -> None:
+        """项目普通 lib 包不能覆盖可信核心；同时验证 API 消费与直接 helper 的真实进程。"""
+        digest = self.write("真实项目正文\n".encode())
+        foreign = self.root / "lib"
+        foreign.mkdir()
+        sentinel = self.root / "foreign-lib-executed"
+        # 若误选项目包，先留下可观察副作用再失败；仅检查 exit=0 不足以证明它未执行。
+        (foreign / "__init__.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(sentinel)!r}).write_text('foreign project lib executed')\n"
+            "raise RuntimeError('FOREIGN_PROJECT_LIB_EXECUTED')\n", encoding="utf-8",
+        )
+        env = dict(os.environ, PYTHONPATH="")
+        python = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8"]
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); "
+                "from lib.project import project_discovery; print(project_discovery.__file__)")
+        commands = (
+            ("package", [*python, "-c", code, str(PACK)]),
+            ("direct-helper", [*python, str(HELPER), str(self.path), "--root", str(self.root)]),
+        )
+        for mode, command in commands:
+            with self.subTest(mode=mode):
+                result = subprocess.run(command, cwd=self.root, env=env, capture_output=True,
+                                        text=True, encoding="utf-8", timeout=15)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertFalse(sentinel.exists(), "项目的同名 lib 包被错误执行")
+                if mode == "package":
+                    self.assertEqual(str(PACK / "lib/project/project_discovery.py"), result.stdout.strip())
+                else:
+                    self.assertEqual(digest, json.loads(result.stdout)["sha256"])
 
     def test_chinese_crlf_and_long_lines_reassemble_exact_original_bytes(self) -> None:
         # 同时覆盖中文、四字节字符、CRLF、独立 CR 与跨越多页的单行。
@@ -203,7 +234,7 @@ class ContextReadTest(unittest.TestCase):
         def frozen_cli(path, *args, selected_env=env):
             # 真正执行已导入的固定核心 helper；每个独立进程显式携带同一 pin。
             return subprocess.run([sys.executable, "-B", "-X", "utf8",
-                                   str(old.root / "lib/context_read.py"), str(path),
+                                   str(old.root / "lib/documents/context_read.py"), str(path),
                                    "--task-pack", str(task_pack), "--root", str(self.root), *args],
                                   cwd=self.root, env=selected_env, capture_output=True, text=True,
                                   encoding="utf-8", timeout=15, check=False)

@@ -3,6 +3,13 @@
 
 from __future__ import annotations
 
+# 直接脚本只信任自身物理位置确定的核心根，避免异 cwd 或 PYTHONPATH 中的
+# 同名模块劫持内部依赖；正常包导入沿用调用方已选择的固定核心。
+if not __package__:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
 import re
 import hashlib
 import os
@@ -15,15 +22,15 @@ sys.dont_write_bytecode = True
 
 try:
     from .standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
-    from .business_confirmation_policy import read_instruction_contract
-    from .validate_project_config import section_lines, strip_inline_comment, validate_docs
-    from .plan_documents import validate_plan_index
+    from lib.skills.business_confirmation_policy import read_instruction_contract
+    from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs
+    from lib.documents.plan_documents import validate_plan_index
     from .runtime_pins import read_builtin_source, record_binding
 except ImportError:
     from standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
-    from business_confirmation_policy import read_instruction_contract
-    from validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
-    from plan_documents import validate_plan_index
+    from lib.skills.business_confirmation_policy import read_instruction_contract
+    from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
+    from lib.documents.plan_documents import validate_plan_index
     from runtime_pins import read_builtin_source, record_binding
 
 

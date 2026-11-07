@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from lib.skill_contracts import expand_skill_contract, verification_scope_errors
+from lib.skills.skill_contracts import expand_skill_contract, verification_scope_errors
 from tests.skill_contract_helpers import read_contract
 from tests.test_unified_host_workflow import HOSTS, UnifiedHostFixture
 

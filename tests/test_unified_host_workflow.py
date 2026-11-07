@@ -17,9 +17,9 @@ from pathlib import Path
 from tests.skill_contract_helpers import read_bootstrap_contract, read_contract
 from unittest import mock
 
-import lib.project_discovery as project_discovery
+import lib.project.project_discovery as project_discovery
 
-from lib.project_discovery import (
+from lib.project.project_discovery import (
     DiscoveryError,
     DiscoveryOverrides,
     ModuleOverride,
@@ -28,7 +28,7 @@ from lib.project_discovery import (
     VerificationCommand,
     discover_project,
 )
-from lib.qa_review_policy import validate_pack_qa_review_policy
+from lib.skills.qa_review_policy import validate_pack_qa_review_policy
 from lib.validate_project_docs import validate as validate_project_docs
 
 
@@ -107,7 +107,7 @@ ACTIVE_UI_CONTRACT_SOURCES = (
     "setup_codex.sh",
     "setup_claude.sh",
     "setup_antigravity.sh",
-    "lib/render_antigravity_agent.py",
+    "lib/hosts/render_antigravity_agent.py",
 )
 
 # Task 2 owns only the canonical product and role layer. Keep this checkpoint separate
@@ -257,7 +257,7 @@ HOST_RENDERER_COMPOSITION_MATRIX = {
         'render_claude_role_body "${src}"',
         'template = Path(os.environ["TPL"]).read_text',
     ),
-    "lib/render_antigravity_agent.py": (
+    "lib/hosts/render_antigravity_agent.py": (
         "role_body = role_markdown_body(pack, role)",
         "role_body,",
         'Path("platforms/shared/AGENTS.product.tpl")',
@@ -277,7 +277,7 @@ TASK5_SHARED_SKILL_MATRIX = {
         "QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report",
     ),
     "platforms/shared/skills/xy-prototype-verify/SKILL.md": (
-        "bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_prototype_workspace.py",
+        "bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/documents/validate_prototype_workspace.py",
         "docs/standards/prototype/index.html",
         "docs/standards/prototype/prototype.css",
         "Page design and interaction contract",
@@ -396,7 +396,7 @@ TASK6_DETAILED_SKILL_MATRIX = {
         "expected output",
         "plan_state: draft",
         "requirements_fingerprint",
-        "must not edit files, dispatch Agents, update PROJECT/feature truth, or request approval",
+        "must not edit files, dispatch Agents, update accepted PROJECT/plans baselines, or request approval",
     ),
     "platforms/shared/skills/xy-workflow/SKILL.md": (
         "Build a DAG",
@@ -1033,7 +1033,7 @@ class ProjectProfilePreviewContractTest(UnifiedHostFixture, unittest.TestCase):
         EngineeringBaselineContractTest.add_observed_modules(project)
         command = [
             sys.executable,
-            str(pack / "lib/project_profile_cli.py"),
+            str(pack / "lib/project/project_profile_cli.py"),
             "preview",
             str(pack),
             str(project),
@@ -1073,7 +1073,7 @@ class ProjectProfilePreviewContractTest(UnifiedHostFixture, unittest.TestCase):
 
     def test_aggregate_check_consumes_the_shared_profile_cli(self) -> None:
         aggregate = (PACK / "setup_all.sh").read_text(encoding="utf-8")
-        self.assertIn("lib/project_profile_cli.py", aggregate)
+        self.assertIn("lib/project/project_profile_cli.py", aggregate)
         # 聚合验收消费脚手架需求，不再以基础 UI 角色的存在推断是否需要原型。
         self.assertRegex(aggregate, r"project_profile_cli\.py\" design-scaffold")
         self.assertNotRegex(aggregate, r"project_profile_cli\.py\" roles")
@@ -1086,7 +1086,7 @@ class ProjectProfilePreviewContractTest(UnifiedHostFixture, unittest.TestCase):
 
         def query() -> subprocess.CompletedProcess[str]:
             return subprocess.run(
-                [sys.executable, str(pack / "lib/project_profile_cli.py"),
+                [sys.executable, str(pack / "lib/project/project_profile_cli.py"),
                  "design-scaffold", str(pack), str(project)],
                 cwd=project, capture_output=True, text=True, check=False, timeout=20,
             )
@@ -1627,7 +1627,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
 
     def test_v2_execution_contract_rejects_retired_grade_and_missing_identity_policy(self) -> None:
         """入口检查必须拒绝旧执行格式，不能靠保留旧文案让2.0检查继续通过。"""
-        from lib.business_confirmation_policy import validate_v2_execution_texts
+        from lib.skills.business_confirmation_policy import validate_v2_execution_texts
 
         path = PACK / "product/WORKFLOW.md"
         current = path.read_text(encoding="utf-8")
@@ -2212,12 +2212,12 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
     def test_all_host_source_checkers_call_the_shared_review_policy_validator(self) -> None:
         for relative in (
             "setup_codex.sh",
-            "lib/validate_claude_artifacts.py",
+            "lib/hosts/validate_claude_artifacts.py",
             "lib/validate_antigravity_artifacts.py",
         ):
             body = self._text(relative)
             with self.subTest(source=relative):
-                self.assertIn("from qa_review_policy import validate_pack_qa_review_policy", body)
+                self.assertIn("from lib.skills.qa_review_policy import validate_pack_qa_review_policy", body)
                 self.assertIn("validate_pack_qa_review_policy(", body)
 
 
@@ -2479,7 +2479,7 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
         return subprocess.run(
             [
                 sys.executable,
-                str(PACK / "lib/validate_project_config.py"),
+                str(PACK / "lib/project/validate_project_config.py"),
                 str(self.config),
                 str(self.root),
                 str(PACK / "roles"),
@@ -2504,8 +2504,8 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
 
         code = (
             "import sys; "
-            f"sys.path.insert(0, {str(PACK / 'lib')!r}); "
-            "import validate_project_config as config; "
+            f"sys.path.insert(0, {str(PACK)!r}); "
+            "from lib.project import validate_project_config as config; "
             f"result=config.validate_with_profile({str(self.config)!r}, "
             f"{str(self.root)!r}, {str(PACK / 'roles')!r}); "
             "assert result.errors == (); "
@@ -2712,8 +2712,8 @@ class ProjectConfigDiscoveryContractTest(unittest.TestCase):
 
         code = (
             "import sys; "
-            f"sys.path.insert(0, {str(PACK / 'lib')!r}); "
-            "import validate_project_config as config; "
+            f"sys.path.insert(0, {str(PACK)!r}); "
+            "from lib.project import validate_project_config as config; "
             f"result=config.validate_with_profile({str(self.config)!r}, "
             f"{str(alias)!r}, {str(PACK / 'roles')!r}); "
             "assert result.profile is None; "
@@ -5559,7 +5559,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         staging = project / "antigravity-test-staging"
         (staging / "agents").mkdir(parents=True)
         shutil.copytree(pack / "platforms/shared/skills", staging / "skills")
-        renderer = pack / "lib/render_antigravity_agent.py"
+        renderer = pack / "lib/hosts/render_antigravity_agent.py"
         role_result = subprocess.run(
             [sys.executable, str(renderer), "--roles", str(pack)],
             cwd=project,
@@ -5607,7 +5607,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         return subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/apply_antigravity_setup.py"),
+                str(pack / "lib/hosts/apply_antigravity_setup.py"),
                 "apply",
                 str(pack),
                 str(project),
@@ -5621,7 +5621,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         )
 
     def test_english_skill_sources_keep_native_machine_identifiers(self) -> None:
-        from lib.shared_core_skills import parse_managed_skill
+        from lib.skills.shared_core_skills import parse_managed_skill
 
         # 发行模型指令使用英文；稳定名称和受管 frontmatter 仍由真实解析器验证。
         for name in ("xy-code-standards", "xy-ui-design"):
@@ -5993,7 +5993,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         preview = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/project_profile_cli.py"),
+                str(pack / "lib/project/project_profile_cli.py"),
                 "roles",
                 str(pack),
                 str(project),
@@ -7061,9 +7061,21 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         temporary, project, _ = self.make_docs_profile_fixture(ui_enabled=False)
         self.addCleanup(temporary.cleanup)
 
+        # 真实脚手架必须从其可信包根导入；项目可以合法拥有自己的普通 lib 包，
+        # 其中的 Python 绝不能因生成受控文档而被执行。
+        foreign = project / "lib"
+        foreign.mkdir()
+        sentinel = project / "foreign-lib-executed"
+        (foreign / "__init__.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(sentinel)!r}).write_text('unexpected project import')\n"
+            "raise RuntimeError('FOREIGN_PROJECT_LIB_EXECUTED')\n", encoding="utf-8",
+        )
+
         result = self.run_script(project, "scripts/scaffold_project_docs.sh")
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(sentinel.exists(), "脚手架执行了项目自己的 lib 包")
         files, directories = self.docs_inventory(project)
         self.assertEqual(
             {
@@ -7566,7 +7578,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 result = subprocess.run(
                     [
                         sys.executable,
-                        str(pack / "lib/business_confirmation_policy.py"),
+                        str(pack / "lib/skills/business_confirmation_policy.py"),
                         str(pack),
                         "all",
                     ],
@@ -7615,7 +7627,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 result = subprocess.run(
                     [
                         sys.executable,
-                        str(pack / "lib/business_confirmation_policy.py"),
+                        str(pack / "lib/skills/business_confirmation_policy.py"),
                         str(pack),
                         "all",
                     ],
@@ -7656,7 +7668,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/business_confirmation_policy.py"),
+                str(pack / "lib/skills/business_confirmation_policy.py"),
                 str(pack),
                 "all",
             ],
@@ -7690,7 +7702,7 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 result = subprocess.run(
                     [
                         sys.executable,
-                        str(pack / "lib/business_confirmation_policy.py"),
+                        str(pack / "lib/skills/business_confirmation_policy.py"),
                         str(pack),
                         "all",
                     ],
@@ -7737,7 +7749,7 @@ additional_business_confirmation:
         result = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/business_confirmation_policy.py"),
+                str(pack / "lib/skills/business_confirmation_policy.py"),
                 str(pack),
                 "all",
             ],
@@ -7761,7 +7773,7 @@ additional_business_confirmation:
             return subprocess.run(
                 [
                     sys.executable,
-                    str(pack / "lib/business_confirmation_policy.py"),
+                    str(pack / "lib/skills/business_confirmation_policy.py"),
                     str(pack),
                     "all",
                 ],
@@ -7810,7 +7822,7 @@ additional_business_confirmation:
         result = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/business_confirmation_policy.py"),
+                str(pack / "lib/skills/business_confirmation_policy.py"),
                 str(pack),
                 "all",
             ],
@@ -7850,7 +7862,7 @@ additional_business_confirmation:
         result = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/business_confirmation_policy.py"),
+                str(pack / "lib/skills/business_confirmation_policy.py"),
                 str(pack),
                 "all",
             ],
@@ -7887,7 +7899,7 @@ additional_business_confirmation:
                     result = subprocess.run(
                         [
                             sys.executable,
-                            str(pack / "lib/business_confirmation_policy.py"),
+                            str(pack / "lib/skills/business_confirmation_policy.py"),
                             str(pack),
                             "all",
                         ],
@@ -7936,7 +7948,7 @@ additional_business_confirmation:
                 result = subprocess.run(
                     [
                         sys.executable,
-                        str(pack / "lib/business_confirmation_policy.py"),
+                        str(pack / "lib/skills/business_confirmation_policy.py"),
                         str(pack),
                         "all",
                     ],
@@ -7969,7 +7981,7 @@ additional_business_confirmation:
         result = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/business_confirmation_policy.py"),
+                str(pack / "lib/skills/business_confirmation_policy.py"),
                 str(pack),
                 "all",
             ],
@@ -8025,7 +8037,7 @@ additional_business_confirmation:
                 result = subprocess.run(
                     [
                         sys.executable,
-                        str(pack / "lib/business_confirmation_policy.py"),
+                        str(pack / "lib/skills/business_confirmation_policy.py"),
                         str(pack),
                         "all",
                     ],
@@ -8050,7 +8062,7 @@ additional_business_confirmation:
         result = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/business_confirmation_policy.py"),
+                str(pack / "lib/skills/business_confirmation_policy.py"),
                 str(pack),
                 "all",
             ],
@@ -8084,7 +8096,7 @@ additional_business_confirmation:
         result = subprocess.run(
             [
                 sys.executable,
-                str(pack / "lib/business_confirmation_policy.py"),
+                str(pack / "lib/skills/business_confirmation_policy.py"),
                 str(pack),
                 "all",
             ],

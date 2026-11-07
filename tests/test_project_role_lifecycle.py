@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import subprocess
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from lib.project_discovery import discover_project
+from lib.project.project_discovery import discover_project
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -22,12 +24,14 @@ class ProjectRoleLifecycleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="workflow-backend-install-") as raw:
             project = Path(raw).resolve() / "Backend Only"
             project.mkdir()
+            state = project.parent / "state"
             manifest = project / "go.mod"
             source = "module example.test/backend\n\ngo 1.24\n"
             manifest.write_text(source, encoding="utf-8")
-            # install.sh 已包含安装后的聚合 --check；成功即获得完整验收证据，
-            # 此处不再追加一轮相同检查，避免测试本身重复安装和验证。
-            installed = subprocess.run(["bash", str(PACK / "install.sh"), str(project)],
+            # 中央安装返回前会真实消费固定 core 并核对受管资源；角色集合和业务
+            # 文件仍在下面逐项检查，不再调用项目中已取消的复制 setup 入口。
+            # 真实安装只写此用例唯一的中央状态，不读取或创建用户的默认内容库。
+            installed = subprocess.run(["bash", str(PACK / "install.sh"), str(project), "--state-dir", str(state)],
                                        capture_output=True, text=True, check=False, timeout=120)
             self.assertEqual(0, installed.returncode, (installed.stdout + installed.stderr)[-5000:])
             self.assertFalse((project / "docs/standards/prototype").exists())
@@ -62,10 +66,13 @@ class ProjectRoleLifecycleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="workflow-role-lifecycle-") as raw:
             project = Path(raw).resolve() / "Prototype First"
             project.mkdir()
-            installed = subprocess.run(["bash", str(PACK / "install.sh"), str(project)],
+            state = project.parent / "state"
+            env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state)}
+            installed = subprocess.run(["bash", str(PACK / "install.sh"), str(project), "--state-dir", str(state)],
                                        capture_output=True, text=True, check=False, timeout=120)
             self.assertEqual(0, installed.returncode, (installed.stdout + installed.stderr)[-5000:])
             runtime = project / ".agent-workflow"
+            binding = json.loads((runtime / "runtime.json").read_bytes())["runtime_binding"]
             config_before = (runtime / "project.yaml").read_bytes()
             docs_before = {p.relative_to(project): p.read_bytes()
                            for p in (project / "docs").rglob("*") if p.is_file()}
@@ -73,9 +80,10 @@ class ProjectRoleLifecycleTest(unittest.TestCase):
             def check(host):
                 return subprocess.run(
                     ["bash", str(runtime / "lib/python_runtime.sh"),
-                     str(runtime / "lib/project_profile_cli.py"), "check-roles", host,
+                     "-B", "-X", "utf8", str(runtime / "runtime.py"), "--binding", json.dumps(binding),
+                     "helper", "lib/project/project_profile_cli.py", "check-roles", host,
                      str(runtime), str(project)],
-                    capture_output=True, text=True, check=False, timeout=15,
+                    cwd=project, env=env, capture_output=True, text=True, check=False, timeout=15,
                 )
 
             for host, (directory, suffix) in ROLE_LOCATIONS.items():
@@ -103,8 +111,8 @@ class ProjectRoleLifecycleTest(unittest.TestCase):
             self.assertEqual(docs_before, {p.relative_to(project): p.read_bytes()
                              for p in (project / "docs").rglob("*") if p.is_file()})
 
-            # 使用既有聚合 setup 刷新：三宿主恢复同一角色集合，原文档与源码保留。
-            refreshed = subprocess.run(["bash", str(runtime / "setup_all.sh")],
+            # 复用真实中央 enable 刷新当前项目画像；薄项目不复制 setup 或 helper。
+            refreshed = subprocess.run(["bash", str(PACK / "install.sh"), str(project), "--state-dir", str(state)],
                                        capture_output=True, text=True, check=False, timeout=120)
             self.assertEqual(0, refreshed.returncode, refreshed.stdout + refreshed.stderr)
             for host, (directory, suffix) in ROLE_LOCATIONS.items():
@@ -113,8 +121,9 @@ class ProjectRoleLifecycleTest(unittest.TestCase):
                                      {p.stem for p in (project / directory).glob(f"*{suffix}")})
                     result = check(host)
                     self.assertEqual(0, result.returncode, result.stderr)
-            verified = subprocess.run(["bash", str(runtime / "setup_all.sh"), "--check"],
-                                      capture_output=True, text=True, check=False, timeout=120)
+            verified = subprocess.run(["bash", str(runtime / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                                       str(runtime / "runtime.py"), "--binding", json.dumps(binding), "check"],
+                                      cwd=project, env=env, capture_output=True, text=True, check=False, timeout=120)
             self.assertEqual(0, verified.returncode, verified.stdout + verified.stderr)
             self.assertEqual(source, (module / "package.json").read_text())
             self.assertEqual(config_before, (runtime / "project.yaml").read_bytes())

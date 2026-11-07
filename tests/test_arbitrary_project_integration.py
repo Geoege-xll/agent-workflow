@@ -77,7 +77,9 @@ class ArbitraryProjectIntegrationMatrixTest(unittest.TestCase):
             b"# Engineering\n\n- Domain: engineering\n\n## Required project constraints\n\n"
             b"- `[eng-java-001] [hard]` Java 21 is required for compilation and runtime.\n"
         )
-        qa_backend = {"xy-backend", "xy-qa"}
+        # 当前默认始终提供 UI/UX 与 QA 支持角色；是否生成原型仍由实际 UI 模块决定。
+        # 业务实现角色继续按每个真实清单精确断言，不能把支持角色误当作新 UI 功能。
+        qa_backend = {"xy-backend", "xy-uiux", "xy-qa"}
         return {
             "go-api": (
                 {"go.mod": "module example.test/api\n\ngo 1.25\n"},
@@ -216,7 +218,7 @@ class ArbitraryProjectIntegrationMatrixTest(unittest.TestCase):
                 preview = subprocess.run(
                     [
                         sys.executable,
-                        str(pack / "lib/project_profile_cli.py"),
+                        str(pack / "lib/project/project_profile_cli.py"),
                         "json",
                         str(pack),
                         str(project),
