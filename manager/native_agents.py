@@ -6,6 +6,7 @@ from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 import base64
 import re
+import stat
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -14,7 +15,7 @@ import uuid
 
 from lib import role_models, runtime_store
 from lib.central import role_preferences
-from lib.central.runtime_project import Node, Resources, Tree, absolute_directory, json_bytes, unique_json, read_at
+from lib.central.runtime_project import Node, Resources, Tree, absolute_directory, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS
 from lib.hosts import native_agents as native
 from lib.hosts.native_context import HostPaths, NativeContext
 from lib.platform_fs import directory_lock, os
@@ -456,13 +457,144 @@ def _check_compensation_history(journal: dict, root: Path, path: str) -> None:
                 raise ValueError("补偿保留节点已有后续编辑，已停止恢复")
 
 
-def _compensate_node(state: Path, journal: dict, root: Path, path: str, *, expected: Node, after: Node) -> Node:
-    """在同一父fd内以完整Node授权补偿，不把授权降为正文/权限二元值。
+def _read_compensation_pair(parent: int, stage: str, name: str, expected: Node) -> Node:
+    """只识别本journal登记的stage和目标形成的精确双链接中间态。
 
-    先持久登记stage与隔离位置，再准备文件、重核完整前像、隔离并核验inode。
-    隔离后才发现的未知节点只返还/保全，永不进入发布或删除分支；其随机隔离
-    路径和实际Node留在原journal中，冲突重入也不会将它当作本轮产物回收。
+    普通reader仍只接受nlink1。这里同时固定两个名字、同一个inode及完整读取
+    前后像，并要求nlink恰为2；第三个硬链接、替换stage、未知同内容inode都拒绝。
+    link/unlink会改变ctime与nlink，因此只在此封闭中间态用已登记inode、正文、
+    mode、size、mtime证明来源；这不是给任意原生文件放宽身份核验。
     """
+    before = os.stat(stage, dir_fd=parent, follow_symlinks=False)
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 2 or before.st_size > LIMIT
+            or identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != identity(before)):
+        raise ValueError("补偿发布双链接不属于唯一登记节点对")
+    descriptor = os.open(stage, READ_FLAGS, dir_fd=parent)
+    with os.fdopen(descriptor, "rb") as stream:
+        if identity(os.fstat(stream.fileno())) != identity(before):
+            raise ValueError("补偿双链接在打开期间变化")
+        body = stream.read(LIMIT + 1)
+        if len(body) > LIMIT or identity(os.fstat(stream.fileno())) != identity(before):
+            raise ValueError("补偿双链接在读取期间变化")
+    actual = Node("file", body, stat.S_IMODE(before.st_mode), identity(before))
+    if (not _moved_matches(actual, expected)
+            or any(identity(os.stat(path, dir_fd=parent, follow_symlinks=False)) != identity(before)
+                   for path in (stage, name))):
+        raise ValueError("补偿双链接身份或内容与登记stage不一致")
+    return actual
+
+
+def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
+    """首次执行和恢复共用的有界推进器；只沿本步骤已有身份向前推进。
+
+    所有临时名字先写journal，文件stage完整Node在隔离前落盘。隔离后未记
+    isolated时仍可由expected的原inode证明；发布后未记result时由staged证明。
+    已有证据的中断继续原步骤，不追加新补偿；没有身份证据的残留只能保全报错。
+    """
+    root, path = Path(step["root"]), step["path"]
+    expected, after = Node.from_value(step["expected"]), Node.from_value(step["after"])
+    stage = Path(step["stage"]).name if step["stage"] else None
+    held = Path(step["held"]).name if step["held"] else None
+    if step["returned"]:
+        raise ValueError("该补偿已保全未知inode，不能自动认领或清理")
+    with Tree(root) as tree:
+        root_info = os.fstat(tree.directories[""])
+        root_identity = journal["root_identities"].get(str(root))
+        if root_identity is not None and [root_info.st_dev, root_info.st_ino] != root_identity:
+            raise ValueError("补偿宿主物理根已变化")
+        parent, name = tree.parent(path)
+        if step["result"] is None:
+            if stage is not None and step["staged"] is None:
+                # 随机路径本身不证明归属：create成功却未持久Node的中断残留
+                # 不可认领。也不允许已经隔离后再临时创造另一份stage。
+                if (read_at(parent, stage).kind != "missing" or read_at(parent, name) != expected
+                        or held is not None and read_at(parent, held).kind != "missing"):
+                    raise ValueError("补偿stage缺少持久身份或前像已变化")
+                descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(after.payload)
+                    stream.flush()
+                    os.fchmod(stream.fileno(), after.mode)
+                    os.fsync(stream.fileno())
+                step["staged"] = read_at(parent, stage).value()
+                _save(state, journal)
+            if held is not None:
+                isolated = read_at(parent, held)
+                if isolated.kind == "missing":
+                    if step["isolated"] is not None or read_at(parent, name) != expected:
+                        raise ValueError("补偿隔离节点缺失或最终前像已变化")
+                    os.rename(name, held, src_dir_fd=parent, dst_dir_fd=parent)
+                    isolated = read_at(parent, held)
+                if step["isolated"] is None:
+                    # rename之后、保存isolated之前崩溃仍有expected的完整inode
+                    # 授权；仅允许rename应改变的ctime，不认领同正文的新inode。
+                    step["isolated"] = isolated.value()
+                    _save(state, journal)
+                elif isolated != Node.from_value(step["isolated"]):
+                    raise state_files.PreservedEdit(root / step["held"])
+                if not _moved_matches(isolated, expected):
+                    step["returned"] = True
+                    _save(state, journal)
+                    try:
+                        os.link(held, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                        os.fsync(parent)
+                    except FileExistsError:
+                        pass
+                    raise state_files.PreservedEdit(root / step["held"])
+            if stage is not None:
+                staged = Node.from_value(step["staged"])
+                try:
+                    stage_info = os.stat(stage, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    stage_info = None
+                if stage_info is not None and stage_info.st_nlink == 2:
+                    # exclusive link已成功、stage尚未移除：普通read_at应继续拒绝，
+                    # 仅此两个明确登记的路径可核实同inode后完成stage清理。
+                    _read_compensation_pair(parent, stage, name, staged)
+                    os.unlink(stage, dir_fd=parent)
+                elif stage_info is not None:
+                    if read_at(parent, stage) != staged or read_at(parent, name).kind != "missing":
+                        raise ValueError("补偿stage或排他发布目标已变化")
+                    os.link(stage, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                    _read_compensation_pair(parent, stage, name, staged)
+                    os.unlink(stage, dir_fd=parent)
+                # stage已经移除、result未持久：仍必须证明目标就是staged inode。
+                result = read_at(parent, name)
+                if not _moved_matches(result, staged):
+                    raise ValueError("补偿产物在发布窗口被替换")
+            else:
+                result = read_at(parent, name)
+                if result.kind != "missing":
+                    raise ValueError("补偿删除期间目标被外部重建")
+            os.fsync(parent)
+            step["result"] = result.value()
+            _save(state, journal)
+        result = Node.from_value(step["result"])
+        if read_at(parent, name) != result:
+            raise ValueError("补偿已发布结果出现未知替换或编辑")
+        if stage is not None and read_at(parent, stage).kind != "missing":
+            raise ValueError("已结算补偿出现未知stage残留")
+        if held is not None:
+            isolated = read_at(parent, held)
+            if isolated.kind != "missing":
+                if step["isolated"] is None or isolated != Node.from_value(step["isolated"]):
+                    raise state_files.PreservedEdit(root / step["held"])
+                os.unlink(held, dir_fd=parent)
+                os.fsync(parent)
+        return result
+
+
+def _resume_compensation(state: Path, journal: dict, root: Path, path: str) -> None:
+    # 同一路径可能先恢复原metadata再重建身份投影；较早已结算步骤不再拥有
+    # 当前目标，只有最新步骤能继续推进。旧保留节点仍由history逐个精确检查。
+    latest = next((step for step in reversed(journal.get("compensations", []))
+                   if step["root"] == str(root) and step["path"] == path), None)
+    if latest is not None:
+        _advance_compensation(state, journal, latest)
+
+
+def _compensate_node(state: Path, journal: dict, root: Path, path: str, *, expected: Node, after: Node) -> Node:
+    """先持久登记完整授权，再由与recover相同的推进器执行文件逆操作。"""
     token = journal["transaction_id"] + "-" + uuid.uuid4().hex
     parent_path = Path(path).parent
     stage = ".awf-native-restore-" + token if after.kind == "file" else None
@@ -471,66 +603,9 @@ def _compensate_node(state: Path, journal: dict, root: Path, path: str, *, expec
             "stage": str(parent_path / stage) if stage else None, "staged": None,
             "held": str(parent_path / held) if held else None, "isolated": None,
             "result": None, "returned": False}
-    with Tree(root) as tree:
-        root_info = os.fstat(tree.directories[""])
-        root_identity = journal["root_identities"].get(str(root))
-        if root_identity is not None and [root_info.st_dev, root_info.st_ino] != root_identity:
-            raise ValueError("补偿宿主物理根已变化")
-        parent, name = tree.parent(path)
-        if read_at(parent, name) != expected:
-            raise ValueError("补偿节点在打开父目录后变化")
-        journal.setdefault("compensations", []).append(step)
-        _save(state, journal)
-        if stage is not None:
-            descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(after.payload)
-                stream.flush()
-                os.fchmod(stream.fileno(), after.mode)
-                os.fsync(stream.fileno())
-            step["staged"] = read_at(parent, stage).value()
-            _save(state, journal)
-        if read_at(parent, name) != expected:
-            raise ValueError("补偿节点在最终隔离前变化")
-        if held is not None:
-            os.rename(name, held, src_dir_fd=parent, dst_dir_fd=parent)
-            isolated = read_at(parent, held)
-            step["isolated"] = isolated.value()
-            _save(state, journal)
-            if not _moved_matches(isolated, expected):
-                # 排他返还不覆盖隔离后新建的目标。未知inode的隔离别名永久保留，
-                # 即使返还后用户又重建目标，其旧fd后续保存仍有journal路径可找。
-                # 此冲突路径可能暂有两个硬链接；普通受管reader继续拒绝它，不能
-                # 通过放宽单链接合同将未知文件重新标为已管理。
-                step["returned"] = True
-                _save(state, journal)
-                try:
-                    os.link(held, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-                    os.fsync(parent)
-                except FileExistsError:
-                    pass
-                raise state_files.PreservedEdit(root / step["held"])
-        if stage is not None:
-            os.link(stage, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-            os.unlink(stage, dir_fd=parent)
-            result = read_at(parent, name)
-            if not _moved_matches(result, Node.from_value(step["staged"])):
-                raise ValueError("补偿产物在发布窗口被替换")
-        else:
-            result = read_at(parent, name)
-            if result.kind != "missing":
-                raise ValueError("补偿删除期间目标被外部重建")
-        os.fsync(parent)
-        step["result"] = result.value()
-        _save(state, journal)
-        if held is not None:
-            # 删除的只有已隔离并再次核实的本轮产物；逻辑目标此后出现的新inode
-            # 不会被unlink触及。旧forward retained资料始终由_check_retained保全。
-            if read_at(parent, held) != Node.from_value(step["isolated"]):
-                raise state_files.PreservedEdit(root / step["held"])
-            os.unlink(held, dir_fd=parent)
-            os.fsync(parent)
-        return result
+    journal.setdefault("compensations", []).append(step)
+    _save(state, journal)
+    return _advance_compensation(state, journal, step)
 
 
 def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
@@ -555,6 +630,8 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
         for row in reversed(journal["writes"]):
             try:
                 root, path = Path(row["root"]), row["path"]
+                _check_retained(row, allow_missing=row.get("restored") is not None)
+                _resume_compensation(state, journal, root, path)
                 _check_compensation_history(journal, root, path)
                 current = native.read_node(root, path)
                 before = Node.from_value(row["before"])
@@ -600,6 +677,7 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
                 record_path = native.record_relative(root)
                 active_root, active_path = state, record_path
                 try:
+                    _resume_compensation(state, journal, state, record_path)
                     _check_compensation_history(journal, state, record_path)
                     current_record = native.read_node(state, record_path)
                     authorized = _compensation_result(journal, state, record_path)
@@ -624,6 +702,7 @@ def compensate_global(recovery_ref, *, context: NativeContext) -> dict:
                     payload = json_bytes(record)
                     for owner_root, owner_path in ((root, native.OWNER), (state, record_path)):
                         active_root, active_path = owner_root, owner_path
+                        _resume_compensation(state, journal, owner_root, owner_path)
                         _check_compensation_history(journal, owner_root, owner_path)
                         node = native.read_node(owner_root, owner_path)
                         authorized = _compensation_result(journal, owner_root, owner_path)
@@ -871,45 +950,44 @@ def admission_issues(state: Path, *, hosts: tuple) -> list[dict]:
         return []
     from . import runtime_policy as policy
     from .central_runtime import _validate_journal
+    authority_node = None
+    authority_path = policy.CURRENT
     try:
         current_node, current = policy.current_snapshot(state)
-        authority_node = native.read_node(state, policy.ACTIVATION)
-        if authority_node.kind != "file" or authority_node.mode != 0o600:
-            return [{"code": "native_authority_missing", "path": policy.ACTIVATION,
-                     "reason": "稀疏角色缺少当前generation对应的原生根授权记录"}]
-        authority = _validate_journal(unique_json(authority_node.payload))
-        active_reader = getattr(policy, "active_activation", None)
-        active = active_reader(state) if active_reader is not None else None
+        active = policy.active_activation(state)
         if active is not None:
+            # 只在真实ContextVar激活栈内读取本批过程日志。ref/receipt仍须互相
+            # 精确匹配；不能通过构造current或外部环境模拟尚未发布的原生授权。
+            authority_path = policy.ACTIVATION
+            authority_node = native.read_node(state, policy.ACTIVATION)
+            if authority_node.kind != "file" or authority_node.mode != 0o600:
+                raise ValueError("当前活动激活日志缺失或权限无效")
+            authority = _validate_journal(unique_json(authority_node.payload))
             if active != authority or active.get("native_receipt") is None:
                 raise ValueError("当前活动激活尚未完成原生发布")
-        elif (current is None or authority["phase"] != "applied" or authority["id"] != current["generation"]
-              or authority["runtime_binding"] != current["runtime_binding"]):
-            raise ValueError("原生根授权不属于当前已结算generation")
-        reference = authority["native_ref"]
-        keys = {"schema_version", "state", "transaction_id", "targets"}
-        if (not isinstance(reference, dict) or set(reference) not in (keys, keys | {"witness"})
-                or type(reference["schema_version"]) is not int or reference["schema_version"] != 1
-                or reference["state"] != str(state) or not isinstance(reference["targets"], list)):
-            raise ValueError("当前原生根引用无效")
-        _journal_relative(reference["transaction_id"])
-        roots = {}
-        for target in reference["targets"]:
-            if (not isinstance(target, dict) or set(target) != {"host", "native_root"}
-                    or target["host"] not in role_models.HOSTS or target["host"] in roots
-                    or not isinstance(target["native_root"], str)):
-                raise ValueError("同宿主原生根权威不唯一")
-            root = Path(target["native_root"])
-            if not root.is_absolute() or ".." in root.parts or str(root) != target["native_root"] or root in roots.values():
-                raise ValueError("原生根授权路径不规范或混用")
-            roots[target["host"]] = root
-        receipt = authority["native_receipt"]
-        if (not isinstance(receipt, dict) or receipt.get("recovery_ref") != reference
-                or receipt.get("transaction_id") != reference["transaction_id"]
-                or receipt.get("status") not in {"applied", "noop"}):
-            raise ValueError("当前激活缺少对应原生结算收据")
+            reference = authority["native_ref"]
+            keys = {"schema_version", "state", "transaction_id", "targets"}
+            if (not isinstance(reference, dict) or set(reference) not in (keys, keys | {"witness"})
+                    or type(reference["schema_version"]) is not int or reference["schema_version"] != 1
+                    or reference["state"] != str(state) or not isinstance(reference["targets"], list)):
+                raise ValueError("当前原生根引用无效")
+            _journal_relative(reference["transaction_id"])
+            receipt = authority["native_receipt"]
+            if (not isinstance(receipt, dict) or receipt.get("recovery_ref") != reference
+                    or receipt.get("transaction_id") != reference["transaction_id"]
+                    or receipt.get("status") not in {"applied", "noop"}):
+                raise ValueError("当前激活缺少对应原生结算收据")
+            targets = policy.validate_native_roots(reference["targets"])
+        else:
+            # 已结算准入只消费current同一次条件发布固定的roots。失败激活会
+            # 替换最后一份过程日志，不能因此丢掉旧current的有效授权；显式空
+            # roots也绝不回退历史日志、root索引、HOME或任何环境变量猜测。
+            if current is None:
+                raise ValueError("缺少已发布的当前原生根授权")
+            targets = policy.validate_native_roots(current["native_roots"])
+        roots = {target["host"]: Path(target["native_root"]) for target in targets}
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
-        return [{"code": "native_authority_invalid", "path": policy.ACTIVATION,
+        return [{"code": "native_authority_invalid", "path": authority_path,
                  "reason": "不能确认唯一当前有效的原生宿主根，已拒绝稀疏准入"}]
     try:
         preference_before, defaults = _projected_preferences(state)
@@ -920,7 +998,7 @@ def admission_issues(state: Path, *, hosts: tuple) -> list[dict]:
     for host in hosts:
         root = roots.get(host)
         if root is None:
-            issues.append({"code": "native_authority_missing", "path": policy.ACTIVATION,
+            issues.append({"code": "native_authority_missing", "path": authority_path,
                            "reason": host + "缺少当前有效的唯一原生根授权"})
             continue
         try:
@@ -946,7 +1024,8 @@ def admission_issues(state: Path, *, hosts: tuple) -> list[dict]:
                            "reason": "原生归属、七角色文件或物理根无效"})
     # 查询不持创建型锁；在同一组逻辑来源与精确节点前后稳定时才发布健康结论。
     try:
-        if (policy.current_snapshot(state)[0] != current_node or native.read_node(state, policy.ACTIVATION) != authority_node
+        if (policy.current_snapshot(state)[0] != current_node
+                or authority_node is not None and native.read_node(state, policy.ACTIVATION) != authority_node
                 or role_preferences.snapshot(state)[0] != preference_before):
             raise ValueError("准入来源读取期间变化")
         for before in observations:
