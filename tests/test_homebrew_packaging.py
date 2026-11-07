@@ -166,12 +166,14 @@ class HomebrewLauncherTest(unittest.TestCase):
         else:
             self.temp = tempfile.TemporaryDirectory(prefix="awf-cellar-test-")
             self.root = Path(self.temp.name).resolve()
-        archive, _, self.formula = release.build(PACK, "2.1.0", self.root / "dist")
+        # 真实源码消费者跟随唯一版本源，旧版本的纯打包夹具仍独立保留。
+        self.version = (PACK / "product/VERSION").read_text(encoding="ascii").strip()
+        archive, _, self.formula = release.build(PACK, self.version, self.root / "dist")
         extracted = self.root / "extracted"
         extracted.mkdir()
         with tarfile.open(archive) as stream:
             stream.extractall(extracted, filter="data")
-        self.prefix = self.root / "Homebrew Cellar/awf-cli/2.1.0"
+        self.prefix = self.root / "Homebrew Cellar/awf-cli" / self.version
         self.python_bin = self.root / "Python opt/bin"
         self.python_bin.mkdir(parents=True)
         self.log = self.root / "python-calls"
@@ -184,7 +186,7 @@ class HomebrewLauncherTest(unittest.TestCase):
         harness = self.root / "formula_harness.rb"
         harness.write_text(FORMULA_HARNESS)
         result = subprocess.run(
-            [shutil.which("ruby"), str(harness), str(self.formula), str(extracted / "agent-workflow-2.1.0"), str(self.prefix), str(self.python_bin)],
+            [shutil.which("ruby"), str(harness), str(self.formula), str(extracted / f"agent-workflow-{self.version}"), str(self.prefix), str(self.python_bin)],
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -209,7 +211,7 @@ class HomebrewLauncherTest(unittest.TestCase):
         # 真实归档→Formula#install→短链接入口；不使用 README 或 Cellar 目录名推断版本。
         result=self.run_cli("--state-dir","state","--version")
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(result.stdout.splitlines(),["awf-cli 2.1.0",f"中央源根：{self.prefix / 'libexec'}"])
+        self.assertEqual(result.stdout.splitlines(),[f"awf-cli {self.version}",f"中央源根：{self.prefix / 'libexec'}"])
         self.assertFalse((self.caller / "state").exists())
         help_result = self.run_cli("--help")
         self.assertEqual(0, help_result.returncode, help_result.stderr)

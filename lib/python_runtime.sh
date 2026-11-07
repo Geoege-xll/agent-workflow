@@ -21,6 +21,8 @@ workflow_select_python() {
       printf '%s\n' '[ERROR] Explicit AGENT_WORKFLOW_BOOTSTRAP cannot be empty.' >&2
       return 2
     fi
+    # 这里只读取已经配置的持久解释器记录；源码与项目入口均不下载或部署 Python。
+    # 保留显式环境变量优先级，记录损坏时拒绝运行，不能静默选择另一套环境。
     workflow_record="${AGENT_WORKFLOW_PROJECT_RUNTIME}/lib/windows-runtime.paths"
     if [[ -f "${workflow_record}" && ! -L "${workflow_record}" && ( "${AGENT_WORKFLOW_PYTHON+x}" != x || "${AGENT_WORKFLOW_BOOTSTRAP+x}" != x ) ]]; then
       {
@@ -33,11 +35,11 @@ workflow_select_python() {
           fi
         }
       } < "${workflow_record}" || {
-        printf '%s\n' '[ERROR] Invalid persistent Windows runtime record; reinstall with npx init.' >&2
+        printf '%s\n' '[ERROR] Invalid persistent Windows runtime record; configure an existing local Python and bootstrap.' >&2
         return 2
       }
       if [[ -z "${workflow_saved_python}" || -z "${workflow_saved_bootstrap}" ]]; then
-        printf '%s\n' '[ERROR] Invalid persistent Windows runtime record; reinstall with npx init.' >&2
+        printf '%s\n' '[ERROR] Invalid persistent Windows runtime record; configure an existing local Python and bootstrap.' >&2
         return 2
       fi
       if [[ "${AGENT_WORKFLOW_PYTHON+x}" != x ]]; then
@@ -89,7 +91,7 @@ workflow_python() {
     workflow_bootstrap="${AGENT_WORKFLOW_BOOTSTRAP:-$(dirname "${AGENT_WORKFLOW_PYTHON}")/windows_bootstrap.py}"
     workflow_bootstrap=$(cygpath -am -- "${workflow_bootstrap}") || return 2
     if [[ ! -f "${workflow_bootstrap}" || -L "${workflow_bootstrap}" ]]; then
-      printf '%s\n' '[ERROR] Stable Windows bootstrap is missing; run npx init with its bundled runtime.' >&2
+      printf '%s\n' '[ERROR] Stable Windows bootstrap is missing; set AGENT_WORKFLOW_BOOTSTRAP to an existing local windows_bootstrap.py.' >&2
       return 2
     fi
     local -a workflow_bridge=(--msys)

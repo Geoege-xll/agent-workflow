@@ -1,7 +1,8 @@
-"""Trusted entry for isolated embedded CPython; never add the caller cwd.
+"""既有本地 Python 的可信隔离启动入口。
 
-The runtime copy lives next to python.exe outside the npx cache. Only the
-explicit script/package directory is added, matching normal Python CLI imports.
+只把显式脚本或包目录加入导入路径，不加入调用者工作目录；这保留正常
+Python CLI 的导入语义，并避免业务目录及临时缓存注入同名模块。
+本模块不提供解释器下载、部署或安装渠道。
 """
 
 from __future__ import annotations

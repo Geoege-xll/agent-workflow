@@ -1862,7 +1862,8 @@ class CliLauncherTest(TemporaryProject):
         result=subprocess.run([str(directory/'awf-cli'),'--state-dir',str(self.state),'--version'],
                               cwd=self.root,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(result.stdout.splitlines(),['awf-cli 2.1.0（源码未打包）',f'中央源根：{PACK}'])
+        version=(PACK/'product/VERSION').read_text(encoding='ascii').strip()
+        self.assertEqual(result.stdout.splitlines(),[f'awf-cli {version}（源码未打包）',f'中央源根：{PACK}'])
         self.assertFalse((PACK/'manager/release.json').exists());self.assertFalse(self.state.exists())
 
     def test_cdpath_does_not_redirect_relative_links_or_pollute_source_directory(self):

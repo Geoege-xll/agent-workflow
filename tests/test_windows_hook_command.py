@@ -272,13 +272,20 @@ class WindowsHookOwnershipTest(unittest.TestCase):
             installer.merge_inline(tampered, PACK, PROJECT, "off")
 
     def test_antigravity_disabled_owner_entry_and_user_hooks_are_preserved(self):
-        group = self.group("antigravity", "PreInvocation")
+        # 当前只管理 SessionStart；用户禁用开关和无关 Hook 在同一现行合同下保留。
+        # PreInvocation 是已拒绝的历史事件，不能靠成功夹具隐式恢复旧版转换。
+        group = self.group("antigravity", "SessionStart")
         user = {"user-hook": {"enabled": False, "Stop": [{"command": "echo keep"}]},
-                installer.OWNER: {"enabled": False, "PreInvocation": [group]}}
+                installer.OWNER: {"enabled": False, "SessionStart": [group]}}
         with patch.object(installer.os, "name", "nt"), \
                 patch.object(codec, "runtime_paths", return_value=(PYTHON, BOOTSTRAP)):
             merged = installer.merge_json(user, PACK, PROJECT, "antigravity", "assist")
             removed = installer.merge_json(merged, PACK, PROJECT, "antigravity", "off")
+            legacy = copy.deepcopy(user)
+            legacy[installer.OWNER] = {"enabled": False, "PreInvocation": [
+                self.group("antigravity", "PreInvocation")]}
+            with self.assertRaisesRegex(ValueError, "collision"):
+                installer.merge_json(legacy, PACK, PROJECT, "antigravity", "assist")
         self.assertFalse(merged[installer.OWNER]["enabled"])
         self.assertIn("SessionStart", merged[installer.OWNER])
         self.assertNotIn("PreInvocation", merged[installer.OWNER])

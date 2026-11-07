@@ -17,10 +17,6 @@ else:
     from platform_fs import os
     from install_process import ACTIVE_RUNNER, SetupRunner, SetupRunError
 
-# 离线 NPM 构建器静态读取此字面量白名单；它描述源包载荷，不代表项目整包复制。
-PACK_FILES = ("setup_all.sh", "setup_claude.sh", "setup_codex.sh", "setup_antigravity.sh", "project.yaml")
-PACK_DIRECTORIES = ("product", "roles", "platforms", "lib", "scripts", "templates", "manager")
-
 class InstallError(Exception):
     """中央安装前置条件或目标边界校验失败。"""
 
@@ -121,7 +117,7 @@ def main() -> int:
 
 def install_central(project: Path, source_root: Path, *, state: Path | None = None,
                     timeout: float | None = None) -> dict:
-    """源码/Homebrew/NPM 共用默认入口；不再默认复制完整核心到项目。
+    """源码与 Homebrew 共用中央入口；不默认复制完整核心到项目。
 
     Windows 缺少安全软链后端时在导入、状态创建及项目写入之前明确拒绝；
     旧自包含残留只由当前预览拒绝，安装器不复制整包或执行历史转换。
@@ -130,8 +126,8 @@ def install_central(project: Path, source_root: Path, *, state: Path | None = No
         from .platform_fs import require_skill_symlinks
     else:
         from platform_fs import require_skill_symlinks
-    # 此能力拒绝早于导入中央 manager/新增模块；旧 Windows 打包入口也必须给
-    # 出明确平台边界，不能因不含 manager 而先抛缺模块错误，更不能回退复制。
+    # 平台能力拒绝早于中央模块导入和任何资源创建，避免缺少安全软链能力时
+    # 留下半安装状态；不能回退到复制 Skill 或完整核心来绕过边界。
     require_skill_symlinks()
     _central_imports()
     from lib.install_process import ACTIVE_RUNNER as central_runner

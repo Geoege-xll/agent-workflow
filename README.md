@@ -1,31 +1,19 @@
 # Agent Workflow Pack 2.1
 
-面向项目的原生多Agent工作流，当前源码版本为 **2.1.0**。
-GitHub 发行版本与资产见 [Releases](https://github.com/Geoege-xll/agent-workflow/releases)；Homebrew 以公共 Tap 声明为准，npm 尚未发布。
+面向项目的原生多Agent工作流，当前源码版本为 **2.1.1**。
+GitHub 发行版本与资产见 [Releases](https://github.com/Geoege-xll/agent-workflow/releases)；Homebrew 以公共 Tap 声明为准；2.1.1 当前为本地稳定候选，尚未公开发布。
 版本唯一来源为 `product/VERSION`；使用 `awf-cli --version` 核对实际中央程序的版本与来源。
 2.1 采用普通中央安装，不提供旧版本兼容升级。仅Light／Full及schema_version:2，
 不兼容旧任务／交接格式；用户文件、已有成果和必要证据保护继续有效。
 Keep this installer folder anywhere and select a project when launching it — works with
 **Claude Code / Codex / Antigravity**.
 
-## Windows 项目安装（npx，本地准备版）
+## Windows 支持边界
 
-Windows 方案只做**在项目目录执行 `npx … init` 安装工作流**，不提供 TUI、WinGet 或全局管理器。
-前置条件为 Windows 10/11 x64、本地 NTFS、Node.js LTS/npm 和完整 Git for Windows；不依赖 WSL，
-不需要预装 Python，不修改 PATH、profile、ExecutionPolicy 或 Git 全局配置。
-
-npm 包目前 `private: true`，**尚未发布，尚未通过原生 Windows 安全、恢复与端到端验收**。
-源码、打包与 npx 项目入口共用中央运行时服务；当前 Windows 安全文件系统后端尚不支持
-受管 Skill 的锚定软链发布，因此会在创建项目资源或中央状态前明确拒绝，不会自动退回完整复制。
-下面只是未来完成验收并获准发布后的目标用法，不是现在可用的远程安装命令：
-
-```powershell
-cd C:\work\my-project
-npx @geoege-xll/agent-workflow init
-```
-
-本地 tgz 构建、离线 `npx.cmd --offline --ignore-scripts` 验证、持久 Python 和当前限制见
-[Windows 说明](docs/windows.md)。本地验证仅使用独立临时项目，不同步真实项目。
+本项目未发布的 npm／npx Windows 安装渠道已移除，不再提供对应包、构建器或安装命令。
+当前项目安装通过 macOS/Linux 源码或 Homebrew 入口使用中央运行时。
+Windows 安全文件系统后端仍不支持受管 Skill 的锚定软链发布，安装会在创建项目资源或
+中央状态前明确拒绝。保留的跨平台启动器与安全合同不代表 Windows 安装已经验收通过。
 
 ## 终端管理工具（macOS/Linux）
 
@@ -345,9 +333,9 @@ The pack requires **Python 3.11 or newer**, including its standard-library `toml
 packages need to be installed. Setup selects a supported `python3` or versioned Python command
 already on PATH before writing project files. If needed, set `AGENT_WORKFLOW_PYTHON` to the desired
 executable path. An invalid explicit selection fails instead of silently changing environments.
-The macOS/Linux source installer never installs a runtime. The separate Windows npx preparation
-bundles Python and deploys it privately on first init; it does not change global shell, host, or
-Python configuration. See the [Windows limitations and verification status](docs/windows.md).
+The source installer never installs or downloads a runtime and does not change global shell, host,
+or Python configuration. The shared launchers only select an existing interpreter; Windows project
+installation remains unavailable under the platform boundary described above.
 
 For direct workflow CLI calls and workflow-owned temporary/inline Python helpers, use the same
 selector rather than assuming the system `python3` meets the requirement. Workflow calls use

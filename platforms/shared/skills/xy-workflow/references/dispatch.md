@@ -148,12 +148,11 @@ provide a compatibility execution or upgrade branch for old self-contained insta
   to rediscover a working interpreter. Diagnose the script only when evidence points to it. Missing
   support is a reported environment limitation, not permission to install Python or alter global PATH.
 
-The local Windows npx 2.1 preparation shares the central installation service. Its current filesystem
+The unpublished npm/npx Windows installation channel has been removed. The Windows filesystem
 backend rejects managed Skill symlink publication before project resources or central state are created;
-it has no accepted installed-project helper path. Do not revive old self-contained Node/helper examples
-or copy a runtime into the project to bypass that boundary. Human-facing local packaging and native
-verification notes are in the standalone source repository's `docs/windows.md`; that document is not
-shipped in the pinned core. Simulated checks do not prove Windows support.
+Windows project installation has no accepted installed-project helper path. Do not copy a runtime or
+Skills into the project to bypass that boundary. Retained cross-platform launchers and simulated checks
+do not prove Windows installation support.
 
 These are command-execution boundaries within existing steps, not additional workflow gates.
 

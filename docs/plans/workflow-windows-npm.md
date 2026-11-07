@@ -31,11 +31,15 @@ non_ui，不改TUI界面或读取原型／设计规则。生产交给fresh／han
 
 ## 当前进展与恢复入口
 
-当前唯一执行请求为retire-npm-channel-2.1.1-20261107，scratch由现有task_graph_cli分配，实施根npm-retirement。旧windows-central-npm-2.1.1-20261107目标已取消，作者已停止并退役，图保留实际失败而非BUILD_VERIFIED／QA PASS。旧Windows源码中央单项曾通过普通用户安装／固定pin/helper／重复安装，但npx产品init与真实Hook没有进入成功验收。
+当前唯一执行请求为retire-npm-channel-2.1.1-20261107，scratch由现有task_graph_cli分配，实施根npm-retirement、集成根retirement-integration。fresh后端单元已完成生产清理并交接BUILD_VERIFIED：12条渠道专用路径已移除，Node6个通用合同逐字节迁入tests，bootstrap3个与原生文件系统11个方法AST保全；通用启动器和安全边界保留，当前源码为2.1.1。唯一handoff为retirement-handoff.json，完整命令和原始输出在retirement-implementation.log。
+
+必要实际消费者已经通过：Node6例、共享安全40个有效节点、macOS交互中央安装／固定pin helper／源码版本3例、Homebrew真实归档到Formula安装后版本1例；共享组首次误写类名及过时PreInvocation夹具的原始失败保留，只补跑缺失和修复的7个节点，未修改生产拒绝旧事件的语义。Windows原生11例保留但本轮未执行，不作为成功证据。PM已读相关源／差量与完整执行结果，并以现有fingerprints核对33项实际输入匹配；下一步是固定检查点、实际集成消费者和唯一独立收尾QA。
+
+旧windows-central-npm-2.1.1-20261107目标已取消，作者已停止并退役，旧图保留实际失败而非BUILD_VERIFIED／QA PASS。旧Windows源码中央单项曾通过普通用户安装／固定pin/helper／重复安装，但npx产品init与真实Hook没有进入成功验收。
 
 旧最后诊断run42344893409／60c522b仍失败：系统PS5.1查到PS7 Security模块在前，固定系统模块可以导入，原只读query继续失败；不再沿该机制修复。旧完整windows-capabilities.log保留1112233字节，SHA759e9cb618e16f0b8fdcbc731fc1c09941d40ae34d4dccbc6f231093a435e648；其余原生日志、作者日志、handoff和执行源码快照都留在原请求scratch，不复制成新报告。新请求仅保留本轮必要日志与交接。
 
-source-pack缺docs/PROJECT.md与docs/STANDARDS.md，指纹null；适用29工程规则来自现有内置源，不造空索引、不假报全仓文档校验成功。memory.project_id仍模板，provider缺严格项目过滤和provenance，不recall/save。下一步是按当前完整任务包实施渠道清理、必要消费者验证、集成及唯一独立收尾QA。
+source-pack缺docs/PROJECT.md与docs/STANDARDS.md，指纹null；适用29工程规则来自现有内置源，不造空索引、不假报全仓文档校验成功。memory.project_id仍模板，provider缺严格项目过滤和provenance，不recall/save。原仓五处修改保持，当前还未交付main、未通过独立QA、未发布2.1.1。
 
 ## 验收结果与当前已交付行为
 
@@ -44,5 +48,5 @@ source-pack缺docs/PROJECT.md与docs/STANDARDS.md，指纹null；适用29工程�
 ## 批准依据与必要证据
 
 - 批准依据: 用户明确“清理干净npm”，并最终选择“彻底移除 npm/npx Windows 安装渠道，审计只用于收尾”；该指令替换旧Windows/npm实施目标，未授权恢复旧链开发。
-- 验收证据: 当前仅已保全稳定基线、旧失败与取消事实；清理实施、必要真实消费者和独立QA待完成，不以文件删除、计划存在或状态标记替代验收。
+- 验收证据: 清理实现、通用测试迁移及必要真实消费者已交接，完整日志和当前输入已核；集成及唯一独立收尾QA待完成，不以文件删除、计划存在或BUILD_VERIFIED替代整体验收。
 
