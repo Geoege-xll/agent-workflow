@@ -42,6 +42,11 @@ ROLE_PATHS = {"codex": (".codex/agents", ".toml"),
               "antigravity": (".agents/agents", ".md")}
 SKILL_NAME = re.compile(r"(?:xy-[a-z0-9]+(?:-[a-z0-9]+)*|grill-me)\Z")
 LIMIT = 4 * 1024 * 1024
+# 容量证明只对尚未生成的原生stat身份使用占位上界，不作为已验证Node。
+# 支持后端的64位stat标量，以及64位秒数转纳秒（乘10**9）的有符号十进制
+# 长度，均被以下全9整数覆盖；真实已有身份超过此界时预算失败关闭。
+_STAT_DECIMAL_WIDTH = len(str(-((1 << 64) * 1_000_000_000)))
+CAPACITY_IDENTITY = (int("9" * _STAT_DECIMAL_WIDTH),) * 7
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
 
@@ -50,9 +55,18 @@ class ProjectRuntimeError(ValueError):
     """项目资源不合法、发生并发变化或跨越了受管边界。"""
 
 
-def json_bytes(value: object) -> bytes:
+def _size_budget(max_bytes: int) -> int:
+    # 显式参数只供可信内部封装预算使用，不从记录/CLI读取。普通调用仍严格4MiB；
+    # 单层base64封装及其封闭头必须落在两倍硬界内，不能把size参数变成无限读取。
+    if type(max_bytes) is not int or not 0 < max_bytes <= 2 * LIMIT:
+        raise ProjectRuntimeError("中央记录容量预算无效")
+    return max_bytes
+
+
+def json_bytes(value: object, *, max_bytes: int = LIMIT) -> bytes:
+    _size_budget(max_bytes)
     body = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
-    if len(body) > LIMIT:
+    if len(body) > max_bytes:
         raise ProjectRuntimeError("中央项目记录超过有界读取范围")
     return body
 
@@ -101,12 +115,13 @@ def identity(info) -> tuple:
             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def read_at(parent: int, name: str, *, allow_link: bool = False) -> Node:
+def read_at(parent: int, name: str, *, allow_link: bool = False, max_bytes: int = LIMIT) -> Node:
     """读取已锚定父目录中的节点；链接开关仅供精确受管叶或已登记恢复资料。
 
     对外普通项目读取仍由 Tree.read 约束路径，不能借本内部事务原语读取任意
     链接目标。链接只取 readlink 字节，从不打开它指向的文件。
     """
+    _size_budget(max_bytes)
     try:
         before = os.stat(name, dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError:
@@ -114,14 +129,16 @@ def read_at(parent: int, name: str, *, allow_link: bool = False) -> Node:
     mode = stat.S_IMODE(before.st_mode)
     if stat.S_ISLNK(before.st_mode) and allow_link:
         body = os.fsencode(os.readlink(name, dir_fd=parent))
-    elif stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size <= LIMIT:
+        if len(body) > max_bytes:
+            raise ProjectRuntimeError("链接节点超过容量预算")
+    elif stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size <= max_bytes:
         descriptor = os.open(name, READ_FLAGS, dir_fd=parent)
         with os.fdopen(descriptor, "rb") as stream:
             if identity(os.fstat(stream.fileno())) != identity(before):
                 raise ProjectRuntimeError("节点在打开时变化")
-            body = stream.read(LIMIT + 1)
+            body = stream.read(max_bytes + 1)
             after = os.fstat(stream.fileno())
-        if len(body) > LIMIT or identity(after) != identity(before):
+        if len(body) > max_bytes or identity(after) != identity(before):
             raise ProjectRuntimeError("节点在读取期间变化")
     else:
         raise ProjectRuntimeError("节点必须是有界单链接普通文件")
@@ -166,6 +183,25 @@ class Node:
         if self.kind == other.kind == "link":
             return self.payload == other.payload
         return (self.kind, self.payload, self.mode) == (other.kind, other.payload, other.mode)
+
+
+def capacity_node_value(node: Node) -> dict:
+    """仅返回容量计算的Node占位，禁止用于发布、归属收据或admission见证。
+
+    正文来自固定计划，base64长度因此可精确计算；未来inode/time和链接模式
+    取封闭字段上界。已有Node的ABI不变，未知身份宽度只使这次预算明确拒绝。
+    """
+    if (not isinstance(node, Node) or node.kind not in {"missing", "file", "link"}
+            or not isinstance(node.payload, bytes) or len(node.payload) > LIMIT
+            or type(node.mode) is not int or not 0 <= node.mode <= 0o7777
+            or len(node.identity) not in {0, 7}
+            or any(type(value) is not int or len(str(value)) > _STAT_DECIMAL_WIDTH for value in node.identity)):
+        raise ProjectRuntimeError("节点容量无法由固定计划证明")
+    if node.kind == "missing":
+        if node.payload or node.mode or node.identity:
+            raise ProjectRuntimeError("缺失节点容量前提无效")
+        return Node().value()
+    return Node(node.kind, node.payload, node.mode if node.kind == "file" else 0o7777, CAPACITY_IDENTITY).value()
 
 
 @contextmanager
@@ -271,12 +307,13 @@ class Tree:
         parent, _, name = relative.rpartition("/")
         return self.directory(parent, create=create, created=created), name
 
-    def read(self, relative: str, *, skill_link: bool = False) -> Node:
+    def read(self, relative: str, *, skill_link: bool = False, max_bytes: int = LIMIT) -> Node:
+        _size_budget(max_bytes)
         try:
             parent, name = self.parent(relative)
         except FileNotFoundError:
             return Node()
-        return read_at(parent, name, allow_link=bool(skill_link and skill_parts(relative)))
+        return read_at(parent, name, allow_link=bool(skill_link and skill_parts(relative)), max_bytes=max_bytes)
 
     def directory_facts(self, paths: list[str]) -> tuple:
         facts = {"": (*node_id(os.fstat(self.directories[""])), stat.S_IMODE(os.fstat(self.directories[""]).st_mode))}

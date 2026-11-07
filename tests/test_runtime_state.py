@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from lib.platform_fs import directory_lock
-from lib.central.runtime_project import Node, Tree, json_bytes, node_id
+from lib.central.runtime_project import LIMIT, Node, ProjectRuntimeError, Tree, json_bytes, node_id
 from manager import runtime_service as service
 
 
@@ -48,6 +48,126 @@ class RuntimeStateTest(unittest.TestCase):
         target.write_bytes(json_bytes(value))
         target.chmod(0o600)
         return relative
+
+    def large_control(self):
+        from manager import runtime_state
+        # 非敏感填充模拟已经合法落盘的3.3MB中央日志；第二次发布必须连同
+        # 完整before见证可编码、可读取，不能把合法record写成无法再次更新。
+        before_body = json_bytes({"schema_version": 1, "phase": "applying", "padding": "x" * 3_300_000})
+        after_body = json_bytes({"schema_version": 1, "phase": "compensating", "padding": "x" * 3_300_000})
+        relative = "central/activation.json"
+        with Tree(self.state) as tree:
+            runtime_state.write_control(tree, relative, before_body, expected=Node())
+        return relative, runtime_state.read_state(self.state, relative), after_body
+
+    def test_large_legal_record_can_be_republished(self):
+        from manager import runtime_state
+        relative, before, after_body = self.large_control()
+        with Tree(self.state) as tree:
+            runtime_state.write_control(tree, relative, after_body, expected=before)
+        after = runtime_state.read_state(self.state, relative)
+        # 仍比较真实完整内容，但失败时只显示静态诊断，不能dump数MiB正文。
+        self.assertTrue(after.payload == after_body, "large record phase update must preserve exact bytes")
+        self.assertEqual("compensating", json.loads(after.payload)["phase"])
+        self.assertEqual(["activation.json"], [path.name for path in (self.state / "central").iterdir()])
+
+    def test_large_marker_sync_failure_restores_inode_and_retry_is_idempotent(self):
+        from manager import runtime_state
+        relative, before, after_body = self.large_control()
+        native_link = runtime_state.os.link
+        failed = False
+        def fail_once(source, target, **kwargs):
+            nonlocal failed
+            if not failed and str(source).startswith(".central-state-"):
+                failed = True
+                raise OSError("fixture large marker publish interruption")
+            return native_link(source, target, **kwargs)
+        with Tree(self.state) as tree, patch.object(runtime_state.os, "link", side_effect=fail_once):
+            with self.assertRaisesRegex(OSError, "large marker"):
+                runtime_state.write_control(tree, relative, after_body, expected=before)
+        restored = runtime_state.read_state(self.state, relative)
+        self.assertTrue(restored.same_content(before), "synchronous failure must preserve full large preimage")
+        self.assertEqual(before.identity[:2], restored.identity[:2])
+        for _ in range(2):
+            with Tree(self.state) as tree:
+                expected = runtime_state.read_state(self.state, relative)
+                runtime_state.write_control(tree, relative, after_body, expected=expected)
+            self.assertTrue(runtime_state.read_state(self.state, relative).payload == after_body)
+        self.assertEqual(["activation.json"], [path.name for path in (self.state / "central").iterdir()])
+
+    def test_large_marker_real_exit_preserves_full_witness_and_gate(self):
+        from manager import runtime_state
+        relative, before, _ = self.large_control()
+        code = '''import json, os, sys
+from pathlib import Path
+from manager import runtime_state
+from lib.central.runtime_project import Tree, json_bytes
+state = Path(sys.argv[1])
+relative = 'central/activation.json'
+before = runtime_state.read_state(state, relative)
+record = json.loads(before.payload)
+record['phase'] = 'compensating'
+native_open = runtime_state.os.open
+def interrupt(path, *args, **kwargs):
+    if str(path).startswith('.central-state-'):
+        os._exit(73)
+    return native_open(path, *args, **kwargs)
+runtime_state.os.open = interrupt
+with Tree(state) as tree:
+    runtime_state.write_control(tree, relative, json_bytes(record), expected=before)
+'''
+        result = subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-c", code, str(self.state)],
+                                cwd=PACK, capture_output=True, text=True, timeout=15)
+        self.assertEqual(73, result.returncode, result.stdout + result.stderr)
+        with Tree(self.state) as tree:
+            with self.assertRaises(ProjectRuntimeError):
+                tree.read(relative + ".publish")
+            marker = tree.read(relative + ".publish", max_bytes=runtime_state.PRIVATE_MARKER_LIMIT)
+            value = json.loads(marker.payload)
+            self.assertTrue(Node.from_value(value["before"]) == before, "crash witness must retain the full exact Node")
+            self.assertGreater(len(marker.payload), LIMIT)
+            self.assertLessEqual(len(marker.payload), runtime_state.PRIVATE_MARKER_LIMIT)
+            for _ in range(2):
+                with self.assertRaisesRegex(service.ActivationError, "私有记录发布中断"):
+                    runtime_state.read_state(self.state, relative)
+                self.assertTrue(tree.read(relative + ".publish", max_bytes=runtime_state.PRIVATE_MARKER_LIMIT) == marker)
+        print(f"large_marker_exit exit={result.returncode} marker_bytes={len(marker.payload)} gate_closed=True")
+
+    def test_record_marker_and_default_resource_limits_remain_distinct(self):
+        from manager import runtime_state
+        self.assertEqual(4 * 1024 * 1024, LIMIT)
+        self.assertEqual(runtime_state.PRIVATE_MARKER_LIMIT,
+                         runtime_state.publication_capacity(LIMIT))
+        # 真正最大合法普通记录仍可更新；不能只修好3.3MB后在4MiB再次卡死。
+        prefix, suffix = b'{"schema_version":1,"padding":"', b'"}'
+        body = prefix + b"x" * (LIMIT - len(prefix) - len(suffix)) + suffix
+        relative = "central/activation.json"
+        with Tree(self.state) as tree:
+            runtime_state.write_control(tree, relative, body, expected=Node())
+            old = runtime_state.read_state(self.state, relative)
+            runtime_state.write_control(tree, relative, json_bytes({"schema_version": 1}), expected=old)
+            stable = runtime_state.read_state(self.state, relative)
+            with self.assertRaises(service.ActivationError):
+                runtime_state.write_control(tree, relative, body + b" ", expected=stable)
+            self.assertTrue(runtime_state.read_state(self.state, relative) == stable)
+            large = self.state / "explicit-envelope"
+            large.write_bytes(b"x" * (LIMIT + 1))
+            with self.assertRaises(ProjectRuntimeError):
+                tree.read("explicit-envelope")
+            explicit = tree.read("explicit-envelope", max_bytes=runtime_state.PRIVATE_MARKER_LIMIT)
+            self.assertEqual(LIMIT + 1, len(explicit.payload))
+            with self.assertRaises(ProjectRuntimeError):
+                Node.from_value(explicit.value())
+            marker = self.state / (relative + ".publish")
+            marker.write_bytes(b"x" * (runtime_state.PRIVATE_MARKER_LIMIT + 1))
+            with self.assertRaises(ProjectRuntimeError):
+                tree.read(relative + ".publish", max_bytes=runtime_state.PRIVATE_MARKER_LIMIT)
+            marker.write_bytes(b'{"malformed":')
+            with self.assertRaisesRegex(service.ActivationError, "私有记录发布中断"):
+                runtime_state.read_state(self.state, relative)
+        for invalid in (True, 0, -1, 2 * LIMIT + 1):
+            with self.subTest(limit=invalid), self.assertRaises(ProjectRuntimeError):
+                json_bytes({}, max_bytes=invalid)
 
     def test_invalid_journal_rows_are_safe_domain_errors(self):
         # 原实现直接 row["path"]，坏项会穿出 TypeError/KeyError，后续恢复甚至
