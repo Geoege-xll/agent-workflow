@@ -99,6 +99,7 @@ awf-cli --state-dir STATE --host-home HOST_HOME add PROJECT --enable --source SO
 `open`／`enable`、`close`／`disable` 分别同义。普通首次启用必须有已激活 current，缺失时会提示先 `runtime install` 再 `runtime activate`。
 只有显式 `--source` 才从所选来源导入；`runtime install` 仅导入核心。
 `runtime activate` 更新中央 current 与已启用的跟随项目，`runtime rollback` 选择中央前次版本。
+不支持控制协议的历史核心不能激活为 current，固定任务资源仍保留。
 `use` 和项目 `rollback` 建立项目锁版，`follow` 清除锁版；停用项目保持停用，下次启用采用有效策略。
 中央激活预览列出锁版保留、停用后续采用和本次应用的固定项目集合。
 `runtime status` 查看中央许可，未结算中央事务先只读预览 `runtime recover --dry-run`，再恢复。
