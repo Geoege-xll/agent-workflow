@@ -643,8 +643,10 @@ def apply(plan: ActivationPlan) -> dict:
                    "phase": "prepared", "action": plan.action,
                    "binding_before": plan.machine_before.value(), "changes": [], "conflicts": []}
         for index, change in enumerate(plan.changes):
-            parent = str(Path(change.relative).parent)
-            prefix = (parent + "/") if parent != "." else ""
+            # journal 保存规范 POSIX 逻辑路径，不经本机 Path 转换分隔符；
+            # 物理位置仍由 Tree/Path 解析，codec 继续严格拒绝反斜杠与别名。
+            parent, _, _ = change.relative.rpartition("/")
+            prefix = parent + "/" if parent else ""
             stem = prefix + f".agent-workflow-central-{identifier}-{index}"
             journal["changes"].append({"path": change.relative, "before": change.before.value(),
                                        "after": change.after.value(), "backup": stem + ".previous",
