@@ -157,9 +157,9 @@ class ProjectPlan:
 def preview_project(state: Path, project: Path, action: str, *, enable: bool = False,
                     source_root: Path | None = None, content_id: str | None = None,
                     hosts=None, native_context=None) -> ProjectPlan:
-    """只读生成 add/del/启停/版本计划；首次启用默认使用当前 SOURCE。
+    """只读生成 add/del/启停/版本计划；首次启用默认跟随已激活 current。
 
-    重开已绑定项目默认沿用其精确版本；显式 source_root 才导入指定来源，
+    重开项目按有效 follow/pinned 策略选版；显式 source_root 才导入指定来源，
     content_id 只选择已存在且验证成功的中央版本。所有原生业务限制交给所有者。
     """
     state, project = state_files.state_root(state), state_files.project_path(project)
@@ -198,8 +198,11 @@ def preview_project(state: Path, project: Path, action: str, *, enable: bool = F
         source = source_root
         if native_action == "enable" and source is None and selected is None:
             selected = runtime_policy.effective_binding(state, project, fallback=before["runtime_binding"])
-        if native_action == "enable" and source is None and selected is None and before["runtime_binding"] is None:
-            source = SOURCE
+        if native_action == "enable" and source is None and selected is None:
+            # 公共服务不能借调用者所在源码目录隐式导入核心，否则CLI与TUI会
+            # 得到不同的首次启用语义，也会制造没有current权威的“已安装”状态。
+            # 明确给出的source/content仍沿既有显式合同；普通启用只消费有效策略。
+            raise ValueError("尚无可用中央版本；请先运行 runtime install，再运行 runtime activate，然后启用项目")
         native = runtime_service.preview(state, project, native_action, source_root=source,
                                          binding=selected, hosts=hosts, native_context=native_context)
     if action == "rollback" and native and native.binding_json:
