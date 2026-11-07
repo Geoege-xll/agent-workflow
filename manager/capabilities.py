@@ -38,6 +38,8 @@ CLAUDE_SUBAGENTS = "https://code.claude.com/docs/en/sub-agents"
 # 以下描述一手文档中的能力及本包调用约束，不由 CLI 版本、文件存在或角色名称推导本会话工具。
 # 特别是停止与关闭不能互换，fresh 字段也不能代替原生上下文隔离的实际核验。
 CODEX_CAPABILITIES = {
+    "custom_agent_parent_permissions": {"documentation": CODEX_SUBAGENTS, "interface": "custom agent TOML",
+                                        "boundary": "sandbox_mode/approval_policy/model_provider/mcp_servers不覆盖parent；只读职责由角色正文声明，文件生成不证明原生权限隔离"},
     "fresh_subagent_context": {"documentation": CODEX_SUBAGENTS, "interface": "native subagent creation",
                                "boundary": "collaboration.spawn_agent 时显式 fork_turns:none；其他入口须核对实际独立上下文能力，禁止父历史 fork 降级"},
     "native_stop_and_close": {"documentation": CODEX_SUBAGENTS, "interface": "steer / stop / close subagents",
@@ -83,7 +85,7 @@ FEATURES = {
                ("model_definition_precedence", (2, 1, 251)), ("model_force", (2, 1, 257)),
                ("role_auto_compact_window", (2, 1, 296)), ("suffixed_window_env", (2, 1, 304)),
                ("block_writes_outside_working_directories", (2, 1, 314)),
-               ("per_invocation_effort", (2, 1, 292)), ("subagent_default_effort", (2, 1, 316)))
+               ("per_invocation_effort", (2, 1, 292)))
               + tuple((name, None) for name in CLAUDE_CAPABILITIES if name != "send_message_resume"),
     "antigravity": (("session_start", None),) + tuple((name, None) for name in AGY_CAPABILITIES),
 }

@@ -154,6 +154,70 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertEqual(native_agents.verified_hosts(self.state, context=self.context), ("codex",))
         self.assertEqual(native_agents.compensate_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
 
+    def test_noop_ref_witness_verifies_without_journal_and_rejects_replacement(self):
+        self.install(hosts=("codex",))
+        plan = self.preview(hosts=("codex",))
+        receipt = native_agents.apply_global(plan)
+        self.assertEqual(receipt["status"], "noop")
+        reference = receipt["recovery_ref"]
+        journal = self.state / "native-agents/transactions" / (plan.transaction_id + ".json")
+        self.assertFalse(journal.exists())
+        self.assertEqual(native_agents.verify_global(reference, context=self.context), [])
+        target = self.paths.codex / "agents/xy-backend.toml"
+        body = target.read_bytes()
+        target.unlink()
+        target.write_bytes(body)
+        self.assertTrue(native_agents.verify_global(reference, context=self.context))
+        self.assertEqual(native_agents.recover_global(reference, context=self.context)["status"], "conflict")
+        self.assertEqual(target.read_bytes(), body)
+        self.assertFalse(journal.exists())
+
+    def test_publish_rejects_same_content_inode_replacement_after_stage(self):
+        self.install(hosts=("codex",))
+        target = self.paths.codex / "agents/xy-backend.toml"
+        body = target.read_bytes()
+        plan = self.preview(hosts=("codex",), preferences={"codex": {"xy-backend": {"model": "new-model"}}})
+        original = native_agents._save
+        replaced = False
+        def replace_after_stage(state, journal):
+            nonlocal replaced
+            original(state, journal)
+            if not replaced and any(row["path"] == "agents/xy-backend.toml" and row.get("staged") is not None
+                                    and row["published"] is None for row in journal["writes"]):
+                replaced = True
+                target.unlink()
+                target.write_bytes(body)
+        with patch.object(native_agents, "_save", side_effect=replace_after_stage):
+            with self.assertRaisesRegex(ValueError, "最终隔离"):
+                native_agents.apply_global(plan)
+        self.assertTrue(replaced)
+        self.assertEqual(target.read_bytes(), body)
+        self.assertEqual(native_agents.compensate_global(plan.recovery_ref, context=self.context)["status"], "conflict")
+        self.assertEqual(target.read_bytes(), body)
+
+    def test_recovery_rejects_replaced_native_root_even_if_role_inodes_are_same(self):
+        receipt = self.install(hosts=("codex",))
+        original = self.paths.codex
+        moved = self.home / "old-codex"
+        original.rename(moved)
+        original.mkdir()
+        for child in moved.iterdir():
+            child.rename(original / child.name)
+        target = original / "agents/xy-backend.toml"
+        before = target.read_bytes()
+        result = native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
+        self.assertEqual(result["status"], "conflict")
+        self.assertTrue(any(row.get("type") == "native_root_conflict" for row in result["conflicts"]))
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_launcher_init_parser_distinguishes_command_from_option_value(self):
+        from lib.central.runtime_project import launcher_source
+        namespace = {"__name__": "launcher_contract"}
+        exec(compile(launcher_source(), "<central-launcher>", "exec"), namespace)
+        classify = namespace["helper_creates_task"]
+        self.assertTrue(classify(["helper", "lib/task_graph_cli.py", "--input", "graph.json", "init"]))
+        self.assertFalse(classify(["helper", "lib/task_graph_cli.py", "validate", "--task-id", "init"]))
+
     def test_project_sparse_only_after_verified_global_and_single_field_is_complete(self):
         project = self.case / "project"
         project.mkdir()

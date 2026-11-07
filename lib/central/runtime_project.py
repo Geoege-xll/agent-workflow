@@ -653,7 +653,8 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
             fields.append(f'model = {json.dumps(settings["model"])}')
         if settings.get("effort", "inherit") != "inherit":
             fields.append(f'model_reasoning_effort = {json.dumps(settings["effort"])}')
-        fields.append("sandbox_mode = " + json.dumps("read-only" if toolset[1] == "read" else "workspace-write"))
+        if toolset[1] == "read":
+            instructions += "This is a read-only review role: do not edit production files. Parent native permissions still apply.\n"
         fields.append("developer_instructions = " + json.dumps(instructions, ensure_ascii=False))
         payload = ("\n".join(fields) + "\n").encode()
         # 沿现有 role_models.patch_artifact 的受管载荷摘要合同，让合法模型修改
@@ -705,6 +706,7 @@ def launcher_source() -> bytes:
     """
     return '''#!/usr/bin/env python3
 """中央项目薄入口；通过 lib/python_runtime.sh 选择已有受支持解释器。"""
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -753,6 +755,32 @@ def read_regular(path):
         for descriptor in reversed(opened):
             os.close(descriptor)
 
+def helper_creates_task(arguments):
+    if arguments[:1] != ["helper"]:
+        return False
+    if arguments[1:2] == ["lib/task_graph_init.py"]:
+        return True
+    if arguments[1:2] != ["lib/task_graph_cli.py"]:
+        return False
+    values = arguments[2:]
+    if values[:1] == ["--"]:
+        values = values[1:]
+    class StrictParser(argparse.ArgumentParser):
+        def error(self, message):
+            raise ValueError("任务helper参数协议未知、歧义或不完整")
+    # 与既有task_graph_cli协议一致，argparse处理command前后的选项、唯一前缀
+    # 和--option=value；不能把--task-id init的值误当作创建任务的command。
+    parser = StrictParser(add_help=False)
+    parser.add_argument("command", choices=("validate", "ready", "qa-ready", "capacity", "init", "update", "task",
+                                             "fingerprints", "scratch", "cleanup-scratch", "continuation"))
+    for option in ("--input", "--patch", "--expect-sha256", "--task-id", "--host", "--observed-state",
+                   "--output", "--root", "--select", "--request-id", "--keep"):
+        parser.add_argument(option)
+    for option in ("--all", "--dry-run"):
+        parser.add_argument(option, action="store_true")
+    parser.add_argument("--help", "-h", action="store_true")
+    return parser.parse_args(values).command == "init"
+
 def start():
     project = Path(__file__).absolute().parent.parent.resolve(strict=True)
     state = Path(os.environ.get("AGENT_WORKFLOW_STATE_DIR", Path.home() / ".config/agent-workflow")).expanduser().absolute()
@@ -782,12 +810,7 @@ def start():
         arguments = arguments[2:]
     elif arguments and arguments[0].startswith("--binding="):
         arguments = arguments[1:]
-    helper_args = arguments[2:] if arguments[:1] == ["helper"] else []
-    if helper_args[:1] == ["--"]:
-        helper_args = helper_args[1:]
-    control = (arguments[:1] in (["check"], ["new_task"]) or
-               arguments[:2] == ["helper", "lib/task_graph_init.py"] or
-               arguments[:2] == ["helper", "lib/task_graph_cli.py"] and helper_args[:1] == ["init"])
+    control = arguments[:1] in (["check"], ["new_task"]) or helper_creates_task(arguments)
     if control:
         # 新任务必须运行当前控制桥，由它检查 supplied/effective pin 与启用状态。
         # 这里只选择经清单逐字节验证的控制代码，不在薄入口重写 gate 规则或持锁。

@@ -119,10 +119,10 @@ def validate_descriptor(body: bytes, host: str, role: str) -> None:
         header, payload = text.split("\n", 1)
         expected = "# " + MARKER + ":v1 sha256=" + hashlib.sha256(payload.encode()).hexdigest()
         data = tomllib.loads(payload)
-        if header != expected or data.get("sandbox_mode") not in {"read-only", "workspace-write"}:
-            raise ValueError("Codex 中央角色摘要或权限无效")
-        if role == "xy-qa" and data.get("sandbox_mode") != "read-only":
-            raise ValueError("QA 角色必须保持只读")
+        if header != expected or any(key in data for key in ("sandbox_mode", "approval_policy", "model_provider", "mcp_servers")):
+            raise ValueError("Codex 中央角色摘要无效或含不能覆盖父会话的伪权限字段")
+        if role == "xy-qa" and "read-only review role" not in data.get("developer_instructions", ""):
+            raise ValueError("QA 角色必须声明只读职责及父会话权限边界")
         role_models.validate(host, {"model": data.get("model", "inherit"),
                                     "effort": data.get("model_reasoning_effort", "inherit")})
     else:
