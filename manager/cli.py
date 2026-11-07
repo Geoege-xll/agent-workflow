@@ -10,7 +10,8 @@ import subprocess
 import sys
 
 from .catalog import clean, discover
-from . import model_preferences, project_service, release, runtime_service, service, state_files
+from . import central_runtime, model_preferences, project_service, release, runtime_service, service, state_files
+from lib.hosts.native_context import HostPaths, NativeContext
 
 
 class CommandParser(argparse.ArgumentParser):
@@ -31,18 +32,19 @@ def parser() -> argparse.ArgumentParser:
     root=CommandParser(prog="awf-cli",description="中央工作流项目、固定版本与角色模型管理。项目参数只接受已存在路径或唯一登记名。")
     root.add_argument("--version",action="store_true",help="只读显示产品版本及源码/构建性质，以及实际中央源根")
     root.add_argument("--state-dir",help="独立管理状态目录；默认 ~/.config/agent-workflow")
+    root.add_argument("--host-home",type=Path,help="显式指定宿主 HOME；与独立 --state-dir 配合时只访问此处，忽略宿主根环境覆盖")
     root.add_argument("--scan-root",default=str(Path.home()/"Desktop"),help="只扫描该目录的直接子项目")
     root.add_argument("--json",action="store_true",help="机器输出模式；--state-dir 等全局参数放在命令之前")
     commands=root.add_subparsers(dest="command")
     tui=commands.add_parser("tui",help="启动终端界面（默认命令）")
     tui.add_argument("--project",help="初始选中项目")
-    for name in ("add", "del", "list", "status", "enable", "disable", "use", "rollback", "repair"):
+    for name in ("add", "del", "list", "status", "enable", "disable", "use", "follow", "rollback", "repair"):
         aliases={"enable":["open"], "disable":["close"]}.get(name, [])
         command=commands.add_parser(name, aliases=aliases, help={
             "add":"登记已存在目录；--enable 同时启用", "del":"先停用，再解除登记；保留全部项目文件",
             "list":"只读列出项目实际状态、固定版本、宿主和冲突", "status":"只读查看一个项目，省略项目则列出全部",
             "enable":"启用项目原生入口；已绑定项目默认保留当前版", "disable":"停用新任务入口；保留旧任务 pin",
-            "use":"切到完整且已验证的中央内容 ID", "rollback":"切回项目已验证的前次版本",
+            "use":"锁定完整且已验证的中央内容 ID", "follow":"清除项目锁版并跟随中央 current；停用项目保持停用", "rollback":"切回项目已验证的前次版本",
             "repair":"条件恢复未完成事务或缺失受管资源，拒绝未知手改"}[name])
         if name != "list":
             command.add_argument("project", nargs="?" if name == "status" else None,
@@ -50,11 +52,11 @@ def parser() -> argparse.ArgumentParser:
         if name == "add":command.add_argument("--enable", action="store_true", help="登记时启用中央原生入口")
         if name in {"add", "enable"}:
             source=command.add_mutually_exclusive_group()
-            source.add_argument("--source", type=Path, help="显式导入该来源；首次启用默认当前中央源码")
+            source.add_argument("--source", type=Path, help="显式导入该来源；默认使用中央 current")
             source.add_argument("--content-id", help="精确选择已导入的完整 SHA256 内容 ID")
         if name == "use":command.add_argument("content_id", help="完整 64 位小写 SHA256；不接受前缀或 latest")
         output_options(command, dry_run=name not in {"list", "status"})
-    runtime=commands.add_parser("runtime",help="管理不可变中央核心；不会自动切换或清理项目版本")
+    runtime=commands.add_parser("runtime",help="导入核心、查看状态、激活/回退中央 current 或恢复未结算事务")
     output_options(runtime)
     runtimes=runtime.add_subparsers(dest="runtime_action",required=True)
     runtime_list=runtimes.add_parser("list",help="只读列出已验证固定核心")
@@ -62,6 +64,10 @@ def parser() -> argparse.ArgumentParser:
     runtime_install=runtimes.add_parser("install",help="只向中央库导入核心，不修改项目")
     runtime_install.add_argument("source",nargs="?",type=Path,default=project_service.SOURCE,help="来源目录，默认当前中央源码")
     output_options(runtime_install,dry_run=True)
+    for name in ("status", "activate", "rollback", "recover"):
+        command=runtimes.add_parser(name,help={"status":"只读查看中央 current 和发布许可", "activate":"激活已导入版本并更新启用的跟随项目", "rollback":"回退中央 current；锁版和停用项目保持", "recover":"条件恢复未结算中央事务"}[name])
+        if name == "activate":command.add_argument("content_id",help="已导入核心的完整 SHA256 内容 ID")
+        output_options(command,dry_run=name != "status")
     model=commands.add_parser("models",help="只读查看本地模型目录及来源")
     model.add_argument("--platform",choices=service.LOCATIONS,required=True)
     model.add_argument("--project")
@@ -83,7 +89,9 @@ def parser() -> argparse.ArgumentParser:
     scope.add_argument("--project")
     scope.add_argument("--global",dest="global_scope",action="store_true",help="编辑用户级工作流角色默认")
     change.add_argument("--platform",choices=service.LOCATIONS,required=True)
-    change.add_argument("--role",required=True)
+    rolescope=change.add_mutually_exclusive_group(required=True)
+    rolescope.add_argument("--role")
+    rolescope.add_argument("--all-roles",action="store_true",help="当前项目当前平台全部角色恢复跟随全局；必须 --reset all")
     change.add_argument("--model")
     change.add_argument("--effort")
     change.add_argument("--reset",choices=("model","effort","all"),help="清除对应范围覆盖；项目恢复跟随全局，全局恢复宿主")
@@ -119,6 +127,10 @@ def print_result(command: str, result, *, json_mode: bool, dry_run=False) -> Non
         print(f"项目：{clean(row['project'])}\n状态：{phase}；宿主：{', '.join(hosts) or '无'}")
         print("固定内容 ID："+(binding["content_id"] if binding else "无"))
         print("前次内容 ID："+(previous["content_id"] if previous else "无"))
+        if "policy" in row:print("版本策略："+{"follow":"跟随中央", "pinned":"项目锁版"}.get(row["policy"],"未知"))
+        if "effective_binding" in row:print("策略目标 ID："+(row["effective_binding"]["content_id"] if row["effective_binding"] else "无"))
+        for key,label in (("declared_enabled","声明启用"),("resources_healthy","资源健康"),("history_recoverable","历史可恢复"),("new_task_allowed","允许新任务"),("management_write_allowed","允许管理写入")):
+            if key in row:print(label+"："+("是" if row[key] else "否"))
         if "registered" in row:print("已登记："+("是" if row["registered"] else "否"))
         if "registered_after" in row:print("登记前后："+str(row["registered_before"])+" → "+str(row["registered_after"]))
         if dry_run:print(f"只读预览；可应用：{row.get('can_apply',True)}；受管变更：{len(row.get('changes',[]))} 项")
@@ -126,7 +138,7 @@ def print_result(command: str, result, *, json_mode: bool, dry_run=False) -> Non
             print("冲突："+clean(conflict["path"])+"；"+clean(conflict["reason"]))
 
 
-def project_command(args, state: Path, scan: Path) -> int | None:
+def project_command(args, state: Path, scan: Path, native_context=None) -> int | None:
     """把命令参数映射到共享服务；此层不自行拼接登记/停用或安装事务。"""
     action={"open":"enable", "close":"disable"}.get(args.command,args.command)
     if action in {"list", "status"}:
@@ -138,20 +150,32 @@ def project_command(args, state: Path, scan: Path) -> int | None:
         from lib import runtime_store
         if args.runtime_action == "list":
             result=runtime_store.list_cores(state)
-        else:
+        elif args.runtime_action == "status":
+            result=central_runtime.status(state)
+        elif args.runtime_action == "install":
             inspected=runtime_store.inspect_core(args.source)
             binding={key:inspected[key] for key in ("protocol_version","content_id","manifest_sha256")}
             result={"state_dir":str(state),"runtime_binding":binding,"label":inspected["label"]}
             if not args.dry_run:
                 core=runtime_store.import_core(args.source,state,expected_binding=binding)
                 result.update(root=str(core.root))
+        else:
+            plan=(central_runtime.preview_recovery(state,native_context=native_context) if args.runtime_action == "recover" else
+                  central_runtime.preview(state,args.runtime_action,binding=project_service.runtime_binding(state,args.content_id) if args.runtime_action == "activate" else None,native_context=native_context))
+            result=plan.summary if args.dry_run else central_runtime.recover(plan) if args.runtime_action == "recover" else central_runtime.apply(plan)
+            if not args.dry_run:
+                # 写入结算事实先保留；后续只读列表失败不能把成功变成可重提的失败。
+                try:result={**result,"project_statuses":project_service.project_summaries(state)}
+                except (OSError,ValueError):result={**result,"refresh_error":"中央操作已完成；逐项目状态读取失败，请用 status 核对，勿重复提交。"}
+            print_result("runtime "+args.runtime_action,result,json_mode=args.json,dry_run=args.dry_run)
+            return 0 if plan.summary["can_apply"] else 2
         print_result("runtime "+args.runtime_action,result,json_mode=args.json,dry_run=getattr(args,"dry_run",False))
         return 0
-    if action not in {"add", "del", "enable", "disable", "use", "rollback", "repair"}:
+    if action not in {"add", "del", "enable", "disable", "use", "follow", "rollback", "repair"}:
         return None
     project=(state_files.project_path(args.project) if action == "add" else project_service.resolve_project(state,args.project))
     plan=project_service.preview_project(state,project,action,enable=getattr(args,"enable",False),
-                                 source_root=getattr(args,"source",None), content_id=getattr(args,"content_id",None))
+                                 source_root=getattr(args,"source",None), content_id=getattr(args,"content_id",None),native_context=native_context)
     result=plan.summary if args.dry_run else project_service.apply_project(plan)
     print_result(args.command,result,json_mode=args.json,dry_run=args.dry_run)
     # 预览冲突仍是业务拒绝，调用方不能把不可应用计划误判为成功。
@@ -174,37 +198,56 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         state=state_files.state_root(args.state_dir)
         scan=Path(args.scan_root).expanduser()
+        # 正式入口只解析一次宿主身份；显式 custom state 仅授权该 state，绝不
+        # 由它猜测真实 HOME。显式 --host-home 使用空覆盖环境固定隔离宿主根。
+        environment=dict(os.environ)
+        context=(NativeContext.for_state(state,host_paths=HostPaths.for_home(args.host_home,environment={})) if args.host_home else
+                 NativeContext.for_state(state,host_paths=HostPaths.for_home(Path.home(),environment=environment)) if args.state_dir is None and not environment.get("AGENT_WORKFLOW_STATE_DIR") else None)
+        needs_context=(args.command in {None,"tui","models","roles","doctor","set","enable","open","disable","close","use","follow","rollback","repair","del","restore"}
+                       or args.command == "add" and args.enable
+                       or args.command == "runtime" and args.runtime_action in {"activate","rollback","recover"})
+        if needs_context and context is None:raise ValueError("独立 --state-dir 的宿主操作需要显式 --host-home；先指定隔离宿主目录")
+        if context:
+            paths=context.host_paths
+            environment.update(HOME=str(paths.home),CODEX_HOME=str(paths.codex),CLAUDE_CONFIG_DIR=str(paths.claude))
         if args.command in {None,"tui"}:
             if json_mode:raise ValueError("TUI 交互输出不支持 --json，请使用无交互命令")
             if not sys.stdin.isatty() or not sys.stdout.isatty():
                 raise ValueError("TUI 需要交互终端。可使用 --help、list 或 models 等无交互命令。")
             from .tui import run
             project=state_files.project_path(args.project) if getattr(args,"project",None) else None
-            return run(state,scan,project)
-        direct=project_command(args,state,scan)
+            return run(state,scan,project,native_context=context)
+        direct=project_command(args,state,scan,context)
         if direct is not None:return direct
         project=project_service.resolve_project(state,args.project) if args.project else None
         if args.command == "models":
-            print(json.dumps(discover(args.platform,project=project).as_dict(),ensure_ascii=False,indent=2))
+            print(json.dumps(discover(args.platform,home=context.host_paths.home,project=project,env=environment).as_dict(),ensure_ascii=False,indent=2))
         elif args.command == "roles":
             values={role:model_preferences.view(state,project,args.platform,role)
-                    for role in model_preferences.roles(state,project,args.platform)}
+                    for role in model_preferences.roles(state,project,args.platform,native_context=context)}
             if args.effective:
                 if args.platform != "claude" or project is None:raise ValueError("--effective 当前只解析项目 Claude 的具名非 fork 角色")
                 from .claude_execution import effective_role
                 from lib.hosts.claude_options import frontmatter_window
-                catalog=discover("claude",project=project)
+                catalog=discover("claude",home=context.host_paths.home,project=project,env=environment)
                 if catalog.execution.get("status") != "projected":
                     raise ValueError("Claude 配置来源读取失败，无法推导有效角色设置；请用 doctor 检查来源")
                 controls=catalog.execution["controls"]
                 # 诊断读取已安装原生角色；不将模型事务的可写范围扩展到窗口或权限字段。
-                values={role:effective_role(service.role_settings(project,"claude",role),controls,frontmatter_window(service.read_file(service.role_path(project,"claude",role))))
-                        for role,value in values.items()}
+                effective={}
+                for role in values:
+                    raw=service.read_file(service.role_path(project,"claude",role))
+                    if raw is None:
+                        # roles 已以相同 ctx 核验全局归属；稀疏项目不能把缺少 local
+                        # 描述符解释为缺角色，也不能读另一个 HOME 的同名文件。
+                        raw=service.read_file(context.host_paths.claude/f"agents/{role}.md")
+                    effective[role]=effective_role(service.role_settings(project,"claude",role,state=state,native_context=context),controls,frontmatter_window(raw or b""))
+                values=effective
             print(json.dumps(values,ensure_ascii=False,indent=2))
         elif args.command == "doctor":
             from .capabilities import diagnose
             hosts=service.LOCATIONS if args.platform == "all" else (args.platform,)
-            print(json.dumps([diagnose(host,project=project,probe=args.probe) for host in hosts],ensure_ascii=False,indent=2))
+            print(json.dumps([diagnose(host,project=project,probe=args.probe,home=context.host_paths.home,environment=environment) for host in hosts],ensure_ascii=False,indent=2))
         elif args.command == "set":
             # CLI 只映射本次实际编辑字段；缺省参数不能暗中变成另一字段的 inherit
             # 覆盖。reset 与同字段赋值互斥，跨字段的修改与恢复可在一次事务完成。
@@ -213,16 +256,22 @@ def main(argv: list[str] | None = None) -> int:
             if set(fields)&set(resets):raise ValueError("同一字段不能同时赋值与 reset")
             fields.update({field:None for field in resets})
             if not fields:raise ValueError("set 至少需要 --model、--effort 或 --reset")
-            catalog=model_preferences.load_catalogs(state,project,args.platform)
-            plan=model_preferences.preview(state,project,args.platform,{args.role:fields},catalog)
+            if args.all_roles:
+                if project is None or args.reset != "all" or args.model is not None or args.effort is not None:
+                    raise ValueError("--all-roles 只支持 --project --reset all，不能混入模型/推理赋值或全局恢复")
+                plan=model_preferences.reset_platform(state,project,args.platform,native_context=context)
+            else:
+                catalog=model_preferences.load_catalogs(state,project,args.platform,native_context=context)
+                plan=model_preferences.preview(state,project,args.platform,{args.role:fields},catalog,native_context=context)
             # 保留既有 set 的 model/effort 结果字段；现在取计划解析后的有效值，
             # 既不把缺省参数写成覆盖，也不让旧 JSON 消费者丢失原有字段。
-            result={**plan.summary,**plan.summary["values"][args.role],"role":args.role,"applied":False,
+            result={**plan.summary,**({**plan.summary["values"][args.role],"role":args.role} if not args.all_roles else {"all_roles":True}),"applied":False,
                     "changed_paths":plan.changed_paths}
             identifier=None
             if args.apply:
                 result.update(model_preferences.apply(plan))
                 identifier=result["backup_id"]
+                if not result["applied"] and not plan.summary["changes"]:result["diagnostic"]="无改动；未写入配置，未创建备份。"
             if json_mode:print_result("set",result,json_mode=True,dry_run=not args.apply)
             else:
                 print(json.dumps(result,ensure_ascii=False,indent=2))
@@ -236,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "restore":
             changes=service.prepare_restore(state,project,args.backup)
             if args.apply:
-                identifier=service.commit(state,project,changes,lambda:check_changed_hosts(project,changes,state=state))
+                identifier=service.commit(state,project,changes,lambda:check_changed_hosts(project,changes,state=state),native_context=context)
             if json_mode:
                 print_result("restore",{"project":str(project),"changed_paths":[row.relative for row in changes],
                                          "applied":args.apply,"backup_id":identifier if args.apply else None},

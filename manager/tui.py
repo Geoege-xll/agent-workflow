@@ -12,16 +12,16 @@ import time
 from lib.install.project_paths import InstallError, target_path
 from lib import runtime_store
 from .catalog import Catalog, clean, discover
-from . import service, model_preferences, project_service, state_files
+from . import central_runtime, service, model_preferences, project_service, state_files
 from .tui_state import Impact, Session
 from .tui_support import (Layout, TextInput, Theme, PROJECT_ACTION_LABELS, binding_id, cell_width, clip,
                           draw_box, draw_divider, draw_frame, draw_scrollbar, ellipsize, operation_error, padded, project_badge,
-                          project_plan_text, project_result_text, project_state, preference_plan_text, preference_result_text, status_text, wrapped)
+                          project_plan_text, project_result_text, project_state, preference_plan_text, preference_result_text, runtime_status_text, runtime_plan_text, runtime_result_text, status_text, wrapped)
 
 HOSTS=("codex","claude","antigravity")
 HOST_LABELS=("Codex","Claude Code","Antigravity")
 ROLE_LABELS={"xy-backend":"后端开发","xy-web":"前端开发","xy-desktop":"桌面开发","xy-apple":"Apple 开发","xy-android":"Android 开发","xy-uiux":"UI 设计","xy-qa":"独立 QA"}
-LIST_MODALS={"model","effort","manage","backups","commands","add_mode","versions"}
+LIST_MODALS={"model","effort","manage","backups","commands","add_mode","versions","runtime_versions"}
 HOST_NAMES=dict(zip(HOSTS,HOST_LABELS))
 
 
@@ -45,7 +45,14 @@ COMMANDS=(Binding("Enter","编辑模型","edit","edit model"),
           Binding("r","刷新状态与来源","refresh","refresh reload"),
           Binding("o","启用工作流","enable","open enable workflow"),
           Binding("p","停用工作流","disable","close disable workflow"),
-          Binding("","导入当前来源并启用","install","install import source"),
+          Binding("","显式导入来源并启用项目","install","install import source"),
+          Binding("","中央运行时状态","runtime-status","runtime status current"),
+          Binding("","导入当前中央核心","runtime-install","runtime install import"),
+          Binding("","激活中央版本","runtime-activate","runtime activate current"),
+          Binding("","回退中央版本","runtime-rollback","runtime rollback previous"),
+          Binding("","恢复中央未结算事务","runtime-recover","runtime recover recovery"),
+          Binding("","项目跟随中央版本","follow","project follow unlock"),
+          Binding("","当前平台全部角色恢复跟随全局","reset-platform","reset all roles platform"),
           Binding("","中央版本列表 / 选择","versions","versions use pin"),
           Binding("","回退前次版本","rollback","rollback previous"),
           Binding("","检查工作流","check","check verify"),
@@ -58,12 +65,13 @@ COMMANDS=(Binding("Enter","编辑模型","edit","edit model"),
           Binding("q","退出","quit","quit exit"))
 COMMAND_BY_ACTION={row.action:row for row in COMMANDS}
 MANAGE=tuple((action,COMMAND_BY_ACTION[action].label) for action in
-             ("enable","disable","install","versions","rollback","check","repair","details","del","backups","sources","reset-model","reset-effort"))
+             ("runtime-status","runtime-install","runtime-activate","runtime-rollback","runtime-recover","enable","disable","follow","install","versions","rollback","check","repair","details","del","backups","sources","reset-platform","reset-model","reset-effort"))
 
 
 class App:
-    def __init__(self,state: Path,scan: Path,initial: Path | None=None):
+    def __init__(self,state: Path,scan: Path,initial: Path | None=None,*,native_context=None):
         self.state,self.scan=state,scan
+        self.native_context=native_context
         self.projects=project_service.projects(state,scan)
         if initial and initial not in self.projects:self.projects.append(initial)
         self.project_index=self.projects.index(initial) if initial else 0 if self.projects else -1
@@ -76,6 +84,7 @@ class App:
         self.catalogs=self.session.catalogs;self.roles_errors=self.session.display_errors;self.page_lines=10
         self.scratch=None;self.scratch_choices={};self.scratch_fields={};self.preference_plan=None;self.changes=[];self.backup_rows=[]
         self.project_plan=None;self.version_rows=[];self.add_target=None
+        self.runtime_plan=None;self.preference_keys=();self.preference_reset=False
         self.toast="m 选择模型 · e 选择推理 · s 保存预览";self.toast_kind="info"
         self.done=False
         self.hits=[];self.screen=None;self.theme=Theme();self.cursor_visible=None
@@ -135,7 +144,7 @@ class App:
         if not self.global_scope and not self.project:return
         key=(self.scope_id,self.host)
         if not force and (key in self.session.displays or key in self.roles_errors):return
-        try:self.session.accept_context(key,model_preferences.load_context(self.state,self.project,self.host))
+        try:self.session.accept_context(key,model_preferences.load_context(self.state,self.project,self.host,native_context=self.native_context))
         except (OSError,ValueError) as exc:
             self.session.fail_display(key,clean(str(exc),500));self.notify(exc,"error")
 
@@ -165,9 +174,9 @@ class App:
         def read():
             # 先完成显式目录批次，再取同一范围的 P1 上下文。已有草稿的 expected
             # 不参与这次显示替换，重开菜单本身也不更新旧来源 stamp。
-            bundle=cached if cached is not None and model_preferences.check_catalogs(self.state,project,host,cached) else model_preferences.load_catalogs(self.state,project,host)
+            bundle=cached if cached is not None and model_preferences.check_catalogs(self.state,project,host,cached,native_context=self.native_context) else model_preferences.load_catalogs(self.state,project,host,native_context=self.native_context)
             if isinstance(bundle,Catalog):bundle=model_preferences.PreferenceCatalogs(bundle,{})
-            return model_preferences.load_context(self.state,project,host,catalogs=bundle)
+            return model_preferences.load_context(self.state,project,host,catalogs=bundle,native_context=self.native_context)
         def accept(context):
             self.session.accept_context(key,context)
             ready()
@@ -200,7 +209,7 @@ class App:
 
     def unavailable(self,action):
         preference_actions={"edit","effort","preview","discard","manage","sources","reset-model","reset-effort","preference-details"}
-        project_actions={"install","check","backups","enable","disable","versions","rollback","repair","details","del"}
+        project_actions={"install","check","backups","enable","disable","follow","versions","rollback","repair","details","del","reset-platform"}
         if action in project_actions and self.global_scope:return "全局默认不执行项目工作流操作"
         if action in preference_actions|project_actions and not self.global_scope and not self.project:return "请先选择项目或全局默认"
         if action in {"edit","effort","reset-model","reset-effort","preference-details"} and not self.role:return "当前平台没有可编辑角色"
@@ -216,10 +225,10 @@ class App:
     def manage_rows(self):
         # 全局入口不伪装成项目，管理菜单也不展示其不存在的启停或固定版本动作。
         return [(action,self.action_label(action)) for action,_ in MANAGE
-                if not self.global_scope or action in {"sources","reset-model","reset-effort"}]
+                if not self.global_scope or action in {"sources","reset-model","reset-effort"} or action.startswith("runtime-")]
 
     def command_rows(self):
-        project_actions={"enable","disable","install","versions","rollback","check","repair","details","del","backups"}
+        project_actions={"enable","disable","follow","install","versions","rollback","check","repair","details","del","backups","reset-platform"}
         return [row for row in COMMANDS if not self.global_scope or row.action not in project_actions]
 
     def bindings(self):
@@ -234,7 +243,11 @@ class App:
             rows=[Binding("↑↓","选择","move"),Binding("Home/End","首项 / 末项","move"),Binding("PgUp/PgDn","翻页","move"),Binding("Enter","执行操作" if self.modal == "commands" else "确认选择","confirm"),Binding("Esc","返回","back")]
             if self.modal != "commands":rows+=[Binding("/","搜索","search"),self.command("help")]
             if self.modal == "manage":rows.append(Binding(":","命令","commands"))
-            if self.modal == "versions":rows.append(Binding("i","完整版本详情","version-details"))
+            if self.modal in {"versions","runtime_versions"}:rows.append(Binding("i","完整版本详情","version-details"))
+            return rows
+        if self.modal == "runtime_plan":
+            rows=[Binding("↑↓","滚动","scroll"),Binding("PgUp/PgDn","翻页","scroll"),Binding("Home/End","页首 / 页尾","scroll"),Binding("Esc","返回不写入","back")]
+            if self.runtime_plan and self.runtime_summary()["can_apply"]:rows.insert(0,Binding("Enter","确认中央操作","confirm"))
             return rows
         if self.modal == "project_plan":
             rows=[Binding("↑↓","滚动","scroll"),Binding("PgUp/PgDn","翻页","scroll"),Binding("Home/End","页首 / 页尾","scroll"),Binding("Esc","返回不写入","back")]
@@ -284,10 +297,10 @@ class App:
             return rows
         if self.modal == "manage":return [(label+(" · "+reason if (reason:=self.unavailable(action)) else ""),action) for action,label in self.manage_rows()]
         if self.modal == "add_mode":return [("仅登记项目（默认，不启用工作流）","register"),("登记并启用三宿主工作流","register_enable")]
-        if self.modal == "versions":
+        if self.modal in {"versions","runtime_versions"}:
             row=self.project_rows.get(str(self.project),{})
             current=binding_id(row.get("runtime_binding"))
-            return [(item["content_id"][:12]+(" · 当前" if item["content_id"] == current else "")+" · "+item["label"],item["content_id"]) for item in self.version_rows]
+            return [(item["content_id"][:12]+(" · 当前" if self.modal == "versions" and item["content_id"] == current else "")+" · "+item["label"],item["content_id"]) for item in self.version_rows]
         if self.modal == "backups":return [(f'{row["id"]} · {row["status"]}',row["id"]) for row in self.backup_rows]
         if self.modal == "commands":
             return [(self.action_label(row.action)+(f"  [{row.key}]" if row.key else "")+(" · "+reason if (reason:=self.unavailable(row.action)) else ""),row.action) for row in self.command_rows()]
@@ -490,7 +503,7 @@ class App:
             self.project_rows[str(project)]={**plan.status_before,"registered":plan.registered_before}
             self.project_plan=plan;self.show_view("project_plan");self.text=project_plan_text(plan.summary)
             if not plan.summary["can_apply"]:self.notify("预览发现冲突，不能应用；查看冲突路径或返回预览修复","warning")
-        self.start_job(lambda:project_service.preview_project(self.state,project,action,**options),show_result=False,
+        self.start_job(lambda:project_service.preview_project(self.state,project,action,native_context=self.native_context,**options),show_result=False,
                        name="预览"+PROJECT_ACTION_LABELS[action],on_result=ready,preserve_view=True)
 
     def apply_project(self):
@@ -502,7 +515,7 @@ class App:
             rows=self.query_project_rows(None if plan.action == "del" else plan.project)
             paths=[Path(row["project"]) for row in rows]
             selected=plan.project if plan.project in paths else paths[min(max(0,old_index),len(paths)-1)] if paths else None
-            context=model_preferences.load_context(self.state,selected,host) if selected is not None else None
+            context=model_preferences.load_context(self.state,selected,host,native_context=self.native_context) if selected is not None else None
             return rows,selected,context
         def ready(result):
             rows,selected,context=self.session.job.refreshed
@@ -525,7 +538,75 @@ class App:
                        result_text=lambda result:project_result_text(result,HOST_NAMES))
         self.project_plan=None
 
+    def runtime_summary(self):
+        return self.runtime_plan if isinstance(self.runtime_plan,dict) else self.runtime_plan.summary
+
+    def runtime_action(self,action,content_id=None):
+        """中央动作与项目动作共用作业/滚动确认，不借全局默认行存中央状态。"""
+        if action == "runtime-status":
+            self.start_job(lambda:central_runtime.status(self.state),name="读取中央运行时状态",preserve_view=True,
+                           result_text=runtime_status_text);return
+        if action == "runtime-activate" and content_id is None:
+            def versions(rows):
+                self.version_rows=rows;self.show_view("runtime_versions")
+                if not rows:self.notify("中央库没有已导入版本；先导入中央核心","warning")
+            self.start_job(lambda:runtime_store.list_cores(self.state),show_result=False,name="读取中央版本",on_result=versions,preserve_view=True);return
+        def preview():
+            if action == "runtime-install":
+                inspected=runtime_store.inspect_core(project_service.SOURCE)
+                return {"action":"install","can_apply":True,"runtime_binding":{key:inspected[key] for key in ("protocol_version","content_id","manifest_sha256")}}
+            if action == "runtime-recover":return central_runtime.preview_recovery(self.state,native_context=self.native_context)
+            return central_runtime.preview(self.state,action.removeprefix("runtime-"),
+                        binding=project_service.runtime_binding(self.state,content_id) if content_id else None,native_context=self.native_context)
+        def ready(plan):
+            self.runtime_plan=plan;self.show_view("runtime_plan");self.text=runtime_plan_text(self.runtime_summary())
+        self.start_job(preview,show_result=False,name="预览中央操作",on_result=ready,preserve_view=True)
+
+    def apply_runtime(self):
+        plan=self.runtime_plan
+        if plan is None or not self.runtime_summary()["can_apply"]:return
+        summary=self.runtime_summary();project,host,scope_id=self.project,self.host,self.scope_id
+        def operation():
+            if summary["action"] == "install":
+                core=runtime_store.import_core(project_service.SOURCE,self.state,expected_binding=summary["runtime_binding"])
+                return {"runtime_binding":core.binding(),"installed":True}
+            if summary["action"] == "recover":return central_runtime.recover(plan)
+            return central_runtime.apply(plan,cancel=self.cancel_job)
+        def refresh(result):
+            # 中央切版会失效所有旧显示，但当前范围必须取得新上下文再回主界面，
+            # 否则成功返回后会把已启用角色误显示为空；旧草稿前像不随刷新续期。
+            rows=self.query_project_rows(project)
+            context=model_preferences.load_context(self.state,project,host,native_context=self.native_context)
+            return rows,context
+        # 中央 apply 返回的是整个固定批次事实；后续列表刷新失败仍展示服务原结果，
+        # 不会重建计划或误报未写。恢复不支持中途取消，按钮忙态直至结算。
+        self.start_job(operation,name="执行中央操作",writes=True,cancellable=summary["action"] in {"activate","rollback"},
+                       impact=Impact(None,projects=None),result_text=runtime_result_text,
+                       refresh=refresh,
+                       on_result=lambda result:self.accept_runtime_result(result,(scope_id,host)))
+        self.runtime_plan=None
+
+    def accept_runtime_result(self,result,key):
+        rows,context=self.session.job.refreshed
+        self.accept_project_rows(rows)
+        self.session.accept_context(key,context)
+        self.show_view("result");self.text=runtime_result_text(result)+"\n\n逐项目实际状态：\n"+"\n\n".join(status_text(row,HOST_NAMES) for row in rows)
+
+    def reset_platform(self):
+        if reason:=self.unavailable("reset-platform"):raise ValueError(reason)
+        project,host,scope_id=self.project,self.host,self.scope_id
+        keys=tuple(key for key in self.session.entries if key[:2] == (scope_id,host))
+        def ready(plan):
+            # 提案从服务持久来源生成，不能先把 reset 塞入 Session 续期/覆盖旧授权。
+            # captured keys 只在这一个计划真实成功时消费；取消、冲突和失败均保留。
+            self.preference_plan=plan;self.preference_keys=keys;self.preference_reset=True
+            self.show_view("preview");self.text="当前项目 · 当前平台 · 全部角色恢复跟随全局\n确认将替代当前范围在生成提案时已有的未保存草稿；其他范围保留。\n\n"+preference_plan_text(plan.summary,HOST_NAMES)
+        self.start_job(lambda:model_preferences.reset_platform(self.state,project,host,native_context=self.native_context),
+                       show_result=False,name="预览整平台恢复",on_result=ready,preserve_view=True)
+
     def manage_action(self,action):
+        if action.startswith("runtime-"):self.runtime_action(action);return
+        if action == "reset-platform":self.reset_platform();return
         if action in {"reset-model","reset-effort"}:self.reset_field(action.split("-",1)[1]);return
         if action == "sources":
             def ready():
@@ -535,7 +616,7 @@ class App:
         if not self.project:raise ValueError("请先按 a 添加项目")
         project=self.project
         if reason:=self.unavailable(action):raise ValueError(reason)
-        if action in {"enable","disable","rollback","repair","del"}:self.preview_project(project,action)
+        if action in {"enable","disable","follow","rollback","repair","del"}:self.preview_project(project,action)
         elif action == "install":
             # “导入当前来源”仍走当前中央启用计划：来源校验、只读预览和条件发布
             # 均由服务层负责；确认写入统一使用中央计划页，不保留已不可达的旧弹窗。
@@ -583,28 +664,30 @@ class App:
         elif self.modal == "manage":self.manage_action(self.options()[self.index][1])
         elif self.modal == "add_mode":self.preview_project(self.add_target,"add",enable=self.options()[self.index][1] == "register_enable")
         elif self.modal == "versions":self.preview_project(project,"use",content_id=self.options()[self.index][1])
+        elif self.modal == "runtime_versions":self.runtime_action("runtime-activate",self.options()[self.index][1])
+        elif self.modal == "runtime_plan":self.apply_runtime()
         elif self.modal == "project_plan":self.apply_project()
         elif self.modal == "preview":
             plan=self.preference_plan
             if plan is None or not plan.summary["can_apply"]:
                 self.notify("计划含冲突，不能保存；请核对诊断后重新预览","warning");return
-            keys=[self.scope(role) for role in self.pending()];scope_id=self.scope_id;label=self.scope_label
-            message=f"已保存模型配置 · {label} / {HOST_NAMES[host]}"
+            keys=self.preference_keys if self.preference_reset or plan.summary["changes"] else ();scope_id=self.scope_id;label=self.scope_label
+            message=("整平台恢复" if self.preference_reset else "已保存模型配置")+f" · {label} / {HOST_NAMES[host]}"
             def apply():
                 result=model_preferences.apply(plan)
-                if not result["applied"]:raise ValueError(result.get("diagnostic") or "配置未应用；草稿保留")
+                if not result["applied"] and plan.summary["changes"]:raise ValueError(result.get("diagnostic") or "配置未应用；草稿保留")
                 return result
             def saved(result):
                 self.session.accept_context((scope_id,host),self.session.job.refreshed)
                 self.show_view("result");self.text=message+"\n"+preference_result_text(result)
-                self.notify(message,"success")
+                self.notify(message if result["applied"] else "无改动；未写入配置，未创建备份","success" if result["applied"] else "info")
             # 全局权威能影响所有项目的跟随字段；失败也按同一宿主的全部显示
             # 范围失效。其他草稿的 expected/stamp 始终保留，只有本次成功项结算。
             affected=frozenset(row["project"] for row in plan.summary.get("affected_projects",[]))
             impact=Impact(None if self.global_scope else frozenset({scope_id}),host,
                           affected if self.global_scope else frozenset({str(project)}))
             self.start_job(apply,name="备份并保存模型配置",on_result=saved,writes=True,draft_keys=keys,
-                           impact=impact,refresh=lambda result:model_preferences.load_context(self.state,project,host),
+                           impact=impact,refresh=lambda result:model_preferences.load_context(self.state,project,host,native_context=self.native_context),
                            result_text=lambda result:message+"\n"+preference_result_text(result))
             self.preference_plan=None
         elif self.modal == "backups":
@@ -616,14 +699,14 @@ class App:
             # 恢复计划携带原版本指纹，不可转成普通 list 丢失发布前/验收后复核。
             changes=self.changes
             def restore():
-                identifier=service.commit(self.state,project,changes,lambda:service.check(project,state=self.state))
+                identifier=service.commit(self.state,project,changes,lambda:service.check(project,state=self.state),native_context=self.native_context)
                 return service.backup_summary(project,identifier)
             def restored(result):
                 self.session.accept_context((str(project),host),self.session.job.refreshed)
                 self.show_view("result");self.text=str(result or "完成")
             self.start_job(restore,name="恢复模型配置",writes=True,
                            impact=Impact(frozenset({str(project)}),projects=frozenset({str(project)})),
-                           refresh=lambda result:model_preferences.load_context(self.state,project,host),
+                           refresh=lambda result:model_preferences.load_context(self.state,project,host,native_context=self.native_context),
                            on_result=restored)
             self.changes=[]
         elif self.modal == "quit":
@@ -684,7 +767,7 @@ class App:
         elif action == "manage":
             if reason:=self.unavailable("manage"):raise ValueError(reason)
             self.show_view("manage")
-        elif action in {"install","check","backups","sources","enable","disable","versions","rollback","repair","details","del","reset-model","reset-effort"}:self.manage_action(action)
+        elif action.startswith("runtime-") or action in {"install","check","backups","sources","enable","disable","follow","versions","rollback","repair","details","del","reset-platform","reset-model","reset-effort"}:self.manage_action(action)
         elif action == "preference-details":
             if reason:=self.unavailable(action):raise ValueError(reason)
             value=self.current(self.role);names={"project":"项目","global":"全局","host":"宿主"}
@@ -716,12 +799,13 @@ class App:
             if not self.pending():self.notify("无改动；当前范围没有待保存草稿，未写入配置");return
             cached=self.catalog();bundle=self.catalogs.get((self.scope_id,self.host))
             # 普通预览只读校验预读bundle；影响项目任一来源变化都不能借预览重启native。
-            if bundle is None or not model_preferences.check_catalogs(self.state,self.project,self.host,bundle):
+            if bundle is None or not model_preferences.check_catalogs(self.state,self.project,self.host,bundle,native_context=self.native_context):
                 raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
             if cached.stamp and any(self.source_stamps.get(self.scope(role)) != cached.stamp for role in self.pending()):
                 raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
             expected={role:self.expected[self.scope(role)] for role in self.pending()}
-            plan=model_preferences.preview(self.state,self.project,self.host,self.pending(),bundle,expected)
+            plan=model_preferences.preview(self.state,self.project,self.host,self.pending(),bundle,expected,native_context=self.native_context)
+            self.preference_keys=tuple(self.scope(role) for role in self.pending());self.preference_reset=False
             self.show_view("preview");self.preference_plan=plan;self.text=preference_plan_text(plan.summary,HOST_NAMES)
             self.notify("保存预览已生成，尚未写入；Enter 确认备份并保存，Esc 返回保留草稿" if plan.summary["can_apply"] else "预览发现冲突，不能保存；草稿保留", "warning")
         elif action == "refresh":
@@ -742,7 +826,7 @@ class App:
         elif action == "help":
             text="当前视图\n"+"\n".join(f"{row.key:12} {row.label}" for row in self.bindings())
             text+="\n\n主界面命令（: 可按名称搜索）\n"+"\n".join(f"{row.key or '命令面板':12} {self.action_label(row.action)}" for row in self.command_rows())
-            text+="\n\n项目列表上方的全局默认独立于项目计数；在项目区按 Home 可选择。草稿按全局/项目/平台隔离。\n项目直接编辑哪个字段就覆盖哪个，v 查看字段来源；g 或 : 搜索恢复模型/推理跟随全局。\n全局恢复跟随宿主；显式 inherit 始终表示宿主。u 只丢弃当前角色草稿。\n全局保存先列出受影响项目及冲突，再确认备份并保存。\n\n主界面 Tab 下一平台，Shift+Tab 上一平台，首尾循环；1/2/3 和顶部点击也可切换。\n左箭头聚焦项目，右箭头聚焦右侧内容；重复同方向保持当前区域，上下选择。\n模型保存：m 选择模型，再 Enter 选择推理、Enter 暂存；e 可只改推理。\n角色表 Enter 按当前选中列编辑；鼠标可选模型/推理列，m/e 随时独立进入对应编辑。\n已选择/已暂存均尚未保存；无改动不写入。按 s 查看保存预览，Enter 确认后才备份保存。\nEsc 取消选择或保存预览；已有草稿保留。失败/冲突保留草稿，核对诊断后重选或 u 丢弃。\n目录失败/来源变化后重新进入模型或推理编辑可重试；旧来源草稿须重新确认选择。\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认；输入中的左右键移动光标。\n弹层和输入中的 Tab/左右不切换底层平台或区域。\n鼠标单击只选中，Enter 确认。\na 输入目录后可选仅登记（默认）或登记并启用；所有写操作先预览，Esc 不写入。\n主界面 o 预览启用、p 预览停用选中项目；再次 Enter 确认。状态待刷新/冲突时以服务预览为准。\ng 管理中央版本、回退、检查、修复、三宿主详情和停用并解除登记。\n版本列表 i 查看完整 ID，Enter 只读预览；完整 ID 才是版本身份。\nCtrl+C 在执行前可请求取消，事务已经开始后等待结算；不会终止已运行任务。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
+            text+="\n\n项目列表上方的全局默认独立于项目计数；在项目区按 Home 可选择。草稿按全局/项目/平台隔离。\n项目直接编辑哪个字段就覆盖哪个，v 查看字段来源；g 或 : 搜索恢复模型/推理跟随全局。\n全局恢复跟随宿主；显式 inherit 始终表示宿主。u 只丢弃当前角色草稿。\n全局保存先列出受影响项目及冲突，再确认备份并保存。\n\n主界面 Tab 下一平台，Shift+Tab 上一平台，首尾循环；1/2/3 和顶部点击也可切换。\n左箭头聚焦项目，右箭头聚焦右侧内容；重复同方向保持当前区域，上下选择。\n模型保存：m 选择模型，再 Enter 选择推理、Enter 暂存；e 可只改推理。\n角色表 Enter 按当前选中列编辑；鼠标可选模型/推理列，m/e 随时独立进入对应编辑。\n已选择/已暂存均尚未保存；无改动不写入。按 s 查看保存预览，Enter 确认后才备份保存。\nEsc 取消选择或保存预览；已有草稿保留。失败/冲突保留草稿，核对诊断后重选或 u 丢弃。\n目录失败/来源变化后重新进入模型或推理编辑可重试；旧来源草稿须重新确认选择。\n/ 搜索后 Enter 只接受筛选，再按 Enter 才确认；输入中的左右键移动光标。\n弹层和输入中的 Tab/左右不切换底层平台或区域。\n鼠标单击只选中，Enter 确认。\na 输入目录后可选仅登记（默认）或登记并启用；所有写操作先预览，Esc 不写入。\n主界面 o 预览启用、p 预览停用选中项目；再次 Enter 确认。状态待刷新/冲突时以服务预览为准。\ng / : 可查看中央状态、导入/激活/回退/恢复；项目跟随清除锁版，use/项目回退保持锁版。\n整平台恢复只作用当前项目当前平台全部角色，独立预览，Esc/失败保留草稿；全局默认不提供批量恢复。\n版本列表 i 查看完整 ID，Enter 只读预览；完整 ID 才是版本身份。\nCtrl+C 在执行前可请求取消，事务已经开始后等待结算；不会终止已运行任务。\n角色配置在新创建的子 Agent 生效；已有 Agent 不会被重启。\n缓存表示本地可见，不保证模型调用成功。"
             self.show_view("help");self.text=text
         elif action == "quit":self.quit()
         elif action == "search":
@@ -763,6 +847,7 @@ class App:
                     self.scratch=None;self.scratch_choices={};self.scratch_fields={}
                 if previous == "quit":self.quit_code=0
                 if previous == "project_plan":self.project_plan=None
+                if previous == "runtime_plan":self.runtime_plan=None
                 if previous == "preview":self.preference_plan=None;self.notify("已取消保存预览；草稿保留，尚未写入配置","warning")
                 elif previous in {"model","effort"}:
                     self.notify("已取消本次选择；已有草稿保留，未写入配置" if left_editor else "已返回模型选择，尚未保存")
@@ -914,7 +999,7 @@ class App:
             draw_scrollbar(self.put,layout.role_start,layout.right,available,len(rows),start,available,self.theme.border)
 
     def draw_modal(self,layout):
-        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"保存预览","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板","preference_details":"当前角色值与来源"}
+        titles={"model":"选择模型","effort":"选择推理级别","manage":"工作流管理","preview":"保存预览","backups":"模型配置备份","restore":"恢复确认","sources":"本地模型来源","help":"快捷键帮助","quit":"退出确认","add":"登记项目 · 输入目录","add_mode":"选择登记方式","project_plan":"项目管理 · 只读预览","versions":"中央版本列表 / 选择","version_details":"完整版本详情","details":"项目 / 三宿主详情","result":"操作结果","error":"操作未完成","commands":"命令面板","preference_details":"当前角色值与来源","runtime_versions":"选择中央激活版本","runtime_plan":"中央运行时 · 只读预览"}
         modal_title=titles.get(self.modal,self.modal)
         x=layout.modal_x;width=layout.modal_width
         inner_x=layout.modal_inner_x;inner_w=layout.modal_inner_width
@@ -939,7 +1024,7 @@ class App:
         self.put(layout.bottom,x+width-1,"┴",1,self.theme.border)
 
         target=self.project_plan.project if self.modal == "project_plan" and self.project_plan else self.add_target if self.modal == "add_mode" else self.project
-        sub_info=ellipsize(f"{self.scope_label if self.global_scope else target or '未选择项目'} / {HOST_LABELS[self.host_index]}",inner_w,tail=True)
+        sub_info=ellipsize(("中央运行时 / "+str(self.state)) if self.modal in {"runtime_plan","runtime_versions"} else f"{self.scope_label if self.global_scope else target or '未选择项目'} / {HOST_LABELS[self.host_index]}",inner_w,tail=True)
         self.put(layout.modal_top+1,inner_x,sub_info,inner_w,self.theme.muted)
         self.put(layout.modal_top+2,x,"├"+"─"*(width-2)+"┤",width,self.theme.border)
 
@@ -958,7 +1043,7 @@ class App:
                 self.row(layout.modal_list+offset,inner_x,inner_w,marker+label,attr)
                 self.hits.append((layout.modal_list+offset,inner_x,inner_w,"option",index))
             if not rows:
-                empty="中央内容库尚无已导入版本 · Esc 返回" if self.modal == "versions" and not self.version_rows else "没有匹配项 · Esc 返回，或重新输入搜索"
+                empty="中央内容库尚无已导入版本 · Esc 返回" if self.modal in {"versions","runtime_versions"} and not self.version_rows else "没有匹配项 · Esc 返回，或重新输入搜索"
                 self.put(layout.modal_list,inner_x,empty,inner_w,self.theme.warning)
             if details and rows:
                 model=next((row for row in self.catalog().models if row.id == self.options()[self.index][1]),None)
@@ -1099,6 +1184,6 @@ class App:
         else:self.dispatch(key)
 
 
-def run(state: Path,scan: Path,project: Path | None=None) -> int:
+def run(state: Path,scan: Path,project: Path | None=None,*,native_context=None) -> int:
     locale.setlocale(locale.LC_ALL,"")
-    return curses.wrapper(App(state,scan,project).loop)
+    return curses.wrapper(App(state,scan,project,native_context=native_context).loop)

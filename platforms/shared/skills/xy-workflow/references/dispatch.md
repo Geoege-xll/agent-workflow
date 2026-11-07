@@ -17,11 +17,11 @@ role unavailable, assess the affected host's resources before dispatch; this is 
 Reuse current ProjectProfile facts and prior successful installation evidence while their inputs
 and resources remain unchanged. If those facts already establish that a refresh is required, go
 directly to refresh rather than running a redundant presence check. When role availability is
-unknown, perform one read-only resource check using the current host:
+unknown, perform one read-only resource check using the current host. Central thin projects use `awf-cli roles --project PROJECT --platform HOST` and `awf-cli check --project PROJECT`, with explicit `--state-dir` / `--host-home` when isolating state. Their role availability includes verified user-level roles plus sparse project overrides; a missing local descriptor alone is not unavailability. These checks prove resources, not actual native role/model execution. The following profile/setup examples apply only to source-pack development from the verified source-pack root:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/project/project_profile_cli.py \
-  check-roles codex .agent-workflow .
+bash lib/python_runtime.sh -B -X utf8 lib/project/project_profile_cli.py \
+  check-roles codex . .
 ```
 
 Use `claude` or `antigravity` for that host; do not preload other hosts' integration files. This
@@ -38,11 +38,11 @@ Refresh when required native resources are missing/invalid, or installation inpu
 
 Codex discovery context deduplicates identical fact/command groups, while retaining each module's exact root,
 command cwd and evidence-base mapping. Different arguments, purposes or evidence are not merged for superficial
-similarity. To inspect a role's full mapping, run read-only `project_profile_cli.py context .agent-workflow . <role>`
+similarity. To inspect a role's full mapping, run read-only `project_profile_cli.py context . . <role>`
 with the Python entry below. It reuses the discoverer without executing candidate commands, writing state or
 refreshing the host, and does not change the refresh conditions above.
 
-For a required refresh, run the current host's normal `setup_<host>.sh`, then `--check` once. Normal
+For required central maintenance, preview and explicitly apply the shared manager's `repair PROJECT`; import and activate a new core separately using `runtime install` and `runtime activate ID`. Central thin projects contain no setup scripts. Source-pack development runs the current host's `bash setup_<host>.sh`, then `bash setup_<host>.sh --check` once from the source-pack root. Normal
 setup already performs its mandatory preflight; do not prepend another standalone `--preflight`
 unless a write-free preview or aggregate multi-host preflight is specifically needed. Preserve all
 ownership protections, populated documents, user settings, native permissions/Hook trust and active
@@ -60,7 +60,7 @@ dispatch, not a new business gate, QA stage or full test run; Hooks never auto-i
 This section is the execution boundary shared by all Skills/roles. A central project with
 `.agent-workflow/runtime.json` must not directly execute `.agent-workflow/lib/<helper>.py` from source-pack
 examples below, or select the current core through host-discovery symlinks. A new workflow,
-including Light without an init step, first checks machine-local enablement:
+including Light without an init step, first checks machine-local enablement. The stable bridge loads the verified central current controller before admission, then selects the project's effective follow/pinned version. A missing current, pending central activation or project drift cannot be treated as enabled. Install and activate a core explicitly before first enablement; never silently import source, clear a project lock or restart an old task to bypass rejection. Resource health and native file parsing do not prove that the host selected or executed a role/model; a task label such as `task_name` is not a native role selector. Check admission with:
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/runtime.py check

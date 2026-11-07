@@ -3,7 +3,7 @@
 This entire managed section applies only when the current host is Claude Code.
 Codex and Antigravity use their own integration sections; do not apply their tool aliases here.
 
-Managed by `bash .agent-workflow/setup_claude.sh`.
+Central resources are managed through shared CLI runtime activation and project repair; source-pack generation uses `bash setup_claude.sh` only from the source-pack root.
 
 ## Entry and authority
 
@@ -160,9 +160,9 @@ for revision and recovery. Update one requirement plan and affected complete wor
 reuse unaffected completed evidence. Do not turn plan persistence into another confirmation.
 
 - Skills: `.claude/skills/xy-*/SKILL.md`; `/xy-workflow` is the main entry.
-- Agents: `.claude/agents/xy-*.md`; required task/UI Skills are hard gates.
+- Central agents: user-root `agents/xy-*.md` (normally `~/.claude/agents/`); only required project overrides appear in `.claude/agents/xy-*.md`. The configured user root may differ from HOME. A missing local file does not prove role unavailability; required task/UI Skills remain hard gates. Discovery files, `Agent(xy-*)` labels and parsed model settings alone do not prove actual native role/model execution; verify the effective native invocation in the target session.
 
-Run `bash .agent-workflow/setup_claude.sh --check` to verify artifacts. Setup merges only signed
+For central installations, preview `awf-cli repair PROJECT --dry-run`, then explicitly apply `repair PROJECT` when authorized. Import and activate central cores separately through `runtime install` and `runtime activate ID`; central thin projects have no `.agent-workflow/setup_claude.sh`. Source-pack developers run `bash setup_claude.sh --check` from the source-pack root. Central projection/source generation merges only signed
 assist Hook entries in project settings; Auto Memory, plugins, MCP and agentmemory
 connection remain user-owned. Hooks remind at intake/recovery and Explore dispatch, never force QA
 or continuation. See `.agent-workflow/platforms/shared/HOOKS.md` only for Hook setup or diagnostics.

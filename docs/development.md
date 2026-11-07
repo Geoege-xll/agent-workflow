@@ -20,7 +20,10 @@
 | `manager/cli.py`、`manager/tui.py` | 命令协议与 curses 交互，调用业务服务，不复制业务规则 |
 | `manager/project_service.py` | 项目扫描、登记、添加／删除计划与登记发布 |
 | `manager/service.py` | 模型配置应用、备份／恢复、收据与精确回滚事务 |
-| `manager/runtime_service.py` | 中央启停、选版、回滚与修复的唯一事务编排 |
+| `manager/runtime_service.py` | 单项目启停、选版、回滚与修复的唯一事务编排 |
+| `manager/central_runtime.py`、`manager/runtime_policy.py` | 中央 current 激活／恢复协调、follow／pinned 策略与准入门 |
+| `manager/native_agents.py`、`lib/hosts/native_context.py` | 用户级原生资源归属与显式不可变宿主上下文 |
+| `manager/runtime_lifecycle.py` | 固定任务／历史引用保护的生命周期预览与结算 |
 | `manager/state_files.py` | 管理状态普通文件的有界读取、前像核对与安全发布 |
 | `lib/install/project_paths.py` | 规范项目路径与目录身份边界，供实际服务调用者复用 |
 | `manager/catalog.py`、`manager/codex_models.py`、`manager/model_preferences.py` | 模型来源、能力与字段偏好 |
@@ -37,6 +40,10 @@
 | `scripts/` | 统一验证入口、guard、冲突标记 lint 与宿主检查薄委派 |
 | `packaging/` | 离线归档构建器和 Homebrew Formula 模板，不进入运行时发行载荷 |
 | `tests/` | 行为、合同与真实消费者验证，不进入运行时发行载荷 |
+
+CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中央和模型角色／上下文／目录／预览调用透传。
+显式 custom state 的宿主操作要求 `--host-home`；模型目录、资源校验和文件投影不能宣称原生角色／模型执行已验证。
+整平台恢复调用 `model_preferences.reset_platform` 的同一固定提案；UI 不先修改草稿或自行写配置。
 
 `service` 仅负责模型事务，`runtime_service` 保持中央事务的单一所有者；项目登记归 `project_service`，
 状态文件和项目路径共用边界分别归 `state_files`、`project_paths`。下游通过所属模块调用，
@@ -120,7 +127,8 @@
 
 ## 普通入口与源包开发生成器
 
-`install.sh` 从任意位置选择已有项目，`workflow.sh`／`awf-cli` 是普通中央管理入口。
+`install.sh` 从任意位置选择已有项目，`workflow.sh` 是源码入口，默认短命令 `awf-dev`；
+Homebrew 管理正式 `awf-cli`。`--version` 显示版本、中央源根、source/formal 身份及物理载荷根。
 中央项目内仅有 `.agent-workflow/` 配置、locator、薄桥和原生资源，没有 `.agent-workflow/setup_*.sh`。
 检查／修复中央项目分别用 `check` 和先预览的 `repair`，不在项目内执行根 setup。
 
@@ -146,9 +154,12 @@ bash setup_all.sh --only=codex
 
 | 宿主 | 指令／入口 | 角色 | Skill 目录 |
 | --- | --- | --- | --- |
-| Codex | `AGENTS.md`／`$xy-workflow` | `.codex/agents/xy-*.toml` | `.agents/skills/` |
-| Claude Code | `CLAUDE.md` → `AGENTS.md`／`/xy-workflow` | `.claude/agents/xy-*.md` | `.claude/skills/` |
-| Antigravity | `AGENTS.md`／`/xy-workflow` | `.agents/agents/xy-*.md` | `.agents/skills/` |
+| Codex | `AGENTS.md`／`$xy-workflow` | 用户 `~/.codex/agents/`；项目稀疏 `.codex/agents/xy-*.toml` | `.agents/skills/` |
+| Claude Code | `CLAUDE.md` → `AGENTS.md`／`/xy-workflow` | 用户 `~/.claude/agents/`；项目稀疏 `.claude/agents/xy-*.md` | `.claude/skills/` |
+| Antigravity | `AGENTS.md`／`/xy-workflow` | 用户 `~/.gemini/config/agents/`；项目稀疏 `.agents/agents/xy-*.md` | `.agents/skills/` |
+
+以上用户目录为默认示例，实际位置取入口固定的 HostPaths。源包开发生成器的角色全部生成在源码项目内，
+不等同于中央安装的用户角色与项目稀疏覆盖。
 
 ### 源包可选 guard
 
@@ -246,12 +257,12 @@ bash scripts/test_workflow.sh tests.test_runtime_store
 
 | 组 | 适用风险与范围 |
 | --- | --- |
-| `service` | 模型来源／偏好、模型事务、登记／安装边界、管理器 CLI 与启动器等服务行为 |
-| `central` | 中央项目启停、固定核心／绑定、状态记录和中央 CLI／安装消费者 |
+| `service` | 模型来源／偏好、模型事务、原生归属、登记／安装边界、CLI 与短命令入口 |
+| `central` | 中央项目启停、固定核心／绑定、current 协调、生命周期和中央 CLI／安装消费者 |
 | `tui` | 输入、终端单元格、草稿交互及选定项目流程；不隐式启动 PTY |
 | `pty` | 真实伪终端键盘、窗口缩放与项目生命周期；需要 POSIX |
 | `packaging` | 离线归档、手册、启动器和 Ruby Formula 安装模拟；Formula 消费者需要 Ruby |
-| `ci` | 已明确的入口、中央 pin／模型收据、三宿主共享源、需求 HTML、PTY 和离线发行组合；需要 Node、Ruby 与 POSIX |
+| `ci` | 已明确的入口、中央 current／生命周期／原生归属／短命令、pin／模型收据、三宿主共享源、需求 HTML、PTY 和离线发行组合；需要 Node、Ruby 与 POSIX |
 
 `codex`、`claude`、`antigravity`、`prototype` 保留各自聚焦范围，`hosts` 覆盖三宿主及其共享合同。
 旧四个 `scripts/test_codex.sh`、`test_claude.sh`、`test_antigravity.sh`、`test_prototype.sh`

@@ -272,7 +272,7 @@ class HomebrewLauncherTest(unittest.TestCase):
         # 真实归档→Formula#install→短链接入口；不使用 README 或 Cellar 目录名推断版本。
         result=self.run_cli("--state-dir","state","--version")
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(result.stdout.splitlines(),[f"awf-cli {self.version}",f"中央源根：{self.prefix / 'libexec'}"])
+        self.assertEqual(result.stdout.splitlines(),[f"awf-cli {self.version}",f"中央源根：{self.prefix / 'libexec'}","入口来源：formal（发行包）",f"物理载荷根：{self.prefix / 'libexec'}"])
         self.assertFalse((self.caller / "state").exists())
         help_result = self.run_cli("--help")
         self.assertEqual(0, help_result.returncode, help_result.stderr)
@@ -324,7 +324,7 @@ class HomebrewLauncherTest(unittest.TestCase):
         self.assertFalse((self.prefix / "libexec/manager/__pycache__").exists())
 
     def test_relative_project_is_resolved_in_caller_and_read_only_command_leaves_no_state(self):
-        result = self.run_cli("--state-dir", "state", "roles", "--project", "project", "--platform", "codex")
+        result = self.run_cli("--state-dir", "state", "--host-home", str(self.caller / "home"), "roles", "--project", "project", "--platform", "codex")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {})
         self.assertFalse((self.caller / "state").exists())

@@ -12,7 +12,7 @@ from .catalog import clean
 PROJECT_ACTION_LABELS = {
     "add": "登记项目", "del": "停用并解除登记", "enable": "启用工作流",
     "disable": "停用工作流", "use": "选择固定版本", "rollback": "回退前次版本",
-    "repair": "修复受管资源",
+    "repair": "修复受管资源", "follow": "跟随中央版本",
 }
 
 
@@ -32,15 +32,22 @@ def project_state(row: dict | None) -> str:
 def project_badge(row: dict | None) -> str:
     state = project_state(row)
     identifier = binding_id(row.get("runtime_binding")) if row else "无"
-    return state + (" · " + identifier[:8] if identifier != "无" else "")
+    policy = "锁版" if row and row.get("policy") == "pinned" else "跟随" if row and row.get("policy") == "follow" else "策略未知"
+    return state + (("·" + policy + ("·" + identifier[:8] if identifier != "无" else "")) if row and row.get("policy") else (" · " + identifier[:8] if identifier != "无" else ""))
 
 
 def status_text(row: dict, host_labels: dict[str, str]) -> str:
     """完整详情允许滚动，保留长路径、完整 ID 和三宿主的实际受管范围。"""
     lines = ["项目  " + str(row["project"]), "状态  " + project_state(row),
              "登记  " + ("未读取，请刷新" if row.get("registered") is None else "已登记" if row["registered"] else "未登记"),
-             "当前内容 ID  " + binding_id(row.get("runtime_binding")),
-             "前次内容 ID  " + binding_id(row.get("previous_binding")), "", "三宿主状态："]
+             "版本策略  " + {"follow":"跟随中央", "pinned":"项目锁版"}.get(row.get("policy"),"未读取"),
+             "策略目标内容 ID  " + binding_id(row.get("effective_binding")),
+             "实际应用内容 ID  " + binding_id(row.get("runtime_binding")),
+             "前次内容 ID  " + binding_id(row.get("previous_binding")),
+             *[label+"  "+("未读取" if key not in row else "是" if row[key] else "否") for key,label in
+               (("declared_enabled","声明启用"),("resources_healthy","当前资源健康"),("history_recoverable","历史可恢复"),
+                ("new_task_allowed","允许新任务"),("management_write_allowed","允许管理写入"))],
+             "", "三宿主状态："]
     managed = set(row.get("hosts", []))
     for host, label in host_labels.items():
         # 服务只返回项目级一致性与受管宿主集合，不能杜撰逐宿主模型加载或探测结果。
@@ -52,6 +59,9 @@ def status_text(row: dict, host_labels: dict[str, str]) -> str:
     if row.get("conflicts"):
         lines += ["", "冲突：", *[f"  {item['path']} · {item['reason']}" for item in row["conflicts"]]]
         lines.append("先检查上述路径；存在未完成事务时预览“修复受管资源”，手工修改应先核对并保留。")
+    for issue in row.get("issues",[]):
+        lines.append("问题  "+str(issue.get("layer",""))+" · "+str(issue.get("path",""))+" · "+str(issue.get("reason","")))
+    lines += ["", "原生角色选择与模型执行尚未实测；资源可解析不代表宿主已按角色/模型完成任务。"]
     return "\n".join(lines)
 
 
@@ -59,19 +69,22 @@ def project_plan_text(summary: dict) -> str:
     """只渲染公共计划，不重新计算写集、业务状态或确认权限。"""
     native = summary.get("runtime") or {}
     before = summary["status_before"]
-    current = native.get("runtime_binding") or before.get("runtime_binding")
     lines = ["动作  " + PROJECT_ACTION_LABELS[summary["action"]], "项目  " + summary["project"],
              "状态目录  " + summary["state_dir"],
              "登记  " + ("已登记" if summary["registered_before"] else "未登记") + " → " + ("已登记" if summary["registered_after"] else "未登记"),
-             "当前状态  " + project_state(before), "目标内容 ID  " + binding_id(current),
+             "当前状态  " + project_state(before), "原实际应用 ID  " + binding_id(before.get("runtime_binding")),
+             "本次物化内容 ID  " + (binding_id(native.get("runtime_binding")) if native else "无；本次只修改登记或策略"),
              "前次内容 ID  " + binding_id(native.get("previous_binding") or before.get("previous_binding"))]
     if native:
         lines.append("工作流  " + ("已启用" if native["enabled_before"] else "未启用") + " → " + ("启用" if native["enabled_after"] else "停用"))
         lines.append("受管宿主  " + " / ".join(native.get("hosts", [])))
     if summary["action"] == "add" and not native:lines.append("仅登记项目；本次不会启用工作流或导入中央核心。")
+    if summary["action"] == "follow":lines.append("清除项目锁版并跟随中央 current；停用项目保持停用，在下次启用时采用有效版本。")
     if summary["action"] in {"disable", "del"}:
         lines.append("停用新工作流入口；保留项目文件、配置、资料与历史，已运行任务不被终止。")
     if summary["action"] == "del":lines.append("停用成功后解除登记；项目将从本列表隐藏，不删除项目目录。")
+    if summary.get("policy_after"):
+        lines.append("目标策略  "+{"follow":"跟随中央", "pinned":"项目锁版"}.get(summary["policy_after"]["mode"],"未知"))
     changes = summary["changes"]
     lines += ["", f"受管变更  {len(changes)} 项："]
     lines += [f"  {item['operation']}  {item['path']} · {item['purpose']}" for item in changes] or ["  无受管文件变更"]
@@ -113,7 +126,7 @@ def preference_plan_text(summary: dict, host_labels: dict[str, str]) -> str:
             after = "恢复跟随" + ("宿主" if summary["scope"] == "global" else "全局") if change.get("after") is None else str(change["after"])
             lines.append(f"  {change.get('role', '')} · {field} · {before} → {after}")
         else:lines.append("  " + str(change))
-    if not summary.get("changes"):lines.append("  无文件变更")
+    if not summary.get("changes"):lines.append("  无改动；未写入配置，未创建备份")
     affected = summary.get("affected_projects", [])
     lines += ["", f"受影响项目  {len(affected)} 项："]
     lines += ["  " + preference_project_text(item) for item in affected]
@@ -125,19 +138,61 @@ def preference_plan_text(summary: dict, host_labels: dict[str, str]) -> str:
             lines.append("  " + (" · ".join(str(item[key]) for key in ("project", "path", "reason") if key in item)
                                 if isinstance(item, dict) else str(item)))
     lines += ["", *[str(note) for note in summary.get("notes", [])]]
-    lines.append("Enter 确认备份并保存；Esc 返回保留草稿。" if summary["can_apply"] else "Esc 返回；草稿保留，请核对冲突后重新预览。")
+    lines.append(("Enter 确认备份并保存；Esc 返回保留草稿。" if summary.get("changes") else "无改动；确认仅核验来源，不写入、不备份；Esc 返回保留草稿。") if summary["can_apply"] else "Esc 返回；草稿保留，请核对冲突后重新预览。")
     return "\n".join(lines)
 
 
 def preference_result_text(result: dict) -> str:
     """只以服务的 applied 结果宣告成功，并保留真实备份和逐项目结算反馈。"""
-    lines = ["范围  " + ("全局默认" if result["scope"] == "global" else "项目覆盖")]
+    lines = ["已保存。" if result.get("applied") else "无改动；未写入配置，未创建备份。", "范围  " + ("全局默认" if result["scope"] == "global" else "项目覆盖")]
     if result.get("backup_id"):lines += ["", "备份：" + str(result["backup_id"])]
     for backup in result.get("backups", []):
         lines.append("  " + (str(backup.get("project", "")) + " · " + str(backup.get("backup_id", "")) if isinstance(backup, dict) else str(backup)))
     if result.get("affected_projects"):
         lines += ["", "受影响项目：", *["  " + preference_project_text(item) for item in result["affected_projects"]]]
     if result.get("diagnostic"):lines += ["", str(result["diagnostic"])]
+    return "\n".join(lines)
+
+
+def runtime_status_text(row: dict) -> str:
+    """中央 current 与项目 applied 各自展示，未知许可不能默认当绿。"""
+    return "\n".join(["中央 current  "+binding_id(row.get("runtime_binding")),
+                      "中央前次版本  "+binding_id(row.get("previous_binding")),
+                      "允许新任务  "+("未读取" if "new_task_allowed" not in row else "是" if row["new_task_allowed"] else "否"),
+                      "允许管理写入  "+("未读取" if "management_write_allowed" not in row else "是" if row["management_write_allowed"] else "否"),
+                      "未结算激活  "+str(row.get("pending_activation") or "无"),
+                      "", "程序升级、核心导入和 current 激活是独立动作；旧任务保留原 pin。",
+                      "原生角色和模型实际执行尚未实测，当前状态仅证明管理资源。"])
+
+
+def runtime_plan_text(summary: dict) -> str:
+    """消费服务固定影响集合；不通过当前界面列表重新推导项目授权。"""
+    action=summary["action"]
+    lines=["中央动作  "+{"install":"导入核心", "activate":"激活版本", "rollback":"回退版本", "recover":"恢复未结算事务"}[action]]
+    if action == "recover":
+        lines += ["事务  "+summary["transaction_id"],"阶段  "+summary["phase"],
+                  "恢复方向  "+("核验并完成已发布版本" if summary["current_published"] else "条件补偿未发布版本")]
+    else:lines.append("目标内容 ID  "+binding_id(summary.get("runtime_binding")))
+    if action == "install":lines.append("只导入不可变核心；不会激活 current 或启用项目。")
+    for row in summary.get("projects",[]):
+        disposition={"apply":"本次应用", "skipped_pinned":"保留项目锁版", "on_enable":"保持停用，后续启用采用", "not_enabled":"尚未启用"}.get(row.get("disposition"),"本次应用" if row["affected"] else "本次不应用")
+        lines += ["",row["project"]+" · "+disposition,"  策略  "+row["policy"],
+                  "  实际已应用  "+binding_id(row.get("applied_binding")),"  激活后策略目标  "+binding_id(row.get("effective_after"))]
+    conflicts=summary.get("conflicts",[])
+    for row in conflicts:lines.append("冲突  "+str(row["path"])+" · "+str(row["reason"]))
+    lines += ["", "Enter 确认上述固定计划；Esc 返回，不写入。" if summary["can_apply"] else "存在冲突，不能应用；Esc 返回核对。"]
+    return "\n".join(lines)
+
+
+def runtime_result_text(result: dict) -> str:
+    if result.get("installed"):
+        return "核心已导入。\n内容 ID  "+binding_id(result.get("runtime_binding"))+"\n未激活 current；项目保持原状态。"
+    lines=["中央操作已结算。"]
+    if "runtime_binding" in result:lines.append(runtime_status_text(result))
+    if result.get("compensated"):lines.append("未发布批次已条件补偿；请刷新中央状态核对 current。")
+    if "projects_applied" in result:lines.append("服务确认应用项目数  "+str(result["projects_applied"]))
+    if result.get("cancel_requested"):lines.append("取消请求到达时事务已开始；以上为结算结果。")
+    if result.get("recovered"):lines.append("中央未结算事务已恢复。")
     return "\n".join(lines)
 
 

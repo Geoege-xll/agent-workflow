@@ -7,7 +7,7 @@
 发行归档、校验文件与 Formula 来自同一次构建。Tap 使用对应 Release 的 Formula，
 安装时核对归档 SHA-256；用已安装入口的 `--version` 核对实际版本和中央程序位置。
 
-当前源码版本为 **2.1.1**，唯一人工维护值在 `product/VERSION`。
+当前源码版本为 **2.1.2**，唯一人工维护值在 `product/VERSION`。
 源码版本不代表公开渠道已发布该版本；GitHub 已公开的版本与资产以
 [Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准，Homebrew 版本以 Tap 中的 Formula 为准。
 下面的公共安装命令只安装 Tap 已声明的版本；发布 GitHub Release 不会自动更新公共 Tap，
@@ -35,7 +35,7 @@ Homebrew 将完整程序装入当前版本的 `libexec`，并在 Homebrew 的 `b
 setup 不启动渲染器；不需要全局 npm 安装，缺失 Node 只阻塞需要重新生成的需求页。
 
 无需也不建议再运行 `awf-cli --install-cli`：Homebrew 已经管理命令入口，额外注册的
-用户链接可能在升级后仍指向旧版本。以前安装过源包命令时，先只读检查：
+用户链接可能在升级后仍指向旧版本。源码入口默认注册 `awf-dev`，不会抢占正式 `awf-cli`；以前安装过源包命令时，先只读检查：
 
 ```bash
 type -a awf-cli
@@ -55,7 +55,9 @@ Homebrew 自身；若 Homebrew 的 `bin` 不在现有 PATH，使用以上完整�
 `brew upgrade` 只采用 Tap 已声明的版本；GitHub 上另有较新的 Release 或本地候选，不会让旧 Formula 自动升级。
 
 `brew upgrade` 只更新中央程序，不自动安装、选版或同步任何项目。项目使用 `add` / `list` /
-`del` / `open` / `close` 及 `use` / `rollback` / `repair` 管理，写入前可用 `--dry-run` 预览。
+`del` / `open` / `close` 及 `use` / `follow` / `rollback` / `repair` 管理，写入前可用 `--dry-run` 预览。
+先用 `runtime install` 导入核心，再 `runtime activate CONTENT_ID` 激活 current；已启用 follow 项目随中央切版，
+pinned 项目保留锁版，停用项目保持停用。`runtime rollback` 和 `runtime recover` 均先支持只读预览。
 2.1 采用普通中央安装，不提供旧版本兼容升级；旧工作流须在任务收尾和文档、专有配置保全后，
 按明确受管归属单独移除，再运行 `open`。`brew uninstall awf-cli` 不删除项目内工作流、
 项目配置或 `~/.config/agent-workflow` 中的用户数据。
@@ -65,13 +67,13 @@ Homebrew 自身；若 Homebrew 的 `bin` 不在现有 PATH，使用以上完整�
 在源码根目录使用现有 Python 选择器；构建版本必须与 `product/VERSION` 一致：
 
 ```bash
-bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1
+bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.2
 ```
 
 生成：
 
-- `dist/agent-workflow-2.1.1.tar.gz`
-- `dist/agent-workflow-2.1.1.tar.gz.sha256`
+- `dist/agent-workflow-2.1.2.tar.gz`
+- `dist/agent-workflow-2.1.2.tar.gz.sha256`
 - `dist/Formula/awf-cli.rb`
 
 发行包使用运行所需文件/目录白名单，不包含 `.sync-backups`、Git 元数据、发行输出、
@@ -86,7 +88,7 @@ bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1
 已有输出一律保留，重建请用新的空目录：
 
 ```bash
-bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1 --output-dir /path/to/new-output
+bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.2 --output-dir /path/to/new-output
 ```
 
 离线测试在独立临时目录中验证发行包及实际 Formula 的安装方法、模拟 Cellar 启动器、
@@ -102,7 +104,7 @@ bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.1 --outp
 
 1. 核对源码上传清单和授权方式，将审阅过的源文件推送到
    `Geoege-xll/agent-workflow`。`.gitignore` 排除本地备份、缓存及 `dist/`。
-2. 在源码仓库的 **Actions → Prepare release → Run workflow** 输入与 `product/VERSION` 一致的版本 `2.1.1`
+2. 在源码仓库的 **Actions → Prepare release → Run workflow** 输入与 `product/VERSION` 一致的版本 `2.1.2`
    （不带 `v`），并选择希望发布的分支。工作流先运行离线打包测试，再构建三份产物，
    然后创建 **Draft Release**；它不会自动公开 Release，也不会推送 Tap。
 3. 核对 Draft 的目标提交、压缩包、校验文件和 `awf-cli.rb` 后，再手动发布 Release。

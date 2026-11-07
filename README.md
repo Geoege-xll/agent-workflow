@@ -1,7 +1,7 @@
 # Agent Workflow Pack 2.1
 
 面向项目的原生多 Agent 工作流，支持 **Claude Code、Codex、Antigravity**。
-当前源码版本为 **2.1.1**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
+当前源码版本为 **2.1.2**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
 公共版本与资产以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 和 Tap 声明为准。
 
 在 macOS/Linux 使用中央程序管理已有项目：项目仅保留配置、薄桥和宿主原生入口，
@@ -18,7 +18,8 @@ awf-cli
 ```
 
 Homebrew 已管理短命令，无需再注册 `--install-cli`。安装、升级与来源排查见
-[Homebrew 说明](docs/homebrew.md)。升级中央程序不会自动同步项目。
+[Homebrew 说明](docs/homebrew.md)。升级中央程序、导入不可变核心和激活中央 current 是三个独立动作。首次使用先 `runtime install`、
+`runtime activate CONTENT_ID`，再启用项目；日常用法见使用手册。
 
 已有源包也可直接启动；需要现有 **Python 3.11+**，不安装 Python 包或下载运行时：
 
@@ -29,7 +30,8 @@ bash /path/to/agent_workflow/install.sh /path/to/project
 bash /path/to/agent_workflow/workflow.sh
 # 可选：注册到 ~/.local/bin，不修改 PATH 或 shell 配置。
 bash /path/to/agent_workflow/workflow.sh --install-cli
-awf-cli --version
+# 源码默认注册 awf-dev，与 Homebrew 的 awf-cli 并存。
+awf-dev --version
 ```
 
 安装先执行只读发现和预检，保留项目专属配置及已有非空文档；未知受管修改会停止覆盖。
