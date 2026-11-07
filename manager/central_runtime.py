@@ -220,6 +220,28 @@ def _save(state: Path, journal: dict, expected: Node) -> Node:
     return read_state(state, policy.ACTIVATION)
 
 
+def _expected_current(journal: dict) -> dict:
+    """发布与已发布恢复共用本批current值，避免只检查部分生效字段。
+
+    本函数不读取可变current，也不把语法校验当作原生成功证据；调用方仍需
+    完成真实项目/原生核验。根授权只复制本批精确targets，不复制witness或
+    receipt；previous也由同一个固定前像推导，恢复不能认领后来的外部改动。
+    """
+    before_node = Node.from_value(journal["current_before"])
+    if before_node.kind not in {"missing", "file"}:
+        raise ActivationError("中央 current 前像不是私有记录或缺失状态")
+    before = policy.validate_current(unique_json(before_node.payload)) if before_node.kind == "file" else None
+    selected = store.validate_binding(journal["runtime_binding"])
+    reference = journal["native_ref"]
+    if not isinstance(reference, dict) or "targets" not in reference:
+        raise ActivationError("中央 current 缺少本批原生根引用")
+    current = {"schema_version": 1, "runtime_binding": selected,
+               "previous_binding": before["runtime_binding"] if before and before["runtime_binding"] != selected else before["previous_binding"] if before else None,
+               "generation": journal["id"],
+               "native_roots": policy.validate_native_roots(reference["targets"])}
+    return policy.validate_current(current)
+
+
 def _check_plan(plan: CentralPlan) -> None:
     if _registry_bytes(plan.state) != plan.registry_before:
         raise ActivationError("项目登记表在中央预览后变化")
@@ -285,16 +307,7 @@ def apply(plan: CentralPlan, *, cancel=None) -> dict:
                         raise ActivationError("未参与激活的固定项目前像发生变化")
                 journal["phase"] = "publishing"
                 snapshot = _save(plan.state, journal, snapshot)
-                before = unique_json(plan.current_before.payload) if plan.current_before.kind == "file" else None
-                current = {"schema_version": 1, "runtime_binding": plan.binding,
-                           "previous_binding": before["runtime_binding"] if before and before["runtime_binding"] != plan.binding else before["previous_binding"] if before else None,
-                           "generation": identifier,
-                           # 生效授权与current同一次CAS发布；activation只记录本批
-                           # 过程，失败或compensated日志不能夺走旧generation的根。
-                           # 上方已核验本批原生收据/产物，这里只冻结精确targets，
-                           # 不把庞大witness、receipt或历史恢复前像复制成第二权威。
-                           "native_roots": policy.validate_native_roots(journal["native_ref"]["targets"])}
-                policy.validate_current(current)
+                current = _expected_current(journal)
                 with Tree(plan.state) as tree:
                     write_control(tree, policy.CURRENT, json_bytes(current), expected=plan.current_before)
                 # 若在此后中断，不能恢复旧项目却留下新 current；recover 会验证
@@ -379,11 +392,16 @@ def recover(plan: RecoveryPlan) -> dict:
         if read_state(plan.state, policy.ACTIVATION) != plan.before:
             raise ActivationError("中央恢复记录在预览后变化")
         journal = unique_json(plan.before.payload)
-        _, current = policy.current_snapshot(plan.state)
+        current_node, current = policy.current_snapshot(plan.state)
         if current and current["generation"] == journal["id"]:
-            if current["runtime_binding"] != journal["runtime_binding"]:
-                raise ActivationError("已发布 current 与激活记录不一致")
+            if current != _expected_current(journal):
+                raise ActivationError("已发布 current 的版本或根授权与激活记录不一致")
             _verify_applied(plan.state, journal, plan.native_context)
+            # 原生核验可能读多个文件；协调锁不能禁止外部编辑器保存current。
+            # 终态保存前重验最初完整Node，连同字节相同的新inode也视为漂移；
+            # 失败只保留外部current和待结算journal，不修正授权或误报恢复成功。
+            if policy.current_snapshot(plan.state)[0] != current_node:
+                raise ActivationError("已发布 current 在资源核验期间发生变化，保留待结算门")
             journal.update(phase="applied", conflicts=[])
             _save(plan.state, journal, plan.before)
             return {**status(plan.state), "recovered": True, "transaction_id": journal["id"]}

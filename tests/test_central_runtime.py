@@ -419,6 +419,78 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.assertTrue(all(set(row) == {"host", "native_root"} for row in current["native_roots"]))
         self.assertEqual([], native_agents.verify_global(plan.native_plan.recovery_ref, context=self.context))
 
+    def interrupt_after_current_publication(self):
+        """真实发布项目和原生产物，只在current成功后切断父事务终态保存。"""
+        self.enable()
+        self.register(self.project)
+        plan = central.preview(self.state, binding=self.core.binding(), native_context=self.context)
+        save = central._save
+        def interrupted(state, journal, expected):
+            if journal["phase"] == "applied":
+                raise OSError("fixture interrupted after real current publication")
+            return save(state, journal, expected)
+        with patch.object(central, "_save", side_effect=interrupted), self.assertRaisesRegex(ValueError, "已发布"):
+            central.apply(plan)
+        self.assertEqual("publishing", policy.pending(self.state)["phase"])
+        self.assertEqual(plan.native_plan.recovery_ref["targets"], policy.current_snapshot(self.state)[1]["native_roots"])
+        return plan
+
+    def assert_published_root_drift_rejected(self, roots):
+        self.interrupt_after_current_publication()
+        node, current = policy.current_snapshot(self.state)
+        altered = {**current, "native_roots": roots}
+        policy.validate_current(altered)  # 负控是合法格式的授权漂移，不能只靠坏schema拒绝。
+        with Tree(self.state) as tree:
+            write_control(tree, policy.CURRENT, json_bytes(altered), expected=node)
+        external = policy.current_snapshot(self.state)[0]
+        pending = read_state(self.state, policy.ACTIVATION)
+        with self.assertRaisesRegex(ValueError, "已发布 current.*不一致"):
+            central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertEqual(external, policy.current_snapshot(self.state)[0])
+        self.assertEqual(pending, read_state(self.state, policy.ACTIVATION))
+        self.assertIsNotNone(policy.pending(self.state))
+        with self.assertRaisesRegex(ValueError, "尚未结算"):
+            central.new_task_gate(self.state, self.project)
+
+    def test_published_recovery_rejects_empty_native_root_authorization(self):
+        self.assert_published_root_drift_rejected([])
+
+    def test_published_recovery_rejects_changed_native_root_authorization(self):
+        other = [{"host": host, "native_root": str(self.workspace / ("external-root-" + host))}
+                 for host in ("codex", "claude", "antigravity")]
+        self.assert_published_root_drift_rejected(other)
+
+    def test_published_recovery_rejects_current_inode_drift_during_verification(self):
+        self.interrupt_after_current_publication()
+        original = policy.current_snapshot(self.state)[0]
+        pending = read_state(self.state, policy.ACTIVATION)
+        verify = central._verify_applied
+        external = []
+        def save_current_after_real_verification(state, journal, context):
+            verify(state, journal, context)
+            # 模拟编辑器在资源核验窗口内同字节重存；字段比较看不到该变化，
+            # 必须保留并比较current完整Node，不能把新的inode认作旧核验结果。
+            with Tree(state) as tree:
+                write_control(tree, policy.CURRENT, original.payload, expected=original)
+            saved = policy.current_snapshot(state)[0]
+            self.assertTrue(saved.same_content(original))
+            self.assertNotEqual(original.identity[:2], saved.identity[:2])
+            external.append(saved)
+        with patch.object(central, "_verify_applied", side_effect=save_current_after_real_verification), \
+                self.assertRaisesRegex(ValueError, "current.*变化"):
+            central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertEqual(external[0], policy.current_snapshot(self.state)[0])
+        self.assertEqual(pending, read_state(self.state, policy.ACTIVATION))
+        with self.assertRaisesRegex(ValueError, "尚未结算"):
+            central.new_task_gate(self.state, self.project)
+        # 新一轮明确恢复会捕获这个仍与本批字段一致的新Node；稳定核验后才可
+        # 结算，且成功也不能为“修复”而重写编辑器留下的current。
+        result = central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertTrue(result["recovered"])
+        self.assertEqual(external[0], policy.current_snapshot(self.state)[0])
+        self.assertIsNone(policy.pending(self.state))
+        self.assertEqual(self.core.binding(), central.new_task_gate(self.state, self.project))
+
     def sparse_pair(self):
         """先完成真实中央激活，让两个项目原本已经依赖明确全局根。
 
