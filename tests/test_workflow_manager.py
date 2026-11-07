@@ -34,7 +34,7 @@ from manager.codex_models import NativeModel, NativeModels
 from manager.claude_execution import effective_role
 from manager.capabilities import diagnose
 from manager.cli import main as cli_main
-from manager import service
+from manager import service, project_service, state_files
 from manager.install_cli import install as install_cli
 from manager.tui import App, cell_width, clip
 
@@ -360,7 +360,7 @@ for line in sys.stdin:
         outcome={'result':NativeModels(failure='原生 model/list 查询超时')}
         def source(host,*,project=None,_snapshot=None):
             return discover(host,self.home,project,env,_snapshot=_snapshot)
-        with patch('manager.tui.service.projects',return_value=[self.home]), \
+        with patch('manager.tui.project_service.projects',return_value=[self.home]), \
              patch('manager.tui.service.roles',return_value=['xy-backend']), \
              patch('manager.tui.service.role_settings',return_value={'model':'inherit','effort':'high'}), \
              patch.dict(os.environ,env,clear=True), \
@@ -1187,10 +1187,10 @@ class TransactionTest(TemporaryProject):
     def test_capacity_is_reserved_before_project_mutation(self):
         """真实快照接近上限时，后续索引空间不足必须在写项目之前拒绝。"""
         self.declare_restore_fixture_effort()
-        changes=self.prepare();initial=service._record_payload
+        changes=self.prepare();initial=service.record_payload
         sizes=[]
         def observe(record):sizes.append((len(json.dumps(record,ensure_ascii=False,indent=2).encode())+1,bool(record.get('previous_files'))));return initial(record)
-        with patch('manager.service._record_payload',side_effect=observe):identifier=service.commit(self.state,self.project,changes)
+        with patch('manager.service.record_payload',side_effect=observe):identifier=service.commit(self.state,self.project,changes)
         base=next(size for size,versions in sizes if not versions)
         # 通过当前正式恢复同步原生 expected 收据；手写旧字节会被中央归属正确拒绝。
         service.commit(self.state,self.project,service.prepare_restore(self.state,self.project,identifier))
@@ -1202,13 +1202,13 @@ class TransactionTest(TemporaryProject):
         for row in changes:self.assertEqual((self.project/row.relative).read_bytes(),row.before)
 
     def test_failed_error_log_keeps_original_failure_and_retained_paths(self):
-        changes=self.prepare();original=service.write_state;calls=[]
+        changes=self.prepare();original=state_files.write_state;calls=[]
         def broken(*args):
             calls.append(True)
             if len(calls)>1:raise OSError('DISK FULL FIXTURE')
             return original(*args)
         def fail():raise ValueError('ORIGINAL VERIFY FAILURE')
-        with patch('manager.service.write_state',side_effect=broken),self.assertRaises(ValueError) as result:
+        with patch('manager.state_files.write_state',side_effect=broken),self.assertRaises(ValueError) as result:
             service.commit(self.state,self.project,changes,fail)
         message=str(result.exception)
         self.assertIn('ORIGINAL VERIFY FAILURE',message);self.assertIn('DISK FULL FIXTURE',message)
@@ -1263,7 +1263,7 @@ class TransactionTest(TemporaryProject):
                 if target == path.name and not triggered:
                     editor.seek(0);editor.write(b'CONCURRENT OLD FD SAVE');editor.truncate();editor.flush();triggered.append(True)
                 return original(source,target,*args,**kwargs)
-            with patch('manager.service.os.link',side_effect=save),self.assertRaisesRegex(ValueError,'保留版本'):
+            with patch('manager.state_files.os.link',side_effect=save),self.assertRaisesRegex(ValueError,'保留版本'):
                 service.commit(self.state,self.project,changes)
         backup=service.backups(self.state,self.project)[0]
         self.assertEqual(backup['status'],'conflict');self.assertTrue(backup['retained_files'])
@@ -1371,13 +1371,13 @@ class TransactionTest(TemporaryProject):
     def test_parent_swap_cannot_write_through_to_external_directory(self):
         changes=self.prepare();outside=self.root/'external-agents';outside.mkdir()
         external=outside/'xy-backend.toml';external.write_bytes(b'EXTERNAL')
-        original=service.AnchoredFile.write;swapped=[]
+        original=state_files.AnchoredFile.write;swapped=[]
         def swap(target,data,mode,expected=None):
             if target.name == 'xy-backend.toml' and not swapped:
                 parent=self.project/'.codex/agents';parent.rename(self.project/'.codex/agents-original');parent.symlink_to(outside,target_is_directory=True);swapped.append(True)
             return original(target,data,mode,expected)
         def fail():raise ValueError('verify failed')
-        with patch.object(service.AnchoredFile,'write',swap),self.assertRaisesRegex(ValueError,'verify failed|父目录在事务中被替换'):
+        with patch.object(state_files.AnchoredFile,'write',swap),self.assertRaisesRegex(ValueError,'verify failed|父目录在事务中被替换'):
             service.commit(self.state,self.project,changes,fail)
         self.assertEqual(external.read_bytes(),b'EXTERNAL')
         self.assertEqual((self.project/'.codex/agents-original/xy-backend.toml').read_bytes(),changes[0].before)
@@ -1390,12 +1390,12 @@ class TransactionTest(TemporaryProject):
             if not edited:
                 path.write_bytes(b'CONCURRENT EDIT');edited.append(True)
         # 仅在角色文件的发布阶段注入并发编辑，不干扰先行备份的写入。
-        real_write=service.AnchoredFile.write
+        real_write=state_files.AnchoredFile.write
         def write(target,data,mode,expected=None):
             if target.name == 'xy-backend.toml':
-                with patch('manager.service.os.fsync',side_effect=edit):return real_write(target,data,mode,expected)
+                with patch('manager.state_files.os.fsync',side_effect=edit):return real_write(target,data,mode,expected)
             return real_write(target,data,mode,expected)
-        with patch.object(service.AnchoredFile,'write',write),self.assertRaisesRegex(ValueError,'并发修改'):
+        with patch.object(state_files.AnchoredFile,'write',write),self.assertRaisesRegex(ValueError,'并发修改'):
             service.commit(self.state,self.project,changes)
         self.assertEqual(path.read_bytes(),b'CONCURRENT EDIT')
 
@@ -1405,7 +1405,7 @@ class TransactionTest(TemporaryProject):
             if target == 'xy-backend.toml' and not edited:
                 path.write_bytes(b'LAST MOMENT SAVE');edited.append(True)
             return original(source,target,*args,**kwargs)
-        with patch('manager.service.os.link',side_effect=save),self.assertRaisesRegex(ValueError,'并发修改'):
+        with patch('manager.state_files.os.link',side_effect=save),self.assertRaisesRegex(ValueError,'并发修改'):
             service.commit(self.state,self.project,changes)
         self.assertEqual(path.read_bytes(),b'LAST MOMENT SAVE')
         self.assertEqual(path.stat().st_nlink,1)
@@ -1442,12 +1442,12 @@ class TransactionTest(TemporaryProject):
     def test_project_registry_is_deduplicated_and_does_not_touch_project(self):
         # 本例只验证登记语义，使用未安装目录；旧自包含安装的删除另受原生迁移边界约束。
         self.project=self.root/'仅登记项目';self.project.mkdir()
-        self.assertEqual(service.projects(self.state),[]);self.assertEqual([],service.backups(self.state,self.project))
-        service.register(self.state,self.project);service.register(self.state,self.project)
-        self.assertEqual(service.projects(self.state),[self.project])
-        service.register(self.state,self.project,True);self.assertEqual(service.projects(self.state),[])
-        self.assertNotIn(self.project,service.projects(self.state,self.root))
-        service.register(self.state,self.project);self.assertIn(self.project,service.projects(self.state,self.root))
+        self.assertEqual(project_service.projects(self.state),[]);self.assertEqual([],service.backups(self.state,self.project))
+        project_service.register(self.state,self.project);project_service.register(self.state,self.project)
+        self.assertEqual(project_service.projects(self.state),[self.project])
+        project_service.register(self.state,self.project,True);self.assertEqual(project_service.projects(self.state),[])
+        self.assertNotIn(self.project,project_service.projects(self.state,self.root))
+        project_service.register(self.state,self.project);self.assertIn(self.project,project_service.projects(self.state,self.root))
 
     def test_keyboard_stage_cancel_and_cross_project_scope(self):
         app=App(self.state,self.root,self.project)
@@ -1495,8 +1495,9 @@ class AddInstallTest(TemporaryProject):
     def test_empty_list_and_project_list_both_offer_registration_entry(self):
         app=App(self.state,self.root/'empty-scan')
         self.assertEqual(app.pane,'projects');self.assertIsNone(app.project)
-        with patch.object(service,'apply_project') as apply:
-            app.dispatch('enter');self.assertEqual(app.modal,'add')
+        with patch.object(project_service,'apply_project') as apply:
+            # 空列表仍先选中固定全局入口；向下选中可见登记项后 Enter，不能把全局当登记。
+            app.dispatch('down');app.dispatch('enter');self.assertEqual(app.modal,'add')
             self.assertIn('登记',app.bindings()[0].label)
             app.dispatch('esc');apply.assert_not_called()
         self.assertFalse(self.state.exists())
@@ -1517,7 +1518,7 @@ class AddInstallTest(TemporaryProject):
             app.dispatch('enter');app.dispatch('enter');app.dispatch('a');self.settle(app)
         self.assertEqual(app.project,target);self.assertEqual(app.pane,'projects');self.assertEqual(app.modal,'result')
         self.assertEqual(app.role_list(),[]);self.assertEqual(app.drafts[key],self.value)
-        self.assertIs(app.catalogs[other_key],self.catalog);self.assertIn(target,service.projects(self.state))
+        self.assertIs(app.catalogs[other_key],self.catalog);self.assertIn(target,project_service.projects(self.state))
         self.assertEqual(app.projects.count(target),1)
 
     def test_invalid_input_stays_editable_without_starting_apply(self):
@@ -1525,7 +1526,7 @@ class AddInstallTest(TemporaryProject):
         # 空输入、多目录以及源包本身/子目录/包含源包的父目录均不得触发安装或状态写入。
         for value in ('',' \t',str(self.root/'missing'),"'unclosed",shlex.quote(str(self.root))+' '+shlex.quote(str(self.project)),
                       str(PACK),str(PACK/'manager'),str(PACK.parent)):
-            with self.subTest(value=value),patch.object(service,'apply_project') as apply:
+            with self.subTest(value=value),patch.object(project_service,'apply_project') as apply:
                 app.dispatch('a');app.input=value;app.dispatch('enter')
                 self.assertEqual(app.modal,'add');self.assertIsNone(app.future);apply.assert_not_called()
         self.assertFalse(self.state.exists())
@@ -1533,7 +1534,7 @@ class AddInstallTest(TemporaryProject):
     def test_apply_failure_keeps_project_list_and_drafts(self):
         target=self.root/'failed-project';target.mkdir()
         app=App(self.state,self.root,self.project);key=app.scope();app.drafts[key]=dict(self.value)
-        with ThreadPoolExecutor(max_workers=1) as executor,patch.object(service,'apply_project',side_effect=ValueError('fixture update unfinished')):
+        with ThreadPoolExecutor(max_workers=1) as executor,patch.object(project_service,'apply_project',side_effect=ValueError('fixture update unfinished')):
             app.executor=executor;app.dispatch('a');app.input=str(target);app.dispatch('enter')
             app.dispatch('enter');self.settle(app);self.assertEqual(app.modal,'project_plan')
             app.dispatch('enter')
@@ -1541,8 +1542,8 @@ class AddInstallTest(TemporaryProject):
             app.poll_job()
         self.assertEqual(app.modal,'error');self.assertIn('update unfinished',app.text)
         self.assertEqual(app.project,self.project);self.assertNotIn(target,app.projects)
-        self.assertNotIn(target,service.projects(self.state));self.assertEqual(app.drafts[key],self.value)
-        with service.lock(self.state,str(target)):pass
+        self.assertNotIn(target,project_service.projects(self.state));self.assertEqual(app.drafts[key],self.value)
+        with state_files.lock(self.state,str(target)):pass
 
     def test_adding_existing_project_registers_without_enable_or_duplicates(self):
         app=App(self.state,self.root,self.project)
@@ -1551,7 +1552,7 @@ class AddInstallTest(TemporaryProject):
             app.executor=executor;app.dispatch('a');app.input=str(self.project);app.dispatch('enter')
             app.dispatch('enter');self.settle(app);app.dispatch('enter');self.settle(app)
         self.assertEqual(app.projects.count(self.project),1)
-        self.assertEqual(service.projects(self.state),[self.project]);self.assertEqual(app.modal,'result')
+        self.assertEqual(project_service.projects(self.state),[self.project]);self.assertEqual(app.modal,'result')
         self.assertEqual(before,(self.project/'.codex/agents/xy-backend.toml').read_bytes())
 
 
@@ -1564,8 +1565,9 @@ class InstalledProjectIntegrationTest(unittest.TestCase):
             source=CentralCliIntegrationTest.create_source(root)
             # 添加先选择“登记并启用”，读取预览后再确认；两次作业均消费正式共享服务。
             app=App(state,root)
-            with ThreadPoolExecutor(max_workers=1) as executor,patch.object(service,'SOURCE',source):
-                app.executor=executor;app.dispatch('enter');app.input=str(project);app.dispatch('enter')
+            with ThreadPoolExecutor(max_workers=1) as executor,patch.object(project_service,'SOURCE',source):
+                # 初始无项目时全局默认已占首项；直接用正式 a 键进入登记。
+                app.executor=executor;app.dispatch('a');app.input=str(project);app.dispatch('enter')
                 self.assertEqual(app.modal,'add_mode');app.index=1;app.dispatch('enter')
                 app.future.result(timeout=30);app.poll_job();self.assertEqual(app.modal,'project_plan')
                 self.assertFalse(state.exists());app.dispatch('enter');app.future.result(timeout=30);app.poll_job()
@@ -1635,11 +1637,11 @@ class CentralCliIntegrationTest(unittest.TestCase):
         for directory in runtime_store.CORE_DIRECTORIES:(source/directory).mkdir(parents=True)
         for relative in runtime_store.SETUP_FILES:cls.put(source,relative,b"#!/bin/sh\nexit 0\n")
         # 真实薄桥和 context_read 的直接依赖显式列出；其余产品文件用最小夹具。
-        selected=("lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py",
+        selected=("lib/project_paths.py", "lib/install_process.py", "lib/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py",
                   "lib/runtime_pins.py","lib/standard_paths.py","lib/claude_instructions.py","lib/context_read.py",
                   "lib/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/role_preferences.py","lib/claude_options.py",
                   "lib/validate_antigravity_artifacts.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
-                  "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py","manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py",
+                  "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py","manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py",
                   "templates/project.yaml.example","templates/docs/PROJECT.md","platforms/shared/core-skills.txt")
         for relative in selected:cls.put(source,relative,(PACK/relative).read_bytes())
         for role in role_models.ROLES:cls.put(source,f"roles/{role}.md",(PACK/f"roles/{role}.md").read_bytes())
@@ -1748,13 +1750,13 @@ class CentralCliIntegrationTest(unittest.TestCase):
         self.cli("repair",self.project);self.assertTrue(role.is_file())
         raw=role.read_bytes();role.write_bytes(raw+b"# unknown edit\n")
         refused=self.cli("del",self.project,expected=2)
-        self.assertTrue(refused["error"]["conflicts"]);self.assertIn(self.project,service.projects(self.state))
+        self.assertTrue(refused["error"]["conflicts"]);self.assertIn(self.project,project_service.projects(self.state))
         self.assertTrue(self.cli("status",self.project)["result"]["conflicts"])
         role.write_bytes(raw)
         deleted=self.cli("del",self.project)["result"]
         self.assertFalse(deleted["enabled"]);self.assertFalse(deleted["registered"])
         self.assertTrue(self.project.is_dir());self.assertTrue((self.project/".agent-workflow/project.yaml").is_file())
-        self.assertTrue((self.project/"docs/PROJECT.md").is_file());self.assertNotIn(self.project,service.projects(self.state))
+        self.assertTrue((self.project/"docs/PROJECT.md").is_file());self.assertNotIn(self.project,project_service.projects(self.state))
         self.assertEqual(json.loads(self.bridge(*helper).stdout)["text"],first["text"])
 
     def test_model_receipt_apply_restore_and_failure_keep_native_expected(self):
@@ -1777,7 +1779,7 @@ class CentralCliIntegrationTest(unittest.TestCase):
         def failure():raise ValueError("fixture verification failure")
         with self.assertRaisesRegex(ValueError,"fixture verification failure"):
             service.commit(self.state,self.project,changes,failure)
-        self.assertEqual(role.read_bytes(),original);self.assertFalse(service.project_status(self.state,self.project)["conflicts"])
+        self.assertEqual(role.read_bytes(),original);self.assertFalse(project_service.project_status(self.state,self.project)["conflicts"])
         self.assertEqual(service.backups(self.state,self.project)[0]["status"],"rolled_back")
         # 工具自己的模型修改不得使下一次换版/停用被当成手改；未知正文仍须拒绝。
         service.commit(self.state,self.project,changes,lambda:service.check(self.project,"codex",state=self.state))
@@ -1786,38 +1788,38 @@ class CentralCliIntegrationTest(unittest.TestCase):
         self.cli("open",self.project)
         role.write_bytes(role.read_bytes()+b"# manual secret=DO-NOT-ECHO\n")
         rejected=self.cli(*arguments,"--apply",expected=2)
-        self.assertNotIn("DO-NOT-ECHO",json.dumps(rejected));self.assertTrue(service.project_status(self.state,self.project)["conflicts"])
+        self.assertNotIn("DO-NOT-ECHO",json.dumps(rejected));self.assertTrue(project_service.project_status(self.state,self.project)["conflicts"])
 
     def test_plan_registration_guards_cancel_clone_and_corrupt_core(self):
         from lib import runtime_store
-        plan=service.preview_project(self.state,self.project,"add")
-        other=self.root/"registry-concurrent";other.mkdir();service.register(self.state,other)
+        plan=project_service.preview_project(self.state,self.project,"add")
+        other=self.root/"registry-concurrent";other.mkdir();project_service.register(self.state,other)
         with self.assertRaisesRegex(ValueError,"登记表在预览后"):
-            service.apply_project(plan)
-        self.assertNotIn(self.project,service.projects(self.state))
+            project_service.apply_project(plan)
+        self.assertNotIn(self.project,project_service.projects(self.state))
         cancelled=Event();cancelled.set()
-        plan=service.preview_project(self.state,self.project,"add",enable=True,content_id=self.first.content_id)
+        plan=project_service.preview_project(self.state,self.project,"add",enable=True,content_id=self.first.content_id)
         with self.assertRaisesRegex(ValueError,"已取消"):
-            service.apply_project(plan,cancel=cancelled)
+            project_service.apply_project(plan,cancel=cancelled)
         self.assertFalse((self.project/".agent-workflow").exists())
         cancelled.clear();native_apply=service.runtime_service.apply
         def late_cancel(native_plan):
             # 只控制取消到达时机，真正文件发布仍执行正式原生服务。
             cancelled.set();return native_apply(native_plan)
         with patch.object(service.runtime_service,"apply",side_effect=late_cancel):
-            result=service.apply_project(plan,cancel=cancelled)
+            result=project_service.apply_project(plan,cancel=cancelled)
         self.assertTrue(result["enabled"]);self.assertTrue(result["cancel_requested"])
         clone=self.root/"unmanaged-clone";shutil.copytree(self.project,clone,symlinks=True)
         status=self.cli("status",clone)["result"]
         self.assertEqual(status["state"],"unmanaged");self.assertFalse(status["enabled"])
         self.cli("open",clone,"--content-id",self.first.content_id,expected=2)
-        self.assertFalse(service.project_status(self.state,clone)["enabled"])
+        self.assertFalse(project_service.project_status(self.state,clone)["enabled"])
         self.cli("use",self.project,"f"*64,expected=2)
-        self.assertEqual(service.project_status(self.state,self.project)["runtime_binding"],self.first.binding())
+        self.assertEqual(project_service.project_status(self.state,self.project)["runtime_binding"],self.first.binding())
         link=self.project/".agents/skills/xy-workflow";target=os.readlink(link)
         link.rename(link.with_name(".retained-fixture-link"));link.symlink_to(target)
         self.cli("close",self.project,expected=2)
-        self.assertTrue(service.project_status(self.state,self.project)["conflicts"])
+        self.assertTrue(project_service.project_status(self.state,self.project)["conflicts"])
         # 损坏独立状态中的固定核心，不能影响共享两版本或降级到源码/其他版本。
         bad_state=self.root/"corrupt-state";core=runtime_store.import_core(self.source,bad_state)
         bad_project=self.root/"corrupt-project";bad_project.mkdir()
@@ -1833,21 +1835,21 @@ class CentralCliIntegrationTest(unittest.TestCase):
 
 
     def test_delete_preserves_registry_edits_after_native_disable(self):
-        self.enable();plan=service.preview_project(self.state,self.project,"del")
+        self.enable();plan=project_service.preview_project(self.state,self.project,"del")
         original_apply=service.runtime_service.apply
         newcomer=self.root/"externally-registered";newcomer.mkdir()
         def external_save(native_plan):
             result=original_apply(native_plan)
             # 模拟不遵守管理器锁的外部编辑器；原生停用已结算，登记不得吞掉新保存。
-            data=service.registry(self.state);data["registered"].append(str(newcomer))
+            data=project_service.registry(self.state);data["registered"].append(str(newcomer))
             (self.state/"projects.json").write_text(json.dumps(data),encoding="utf-8")
             return result
         with patch.object(service.runtime_service,"apply",side_effect=external_save),self.assertRaisesRegex(ValueError,"原生项目操作已结算"):
-            service.apply_project(plan)
-        self.assertFalse(service.project_status(self.state,self.project)["enabled"])
-        self.assertIn(self.project,service.projects(self.state));self.assertIn(newcomer,service.projects(self.state))
-        result=service.apply_project(service.preview_project(self.state,self.project,"del"))
-        self.assertFalse(result["registered"]);self.assertIn(newcomer,service.projects(self.state));self.assertTrue(self.project.is_dir())
+            project_service.apply_project(plan)
+        self.assertFalse(project_service.project_status(self.state,self.project)["enabled"])
+        self.assertIn(self.project,project_service.projects(self.state));self.assertIn(newcomer,project_service.projects(self.state))
+        result=project_service.apply_project(project_service.preview_project(self.state,self.project,"del"))
+        self.assertFalse(result["registered"]);self.assertIn(newcomer,project_service.projects(self.state));self.assertTrue(self.project.is_dir())
 
     def test_source_root_enable_refused_without_creating_state(self):
         state=self.root/"protected-source-state"
@@ -1895,7 +1897,7 @@ class CliLauncherTest(TemporaryProject):
              'PATH':str(directory)+os.pathsep+os.environ['PATH']}
         result=subprocess.run(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root),'--json','add',self.project.name],
                               cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
-        self.assertEqual(result.returncode,0,result.stderr);self.assertIn(str(self.project),json.loads(result.stdout))
+        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(str(self.project),json.loads(result.stdout)['result']['project'])
         # 一次版本探测、一次模块执行；两个子进程的环境均应保留原值。
         self.assertEqual(log.read_text().splitlines(),[env['CDPATH'],env['PATH']]*2)
 
@@ -1974,7 +1976,7 @@ class CliLauncherTest(TemporaryProject):
         self.assertEqual(result.returncode,0,result.stderr);self.assertIn('usage: awf-cli',result.stdout)
         result=subprocess.run(['awf-cli','--state-dir',str(self.state),'--scan-root',str(self.root),'--json','add',self.project.name],
                               cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
-        self.assertEqual(result.returncode,0,result.stderr);self.assertIn(str(self.project),json.loads(result.stdout))
+        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(str(self.project),json.loads(result.stdout)['result']['project'])
         result=subprocess.run(['awf-cli','--install-cli','--bin-dir',directory.name],cwd=self.root,env=env,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(target.lstat().st_ino,inode)
 
@@ -2047,13 +2049,13 @@ class TerminalAndCliTest(TemporaryProject):
                 if app.modal == 'result':app.done=True
                 if app.modal == 'error':raise AssertionError(app.text)
                 time.sleep(.01);return -1
-        with patch.object(service,'SOURCE',source),patch.object(service.runtime_service,'_publish',side_effect=checkpoint),\
+        with patch.object(project_service,'SOURCE',source),patch.object(service.runtime_service,'_publish',side_effect=checkpoint),\
              patch('manager.tui.curses.curs_set'),patch('manager.tui.curses.has_colors',return_value=False),\
              patch('manager.tui.curses.mousemask'),patch.object(app,'draw',side_effect=lambda:painted.append(app.cancel_job.is_set())):
             self.assertEqual(app.loop(Screen()),0)
         self.assertTrue(finish.is_set());self.assertTrue(locked_during_settlement)
         self.assertTrue(any(painted));self.assertTrue(app.drafts);self.assertIn('结算',app.text)
-        self.assertTrue(service.project_status(self.state,self.project)['enabled'])
+        self.assertTrue(project_service.project_status(self.state,self.project)['enabled'])
         with directory_lock(self.project,'install'):pass
 
     def test_launcher_preserves_relative_project_paths(self):
@@ -2102,7 +2104,7 @@ class TerminalAndCliTest(TemporaryProject):
             self.assertIsNone(process.poll())
             os.write(master,b'\r');until('推理级别')
             os.write(master,b'\r');until('已暂存')
-            os.write(master,b':preview\r');until('变更预览')
+            os.write(master,b':preview\r');until('保存预览')
             os.write(master,b'\x1b');time.sleep(.1)
             os.write(master,b'a');until('输入目录')
             os.write(master,'/tmp/中文路径'.encode()+b'\x15edited-path');until('edited-path')

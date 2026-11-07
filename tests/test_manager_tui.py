@@ -27,7 +27,7 @@ from unittest.mock import patch
 import uuid
 
 from lib import runtime_store, role_models
-from manager import service, model_preferences
+from manager import service, model_preferences, project_service, state_files
 from manager.catalog import Catalog, Model
 from manager.tui import App, HOSTS, cell_width
 from manager.tui_state import Impact
@@ -110,7 +110,7 @@ class TuiTest(unittest.TestCase):
             choices={host:{role:{"effort":"high"} for role in ("xy-backend","xy-web")} for host in ("codex","claude")}
             (project/".agent-workflow/project.yaml").write_text(role_models.update("project_name: fixture\n",choices),encoding="utf-8")
         self.catalog=Catalog("codex",[Model("inherit","继承宿主","fixture",("high","max")),Model("local-model","本地模型","fixture",("high","max"))])
-        for target,value in (("manager.tui.service.projects",self.projects),
+        for target,value in (("manager.tui.project_service.projects",self.projects),
                              ("manager.tui.model_preferences.roles",["xy-backend","xy-web"]),
                              ("manager.tui.model_preferences.load_catalogs",model_preferences.PreferenceCatalogs(self.catalog,{})),
                              ("manager.tui.discover",self.catalog)):
@@ -307,7 +307,7 @@ class TuiTest(unittest.TestCase):
     def test_project_filter_empty_keeps_registration_entry_without_writing(self):
         self.app.pane="projects";self.app.dispatch("/");self.type("does-not-exist");self.app.dispatch("enter")
         self.assertIn("登记",self.draw().text())
-        with patch("manager.tui.service.apply_project") as apply:
+        with patch("manager.tui.project_service.apply_project") as apply:
             self.app.dispatch("enter");apply.assert_not_called()
         self.app.dispatch("a");self.assertEqual(self.app.modal,"add")
 
@@ -512,7 +512,7 @@ class TuiTest(unittest.TestCase):
             self.app.preview_project(target,'add');self.app.future.result(timeout=5);self.app.poll_job()
             self.assertEqual(self.app.modal,'project_plan')
             with patch.object(self.app,'query_project_rows',side_effect=OSError('fixture post-commit refresh failure')), \
-                 patch('manager.tui.service.apply_project',wraps=service.apply_project) as apply:
+                 patch('manager.tui.project_service.apply_project',wraps=project_service.apply_project) as apply:
                 self.app.confirm()
                 with self.assertRaisesRegex(OSError,'post-commit'):self.app.future.result(timeout=5)
                 self.app.poll_job()
@@ -527,7 +527,7 @@ class TuiTest(unittest.TestCase):
                 self.app.poll_job();self.app.dispatch('esc')
                 self.assertIsNone(self.app.modal);self.assertFalse(any(frame['modal']=='project_plan' for frame in self.app.frames))
                 self.app.apply_project();self.assertEqual(apply.call_count,1)
-        with service.lock(self.app.state,str(target)):pass
+        with state_files.lock(self.app.state,str(target)):pass
 
     def test_global_failure_invalidates_all_affected_projections_and_keeps_authorizations(self):
         """真实全局前像守卫失败；同宿主全部显示失效，所有草稿授权仍保持原值。"""
@@ -795,7 +795,7 @@ class TuiTest(unittest.TestCase):
             def __init__(self,project,summary):self.project=project;self.summary=summary
         self.app.project_plan=ConflictingPlan(self.project,summary)
         self.app.show_view("project_plan");self.app.text=project_plan_text(summary)
-        with patch("manager.tui.service.apply_project") as apply:
+        with patch("manager.tui.project_service.apply_project") as apply:
             self.app.dispatch("enter");apply.assert_not_called()
         self.assertFalse(any(row.action == "confirm" for row in self.app.bindings()))
         self.assertIn("停止覆盖",self.app.text);self.assertIn("修复",self.app.text)
@@ -809,7 +809,7 @@ class TuiTest(unittest.TestCase):
              "runtime_binding":{"content_id":identifier},"previous_binding":None,
              "hosts":list(HOSTS),"managed_paths":["中文/超长路径/é"],"conflicts":[]}
         self.app.project_rows[str(self.project)]=row;self.app.theme=Theme()
-        with patch("manager.tui.service.project_status") as status,patch("manager.tui.service.project_summaries") as summaries,patch("manager.tui.runtime_store.list_cores") as versions:
+        with patch("manager.tui.project_service.project_status") as status,patch("manager.tui.project_service.project_summaries") as summaries,patch("manager.tui.runtime_store.list_cores") as versions:
             self.draw();self.draw();status.assert_not_called();summaries.assert_not_called();versions.assert_not_called()
         text=self.screen.text();self.assertIn("已停用",text);self.assertIn(identifier[:8],text)
         for width in (80,100,140):
@@ -1008,11 +1008,11 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         for name in runtime_store.SETUP_FILES:put(name,b"#!/bin/sh\nexit 0\n")
         # apply 通过固定核心的真实 reader 验收发布；中央启停现在还要校验签名 Hook。
         # 只补齐这条真实消费链的直接依赖，不复制完整源包、宿主环境或独立运行时。
-        for name in ("lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py","lib/claude_options.py",
+        for name in ("lib/project_paths.py", "lib/install_process.py", "lib/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/runtime_project.py","lib/runtime_bridge.py","lib/claude_options.py",
                      "lib/claude_instructions.py","lib/workflow_hook_install.py","lib/workflow_hook_settings.py",
                      "lib/workflow_hooks.py","lib/windows_hook_command.py","lib/merge_codex_config.py",
                      "lib/shared_core_skills.py","lib/role_models.py","lib/role_preferences.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
-                     "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
+                     "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
                      "roles/xy-qa.md","roles/xy-uiux.md","platforms/shared/core-skills.txt"):
             put(name,(PACK/name).read_bytes())
         put("product/WORKFLOW.md","# TUI 固定版本甲\n".encode());put("product/GLOBAL_CONSTRAINTS.md",b"# fixture\n")
@@ -1029,11 +1029,18 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         print(f"TUI 最小协议夹具已清理：{cls.root}；exists={cls.root.exists()}")
 
     def setUp(self):
+        # 类级状态目录只共享不可变核心，登记/全局偏好归每个测试自己的夹具。
+        # 前例故意留下的坏 pin 不能成为下一例的全局物化目标，也不能令 Home↓
+        # 跳进另一项目。精确回收这两个已知私有文件，不清理核心、缓存或用户目录。
+        def clear_mutable_fixture():
+            for relative in ("projects.json", "preferences/role-models.json"):
+                (self.state / relative).unlink(missing_ok=True)
+        self.addCleanup(clear_mutable_fixture)
         self.project=self.root/("中文 é 项目-"+uuid.uuid4().hex[:8]);self.project.mkdir()
         self.app=App(self.state,self.root/"empty-scan",self.project)
         self.executor=ThreadPoolExecutor(max_workers=1);self.app.executor=self.executor
         self.addCleanup(self.executor.shutdown,wait=True)
-        self.source_patch=patch("manager.tui.service.SOURCE",self.source);self.source_patch.start();self.addCleanup(self.source_patch.stop)
+        self.source_patch=patch("manager.tui.project_service.SOURCE",self.source);self.source_patch.start();self.addCleanup(self.source_patch.stop)
 
     def type(self,text):
         for char in text:self.app.dispatch(char)
@@ -1065,14 +1072,14 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
     def test_real_project_lifecycle_versions_details_and_deletion_focus(self):
         self.app.dispatch("a");self.type(str(self.project));self.app.dispatch("enter");self.app.dispatch("enter");self.settle()
         self.assertEqual("project_plan",self.app.modal);self.assertEqual([],list(self.project.iterdir()))
-        self.apply();self.assertFalse(service.project_status(self.state,self.project)["enabled"])
-        self.assertIn(str(self.project),service.registry(self.state)["registered"])
+        self.apply();self.assertFalse(project_service.project_status(self.state,self.project)["enabled"])
+        self.assertIn(str(self.project),project_service.registry(self.state)["registered"])
         before=self.snapshot(self.root)
         # 当前来源导入与普通启用共用真实中央服务；先验证导入预览取消无写入，
         # 再从普通启用完成后续生命周期，避免仅用模拟调用证明消费者仍可达。
         self.menu("install");self.assertIn(self.core.content_id,self.app.text)
         self.app.dispatch("esc");self.assertEqual("manage",self.app.modal);self.assertEqual(before,self.snapshot(self.root))
-        self.menu("enable");self.apply();self.assertTrue(service.project_status(self.state,self.project)["enabled"])
+        self.menu("enable");self.apply();self.assertTrue(project_service.project_status(self.state,self.project)["enabled"])
         self.menu("details");self.assertEqual("details",self.app.modal)
         self.assertTrue(all(label in self.app.text for label in ("Codex","Claude Code","Antigravity",self.core.content_id,str(self.project))))
         self.menu("versions");self.assertEqual("versions",self.app.modal)
@@ -1080,25 +1087,25 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         self.app.index=next(index for index,(_,value) in enumerate(self.app.options()) if value == self.alternate.content_id)
         self.app.dispatch("i");self.assertIn(self.alternate.content_id,self.app.text)
         self.app.dispatch("esc");self.app.dispatch("enter");self.settle();self.apply()
-        self.assertEqual(self.alternate.content_id,service.project_status(self.state,self.project)["runtime_binding"]["content_id"])
+        self.assertEqual(self.alternate.content_id,project_service.project_status(self.state,self.project)["runtime_binding"]["content_id"])
         self.menu("rollback");self.apply()
-        self.assertEqual(self.core.content_id,service.project_status(self.state,self.project)["runtime_binding"]["content_id"])
+        self.assertEqual(self.core.content_id,project_service.project_status(self.state,self.project)["runtime_binding"]["content_id"])
         self.menu("check");self.assertIn("只读校验通过",self.app.text)
         self.menu("disable");self.assertIn("保留项目文件",self.app.text);self.apply()
         config=(self.project/".agent-workflow/project.yaml").read_bytes()
         documentation=(self.project/"docs/PROJECT.md").read_bytes()
         neighbor=self.root/("相邻项目-"+uuid.uuid4().hex[:8]);neighbor.mkdir()
-        service.apply_project(service.preview_project(self.state,neighbor,"add"))
+        project_service.apply_project(project_service.preview_project(self.state,neighbor,"add"))
         other_key=(str(neighbor),"claude","xy-qa");self.app.drafts[other_key]={"model":"inherit","effort":"inherit"}
         self.menu("del");self.apply();self.app.dispatch("esc")
         self.assertNotIn(self.project,self.app.projects);self.assertNotEqual(self.project,self.app.project)
         self.assertIsNone(self.app.modal);self.assertIn(other_key,self.app.drafts)
         self.assertEqual(config,(self.project/".agent-workflow/project.yaml").read_bytes())
         self.assertEqual(documentation,(self.project/"docs/PROJECT.md").read_bytes())
-        self.assertNotIn(str(self.project),service.registry(self.state)["registered"])
+        self.assertNotIn(str(self.project),project_service.registry(self.state)["registered"])
 
     def test_hand_edit_conflict_and_unknown_pin_remain_visible_without_fallback(self):
-        service.apply_project(service.preview_project(self.state,self.project,"add",enable=True,content_id=self.core.content_id))
+        project_service.apply_project(project_service.preview_project(self.state,self.project,"add",enable=True,content_id=self.core.content_id))
         target=self.project/".codex/agents/xy-qa.toml";target.write_bytes(target.read_bytes()+b"\n# hand edit\n")
         self.menu("disable");self.assertFalse(self.app.project_plan.summary["can_apply"])
         before=self.snapshot(self.project);self.app.dispatch("enter")
@@ -1111,7 +1118,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         record_path.write_text(json.dumps(record))
         self.menu("details");self.assertIn("固定核心版本缺失",self.app.text)
         self.menu("enable");self.assertEqual("error",self.app.modal);self.assertIn("固定核心版本缺失",self.app.text)
-        self.assertEqual("a"*64,service.project_status(self.state,self.project)["runtime_binding"]["content_id"])
+        self.assertEqual("a"*64,project_service.project_status(self.state,self.project)["runtime_binding"]["content_id"])
 
     def test_damaged_version_list_fails_and_keeps_model_draft(self):
         self.menu("versions");self.assertEqual("versions",self.app.modal)
@@ -1140,7 +1147,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         environment.update(HOME=str(host),XDG_CONFIG_HOME=str(host/"config"),CLAUDE_CONFIG_DIR=str(host/"claude"),
                            CODEX_HOME=str(host/"codex"),TERM="xterm-256color",LANG="en_US.UTF-8")
         # 唯一注入是最小真实来源路径；run/App/服务/文件系统和所有按键均为生产实现。
-        program="from pathlib import Path; import sys; from manager import service, model_preferences; from manager.tui import run; service.SOURCE=Path(sys.argv[4]); raise SystemExit(run(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3])))"
+        program="from pathlib import Path; import sys; from manager import service, model_preferences, project_service, state_files; from manager.tui import run; project_service.SOURCE=Path(sys.argv[4]); raise SystemExit(run(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3])))"
         process=subprocess.Popen([*PYTHON,"-c",program,str(self.state),str(self.root/"empty-scan"),str(self.project),str(self.source)],
                                  cwd=PACK,env=environment,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)
         checkpoints.append(f'\n=== PTY进程 {process.pid} · 测试项目 {self.project} ===\n')
@@ -1209,19 +1216,19 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             send("\r");view("选择登记方式")
             send("\r");view("项目管理 · 只读预览")
             checkpoint('登记只读预览弹层')
-            self.assertNotIn(str(self.project),service.registry(self.state)["registered"])
+            self.assertNotIn(str(self.project),project_service.registry(self.state)["registered"])
             self.assertEqual([],list(self.project.iterdir()))
             send("\x1b");view("选择登记方式");send("\x1b");view("登记项目 · 输入目录")
             self.assertIn("项目-",terminal.text());send("\x1b")
             send("a");view("登记项目 · 输入目录");send(str(self.project)+"\r");view("选择登记方式")
             send("\r");view("项目管理 · 只读预览");send("\r");view("操作结果")
-            self.assertIn(str(self.project),service.registry(self.state)["registered"])
-            self.assertFalse(service.project_status(self.state,self.project)["enabled"]);send("\x1b")
+            self.assertIn(str(self.project),project_service.registry(self.state)["registered"])
+            self.assertFalse(project_service.project_status(self.state,self.project)["enabled"]);send("\x1b")
             # 主界面启停不能依靠隐藏菜单或过期状态直接写入；先取消一次启用预览。
             close_to_main();visible('[o]启用工作流');send('o');view('项目管理 · 只读预览')
-            send('\x1b');self.assertFalse(service.project_status(self.state,self.project)['enabled'])
+            send('\x1b');self.assertFalse(project_service.project_status(self.state,self.project)['enabled'])
             send('o');view('项目管理 · 只读预览');send('\r');view('操作结果')
-            self.assertTrue(service.project_status(self.state,self.project)["enabled"]);close_to_main()
+            self.assertTrue(project_service.project_status(self.state,self.project)["enabled"]);close_to_main()
             visible('项目工作流 已启用');checkpoint('主界面启用真实成功')
             choose_menu("三宿主详情","项目 / 三宿主详情")
             self.assertTrue(all(name in terminal.text() for name in ("Codex","Claude Code","Antigravity")))
@@ -1263,7 +1270,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             observed=model_preferences.view(self.state,self.project,'codex','xy-qa')
             self.assertEqual({'model':'fixture-current','effort':'high'},
                              {key:observed[key] for key in ('model','effort')})
-            self.assertEqual(self.core.content_id,service.project_status(self.state,self.project)['runtime_binding']['content_id'])
+            self.assertEqual(self.core.content_id,project_service.project_status(self.state,self.project)['runtime_binding']['content_id'])
             checkpoint('全局保存成功并物化跟随项目');close_to_main()
             send('\x1bOD');send('\x1bOB');send('\x1bOC');send('v');view('当前角色值与来源');visible('来源  全局')
             checkpoint('项目模型推理均显示全局来源');send('\x1b')
@@ -1329,14 +1336,14 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             send("\x1b");view("中央版本列表 / 选择");send("\r");view("项目管理 · 只读预览")
             send("\x1b");view("中央版本列表 / 选择");close_to_main()
             close_to_main();send('p');view('项目管理 · 只读预览');send("\r");view("操作结果")
-            self.assertFalse(service.project_status(self.state,self.project)["enabled"]);close_to_main()
+            self.assertFalse(project_service.project_status(self.state,self.project)["enabled"]);close_to_main()
             visible('项目工作流 已停用');checkpoint('主界面停用真实成功')
             # 在停用后的受管目标放入手改，真实预览必须显示冲突，Enter也不能发布。
             target=self.project/".codex/agents/xy-qa.toml";target.parent.mkdir(parents=True,exist_ok=True);target.write_text("user hand edit\n")
             # xterm keypad启用后使用应用模式End（kend），CSI F会被部分ncurses当作Esc返回。
             send('o');view('项目管理 · 只读预览');send("\x1bOF");visible("不能应用；冲突")
             before=self.snapshot(self.project);send("\r");self.assertEqual(before,self.snapshot(self.project))
-            self.assertFalse(service.project_status(self.state,self.project)["enabled"]);close_to_main()
+            self.assertFalse(project_service.project_status(self.state,self.project)["enabled"]);close_to_main()
             # 表单错误保留输入，取消后缩小真实终端并从窄屏安全退出。
             send("a");view("登记项目 · 输入目录");send(str(self.root/"missing-project")+"\r");visible("目录不存在")
             self.assertIn("missing-project",terminal.text());send("\x1b")

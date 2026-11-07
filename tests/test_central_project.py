@@ -46,11 +46,11 @@ def make_alternate_source(root: Path) -> None:
         (root / directory).mkdir(parents=True, exist_ok=True)
     for name in store.SETUP_FILES:
         put(name, b"#!/bin/sh\nexit 0\n")
-    for name in ("lib/platform_fs.py", "lib/runtime_store.py", "lib/runtime_project.py", "lib/runtime_bridge.py",
+    for name in ("lib/project_paths.py", "lib/install_process.py", "lib/windows_process.py", "lib/platform_fs.py", "lib/runtime_store.py", "lib/runtime_project.py", "lib/runtime_bridge.py",
                  "lib/runtime_pins.py", "lib/standard_paths.py", "lib/claude_instructions.py", "lib/context_read.py",
                  "lib/shared_core_skills.py", "lib/role_models.py", "lib/role_preferences.py", "lib/claude_options.py", "lib/validate_antigravity_artifacts.py",
                  "lib/python_runtime.sh", "lib/workflow_hook_install.py", "lib/workflow_hook_settings.py",
-                 "lib/workflow_hooks.py", "lib/windows_hook_command.py", "lib/merge_codex_config.py", "manager/runtime_service.py", "manager/runtime_state.py", "manager/__init__.py",
+                 "lib/workflow_hooks.py", "lib/windows_hook_command.py", "lib/merge_codex_config.py", "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py", "manager/runtime_state.py", "manager/__init__.py",
                  "templates/project.yaml.example", "templates/docs/PROJECT.md",
                  "roles/xy-qa.md", "roles/xy-uiux.md", "platforms/shared/core-skills.txt"):
         put(name, (PACK / name).read_bytes())
@@ -241,6 +241,32 @@ print("native role parsers OK")
         checked = self.invoke("check")
         self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
         self.assertEqual(self.core.binding(), json.loads(checked.stdout)["runtime_binding"])
+
+    def test_minimal_frozen_core_loads_service_owners_without_reverse_dependencies(self):
+        """最小核心独立导入所有新 owner，拒绝由源码 checkout 偶然补齐依赖。
+
+        -I 排除工作目录及用户 Python 路径；只加入已冻结且经清单验证的核心。
+        项目服务导入不能把模型事务或安装入口拉回来，否则抽取没有隔离边界。
+        """
+        program = r'''import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+from lib import project_paths, install_process
+from manager import project_service, state_files
+for module in (project_paths, install_process, project_service, state_files):
+    assert Path(module.__file__).is_relative_to(root), module.__file__
+assert "lib.install_workflow" not in sys.modules
+assert "manager.service" not in sys.modules
+assert project_service.parse_registry(None) == {"schema": 1, "registered": [], "hidden": []}
+assert project_paths.target_path(sys.argv[2], root) == Path(sys.argv[2])
+print("最小冻结核心新 owner 独立加载成功")
+'''
+        loaded = subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                                 "-I", "-c", program, str(self.alternate.root), str(self.project)],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(0, loaded.returncode, loaded.stdout + loaded.stderr)
+        self.assertIn("最小冻结核心新 owner 独立加载成功", loaded.stdout)
 
     def test_workflow_navigation_reads_same_task_pin_across_switch_and_disable(self):
         # 用户外段逐字保全；导航从真正 enable/repair 产物取得，不能以手写提示代替生成入口。

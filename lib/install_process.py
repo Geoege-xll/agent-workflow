@@ -145,3 +145,22 @@ class SetupRunner:
 
 
 ACTIVE_RUNNER: ContextVar[SetupRunner | None] = ContextVar("workflow_install_runner", default=None)
+
+
+def capture_process(command: list[str], *, env: dict | None = None, body: bytes | None = None):
+    """真实薄桥消费的有界进程入口；沿用安装预算、进程组回收和中断传播。"""
+    runner = ACTIVE_RUNNER.get()
+    remaining = 60.0 if runner is None or runner.deadline is None else min(60.0, runner.deadline - time.monotonic())
+    if remaining <= 0:
+        raise SetupRunError("安装预算已耗尽，未启动下一纯读取阶段")
+    env = dict(os.environ) if env is None else dict(env)
+    for key in ("BASH_ENV", "ENV", "CDPATH", "SHELLOPTS", "BASHOPTS"):
+        env.pop(key, None)
+    process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        output, error = process.communicate(body, timeout=remaining)
+    except BaseException:
+        SetupRunner.stop(process)
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, output, error)
