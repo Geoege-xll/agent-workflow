@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 import base64
+import copy
 import re
 import stat
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ import uuid
 
 from lib import role_models, runtime_store
 from lib.central import role_preferences
-from lib.central.runtime_project import Node, Resources, Tree, absolute_directory, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS
+from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Resources, Tree, absolute_directory, capacity_node_value, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS
 from lib.hosts import native_agents as native
 from lib.hosts.native_context import HostPaths, NativeContext
 from lib.platform_fs import directory_lock, os
@@ -282,6 +283,119 @@ def _receipt(journal: dict) -> dict:
                           for row in journal["writes"] if row.get("published") is not None]}
 
 
+def _owner_bytes(state: Path, before: _Observation, root_identity: list, entries: dict) -> bytes:
+    """执行与容量证明共用同一归属格式；容量占位永远不进入真实写入路径。"""
+    return json_bytes({"schema_version": 1, "host": before.host, "native_root": str(before.root),
+                       "root_identity": root_identity, "state": str(state), "files": entries})
+
+
+def _initial_journal(plan: GlobalNativePlan) -> dict:
+    return {"schema_version": 1, "transaction_id": plan.transaction_id, "recovery_ref": plan.recovery_ref,
+            "status": "prepared", "writes": [], "conflicts": [], "applied_evidence": None, "root_identities": {},
+            "desired": [{"host": host, "path": path, "after": Node("file", body, 0o644).value()}
+                        for host, path, body in plan.desired]}
+
+
+def _compensation_value(identifier: str, nonce: str, root: Path, path: str, expected: Node, after: Node) -> dict:
+    token = identifier + "-" + nonce
+    parent = Path(path).parent
+    return {"root": str(root), "path": path, "expected": expected.value(), "after": after.value(),
+            "stage": str(parent / (".awf-native-restore-" + token)) if after.kind == "file" else None,
+            "staged": None,
+            "held": str(parent / (".native-rollback-" + token)) if expected.kind == "file" else None,
+            "isolated": None, "result": None, "returned": False}
+
+
+def receipt_budget(plan: GlobalNativePlan) -> int:
+    """纯读固定计划，返回receipt嵌入中央顶层字段时相对null增加的字节上界。
+
+    同时证明原生journal成功与条件补偿各阶段仍在原4MiB内。这里的未来stat
+    和补偿副本仅用于长度计算，最终只返回整数，不能冒充真实receipt/归属。
+    按真实正文、固定名字长度和推进器每条目标最多一次逆操作计算，不按项目
+    个数猜预留；两个metadata目标另外各有一次旧身份投影重建。
+    """
+    if not isinstance(plan, GlobalNativePlan) or not plan.can_apply:
+        raise ValueError("原生提案缺少可证明的容量预算")
+    if not plan.summary["changes"]:
+        receipt = {"schema_version": 1, "transaction_id": plan.transaction_id, "recovery_ref": plan.recovery_ref,
+                   "status": "noop", "applied": False, "artifacts": [], "conflicts": []}
+    else:
+        journal = _initial_journal(plan)
+        rebuilds = []
+        for before in plan.observations:
+            record, conflicts = _ownership(plan.state, before)
+            if conflicts:
+                raise ValueError("原生容量提案归属无效")
+            entries = {}
+            journal["root_identities"][str(before.root)] = list(CAPACITY_IDENTITY[:2])
+            changes = []
+            for host, path, body in plan.desired:
+                if host != before.host:
+                    continue
+                old = next((node for relative, node, _ in before.discovery if path == relative), Node())
+                after = Node("file", body, 0o644)
+                changed = not old.same_content(after)
+                entries[path] = {"baseline": record["files"][path]["baseline"] if record else Node().value(),
+                                 "expected": capacity_node_value(after) if changed else old.value()}
+                if changed:
+                    changes.append((before.root, path, old, after))
+            payload = _owner_bytes(plan.state, before, list(CAPACITY_IDENTITY[:2]), entries)
+            for root, path, old in ((before.root, native.OWNER, before.owner),
+                                    (plan.state, native.record_relative(before.root), before.record)):
+                # metadata可能不必写；把这两行都纳入上界仍保守，内容来自相同builder。
+                changes.append((root, path, old, Node("file", payload, 0o600)))
+            if record is not None:
+                restored = copy.deepcopy(record)
+                for entry in restored["files"].values():
+                    entry["expected"] = capacity_node_value(Node.from_value(entry["expected"]))
+                rebuilt = json_bytes(restored)
+                for root, path, old in ((before.root, native.OWNER, before.owner),
+                                        (plan.state, native.record_relative(before.root), before.record)):
+                    rebuilds.append((root, path, Node("file", old.payload, 0o600), Node("file", rebuilt, 0o600)))
+            for root, path, old, after in changes:
+                parent, token = Path(path).parent, plan.transaction_id + "-" + "f" * 32
+                future = capacity_node_value(after)
+                journal["writes"].append({"root": str(root), "path": path, "before": old.value(), "after": after.value(),
+                    "published": future, "staged": future,
+                    "stage": str(parent / (".awf-native-stage-" + token)),
+                    "retained": [{"path": str(parent / (".workflow-models-previous-" + token + ".tmp")),
+                                  "expected": old.value()}] if old.kind == "file" else []})
+        journal["status"] = "applied"
+        receipt = _receipt(journal)
+        journal["applied_evidence"] = receipt
+        json_bytes(journal)
+        rollback = copy.deepcopy(journal)
+        rollback["status"] = "compensated"
+        rollback["compensations"] = []
+        reversals = [(Path(row["root"]), row["path"], Node.from_value(row["published"]), Node.from_value(row["before"]))
+                     for row in journal["writes"]] + rebuilds
+        for row in rollback["writes"]:
+            row["restored"] = capacity_node_value(Node.from_value(row["before"]))
+        for root, path, expected, after in reversals:
+            expected = Node.from_value(capacity_node_value(expected))
+            after = Node.from_value(capacity_node_value(after))
+            step = _compensation_value(plan.transaction_id, "f" * 32, root, path, expected, after)
+            step.update(staged=after.value() if after.kind == "file" else None,
+                        isolated=expected.value() if expected.kind == "file" else None, result=after.value())
+            rollback["compensations"].append(step)
+        # 恢复冲突原因全是推进器的固定文本；覆盖root检查、逐行逆操作、角色
+        # 核验和最后的逐目标检查。额外字段/同时出现的冲突只增大上界。
+        targets = [(str(root), path) for root, path, _, _ in reversals]
+        targets += [(str(row.root), "") for row in plan.observations]
+        targets += [(str(row.root), path) for row in plan.observations for host, path, _ in plan.desired if row.host == host]
+        targets += [(str(root), path) for root, path, _, _ in reversals]
+        reason_bytes = max(len(value.encode("utf-8")) for value in (
+            "恢复身份或旧 inode 冲突，已保留文件和日志", "恢复后精确节点与已授权归属不一致",
+            "归属投影的精确Node或补偿保留资料冲突，已保全现状", "补偿结算前精确节点或保留资料变化",
+            "宿主物理根已替换、链接化或删除"))
+        rollback["conflicts"] = [{"root": root, "path": path, "type": "native_root_conflict", "reason": "x" * reason_bytes}
+                                 for root, path in targets]
+        json_bytes(rollback)
+    # receipt不是单行：由生产者按与中央相同的嵌入深度计入缩进，避免单独
+    # len(receipt)遗漏每行新增空格。中央只能消费增量数字，不复制本模块wire。
+    return len(json_bytes({"native_receipt": receipt})) - len(json_bytes({"native_receipt": None}))
+
+
 def apply_global(plan: GlobalNativePlan) -> dict:
     if not isinstance(plan, GlobalNativePlan) or not plan.can_apply:
         raise ValueError("全局原生预览存在冲突，不能应用")
@@ -294,10 +408,7 @@ def apply_global(plan: GlobalNativePlan) -> dict:
         from . import runtime_policy
         runtime_policy.ensure_management_settled(plan.state)
         _guard(plan)
-        journal = {"schema_version": 1, "transaction_id": plan.transaction_id, "recovery_ref": plan.recovery_ref,
-                   "status": "prepared", "writes": [], "conflicts": [], "applied_evidence": None, "root_identities": {},
-                   "desired": [{"host": host, "path": path, "after": Node("file", body, 0o644).value()}
-                               for host, path, body in plan.desired]}
+        journal = _initial_journal(plan)
         _save(plan.state, journal)
         created = []
         try:
@@ -323,9 +434,7 @@ def apply_global(plan: GlobalNativePlan) -> dict:
                              expected=next((node for path, node, _ in before.discovery if path == relative), Node()))
                     entries[relative] = {"baseline": baseline,
                                          "expected": native.read_node(before.root, relative).value()}
-                payload = json_bytes({"schema_version": 1, "host": before.host, "native_root": str(before.root),
-                                      "root_identity": list(native.root_identity(before.root)), "state": str(plan.state),
-                                      "files": entries})
+                payload = _owner_bytes(plan.state, before, list(native.root_identity(before.root)), entries)
                 _publish(plan.state, journal, before.root, native.OWNER, Node("file", payload, 0o600), expected=before.owner)
                 _publish(plan.state, journal, plan.state, native.record_relative(before.root), Node("file", payload, 0o600), expected=before.record)
             journal["status"] = "applied"
@@ -595,14 +704,7 @@ def _resume_compensation(state: Path, journal: dict, root: Path, path: str) -> N
 
 def _compensate_node(state: Path, journal: dict, root: Path, path: str, *, expected: Node, after: Node) -> Node:
     """先持久登记完整授权，再由与recover相同的推进器执行文件逆操作。"""
-    token = journal["transaction_id"] + "-" + uuid.uuid4().hex
-    parent_path = Path(path).parent
-    stage = ".awf-native-restore-" + token if after.kind == "file" else None
-    held = ".native-rollback-" + token if expected.kind == "file" else None
-    step = {"root": str(root), "path": path, "expected": expected.value(), "after": after.value(),
-            "stage": str(parent_path / stage) if stage else None, "staged": None,
-            "held": str(parent_path / held) if held else None, "isolated": None,
-            "result": None, "returned": False}
+    step = _compensation_value(journal["transaction_id"], uuid.uuid4().hex, root, path, expected, after)
     journal.setdefault("compensations", []).append(step)
     _save(state, journal)
     return _advance_compensation(state, journal, step)

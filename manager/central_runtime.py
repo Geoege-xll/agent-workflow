@@ -7,15 +7,16 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 import uuid
 
 from lib import runtime_store as store
-from lib.central.runtime_project import Node, Tree, canonical_project, json_bytes, unique_json
+from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Tree, canonical_project, json_bytes, unique_json
 from lib.hosts.claude_instructions import read_file
 from . import runtime_policy as policy, runtime_service as projects, state_files
-from .runtime_state import ActivationError, read_state, write_control
+from .runtime_state import ActivationError, CONFLICT_REASON_LIMIT, bounded_conflicts, publication_capacity, read_state, write_control
 
 
 @dataclass(frozen=True)
@@ -177,8 +178,11 @@ def preview(state: Path, action: str = "activate", *, binding: dict | None = Non
         runtime = projects.preview(state, project, "use", binding=selected, native_context=context,
                                    native_ready_hosts=tuple(native.hosts)) if affected else None
         captures.append(ProjectCapture(project, policy_node, binding_node, journal_node, runtime, project_policy["mode"]))
-    return CentralPlan(state, action, selected, current_node, read_state(state, policy.ACTIVATION), raw,
+    plan = CentralPlan(state, action, selected, current_node, read_state(state, policy.ACTIVATION), raw,
                        tuple(captures), native, context)
+    if plan.summary["can_apply"]:
+        _publication_budget(plan)
+    return plan
 
 
 def _validate_journal(value: dict) -> dict:
@@ -230,8 +234,65 @@ def _validate_journal_data(value: dict) -> dict:
 def _save(state: Path, journal: dict, expected: Node) -> Node:
     _validate_journal(journal)
     with Tree(state) as tree:
-        write_control(tree, policy.ACTIVATION, json_bytes(journal), expected=expected)
+        write_control(tree, policy.ACTIVATION, json_bytes({**journal, "conflicts": bounded_conflicts(journal["conflicts"])}), expected=expected)
     return read_state(state, policy.ACTIVATION)
+
+
+def _journal_value(plan: CentralPlan, identifier: str) -> dict:
+    """发布与预算共享封闭格式；预算nonce只取相同固定长度，不产生授权见证。"""
+    return {"schema_version": 1, "id": identifier, "phase": "prepared", "action": plan.action,
+            "runtime_binding": plan.binding, "current_before": plan.current_before.value(),
+            "registry_before": plan.registry_before.decode("utf-8") if plan.registry_before is not None else None,
+            "native_ref": plan.native_plan.recovery_ref, "native_receipt": None,
+            "projects": [{"project": str(capture.project), "policy_before": capture.policy_before.value(),
+                          "binding_before": capture.binding_before.value(), "journal_before": capture.journal_before.value(),
+                          "binding_after": None, "journal_after": None, "transaction_id": identifier, "phase": "queued"}
+                         for capture in plan.captures if capture.runtime_plan], "conflicts": []}
+
+
+def _settlement_budget(journal: dict, *, receipt_increment: int = 0) -> int:
+    """封闭阶段的逐字段上界，同时涵盖失败/补偿诊断，不截断任何历史Node。
+
+    每个项目及native最多产生一条中央补偿冲突；reason在真实_save中执行同一
+    UTF-8字节上限，控制字符占位覆盖最坏JSON转义。phase采用各自最长合法值，
+    这里只计算字节，不把这个非真实状态交给codec/恢复/准入。
+    """
+    bound = copy.deepcopy(journal)
+    bound["phase"] = "compensating"
+    for row in bound["projects"]:
+        row["phase"] = "compensated"
+    bound["conflicts"] = bounded_conflicts(bound["conflicts"]) + [
+        {"path": row["project"], "reason": "\x00" * CONFLICT_REASON_LIMIT, "code": "project_compensation_conflict"}
+        for row in bound["projects"]] + [
+        {"path": "native", "reason": "\x00" * CONFLICT_REASON_LIMIT, "code": "native_compensation_conflict"}]
+    size = len(json_bytes(bound)) + receipt_increment
+    publication_capacity(size)
+    return size
+
+
+def _publication_budget(plan: CentralPlan) -> int:
+    """在任何prepared/目标写之前汇总生产者预算；未知格式不猜测、不落盘。
+
+    子记录进入中央Node时正文再次base64；它们的生产者只返回已证明的普通
+    记录大小。原生receipt由其生产者计入嵌入缩进，中央不复制native wire。
+    两种占位都仅用于本函数RAM长度计算，不能作为应用收据或文件归属。
+    """
+    from . import native_agents
+    increment = native_agents.receipt_budget(plan.native_plan)
+    if type(increment) is not int or increment < 0:
+        raise ActivationError("原生生产者没有提供有效容量预算")
+    journal = _journal_value(plan, "f" * 32)
+    affected = [capture for capture in plan.captures if capture.runtime_plan]
+    for capture, row in zip(affected, journal["projects"]):
+        budget = projects.publication_budget(capture.runtime_plan)
+        if not isinstance(budget, projects.PublicationBudget):
+            raise ActivationError("项目生产者没有提供有效容量预算")
+        for field, size in (("binding_after", budget.binding_after_bytes), ("journal_after", budget.journal_after_bytes)):
+            publication_capacity(size)
+            row[field] = Node("file", b"x" * size, 0o600, CAPACITY_IDENTITY).value()
+    publication_capacity(len(plan.activation_before.payload))
+    publication_capacity(len(json_bytes(_expected_current(journal))))
+    return _settlement_budget(journal, receipt_increment=increment)
 
 
 def _expected_current(journal: dict) -> dict:
@@ -279,19 +340,17 @@ def apply(plan: CentralPlan, *, cancel=None) -> dict:
         raise ActivationError("中央预览含冲突，不能应用")
     if cancel is not None and cancel.is_set():
         raise ActivationError("操作已取消，尚未应用中央计划")
+    # 第一次校验在协调锁创建前；最终前像校验后再证明一次，不能由绕过CLI的
+    # 直接服务调用把超容量计划推进到native prepare或第一个项目写入。
+    _publication_budget(plan)
     with policy.coordination(plan.state):
         policy.ensure_management_settled(plan.state)
         _check_plan(plan)
+        _publication_budget(plan)
         identifier = uuid.uuid4().hex
-        journal = {"schema_version": 1, "id": identifier, "phase": "prepared", "action": plan.action,
-                   "runtime_binding": plan.binding, "current_before": plan.current_before.value(),
-                   "registry_before": plan.registry_before.decode("utf-8") if plan.registry_before is not None else None,
-                   "native_ref": plan.native_plan.recovery_ref, "native_receipt": None,
-                   "projects": [{"project": str(capture.project), "policy_before": capture.policy_before.value(),
-                                 "binding_before": capture.binding_before.value(), "journal_before": capture.journal_before.value(),
-                                 "binding_after": None, "journal_after": None,
-                                 "transaction_id": uuid.uuid4().hex, "phase": "queued"}
-                                for capture in plan.captures if capture.runtime_plan], "conflicts": []}
+        journal = _journal_value(plan, identifier)
+        for row in journal["projects"]:
+            row["transaction_id"] = uuid.uuid4().hex
         snapshot = _save(plan.state, journal, plan.activation_before)
         with policy.activation_scope(plan.state, identifier):
             try:
@@ -395,6 +454,7 @@ def preview_recovery(state: Path, *, native_context=None) -> RecoveryPlan:
     record = _validate_journal(unique_json(node.payload))
     if record["phase"] not in policy.PENDING_PHASES:
         raise ActivationError("中央激活已经结算")
+    _settlement_budget(record)
     return RecoveryPlan(state, node, record, _native_context(state, native_context))
 
 
@@ -402,6 +462,7 @@ def recover(plan: RecoveryPlan) -> dict:
     from . import native_agents
     if not isinstance(plan, RecoveryPlan):
         raise ActivationError("需要同一进程预览的恢复计划")
+    _settlement_budget(plan.record)
     with policy.coordination(plan.state), policy.activation_scope(plan.state, plan.record["id"]):
         if read_state(plan.state, policy.ACTIVATION) != plan.before:
             raise ActivationError("中央恢复记录在预览后变化")

@@ -9,6 +9,7 @@ CLI/TUI 应共享此模块，不各自复制安装或恢复业务规则。
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -23,7 +24,7 @@ from lib import runtime_store as store
 from lib.central import role_preferences
 from lib.platform_fs import directory_lock, os, publish_skill_symlink, require_skill_symlinks
 from lib.central.runtime_project import (
-    CONFIG, HOSTS, LOCATOR, Node, Resources, Tree,
+    CAPACITY_IDENTITY, CONFIG, HOSTS, LOCATOR, Node, Resources, Tree, capacity_node_value,
     absolute_directory, canonical_project, central_block, identity, json_bytes,
     managed_path, merge_central_block, node_id, read_at, relative_path, skill_parts,
     unique_json, validate_skill_link,
@@ -40,6 +41,7 @@ from .runtime_state import (
     read_state as _read_state, retained_conflicts as _retained,
     retained_record as _retained_record, state_relative as _state_relative,
     write_private as _write_private,
+    CONFLICT_REASON_LIMIT, bounded_conflicts, publication_capacity,
 )
 
 
@@ -94,6 +96,13 @@ class ActivationPlan:
                              "kind": row.after.kind, "purpose": row.purpose} for row in self.changes],
                 "conflicts": list(self.conflicts), "warnings": list(self.warnings),
                 "can_apply": not self.conflicts, "recovery": self.recovery}
+
+
+@dataclass(frozen=True)
+class PublicationBudget:
+    """仅容量数字，不携带可误用为真实binding/Node的未来占位。"""
+    binding_after_bytes: int
+    journal_after_bytes: int
 
 
 def _raw(tree: Tree, relative: str) -> Node:
@@ -578,6 +587,92 @@ def _check_plan(plan: ActivationPlan, tree: Tree) -> None:
     if _history_writes(tree, old.get("retained_nodes", []) + previous_journal.get("retained_nodes", [])):
         raise ActivationError("保留的旧 inode 在预览后发生保存")
 
+def _journal_value(plan: ActivationPlan, identifier: str) -> dict:
+    """真实执行与容量证明共用初始journal格式，避免两个wire实现逐渐分叉。"""
+    journal = {"schema_version": 1, "project_root": str(plan.project), "id": identifier,
+               "phase": "prepared", "action": plan.action,
+               "binding_before": plan.machine_before.value(), "changes": [], "conflicts": []}
+    for index, change in enumerate(plan.changes):
+        parent = str(Path(change.relative).parent)
+        prefix = (parent + "/") if parent != "." else ""
+        stem = prefix + f".agent-workflow-central-{identifier}-{index}"
+        journal["changes"].append({"path": change.relative, "before": change.before.value(),
+                                   "after": change.after.value(), "backup": stem + ".previous",
+                                   "stage": stem + ".stage", "rollback": stem + ".rollback"})
+    return journal
+
+
+def _retained_base(old: dict | None, previous_journal: dict) -> list[dict]:
+    return list({item["path"]: item for item in (old["retained_nodes"] if old else [])
+                 + previous_journal.get("retained_nodes", [])}.values())
+
+
+def _binding_value(plan: ActivationPlan, identifier: str, managed: dict, retained: list, project_identity: list) -> dict:
+    old = unique_json(plan.machine_before.payload) if plan.machine_before.kind == "file" else None
+    selected = store.validate_binding(unique_json(plan.binding_json))
+    used = list(old["used_bindings"]) if old else []
+    if selected not in used:
+        used.append(selected)
+    previous = old["previous_binding"] if old else None
+    if old and old["runtime_binding"] != selected:
+        previous = old["runtime_binding"]
+    return {"schema_version": 1, "project_root": str(plan.project), "project_identity": project_identity,
+            "runtime_binding": selected, "enabled": plan.enabled_after, "hosts": list(plan.hosts),
+            "previous_binding": previous, "used_bindings": used, "managed": managed,
+            "retained_nodes": retained, "generation": identifier}
+
+
+def _journal_bytes(journal: dict) -> bytes:
+    return json_bytes({**journal, "conflicts": bounded_conflicts(journal["conflicts"])})
+
+
+def publication_budget(plan: ActivationPlan) -> PublicationBudget:
+    """从固定资源正文、原像和真实builder证明项目所有发布阶段的容量。
+
+    成功后像将被中央嵌入；失败journal只在本项目持久化，不会假装成中央的
+    成功后像。future身份仅为字节上界，永不交给ownership/admission消费。
+    """
+    if not isinstance(plan, ActivationPlan) or plan.recovery or plan.binding_json is None:
+        raise ActivationError("项目提案缺少可证明的容量预算")
+    identifier = "f" * 32
+    journal = _journal_value(plan, identifier)
+    old = unique_json(plan.machine_before.payload) if plan.machine_before.kind == "file" else None
+    previous = unique_json(plan.journal_before.payload) if plan.journal_before.kind == "file" else {}
+    retained = _retained_base(old, previous)
+    for row, change in zip(journal["changes"], plan.changes):
+        if change.after.kind != "missing":
+            row["stage_inode"] = list(CAPACITY_IDENTITY[:2])
+            row["published_inode"] = list(CAPACITY_IDENTITY[:2])
+            if change.after.kind == "link":
+                row["after"]["mode"] = 0o7777
+        row["installed"] = capacity_node_value(change.after)
+        if change.before.kind != "missing":
+            retained.append(_retained_record(row["backup"], change.before))
+    managed = unique_json(plan.managed_json)
+    for item in managed.values():
+        item["expected"] = capacity_node_value(Node.from_value(item["expected"]))
+    identity = list(dict(plan.directories)[""][:2])
+    binding = _binding_value(plan, identifier, managed, retained, identity)
+    # enabled=False候选比True多一个字节，真实桥验证阶段也须纳入容量证明。
+    binding_size = len(json_bytes({**binding, "enabled": False}))
+    journal["phase"] = "applied"
+    journal_size = len(json_bytes(journal))
+    rollback = copy.deepcopy(journal)
+    rollback["phase"] = "rolled_back"
+    rollback["retained_nodes"] = [
+        _retained_record(row["rollback"], Node(change.after.kind, change.after.payload, 0o7777, CAPACITY_IDENTITY))
+        for row, change in zip(journal["changes"], plan.changes) if change.after.kind != "missing"]
+    # _restore最多按既有retained、目标行、stage各产生一条冲突，另有Tree.check。
+    # 新诊断实际执行相同UTF-8上限；全控制字符覆盖JSON的最坏六倍转义膨胀。
+    paths = [row["path"] for row in rollback["retained_nodes"]]
+    paths.extend(path for row in journal["changes"] for path in (row["path"], row["stage"]))
+    rollback["conflicts"] = [{"path": path, "reason": "\x00" * CONFLICT_REASON_LIMIT} for path in (*paths, ".")]
+    for size in (len(plan.machine_before.payload), len(plan.journal_before.payload), binding_size,
+                 journal_size, len(json_bytes(rollback))):
+        publication_capacity(size)
+    return PublicationBudget(binding_size, journal_size)
+
+
 def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
     """应用已预览计划；返回 status 字段及 transaction_id，绝不自动运行 Agent。"""
     if not isinstance(plan, ActivationPlan) or plan.conflicts:
@@ -647,7 +742,7 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
             journal["phase"] = "conflict" if conflicts else "rolled_back"
             journal["conflicts"] = conflicts
             journal["retained_nodes"] = retained
-            _write_private(machine_tree, _state_relative(plan.project, "transactions"), json_bytes(journal))
+            _write_private(machine_tree, _state_relative(plan.project, "transactions"), _journal_bytes(journal))
             if conflicts:
                 raise ActivationError("事务恢复含后续手改，已保留现状", conflicts)
             result = status(plan.state, plan.project)
@@ -658,28 +753,18 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
             return status(plan.state, plan.project)  # 从未启用项目的 disable 为真正幂等空操作。
         identifier = transaction_id or uuid.uuid4().hex
         managed = unique_json(plan.managed_json)
-        journal = {"schema_version": 1, "project_root": str(plan.project), "id": identifier,
-                   "phase": "prepared", "action": plan.action,
-                   "binding_before": plan.machine_before.value(), "changes": [], "conflicts": []}
-        for index, change in enumerate(plan.changes):
-            parent = str(Path(change.relative).parent)
-            prefix = (parent + "/") if parent != "." else ""
-            stem = prefix + f".agent-workflow-central-{identifier}-{index}"
-            journal["changes"].append({"path": change.relative, "before": change.before.value(),
-                                       "after": change.after.value(), "backup": stem + ".previous",
-                                       "stage": stem + ".stage", "rollback": stem + ".rollback"})
+        journal = _journal_value(plan, identifier)
         # 预先检查记录容量，避免改完项目后才发现日志无法持久化。
         json_bytes(journal)
         def save():
-            _write_private(machine_tree, _state_relative(plan.project, "transactions"), json_bytes(journal))
+            _write_private(machine_tree, _state_relative(plan.project, "transactions"), _journal_bytes(journal))
         save()
         try:
             for row in journal["changes"]:
                 _publish(tree, row, core, save)
             tree.check()
             previous_journal = unique_json(plan.journal_before.payload) if plan.journal_before.kind == "file" else {}
-            retained_by_path = {item["path"]: item for item in (old["retained_nodes"] if old else []) + previous_journal.get("retained_nodes", [])}
-            retained = list(retained_by_path.values())
+            retained = _retained_base(old, previous_journal)
             for row in journal["changes"]:
                 prior = _raw(tree, row["backup"])
                 if prior.kind != "missing":
@@ -698,18 +783,7 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
                 if node.kind == "link":
                     validate_skill_link(tree, relative, node, core)
                 row["expected"] = node.value()
-            used = list(old["used_bindings"]) if old else []
-            if selected not in used:
-                used.append(selected)
-            previous = old["previous_binding"] if old else None
-            if old and old["runtime_binding"] != selected:
-                previous = old["runtime_binding"]
-            record = {"schema_version": 1, "project_root": str(plan.project),
-                      "project_identity": list(node_id(os.fstat(tree.directories[""]))),
-                      "runtime_binding": selected, "enabled": plan.enabled_after,
-                      "hosts": list(plan.hosts), "previous_binding": previous,
-                      "used_bindings": used, "managed": managed,
-                      "retained_nodes": retained, "generation": identifier}
+            record = _binding_value(plan, identifier, managed, retained, list(node_id(os.fstat(tree.directories[""]))))
             # 普通项目省略可空扩展键，保持已用首版 reader 的原封闭字段集合。
             # 先发布 enabled=False 的 prepared 候选，由真实选版桥消费；若实际
             # reader 不兼容字段/入口，则回滚候选和项目，不能假报启用成功。
@@ -791,7 +865,7 @@ def compensate(state: Path, project: Path, transaction_id: str, binding_before: 
                 os.unlink(name, dir_fd=parent)
                 os.fsync(parent)
         journal.update(phase="conflict" if conflicts else "rolled_back", conflicts=conflicts, retained_nodes=retained)
-        _write_private(machine_tree, _state_relative(project, "transactions"), json_bytes(journal), expected=journal_node)
+        _write_private(machine_tree, _state_relative(project, "transactions"), _journal_bytes(journal), expected=journal_node)
         if conflicts:
             raise ActivationError("项目条件补偿遇到后续手改，已保留恢复资料", conflicts)
         return {"compensated": True, "untouched": False, "transaction_id": transaction_id}

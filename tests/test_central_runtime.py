@@ -19,7 +19,7 @@ from unittest.mock import patch
 import uuid
 
 from lib import runtime_bridge, runtime_pins, runtime_store as store
-from lib.central.runtime_project import Tree, json_bytes
+from lib.central.runtime_project import LIMIT, Node, Tree, json_bytes, unique_json
 from lib.hosts.native_context import HostPaths, NativeContext
 import manager
 from manager import central_runtime as central, project_service, runtime_policy as policy, runtime_service as projects
@@ -112,6 +112,9 @@ class CentralRuntimeTest(RuntimeFixture, unittest.TestCase):
             return {"status": "compensated", "conflicts": []}
         self.native = SimpleNamespace(preview_global=native_preview,
             apply_global=lambda plan: {"transaction_id": plan.recovery_ref["transaction_id"]},
+            # 此替身的真实receipt只有固定ID；显式提供其相同嵌入深度预算，
+            # 不让生产服务为未知producer格式猜测大小或误用真实native证明。
+            receipt_budget=lambda plan: len(json_bytes({"native_receipt": {"transaction_id": plan.recovery_ref["transaction_id"]}})) - len(json_bytes({"native_receipt": None})),
             compensate_global=native_compensate,
             verify_global=lambda reference, **kwargs: [], verified_hosts=lambda state, **kwargs: ())
         self.enterContext(patch.dict(sys.modules, {"manager.native_agents": self.native}))
@@ -119,6 +122,23 @@ class CentralRuntimeTest(RuntimeFixture, unittest.TestCase):
 
     def plan(self, binding=None):
         return central.preview(self.state, binding=binding or self.alternate.binding(), native_context=self.context)
+
+    def test_persisted_conflict_budget_preserves_full_before(self):
+        self.enable(); self.register(self.project)
+        plan = self.plan()
+        journal = central._journal_value(plan, uuid.uuid4().hex)
+        before = copy.deepcopy(journal["projects"][0]["binding_before"])
+        journal["phase"] = "conflict"
+        journal["conflicts"] = [{"path": "native", "code": "native_compensation_conflict",
+                                  "reason": "\x00" * 500000 + "\ud800"}]
+        central._save(self.state, journal, plan.activation_before)
+        saved = unique_json(read_state(self.state, policy.ACTIVATION).payload)
+        self.assertLessEqual(len(saved["conflicts"][0]["reason"].encode("utf-8")), 4096)
+        self.assertEqual(before, saved["projects"][0]["binding_before"])
+        # 短的不可编码异常也必须有合法UTF-8诊断，不能只照顾超长字符串。
+        journal["conflicts"][0]["reason"] = "\ud800"
+        central._save(self.state, journal, read_state(self.state, policy.ACTIVATION))
+        self.assertEqual("?", unique_json(read_state(self.state, policy.ACTIVATION).payload)["conflicts"][0]["reason"])
 
     def test_controller_protocol_is_static_closed_and_independent_of_helper(self):
         self.assertIs(type(runtime_bridge.CENTRAL_CONTROL_PROTOCOL), int)
@@ -512,6 +532,127 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         second = self.workspace / ("second-" + uuid.uuid4().hex[:8]); second.mkdir(); self.enable(second)
         self.register(self.project, second)
         return central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+
+    def large_projects(self, padding=25000):
+        """真实用户入口段由生产服务保留，不填造journal/receipt或复制客户资料。"""
+        paths = [self.project]
+        for _ in range(2):
+            project = self.workspace / ("large-" + uuid.uuid4().hex[:8])
+            project.mkdir()
+            paths.append(project)
+        for project in paths:
+            (project / "AGENTS.md").write_text("User instructions.\n" + "x" * padding + "\n")
+            self.enable(project)
+        self.register(*paths)
+        return tuple(paths)
+
+    def test_large_aggregate_activation_and_producer_bounds(self):
+        from manager import native_agents
+        paths = self.large_projects()
+        plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+        bound = central._publication_budget(plan)
+        budgets = {capture.project: projects.publication_budget(capture.runtime_plan) for capture in plan.captures}
+        native_bound = native_agents.receipt_budget(plan.native_plan)
+        central.apply(plan)
+        node = read_state(self.state, policy.ACTIVATION)
+        record = unique_json(node.payload)
+        print("large_aggregate", {"actual": len(node.payload), "bound": bound, "limit": LIMIT})
+        self.assertGreater(len(node.payload), 3 * 1024 * 1024)
+        self.assertLessEqual(len(node.payload), bound)
+        self.assertLessEqual(bound, LIMIT)
+        actual_increment = len(json_bytes({"native_receipt": record["native_receipt"]})) - len(json_bytes({"native_receipt": None}))
+        self.assertLessEqual(actual_increment, native_bound)
+        for path in paths:
+            self.assertLessEqual(len(projects.read_binding_record(self.state, path)[0].payload), budgets[path].binding_after_bytes)
+            self.assertLessEqual(len(projects._journal(self.state, path)[0].payload), budgets[path].journal_after_bytes)
+        # no-op producer也必须以真实持久身份证明；其budget只返回数字。
+        noop = native_agents.preview_global(self.state, self.alternate.binding(), context=self.context)
+        self.assertFalse(noop.summary["changes"])
+        increment = native_agents.receipt_budget(noop)
+        receipt = native_agents.apply_global(noop)
+        self.assertEqual(increment, len(json_bytes({"native_receipt": receipt})) - len(json_bytes({"native_receipt": None})))
+
+    def test_large_aggregate_pending_can_conditionally_compensate(self):
+        paths = self.large_projects()
+        originals = {path: projects.read_binding_record(self.state, path)[0] for path in paths}
+        current = policy.current_snapshot(self.state)[0]
+        plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+        save = central._save
+        def interrupted_publish(state, journal, expected):
+            if journal["phase"] == "publishing":
+                raise OSError("fixture before current publication")
+            return save(state, journal, expected)
+        # 全部真实after持久化后、父补偿开始前中断；大聚合恢复仍走原生产入口。
+        with patch.object(central, "_save", side_effect=interrupted_publish), patch.object(central, "_compensate", side_effect=OSError("fixture parent interrupted")), self.assertRaises(OSError):
+            central.apply(plan)
+        pending = read_state(self.state, policy.ACTIVATION)
+        print("large_pending", {"actual": len(pending.payload), "limit": LIMIT})
+        self.assertGreater(len(pending.payload), 3 * 1024 * 1024)
+        self.assertIsNotNone(policy.pending(self.state))
+        result = central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertTrue(result["compensated"])
+        self.assertIsNone(policy.pending(self.state))
+        self.assertEqual(current, policy.current_snapshot(self.state)[0])
+        for path in paths:
+            self.assertTrue(originals[path].same_content(projects.read_binding_record(self.state, path)[0]))
+        self.assertEqual("compensated", unique_json(read_state(self.state, policy.ACTIVATION).payload)["phase"])
+        with self.assertRaisesRegex(ValueError, "已经结算"):
+            central.preview_recovery(self.state, native_context=self.context)
+
+    def test_oversized_aggregate_preview_and_direct_apply_are_zero_target_writes(self):
+        from manager import native_agents
+        paths = self.large_projects(padding=150000)
+        before = {path: (projects.read_binding_record(self.state, path)[0], projects._journal(self.state, path)[0]) for path in paths}
+        current, activation = policy.current_snapshot(self.state)[0], read_state(self.state, policy.ACTIVATION)
+        with patch.object(native_agents, "apply_global", side_effect=AssertionError("must reject before native prepare")), patch.object(projects, "apply", side_effect=AssertionError("must reject before project write")):
+            with self.assertRaises(ValueError):
+                central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+            # 直接caller即使跳过preview的第一道检查，apply仍须在任何写之前拒绝。
+            with patch.object(central, "_publication_budget"):
+                plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+            with self.assertRaises(ValueError):
+                central.apply(plan)
+        self.assertEqual(current, policy.current_snapshot(self.state)[0])
+        self.assertEqual(activation, read_state(self.state, policy.ACTIVATION))
+        self.assertFalse((self.state / "native-agents").exists())
+        for path in paths:
+            self.assertEqual(before[path], (projects.read_binding_record(self.state, path)[0], projects._journal(self.state, path)[0]))
+
+    def test_unknown_producer_budget_is_rejected_before_native_prepare(self):
+        from manager import native_agents
+        plan = central.preview(self.state, binding=self.core.binding(), native_context=self.context)
+        current, activation = policy.current_snapshot(self.state)[0], read_state(self.state, policy.ACTIVATION)
+        with patch.object(native_agents, "receipt_budget", return_value=None), patch.object(native_agents, "apply_global", side_effect=AssertionError("unknown budget must fail closed")):
+            with self.assertRaisesRegex(ValueError, "容量预算"):
+                central.apply(plan)
+        self.assertEqual(current, policy.current_snapshot(self.state)[0])
+        self.assertEqual(activation, read_state(self.state, policy.ACTIVATION))
+
+    def test_native_budget_covers_owned_update_and_compensation(self):
+        from manager import native_agents
+        native_agents.apply_global(native_agents.preview_global(self.state, self.core.binding(), context=self.context))
+        plan = native_agents.preview_global(self.state, self.core.binding(), context=self.context,
+                    preferences={"codex": {"xy-qa": {"model": "capacity-fixture-model"}}})
+        bound = native_agents.receipt_budget(plan)
+        saved_sizes = []
+        save = native_agents._save
+        def observe(state, journal):
+            saved_sizes.append(len(json_bytes(journal)))
+            return save(state, journal)
+        # 更改已经归属的真实角色，覆盖旧owner/index前像与身份投影重建；
+        # 全程仍用正式producer发布/恢复，不把预算占位传给任何写入入口。
+        with patch.object(native_agents, "_save", side_effect=observe):
+            receipt = native_agents.apply_global(plan)
+            actual = len(json_bytes({"native_receipt": receipt})) - len(json_bytes({"native_receipt": None}))
+            self.assertLessEqual(actual, bound)
+            recovered = native_agents.compensate_global(plan.recovery_ref, context=self.context)
+            self.assertEqual("compensated", recovered["status"])
+            self.assertEqual("compensated", native_agents.compensate_global(plan.recovery_ref, context=self.context)["status"])
+        self.assertEqual(3, len(native_agents.verified_hosts(self.state, context=self.context)))
+        self.assertTrue(saved_sizes)
+        self.assertLessEqual(max(saved_sizes), LIMIT)
+        print("native_owned_budget", {"receipt_actual_increment": actual, "receipt_bound_increment": bound,
+                                      "largest_real_journal": max(saved_sizes), "save_count": len(saved_sizes)})
 
     def test_current_publishes_only_verified_exact_native_roots(self):
         from manager import native_agents

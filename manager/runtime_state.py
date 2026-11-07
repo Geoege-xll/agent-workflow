@@ -16,7 +16,7 @@ import uuid
 from lib import runtime_store as store
 from lib.platform_fs import os
 from lib.central.runtime_project import (
-    HOSTS, Node, ProjectRuntimeError, Tree, json_bytes, managed_path, node_id,
+    CAPACITY_IDENTITY, HOSTS, LIMIT, Node, ProjectRuntimeError, Tree, json_bytes, managed_path, node_id,
     project_key, read_at, relative_path, skill_parts, unique_json,
 )
 
@@ -25,6 +25,17 @@ _NONCE = re.compile(r"[0-9a-f]{32}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _RETAINED = re.compile(r"(?:.*/)?\.agent-workflow-central-[0-9a-f]{32}-[0-9]+\.(?:previous|rollback)\Z")
 _ACTIONS = frozenset({"enable", "disable", "use", "rollback", "repair"})
+# 发布见证含一个完整before，其base64长度为4*ceil(record_bytes/3)。封闭头的
+# 最长私有路径是transactions/<64hex>.json，名字/摘要固定长度，stat整数的
+# 十进制上界与生产者容量占位共用。这里只扩见证，不扩普通record/资源的4MiB。
+_MARKER_METADATA_LIMIT = len(json_bytes({
+    "schema_version": 1, "record": "transactions/" + "f" * 64 + ".json",
+    "before": Node("missing", b"", 0o7777, CAPACITY_IDENTITY).value(),
+    "temporary": ".central-state-" + "f" * 32,
+    "previous": ".central-state-previous-" + "f" * 32, "after_sha256": "f" * 64,
+}))
+PRIVATE_MARKER_LIMIT = _MARKER_METADATA_LIMIT + 4 * ((LIMIT + 2) // 3)
+CONFLICT_REASON_LIMIT = 4096
 
 
 class ActivationError(ProjectRuntimeError):
@@ -33,6 +44,47 @@ class ActivationError(ProjectRuntimeError):
     def __init__(self, message: str, conflicts=()):
         self.conflicts = tuple(conflicts)
         super().__init__(message)
+
+
+def publication_capacity(record_bytes: int) -> int:
+    """证明普通记录及其完整before见证均在各自预算内；不读取或创建状态。"""
+    if type(record_bytes) is not int or not 0 <= record_bytes <= LIMIT:
+        raise ActivationError("中央事务记录容量超过4MiB，未开始写入")
+    return _MARKER_METADATA_LIMIT + 4 * ((record_bytes + 2) // 3)
+
+
+def bounded_conflicts(rows: list[dict]) -> list[dict]:
+    """只限制新生成诊断文本，历史Node正文/路径/归属原像完全保留。
+
+    容量证明必须覆盖失败阶段；异常文本没有天然长度上界，因此生产者实际
+    执行同一UTF-8字节约束。JSON最坏控制字符膨胀由预算里的\\u0000占位覆盖。
+    """
+    result = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("reason"), str):
+            raise ActivationError("冲突诊断容量结构无效")
+        encoded = row["reason"].encode("utf-8", errors="replace")
+        # 异常文字可能含操作系统surrogateescape；只规范新诊断，不让一个
+        # 无法UTF-8编码的reason在目标写入后破坏本已证明有界的结算日志。
+        reason = encoded.decode("utf-8") if len(encoded) <= CONFLICT_REASON_LIMIT else encoded[:CONFLICT_REASON_LIMIT - 3].decode("utf-8", errors="ignore") + "..."
+        result.append({**row, "reason": reason})
+    return result
+
+
+def _record_size(body: bytes) -> None:
+    if not isinstance(body, bytes):
+        raise ActivationError("中央私有记录正文必须为bytes")
+    publication_capacity(len(body))
+
+
+def _marker_bytes(relative: str, before: Node, temporary: str, previous: str, after: bytes) -> bytes:
+    value = {"schema_version": 1, "record": relative, "before": before.value(),
+             "temporary": temporary, "previous": previous, "after_sha256": hashlib.sha256(after).hexdigest()}
+    metadata = {**value, "before": {**value["before"], "body": ""}}
+    if len(json_bytes(metadata)) > _MARKER_METADATA_LIMIT:
+        raise ActivationError("私有发布见证元数据超出封闭预算")
+    publication_capacity(len(before.payload))
+    return json_bytes(value, max_bytes=PRIVATE_MARKER_LIMIT)
 
 
 def state_relative(project: Path, kind: str) -> str:
@@ -278,6 +330,7 @@ def write_private(tree: Tree, relative: str, body: bytes, *, expected: Node | No
     临时名和节点身份可用于内部核对；业务 reader 没有绕过中断标记的入口。
     这里只保障单机状态的可识别结算，不承诺项目/机器跨文件系统原子提交。
     """
+    _record_size(body)
     # 发布也使用同一完整 codec，避免业务在修改项目后写出 reader 无法接受的日志。
     try:
         raw = unique_json(body)
@@ -298,6 +351,7 @@ def write_control(tree: Tree, relative: str, body: bytes, *, expected: Node) -> 
     路径白名单阻止业务层把这个安全发布原语用作任意项目文件写入器；全部
     调用都必须显式给出前像，不能把发布时重新读取的外部保存自动认作授权。
     """
+    _record_size(body)
     relative_path(relative)
     allowed = relative in {"central/current.json", "central/activation.json", "central/lifecycle.json"}
     allowed = allowed or bool(re.fullmatch(r"policies/[0-9a-f]{64}\.json", relative))
@@ -333,9 +387,7 @@ def _publish_private(tree: Tree, relative: str, body: bytes, *, expected: Node |
     temporary = ".central-state-" + uuid.uuid4().hex
     held_name = ".central-state-previous-" + uuid.uuid4().hex
     marker_name = _marker_name(name)
-    marker_body = json_bytes({"schema_version": 1, "record": relative, "before": before.value(),
-                              "temporary": temporary, "previous": held_name,
-                              "after_sha256": hashlib.sha256(body).hexdigest()})
+    marker_body = _marker_bytes(relative, before, temporary, held_name, body)
     # O_EXCL 使两个 writer 即使误缺中央锁也不能共享一次发布见证；旧/未知标记
     # 永不认领。先落盘标记和父目录，再触碰正式名称，覆盖首次发布无记录窗口。
     held = None
@@ -433,7 +485,7 @@ def _publish_private(tree: Tree, relative: str, body: bytes, *, expected: Node |
         if completed and not finished:
             raise ActivationError("机器新记录在结算前已有后续保存，已保留核对资料：" + relative + ".publish")
         if finished or restored:
-            marker = read_at(parent, marker_name)
+            marker = read_at(parent, marker_name, max_bytes=PRIVATE_MARKER_LIMIT)
             if marker.identity[:2] != marker_inode or marker.payload != marker_body:
                 raise ActivationError("私有发布见证已有外部修改，已保留核对资料：" + relative + ".publish")
             os.unlink(marker_name, dir_fd=parent)
