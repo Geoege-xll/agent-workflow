@@ -281,6 +281,18 @@ target.write_text(json.dumps({'blocked': blocked, 'binding': json.loads(os.envir
         self.assertIsNone(policy.pending(self.state))
         self.assertEqual(self.alternate.binding(), central.new_task_gate(self.state, self.project))
 
+    def test_project_pending_is_a_recovery_issue_even_when_current_resources_match(self):
+        self.enable()
+        _, journal = projects._journal(self.state, self.project)
+        journal["phase"] = "prepared"
+        target = self.state / projects._state_relative(self.project, "transactions")
+        target.write_bytes(json_bytes(journal))
+        checked = projects.status(self.state, self.project)
+        self.assertTrue(checked["resources_healthy"])
+        self.assertFalse(checked["new_task_allowed"])
+        self.assertFalse(checked["management_write_allowed"])
+        self.assertIn("project_transaction_pending", {row["code"] for row in checked["issues"]})
+
     def test_history_missing_modified_and_current_corruption_have_distinct_permissions(self):
         self.enable()
         projects.apply(projects.preview(self.state, self.project, "use", binding=self.alternate.binding()))
@@ -356,3 +368,32 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.assertEqual(self.core.binding(), central.status(self.state)["runtime_binding"])
         self.assertEqual("conflict", policy.pending(self.state)["phase"])
         self.assertTrue((first / ".agent-workflow/runtime.json").read_bytes().endswith(b" \n"))
+
+    def test_sparse_delete_rechecks_global_before_receipt_and_commit_restores_local(self):
+        from lib import role_models
+        from manager import native_agents
+        from manager.service import Change, commit
+        self.enable()
+        native_agents.apply_global(native_agents.preview_global(self.state, self.core.binding(), context=self.context))
+        relative = ".codex/agents/xy-qa.toml"
+        target = self.project / relative
+        config = self.project / ".agent-workflow/project.yaml"
+        selected = {"codex": {"xy-qa": {"model": "fixture-local-model", "effort": "high"}}}
+        original_config = config.read_bytes()
+        after_config = role_models.update(original_config.decode(), selected).encode()
+        commit(self.state, self.project,
+               [Change(relative, target.read_bytes(), role_models.patch_artifact(target.read_bytes(), "codex", selected["codex"]["xy-qa"]), 0o644),
+                Change(".agent-workflow/project.yaml", original_config, after_config, 0o644)], native_context=self.context)
+        before_role, before_config = target.read_bytes(), config.read_bytes()
+        before_binding = projects.read_binding_record(self.state, self.project)[0].payload
+        changes = [Change(relative, before_role, None, 0o644),
+                   Change(".agent-workflow/project.yaml", before_config, role_models.update(before_config.decode(), {}).encode(), 0o644)]
+        publish = projects.NativeEditReceipt.publish
+        def remove_global_before_receipt(receipt):
+            (self.context.host_paths.codex / "agents/xy-qa.toml").unlink()
+            return publish(receipt)
+        with patch.object(projects.NativeEditReceipt, "publish", new=remove_global_before_receipt), self.assertRaisesRegex(ValueError, "全局归属"):
+            commit(self.state, self.project, changes, native_context=self.context)
+        self.assertEqual(before_role, target.read_bytes())
+        self.assertEqual(before_config, config.read_bytes())
+        self.assertEqual(before_binding, projects.read_binding_record(self.state, self.project)[0].payload)
