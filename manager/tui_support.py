@@ -156,11 +156,17 @@ def preference_result_text(result: dict) -> str:
 
 def runtime_status_text(row: dict) -> str:
     """中央 current 与项目 applied 各自展示，未知许可不能默认当绿。"""
+    lifecycle=row.get("lifecycle")
+    cleanup_phase=({"none":"无清理记录","prepared":"待恢复","conflict":"冲突待恢复","applied":"已结算"}.get(lifecycle.get("phase"),"未知") if lifecycle is not None else "未读取")
     return "\n".join(["中央 current  "+binding_id(row.get("runtime_binding")),
                       "中央前次版本  "+binding_id(row.get("previous_binding")),
                       "允许新任务  "+("未读取" if "new_task_allowed" not in row else "是" if row["new_task_allowed"] else "否"),
                       "允许管理写入  "+("未读取" if "management_write_allowed" not in row else "是" if row["management_write_allowed"] else "否"),
                       "未结算激活  "+str(row.get("pending_activation") or "无"),
+                      "清理状态  "+cleanup_phase,
+                      "未结算清理  "+("未读取" if lifecycle is None else "是" if lifecycle["pending"] else "否"),
+                      "清理事务  "+str(lifecycle.get("transaction_id") or "无" if lifecycle is not None else "未读取"),
+                      "激活恢复：runtime recover；清理恢复：runtime cleanup --recover（默认只读，追加 --apply 才恢复）。",
                       "", "程序升级、核心导入和 current 激活是独立动作；旧任务保留原 pin。",
                       "原生角色和模型实际执行尚未实测，当前状态仅证明管理资源。"])
 
@@ -168,7 +174,7 @@ def runtime_status_text(row: dict) -> str:
 def runtime_plan_text(summary: dict) -> str:
     """消费服务固定影响集合；不通过当前界面列表重新推导项目授权。"""
     action=summary["action"]
-    lines=["中央动作  "+{"install":"导入核心", "activate":"激活版本", "rollback":"回退版本", "recover":"恢复未结算事务"}[action]]
+    lines=["中央动作  "+{"install":"导入核心", "activate":"激活版本", "rollback":"回退版本", "recover":"恢复未结算激活事务"}[action]]
     if action == "recover":
         lines += ["事务  "+summary["transaction_id"],"阶段  "+summary["phase"],
                   "恢复方向  "+("核验并完成已发布版本" if summary["current_published"] else "条件补偿未发布版本")]
@@ -192,7 +198,7 @@ def runtime_result_text(result: dict) -> str:
     if result.get("compensated"):lines.append("未发布批次已条件补偿；请刷新中央状态核对 current。")
     if "projects_applied" in result:lines.append("服务确认应用项目数  "+str(result["projects_applied"]))
     if result.get("cancel_requested"):lines.append("取消请求到达时事务已开始；以上为结算结果。")
-    if result.get("recovered"):lines.append("中央未结算事务已恢复。")
+    if result.get("recovered"):lines.append("中央激活事务已恢复。")
     return "\n".join(lines)
 
 

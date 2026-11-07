@@ -114,6 +114,31 @@ awf-cli --state-dir STATE --host-home HOST_HOME add PROJECT --enable --source SO
 `check` 只读检查受管资源，不运行可能修复文件的 setup，也不证明宿主已加载模型；缺失或发现变化先用
 `repair --dry-run` 核对，再显式应用。管理器不提交、合并、推送，也不改宿主主会话的全局模型设置。
 
+### 备份与核心清理
+
+`runtime cleanup` 默认只读预览，`--dry-run` 是显式同义写法；追加 `--apply` 才在同一进程生成并应用服务提案。
+管理器不猜测或扫描真实 HOME、业务会话及任意旧目录。服务保留当前/前次及历史绑定、明确任务 pin、
+最新完整备份和未结算恢复依赖；遇到未知引用会保守保留核心。
+
+```bash
+awf-cli --state-dir STATE runtime cleanup
+awf-cli --state-dir STATE runtime cleanup --dry-run --task-record /path/to/task.json
+awf-cli --state-dir STATE runtime cleanup --apply --task-record /path/to/task.json
+# 每个ROOT必须是明确授权的精确旧工作流归档批次；可重复传入不同批次。
+awf-cli --state-dir STATE runtime cleanup --backups-only \
+  --approved-backup-root /path/to/.sync-backups/BATCH_A \
+  --approved-backup-root /path/to/.sync-backups/BATCH_B
+# 核对上述预览后，在同样参数后追加 --apply；--backups-only不回收核心。
+awf-cli --state-dir STATE runtime cleanup --recover
+awf-cli --state-dir STATE runtime cleanup --recover --apply
+```
+
+`--task-record` 可重复传入明确 JSON 记录，使其中 pin 参与保活；不指定的业务目录不会被扫描。
+`--recover` 默认只读查看既有清理状态，`--recover --apply` 仅恢复原先已确认的集合；
+不能与 `--approved-backup-root`、`--backups-only` 或 `--task-record` 混用。
+`--apply` 与 `--dry-run` 互斥。中断或冲突时保留原清理记录，先核对恢复摘要再继续，不能重新扩大候选。
+中央状态分别展示激活和清理未结算门；`runtime recover` 只恢复激活，清理须用 `runtime cleanup --recover`。
+
 ### JSON 与退出码
 
 成功结构为 `{"schema_version":1,"command":"…","dry_run":false,"result":…}`；

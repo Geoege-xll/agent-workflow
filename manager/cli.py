@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from .catalog import clean, discover
-from . import central_runtime, model_preferences, project_service, release, runtime_service, service, state_files
+from . import central_runtime, model_preferences, project_service, release, runtime_lifecycle, runtime_service, service, state_files
 from lib.hosts.native_context import HostPaths, NativeContext
 
 
@@ -56,7 +56,7 @@ def parser() -> argparse.ArgumentParser:
             source.add_argument("--content-id", help="精确选择已导入的完整 SHA256 内容 ID")
         if name == "use":command.add_argument("content_id", help="完整 64 位小写 SHA256；不接受前缀或 latest")
         output_options(command, dry_run=name not in {"list", "status"})
-    runtime=commands.add_parser("runtime",help="导入核心、查看状态、激活/回退中央 current 或恢复未结算事务")
+    runtime=commands.add_parser("runtime",help="导入核心、查看状态、激活/回退中央 current，以及清理/恢复")
     output_options(runtime)
     runtimes=runtime.add_subparsers(dest="runtime_action",required=True)
     runtime_list=runtimes.add_parser("list",help="只读列出已验证固定核心")
@@ -65,9 +65,20 @@ def parser() -> argparse.ArgumentParser:
     runtime_install.add_argument("source",nargs="?",type=Path,default=project_service.SOURCE,help="来源目录，默认当前中央源码")
     output_options(runtime_install,dry_run=True)
     for name in ("status", "activate", "rollback", "recover"):
-        command=runtimes.add_parser(name,help={"status":"只读查看中央 current 和发布许可", "activate":"激活已导入版本并更新启用的跟随项目", "rollback":"回退中央 current；锁版和停用项目保持", "recover":"条件恢复未结算中央事务"}[name])
+        command=runtimes.add_parser(name,help={"status":"只读查看中央 current 和发布许可", "activate":"激活已导入版本并更新启用的跟随项目", "rollback":"回退中央 current；锁版和停用项目保持", "recover":"仅条件恢复未结算中央激活事务；清理恢复使用 cleanup --recover"}[name])
         if name == "activate":command.add_argument("content_id",help="已导入核心的完整 SHA256 内容 ID")
         output_options(command,dry_run=name != "status")
+    cleanup=runtimes.add_parser("cleanup",help="只读预览备份/核心清理；--apply执行固定计划，--recover恢复原清理")
+    confirmation=cleanup.add_mutually_exclusive_group()
+    confirmation.add_argument("--apply",action="store_true",help="确认应用本次只读提案；恢复时仅继续已确认的原计划")
+    confirmation.add_argument("--dry-run",action="store_true",help="显式只读预览，与默认行为相同，不写状态或删除文件")
+    cleanup.add_argument("--recover",action="store_true",help="默认只读查看未结算清理摘要；追加 --apply 才恢复")
+    cleanup.add_argument("--approved-backup-root",type=Path,action="append",default=[],metavar="ROOT",
+                         help="明确授权一个精确旧工作流归档批次，可重复；不递归猜测其他目录")
+    cleanup.add_argument("--backups-only",action="store_true",help="只考虑归属备份和明确授权归档，不回收不可变核心")
+    cleanup.add_argument("--task-record",type=Path,action="append",default=[],metavar="JSON",
+                         help="显式任务记录中的 pin 参与保活，可重复；未知引用由服务保守保留")
+    output_options(cleanup)
     model=commands.add_parser("models",help="只读查看本地模型目录及来源")
     model.add_argument("--platform",choices=service.LOCATIONS,required=True)
     model.add_argument("--project")
@@ -152,6 +163,20 @@ def project_command(args, state: Path, scan: Path, native_context=None) -> int |
             result=runtime_store.list_cores(state)
         elif args.runtime_action == "status":
             result=central_runtime.status(state)
+        elif args.runtime_action == "cleanup":
+            # CLI只映射显式候选与确认，不扫描目录、不重建归属或删除索引。
+            # 恢复沿原服务journal继续已确认的集合，绝不把新候选混入旧授权；
+            # custom state只授权该state，生命周期入口无需推断或访问真实HOME。
+            if args.recover and (args.approved_backup_root or args.backups_only or args.task_record):
+                raise ValueError("cleanup --recover 不能与归档候选、--backups-only 或 --task-record 同时使用")
+            if args.recover:
+                result=runtime_lifecycle.recover(state) if args.apply else runtime_lifecycle.status(state)
+            else:
+                plan=runtime_lifecycle.preview(state,task_records=tuple(args.task_record),
+                        approved_backup_roots=tuple(args.approved_backup_root),include_cores=not args.backups_only)
+                result=runtime_lifecycle.apply(plan) if args.apply else plan.summary
+            print_result("runtime cleanup",result,json_mode=args.json,dry_run=not args.apply)
+            return 0
         elif args.runtime_action == "install":
             inspected=runtime_store.inspect_core(args.source)
             binding={key:inspected[key] for key in ("protocol_version","content_id","manifest_sha256")}
@@ -295,9 +320,13 @@ def main(argv: list[str] | None = None) -> int:
                 print("恢复完成；"+service.backup_summary(project,identifier) if args.apply else "只读预览；添加 --apply 才执行恢复。")
         return 0
     except KeyboardInterrupt:
+        # 清理支持断点续删；信号可能在prepared之后到达，不能沿用其他同步
+        # 事务的“已等待结算”文案。这里只给恢复入口，不猜测中断是否已写入。
+        cleanup_interrupted=("args" in locals() and args.command == "runtime" and args.runtime_action == "cleanup")
+        cancellation=("清理已中断；请先运行 runtime cleanup --recover 核对并恢复原计划。" if cleanup_interrupted else "操作已取消，已等待当前事务结算。")
         if json_mode:
-            print(json.dumps({"schema_version":1,"error":{"code":"cancelled","message":"操作已取消，已等待当前事务结算。"}},ensure_ascii=False))
-        else:print("\n已取消。",file=sys.stderr)
+            print(json.dumps({"schema_version":1,"error":{"code":"cancelled","message":cancellation}},ensure_ascii=False))
+        else:print("\n"+cancellation if cleanup_interrupted else "\n已取消。",file=sys.stderr)
         return 130
     except (OSError,ValueError,KeyError,TypeError,RecursionError,subprocess.TimeoutExpired) as exc:
         if json_mode:

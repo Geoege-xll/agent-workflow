@@ -23,7 +23,7 @@
 | `manager/runtime_service.py` | 单项目启停、选版、回滚与修复的唯一事务编排 |
 | `manager/central_runtime.py`、`manager/runtime_policy.py` | 中央 current 激活／恢复协调、follow／pinned 策略与准入门 |
 | `manager/native_agents.py`、`lib/hosts/native_context.py` | 用户级原生资源归属与显式不可变宿主上下文 |
-| `manager/runtime_lifecycle.py` | 固定任务／历史引用保护的生命周期预览与结算 |
+| `manager/runtime_lifecycle.py` | 固定任务／历史引用保护的生命周期 preview/apply/status/recover，CLI `runtime cleanup` 是公开维护入口 |
 | `manager/state_files.py` | 管理状态普通文件的有界读取、前像核对与安全发布 |
 | `lib/install/project_paths.py` | 规范项目路径与目录身份边界，供实际服务调用者复用 |
 | `manager/catalog.py`、`manager/codex_models.py`、`manager/model_preferences.py` | 模型来源、能力与字段偏好 |
@@ -44,6 +44,8 @@
 CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中央和模型角色／上下文／目录／预览调用透传。
 显式 custom state 的宿主操作要求 `--host-home`；模型目录、资源校验和文件投影不能宣称原生角色／模型执行已验证。
 整平台恢复调用 `model_preferences.reset_platform` 的同一固定提案；UI 不先修改草稿或自行写配置。
+`runtime cleanup` 默认只读，`--apply` 调同一进程生命周期提案；`--recover` 读取公共状态，
+`--recover --apply` 只恢复已确认原计划。候选、归属、引用保活与删除全部由生命周期服务维护，CLI不另写扫描或索引。
 
 `service` 仅负责模型事务，`runtime_service` 保持中央事务的单一所有者；项目登记归 `project_service`，
 状态文件和项目路径共用边界分别归 `state_files`、`project_paths`。下游通过所属模块调用，

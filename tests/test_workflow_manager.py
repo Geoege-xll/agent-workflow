@@ -1772,6 +1772,70 @@ class CentralCliIntegrationTest(unittest.TestCase):
         rolled=self.cli("runtime","rollback",state=state)["result"]
         self.assertEqual(installed["runtime_binding"],rolled["runtime_binding"])
 
+    def test_runtime_cleanup_preview_apply_pins_and_interruption_recovery(self):
+        state=self.root/(self._testMethodName+"-state")
+        archives=self.root/".sync-backups";archives.mkdir(exist_ok=True)
+        roots=[archives/(self._testMethodName+suffix) for suffix in ("-one","-two")]
+        for root in roots:root.mkdir();(root/"old.txt").write_bytes(b"explicit historical fixture")
+        # cleanup不需要宿主身份；从真实脚本入口验证custom state仍不猜HOME，
+        # 缺少state的默认预览和显式dry-run都不能建立锁、journal或内容库。
+        command=["bash",str(PACK/"workflow.sh"),"--state-dir",str(state),"--json","runtime","cleanup"]
+        for options in ([],["--dry-run"]):
+            result=subprocess.run(command+options,cwd=self.root,env=self.environment,capture_output=True,text=True,timeout=20)
+            self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+            self.assertTrue(json.loads(result.stdout)["dry_run"]);self.assertFalse(state.exists())
+        invalid=(("--apply","--dry-run"),("--recover","--backups-only"),
+                 ("--recover","--approved-backup-root",roots[0]),("--recover","--task-record",self.root/"not-a-task.json"))
+        for options in invalid:
+            self.cli("runtime","cleanup",*options,state=state,expected=2)
+            self.assertFalse(state.exists())
+        self.cli("runtime","install",self.first.root,state=state)
+        self.cli("runtime","install",self.second.root,state=state)
+        pin=self.root/(self._testMethodName+"-task.json")
+        pin.write_text(json.dumps({"schema_version":2,"runtime_binding":self.first.binding()}),encoding="utf-8")
+        arguments=("runtime","cleanup","--approved-backup-root",roots[0],"--approved-backup-root",roots[1],
+                   "--task-record",pin,"--backups-only")
+        def snapshot(root):
+            return {str(path.relative_to(root)):(path.lstat().st_ino,path.lstat().st_mode,path.lstat().st_mtime_ns,
+                     path.read_bytes() if path.is_file() else None) for path in (root,*root.rglob("*"))}
+        before=snapshot(state);archive_before=[snapshot(root) for root in roots]
+        preview=self.cli(*arguments,state=state)
+        self.assertTrue(preview["dry_run"]);self.assertEqual([],preview["result"]["cores"])
+        self.assertEqual(set(map(str,roots)),set(preview["result"]["approved_archives"]))
+        self.assertEqual(before,snapshot(state));self.assertEqual(archive_before,[snapshot(root) for root in roots])
+        applied=self.cli(*arguments,"--apply",state=state)["result"]
+        self.assertEqual(2,applied["archives_removed"]);self.assertEqual(0,applied["cores_removed"])
+        self.assertTrue(all(not root.exists() for root in roots))
+        collection=self.cli("runtime","cleanup","--task-record",pin,state=state)["result"]
+        self.assertEqual([self.second.content_id],collection["cores"])
+        self.cli("runtime","cleanup","--task-record",pin,"--apply",state=state)
+        self.assertEqual([self.first.content_id],[row["content_id"] for row in self.cli("runtime","list",state=state)["result"]])
+        interrupted=archives/(self._testMethodName+"-resume");interrupted.mkdir()
+        (interrupted/"resume.txt").write_bytes(b"only explicitly approved fixture")
+        unlink=os.unlink
+        def interrupt_after_unlink(path,*args,**kwargs):
+            # 仅注入真实系统调用后的信号：服务已持久化prepared/deleting并完成
+            # 一次删除，恢复必须从原journal继续；不调用或替换后端私有方法。
+            result=unlink(path,*args,**kwargs)
+            if path == "resume.txt":raise KeyboardInterrupt("fixture cleanup interruption")
+            return result
+        output=io.StringIO()
+        with patch("os.unlink",side_effect=interrupt_after_unlink),redirect_stdout(output):
+            code=cli_main(["--state-dir",str(state),"--json","runtime","cleanup","--backups-only",
+                           "--approved-backup-root",str(interrupted),"--apply"])
+        self.assertEqual(130,code);self.assertIn("cleanup --recover",json.loads(output.getvalue())["error"]["message"])
+        self.assertTrue(interrupted.exists());self.assertFalse((interrupted/"resume.txt").exists())
+        before=snapshot(state)
+        pending=self.cli("runtime","cleanup","--recover",state=state)
+        self.assertTrue(pending["dry_run"]);self.assertEqual(before,snapshot(state))
+        self.assertEqual("prepared",pending["result"]["phase"])
+        self.assertTrue(pending["result"]["pending"]);self.assertTrue(pending["result"]["can_recover"])
+        self.assertFalse(self.cli("runtime","status",state=state)["result"]["management_write_allowed"])
+        resumed=self.cli("runtime","cleanup","--recover","--apply",state=state)["result"]
+        self.assertEqual("applied",resumed["phase"]);self.assertFalse(interrupted.exists())
+        self.assertTrue(self.cli("runtime","status",state=state)["result"]["management_write_allowed"])
+        self.assertEqual([],list(self.home.iterdir()))
+
     def test_custom_state_requires_host_home_and_explicit_home_ignores_root_overrides(self):
         state=self.root/(self._testMethodName+"-state")
         result=subprocess.run(["bash",str(PACK/"workflow.sh"),"--state-dir",str(state),"--json","models","--platform","codex"],

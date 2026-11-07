@@ -58,6 +58,8 @@ Homebrew 自身；若 Homebrew 的 `bin` 不在现有 PATH，使用以上完整�
 `del` / `open` / `close` 及 `use` / `follow` / `rollback` / `repair` 管理，写入前可用 `--dry-run` 预览。
 先用 `runtime install` 导入核心，再 `runtime activate CONTENT_ID` 激活 current；已启用 follow 项目随中央切版，
 pinned 项目保留锁版，停用项目保持停用。`runtime rollback` 和 `runtime recover` 均先支持只读预览。
+`runtime cleanup` 默认只读盘点备份/核心，`--apply` 才执行；中断后用 `runtime cleanup --recover` 核对，
+再追加 `--apply` 恢复原清理。它不猜测或删除任意旧目录，显式旧归档授权和任务pin保护见使用手册。
 2.1 采用普通中央安装，不提供旧版本兼容升级；旧工作流须在任务收尾和文档、专有配置保全后，
 按明确受管归属单独移除，再运行 `open`。`brew uninstall awf-cli` 不删除项目内工作流、
 项目配置或 `~/.config/agent-workflow` 中的用户数据。
