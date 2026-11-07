@@ -833,7 +833,10 @@ def assert_closed_qa_outcomes(text: str) -> None:
 class UnifiedHostFixture:
     def make_fixture(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
         temporary = tempfile.TemporaryDirectory(prefix="agent-workflow-unified-")
-        project = Path(temporary.name) / "Project"
+        # macOS的TMPDIR可经/var别名进入/private/var；把受控临时根规范为物理
+        # 路径后再派生项目与pack，避免合法夹具被生产no-follow父目录校验拒绝。
+        # 不放宽校验，也不把测试刻意构造的后续链接转换成已授权普通目录。
+        project = Path(temporary.name).resolve() / "Project"
         pack = project / "agent_workflow"
         project.mkdir()
         shutil.copytree(
@@ -861,11 +864,16 @@ class UnifiedHostFixture:
     def run_script(
         project: Path, script: str, *arguments: str
     ) -> subprocess.CompletedProcess[str]:
+        # 安装器会再用mktemp建立Claude暂存产物；仅规范外层项目不足以消除
+        # TMPDIR中的/var系统别名。子进程沿同一受控物理临时根创建暂存目录，
+        # 仍完整执行生产no-follow校验，不更改宿主HOME或给受测资源额外信任。
+        environment = {**os.environ, "TMPDIR": str(Path(tempfile.gettempdir()).resolve())}
         return subprocess.run(
             ["bash", f"agent_workflow/{script}", *arguments],
             cwd=project,
             text=True,
             capture_output=True,
+            env=environment,
             check=False,
             timeout=90,
         )
