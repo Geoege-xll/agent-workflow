@@ -12,6 +12,7 @@ on:
         options:
           - acceptance
           - native-capabilities
+          - native-negative-fixture
 
 permissions:
   contents: read
@@ -57,6 +58,14 @@ jobs:
           python -I -B -c "import sys,unittest; sys.path.insert(0,'tests'); suite=unittest.defaultTestLoader.loadTestsFromName('test_windows_runtime_boundaries.SkillBackendBoundaryTest.test_content_read_rejects_hardlink_swapped_after_metadata_check'); result=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)"
           if ($LASTEXITCODE -ne 0) { throw 'Hardlink rejection fixture failed' }
           & ./tests/windows_npx_runner.ps1 -Mode native-capabilities
+      - name: Native missing-capability fixture on disposable hosted VM
+        if: inputs.validation_mode == 'native-negative-fixture'
+        run: |
+          & ./tests/windows_npx_runner.ps1 -Mode native-negative-fixture
+      - name: Always restore missing-capability fixture
+        if: always() && inputs.validation_mode == 'native-negative-fixture'
+        run: |
+          & ./tests/windows_npx_runner.ps1 -Mode native-negative-cleanup
       - name: Portable contracts and native Job and Hook protocol checks
         if: inputs.validation_mode == 'acceptance'
         run: |

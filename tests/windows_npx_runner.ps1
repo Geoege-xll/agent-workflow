@@ -1,7 +1,7 @@
 # 此脚本仅在一次性 GitHub Windows runner 中验证真实账户能力。
 # 产品安装器不会调用此脚本、创建账户或修改任何账户权限。
 param(
-    [ValidateSet('native-capabilities')]
+    [ValidateSet('native-capabilities', 'native-negative-fixture', 'native-negative-cleanup')]
     [string]$Mode = 'native-capabilities'
 )
 
@@ -13,18 +13,21 @@ $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.Wind
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw '准备限定测试账户需要 runner 管理员令牌；测试本身另以标准用户执行'
 }
-# setup-python 已在当前 job 声明唯一解释器。Get-Command 可能一次返回
-# PATH 上多个 Application，不能把 Source 集合拼接成可执行文件名。
-# 仅采用该已配置目录中的单个真实文件，不回退 WindowsApps 或另一版本。
-if ([string]::IsNullOrWhiteSpace($env:pythonLocation)) {
-    throw '当前 job 未提供 setup-python 的 pythonLocation'
+if ($Mode -ne 'native-negative-cleanup') {
+    # setup-python 已在当前 job 声明唯一解释器。Get-Command 可能一次返回
+    # PATH 上多个 Application，不能把 Source 集合拼接成可执行文件名。
+    # 仅采用该已配置目录中的单个真实文件，不回退 WindowsApps 或另一版本。
+    if ([string]::IsNullOrWhiteSpace($env:pythonLocation)) {
+        throw '当前 job 未提供 setup-python 的 pythonLocation'
+    }
+    $pythonFile = Get-Item -LiteralPath (Join-Path $env:pythonLocation 'python.exe')
+    if ($pythonFile -isnot [IO.FileInfo]) {
+        throw 'setup-python 的 python.exe 必须是一个已存在的普通文件'
+    }
+    [string]$python = $pythonFile.FullName
+    Write-Host "已配置解释器：$python"
 }
-$pythonFile = Get-Item -LiteralPath (Join-Path $env:pythonLocation 'python.exe')
-if ($pythonFile -isnot [IO.FileInfo]) {
-    throw 'setup-python 的 python.exe 必须是一个已存在的普通文件'
-}
-[string]$python = $pythonFile.FullName
-Write-Host "已配置解释器：$python"
+
 $probe = Join-Path $PSScriptRoot 'test_windows_central_fs.py'
 $name = 'awfprobe' + [guid]::NewGuid().ToString('N').Substring(0, 10)
 $root = Join-Path ($env:SystemDrive + '\') ('awf-capabilities-' + [guid]::NewGuid().ToString('N'))
@@ -35,6 +38,7 @@ $failures = [Collections.Generic.List[string]]::new()
 
 # LSA 修改限定为刚创建的随机测试 SID。禁止使用本 helper 更改 runner
 # 或任何现有账户；finally 先移除该 SID 的赋权再删除账户与 profile。
+if ($Mode -eq 'native-capabilities') {
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -90,6 +94,8 @@ public static class AwfProbeRights {
 }
 '@
 
+}
+
 function Invoke-OrdinaryProbe([string]$Stage, [pscredential]$Credential) {
     $stdout = Join-Path $root ($Stage + '.stdout.log')
     $stderr = Join-Path $root ($Stage + '.stderr.log')
@@ -120,6 +126,265 @@ function Invoke-OrdinaryProbe([string]$Stage, [pscredential]$Credential) {
         }
         if ($null -ne $process) { $process.Dispose() }
     }
+}
+
+
+# 只供本仓临时 CI 分支使用的负向环境 fixture；生产入口没有此调用链。
+$negativeRepository = 'Geoege-xll/agent-workflow'
+$negativeBranch = 'refs/heads/ci/windows-central-npm-2.1.1'
+$negativeSubkey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+$negativeValue = 'AllowDevelopmentWithoutDevLicense'
+
+function Assert-NegativeEnvironment {
+    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+        $env:GITHUB_REPOSITORY -cne $negativeRepository -or $env:GITHUB_REF -cne $negativeBranch) {
+        throw '负向 fixture 仅授权本仓临时 CI 分支的 GitHub-hosted 一次性 VM'
+    }
+    $head = & git -C (Split-Path $PSScriptRoot -Parent) rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or $head -cne $env:GITHUB_SHA) {
+        throw '实际 checkout HEAD 与本次 GitHub SHA 不符'
+    }
+    Write-Host "负向 fixture 环境：$env:RUNNER_ENVIRONMENT $env:GITHUB_REPOSITORY $env:GITHUB_REF $head"
+}
+
+function Open-NegativeRegistry {
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    try {
+        $key = $base.OpenSubKey($negativeSubkey, $true)
+        if ($null -eq $key) { throw '授权的既有 AppModelUnlock 注册表项不存在' }
+        return $key
+    } finally { $base.Dispose() }
+}
+
+function Set-NegativeSwitch([bool]$Restore) {
+    $key = Open-NegativeRegistry
+    try {
+        $kind = $key.GetValueKind($negativeValue)
+        $value = $key.GetValue($negativeValue)
+        if ($kind -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+            ($Restore -and $value -notin @(0, 1)) -or (-not $Restore -and $value -ne 1)) {
+            throw "注册表前像/当前状态未知，保留且拒绝覆盖：kind=$kind value=$value"
+        }
+        # 此处是独占一次性 VM、无其他配置 writer 前提下的条件恢复。
+        # RegistryKey 没有原子 CompareExchange，不能声称排除非合作外部写者。
+        $desired = if ($Restore) { 1 } else { 0 }
+        if ($value -ne $desired) {
+            $key.SetValue($negativeValue, $desired, [Microsoft.Win32.RegistryValueKind]::DWord)
+            $key.Flush()
+        }
+        if ($key.GetValueKind($negativeValue) -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+            $key.GetValue($negativeValue) -ne $desired) {
+            throw '注册表条件更新后核对失败'
+        }
+        Write-Host "授权单值状态：DWORD$value -> DWORD$desired；restore=$Restore"
+    } finally { $key.Dispose() }
+}
+
+function Assert-NegativeControl([string]$Control) {
+    $parent = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
+    $full = [IO.Path]::GetFullPath($Control).TrimEnd('\')
+    if (-not [string]::Equals([IO.Path]::GetDirectoryName($full), $parent,
+                             [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($full) -cnotmatch '^awf-negative-control-([0-9a-f]{32})$') {
+        throw '备用恢复位置必须是 RUNNER_TEMP 下本任务的直接子目录'
+    }
+    $id = [regex]::Match([IO.Path]::GetFileName($full), '^awf-negative-control-([0-9a-f]{32})$').Groups[1].Value
+    if (Test-Path -LiteralPath $full) {
+        $directory = Get-Item -LiteralPath $full
+        if ($directory -isnot [IO.DirectoryInfo] -or
+            ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw '控制器目录不能是链接或特殊节点'
+        }
+        $acl = Get-Acl -LiteralPath $full
+        $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        if (-not $acl.AreAccessRulesProtected -or
+            $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $owner -or $rules.Count -ne 2) {
+            throw '控制器快照目录不是受保护的当前控制器所有'
+        }
+        $seen = @()
+        foreach ($rule in $rules) {
+            if ($rule.IsInherited -or $rule.AccessControlType -ne 'Allow' -or
+                $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+                $rule.IdentityReference.Value -notin @($owner, 'S-1-5-18')) {
+                throw '控制器快照目录向其他主体授予访问'
+            }
+            $seen += $rule.IdentityReference.Value
+        }
+        if (@($seen | Select-Object -Unique).Count -ne 2) { throw '控制器 DACL 主体不完整' }
+    }
+    return $id
+}
+
+function Read-NegativeSnapshot([string]$Control) {
+    $id = Assert-NegativeControl $Control
+    $file = Get-Item -LiteralPath (Join-Path $Control 'negative-state.json')
+    if ($file -isnot [IO.FileInfo] -or $file.Length -gt 4096 -or
+        ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw '备用恢复快照不是有界普通文件'
+    }
+    $state = [IO.File]::ReadAllText($file.FullName) | ConvertFrom-Json
+    $fields = @('schema_version','fixture_id','run_id','run_attempt','repository','branch','owner_sid','registry_kind','registry_value')
+    $actual = @($state.PSObject.Properties.Name)
+    if (@(Compare-Object ($fields | Sort-Object) ($actual | Sort-Object)).Count -ne 0 -or
+        $state.schema_version -ne 1 -or $state.fixture_id -cne $id -or
+        $state.run_id -cne $env:GITHUB_RUN_ID -or $state.run_attempt -cne $env:GITHUB_RUN_ATTEMPT -or
+        $state.repository -cne $negativeRepository -or $state.branch -cne $negativeBranch -or
+        $state.owner_sid -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -or
+        $state.registry_kind -cne 'DWord' -or $state.registry_value -ne 1) {
+        throw '备用恢复快照身份/固定前像不符'
+    }
+    # 注册表路径和值均由源码常量决定；快照不能指定任意键或任意原值。
+    return $state
+}
+
+function Remove-NegativeResources($State) {
+    $accountName = 'awfneg' + $State.fixture_id.Substring(0, 12)
+    $description = "AWF negative $($State.run_id)/$($State.run_attempt) $($State.fixture_id.Substring(0, 8))"
+    $account = Get-LocalUser -Name $accountName -ErrorAction SilentlyContinue
+    if ($null -ne $account) {
+        if ($account.Description -cne $description) { throw '同名账户不是本次 fixture，拒绝删除' }
+        $accountSid = $account.SID.Value
+        # 正常调用已释放进程；取消后的 always 只收回本轮随机测试账户的
+        # Python 进程，不终止 runner 或任何现有用户的进程。
+        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='python.exe'")) {
+            $identity = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
+            if ($identity.ReturnValue -eq 0 -and $identity.Sid -ceq $accountSid) {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+                Wait-Process -Id $process.ProcessId -Timeout 30 -ErrorAction SilentlyContinue
+                if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) {
+                    throw '本轮测试进程尚未退出，保留恢复快照'
+                }
+            }
+        }
+        Get-CimInstance Win32_UserProfile -Filter "SID='$accountSid'" | Remove-CimInstance
+        Remove-LocalUser -Name $accountName
+    }
+    $fixture = Join-Path ($env:SystemDrive + '\') ('awf-negative-' + $State.fixture_id)
+    if (Test-Path -LiteralPath $fixture) {
+        if ((Get-Item -LiteralPath $fixture).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw '测试根被替换成链接，保留且拒绝递归删除'
+        }
+        Remove-Item -LiteralPath $fixture -Recurse -Force
+    }
+}
+
+function Complete-NegativeFixture([bool]$Final) {
+    if ([string]::IsNullOrWhiteSpace($env:AWF_NEGATIVE_CONTROL)) {
+        Write-Host '未登记控制器快照，注册表修改许可尚未取得，无需恢复。'
+        return
+    }
+    $id = Assert-NegativeControl $env:AWF_NEGATIVE_CONTROL
+    if (-not (Test-Path -LiteralPath $env:AWF_NEGATIVE_CONTROL)) {
+        # always 成功清理后再次调用只核对，不创建资源、改值或重新运行测试。
+        $key = Open-NegativeRegistry
+        try {
+            if ($key.GetValueKind($negativeValue) -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+                $key.GetValue($negativeValue) -ne 1) { throw '快照已回收但固定前像不符，拒绝盲目恢复' }
+        } finally { $key.Dispose() }
+        $account = Get-LocalUser -Name ('awfneg' + $id.Substring(0, 12)) -ErrorAction SilentlyContinue
+        $fixture = Join-Path ($env:SystemDrive + '\') ('awf-negative-' + $id)
+        if ($null -ne $account -or (Test-Path -LiteralPath $fixture)) {
+            throw '快照已回收但存在未结算资源，拒绝猜测归属'
+        }
+        Write-Host '备用恢复幂等核对完成：前像为 DWORD1，本轮账户/数据目录已不存在。'
+        return
+    }
+    $state = Read-NegativeSnapshot $env:AWF_NEGATIVE_CONTROL
+    $errors = [Collections.Generic.List[string]]::new()
+    try { Set-NegativeSwitch $true } catch { $errors.Add("registry restore: $($_.Exception.Message)") }
+    try { Remove-NegativeResources $state } catch { $errors.Add("resource cleanup: $($_.Exception.Message)") }
+    if ($errors.Count) { throw ($errors -join '; ') }
+    Write-Host '负向 fixture 清理完成：固定前像 DWORD1、账户、profile、测试进程及数据已核对。'
+    if ($Final) {
+        # finally 保留快照供 always 再核对；只有备用恢复完成后才删除控制器。
+        Remove-Item -LiteralPath $env:AWF_NEGATIVE_CONTROL -Recurse -Force
+        Write-Host 'always 备用恢复已完成，控制器快照已回收。'
+    }
+}
+
+function Invoke-NegativeFixture {
+    $id = [guid]::NewGuid().ToString('N')
+    $control = Join-Path $env:RUNNER_TEMP ('awf-negative-control-' + $id)
+    $script:root = Join-Path ($env:SystemDrive + '\') ('awf-negative-' + $id)
+    $script:name = 'awfneg' + $id.Substring(0, 12)
+    $credential = $null
+    $controlCreated = $false
+    if (-not [string]::IsNullOrWhiteSpace($env:AWF_NEGATIVE_CONTROL)) { throw '存在未结算控制器，请先恢复' }
+    try {
+        # 先核既有 DWORD1，不创建/修复不存在或未知类型的机器配置。
+        $key = Open-NegativeRegistry
+        try {
+            if ($key.GetValueKind($negativeValue) -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+                $key.GetValue($negativeValue) -ne 1) { throw '负向 fixture 只接受既有 DWORD1' }
+        } finally { $key.Dispose() }
+        New-Item -ItemType Directory -Path $control | Out-Null
+        $controlCreated = $true
+        $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.SetOwner($owner)
+        foreach ($sidText in @($owner.Value, 'S-1-5-18')) {
+            $sid = [Security.Principal.SecurityIdentifier]::new($sidText)
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            $acl.AddAccessRule($rule)
+        }
+        Set-Acl -LiteralPath $control -AclObject $acl
+        $state = [ordered]@{
+            schema_version=1; fixture_id=$id; run_id=$env:GITHUB_RUN_ID; run_attempt=$env:GITHUB_RUN_ATTEMPT
+            repository=$negativeRepository; branch=$negativeBranch; owner_sid=$owner.Value
+            registry_kind='DWord'; registry_value=1
+        }
+        $body = [Text.UTF8Encoding]::new($false).GetBytes(($state | ConvertTo-Json -Compress))
+        $stream = [IO.File]::Open((Join-Path $control 'negative-state.json'), 'CreateNew', 'Write', 'None')
+        try { $stream.Write($body, 0, $body.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        $null = Read-NegativeSnapshot $control
+        # 控制器路径与非秘密快照先持久化到本 job 的恢复入口，再允许变更。
+        $entry = [Text.UTF8Encoding]::new($false).GetBytes("AWF_NEGATIVE_CONTROL=$control" + [Environment]::NewLine)
+        $environment = [IO.File]::Open($env:GITHUB_ENV, 'Append', 'Write', 'Read')
+        try { $environment.Write($entry, 0, $entry.Length); $environment.Flush($true) } finally { $environment.Dispose() }
+        $env:AWF_NEGATIVE_CONTROL = $control
+        New-Item -ItemType Directory -Path $root | Out-Null
+        $password = 'Awf!a9-' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+        Write-Host "::add-mask::$password"
+        $secure = ConvertTo-SecureString $password -AsPlainText -Force
+        $description = "AWF negative $env:GITHUB_RUN_ID/$env:GITHUB_RUN_ATTEMPT $($id.Substring(0, 8))"
+        $account = New-LocalUser -Name $name -Password $secure -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword -Description $description
+        $users = Get-LocalGroup -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'))
+        Add-LocalGroupMember -Group $users -Member $account
+        $credential = [pscredential]::new("$env:COMPUTERNAME\$name", $secure)
+        & "$env:SystemRoot\System32\icacls.exe" $root /grant ('*' + $account.SID.Value + ':(OI)(CI)F') | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw '负向测试 SID 的数据目录 ACL 设置失败' }
+        Set-NegativeSwitch $false
+        Invoke-OrdinaryProbe 'ordinary-denied-only' $credential
+        if ($failures.Count) { throw '负向未成立，立即停止能力试探，仅执行恢复' }
+        Set-NegativeSwitch $true
+        # 此调用只证明恢复后的实际能力；不重跑目录或已赋权正向矩阵。
+        Invoke-OrdinaryProbe 'ordinary-restored' $credential
+    } catch {
+        $failures.Add("negative fixture: $($_.Exception.Message)")
+    } finally {
+        try {
+            if ($env:AWF_NEGATIVE_CONTROL) { Complete-NegativeFixture $false }
+            elseif ($controlCreated) {
+                # 尚未发布恢复入口时没有修改注册表或创建测试账户；只回收
+                # 此函数确证创建的控制器，不留下半写入的无效快照。
+                Remove-Item -LiteralPath $control -Recurse -Force
+            }
+        } catch { $failures.Add("finally restore: $($_.Exception.Message)") }
+        $credential = $null; $secure = $null; $password = $null
+    }
+    if ($failures.Count) { throw ($failures -join '; ') }
+    Write-Host '负向能力与恢复调用完成；仍不是中央安装或 npm 最终验收。'
+}
+
+if ($Mode -in @('native-negative-fixture', 'native-negative-cleanup')) {
+    Assert-NegativeEnvironment
+    if ($Mode -eq 'native-negative-cleanup') { Complete-NegativeFixture $true }
+    else { Invoke-NegativeFixture }
+    return
 }
 
 try {

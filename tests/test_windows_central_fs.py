@@ -53,27 +53,37 @@ class WindowsCapabilityProbe(unittest.TestCase):
         self._set_symlink_privilege(PROBE_MODE == "ordinary-allowed")
         target, link = self.root / "真实目标", self.root / "目录软链接"
         target.mkdir()
+        target_sentinel = target / "保留.txt"
+        user_sentinel = self.root / "user-owned.txt"
+        target_sentinel.write_bytes(b"target sentinel")
+        user_sentinel.write_bytes(b"user sentinel")
+        target_identity = (target.stat().st_dev, target.stat().st_ino)
         kernel = self.fs._api().kernel
         create = kernel.CreateSymbolicLinkW
         create.restype = ctypes.c_uint8
         create.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, self.fs.DWORD]
-        # 与拟实现的产品一致：目录 + ALLOW_UNPRIVILEGED_CREATE。该 flag 不会
-        # 开启 Developer Mode；若当前系统本就允许未授权用户创建，则负向
-        # fixture 无法成立，必须明确失败，绝不改注册表制造缺能力环境。
+        # 与拟实现的产品一致：目录 + ALLOW_UNPRIVILEGED_CREATE。该调用
+        # 不改变 Developer Mode；独立 CI runner 按授权准备/恢复负向环境，
+        # 但注册表值本身不能代替这里真实 API 的拒绝或成功结果。
         succeeded = bool(create(str(link), str(target), 0x1 | 0x2))
         error = ctypes.get_last_error()
         try:
-            if PROBE_MODE == "ordinary-denied":
+            if PROBE_MODE in {"ordinary-denied", "ordinary-denied-only"}:
                 self.assertFalse(succeeded, "当前机器已有未提权软链能力，缺能力 fixture 不成立")
                 self.assertEqual(error, 1314, f"需要真实 ERROR_PRIVILEGE_NOT_HELD，实际 {error}")
                 self.assertFalse(os.path.lexists(link))
-                self.assertEqual(list(self.root.iterdir()), [target])
+                self.assertCountEqual(list(self.root.iterdir()), [target, user_sentinel])
             else:
-                self.assertTrue(succeeded, f"标准用户已赋软链权限仍失败，Win32 error={error}")
+                self.assertTrue(succeeded, f"标准用户目录软链能力未成立，Win32 error={error}")
                 info = os.lstat(link)
                 self.assertEqual(info.st_reparse_tag, 0xA000000C, "必须是真正 SYMLINK，不能是 junction")
                 self.assertTrue(link.is_symlink())
                 self.assertEqual(link.resolve(strict=True), target)
+            # 负向失败或恢复调用都必须保持既有目标与用户文件；只看 API
+            # 返回值不能替代没有误写/替换数据的事实。
+            self.assertEqual(target_sentinel.read_bytes(), b"target sentinel")
+            self.assertEqual(user_sentinel.read_bytes(), b"user sentinel")
+            self.assertEqual((target.stat().st_dev, target.stat().st_ino), target_identity)
         finally:
             # 只收回本 fixture 创建、并已确认是目录软链的节点；目标目录由
             # TemporaryDirectory 在测试结束后回收，不能通过链接递归删除目标。
@@ -115,11 +125,15 @@ class WindowsCapabilityProbe(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", required=True,
-                        choices=("host-directory", "ordinary-denied", "ordinary-allowed"))
+                        choices=("host-directory", "ordinary-denied", "ordinary-allowed",
+                                 "ordinary-denied-only", "ordinary-restored"))
     parser.add_argument("--root", required=True)
     args = parser.parse_args()
     PROBE_ROOT, PROBE_MODE = Path(args.root).resolve(strict=True), args.probe
-    methods = ["test_directory_durability_uses_real_backend"]
+    # 新负向 fixture 只补缺失的软链拒绝与恢复事实，复用已经通过的目录
+    # fsync，不能为了共享测试分组重复整轮已绿矩阵。
+    methods = ([] if PROBE_MODE in {"ordinary-denied-only", "ordinary-restored"}
+               else ["test_directory_durability_uses_real_backend"])
     if PROBE_MODE != "host-directory":
         methods.append("test_ordinary_token_and_directory_symlink_capability")
     suite = unittest.TestSuite(WindowsCapabilityProbe(name) for name in methods)

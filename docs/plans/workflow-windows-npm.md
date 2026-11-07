@@ -34,6 +34,8 @@
 
 验证复用此前Claude／Codex／TUI与真实PTY未受影响结论。保留既有Windows CI的实际相关检查，随精确提交迁移当前E2E；新增普通用户正反能力验证使用自有临时账户／目录并收尾，绝不修改开发机或真实业务项目。首次基线CI可定位原生目录屏障等尚未知能力，已知init拒绝不反复整组重跑。实现者给出成功build／可运行消费者和完整命令、退出码、源SHA及日志，PM在隔离工作树生成仅本任务的CI检查点，只有当前候选的原生证据成立才进入唯一独立QA。
 
+托管Windows环境已证明无软链权限的普通用户仍可创建链接，原负向环境假设不成立。仅本任务的GitHub-hosted一次性虚拟机测试允许临时将已存在且类型为DWORD、值为1的AllowDevelopmentWithoutDevLicense设为0，构造一次真实缺能力检查；这不是产品行为，也不授权修改本机、共享runner或真实账户设置。测试须先记录精确前像，仅修改该一个值，使用全新普通用户令牌及相同flags3调用，以真实ERROR_PRIVILEGE_NOT_HELD、无链接及sentinel不变证明拒绝。finally和workflow always路径按前像恢复并验证，不覆盖未知并发值，取消后也保留明确清理结果。若写0后仍可创建链接，停止此方案而不换参数、重试或降低验收。已通过的目录和赋权正向证据继续复用，不为该补缺重跑整组。
+
 QA后PM原位更新本主题及同名HTML，使用实际required生命周期解析、链接和HTML freshness；source-pack没有PROJECT／STANDARDS索引，保留配置路径及null，不创建空索引或假报全仓文档通过。README、Homebrew及Windows用法由实现单元随真实候选更新，说明来源版本与已公开版本的不同状态。独立候选最终交付只包含本轮改动和已验计划投影。
 
 ## 当前进展与恢复入口
@@ -41,6 +43,8 @@ QA后PM原位更新本主题及同名HTML，使用实际required生命周期解�
 准备审计已完成，当前npm init只接受win32/x64，但install_central先调用的require_skill_symlinks对nt无条件拒绝；Windows伪fd后端还缺readlink／link／symlink，既有E2E仍调用旧项目lib路径。已有单例确认拒绝早于中央导入和项目／state写入；该通过仅证明安全拒绝，不是安装支持。
 
 普通npm账号尚未注册／登录，当前不发布。发布准备记录在request-id publish-tap-npm-2.1.0-20261107的既有scratch；本实现请求使用request-id windows-central-npm-2.1.1-20261107的唯一scratch及其中单一graph和作者／CI完整日志。来源分支main基线e2c981b，5处外部修改留在原检出；实现工作树windows-fs，后续集成工作树windows-integration，当前无已验收Windows候选。
+
+能力探针检查点52cb9e83／原生run42331944946已确认宿主及普通用户目录fsync通过、非管理员赋权后真实目录SYMLINK通过；整次run失败是无权限用户也能创建链接，缺能力fixture不成立。完整原日志在本请求windows-capabilities.log，前三次输出均保留，未进入中央安装验收。当前先补严格限定且可恢复的CI负向fixture，再继续生产适配与完整安装验证；不将探针通过记为BUILD_VERIFIED或QA PASS。
 
 ## 验收结果与当前已交付行为
 
