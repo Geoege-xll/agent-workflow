@@ -37,9 +37,9 @@
 
 基础为 main aeb03f34195d6d5b77e430d3ea233c415e6d7f16。原仓五处外部未提交改动全部排除：notes-and-central-runtime.md/.html、lib/task_graph_cli.py、xy-qa-review/references/ui-review.md、tests/test_task_graph.py，不暂存、覆盖或回退。
 
-本请求唯一 scratch 由 task_graph_cli 的 workflow-stability-20261107 解析；包含当前 graph、完整 Task Pack、各实施单元和 integration 工作树及必要原始日志。图是运行状态唯一来源；本节只记录恢复所需事实。当前已完成只读边界确认，尚无本轮实施验收结果。
+本请求唯一 scratch 由 task_graph_cli 的 workflow-stability-20261107 解析；包含当前 graph、完整 Task Pack、各实施单元和 integration 工作树及必要原始日志。图是运行状态唯一来源；本节只记录恢复所需事实。验证入口 dcc00f5、文档发行 dd33f04、服务重构 b11cf90 三个检查点已无冲突组合到 integration。各单元必要验证已闭合；服务回归首轮七处失败的原始输出保留，按实际合同修正旧断言和测试状态隔离后定向复验通过，其余有效证据复用。当前尚待组合 ci 消费者验证与唯一独立 QA，不能声明已验收或合入 main。
 
-清理候选已确认三对 SHA 一致，共 416855 逻辑字节。执行前重新比较完整字节和归档校验；只删除 exact paths，再移除空目录，不递归删除 dist 或任何工作区。必要原件唯一或引用不明的内容保留。
+历史精确清理已执行：再次核对三对完整字节、固定 SHA、保留归档校验与无匹配进程占用后，只删除 dist/github-v0.1.0 下三个重复文件和四个空目录，共 416855 逻辑字节；未递归删除 dist 或任何工作区，主仓五处外部修改不变。必要原件唯一或引用不明的内容均保留。原始执行输出已移交本请求 integration.log；单元完整证据分别为 services.log、docs.log、validation.log。
 
 ## 验收结果与当前已交付行为
 
@@ -49,4 +49,3 @@
 
 - 批准依据: 用户本轮“开始优化，将历史无用的该清理的进行清理”，承接前一轮文件归属、服务职责和固定回归建议；无新增产品功能或设计选择。
 - 验收证据: none；实施输出、集成验证与唯一 QA 结果将在完成后于本主题原位补充，完整日志保留在本请求现有证据区。
-
