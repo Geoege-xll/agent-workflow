@@ -533,8 +533,14 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.register(self.project, second)
         return central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
 
-    def large_projects(self, padding=25000):
+    def large_projects(self, padding=32000):
         """真实用户入口段由生产服务保留，不填造journal/receipt或复制客户资料。"""
+        # 用户段会完整进入binding的baseline/expected及journal的前后像，再由
+        # 中央Node封装；绝对路径越短，这些记录的额外字节也越少。25000字节在
+        # Linux短根仅生成约3.03MB，未覆盖旧marker的4MiB失败边界。每项目增加
+        # 7000字节真实用户段，使短根仍有充分余量超过3MiB；长根的完整阶段预算
+        # 仍须通过原4MiB预检。下面两个测试保留实际大小/预算/应用与恢复断言，
+        # 不靠临时根的长度制造覆盖；显式150000字节的超限负控保持原输入。
         paths = [self.project]
         for _ in range(2):
             project = self.workspace / ("large-" + uuid.uuid4().hex[:8])
