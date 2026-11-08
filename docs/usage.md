@@ -7,7 +7,7 @@ Homebrew 的安装、升级与发行构建见 [Homebrew 说明](homebrew.md)。
 
 ## 支持范围与安装保护
 
-当前源码版本为 **2.1.2**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
+当前源码版本为 **2.1.3**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
 GitHub 与 Tap 的公开版本以各自发布声明为准；源码更新不会改变既有二进制、Cellar 载荷或 Tap。
 
 当前安装通过 macOS/Linux 源包或 Homebrew 使用中央运行时。未发布的 npm／npx Windows
@@ -103,6 +103,10 @@ awf-cli --state-dir STATE --host-home HOST_HOME add PROJECT --enable --source SO
 `use` 和项目 `rollback` 建立项目锁版，`follow` 清除锁版；停用项目保持停用，下次启用采用有效策略。
 中央激活预览列出锁版保留、停用后续采用和本次应用的固定项目集合。
 `runtime status` 查看中央许可，未结算中央事务先只读预览 `runtime recover --dry-run`，再恢复。
+2.1.3 分别核对中央事务记录和发布见证的容量，超容量新计划在新的 prepared 与目标写入前拒绝。
+如果旧运行因容量问题中断并留下未结算状态，更新到修复后的程序后，仍沿用原 `--state-dir` 与 `--host-home`，
+先查看 `runtime status` 和 `runtime recover --dry-run`，核对条件恢复方向后再运行 `runtime recover`。
+保留原日志、发布见证和受管前像；不要手工删除它们或重复激活来绕过保护门。
 `use` 只接受已验证的完整 SHA-256 内容 ID，不接受前缀或版本标签。
 
 中央内容库保存不可变核心。项目仅保留 `.agent-workflow/project.yaml`、locator、薄桥和宿主原生入口，

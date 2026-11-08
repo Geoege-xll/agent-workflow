@@ -54,12 +54,12 @@ GROUPS["hosts"] = (
     + modules("unified_host_workflow", "antigravity_upgrade_boundaries", "claude_options",
               "bootstrap_routing", "astra_instruction_adaptation", "project_role_lifecycle")
 )
-# CI 是有明确合同的组合：当前 CLI/pin/模型收据、三宿主共享正文和中央软链、真实
+# CI 是有明确合同的组合：当前 CLI/pin/模型收据、记录/见证容量、三宿主共享正文和中央软链、真实
 # PTY、离线归档及 Ruby Formula 消费者。Node 对应需求 HTML 的真实运行时消费者。
 GROUPS["ci"] = (
     modules("validation_runner")
     + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
-    + modules("central_project", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli")
+    + modules("central_project", "runtime_state", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli")
     + ("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",
        "tests.test_manager_tui.TuiTest.test_runtime_actions_use_captured_context_and_modal_focus")
     + ("tests.test_unified_host_workflow.UnifiedSetupContractTest.test_all_hosts_generate_core_skills_from_one_shared_source",)

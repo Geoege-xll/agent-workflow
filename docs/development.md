@@ -62,6 +62,13 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 激活、中央回退、状态和新任务准入，以及薄桥的 current 控制入口，都要求受支持的控制协议。
 这不改变三字段 `runtime_binding` 或 manifest 协议，也不等同于 helper 的发布锁协议。
 
+2.1.3 将普通记录与类型化发布见证的容量预算分开：普通记录和资源仍受 4 MiB 上界约束，
+发布见证按完整 before 的 base64 长度及封闭元数据计算专用上界，读取与写入使用同一边界。
+中央激活/回退预览和应用在首次 prepared/目标写入前汇总原生收据、项目 binding/journal、
+中央终态与失败补偿诊断的序列化预算；超限先拒绝，不截断历史原文、权限或归属前像。
+容量占位只用于内存中的预算证明，不作为真实 Node/收据发布。恢复沿原固定计划与精确前像核验，
+仍拒绝后续未知修改；程序升级不会自动执行恢复。`tests.test_runtime_state` 纳入实际 `ci` 组以保护这些容量边界。
+
 显式固定任务的资源读取继续保留；helper 协议 0 的旧核心仍由合格 current 控制器在父锁保护下执行，
 不会因不能担任 current 而被删除。最小协议测试夹具复制源码中真实的桥及声明，只验证各自实际覆盖的消费者；
 不能靠注入一个常量冒充完整控制器，也不能把资格或文件校验当作原生角色、模型执行或发布验收。
@@ -274,7 +281,7 @@ bash scripts/test_workflow.sh tests.test_runtime_store
 | `tui` | 输入、终端单元格、草稿交互及选定项目流程；不隐式启动 PTY |
 | `pty` | 真实伪终端键盘、窗口缩放与项目生命周期；需要 POSIX |
 | `packaging` | 离线归档、手册、启动器和 Ruby Formula 安装模拟；Formula 消费者需要 Ruby |
-| `ci` | 已明确的入口、中央 current／生命周期／原生归属／短命令、pin／模型收据、三宿主共享源、需求 HTML、PTY 和离线发行组合；需要 Node、Ruby 与 POSIX |
+| `ci` | 已明确的入口、中央 current／记录容量／生命周期／原生归属／短命令、pin／模型收据、三宿主共享源、需求 HTML、PTY 和离线发行组合；需要 Node、Ruby 与 POSIX |
 
 `codex`、`claude`、`antigravity`、`prototype` 保留各自聚焦范围，`hosts` 覆盖三宿主及其共享合同。
 旧四个 `scripts/test_codex.sh`、`test_claude.sh`、`test_antigravity.sh`、`test_prototype.sh`
