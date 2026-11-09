@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 import ctypes
 import ast
 import hashlib
@@ -400,6 +400,148 @@ class WindowsSkillReparseContractTest(unittest.TestCase):
                 self.read(self.reparse(**options)[0])
         with self.assertRaises(ValueError):
             self.read(self.reparse()[0][:-2])
+
+
+class WindowsCreatedSkillPolicyContractTest(unittest.TestCase):
+    """仅证明新链接的权限写入顺序/拒绝边界；真实 ACL 结果另由原生两布局核对。"""
+
+    USER = bytes.fromhex("010100000000000515000000")
+    SYSTEM = bytes.fromhex("010100000000000512000000")
+    ADMINS = bytes.fromhex("01020000000000052000000020020000")
+
+    def policy(self, *, owner=None, protected=False, flags=0x13):
+        entries = b"".join(bytes((0, flags)) + (8 + len(sid)).to_bytes(2, "little")
+                           + (0x1F01FF).to_bytes(4, "little") + sid for sid in (self.USER, self.SYSTEM))
+        acl = (bytes((2, 0)) + (8 + len(entries)).to_bytes(2, "little") + b"\2\0\0\0" + entries)
+        return SimpleNamespace(owner=owner or self.USER, control=0x1004 if protected else 4,
+                               acl_bytes=acl, fingerprint="a" * 64 if not protected else "b" * 64)
+
+    @contextmanager
+    def creation(self, *, owner=None, elevated=False, snapshots=None, policies=None):
+        """不模拟成功的文件系统：替身只捕获真实创建函数将提交的 Win32 调用。"""
+        core = PureWindowsPath("C:/owned/runtimes/" + "a" * 64 + "/core")
+        target, path = core / "platforms/shared/skills/grill-me", PureWindowsPath("C:/owned/stage/grill-me")
+        expected = {"kind": "link", "payload": fs._os.fsencode(target), "mode": 0o777,
+                    "identity": (1, 2, stat.S_IFLNK | 0o777, 1, 0, 5, 6), "security": "a" * 64}
+        after = dict(expected, identity=expected["identity"][:6] + (7,), security="b" * 64)
+        assign = owner == self.ADMINS and elevated
+        observed = Mock(side_effect=snapshots if snapshots is not None else [expected] * (2 if assign else 1) + [after])
+        values = iter(policies if policies is not None else [self.policy(owner=owner), self.policy(protected=True, flags=0)])
+        def owner_pointer(descriptor, pointer, defaulted):
+            ctypes.cast(pointer, ctypes.POINTER(fs.HANDLE))[0] = fs.HANDLE(66)
+            return True
+        written, opened, closed = Mock(return_value=0), Mock(return_value=123), Mock()
+        kernel = SimpleNamespace(CreateSymbolicLinkW=Mock(return_value=1))
+        api = SimpleNamespace(kernel=kernel, security=SimpleNamespace(
+            SetSecurityInfo=written, GetSecurityDescriptorOwner=Mock(side_effect=owner_pointer)))
+        with ExitStack() as stack:
+            replacements = {"_api": Mock(return_value=api), "_skill_target": Mock(return_value=target),
+                            "absolute_path": Mock(return_value=core),
+                            "Directory": Mock(side_effect=lambda value: nullcontext()),
+                            "flush_directory": Mock(), "read_skill_symlink": Mock(return_value=expected),
+                            "_open_skill_handle": opened, "_opened_snapshot": observed, "_close": closed,
+                            "_security_policy": Mock(side_effect=lambda handle: nullcontext(next(values))),
+                            "current_sid": Mock(return_value="user"),
+                            "_sid_bytes": Mock(side_effect=lambda sid: self.USER if sid == "user" else self.ADMINS),
+                            "_token_elevated": Mock(return_value=elevated),
+                            "private_security": Mock(side_effect=lambda **kwargs: nullcontext(88)),
+                            "_dacl": Mock(return_value=99)}
+            for name, replacement in replacements.items():
+                stack.enter_context(patch.object(fs, name, replacement))
+            stack.enter_context(patch.object(fs.secure_os, "_path", return_value=path))
+            yield SimpleNamespace(core=core, target=target, path=path, expected=expected, after=after,
+                                  written=written, opened=opened, closed=closed, observed=observed,
+                                  api=api, replacements=replacements)
+
+    def test_creation_fixes_only_new_link_before_return_and_refuses_existing_collision(self):
+        with self.creation() as fixture:
+            fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+            fixture.written.assert_called_once_with(123, 1, 0x80000004, None, None, 99, None)
+            fixture.opened.assert_called_once_with(fixture.path, 0x60080)
+            fixture.replacements["private_security"].assert_called_once_with(inherit=False)
+            self.assertEqual(fixture.observed.call_count, 2)
+            fixture.closed.assert_called_once_with(123)
+        with self.creation() as fixture:
+            fixture.api.kernel.CreateSymbolicLinkW.side_effect = FileExistsError("owned collision")
+            with self.assertRaises(FileExistsError):
+                fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+            fixture.written.assert_not_called()
+            fixture.opened.assert_not_called()
+            fixture.replacements["read_skill_symlink"].assert_not_called()
+
+    def test_creation_checks_owner_and_full_snapshot_before_any_permission_write(self):
+        for owner, elevated in ((b"unknown-owner", True), (self.ADMINS, False)):
+            with self.subTest(owner=owner, elevated=elevated), self.creation(owner=owner, elevated=elevated) as fixture:
+                with self.assertRaisesRegex(ValueError, "unknown or non-elevated foreign owner"):
+                    fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+                fixture.written.assert_not_called()
+                fixture.opened.assert_called_once_with(fixture.path, 0x60080)
+                fixture.closed.assert_called_once_with(123)
+        with self.creation(owner=self.ADMINS, elevated=True) as fixture:
+            fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+            self.assertEqual(fixture.opened.call_args_list,
+                             [((fixture.path, 0x60080), {}), ((fixture.path, 0xE0080), {})])
+            self.assertEqual(fixture.written.call_count, 1)
+            args = fixture.written.call_args.args
+            self.assertEqual(args[:3], (123, 1, 0x80000005))
+            self.assertEqual(args[3].value, 66)
+            self.assertEqual(args[4:], (None, 99, None))
+            self.assertEqual(fixture.observed.call_count, 3)
+            self.assertEqual(fixture.closed.call_count, 2)
+        # 首次开句柄或提权重开后，inode/目标/mode/ACL 任一变化都不能写。
+        for reopened in (False, True):
+            for field in ("identity", "payload", "mode", "security"):
+                options = {"owner": self.ADMINS, "elevated": True} if reopened else {}
+                with self.subTest(reopened=reopened, field=field), self.creation(**options) as fixture:
+                    changed = dict(fixture.expected)
+                    changed[field] = {"identity": (1, 99) + fixture.expected["identity"][2:],
+                                      "payload": b"another-central-target", "mode": 0o555,
+                                      "security": "c" * 64}[field]
+                    fixture.observed.side_effect = [fixture.expected, changed] if reopened else [changed]
+                    with self.assertRaisesRegex(ValueError, "changed"):
+                        fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+                    fixture.written.assert_not_called()
+        with self.creation(policies=[SimpleNamespace(owner=self.USER, fingerprint="c" * 64)]) as fixture:
+            with self.assertRaisesRegex(ValueError, "permissions changed"):
+                fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+            fixture.written.assert_not_called()
+
+    def test_leaf_descriptor_and_postcondition_keep_owner_protection_flags_and_target_strict(self):
+        # 执行实际 SDDL 生成器，明确默认目录仍 OI/CI、链接精确 flags=0。
+        texts = []
+        def convert(text, revision, pointer, size):
+            texts.append(text)
+            ctypes.cast(pointer, ctypes.POINTER(fs.HANDLE))[0] = fs.HANDLE(88)
+            return True
+        api = SimpleNamespace(security=SimpleNamespace(ConvertStringSecurityDescriptorToSecurityDescriptorW=convert),
+                              kernel=SimpleNamespace(LocalFree=Mock()))
+        with patch.object(fs, "_api", return_value=api), patch.object(fs, "current_sid", return_value="user"):
+            with fs.private_security():
+                pass
+            with fs.private_security(inherit=False):
+                pass
+        self.assertEqual(texts, ["O:userD:P(A;OICI;GA;;;user)(A;OICI;GA;;;SY)",
+                                 "O:userD:P(A;;GA;;;user)(A;;GA;;;SY)"])
+        self.assertEqual(api.kernel.LocalFree.call_count, 2)
+        for label, policy in (("wrong-owner", self.policy(owner=self.ADMINS, protected=True, flags=0)),
+                              ("unprotected", self.policy(flags=0)),
+                              ("inheritable", self.policy(protected=True, flags=3)),
+                              ("inherited", self.policy(protected=True, flags=0x13))):
+            with self.subTest(post=label), self.creation(policies=[self.policy(), policy]) as fixture:
+                with self.assertRaisesRegex(ValueError, "postcondition|inheritable"):
+                    fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+                self.assertEqual(fixture.written.call_count, 1)
+                fixture.closed.assert_called_once_with(123)
+        for field in ("identity", "payload", "mode", "security"):
+            with self.subTest(after_write=field), self.creation() as fixture:
+                changed = dict(fixture.after)
+                changed[field] = {"identity": (1, 99) + fixture.after["identity"][2:],
+                                  "payload": b"another-central-target", "mode": 0o555,
+                                  "security": "c" * 64}[field]
+                fixture.observed.side_effect = [fixture.expected, changed]
+                with self.assertRaisesRegex(ValueError, "changed during initialization"):
+                    fs.create_skill_symlink(11, "grill-me", fixture.target, core_root=fixture.core)
+                fixture.closed.assert_called_once_with(123)
 
 
 class WindowsLockAndCapabilityContractTest(unittest.TestCase):

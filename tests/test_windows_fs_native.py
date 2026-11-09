@@ -103,6 +103,23 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
         target = core / "platforms/shared/skills/grill-me"
         target.mkdir(parents=True)
         (target / "SKILL.md").write_bytes(b"owned backend target; not a full imported core")
+        def target_permissions():
+            # 不跟随链接取证明，而是分别锚定真实 core 目录和普通 SKILL.md。
+            # 三个时点均保完整 owner/control/有序 ACE 摘要，避免仅看 mask
+            # 相同而漏掉 link 权限写入意外传播给 target 的副作用。
+            result = {}
+            with fs.Directory(target) as directory:
+                with fs._security_policy(directory.handle) as policy:
+                    result["directory"] = native_policy_observation(policy)
+                handle = fs._open_handle(target / "SKILL.md", fs.READ_CONTROL | 0x80)
+                try:
+                    with fs._security_policy(handle) as policy:
+                        result["skill_file"] = native_policy_observation(policy)
+                finally:
+                    fs._close(handle)
+            return result
+        target_before = target_permissions()
+        print("NATIVE_SKILL_TARGET_BEFORE " + json.dumps(target_before, sort_keys=True), flush=True)
         destination = self.root / "project/.agents/skills"
         destination.mkdir(parents=True)
         parent = fs.secure_os.open(destination, fs.DIRECTORY | fs.NOFOLLOW)
@@ -121,12 +138,28 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             before = {"frozen": {"identity": expected["identity"], "mode": expected["mode"], "security": expected["security"]},
                       "handle": native_skill_observation(destination / stage_name / "grill-me", "grill-me")}
             print("NATIVE_SKILL_STAGE_BEFORE " + json.dumps(before, sort_keys=True), flush=True)
+            target_created = target_permissions()
+            print("NATIVE_SKILL_TARGET_CREATED " + json.dumps(target_created, sort_keys=True), flush=True)
+            self.assertEqual(target_before, target_created)
+            self.assertEqual(before["handle"]["owner_sid_sha256"], hashlib.sha256(fs._sid_bytes(fs.current_sid())).hexdigest())
+            self.assertTrue(before["handle"]["control"] & 0x1000)
+            self.assertEqual(before["handle"]["ace_count"], 2)
+            self.assertEqual([ace["flags"] for ace in before["handle"]["aces"]], [0, 0])
+            handle = fs._open_skill_handle(destination / stage_name / "grill-me")
+            try:
+                with fs._security_policy(handle) as policy:
+                    self.assertTrue(fs._policy_is_private(policy))
+            finally:
+                fs._close(handle)
             fs.move_skill_symlink("grill-me", "grill-me", src_dir_fd=stage, dst_dir_fd=parent,
                                   skill_name="grill-me", expected=expected)
             actual = fs.read_skill_symlink(parent, "grill-me", skill_name="grill-me")
             after = {"frozen": {"identity": actual["identity"], "mode": actual["mode"], "security": actual["security"]},
                      "handle": native_skill_observation(destination / "grill-me", "grill-me")}
             print("NATIVE_SKILL_STAGE_AFTER " + json.dumps(after, sort_keys=True), flush=True)
+            target_moved = target_permissions()
+            print("NATIVE_SKILL_TARGET_MOVED " + json.dumps(target_moved, sort_keys=True), flush=True)
+            self.assertEqual(target_before, target_moved)
             # 所有事实已即时落日志，随后仍核冻结守卫；不把当前实际值追认成
             # 新授权，也不对 ACL/mode/metadata 归零来取得一个表面的 PASS。
             self.assertEqual(expected["payload"], actual["payload"])
