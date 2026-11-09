@@ -168,6 +168,12 @@ GROUPS["windows-native-conpty"] = (
     "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_console_modes_restore",
     "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_start_failure_releases_owned_resources",
 )
+# 当前失败尚待解释器/标准句柄证据定位；仅执行已冻结的一个真实诊断方法，
+# 同时保留完整七方法组供后续修复验收。诊断不重复旧失败，不代表传输或 TUI
+# 已通过；仍纳入原生必验集合，任何方法/子场景 skip 或未执行均必须失败。
+GROUPS["windows-native-conpty-diagnostics"] = (
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_interpreter_and_standard_handle_diagnostics",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -177,7 +183,7 @@ NATIVE_GROUPS = frozenset((
     "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
     "windows-native-central-copy-repair", "windows-native-central-link-repair",
     "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader",
-    "windows-native-conpty", "windows-native",
+    "windows-native-conpty", "windows-native-conpty-diagnostics", "windows-native",
 ))
 
 
