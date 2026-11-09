@@ -131,6 +131,10 @@ NATIVE_COMPONENTS = {
             "tests.test_central_project.CentralProjectTest.test_fixed_graph_runner_validates_once_and_rejects_changed_sources_before_cas",
             "tests.test_central_project.CentralProjectTest.test_fixed_graph_runner_keeps_old_pin_helper_path_and_target_provenance",
             "tests.test_central_project.CentralProjectTest.test_fixed_runner_windows_literal_root_guards_are_case_sensitive",
+            # 保存阶段的纯读取准备/尾验负控复用原中央 fixture；原生侧精确登记，
+            # 普通 ci 继续由 central_project 整模块覆盖，不增第二次执行选择。
+            "tests.test_central_project.CentralProjectTest.test_model_commit_read_preparation_keeps_callback_boundary_and_single_scan",
+            "tests.test_central_project.CentralProjectTest.test_model_commit_read_preparation_rejects_finish_and_mutable_drift_before_write",
         ),
         "qualification": "ordinary",
         "node_required": False, "curses_required": False,
@@ -210,9 +214,13 @@ GROUPS["windows-native-desktop"] = tuple(
 NATIVE_GROUPS = frozenset((*NATIVE_COMPONENTS, *NATIVE_SCOPES))
 # 共享操作/续用节点复用同一登记；提升专项没有此字段，不进入 POSIX ci。
 GROUPS["ci"] += tuple(target for component in NATIVE_COMPONENTS.values() for target in component.get("portable_ci_targets", ()))
-# RolePrefs 的这个计数消费者使用既有 pty/termios/curses 与 POSIX sourcebuilder，
+# RolePrefs 的计数及保存尾阶段消费者使用既有 pty/termios/curses 与 POSIX sourcebuilder，
 # 只补精准普通 CI；它不是普通 Windows 或提升 NTFS 的执行资格。
-GROUPS["ci"] += ("tests.test_role_preferences.RolePreferencesTest.test_preview_proves_each_pin_once_and_never_retains_live_reader",)
+GROUPS["ci"] += (
+    "tests.test_role_preferences.RolePreferencesTest.test_preview_proves_each_pin_once_and_never_retains_live_reader",
+    "tests.test_role_preferences.RolePreferencesTest.test_native_global_unchanged_projects_batch_final_read_phase",
+    "tests.test_role_preferences.RolePreferencesTest.test_native_global_unchanged_projects_recheck_original_observation_and_compensate",
+)
 
 
 def make_parser():
