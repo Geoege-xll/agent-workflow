@@ -1738,7 +1738,10 @@ finally:
                 mark_stage("html_" + command + "_suspended")
             self.assertEqual(keep_body, (scratch / "keep.log").read_bytes())
             final_preview = scratch_call("cleanup-scratch", "--dry-run")
-            self.assertEqual((1, 0, len(keep_body)), tuple(final_preview[key] for key in (
+            # keep 阶段为保留日志而留下请求根；最终不再指定 keep，快照中的
+            # 相对路径空串（展示为“.”）也要删除，所以还包含一个请求根目录。
+            # 这不是 HTML 生成的额外目录，不能把目录数误设为零或删掉保留日志。
+            self.assertEqual((1, 1, len(keep_body)), tuple(final_preview[key] for key in (
                 "planned_files", "planned_directories", "planned_logical_bytes")))
             final = scratch_call("cleanup-scratch", "--expect-sha256", final_preview["snapshot_sha256"])
             self.assertEqual("applied", final["status"])
