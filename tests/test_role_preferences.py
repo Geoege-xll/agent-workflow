@@ -306,6 +306,74 @@ class RolePreferencesTest(unittest.TestCase):
             preferences.preview(self.state, None, "codex", {"xy-backend": {"effort": "high"}},
                                 fixtures.Catalog("codex", [fixtures.Model("inherit", "inherit", "fixture")]))
 
+    def test_native_sparse_reset_restore_keeps_compilation_and_exact_mode_contract(self):
+        from dataclasses import replace
+        from lib.central import runtime_project as resources
+        from lib.windows_fs import project_mode as windows_project_mode
+        context = self.native_scope()
+        self.native_save(context, None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+        project = self.sparse_project(context, "sparse-reset-restore")
+        self.native_save(context, project, {"xy-backend": {"model": "project-model"}})
+        self.native_save(context, None, {"xy-backend": {"effort": "max"}})
+        relative = ".codex/agents/xy-backend.toml"
+        local = project / relative
+        with resources.Tree(project) as tree:
+            original = tree.read(relative)
+        original_mode = stat.S_IMODE(local.stat().st_mode)
+        global_before = role_preferences.snapshot(self.state)[0]
+        result = preferences.apply(preferences.reset_platform(self.state, project, "codex", native_context=context))
+        self.assertFalse(local.exists())
+        restored = service.prepare_restore(self.state, project, result["backup_id"])
+        role_change = next(row for row in restored if row.relative == relative)
+        config_change = next(row for row in restored if row.relative == resources.CONFIG)
+        self.assertIsNone(role_change.before)
+        self.assertEqual(original_mode, role_change.mode, "恢复必须沿用实际备份mode，不能改写成0644掩盖断点")
+        self.assertEqual(original.payload, role_change.after)
+        self.assertNotIn(relative, runtime_service.read_binding_record(self.state, project)[1]["managed"])
+        material = resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core)
+        compiled = resources.role_resource(material, config_change.after, "codex", "xy-backend", self.core.binding(),
+                                           preferences=role_preferences.snapshot(self.state)[1])
+        self.assertEqual(compiled, role_change.after, "恢复正文必须逐字节等于固定core按拟恢复CONFIG及当前global编译的完整产物")
+        def persisted_files():
+            return {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_ino, path.stat().st_mtime_ns)
+                    for root in (self.state, project, self.home) for path in root.rglob("*")
+                    if path.is_file() and not path.is_symlink()}
+        before = persisted_files()
+        class AdmissionObserved(Exception):
+            pass
+        # 仅把既有纯Windows模式映射交给真实receipt准入边界，不模拟Win32或
+        # ACL成功。准入后立即以测试异常退出，不发布文件或伪造实际收据。
+        with patch.object(runtime_service, "project_mode", windows_project_mode):
+            self.assertEqual(0o666, windows_project_mode(0o644))
+            for mode in (0o666, 0o644):
+                changes = tuple(replace(row, mode=mode) if row.relative == relative else row for row in restored)
+                with self.subTest(accepted=oct(mode)), self.assertRaises(AdmissionObserved):
+                    with runtime_service.native_edit_receipt(self.state, project, changes, native_context=context):
+                        raise AdmissionObserved()
+                self.assertEqual(before, persisted_files())
+            for mode, body in ((0o600, role_change.after), (0o444, role_change.after), (0o777, role_change.after),
+                               (0o666, role_change.after + b"# unknown body change\n")):
+                changes = tuple(replace(row, mode=mode, after=body) if row.relative == relative else row for row in restored)
+                with self.subTest(rejected=oct(mode), changed_body=body != role_change.after), \
+                        self.assertRaisesRegex(ValueError, "稀疏角色创建必须等于固定核心完整编译结果"):
+                    with runtime_service.native_edit_receipt(self.state, project, changes, native_context=context):
+                        self.fail("非规范mode或正文改变不能进入发布阶段")
+                self.assertEqual(before, persisted_files())
+        # 使用本平台真实备份mode完成实际commit；归档身份/ACL验证、来源守卫及
+        # 新节点观察均走生产路径，回执必须登记真实产物而不是请求mode的占位。
+        self.assertIsNotNone(service.commit(self.state, project, restored, native_context=context))
+        with resources.Tree(project) as tree:
+            actual = tree.read(relative)
+        managed = runtime_service.read_binding_record(self.state, project)[1]["managed"][relative]
+        self.assertEqual(actual, resources.Node.from_value(managed["expected"]))
+        self.assertEqual((original.payload, original.mode, original.security), (actual.payload, actual.mode, actual.security))
+        self.assertEqual(global_before, role_preferences.snapshot(self.state)[0])
+        self.assertEqual({"model": "project-model", "effort": "max"},
+                         service.role_settings(project, "codex", "xy-backend", state=self.state, native_context=context))
+        self.assertTrue(runtime_service.status(self.state, project)["new_task_allowed"])
+        print("SPARSE_RESTORE_MODE requested=" + oct(role_change.mode) + " actual=" + oct(actual.mode) +
+              " receipt=" + oct(resources.Node.from_value(managed["expected"]).mode) + "; full_compilation_equal=True")
+
     def test_sparse_delete_rename_failure_retains_old_inode_and_index(self):
         context = self.native_scope()
         project = self.sparse_project(context, "delete-rename-failure")

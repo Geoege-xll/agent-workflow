@@ -22,7 +22,7 @@ import uuid
 from lib.central import runtime_project as project_files
 from lib import runtime_store as store
 from lib.central import role_preferences
-from lib.platform_fs import directory_lock, os, publish_skill_symlink, require_skill_symlinks
+from lib.platform_fs import directory_lock, os, project_mode, publish_skill_symlink, require_skill_symlinks
 from lib.central.runtime_project import (
     CAPACITY_IDENTITY, CONFIG, HOSTS, LOCATOR, Node, Resources, Tree, capacity_node_value,
     absolute_directory, canonical_project, central_block, identity, json_bytes,
@@ -1289,7 +1289,11 @@ def native_edit_receipt(state: Path, project: Path, changes, *, native_context=N
                     raise ActivationError("稀疏角色不属于项目已启用的宿主和角色")
                 if change.before is None:
                     compiled = project_files.role_resource(resources, config_after, host, role, record["runtime_binding"], preferences=preferences)
-                    if managed is not None or change.mode != 0o644 or change.after != compiled:
+                    # 新建角色只允许规范请求mode及当前文件系统对该mode的精确
+                    # 投影。Windows备份通过stat保留实际0666，恢复不能将其伪改
+                    # 为0644；也不能按可写位放宽到0600/0777等其他权限。这里
+                    # 仅校验计划mode，真实节点的ACL、身份及收据仍由原路径验证。
+                    if managed is not None or change.mode not in {0o644, project_mode(0o644)} or change.after != compiled:
                         raise ActivationError("稀疏角色创建必须等于固定核心完整编译结果")
                 else:
                     from lib.hosts import claude_options
