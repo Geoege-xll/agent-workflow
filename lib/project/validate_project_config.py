@@ -591,24 +591,28 @@ def validate_with_profile(
         managed_files.add(Path(".agents/skills") / skill / "SKILL.md")
     managed_paths = managed_directories | managed_files
     for relative in sorted(managed_paths):
+        # 诊断中的受管输出名是跨平台逻辑路径，中央只会精确豁免已验证的
+        # 同名 Skill 叶。不能让 Windows 原生反斜线破坏该合同，也不能在
+        # 消费端宽泛改写错误；实际文件系统检查仍使用下面原生 Path 对象。
+        logical = relative.as_posix()
         target = root / relative
         resolved = (root / relative).resolve()
         if not resolved.is_relative_to(root):
-            errors.append(f"managed output resolves outside project root: {relative}")
+            errors.append(f"managed output resolves outside project root: {logical}")
         elif path_has_symlink(root, relative):
-            errors.append(f"managed output must not use symlinks: {relative}")
+            errors.append(f"managed output must not use symlinks: {logical}")
         elif target.exists() and relative in managed_directories and not target.is_dir():
-            errors.append(f"managed output must be a directory: {relative}")
+            errors.append(f"managed output must be a directory: {logical}")
         elif target.exists() and relative in managed_files and not target.is_file():
-            errors.append(f"managed output must be a regular file: {relative}")
+            errors.append(f"managed output must be a regular file: {logical}")
         elif target.exists() and relative in managed_files:
             try:
                 if target.lstat().st_nlink != 1:
                     errors.append(
-                        f"managed output must not be a hard link: {relative}"
+                        f"managed output must not be a hard link: {logical}"
                     )
             except OSError as exc:
-                errors.append(f"cannot inspect managed output {relative}: {exc}")
+                errors.append(f"cannot inspect managed output {logical}: {exc}")
     for match in re.finditer(r"docs/[A-Za-z0-9_./-]+\.md", text):
         relative = Path(match.group(0))
         resolved = (root / relative).resolve()
