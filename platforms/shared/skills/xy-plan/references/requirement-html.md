@@ -16,9 +16,12 @@ visual approval.
 
 ## Invoke the same adapter
 
-Run from the project root in installed mode; for source-pack development, remove the `.agent-workflow/` prefix.
-Prefer the target project's `.agent-workflow/project.yaml`; use that project's `project.yaml` when installed
-configuration is absent.
+Central projects invoke the logical `lib/documents/requirement_html.py` helper through the current task's pinned
+thin bridge on every call, following the [shared execution boundary](../../xy-workflow/references/dispatch.md#workflow-helper-execution).
+Do not execute a copied project helper or follow a mutable Skill symlink to select a core. Prefer the physical
+project's `.agent-workflow/project.yaml`; source-pack development uses its actual source root and removes the
+`.agent-workflow/` prefix from the source/POSIX argument examples below. Windows central calls use only the native
+entry shown next, including for the later draft/check examples.
 
 ```bash
 bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/documents/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
@@ -31,16 +34,21 @@ at a canonical relative path under plans. Reject symlinks, hard links, unsafe an
 CLI never receives the original source; it may read/clean only the staging copy in scratch. Original bytes,
 permissions and node identity remain unchanged.
 
-On Windows, use the persistent in-project Python entry with the same arguments:
+On native Windows, use PowerShell 7.0+ and the explicitly selected existing Python 3.11+ executable. Set
+`$workflowPython` to that absolute executable in the current call; use the current task's exact three-field pin
+encoded as canonical base64 of strict UTF-8 JSON (decoded maximum 4KiB). Do not guess an interpreter/bootstrap,
+run Bash, or copy helpers/Skills into the thin project.
 
 ```powershell
-node .agent-workflow/lib/python_runtime.cjs -X utf8 .agent-workflow/lib/documents/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
+& $workflowPython -I -B -X utf8 .agent-workflow/runtime.py --binding-b64 '<current-task-pin-base64>' helper lib/documents/requirement_html.py render --project . --source docs/plans/change.md --request-id current-request
+& $workflowPython -I -B -X utf8 .agent-workflow/runtime.py --binding-b64 '<same-current-task-pin-base64>' helper lib/documents/requirement_html.py check --project . --source docs/plans/change.md
 ```
 
-Runtime requires existing Node.js >= 20 (the Windows installation route already has Node 22). Do not install global
-dependencies or start the renderer on every setup. Missing/outdated Node blocks only the rendering needed now;
-existing fresh pages and read-only checks do not start Node. The Brew Formula declares the Node dependency;
-existing Python selection/explicit-interpreter rules still apply.
+Only on-demand HTML rendering requires an existing Node.js >= 20; Node is the renderer dependency, not the
+Windows Python entry or an installation channel. Do not install Node/dependencies, invoke npm/npx, or start the
+renderer on every setup. Missing/outdated Node blocks only the rendering needed now; existing fresh pages and
+read-only checks do not start Node. Existing explicit Python selection rules still apply. These platform calls
+change no requirements approval, workflow stage or permission.
 
 ## Pre-approval draft
 

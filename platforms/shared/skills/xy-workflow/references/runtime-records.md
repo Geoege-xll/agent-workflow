@@ -9,7 +9,11 @@ Central projects first follow the [shared helper execution boundary](dispatch.md
 each call goes through the project thin entry with explicit current-pack `runtime_binding`; do not assume
 shell environment persists across tool calls. The `.agent-workflow/lib/<helper>.py` commands below remain
 source-pack development examples, resolved against the actual source root. Central mode passes the helper/arguments to the same pin's
-`runtime.py --binding '<three-field JSON>' helper lib/<helper>.py`. New workflows first check machine-local
+`runtime.py --binding '<three-field JSON>' helper lib/<helper>.py` on POSIX. Native Windows uses PowerShell 7.0+
+and the explicitly selected existing Python 3.11+ with `-I -B -X utf8 .agent-workflow/runtime.py
+--binding-b64 <canonical-current-task-pin-base64> helper lib/<helper>.py`; encode the same strict three-field pin
+as UTF-8 JSON and canonical base64 within the 4KiB decoded transport bound. Translate every Bash example below
+to this native logical-helper call on Windows; do not run Bash or copy a project-local lib/Skill tree. New workflows first check machine-local
 enabled state. New graphs freeze their top-level pin from the verified bridge environment or an explicitly
 verified binding. Task export projects it unchanged; update/refresh do not alter it. Reject old packs with
 missing pins, bridge conflicts or corrupt cores. Do not fill the current version from the project locator
@@ -434,7 +438,14 @@ By default, close out only this `--request-id`. `--all` is only for explicitly a
 cleanup with known ownership of every target and no active use. It likewise requires preview/snapshot
 binding and cannot combine with `--keep`; it is not a default action per task round. POSIX does not follow
 links; ordinary hard links only unlink task-owned entries without changing external contents/permissions.
-Windows retains its existing safe backend/link-rejection policy and does not label ctime as changeTime.
+Native Windows uses handle-anchored local NTFS operations. Central actual node snapshots keep seven real identity
+scalars plus an independent ACL/owner `security` SHA256; `st_ctime_ns` projects NTFS ChangeTime and cannot replace
+that separate permission witness. This scratch `metadata` inventory is not a central Node/ACL conditional-write
+authorization, a content hash, or a promise to detect unobservable same-byte historical writes. Keep the stop-writers
+and ownership/reference requirements above. Ordinary file reads reject links; only the exact owned same-name
+central Skill symlink has an explicit verified create/read/move/delete lifecycle, with no copied Skill tree.
+Unknown reparse points (including junctions), remote volumes and multiple hard links fail closed. These platform
+facts add no workflow stage, approval or permission and do not establish complete Windows/desktop acceptance.
 Permission/partial-deletion failure returns nonzero and truthfully retains successful counts, restoring
 permissions temporarily adjusted to preserve necessary directories. `planned_logical_bytes`/
 `removed_logical_bytes` count pending/removed entries by logical file length, not physical disk reclamation;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 import subprocess
@@ -654,6 +655,56 @@ class NativeAgentsTest(unittest.TestCase):
         classify = namespace["helper_creates_task"]
         self.assertTrue(classify(["helper", "lib/task_graph_cli.py", "--input", "graph.json", "init"]))
         self.assertFalse(classify(["helper", "lib/task_graph_cli.py", "validate", "--task-id", "init"]))
+
+    def test_role_frontmatter_crlf_preserves_frozen_bytes_and_strict_permissions(self):
+        """实际导入 CRLF 来源并运行三宿主消费者；坏策略不能借正文或换行扩大权限。"""
+        baseline = self.preview()
+        originals = {role: (self.source / f"roles/{role}.md").read_bytes() for role in role_models.ROLES}
+        try:
+            crlf = {role: body.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+                    for role, body in originals.items()}
+            for role, body in crlf.items():
+                (self.source / f"roles/{role}.md").write_bytes(body)
+            candidate = runtime_store.import_core(self.source, self.state)
+            self.assertNotEqual(self.core.content_id, candidate.content_id)
+            manifest = json.loads((candidate.root.parent / "manifest.json").read_bytes())
+            for role, body in crlf.items():
+                path = f"roles/{role}.md"
+                self.assertEqual(body, runtime_store.read_core_source(candidate, path))
+                row = next(row for row in manifest["files"] if row["path"] == path)
+                self.assertEqual(hashlib.sha256(body).hexdigest(), row["sha256"])
+            plan = native_agents.preview_global(self.state, candidate.binding(), context=self.context)
+            self.assertTrue(plan.can_apply, plan.summary)
+            self.assertEqual(baseline.desired, plan.desired,
+                             "LF/CRLF must compile identical existing host permissions and bootstrap text")
+            native_agents.apply_global(plan)
+            for host, path, expected in plan.desired:
+                actual = native.read_node(self.paths.root(host), path)
+                self.assertEqual(expected, actual.payload)
+                native.validate_descriptor(actual.payload, host, Path(path).stem)
+        finally:
+            for role, body in originals.items():
+                (self.source / f"roles/{role}.md").write_bytes(body)
+        role = "xy-qa"
+        original = originals[role].replace(b"\r\n", b"\n")
+        absent = original.replace(b"toolsets: [read]\n", b"")
+        invalid = (absent, absent + b"\ntoolsets: [write]\n",
+                   original.replace(b"toolsets: [read]", b"toolsets: [read]\ntoolsets: [read]"),
+                   original.replace(b"toolsets: [read]", b"toolsets: [read, write]"),
+                   original.replace(b"toolsets: [read]", b"toolsets: [unknown-mcp]"),
+                   original.replace(b"\n---\n", b"\n--\n", 1),
+                   original.replace(b"---\n", b"---\r", 1))
+        preview = Resources(self.source, json_bytes(self.core.binding()), self.core.label)
+        try:
+            for body in invalid:
+                for line_end in (body, body.replace(b"\n", b"\r\n")):
+                    (self.source / f"roles/{role}.md").write_bytes(line_end)
+                    for host in role_models.HOSTS:
+                        with self.subTest(host=host, policy_sha=hashlib.sha256(line_end).hexdigest()), \
+                                self.assertRaisesRegex(ValueError, "角色.*toolsets"):
+                            native.compile_role(preview, host, role, {})
+        finally:
+            (self.source / f"roles/{role}.md").write_bytes(originals[role])
 
     def test_native_descriptor_real_validators_accept_bootstrap_and_reject_permission_expansion(self):
         from lib.hosts.validate_claude_artifacts import validate_agent as validate_claude
