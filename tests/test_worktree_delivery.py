@@ -102,14 +102,19 @@ class GitDeliveryTest(unittest.TestCase):
         for worker in self.workers:
             git(self.integration, "merge", "--no-ff", "--no-edit", head(worker))
         self.tip = head(self.integration)
+        command = [sys.executable, "-B", "-X", "utf8", "-c",
+                   "from src.a import a; from src.b import b; assert a == b == 1"]
         self.record = {"root": str(self.integration), "target_branch": "main", "target_base": self.base,
                        "head_revision": self.tip, "verification": [{
-                           "command": "python -c 'assert a == b == 1'", "exit_code": 0,
+                           "command": json.dumps(command, ensure_ascii=False), "exit_code": 0,
                            "log_ref": "fixture:integration-check", "head_revision": self.tip}]}
         # 真正执行组合行为检查，而不是仅在 JSON 中填入成功退出码。
-        checked = subprocess.run([sys.executable, "-c", "from src.a import a; from src.b import b; assert a == b == 1"],
-                                 cwd=self.integration, capture_output=True, check=False)
+        # 外层测试进程的-B不传给子Python；必须在实际启动方显式禁止pyc，
+        # 否则fixture自己生成未跟踪文件，生产clean正确拒绝而不是CRLF问题。
+        self.assert_fixture_clean("before verification")
+        checked = subprocess.run(command, cwd=self.integration, capture_output=True, check=False)
         self.assertEqual(0, checked.returncode, checked.stderr)
+        self.assert_fixture_clean("after verification")
         self.qa_task = v2_task({"id": "qa", "request_id": "req", "task_type": "qa", "state": "QA_PASSED",
                                "depends_on": [], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [],
                                "agent_ref": {"host": "codex", "agent_id": "current-reviewer"}})
@@ -144,6 +149,18 @@ class GitDeliveryTest(unittest.TestCase):
             "mode": "confirm", "source": "user:approve-current-merge", "request_id": "req",
             "target_branch": "main", "target_base": self.base, "head_revision": self.tip,
             "diff_fingerprint": actual["diff_fingerprint"]}}
+
+    def assert_fixture_clean(self, phase: str) -> None:
+        """只诊断自有fixture，不清理或忽略脏文件；保留区分行尾/真实改动的证据。"""
+        status = git(self.integration, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none")
+        print(f"FIXTURE_GIT_STATUS {phase}: {status!r}", flush=True)
+        if status:
+            for arguments in (("diff", "--raw", "-z"), ("diff", "--cached", "--raw", "-z"),
+                              ("ls-files", "--eol", "-z"), ("check-attr", "--all", "--", "src/a.py", "src/b.py")):
+                print(f"FIXTURE_GIT_DIAGNOSTIC {arguments!r}: {git(self.integration, *arguments)!r}", flush=True)
+            for key in ("core.autocrlf", "core.filemode"):
+                print(f"FIXTURE_GIT_CONFIG {key}: {git(self.integration, 'config', '--get', key, allowed=(0, 1))!r}", flush=True)
+        self.assertFalse(status, f"fixture dirtied at {phase}; preserve status/EOL evidence instead of bypassing clean")
 
     def test_parallel_writes_are_isolated_and_confirmed_merge_delivers_both(self) -> None:
         self.assertEqual("b = 0\n", (self.workers[0] / "src/b.py").read_text())

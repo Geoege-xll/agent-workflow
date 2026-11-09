@@ -346,7 +346,8 @@ class TaskSettlementTest(unittest.TestCase):
 class SettlementWorktreeConsumerTest(unittest.TestCase):
     def test_native_registered_worktree_roots_use_physical_identity(self):
         """实际Git登记解析覆盖Unicode/空格；同一节点在Windows核实native路径表示。"""
-        from lib.delivery.worktree_cli import DeliveryError, common_dir, create, git, head, linked, private_dir
+        import stat
+        from lib.delivery.worktree_cli import DeliveryError, common_dir, create, git, head, linked, private_dir, repository
         with tempfile.TemporaryDirectory(prefix="registered-worktree-", dir=os.environ.get("AWF_TEST_SCRATCH")) as raw:
             root = Path(raw).resolve()
             repo, worker = root / "主 仓库", root / "独立 工作树"
@@ -378,12 +379,59 @@ class SettlementWorktreeConsumerTest(unittest.TestCase):
             # 即使目录仍有真实旧登记，也不能共享主checkout的私有HEAD/index。
             gitfile = worker / ".git"
             original = gitfile.read_bytes()
+            before = gitfile.stat()
+            attributes = getattr(before, "st_file_attributes", None)
+            self.assertTrue(stat.S_ISREG(before.st_mode))
+            self.assertEqual(1, before.st_nlink)
+            print(f"REGISTERED_GITFILE_BEFORE: identity={(before.st_dev, before.st_ino)!r} mode={stat.S_IMODE(before.st_mode)} attributes={attributes!r}", flush=True)
+            set_attributes = None
+            if os.name == "nt":
+                # 仅为本测试刚创建的gitfile保全完整原属性；不能推测其READONLY。
+                import ctypes
+                from ctypes import wintypes
+                setter = ctypes.WinDLL("kernel32", use_last_error=True).SetFileAttributesW
+                setter.argtypes = (wintypes.LPCWSTR, wintypes.DWORD)
+                setter.restype = wintypes.BOOL
+                def set_attributes(value):
+                    if not setter(str(gitfile), value):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                self.assertIsNotNone(attributes)
             try:
-                gitfile.write_text(f"gitdir: {private_dir(repo)}\n", encoding="utf-8")
-                with self.assertRaises(DeliveryError):
-                    linked(repo, str(worker))
+                if attributes is not None and attributes & stat.FILE_ATTRIBUTE_READONLY:
+                    set_attributes((attributes & ~stat.FILE_ATTRIBUTE_READONLY) or stat.FILE_ATTRIBUTE_NORMAL)
+                # Windows的HIDDEN/SYSTEM文件以w打开可能触发CREATE_ALWAYS拒绝；
+                # 用既有r+b句柄改写/恢复，不清HIDDEN/SYSTEM、不截断重开，也不换inode。
+                with gitfile.open("r+b") as stream:
+                    self.assertEqual(original, stream.read())
+                    try:
+                        stream.seek(0)
+                        stream.write(f"gitdir: {private_dir(repo)}\n".encode("utf-8"))
+                        stream.truncate()
+                        stream.flush()
+                        self.assertTrue(repository(worker).samefile(worker))
+                        self.assertTrue(common_dir(worker).samefile(common_dir(repo)))
+                        self.assertTrue(private_dir(worker).samefile(private_dir(repo)))
+                        registered = git(repo, "worktree", "list", "--porcelain", "-z").split(b"\0")
+                        self.assertTrue(any(Path(os.fsdecode(item[len(b"worktree "):])).samefile(worker)
+                                            for item in registered if item.startswith(b"worktree ")))
+                        with self.assertRaisesRegex(DeliveryError, "distinct canonical root"):
+                            linked(repo, str(worker))
+                    finally:
+                        # 只有句柄已成功打开后才恢复bytes，避免首次打开失败又抛恢复错误。
+                        stream.seek(0)
+                        stream.write(original)
+                        stream.truncate()
+                        stream.flush()
             finally:
-                gitfile.write_bytes(original)
+                if set_attributes is not None and gitfile.stat().st_file_attributes != attributes:
+                    set_attributes(attributes)
+            after = gitfile.stat()
+            self.assertEqual(original, gitfile.read_bytes())
+            self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
+            self.assertEqual(stat.S_IMODE(before.st_mode), stat.S_IMODE(after.st_mode))
+            self.assertEqual(attributes, getattr(after, "st_file_attributes", None))
+            self.assertTrue(linked(repo, str(worker)).samefile(worker))
+            print(f"REGISTERED_GITFILE_RESTORED: identity={(after.st_dev, after.st_ino)!r} attributes={getattr(after, 'st_file_attributes', None)!r}; bytes/identity/mode/attributes preserved", flush=True)
 
     def test_actual_merge_check_accepts_result_dependency_but_keeps_writer_qa_gates(self):
         """复用已有真实Git/验证QA夹具，只增加本变更缺失的结果依赖消费者场景。"""
