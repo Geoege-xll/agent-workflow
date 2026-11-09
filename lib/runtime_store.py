@@ -343,7 +343,10 @@ def _label(root: int, files: list[dict]) -> str:
         with _relative_parent(root, "product/VERSION") as (parent, name):
             raw, _ = _read_regular(parent, name, limit=128)
         try:
-            version = raw.decode("ascii", errors="strict").removesuffix("\n")
+            text = raw.decode("ascii", errors="strict")
+            # 与诊断入口相同，只消费一个 LF 或 CRLF；自举前不能 import
+            # manager 共用解析器。原始 raw 仍参与清单 SHA，绝不改写核心字节。
+            version = text[:-2] if text.endswith("\r\n") else text.removesuffix("\n")
         except UnicodeError as exc:
             raise RuntimeStoreError("product/VERSION 不是有效产品版本") from exc
         if not _VERSION.fullmatch(version):
