@@ -1263,10 +1263,22 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
 
     def test_source_install_detached_pin_helper_hooks_and_admission(self):
         import base64
+        import time
+        from urllib.parse import quote
         from lib.hosts.native_context import HostPaths, NativeContext
         from lib.windows_fs import assert_private
         from lib.hosts.windows_hook_command import validate_powershell
         from manager import central_runtime
+        # 只观测真实组合入口：累计时间定位整体阶段，增量时间定位相邻调用；
+        # 立即 flush 让中途异常或超时仍保留最后完成位置。时间不参与断言、
+        # 重试或 deadline 计算，既有 Hook/子进程预算与业务步骤完全沿用。
+        started = previous = time.monotonic()
+        def mark_stage(name):
+            nonlocal previous
+            now = time.monotonic()
+            print(f"NATIVE_CENTRAL_STAGE name={name} elapsed_s={now - started:.3f} delta_s={now - previous:.3f}", flush=True)
+            previous = now
+        mark_stage("begin")
         with tempfile.TemporaryDirectory(prefix="central-native-") as raw:
             workspace = Path(raw).resolve()
             state, source, project = workspace / "state", workspace / "source", workspace / "project 中文 space"
@@ -1292,13 +1304,20 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             (codex_home / "models.json").write_text(json.dumps({"models": [
                 {"id": "fixture-model", "supported_reasoning_levels": ["high", "max"]},
                 {"id": "project-model", "supported_reasoning_levels": ["high", "max"]}]}), encoding="utf-8")
+            mark_stage("fixture_ready")
             core = store.import_core(source, state)
             self.assertEqual(version, core.label)
-            central_runtime.apply(central_runtime.preview(state, binding=core.binding(), native_context=context))
+            mark_stage("import_complete")
+            central_proposal = central_runtime.preview(state, binding=core.binding(), native_context=context)
+            mark_stage("central_preview_complete")
+            central_runtime.apply(central_proposal)
+            mark_stage("central_apply_complete")
             proposal = project_service.preview_project(state, project, "add", enable=True,
                                                        source_root=source, native_context=context)
             self.assertTrue(proposal.summary["can_apply"], proposal.summary)
+            mark_stage("project_preview_complete")
             project_service.apply_project(proposal)
+            mark_stage("project_apply_complete")
             binding_node, _ = service.read_binding_record(state, project)
             self.assertEqual(64, len(binding_node.security))
             assert_private(state / service._state_relative(project, "bindings"))
@@ -1312,6 +1331,7 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             checked = invoke("check")
             self.assertEqual(0, checked.returncode, checked.stderr.decode("utf-8", errors="replace"))
             self.assertEqual(core.binding(), json.loads(checked.stdout)["runtime_binding"])
+            mark_stage("thin_check_complete")
             expected = store.read_core_source(core, "product/GLOBAL_CONSTRAINTS.md")
             shutil.rmtree(source)
             self.assertFalse(source.exists())
@@ -1321,6 +1341,7 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
                 (project / ".agent-workflow/lib" / (name + ".py")).write_text("raise RuntimeError('thin project module executed')\n", encoding="utf-8")
             read = invoke("--binding-b64", pin, "read", "product/GLOBAL_CONSTRAINTS.md")
             self.assertEqual((0, expected), (read.returncode, read.stdout), read.stderr)
+            mark_stage("detached_read_complete")
             fingerprints = project / "fingerprints.json"
             fingerprints.write_text('["AGENTS.md"]', encoding="utf-8")
             queried = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "fingerprints",
@@ -1328,6 +1349,7 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             self.assertEqual(0, queried.returncode, queried.stderr)
             self.assertTrue(json.loads(queried.stdout)["matched"])
             self.assertEqual(1, json.loads(queried.stdout)["checked"])
+            mark_stage("thin_fingerprints_complete")
             # 复用既有合法 Full 决策，只裁剪为内置工程规范；不补审批、不复制
             # 规范正文，也不替换新任务门。实际薄桥/Windows 协调锁和私有发布必须
             # 在来源已移除后真正生成新图，不能用 fingerprints 查询成功代替 init。
@@ -1352,16 +1374,91 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             self.assertEqual(core.binding(), store.validate_binding(graph["runtime_binding"]))
             self.assertEqual([], graph["approved_gates"])
             self.assertEqual("DECLARED", graph["tasks"][0]["state"])
+            mark_stage("thin_init_complete")
             print("NATIVE_ENABLED_INIT: actual isolated thin bridge persisted schema2 graph with strict task pin and explicit approvals")
+            # Full 必经消费者沿同一个已移除来源的项目/pin 调用，不直接导入
+            # helper 替代薄桥。请求只属于本夹具；先证明保留项清理，再让 HTML
+            # 复用它的舞台，最后按新预览清完整个请求，不使用 --all 或新来源副本。
+            mark_stage("full_helpers_begin")
+            request_id = "native-full-consumer"
+            def scratch_call(command, *options):
+                result = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", command,
+                                "--root", str(project), "--request-id", request_id, *options)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                return json.loads(result.stdout)
+            allocated = scratch_call("scratch")
+            reused = scratch_call("scratch")
+            self.assertFalse(allocated["reused"])
+            self.assertTrue(reused["reused"])
+            self.assertEqual(allocated["scratch_dir"], reused["scratch_dir"])
+            scratch = Path(allocated["scratch_dir"])
+            self.assertTrue(scratch.is_dir())
+            mark_stage("scratch_reuse_complete")
+            keep_body, build_body = b"native full evidence\n", b"native temporary build\n"
+            (scratch / "keep.log").write_bytes(keep_body)
+            (scratch / "build.tmp").write_bytes(build_body)
+            preview = scratch_call("cleanup-scratch", "--dry-run", "--keep", "keep.log")
+            self.assertEqual("metadata", preview["snapshot_kind"])
+            self.assertEqual((1, 0, len(build_body)),
+                             tuple(preview[key] for key in ("planned_files", "planned_directories", "planned_logical_bytes")))
+            cleaned = scratch_call("cleanup-scratch", "--keep", "keep.log", "--expect-sha256", preview["snapshot_sha256"])
+            self.assertEqual("applied", cleaned["status"])
+            self.assertEqual((1, 0, len(build_body)),
+                             tuple(cleaned[key] for key in ("removed_files", "removed_directories", "removed_logical_bytes")))
+            self.assertEqual(keep_body, (scratch / "keep.log").read_bytes())
+            self.assertEqual({"keep.log"}, {path.name for path in scratch.iterdir()})
+            mark_stage("scratch_keep_cleanup_complete")
+            plans = project / "docs/plans"
+            plans.mkdir(parents=True, exist_ok=True)
+            logical = "platforms/shared/skills/xy-code-standards/references/rules.md"
+            markdown, html = plans / "native-full.md", plans / "native-full.html"
+            markdown_body = ("# Native Full consumer\n\n[Rules](../../.agent-workflow/" + logical + ")\n").encode("utf-8")
+            markdown.write_bytes(markdown_body)
+            rendered = invoke("--binding-b64", pin, "helper", "lib/documents/requirement_html.py", "render",
+                              "--project", str(project), "--source", "docs/plans/native-full.md", "--request-id", request_id)
+            self.assertEqual(0, rendered.returncode, rendered.stdout + rendered.stderr)
+            self.assertEqual("fresh", json.loads(rendered.stdout)["status"])
+            self.assertTrue(json.loads(rendered.stdout)["rendered"])
+            self.assertEqual(markdown_body, markdown.read_bytes())
+            self.assertTrue(html.is_file())
+            page = html.read_bytes()
+            # 原稿保留可移植逻辑路径，真实 HTML 导航必须落在此 pin 的 core；
+            # 不把宿主 Skill 发现软链、项目 locator 或已删除 source 当资源来源。
+            expected_href = quote(Path(os.path.relpath(core.root / logical, plans)).as_posix(), safe="/.-_")
+            self.assertIn(('href="' + expected_href + '"').encode("utf-8"), page)
+            mark_stage("html_render_complete")
+            checked_html = invoke("--binding-b64", pin, "helper", "lib/documents/requirement_html.py", "check",
+                                  "--project", str(project), "--source", "docs/plans/native-full.md")
+            self.assertEqual(0, checked_html.returncode, checked_html.stdout + checked_html.stderr)
+            self.assertEqual("fresh", json.loads(checked_html.stdout)["status"])
+            self.assertFalse(json.loads(checked_html.stdout)["rendered"])
+            self.assertEqual(markdown_body, markdown.read_bytes())
+            self.assertEqual(page, html.read_bytes())
+            mark_stage("html_check_complete")
+            self.assertEqual(keep_body, (scratch / "keep.log").read_bytes())
+            final_preview = scratch_call("cleanup-scratch", "--dry-run")
+            self.assertGreaterEqual(final_preview["planned_files"], 1)
+            self.assertGreaterEqual(final_preview["planned_directories"], 1)
+            self.assertGreaterEqual(final_preview["planned_logical_bytes"], len(keep_body))
+            final = scratch_call("cleanup-scratch", "--expect-sha256", final_preview["snapshot_sha256"])
+            self.assertEqual("applied", final["status"])
+            for metric in ("files", "directories", "logical_bytes"):
+                self.assertEqual(final_preview["planned_" + metric], final["removed_" + metric])
+            self.assertFalse(scratch.exists())
+            self.assertEqual(markdown_body, markdown.read_bytes())
+            self.assertEqual(page, html.read_bytes())
+            mark_stage("scratch_final_cleanup_complete")
             settings = json.loads((project / ".claude/settings.json").read_bytes())
             group = hook_install.managed_json(settings, "claude")["SessionStart"][0]
             command = group["hooks"][0]["command"]
+            mark_stage("hook_begin")
             hook = subprocess.run(command, shell=True, cwd=project, env=environment,
                                   input=json.dumps({"cwd": str(project), "hook_event_name": "SessionStart", "source": "resume"}).encode(),
                                   capture_output=True, timeout=20)
             self.assertEqual(0, hook.returncode, hook.stderr)
             response = json.loads(hook.stdout)
             self.assertIn("hookSpecificOutput", response, "enabled real Hook must execute beyond the neutral timeout path")
+            mark_stage("hook_complete")
             from manager import model_preferences, service as model_service
             def save_preference(target, edits):
                 catalogs = model_preferences.load_catalogs(state, target, "codex", native_context=context)
@@ -1373,6 +1470,7 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             local_role = project / ".codex/agents/xy-backend.toml"
             self.assertEqual("project-model", tomllib.loads(local_role.read_text(encoding="utf-8"))["model"])
             save_preference(None, {"xy-backend": {"effort": "max"}})
+            mark_stage("preference_overrides_complete")
             reset = model_preferences.reset_platform(state, project, "codex", native_context=context)
             self.assertTrue(reset.summary["can_apply"], reset.summary)
             reset_result = model_preferences.apply(reset)
@@ -1380,11 +1478,14 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             restored_model = model_service.prepare_restore(state, project, reset_result["backup_id"])
             model_service.commit(state, project, restored_model, native_context=context)
             self.assertEqual("project-model", tomllib.loads(local_role.read_text(encoding="utf-8"))["model"])
+            mark_stage("preference_restore_complete")
             model_preferences.apply(model_preferences.reset_platform(state, project, "codex", native_context=context))
             self.assertFalse(local_role.exists())
             self.assertEqual({"model": "fixture-model", "effort": "max"},
                              model_service.role_settings(project, "codex", "xy-backend", state=state, native_context=context))
+            mark_stage("preference_reset_complete")
             project_service.apply_project(project_service.preview_project(state, project, "disable", native_context=context))
+            mark_stage("project_disable_complete")
             self.assertNotEqual(0, invoke("check").returncode)
             self.assertEqual((0, expected), (lambda result: (result.returncode, result.stdout))(
                 invoke("--binding-b64", pin, "read", "product/GLOBAL_CONSTRAINTS.md")))
@@ -1395,6 +1496,7 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             unknown = {"protocol_version": 1, "content_id": "f" * 64, "manifest_sha256": "f" * 64}
             self.assertNotEqual(0, invoke("--binding-b64", base64.b64encode(json.dumps(unknown).encode()).decode(),
                                         "read", "product/GLOBAL_CONSTRAINTS.md").returncode)
+            mark_stage("disabled_admission_checks_complete")
             # 版本差异夹具仅作第二个切版目标；首次安装/薄桥/Hook/helper/偏好始终
             # 由上面的真实完整 core 证明，不能用最小夹具代替组合入口验收。
             alternate_source = workspace / "alternate-source"
@@ -1416,8 +1518,10 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             project_service.apply_project(project_service.preview_project(state, disabled, "enable", native_context=context))
             self.assertEqual(alternate.binding(), service.status(state, pinned)["runtime_binding"])
             self.assertEqual(alternate.binding(), service.status(state, disabled)["runtime_binding"])
+            mark_stage("follow_pin_activation_complete")
             central_runtime.apply(central_runtime.preview(state, "rollback", native_context=context))
             self.assertEqual(core.binding(), service.status(state, project)["runtime_binding"])
+            mark_stage("central_rollback_complete")
             # 仅注入第二项目的业务失败点；所有第一项目发布/Job/ACL/原inode补偿都
             # 运行真实 Windows 后端。不能把 mocked native success 当作验收结果。
             proposal = central_runtime.preview(state, binding=alternate.binding(), native_context=context)
@@ -1437,6 +1541,7 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             self.assertEqual((original.payload, original.mode, original.identity[:2], original.security),
                              (restored.payload, restored.mode, restored.identity[:2], restored.security))
             self.assertIsNone(runtime_policy.pending(state))
+            mark_stage("original_inode_compensation_complete")
             concurrent = central_runtime.preview(state, binding=alternate.binding(), native_context=context)
             first = next(capture for capture in concurrent.captures if capture.runtime_plan)
             calls.clear()
@@ -1451,11 +1556,13 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
                 central_runtime.apply(concurrent)
             self.assertEqual(user_saved, (first.project / resources.LOCATOR).read_bytes())
             self.assertIsNotNone(runtime_policy.pending(state))
+            mark_stage("concurrent_save_retained")
             # 已用旧 pin 的损坏核心直接拒绝；不会补最新版本或把源夹具当回退目录。
             corrupt = alternate.root / "product/GLOBAL_CONSTRAINTS.md"
             corrupt.write_bytes(b"damaged frozen constraints")
             alternate_pin = base64.b64encode(json.dumps(alternate.binding()).encode()).decode()
             self.assertNotEqual(0, invoke("--binding-b64", alternate_pin, "read", "product/GLOBAL_CONSTRAINTS.md").returncode)
+            mark_stage("corrupt_pin_rejected")
             print("NATIVE_CENTRAL: full source/version/activate; detached isolated pin read/task_graph/PS7 Hook; Global/project override/reset; follow/pin/disable/rollback; second-project original-inode recovery/concurrent-save retention; unknown/corrupt/admission rejection executed")
 
     def test_project_junction_is_rejected_before_resolve_and_writes(self):
