@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 import curses
 from dataclasses import dataclass, replace
 import locale
@@ -797,17 +798,33 @@ class App:
             self.add_target=project;self.show_view("add_mode")
         elif action == "preview":
             if not self.pending():self.notify("无改动；当前范围没有待保存草稿，未写入配置");return
-            cached=self.catalog();bundle=self.catalogs.get((self.scope_id,self.host))
-            # 普通预览只读校验预读bundle；影响项目任一来源变化都不能借预览重启native。
-            if bundle is None or not model_preferences.check_catalogs(self.state,self.project,self.host,bundle,native_context=self.native_context):
-                raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
-            if cached.stamp and any(self.source_stamps.get(self.scope(role)) != cached.stamp for role in self.pending()):
-                raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
-            expected={role:self.expected[self.scope(role)] for role in self.pending()}
-            plan=model_preferences.preview(self.state,self.project,self.host,self.pending(),bundle,expected,native_context=self.native_context)
-            self.preference_keys=tuple(self.scope(role) for role in self.pending());self.preference_reset=False
-            self.show_view("preview");self.preference_plan=plan;self.text=preference_plan_text(plan.summary,HOST_NAMES)
-            self.notify("保存预览已生成，尚未写入；Enter 确认备份并保存，Esc 返回保留草稿" if plan.summary["can_apply"] else "预览发现冲突，不能保存；草稿保留", "warning")
+            # 来源、归属与固定核心校验包含真实文件 I/O，必须沿既有单作业线程
+            # 执行，让主线程继续绘制忙态和处理 Ctrl+C。提交前的服务 guard 不变。
+            # 作业只消费这次按键的完整快照，不能在后台重读后来切换的 App 范围，
+            # 也不能让可变 Catalog/草稿字典随显示刷新而续期本次来源授权。
+            state,project,host,scope_id,context=self.state,self.project,self.host,self.scope_id,self.native_context
+            choices=deepcopy(self.pending());keys=tuple((scope_id,host,role) for role in choices)
+            expected=deepcopy({role:self.expected[(scope_id,host,role)] for role in choices})
+            stamp=self.catalog().stamp;stamps=tuple(self.source_stamps.get(key) for key in keys)
+            bundle=deepcopy(self.catalogs.get((scope_id,host)))
+            def preview():
+                # 普通预览只读校验已有 bundle，不发现新目录、不启动原生宿主；
+                # 失败沿 poll_job 的原错误出口显示，writes=False 保留全部草稿前像。
+                if (bundle is None or not model_preferences.check_catalogs(state,project,host,bundle,native_context=context)
+                        or stamp and any(source != stamp for source in stamps)):
+                    raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
+                return model_preferences.preview(state,project,host,choices,bundle,expected,native_context=context)
+            def ready(plan):
+                # 正常键盘导航在忙态被既有 dispatch 守卫拒绝；仍封闭检查回调归属，
+                # 避免外部项目列表更新把原范围的确认计划展示到另一范围。
+                if (self.scope_id,self.project,self.host) != (scope_id,project,host):
+                    raise ValueError("保存预览范围已变化；草稿保留，请返回原范围重新预览")
+                self.preference_keys=keys;self.preference_reset=False
+                self.show_view("preview");self.preference_plan=plan;self.text=preference_plan_text(plan.summary,HOST_NAMES)
+                self.notify("保存预览已生成，尚未写入；Enter 确认备份并保存，Esc 返回保留草稿" if plan.summary["can_apply"] else "预览发现冲突，不能保存；草稿保留", "warning")
+            self.preference_plan=None
+            self.start_job(preview,show_result=False,name="生成保存预览",on_result=ready,preserve_view=True,
+                           impact=Impact(frozenset({scope_id}),host),writes=False)
         elif action == "refresh":
             role=self.role
             # 丢弃当前 scope 的快照；下一次显式编辑按需查询，不影响其他项目/平台目录。

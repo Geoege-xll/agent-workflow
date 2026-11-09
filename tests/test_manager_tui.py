@@ -281,8 +281,8 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch('left');self.app.dispatch('home');self.app.dispatch('right')
         self.app.dispatch('e');self.app.dispatch('end');self.app.dispatch('enter')
         with patch('manager.tui.model_preferences.preview',return_value=self.preference_plan('global',[{'project':str(self.project),'reason':'来源已经变化'}])), \
-             patch('manager.tui.model_preferences.apply') as apply:
-            self.app.dispatch('s');self.assertEqual(self.app.modal,'preview')
+             patch('manager.tui.model_preferences.apply') as apply, ThreadPoolExecutor(max_workers=1) as self.app.executor:
+            self.app.dispatch('s');self.app.future.result(timeout=5);self.app.poll_job();self.assertEqual(self.app.modal,'preview')
             self.assertIn('保存范围  全局默认',self.app.text);self.assertIn('受影响项目  1 项',self.app.text)
             self.assertIn('来源已经变化',self.app.text);self.assertFalse(any(row.action == 'confirm' for row in self.app.bindings()))
             self.app.dispatch('enter');apply.assert_not_called()
@@ -457,12 +457,11 @@ class TuiTest(unittest.TestCase):
             other=(str(self.projects[1]),'claude','xy-qa')
             self.app.drafts[other]={'model':'inherit','effort':'high'}
             self.app.catalogs[other[:2]]=Catalog('claude')
-            with patch('manager.tui.model_preferences.preview',return_value=self.preference_plan()):
-                self.app.dispatch('s');self.assertEqual(self.app.modal,'preview');commit.assert_not_called()
+            with patch('manager.tui.model_preferences.preview',return_value=self.preference_plan()), ThreadPoolExecutor(max_workers=1) as self.app.executor:
+                self.app.dispatch('s');self.app.future.result(timeout=5);self.app.poll_job();self.assertEqual(self.app.modal,'preview');commit.assert_not_called()
                 self.app.dispatch('esc');self.assertTrue(self.app.pending());commit.assert_not_called()
-                self.app.dispatch('s')
-            with ThreadPoolExecutor(max_workers=1) as self.app.executor, \
-                 patch('manager.tui.service.backup_summary',return_value='fixture backup'):
+                self.app.dispatch('s');self.app.future.result(timeout=5);self.app.poll_job()
+            with ThreadPoolExecutor(max_workers=1) as self.app.executor, patch('manager.tui.service.backup_summary',return_value='fixture backup'):
                 commit.return_value={'applied':True,'scope':'project','backup_id':'fixture-id','backups':[],'affected_projects':[],'diagnostic':''}
                 self.app.dispatch('enter');self.app.future.result(timeout=2);self.app.poll_job()
             self.assertFalse(self.app.pending());self.assertIn(other,self.app.drafts)
@@ -627,7 +626,9 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch('m');self.app.dispatch('down');self.app.dispatch('enter');self.app.dispatch('enter')
         drafts=deepcopy(dict(self.app.drafts));expected=deepcopy(dict(self.app.expected));stamps=dict(self.app.source_stamps)
         unaffected={key:value for key,value in self.app.session.displays.items() if key[1]=='claude'}
-        self.app.dispatch('s');self.assertEqual(self.app.modal,'preview');self.assertTrue(self.app.preference_plan.summary['can_apply'])
+        with ThreadPoolExecutor(max_workers=1) as self.app.executor:
+            self.app.dispatch('s');self.app.future.result(timeout=5);self.app.poll_job()
+        self.assertEqual(self.app.modal,'preview');self.assertTrue(self.app.preference_plan.summary['can_apply'])
         self.assertEqual({row['project'] for row in self.app.preference_plan.summary['affected_projects']},{str(project) for project in self.projects})
         preferences=self.app.state/'preferences';preferences.mkdir()
         (preferences/'role-models.json').write_text('{"PRIVATE-GLOBAL-SECRET":')
@@ -729,10 +730,10 @@ class TuiTest(unittest.TestCase):
         self.app.dispatch('esc')
         self.app.drafts[self.app.scope()]={"model":"local-model","effort":"high"}
         self.app.dispatch(":");self.type("预览")
-        with patch.object(self.app,"act",wraps=self.app.act) as act,patch("manager.tui.model_preferences.preview",return_value=self.preference_plan()),patch("manager.tui.model_preferences.apply") as commit:
+        with patch.object(self.app,"act",wraps=self.app.act) as act,patch("manager.tui.model_preferences.preview",return_value=self.preference_plan()),patch("manager.tui.model_preferences.apply") as commit,ThreadPoolExecutor(max_workers=1) as self.app.executor:
             self.app.expected[self.app.scope()]=dict(self.app.base_value(self.app.role))
             self.app.catalogs[self.app.scope()[:2]]=model_preferences.PreferenceCatalogs(self.catalog,{})
-            self.app.dispatch("enter")
+            self.app.dispatch("enter");self.app.future.result(timeout=5);self.app.poll_job()
             self.assertEqual(self.app.modal,"preview");commit.assert_not_called()
             self.assertTrue(any(call.args[0]=="preview" for call in act.call_args_list))
 
@@ -906,6 +907,69 @@ class TuiTest(unittest.TestCase):
         self.assertTrue(all(label in detail for label in ("Codex","Claude Code","Antigravity")))
         row["conflicts"]=[{"path":"runtime_binding","reason":"固定核心版本缺失"}]
         self.assertIn("冲突",status_text(row,{}))
+
+    def test_save_preview_blocked_validation_keeps_ui_responsive_and_drafts(self):
+        """真实 App/Future 消费阻塞校验；这里只验证 portable 作业边界，不声称原生 UI。"""
+        for scope,outcome in (("project","success"),("global","success"),("project","invalid"),("project","moved")):
+            with self.subTest(scope=scope,outcome=outcome):
+                self.app=App(self.root/"state",self.root/"scan",self.project,native_context=self.context)
+                self.app.theme=Theme();self.app.screen=self.screen
+                if scope == "global":self.app.project_index=-1;self.app.load_display()
+                key=self.app.scope();scope_key=key[:2];project=self.app.project
+                catalog=deepcopy(self.catalog);catalog.stamp="captured-source"
+                bundle=model_preferences.PreferenceCatalogs(catalog,{})
+                self.app.catalogs[scope_key]=bundle
+                self.app.session.begin(key);self.app.session.stage(key,{"model":"local-model"},catalog.stamp)
+                other=(str(self.projects[1]),"claude","xy-qa");self.app.drafts[other]={"effort":"high"}
+                before=deepcopy(self.app.session.entries);expected=deepcopy(self.app.expected[key])
+                entered,release=Event(),Event();plan=self.preference_plan(scope)
+                def validate(state,target,host,captured,**kwargs):
+                    entered.set()
+                    if not release.wait(5):raise RuntimeError("测试未释放只读校验")
+                    return outcome != "invalid"
+                with ThreadPoolExecutor(max_workers=1) as self.app.executor, \
+                     patch("manager.tui.model_preferences.check_catalogs",side_effect=validate) as check, \
+                     patch("manager.tui.model_preferences.preview",return_value=plan) as preview, \
+                     patch("manager.tui.model_preferences.apply") as apply:
+                    try:
+                        self.app.dispatch("s");self.assertTrue(entered.wait(2));future=self.app.future
+                        self.assertIsNotNone(future);self.assertFalse(future.done())
+                        self.assertIn("执行中",self.draw().text());self.assertFalse(self.app.session.job.writes)
+                        # 校验仍被 Event 阻塞时，主线程可以绘制和派发；已有非取消型
+                        # 作业守卫拒绝切换、重复保存、Esc 和 Ctrl+C，不清草稿或提前退出。
+                        for value in ("tab","left","s","esc","ctrl-c"):self.app.dispatch(value)
+                        self.assertEqual((self.app.scope_id,self.app.project,self.app.host),(key[0],project,key[1]))
+                        self.assertIs(self.app.future,future);self.assertFalse(self.app.done)
+                        self.assertFalse(self.app.cancel_job.is_set());self.assertEqual(self.app.session.entries,before)
+                        self.assertIn("等待完成",self.app.toast);apply.assert_not_called()
+                        # 后台已拿到独立来源快照，后续缓存对象变化不能替它续期。
+                        catalog.models.append(Model("later","later","fixture"));catalog.stamp="later-source"
+                        if outcome == "moved":self.app.projects=[]
+                    finally:release.set()
+                    if outcome == "invalid":
+                        with self.assertRaisesRegex(ValueError,"来源或能力已变化"):future.result(timeout=5)
+                    else:future.result(timeout=5)
+                    self.app.poll_job();self.assertIsNone(self.app.future);self.assertEqual(self.app.session.entries,before)
+                    captured=check.call_args.args[3]
+                    self.assertIsNot(captured,bundle);self.assertEqual(captured.catalog.stamp,"captured-source")
+                    self.assertNotIn("later",[model.id for model in captured.catalog.models])
+                    if outcome == "invalid":
+                        preview.assert_not_called();self.assertEqual(self.app.modal,"error")
+                    else:
+                        args=preview.call_args.args
+                        self.assertEqual(args[:3],(self.app.state,project,key[1]))
+                        self.assertEqual(args[3],{"xy-backend":{"model":"local-model"}})
+                        self.assertEqual(args[5],{"xy-backend":expected})
+                        self.assertIs(preview.call_args.kwargs["native_context"],self.context)
+                        if outcome == "moved":
+                            self.assertEqual(self.app.modal,"error");self.assertIn("范围已变化",self.app.text)
+                            self.assertIsNone(self.app.preference_plan)
+                        else:
+                            self.assertEqual(self.app.modal,"preview");self.assertIs(self.app.preference_plan,plan)
+                            self.assertEqual(self.app.preference_keys,(key,))
+                            self.app.dispatch("esc");self.assertIsNone(self.app.modal)
+                            self.assertEqual(self.app.session.entries,before)
+                    apply.assert_not_called()
 
     def test_busy_job_blocks_duplicate_actions_and_waits_for_real_settlement(self):
         release=Event();started=Event()

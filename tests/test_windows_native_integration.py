@@ -247,6 +247,7 @@ class NativeUI:
     def __init__(self, case, root, argv, environment):
         self.case, self.root, self.argv = case, root, argv
         self.sequence, self.frames = 0, []
+        self.started_ns, self.events = time.monotonic_ns(), []
         self.inflight = None
         self.last_request = self.last_response = None
         # 两端各自独占一个方向；目录在 child 启动前建立，消息名发布后不可变。
@@ -255,7 +256,20 @@ class NativeUI:
         self.process = ConPTYProcess(argv, cwd=PACK, env=environment, columns=120, rows=36)
 
     def key(self, value):
-        self.process.write(KEYS.get(value, value))
+        payload = KEYS.get(value, value)
+        # 记录测试输入的写入边界；返回长度只证明 ConPTY 接受了字节，不能推定
+        # curses 已消费/派发。组合查询正文不写入诊断，只记录测试单键和字节数。
+        event = {"kind": "input", "key": value if value in KEYS or len(value) == 1 else None,
+                 "bytes": len(payload.encode("utf-8")), "started_ns": time.monotonic_ns() - self.started_ns}
+        try:
+            event["accepted_bytes"] = self.process.write(payload)
+            self.case.assertEqual(event["accepted_bytes"], event["bytes"])
+        except BaseException as exc:
+            event["error"] = type(exc).__name__
+            raise
+        finally:
+            event["finished_ns"] = time.monotonic_ns() - self.started_ns
+            self.events.append(event)
 
     def snapshot(self, timeout=5):
         if self.inflight is not None:
@@ -275,6 +289,9 @@ class NativeUI:
                 if response.exists():
                     value = read_message(response, number, response=True)
                     self.last_response = response
+                    observation = value["snapshot"]["observation"]
+                    self.case.assertEqual(observation["number"], number)
+                    self.case.assertTrue(0 < len(observation["main_stack"]) <= 24)
                     return value["snapshot"]
                 if (self.root / "final.json").exists():
                     self.case.fail("生产 TUI 提前结束：" + (self.root / "final.json").read_text(encoding="utf-8"))
@@ -291,15 +308,26 @@ class NativeUI:
 
     def wait(self, label, predicate, timeout=30):
         deadline, last = time.monotonic() + timeout, None
-        while time.monotonic() < deadline:
-            last = self.snapshot()
-            if last["stable"] and predicate(last):
-                self.frames.append({"label": label, "native": last})
-                return last
-            time.sleep(0.03)
-        if last is not None:
-            self.frames.append({"label": label + "-failed", "native": last})
-        self.case.fail(f"原生屏幕未达到 {label}：\n" + (self.text(last) if last else "无快照"))
+        event = {"kind": "wait", "label": label, "started_ns": time.monotonic_ns() - self.started_ns,
+                 "first_number": self.sequence + 1, "outcome": "error"}
+        try:
+            while time.monotonic() < deadline:
+                last = self.snapshot()
+                if last["stable"] and predicate(last):
+                    self.frames.append({"label": label, "native": last})
+                    event["outcome"] = "success"
+                    return last
+                time.sleep(0.03)
+            event["outcome"] = "timeout"
+            if last is not None:
+                self.frames.append({"label": label + "-failed", "native": last})
+            self.case.fail(f"原生屏幕未达到 {label}：\n" + (self.text(last) if last else "无快照"))
+        finally:
+            # 父子进程各记自身单调时间，以同一请求序号关联，绝不假定两个进程
+            # 的相对起点相同；失败也在既有 record finally 中保留实际耗时。
+            event["last_number"] = self.sequence
+            event["finished_ns"] = time.monotonic_ns() - self.started_ns
+            self.events.append(event)
 
     def text_is(self, *values, absent=(), timeout=30):
         return self.wait(" / ".join(values), lambda frame:
@@ -307,7 +335,17 @@ class NativeUI:
                          and not any(text in self.text(frame) for text in absent), timeout)
 
     def ready(self):
-        return self.text_is("角色模型", "后端开发", absent=("执行中",))
+        return self.main_is("角色模型", "后端开发")
+
+    @classmethod
+    def _main_ready(cls, frame, values):
+        # 主标题/草稿数会透过退出弹层留在背景；同一快照还必须证明原生弹层
+        # 标题已消失，才能发送下一按键。沿用原等待预算，不增加第二段等待。
+        text = cls.text(frame)
+        return cls._modal_title(frame) is None and "执行中" not in text and all(value in text for value in values)
+
+    def main_is(self, *values):
+        return self.wait(" / ".join(values), lambda frame:self._main_ready(frame, values))
 
     def assert_frame(self, frame):
         # 直接核对原生格子的边界，中文内容/状态/提示不能覆盖粗框；这里不
@@ -357,8 +395,14 @@ class NativeUI:
         self.choose(query, "选择推理级别")
         self.choose(effort, "已暂存，尚未保存")
 
+    def preview(self):
+        self.key("s")
+        return self.wait("保存预览 / 确认备份并保存", lambda frame:
+                         self._modal_title(frame) == "保存预览" and "确认备份并保存" in self.text(frame)
+                         and "执行中" not in self.text(frame))
+
     def save(self):
-        self.key("s");self.text_is("保存预览", "确认备份并保存", absent=("执行中",))
+        self.preview()
         self.key("enter");self.text_is("操作结果", "已保存模型配置", absent=("执行中",))
         self.key("esc");self.ready()
 
@@ -389,7 +433,7 @@ class NativeUI:
         value = {"kind": "native-tui", "test": self.case.id(), "argv": self.argv,
                  "pid": self.process.pid, "exit": self.process.returncode, "closed": self.process.closed,
                  "raw_base64": base64.b64encode(self.process.raw_output).decode("ascii"),
-                 "frames": self.frames,
+                 "frames": self.frames, "events": self.events,
                  "final": json.loads(final_path.read_text(encoding="utf-8")) if final_path.exists() else None}
         line = json.dumps(value, ensure_ascii=True)
         print("\n[native TUI evidence] " + line, flush=True)
@@ -520,8 +564,8 @@ class WindowsNativeTUIIntegrationTest(unittest.TestCase):
             self.assertEqual((self.project / ".agent-workflow/project.yaml").read_bytes(), before)
             ui.model("fixture-model", "max")
             ui.key("q");ui.text_is("退出确认", "项未应用草稿")
-            ui.key("esc");ui.text_is("角色模型", "1 项未保存")
-            ui.key("s");ui.text_is("保存预览", "确认备份并保存")
+            ui.key("esc");ui.main_is("角色模型", "1 项未保存")
+            ui.preview()
             ui.key("esc");ui.text_is("已取消保存预览", "1 项未保存")
             self.assertEqual((self.project / ".agent-workflow/project.yaml").read_bytes(), before)
             ui.save()

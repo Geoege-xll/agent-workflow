@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 import traceback
 
 
@@ -211,8 +212,26 @@ def cursor_access_diagnostics(path):
     _publish(Path(path), {"executable": sys.executable, "results": results})
 
 
+def _main_thread_observation(number, started):
+    """只读采样真实主线程的有界调用位置，不读取局部值或生产 App 状态。"""
+    frame = sys._current_frames().get(threading.main_thread().ident)
+    if frame is None:
+        raise RuntimeError("无法取得生产 TUI 主线程调用位置")
+    stack = []
+    try:
+        # 只保留靠近当前执行位置的 24 层文件/函数/行号，不读取源正文或 locals；
+        # 观察器原线程即可区分 get_wch 等待与预览 I/O，无需 trace hook 或新线程。
+        while frame is not None and len(stack) < 24:
+            stack.append({"file": frame.f_code.co_filename, "function": frame.f_code.co_name, "line": frame.f_lineno})
+            frame = frame.f_back
+    finally:
+        # 不长期持有 frame，避免让测试诊断延长生产栈及其局部对象的生命周期。
+        del frame
+    return {"number": number, "elapsed_ns": time.monotonic_ns() - started, "main_stack": list(reversed(stack))}
+
+
 def run_observed(root, arguments):
-    """真实 CLI/TUI 在主线程运行；旁路线程只读取原生 buffer/modes/cursor。
+    """真实 CLI/TUI 在主线程运行；原观察线程只读原生控制台与有界栈位置。
 
     请求/响应文件只位于本方法专有目录，最终报告保留 wrapper 前后的实际模式。
     不包装 App、不注入按键、不读取 App 的私有选择状态；交互完全经过 ConPTY。
@@ -224,6 +243,7 @@ def run_observed(root, arguments):
     before = observer.snapshot()
     stop = threading.Event()
     failures = []
+    started = time.monotonic_ns()
 
     def watch():
         number = 1
@@ -233,7 +253,9 @@ def run_observed(root, arguments):
                 continue
             try:
                 read_message(request, number)
-                _publish(message_path(root, "responses", number), {"number": number, "snapshot": observer.snapshot()})
+                snapshot = observer.snapshot()
+                snapshot["observation"] = _main_thread_observation(number, started)
+                _publish(message_path(root, "responses", number), {"number": number, "snapshot": snapshot})
                 # 响应发布后才推进游标；父端也必须取得该响应才能提交下一请求。
                 # 历史消息保留到进程/线程结束，不在读者打开文件期间回收名字。
                 number += 1
