@@ -738,6 +738,10 @@ class WindowsNodeCodecContractTest(unittest.TestCase):
                         with self.assertRaises(service.ActivationError) as rejected:
                             service._register_installed(recovery["changes"][0], changed)
                         self.assertIn(row["path"], str(rejected.exception))
+                        category = "security" if changed.security != staged.security else "identity.mtime"
+                        self.assertIn(category, str(rejected.exception))
+                        self.assertNotIn(staged.security, str(rejected.exception))
+                        self.assertNotIn(str(staged.identity[:6]), str(rejected.exception))
                         self.assertNotIn("installed", recovery["changes"][0])
                     self.assertEqual(recovery, runtime_state._journal(recovery, project))
                     with self.subTest(kind=kind, valid=valid), patch.object(service, "_retained", return_value=[]), \

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -16,6 +17,44 @@ from lib import windows_fs as fs
 
 
 PACK = Path(__file__).resolve().parents[1]
+
+
+def native_policy_observation(policy):
+    """测试日志只公开控制位/ACE mask 与摘要，不输出任何 SID 正文。"""
+    acl, entries, offset = policy.acl_bytes, [], 8
+    count = int.from_bytes(acl[4:6], "little")
+    for _ in range(count):
+        size = int.from_bytes(acl[offset + 2:offset + 4], "little")
+        if size < 8 or offset + size > len(acl):
+            raise ValueError("native observation encountered an invalid ACE bound")
+        ace = acl[offset:offset + size]
+        item = {"type": ace[0], "flags": ace[1], "mask": int.from_bytes(ace[4:8], "little"),
+                "ace_sha256": hashlib.sha256(ace).hexdigest()}
+        if ace[0] in {0, 1}:
+            item["sid_sha256"] = hashlib.sha256(ace[8:]).hexdigest()
+        entries.append(item)
+        offset += size
+    return {"control": policy.control, "ace_count": count, "aces": entries,
+            "owner_sid_sha256": hashlib.sha256(policy.owner).hexdigest(), "security_sha256": policy.fingerprint}
+
+
+def native_skill_observation(path, skill_name):
+    """沿真实 no-follow 句柄观测 Skill 的七标量、raw basic 属性及安全事实。"""
+    with fs.Directory(Path(path).parent):
+        handle = fs._open_skill_handle(path)
+        try:
+            node = fs._opened_snapshot(handle, max_bytes=fs._LIMIT, skill_name=skill_name)
+            basic = fs._basic_information(handle)
+            with fs._security_policy(handle) as policy:
+                result = native_policy_observation(policy)
+            result.update(identity=list(node["identity"]), mode=node["mode"],
+                          snapshot_security_sha256=node["security"],
+                          payload_sha256=hashlib.sha256(node["payload"]).hexdigest(),
+                          file_attributes=int(fs._information(handle).attributes),
+                          basic={name: int(getattr(basic, name)) for name in ("created", "accessed", "modified", "changed", "attributes")})
+            return result
+        finally:
+            fs._close(handle)
 
 
 @unittest.skipUnless(os.name == "nt", "requires actual native Windows local NTFS")
@@ -57,6 +96,47 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
                 read(target)
             with self.subTest(shared_consumer=target), self.assertRaises(ValueError):
                 shared_read(target)
+
+    def test_managed_skill_stage_publication_preserves_frozen_witness(self):
+        """只定位真实 staged→目标父目录边界；完整核心安装仍由组合方法验收。"""
+        core = self.root / "runtimes" / ("a" * 64) / "core"
+        target = core / "platforms/shared/skills/grill-me"
+        target.mkdir(parents=True)
+        (target / "SKILL.md").write_bytes(b"owned backend target; not a full imported core")
+        destination = self.root / "project/.agents/skills"
+        destination.mkdir(parents=True)
+        parent = fs.secure_os.open(destination, fs.DIRECTORY | fs.NOFOLLOW)
+        stage_name = ".agent-workflow-central-" + "e" * 32 + "-0.stage"
+        stage = None
+        try:
+            fs.secure_os.mkdir(stage_name, 0o700, dir_fd=parent)
+            stage = fs.secure_os.open(stage_name, fs.DIRECTORY | fs.NOFOLLOW, dir_fd=parent)
+            policies = {}
+            for label, descriptor in (("stage_parent", stage), ("destination_parent", parent)):
+                with fs._security_policy(fs.secure_os._directories[descriptor].handle) as policy:
+                    policies[label] = native_policy_observation(policy)
+            print("NATIVE_SKILL_STAGE_PARENTS " + json.dumps(policies, sort_keys=True), flush=True)
+            fs.create_skill_symlink(stage, "grill-me", target, core_root=core)
+            expected = fs.read_skill_symlink(stage, "grill-me", skill_name="grill-me")
+            before = {"frozen": {"identity": expected["identity"], "mode": expected["mode"], "security": expected["security"]},
+                      "handle": native_skill_observation(destination / stage_name / "grill-me", "grill-me")}
+            print("NATIVE_SKILL_STAGE_BEFORE " + json.dumps(before, sort_keys=True), flush=True)
+            fs.move_skill_symlink("grill-me", "grill-me", src_dir_fd=stage, dst_dir_fd=parent,
+                                  skill_name="grill-me", expected=expected)
+            actual = fs.read_skill_symlink(parent, "grill-me", skill_name="grill-me")
+            after = {"frozen": {"identity": actual["identity"], "mode": actual["mode"], "security": actual["security"]},
+                     "handle": native_skill_observation(destination / "grill-me", "grill-me")}
+            print("NATIVE_SKILL_STAGE_AFTER " + json.dumps(after, sort_keys=True), flush=True)
+            # 所有事实已即时落日志，随后仍核冻结守卫；不把当前实际值追认成
+            # 新授权，也不对 ACL/mode/metadata 归零来取得一个表面的 PASS。
+            self.assertEqual(expected["payload"], actual["payload"])
+            self.assertEqual(expected["identity"][:6], actual["identity"][:6])
+            self.assertEqual(expected["mode"], actual["mode"])
+            self.assertEqual(expected["security"], actual["security"])
+        finally:
+            if stage is not None:
+                fs.secure_os.close(stage)
+            fs.secure_os.close(parent)
 
     def test_exact_dacl_copy_is_idempotent_and_private_state_republishes(self):
         """同策略真实复制不重写权限，并消费实际中央私有记录二次发布。"""

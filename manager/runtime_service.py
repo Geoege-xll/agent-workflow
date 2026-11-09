@@ -469,7 +469,20 @@ def _register_installed(row: dict, current: Node) -> None:
     if os.name == "nt" and current.kind != "missing" and not same_published_node(current, after):
         # ACL/身份漂移不能被当前快照追认成授权，也不能先把坏 installed
         # 放入 journal，使补偿完成后连冲突日志自身都无法持久化。
-        raise ActivationError("发布节点与已登记 stage 的身份、内容或 ACL 不一致：" + row["path"])
+        fields = []
+        if len(current.identity) != 7 or len(after.identity) != 7:
+            fields.append("identity.shape")
+        else:
+            names = ("device", "inode", "mode", "nlink", "size", "mtime")
+            fields.extend("identity." + name for name, old, new in zip(names, after.identity[:6], current.identity[:6]) if old != new)
+        if current.mode != after.mode:
+            fields.append("mode")
+        if current.security != after.security:
+            fields.append("security")
+        # CLI/TUI 只报告路径和字段类别；完整 inode/时间戳/权限摘要留给原生
+        # 验收的即时观测日志，不把内部机器元数据塞进产品用户提示。
+        raise ActivationError("发布节点与已登记 stage 不一致：" + row["path"]
+                              + "（字段：" + ", ".join(fields or ["actual_witness"]) + "）")
     row["installed"] = current.value()
 
 
