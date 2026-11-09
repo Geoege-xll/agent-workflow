@@ -5,6 +5,7 @@
 候选，不碰真实业务项目、用户全局配置或宿主模型。
 """
 
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
@@ -181,6 +182,81 @@ class CentralProjectTest(unittest.TestCase):
                                      "lib/project/project_profile_cli.py", "roles", ".agent-workflow", ".")
                 self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertEqual("", result.stdout)
+
+    def test_explicit_read_sessions_bound_consumers_and_close_before_publication(self):
+        """完整核心真实安装/薄入口消费；计数证明复用范围，不能替代 Windows 耗时。"""
+        proposal = service.preview(self.state, self.project, "enable", binding=self.core.binding())
+        sessions, original_reader = [], store.core_reader
+        original_write = service._write_private
+        @contextmanager
+        def observed_reader(*args, **kwargs):
+            with original_reader(*args, **kwargs) as reader:
+                sessions.append(reader)
+                yield reader
+        def assert_closed():
+            self.assertTrue(all(reader._root is None for reader in sessions), "reader cannot cross publication/execution")
+        def publish(*args, **kwargs):
+            assert_closed()
+            return original_write(*args, **kwargs)
+        def measured(label, action):
+            with ExitStack() as stack:
+                counts = {name: stack.enter_context(patch.object(store, name, wraps=getattr(store, name)))
+                          for name in ("_scan", "_verify_snapshot", "_read_regular", "_entry_identity",
+                                       "_relative_parent", "_child_directory")}
+                result = action()
+            facts = {name: value.call_count for name, value in counts.items()}
+            print("PORTABLE_EXPLICIT_SESSION_COUNTS " + json.dumps({"phase": label, "counts": facts}, sort_keys=True), flush=True)
+            return result, facts
+        with patch.object(store, "core_reader", side_effect=observed_reader), \
+                patch.object(service, "_write_private", side_effect=publish):
+            applied, apply_counts = measured("apply_after", lambda: service.apply(proposal))
+        self.assertTrue(applied["enabled"], applied)
+        self.assertEqual(4, apply_counts["_scan"])
+        self.assertLess(apply_counts["_entry_identity"], 33386)
+        assert_closed()
+        checked, check_counts = measured("check_resolve_after", lambda: bridge.resolve_runtime(self.state, self.project, new_task=True))
+        self.assertEqual(self.core.binding(), checked.runtime_binding)
+        self.assertEqual(1, check_counts["_scan"])
+        self.assertEqual(2, check_counts["_verify_snapshot"])
+        self.assertLess(check_counts["_entry_identity"], 36562)
+        again, again_counts = measured("check_next_operation", lambda: bridge.resolve_runtime(self.state, self.project, new_task=True))
+        self.assertEqual(checked, again)
+        self.assertEqual(1, again_counts["_scan"], "independent call must freshly scan again")
+        from manager.central_runtime import new_task_gate
+        gated, gate_counts = measured("default_commit_gate_fresh", lambda: new_task_gate(self.state, self.project))
+        self.assertEqual(self.core.binding(), gated)
+        self.assertEqual(2, gate_counts["_scan"], "default child/commit gate retains its fresh load boundary")
+        baseline = service.status(self.state, self.project)
+        with store.core_reader(self.core.binding(), self.state) as reader:
+            self.assertEqual(baseline, service.status(self.state, self.project, reader=reader))
+            material = resources.Resources(self.core.root, resources.json_bytes(self.core.binding()), self.core.label, self.core)
+            with material.session_view(reader) as view:
+                self.assertEqual((self.core.root / "product/WORKFLOW.md").read_bytes(), view.read("product/WORKFLOW.md"))
+            with self.assertRaises(ValueError):
+                view.read("product/WORKFLOW.md")
+        with self.assertRaises(ValueError):
+            service.status(self.state, self.project, reader=reader)
+        with self.assertRaises(ValueError):
+            service.status(self.state, self.project, reader=object())
+        with store.core_reader(self.alternate.binding(), self.state) as reader:
+            with self.assertRaises(ValueError):
+                service.status(self.state, self.project, reader=reader)
+        # 真实生成薄入口及选版 helper 都在自己的进程中重新验证，不用父进程
+        # 打开的 reader，不改原40s/Hook预算；验证字节与三字段 pin 均保持。
+        checked = self.invoke("check")
+        self.assertEqual(0, checked.returncode, checked.stderr)
+        self.assertEqual(self.core.binding(), json.loads(checked.stdout)["runtime_binding"])
+        logical, pin = "product/GLOBAL_CONSTRAINTS.md", json.dumps(self.core.binding())
+        read = self.invoke("--binding", pin, "read", logical)
+        self.assertEqual(0, read.returncode, read.stderr)
+        self.assertEqual((self.core.root / logical).read_bytes(), read.stdout.encode())
+        input_path = self.project / "fingerprints.json"
+        input_path.write_text('["AGENTS.md"]', encoding="utf-8")
+        helper = self.invoke("--binding", pin, "helper", "lib/task_graph_cli.py", "fingerprints",
+                             "--root", str(self.project), "--input", str(input_path))
+        self.assertEqual(0, helper.returncode, helper.stdout + helper.stderr)
+        self.assertTrue(json.loads(helper.stdout)["matched"])
+        self.assertEqual(1, json.loads(helper.stdout)["checked"])
 
     def test_enable_native_resources_and_read_only_preview(self):
         before = sorted(str(path) for path in self.project.rglob("*"))

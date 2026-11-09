@@ -420,7 +420,7 @@ def _source_manifest(source: int) -> tuple[dict, bytes, dict]:
     if len(raw) > _MANIFEST_LIMIT:
         raise RuntimeStoreError("核心清单超过安全读取上限")
     _validate_manifest(raw)
-    _verify_snapshot(source, identities)
+    _verify_snapshot(source, identities, source=True)
     return manifest, raw, identities
 
 
@@ -432,14 +432,16 @@ def inspect_core(source_root: Path) -> dict:
 
 
 @contextmanager
-def _validated_entry(version: Path, binding: dict):
+def _validated_entry(version: Path, binding: dict, *, snapshot: dict | None = None):
     """保持祖先及核心目录锚定，完整验证后才把描述符交给读取操作。"""
     with _absolute_directory(version) as root:
         version_info = os.fstat(root)
+        version_identity = (*_identity(version_info), *_security(root))
         _check_directory(version_info, str(version), frozen=True)
         if set(os.listdir(root)) != {"core", "manifest.json"}:
             raise RuntimeStoreError("核心版本目录的节点集合已改变")
         raw, info = _read_regular(root, "manifest.json", limit=_MANIFEST_LIMIT)
+        manifest_identity = _entry_identity(root, "manifest.json", info)
         if stat.S_IMODE(info.st_mode) != (0o600 if os.name == "nt" else 0o444):
             raise RuntimeStoreError("核心清单只读模式已改变")
         if hashlib.sha256(raw).hexdigest() != binding["manifest_sha256"]:
@@ -457,12 +459,18 @@ def _validated_entry(version: Path, binding: dict):
             if _label(core, files) != manifest["label"]:
                 raise RuntimeStoreError("核心来源标签与冻结发行元数据不符")
             _verify_snapshot(core, identities)
+            if snapshot is not None:
+                # 只把本次已验实际见证交给显式短生命周期 reader；不是持久化
+                # 元数据或正文缓存，原两元素 yield 和普通 reader 合同保持。
+                snapshot.update(identities)
             yield core, manifest
             # 清单先于内容读取；结束时再次核对其身份及整个快照，避免一次读取中
             # 前后看到两种版本仍返回成功。操作结束后的主动同用户篡改不在防护承诺内。
-            if _identity(os.stat("manifest.json", dir_fd=root, follow_symlinks=False)) != _identity(info):
+            if set(os.listdir(root)) != {"core", "manifest.json"}:
+                raise RuntimeStoreError("核心版本目录的节点集合在验证期间变化")
+            if _entry_identity(root, "manifest.json", os.stat("manifest.json", dir_fd=root, follow_symlinks=False)) != manifest_identity:
                 raise RuntimeStoreError("核心清单在验证期间变化")
-            if _identity(os.fstat(root)) != _identity(version_info):
+            if (*_identity(os.fstat(root)), *_security(root)) != version_identity:
                 raise RuntimeStoreError("核心版本目录在验证期间变化")
             _verify_snapshot(core, identities)
 
@@ -480,6 +488,67 @@ def load_core(binding: dict, state: Path | None = None) -> FrozenCore:
         with _validated_entry(version, binding) as (_, manifest):
             return FrozenCore(binding["content_id"], binding["manifest_sha256"],
                               version / "core", manifest["label"])
+    except FileNotFoundError as exc:
+        raise RuntimeStoreError(f"固定核心版本缺失：{binding['content_id']}") from exc
+
+
+class CoreReadSession:
+    """一次只读操作拥有的核心目录句柄与实际见证；不能保存进 plan/env。
+
+    会话不缓存文件正文。每次成员读取仍重新打开同一锚定树下的普通文件，
+    核对初次完整扫描的 identity/security 及清单内容；scope 退出再核整树。
+    对象即使被调用者保留，关闭后也不能继续使用或静默回退到别的版本。
+    """
+
+    def __init__(self, core, root, manifest, snapshot):
+        self._core, self._root = core, root
+        self._records = {row["path"]: row for row in manifest["files"]}
+        self._snapshot = snapshot
+
+    @property
+    def core(self):
+        if self._root is None:
+            raise RuntimeStoreError("核心读取会话已经关闭")
+        return self._core
+
+    def core_for(self, binding: dict, state: Path | None = None) -> FrozenCore:
+        binding = validate_binding(binding)
+        core = self.core
+        if (core.binding() != binding
+                or core.root != state_root(state) / "runtimes" / binding["content_id"] / "core"):
+            raise RuntimeStoreError("核心读取会话不属于请求的固定版本或机器状态")
+        return core
+
+    def read(self, core: FrozenCore, logical_path: str) -> bytes:
+        _source_binding(core)
+        if core != self.core:
+            raise RuntimeStoreError("核心读取会话与请求的定位值不一致")
+        relative = _logical_path(logical_path, alias=True)
+        record = self._records.get(relative)
+        if record is None:
+            raise RuntimeStoreError("逻辑路径不在冻结核心文件清单中")
+        return _read_manifest_source(self._root, relative, record, expected=self._snapshot[relative])
+
+    def _close(self):
+        self._root = None
+        self._records.clear()
+        self._snapshot.clear()
+
+
+@contextmanager
+def core_reader(binding: dict, state: Path | None = None):
+    """显式作用域内复用一次完整核心证明；不设全局/ContextVar/跨调用缓存。"""
+    binding = validate_binding(binding)
+    version = state_root(state) / "runtimes" / binding["content_id"]
+    snapshot = {}
+    try:
+        with _validated_entry(version, binding, snapshot=snapshot) as (root, manifest):
+            reader = CoreReadSession(FrozenCore(binding["content_id"], binding["manifest_sha256"],
+                                                version / "core", manifest["label"]), root, manifest, snapshot)
+            try:
+                yield reader
+            finally:
+                reader._close()
     except FileNotFoundError as exc:
         raise RuntimeStoreError(f"固定核心版本缺失：{binding['content_id']}") from exc
 
@@ -522,11 +591,11 @@ def _source_binding(core: FrozenCore) -> dict:
     return binding
 
 
-def _read_manifest_source(root: int, relative: str, record: dict) -> bytes:
+def _read_manifest_source(root: int, relative: str, record: dict, *, expected=None) -> bytes:
     # _read_regular 保留同句柄前后 identity/security、普通文件/单链接与
     # 原读取上限；外层 _validated_entry 仍在退出时复核整个核心快照。
     with _relative_parent(root, relative) as (parent, name):
-        body, info = _read_regular(parent, name)
+        body, info = _read_regular(parent, name, expected=expected)
     if len(body) != record["size"] or hashlib.sha256(body).hexdigest() != record["sha256"]:
         raise RuntimeStoreError("核心文件在验证后发生变化")
     if os.name != "nt" and stat.S_IMODE(info.st_mode) != (0o555 if record["executable"] else 0o444):
@@ -599,16 +668,58 @@ def _write_new(parent: int, name: str, body: bytes, mode: int = 0o600) -> dict |
     return None
 
 
-def _verify_snapshot(root: int, expected: dict) -> None:
-    # 比较整个两遍快照的节点身份；仅比较摘要会漏掉改写后恢复同字节的并发输入。
-    for relative, identity in expected.items():
-        if not relative:
-            actual = (*_identity(os.fstat(root)), *_security(root))
-        else:
-            with _relative_parent(root, relative) as (parent, name):
-                actual = _entry_identity(parent, name, os.stat(name, dir_fd=parent, follow_symlinks=False))
-        if actual != identity:
+def _verify_snapshot(root: int, expected: dict, *, source=False) -> None:
+    # 固定根内按树遍历，当前深度的目录句柄一直锚定，不为每片叶子反复重开
+    # 全祖先。仍逐节点 fresh 读取完整身份/ACL，不能以摘要或目录mtime代替。
+    # 只保留当前深度的 fd，避免全核心目录同时打开而耗尽 POSIX fd 上限。
+    children = {relative: [] for relative, value in expected.items() if stat.S_ISDIR(value[2])}
+    if "" not in children:
+        raise RuntimeStoreError("核心快照缺少实际根目录")
+    for relative in expected:
+        if relative:
+            _logical_path(relative)
+            parent, _, name = relative.rpartition("/")
+            if parent not in children:
+                raise RuntimeStoreError("核心快照缺少已锚定父目录")
+            children[parent].append((name, relative))
+
+    def check_members(descriptor, relative):
+        names = set(os.listdir(descriptor))
+        if source:
+            if not relative:
+                # source 根只选择原有公开边界；.git/docs/项目配置等不属于核心。
+                names.intersection_update((*CORE_DIRECTORIES, *SETUP_FILES))
+            else:
+                selected = set()
+                for name in names:
+                    info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                    if (not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))
+                            or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
+                        raise RuntimeStoreError("核心来源的忽略节点也不能是链接或特殊节点")
+                    if _included(relative + "/" + name):
+                        selected.add(name)
+                names = selected
+        if names != {name for name, _ in children[relative]}:
+            raise RuntimeStoreError(f"核心快照的成员集合在操作期间变化：{relative or '.'}")
+
+    def visit(descriptor, relative):
+        check_members(descriptor, relative)
+        if (*_identity(os.fstat(descriptor)), *_security(descriptor)) != expected[relative]:
             raise RuntimeStoreError(f"核心快照在操作期间变化：{relative or '.'}")
+        for name, path in sorted(children[relative]):
+            info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if path in children:
+                with _child_directory(descriptor, name) as child:
+                    visit(child, path)
+            elif _entry_identity(descriptor, name, info) != expected[path]:
+                raise RuntimeStoreError(f"核心快照在操作期间变化：{path}")
+        # 子节点读取期间父目录新增/删除/换名或ACL变化仍须被拒绝；目录链的
+        # 叶名身份由 _child_directory 的退出检查独立复核，不能遗漏祖先交换。
+        check_members(descriptor, relative)
+        if (*_identity(os.fstat(descriptor)), *_security(descriptor)) != expected[relative]:
+            raise RuntimeStoreError(f"核心快照在操作期间变化：{relative or '.'}")
+
+    visit(root, "")
 
 
 def _copy_snapshot(source: int, stage: int, manifest: dict, identities: dict) -> dict:
@@ -752,7 +863,7 @@ def import_core(source_root: Path, state: Path | None = None, *, expected_bindin
                 # 先校验同名目标再整目录 rename，不会覆盖另一轮已经发布的非空快照。
                 # 此互斥与 POSIX 只读位都不宣称能抵抗主动绕锁的同用户进程。
                 with directory_lock(runtimes, "runtime-core-publication", blocking=True):
-                    _verify_snapshot(source, identities)
+                    _verify_snapshot(source, identities, source=True)
                     try:
                         os.stat(content_id, dir_fd=destination, follow_symlinks=False)
                     except FileNotFoundError:
