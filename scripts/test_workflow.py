@@ -63,12 +63,23 @@ GROUPS["ci"] = (
     + modules("requirement_html") + GROUPS["pty"] + GROUPS["packaging"]
 )
 
-# 初始原生集合只绑定已经存在的真实 Win32 测试类；后续平台消费者由本入口 owner
-# 增补。此组不引入 POSIX PTY、Git Bash 或 portable mock 来充当 Windows 验收。
-GROUPS["windows-native"] = (
+# 原生库阶段与最终组合使用同一份节点清单；库阶段仅绑定实际交接的 Win32 类，
+# 不引入 POSIX PTY、Git Bash 或 portable mock。新增消费者由本入口 owner 在交接
+# 后补入最终组，缺失节点仍走 load_target 的真实导入/存在性拒绝，不动态忽略。
+GROUPS["windows-native-libraries"] = (
     "tests.test_windows_runtime.WindowsFilesystemNativeTest",
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest",
     "tests.test_install_process_windows.NativeWindowsJobTest",
+    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_cmd_actual_command_string_protocol",
+    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_powershell_actual_command_string_protocol",
+    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_payload_preserves_raw_streams_exit_and_authoritative_deadline",
+    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_budget_is_end_to_end_and_discards_partial_output",
+    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_terminating_outer_powershell_drains_supervised_descendants",
 )
+GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
+# 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
+# GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
+NATIVE_GROUPS = frozenset(("windows-native-libraries", "windows-native"))
 
 
 def make_parser():
@@ -79,6 +90,7 @@ def make_parser():
                 "示例：bash scripts/test_workflow.sh --list ci\n"
                 "      bash scripts/test_workflow.sh service tests.test_runtime_store\n"
                 "      python -I -B -X utf8 scripts/test_workflow.py windows-native\n"
+                "原生库阶段：windows-native-libraries；完整中央/TUI 组合验收仍待接入。\n"
                 "依赖：Python >= 3.11；requirement_html/ci 需要 Node，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -130,18 +142,31 @@ class ExecutionResult(unittest.TextTestResult):
     def startTest(self, test):
         super().startTest(test)
         self.started_ids.add(test.id())
+        self.active_test_id = test.id()
+
+    def stopTest(self, test):
+        self.active_test_id = None
+        super().stopTest(test)
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        # unittest 的 subTest skip 只登记子场景 id，父方法仍然算已启动并且整体
+        # wasSuccessful() 为真。使用 start/stop 生命周期记录当前父方法，不依赖
+        # 私有 _SubTest 类型；任一原生必验子场景未执行，都使所属方法不能获验收。
+        self.skipped_ids.add(self.active_test_id or test.id())
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.started_ids = set()
+        self.skipped_ids = set()
+        self.active_test_id = None
 
 
 def run_cases(cases, required_native_ids=()):
     result = unittest.TextTestRunner(verbosity=2, resultclass=ExecutionResult).run(unittest.TestSuite(cases))
     # unittest 把全 skip 当成功，但原生必验集合必须真正执行。逐个 required id 核对，
     # 既拒绝全 skip，也拒绝自定义 suite 未执行节点；失败用原退出码 1 向上传播。
-    skipped = {case.id() for case, _ in result.skipped}
-    executed = result.started_ids - skipped
+    executed = result.started_ids - result.skipped_ids
     if required_native_ids and not set(required_native_ids).issubset(executed):
         print("原生必验节点未实际执行或被 skip；不能作为 Windows 验收成功。", file=sys.stderr)
         return 1
@@ -182,13 +207,13 @@ def main():
     for _, tests in collected:
         for case in tests:
             cases.setdefault(case.id(), case)
-    native_requested = "windows-native" in args.selectors
+    native_requested = NATIVE_GROUPS.intersection(args.selectors)
     if native_requested and os.name != "nt":
-        print("windows-native 必须在真实 Windows 运行；未执行原生必验节点。", file=sys.stderr)
+        print("原生 Windows 组必须在真实 Windows 运行；未执行原生必验节点。", file=sys.stderr)
         return 1
     required_native_ids = set()
-    if native_requested:
-        for target in GROUPS["windows-native"]:
+    for group in native_requested:
+        for target in GROUPS[group]:
             required_native_ids.update(case.id() for case in resolved[target])
     return run_cases(cases.values(), required_native_ids)
 

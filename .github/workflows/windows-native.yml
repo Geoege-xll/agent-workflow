@@ -1,4 +1,4 @@
-name: Native Windows capability evidence
+name: Native Windows validation evidence
 
 on:
   push:
@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Capabilities produces evidence only; acceptance is blocked until native integration is ready'
+        description: 'Run the native libraries or the independent capability probe; complete acceptance is still blocked'
         type: choice
-        options: [capabilities, acceptance]
-        default: capabilities
+        options: [libraries, capabilities, acceptance]
+        default: libraries
         required: true
 
 permissions:
@@ -21,6 +21,9 @@ concurrency:
 
 jobs:
   capabilities:
+    # 探针已有独立证据。后续候选 push 只验证当前库阶段，避免每次修改重复探针；
+    # 保留显式模式供有诊断依据时复用原入口，不把此 job 绿色提升为原生验收。
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'capabilities'
     runs-on: windows-2025
     timeout-minutes: 10
     defaults:
@@ -96,10 +99,106 @@ jobs:
             ${{ runner.temp }}/awf-windows-capabilities-*/capabilities.json
           if-no-files-found: error
           retention-days: 14
-      - name: Block incomplete native acceptance
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'acceptance'
-        # 这个阶段尚未集成 FS/进程/TUI 完整验收；显式模式必须失败，避免 probe 绿色
-        # 被误读为 Win11 桌面验收。后续只由同一 owner 增补真实节点并解除此阻断。
+
+  libraries:
+    # 固定阶段选择只来自受控事件条件；不把 inputs 或 commit message 拼入 shell。
+    # 候选分支 push 能运行尚未进入默认分支的 workflow，无需依赖 dispatch 可见性。
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'libraries')
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+      - name: Run the fixed native library stage
+        env:
+          NATIVE_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
-          Write-Error 'Native acceptance is not implemented yet. Capability evidence is not a Windows 11 support PASS.'
+          $log = Join-Path $env:RUNNER_TEMP 'windows-native-libraries.log'
+          # 原始日志排他创建；任何失败均追加，不覆盖上一条输出或把启动失败算作 skip。
+          $stream = [System.IO.File]::Open($log, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+          $stream.Dispose()
+          $code = 1
+          try {
+            $PSVersionTable | Out-String | Tee-Object -FilePath $log -Append
+            if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell >= 7.0 is required.' }
+            $python = $env:NATIVE_PYTHON
+            if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
+            "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
+            "python_path=$python" | Tee-Object -FilePath $log -Append
+            $runtimeCheck = 'import platform,struct,sys; print(sys.version); print(platform.platform()); print("pointer_bits="+str(struct.calcsize("P")*8)); raise SystemExit(0 if sys.version_info >= (3,11) and struct.calcsize("P")==8 else 1)'
+            # PowerShell 7.0/7.2 仍采用 Legacy native argv 规则；源码内的引号不能
+            # 经 -c 参数传递。固定 ASCII 源码通过 stdin 输入 Python '-'，避免依赖
+            # 7.3+ 参数转义，同时完整记录实际输入，不增加临时脚本或 shell 求值。
+            "command=$python -I -B -X utf8 -" | Tee-Object -FilePath $log -Append
+            "stdin=$runtimeCheck" | Tee-Object -FilePath $log -Append
+            $runtimeCheck | & $python -I -B -X utf8 - 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "runtime_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The explicit Python must be >= 3.11 and x64.' }
+            # 库阶段只需 stdlib；自有 venv 不安装 curses、不修改全局解释器或 PATH。
+            $venv = Join-Path $env:RUNNER_TEMP 'awf-native-libraries-venv'
+            if (Test-Path -LiteralPath $venv) { throw 'The owned library virtual environment already exists.' }
+            "command=python -I -B -X utf8 -m venv --without-pip $venv" | Tee-Object -FilePath $log -Append
+            & $python -I -B -X utf8 -m venv --without-pip $venv 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "venv_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The owned library virtual environment could not be created.' }
+            $python = Join-Path $venv 'Scripts/python.exe'
+            # 所有测试临时文件均限制在本次 job 自有目录，沿用原测试清理责任；完整
+            # 命令日志保留在目录之外，失败后仍可上传，不触碰真实 HOME/state/业务项目。
+            $data = Join-Path $env:RUNNER_TEMP 'awf-native-libraries-data'
+            if (Test-Path -LiteralPath $data) { throw 'The owned library data directory already exists.' }
+            [System.IO.Directory]::CreateDirectory($data) | Out-Null
+            $env:TEMP = $data
+            $env:TMP = $data
+            $entry = Join-Path $env:GITHUB_WORKSPACE 'scripts/test_workflow.py'
+            "command=$python -I -B -X utf8 $entry --list windows-native-libraries" | Tee-Object -FilePath $log -Append
+            & $python -I -B -X utf8 $entry --list windows-native-libraries 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "selection_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The native library selection did not resolve every real node.' }
+            # YAML 只选固定组，方法清单唯一存在 Python GROUPS。runner 同时拒绝
+            # 缺失、未执行和方法/子场景 skip，不能把 mock 或全 skip 当成原生成功。
+            "command=$python -I -B -X utf8 $entry windows-native-libraries" | Tee-Object -FilePath $log -Append
+            & $python -I -B -X utf8 $entry windows-native-libraries 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "native_libraries_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode) { throw 'The native library runner did not provide an exit code.' }
+            $code = [int]$nativeCode
+          } catch {
+            $_ | Out-String | Tee-Object -FilePath $log -Append
+            $code = 1
+          } finally {
+            "workflow_exit_code=$code" | Add-Content -LiteralPath $log -Encoding utf8
+          }
+          exit $code
+      - name: Preserve complete native library evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-server-native-libraries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-native-libraries.log
+          if-no-files-found: error
+          retention-days: 14
+
+  acceptance:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'acceptance'
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - name: Block incomplete native acceptance
+        # 中央/TUI 真实节点尚未交接；独立阻断避免条件跳过 capabilities 后，显式
+        # acceptance 模式只剩 skip 而显示成功。Server 库证据也不是 Win11 桌面 PASS。
+        shell: pwsh
+        run: |
+          Write-Error 'Native acceptance is not implemented yet. Library or capability evidence is not a Windows 11 support PASS.'
           exit 1

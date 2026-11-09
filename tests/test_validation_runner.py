@@ -10,8 +10,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from contextlib import redirect_stderr
+from unittest.mock import patch
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -243,11 +245,35 @@ class ExampleTest(unittest.TestCase):
             def test_skip(self):
                 pass
 
+            def test_subtest_skip(self):
+                with self.subTest(stage="required-native-scenario"):
+                    self.skipTest("受控子场景 skip：父方法启动不能代表必验完整执行")
+
         with redirect_stderr(io.StringIO()):
             skipped = RequiredCase("test_skip")
             self.assertEqual(1, runner.run_cases([skipped], {skipped.id()}))
             actual = RequiredCase("test_ok")
             self.assertEqual(1, runner.run_cases([actual], {actual.id(), "required.but.not.executed"}))
+            skipped_child = RequiredCase("test_subtest_skip")
+            self.assertEqual(1, runner.run_cases([skipped_child], {skipped_child.id()}))
+            # 普通组仍遵循 unittest 的 skip 语义；只在原生必验集合加严，不改变
+            # 原 ci 或既有 portable 组的行为。
+            self.assertEqual(0, runner.run_cases([RequiredCase("test_subtest_skip")]))
+
+    def test_each_native_stage_rejects_non_windows_before_execution(self):
+        # 本例仅验证阶段选择不能绕过平台守卫，实际 Win32 能力由组合 Windows CI
+        # 验证。模拟的是 runner 的平台边界，不实例化平台后端或伪造原生成功。
+        spec = importlib.util.spec_from_file_location("validation_native_stage_contract", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        for group in ("windows-native-libraries", "windows-native"):
+            with self.subTest(group=group), redirect_stderr(io.StringIO()), \
+                    patch.object(runner, "os", SimpleNamespace(name="posix", chdir=lambda _: None)), \
+                    patch.object(sys, "argv", ["test_workflow.py", group]), \
+                    patch.object(runner, "load_target", return_value=[self]), \
+                    patch.object(runner, "run_cases") as execute:
+                self.assertEqual(1, runner.main())
+                execute.assert_not_called()
 
 
 if __name__ == "__main__":
