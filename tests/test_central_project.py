@@ -1571,9 +1571,27 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             environment = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state)}
             for name in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"):
                 environment.pop(name, None)
-            def invoke(*args):
-                return subprocess.run([sys.executable, "-I", "-B", "-X", "utf8", str(project / resources.LAUNCHER), *args],
-                                      cwd=project, env=environment, capture_output=True, timeout=40)
+            def invoke(*args, timeout=40):
+                command = [sys.executable, "-I", "-B", "-X", "utf8", str(project / resources.LAUNCHER), *args]
+                # 默认 check/read/helper 仍为40秒。仅下方实际写图 init 显式
+                # 使用150秒外层验收预算：既有生产子预算120秒＋自举余量30秒。
+                # 记录实际argv/耗时/退出，不重试、不吞超时，也不改生产预算。
+                observed = timeout != 40
+                started, outcome = time.monotonic(), "exception"
+                if observed:
+                    print("NATIVE_CENTRAL_INVOKE " + json.dumps({"command": command, "outer_timeout_s": timeout,
+                          "helper_timeout_s": 120}, ensure_ascii=False, sort_keys=True), flush=True)
+                try:
+                    result = subprocess.run(command, cwd=project, env=environment, capture_output=True, timeout=timeout)
+                    outcome = result.returncode
+                    return result
+                except subprocess.TimeoutExpired:
+                    outcome = "outer_timeout"
+                    raise
+                finally:
+                    if observed:
+                        print("NATIVE_CENTRAL_INVOKE_RESULT " + json.dumps({"outer_timeout_s": timeout,
+                              "elapsed_s": round(time.monotonic() - started, 3), "exit": outcome}, sort_keys=True), flush=True)
             checked = invoke("check")
             if checked.returncode:
                 # 原调用与其FAIL必须保留。此额外只读进程仍经同一-I薄入口完整
@@ -1639,7 +1657,7 @@ finally:
             decision_path, graph_path = project / "native-init-decisions.json", project / "native-enabled-task.json"
             decision_path.write_text(json.dumps(init_decisions, ensure_ascii=False), encoding="utf-8")
             initialized = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "init",
-                                 "--root", str(project), "--input", str(decision_path), "--output", str(graph_path))
+                                 "--root", str(project), "--input", str(decision_path), "--output", str(graph_path), timeout=150)
             self.assertEqual(0, initialized.returncode, initialized.stdout + initialized.stderr)
             self.assertTrue(graph_path.is_file())
             summary, graph_body = json.loads(initialized.stdout), graph_path.read_bytes()
