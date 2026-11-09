@@ -101,12 +101,20 @@ GROUPS["windows-native-central"] = (
 GROUPS["windows-native-central-repair"] = (
     "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
 )
+# HTML 阶段单独验证真实 Node 消费者的固定源码/vendor 字节、junction 拒绝及
+# Job 后代收尾；仅使用现有 Node >=20 和 stdlib，不引入 curses 或第二套清单。
+# 方法名来自 renderer owner 的冻结接入合同；组合源码缺失仍须真实导入失败。
+GROUPS["windows-native-renderer"] = (
+    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_render_check_preserves_source_and_vendor_bytes",
+    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_stage_and_home_junctions_are_rejected",
+    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_node_timeout_terminates_descendants",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
 NATIVE_GROUPS = frozenset((
     "windows-native-libraries", "windows-native-repair", "windows-native-central",
-    "windows-native-central-repair", "windows-native",
+    "windows-native-central-repair", "windows-native-renderer", "windows-native",
 ))
 
 
