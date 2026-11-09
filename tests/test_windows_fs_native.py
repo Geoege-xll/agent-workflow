@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -65,6 +66,46 @@ def native_policy_observation(policy):
             "owner_sid_sha256": hashlib.sha256(policy.owner).hexdigest(), "security_sha256": policy.fingerprint}
 
 
+def _native_clone_observation(handle, *, label):
+    """只读同一真实 HANDLE 的权限、SDDL 与元数据，不改变 ACL 或文件游标。
+
+    SDDL 由当前 GetSecurityInfo 返回的 SD 转换，绝不写死预期权限。动态 SID
+    仅在显示串中稳定标记，原 SDDL/ACL/有序 ACE 的摘要仍来自未改写原字节，
+    因而不同主体、ACE 顺序和继承 flags 都不会被显示脱敏误当成相等。
+    """
+    before, security = fs._metadata(handle)
+    information, basic = fs._information(handle), fs._basic_information(handle)
+    api = fs._api()
+    convert = api.security.ConvertSecurityDescriptorToStringSecurityDescriptorW
+    convert.restype = fs.BOOL
+    convert.argtypes = [fs.HANDLE, fs.DWORD, fs.DWORD, ctypes.POINTER(ctypes.c_wchar_p), ctypes.POINTER(fs.DWORD)]
+    with fs._security_policy(handle) as policy:
+        pointer = ctypes.c_wchar_p()
+        try:
+            fs._check(convert(policy.descriptor, 1, 5, ctypes.byref(pointer), None))
+            if pointer.value is None:
+                raise ValueError("native SDDL conversion returned no descriptor")
+            sddl = pointer.value
+        finally:
+            if pointer:
+                api.kernel.LocalFree(ctypes.cast(pointer, fs.HANDLE))
+        result = native_policy_observation(policy)
+        result.update(label=label, identity=list(before), file_attributes=int(information.attributes),
+                      basic={name: int(getattr(basic, name)) for name in ("created", "accessed", "modified", "changed", "attributes")},
+                      dacl_key_sha256=hashlib.sha256(policy.dacl_key).hexdigest(),
+                      acl_sha256=hashlib.sha256(policy.acl_bytes).hexdigest(),
+                      sddl_sha256=hashlib.sha256(sddl.encode("utf-8")).hexdigest(),
+                      sddl_sid_marked=re.sub(r"S-\d+(?:-\d+)+", lambda match:
+                                             "<SID-SHA256:" + hashlib.sha256(match.group().encode()).hexdigest() + ">", sddl),
+                      control_flags={name: bool(policy.control & mask) for name, mask in
+                                     (("PROTECTED", 0x1000), ("AUTO_INHERITED", 0x400), ("AUTO_REQ", 0x100))})
+    after, after_security = fs._metadata(handle)
+    if (before != after or security != after_security or result["security_sha256"] != security
+            or fs._information(handle).attributes != information.attributes):
+        raise ValueError("native clone observation changed while reading its handle: " + label)
+    return result
+
+
 def native_skill_observation(path, skill_name):
     """沿真实 no-follow 句柄观测 Skill 的七标量、raw basic 属性及安全事实。"""
     with fs.Directory(Path(path).parent):
@@ -118,6 +159,139 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             if descriptor.value:
                 fs._api().kernel.LocalFree(descriptor)
             fs._close(handle)
+
+    def test_same_parent_external_config_permission_copy_preserves_exact_security(self):
+        """最小真实证明：默认外部配置与同父 stage 的 DACL 克隆必须精确保留。"""
+        api = fs._api()
+        original_copy, original_set = fs._copy_permissions, api.security.SetSecurityInfo
+        points = {}
+        def emit(event, value):
+            # 每个时点立即输出并 flush；原生调用/精确断言失败后，stdout 与
+            # unittest 的原始 stderr 都由诊断 job 保留，报告生成本身不算通过。
+            print("NATIVE_SAME_PARENT_ACL_TRACE " + json.dumps({"event": event, "value": value}, sort_keys=True), flush=True)
+        def record(label, observe, original_error=None):
+            try:
+                value = observe()
+                emit(label, value)
+                return value
+            except BaseException as observation_error:
+                emit(label + ".observation_error", {"type": type(observation_error).__name__, "message": str(observation_error)})
+                if original_error is None:
+                    raise
+                # 诊断读取也可能失败：保留原复制异常及其 traceback，不用日志
+                # 采样失败覆盖第一故障；附注仍明确暴露缺失的诊断证据。
+                original_error.add_note(label + " observation failed: " + repr(observation_error))
+                return None
+        workspace = fs.secure_os._directories[self.parent]
+        record("T0.workspace-before-project", lambda: _native_clone_observation(workspace.handle, label="workspace"))
+        project = self.root / "external-project"
+        project.mkdir()
+        host = project / ".codex"
+        host.mkdir()
+        source, stage_name = host / "config.toml", ".agent-workflow-central-" + "f" * 32 + "-26.stage"
+        target = host / stage_name
+        parent = fs.secure_os.open(host, fs.DIRECTORY | fs.NOFOLLOW)
+        try:
+            directory = fs.secure_os._directories[parent]
+            with fs.Directory(project) as root:
+                def file_observation(name):
+                    try:
+                        handle = fs._open_handle(directory.child(name), fs.READ, sharing=fs.SHARE_READ)
+                    except FileNotFoundError:
+                        return None
+                    try:
+                        value = _native_clone_observation(handle, label=name)
+                        node = fs._opened_snapshot(handle, max_bytes=fs._LIMIT)
+                        self.assertEqual(value["identity"], list(node["identity"]))
+                        self.assertEqual(value["security_sha256"], node["security"])
+                        value["payload_sha256"] = hashlib.sha256(node["payload"]).hexdigest()
+                        return value
+                    finally:
+                        fs._close(handle)
+                def phase():
+                    return {"workspace": _native_clone_observation(workspace.handle, label="workspace"),
+                            "root": _native_clone_observation(root.handle, label="root"),
+                            "parent": _native_clone_observation(directory.handle, label="parent"),
+                            "source": file_observation(source.name), "target": file_observation(stage_name)}
+                points["T0"] = record("T0.before-source", phase)
+                # 与失败准备步骤一致：root/.codex/config 完全走 stdlib 默认
+                # 创建，不提前设私有 DACL，也不主动重写任何祖先的继承策略。
+                source.write_bytes(b"# existing user config\n")
+                points["T1"] = record("T1.external-source-created", phase)
+                source_mode = stat.S_IMODE(points["T1"]["source"]["identity"][2])
+                descriptor = fs.secure_os.open(stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | fs.NOFOLLOW,
+                                                0o600, dir_fd=parent)
+                with fs.secure_os.fdopen(descriptor, "wb") as stream:
+                    stream.write(b"# existing user config\n# approved staged update\n")
+                    stream.flush()
+                    fs.secure_os.fchmod(stream.fileno(), source_mode)
+                    fs.secure_os.fsync(stream.fileno())
+                points["T2"] = record("T2.private-stage-written-and-closed", phase)
+                def traced_set(*args):
+                    emit("SetSecurityInfo.request", {"object_type": int(args[1]), "security_information": int(args[2])})
+                    # 原始 ctypes 函数执行真实系统调用；只记录实际返回码，
+                    # 不改参数、不模拟成功、不补一次不同 flags 的重试。
+                    result = original_set(*args)
+                    emit("SetSecurityInfo.result", {"return_code": int(result)})
+                    return result
+                def traced_copy(source_handle, target_handle, **kwargs):
+                    record("copy.same-handle.before", lambda: {
+                        "source": _native_clone_observation(source_handle, label="copy-source"),
+                        "target": _native_clone_observation(target_handle, label="copy-target"),
+                        "parent": _native_clone_observation(directory.handle, label="copy-parent")})
+                    error = None
+                    try:
+                        return original_copy(source_handle, target_handle, **kwargs)
+                    except BaseException as exc:
+                        error = exc
+                        emit("copy.original-error", {"type": type(exc).__name__, "message": str(exc)})
+                        raise
+                    finally:
+                        record("copy.same-handle.after", lambda: {
+                            "source": _native_clone_observation(source_handle, label="copy-source"),
+                            "target": _native_clone_observation(target_handle, label="copy-target"),
+                            "parent": _native_clone_observation(directory.handle, label="copy-parent")}, error)
+                failure = None
+                try:
+                    with patch.object(fs, "_copy_permissions", new=traced_copy), \
+                            patch.object(api.security, "SetSecurityInfo", new=traced_set):
+                        fs.copy_permissions(source, target)
+                except BaseException as exc:
+                    failure = exc
+                finally:
+                    points["T3"] = record("T3.after-real-copy-including-failure", phase, failure)
+                    emit("copy.outcome", {"original_error": type(failure).__name__ if failure else None})
+                try:
+                    self.assertIsNotNone(points["T3"], "失败后的真实权限证据不可缺失")
+                    source_fields = ("identity", "file_attributes", "security_sha256", "control", "dacl_key_sha256",
+                                     "owner_sid_sha256", "aces", "payload_sha256")
+                    for point in ("T2", "T3"):
+                        for key in source_fields:
+                            self.assertEqual(points["T1"]["source"][key], points[point]["source"][key], "source." + key)
+                    for point in ("T1", "T2", "T3"):
+                        for label in ("workspace", "root", "parent"):
+                            # 自己创建 config/stage 必然可能更新目录时间；记录
+                            # 全部原值，但只以目录原身份和真实安全事实判稳定。
+                            self.assertEqual(points["T0"][label]["identity"][:2], points[point][label]["identity"][:2])
+                            self.assertEqual(points["T0"][label]["security_sha256"], points[point][label]["security_sha256"])
+                    before, after = points["T2"]["target"], points["T3"]["target"]
+                    self.assertEqual(before["identity"][:2], after["identity"][:2])
+                    self.assertEqual(before["identity"][3:6], after["identity"][3:6])
+                    for key in ("payload_sha256", "file_attributes", "owner_sid_sha256"):
+                        self.assertEqual(before[key], after[key], "stage." + key)
+                except BaseException as invariant_error:
+                    if failure is not None:
+                        failure.add_note("post-copy preservation assertion failed: " + repr(invariant_error))
+                        raise failure from invariant_error
+                    raise
+                if failure is not None:
+                    raise failure
+                # 不能把“生成了诊断日志”当作复制成功；正常返回也必须逐项
+                # 证明有序 ACE 原字节、控制位与 DACL 语义摘要完全等于原源。
+                for key in ("control", "dacl_key_sha256", "aces"):
+                    self.assertEqual(points["T1"]["source"][key], after[key], "exact-clone." + key)
+        finally:
+            fs.secure_os.close(parent)
 
     def test_anchored_state_stage_close_races_preserve_foreign_nodes(self):
         """真实 write_state 在写句柄关闭处遭遇改写/换 inode/ACL 源变化均保全现场。"""
