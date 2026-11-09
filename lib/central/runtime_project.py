@@ -864,7 +864,16 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
     from lib.central.role_preferences import resolve
     from lib.hosts.claude_options import parse as parse_claude
     source = resources.read(f"roles/{role}.md").decode("utf-8", errors="strict")
-    match = re.search(r"(?m)^description:\s*(.+)$", source)
+    # 只给 frontmatter 解析建立 CRLF/LF 等价的内存语法视图；Resources 与
+    # 固定核心仍保存原始字节和 SHA。bare CR 不当成分隔符，正文里的同名字段
+    # 也不能补齐、覆盖或扩大工具声明。三宿主只使用这一份已验证的权限结果。
+    syntax = source.replace("\r\n", "\n")
+    front, separator, _ = syntax.partition("\n---\n")
+    declared = re.findall(r"(?m)^toolsets:[ \t]*(.*)$", front)
+    toolset = re.fullmatch(r"\[[ \t]*(read|write)[ \t]*\]", declared[0]) if len(declared) == 1 else None
+    if not syntax.startswith("---\n") or not separator or "\r" in front or toolset is None:
+        raise ProjectRuntimeError("角色缺少唯一受支持的 toolsets 声明")
+    match = re.search(r"(?m)^description:[ \t]*(.+)$", front)
     description = match[1].strip().strip('"') if match else role
     models = parse_models(config.decode())
     # 全局默认属于可变用户状态，不写回项目适配器，更不写入固定核心。这里仅
@@ -892,11 +901,6 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
         instructions += ("On Windows use only the native isolated bridge above from PowerShell 7.0+. "
                          "Translate any Bash source/POSIX helper example to the same logical lib/*.py via this pin's helper command; "
                          "never execute Bash or copy Skills/helpers into this thin project. Skill links remain discovery only.\n")
-    front, separator, _ = source.partition("\n---\n")
-    declared = re.findall(r"(?m)^toolsets:[ \t]*(.*)$", front)
-    toolset = re.fullmatch(r"\[\s*(read|write)\s*\]", declared[0]) if len(declared) == 1 else None
-    if not source.startswith("---\n") or not separator or toolset is None:
-        raise ProjectRuntimeError("角色缺少唯一受支持的 toolsets 声明")
     if host == "codex":
         fields = [f'name = {json.dumps(role)}', f'description = {json.dumps(description, ensure_ascii=False)}']
         if settings.get("model", "inherit") != "inherit":
@@ -913,15 +917,9 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
         return header.encode() + payload
     fields = ["---", f"name: {role}", "description: " + json.dumps(description, ensure_ascii=False)]
     if host == "claude":
-        # 当前静态角色原文只声明 [read] 或 [write]。明确沿用旧 setup_claude
-        # 的对应工具列表，不能省略 tools 后让 QA 继承父会话的 Edit/Write/MCP。
-        # 只解析已读取原文的 frontmatter，不执行来源脚本，也不新增核心依赖；
-        # 缺失、重复、混合或未知策略失败关闭，不能沿旧 Shell 的兜底扩大为 write。
-        front, separator, _ = source.partition("\n---\n")
-        declared = re.findall(r"(?m)^toolsets:[ \t]*(.*)$", front)
-        toolset = re.fullmatch(r"\[\s*(read|write)\s*\]", declared[0]) if len(declared) == 1 else None
-        if not source.startswith("---\n") or not separator or toolset is None:
-            raise ProjectRuntimeError("Claude 角色缺少唯一受支持的 toolsets 声明")
+        # 共用上方唯一 frontmatter/toolsets 结果，沿用既定 Claude 工具列表；
+        # 不省略 tools，不让只读角色继承父会话的 Edit/Write/MCP，不按宿主
+        # 再次解析或为未知声明回退 write。Antigravity 的既有角色白名单也不变。
         tools = "Read, Grep, Glob, Bash, Skill" if toolset[1] == "read" else "Read, Grep, Glob, Bash, Edit, Write, Skill"
         fields.extend(["model: " + json.dumps(settings.get("model", "inherit")), "tools: " + tools,
                        "permissionMode: default", "disallowedTools: Agent"])

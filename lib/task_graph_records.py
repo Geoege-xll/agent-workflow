@@ -506,8 +506,10 @@ def _scratch_keep_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
 def _scratch_metadata(info) -> tuple[int, ...]:
     """只描述元数据身份，不读取内容，也不把摘要称为文件内容 SHA。
 
-    Windows 后端的 ctime 是创建时间；它只是快照中的一个字段，不能充当 NTFS
-    changeTime。双方均依赖调用者先停止写者；保留时间戳的非协作写入不在保证内。
+    Windows platform_fs 的 st_ctime_ns 投影真实 NTFS ChangeTime；权限仍须
+    独立 ACL/security 见证，不能由时间戳代替。该 scratch 元数据清单不是完整
+    Node/ACL 的条件操作授权；双方仍依赖调用者先停止写者，不承诺不可观察的
+    同字节历史写或保留时间戳的非协作写入检测。
     """
     return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size,
             info.st_mtime_ns, info.st_ctime_ns, getattr(info, "st_file_attributes", 0))
