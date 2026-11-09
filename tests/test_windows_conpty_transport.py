@@ -7,13 +7,18 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import queue
+import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
+from unittest.mock import Mock, patch
 
-from lib.install.windows_process import WindowsJobProcess, WindowsProcessCancelled
+from lib.install import windows_process as win
+from lib.install.windows_process import WindowsJobCleanupError, WindowsJobProcess, WindowsProcessCancelled
 from tests.windows_conpty import COORD, ConPTYProcess, _size, _timeout, _validate_launch
 
 
@@ -52,6 +57,45 @@ class PortableConPTYContractTest(unittest.TestCase):
             with self.subTest(handle=handle), self.assertRaises(ValueError):
                 WindowsJobProcess([sys.executable], pseudoconsole=handle)
 
+    def test_job_failure_survives_repeated_close_and_conpty_releases_only_io(self):
+        # 复用既有 Win32 测试替身控制“累计 2、只持有 1”的已证原生失败，验证
+        # 实际 Job/ConPTY owner 的生命周期，不把替身结果声称为原生附着成功。
+        from tests.test_install_process_windows import FakeWin32
+        api = FakeWin32(total=2)
+        api.after_stop = [0]
+        with patch.object(win, "_Win32API", return_value=api):
+            owner = WindowsJobProcess([sys.executable])
+        channel = ConPTYProcess.__new__(ConPTYProcess)
+        channel._process, channel._closed, channel._closing = owner, False, False
+        channel._api = Mock()
+        channel._api.CloseHandle.return_value = True
+        channel._console, channel._input, channel._output_handle = (
+            ctypes.c_void_p(value) for value in (710, 711, 712))
+        channel._reader = channel._writer = channel._closer = None
+        channel._requests = queue.Queue()
+        previous = signal.getsignal(signal.SIGINT)
+        try:
+            with self.assertRaises(WindowsJobCleanupError) as first:
+                owner.wait(timeout=0)
+            for action in (channel.close, channel.close, owner.close, owner.stop, owner.wait):
+                with self.subTest(action=action.__qualname__), self.assertRaises(WindowsJobCleanupError) as caught:
+                    action()
+                self.assertIs(caught.exception, first.exception)
+                self.assertTrue(owner.closed)
+                self.assertFalse(owner._quiescent)
+                self.assertTrue(channel.closed)
+            self.assertEqual(api.events.count("terminate_job"), 1)
+            self.assertEqual(api.closed.count(100), 1)
+            self.assertEqual(api.closed.count(200), 1)
+            channel._api.ClosePseudoConsole.assert_called_once_with(710)
+            self.assertEqual(channel._api.CloseHandle.call_count, 2)
+            self.assertIsNone(channel._console.value)
+            self.assertIsNone(channel._input.value)
+            self.assertIsNone(channel._output_handle.value)
+        finally:
+            # 致命生产路径故意忽略后续 SIGINT；测试只还原自己的解释器信号。
+            signal.signal(signal.SIGINT, previous)
+
 
 # 子程序只操作自己在 ConPTY 中获得的标准 console handles。父 runner 不调用
 # SetConsoleMode/AttachConsole/GenerateConsoleCtrlEvent，因此不会触碰用户终端模式。
@@ -74,6 +118,66 @@ def set_mode(handle, value):
     if not K.SetConsoleMode(handle, value):
         raise ctypes.WinError(ctypes.get_last_error())
 signal.signal(signal.SIGINT, signal.default_int_handler)
+"""
+
+
+# 诊断结果经任务临时文件传回，不能依赖正在排查的 stdout 路由。独立 CONOUT$
+# 写入只用于区分“控制台已附着但标准句柄错误”与“根本没有控制台”；不重设
+# 标准句柄、不为生产入口补丁，也不改变其环境或解释器。短暂握手让父进程
+# 有机会在正常 wait 内保留真实 payload 句柄，仅用于诊断，不是终止证明方案。
+CONSOLE_DIAGNOSTIC_CHILD = r"""
+import ctypes, json, os, pathlib, sys, time
+K = ctypes.WinDLL('kernel32', use_last_error=True)
+H, D = ctypes.c_void_p, ctypes.c_uint32
+for name, args, result in (
+    ('GetStdHandle', [D], H), ('GetFileType', [H], D),
+    ('GetConsoleMode', [H, ctypes.POINTER(D)], ctypes.c_int32),
+    ('CreateFileW', [ctypes.c_wchar_p, D, D, H, D, D, H], H),
+    ('WriteFile', [H, H, D, ctypes.POINTER(D), H], ctypes.c_int32),
+    ('CloseHandle', [H], ctypes.c_int32)):
+    fn = getattr(K, name)
+    fn.argtypes, fn.restype = args, result
+def describe(handle):
+    ctypes.set_last_error(0)
+    file_type = K.GetFileType(handle)
+    file_error = ctypes.get_last_error()
+    value = D()
+    ctypes.set_last_error(0)
+    ok = bool(K.GetConsoleMode(handle, ctypes.byref(value)))
+    return {'handle': handle, 'file_type': file_type, 'file_error': file_error,
+            'console_mode_ok': ok, 'console_mode': value.value,
+            'console_mode_error': ctypes.get_last_error()}
+data = {'pid': os.getpid(), 'ppid': os.getppid(), 'executable': sys.executable,
+        'base_executable': getattr(sys, '_base_executable', None),
+        'prefix': sys.prefix, 'base_prefix': sys.base_prefix, 'version': list(sys.version_info[:3]),
+        'standard': {name: describe(K.GetStdHandle(D(number).value))
+                     for name, number in (('stdin', -10), ('stdout', -11), ('stderr', -12))}}
+data['console_devices'] = {}
+for name in ('CONIN$', 'CONOUT$'):
+    ctypes.set_last_error(0)
+    handle = K.CreateFileW(name, 0xc0000000, 3, None, 3, 0x80, None)
+    if handle in (None, 0, H(-1).value):
+        data['console_devices'][name] = {'open_error': ctypes.get_last_error()}
+        continue
+    try:
+        item = data['console_devices'][name] = describe(handle)
+        if name == 'CONOUT$':
+            marker = b'AWF_DIAGNOSTIC_CONOUT\r\n'
+            count = D()
+            item['write_ok'] = bool(K.WriteFile(handle, marker, len(marker), ctypes.byref(count), None))
+            item['write_count'], item['write_error'] = count.value, ctypes.get_last_error()
+    finally:
+        K.CloseHandle(handle)
+report = pathlib.Path(sys.argv[1])
+pending = report.with_suffix('.pending')
+pending.write_text(json.dumps(data), encoding='utf-8')
+pending.replace(report)
+print('AWF_DIAGNOSTIC_STDOUT', flush=True)
+release = pathlib.Path(sys.argv[2])
+deadline = time.monotonic() + 8
+while not release.exists() and time.monotonic() < deadline:
+    time.sleep(.01)
+time.sleep(.25)
 """
 
 
@@ -106,12 +210,14 @@ class NativeConPTYTransportTest(unittest.TestCase):
         return [sys.executable, "-I", "-B", "-X", "utf8", "-u", "-c",
                 textwrap.dedent(code), *arguments]
 
-    def record(self, process, label):
+    def record(self, process, label, *, diagnostic=None):
         # base64 保存每个 VT/UTF-8 原字节，避免终端控制序列修改 runner 日志的显示。
         # 只记录本夹具 argv，不展开继承环境；可选 process.log 沿用既有 CI 证据入口。
         entry = {"kind": "conpty", "test": self.id(), "label": label, "argv": process.args,
                  "pid": process.pid, "exit": process.returncode, "closed": process.closed,
                  "raw_base64": base64.b64encode(process.raw_output).decode("ascii")}
+        if diagnostic is not None:
+            entry["diagnostic"] = diagnostic
         line = json.dumps(entry, ensure_ascii=False)
         print("\n[conpty evidence] " + line, flush=True)
         target = os.environ.get("AWF_TEST_EVIDENCE_LOG")
@@ -141,6 +247,36 @@ class NativeConPTYTransportTest(unittest.TestCase):
         if not self.kernel.GetProcessHandleCount(self.kernel.GetCurrentProcess(), ctypes.byref(count)):
             raise ctypes.WinError(ctypes.get_last_error())
         return count.value
+
+    def test_native_interpreter_and_standard_handle_diagnostics(self):
+        # 基础解释器只作对照；全部既有原生验收仍从 sys.executable（生产 venv
+        # 入口）启动。路径由当前运行时提供，并核对真实文件与 base_prefix，不能
+        # 从 PATH 搜索一个“能绿”的 Python，也不加载/打印用户环境和业务文件。
+        base = Path(sys._base_executable).resolve(strict=True)
+        self.assertTrue(os.path.samefile(base, Path(sys.base_prefix) / Path(sys.executable).name))
+        for label, executable in (("production-entry", Path(sys.executable)), ("base-comparison", base)):
+            with self.subTest(entry=label):
+                report, release = self.root / (label + ".json"), self.root / (label + ".release")
+                argv = self.argv(CONSOLE_DIAGNOSTIC_CHILD, str(report), str(release))
+                argv[0] = str(executable)
+                process = ConPTYProcess(argv, cwd=self.root, env=self.env)
+                data = None
+                try:
+                    deadline = time.monotonic() + 8
+                    while not report.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(report.exists(), "诊断 child 未写入任务临时 JSON")
+                    data = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertTrue(os.path.samefile(data["executable"], executable))
+                    self.assertEqual(data["version"], list(sys.version_info[:3]))
+                    release.touch()
+                    self.assertEqual(process.wait(), 0)
+                finally:
+                    try:
+                        process.close()
+                    finally:
+                        # 即使 Job 屏障拒绝，也把已有身份/句柄投影保留到原日志。
+                        self.record(process, label, diagnostic=data)
 
     def test_native_utf8_input_and_vt_output(self):
         literal = "中文 e\u0301 🧪 & !"

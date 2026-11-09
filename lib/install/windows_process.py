@@ -272,6 +272,11 @@ class WindowsJobProcess:
         self._assigned = False
         self._resumed = False
         self._quiescent = False
+        # 句柄释放与“所有成员均已结束”是两个独立事实。证明失败必须永久归本
+        # owner 所有；close 后不能因句柄已清空再查询 Win32，更不能把失败改成成功。
+        self._closed = False
+        self._cleanup_error = None
+        self._stop_attempted = False
         # 只在本 owner 生命周期内持有成员真实句柄。累计成员数用于证明捕获完整性，
         # 不能把当前 PID 清单/ActiveProcesses=0 当作历史成员均已 signaled 的屏障。
         self._members = {}
@@ -406,6 +411,11 @@ class WindowsJobProcess:
     def pid(self):
         return self._process.dwProcessId
 
+    @property
+    def closed(self):
+        """本 owner 的句柄已释放；不等同于 Job 归零证明成功。"""
+        return self._closed
+
     def _member_identity(self, pid, handle):
         associated = BOOL()
         self._check(self._api.IsProcessInJob(handle, self._job, ctypes.byref(associated)),
@@ -475,6 +485,17 @@ class WindowsJobProcess:
         return self.returncode
 
     def wait(self, timeout=None):
+        if self._cleanup_error is not None:
+            raise self._cleanup_error
+        try:
+            return self._wait_for_job(timeout)
+        except WindowsJobCleanupError as error:
+            self._cleanup_error = error
+            raise
+
+    def _wait_for_job(self, timeout=None):
+        # 仅 stop 首次收尾可以在已有失败后继续尝试终止；公开 wait 始终保留
+        # 最初的证明失败。内部等待仍执行原累计计数与逐真实句柄 signaled 屏障。
         if self._quiescent:
             return self.returncode
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -504,7 +525,8 @@ class WindowsJobProcess:
                 confirmed = self._accounting()
                 if confirmed.ActiveProcesses == 0 and confirmed.TotalProcesses == len(self._members):
                     result = self._root_exitcode()
-                    self._quiescent = True
+                    if self._cleanup_error is None:
+                        self._quiescent = True
                     return result
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
@@ -512,9 +534,12 @@ class WindowsJobProcess:
             time.sleep(0.02 if remaining is None else min(0.02, remaining))
 
     def stop(self):
+        if self._cleanup_error is not None and (self._closed or self._stop_attempted):
+            raise self._cleanup_error
         if self._quiescent:
             return
         with _ignore_interrupts():
+            self._stop_attempted = True
             try:
                 try:
                     self._capture_members()
@@ -524,11 +549,17 @@ class WindowsJobProcess:
                     self._check(self._api.TerminateJobObject(self._job, 1), "Terminate setup Job Object")
                 # TerminateJobObject is asynchronous: a root-process wait alone
                 # is insufficient. Do not give recovery an arbitrary grace timer.
-                self.wait()
+                self._wait_for_job()
             except BaseException as exc:
-                raise WindowsJobCleanupError(
-                    "Cannot confirm the Windows setup Job is empty; filesystem recovery was not started"
-                ) from exc
+                # 第一次失败才决定终态；后续清理异常只属于这一失败的收尾，不能
+                # 用 InvalidHandle 或另一个包装错误替换最初累计成员缺口的证据。
+                if self._cleanup_error is None:
+                    self._cleanup_error = WindowsJobCleanupError(
+                        "Cannot confirm the Windows setup Job is empty; filesystem recovery was not started"
+                    )
+                    self._cleanup_error.__cause__ = exc
+            if self._cleanup_error is not None:
+                raise self._cleanup_error
 
     def communicate(self, body=None, timeout=None, cancel_file=None):
         """并行排空原字节管道；所有等待共用一次 deadline，不能因轮询重置预算。"""
@@ -646,11 +677,16 @@ class WindowsJobProcess:
 
     def close(self):
         with _ignore_interrupts():
+            if self._closed:
+                if self._cleanup_error is not None:
+                    raise self._cleanup_error
+                return
             try:
                 if not self._quiescent:
                     self.stop()
             finally:
                 self._close_handles()
+                self._closed = True
 
 
 def supervise_hook(command, parent_pid, parent_created, deadline):

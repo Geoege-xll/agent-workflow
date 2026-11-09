@@ -12,7 +12,7 @@ import threading
 import time
 
 from lib.install.windows_process import (
-    WindowsJobProcess, WindowsProcessCancelled, _defer_interrupts, _ignore_interrupts,
+    WindowsJobCleanupError, WindowsJobProcess, WindowsProcessCancelled, _defer_interrupts, _ignore_interrupts,
 )
 
 
@@ -294,9 +294,10 @@ class ConPTYProcess:
     def wait(self, *, timeout=10):
         deadline = _timeout(timeout)
         if self._cancelled:
+            self.close()  # 取消不能盖过唯一 Job owner 已记录的致命终止证明失败。
             raise WindowsProcessCancelled()
         if self._closed:
-            return self.returncode
+            return self._process.wait()
         while True:
             self._check_output()
             remaining = deadline - time.monotonic()
@@ -343,12 +344,29 @@ class ConPTYProcess:
 
     def _close(self):
         if self._closed:
+            if self._process is not None:
+                self._process.close()
             return
         self._closing = True
         # 先让唯一 Job owner 证明所有 child 结束，保持输出 drain 存活；否则旧版
         # Windows 的 ClosePseudoConsole 会因输出管道已满而阻塞当前线程。
+        job_error = None
         if self._process is not None:
-            self._process.close()
+            try:
+                self._process.close()
+            except WindowsJobCleanupError as error:
+                # Job 已执行一次终止并释放自身句柄，致命终态仍由它保存。通道
+                # 必须继续释放自己的 HPCON/I/O，最后原样传播该失败；不自行
+                # 操作 Job 私有字段，也不把 HPCON 关闭当成后代结束的替代证明。
+                job_error = error
+        try:
+            self._close_io()
+        finally:
+            if job_error is not None:
+                raise job_error
+
+    def _close_io(self):
+        """只释放通道拥有的 HPCON、I/O 线程与管道，不判断 Job 生命周期。"""
         self._requests.put(None)
         deadline = time.monotonic() + 5
         self._join_io(self._writer, deadline)
