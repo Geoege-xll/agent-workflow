@@ -22,11 +22,11 @@ from typing import Any
 
 if __package__:
     from lib import runtime_store as store
-    from .standard_paths import builtin_source_path
+    from .standard_paths import BUILTIN_STANDARD_SOURCES, builtin_source_path
     from lib.hosts.claude_instructions import read_file
 else:
     import runtime_store as store
-    from standard_paths import builtin_source_path
+    from standard_paths import BUILTIN_STANDARD_SOURCES, builtin_source_path
     from lib.hosts.claude_instructions import read_file
 
 
@@ -97,12 +97,14 @@ def _central_context(root: Path) -> bool:
 
 
 def record_binding(record: dict[str, Any], *, root: Path | None = None,
-                   initialize: bool = False) -> dict | None:
+                   initialize: bool = False, reader=None) -> dict | None:
     """解析 schema 2 图／单包的固定版本；仅新建时允许从桥环境投影 pin。
 
     既有记录缺 pin 时不能采用环境当前版。已有 pin 与桥执行版必须相同，未知／损坏
     版本直接由内容库拒绝。源包和旧自包含安装在没有中央上下文时保持无 pin 行为。
     """
+    if reader is not None and not isinstance(reader, store.CoreReadSession):
+        raise RuntimePinError("任务 pin 拒绝未知核心 reader")
     selected_root = project_root(root)
     environment = environment_binding()
     if "runtime_binding" in record:
@@ -115,7 +117,9 @@ def record_binding(record: dict[str, Any], *, root: Path | None = None,
         return None
     if environment is not None and binding != environment:
         raise RuntimePinError("任务 runtime_binding 与桥执行版本冲突")
-    core = store.load_core(binding)
+    # 默认调用仍完整 fresh load；只有本次源读取显式持有的活跃 reader 可
+    # 复用其已锚定证明。错误版本/state/已关闭对象不能静默回退或接受环境根。
+    core = reader.core_for(binding) if reader is not None else store.load_core(binding)
     supplied_core = os.environ.get(CORE_ENV)
     if supplied_core is not None and Path(supplied_core).absolute() != core.root:
         raise RuntimePinError("桥核心根与任务固定内容库版本不一致")
@@ -170,10 +174,20 @@ def task_pack_binding(path: Path, *, root: Path | None = None) -> dict | None:
     return record_binding(pack, root=root)
 
 
+@contextmanager
+def _source_reader(binding: dict):
+    """单次读取校验 pin/桥三根并锚定核心；不跨 catalog、指纹或提交阶段复用。"""
+    with store.core_reader(store.validate_binding(binding)) as reader:
+        # 仍走同一 pin、项目根、CORE_ENV/CONFIG_ENV 守卫；只消除原函数中
+        # record_binding→load_core→read_core_source 三次验证同一核心的重复。
+        record_binding({"runtime_binding": binding}, reader=reader)
+        yield reader
+
+
 def read_source(binding: dict, logical_path: str) -> bytes:
     """由严格 pin 读取清单内资源；不接受 Task Pack 自报的 core_root 或任意机器路径。"""
-    checked = record_binding({"runtime_binding": binding})
-    return store.read_core_source(store.load_core(checked), logical_path)
+    with _source_reader(binding) as reader:
+        return reader.read(reader.core, logical_path)
 
 
 def read_builtin_source(binding: dict, path: str) -> bytes:
@@ -182,6 +196,26 @@ def read_builtin_source(binding: dict, path: str) -> bytes:
     if relative is None:
         raise RuntimePinError("不是精确的内置规范来源")
     return read_source(binding, relative)
+
+
+def read_builtin_sources(binding: dict) -> dict[str, bytes]:
+    """只读既有三份内置权威，不接受第二名单、任意 paths 或可调 CLI 预算。
+
+    同一 catalog 内逐份核对原 manifest/hash/大小/mode/identity/security，
+    最后整快照复核成功才返回。返回正文是本次消费者的原数据，不作跨调用
+    缓存；validate/ready 两份 catalog 及初末指纹仍各自建立新鲜读取边界。
+    """
+    with _source_reader(binding) as reader:
+        sources, total = {}, 0
+        for path in BUILTIN_STANDARD_SOURCES:
+            body = reader.read(reader.core, path)
+            total += len(body)
+            # 单份仍沿原128MiB读取限制；新增聚合返回值复用 store 既有批读
+            # 总预算，不因固定三份就把一轮内存正文上限扩大成三倍。
+            if total > store._SOURCE_BATCH_BYTES_LIMIT:
+                raise RuntimePinError("固定内置源总正文超过核心批读预算")
+            sources[path] = body
+        return sources
 
 
 def resource_path(path: Path, root: Path) -> str | None:

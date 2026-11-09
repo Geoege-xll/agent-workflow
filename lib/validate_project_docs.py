@@ -25,13 +25,13 @@ try:
     from lib.skills.business_confirmation_policy import read_instruction_contract
     from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs
     from lib.documents.plan_documents import validate_plan_index
-    from .runtime_pins import read_builtin_source, record_binding
+    from .runtime_pins import read_builtin_sources, record_binding
 except ImportError:
     from standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from lib.skills.business_confirmation_policy import read_instruction_contract
     from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
     from lib.documents.plan_documents import validate_plan_index
-    from runtime_pins import read_builtin_source, record_binding
+    from runtime_pins import read_builtin_sources, record_binding
 
 
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
@@ -62,9 +62,12 @@ def read_builtin_standard_sources(pack_root: Path, *, binding: dict | None = Non
     sources: dict[str, str] = {}
     owners: dict[str, str] = {}
     errors: list[str] = []
+    # 三份权威属于同一次 catalog 读取：仅固定 pin 分支使用显式短会话，
+    # 不让每份正文反复扫描全核心。source 分支仍读原安全本地来源，不降级。
+    pinned = read_builtin_sources(binding) if binding is not None else None
     for relative, domain in BUILTIN_STANDARD_SOURCES.items():
         # 显式 pin 时只信内容库原字节；旧 source 调用仍走原安全本地读取，互不回退。
-        body = (read_builtin_source(binding, relative).decode("utf-8") if binding is not None
+        body = (pinned[relative].decode("utf-8") if pinned is not None
                 else read_instruction_contract(pack_root, relative))
         validate_rule_definitions(body, relative, errors)
         if re.findall(r"(?im)^- Domain: (engineering|design)\s*$", body) != [domain]:
