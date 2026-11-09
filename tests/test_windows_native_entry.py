@@ -100,24 +100,27 @@ class EntryFixture:
         # 只读 list 自己扫描夹具中的空项目即可证明原 cwd/相对 scan-root 生效，
         # 无需登记、安装中央核心或触发任何写事务。引号等 Win32 禁用字符仅放入
         # 错误参数，另外验证 argv 数据边界与业务 exit=2，不能拼成 shell 指令。
-        project = self.scan / "项目 中文 & e\u0301"
-        marker = project / ".agent-workflow/project.yaml"
-        marker.parent.mkdir(parents=True)
-        marker.write_text("schema: 1\n", encoding="utf-8")
-        before = marker.read_bytes()
-        listing = launch(["--json", "list"])
-        self.assertEqual(listing.returncode, 0, listing.stderr)
-        rows = json.loads(listing.stdout)["result"]
-        self.assertEqual([row["project"] for row in rows], [str(project.resolve())])
-        self.assertEqual(marker.read_bytes(), before)
-        rejected = launch(["list", "--unexpected", literal])
-        self.assertEqual(rejected.returncode, 2, rejected.stdout + rejected.stderr)
-        self.assertIn(literal, rejected.stderr)
-        # 空字符串若被壳层丢弃就会退化成合法 list/exit=0，因此独立检查此
-        # 负例可真实区分保留空参数与静默丢参，不能只检查含空格字符串。
-        empty = launch(["list", ""])
-        self.assertEqual(empty.returncode, 2, empty.stdout + empty.stderr)
-        self.assert_read_only()
+        # 项目生命周期属于单个入口子场景。上下文管理器在断言失败时也会
+        # 回收本次自有项目，避免前一 subTest 残留标记掩盖下一入口的真实结果。
+        with tempfile.TemporaryDirectory(prefix="项目 中文 & e\u0301-", dir=self.scan) as raw:
+            project = Path(raw)
+            marker = project / ".agent-workflow/project.yaml"
+            marker.parent.mkdir(parents=True)
+            marker.write_text("schema: 1\n", encoding="utf-8")
+            before = marker.read_bytes()
+            listing = launch(["--json", "list"])
+            self.assertEqual(listing.returncode, 0, listing.stderr)
+            rows = json.loads(listing.stdout)["result"]
+            self.assertEqual([row["project"] for row in rows], [str(project.resolve())])
+            self.assertEqual(marker.read_bytes(), before)
+            rejected = launch(["list", "--unexpected", literal])
+            self.assertEqual(rejected.returncode, 2, rejected.stdout + rejected.stderr)
+            self.assertIn(literal, rejected.stderr)
+            # 空字符串若被壳层丢弃就会退化成合法 list/exit=0，因此独立检查此
+            # 负例可真实区分保留空参数与静默丢参，不能只检查含空格字符串。
+            empty = launch(["list", ""])
+            self.assertEqual(empty.returncode, 2, empty.stdout + empty.stderr)
+            self.assert_read_only()
 
 
 class PortableNativeEntryTest(EntryFixture, unittest.TestCase):
@@ -128,6 +131,7 @@ class PortableNativeEntryTest(EntryFixture, unittest.TestCase):
 
     def test_relative_scan_and_literal_error_preserve_caller(self):
         self.literal_and_relative(self.python)
+        self.assertEqual(list(self.scan.iterdir()), [], "入口子场景未回收自有项目")
 
     def test_isolated_python_ignores_stdlib_shadows(self):
         self.poison_stdlib()
@@ -162,8 +166,23 @@ class WindowsNativeEntryTest(EntryFixture, unittest.TestCase):
         self.assertTrue(self.cmd.is_file())
         self.env["AGENT_WORKFLOW_PWSH"] = str(self.pwsh)
 
-    def powershell(self, arguments, *, env=None):
+    def shell_environment(self, env=None):
+        # pwsh 自身可以创建 AppData 等运行时文件；不能把 shell HOME 与
+        # workflow 显式 --host-home 混为同一个写入所有者。仅壳消费者换用
+        # 另一自有目录，直接 Python smoke 的环境和既有原生通过证据保持。
+        # assert_read_only 仍严格要求 self.home 完全为空，不忽略任何 AppData。
+        shell_home = self.root / "壳运行时 HOME"
+        shell_home.mkdir(exist_ok=True)
         environment = dict(self.env if env is None else env)
+        environment.update(HOME=str(shell_home), USERPROFILE=str(shell_home),
+                           APPDATA=str(shell_home / "AppData/Roaming"),
+                           LOCALAPPDATA=str(shell_home / "AppData/Local"),
+                           HOMEDRIVE=shell_home.drive, HOMEPATH=str(shell_home)[2:],
+                           PSModuleAnalysisCachePath=str(shell_home / "AppData/Local/PowerShell/ModuleAnalysisCache"))
+        return environment
+
+    def powershell(self, arguments, *, env=None):
+        environment = self.shell_environment(env)
         environment.update(AWF_ENTRY_TEST_SCRIPT=str(PACK / "workflow.ps1"),
                            AWF_ENTRY_TEST_CWD=str(self.caller),
                            AWF_ENTRY_TEST_ARGV=json.dumps([*self.options, *arguments], ensure_ascii=False))
@@ -178,7 +197,7 @@ class WindowsNativeEntryTest(EntryFixture, unittest.TestCase):
                              "-EncodedCommand", encoded], env=environment, cwd=self.decoy)
 
     def command_prompt(self, arguments, *, env=None):
-        environment = dict(self.env if env is None else env)
+        environment = self.shell_environment(env)
         # 正常双引号参数不包含嵌套引号或成对变量表达式。/d 禁用 AutoRun，
         # /v:off 与生产批处理的 DisableDelayedExpansion 共同保护字面 !。
         quoted = []
@@ -197,6 +216,18 @@ class WindowsNativeEntryTest(EntryFixture, unittest.TestCase):
         self.smoke(self.python)
 
     def test_powershell_legacy_help_version_and_empty_list(self):
+        # 先实际启动不加载业务入口的空白 pwsh，记录它在专用 runtime HOME
+        # 的目录变化。此对照只说明 shell 自身行为，不放宽 workflow 宿主
+        # 零写入合同，也不将目录内容或继承环境写入日志。
+        environment = self.shell_environment()
+        control = self.execute([str(self.pwsh), "-NoLogo", "-NoProfile", "-NonInteractive",
+                                "-Command", "exit 0"], env=environment)
+        self.assertEqual(control.returncode, 0, control.stderr)
+        shell_home = Path(environment["USERPROFILE"])
+        print("[blank pwsh runtime paths] " + json.dumps(
+            sorted(str(path.relative_to(shell_home)) for path in shell_home.rglob("*")),
+            ensure_ascii=False), flush=True)
+        self.assert_read_only()
         self.smoke(self.powershell)
 
     def test_cmd_help_version_and_empty_list(self):
@@ -206,11 +237,6 @@ class WindowsNativeEntryTest(EntryFixture, unittest.TestCase):
         for launch in (self.python, self.powershell, self.command_prompt):
             with self.subTest(entry=launch.__name__):
                 self.literal_and_relative(launch, CMD_LITERAL if launch == self.command_prompt else LITERAL)
-                # 同一 scan 夹具原位复用，下个入口需要重新建立同一项目标记。
-                marker = self.scan / "项目 中文 & e\u0301/.agent-workflow/project.yaml"
-                marker.unlink()
-                marker.parent.rmdir()
-                marker.parent.parent.rmdir()
 
     def test_explicit_invalid_python_is_refused_without_fallback(self):
         bad_executable = self.caller / "python.exe"
