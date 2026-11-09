@@ -12,6 +12,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import time
@@ -26,6 +27,7 @@ from lib.central.role_preferences import snapshot as preference_snapshot
 from lib.hosts.native_context import HostPaths, NativeContext
 from manager import central_runtime, model_preferences, project_service, service
 from tests.windows_conpty import ConPTYProcess
+from tests.windows_console_observer import _publish, message_path, read_message
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -47,6 +49,81 @@ def isolated_environment(home):
 
 @unittest.skipUnless(os.name == "nt", "真实 Legacy/Win32 边界必须在 Windows 执行")
 class WindowsAcceptanceScriptNativeTest(unittest.TestCase):
+    def test_native_acceptance_git_resolution_preserves_path_priority(self):
+        with tempfile.TemporaryDirectory(prefix="awf-git-preflight-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
+            root = Path(raw).resolve()
+            found = shutil.which("git.exe")
+            self.assertIsNotNone(found, "需要已有 Git；测试不下载或安装第二套 Git")
+            real_git = Path(found).resolve(strict=True)
+            alias_directory, empty_directory, home = root / "git-metadata-alias", root / "empty-path", root / "private-home"
+            alias_directory.mkdir();empty_directory.mkdir();home.mkdir()
+            # 复用本轮已经要求的原生链接能力，只创建私有文件链接供 Get-Command
+            # 实际枚举。真实 Git 目录排第一；第二链接从不执行，不复制或部署 DLL。
+            os.symlink(real_git, alias_directory / "git.exe")
+            environment = isolated_environment(home)
+            pwsh = Path(os.environ.get("AGENT_WORKFLOW_PWSH", str(Path(os.environ["ProgramFiles"]) / "PowerShell/7/pwsh.exe")))
+            self.assertTrue(pwsh.is_absolute() and pwsh.is_file(), "需要已有 PowerShell 7+")
+            environment.update(AWF_GIT_TEST_SCRIPT=str(PACK / "scripts/windows_acceptance.ps1"),
+                               AWF_GIT_TEST_REAL=str(real_git), AWF_GIT_TEST_PACK=str(PACK))
+            script = r'''
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandArgumentPassing = 'Legacy'
+$pathBefore = $env:PATH
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:AWF_GIT_TEST_SCRIPT, [ref]$tokens, [ref]$errors)
+if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+$definitions = @($ast.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Resolve-AcceptanceGit'
+}, $true))
+if ($definitions.Count -ne 1) { throw 'Expected the actual production Git resolver.' }
+. ([scriptblock]::Create($definitions[0].Extent.Text))
+if ($env:AWF_GIT_TEST_MODE -eq 'missing') {
+    $refused = $false
+    try { Resolve-AcceptanceGit | Out-Null } catch {
+        if ($_.FullyQualifiedErrorId -notlike '*CommandNotFoundException*') { throw }
+        $refused = $true
+    }
+    if (-not $refused) { throw 'A missing Git was silently accepted.' }
+    Write-Output 'ACCEPTANCE_GIT_MISSING_REFUSED'
+} else {
+    $gitApplications = @(Get-Command git.exe -CommandType Application -ErrorAction Stop)
+    if ($gitApplications.Count -lt 2) { throw 'The real command discovery did not observe both PATH applications.' }
+    $git = Resolve-AcceptanceGit
+    if ($git -isnot [string] -or [string]::IsNullOrWhiteSpace($git)) { throw 'Git selection was not one string.' }
+    if (-not [string]::Equals($git, $env:AWF_GIT_TEST_REAL, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The production resolver did not preserve the first PATH application.'
+    }
+    $head = (& $git -C $env:AWF_GIT_TEST_PACK rev-parse HEAD | Out-String).Trim()
+    $nativeExit = $LASTEXITCODE
+    if ($nativeExit -ne 0 -or $head -notmatch '\A[0-9a-f]{40}\z') { throw 'The selected real Git could not consume the checkout.' }
+    [ordered]@{ matches = $gitApplications.Count; selected = $git; first = $gitApplications[0].Path; git_exit = $nativeExit; head = $head } |
+        ConvertTo-Json -Compress | Write-Output
+    Write-Output 'ACCEPTANCE_GIT_MULTIPATH_REAL_BOUNDARY_OK'
+}
+if ($env:PATH -cne $pathBefore -or $PSNativeCommandArgumentPassing -cne 'Legacy') { throw 'The resolver changed shell settings.' }
+'''
+            encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+            argv = [str(pwsh), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+            for mode in ("multiple", "missing"):
+                with self.subTest(mode=mode):
+                    selected_environment = dict(environment)
+                    selected_environment["AWF_GIT_TEST_MODE"] = mode
+                    selected_environment["PATH"] = (str(real_git.parent) + os.pathsep + str(alias_directory)
+                        + os.pathsep + environment.get("PATH", "")) if mode == "multiple" else str(empty_directory)
+                    # 两种 PATH 使用独立的实际 PS 子进程，避免正例的命令发现
+                    # 缓存影响无 Git 负控；仅测试环境变化，用户 PATH 完整保留。
+                    result = capture_process(argv, env=selected_environment, timeout=60)
+                    line = json.dumps({"kind": "acceptance-git", "mode": mode, "argv": argv, "exit": result.returncode,
+                        "stdout_base64": base64.b64encode(result.stdout).decode("ascii"),
+                        "stderr_base64": base64.b64encode(result.stderr).decode("ascii")}, ensure_ascii=True)
+                    print("\n[native Git preflight evidence] " + line, flush=True)
+                    if target := os.environ.get("AWF_TEST_EVIDENCE_LOG"):
+                        with open(target, "a", encoding="utf-8") as stream:stream.write(line + "\n")
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    marker = b"ACCEPTANCE_GIT_MULTIPATH_REAL_BOUNDARY_OK" if mode == "multiple" else b"ACCEPTANCE_GIT_MISSING_REFUSED"
+                    self.assertIn(marker, result.stdout)
+
     def test_native_acceptance_identity_preserves_legacy_quotes_and_exit_codes(self):
         with tempfile.TemporaryDirectory(prefix="awf-acceptance-中文 e\u0301-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
             root = Path(raw).resolve()
@@ -170,30 +247,41 @@ class NativeUI:
     def __init__(self, case, root, argv, environment):
         self.case, self.root, self.argv = case, root, argv
         self.sequence, self.frames = 0, []
+        self.inflight = None
+        self.last_request = self.last_response = None
+        # 两端各自独占一个方向；目录在 child 启动前建立，消息名发布后不可变。
+        (root / "requests").mkdir()
+        (root / "responses").mkdir()
         self.process = ConPTYProcess(argv, cwd=PACK, env=environment, columns=120, rows=36)
 
     def key(self, value):
         self.process.write(KEYS.get(value, value))
 
     def snapshot(self, timeout=5):
+        if self.inflight is not None:
+            raise RuntimeError("原生观察已有请求在途，不能提交第二个请求")
         self.sequence += 1
-        pending, request = self.root / "request.pending", self.root / "request.json"
-        pending.write_text(json.dumps({"number": self.sequence}), encoding="utf-8")
-        pending.replace(request)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            error = self.root / "observer-error.json"
-            if error.exists():
-                self.case.fail(error.read_text(encoding="utf-8"))
-            response = self.root / "response.json"
-            if response.exists():
-                value = json.loads(response.read_text(encoding="utf-8"))
-                if value["number"] == self.sequence:
+        number = self.inflight = self.sequence
+        request = message_path(self.root, "requests", number)
+        response = message_path(self.root, "responses", number)
+        try:
+            _publish(request, {"number": number})
+            self.last_request = request
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                error = self.root / "observer-error.json"
+                if error.exists():
+                    self.case.fail(error.read_text(encoding="utf-8"))
+                if response.exists():
+                    value = read_message(response, number, response=True)
+                    self.last_response = response
                     return value["snapshot"]
-            if (self.root / "final.json").exists():
-                self.case.fail("生产 TUI 提前结束：" + (self.root / "final.json").read_text(encoding="utf-8"))
-            time.sleep(0.02)
-        self.case.fail("原生控制台观察响应超时；VT=" + repr(self.process.raw_output[-3000:]))
+                if (self.root / "final.json").exists():
+                    self.case.fail("生产 TUI 提前结束：" + (self.root / "final.json").read_text(encoding="utf-8"))
+                time.sleep(0.02)
+            self.case.fail("原生控制台观察响应超时；VT=" + repr(self.process.raw_output[-3000:]))
+        finally:
+            self.inflight = None
 
     @staticmethod
     def text(frame):
@@ -381,6 +469,22 @@ class WindowsNativeTUIIntegrationTest(unittest.TestCase):
         with self.ui() as ui:
             first = ui.ready()
             ui.assert_frame(first)
+            # 使用真实 Windows 共享句柄钉住上一轮请求/响应，再通过实际 IPC
+            # 取得下一帧。旧固定文件名的 replace 会在此确定性冲突；序号消息
+            # 必须保留旧字节并返回新的真实 Win32 快照，不能改为屏幕替身。
+            previous_sequence = ui.sequence
+            previous_request, previous_response = ui.last_request, ui.last_response
+            with previous_request.open("rb") as request_reader, previous_response.open("rb") as response_reader:
+                request_before, response_before = request_reader.read(), response_reader.read()
+                next_frame = ui.snapshot()
+                ui.assert_frame(next_frame)
+                self.assertEqual(ui.sequence, previous_sequence + 1)
+                self.assertNotEqual(ui.last_request, previous_request)
+                self.assertNotEqual(ui.last_response, previous_response)
+                request_reader.seek(0);response_reader.seek(0)
+                self.assertEqual(request_reader.read(), request_before)
+                self.assertEqual(response_reader.read(), response_before)
+                ui.frames.append({"label": "held-reader next native frame", "native": next_frame})
             self.assertIn("[1 Codex]", ui.text(first))
             # 活动 tab 的原生属性必须有配色；焦点另由 ◈/▌/▸ 表达，颜色非唯一含义。
             colors = {value & 7 for row in first["attributes"] for value in row}

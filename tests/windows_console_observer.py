@@ -127,10 +127,35 @@ class ConsoleObserver:
 
 
 def _publish(path, value):
-    """同目录原子发布有限 JSON，让观察线程不消费父测试未写完的请求。"""
+    """单写者排他发布一次 JSON；已发布名字永远不再覆盖或删除。
+
+    每个序号/方向只有一个写者。先关闭 pending 的写句柄，再 rename 到
+    未出现过的名字；Windows rename 还会原生拒绝目标碰撞。读者无需共享
+    删除权限，后续序号也不会替换其持有的文件。错误直接传播，不重试权限错误。
+    """
+    if path.exists():
+        raise FileExistsError(f"原生观察消息已经发布：{path.name}")
     pending = path.with_suffix(".pending")
-    pending.write_text(json.dumps(value, ensure_ascii=True), encoding="utf-8")
-    pending.replace(path)
+    with pending.open("x", encoding="utf-8") as stream:
+        json.dump(value, stream, ensure_ascii=True)
+    pending.rename(path)
+
+
+def message_path(root, direction, number):
+    """父测试与观察线程共用序号命名；这只是单次测试 IPC 的局部游标。"""
+    if direction not in {"requests", "responses"} or type(number) is not int or number <= 0:
+        raise ValueError("原生观察消息方向或序号无效")
+    return Path(root) / direction / f"{number:08d}.json"
+
+
+def read_message(path, number, *, response=False):
+    """关闭读取句柄后校验封闭信封；权限/解码/序号错误都是真实协议失败。"""
+    value = json.loads(path.read_text(encoding="utf-8"))
+    keys = {"number", "snapshot"} if response else {"number"}
+    if (not isinstance(value, dict) or set(value) != keys or type(value["number"]) is not int
+            or value["number"] != number or response and not isinstance(value["snapshot"], dict)):
+        raise ValueError(f"原生观察消息不属于预期序号 {number}：{path.name}")
+    return value
 
 
 def cursor_access_diagnostics(path):
@@ -201,19 +226,17 @@ def run_observed(root, arguments):
     failures = []
 
     def watch():
-        previous = None
+        number = 1
         while not stop.wait(0.02):
-            request = root / "request.json"
+            request = message_path(root, "requests", number)
             if not request.is_file():
                 continue
             try:
-                value = json.loads(request.read_text(encoding="utf-8"))
-                number = value["number"]
-                if type(number) is not int or number <= 0:
-                    raise ValueError("原生观察请求序号无效")
-                if number != previous:
-                    _publish(root / "response.json", {"number": number, "snapshot": observer.snapshot()})
-                    previous = number
+                read_message(request, number)
+                _publish(message_path(root, "responses", number), {"number": number, "snapshot": observer.snapshot()})
+                # 响应发布后才推进游标；父端也必须取得该响应才能提交下一请求。
+                # 历史消息保留到进程/线程结束，不在读者打开文件期间回收名字。
+                number += 1
             except BaseException:
                 # 观察失败是原生验收失败；保留 traceback，不改为模拟屏幕或空快照。
                 error = traceback.format_exc()

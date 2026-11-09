@@ -15,6 +15,25 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+function Resolve-AcceptanceGit {
+    # 显式 -CommandType Application 会枚举 PATH 中的多个 git.exe。先按
+    # 原生发现优先次序固定首项，再读取单值 Path，不能把 Source 数组交给 &。
+    # 首项损坏即失败，绝不悄悄换另一套 Git；本次验收前后都复用同一路径。
+    $applications = @(Get-Command git.exe -CommandType Application -ErrorAction Stop)
+    if ($applications.Count -eq 0 -or $applications[0] -isnot [System.Management.Automation.ApplicationInfo]) {
+        throw 'The first Git command must be an actual application.'
+    }
+    $selectedPath = $applications[0].Path
+    if ($selectedPath -isnot [string] -or [string]::IsNullOrWhiteSpace($selectedPath) -or
+        -not [System.IO.Path]::IsPathFullyQualified($selectedPath)) {
+        throw 'The first Git application must have one nonempty absolute path.'
+    }
+    $selectedFile = Get-Item -LiteralPath $selectedPath -Force -ErrorAction Stop
+    if ($selectedFile -isnot [System.IO.FileInfo] -or -not $selectedFile.Exists -or $selectedFile.Extension -ine '.exe') {
+        throw 'The first Git path must be an existing executable file.'
+    }
+    return $selectedFile.FullName
+}
 if (-not $IsWindows) { throw 'This acceptance entry requires native Windows 11 x64 and PowerShell 7+.' }
 if (-not [System.IO.Path]::IsPathFullyQualified($Python)) { throw 'Pass one absolute existing python.exe path.' }
 $interpreter = Get-Item -LiteralPath $Python -Force -ErrorAction Stop
@@ -28,7 +47,7 @@ if ($parent.FullName.TrimEnd('\') -ieq $root.TrimEnd('\') -or
     $parent.FullName.StartsWith($root.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Keep acceptance evidence outside the candidate source tree.'
 }
-$git = (Get-Command git.exe -CommandType Application -ErrorAction Stop).Source
+$git = Resolve-AcceptanceGit
 $actualCommit = (& $git -C $root rev-parse HEAD | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $actualCommit -cne $ExpectedCommit) { throw 'The source HEAD does not match ExpectedCommit.' }
 $dirty = @(& $git -C $root status --porcelain --untracked-files=normal)
