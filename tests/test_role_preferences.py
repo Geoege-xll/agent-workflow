@@ -176,6 +176,217 @@ class RolePreferencesTest(unittest.TestCase):
         self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
         return project
 
+    def test_native_global_unchanged_projects_batch_final_read_phase(self):
+        """两次真实保存只合并纯尾阶段；原生实际发布和恢复journal一条也不省。"""
+        from manager import native_agents
+        context = self.native_scope()
+        project = self.sparse_project(context, "phase-global")
+        def refuse_nested(plan):
+            """项目及不经过commit的全局分支都在任何锁/native写之前拒绝父租约。"""
+            def snapshot():
+                return {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_ino, path.stat().st_mtime_ns)
+                        for root in (self.state, self.home, project) for path in root.rglob("*")
+                        if path.is_file() and not path.is_symlink()}
+            before, paths = snapshot(), {str(path) for root in (self.state, self.home, project) for path in root.rglob("*")}
+            with runtime_store.core_read_operation() as parent:
+                reader = parent.reader(self.core.binding(), self.state)
+                with patch.object(native_agents, "apply_global", wraps=native_agents.apply_global) as apply_native, \
+                        self.assertRaisesRegex(ValueError, "读取操作"):
+                    preferences.apply(plan)
+                self.assertEqual(0, apply_native.call_count)
+                self.assertFalse(parent._closed)
+                self.assertIs(reader, parent.reader(self.core.binding(), self.state))
+                self.assertEqual(before, snapshot())
+                self.assertEqual(paths, {str(path) for root in (self.state, self.home, project) for path in root.rglob("*")})
+        for edits in ({"xy-backend": {"model": "fixture-model", "effort": "max"}},
+                      {"xy-backend": {"model": None, "effort": None}}):
+            catalogs = preferences.load_catalogs(self.state, None, "codex", native_context=context)
+            plan = preferences.preview(self.state, None, "codex", edits, catalogs, native_context=context)
+            self.assertTrue(plan.summary["can_apply"], plan.summary)
+            self.assertTrue(all(not target.changes for target in plan.targets))
+            refuse_nested(plan)
+            before = preferences._snapshot_observation(self.state, project)
+            with patch.object(runtime_store, "_scan", wraps=runtime_store._scan) as scan, \
+                    patch.object(runtime_store, "_verify_snapshot", wraps=runtime_store._verify_snapshot) as verify, \
+                    patch.object(native_agents, "_save", wraps=native_agents._save) as save, \
+                    patch.object(native_agents, "_publish", wraps=native_agents._publish) as publish, \
+                    patch("manager.codex_models.query", side_effect=AssertionError("应用不能隐式查询宿主")):
+                result = preferences.apply(plan)
+            self.assertTrue(result["applied"])
+            self.assertEqual((4, 8), (scan.call_count, verify.call_count))
+            self.assertEqual((9, 15), (publish.call_count, save.call_count))
+            self.assertEqual(before, preferences._snapshot_observation(self.state, project))
+            native_journals = list((self.state / "native-agents/transactions").glob("*.json"))
+            applied = [json.loads(path.read_bytes()) for path in native_journals
+                       if json.loads(path.read_bytes())["status"] == "applied"]
+            self.assertTrue(any(len(row["writes"]) == 3 for row in applied))
+            files = {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_ino, path.stat().st_mtime_ns)
+                     for root in (self.state, self.home, project) for path in root.rglob("*")
+                     if path.is_file() and not path.is_symlink()}
+            with patch.object(runtime_store, "_scan", wraps=runtime_store._scan) as refresh_scan:
+                preferences.load_context(self.state, None, "codex", native_context=context)
+            self.assertEqual(0, refresh_scan.call_count)
+            self.assertEqual(files, {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_ino, path.stat().st_mtime_ns)
+                                    for root in (self.state, self.home, project) for path in root.rglob("*")
+                                    if path.is_file() and not path.is_symlink()})
+            self.assertIsNone(runtime_store._READ_OPERATION.get())
+        catalogs = preferences.load_catalogs(self.state, project, "codex", native_context=context)
+        project_plan = preferences.preview(self.state, project, "codex", {"xy-backend": {"model": "project-model"}},
+                                           catalogs, native_context=context)
+        self.assertTrue(project_plan.summary["can_apply"], project_plan.summary)
+        refuse_nested(project_plan)
+        self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
+        # 完整事实来源增加mutable读取，不能偷偷增加core扫描。这里实际保存
+        # 项目稀疏角色，再按TUI同一Future的真实refresh独立计数，复核4/8+1/2。
+        with patch.object(runtime_store, "_scan", wraps=runtime_store._scan) as project_scan, \
+                patch.object(runtime_store, "_verify_snapshot", wraps=runtime_store._verify_snapshot) as project_verify:
+            self.assertTrue(preferences.apply(project_plan)["applied"])
+        self.assertEqual((4, 8), (project_scan.call_count, project_verify.call_count))
+        refreshed_before = preferences._snapshot_observation(self.state, project)
+        with patch.object(runtime_store, "_scan", wraps=runtime_store._scan) as refresh_scan, \
+                patch.object(runtime_store, "_verify_snapshot", wraps=runtime_store._verify_snapshot) as refresh_verify:
+            preferences.load_context(self.state, project, "codex", native_context=context)
+        self.assertEqual((1, 2), (refresh_scan.call_count, refresh_verify.call_count))
+        self.assertEqual(refreshed_before, preferences._snapshot_observation(self.state, project))
+        print("COMPLETE_OWNERSHIP_COUNTS project_apply=4/8 refresh=1/2 global_saves=4/8,4/8 global_refresh=0,0 native_artifacts=3 native_journal_writes=15")
+
+    def test_native_global_unchanged_projects_recheck_original_observation_and_compensate(self):
+        """native已真实发布后仍比较项目原前像，尾验后漂移也必须触发实际补偿。"""
+        from manager import native_agents
+        context = self.native_scope()
+        project = self.sparse_project(context, "phase-global-drift")
+        from lib.central.runtime_project import Tree, json_bytes
+        from manager import runtime_state
+        # 两份真实文件分别只登记在binding和journal，metadata由正式producer从
+        # 实际Node产生；不让两份inventory共享同一路径而掩盖任何一侧的遗漏。
+        retained_paths = {}
+        for kind, index in (("record", 1), ("journal", 2)):
+            relative = kind + "-history/.agent-workflow-central-" + ("a" if kind == "record" else "b") * 32 + "-" + str(index) + ".previous"
+            target = project / relative
+            target.parent.mkdir()
+            target.write_bytes((kind + " original retained bytes\n").encode())
+            with Tree(project) as tree:
+                retained = runtime_state.retained_record(relative, tree.read(relative))
+            name = "bindings" if kind == "record" else "transactions"
+            before, value = (runtime_service.read_binding_record(self.state, project) if kind == "record"
+                             else runtime_service._journal(self.state, project))
+            value.setdefault("retained_nodes", []).append(retained)
+            with Tree(self.state) as tree:
+                runtime_state.write_private(tree, runtime_state.state_relative(project, name), json_bytes(value), expected=before)
+            retained_paths[kind] = target
+        _, actual_record = runtime_service.read_binding_record(self.state, project)
+        _, actual_journal = runtime_service._journal(self.state, project)
+        self.assertIn(retained_paths["record"].relative_to(project).as_posix(), {row["path"] for row in actual_record["retained_nodes"]})
+        self.assertNotIn(retained_paths["journal"].relative_to(project).as_posix(), {row["path"] for row in actual_record["retained_nodes"]})
+        self.assertIn(retained_paths["journal"].relative_to(project).as_posix(), {row["path"] for row in actual_journal["retained_nodes"]})
+        self.assertNotIn(retained_paths["record"].relative_to(project).as_posix(), {row["path"] for row in actual_journal["retained_nodes"]})
+        original_native_apply = native_agents.apply_global
+        original_finish = runtime_store.CoreReadOperation.finish
+        for fault in ("config", "binding", "directory", "after_finish",
+                      "record_body_tail", "record_body_after", "journal_body_tail", "journal_body_after",
+                      "record_identity_after", "journal_identity_after", "record_directory_after", "journal_directory_after"):
+            with self.subTest(fault=fault):
+                # 本矩阵复用自有fixture，但每个子例必须从已实际补偿的无偏好
+                # 状态开始；若前例意外发布则立即暴露，不能把后续no-op当独立证据。
+                self.assertFalse(role_preferences.snapshot(self.state)[1].get("codex"))
+                catalogs = preferences.load_catalogs(self.state, None, "codex", native_context=context)
+                plan = preferences.preview(self.state, None, "codex", {"xy-backend": {"model": "fixture-model"}},
+                                           catalogs, native_context=context)
+                self.assertTrue(plan.summary["can_apply"], plan.summary)
+                self.assertTrue(all(not target.changes for target in plan.targets))
+                native_before = {path: node.payload for path, node, _ in
+                                 native_agents.observe_sources(self.state, context.host_paths, "codex").discovery}
+                config = project / ".agent-workflow/project.yaml"
+                machine = self.state / runtime_service._state_relative(project, "bindings")
+                original_config, original_machine = config.read_bytes(), machine.read_bytes()
+                armed, injected = [], []
+                retained_kind = fault.split("_", 1)[0] if fault.startswith(("record_", "journal_")) else None
+                retained_path = retained_paths.get(retained_kind)
+                retained_body = retained_path.read_bytes() if retained_path is not None else None
+                retained_identity = retained_path.stat().st_ino if retained_path is not None else None
+                retained_directory_mode = stat.S_IMODE(retained_path.parent.stat().st_mode) if retained_path is not None else None
+                retained_held = retained_path.with_name(retained_path.name + ".external-held") if retained_path is not None else None
+                held = project / ".agent-workflow-held-by-external"
+                def mutate():
+                    if injected:return
+                    injected.append(True)
+                    if retained_kind:
+                        if "_identity_" in fault:
+                            retained_path.rename(retained_held)
+                            retained_path.write_bytes(retained_body)
+                        elif "_directory_" in fault:
+                            retained_path.parent.chmod(0o700 if retained_directory_mode != 0o700 else 0o755)
+                        else:retained_path.write_bytes(retained_body + b"external retained edit\n")
+                    elif fault == "binding":machine.write_bytes(original_machine + b" ")
+                    elif fault == "directory":
+                        (project / ".agent-workflow").rename(held)
+                        (project / ".agent-workflow").mkdir()
+                        config.write_bytes(original_config)
+                    else:config.write_bytes(original_config + b"\n# external-phase-edit\n")
+                def apply_native(native_plan):
+                    result = original_native_apply(native_plan)
+                    self.assertEqual("applied", result["status"])
+                    self.assertEqual(3, len(result["artifacts"]))
+                    armed.append(True)
+                    if fault in {"config", "binding", "directory"}:mutate()
+                    return result
+                def finish(operation):
+                    if armed and fault.endswith("_tail"):mutate()
+                    result = original_finish(operation)
+                    if armed and (fault == "after_finish" or fault.endswith("_after")):mutate()
+                    return result
+                try:
+                    with patch.object(native_agents, "apply_global", apply_native), \
+                            patch.object(runtime_store.CoreReadOperation, "finish", finish), \
+                            patch.object(native_agents, "compensate_global", wraps=native_agents.compensate_global) as compensate, \
+                            self.assertRaisesRegex(ValueError, "已条件撤回"):
+                        preferences.apply(plan)
+                    self.assertTrue(injected)
+                    self.assertEqual(1, compensate.call_count)
+                    self.assertEqual(native_before, {path: node.payload for path, node, _ in
+                                     native_agents.observe_sources(self.state, context.host_paths, "codex").discovery})
+                    self.assertFalse(role_preferences.snapshot(self.state)[1].get("codex"))
+                    self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
+                    if retained_kind:
+                        if "_identity_" in fault:
+                            self.assertTrue(retained_held.exists())
+                            self.assertNotEqual(retained_identity, retained_path.stat().st_ino)
+                            self.assertEqual(retained_body, retained_path.read_bytes())
+                        elif "_directory_" in fault:
+                            self.assertNotEqual(retained_directory_mode, stat.S_IMODE(retained_path.parent.stat().st_mode))
+                            self.assertEqual(retained_identity, retained_path.stat().st_ino)
+                            self.assertEqual(retained_body, retained_path.read_bytes())
+                        else:self.assertEqual(retained_body + b"external retained edit\n", retained_path.read_bytes())
+                    elif fault == "binding":self.assertEqual(original_machine + b" ", machine.read_bytes())
+                    elif fault == "directory":self.assertTrue(held.exists())
+                    else:self.assertEqual(original_config + b"\n# external-phase-edit\n", config.read_bytes())
+                finally:
+                    # 本例继续复用自有项目；仅测试在断言之后撤回自己注入的输入。
+                    # 生产apply必须保留它们，不能为了让下一subcase通过主动清理。
+                    if retained_kind:
+                        if retained_held.exists():
+                            retained_path.unlink()
+                            retained_held.rename(retained_path)
+                        else:retained_path.write_bytes(retained_body)
+                        retained_path.parent.chmod(retained_directory_mode)
+                    if fault == "directory" and held.exists():
+                        config.unlink()
+                        (project / ".agent-workflow").rmdir()
+                        held.rename(project / ".agent-workflow")
+                    else:
+                        config.write_bytes(original_config)
+                        machine.write_bytes(original_machine)
+                self.assertIsNone(runtime_store._READ_OPERATION.get())
+
+        # 历史本来已缺失仍只降低可恢复性；稳定的missing不能被新来源守卫
+        # 当作未知编辑来拒绝正常全局保存。文件删除仅是本例明确的缺历史输入。
+        for target in retained_paths.values():target.unlink()
+        catalogs = preferences.load_catalogs(self.state, None, "codex", native_context=context)
+        missing_plan = preferences.preview(self.state, None, "codex", {"xy-backend": {"model": "fixture-model"}},
+                                           catalogs, native_context=context)
+        self.assertTrue(missing_plan.summary["can_apply"], missing_plan.summary)
+        self.assertTrue(preferences.apply(missing_plan)["applied"])
+
     def separate_ambient_environment(self):
         """准备第二个临时宿主根，使进程默认路径不再巧合等于NativeContext。"""
         home = self.case / "ambient-home"

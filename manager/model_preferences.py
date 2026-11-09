@@ -275,25 +275,40 @@ class _Observation:
     journal: Node
     observed: tuple
     directories: tuple
+    ownership_sources: runtime_service.OwnershipSources
+
+
+def _project_observation(project, sources) -> _Observation:
+    """只投影既有调用字段；完整inventory唯一归项目ownership职责维护。"""
+    config = dict(sources.observed)[CONFIG]
+    return _Observation(project, config, sources.machine, sources.journal,
+                        sources.observed, sources.directories, sources)
+
+
+def _snapshot_observation(state: Path, project: Path) -> _Observation:
+    """只读取得完整事实；真正封口后的recheck另沿Plan固定inventory比较。"""
+    project = state_files.project_path(project)
+    return _project_observation(project, runtime_service.capture_ownership_sources(state, project))
 
 
 @runtime_store.read_operation
 def _observe(state: Path, project: Path) -> tuple[_Observation, dict | None]:
     project = state_files.project_path(project)
     machine, record = runtime_service.read_binding_record(state, project)
-    journal = runtime_state.read_state(state, runtime_state.state_relative(project, "transactions"))
+    sources = runtime_service.capture_ownership_sources(state, project)
+    if sources.machine != machine:
+        raise ValueError("项目归属记录在观察前变化")
     with Tree(project) as tree:
         if record:
             conflicts, _ = runtime_service._ownership(tree, record, state, repair=False)
             if conflicts:
                 raise ValueError("项目已归属资源含手改、手删或替换冲突")
-        config = tree.read(CONFIG)
-        paths = {CONFIG}
-        if record:
-            paths.update(record["managed"])
-        observed = tuple((path, tree.read(path, skill_link=bool(skill_parts(path)))) for path in sorted(paths))
-        directories = tree.directory_facts(list(paths))
-    return _Observation(project, config, machine, journal, observed, directories), record
+        # journal-only历史也属于本次完整inventory。复用原历史producer/校验，
+        # 稳定missing仍允许；存在但已编辑的历史不能由完整来源快照追认。
+        if runtime_service._history_writes(tree, json.loads(sources.retained_json)):
+            raise ValueError("项目保留历史含未知编辑")
+    runtime_service.recheck_ownership_sources(state, project, sources)
+    return _project_observation(project, sources), record
 
 
 @runtime_store.read_operation
@@ -507,6 +522,70 @@ def _guard(plan: ModelPreferencePlan) -> None:
                 raise ValueError("模型来源或能力已变化；草稿已保留，请刷新并重新选择后再应用")
 
 
+@dataclass(frozen=True)
+class _PreferenceGuardSnapshot:
+    """只保存本轮额外mutable原生来源，既有Plan仍是其他来源的唯一expected。"""
+
+    native_sources: tuple
+
+
+def _native_guard_sources(plan):
+    if plan.native_context is None:
+        return ()
+    return tuple(native_agents.observe_sources(plan.state, plan.native_context.host_paths, host)
+                 for host in role_models.HOSTS)
+
+
+def _capture_commit_guard(plan: ModelPreferencePlan) -> _PreferenceGuardSnapshot:
+    """在显式纯准备phase内执行真实guard，前后绑定原生稀疏资格来源。"""
+    sources = _native_guard_sources(plan)
+    _guard(plan)
+    if _native_guard_sources(plan) != sources:
+        raise ValueError("模型准备期间原生角色来源已变化")
+    return _PreferenceGuardSnapshot(sources)
+
+
+def _check_catalog_sources(state, project, host, catalog, native_context):
+    """只重读已固定目录来源，不再推导项目/core资格，不查询或续期目录。
+
+    完整check_catalogs已经在同一纯准备phase内验证active集合；随后registry、
+    全部项目binding/config/managed节点和原生完整来源都必须仍等于同一前像。
+    因此这里只沿已固定各scope重查ready、来源stamp及缓存身份，不重新基准。
+    """
+    bundle = catalog if isinstance(catalog, PreferenceCatalogs) else PreferenceCatalogs(catalog, {})
+    if bundle._scope is not None and bundle._scope != (str(state), str(project) if project else None, host):
+        raise ValueError("模型目录范围在准备后变化")
+    snapshots = [(project, bundle.catalog)]
+    if project is None:
+        snapshots.extend((Path(path), item) for path, item in bundle.project_catalogs.items())
+    for target, previous in snapshots:
+        if not isinstance(previous, Catalog) or previous.host != host or previous._status != "ready":
+            raise ValueError("模型目录在准备后不可应用")
+        if previous.stamp:
+            current = _discover(host, project=target, _snapshot=previous, native_context=native_context)
+            if current._status != "ready" or current.stamp != previous.stamp:
+                raise ValueError("模型目录来源在准备后变化，请重新编辑")
+
+
+def _recheck_commit_guard(plan: ModelPreferencePlan, snapshot: _PreferenceGuardSnapshot) -> None:
+    """整树尾验结束后fresh比较原前像；此函数没有core读取或隐式宿主查询。"""
+    if not isinstance(snapshot, _PreferenceGuardSnapshot):
+        raise TypeError("模型准备来源快照无效")
+    if role_preferences.snapshot(plan.state)[0] != plan.global_before:
+        raise ValueError("全局角色偏好在准备后变化")
+    if plan.registry_before is not None and _registered(plan.state)[0] != plan.registry_before:
+        raise ValueError("登记项目列表在准备后变化")
+    for target in plan.targets:
+        runtime_service.recheck_ownership_sources(plan.state, target.observation.project,
+                                                  target.observation.ownership_sources)
+        if plan.catalog is None and target.catalog is not None:
+            _check_catalog_sources(plan.state, target.observation.project, plan.host, target.catalog, plan.native_context)
+    if plan.catalog is not None:
+        _check_catalog_sources(plan.state, plan.project, plan.host, plan.catalog, plan.native_context)
+    if _native_guard_sources(plan) != snapshot.native_sources:
+        raise ValueError("原生角色来源在准备封口后变化")
+
+
 def _restore_global(state: Path, before: Node, published: Node) -> None:
     """只撤回仍等于本轮产物的私有配置；后续编辑与换目录必须保留为冲突。"""
     if _read(state, role_preferences.RELATIVE) != published:
@@ -531,6 +610,9 @@ def apply(plan) -> dict:
     """应用同一进程内计划；多项目补偿复用模型备份及原生收据，不盲目恢复。"""
     if not isinstance(plan, ModelPreferencePlan) or not plan.summary["can_apply"]:
         raise ValueError("偏好预览存在冲突，不能应用")
+    # project及不经过commit的global尾phase都必须拥有自己的封口。入口先拒绝
+    # 外层租约，不能在native已发布/创建journal后才发现借来的phase尚未结束。
+    runtime_store.require_no_read_operation()
     summary = plan.summary
     result = {"applied": False, "scope": summary["scope"], "backup_id": None, "backups": [],
               "affected_projects": summary["affected_projects"], "diagnostic": "无偏好变更。"}
@@ -561,7 +643,10 @@ def apply(plan) -> dict:
                     service.check(plan.project, plan.host, state=plan.state)
             identifier = service.commit(plan.state, plan.project, target.changes,
                                         verify_project,
-                                        before_write=lambda: _guard(plan), native_context=plan.native_context)
+                                        read_preparation=service.CommitReadPreparation(
+                                            lambda: _capture_commit_guard(plan),
+                                            lambda captured: _recheck_commit_guard(plan, captured)),
+                                        native_context=plan.native_context)
             result.update(applied=identifier is not None, backup_id=identifier,
                           backups=[{"project": str(plan.project), "backup_id": identifier}] if identifier else [],
                           diagnostic="项目角色偏好已保存。" if identifier else result["diagnostic"])
@@ -602,7 +687,13 @@ def apply(plan) -> dict:
         try:
             if plan.global_native is not None:
                 native_receipt = native_agents.apply_global(plan.global_native)
+            no_project_changes = all(not target.changes for target in plan.targets)
             for target in plan.targets:
+                if no_project_changes:
+                    # 没有项目发布时，末次guard继续比较预览原前像。不能在native
+                    # 自有写之后重读_observe并把窗口中的第三方编辑追认为新基准。
+                    observations.append(target.observation)
+                    continue
                 _check_observation(plan.state, target.observation)
                 if target.changes:
                     project = target.observation.project
@@ -618,12 +709,19 @@ def apply(plan) -> dict:
                 observations.append(_observe(plan.state, target.observation.project)[0])
             # 所有项目先准备并成功后再发布全局权威。最后重查目录及目标，失败
             # 则按精确前后像补偿，不能把部分更新报告为全局成功。
-            if role_preferences.snapshot(plan.state)[0] != plan.global_before or _registered(plan.state)[0] != plan.registry_before:
-                raise ValueError("全局偏好或登记项目列表在应用期间变化")
-            if plan.catalog is not None and not check_catalogs(plan.state, None, plan.host, plan.catalog, native_context=plan.native_context):
-                raise ValueError("模型目录来源在应用期间变化")
-            for observation in observations:
-                _check_observation(plan.state, observation)
+            if no_project_changes:
+                with runtime_store.core_read_operation():
+                    publication_sources = _capture_commit_guard(plan)
+                # scope尾验仍位于本父补偿try内；fresh来源检查紧邻下面的权威
+                # 发布，不把昂贵核心尾检放在最终CAS之后，也不复用关闭reader。
+                _recheck_commit_guard(plan, publication_sources)
+            else:
+                if role_preferences.snapshot(plan.state)[0] != plan.global_before or _registered(plan.state)[0] != plan.registry_before:
+                    raise ValueError("全局偏好或登记项目列表在应用期间变化")
+                if plan.catalog is not None and not check_catalogs(plan.state, None, plan.host, plan.catalog, native_context=plan.native_context):
+                    raise ValueError("模型目录来源在应用期间变化")
+                for observation in observations:
+                    _check_observation(plan.state, observation)
             with state_files.AnchoredFile(plan.state, role_preferences.RELATIVE) as target:
                 def retain_global(original, previous, expected):
                     # 私有全局文件也保留旧 inode。仅保存正文副本会遗漏仍持有旧

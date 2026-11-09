@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 import copy
+import json
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -1151,17 +1152,254 @@ def _model_fields(body: bytes, host: str) -> dict:
     return validate(host, value)
 
 
+@dataclass(frozen=True)
+class OwnershipSources:
+    """项目归属证明的完整mutable来源；只保存固定inventory和实际Node。
+
+    inventory由已解析binding/journal生产，保留历史Skill名以复用原链接读取合同；
+    retained_json固定原历史预期，missing仍由原历史规则解释。没有reader、core或
+    授权标志。后续recheck必须沿此inventory读取，不能从新记录重新认领前像。
+    """
+
+    machine: Node
+    journal: Node
+    inventory: tuple
+    retained_json: bytes
+    observed: tuple
+    directories: tuple
+
+
+def _read_ownership_sources(state, project, inventory, retained_json):
+    """事实读取的唯一枚举执行点；完整Node保留identity/security及目录ACL。"""
+    with Tree(project) as tree:
+        observed = tuple((path, _raw(tree, path, skill_name=skill)) for path, skill in inventory)
+        directories = tree.directory_facts([path for path, _ in inventory])
+        tree.check()
+    return OwnershipSources(_read_state(state, _state_relative(project, "bindings")),
+                            _read_state(state, _state_relative(project, "transactions")),
+                            inventory, retained_json, observed, directories)
+
+
+def capture_ownership_sources(state, project, *, extra_paths=()) -> OwnershipSources:
+    """在实际ownership guard之前固定全部来源，不代替guard或授予写许可。
+
+    CONFIG、managed与binding/journal两份retained inventory在本职责统一枚举，
+    global偏好及project receipt共用。额外路径只补本次计划尚未存在的目标；
+    准备期间记录变化即拒绝，不能把较晚读到的新inventory追认为guard前像。
+    """
+    state, project = store.state_root(state), canonical_project(project)
+    machine, record = read_binding_record(state, project)
+    journal_node, journal = _journal(state, project)
+    if isinstance(extra_paths, (str, bytes)):
+        raise TypeError("额外归属来源必须是逻辑路径序列")
+    paths = {CONFIG, *(record["managed"] if record else ())}
+    paths.update(relative_path(path) for path in extra_paths)
+    histories = (record["retained_nodes"] if record else []) + (journal.get("retained_nodes", []) if journal else [])
+    retained = {row["path"]: row.get("skill") for row in histories}
+    paths.update(retained)
+    inventory = tuple((relative_path(path), retained.get(path) or
+                       (skill_parts(path)[1] if skill_parts(path) else None)) for path in sorted(paths))
+    # 两份输入各自由原私有记录codec限制；此镜像仅驻留本次RAM，不是新的wire。
+    # 不能再套单份4MiB发布预算，把两份分别合法的来源合并后误拒绝为超限。
+    retained_json = json.dumps(histories, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    snapshot = _read_ownership_sources(state, project, inventory, retained_json)
+    if snapshot.machine != machine or snapshot.journal != journal_node:
+        raise ActivationError("项目归属记录在来源捕获期间变化")
+    return snapshot
+
+
+def recheck_ownership_sources(state, project, before: OwnershipSources) -> None:
+    """fresh比较原inventory的完整来源；封口后不再解析新inventory或读core。"""
+    if not isinstance(before, OwnershipSources):
+        raise TypeError("项目归属来源快照无效")
+    state, project = store.state_root(state), canonical_project(project)
+    # 记录本身先拒漂移，再沿原inventory读取项目节点；不能在新记录上重建
+    # 较小的路径集。最后一次完整比较仍会捕获这些读取期间的记录并发修改。
+    if (_read_state(state, _state_relative(project, "bindings")) != before.machine
+            or _read_state(state, _state_relative(project, "transactions")) != before.journal):
+        raise ActivationError("项目归属记录在证明后变化")
+    if _read_ownership_sources(state, project, before.inventory, before.retained_json) != before:
+        raise ActivationError("项目归属、保留节点或目录在证明后变化")
+
+
+@dataclass(frozen=True)
+class _NativeEditSnapshot:
+    """receipt附加来源；项目文件事实统一归OwnershipSources所有。"""
+
+    ownership: OwnershipSources
+    preferences: Node
+    controls: tuple
+    native_sources: tuple
+
+    @property
+    def machine(self):
+        return self.ownership.machine
+
+    @property
+    def journal(self):
+        return self.ownership.journal
+
+
+def _native_edit_extra_sources(state, project, native_context):
+    from . import runtime_policy
+    sources = ()
+    if native_context is not None:
+        from . import native_agents
+        sources = tuple(native_agents.observe_sources(state, native_context.host_paths, host) for host in HOSTS)
+    controls = tuple((path, _read_state(state, path)) for path in (
+        runtime_policy.CURRENT, runtime_policy.ACTIVATION, "central/lifecycle.json", runtime_policy.policy_relative(project)))
+    return role_preferences.snapshot(state)[0], controls, sources
+
+
+def _capture_native_edit_sources(state, project, tree, changes, native_context):
+    tree.check()
+    ownership = capture_ownership_sources(state, project, extra_paths=tuple(change.relative for change in changes))
+    return _NativeEditSnapshot(ownership, *_native_edit_extra_sources(state, project, native_context))
+
+
+def _recheck_native_edit_sources(state, project, tree, native_context, before):
+    tree.check()
+    recheck_ownership_sources(state, project, before.ownership)
+    if _native_edit_extra_sources(state, project, native_context) != (before.preferences, before.controls, before.native_sources):
+        raise ActivationError("模型准备后偏好、控制或原生来源已变化")
+    tree.check()
+
+
+@store.read_operation
+def _prepare_native_edit_receipt(state, project, tree, machine_tree, before, record, journal_before, changes,
+                                 native_context, global_preferences):
+    """锁后的纯验证/编译阶段；完整尾验在yield给writer前完成。
+
+    standalone调用拥有短operation，service显式纯准备入口则借用同一个operation。
+    来源前后相等才能把此次实际guard绑定到快照，禁止guard后重读追认新前像。
+    """
+    from lib import role_models
+    from . import runtime_policy
+    source_before = _capture_native_edit_sources(state, project, tree, changes, native_context)
+    if source_before.machine != before or source_before.journal != journal_before:
+        raise ActivationError("机器绑定或项目事务在模型准备前变化")
+    # 外层锁序和原pending门保持；在已捕获来源上实际重验结算门，不能把
+    # 外层检查以后新出现的prepared状态当作已通过guard的准备前像。
+    runtime_policy.ensure_management_settled(state)
+    conflicts, _ = _ownership(tree, record, state, repair=False)
+    if conflicts:
+        raise ActivationError("当前资源含未知编辑，不能登记模型收据", conflicts)
+    config_change = next((change for change in changes if change.relative == CONFIG), None)
+    config_before = tree.read(CONFIG)
+    if config_before.kind != "file" or (config_change is not None and config_change.after is None):
+        raise ActivationError("模型收据必须保留有效项目配置")
+    config_after = config_change.after if config_change is not None else config_before.payload
+    preferences = role_preferences.snapshot(state)[1] if global_preferences is None else global_preferences
+    role_preferences.payload(preferences)
+    core = store.load_core(record["runtime_binding"], state)
+    resources = Resources(core.root, json_bytes(core.binding()), core.label, core)
+    profile = None
+    verified = ()
+    if native_context is not None:
+        from . import native_agents
+        verified = native_agents.verified_hosts(state, context=native_context)
+    seen = set()
+    for change in changes:
+        relative = relative_path(change.relative)
+        if (relative in seen or change.before is not None and not isinstance(change.before, bytes)
+                or change.after is not None and not isinstance(change.after, bytes)
+                or change.before is None and change.after is None
+                or type(change.mode) is not int):
+            raise ActivationError("模型收据变化列表无效或重复")
+        seen.add(relative)
+        current = tree.read(relative)
+        expected_before = Node() if change.before is None else Node("file", change.before, change.mode)
+        if not current.same_content(expected_before) or content_mode(current.mode) != content_mode(expected_before.mode):
+            raise ActivationError("模型收据前像与当前文件不符：" + relative)
+        if relative == CONFIG:
+            if change.before is None or change.after is None:
+                raise ActivationError("模型收据不能创建或删除项目配置")
+            parsed = role_models.parse(change.after.decode("utf-8"))
+            forward = role_models.update(change.before.decode("utf-8"), parsed).encode() == change.after
+            # 精确恢复到原先没有 role_models 的模板时，空 update 会保留映射
+            # 头及空行。只允许同一权威补丁器可严格证明的逆变换；不去空行、
+            # 不比较宽松 YAML 结构，非模型正文或记忆/权限字节仍必须完全相同。
+            inverse = role_models.update(change.after.decode("utf-8"), role_models.parse(change.before.decode("utf-8"))).encode() == change.before
+            if not forward and not inverse:
+                raise ActivationError("模型收据只能修改项目 role_models 区块")
+            continue
+        managed = record["managed"].get(relative)
+        selected_role = next(((host, role) for host, (directory, suffix) in project_files.ROLE_PATHS.items()
+                              for role in role_models.ROLES if relative == f"{directory}/{role}{suffix}"), None)
+        if selected_role is None:
+            raise ActivationError("模型收据只能修改精确的原生角色路径")
+        host, role = selected_role
+        if change.before is None or change.after is None:
+            # 稀疏投影的增删不是普通 model 补丁：必须由固定核心编译结果
+            # 证明完整正文、权限与角色策略；删除还要求宿主全部七角色归属，
+            # 不能因单个同名全局文件存在就撤掉唯一可发现的项目角色。
+            if profile is None:
+                _, profile, _ = project_files.configuration(resources, project, Node("file", config_after, config_before.mode),
+                                                            owned_links={path for path, entry in record["managed"].items() if entry["purpose"] == "skill"})
+            if host not in record["hosts"] or role not in profile.enabled_roles or not record["enabled"]:
+                raise ActivationError("稀疏角色不属于项目已启用的宿主和角色")
+            if change.before is None:
+                compiled = project_files.role_resource(resources, config_after, host, role, record["runtime_binding"], preferences=preferences)
+                # 新建角色只允许规范请求mode及当前文件系统对该mode的精确
+                # 投影。Windows备份通过stat保留实际0666，恢复不能将其伪改
+                # 为0644；也不能按可写位放宽到0600/0777等其他权限。这里
+                # 仅校验计划mode，真实节点的ACL、身份及收据仍由原路径验证。
+                if managed is not None or change.mode not in {0o644, project_mode(0o644)} or change.after != compiled:
+                    raise ActivationError("稀疏角色创建必须等于固定核心完整编译结果")
+            else:
+                from lib.hosts import claude_options
+                overrides = role_models.parse(config_after.decode()).get(host, {})
+                claude_override = host == "claude" and role in claude_options.parse(config_after.decode())["auto_compact_windows"]
+                compiled_before = project_files.role_resource(resources, config_before.payload, host, role, record["runtime_binding"],
+                                                              preferences=role_preferences.snapshot(state)[1])
+                if (not managed or managed["purpose"] != "role" or Node.from_value(managed["baseline"]).kind != "missing"
+                        or host not in verified or role in overrides or claude_override or change.before != compiled_before):
+                    raise ActivationError("稀疏角色删除缺少完整全局归属或仍有项目覆盖")
+            continue
+        if not managed or managed["purpose"] != "role":
+            raise ActivationError("模型收据只能修改已登记的原生角色")
+        selected = _model_fields(change.after, host)
+        if role_models.patch_artifact(change.before, host, selected) != change.after:
+            raise ActivationError("模型收据包含模型字段以外的变化")
+    _recheck_native_edit_sources(state, project, tree, native_context, source_before)
+    profile_snapshot = None
+    if profile is not None:
+        from lib.project.validate_project_config import validate_workspace
+        errors = []
+        overrides = validate_workspace(config_after.decode("utf-8").splitlines(), errors)
+        if errors or overrides is None:
+            raise ActivationError("稀疏角色画像配置在准备期间无效")
+        profile_snapshot = (profile, overrides)
+    return NativeEditReceipt(state, project, tree, machine_tree, before, record, changes,
+                             native_context, source_before, profile_snapshot)
+
+
 class NativeEditReceipt:
     """合法模型事务的条件收据；由 native_edit_receipt 上下文管理其生命周期。"""
 
     def __init__(self, state: Path, project: Path, tree: Tree, machine_tree: Tree,
-                 before: Node, record: dict, changes: tuple, native_context=None):
+                 before: Node, record: dict, changes: tuple, native_context=None, prepared_sources=None, profile_snapshot=None):
         self.state, self.project = state, project
         self.tree, self.machine_tree = tree, machine_tree
         self.before, self.record, self.changes = before, record, changes
         self.generation = uuid.uuid4().hex
         self.published = False
         self.native_context = native_context
+        self._prepared_sources = prepared_sources
+        self._profile_snapshot = profile_snapshot
+
+    def check_before_write(self) -> None:
+        """核心封口之后、项目发布之前fresh复核原输入，不重新建立许可基准。"""
+        from . import runtime_policy
+        runtime_policy.ensure_management_settled(self.state)
+        if self._profile_snapshot is not None:
+            from lib.project.project_discovery import discover_project
+            expected, overrides = self._profile_snapshot
+            if discover_project(self.project, overrides) != expected:
+                raise ActivationError("模型准备封口后项目画像已变化")
+        # 画像可能遍历较大工作区；先完成它，再fresh比较原节点/绑定/目录，
+        # 不在最后一轮mutable来源证据之后插入这一较昂贵的发现步骤。
+        _recheck_native_edit_sources(self.state, self.project, self.tree, self.native_context, self._prepared_sources)
 
     def publish(self) -> dict:
         """放在现有 manager.service.commit 的 verify 回调内调用，失败由原事务撤回。
@@ -1215,7 +1453,6 @@ def native_edit_receipt(state: Path, project: Path, changes, *, native_context=N
     任何正文、权限、MCP、provider 或额外路径变化都在写入前拒绝。原 commit
     继续拥有项目文件备份与回滚，本上下文只同步并条件撤回机器收据。
     """
-    from lib import role_models
     state, project = store.state_root(state), canonical_project(project)
     changes = tuple(changes)
     with ExitStack() as stack:
@@ -1227,92 +1464,13 @@ def native_edit_receipt(state: Path, project: Path, changes, *, native_context=N
         before, record = read_binding_record(state, project)
         if record is None:
             raise ActivationError("模型收据仅适用于本机已有中央绑定的项目")
-        _, journal = _journal(state, project)
+        journal_before, journal = _journal(state, project)
         if journal and journal["phase"] in {"prepared", "conflict"}:
             raise ActivationError("中央项目存在未完成事务，先恢复")
         machine_tree = stack.enter_context(Tree(state))
         stack.enter_context(directory_lock(state / "bindings", "central-project-state"))
-        conflicts, _ = _ownership(tree, record, state, repair=False)
-        if conflicts:
-            raise ActivationError("当前资源含未知编辑，不能登记模型收据", conflicts)
-        config_change = next((change for change in changes if change.relative == CONFIG), None)
-        config_before = tree.read(CONFIG)
-        if config_before.kind != "file" or (config_change is not None and config_change.after is None):
-            raise ActivationError("模型收据必须保留有效项目配置")
-        config_after = config_change.after if config_change is not None else config_before.payload
-        preferences = role_preferences.snapshot(state)[1] if global_preferences is None else global_preferences
-        role_preferences.payload(preferences)
-        core = store.load_core(record["runtime_binding"], state)
-        resources = Resources(core.root, json_bytes(core.binding()), core.label, core)
-        profile = None
-        verified = ()
-        if native_context is not None:
-            from . import native_agents
-            verified = native_agents.verified_hosts(state, context=native_context)
-        seen = set()
-        for change in changes:
-            relative = relative_path(change.relative)
-            if (relative in seen or change.before is not None and not isinstance(change.before, bytes)
-                    or change.after is not None and not isinstance(change.after, bytes)
-                    or change.before is None and change.after is None
-                    or type(change.mode) is not int):
-                raise ActivationError("模型收据变化列表无效或重复")
-            seen.add(relative)
-            current = tree.read(relative)
-            expected_before = Node() if change.before is None else Node("file", change.before, change.mode)
-            if not current.same_content(expected_before) or content_mode(current.mode) != content_mode(expected_before.mode):
-                raise ActivationError("模型收据前像与当前文件不符：" + relative)
-            if relative == CONFIG:
-                if change.before is None or change.after is None:
-                    raise ActivationError("模型收据不能创建或删除项目配置")
-                parsed = role_models.parse(change.after.decode("utf-8"))
-                forward = role_models.update(change.before.decode("utf-8"), parsed).encode() == change.after
-                # 精确恢复到原先没有 role_models 的模板时，空 update 会保留映射
-                # 头及空行。只允许同一权威补丁器可严格证明的逆变换；不去空行、
-                # 不比较宽松 YAML 结构，非模型正文或记忆/权限字节仍必须完全相同。
-                inverse = role_models.update(change.after.decode("utf-8"), role_models.parse(change.before.decode("utf-8"))).encode() == change.before
-                if not forward and not inverse:
-                    raise ActivationError("模型收据只能修改项目 role_models 区块")
-                continue
-            managed = record["managed"].get(relative)
-            selected_role = next(((host, role) for host, (directory, suffix) in project_files.ROLE_PATHS.items()
-                                  for role in role_models.ROLES if relative == f"{directory}/{role}{suffix}"), None)
-            if selected_role is None:
-                raise ActivationError("模型收据只能修改精确的原生角色路径")
-            host, role = selected_role
-            if change.before is None or change.after is None:
-                # 稀疏投影的增删不是普通 model 补丁：必须由固定核心编译结果
-                # 证明完整正文、权限与角色策略；删除还要求宿主全部七角色归属，
-                # 不能因单个同名全局文件存在就撤掉唯一可发现的项目角色。
-                if profile is None:
-                    _, profile, _ = project_files.configuration(resources, project, Node("file", config_after, config_before.mode),
-                                                                owned_links={path for path, entry in record["managed"].items() if entry["purpose"] == "skill"})
-                if host not in record["hosts"] or role not in profile.enabled_roles or not record["enabled"]:
-                    raise ActivationError("稀疏角色不属于项目已启用的宿主和角色")
-                if change.before is None:
-                    compiled = project_files.role_resource(resources, config_after, host, role, record["runtime_binding"], preferences=preferences)
-                    # 新建角色只允许规范请求mode及当前文件系统对该mode的精确
-                    # 投影。Windows备份通过stat保留实际0666，恢复不能将其伪改
-                    # 为0644；也不能按可写位放宽到0600/0777等其他权限。这里
-                    # 仅校验计划mode，真实节点的ACL、身份及收据仍由原路径验证。
-                    if managed is not None or change.mode not in {0o644, project_mode(0o644)} or change.after != compiled:
-                        raise ActivationError("稀疏角色创建必须等于固定核心完整编译结果")
-                else:
-                    from lib.hosts import claude_options
-                    overrides = role_models.parse(config_after.decode()).get(host, {})
-                    claude_override = host == "claude" and role in claude_options.parse(config_after.decode())["auto_compact_windows"]
-                    compiled_before = project_files.role_resource(resources, config_before.payload, host, role, record["runtime_binding"],
-                                                                  preferences=role_preferences.snapshot(state)[1])
-                    if (not managed or managed["purpose"] != "role" or Node.from_value(managed["baseline"]).kind != "missing"
-                            or host not in verified or role in overrides or claude_override or change.before != compiled_before):
-                        raise ActivationError("稀疏角色删除缺少完整全局归属或仍有项目覆盖")
-                continue
-            if not managed or managed["purpose"] != "role":
-                raise ActivationError("模型收据只能修改已登记的原生角色")
-            selected = _model_fields(change.after, host)
-            if role_models.patch_artifact(change.before, host, selected) != change.after:
-                raise ActivationError("模型收据包含模型字段以外的变化")
-        receipt = NativeEditReceipt(state, project, tree, machine_tree, before, record, changes, native_context)
+        receipt = _prepare_native_edit_receipt(state, project, tree, machine_tree, before, record, journal_before, changes,
+                                               native_context, global_preferences)
         try:
             yield receipt
             if changes and not receipt.published:

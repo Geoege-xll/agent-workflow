@@ -639,6 +639,16 @@ def _active_operation():
     return operation
 
 
+def require_no_read_operation():
+    """要求写入口自行拥有其短读阶段，不接管调用方已有的核心租约。
+
+    只复用原owner/thread/module/closed检查；无参数、无许可返回值，也不创建
+    或关闭任何reader。异常上下文同样失败关闭，防止父尾验延迟到业务写入后。
+    """
+    if _active_operation() is not None:
+        raise RuntimeStoreError("写入准备不能嵌入现有核心读取操作")
+
+
 class CoreReadOperation:
     """只拥有本次同步调用的reader，不保存业务状态、不授权执行或写入。
 

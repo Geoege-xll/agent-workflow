@@ -131,6 +131,17 @@ def _observe(state: Path, paths: HostPaths, host: str) -> _Observation:
                         native.read_node(state, native.record_relative(root)), native.discover(root, host))
 
 
+def observe_sources(state: Path, host_paths: HostPaths, host: str) -> _Observation:
+    """fresh读取原生归属的完整不可变来源，供调用方比较本轮原快照。
+
+    只复用既有观察器：root身份、owner/record及discovery内的完整Node均保留，
+    不能用roles列表代替文件身份/ACL。结果不代表归属已验证，也不授予执行或
+    写入权限；调用方必须实际完成原guard，并在其前后及核心封口后比较来源。
+    本接口不缓存、不创建目录、不改变内部writer或原生恢复日志的职责。
+    """
+    return _observe(state, host_paths, host)
+
+
 def _ownership(state: Path, before: _Observation) -> tuple[dict | None, list]:
     conflicts = []
     record = native.parse_record(before.record, state=state, root=before.root,

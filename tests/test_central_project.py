@@ -1439,6 +1439,216 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         return [Change(relative, before, role_models.patch_artifact(before, "codex", selected), 0o644),
                 Change(resources.CONFIG, config, updated, 0o644)]
 
+    def test_model_commit_read_preparation_keeps_callback_boundary_and_single_scan(self):
+        """纯准备真实借一次reader；普通callback不借scope，双合同在建锁前拒绝。"""
+        from manager import service as models
+        self.enable()
+        changes = self.model_changes()
+        def persisted(root):
+            return {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_ino, path.stat().st_mtime_ns)
+                    for path in root.rglob("*") if path.is_file() and not path.is_symlink()}
+        for other_pin in (False, True):
+            with self.subTest(other_pin=other_pin):
+                seen = []
+                def capture():
+                    self.assertIsNotNone(store._READ_OPERATION.get())
+                    core = store.load_core(self.core.binding(), self.state)
+                    store.read_core_source(core, "lib/role_models.py")
+                    if other_pin:store.load_core(self.alternate.binding(), self.state)
+                    return (self.project / changes[1].relative).read_bytes()
+                def recheck(snapshot):
+                    self.assertIsNone(store._READ_OPERATION.get())
+                    self.assertEqual(snapshot, (self.project / changes[1].relative).read_bytes())
+                    self.assertEqual((2, 4) if other_pin else (1, 2), (scan.call_count, verify.call_count))
+                    seen.append(True)
+                with patch.object(store, "_scan", wraps=store._scan) as scan, \
+                        patch.object(store, "_verify_snapshot", wraps=store._verify_snapshot) as verify:
+                    identifier = models.commit(self.state, self.project, changes,
+                        read_preparation=models.CommitReadPreparation(capture, recheck))
+                self.assertTrue(identifier)
+                self.assertEqual([True], seen)
+                self.assertEqual((3, 6) if other_pin else (2, 4), (scan.call_count, verify.call_count))
+                models.commit(self.state, self.project, models.prepare_restore(self.state, self.project, identifier))
+                self.assertIsNone(store._READ_OPERATION.get())
+        before = persisted(self.project), persisted(self.state)
+        called = []
+        def old_callback():
+            self.assertIsNone(store._READ_OPERATION.get())
+            called.append(True)
+            raise OSError("original-before-write-contract")
+        with self.assertRaisesRegex(OSError, "original-before-write-contract"):
+            models.commit(self.state, self.project, changes, before_write=old_callback)
+        self.assertEqual([True], called)
+        self.assertEqual(before, (persisted(self.project), persisted(self.state)))
+        bad_state = self.workspace / ("never-created-" + uuid.uuid4().hex)
+        preparation = models.CommitReadPreparation(lambda: self.fail("不得capture"), lambda value: self.fail("不得recheck"))
+        with self.assertRaisesRegex(ValueError, "不能同时"):
+            models.commit(bad_state, self.project, changes, before_write=lambda: self.fail("不得callback"),
+                          read_preparation=preparation)
+        with self.assertRaises(TypeError):models.commit(bad_state, self.project, changes, read_preparation=object())
+        with self.assertRaises(TypeError):models.CommitReadPreparation(None, lambda value: None)
+        with self.assertRaises(ValueError):service.capture_ownership_sources(self.state, self.project, extra_paths=("../escape",))
+        with self.assertRaises(TypeError):service.capture_ownership_sources(self.state, self.project, extra_paths="ambiguous-string")
+        self.assertFalse(bad_state.exists())
+        self.assertEqual(before, (persisted(self.project), persisted(self.state)))
+        with store.core_read_operation() as parent:
+            reader = parent.reader(self.core.binding(), self.state)
+            with self.assertRaisesRegex(ValueError, "读取操作"):
+                models.commit(bad_state, self.project, changes, read_preparation=preparation)
+            self.assertFalse(bad_state.exists())
+            self.assertFalse(parent._closed)
+            self.assertIs(reader, parent.reader(self.core.binding(), self.state))
+            reader.core_for(self.core.binding(), self.state)
+            self.assertEqual(before, (persisted(self.project), persisted(self.state)))
+        with store.core_read_operation() as closed:
+            closed.reader(self.core.binding(), self.state)
+            closed.finish()
+            with self.assertRaises(ValueError):
+                models.commit(bad_state, self.project, changes, read_preparation=preparation)
+        self.assertFalse(bad_state.exists())
+        self.assertIsNone(store._READ_OPERATION.get())
+
+    def test_model_commit_read_preparation_rejects_finish_and_mutable_drift_before_write(self):
+        """真实尾验/封口窗口故障全部零模型发布；原生来源及pyproject画像也必检。"""
+        from lib.hosts.native_context import HostPaths, NativeContext
+        from manager import central_runtime, native_agents, model_preferences as preferences, service as models
+        home = self.workspace / ("phase-native-home-" + uuid.uuid4().hex)
+        (home / ".codex").mkdir(parents=True)
+        (home / ".codex/config.toml").write_text('model_catalog_json="models.json"\n')
+        (home / ".codex/models.json").write_text(json.dumps({"models": [
+            {"id": "phase-model", "supported_reasoning_levels": ["high", "max"]}]}))
+        context = NativeContext(self.state, HostPaths.for_home(home, environment={}))
+        central_runtime.apply(central_runtime.preview(self.state, binding=self.core.binding(), native_context=context))
+        original_prepare, original_finish = service._prepare_native_edit_receipt, store.CoreReadOperation.finish
+        source = self.core.root / "roles/xy-backend.md"
+        source_body, source_mode = source.read_bytes(), stat.S_IMODE(source.stat().st_mode)
+        for fault in ("core_tail", "config", "binding", "journal_before_capture", "managed", "retained", "directory", "native", "catalog", "profile"):
+            with self.subTest(fault=fault):
+                project = self.workspace / ("phase-project-" + uuid.uuid4().hex)
+                project.mkdir()
+                (project / "pyproject.toml").write_text('[project]\nname="phase-project"\nversion="0.1.0"\n')
+                self.put(project, ".codex/config.toml", b"# existing user config\n")
+                project_service.apply_project(project_service.preview_project(self.state, project, "add", enable=True,
+                                                                              native_context=context))
+                self.assertTrue(service.status(self.state, project)["new_task_allowed"])
+                catalogs = preferences.load_catalogs(self.state, project, "codex", native_context=context)
+                plan = preferences.preview(self.state, project, "codex", {"xy-backend": {"model": "phase-model"}},
+                                           catalogs, native_context=context)
+                self.assertTrue(plan.summary["can_apply"], plan.summary)
+                self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
+                machine = self.state / service._state_relative(project, "bindings")
+                machine_before = machine.read_bytes()
+                journal = self.state / service._state_relative(project, "transactions")
+                journal_before = journal.read_bytes()
+                config = project / resources.CONFIG
+                config_before = config.read_bytes()
+                _, record = service.read_binding_record(self.state, project)
+                natives_before = native_agents.observe_sources(self.state, context.host_paths, "codex")
+                # 归属marker名字由正式低层producer提供，不能猜路径令负控空转。
+                from lib.hosts import native_agents as native_files
+                native_owner = context.host_paths.codex / native_files.OWNER
+                owner_before = native_owner.read_bytes()
+                catalog_file = context.host_paths.codex / "models.json"
+                catalog_before = catalog_file.read_bytes()
+                armed, injected, preserved_edits, directory_os_blocked = [], [], [], []
+                directory = project / ".agent-workflow"
+                directory_identity = (directory.stat().st_dev, directory.stat().st_ino)
+                directory_bytes = {path.relative_to(directory).as_posix(): path.read_bytes()
+                                   for path in directory.rglob("*") if path.is_file() and not path.is_symlink()}
+                def prepare(*args, **kwargs):
+                    if fault == "journal_before_capture":mutate()
+                    result = original_prepare(*args, **kwargs)
+                    armed.append(True)
+                    return result
+                def mutate():
+                    if injected:return
+                    injected.append(True)
+                    if fault == "core_tail":
+                        source.chmod(source_mode | stat.S_IWUSR)
+                        source.write_bytes(source_body + b"\nphase-core-mutation\n")
+                    elif fault == "config":config.write_bytes(config_before + b"\n# external-config\n")
+                    elif fault == "binding":machine.write_bytes(machine_before + b" ")
+                    elif fault == "journal_before_capture":journal.write_bytes(journal_before + b" ")
+                    elif fault == "managed":
+                        path = project / next(path for path, row in record["managed"].items() if row["purpose"] == "block")
+                        path.write_bytes(path.read_bytes() + b"\nexternal-managed-node\n")
+                        preserved_edits.append((path, path.read_bytes()))
+                    elif fault == "retained":
+                        self.assertTrue(record["retained_nodes"], "必须有真实保留inode，不能跳过负控")
+                        path = project / record["retained_nodes"][0]["path"]
+                        path.write_bytes(path.read_bytes() + b"\nexternal-retained-node\n")
+                        preserved_edits.append((path, path.read_bytes()))
+                    elif fault == "directory":
+                        try:
+                            directory.rename(project / ".agent-workflow-external-held")
+                        except OSError as error:
+                            # Windows的既有锚定HANDLE没有SHARE_DELETE；内核可能先
+                            # 阻止rename。这不是fresh guard拒绝，只接受实际精确的
+                            # sharing/access错误，其它平台/错误原样失败，不模拟成功。
+                            if sys.platform != "win32" or getattr(error, "winerror", None) not in {5, 32}:
+                                raise
+                            directory_os_blocked.append(error.winerror)
+                            raise
+                        directory.mkdir()
+                        config.write_bytes(config_before)
+                    elif fault == "native":native_owner.write_bytes(owner_before + b" ")
+                    elif fault == "catalog":catalog_file.write_bytes(catalog_before.replace(b"phase-model", b"other-model"))
+                    else:(project / "pyproject.toml").unlink()
+                def finish(operation):
+                    if armed and fault == "core_tail":mutate()
+                    result = original_finish(operation)
+                    if armed and fault != "core_tail":mutate()
+                    return result
+                try:
+                    with patch.object(service, "_prepare_native_edit_receipt", prepare), \
+                            patch.object(store.CoreReadOperation, "finish", finish), \
+                            patch("manager.codex_models.query", side_effect=AssertionError("封口复核不得查询宿主")), \
+                            self.assertRaises((ValueError, OSError) if fault == "directory" and sys.platform == "win32" else ValueError) as rejected:
+                        preferences.apply(plan)
+                    self.assertEqual([True], injected)
+                    self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
+                    self.assertEqual([], models.backups(self.state, project))
+                    self.assertEqual(machine_before + (b" " if fault == "binding" else b""), machine.read_bytes())
+                    self.assertEqual(journal_before + (b" " if fault == "journal_before_capture" else b""), journal.read_bytes())
+                    if fault != "config":self.assertEqual(config_before, config.read_bytes())
+                    else:self.assertEqual(config_before + b"\n# external-config\n", config.read_bytes())
+                    for path, expected_bytes in preserved_edits:
+                        self.assertEqual(expected_bytes, path.read_bytes(), "拒绝不能撤回外部managed/retained编辑")
+                    if fault == "directory":
+                        held = project / ".agent-workflow-external-held"
+                        if directory_os_blocked:
+                            self.assertIsInstance(rejected.exception, OSError)
+                            self.assertEqual(directory_os_blocked, [rejected.exception.winerror])
+                            self.assertIn(rejected.exception.winerror, {5, 32})
+                            self.assertFalse(held.exists())
+                            self.assertEqual(directory_identity, (directory.stat().st_dev, directory.stat().st_ino))
+                            self.assertEqual(directory_bytes, {path.relative_to(directory).as_posix(): path.read_bytes()
+                                             for path in directory.rglob("*") if path.is_file() and not path.is_symlink()})
+                            # 异常退出原receipt/锁上下文后，再用真实rename成功证明
+                            # 本轮无SHARE_DELETE句柄已经结清；不更改生产sharing。
+                            directory.rename(held)
+                            held.rename(directory)
+                            self.assertEqual(directory_identity, (directory.stat().st_dev, directory.stat().st_ino))
+                            print("WINDOWS_DIRECTORY_OS_BLOCKED_ZERO_PUBLICATION_HANDLES_RELEASED winerror=" + str(rejected.exception.winerror))
+                        else:
+                            self.assertIsInstance(rejected.exception, ValueError)
+                            self.assertTrue(held.exists())
+                            print("DIRECTORY_REPLACED_THEN_FRESH_GUARD_REJECTED platform=" + sys.platform)
+                    if fault == "native":
+                        self.assertNotEqual(natives_before, native_agents.observe_sources(self.state, context.host_paths, "codex"))
+                        self.assertEqual(owner_before + b" ", native_owner.read_bytes())
+                    if fault == "catalog":self.assertEqual(catalog_before.replace(b"phase-model", b"other-model"), catalog_file.read_bytes())
+                    if fault == "core_tail":self.assertEqual(source_body + b"\nphase-core-mutation\n", source.read_bytes())
+                    if fault == "profile":self.assertFalse((project / "pyproject.toml").exists())
+                finally:
+                    if fault == "core_tail" and injected:
+                        source.chmod(source_mode | stat.S_IWUSR)
+                        source.write_bytes(source_body)
+                        source.chmod(source_mode)
+                    native_owner.write_bytes(owner_before)
+                    catalog_file.write_bytes(catalog_before)
+                self.assertIsNone(store._READ_OPERATION.get())
+
     def test_model_receipt_syncs_real_existing_commit(self):
         from manager.service import commit, prepare_restore
         self.enable()

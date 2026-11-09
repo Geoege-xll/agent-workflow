@@ -14,6 +14,7 @@ import re
 import stat
 import tomllib
 import uuid
+from typing import Callable
 
 from lib.hosts.claude_instructions import read_file
 from lib.hosts.native_agents import native_settings
@@ -27,6 +28,23 @@ from . import runtime_service, state_files
 LOCATIONS = {"codex": (".codex/agents", ".toml"), "claude": (".claude/agents", ".md"), "antigravity": (".agents/agents", ".md")}
 MAX_RECORD_BYTES = 4 * 1024 * 1024
 BACKUP_ID = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
+
+
+@dataclass(frozen=True)
+class CommitReadPreparation:
+    """显式纯准备合同；与允许任意行为的旧before_write回调分开。
+
+    capture必须真正运行业务guard，只返回本次mutable来源快照，不能返回
+    validated/skip许可或活reader。recheck在核心整树封口后fresh比较该快照，
+    不再读core或查询宿主。业务规则仍归调用方，service只拥有锁与阶段顺序。
+    """
+
+    capture: Callable[[], object]
+    recheck: Callable[[object], None]
+
+    def __post_init__(self):
+        if not callable(self.capture) or not callable(self.recheck):
+            raise TypeError("纯读取准备必须提供capture及recheck函数")
 
 
 @runtime_store.read_operation
@@ -396,8 +414,18 @@ def _replace_optional(target, body: bytes | None, mode: int, expected: tuple) ->
 
 
 def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, verify=None, before_write=None,
-           *, native_context=None, global_preferences=None) -> str | None:
+           *, native_context=None, global_preferences=None, read_preparation=None) -> str | None:
     """先备份再写入；失败只撤回仍等于本轮精确产物的文件，绝不覆盖并发修改。"""
+    # 新旧回调具有不同语义；入口先拒绝歧义及坏类型，连协调锁都不能创建。
+    # 旧调用不传新参数，before_write仍在原锁内位置按原任意callback合同运行。
+    if read_preparation is not None and (not isinstance(read_preparation, CommitReadPreparation)
+                                         or not callable(read_preparation.capture)
+                                         or not callable(read_preparation.recheck)):
+        raise TypeError("read_preparation必须是完整的CommitReadPreparation")
+    if read_preparation is not None and before_write is not None:
+        raise ValueError("read_preparation与before_write不能同时提供")
+    if read_preparation is not None:
+        runtime_store.require_no_read_operation()
     if not changes:
         return None
     # restore 与旧直接调用也必须参与同一全局协调，不能在跨项目计划最后核查
@@ -406,12 +434,25 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
         if before_write:before_write()
         if isinstance(changes,RestorePlan):changes.validate(project)
         receipt = None
-        if runtime_service.status(state, project)["runtime_binding"] is not None:
-            # 中央锁由唯一原生收据上下文持有；现有模型锁仍只保护备份/配置事务。
-            # 收据在任何项目写入前校验声明范围，退出异常时在原事务撤回后恢复前像。
-            receipt_options = ({"native_context": native_context, "global_preferences": global_preferences}
-                               if native_context is not None else {})
-            receipt = stack.enter_context(runtime_service.native_edit_receipt(state, project, changes, **receipt_options))
+        def prepare_receipt():
+            if runtime_service.status(state, project)["runtime_binding"] is not None:
+                # 锁及异常恢复上下文的生命期仍跨原commit；纯核心reader必须在
+                # 下面短phase退出时撤销，不能跟随receipt活到实际文件写入之后。
+                options = ({"native_context": native_context, "global_preferences": global_preferences}
+                           if native_context is not None else {})
+                return stack.enter_context(runtime_service.native_edit_receipt(state, project, changes, **options))
+            return None
+        if read_preparation is None:
+            receipt = prepare_receipt()
+        else:
+            with runtime_store.core_read_operation():
+                prepared_sources = read_preparation.capture()
+                receipt = prepare_receipt()
+            # 昂贵整树尾验已经完成。之后先fresh检查mutable来源，再进入原
+            # Anchored targets/备份/发布，不能尾验结束后重新追认一个新前像。
+            read_preparation.recheck(prepared_sources)
+        if receipt is not None:
+            receipt.check_before_write()
         for row in changes:
             state_files.writable_directory((project / row.relative).parent)
         targets={row.relative:stack.enter_context(state_files.AnchoredFile(project,row.relative)) for row in changes}
