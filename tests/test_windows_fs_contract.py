@@ -168,12 +168,17 @@ class WindowsRenameDurabilityContractTest(unittest.TestCase):
                 events.append("flush")
                 if fail_after and "rename" in events:
                     raise OSError("durability unavailable after rename")
-            info = SimpleNamespace(volume=7, index_high=0, index_low=9)
+            def final_path(handle, buffer, size, flags):
+                buffer.value = "\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\project"
+                return len(buffer.value)
+            info = SimpleNamespace(volume=7, index_high=0, index_low=9, links=1, attributes=0)
             api = SimpleNamespace(kernel=SimpleNamespace(
-                SetFileInformationByHandle=lambda *args: events.append("rename") or True))
+                SetFileInformationByHandle=lambda *args: events.append("rename") or True,
+                GetFinalPathNameByHandleW=final_path, CreateFileW=lambda *args: 21))
             backend = fs._WindowsOS()
             with self.subTest(fail_after=fail_after), \
-                    patch.object(fs, "Directory", side_effect=lambda path: nullcontext(SimpleNamespace(handle=10))), \
+                    patch.object(fs, "Directory", side_effect=lambda path: nullcontext(SimpleNamespace(
+                        handle=10, child=lambda name: Path("/project") / name))), \
                     patch.object(fs, "flush_directory", side_effect=flush), \
                     patch.object(fs, "_open_handle", return_value=20), \
                     patch.object(fs, "_information", return_value=info), \
@@ -185,6 +190,68 @@ class WindowsRenameDurabilityContractTest(unittest.TestCase):
                 else:
                     backend._rename(Path("/project/stage"), Path("/project/runtime"), False)
             self.assertEqual(events, ["flush", "rename", "flush"])
+
+
+class WindowsRenameAbiContractTest(unittest.TestCase):
+    GUID_PARENT = "\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\real\\父目录"
+
+    def api(self, *, final_path=None, actual=None):
+        captured = []
+        def get_final(handle, buffer, size, flags):
+            self.assertEqual((handle, flags), (456, 1))
+            buffer.value = final_path if final_path is not None else self.GUID_PARENT
+            return len(buffer.value)
+        def rename(handle, kind, buffer, length):
+            value = fs._RenameInfo.from_buffer(buffer)
+            start = fs._RenameInfo.name.offset
+            raw = bytes(buffer)
+            captured.append((handle, kind, value.flags, value.root, value.length,
+                             raw[start:start + value.length], raw[start + value.length:start + value.length + 2], length))
+            return True
+        kernel = SimpleNamespace(GetFinalPathNameByHandleW=get_final, SetFileInformationByHandle=Mock(side_effect=rename),
+                                 CreateFileW=Mock(return_value=789))
+        before = SimpleNamespace(volume=7, index_high=0, index_low=9, links=1, attributes=0)
+        after = actual if actual is not None else before
+        return SimpleNamespace(kernel=kernel), captured, [before, after]
+
+    def test_x64_payload_uses_null_root_handle_guid_absolute_name_and_explicit_utf16_nul(self):
+        self.assertEqual((ctypes.sizeof(fs.HANDLE), ctypes.sizeof(fs._RenameInfo),
+                          fs._RenameInfo.root.offset, fs._RenameInfo.length.offset, fs._RenameInfo.name.offset),
+                         (8, 24, 8, 16, 20))
+        name = "新🙂.md"
+        destination = SimpleNamespace(handle=456, child=lambda leaf: PureWindowsPath("Z:/mutable-alias") / leaf)
+        target = self.GUID_PARENT + "\\" + name
+        encoded = target.encode("utf-16-le")
+        for replacing in (False, True):
+            api, captured, information = self.api()
+            with self.subTest(replacing=replacing), patch.object(fs, "_api", return_value=api), \
+                    patch.object(fs, "_information", side_effect=information), patch.object(fs, "_close") as close:
+                fs._rename_handle(123, destination, name, replace=replacing)
+            self.assertEqual(captured[0][:7], (123, 3, int(replacing), None, len(encoded), encoded, b"\0\0"))
+            self.assertGreaterEqual(captured[0][7], ctypes.sizeof(fs._RenameInfo) + len(encoded) + 2)
+            api.kernel.CreateFileW.assert_called_once_with(target, 0x80,
+                fs.SHARE_READ | fs.SHARE_WRITE | fs.SHARE_DELETE, None, 3,
+                fs.BACKUP_SEMANTICS | fs.OPEN_REPARSE_POINT, None)
+            close.assert_called_once_with(789)
+
+    def test_unsupported_final_path_never_falls_back_to_cwd_or_drive_alias(self):
+        destination = SimpleNamespace(handle=456)
+        for final_path in ("C:\\project", "\\\\?\\UNC\\server\\project"):
+            api, _, _ = self.api(final_path=final_path)
+            with self.subTest(final_path=final_path), patch.object(fs, "_api", return_value=api), \
+                    self.assertRaisesRegex(ValueError, "local volume GUID"):
+                fs._rename_handle(123, destination, "target")
+            api.kernel.SetFileInformationByHandle.assert_not_called()
+            api.kernel.CreateFileW.assert_not_called()
+
+    def test_post_rename_identity_mismatch_propagates_and_only_closes_verification_handle(self):
+        actual = SimpleNamespace(volume=7, index_high=0, index_low=10, links=1, attributes=0)
+        api, _, information = self.api(actual=actual)
+        destination = SimpleNamespace(handle=456, child=lambda name: PureWindowsPath("Z:/alias") / name)
+        with patch.object(fs, "_api", return_value=api), patch.object(fs, "_information", side_effect=information), \
+                patch.object(fs, "_close") as close, self.assertRaisesRegex(ValueError, "identity"):
+            fs._rename_handle(123, destination, "target")
+        close.assert_called_once_with(789)
 
 
 class WindowsSnapshotContractTest(unittest.TestCase):
