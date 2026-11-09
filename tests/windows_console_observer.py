@@ -212,22 +212,50 @@ def cursor_access_diagnostics(path):
     _publish(Path(path), {"executable": sys.executable, "results": results})
 
 
-def _main_thread_observation(number, started):
-    """只读采样真实主线程的有界调用位置，不读取局部值或生产 App 状态。"""
-    frame = sys._current_frames().get(threading.main_thread().ident)
-    if frame is None:
-        raise RuntimeError("无法取得生产 TUI 主线程调用位置")
+def _stack_positions(frame):
+    """把现有 Python 栈立即投影为有界 JSON 字段，不保留任何 frame 引用。"""
     stack = []
+    truncated = False
     try:
-        # 只保留靠近当前执行位置的 24 层文件/函数/行号，不读取源正文或 locals；
-        # 观察器原线程即可区分 get_wch 等待与预览 I/O，无需 trace hook 或新线程。
+        # 从叶子向外最多取 24 层；长路径/函数名也封顶，并显式记录截断。
+        # 只读 code 元数据和当前行号，不读源码正文、locals 或 Job 的私有状态。
         while frame is not None and len(stack) < 24:
-            stack.append({"file": frame.f_code.co_filename, "function": frame.f_code.co_name, "line": frame.f_lineno})
+            filename, function = frame.f_code.co_filename, frame.f_code.co_name
+            truncated = truncated or len(filename) > 1024 or len(function) > 128
+            stack.append({"file": filename[:1024], "function": function[:128], "line": frame.f_lineno})
             frame = frame.f_back
+        return list(reversed(stack)), truncated or frame is not None
     finally:
-        # 不长期持有 frame，避免让测试诊断延长生产栈及其局部对象的生命周期。
+        # 包括异常出口也解除参数引用，避免诊断延长执行栈及其局部资源生命周期。
         del frame
-    return {"number": number, "elapsed_ns": time.monotonic_ns() - started, "main_stack": list(reversed(stack))}
+
+
+def _main_thread_observation(number, started):
+    """同一观察线程一次采样主线程及既有 App executor，不读取业务对象。"""
+    # App.loop 使用标准 ThreadPoolExecutor 的默认前缀；只枚举已存在的线程，
+    # 不读取 App/executor 实例、不增加观察线程，也不把 native helper 混入此表。
+    workers = sorted((thread.name, thread.ident) for thread in threading.enumerate()
+                     if thread.name.startswith("ThreadPoolExecutor-") and thread.ident is not None)
+    frames = sys._current_frames()
+    try:
+        main_ident = threading.main_thread().ident
+        if main_ident not in frames:
+            raise RuntimeError("无法取得生产 TUI 主线程调用位置")
+        main_stack, _ = _stack_positions(frames[main_ident])
+        executor_stacks = []
+        for name, ident in workers[:4]:
+            # 线程可在枚举和采样间结束；available 明示这个竞态，不能用空栈
+            # 冒充已取得执行位置。列表超限与每个栈/名称的截断分别显式保留。
+            stack, truncated = _stack_positions(frames.get(ident))
+            executor_stacks.append({"name": name[:128], "ident": ident, "available": ident in frames,
+                                    "stack": stack, "truncated": truncated or len(name) > 128})
+        return {"number": number, "elapsed_ns": time.monotonic_ns() - started, "main_stack": main_stack,
+                "executor_stacks": {"total": len(workers), "truncated": len(workers) > 4, "threads": executor_stacks}}
+    finally:
+        # _current_frames 返回的私有字典握持全部线程栈。成功/异常均立即清空并
+        # 删除它，返回值只含标量和普通容器，不依赖后续 GC 才释放文件或 locals。
+        frames.clear()
+        del frames
 
 
 def run_observed(root, arguments):

@@ -17,11 +17,13 @@ import struct
 import subprocess
 import tempfile
 from threading import Event
+import threading
 from types import SimpleNamespace
 import time
 import unittest
 from unittest.mock import patch
 import uuid
+import weakref
 
 # Win32 的单元/业务测试不依赖 POSIX PTY。仅在对应宿主加载这些标准库，
 # 下方真实 POSIX 终端方法保留原有平台 guard；Windows 由独立 ConPTY 节点验收。
@@ -38,6 +40,7 @@ from manager.catalog import Catalog, Model, discover
 from manager.tui import App, HOSTS, cell_width
 from manager.tui_state import Impact
 from manager.tui_support import Layout, TextInput, Theme, ellipsize, project_plan_text, runtime_status_text, status_text
+from tests import windows_console_observer as console_observer
 
 
 PACK=Path(__file__).resolve().parents[1]
@@ -913,6 +916,28 @@ class TuiTest(unittest.TestCase):
 
     def test_save_preview_blocked_validation_keeps_ui_responsive_and_drafts(self):
         """真实 App/Future 消费阻塞校验；这里只验证 portable 作业边界，不声称原生 UI。"""
+        original_frames=console_observer.sys._current_frames
+        started=time.monotonic_ns()
+        class LocalResource:pass
+        def sample(number):
+            # 真正执行采样，只对 builtin 计数以证明一次 observation 共用一次
+            # frames 快照；序列化成功及精确字段检查拒绝局部对象/源码正文泄漏。
+            with patch.object(console_observer.sys,"_current_frames",wraps=original_frames) as current:
+                observation=console_observer._main_thread_observation(number,started)
+                current.assert_called_once()
+            self.assertEqual(observation["number"],number);self.assertGreaterEqual(observation["elapsed_ns"],0)
+            self.assertTrue(0<len(observation["main_stack"])<=24)
+            workers=observation["executor_stacks"];self.assertLessEqual(len(workers["threads"]),4)
+            for worker in workers["threads"]:
+                self.assertEqual(set(worker),{"name","ident","available","stack","truncated"})
+                self.assertLessEqual(len(worker["name"]),128);self.assertIsInstance(worker["ident"],int)
+                self.assertLessEqual(len(worker["stack"]),24)
+                for position in worker["stack"]:
+                    self.assertEqual(set(position),{"file","function","line"})
+                    self.assertLessEqual(len(position["file"]),1024);self.assertLessEqual(len(position["function"]),128)
+                    self.assertGreater(position["line"],0)
+            self.assertNotIn("UNREAD-LOCAL-RESOURCE",json.dumps(observation))
+            return observation
         for scope,outcome in (("project","success"),("global","success"),("project","invalid"),("global","invalid"),("project","moved")):
             with self.subTest(scope=scope,outcome=outcome):
                 self.app=App(self.root/"state",self.root/"scan",self.project,native_context=self.context)
@@ -934,13 +959,24 @@ class TuiTest(unittest.TestCase):
                 self.app.session.begin(key);self.app.session.stage(key,{"model":"local-model"},catalog.stamp)
                 other=(str(self.projects[1]),"claude","xy-qa");self.app.drafts[other]={"effort":"high"}
                 before=deepcopy(self.app.session.entries);expected=deepcopy(self.app.expected[key])
-                entered,release=Event(),Event()
+                entered,release=Event(),Event();worker_info={};resources=[]
+                deep=scope == "global" and outcome == "success"
+                def await_validation(depth):
+                    if depth:return await_validation(depth-1)
+                    entered.set()
+                    if not release.wait(5):raise RuntimeError("测试未释放只读校验")
                 def validate(state,target,host,captured,**kwargs):
                     # Event 位于真实 preview 调用的权威服务检查内；释放后继续执行
                     # 原检查实现，真实读文件，不返回合成成功/失败或伪造预览计划。
-                    entered.set()
-                    if not release.wait(5):raise RuntimeError("测试未释放只读校验")
-                    return self.real_check_catalogs(state,target,host,captured,**kwargs)
+                    local=LocalResource();local.private="UNREAD-LOCAL-RESOURCE";resources.append(weakref.ref(local))
+                    thread=threading.current_thread();name=thread.name;worker_info["ident"]=thread.ident
+                    try:
+                        # 仅此测试的真实 App worker 使用长名称/深调用链，实际执行
+                        # 字段与24层截断边界；观察器本身从不创建或改名任何线程。
+                        if deep:thread.name=name+"_"+"N"*160
+                        await_validation(32 if deep else 0)
+                        return self.real_check_catalogs(state,target,host,captured,**kwargs)
+                    finally:thread.name=name
                 with ThreadPoolExecutor(max_workers=1) as self.app.executor, \
                      patch.dict(os.environ,{},clear=True), \
                      patch("manager.tui.model_preferences.check_catalogs",side_effect=validate) as check, \
@@ -953,6 +989,42 @@ class TuiTest(unittest.TestCase):
                         # 此时 preview 尚未被调用，这个消费者会立即拒绝该重复边界。
                         preview.assert_called_once()
                         self.assertIn("执行中",self.draw().text());self.assertFalse(self.app.session.job.writes)
+                        observation=sample(101)
+                        worker=next(row for row in observation["executor_stacks"]["threads"] if row["ident"] == worker_info["ident"])
+                        self.assertTrue(worker["available"]);self.assertTrue(worker["stack"])
+                        if deep:
+                            self.assertEqual(len(worker["name"]),128);self.assertEqual(len(worker["stack"]),24)
+                            self.assertTrue(worker["truncated"])
+                        else:
+                            self.assertFalse(worker["truncated"])
+                            self.assertTrue(any(Path(row["file"]).name == "tui_state.py" and row["function"] == "execute" for row in worker["stack"]))
+                            self.assertTrue(any(Path(row["file"]).name == "model_preferences.py" and row["function"] == "preview" for row in worker["stack"]))
+                        if scope == "project" and outcome == "success":
+                            # 只在测试夹具创建受控 peer workers，实际执行超过四线程
+                            # 的截断边界；它们与 App worker 都在 finally/context 中结清。
+                            peer_release=Event();peer_ready=[Event() for _ in range(5)]
+                            def peer(index):
+                                peer_ready[index].set()
+                                if not peer_release.wait(5):raise RuntimeError("测试未释放采样边界线程")
+                            with ThreadPoolExecutor(max_workers=5) as peers:
+                                peer_futures=[peers.submit(peer,index) for index in range(5)]
+                                try:
+                                    self.assertTrue(all(ready.wait(2) for ready in peer_ready))
+                                    bounded=sample(102)["executor_stacks"]
+                                    self.assertGreaterEqual(bounded["total"],6);self.assertEqual(len(bounded["threads"]),4)
+                                    self.assertTrue(bounded["truncated"])
+                                finally:peer_release.set()
+                                for peer_future in peer_futures:peer_future.result(timeout=2)
+                            # 用实际帧字典构造缺少主线程的错误路径；异常后字典必须
+                            # 已清空，不能因诊断失败继续握持仍被 Event 阻塞的局部资源。
+                            captured_frames=[]
+                            def missing_main():
+                                frames=original_frames();frames.pop(threading.main_thread().ident)
+                                captured_frames.append(frames);return frames
+                            with patch.object(console_observer.sys,"_current_frames",side_effect=missing_main):
+                                with self.assertRaisesRegex(RuntimeError,"主线程调用位置"):
+                                    console_observer._main_thread_observation(103,started)
+                            self.assertTrue(captured_frames);self.assertTrue(all(not frames for frames in captured_frames))
                         # 校验仍被 Event 阻塞时，主线程可以绘制和派发；已有非取消型
                         # 作业守卫拒绝切换、重复保存、Esc 和 Ctrl+C，不清草稿或提前退出。
                         for value in ("tab","left","s","esc","ctrl-c"):self.app.dispatch(value)
@@ -968,6 +1040,9 @@ class TuiTest(unittest.TestCase):
                         if outcome == "moved":self.app.projects=[]
                     finally:release.set()
                     plan=future.result(timeout=5)
+                    # 不主动触发 GC；实际 worker 函数返回后 weakref 应立即失效，
+                    # 证明采样结果/异常出口均未延长 frame 内局部资源的生命周期。
+                    self.assertTrue(resources);self.assertTrue(all(reference() is None for reference in resources))
                     self.app.poll_job();self.assertIsNone(self.app.future);self.assertEqual(self.app.session.entries,before)
                     # 一次普通预览仅由服务检查一次来源；UI 再加同样检查会在此失败。
                     check.assert_called_once();preview.assert_called_once()
@@ -994,6 +1069,8 @@ class TuiTest(unittest.TestCase):
                         self.app.dispatch("esc");self.assertIsNone(self.app.modal)
                         self.assertEqual(self.app.session.entries,before)
                     apply.assert_not_called()
+                after=sample(104)["executor_stacks"]
+                self.assertNotIn(worker_info["ident"],[row["ident"] for row in after["threads"]])
 
     def test_busy_job_blocks_duplicate_actions_and_waits_for_real_settlement(self):
         release=Event();started=Event()
