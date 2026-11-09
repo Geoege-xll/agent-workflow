@@ -65,6 +65,8 @@ from a previous tool call. Source-pack development retains its source entry poin
 old self-contained execution branch. The central adapter
 always belongs to the actual project's `.agent-workflow/project.yaml`.
 
+For native Windows central execution, follow the shared dispatch boundary with PowerShell 7.0+ and the explicitly selected existing Python 3.11+, always `-I -B -X utf8`. Use `.agent-workflow/runtime.py check` for new tasks; use the current task's canonical `--binding-b64` for each `read`/`helper` call. Translate source/POSIX Bash helper examples to the same logical `lib/...py` through that native bridge. Never execute Bash or copy Skills/helpers into a thin central project because a pinned source document shows a Bash example. Discovery symlinks remain single-source, and Light/Full, permissions and acceptance stages remain unchanged.
+
 Formal Full requirements review uses HTML while the model maintains one Markdown source. PM follows
 [requirements HTML delivery](../xy-plan/references/requirement-html.md) for pre-approval scratch drafts,
 post-approval same-name plans `.md`/`.html`, and prototype-coverage writeback. HTML freshness creates no

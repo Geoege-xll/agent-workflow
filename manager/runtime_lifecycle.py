@@ -16,7 +16,7 @@ import stat
 import uuid
 
 from lib import runtime_store as store
-from lib.central.runtime_project import Node, Tree, absolute_directory, identity, json_bytes, node_id, read_at, relative_path, unique_json
+from lib.central.runtime_project import Node, Tree, absolute_directory, identity, json_bytes, node_id, read_at, relative_path, unique_json, delete_at
 from lib.platform_fs import directory_lock, os
 from . import runtime_policy as policy
 from .runtime_state import ActivationError, read_binding_record, read_journal, read_state, retained_conflicts, write_control
@@ -26,8 +26,11 @@ _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _revision(node: Node) -> dict:
-    return {"kind": node.kind, "sha256": hashlib.sha256(node.payload).hexdigest(),
-            "mode": node.mode, "identity": list(node.identity)}
+    value = {"kind": node.kind, "sha256": hashlib.sha256(node.payload).hexdigest(),
+             "mode": node.mode, "identity": list(node.identity)}
+    if os.name == "nt":
+        value["security"] = node.security
+    return value
 
 
 def _read_lifecycle(state: Path) -> tuple[Node, dict | None]:
@@ -86,7 +89,16 @@ def _validate_snapshot(snapshot: dict) -> None:
         if not isinstance(path, str) or path and relative_path(path) != path or not isinstance(row, dict):
             raise ActivationError("生命周期快照路径无效")
         directory = row.get("directory") is True
-        if set(row) != ({"inode", "mode", "directory"} if directory else {"inode", "mode", "sha256", "size"}):
+        keys = {"inode", "mode", "directory"} if directory else {"inode", "mode", "sha256", "size"}
+        if os.name == "nt":
+            keys.add("security")
+            if not directory:
+                keys.add("identity")
+            if (not isinstance(row.get("security"), str) or not _DIGEST.fullmatch(row["security"])
+                    or not directory and (not isinstance(row.get("identity"), list) or len(row["identity"]) != 7
+                       or any(type(item) is not int for item in row["identity"]))):
+                raise ActivationError("生命周期 Windows 快照缺少完整身份或 ACL")
+        if set(row) != keys:
             raise ActivationError("生命周期快照节点结构无效")
         if (not isinstance(row["inode"], list) or len(row["inode"]) != 2
                 or any(type(item) is not int or item < 0 for item in row["inode"])
@@ -135,11 +147,14 @@ def _validate_entries(value: dict) -> None:
                 raise ActivationError("生命周期引用目录清单无效")
         else:
             revision = row["revision"]
-            if (not isinstance(revision, dict) or set(revision) != {"kind", "sha256", "mode", "identity"}
+            if (not isinstance(revision, dict) or set(revision) != ({"kind", "sha256", "mode", "identity", "security"} if os.name == "nt" else {"kind", "sha256", "mode", "identity"})
                     or revision["kind"] not in ("file", "missing") or not isinstance(revision["sha256"], str)
                     or not _DIGEST.fullmatch(revision["sha256"]) or type(revision["mode"]) is not int
                     or not isinstance(revision["identity"], list) or any(type(item) is not int for item in revision["identity"])):
                 raise ActivationError("生命周期引用记录身份无效")
+            if os.name == "nt" and (not isinstance(revision["security"], str)
+                    or (not _DIGEST.fullmatch(revision["security"]) if revision["kind"] == "file" else revision["security"] != "")):
+                raise ActivationError("生命周期引用缺少实际 ACL")
 
 
 def retired_history(state: Path, project: Path) -> dict[str, dict]:
@@ -271,18 +286,25 @@ def _check_observed(observed: list[dict]) -> None:
 
 
 def _file_metadata(parent: int, name: str) -> dict:
-    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    # Windows 与 store 的流式 reader 使用同一 FILE_SHARE_READ 边界；POSIX
+    # 不接收 Windows 专用参数，既有元数据形状与128MiB预算保持。
+    options = {"sharing": 1} if os.name == "nt" else {}
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent, **options)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 128 * 1024 * 1024:
             raise ActivationError("核心回收遇到未知非独占普通文件")
+        security = store._security(descriptor)
         digest = hashlib.sha256()
         while chunk := os.read(descriptor, 1024 * 1024):
             digest.update(chunk)
-        if identity(os.fstat(descriptor)) != identity(before):
+        if identity(os.fstat(descriptor)) != identity(before) or store._security(descriptor) != security:
             raise ActivationError("核心回收快照读取期间变化")
-        return {"inode": list(node_id(before)), "mode": stat.S_IMODE(before.st_mode),
-                "sha256": digest.hexdigest(), "size": before.st_size}
+        value = {"inode": list(node_id(before)), "mode": stat.S_IMODE(before.st_mode),
+                 "sha256": digest.hexdigest(), "size": before.st_size}
+        if os.name == "nt":
+            value.update(identity=list(identity(before)), security=security[0])
+        return value
     finally:
         os.close(descriptor)
 
@@ -293,6 +315,8 @@ def _core_snapshot(root: Path) -> dict:
         def walk(parent: int, prefix: str):
             info = os.fstat(parent)
             result[prefix] = {"inode": list(node_id(info)), "mode": stat.S_IMODE(info.st_mode), "directory": True}
+            if os.name == "nt":
+                result[prefix]["security"] = store._security(parent)[0]
             for name in sorted(os.listdir(parent)):
                 relative = prefix + "/" + name if prefix else name
                 info = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -479,7 +503,11 @@ def _delete_snapshot(root_path: Path, snapshot: dict) -> None:
             info = os.fstat(directory)
             if list(node_id(info)) != expected["inode"] or stat.S_IMODE(info.st_mode) not in {expected["mode"], expected["mode"] | 0o200}:
                 raise ActivationError("核心目录身份或权限变化，拒绝回收")
-            os.fchmod(directory, expected["mode"] | 0o200)
+            if os.name == "nt":
+                if store._security(directory)[0] != expected["security"]:
+                    raise ActivationError("核心目录 ACL 已变化，拒绝回收")
+            else:
+                os.fchmod(directory, expected["mode"] | 0o200)
             for name in sorted(os.listdir(directory)):
                 relative = prefix + "/" + name if prefix else name
                 expected_child = snapshot.get(relative)
@@ -494,11 +522,24 @@ def _delete_snapshot(root_path: Path, snapshot: dict) -> None:
                         remove(child, relative)
                     finally:
                         os.close(child)
-                    os.rmdir(name, dir_fd=directory)
+                    if os.name == "nt":
+                        from lib.windows_fs import delete_directory
+                        delete_directory(directory, name, expected={"identity": tuple(expected_child["inode"]),
+                                                                   "security": expected_child["security"]})
+                    else:
+                        os.rmdir(name, dir_fd=directory)
                 else:
                     if _file_metadata(directory, name) != expected_child:
                         raise ActivationError("核心文件已有变化，保留")
-                    os.unlink(name, dir_fd=directory)
+                    if os.name == "nt":
+                        from lib.windows_fs import delete_regular
+                        # 仅此已确认的 core/归档 GC 保留既有128MiB流式预算；普通
+                        # state/marker 删除仍由 delete_at 的4MiB/独立marker预算限定。
+                        delete_regular(directory, name, expected={"identity": tuple(expected_child["identity"]),
+                            "security": expected_child["security"], "sha256": expected_child["sha256"]},
+                            max_bytes=128 * 1024 * 1024)
+                    else:
+                        os.unlink(name, dir_fd=directory)
                 os.fsync(directory)
         try:
             remove(root, "")
@@ -506,7 +547,12 @@ def _delete_snapshot(root_path: Path, snapshot: dict) -> None:
             os.close(root)
         if list(node_id(os.stat(content_id, dir_fd=parent, follow_symlinks=False))) != snapshot[""]["inode"]:
             raise ActivationError("核心最终目录发生替换，保留")
-        os.rmdir(content_id, dir_fd=parent)
+        if os.name == "nt":
+            from lib.windows_fs import delete_directory
+            delete_directory(parent, content_id, expected={"identity": tuple(snapshot[""]["inode"]),
+                                                           "security": snapshot[""]["security"]})
+        else:
+            os.rmdir(content_id, dir_fd=parent)
         os.fsync(parent)
 
 
@@ -524,7 +570,11 @@ def _execute(state: Path, journal: dict, before: Node) -> dict:
                     raise ActivationError("待清理旧inode已被修改，保留")
                 if not issues:
                     parent, name = tree.parent(record["path"])
-                    os.unlink(name, dir_fd=parent)
+                    current = read_at(parent, name, allow_link=record["kind"] == "link", skill_name=record.get("skill"))
+                    from .runtime_state import retained_record
+                    if retained_record(record["path"], current, skill_name=record.get("skill")) != record:
+                        raise ActivationError("待清理旧 inode 在条件删除捕获前已变化")
+                    delete_at(parent, name, expected=current, skill_name=record.get("skill"))
                     os.fsync(parent)
             row["phase"] = "done"
             receipt = {"project": str(project), "record": record}

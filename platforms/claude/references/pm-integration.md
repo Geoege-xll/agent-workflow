@@ -1,5 +1,7 @@
 # Claude Code — PM bootstrap
 
+Native Windows central calls use PowerShell 7.0+ and the explicit existing Python 3.11+ with `-I -B -X utf8 .agent-workflow/runtime.py`. Take `--binding-b64` from the current task's strict three-field pin on every managed `read`/`helper` call; new tasks first run `check`. Translate any POSIX/source Bash helper example to its logical `lib/...py` through this native pinned bridge. Do not run Bash or copy Skills/helpers into the thin project; central Skill symlinks remain the only discovery source. Follow the shared [execution boundary](../../shared/skills/xy-workflow/references/dispatch.md#native-windows-central-calls); task stages, permissions and native role/model evidence requirements are unchanged.
+
 This entire managed section applies only when the current host is Claude Code.
 Codex and Antigravity use their own integration sections; do not apply their tool aliases here.
 

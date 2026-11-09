@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
+from lib.platform_fs import os
 from pathlib import Path
 import re
 import stat
@@ -20,7 +20,7 @@ from lib.hosts.native_agents import native_settings
 from lib import role_models
 from lib.central import role_preferences
 from lib import runtime_store
-from lib.central.runtime_project import CONFIG, Node, Tree
+from lib.central.runtime_project import CAPACITY_IDENTITY, CONFIG, Node, Tree, move_at, read_at, delete_at
 from .catalog import Catalog, clean, discover
 from . import runtime_service, state_files
 
@@ -171,12 +171,33 @@ class RestorePlan:
 
 
 def check_versions(project: Path,versions) -> None:
-    """同时核验保留版本的内容和权限；旧 fd 的后续保存不能被恢复操作忽略。"""
+    """同时核验历史正文/实际权限；Windows 再封闭校验真实身份与独立 ACL。"""
     for version in versions:
-        with state_files.AnchoredFile(project,version["path"]) as target:
-            raw,mode=target.read()
-        if raw is None or hashlib.sha256(raw).hexdigest() != version["expected_sha"] or mode != version["mode"]:
-            raise state_files.PreservedEdit(project/version["path"])
+        if os.name == "nt":
+            keys = {"path", "expected_sha", "mode", "identity", "security"}
+            if isinstance(version, dict) and "source" in version:
+                keys.add("source")
+            if (not isinstance(version, dict) or set(version) != keys
+                    or not isinstance(version["path"], str) or type(version["mode"]) is not int
+                    or not 0 <= version["mode"] <= 0o7777 or not isinstance(version["expected_sha"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", version["expected_sha"])
+                    or not isinstance(version["identity"], list) or len(version["identity"]) != 7
+                    or any(type(item) is not int for item in version["identity"])
+                    or not isinstance(version["security"], str) or not re.fullmatch(r"[0-9a-f]{64}", version["security"])):
+                raise ValueError("Windows 归档索引缺少封闭身份或 ACL")
+            with state_files.AnchoredFile(project, version["path"]) as target:
+                actual = read_at(target.directory, target.name)
+            if (actual.kind != "file" or hashlib.sha256(actual.payload).hexdigest() != version["expected_sha"]
+                    or actual.mode != version["mode"] or list(actual.identity) != version["identity"]
+                    or actual.security != version["security"]):
+                raise state_files.PreservedEdit(project/version["path"])
+        else:
+            # POSIX 历史索引保持原 sha/mode 字段与读取方式，不能因 Windows
+            # 新增事实而拒绝已经存在的2.1.3备份。
+            with state_files.AnchoredFile(project,version["path"]) as target:
+                raw,mode=target.read()
+            if raw is None or hashlib.sha256(raw).hexdigest() != version["expected_sha"] or mode != version["mode"]:
+                raise state_files.PreservedEdit(project/version["path"])
 
 
 def record_payload(record: dict) -> bytes:
@@ -199,6 +220,8 @@ def _reserve_backup_capacity(record: dict,changes,project: Path,versions_relativ
                str(Path(row.relative).parent/(".workflow-models-previous-"+"0"*32+".tmp"))]
         relative=max(paths,key=lambda value:len(json.dumps(value,ensure_ascii=False).encode()))
         entry={"source":row.relative,"path":relative,"expected_sha":"0"*64,"mode":0o7777}
+        if os.name == "nt":
+            entry.update(identity=list(CAPACITY_IDENTITY), security="f" * 64)
         versions.extend([entry,entry]);retained.extend([str(project/relative)]*2)
     if retained:retained.append(max(retained,key=lambda value:len(value.encode())))
     record_payload({**record,"status":"rolled_back","previous_files":versions,"retained_files":retained})
@@ -321,12 +344,15 @@ def _replace_optional(target, body: bytes | None, mode: int, expected: tuple) ->
     if body is not None:
         target.write(body, mode, expected)
         return
-    if target.read() != expected:
+    before_node = read_at(target.directory, target.name)
+    if (not state_files.same_file_state(target.read(), expected)
+            or not state_files.same_file_state((before_node.payload, before_node.mode), expected)):
         raise ValueError("删除前原生文件已变化")
     held = ".workflow-models-previous-" + uuid.uuid4().hex + ".tmp"
     try:
-        os.rename(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory)
-        if target.read(held) != expected:
+        move_at(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory,
+                expected=before_node)
+        if not state_files.same_file_state(target.read(held), expected):
             raise state_files.PreservedEdit(target.path.parent / held)
     finally:
         # rename可能已经移动inode后才被取消/报错。无论正向删除是否返回成功，
@@ -338,8 +364,13 @@ def _replace_optional(target, body: bytes | None, mode: int, expected: tuple) ->
         else:
             if target.retainer is not None:
                 target.retainer(target, held, expected)
-            elif target.read(held) == expected:
-                os.unlink(held, dir_fd=target.directory)
+            elif state_files.same_file_state(target.read(held), expected):
+                held_node = read_at(target.directory, held)
+                if (not state_files.same_file_state((held_node.payload, held_node.mode), expected)
+                        or held_node.identity[:2] != before_node.identity[:2]
+                        or held_node.security != before_node.security):
+                    raise state_files.PreservedEdit(target.path.parent / held)
+                delete_at(target.directory, held, expected=held_node)
             else:
                 raise state_files.PreservedEdit(target.path.parent / held)
     if target.read() != (None, None):
@@ -367,7 +398,7 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
             state_files.writable_directory((project / row.relative).parent)
         targets={row.relative:stack.enter_context(state_files.AnchoredFile(project,row.relative)) for row in changes}
         for change in changes:
-            if targets[change.relative].read() != _expected(change.before,change.mode):
+            if not state_files.same_file_state(targets[change.relative].read(), _expected(change.before,change.mode)):
                 raise ValueError(f"文件在预览后发生变化，已停止：{change.relative}")
         directory = _backup_path(state, project)
         state_files.writable_directory(directory)
@@ -394,7 +425,16 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
                 try:
                     archive=stack.enter_context(state_files.AnchoredFile(project,relative))
                     # 目录位于项目同一文件系统；rename 保留 inode，不复制后删除旧版本。
-                    os.rename(previous,archive.name,src_dir_fd=target.directory,dst_dir_fd=archive.directory)
+                    frozen = getattr(target, "retained_snapshot", None) or read_at(target.directory, previous)
+                    if os.name == "nt":
+                        version.update(identity=list(frozen.identity), security=frozen.security, mode=frozen.mode)
+                    move_at(previous, archive.name, src_dir_fd=target.directory, dst_dir_fd=archive.directory, expected=frozen)
+                    if os.name == "nt":
+                        archived = read_at(archive.directory, archive.name)
+                        if (archived.identity[:2] != frozen.identity[:2] or archived.security != frozen.security
+                                or archived.identity[4:6] != frozen.identity[4:6] or archived.payload != frozen.payload):
+                            raise state_files.PreservedEdit(archive.path)
+                        version.update(identity=list(archived.identity), security=archived.security, mode=archived.mode)
                     version["path"]=relative
                 except BaseException as exc:
                     # 搬运失败也要记录旧 inode；兼顾 rename 已成功后才报告异常的情况。
@@ -408,7 +448,7 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
                     raise state_files.PreservedEdit(retained) from exc
                 try:observed=archive.read()
                 except BaseException as exc:raise state_files.PreservedEdit(archive.path) from exc
-                if observed != expected:raise state_files.PreservedEdit(archive.path)
+                if not state_files.same_file_state(observed, expected):raise state_files.PreservedEdit(archive.path)
             targets[row.relative].retainer=retain
         def save():
             state_files.write_state(state,backup_path.relative_to(state).as_posix(),record_payload(record))
@@ -417,7 +457,7 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
         try:
             for row in changes:
                 target=targets[row.relative]
-                if target.read() != _expected(row.before,row.mode):
+                if not state_files.same_file_state(target.read(), _expected(row.before,row.mode)):
                     raise ValueError(f"文件发生并发修改，停止写入：{row.relative}")
                 written.append(row)
                 _replace_optional(target,row.after,row.mode,_expected(row.before,row.mode))
@@ -440,8 +480,8 @@ def commit(state: Path, project: Path, changes: list[Change] | RestorePlan, veri
                 try:
                     target=targets[row.relative]
                     current=target.read()
-                    if current == _expected(row.after,row.mode):_replace_optional(target,row.before,row.mode,_expected(row.after,row.mode))
-                    elif current != _expected(row.before,row.mode):conflicts.append(row.relative)
+                    if state_files.same_file_state(current, _expected(row.after,row.mode)):_replace_optional(target,row.before,row.mode,_expected(row.after,row.mode))
+                    elif not state_files.same_file_state(current, _expected(row.before,row.mode)):conflicts.append(row.relative)
                 except (OSError,ValueError) as exc:
                     conflicts.append(row.relative)
                     if isinstance(exc,state_files.PreservedEdit):retained.append(exc.retained_path)
@@ -492,10 +532,13 @@ def _load_backup(path: Path,project: Path) -> dict:
     for row in versions:
         if not isinstance(row,dict) or not isinstance(row.get("path"),str) or not isinstance(row.get("source"),str) or row["source"] not in seen:invalid()
         if not fingerprint(row.get("expected_sha")) or not mode(row.get("mode")):invalid()
+        if os.name == "nt" and (set(row) != {"source", "path", "expected_sha", "mode", "identity", "security"}
+                or not isinstance(row["identity"], list) or len(row["identity"]) != 7
+                or any(type(item) is not int for item in row["identity"]) or not fingerprint(row["security"])):invalid()
         state_files.secure_path(project,row["path"])
         if record["status"] == "applied":
             source=next(value for value in files if value["path"] == row["source"])
-            if row["source"] in indexed or row["expected_sha"] != source["before_sha"] or row["mode"] != source["mode"]:invalid()
+            if row["source"] in indexed or row["expected_sha"] != source["before_sha"] or not state_files.same_file_state((b"", row["mode"]), (b"", source["mode"])):invalid()
             if not row["path"].startswith(f".agent-workflow-backup-models-{path.stem}/"):invalid()
             indexed.add(row["source"])
     if record["status"] == "applied" and indexed != {row["path"] for row in files if row["before"] is not None}:invalid()
@@ -539,7 +582,7 @@ def prepare_restore(state: Path, project: Path, identifier: str) -> RestorePlan:
         relative=row["path"]
         target=state_files.secure_path(project,relative); raw=read_file(target)
         restored=base64.b64decode(row["before"],validate=True) if row["before"] is not None else None
-        if _fingerprint(raw) != row["after_sha"] or raw is not None and stat.S_IMODE(target.stat().st_mode) != row["mode"]:
+        if _fingerprint(raw) != row["after_sha"] or raw is not None and not state_files.same_file_state((raw, stat.S_IMODE(target.stat().st_mode)), (raw, row["mode"])):
             raise ValueError("应用后文件已有其他更改，已停止恢复："+relative)
         if _fingerprint(restored) != row["before_sha"]:
             raise ValueError("备份内容指纹不一致")

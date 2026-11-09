@@ -16,7 +16,7 @@ import uuid
 
 from lib import role_models, runtime_store
 from lib.central import role_preferences
-from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Resources, Tree, absolute_directory, capacity_node_value, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS
+from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Resources, Tree, absolute_directory, capacity_node_value, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS, move_at, publish_at, clone_file_permissions, delete_at
 from lib.hosts import native_agents as native
 from lib.hosts.native_context import HostPaths, NativeContext
 from lib.platform_fs import directory_lock, os
@@ -216,7 +216,7 @@ def _save(state: Path, journal: dict) -> None:
 def _moved_matches(actual: Node, expected: Node) -> bool:
     # rename/link会改变ctime；inode、正文、mode、size、mtime必须仍是授权前像。
     return (actual.same_content(expected) and actual.identity[:2] == expected.identity[:2]
-            and actual.identity[4:6] == expected.identity[4:6])
+            and actual.identity[4:6] == expected.identity[4:6] and actual.security == expected.security)
 
 
 def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node, *, expected: Node) -> None:
@@ -253,6 +253,8 @@ def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node,
             stream.flush()
             os.fchmod(stream.fileno(), after.mode)
             os.fsync(stream.fileno())
+        if expected.kind == "file":
+            clone_file_permissions(parent, name, stage_name)
         row["staged"] = read_at(parent, stage_name).value()
         _save(state, journal)
         # stage磁盘写入期间的同内容替换也必须拒绝，完整Node比较包含inode/ctime。
@@ -261,12 +263,12 @@ def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node,
         if expected.kind == "file":
             row["retained"].append({"path": str(parent_path / held_name), "expected": expected.value()})
             _save(state, journal)
-            os.rename(name, held_name, src_dir_fd=parent, dst_dir_fd=parent)
+            move_at(name, held_name, src_dir_fd=parent, dst_dir_fd=parent, expected=expected)
             if not _moved_matches(read_at(parent, held_name), expected):
                 raise ValueError("原生旧inode在隔离窗口发生变化，已保全原像")
         # exclusive link不覆盖隔离后被编辑器重建的目标；stage链接移除后恢复nlink=1。
-        os.link(stage_name, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-        os.unlink(stage_name, dir_fd=parent)
+        publish_at(stage_name, name, src_dir_fd=parent, dst_dir_fd=parent,
+                   expected=Node.from_value(row["staged"]))
         os.fsync(parent)
         published = read_at(parent, name)
         if not _moved_matches(published, Node.from_value(row["staged"])):
@@ -541,7 +543,7 @@ def _check_retained(row: dict, *, allow_missing: bool = False) -> None:
         # rename 改变 ctime，但不改变 inode、mtime 和正文；保留旧 fd 后的保存
         # 或权限修改必须停止恢复，不能把后续用户编辑藏在一次成功补偿后面。
         if (not node.same_content(before) or node.identity[:2] != before.identity[:2]
-                or node.identity[5:6] != before.identity[5:6]):
+                or node.identity[5:6] != before.identity[5:6] or node.security != before.security):
             raise ValueError("保留的原生旧 inode 已有后续编辑")
 
 
@@ -625,6 +627,8 @@ def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
                     stream.flush()
                     os.fchmod(stream.fileno(), after.mode)
                     os.fsync(stream.fileno())
+                if expected.kind == "file":
+                    clone_file_permissions(parent, name, stage)
                 step["staged"] = read_at(parent, stage).value()
                 _save(state, journal)
             if held is not None:
@@ -632,7 +636,7 @@ def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
                 if isolated.kind == "missing":
                     if step["isolated"] is not None or read_at(parent, name) != expected:
                         raise ValueError("补偿隔离节点缺失或最终前像已变化")
-                    os.rename(name, held, src_dir_fd=parent, dst_dir_fd=parent)
+                    move_at(name, held, src_dir_fd=parent, dst_dir_fd=parent, expected=expected)
                     isolated = read_at(parent, held)
                 if step["isolated"] is None:
                     # rename之后、保存isolated之前崩溃仍有expected的完整inode
@@ -645,7 +649,10 @@ def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
                     step["returned"] = True
                     _save(state, journal)
                     try:
-                        os.link(held, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                        if os.name == "nt":
+                            publish_at(held, name, src_dir_fd=parent, dst_dir_fd=parent, expected=isolated)
+                        else:
+                            os.link(held, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
                         os.fsync(parent)
                     except FileExistsError:
                         pass
@@ -657,6 +664,8 @@ def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
                 except FileNotFoundError:
                     stage_info = None
                 if stage_info is not None and stage_info.st_nlink == 2:
+                    if os.name == "nt":
+                        raise ValueError("Windows 消费发布不存在双硬链接中间态，拒绝未知 stage")
                     # exclusive link已成功、stage尚未移除：普通read_at应继续拒绝，
                     # 仅此两个明确登记的路径可核实同inode后完成stage清理。
                     _read_compensation_pair(parent, stage, name, staged)
@@ -664,9 +673,12 @@ def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
                 elif stage_info is not None:
                     if read_at(parent, stage) != staged or read_at(parent, name).kind != "missing":
                         raise ValueError("补偿stage或排他发布目标已变化")
-                    os.link(stage, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-                    _read_compensation_pair(parent, stage, name, staged)
-                    os.unlink(stage, dir_fd=parent)
+                    if os.name == "nt":
+                        publish_at(stage, name, src_dir_fd=parent, dst_dir_fd=parent, expected=staged)
+                    else:
+                        os.link(stage, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                        _read_compensation_pair(parent, stage, name, staged)
+                        os.unlink(stage, dir_fd=parent)
                 # stage已经移除、result未持久：仍必须证明目标就是staged inode。
                 result = read_at(parent, name)
                 if not _moved_matches(result, staged):
@@ -688,7 +700,7 @@ def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
             if isolated.kind != "missing":
                 if step["isolated"] is None or isolated != Node.from_value(step["isolated"]):
                     raise state_files.PreservedEdit(root / step["held"])
-                os.unlink(held, dir_fd=parent)
+                delete_at(parent, held, expected=isolated)
                 os.fsync(parent)
         return result
 
@@ -908,7 +920,7 @@ def _clean_stage(row: dict) -> None:
         parent, name = tree.parent(row["stage"])
         if read_at(parent, name) != actual:
             raise ValueError("原生stage在清理前变化")
-        os.unlink(name, dir_fd=parent)
+        delete_at(parent, name, expected=actual)
         os.fsync(parent)
 
 

@@ -230,8 +230,15 @@ def python_helper(state: Path, project: Path, logical_path: str, args: tuple | l
                 "AGENT_WORKFLOW_CONFIG_PATH": str(context.config_path),
                 "AGENT_WORKFLOW_CORE_ROOT": str(context.core.root)})
     protocol = _admission_protocol(context.core) if initializes else None
-    return HelperInvocation((sys.executable, "-B", "-X", "utf8", str(context.core.root / relative), *args),
-                            env, context.project_root, context.runtime_binding, initializes, protocol)
+    if os.name == "nt":
+        # 通用 bootstrap 只为已经 load_core 验证的固定 helper 增加其 core/lib。
+        # 项目薄 Hook 使用另一份不插目录的小入口；二者不能混用搜索路径合同。
+        store.read_core_source(context.core, "lib/windows_bootstrap.py")
+        command = (sys.executable, "-I", "-B", "-X", "utf8", str(context.core.root / "lib/windows_bootstrap.py"),
+                   "--script", str(context.core.root / relative), *args)
+    else:
+        command = (sys.executable, "-B", "-X", "utf8", str(context.core.root / relative), *args)
+    return HelperInvocation(command, env, context.project_root, context.runtime_binding, initializes, protocol)
 
 
 def _admission_protocol(core: store.FrozenCore) -> int:
@@ -344,8 +351,15 @@ def _execute_helper(invocation: HelperInvocation, timeout: float) -> int:
 
 def main(argv: list[str] | None = None, *, project: Path | None = None, state: Path | None = None) -> int:
     """供项目薄入口使用；所有核心选择仍走上方相同服务合同。"""
-    parser = argparse.ArgumentParser(description="中央项目资源桥；不运行 Agent")
-    parser.add_argument("--binding", help="任务固定的三字段 JSON；优先于环境 pin")
+    parser = argparse.ArgumentParser(description="中央项目资源桥；不运行 Agent", allow_abbrev=False)
+    class UniquePin(argparse.Action):
+        def __call__(self, parser, namespace, value, option_string=None):
+            if getattr(namespace, self.dest, None) is not None:
+                raise argparse.ArgumentError(self, "duplicate runtime binding")
+            setattr(namespace, self.dest, value)
+    pins = parser.add_mutually_exclusive_group()
+    pins.add_argument("--binding", action=UniquePin, help="任务固定的三字段 JSON；优先于环境 pin")
+    pins.add_argument("--binding-b64", action=UniquePin, help="规范 base64 三字段 JSON，解码正文最多4KiB")
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("check")
     reader = commands.add_parser("read")
@@ -357,7 +371,9 @@ def main(argv: list[str] | None = None, *, project: Path | None = None, state: P
     project = canonical_project(project if project is not None else Path.cwd())
     state = store.state_root(state)
     try:
-        binding = store.validate_binding(unique_json(selected.binding.encode())) if selected.binding is not None else None
+        from lib.runtime_pins import decode_binding_b64
+        binding = (decode_binding_b64(selected.binding_b64) if selected.binding_b64 is not None else
+                   store.validate_binding(unique_json(selected.binding.encode())) if selected.binding is not None else None)
         if selected.action == "check":
             context = resolve_runtime(state, project, binding=binding, new_task=True)
             sys.stdout.buffer.write(json_bytes({"enabled": True, "project": str(project), "runtime_binding": context.runtime_binding}))

@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 import re
 import stat
+import sys
 import tomllib
 
 from lib.platform_fs import os
@@ -32,6 +33,7 @@ from lib import runtime_store as store
 LOCATOR = ".agent-workflow/runtime.json"
 LAUNCHER = ".agent-workflow/runtime.py"
 PYTHON_ENTRY = ".agent-workflow/lib/python_runtime.sh"
+WINDOWS_BOOTSTRAP = ".agent-workflow/lib/windows_bootstrap.py"
 CONFIG = ".agent-workflow/project.yaml"
 CENTRAL_BEGIN = "<!-- agent-workflow-pack:central-begin -->"
 CENTRAL_END = "<!-- agent-workflow-pack:central-end -->"
@@ -98,6 +100,16 @@ def canonical_project(project: Path) -> Path:
     path = Path(project).expanduser().absolute()
     if path.is_symlink() or not path.is_dir():
         raise ProjectRuntimeError("项目必须是已存在的真实目录")
+    # Python 3.11 Windows is_symlink 不覆盖 junction；先按原始绝对拼写逐级
+    # 打开并拒绝所有 reparse，再 resolve，避免洗白一个原本不受支持的入口。
+    if os.name == "nt":
+        with absolute_directory(path) as descriptor:
+            before = node_id(os.fstat(descriptor))
+            resolved = path.resolve(strict=True)
+            with absolute_directory(resolved) as final:
+                if node_id(os.fstat(final)) != before:
+                    raise ProjectRuntimeError("项目规范化前后物理目录身份不一致")
+            return resolved
     # 物理根是机器隔离键；memory.project_id 仍只是项目的可移植记忆身份。
     return path.resolve(strict=True)
 
@@ -115,13 +127,28 @@ def identity(info) -> tuple:
             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def read_at(parent: int, name: str, *, allow_link: bool = False, max_bytes: int = LIMIT) -> Node:
+def read_at(parent: int, name: str, *, allow_link: bool = False, max_bytes: int = LIMIT, skill_name: str | None = None) -> Node:
     """读取已锚定父目录中的节点；链接开关仅供精确受管叶或已登记恢复资料。
 
     对外普通项目读取仍由 Tree.read 约束路径，不能借本内部事务原语读取任意
     链接目标。链接只取 readlink 字节，从不打开它指向的文件。
     """
     _size_budget(max_bytes)
+    if os.name == "nt":
+        # 原生 reader 在同一句柄拒绝 WRITE/DELETE sharing，并独立复核 ACL；
+        # 不能由 stat/open/stat 拼接后丢失权限事实或开放数据写入窗口。
+        from lib.windows_fs import node_snapshot
+        try:
+            observed = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return Node()
+        skill = None
+        if stat.S_ISLNK(observed.st_mode):
+            skill = skill_name or (name if allow_link and SKILL_NAME.fullmatch(name) else None)
+            if not allow_link or skill is None or not SKILL_NAME.fullmatch(skill):
+                raise ProjectRuntimeError("未知链接没有原始受管 Skill 名称")
+        snapshot = node_snapshot(parent, name, max_bytes=max_bytes, skill_name=skill)
+        return Node() if snapshot is None else Node(**snapshot)
     try:
         before = os.stat(name, dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError:
@@ -155,15 +182,23 @@ class Node:
     payload: bytes = b""
     mode: int = 0
     identity: tuple = ()
+    security: str = ""
 
     def value(self) -> dict:
-        return {"kind": self.kind, "body": base64.b64encode(self.payload).decode("ascii"),
-                "mode": self.mode, "identity": list(self.identity)}
+        value = {"kind": self.kind, "body": base64.b64encode(self.payload).decode("ascii"),
+                 "mode": self.mode, "identity": list(self.identity)}
+        # POSIX 历史日志的封闭四字段字节保持不变。Windows 的 ACL 是独立事实，
+        # 真实节点必须记录完整摘要；planned/missing 尚无真实权限，明确为空。
+        if os.name == "nt":
+            value["security"] = self.security
+        return value
 
     @classmethod
     def from_value(cls, raw: dict) -> Node:
-        if (not isinstance(raw, dict) or set(raw) != {"kind", "body", "mode", "identity"}
-                or raw["kind"] not in {"missing", "file", "link"}
+        keys = {"kind", "body", "mode", "identity"} | ({"security"} if os.name == "nt" else set())
+        if (not isinstance(raw, dict) or set(raw) != keys
+                or not isinstance(raw["kind"], str) or raw["kind"] not in {"missing", "file", "link"}
+                or not isinstance(raw["body"], str)
                 or type(raw["mode"]) is not int or not 0 <= raw["mode"] <= 0o7777
                 or not isinstance(raw["identity"], list)
                 or not all(type(item) is int for item in raw["identity"])):
@@ -172,9 +207,15 @@ class Node:
             body = base64.b64decode(raw["body"], validate=True)
         except (ValueError, TypeError) as exc:
             raise ProjectRuntimeError("中央项目节点恢复正文无效") from exc
-        if len(body) > LIMIT or len(raw["identity"]) not in {0, 7}:
-            raise ProjectRuntimeError("中央项目节点快照超过边界")
-        return cls(raw["kind"], body, raw["mode"], tuple(raw["identity"]))
+        security = raw.get("security", "")
+        if (len(body) > LIMIT or len(raw["identity"]) not in {0, 7}
+                or not isinstance(security, str)
+                or os.name == "nt" and (not re.fullmatch(r"[0-9a-f]{64}", security)
+                   if raw["identity"] else security != "")):
+            raise ProjectRuntimeError("中央项目节点快照超过边界或缺少真实权限事实")
+        if raw["kind"] == "missing" and (body or raw["mode"] or raw["identity"] or security):
+            raise ProjectRuntimeError("缺失节点不能包含实际快照")
+        return cls(raw["kind"], body, raw["mode"], tuple(raw["identity"]), security)
 
     def same_content(self, other: Node) -> bool:
         # macOS 的新软链模式受 umask 影响，Linux 通常固定 0777；链接模式不
@@ -182,7 +223,74 @@ class Node:
         # inode，归属与恢复另显式检查已经发布节点的实际模式，不能豁免换链。
         if self.kind == other.kind == "link":
             return self.payload == other.payload
-        return (self.kind, self.payload, self.mode) == (other.kind, other.payload, other.mode)
+        return ((self.kind, self.payload) == (other.kind, other.payload)
+                and content_mode(self.mode) == content_mode(other.mode))
+
+
+def content_mode(mode: int) -> int:
+    """内容模式只在 Windows 投影 readonly 属性，绝不代表 ACL 或私有性。"""
+    return int(bool(mode & 0o222)) if os.name == "nt" else mode
+
+
+def native_snapshot(node: Node) -> dict:
+    """把已取得的完整 Node 交还 A 的条件 API，不重新认领当前路径状态。"""
+    if len(node.identity) != 7 or not re.fullmatch(r"[0-9a-f]{64}", node.security):
+        raise ProjectRuntimeError("Windows 条件操作缺少完整节点身份和 ACL")
+    return {"kind": node.kind, "payload": node.payload, "mode": node.mode,
+            "identity": node.identity, "security": node.security}
+
+
+def move_at(source: str, target: str, *, src_dir_fd: int, dst_dir_fd: int, expected: Node) -> None:
+    """隔离/回接均排他消费原 inode；Windows 在同句柄复核完整前像后移动。"""
+    if os.name == "nt":
+        from lib.windows_fs import move_regular, move_skill_symlink
+        if expected.kind == "link":
+            # 原始受管叶名来自调用方已授权的源/目标路径；payload 只交叉复核，
+            # 不能让一个被改写的链接自报另一 Skill 名字来获得移动许可。
+            skill = source if SKILL_NAME.fullmatch(source) else target if SKILL_NAME.fullmatch(target) else None
+            if skill is None or Path(os.fsdecode(expected.payload)).name != skill:
+                raise ProjectRuntimeError("Skill 条件移动缺少原始同名授权")
+            move_skill_symlink(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd,
+                               skill_name=skill, expected=native_snapshot(expected))
+        else:
+            move_regular(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd,
+                         expected=native_snapshot(expected))
+    else:
+        os.rename(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+
+def publish_at(source: str, target: str, *, src_dir_fd: int, dst_dir_fd: int, expected: Node) -> None:
+    """不覆盖任何后来出现的目标；Windows move 成功已消费源，不能再 unlink。"""
+    if os.name == "nt":
+        move_at(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, expected=expected)
+    else:
+        os.link(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, follow_symlinks=False)
+        os.unlink(source, dir_fd=src_dir_fd)
+
+
+def delete_at(parent: int, name: str, *, expected: Node, max_bytes: int = LIMIT,
+              skill_name: str | None = None) -> None:
+    """中央唯一条件删除入口；Windows 不把先读后裸 unlink 当作 CAS。"""
+    if os.name == "nt":
+        from lib.windows_fs import delete_regular, delete_skill_symlink
+        if expected.kind == "link":
+            if skill_name is None or Path(os.fsdecode(expected.payload)).name != skill_name:
+                raise ProjectRuntimeError("Skill 条件删除缺少原始同名授权")
+            delete_skill_symlink(parent, name, skill_name=skill_name, expected=native_snapshot(expected))
+        elif expected.kind == "file":
+            delete_regular(parent, name, expected={"identity": expected.identity, "security": expected.security,
+                                                  "sha256": hashlib.sha256(expected.payload).hexdigest()}, max_bytes=max_bytes)
+        else:
+            raise ProjectRuntimeError("不能删除缺失节点")
+    else:
+        os.unlink(name, dir_fd=parent)
+
+
+def clone_file_permissions(parent: int, source: str, target: str) -> None:
+    """只为已存在用户文件精确克隆 DACL；不同继承或权限竞态直接失败关闭。"""
+    if os.name == "nt":
+        from lib.windows_fs import copy_permissions, secure_os
+        copy_permissions(secure_os._path(source, parent), secure_os._path(target, parent))
 
 
 def capacity_node_value(node: Node) -> dict:
@@ -195,13 +303,15 @@ def capacity_node_value(node: Node) -> dict:
             or not isinstance(node.payload, bytes) or len(node.payload) > LIMIT
             or type(node.mode) is not int or not 0 <= node.mode <= 0o7777
             or len(node.identity) not in {0, 7}
-            or any(type(value) is not int or len(str(value)) > _STAT_DECIMAL_WIDTH for value in node.identity)):
+            or any(type(value) is not int or len(str(value)) > _STAT_DECIMAL_WIDTH for value in node.identity)
+            or not isinstance(node.security, str)
+            or os.name == "nt" and (not re.fullmatch(r"[0-9a-f]{64}", node.security) if node.identity else bool(node.security))):
         raise ProjectRuntimeError("节点容量无法由固定计划证明")
     if node.kind == "missing":
         if node.payload or node.mode or node.identity:
             raise ProjectRuntimeError("缺失节点容量前提无效")
         return Node().value()
-    return Node(node.kind, node.payload, node.mode if node.kind == "file" else 0o7777, CAPACITY_IDENTITY).value()
+    return Node(node.kind, node.payload, node.mode if node.kind == "file" else 0o7777, CAPACITY_IDENTITY, "f" * 64 if os.name == "nt" else "").value()
 
 
 @contextmanager
@@ -328,6 +438,12 @@ class Tree:
                 else:
                     info = os.fstat(descriptor)
                     facts[prefix] = (*node_id(info), stat.S_IMODE(info.st_mode))
+        if os.name == "nt":
+            from lib.windows_fs import security_fingerprint
+            # 目录 ChangeTime 不能证明 DACL 未改；预览必须冻结独立 ACL 事实。
+            for relative, value in list(facts.items()):
+                if value is not None:
+                    facts[relative] = (*value, security_fingerprint(self.directories[relative]))
         return tuple(sorted(facts.items()))
 
 
@@ -343,7 +459,7 @@ def managed_path(relative: str, purpose: str) -> bool:
     relative_path(relative)
     if purpose == "skill":
         return skill_parts(relative) is not None
-    fixed = {"locator": {LOCATOR}, "bridge": {LAUNCHER, PYTHON_ENTRY, ".agent-workflow/lib/workflow_hooks.py"},
+    fixed = {"locator": {LOCATOR}, "bridge": {LAUNCHER, PYTHON_ENTRY, WINDOWS_BOOTSTRAP, ".agent-workflow/lib/workflow_hooks.py"},
              "block": {"AGENTS.md", "CLAUDE.md"}, "native-config": {".codex/config.toml"}}
     if purpose in fixed:
         return relative in fixed[purpose]
@@ -353,15 +469,94 @@ def managed_path(relative: str, purpose: str) -> bool:
     return False
 
 
+def entry_command() -> str:
+    """机器角色与共享入口给出目标平台真实命令，Windows 统一 PowerShell 7。"""
+    if os.name == "nt":
+        return "& " + "'" + sys.executable.replace("'", "''") + "' -I -B -X utf8 " + LAUNCHER
+    return f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"
+
+
+def hook_material(resources: Resources, project: Path) -> dict:
+    if os.name != "nt":
+        return {}
+    from lib.hosts.windows_hook_command import validate_powershell, persistent_path
+    validate_powershell()
+    root = resources.frozen.root if resources.frozen is not None else resources.destination
+    if root is None:
+        raise ProjectRuntimeError("Windows Hook 缺少显式中央目标根")
+    body = resources.read("lib/install/windows_process.py")
+    return {"windows_runtime": (persistent_path(sys.executable, "Python executable"),
+                                persistent_path(str(project / WINDOWS_BOOTSTRAP), "bootstrap")),
+            "supervisor": {"path": persistent_path(str(root / "lib/install/windows_process.py"), "supervisor"),
+                           "sha256": hashlib.sha256(body).hexdigest()}}
+
+
+def windows_bootstrap_source(supervisor: dict) -> bytes:
+    """只生成 Hook 所需的隔离路由；不插入项目目录、不复制 Job 后端。"""
+    from lib.windows_fs import bootstrap_reader_source
+    source = r'''import sys
+if sys.platform != "win32" or not sys.flags.isolated:
+    raise SystemExit("Windows managed bootstrap requires native isolated Python (-I)")
+import hashlib
+import math
+import os
+from pathlib import Path
+import time
+__WINDOWS_INITIAL_READER__
+SUPERVISOR = __SUPERVISOR__
+
+def main(arguments):
+    read_initial_regular(Path(__file__).absolute(), 4194304, require_private=True)
+    if arguments[:1] == ["--hook-supervise"]:
+        if len(arguments) < 8:
+            raise ValueError("Missing Hook supervision identity")
+        backend, digest, parent, created, remaining = arguments[1:6]
+        if {"path": backend, "sha256": digest} != SUPERVISOR:
+            raise ValueError("Unknown Hook supervisor")
+        budget = float(remaining)
+        deadline = time.monotonic() + budget / 1000
+        if not math.isfinite(deadline) or budget > 11500:
+            raise ValueError("Invalid bounded Hook deadline")
+        if budget <= 0:
+            sys.stdout.buffer.write(b"{}\n")
+            return 0
+        body = read_initial_regular(Path(backend), 4194304, require_private=True)
+        if hashlib.sha256(body).hexdigest() != digest:
+            raise ValueError("Hook supervisor digest changed")
+        namespace = {"__name__": "_workflow_windows_supervisor", "__file__": backend}
+        exec(compile(body, backend, "exec"), namespace)
+        # 同一薄 bootstrap 的子调用仍用 -I；不经过通用 --script 路由增加项目 sys.path。
+        command = [sys.executable, "-I", "-B", "-X", "utf8", str(Path(__file__).absolute()), *arguments[6:]]
+        return namespace["supervise_hook"](command, int(parent), int(created), deadline)
+    hook = Path(__file__).absolute().parent / "workflow_hooks.py"
+    if arguments[:2] != ["--script", str(hook)]:
+        raise ValueError("Managed bootstrap only accepts its exact Hook")
+    sys.argv = [str(hook), *arguments[2:]]
+    body = read_initial_regular(hook, 4194304, require_private=True)
+    # Hook 是受管固定薄资源，实际 core 由 runtime.py 的已哈希闭包选择。
+    exec(compile(body, str(hook), "exec"), {"__name__": "__main__", "__file__": str(hook)})
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
+'''
+    return source.replace("__WINDOWS_INITIAL_READER__", bootstrap_reader_source()).replace(
+        "__SUPERVISOR__", repr(supervisor)).encode("utf-8")
+
+
 def hook_bridge_source() -> bytes:
     """当前受管 Hook 的固定版本薄入口；不加载项目代码或猜已有任务的 pin。"""
     return '''"""当前受管 Hook 的薄入口；不改宿主命令/信任，不猜进行中任务版本。"""
+import sys
+if sys.platform == "win32" and not sys.flags.isolated:
+    raise SystemExit("Windows Hook requires isolated Python (-I)")
 import os
 from pathlib import Path
 import runpy
 import json
+import math
 import subprocess
-import sys
+import time
 
 entry = Path(__file__).absolute().parent.parent / "runtime.py"
 if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
@@ -371,8 +566,14 @@ if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
     # 合法检查完成。十秒只是等待上限，正常成功立即继续，不预热、重试或缓存；
     # 持续超时仍回收check进程并返回中性响应，不能绕过新任务准入或猜测pin。
     try:
-        checked = subprocess.run([sys.executable, "-B", "-X", "utf8", str(entry), "check"],
-                                 capture_output=True, timeout=10, check=False)
+        timeout = 10.0
+        if "AGENT_WORKFLOW_HOOK_DEADLINE" in os.environ:
+            remaining = float(os.environ["AGENT_WORKFLOW_HOOK_DEADLINE"]) - time.monotonic()
+            if not math.isfinite(remaining) or remaining <= 0:
+                raise ValueError("expired Hook budget")
+            timeout = min(timeout, remaining)
+        checked = subprocess.run([sys.executable, "-I", "-B", "-X", "utf8", str(entry), "check"],
+                                 capture_output=True, timeout=timeout, check=False)
         if checked.returncode != 0:
             raise ValueError("inactive workflow")
         os.environ["AGENT_WORKFLOW_RUNTIME_BINDING"] = json.dumps(json.loads(checked.stdout)["runtime_binding"])
@@ -439,7 +640,7 @@ def restore_native(current: Node, baseline: Node, expected: Node) -> Node:
 
 def hook_resources(project: Path, config: bytes, hosts: tuple[str, ...], *,
                    enabled: bool = True, check_only: bool = False,
-                   codex_after: Node | None = None) -> dict[str, tuple[Node, str]]:
+                   codex_after: Node | None = None, resources: Resources | None = None) -> dict[str, tuple[Node, str]]:
     """内存配置驱动的当前 Hook 资源计划；仅签名条目归工作流，原生容器始终共享。
 
     guard 行由普通条件事务发布但不登记整文件独占；后续 repair/use/disable
@@ -452,6 +653,9 @@ def hook_resources(project: Path, config: bytes, hosts: tuple[str, ...], *,
     mode = hook_mode(config.decode("utf-8")) if enabled else "off"
     options = parse(config.decode("utf-8"))
     desired = {}
+    material = hook_material(resources, project) if os.name == "nt" and mode != "off" and resources is not None else {}
+    if os.name == "nt" and mode != "off" and not material:
+        raise ProjectRuntimeError("Windows Hook 生成必须有已验证固定核心")
     pack = project / ".agent-workflow"
     with Tree(project) as tree:
         for host in hosts:
@@ -463,7 +667,7 @@ def hook_resources(project: Path, config: bytes, hosts: tuple[str, ...], *,
                 signed = managed_json(data, host)
                 if ("hooks" in parsed or BEGIN.encode() in native.payload) and not signed:
                     source = codex_after if codex_after is not None else native
-                    after = merge_inline(source.payload, pack, project, mode)
+                    after = merge_inline(source.payload, pack, project, mode, **material)
                     if check_only:
                         if managed_inline(native.payload) != managed_inline(after):
                             raise ProjectRuntimeError("Codex 受管 Hook 缺失或偏离当前配置")
@@ -482,7 +686,7 @@ def hook_resources(project: Path, config: bytes, hosts: tuple[str, ...], *,
                 local = json_object(local_node.payload if local_node.kind == "file" else None)
                 desired[".claude/settings.local.json"] = (local_node, "watch")
             merged = merge_json(data, pack, project, host, mode, claude_options=options if host == "claude" else None,
-                                local_settings=local)
+                                local_settings=local, **material)
             if check_only:
                 guard_missing = (host == "claude" and local is not None
                                  and data.get("permissions", {}).get("blockWritesOutsideWorkingDirectories") is not True)
@@ -525,6 +729,7 @@ class Resources:
     binding_json: bytes
     label: str
     frozen: store.FrozenCore | None = None
+    destination: Path | None = None
 
     @property
     def binding(self) -> dict:
@@ -665,15 +870,16 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
     # 全局默认属于可变用户状态，不写回项目适配器，更不写入固定核心。这里仅
     # 物化按字段解析后的模型/推理值；原有正文、工具白名单和任务 pin 继续原样生成。
     settings, _ = resolve(preferences or {}, models, host, role)
-    command = f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"
+    command = entry_command()
     # 全局入口故意不固定当前安装版本。已有任务先读取完整 Task Pack 的 pin，
     # 即使项目已换版/停用也沿旧 pin 读取；只有无 pin 的新任务才调用当前 gate。
+    pin_option = "--binding-b64 <canonical-base64-of-task-three-field-JSON>" if os.name == "nt" else "--binding '<task-three-field-JSON>'"
     instructions = (
         f"Workflow role {role}. First read the complete current schema_version: 2 Task Pack.\n"
         "Require instance_policy: fresh and context_policy: handoff_only; never inherit PM/sibling history or delegate.\n"
         "Use only its exact owned_paths, execution_workspace, approved gates, and requiredSkills.\n"
         "Before any project check, take runtime_binding from that Task Pack. For an existing task, never substitute the current project/global version.\n"
-        f"From the explicit business project root, use `{command} --binding '<task-three-field-JSON>' read roles/{role}.md` "
+        f"From the explicit business project root, use `{command} {pin_option} read roles/{role}.md` "
         "to read the complete role, then product/WORKFLOW.md, product/GLOBAL_CONSTRAINTS.md, "
         f"platforms/{host}/references/pm-integration.md and each required Skill using the same pin.\n"
         f"Only a genuinely new task without a pin may run `{command} check` to freeze the admitted binding. "
@@ -682,6 +888,10 @@ def role_resource(resources: Resources, config: bytes, host: str, role: str, bin
         f"Project configuration is {CONFIG}; keep business, configuration and immutable core roots separate.\n"
         "Native role permissions do not prove parent/provider/MCP isolation or actual model execution.\n"
     )
+    if os.name == "nt":
+        instructions += ("On Windows use only the native isolated bridge above from PowerShell 7.0+. "
+                         "Translate any Bash source/POSIX helper example to the same logical lib/*.py via this pin's helper command; "
+                         "never execute Bash or copy Skills/helpers into this thin project. Skill links remain discovery only.\n")
     front, separator, _ = source.partition("\n---\n")
     declared = re.findall(r"(?m)^toolsets:[ \t]*(.*)$", front)
     toolset = re.fullmatch(r"\[\s*(read|write)\s*\]", declared[0]) if len(declared) == 1 else None
@@ -744,9 +954,14 @@ def launcher_source() -> bytes:
     项目中无机器路径；克隆后的薄入口即使还在，也必须先找到当前物理根的
     私有机器 binding。自举代码不 import 项目代码，不运行 setup 或模型进程。
     """
-    return '''#!/usr/bin/env python3
-"""中央项目薄入口；通过 lib/python_runtime.sh 选择已有受支持解释器。"""
+    from lib.windows_fs import bootstrap_reader_source
+    source = '''#!/usr/bin/env python3
+"""中央项目薄入口；Windows 必须由显式 Python -I 启动。"""
+import sys
+if sys.platform == "win32" and not sys.flags.isolated:
+    raise SystemExit("Windows central entry requires isolated Python (-I)")
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -758,7 +973,56 @@ import sys
 
 sys.dont_write_bytecode = True
 
+__WINDOWS_INITIAL_READER__
+
+def unique_json(body):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate JSON field")
+            result[key] = value
+        return result
+    return json.loads(body.decode("utf-8", errors="strict"), object_pairs_hook=unique)
+
+def validate_pin(value):
+    if (not isinstance(value, dict) or set(value) != {"protocol_version", "content_id", "manifest_sha256"}
+            or type(value["protocol_version"]) is not int or value["protocol_version"] != 1
+            or not isinstance(value["content_id"], str) or not re.fullmatch("[0-9a-f]{64}", value["content_id"])
+            or value["content_id"] != value["manifest_sha256"]):
+        raise ValueError("Invalid three-field runtime binding")
+    return value
+
+def normalize_binding(arguments):
+    # 编码只是有界传输，不是第二种 pin/schema；先规范化才能判断控制动作。
+    result = list(arguments)
+    if result and result[0].split("=", 1)[0] in {"--binding", "--binding-b64"}:
+        flag, separator, value = result[0].partition("=")
+        if not separator:
+            if len(result) < 2:
+                raise ValueError("Missing runtime binding")
+            value = result[1]
+            del result[:2]
+        else:
+            del result[:1]
+        if flag == "--binding-b64":
+            if len(value) > 5464:
+                raise ValueError("Encoded runtime binding exceeds 4KiB")
+            body = base64.b64decode(value, validate=True)
+            if len(body) > 4096 or base64.b64encode(body).decode("ascii") != value:
+                raise ValueError("Noncanonical or oversized runtime binding")
+        else:
+            body = value.encode("utf-8", errors="strict")
+        binding = validate_pin(unique_json(body))
+        # 后端只看到同一三字段 pin 的已解析 Python argv；不再经过宿主 shell。
+        if result and result[0].split("=", 1)[0] in {"--binding", "--binding-b64"}:
+            raise ValueError("Duplicate runtime binding")
+        return ["--binding", json.dumps(binding, separators=(",", ":")), *result]
+    return result
+
 def read_regular(path):
+    if sys.platform == "win32":
+        return read_initial_regular(path, 4194304, require_private=True)
     # 自举尚不能加载核心模块，先逐段 no-follow 读取有界普通文件；完整核心验证随后进行。
     opened = []
     chain = []
@@ -822,11 +1086,16 @@ def helper_creates_task(arguments):
     return parser.parse_args(values).command == "init"
 
 def start():
-    project = Path(__file__).absolute().parent.parent.resolve(strict=True)
+    sys.argv[1:] = normalize_binding(sys.argv[1:])
+    raw_entry = Path(__file__).absolute()
+    if sys.platform == "win32":
+        # 先按启动时原始入口拒绝 junction/reparse，再允许规范化项目物理根。
+        read_initial_regular(raw_entry, 4194304, require_private=True)
+    project = raw_entry.parent.parent.resolve(strict=True)
     state = Path(os.environ.get("AGENT_WORKFLOW_STATE_DIR", Path.home() / ".config/agent-workflow")).expanduser().absolute()
     key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()
     try:
-        record = json.loads(read_regular(state / "bindings" / (key + ".json")))
+        record = unique_json(read_regular(state / "bindings" / (key + ".json")))
     except FileNotFoundError:
         raise ValueError("本项目尚未在本机启用工作流") from None
     if record.get("project_root") != str(project) or record.get("schema_version") != 1:
@@ -838,13 +1107,13 @@ def start():
     has_requested = False
     if len(sys.argv) > 2 and sys.argv[1] == "--binding":
         has_requested = True
-        requested = json.loads(sys.argv[2])
+        requested = validate_pin(unique_json(sys.argv[2].encode("utf-8")))
     elif len(sys.argv) > 1 and sys.argv[1].startswith("--binding="):
         has_requested = True
-        requested = json.loads(sys.argv[1].split("=", 1)[1])
+        requested = validate_pin(unique_json(sys.argv[1].split("=", 1)[1].encode("utf-8")))
     elif "AGENT_WORKFLOW_RUNTIME_BINDING" in os.environ:
         has_requested = True
-        requested = json.loads(os.environ["AGENT_WORKFLOW_RUNTIME_BINDING"])
+        requested = validate_pin(unique_json(os.environ["AGENT_WORKFLOW_RUNTIME_BINDING"].encode("utf-8")))
     arguments = list(sys.argv[1:])
     if arguments[:1] == ["--binding"]:
         arguments = arguments[2:]
@@ -856,7 +1125,7 @@ def start():
         # 这里只检查current的封闭五字段外壳并选择经清单验证的控制代码。
         # native_roots的宿主/路径语义须交完整load_core后的唯一中央codec，
         # 不能提前import manager、复制根授权规则或接受缺字段的旧current。
-        current = json.loads(read_regular(state / "central/current.json"))
+        current = unique_json(read_regular(state / "central/current.json"))
         if (not isinstance(current, dict) or set(current) != {"schema_version", "runtime_binding", "previous_binding", "generation", "native_roots"}
                 or type(current["schema_version"]) is not int or current["schema_version"] != 1
                 or not isinstance(current["generation"], str) or not re.fullmatch("[0-9a-f]{32}", current["generation"])):
@@ -875,18 +1144,35 @@ def start():
     manifest = read_regular(version / "manifest.json")
     if hashlib.sha256(manifest).hexdigest() != binding["manifest_sha256"]:
         raise ValueError("中央核心清单已损坏")
-    files = {row["path"]: row for row in json.loads(manifest)["files"]}
+    files = {row["path"]: row for row in unique_json(manifest)["files"]}
     root = version / "core"
-    # 仅这两个文件会在完整 load_core 前执行，故必须先逐个核对固定清单中的字节。
-    for relative in ("lib/platform_fs.py", "lib/runtime_store.py"):
+    # 完整 load_core 之前仅执行这个固定闭包；Windows 额外依赖必须先核验，
+    # 不能先 import 未验证的 windows_fs 或 lib/__init__.py 再验证自身。
+    dependencies = ["lib/platform_fs.py", "lib/runtime_store.py", "lib/__init__.py"]
+    if sys.platform == "win32":
+        dependencies.append("lib/windows_fs.py")
+    bodies = {}
+    for relative in dependencies:
         body = read_regular(root / relative)
         if relative not in files or hashlib.sha256(body).hexdigest() != files[relative]["sha256"]:
             raise ValueError("中央自举校验器已损坏")
-    sys.path.insert(0, str(root / "lib"))
-    spec = importlib.util.spec_from_file_location("_agent_workflow_store", root / "lib/runtime_store.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+        bodies[relative] = body
+    # 校验与 exec 消费同一份字节；模块缓存仅属于本次启动，不建立额外持久化。
+    from types import ModuleType
+    if sys.platform == "win32":
+        native = ModuleType("windows_fs")
+        native.__file__ = str(root / "lib/windows_fs.py")
+        sys.modules[native.__name__] = native
+        exec(compile(bodies["lib/windows_fs.py"], native.__file__, "exec"), native.__dict__)
+    platform = ModuleType("platform_fs")
+    platform.__file__ = str(root / "lib/platform_fs.py")
+    sys.modules[platform.__name__] = platform
+    exec(compile(bodies["lib/platform_fs.py"], platform.__file__, "exec"), platform.__dict__)
+    module = ModuleType("_agent_workflow_store")
+    module.__file__ = str(root / "lib/runtime_store.py")
+    module.__package__ = ""
+    sys.modules[module.__name__] = module
+    exec(compile(bodies["lib/runtime_store.py"], module.__file__, "exec"), module.__dict__)
     module.load_core(binding, state)
     sys.path.insert(0, str(root))
     from lib import runtime_bridge
@@ -906,7 +1192,8 @@ if __name__ == "__main__":
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print("[ERROR] " + str(exc), file=sys.stderr)
         raise SystemExit(1)
-'''.encode()
+'''
+    return source.replace("__WINDOWS_INITIAL_READER__", bootstrap_reader_source()).encode()
 
 
 def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str, ...], *, owned_links: set[str],
@@ -925,13 +1212,16 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
         PYTHON_ENTRY: (Node("file", resources.read("lib/python_runtime.sh"), 0o755), "bridge"),
         ".agent-workflow/lib/workflow_hooks.py": (Node("file", hook_bridge_source(), 0o644), "bridge"),
     }
+    if os.name == "nt":
+        material = hook_material(resources, project)
+        desired[WINDOWS_BOOTSTRAP] = (Node("file", windows_bootstrap_source(material["supervisor"]), 0o644), "bridge")
     if config.kind == "missing":
         desired[CONFIG] = (Node("file", body, 0o644), "persistent")
-    command = f"bash {PYTHON_ENTRY} -B -X utf8 {LAUNCHER}"
+    command = entry_command()
     # 中央薄入口必须保留自包含安装既有的实施 Skill/宿主细则导航，但真实正文始终
     # 经同一任务 pin 由桥读取。宿主发现软链会随项目换版变化，不能作为旧任务权威；
     # 这里仅声明当前操作的按需入口，不执行模型、不改 startup 事件或默认触发范围。
-    pinned_read = command + " --binding '<task-three-field-JSON>' read "
+    pinned_read = command + (" --binding-b64 <canonical-base64-of-task-three-field-JSON> read " if os.name == "nt" else " --binding '<task-three-field-JSON>' read ")
     block = (CENTRAL_BEGIN + "\n" +
              "This project uses the central workflow. For every new task, first run `" + command + " check`; stop and report inactive if not enabled locally.\n" +
              "Project version switches do not change existing tasks' runtime_binding; stop if a central task lacks a fixed binding rather than guessing the current version.\n" +
@@ -940,6 +1230,9 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
              "Read only the current host's integration with `" + pinned_read + "platforms/<current-host>/references/pm-integration.md`, replacing <current-host> with codex, claude, or antigravity for the actual host; do not preload the other hosts' details.\n" +
              "Read the shared core with `" + pinned_read + "product/WORKFLOW.md`; project configuration is `" + CONFIG + "`.\n" +
              "Keep business, configuration, and core roots separate; role permission fields do not imply parent-session provider/MCP isolation.\n" + CENTRAL_END + "\n").encode()
+    if os.name == "nt":
+        platform_rule = ("On Windows use PowerShell 7.0+ and only the isolated native bridge above. Translate every Bash source/POSIX helper example to its logical lib/*.py through the same pin's helper command; never run Bash or copy Skills/helpers into this thin project.\n").encode()
+        block = block.replace(CENTRAL_END.encode(), platform_rule + CENTRAL_END.encode(), 1)
     desired["AGENTS.md"] = (Node("file", block, 0o644), "block")
     if "claude" in hosts:
         desired["CLAUDE.md"] = (Node("file", (CENTRAL_BEGIN + "\n@AGENTS.md\n" + CENTRAL_END + "\n").encode(), 0o644), "block")
@@ -953,7 +1246,7 @@ def prepare(resources: Resources, project: Path, config: Node, hosts: tuple[str,
         desired[".codex/config.toml"] = (Node("file", rendered, native.mode or 0o644), "native-config")
     # 配置尚未落盘也能生成 fresh Hooks；JSON 容器不成为整文件独占资源。
     desired.update(hook_resources(project, body, hosts,
-                                  codex_after=desired.get(".codex/config.toml", (None,))[0]))
+                                  codex_after=desired.get(".codex/config.toml", (None,))[0], resources=resources))
     from lib.role_models import parse as parse_models
     from lib.hosts.claude_options import parse as parse_claude
     overrides = parse_models(body.decode("utf-8"))

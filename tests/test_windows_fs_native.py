@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 from pathlib import Path
 import stat
@@ -132,6 +133,124 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
         fs.delete_skill_symlink(self.parent, ".owned-recovery", skill_name="xy-workflow", expected=moved)
         self.assertIsNone(fs.read_skill_symlink(self.parent, ".owned-recovery", skill_name="xy-workflow"))
         self.assertEqual((target / "SKILL.md").read_bytes(), b"central-owned-body")
+
+    def test_complete_regular_delete_preserves_acl_writer_replacement_and_deletes_owned(self):
+        path = self.private_file("delete-owned")
+        before = fs.node_snapshot(self.parent, path.name)
+        def compact(snapshot):
+            return {"identity": snapshot["identity"], "security": snapshot["security"],
+                    "sha256": hashlib.sha256(snapshot["payload"]).hexdigest()}
+        with path.open("r+b"), self.assertRaises(OSError):
+            fs.delete_regular(self.parent, path.name, expected=compact(before))
+        self.assertEqual(b"owned", path.read_bytes())
+        replacement = self.private_file("replacement", b"later-user-save")
+        os.replace(replacement, path)
+        with self.assertRaises(ValueError):
+            fs.delete_regular(self.parent, path.name, expected=compact(before))
+        self.assertEqual(b"later-user-save", path.read_bytes())
+        current = fs.node_snapshot(self.parent, path.name)
+        fs.delete_regular(self.parent, path.name, expected=compact(current))
+        self.assertFalse(path.exists())
+        acl_path = self.private_file("delete-acl")
+        original = fs.node_snapshot(self.parent, acl_path.name)
+        descriptor, handle = fs.HANDLE(), fs._open_handle(acl_path, 0x60080)
+        try:
+            api = fs._api()
+            sddl = f"O:{fs.current_sid()}D:P(A;;GA;;;{fs.current_sid()})(A;;GA;;;SY)(A;;GR;;;WD)"
+            self.assertTrue(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl, 1, ctypes.byref(descriptor), None))
+            self.assertEqual(0, api.security.SetSecurityInfo(handle, 1, 0x80000004,
+                None, None, fs._dacl(descriptor), None))
+        finally:
+            if descriptor.value:
+                fs._api().kernel.LocalFree(descriptor)
+            fs._close(handle)
+        changed = fs.node_snapshot(self.parent, acl_path.name)
+        self.assertNotEqual(original["security"], changed["security"])
+        # 使用真实当前 metadata 与过期 ACL 构造负控，使任何 ChangeTime 行为都不能
+        # 替独立 ACL 做决定；portable 同时覆盖七标量完全相同的前后 ACL 竞态。
+        stale_acl = {**compact(changed), "security": original["security"]}
+        with self.assertRaises(ValueError):
+            fs.delete_regular(self.parent, acl_path.name, expected=stale_acl)
+        self.assertEqual(b"owned", acl_path.read_bytes())
+        print("NATIVE_DELETE_CAS: writer blocked; replacement retained; real ACL change retained; owned node deleted; dacl_change_time_equal="
+              + str(original["identity"][6] == changed["identity"][6]))
+
+    def test_conditional_empty_directory_and_streaming_read_exclude_changes(self):
+        from lib import runtime_store
+        from manager import runtime_lifecycle
+        stream = self.private_file("stream-owned")
+        with stream.open("r+b"):
+            with self.assertRaises(OSError):
+                runtime_store._read_regular(self.parent, stream.name)
+            with self.assertRaises(OSError):
+                runtime_lifecycle._file_metadata(self.parent, stream.name)
+        fs.secure_os.mkdir("stage-dir", 0o700, dir_fd=self.parent)
+        child = fs.secure_os.open("stage-dir", fs.DIRECTORY | fs.NOFOLLOW, dir_fd=self.parent)
+        info = fs.secure_os.fstat(child)
+        expected = {"identity": (info.st_dev, info.st_ino), "security": fs.security_fingerprint(child)}
+        fs.secure_os.close(child)
+        directory = self.root / "stage-dir"
+        (directory / "user-save").write_bytes(b"must survive nonempty rejection")
+        with self.assertRaises(OSError):
+            fs.delete_directory(self.parent, directory.name, expected=expected)
+        self.assertEqual(b"must survive nonempty rejection", (directory / "user-save").read_bytes())
+        (directory / "user-save").unlink()
+        fs.delete_directory(self.parent, directory.name, expected=expected)
+        self.assertFalse(directory.exists())
+        fs.secure_os.mkdir("replace-dir", 0o700, dir_fd=self.parent)
+        child = fs.secure_os.open("replace-dir", fs.DIRECTORY | fs.NOFOLLOW, dir_fd=self.parent)
+        info = fs.secure_os.fstat(child)
+        stale = {"identity": (info.st_dev, info.st_ino), "security": fs.security_fingerprint(child)}
+        fs.secure_os.close(child)
+        (self.root / "replace-dir").rename(self.root / "original-dir")
+        fs.secure_os.mkdir("replace-dir", 0o700, dir_fd=self.parent)
+        with self.assertRaises(ValueError):
+            fs.delete_directory(self.parent, "replace-dir", expected=stale)
+        self.assertTrue((self.root / "replace-dir").is_dir())
+        descriptor, handle = fs.HANDLE(), fs._open_handle(self.root / "replace-dir", 0x60080, directory=True)
+        try:
+            api = fs._api()
+            current = fs._metadata(handle)
+            sddl = f"O:{fs.current_sid()}D:P(A;;GA;;;{fs.current_sid()})(A;;GA;;;SY)(A;;GR;;;WD)"
+            self.assertTrue(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl, 1, ctypes.byref(descriptor), None))
+            self.assertEqual(0, api.security.SetSecurityInfo(handle, 1, 0x80000004,
+                None, None, fs._dacl(descriptor), None))
+        finally:
+            if descriptor.value:
+                fs._api().kernel.LocalFree(descriptor)
+            fs._close(handle)
+        with self.assertRaises(ValueError):
+            fs.delete_directory(self.parent, "replace-dir", expected={"identity": current[0][:2], "security": current[1]})
+        self.assertTrue((self.root / "replace-dir").is_dir())
+        print("NATIVE_DIRECTORY_CAS: empty deleted, nonempty and replacement retained; both128MiB stream consumers reject live writer")
+
+    def test_independent_initial_private_gate_rejects_public_acl_before_core(self):
+        private = self.private_file("initial-private")
+        namespace = {}
+        exec(compile(fs.bootstrap_reader_source(), "<private-native-initial>", "exec"), namespace)
+        embedded = namespace["read_initial_regular"]
+        self.assertEqual(b"owned", embedded(private, require_private=True))
+        self.assertEqual(b"owned", fs.read_initial_regular(private, require_private=True))
+        descriptor, handle = fs.HANDLE(), fs._open_handle(private, 0x60080)
+        try:
+            api = fs._api()
+            sddl = f"O:{fs.current_sid()}D:P(A;;GA;;;{fs.current_sid()})(A;;GA;;;SY)(A;;GR;;;WD)"
+            self.assertTrue(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl, 1, ctypes.byref(descriptor), None))
+            self.assertEqual(0, api.security.SetSecurityInfo(handle, 1, 0x80000004,
+                None, None, fs._dacl(descriptor), None))
+        finally:
+            if descriptor.value:
+                fs._api().kernel.LocalFree(descriptor)
+            fs._close(handle)
+        # 同一个公开文档仍可沿默认reader读取；只有控制/预执行材料要求私有信任门。
+        self.assertEqual(b"owned", embedded(private))
+        for read in (embedded, fs.read_initial_regular):
+            with self.assertRaisesRegex(ValueError, "private"):
+                read(private, require_private=True)
+        print("NATIVE_INITIAL_PRIVATE: real private owner/protectedDACL accepted; public ACL rejected by embedded/backend; default public read retained")
 
     def test_global_mutex_real_second_process_contends_on_same_directory(self):
         source = ("import sys; sys.path.insert(0, sys.argv[1]); "
