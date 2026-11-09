@@ -141,6 +141,74 @@ class RolePreferencesTest(unittest.TestCase):
         self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
         return project
 
+    def separate_ambient_environment(self):
+        """准备第二个临时宿主根，使进程默认路径不再巧合等于NativeContext。"""
+        home = self.case / "ambient-home"
+        codex = home / ".codex"
+        codex.mkdir(parents=True)
+        (codex / "config.toml").write_text('model_catalog_json="models.json"\n')
+        # 两边候选完全一致，差异仅在显式来源根，避免把缺模型误当成范围回归。
+        (codex / "models.json").write_bytes(self.models.read_bytes())
+        return {"HOME": str(home), "USERPROFILE": str(home), "CODEX_HOME": str(codex),
+                "CLAUDE_CONFIG_DIR": str(home / ".claude")}
+
+    def test_native_lazy_project_and_global_reset_keep_explicit_source_scope(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "separate-reset-scope")
+        with patch.dict(os.environ, self.separate_ambient_environment()), \
+                patch("manager.codex_models.query", side_effect=AssertionError("恢复及守卫不能隐式刷新原生目录")):
+            self.native_save(context, None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+            self.native_save(context, project, {"xy-backend": {"model": "project-model"}})
+            local = project / ".codex/agents/xy-backend.toml"
+            project_reset = preferences.reset_platform(self.state, project, "codex", native_context=context)
+            self.assertTrue(project_reset.summary["can_apply"], project_reset.summary)
+            self.assertIsNone(project_reset.catalog, "本例必须覆盖恢复时惰性获取目录的分支")
+            self.assertIsNotNone(project_reset.targets[0].catalog)
+            self.assertTrue(preferences.apply(project_reset)["applied"])
+            self.assertFalse(local.exists())
+            self.assertEqual({"model": "fixture-model", "effort": "high"},
+                             service.role_settings(project, "codex", "xy-backend", state=self.state, native_context=context))
+            global_reset = preferences.reset_platform(self.state, None, "codex", native_context=context)
+            self.assertTrue(global_reset.summary["can_apply"], global_reset.summary)
+            self.assertIsNone(global_reset.catalog)
+            self.assertIsNotNone(global_reset.targets[0].catalog)
+            self.assertTrue(preferences.apply(global_reset)["applied"])
+            self.assertFalse(role_preferences.snapshot(self.state)[1].get("codex"))
+            self.assertFalse(local.exists(), "全局恢复不能补装稀疏项目角色")
+            self.assertEqual({"model": "inherit", "effort": "inherit"},
+                             service.role_settings(project, "codex", "xy-backend", state=self.state, native_context=context))
+
+    def test_native_lazy_reset_rejects_real_context_source_change_without_writes(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "changed-reset-source")
+        with patch.dict(os.environ, self.separate_ambient_environment()), \
+                patch("manager.codex_models.query", side_effect=AssertionError("来源失效不能隐式刷新")):
+            self.native_save(context, None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+            self.native_save(context, project, {"xy-backend": {"model": "project-model"}})
+            original = self.models.read_bytes()
+            for scope in (project, None):
+                with self.subTest(scope="project" if scope is not None else "global"):
+                    plan = preferences.reset_platform(self.state, scope, "codex", native_context=context)
+                    self.assertTrue(plan.summary["can_apply"], plan.summary)
+                    self.assertIsNone(plan.catalog)
+                    self.assertIsNotNone(plan.targets[0].catalog)
+                    changed = json.loads(original)
+                    changed["models"].append({"id": "changed-context-model", "supported_reasoning_levels": ["high"]})
+                    self.models.write_text(json.dumps(changed))
+                    def persisted_files():
+                        # 来源变更是本例主动输入；在其之后取前像，证明拒绝apply
+                        # 不改项目、全局原生产物、偏好、备份或恢复日志，连mtime也不变。
+                        return {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_ino, path.stat().st_mtime_ns)
+                                for root in (self.state, project, self.home) for path in root.rglob("*")
+                                if path.is_file() and not path.is_symlink()}
+                    before = persisted_files()
+                    try:
+                        with self.assertRaisesRegex(ValueError, "来源"):
+                            preferences.apply(plan)
+                        self.assertEqual(before, persisted_files())
+                    finally:
+                        self.models.write_bytes(original)
+
     def test_empty_profile_rejects_explicit_role_edit_without_partial_save_or_global_install(self):
         context = self.native_scope()
         project = self.sparse_project(context, "empty-profile", backend=False)

@@ -489,7 +489,12 @@ def _guard(plan: ModelPreferencePlan) -> None:
     for target in plan.targets:
         _check_observation(plan.state, target.observation)
         if plan.catalog is None and target.catalog is not None:
-            service.ensure_source(target.catalog, target.observation.project)
+            # 平台恢复可能在准备目标时惰性取得目录；它仍属于同一显式宿主
+            # 上下文，不能回退到进程HOME/CODEX_HOME重读。复用普通目录守卫，
+            # 同时保留ready/host/stamp检查和只读_snapshot，绝不隐式刷新授权。
+            if not check_catalogs(plan.state, target.observation.project, plan.host, target.catalog,
+                                  native_context=plan.native_context):
+                raise ValueError("模型来源或能力已变化；草稿已保留，请刷新并重新选择后再应用")
 
 
 def _restore_global(state: Path, before: Node, published: Node) -> None:
