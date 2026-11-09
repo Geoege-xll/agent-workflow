@@ -101,7 +101,7 @@ jobs:
           retention-days: 14
 
   libraries:
-    name: Native central-only evidence (4 methods)
+    name: Native central-only evidence (5 methods)
     # 固定阶段选择只来自受控事件条件；不把 inputs 或 commit message 拼入 shell。
     # 候选分支 push 能运行尚未进入默认分支的 workflow，无需依赖 dispatch 可见性。
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'libraries')
@@ -119,7 +119,7 @@ jobs:
         with:
           python-version: '3.11'
           architecture: 'x64'
-      - name: Run the fixed native central-only stage (4 methods)
+      - name: Run the fixed native central-only stage (5 methods)
         env:
           NATIVE_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
@@ -134,7 +134,7 @@ jobs:
             $python = $env:NATIVE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
             'stage=windows-native-central' | Tee-Object -FilePath $log -Append
-            'scope=4-new-central-methods-only; library_ci=42550963192; repair_ci=42552175641' | Tee-Object -FilePath $log -Append
+            'scope=5-new-central-methods-only; library_ci=42550963192; repair_ci=42552175641' | Tee-Object -FilePath $log -Append
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
             "python_path=$python" | Tee-Object -FilePath $log -Append
             $runtimeCheck = 'import platform,struct,sys; print(sys.version); print(platform.platform()); print("pointer_bits="+str(struct.calcsize("P")*8)); raise SystemExit(0 if sys.version_info >= (3,11) and struct.calcsize("P")==8 else 1)'
@@ -188,7 +188,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-server-native-central-4-methods-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-server-native-central-5-methods-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-native-central.log
           if-no-files-found: error
           retention-days: 14

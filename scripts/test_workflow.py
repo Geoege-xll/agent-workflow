@@ -92,6 +92,7 @@ GROUPS["windows-native-repair"] = (
 GROUPS["windows-native-central"] = (
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_complete_regular_delete_preserves_acl_writer_replacement_and_deletes_owned",
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_conditional_empty_directory_and_streaming_read_exclude_changes",
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_independent_initial_private_gate_rejects_public_acl_before_core",
     "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
     "tests.test_central_project.WindowsCentralComposedNativeTest.test_project_junction_is_rejected_before_resolve_and_writes",
 )
