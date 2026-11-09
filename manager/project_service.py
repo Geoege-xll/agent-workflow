@@ -154,6 +154,10 @@ class ProjectPlan:
                 "changes": native["changes"] if native else []}
 
 
+# 项目组合预览把status、固定版本选择和native准备置于同一纯读调用栈；
+# 嵌套readonly借父scope，各实际根/pin独立验证，最外层尾验后才交付纯Plan。
+# apply仍自行fresh校验；显式source双inspect/零导入及原registry CAS不变。
+@runtime_store.read_operation
 def preview_project(state: Path, project: Path, action: str, *, enable: bool = False,
                     source_root: Path | None = None, content_id: str | None = None,
                     hosts=None, native_context=None) -> ProjectPlan:

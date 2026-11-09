@@ -137,6 +137,167 @@ class CentralProjectTest(unittest.TestCase):
         return subprocess.run(command, cwd=self.project, env=environment, capture_output=True, text=True, timeout=20,
                               input=json.dumps({"cwd": str(self.project), "hook_event_name": "SessionStart", "source": "resume"}))
 
+    @contextmanager
+    def preview_scope_fixture(self):
+        """预览用独立state隔离本类其它故障记录；所有生产者仍走真实公开服务。"""
+        from lib.hosts.native_context import HostPaths, NativeContext
+        from manager import central_runtime
+        with tempfile.TemporaryDirectory(prefix="preview-operation-", dir=self.workspace) as raw:
+            root = Path(raw).resolve()
+            state, project = root / "state", root / "项目"
+            project.mkdir()
+            (project / "pyproject.toml").write_text('[project]\nname="preview-operation"\nversion="0.1.0"\n')
+            context = NativeContext(state, HostPaths.for_home(root / "home", environment={}))
+            core = store.import_core(PACK, state)
+            alternate_source = root / "explicit-source"
+            make_alternate_source(alternate_source)
+            alternate = store.import_core(alternate_source, state)
+            central_runtime.apply(central_runtime.preview(state, binding=core.binding(), native_context=context))
+            project_service.apply_project(project_service.preview_project(state, project, "add", enable=True, native_context=context))
+            yield root, state, project, core, alternate, context, alternate_source
+
+    @staticmethod
+    def preview_mutable_snapshot(root):
+        """只观察mutable状态；core由真实完整reader证明，source另有双inspect守卫。"""
+        result = {}
+        for path in root.rglob("*"):
+            relative = path.relative_to(root)
+            if any(part in {"runtimes", "explicit-source"} for part in relative.parts):continue
+            info = path.lstat()
+            if path.is_symlink():value = ("link", str(path.readlink()), info.st_ino, info.st_mode, info.st_mtime_ns)
+            elif path.is_file():value = ("file", hashlib.sha256(path.read_bytes()).hexdigest(), info.st_ino, info.st_mode, info.st_mtime_ns)
+            else:value = ("dir", info.st_dev, info.st_ino, info.st_mode)
+            result[relative.as_posix()] = value
+        return result
+
+    def assert_preview_has_no_reader(self, value, seen=None):
+        """递归检查实际Plan；不以顶层类型或摘要形状代替句柄生命周期验证。"""
+        from dataclasses import fields, is_dataclass
+        seen = set() if seen is None else seen
+        if id(value) in seen:return
+        seen.add(id(value))
+        self.assertNotIsInstance(value, (store.CoreReadSession, store.CoreReadOperation))
+        if is_dataclass(value):
+            for field in fields(value):self.assert_preview_has_no_reader(getattr(value, field.name), seen)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                self.assert_preview_has_no_reader(key, seen);self.assert_preview_has_no_reader(item, seen)
+        elif isinstance(value, (tuple, list, set, frozenset)):
+            for item in value:self.assert_preview_has_no_reader(item, seen)
+
+    def test_project_previews_share_read_operation_and_preserve_source_inspection(self):
+        """public/direct纯入口共享一次完整证明；显式source仍双inspect且零导入。"""
+        with self.preview_scope_fixture() as (root, state, project, core, alternate, context, source):
+            project_service.apply_project(project_service.preview_project(state, project, "disable", native_context=context))
+            before = self.preview_mutable_snapshot(root)
+            summaries = []
+            for entry in (lambda: project_service.preview_project(state, project, "enable", native_context=context),
+                          lambda: service.preview(state, project, "enable", binding=core.binding(), native_context=context)):
+                with patch.object(store, "_scan", wraps=store._scan) as scan, \
+                        patch.object(store, "_verify_snapshot", wraps=store._verify_snapshot) as verify, \
+                        patch.object(store, "import_core", side_effect=AssertionError("纯预览不能导入核心")):
+                    plan = entry()
+                self.assertEqual((1, 2), (scan.call_count, verify.call_count))
+                self.assertTrue(plan.summary["can_apply"], plan.summary)
+                self.assert_preview_has_no_reader(plan)
+                self.assertIsNone(store._READ_OPERATION.get())
+                self.assertEqual(before, self.preview_mutable_snapshot(root))
+                summaries.append(plan.runtime_plan.summary if isinstance(plan, project_service.ProjectPlan) else plan.summary)
+            self.assertEqual(summaries[0], summaries[1])
+            with patch.object(store, "_scan", wraps=store._scan) as scan, \
+                    patch.object(store, "_verify_snapshot", wraps=store._verify_snapshot) as verify:
+                with store.core_read_operation() as parent:
+                    reader = parent.reader(core.binding(), state)
+                    plan = project_service.preview_project(state, project, "enable", native_context=context)
+                    self.assertFalse(parent._closed)
+                    self.assertIs(reader, parent.reader(core.binding(), state))
+                    self.assert_preview_has_no_reader(plan)
+                self.assertEqual((1, 2), (scan.call_count, verify.call_count))
+            self.assertEqual(before, self.preview_mutable_snapshot(root))
+            with patch.object(store, "inspect_core", wraps=store.inspect_core) as inspect, \
+                    patch.object(store, "import_core", side_effect=AssertionError("source预览不能偷偷导入")), \
+                    patch.object(store, "_scan", wraps=store._scan) as scan, \
+                    patch.object(store, "_verify_snapshot", wraps=store._verify_snapshot) as verify:
+                source_plan = project_service.preview_project(state, project, "enable", source_root=source, native_context=context)
+            self.assertTrue(source_plan.summary["can_apply"], source_plan.summary)
+            self.assertEqual((2, 3, 4), (inspect.call_count, scan.call_count, verify.call_count))
+            self.assertEqual(before, self.preview_mutable_snapshot(root))
+            self.assert_preview_has_no_reader(source_plan)
+            original_inspect = store.inspect_core
+            mutable_source = source / "product/WORKFLOW.md"
+            source_before = mutable_source.read_bytes()
+            inspected = []
+            def inspect_then_change(path):
+                result = original_inspect(path)
+                inspected.append(True)
+                if len(inspected) == 1:mutable_source.write_bytes(source_before + b"\nactual-source-change\n")
+                return result
+            try:
+                with patch.object(store, "inspect_core", inspect_then_change), \
+                        patch.object(store, "import_core", side_effect=AssertionError("坏source不能导入")), \
+                        self.assertRaisesRegex(ValueError, "核心来源在预览期间变化"):
+                    project_service.preview_project(state, project, "enable", source_root=source, native_context=context)
+                self.assertEqual(2, len(inspected))
+                self.assertEqual(before, self.preview_mutable_snapshot(root))
+            finally:mutable_source.write_bytes(source_before)
+            self.assertIsNone(store._READ_OPERATION.get())
+
+    def test_central_preview_separates_pins_and_withholds_plan_on_exit_drift(self):
+        """中央组合按实际pin各自证明；尾验失败不交Plan，apply不借旧预览许可。"""
+        from manager import central_runtime
+        with self.preview_scope_fixture() as (root, state, project, core, alternate, context, source):
+            before = self.preview_mutable_snapshot(root)
+            for selected, expected in ((core, (1, 2)), (alternate, (2, 4))):
+                with patch.object(store, "_scan", wraps=store._scan) as scan, \
+                        patch.object(store, "_verify_snapshot", wraps=store._verify_snapshot) as verify:
+                    plan = central_runtime.preview(state, binding=selected.binding(), native_context=context)
+                self.assertTrue(plan.summary["can_apply"], plan.summary)
+                self.assertEqual(selected.binding(), plan.binding)
+                self.assertEqual(expected, (scan.call_count, verify.call_count))
+                self.assert_preview_has_no_reader(plan)
+                self.assertEqual(before, self.preview_mutable_snapshot(root))
+                self.assertIsNone(store._READ_OPERATION.get())
+            ready = project_service.preview_project(state, project, "use", content_id=alternate.content_id, native_context=context)
+            self.assertTrue(ready.summary["can_apply"], ready.summary)
+            member = alternate.root / "roles/xy-backend.md"
+            original_body, original_mode = member.read_bytes(), stat.S_IMODE(member.stat().st_mode)
+            original_finish = store.CoreReadOperation.finish
+            injected = []
+            returned = []
+            def change_before_tail(operation):
+                if not injected:
+                    member.chmod(original_mode | stat.S_IWUSR)
+                    member.write_bytes(original_body + b"\nactual-core-tail-change\n")
+                    injected.append(True)
+                return original_finish(operation)
+            try:
+                with patch.object(store.CoreReadOperation, "finish", change_before_tail), \
+                        self.assertRaises(store.RuntimeStoreError):
+                    returned.append(central_runtime.preview(state, binding=alternate.binding(), native_context=context))
+                self.assertEqual([True], injected)
+                self.assertEqual([], returned, "尾验失败不能把未验证计划交给调用方")
+                self.assertEqual(before, self.preview_mutable_snapshot(root))
+                self.assertIsNone(store._READ_OPERATION.get())
+                # 此计划是在Core真实变化以前生成的；apply必须独立fresh校验，
+                # 不能凭Plan含有同一binding就使用此前预览的reader或字节缓存。
+                with patch.object(store, "_scan", wraps=store._scan) as fresh_scan, self.assertRaises(ValueError):
+                    project_service.apply_project(ready)
+                self.assertGreaterEqual(fresh_scan.call_count, 1)
+                self.assertEqual(before, self.preview_mutable_snapshot(root))
+            finally:
+                member.chmod(original_mode | stat.S_IWUSR)
+                member.write_bytes(original_body)
+                member.chmod(original_mode)
+            registration = project_service.preview_project(state, project, "del", native_context=context)
+            registry = state / "projects.json"
+            old_registry = registry.read_bytes()
+            registry.write_bytes(old_registry + b" ")
+            changed = self.preview_mutable_snapshot(root)
+            with self.assertRaisesRegex(ValueError, "项目登记表在预览后发生变化"):
+                project_service.apply_project(registration)
+            self.assertEqual(changed, self.preview_mutable_snapshot(root))
+            self.assertIsNone(store._READ_OPERATION.get())
+
     def test_single_scope_hook_reuses_one_scan_and_rejects_invalid_readers_and_admission(self):
         self.enable()
         profile = '''import collections,json,runpy,sys

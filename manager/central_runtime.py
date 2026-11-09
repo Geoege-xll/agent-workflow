@@ -173,6 +173,10 @@ def _after_guards_allowed(state: Path, selected: dict, current: Node, captures: 
     return capable
 
 
+# 中央只读提案统合controller、全局原生及各项目准备的核心证明；不同实际根与
+# 完整pin仍各持一份reader。尾验完成才返回纯数据，apply不继承预览许可，
+# 原来源/登记/容量检查和全部writer保持原合同，不扩成长写事务scope。
+@store.read_operation
 def preview(state: Path, action: str = "activate", *, binding: dict | None = None,
             source_root: Path | None = None, native_context=None) -> CentralPlan:
     """预览只激活已导入核心；来源导入、中央激活和程序升级是三个独立动作。"""

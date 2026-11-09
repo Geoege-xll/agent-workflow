@@ -188,6 +188,10 @@ def _protect_project(project: Path, source_root: Path | None) -> None:
             raise ActivationError("发现旧工作流目录 agent_workflow；先显式处理原安装，保留该目录")
 
 
+# 直接库消费者也拥有完整的纯预览scope，组合调用则嵌套共享既有reader。
+# 每份成员仍fresh校验hash/身份/ACL，退出完整尾验；不把reader带入Plan或apply，
+# 不缓存可变source检查，不改变任何写入、版本选择或补偿边界。
+@store.read_operation
 def preview(state: Path, project: Path, action: str, *, source_root: Path | None = None,
             binding: dict | None = None, hosts: tuple | None = None,
             native_context=None, native_ready_hosts: tuple = ()) -> ActivationPlan:
