@@ -7,18 +7,21 @@ Homebrew 的安装、升级与发行构建见 [Homebrew 说明](homebrew.md)。
 
 ## 支持范围与安装保护
 
-当前源码版本为 **2.1.3**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
+当前源码版本为 **2.1.4**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
 GitHub 与 Tap 的公开版本以各自发布声明为准；源码更新不会改变既有二进制、Cellar 载荷或 Tap。
 
-当前安装通过 macOS/Linux 源包或 Homebrew 使用中央运行时。未发布的 npm／npx Windows
-安装渠道已移除，不提供对应包、构建器或安装命令。Windows 安全文件系统后端尚不支持受管
-Skill 的锚定软链发布，安装在创建项目资源或中央状态前明确拒绝。跨平台启动器和安全合同仍保留，
-不表示 Windows 安装已经验收。
+macOS/Linux 通过源包或 Homebrew 使用中央运行时。原生 Windows 的目标为 Windows 11 x64、
+PowerShell 7+ 和已有的 CPython 3.11+ x64，使用同一源包／发行归档中的原生入口。Windows Server
+原生检查只证明对应环境与方法，不能替代 Win11 普通用户、桌面终端和实际客户端验收；当前这些 Win11
+证据以及 Codex App 原生会话／CUA 仍未取得。未发布的 npm／npx 渠道保持移除，不提供对应安装命令，
+不新增 WinGet、EXE/MSI 或旧自包含安装方式。
 
-源包需要 Python 3.11+（含标准库 `tomllib`），无需安装 Python 包。入口从现有 PATH 选择
+macOS/Linux 源包需要 Python 3.11+（含标准库 `tomllib`），无需安装 Python 包。Bash 入口从现有 PATH 选择
 支持的 `python3` 或带版本命令；可用 `AGENT_WORKFLOW_PYTHON` 指定解释器路径，显式值无效时
 直接失败，不静默切换环境。安装器不下载运行时，也不改全局 shell、宿主或 Python 配置。
-重新生成需求 HTML 时才需要现有 Node.js >= 20；setup 不启动渲染器，无需全局 npm 安装。
+需求／计划 HTML 生成已暂停，不需要为此安装 Node。随包保留的 `lib/python_runtime.cjs` 启动器及相关
+开发消费者仍使用 Node，Homebrew 保留已有 `node` 依赖；原生 Python／PowerShell CLI 不通过 CJS 启动。
+三平台辅助 Hook 使用共享 Python 边界；无需全局 npm 安装。
 
 ```bash
 bash /path/to/agent_workflow/install.sh
@@ -56,6 +59,72 @@ Homebrew 已管理入口，无需再注册；来源排查见 [Homebrew 说明](h
 不创建管理状态。旧入口若不认识该选项，先核对链接和已安装版本。
 相对项目路径、相对 Python 和相对 PATH 按调用目录解释；相对链接按物理父目录解析。
 入口内部 `cd` 仅在该次操作中隔离 CDPATH，原 PATH、CDPATH 及传给 Python 的环境保持。
+
+## 原生 Windows 入口
+
+先核对源包或 [GitHub Release](https://github.com/Geoege-xll/agent-workflow/releases) 的目标提交、版本与归档
+SHA-256，再解压到本地目录。采用已审阅的本地文件，不建议直接执行来源未核对的下载脚本。
+以下示例在 PowerShell 7 中运行，路径替换为已有的 CPython 控制台解释器与已核对载荷；环境变量只设置当前进程：
+
+```powershell
+$Source = 'C:\Tools\agent-workflow-2.1.4'
+$env:AGENT_WORKFLOW_PYTHON = 'C:\Python311\python.exe'
+& $env:AGENT_WORKFLOW_PYTHON -I -B -X utf8 "$Source\workflow.py" --help
+& "$Source\workflow.ps1" --version
+```
+
+PowerShell 薄入口要求解释器为本地绝对 `python.exe` 路径，最终由 Python 入口核对隔离模式、
+CPython、最低版本与 x64。显式解释器无效时拒绝，不从 PATH、`py.exe` 或下载器另选环境。
+直接 Python 必须保留 `-I -B -X utf8`。`workflow.cmd` 委派到标准
+`%ProgramFiles%\PowerShell\7\pwsh.exe`；非标准 PowerShell 位置可直接使用 PowerShell 或 Python 入口。
+程序化复杂参数使用 PowerShell 字符串数组或直接 Python；cmd 仍遵循普通 cmd 引用及变量展开规则。
+
+本手册后续的 `awf-cli` 示例，在 Windows 改用 `& "$Source\workflow.ps1"` 前缀，使用 Windows 绝对路径。
+中央服务仍按 `runtime install`、`runtime activate`、`open` 顺序显式执行，可先用 `--dry-run --json` 核对。
+写入仅支持本地 NTFS，受管 Skill 软链只指向已验证的中央核心同名 Skill。预检要求系统已经启用
+Developer Mode，或当前令牌已经启用 `SeCreateSymbolicLinkPrivilege`；实际创建还受目录 ACL 和系统策略约束。
+缺权限或不支持能力时拒绝，程序不自动启用 Developer Mode 或提升令牌。新建私有工作流资源按既定 DACL 合同保护，
+已有资料的权限和继承策略按事务前像保留；不修改 PATH、profile、ExecutionPolicy 或全局宿主设置。
+远程卷、未知 reparse／junction 和不安全多硬链仍拒绝。
+
+CLI 和库不自动安装 TUI 依赖。需要运行 curses TUI 时，由用户选择一个独立 venv，显式安装随包哈希锁定清单：
+
+```powershell
+& 'C:\Python311\python.exe' -I -B -X utf8 -m venv 'C:\Tools\awf-venv'
+$env:AGENT_WORKFLOW_PYTHON = 'C:\Tools\awf-venv\Scripts\python.exe'
+& $env:AGENT_WORKFLOW_PYTHON -I -B -X utf8 -m pip --isolated install -r "$Source\requirements-windows.txt"
+& "$Source\workflow.ps1" tui
+```
+
+清单固定 `windows-curses==2.4.2`，只接受 PyPI 已锁定的 Windows x64 wheel，不回退源码构建或下载 Python。
+清单包含普通 GIL CPython 3.11／3.12／3.13／3.14 的官方 wheel 哈希；wheel 可用不代表每个 ABI 已完成产品验收，
+本轮原生 TUI 目标为 CPython 3.11 x64。ConPTY 传输方法在 Windows Server 2025 已取得实际通过证据；
+它只覆盖终端传输、资源收尾等方法，完整 TUI 交互与 Win11 普通用户桌面验收必须另有真实结果。
+
+## 持续接单与多请求协作
+
+在任一平台由主会话 PM 接收需求。A 执行期间可以直接讨论 B、C，PM 根据目标、职责、路径、语义锁和已有成果
+判断并行、复用、同任务追加或等待；用户无需分配子代理或整理依赖图。独立请求保留各自授权、固定核心、验证和
+适用 QA；容量或资源占用只影响何时开始，不会把独立 B 静默并入 A，也不会自动恢复用户暂停或取消的任务。
+
+同任务追加先同步完整范围与任务包，再确认原工作实例收到修订。进度询问不改变范围，旧完成报告不能证明追加范围完成。
+PM 在原记录领取资源、确认原生创建结果后绑定实际 ID；结果不明先核实，不能自动重派。任务状态仍只有原 `Task.state`，
+不引入后台 daemon、Agent 池或另一份持久任务台账。具体准入与续用入口见[开发手册](development.md#持续接单的准入与续用)。
+
+| 当前客户端 | 发送新需求和续用的边界 |
+| --- | --- |
+| Codex CLI | 官方说明工作时 Enter 注入当前回合，Tab 排队到下一回合；需要 PM 立即协调时使用当前客户端的引导入口，并核对实际键位。 |
+| Codex App | 在 Settings → General → Follow-up behavior 选择引导当前运行或排队下一运行；包本身不改设置或宿主数据库。 |
+| Claude Code | 使用普通具名原生子代理及当前工具实际支持的消息／同 ID 恢复，保持独立初始上下文；不为消息功能启用 Teams 或 fork。 |
+| Antigravity | 官方说明运行中消息可打断子代理；没有另行验证的不打断工具时等待原结果，空闲后才按同任务合同续用原 ID。 |
+
+以上客户端行为分别依据 [Codex CLI 官方命令说明](https://learn.chatgpt.com/docs/developer-commands?surface=cli)、
+[App 官方设置](https://learn.chatgpt.com/docs/reference/settings)、
+[Claude 子代理说明](https://code.claude.com/docs/en/sub-agents#resume-subagents) 和
+[Antigravity 生命周期](https://antigravity.google/docs/subagents?app=cli#subagent-lifecycle-and-states)。
+官方能力、当前暴露工具和真实目标会话是三种证据；消息送达、等待唤醒、A 原 ID 持续运行、同 ID 后续工作以及
+父回合结束／中断后的子代理生命周期分别验收，缺证据保持 `runtime_unverified`。停止／中断不代替引导，
+退役不证明已关闭或释放宿主线程；不能仅凭版本探针、生成配置或本地算法测试称原生交互已通过。
 
 ## 项目登记与中央版本
 
@@ -103,7 +172,7 @@ awf-cli --state-dir STATE --host-home HOST_HOME add PROJECT --enable --source SO
 `use` 和项目 `rollback` 建立项目锁版，`follow` 清除锁版；停用项目保持停用，下次启用采用有效策略。
 中央激活预览列出锁版保留、停用后续采用和本次应用的固定项目集合。
 `runtime status` 查看中央许可，未结算中央事务先只读预览 `runtime recover --dry-run`，再恢复。
-2.1.3 分别核对中央事务记录和发布见证的容量，超容量新计划在新的 prepared 与目标写入前拒绝。
+自 2.1.3 起分别核对中央事务记录和发布见证的容量，超容量新计划在新的 prepared 与目标写入前拒绝。
 如果旧运行因容量问题中断并留下未结算状态，更新到修复后的程序后，仍沿用原 `--state-dir` 与 `--host-home`，
 先查看 `runtime status` 和 `runtime recover --dry-run`，核对条件恢复方向后再运行 `runtime recover`。
 保留原日志、发布见证和受管前像；不要手工删除它们或重复激活来绕过保护门。
@@ -342,11 +411,15 @@ UI／UX、QA 是基线可用角色，不表示必须做 UI；实施角色仍按�
 
 项目文档只补缺失或空内容，不覆盖已有非空正文。存在实际项目特有规范才维护 `docs/STANDARDS.md` 薄索引和叶，
 不复制内置通用规则、不建 GENERAL／默认设计叶／空索引。`docs/PROJECT.md` 保留项目概况与明确已验收计划基线链接；
-同主题计划只有一份 Markdown 和同名派生 HTML，历史状态或 `completed` 标签不能证明当前功能。plans 仅实际保存时创建，
+同主题计划只有一份可编辑 Markdown，需求／计划 HTML 生成和新鲜度检查已暂停；保留已有同名 HTML 与渲染源码作为
+历史／恢复材料，不重新生成、删除或批量转换，也不要求 HTML 存在才能讨论、批准、派发或验收。原型 HTML 继续保留，
+当前需求导航可仅链接 Markdown，已有安全的历史 HTML 链接可保留。历史状态或 `completed` 标签不能证明当前功能。
+plans 仅实际保存时创建，
 不创建 features／plans／notes 空目录。旧 `docs.features`、`docs.notes`、`memory.fallback_dir` 和旧权威格式明确拒绝，
 2.1 不提供转换入口；处理前先证明完整原文、批准、验收证据、权限与引用可恢复，未知归属或并发修改时停止。
 详细生命周期与安全保留规则见[计划生命周期](../platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)，
-Full 六节写作形状见 [PLAN 模板](../templates/docs/PLAN.md)，需求 HTML 见[生成方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)。
+Full 六节写作形状见 [PLAN 模板](../templates/docs/PLAN.md)，HTML 暂停与恢复边界见
+[保留说明](../platforms/shared/skills/xy-plan/references/requirement-html.md)。
 
 普通安装在模板占位值仍存在时，自动派生 `memory.project_id` 并原子写入配置；这是项目唯一稳定 slug，不是文件系统路径。
 已配置 ID 不覆盖，自定义命名空间可手改。`--check` 和 `--preflight` 从不初始化该值，保持只读。

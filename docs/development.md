@@ -28,6 +28,8 @@
 | `lib/install/project_paths.py` | 规范项目路径与目录身份边界，供实际服务调用者复用 |
 | `manager/catalog.py`、`manager/codex_models.py`、`manager/model_preferences.py` | 模型来源、能力与字段偏好 |
 | `manager/runtime_state.py` | 中央绑定及事务日志的私有记录读写边界 |
+| `lib/dispatch_admission.py`、`lib/dispatch_admission_cli.py` | 显式当前记录的跨请求资源投影、只读准入与原记录 CAS 领取／释放；不创建原生 Agent |
+| `lib/agent_continuation.py`、`lib/agent_continuation_cli.py` | 按实际身份、动作意图和当前工具能力给出只读续用建议 |
 | `lib/runtime_store.py`、`lib/central/runtime_project.py`、`lib/runtime_bridge.py` | 不可变核心、项目受管资源与 pin 薄桥 |
 | `lib/install/` | 安装编排、项目路径及平台子进程的超时／取消／资源回收 |
 | `lib/project/` | 项目发现、画像、配置验证及项目记忆身份初始化 |
@@ -62,7 +64,7 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 激活、中央回退、状态和新任务准入，以及薄桥的 current 控制入口，都要求受支持的控制协议。
 这不改变三字段 `runtime_binding` 或 manifest 协议，也不等同于 helper 的发布锁协议。
 
-2.1.3 将普通记录与类型化发布见证的容量预算分开：普通记录和资源仍受 4 MiB 上界约束，
+自 2.1.3 起，普通记录与类型化发布见证使用不同容量预算：普通记录和资源仍受 4 MiB 上界约束，
 发布见证按完整 before 的 base64 长度及封闭元数据计算专用上界，读取与写入使用同一边界。
 中央激活/回退预览和应用在首次 prepared/目标写入前汇总原生收据、项目 binding/journal、
 中央终态与失败补偿诊断的序列化预算；超限先拒绝，不截断历史原文、权限或归属前像。
@@ -117,7 +119,7 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 | `central`：中央项目资源与偏好 | `lib/runtime_project.py` | [lib/central/runtime_project.py](../lib/central/runtime_project.py) |
 | `central`：中央项目资源与偏好 | `lib/role_preferences.py` | [lib/central/role_preferences.py](../lib/central/role_preferences.py) |
 
-以下 20 个固定根文件继续保留真实实现，原因来自现有直接入口、薄桥生成字节、预校验链或固定依赖合同。
+以下固定根文件继续保留真实实现，原因来自现有直接入口、薄桥生成字节、预校验链或固定依赖合同。
 
 | 固定根实现 | 保留理由 |
 | --- | --- |
@@ -130,6 +132,9 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 | [lib/windows_fs.py](../lib/windows_fs.py) | 固定 platform_fs 的 Windows 后端，保持预校验依赖链和拒绝边界。 |
 | [lib/runtime_bridge.py](../lib/runtime_bridge.py) | 生成的 launcher 固定导入的资源／helper 分发实现。 |
 | [lib/agent_continuation.py](../lib/agent_continuation.py) | 固定任务图 CLI 的原生身份、续用状态和错误类型依赖。 |
+| [lib/agent_continuation_cli.py](../lib/agent_continuation_cli.py) | 显式意图与能力的只读续用入口，复用原图／Light 单包读取和完整校验。 |
+| [lib/dispatch_admission.py](../lib/dispatch_admission.py) | 纯资源仲裁规则，按显式任务状态、物理路径、语义锁和容量选择候选。 |
+| [lib/dispatch_admission_cli.py](../lib/dispatch_admission_cli.py) | 显式记录读取和原记录 CAS 边界，短期协调锁不保存第二份任务状态。 |
 | [lib/worktree_policy.py](../lib/worktree_policy.py) | 固定任务图入口共享的 worktree 验证合同；交付命令实现归 delivery。 |
 | [lib/standard_paths.py](../lib/standard_paths.py) | 固定任务图与 pin 工具共用的规范来源路径和领域合同。 |
 | [lib/validate_project_docs.py](../lib/validate_project_docs.py) | 固定任务图 CLI 直接导入的项目文档、规范目录与规则目录验证器。 |
@@ -142,12 +147,17 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 | [lib/task_graph_records.py](../lib/task_graph_records.py) | 固定任务图记录的 CAS、指纹和请求 scratch 真实读写入口。 |
 | [lib/task_graph_init.py](../lib/task_graph_init.py) | 固定任务图 CLI 惰性加载的初始图组装入口。 |
 
-[lib/__init__.py](../lib/__init__.py) 是额外的普通 Python 包标识，仅含文档字符串，不导入、不重导出 API、不设置路径或执行其他副作用。它确保可信 core 根先加入搜索路径后，项目自己的普通 `lib` 包不能取代核心。七个职责目录的 `__init__.py` 同样只含文档；固定根实现仍是上列 20 项。
+[lib/__init__.py](../lib/__init__.py) 是额外的普通 Python 包标识，仅含文档字符串，不导入、不重导出 API、不设置路径或执行其他副作用。它确保可信 core 根先加入搜索路径后，项目自己的普通 `lib` 包不能取代核心。七个职责目录的 `__init__.py` 同样只含文档。
 
 ## 普通入口与源包开发生成器
 
 `install.sh` 从任意位置选择已有项目，`workflow.sh` 是源码入口，默认短命令 `awf-dev`；
 Homebrew 管理正式 `awf-cli`。`--version` 显示版本、中央源根、source/formal 身份及物理载荷根。
+Windows 的 `workflow.py`、`workflow.ps1`、`workflow.cmd` 是同一 `manager.cli.main` 的薄入口，
+不建立第二套安装或服务实现。PowerShell 7 使用 .NET `ArgumentList` 逐项转发并保留调用目录；
+cmd 只按普通 cmd 引用合同转发一次。直接 Python 使用 `-I -B -X utf8`，隔离与 CPython 3.11+ x64 检查在导入业务模块前完成。
+`requirements-windows.txt` 只为 curses TUI 锁定 Windows wheel；CLI／库不读取它自动安装。
+前置、权限与当前未验收项见[原生 Windows 入口](usage.md#原生-windows-入口)。
 中央项目内仅有 `.agent-workflow/` 配置、locator、薄桥和原生资源，没有 `.agent-workflow/setup_*.sh`。
 检查／修复中央项目分别用 `check` 和先预览的 `repair`，不在项目内执行根 setup。
 
@@ -228,6 +238,37 @@ QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口�
 完整实例、图、原生交接与 worktree 方法分别按[工作流 Skill](../platforms/shared/skills/xy-workflow/SKILL.md)
 的读取条件进入，手册不复制规则全文。
 
+### 持续接单的准入与续用
+
+主会话 PM 在 A 运行时继续接收 B、C，由产品工作流的持续接单合同判断独立任务、成果复用、同任务追加与资源等待。
+任务状态、批准、pin 和 QA 仍归原图／Light 单包；准入清单仅是临时输入，不是另一个台账或调度服务。
+先收齐当前协调范围的活动记录与实际执行根，不能扫描其他会话补齐，也不能遗漏活动任务后宣称全局资源安全。
+
+源码维护可使用以下公开 helper；中央项目通过任务固定 pin 的薄桥 `helper` 调用同一逻辑资源，不执行项目里复制的 helper：
+
+```bash
+# manifest.json 只列明确选中的当前记录、实际 SHA、各任务执行根及当前容量。
+bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py view --input /path/to/manifest.json
+# 原生创建前 CAS 领取原任务；随后才调用当前宿主工具并绑定实际 agent_ref。
+bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py claim --input /path/to/manifest.json \
+  --record /path/to/current-record.json --request-id REQUEST_ID --task-id TASK_ID
+# 只读续用建议；仅在当前工具已核实不打断消息能力时声明此 capability。
+bash lib/python_runtime.sh -B -X utf8 lib/agent_continuation_cli.py \
+  --input /path/to/current-record.json --task-id TASK_ID --host codex \
+  --observed-state running --intent progress --capability non_interrupting_message
+```
+
+`view` 零写，`claim` 复核路径／语义锁、线程／Writer 容量及各记录授权，并只在原记录改 `Task.state`。
+领取不证明原生实例已创建；保留领取结果，使用返回的新 SHA 刷新临时清单，再记录实际原生 ID。
+确定未创建才可按原领取结果释放，创建结果不明必须核实，不能重派或静默释放。旧 `task_graph_cli.py ready` 与
+请求级 `qa-ready` 保持各自作用；完整清单、CAS 冲突和 release 合同见[分派参考](../platforms/shared/skills/xy-workflow/references/dispatch.md)。
+
+续用查询只提供 `wait`／`message`／`followup` 或阻止建议，不发送消息、不批准新范围。能力字段是当前宿主已核实工具的
+声明，不能拿任意字符串冒充运行验收。running 观察默认等待；同任务追加／进度询问仅在有不打断消息能力时联系原 ID，
+空闲才使用真实同 ID 后续工具。取消、未知、退役、跨宿主或未绑定实例不自动续用。
+`interrupt`／stop 不代替引导，退役也不证明线程关闭。各平台实际发送入口与证据边界见
+[使用手册](usage.md#持续接单与多请求协作)和[运行记录工具](../platforms/shared/skills/xy-workflow/references/runtime-records.md)。
+
 角色职责与权限维护在 `roles/`；工程方法与规则维护在
 [代码规范 Skill](../platforms/shared/skills/xy-code-standards/SKILL.md)，设计方法与规则维护在
 [设计 Skill](../platforms/shared/skills/xy-ui-design/SKILL.md)。根指令只保留关键边界和条件索引，
@@ -257,7 +298,7 @@ bash lib/python_runtime.sh -B -X utf8 lib/project/project_profile_cli.py json /p
 
 ### 统一验证入口与风险分组
 
-`scripts/test_workflow.sh` 统一选择源包物理根、现有 Python 解释器与 UTF-8／禁字节码参数，
+`scripts/test_workflow.py` 是唯一 Python 测试清单；Bash 薄入口 `scripts/test_workflow.sh` 选择源包物理根、现有解释器与 UTF-8／禁字节码参数，
 保留 unittest 的真实输出和失败／中断状态，不重试、不下载依赖。无参数只显示帮助，不默认跑全套；
 先用 `--list` 校验并查看实际目标，再按变更风险选择组或完整节点：
 
@@ -281,7 +322,19 @@ bash scripts/test_workflow.sh tests.test_runtime_store
 | `tui` | 输入、终端单元格、草稿交互及选定项目流程；不隐式启动 PTY |
 | `pty` | 真实伪终端键盘、窗口缩放与项目生命周期；需要 POSIX |
 | `packaging` | 离线归档、手册、启动器和 Ruby Formula 安装模拟；Formula 消费者需要 Ruby |
-| `ci` | 已明确的入口、中央 current／记录容量／生命周期／原生归属／短命令、pin／模型收据、三宿主共享源、需求 HTML、PTY 和离线发行组合；需要 Node、Ruby 与 POSIX |
+| `ci` | 已明确的入口、中央 current／记录容量／生命周期／原生归属／短命令、pin／模型收据、三宿主共享源、HTML 暂停合同、PTY 和离线发行组合；保留 Node 前置，另需 Ruby 与 POSIX |
+
+原生 Windows 使用已有解释器直接进入同一 Python 清单，例如在 PowerShell 7 中：
+
+```powershell
+& $env:AGENT_WORKFLOW_PYTHON -I -B -X utf8 scripts/test_workflow.py --list windows-native
+& $env:AGENT_WORKFLOW_PYTHON -I -B -X utf8 scripts/test_workflow.py windows-native
+```
+
+实际包含的方法以当前版本 `--list` 为准；入口、中央消费者与 ConPTY 等定向组用于对应边界，组名本身不证明完整产品已验收。
+原生组须在真实 Windows 执行每个必验方法及子场景，缺失、未运行或 skip 都不能作为通过。
+Windows Server CI、ConPTY 传输、真实 curses TUI 和 Win11 普通用户桌面是独立证据，POSIX PTY 不能代替 ConPTY。
+验证只使用请求自己的临时项目、state 和 host-home，不改真实项目、HOME、系统权限或安装全局依赖。
 
 `codex`、`claude`、`antigravity`、`prototype` 保留各自聚焦范围，`hosts` 覆盖三宿主及其共享合同。
 旧四个 `scripts/test_codex.sh`、`test_claude.sh`、`test_antigravity.sh`、`test_prototype.sh`
@@ -310,6 +363,10 @@ bash scripts/test_workflow.sh full
 业务项目文档仍遵循已配置的 `docs/PROJECT.md`、规范和同主题计划归属；当前源包没有 PROJECT／STANDARDS 实体时，
 不为说明而新建空索引。源包 `docs/plans/` 的历史 Markdown、同名 HTML 和已批准原型保留在原位，
 用于恢复批准、设计与验收依据；未索引计划或历史状态不自动成为当前功能事实。
+当前需求／计划只维护单份 Markdown，HTML 生成与新鲜度检查统一暂停；公开 CLI／Python 生成入口在读取输入、创建 scratch
+或启动 Node 前明确拒绝。原执行体以中文注释保留在 `lib/documents/requirement_html.py`，vendor 与许可证原样保留。
+恢复必须显式重新授权并同步公开入口、规则和实际消费者，不能直接调用私有 renderer 或 vendor 绕过暂停。
+原型 HTML、REQ 覆盖与安全导航继续工作，需求导航允许仅 Markdown，不批量改写历史原型。
 完整日志留在请求证据位置，长期正文仅归纳必要结论并引用现有证据，不新建归档树或杂记副本。
 
 `.sync-backups` 是既有恢复材料，`dist/` 保存本地发行产物与历史；不进入运行时载荷，不因本轮结构整理批量删除。
