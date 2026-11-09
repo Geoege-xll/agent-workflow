@@ -149,6 +149,13 @@ GROUPS["windows-native-entry"] = (
 # 从同一有序六方法清单派生，保留完整组件组且避免第二份手写名单漂移；本组同样
 # 必须真实运行，不能因夹具隔离/清理修复而用 skip 或已绿 smoke 代替剩余验证。
 GROUPS["windows-native-entry-shells"] = GROUPS["windows-native-entry"][1:]
+# 稳定中央 reader 组件验证单操作显式 core 会话的归属、fresh 校验与递归快照
+# 边界，并复用唯一已有的完整消费者节点；不以跨调用缓存、放宽超时或跳过消费者
+# 替代原生验收。已绿 CLI/Skill/renderer/原语保留各自证据，不纳入本轮重复执行。
+GROUPS["windows-native-central-reader"] = GROUPS["windows-native-central-repair"] + (
+    "tests.test_runtime_store.RuntimeStoreTest.test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member",
+    "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_rejects_unknown_members_and_directory_exchange",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -157,7 +164,7 @@ NATIVE_GROUPS = frozenset((
     "windows-native-central-repair", "windows-native-renderer",
     "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
     "windows-native-central-copy-repair", "windows-native-central-link-repair",
-    "windows-native-entry", "windows-native-entry-shells", "windows-native",
+    "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader", "windows-native",
 ))
 
 
