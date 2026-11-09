@@ -248,11 +248,27 @@ def _journal(record: object, project: Path) -> dict:
         if os.name == "nt" and "stage_security" in row:
             _require(isinstance(row["stage_security"], str) and bool(_DIGEST.fullmatch(row["stage_security"]))
                      and "stage_inode" in row and _node(row["after"]).kind == "link")
+        after = _node(row["after"])
+        if os.name == "nt":
+            if after.kind == "missing":
+                _require(not {"stage_inode", "stage_security", "published_inode"}.intersection(row))
+            elif after.kind == "link" and "stage_inode" in row:
+                _require("stage_security" in row)
+        if os.name == "nt" and "published_inode" in row:
+            # published_inode 已表示完整 stage 准备就绪；planned 空身份/ACL
+            # 此时不再足够。普通文件 stage 就是产物，Skill stage 则仍是带
+            # 独立安全见证的目录，二者不可互换或待 installed 后才补事实。
+            _require(after.kind in {"file", "link"} and len(after.identity) == 7
+                     and row["published_inode"] == list(after.identity[:2]) and "stage_inode" in row)
+            if after.kind == "file":
+                _require(row["stage_inode"] == row["published_inode"] and "stage_security" not in row)
+            else:
+                _require("stage_security" in row)
         if "installed" in row:
             installed = _node(row["installed"])
-            _require(installed.same_content(_node(row["after"])))
+            _require(installed.same_content(after))
             if os.name == "nt" and installed.kind != "missing":
-                _require(installed.security == _node(row["after"]).security)
+                _require("published_inode" in row and same_published_node(installed, after))
             if installed.kind != "missing":
                 _require(list(installed.identity[:2]) == row.get("published_inode"))
     _require(isinstance(record["conflicts"], list))
@@ -341,6 +357,19 @@ def retained_record(path: str, node: Node, *, skill_name: str | None = None) -> 
 
 def _same_inode(actual: Node, expected: Node) -> bool:
     return actual.same_content(expected) and actual.mode == expected.mode and actual.identity[:2] == expected.identity[:2] and actual.identity[4:6] == expected.identity[4:6] and actual.security == expected.security
+
+
+def same_published_node(actual: Node, expected: Node) -> bool:
+    """Windows 发布/codec/恢复共用完整实际见证，仅排除 rename 自身的 ChangeTime。
+
+    planned 空身份不构成发布授权；内容模式的宽投影也不能替代实际 mode、
+    节点身份、链接数、大小、mtime 或独立 ACL/owner 指纹。没有历史写承诺。
+    """
+    return (actual.kind in {"file", "link"} and actual.kind == expected.kind
+            and len(actual.identity) == len(expected.identity) == 7
+            and isinstance(actual.security, str) and bool(_DIGEST.fullmatch(actual.security))
+            and actual.security == expected.security and actual.same_content(expected)
+            and actual.mode == expected.mode and actual.identity[:6] == expected.identity[:6])
 
 
 def write_private(tree: Tree, relative: str, body: bytes, *, expected: Node | None = None) -> None:

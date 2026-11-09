@@ -508,6 +508,11 @@ def restrict_handle(handle, *, assign_owner=False):
             _private_owner_action(before)
         elif before.owner != _sid_bytes(current_sid()):
             raise ValueError("private Windows creation refuses an existing foreign owner")
+        # 同一句柄已完整证明 owner、protected DACL 和精确 user/SYSTEM 权限
+        # 满足私有策略时，重复 chmod 不再重写已合格的 ACL。不能凭 mode 或
+        # 创建成功早退；不满足者仍沿原受限变更和严格后置证明，保留失败关闭。
+        if _policy_is_private(before):
+            return
     with private_security() as descriptor:
         owner, defaulted = HANDLE(), BOOL()
         if assign_owner:

@@ -58,6 +58,29 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             with self.subTest(shared_consumer=target), self.assertRaises(ValueError):
                 shared_read(target)
 
+    def test_private_directory_chmod_is_idempotent_and_preserves_security(self):
+        """新私有目录重复请求 0700 必须保留真实 owner/ACL 与目录身份。"""
+        name = "private-directory"
+        fs.secure_os.mkdir(name, 0o700, dir_fd=self.parent)
+        path = self.root / name
+        fs.assert_private(path)
+        descriptor = fs.secure_os.open(name, fs.DIRECTORY | fs.NOFOLLOW, dir_fd=self.parent)
+        try:
+            before = fs.secure_os.fstat(descriptor)
+            security = fs.security_fingerprint(descriptor)
+            for _ in range(2):
+                # 与 scratch_workspace 使用同一相对父句柄 chmod 路径；不改
+                # 临时根、不跳过证明，也不通过模拟 SetSecurityInfo 制造成功。
+                fs.secure_os.chmod(name, 0o700, dir_fd=self.parent, follow_symlinks=False)
+                fs.assert_private(path)
+                after = fs.secure_os.fstat(descriptor)
+                self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
+                self.assertEqual(0o700, stat.S_IMODE(after.st_mode))
+                self.assertEqual(security, fs.security_fingerprint(descriptor))
+        finally:
+            fs.secure_os.close(descriptor)
+        print("NATIVE_PRIVATE_DIRECTORY_CHMOD: repeated requests preserved private owner/protected DACL and identity/security", flush=True)
+
     def test_private_file_acl_projection_and_real_change_time(self):
         path = self.private_file("private")
         fs.assert_private(path)
