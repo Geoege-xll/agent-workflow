@@ -308,9 +308,16 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
             tasks = [payload["task"]]
         else:
             tasks = payload.get("tasks")
-        _query(payload, root, "validate")
-        # 原 validate 已核实 tasks/身份/规范/需求/QA/worktree 结构；本层只核实
-        # 聚合所需的实际执行位置，绝不把 manifest.execution_roots 变成换根授权。
+        # 原 ready 与 validate 共用完整 schema/pin/规范/图/worktree 校验入口；
+        # 先在各自固定核心内完成真实 ready，再投影物理执行根，避免额外启动一轮
+        # 重复 validate。结果仅用于本快照候选，不能代替后续 SHA 重读或原 update。
+        # capacity 属于本次全局投影；坏 tasks 仍交原校验器拒绝，不在此先遍历它。
+        candidate = copy.deepcopy(payload)
+        if "task" not in candidate:
+            candidate["capacity"] = len(tasks) if isinstance(tasks, list) else 0
+        eligible = set(_query(candidate, root, "ready")["ready"])
+        # 原 ready 已核实任务合同；本层只核实聚合所需的实际执行位置，绝不把
+        # manifest.execution_roots 变成换根授权，也不接受调用者自报 validated。
         roots = descriptor["execution_roots"]
         if not isinstance(roots, dict) or set(roots) != {task["id"] for task in tasks}:
             raise TaskGraphError("execution_roots must exactly cover authoritative task IDs")
@@ -332,11 +339,6 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
             resource_paths[task["id"]] = tuple(_resource_identity(execution / owned, directory_modes)
                                                 for owned in task.get("owned_paths", ()))
             checked_roots[task["id"]] = str(execution)
-        # capacity 属于本次全局投影；原 record 的历史数值不能截断局部候选。
-        candidate = copy.deepcopy(payload)
-        if "task" not in candidate:
-            candidate["capacity"] = len(tasks)
-        eligible = set(_query(candidate, root, "ready")["ready"])
         for task in tasks:
             if task["task_type"] != "qa" or task["state"] not in {"DECLARED", "BLOCKED", "READY"}:
                 continue

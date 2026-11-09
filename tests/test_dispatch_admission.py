@@ -161,6 +161,18 @@ class AdmissionTest(unittest.TestCase):
         self.assertIn("agent_retired", result["waiting"][0]["reasons"])
 
     def test_duplicate_sources_handoff_packs_agent_identity_and_forged_validation_are_rejected(self):
+        # 原 pin 的 ready 必须先完成完整校验，坏 schema/tasks 不可先触发物理
+        # owned_paths 投影；此处调用真实校验 helper，只监测投影边界是否被进入。
+        for invalid in ("schema_version", "tasks"):
+            with self.subTest(invalid_before_resource_projection=invalid):
+                self.manifest["records"] = []
+                broken = self.add_record("invalid")
+                self.modify(broken, lambda value: value.update({invalid: 1 if invalid == "schema_version" else None}))
+                with patch.object(cli, "_resource_identity", side_effect=AssertionError("invalid contract reached projection")) as projection:
+                    with self.assertRaisesRegex(ValueError, "record helper rejected"):
+                        cli.admission("view", self.manifest)
+                    projection.assert_not_called()
+        self.manifest["records"] = []
         path = self.add_record("a", state="RUNNING")
         other = self.add_record("b", state="BUILD_VERIFIED", owned="src/two", lock="other")
         self.manifest["records"].append(copy.deepcopy(self.manifest["records"][0]))
@@ -185,14 +197,18 @@ class AdmissionTest(unittest.TestCase):
     def test_all_record_sha_rechecked_under_lock_and_failed_publish_keeps_claim(self):
         a = self.add_record("a")
         b = self.add_record("b", owned="src/two", lock="other")
-        original = cli._recheck
-        def drift(views):
-            b.write_bytes(b.read_bytes() + b"\n")
-            original(views)
-        with patch.object(cli, "_recheck", side_effect=drift), self.assertRaisesRegex(ValueError, "changed during"):
+        query = cli._query
+        def drift_after_ready(payload, root, command):
+            result = query(payload, root, command)
+            if command == "ready" and payload.get("tasks", [{}])[0].get("request_id") == "b":
+                # 最后一条记录已真实就绪后，较早读取的 A 发生字节漂移；初始
+                # ready 不能被当作已领取，仍须在原协作锁内拒绝后续 CAS。
+                a.write_bytes(a.read_bytes() + b"\n")
+            return result
+        with patch.object(cli, "_query", side_effect=drift_after_ready), self.assertRaisesRegex(ValueError, "changed during"):
             cli.admission("claim", self.manifest, self.key(a))
         self.assertEqual("DECLARED", json.loads(a.read_bytes())["tasks"][0]["state"])
-        self.refresh(b)
+        self.refresh(a)
         receipt = cli.admission("claim", self.manifest, self.key(a))
         self.refresh(a)
         original_payload = json.loads(a.read_bytes())
@@ -535,6 +551,19 @@ class AdmissionTest(unittest.TestCase):
                               "--request-id", "a", "--task-id", "api")
         self.assertEqual("claimed", claimed_a["status"])
         self.assertEqual(core_a.binding(), json.loads(a.read_bytes())["runtime_binding"])
+        # 前移 ready 不得借 B 的已加载核心跳过 A 的实际 pin。只破坏私有 A
+        # 冻结核心，再走真实 B 薄桥查询；失败不能发布任何原记录变更。
+        records_before = (a.read_bytes(), b.read_bytes())
+        frozen = core_a.root / "lib/dispatch_admission.py"
+        frozen.chmod(0o600)
+        frozen.write_bytes(frozen.read_bytes() + "\n# 私有夹具损坏，验证不同 pin 不能互相替代。\n".encode("utf-8"))
+        frozen.chmod(0o444)
+        self.refresh(a)
+        manifest.write_text(json.dumps(self.manifest))
+        rejected = subprocess.run([*command, "view", "--input", str(manifest)], env=environment,
+                                  cwd=self.project, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(0, rejected.returncode, rejected.stdout + rejected.stderr)
+        self.assertEqual(records_before, (a.read_bytes(), b.read_bytes()))
 
 
 if __name__ == "__main__":
