@@ -58,6 +58,32 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             with self.subTest(shared_consumer=target), self.assertRaises(ValueError):
                 shared_read(target)
 
+    def test_exact_dacl_copy_is_idempotent_and_private_state_republishes(self):
+        """同策略真实复制不重写权限，并消费实际中央私有记录二次发布。"""
+        from manager import state_files
+        source, target = self.private_file("copy-source"), self.private_file("copy-target", b"target")
+        before_source = fs.node_snapshot(self.parent, source.name)
+        before_target = fs.node_snapshot(self.parent, target.name)
+        self.assertEqual(before_source["security"], before_target["security"])
+        for _ in range(2):
+            fs.copy_permissions(source, target)
+            self.assertEqual(before_source, fs.node_snapshot(self.parent, source.name))
+            self.assertEqual(before_target, fs.node_snapshot(self.parent, target.name))
+        fs.secure_os.mkdir("owned-state", 0o700, dir_fd=self.parent)
+        state = self.root / "owned-state"
+        state_files.write_state(state, "control.json", b'{"phase":"prepared"}\n')
+        descriptor = fs.secure_os.open(state, fs.DIRECTORY | fs.NOFOLLOW)
+        try:
+            first = fs.node_snapshot(descriptor, "control.json")
+            state_files.write_state(state, "control.json", b'{"phase":"applied"}\n')
+            final = fs.node_snapshot(descriptor, "control.json")
+            self.assertEqual(b'{"phase":"applied"}\n', final["payload"])
+            self.assertEqual(first["security"], final["security"])
+            fs.assert_private(state / "control.json")
+        finally:
+            fs.secure_os.close(descriptor)
+        print("NATIVE_EXACT_DACL_COPY: stable two-handle copies and real private state republication preserved ACL", flush=True)
+
     def test_private_directory_chmod_is_idempotent_and_preserves_security(self):
         """新私有目录重复请求 0700 必须保留真实 owner/ACL 与目录身份。"""
         name = "private-directory"

@@ -558,15 +558,28 @@ def security_fingerprint(descriptor: int) -> str:
 
 def _copy_permissions(source, destination):
     """复制并核实真实 DACL；不同 stage 父继承带来的重写不能当作成功。"""
-    with _security_policy(source) as before:
-        protection = 0x80000000 if before.control & 0x1000 else 0x20000000
-        error = _api().security.SetSecurityInfo(destination, 1, 4 | protection,
-                                                None, None, before.acl, None)
-        if error:
-            raise ctypes.WinError(error)
+    with _security_policy(source) as before, _security_policy(destination) as original:
+        # dacl_key 保留 protection/control、ACE 顺序/flags/mask，只排除 owner。
+        # 两端已是同一完整 DACL 时不冗余 SetSecurityInfo，避免已正确策略被
+        # 系统重新加工；免写仍须复核两句柄，不能以一次相等观察吞掉权限竞态。
+        unchanged = original.dacl_key == before.dacl_key
+        if not unchanged:
+            protection = 0x80000000 if before.control & 0x1000 else 0x20000000
+            error = _api().security.SetSecurityInfo(destination, 1, 4 | protection,
+                                                    None, None, before.acl, None)
+            if error:
+                raise ctypes.WinError(error)
         with _security_policy(destination) as after, _security_policy(source) as current:
-            if after.dacl_key != before.dacl_key or current.dacl_key != before.dacl_key:
-                raise ValueError("Windows DACL copy changed inheritance or raced with a permission update")
+            source_stable = current.fingerprint == before.fingerprint
+            target_stable = after.owner == original.owner and (not unchanged or after.fingerprint == original.fingerprint)
+            if after.dacl_key != before.dacl_key or not source_stable or not target_stable:
+                # 仅给控制位与 ACE 数量/稳定性定位，不输出 SID、完整 DACL 或正文；
+                # 这些事实用于下一次原生诊断，不能预先归因某种 generic 映射。
+                raise ValueError("Windows DACL copy changed inheritance or raced with a permission update "
+                                 f"(source_control={before.control:#x}, target_control={after.control:#x}, "
+                                 f"source_aces={int.from_bytes(before.acl_bytes[4:6], 'little')}, "
+                                 f"target_aces={int.from_bytes(after.acl_bytes[4:6], 'little')}, "
+                                 f"source_stable={source_stable}, target_stable={target_stable})")
 
 
 def copy_permissions(source: Path, destination: Path) -> None:
@@ -577,7 +590,10 @@ def copy_permissions(source: Path, destination: Path) -> None:
         try:
             new = _open_handle(destination, READ | WRITE | 0x40000)
             try:
-                _copy_permissions(old, new)
+                try:
+                    _copy_permissions(old, new)
+                except ValueError as exc:
+                    raise ValueError(f"Windows permission copy {source.name} -> {destination.name}: {exc}") from exc
             finally:
                 _close(new)
         finally:

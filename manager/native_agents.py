@@ -168,19 +168,27 @@ def preview_global(state, binding, *, context: NativeContext, hosts=None, prefer
     if preferences is not None:
         defaults = role_preferences.validate({"schema_version": 1, "role_models": preferences})
     observations, desired, changes, conflicts = [], [], [], []
-    for host in selected:
-        before = _observe(state, context.host_paths, host)
-        _, found = _ownership(state, before)
-        observations.append(before)
-        conflicts.extend(found)
-        current = {path: node for path, node, _ in before.discovery}
-        for role in sorted(role_models.ROLES):
-            path = native.role_relative(host, role)
-            body = native.compile_role(resources, host, role, defaults)
-            native.validate_descriptor(body, host, role)
-            desired.append((host, path, body))
-            if not current.get(path, Node()).same_content(Node("file", body, 0o644)):
-                changes.append({"host": host, "path": str(before.root / path), "operation": "write"})
+    roles = tuple(sorted(role_models.ROLES))
+    sources = tuple(f"roles/{role}.md" for role in roles)
+    if "antigravity" in selected:
+        sources += ("lib/validate_antigravity_artifacts.py",)
+    # 同一次编译只需七份角色与一份工具白名单，不让 21 份宿主产物重复完整
+    # 扫描核心。视图退出即失效，plan 仍只持有编译产物；apply 的 fresh 全验
+    # 和每份源的 manifest/hash/identity/security 校验均沿原边界保留。
+    with resources.read_view(sources) as current_sources:
+        for host in selected:
+            before = _observe(state, context.host_paths, host)
+            _, found = _ownership(state, before)
+            observations.append(before)
+            conflicts.extend(found)
+            current = {path: node for path, node, _ in before.discovery}
+            for role in roles:
+                path = native.role_relative(host, role)
+                body = native.compile_role(current_sources, host, role, defaults)
+                native.validate_descriptor(body, host, role)
+                desired.append((host, path, body))
+                if not current.get(path, Node()).same_content(Node("file", body, 0o644)):
+                    changes.append({"host": host, "path": str(before.root / path), "operation": "write"})
     summary = {"scope": "global_native", "changes": changes, "conflicts": conflicts,
                "can_apply": not conflicts, "runtime_verified": False,
                "verification_boundary": "Generated descriptors and ownership do not prove native discovery priority or model execution."}

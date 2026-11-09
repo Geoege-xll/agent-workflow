@@ -34,6 +34,10 @@ _STAGE = re.compile(r"\.import-[0-9a-f]{32}", re.ASCII)
 _MANIFEST_LIMIT = 4 * 1024 * 1024
 # 沿用既有 Windows 安全文件边界的上限；流式逐文件处理，不在内存聚合整个包。
 _FILE_LIMIT = 128 * 1024 * 1024
+# 批读仅服务一次角色编译：七份角色与一份工具白名单。限制份数及总正文，
+# 不增加单文件预算、不开放 CLI 参数，也不在内存聚合整个冻结核心。
+_SOURCE_BATCH_LIMIT = 8
+_SOURCE_BATCH_BYTES_LIMIT = _FILE_LIMIT
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 _READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
 
@@ -507,14 +511,32 @@ def list_cores(state: Path | None = None) -> list[dict]:
         return []
 
 
-def read_core_source(core: FrozenCore, logical_path: str) -> bytes:
-    """仅读取完整验证清单中的规范路径，支持一次精确 .agent-workflow/ 别名。"""
+def _source_binding(core: FrozenCore) -> dict:
+    """单读与批读共用固定定位检查，不能由任意物理根替代机器内容库形状。"""
     if not isinstance(core, FrozenCore) or not isinstance(core.root, Path):
         raise RuntimeStoreError("核心读取需要已加载的 FrozenCore")
     binding = core.binding()
     if (not core.root.is_absolute() or core.root.name != "core"
             or core.root.parent.name != core.content_id or core.root.parent.parent.name != "runtimes"):
         raise RuntimeStoreError("核心定位值不是固定内容库目录")
+    return binding
+
+
+def _read_manifest_source(root: int, relative: str, record: dict) -> bytes:
+    # _read_regular 保留同句柄前后 identity/security、普通文件/单链接与
+    # 原读取上限；外层 _validated_entry 仍在退出时复核整个核心快照。
+    with _relative_parent(root, relative) as (parent, name):
+        body, info = _read_regular(parent, name)
+    if len(body) != record["size"] or hashlib.sha256(body).hexdigest() != record["sha256"]:
+        raise RuntimeStoreError("核心文件在验证后发生变化")
+    if os.name != "nt" and stat.S_IMODE(info.st_mode) != (0o555 if record["executable"] else 0o444):
+        raise RuntimeStoreError("核心文件模式在验证后发生变化")
+    return body
+
+
+def read_core_source(core: FrozenCore, logical_path: str) -> bytes:
+    """仅读取完整验证清单中的规范路径，支持一次精确 .agent-workflow/ 别名。"""
+    binding = _source_binding(core)
     relative = _logical_path(logical_path, alias=True)
     try:
         with _validated_entry(core.root.parent, binding) as (root, manifest):
@@ -523,13 +545,34 @@ def read_core_source(core: FrozenCore, logical_path: str) -> bytes:
             record = next((row for row in manifest["files"] if row["path"] == relative), None)
             if record is None:
                 raise RuntimeStoreError("逻辑路径不在冻结核心文件清单中")
-            with _relative_parent(root, relative) as (parent, name):
-                body, info = _read_regular(parent, name)
-            if len(body) != record["size"] or hashlib.sha256(body).hexdigest() != record["sha256"]:
-                raise RuntimeStoreError("核心文件在验证后发生变化")
-            if os.name != "nt" and stat.S_IMODE(info.st_mode) != (0o555 if record["executable"] else 0o444):
-                raise RuntimeStoreError("核心文件模式在验证后发生变化")
-            return body
+            return _read_manifest_source(root, relative, record)
+    except FileNotFoundError as exc:
+        raise RuntimeStoreError("固定核心或其清单文件缺失") from exc
+
+
+def read_core_sources(core: FrozenCore, logical_paths: tuple[str, ...]) -> dict[str, bytes]:
+    """一次完整 entry 验证内批读至多八份已登记源；不建立跨调用缓存。
+
+    逐份仍核 manifest 成员、大小、SHA、模式与句柄 identity/security；所有
+    字节只有在 _validated_entry 的末尾整快照复核成功后才交还调用者。
+    """
+    binding = _source_binding(core)
+    if not isinstance(logical_paths, tuple) or not 1 <= len(logical_paths) <= _SOURCE_BATCH_LIMIT:
+        raise RuntimeStoreError("核心批读必须是非空且不超过八份的显式路径 tuple")
+    relatives = tuple(_logical_path(path, alias=True) for path in logical_paths)
+    if len(set(relatives)) != len(relatives):
+        raise RuntimeStoreError("核心批读不能重复或用别名重复同一成员")
+    try:
+        with _validated_entry(core.root.parent, binding) as (root, manifest):
+            if core.label != manifest["label"]:
+                raise RuntimeStoreError("核心定位值的来源标签不匹配")
+            records = {row["path"]: row for row in manifest["files"]}
+            if any(relative not in records for relative in relatives):
+                raise RuntimeStoreError("逻辑路径不在冻结核心文件清单中")
+            if sum(records[relative]["size"] for relative in relatives) > _SOURCE_BATCH_BYTES_LIMIT:
+                raise RuntimeStoreError("核心批读总正文超过既有读取预算")
+            result = {relative: _read_manifest_source(root, relative, records[relative]) for relative in relatives}
+        return result
     except FileNotFoundError as exc:
         raise RuntimeStoreError("固定核心或其清单文件缺失") from exc
 
