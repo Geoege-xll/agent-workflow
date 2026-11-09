@@ -1465,7 +1465,6 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
     def test_source_install_detached_pin_helper_hooks_and_admission(self):
         import base64
         import time
-        from urllib.parse import quote
         from lib.hosts.native_context import HostPaths, NativeContext
         from lib.windows_fs import assert_private
         from lib.hosts.windows_hook_command import validate_powershell
@@ -1484,6 +1483,10 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             workspace = Path(raw).resolve()
             state, source, project = workspace / "state", workspace / "source", workspace / "project 中文 space"
             source.mkdir(); project.mkdir()
+            # 偏好组合验证针对真实后端工程；空目录画像只有通用 QA/UIUX 角色。
+            # 明确清单让发现器按实际工程事实启用后端，绝不让全局角色安装或
+            # 本次偏好请求反向补齐画像；空画像拒绝由偏好专项回归单独覆盖。
+            (project / "pyproject.toml").write_text('[project]\nname="native-central-fixture"\nversion="0.1.0"\n', encoding="utf-8")
             # 此唯一 source fixture 为验收“移除来源后仍可运行”而存在；不移动真实仓库，
             # 不复制 state/业务目录/个人 Skills，不按重试再造候选。只复制正式 core 边界。
             for directory in store.CORE_DIRECTORIES:
@@ -1673,8 +1676,8 @@ finally:
             mark_stage("thin_init_complete")
             print("NATIVE_ENABLED_INIT: actual isolated thin bridge persisted schema2 graph with strict task pin and explicit approvals")
             # Full 必经消费者沿同一个已移除来源的项目/pin 调用，不直接导入
-            # helper 替代薄桥。请求只属于本夹具；先证明保留项清理，再让 HTML
-            # 复用它的舞台，最后按新预览清完整个请求，不使用 --all 或新来源副本。
+            # helper 替代薄桥。请求只属于本夹具；先证明保留项清理，再证明
+            # 已暂停 HTML 不污染该请求，最后按新预览清理，不使用 --all。
             mark_stage("full_helpers_begin")
             request_id = "native-full-consumer"
             def scratch_call(command, *options):
@@ -1710,32 +1713,33 @@ finally:
             markdown, html = plans / "native-full.md", plans / "native-full.html"
             markdown_body = ("# Native Full consumer\n\n[Rules](../../.agent-workflow/" + logical + ")\n").encode("utf-8")
             markdown.write_bytes(markdown_body)
-            rendered = invoke("--binding-b64", pin, "helper", "lib/documents/requirement_html.py", "render",
-                              "--project", str(project), "--source", "docs/plans/native-full.md", "--request-id", request_id)
-            self.assertEqual(0, rendered.returncode, rendered.stdout + rendered.stderr)
-            self.assertEqual("fresh", json.loads(rendered.stdout)["status"])
-            self.assertTrue(json.loads(rendered.stdout)["rendered"])
-            self.assertEqual(markdown_body, markdown.read_bytes())
-            self.assertTrue(html.is_file())
-            page = html.read_bytes()
-            # 原稿保留可移植逻辑路径，真实 HTML 导航必须落在此 pin 的 core；
-            # 不把宿主 Skill 发现软链、项目 locator 或已删除 source 当资源来源。
-            expected_href = quote(Path(os.path.relpath(core.root / logical, plans)).as_posix(), safe="/.-_")
-            self.assertIn(('href="' + expected_href + '"').encode("utf-8"), page)
-            mark_stage("html_render_complete")
-            checked_html = invoke("--binding-b64", pin, "helper", "lib/documents/requirement_html.py", "check",
-                                  "--project", str(project), "--source", "docs/plans/native-full.md")
-            self.assertEqual(0, checked_html.returncode, checked_html.stdout + checked_html.stderr)
-            self.assertEqual("fresh", json.loads(checked_html.stdout)["status"])
-            self.assertFalse(json.loads(checked_html.stdout)["rendered"])
-            self.assertEqual(markdown_body, markdown.read_bytes())
-            self.assertEqual(page, html.read_bytes())
-            mark_stage("html_check_complete")
+            # 公开 render/check 已暂停，仍通过已移除来源后的真实固定薄桥调用。
+            # 首轮证明不会生成新页面，第二轮放入历史页面证明不会覆盖；两轮均
+            # 核对 Markdown、请求根与项目路径集合，不以一次错误码代替副作用验收。
+            page = b"<!doctype html><title>retained historical plan</title>\n"
+            for command in ("render", "check"):
+                if command == "check":
+                    html.write_bytes(page)
+                before_paths = set(project.rglob("*"))
+                options = ("--request-id", request_id) if command == "render" else ()
+                paused = invoke("--binding-b64", pin, "helper", "lib/documents/requirement_html.py", command,
+                                "--project", str(project), "--source", "docs/plans/native-full.md", *options)
+                self.assertEqual(2, paused.returncode, paused.stdout + paused.stderr)
+                self.assertEqual(b"", paused.stdout)
+                self.assertIn("HTML 生成功能已暂停".encode("utf-8"), paused.stderr)
+                self.assertEqual(markdown_body, markdown.read_bytes())
+                self.assertEqual(before_paths, set(project.rglob("*")))
+                self.assertEqual({"keep.log"}, {path.name for path in scratch.iterdir()})
+                self.assertEqual(keep_body, (scratch / "keep.log").read_bytes())
+                if command == "render":
+                    self.assertFalse(html.exists())
+                else:
+                    self.assertEqual(page, html.read_bytes())
+                mark_stage("html_" + command + "_suspended")
             self.assertEqual(keep_body, (scratch / "keep.log").read_bytes())
             final_preview = scratch_call("cleanup-scratch", "--dry-run")
-            self.assertGreaterEqual(final_preview["planned_files"], 1)
-            self.assertGreaterEqual(final_preview["planned_directories"], 1)
-            self.assertGreaterEqual(final_preview["planned_logical_bytes"], len(keep_body))
+            self.assertEqual((1, 0, len(keep_body)), tuple(final_preview[key] for key in (
+                "planned_files", "planned_directories", "planned_logical_bytes")))
             final = scratch_call("cleanup-scratch", "--expect-sha256", final_preview["snapshot_sha256"])
             self.assertEqual("applied", final["status"])
             for metric in ("files", "directories", "logical_bytes"):
@@ -1756,11 +1760,16 @@ finally:
             self.assertIn("hookSpecificOutput", response, "enabled real Hook must execute beyond the neutral timeout path")
             mark_stage("hook_complete")
             from manager import model_preferences, service as model_service
+            self.assertIn("xy-backend", model_preferences.roles(state, project, "codex", native_context=context),
+                          "组合夹具必须先证明后端角色来自实际工程画像")
             def save_preference(target, edits):
                 catalogs = model_preferences.load_catalogs(state, target, "codex", native_context=context)
                 plan = model_preferences.preview(state, target, "codex", edits, catalogs, native_context=context)
                 self.assertTrue(plan.summary["can_apply"], plan.summary)
-                return model_preferences.apply(plan)
+                result = model_preferences.apply(plan)
+                self.assertTrue(result["applied"], result)
+                self.assertIsNotNone(result["backup_id"], result)
+                return result
             save_preference(None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
             save_preference(project, {"xy-backend": {"model": "project-model"}})
             local_role = project / ".codex/agents/xy-backend.toml"

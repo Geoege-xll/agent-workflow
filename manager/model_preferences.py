@@ -303,6 +303,52 @@ class _Target:
     metadata_only: bool = False
 
 
+class _UnavailableRoles(ValueError):
+    """仅携带已校验角色标识的资格失败，可安全投影为具体预览冲突。"""
+
+
+def _prepare_target(state, observation, record, host, effective, catalog, defaults, *,
+                    project_scope, reset, native_context) -> _Target:
+    """按真实角色资格形成一个项目的固定变更，不负责发布或汇总展示。
+
+    项目显式请求是整批编辑，不能像全局默认传播一样丢掉不可用角色；恢复
+    平台则只清理历史来源，允许角色已离开画像且不依赖模型目录。角色资格
+    始终复用 service.roles 的绑定、归属与画像检查，稀疏角色不以文件判定。
+    """
+    project = observation.project
+    active = bool(record and record["enabled"] and host in record["hosts"])
+    changes = ()
+    if active and effective:
+        installed = set(service.roles(project, host, state=state, native_context=native_context))
+        unavailable = set(effective) - installed
+        if project_scope and not reset and unavailable:
+            raise _UnavailableRoles("角色不在当前启用宿主的已验证画像中：" + "、".join(sorted(unavailable)))
+        # 全局保存仅更新已经可用的跟随角色，绝不因为设置默认而安装新角色。
+        # reset 的不可用角色仅进入 metadata_roles，不能生成其原生文件。
+        editable = effective if project_scope and reset else {
+            role: fields for role, fields in effective.items() if role in installed}
+        if editable:
+            if catalog is None:
+                if not reset:
+                    raise ValueError("缺少该项目真实来源的模型目录快照，请刷新")
+                if set(editable) & installed:
+                    catalog = _discover(host, project=project, native_context=native_context)
+            changes = tuple(service.prepare(project, host, editable, catalog, state=state,
+                                             global_preferences=defaults, persist=project_scope,
+                                             native_context=native_context,
+                                             metadata_roles=tuple(sorted(set(editable) - installed))))
+    elif project_scope and effective:
+        if not reset:
+            raise _UnavailableRoles("项目该宿主尚未启用，不能保存原生角色偏好")
+        # 停用项目没有可物化目标；只从原配置删除本次请求字段，其他宿主和
+        # 未编辑字段由统一的 _edit 保留，不借平台恢复执行项目启用。
+        edited = _edit(_config(observation.config), host, effective)
+        updated = role_models.update(observation.config.payload.decode(), edited).encode()
+        if updated != observation.config.payload:
+            changes = (service.Change(CONFIG, observation.config.payload, updated, observation.config.mode),)
+    return _Target(observation, changes, catalog, not active)
+
+
 @dataclass(frozen=True)
 class ModelPreferencePlan:
     state: Path
@@ -401,40 +447,19 @@ def preview(state, project, host, choices, catalog, expected=None, *, native_con
                     if changed_fields:
                         effective[role] = role_preferences.resolve(edited, target_choices, host, role)[0]
                         following.extend({"role": role, "field": name} for name in changed_fields)
-            changes = ()
             active = bool(record and record["enabled"] and host in record["hosts"])
             selected = bundle.catalog if project is not None else bundle.project_catalogs.get(str(target))
-            if active and effective:
-                # 已启用但未安装该角色不应借全局默认补装。其余角色仍保持明确覆
-                # 盖；只对当前已有宿主资源的跟随字段形成模型补丁。
-                installed = service.roles(target, host, state=state, native_context=native_context)
-                editable = {role: value for role, value in effective.items() if role in installed}
-                if project is not None and _reset:
-                    editable = effective
-                if editable:
-                    if selected is None:
-                        # reset 的目录只在确实需要物化时获取；停用或未安装角色的
-                        # metadata 清理不依赖模型目录，也不能借恢复安装原生资源。
-                        if not _reset:
-                            raise ValueError("缺少该项目真实来源的模型目录快照，请刷新")
-                        if any(role in installed for role in editable):
-                            selected = _discover(host, project=target, native_context=native_context)
-                    changes = tuple(service.prepare(target, host, editable, selected, state=state,
-                                                     global_preferences=edited if project is None else defaults,
-                                                     persist=project is not None, native_context=native_context,
-                                                     metadata_roles=tuple(role for role in editable if role not in installed)))
-            elif project is not None and effective:
-                if not _reset:
-                    raise ValueError("项目该宿主尚未启用，不能保存原生角色偏好")
-                updated = role_models.update(observation.config.payload.decode(), edited).encode()
-                if updated != observation.config.payload:
-                    changes = (service.Change(CONFIG, observation.config.payload, updated, observation.config.mode),)
+            planned = _prepare_target(state, observation, record, host, effective, selected,
+                                      edited if project is None else defaults, project_scope=project is not None,
+                                      reset=_reset, native_context=native_context)
             if following:
                 summary["affected_projects"].append({"project": str(target), "enabled": bool(record and record["enabled"]),
                                                       "host_active": active, "fields": following,
-                                                      "changed_paths": [row.relative for row in changes],
-                                                      "materialization": "update" if changes else "on_enable" if not active else "unchanged"})
-            targets.append(_Target(observation, changes, selected, not active))
+                                                      "changed_paths": [row.relative for row in planned.changes],
+                                                      "materialization": "update" if planned.changes else "on_enable" if not active else "unchanged"})
+            targets.append(planned)
+        except _UnavailableRoles as exc:
+            summary["conflicts"].append({"path": str(target), "reason": str(exc)})
         except (OSError, ValueError, TypeError) as exc:
             summary["conflicts"].append({"path": str(target), "reason": "项目状态、受管资源或模型能力冲突，请检查项目后重试"})
     global_native = None
@@ -503,6 +528,10 @@ def apply(plan) -> dict:
         _guard(plan)
         if plan.project is not None:
             target = plan.targets[0]
+            if not target.changes:
+                # 展示出的请求差异不等于落盘结果。空计划不能创建备份，也不能
+                # 把 commit 的 no-op 包装成保存成功；资格冲突已在 preview 拒绝。
+                return result
             def verify_project():
                 if target.metadata_only:
                     # 停用/尚未管理项目仅恢复持久来源；没有可启动的native目标，
@@ -518,9 +547,9 @@ def apply(plan) -> dict:
             identifier = service.commit(plan.state, plan.project, target.changes,
                                         verify_project,
                                         before_write=lambda: _guard(plan), native_context=plan.native_context)
-            result.update(applied=True, backup_id=identifier,
+            result.update(applied=identifier is not None, backup_id=identifier,
                           backups=[{"project": str(plan.project), "backup_id": identifier}] if identifier else [],
-                          diagnostic="项目角色偏好已保存。")
+                          diagnostic="项目角色偏好已保存。" if identifier else result["diagnostic"])
             return result
         identifier = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
         relative = "preferences/transactions/" + identifier + ".json"

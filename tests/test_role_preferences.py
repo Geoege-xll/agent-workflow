@@ -75,10 +75,13 @@ class RolePreferencesTest(unittest.TestCase):
                    if path not in self.transactions_before and service.BACKUP_ID.fullmatch(path.stem)]
         return [record for record in records if "id" in record]
 
-    def project(self, name, *, enabled=True, config=None):
+    def project(self, name, *, enabled=True, config=None, backend=True):
         project = self.case / name
         project.mkdir()
-        (project / "pyproject.toml").write_text('[project]\nname="fixture"\nversion="0.1.0"\n')
+        # 空工程是有效画像：实现角色必须由工程事实产生，不能由全局已安装
+        # 角色或本次偏好请求反向补齐；正常后端用例仍明确提供最小清单。
+        if backend:
+            (project / "pyproject.toml").write_text('[project]\nname="fixture"\nversion="0.1.0"\n')
         if config is not None:
             (project / ".agent-workflow").mkdir()
             (project / ".agent-workflow/project.yaml").write_text(config)
@@ -101,7 +104,10 @@ class RolePreferencesTest(unittest.TestCase):
         return service.role_settings(project, host, "xy-backend")
 
     def cli(self, *arguments, expected=0):
-        command = ["bash", str(PACK / "workflow.sh"), "--state-dir", str(self.state), "--json", *map(str, arguments)]
+        # 独立 state 的宿主操作必须显式绑定同一临时 HOME；仅修改环境不能
+        # 替代 CLI 的隔离授权，也不能让安全拒绝测试误中“缺少宿主目录”。
+        command = ["bash", str(PACK / "workflow.sh"), "--state-dir", str(self.state),
+                   "--host-home", str(self.home), "--json", *map(str, arguments)]
         result = subprocess.run(command, cwd=self.case, env=self.environment,
                                 text=True, capture_output=True, timeout=35)
         print("真实 CLI：" + " ".join(command) + "\n" + result.stdout + result.stderr + "退出=" + str(result.returncode))
@@ -126,14 +132,60 @@ class RolePreferencesTest(unittest.TestCase):
         self.assertTrue(plan.summary["can_apply"], plan.summary)
         return preferences.apply(plan)
 
-    def sparse_project(self, context, name):
-        project = self.project(name, enabled=False)
+    def sparse_project(self, context, name, *, backend=True):
+        project = self.project(name, enabled=False, backend=backend)
         plan = runtime_service.preview(self.state, project, "enable", binding=self.core.binding(), hosts=("codex",),
                                        native_context=context)
         self.assertTrue(plan.summary["can_apply"], plan.summary)
         runtime_service.apply(plan)
         self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
         return project
+
+    def test_empty_profile_rejects_explicit_role_edit_without_partial_save_or_global_install(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "empty-profile", backend=False)
+        self.assertEqual(["xy-qa", "xy-uiux"], preferences.roles(self.state, project, "codex", native_context=context))
+        config = project / ".agent-workflow/project.yaml"
+        before_config = config.read_bytes()
+        # 全局默认仍可保存给未来工程使用；它不能把空画像中的后端角色补装
+        # 到项目，也不能为后续项目显式请求提供伪造的角色资格。
+        result = self.native_save(context, None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+        self.assertTrue(result["applied"])
+        self.assertEqual(before_config, config.read_bytes())
+        self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
+        self.assertFalse(result["backups"])
+        catalogs = preferences.load_catalogs(self.state, project, "codex", native_context=context)
+        before_paths, before_backups = set(project.rglob("*")), service.backups(self.state, project)
+        edits = {"xy-backend": {"model": "project-model"}, "xy-qa": {"effort": "high"}}
+        plan = preferences.preview(self.state, project, "codex", edits, catalogs, native_context=context)
+        self.assertFalse(plan.summary["can_apply"], plan.summary)
+        self.assertEqual([], plan.changed_paths, "混合请求必须整批拒绝，不能仅保存其中可用角色")
+        with self.assertRaises(ValueError):
+            preferences.apply(plan)
+        # 直接模型服务调用也遵守同一已验证画像，避免旁路偏好计划后补装角色。
+        with self.assertRaisesRegex(ValueError, "画像"):
+            service.prepare(project, "codex", edits, catalogs.catalog, state=self.state, native_context=context)
+        with self.assertRaisesRegex(ValueError, "只允许清理"):
+            service.prepare(project, "codex", {"xy-backend": {"model": "project-model"}}, catalogs.catalog,
+                            state=self.state, native_context=context, metadata_roles=("xy-backend",))
+        self.assertEqual(before_config, config.read_bytes())
+        self.assertEqual(before_paths, set(project.rglob("*")))
+        self.assertEqual(before_backups, service.backups(self.state, project))
+
+    def test_active_empty_profile_reset_cleans_legacy_metadata_without_installing_role(self):
+        context = self.native_scope()
+        project = self.sparse_project(context, "empty-reset", backend=False)
+        config = project / ".agent-workflow/project.yaml"
+        # 合法旧覆盖可能在工程类型改变后遗留；恢复平台必须允许删除这些元数据，
+        # 即使普通编辑已不具备该角色资格，也不能为了清理而安装原生角色。
+        config.write_text(role_models.update(config.read_text(), {"codex": {"xy-backend": {"model": "project-model"}}}))
+        plan = preferences.reset_platform(self.state, project, "codex", native_context=context)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        self.assertEqual([".agent-workflow/project.yaml"], plan.changed_paths)
+        self.assertTrue(preferences.apply(plan)["applied"])
+        self.assertFalse(role_models.parse(config.read_text()).get("codex"))
+        self.assertFalse((project / ".codex/agents/xy-backend.toml").exists())
+        self.assertFalse(preferences.apply(preferences.reset_platform(self.state, project, "codex", native_context=context))["applied"])
 
     def test_native_sparse_create_single_field_global_following_explicit_inherit_and_final_reset(self):
         context = self.native_scope()

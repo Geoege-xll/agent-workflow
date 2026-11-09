@@ -227,7 +227,7 @@ def _reserve_backup_capacity(record: dict,changes,project: Path,versions_relativ
     record_payload({**record,"status":"rolled_back","previous_files":versions,"retained_files":retained})
 
 
-def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog, expected: dict | None = None,
+def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog | None, expected: dict | None = None,
             *, state: Path | None = None, global_preferences: dict | None = None,
             persist: bool = True, native_context=None, metadata_roles: tuple = ()) -> list[Change]:
     runtime = state_files.secure_path(project, ".agent-workflow")
@@ -244,12 +244,25 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
     # 先经模型合同的安全错误出口解析适配器；随后验证当前中央归属。不存在旧
     # lib 文件探测或兼容升级分支，任意本地 helper 都不能替代本机有效绑定。
     validate_runtime(runtime, state=state)
+    if not isinstance(choices, dict) or any(
+            role not in role_models.ROLES or not isinstance(value, dict)
+            or set(value) - set(role_preferences.FIELDS) for role, value in choices.items()):
+        raise ValueError("角色编辑只接受已知角色的 model / effort 字段")
+    available = set(roles(project, host, state=state, native_context=native_context))
+    # prepare 也是既有直接调用入口：不能只靠偏好菜单过滤角色，否则普通
+    # 项目保存可绕过画像并生成未启用角色。metadata 例外仅授权删除历史字段，
+    # 不能借此设置新值或绕过当前宿主的原生资格检查。
+    metadata = set(metadata_roles)
+    if metadata and (not persist or not metadata <= set(choices)
+                     or any(any(value is not None for value in choices[role].values()) for role in metadata)):
+        raise ValueError("元数据角色只允许清理项目历史偏好字段")
+    unavailable = set(choices) - available - metadata
+    if unavailable:
+        raise ValueError("角色不在当前启用宿主的已验证画像中：" + "、".join(sorted(unavailable)))
     defaults = role_preferences.snapshot(state_files.state_root(state))[1] if global_preferences is None else global_preferences
     changes = []
     effective = {}
     for role, raw_value in sorted(choices.items()):
-        if role not in role_models.ROLES or not isinstance(raw_value, dict) or set(raw_value) - set(role_preferences.FIELDS):
-            raise ValueError("角色编辑只接受已知角色的 model / effort 字段")
         fields = dict(all_choices.get(host, {}).get(role, {}))
         for field, selected in raw_value.items():
             if selected is None:
