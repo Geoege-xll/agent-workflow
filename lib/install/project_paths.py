@@ -35,10 +35,16 @@ def target_path(raw: str, source_root: Path) -> Path:
     # 参数模式收到的是 shell 已解引用的真实路径，文件夹名本身可能含单引号；
     # 只有原样和去除误输入空白的路径都不存在时，才解析终端拖入的转义形式。
     if not any(Path(candidate).expanduser().is_dir() for candidate in candidates):
-        try:
-            tokens = shlex.split(value)
-        except ValueError as exc:
-            raise InstallError(f"项目路径的引号或转义不完整：{exc}") from exc
+        if os.name == "nt":
+            # 原生终端拖入路径只解除成对外引号；shlex 的 POSIX 转义会把
+            # C:\\work\\项目 中的反斜线吃掉，不能用于 Windows 的路径数据。
+            trimmed = value.strip()
+            tokens = [trimmed[1:-1]] if len(trimmed) >= 2 and trimmed[0] == trimmed[-1] and trimmed[0] in "\"'" else []
+        else:
+            try:
+                tokens = shlex.split(value)
+            except ValueError as exc:
+                raise InstallError(f"项目路径的引号或转义不完整：{exc}") from exc
         if len(tokens) == 1:
             candidates.append(tokens[0])
     for candidate in candidates:

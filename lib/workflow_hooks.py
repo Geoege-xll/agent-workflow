@@ -12,6 +12,8 @@ if not __package__:
 
 import argparse
 import json
+import math
+import time
 if __package__:
     from .platform_fs import os
 else:
@@ -71,22 +73,40 @@ def read_small(path: Path, limit: int = 65536) -> str:
     return body.decode("utf-8")
 
 
-def common_git(root: Path) -> str:
+def hook_deadline() -> float:
+    """监督者传来的绝对预算只读消费；未监督的 POSIX Hook 沿用原 3 秒上限。"""
+    value = os.environ.get("AGENT_WORKFLOW_HOOK_DEADLINE")
+    deadline = time.monotonic() + 3 if value is None else float(value)
+    if not math.isfinite(deadline) or deadline <= time.monotonic():
+        raise ValueError("expired or invalid Hook deadline")
+    return deadline
+
+
+def common_git(root: Path, deadline: float | None = None) -> str:
     """只为跨目录的 worktree 验证 Git 共同仓库；不扫描 diff 或业务文件。"""
-    result = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        capture_output=True, text=True, timeout=0.7, check=False,
+    from lib.install.install_process import capture_process
+    deadline = hook_deadline() if deadline is None else deadline
+
+    def git(*arguments):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("git", 0)
+        result = capture_process(["git", "-C", str(root), *arguments], timeout=min(0.7, remaining))
+        # Windows 本地代码页不能决定 Git 路径字符；错误解码进入中性响应。
+        return result.returncode, result.stdout.decode("utf-8", "strict").strip()
+
+    code, common = git(
+        "rev-parse", "--path-format=absolute", "--git-common-dir",
     )
-    if result.returncode != 0:
+    if code != 0:
         return ""
-    top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-                         capture_output=True, text=True, timeout=0.7, check=False)
-    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
+    code, top = git("rev-parse", "--show-toplevel")
+    if code != 0 or Path(top).resolve() != root:
         return ""
-    return result.stdout.strip()
+    return common
 
 
-def scoped_root(host: str, payload: dict, installed: Path) -> Path | None:
+def scoped_root(host: str, payload: dict, installed: Path, *, deadline: float | None = None) -> Path | None:
     """绑定实际工作区；不把其他项目或多工作区的会话当成本项目任务。"""
     if host == "antigravity":
         paths = payload.get("workspacePaths")
@@ -105,8 +125,9 @@ def scoped_root(host: str, payload: dict, installed: Path) -> Path | None:
     if root is None:
         return None
     if root != installed:
-        own = common_git(installed)
-        if not own or own != common_git(root):
+        deadline = hook_deadline() if deadline is None else deadline
+        own = common_git(installed, deadline)
+        if not own or own != common_git(root, deadline):
             return None
     return root
 
@@ -115,7 +136,8 @@ def response(host: str, event: str, payload: dict, project: Path) -> dict:
     """事件输出严格按宿主协议构造；没有 deny/allow、force_continue 或伪造用户消息。"""
     if os.environ.get("AGENT_WORKFLOW_HOOKS") == "off":
         return {}
-    root = scoped_root(host, payload, project)
+    deadline = hook_deadline()
+    root = scoped_root(host, payload, project, deadline=deadline)
     if root is None:
         return {}
     # 实际已安装的项目配置优先；worktree 未复制运行时时沿用原安装点的同仓库配置。

@@ -169,6 +169,7 @@ class WindowsCtypesBackendTest(unittest.TestCase):
             self.assertEqual(104, ctypes.sizeof(win.STARTUPINFOW))
             self.assertEqual(112, ctypes.sizeof(win.STARTUPINFOEXW))
             self.assertEqual(24, ctypes.sizeof(win.PROCESS_INFORMATION))
+            self.assertEqual(568, ctypes.sizeof(win.PROCESSENTRY32W))
             self.assertEqual(80, win.STARTUPINFOW.hStdInput.offset)
             self.assertEqual(104, win.STARTUPINFOEXW.lpAttributeList.offset)
 
@@ -321,6 +322,94 @@ class WindowsCtypesBackendTest(unittest.TestCase):
                 self.assertEqual(signal.SIG_IGN, signal.getsignal(signal.SIGINT))
         finally:
             signal.signal(signal.SIGINT, before)
+
+    def test_pipe_handles_are_allowlisted_without_inheriting_parent_ends(self):
+        api = FakeWin32(exitcode=0)
+        with patch.object(win, "_Win32API", return_value=api), \
+                patch.object(win.WindowsJobProcess, "_file_handle", side_effect=lambda fd: fd + 5000):
+            process = win.WindowsJobProcess(["fixture.exe"], stdin=subprocess.PIPE,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(3, len(api.allowed))
+        self.assertTrue(all(handle >= 6000 for handle in api.allowed))
+        streams = (process.stdin, process.stdout, process.stderr)
+        process.wait()
+        process.close()
+        self.assertTrue(all(stream.closed for stream in streams))
+
+    def test_supervisor_rejects_reused_payload_pid_before_spawn(self):
+        api = Mock()
+        api.OpenProcess.return_value = 100
+
+        def times(handle, created, *unused):
+            ctypes.cast(created, ctypes.POINTER(ctypes.c_uint64))[0] = 999
+            return True
+
+        api.GetProcessTimes.side_effect = times
+        with patch.object(win, "_Win32API", return_value=api), patch.object(win, "WindowsJobProcess") as spawn, \
+                self.assertRaisesRegex(ValueError, "identity changed"):
+            win.supervise_hook(["fixture.exe"], 1, 2, time.monotonic() + 1)
+        spawn.assert_not_called()
+        api.CloseHandle.assert_called_once_with(100)
+
+
+class CaptureProcessTest(unittest.TestCase):
+    def test_real_helper_preserves_selected_interpreter_exit(self):
+        from lib import runtime_bridge
+        env = dict(os.environ)
+        env.pop("AGENT_WORKFLOW_HOOK_DEADLINE", None)
+        invocation = runtime_bridge.HelperInvocation((sys.executable, "-B", "-X", "utf8", "-c", "raise SystemExit(37)"), env, ROOT, {})
+        self.assertEqual(37, runtime_bridge.run_helper(invocation, timeout=5))
+
+    def test_windows_capture_uses_job_and_preserves_bytes_and_exit(self):
+        backend = Mock(returncode=37)
+        backend.communicate.return_value = (b"\xff\x00out", b"\x80err")
+        with patch.object(install_process.os, "name", "nt"), \
+                patch.object(install_process.time, "monotonic", return_value=100), \
+                patch.object(install_process, "WindowsJobProcess", return_value=backend), \
+                patch.object(install_process.subprocess, "Popen") as ordinary:
+            result = install_process.capture_process(["fixture.exe"], body=b"\x00\xff", timeout=2)
+        self.assertEqual((37, b"\xff\x00out", b"\x80err"), (result.returncode, result.stdout, result.stderr))
+        backend.communicate.assert_called_once_with(b"\x00\xff", timeout=2, cancel_file=None)
+        backend.close.assert_called_once()
+        ordinary.assert_not_called()
+
+    def test_capture_startup_consumes_the_same_deadline(self):
+        backend = Mock(returncode=0)
+        backend.communicate.return_value = (b"out", b"")
+        with patch.object(install_process.os, "name", "nt"), \
+                patch.object(install_process.time, "monotonic", side_effect=(100, 100, 100.8)), \
+                patch.object(install_process, "WindowsJobProcess", return_value=backend):
+            install_process.capture_process(["fixture.exe"], timeout=2)
+        self.assertAlmostEqual(1.2, backend.communicate.call_args.kwargs["timeout"])
+
+    def test_real_capture_runs_selected_interpreter_with_binary_stdio(self):
+        body = b"\x00\xff" + "中文".encode("utf-8") * 40000
+        command = [sys.executable, "-B", "-X", "utf8", "-c",
+                   "import sys; b=sys.stdin.buffer.read(); sys.stdout.buffer.write(b); sys.stderr.buffer.write(b'err\\xff'); raise SystemExit(37)"]
+        result = install_process.capture_process(command, body=body, timeout=5)
+        self.assertEqual((37, body, b"err\xff"), (result.returncode, result.stdout, result.stderr))
+
+    def test_windows_helper_preserves_exit_and_stops_timeout_before_return(self):
+        from lib import runtime_bridge
+        backend = Mock()
+        backend.wait.return_value = 37
+        invocation = runtime_bridge.HelperInvocation((sys.executable, "-c", "pass"), dict(os.environ), ROOT, {})
+        with patch.object(runtime_bridge.os, "name", "nt"), patch.object(win, "WindowsJobProcess", return_value=backend):
+            self.assertEqual(37, runtime_bridge.run_helper(invocation, timeout=1))
+            backend.wait.side_effect = subprocess.TimeoutExpired(invocation.command, 1)
+            with self.assertRaisesRegex(ValueError, "超时并终止"):
+                runtime_bridge.run_helper(invocation, timeout=1)
+        backend.stop.assert_called_once()
+        self.assertEqual(2, backend.close.call_count)
+
+    def test_expired_hook_deadline_rejects_helper_without_spawn(self):
+        from lib import runtime_bridge
+        invocation = runtime_bridge.HelperInvocation((sys.executable,), {"AGENT_WORKFLOW_HOOK_DEADLINE": "1"}, ROOT, {})
+        with patch.object(runtime_bridge.subprocess, "Popen") as spawn, \
+                patch.object(win, "WindowsJobProcess") as job, self.assertRaisesRegex(ValueError, "未启动"):
+            runtime_bridge.run_helper(invocation)
+        spawn.assert_not_called()
+        job.assert_not_called()
 
 
 class SetupRunnerWindowsTest(unittest.TestCase):
@@ -636,6 +725,61 @@ class NativeWindowsJobTest(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError) as raised:
                 SetupRunner(timeout=10).run([sys.executable, "-B", "-c", "raise SystemExit(37)"], raw)
             self.assertEqual(37, raised.exception.returncode)
+
+    def test_capture_timeout_drains_descendants_and_binary_output(self):
+        # 真正的管道读写、Job 孙进程与超时必须在 native 集合执行；portable
+        # fake 仅证明选路，不能替代该节点对 Win32 管道/句柄继承的验证。
+        CaptureProcessTest("test_real_capture_runs_selected_interpreter_with_binary_stdio").test_real_capture_runs_selected_interpreter_with_binary_stdio()
+        with tempfile.TemporaryDirectory(prefix="workflow-native-capture-") as raw:
+            command, ready, late = self.tree(Path(raw))
+            with self.assertRaises(subprocess.TimeoutExpired):
+                install_process.capture_process(command, body=b"raw\xff", timeout=1.5)
+            self.assertTrue(ready.exists())
+            time.sleep(3.1)
+            self.assertFalse(late.exists(), "capture returned while its Job descendant could still write")
+
+    def test_helper_timeout_drains_its_job(self):
+        from lib import runtime_bridge
+        with tempfile.TemporaryDirectory(prefix="workflow-native-helper-") as raw:
+            root = Path(raw)
+            command, ready, late = self.tree(root)
+            invocation = runtime_bridge.HelperInvocation(tuple(command), dict(os.environ), root, {})
+            with self.assertRaisesRegex(ValueError, "超时并终止"):
+                runtime_bridge.run_helper(invocation, timeout=1.5)
+            self.assertTrue(ready.exists())
+            time.sleep(3.1)
+            self.assertFalse(late.exists())
+
+    def test_helper_native_exitcode_is_preserved(self):
+        CaptureProcessTest("test_real_helper_preserves_selected_interpreter_exit").test_real_helper_preserves_selected_interpreter_exit()
+
+    def test_capture_cancel_file_drains_its_job(self):
+        with tempfile.TemporaryDirectory(prefix="workflow-native-capture-cancel-") as raw:
+            root = Path(raw)
+            command, ready, late = self.tree(root)
+            cancel = root / "cancel"
+
+            def cancel_when_ready():
+                deadline = time.monotonic() + 8
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                cancel.touch()
+
+            with patch.dict(os.environ, {CANCEL_FILE_ENV: str(cancel)}):
+                runner = SetupRunner(timeout=10)
+                token = install_process.ACTIVE_RUNNER.set(runner)
+                worker = threading.Thread(target=cancel_when_ready)
+                worker.start()
+                try:
+                    with self.assertRaisesRegex(SetupRunError, "取消"):
+                        install_process.capture_process(command, body=b"raw\xff", timeout=10)
+                    self.assertTrue(ready.exists())
+                finally:
+                    install_process.ACTIVE_RUNNER.reset(token)
+                    runner.close()
+                    worker.join(timeout=10)
+            time.sleep(3.1)
+            self.assertFalse(late.exists())
 
 
 if __name__ == "__main__":

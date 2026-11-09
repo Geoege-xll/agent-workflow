@@ -341,6 +341,23 @@ class HookTest(unittest.TestCase):
         (worktree / "AGENTS.md").write_text("worktree rules")
         self.assertEqual(worktree, hooks.scoped_root("codex", {"cwd": str(worktree)}, self.project))
 
+    def test_git_uses_one_remaining_budget_and_decodes_paths_as_utf8(self):
+        from lib.install import install_process
+        # 两次 Git 命令共享同一截止时间，第二次只能使用递减后的剩余量；
+        # 原生代码页不参与路径解码，也不重新给每一步完整的 0.7 秒预算。
+        common = str(self.project / "中文.git")
+        answers = [subprocess.CompletedProcess([], 0, common.encode("utf-8") + b"\n", b""),
+                   subprocess.CompletedProcess([], 0, str(self.project).encode("utf-8") + b"\n", b"")]
+        with patch.object(hooks.time, "monotonic", side_effect=(100.1, 100.8)), \
+                patch.object(install_process, "capture_process", side_effect=answers) as capture:
+            self.assertEqual(common, hooks.common_git(self.project, deadline=101))
+        self.assertAlmostEqual(0.7, capture.call_args_list[0].kwargs["timeout"])
+        self.assertAlmostEqual(0.2, capture.call_args_list[1].kwargs["timeout"])
+        with patch.object(hooks.time, "monotonic", return_value=102), \
+                patch.object(install_process, "capture_process") as capture, self.assertRaises(subprocess.TimeoutExpired):
+            hooks.common_git(self.project, deadline=101)
+        capture.assert_not_called()
+
     def test_off_env_unknown_and_stop_events_are_neutral(self):
         event = self.payload("codex")
         with patch.dict(os.environ, {"AGENT_WORKFLOW_HOOKS": "off"}):
