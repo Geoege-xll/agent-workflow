@@ -917,15 +917,9 @@ class _WindowsOS:
                                 _copy_permissions(old, handle)
                             finally:
                                 _close(old)
-                # Rename the opened identity, not a checked-then-reopened source
-                # pathname. Destination ancestry stays pinned throughout the call.
-                encoded = target.name.encode("utf-16-le")
-                buffer = ctypes.create_string_buffer(max(ctypes.sizeof(_RenameInfo),
-                                                         _RenameInfo.name.offset + len(encoded)))
-                rename = _RenameInfo.from_buffer(buffer)
-                rename.flags, rename.root, rename.length = int(replace), destination.handle, len(encoded)
-                ctypes.memmove(ctypes.addressof(buffer) + _RenameInfo.name.offset, encoded, len(encoded))
-                _check(_api().kernel.SetFileInformationByHandle(handle, 3, buffer, len(buffer)), target)
+                # 普通发布与窄条件移动必须使用同一 Win32 请求构造。源句柄及
+                # 目标全部祖先仍固定，不能退化为重新按源路径执行的 rename。
+                _rename_handle(handle, destination, target.name, replace=replace)
             finally:
                 _close(handle)
             # A preflight flush cannot make this later namespace mutation durable.
@@ -1098,13 +1092,48 @@ def node_snapshot(directory: int, name: str, *, max_bytes=_LIMIT, skill_name=Non
         _close(handle)
 
 
-def _rename_handle(handle, destination, name):
-    encoded = validate_component(name).encode("utf-16-le")
-    buffer = ctypes.create_string_buffer(max(ctypes.sizeof(_RenameInfo), _RenameInfo.name.offset + len(encoded)))
+def _rename_handle(handle, destination, name, *, replace=False):
+    """以稳定源 HANDLE 和目标目录的真实卷 GUID 路径执行 Win32 重命名。
+
+    原生 CI 已证明旧的非空 RootDirectory/相对名请求返回 87，但错误码本身
+    不足以唯一定位字段。这里采用 Win32 的完整绝对目标形态；完整路径来自
+    已锚定目录 HANDLE，祖先持续拒绝 DELETE sharing，因此不依赖 cwd 或可变
+    盘符别名。未知/远程形式不回退到调用者路径，也不调用普通 Path.rename。
+    """
+    name = validate_component(name)
+    api = _api()
+    final_path = ctypes.create_unicode_buffer(32768)
+    count = _check(api.kernel.GetFinalPathNameByHandleW(
+        destination.handle, final_path, len(final_path), 1))  # VOLUME_NAME_GUID
+    if (count >= len(final_path)
+            or not re.match(r"^\\\\\?\\Volume\{[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}\\", final_path.value)):
+        raise ValueError("Windows rename requires the anchored local volume GUID path")
+    target = final_path.value.rstrip("\\") + "\\" + name
+    encoded = target.encode("utf-16-le")
+    # FILE_RENAME_INFO 的 WCHAR[1] 属于结构体；额外空间包括完整正文、明确的
+    # UTF-16 NUL 与 SDK 尾部对齐。FileNameLength 仅计正文，不计终止符或 padding。
+    buffer = ctypes.create_string_buffer(ctypes.sizeof(_RenameInfo) + len(encoded) + 2)
     rename = _RenameInfo.from_buffer(buffer)
-    rename.flags, rename.root, rename.length = 0, destination.handle, len(encoded)
+    rename.flags, rename.root, rename.length = int(replace), None, len(encoded)
     ctypes.memmove(ctypes.addressof(buffer) + _RenameInfo.name.offset, encoded, len(encoded))
-    _check(_api().kernel.SetFileInformationByHandle(handle, 3, buffer, len(buffer)), destination.child(name))
+    before = _information(handle)
+    _check(api.kernel.SetFileInformationByHandle(handle, 3, buffer, len(buffer)), destination.child(name))
+    # 原源句柄仍拒绝 DELETE sharing，成功后新叶也不能被普通换名者替换。
+    # 用同一 GUID 目标 no-follow 打开并复核身份，不能把 API 成功误认为发布了
+    # 另一个对象；复核失败正常传播，保留已发布节点供事务恢复，不自动清除。
+    published = api.kernel.CreateFileW(target, 0x80, SHARE_READ | SHARE_WRITE | SHARE_DELETE,
+                                      None, 3, BACKUP_SEMANTICS | OPEN_REPARSE_POINT, None)
+    if published == INVALID_HANDLE:
+        _check(False, destination.child(name))
+    try:
+        after = _information(published)
+        if ((before.volume, before.index_high, before.index_low, before.links,
+             before.attributes & (ATTR_DIRECTORY | ATTR_REPARSE))
+                != (after.volume, after.index_high, after.index_low, after.links,
+                    after.attributes & (ATTR_DIRECTORY | ATTR_REPARSE))):
+            raise ValueError("Windows rename destination identity does not match its opened source")
+    finally:
+        _close(published)
 
 
 def _check_expected(expected, kind):
