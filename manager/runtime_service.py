@@ -122,7 +122,13 @@ def _history_writes(tree: Tree, records: list[dict]) -> list[dict]:
 
 
 def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool,
-               include_history: bool = True) -> tuple[list[dict], set[str]]:
+               include_history: bool = True, reader=None) -> tuple[list[dict], set[str]]:
+    with ExitStack() as stack:
+        return _ownership_in_scope(tree, record, state, repair=repair, include_history=include_history,
+                                   reader=reader, stack=stack)
+
+
+def _ownership_in_scope(tree, record, state, *, repair, include_history, reader, stack):
     conflicts = _history_writes(tree, record["retained_nodes"]) if include_history else []
     links = set()
     core = None
@@ -146,8 +152,12 @@ def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool,
                 if actual.identity[:2] != expected.identity[:2] or actual.mode != expected.mode:
                     raise ActivationError("受管 Skill 链接节点已被替换")
                 if core is None:
-                    core = store.load_core(record["runtime_binding"], state)
-                validate_skill_link(tree, relative, actual, core)
+                    if reader is None:
+                        reader = stack.enter_context(store.core_reader(record["runtime_binding"], state))
+                    if not isinstance(reader, store.CoreReadSession):
+                        raise ActivationError("资源归属验证拒绝未知核心 reader")
+                    core = reader.core_for(record["runtime_binding"], state)
+                validate_skill_link(tree, relative, actual, core, reader=reader)
                 links.add(relative)
         except (OSError, ValueError) as exc:
             conflicts.append({"path": relative, "reason": "受管资源验证失败：" + str(exc)})
@@ -871,14 +881,19 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
             conflicts = _history_writes(tree, retained)
             if conflicts:
                 raise ActivationError("旧 inode 已有后续保存", conflicts)
-            for relative, row in managed.items():
-                node = tree.read(relative, skill_link=row["purpose"] == "skill")
-                expected = Node.from_value(row["expected"])
-                if not node.same_content(expected):
-                    raise ActivationError("安装检查未得到计划资源：" + relative)
-                if node.kind == "link":
-                    validate_skill_link(tree, relative, node, core)
-                row["expected"] = node.value()
+            # 最终安装核验只在这段只读操作共享核心证明；离开后才发布 candidate。
+            # 真实薄桥子进程和最终 status 各自重新验证，不携带此 reader。
+            with ExitStack() as checks:
+                reader = (checks.enter_context(store.core_reader(core.binding(), plan.state))
+                          if any(row["purpose"] == "skill" for row in managed.values()) else None)
+                for relative, row in managed.items():
+                    node = tree.read(relative, skill_link=row["purpose"] == "skill")
+                    expected = Node.from_value(row["expected"])
+                    if not node.same_content(expected):
+                        raise ActivationError("安装检查未得到计划资源：" + relative)
+                    if node.kind == "link":
+                        validate_skill_link(tree, relative, node, core, reader=reader)
+                    row["expected"] = node.value()
             record = _binding_value(plan, identifier, managed, retained, list(node_id(os.fstat(tree.directories[""]))))
             # 普通项目省略可空扩展键，保持已用首版 reader 的原封闭字段集合。
             # 先发布 enabled=False 的 prepared 候选，由真实选版桥消费；若实际
@@ -967,8 +982,15 @@ def compensate(state: Path, project: Path, transaction_id: str, binding_before: 
         return {"compensated": True, "untouched": False, "transaction_id": transaction_id}
 
 
-def status(state: Path, project: Path) -> dict:
-    """只读本机状态与资源一致性；不会导入来源、创建目录或自动修复。"""
+def status(state: Path, project: Path, *, reader=None) -> dict:
+    """显式短会话内检查资源；提交/执行调用不得保存或跨调用复用 reader。"""
+    if reader is not None and not isinstance(reader, store.CoreReadSession):
+        raise ActivationError("项目状态拒绝未知核心 reader")
+    with ExitStack() as stack:
+        return _status_in_scope(state, project, reader=reader, stack=stack)
+
+
+def _status_in_scope(state, project, *, reader, stack):
     state, project = store.state_root(state), canonical_project(project)
     _, record = read_binding_record(state, project)
     _, journal = _journal(state, project)
@@ -979,12 +1001,19 @@ def status(state: Path, project: Path) -> dict:
         recovery_conflicts.extend(journal.get("conflicts", []))
     if record:
         core = None
+        if reader is not None:
+            # 错误 pin/state/关闭 reader 不能静默 fallback 成另一份权限证明。
+            core = reader.core_for(record["runtime_binding"], state)
         try:
-            core = store.load_core(record["runtime_binding"], state)
+            if reader is None:
+                reader = stack.enter_context(store.core_reader(record["runtime_binding"], state))
+                core = reader.core
         except (OSError, ValueError) as exc:
             conflicts.append({"path": "runtime_binding", "reason": str(exc)})
+        resources = (stack.enter_context(Resources(core.root, json_bytes(core.binding()), core.label, core).session_view(reader))
+                     if core is not None else None)
         with Tree(project) as tree:
-            found, owned_links = _ownership(tree, record, state, repair=False, include_history=False)
+            found, owned_links = _ownership(tree, record, state, repair=False, include_history=False, reader=reader)
             conflicts.extend(found)
             history_records = record["retained_nodes"] + (journal.get("retained_nodes", []) if journal else [])
             history = _retained(tree, history_records, typed=True)
@@ -1006,13 +1035,12 @@ def status(state: Path, project: Path) -> dict:
                     raise ActivationError("项目配置缺失，不能核验当前受管 Hooks")
                 project_files.hook_resources(project, config.payload, tuple(record["hosts"]),
                                              enabled=record["enabled"], check_only=True,
-                                             resources=Resources(core.root, json_bytes(core.binding()), core.label, core) if core else None)
+                                             resources=resources)
             except (OSError, ValueError) as exc:
                 conflicts.append({"path": "workflow_hooks", "reason": str(exc)})
             if record["enabled"] and core is not None:
                 try:
                     config = tree.read(CONFIG)
-                    resources = Resources(core.root, json_bytes(core.binding()), core.label, core)
                     _, profile, _ = project_files.configuration(resources, project, config, owned_links=owned_links)
                     required_hosts = []
                     for host in record["hosts"]:
@@ -1043,8 +1071,13 @@ def status(state: Path, project: Path) -> dict:
         _, current_control = runtime_policy.current_snapshot(state)
         if current_control is not None:
             from lib.runtime_bridge import controller_protocol
-            controller = store.load_core(current_control["runtime_binding"], state)
-            if controller_protocol(controller) != 1:
+            if reader is not None and reader.core.binding() == current_control["runtime_binding"]:
+                controller_reader = reader
+                controller = reader.core_for(current_control["runtime_binding"], state)
+            else:
+                controller_reader = stack.enter_context(store.core_reader(current_control["runtime_binding"], state))
+                controller = controller_reader.core
+            if controller_protocol(controller, reader=controller_reader) != 1:
                 raise ActivationError("中央current缺少受支持的控制协议")
         else:
             controller_issue = {"path": runtime_policy.CURRENT, "reason": "尚无中央current，请先导入并激活版本",

@@ -759,6 +759,30 @@ class Resources:
         finally:
             view._close()
 
+    @contextmanager
+    def session_view(self, reader):
+        """把显式 reader 限定在本次调用栈，不把打开句柄放入 Resources/plan。"""
+        if not isinstance(reader, store.CoreReadSession) or self.frozen is None:
+            raise ProjectRuntimeError("核心会话视图需要显式活跃的固定核心 reader")
+        view = _ResourceSessionView(self, reader)
+        try:
+            yield view
+        finally:
+            view._reader = None
+
+
+class _ResourceSessionView:
+    def __init__(self, resources, reader):
+        self._resources, self._reader = resources, reader
+
+    def __getattr__(self, name):
+        return getattr(self._resources, name)
+
+    def read(self, relative):
+        if self._reader is None:
+            raise ProjectRuntimeError("核心会话视图已经关闭")
+        return self._reader.read(self._resources.frozen, relative)
+
 
 class _ResourceReadView:
     """委托定位元数据，只对本次已验证的精确成员提供临时 bytes 视图。"""
@@ -798,7 +822,7 @@ def skill_names(resources: Resources) -> tuple[str, ...]:
     return tuple(names)
 
 
-def validate_skill_link(tree: Tree, relative: str, node: Node, core: store.FrozenCore) -> None:
+def validate_skill_link(tree: Tree, relative: str, node: Node, core: store.FrozenCore, *, reader=None) -> None:
     """只对机器记录已证明归属的精确 Skill 叶验证固定目标，绝不跟随未知链接。"""
     parts = skill_parts(relative)
     if parts is None or node.kind != "link":
@@ -806,9 +830,12 @@ def validate_skill_link(tree: Tree, relative: str, node: Node, core: store.Froze
     expected = core.root / "platforms/shared/skills" / parts[1]
     if node.payload != os.fsencode(expected):
         raise ProjectRuntimeError(f"受管 Skill 链接目标已被替换：{relative}")
-    # read_core_source 会验证完整清单、ID、普通文件集合和目标文件，不把 exists()
-    # 或 resolve() 的成功当作链接安全证明；死链与损坏核心均在此正常失败。
-    body = store.read_core_source(core, f"platforms/shared/skills/{parts[1]}/SKILL.md")
+    # 默认 reader 验证完整清单；显式会话在同一锚定核心证明内逐成员重新核对
+    # identity/ACL/hash，退出再核整树。exists()/resolve() 均不是安全证明。
+    if reader is not None and not isinstance(reader, store.CoreReadSession):
+        raise ProjectRuntimeError("Skill 验证拒绝未知核心 reader")
+    logical = f"platforms/shared/skills/{parts[1]}/SKILL.md"
+    body = reader.read(core, logical) if reader is not None else store.read_core_source(core, logical)
     from lib.skills.shared_core_skills import parse_managed_skill_bytes
     parse_managed_skill_bytes(body, parts[1])
     if tree.read(relative, skill_link=True) != node:

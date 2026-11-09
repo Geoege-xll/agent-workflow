@@ -113,6 +113,136 @@ class RuntimeStoreTest(unittest.TestCase):
         finally:
             write_owned(other, body, mode)
 
+    def test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member(self):
+        """真实源/冻结树上核对活跃范围、每次成员读取及独立调用；不是正文缓存。"""
+        core = self.imported()
+        logical = "roles/xy-backend.md"
+        expected = (core.root / logical).read_bytes()
+        with patch.object(store, "_scan", wraps=store._scan) as scans, \
+                patch.object(store, "_read_manifest_source", wraps=store._read_manifest_source) as members:
+            with store.core_reader(core.binding(), self.state) as reader:
+                self.assertEqual(core, reader.core_for(core.binding(), self.state))
+                self.assertEqual(expected, reader.read(core, logical))
+                self.assertEqual(expected, reader.read(core, ".agent-workflow/" + logical))
+                self.assertEqual(2, members.call_count, "each member must reopen and verify, never reuse cached bytes")
+                for wrong in (replace(core, label="foreign"), replace(core, root=self.source)):
+                    with self.subTest(core=wrong.root), self.assertRaises(store.RuntimeStoreError):
+                        reader.read(wrong, logical)
+                for unknown in ("roles/unknown.md", "../roles/xy-backend.md"):
+                    with self.subTest(path=unknown), self.assertRaises(store.RuntimeStoreError):
+                        reader.read(core, unknown)
+                with self.assertRaises(store.RuntimeStoreError):
+                    reader.core_for(core.binding(), self.workspace / "other-state")
+            self.assertEqual(1, scans.call_count)
+            with self.assertRaisesRegex(store.RuntimeStoreError, "关闭"):
+                reader.read(core, logical)
+            with store.core_reader(core.binding(), self.state) as next_reader:
+                self.assertEqual(expected, next_reader.read(core, logical))
+            self.assertEqual(2, scans.call_count, "a new operation must perform a new complete scan")
+        # 同字节重写、所选/未选正文变动都不能在同一会话中追认成新见证。
+        for relative, same_bytes in ((logical, True), (logical, False), ("product/ROLES.yaml", False)):
+            path = core.root / relative
+            original, mode = path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+            try:
+                with self.subTest(changed=relative, same_bytes=same_bytes), self.assertRaises(store.RuntimeStoreError):
+                    with store.core_reader(core.binding(), self.state) as active:
+                        path.chmod(mode | 0o600)
+                        path.write_bytes(original if same_bytes else original + b"tamper")
+                        path.chmod(mode)
+                        active.read(core, logical)
+            finally:
+                path.chmod(mode | 0o600)
+                path.write_bytes(original)
+                path.chmod(mode)
+        # manifest 也属于本次权限/身份闭包；不能在进入reader后同字节重写，
+        # 或在版本目录加清单外叶子，再靠正常core成员读取获得成功。
+        manifest = core.root.parent / "manifest.json"
+        raw, mode = manifest.read_bytes(), stat.S_IMODE(manifest.stat().st_mode)
+        try:
+            with self.assertRaises(store.RuntimeStoreError):
+                with store.core_reader(core.binding(), self.state) as active:
+                    manifest.chmod(mode | 0o600)
+                    manifest.write_bytes(raw)
+                    manifest.chmod(mode)
+                    active.read(core, logical)
+        finally:
+            manifest.chmod(mode | 0o600)
+            manifest.write_bytes(raw)
+            manifest.chmod(mode)
+        parent = core.root.parent
+        mode = stat.S_IMODE(parent.stat().st_mode)
+        extra = parent / ".unknown"
+        try:
+            with self.assertRaisesRegex(store.RuntimeStoreError, "节点集合"):
+                with store.core_reader(core.binding(), self.state) as active:
+                    stamp = parent.stat()
+                    parent.chmod(mode | 0o700)
+                    extra.write_bytes(b"unregistered")
+                    os.utime(parent, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                    active.read(core, logical)
+        finally:
+            extra.unlink(missing_ok=True)
+            parent.chmod(mode)
+        if store.os.name == "nt":
+            # Windows 的独立 ACL 见证必须参与即时成员拒绝；同用户仅改自有
+            # fixture 文件的 ACE flags，再用原 SD 恢复，不依赖 ChangeTime。
+            from lib import windows_fs as fs
+            path = core.root / logical
+            with self.assertRaises(store.RuntimeStoreError):
+                with store.core_reader(core.binding(), self.state) as active:
+                    handle = fs._open_handle(path, 0x60080)
+                    try:
+                        with fs._security_policy(handle) as before:
+                            try:
+                                with fs.private_security(inherit=not bool(before.acl_bytes[9] & 3)) as descriptor:
+                                    error = fs._api().security.SetSecurityInfo(handle, 1, 0x80000004,
+                                                                             None, None, fs._dacl(descriptor), None)
+                                    self.assertEqual(0, error)
+                                with fs._security_policy(handle) as after:
+                                    self.assertNotEqual(before.fingerprint, after.fingerprint)
+                                with self.assertRaises(store.RuntimeStoreError):
+                                    active.read(core, logical)
+                            finally:
+                                error = fs._api().security.SetSecurityInfo(handle, 1, 0x80000004,
+                                                                         None, None, before.acl, None)
+                                self.assertEqual(0, error)
+                    finally:
+                        fs._close(handle)
+
+    def test_recursive_snapshot_rejects_unknown_members_and_directory_exchange(self):
+        """目录句柄复用仍逐成员核验，未知节点不靠可重置mtime判断，源过滤不扩张。"""
+        core = self.imported()
+        with store._absolute_directory(core.root) as root:
+            _, _, snapshot = store._scan(root, source=False)
+            parent = core.root / "product"
+            mode, stamp = stat.S_IMODE(parent.stat().st_mode), parent.stat()
+            extra = parent / ".unknown"
+            try:
+                parent.chmod(mode | 0o700)
+                extra.write_bytes(b"unregistered")
+                os.utime(parent, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                with self.assertRaisesRegex(store.RuntimeStoreError, "成员集合"):
+                    store._verify_snapshot(root, snapshot)
+            finally:
+                extra.unlink()
+                parent.chmod(mode)
+        # 源允许未管理正文，但既有 source 忽略规则不能允许链接或换过的祖先。
+        self.write("lib/__pycache__/owned.pyc", b"ignored owned cache")
+        with store._absolute_directory(self.source) as root:
+            _, _, snapshot = store._scan(root, source=True)
+            store._verify_snapshot(root, snapshot, source=True)
+            original_open, changed = store.os.open, False
+            def exchange(name, flags, *args, **options):
+                nonlocal changed
+                if name == "roles" and not changed:
+                    changed = True
+                    os.rename(self.source / "roles", self.source / "owned-previous-roles")
+                    shutil.copytree(self.source / "owned-previous-roles", self.source / "roles")
+                return original_open(name, flags, *args, **options)
+            with patch.object(store.os, "open", side_effect=exchange), self.assertRaises((OSError, store.RuntimeStoreError)):
+                store._verify_snapshot(root, snapshot, source=True)
+            self.assertTrue(changed)
+
     def test_import_load_list_binding_and_detached_runtime(self):
         core = self.imported()
         self.assertIsInstance(core, store.FrozenCore)

@@ -15,6 +15,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import argparse
+from contextlib import contextmanager
 import ast
 from dataclasses import dataclass
 import json
@@ -42,14 +43,16 @@ class RuntimeBridgeError(ProjectRuntimeError):
     """项目未启用、任务缺 pin，或中央资源已损坏。"""
 
 
-def controller_protocol(core: store.FrozenCore) -> int:
+def controller_protocol(core: store.FrozenCore, *, reader=None) -> int:
     """静态读取已验证core的控制资格，不import或执行候选bridge探测能力。
 
     清单验证只证明字节身份，不能证明旧bridge具有新中央门禁。声明必须是唯一
     顶层字面整数；缺失或0表示无资格，1支持，其余值/动态/重复赋值失败关闭。
     连嵌套或删除写入也计入，不能在一个表面合法声明后偷偷重赋协议常量。
     """
-    body = store.read_core_source(core, "lib/runtime_bridge.py")
+    if reader is not None and not isinstance(reader, store.CoreReadSession):
+        raise RuntimeBridgeError("控制协议拒绝未知核心 reader")
+    body = reader.read(core, "lib/runtime_bridge.py") if reader is not None else store.read_core_source(core, "lib/runtime_bridge.py")
     try:
         module = ast.parse(body)
     except (SyntaxError, ValueError) as exc:
@@ -133,8 +136,9 @@ class HelperInvocation:
     admission_protocol: int | None = None
 
 
-def resolve_runtime(state: Path, project: Path, *, binding: dict | None = None,
-                    new_task: bool = False) -> RuntimeContext:
+@contextmanager
+def _runtime_context(state: Path, project: Path, *, binding: dict | None = None,
+                     new_task: bool = False):
     """严格校验 pin 并加载该项目曾用版本；新任务额外验证本机 enabled。
 
     参数 binding 优先于 AGENT_WORKFLOW_RUNTIME_BINDING。环境中的 project root
@@ -168,37 +172,46 @@ def resolve_runtime(state: Path, project: Path, *, binding: dict | None = None,
     binding = store.validate_binding(binding)
     if binding not in record["used_bindings"]:
         raise RuntimeBridgeError("任务 pin 不是当前物理项目曾经使用的中央版本")
-    if new_task:
-        from manager.central_runtime import new_task_gate
-        binding = new_task_gate(state, project, binding)
-        checked = status(state, project)
-        if not checked["enabled"]:
-            raise RuntimeBridgeError("本项目未在本机启用或资源存在冲突，不能创建新任务")
-        with Tree(project) as tree:
-            locator = tree.read(LOCATOR)
-        value = unique_json(locator.payload) if locator.kind == "file" else None
-        if value != {"schema_version": 1, "kind": "central", "runtime_binding": record["runtime_binding"]}:
-            raise RuntimeBridgeError("中央项目标记与本机当前绑定不一致")
-    core = store.load_core(binding, state)
-    return RuntimeContext(state, project, project / CONFIG, core)
+    # 只读解析与成员消费共用显式 reader；离开调用栈即关闭，不能随
+    # RuntimeContext/HelperInvocation 返回，执行或发布阶段必须另行 fresh。
+    with store.core_reader(binding, state) as reader:
+        if new_task:
+            from manager.central_runtime import new_task_gate
+            binding = new_task_gate(state, project, binding, reader=reader)
+            checked = status(state, project, reader=reader)
+            if not checked["enabled"]:
+                raise RuntimeBridgeError("本项目未在本机启用或资源存在冲突，不能创建新任务")
+            with Tree(project) as tree:
+                locator = tree.read(LOCATOR)
+            value = unique_json(locator.payload) if locator.kind == "file" else None
+            if value != {"schema_version": 1, "kind": "central", "runtime_binding": record["runtime_binding"]}:
+                raise RuntimeBridgeError("中央项目标记与本机当前绑定不一致")
+        yield RuntimeContext(state, project, project / CONFIG, reader.core), reader
+
+
+def resolve_runtime(state: Path, project: Path, *, binding: dict | None = None,
+                    new_task: bool = False) -> RuntimeContext:
+    """公开解析返回不可变定位值；不泄漏或持久保留活跃权限证明。"""
+    with _runtime_context(state, project, binding=binding, new_task=new_task) as (context, reader):
+        return context
 
 
 def read_resource(state: Path, project: Path, logical_path: str, *, binding: dict | None = None) -> bytes:
     """读取任务固定核心的清单文件；不把普通业务文件改成可跟随链接的读取器。"""
-    context = resolve_runtime(state, project, binding=binding)
-    return store.read_core_source(context.core, logical_path)
+    with _runtime_context(state, project, binding=binding) as (context, reader):
+        return reader.read(context.core, logical_path)
 
 
 def helper_path(state: Path, project: Path, logical_path: str, *, binding: dict | None = None,
                 new_task: bool = False) -> Path:
     """解析一个已验证 lib/*.py；helper 必须来自固定核心而非项目外部路径。"""
-    context = resolve_runtime(state, project, binding=binding, new_task=new_task)
-    relative = logical_path[len(".agent-workflow/"):] if logical_path.startswith(".agent-workflow/") else logical_path
-    relative_path(relative)
-    if not relative.startswith("lib/") or not relative.endswith(".py"):
-        raise RuntimeBridgeError("Python helper 只接受固定核心中的 lib/*.py 逻辑路径")
-    store.read_core_source(context.core, relative)
-    return context.core.root / relative
+    with _runtime_context(state, project, binding=binding, new_task=new_task) as (context, reader):
+        relative = logical_path[len(".agent-workflow/"):] if logical_path.startswith(".agent-workflow/") else logical_path
+        relative_path(relative)
+        if not relative.startswith("lib/") or not relative.endswith(".py"):
+            raise RuntimeBridgeError("Python helper 只接受固定核心中的 lib/*.py 逻辑路径")
+        reader.read(context.core, relative)
+        return context.core.root / relative
 
 
 def python_helper(state: Path, project: Path, logical_path: str, args: tuple | list = (), *,
@@ -215,35 +228,37 @@ def python_helper(state: Path, project: Path, logical_path: str, args: tuple | l
     relative = logical_path.removeprefix(".agent-workflow/")
     # 即使调用方忘了声明 new_task，统一任务初始化入口也不能绕过 enabled 门。
     initializes = helper_creates_task(relative, args)
-    context = resolve_runtime(state, project, binding=binding, new_task=new_task or initializes)
-    relative_path(relative)
-    if not relative.startswith("lib/") or not relative.endswith(".py"):
-        raise RuntimeBridgeError("Python helper 必须位于固定核心的 lib 目录")
-    store.read_core_source(context.core, relative)
-    if sys.version_info < (3, 11):
-        raise RuntimeBridgeError("中央 helper 需要沿既有入口选择 Python >= 3.11")
-    env = dict(os.environ)
-    env.update({"PYTHONDONTWRITEBYTECODE": "1",
-                "AGENT_WORKFLOW_RUNTIME_BINDING": json.dumps(context.runtime_binding, sort_keys=True, separators=(",", ":")),
-                "AGENT_WORKFLOW_STATE_DIR": str(context.state),
-                "AGENT_WORKFLOW_PROJECT_ROOT": str(context.project_root),
-                "AGENT_WORKFLOW_CONFIG_PATH": str(context.config_path),
-                "AGENT_WORKFLOW_CORE_ROOT": str(context.core.root)})
-    protocol = _admission_protocol(context.core) if initializes else None
-    if os.name == "nt":
-        # 通用 bootstrap 只为已经 load_core 验证的固定 helper 增加其 core/lib。
-        # 项目薄 Hook 使用另一份不插目录的小入口；二者不能混用搜索路径合同。
-        store.read_core_source(context.core, "lib/windows_bootstrap.py")
-        command = (sys.executable, "-I", "-B", "-X", "utf8", str(context.core.root / "lib/windows_bootstrap.py"),
-                   "--script", str(context.core.root / relative), *args)
-    else:
-        command = (sys.executable, "-B", "-X", "utf8", str(context.core.root / relative), *args)
-    return HelperInvocation(command, env, context.project_root, context.runtime_binding, initializes, protocol)
+    with _runtime_context(state, project, binding=binding, new_task=new_task or initializes) as (context, reader):
+        relative_path(relative)
+        if not relative.startswith("lib/") or not relative.endswith(".py"):
+            raise RuntimeBridgeError("Python helper 必须位于固定核心的 lib 目录")
+        reader.read(context.core, relative)
+        if sys.version_info < (3, 11):
+            raise RuntimeBridgeError("中央 helper 需要沿既有入口选择 Python >= 3.11")
+        env = dict(os.environ)
+        env.update({"PYTHONDONTWRITEBYTECODE": "1",
+                    "AGENT_WORKFLOW_RUNTIME_BINDING": json.dumps(context.runtime_binding, sort_keys=True, separators=(",", ":")),
+                    "AGENT_WORKFLOW_STATE_DIR": str(context.state),
+                    "AGENT_WORKFLOW_PROJECT_ROOT": str(context.project_root),
+                    "AGENT_WORKFLOW_CONFIG_PATH": str(context.config_path),
+                    "AGENT_WORKFLOW_CORE_ROOT": str(context.core.root)})
+        protocol = _admission_protocol(context.core, reader=reader) if initializes else None
+        if os.name == "nt":
+            # 通用 bootstrap 只为已经 load_core 验证的固定 helper 增加其 core/lib。
+            # 项目薄 Hook 使用另一份不插目录的小入口；二者不能混用搜索路径合同。
+            reader.read(context.core, "lib/windows_bootstrap.py")
+            command = (sys.executable, "-I", "-B", "-X", "utf8", str(context.core.root / "lib/windows_bootstrap.py"),
+                       "--script", str(context.core.root / relative), *args)
+        else:
+            command = (sys.executable, "-B", "-X", "utf8", str(context.core.root / relative), *args)
+        return HelperInvocation(command, env, context.project_root, context.runtime_binding, initializes, protocol)
 
 
-def _admission_protocol(core: store.FrozenCore) -> int:
+def _admission_protocol(core: store.FrozenCore, *, reader=None) -> int:
     """只从清单校验过的 init 源码取静态能力，绝不执行代码探测或信任环境旗标。"""
-    body = store.read_core_source(core, "lib/task_graph_init.py")
+    if reader is not None and not isinstance(reader, store.CoreReadSession):
+        raise RuntimeBridgeError("准入协议拒绝未知核心 reader")
+    body = reader.read(core, "lib/task_graph_init.py") if reader is not None else store.read_core_source(core, "lib/task_graph_init.py")
     try:
         module = ast.parse(body)
     except (SyntaxError, ValueError) as exc:

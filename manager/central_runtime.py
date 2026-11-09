@@ -487,14 +487,16 @@ def recover(plan: RecoveryPlan) -> dict:
         return _compensate(plan.state, journal, plan.before, plan.native_context)
 
 
-def new_task_gate(state: Path, project: Path, binding: dict | None = None) -> dict:
+def new_task_gate(state: Path, project: Path, binding: dict | None = None, *, reader=None) -> dict:
     """只读新任务许可；旧任务 read/helper 不调用此门，也不读取 current。"""
     state, project = store.state_root(state), canonical_project(project)
     policy.ensure_settled(state)
-    checked = projects.status(state, project)
+    checked = projects.status(state, project, **({"reader": reader} if reader is not None else {}))
     selected = checked["effective_binding"]
     if not checked["new_task_allowed"] or selected is None:
         raise ActivationError("项目未启用、当前资源冲突或有效策略未结算，不能创建新任务")
     if binding is not None and store.validate_binding(binding) != selected:
         raise ActivationError("新任务显式 pin 不是项目有效策略版本，不能创建新任务")
-    return store.load_core(selected, state).binding()
+    # 默认公开入口仍新鲜 load；仅调用栈显式持有的活跃 reader 可复用同一
+    # 固定版本证明。child init 的提交门不继承父进程对象，仍走默认 fresh。
+    return (reader.core_for(selected, state) if reader is not None else store.load_core(selected, state)).binding()
