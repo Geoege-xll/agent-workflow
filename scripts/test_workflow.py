@@ -156,6 +156,18 @@ GROUPS["windows-native-central-reader"] = GROUPS["windows-native-central-repair"
     "tests.test_runtime_store.RuntimeStoreTest.test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member",
     "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_rejects_unknown_members_and_directory_exchange",
 )
+# 稳定低层 ConPTY 通道独立验证 UTF-8/VT、尺寸、定向 Ctrl+C、输出/退出、Job
+# 静止屏障和资源/console mode 恢复；只需 stdlib。large_output 节点同时真实验证
+# 共享 Job 的 None 默认 capture，不另重复已绿的旧进程组；此组不等同 TUI 验收。
+GROUPS["windows-native-conpty"] = (
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_utf8_input_and_vt_output",
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_resize_reports_console_dimensions",
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_ctrl_c_targets_owned_console",
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_large_output_and_exit_codes",
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_timeout_and_cancel_quiesce_job",
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_console_modes_restore",
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_start_failure_releases_owned_resources",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -164,7 +176,8 @@ NATIVE_GROUPS = frozenset((
     "windows-native-central-repair", "windows-native-renderer",
     "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
     "windows-native-central-copy-repair", "windows-native-central-link-repair",
-    "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader", "windows-native",
+    "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader",
+    "windows-native-conpty", "windows-native",
 ))
 
 
