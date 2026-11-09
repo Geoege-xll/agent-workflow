@@ -63,6 +63,56 @@ class RuntimeStoreTest(unittest.TestCase):
         path.write_bytes(body)
         path.chmod(0o444)
 
+    def test_batch_core_sources_preserves_members_source_and_complete_snapshot_guards(self):
+        """实际批读仍是完整核心/成员合同，不能靠已加载定位值或上一轮字节缓存。"""
+        core = self.imported()
+        paths = ("roles/xy-backend.md", "product/WORKFLOW.md")
+        expected = {path: store.read_core_source(core, path) for path in paths}
+        with patch.object(store, "_validated_entry", wraps=store._validated_entry) as validated:
+            self.assertEqual(expected, store.read_core_sources(core, paths))
+        self.assertEqual(1, validated.call_count)
+        for invalid in ((), list(paths), paths * 5, ("../roles/xy-backend.md",),
+                        (paths[0], ".agent-workflow/" + paths[0]), ("roles/missing.md",)):
+            with self.subTest(paths=invalid), self.assertRaises(store.RuntimeStoreError):
+                store.read_core_sources(core, invalid)
+        for wrong in (self.source, replace(core, root=self.source), replace(core, label="wrong-label")):
+            with self.subTest(source=type(wrong).__name__), self.assertRaises(store.RuntimeStoreError):
+                store.read_core_sources(wrong, paths)
+        with patch.object(store, "_SOURCE_BATCH_BYTES_LIMIT", 1), self.assertRaisesRegex(store.RuntimeStoreError, "总正文"):
+            store.read_core_sources(core, paths)
+        def write_owned(path, body, mode):
+            # 仅为自有核心负控制造篡改；还原实际原 mode，兼容私有 Windows
+            # 与 POSIX 只读冻结文件，不通过生产 API 放宽或修复任何 ACL。
+            path.chmod(mode | 0o600)
+            path.write_bytes(body)
+            path.chmod(mode)
+        for relative in (paths[0], "product/ROLES.yaml"):
+            path = core.root / relative
+            body, mode = path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+            try:
+                write_owned(path, body + b"tampered", mode)
+                with self.subTest(tampered=relative), self.assertRaises(store.RuntimeStoreError):
+                    store.read_core_sources(core, paths)
+            finally:
+                write_owned(path, body, mode)
+        other = core.root / "product/ROLES.yaml"
+        body, mode = other.read_bytes(), stat.S_IMODE(other.stat().st_mode)
+        original_read, changed = store._read_regular, False
+        def change_after_selected_read(parent, name, **options):
+            nonlocal changed
+            result = original_read(parent, name, **options)
+            if name == "xy-backend.md" and options.get("expected") is None and not changed:
+                changed = True
+                write_owned(other, body + b"late mutation", mode)
+            return result
+        try:
+            with patch.object(store, "_read_regular", side_effect=change_after_selected_read), \
+                    self.assertRaisesRegex(store.RuntimeStoreError, "快照"):
+                store.read_core_sources(core, paths)
+            self.assertTrue(changed, "must mutate after selected read, before final whole-core snapshot check")
+        finally:
+            write_owned(other, body, mode)
+
     def test_import_load_list_binding_and_detached_runtime(self):
         core = self.imported()
         self.assertIsInstance(core, store.FrozenCore)

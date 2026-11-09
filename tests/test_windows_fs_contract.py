@@ -109,20 +109,47 @@ class WindowsAclContractTest(unittest.TestCase):
             with patch.object(fs, "_token_elevated", return_value=True), self.assertRaises(ValueError):
                 fs._private_owner_action(SimpleNamespace(owner=b"foreign"))
 
+    def test_permission_copy_skips_equal_policy_only_with_stable_source_and_target(self):
+        """同策略免写仍复核两端；owner/ACL 竞态不能被免写分支吞掉。"""
+        def policy(fingerprint, key=b"same"):
+            return SimpleNamespace(control=0x1004, acl=42, dacl_key=key, owner=b"owner",
+                                   fingerprint=fingerprint, acl_bytes=b"\2\0\10\0\2\0\0\0")
+        source, target = policy("source"), policy("target")
+        for label, current, after in (("stable", source, target),
+                                      ("source-owner-race", policy("changed-source"), target),
+                                      ("target-owner-race", source, policy("changed-target")),
+                                      ("target-acl-race", source, policy("changed-target", b"other"))):
+            observed = Mock(side_effect=lambda handle, values=iter((source, target, after, current)):
+                            nullcontext(next(values)))
+            with self.subTest(race=label), patch.object(fs, "_security_policy", observed), \
+                    patch.object(fs, "_api", side_effect=AssertionError("equal DACL policy must not be rewritten")):
+                if label == "stable":
+                    fs._copy_permissions(1, 2)
+                else:
+                    with self.assertRaisesRegex(ValueError, "raced"):
+                        fs._copy_permissions(1, 2)
+            self.assertEqual([((1,), {}), ((2,), {}), ((2,), {}), ((1,), {})], observed.call_args_list)
+
     def test_permission_copy_preserves_protected_or_inheriting_policy(self):
         for protected, expected in ((False, 0x20000004), (True, 0x80000004)):
             calls = []
             api = SimpleNamespace(security=SimpleNamespace(
                 SetSecurityInfo=lambda *args: calls.append(args) or 0))
-            policy = SimpleNamespace(control=0x1000 if protected else 0, acl=42, dacl_key=b"same")
+            policy = SimpleNamespace(control=0x1000 if protected else 0, acl=42, dacl_key=b"same",
+                                     owner=b"owner", fingerprint=b"same", acl_bytes=b"\2\0\10\0\2\0\0\0")
+            original = SimpleNamespace(dacl_key=b"different", owner=b"owner", fingerprint=b"stage")
+            policies = iter((policy, original, policy, policy))
             with self.subTest(protected=protected), patch.object(fs, "_api", return_value=api), \
-                    patch.object(fs, "_security_policy", side_effect=lambda handle: nullcontext(policy)):
+                    patch.object(fs, "_security_policy", side_effect=lambda handle: nullcontext(next(policies))):
                 fs._copy_permissions(1, 2)
             self.assertEqual(calls[0][2], expected)
 
     def test_permission_copy_refuses_stage_parent_inheritance_changes(self):
-        policies = [SimpleNamespace(control=0, acl=42, dacl_key=b"target"),
-                    SimpleNamespace(dacl_key=b"stage-parent"), SimpleNamespace(dacl_key=b"target")]
+        source = SimpleNamespace(control=0, acl=42, dacl_key=b"target", owner=b"owner",
+                                 fingerprint=b"target", acl_bytes=b"\2\0\10\0\2\0\0\0")
+        stage = SimpleNamespace(control=0, dacl_key=b"stage-parent", owner=b"owner",
+                                fingerprint=b"stage", acl_bytes=b"\2\0\10\0\3\0\0\0")
+        policies = [source, stage, stage, source]
         api = SimpleNamespace(security=SimpleNamespace(SetSecurityInfo=lambda *args: 0))
         with patch.object(fs, "_api", return_value=api), \
                 patch.object(fs, "_security_policy", side_effect=lambda handle: nullcontext(policies.pop(0))), \

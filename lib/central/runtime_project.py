@@ -747,6 +747,40 @@ class Resources:
         return value.payload
 
 
+    @contextmanager
+    def read_view(self, relatives: tuple[str, ...]):
+        """只在本次调用栈复用已批验字节；退出后即使保留 view 也必须重新读取。"""
+        if self.frozen is None:
+            yield self  # 显式 source 预览仍沿原 Tree 读取及业务前后 inspect 守卫。
+            return
+        view = _ResourceReadView(self, store.read_core_sources(self.frozen, relatives))
+        try:
+            yield view
+        finally:
+            view._close()
+
+
+class _ResourceReadView:
+    """委托定位元数据，只对本次已验证的精确成员提供临时 bytes 视图。"""
+
+    def __init__(self, resources: Resources, sources: dict[str, bytes]):
+        self._resources, self._sources = resources, sources
+
+    def __getattr__(self, name):
+        return getattr(self._resources, name)
+
+    def read(self, relative: str) -> bytes:
+        if self._sources is not None and isinstance(relative, str) and relative in self._sources:
+            return self._sources[relative]
+        # 未列入批读的路径及已关闭视图一律回原严格 reader；不凭同一个 core
+        # 对象就跳过成员、完整核心或权限验证，不将此视图写进 plan/env。
+        return self._resources.read(relative)
+
+    def _close(self) -> None:
+        self._sources.clear()
+        self._sources = None
+
+
 def skill_names(resources: Resources) -> tuple[str, ...]:
     names = []
     for raw in resources.read("platforms/shared/core-skills.txt").decode("utf-8").splitlines():

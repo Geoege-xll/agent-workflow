@@ -50,6 +50,49 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertTrue(plan.can_apply, plan.summary)
         return native_agents.apply_global(plan)
 
+    def test_preview_batches_verified_sources_without_changing_role_artifacts(self):
+        """实际读取固定核心；每轮角色预览只留加载与批读两次完整 entry 验证。"""
+        with patch.object(runtime_store, "_validated_entry", wraps=runtime_store._validated_entry) as validated:
+            plan = self.preview()
+        self.assertTrue(plan.can_apply, plan.summary)
+        self.assertEqual(2, validated.call_count, "one load plus one verified batch per preview; no per-role full scan")
+        direct = Resources(self.core.root, json_bytes(self.core.binding()), self.core.label, self.core)
+        expected = tuple((host, native.role_relative(host, role), native.compile_role(direct, host, role, {}))
+                         for host in role_models.HOSTS for role in sorted(role_models.ROLES))
+        self.assertEqual(expected, plan.desired)
+        paths = tuple(f"roles/{role}.md" for role in sorted(role_models.ROLES)) + ("lib/validate_antigravity_artifacts.py",)
+        body = runtime_store.read_core_source(self.core, paths[0])
+        with direct.read_view(paths) as view:
+            with patch.object(runtime_store, "read_core_source", side_effect=AssertionError("known view member needs no new full read")):
+                self.assertEqual(body, view.read(paths[0]))
+                self.assertEqual(body, view.read(paths[0]))
+            with patch.object(runtime_store, "read_core_source", wraps=runtime_store.read_core_source) as single:
+                self.assertTrue(view.read("product/WORKFLOW.md"))
+                with self.assertRaises(runtime_store.RuntimeStoreError):
+                    view.read("roles/missing.md")
+            self.assertEqual(2, single.call_count, "unknown view paths must use the original strict reader")
+        with patch.object(runtime_store, "read_core_source", wraps=runtime_store.read_core_source) as single:
+            self.assertEqual(body, view.read(paths[0]))
+        self.assertEqual(1, single.call_count, "an escaped view must stop reusing bytes after scope exit")
+        with patch.object(runtime_store, "_validated_entry", wraps=runtime_store._validated_entry) as repeated:
+            again = self.preview()
+        self.assertEqual(2, repeated.call_count, "a new preview always repeats full load and batch verification")
+        self.assertEqual(plan.desired, again.desired)
+        path = self.core.root / paths[0]
+        mode = path.stat().st_mode & 0o7777
+        try:
+            path.chmod(mode | 0o600)
+            path.write_bytes(body + b"\ntampered after preview\n")
+            path.chmod(mode)
+            for action in (lambda: view.read(paths[0]), self.preview, lambda: native_agents.apply_global(plan)):
+                with self.assertRaises(runtime_store.RuntimeStoreError):
+                    action()
+        finally:
+            path.chmod(mode | 0o600)
+            path.write_bytes(body)
+            path.chmod(mode)
+        print(f"PORTABLE_PREVIEW_ENTRY_COUNTS: preview={validated.call_count} repeated={repeated.call_count} identical_artifacts={len(expected)}", flush=True)
+
     def test_admission_uses_current_authority_not_historical_roots_and_detects_deleted_global(self):
         from manager import central_runtime
         older = HostPaths.for_home(self.case / "older-home", environment={})
