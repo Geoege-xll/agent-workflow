@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run fixed ConPTY and central consumer stages or capability probe; complete acceptance is still blocked'
+        description: 'Run the fixed central consumer stage or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -108,14 +108,11 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 15
     strategy:
-      # 标准句柄与中央偏好链路已修复，本轮并行验证低层 ConPTY 八方法和完整中央
-      # 消费者一方法；其余既有库证据继续复用，不因组合修复扩大原生重跑范围。
+      # CI42598994710 的 ConPTY 八方法已通过且底座未变，本轮仅补中央消费者
+      # 最终 cleanup 计数修复；保留原有 Node 前置，不重跑其它已有效的原生证据。
       fail-fast: false
       matrix:
         include:
-          - group: windows-native-conpty
-            methods: 8
-            node_required: false
           - group: windows-native-central-repair
             methods: 1
             node_required: true
