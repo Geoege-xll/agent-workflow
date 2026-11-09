@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import unittest
@@ -43,9 +44,13 @@ class FakeWin32:
         self.process_handles = {100: 9001}
         self.next_process_handle = 300
         self.pending_members = set()
+        self.notifications = []
+        self.last_error = 5
 
     def error(self, operation):
-        return OSError(5, operation)
+        error = OSError(self.last_error, operation)
+        error.winerror = self.last_error
+        return error
 
     def record(self, name):
         self.events.append(name)
@@ -55,12 +60,36 @@ class FakeWin32:
         return 200 if self.record("create_job") else None
 
     def SetInformationJobObject(self, job, kind, data, size):
+        if kind == win.JobObjectAssociateCompletionPortInformation:
+            port = win.JOBOBJECT_ASSOCIATE_COMPLETION_PORT.from_buffer_copy(ctypes.string_at(data, size))
+            self.completion_key, self.completion_port = port.CompletionKey, port.CompletionPort
+            return self.record("associate_port")
         # Win32 在调用时同步消费结构体；fake 也必须复制值，不能把 .contents
         # 的借用视图保存到 _start 返回之后。生产局部缓冲区释放后该视图会读到
         # 被复用的内存（本轮限值 8192 曾读成 103），造成与启动合同无关的随机失败。
         self.limits = win.JOBOBJECT_EXTENDED_LIMIT_INFORMATION.from_buffer_copy(
             ctypes.string_at(data, size))
         return self.record("set_limits")
+
+    def CreateIoCompletionPort(self, file_handle, existing, key, concurrency):
+        self.port_creation = (file_handle, existing, key, concurrency)
+        return 201 if self.record("create_port") else None
+
+    def GetQueuedCompletionStatus(self, port, code, key, value, milliseconds):
+        self.events.append(("read_notification", port, milliseconds))
+        if self.fail == "read_notification":
+            self.last_error = 6
+            ctypes.cast(value, ctypes.POINTER(win.LPVOID))[0] = None
+            return False
+        if not self.notifications:
+            self.last_error = win.WAIT_TIMEOUT
+            ctypes.cast(value, ctypes.POINTER(win.LPVOID))[0] = None
+            return False
+        incoming_key, incoming_code, incoming_value = self.notifications.pop(0)
+        ctypes.cast(code, ctypes.POINTER(win.DWORD))[0] = incoming_code
+        ctypes.cast(key, ctypes.POINTER(win.SIZE_T))[0] = incoming_key
+        ctypes.cast(value, ctypes.POINTER(win.LPVOID))[0] = incoming_value
+        return True
 
     def GetCurrentProcess(self):
         return -1
@@ -195,6 +224,18 @@ class WindowsCtypesBackendTest(unittest.TestCase):
         with patch.object(win, "_Win32API", return_value=api):
             return win.WindowsJobProcess(command or ["C:\\Git\\bin\\bash.exe", "--noprofile"], cwd, env)
 
+    def test_supervisor_source_exec_needs_no_registered_module(self):
+        # 对齐真实 windows_bootstrap 的已验证字节 exec 边界：它不注册模块，
+        # 也不先 import 再重开源码。不可变证明类型必须在这一真实加载形态可用。
+        source = ROOT / "lib/install/windows_process.py"
+        namespace = {"__name__": "_workflow_windows_supervisor", "__file__": str(source)}
+        exec(compile(source.read_bytes(), str(source), "exec"), namespace)
+        proof = namespace["_JobExitProof"]("job-zero-notification", 2, 1)
+        self.assertEqual(proof._asdict(), {"source": "job-zero-notification", "total_processes": 2,
+                                           "retained_processes": 1})
+        with self.assertRaises(AttributeError):
+            proof.total_processes = 1
+
     def test_windows_abi_sizes_on_64_bit_test_hosts(self):
         self.assertEqual(4, ctypes.sizeof(win.DWORD))
         self.assertEqual(2, ctypes.sizeof(win.WORD))
@@ -209,12 +250,17 @@ class WindowsCtypesBackendTest(unittest.TestCase):
             self.assertEqual(568, ctypes.sizeof(win.PROCESSENTRY32W))
             self.assertEqual(80, win.STARTUPINFOW.hStdInput.offset)
             self.assertEqual(104, win.STARTUPINFOEXW.lpAttributeList.offset)
+        self.assertEqual(2 * ctypes.sizeof(win.HANDLE), ctypes.sizeof(win.JOBOBJECT_ASSOCIATE_COMPLETION_PORT))
+        self.assertEqual(ctypes.sizeof(win.HANDLE), win.JOBOBJECT_ASSOCIATE_COMPLETION_PORT.CompletionPort.offset)
 
     def test_suspended_assign_resume_and_explicit_handle_allowlist(self):
         api = FakeWin32(exitcode=0)
         process = self.launch(api)
         self.assertLess(api.events.index("create_suspended"), api.events.index("assign_job"))
         self.assertLess(api.events.index("assign_job"), api.events.index("resume"))
+        self.assertLess(api.events.index("associate_port"), api.events.index("create_suspended"))
+        self.assertEqual(api.port_creation, (win.INVALID_HANDLE_VALUE, None, 0, 1))
+        self.assertEqual((api.completion_key, api.completion_port), (200, 201))
         self.assertEqual(win.CREATE_SUSPENDED | win.CREATE_UNICODE_ENVIRONMENT |
                          win.EXTENDED_STARTUPINFO_PRESENT, api.creation["flags"])
         self.assertTrue(api.creation["inherit"])
@@ -229,11 +275,14 @@ class WindowsCtypesBackendTest(unittest.TestCase):
         self.assertNotIn(11, api.closed)
         self.assertNotIn(12, api.closed)
         self.assertNotIn(200, api.allowed)  # Job handle cannot escape to children
+        self.assertNotIn(201, api.allowed)  # IOCP handle stays with the same owner
         self.assertEqual(0, process.wait())
         process.close()
         self.assertEqual(1, api.closed.count(100))
         self.assertEqual(1, api.closed.count(101))
         self.assertEqual(1, api.closed.count(200))
+        self.assertEqual(1, api.closed.count(201))
+        self.assertEqual("retained-handles", process._exit_proof.source)
 
     def test_unicode_command_cwd_env_and_exitcode_are_preserved(self):
         api = FakeWin32(exitcode=3010)
@@ -263,7 +312,8 @@ class WindowsCtypesBackendTest(unittest.TestCase):
         process.close()
 
     def test_unavailable_job_never_creates_or_resumes_a_process(self):
-        for failure in ("create_job", "set_limits", "duplicate", "initialize_attributes", "restrict_handles"):
+        for failure in ("create_job", "set_limits", "create_port", "associate_port", "duplicate",
+                        "initialize_attributes", "restrict_handles"):
             api = FakeWin32(fail=failure)
             with self.subTest(failure=failure), self.assertRaises(OSError):
                 self.launch(api)
@@ -322,10 +372,93 @@ class WindowsCtypesBackendTest(unittest.TestCase):
         process = self.launch(api)
         try:
             with self.assertRaises(win.WindowsJobCleanupError):
-                process.wait(timeout=0)
+                process.wait()  # 两类证据均缺失；无期限入口不能挂死等待 best-effort 消息。
             self.assertFalse(process._quiescent)
         finally:
             process._close_handles()  # 仅回收 fake；不让故意失败的清理改变测试解释器信号。
+
+    def test_job_zero_proves_transient_member_only_after_retained_handles_signal(self):
+        api = FakeWin32(total=2)
+        api.notifications = [(200, win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, None)]
+        api.pending_members.add(9001)
+        process = self.launch(api)
+        try:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                process.wait(timeout=0)
+            self.assertFalse(process._quiescent)
+            # 消费当场 owner 已空的证据可跨有限 wait 保留；真实已持有句柄仍须
+            # signaled，不能收到一个 zero 就跳过根或已观察到的后代结束屏障。
+            self.assertEqual(2, process._observed_zero_total)
+            self.assertEqual(37, process.wait(timeout=1))
+            self.assertEqual(("job-zero-notification", 2, 1),
+                             (process._exit_proof.source, process._exit_proof.total_processes,
+                              process._exit_proof.retained_processes))
+        finally:
+            process.close()
+
+    def test_missing_zero_respects_finite_deadline_and_cleanup_remains_fatal(self):
+        api = FakeWin32(total=2)
+        api.after_stop = [0]
+        process = self.launch(api)
+        previous = signal.getsignal(signal.SIGINT)
+        try:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                process.wait(timeout=0)
+            self.assertFalse(process._quiescent)
+            with self.assertRaises(win.WindowsJobCleanupError) as caught:
+                process.close()
+            self.assertNotIsInstance(caught.exception, Exception)
+            self.assertTrue(process.closed)
+            with self.assertRaises(win.WindowsJobCleanupError) as repeated:
+                process.close()
+            self.assertIs(caught.exception, repeated.exception)
+            self.assertEqual(api.closed.count(201), 1)
+        finally:
+            signal.signal(signal.SIGINT, previous)
+
+    def test_invalid_notifications_never_replace_missing_history(self):
+        for notifications, failure in (([(999, win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, None)], None),
+                                       ([(200, win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, 9002)], None),
+                                       ([], "read_notification")):
+            with self.subTest(notifications=notifications, failure=failure):
+                api = FakeWin32(total=2, fail=failure)
+                api.notifications = notifications
+                process = self.launch(api)
+                try:
+                    with self.assertRaises((win.WindowsJobCleanupError, OSError)):
+                        process.wait()
+                    self.assertFalse(process._quiescent)
+                    self.assertIsNone(process._observed_zero_total)
+                finally:
+                    process._close_handles()
+
+    def test_active_owner_and_changed_totals_invalidate_zero_observation(self):
+        # 正确 key 的内层/早到 zero 在 owner 仍 active 时必须被消费并丢弃。
+        api = FakeWin32(total=2, active=(2, 2, 0))
+        api.notifications = [(200, win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, None)]
+        process = self.launch(api)
+        try:
+            with self.assertRaises(win.WindowsJobCleanupError):
+                process.wait()
+            self.assertIsNone(process._observed_zero_total)
+            self.assertFalse(process._quiescent)
+        finally:
+            process._close_handles()
+        for changed_total in (1, 3):
+            with self.subTest(total=changed_total):
+                api = FakeWin32(total=2)
+                api.notifications = [(200, win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, None)]
+                api.pending_members.add(9001)
+                process = self.launch(api)
+                try:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        process.wait(timeout=0)
+                    api.total = changed_total
+                    with self.assertRaises(win.WindowsJobCleanupError):
+                        process.wait()
+                    self.assertFalse(process._quiescent)
+                finally:
+                    process._close_handles()
 
     def test_active_zero_waits_for_every_retained_member_handle(self):
         # 20 成员同时覆盖可变长 Win32 缓冲区的扩容分支；不能默默只保留前 16 个。
@@ -698,6 +831,153 @@ class PosixCancelFileRegressionTest(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "requires native Windows Job Objects; not native-tested on macOS")
 class NativeWindowsJobTest(unittest.TestCase):
+    def record_proof(self, process, **details):
+        # 原始证据沿现有 CI process.log 保存，不打印环境、业务资料或继承凭据。
+        proof = process._exit_proof
+        entry = {"kind": "job-quiescence", "test": self.id(), "pid": process.pid,
+                 "exit": process.returncode, "closed": process.closed,
+                 "proof": None if proof is None else proof._asdict(), **details}
+        line = json.dumps(entry, ensure_ascii=False)
+        print("[job evidence] " + line, flush=True)
+        target = os.environ.get("AWF_TEST_EVIDENCE_LOG")
+        if target:
+            with open(target, "a", encoding="utf-8") as stream:
+                stream.write(line + "\n")
+
+    def test_completed_transient_members_use_owned_job_zero_notification(self):
+        # 固定原生入口为既有选定私有 venv；不换 base、不加 sleep 或 child 握手。
+        # 先等真实根句柄结束，故意让所有瞬时 Python 成员在首次观察前都已退出，
+        # 从而确定覆盖旧“累计 2 / 仅根句柄 1”的缺口，而非依靠调度碰巧复现。
+        self.assertNotEqual(Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve(),
+                            "该原生节点需要现有测试入口选定的私有 venv")
+        with tempfile.TemporaryDirectory(prefix="workflow-native-transient-",
+                                         dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
+            command = [sys.executable, "-B", "-X", "utf8", "-c",
+                       "import os;os.write(1,b'out\\x00');os.write(2,b'err\\xff');raise SystemExit(37)"]
+            process = win.WindowsJobProcess(command, cwd=raw, stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.GetHandleInformation.argtypes = [win.HANDLE, ctypes.POINTER(win.DWORD)]
+                kernel.GetHandleInformation.restype = win.BOOL
+                for handle in (process._job, process._completion_port):
+                    flags = win.DWORD()
+                    self.assertTrue(kernel.GetHandleInformation(handle, ctypes.byref(flags)))
+                    self.assertEqual(flags.value & 1, 0, "Job/IOCP 必须保持不可继承")
+                self.assertEqual(win.WAIT_OBJECT_0,
+                                 process._api.WaitForSingleObject(process._process.hProcess, 5000))
+                self.assertFalse(process._quiescent)  # root 结束本身不能发布 Job 终态。
+                before = process._accounting()
+                self.assertGreaterEqual(before.TotalProcesses, 2)
+                self.assertEqual(len(process._members), 1)
+                output, error = process.communicate(timeout=5)
+                self.assertEqual((output, error, process.returncode), (b"out\x00", b"err\xff", 37))
+                self.assertEqual("job-zero-notification", process._exit_proof.source)
+                self.assertGreater(process._exit_proof.total_processes, process._exit_proof.retained_processes)
+                self.assertTrue(process._quiescent)
+                self.record_proof(process, argv=command, stdout_hex=output.hex(), stderr_hex=error.hex())
+            finally:
+                process.close()
+
+    def test_nested_breakaway_remains_contained_until_owner_job_is_empty(self):
+        # 真实 Win32 event 控制后代写入，不靠 sleep 延长寿命或等待“足够久”。
+        # fixture 的内层 Job 允许显式/静默 breakaway；自有祖先 Job 禁止它，
+        # 因此新进程可以离开内层，仍必须受唯一外层 owner 的终止证明覆盖。
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateEventW.argtypes = [win.LPVOID, win.BOOL, win.BOOL, win.LPWSTR]
+        kernel.CreateEventW.restype = win.HANDLE
+        kernel.SetEvent.argtypes, kernel.SetEvent.restype = [win.HANDLE], win.BOOL
+        kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [win.HANDLE], win.BOOL
+        for outcome in ("normal", "cancel"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory(
+                    prefix="workflow-native-nested-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
+                root = Path(raw)
+                ready_name, release_name = ("Local\\awf-" + root.name + suffix for suffix in ("-ready", "-release"))
+                ready = kernel.CreateEventW(None, True, False, ready_name)
+                if not ready:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                self.addCleanup(kernel.CloseHandle, ready)
+                release = kernel.CreateEventW(None, True, False, release_name)
+                if not release:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                self.addCleanup(kernel.CloseHandle, release)
+                report, late = root / "member.json", root / "after-release"
+                child = textwrap.dedent(f"""
+                    import ctypes, json, os
+                    from pathlib import Path
+                    K = ctypes.WinDLL('kernel32', use_last_error=True)
+                    H, D = ctypes.c_void_p, ctypes.c_uint32
+                    K.OpenEventW.argtypes, K.OpenEventW.restype = [D, ctypes.c_int32, ctypes.c_wchar_p], H
+                    K.SetEvent.argtypes, K.SetEvent.restype = [H], ctypes.c_int32
+                    K.WaitForSingleObject.argtypes, K.WaitForSingleObject.restype = [H, D], D
+                    ready = K.OpenEventW(2, False, {ready_name!r})
+                    release = K.OpenEventW(0x00100000, False, {release_name!r})
+                    assert ready and release, ctypes.get_last_error()
+                    Path({str(report)!r}).write_text(json.dumps({{'pid': os.getpid()}}), encoding='utf-8')
+                    assert K.SetEvent(ready), ctypes.get_last_error()
+                    assert K.WaitForSingleObject(release, 10000) == 0
+                    Path({str(late)!r}).write_text('released', encoding='utf-8')
+                """)
+                parent = textwrap.dedent(f"""
+                    import ctypes, subprocess, sys
+                    sys.path.insert(0, {str(ROOT)!r})
+                    from lib.install import windows_process as W
+                    K = W._Win32API()
+                    inner = K.CreateJobObjectW(None, None)
+                    assert inner, ctypes.get_last_error()
+                    limits = W.JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+                    limits.BasicLimitInformation.LimitFlags = 0x00000800 | 0x00001000
+                    assert K.SetInformationJobObject(inner, W.JobObjectExtendedLimitInformation,
+                                                    ctypes.byref(limits), ctypes.sizeof(limits))
+                    assert K.AssignProcessToJobObject(inner, K.GetCurrentProcess()), ctypes.get_last_error()
+                    subprocess.Popen([sys.executable, '-B', '-X', 'utf8', '-c', {child!r}],
+                                     creationflags=0x01000000)
+                    raise SystemExit(23)
+                """)
+                process = win.WindowsJobProcess([sys.executable, "-B", "-X", "utf8", "-c", parent], cwd=root,
+                                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                zeros = []
+                native_next = process._api.GetQueuedCompletionStatus
+
+                def observe_native_packet(*arguments):
+                    # 只投影实际内核返回的 packet，不制造/重发消息、不改变返回值。
+                    received = native_next(*arguments)
+                    if received and ctypes.cast(arguments[1], ctypes.POINTER(win.DWORD))[0] == win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO:
+                        state = process._accounting()
+                        zeros.append({"key": ctypes.cast(arguments[2], ctypes.POINTER(win.SIZE_T))[0],
+                                      "active": state.ActiveProcesses})
+                    return received
+
+                process._api.GetQueuedCompletionStatus = observe_native_packet
+                try:
+                    self.assertEqual(win.WAIT_OBJECT_0, process._api.WaitForSingleObject(ready, 5000))
+                    self.assertEqual(win.WAIT_OBJECT_0,
+                                     process._api.WaitForSingleObject(process._process.hProcess, 5000))
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        process.wait(timeout=.1)
+                    self.assertTrue(any(item["active"] > 0 for item in zeros),
+                                    "尚未观察到内层归零向仍活跃 owner 上送的真实通知")
+                    self.assertIsNone(process._observed_zero_total)
+                    self.assertFalse(process._quiescent)
+                    member_pid = json.loads(report.read_text(encoding="utf-8"))["pid"]
+                    member = next(handle for (pid, _), handle in process._members.items() if pid == member_pid)
+                    self.assertIsNotNone(process._member_identity(member_pid, member))
+                    self.assertEqual(win.WAIT_TIMEOUT, process._api.WaitForSingleObject(member, 0))
+                    if outcome == "cancel":
+                        process.stop()
+                        self.assertEqual(win.WAIT_OBJECT_0, process._api.WaitForSingleObject(member, 0))
+                        self.assertTrue(kernel.SetEvent(release))
+                        self.assertFalse(late.exists(), "已停止成员仍在 release 后写入")
+                    else:
+                        self.assertTrue(kernel.SetEvent(release))
+                        self.assertEqual(23, process.wait(timeout=5))
+                        self.assertEqual(late.read_text(encoding="utf-8"), "released")
+                    self.assertTrue(process._quiescent)
+                    self.record_proof(process, outcome=outcome, zero_packets=zeros, member_pid=member_pid,
+                                      member_wait=process._api.WaitForSingleObject(member, 0))
+                finally:
+                    process.close()
+
     def test_wait_confirms_normal_descendant_handles(self):
         """根进程先正常退出，owner 仍须捕获完整成员并等待后代真实句柄。"""
         with tempfile.TemporaryDirectory(prefix="workflow-native-normal-members-") as raw:

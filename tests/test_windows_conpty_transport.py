@@ -76,7 +76,7 @@ class PortableConPTYContractTest(unittest.TestCase):
         previous = signal.getsignal(signal.SIGINT)
         try:
             with self.assertRaises(WindowsJobCleanupError) as first:
-                owner.wait(timeout=0)
+                owner.wait()  # 无句柄完备证明/无有效 zero，保持原致命拒绝合同。
             for action in (channel.close, channel.close, owner.close, owner.stop, owner.wait):
                 with self.subTest(action=action.__qualname__), self.assertRaises(WindowsJobCleanupError) as caught:
                     action()

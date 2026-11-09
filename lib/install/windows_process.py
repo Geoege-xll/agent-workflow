@@ -7,6 +7,7 @@ for disabling shell profiles). Only duplicated standard handles are inherited.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections import namedtuple
 import ctypes
 import math
 import os
@@ -36,7 +37,9 @@ PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JobObjectBasicAccountingInformation = 1
 JobObjectBasicProcessIdList = 3
+JobObjectAssociateCompletionPortInformation = 7
 JobObjectExtendedLimitInformation = 9
+JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO = 4
 DUPLICATE_SAME_ACCESS = 0x00000002
 INFINITE = 0xFFFFFFFF
 WAIT_OBJECT_0 = 0
@@ -87,6 +90,16 @@ class JOBOBJECT_BASIC_ACCOUNTING_INFORMATION(ctypes.Structure):
         ("ActiveProcesses", DWORD),
         ("TotalTerminatedProcesses", DWORD),
     ]
+
+
+class JOBOBJECT_ASSOCIATE_COMPLETION_PORT(ctypes.Structure):
+    _fields_ = [("CompletionKey", LPVOID), ("CompletionPort", HANDLE)]
+
+
+# 唯一 Job owner 已完成的不可变证据快照，不保存并行清理状态机。选用标准库
+# namedtuple，兼容 windows_bootstrap 对验过摘要的字节直接 exec 的既有入口；
+# 该入口故意不注册/导入 supervisor 模块，不能引入依赖 sys.modules 的装饰器。
+_JobExitProof = namedtuple("_JobExitProof", "source total_processes retained_processes")
 
 
 class STARTUPINFOW(ctypes.Structure):
@@ -146,6 +159,9 @@ class _Win32API:
             "QueryInformationJobObject": ([HANDLE, ctypes.c_int, LPVOID, DWORD, LPVOID], BOOL),
             "AssignProcessToJobObject": ([HANDLE, HANDLE], BOOL),
             "TerminateJobObject": ([HANDLE, DWORD], BOOL),
+            "CreateIoCompletionPort": ([HANDLE, HANDLE, SIZE_T, DWORD], HANDLE),
+            "GetQueuedCompletionStatus": ([HANDLE, ctypes.POINTER(DWORD), ctypes.POINTER(SIZE_T),
+                                            ctypes.POINTER(LPVOID), DWORD], BOOL),
             "GetCurrentProcess": ([], HANDLE),
             "GetStdHandle": ([DWORD], HANDLE),
             "OpenProcess": ([DWORD, BOOL, DWORD], HANDLE),
@@ -268,17 +284,22 @@ class WindowsJobProcess:
         self.returncode = None
         self._api = _Win32API()
         self._job = None
+        self._completion_port = None
         self._process = PROCESS_INFORMATION()
         self._assigned = False
         self._resumed = False
-        self._quiescent = False
+        self._exit_proof = None
+        # 只记录“消费通知当场，当前 owner Job 已为空”的累计代数；一旦查询到
+        # owner 仍活跃或累计数变化就失效。内层/陈旧 zero 绝不能留到未来放行。
+        self._observed_zero_total = None
         # 句柄释放与“所有成员均已结束”是两个独立事实。证明失败必须永久归本
         # owner 所有；close 后不能因句柄已清空再查询 Win32，更不能把失败改成成功。
         self._closed = False
         self._cleanup_error = None
         self._stop_attempted = False
-        # 只在本 owner 生命周期内持有成员真实句柄。累计成员数用于证明捕获完整性，
-        # 不能把当前 PID 清单/ActiveProcesses=0 当作历史成员均已 signaled 的屏障。
+        # 只在本 owner 生命周期内持有成员真实句柄。累计数仍校验历史捕获完整性；
+        # 瞬时成员的缺口只能由当前 Job 的正向内核归零证据补足，不能按 PID 消失
+        # 或 NEW/EXIT 消息数量猜测历史，也不能单靠 ActiveProcesses=0 放行。
         self._members = {}
         self._total_processes = 0
         self.stdin = self.stdout = self.stderr = None
@@ -351,6 +372,16 @@ class WindowsJobProcess:
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         self._check(api.SetInformationJobObject(self._job, JobObjectExtendedLimitInformation,
                                                ctypes.byref(limits), ctypes.sizeof(limits)), "Set setup Job limits")
+        # 空 Job 先关联私有 IOCP，避免创建/退出发生在关联过程内而丢失证明。
+        # 两个自有句柄均不可继承；标准流白名单也不会包含它们。这里没有第二个
+        # 监督线程或清理 owner，通知只由本实例的 wait/stop 串行消费。
+        # 微软官方全 Job 退出等待方案：
+        # https://devblogs.microsoft.com/oldnewthing/20130405-00/?p=4743/
+        self._completion_port = self._check(
+            api.CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 1), "Create setup Job completion port")
+        port = JOBOBJECT_ASSOCIATE_COMPLETION_PORT(self._job, self._completion_port)
+        self._check(api.SetInformationJobObject(self._job, JobObjectAssociateCompletionPortInformation,
+                                               ctypes.byref(port), ctypes.sizeof(port)), "Associate setup Job completion port")
         handles = []
         attributes = None
         initialized = False
@@ -423,6 +454,11 @@ class WindowsJobProcess:
         """本 owner 的句柄已释放；不等同于 Job 归零证明成功。"""
         return self._closed
 
+    @property
+    def _quiescent(self):
+        # 既有消费者继续读取原属性，但不能再用一个可散落写入的 bool 跳过证明。
+        return self._exit_proof is not None
+
     def _member_identity(self, pid, handle):
         associated = BOOL()
         self._check(self._api.IsProcessInJob(handle, self._job, ctypes.byref(associated)),
@@ -460,8 +496,7 @@ class WindowsJobProcess:
             handle = self._api.OpenProcess(0x00101000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
             if not handle:
                 # PID 可能在枚举后退出或被回收；这里绝不据此宣称它已安全结束。
-                # 最终 TotalProcesses 必须与已持有的唯一真实成员句柄数相等，
-                # 捕获前已消失的瞬时成员因此会留下缺口并触发致命失败关闭。
+                # 捕获前消失的成员会留下历史缺口；缺少有效内核归零证明时仍拒绝。
                 continue
             try:
                 key = self._member_identity(pid, handle)
@@ -479,8 +514,67 @@ class WindowsJobProcess:
             ctypes.sizeof(accounting), None), "Query setup Job active processes")
         if accounting.TotalProcesses < self._total_processes:
             raise WindowsJobCleanupError("Cannot confirm setup Job cumulative member count after counter regression")
+        if self._assigned and (accounting.TotalProcesses < len(self._members) or accounting.TotalProcesses == 0):
+            raise WindowsJobCleanupError("Invalid setup Job cumulative member count")
         self._total_processes = accounting.TotalProcesses
+        if accounting.ActiveProcesses or self._observed_zero_total != accounting.TotalProcesses:
+            self._observed_zero_total = None
         return accounting
+
+    def _next_job_notification(self):
+        """非阻塞消费一个内核通知；只在消费当场复核 owner 为空后记录 zero。"""
+        code, key, value = DWORD(), SIZE_T(), LPVOID()
+        received = self._api.GetQueuedCompletionStatus(
+            self._completion_port, ctypes.byref(code), ctypes.byref(key), ctypes.byref(value), 0)
+        if not received:
+            error = self._api.error("Read setup Job completion notification")
+            # FALSE 且没有 packet 时 key/code 未定义，严禁沿用之前的缓冲区值。
+            # 普通消息可能丢失：空队列不证明任何历史成员已结束。
+            # https://learn.microsoft.com/windows/win32/api/ioapiset/nf-ioapiset-getqueuedcompletionstatus
+            if value.value is None and getattr(error, "winerror", None) == WAIT_TIMEOUT:
+                return False
+            raise error
+        if key.value != self._job:
+            raise WindowsJobCleanupError("Unexpected setup Job completion key")
+        if code.value == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO:
+            if value.value is not None:
+                raise WindowsJobCleanupError("Invalid setup Job zero notification payload")
+            # 嵌套 Job 的通知会上送，因此 key 正确仍不足够。先查当前 owner Job；
+            # 如果仍有成员，就丢弃本消息，绝不锁存内层 zero 等待未来归零。
+            # https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-jobobject_associate_completion_port
+            accounting = self._accounting()
+            if accounting.ActiveProcesses == 0:
+                self._observed_zero_total = accounting.TotalProcesses
+        return True
+
+    def _confirm_job_exit(self, accounting, deadline, timeout):
+        """仅两个完整证据分支能发布不可变终态；所有已持有句柄仍须 signaled。"""
+        if accounting.ActiveProcesses:
+            return False
+        complete = accounting.TotalProcesses == len(self._members)
+        if not complete and self._observed_zero_total != accounting.TotalProcesses:
+            return False
+        for handle in self._members.values():
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            milliseconds = INFINITE if remaining is None else min(INFINITE - 1, math.ceil(remaining * 1000))
+            result = self._api.WaitForSingleObject(handle, milliseconds)
+            if result == WAIT_TIMEOUT:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            if result != WAIT_OBJECT_0:
+                raise self._api.error("Wait for setup Job member termination")
+        # 根句柄从 Assign 之前一直保留在 _members。等候期间若出现新的合法关联，
+        # 累计代数或 Active 会变化并使通知失效；必须回到观察，不能复用旧证明。
+        confirmed = self._accounting()
+        if confirmed.ActiveProcesses or confirmed.TotalProcesses != accounting.TotalProcesses:
+            return False
+        if not complete and self._observed_zero_total != confirmed.TotalProcesses:
+            return False
+        self._root_exitcode()
+        if self._cleanup_error is None:
+            self._exit_proof = _JobExitProof(
+                "retained-handles" if complete else "job-zero-notification",
+                confirmed.TotalProcesses, len(self._members))
+        return True
 
     def _root_exitcode(self):
         result = self._api.WaitForSingleObject(self._process.hProcess, INFINITE)
@@ -502,43 +596,32 @@ class WindowsJobProcess:
 
     def _wait_for_job(self, timeout=None):
         # 仅 stop 首次收尾可以在已有失败后继续尝试终止；公开 wait 始终保留
-        # 最初的证明失败。内部等待仍执行原累计计数与逐真实句柄 signaled 屏障。
+        # 最初的证明失败。只消费现有通知，不无限等待 best-effort 的消息送达；
+        # 操作系统本身的真实进程终止仍沿原策略等待，不能承诺有限内核收尾时间。
         if self._quiescent:
             return self.returncode
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             self._capture_members()
             accounting = self._accounting()
-            if accounting.ActiveProcesses == 0:
-                if accounting.TotalProcesses != len(self._members):
-                    raise WindowsJobCleanupError(
-                        "Cannot confirm every setup Job member: "
-                        f"cumulative={accounting.TotalProcesses}, retained={len(self._members)}; "
-                        "a transient member may have exited before its handle could be retained"
-                    )
-                # 计数完整只证明每个成员都有句柄。终止是异步的，必须再逐句柄
-                # 等到 signaled；所有等待共用原 deadline，取消/强停后的无预算
-                # 清理仍延用既有“未确认结束不得交给恢复”的策略，不设假定宽限期。
-                for handle in self._members.values():
-                    remaining = None if deadline is None else max(0, deadline - time.monotonic())
-                    milliseconds = INFINITE if remaining is None else min(INFINITE - 1, math.ceil(remaining * 1000))
-                    result = self._api.WaitForSingleObject(handle, milliseconds)
-                    if result == WAIT_TIMEOUT:
-                        raise subprocess.TimeoutExpired(self.args, timeout)
-                    if result != WAIT_OBJECT_0:
-                        raise self._api.error("Wait for setup Job member termination")
-                # 等待期间仍可能发生新的合法成员关联；再次核对累计数。只有完整
-                # 历史成员都已退出且当前 Job 为空时，才没有本 Job 内的后续创建者。
-                confirmed = self._accounting()
-                if confirmed.ActiveProcesses == 0 and confirmed.TotalProcesses == len(self._members):
-                    result = self._root_exitcode()
-                    if self._cleanup_error is None:
-                        self._quiescent = True
-                    return result
+            received = self._next_job_notification()
+            if received:
+                # 有消息就继续校验/排空队列；NEW/EXIT 绝不拿来补历史计数。
+                # 有限 wait 每次仍检查原 deadline，队列繁忙不能重置预算。
+                accounting = self._accounting()
+            if self._confirm_job_exit(accounting, deadline, timeout):
+                return self.returncode
+            if not received and accounting.ActiveProcesses == 0 and deadline is None:
+                # wait(None)/stop 在 Job 已空、两类证明均缺失且通知队列已空时
+                # 立即致命失败；不挂死等待可能永不送达的通知，也不放行恢复。
+                raise WindowsJobCleanupError(
+                    "Cannot confirm every setup Job member without an owned Job zero notification: "
+                    f"cumulative={accounting.TotalProcesses}, retained={len(self._members)}")
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise subprocess.TimeoutExpired(self.args, timeout)
-            time.sleep(0.02 if remaining is None else min(0.02, remaining))
+            if not received:
+                time.sleep(0.02 if remaining is None else min(0.02, remaining))
 
     def stop(self):
         if self._cleanup_error is not None and (self._closed or self._stop_attempted):
@@ -646,7 +729,7 @@ class WindowsJobProcess:
                 try:
                     self._check(self._api.TerminateJobObject(self._job, 1), "Discard suspended setup Job")
                     self._root_exitcode()
-                    self._quiescent = True
+                    self._exit_proof = _JobExitProof("suspended-root", 1, 1)
                 except BaseException as exc:
                     raise WindowsJobCleanupError("Cannot discard suspended setup Job") from exc
             return
@@ -681,6 +764,9 @@ class WindowsJobProcess:
         if self._job:
             self._api.CloseHandle(self._job)
             self._job = None
+        if self._completion_port:
+            self._api.CloseHandle(self._completion_port)
+            self._completion_port = None
 
     def close(self):
         with _ignore_interrupts():
