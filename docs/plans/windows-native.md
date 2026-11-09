@@ -14,7 +14,7 @@
 
 ## 需求与验收
 
-1. 无 Bash 的原生 Python/PowerShell/cmd 入口可执行 CLI；现有解释器显式无效时拒绝，不静默下载运行时、调整全局 PATH、profile 或 ExecutionPolicy。
+1. 无 Bash 的原生 Python/PowerShell 7+（pwsh）/cmd 入口可执行 CLI；Windows PowerShell 5.1 不在目标范围，不新增该兼容分支；现有解释器显式无效时拒绝，不静默下载运行时、调整全局 PATH、profile 或 ExecutionPolicy。
 2. 本地 NTFS 上以真实句柄和 ChangeTime 验证身份；私有性由 ACL/owner 证明。保全原 DACL/继承策略、用户后续保存及原 inode/file ID，不跳过 POSIX mode 判断来伪装 Windows 安全。
 3. 受管 Skill 仍只指向已验证中央核心同名 Skill；实现锚定创建、精确 tag/target 读取、排他移动、身份条件删除和恢复。普通未知 reparse/junction/多硬链、远程卷与不支持能力继续拒绝。
 4. 保留 current/follow/pinned、三字段任务 pin、控制协议、全局与项目模型逐字段继承、条件补偿/中断恢复、旧任务资源读取和生命周期保活。普通记录4MiB及独立marker预算不升，不新增旧自包含兼容。
@@ -37,7 +37,7 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 基线main为1235951。已完成三路只读分析，确认现有安全骨架可复用，但缺少目录软链完整生命周期、真实权限/时间投影、Windows初读依赖闭包和管理器/进程导入链。保留的跨平台模块及旧fake测试不能证明当前中央安装可用。
 
-当前先实施原生能力探针和唯一Python测试入口；其后冻结原语合同再接入消费者。用户Win11机器可运行脚本，仓库没有自托管验收运行器。GitHub原生Windows Server证据与Win11 x64桌面证据分别取得，不修改用户机器的全局配置。
+第一阶段探针和唯一Python入口候选已实现。Mac定向runner14项通过，首轮Server CI因Python多匹配未启动的原失败已保留；修复后的Server 2025 x64/NTFS提升令牌探针已产出完整报告（42546855984）。目录GENERIC_READ|WRITE flush和软链调用成功，但快速文件重写及实际DACL变更前后ChangeTime本轮未变，不能假定时间戳独立充分；后续须据此冻结权限快照/竞争合同。此证据不是Win11普通用户或断电保证。用户随后明确Shell统一PowerShell7+，已移除5.1临时入口；080b490候选在CI42547237040以PowerShell7.6.9、Python3.11.9实际运行同一薄入口，探针退出0且同次完整JSON身份核对成功。保留原API证据，不把Server提升令牌当普通用户保证。其后冻结原语合同再接入消费者。用户Win11机器可运行脚本，随后明确先整体开发，真机脚本移至整体候选完成后统一验收，不阻塞开发；仓库没有自托管验收运行器。GitHub原生Windows Server证据与Win11 x64桌面证据分别取得，不修改用户机器的全局配置。
 
 工作采用独立工作树，保留主目录五处原有dirty。原有merge: confirm策略在具体候选完成QA后适用；当前实现授权不扩大为发布、主分支交付或本机业务项目安装。不存在待执行的旧npm/npx升级任务。
 
@@ -50,4 +50,4 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 ## 批准依据与必要证据
 
 - 批准依据: 用户要求先完成原生Windows适配验收、选择Windows11 x64，并确认可运行验收脚本。此前明确要求生产交子代理、独立QA、保留资料和现有修复；布局与流程已定版，当前仅原生平台适配。
-- 验收证据: 三路分析只读完成；尚无原生实现/CI/真机通过记录。后续仅记录真实命令/环境/输出/退出码、原始失败和相应修复，完整证据不以摘要替代。
+- 验收证据: 三路分析只读完成；首阶段探针/统一runner已实现并有Mac14节点与Server7入口证据，完整中央/进程/TUI及Win11真机尚未验收。后续仅记录真实命令/环境/输出/退出码、原始失败和相应修复，完整证据不以摘要替代。
