@@ -128,6 +128,12 @@ GROUPS["windows-native-renderer-process-repair"] = (
 GROUPS["windows-native-central-copy-repair"] = GROUPS["windows-native-central-repair"] + (
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_exact_dacl_copy_is_idempotent_and_private_state_republishes",
 )
+# CI42568804698 的精确 DACL 复制已绿，中央消费者后续停在 Skill 发布见证。
+# 此组只补实际 stage→目标父移动的原生见证与完整消费者，不重复已验 copy，
+# 也不在验证入口放宽生产 guard；真实诊断和修复仍由中央 owner 冻结后组合。
+GROUPS["windows-native-central-link-repair"] = GROUPS["windows-native-central-repair"] + (
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_managed_skill_stage_publication_preserves_frozen_witness",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -135,7 +141,7 @@ NATIVE_GROUPS = frozenset((
     "windows-native-libraries", "windows-native-repair", "windows-native-central",
     "windows-native-central-repair", "windows-native-renderer",
     "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
-    "windows-native-central-copy-repair", "windows-native",
+    "windows-native-central-copy-repair", "windows-native-central-link-repair", "windows-native",
 ))
 
 
