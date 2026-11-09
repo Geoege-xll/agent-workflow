@@ -2027,7 +2027,47 @@ finally:
             self.assertEqual(alternate.binding(), service.status(state, pinned)["runtime_binding"])
             self.assertEqual(alternate.binding(), service.status(state, disabled)["runtime_binding"])
             mark_stage("follow_pin_activation_complete")
-            central_runtime.apply(central_runtime.preview(state, "rollback", native_context=context))
+            # 只观测本次真实rollback预览的容量组成，原producer/serializer与
+            # 4MiB拒绝原样执行。即使现场再次超限，也先留下有界字节/计数证据，
+            # 不dump任何配置、正文、HOME或环境，不在异常后重试或绕过guard。
+            actual_budget, actual_settlement = service.publication_budget, central_runtime._settlement_budget
+            producer_facts = {}
+            def observe_budget(plan):
+                budget = actual_budget(plan)
+                producer_facts[plan.project] = (plan, budget)
+                return budget
+            def observe_settlement(journal, *, receipt_increment=0):
+                bound = central_runtime._settlement_value(journal)
+                count_bytes = lambda value: len((json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode())
+                rows = []
+                watched = {".codex/hooks.json", ".claude/settings.json", ".agents/hooks.json", resources.WINDOWS_BOOTSTRAP}
+                for row in bound["projects"][:8]:
+                    project_plan, producer = producer_facts[Path(row["project"])]
+                    binding = resources.unique_json(resources.Node.from_value(row["binding_before"]).payload)
+                    previous = resources.unique_json(resources.Node.from_value(row["journal_before"]).payload)
+                    previous_changes = [{"path": item["path"], "bytes": {
+                        key: len(base64.b64decode(item[key]["body"])) for key in ("before", "after", "installed") if key in item}}
+                        for item in previous["changes"] if item["path"] in watched]
+                    planned_changes = [{"path": item.relative, "before_bytes": len(item.before.payload), "after_bytes": len(item.after.payload)}
+                                       for item in project_plan.changes if item.relative in watched]
+                    rows.append({"project": Path(row["project"]).name,
+                        "binding_before_bytes": len(resources.Node.from_value(row["binding_before"]).payload),
+                        "journal_before_bytes": len(resources.Node.from_value(row["journal_before"]).payload),
+                        "binding_after_producer_bytes": producer.binding_after_bytes,
+                        "journal_after_producer_bytes": producer.journal_after_bytes,
+                        "central_row_bytes": count_bytes(row), "after_is_guard": "sha256" in row["binding_after"],
+                        "retained_count": len(binding["retained_nodes"]), "retained_bytes": count_bytes(binding["retained_nodes"]),
+                        "previous_changes": previous_changes, "planned_changes": planned_changes})
+                root_bytes = count_bytes(bound)
+                print("NATIVE_CENTRAL_ROLLBACK_CAPACITY " + json.dumps({"projects": rows,
+                    "project_count": len(bound["projects"]), "root_wire_before_receipt": root_bytes,
+                    "native_receipt_increment": receipt_increment, "total_bound": root_bytes + receipt_increment,
+                    "limit": resources.LIMIT}, sort_keys=True), flush=True)
+                return actual_settlement(journal, receipt_increment=receipt_increment)
+            with patch.object(service, "publication_budget", side_effect=observe_budget), \
+                    patch.object(central_runtime, "_settlement_budget", side_effect=observe_settlement):
+                rollback = central_runtime.preview(state, "rollback", native_context=context)
+            central_runtime.apply(rollback)
             self.assertEqual(core.binding(), service.status(state, project)["runtime_binding"])
             mark_stage("central_rollback_complete")
             # 仅注入第二项目的业务失败点；所有第一项目发布/Job/ACL/原inode补偿都

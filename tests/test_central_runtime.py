@@ -30,6 +30,30 @@ PACK = Path(__file__).resolve().parents[1]
 
 
 class CurrentRecordCodecTest(unittest.TestCase):
+    def test_after_guard_codec_is_closed_and_preserves_windows_acl_and_all_identity(self):
+        from lib.central import runtime_project as resources
+        identity = (1, 2, 0o100600, 1, 3, 5, 6)
+        for platform in ("posix", "nt"):
+            with self.subTest(platform=platform), patch.object(resources, "os", SimpleNamespace(name=platform)):
+                # 只证明codec字段合同；这里的固定身份不是Win32/ACL运行证据。
+                node = Node("file", b"row", 0o600, identity, "a" * 64 if platform == "nt" else "")
+                guard = resources.node_revision(node)
+                self.assertEqual(guard, central._after_revision(guard))
+                self.assertEqual(guard, central._after_revision(node.value()))
+                invalid = [dict(guard, body=""), dict(guard, unknown=True), dict(guard, kind=[]),
+                           dict(guard, kind="link"), dict(guard, kind="missing"), dict(guard, mode=True),
+                           dict(guard, mode=0o644), dict(guard, identity=[]), dict(guard, identity=list(identity[:6])),
+                           dict(guard, identity=[True, *identity[1:]]),
+                           dict(guard, sha256="F" * 64), {key: value for key, value in guard.items() if key != "sha256"}]
+                if platform == "nt":
+                    invalid.extend([dict(guard, security=""), {key: value for key, value in guard.items() if key != "security"}])
+                    self.assertNotEqual(guard, resources.node_revision(Node("file", b"row", 0o600, identity, "b" * 64)))
+                for value in invalid:
+                    with self.assertRaises(ValueError):
+                        central._after_revision(value)
+                with self.assertRaises(ValueError):
+                    central._after_revision(Node("file", b"planned", 0o600).value())
+
     def test_native_roots_are_required_closed_canonical_and_readonly(self):
         binding = {"protocol_version": 1, "content_id": "a" * 64, "manifest_sha256": "a" * 64}
         value = {"schema_version": 1, "runtime_binding": binding, "previous_binding": None,
@@ -140,6 +164,57 @@ class CentralRuntimeTest(RuntimeFixture, unittest.TestCase):
         central._save(self.state, journal, read_state(self.state, policy.ACTIVATION))
         self.assertEqual("?", unique_json(read_state(self.state, policy.ACTIVATION).payload)["conflicts"][0]["reason"])
 
+    def test_after_guards_keep_full_before_and_reject_every_record_drift(self):
+        self.enable(); self.register(self.project)
+        plan = self.plan()
+        before = plan.captures[0]
+        actual_save, publishing = central._save, []
+        def observe(state, journal, expected):
+            result = actual_save(state, journal, expected)
+            if journal["phase"] == "publishing":
+                publishing.append(copy.deepcopy(journal))
+            return result
+        with patch.object(central, "_save", side_effect=observe):
+            central.apply(plan)
+        settled = unique_json(read_state(self.state, policy.ACTIVATION).payload)
+        self.assertTrue(all(row["binding_after"] is None and row["journal_after"] is None for row in settled["projects"]))
+        journal = publishing[0]
+        row = journal["projects"][0]
+        self.assertEqual(before.binding_before.value(), row["binding_before"])
+        self.assertEqual(before.journal_before.value(), row["journal_before"])
+        self.assertTrue("sha256" in row["binding_after"] and "body" not in row["binding_after"],
+                        "after只能保存严格条件守卫，完整before仍用于恢复")
+        central._verify_applied(self.state, journal, self.context)
+        for key in ("binding_after", "journal_after"):
+            original = row[key]
+            for field, changed in (("sha256", "f" * 64), ("mode", 0o644),
+                                   ("identity", [*original["identity"][:-1], original["identity"][-1] + 1])):
+                altered = copy.deepcopy(journal)
+                altered["projects"][0][key][field] = changed
+                with self.subTest(key=key, field=field), self.assertRaises(ValueError):
+                    central._verify_applied(self.state, altered, self.context)
+        # 旧完整after属于只读的封闭兼容分支；与新guard一样核对真实记录，
+        # 不能因没有新字段而跳过内容、完整identity或权限比较。
+        legacy = copy.deepcopy(journal)
+        legacy["projects"][0]["binding_after"] = projects.read_binding_record(self.state, self.project)[0].value()
+        legacy["projects"][0]["journal_after"] = projects._journal(self.state, self.project)[0].value()
+        central._validate_journal(legacy)
+        central._verify_applied(self.state, legacy, self.context)
+        wrong_before = copy.deepcopy(journal)
+        wrong_before["projects"][0]["binding_before"] = row["binding_after"]
+        with self.assertRaises(ValueError):
+            central._validate_journal(wrong_before)
+        # 通过真实私有发布器重写相同正文，制造hash完全相同的新inode；guard
+        # 仍必须拒绝，而不能把摘要一致误当完整条件前像一致。
+        old_node = projects.read_binding_record(self.state, self.project)[0]
+        with Tree(self.state) as tree:
+            projects._write_private(tree, projects._state_relative(self.project, "bindings"), old_node.payload, expected=old_node)
+        new_node = projects.read_binding_record(self.state, self.project)[0]
+        self.assertEqual(old_node.payload, new_node.payload)
+        self.assertNotEqual(old_node.identity[:2], new_node.identity[:2])
+        with self.assertRaises(ValueError):
+            central._verify_applied(self.state, journal, self.context)
+
     def test_controller_protocol_is_static_closed_and_independent_of_helper(self):
         self.assertIs(type(runtime_bridge.CENTRAL_CONTROL_PROTOCOL), int)
         self.assertEqual(1, runtime_bridge.CENTRAL_CONTROL_PROTOCOL)
@@ -165,6 +240,164 @@ class CentralRuntimeTest(RuntimeFixture, unittest.TestCase):
                      b"CENTRAL_CONTROL_PROTOCOL = (\n"):
             with self.subTest(body=body), patch.object(store, "read_core_source", return_value=body), self.assertRaises(ValueError):
                 runtime_bridge.controller_protocol(self.core)
+
+    def test_after_guard_capability_is_static_closed_and_not_execution_permission(self):
+        for body, expected in ((b"# old reader\n", 0), (b"CENTRAL_AFTER_GUARD_PROTOCOL = 0\n", 0),
+                               (b"raise AssertionError('must not execute')\nCENTRAL_AFTER_GUARD_PROTOCOL = 1\n", 1)):
+            with patch.object(store, "read_core_source", return_value=body):
+                self.assertEqual(expected, runtime_bridge.after_guard_protocol(self.core))
+        for declaration in ("True", "2", "int('1')"):
+            with patch.object(store, "read_core_source", return_value=("CENTRAL_AFTER_GUARD_PROTOCOL = " + declaration).encode()), \
+                    self.assertRaises(ValueError):
+                runtime_bridge.after_guard_protocol(self.core)
+        for body in (b"if True:\n CENTRAL_AFTER_GUARD_PROTOCOL = 1\n", b"CENTRAL_AFTER_GUARD_PROTOCOL = 1\ndel CENTRAL_AFTER_GUARD_PROTOCOL\n",
+                     b"CENTRAL_AFTER_GUARD_PROTOCOL = 1\ndef CENTRAL_AFTER_GUARD_PROTOCOL(): pass\n"):
+            with patch.object(store, "read_core_source", return_value=body), self.assertRaises(ValueError):
+                runtime_bridge.after_guard_protocol(self.core)
+
+    def test_old_bound_reader_preserves_real_init_and_historical_pin_read(self):
+        from tests.test_task_graph_init import BUILTIN_ENGINEERING, decisions
+        # 唯一额外完整来源用于真正task_graph_cli init消费者。旧reader夹具只
+        # 固定此前after必须是完整Node的ABI，不冒称某历史发布的全部实现。
+        source = self.workspace / ("legacy-reader-" + uuid.uuid4().hex[:8])
+        source.mkdir()
+        for directory in store.CORE_DIRECTORIES:
+            shutil.copytree(PACK / directory, source / directory, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        for name in store.SETUP_FILES:
+            shutil.copyfile(PACK / name, source / name)
+        bridge_path = source / "lib/runtime_bridge.py"
+        original = bridge_path.read_bytes()
+        declaration = b"CENTRAL_AFTER_GUARD_PROTOCOL = 1\n"
+        self.assertEqual(1, original.count(declaration))
+        bridge_path.write_bytes(original.replace(declaration, b"# Legacy reader has no after-guard capability.\n", 1))
+        with (source / "manager/central_runtime.py").open("ab") as stream:
+            stream.write(b'\n_compatible_validate = _validate_journal\ndef _validate_journal(value):\n'
+                         b'    for row in value["projects"]:\n'
+                         b'        for key in ("binding_after", "journal_after"):\n'
+                         b'            if row[key] is not None: Node.from_value(row[key])\n'
+                         b'    return _compatible_validate(value)\n')
+        legacy = store.import_core(source, self.state)
+        self.assertEqual(0, runtime_bridge.after_guard_protocol(legacy))
+        self.assertFalse(central.preview(self.state, binding=legacy.binding(), native_context=self.context).after_guards)
+        self.set_current(legacy.binding())
+        self.assertFalse(self.plan().after_guards)
+        self.set_current(self.core.binding())
+        self.enable(); self.register(self.project)
+        central.apply(self.plan())
+        older = self.workspace / ("old-pinned-" + uuid.uuid4().hex[:8]); older.mkdir()
+        project_service.apply_project(project_service.preview_project(self.state, older, "add", enable=True,
+                                                                     content_id=legacy.content_id))
+        input_path, output = older / "init-input.json", older / "init-task.json"
+        payload = decisions()
+        payload["standards"].update(required_engineering_rule_ids=["eng-common-005"],
+            leaves=[{"path": BUILTIN_ENGINEERING, "domain": "engineering", "rule_ids": ["eng-common-005"]}])
+        payload["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+        input_path.write_text(json.dumps(payload), encoding="utf-8")
+        def initialize():
+            invocation = runtime_bridge.python_helper(self.state, older, "lib/task_graph_cli.py",
+                ("init", "--root", str(older), "--input", str(input_path), "--output", str(output)), binding=legacy.binding())
+            return subprocess.run(invocation.command, cwd=invocation.cwd, env=invocation.environment,
+                                  capture_output=True, text=True, timeout=60)
+        # 先前guard批次已经成功结算；后来通过公开add/use采用旧reader也应可
+        # 真正init，而无需额外中央写入来“修复”这份已结算历史日志。
+        initialized = initialize()
+        self.assertEqual(0, initialized.returncode, initialized.stdout + initialized.stderr)
+        self.assertEqual(legacy.binding(), unique_json(output.read_bytes())["runtime_binding"])
+        output.unlink()
+        protected = central.preview(self.state, binding=self.core.binding(), native_context=self.context)
+        self.assertFalse(protected.after_guards, "已登记旧pinned reader必须否决新格式")
+        actual_save, publishing = central._save, []
+        def observe_legacy(state, journal, expected):
+            result = actual_save(state, journal, expected)
+            if journal["phase"] == "publishing":
+                publishing.append(copy.deepcopy(journal))
+            return result
+        with patch.object(central, "_save", side_effect=observe_legacy):
+            central.apply(protected)
+        actual = unique_json(read_state(self.state, policy.ACTIVATION).payload)
+        self.assertTrue(all("body" in row["binding_after"] for row in publishing[0]["projects"]))
+        self.assertTrue(all(row["binding_after"] is None and row["journal_after"] is None for row in actual["projects"]))
+        initialized = initialize()
+        self.assertEqual(0, initialized.returncode, initialized.stdout + initialized.stderr)
+        self.assertEqual(legacy.binding(), unique_json(output.read_bytes())["runtime_binding"])
+        project_service.apply_project(project_service.preview_project(self.state, older, "disable"))
+        self.assertFalse(self.plan().after_guards, "旧disabled reader也必须纳入保护")
+        project_service.apply_project(project_service.preview_project(self.state, older, "follow"))
+        project_service.apply_project(project_service.preview_project(self.state, older, "enable"))
+        current_plan = self.plan()
+        self.assertTrue(current_plan.after_guards, "仅used_bindings保留的旧任务pin不否决新格式")
+        central.apply(current_plan)
+        read = runtime_bridge.read_resource(self.state, older, "product/WORKFLOW.md", binding=legacy.binding())
+        self.assertEqual(store.read_core_source(legacy, "product/WORKFLOW.md"), read)
+        query = runtime_bridge.python_helper(self.state, older, "lib/task_graph_cli.py",
+            ("fingerprints", "--root", str(older), "--input", str(input_path)), binding=legacy.binding())
+        # 合法指纹映射单独输入，真实旧helper在bodyless全局记录下仍可读取。
+        input_path.write_text('[".agent-workflow/project.yaml"]')
+        result = subprocess.run(query.command, cwd=query.cwd, env=query.environment, capture_output=True, text=True, timeout=60)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        frozen = self.plan()
+        self.assertTrue(frozen.after_guards)
+        project_service.apply_project(project_service.preview_project(self.state, older, "use", content_id=legacy.content_id))
+        input_path.write_text(json.dumps(payload), encoding="utf-8")
+        output.unlink()
+        adopted = initialize()
+        self.assertEqual(0, adopted.returncode, adopted.stdout + adopted.stderr)
+        self.assertEqual(legacy.binding(), unique_json(output.read_bytes())["runtime_binding"])
+        before_apply = read_state(self.state, policy.ACTIVATION)
+        with self.assertRaisesRegex(ValueError, "预览"):
+            central.apply(frozen)
+        self.assertEqual(before_apply, read_state(self.state, policy.ACTIVATION))
+
+    def test_pending_after_guard_keeps_recovery_data_and_rejects_record_replacement(self):
+        self.enable(); self.register(self.project)
+        plan, actual_save = self.plan(), central._save
+        def stop_final_save(state, journal, expected):
+            if journal["phase"] == "applied":
+                self.assertTrue(all(row["binding_after"] is None for row in journal["projects"]))
+                raise OSError("fixture final atomic save interrupted")
+            return actual_save(state, journal, expected)
+        with patch.object(central, "_save", side_effect=stop_final_save), self.assertRaisesRegex(ValueError, "current 已发布"):
+            central.apply(plan)
+        pending = read_state(self.state, policy.ACTIVATION)
+        data = unique_json(pending.payload)
+        self.assertEqual("publishing", data["phase"])
+        self.assertTrue(all("sha256" in row["binding_after"] for row in data["projects"]))
+        self.assertEqual(plan.captures[0].binding_before.value(), data["projects"][0]["binding_before"])
+        before = projects.read_binding_record(self.state, self.project)[0]
+        with Tree(self.state) as tree:
+            projects._write_private(tree, projects._state_relative(self.project, "bindings"), before.payload, expected=before)
+        with self.assertRaises(ValueError):
+            central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertEqual(pending, read_state(self.state, policy.ACTIVATION), "失败恢复不能清理pending守卫或恢复前像")
+
+    def test_compensation_final_save_is_atomic_and_recovery_clears_only_success(self):
+        self.enable()
+        second = self.workspace / ("compensation-" + uuid.uuid4().hex[:8]); second.mkdir(); self.enable(second)
+        self.register(self.project, second)
+        plan, actual_apply, actual_save = self.plan(), projects.apply, central._save
+        calls = []
+        def fail_second(proposal, **kwargs):
+            calls.append(proposal.project)
+            if len(calls) == 2:
+                raise OSError("fixture second project failure")
+            return actual_apply(proposal, **kwargs)
+        def fail_terminal(state, journal, expected):
+            if journal["phase"] == "compensated":
+                self.assertTrue(all(row["binding_after"] is None for row in journal["projects"]))
+                raise OSError("fixture compensation terminal interrupted")
+            return actual_save(state, journal, expected)
+        with patch.object(projects, "apply", side_effect=fail_second), patch.object(central, "_save", side_effect=fail_terminal), \
+                self.assertRaisesRegex(OSError, "terminal interrupted"):
+            central.apply(plan)
+        pending = unique_json(read_state(self.state, policy.ACTIVATION).payload)
+        self.assertEqual("compensating", pending["phase"])
+        self.assertTrue(any(row["binding_after"] is not None for row in pending["projects"]))
+        self.assertEqual(plan.captures[0].binding_before.value(), pending["projects"][0]["binding_before"])
+        recovered = central.recover(central.preview_recovery(self.state, native_context=self.context))
+        self.assertTrue(recovered["compensated"])
+        settled = unique_json(read_state(self.state, policy.ACTIVATION).payload)
+        self.assertEqual("compensated", settled["phase"])
+        self.assertTrue(all(row["binding_after"] is None and row["journal_after"] is None for row in settled["projects"]))
 
     def test_unqualified_controller_is_rejected_before_native_preview_but_pin_remains_readable(self):
         # 从现有有限来源精确去掉控制声明，再通过正式import建立无资格core。
@@ -558,12 +791,20 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         target, tolerance = 7 * LIMIT // 8, 16 * 1024
         padding, samples = 0, []
         # 用户只改已归属块之外的正文；每轮都由生产preview重新验证受管块、
-        # 物理身份和原像，并由真实producer在RAM中计算预算。不改机器记录、
-        # 不拼造journal/receipt，也不把上一轮已失效的计划交给apply。
+        # 物理身份和原像，并由真实producer在RAM中计算预算。私有记录只由
+        # 正式repair发布，不手改/拼造journal或receipt，不应用上一轮失效计划。
         for _ in range(5):
             user = b"User instructions.\n" + b"x" * padding + b"\n"
             for path in paths:
                 (path / "AGENTS.md").write_bytes(merge_central_block(user, blocks[path]))
+                # after不再携带正文，正控必须把载荷经正式服务记入真实before。
+                # 两次无资源变化repair分别刷新当前binding和上一journal中的
+                # binding前像，消除上一轮填充量的依赖；不手改私有记录、不重复
+                # enable，每轮仍只做一次中央只读preview且最多五轮。
+                for _ in range(2):
+                    repair = projects.preview(self.state, path, "repair")
+                    self.assertFalse(repair.changes, "校准只发布真实metadata，不应改变受管资源")
+                    projects.apply(repair)
             plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
             self.assertTrue(plan.summary["can_apply"], plan.summary)
             bound = central._publication_budget(plan)
@@ -579,7 +820,8 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
             self.assertGreater((padding - previous_padding) * (bound - previous_bound), 0,
                                "真实生产预算必须随块外载荷单调增长")
             # 两个小载荷样本估计放大倍数；后续只以新真实预览校正base64取整等
-            # 差异。最多五次preview，初始化仍是三次enable，没有反复发布试探。
+            # 差异。最多五次preview，仍只初始化三次enable；repair仅刷新真实
+            # before的metadata，没有重新安装资源或扩大项目启用范围。
             selected = padding + (target - bound) * (padding - previous_padding) // (bound - previous_bound)
             self.assertTrue(0 <= selected <= LIMIT // 8, "校准输入必须有界：" + repr(samples))
             self.assertNotEqual(padding, selected, "预算未收敛：" + repr(samples))

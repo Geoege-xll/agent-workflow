@@ -16,7 +16,7 @@ import stat
 import uuid
 
 from lib import runtime_store as store
-from lib.central.runtime_project import Node, Tree, absolute_directory, identity, json_bytes, node_id, read_at, relative_path, unique_json, delete_at
+from lib.central.runtime_project import Node, Tree, absolute_directory, identity, json_bytes, node_id, node_revision, read_at, relative_path, unique_json, delete_at
 from lib.platform_fs import directory_lock, os
 from . import runtime_policy as policy
 from .runtime_state import ActivationError, read_binding_record, read_journal, read_state, retained_conflicts, write_control
@@ -26,11 +26,8 @@ _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _revision(node: Node) -> dict:
-    value = {"kind": node.kind, "sha256": hashlib.sha256(node.payload).hexdigest(),
-             "mode": node.mode, "identity": list(node.identity)}
-    if os.name == "nt":
-        value["security"] = node.security
-    return value
+    # 共用强条件投影；既有生命周期记录字段/正文及引用检查语义保持一致。
+    return node_revision(node)
 
 
 def _read_lifecycle(state: Path) -> tuple[Node, dict | None]:

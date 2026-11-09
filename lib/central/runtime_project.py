@@ -227,6 +227,43 @@ class Node:
                 and content_mode(self.mode) == content_mode(other.mode))
 
 
+def validate_node_revision(value: dict) -> dict:
+    """验证只作条件守卫的完整记录摘要；不提供恢复正文或任何写入授权。
+
+    与生命周期既有wire一致，Windows必须包含ACL摘要。真实file保留全部
+    七项stat身份，不能用内容mode投影、部分inode或空planned身份代替。
+    """
+    keys = {"kind", "sha256", "mode", "identity"} | ({"security"} if os.name == "nt" else set())
+    if (not isinstance(value, dict) or set(value) != keys or not isinstance(value["kind"], str)
+            or value["kind"] not in {"file", "missing"}
+            or not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"])
+            or type(value["mode"]) is not int or not 0 <= value["mode"] <= 0o7777
+            or not isinstance(value["identity"], list)
+            or any(type(item) is not int or len(str(item)) > _STAT_DECIMAL_WIDTH for item in value["identity"])):
+        raise ProjectRuntimeError("记录条件守卫格式无效")
+    if value["kind"] == "file" and len(value["identity"]) != 7:
+        raise ProjectRuntimeError("记录条件守卫缺少真实完整身份")
+    security = value.get("security", "")
+    if os.name == "nt" and (not isinstance(security, str) or
+            (not re.fullmatch(r"[0-9a-f]{64}", security) if value["kind"] == "file" else security != "")):
+        raise ProjectRuntimeError("记录条件守卫缺少真实ACL")
+    if value["kind"] == "missing" and (value["mode"] or value["identity"] or security
+            or value["sha256"] != hashlib.sha256(b"").hexdigest()):
+        raise ProjectRuntimeError("缺失记录条件守卫包含实际快照")
+    return value
+
+
+def node_revision(node: Node) -> dict:
+    """从已读取的Node生成生命周期/发布复核共用投影，完整Node恢复合同不变。"""
+    if not isinstance(node, Node) or not isinstance(node.payload, bytes):
+        raise ProjectRuntimeError("记录条件守卫需要完整Node")
+    value = {"kind": node.kind, "sha256": hashlib.sha256(node.payload).hexdigest(),
+             "mode": node.mode, "identity": list(node.identity)}
+    if os.name == "nt":
+        value["security"] = node.security
+    return validate_node_revision(value)
+
+
 def content_mode(mode: int) -> int:
     """内容模式只在 Windows 投影 readonly 属性，绝不代表 ACL 或私有性。"""
     return int(bool(mode & 0o222)) if os.name == "nt" else mode

@@ -37,6 +37,8 @@ from lib.central.runtime_project import (
 # current控制器负责全局待结算门和初始化协调；该资格与选版helper是否自行持
 # 发布锁完全独立。旧core仍可作为任务pin读取，但不能凭旧enabled检查接管current。
 CENTRAL_CONTROL_PROTOCOL = 1
+# 该能力只声明固定reader能消费中央after条件守卫，不授予执行/新任务权限。
+CENTRAL_AFTER_GUARD_PROTOCOL = 1
 
 
 class RuntimeBridgeError(ProjectRuntimeError):
@@ -50,6 +52,16 @@ def controller_protocol(core: store.FrozenCore, *, reader=None) -> int:
     顶层字面整数；缺失或0表示无资格，1支持，其余值/动态/重复赋值失败关闭。
     连嵌套或删除写入也计入，不能在一个表面合法声明后偷偷重赋协议常量。
     """
+    return _static_protocol(core, "CENTRAL_CONTROL_PROTOCOL", reader=reader)
+
+
+def after_guard_protocol(core: store.FrozenCore, *, reader=None) -> int:
+    """从已验证固定core读取after格式能力；未知/动态声明不能降级成旧能力。"""
+    return _static_protocol(core, "CENTRAL_AFTER_GUARD_PROTOCOL", reader=reader)
+
+
+def _static_protocol(core: store.FrozenCore, name: str, *, reader=None) -> int:
+    # 两项独立协议共用原静态语法边界；不执行候选模块、不读版本号或用户环境。
     if reader is not None and not isinstance(reader, store.CoreReadSession):
         raise RuntimeBridgeError("控制协议拒绝未知核心 reader")
     body = reader.read(core, "lib/runtime_bridge.py") if reader is not None else store.read_core_source(core, "lib/runtime_bridge.py")
@@ -59,18 +71,18 @@ def controller_protocol(core: store.FrozenCore, *, reader=None) -> int:
         raise RuntimeBridgeError("所选核心中央控制协议无效") from exc
     declarations = []
     writes = [node for node in ast.walk(module) if isinstance(node, ast.Name)
-              and node.id == "CENTRAL_CONTROL_PROTOCOL" and isinstance(node.ctx, (ast.Store, ast.Del))]
+              and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del))]
     # Python的def/class/import及异常/模式绑定把名字保存在节点字段，未必产生
     # Name(Store)。这些明确重绑定同样破坏“唯一字面声明”，不能漏成合法资格。
     # 此处只校验协议声明语法；真正加载桥后仍由薄入口核验实际module值。
     other_writes = [node for node in ast.walk(module)
                     if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler,
-                                         ast.MatchAs, ast.MatchStar)) and node.name == "CENTRAL_CONTROL_PROTOCOL")
-                    or (isinstance(node, ast.MatchMapping) and node.rest == "CENTRAL_CONTROL_PROTOCOL")
-                    or (isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == "CENTRAL_CONTROL_PROTOCOL")]
+                                         ast.MatchAs, ast.MatchStar)) and node.name == name)
+                    or (isinstance(node, ast.MatchMapping) and node.rest == name)
+                    or (isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == name)]
     for statement in module.body:
         targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target] if isinstance(statement, ast.AnnAssign) else []
-        if any(isinstance(target, ast.Name) and target.id == "CENTRAL_CONTROL_PROTOCOL" for target in targets):
+        if any(isinstance(target, ast.Name) and target.id == name for target in targets):
             declarations.append(statement.value)
     if not declarations and not writes and not other_writes:
         return 0

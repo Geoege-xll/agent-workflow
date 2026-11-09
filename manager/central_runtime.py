@@ -14,7 +14,7 @@ import uuid
 
 from lib import runtime_store as store
 from lib.platform_fs import os
-from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Tree, canonical_project, json_bytes, unique_json
+from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Tree, canonical_project, json_bytes, unique_json, node_revision, validate_node_revision
 from lib.hosts.claude_instructions import read_file
 from . import runtime_policy as policy, runtime_service as projects, state_files
 from .runtime_state import ActivationError, CONFLICT_REASON_LIMIT, bounded_conflicts, publication_capacity, read_state, write_control
@@ -41,6 +41,7 @@ class CentralPlan:
     captures: tuple[ProjectCapture, ...]
     native_plan: object
     native_context: object
+    after_guards: bool = False
 
     @property
     def summary(self) -> dict:
@@ -146,6 +147,32 @@ def _require_controller(core: store.FrozenCore) -> store.FrozenCore:
     return core
 
 
+def _after_guards_allowed(state: Path, selected: dict, current: Node, captures: tuple) -> bool:
+    """双方controller及登记内所有已绑定reader都明确支持后才写新格式。
+
+    pinned/disabled项目也可能从自身固定core启动init并读取全局日志，因此不能
+    只核对受影响项目。used_bindings中的历史只读pin不参与格式否决。局部去重
+    仅存活于此调用，每次检查都重新验证固定核心，没有跨调用版本缓存。
+    """
+    from lib.runtime_bridge import after_guard_protocol
+    bindings = [selected]
+    if current.kind == "file":
+        bindings.append(unique_json(current.payload)["runtime_binding"])
+    bindings.extend(unique_json(row.binding_before.payload)["runtime_binding"]
+                    for row in captures if row.binding_before.kind == "file")
+    capable = True
+    seen = set()
+    for binding in bindings:
+        binding = store.validate_binding(binding)
+        token = (binding["protocol_version"], binding["content_id"], binding["manifest_sha256"])
+        if token not in seen:
+            seen.add(token)
+            with store.core_reader(binding, state) as reader:
+                supported = after_guard_protocol(reader.core, reader=reader)
+            capable = supported == 1 and capable
+    return capable
+
+
 def preview(state: Path, action: str = "activate", *, binding: dict | None = None,
             source_root: Path | None = None, native_context=None) -> CentralPlan:
     """预览只激活已导入核心；来源导入、中央激活和程序升级是三个独立动作。"""
@@ -179,8 +206,9 @@ def preview(state: Path, action: str = "activate", *, binding: dict | None = Non
         runtime = projects.preview(state, project, "use", binding=selected, native_context=context,
                                    native_ready_hosts=tuple(native.hosts)) if affected else None
         captures.append(ProjectCapture(project, policy_node, binding_node, journal_node, runtime, project_policy["mode"]))
+    captured = tuple(captures)
     plan = CentralPlan(state, action, selected, current_node, read_state(state, policy.ACTIVATION), raw,
-                       tuple(captures), native, context)
+                       captured, native, context, _after_guards_allowed(state, selected, current_node, captured))
     if plan.summary["can_apply"]:
         _publication_budget(plan)
     return plan
@@ -226,10 +254,36 @@ def _validate_journal_data(value: dict) -> dict:
             Node.from_value(row[key])
         for key in ("binding_after", "journal_after"):
             if row[key] is not None:
-                Node.from_value(row[key])
+                _after_revision(row[key])
         policy.validate_current({"schema_version": 1, "runtime_binding": value["runtime_binding"],
                                  "previous_binding": None, "generation": row["transaction_id"], "native_roots": []})
     return value
+
+
+def _after_revision(value: dict) -> dict:
+    """封闭after子codec：旧完整Node或强record guard，不接受混合字段。
+
+    只有after具有两种明确结构，before/current/policy仍只接受原Node codec。
+    两种结构均须代表实际私有file；新摘要不能成为缺失/planned节点或恢复正文。
+    """
+    if isinstance(value, dict) and "body" in value:
+        revision = node_revision(Node.from_value(value))
+    else:
+        revision = validate_node_revision(value)
+    if revision["kind"] != "file" or revision["mode"] != 0o600:
+        raise ActivationError("中央after条件守卫必须属于实际私有记录")
+    return revision
+
+
+def _clear_settled_after(journal: dict) -> None:
+    """仅由成功结算路径在最终原子保存前移除已无用途的after证明。
+
+    before仍是完整恢复材料；pending/conflict及generic_save绝不调用。若最终
+    保存失败，磁盘仍是上一份带完整guard的pending，恢复可继续精确复核。
+    已结算记录的None也让后来公开add/use的旧reader安全读取历史全局日志。
+    """
+    for row in journal["projects"]:
+        row["binding_after"] = row["journal_after"] = None
 
 
 def _save(state: Path, journal: dict, expected: Node) -> Node:
@@ -251,7 +305,7 @@ def _journal_value(plan: CentralPlan, identifier: str) -> dict:
                          for capture in plan.captures if capture.runtime_plan], "conflicts": []}
 
 
-def _settlement_budget(journal: dict, *, receipt_increment: int = 0) -> int:
+def _settlement_value(journal: dict) -> dict:
     """封闭阶段的逐字段上界，同时涵盖失败/补偿诊断，不截断任何历史Node。
 
     每个项目及native最多产生一条中央补偿冲突；reason在真实_save中执行同一
@@ -266,7 +320,11 @@ def _settlement_budget(journal: dict, *, receipt_increment: int = 0) -> int:
         {"path": row["project"], "reason": "\x00" * CONFLICT_REASON_LIMIT, "code": "project_compensation_conflict"}
         for row in bound["projects"]] + [
         {"path": "native", "reason": "\x00" * CONFLICT_REASON_LIMIT, "code": "native_compensation_conflict"}]
-    size = len(json_bytes(bound)) + receipt_increment
+    return bound
+
+
+def _settlement_budget(journal: dict, *, receipt_increment: int = 0) -> int:
+    size = len(json_bytes(_settlement_value(journal))) + receipt_increment
     publication_capacity(size)
     return size
 
@@ -283,6 +341,8 @@ def _publication_budget(plan: CentralPlan) -> int:
     if type(increment) is not int or increment < 0:
         raise ActivationError("原生生产者没有提供有效容量预算")
     journal = _journal_value(plan, "f" * 32)
+    if type(plan.after_guards) is not bool:
+        raise ActivationError("中央after格式选择无效")
     affected = [capture for capture in plan.captures if capture.runtime_plan]
     for capture, row in zip(affected, journal["projects"]):
         budget = projects.publication_budget(capture.runtime_plan)
@@ -290,7 +350,13 @@ def _publication_budget(plan: CentralPlan) -> int:
             raise ActivationError("项目生产者没有提供有效容量预算")
         for field, size in (("binding_after", budget.binding_after_bytes), ("journal_after", budget.journal_after_bytes)):
             publication_capacity(size)
-            row[field] = Node("file", b"x" * size, 0o600, CAPACITY_IDENTITY, "f" * 64 if os.name == "nt" else "").value()
+            if plan.after_guards:
+                # 固定长度上界只用于RAM计数，不能作为实际after或授权见证发布。
+                row[field] = {"kind": "file", "sha256": "f" * 64, "mode": 0o600, "identity": list(CAPACITY_IDENTITY)}
+                if os.name == "nt":
+                    row[field]["security"] = "f" * 64
+            else:
+                row[field] = Node("file", b"x" * size, 0o600, CAPACITY_IDENTITY, "f" * 64 if os.name == "nt" else "").value()
     publication_capacity(len(plan.activation_before.payload))
     publication_capacity(len(json_bytes(_expected_current(journal))))
     return _settlement_budget(journal, receipt_increment=increment)
@@ -331,6 +397,8 @@ def _check_plan(plan: CentralPlan) -> None:
         if capture.runtime_plan:
             with Tree(capture.project) as tree:
                 projects._check_plan(capture.runtime_plan, tree)
+    if _after_guards_allowed(plan.state, plan.binding, plan.current_before, plan.captures) != plan.after_guards:
+        raise ActivationError("中央after格式能力在预览后变化，请重新预览")
     _require_controller(store.load_core(plan.binding, plan.state))
 
 
@@ -366,8 +434,10 @@ def apply(plan: CentralPlan, *, cancel=None) -> dict:
                     if native_issues:
                         raise ActivationError("全局原生产物在项目应用前发生变化", native_issues)
                     projects.apply(capture.runtime_plan, transaction_id=row["transaction_id"])
-                    row["binding_after"] = projects.read_binding_record(plan.state, capture.project)[0].value()
-                    row["journal_after"] = projects._journal(plan.state, capture.project)[0].value()
+                    actual_binding = projects.read_binding_record(plan.state, capture.project)[0]
+                    actual_journal = projects._journal(plan.state, capture.project)[0]
+                    row["binding_after"] = node_revision(actual_binding) if plan.after_guards else actual_binding.value()
+                    row["journal_after"] = node_revision(actual_journal) if plan.after_guards else actual_journal.value()
                     row["phase"] = "applied"
                     snapshot = _save(plan.state, journal, snapshot)
                 # current 发布前再次核对 raw registry 及全部策略，不能只信持锁。
@@ -387,6 +457,7 @@ def apply(plan: CentralPlan, *, cancel=None) -> dict:
                 # 若在此后中断，不能恢复旧项目却留下新 current；recover 会验证
                 # 已发布批次并补终态。此异常分支仅补偿 current 尚未发布的批次。
                 journal["phase"] = "applied"
+                _clear_settled_after(journal)
                 snapshot = _save(plan.state, journal, snapshot)
             except BaseException:
                 _, actual = policy.current_snapshot(plan.state)
@@ -422,6 +493,8 @@ def _compensate(state: Path, journal: dict, snapshot: Node, context) -> dict:
     except (OSError, ValueError) as exc:
         conflicts.append({"path": "native", "reason": str(exc), "code": "native_compensation_conflict"})
     journal.update(phase="conflict" if conflicts else "compensated", conflicts=conflicts)
+    if not conflicts:
+        _clear_settled_after(journal)
     _save(state, journal, snapshot)
     if conflicts:
         raise ActivationError("中央激活补偿遇到冲突，保留待结算门与全部恢复资料", conflicts)
@@ -437,7 +510,8 @@ def _verify_applied(state: Path, journal: dict, context) -> None:
         journal_node, project_journal = projects._journal(state, project)
         checked = projects.status(state, project)
         if (row["phase"] != "applied" or row["binding_after"] is None or row["journal_after"] is None
-                or binding_node != Node.from_value(row["binding_after"]) or journal_node != Node.from_value(row["journal_after"])
+                or node_revision(binding_node) != _after_revision(row["binding_after"])
+                or node_revision(journal_node) != _after_revision(row["journal_after"])
                 or not record or record["generation"] != row["transaction_id"] or record["runtime_binding"] != journal["runtime_binding"]
                 or not record["enabled"] or not project_journal or project_journal["id"] != row["transaction_id"]
                 or project_journal["phase"] != "applied" or not checked["resources_healthy"]):
@@ -479,6 +553,7 @@ def recover(plan: RecoveryPlan) -> dict:
             if policy.current_snapshot(plan.state)[0] != current_node:
                 raise ActivationError("已发布 current 在资源核验期间发生变化，保留待结算门")
             journal.update(phase="applied", conflicts=[])
+            _clear_settled_after(journal)
             _save(plan.state, journal, plan.before)
             return {**status(plan.state), "recovered": True, "transaction_id": journal["id"]}
         before = Node.from_value(journal["current_before"])
