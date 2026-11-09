@@ -533,14 +533,11 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.register(self.project, second)
         return central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
 
-    def large_projects(self, padding=32000):
+    def large_projects(self, *, padding):
         """真实用户入口段由生产服务保留，不填造journal/receipt或复制客户资料。"""
-        # 用户段会完整进入binding的baseline/expected及journal的前后像，再由
-        # 中央Node封装；绝对路径越短，这些记录的额外字节也越少。25000字节在
-        # Linux短根仅生成约3.03MB，未覆盖旧marker的4MiB失败边界。每项目增加
-        # 7000字节真实用户段，使短根仍有充分余量超过3MiB；长根的完整阶段预算
-        # 仍须通过原4MiB预检。下面两个测试保留实际大小/预算/应用与恢复断言，
-        # 不靠临时根的长度制造覆盖；显式150000字节的超限负控保持原输入。
+        # 显式载荷在首次启用前写入，保留150000字节超限负控的原始输入阶段。
+        # 正控先以零填充真实启用三项目一次，再由下面的只读预算选择块外用户
+        # 内容大小，避免路径/正文变化使固定填充量偶然越过生产4MiB上限。
         paths = [self.project]
         for _ in range(2):
             project = self.workspace / ("large-" + uuid.uuid4().hex[:8])
@@ -552,11 +549,47 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.register(*paths)
         return tuple(paths)
 
+    def large_activation(self):
+        """以真实用户编辑和生产预览校准大载荷，仅发布最后一份真实计划。"""
+        from lib.central.runtime_project import central_block, merge_central_block
+        paths = self.large_projects(padding=0)
+        blocks = {path: central_block((path / "AGENTS.md").read_bytes()) for path in paths}
+        self.assertTrue(all(blocks.values()))
+        target, tolerance = 7 * LIMIT // 8, 16 * 1024
+        padding, samples = 0, []
+        # 用户只改已归属块之外的正文；每轮都由生产preview重新验证受管块、
+        # 物理身份和原像，并由真实producer在RAM中计算预算。不改机器记录、
+        # 不拼造journal/receipt，也不把上一轮已失效的计划交给apply。
+        for _ in range(5):
+            user = b"User instructions.\n" + b"x" * padding + b"\n"
+            for path in paths:
+                (path / "AGENTS.md").write_bytes(merge_central_block(user, blocks[path]))
+            plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
+            self.assertTrue(plan.summary["can_apply"], plan.summary)
+            bound = central._publication_budget(plan)
+            samples.append((padding, bound))
+            if abs(bound - target) <= tolerance:
+                print("large_fixture", {"samples": samples, "headroom": LIMIT - bound})
+                return paths, plan, bound, user
+            if len(samples) == 1:
+                self.assertLess(bound, target - tolerance, "最小载荷已超过正控目标，不能靠缩短根或扩容量绕过")
+                padding = 4096
+                continue
+            previous_padding, previous_bound = samples[-2]
+            self.assertGreater((padding - previous_padding) * (bound - previous_bound), 0,
+                               "真实生产预算必须随块外载荷单调增长")
+            # 两个小载荷样本估计放大倍数；后续只以新真实预览校正base64取整等
+            # 差异。最多五次preview，初始化仍是三次enable，没有反复发布试探。
+            selected = padding + (target - bound) * (padding - previous_padding) // (bound - previous_bound)
+            self.assertTrue(0 <= selected <= LIMIT // 8, "校准输入必须有界：" + repr(samples))
+            self.assertNotEqual(padding, selected, "预算未收敛：" + repr(samples))
+            padding = selected
+        self.fail("五次真实预览仍未达到3.5MiB±16KiB：" + repr(samples))
+
     def test_large_aggregate_activation_and_producer_bounds(self):
         from manager import native_agents
-        paths = self.large_projects()
-        plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
-        bound = central._publication_budget(plan)
+        from lib.central.runtime_project import central_block, merge_central_block
+        paths, plan, bound, user = self.large_activation()
         budgets = {capture.project: projects.publication_budget(capture.runtime_plan) for capture in plan.captures}
         native_bound = native_agents.receipt_budget(plan.native_plan)
         central.apply(plan)
@@ -571,6 +604,8 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         for path in paths:
             self.assertLessEqual(len(projects.read_binding_record(self.state, path)[0].payload), budgets[path].binding_after_bytes)
             self.assertLessEqual(len(projects._journal(self.state, path)[0].payload), budgets[path].journal_after_bytes)
+            actual = (path / "AGENTS.md").read_bytes()
+            self.assertEqual(merge_central_block(user, central_block(actual)), actual)
         # no-op producer也必须以真实持久身份证明；其budget只返回数字。
         noop = native_agents.preview_global(self.state, self.alternate.binding(), context=self.context)
         self.assertFalse(noop.summary["changes"])
@@ -579,10 +614,10 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.assertEqual(increment, len(json_bytes({"native_receipt": receipt})) - len(json_bytes({"native_receipt": None})))
 
     def test_large_aggregate_pending_can_conditionally_compensate(self):
-        paths = self.large_projects()
+        paths, plan, bound, _ = self.large_activation()
         originals = {path: projects.read_binding_record(self.state, path)[0] for path in paths}
+        user_files = {path: (path / "AGENTS.md").read_bytes() for path in paths}
         current = policy.current_snapshot(self.state)[0]
-        plan = central.preview(self.state, binding=self.alternate.binding(), native_context=self.context)
         save = central._save
         def interrupted_publish(state, journal, expected):
             if journal["phase"] == "publishing":
@@ -592,8 +627,10 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         with patch.object(central, "_save", side_effect=interrupted_publish), patch.object(central, "_compensate", side_effect=OSError("fixture parent interrupted")), self.assertRaises(OSError):
             central.apply(plan)
         pending = read_state(self.state, policy.ACTIVATION)
-        print("large_pending", {"actual": len(pending.payload), "limit": LIMIT})
+        print("large_pending", {"actual": len(pending.payload), "bound": bound, "limit": LIMIT})
         self.assertGreater(len(pending.payload), 3 * 1024 * 1024)
+        self.assertLessEqual(len(pending.payload), bound)
+        self.assertLessEqual(bound, LIMIT)
         self.assertIsNotNone(policy.pending(self.state))
         result = central.recover(central.preview_recovery(self.state, native_context=self.context))
         self.assertTrue(result["compensated"])
@@ -601,6 +638,9 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         self.assertEqual(current, policy.current_snapshot(self.state)[0])
         for path in paths:
             self.assertTrue(originals[path].same_content(projects.read_binding_record(self.state, path)[0]))
+            # 载荷来自启用后的真实用户编辑；补偿必须还原完整前像，不能只恢复
+            # 机器绑定或最初较小的baseline后吞掉已经加入的块外用户字节。
+            self.assertEqual(user_files[path], (path / "AGENTS.md").read_bytes())
         self.assertEqual("compensated", unique_json(read_state(self.state, policy.ACTIVATION).payload)["phase"])
         with self.assertRaisesRegex(ValueError, "已经结算"):
             central.preview_recovery(self.state, native_context=self.context)

@@ -797,12 +797,32 @@ print("最小冻结核心新 owner 独立加载成功")
             self.assertEqual(originals[relative], (self.project / relative).read_bytes())
 
     def test_disable_preserves_pin_documents_config_and_core(self):
+        # fingerprint查询应核验持续存在的用户工程文件。纯工作流AGENTS入口
+        # 没有用户baseline，停用时应合法删除，不能把它当作只读helper的输入。
+        user_file = self.project / "pyproject.toml"
+        user_file.write_bytes(b'[project]\nname="disabled-user-fixture"\nversion="0.1.0"\n')
+        user_before = user_file.read_bytes()
+        user_sha = hashlib.sha256(user_before).hexdigest()
+        fingerprints = self.project / "fingerprints.json"
+        fingerprints.write_text(json.dumps({"pyproject.toml": user_sha}), encoding="utf-8")
+        self.assertFalse((self.project / "AGENTS.md").exists())
         self.enable()
+        self.assertTrue((self.project / "AGENTS.md").is_file())
+        def check_user_fingerprint():
+            self.assertEqual(user_before, user_file.read_bytes())
+            self.assertEqual(user_sha, hashlib.sha256(user_file.read_bytes()).hexdigest())
+            queried = self.invoke("--binding", json.dumps(self.core.binding()), "helper", "lib/task_graph_cli.py",
+                                  "fingerprints", "--root", str(self.project), "--input", str(fingerprints))
+            self.assertEqual(0, queried.returncode, queried.stderr)
+            self.assertEqual({"matched": True, "checked": 1, "changed": []}, json.loads(queried.stdout))
+        check_user_fingerprint()
         config = (self.project / resources.CONFIG).read_bytes()
         document = (self.project / "docs/PROJECT.md").read_bytes()
         result = service.apply(service.preview(self.state, self.project, "disable"))
         self.assertFalse(result["enabled"])
         self.assertEqual("disabled", result["state"])
+        self.assertFalse((self.project / "AGENTS.md").exists())
+        check_user_fingerprint()
         self.assertEqual(config, (self.project / resources.CONFIG).read_bytes())
         self.assertEqual(document, (self.project / "docs/PROJECT.md").read_bytes())
         self.assertFalse((self.project / ".agents/skills/xy-workflow").exists())
@@ -1643,7 +1663,11 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             # 偏好组合验证针对真实后端工程；空目录画像只有通用 QA/UIUX 角色。
             # 明确清单让发现器按实际工程事实启用后端，绝不让全局角色安装或
             # 本次偏好请求反向补齐画像；空画像拒绝由偏好专项回归单独覆盖。
-            (project / "pyproject.toml").write_text('[project]\nname="native-central-fixture"\nversion="0.1.0"\n', encoding="utf-8")
+            user_file = project / "pyproject.toml"
+            user_file.write_text('[project]\nname="native-central-fixture"\nversion="0.1.0"\n', encoding="utf-8")
+            user_before = user_file.read_bytes()
+            user_sha = hashlib.sha256(user_before).hexdigest()
+            self.assertFalse((project / "AGENTS.md").exists())
             # 此唯一 source fixture 为验收“移除来源后仍可运行”而存在；不移动真实仓库，
             # 不复制 state/业务目录/个人 Skills，不按重试再造候选。只复制正式 core 边界。
             for directory in store.CORE_DIRECTORIES:
@@ -1712,6 +1736,9 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
                     patch.object(service, "_register_installed", side_effect=observe_installed):
                 applied = project_service.apply_project(proposal)
             mark_stage("project_apply_complete")
+            self.assertTrue((project / "AGENTS.md").is_file())
+            self.assertEqual(user_before, user_file.read_bytes())
+            self.assertEqual(user_sha, hashlib.sha256(user_file.read_bytes()).hexdigest())
             print("NATIVE_COMPOSED_SKILL_STAGE_COUNT " + str(observed_skills), flush=True)
             # 只投影真实fixture状态字段，不输出配置正文、模型目录、环境或凭据。
             # can_apply/未抛异常不等于启用健康；先留父状态再观察原薄桥的门禁。
@@ -1799,7 +1826,9 @@ finally:
             self.assertEqual((0, expected), (read.returncode, read.stdout), read.stderr)
             mark_stage("detached_read_complete")
             fingerprints = project / "fingerprints.json"
-            fingerprints.write_text('["AGENTS.md"]', encoding="utf-8")
+            # 此输入属于工程用户文件，停用后仍须逐字节保留。使用实际原像的
+            # expected hash映射做核对，不能用列表模式只计算新的摘要后声称一致。
+            fingerprints.write_text(json.dumps({"pyproject.toml": user_sha}), encoding="utf-8")
             queried = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "fingerprints",
                              "--root", str(project), "--input", str(fingerprints))
             self.assertEqual(0, queried.returncode, queried.stderr)
@@ -1958,12 +1987,19 @@ finally:
             mark_stage("preference_reset_complete")
             project_service.apply_project(project_service.preview_project(state, project, "disable", native_context=context))
             mark_stage("project_disable_complete")
+            # 本夹具启用前无用户AGENTS，停用应撤下工作流独占入口；pyproject
+            # 同时承担工程画像和固定pin只读消费的输入，必须保留原bytes/hash。
+            self.assertFalse((project / "AGENTS.md").exists())
+            self.assertEqual(user_before, user_file.read_bytes())
+            self.assertEqual(user_sha, hashlib.sha256(user_file.read_bytes()).hexdigest())
             self.assertNotEqual(0, invoke("check").returncode)
             self.assertEqual((0, expected), (lambda result: (result.returncode, result.stdout))(
                 invoke("--binding-b64", pin, "read", "product/GLOBAL_CONSTRAINTS.md")))
             old_query = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "fingerprints",
                                "--root", str(project), "--input", str(fingerprints))
             self.assertEqual(0, old_query.returncode, old_query.stderr)
+            self.assertTrue(json.loads(old_query.stdout)["matched"])
+            self.assertEqual(1, json.loads(old_query.stdout)["checked"])
             self.assertNotEqual(0, invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "init").returncode)
             unknown = {"protocol_version": 1, "content_id": "f" * 64, "manifest_sha256": "f" * 64}
             self.assertNotEqual(0, invoke("--binding-b64", base64.b64encode(json.dumps(unknown).encode()).decode(),
