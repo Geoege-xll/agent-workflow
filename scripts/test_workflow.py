@@ -76,10 +76,20 @@ GROUPS["windows-native-libraries"] = (
     "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_budget_is_end_to_end_and_discards_partial_output",
     "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_terminating_outer_powershell_drains_supervised_descendants",
 )
+# CI42550963192 的同一 rename 参数错误只影响以下五个真实方法；保留已绿的
+# 其余二十五方法原始证据，修复后仅补这五方法及其全部原生子场景。完整库组仍
+# 供新环境或完整库验收显式选择；修复组不做动态筛选，不把失败节点退化为 skip。
+GROUPS["windows-native-repair"] = (
+    "tests.test_windows_runtime.WindowsFilesystemNativeTest.test_exhausted_or_context_closed_scandir_does_not_pin_directory",
+    "tests.test_windows_runtime.WindowsFilesystemNativeTest.test_replacement_preserves_acl_protection_and_future_parent_inheritance",
+    "tests.test_windows_runtime.WindowsFilesystemNativeTest.test_successful_backend_file_directory_rename_and_delete",
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_consuming_regular_move_preserves_identity_and_excludes_existing_target",
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_managed_skill_exact_create_read_move_delete_and_stale_refusal",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
-NATIVE_GROUPS = frozenset(("windows-native-libraries", "windows-native"))
+NATIVE_GROUPS = frozenset(("windows-native-libraries", "windows-native-repair", "windows-native"))
 
 
 def make_parser():
