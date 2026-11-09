@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import curses
 from dataclasses import dataclass
+import os
 import unicodedata
 
 from .catalog import clean
@@ -401,6 +402,9 @@ class Theme:
 
     @classmethod
     def create(cls):
+        # NO_COLOR 只选择现有单色主题：反显、字重和文字仍分别表达焦点、
+        # 选择与结果，不改默认配色，也不让颜色成为唯一可用的状态提示。
+        if os.environ.get("NO_COLOR"):return cls()
         try:
             if not curses.has_colors():return cls()
             curses.start_color();curses.use_default_colors()

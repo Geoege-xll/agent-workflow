@@ -7,24 +7,28 @@ from copy import deepcopy
 import curses
 import codecs
 import errno
-import fcntl
 import json
 import os
 from pathlib import Path
-import pty
 import re
 import select
 import signal
 import struct
 import subprocess
 import tempfile
-import termios
 from threading import Event
 from types import SimpleNamespace
 import time
 import unittest
 from unittest.mock import patch
 import uuid
+
+# Win32 的单元/业务测试不依赖 POSIX PTY。仅在对应宿主加载这些标准库，
+# 下方真实 POSIX 终端方法保留原有平台 guard；Windows 由独立 ConPTY 节点验收。
+if os.name == "posix":
+    import fcntl
+    import pty
+    import termios
 
 from lib import runtime_store
 from lib import role_models
@@ -781,6 +785,8 @@ class TuiTest(unittest.TestCase):
         self.assertIn("等待",self.app.toast)
 
     def test_monochrome_and_unsupported_default_background_fall_back(self):
+        with patch.dict(os.environ,{"NO_COLOR":"1"}),patch("manager.tui_support.curses.has_colors") as probe:
+            theme=Theme.create();self.assertEqual(theme,Theme());probe.assert_not_called()
         with patch("manager.tui_support.curses.has_colors",return_value=False):
             theme=Theme.create();self.assertNotEqual(theme.selected,theme.text)
         with patch("manager.tui_support.curses.has_colors",return_value=True),patch("manager.tui_support.curses.start_color"),patch("manager.tui_support.curses.use_default_colors",side_effect=curses.error()):
@@ -1090,6 +1096,9 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                      "lib/hosts/native_context.py","lib/hosts/native_agents.py","manager/native_agents.py","manager/runtime_policy.py","manager/runtime_lifecycle.py","manager/central_runtime.py","lib/hosts/claude_instructions.py","lib/hosts/workflow_hook_install.py","lib/hosts/workflow_hook_settings.py",
                      "lib/workflow_hooks.py","lib/hosts/windows_hook_command.py","lib/hosts/merge_codex_config.py",
                      "lib/skills/shared_core_skills.py","lib/role_models.py","lib/central/role_preferences.py","lib/python_runtime.sh","lib/validate_antigravity_artifacts.py",
+                     # 原生桥 main 已统一解码三字段 pin；最小核心仍须包含该
+                     # 真实入口直接导入的模块及其静态标准路径依赖，不能绕过桥验收。
+                     "lib/runtime_pins.py","lib/standard_paths.py",
                      "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
                      "platforms/shared/core-skills.txt"):
             put(name,(PACK/name).read_bytes())
