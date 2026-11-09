@@ -258,6 +258,131 @@ class CentralProjectTest(unittest.TestCase):
         self.assertTrue(json.loads(helper.stdout)["matched"])
         self.assertEqual(1, json.loads(helper.stdout)["checked"])
 
+    def test_init_scopes_pin_sources_and_keeps_fresh_publication_gate(self):
+        """同原生组合的合法 init 决策与实际发布，计数不替代 Windows 时限证明。"""
+        from lib import runtime_pins as pins, task_graph_cli, task_graph_init, task_graph_records
+        from tests.test_task_graph_init import BUILTIN_ENGINEERING, decisions
+        self.enable()
+        selected = decisions()
+        selected["standards"].update(required_engineering_rule_ids=["eng-common-005"],
+            leaves=[{"path": BUILTIN_ENGINEERING, "domain": "engineering", "rule_ids": ["eng-common-005"]}])
+        selected["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+        input_path, output = self.project / "init-decisions.json", self.project / "initialized.json"
+        body = json.dumps(selected, ensure_ascii=False).encode()
+        input_path.write_bytes(body)
+        invocation = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py",
+            ("init", "--root", str(self.project), "--input", str(input_path), "--output", str(output)), binding=self.core.binding())
+        self.assertEqual(1, invocation.admission_protocol)
+        sessions, waits = [], []
+        original_reader, original_coordination, original_publish = pins._source_reader, runtime_policy.coordination, task_graph_records.publish
+        def assert_closed():
+            self.assertTrue(all(reader._root is None for reader in sessions), "source reader must close before commit")
+        @contextmanager
+        def observed_reader(*args):
+            with original_reader(*args) as reader:
+                sessions.append(reader)
+                yield reader
+        @contextmanager
+        def coordination(*args, **kwargs):
+            assert_closed()
+            started = time.monotonic()
+            with original_coordination(*args, **kwargs):
+                waits.append(time.monotonic() - started)
+                yield
+        def publish(*args, **kwargs):
+            assert_closed()
+            return original_publish(*args, **kwargs)
+        with patch.dict(os.environ, invocation.environment, clear=True), \
+                patch.object(pins, "_source_reader", side_effect=observed_reader), \
+                patch.object(runtime_policy, "coordination", side_effect=coordination), \
+                patch.object(task_graph_records, "publish", side_effect=publish), ExitStack() as stack:
+            counted = {name: stack.enter_context(patch.object(store, name, wraps=getattr(store, name)))
+                       for name in ("_scan", "_verify_snapshot", "_read_regular", "_entry_identity", "_read_manifest_source")}
+            result = task_graph_init.initialize(selected, self.project, output, task_graph_cli._execute,
+                                                 input_path=input_path, input_body=body)
+        facts = {name: value.call_count for name, value in counted.items()}
+        print("PORTABLE_INIT_AFTER " + json.dumps({"counts": facts, "source_scopes": len(sessions),
+              "coordination_entries": len(waits), "lock_wait_s": waits}, sort_keys=True), flush=True)
+        self.assertEqual(11, facts["_scan"])
+        self.assertEqual(22, facts["_verify_snapshot"])
+        self.assertEqual(4, len(sessions), "initial/final fingerprints and both catalogs stay independently fresh")
+        self.assertEqual(1, len(waits))
+        assert_closed()
+        self.assertTrue(result["initialized"])
+        graph = json.loads(output.read_bytes())
+        self.assertEqual(self.core.binding(), graph["runtime_binding"])
+        self.assertEqual({"protocol_version", "content_id", "manifest_sha256"}, set(graph["runtime_binding"]))
+        self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), result["sha256"])
+        # 同一合法输入再经真实生成薄桥启动 core 的脚本入口，覆盖直接脚本
+        # import 分支；不以当前进程的包导入成功冒充子 helper 可以真实执行。
+        bridged_output = self.project / "bridge-initialized.json"
+        bridged = self.invoke("--binding", json.dumps(self.core.binding()), "helper", "lib/task_graph_cli.py", "init",
+                              "--root", str(self.project), "--input", str(input_path), "--output", str(bridged_output))
+        self.assertEqual(0, bridged.returncode, bridged.stdout + bridged.stderr)
+        self.assertEqual(output.read_bytes(), bridged_output.read_bytes())
+        self.assertEqual(self.core.binding(), json.loads(bridged_output.read_bytes())["runtime_binding"])
+
+    def test_pinned_source_scopes_keep_context_members_and_cross_call_tamper_guards(self):
+        """源读取优化仍消费真实固定核心，错误桥三根和后置变化都不能获得正文。"""
+        from lib import runtime_pins as pins, validate_project_docs as docs
+        from lib.standard_paths import BUILTIN_STANDARD_SOURCES
+        self.enable()
+        invocation = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", ("fingerprints",), binding=self.core.binding())
+        expected = {path: (self.core.root / path).read_bytes() for path in BUILTIN_STANDARD_SOURCES}
+        first = next(iter(expected))
+        source_catalog = docs.builtin_standard_rule_catalog(PACK)
+        with patch.dict(os.environ, invocation.environment, clear=True):
+            for action, wanted in ((lambda: pins.read_source(self.core.binding(), first), expected[first]),
+                                   (lambda: pins.read_builtin_sources(self.core.binding()), expected),
+                                   (lambda: docs.builtin_standard_rule_catalog(PACK, binding=self.core.binding()), source_catalog)):
+                with patch.object(store, "_scan", wraps=store._scan) as scans:
+                    actual = action()
+                self.assertEqual(1, scans.call_count)
+                self.assertEqual(wanted, actual)
+            with patch.object(store, "_SOURCE_BATCH_BYTES_LIMIT", 1), self.assertRaisesRegex(ValueError, "预算"):
+                pins.read_builtin_sources(self.core.binding())
+            with self.assertRaises(ValueError):
+                pins.read_source(self.core.binding(), "roles/unregistered.md")
+            with self.assertRaises(ValueError):
+                pins.read_builtin_source(self.core.binding(), "roles/xy-backend.md")
+            with self.assertRaises(ValueError):
+                pins.record_binding({"runtime_binding": self.core.binding()}, reader=object())
+            with store.core_reader(self.alternate.binding(), self.state) as reader:
+                with self.assertRaises(ValueError):
+                    pins.record_binding({"runtime_binding": self.core.binding()}, reader=reader)
+            with self.assertRaises(ValueError):
+                pins.record_binding({"runtime_binding": self.core.binding()}, reader=reader)
+            for key, value in ((pins.BINDING_ENV, json.dumps(self.alternate.binding())),
+                               (pins.CORE_ENV, str(self.source)),
+                               (pins.CONFIG_ENV, str(self.project / "project.yaml")),
+                               (pins.PROJECT_ENV, str(self.workspace / "missing-project"))):
+                with self.subTest(context=key), patch.dict(os.environ, {key: value}), self.assertRaises((OSError, ValueError)):
+                    pins.read_builtin_sources(self.core.binding())
+            changed = self.core.root / "product/WORKFLOW.md"
+            original, mode = changed.read_bytes(), changed.stat().st_mode & 0o777
+            def write(body):
+                changed.chmod(mode | 0o600)
+                changed.write_bytes(body)
+                changed.chmod(mode)
+            try:
+                write(original + b"tamper")
+                with self.assertRaises(ValueError):
+                    pins.read_builtin_sources(self.core.binding())
+                write(original)
+                original_read = store.CoreReadSession.read
+                def drift(reader, core, path):
+                    result = original_read(reader, core, path)
+                    if path == list(BUILTIN_STANDARD_SOURCES)[-1]:
+                        write(original + b"late unselected drift")
+                    return result
+                with patch.object(store.CoreReadSession, "read", drift), self.assertRaises(ValueError):
+                    pins.read_builtin_sources(self.core.binding())
+            finally:
+                write(original)
+            with patch.object(store, "_scan", wraps=store._scan) as scans:
+                self.assertEqual(expected, pins.read_builtin_sources(self.core.binding()))
+            self.assertEqual(1, scans.call_count, "next call freshly validates, never reuse earlier permission or bytes")
+
     def test_enable_native_resources_and_read_only_preview(self):
         before = sorted(str(path) for path in self.project.rglob("*"))
         binding_paths = sorted((self.state / "bindings").glob("*")) if (self.state / "bindings").exists() else []
