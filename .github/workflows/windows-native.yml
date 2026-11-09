@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run fixed native central-ACL and renderer-process repair stages or capability probe; complete acceptance is still blocked'
+        description: 'Run the fixed native central-copy repair stage or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -108,16 +108,13 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 15
     strategy:
-      # 两个阶段独立取证，任一路失败不取消另一路；后续只保留实际失败 scope，
+      # 固定阶段各自取证，任一路失败不取消其它路；后续只保留实际失败 scope，
       # 不用一次失败触发已经有效的库、中央或 HTML 全分支保险重跑。
       fail-fast: false
       matrix:
         include:
-          - group: windows-native-central-acl-repair
+          - group: windows-native-central-copy-repair
             methods: 2
-            node_required: false
-          - group: windows-native-renderer-process-repair
-            methods: 5
             node_required: true
     defaults:
       run:
@@ -160,7 +157,7 @@ jobs:
             $python = $env:NATIVE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
             "stage=$stage" | Tee-Object -FilePath $log -Append
-            "scope=affected-repair-methods-only; method_count=$env:NATIVE_METHODS; baseline_ci=42563956735" | Tee-Object -FilePath $log -Append
+            "scope=affected-repair-methods-only; method_count=$env:NATIVE_METHODS; baseline_ci=42566554380" | Tee-Object -FilePath $log -Append
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
             "python_path=$python" | Tee-Object -FilePath $log -Append
             $runtimeCheck = 'import platform,struct,sys; print(sys.version); print(platform.platform()); print("pointer_bits="+str(struct.calcsize("P")*8)); raise SystemExit(0 if sys.version_info >= (3,11) and struct.calcsize("P")==8 else 1)'

@@ -122,13 +122,20 @@ GROUPS["windows-native-renderer-process-repair"] = (
     "tests.test_install_process_windows.NativeWindowsJobTest.test_timeout_drains_child_and_grandchild_before_recovery",
     "tests.test_install_process_windows.NativeWindowsJobTest.test_capture_cancel_file_drains_its_job",
 )
+# CI42566554380 已验证 renderer/process 五方法及私有目录 chmod；后续仅补中央
+# 组合与精确 DACL 复制的新边界。组合消费者已执行 Full HTML，CI 需保留现有
+# Node 前置；本阶段不重复已绿节点，临时 repair 名称留待最终稳定清单统一收敛。
+GROUPS["windows-native-central-copy-repair"] = GROUPS["windows-native-central-repair"] + (
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_exact_dacl_copy_is_idempotent_and_private_state_republishes",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
 NATIVE_GROUPS = frozenset((
     "windows-native-libraries", "windows-native-repair", "windows-native-central",
     "windows-native-central-repair", "windows-native-renderer",
-    "windows-native-central-acl-repair", "windows-native-renderer-process-repair", "windows-native",
+    "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
+    "windows-native-central-copy-repair", "windows-native",
 ))
 
 
