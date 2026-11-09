@@ -293,6 +293,138 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
         finally:
             fs.secure_os.close(parent)
 
+    def test_same_parent_external_config_creation_security_is_exact_before_write(self):
+        """只验证 initial SD 的真实可行性；未通过精确权限证明前不写批准正文。"""
+        import msvcrt
+        def emit(event, value):
+            print("NATIVE_INITIAL_SD_TRACE " + json.dumps({"event": event, "value": value}, sort_keys=True), flush=True)
+        project = self.root / "initial-sd-project"
+        project.mkdir()
+        host = project / ".codex"
+        host.mkdir()
+        source, target = host / "config.toml", host / (".agent-workflow-central-" + "e" * 32 + "-26.stage")
+        source.write_bytes(b"# existing user config\n")
+        approved = b"# existing user config\n# approved initial-SD stage\n"
+        parent = fs.secure_os.open(host, fs.DIRECTORY | fs.NOFOLLOW)
+        source_handle = None
+        try:
+            directory = fs.secure_os._directories[parent]
+            source_handle = fs._open_handle(source, fs.READ, sharing=fs.SHARE_READ)
+            source_snapshot = fs._opened_snapshot(source_handle, max_bytes=fs._LIMIT)
+            source_before = _native_clone_observation(source_handle, label="initial-source")
+            parent_before = _native_clone_observation(directory.handle, label="initial-parent")
+            self.assertEqual(list(source_snapshot["identity"]), source_before["identity"])
+            self.assertEqual(source_snapshot["security"], source_before["security_sha256"])
+            emit("before-create", {"source": source_before, "parent": parent_before,
+                                   "source_payload_sha256": hashlib.sha256(source_snapshot["payload"]).hexdigest()})
+            raw_handle, descriptor, failure = None, None, None
+            try:
+                with fs._security_policy(source_handle) as policy:
+                    # 只借用固定源 HANDLE 当前的 owner+DACL/control 描述符；
+                    # sharing 不阻止 WRITE_DAC，所以在实际创建前仍精确核源。
+                    self.assertEqual((source_snapshot["identity"], source_snapshot["security"]), fs._metadata(source_handle))
+                    self.assertEqual(source_snapshot["security"], policy.fingerprint)
+                    attributes = fs._SecurityAttributes(ctypes.sizeof(fs._SecurityAttributes), policy.descriptor, 0)
+                    emit("CreateFileW.request", {"access": fs.READ | fs.WRITE, "sharing": 0, "disposition": 1,
+                                                 "flags": fs.OPEN_REPARSE_POINT | fs.BACKUP_SEMANTICS,
+                                                 "inherit_handle": False, "source_security": policy.fingerprint})
+                    # 复用真实 no-follow/单链接检查原语。它在 exclusive=True 时
+                    # 走 CREATE_NEW，hTemplateFile=NULL，不做 restrict/SetSI。
+                    raw_handle = fs._open_handle(target, fs.READ | fs.WRITE, create=True, exclusive=True,
+                                                  security=ctypes.byref(attributes), sharing=0)
+                    emit("CreateFileW.returned", {"success": True})
+                empty = _native_clone_observation(raw_handle, label="initial-empty-stage")
+                emit("created-same-handle-empty", empty)
+                self.assertTrue(stat.S_ISREG(empty["identity"][2]))
+                self.assertEqual(1, empty["identity"][3])
+                self.assertEqual(0, empty["identity"][4])
+                self.assertEqual(source_snapshot["mode"], stat.S_IMODE(empty["identity"][2]))
+                self.assertEqual(source_before["file_attributes"], empty["file_attributes"])
+                for key in ("owner_sid_sha256", "control", "dacl_key_sha256", "aces", "security_sha256"):
+                    self.assertEqual(source_before[key], empty[key], "initial-SD." + key)
+                # CRT 接管原 HANDLE 后仅由真实流关闭；不 dup、不再调用原生
+                # CloseHandle，也不在关闭前重开 stage 取得另一份“当前归属”。
+                descriptor = msvcrt.open_osfhandle(raw_handle, os.O_RDWR | os.O_BINARY | os.O_NOINHERIT)
+                raw_handle = None
+                stream = os.fdopen(descriptor, "w+b")
+                descriptor = None
+                with stream:
+                    owned_handle = msvcrt.get_osfhandle(stream.fileno())
+                    self.assertEqual(8, stream.write(approved[:8]))
+                    stream.flush()
+                    # 刻意在只有部分正文且尚未 seal 时发起真实叶子重开，
+                    # 只接受共享冲突32；普通权限拒绝5不能冒充 share0 保护。
+                    for label, access in (("READ", fs.READ), ("WRITE", fs.WRITE), ("DELETE", fs.DELETE)):
+                        try:
+                            extra = fs._open_handle(target, access, sharing=fs.SHARE_READ | fs.SHARE_WRITE | fs.SHARE_DELETE)
+                        except OSError as exc:
+                            emit("partial-stage-reopen", {"access": label, "winerror": exc.winerror})
+                            self.assertEqual(32, exc.winerror, "必须实际命中 ERROR_SHARING_VIOLATION")
+                        else:
+                            fs._close(extra)
+                            self.fail("share0 未拒绝部分 stage 的 " + label + " 重开")
+                    self.assertEqual(len(approved) - 8, stream.write(approved[8:]))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                    stream.seek(0)
+                    self.assertEqual(approved, stream.read())
+                    sealed = _native_clone_observation(owned_handle, label="initial-sealed-stage")
+                    emit("sealed-same-handle-before-close", {**sealed, "payload_sha256": hashlib.sha256(approved).hexdigest()})
+                    self.assertEqual(empty["identity"][:4], sealed["identity"][:4])
+                    self.assertEqual(len(approved), sealed["identity"][4])
+                    self.assertEqual(empty["file_attributes"], sealed["file_attributes"])
+                    self.assertEqual(source_snapshot["security"], sealed["security_sha256"])
+                # 关闭前已固定 creator 身份/批准正文/精确安全事实；首读只验证
+                # 这些事实，绝不把新路径状态直接追认为本轮 stage。
+                closed_handle = fs._open_handle(target, fs.READ, sharing=fs.SHARE_READ)
+                try:
+                    closed = _native_clone_observation(closed_handle, label="initial-closed-stage")
+                    actual = fs._opened_snapshot(closed_handle, max_bytes=fs._LIMIT)
+                    emit("closed-first-read", {**closed, "payload_sha256": hashlib.sha256(actual["payload"]).hexdigest()})
+                    self.assertEqual(list(actual["identity"]), closed["identity"])
+                    self.assertEqual(approved, actual["payload"])
+                    self.assertEqual(sealed["identity"][:5], closed["identity"][:5])
+                    # 沿既有关闭合同只容许 LastWriteTime 结算，ctime 不豁免。
+                    self.assertEqual(sealed["identity"][6:], closed["identity"][6:])
+                    self.assertEqual(source_snapshot["mode"], actual["mode"])
+                    self.assertEqual(source_snapshot["security"], actual["security"])
+                    self.assertEqual(empty["file_attributes"], closed["file_attributes"])
+                    for key in ("owner_sid_sha256", "control", "dacl_key_sha256", "aces", "security_sha256"):
+                        self.assertEqual(source_before[key], closed[key], "closed-SD." + key)
+                finally:
+                    fs._close(closed_handle)
+            except BaseException as exc:
+                failure = exc
+                emit("original-error", {"type": type(exc).__name__, "winerror": getattr(exc, "winerror", None), "message": str(exc)})
+                raise
+            finally:
+                try:
+                    source_after = _native_clone_observation(source_handle, label="final-source")
+                    parent_after = _native_clone_observation(directory.handle, label="final-parent")
+                    emit("finally-source-parent", {"source": source_after, "parent": parent_after})
+                    self.assertEqual(source_snapshot, fs.node_snapshot(parent, source.name))
+                    self.assertEqual((source_snapshot["identity"], source_snapshot["security"]), fs._metadata(source_handle))
+                    # 自己创建子文件改变目录时间合法；原目录实体与完整安全
+                    # 摘要必须保持，不能把自己的 mtime 更新误判为外来竞态。
+                    self.assertEqual(parent_before["identity"][:2], parent_after["identity"][:2])
+                    self.assertEqual(parent_before["security_sha256"], parent_after["security_sha256"])
+                except BaseException as observation_error:
+                    if failure is None:
+                        raise
+                    failure.add_note("final source/parent proof failed: " + repr(observation_error))
+                    emit("finally-observation-error", {"type": type(observation_error).__name__, "message": str(observation_error)})
+                finally:
+                    # fdopen 失败前仍归当前栈；成功后流已负责关闭，避免双重
+                    # CloseHandle 误关后来复用的对象。创建失败不认领同名路径。
+                    if descriptor is not None:
+                        os.close(descriptor)
+                    if raw_handle is not None:
+                        fs._close(raw_handle)
+        finally:
+            if source_handle is not None:
+                fs._close(source_handle)
+            fs.secure_os.close(parent)
+
     def test_anchored_state_stage_close_races_preserve_foreign_nodes(self):
         """真实 write_state 在写句柄关闭处遭遇改写/换 inode/ACL 源变化均保全现场。"""
         from manager import state_files
