@@ -32,6 +32,7 @@ CREATE_UNICODE_ENVIRONMENT = 0x00000400
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 STARTF_USESTDHANDLES = 0x00000100
 PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JobObjectBasicAccountingInformation = 1
 JobObjectBasicProcessIdList = 3
@@ -253,7 +254,16 @@ def _environment_block(env):
 class WindowsJobProcess:
     """Small Popen-like owner. wait() means the *whole Job* is empty."""
 
-    def __init__(self, command, cwd=None, env=None, *, stdin=None, stdout=None, stderr=None):
+    def __init__(self, command, cwd=None, env=None, *, stdin=None, stdout=None, stderr=None,
+                 pseudoconsole=None):
+        # HPCON 是调用者拥有的指针宽度不透明值；本 owner 只把它绑定到启动属性，
+        # 不关闭伪控制台。调用者必须保持其存活，直至 wait/close 已确认 Job 归零。
+        # ConPTY 自行提供控制台标准句柄，显式 PIPE/DEVNULL 必须拒绝，不能悄悄丢弃。
+        if pseudoconsole is not None:
+            if type(pseudoconsole) is not int or not 0 < pseudoconsole < INVALID_HANDLE_VALUE:
+                raise ValueError("Windows 伪控制台句柄必须是有效的指针宽度整数")
+            if any(stream is not None for stream in (stdin, stdout, stderr)):
+                raise ValueError("Windows 伪控制台不能同时指定标准流重定向")
         self.args = command
         self.returncode = None
         self._api = _Win32API()
@@ -272,7 +282,7 @@ class WindowsJobProcess:
         self._communicated = False
         try:
             with _defer_interrupts():
-                self._start(command, cwd, env, (stdin, stdout, stderr))
+                self._start(command, cwd, env, (stdin, stdout, stderr), pseudoconsole)
         except BaseException:
             with _ignore_interrupts():
                 try:
@@ -324,7 +334,7 @@ class WindowsJobProcess:
                 if temporary is not None:
                     api.CloseHandle(temporary)
 
-    def _start(self, command, cwd, env, streams):
+    def _start(self, command, cwd, env, streams, pseudoconsole=None):
         api = self._api
         command_line = ctypes.create_unicode_buffer(_command_line(command))
         environment = _environment_block(env)
@@ -340,7 +350,8 @@ class WindowsJobProcess:
         attributes = None
         initialized = False
         try:
-            self._standard_handles(handles, streams)
+            if pseudoconsole is None:
+                self._standard_handles(handles, streams)
             size = SIZE_T()
             # The first call reports the required buffer size, normally returning
             # ERROR_INSUFFICIENT_BUFFER. No fixed size or private CPython ABI.
@@ -351,17 +362,24 @@ class WindowsJobProcess:
             self._check(api.InitializeProcThreadAttributeList(attributes, 1, 0, ctypes.byref(size)),
                         "Initialize process handle-inheritance attributes")
             initialized = True
-            allowed = (HANDLE * len(handles))(*handles)
-            self._check(api.UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                                                     allowed, ctypes.sizeof(allowed), None, None),
-                        "Restrict inherited handles")
             startup = STARTUPINFOEXW()
             startup.StartupInfo.cb = ctypes.sizeof(startup)
-            startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
-            startup.StartupInfo.hStdInput, startup.StartupInfo.hStdOutput, startup.StartupInfo.hStdError = handles
+            if pseudoconsole is None:
+                allowed = (HANDLE * len(handles))(*handles)
+                self._check(api.UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                                         allowed, ctypes.sizeof(allowed), None, None),
+                            "Restrict inherited handles")
+                startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
+                startup.StartupInfo.hStdInput, startup.StartupInfo.hStdOutput, startup.StartupInfo.hStdError = handles
+            else:
+                # 官方 ConPTY 属性要求 lpValue=HPCON 本值，并非 &HPCON；cbSize
+                # 仍为 sizeof(HANDLE)。此分支不继承宿主标准句柄，也不设 USESTDHANDLES。
+                self._check(api.UpdateProcThreadAttribute(
+                    attributes, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                    HANDLE(pseudoconsole), ctypes.sizeof(HANDLE), None, None), "Bind pseudoconsole")
             startup.lpAttributeList = ctypes.cast(attributes, LPVOID)
             flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
-            self._check(api.CreateProcessW(None, command_line, None, None, True, flags, environment,
+            self._check(api.CreateProcessW(None, command_line, None, None, pseudoconsole is None, flags, environment,
                                           directory, ctypes.byref(startup), ctypes.byref(self._process)), "Create suspended setup")
             self._check(api.AssignProcessToJobObject(self._job, self._process.hProcess), "Assign setup to Job Object")
             self._assigned = True
