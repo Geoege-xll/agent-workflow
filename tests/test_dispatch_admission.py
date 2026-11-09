@@ -33,6 +33,10 @@ class AdmissionTest(unittest.TestCase):
         self.workspace = Path(self.temporary.name).resolve()
         self.project = self.workspace / "project"
         self.project.mkdir()
+        # 独立 one/two 资源的共同父目录真实存在，才能核实该父目录的名称规则；
+        # 未创建的中间目录应保守占子树，不能靠原夹具隐含“未来目录继承”来并行。
+        (self.project / "src").mkdir()
+        (self.project / "src/name-rule-fixture.txt").write_text("fixture\n")
         self.manifest = {"schema_version": 1, "project_root": str(self.project), "records": [],
                          "capacity": {"configured_subagents": 4, "configured_writers": 3,
                                       "host_available_subagents": 4}}
@@ -351,6 +355,41 @@ class AdmissionTest(unittest.TestCase):
         with patch.object(cli, "_directory_case_sensitive", return_value=True):
             self.assertTrue(_overlap(cli._resource_identity(self.project / "新文件.py", {}),
                                      cli._resource_identity(first, {})))
+
+    def test_future_directory_children_do_not_inherit_the_existing_parents_case_rule(self):
+        """仅第一不存在分量的父规则已知，未来目录内的 Foo/foo 必须保守冲突。"""
+        from lib.dispatch_admission import _overlap
+        with patch.object(cli, "_directory_case_sensitive", return_value=True):
+            first = cli._resource_identity(self.project / "FutureCaseDir214/Foo.py", {})
+            second = cli._resource_identity(self.project / "FutureCaseDir214/foo.py", {})
+            self.assertTrue(_overlap(first, second))
+            # 敏感父目录内不同的第一分量仍独立，不能粗锁整个项目。
+            other = cli._resource_identity(self.project / "futureCaseDir214/Foo.py", {})
+            self.assertFalse(_overlap(first, other))
+
+    def test_execution_root_binding_uses_physical_identity_when_path_equality_folds_case(self):
+        """注入 Windows 式词法相等控制流，实际根身份仍来自两个真实独立目录。"""
+        from pathlib import PureWindowsPath
+        self.assertEqual(PureWindowsPath("C:/Project"), PureWindowsPath("C:/project"))
+        unrelated = self.workspace / "other-project"
+        unrelated.mkdir()
+        self.assertFalse(self.project.samefile(unrelated))
+        path = self.add_record("a")
+        self.manifest["records"][0]["execution_roots"]["api"] = str(unrelated)
+        selected_roots = {str(self.project), str(unrelated)}
+        class FoldingPath(type(Path())):
+            def __eq__(self, other):
+                if str(self) in selected_roots and str(other) in selected_roots:
+                    return True
+                return super().__eq__(other)
+            __hash__ = type(Path()).__hash__
+        absolute = cli._absolute
+        def folded_absolute(value, **kwargs):
+            result = absolute(value, **kwargs)
+            return FoldingPath(result) if str(result) in selected_roots else result
+        with patch.object(cli, "_absolute", side_effect=folded_absolute), self.assertRaisesRegex(ValueError, "differs from original"):
+            cli.admission("view", self.manifest)
+        self.assertEqual("DECLARED", json.loads(path.read_bytes())["tasks"][0]["state"])
 
     def test_worktree_qa_uses_its_original_request_integration_root(self):
         """QA 不伪造 writer-only execution_workspace，从请求集成记录选择审查树。"""

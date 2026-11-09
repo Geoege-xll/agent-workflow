@@ -47,16 +47,50 @@ def _object(value: Any, fields: set[str], label: str) -> dict:
     return value
 
 
+def _same_directory(left: Path, right: Path) -> bool:
+    """现有目录按原生节点身份比较，不能依赖 WindowsPath 的词法大小写折叠。
+
+    根已由 _absolute 核实存在并拒绝链接；再次 no-follow 取得实际身份，既允许
+    同目录的名称别名，也不会把敏感父目录内仅大小写不同的两个目录判作同根。
+    """
+    first, second = left.lstat(), right.lstat()
+    if not first.st_ino or not second.st_ino:
+        raise TaskGraphError("filesystem did not provide a reliable directory identity")
+    return (stat.S_ISDIR(first.st_mode) and stat.S_ISDIR(second.st_mode)
+            and not (getattr(first, "st_file_attributes", 0) & 0x400)
+            and not (getattr(second, "st_file_attributes", 0) & 0x400)
+            and (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino))
+
+
 def _absolute(value: Any, *, directory: bool = False) -> Path:
     """显式物理身份不能借软链或 .. 把新执行根伪装成原根。"""
     if not isinstance(value, str) or not value or "\x00" in value:
         raise TaskGraphError("path must be a canonical absolute path")
     path = Path(value)
-    if not path.is_absolute() or path != path.resolve(strict=True):
+    if not path.is_absolute() or ".." in path.parts:
         raise TaskGraphError("path must be a canonical existing absolute path")
+    # Path.resolve/WindowsPath== 会保留或折叠名称大小写，二者都不能作为链接
+    # 或物理身份的证明。逐级拒绝链接/重解析点，再核对真实节点，避免敏感目录
+    # 内的不同大小写根因词法相等而绕过绑定；同一真实目录的名称别名仍可使用。
+    for component in (path, *path.parents):
+        info = component.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise TaskGraphError("path must not traverse symlinks or reparse points")
+    if not path.samefile(path.resolve(strict=True)):
+        raise TaskGraphError("path physical identity changed during resolution")
     if directory and not path.is_dir():
         raise TaskGraphError("root must be an existing directory")
     return path
+
+
+def _project_directory(value: Any) -> Path:
+    """复用原项目根守卫，并补实际环境根身份检查，防止词法折叠跳过跨根拒绝。"""
+    root = _absolute(value, directory=True)
+    project_root(root)
+    supplied = os.environ.get(PROJECT_ENV)
+    if supplied is not None and not _same_directory(root, _absolute(supplied, directory=True)):
+        raise TaskGraphError("explicit project root differs from the bridge physical project")
+    return root
 
 
 def _sha(value: Any) -> str:
@@ -85,7 +119,7 @@ def _git_identity(root: Path, *, required: bool = True) -> str:
     rows = result.stdout.splitlines()
     if result.returncode and not required and not has_marker:
         return str(root)
-    if result.returncode or len(rows) != 2 or (required and Path(rows[0]).resolve(strict=True) != root):
+    if result.returncode or len(rows) != 2 or (required and not _same_directory(Path(rows[0]), root)):
         raise TaskGraphError("execution root must be a verified Git worktree root")
     return str(Path(rows[1]).resolve(strict=True))
 
@@ -130,10 +164,10 @@ def _resource_identity(path: Path, directory_modes: dict[tuple[int, int], bool |
     """在文件边界投影真实节点和名称语义，覆盖不存在叶及不存在中间目录。
 
     每级现有节点都保留 dev/inode 锚点，不能只比较叶或 resolve 的保留大小写
-    字符串。名称后缀按各自父目录的已核实规则转换；大小写敏感目录保留大小写。
-    现有名称规范等价采用保守 NFD，实际节点仍由 inode 证明。未创建的非 ASCII
-    名称涉及尚未核实的卷 Unicode 规则，或目录大小写规则未知时，直接扩大为
-    最近现有目录的资源锁，而不猜测一个可能放行的名称比较规则。
+    字符串。现有父目录内的名称按已核实规则转换，敏感目录保留大小写。只给
+    第一个不存在分量使用其已证父规则，并保守占住该分量的未来子树，不假定
+    新目录会继承规则。首个不存在名称为非 ASCII 或父规则未知时，扩大为最近
+    现有目录锁。现有名称采用保守 NFD，实际节点仍由 inode 证明。
     """
     if os.name == "nt":
         # 复用原 Windows owner 的组件合同，拒绝尾点/尾空格、设备名及 ADS，
@@ -154,11 +188,12 @@ def _resource_identity(path: Path, directory_modes: dict[tuple[int, int], bool |
         try:
             info = child.lstat()
         except FileNotFoundError:
-            remaining_parts = parts[position:]
-            if sensitive is not None and all(remaining.isascii() for remaining in remaining_parts):
-                for remaining in remaining_parts:
-                    name = unicodedata.normalize("NFD", remaining)
-                    names.append(name if sensitive else name.casefold())
+            if sensitive is not None and part.isascii():
+                # 只有第一个不存在分量位于已核实的父目录内，后续目录的规则
+                # 尚不存在且不保证继承（尤其 Windows/NTFS 逐目录 case 规则）。
+                # 保留这一分量后即占住其整个未来子树，不再猜 Foo/foo 是否独立。
+                name = unicodedata.normalize("NFD", part)
+                names.append(name if sensitive else name.casefold())
             # 名称规则未知时不追加剩余段，当前实际目录空后缀即保守子树锁。
             break
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
@@ -234,8 +269,7 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
     _object(manifest, {"schema_version", "project_root", "records", "capacity"}, "admission manifest")
     if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1:
         raise TaskGraphError("admission schema_version must be integer 1")
-    root = _absolute(manifest["project_root"], directory=True)
-    project_root(root)
+    root = _project_directory(manifest["project_root"])
     semantic_scope = _git_identity(root, required=False)
     descriptors = manifest["records"]
     if not isinstance(descriptors, list) or not descriptors or len(descriptors) > 128:
@@ -281,9 +315,10 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
             # 决定；不得要求 QA 伪造 Writer 字段，也不能借 manifest 改绑根。
             binding = integration or workspace
             expected = _absolute(binding["root"], directory=True) if binding else root
-            if execution != expected:
+            if not _same_directory(execution, expected):
                 raise TaskGraphError("execution root differs from original task binding")
-            if execution != root and _git_identity(execution) != _git_identity(root):
+            if (not _same_directory(execution, root)
+                    and not _same_directory(Path(_git_identity(execution)), Path(_git_identity(root)))):
                 raise TaskGraphError("execution worktree does not belong to the actual project")
             resource_paths[task["id"]] = tuple(_resource_identity(execution / owned, directory_modes)
                                                 for owned in task.get("owned_paths", ()))
@@ -364,11 +399,10 @@ def admission(command: str, manifest: dict, target: dict | None = None,
         result = select_candidates(views, manifest["capacity"])
         _recheck(views)
         return result
-    root = _absolute(manifest.get("project_root"), directory=True)
-    project_root(root)
+    root = _project_directory(manifest.get("project_root"))
     with _project_lock(root) as locked_scope:
         _, views, sources = _load(manifest)
-        if any(view.semantic_scope != locked_scope for view in views):
+        if any(not _same_directory(Path(view.semantic_scope), Path(locked_scope)) for view in views):
             raise TaskGraphError("project Git coordination identity changed during admission")
         projection = select_candidates(views, manifest["capacity"])
         if command == "release":
