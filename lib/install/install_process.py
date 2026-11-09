@@ -18,9 +18,9 @@ import time
 import threading
 
 try:
-    from lib.install.windows_process import WindowsJobProcess, _defer_interrupts
+    from lib.install.windows_process import WindowsJobProcess, WindowsProcessCancelled, _defer_interrupts
 except ImportError:
-    from lib.install.windows_process import WindowsJobProcess, _defer_interrupts
+    from lib.install.windows_process import WindowsJobProcess, WindowsProcessCancelled, _defer_interrupts
 
 
 CANCEL_FILE_ENV = "AGENT_WORKFLOW_CANCEL_FILE"
@@ -154,19 +154,43 @@ class SetupRunner:
 ACTIVE_RUNNER: ContextVar[SetupRunner | None] = ContextVar("workflow_install_runner", default=None)
 
 
-def capture_process(command: list[str], *, env: dict | None = None, body: bytes | None = None):
+def capture_process(command: list[str], *, env: dict | None = None, body: bytes | None = None,
+                    timeout: float = 60):
     """真实薄桥消费的有界进程入口；沿用安装预算、进程组回收和中断传播。"""
     runner = ACTIVE_RUNNER.get()
-    remaining = 60.0 if runner is None or runner.deadline is None else min(60.0, runner.deadline - time.monotonic())
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise SetupRunError("捕获进程超时必须为有限正数")
+    deadline = time.monotonic() + timeout
+    if runner is not None and runner.deadline is not None:
+        deadline = min(deadline, runner.deadline)
+    remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise SetupRunError("安装预算已耗尽，未启动下一纯读取阶段")
+    cancel_file = runner.cancel_file if runner is not None and not runner.recovering else None
+    if cancel_file is not None and os.path.lexists(cancel_file):
+        raise SetupRunError("安装已取消，未启动下一纯读取阶段")
     env = dict(os.environ) if env is None else dict(env)
     for key in ("BASH_ENV", "ENV", "CDPATH", "SHELLOPTS", "BASHOPTS"):
         env.pop(key, None)
+    if os.name == "nt":
+        process = None
+        try:
+            # 与 setup/helper 共用先挂 Job 再恢复线程的边界；不能用普通 Popen
+            # 的父进程超时替代真实后代清理，原始管道字节也不经过文本 codec。
+            with _defer_interrupts():
+                process = WindowsJobProcess(command, env=env, stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output, error = process.communicate(body, timeout=max(0, deadline - time.monotonic()), cancel_file=cancel_file)
+            return subprocess.CompletedProcess(command, process.returncode, output, error)
+        except WindowsProcessCancelled as exc:
+            raise SetupRunError("安装已取消，捕获 Job 已停止") from exc
+        finally:
+            if process is not None:
+                process.close()
     process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
-        output, error = process.communicate(body, timeout=remaining)
+        output, error = process.communicate(body, timeout=max(0, deadline - time.monotonic()))
     except BaseException:
         SetupRunner.stop(process)
         raise

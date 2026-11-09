@@ -10,6 +10,8 @@ import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 from lib.install import install_workflow
 from lib.install import project_paths
@@ -19,6 +21,17 @@ PACK = Path(__file__).resolve().parents[1]
 
 
 class DetachedInstallTest(unittest.TestCase):
+    def test_windows_drag_quotes_preserve_backslashes_without_posix_reparse(self):
+        from lib import windows_fs
+        with tempfile.TemporaryDirectory(prefix="workflow-win-path-") as raw:
+            project = Path(raw) / r"Owner's 中文\nested"
+            project.mkdir()
+            with patch.object(project_paths, "os", SimpleNamespace(name="nt")), \
+                    patch.object(windows_fs, "Directory", side_effect=lambda path: nullcontext()), \
+                    patch.object(project_paths.shlex, "split") as posix:
+                self.assertEqual(project.resolve(), project_paths.target_path('"' + str(project) + '"', PACK))
+            posix.assert_not_called()
+
     def test_existing_path_with_apostrophe_is_not_reparsed(self) -> None:
         """参数形式的真实路径允许文件夹名含单引号。"""
 

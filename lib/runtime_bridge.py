@@ -18,10 +18,12 @@ import argparse
 import ast
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 from lib import runtime_store as store
 from .platform_fs import os
@@ -257,14 +259,25 @@ def _admission_protocol(core: store.FrozenCore) -> int:
 def run_helper(invocation: HelperInvocation, *, timeout: float = 120) -> int:
     """只运行显式选定的 Python helper，并负责超时/中断后的进程资源回收。
 
-    独立进程组只包含本次 helper 及其后代；中断不会 stop/kill 既有会话。先
-    TERM 并等待至多 5 秒，再 KILL 并等待至多 5 秒，原失败继续向调用方传播。
-    不重试未知结果，不吞掉 KeyboardInterrupt，也不把超时写成成功。
+    Windows 在首条指令前加入自有 Job，停止后确认后代归零；POSIX 沿用独立
+    进程组的 TERM/KILL 收尾。中断不影响既有会话，不重试未知结果，不吞掉
+    KeyboardInterrupt，也不把超时写成成功。
     """
     if not isinstance(invocation, HelperInvocation) or type(timeout) not in {int, float} or not 0 < timeout <= 3600:
         raise RuntimeBridgeError("helper 需要有效调用值及 0..3600 秒的有限超时")
-    if os.name == "nt":
-        raise RuntimeBridgeError("当前中央 helper 缺少已验证的 Windows 进程组后端")
+    # Hook 监督者设定的同机单调截止时间覆盖整个薄桥链。控制/准入判断仍在
+    # 原位置完成，只有最终执行等待取剩余量，不放宽旧 pin 或跨进程锁协议。
+    supplied_deadline = invocation.environment.get("AGENT_WORKFLOW_HOOK_DEADLINE")
+    if supplied_deadline is not None:
+        try:
+            deadline = float(supplied_deadline)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeBridgeError("Hook 截止时间无效") from exc
+        if not math.isfinite(deadline):
+            raise RuntimeBridgeError("Hook 截止时间无效")
+        timeout = min(timeout, deadline - time.monotonic())
+        if timeout <= 0:
+            raise RuntimeBridgeError("Python helper 已超时，未启动下一阶段")
     if invocation.initializes and invocation.admission_protocol == 0:
         from manager import runtime_policy
         from manager.central_runtime import new_task_gate
@@ -282,6 +295,23 @@ def run_helper(invocation: HelperInvocation, *, timeout: float = 120) -> int:
 
 def _execute_helper(invocation: HelperInvocation, timeout: float) -> int:
     """执行已通过门禁的固定 helper，超时清理沿用原进程组所有权边界。"""
+    if os.name == "nt":
+        deadline = time.monotonic() + timeout
+        from lib.install.windows_process import WindowsJobProcess, _defer_interrupts
+        child = None
+        try:
+            with _defer_interrupts():
+                child = WindowsJobProcess(invocation.command, cwd=invocation.cwd, env=invocation.environment)
+            return child.wait(timeout=max(0, deadline - time.monotonic()))
+        except BaseException as failure:
+            if child is not None:
+                child.stop()
+            if isinstance(failure, subprocess.TimeoutExpired):
+                raise RuntimeBridgeError("Python helper 已超时并终止本次调用") from failure
+            raise
+        finally:
+            if child is not None:
+                child.close()
     child = subprocess.Popen(invocation.command, cwd=invocation.cwd, env=invocation.environment,
                              start_new_session=True)
     try:

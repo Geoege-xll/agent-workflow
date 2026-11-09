@@ -8,10 +8,39 @@ Python CLI 的导入语义，并避免业务目录及临时缓存注入同名模
 from __future__ import annotations
 
 import os
+import hashlib
+import math
 from pathlib import Path, PureWindowsPath
 import runpy
 import subprocess
 import sys
+import time
+
+
+def _supervise(arguments: list[str]) -> int:
+    """只执行生成端清单已冻结的 stdlib 后端；校验与编译使用同一份字节。"""
+    if os.name != "nt" or len(arguments) < 7:
+        raise ValueError("Windows Hook supervision requires native Windows and an explicit backend")
+    backend, digest, parent, created, remaining = arguments[:5]
+    budget = float(remaining)
+    deadline = time.monotonic() + budget / 1000
+    if (not math.isfinite(deadline) or budget > 12000
+            or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest)
+            or not Path(backend).is_absolute()):
+        raise ValueError("Invalid Windows Hook backend or budget")
+    if budget <= 0:
+        sys.stdout.buffer.write(b"{}\n")
+        return 0
+    with open(backend, "rb") as stream:
+        body = stream.read(4 * 1024 * 1024 + 1)
+    if len(body) > 4 * 1024 * 1024 or hashlib.sha256(body).hexdigest() != digest:
+        raise ValueError("Windows Hook supervisor does not match its frozen digest")
+    # 不先 import，也不核验后 runpy 重开路径，防止并发替换把另一份代码带进
+    # 监督者。该后端仅依赖标准库，导入闭包不会借用项目 cwd/PYTHONPATH。
+    namespace = {"__name__": "_workflow_windows_supervisor", "__file__": backend}
+    exec(compile(body, backend, "exec"), namespace)
+    command = [sys.executable, "-I", "-B", "-X", "utf8", str(Path(__file__).absolute()), *arguments[5:]]
+    return namespace["supervise_hook"](command, int(parent), int(created), deadline)
 
 
 def _native_path(value: str) -> str:
@@ -75,6 +104,8 @@ def _convert(argv: list[str], indices: tuple[int, ...]) -> list[str]:
 
 def main(arguments: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if arguments is None else arguments)
+    if arguments[:1] == ["--hook-supervise"]:
+        return _supervise(arguments[1:])
     msys = arguments[:1] == ["--msys"]
     if msys:
         arguments.pop(0)

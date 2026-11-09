@@ -52,22 +52,30 @@ def canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
-def _hook_command(pack: Path, project: Path, host: str, event: str) -> str:
+def _hook_command(pack: Path, project: Path, host: str, event: str, *, windows_runtime=None, supervisor=None) -> str:
     tail = ["--host", host, "--event", event, "--project", str(project),
             "--owner", OWNER, "--signature", SIGNATURE]
     if os.name == "nt":
-        python, bootstrap = windows_hook_command.runtime_paths()
+        if (not isinstance(windows_runtime, (tuple, list)) or len(windows_runtime) != 2
+                or supervisor is None):
+            raise ValueError("Windows Hook requires an explicit managed runtime and verified supervisor descriptor")
+        python, bootstrap = windows_runtime
+        windows_hook_command.persistent_path(python, "Python executable")
+        windows_hook_command.persistent_path(bootstrap, "bootstrap")
+        if ntpath.basename(bootstrap).casefold() != "windows_bootstrap.py":
+            raise ValueError("Windows Hook requires its managed windows_bootstrap.py")
         script = windows_hook_command.persistent_path(str(pack / "lib/workflow_hooks.py"), "project runtime")
         windows_hook_command.persistent_path(str(project), "project")
         return windows_hook_command.encode_command([
-            python, "-I", "-B", "-X", "utf8", bootstrap, "--script", script, *tail])
+            python, "-I", "-B", "-X", "utf8", bootstrap, "--script", script, *tail], supervisor=supervisor)
     return shlex.join([sys.executable, "-B", str(pack / "lib/workflow_hooks.py"), *tail])
 
 
-def signed_group(pack: Path, project: Path, host: str, event: str, matcher: str) -> dict:
-    """POSIX v1 保持原命令；Windows v2 使用可逆原生协议及持久运行时。"""
-    command = _hook_command(pack, project, host, event)
-    handler = {"type": "command", "command": command, "timeout": 3}
+def signed_group(pack: Path, project: Path, host: str, event: str, matcher: str, *, windows_runtime=None, supervisor=None) -> dict:
+    """POSIX v1 保持原字节；Windows v3 显式消费生成端已验 core 的后端材料。"""
+    command = _hook_command(pack, project, host, event, windows_runtime=windows_runtime, supervisor=supervisor)
+    handler = {"type": "command", "command": command,
+               "timeout": windows_hook_command.HOST_TIMEOUT_SECONDS if os.name == "nt" else 3}
     if host == "codex":
         handler["additionalContextLimit"] = 512
     group = {"hooks": [handler]}
@@ -79,7 +87,7 @@ def signed_group(pack: Path, project: Path, host: str, event: str, matcher: str)
     if command.startswith(windows_hook_command.PREFIX):
         args = windows_hook_command.decode_command(command)
         args[-1] = digest
-        handler["command"] = windows_hook_command.encode_command(args)
+        handler["command"] = windows_hook_command.encode_command(args, supervisor=supervisor)
     else:
         handler["command"] = command[:-len(SIGNATURE)] + digest
     return group
@@ -100,9 +108,12 @@ def owned_group(group: object) -> bool:
     if len(handlers) != 1 or len(candidates) != 1:
         raise ValueError("mixed or modified managed Hook group; preserve it and resolve explicitly")
     command = candidates[0]["command"]
-    windows = (command.startswith("powershell.exe ") or windows_hook_command.ENCODED_MARKER in command)
+    windows = (command.startswith(("pwsh.exe ", "powershell.exe ")) or windows_hook_command.ENCODED_MARKER in command)
     if windows:
-        args = windows_hook_command.decode_command(command)
+        manifest = windows_hook_command.decode_manifest(command)
+        args = manifest["argv"]
+        if manifest["supervisor"] is None:
+            raise ValueError("unproven managed Windows Hook supervisor; preserve it and resolve explicitly")
         if len(args) == 18:
             for index, label in ((0, "Python executable"), (5, "bootstrap"),
                                  (7, "project runtime"), (13, "project")):
@@ -118,7 +129,7 @@ def owned_group(group: object) -> bool:
             raise ValueError("unproven managed Windows Hook command; preserve it and resolve explicitly")
         signature = args[-1]
         args[-1] = SIGNATURE
-        unsigned_command = windows_hook_command.encode_command(args)
+        unsigned_command = windows_hook_command.encode_command(args, supervisor=manifest["supervisor"])
     else:
         args = shlex.split(command)
         if (len(args) != 13 or args[1] != "-B" or not args[2].endswith("/lib/workflow_hooks.py")
@@ -174,7 +185,8 @@ def merge_claude_write_guard(data: dict, local_settings: dict | None = None) -> 
 
 
 def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
-               claude_options: dict | None = None, local_settings: dict | None = None) -> dict:
+               claude_options: dict | None = None, local_settings: dict | None = None,
+               windows_runtime=None, supervisor=None) -> dict:
     """只替换可证明归属的 Hook；Claude 可选保护独立收紧，不隐式放宽权限。"""
     result = copy.deepcopy(data)
     if host == "claude":
@@ -201,7 +213,7 @@ def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
             result.pop(OWNER)
         if mode == "assist":
             result[OWNER] = {"enabled": enabled, "SessionStart": [
-                signed_group(pack, project, host, "SessionStart", "")]}
+                signed_group(pack, project, host, "SessionStart", "", windows_runtime=windows_runtime, supervisor=supervisor)]}
         return result
     hooks = result.get("hooks", {})
     if not isinstance(hooks, dict):
@@ -221,7 +233,7 @@ def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
             # 受管组原位更新，不能每次挪到列表末尾，改变后来追加的用户 Hook
             # 与辅助提醒之间的执行顺序。只替换验签后的本组，其余位置保持不变。
             if event in desired and event not in replaced:
-                retained.append(signed_group(pack, project, host, event, desired[event]))
+                retained.append(signed_group(pack, project, host, event, desired[event], windows_runtime=windows_runtime, supervisor=supervisor))
                 replaced.add(event)
         if retained:
             hooks[event] = retained
@@ -229,7 +241,7 @@ def merge_json(data: dict, pack: Path, project: Path, host: str, mode: str, *,
             hooks.pop(event)
     for event, matcher in desired.items():
         if event not in replaced:
-            hooks.setdefault(event, []).append(signed_group(pack, project, host, event, matcher))
+            hooks.setdefault(event, []).append(signed_group(pack, project, host, event, matcher, windows_runtime=windows_runtime, supervisor=supervisor))
     if hooks:
         result["hooks"] = hooks
     else:
@@ -273,7 +285,7 @@ def managed_inline(raw: bytes) -> bytes:
     return text[text.index(BEGIN):text.index(END) + len(END)].encode("utf-8")
 
 
-def merge_inline(raw: bytes | None, pack: Path, project: Path, mode: str) -> bytes:
+def merge_inline(raw: bytes | None, pack: Path, project: Path, mode: str, *, windows_runtime=None, supervisor=None) -> bytes:
     """Codex 已使用 TOML Hooks 时沿用该来源，不再制造同层双配置。
 
     用户 TOML 字节不重排；受管块必须具有精确边界和字节签名。原生 features.hooks
@@ -296,7 +308,7 @@ def merge_inline(raw: bytes | None, pack: Path, project: Path, mode: str) -> byt
         return text.encode()
     chunks = []
     for event, matcher in EVENTS["codex"]:
-        group = signed_group(pack, project, "codex", event, matcher)
+        group = signed_group(pack, project, "codex", event, matcher, windows_runtime=windows_runtime, supervisor=supervisor)
         chunks.append(f"[[hooks.{event}]]\n")
         if matcher:
             chunks.append(f"matcher = {json.dumps(matcher)}\n")
@@ -325,7 +337,8 @@ def project_codex_config(config: bytes, before: bytes | None) -> bytes:
     return render((before or b"").decode(), limits[0] if limits else 8).encode()
 
 
-def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bool = False) -> tuple[Path, bytes | None, bytes]:
+def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bool = False,
+               windows_runtime=None, supervisor=None) -> tuple[Path, bytes | None, bytes]:
     """预检、发布、验收共用生成结果；预检不会创建项目目录或配置。"""
     # macOS /var、/tmp 等系统别名先解析为真实根；配置文件自身仍保持 no-follow 校验。
     pack, project = pack.resolve(strict=True), project.resolve(strict=True)
@@ -349,7 +362,7 @@ def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bo
                 # 同文件先由原生 agents 合并器更新，再合并 Hooks。快照需包含这两个
                 # 受管步骤的真实结果，不能将合法并发数更新误认成用户并发修改。
                 projected = project_codex_config(config, original_toml)
-            return toml, original_toml, merge_inline(projected, pack, project, mode)
+            return toml, original_toml, merge_inline(projected, pack, project, mode, windows_runtime=windows_runtime, supervisor=supervisor)
     relative = {"codex": ".codex/hooks.json", "claude": ".claude/settings.json",
                 "antigravity": ".agents/hooks.json"}[host]
     path = project / relative
@@ -359,7 +372,8 @@ def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bo
     options = parse_claude_options(config.decode("utf-8")) if host == "claude" else None
     local = (json_object(read_file(project / ".claude/settings.local.json"))
              if options and options["block_writes_outside_working_directories"] is True else None)
-    merged = merge_json(data, pack, project, host, mode, claude_options=options, local_settings=local)
+    merged = merge_json(data, pack, project, host, mode, claude_options=options, local_settings=local,
+                        windows_runtime=windows_runtime, supervisor=supervisor)
     # 没有语义变化时保留用户格式；off 且从未安装则不创建空宿主配置。
     after = before if data == merged and before is not None else (
         json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode()
