@@ -31,16 +31,57 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
         with:
           python-version: '3.11'
       - name: Probe independent Win32 capabilities
+        env:
+          PROBE_PYTHON: ${{ steps.python.outputs.python-path }}
         # 首轮固定 probe；不把原始 workflow input 插值到 shell 中。stdout 与 stderr
         # 均落完整日志，JSON 保存在脚本排他创建的私有目录；exit 0 仅代表报告已产出。
         run: |
-          $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
-          & $python -I -B -X utf8 scripts/windows_capabilities.py --output-parent $env:RUNNER_TEMP 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'windows-capabilities.log')
-          $code = $LASTEXITCODE
-          "probe_exit_code=$code" | Add-Content -Path (Join-Path $env:RUNNER_TEMP 'windows-capabilities.log')
+          $log = Join-Path $env:RUNNER_TEMP 'windows-capabilities.log'
+          # 启动和解释器校验之前排他创建日志；启动失败也必须保留原始错误，不能被
+          # 后续“没有 artifact”掩盖。现有同名文件拒绝覆盖，由 Actions 控制台保留该失败。
+          $stream = [System.IO.File]::Open($log, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+          $stream.Dispose()
+          $code = 1
+          $nativeCode = $null
+          try {
+            $python = $env:PROBE_PYTHON
+            if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
+            $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $script = Join-Path $env:GITHUB_WORKSPACE 'scripts/windows_capabilities.ps1'
+            $before = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Filter 'awf-windows-capabilities-*' -ErrorAction Stop | ForEach-Object FullName)
+            "python_path=$python" | Tee-Object -FilePath $log -Append
+            # 只从 setup-python 的单值绝对路径进入 WinPS 5.1 薄入口；不查询 PATH，
+            # 不插值输入、不修改 ExecutionPolicy，也不增加第二次 probe。
+            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File $script -Python $python -OutputParent $env:RUNNER_TEMP 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "probe_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode) { throw 'Windows PowerShell did not provide an exit code.' }
+            if ($nativeCode -ne 0) {
+              $code = [int]$nativeCode
+            } else {
+              # -File 在 Ctrl+C 下可能返回 0；只有本次新建根中的完整权威 JSON
+              # 通过检查才确认“报告已产出”。JSON 仍不代表平台支持或桌面验收 PASS。
+              $created = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Filter 'awf-windows-capabilities-*' -ErrorAction Stop | Where-Object { $_.FullName -notin $before })
+              if ($created.Count -ne 1) { throw 'Expected exactly one new private probe workspace.' }
+              $reportPath = Join-Path $created[0].FullName 'capabilities.json'
+              $report = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+              if ($report.schema_version -ne 1 -or $report.status -ne 'report-produced' -or $report.scope -ne 'capabilities-only' -or $report.support_status -ne 'NOT_EVALUATED' -or $report.report_file -ne $reportPath -or $report.workspace -ne $created[0].FullName) {
+                throw 'Probe JSON is incomplete or does not match this invocation.'
+              }
+              "report_verified=$reportPath; support_status=NOT_EVALUATED" | Tee-Object -FilePath $log -Append
+              $code = 0
+            }
+          } catch {
+            $_ | Out-String | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode) { 'probe_exit_code=not-started-or-unavailable' | Tee-Object -FilePath $log -Append }
+            $code = 1
+          } finally {
+            "workflow_exit_code=$code" | Add-Content -LiteralPath $log -Encoding utf8
+          }
           exit $code
       - name: Preserve complete capability evidence
         if: always()
