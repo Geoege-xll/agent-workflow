@@ -12,7 +12,7 @@ import uuid
 
 from lib import role_models
 from lib.central import role_preferences
-from lib.central.runtime_project import CONFIG, Node, Tree, absolute_directory, json_bytes, skill_parts
+from lib.central.runtime_project import CAPACITY_IDENTITY, CONFIG, Node, Tree, absolute_directory, json_bytes, skill_parts, move_at, read_at, delete_at
 from . import project_service, service, runtime_service, runtime_state, state_files, native_agents
 from .catalog import Catalog, discover
 
@@ -476,11 +476,15 @@ def _restore_global(state: Path, before: Node, published: Node) -> None:
             target.write(before.payload, before.mode, (published.payload, published.mode))
         else:
             held = ".role-preferences-rollback-" + uuid.uuid4().hex
-            state_files.os.rename(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory)
+            move_at(target.name, held, src_dir_fd=target.directory, dst_dir_fd=target.directory, expected=published)
             if target.read(held) != (published.payload, published.mode):
                 raise state_files.PreservedEdit(target.path.parent / held)
             # 排他隔离后仅删除本轮精确产物；目标被第三方重建时保持新文件。
-            state_files.os.unlink(held, dir_fd=target.directory)
+            held_node = read_at(target.directory, held)
+            if (held_node.identity[:2] != published.identity[:2] or held_node.security != published.security
+                    or (held_node.payload, held_node.mode) != (published.payload, published.mode)):
+                raise state_files.PreservedEdit(target.path.parent / held)
+            delete_at(target.directory, held, expected=held_node)
 
 
 def apply(plan) -> dict:
@@ -523,6 +527,8 @@ def apply(plan) -> dict:
         previous_global = ([{"path": "preferences/transactions/" + identifier + "-previous-" + uuid.uuid4().hex + ".json",
                              "expected_sha": hashlib.sha256(plan.global_before.payload).hexdigest(),
                              "mode": plan.global_before.mode}] if plan.global_before.kind == "file" else [])
+        if state_files.os.name == "nt" and previous_global:
+            previous_global[0].update(identity=list(plan.global_before.identity), security=plan.global_before.security)
         record = {"schema_version": 1, "id": identifier, "status": "prepared",
                   "global_before": plan.global_before.value(),
                   "global_after": base64.b64encode(plan.global_after).decode(), "global_previous": previous_global,
@@ -532,6 +538,11 @@ def apply(plan) -> dict:
                                            "after_sha": service._fingerprint(row.after), "mode": row.mode}
                                           for row in target.changes]}
                                for target in plan.targets if target.changes], "conflicts": []}
+        if state_files.os.name == "nt":
+            # 关闭后实际 metadata 的位宽使用固定上界证明；只增字段预算，不抬4MiB。
+            capacity = {**record, "global_previous": [{**row, "identity": list(CAPACITY_IDENTITY),
+                         "security": "f" * 64, "mode": 0o7777} for row in previous_global]}
+            service.record_payload(capacity)
         with absolute_directory(plan.state / "preferences" / "transactions", create=True):
             pass
         def save():
@@ -575,8 +586,15 @@ def apply(plan) -> dict:
                     # fd 的编辑器随后写入；永久路径和摘要写入同一恢复明细。
                     archive_relative = record["global_previous"][0]["path"]
                     with state_files.AnchoredFile(plan.state, archive_relative) as archive:
-                        state_files.os.rename(previous, archive.name, src_dir_fd=original.directory, dst_dir_fd=archive.directory)
-                        if archive.read() != expected:
+                        frozen = getattr(original, "retained_snapshot", None) or read_at(original.directory, previous)
+                        move_at(previous, archive.name, src_dir_fd=original.directory, dst_dir_fd=archive.directory, expected=frozen)
+                        if state_files.os.name == "nt":
+                            archived = read_at(archive.directory, archive.name)
+                            if (archived.identity[:2] != frozen.identity[:2] or archived.security != frozen.security
+                                    or archived.identity[4:6] != frozen.identity[4:6] or archived.payload != frozen.payload):
+                                raise state_files.PreservedEdit(archive.path)
+                            record["global_previous"][0].update(identity=list(archived.identity), security=archived.security, mode=archived.mode)
+                        if not state_files.same_file_state(archive.read(), expected):
                             raise state_files.PreservedEdit(archive.path)
                 target.retainer = retain_global
                 expected = ((plan.global_before.payload, plan.global_before.mode)

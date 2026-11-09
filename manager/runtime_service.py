@@ -27,7 +27,7 @@ from lib.central.runtime_project import (
     CAPACITY_IDENTITY, CONFIG, HOSTS, LOCATOR, Node, Resources, Tree, capacity_node_value,
     absolute_directory, canonical_project, central_block, identity, json_bytes,
     managed_path, merge_central_block, node_id, read_at, relative_path, skill_parts,
-    unique_json, validate_skill_link,
+    unique_json, validate_skill_link, move_at, publish_at, clone_file_permissions, content_mode, delete_at,
 )
 
 
@@ -105,12 +105,12 @@ class PublicationBudget:
     journal_after_bytes: int
 
 
-def _raw(tree: Tree, relative: str) -> Node:
+def _raw(tree: Tree, relative: str, *, skill_name: str | None = None) -> Node:
     try:
         directory, name = tree.parent(relative)
     except FileNotFoundError:
         return Node()
-    return read_at(directory, name, allow_link=True)
+    return read_at(directory, name, allow_link=True, skill_name=skill_name)
 
 
 def _history_writes(tree: Tree, records: list[dict]) -> list[dict]:
@@ -229,7 +229,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
         source = Path(source_root).expanduser().absolute()
         inspected = store.inspect_core(source)
         selected = {key: inspected[key] for key in ("protocol_version", "content_id", "manifest_sha256")}
-        resources = Resources(source, json_bytes(selected), inspected["label"])
+        resources = Resources(source, json_bytes(selected), inspected["label"], destination=state / "runtimes" / selected["content_id"] / "core")
     else:
         if action == "use":
             if binding is None:
@@ -354,7 +354,7 @@ def preview(state: Path, project: Path, action: str, *, source_root: Path | None
 
 def _same_moved(actual: Node, expected: Node) -> bool:
     return (actual.same_content(expected) and actual.mode == expected.mode
-            and actual.identity[:2] == expected.identity[:2])
+            and actual.identity[:2] == expected.identity[:2] and actual.security == expected.security)
 
 
 def _application_budget() -> None:
@@ -382,7 +382,7 @@ def _verify_installed_bridge(state: Path, project: Path, core: store.FrozenCore)
         raise ActivationError("中央公共约束超过桥接有界读取范围")
     env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state),
            "AGENT_WORKFLOW_PROJECT_ROOT": str(project), "PYTHONDONTWRITEBYTECODE": "1"}
-    result = capture_process([sys.executable, "-B", "-X", "utf8", str(project / project_files.LAUNCHER),
+    result = capture_process([sys.executable, "-I", "-B", "-X", "utf8", str(project / project_files.LAUNCHER),
                               "--binding", json_bytes(core.binding()).decode(), "read", "product/GLOBAL_CONSTRAINTS.md"], env=env)
     if result.returncode or result.stdout != expected:
         raise ActivationError("所选固定核心无法消费本机项目协议，已停止启用；不回退其他版本")
@@ -394,6 +394,18 @@ def _cleanup_stage(tree: Tree, row: dict) -> None:
         parent, name = tree.parent(row["stage"])
         before = os.stat(name, dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError:
+        return
+    if os.name == "nt" and stat.S_ISREG(before.st_mode):
+        # Windows 普通文件在目标同父目录暂存，避免子目录继承改变用户 DACL。
+        staged = read_at(parent, name)
+        expected = Node.from_value(row["after"])
+        if (not staged.same_content(expected) or list(staged.identity[:2]) != row.get("stage_inode")
+                or list(staged.identity[:2]) != row.get("published_inode")):
+            raise ActivationError("stage 文件归属不明，保留恢复资料")
+        if staged != Node.from_value(row["after"]):
+            raise ActivationError("stage 文件完整身份或 ACL 已变化")
+        delete_at(parent, name, expected=staged)
+        os.fsync(parent)
         return
     if not stat.S_ISDIR(before.st_mode) or list(node_id(before)) != row.get("stage_inode"):
         raise ActivationError("stage 目录归属不明，保留恢复资料")
@@ -411,14 +423,20 @@ def _cleanup_stage(tree: Tree, row: dict) -> None:
             if (not staged.same_content(expected) or list(staged.identity[:2]) != row.get("published_inode")
                     or staged.mode != expected.mode):
                 raise ActivationError("stage 文件不是已登记产物，保留现状")
-            os.unlink(leaf, dir_fd=descriptor)
+            delete_at(descriptor, leaf, expected=staged,
+                      skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None)
             os.fsync(descriptor)
         if node_id(os.stat(name, dir_fd=parent, follow_symlinks=False)) != node_id(before):
             raise ActivationError("stage 目录在清理时被替换")
-        os.rmdir(name, dir_fd=parent)
-        os.fsync(parent)
+        if os.name != "nt":
+            os.rmdir(name, dir_fd=parent)
+            os.fsync(parent)
     finally:
         os.close(descriptor)
+    if os.name == "nt":
+        from lib.windows_fs import delete_directory
+        delete_directory(parent, name, expected={"identity": tuple(row["stage_inode"]),
+                                                 "security": row["stage_security"]})
 
 
 def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None:
@@ -432,11 +450,39 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
     backup = Path(row["backup"]).name
     stage_name = Path(row["stage"]).name
     stage = None
-    if after.kind != "missing":
+    file_stage = os.name == "nt" and after.kind == "file"
+    if file_stage:
+        # 普通文件必须与 target 同父目录。先私有写入，再精确克隆旧 DACL；
+        # 任何克隆/继承复核失败均发生于隔离原件之前，不降级为权限近似。
+        descriptor = os.open(stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent)
+        with os.fdopen(descriptor, "wb") as stream:
+            row["stage_inode"] = list(node_id(os.fstat(stream.fileno())))
+            save()
+            stream.write(after.payload); stream.flush()
+            os.fchmod(stream.fileno(), after.mode); os.fsync(stream.fileno())
+        if before.kind == "file":
+            clone_file_permissions(parent, name, stage_name)
+        staged = read_at(parent, stage_name)
+        if list(staged.identity[:2]) != row["stage_inode"]:
+            raise ActivationError("stage 文件在读取前已被替换")
+        # Windows after 保存本次真实 stage Node，不加第二份正文/新 journal 字段；
+        # cleanup/recovery 因而有完整身份与 ACL 授权，而不仅依赖 inode 二元组。
+        after = staged
+        row["after"] = staged.value()
+        row["published_inode"] = list(staged.identity[:2])
+        os.fsync(parent)
+        save()
+        if read_at(parent, name) != before:
+            raise ActivationError("节点在 stage 准备期间变化：" + row["path"])
+    elif after.kind != "missing":
         os.mkdir(stage_name, 0o700, dir_fd=parent)
         stage = os.open(stage_name, project_files.DIR_FLAGS, dir_fd=parent)
         try:
             row["stage_inode"] = list(node_id(os.fstat(stage)))
+            if os.name == "nt":
+                from lib.windows_fs import security_fingerprint
+                row["stage_security"] = security_fingerprint(stage)
             save()
             if after.kind == "file":
                 descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=stage)
@@ -451,7 +497,7 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
                 publish_skill_symlink(stage, name, Path(os.fsdecode(after.payload)), core_root=core.root)
             staged = read_at(stage, name, allow_link=after.kind == "link")
             if after.kind == "link":
-                after = Node("link", after.payload, staged.mode)
+                after = staged if os.name == "nt" else Node("link", after.payload, staged.mode)
                 row["after"] = after.value()
             row["published_inode"] = list(staged.identity[:2])
             os.fsync(stage)
@@ -463,15 +509,15 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
             raise
     try:
         if before.kind != "missing":
-            if read_at(parent, backup, allow_link=True).kind != "missing":
+            if read_at(parent, backup, allow_link=True, skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None).kind != "missing":
                 raise ActivationError("旧 inode 保留位置发生碰撞")
-            os.rename(name, backup, src_dir_fd=parent, dst_dir_fd=parent)
-            moved = read_at(parent, backup, allow_link=True)
+            move_at(name, backup, src_dir_fd=parent, dst_dir_fd=parent, expected=before)
+            moved = read_at(parent, backup, allow_link=True, skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None)
             if not _same_moved(moved, before):
                 raise ActivationError("旧 inode 在隔离时发生保存，已保留：" + row["backup"])
         if after.kind != "missing":
-            os.link(name, name, src_dir_fd=stage, dst_dir_fd=parent, follow_symlinks=False)
-            os.unlink(name, dir_fd=stage)
+            publish_at(stage_name if file_stage else name, name,
+                       src_dir_fd=parent if file_stage else stage, dst_dir_fd=parent, expected=staged)
         os.fsync(parent)
         current = read_at(parent, name, allow_link=bool(skill_parts(row["path"])))
         if not current.same_content(after):
@@ -486,7 +532,12 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
             info = os.stat(stage_name, dir_fd=parent, follow_symlinks=False)
             if list(node_id(info)) == row["stage_inode"]:
                 try:
-                    os.rmdir(stage_name, dir_fd=parent)
+                    if os.name == "nt":
+                        from lib.windows_fs import delete_directory
+                        delete_directory(parent, stage_name, expected={"identity": tuple(row["stage_inode"]),
+                                                                       "security": row["stage_security"]})
+                    else:
+                        os.rmdir(stage_name, dir_fd=parent)
                 except OSError:
                     pass
 
@@ -519,7 +570,7 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
         if keep_hook_bridge and before.kind == "missing" and managed_path(row["path"], "bridge"):
             continue
         try:
-            backup = _raw(tree, row["backup"])
+            backup = _raw(tree, row["backup"], skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None)
             if backup.kind == "missing" and not any(key in row for key in ("stage_inode", "published_inode", "installed")):
                 _cleanup_stage(tree, row)
                 continue  # 从未触碰的行无需补偿，尤其不能把尚未归档的旧目录当成新文件。
@@ -529,27 +580,26 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
                 raise ActivationError("旧 inode 已有后续保存，拒绝恢复")
             if actual.kind == "missing":
                 if backup.kind != "missing":
-                    os.link(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-                    os.unlink(Path(row["backup"]).name, dir_fd=parent)
+                    publish_at(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent, expected=backup)
                 elif before.kind != "missing":
                     raise ActivationError("原文件和旧 inode 均缺失")
             elif _same_moved(actual, before) and backup.kind == "missing":
                 pass
-            elif (actual.same_content(after) and actual.mode == after.mode
-                  and list(actual.identity[:2]) == row.get("published_inode")):
+            elif (actual.same_content(after) and content_mode(actual.mode) == content_mode(after.mode)
+                  and list(actual.identity[:2]) == row.get("published_inode")
+                  and (os.name != "nt" or actual.security == after.security)):
                 rolled = Path(row["rollback"]).name
                 if _raw(tree, row["rollback"]).kind != "missing":
                     raise ActivationError("回滚 inode 保留位置发生碰撞")
-                os.rename(name, rolled, src_dir_fd=parent, dst_dir_fd=parent)
-                moved = read_at(parent, rolled, allow_link=True)
-                retained.append(_retained_record(row["rollback"], moved))
+                move_at(name, rolled, src_dir_fd=parent, dst_dir_fd=parent, expected=actual)
+                moved = read_at(parent, rolled, allow_link=True, skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None)
+                retained.append(_retained_record(row["rollback"], moved, skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None))
                 if not _same_moved(moved, actual):
                     raise ActivationError("撤下产物时检测到后续保存，已保留")
                 if before.kind != "missing":
                     if backup.kind == "missing":
                         raise ActivationError("原 inode 缺失，拒绝用正文副本冒充恢复")
-                    os.link(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-                    os.unlink(Path(row["backup"]).name, dir_fd=parent)
+                    publish_at(Path(row["backup"]).name, name, src_dir_fd=parent, dst_dir_fd=parent, expected=backup)
             else:
                 raise ActivationError("目标已有后续手改或 inode 已替换，拒绝恢复")
             os.fsync(parent)
@@ -643,11 +693,15 @@ def publication_budget(plan: ActivationPlan) -> PublicationBudget:
         if change.after.kind != "missing":
             row["stage_inode"] = list(CAPACITY_IDENTITY[:2])
             row["published_inode"] = list(CAPACITY_IDENTITY[:2])
+            if os.name == "nt":
+                row["after"] = capacity_node_value(change.after)
             if change.after.kind == "link":
+                if os.name == "nt":
+                    row["stage_security"] = "f" * 64
                 row["after"]["mode"] = 0o7777
         row["installed"] = capacity_node_value(change.after)
         if change.before.kind != "missing":
-            retained.append(_retained_record(row["backup"], change.before))
+            retained.append(_retained_record(row["backup"], change.before, skill_name=skill_parts(change.relative)[1] if skill_parts(change.relative) else None))
     managed = unique_json(plan.managed_json)
     for item in managed.values():
         item["expected"] = capacity_node_value(Node.from_value(item["expected"]))
@@ -660,7 +714,8 @@ def publication_budget(plan: ActivationPlan) -> PublicationBudget:
     rollback = copy.deepcopy(journal)
     rollback["phase"] = "rolled_back"
     rollback["retained_nodes"] = [
-        _retained_record(row["rollback"], Node(change.after.kind, change.after.payload, 0o7777, CAPACITY_IDENTITY))
+        _retained_record(row["rollback"], Node(change.after.kind, change.after.payload, 0o7777, CAPACITY_IDENTITY, "f" * 64 if os.name == "nt" else ""),
+                         skill_name=skill_parts(change.relative)[1] if skill_parts(change.relative) else None)
         for row, change in zip(journal["changes"], plan.changes) if change.after.kind != "missing"]
     # _restore最多按既有retained、目标行、stage各产生一条冲突，另有Tree.check。
     # 新诊断实际执行相同UTF-8上限；全控制字符覆盖JSON的最坏六倍转义膨胀。
@@ -737,7 +792,7 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
                     _write_private(machine_tree, _state_relative(plan.project, "bindings"), binding_before.payload)
                 else:
                     parent, name = machine_tree.parent(_state_relative(plan.project, "bindings"))
-                    os.unlink(name, dir_fd=parent)
+                    delete_at(parent, name, expected=current_node)
                     os.fsync(parent)
             journal["phase"] = "conflict" if conflicts else "rolled_back"
             journal["conflicts"] = conflicts
@@ -766,12 +821,12 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
             previous_journal = unique_json(plan.journal_before.payload) if plan.journal_before.kind == "file" else {}
             retained = _retained_base(old, previous_journal)
             for row in journal["changes"]:
-                prior = _raw(tree, row["backup"])
+                prior = _raw(tree, row["backup"], skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None)
                 if prior.kind != "missing":
                     before = Node.from_value(row["before"])
                     if not _same_moved(prior, before):
                         raise ActivationError("保留的旧 inode 在安装检查期间变化")
-                    retained.append(_retained_record(row["backup"], prior))
+                    retained.append(_retained_record(row["backup"], prior, skill_name=skill_parts(row["path"])[1] if skill_parts(row["path"]) else None))
             conflicts = _history_writes(tree, retained)
             if conflicts:
                 raise ActivationError("旧 inode 已有后续保存", conflicts)
@@ -808,7 +863,7 @@ def apply(plan: ActivationPlan, *, transaction_id: str | None = None) -> dict:
                     _write_private(machine_tree, _state_relative(plan.project, "bindings"), plan.machine_before.payload)
                 else:
                     parent, name = machine_tree.parent(_state_relative(plan.project, "bindings"))
-                    os.unlink(name, dir_fd=parent)
+                    delete_at(parent, name, expected=current)
                     os.fsync(parent)
             journal["phase"] = "conflict" if conflicts else "rolled_back"
             journal["conflicts"] = conflicts
@@ -862,7 +917,7 @@ def compensate(state: Path, project: Path, transaction_id: str, binding_before: 
                 parent, name = machine_tree.parent(_state_relative(project, "bindings"))
                 if read_at(parent, name) != current:
                     raise ActivationError("项目绑定在撤回前变化")
-                os.unlink(name, dir_fd=parent)
+                delete_at(parent, name, expected=current)
                 os.fsync(parent)
         journal.update(phase="conflict" if conflicts else "rolled_back", conflicts=conflicts, retained_nodes=retained)
         _write_private(machine_tree, _state_relative(project, "transactions"), _journal_bytes(journal), expected=journal_node)
@@ -909,7 +964,8 @@ def status(state: Path, project: Path) -> dict:
                 if config.kind != "file":
                     raise ActivationError("项目配置缺失，不能核验当前受管 Hooks")
                 project_files.hook_resources(project, config.payload, tuple(record["hosts"]),
-                                             enabled=record["enabled"], check_only=True)
+                                             enabled=record["enabled"], check_only=True,
+                                             resources=Resources(core.root, json_bytes(core.binding()), core.label, core) if core else None)
             except (OSError, ValueError) as exc:
                 conflicts.append({"path": "workflow_hooks", "reason": str(exc)})
             if record["enabled"] and core is not None:
@@ -1051,7 +1107,7 @@ class NativeEditReceipt:
         for change in self.changes:
             current = self.tree.read(change.relative)
             expected = Node() if change.after is None else Node("file", change.after, change.mode)
-            if not current.same_content(expected) or current.mode != expected.mode:
+            if not current.same_content(expected) or content_mode(current.mode) != content_mode(expected.mode):
                 raise ActivationError("模型事务产物与已声明 after 不符：" + change.relative)
             if change.after is None:
                 record["managed"].pop(change.relative, None)
@@ -1128,7 +1184,7 @@ def native_edit_receipt(state: Path, project: Path, changes, *, native_context=N
             seen.add(relative)
             current = tree.read(relative)
             expected_before = Node() if change.before is None else Node("file", change.before, change.mode)
-            if not current.same_content(expected_before) or current.mode != expected_before.mode:
+            if not current.same_content(expected_before) or content_mode(current.mode) != content_mode(expected_before.mode):
                 raise ActivationError("模型收据前像与当前文件不符：" + relative)
             if relative == CONFIG:
                 if change.before is None or change.after is None:

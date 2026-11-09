@@ -18,6 +18,10 @@ def _regular_bytes(path: Path, limit: int) -> bytes:
     版本诊断发生在正常服务启动之前，不能借错误元数据回退为另一个来源。
     根目录由调用者明确传入，且每一级祖先都拒绝符号链接。
     """
+    if os.name == "nt":
+        # 版本诊断在服务导入前执行，复用 A 的独立 no-follow 初读闭包。
+        from lib.windows_fs import read_initial_regular
+        return read_initial_regular(path.absolute(), limit)
     for parent in path.parents:
         if parent.is_symlink():
             raise ValueError("版本文件祖先不能是符号链接")

@@ -303,25 +303,36 @@ def _security_policy(handle, *, object_type=1):
         api.kernel.LocalFree(descriptor)
 
 
-def _policy_is_private(policy, *, object_type=1):
-    if policy.owner != _sid_bytes(current_sid()) or not policy.control & 0x1000:
+def _private_policy_bytes(owner: bytes, control: int, acl: bytes, user: bytes, *, object_type=1) -> bool:
+    """唯一纯私有策略：当前用户 owner、protected DACL、用户/SYSTEM 两条全权 ACE。
+
+    既有句柄后端与未加载 core 的初读闭包共用这份代码。ACE 顺序不影响此
+    权限集合的准入，但完整安全摘要仍保留顺序/flags，不能据此免除 ACL CAS。
+    """
+    if owner != user or not control & 0x1000 or len(acl) < 8:
         return False
-    data = policy.acl_bytes
-    if int.from_bytes(data[4:6], "little") != 2:
+    if int.from_bytes(acl[4:6], "little") != 2:
         return False
-    wanted = {_sid_bytes(current_sid()), _sid_bytes("S-1-5-18")}
+    wanted = {user, bytes.fromhex("010100000000000512000000")}
     offset, found = 8, set()
     for _ in range(2):
-        size = int.from_bytes(data[offset + 2:offset + 4], "little")
-        ace = data[offset:offset + size]
+        if offset + 4 > len(acl):
+            return False
+        size = int.from_bytes(acl[offset + 2:offset + 4], "little")
+        ace = acl[offset:offset + size]
         rights = int.from_bytes(ace[4:8], "little")
         all_access = 0x1F01FF if object_type == 1 else 0x1F0001
-        if (len(ace) < 16 or ace[0] != 0 or ace[1] & ~0x07
+        if (size < 16 or offset + size > len(acl) or ace[0] != 0 or ace[1] & ~0x07
                 or rights not in (0x10000000, all_access) or ace[8:] not in wanted):
             return False
         found.add(ace[8:])
         offset += size
     return found == wanted
+
+
+def _policy_is_private(policy, *, object_type=1):
+    return _private_policy_bytes(policy.owner, policy.control, policy.acl_bytes,
+                                 _sid_bytes(current_sid()), object_type=object_type)
 
 
 def _stat_info(info, basic, *, private=False):
@@ -722,8 +733,10 @@ class _WindowsOS:
     def _path(self, path, descriptor):
         return self._directories[descriptor].child(_os.fspath(path)) if descriptor is not None else absolute_path(path)
 
-    def open(self, path, flags, mode=0o777, *, dir_fd=None):
+    def open(self, path, flags, mode=0o777, *, dir_fd=None, sharing=SHARE_READ | SHARE_WRITE):
         import msvcrt
+        if type(sharing) is not int or sharing < 0 or sharing & ~(SHARE_READ | SHARE_WRITE | SHARE_DELETE):
+            raise ValueError("invalid Windows file sharing mask")
         path = self._path(path, dir_fd)
         if flags & DIRECTORY:
             directory = Directory(path)
@@ -742,10 +755,10 @@ class _WindowsOS:
                 with private_security() as descriptor:
                     attributes = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), descriptor, 0)
                     handle = _open_handle(path, access, create=True,
-                                          exclusive=bool(flags & _os.O_EXCL), security=ctypes.byref(attributes))
+                                          exclusive=bool(flags & _os.O_EXCL), security=ctypes.byref(attributes), sharing=sharing)
             else:
                 handle = _open_handle(path, access, create=bool(flags & _os.O_CREAT),
-                                      exclusive=bool(flags & _os.O_EXCL))
+                                      exclusive=bool(flags & _os.O_EXCL), sharing=sharing)
             try:
                 if flags & _os.O_CREAT and not mode & 0o077:
                     restrict_handle(handle)
@@ -1278,6 +1291,85 @@ def flush_tree(root: Path) -> None:
         flush_directory(root)
 
 
+def delete_directory(directory: int, name: str, *, expected: dict) -> None:
+    """只条件删除已登记的普通空目录，绝不递归清理未知内容。
+
+    调用方先释放自己对该子目录的 no-delete 句柄，但保留父目录锚定；这里
+    重新取得 DELETE 句柄后核对原创建/登记的 dirID 与独立 ACL。内核的普通
+    FileDispositionInformation 必须原子拒绝非空目录，不用先列目录再裸 rmdir。
+    """
+    if (not isinstance(expected, dict) or set(expected) != {"identity", "security"}
+            or not isinstance(expected["identity"], tuple) or len(expected["identity"]) != 2
+            or any(type(item) is not int or item < 0 for item in expected["identity"])
+            or not isinstance(expected["security"], str) or not re.fullmatch(r"[0-9a-f]{64}", expected["security"])):
+        raise ValueError("conditional directory deletion requires registered identity and ACL")
+    path = secure_os._path(validate_component(name), directory)
+    with Directory(path.parent):
+        flush_directory(path.parent)
+        handle = _open_handle(path, READ_CONTROL | 0x81 | DELETE, directory=True, sharing=SHARE_READ)
+        try:
+            before, security = _metadata(handle)
+            if (before[:2] != expected["identity"] or not _stat.S_ISDIR(before[2])
+                    or security != expected["security"]):
+                raise ValueError("Windows directory changed since its registered snapshot")
+            after, after_security = _metadata(handle)
+            if before != after or security != after_security:
+                raise ValueError("Windows directory changed during conditional deletion")
+            disposition = BOOL(True)
+            _check(_api().kernel.SetFileInformationByHandle(
+                handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)), path)
+        finally:
+            _close(handle)
+        flush_directory(path.parent)
+
+
+def delete_regular(directory: int, name: str, *, expected: dict, max_bytes=_LIMIT) -> None:
+    """在一个拒绝 WRITE/DELETE sharing 的句柄上验证并删除明确普通文件。
+
+    expected 只接受完整七标量身份、独立 ACL 摘要和正文 SHA256；不持久化正文，
+    因而可信 core GC 可保留原 128MiB 流式合同。普通调用仍默认 4MiB，marker
+    明确给独立预算；上限仅为内部可信调用参数，绝不从项目 JSON/CLI 推导。
+    失败不 unlink 路径、不重试、不删除碰撞的新 inode；目录 flush 失败正常传播。
+    """
+    if (not isinstance(expected, dict) or set(expected) != {"identity", "security", "sha256"}
+            or not isinstance(expected["identity"], tuple) or len(expected["identity"]) != 7
+            or any(type(item) is not int for item in expected["identity"])
+            or any(not isinstance(expected[key], str) or not re.fullmatch(r"[0-9a-f]{64}", expected[key])
+                   for key in ("security", "sha256"))
+            or type(max_bytes) is not int or not 0 < max_bytes <= 128 * 1024 * 1024):
+        raise ValueError("conditional deletion requires complete metadata, ACL and bounded digest")
+    path = secure_os._path(validate_component(name), directory)
+    with Directory(path.parent):
+        flush_directory(path.parent)
+        handle = _open_handle(path, READ | DELETE, sharing=SHARE_READ)
+        try:
+            before, security = _metadata(handle)
+            if (before != expected["identity"] or security != expected["security"]
+                    or not _stat.S_ISREG(before[2]) or before[3] != 1 or not 0 <= before[4] <= max_bytes):
+                raise ValueError("Windows deletion source changed since its expected snapshot")
+            digest, total = hashlib.sha256(), 0
+            buffer = ctypes.create_string_buffer(min(max_bytes + 1, 1024 * 1024))
+            while True:
+                count = DWORD()
+                _check(_api().kernel.ReadFile(handle, buffer, len(buffer), ctypes.byref(count), None), path)
+                if not count.value:
+                    break
+                total += count.value
+                if total > max_bytes:
+                    raise ValueError("Windows deletion source exceeds bounded stream budget")
+                digest.update(buffer.raw[:count.value])
+            after, after_security = _metadata(handle)
+            if (after != before or after_security != security or total != before[4]
+                    or digest.hexdigest() != expected["sha256"]):
+                raise ValueError("Windows deletion source changed during its bounded verification")
+            disposition = BOOL(True)
+            _check(_api().kernel.SetFileInformationByHandle(
+                handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)), path)
+        finally:
+            _close(handle)
+        flush_directory(path.parent)
+
+
 def remove_file_if_unchanged(path: Path, digest: str, identity=None, *, limit=128 * 1024 * 1024) -> bool:
     """Validate and delete one opened identity, excluding ordinary writers/swaps."""
     path = absolute_path(path)
@@ -1327,7 +1419,7 @@ def read_file(path: Path, limit=4 * 1024 * 1024) -> bytes | None:
         return None
 
 
-def read_initial_regular(path, limit=4 * 1024 * 1024) -> bytes:
+def read_initial_regular(path, limit=4 * 1024 * 1024, *, require_private=False) -> bytes:
     """尚未信任 core 模块时的独立只读闭包，供生成阶段嵌入薄启动器。
 
     所有原生对象、长度和 ACL 都来自当前句柄；祖先拒绝 delete sharing，叶子
@@ -1340,8 +1432,8 @@ def read_initial_regular(path, limit=4 * 1024 * 1024) -> bytes:
 
     if os.name != "nt":
         raise OSError("initial Windows reader requires native Windows")
-    if type(limit) is not int or not 0 < limit <= 8 * 1024 * 1024:
-        raise ValueError("invalid bounded initial read budget")
+    if type(limit) is not int or not 0 < limit <= 8 * 1024 * 1024 or type(require_private) is not bool:
+        raise ValueError("invalid bounded initial read budget or privacy flag")
     raw = os.fspath(path)
     windows = PureWindowsPath(raw)
     if (not isinstance(raw, str) or not windows.is_absolute() or windows.drive.startswith("\\\\")
@@ -1378,6 +1470,9 @@ def read_initial_regular(path, limit=4 * 1024 * 1024) -> bytes:
         (kernel, "GetFinalPathNameByHandleW", D, [H, ctypes.c_wchar_p, D, D]),
         (kernel, "ReadFile", B, [H, H, D, ctypes.POINTER(D), H]),
         (kernel, "LocalFree", H, [H]),
+        (kernel, "GetCurrentProcess", H, []),
+        (security, "OpenProcessToken", B, [H, D, ctypes.POINTER(H)]),
+        (security, "GetTokenInformation", B, [H, ctypes.c_int, H, D, ctypes.POINTER(D)]),
         (security, "GetSecurityInfo", D, [H, ctypes.c_int, D, H, H, H, H, ctypes.POINTER(H)]),
         (security, "GetSecurityDescriptorControl", B, [H, H, H]),
         (security, "GetSecurityDescriptorOwner", B, [H, ctypes.POINTER(H), ctypes.POINTER(B)]),
@@ -1395,7 +1490,29 @@ def read_initial_regular(path, limit=4 * 1024 * 1024) -> bytes:
             raise ctypes.WinError(ctypes.get_last_error())
         return result
 
-    def permissions(handle):
+    def token_user():
+        token, required = H(), D()
+        check(security.OpenProcessToken(kernel.GetCurrentProcess(), 8, ctypes.byref(token)))
+        try:
+            security.GetTokenInformation(token, 1, None, 0, ctypes.byref(required))
+            if not ctypes.sizeof(H) + 8 <= required.value <= 65536:
+                raise ValueError("initial reader token user exceeds bounded size")
+            data = ctypes.create_string_buffer(required.value)
+            check(security.GetTokenInformation(token, 1, data, len(data), ctypes.byref(required)))
+            sid = ctypes.cast(data, ctypes.POINTER(H)).contents.value
+            if not sid or not security.IsValidSid(sid):
+                raise ValueError("initial reader requires valid current user SID")
+            length = security.GetLengthSid(sid)
+            if (not 8 <= length <= 68 or sid < ctypes.addressof(data)
+                    or sid + length > ctypes.addressof(data) + len(data)):
+                raise ValueError("initial reader token SID is outside bounded buffer")
+            return ctypes.string_at(sid, length)
+        finally:
+            check(kernel.CloseHandle(token))
+
+    user = token_user() if require_private else None
+
+    def permissions(handle, private=False):
         descriptor, owner, acl = H(), H(), H()
         error = security.GetSecurityInfo(handle, 1, 5, None, None, None, None, ctypes.byref(descriptor))
         if error:
@@ -1414,8 +1531,10 @@ def read_initial_regular(path, limit=4 * 1024 * 1024) -> bytes:
             acl_length = int.from_bytes(ctypes.string_at(acl, 8)[2:4], "little")
             if not 8 <= acl_length <= 65535:
                 raise ValueError("initial reader ACL exceeds bounded size")
-            return _canonical_security(ctypes.string_at(owner, sid_length), control.value,
-                                       ctypes.string_at(acl, acl_length))
+            owner_bytes, acl_bytes = ctypes.string_at(owner, sid_length), ctypes.string_at(acl, acl_length)
+            if private and not _private_policy_bytes(owner_bytes, control.value, acl_bytes, user):
+                raise ValueError("initial private reader requires current-user/SYSTEM protected owner and DACL")
+            return _canonical_security(owner_bytes, control.value, acl_bytes)
         finally:
             kernel.LocalFree(descriptor)
 
@@ -1429,7 +1548,8 @@ def read_initial_regular(path, limit=4 * 1024 * 1024) -> bytes:
             raise ValueError("initial reader requires a single-link regular file")
         return (info.volume, info.index_high << 32 | info.index_low, info.attributes,
                 info.links, info.size_high << 32 | info.size_low,
-                info.modified.high << 32 | info.modified.low, basic.changed, permissions(handle))
+                info.modified.high << 32 | info.modified.low, basic.changed,
+                permissions(handle, require_private and not directory))
 
     handles, ancestors = [], []
     try:
@@ -1488,5 +1608,6 @@ def bootstrap_reader_source() -> str:
     import textwrap
     source = inspect.getsource(read_initial_regular)
     header, body = source.split("\n", 1)
-    helpers = inspect.getsource(validate_component) + "\n" + inspect.getsource(_canonical_security)
+    helpers = (inspect.getsource(validate_component) + "\n" + inspect.getsource(_canonical_security)
+               + "\n" + inspect.getsource(_private_policy_bytes))
     return header + "\n" + textwrap.indent(helpers, "    ") + body

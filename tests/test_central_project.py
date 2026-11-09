@@ -47,7 +47,7 @@ def make_alternate_source(root: Path) -> None:
         (root / directory).mkdir(parents=True, exist_ok=True)
     for name in store.SETUP_FILES:
         put(name, b"#!/bin/sh\nexit 0\n")
-    for name in ("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py", "lib/runtime_store.py", "lib/central/runtime_project.py", "lib/runtime_bridge.py",
+    for name in ("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py", "lib/windows_fs.py", "lib/windows_bootstrap.py", "lib/runtime_store.py", "lib/central/runtime_project.py", "lib/runtime_bridge.py",
                  "lib/runtime_pins.py", "lib/standard_paths.py", "lib/hosts/claude_instructions.py", "lib/documents/context_read.py",
                  "lib/skills/shared_core_skills.py", "lib/role_models.py", "lib/central/role_preferences.py", "lib/hosts/claude_options.py", "lib/validate_antigravity_artifacts.py",
                  "lib/python_runtime.sh", "lib/hosts/workflow_hook_install.py", "lib/hosts/workflow_hook_settings.py",
@@ -1203,3 +1203,248 @@ finally:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeBindingTransportContractTest(unittest.TestCase):
+    """传输和初读闭包的可移植负控，原生消费者另由 Windows 节点执行。"""
+
+    def test_encoded_pin_is_bounded_unique_canonical_and_normalized_before_admission(self):
+        import base64
+        from lib.runtime_pins import decode_binding_b64
+        binding = {"protocol_version": 1, "content_id": "a" * 64, "manifest_sha256": "a" * 64}
+        encoded = base64.b64encode(json.dumps(binding).encode()).decode()
+        self.assertEqual(binding, decode_binding_b64(encoded))
+        namespace = {"__name__": "_launcher_contract", "__file__": str(PACK / ".agent-workflow/runtime.py")}
+        exec(compile(resources.launcher_source(), "<generated-launcher>", "exec"), namespace)
+        argv = namespace["normalize_binding"](["--binding-b64", encoded, "helper", "lib/task_graph_cli.py", "--root", ".", "init"])
+        self.assertEqual(binding, json.loads(argv[1]))
+        self.assertTrue(namespace["helper_creates_task"](argv[2:]))
+        invalid = [encoded + "\n", "eA==", base64.b64encode(b"x" * 4097).decode(),
+                   base64.b64encode(b'{"protocol_version":1,"protocol_version":1}').decode(),
+                   base64.b64encode(b"\xff").decode()]
+        for value in invalid:
+            with self.subTest(value_length=len(value)), self.assertRaises(ValueError):
+                decode_binding_b64(value)
+            with self.assertRaises(ValueError):
+                namespace["normalize_binding"](["--binding-b64", value, "check"])
+        for flags in (["--binding-b64"], ["--binding-b64", encoded, "--binding", json.dumps(binding), "check"]):
+            with self.assertRaises(ValueError):
+                namespace["normalize_binding"](flags)
+        for flags in (["--binding", json.dumps(binding), "--binding", json.dumps(binding), "check"],
+                      ["--binding-b64", encoded, "--binding-b64", encoded, "check"],
+                      ["--binding-unknown", encoded, "check"]):
+            with self.assertRaises(SystemExit) as rejected:
+                bridge.main(flags, project=PACK, state=PACK / "unused-state")
+            self.assertEqual(2, rejected.exception.code)
+
+    def test_generated_windows_entries_reject_nonisolated_before_project_imports(self):
+        with tempfile.TemporaryDirectory(prefix="central-isolation-") as raw:
+            root = Path(raw).resolve()
+            marker = root / "unexpected-import"
+            for name in ("ctypes", "pathlib", "argparse", "hashlib"):
+                (root / (name + ".py")).write_text("open('unexpected-import','w').write('executed')\nraise RuntimeError('project module executed')\n")
+            sources = [resources.launcher_source(), resources.hook_bridge_source(),
+                       resources.windows_bootstrap_source({"path": "C:/managed/windows_process.py", "sha256": "a" * 64})]
+            for index, body in enumerate(sources):
+                target = root / ("entry" + str(index) + ".py")
+                target.write_bytes(body)
+                # 将平台标识改为 win32 只用于证明最前置纯 guard，完全不运行原生 API。
+                code = "import sys; sys.platform='win32'; exec(compile(open(sys.argv[1],'rb').read(),sys.argv[1],'exec'),{'__name__':'__main__','__file__':sys.argv[1]})"
+                result = subprocess.run([sys.executable, "-B", "-X", "utf8", "-c", code, str(target)],
+                                        cwd=root, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("isolated", result.stderr)
+                self.assertFalse(marker.exists(), "project import ran before isolated guard")
+
+
+@unittest.skipUnless(os.name == "nt", "requires real native Windows; never count this skip as acceptance")
+class WindowsCentralComposedNativeTest(unittest.TestCase):
+    """真实核心/中央记录/项目薄桥/PS7 Hook 的组合；不模拟 Win32 成功。"""
+
+    def test_source_install_detached_pin_helper_hooks_and_admission(self):
+        import base64
+        from lib.hosts.native_context import HostPaths, NativeContext
+        from lib.windows_fs import assert_private
+        from lib.hosts.windows_hook_command import validate_powershell
+        from manager import central_runtime
+        with tempfile.TemporaryDirectory(prefix="central-native-") as raw:
+            workspace = Path(raw).resolve()
+            state, source, project = workspace / "state", workspace / "source", workspace / "project 中文 space"
+            source.mkdir(); project.mkdir()
+            # 此唯一 source fixture 为验收“移除来源后仍可运行”而存在；不移动真实仓库，
+            # 不复制 state/业务目录/个人 Skills，不按重试再造候选。只复制正式 core 边界。
+            for directory in store.CORE_DIRECTORIES:
+                shutil.copytree(PACK / directory, source / directory,
+                                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+            for name in store.SETUP_FILES:
+                shutil.copyfile(PACK / name, source / name)
+            context = NativeContext.for_state(state, host_paths=HostPaths.for_home(workspace / "host-home", environment={}))
+            validate_powershell()
+            from manager.release import source_version, describe
+            version = source_version(source)
+            self.assertIn("awf-cli " + version, describe())
+            # 真实模型目录只位于该request的显式host-home，不读取个人账户/provider。
+            codex_home = context.host_paths.codex
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text('model_catalog_json="models.json"\n', encoding="utf-8")
+            (codex_home / "models.json").write_text(json.dumps({"models": [
+                {"id": "fixture-model", "supported_reasoning_levels": ["high", "max"]},
+                {"id": "project-model", "supported_reasoning_levels": ["high", "max"]}]}), encoding="utf-8")
+            core = store.import_core(source, state)
+            self.assertEqual(version, core.label)
+            central_runtime.apply(central_runtime.preview(state, binding=core.binding(), native_context=context))
+            proposal = project_service.preview_project(state, project, "add", enable=True,
+                                                       source_root=source, native_context=context)
+            self.assertTrue(proposal.summary["can_apply"], proposal.summary)
+            project_service.apply_project(proposal)
+            binding_node, _ = service.read_binding_record(state, project)
+            self.assertEqual(64, len(binding_node.security))
+            assert_private(state / service._state_relative(project, "bindings"))
+            pin = base64.b64encode(json.dumps(core.binding()).encode()).decode()
+            environment = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state)}
+            for name in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"):
+                environment.pop(name, None)
+            def invoke(*args):
+                return subprocess.run([sys.executable, "-I", "-B", "-X", "utf8", str(project / resources.LAUNCHER), *args],
+                                      cwd=project, env=environment, capture_output=True, timeout=40)
+            checked = invoke("check")
+            self.assertEqual(0, checked.returncode, checked.stderr.decode("utf-8", errors="replace"))
+            self.assertEqual(core.binding(), json.loads(checked.stdout)["runtime_binding"])
+            expected = store.read_core_source(core, "product/GLOBAL_CONSTRAINTS.md")
+            shutil.rmtree(source)
+            self.assertFalse(source.exists())
+            # 项目模块探针不得抢先覆盖 stdlib；仅已验证的 core helper 根允许导入。
+            for name in ("ctypes", "pathlib", "argparse"):
+                (project / (name + ".py")).write_text("raise RuntimeError('project module executed')\n", encoding="utf-8")
+                (project / ".agent-workflow/lib" / (name + ".py")).write_text("raise RuntimeError('thin project module executed')\n", encoding="utf-8")
+            read = invoke("--binding-b64", pin, "read", "product/GLOBAL_CONSTRAINTS.md")
+            self.assertEqual((0, expected), (read.returncode, read.stdout), read.stderr)
+            fingerprints = project / "fingerprints.json"
+            fingerprints.write_text('["AGENTS.md"]', encoding="utf-8")
+            queried = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "fingerprints",
+                             "--root", str(project), "--input", str(fingerprints))
+            self.assertEqual(0, queried.returncode, queried.stderr)
+            self.assertTrue(json.loads(queried.stdout)["matched"])
+            self.assertEqual(1, json.loads(queried.stdout)["checked"])
+            settings = json.loads((project / ".claude/settings.json").read_bytes())
+            group = hook_install.managed_json(settings, "claude")["SessionStart"][0]
+            command = group["hooks"][0]["command"]
+            hook = subprocess.run(command, shell=True, cwd=project, env=environment,
+                                  input=json.dumps({"cwd": str(project), "hook_event_name": "SessionStart", "source": "resume"}).encode(),
+                                  capture_output=True, timeout=20)
+            self.assertEqual(0, hook.returncode, hook.stderr)
+            response = json.loads(hook.stdout)
+            self.assertIn("hookSpecificOutput", response, "enabled real Hook must execute beyond the neutral timeout path")
+            from manager import model_preferences, service as model_service
+            def save_preference(target, edits):
+                catalogs = model_preferences.load_catalogs(state, target, "codex", native_context=context)
+                plan = model_preferences.preview(state, target, "codex", edits, catalogs, native_context=context)
+                self.assertTrue(plan.summary["can_apply"], plan.summary)
+                return model_preferences.apply(plan)
+            save_preference(None, {"xy-backend": {"model": "fixture-model", "effort": "high"}})
+            save_preference(project, {"xy-backend": {"model": "project-model"}})
+            local_role = project / ".codex/agents/xy-backend.toml"
+            self.assertEqual("project-model", tomllib.loads(local_role.read_text(encoding="utf-8"))["model"])
+            save_preference(None, {"xy-backend": {"effort": "max"}})
+            reset = model_preferences.reset_platform(state, project, "codex", native_context=context)
+            self.assertTrue(reset.summary["can_apply"], reset.summary)
+            reset_result = model_preferences.apply(reset)
+            self.assertFalse(local_role.exists())
+            restored_model = model_service.prepare_restore(state, project, reset_result["backup_id"])
+            model_service.commit(state, project, restored_model, native_context=context)
+            self.assertEqual("project-model", tomllib.loads(local_role.read_text(encoding="utf-8"))["model"])
+            model_preferences.apply(model_preferences.reset_platform(state, project, "codex", native_context=context))
+            self.assertFalse(local_role.exists())
+            self.assertEqual({"model": "fixture-model", "effort": "max"},
+                             model_service.role_settings(project, "codex", "xy-backend", state=state, native_context=context))
+            project_service.apply_project(project_service.preview_project(state, project, "disable", native_context=context))
+            self.assertNotEqual(0, invoke("check").returncode)
+            self.assertEqual((0, expected), (lambda result: (result.returncode, result.stdout))(
+                invoke("--binding-b64", pin, "read", "product/GLOBAL_CONSTRAINTS.md")))
+            old_query = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "fingerprints",
+                               "--root", str(project), "--input", str(fingerprints))
+            self.assertEqual(0, old_query.returncode, old_query.stderr)
+            self.assertNotEqual(0, invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "init").returncode)
+            unknown = {"protocol_version": 1, "content_id": "f" * 64, "manifest_sha256": "f" * 64}
+            self.assertNotEqual(0, invoke("--binding-b64", base64.b64encode(json.dumps(unknown).encode()).decode(),
+                                        "read", "product/GLOBAL_CONSTRAINTS.md").returncode)
+            # 版本差异夹具仅作第二个切版目标；首次安装/薄桥/Hook/helper/偏好始终
+            # 由上面的真实完整 core 证明，不能用最小夹具代替组合入口验收。
+            alternate_source = workspace / "alternate-source"
+            alternate_source.mkdir()
+            make_alternate_source(alternate_source)
+            alternate = store.import_core(alternate_source, state)
+            project_service.apply_project(project_service.preview_project(state, project, "enable", native_context=context))
+            pinned, disabled = workspace / "pinned-project", workspace / "disabled-project"
+            for target in (pinned, disabled):
+                target.mkdir()
+                project_service.apply_project(project_service.preview_project(state, target, "add", enable=True, native_context=context))
+            project_service.apply_project(project_service.preview_project(state, pinned, "use", content_id=core.content_id, native_context=context))
+            project_service.apply_project(project_service.preview_project(state, disabled, "disable", native_context=context))
+            central_runtime.apply(central_runtime.preview(state, binding=alternate.binding(), native_context=context))
+            self.assertEqual(alternate.binding(), service.status(state, project)["runtime_binding"])
+            self.assertEqual(core.binding(), service.status(state, pinned)["runtime_binding"])
+            self.assertFalse(service.status(state, disabled)["declared_enabled"])
+            project_service.apply_project(project_service.preview_project(state, pinned, "follow", native_context=context))
+            project_service.apply_project(project_service.preview_project(state, disabled, "enable", native_context=context))
+            self.assertEqual(alternate.binding(), service.status(state, pinned)["runtime_binding"])
+            self.assertEqual(alternate.binding(), service.status(state, disabled)["runtime_binding"])
+            central_runtime.apply(central_runtime.preview(state, "rollback", native_context=context))
+            self.assertEqual(core.binding(), service.status(state, project)["runtime_binding"])
+            # 仅注入第二项目的业务失败点；所有第一项目发布/Job/ACL/原inode补偿都
+            # 运行真实 Windows 后端。不能把 mocked native success 当作验收结果。
+            proposal = central_runtime.preview(state, binding=alternate.binding(), native_context=context)
+            first = next(capture for capture in proposal.captures if capture.runtime_plan)
+            with resources.Tree(first.project) as tree:
+                original = tree.read(resources.LOCATOR)
+            actual_apply, calls = service.apply, []
+            def fail_second(plan, **kwargs):
+                calls.append(plan.project)
+                if len(calls) == 2:
+                    raise OSError("native fixture second project failure")
+                return actual_apply(plan, **kwargs)
+            with patch.object(service, "apply", side_effect=fail_second), self.assertRaisesRegex(OSError, "second project"):
+                central_runtime.apply(proposal)
+            with resources.Tree(first.project) as tree:
+                restored = tree.read(resources.LOCATOR)
+            self.assertEqual((original.payload, original.mode, original.identity[:2], original.security),
+                             (restored.payload, restored.mode, restored.identity[:2], restored.security))
+            self.assertIsNone(runtime_policy.pending(state))
+            concurrent = central_runtime.preview(state, binding=alternate.binding(), native_context=context)
+            first = next(capture for capture in concurrent.captures if capture.runtime_plan)
+            calls.clear()
+            user_saved = b'{"later-user-save":true}\n'
+            def save_then_fail(plan, **kwargs):
+                calls.append(plan.project)
+                if len(calls) == 2:
+                    (first.project / resources.LOCATOR).write_bytes(user_saved)
+                    raise OSError("native fixture concurrent save before compensation")
+                return actual_apply(plan, **kwargs)
+            with patch.object(service, "apply", side_effect=save_then_fail), self.assertRaises((OSError, ValueError)):
+                central_runtime.apply(concurrent)
+            self.assertEqual(user_saved, (first.project / resources.LOCATOR).read_bytes())
+            self.assertIsNotNone(runtime_policy.pending(state))
+            # 已用旧 pin 的损坏核心直接拒绝；不会补最新版本或把源夹具当回退目录。
+            corrupt = alternate.root / "product/GLOBAL_CONSTRAINTS.md"
+            corrupt.write_bytes(b"damaged frozen constraints")
+            alternate_pin = base64.b64encode(json.dumps(alternate.binding()).encode()).decode()
+            self.assertNotEqual(0, invoke("--binding-b64", alternate_pin, "read", "product/GLOBAL_CONSTRAINTS.md").returncode)
+            print("NATIVE_CENTRAL: full source/version/activate; detached isolated pin read/task_graph/PS7 Hook; Global/project override/reset; follow/pin/disable/rollback; second-project original-inode recovery/concurrent-save retention; unknown/corrupt/admission rejection executed")
+
+    def test_project_junction_is_rejected_before_resolve_and_writes(self):
+        with tempfile.TemporaryDirectory(prefix="central-junction-") as raw:
+            root = Path(raw).resolve()
+            target, junction = root / "real-project", root / "project-junction"
+            target.mkdir()
+            result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(target)],
+                                    capture_output=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            try:
+                with self.assertRaises((OSError, ValueError)):
+                    resources.canonical_project(junction)
+                from manager.state_files import project_path
+                with self.assertRaises((OSError, ValueError)):
+                    project_path(junction)
+                self.assertEqual([], list(target.iterdir()))
+            finally:
+                os.rmdir(junction)

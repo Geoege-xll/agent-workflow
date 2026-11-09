@@ -383,3 +383,120 @@ class WindowsLockAndCapabilityContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsCompleteDeleteContractTest(unittest.TestCase):
+    """完整条件删除只模拟原生调用边界，实际文件删除由 native 方法证明。"""
+
+    def run_delete(self, *, before_security="a" * 64, after_security="a" * 64,
+                   body=b"owned", expected_body=b"owned", reject=False):
+        calls, chunks = [], [body, b""]
+        identity = (7, 9, stat.S_IFREG | 0o600, 1, len(body), 11, 12)
+        def read(handle, buffer, size, count, overlapped):
+            self.assertEqual(123, handle)
+            chunk = chunks.pop(0)
+            ctypes.memmove(buffer, chunk, len(chunk))
+            ctypes.cast(count, ctypes.POINTER(fs.DWORD))[0] = len(chunk)
+            calls.append("read")
+            return True
+        api = SimpleNamespace(kernel=SimpleNamespace(ReadFile=read,
+            SetFileInformationByHandle=lambda handle, *args: calls.append("delete") or True))
+        with patch.object(fs.secure_os, "_path", return_value=Path("/project/file")), \
+                patch.object(fs, "Directory", side_effect=lambda path: nullcontext()), \
+                patch.object(fs, "_open_handle", return_value=123) as opened, \
+                patch.object(fs, "_metadata", side_effect=[(identity, before_security), (identity, after_security)]), \
+                patch.object(fs, "_api", return_value=api), \
+                patch.object(fs, "_close", side_effect=lambda handle: calls.append("close")), \
+                patch.object(fs, "flush_directory", side_effect=lambda path: calls.append("flush")):
+            expected = {"identity": identity, "security": "a" * 64,
+                        "sha256": hashlib.sha256(expected_body).hexdigest()}
+            if reject:
+                with self.assertRaises(ValueError):
+                    fs.delete_regular(1, "file", expected=expected)
+            else:
+                fs.delete_regular(1, "file", expected=expected)
+        opened.assert_called_once_with(Path("/project/file"), fs.READ | fs.DELETE, sharing=fs.SHARE_READ)
+        return calls
+
+    def test_same_handle_full_metadata_acl_digest_delete_and_flush(self):
+        self.assertEqual(["flush", "read", "read", "delete", "close", "flush"], self.run_delete())
+
+    def test_acl_change_with_identical_stat_or_digest_change_never_deletes(self):
+        for options in ({"before_security": "b" * 64}, {"after_security": "b" * 64},
+                        {"body": b"saved", "expected_body": b"owned"}):
+            with self.subTest(options=options):
+                calls = self.run_delete(**options, reject=True)
+                self.assertNotIn("delete", calls)
+                self.assertEqual("close", calls[-1])
+
+    def test_closed_expected_and_fixed_stream_budget_reject_before_native_io(self):
+        expected = {"identity": (1,) * 7, "security": "a" * 64, "sha256": "b" * 64}
+        with patch.object(fs, "_api", side_effect=AssertionError("must reject before native I/O")):
+            for invalid in ({**expected, "path": "escape"}, {**expected, "security": ""},
+                            {**expected, "identity": list(expected["identity"])}):
+                with self.assertRaises(ValueError):
+                    fs.delete_regular(1, "file", expected=invalid)
+            for limit in (0, True, 128 * 1024 * 1024 + 1):
+                with self.assertRaises(ValueError):
+                    fs.delete_regular(1, "file", expected=expected, max_bytes=limit)
+
+
+class WindowsDirectoryDeleteContractTest(unittest.TestCase):
+    """目录身份/ACL守卫与内核非空拒绝的窄调用合同，不递归或猜测路径归属。"""
+
+    def run_delete(self, *, security="a" * 64, nonempty=False, reject=False):
+        calls = []
+        metadata = ((7, 9, stat.S_IFDIR | 0o700, 1, 0, 11, 12), security)
+        def disposition(*args):
+            calls.append("disposition")
+            if nonempty:
+                raise OSError("native directory is not empty")
+            return True
+        with patch.object(fs.secure_os, "_path", return_value=Path("/project/stage")), \
+                patch.object(fs, "Directory", side_effect=lambda path: nullcontext()), \
+                patch.object(fs, "_open_handle", return_value=123) as opened, \
+                patch.object(fs, "_metadata", return_value=metadata), \
+                patch.object(fs, "_api", return_value=SimpleNamespace(kernel=SimpleNamespace(SetFileInformationByHandle=disposition))), \
+                patch.object(fs, "_close", side_effect=lambda handle: calls.append("close")), \
+                patch.object(fs, "flush_directory", side_effect=lambda path: calls.append("flush")):
+            expected = {"identity": (7, 9), "security": "a" * 64}
+            if reject:
+                with self.assertRaises((OSError, ValueError)):
+                    fs.delete_directory(1, "stage", expected=expected)
+            else:
+                fs.delete_directory(1, "stage", expected=expected)
+        opened.assert_called_once_with(Path("/project/stage"), fs.READ_CONTROL | 0x81 | fs.DELETE,
+                                       directory=True, sharing=fs.SHARE_READ)
+        return calls
+
+    def test_registered_empty_directory_deletes_then_flushes(self):
+        self.assertEqual(["flush", "disposition", "close", "flush"], self.run_delete())
+
+    def test_acl_change_or_nonempty_kernel_rejection_preserves_directory(self):
+        self.assertEqual(["flush", "close"], self.run_delete(security="b" * 64, reject=True))
+        self.assertEqual(["flush", "disposition", "close"], self.run_delete(nonempty=True, reject=True))
+
+
+class WindowsInitialPrivateContractTest(unittest.TestCase):
+    def test_embedded_and_backend_share_exact_private_owner_and_acl_policy(self):
+        user = bytes.fromhex("010100000000000515000000")
+        system = bytes.fromhex("010100000000000512000000")
+        def ace(sid):
+            return bytes((0, 3)) + (8 + len(sid)).to_bytes(2, "little") + (0x1F01FF).to_bytes(4, "little") + sid
+        entries = ace(user) + ace(system)
+        acl = bytes((2, 0)) + (8 + len(entries)).to_bytes(2, "little") + (2).to_bytes(2, "little") + b"\0\0" + entries
+        self.assertTrue(fs._private_policy_bytes(user, 0x1004, acl, user))
+        self.assertFalse(fs._private_policy_bytes(system, 0x1004, acl, user))
+        self.assertFalse(fs._private_policy_bytes(user, 4, acl, user))
+        changed = bytearray(acl); changed[4:6] = (3).to_bytes(2, "little")
+        self.assertFalse(fs._private_policy_bytes(user, 0x1004, bytes(changed), user))
+        policy = SimpleNamespace(owner=user, control=0x1004, acl_bytes=acl)
+        with patch.object(fs, "current_sid", return_value="user"), patch.object(fs, "_sid_bytes", return_value=user):
+            self.assertTrue(fs._policy_is_private(policy))
+        source = fs.bootstrap_reader_source()
+        self.assertIn("def _private_policy_bytes", source)
+        self.assertIn("require_private=False", source)
+        self.assertIn("permissions(handle, require_private and not directory)", source)
+        namespace = {}
+        exec(compile(source, "<private-initial-closure>", "exec"), namespace)
+        self.assertEqual(False, namespace["read_initial_regular"].__kwdefaults__["require_private"])

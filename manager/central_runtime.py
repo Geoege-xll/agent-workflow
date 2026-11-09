@@ -13,6 +13,7 @@ from pathlib import Path
 import uuid
 
 from lib import runtime_store as store
+from lib.platform_fs import os
 from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Tree, canonical_project, json_bytes, unique_json
 from lib.hosts.claude_instructions import read_file
 from . import runtime_policy as policy, runtime_service as projects, state_files
@@ -289,7 +290,7 @@ def _publication_budget(plan: CentralPlan) -> int:
             raise ActivationError("项目生产者没有提供有效容量预算")
         for field, size in (("binding_after", budget.binding_after_bytes), ("journal_after", budget.journal_after_bytes)):
             publication_capacity(size)
-            row[field] = Node("file", b"x" * size, 0o600, CAPACITY_IDENTITY).value()
+            row[field] = Node("file", b"x" * size, 0o600, CAPACITY_IDENTITY, "f" * 64 if os.name == "nt" else "").value()
     publication_capacity(len(plan.activation_before.payload))
     publication_capacity(len(json_bytes(_expected_current(journal))))
     return _settlement_budget(journal, receipt_increment=increment)

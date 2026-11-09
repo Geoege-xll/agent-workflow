@@ -593,3 +593,41 @@ with directory_lock(Path(sys.argv[1]), "central-project-state"):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsNodeCodecContractTest(unittest.TestCase):
+    """只验证平台 codec 纯合同；这些用例不冒充 Win32 文件系统执行证据。"""
+
+    def test_posix_codec_stays_four_fields_and_windows_actual_requires_security(self):
+        from types import SimpleNamespace
+        from lib.central import runtime_project as resource
+        node = Node("file", b"retained bytes", 0o600, (1, 2, 0o100600, 1, 14, 5, 6), "a" * 64)
+        with patch.object(resource, "os", SimpleNamespace(name="posix")):
+            value = node.value()
+            self.assertEqual({"kind", "body", "mode", "identity"}, set(value))
+            self.assertEqual(value, Node.from_value(value).value())
+            with self.assertRaises(ProjectRuntimeError):
+                Node.from_value({**value, "security": "a" * 64})
+        with patch.object(resource, "os", SimpleNamespace(name="nt")):
+            value = node.value()
+            self.assertEqual("a" * 64, Node.from_value(value).security)
+            for invalid in ({key: item for key, item in value.items() if key != "security"},
+                            {**value, "security": ""}, {**value, "security": "A" * 64}):
+                with self.subTest(invalid=set(invalid)), self.assertRaises(ProjectRuntimeError):
+                    Node.from_value(invalid)
+            self.assertEqual("", Node.from_value(Node("file", b"future", 0o644).value()).security)
+            self.assertEqual("", Node.from_value(Node().value()).security)
+            with self.assertRaises(ProjectRuntimeError):
+                Node.from_value({**Node().value(), "security": "a" * 64})
+            self.assertEqual("f" * 64, resource.capacity_node_value(Node("file", b"future", 0o644))["security"])
+
+    def test_windows_content_projection_preserves_readonly_and_keeps_acl_independent(self):
+        from types import SimpleNamespace
+        from lib.central import runtime_project as resource
+        with patch.object(resource, "os", SimpleNamespace(name="nt")):
+            private = Node("file", b"same", 0o600, (), "")
+            public = Node("file", b"same", 0o666, (), "")
+            self.assertTrue(private.same_content(public))
+            self.assertFalse(private.same_content(Node("file", b"same", 0o444)))
+            self.assertNotEqual(Node("file", b"same", 0o600, (1,) * 7, "a" * 64),
+                                Node("file", b"same", 0o600, (1,) * 7, "b" * 64))

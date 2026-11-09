@@ -91,6 +91,30 @@ def _identity(info) -> tuple:
             info.st_mtime_ns, info.st_ctime_ns)
 
 
+def _security(descriptor: int) -> tuple:
+    """仅 Windows 增加独立 ACL 见证，POSIX 快照元组保持历史形状。"""
+    if os.name == "nt":
+        if __package__:
+            from .windows_fs import security_fingerprint
+        else:
+            from windows_fs import security_fingerprint
+        return (security_fingerprint(descriptor),)
+    return ()
+
+
+def _entry_identity(parent: int, name: str, info) -> tuple:
+    if os.name != "nt":
+        return _identity(info)
+    flags = _DIRECTORY_FLAGS if stat.S_ISDIR(info.st_mode) else _READ_FLAGS
+    descriptor = os.open(name, flags, dir_fd=parent)
+    try:
+        if _identity(os.fstat(descriptor)) != _identity(info):
+            raise RuntimeStoreError("核心节点在权限见证时被替换")
+        return (*_identity(info), *_security(descriptor))
+    finally:
+        os.close(descriptor)
+
+
 def _node_identity(info) -> tuple:
     return info.st_dev, info.st_ino
 
@@ -132,7 +156,7 @@ def _included(relative: str) -> bool:
 def _check_directory(info, display: str, *, frozen: bool = False) -> None:
     if not stat.S_ISDIR(info.st_mode):
         raise RuntimeStoreError(f"核心目录不能是链接或特殊节点：{display}")
-    if frozen and os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o555:
+    if frozen and stat.S_IMODE(info.st_mode) != (0o700 if os.name == "nt" else 0o555):
         raise RuntimeStoreError(f"核心目录只读模式已改变：{display}")
 
 
@@ -197,18 +221,26 @@ def _read_regular(parent: int, name: str, *, limit: int = _FILE_LIMIT, expected=
     if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
             or before.st_mode & 0o7000):
         raise RuntimeStoreError(f"核心文件必须是无特殊权限的单链接普通文件：{name}")
-    if expected is not None and _identity(before) != expected:
+    if expected is not None and _identity(before) != expected[:7]:
         raise RuntimeStoreError(f"核心源文件在快照期间变化：{name}")
     if before.st_size > limit:
         raise RuntimeStoreError(f"核心文件超过安全读取上限：{name}")
-    descriptor = os.open(name, _READ_FLAGS, dir_fd=parent)
+    # Windows 流式核心读取同样拒绝活跃数据写者与换名者；保留 CRT fd 与
+    # 既有128MiB读预算，不把普通 Node 的8MiB后端上限转嫁给核心载荷。
+    options = {"sharing": 1} if os.name == "nt" else {}  # FILE_SHARE_READ
+    descriptor = os.open(name, _READ_FLAGS, dir_fd=parent, **options)
     with os.fdopen(descriptor, "rb") as stream:
+        security = _security(stream.fileno())
+        if expected is not None and (*_identity(before), *security) != expected:
+            raise RuntimeStoreError(f"核心源文件权限在快照期间变化：{name}")
         if _identity(os.fstat(stream.fileno())) != _identity(before):
             raise RuntimeStoreError(f"核心文件在打开时变化：{name}")
         body = stream.read(before.st_size + 1)
         after = os.fstat(stream.fileno())
+        if _security(stream.fileno()) != security:
+            raise RuntimeStoreError(f"核心文件 ACL 在读取期间变化：{name}")
     if (len(body) != before.st_size or _identity(after) != _identity(before)
-            or _identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != _identity(before)):
+            or _entry_identity(parent, name, os.stat(name, dir_fd=parent, follow_symlinks=False)) != (*_identity(before), *security)):
         raise RuntimeStoreError(f"核心文件在读取期间变化：{name}")
     return body, before
 
@@ -241,7 +273,7 @@ def _scan(root: int, *, source: bool) -> tuple[list[str], list[dict], dict]:
     """源扫描只选择受管边界，库扫描验证全部节点，不能用忽略规则掩盖损坏。"""
     root_info = os.fstat(root)
     _check_directory(root_info, ".", frozen=not source)
-    directories, files, identities = [], [], {"": _identity(root_info)}
+    directories, files, identities = [], [], {"": (*_identity(root_info), *_security(root))}
     seen = set()
 
     def visit(parent: int, name: str, relative: str) -> None:
@@ -257,18 +289,20 @@ def _scan(root: int, *, source: bool) -> tuple[list[str], list[dict], dict]:
         if folded in seen:
             raise RuntimeStoreError(f"核心载荷路径存在跨平台重名：{relative}")
         seen.add(folded)
-        identities[relative] = _identity(info)
+        identities[relative] = _entry_identity(parent, name, info)
         if stat.S_ISDIR(info.st_mode):
             _check_directory(info, relative, frozen=not source)
             directories.append(relative)
             with _child_directory(parent, name, frozen=not source) as child:
                 for child_name in sorted(os.listdir(child)):
                     visit(child, child_name, f"{relative}/{child_name}")
-                if _identity(os.fstat(child)) != _identity(info):
+                if (*_identity(os.fstat(child)), *_security(child)) != identities[relative]:
                     raise RuntimeStoreError(f"核心目录在扫描期间变化：{relative}")
         else:
             body, opened = _read_regular(parent, name, expected=identities[relative])
             executable = bool(opened.st_mode & 0o111)
+            if not source and os.name == "nt" and stat.S_IMODE(opened.st_mode) != 0o600:
+                raise RuntimeStoreError(f"中央 Windows 核心文件不是私有 ACL 投影：{relative}")
             if not source and os.name != "nt":
                 mode = 0o555 if executable else 0o444
                 if stat.S_IMODE(opened.st_mode) != mode:
@@ -279,7 +313,7 @@ def _scan(root: int, *, source: bool) -> tuple[list[str], list[dict], dict]:
     names = (*CORE_DIRECTORIES, *SETUP_FILES) if source else sorted(os.listdir(root))
     for name in names:
         visit(root, name, name)
-    if _identity(os.fstat(root)) != identities[""]:
+    if (*_identity(os.fstat(root)), *_security(root)) != identities[""]:
         raise RuntimeStoreError("核心根目录在扫描期间变化")
     return sorted(directories), sorted(files, key=lambda row: row["path"]), identities
 
@@ -399,7 +433,7 @@ def _validated_entry(version: Path, binding: dict):
         if set(os.listdir(root)) != {"core", "manifest.json"}:
             raise RuntimeStoreError("核心版本目录的节点集合已改变")
         raw, info = _read_regular(root, "manifest.json", limit=_MANIFEST_LIMIT)
-        if os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o444:
+        if stat.S_IMODE(info.st_mode) != (0o600 if os.name == "nt" else 0o444):
             raise RuntimeStoreError("核心清单只读模式已改变")
         if hashlib.sha256(raw).hexdigest() != binding["manifest_sha256"]:
             raise RuntimeStoreError("核心原始清单摘要不匹配，版本已损坏")
@@ -497,35 +531,54 @@ def read_core_source(core: FrozenCore, logical_path: str) -> bytes:
         raise RuntimeStoreError("固定核心或其清单文件缺失") from exc
 
 
-def _write_new(parent: int, name: str, body: bytes, mode: int = 0o600) -> None:
+def _write_new(parent: int, name: str, body: bytes, mode: int = 0o600) -> dict | None:
     descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          mode, dir_fd=parent)
+    created = None
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(body)
         stream.flush()
         os.fchmod(stream.fileno(), mode)
         os.fsync(stream.fileno())
+        if os.name == "nt":
+            created = {"identity": _identity(os.fstat(stream.fileno())), "security": _security(stream.fileno())[0],
+                       "sha256": hashlib.sha256(body).hexdigest()}
+    if created is not None:
+        # Windows 可能到写句柄关闭才结算 LastWriteTime；只允许原创建 inode/ACL
+        # 的关闭后 metadata 投影，正文 SHA 仍来自刚写入的精确字节，不认领换名节点。
+        actual = _entry_identity(parent, name, os.stat(name, dir_fd=parent, follow_symlinks=False))
+        if actual[:2] != created["identity"][:2] or actual[7] != created["security"]:
+            raise RuntimeStoreError("新建核心文件在关闭写句柄前后被替换或改变 ACL")
+        return {"identity": actual[:7], "security": actual[7], "sha256": created["sha256"]}
+    return None
 
 
 def _verify_snapshot(root: int, expected: dict) -> None:
     # 比较整个两遍快照的节点身份；仅比较摘要会漏掉改写后恢复同字节的并发输入。
     for relative, identity in expected.items():
         if not relative:
-            actual = os.fstat(root)
+            actual = (*_identity(os.fstat(root)), *_security(root))
         else:
             with _relative_parent(root, relative) as (parent, name):
-                actual = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if _identity(actual) != identity:
+                actual = _entry_identity(parent, name, os.stat(name, dir_fd=parent, follow_symlinks=False))
+        if actual != identity:
             raise RuntimeStoreError(f"核心快照在操作期间变化：{relative or '.'}")
 
 
-def _copy_snapshot(source: int, stage: int, manifest: dict, identities: dict) -> None:
+def _copy_snapshot(source: int, stage: int, manifest: dict, identities: dict) -> dict:
+    created = {}
     os.mkdir("core", 0o700, dir_fd=stage)
     with _child_directory(stage, "core") as root:
+        if os.name == "nt":
+            created["core"] = {"identity": _node_identity(os.fstat(root)), "security": _security(root)[0]}
         # 字典序使父目录先于子目录创建；所有目标由本轮排他创建，没有覆盖已有内容。
         for relative in manifest["directories"]:
             with _relative_parent(root, relative) as (parent, name):
                 os.mkdir(name, 0o700, dir_fd=parent)
+                if os.name == "nt":
+                    with _child_directory(parent, name) as child:
+                        created["core/" + relative] = {"identity": _node_identity(os.fstat(child)),
+                                                       "security": _security(child)[0]}
         for row in manifest["files"]:
             relative = row["path"]
             with _relative_parent(source, relative) as (parent, name):
@@ -534,7 +587,10 @@ def _copy_snapshot(source: int, stage: int, manifest: dict, identities: dict) ->
                 raise RuntimeStoreError(f"核心源在复制期间变化：{relative}")
             with _relative_parent(root, relative) as (parent, name):
                 mode = (0o555 if row["executable"] else 0o444) if os.name != "nt" else 0o600
-                _write_new(parent, name, body, mode)
+                fact = _write_new(parent, name, body, mode)
+                if os.name == "nt":
+                    created["core/" + relative] = fact
+    return created
 
 
 def _freeze_directories(root: int, paths: list[str]) -> None:
@@ -549,23 +605,52 @@ def _freeze_directories(root: int, paths: list[str]) -> None:
     os.fsync(root)
 
 
-def _remove_stage(parent: int, name: str, expected: tuple) -> None:
+def _remove_stage(parent: int, name: str, expected: tuple, *, directories: dict | None = None, prefix: str = "") -> None:
     """只回收本轮 UUID 暂存树；逐段拒绝链接，绝不清理已发布版本。"""
     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
     if _node_identity(info) != expected:
         raise RuntimeStoreError("导入暂存目录身份已改变，保留现场")
+    if os.name == "nt" and (directories is None or prefix not in directories
+            or tuple(directories[prefix]["identity"]) != expected):
+        # 复制尚未返回完整创建事实时，保留整个失败 stage，不能即时认领其子目录。
+        raise RuntimeStoreError("Windows 暂存目录缺少可信创建身份与 ACL，保留现场")
     with _child_directory(parent, name) as root:
         if os.name != "nt":
             os.fchmod(root, 0o700)
         for child in os.listdir(root):
             info = os.stat(child, dir_fd=root, follow_symlinks=False)
             if stat.S_ISDIR(info.st_mode):
-                _remove_stage(root, child, _node_identity(info))
+                if os.name == "nt":
+                    child_prefix = prefix + "/" + child if prefix else child
+                    known = directories.get(child_prefix)
+                    if known is None:
+                        raise RuntimeStoreError("暂存子目录缺少本轮创建事实，保留现场")
+                    _remove_stage(root, child, tuple(known["identity"]), directories=directories, prefix=child_prefix)
+                else:
+                    _remove_stage(root, child, _node_identity(info))
             elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
-                os.unlink(child, dir_fd=root)
+                if os.name == "nt":
+                    if __package__:
+                        from .windows_fs import delete_regular
+                    else:
+                        from windows_fs import delete_regular
+                    child_prefix = prefix + "/" + child if prefix else child
+                    known = directories.get(child_prefix)
+                    if known is None or len(known["identity"]) != 7 or "sha256" not in known:
+                        raise RuntimeStoreError("暂存文件缺少本轮创建事实，保留未知内容")
+                    delete_regular(root, child, expected=known, max_bytes=_FILE_LIMIT)
+                else:
+                    os.unlink(child, dir_fd=root)
             else:
                 raise RuntimeStoreError("暂存树出现未知链接或特殊节点，保留现场")
-    os.rmdir(name, dir_fd=parent)
+    if os.name == "nt":
+        if __package__:
+            from .windows_fs import delete_directory
+        else:
+            from windows_fs import delete_directory
+        delete_directory(parent, name, expected=directories[prefix])
+    else:
+        os.rmdir(name, dir_fd=parent)
 
 
 def import_core(source_root: Path, state: Path | None = None, *, expected_binding: dict | None = None) -> FrozenCore:
@@ -592,12 +677,25 @@ def import_core(source_root: Path, state: Path | None = None, *, expected_bindin
             stage_name = ".import-" + uuid.uuid4().hex
             os.mkdir(stage_name, 0o700, dir_fd=destination)
             stage_identity = _node_identity(os.stat(stage_name, dir_fd=destination, follow_symlinks=False))
+            stage_directories = {}
             try:
                 with _child_directory(destination, stage_name) as stage:
-                    _copy_snapshot(source, stage, manifest, identities)
+                    if _node_identity(os.fstat(stage)) != stage_identity:
+                        raise RuntimeStoreError("新建导入 stage 在首次使用前被替换")
+                    if os.name == "nt":
+                        stage_directories[""] = {"identity": stage_identity, "security": _security(stage)[0]}
+                    created_directories = _copy_snapshot(source, stage, manifest, identities)
+                    if os.name == "nt" and created_directories is not None:
+                        stage_directories.update(created_directories)
                     # 清单先在不可见暂存树内排他发布，复用既有跨平台发布语义。
-                    _write_new(stage, ".manifest", raw, 0o444 if os.name != "nt" else 0o600)
+                    manifest_fact = _write_new(stage, ".manifest", raw, 0o444 if os.name != "nt" else 0o600)
                     publish_exclusive(runtimes / stage_name / ".manifest", runtimes / stage_name / "manifest.json")
+                    if os.name == "nt":
+                        actual = _entry_identity(stage, "manifest.json", os.stat("manifest.json", dir_fd=stage, follow_symlinks=False))
+                        if actual[:2] != manifest_fact["identity"][:2] or actual[7] != manifest_fact["security"]:
+                            raise RuntimeStoreError("发布清单的 inode 或 ACL 不再属于本轮创建")
+                        stage_directories["manifest.json"] = {"identity": actual[:7], "security": actual[7],
+                                                              "sha256": manifest_fact["sha256"]}
                     _freeze_directories(stage, ["core", *("core/" + path for path in directories)])
                 second_directories, second_files, second_identities = _scan(source, source=True)
                 if (directories != second_directories or files != second_files or identities != second_identities):
@@ -623,7 +721,7 @@ def import_core(source_root: Path, state: Path | None = None, *, expected_bindin
                 if stage_name:
                     active_error = sys.exc_info()[1]
                     try:
-                        _remove_stage(destination, stage_name, stage_identity)
+                        _remove_stage(destination, stage_name, stage_identity, directories=stage_directories)
                     except (OSError, RuntimeStoreError) as cleanup_error:
                         if active_error is None:
                             raise

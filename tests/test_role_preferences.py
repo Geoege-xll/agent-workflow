@@ -1218,3 +1218,37 @@ class RolePreferencesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsModelArchiveContractTest(unittest.TestCase):
+    """只覆盖计划 mode 投影与历史 ACL 的区别；真实归档走 Windows 组合节点。"""
+
+    def test_planned_content_projection_does_not_relax_archive_identity_or_acl(self):
+        from contextlib import nullcontext
+        import hashlib
+        from types import SimpleNamespace
+        from lib.central import runtime_project
+        node = runtime_project.Node("file", b"archived", 0o600,
+                                   (1, 2, stat.S_IFREG | 0o600, 1, 8, 5, 6), "a" * 64)
+        version = {"path": "archive", "expected_sha": hashlib.sha256(node.payload).hexdigest(),
+                   "mode": node.mode, "identity": list(node.identity), "security": node.security}
+        project = Path("/owned-project")
+        with patch.object(runtime_project, "os", SimpleNamespace(name="nt")):
+            self.assertTrue(state_files.same_file_state((b"same", 0o600), (b"same", 0o644)))
+            self.assertFalse(state_files.same_file_state((b"same", 0o444), (b"same", 0o600)))
+        with patch.object(service, "os", SimpleNamespace(name="nt")), \
+                patch.object(state_files, "AnchoredFile", side_effect=lambda *args: nullcontext(SimpleNamespace(directory=1, name="archive"))):
+            with patch.object(service, "read_at", return_value=node):
+                service.check_versions(project, [version])
+            for changed in (runtime_project.Node(node.kind, node.payload, node.mode, node.identity, "b" * 64),
+                            runtime_project.Node(node.kind, node.payload, node.mode, (1, 99, *node.identity[2:]), node.security),
+                            runtime_project.Node(node.kind, node.payload, 0o666, node.identity, node.security)):
+                with self.subTest(changed_mode=changed.mode), patch.object(service, "read_at", return_value=changed), \
+                        self.assertRaises(state_files.PreservedEdit):
+                    service.check_versions(project, [version])
+            for invalid in ({key: value for key, value in version.items() if key != "security"},
+                            {**version, "identity": []}, {**version, "unknown": True}):
+                with self.assertRaises(ValueError):
+                    service.check_versions(project, [invalid])
+        with patch.object(runtime_project, "os", SimpleNamespace(name="posix")):
+            self.assertFalse(state_files.same_file_state((b"same", 0o600), (b"same", 0o644)))

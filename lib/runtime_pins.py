@@ -13,6 +13,7 @@ if not __package__:
     from pathlib import Path as _Path
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
+import base64
 import json
 from contextlib import contextmanager
 import os
@@ -48,6 +49,20 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise RuntimePinError("runtime_binding JSON 不得包含重复字段")
         result[key] = value
     return result
+
+
+def decode_binding_b64(value: str) -> dict:
+    """Windows Shell 只传规范 base64；解码正文硬限 4KiB，pin 仍严格三字段。"""
+    if not isinstance(value, str) or len(value) > 5464:
+        raise RuntimePinError("编码 runtime_binding 超过传输上限")
+    try:
+        body = base64.b64decode(value, validate=True)
+        if len(body) > 4096 or base64.b64encode(body).decode("ascii") != value:
+            raise ValueError("noncanonical binding")
+        return store.validate_binding(json.loads(body.decode("utf-8", errors="strict"),
+                                                 object_pairs_hook=_unique_object))
+    except (ValueError, TypeError, UnicodeError) as exc:
+        raise RuntimePinError("编码 runtime_binding 无效") from exc
 
 
 def environment_binding() -> dict | None:

@@ -102,6 +102,20 @@ old versions under this project's `used_bindings`; disabling prevents new tasks.
 roots and unknown/corrupt versions fail immediately, without latest-version fallback. This defines only the
 invocation contract; it does not prove host loading or Agent execution.
 
+### Native Windows central calls
+
+Use PowerShell 7.0+ and the explicitly selected existing Python 3.11+ executable; never choose Windows PowerShell 5.1 or infer a Python/bootstrap beside another executable. Pass `-I -B -X utf8` before `.agent-workflow/runtime.py`. The generated project entry names the selected Python; the following `$workflowPython` must be assigned that same explicit absolute executable in the current call, not inherited from an earlier shell.
+
+```powershell
+& $workflowPython -I -B -X utf8 .agent-workflow/runtime.py check
+& $workflowPython -I -B -X utf8 .agent-workflow/runtime.py --binding-b64 '<canonical-base64-of-current-task-three-field-JSON>' read product/WORKFLOW.md
+& $workflowPython -I -B -X utf8 .agent-workflow/runtime.py --binding-b64 '<same-current-task-pin-base64>' helper lib/task_graph_cli.py validate --input '<current-graph-or-pack>'
+```
+
+Encode the exact current Task Pack pin as strict UTF-8 JSON and canonical base64 in this call; the decoded transport is at most 4KiB. This does not add fields or a second binding schema. Duplicate/mutually exclusive flags, unknown fields, missing pins and invalid base64 fail closed before task admission. The native bridge normalizes the pin before selecting the current controller for `check`/task initialization; existing pinned reads/helpers retain their original core after switches or disablement. POSIX `--binding` argv remains unchanged.
+
+Any Bash `python_runtime.sh .../lib/<helper>.py` example in a pinned Skill, role or source document maps to the same logical `lib/<helper>.py` via `helper` above on Windows central projects. Do not execute Bash, source setup scripts or copied project helpers to follow such examples. Required managed text is read through the same pin, while Skill discovery remains a central symlink with no copied Skill tree. Generated advisory Hooks use an explicit managed thin bootstrap and verified central supervisor within the existing 15s host/12s inner deadline; no daemon, runtime download or persistent alternate core is introduced. These platform contracts change no Light/Full stage, permission or confirmation rule.
+
 ### Source-pack development
 
 Source-pack development without a central marker/bridge context uses the Python entries below
@@ -148,11 +162,7 @@ provide a compatibility execution or upgrade branch for old self-contained insta
   to rediscover a working interpreter. Diagnose the script only when evidence points to it. Missing
   support is a reported environment limitation, not permission to install Python or alter global PATH.
 
-The unpublished npm/npx Windows installation channel has been removed. The Windows filesystem
-backend rejects managed Skill symlink publication before project resources or central state are created;
-Windows project installation has no accepted installed-project helper path. Do not copy a runtime or
-Skills into the project to bypass that boundary. Retained cross-platform launchers and simulated checks
-do not prove Windows installation support.
+The unpublished npm/npx Windows installation channel has been removed. Public version 2.1.3 remains unsupported on Windows; candidate native central code and real Windows/desktop acceptance are separate evidence. Native candidates require local NTFS, private owner/DACL proofs and the managed Skill symlink capability. Unknown reparse points, remote volumes and multiple hard links fail closed. Do not copy a runtime or Skills into the project to bypass those boundaries; portable contract checks alone do not prove native installation support.
 
 These are command-execution boundaries within existing steps, not additional workflow gates.
 
