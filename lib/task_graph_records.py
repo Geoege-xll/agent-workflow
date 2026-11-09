@@ -31,13 +31,13 @@ import unicodedata
 try:
     from .agent_continuation import active as _running, check_binding
     from lib.hosts.claude_instructions import read_file
-    from .task_graph import TaskGraphError
+    from .task_graph import TaskGraphError, SATISFIED_DEPENDENCY_STATES
     from .runtime_pins import project_root, read_builtin_source, record_binding
     from .standard_paths import builtin_source_path
 except ImportError:
     from agent_continuation import active as _running, check_binding
     from lib.hosts.claude_instructions import read_file
-    from task_graph import TaskGraphError
+    from task_graph import TaskGraphError, SATISFIED_DEPENDENCY_STATES
     from runtime_pins import project_root, read_builtin_source, record_binding
     from standard_paths import builtin_source_path
 
@@ -130,6 +130,13 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
         if before == body:
             return False
         identity = _identity(path) if before is not None else None
+        # 只有I/O边界知道实际待写原记录。由结算owner比较before/after识别本轮
+        # 新收据并拒绝证据自覆写；不向纯update塞隐式源路径或特殊返回对象。
+        if __package__:
+            from .task_settlement import validate_new_settlement_sources
+        else:
+            from task_settlement import validate_new_settlement_sources
+        validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         mode = identity[2] if identity else 0o600
         descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
         temporary = Path(raw)
@@ -303,6 +310,12 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
             raise TaskGraphError("task update attempts to modify a protected or unsupported field")
         if fields.get("state") == "RESULT_VERIFIED":
             raise TaskGraphError("RESULT_VERIFIED requires the evidence-bound settle operation")
+        if (task["task_type"] in {"read_only", "evidence"} and "state" in fields
+                and fields["state"] != old[task_id]["state"]
+                and isinstance(fields["state"], str) and fields["state"] in SATISFIED_DEPENDENCY_STATES):
+            # 旧完成值仅加载/同态兼容，不能让新结果换个历史名称绕过证据结算。
+            # 回到pending仍沿原规则处理；Writer/显式QA的既有转换不受此守卫影响。
+            raise TaskGraphError("new read_only/evidence completion requires settle; legacy success states are read-only compatibility")
         for field, value in fields.items():
             if field == "agent_ref":
                 # 在套用状态变更之前检查旧记录，身份不是新派发或完成态的凭据。

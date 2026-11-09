@@ -157,6 +157,90 @@ class TaskSettlementTest(unittest.TestCase):
             with self.assertRaisesRegex(TaskGraphError, "RESULT_VERIFIED"):
                 validate_graph([Task("invalid", "request", task_type=kind, state="RESULT_VERIFIED")])
 
+    def test_new_legacy_success_transitions_reject_but_history_and_same_state_remain_compatible(self):
+        """历史加载兼容不等于新转换许可，包含会解依赖的QA旧值。"""
+        for kind in ("read_only", "evidence"):
+            for light in (False, True):
+                for destination in ("BUILD_VERIFIED", "QA_SCOPE_READY", "QA"):
+                    payload, _ = self.fixture(kind=kind, light=light)
+                    change = {"tasks": {"api": {"set": {"state": destination}}}}
+                    rejected, before = self.invoke(payload, change)
+                    self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                    self.assertEqual(before, self.source.read_bytes())
+                    self.assertTrue(active((payload.get("task") or payload["tasks"][0])))
+                    # 既有状态仍可读、同态设置与回到pending；不重写历史事实。
+                    task = payload.get("task") or payload["tasks"][0]
+                    task["state"] = destination
+                    self.assertEqual({"status": "valid"}, _execute("validate", payload))
+                    same = self.update(payload, change)
+                    self.assertEqual(destination, (same.get("task") or same["tasks"][0])["state"])
+                    pending = self.update(payload, {"tasks": {"api": {"set": {"state": "DECLARED"}}}})
+                    self.assertEqual("DECLARED", (pending.get("task") or pending["tasks"][0])["state"])
+                    other = "QA_SCOPE_READY" if destination != "QA_SCOPE_READY" else "BUILD_VERIFIED"
+                    with self.assertRaisesRegex(TaskGraphError, "completion requires settle"):
+                        self.update(payload, {"tasks": {"api": {"set": {"state": other}}}})
+
+    def _assert_record_evidence_alias_rejected(self, alias: Path):
+        """真实原CLI分别验证所有证据位置，拒绝发生在发布前且原文件字节不变。"""
+        for field in ("task_pack", "completion", "result", "verification"):
+            payload, patch = self.fixture(light=True)
+            settle = patch["tasks"]["api"]["settle"]
+            source = {"path": str(alias), "sha256": records.digest(self.source.read_bytes())}
+            if field == "task_pack":
+                settle["task_pack"] = source
+                settle["completion"]["task_pack_sha256"] = source["sha256"]
+                settle["result"]["task_pack_sha256"] = source["sha256"]
+            elif field == "result":
+                settle["result"]["evidence"] = [source]
+            elif field == "verification":
+                settle["verification"][0]["evidence"] = source
+            else:
+                settle["completion"]["evidence"] = source
+            with self.subTest(field=field):
+                rejected, before = self.invoke(payload, patch)
+                self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                self.assertIn("physically independent", rejected.stderr)
+                self.assertEqual(before, self.source.read_bytes())
+                self.assertFalse(list(self.root.glob(".*.workflow-*")))
+
+    def test_publish_rejects_original_record_as_any_new_settlement_evidence(self):
+        self._assert_record_evidence_alias_rejected(self.source)
+
+    def test_publish_rejects_real_case_alias_as_any_new_settlement_evidence(self):
+        """同一节点也在Windows运行；只按真实文件系统是否存在别名决定覆盖范围。"""
+        self.fixture(light=True)
+        alias = self.source.with_name(self.source.name.upper())
+        if not alias.exists() or not alias.samefile(self.source):
+            self.skipTest("本文件系统不提供大小写别名；未冒充Windows原生覆盖")
+        self._assert_record_evidence_alias_rejected(alias)
+        print("SETTLEMENT_CASE_ALIAS: actual samefile alias rejected in every evidence position", flush=True)
+
+    def test_independent_snapshots_survive_and_ordinary_publication_contract_is_unchanged(self):
+        payload, patch = self.fixture(light=True)
+        pack_bytes, log_bytes = self.accepted.read_bytes(), self.evidence.read_bytes()
+        result, _ = self.invoke(payload, patch)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(pack_bytes, self.accepted.read_bytes())
+        self.assertEqual(log_bytes, self.evidence.read_bytes())
+        self.assertEqual(patch["tasks"]["api"]["settle"]["task_pack"]["sha256"], records.digest(self.accepted.read_bytes()))
+        # 普通bytes/JSON和新文件不是结算协议；不以字节魔法更改publish API。
+        ordinary = self.root / "ordinary.json"
+        for body in (b"ordinary bytes\n", b'{"ordinary":true}', b'{"ordinary":false}',
+                     b'{"schema_version":2,"task":{"id":"ordinary","state":"RUNNING","task_type":[]}}',
+                     b'{"schema_version":2,"task":{"id":"ordinary","state":"RESULT_VERIFIED","task_type":[]}}'):
+            expected = records.digest(ordinary.read_bytes()) if ordinary.exists() else "missing"
+            self.assertTrue(records.publish(ordinary, body, expected))
+            self.assertEqual(body, ordinary.read_bytes())
+            self.assertFalse(records.publish(ordinary, body, records.digest(body)))
+        exported = self.root / "completed-export.json"
+        self.assertTrue(records.publish(exported, self.source.read_bytes(), "missing"))
+        # 后续非结算更新不重查所有历史来源；本测试只删除自有日志模拟过期来源。
+        completed = records.decode(self.source.read_bytes())
+        completed["task"]["acceptance_evidence"].append("ordinary later evidence reference")
+        self.evidence.unlink()
+        self.assertTrue(records.publish(self.source, json.dumps(completed).encode("utf-8"),
+                                        records.digest(self.source.read_bytes())))
+
     def test_completed_scope_change_requires_pending_and_retirement_does_not_complete_running(self):
         payload, patch = self.fixture()
         retired = self.update(payload, {"tasks": {"api": {"set": {"agent_retired": True}}}})

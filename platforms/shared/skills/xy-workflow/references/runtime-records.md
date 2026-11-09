@@ -204,6 +204,10 @@ Task Pack bytes with existing `fingerprints` and reuse the complete pack actuall
 Keep necessary accepted-pack bytes and evidence readable for review. The helper compares the complete
 current task contract/authority, allowing only state/retirement metadata and omitted empty Light graph
 fields to differ. Changed scope, approvals, standards, pin, wrong identity or old result SHA rejects.
+Use the explicit complete Task Pack snapshot actually delivered/acknowledged, physically separate from
+the mutable original record. Existing `task` export supports the task artifact; retain its delivered bytes
+and SHA. A Light record cannot serve simultaneously as the accepted snapshot being preserved and the
+record being overwritten. No new report or second ledger is required.
 
 Evidence references reuse explicit existing task-owned native exports/results/logs. Each is an absolute
 single-link regular file with exact SHA and the existing safe-reader 4MiB limit; do not scan histories or
@@ -224,6 +228,11 @@ one original CAS. It releases record execution occupancy and owned locks; actual
 still unknown until observed separately. A stale original SHA, failed check or busy publication lock leaves
 the original unchanged; inspect conflicts before retry. Plain `set.state=RESULT_VERIFIED`, mixed settle/set,
 multi-task settlement and Writer/QA settlement reject. Existing Writer build and QA handoff gates remain.
+Ordinary result-task updates also reject new entry into legacy BUILD_VERIFIED, QA_SCOPE_READY and QA;
+historical loading/same-state idempotence and returning to pending remain compatible. At publication,
+the original locked CAS boundary rechecks this round's new receipt sources and rejects every accepted-pack,
+completion, result or verification source physically aliasing the target record, including Windows case
+aliases. Independent copies with the same bytes remain valid; unrelated updates do not rescan old receipts.
 Refresh the admission manifest SHA after success, then use `view` only when its relevant inputs changed.
 An older fixed core lacking the operation/state rejects; never mutate it, replace old pins or hand-edit
 historical native failure fixtures to make this pass.

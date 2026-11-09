@@ -26,6 +26,7 @@ except ImportError:
 
 
 SHA = re.compile(r"[0-9a-f]{64}\Z")
+SETTLEMENT_PREFIX = "RESULT_VERIFIED settlement: "
 
 
 def _object(value: Any, fields: set[str], label: str, *, optional: set[str] = frozenset()) -> dict:
@@ -60,6 +61,69 @@ def _scope(task: dict) -> dict:
     for field in ("depends_on", "blocks", "gates", "semantic_locks"):
         result.setdefault(field, [])
     return result
+
+
+def _record_tasks(value: Any) -> dict[str, dict]:
+    """只识别schema 2记录；普通publish仍可写任意bytes/JSON，不引入新传输协议。"""
+    if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 2:
+        return {}
+    tasks = [value["task"]] if "task" in value else value.get("tasks")
+    if not isinstance(tasks, list) or any(not isinstance(task, dict) or not isinstance(task.get("id"), str)
+                                         or not isinstance(task.get("task_type"), str) for task in tasks):
+        return {}
+    return {task["id"]: task for task in tasks}
+
+
+def validate_new_settlement_sources(target: Path, before: bytes | None, after: bytes, *,
+                                    read: Callable, decode: Callable) -> None:
+    """在原CAS锁内拒绝本轮结算自毁证据，不回查所有历史收据。
+
+    新文件、普通字节/JSON和未发生新结算的更新沿原publish语义。已生成收据是
+    owner显式的不可变证据描述；只解析RUNNING→RESULT_VERIFIED新追加的一条。
+    samefile核实际文件身份，可覆盖Windows大小写别名；不能用同内容或字符串
+    casefold判身份。最后一瞬的不合作外部替换仍受原发布边界限制，不宣称跨文件事务。
+    """
+    if before is None:
+        return
+    try:
+        old_tasks, new_tasks = _record_tasks(decode(before)), _record_tasks(decode(after))
+    except (ValueError, UnicodeError):
+        return
+    for task_id, current in new_tasks.items():
+        previous = old_tasks.get(task_id)
+        if (previous is None or previous.get("state") != "RUNNING" or current.get("state") != "RESULT_VERIFIED"
+                or previous.get("task_type") not in {"read_only", "evidence"}):
+            continue
+        old_evidence, evidence = previous.get("acceptance_evidence"), current.get("acceptance_evidence")
+        if (not isinstance(old_evidence, list) or not isinstance(evidence, list)
+                or len(evidence) != len(old_evidence) + 1 or evidence[:-1] != old_evidence
+                or not isinstance(evidence[-1], str) or not evidence[-1].startswith(SETTLEMENT_PREFIX)):
+            raise TaskGraphError("new result publication requires its exclusive settlement receipt")
+        receipt = _object(decode(evidence[-1][len(SETTLEMENT_PREFIX):].encode("utf-8")),
+                          {"schema_version", "agent_ref", "task_pack", "completion", "result", "verification"},
+                          "settlement receipt", optional={"retire"})
+        completion = _object(receipt["completion"], {"state", "agent_ref", "task_pack_sha256", "evidence"}, "receipt.completion")
+        result = _object(receipt["result"], {"task_pack_sha256", "evidence"}, "receipt.result")
+        if not isinstance(result["evidence"], list) or not isinstance(receipt["verification"], list):
+            raise TaskGraphError("new settlement receipt must contain result and verification evidence arrays")
+        references = [receipt["task_pack"], completion["evidence"], *result["evidence"]]
+        for entry in receipt["verification"]:
+            _object(entry, {"command", "exit_code", "evidence"}, "receipt.verification", optional={"expected"})
+            references.append(entry["evidence"])
+        checked = set()
+        for reference in references:
+            # 复用安全reader及SHA核验，避免路径在结算计算与发布之间已变化。
+            # 同一独立日志可以被多个证据字段引用，但任何字段都不得别名目标。
+            _object(reference, {"path", "sha256"}, "settlement source")
+            if not isinstance(reference["path"], str) or not isinstance(reference["sha256"], str):
+                raise TaskGraphError("settlement source requires a path and SHA string")
+            key = (reference["path"], reference["sha256"])
+            if key in checked:
+                continue
+            _evidence(reference, read, "settlement source")
+            if Path(reference["path"]).samefile(target):
+                raise TaskGraphError("settlement evidence must be physically independent from the record being published")
+            checked.add(key)
 
 
 def _overlap(first: str, second: str) -> bool:
@@ -164,7 +228,7 @@ def settle_task(payload: dict, task: dict, value: Any, *, read: Callable, decode
             raise TaskGraphError("verification failed; string commands require exit 0")
         _evidence(entry["evidence"], read, "settle.verification.evidence")
     # 已有acceptance_evidence承载最小来源绑定，不保存另一份状态或强制额外报告。
-    summary = "RESULT_VERIFIED settlement: " + json.dumps(value, ensure_ascii=False, sort_keys=True)
+    summary = SETTLEMENT_PREFIX + json.dumps(value, ensure_ascii=False, sort_keys=True)
     fields = {"state": "RESULT_VERIFIED", "acceptance_evidence": [*task["acceptance_evidence"], summary]}
     if value.get("retire"):
         fields["agent_retired"] = True

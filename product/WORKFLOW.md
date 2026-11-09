@@ -901,6 +901,9 @@ findings of defects; it does not mean product correctness, a build or implementa
 use this state. Their existing `BUILD_VERIFIED` and request-QA gates remain; explicit QA still requires the
 validated current handoff before `QA_PASSED`. Historical completion values remain readable, without rewriting
 old records or generating them for new result settlement. A standalone audit gets no implementation/QA loop.
+For result tasks, ordinary `set` cannot newly enter legacy dependency-satisfying BUILD_VERIFIED,
+QA_SCOPE_READY or QA. Only loading historical values, setting the same value and returning to pending
+retain compatibility; switching between legacy success values is also a new entry and rejects.
 
 Use the existing record `update` with one exclusive `settle` operation under the shared runtime-records
 reference. Bind the original native ID, accepted complete Task Pack's original-byte SHA, actual native
@@ -910,6 +913,10 @@ JSON shape or SHA is not a host probe. Preserve any accepted-pack bytes and full
 existing task artifacts, not a mandatory new report. Running, unknown, unbound, wrong-ID, stale-scope,
 changed/missing-evidence or rejected verification keeps the original task active. Do not hand-edit a result
 state, use retirement as completion, or turn old failed native fixtures green.
+The accepted Task Pack snapshot and every completion/result/verification evidence source must be physically
+independent of the authoritative record being overwritten. The locked publication boundary checks new
+settlement references against the actual target identity, including Windows case aliases; equal bytes in
+an independent file are allowed. Do not use the mutable Light record itself as its accepted snapshot.
 
 After all checks, the original CAS publishes `RESULT_VERIFIED`, evidence references and optional logical
 retirement together, releasing only record execution occupancy/owned locks. Native closure and actual host
