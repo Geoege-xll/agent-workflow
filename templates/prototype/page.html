@@ -27,7 +27,8 @@
     </div>
   </div>
   <!-- 信息排在画面后。绑定时把 body 来源设为配置 plans 下项目相对 .md 路径，
-       并在唯一导航槽填写同 stem 的两个真实锚点。文档独立打开，不替换受控预览。
+       并在唯一导航槽填写真实 Markdown 锚点；只有同 stem 历史 HTML 实际存在时才可选填其锚点。
+       HTML 生成已暂停，不补造派生页。文档独立打开，不替换受控预览。
        <a href="真实相对路径.html" data-prototype-document="html" target="_blank" rel="noopener">阅读需求 HTML</a>
        <a href="真实相对路径.md" data-prototype-document="markdown" target="_blank" rel="noopener">需求原稿 Markdown</a>
        源模板未绑定时保留空槽；真实交付页必须绑定，不使用 # 或虚构文件充当需求链接。 -->
@@ -39,7 +40,7 @@
   <details class="prototype-contract">
     <summary id="prototype-contract-toggle">Page design and interaction contract</summary>
     <section data-contract-section="purpose"><h2>页面职责</h2><p>此源模板提供独立页面外壳，不代表已批准的业务设计。Platform: Web. Display: responsive. 内容按可用宽度自然展开，使用 CSS px，无固定窗口。创建实际页面时替换为批准的职责与范围；iOS／PC 固定预览须记录实际平台、宽高和显示比例。</p></section>
-    <section data-contract-section="navigation"><h2>导航</h2><p>实际页面只在 index.html 的唯一 nav#prototype-pages 登记一次，可从工作区或独立 HTML 进入。工作区只承载当前登记页；圆形返回展开侧栏和当前分组并聚焦当前入口。独立打开时通过 index.html 的登记页深链返回，不依赖浏览器历史。</p><p>画面后的唯一需求槽尚未绑定。实际交付须声明配置 plans 下的 Markdown 来源，并提供同名 HTML/Markdown 两个普通相对链接；文档导航不属于画面渲染依赖。</p></section>
+    <section data-contract-section="navigation"><h2>导航</h2><p>实际页面只在 index.html 的唯一 nav#prototype-pages 登记一次，可从工作区或独立 HTML 进入。工作区只承载当前登记页；圆形返回展开侧栏和当前分组并聚焦当前入口。独立打开时通过 index.html 的登记页深链返回，不依赖浏览器历史。</p><p>画面后的唯一需求槽尚未绑定。实际交付须声明配置 plans 下的 Markdown 来源，并提供唯一 Markdown 普通相对链接；可选同名历史 HTML 链接仅在实际文件存在时提供。每个文档链接均以 target="_blank" 和 rel="noopener" 独立打开；HTML 生成已暂停，旧页过期不阻断 Markdown 修订，文档导航不属于画面渲染依赖。</p></section>
     <section data-contract-section="interactions"><h2>交互</h2><p data-contract-for="prototype-back-index">圆形返回：点击或 Enter。受控工作区内发送本页返回意图，展开侧栏和当前分组并聚焦当前导航项，保留当前画面；独立打开则进入 index.html 并恢复当前登记页。</p><p data-contract-for="prototype-page-sidebar-toggle">侧栏开关：认证为当前承载页后显示；点击或 Enter/Space 向父工作区发送收放意图，由父级更新侧栏及按钮的名称、aria-expanded。它只改变布局，不改变当前页或分组状态，独立打开本页时隐藏。</p><p data-contract-for="prototype-contract-toggle">页面契约：原生 summary 通过点击、Enter 或 Space 展开和折叠此五节，初始折叠，不覆盖产品画面。实际页面新增的重要产品操作须在此逐项映射稳定 ID。</p></section>
     <section data-contract-section="states"><h2>状态</h2><p>初始显示响应式产品插槽，五节契约折叠。标题、简述、圆形返回、画面、需求与平台说明依次可读。工作区选择和分组展开分别维护；侧栏开关不改变当前页，返回才定位当前入口。源模板没有业务请求或提交，因此业务加载、成功、错误和弹窗状态不适用；实际页面需在本 HTML 实现获准状态。</p></section>
     <section data-contract-section="exceptions"><h2>页面特例</h2><p>此源模板允许未绑定需求的空槽；真实交付页必须绑定正式需求。没有其他页面特例。复用中性共享外壳，产品 token 来自实际项目规范，不将外壳颜色当作产品主题或业务视觉批准。</p></section>

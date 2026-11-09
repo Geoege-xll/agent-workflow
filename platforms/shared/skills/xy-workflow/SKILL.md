@@ -67,10 +67,11 @@ always belongs to the actual project's `.agent-workflow/project.yaml`.
 
 For native Windows central execution, follow the shared dispatch boundary with PowerShell 7.0+ and the explicitly selected existing Python 3.11+, always `-I -B -X utf8`. Use `.agent-workflow/runtime.py check` for new tasks; use the current task's canonical `--binding-b64` for each `read`/`helper` call. Translate source/POSIX Bash helper examples to the same logical `lib/...py` through that native bridge. Never execute Bash or copy Skills/helpers into a thin central project because a pinned source document shows a Bash example. Discovery symlinks remain single-source, and Light/Full, permissions and acceptance stages remain unchanged.
 
-Formal Full requirements review uses HTML while the model maintains one Markdown source. PM follows
-[requirements HTML delivery](../xy-plan/references/requirement-html.md) for pre-approval scratch drafts,
-post-approval same-name plans `.md`/`.html`, and prototype-coverage writeback. HTML freshness creates no
-approval and replaces neither requirement nor prototype fingerprints.
+Formal Full requirements review uses one Markdown source. PM keeps any pre-approval draft in the current
+request scratch, saves the approved plans `.md` before dispatch, and writes prototype coverage back to it.
+Requirements/plan HTML generation and freshness checks are suspended under
+[the retained reference](../xy-plan/references/requirement-html.md); preserve historical HTML and renderer
+source. Document existence creates no approval and replaces neither requirement nor prototype fingerprints.
 
 Use host-native aliases only when explicit activation is needed. Examples:
 `xy-project-memory` (Codex: `$xy-project-memory`; Claude Code: `/xy-project-memory`;

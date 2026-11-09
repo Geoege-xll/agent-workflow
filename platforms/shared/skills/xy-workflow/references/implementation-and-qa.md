@@ -32,11 +32,11 @@ At prototype stage, the design Agent performs three self-checks and the user giv
 there is no independent prototype QA. Unified QA below still reviews production functionality, applicable
 built-in rules, project-specific standards and real evidence. With a physically missing project index and
 no specific leaves, bind configured paths/null fingerprints; create no GENERAL/empty index or duplicated
-general rules for QA. Requirements-review HTML projects one Markdown source. Implementers consume the
-complete current source/task pack without preloading all HTML. QA follows
-[requirements HTML delivery](../../xy-plan/references/requirement-html.md) to check affected-page freshness
-and this source's actual prototype references, reusing valid evidence without rescanning the prototype tree,
-adding approval or independent prototype QA.
+general rules for QA. Requirements review uses one Markdown source; implementers consume the complete
+current source/task pack. Requirements/plan HTML generation and freshness checks are suspended under
+[the retained reference](../../xy-plan/references/requirement-html.md). QA checks the source's actual scoped
+prototype references and applicable Markdown/navigation contracts, reusing valid evidence without rescanning
+the prototype tree, adding approval or independent prototype QA. Existing HTML remains historical material.
 
 ### Execution and acceptance
 

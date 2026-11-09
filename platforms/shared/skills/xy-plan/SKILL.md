@@ -27,9 +27,10 @@ plan_state: draft
 - This draft Skill does not persist files. After requirements approval PM saves Full plans under
   adapter-resolved `docs.plans` before first dispatch, following
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
-- Formal Full requirements review uses an HTML projection of one Markdown source. PM owns the pre-approval
-  scratch draft and post-approval same-name `.md`/`.html` persistence; see
-  [requirements HTML delivery](references/requirement-html.md). This Skill still returns only a draft.
+- Formal Full requirements review uses one Markdown source. PM owns the pre-approval scratch draft
+  and post-approval `.md` persistence before dispatch. Requirements/plan HTML generation is suspended;
+  existing HTML and renderer source remain historical/recovery material under
+  [the suspended HTML delivery reference](references/requirement-html.md). This Skill returns only a draft.
   Reserve concrete prototype page/state coverage with stable REQ IDs; page state is not approval.
 
 ## Drafting procedure

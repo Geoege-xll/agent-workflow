@@ -294,9 +294,10 @@ this reference creates no separate instance-state source.
    Antigravity CLI: `/xy-plan`). It returns a self-contained proposal with `plan_state: draft`,
    exact paths, interfaces, task packs, verification commands and expected results, semantic locks,
    and a machine-readable `task_graph`. The graph is internal scheduler input, not user-visible
-   output. `xy-plan` does not edit files or dispatch Agents. PM follows
-   [requirements HTML delivery](../../xy-plan/references/requirement-html.md) to render the single Markdown
-   draft in this request's scratch for formal Full review, without writing formal plans before approval.
+   output. `xy-plan` does not edit files or dispatch Agents. PM presents the single Markdown draft
+   for formal Full review and may keep it in this request's scratch, without writing formal plans
+   before approval. Requirements/plan HTML generation is suspended under
+   [the retained reference](../../xy-plan/references/requirement-html.md).
 7. The PM reviews the draft and decides the post-QA controlled-document projection:
 
    ```yaml
@@ -323,7 +324,7 @@ this reference creates no separate instance-state source.
    implementation tasks consume that frozen contract directly. A material requirement,
    affected-surface, or plan-boundary change returns the plan to draft and reopens approval.
    The PM now saves the Full plan in adapter-resolved `docs.plans`, before any design/implementation
-   dispatch, then renders its same-name HTML from the single Markdown. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
+   dispatch, retaining the single Markdown without generating HTML. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
    write accepted PROJECT/plans baselines just to save intended work. Merge subsequent effective changes into
    this same plan and replace affected complete Task Packs, including in-flight worker/QA inputs,
    before accepting their results. Preserve unaffected work; apply the linked plan lifecycle.

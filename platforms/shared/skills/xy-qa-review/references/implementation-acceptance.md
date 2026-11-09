@@ -44,11 +44,11 @@ evidence. Do not infer duplication from file count, length or directory, or add 
 Check that current recovery/handoff briefs reflect remaining work in place and preserve necessary completed
 baselines through recoverable references under `xy-workflow/references/plan-lifecycle.md`; accumulated batch
 completion notes do not replace current state. PM still performs cleanup under existing closeout contracts;
-QA deletes no resources and does not rereview unchanged scope for closeout. For requirements HTML delivery,
-follow the [single-source method](../../xy-plan/references/requirement-html.md) to check current Markdown/
-same-name HTML freshness and prototype pages/anchors actually linked by this source. Reuse valid checks;
-do not preload all HTML or the prototype dependency tree. Page existence/checkboxes/successful check do not
-create approval; historical plans/HTML are not current feature truth.
+QA deletes no resources and does not rereview unchanged scope for closeout. Requirements/plan HTML
+generation and freshness checks are suspended under [the retained reference](../../xy-plan/references/requirement-html.md).
+Check the current single Markdown source and prototype pages/anchors actually linked by it within scope.
+Reuse valid checks; do not preload historical HTML or the prototype dependency tree. Document existence
+and checkboxes do not create approval; historical plans/HTML are not current feature truth.
 
 ## Independent standards coverage
 

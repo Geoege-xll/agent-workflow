@@ -68,13 +68,15 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    an explicit src pointing to a registered page. The index rejects meta refresh, arbitrary scripts and inline
    routing. workspace.css/js belong only to the index; concrete pages use minimal page-shell.js.
    Requirements-bound concrete pages declare the canonical Markdown path under configured plans with
-   `body[data-prototype-plan-source]`, and provide the same-name file pair in a single
-   `nav.prototype-requirement-links`, marked `data-prototype-document="html"` and `"markdown"` respectively.
-   Only this slot allows navigation across the prototype root. An unbound source template may leave it empty;
-   do not fabricate links. The validator checks file safety, source binding and HTML integrity. It does not
-   scan Markdown's reverse prototype links, require historical renderer identities to be current, or add
-   documents to page-rendering dependencies. The document-delivery procedure still owns fresh checks for
-   currently delivered requirements HTML.
+   `body[data-prototype-plan-source]`, and provide one `data-prototype-document="markdown"` link in a
+   single `nav.prototype-requirement-links`. One same-name historical HTML link marked
+   `data-prototype-document="html"` is optional when that actual file exists. Every document link uses
+   `target="_blank"` and `rel` containing `noopener`. Only this slot allows navigation across the prototype
+   root. An unbound source template may leave it empty; do not fabricate links. The validator checks safe
+   actual files, canonical target binding and concurrent replacement. It does not scan Markdown's reverse
+   prototype links, require historical HTML freshness/records/renderer identities, or add documents to
+   page-rendering dependencies. Requirements/plan HTML generation and freshness checks are suspended;
+   old derived content cannot block Markdown revisions.
 4. Confirm every changed prototype path is under the configured
    `docs.standards_root/prototype`, except a separately task-authorized design-standard leaf
    update under `docs.standards_root/DESIGN_*.md`. Reject revision-suffixed, dated, `final`, `new`, or

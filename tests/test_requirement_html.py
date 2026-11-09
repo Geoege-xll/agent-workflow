@@ -1,8 +1,10 @@
-"""需求投影独立职责：真实 CLI、唯一原稿、路径/故障保护和安装消费者。"""
+"""当前暂停契约的真实入口验证；旧引擎用例原样保留为不收集的恢复资料。"""
 
 from __future__ import annotations
 
 import hashlib
+import contextlib
+import io
 import base64
 import ctypes
 from html.parser import HTMLParser
@@ -106,7 +108,12 @@ class _RequirementHtmlFixture:
         return page
 
 
-class RequirementHtmlTest(_RequirementHtmlFixture, unittest.TestCase):
+class RequirementHtmlEngineHistory(_RequirementHtmlFixture):
+    """暂停前的历史渲染用例：无 TestCase 基类，不被当前测试收集，也不报告 skip。
+
+    恢复生成须重新授权、恢复全部入口/规则并重新启用这些真实依赖用例；保留正文
+    不是本轮已执行或仍可用的引擎证据。当前契约由 RequirementHtmlSuspendedTest 验证。
+    """
     def test_vendor_checkout_filters_preserve_upstream_bytes(self):
         """真实消费 Git checkout 过滤器，防止 Windows CRLF 改写固定上游载荷。"""
         upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text(encoding="utf-8"))
@@ -517,9 +524,8 @@ class RequirementHtmlTest(_RequirementHtmlFixture, unittest.TestCase):
         self.assertIn("svg", Page((plans / "installed.html").read_bytes()).tags)
 
 
-@unittest.skipUnless(os.name == "nt", "requires actual native Windows, existing Node >= 20 and local NTFS")
-class WindowsRequirementHtmlNativeTest(_RequirementHtmlFixture, unittest.TestCase):
-    """仅供原生组收集；真实文件系统、固定 bundle 和 Job 消费者各有可观察断言。"""
+class WindowsRequirementHtmlNativeHistory(_RequirementHtmlFixture):
+    """暂停前的原生 Windows 恢复资料；不收集、不 skip、不作为当前原生验收。"""
 
     def test_native_render_check_preserves_source_and_vendor_bytes(self):
         upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text(encoding="utf-8"))
@@ -710,6 +716,124 @@ class WindowsRequirementHtmlNativeTest(_RequirementHtmlFixture, unittest.TestCas
             observer.join(timeout=7)
             for handle in handles:
                 api.CloseHandle(handle)
+
+
+class RequirementHtmlSuspendedTest(_RequirementHtmlFixture, unittest.TestCase):
+    """当前必须通过的暂停行为；实际源入口和安装态入口都不能产生派生文件。"""
+
+    def test_public_python_entries_reject_before_any_input_or_side_effect(self):
+        # 故意保留手写旧页且给部分调用无效路径：暂停必须先于输入校验，不能为了
+        # 返回“暂停”先读用户文档、验证 Node、建 scratch 或覆盖已有 HTML。
+        self.target.write_bytes(b"<!doctype html><html>historical user material</html>")
+        before = (renderer.snapshot(self.source), renderer.snapshot(self.target))
+        nodes = sorted(path.relative_to(self.root).as_posix() for path in self.root.rglob("*"))
+        calls = (
+            lambda: renderer.process("render", self.root, "docs/plans/change.md", REQUEST),
+            lambda: renderer.process("check", self.root, "../invalid.md"),
+            lambda: renderer.process("render", self.work / "missing", "missing.md", draft=True),
+            lambda: renderer.render_candidate(self.root, self.source, SAMPLE.encode(), self.source,
+                self.root / "docs/standards/prototype", REQUEST),
+            lambda: renderer.run_renderer(self.work / "never-create-stage", SAMPLE.encode()),
+        )
+        with contextlib.ExitStack() as stack:
+            for name in ("resolve_inputs", "stage_markdown", "scratch_workspace", "publish", "_renderer_stage", "_run_node"):
+                stack.enter_context(patch.object(renderer, name, side_effect=AssertionError(name + " must not run")))
+            for index, invoke in enumerate(calls):
+                with self.subTest(entry=index), self.assertRaisesRegex(renderer.RequirementHtmlError, "HTML 生成功能已暂停"):
+                    invoke()
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(2, renderer.main(["render", "--project", str(self.root), "--source", "../invalid.md"]))
+            self.assertEqual("", stdout.getvalue())
+            self.assertIn(renderer.SUSPENDED_MESSAGE, stderr.getvalue())
+        self.assertEqual(before, (renderer.snapshot(self.source), renderer.snapshot(self.target)))
+        self.assertEqual(nodes, sorted(path.relative_to(self.root).as_posix() for path in self.root.rglob("*")))
+        self.assertFalse((self.work / "never-create-stage").exists())
+
+    def test_real_source_cli_render_check_and_draft_are_suspended(self):
+        # 直接执行仓库真实入口，以选定 Python wrapper 固定解释器；不使用 mock 输出。
+        # 空项目和错误路径同样只得到暂停，不会创建计划、scratch 或访问 Node。
+        self.target.write_bytes(b"historical HTML must stay byte-for-byte")
+        before = (renderer.snapshot(self.source), renderer.snapshot(self.target))
+        for action, extra in (("render", ["--request-id", REQUEST]), ("check", []),
+                              ("render", ["--draft"]), ("render", [])):
+            with self.subTest(action=action, extra=extra):
+                command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                           str(PACK / "lib/documents/requirement_html.py"), action,
+                           "--project", str(self.root), "--source", "docs/plans/change.md", *extra]
+                result = subprocess.run(command, cwd=self.work, capture_output=True, text=True, timeout=20)
+                with (self.work / "engine.log").open("a", encoding="utf-8") as log:
+                    log.write(json.dumps({"argv": command, "exit": result.returncode}, ensure_ascii=False) + "\n")
+                    log.write(result.stdout + result.stderr)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertEqual("", result.stdout)
+                self.assertIn("HTML 生成功能已暂停", result.stderr)
+        # --help 只展示用法，继续保持原有成功退出，便于安装包/消费者检查入口可用性。
+        help_command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                        str(PACK / "lib/documents/requirement_html.py"), "--help"]
+        help_result = subprocess.run(help_command, cwd=self.work, capture_output=True, text=True, timeout=20)
+        with (self.work / "engine.log").open("a", encoding="utf-8") as log:
+            log.write(json.dumps({"argv": help_command, "exit": help_result.returncode}) + "\n")
+            log.write(help_result.stdout + help_result.stderr)
+        self.assertEqual(0, help_result.returncode, help_result.stdout + help_result.stderr)
+        self.assertIn("--source", help_result.stdout)
+        self.assertEqual(before, (renderer.snapshot(self.source), renderer.snapshot(self.target)))
+        self.assertEqual({"project.yaml", "docs"}, {path.name for path in self.root.iterdir()})
+
+    def test_vendor_checkout_filters_preserve_upstream_bytes(self):
+        """真实消费 Git checkout 过滤器，防止 Windows CRLF 改写固定上游载荷。"""
+        upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text(encoding="utf-8"))
+        for name, facts in upstream["files"].items():
+            relative = (renderer.VENDOR / name).relative_to(PACK).as_posix()
+            command = ["git", "-c", "core.autocrlf=true", "cat-file", "--filters",
+                       "--path=" + relative, "HEAD:" + relative]
+            result = subprocess.run(command, cwd=PACK, capture_output=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr.decode("utf-8", errors="replace"))
+            self.assertEqual(facts["sha256"], hashlib.sha256(result.stdout).hexdigest(), name)
+
+    def test_installed_runtime_preserves_payload_and_rejects_generation(self):
+        project = self.work / "installed-project"
+        project.mkdir(exist_ok=True)
+        state = self.work / "installed-state"
+        command = ["bash", str(PACK / "lib/python_runtime.sh"), "-X", "utf8", "-B",
+                   str(PACK / "lib/install/install_workflow.py"), str(project), "--state-dir", str(state)]
+        installed = subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=120)
+        (self.work / "install.log").write_text(json.dumps(command) + "\n" + installed.stdout + installed.stderr, encoding="utf-8")
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        runtime = project / ".agent-workflow"
+        reference = "xy-plan/references/requirement-html.md"
+        from manager import runtime_service
+        binding = runtime_service.status(state, project)["runtime_binding"]
+        core = runtime_store.load_core(binding, state)
+        for host in (project / ".agents/skills", project / ".claude/skills"):
+            self.assertEqual((host / reference).read_bytes(), (PACK / "platforms/shared/skills" / reference).read_bytes())
+        for relative in ("lib/documents/requirement_html.py", "lib/documents/plan_documents.py",
+                         "lib/documents/prototype_navigation.py", "lib/documents/validate_prototype_workspace.py",
+                         *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
+                         "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
+                         "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt"):
+            self.assertEqual(runtime_store.read_core_source(core, relative), (PACK / relative).read_bytes())
+        plans = project / "docs/plans"
+        self.assertFalse((project / "docs/features").exists())
+        self.assertFalse(plans.exists())
+        plans.mkdir()
+        (plans / "installed.md").write_text(SAMPLE, encoding="utf-8")
+        # 使用安装态 wrapper、cwd 与清空的 PYTHONPATH；没有源包参数或源目录导入路径。
+        env = {**os.environ, "PYTHONPATH": "", "AGENT_WORKFLOW_STATE_DIR": str(state)}
+        for action in ("render", "check"):
+            command = ["bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", "-B",
+                       str(runtime / "runtime.py"), "--binding", json.dumps(binding), "helper",
+                       "lib/documents/requirement_html.py", "--", action, "--project", str(project),
+                       "--source", "docs/plans/installed.md"]
+            if action == "render":
+                command.extend(["--request-id", REQUEST])
+            result = subprocess.run(command, cwd=project, env=env, capture_output=True, text=True, timeout=45)
+            (self.work / f"installed-{action}.log").write_text(json.dumps(command) + "\n" + result.stdout + result.stderr, encoding="utf-8")
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertEqual("", result.stdout)
+            self.assertIn("HTML 生成功能已暂停", result.stderr)
+        self.assertFalse((plans / "installed.html").exists())
+        self.assertEqual(SAMPLE, (plans / "installed.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

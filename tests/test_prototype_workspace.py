@@ -151,10 +151,10 @@ def write_valid_project(parent: Path) -> Path:
 
 
 def bind_requirement_documents(project: Path, *, source_body: str | None = None) -> tuple[Path, Path]:
-    """建立文档记录消费夹具；真实渲染另由展示项目和 requirement_html 集成证据覆盖。
+    """保留带旧版本记录的历史 HTML 夹具；当前不执行暂停的渲染器。
 
-    使用旧 renderer 标识是有意的：原型导航只承诺来源/产物完整性，不授予或刷新文档批准，
-    也不能把 helper 代码变动当作要求所有历史原型重验的理由。
+    导航只承诺实际文件/路径/竞态安全，不要求历史页记录或摘要与修订后原稿一致，
+    也不把 helper 代码变动当作重验所有历史原型的理由。
     """
     (project / "project.yaml").write_bytes((PACK / "project.yaml").read_bytes())
     plans = project / "docs/plans"
@@ -662,7 +662,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                         page.unlink()
                     page.write_bytes(body)
 
-    def test_requirement_navigation_only_allows_the_explicit_matching_document_pair(self) -> None:
+    def test_requirement_navigation_only_allows_explicit_markdown_and_optional_historical_html(self) -> None:
         """普通链接、资源引用和伪装槽位不能继承 plans 导航的窄权限。"""
         with tempfile.TemporaryDirectory(prefix="prototype-requirement-navigation-") as temporary:
             project = write_valid_project(Path(temporary)).resolve()
@@ -703,7 +703,26 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                 with self.subTest(case=case):
                     source.write_bytes(source_bytes)
                     html.write_bytes(html_bytes)
-                    self.assert_rejected_without_mutation(project, case)
+                    # 历史页的旧原稿摘要、手改内容及旧记录不再是当前新鲜度合同。
+                    # 实际导航只保证路径与安全文件，并且绝不重新生成或改写任何输入。
+                    before = tree_snapshot(project)
+                    result = self.run_validator(project)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertEqual(before, tree_snapshot(project))
+            # Markdown 是必选项；没有 HTML 链接时，即使旧页缺失也应正常校验。
+            source.write_bytes(valid_source)
+            html.unlink()
+            markdown_only = re.sub(r'<a data-prototype-document="html"[^>]*>.*?</a>', '', text)
+            page.write_text(markdown_only, encoding="utf-8")
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            page.write_text(re.sub(r'<a data-prototype-document="markdown"[^>]*>.*?</a>', '', text), encoding="utf-8")
+            self.assert_rejected_without_mutation(project, "missing mandatory Markdown anchor")
+            # 没有声明的旧 HTML 不得读取；放入真实链接负控也不能影响 Markdown-only 导航。
+            html.symlink_to(source)
+            page.write_text(markdown_only, encoding="utf-8")
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_requirement_navigation_requires_independent_safe_browsing_context(self) -> None:
         """无 page-shell 的合法页也须保护工作区上下文，两个文档锚点逐一校验。"""

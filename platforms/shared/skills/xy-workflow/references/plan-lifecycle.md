@@ -14,14 +14,14 @@ applicable project constraints and permission boundaries still apply.
   current plan under adapter-resolved `docs.plans` before the first design or implementation dispatch.
   xy-plan still only drafts; PM owns persistence. Do not wait for visual approval to save the plan.
 
-Formal Full review uses HTML. Before approval, PM creates/renders the single Markdown draft in the current
-request scratch. Only after approval does PM save `docs.plans/<name>.md` and generate same-name `.html`.
-Markdown is the sole editing authority; rerender at the same path after changes. For exact commands, draft-link
-basis and failure protection, see [requirements HTML delivery](../../xy-plan/references/requirement-html.md).
-Light selects this by existing save needs, complexity or user requirements; generating HTML does not upgrade
-the workflow. Pages, checkbox selections and freshness checks do not create approval.
+Formal Full review uses the single Markdown draft. Before approval, PM may keep that draft in the current
+request scratch. Only after approval does PM save `docs.plans/<name>.md` before dispatch. Markdown remains
+the sole editing authority. Requirements/plan HTML generation and freshness checks are suspended; preserve
+existing HTML and renderer code under [the retained reference](../../xy-plan/references/requirement-html.md).
+Light selects persistence by existing save needs, complexity or user requirements, without upgrading the
+workflow. Document existence and checkbox selections do not create approval.
 
-Maintain one lifecycle Markdown and derived HTML per stable topic. Update in place for further iterations,
+Maintain one lifecycle Markdown per stable topic. Update in place for further iterations,
 visual adjustments, implementation assignments or QA rework, without version copies. Independent topics
 have separate documents. Light persistence still depends on actual need; an old topic's Full level does
 not automatically make an unrelated small correction Full.
@@ -77,9 +77,10 @@ plan. Update on meaningful decisions, completed deliverables, blockers, rework o
 every tool call. Preserve an accurate checkpoint during long work; do not rely solely on a final save
 that may never run. File persistence does not imply permission to commit, publish, or execute it.
 The design Agent returns coverage from REQ IDs to concrete prototype pages/actual state anchors in the original
-handoff. PM writes it into this source and rerenders, without a separate mapping file or prototype QA. Progress,
-link or presentation-only changes do not automatically reopen requirements approval. HTML byte freshness,
-requirements_fingerprint and prototype dependency fingerprints retain their separate responsibilities.
+handoff. PM writes it into this Markdown source, without generating HTML, a separate mapping file or
+prototype QA. Progress, link or presentation-only changes do not automatically reopen requirements approval.
+requirements_fingerprint and prototype dependency fingerprints retain their separate responsibilities;
+historical HTML freshness is not required while generation is suspended.
 
 ## Visual iteration and task replacement
 
@@ -204,8 +205,8 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
 - Mark accepted deletion as removed in the same source, retaining necessary dates, reason, replacement and
   history. Remove its current index entry; do not rename it or create a feature/ADR document.
 - Unindexed old execution drafts retain historical boundaries. Do not auto-index by completed, bulk-edit
-  history or replay old tasks by default. Same-name HTML projects the source; it is not a second standard or
-  approval source.
+  history or replay old tasks by default. Existing same-name HTML is retained historical material while
+  generation is suspended; it is not a second standard or approval source.
 - Old `docs.features` and FEATURE templates are outside the current runtime contract, and version 2.1
   provides no old-document conversion CLI. Preserve complete text, approvals/evidence and index references
   under README's document-protection boundary before removing rejected old keys; stop for conflicts or

@@ -1,6 +1,6 @@
 # 稳定主题名称
 
-> 同一稳定主题只维护本 Markdown；同名 HTML 由工具生成。以下是 Full 的写作形状，
+> 同一稳定主题只维护本 Markdown；需求／计划 HTML 生成已暂停，已有 HTML 仅保留为历史资料。以下是 Full 的写作形状，
 > 示例和模板不构成实际批准或交付。Light 仅在确需保存／恢复时按必要性简化。
 > 再次迭代时原地更新本次目标、需求与恢复入口，保留上一次真实已验收基线；
 > 未验收、暂停或取消的本次目标不能写成已交付行为。Git 保留完整修订历史。
@@ -40,4 +40,4 @@
 - 验收证据: none
 
 仅填写真实可恢复的既有批准与验收引用；本节和版本标签本身不产生批准、QA 或交付。
-Full 正式审阅、草案 scratch 和安全渲染调用见 xy-plan 的 references/requirement-html.md。
+Full 使用唯一 Markdown 正式审阅并在批准后保存；HTML 暂停与恢复边界见 xy-plan 的 references/requirement-html.md。
