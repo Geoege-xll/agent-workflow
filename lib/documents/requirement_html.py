@@ -11,6 +11,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import argparse
+from contextlib import contextmanager, ExitStack
 import hashlib
 from html.parser import HTMLParser
 import json
@@ -20,6 +21,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from urllib.parse import quote, unquote, urlsplit
 
 if __package__:
@@ -328,39 +330,137 @@ def node_environment(stage: Path) -> dict[str, str]:
     return env
 
 
-def run_renderer(stage: Path, markdown: bytes) -> bytes:
-    node = shutil.which("node")
-    if node is None:
-        raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；请提供现有 Node 运行时后重试")
-    env = node_environment(stage)
-    try:
-        version = subprocess.run([node, "--version"], env=env, capture_output=True, timeout=5, check=True)
-        found = re.fullmatch(rb"v(\d+)\.\d+\.\d+\s*", version.stdout)
-        if not found or int(found.group(1)) < 20:
-            raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；当前 Node 版本不满足要求")
-        for path in stage.rglob("*"):
-            info = path.lstat()
-            if stat.S_ISLNK(info.st_mode) or (not stat.S_ISDIR(info.st_mode) and
-                    (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)):
-                raise RequirementHtmlError(f"渲染舞台存在链接或特殊节点：{path}")
-        # 固定私有舞台不接受额外主题和配置，以免上游隐式消费非本轮内容。
-        home = stage / "am-home"
-        if (home / "config.json").exists() or (home / "themes").exists():
+@contextmanager
+def _renderer_stage(stage: Path):
+    """在消费期间固定舞台及已有子目录；拒绝任何未知链接或重解析点。"""
+    with ExitStack() as held:
+        def pin(path, parent=None):
+            descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            held.callback(os.close, descriptor)
+            return descriptor
+
+        # Windows 的 platform_fs.os.open 会逐层打开 no-reparse 目录句柄，且
+        # 不共享 DELETE：Python 3.11 把 junction 投影为普通目录也不能绕过。
+        # 必须持有句柄直到 Node 退出及输出读取完成，不能只在启动前裸路径检查。
+        stage_descriptor = pin(stage)
+        try:
+            os.mkdir("am-home", 0o700, dir_fd=stage_descriptor)
+        except FileExistsError:
+            pass
+        pending = [stage_descriptor]
+        home_descriptor = None
+        while pending:
+            parent = pending.pop()
+            # 使用后端 scandir/stat，不用 Path.rglob；后者在旧 Python/Windows
+            # 上可能先跟进 junction，导致检查本身就越出舞台。所有已打开子目录
+            # 也由 ExitStack 持有，失败仅释放句柄，绝不递归清理未知现场。
+            with os.scandir(parent) as entries:
+                for entry in entries:
+                    info = os.stat(entry.name, dir_fd=parent, follow_symlinks=False)
+                    if stat.S_ISDIR(info.st_mode):
+                        child = pin(entry.name, parent)
+                        opened = os.fstat(child)
+                        if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+                            raise RequirementHtmlError("渲染舞台目录在打开期间变化")
+                        pending.append(child)
+                        name = entry.name.casefold() if os.name == "nt" else entry.name
+                        if parent == stage_descriptor and name == "am-home":
+                            home_descriptor = child
+                    elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        raise RequirementHtmlError(f"渲染舞台存在链接或特殊节点：{entry.name}")
+        if home_descriptor is None:
+            raise RequirementHtmlError("渲染舞台缺少安全的 am-home 目录")
+        # 即使 config/themes 是空文件或链接也不接受，避免上游隐式消费其他轮次
+        # 的配置。am-home 预先建立并固定，因此其隐式 HOME 回退不能被换成 junction。
+        names = os.listdir(home_descriptor)
+        if os.name == "nt":
+            # NTFS 默认名称比较不区分大小写；拒绝范围须与 Node 的路径消费一致。
+            names = [name.casefold() for name in names]
+        if {"config.json", "themes"}.intersection(names):
             raise RequirementHtmlError("渲染舞台出现非本轮配置/主题，拒绝消费")
-        input_path, output_path = stage / "input.md", stage / "output.html"
-        snapshot(input_path, required=False)
-        snapshot(output_path, required=False)
-        atomic_write(input_path, markdown, 0o600)
-        command = [node, str(VENDOR / "am.mjs"), "render", str(input_path), "-o", str(output_path),
-                   "--no-open", "--template", "doc", "--style", "off"]
-        result = subprocess.run(command, cwd=stage, env=env, capture_output=True, timeout=30)
-        if result.returncode:
-            # 上游报错可能回显正文，因此主 CLI 仅给定位诊断；完整过程输出不注入用户页面。
-            raise RequirementHtmlError(f"内置 render 失败（exit {result.returncode}），原稿和原 HTML 保留")
-        html, _ = snapshot(output_path)
-        if b"<html" not in html or b"am-source" not in html:
-            raise RequirementHtmlError("内置 render 未返回完整 HTML，原页保留")
-        return project_branding(html)
+        yield
+
+
+def _run_node(command: list[str], *, stage: Path, env: dict[str, str], timeout: float,
+              check: bool = False) -> subprocess.CompletedProcess:
+    """保持原字节捕获；Windows 超时、取消或中断后先确认整个 Job 已停止。"""
+    if os.name != "nt":
+        return subprocess.run(command, cwd=stage, env=env, capture_output=True, timeout=timeout, check=check)
+    from lib.install.install_process import ACTIVE_RUNNER
+    from lib.install.windows_process import WindowsJobProcess, WindowsProcessCancelled, _defer_interrupts
+
+    # capture_process 尚无 cwd 参数，不能借此改写共用进程后端；直接复用它的
+    # WindowsJobProcess 生命周期，并沿用实际安装事务的总预算与取消通道。
+    runner = ACTIVE_RUNNER.get()
+    deadline = time.monotonic() + timeout
+    if runner is not None and runner.deadline is not None:
+        deadline = min(deadline, runner.deadline)
+    cancel_file = runner.cancel_file if runner is not None and not runner.recovering else None
+    if cancel_file is not None and os.path.lexists(cancel_file):
+        raise RequirementHtmlError("Node 渲染已取消，尚未启动下一阶段")
+    if deadline <= time.monotonic():
+        raise subprocess.TimeoutExpired(command, timeout)
+    process = None
+    try:
+        # 同时封闭构造成功到本地赋值间的中断窗口；Job 先约束子进程再放行。
+        with _defer_interrupts():
+            process = WindowsJobProcess(command, cwd=stage, env=env, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output, error = process.communicate(timeout=max(0, deadline - time.monotonic()), cancel_file=cancel_file)
+        result = subprocess.CompletedProcess(command, process.returncode, output, error)
+        if check:
+            result.check_returncode()
+        return result
+    except WindowsProcessCancelled as exc:
+        raise RequirementHtmlError("Node 渲染已取消，整个 Job 已停止，原稿和原 HTML 保留") from exc
+    finally:
+        # communicate 在超时/中断时已停止 Job；close 也覆盖其他失败窗口。
+        # 后端若无法确认后代清空会抛出其致命异常，不能伪装普通失败后继续发布。
+        if process is not None:
+            process.close()
+
+
+def _node_executable() -> str | None:
+    if os.name != "nt":
+        return shutil.which("node")
+    # Python 3.11 的 Windows which 会先查当前目录；薄桥 cwd 属于项目，不能
+    # 因项目内出现 node.exe 就把它当运行时执行。这里只逐个消费显式绝对 PATH
+    # 项，并给 which 一个含目录的绝对文件名，禁止空项、相对项及隐式 cwd 搜索。
+    for raw in os.environ.get("PATH", "").split(os.pathsep):
+        directory = Path(raw[1:-1] if raw.startswith('"') and raw.endswith('"') else raw)
+        if not directory.is_absolute():
+            continue
+        found = shutil.which(str(directory / "node.exe"))
+        if found is not None:
+            return found
+    return None
+
+
+def run_renderer(stage: Path, markdown: bytes) -> bytes:
+    try:
+        with _renderer_stage(stage):
+            node = _node_executable()
+            if node is None:
+                raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；请提供现有 Node 运行时后重试")
+            env = node_environment(stage)
+            version = _run_node([node, "--version"], stage=stage, env=env, timeout=5, check=True)
+            found = re.fullmatch(rb"v(\d+)\.\d+\.\d+\s*", version.stdout)
+            if not found or int(found.group(1)) < 20:
+                raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；当前 Node 版本不满足要求")
+            input_path, output_path = stage / "input.md", stage / "output.html"
+            snapshot(input_path, required=False)
+            snapshot(output_path, required=False)
+            atomic_write(input_path, markdown, 0o600)
+            command = [node, str(VENDOR / "am.mjs"), "render", str(input_path), "-o", str(output_path),
+                       "--no-open", "--template", "doc", "--style", "off"]
+            result = _run_node(command, stage=stage, env=env, timeout=30)
+            if result.returncode:
+                # 上游报错可能回显正文，因此主 CLI 仅给定位诊断；完整过程输出不注入用户页面。
+                raise RequirementHtmlError(f"内置 render 失败（exit {result.returncode}），原稿和原 HTML 保留")
+            html, _ = snapshot(output_path)
+            if b"<html" not in html or b"am-source" not in html:
+                raise RequirementHtmlError("内置 render 未返回完整 HTML，原页保留")
+            return project_branding(html)
     except subprocess.TimeoutExpired:
         raise RequirementHtmlError("Node 渲染超时并已结束，原稿和原 HTML 保留") from None
     except subprocess.CalledProcessError:

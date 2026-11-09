@@ -1,0 +1,4 @@
+# 固定上游载荷按 UPSTREAM.json 校验原始字节；Windows checkout 也不得转换行尾。
+/lib/vendor/answer-me-with-html/am.mjs -text
+/lib/vendor/answer-me-with-html/LICENSE -text
+/lib/vendor/answer-me-with-html/OFL-Bangers.txt -text
