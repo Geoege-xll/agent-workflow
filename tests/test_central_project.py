@@ -1395,7 +1395,9 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             from tests.test_windows_fs_native import native_skill_observation
             actual_stage, actual_installed = service._register_stage, service._register_installed
             stage_observation = {}
+            observed_skills = 0
             def observe_stage(row, staged):
+                nonlocal observed_skills
                 result = actual_stage(row, staged)
                 if staged.kind == "link":
                     # 仅观测真实完整安装中的当前 stage，叶名仍来自原受管路径。
@@ -1405,7 +1407,11 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
                     stage_observation["path"] = row["path"]
                     stage_observation["node"] = {"identity": staged.identity, "mode": staged.mode, "security": staged.security}
                     stage_observation["facts"] = native_skill_observation(project / row["stage"] / skill, skill)
-                    print("NATIVE_COMPOSED_SKILL_STAGE " + json.dumps(stage_observation, sort_keys=True), flush=True)
+                    observed_skills += 1
+                    # 完整成功布局已有真实原始证据；本轮只打印首条与总数。
+                    # 每条最新 before 事实仍保留，异常时与实际发布值完整输出。
+                    if observed_skills == 1:
+                        print("NATIVE_COMPOSED_SKILL_STAGE " + json.dumps(stage_observation, sort_keys=True), flush=True)
                 return result
             def observe_installed(row, current):
                 from manager.runtime_state import same_published_node
@@ -1419,8 +1425,20 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
                 return actual_installed(row, current)
             with patch.object(service, "_register_stage", side_effect=observe_stage), \
                     patch.object(service, "_register_installed", side_effect=observe_installed):
-                project_service.apply_project(proposal)
+                applied = project_service.apply_project(proposal)
             mark_stage("project_apply_complete")
+            print("NATIVE_COMPOSED_SKILL_STAGE_COUNT " + str(observed_skills), flush=True)
+            # 只投影真实fixture状态字段，不输出配置正文、模型目录、环境或凭据。
+            # can_apply/未抛异常不等于启用健康；先留父状态再观察原薄桥的门禁。
+            status_fields = ("state", "enabled", "declared_enabled", "resources_healthy", "new_task_allowed",
+                             "management_write_allowed", "runtime_binding", "effective_binding", "policy",
+                             "pending_transaction", "issues", "conflicts")
+            def report_status(label, value):
+                print("NATIVE_CENTRAL_STATUS " + json.dumps({"stage": label,
+                      "status": {key: value.get(key) for key in status_fields}}, ensure_ascii=False, sort_keys=True), flush=True)
+            report_status("apply_return", applied)
+            parent_status = service.status(state, project)
+            report_status("parent_after_apply", parent_status)
             binding_node, _ = service.read_binding_record(state, project)
             self.assertEqual(64, len(binding_node.security))
             assert_private(state / service._state_relative(project, "bindings"))
@@ -1432,7 +1450,39 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
                 return subprocess.run([sys.executable, "-I", "-B", "-X", "utf8", str(project / resources.LAUNCHER), *args],
                                       cwd=project, env=environment, capture_output=True, timeout=40)
             checked = invoke("check")
+            if checked.returncode:
+                # 原调用与其FAIL必须保留。此额外只读进程仍经同一-I薄入口完整
+                # 验核心，profile仅观察真实status正常返回，不改返回值或gate。
+                # 先不import任何core；stdlib runpy保持同一__file__/argv语义。
+                diagnostic_code = '''import json,runpy,sys
+entry = sys.argv[1]
+fields = ''' + repr(status_fields) + '''
+def observe(frame, event, value):
+    if (event == "return" and frame.f_code.co_name == "status"
+            and frame.f_code.co_filename.replace("\\\\", "/").endswith("/manager/runtime_service.py")
+            and isinstance(value, dict)):
+        print("NATIVE_THIN_STATUS " + json.dumps({key: value.get(key) for key in fields},
+              ensure_ascii=False, sort_keys=True), file=sys.stderr, flush=True)
+sys.argv = [entry, "check"]
+sys.setprofile(observe)
+try:
+    runpy.run_path(entry, run_name="__main__")
+finally:
+    sys.setprofile(None)
+'''
+                try:
+                    diagnostic = subprocess.run([sys.executable, "-I", "-B", "-X", "utf8", "-c", diagnostic_code,
+                                                 str(project / resources.LAUNCHER)], cwd=project, env=environment,
+                                                capture_output=True, timeout=40)
+                    print("NATIVE_THIN_STATUS_DIAGNOSTIC " + json.dumps({"returncode": diagnostic.returncode,
+                          "stdout": diagnostic.stdout.decode("utf-8", errors="replace"),
+                          "stderr": diagnostic.stderr.decode("utf-8", errors="replace")}, ensure_ascii=False, sort_keys=True), flush=True)
+                except subprocess.TimeoutExpired:
+                    print("NATIVE_THIN_STATUS_DIAGNOSTIC timeout_s=40; original check failure retained", flush=True)
             self.assertEqual(0, checked.returncode, checked.stderr.decode("utf-8", errors="replace"))
+            self.assertTrue(applied["enabled"], applied)
+            self.assertTrue(parent_status["enabled"], parent_status)
+            self.assertTrue(parent_status["new_task_allowed"], parent_status)
             self.assertEqual(core.binding(), json.loads(checked.stdout)["runtime_binding"])
             mark_stage("thin_check_complete")
             expected = store.read_core_source(core, "product/GLOBAL_CONSTRAINTS.md")
