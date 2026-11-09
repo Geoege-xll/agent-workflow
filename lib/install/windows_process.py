@@ -547,13 +547,8 @@ class WindowsJobProcess:
                 self._observed_zero_total = accounting.TotalProcesses
         return True
 
-    def _confirm_job_exit(self, accounting, deadline, timeout):
-        """仅两个完整证据分支能发布不可变终态；所有已持有句柄仍须 signaled。"""
-        if accounting.ActiveProcesses:
-            return False
-        complete = accounting.TotalProcesses == len(self._members)
-        if not complete and self._observed_zero_total != accounting.TotalProcesses:
-            return False
+    def _wait_retained_members(self, deadline, timeout):
+        """先确认已知成员结束；等待真实句柄不依赖可能尚未入队的普通通知。"""
         for handle in self._members.values():
             remaining = None if deadline is None else max(0, deadline - time.monotonic())
             milliseconds = INFINITE if remaining is None else min(INFINITE - 1, math.ceil(remaining * 1000))
@@ -562,6 +557,17 @@ class WindowsJobProcess:
                 raise subprocess.TimeoutExpired(self.args, timeout)
             if result != WAIT_OBJECT_0:
                 raise self._api.error("Wait for setup Job member termination")
+
+    def _confirm_job_exit(self, accounting, deadline, timeout):
+        """已知句柄结束后，仍只有原两条完整证据路径能发布不可变终态。"""
+        if accounting.ActiveProcesses:
+            return False
+        complete = accounting.TotalProcesses == len(self._members)
+        if not complete and self._observed_zero_total != accounting.TotalProcesses:
+            return False
+        # 初读 Job 仍 active、消费 packet 时才归零的分支也必须走句柄屏障。
+        # 保留发布终态前的原校验，不把前面的顺序优化变成一次性布尔通行证。
+        self._wait_retained_members(deadline, timeout)
         # 根句柄从 Assign 之前一直保留在 _members。等候期间若出现新的合法关联，
         # 累计代数或 Active 会变化并使通知失效；必须回到观察，不能复用旧证明。
         confirmed = self._accounting()
@@ -604,6 +610,13 @@ class WindowsJobProcess:
         while True:
             self._capture_members()
             accounting = self._accounting()
+            if accounting.ActiveProcesses == 0:
+                # 先等当前已持有的真实成员，再 fresh 查询/消费现有 packet。
+                # 否则尚在异步终止的已知成员可能还未发布最终通知，我们便先
+                # 把空队列判为致命失败并关闭句柄。这里没有等待消息的新预算；
+                # 真正缺失消息且历史句柄不全时，下面原双证明仍明确拒绝。
+                self._wait_retained_members(deadline, timeout)
+                accounting = self._accounting()
             received = self._next_job_notification()
             if received:
                 # 有消息就继续校验/排空队列；NEW/EXIT 绝不拿来补历史计数。

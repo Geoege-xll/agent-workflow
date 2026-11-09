@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,7 @@ class FakeWin32:
         self.pending_members = set()
         self.notifications = []
         self.last_error = 5
+        self.on_process_wait = None
 
     def error(self, operation):
         error = OSError(self.last_error, operation)
@@ -207,6 +209,8 @@ class FakeWin32:
             if timeout == 0:
                 return win.WAIT_TIMEOUT
             self.pending_members.remove(pid)
+        if self.on_process_wait is not None:
+            self.on_process_wait(pid, timeout)
         return win.WAIT_OBJECT_0
 
     def GetExitCodeProcess(self, process, output):
@@ -386,9 +390,9 @@ class WindowsCtypesBackendTest(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 process.wait(timeout=0)
             self.assertFalse(process._quiescent)
-            # 消费当场 owner 已空的证据可跨有限 wait 保留；真实已持有句柄仍须
-            # signaled，不能收到一个 zero 就跳过根或已观察到的后代结束屏障。
-            self.assertEqual(2, process._observed_zero_total)
+            # finite wait 先受真实句柄约束，超时前尚未消费 zero；不能因消息
+            # 已排队就跳过根或已观察后代的 signaled 屏障。
+            self.assertIsNone(process._observed_zero_total)
             self.assertEqual(37, process.wait(timeout=1))
             self.assertEqual(("job-zero-notification", 2, 1),
                              (process._exit_proof.source, process._exit_proof.total_processes,
@@ -451,6 +455,9 @@ class WindowsCtypesBackendTest(unittest.TestCase):
                 api.pending_members.add(9001)
                 process = self.launch(api)
                 try:
+                    # 明确制造已被接收且当场 owner 为空的旧代数观察，再检查它
+                    # 不能被后续累计变化复用；不依赖 wait 的内部消费先后次序。
+                    self.assertTrue(process._next_job_notification())
                     with self.assertRaises(subprocess.TimeoutExpired):
                         process.wait(timeout=0)
                     api.total = changed_total
@@ -459,6 +466,42 @@ class WindowsCtypesBackendTest(unittest.TestCase):
                     self.assertFalse(process._quiescent)
                 finally:
                     process._close_handles()
+
+    def test_stop_observes_packets_after_retained_wait_and_still_rejects_missing_proof(self):
+        for publish in (True, False):
+            with self.subTest(publish_after_wait=publish):
+                api = FakeWin32(total=2)
+                api.after_stop = [0]
+                api.pending_members.add(9001)
+                process = self.launch(api)
+
+                def after_signal(pid, milliseconds):
+                    self.assertEqual((pid, milliseconds), (9001, win.INFINITE))
+                    api.on_process_wait = None
+                    api.events.append("held-signaled")
+                    if publish:
+                        api.notifications.append((200, win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, None))
+
+                api.on_process_wait = after_signal
+                previous = signal.getsignal(signal.SIGINT)
+                try:
+                    if publish:
+                        process.stop()
+                        self.assertEqual("job-zero-notification", process._exit_proof.source)
+                        self.assertTrue(process._quiescent)
+                        process.close()
+                    else:
+                        with self.assertRaises(win.WindowsJobCleanupError) as first:
+                            process.stop()
+                        self.assertFalse(process._quiescent)
+                        with self.assertRaises(win.WindowsJobCleanupError) as repeated:
+                            process.close()
+                        self.assertIs(first.exception, repeated.exception)
+                    self.assertLess(api.events.index("held-signaled"), api.events.index(("close", 200)))
+                    self.assertEqual(1, api.closed.count(201))
+                finally:
+                    signal.signal(signal.SIGINT, previous)
+                    process._close_handles()  # 只回收本测试的 fake，不新增真实清理 owner。
 
     def test_active_zero_waits_for_every_retained_member_handle(self):
         # 20 成员同时覆盖可变长 Win32 缓冲区的扩容分支；不能默默只保留前 16 个。
@@ -880,29 +923,47 @@ class NativeWindowsJobTest(unittest.TestCase):
                 process.close()
 
     def test_nested_breakaway_remains_contained_until_owner_job_is_empty(self):
-        # 真实 Win32 event 控制后代写入，不靠 sleep 延长寿命或等待“足够久”。
-        # fixture 的内层 Job 允许显式/静默 breakaway；自有祖先 Job 禁止它，
-        # 因此新进程可以离开内层，仍必须受唯一外层 owner 的终止证明覆盖。
+        # 用真实内层 Job/accounting 与后代句柄验证约束。普通 IOCP 通知不保证
+        # 送达，实际收到时仅记录；不能把某条通知必达变成嵌套能力的验收条件。
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.CreateEventW.argtypes = [win.LPVOID, win.BOOL, win.BOOL, win.LPWSTR]
         kernel.CreateEventW.restype = win.HANDLE
         kernel.SetEvent.argtypes, kernel.SetEvent.restype = [win.HANDLE], win.BOOL
         kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [win.HANDLE], win.BOOL
+        fixture_api = win._Win32API()
         for outcome in ("normal", "cancel"):
-            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory(
-                    prefix="workflow-native-nested-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
-                root = Path(raw)
-                ready_name, release_name = ("Local\\awf-" + root.name + suffix for suffix in ("-ready", "-release"))
-                ready = kernel.CreateEventW(None, True, False, ready_name)
-                if not ready:
-                    raise ctypes.WinError(ctypes.get_last_error())
-                self.addCleanup(kernel.CloseHandle, ready)
-                release = kernel.CreateEventW(None, True, False, release_name)
-                if not release:
-                    raise ctypes.WinError(ctypes.get_last_error())
-                self.addCleanup(kernel.CloseHandle, release)
-                report, late = root / "member.json", root / "after-release"
-                child = textwrap.dedent(f"""
+            with self.subTest(outcome=outcome):
+                # 不能用自动析构删除未证明静止的目录。只有唯一 owner 已完成证明
+                # 且夹具后代确实在其内时才删除；否则保留这个任务自有目录和日志。
+                root = Path(tempfile.mkdtemp(prefix="workflow-native-nested-",
+                                             dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")))
+                resources, zeros = [], []
+                process = release = None
+                contained = False
+                inner_active = inner_total = owner_active = member_pid = None
+                ready_name, release_name, inner_name = (
+                    "Local\\awf-" + root.name + suffix for suffix in ("-ready", "-release", "-inner"))
+                try:
+                    ready = kernel.CreateEventW(None, True, False, ready_name)
+                    if not ready:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    resources.append(ready)
+                    release = kernel.CreateEventW(None, True, False, release_name)
+                    if not release:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    resources.append(release)
+                    # parent 仅持有 fixture 内层 Job 供 query；从不通过它终止树，
+                    # 清理所有进程的职责仍全部属于下面创建的唯一 WindowsJobProcess。
+                    inner = fixture_api.CreateJobObjectW(None, inner_name)
+                    if not inner:
+                        raise fixture_api.error("Create fixture inner Job")
+                    resources.append(inner)
+                    limits = win.JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+                    limits.BasicLimitInformation.LimitFlags = 0x00000800 | 0x00001000
+                    self.assertTrue(fixture_api.SetInformationJobObject(
+                        inner, win.JobObjectExtendedLimitInformation, ctypes.byref(limits), ctypes.sizeof(limits)))
+                    report, late = root / "member.json", root / "after-release"
+                    child = textwrap.dedent(f"""
                     import ctypes, json, os
                     from pathlib import Path
                     K = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -917,51 +978,57 @@ class NativeWindowsJobTest(unittest.TestCase):
                     assert K.SetEvent(ready), ctypes.get_last_error()
                     assert K.WaitForSingleObject(release, 10000) == 0
                     Path({str(late)!r}).write_text('released', encoding='utf-8')
-                """)
-                parent = textwrap.dedent(f"""
+                    """)
+                    parent = textwrap.dedent(f"""
                     import ctypes, subprocess, sys
                     sys.path.insert(0, {str(ROOT)!r})
                     from lib.install import windows_process as W
                     K = W._Win32API()
-                    inner = K.CreateJobObjectW(None, None)
+                    native = ctypes.WinDLL('kernel32', use_last_error=True)
+                    native.OpenJobObjectW.argtypes = [W.DWORD, W.BOOL, W.LPWSTR]
+                    native.OpenJobObjectW.restype = W.HANDLE
+                    inner = native.OpenJobObjectW(1, False, {inner_name!r})
                     assert inner, ctypes.get_last_error()
-                    limits = W.JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-                    limits.BasicLimitInformation.LimitFlags = 0x00000800 | 0x00001000
-                    assert K.SetInformationJobObject(inner, W.JobObjectExtendedLimitInformation,
-                                                    ctypes.byref(limits), ctypes.sizeof(limits))
                     assert K.AssignProcessToJobObject(inner, K.GetCurrentProcess()), ctypes.get_last_error()
                     subprocess.Popen([sys.executable, '-B', '-X', 'utf8', '-c', {child!r}],
                                      creationflags=0x01000000)
                     raise SystemExit(23)
-                """)
-                process = win.WindowsJobProcess([sys.executable, "-B", "-X", "utf8", "-c", parent], cwd=root,
-                                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                zeros = []
-                native_next = process._api.GetQueuedCompletionStatus
+                    """)
+                    with win._defer_interrupts():
+                        process = win.WindowsJobProcess([sys.executable, "-B", "-X", "utf8", "-c", parent], cwd=root,
+                                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    native_next = process._api.GetQueuedCompletionStatus
 
-                def observe_native_packet(*arguments):
-                    # 只投影实际内核返回的 packet，不制造/重发消息、不改变返回值。
-                    received = native_next(*arguments)
-                    if received and ctypes.cast(arguments[1], ctypes.POINTER(win.DWORD))[0] == win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO:
-                        state = process._accounting()
-                        zeros.append({"key": ctypes.cast(arguments[2], ctypes.POINTER(win.SIZE_T))[0],
-                                      "active": state.ActiveProcesses})
-                    return received
+                    def observe_native_packet(*arguments):
+                        # 只投影内核实际 packet，不制造/重发、不改变返回值。
+                        received = native_next(*arguments)
+                        if received and ctypes.cast(arguments[1], ctypes.POINTER(win.DWORD))[0] == win.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO:
+                            state = process._accounting()
+                            zeros.append({"key": ctypes.cast(arguments[2], ctypes.POINTER(win.SIZE_T))[0],
+                                          "active": state.ActiveProcesses})
+                        return received
 
-                process._api.GetQueuedCompletionStatus = observe_native_packet
-                try:
+                    process._api.GetQueuedCompletionStatus = observe_native_packet
                     self.assertEqual(win.WAIT_OBJECT_0, process._api.WaitForSingleObject(ready, 5000))
                     self.assertEqual(win.WAIT_OBJECT_0,
                                      process._api.WaitForSingleObject(process._process.hProcess, 5000))
+                    state = win.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION()
+                    self.assertTrue(fixture_api.QueryInformationJobObject(
+                        inner, win.JobObjectBasicAccountingInformation, ctypes.byref(state), ctypes.sizeof(state), None))
+                    inner_active = state.ActiveProcesses
+                    inner_total = state.TotalProcesses
+                    owner_active = process._accounting().ActiveProcesses
+                    self.assertEqual(inner_active, 0)
+                    self.assertGreaterEqual(inner_total, 1)
+                    self.assertGreater(owner_active, 0)
                     with self.assertRaises(subprocess.TimeoutExpired):
                         process.wait(timeout=.1)
-                    self.assertTrue(any(item["active"] > 0 for item in zeros),
-                                    "尚未观察到内层归零向仍活跃 owner 上送的真实通知")
                     self.assertIsNone(process._observed_zero_total)
                     self.assertFalse(process._quiescent)
                     member_pid = json.loads(report.read_text(encoding="utf-8"))["pid"]
                     member = next(handle for (pid, _), handle in process._members.items() if pid == member_pid)
                     self.assertIsNotNone(process._member_identity(member_pid, member))
+                    contained = True
                     self.assertEqual(win.WAIT_TIMEOUT, process._api.WaitForSingleObject(member, 0))
                     if outcome == "cancel":
                         process.stop()
@@ -973,10 +1040,45 @@ class NativeWindowsJobTest(unittest.TestCase):
                         self.assertEqual(23, process.wait(timeout=5))
                         self.assertEqual(late.read_text(encoding="utf-8"), "released")
                     self.assertTrue(process._quiescent)
-                    self.record_proof(process, outcome=outcome, zero_packets=zeros, member_pid=member_pid,
-                                      member_wait=process._api.WaitForSingleObject(member, 0))
                 finally:
-                    process.close()
+                    primary = sys.exception()
+                    try:
+                        # 正式 cancel 的 stop/signaled/禁止写断言全部已在上面执行。
+                        # 这里只解除本测试制造的等待，再交回同一 owner；异常分支
+                        # 不另起进程清理器、不按 PID 重杀，也不把等待超时写成成功。
+                        try:
+                            if release:
+                                self.assertTrue(kernel.SetEvent(release))
+                        finally:
+                            # 即便 fixture 自有 event 的释放失败，也必须请求唯一
+                            # owner 收尾；释放错误不能绕过已有 Job 的清理职责。
+                            if process is not None:
+                                try:
+                                    if not process.closed and not process._quiescent:
+                                        process.wait(timeout=5)
+                                finally:
+                                    process.close()
+                    finally:
+                        try:
+                            if process is not None:
+                                self.record_proof(process, outcome=outcome, zero_packets=zeros,
+                                                  inner_active=inner_active, inner_total=inner_total, owner_active=owner_active,
+                                                  member_pid=member_pid, contained=contained,
+                                                  late_write_observed=late.exists(),
+                                                  fixture_directory=str(root),
+                                                  directory_retained=not (contained and process._quiescent),
+                                                  primary_failure=None if primary is None else type(primary).__name__)
+                        finally:
+                            for handle in reversed(resources):
+                                kernel.CloseHandle(handle)
+                            # 构造中发生致命清理失败时 local 尚未赋值，也不能把
+                            # process=None 误当成“肯定没有活跃夹具”并删除其 cwd。
+                            removable = ((process is None and not isinstance(primary, win.WindowsJobCleanupError))
+                                         or (process is not None and contained and process._quiescent))
+                            if removable:
+                                shutil.rmtree(root)
+                            else:
+                                print("[job fixture retained] " + str(root), flush=True)
 
     def test_wait_confirms_normal_descendant_handles(self):
         """根进程先正常退出，owner 仍须捕获完整成员并等待后代真实句柄。"""
