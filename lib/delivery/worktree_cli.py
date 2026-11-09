@@ -28,7 +28,7 @@ sys.dont_write_bytecode = True
 
 if __package__:
     from lib.delivery.qa_handoff_cli import QAHandoffError, validate_qa_handoff
-    from lib.task_graph import TaskGraphError, request_closure
+    from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
     from lib.task_graph_records import read_record, decode
     from lib.project.validate_project_config import validate_docs
@@ -36,7 +36,7 @@ if __package__:
     from lib.worktree_policy import WorktreePolicyError, revision, settings
 else:
     from lib.delivery.qa_handoff_cli import QAHandoffError, validate_qa_handoff
-    from lib.task_graph import TaskGraphError, request_closure
+    from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
     from lib.task_graph_records import read_record, decode
     from lib.project.validate_project_config import validate_docs
@@ -198,8 +198,7 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     indexed = {task["id"]: task for task in selected}
     for task in selected:
         # qa-ready 只表示可以开始审查；显式 QA 节点必须实际完成，旧 PASS 不能覆盖复审中或失败态。
-        completed = {"QA_PASSED"} if task["task_type"] == "qa" else {"BUILD_VERIFIED", "QA_SCOPE_READY"}
-        if task["state"] not in completed:
+        if not delivery_complete(task["task_type"], task["state"]):
             raise DeliveryError(f"request task is not complete: {task['id']}")
         if task["task_type"] == "writer" and not set(task["gates"]) <= set(graph.get("approved_gates", [])):
             raise DeliveryError(f"request writer has an unapproved gate: {task['id']}")

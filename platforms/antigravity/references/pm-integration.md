@@ -69,6 +69,12 @@ only for Hook setup or diagnostics.
 
 ## Native Tool Short Path
 
+After actual `read_only`/`evidence` completion, accept its current-scope result/revision receipt and use
+shared `runtime-records.md#result-task-settlement` exclusive `update`/`settle`, binding the original AGY ID,
+accepted full pack bytes and actual native result/verification evidence. RESULT_VERIFIED ends record
+execution occupancy; idle, retirement or kill alone is not accepted result evidence. Preserve necessary
+worktree results and logs before kill; native closure/capacity and Writer/QA gates remain separate.
+
 Apply WORKFLOW's `continuous-pm-intake` and shared dispatch/admission calls for cross-request relationships,
 authority, ownership, pin and QA; this adapter supplies native differences. The
 [official lifecycle](https://antigravity.google/docs/subagents?app=cli#subagent-lifecycle-and-states) says

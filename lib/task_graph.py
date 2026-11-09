@@ -17,10 +17,10 @@ class TaskGraphError(ValueError):
 
 
 VALID_STATES = frozenset(
-    {"DECLARED", "BLOCKED", "READY", "RUNNING", "BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED", "FAILED"}
+    {"DECLARED", "BLOCKED", "READY", "RUNNING", "BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED", "RESULT_VERIFIED", "FAILED"}
 )
 VALID_TASK_TYPES = frozenset({"writer", "evidence", "read_only", "qa"})
-SATISFIED_DEPENDENCY_STATES = frozenset({"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED"})
+SATISFIED_DEPENDENCY_STATES = frozenset({"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED", "RESULT_VERIFIED"})
 SEMANTIC_LOCK_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]*$")
 EXCEPTIONAL_GATE_RE = re.compile(r"^exceptional:[a-z0-9][a-z0-9._-]*$")
 VISUAL_GATE_RE = re.compile(r"^visual_approved:[^@\s]+@[A-Fa-f0-9]{8,128}$")
@@ -40,6 +40,20 @@ class Task:
     task_type: str = "writer"
     state: str = "DECLARED"
     agent_retired: bool = False
+
+
+def delivery_complete(task_type: str, state: str) -> bool:
+    """交付完成按任务类型判断，不能让只读结果冒充构建或独立 QA。
+
+    Writer 的既有交付门禁保持原样；只读/证据新增真实结果态，同时保留旧记录
+    原有完成值的读取兼容，新结算只生成RESULT_VERIFIED。显式 QA 仍须已有handoff
+    验证。该谓词不确认原生 close，也不推断宿主线程额度。
+    """
+    if task_type == "qa":
+        return state == "QA_PASSED"
+    if task_type in {"read_only", "evidence"}:
+        return state in {"RESULT_VERIFIED", "BUILD_VERIFIED", "QA_SCOPE_READY"}
+    return task_type == "writer" and state in {"BUILD_VERIFIED", "QA_SCOPE_READY"}
 
 
 def _require_unique(values: tuple[str, ...], task_id: str, field: str) -> None:
@@ -102,6 +116,8 @@ def _tasks_by_id(tasks: Iterable[Task]) -> dict[str, Task]:
         # 只给显式 QA 节点新增完成态，不能让 Writer 用审查结果冒充自身构建完成。
         if task.state == "QA_PASSED" and task.task_type != "qa":
             raise TaskGraphError(f"task {task.id}: QA_PASSED belongs only to a qa task")
+        if task.state == "RESULT_VERIFIED" and task.task_type not in {"read_only", "evidence"}:
+            raise TaskGraphError(f"task {task.id}: RESULT_VERIFIED belongs only to read_only or evidence tasks")
         for field, values in (
             ("depends_on", task.depends_on),
             ("blocks", task.blocks),
@@ -361,6 +377,7 @@ def qa_ready(tasks: Iterable[Task], request_id: str) -> bool:
 __all__ = [
     "Task",
     "TaskGraphError",
+    "delivery_complete",
     "downstream_tasks",
     "effective_dispatch_capacity",
     "qa_ready",

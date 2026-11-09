@@ -48,7 +48,7 @@ SET_FIELDS = frozenset({
     "acceptance_evidence", "verification_commands", "controlled_document_access",
 })
 APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access", "agent_ref", "agent_retired", "handoff_assessment"}
-COMPLETED_STATES = {"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED"}
+COMPLETED_STATES = {"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED", "RESULT_VERIFIED"}
 
 
 def digest(body: bytes) -> str:
@@ -283,13 +283,26 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if task_id not in indexed:
             raise TaskGraphError(f"unknown task ID: {task_id}")
         operations = _object(operations, f"patch.tasks.{task_id}")
-        if set(operations) - {"set", "append", "documents", "checkpoint"}:
+        if set(operations) - {"set", "append", "documents", "checkpoint", "settle"}:
             raise TaskGraphError(f"unsupported task update operation: {task_id}")
         task = indexed[task_id]
+        if "settle" in operations:
+            # 结果态、证据引用与可选退休必须作为同一事实原子发布；拒绝同补丁
+            # 修改范围或其他任务，避免先改约定再拿旧结果结算。CAS仍由原CLI统一发布。
+            if set(operations) != {"settle"} or set(patch) != {"tasks"} or len(changes) != 1:
+                raise TaskGraphError("settle must be the only operation for exactly one task")
+            if __package__:
+                from .task_settlement import settle_task
+            else:
+                from task_settlement import settle_task
+            task.update(settle_task(payload, old[task_id], operations["settle"],
+                                    read=read_record, decode=decode))
         fields = _object(operations.get("set", {}), "task.set")
         additions = _object(operations.get("append", {}), "task.append")
         if set(fields) - SET_FIELDS or set(additions) - APPEND_FIELDS:
             raise TaskGraphError("task update attempts to modify a protected or unsupported field")
+        if fields.get("state") == "RESULT_VERIFIED":
+            raise TaskGraphError("RESULT_VERIFIED requires the evidence-bound settle operation")
         for field, value in fields.items():
             if field == "agent_ref":
                 # 在套用状态变更之前检查旧记录，身份不是新派发或完成态的凭据。

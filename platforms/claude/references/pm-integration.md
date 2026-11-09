@@ -106,6 +106,12 @@ review. Findings/FAIL still go to PM for bounded rework, never trigger a differe
 
 ### Background execution and recovery
 
+For an actually completed `read_only`/`evidence` result, verify its latest scope and revision receipt,
+then use the shared `runtime-records.md#result-task-settlement` exclusive `update`/`settle` operation.
+Bind the original named Agent ID, accepted full pack bytes and actual background terminal/result evidence.
+RESULT_VERIFIED releases record execution occupancy; SendMessage/TaskStop/retirement alone proves neither
+that result nor native closure/open-thread capacity. Keep existing Writer build and validated QA gates.
+
 Apply WORKFLOW's `continuous-pm-intake` and the shared dispatch/admission calls for relationship,
 authorization, ownership, pin and per-request QA. The
 [official subagent guide](https://code.claude.com/docs/en/sub-agents#resume-subagents) describes named

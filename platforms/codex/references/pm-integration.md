@@ -58,6 +58,12 @@ invoke native review safely, record the technical reason and continue the existi
 
 ## Native Tool Short Path
 
+After a `read_only`/`evidence` worker actually completes, accept its latest-scope result and revision
+acknowledgement, then use the existing record `update` exclusive `settle` operation under shared
+`runtime-records.md#result-task-settlement`. Bind the original Codex native ID and accepted complete pack
+bytes plus actual native result/event and verification evidence. RESULT_VERIFIED ends record execution
+occupancy; optional retirement does not prove close or release open native threads. Writer/QA gates remain.
+
 Apply WORKFLOW's `continuous-pm-intake` and the shared dispatch/admission calls for all relationship,
 authorization, ownership, pin and request-QA decisions; this adapter supplies only Codex-native differences.
 The [current CLI documentation](https://learn.chatgpt.com/docs/developer-commands?surface=cli) says Enter

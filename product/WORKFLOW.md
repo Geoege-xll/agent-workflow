@@ -893,6 +893,31 @@ execution, same-ID followup and parent-final/cancellation lifecycle separately. 
 `runtime_unverified`. Current-host adapters describe only native differences; this section owns the
 cross-platform semantics, and existing Light/Full, approvals, role ownership, pin and QA contracts remain.
 
+### Result-task settlement
+
+`read_only` and `evidence` tasks finish as `RESULT_VERIFIED` only after PM accepts their actual latest-scope
+results and verification evidence. This means successful delivery of an audit or evidence result, including
+findings of defects; it does not mean product correctness, a build or implementation QA PASS. Writers cannot
+use this state. Their existing `BUILD_VERIFIED` and request-QA gates remain; explicit QA still requires the
+validated current handoff before `QA_PASSED`. Historical completion values remain readable, without rewriting
+old records or generating them for new result settlement. A standalone audit gets no implementation/QA loop.
+
+Use the existing record `update` with one exclusive `settle` operation under the shared runtime-records
+reference. Bind the original native ID, accepted complete Task Pack's original-byte SHA, actual native
+completion observation/source, current revised-scope result and declared verification evidence. PM checks
+the real completion and latest revision acknowledgement in the authorized host; a supplied `completed` word,
+JSON shape or SHA is not a host probe. Preserve any accepted-pack bytes and full logs needed for review using
+existing task artifacts, not a mandatory new report. Running, unknown, unbound, wrong-ID, stale-scope,
+changed/missing-evidence or rejected verification keeps the original task active. Do not hand-edit a result
+state, use retirement as completion, or turn old failed native fixtures green.
+
+After all checks, the original CAS publishes `RESULT_VERIFIED`, evidence references and optional logical
+retirement together, releasing only record execution occupancy/owned locks. Native closure and actual host
+open-thread capacity remain separately observed; no capacity release is inferred from retirement or state.
+Subsequent dependencies can use the verified result, but it adds no Writer or request QA PASS. An older pin
+without this operation/state fails closed; do not mutate immutable cores, switch running pins or fall back
+to latest to obtain settlement support.
+
 For multiple substantive independent features, assess `parallel_worktrees.mode: auto` and prefer
 real isolated worktrees when Git and the host can bind each writer to its own root. `off`, Light without a justified isolation need,
 read-only work, shared semantic dependencies or unavailable isolation preserve safe existing routing.
@@ -1023,7 +1048,7 @@ canonical `role`, stable `agent_alias`, `instance_policy: fresh`, and `context_p
   candidate head and revision-bound verification. No independent ledger or user-visible JSON is added.
 - `agent_ref`: actual native reference after dispatch, `{host: codex|claude|antigravity, agent_id: <actual-ID>}`. Record it through existing `update` after the task enters execution; once bound, it cannot be changed/cleared. Different tasks cannot share identities, and historical references do not authorize new tasks. `agent_retired: true` is irreversible and does not release active locks.
 - `state`: the scheduler's single state source: `DECLARED`, `BLOCKED`, `READY`, `RUNNING`,
-  `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, or `FAILED`.
+  `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, `RESULT_VERIFIED`, or `FAILED`.
 - `qa_scope`: required for tasks with a `role` and exactly `request`, meaning the current request's
   dependency closure rather than the entire project.
 

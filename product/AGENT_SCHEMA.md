@@ -421,12 +421,18 @@ snapshot, not independently maintained task-pack claims or PM completion lists.
   the task may be dispatched when capacity is available. Unmet, failed, or pending prerequisites
   keep the task out of READY instead of creating another task-state enum value. If no slot is
   available, record `capacity_delay`; never disguise it as a new semantic dependency.
-- `RUNNING`: a writer is assigned and executing.
+- `RUNNING`: allocated for execution; an unbound claim is not proof a native worker started.
 - `BUILD_VERIFIED`: the writer has completed and returned real build/test evidence.
 - `QA`: unified QA is running on the current request dependency closure. The QA barrier includes
   only `task_type: writer`; read-only, evidence, and QA tasks cannot make it wait on itself.
 - `QA_PASSED`: only an explicit `task_type: qa` node may use it, after its current PASS handoff validates.
   Re-review/failure resets its state; stale PASS cannot override a running or failed review at delivery.
+- `RESULT_VERIFIED`: only `read_only`/`evidence`, after the exclusive evidence-bound record `settle`
+  operation accepts the current result. It is neither Writer BUILD_VERIFIED nor implementation QA PASS.
+  Bind the original native ID, latest accepted complete Task Pack bytes/SHA, real completion source,
+  revised-scope result and actual declared verification evidence. Unknown/running or stale inputs remain
+  active; retirement never completes them. Settlement atomically releases record execution occupancy,
+  not unconfirmed native threads. See WORKFLOW's `Result-task settlement` and runtime-records for wire use.
 
 The PM dispatches all currently ready independent tasks within configured limits and re-evaluates
 downstream readiness after each completion. `depends_on` and `gates` are semantic dependency fields;

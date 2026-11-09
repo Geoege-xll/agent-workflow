@@ -40,6 +40,13 @@ the prototype tree, adding approval or independent prototype QA. Existing HTML r
 
 ### Execution and acceptance
 
+For successful `read_only`/`evidence` delivery, apply WORKFLOW's `Result-task settlement` using the existing
+record `update` exclusive `settle` operation in [runtime records](runtime-records.md#result-task-settlement).
+Accept current-scope results and native completion first, then atomically record RESULT_VERIFIED/evidence
+and optional retirement. Never leave accepted completed result tasks RUNNING merely because close is absent.
+Unknown/running/old-scope results retain occupancy. This adds no build or implementation QA to standalone
+audits and does not change the Writer/QA loop below. Native open-thread capacity remains separately observed.
+
 The graph, qa-ready and mandatory QA steps below apply to Full. Light uses only actually applicable
 verification, handoff and audit branches. Both levels follow WORKFLOW's `agent-instance-lifecycle` for
 instance identity, context and closure boundaries, without a separate pool.
