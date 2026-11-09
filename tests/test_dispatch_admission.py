@@ -1,0 +1,401 @@
+"""只用本 request 的临时数据验证聚合、原记录 CAS 与真实中央薄桥消费者。"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from lib import dispatch_admission_cli as cli, task_graph_records as records
+from lib.platform_fs import directory_lock
+from tests.test_task_graph_records import graph
+
+
+PACK = Path(__file__).resolve().parents[1]
+# macOS 沿项目 wrapper；Windows 直接复用原生隔离 bootstrap，不依赖 Git Bash。
+PYTHON = ([sys.executable, "-I", "-B", "-X", "utf8", str(PACK / "lib/windows_bootstrap.py"), "--script"]
+          if os.name == "nt" else ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8"])
+
+
+class AdmissionTest(unittest.TestCase):
+    def setUp(self):
+        # 使用任务既有 scratch 分配入口，多个用例在同一 request 夹具内复用；
+        # unittest 的清理由夹具所有者负责，不触碰真实项目、HOME 或宿主配置。
+        self.temporary = tempfile.TemporaryDirectory(prefix="admission-", dir=Path(__file__).resolve().parents[2])
+        self.addCleanup(self.temporary.cleanup)
+        self.workspace = Path(self.temporary.name).resolve()
+        self.project = self.workspace / "project"
+        self.project.mkdir()
+        self.manifest = {"schema_version": 1, "project_root": str(self.project), "records": [],
+                         "capacity": {"configured_subagents": 4, "configured_writers": 3,
+                                      "host_available_subagents": 4}}
+        self.environment = {key: value for key, value in os.environ.items() if not key.startswith("AGENT_WORKFLOW_")}
+        self.environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        self.environment_patch = patch.dict(os.environ, self.environment, clear=True)
+        self.environment_patch.start()
+        self.addCleanup(self.environment_patch.stop)
+
+    def add_record(self, name, *, state="DECLARED", owned="src/one", lock="api", level="Full", task_type="writer", approved=True):
+        value = graph()
+        value.update(active_paths=[], active_semantic_locks=[])
+        task = value["tasks"][0]
+        task.update(request_id=name, state=state, owned_paths=[owned], semantic_locks=[lock] if lock else [])
+        for document in task["controlled_document_access"]["documents"]:
+            document["applies_to"] = [owned]
+        if task_type != "writer":
+            task.update(task_type=task_type, role="xy-qa" if task_type == "qa" else "xy-backend", owned_paths=[], semantic_locks=[])
+            task["controlled_document_access"] = {"adapter": "project.yaml", "documents": []}
+            task["audit_surfaces"] = []
+        if not approved:
+            value["approved_gates"] = []
+        if state == "RUNNING":
+            value.update(active_paths=list(task["owned_paths"]), active_semantic_locks=list(task["semantic_locks"]))
+        if level == "Light":
+            from lib.task_graph_cli import export_task_pack
+            value = export_task_pack(value, task["id"])
+            value["task"]["workflow_level"] = "Light"
+        path = self.project / f"{name}.json"
+        path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        self.manifest["records"].append({"path": str(path), "sha256": records.digest(path.read_bytes()),
+                                         "execution_roots": {task["id"]: str(self.project)}})
+        return path
+
+    def refresh(self, path):
+        next(item for item in self.manifest["records"] if item["path"] == str(path))["sha256"] = records.digest(path.read_bytes())
+
+    def modify(self, path, change):
+        value = json.loads(path.read_bytes())
+        change(value)
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.refresh(path)
+
+    def key(self, path):
+        value = json.loads(path.read_bytes())
+        task = value.get("task") or value["tasks"][0]
+        return {"record": str(path), "request_id": task["request_id"], "task_id": task["id"]}
+
+    def test_running_a_conflicting_b_waits_and_independent_c_advances_without_gate_leak(self):
+        self.add_record("a", state="RUNNING")
+        b = self.add_record("b", owned="src/one/sub", lock="different")
+        c = self.add_record("c", owned="src/two", lock="other")
+        denied = self.add_record("d", owned="src/three", lock="third", approved=False)
+        before = set(self.project.iterdir())
+        result = cli.admission("view", self.manifest)
+        self.assertEqual([self.key(c)], result["candidates"])
+        waiting = {row["record"]: row["reasons"] for row in result["waiting"]}
+        self.assertIn("path_conflict", waiting[str(b)])
+        self.assertIn("record_gates_dependencies_locks_or_qa", waiting[str(denied)])
+        self.assertEqual((1, 1), (result["active_subagents"], result["active_writers"]))
+        self.assertEqual(before, set(self.project.iterdir()))
+        self.assertFalse(records._project_scratch_base(self.project).exists())
+
+    def test_candidates_reserve_resources_and_writer_limit_leaves_read_only_and_light_qa_slots(self):
+        a = self.add_record("a", level="Light")
+        self.add_record("b", owned="src/other", lock="api")
+        read_only = self.add_record("c", task_type="read_only")
+        qa = self.add_record("d", level="Light", task_type="qa")
+        self.manifest["capacity"]["configured_writers"] = 1
+        result = cli.admission("view", self.manifest)
+        self.assertEqual([self.key(a), self.key(read_only), self.key(qa)], result["candidates"])
+        self.assertIn("semantic_lock_conflict", result["waiting"][0]["reasons"])
+        self.assertIn("writer_capacity", result["waiting"][0]["reasons"])
+
+    def test_unbound_claim_reserves_the_native_slot_before_agent_creation(self):
+        a = self.add_record("a")
+        self.add_record("b", owned="src/two", lock="other")
+        self.manifest["capacity"].update(configured_subagents=8, configured_writers=8, host_available_subagents=1)
+        cli.admission("claim", self.manifest, self.key(a))
+        self.refresh(a)
+        held = cli.admission("view", self.manifest)
+        self.assertEqual([], held["candidates"])
+        self.assertEqual(1, held["unbound_claims"])
+        self.assertEqual(0, held["remaining_subagent_slots"])
+
+    def test_claim_duplicate_unknown_and_confirmed_failure_release_use_original_state_and_sha(self):
+        path = self.add_record("a", level="Light", state="READY")
+        key = self.key(path)
+        receipt = cli.admission("claim", self.manifest, key)
+        self.assertEqual("RUNNING", json.loads(path.read_bytes())["task"]["state"])
+        self.assertNotIn("agent_ref", json.loads(path.read_bytes())["task"])
+        with self.assertRaisesRegex(ValueError, "fingerprint changed"):
+            cli.admission("claim", self.manifest, key)
+        self.refresh(path)
+        with self.assertRaisesRegex(ValueError, "not an admitted"):
+            cli.admission("claim", self.manifest, key)
+        held = path.read_bytes()
+        malformed = {**receipt, "prior_state": []}
+        with self.assertRaisesRegex(ValueError, "invalid prior_state"):
+            cli.admission("release", self.manifest, receipt=malformed, outcome="definitely_not_created")
+        retained = cli.admission("release", self.manifest, receipt=receipt, outcome="unknown")
+        self.assertEqual("retained", retained["status"])
+        self.assertEqual(held, path.read_bytes())
+        result = cli.admission("release", self.manifest, receipt=receipt, outcome="definitely_not_created")
+        self.assertEqual("READY", result["state"])
+        self.assertEqual("READY", json.loads(path.read_bytes())["task"]["state"])
+        with self.assertRaises(ValueError):
+            cli.admission("release", self.manifest, receipt=receipt, outcome="definitely_not_created")
+
+    def test_sha_change_bound_or_retired_claim_cannot_release_or_spawn_again(self):
+        path = self.add_record("a")
+        key = self.key(path)
+        receipt = cli.admission("claim", self.manifest, key)
+        self.modify(path, lambda value: value["tasks"][0].update(agent_ref={"host": "codex", "agent_id": "/fixture/a"}))
+        # 原生创建已成功但后续绑定/发布失败都不能被当作“确定未创建”自动释放。
+        with self.assertRaisesRegex(ValueError, "release requires"):
+            cli.admission("release", self.manifest, receipt=receipt, outcome="definitely_not_created")
+        self.assertEqual([], cli.admission("view", self.manifest)["candidates"])
+        self.modify(path, lambda value: value["tasks"][0].update(agent_retired=True))
+        result = cli.admission("view", self.manifest)
+        self.assertEqual(1, result["active_writers"])
+        self.assertIn("agent_retired", result["waiting"][0]["reasons"])
+
+    def test_duplicate_sources_handoff_packs_agent_identity_and_forged_validation_are_rejected(self):
+        path = self.add_record("a", state="RUNNING")
+        other = self.add_record("b", state="BUILD_VERIFIED", owned="src/two", lock="other")
+        self.manifest["records"].append(copy.deepcopy(self.manifest["records"][0]))
+        with self.assertRaisesRegex(ValueError, "duplicate authoritative"):
+            cli.admission("view", self.manifest)
+        self.manifest["records"].pop()
+        for source in (path, other):
+            self.modify(source, lambda value: value["tasks"][0].update(agent_ref={"host": "codex", "agent_id": "/same"}))
+        with self.assertRaisesRegex(ValueError, "shared across"):
+            cli.admission("view", self.manifest)
+        self.manifest["records"][0]["validated"] = True
+        with self.assertRaisesRegex(ValueError, "requires exactly"):
+            cli.admission("view", self.manifest)
+        self.manifest["records"][0].pop("validated")
+        from lib.task_graph_cli import export_task_pack
+        self.modify(path, lambda value: None)
+        path.write_text(json.dumps(export_task_pack(json.loads(path.read_bytes()), "api")))
+        self.refresh(path)
+        with self.assertRaisesRegex(ValueError, "Full handoff"):
+            cli.admission("view", self.manifest)
+
+    def test_all_record_sha_rechecked_under_lock_and_failed_publish_keeps_claim(self):
+        a = self.add_record("a")
+        b = self.add_record("b", owned="src/two", lock="other")
+        original = cli._recheck
+        def drift(views):
+            b.write_bytes(b.read_bytes() + b"\n")
+            original(views)
+        with patch.object(cli, "_recheck", side_effect=drift), self.assertRaisesRegex(ValueError, "changed during"):
+            cli.admission("claim", self.manifest, self.key(a))
+        self.assertEqual("DECLARED", json.loads(a.read_bytes())["tasks"][0]["state"])
+        self.refresh(b)
+        receipt = cli.admission("claim", self.manifest, self.key(a))
+        self.refresh(a)
+        original_payload = json.loads(a.read_bytes())
+        binding_patch = {"tasks": {"api": {"set": {"agent_ref": {"host": "codex", "agent_id": "/fixture/observed"}}}}}
+        with self.assertRaisesRegex(ValueError, "fingerprint differs"):
+            cli._helper(original_payload, self.project,
+                        ["update", "--input", str(a), "--root", str(self.project), "--patch", "-",
+                         "--expect-sha256", receipt["previous_sha256"]], json.dumps(binding_patch).encode())
+        self.assertNotIn("agent_ref", json.loads(a.read_bytes())["tasks"][0])
+        self.assertEqual("RUNNING", json.loads(a.read_bytes())["tasks"][0]["state"])
+        # 用真实记录的父目录发布锁制造 CAS 发布失败，验证不会偷偷释放已有领取。
+        with directory_lock(self.project, "taskgraph"), self.assertRaisesRegex(ValueError, "helper rejected"):
+            cli.admission("release", self.manifest, receipt=receipt, outcome="definitely_not_created")
+        self.assertEqual("RUNNING", json.loads(a.read_bytes())["tasks"][0]["state"])
+
+    def test_project_claim_lock_rejects_concurrent_writer_without_blocking_view(self):
+        path = self.add_record("a")
+        manifest = self.workspace / "manifest.json"
+        manifest.write_text(json.dumps(self.manifest))
+        with cli._project_lock(self.project):
+            # 使用真实另一个进程；Windows mutex 同线程可重入，进程内嵌套不能
+            # 证明跨进程领取互斥，POSIX/Windows 在此共用同一可观察边界。
+            competing = subprocess.run([*PYTHON, str(PACK / "lib/dispatch_admission_cli.py"), "claim", "--input", str(manifest),
+                                        "--record", str(path), "--request-id", "a", "--task-id", "api"],
+                                       env=self.environment, cwd=self.project, capture_output=True, text=True, timeout=30)
+            self.assertEqual(2, competing.returncode, competing.stdout + competing.stderr)
+            self.assertEqual([self.key(path)], cli.admission("view", self.manifest)["candidates"])
+
+    def test_lost_update_result_retains_real_published_claim_without_automatic_retry(self):
+        path = self.add_record("a")
+        run = subprocess.run
+        updates = []
+        def lose_result(command, *args, **kwargs):
+            result = run(command, *args, **kwargs)
+            if "update" in command:
+                updates.append(command)
+                # 实际子进程已经完成原 CAS，模拟调用者未收到其结果的边界。
+                # 这里不是把 mock 当原生启动：只验证真实磁盘发布后的未知结果。
+                raise subprocess.TimeoutExpired(command, 120)
+            return result
+        with patch.object(cli.subprocess, "run", side_effect=lose_result), self.assertRaisesRegex(ValueError, "inspect original record"):
+            cli.admission("claim", self.manifest, self.key(path))
+        self.assertEqual(1, len(updates))
+        self.assertEqual("RUNNING", json.loads(path.read_bytes())["tasks"][0]["state"])
+        self.refresh(path)
+        self.assertEqual([], cli.admission("view", self.manifest)["candidates"])
+
+    def test_full_qa_uses_existing_request_barrier_and_shared_thread_capacity(self):
+        path = self.add_record("a", state="RUNNING")
+        def append_qa(value):
+            from tests.test_scheduler_boundaries import v2_task
+            value["tasks"].append(v2_task({"id": "qa", "request_id": "a", "task_type": "qa", "state": "DECLARED",
+                "depends_on": [], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": []}))
+        self.modify(path, append_qa)
+        self.manifest["records"][0]["execution_roots"]["qa"] = str(self.project)
+        qa_key = {"record": str(path), "request_id": "a", "task_id": "qa"}
+        self.assertEqual([], cli.admission("view", self.manifest)["candidates"])
+        self.modify(path, lambda value: value["tasks"][0].update(state="BUILD_VERIFIED"))
+        self.modify(path, lambda value: value.update(active_paths=[], active_semantic_locks=[]))
+        self.assertEqual([qa_key], cli.admission("view", self.manifest)["candidates"])
+        claimed = cli.admission("claim", self.manifest, qa_key)
+        self.assertEqual("claimed", claimed["status"])
+        self.refresh(path)
+        self.assertEqual(1, cli.admission("view", self.manifest)["active_subagents"])
+        self.assertEqual(0, cli.admission("view", self.manifest)["active_writers"])
+
+    def test_actual_source_cli_and_invalid_schema_return_json_exit_two(self):
+        path = self.add_record("a")
+        manifest = self.workspace / "manifest.json"
+        manifest.write_text(json.dumps(self.manifest))
+        result = subprocess.run([*PYTHON, str(PACK / "lib/dispatch_admission_cli.py"), "claim", "--input", str(manifest),
+                                 "--record", str(path), "--request-id", "a", "--task-id", "api"],
+                                env=self.environment, cwd=self.project, capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("claimed", json.loads(result.stdout)["status"])
+        manifest.write_text("[]")
+        failed = subprocess.run([*PYTHON, str(PACK / "lib/dispatch_admission_cli.py"), "claim", "--input", str(manifest)],
+                                env=self.environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(2, failed.returncode)
+        self.assertIn("error", json.loads(failed.stderr))
+
+    def test_actual_worktree_roots_separate_paths_but_share_semantic_locks(self):
+        def git(*args):
+            subprocess.run(["git", "-C", str(self.project), *args], check=True, capture_output=True)
+        git("init", "-q")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture")
+        head = subprocess.check_output(["git", "-C", str(self.project), "rev-parse", "HEAD"], text=True).strip()
+        roots = []
+        for name in ("worker-a", "worker-b", "integration-a", "integration-b"):
+            root = self.workspace / name
+            git("worktree", "add", "--detach", "-q", str(root), head)
+            roots.append(root)
+        a = self.add_record("a", state="RUNNING")
+        b = self.add_record("b", lock="other")
+        for path, root, integration in ((a, roots[0], roots[2]), (b, roots[1], roots[3])):
+            def bind(value):
+                request_id = value["tasks"][0]["request_id"]
+                value["tasks"][0]["execution_workspace"] = {"root": str(root), "base_revision": head, "head_revision": None}
+                value["worktree_integrations"] = {request_id: {"root": str(integration), "target_branch": "main",
+                    "target_base": head, "head_revision": None, "verification": []}}
+            self.modify(path, bind)
+            next(item for item in self.manifest["records"] if item["path"] == str(path))["execution_roots"]["api"] = str(root)
+        self.assertEqual([self.key(b)], cli.admission("view", self.manifest)["candidates"])
+        other_entry = copy.deepcopy(self.manifest)
+        other_entry["project_root"] = str(roots[0])
+        manifest = self.workspace / "worktree-entry.json"
+        manifest.write_text(json.dumps(other_entry))
+        git_root = Path(cli._git_identity(self.project))
+        git_names = set(git_root.iterdir())
+        # 同 Git 项目从另一个 worktree 进入也必须命中同一临界区；锁本身
+        # 仍位于系统 scratch，不能把 .git 当成新的资源账本或状态目录。
+        with cli._project_lock(self.project) as scope:
+            self.assertEqual(scope, cli._git_identity(roots[0]))
+            competing = subprocess.run([*PYTHON, str(PACK / "lib/dispatch_admission_cli.py"), "claim", "--input", str(manifest),
+                                        "--record", str(b), "--request-id", "b", "--task-id", "api"],
+                                       env=self.environment, cwd=roots[0], capture_output=True, text=True, timeout=30)
+            self.assertEqual(2, competing.returncode, competing.stdout + competing.stderr)
+        self.assertEqual(git_names, set(git_root.iterdir()))
+        self.modify(b, lambda value: value["tasks"][0].update(semantic_locks=["api"]))
+        result = cli.admission("view", self.manifest)
+        self.assertEqual([], result["candidates"])
+        self.assertIn("semantic_lock_conflict", result["waiting"][1]["reasons"])
+        other_entry["records"] = copy.deepcopy(self.manifest["records"])
+        self.assertEqual([], cli.admission("view", other_entry)["candidates"])
+        self.manifest["records"][1]["execution_roots"]["api"] = str(self.project)
+        with self.assertRaisesRegex(ValueError, "differs from original"):
+            cli.admission("view", self.manifest)
+
+    def test_detached_installed_cli_mixed_pins_validate_and_claim_through_each_original_core(self):
+        """双版本是真实冻结安装，不把调用者的 validated 标志或 mock 当作验证。
+
+        混合 pin 的必要输入是两个完整核心。只为本用例建立一次可复用 source
+        夹具，版本差异是一条无行为影响的中文注释；两版均经真实清单/安装校验。
+        运行时 cwd 是薄项目且环境固定 B，A 必须通过原桥显式转入自身核心。
+        """
+        from lib import runtime_store as store
+        from lib.central.runtime_project import Tree, json_bytes
+        from manager import runtime_policy as policy, runtime_service as projects
+        from manager.runtime_state import read_state, write_control
+        import uuid
+
+        state = self.workspace / "machine-state"
+        core_a = store.import_core(PACK, state)
+        source = self.workspace / "version-source"
+        source.mkdir()
+        for relative in store.CORE_DIRECTORIES:
+            shutil.copytree(PACK / relative, source / relative,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        for relative in store.SETUP_FILES:
+            shutil.copy2(PACK / relative, source / relative)
+        with (source / "lib/dispatch_admission.py").open("a", encoding="utf-8") as stream:
+            stream.write("\n# 中央双版本回归夹具：仅区分内容身份，业务合同保持一致。\n")
+        core_b = store.import_core(source, state)
+        self.assertNotEqual(core_a.binding(), core_b.binding())
+        def set_current(binding):
+            with policy.coordination(state), Tree(state) as tree:
+                write_control(tree, policy.CURRENT,
+                              json_bytes({"schema_version": 1, "runtime_binding": binding,
+                                          "previous_binding": None, "generation": uuid.uuid4().hex,
+                                          "native_roots": []}), expected=read_state(state, policy.CURRENT))
+        set_current(core_a.binding())
+        projects.apply(projects.preview(state, self.project, "enable", binding=core_a.binding()))
+        a = self.add_record("a", state="RUNNING")
+        self.modify(a, lambda value: value.update(runtime_binding=core_a.binding()))
+        b = self.add_record("b", owned="src/two", lock="other", level="Light")
+        self.modify(b, lambda value: value.update(runtime_binding=core_b.binding()))
+        set_current(core_b.binding())
+        projects.apply(projects.preview(state, self.project, "use", binding=core_b.binding()))
+        # 仅保留中央内容库，移走必要测试source夹具，保证实际入口不依赖原源码路径。
+        shutil.rmtree(source)
+        environment = {**self.environment, "AGENT_WORKFLOW_STATE_DIR": str(state)}
+        manifest = self.workspace / "manifest.json"
+        manifest.write_text(json.dumps(self.manifest), encoding="utf-8")
+        launcher = ([sys.executable, "-I", "-B", "-X", "utf8"] if os.name == "nt" else
+                    ["bash", str(self.project / ".agent-workflow/lib/python_runtime.sh"), "-B", "-X", "utf8"])
+        command = [*launcher, str(self.project / ".agent-workflow/runtime.py"),
+                   "--binding", json.dumps(core_b.binding()), "helper", "lib/dispatch_admission_cli.py"]
+        def installed(*arguments):
+            result = subprocess.run([*command, *arguments], env=environment, cwd=self.project,
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            return json.loads(result.stdout)
+        viewed = installed("view", "--input", str(manifest))
+        self.assertEqual([self.key(b)], viewed["candidates"])
+        claimed = installed("claim", "--input", str(manifest), "--record", str(b),
+                            "--request-id", "b", "--task-id", "api")
+        self.assertEqual("claimed", claimed["status"])
+        self.assertEqual(core_a.binding(), json.loads(a.read_bytes())["runtime_binding"])
+        self.assertEqual(core_b.binding(), json.loads(b.read_bytes())["runtime_binding"])
+        self.assertEqual("RUNNING", json.loads(b.read_bytes())["task"]["state"])
+        self.refresh(b)
+        manifest.write_text(json.dumps(self.manifest))
+        receipt = self.workspace / "receipt.json"
+        receipt.write_text(json.dumps(claimed))
+        self.assertEqual("released", installed("release", "--input", str(manifest), "--receipt", str(receipt),
+                                                "--outcome", "definitely_not_created")["status"])
+        # B 环境中领取 A：先明确把 A 的原状态恢复为 pending，仍保留 A pin。
+        # 本用例未调用原生spawn；状态变更只是测试输入，不是实例存活证据。
+        self.modify(a, lambda value: value["tasks"][0].update(state="DECLARED"))
+        self.modify(a, lambda value: value.update(active_paths=[], active_semantic_locks=[]))
+        self.refresh(b)
+        manifest.write_text(json.dumps(self.manifest))
+        claimed_a = installed("claim", "--input", str(manifest), "--record", str(a),
+                              "--request-id", "a", "--task-id", "api")
+        self.assertEqual("claimed", claimed_a["status"])
+        self.assertEqual(core_a.binding(), json.loads(a.read_bytes())["runtime_binding"])
+
+
+if __name__ == "__main__":
+    unittest.main()
