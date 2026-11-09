@@ -7,7 +7,7 @@
 import copy
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import subprocess
 import tempfile
 import unittest
@@ -180,6 +180,52 @@ with Tree(state) as tree:
                 with self.assertRaises(service.ActivationError) as raised:
                     service._journal(self.state, self.project)
                 self.assertNotIn("PRIVATE-BODY-MUST-NOT-LEAK", str(raised.exception))
+
+    def test_journal_builder_uses_canonical_logical_paths_for_every_platform(self):
+        """逻辑路径不随宿主变反斜杠；真实私有发布仍拒绝任何篡改恢复名。"""
+        changes = (
+            service.ResourceChange("AGENTS.md", Node(), Node("file", b"top", 0o600), "block"),
+            service.ResourceChange(".agent-workflow/lib/workflow_hooks.py", Node(),
+                                   Node("file", b"nested", 0o600), "file"),
+            service.ResourceChange(".agents/skills/xy-workflow", Node(),
+                                   Node("link", b"/pinned/core/platforms/shared/skills/xy-workflow", 0o777), "skill"),
+            service.ResourceChange(".agent-workflow/removed.md", Node("file", b"old", 0o600),
+                                   Node(), "file"),
+        )
+        plan = service.ActivationPlan(self.state, self.project, "enable", None, json_bytes(BINDING),
+                                      "fixture", ("codex",), False, True, changes, (), (),
+                                      Node(), Node(), json_bytes({}))
+        relative = service._state_relative(self.project, "transactions")
+        reference = None
+        for path_type in (PurePosixPath, PureWindowsPath):
+            # 只替换 builder 的路径词法，暴露 Windows str(parent) 的分隔符；
+            # 随后退出注入范围，以本机真实 Tree/write/read 消费序列化结果。
+            # 这里不模拟 Windows API、ACL 或原生成功，原生组合仍须单独执行。
+            with self.subTest(path_semantics=path_type.__name__):
+                with patch.object(service, "Path", path_type):
+                    journal = service._journal_value(plan, NONCE)
+                with Tree(self.state) as tree:
+                    service._write_private(tree, relative, json_bytes(journal))
+                self.assertEqual(journal, service._journal(self.state, self.project)[1])
+                if reference is None:
+                    reference = journal
+                self.assertEqual(reference, journal)
+                self.assertEqual(f".agent-workflow/lib/.agent-workflow-central-{NONCE}-1.stage",
+                                 journal["changes"][1]["stage"])
+        stable = service._read_state(self.state, relative)
+        for key in ("backup", "stage", "rollback"):
+            expected = reference["changes"][1][key]
+            # nonce、序号、父目录和后缀都属于恢复授权；即使仍是根内路径，
+            # 也不能把别人的同名资料、目录或另一次事务认领为当前 stage。
+            invalid = (expected.replace("/", "\\"), expected.replace(NONCE, "c" * 32),
+                       expected.replace("-1.", "-99."), expected.rsplit("/", 1)[1], expected + "/child")
+            for wrong in invalid:
+                with self.subTest(field=key, malformed_path=wrong):
+                    broken = copy.deepcopy(reference)
+                    broken["changes"][1][key] = wrong
+                    with Tree(self.state) as tree, self.assertRaises(service.ActivationError):
+                        service._write_private(tree, relative, json_bytes(broken))
+                    self.assertEqual(stable, service._read_state(self.state, relative))
 
     def test_complete_nested_codecs_reject_bad_optional_and_embedded_values(self):
         stem = f".agent-workflow/.agent-workflow-central-{NONCE}-0"
