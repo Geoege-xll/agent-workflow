@@ -72,6 +72,38 @@ function Invoke-AcceptancePython([string[]]$Arguments) {
     Write-AcceptanceLog "exit_code=$nativeExit"
     if ($null -eq $nativeExit -or $nativeExit -ne 0) { throw "The explicit Python command failed with exit $nativeExit." }
 }
+function Write-AcceptanceIdentity {
+    $identityCode = @'
+import ctypes, importlib.metadata, json, os, pathlib, platform, sys
+if os.name != "nt" or sys.version_info < (3, 11) or ctypes.sizeof(ctypes.c_void_p) != 8:
+    raise RuntimeError("An existing native CPython >= 3.11 x64 is required")
+if platform.python_implementation() != "CPython":
+    raise RuntimeError("Only the declared CPython runtime is accepted")
+import curses, _curses
+version = importlib.metadata.version("windows-curses")
+if version != "2.4.2":
+    raise RuntimeError("Install the reviewed requirements-windows.txt into the selected environment before acceptance")
+value = {"python": sys.version, "executable": sys.executable, "prefix": sys.prefix,
+         "base_prefix": sys.base_prefix, "windows_curses": version, "curses_extension": _curses.__file__}
+body = json.dumps(value, ensure_ascii=True, indent=2)
+with pathlib.Path(sys.argv[1]).open("x", encoding="utf-8") as stream: stream.write(body + "\n")
+print(body)
+'@
+    # PowerShell 7.0–7.2 与 Legacy native argv 会再次处理 -c 代码中的双引号。
+    # 固定代码只排他写入能力探针创建的本次私有目录，再按脚本路径调用：无需
+    # 改用户 ArgumentPassing，也不引入另一套进程/Job、重定向或取消清理逻辑。
+    # 保留该文件作为实际执行输入，便于与环境报告及完整 argv 日志共同复核。
+    $identityScript = Join-Path $workspace 'environment_probe.py'
+    $identityStream = [System.IO.File]::Open($identityScript, [System.IO.FileMode]::CreateNew,
+        [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    try {
+        $identityBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($identityCode)
+        $identityStream.Write($identityBytes, 0, $identityBytes.Length)
+    } finally {
+        $identityStream.Dispose()
+    }
+    Invoke-AcceptancePython -Arguments @('-I', '-B', '-X', 'utf8', $identityScript, $identityPath)
+}
 
 $environmentNames = @('TEMP', 'TMP', 'AGENT_WORKFLOW_TEST_SCRATCH', 'AWF_TEST_EVIDENCE_LOG',
     'AGENT_WORKFLOW_PYTHON', 'AGENT_WORKFLOW_BOOTSTRAP', 'AGENT_WORKFLOW_PWSH')
@@ -102,23 +134,7 @@ try {
     $env:AGENT_WORKFLOW_PYTHON = $interpreter.FullName
     $env:AGENT_WORKFLOW_BOOTSTRAP = Join-Path $root 'lib/windows_bootstrap.py'
     $env:AGENT_WORKFLOW_PWSH = Join-Path $PSHOME 'pwsh.exe'
-    $identityCode = @'
-import ctypes, importlib.metadata, json, os, pathlib, platform, sys
-if os.name != "nt" or sys.version_info < (3, 11) or ctypes.sizeof(ctypes.c_void_p) != 8:
-    raise RuntimeError("An existing native CPython >= 3.11 x64 is required")
-if platform.python_implementation() != "CPython":
-    raise RuntimeError("Only the declared CPython runtime is accepted")
-import curses, _curses
-version = importlib.metadata.version("windows-curses")
-if version != "2.4.2":
-    raise RuntimeError("Install the reviewed requirements-windows.txt into the selected environment before acceptance")
-value = {"python": sys.version, "executable": sys.executable, "prefix": sys.prefix,
-         "base_prefix": sys.base_prefix, "windows_curses": version, "curses_extension": _curses.__file__}
-body = json.dumps(value, ensure_ascii=True, indent=2)
-with pathlib.Path(sys.argv[1]).open("x", encoding="utf-8") as stream: stream.write(body + "\n")
-print(body)
-'@
-    Invoke-AcceptancePython -Arguments @('-I', '-B', '-X', 'utf8', '-c', $identityCode, $identityPath)
+    Write-AcceptanceIdentity
     $entry = Join-Path $PSScriptRoot 'test_workflow.py'
     # 唯一测试清单决定最终组合，脚本不持有第二套方法名、计数或动态 skip 规则。
     # --list 只确认节点存在；随后同一组必须真实执行，退出码由原 runner 拒绝

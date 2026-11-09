@@ -21,6 +21,7 @@ from unittest.mock import patch
 import uuid
 
 from lib import runtime_store
+from lib.install.install_process import capture_process
 from lib.central.role_preferences import snapshot as preference_snapshot
 from lib.hosts.native_context import HostPaths, NativeContext
 from manager import central_runtime, model_preferences, project_service, service
@@ -42,6 +43,125 @@ def isolated_environment(home):
     environment.update(HOME=str(home), USERPROFILE=str(home),
                        APPDATA=str(home / "AppData/Roaming"), LOCALAPPDATA=str(home / "AppData/Local"))
     return environment
+
+
+@unittest.skipUnless(os.name == "nt", "真实 Legacy/Win32 边界必须在 Windows 执行")
+class WindowsAcceptanceScriptNativeTest(unittest.TestCase):
+    def test_native_acceptance_identity_preserves_legacy_quotes_and_exit_codes(self):
+        with tempfile.TemporaryDirectory(prefix="awf-acceptance-中文 e\u0301-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
+            root = Path(raw).resolve()
+            home = root / "private-home"
+            home.mkdir()
+            environment = isolated_environment(home)
+            pwsh = Path(os.environ.get("AGENT_WORKFLOW_PWSH", str(Path(os.environ["ProgramFiles"]) / "PowerShell/7/pwsh.exe")))
+            self.assertTrue(pwsh.is_absolute() and pwsh.is_file(), "需要已有 PowerShell 7+")
+            negative = root / "真实双流退出.py"
+            negative.write_text('import os,sys\nos.write(1,b\'ACCEPTANCE_OUT_"quoted"\\n\'*2048)\nos.write(2,b\'ACCEPTANCE_ERR_"quoted"\\n\'*2048)\nsys.exit(27)\n', encoding="utf-8")
+            environment.update(AWF_ACCEPTANCE_TEST_ROOT=str(root), AWF_ACCEPTANCE_TEST_PYTHON=sys.executable,
+                AWF_ACCEPTANCE_TEST_SCRIPT=str(PACK / "scripts/windows_acceptance.ps1"),
+                AWF_ACCEPTANCE_TEST_NEGATIVE=str(negative))
+            # AST 只载入仓内实际生产函数；没有镜像其 argv 拼接、文件发布、
+            # 日志或退出码实现，也不执行 Win11 整套入口以递归启动本测试。
+            # Legacy 仅属于新建 PS 子进程，不改变调用用户的 shell 偏好。
+            script = r'''
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandArgumentPassing = 'Legacy'
+$passingBefore = $PSNativeCommandArgumentPassing
+$pathBefore = $env:PATH
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:AWF_ACCEPTANCE_TEST_SCRIPT, [ref]$tokens, [ref]$errors)
+if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+foreach ($name in @('Write-AcceptanceLog', 'Invoke-AcceptancePython', 'Write-AcceptanceIdentity')) {
+    $definitions = @($ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name
+    }, $true))
+    if ($definitions.Count -ne 1) { throw "Expected one actual production function: $name" }
+    . ([scriptblock]::Create($definitions[0].Extent.Text))
+}
+$workspace = Join-Path $env:AWF_ACCEPTANCE_TEST_ROOT 'identity-workspace'
+[System.IO.Directory]::CreateDirectory($workspace) | Out-Null
+$identityPath = Join-Path $workspace 'environment.json'
+$log = Join-Path $workspace 'acceptance.log'
+$interpreter = Get-Item -LiteralPath $env:AWF_ACCEPTANCE_TEST_PYTHON
+Write-AcceptanceIdentity
+if (-not (Test-Path -LiteralPath $identityPath)) { throw 'The real identity step did not produce its report.' }
+$refused = $false
+try {
+    Invoke-AcceptancePython -Arguments @('-I', '-B', '-X', 'utf8', $env:AWF_ACCEPTANCE_TEST_NEGATIVE)
+} catch {
+    if ($_.Exception.Message -notlike '*exit 27*') { throw }
+    $refused = $true
+}
+if (-not $refused) { throw 'The real launcher swallowed exit 27.' }
+if ($PSNativeCommandArgumentPassing -cne $passingBefore -or $env:PATH -cne $pathBefore) { throw 'The production boundary changed shell preferences.' }
+Write-Output 'ACCEPTANCE_LEGACY_REAL_BOUNDARY_OK'
+'''
+            encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+            argv = [str(pwsh), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+            # 沿用既有 Job/capture owner 与双流排空；此测试不新增进程清理器。
+            result = capture_process(argv, env=environment, timeout=60)
+            log_path = root / "identity-workspace/acceptance.log"
+            logs = log_path.read_bytes() if log_path.exists() else b""
+            value = {"kind": "acceptance-legacy", "argv": argv, "exit": result.returncode,
+                     "stdout_base64": base64.b64encode(result.stdout).decode("ascii"),
+                     "stderr_base64": base64.b64encode(result.stderr).decode("ascii"),
+                     "log_base64": base64.b64encode(logs).decode("ascii")}
+            line = json.dumps(value, ensure_ascii=True)
+            print("\n[native acceptance evidence] " + line, flush=True)
+            if target := os.environ.get("AWF_TEST_EVIDENCE_LOG"):
+                with open(target, "a", encoding="utf-8") as stream:stream.write(line + "\n")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(b"ACCEPTANCE_LEGACY_REAL_BOUNDARY_OK", result.stdout)
+            self.assertIn(b'ACCEPTANCE_OUT_"quoted"', logs)
+            self.assertIn(b'ACCEPTANCE_ERR_"quoted"', logs)
+            self.assertIn(b"exit_code=0", logs)
+            self.assertIn(b"exit_code=27", logs)
+            identity = json.loads((root / "identity-workspace/environment.json").read_text(encoding="utf-8"))
+            self.assertTrue(os.path.samefile(identity["executable"], sys.executable))
+            self.assertEqual(identity["windows_curses"], "2.4.2")
+
+
+@unittest.skipUnless(os.name == "nt", "控制台访问权限必须经真实 ConPTY 观测")
+class NativeConsoleObserverNativeTest(unittest.TestCase):
+    def test_native_console_cursor_access_diagnostics(self):
+        with tempfile.TemporaryDirectory(prefix="awf-console-access-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
+            root = Path(raw).resolve()
+            report = root / "access.json"
+            code = "import sys;sys.path.insert(0,sys.argv[1]);from tests.windows_console_observer import cursor_access_diagnostics;cursor_access_diagnostics(sys.argv[2])"
+            argv = [sys.executable, "-I", "-B", "-X", "utf8", "-c", code, str(PACK), str(report)]
+            environment = isolated_environment(root)
+            process = ConPTYProcess(argv, cwd=PACK, env=environment)
+            data = None
+            try:
+                # 立即进入唯一 owner 的 wait/capture，避免先等 UI 响应超时，
+                # 再尝试捕捉已经退出的 venv payload；累计屏障仍完整执行。
+                self.assertEqual(process.wait(timeout=20), 0)
+                data = json.loads(report.read_text(encoding="utf-8"))
+                self.assertTrue(os.path.samefile(data["executable"], sys.executable))
+                for label in ("read", "readwrite"):
+                    row = data["results"][label]
+                    self.assertNotIn("open_error", row)
+                    for name in ("mode", "buffer", "screen"):
+                        self.assertTrue(row[name]["ok"], (label, name, row[name]))
+                    self.assertGreater(row["screen"]["width"], 0)
+                    self.assertGreater(row["screen"]["height"], 0)
+                # READ 的已知错误完整保留；READ|WRITE 也失败或只留下零值，
+                # 本节点必须失败，不能把 0/False 光标当成兼容或 UI 通过。
+                cursor = data["results"]["readwrite"]["cursor"]
+                self.assertTrue(cursor["ok"], cursor)
+                self.assertTrue(1 <= cursor["size"] <= 100, cursor)
+            finally:
+                try:process.close()
+                finally:
+                    if data is None and report.exists():data = json.loads(report.read_text(encoding="utf-8"))
+                    value = {"kind": "console-access-diagnostics", "argv": argv,
+                             "exit": process.returncode, "closed": process.closed, "native": data,
+                             "raw_base64": base64.b64encode(process.raw_output).decode("ascii")}
+                    line = json.dumps(value, ensure_ascii=True)
+                    print("\n[native console access evidence] " + line, flush=True)
+                    if target := os.environ.get("AWF_TEST_EVIDENCE_LOG"):
+                        with open(target, "a", encoding="utf-8") as stream:stream.write(line + "\n")
 
 
 class NativeUI:

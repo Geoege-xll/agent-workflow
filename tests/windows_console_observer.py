@@ -128,6 +128,59 @@ def _publish(path, value):
     pending.replace(path)
 
 
+def cursor_access_diagnostics(path):
+    """实际比较两种 CONOUT$ 访问权限；保留每个 Get API 的原始状态。
+
+    首轮真实 Server 在 GENERIC_READ 的 GetConsoleCursorInfo 返回错误 5，
+    而前面的 buffer/ReadConsoleOutputW 成功。本入口只诊断该差异，不修改
+    snapshot 默认访问、不写入控制台、不替换生产 UI，也不把失败字段的零值
+    当成有效光标信息。结果文件仅位于调用测试的私有目录。
+    """
+    observer = ConsoleObserver()
+    results = {}
+    for label, access in (("read", 0x80000000), ("readwrite", 0xc0000000)):
+        handle = observer.kernel.CreateFileW("CONOUT$", access, 3, None, 3, 0, None)
+        item = results[label] = {"access": access}
+        if handle in (None, HANDLE(-1).value):
+            item["open_error"] = C.get_last_error()
+            continue
+        try:
+            for name, value in (("mode", DWORD()), ("buffer", CONSOLE_SCREEN_BUFFER_INFO()),
+                                ("cursor", CONSOLE_CURSOR_INFO())):
+                method = {"mode": "GetConsoleMode", "buffer": "GetConsoleScreenBufferInfo",
+                          "cursor": "GetConsoleCursorInfo"}[name]
+                C.set_last_error(0)
+                ok = bool(getattr(observer.kernel, method)(handle, C.byref(value)))
+                record = item[name] = {"ok": ok, "winerror": C.get_last_error()}
+                if not ok:
+                    continue
+                if name == "mode":record["value"] = value.value
+                elif name == "cursor":record.update(size=value.dwSize, visible=bool(value.bVisible))
+                else:
+                    record["window"] = [value.srWindow.Left, value.srWindow.Top,
+                                        value.srWindow.Right, value.srWindow.Bottom]
+                    record["cursor"] = [value.dwCursorPosition.Y, value.dwCursorPosition.X]
+            if item["buffer"]["ok"]:
+                left, top, right, bottom = item["buffer"]["window"]
+                width, height = right - left + 1, bottom - top + 1
+                if not (0 < width <= 240 and 0 < height <= 120):
+                    raise ValueError("原生访问权限诊断超出有界视口")
+                cells = (CHAR_INFO * (width * height))()
+                region = SMALL_RECT(left, top, right, bottom)
+                C.set_last_error(0)
+                ok = bool(observer.kernel.ReadConsoleOutputW(handle, cells, COORD(width, height),
+                                                            COORD(0, 0), C.byref(region)))
+                item["screen"] = {"ok": ok, "winerror": C.get_last_error()}
+                if ok:
+                    item["screen"].update(width=width, height=height,
+                        region=[region.Left, region.Top, region.Right, region.Bottom],
+                        units=[[cell.UnicodeChar for cell in cells[row * width:(row + 1) * width]] for row in range(height)],
+                        attributes=[[cell.Attributes for cell in cells[row * width:(row + 1) * width]] for row in range(height)])
+        finally:
+            observer.check(observer.kernel.CloseHandle(handle))
+    _publish(Path(path), {"executable": sys.executable, "results": results})
+
+
 def run_observed(root, arguments):
     """真实 CLI/TUI 在主线程运行；旁路线程只读取原生 buffer/modes/cursor。
 
