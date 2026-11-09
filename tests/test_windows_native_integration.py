@@ -323,13 +323,34 @@ class NativeUI:
         self.key("right");self.key("/xy-backend\r")
         self.text_is("角色模型", "后端开发", "/ xy-backend")
 
+    @staticmethod
+    def _modal_title(frame):
+        # 既定布局的弹层标题位于原生第 4 行；只读取 ReadConsoleOutputW
+        # 已取得的文字范围，不从状态提示、App 私有状态或模拟 Screen 推断视图。
+        # 标题与后续计数之间由横线分隔，完整标题去掉两端排版空白后才比较。
+        lines = frame["lines"]
+        if len(lines) <= 4:return None
+        header = unicodedata.normalize("NFC", lines[4])
+        _, corner, content = header.partition("╭")
+        title, divider, _ = content.partition("─")
+        return title.strip() if corner and divider else None
+
+    @classmethod
+    def _choice_ready(cls, frame, next_text):
+        text, title = cls.text(frame), cls._modal_title(frame)
+        previous = "选择模型" if next_text == "选择推理级别" else "选择推理级别"
+        # 模型确认后的合法 toast 含“已选择模型”，不能用整屏 absent 误判
+        # 旧弹层仍在。目标/旧视图仅在同一原生标题范围比较完整标题；暂存
+        # 仍同时要求成功文字和推理弹层消失，执行中条件也按原合同继续拒绝。
+        if "执行中" in text or title == previous:return False
+        return title == next_text if next_text == "选择推理级别" else next_text in text
+
     def choose(self, query, next_text):
         # 第一回车只接受筛选，第二回车才激活正式选择器中的选项。
         self.key("/" + query + "\r")
         self.text_is("/ " + query)
         self.key("enter")
-        previous = "选择模型" if next_text == "选择推理级别" else "选择推理级别"
-        return self.text_is(next_text, absent=("执行中", previous))
+        return self.wait(next_text, lambda frame:self._choice_ready(frame, next_text))
 
     def model(self, query, effort="high"):
         self.key("m");self.text_is("选择模型", absent=("执行中",))
