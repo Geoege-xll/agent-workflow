@@ -30,6 +30,7 @@
 | `manager/runtime_state.py` | 中央绑定及事务日志的私有记录读写边界 |
 | `lib/dispatch_admission.py`、`lib/dispatch_admission_cli.py` | 显式当前记录的跨请求资源投影、只读准入与原记录 CAS 领取／释放；不创建原生 Agent |
 | `lib/agent_continuation.py`、`lib/agent_continuation_cli.py` | 按实际身份、动作意图和当前工具能力给出只读续用建议 |
+| `lib/task_settlement.py` | 只读校验结果任务的接受包与证据，交由原记录 `update`／CAS 结算，不保存另一份状态 |
 | `lib/runtime_store.py`、`lib/central/runtime_project.py`、`lib/runtime_bridge.py` | 不可变核心、项目受管资源与 pin 薄桥 |
 | `lib/install/` | 安装编排、项目路径及平台子进程的超时／取消／资源回收 |
 | `lib/project/` | 项目发现、画像、配置验证及项目记忆身份初始化 |
@@ -133,6 +134,7 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 | [lib/runtime_bridge.py](../lib/runtime_bridge.py) | 生成的 launcher 固定导入的资源／helper 分发实现。 |
 | [lib/agent_continuation.py](../lib/agent_continuation.py) | 固定任务图 CLI 的原生身份、续用状态和错误类型依赖。 |
 | [lib/agent_continuation_cli.py](../lib/agent_continuation_cli.py) | 显式意图与能力的只读续用入口，复用原图／Light 单包读取和完整校验。 |
+| [lib/task_settlement.py](../lib/task_settlement.py) | 结果任务结算证据校验，供原 `update` 与锁内发布复用，不探测原生宿主或自行写状态。 |
 | [lib/dispatch_admission.py](../lib/dispatch_admission.py) | 纯资源仲裁规则，按显式任务状态、物理路径、语义锁和容量选择候选。 |
 | [lib/dispatch_admission_cli.py](../lib/dispatch_admission_cli.py) | 显式记录读取和原记录 CAS 边界，短期协调锁不保存第二份任务状态。 |
 | [lib/worktree_policy.py](../lib/worktree_policy.py) | 固定任务图入口共享的 worktree 验证合同；交付命令实现归 delivery。 |
@@ -268,6 +270,14 @@ bash lib/python_runtime.sh -B -X utf8 lib/agent_continuation_cli.py \
 空闲才使用真实同 ID 后续工具。取消、未知、退役、跨宿主或未绑定实例不自动续用。
 `interrupt`／stop 不代替引导，退役也不证明线程关闭。各平台实际发送入口与证据边界见
 [使用手册](usage.md#持续接单与多请求协作)和[运行记录工具](../platforms/shared/skills/xy-workflow/references/runtime-records.md)。
+
+`read_only`／`evidence` 任务由 PM 核实真实原生完成、最新范围接收与实际结果后，通过原 `update` 的独占 `settle`
+操作结算为 `RESULT_VERIFIED`。完整接受包必须保存实际交付并确认接收的原字节与 SHA，且与将被更新的权威记录物理独立；
+完成、结果及逐条验证证据同样使用独立的真实来源，不能把可变 Light 记录本身当作接受快照。原 CAS 一次发布状态、
+证据引用及可选逻辑退役，陈旧 SHA、身份／范围变化或证据冲突保持原记录不变，不建立第二台账。
+该状态只证明结果交付获接受，发现缺陷的审计也可结算；不表示产品正确、Writer 构建通过或 QA PASS。
+Writer／QA 的既有守卫保持，原生关闭和宿主线程容量仍需单独观察。实际调用见
+[结果任务结算](../platforms/shared/skills/xy-workflow/references/runtime-records.md#result-task-settlement)。
 
 角色职责与权限维护在 `roles/`；工程方法与规则维护在
 [代码规范 Skill](../platforms/shared/skills/xy-code-standards/SKILL.md)，设计方法与规则维护在

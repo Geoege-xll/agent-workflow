@@ -133,7 +133,8 @@ bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py 2.1.4 --outp
 1. 核对源码上传清单和授权方式，将审阅过的源文件推送到
    `Geoege-xll/agent-workflow`。`.gitignore` 排除本地备份、缓存及 `dist/`。
 2. 在源码仓库的 **Actions → Validate and prepare release → Run workflow** 输入与 `product/VERSION` 一致的版本 `2.1.4`
-   （不带 `v`），并选择希望发布的分支。工作流先在 macOS/Linux 执行明确的 `ci` 组合，再构建三份产物，
+   （不带 `v`），并选择希望发布的分支。工作流先执行 macOS/Linux 的 `ci` 组合及同提交的可复用 Windows Server 完整门禁，
+   两者成功后才构建三份产物，
    然后创建 **Draft Release**；它不会自动公开 Release，也不会推送 Tap。
 3. 核对 Draft 的目标提交、压缩包、校验文件和 `awf-cli.rb` 后，再手动发布 Release。
    同名标签若指向另一个提交则拒绝，已有 Release/资产也不会自动替换。
@@ -150,7 +151,11 @@ bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py 2.1.4 --outp
 
 工作流仅使用当前仓库的 `GITHUB_TOKEN` 创建草稿，权限限制为该发布任务的
 `contents: write`；无需提供能写其他仓库的个人令牌。GitHub Actions 固定到不可变提交。
-此发布工作流不承担完整 Windows／Win11 或真实客户端验收；发布说明必须对应实际证据，不以生成 Draft 或 Formula 代替。
+PR 与手动发行都通过同仓 `workflow_call` 执行同一提交的 Windows Server 完整门禁；发行任务的 `needs` 同时依赖
+portable 验证与 `windows_gate`，失败或 skip 不能进入资产构建。组件、实际方法数和依赖来自唯一清单的
+`scripts/test_workflow.py --matrix windows-native`，不在工作流或手册另写固定方法计数。
+该门禁的真实结果只覆盖对应 Windows Server 环境；Win11 普通用户桌面及真实客户端／App 的证据仍单独取得。
+发布说明必须对应实际结果，不以配置声明、清单收集或生成 Draft／Formula 代替验收通过。
 
 ## 后续中央程序版本
 

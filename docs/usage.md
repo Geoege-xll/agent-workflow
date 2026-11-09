@@ -101,6 +101,23 @@ $env:AGENT_WORKFLOW_PYTHON = 'C:\Tools\awf-venv\Scripts\python.exe'
 本轮原生 TUI 目标为 CPython 3.11 x64。ConPTY 传输方法在 Windows Server 2025 已取得实际通过证据；
 它只覆盖终端传输、资源收尾等方法，完整 TUI 交互与 Win11 普通用户桌面验收必须另有真实结果。
 
+Win11 整体验收使用包含 Git 元数据与 `tests/` 的完整、干净源码 checkout；发行归档不含这两项，不能直接运行完整验收。
+在普通用户 PowerShell 7 中，先准备已有的私有 venv 并按上述锁定清单安装依赖，再使用本次候选的精确提交与产品版本：
+
+```powershell
+$Candidate = 'C:\src\agent-workflow'
+$ExpectedCommit = '<替换为本次已核对的40位小写Git提交SHA>'
+& "$Candidate\scripts\windows_acceptance.ps1" `
+  -Python 'C:\Tools\awf-venv\Scripts\python.exe' `
+  -ExpectedCommit $ExpectedCommit -ExpectedVersion '2.1.4' `
+  -OutputParent 'C:\Temp'
+```
+
+`-Python` 必须是已有解释器的绝对路径，`-OutputParent` 必须是源码树外已存在的本地临时目录；也可省略后者使用系统临时目录。
+脚本要求已有 Git，核对提交、版本、干净工作树、Win11 x64 和非提升令牌，复用能力探针与唯一 `windows-native` 清单。
+它不运行 pip、不安装软件，不改真实宿主或系统设置；结果、完整日志与环境证据保留在本次创建的私有目录。
+脚本存在或节点收集成功不等于验收通过，Windows Server CI 也不替代该普通用户客户端结果。
+
 ## 持续接单与多请求协作
 
 在任一平台由主会话 PM 接收需求。A 执行期间可以直接讨论 B、C，PM 根据目标、职责、路径、语义锁和已有成果
