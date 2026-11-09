@@ -96,10 +96,18 @@ GROUPS["windows-native-central"] = (
     "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
     "tests.test_central_project.WindowsCentralComposedNativeTest.test_project_junction_is_rejected_before_resolve_and_writes",
 )
+# 中央首轮 CI42559903683 仅此组合消费者在早期 VERSION 解析失败；保留四个
+# 已绿方法的原始证据，修复后只补实际失败方法，不重复原库或以部分阶段冒充全验收。
+GROUPS["windows-native-central-repair"] = (
+    "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
-NATIVE_GROUPS = frozenset(("windows-native-libraries", "windows-native-repair", "windows-native-central", "windows-native"))
+NATIVE_GROUPS = frozenset((
+    "windows-native-libraries", "windows-native-repair", "windows-native-central",
+    "windows-native-central-repair", "windows-native",
+))
 
 
 def make_parser():

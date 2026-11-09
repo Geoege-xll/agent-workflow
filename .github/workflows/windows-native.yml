@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run the fixed native central-only stage or independent capability probe; complete acceptance is still blocked'
+        description: 'Run the fixed native central-repair stage or independent capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -101,7 +101,7 @@ jobs:
           retention-days: 14
 
   libraries:
-    name: Native central-only evidence (5 methods)
+    name: Native central repair evidence (1 method)
     # 固定阶段选择只来自受控事件条件；不把 inputs 或 commit message 拼入 shell。
     # 候选分支 push 能运行尚未进入默认分支的 workflow，无需依赖 dispatch 可见性。
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'libraries')
@@ -119,11 +119,11 @@ jobs:
         with:
           python-version: '3.11'
           architecture: 'x64'
-      - name: Run the fixed native central-only stage (5 methods)
+      - name: Run the fixed native central repair stage (1 method)
         env:
           NATIVE_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
-          $log = Join-Path $env:RUNNER_TEMP 'windows-native-central.log'
+          $log = Join-Path $env:RUNNER_TEMP 'windows-native-central-repair.log'
           # 原始日志排他创建；任何失败均追加，不覆盖上一条输出或把启动失败算作 skip。
           $stream = [System.IO.File]::Open($log, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
           $stream.Dispose()
@@ -133,8 +133,8 @@ jobs:
             if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell >= 7.0 is required.' }
             $python = $env:NATIVE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
-            'stage=windows-native-central' | Tee-Object -FilePath $log -Append
-            'scope=5-new-central-methods-only; library_ci=42550963192; repair_ci=42552175641' | Tee-Object -FilePath $log -Append
+            'stage=windows-native-central-repair' | Tee-Object -FilePath $log -Append
+            'scope=1-failed-central-method-only; baseline_ci=42559903683' | Tee-Object -FilePath $log -Append
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
             "python_path=$python" | Tee-Object -FilePath $log -Append
             $runtimeCheck = 'import platform,struct,sys; print(sys.version); print(platform.platform()); print("pointer_bits="+str(struct.calcsize("P")*8)); raise SystemExit(0 if sys.version_info >= (3,11) and struct.calcsize("P")==8 else 1)'
@@ -164,18 +164,18 @@ jobs:
             $env:TEMP = $data
             $env:TMP = $data
             $entry = Join-Path $env:GITHUB_WORKSPACE 'scripts/test_workflow.py'
-            "command=$python -I -B -X utf8 $entry --list windows-native-central" | Tee-Object -FilePath $log -Append
-            & $python -I -B -X utf8 $entry --list windows-native-central 2>&1 | Tee-Object -FilePath $log -Append
+            "command=$python -I -B -X utf8 $entry --list windows-native-central-repair" | Tee-Object -FilePath $log -Append
+            & $python -I -B -X utf8 $entry --list windows-native-central-repair 2>&1 | Tee-Object -FilePath $log -Append
             $nativeCode = $LASTEXITCODE
             "selection_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
-            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The native central selection did not resolve every real node.' }
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The native central repair selection did not resolve every real node.' }
             # YAML 只选固定组，方法清单唯一存在 Python GROUPS。runner 同时拒绝
             # 缺失、未执行和方法/子场景 skip，不能把 mock 或全 skip 当成原生成功。
-            "command=$python -I -B -X utf8 $entry windows-native-central" | Tee-Object -FilePath $log -Append
-            & $python -I -B -X utf8 $entry windows-native-central 2>&1 | Tee-Object -FilePath $log -Append
+            "command=$python -I -B -X utf8 $entry windows-native-central-repair" | Tee-Object -FilePath $log -Append
+            & $python -I -B -X utf8 $entry windows-native-central-repair 2>&1 | Tee-Object -FilePath $log -Append
             $nativeCode = $LASTEXITCODE
-            "native_central_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
-            if ($null -eq $nativeCode) { throw 'The native central runner did not provide an exit code.' }
+            "native_central_repair_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode) { throw 'The native central repair runner did not provide an exit code.' }
             $code = [int]$nativeCode
           } catch {
             $_ | Out-String | Tee-Object -FilePath $log -Append
@@ -184,12 +184,12 @@ jobs:
             "workflow_exit_code=$code" | Add-Content -LiteralPath $log -Encoding utf8
           }
           exit $code
-      - name: Preserve complete native central-only evidence
+      - name: Preserve complete native central repair evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-server-native-central-5-methods-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/windows-native-central.log
+          name: windows-server-native-central-repair-1-method-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-native-central-repair.log
           if-no-files-found: error
           retention-days: 14
 
