@@ -96,6 +96,35 @@ class PortableConPTYContractTest(unittest.TestCase):
             # 致命生产路径故意忽略后续 SIGINT；测试只还原自己的解释器信号。
             signal.signal(signal.SIGINT, previous)
 
+    def test_pseudoconsole_startup_uses_null_console_streams_without_parent_inheritance(self):
+        # 检查实际 ctypes STARTUPINFOEX 的边界，而非修改 child 的 Python stdio。
+        # 原生两入口仍须证明其 GetStdHandle/PTY 行为；此处只保护精确启动配置。
+        from tests.test_install_process_windows import FakeWin32
+
+        class ConsoleWin32(FakeWin32):
+            def UpdateProcThreadAttribute(self, attributes, flags, kind, values, size, previous, returned):
+                # HPCON 本值不是供解引用的 HANDLE 数组，不能复用默认 capture
+                # 替身的数组读取；只按官方属性合同保存这一个不透明值及宽度。
+                self.attribute_kind, self.console_value, self.console_size = kind, values.value, size
+                return self.record("bind_console")
+
+        api = ConsoleWin32(exitcode=0)
+        with patch.object(win, "_Win32API", return_value=api):
+            owner = WindowsJobProcess([sys.executable], pseudoconsole=710)
+        try:
+            self.assertFalse(api.creation["inherit"])
+            self.assertEqual(api.startup["flags"], win.STARTF_USESTDHANDLES)
+            self.assertEqual(api.startup["handles"], [None, None, None])
+            self.assertEqual(api.attribute_kind, win.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE)
+            self.assertEqual((api.console_value, api.console_size), (710, ctypes.sizeof(win.HANDLE)))
+            self.assertFalse(any(isinstance(event, tuple) and event[0] == "duplicate" for event in api.events))
+            self.assertLess(api.events.index("create_suspended"), api.events.index("assign_job"))
+            self.assertLess(api.events.index("assign_job"), api.events.index("resume"))
+            self.assertEqual(owner.wait(), 0)
+        finally:
+            owner.close()
+        self.assertNotIn(710, api.closed)  # HPCON 生命周期归通道，不归 Job owner。
+
 
 # 子程序只操作自己在 ConPTY 中获得的标准 console handles。父 runner 不调用
 # SetConsoleMode/AttachConsole/GenerateConsoleCtrlEvent，因此不会触碰用户终端模式。
@@ -271,6 +300,15 @@ class NativeConPTYTransportTest(unittest.TestCase):
                     self.assertEqual(data["version"], list(sys.version_info[:3]))
                     release.touch()
                     self.assertEqual(process.wait(), 0)
+                    # 前次真实对照证明两入口均已附着 console，但默认标准句柄仍
+                    # 指向 runner PIPE。修复后必须由未注入 bootstrap 的目标程序
+                    # 自己观察三个 CHAR/console handles，且普通 print 真正进入 PTY。
+                    for name, standard in data["standard"].items():
+                        with self.subTest(entry=label, stream=name):
+                            self.assertEqual(standard["file_type"], 2)
+                            self.assertTrue(standard["console_mode_ok"], standard)
+                    self.assertIn(b"AWF_DIAGNOSTIC_STDOUT", process.raw_output)
+                    self.assertIn(b"AWF_DIAGNOSTIC_CONOUT", process.raw_output)
                 finally:
                     try:
                         process.close()

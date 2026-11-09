@@ -378,7 +378,14 @@ class WindowsJobProcess:
                 startup.StartupInfo.hStdInput, startup.StartupInfo.hStdOutput, startup.StartupInfo.hStdError = handles
             else:
                 # 官方 ConPTY 属性要求 lpValue=HPCON 本值，并非 &HPCON；cbSize
-                # 仍为 sizeof(HANDLE)。此分支不继承宿主标准句柄，也不设 USESTDHANDLES。
+                # 仍为 sizeof(HANDLE)。即使 bInheritHandles=False，未设下面标志时
+                # Windows 仍可能复制宿主已重定向的标准管道；HPCON 连接成功也不会
+                # 替换这些 PIPE。显式声明三个 NULL 标准句柄，才由控制台初始化为
+                # 此 HPCON 的 CONIN$/CONOUT$，不需要修改宿主或任意目标程序。
+                # 微软 Terminal 固定发布源码同样使用零初始化 + USESTDHANDLES：
+                # https://github.com/microsoft/terminal/blob/7ff11ee107c984e236960ec948b450ccbc10187b/src/cascadia/TerminalConnection/ConptyConnection.cpp#L35-L37
+                # 机制解释：https://github.com/microsoft/terminal/discussions/15814
+                startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
                 self._check(api.UpdateProcThreadAttribute(
                     attributes, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
                     HANDLE(pseudoconsole), ctypes.sizeof(HANDLE), None, None), "Bind pseudoconsole")
