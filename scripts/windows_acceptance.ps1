@@ -1,10 +1,12 @@
 #requires -Version 7.0
 <#
-Win11 普通用户整体验收。由 PM 在整体开发完成后提供固定 commit/version。
+Win11 普通用户范围验收。由 PM 在整体开发完成后提供固定 commit/version。
 示例：& .\scripts\windows_acceptance.ps1 -Python 'C:\awf-venv\Scripts\python.exe' `
   -ExpectedCommit '<40位提交>' -ExpectedVersion '<product/VERSION中的版本>'
 已有 Python 必须已按 requirements-windows.txt 装好依赖；本入口不下载/安装软件，
 不改真实宿主、PATH、profile、ExecutionPolicy。NO_COLOR=1 只选择既有单色主题。
+提升 NTFS 专项由 Server full gate 证明；本入口明确记录排除项，不要求用户提升，
+普通范围成功仅报告 SCOPED_PASS，不冒称本次运行了完整 Server 原生集合。
 #>
 [CmdletBinding()]
 param(
@@ -74,6 +76,7 @@ $workspace = $capability.workspace
 $log = Join-Path $workspace 'acceptance.log'
 $identityPath = Join-Path $workspace 'environment.json'
 $summaryPath = Join-Path $workspace 'acceptance.json'
+$scopePath = Join-Path $workspace 'scope.json'
 $stream = [System.IO.File]::Open($log, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
 $stream.Dispose()
 ('command=' + (ConvertTo-Json -InputObject (@($interpreter.FullName) + $capabilityArguments) -Compress)) |
@@ -90,6 +93,58 @@ function Invoke-AcceptancePython([string[]]$Arguments) {
     $nativeExit = $LASTEXITCODE
     Write-AcceptanceLog "exit_code=$nativeExit"
     if ($null -eq $nativeExit -or $nativeExit -ne 0) { throw "The explicit Python command failed with exit $nativeExit." }
+}
+function Get-AcceptanceScope([string]$Entry, [string]$Destination) {
+    # 资格、实际方法和排除原因只由 Python 单一登记决定。脚本固定请求普通范围，
+    # 验证并保存其描述；不手造方法列表、不算差集，也不因 token 自动改选 full。
+    $scopeName = 'windows-native-desktop'
+    $arguments = @('-I', '-B', '-X', 'utf8', $Entry, '--describe', $scopeName)
+    Write-AcceptanceLog ('command=' + (ConvertTo-Json -InputObject (@($interpreter.FullName) + $arguments) -Compress))
+    $lines = @(& $interpreter.FullName @arguments 2>&1)
+    $nativeExit = $LASTEXITCODE
+    $lines | Tee-Object -FilePath $log -Append | Out-Host
+    Write-AcceptanceLog "scope_description_exit_code=$nativeExit"
+    if ($null -eq $nativeExit -or $nativeExit -ne 0) { throw 'The native scope description could not be collected.' }
+    $body = ($lines | Out-String).Trim()
+    $description = $body | ConvertFrom-Json -ErrorAction Stop
+    if ($description.schema_version -ne 1 -or $description.scope -isnot [string] -or
+        $description.scope -cne $scopeName -or $description.full_registry_scope -cne 'windows-native' -or
+        $description.collection_only -isnot [bool] -or -not $description.collection_only -or
+        $description.scope_is_full -isnot [bool] -or $description.scope_is_full) {
+        throw 'The ordinary-user scope must be an explicit collection-only desktop description, never full acceptance.'
+    }
+    $selectedCount = 0
+    $excludedCount = 0
+    $registryCount = 0
+    if (-not [int]::TryParse([string]$description.selected.count, [ref]$selectedCount) -or $selectedCount -le 0 -or
+        -not [int]::TryParse([string]$description.excluded.count, [ref]$excludedCount) -or $excludedCount -lt 0 -or
+        -not [int]::TryParse([string]$description.registry.count, [ref]$registryCount) -or
+        $registryCount -ne ($selectedCount + $excludedCount) -or
+        $null -eq $description.selected.ids -or @($description.selected.ids).Count -ne $selectedCount -or
+        $null -eq $description.excluded.ids -or @($description.excluded.ids).Count -ne $excludedCount -or
+        $null -eq $description.registry.ids -or @($description.registry.ids).Count -ne $registryCount -or
+        @($description.selected.components).Count -eq 0) {
+        throw 'The scope description is empty or has inconsistent collection counts.'
+    }
+    foreach ($component in @($description.selected.components)) {
+        if ($component.qualification -cne 'ordinary') { throw 'The desktop description contains a non-ordinary component.' }
+    }
+    foreach ($component in @($description.excluded.components)) {
+        if ($component.qualification -cne 'elevated' -or [string]::IsNullOrWhiteSpace($component.reason)) {
+            throw 'An excluded component must explicitly require elevated test-fixture qualification.'
+        }
+    }
+    # 与 identity 报告相同，排他保存本次真实执行输入；启动/解析失败只保留原日志，
+    # 不覆盖旧证据或生成一个看似完整的成功描述。
+    $stream = [System.IO.File]::Open($Destination, [System.IO.FileMode]::CreateNew,
+        [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    try {
+        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($body + "`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+    } finally {
+        $stream.Dispose()
+    }
+    return $description
 }
 function Write-AcceptanceIdentity {
     $identityCode = @'
@@ -130,6 +185,7 @@ $previousEnvironment = @{}
 foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $code = 1
 $failure = $null
+$scopeDescription = $null
 try {
     Write-AcceptanceLog "candidate_commit=$actualCommit"
     Write-AcceptanceLog "candidate_version=$version"
@@ -155,11 +211,14 @@ try {
     $env:AGENT_WORKFLOW_PWSH = Join-Path $PSHOME 'pwsh.exe'
     Write-AcceptanceIdentity
     $entry = Join-Path $PSScriptRoot 'test_workflow.py'
-    # 唯一测试清单决定最终组合，脚本不持有第二套方法名、计数或动态 skip 规则。
-    # --list 只确认节点存在；随后同一组必须真实执行，退出码由原 runner 拒绝
-    # missing/skip/未执行。原始 VT、原生格/属性/模式存入独立 evidence JSONL。
-    Invoke-AcceptancePython -Arguments @('-I', '-B', '-X', 'utf8', $entry, '--list', 'windows-native')
-    Invoke-AcceptancePython -Arguments @('-I', '-B', '-X', 'utf8', $entry, 'windows-native')
+    $scopeDescription = Get-AcceptanceScope -Entry $entry -Destination $scopePath
+    Write-AcceptanceLog "scope=$($scopeDescription.scope); selected=$($scopeDescription.selected.count); excluded=$($scopeDescription.excluded.count); full_registry_executed=false"
+    Write-AcceptanceLog ('excluded=' + (ConvertTo-Json -InputObject $scopeDescription.excluded -Depth 8 -Compress))
+    # 只执行描述指定的同一派生普通范围；被排除的提升专项不是 unittest skip。
+    # 所选全部方法仍由唯一 runner 拒绝 missing/skip/未执行，原始 VT/原生格等
+    # 完整证据仍写入独立 JSONL，退出码 0 只代表这个明确范围实际通过。
+    Invoke-AcceptancePython -Arguments @('-I', '-B', '-X', 'utf8', $entry, '--list', $scopeDescription.scope)
+    Invoke-AcceptancePython -Arguments @('-I', '-B', '-X', 'utf8', $entry, $scopeDescription.scope)
     $afterCommit = (& $git -C $root rev-parse HEAD | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $afterCommit -cne $ExpectedCommit) { throw 'The candidate changed during acceptance.' }
     $afterDirty = @(& $git -C $root status --porcelain --untracked-files=normal)
@@ -170,14 +229,17 @@ try {
     Write-AcceptanceLog $failure
 } finally {
     foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process') }
-    $summary = [ordered]@{ schema_version = 1; scope = 'windows11-client-native-full';
-        status = $(if ($code -eq 0) { 'PASS' } else { 'FAIL' }); exit_code = $code;
+    $summary = [ordered]@{ schema_version = 1; scope = 'windows11-client-ordinary';
+        status = $(if ($code -eq 0) { 'SCOPED_PASS' } else { 'FAIL' }); exit_code = $code;
+        full_registry_executed = $false; scope_description = $scopePath;
+        selected = $(if ($null -ne $scopeDescription) { $scopeDescription.selected } else { $null });
+        excluded = $(if ($null -ne $scopeDescription) { $scopeDescription.excluded } else { $null });
         candidate_commit = $actualCommit; candidate_version = $version;
         powershell_version = $PSVersionTable.PSVersion.ToString(); python = $interpreter.FullName;
         capabilities = $capability.report_file; environment = $identityPath;
         log = $log; native_evidence = (Join-Path $workspace 'native-evidence.jsonl'); failure = $failure }
     $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding utf8
     Write-AcceptanceLog "acceptance_exit_code=$code"
-    Write-Host "完整验收结果：$summaryPath"
+    Write-Host "普通用户范围验收结果（含所选与排除事实）：$summaryPath"
 }
 exit $code

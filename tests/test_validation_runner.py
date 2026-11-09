@@ -1,5 +1,6 @@
 """唯一验证入口的进程级合同；受控运行时只记录边界，测试仍由真实 unittest 执行。"""
 
+import base64
 import json
 import importlib.util
 import io
@@ -192,6 +193,9 @@ class ExampleTest(unittest.TestCase):
     def test_real_central_service_ci_include_212_consumers_without_duplicates(self):
         # 单独核对真实ci，避免central组已含runtime_state而掩盖ci漏纳该模块；
         # 再核对组合计划去重，确保重叠组不会重复执行有状态的容量/恢复测试。
+        spec = importlib.util.spec_from_file_location("validation_shared_ci_contract", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
         for selectors in (("ci",),("central","service","ci")):
             with self.subTest(selectors=selectors):
                 result=self.invoke("--list",*selectors,entry=PACK/"scripts/test_workflow.sh")
@@ -203,6 +207,14 @@ class ExampleTest(unittest.TestCase):
                 # 新保存预览的真实 App 回归必须经唯一 ci 清单运行，且组合选择不能重复。
                 self.assertEqual(1, targets.count("tests.test_manager_tui.TuiTest.test_save_preview_blocked_validation_keeps_ui_responsive_and_drafts"))
                 self.assertIn("tests.test_manager_tui.ProjectTuiIntegrationTest.test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize",targets)
+                for component in runner.NATIVE_COMPONENTS.values():
+                    for target in component.get("portable_ci_targets", ()):
+                        # 父模块覆盖精确节点也是一次有效选择；组合 central 时不能
+                        # 为满足文本计数而再次执行其子方法，亦不能漏掉共享回归。
+                        self.assertEqual(1, sum(target == parent or target.startswith(parent + ".") for parent in targets))
+                    if selectors == ("ci",) and component["qualification"] == "elevated":
+                        for target in runner.component_targets(component):
+                            self.assertFalse(any(target == parent or target.startswith(parent + ".") for parent in targets))
 
     def test_real_existing_node_runs_through_repository_entry(self):
         # 受控夹具只能证明调度边界；另经真实入口执行既有生产消费者，证明当前
@@ -281,14 +293,14 @@ class ExampleTest(unittest.TestCase):
 
         first, second = MatrixCase("test_one"), MatrixCase("test_two")
         components = {
-            "first": {"targets": ("one",), "node_required": False, "curses_required": False},
-            "second": {"targets": ("two",), "node_required": False, "curses_required": True},
+            "first": {"targets": ("one",), "qualification": "ordinary", "node_required": False, "curses_required": False},
+            "second": {"targets": ("two",), "qualification": "elevated", "node_required": False, "curses_required": True},
         }
         parser = runner.make_parser()
         with patch.object(runner, "NATIVE_COMPONENTS", components):
             self.assertEqual({"include": [
-                {"group": "first", "methods": 1, "node_required": False, "curses_required": False},
-                {"group": "second", "methods": 1, "node_required": False, "curses_required": True},
+                {"group": "first", "methods": 1, "qualification": "ordinary", "node_required": False, "curses_required": False},
+                {"group": "second", "methods": 1, "qualification": "elevated", "node_required": False, "curses_required": True},
             ]}, runner.native_matrix({"one": [first, first], "two": [second]}, parser))
             for resolved in ({"one": [], "two": [second]}, {"one": [first], "two": [first]},
                              {"one": [first], "two": [second], "extra": [MatrixCase("test_unregistered")]}):
@@ -310,7 +322,10 @@ class ExampleTest(unittest.TestCase):
         # 缺范围、局部范围、组合范围与 --list 混用都在导入/执行前拒绝，防止调用方
         # 将一次窄诊断伪装成完整发行 gate；不会为兼容旧 repair 名称退回 discovery。
         for arguments in (("--matrix",), ("--matrix", "codex"), ("--matrix", "windows-native-libraries"),
-                          ("--matrix", "windows-native", "codex"), ("--matrix", "--list", "windows-native")):
+                          ("--matrix", "windows-native-desktop"), ("--matrix", "windows-native", "codex"),
+                          ("--matrix", "--list", "windows-native"), ("--matrix", "--describe", "windows-native"),
+                          ("--describe",), ("--describe", "windows-native-libraries"),
+                          ("--describe", "windows-native", "codex"), ("--describe", "--list", "windows-native")):
             with self.subTest(arguments=arguments), redirect_stderr(io.StringIO()), \
                     patch.object(sys, "argv", ["test_workflow.py", *arguments]), \
                     patch.object(runner, "load_target") as collect, patch.object(runner, "run_cases") as execute, \
@@ -319,7 +334,7 @@ class ExampleTest(unittest.TestCase):
             self.assertEqual(2, error.exception.code)
             collect.assert_not_called()
             execute.assert_not_called()
-        component = {"targets": ("tests.test_protocol",), "node_required": False, "curses_required": False}
+        component = {"targets": ("tests.test_protocol",), "qualification": "ordinary", "node_required": False, "curses_required": False}
         with patch.object(runner, "NATIVE_COMPONENTS", {"native-protocol": component}), \
                 patch.object(runner, "GROUPS", {"windows-native": component["targets"]}), \
                 patch.object(runner, "load_target", return_value=[self]), \
@@ -329,7 +344,70 @@ class ExampleTest(unittest.TestCase):
             self.assertEqual(0, runner.main())
         execute.assert_not_called()
         self.assertEqual({"include": [{"group": "native-protocol", "methods": 1,
-                                      "node_required": False, "curses_required": False}]}, json.loads(output.getvalue()))
+                                      "qualification": "ordinary", "node_required": False, "curses_required": False}]}, json.loads(output.getvalue()))
+        # describe 也只收集完整登记；桌面描述明确是范围事实，即使当前夹具没有
+        # 提升组件，也不能将 collection-only 转写为 full native 执行成功。
+        with patch.object(runner, "NATIVE_COMPONENTS", {"native-protocol": component}), \
+                patch.object(runner, "GROUPS", {"windows-native": component["targets"]}), \
+                patch.object(runner, "load_target", return_value=[self]), \
+                patch.object(runner, "run_cases") as execute, \
+                patch.object(sys, "argv", ["test_workflow.py", "--describe", "windows-native-desktop"]), \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(0, runner.main())
+        execute.assert_not_called()
+        description = json.loads(output.getvalue())
+        self.assertEqual("windows-native-desktop", description["scope"])
+        self.assertTrue(description["collection_only"])
+        self.assertFalse(description["scope_is_full"])
+        self.assertEqual([self.id()], description["selected"]["ids"])
+        self.assertEqual([], description["excluded"]["ids"])
+        with patch.object(runner, "GROUPS", {"windows-native-desktop": ()}), \
+                patch.object(runner, "load_target") as collect, patch.object(runner, "run_cases") as execute, \
+                patch.object(sys, "argv", ["test_workflow.py", "windows-native-desktop"]), \
+                redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            runner.main()
+        self.assertEqual(2, error.exception.code)
+        collect.assert_not_called()
+        execute.assert_not_called()
+
+    def test_native_description_uses_one_registry_and_rejects_unknown_qualification(self):
+        spec = importlib.util.spec_from_file_location("validation_scope_contract", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        ordinary, elevated = SimpleNamespace(id=lambda: "ordinary.case"), SimpleNamespace(id=lambda: "elevated.case")
+        components = {
+            "ordinary": {"targets": ("one",), "qualification": "ordinary", "node_required": False, "curses_required": False},
+            "elevated": {"targets": ("two",), "qualification": "elevated", "node_required": False, "curses_required": False},
+        }
+        parser, resolved = runner.make_parser(), {"one": [ordinary], "two": [elevated]}
+        with patch.object(runner, "NATIVE_COMPONENTS", components):
+            full = runner.native_description("windows-native", resolved, parser)
+            desktop = runner.native_description("windows-native-desktop", resolved, parser)
+            self.assertEqual(full["registry"]["ids"], full["selected"]["ids"])
+            self.assertEqual([], full["excluded"]["ids"])
+            self.assertEqual(full["registry"], desktop["registry"])
+            self.assertEqual([ordinary.id()], desktop["selected"]["ids"])
+            self.assertEqual([elevated.id()], desktop["excluded"]["ids"])
+            self.assertEqual(2, desktop["registry"]["count"])
+            self.assertEqual(1, desktop["selected"]["count"])
+            self.assertEqual(1, desktop["excluded"]["count"])
+            self.assertEqual("requires-elevated-test-fixture", desktop["excluded"]["components"][0]["reason"])
+            # 选择桌面不是权限探测：没有 token/mock 参与决定；资格缺失、未知或
+            # 把现有 ordinary 全改成 elevated 导致空桌面，均在任何执行之前失败。
+            for qualification in (None, "admin", True):
+                components["elevated"]["qualification"] = qualification
+                with self.subTest(qualification=qualification), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    runner.native_description("windows-native-desktop", resolved, parser)
+                self.assertEqual(2, error.exception.code)
+            del components["elevated"]["qualification"]
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                runner.native_matrix(resolved, parser)
+            self.assertEqual(2, error.exception.code)
+            components["elevated"]["qualification"] = "elevated"
+            components["ordinary"]["qualification"] = "elevated"
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                runner.native_description("windows-native-desktop", resolved, parser)
+            self.assertEqual(2, error.exception.code)
 
     def test_each_native_stage_rejects_non_windows_before_execution(self):
         # 本例仅验证阶段选择不能绕过平台守卫，实际 Win32 能力由组合 Windows CI
@@ -345,6 +423,99 @@ class ExampleTest(unittest.TestCase):
                     patch.object(runner, "run_cases") as execute:
                 self.assertEqual(1, runner.main())
                 execute.assert_not_called()
+
+    def test_desktop_execution_requires_only_selected_cases_without_permission_fallback(self):
+        # 模拟的仅是 runner 平台边界与短小 TestCase id；验证普通执行不收集提升
+        # 方法、仍将全部所选 id 交给 zeroSkip 守卫，不冒充任何原生权限或桌面通过。
+        spec = importlib.util.spec_from_file_location("validation_desktop_execution", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        ordinary = SimpleNamespace(id=lambda: "ordinary.case")
+        components = {
+            "ordinary": {"targets": ("one",), "qualification": "ordinary", "node_required": False, "curses_required": False},
+            "elevated": {"targets": ("two",), "qualification": "elevated", "node_required": False, "curses_required": False},
+        }
+        with patch.object(runner, "NATIVE_COMPONENTS", components), \
+                patch.object(runner, "GROUPS", {"windows-native": ("one", "two"), "windows-native-desktop": ("one",)}), \
+                patch.object(runner, "os", SimpleNamespace(name="nt", chdir=lambda _: None)), \
+                patch.object(runner, "load_target", return_value=[ordinary]) as collect, \
+                patch.object(runner, "run_cases", return_value=0) as execute, \
+                patch.object(sys, "argv", ["test_workflow.py", "windows-native-desktop"]):
+            self.assertEqual(0, runner.main())
+        self.assertEqual(1, collect.call_count)
+        self.assertEqual("one", collect.call_args.args[0])
+        self.assertEqual([ordinary.id()], [case.id() for case in execute.call_args.args[0]])
+        self.assertEqual({ordinary.id()}, execute.call_args.args[1])
+
+
+@unittest.skipUnless(os.name == "nt", "PowerShell scope 消费合同必须由真实 Windows 执行")
+class WindowsAcceptanceScopeNativeTest(unittest.TestCase):
+    def test_native_script_consumes_desktop_description_and_rejects_full_scope(self):
+        # 真实生产函数直接消费当前唯一 runner；只加载函数以避免在 Server 上绕过
+        # Win11/普通用户 root 守卫或递归执行全部原生组。本例不是桌面入口通过证据。
+        from lib.install.install_process import capture_process
+        from lib.hosts.windows_hook_command import validate_powershell
+        from tests.test_windows_native_integration import isolated_environment
+        with tempfile.TemporaryDirectory(prefix="awf-scope-consumer-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")) as raw:
+            root = Path(raw).resolve()
+            home = root / "private-home"
+            home.mkdir()
+            bad = root / "fake-full-producer.py"
+            bad.write_text("import json\nprint(json.dumps({'schema_version':1,'scope':'windows-native','full_registry_scope':'windows-native','collection_only':True,'scope_is_full':True}))\n", encoding="utf-8")
+            environment = isolated_environment(home)
+            environment.update(AWF_SCOPE_TEST_ROOT=str(root), AWF_SCOPE_TEST_PYTHON=sys.executable,
+                               AWF_SCOPE_TEST_SCRIPT=str(PACK / "scripts/windows_acceptance.ps1"),
+                               AWF_SCOPE_TEST_ENTRY=str(PACK / "scripts/test_workflow.py"), AWF_SCOPE_TEST_BAD=str(bad))
+            script = r'''
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandArgumentPassing = 'Legacy'
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:AWF_SCOPE_TEST_SCRIPT, [ref]$tokens, [ref]$errors)
+if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+foreach ($name in @('Write-AcceptanceLog', 'Get-AcceptanceScope')) {
+    $definitions = @($ast.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name
+    }, $true))
+    if ($definitions.Count -ne 1) { throw "Expected one actual production function: $name" }
+    . ([scriptblock]::Create($definitions[0].Extent.Text))
+}
+$interpreter = Get-Item -LiteralPath $env:AWF_SCOPE_TEST_PYTHON
+$log = Join-Path $env:AWF_SCOPE_TEST_ROOT 'scope-consumer.log'
+$destination = Join-Path $env:AWF_SCOPE_TEST_ROOT 'scope.json'
+$description = Get-AcceptanceScope -Entry $env:AWF_SCOPE_TEST_ENTRY -Destination $destination
+if ($description.scope -cne 'windows-native-desktop' -or $description.scope_is_full) { throw 'The real scope consumer widened desktop acceptance.' }
+$badDestination = Join-Path $env:AWF_SCOPE_TEST_ROOT 'rejected.json'
+$refused = $false
+try { Get-AcceptanceScope -Entry $env:AWF_SCOPE_TEST_BAD -Destination $badDestination | Out-Null } catch {
+    if ($_.Exception.Message -notlike '*ordinary-user scope*') { throw }
+    $refused = $true
+}
+if (-not $refused -or (Test-Path -LiteralPath $badDestination)) { throw 'The real scope consumer accepted or published a fake full description.' }
+Write-Output 'DESKTOP_SCOPE_REAL_CONSUMER_OK'
+'''
+            encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+            argv = [validate_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+            result = capture_process(argv, env=environment, timeout=60)
+            log = root / "scope-consumer.log"
+            descriptor = root / "scope.json"
+            evidence = {"kind": "desktop-scope-consumer", "argv": argv, "exit": result.returncode,
+                        "stdout_base64": base64.b64encode(result.stdout).decode("ascii"),
+                        "stderr_base64": base64.b64encode(result.stderr).decode("ascii"),
+                        "log_base64": base64.b64encode(log.read_bytes() if log.exists() else b"").decode("ascii"),
+                        "description": json.loads(descriptor.read_bytes()) if descriptor.exists() else None}
+            line = json.dumps(evidence, ensure_ascii=True)
+            print("\n[native scope evidence] " + line, flush=True)
+            if target := os.environ.get("AWF_TEST_EVIDENCE_LOG"):
+                with open(target, "a", encoding="utf-8") as stream:
+                    stream.write(line + "\n")
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn(b"DESKTOP_SCOPE_REAL_CONSUMER_OK", result.stdout)
+            description = evidence["description"]
+            self.assertEqual("windows-native-desktop", description["scope"])
+            selected, excluded = set(description["selected"]["ids"]), set(description["excluded"]["ids"])
+            self.assertFalse(selected.intersection(excluded))
+            self.assertEqual(set(description["registry"]["ids"]), selected | excluded)
 
 
 if __name__ == "__main__":

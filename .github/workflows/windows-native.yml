@@ -199,6 +199,7 @@ jobs:
           NATIVE_METHODS: ${{ matrix.methods }}
           NATIVE_NODE_REQUIRED: ${{ matrix.node_required }}
           NATIVE_CURSES_REQUIRED: ${{ matrix.curses_required }}
+          NATIVE_QUALIFICATION: ${{ matrix.qualification }}
         run: |
           # stage 仅来自上方固定 matrix 常量，不读取用户输入或提交内容；作为独立
           # argv 单值调用同一 Python 入口，既不求值 shell，也不在 YAML 重复方法名。
@@ -222,6 +223,9 @@ jobs:
             $python = $env:NATIVE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
             "stage=$stage" | Tee-Object -FilePath $log -Append
+            # 资格仅记录该组件所需测试环境，不作为过滤条件；完整 Server gate
+            # 仍执行 elevated 专项，实际权限/flag 准备失败须由真实用例失败留证。
+            "qualification=$env:NATIVE_QUALIFICATION" | Tee-Object -FilePath $log -Append
             "scope=registered-component; method_count=$env:NATIVE_METHODS" | Tee-Object -FilePath $log -Append
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
             "python_path=$python" | Tee-Object -FilePath $log -Append

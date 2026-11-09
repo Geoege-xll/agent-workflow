@@ -86,6 +86,18 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_budget_is_end_to_end_and_discards_partial_output",
             "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_terminating_outer_powershell_drains_supervised_descendants",
         ),
+        # 普通与原生 CI 共同消费的操作租约负控只在这里声明一次；原生分组
+        # 自动包含，普通 ci 也由这个字段派生，不另抄 Store/Records 方法清单。
+        "portable_ci_targets": (
+            "tests.test_runtime_store.RuntimeStoreTest.test_operation_unifies_load_batch_and_builtin_catalog_then_expires",
+            "tests.test_runtime_store.RuntimeStoreTest.test_operation_checkpoint_rejects_unread_member_and_ancestor_drift",
+            "tests.test_runtime_store.RuntimeStoreTest.test_operation_isolates_roots_pins_threads_processes_and_module_aliases",
+            "tests.test_runtime_store.RuntimeStoreTest.test_operation_checkpoint_keeps_manifest_version_mode_and_member_guards",
+            "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_rejects_source_drift_before_any_temporary_or_publish",
+            "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_precedes_last_fresh_cas_and_settlement_sources",
+            "tests.test_runtime_store.RuntimeStoreTest.test_windows_literal_roots_do_not_alias_operation_or_core_locators",
+        ),
+        "qualification": "ordinary",
         "node_required": False, "curses_required": False,
     },
     "windows-native-entry": {
@@ -97,6 +109,7 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_native_entry.WindowsNativeEntryTest.test_explicit_invalid_python_is_refused_without_fallback",
             "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_isolation_precedes_stdlib_imports",
         ),
+        "qualification": "ordinary",
         "node_required": False, "curses_required": False,
     },
     "windows-native-central": {
@@ -105,6 +118,7 @@ NATIVE_COMPONENTS = {
         ),
         # 保留已冻结中央消费者的 Node 前置；HTML 已暂停，不把旧 renderer
         # 节点放回聚合，也不在收敛清单时擅自改变中央运行时契约。
+        "qualification": "ordinary",
         "node_required": True, "curses_required": False,
     },
     "windows-native-central-boundaries": {
@@ -112,7 +126,13 @@ NATIVE_COMPONENTS = {
             "tests.test_central_project.WindowsCentralComposedNativeTest.test_project_junction_is_rejected_before_resolve_and_writes",
             "tests.test_runtime_store.RuntimeStoreTest.test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member",
             "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_rejects_unknown_members_and_directory_exchange",
+            # central_project 已整体进入普通 ci；这里只补原生侧，不再重复其
+            # 精确普通 CI 登记。词法负控验证实际方法，不冒称 NTFS 实体证明。
+            "tests.test_central_project.CentralProjectTest.test_fixed_graph_runner_validates_once_and_rejects_changed_sources_before_cas",
+            "tests.test_central_project.CentralProjectTest.test_fixed_graph_runner_keeps_old_pin_helper_path_and_target_provenance",
+            "tests.test_central_project.CentralProjectTest.test_fixed_runner_windows_literal_root_guards_are_case_sensitive",
         ),
+        "qualification": "ordinary",
         "node_required": False, "curses_required": False,
     },
     "windows-native-conpty": {
@@ -126,6 +146,7 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_start_failure_releases_owned_resources",
             "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_interpreter_and_standard_handle_diagnostics",
         ),
+        "qualification": "ordinary",
         "node_required": False, "curses_required": False,
     },
     "windows-native-tui": {
@@ -134,6 +155,7 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_global_reset_and_monochrome",
             "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_unicode_resize_and_interrupt_restores_modes",
         ),
+        "qualification": "ordinary",
         "node_required": False, "curses_required": True,
     },
     "windows-native-tui-diagnostics": {
@@ -141,9 +163,11 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_native_integration.WindowsAcceptanceScriptNativeTest.test_native_acceptance_identity_preserves_legacy_quotes_and_exit_codes",
             "tests.test_windows_native_integration.WindowsAcceptanceScriptNativeTest.test_native_acceptance_git_resolution_preserves_path_priority",
             "tests.test_windows_native_integration.NativeConsoleObserverNativeTest.test_native_console_cursor_access_diagnostics",
+            "tests.test_validation_runner.WindowsAcceptanceScopeNativeTest.test_native_script_consumes_desktop_description_and_rejects_full_scope",
         ),
         # Legacy 方法真实调用身份函数并导入 curses/_curses；不启动 TUI 也需要
         # 已锁 windows-curses，缺依赖应失败，不以跳过身份边界换取绿色。
+        "qualification": "ordinary",
         "node_required": False, "curses_required": True,
     },
     "windows-native-intake": {
@@ -151,15 +175,44 @@ NATIVE_COMPONENTS = {
         # POSIX 专属或 skip 节点；它们验证调度/续用/证据分层合同，不冒充宿主
         # 消息送达。settlement 已由 owner 冻结，同样使用隔离 Windows 入口、
         # 无 skip；保留 installed pin 的真实 CAS/准入释放消费者，数量由收集决定。
-        "targets": modules("dispatch_admission", "agent_continuation", "continuous_intake_capabilities", "task_settlement"),
+        "targets": (),
+        "portable_ci_targets": modules("dispatch_admission", "agent_continuation", "continuous_intake_capabilities", "task_settlement"),
+        "qualification": "ordinary",
+        "node_required": False, "curses_required": False,
+    },
+    "windows-native-case-sensitive": {
+        # 提升只用于本例新建空 NTFS 父目录的 fsutil 标志准备；不写生产目录、
+        # 不引入 WSL/软链/预置根。缺权限或实际大小写负控失败必须 FAIL，无 skip。
+        "targets": (
+            "tests.test_runtime_store.WindowsCaseSensitiveCoreNativeTest.test_case_sensitive_ntfs_roots_get_independent_readers_and_guards",
+            "tests.test_runtime_store.WindowsCaseSensitiveCoreNativeTest.test_case_sensitive_ntfs_fixed_runner_rejects_cross_root_before_cas",
+        ),
+        "qualification": "elevated",
         "node_required": False, "curses_required": False,
     },
 }
-GROUPS.update((name, component["targets"]) for name, component in NATIVE_COMPONENTS.items())
-GROUPS["windows-native"] = tuple(target for component in NATIVE_COMPONENTS.values() for target in component["targets"])
-NATIVE_GROUPS = frozenset((*NATIVE_COMPONENTS, "windows-native"))
-# 新功能在三平台执行同一已冻结模块；这里只复用登记，不再维护第二套模块名单。
-GROUPS["ci"] += NATIVE_COMPONENTS["windows-native-intake"]["targets"]
+
+
+def component_targets(component):
+    """同一组件合并专属和共享 CI 节点；调用方不得自行补一份平行方法名单。"""
+    return component["targets"] + component.get("portable_ci_targets", ())
+
+
+GROUPS.update((name, component_targets(component)) for name, component in NATIVE_COMPONENTS.items())
+GROUPS["windows-native"] = tuple(target for component in NATIVE_COMPONENTS.values() for target in component_targets(component))
+# 桌面范围是显式资格选择，不从 token/权限动态降级；缺失或未知资格在每次
+# 原生收集/执行前拒绝。只派生目标，不养第二套方法名单；所选仍逐项 zeroSkip。
+NATIVE_SCOPES = frozenset(("windows-native", "windows-native-desktop"))
+GROUPS["windows-native-desktop"] = tuple(
+    target for component in NATIVE_COMPONENTS.values() if component.get("qualification") == "ordinary"
+    for target in component_targets(component)
+)
+NATIVE_GROUPS = frozenset((*NATIVE_COMPONENTS, *NATIVE_SCOPES))
+# 共享操作/续用节点复用同一登记；提升专项没有此字段，不进入 POSIX ci。
+GROUPS["ci"] += tuple(target for component in NATIVE_COMPONENTS.values() for target in component.get("portable_ci_targets", ()))
+# RolePrefs 的这个计数消费者使用既有 pty/termios/curses 与 POSIX sourcebuilder，
+# 只补精准普通 CI；它不是普通 Windows 或提升 NTFS 的执行资格。
+GROUPS["ci"] += ("tests.test_role_preferences.RolePreferencesTest.test_preview_proves_each_pin_once_and_never_retains_live_reader",)
 
 
 def make_parser():
@@ -171,6 +224,7 @@ def make_parser():
                 "      bash scripts/test_workflow.sh service tests.test_runtime_store\n"
                 "      python -I -B -X utf8 scripts/test_workflow.py windows-native\n"
                 "Windows 完整验收：windows-native；--matrix windows-native 只校验并输出 CI 组件矩阵。\n"
+                "普通用户范围：windows-native-desktop；--describe 输出同一登记派生的所选与排除事实。\n"
                 "原生库/CLI/ConPTY 使用 stdlib；TUI/脚本身份需要 requirements-windows.txt 锁定依赖。\n"
                 "依赖：Python >= 3.11；HTML 生成已暂停；ci 保留 Node 前置，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -178,6 +232,7 @@ def make_parser():
     display = parser.add_mutually_exclusive_group()
     display.add_argument("--list", action="store_true", help="校验后逐行显示实际测试目标，不运行测试")
     display.add_argument("--matrix", action="store_true", help="只收集 windows-native 完整清单，输出含实际方法数和依赖的 JSON 矩阵")
+    display.add_argument("--describe", action="store_true", help="只收集完整原生或普通桌面范围，输出所选/排除的 JSON 描述")
     parser.add_argument("selectors", nargs="*", metavar="组或节点")
     return parser
 
@@ -190,25 +245,67 @@ def flatten(suite):
             yield item
 
 
-def native_matrix(resolved, parser):
-    """发布同一登记的真实组件分区；缺失、空集合或跨组重复都不能成为 CI 计划。"""
-    include, registered_ids = [], set()
+def validate_native_components(parser):
+    """资格是显式登记合同，不能把遗漏或拼错默认为普通用户可用。"""
     if not NATIVE_COMPONENTS:
         parser.error("原生组件矩阵不能为空")
     for name, component in NATIVE_COMPONENTS.items():
-        identifiers = {case.id() for target in component["targets"] for case in resolved[target]}
+        if component.get("qualification") not in ("ordinary", "elevated"):
+            parser.error("原生组件缺少有效资格：" + name)
+        if component["qualification"] == "elevated" and component.get("portable_ci_targets"):
+            parser.error("提升专项不能进入普通 CI 共享节点：" + name)
+        if any(type(component.get(key)) is not bool for key in ("node_required", "curses_required")):
+            parser.error("原生组件依赖必须是明确布尔值：" + name)
+
+
+def native_partition(resolved, parser):
+    """完整收集一次，再供矩阵和范围描述共享；分区必须非空、互斥且覆盖全部 ID。"""
+    validate_native_components(parser)
+    rows, registered_ids = [], set()
+    for name, component in NATIVE_COMPONENTS.items():
+        identifiers = {case.id() for target in component_targets(component) for case in resolved[target]}
         if not identifiers or registered_ids.intersection(identifiers):
             parser.error("原生组件为空或测试跨组件重复：" + name)
-        if any(type(component[key]) is not bool for key in ("node_required", "curses_required")):
-            parser.error("原生组件依赖必须是明确布尔值：" + name)
         registered_ids.update(identifiers)
-        include.append({"group": name, "methods": len(identifiers),
-                        "node_required": component["node_required"], "curses_required": component["curses_required"]})
-    # 拒绝未来调用方另改聚合而漏进矩阵的漂移；客户端完整组与 Server 组件并集
-    # 必须是同一集合，不能只有各组件非空就把未登记的新消费者遗漏为绿色。
+        rows.append({"group": name, "methods": len(identifiers), "ids": sorted(identifiers),
+                     "qualification": component["qualification"],
+                     "node_required": component["node_required"], "curses_required": component["curses_required"]})
     if registered_ids != {case.id() for cases in resolved.values() for case in cases}:
         parser.error("原生聚合与组件矩阵的实际测试集合不一致")
-    return {"include": include}
+    return rows
+
+
+def native_matrix(resolved, parser):
+    """CI 仍只消费完整分区，资格字段只留证，不过滤提升专项或将其变成 skip。"""
+    return {"include": [{key: value for key, value in row.items() if key != "ids"}
+                        for row in native_partition(resolved, parser)]}
+
+
+def native_description(scope, resolved, parser):
+    """描述是收集证据而非运行成功；脚本直接消费所选和排除，不自己推导差集。"""
+    if scope not in NATIVE_SCOPES:
+        parser.error("--describe 只接受完整原生或普通用户桌面范围")
+    selected, excluded, registry_ids = [], [], set()
+    for row in native_partition(resolved, parser):
+        registry_ids.update(row["ids"])
+        if scope == "windows-native" or row["qualification"] == "ordinary":
+            selected.append(row)
+        else:
+            excluded.append({**row, "reason": "requires-elevated-test-fixture"})
+    if not selected:
+        parser.error("所选原生范围不能为空")
+
+    def section(rows):
+        identifiers = sorted({identifier for row in rows for identifier in row["ids"]})
+        # 每个分区的 IDs 只在本层出现，组件保留资格/计数/原因；报告由权威登记
+        # 即时生成，不能成为下一轮手写维护的另一份方法名单。
+        return {"count": len(identifiers), "ids": identifiers,
+                "components": [{key: value for key, value in row.items() if key != "ids"} for row in rows]}
+
+    return {"schema_version": 1, "scope": scope, "full_registry_scope": "windows-native",
+            "collection_only": True, "scope_is_full": scope == "windows-native",
+            "registry": {"count": len(registry_ids), "ids": sorted(registry_ids)},
+            "selected": section(selected), "excluded": section(excluded)}
 
 
 def load_target(target, parser):
@@ -284,11 +381,23 @@ def main():
     args = parser.parse_args()
     if args.matrix and args.selectors != ["windows-native"]:
         parser.error("--matrix 必须且只能选择完整 windows-native；不能把局部分组当作完整发布门禁")
+    if args.describe and (len(args.selectors) != 1 or args.selectors[0] not in NATIVE_SCOPES):
+        parser.error("--describe 必须且只能选择 windows-native 或 windows-native-desktop")
+    native_requested = NATIVE_GROUPS.intersection(args.selectors)
+    if native_requested:
+        validate_native_components(parser)
+        if not (args.matrix or args.describe):
+            for group in native_requested:
+                if not GROUPS[group]:
+                    parser.error("原生范围不能为空：" + group)
     if not args.selectors:
         parser.print_help()
         return 0
     targets = []
-    for selector in args.selectors:
+    # describe 即使选择桌面，也先解析完整登记来证明排除项真实存在；这里只收集，
+    # 不执行被排除的提升 TestCase，其权限准备必须留在各自 setUp/方法生命周期。
+    selectors = ("windows-native",) if args.describe else args.selectors
+    for selector in selectors:
         if selector == "full":
             targets.extend("tests." + path.stem for path in sorted(Path("tests").glob("test_*.py")))
         elif selector in GROUPS:
@@ -305,6 +414,9 @@ def main():
     plan = [target for target in targets
             if not any(target.startswith(parent + ".") for parent in targets if parent != target)]
     collected = [(target, resolved[target]) for target in plan]
+    if args.describe:
+        print(json.dumps(native_description(args.selectors[0], resolved, parser), separators=(",", ":")))
+        return 0
     if args.matrix:
         # 收集遵循与 --list/执行相同的真实导入和节点存在性边界；不会运行 TestCase
         # 或把静态预期计数冒充方法数。单行 JSON 可直接进入 GITHUB_OUTPUT，不能带
@@ -319,7 +431,6 @@ def main():
     for _, tests in collected:
         for case in tests:
             cases.setdefault(case.id(), case)
-    native_requested = NATIVE_GROUPS.intersection(args.selectors)
     if native_requested and os.name != "nt":
         print("原生 Windows 组必须在真实 Windows 运行；未执行原生必验节点。", file=sys.stderr)
         return 1
