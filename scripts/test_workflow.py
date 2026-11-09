@@ -136,6 +136,7 @@ NATIVE_COMPONENTS = {
     "windows-native-tui-diagnostics": {
         "targets": (
             "tests.test_windows_native_integration.WindowsAcceptanceScriptNativeTest.test_native_acceptance_identity_preserves_legacy_quotes_and_exit_codes",
+            "tests.test_windows_native_integration.WindowsAcceptanceScriptNativeTest.test_native_acceptance_git_resolution_preserves_path_priority",
             "tests.test_windows_native_integration.NativeConsoleObserverNativeTest.test_native_console_cursor_access_diagnostics",
         ),
         # Legacy 方法真实调用身份函数并导入 curses/_curses；不启动 TUI 也需要
@@ -143,10 +144,10 @@ NATIVE_COMPONENTS = {
         "node_required": False, "curses_required": True,
     },
     "windows-native-intake": {
-        # 三模块的实际 CLI 已按 os.name 选择隔离 Windows bootstrap，且没有
+        # 四模块的实际 CLI 已按 os.name 选择隔离 Windows bootstrap，且没有
         # POSIX 专属或 skip 节点；它们验证调度/续用/证据分层合同，不冒充宿主
-        # 消息送达。settlement 的九节点已由 owner 冻结，同样使用隔离 Windows
-        # 入口，无 skip；保留 installed pin 的真实 CAS/准入释放消费者。
+        # 消息送达。settlement 已由 owner 冻结，同样使用隔离 Windows 入口、
+        # 无 skip；保留 installed pin 的真实 CAS/准入释放消费者，数量由收集决定。
         "targets": modules("dispatch_admission", "agent_continuation", "continuous_intake_capabilities", "task_settlement"),
         "node_required": False, "curses_required": False,
     },
