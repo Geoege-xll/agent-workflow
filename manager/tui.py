@@ -808,10 +808,10 @@ class App:
             stamp=self.catalog().stamp;stamps=tuple(self.source_stamps.get(key) for key in keys)
             bundle=deepcopy(self.catalogs.get((scope_id,host)))
             def preview():
-                # 普通预览只读校验已有 bundle，不发现新目录、不启动原生宿主；
-                # 失败沿 poll_job 的原错误出口显示，writes=False 保留全部草稿前像。
-                if (bundle is None or not model_preferences.check_catalogs(state,project,host,bundle,native_context=context)
-                        or stamp and any(source != stamp for source in stamps)):
+                # UI 只核对本次冻结的 bundle/草稿来源，不重复读取来源文件。
+                # 服务 preview 唯一执行 check_catalogs 并返回不可保存的冲突计划；
+                # apply 仍独立重验。这里的本地授权失败沿原错误出口保留草稿。
+                if bundle is None or stamp and any(source != stamp for source in stamps):
                     raise ValueError("模型来源或能力已变化；草稿保留，请重新进入模型/推理选择，或按 u 丢弃当前角色草稿")
                 return model_preferences.preview(state,project,host,choices,bundle,expected,native_context=context)
             def ready(plan):
