@@ -1937,10 +1937,16 @@ class CentralCliIntegrationTest(unittest.TestCase):
         catalog=Catalog("codex",[Model("fixture-model","fixture","fixture")])
         changes=service.prepare(self.project,"codex",{"xy-backend":{"model":"fixture-model","effort":"max"}},catalog,state=self.state)
         def failure():raise ValueError("fixture verification failure")
+        # 备份 ID 含同秒随机 nonce，列表逆序不保证首项属于本次事务；按实际
+        # 操作前后 ID 差定位失败记录，并要求本次确实只新增一份，不能借旧记录
+        # 的 rolled_back 状态冒充本次回滚成功。文件正文/原生归属断言仍独立保留。
+        before_ids={row["id"] for row in service.backups(self.state,self.project)}
         with self.assertRaisesRegex(ValueError,"fixture verification failure"):
             service.commit(self.state,self.project,changes,failure)
         self.assertEqual(role.read_bytes(),original);self.assertFalse(project_service.project_status(self.state,self.project)["conflicts"])
-        self.assertEqual(service.backups(self.state,self.project)[0]["status"],"rolled_back")
+        records={row["id"]:row for row in service.backups(self.state,self.project)}
+        added_ids=set(records)-before_ids;self.assertEqual(len(added_ids),1)
+        self.assertEqual(records[next(iter(added_ids))]["status"],"rolled_back")
         # 工具自己的模型修改不得使下一次换版/停用被当成手改；未知正文仍须拒绝。
         service.commit(self.state,self.project,changes,lambda:service.check(self.project,"codex",state=self.state))
         self.cli("use",self.project,self.second.content_id)
@@ -2242,8 +2248,11 @@ class TerminalAndCliTest(TemporaryProject):
         process=subprocess.Popen([str(entry),'--state-dir',str(self.state),'--host-home',str(self.root/'home'),'--scan-root',str(scan)],cwd=self.root,
                                  stdin=slave,stdout=slave,stderr=slave,env=env)
         os.close(slave);captured=bytearray()
-        def until(text,*,existing=False):
-            start=0 if existing else len(captured);deadline=time.monotonic()+5
+        def until(text,*,existing=False,deadline=None):
+            start=0 if existing else len(captured)
+            # 多个反馈属于同一次交互时共享绝对期限，不能每等一个词就重新
+            # 获得五秒；未指定的既有步骤继续使用原来的五秒预算。
+            deadline=time.monotonic()+5 if deadline is None else deadline
             while time.monotonic()<deadline:
                 if select.select([master],[],[],.1)[0]:
                     try:captured.extend(os.read(master,65536))
@@ -2268,9 +2277,16 @@ class TerminalAndCliTest(TemporaryProject):
             self.assertIsNone(process.poll())
             os.write(master,b'\r');until('推理级别')
             os.write(master,b'\r');until('已暂存')
-            os.write(master,b':preview\r');until('保存预览')
-            os.write(master,b'\x1b');time.sleep(.1)
-            os.write(master,b'a');until('输入目录')
+            # 命令面板与后台忙态也含“保存预览”，只有真实完成反馈才能证明
+            # 确认页已就绪。两个条件共用原五秒，保留确认保存入口的实际输出。
+            deadline=time.monotonic()+5
+            os.write(master,b':preview\r');until('保存预览已生成，尚未写入',deadline=deadline)
+            until('确认备份并保存',existing=True,deadline=deadline)
+            # Esc 必须已由生产界面消费并返回保留草稿，再打开登记页；取消与
+            # 输入目录共享原五秒期限，不用固定 sleep 猜测异步按键消费时刻。
+            deadline=time.monotonic()+5
+            os.write(master,b'\x1b');until('已取消保存预览',deadline=deadline)
+            os.write(master,b'a');until('输入目录',deadline=deadline)
             os.write(master,'/tmp/中文路径'.encode()+b'\x15edited-path');until('edited-path')
             os.write(master,b'\x1b');time.sleep(.1)
             fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',16,55,0,0));os.kill(process.pid,signal.SIGWINCH);time.sleep(.1)
