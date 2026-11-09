@@ -11,6 +11,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
@@ -54,7 +56,7 @@ class Page(HTMLParser):
         self.hrefs.extend(value for key, value in attrs if tag == "a" and key == "href")
 
 
-class RequirementHtmlTest(unittest.TestCase):
+class _RequirementHtmlFixture:
     def setUp(self):
         supplied = os.environ.get("AWF_TEST_SCRATCH")
         parent = Path(supplied) / "requirement-html-fixtures" if supplied else None
@@ -101,6 +103,46 @@ class RequirementHtmlTest(unittest.TestCase):
         page = root / "editor.html"
         page.write_text('<!doctype html><html><body><section id="error-state">错误</section></body></html>', encoding="utf-8")
         return page
+
+
+class RequirementHtmlTest(_RequirementHtmlFixture, unittest.TestCase):
+    def test_vendor_checkout_filters_preserve_upstream_bytes(self):
+        """真实消费 Git checkout 过滤器，防止 Windows CRLF 改写固定上游载荷。"""
+        upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text(encoding="utf-8"))
+        for name, facts in upstream["files"].items():
+            relative = (renderer.VENDOR / name).relative_to(PACK).as_posix()
+            command = ["git", "-c", "core.autocrlf=true", "cat-file", "--filters",
+                       "--path=" + relative, "HEAD:" + relative]
+            result = subprocess.run(command, cwd=PACK, capture_output=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr.decode("utf-8", errors="replace"))
+            self.assertEqual(facts["sha256"], hashlib.sha256(result.stdout).hexdigest(), name)
+
+    def test_stage_links_and_unowned_configuration_are_rejected(self):
+        """直接消费真实舞台节点；错误实现不能靠不存在的外部目录偶然拒绝。"""
+        outside = self.work / "outside-stage"
+        outside.mkdir()
+        marker = outside / "private.txt"
+        marker.write_bytes(b"owned fixture; must remain untouched")
+        before = renderer.snapshot(marker)
+        stage_link = self.work / "stage-link"
+        stage_link.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises((OSError, ValueError)):
+            renderer.run_renderer(stage_link, SAMPLE.encode())
+        stage = self.work / "stage"
+        stage.mkdir()
+        home = stage / "am-home"
+        home.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises((OSError, ValueError)):
+            renderer.run_renderer(stage, SAMPLE.encode())
+        home.unlink()
+        home.mkdir()
+        (home / "config.json").write_bytes(b"{}")
+        with self.assertRaisesRegex(renderer.RequirementHtmlError, "非本轮配置"):
+            renderer.run_renderer(stage, SAMPLE.encode())
+        self.assertEqual(before, renderer.snapshot(marker))
+        self.assertEqual({"private.txt"}, {path.name for path in outside.iterdir()})
+        self.assertFalse((stage / "input.md").exists())
+        self.assertFalse((stage / "output.html").exists())
 
     def test_vendor_and_real_render_fresh_stale_source_properties(self):
         upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text())
@@ -472,6 +514,167 @@ class RequirementHtmlTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(json.loads(result.stdout)["status"], "fresh")
         self.assertIn("svg", Page((plans / "installed.html").read_bytes()).tags)
+
+
+@unittest.skipUnless(os.name == "nt", "requires actual native Windows, existing Node >= 20 and local NTFS")
+class WindowsRequirementHtmlNativeTest(_RequirementHtmlFixture, unittest.TestCase):
+    """仅供原生组收集；真实文件系统、固定 bundle 和 Job 消费者各有可观察断言。"""
+
+    def test_native_render_check_preserves_source_and_vendor_bytes(self):
+        upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text(encoding="utf-8"))
+        for name, facts in upstream["files"].items():
+            self.assertEqual(facts["sha256"], hashlib.sha256((renderer.VENDOR / name).read_bytes()).hexdigest(), name)
+        before = renderer.snapshot(self.source)
+        # 使用确实存在的项目 node.exe 作为搜索负控。它不是可执行替身：正确实现
+        # 应在进程创建前报告缺少显式 PATH 运行时，错误搜索执行则会以其他错误失败。
+        (self.root / "node.exe").write_bytes(b"MZ untrusted project fixture")
+        relative = self.root / "relative-node-bin"
+        relative.mkdir()
+        (relative / "node.exe").write_bytes(b"MZ untrusted relative PATH fixture")
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            for path in ("", ".", "relative-node-bin"):
+                with self.subTest(path=path), patch.dict(os.environ, {"PATH": path}):
+                    with self.assertRaisesRegex(renderer.RequirementHtmlError, "Node.js >= 20"):
+                        self.process()
+                    self.assertEqual(before, renderer.snapshot(self.source))
+                    self.assertFalse(self.target.exists())
+            # 只观察并保留实际调用结果，不提供模拟进程输出；固定 bundle 必须由
+            # 已有 Node 经真实 Windows Job 执行，输出仍由真实 HTML 结构断言验证。
+            actual_run = renderer._run_node
+
+            def record(command, **options):
+                result = actual_run(command, **options)
+                with (self.work / "engine.log").open("ab") as log:
+                    log.write((json.dumps({"argv": command, "cwd": str(options["stage"]),
+                        "env": options["env"], "exit": result.returncode}, ensure_ascii=False) + "\n").encode())
+                    log.write(result.stdout + result.stderr + b"\n")
+                return result
+
+            with patch.object(renderer, "_run_node", side_effect=record):
+                self.assertTrue(self.process()["rendered"])
+                page_before = renderer.snapshot(self.target)
+                self.assertEqual("fresh", self.process("check")["status"])
+                self.assertFalse(self.process()["rendered"])
+                self.assertEqual(page_before, renderer.snapshot(self.target))
+        finally:
+            os.chdir(original_cwd)
+        self.assertEqual(before, renderer.snapshot(self.source))
+        page = Page(self.target.read_bytes())
+        self.assertIn("svg", page.tags)
+        self.assertIn("table", page.tags)
+        self.assertEqual(2, page.hrefs.count(renderer.PROJECT_REPOSITORY))
+        self.assertIn(renderer.UPSTREAM_REPOSITORY, page.hrefs)
+
+    def test_native_stage_and_home_junctions_are_rejected(self):
+        outside = self.work / "outside-junction"
+        outside.mkdir()
+        marker = outside / "private.txt"
+        marker.write_bytes(b"must not change through any junction")
+        before = renderer.snapshot(marker)
+        stage = self.work / "junction-stage"
+        home_stage = self.work / "home-junction-stage"
+        home_stage.mkdir()
+        nested_stage = self.work / "nested-junction-stage"
+        nested_stage.mkdir()
+        for link, consumed_stage in ((stage, stage), (home_stage / "am-home", home_stage),
+                                      (nested_stage / "nested", nested_stage)):
+            command = ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(outside)]
+            result = subprocess.run(command, capture_output=True, timeout=10)
+            with (self.work / "engine.log").open("ab") as log:
+                log.write((json.dumps({"argv": command, "exit": result.returncode}) + "\n").encode())
+                log.write(result.stdout + result.stderr + b"\n")
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            try:
+                with self.subTest(link=link), self.assertRaises((OSError, ValueError)):
+                    renderer.run_renderer(consumed_stage, SAMPLE.encode())
+                self.assertEqual(before, renderer.snapshot(marker))
+                self.assertEqual({"private.txt"}, {path.name for path in outside.iterdir()})
+            finally:
+                # 只移除刚创建的确切 junction 自身；不递归扫描、追随或清理目标。
+                os.rmdir(link)
+        held_stage = self.work / "held-stage"
+        held_stage.mkdir()
+        with renderer._renderer_stage(held_stage):
+            # 原生 DELETE sharing 边界必须覆盖 Node 实际消费的 stage 和 am-home，
+            # 仅完成一次 no-reparse 检查而随后释放句柄的实现会允许这两个重命名。
+            for path in (held_stage, held_stage / "am-home"):
+                with self.subTest(held=path), self.assertRaises(OSError):
+                    os.rename(path, path.with_name(path.name + "-replaced"))
+        # Windows 实际路径比较不区分大小写，不能只拒绝小写 config.json/themes。
+        for name in ("CONFIG.JSON", "THEMES"):
+            configured = held_stage / "am-home" / name
+            configured.write_bytes(b"{}")
+            try:
+                with self.subTest(configuration=name), self.assertRaisesRegex(
+                        renderer.RequirementHtmlError, "非本轮配置"):
+                    renderer.run_renderer(held_stage, SAMPLE.encode())
+            finally:
+                configured.unlink()
+
+    def test_native_node_timeout_terminates_descendants(self):
+        from lib.install.windows_process import _Win32API
+
+        node = renderer._node_executable()
+        self.assertIsNotNone(node, "requires an existing Node >= 20 on explicit absolute PATH")
+        stage = self.work / "timeout-stage"
+        stage.mkdir()
+        ready, late = stage / "ready.json", stage / "late.txt"
+        grandchild, child, parent = (self.work / name for name in ("grandchild.mjs", "child.mjs", "parent.mjs"))
+        grandchild.write_text(
+            "import fs from 'node:fs';\n"
+            # 先写临时叶再改名，观察线程只会读到完整 JSON，避免把准备竞争当后端失败。
+            "fs.writeFileSync('ready.tmp', JSON.stringify([Number(process.argv[2]), process.ppid, process.pid]));\n"
+            "fs.renameSync('ready.tmp', 'ready.json');\n"
+            "setTimeout(() => fs.writeFileSync('late.txt', 'late'), 20000);\n", encoding="utf-8")
+        child.write_text("import {spawn} from 'node:child_process';\n"
+            f"spawn(process.execPath, [{json.dumps(str(grandchild))}, process.argv[2]], {{stdio:'inherit'}});\n"
+            "setInterval(() => {}, 1000);\n", encoding="utf-8")
+        parent.write_text("import {spawn} from 'node:child_process';\n"
+            f"spawn(process.execPath, [{json.dumps(str(child))}, String(process.pid)], {{stdio:'inherit'}});\n"
+            "setInterval(() => {}, 1000);\n", encoding="utf-8")
+        api, handles, observer_errors = _Win32API(), [], []
+
+        def observe_started_tree():
+            try:
+                deadline = time.monotonic() + 6
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                pids = json.loads(ready.read_text(encoding="utf-8"))
+                for pid in pids:
+                    handle = api.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+                    if not handle:
+                        raise api.error("Open live Node fixture process")
+                    handles.append(handle)
+                    if api.WaitForSingleObject(handle, 0) != 258:  # WAIT_TIMEOUT
+                        raise AssertionError("Node fixture exited before containment was exercised")
+            except BaseException as exc:
+                observer_errors.append(exc)
+
+        observer = threading.Thread(target=observe_started_tree)
+        observer.start()
+        command = [node, str(parent)]
+        try:
+            with renderer._renderer_stage(stage):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    renderer._run_node(command, stage=stage, env=renderer.node_environment(stage), timeout=8)
+            observer.join(timeout=7)
+            self.assertFalse(observer.is_alive(), "Node fixture observer did not finish")
+            self.assertFalse(observer_errors, str(observer_errors))
+            self.assertEqual(3, len(handles), "root, child and grandchild must all actually start")
+            # 在超时返回之前持有真实进程句柄，既不靠 PID 重用猜测，也不靠 sleep
+            # 后没有写文件推断清理成功；三个句柄在返回时都必须已经 signaled。
+            for handle in handles:
+                self.assertEqual(0, api.WaitForSingleObject(handle, 0))  # WAIT_OBJECT_0
+            self.assertFalse(late.exists())
+            with (self.work / "engine.log").open("a", encoding="utf-8") as log:
+                log.write(json.dumps({"argv": command, "cwd": str(stage), "timeout": 8,
+                    "observed_live_processes": len(handles), "all_signaled_after_timeout": True}) + "\n")
+        finally:
+            observer.join(timeout=7)
+            for handle in handles:
+                api.CloseHandle(handle)
 
 
 if __name__ == "__main__":
