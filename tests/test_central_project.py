@@ -1316,7 +1316,34 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
                                                        source_root=source, native_context=context)
             self.assertTrue(proposal.summary["can_apply"], proposal.summary)
             mark_stage("project_preview_complete")
-            project_service.apply_project(proposal)
+            from tests.test_windows_fs_native import native_skill_observation
+            actual_stage, actual_installed = service._register_stage, service._register_installed
+            stage_observation = {}
+            def observe_stage(row, staged):
+                result = actual_stage(row, staged)
+                if staged.kind == "link":
+                    # 仅观测真实完整安装中的当前 stage，叶名仍来自原受管路径。
+                    # 原函数先执行、返回值原样交回；不伪造 native 成功或改变授权。
+                    skill = Path(row["path"]).name
+                    stage_observation.clear()
+                    stage_observation["path"] = row["path"]
+                    stage_observation["node"] = {"identity": staged.identity, "mode": staged.mode, "security": staged.security}
+                    stage_observation["facts"] = native_skill_observation(project / row["stage"] / skill, skill)
+                    print("NATIVE_COMPOSED_SKILL_STAGE " + json.dumps(stage_observation, sort_keys=True), flush=True)
+                return result
+            def observe_installed(row, current):
+                from manager.runtime_state import same_published_node
+                expected_stage = resources.Node.from_value(row["after"])
+                if current.kind == "link" and not same_published_node(current, expected_stage):
+                    report = {"path": row["path"], "stage": stage_observation,
+                              "expected_node": {"identity": expected_stage.identity, "mode": expected_stage.mode, "security": expected_stage.security},
+                              "actual_node": {"identity": current.identity, "mode": current.mode, "security": current.security},
+                              "actual_handle": native_skill_observation(project / row["path"], Path(row["path"]).name)}
+                    print("NATIVE_COMPOSED_SKILL_MISMATCH " + json.dumps(report, sort_keys=True), flush=True)
+                return actual_installed(row, current)
+            with patch.object(service, "_register_stage", side_effect=observe_stage), \
+                    patch.object(service, "_register_installed", side_effect=observe_installed):
+                project_service.apply_project(proposal)
             mark_stage("project_apply_complete")
             binding_node, _ = service.read_binding_record(state, project)
             self.assertEqual(64, len(binding_node.security))
