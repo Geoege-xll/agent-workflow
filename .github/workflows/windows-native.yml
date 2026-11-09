@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run the fixed native TUI stage or capability probe; complete acceptance is still blocked'
+        description: 'Run fixed central and TUI diagnostic stages or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -108,14 +108,20 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 15
     strategy:
-      # 当前只验证已运输的三个真实 TUI 方法；ConPTY 八方法复用原生通过证据，
-      # 正在修复的中央 Hook 长链独立处理，不混入本次 curses/生产界面首次取证。
+      # 中央完整消费者单独验证同调用栈 Hook 和完整 Node 元数据修复；另一组仅
+      # 取验收脚本 Legacy 与 Console 访问诊断，不重跑失败 TUI 三方法或已绿 ConPTY。
       fail-fast: false
       matrix:
         include:
-          - group: windows-native-tui
-            methods: 3
+          - group: windows-native-central-repair
+            methods: 1
+            node_required: true
+            curses_required: false
+          - group: windows-native-tui-diagnostics
+            methods: 2
             node_required: false
+            # Legacy 方法真实调用身份函数，后者导入并校验 windows-curses；
+            # 虽不启动生产 TUI，仍须沿既有哈希锁安装，不能猜成 stdlib-only。
             curses_required: true
     defaults:
       run:
@@ -197,7 +203,7 @@ jobs:
               if (-not $nodeMatch.Success) { throw 'The existing Node version is not recognizable.' }
               if ([int]($nodeMatch.Groups['major'].Value) -lt 20) { throw 'An existing Node >= 20 is required for this native stage.' }
             }
-            # 仅 TUI 的固定 matrix 常量允许安装 curses；库阶段仍用无 pip 的 stdlib
+            # 仅明确需要 curses 的固定 matrix 常量允许安装；库阶段仍用无 pip 的 stdlib
             # 环境。TUI venv 保留解释器自带 ensurepip，不能 --without-pip 后直接调用
             # 不存在的 pip，也不升级 pip、改全局解释器或 PATH。每个 stage 独占目录。
             $withCurses = $env:NATIVE_CURSES_REQUIRED -eq 'true'

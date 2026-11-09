@@ -168,6 +168,13 @@ GROUPS["windows-native-tui"] = (
     "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_global_reset_and_monochrome",
     "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_unicode_resize_and_interrupt_restores_modes",
 )
+# 两个诊断方法分别消费真实验收脚本函数和 Win32 Console 只读观察器，不启动
+# 生产 TUI。脚本身份函数仍真实导入并校验 windows-curses 2.4.2，因此本组需要
+# 已锁依赖；不能仅凭“诊断”二字使用缺依赖的 stdlib 环境，或以 skip 冒充通过。
+GROUPS["windows-native-tui-diagnostics"] = (
+    "tests.test_windows_native_integration.WindowsAcceptanceScriptNativeTest.test_native_acceptance_identity_preserves_legacy_quotes_and_exit_codes",
+    "tests.test_windows_native_integration.NativeConsoleObserverNativeTest.test_native_console_cursor_access_diagnostics",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -176,7 +183,8 @@ NATIVE_GROUPS = frozenset((
     "windows-native-central-repair", "windows-native-central-acl-repair",
     "windows-native-central-copy-repair", "windows-native-central-link-repair",
     "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader",
-    "windows-native-conpty", "windows-native-conpty-diagnostics", "windows-native-tui", "windows-native",
+    "windows-native-conpty", "windows-native-conpty-diagnostics", "windows-native-tui",
+    "windows-native-tui-diagnostics", "windows-native",
 ))
 
 
