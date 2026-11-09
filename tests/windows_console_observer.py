@@ -45,7 +45,7 @@ class CONSOLE_CURSOR_INFO(C.Structure):
 
 
 class ConsoleObserver:
-    """只拥有短命 GENERIC_READ 设备句柄；不拥有进程、Job 或伪控制台。"""
+    """只拥有短命控制台观察句柄；不拥有进程、Job 或伪控制台。"""
 
     def __init__(self):
         if os.name != "nt":
@@ -70,8 +70,13 @@ class ConsoleObserver:
     @contextmanager
     def device(self, name):
         # 每次重新打开活动 buffer：PDCurses 可切换 screen buffer，保留启动前
-        # 句柄会读到旧 shell 屏幕。只申请读取，不靠临时写入“校准”测试结果。
-        handle = self.kernel.CreateFileW(name, 0x80000000, 3, None, 3, 0, None)
+        # 句柄会读到旧 shell 屏幕。CI42614154168 的同 console 原生对照证明：
+        # CONOUT$ 的 READ 可读格子/模式，但 GetConsoleCursorInfo 返回错误 5；
+        # READ|WRITE 才能完整读取光标。句柄访问权限与执行写操作是两回事：
+        # 本观察器仍仅调用 Get/Read APIs，绝不靠 Set/Write 或临时输出校准屏幕。
+        # CONIN$ 的模式读取不需要扩大权限，保持 GENERIC_READ。
+        access = 0xc0000000 if name == "CONOUT$" else 0x80000000
+        handle = self.kernel.CreateFileW(name, access, 3, None, 3, 0, None)
         if handle in (None, HANDLE(-1).value):
             raise C.WinError(C.get_last_error())
         try:
