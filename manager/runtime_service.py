@@ -643,8 +643,11 @@ def _journal_value(plan: ActivationPlan, identifier: str) -> dict:
                "phase": "prepared", "action": plan.action,
                "binding_before": plan.machine_before.value(), "changes": [], "conflicts": []}
     for index, change in enumerate(plan.changes):
-        parent = str(Path(change.relative).parent)
-        prefix = (parent + "/") if parent != "." else ""
+        # journal 保存规范逻辑路径，不是宿主文件系统路径。与唯一 decoder
+        # 按同一 '/' 边界取父前缀，避免 Windows Path 把父目录序列化成 '\\'；
+        # backup/stage/rollback 的 nonce、序号和后缀仍由严格 codec 逐项核对。
+        parent, _, _ = change.relative.rpartition("/")
+        prefix = parent + "/" if parent else ""
         stem = prefix + f".agent-workflow-central-{identifier}-{index}"
         journal["changes"].append({"path": change.relative, "before": change.before.value(),
                                    "after": change.after.value(), "backup": stem + ".previous",
