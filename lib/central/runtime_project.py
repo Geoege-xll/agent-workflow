@@ -559,6 +559,12 @@ import subprocess
 import time
 
 entry = Path(__file__).absolute().parent.parent / "runtime.py"
+if sys.platform == "win32":
+    # Windows监督Job已经覆盖整条12秒链；专用动作在同一调用栈内完成选版、
+    # 准入及有限响应，不再先启动check、再自举一次通用helper。POSIX保留原链。
+    sys.argv = [str(entry), "hook", *sys.argv[1:]]
+    runpy.run_path(str(entry), run_name="__main__")
+    raise SystemExit(0)
 if not os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING"):
     # 无任务 pin 时只选择已启用项目的当前提醒脚本，不创建或改写任何任务 pin。
     # 真实 check 拒绝未知/损坏版本和停用项目；辅助层失败始终保持宿主协议中性。
@@ -1144,6 +1150,20 @@ def helper_creates_task(arguments):
     parser.add_argument("--help", "-h", action="store_true")
     return parser.parse_args(values).command == "init"
 
+def hook_call(arguments):
+    # 这里只决定安全错误的中性投影，不授予任何选版/准入权；无效pin也应
+    # 返回辅助协议的空对象，不能用任意参数值中的“hook”误判普通helper。
+    values = list(arguments)
+    if values and values[0].split("=", 1)[0] in {"--binding", "--binding-b64"}:
+        values = values[1:] if "=" in values[0] else values[2:]
+    return values[:1] == ["hook"]
+
+def require_controller(bridge):
+    # Hook与普通控制动作使用同一严格协议判断；bool不能借True == 1混入。
+    protocol = getattr(bridge, "CENTRAL_CONTROL_PROTOCOL", None)
+    if type(protocol) is not int or protocol != 1:
+        raise ValueError("中央当前核心不支持控制协议1，不能执行控制动作")
+
 def start():
     sys.argv[1:] = normalize_binding(sys.argv[1:])
     raw_entry = Path(__file__).absolute()
@@ -1178,7 +1198,8 @@ def start():
         arguments = arguments[2:]
     elif arguments and arguments[0].startswith("--binding="):
         arguments = arguments[1:]
-    control = arguments[:1] in (["check"], ["new_task"]) or helper_creates_task(arguments)
+    is_hook = arguments[:1] == ["hook"]
+    control = arguments[:1] in (["check"], ["new_task"]) or is_hook and not has_requested or helper_creates_task(arguments)
     if control:
         # 新任务必须运行当前控制桥，由它检查 supplied/effective pin 与启用状态。
         # 这里只检查current的封闭五字段外壳并选择经清单验证的控制代码。
@@ -1232,6 +1253,37 @@ def start():
     module.__package__ = ""
     sys.modules[module.__name__] = module
     exec(compile(bodies["lib/runtime_store.py"], module.__file__, "exec"), module.__dict__)
+    if is_hook:
+        # 只在本次独立Hook进程内把已验证的同一个存储模块交给固定bridge，
+        # 避免bootstrap load_core后又由另一模块实例重新完整扫描同一核心。
+        # 预存的不一致模块必须失败关闭，不能覆盖成看似有效的权限证明。
+        with module.core_reader(binding, state) as reader:
+            existing = sys.modules.get("lib.runtime_store")
+            package = sys.modules.get("lib")
+            if existing is not None and existing is not module:
+                raise ValueError("Hook core store module identity conflicts")
+            if package is not None and getattr(package, "__file__", None) != str(root / "lib/__init__.py"):
+                raise ValueError("Hook core package identity conflicts")
+            sys.modules["lib.runtime_store"] = module
+            sys.path.insert(0, str(root))
+            from lib import runtime_bridge
+            if control:
+                require_controller(runtime_bridge)
+            if not callable(getattr(runtime_bridge, "hook_response", None)):
+                raise ValueError("固定核心不支持单调用栈Hook")
+            payload = sys.stdin.buffer.read(1024 * 1024 + 1)
+            result = runtime_bridge.hook_response(state, project, arguments[1:], payload,
+                                                  binding=requested if has_requested else None, reader=reader)
+        # 结果一直留在内存，完整核心结束重验失败或共享预算耗尽时不发布提醒。
+        # 不生成新预算；Windows监督者仍负责原12秒deadline及整棵子树回收。
+        if "AGENT_WORKFLOW_HOOK_DEADLINE" in os.environ:
+            import math
+            import time
+            deadline = float(os.environ["AGENT_WORKFLOW_HOOK_DEADLINE"])
+            if not math.isfinite(deadline) or deadline <= time.monotonic():
+                raise ValueError("Hook deadline expired before publication")
+        sys.stdout.buffer.write((json.dumps(result, ensure_ascii=False) + "\\n").encode("utf-8"))
+        return 0
     module.load_core(binding, state)
     sys.path.insert(0, str(root))
     from lib import runtime_bridge
@@ -1240,15 +1292,17 @@ def start():
         # 通过清单核验，此处只核验已加载桥的明确运行时声明，不执行候选
         # AST资格探测或适配旧控制器；bool不能借Python的True == 1混入。
         # 旧pin read/普通helper仍调用原桥，不要求它具备新任务控制资格。
-        protocol = getattr(runtime_bridge, "CENTRAL_CONTROL_PROTOCOL", None)
-        if type(protocol) is not int or protocol != 1:
-            raise ValueError("中央当前核心不支持控制协议1，不能执行控制动作")
+        require_controller(runtime_bridge)
     return runtime_bridge.main(project=project, state=state)
 
 if __name__ == "__main__":
     try:
         raise SystemExit(start())
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, UnicodeError) as exc:
+        if hook_call(sys.argv[1:]):
+            print("[workflow hooks] 中央辅助提醒暂不可用；原有工作流与宿主权限保持不变。", file=sys.stderr)
+            print("{}")
+            raise SystemExit(0)
         print("[ERROR] " + str(exc), file=sys.stderr)
         raise SystemExit(1)
 '''

@@ -121,6 +121,163 @@ class CentralProjectTest(unittest.TestCase):
                                str(root / resources.LAUNCHER), *args], cwd=root,
                               env=environment, capture_output=True, text=True, timeout=40)
 
+    def hook_invocation(self, *, prefix=(), env=None, profile=""):
+        """经真实薄入口调用专用Hook；profile只由本测试提供，不改业务返回值。"""
+        entry = self.project / resources.LAUNCHER
+        arguments = [*prefix, "hook", "--host", "claude", "--event", "SessionStart", "--project", str(self.project),
+                     "--owner", hook_install.OWNER, "--signature", "0" * 64]
+        environment = {key: value for key, value in os.environ.items() if key not in {
+            "AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH",
+            "AGENT_WORKFLOW_CORE_ROOT", "AGENT_WORKFLOW_HOOK_DEADLINE"}}
+        environment.update({"AGENT_WORKFLOW_STATE_DIR": str(self.state), **(env or {})})
+        command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8"]
+        command.extend(["-c", profile, str(entry), *arguments] if profile else [str(entry), *arguments])
+        return subprocess.run(command, cwd=self.project, env=environment, capture_output=True, text=True, timeout=20,
+                              input=json.dumps({"cwd": str(self.project), "hook_event_name": "SessionStart", "source": "resume"}))
+
+    def test_single_scope_hook_reuses_one_scan_and_rejects_invalid_readers_and_admission(self):
+        self.enable()
+        profile = '''import collections,json,runpy,sys
+counts=collections.Counter()
+def observe(frame,event,value):
+    if event == "call" and frame.f_code.co_filename.replace("\\\\", "/").endswith("/lib/runtime_store.py"):
+        if frame.f_code.co_name in {"_scan", "_verify_snapshot"}: counts[frame.f_code.co_name]+=1
+sys.argv=sys.argv[1:]
+sys.setprofile(observe)
+try:
+    runpy.run_path(sys.argv[0],run_name="__main__")
+finally:
+    sys.setprofile(None)
+    print("HOOK_SCOPE_COUNTS "+json.dumps(dict(counts)),file=sys.stderr)
+'''
+        result = self.hook_invocation(profile=profile)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("SessionStart", json.loads(result.stdout)["hookSpecificOutput"]["hookEventName"])
+        counts = json.loads(result.stderr.split("HOOK_SCOPE_COUNTS ", 1)[1])
+        self.assertEqual({"_scan": 1, "_verify_snapshot": 2}, counts)
+        print("SINGLE_SCOPE_HOOK " + json.dumps(counts), flush=True)
+        arguments = ["--host", "claude", "--event", "SessionStart", "--project", str(self.project),
+                     "--owner", hook_install.OWNER, "--signature", "0" * 64]
+        payload = json.dumps({"cwd": str(self.project), "hook_event_name": "SessionStart", "source": "resume"}).encode()
+        with store.core_reader(self.alternate.binding(), self.state) as reader:
+            with self.assertRaises(ValueError):
+                bridge.hook_response(self.state, self.project, arguments, payload, binding=self.core.binding(), reader=reader)
+        with self.assertRaises(ValueError):
+            bridge.hook_response(self.state, self.project, arguments, payload, reader=reader)
+        with self.assertRaises(ValueError):
+            bridge.hook_response(self.state, self.project, arguments, payload, reader=object())
+        from lib.install import install_process
+        with store.core_reader(self.core.binding(), self.state) as reader:
+            # 捕获器负责真实进程资源；这里只定向验证其有限超时/取消错误在
+            # Hook桥被转换为安全业务错误，供薄入口统一中性，不能漏出异常栈。
+            for failure in (subprocess.TimeoutExpired("fixture", 0.1), install_process.SetupRunError("private fixture")):
+                with patch.object(install_process, "capture_process", side_effect=failure):
+                    with self.assertRaisesRegex(ValueError, "固定目标Hook未完成"):
+                        bridge.hook_response(self.state, self.project, arguments, payload,
+                                             binding=self.core.binding(), reader=reader)
+        # 显式未知pin、监督预算过期、环境关闭与停用项目均不产生提醒；不能
+        # 为了减少扫描而绕开旧版本身份、截止时间或无pin的新任务门。
+        unknown = dict(self.core.binding(), content_id="0" * 64, manifest_sha256="0" * 64)
+        for prefix, environment in ((("--binding", json.dumps(unknown)), {}),
+                                    ((), {"AGENT_WORKFLOW_HOOK_DEADLINE": "0"}),
+                                    ((), {"AGENT_WORKFLOW_HOOKS": "off"})):
+            refused = self.hook_invocation(prefix=prefix, env=environment)
+            self.assertEqual(0, refused.returncode, refused.stderr)
+            self.assertEqual({}, json.loads(refused.stdout))
+        # current控制器与项目pinned版本不同仍分别完整校验；不能把外层的
+        # current reader冒充目标版本，也不能把合法旧pin偷偷改绑到current。
+        project_service.apply_project(project_service.preview_project(
+            self.state, self.project, "use", content_id=self.alternate.content_id))
+        pinned = self.hook_invocation()
+        self.assertEqual(0, pinned.returncode, pinned.stderr)
+        self.assertIn("hookSpecificOutput", json.loads(pinned.stdout))
+        service.apply(service.preview(self.state, self.project, "disable"))
+        disabled = self.hook_invocation()
+        self.assertEqual(0, disabled.returncode, disabled.stderr)
+        self.assertEqual({}, json.loads(disabled.stdout))
+        disabled_pin = self.hook_invocation(prefix=("--binding", json.dumps(self.core.binding())))
+        self.assertEqual(0, disabled_pin.returncode, disabled_pin.stderr)
+        self.assertEqual({}, json.loads(disabled_pin.stdout))
+
+    def test_single_scope_hook_keeps_old_core_without_command_capability_neutral(self):
+        self.enable()
+        source = self.source / "lib/workflow_hooks.py"
+        body = source.read_bytes()
+        try:
+            # 复用同一最小来源生成一个缺少新响应接口的真实固定版本；只证明
+            # 能力不足时安全中性，不复制完整core、不添加旧自包含兼容路径。
+            source.write_bytes(b"def main():\n    raise RuntimeError('old callback must not execute')\n")
+            old = store.import_core(self.source, self.state)
+        finally:
+            source.write_bytes(body)
+        project_service.apply_project(project_service.preview_project(
+            self.state, self.project, "use", content_id=old.content_id))
+        self.assertTrue(service.status(self.state, self.project)["new_task_allowed"])
+        for prefix in ((), ("--binding", json.dumps(old.binding()))):
+            rejected = self.hook_invocation(prefix=prefix)
+            self.assertEqual(0, rejected.returncode, rejected.stderr)
+            self.assertEqual({}, json.loads(rejected.stdout))
+            self.assertNotIn("old callback must not execute", rejected.stderr)
+
+    def test_single_scope_hook_target_pin_keeps_its_own_callback_dependencies(self):
+        self.enable()
+        settings = self.source / "lib/hosts/workflow_hook_settings.py"
+        body = settings.read_bytes()
+        try:
+            # 真实固定目标的解析器故意与current不同；若只校验旧Hook正文、
+            # 却借当前已加载lib依赖执行，响应会错误地恢复为assist提醒。
+            settings.write_bytes(b'def hook_mode(text):\n    return "off"\n')
+            selected = store.import_core(self.source, self.state)
+        finally:
+            settings.write_bytes(body)
+        project_service.apply_project(project_service.preview_project(
+            self.state, self.project, "use", content_id=selected.content_id))
+        self.assertTrue(service.status(self.state, self.project)["new_task_allowed"])
+        result = self.hook_invocation()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({}, json.loads(result.stdout), "目标pin必须执行自己的固定Hook依赖，不能借current解析器")
+
+    def test_single_scope_hook_withholds_response_on_exit_mutation_or_module_conflict(self):
+        self.enable()
+        conflict = '''import runpy,sys,types
+sys.modules["lib.runtime_store"]=types.ModuleType("untrusted_store")
+sys.argv=sys.argv[1:]
+runpy.run_path(sys.argv[0],run_name="__main__")
+'''
+        rejected = self.hook_invocation(profile=conflict)
+        self.assertEqual(0, rejected.returncode, rejected.stderr)
+        self.assertEqual({}, json.loads(rejected.stdout))
+        target = self.core.root / "product/GLOBAL_CONSTRAINTS.md"
+        before, mode = target.read_bytes(), target.stat().st_mode & 0o7777
+        # 只在固定Hook已经算出响应后改动本例独占核心；最终整树复核必须
+        # 拒绝发布整份提醒，不能先输出hookSpecificOutput再追加一个空对象。
+        mutate = '''import os,runpy,sys
+from pathlib import Path
+target=Path(''' + repr(str(target)) + ''')
+changed=False
+def observe(frame,event,value):
+    global changed
+    if event == "return" and frame.f_code.co_name == "command_response" and not changed:
+        changed=True
+        target.chmod(0o600)
+        target.write_bytes(b"fixture exit mutation")
+sys.argv=sys.argv[1:]
+sys.setprofile(observe)
+try:
+    runpy.run_path(sys.argv[0],run_name="__main__")
+finally:
+    sys.setprofile(None)
+'''
+        try:
+            rejected = self.hook_invocation(profile=mutate)
+            self.assertEqual(0, rejected.returncode, rejected.stderr)
+            self.assertEqual({}, json.loads(rejected.stdout))
+            self.assertEqual(b"fixture exit mutation", target.read_bytes())
+        finally:
+            target.chmod(0o600)
+            target.write_bytes(before)
+            target.chmod(mode)
+
     def test_profile_helper_uses_verified_project_and_pinned_core(self):
         self.enable()
         binding = json.dumps(self.core.binding())
@@ -1172,7 +1329,7 @@ service.apply(service.preview(Path(sys.argv[1]), Path(sys.argv[2]), "enable", bi
         # helper保持原样执行。exec不留下shell/睡眠子孙，timeout必须回收这个PID。
         delay_code = ("import json,os,sys,time; from pathlib import Path; "
                       "args=sys.argv[1:]; "
-                      "delayed=args == " + repr(["-B", "-X", "utf8", str(entry), "check"]) + "; "
+                      "delayed=args == " + repr(["-I", "-B", "-X", "utf8", str(entry), "check"]) + "; "
                       "Path(" + repr(str(observed)) + ").write_text(json.dumps({'pid':os.getpid(),'argv':args})) if delayed else None; "
                       "time.sleep(" + repr(seconds) + ") if delayed else None; "
                       "os.execv(sys.executable,[sys.executable,*args])")
@@ -1205,7 +1362,7 @@ finally:
         delayed, entry, shim, observed, binding_out, env, command, payload = self.delayed_hook_check(2.5)
         before = shim.read_bytes()
         started = time.monotonic()
-        checked = subprocess.run([str(delayed), "-B", "-X", "utf8", str(entry), "check"],
+        checked = subprocess.run([str(delayed), "-I", "-B", "-X", "utf8", str(entry), "check"],
                                  cwd=self.project, env=env, capture_output=True, text=True, timeout=20)
         print("SLOW_VALID_CHECK", json.dumps({"elapsed": time.monotonic() - started, "returncode": checked.returncode,
                                              "stdout": checked.stdout, "stderr": checked.stderr}), flush=True)
@@ -1222,7 +1379,7 @@ finally:
         self.assertTrue(json.loads(result.stdout), result.stdout)
         self.assertEqual("SessionStart", json.loads(result.stdout)["hookSpecificOutput"]["hookEventName"])
         self.assertEqual(self.core.binding(), json.loads(json.loads(binding_out.read_bytes())))
-        self.assertEqual(["-B", "-X", "utf8", str(entry), "check"], json.loads(observed.read_bytes())["argv"])
+        self.assertEqual(["-I", "-B", "-X", "utf8", str(entry), "check"], json.loads(observed.read_bytes())["argv"])
         self.assertEqual(before, shim.read_bytes())
 
     def test_fresh_hook_timeout_is_neutral_and_reaps_check_process(self):
@@ -1241,7 +1398,7 @@ finally:
         self.assertGreaterEqual(elapsed, 9.5)
         self.assertLess(elapsed, 20)
         process = json.loads(observed.read_bytes())
-        self.assertEqual(["-B", "-X", "utf8", str(entry), "check"], process["argv"])
+        self.assertEqual(["-I", "-B", "-X", "utf8", str(entry), "check"], process["argv"])
         with self.assertRaises(ProcessLookupError):
             os.kill(process["pid"], 0)
         self.assertEqual(before, shim.read_bytes())
@@ -1755,9 +1912,16 @@ finally:
             group = hook_install.managed_json(settings, "claude")["SessionStart"][0]
             command = group["hooks"][0]["command"]
             mark_stage("hook_begin")
+            hook_started = time.monotonic()
             hook = subprocess.run(command, shell=True, cwd=project, env=environment,
                                   input=json.dumps({"cwd": str(project), "hook_event_name": "SessionStart", "source": "resume"}).encode(),
                                   capture_output=True, timeout=20)
+            mark_stage("hook_return")
+            # 仅记录返回边界/协议字节数，区分以后失败在启动、监督还是业务响应；
+            # 不转储payload、提醒正文、环境或用户配置，时间也不参与重试/预算。
+            print("NATIVE_CENTRAL_HOOK_RESULT " + json.dumps({"elapsed_s": round(time.monotonic() - hook_started, 3),
+                  "returncode": hook.returncode, "stdout_bytes": len(hook.stdout), "stderr_bytes": len(hook.stderr)},
+                  sort_keys=True), flush=True)
             self.assertEqual(0, hook.returncode, hook.stderr)
             response = json.loads(hook.stdout)
             self.assertIn("hookSpecificOutput", response, "enabled real Hook must execute beyond the neutral timeout path")

@@ -178,23 +178,49 @@ def response(host: str, event: str, payload: dict, project: Path) -> dict:
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def _command_parser() -> argparse.ArgumentParser:
+    class HookParser(argparse.ArgumentParser):
+        def error(self, message):
+            # 参数可能含私有项目名；只报告稳定类别，不回显 argparse 原文。
+            raise ValueError("Hook 参数无效")
+    # 数据返回入口不能让--help先向stdout打印；独立main仍显式保留帮助入口。
+    parser = HookParser(description=__doc__, add_help=False)
     parser.add_argument("--host", choices=("codex", "claude", "antigravity"), required=True)
     parser.add_argument("--event", required=True)
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--owner", choices=(OWNER,), required=True)
     parser.add_argument("--signature", required=True)
-    args = parser.parse_args()
+    return parser
+
+
+def command_response(arguments, payload: bytes, *, project: Path | None = None) -> dict:
+    """解析一次有限 Hook 请求并返回数据；打印由最外层安全读取边界负责。
+
+    中央薄桥必须在核心会话结束重验之后才能发布提醒，因此这里不能打印、
+    再启动helper或自行选择另一核心；既有worktree的有限只读Git检查仍保留。
+    project 是桥已核验的物理根，只作一致性
+    守卫，不能由事件 payload 或命令参数替换。普通独立脚本仍沿原 main 入口。
+    """
+    parser = _command_parser()
+    args = parser.parse_args(arguments)
+    if project is not None and args.project != project:
+        raise ValueError("Hook 项目根与固定桥不一致")
+    if not isinstance(payload, bytes) or len(payload) > 1024 * 1024:
+        raise ValueError("oversized or invalid payload")
+    decoded = json.loads(payload)
+    if not isinstance(decoded, dict):
+        raise ValueError("payload must be an object")
+    return response(args.host, args.event, decoded, project if project is not None else args.project)
+
+
+def main() -> int:
+    if sys.argv[1:] in (["-h"], ["--help"]):
+        _command_parser().print_help()
+        return 0
     try:
         raw = sys.stdin.buffer.read(1024 * 1024 + 1)
-        if len(raw) > 1024 * 1024:
-            raise ValueError("oversized payload")
-        payload = json.loads(raw)
-        if not isinstance(payload, dict):
-            raise ValueError("payload must be an object")
-        result = response(args.host, args.event, payload, args.project)
-    except (OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+        result = command_response(sys.argv[1:], raw)
+    except (OSError, ValueError, UnicodeError, RecursionError, subprocess.SubprocessError):
         # 辅助层失败保持中性，不能让脚本/配置故障改变用户权限或冻结会话。
         # stderr 不输出原始 payload、路径或日志，避免泄露提示词和敏感内容。
         print("[workflow hooks] 辅助提醒暂不可用；原有工作流与宿主权限保持不变。", file=sys.stderr)

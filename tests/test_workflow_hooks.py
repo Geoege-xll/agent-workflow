@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -29,6 +31,14 @@ class HookTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="workflow-hooks-")
         self.addCleanup(self.temp.cleanup)
+        # Git/worktree与安装器子进程同样属于夹具边界，不能只隔离项目路径，
+        # 却让它们读取真实用户的宿主配置或Git配置；所有默认根均落在本例内。
+        home = Path(self.temp.name).resolve() / "host-home"
+        environment = patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home),
+            "CODEX_HOME": str(home / ".codex"), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+            "AGENT_WORKFLOW_STATE_DIR": str(Path(self.temp.name).resolve() / "state")})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.project = Path(self.temp.name).resolve() / "Owner's 项目 with spaces"
         self.project.mkdir()
         self.pack = self.project / ".agent-workflow"
@@ -378,6 +388,26 @@ class HookTest(unittest.TestCase):
             self.assertNotIn("SECRET", result.stderr)
             self.assertNotIn("not-json-secret", result.stderr)
 
+    def test_command_response_is_silent_bounded_and_checks_bridge_project(self):
+        arguments = ["--host", "claude", "--event", "SessionStart", "--project", str(self.project),
+                     "--owner", hooks.OWNER, "--signature", "0" * 64]
+        payload = json.dumps(self.payload("claude", hook_event_name="SessionStart", source="resume")).encode()
+        output, error = io.StringIO(), io.StringIO()
+        # 中央入口会在核心结束重验后发布；解析成功、帮助参数、无效输入及
+        # 项目越界均不能在该边界之前打印正文或读取另一项目的配置。
+        with redirect_stdout(output), redirect_stderr(error):
+            result = hooks.command_response(arguments, payload, project=self.project)
+            self.assertEqual(hooks.RECOVERY, result["hookSpecificOutput"]["additionalContext"])
+            with self.assertRaises(ValueError):
+                hooks.command_response(arguments, payload, project=self.project.parent)
+            for raw in (b"not-json-SECRET", b"[]", b"x" * (1024 * 1024 + 1)):
+                with self.subTest(size=len(raw)), self.assertRaises(ValueError):
+                    hooks.command_response(arguments, raw, project=self.project)
+            with self.assertRaises(ValueError):
+                hooks.command_response(["--help"], payload, project=self.project)
+        self.assertEqual("", output.getvalue())
+        self.assertEqual("", error.getvalue())
+
     def test_invalid_mode_and_config_shape_have_no_silent_enforce_mode(self):
         for text in ("workflow_hooks: false", "workflow_hooks:\n  mode: enforce\n",
                      "workflow_hooks:\n  mode: off\n  mode: assist\n",
@@ -429,6 +459,10 @@ class InstalledCallbackTest(unittest.TestCase):
             project.mkdir()
             source = PACK
             state = Path(raw).resolve() / "state"
+            home = Path(raw).resolve() / "host-home"
+            environment = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+                           "CODEX_HOME": str(home / ".codex"), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+                           "AGENT_WORKFLOW_STATE_DIR": str(state)}
             (project / ".codex").mkdir()
             codex = project / ".codex/config.toml"
             codex.write_text('[features]\nhooks = false\n[[hooks.SessionStart]]\n'
@@ -443,12 +477,12 @@ class InstalledCallbackTest(unittest.TestCase):
             claude.write_text('{"autoMemoryEnabled":false,"disableAllHooks":true}')
             # 同一用例复用自己的内容库；不访问默认用户状态，也不复制另一份源码。
             installed = subprocess.run(["bash", str(source / "install.sh"), str(project), "--state-dir", str(state)],
-                                       capture_output=True, text=True, timeout=120)
+                                       capture_output=True, text=True, env=environment, timeout=120)
             self.assertEqual(0, installed.returncode, installed.stdout + installed.stderr)
             runtime = project / ".agent-workflow"
             for attempt in range(2):
                 result = subprocess.run(["bash", str(source / "install.sh"), str(project), "--state-dir", str(state)],
-                                        capture_output=True, text=True, timeout=120)
+                                        capture_output=True, text=True, env=environment, timeout=120)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertFalse((project / ".codex/hooks.json").exists())
                 parsed = tomllib.loads(codex.read_text())
@@ -459,9 +493,18 @@ class InstalledCallbackTest(unittest.TestCase):
                 self.assertFalse(json.loads(claude.read_text())["autoMemoryEnabled"])
             before = agy.read_bytes()
             agents = {path.name: path.read_bytes() for path in (project / ".agents/agents").glob("xy-*.md")}
-            from manager import runtime_service as central_service
-            (project / "go.mod").write_text("module example.test/hook-rollback\n")
+            from lib.hosts.native_context import HostPaths, NativeContext
+            from manager import central_runtime, runtime_service as central_service, service as models
             binding = json.loads((runtime / "runtime.json").read_bytes())["runtime_binding"]
+            # 新任务与稀疏画像需要真实current及明确授权的全局角色根；通过公开
+            # activate补齐前置，不手写记录、不借current_missing掩盖业务回滚。
+            context = NativeContext.for_state(state, host_paths=HostPaths.for_home(
+                home, environment={}))
+            central_runtime.apply(central_runtime.preview(state, binding=binding, native_context=context))
+            baseline = central_service.status(state, project)
+            self.assertTrue(baseline["resources_healthy"], baseline)
+            self.assertTrue(baseline["new_task_allowed"], baseline)
+            (project / "go.mod").write_text("module example.test/hook-rollback\n")
             plan = central_service.preview(state, project, "enable", binding=binding)
             target = ".agents/agents/xy-backend.md"
             self.assertIn(target, {change.relative for change in plan.changes})
@@ -486,9 +529,14 @@ class InstalledCallbackTest(unittest.TestCase):
             # 原生角色正文必须逐字节恢复；中央事务为保护旧 inode 保留的私有条目
             # 由机器记录和 ownership 验证，不把它们误当作新 Agent 或删除这些恢复资料。
             self.assertEqual(agents, {path.name: path.read_bytes() for path in (project / ".agents/agents").glob("xy-*.md")})
+            self.assertTrue((project / "go.mod").is_file())
             restored = central_service.status(state, project)
             self.assertTrue(restored["enabled"], restored)
+            self.assertTrue(restored["new_task_allowed"], restored)
             self.assertEqual([], restored["conflicts"])
+            # 回滚保留新工程事实；新增backend由刚才真实激活的global角色提供，
+            # 并非不存在的local文件或手写current让不完整安装冒充健康。
+            self.assertIn("xy-backend", models.roles(project, "antigravity", state=state, native_context=context))
 
 
 if __name__ == "__main__":

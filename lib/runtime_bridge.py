@@ -15,7 +15,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import ast
 from dataclasses import dataclass
 import json
@@ -138,7 +138,7 @@ class HelperInvocation:
 
 @contextmanager
 def _runtime_context(state: Path, project: Path, *, binding: dict | None = None,
-                     new_task: bool = False):
+                     new_task: bool = False, reader=None):
     """严格校验 pin 并加载该项目曾用版本；新任务额外验证本机 enabled。
 
     参数 binding 优先于 AGENT_WORKFLOW_RUNTIME_BINDING。环境中的 project root
@@ -174,7 +174,12 @@ def _runtime_context(state: Path, project: Path, *, binding: dict | None = None,
         raise RuntimeBridgeError("任务 pin 不是当前物理项目曾经使用的中央版本")
     # 只读解析与成员消费共用显式 reader；离开调用栈即关闭，不能随
     # RuntimeContext/HelperInvocation 返回，执行或发布阶段必须另行 fresh。
-    with store.core_reader(binding, state) as reader:
+    if reader is not None and not isinstance(reader, store.CoreReadSession):
+        raise RuntimeBridgeError("运行时拒绝未知核心 reader")
+    with (store.core_reader(binding, state) if reader is None else nullcontext(reader)) as reader:
+        # 只能复用本调用栈显式传入且属于同state/pin的活跃证明；关闭、错误
+        # state/pin或伪造对象一律拒绝，不把复用失败悄悄降级成另一版本读取。
+        reader.core_for(binding, state)
         if new_task:
             from manager.central_runtime import new_task_gate
             binding = new_task_gate(state, project, binding, reader=reader)
@@ -187,6 +192,93 @@ def _runtime_context(state: Path, project: Path, *, binding: dict | None = None,
             if value != {"schema_version": 1, "kind": "central", "runtime_binding": record["runtime_binding"]}:
                 raise RuntimeBridgeError("中央项目标记与本机当前绑定不一致")
         yield RuntimeContext(state, project, project / CONFIG, reader.core), reader
+
+
+def hook_response(state: Path, project: Path, arguments, payload: bytes, *,
+                  binding: dict | None = None, reader=None) -> dict:
+    """在一次中央只读调用栈内执行固定 Hook；失败由薄入口转换为中性响应。
+
+    无pin仍走原新任务准入/状态/locator检查，有pin保持原used_bindings约束。
+    仅消费固定lib/workflow_hooks.py，不能成为任意helper的进程内执行开关。
+    返回值尚未发布；调用方须等最外层reader结束整树重验后再打印JSON。
+    """
+    from manager.runtime_service import read_binding_record
+    supplied_deadline = os.environ.get("AGENT_WORKFLOW_HOOK_DEADLINE")
+    deadline = time.monotonic() + 3 if supplied_deadline is None else float(supplied_deadline)
+    if not math.isfinite(deadline) or deadline <= time.monotonic():
+        raise RuntimeBridgeError("Hook 截止时间无效或已过期")
+    state, project = store.state_root(state), canonical_project(project)
+    if not isinstance(arguments, (tuple, list)) or any(not isinstance(value, str) or "\0" in value for value in arguments):
+        raise RuntimeBridgeError("Hook 参数必须是无NUL的字符串序列")
+    if binding is None and "AGENT_WORKFLOW_RUNTIME_BINDING" in os.environ:
+        binding = store.validate_binding(unique_json(os.environ["AGENT_WORKFLOW_RUNTIME_BINDING"].encode("utf-8")))
+    unpinned = binding is None
+    _, record = read_binding_record(state, project)
+    if record is None:
+        raise RuntimeBridgeError("本项目尚未在本机启用工作流")
+    if not record["enabled"]:
+        # 停用不影响旧任务普通read/helper；辅助Hook本身已退出宿主注册，
+        # 即使旧进程仍持有曾用pin也不继续注入提醒，更不因此重新启用项目。
+        raise RuntimeBridgeError("停用项目不执行辅助Hook")
+    selected = store.validate_binding(record["runtime_binding"] if unpinned else binding)
+    scoped_reader = None
+    if reader is not None:
+        if not isinstance(reader, store.CoreReadSession):
+            raise RuntimeBridgeError("Hook 拒绝未知核心 reader")
+        reader.core_for(reader.core.binding(), state)
+        if reader.core.binding() == selected:
+            scoped_reader = reader
+        else:
+            from manager.runtime_policy import current_snapshot
+            _, current = current_snapshot(state)
+            if not unpinned or current is None:
+                raise RuntimeBridgeError("Hook reader 不属于目标固定版本")
+            # 只有真实current控制器与项目固定旧版本不同才允许双会话；任意
+            # 其他版本的reader仍明确拒绝，不能借这个分支静默fallback。
+            reader.core_for(current["runtime_binding"], state)
+        # current控制器与项目固定旧版本可能不同；这时明确为目标版本建立新
+        # 会话，current会话继续由外层持有。绝不把外层对象冒充旧pin的证明。
+    with _runtime_context(state, project, binding=selected, new_task=unpinned,
+                          reader=scoped_reader) as (context, source):
+        relative = "lib/workflow_hooks.py"
+        body = source.read(context.core, relative)
+        # 新接口只接受明确声明数据响应入口的固定Hook；旧自包含脚本缺能力
+        # 时安全拒绝，不先执行它的顶层代码，更不猜一个current替代其版本。
+        if not any(isinstance(node, ast.FunctionDef) and node.name == "command_response"
+                   for node in ast.parse(body).body):
+            raise RuntimeBridgeError("固定核心不支持单调用栈Hook")
+        if context.core.root != Path(__file__).resolve().parents[1]:
+            # 控制器和目标pin不同，进程内lib已属于控制器，不能让旧Hook借用
+            # 新解析器/平台依赖。复用既有精确helper与Job/进程组启动目标解释器，
+            # 父会话继续持有并在结束时重验；不向child传reader或跳验标记。
+            from lib.install.install_process import capture_process, SetupRunError
+            invocation = python_helper(state, project, relative, arguments, binding=selected, reader=source)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeBridgeError("Hook 预算已耗尽，未启动目标版本")
+            try:
+                captured = capture_process(list(invocation.command), env=invocation.environment,
+                                           body=payload, timeout=remaining)
+            except (OSError, subprocess.SubprocessError, SetupRunError) as exc:
+                # 进程拥有者已按原合同回收子树；这里只把有限捕获失败交给最外
+                # Hook边界转中性，不吞中断、不回显目标脚本或payload的错误原文。
+                raise RuntimeBridgeError("固定目标Hook未完成") from exc
+            if captured.returncode != 0:
+                raise RuntimeBridgeError("固定目标Hook执行失败")
+            result = unique_json(captured.stdout)
+            if not isinstance(result, dict):
+                raise RuntimeBridgeError("固定Hook返回了未知响应类型")
+            return result
+        namespace = {"__name__": "_workflow_hook_response", "__file__": str(context.core.root / relative),
+                     "__package__": "lib"}
+        exec(compile(body, namespace["__file__"], "exec"), namespace)
+        command_response = namespace.get("command_response")
+        if not callable(command_response):
+            raise RuntimeBridgeError("固定核心不支持单调用栈Hook")
+        result = command_response(arguments, payload, project=context.project_root)
+        if not isinstance(result, dict):
+            raise RuntimeBridgeError("固定Hook返回了未知响应类型")
+        return result
 
 
 def resolve_runtime(state: Path, project: Path, *, binding: dict | None = None,
@@ -215,12 +307,14 @@ def helper_path(state: Path, project: Path, logical_path: str, *, binding: dict 
 
 
 def python_helper(state: Path, project: Path, logical_path: str, args: tuple | list = (), *,
-                  binding: dict | None = None, new_task: bool = False) -> HelperInvocation:
+                  binding: dict | None = None, new_task: bool = False, reader=None) -> HelperInvocation:
     """使用调用桥时已选择的受支持 Python，并为独立 helper 导出明确三根与 pin。
 
     薄入口沿既有 python_runtime.sh 选择解释器；这里只沿用 sys.executable，不
     硬编码 system python3 或旧 Homebrew keg。环境 pin 在每次 helper 执行时
     都重新生成；用户全局 PATH、模型、权限、MCP 与凭据不被改写或投影输出。
+    reader仅供同一父调用栈的只读准备复用，默认仍新建会话；返回值不携带
+    reader，也不向child传跳验标志，目标解释器仍经过既有精确脚本启动边界。
     """
     if (not isinstance(args, (tuple, list)) or not all(isinstance(arg, str) for arg in args)
             or any("\x00" in arg for arg in args)):
@@ -228,7 +322,8 @@ def python_helper(state: Path, project: Path, logical_path: str, args: tuple | l
     relative = logical_path.removeprefix(".agent-workflow/")
     # 即使调用方忘了声明 new_task，统一任务初始化入口也不能绕过 enabled 门。
     initializes = helper_creates_task(relative, args)
-    with _runtime_context(state, project, binding=binding, new_task=new_task or initializes) as (context, reader):
+    with _runtime_context(state, project, binding=binding, new_task=new_task or initializes,
+                          reader=reader) as (context, reader):
         relative_path(relative)
         if not relative.startswith("lib/") or not relative.endswith(".py"):
             raise RuntimeBridgeError("Python helper 必须位于固定核心的 lib 目录")
