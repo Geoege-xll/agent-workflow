@@ -29,6 +29,7 @@ MAX_RECORD_BYTES = 4 * 1024 * 1024
 BACKUP_ID = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
 
 
+@runtime_store.read_operation
 def validate_runtime(runtime: Path, *, state: Path | None = None) -> None:
     """只读验证实际中央绑定；旧自包含残留不能冒充当前中央安装。
 
@@ -56,6 +57,7 @@ def ensure_source(catalog: Catalog, project: Path) -> None:
         raise ValueError("模型来源或能力已变化；草稿已保留，请刷新并重新选择后再应用")
 
 
+@runtime_store.read_operation
 def roles(project: Path, host: str, *, state: Path | None = None, native_context=None) -> list[str]:
     """角色可用性来自当前绑定宿主与已验证画像，稀疏角色不以文件存在判定。"""
     if host not in LOCATIONS:
@@ -95,6 +97,7 @@ def role_path(project: Path, host: str, role: str) -> Path:
     return state_files.secure_path(project, f"{directory}/{role}{suffix}")
 
 
+@runtime_store.read_operation
 def role_settings(project: Path, host: str, role: str, *, state: Path | None = None, native_context=None) -> dict[str, str]:
     raw = read_file(role_path(project, host, role))
     if raw is not None:
@@ -227,6 +230,7 @@ def _reserve_backup_capacity(record: dict,changes,project: Path,versions_relativ
     record_payload({**record,"status":"rolled_back","previous_files":versions,"retained_files":retained})
 
 
+@runtime_store.read_operation
 def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog | None, expected: dict | None = None,
             *, state: Path | None = None, global_preferences: dict | None = None,
             persist: bool = True, native_context=None, metadata_roles: tuple = ()) -> list[Change]:
@@ -321,6 +325,7 @@ def prepare(project: Path, host: str, choices: dict[str, dict], catalog: Catalog
     return changes
 
 
+@runtime_store.read_operation
 def check(project: Path, host: str | None = None, *, state: Path | None = None) -> str:
     """只读验证当前中央受管资源，不执行 setup 或安装转换。
 

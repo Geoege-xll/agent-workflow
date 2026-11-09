@@ -95,6 +95,41 @@ class RolePreferencesTest(unittest.TestCase):
         catalogs = preferences.load_catalogs(self.state, project, host)
         return preferences.preview(self.state, project, host, changes, catalogs, expected)
 
+    def test_preview_proves_each_pin_once_and_never_retains_live_reader(self):
+        """真实项目/全局预览同根共用证明，第二实际pin必须另扫；Plan不能持活reader。"""
+        first = self.project("first")
+        second = self.project("second")
+        choices = {"xy-backend": {"model": "fixture-model", "effort": "max"}}
+        for project in (first, None):
+            catalogs = preferences.load_catalogs(self.state, project, "codex")
+            before = {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+                      for root in (first, second, self.home) for path in root.rglob("*")
+                      if path.is_file() and not path.is_symlink()}
+            with patch.object(runtime_store, "_scan", wraps=runtime_store._scan) as scan, \
+                    patch.object(runtime_store, "_verify_snapshot", wraps=runtime_store._verify_snapshot) as verify:
+                plan = preferences.preview(self.state, project, "codex", choices, catalogs)
+            self.assertTrue(plan.summary["can_apply"], plan.summary)
+            self.assertEqual((1, 2), (scan.call_count, verify.call_count))
+            self.assertIsNone(runtime_store._READ_OPERATION.get())
+            self.assertEqual(before, {str(path): (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+                                     for root in (first, second, self.home) for path in root.rglob("*")
+                                     if path.is_file() and not path.is_symlink()})
+        # 第二版仍由真实import/use生产者发布，不手写binding或用mock假装跨pin。
+        alternate_root = self.case / "alternate"
+        alternate_root.mkdir()
+        source = fixtures.CentralCliIntegrationTest.create_source(alternate_root)
+        (source / "product/WORKFLOW.md").write_bytes(b"# alternate operation fixture\n")
+        alternate = runtime_store.import_core(source, self.state)
+        project_service.apply_project(project_service.preview_project(
+            self.state, second, "use", content_id=alternate.content_id))
+        catalogs = preferences.load_catalogs(self.state, None, "codex")
+        with patch.object(runtime_store, "_scan", wraps=runtime_store._scan) as scan, \
+                patch.object(runtime_store, "_verify_snapshot", wraps=runtime_store._verify_snapshot) as verify:
+            plan = preferences.preview(self.state, None, "codex", choices, catalogs)
+        self.assertTrue(plan.summary["can_apply"], plan.summary)
+        self.assertEqual((2, 4), (scan.call_count, verify.call_count))
+        self.assertIsNone(runtime_store._READ_OPERATION.get())
+
     def save(self, project, changes, host="codex"):
         plan = self.plan(project, changes, host)
         self.assertTrue(plan.summary["can_apply"], plan.summary)
@@ -1078,6 +1113,28 @@ class RolePreferencesTest(unittest.TestCase):
                     app.draw()
                 self.assertEqual(calls(), before, "普通绘制不得启动或补跑原生目录")
 
+            def refused_preview():
+                # 新UI沿真实executor预览：本地stamp失效抛来源错误，服务来源
+                # 失效形成明确model-catalog冲突。二者都必须结算且不可应用，
+                # 不能把仍在busy或任意其它error当成原授权守卫已通过。
+                self.assertIsNotNone(app.future, app.toast)
+                try:
+                    plan = app.future.result(timeout=20)
+                except ValueError as failure:
+                    self.assertIn("来源", str(failure))
+                    app.poll_job()
+                    self.assertEqual(app.modal, "error", app.text)
+                    self.assertIn("来源", app.text)
+                else:
+                    app.poll_job()
+                    self.assertEqual(app.modal, "preview", app.toast)
+                    self.assertFalse(plan.summary["can_apply"])
+                    self.assertTrue(any(row["path"] == "model-catalog" and "来源" in row["reason"]
+                                        for row in plan.summary["conflicts"]), plan.summary)
+                self.assertIsNone(app.future)
+                app.dispatch("esc")
+                self.assertIsNone(app.modal)
+
             def choose(value):
                 options = app.options()
                 position = next(index for index, (_, item) in enumerate(options) if item == value)
@@ -1116,6 +1173,7 @@ class RolePreferencesTest(unittest.TestCase):
             self.assertEqual(app.pending(), {"xy-backend": {"model": "fixture-model", "effort": "max"}})
             draw_without_native()
             app.dispatch("s")
+            settle()
             self.assertEqual(app.modal, "preview", app.toast)
             self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
             self.assertEqual({row["project"] for row in app.preference_plan.summary["affected_projects"]},
@@ -1146,8 +1204,8 @@ class RolePreferencesTest(unittest.TestCase):
             native_config.write_text('model="fixture-model"\nmodel_provider="external-provider"\n')
             before_refusal = calls()
             app.dispatch("s")
+            refused_preview()
             self.assertIsNone(app.modal)
-            self.assertIn("来源", app.toast)
             draw_without_native()
             app.dispatch("r")
             settle()
@@ -1160,8 +1218,8 @@ class RolePreferencesTest(unittest.TestCase):
             app.dispatch("esc")
             after_explicit_reload = calls()
             app.dispatch("s")
+            refused_preview()
             self.assertIsNone(app.modal)
-            self.assertIn("来源", app.toast)
             self.assertEqual(calls(), after_explicit_reload)
             self.assertEqual(app.expected[key], original_expected)
             self.assertEqual(app.source_stamps[key], original_stamp)
@@ -1223,6 +1281,27 @@ class RolePreferencesTest(unittest.TestCase):
                     app.draw()
                 self.assertFalse((self.home / "native-pid").exists(), "Claude 本地绘制/预览/守卫不得调用 native")
 
+            def refused_preview():
+                # 与正式异步入口同一future/回调结算，仍严格要求对应的来源或
+                # model-catalog冲突，随后保持原草稿、来源stamp和落盘字节断言。
+                self.assertIsNotNone(app.future, app.toast)
+                try:
+                    plan = app.future.result(timeout=20)
+                except ValueError as failure:
+                    self.assertIn("来源", str(failure))
+                    app.poll_job()
+                    self.assertEqual(app.modal, "error", app.text)
+                    self.assertIn("来源", app.text)
+                else:
+                    app.poll_job()
+                    self.assertEqual(app.modal, "preview", app.toast)
+                    self.assertFalse(plan.summary["can_apply"])
+                    self.assertTrue(any(row["path"] == "model-catalog" and "来源" in row["reason"]
+                                        for row in plan.summary["conflicts"]), plan.summary)
+                self.assertIsNone(app.future)
+                app.dispatch("esc")
+                self.assertIsNone(app.modal)
+
             def choose(value):
                 position = next(index for index, (_, item) in enumerate(app.options()) if item == value)
                 app.dispatch("home")
@@ -1244,6 +1323,7 @@ class RolePreferencesTest(unittest.TestCase):
 
             def save_pending():
                 app.dispatch("s")
+                settle()
                 self.assertEqual(app.modal, "preview", app.toast)
                 self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
                 draw_without_native()
@@ -1269,6 +1349,7 @@ class RolePreferencesTest(unittest.TestCase):
             before = {project: service.role_path(project, "claude", "xy-backend").read_bytes()
                       for project in (first, second)}
             app.dispatch("s")
+            settle()
             self.assertEqual(app.modal, "preview", app.toast)
             self.assertTrue(app.preference_plan.summary["can_apply"], app.preference_plan.summary)
             self.assertEqual({row["project"] for row in app.preference_plan.summary["affected_projects"]},
@@ -1317,6 +1398,7 @@ class RolePreferencesTest(unittest.TestCase):
             os.environ.update(ANTHROPIC_MODEL="masked-shell-changed", ANTHROPIC_BASE_URL="masked-shell-endpoint",
                               ANTHROPIC_DEFAULT_OPUS_MODEL="masked-shell-opus", CLAUDE_CODE_USE_VERTEX="0")
             app.dispatch("s")
+            settle()
             self.assertEqual(app.modal, "preview", app.toast)
             self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
             app.dispatch("esc")
@@ -1325,6 +1407,10 @@ class RolePreferencesTest(unittest.TestCase):
                     if changed_source == "sdk-endpoint":
                         # 上一分支结束已恢复文件，但缓存仍持有换源后的目录；显式
                         # 重开编辑只刷新显示，不续期原草稿，再用原来源形成真实预览。
+                        # 异步来源错误会清除显示资格；先沿真实r入口重新读取角色，
+                        # 不得把“角色已移除”的更早拒绝冒充后续SDK来源守卫。
+                        app.dispatch("r")
+                        settle()
                         app.dispatch("e")
                         settle()
                         app.dispatch("esc")
@@ -1332,6 +1418,7 @@ class RolePreferencesTest(unittest.TestCase):
                         # 先形成可应用的真实预览，再换源并确认，直接覆盖 apply 的
                         # 二次守卫；只在预览入口拒绝不足以证明这一竞态不会落盘。
                         app.dispatch("s")
+                        settle()
                         self.assertEqual(app.modal, "preview", app.toast)
                         self.assertTrue(app.preference_plan.summary["can_apply"], app.text)
                     changed = json.loads(json.dumps(settings))
@@ -1356,8 +1443,8 @@ class RolePreferencesTest(unittest.TestCase):
                         app.dispatch("esc")
                         self.assertIsNone(app.modal, "失败不得复活已失效的确认页")
                     app.dispatch("s")
+                    refused_preview()
                     self.assertIsNone(app.modal)
-                    self.assertIn("来源", app.toast)
                     draw_without_native()
                     app.dispatch("r")
                     settle()
@@ -1367,8 +1454,8 @@ class RolePreferencesTest(unittest.TestCase):
                     self.assertNotEqual(app.catalog().stamp, original_stamp)
                     app.dispatch("esc")
                     app.dispatch("s")
+                    refused_preview()
                     self.assertIsNone(app.modal)
-                    self.assertIn("来源", app.toast)
                     self.assertEqual(app.expected[key], original_expected)
                     self.assertEqual(app.source_stamps[key], original_stamp)
                     self.assertEqual(app.drafts[key], original_draft)

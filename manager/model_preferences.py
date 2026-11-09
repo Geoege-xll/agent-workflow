@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import uuid
 
-from lib import role_models
+from lib import role_models, runtime_store
 from lib.central import role_preferences
 from lib.central.runtime_project import CAPACITY_IDENTITY, CONFIG, Node, Tree, absolute_directory, json_bytes, skill_parts, move_at, read_at, delete_at
 from . import project_service, service, runtime_service, runtime_state, state_files, native_agents
@@ -80,12 +80,14 @@ def _registered(state: Path) -> tuple[Node, tuple[Path, ...]]:
     return node, tuple(sorted(paths, key=str))
 
 
+@runtime_store.read_operation
 def roles(state: Path, project: Path | None, host: str, *, native_context=None) -> list[str]:
     if host not in role_models.HOSTS:
         raise ValueError("未知平台")
     return sorted(role_models.ROLES) if project is None else service.roles(state_files.project_path(project), host, state=state, native_context=native_context)
 
 
+@runtime_store.read_operation
 def view(state, project, host, role) -> dict:
     """纯读取有效值和字段来源；明确 inherit 的来源为 host，覆盖仍保留在 overrides。"""
     state = state_files.state_root(state)
@@ -112,6 +114,7 @@ def _view(defaults, choices, host, role, project, global_node, config, native, m
                          "binding": role_preferences.revision(machine)}}
 
 
+@runtime_store.read_operation
 def load_context(state: Path, project: Path | None, host: str, *,
                  catalogs: PreferenceCatalogs | None = None, native_context=None) -> PreferenceContext:
     """只读角色、来源和 reset 跟随值，绝不发现目录或启动原生宿主。
@@ -164,6 +167,7 @@ def _discover(host, *, project=None, _snapshot=None, native_context=None):
     return discover(host, home=paths.home, project=project, env=environment, _snapshot=_snapshot)
 
 
+@runtime_store.read_operation
 def _active_projects(state: Path, host: str, *, native_context=None) -> tuple[Node, tuple[Path, ...]]:
     registry, projects = _registered(state)
     active = []
@@ -177,6 +181,7 @@ def _active_projects(state: Path, host: str, *, native_context=None) -> tuple[No
     return registry, tuple(active)
 
 
+@runtime_store.read_operation
 def load_catalogs(state: Path, project: Path | None, host: str, *, native_context=None) -> PreferenceCatalogs:
     """仅显式编辑/刷新调用：固定整个批次后逐范围查询，最后发布一致快照。"""
     state = state_files.state_root(state)
@@ -230,6 +235,7 @@ def load_catalogs(state: Path, project: Path | None, host: str, *, native_contex
                               (str(state), str(project) if project else None, host), registry)
 
 
+@runtime_store.read_operation
 def check_catalogs(state: Path, project: Path | None, host: str,
                    catalog: Catalog | PreferenceCatalogs, *, native_context=None) -> bool:
     """只读失效检查，不启动 native；False 要求用户重新进入编辑/刷新后重选。"""
@@ -271,6 +277,7 @@ class _Observation:
     directories: tuple
 
 
+@runtime_store.read_operation
 def _observe(state: Path, project: Path) -> tuple[_Observation, dict | None]:
     project = state_files.project_path(project)
     machine, record = runtime_service.read_binding_record(state, project)
@@ -289,6 +296,7 @@ def _observe(state: Path, project: Path) -> tuple[_Observation, dict | None]:
     return _Observation(project, config, machine, journal, observed, directories), record
 
 
+@runtime_store.read_operation
 def _check_observation(state: Path, before: _Observation) -> None:
     current, _ = _observe(state, before.project)
     if current != before:
@@ -397,6 +405,7 @@ def _edit(choices: dict, host: str, edits: dict) -> dict:
     return updated
 
 
+@runtime_store.read_operation
 def preview(state, project, host, choices, catalog, expected=None, *, native_context=None, _reset=False) -> ModelPreferencePlan:
     """只读构建全部目标；普通保存不发现新目录，不创建锁、备份或配置文件。"""
     state = state_files.state_root(state)
@@ -479,6 +488,7 @@ def preview(state, project, host, choices, catalog, expected=None, *, native_con
                                catalog, tuple(targets), json_bytes(summary), native_context, global_native)
 
 
+@runtime_store.read_operation
 def _guard(plan: ModelPreferencePlan) -> None:
     if role_preferences.snapshot(plan.state)[0] != plan.global_before:
         raise ValueError("全局角色偏好在预览后变化，请重新预览")

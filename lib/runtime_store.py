@@ -7,14 +7,17 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePath
 import re
 import stat
 import sys
+import threading
 import uuid
 
 if __package__:
@@ -72,6 +75,18 @@ def state_root(raw: str | Path | None = None) -> Path:
     if not isinstance(value, (str, Path)) or not str(value):
         raise RuntimeStoreError("中央状态目录必须是非空路径")
     return Path(value).expanduser().absolute()
+
+
+def absolute_path_key(path: PurePath) -> str:
+    """仅把已绝对化定位转为不折叠字面的键，不替代实际打开/identity/ACL证明。
+
+    WindowsPath默认相等/哈希会折叠大小写，但NTFS的大小写敏感父目录可让
+    State/state成为两个实体。这里不resolve、casefold或认定任何物理别名；
+    不同拼写保守独立验证或拒用，即使在其它文件系统上它们可能指向同一实体。
+    """
+    if not isinstance(path, PurePath) or not path.is_absolute():
+        raise RuntimeStoreError("核心根归属比较只接受绝对路径定位")
+    return str(path)
 
 
 def validate_binding(binding: dict) -> dict:
@@ -165,7 +180,7 @@ def _check_directory(info, display: str, *, frozen: bool = False) -> None:
 
 
 @contextmanager
-def _child_directory(parent: int, name: str, *, frozen: bool = False):
+def _child_directory(parent: int, name: str, *, frozen: bool = False, checkpoints=None):
     _component(name)
     before = os.stat(name, dir_fd=parent, follow_symlinks=False)
     _check_directory(before, name, frozen=frozen)
@@ -173,16 +188,20 @@ def _child_directory(parent: int, name: str, *, frozen: bool = False):
     try:
         if _node_identity(os.fstat(descriptor)) != _node_identity(before):
             raise RuntimeStoreError(f"核心目录在打开时被替换：{name}")
+        def check():
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if _node_identity(current) != _node_identity(before):
+                raise RuntimeStoreError(f"核心目录在操作期间被替换：{name}")
+        if checkpoints is not None:
+            checkpoints.append(check)
         yield descriptor
-        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if _node_identity(current) != _node_identity(before):
-            raise RuntimeStoreError(f"核心目录在操作期间被替换：{name}")
+        check()
     finally:
         os.close(descriptor)
 
 
 @contextmanager
-def _absolute_directory(path: Path, *, create: bool = False):
+def _absolute_directory(path: Path, *, create: bool = False, checkpoints=None):
     """逐段锚定绝对路径；先拒绝祖先链接，再允许在已锚定父目录内创建。"""
     path = Path(path).expanduser().absolute()
     if ".." in path.parts:
@@ -210,10 +229,14 @@ def _absolute_directory(path: Path, *, create: bool = False):
                 raise RuntimeStoreError("核心路径在打开期间被替换")
             links.append((descriptor, name, _node_identity(before)))
             descriptor = child
+        def check():
+            for parent, name, expected in links:
+                if _node_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != expected:
+                    raise RuntimeStoreError("核心路径祖先在操作期间被替换")
+        if checkpoints is not None:
+            checkpoints.append(check)
         yield descriptor
-        for parent, name, expected in links:
-            if _node_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) != expected:
-                raise RuntimeStoreError("核心路径祖先在操作期间被替换")
+        check()
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
@@ -432,9 +455,10 @@ def inspect_core(source_root: Path) -> dict:
 
 
 @contextmanager
-def _validated_entry(version: Path, binding: dict, *, snapshot: dict | None = None):
+def _validated_entry(version: Path, binding: dict, *, snapshot: dict | None = None, checkpoints=None):
     """保持祖先及核心目录锚定，完整验证后才把描述符交给读取操作。"""
-    with _absolute_directory(version) as root:
+    path_checks = []
+    with _absolute_directory(version, checkpoints=path_checks) as root:
         version_info = os.fstat(root)
         version_identity = (*_identity(version_info), *_security(root))
         _check_directory(version_info, str(version), frozen=True)
@@ -447,7 +471,7 @@ def _validated_entry(version: Path, binding: dict, *, snapshot: dict | None = No
         if hashlib.sha256(raw).hexdigest() != binding["manifest_sha256"]:
             raise RuntimeStoreError("核心原始清单摘要不匹配，版本已损坏")
         manifest = _validate_manifest(raw)
-        with _child_directory(root, "core", frozen=True) as core:
+        with _child_directory(root, "core", frozen=True, checkpoints=path_checks) as core:
             directories, files, identities = _scan(core, source=False)
             # Windows 没有 POSIX 可执行位，保留源清单里的执行需求供桥接器使用。
             if os.name == "nt":
@@ -463,16 +487,22 @@ def _validated_entry(version: Path, binding: dict, *, snapshot: dict | None = No
                 # 只把本次已验实际见证交给显式短生命周期 reader；不是持久化
                 # 元数据或正文缓存，原两元素 yield 和普通 reader 合同保持。
                 snapshot.update(identities)
+            def check():
+                # checkpoint与正常退出共用同一完整证明，包含外层目录锚定；
+                # 不能仅重验快照而遗漏被换名的state/version/manifest入口。
+                if set(os.listdir(root)) != {"core", "manifest.json"}:
+                    raise RuntimeStoreError("核心版本目录的节点集合在验证期间变化")
+                if _entry_identity(root, "manifest.json", os.stat("manifest.json", dir_fd=root, follow_symlinks=False)) != manifest_identity:
+                    raise RuntimeStoreError("核心清单在验证期间变化")
+                if (*_identity(os.fstat(root)), *_security(root)) != version_identity:
+                    raise RuntimeStoreError("核心版本目录在验证期间变化")
+                _verify_snapshot(core, identities)
+                for path_check in path_checks:
+                    path_check()
+            if checkpoints is not None:
+                checkpoints.append(check)
             yield core, manifest
-            # 清单先于内容读取；结束时再次核对其身份及整个快照，避免一次读取中
-            # 前后看到两种版本仍返回成功。操作结束后的主动同用户篡改不在防护承诺内。
-            if set(os.listdir(root)) != {"core", "manifest.json"}:
-                raise RuntimeStoreError("核心版本目录的节点集合在验证期间变化")
-            if _entry_identity(root, "manifest.json", os.stat("manifest.json", dir_fd=root, follow_symlinks=False)) != manifest_identity:
-                raise RuntimeStoreError("核心清单在验证期间变化")
-            if (*_identity(os.fstat(root)), *_security(root)) != version_identity:
-                raise RuntimeStoreError("核心版本目录在验证期间变化")
-            _verify_snapshot(core, identities)
+            check()
 
 
 def _binding(content_id: str) -> dict:
@@ -483,6 +513,9 @@ def _binding(content_id: str) -> dict:
 def load_core(binding: dict, state: Path | None = None) -> FrozenCore:
     """只从固定机器内容库加载 pin；未知或损坏版本立即失败，不寻找最新版。"""
     binding = validate_binding(binding)
+    operation = _active_operation()
+    if operation is not None:
+        return operation.reader(binding, state).core
     version = state_root(state) / "runtimes" / binding["content_id"]
     try:
         with _validated_entry(version, binding) as (_, manifest):
@@ -500,28 +533,38 @@ class CoreReadSession:
     对象即使被调用者保留，关闭后也不能继续使用或静默回退到别的版本。
     """
 
-    def __init__(self, core, root, manifest, snapshot):
+    def __init__(self, core, root, manifest, snapshot, checkpoint=None):
         self._core, self._root = core, root
         self._records = {row["path"]: row for row in manifest["files"]}
         self._snapshot = snapshot
+        self._checkpoint = checkpoint
+        self._owner = (os.getpid(), threading.get_ident())
 
     @property
     def core(self):
         if self._root is None:
             raise RuntimeStoreError("核心读取会话已经关闭")
+        if self._owner != (os.getpid(), threading.get_ident()):
+            raise RuntimeStoreError("核心读取会话不能跨进程或线程使用")
+        _check_store_aliases()
         return self._core
 
     def core_for(self, binding: dict, state: Path | None = None) -> FrozenCore:
         binding = validate_binding(binding)
         core = self.core
         if (core.binding() != binding
-                or core.root != state_root(state) / "runtimes" / binding["content_id"] / "core"):
+                or absolute_path_key(core.root) != absolute_path_key(state_root(state) / "runtimes" / binding["content_id"] / "core")):
             raise RuntimeStoreError("核心读取会话不属于请求的固定版本或机器状态")
         return core
 
+    def contains(self, logical_path: str) -> bool:
+        """仅查询已验清单是否有静态能力来源；缺成员不等于忽略损坏文件。"""
+        self.core
+        return _logical_path(logical_path, alias=True) in self._records
+
     def read(self, core: FrozenCore, logical_path: str) -> bytes:
         _source_binding(core)
-        if core != self.core:
+        if _core_location_key(core) != _core_location_key(self.core):
             raise RuntimeStoreError("核心读取会话与请求的定位值不一致")
         relative = _logical_path(logical_path, alias=True)
         record = self._records.get(relative)
@@ -533,24 +576,158 @@ class CoreReadSession:
         self._root = None
         self._records.clear()
         self._snapshot.clear()
+        self._checkpoint = None
+
+    def checkpoint(self):
+        """在本次作用域内重验完整证明；不刷新基线、不把漂移接受为新状态。"""
+        self.core
+        if self._checkpoint is None:
+            raise RuntimeStoreError("核心读取会话没有活跃完整证明")
+        self._checkpoint()
 
 
 @contextmanager
 def core_reader(binding: dict, state: Path | None = None):
-    """显式作用域内复用一次完整核心证明；不设全局/ContextVar/跨调用缓存。"""
+    """默认独立fresh；仅显式operation内借同一强租约，不缓存正文或跨调用。"""
+    operation = _active_operation()
+    if operation is not None:
+        yield operation.reader(binding, state)
+        return
+    with _independent_core_reader(binding, state) as reader:
+        yield reader
+
+
+@contextmanager
+def _independent_core_reader(binding, state):
+    """唯一开新证明的实现，operation调用它而不递归进入借用分支。"""
     binding = validate_binding(binding)
     version = state_root(state) / "runtimes" / binding["content_id"]
     snapshot = {}
+    checkpoints = []
     try:
-        with _validated_entry(version, binding, snapshot=snapshot) as (root, manifest):
+        with _validated_entry(version, binding, snapshot=snapshot, checkpoints=checkpoints) as (root, manifest):
             reader = CoreReadSession(FrozenCore(binding["content_id"], binding["manifest_sha256"],
-                                                version / "core", manifest["label"]), root, manifest, snapshot)
+                                                version / "core", manifest["label"]), root, manifest, snapshot, checkpoints[0])
             try:
                 yield reader
             finally:
                 reader._close()
     except FileNotFoundError as exc:
         raise RuntimeStoreError(f"固定核心版本缺失：{binding['content_id']}") from exc
+
+
+_READ_OPERATION = ContextVar("workflow_core_read_operation", default=None)
+# 固定创建本模块时的对象；不能在检查时从已被替换的sys.modules取“自己”，
+# 否则替换canonical键本身会被误认作合法owner。
+_STORE_MODULE = sys.modules[__name__]
+
+
+def _check_store_aliases():
+    # ContextVar只属于这一个已选模块。重复导入同一文件也不是同一个强租约，
+    # 不得覆盖已有模块或假装两个模块各自的缓存能组成完整证明。
+    owner = _STORE_MODULE
+    if (sys.modules.get(__name__) is not owner
+            or any(sys.modules.get(name, owner) is not owner for name in ("lib.runtime_store", "runtime_store"))):
+        raise RuntimeStoreError("核心存储模块别名身份冲突")
+
+
+def _active_operation():
+    _check_store_aliases()
+    operation = _READ_OPERATION.get()
+    if operation is not None:
+        operation._check()
+    return operation
+
+
+class CoreReadOperation:
+    """只拥有本次同步调用的reader，不保存业务状态、不授权执行或写入。
+
+    每个实际根和完整pin各持一份锚定证明；成员仍fresh打开并验hash/ACL。
+    finish先完成所有退出验证再永久撤销reader，不能在封口后偷偷重开。
+    """
+
+    def __init__(self):
+        self._owner = (os.getpid(), threading.get_ident())
+        self._stack = ExitStack()
+        self._readers = {}
+        self._closed = False
+
+    def _check(self):
+        _check_store_aliases()
+        if (self._closed or _READ_OPERATION.get() is not self
+                or self._owner != (os.getpid(), threading.get_ident())):
+            raise RuntimeStoreError("核心操作租约已关闭或不属于本进程/线程")
+
+    def reader(self, binding, state=None):
+        self._check()
+        binding = validate_binding(binding)
+        root = state_root(state)
+        key = (absolute_path_key(root), binding["protocol_version"], binding["content_id"], binding["manifest_sha256"])
+        if key not in self._readers:
+            self._readers[key] = self._stack.enter_context(_independent_core_reader(binding, root))
+        reader = self._readers[key]
+        # core_for同时保留原实际根/完整pin一致性检查，不能接受任意FrozenCore。
+        reader.core_for(binding, root)
+        return reader
+
+    def checkpoint(self):
+        self._check()
+        for reader in self._readers.values():
+            reader.checkpoint()
+
+    def finish(self):
+        self._check()
+        try:
+            self._stack.close()
+        finally:
+            self._closed = True
+            self._readers.clear()
+
+    def _abort(self, failure):
+        if not self._closed:
+            try:
+                self._stack.__exit__(type(failure), failure, failure.__traceback__)
+            finally:
+                self._closed = True
+                self._readers.clear()
+
+
+@contextmanager
+def core_read_operation():
+    """显式只读入口拥有scope；嵌套纯读取借用它，退出绝不泄漏到下一次调用。"""
+    existing = _active_operation()
+    if existing is not None:
+        yield existing
+        return
+    _check_store_aliases()
+    operation = CoreReadOperation()
+    token = _READ_OPERATION.set(operation)
+    try:
+        try:
+            yield operation
+            if not operation._closed:
+                operation.finish()
+        except BaseException as failure:
+            operation._abort(failure)
+            raise
+    finally:
+        _READ_OPERATION.reset(token)
+
+
+def finish_read_operation():
+    """仅供最后发布边界封口；没有operation时保留普通发布的原合同。"""
+    operation = _active_operation()
+    if operation is not None:
+        operation.finish()
+
+
+def read_operation(function):
+    """只装饰明确只读/纯guard入口；不可把通用apply/commit套成长写scope。"""
+    @wraps(function)
+    def scoped(*args, **kwargs):
+        with core_read_operation():
+            return function(*args, **kwargs)
+    return scoped
 
 
 def list_cores(state: Path | None = None) -> list[dict]:
@@ -591,6 +768,13 @@ def _source_binding(core: FrozenCore) -> dict:
     return binding
 
 
+def _core_location_key(core: FrozenCore) -> tuple:
+    """单/批读共用定位守卫；FrozenCore普通dataclass相等不作为根归属证明。"""
+    binding = _source_binding(core)
+    return (binding["protocol_version"], binding["content_id"], binding["manifest_sha256"],
+            absolute_path_key(core.root), core.label)
+
+
 def _read_manifest_source(root: int, relative: str, record: dict, *, expected=None) -> bytes:
     # _read_regular 保留同句柄前后 identity/security、普通文件/单链接与
     # 原读取上限；外层 _validated_entry 仍在退出时复核整个核心快照。
@@ -607,6 +791,9 @@ def read_core_source(core: FrozenCore, logical_path: str) -> bytes:
     """仅读取完整验证清单中的规范路径，支持一次精确 .agent-workflow/ 别名。"""
     binding = _source_binding(core)
     relative = _logical_path(logical_path, alias=True)
+    operation = _active_operation()
+    if operation is not None:
+        return operation.reader(binding, core.root.parents[2]).read(core, relative)
     try:
         with _validated_entry(core.root.parent, binding) as (root, manifest):
             if core.label != manifest["label"]:
@@ -631,6 +818,14 @@ def read_core_sources(core: FrozenCore, logical_paths: tuple[str, ...]) -> dict[
     relatives = tuple(_logical_path(path, alias=True) for path in logical_paths)
     if len(set(relatives)) != len(relatives):
         raise RuntimeStoreError("核心批读不能重复或用别名重复同一成员")
+    operation = _active_operation()
+    if operation is not None:
+        reader = operation.reader(binding, core.root.parents[2])
+        if _core_location_key(core) != _core_location_key(reader.core) or any(path not in reader._records for path in relatives):
+            raise RuntimeStoreError("核心批读定位值或清单成员无效")
+        if sum(reader._records[path]["size"] for path in relatives) > _SOURCE_BATCH_BYTES_LIMIT:
+            raise RuntimeStoreError("核心批读总正文超过既有读取预算")
+        return {path: reader.read(core, path) for path in relatives}
     try:
         with _validated_entry(core.root.parent, binding) as (root, manifest):
             if core.label != manifest["label"]:

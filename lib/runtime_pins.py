@@ -18,15 +18,84 @@ import json
 from contextlib import contextmanager
 import os
 from pathlib import Path, PurePosixPath
+import re
+import sys
 from typing import Any
 
+
+def _runner_preflight():
+    """只用stdlib检查启动三根和模块来源；这不是跳过child完整验证的凭据。"""
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("固定runner的pin含重复字段")
+            result[key] = value
+        return result
+    binding = json.loads(os.environ.get("AGENT_WORKFLOW_RUNTIME_BINDING", "null"), object_pairs_hook=unique)
+    if (not isinstance(binding, dict) or set(binding) != {"protocol_version", "content_id", "manifest_sha256"}
+            or type(binding["protocol_version"]) is not int or binding["protocol_version"] != 1
+            or not isinstance(binding["content_id"], str) or not re.fullmatch("[0-9a-f]{64}", binding["content_id"])
+            or binding["manifest_sha256"] != binding["content_id"]):
+        raise ValueError("固定runner需要原三字段pin")
+    if not all(os.environ.get(name) for name in ("AGENT_WORKFLOW_STATE_DIR", "AGENT_WORKFLOW_CORE_ROOT",
+                                                 "AGENT_WORKFLOW_PROJECT_ROOT", "AGENT_WORKFLOW_CONFIG_PATH")):
+        raise ValueError("固定runner缺少原桥三根")
+    state = Path(os.environ["AGENT_WORKFLOW_STATE_DIR"]).expanduser().absolute()
+    root = Path(__file__).absolute().parents[1]
+    project = Path(os.environ["AGENT_WORKFLOW_PROJECT_ROOT"]).absolute()
+    # 此阶段还不能import存储闭包；所有字段已按stdlib绝对化，再直接比较
+    # 不折叠的str tuple。不能用WindowsPath相等把真实State/state混为一根。
+    supplied = (str(root), str(Path(os.environ["AGENT_WORKFLOW_CORE_ROOT"]).absolute()),
+                str(Path(os.environ["AGENT_WORKFLOW_CONFIG_PATH"]).absolute()))
+    expected = (str(state / "runtimes" / binding["content_id"] / "core"), str(root),
+                str(project / ".agent-workflow/project.yaml"))
+    if supplied != expected:
+        raise ValueError("固定runner自身物理根与原pin/桥三根不一致")
+    # 固定script入口由全新generic helper解释器启动；此时只有stdlib。
+    # __file__可以被预存模块伪造，不能仅凭相同文件名借入任何先前lib对象。
+    # 正常包导入不运行此预检；扫描后的实际模块另由下面的来源检查约束。
+    if any(name == "lib" or name.startswith("lib.") or name in {"runtime_store", "runtime_pins"}
+           for name in sys.modules):
+        raise ValueError("固定runner拒绝预存核心模块或存储别名")
+    # 上方已经拒绝任何预存lib/store。此处无需调用空namespace来源检查；
+    # 真实模块导入后才用唯一store绝对字面键检查来源，保留原初读依赖方向。
+    return state, project, root, binding
+
+
+def _runner_module_sources(root):
+    """不能借已加载的current/业务cwd模块解析旧pin；不覆盖已有模块。"""
+    for name, module in tuple(sys.modules.items()):
+        if name == "lib" or name.startswith("lib.") or name in {"runtime_store", "runtime_pins"}:
+            relative = "lib/" + name + ".py" if "." not in name and name != "lib" else name.replace(".", "/")
+            if name == "lib" or getattr(module, "__path__", None) is not None:
+                relative += "/__init__.py"
+            elif not relative.endswith(".py"):
+                relative += ".py"
+            origin = getattr(module, "__file__", None)
+            if (not isinstance(origin, (str, Path))
+                    or store.absolute_path_key(Path(origin).absolute()) != store.absolute_path_key(root / relative)):
+                raise ValueError("固定runner发现不属于原core的已加载模块")
+
+
+_FIXED_RUNNER = __name__ == "__main__" and sys.argv[1:2] == ["--task-graph-operation"]
+if _FIXED_RUNNER:
+    try:
+        _RUNNER_CONTEXT = _runner_preflight()
+    except (OSError, ValueError, TypeError, KeyError) as failure:
+        print(json.dumps({"error": str(failure)}, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(2)
+
+# runner在stdlib预检之后只导入原generic边界已有的存储闭包；规范/宿主正文
+# 消费器延迟到child独立full scan之后。它不宣称拥有Hook专用的更强初读闭包。
 if __package__:
     from lib import runtime_store as store
-    from .standard_paths import BUILTIN_STANDARD_SOURCES, builtin_source_path
-    from lib.hosts.claude_instructions import read_file
 else:
-    import runtime_store as store
-    from standard_paths import BUILTIN_STANDARD_SOURCES, builtin_source_path
+    # standalone与package也必须使用同一存储模块，避免同进程内出现两份
+    # ContextVar/会话类型。物理核心根由上方自身__file__确定，非业务cwd。
+    from lib import runtime_store as store
+if not _FIXED_RUNNER:
+    from lib.standard_paths import BUILTIN_STANDARD_SOURCES, builtin_source_path
     from lib.hosts.claude_instructions import read_file
 
 
@@ -36,6 +105,8 @@ CONFIG_ENV = "AGENT_WORKFLOW_CONFIG_PATH"
 CORE_ENV = "AGENT_WORKFLOW_CORE_ROOT"
 CENTRAL_ADAPTER = ".agent-workflow/project.yaml"
 CENTRAL_MARKER = ".agent-workflow/runtime.json"
+# 仅声明固定runner的读取协议，不授予执行、写入、新任务或跳验权限。
+CORE_READ_OPERATION_PROTOCOL = 1
 
 
 class RuntimePinError(ValueError):
@@ -81,7 +152,8 @@ def project_root(root: Path | None = None) -> Path:
     supplied = os.environ.get(PROJECT_ENV)
     selected = Path(root) if root is not None else Path(supplied) if supplied else Path.cwd()
     selected = selected.resolve(strict=True)
-    if supplied is not None and Path(supplied).resolve(strict=True) != selected:
+    if (supplied is not None
+            and store.absolute_path_key(Path(supplied).resolve(strict=True)) != store.absolute_path_key(selected)):
         raise RuntimePinError("显式项目根与桥环境项目根不一致")
     if not selected.is_dir():
         raise RuntimePinError("项目根必须是实际存在的目录")
@@ -121,10 +193,12 @@ def record_binding(record: dict[str, Any], *, root: Path | None = None,
     # 复用其已锚定证明。错误版本/state/已关闭对象不能静默回退或接受环境根。
     core = reader.core_for(binding) if reader is not None else store.load_core(binding)
     supplied_core = os.environ.get(CORE_ENV)
-    if supplied_core is not None and Path(supplied_core).absolute() != core.root:
+    if (supplied_core is not None
+            and store.absolute_path_key(Path(supplied_core).absolute()) != store.absolute_path_key(core.root)):
         raise RuntimePinError("桥核心根与任务固定内容库版本不一致")
     supplied_config = os.environ.get(CONFIG_ENV)
-    if supplied_config is not None and Path(supplied_config).absolute() != selected_root / CENTRAL_ADAPTER:
+    if (supplied_config is not None and store.absolute_path_key(Path(supplied_config).absolute())
+            != store.absolute_path_key(selected_root / CENTRAL_ADAPTER)):
         raise RuntimePinError("桥配置路径不是当前项目的中央适配器")
     return binding
 
@@ -236,3 +310,59 @@ def resource_path(path: Path, root: Path) -> str | None:
     if parts[0] in store.CORE_DIRECTORIES or raw in store.SETUP_FILES:
         return raw
     return None
+
+
+def _run_fixed_graph(arguments):
+    """运行原pin/同字节CLI；只读输出等完整结束验证，写入由原publish封口。"""
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from types import ModuleType
+    state, project, root, binding = _RUNNER_CONTEXT
+    output = StringIO()
+    with store.core_read_operation() as operation:
+        reader = operation.reader(binding, state)
+        if store.absolute_path_key(reader.core.root) != store.absolute_path_key(root):
+            raise RuntimePinError("固定runner选择了其它物理核心")
+        _runner_module_sources(root)
+        # self校验不能替代上面的独立完整扫描。原main仅由本次reader读出的
+        # 同一份字节编译，不能校验后runpy重开CLI或导入当前版本来代替它。
+        reader.read(reader.core, "lib/runtime_pins.py")
+        record_binding({"runtime_binding": binding}, root=project, reader=reader)
+        body = reader.read(reader.core, "lib/task_graph_cli.py")
+        name = "lib.task_graph_cli"
+        if name in sys.modules:
+            raise RuntimePinError("固定runner拒绝已加载的CLI模块")
+        module = ModuleType(name)
+        module.__file__ = str(root / "lib/task_graph_cli.py")
+        module.__package__ = "lib"
+        sys.modules[name] = module
+        old_argv = sys.argv
+        try:
+            sys.argv = [module.__file__, *arguments]
+            with redirect_stdout(output):
+                try:
+                    exec(compile(body, module.__file__, "exec"), module.__dict__)
+                    # 使用原parser确认精确command；没有新增参数解释器/业务验证。
+                    parsed = module._parser().parse_args(arguments)
+                    if parsed.command not in {"validate", "ready", "update"}:
+                        raise RuntimePinError("固定runner只接受validate/ready/update")
+                    _runner_module_sources(root)
+                    code = module.main()
+                except SystemExit as completion:
+                    code = completion.code
+        finally:
+            sys.argv = old_argv
+    # update的原publish已在锁内finish；readonly在上方正常退出时finish。
+    # 原父进程也内存捕获stdout；此处不增加新的输入/输出容量或超时协议。
+    sys.stdout.write(output.getvalue())
+    return code
+
+
+if __name__ == "__main__":
+    try:
+        if not _FIXED_RUNNER:
+            raise RuntimePinError("runtime_pins只提供固定内部runner入口")
+        raise SystemExit(_run_fixed_graph(sys.argv[2:]))
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError) as failure:
+        print(json.dumps({"error": str(failure)}, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(2)

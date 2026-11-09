@@ -136,6 +136,17 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
             from .task_settlement import validate_new_settlement_sources
         else:
             from task_settlement import validate_new_settlement_sources
+        # 先完成上述延迟模块导入，再封口。昂贵尾检后重新核CAS/identity，
+        # 然后才执行最后结算来源fresh校验，不能把尾检插入证据与temp之间。
+        # 失败时尚无temp/发布；无operation时finish是no-op，原合同保持。
+        from lib.runtime_store import finish_read_operation
+        finish_read_operation()
+        fresh = read_file(path)
+        actual = "missing" if fresh is None else digest(fresh)
+        if expected != actual:
+            raise TaskGraphError(f"record fingerprint changed: {path}; expected {expected}, got {actual}")
+        if identity is not None and _identity(path) != identity:
+            raise TaskGraphError(f"record identity changed before publication: {path}")
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         mode = identity[2] if identity else 0o600
         descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)

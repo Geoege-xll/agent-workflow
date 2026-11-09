@@ -6,13 +6,15 @@
 """
 
 from contextlib import ExitStack, contextmanager
+import ast
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import shlex
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -198,6 +200,218 @@ finally:
         disabled_pin = self.hook_invocation(prefix=("--binding", json.dumps(self.core.binding())))
         self.assertEqual(0, disabled_pin.returncode, disabled_pin.stderr)
         self.assertEqual({}, json.loads(disabled_pin.stdout))
+
+    def test_fixed_graph_runner_validates_once_and_rejects_changed_sources_before_cas(self):
+        """实际选版子进程运行原CLI/CAS；同字节消费与退出拒绝都不能靠假的成功回执。"""
+        from tests.test_task_graph_records import graph, records
+        self.enable()
+        path = self.project / "graph.json"
+        payload = graph()
+        payload["runtime_binding"] = self.core.binding()
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        arguments = ("update", "--input", str(path), "--expect-sha256", records.digest(path.read_bytes()), "--patch", "-")
+        invocation = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=self.core.binding())
+        self.assertIn(str(self.core.root / "lib/runtime_pins.py"), invocation.command)
+        self.assertIn("--task-graph-operation", invocation.command)
+        profile = '''import collections,json,os,runpy,stat,sys
+counts=collections.Counter()
+def observe(frame,event,value):
+    if event == "call" and frame.f_code.co_filename.replace("\\\\", "/").endswith("/lib/runtime_store.py"):
+        if frame.f_code.co_name in {"_scan", "_verify_snapshot"}: counts[frame.f_code.co_name]+=1
+values=sys.argv[1:]
+while values and values[0] in {"-I","-B","-X"}:
+    del values[:2 if values[0] == "-X" else 1]
+sys.argv=values
+sys.setprofile(observe)
+try:
+    runpy.run_path(values[0],run_name="__main__")
+finally:
+    sys.setprofile(None)
+    print("GRAPH_SCOPE_COUNTS "+json.dumps(dict(counts)),file=sys.stderr)
+'''
+        def run(selected=invocation, observe=profile, body='{"tasks":{"api":{"set":{"state":"RUNNING"}}}}'):
+            # 只在测试解释器外层增加计数；原Windows bootstrap/脚本/参数仍完整
+            # 进入runpy，不替换原main、业务guard、源读取或publish的返回值。
+            command = [selected.command[0], "-I", "-B", "-X", "utf8", "-c", observe, *selected.command[1:]]
+            return subprocess.run(command, cwd=selected.cwd, env=selected.environment, input=body,
+                                  text=True, capture_output=True, timeout=40)
+        result = run()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["updated"])
+        self.assertEqual("RUNNING", json.loads(path.read_bytes())["tasks"][0]["state"])
+        counts = json.loads(result.stderr.split("GRAPH_SCOPE_COUNTS ", 1)[1])
+        self.assertEqual({"_scan": 1, "_verify_snapshot": 2}, counts)
+        print("FIXED_GRAPH_RUNNER_ACTUAL " + json.dumps(counts), flush=True)
+
+        arguments = ("update", "--input", str(path), "--expect-sha256", records.digest(path.read_bytes()), "--patch", "-")
+        invocation = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=self.core.binding())
+        before = path.read_bytes()
+        # reader已取出原CLI字节后才改变磁盘。若消费者重新runpy打开CLI，会执行
+        # 这个sentinel；正确消费者使用同字节运行，但必须在原CAS前尾检拒绝。
+        mutate_profile = profile.replace('counts=collections.Counter()', '''counts=collections.Counter()
+changed=False''').replace('def observe(frame,event,value):', '''def observe(frame,event,value):
+    global changed
+    if (event == "return" and frame.f_code.co_name == "_read_manifest_source"
+            and frame.f_locals.get("relative") == "lib/task_graph_cli.py" and not changed):
+        from pathlib import Path
+        target=Path(os.environ["AGENT_WORKFLOW_CORE_ROOT"])/"lib/task_graph_cli.py"
+        mode=stat.S_IMODE(target.stat().st_mode)
+        target.chmod(mode | 0o600)
+        target.write_bytes(target.read_bytes()+b"\\nraise RuntimeError('DISK BYTES EXECUTED')\\n")
+        target.chmod(mode)
+        changed=True''')
+        source = self.core.root / "lib/task_graph_cli.py"
+        original, mode = source.read_bytes(), stat.S_IMODE(source.stat().st_mode)
+        try:
+            result = run(invocation, mutate_profile, '{"tasks":{"api":{"set":{"agent_ref":{"host":"codex","agent_id":"fixture-runner"}}}}}')
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertEqual("", result.stdout)
+            self.assertIn(b"DISK BYTES EXECUTED", source.read_bytes(), "必须实际触发读后漂移，而非更早的fixture错误")
+            self.assertIn("快照", result.stderr)
+            self.assertNotIn("DISK BYTES EXECUTED", result.stderr)
+            self.assertEqual(before, path.read_bytes())
+
+            self.assertFalse(list(self.project.glob(".*.workflow-*")))
+        finally:
+            source.chmod(mode | 0o600)
+            source.write_bytes(original)
+            source.chmod(mode)
+
+        from dataclasses import replace
+        wrong = {**invocation.environment, "AGENT_WORKFLOW_CORE_ROOT": str(self.alternate.root)}
+        result = run(replace(invocation, environment=wrong))
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertEqual("", result.stdout)
+        self.assertEqual(before, path.read_bytes())
+
+        for alias in ("runtime_store", "lib.runtime_store", "lib"):
+            # 即使谎称同一个__file__也不能借入预存模块，不只测路径明显不同
+            # 的弱反例；独立runner必须从自己的已选解释器重新建立证明。
+            collision = profile.replace("sys.setprofile(observe)", '''from types import ModuleType
+from pathlib import Path
+foreign=ModuleType(ALIAS)
+foreign.__file__=str(Path(os.environ["AGENT_WORKFLOW_CORE_ROOT"])/RELATIVE)
+sys.modules[ALIAS]=foreign
+sys.setprofile(observe)'''.replace("ALIAS", repr(alias)).replace("RELATIVE", repr("lib/__init__.py" if alias == "lib" else "lib/runtime_store.py")))
+            result = run(invocation, collision)
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertEqual("", result.stdout)
+            self.assertIn("别名", result.stderr)
+            self.assertEqual(before, path.read_bytes())
+
+    def test_fixed_runner_windows_literal_root_guards_are_case_sensitive(self):
+        """执行实际runner函数及既有pin守卫的Windows词法；不冒充Win32/NTFS。"""
+        from types import SimpleNamespace
+        from lib import runtime_pins as pins
+        class WinLex(PureWindowsPath):
+            def absolute(self):return self
+            def expanduser(self):return self
+            def resolve(self, **kwargs):return self
+            def is_dir(self):return True
+        state = WinLex("C:/case/State")
+        other_state = WinLex("C:/case/state")
+        project = WinLex("C:/case/project")
+        other_project = WinLex("C:/case/Project")
+        binding = {"protocol_version": 1, "content_id": "a" * 64, "manifest_sha256": "a" * 64}
+        root = state / "runtimes" / ("a" * 64) / "core"
+        other_root = other_state / "runtimes" / ("a" * 64) / "core"
+        environment = {"AGENT_WORKFLOW_RUNTIME_BINDING": json.dumps(binding), "AGENT_WORKFLOW_STATE_DIR": str(state),
+                       "AGENT_WORKFLOW_PROJECT_ROOT": str(project), "AGENT_WORKFLOW_CORE_ROOT": str(root),
+                       "AGENT_WORKFLOW_CONFIG_PATH": str(project / ".agent-workflow/project.yaml")}
+        source = ast.parse((PACK / "lib/runtime_pins.py").read_bytes())
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                     and node.name in {"_runner_preflight", "_runner_module_sources", "_run_fixed_graph"}]
+        namespace = {"Path": WinLex, "json": json, "re": re, "os": SimpleNamespace(environ=dict(environment)),
+                     "sys": SimpleNamespace(modules={}), "__file__": str(root / "lib/runtime_pins.py"),
+                     "store": store, "RuntimePinError": pins.RuntimePinError}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "<actual fixed-runner root guards>", "exec"), namespace)
+        self.assertEqual(str(root), str(namespace["_runner_preflight"]()[2]))
+        for field, changed in (("AGENT_WORKFLOW_STATE_DIR", other_state), ("AGENT_WORKFLOW_CORE_ROOT", other_root),
+                               ("AGENT_WORKFLOW_PROJECT_ROOT", other_project),
+                               ("AGENT_WORKFLOW_CONFIG_PATH", other_project / ".agent-workflow/project.yaml")):
+            namespace["os"].environ = {**environment, field: str(changed)}
+            with self.subTest(boundary="preflight", field=field), self.assertRaisesRegex(ValueError, "三根"):
+                namespace["_runner_preflight"]()
+        namespace["os"].environ = dict(environment)
+        for origin, expected in ((root, True), (other_root, False)):
+            namespace["sys"].modules = {"lib.origin": SimpleNamespace(__file__=str(origin / "lib/origin.py"))}
+            with self.subTest(boundary="post-import-origin", same_literal=expected):
+                if expected:namespace["_runner_module_sources"](root)
+                else:
+                    with self.assertRaisesRegex(ValueError, "已加载模块"):
+                        namespace["_runner_module_sources"](root)
+        namespace["sys"].modules = {}
+        @contextmanager
+        def operation():
+            reader = SimpleNamespace(core=store.FrozenCore("a" * 64, "a" * 64, other_root, "source"),
+                                     read=lambda *args: self.fail("错根reader不能消费正文"))
+            yield SimpleNamespace(reader=lambda *args: reader)
+        namespace.update(_RUNNER_CONTEXT=(state, project, root, binding),
+                         store=SimpleNamespace(core_read_operation=operation,
+                                               absolute_path_key=getattr(store, "absolute_path_key", None)))
+        with self.subTest(boundary="runner-reader-root"), self.assertRaisesRegex(ValueError, "物理核心"):
+            namespace["_run_fixed_graph"](["validate"])
+        # 旧CORE_ENV/CONFIG/project_root在新runner内也必须封闭，不能只修预检
+        # 或把其它旧接口的更早失败当成此处守卫有效。
+        reader = store.CoreReadSession(store.FrozenCore("a" * 64, "a" * 64, root, "source"), 123, {"files": []}, {})
+        try:
+            with patch.object(pins, "Path", WinLex), patch.object(store, "state_root", return_value=state), \
+                    patch.dict(os.environ, environment):
+                with self.subTest(boundary="explicit-project-root"), self.assertRaises(pins.RuntimePinError):
+                    pins.project_root(other_project)
+                for field, changed in ((pins.CORE_ENV, other_root),
+                                       (pins.CONFIG_ENV, other_project / ".agent-workflow/project.yaml")):
+                    with self.subTest(boundary="record-binding", field=field), \
+                            patch.dict(os.environ, {field: str(changed)}), self.assertRaises(pins.RuntimePinError):
+                        pins.record_binding({"runtime_binding": binding}, root=project, reader=reader)
+        finally:
+            reader._close()
+
+    def test_fixed_graph_runner_keeps_old_pin_helper_path_and_target_provenance(self):
+        """旧能力只走旧helper，实际运行原CLI；current与旧pin不能相互借代码/身份。"""
+        from tests.test_task_graph_records import graph
+        self.enable()
+        source = self.workspace / ("old-graph-source-" + uuid.uuid4().hex)
+        make_alternate_source(source)
+        # 在已有最小版本上补原CLI实际import闭包和三份规范，不复制另一份候选。
+        dependencies = ("lib/task_graph_cli.py", "lib/task_graph_records.py", "lib/task_graph.py",
+                        "lib/task_settlement.py", "lib/agent_continuation.py", "lib/worktree_policy.py",
+                        "lib/validate_project_docs.py", "lib/skills/business_confirmation_policy.py",
+                        "lib/skills/skill_contracts.py", "lib/skills/role_skills.py", "lib/project/__init__.py",
+                        "lib/project/validate_project_config.py", "lib/project/project_discovery.py",
+                        "lib/documents/plan_documents.py")
+        from lib.standard_paths import BUILTIN_STANDARD_SOURCES
+        for relative in (*dependencies, *BUILTIN_STANDARD_SOURCES):
+            self.put(source, relative, (PACK / relative).read_bytes())
+        pins = source / "lib/runtime_pins.py"
+        pins.write_bytes(pins.read_bytes().replace(b"CORE_READ_OPERATION_PROTOCOL = 1\n", b""))
+        old = store.import_core(source, self.state)
+        project_service.apply_project(project_service.preview_project(
+            self.state, self.project, "use", content_id=old.content_id))
+        path = self.project / "old-graph.json"
+        payload = graph()
+        payload["runtime_binding"] = old.binding()
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        before = path.read_bytes()
+        arguments = ("validate", "--input", str(path))
+        legacy = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=old.binding())
+        self.assertIn(str(old.root / "lib/task_graph_cli.py"), legacy.command)
+        self.assertNotIn("--task-graph-operation", legacy.command)
+        result = subprocess.run(legacy.command, env=legacy.environment, cwd=legacy.cwd,
+                                capture_output=True, text=True, timeout=40)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"status": "valid"}, json.loads(result.stdout))
+        self.assertEqual(before, path.read_bytes())
+        # 同一项目实际已切到old，但完整原pin仍必须用自己的新runner；其环境
+        # 不能接受另一版payload，也不能把旧任务自动绑定到current/new core。
+        current = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=self.core.binding())
+        self.assertIn(str(self.core.root / "lib/runtime_pins.py"), current.command)
+        result = subprocess.run(current.command, env=current.environment, cwd=current.cwd,
+                                capture_output=True, text=True, timeout=40)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertEqual("", result.stdout)
+        self.assertIn("桥执行版本冲突", result.stderr)
+        self.assertEqual(before, path.read_bytes())
 
     def test_single_scope_hook_keeps_old_core_without_command_capability_neutral(self):
         self.enable()

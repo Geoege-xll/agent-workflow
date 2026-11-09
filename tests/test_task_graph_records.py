@@ -422,6 +422,79 @@ class RecordUpdateTest(unittest.TestCase):
 
 
 class RecordPublicationTest(unittest.TestCase):
+    def operation_fixture(self):
+        """复用最小真实内容库构造器，所有core与记录都只位于本例临时目录。"""
+        from tests.test_runtime_store import RuntimeStoreTest
+        fixture = RuntimeStoreTest()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        return fixture, fixture.imported()
+
+    def test_operation_finish_rejects_source_drift_before_any_temporary_or_publish(self):
+        """实际修改未读core成员；尾检失败必须发生在temp/原记录的任何写入之前。"""
+        from lib import runtime_store as store
+        fixture, core = self.operation_fixture()
+        record = fixture.workspace / "graph.json"
+        record.write_bytes(b"old\n")
+        target = core.root / "product/ROLES.yaml"
+        original, mode = target.read_bytes(), stat.S_IMODE(target.stat().st_mode)
+        try:
+            with patch.object(records.tempfile, "mkstemp", wraps=records.tempfile.mkstemp) as temporary:
+                with self.assertRaises(store.RuntimeStoreError), store.core_read_operation():
+                    store.load_core(core.binding(), fixture.state)
+                    target.chmod(mode | 0o600)
+                    target.write_bytes(original + b"drift\n")
+                    target.chmod(mode)
+                    records.publish(record, b"new\n", records.digest(b"old\n"))
+                self.assertEqual(0, temporary.call_count)
+            self.assertEqual(b"old\n", record.read_bytes())
+            self.assertFalse(list(record.parent.glob(".*.workflow-*")))
+        finally:
+            target.chmod(mode | 0o600)
+            target.write_bytes(original)
+            target.chmod(mode)
+
+    def test_operation_finish_precedes_last_fresh_cas_and_settlement_sources(self):
+        """在真实完整尾检中插入并发编辑，最后CAS仍须发现，不能扩大证据窗口。"""
+        from lib import runtime_store as store
+        from lib import task_settlement
+        fixture, core = self.operation_fixture()
+        record = fixture.workspace / "graph.json"
+        record.write_bytes(b"old\n")
+        original_verify, changed = store._verify_snapshot, False
+        def edit_during_finish(*args, **kwargs):
+            nonlocal changed
+            result = original_verify(*args, **kwargs)
+            if not changed:
+                record.write_bytes(b"external edit\n")
+                changed = True
+            return result
+        with store.core_read_operation():
+            store.load_core(core.binding(), fixture.state)
+            with patch.object(store, "_verify_snapshot", side_effect=edit_during_finish), \
+                    patch.object(records.tempfile, "mkstemp", wraps=records.tempfile.mkstemp) as temporary:
+                with self.assertRaisesRegex(ValueError, "fingerprint changed"):
+                    records.publish(record, b"new\n", records.digest(b"old\n"))
+                self.assertTrue(changed)
+                self.assertEqual(0, temporary.call_count)
+        self.assertEqual(b"external edit\n", record.read_bytes())
+
+        # 正向发布也真实执行原证据校验器；观察它开始时租约已经关闭，原CAS
+        # 与来源复核仍在锁内，任何封口后core读取都明确失败而非另开证明。
+        original_sources = task_settlement.validate_new_settlement_sources
+        observed = []
+        def source_guard(*args, **kwargs):
+            with self.assertRaises(store.RuntimeStoreError):
+                store.load_core(core.binding(), fixture.state)
+            observed.append(True)
+            return original_sources(*args, **kwargs)
+        with store.core_read_operation():
+            store.load_core(core.binding(), fixture.state)
+            with patch.object(task_settlement, "validate_new_settlement_sources", side_effect=source_guard):
+                self.assertTrue(records.publish(record, b"new\n", records.digest(b"external edit\n")))
+        self.assertEqual([True], observed)
+        self.assertEqual(b"new\n", record.read_bytes())
+
     def test_noop_stale_fingerprint_and_original_permissions(self):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw).resolve() / "graph.json"

@@ -121,6 +121,7 @@ def _history_writes(tree: Tree, records: list[dict]) -> list[dict]:
             for row in _retained(tree, records, typed=True) if row["code"] == "history_modified"]
 
 
+@store.read_operation
 def _ownership(tree: Tree, record: dict, state: Path, *, repair: bool,
                include_history: bool = True, reader=None) -> tuple[list[dict], set[str]]:
     with ExitStack() as stack:
@@ -982,6 +983,7 @@ def compensate(state: Path, project: Path, transaction_id: str, binding_before: 
         return {"compensated": True, "untouched": False, "transaction_id": transaction_id}
 
 
+@store.read_operation
 def status(state: Path, project: Path, *, reader=None) -> dict:
     """显式短会话内检查资源；提交/执行调用不得保存或跨调用复用 reader。"""
     if reader is not None and not isinstance(reader, store.CoreReadSession):

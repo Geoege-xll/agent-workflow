@@ -60,11 +60,13 @@ def after_guard_protocol(core: store.FrozenCore, *, reader=None) -> int:
     return _static_protocol(core, "CENTRAL_AFTER_GUARD_PROTOCOL", reader=reader)
 
 
-def _static_protocol(core: store.FrozenCore, name: str, *, reader=None) -> int:
+def _static_protocol(core: store.FrozenCore, name: str, *, reader=None, logical_path="lib/runtime_bridge.py") -> int:
     # 两项独立协议共用原静态语法边界；不执行候选模块、不读版本号或用户环境。
     if reader is not None and not isinstance(reader, store.CoreReadSession):
         raise RuntimeBridgeError("控制协议拒绝未知核心 reader")
-    body = reader.read(core, "lib/runtime_bridge.py") if reader is not None else store.read_core_source(core, "lib/runtime_bridge.py")
+    if reader is not None and not reader.contains(logical_path):
+        return 0
+    body = reader.read(core, logical_path) if reader is not None else store.read_core_source(core, logical_path)
     try:
         module = ast.parse(body)
     except (SyntaxError, ValueError) as exc:
@@ -104,6 +106,11 @@ def helper_creates_task(logical_path: str, args: tuple | list) -> bool:
         return True
     if relative != "lib/task_graph_cli.py":
         return False
+    return _task_graph_command(args) == "init"
+
+
+def _task_graph_command(args):
+    """沿原helper静态参数协议选command；不能把选项值当作runner能力。"""
     class AdmissionParser(argparse.ArgumentParser):
         def error(self, message):
             # 参数可能含私有路径或payload，不回显argparse原始诊断。
@@ -118,10 +125,10 @@ def helper_creates_task(logical_path: str, args: tuple | list) -> bool:
     parser.add_argument("-h", "--help", action="store_true")
     selected = parser.parse_args(args)
     if selected.help:
-        return False
+        return None
     if selected.command is None:
         raise RuntimeBridgeError("任务图helper缺少command")
-    return selected.command == "init"
+    return selected.command
 
 
 @dataclass(frozen=True)
@@ -350,14 +357,26 @@ def python_helper(state: Path, project: Path, logical_path: str, args: tuple | l
                     "AGENT_WORKFLOW_CONFIG_PATH": str(context.config_path),
                     "AGENT_WORKFLOW_CORE_ROOT": str(context.core.root)})
         protocol = _admission_protocol(context.core, reader=reader) if initializes else None
+        selected_relative, selected_args = relative, args
+        if (relative == "lib/task_graph_cli.py" and _task_graph_command(args) in {"validate", "ready", "update"}
+                and _static_protocol(context.core, "CORE_READ_OPERATION_PROTOCOL", reader=reader,
+                                     logical_path="lib/runtime_pins.py") == 1):
+            # 只选择目标原core明确声明的固定runner。父方逐份消费原启动闭包，
+            # child仍独立验证整树，不传reader/validated标志或任意代码字符串。
+            closure = ["lib/runtime_pins.py", "lib/runtime_store.py", "lib/platform_fs.py", "lib/__init__.py"]
+            if os.name == "nt":
+                closure.append("lib/windows_fs.py")
+            for member in closure:
+                reader.read(context.core, member)
+            selected_relative, selected_args = "lib/runtime_pins.py", ("--task-graph-operation", *args)
         if os.name == "nt":
             # 通用 bootstrap 只为已经 load_core 验证的固定 helper 增加其 core/lib。
             # 项目薄 Hook 使用另一份不插目录的小入口；二者不能混用搜索路径合同。
             reader.read(context.core, "lib/windows_bootstrap.py")
             command = (sys.executable, "-I", "-B", "-X", "utf8", str(context.core.root / "lib/windows_bootstrap.py"),
-                       "--script", str(context.core.root / relative), *args)
+                       "--script", str(context.core.root / selected_relative), *selected_args)
         else:
-            command = (sys.executable, "-B", "-X", "utf8", str(context.core.root / relative), *args)
+            command = (sys.executable, "-B", "-X", "utf8", str(context.core.root / selected_relative), *selected_args)
         return HelperInvocation(command, env, context.project_root, context.runtime_binding, initializes, protocol)
 
 

@@ -4,11 +4,15 @@ from dataclasses import FrozenInstanceError, replace
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from contextlib import contextmanager
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from types import ModuleType
 import unittest
 from unittest.mock import patch
 
@@ -62,6 +66,236 @@ class RuntimeStoreTest(unittest.TestCase):
         path.chmod(0o600)
         path.write_bytes(body)
         path.chmod(0o444)
+
+    def test_operation_unifies_load_batch_and_builtin_catalog_then_expires(self):
+        """真实catalog也借同一次完整证明；租约不把正文或活跃reader带入下一次调用。"""
+        from lib import runtime_pins
+        for relative in runtime_pins.BUILTIN_STANDARD_SOURCES:
+            self.write(relative, b"# builtin fixture\n")
+        core = self.imported()
+        project = self.workspace / "project"
+        project.mkdir()
+        environment = {"AGENT_WORKFLOW_STATE_DIR": str(self.state),
+                       "AGENT_WORKFLOW_PROJECT_ROOT": str(project),
+                       "AGENT_WORKFLOW_CORE_ROOT": str(core.root),
+                       "AGENT_WORKFLOW_CONFIG_PATH": str(project / ".agent-workflow/project.yaml")}
+        with patch.dict(os.environ, environment), \
+                patch.object(store, "_scan", wraps=store._scan) as scan, \
+                patch.object(store, "_verify_snapshot", wraps=store._verify_snapshot) as verify:
+            with store.core_read_operation() as operation:
+                self.assertEqual(core, store.load_core(core.binding(), self.state))
+                with store.core_reader(core.binding(), self.state) as reader:
+                    self.assertEqual(core, reader.core)
+                    expected = reader.read(core, "roles/xy-backend.md")
+                self.assertEqual(expected, store.read_core_source(core, "roles/xy-backend.md"))
+                self.assertEqual(expected, store.read_core_sources(core, ("roles/xy-backend.md",))["roles/xy-backend.md"])
+                self.assertEqual(set(runtime_pins.BUILTIN_STANDARD_SOURCES), set(runtime_pins.read_builtin_sources(core.binding())))
+            self.assertEqual((1, 2), (scan.call_count, verify.call_count))
+            with self.assertRaises(store.RuntimeStoreError):
+                reader.read(core, "roles/xy-backend.md")
+            with self.assertRaises(store.RuntimeStoreError):
+                operation.checkpoint()
+            store.load_core(core.binding(), self.state)
+            self.assertEqual(2, scan.call_count, "下一次调用必须完整fresh，不能借已关闭的证明")
+
+    def test_windows_literal_roots_do_not_alias_operation_or_core_locators(self):
+        """执行实际租约/单批读方法的Windows词法分支；不是NTFS/ACL原生证据。"""
+        class WinLex(PureWindowsPath):
+            def absolute(self):return self
+            def expanduser(self):return self
+        roots = (WinLex("C:/case/State"), WinLex("C:/case/state"))
+        binding = {"protocol_version": 1, "content_id": "a" * 64, "manifest_sha256": "a" * 64}
+        cores = tuple(store.FrozenCore("a" * 64, "a" * 64, root / "runtimes" / ("a" * 64) / "core", "source")
+                      for root in roots)
+        # 默认dataclass/WindowsPath相等仍存在，授权方法必须自行拒绝错根。
+        self.assertEqual(roots[0], roots[1])
+        self.assertEqual(cores[0], cores[1])
+        opened = []
+        @contextmanager
+        def independent(selected, root):
+            opened.append(str(root))
+            index = 0 if str(root) == str(roots[0]) else 1
+            reader = store.CoreReadSession(cores[index], index + 100, {"files": [{"path": "roles/a.md", "size": 1}]},
+                                           {"roles/a.md": ()})
+            try:yield reader
+            finally:reader._close()
+        def member(root, *args, **kwargs):
+            return b"A" if root == 100 else b"B"
+        with patch.object(store, "Path", WinLex), \
+                patch.object(store, "state_root", side_effect=lambda root=None: root), \
+                patch.object(store, "_independent_core_reader", side_effect=independent), \
+                patch.object(store, "_read_manifest_source", side_effect=member) as members:
+            with store.core_read_operation() as operation:
+                first = operation.reader(binding, roots[0])
+                second = operation.reader(binding, roots[1])
+                with self.subTest(boundary="operation-key"):
+                    self.assertIsNot(first, second)
+                    self.assertEqual(list(map(str, roots)), opened)
+                with self.subTest(boundary="correct-second-reader"):
+                    self.assertEqual(b"B", second.read(cores[1], "roles/a.md"))
+                with self.subTest(boundary="session-core-for"), self.assertRaises(store.RuntimeStoreError):
+                    first.core_for(binding, roots[1])
+                with self.subTest(boundary="session-read"), self.assertRaises(store.RuntimeStoreError):
+                    first.read(cores[1], "roles/a.md")
+                # 独立验证成员/批读的定位守卫：即使上层错误交来第一reader，
+                # 仍不可依赖FrozenCore折叠相等消费它，且不得先读正文再拒绝。
+                consumed = members.call_count
+                with patch.object(operation, "reader", return_value=first):
+                    with self.subTest(boundary="single-read"), self.assertRaises(store.RuntimeStoreError):
+                        store.read_core_source(cores[1], "roles/a.md")
+                    with self.subTest(boundary="batch-read"), self.assertRaises(store.RuntimeStoreError):
+                        store.read_core_sources(cores[1], ("roles/a.md",))
+                with self.subTest(boundary="no-foreign-consumption"):
+                    self.assertEqual(consumed, members.call_count)
+                self.assertIs(first, operation.reader(binding, roots[0]))
+                self.assertIs(second, operation.reader(binding, roots[1]))
+                with self.subTest(boundary="same-literal-reuse"):
+                    self.assertEqual(2, len(opened))
+
+    def test_operation_checkpoint_rejects_unread_member_and_ancestor_drift(self):
+        """checkpoint包含整树与祖先路径见证，不能只检查已读成员或打开的旧fd。"""
+        core = self.imported()
+        target = core.root / "product/ROLES.yaml"
+        body, mode = target.read_bytes(), stat.S_IMODE(target.stat().st_mode)
+        try:
+            with self.assertRaises(store.RuntimeStoreError), store.core_read_operation() as operation:
+                store.read_core_source(core, "roles/xy-backend.md")
+                target.chmod(mode | 0o600)
+                target.write_bytes(body + b"changed\n")
+                target.chmod(mode)
+                operation.checkpoint()
+        finally:
+            target.chmod(mode | 0o600)
+            target.write_bytes(body)
+            target.chmod(mode)
+        moved = self.workspace / "moved-state"
+        if store.os.name == "nt":
+            # Windows祖先句柄不共享DELETE，实际换名会先被内核阻止。先在无
+            # reader时完成换名正控，证明不是fixture本来无权移动；持租约时
+            # 必须出现sharing/access拒绝，并保持原树可完整checkpoint。
+            self.state.rename(moved)
+            moved.rename(self.state)
+            with store.core_read_operation() as operation:
+                store.load_core(core.binding(), self.state)
+                with self.assertRaises(OSError) as failure:
+                    self.state.rename(moved)
+                self.assertIn(failure.exception.winerror, (5, 32))
+                self.assertFalse(moved.exists())
+                operation.checkpoint()
+            return
+        try:
+            with self.assertRaises(store.RuntimeStoreError), store.core_read_operation() as operation:
+                store.load_core(core.binding(), self.state)
+                self.state.rename(moved)
+                self.state.mkdir()
+                operation.checkpoint()
+        finally:
+            if moved.exists():
+                self.state.rmdir()
+                moved.rename(self.state)
+
+    def test_operation_isolates_roots_pins_threads_processes_and_module_aliases(self):
+        """同一pin不能跨机器根借证明；错误归属拒绝，封口之后不能静默fresh回退。"""
+        core = self.imported()
+        second_state = self.workspace / "second-state"
+        same_pin_other_root = store.import_core(self.source, second_state)
+        self.write("roles/xy-backend.md", b"# different version\n")
+        other_pin = self.imported()
+        with patch.object(store, "_scan", wraps=store._scan) as scan:
+            with store.core_read_operation() as operation:
+                with store.core_reader(core.binding(), self.state) as reader:
+                    store.load_core(same_pin_other_root.binding(), second_state)
+                    store.load_core(other_pin.binding(), self.state)
+                    self.assertEqual(3, scan.call_count)
+                    for binding, root in ((core.binding(), second_state), (other_pin.binding(), self.state)):
+                        with self.assertRaises(store.RuntimeStoreError):
+                            reader.core_for(binding, root)
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        with self.assertRaises(store.RuntimeStoreError):
+                            pool.submit(operation.checkpoint).result()
+                        with self.assertRaises(store.RuntimeStoreError):
+                            pool.submit(reader.read, core, "roles/xy-backend.md").result()
+                    actual_pid = store.os.getpid()
+                    with patch.object(store.os, "getpid", return_value=actual_pid + 1):
+                        with self.assertRaises(store.RuntimeStoreError):
+                            operation.checkpoint()
+                        with self.assertRaises(store.RuntimeStoreError):
+                            reader.read(core, "roles/xy-backend.md")
+                    with patch.dict(sys.modules, {"runtime_store": ModuleType("conflicting_store")}):
+                        with self.assertRaisesRegex(store.RuntimeStoreError, "别名"):
+                            store.load_core(core.binding(), self.state)
+                    with patch.dict(sys.modules, {"lib.runtime_store": ModuleType("canonical_replacement")}):
+                        with self.assertRaisesRegex(store.RuntimeStoreError, "别名"):
+                            store.load_core(core.binding(), self.state)
+                        with self.assertRaisesRegex(store.RuntimeStoreError, "别名"):
+                            reader.read(core, "roles/xy-backend.md")
+                operation.finish()
+                with self.assertRaises(store.RuntimeStoreError):
+                    store.load_core(core.binding(), self.state)
+            self.assertEqual(3, scan.call_count, "拒绝案例和封口后的读取不能重新打开其它证明")
+
+    def test_operation_checkpoint_keeps_manifest_version_mode_and_member_guards(self):
+        """逐个真实变更后独立开新基线，不以mock校验器或同字节缓存当安全证据。"""
+        core = self.imported()
+        for relative, directory in (("manifest.json", False), ("core/product/ROLES.yaml", False), ("core/roles", True)):
+            if directory and store.os.name == "nt":
+                # Win32目录没有可用的POSIX可写位反例；下面独立改变真实ACL，
+                # 不能把chmod无效果或Mac上的mode检查冒充Windows权限证据。
+                continue
+            path = core.root.parent / relative
+            mode = stat.S_IMODE(path.stat().st_mode)
+            body = None if directory else path.read_bytes()
+            try:
+                with self.subTest(path=relative), self.assertRaises(store.RuntimeStoreError), store.core_read_operation() as operation:
+                    store.load_core(core.binding(), self.state)
+                    if directory:
+                        path.chmod(mode ^ 0o200)
+                    else:
+                        path.chmod(mode | 0o600)
+                        path.write_bytes(body + b" ")
+                        path.chmod(mode)
+                    operation.checkpoint()
+            finally:
+                path.chmod(mode | 0o600)
+                if body is not None:
+                    path.write_bytes(body)
+                path.chmod(mode)
+        version = core.root.parent
+        mode = stat.S_IMODE(version.stat().st_mode)
+        extra = version / "unexpected"
+        try:
+            with self.assertRaises(store.RuntimeStoreError), store.core_read_operation() as operation:
+                store.load_core(core.binding(), self.state)
+                version.chmod(mode | 0o200)
+                extra.write_bytes(b"unknown node")
+                version.chmod(mode)
+                operation.checkpoint()
+        finally:
+            version.chmod(mode | 0o200)
+            extra.unlink(missing_ok=True)
+            version.chmod(mode)
+
+        if store.os.name == "nt":
+            from lib import windows_fs as fs
+            path = core.root / "product/ROLES.yaml"
+            # 这次不读取所改成员，只由完整checkpoint发现ACL变化。
+            with self.assertRaises(store.RuntimeStoreError), store.core_read_operation() as operation:
+                store.load_core(core.binding(), self.state)
+                handle = fs._open_handle(path, 0x60080)
+                try:
+                    with fs._security_policy(handle) as before:
+                        try:
+                            with fs.private_security(inherit=not bool(before.acl_bytes[9] & 3)) as descriptor:
+                                self.assertEqual(0, fs._api().security.SetSecurityInfo(
+                                    handle, 1, 0x80000004, None, None, fs._dacl(descriptor), None))
+                            with fs._security_policy(handle) as after:
+                                self.assertNotEqual(before.fingerprint, after.fingerprint)
+                            operation.checkpoint()
+                        finally:
+                            self.assertEqual(0, fs._api().security.SetSecurityInfo(
+                                handle, 1, 0x80000004, None, None, before.acl, None))
+                finally:
+                    fs._close(handle)
 
     def test_batch_core_sources_preserves_members_source_and_complete_snapshot_guards(self):
         """实际批读仍是完整核心/成员合同，不能靠已加载定位值或上一轮字节缓存。"""
@@ -666,6 +900,184 @@ class RuntimeStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(store.RuntimeStoreError, "互相包含"):
             store.import_core(self.source, self.source / "machine-state")
         self.assertFalse((self.source / "machine-state").exists())
+
+
+@unittest.skipUnless(os.name == "nt", "仅Server/elevated原生Windows的NTFS大小写目录安全证明")
+class WindowsCaseSensitiveCoreNativeTest(unittest.TestCase):
+    """独立于普通store类收集；产品不设置flag，也不要求普通用户提升。
+
+    唯一native registry为本类声明Server/elevated资格。Windows中若fsutil或
+    NTFS能力不足直接失败，不能skip/降级；POSIX不调用这两个原生节点。
+    """
+
+    def setUp(self):
+        # 仅复用最小来源构造器和cleanup，不继承带tests的TestCase造成重复收集。
+        self.fixture = RuntimeStoreTest()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.workspace = self.fixture.workspace
+        parent = self.workspace / "case-sensitive"
+        parent.mkdir()
+        fsutil = Path(os.environ["SystemRoot"]) / "System32/fsutil.exe"
+        command = [str(fsutil), "file", "setCaseSensitiveInfo", str(parent), "enable"]
+        # 系统工具输出可能使用本地代码页；不解析本地化文案，资格由exit及
+        # 后面真正创建的不同inode证明，诊断解码不能掩盖实际能力结果。
+        enabled = subprocess.run(command, capture_output=True, timeout=10)
+        self.assertEqual(0, enabled.returncode,
+                         "Server/elevated测试资格不足：需要本地NTFS/管理员及自有目录属性权限；"
+                         "未降级或skip。\n" + (enabled.stdout + enabled.stderr).decode("utf-8", errors="replace"))
+        query = subprocess.run([str(fsutil), "file", "queryCaseSensitiveInfo", str(parent)],
+                               capture_output=True, timeout=10)
+        self.assertEqual(0, query.returncode, (query.stdout + query.stderr).decode("utf-8", errors="replace"))
+        self.states = (parent / "State", parent / "state")
+        for state in self.states:
+            state.mkdir()
+        identities = [store._node_identity(store.os.stat(path, follow_symlinks=False)) for path in self.states]
+        self.assertEqual(self.states[0], self.states[1], "必须实际覆盖WindowsPath折叠语义")
+        self.assertNotEqual(identities[0], identities[1], "必须真建两个实体，不能只有不同路径字符串")
+        print("NTFS_CASE_SENSITIVE_CAPABILITY " + json.dumps({"fsutil_exit": enabled.returncode,
+              "query_exit": query.returncode, "states": list(map(str, self.states)),
+              "identities": identities, "qualification": "Server/elevated"}), flush=True)
+
+    def pair(self, source):
+        cores = tuple(store.import_core(source, state) for state in self.states)
+        self.assertEqual(cores[0].binding(), cores[1].binding())
+        return cores
+
+    @staticmethod
+    def overwrite_owned(path, body, mode):
+        # 仅主动改变本例冻结文件；恢复原attributes，不修改生产ACL或codec。
+        path.chmod(mode | 0o600)
+        path.write_bytes(body)
+        path.chmod(mode)
+
+    def test_case_sensitive_ntfs_roots_get_independent_readers_and_guards(self):
+        """真实两根分别fresh/尾检；缺失、正文损坏和第二根ACL变化不得借第一证明。"""
+        first, second = self.pair(self.fixture.source)
+        with patch.object(store, "_scan", wraps=store._scan) as scans, \
+                patch.object(store, "_verify_snapshot", wraps=store._verify_snapshot) as checks:
+            with store.core_read_operation() as operation:
+                left = operation.reader(first.binding(), self.states[0])
+                right = operation.reader(second.binding(), self.states[1])
+                self.assertIsNot(left, right)
+                self.assertNotEqual(store._node_identity(store.os.fstat(left._root)),
+                                    store._node_identity(store.os.fstat(right._root)))
+                self.assertIs(left, operation.reader(first.binding(), self.states[0]))
+                self.assertEqual((second.root / "roles/xy-backend.md").read_bytes(),
+                                 store.read_core_sources(second, ("roles/xy-backend.md",))["roles/xy-backend.md"])
+                with self.assertRaises(store.RuntimeStoreError):
+                    left.core_for(second.binding(), self.states[1])
+                with self.assertRaises(store.RuntimeStoreError):
+                    left.read(second, "roles/xy-backend.md")
+                # 第三个拼写与两个已开根都折叠相等，但实际不存在，必须拒绝。
+                with self.assertRaises(store.RuntimeStoreError):
+                    store.load_core(first.binding(), self.states[0].parent / "STATE")
+            self.assertEqual((2, 4), (scans.call_count, checks.call_count))
+        damaged = second.root / "product/ROLES.yaml"
+        original, mode = damaged.read_bytes(), stat.S_IMODE(damaged.stat().st_mode)
+        try:
+            with self.assertRaises(store.RuntimeStoreError), store.core_read_operation():
+                store.load_core(first.binding(), self.states[0])
+                self.overwrite_owned(damaged, original + b"different second root\n", mode)
+                self.assertEqual(original, (first.root / "product/ROLES.yaml").read_bytes())
+                store.load_core(second.binding(), self.states[1])
+        finally:
+            self.overwrite_owned(damaged, original, mode)
+        from lib import windows_fs as fs
+        with self.assertRaises(store.RuntimeStoreError), store.core_read_operation() as operation:
+            operation.reader(first.binding(), self.states[0])
+            operation.reader(second.binding(), self.states[1])
+            handle = fs._open_handle(damaged, 0x60080)
+            try:
+                with fs._security_policy(handle) as before:
+                    try:
+                        with fs.private_security(inherit=not bool(before.acl_bytes[9] & 3)) as descriptor:
+                            self.assertEqual(0, fs._api().security.SetSecurityInfo(
+                                handle, 1, 0x80000004, None, None, fs._dacl(descriptor), None))
+                        with fs._security_policy(handle) as after:
+                            self.assertNotEqual(before.fingerprint, after.fingerprint)
+                        operation.checkpoint()
+                    finally:
+                        self.assertEqual(0, fs._api().security.SetSecurityInfo(
+                            handle, 1, 0x80000004, None, None, before.acl, None))
+            finally:
+                fs._close(handle)
+
+    def test_case_sensitive_ntfs_fixed_runner_rejects_cross_root_before_cas(self):
+        """原helper子进程启动边界真实正向更新，再证明case-distinct错根零CAS。"""
+        from tests.test_task_graph_records import graph, records
+        from lib.central.runtime_project import Tree
+        first, second = self.pair(PACK)
+        project = self.states[0].parent / "project"
+        foreign_project = self.states[0].parent / "Project"
+        project.mkdir()
+        foreign_project.mkdir()
+        self.assertNotEqual(store._node_identity(store.os.stat(project, follow_symlinks=False)),
+                            store._node_identity(store.os.stat(foreign_project, follow_symlinks=False)))
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("AGENT_WORKFLOW_")}
+        with patch.dict(os.environ, environment, clear=True):
+            payload = graph()
+        payload["runtime_binding"] = first.binding()
+        record = project / "graph.json"
+        record.write_text(json.dumps(payload), encoding="utf-8")
+        environment.update({"AGENT_WORKFLOW_STATE_DIR": str(self.states[0]),
+                            "AGENT_WORKFLOW_CORE_ROOT": str(first.root),
+                            "AGENT_WORKFLOW_RUNTIME_BINDING": json.dumps(first.binding()),
+                            "AGENT_WORKFLOW_PROJECT_ROOT": str(project),
+                            "AGENT_WORKFLOW_CONFIG_PATH": str(project / ".agent-workflow/project.yaml"),
+                            "PYTHONDONTWRITEBYTECODE": "1"})
+        # 此节点直接验证固定helper child，不伪造本机绑定或上层init准入；上层
+        # python_helper的实际绑定合同仍由已有central_project两个消费者覆盖。
+        members = ("lib/runtime_pins.py", "lib/task_graph_cli.py", "lib/runtime_store.py", "lib/platform_fs.py",
+                   "lib/__init__.py", "lib/windows_fs.py", "lib/windows_bootstrap.py")
+        with store.core_reader(first.binding(), self.states[0]) as reader:
+            for member in members:
+                reader.read(first, member)
+        command = [sys.executable, "-I", "-B", "-X", "utf8", str(first.root / "lib/windows_bootstrap.py"),
+                   "--script", str(first.root / "lib/runtime_pins.py"), "--task-graph-operation"]
+        def update(environment, patch_body, *, profile=None):
+            arguments = ["update", "--input", str(record), "--expect-sha256", records.digest(record.read_bytes()), "--patch", "-"]
+            selected = command if profile is None else [sys.executable, "-I", "-B", "-X", "utf8", "-c", profile, *command[1:]]
+            return subprocess.run([*selected, *arguments], env=environment, cwd=project, input=patch_body,
+                                  capture_output=True, text=True, timeout=40)
+        positive = update(environment, '{"tasks":{"api":{"set":{"state":"RUNNING"}}}}')
+        self.assertEqual(0, positive.returncode, positive.stderr)
+        self.assertTrue(json.loads(positive.stdout)["updated"])
+        self.assertEqual("RUNNING", json.loads(record.read_bytes())["tasks"][0]["state"])
+        with Tree(project) as tree:
+            before = tree.read("graph.json")
+        body = '{"tasks":{"api":{"set":{"agent_ref":{"host":"codex","agent_id":"case-root-fixture"}}}}}'
+        for field, value in (("AGENT_WORKFLOW_STATE_DIR", self.states[1]),
+                             ("AGENT_WORKFLOW_CORE_ROOT", second.root),
+                             ("AGENT_WORKFLOW_CONFIG_PATH", foreign_project / ".agent-workflow/project.yaml")):
+            with self.subTest(field=field):
+                denied = update({**environment, field: str(value)}, body)
+                self.assertEqual(2, denied.returncode, denied.stderr)
+                self.assertEqual("", denied.stdout)
+                self.assertIn("三根", denied.stderr)
+                with Tree(project) as tree:
+                    self.assertEqual(before, tree.read("graph.json"))
+                self.assertFalse(list(project.glob(".*.workflow-*")))
+        # 这是导入之后的来源谓词故障注入，不是绕过预存lib拒绝。两个来源
+        # 路径实际位于不同NTFS根；改__file__只能让来源检查拒绝，不能续用CAS。
+        profile = '''import os,runpy,sys
+def observe(frame,event,value):
+    if event == "call" and frame.f_code.co_name == "_runner_module_sources" and "lib.runtime_store" in sys.modules:
+        sys.modules["lib.runtime_store"].__file__=ORIGIN
+values=sys.argv[1:]
+while values and values[0] in {"-I","-B","-X"}:
+    del values[:2 if values[0] == "-X" else 1]
+sys.argv=values
+sys.setprofile(observe)
+runpy.run_path(values[0],run_name="__main__")
+'''.replace("ORIGIN", repr(str(second.root / "lib/runtime_store.py")))
+        denied = update(environment, body, profile=profile)
+        self.assertEqual(2, denied.returncode, denied.stderr)
+        self.assertEqual("", denied.stdout)
+        self.assertIn("已加载模块", denied.stderr)
+        with Tree(project) as tree:
+            self.assertEqual(before, tree.read("graph.json"))
+        self.assertFalse(list(project.glob(".*.workflow-*")))
 
 
 if __name__ == "__main__":
