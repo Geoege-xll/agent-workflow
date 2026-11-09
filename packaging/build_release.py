@@ -19,7 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from manager.release import source_version
 RELEASE_FILES = (
-    "workflow.sh", "install.sh", "setup_all.sh", "setup_claude.sh",
+    "workflow.sh",
+    # 原生 Windows 与 Bash 共用同一 manager 实现；发行包必须同时携带薄入口
+    # 及已锁定的 TUI 依赖清单。纳入载荷只证明文件完整，不代替真机运行验收。
+    "workflow.py", "workflow.ps1", "workflow.cmd", "requirements-windows.txt",
+    "install.sh", "setup_all.sh", "setup_claude.sh",
     "setup_codex.sh", "setup_antigravity.sh", "project.yaml", "README.md",
     # 用户离线入口只需要这三份手册；历史计划、原型及私有文档不进入载荷。
     "docs/usage.md", "docs/development.md", "docs/homebrew.md",

@@ -52,7 +52,13 @@ def assert_offline_manual_links(test, documents, available_paths):
 
 class ReleaseArchiveTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="awf-release-test-")
+        supplied = os.environ.get("AWF_TEST_SCRATCH")
+        parent = Path(supplied) / "release-packaging" if supplied else None
+        if parent is not None:
+            parent.mkdir(parents=True, exist_ok=True)
+        # 与 Formula 模拟一样优先使用请求已有临时根；各用例仅回收自己创建的夹具。
+        self.temp = tempfile.TemporaryDirectory(prefix=self._testMethodName + "-", dir=parent)
+        self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.source = self.root / "source"
         self.source.mkdir()
@@ -136,6 +142,34 @@ class ReleaseArchiveTest(unittest.TestCase):
             for relative in MANUAL_FILES:
                 self.assertEqual(documents[relative], (PACK / relative).read_bytes())
             assert_offline_manual_links(self, documents, available)
+            # 独立枚举实际消费者需要的文件，不能仅从构建器白名单反推期望，
+            # 否则遗漏原生入口或锁文件时，夹具与断言会一起遗漏而仍然变绿。
+            for relative in ("workflow.py", "workflow.ps1", "workflow.cmd", "requirements-windows.txt"):
+                self.assertIn(relative, available)
+                self.assertTrue(stream.getmember(prefix + relative).isfile())
+                self.assertEqual(stream.extractfile(prefix + relative).read(), (PACK / relative).read_bytes())
+            self.assertFalse(any(member.issym() or member.islnk() for member in stream))
+            extracted = self.root / "extracted"
+            extracted.mkdir()
+            stream.extractall(extracted, filter="data")
+        packaged = extracted / prefix.rstrip("/")
+        # 在当前宿主从真实归档运行共享 Python 入口，确保不会借用源码根导入。
+        # 此证据不执行 PowerShell/cmd，也不宣称 Windows/ConPTY/TUI 已验收。
+        for argument in ("--help", "--version"):
+            result = subprocess.run(
+                ["bash", str(packaged / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-I",
+                 str(packaged / "workflow.py"), argument],
+                cwd=self.root, env={**os.environ, "AGENT_WORKFLOW_PYTHON": sys.executable},
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if argument == "--version":
+                self.assertEqual(result.stdout.splitlines(), [
+                    f"awf-cli {version}", f"中央源根：{packaged}", "入口来源：formal（发行包）",
+                    f"物理载荷根：{packaged}",
+                ])
+            else:
+                self.assertTrue(result.stdout.startswith("usage: awf-cli"))
 
     def test_manual_parent_symlink_is_rejected_without_output(self):
         # 文件本身是普通文件也不能沿 docs 父目录链接读取源包外材料。
@@ -174,11 +208,15 @@ class ReleaseArchiveTest(unittest.TestCase):
         self.assertEqual(before, [path.read_bytes() for path in files])
 
     def test_missing_entries_and_payload_symlinks_are_rejected(self):
-        script = self.source / "workflow.sh"
-        script.unlink()
-        with self.assertRaises(ValueError):
-            release.build(self.source, "0.1.0", self.root / "out")
-        script.write_text("fixture")
+        # 任一原生入口或锁文件缺失都必须在写输出前拒绝；不能退化成仅 Bash 可用的包。
+        for relative in ("workflow.sh", "workflow.py", "workflow.ps1", "workflow.cmd", "requirements-windows.txt"):
+            script = self.source / relative
+            original = script.read_bytes()
+            script.unlink()
+            with self.subTest(relative=relative), self.assertRaises(ValueError):
+                release.build(self.source, "0.1.0", self.root / "out")
+            self.assertFalse((self.root / "out").exists())
+            script.write_bytes(original)
         (self.source / "lib/foreign").symlink_to(PACK / "README.md")
         with self.assertRaises(ValueError):
             release.build(self.source, "0.1.0", self.root / "out")
