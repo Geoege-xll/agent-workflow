@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from lib.platform_fs import directory_lock
 from lib.central.runtime_project import LIMIT, Node, ProjectRuntimeError, Tree, json_bytes, node_id
@@ -643,6 +643,121 @@ if __name__ == "__main__":
 
 class WindowsNodeCodecContractTest(unittest.TestCase):
     """只验证平台 codec 纯合同；这些用例不冒充 Win32 文件系统执行证据。"""
+
+    def _publication_record(self, kind):
+        project = Path("/portable-codec-project")
+        relative = ".agent-workflow/runtime.py" if kind == "file" else ".agents/skills/xy-workflow"
+        body = b"stage" if kind == "file" else b"C:/state/runtimes/" + b"a" * 64 + b"/core/platforms/shared/skills/xy-workflow"
+        planned = Node(kind, body, 0o644 if kind == "file" else 0o777)
+        staged = Node(kind, body, 0o600 if kind == "file" else 0o777,
+                      (1, 2, 0, 1, len(body), 5, 6), "a" * 64)
+        parent = relative.rpartition("/")[0]
+        stem = parent + f"/.agent-workflow-central-{NONCE}-0"
+        row = {"path": relative, "before": Node().value(), "after": staged.value(),
+               "backup": stem + ".previous", "stage": stem + ".stage", "rollback": stem + ".rollback",
+               "stage_inode": [1, 2] if kind == "file" else [1, 99], "published_inode": [1, 2]}
+        if kind == "link":
+            row["stage_security"] = "c" * 64
+        record = {"schema_version": 1, "project_root": str(project), "id": NONCE, "phase": "prepared",
+                  "action": "enable", "binding_before": Node().value(), "changes": [row], "conflicts": []}
+        return project, record, planned, staged
+
+    def test_windows_journal_requires_actual_stage_witness_before_publication(self):
+        from types import SimpleNamespace
+        from lib.central import runtime_project as resource
+        from manager import runtime_state
+        with patch.object(resource, "os", SimpleNamespace(name="nt")), \
+                patch.object(runtime_state, "os", SimpleNamespace(name="nt")):
+            for kind in ("file", "link"):
+                project, record, planned, staged = self._publication_record(kind)
+                def decode(value):
+                    # 使用真实外层 decoder，坏 Node 的领域异常也必须统一封闭。
+                    return runtime_state._decode(Node("file", json_bytes(value), 0o600), project, "transactions")
+                self.assertEqual(record, decode(record))
+                installed = Node(kind, staged.payload, staged.mode, (*staged.identity[:6], 7), staged.security)
+                complete = copy.deepcopy(record)
+                complete["changes"][0]["installed"] = installed.value()
+                self.assertEqual(complete, decode(complete))
+                # published_inode 已声明准备发布，不能仍用 planned 的空权限作授权；
+                # 也不能只比较 ACL 和 inode 二元组，而放过实际元数据或类型失真。
+                invalid = [("after", planned.value()), ("published_inode", [1, 8]),
+                           ("after", {**staged.value(), "security": ""}),
+                           ("after", {key: value for key, value in staged.value().items() if key != "security"}),
+                           ("stage_inode", [1, 8]) if kind == "file" else ("stage_security", None)]
+                for key, value in invalid:
+                    broken = copy.deepcopy(record)
+                    broken["changes"][0][key] = value
+                    with self.subTest(kind=kind, field=key), self.assertRaises(service.ActivationError):
+                        decode(broken)
+                for changed in (Node(kind, staged.payload, staged.mode, (*staged.identity[:6], 7), "b" * 64),
+                                Node(kind, staged.payload, staged.mode, (*staged.identity[:5], 9, 7), staged.security),
+                                planned):
+                    broken = copy.deepcopy(complete)
+                    broken["changes"][0]["installed"] = changed.value()
+                    with self.subTest(kind=kind, installed=changed.identity), self.assertRaises(service.ActivationError):
+                        decode(broken)
+                malformed_stage = copy.deepcopy(record)
+                del malformed_stage["changes"][0]["published_inode"]
+                if kind == "link":
+                    del malformed_stage["changes"][0]["stage_security"]
+                else:
+                    malformed_stage["changes"][0]["after"] = Node().value()
+                with self.subTest(kind=kind, stage_type="inconsistent"), self.assertRaises(service.ActivationError):
+                    decode(malformed_stage)
+
+    def test_windows_stage_registration_and_recovery_keep_frozen_security(self):
+        from types import SimpleNamespace
+        from lib.central import runtime_project as resource
+        from manager import runtime_state
+        platform = SimpleNamespace(name="nt", fsdecode=os.fsdecode, fsync=Mock())
+        with patch.object(resource, "os", platform), patch.object(runtime_state, "os", platform), \
+                patch.object(service, "os", platform):
+            for kind in ("file", "link"):
+                project, record, planned, staged = self._publication_record(kind)
+                row = record["changes"][0]
+                row["after"] = planned.value()
+                del row["published_inode"]
+                self.assertEqual(staged, service._register_stage(row, staged))
+                self.assertEqual(staged.value(), row["after"])
+                self.assertEqual([1, 2], row["published_inode"])
+                self.assertEqual(record, runtime_state._journal(record, project))
+                moved = Node(kind, staged.payload, staged.mode, (*staged.identity[:6], 7), staged.security)
+                self.assertTrue(runtime_state.same_published_node(moved, staged), "rename-only ChangeTime is permitted")
+                for changed in (moved, Node(kind, staged.payload, staged.mode, moved.identity, "b" * 64),
+                                Node(kind, staged.payload, staged.mode, (*staged.identity[:5], 9, 7), staged.security)):
+                    valid = changed == moved
+                    self.assertEqual(valid, runtime_state.same_published_node(changed, staged))
+                    # 只模拟恢复调用的观测值，实际执行同一恢复分支与严格 codec。
+                    # 不相符的 ACL/mtime 不能触发 move，也不能反填 after 追认权限。
+                    tree = SimpleNamespace(parent=lambda relative: (1, Path(relative).name))
+                    observed = [changed, moved] if valid else [changed]
+                    recovery = copy.deepcopy(record)
+                    if valid:
+                        service._register_installed(recovery["changes"][0], changed)
+                    else:
+                        with self.assertRaises(service.ActivationError) as rejected:
+                            service._register_installed(recovery["changes"][0], changed)
+                        self.assertIn(row["path"], str(rejected.exception))
+                        self.assertNotIn("installed", recovery["changes"][0])
+                    self.assertEqual(recovery, runtime_state._journal(recovery, project))
+                    with self.subTest(kind=kind, valid=valid), patch.object(service, "_retained", return_value=[]), \
+                            patch.object(service, "_raw", return_value=Node()), patch.object(service, "read_at", side_effect=observed), \
+                            patch.object(service, "move_at") as moving, patch.object(service, "_cleanup_stage"):
+                        conflicts, retained = service._restore(tree, recovery)
+                    self.assertEqual(not valid, bool(conflicts))
+                    self.assertEqual(int(valid), moving.call_count)
+                    self.assertEqual(int(valid), len(retained))
+                    self.assertEqual(staged.value(), recovery["changes"][0]["after"])
+                if kind == "file":
+                    # 原文件 ACL 是独立已验前像，克隆不一致必须在隔离原件前拒绝。
+                    unready = copy.deepcopy(record["changes"][0])
+                    unready["before"] = Node("file", b"old", 0o600, (1, 8, 0, 1, 3, 5, 6), "b" * 64).value()
+                    unready["after"] = planned.value()
+                    del unready["published_inode"]
+                    with self.assertRaises(service.ActivationError):
+                        service._register_stage(unready, staged)
+                    self.assertNotIn("published_inode", unready)
+                    self.assertEqual(planned.value(), unready["after"])
 
     def test_posix_codec_stays_four_fields_and_windows_actual_requires_security(self):
         from types import SimpleNamespace

@@ -28,6 +28,7 @@ from lib.central.runtime_project import (
     absolute_directory, canonical_project, central_block, identity, json_bytes,
     managed_path, merge_central_block, node_id, read_at, relative_path, skill_parts,
     unique_json, validate_skill_link, move_at, publish_at, clone_file_permissions, content_mode, delete_at,
+    native_snapshot,
 )
 
 
@@ -42,6 +43,7 @@ from .runtime_state import (
     retained_record as _retained_record, state_relative as _state_relative,
     write_private as _write_private,
     CONFLICT_REASON_LIMIT, bounded_conflicts, publication_capacity,
+    same_published_node,
 )
 
 
@@ -439,6 +441,38 @@ def _cleanup_stage(tree: Tree, row: dict) -> None:
                                                  "security": row["stage_security"]})
 
 
+def _register_stage(row: dict, staged: Node) -> Node:
+    """file/Skill 共用登记边界；在隔离原件前把已验证 stage 见证写入原 after 字段。"""
+    expected = Node.from_value(row["after"])
+    if not staged.same_content(expected):
+        raise ActivationError("stage 产物与计划内容不符：" + row["path"])
+    if os.name == "nt":
+        native_snapshot(staged)  # 拒绝 planned/缺失 ACL，不能以 inode 二元组代替实际事实。
+        if staged.kind == "file":
+            before = Node.from_value(row["before"])
+            if (list(staged.identity[:2]) != row.get("stage_inode")
+                    or before.kind == "file" and staged.security != before.security):
+                raise ActivationError("stage 文件身份或原权限见证不符：" + row["path"])
+        row["after"] = staged.value()
+    elif staged.kind == "link":
+        # POSIX 保持原记录形状及软链实际 mode 投影，不引入 Windows 身份字段。
+        row["after"] = Node("link", expected.payload, staged.mode).value()
+    row["published_inode"] = list(staged.identity[:2])
+    return Node.from_value(row["after"])
+
+
+def _register_installed(row: dict, current: Node) -> None:
+    """验证已登记 stage 的发布后事实，成功前不污染可恢复 journal。"""
+    after = Node.from_value(row["after"])
+    if not current.same_content(after):
+        raise ActivationError("发布产物与计划不一致：" + row["path"])
+    if os.name == "nt" and current.kind != "missing" and not same_published_node(current, after):
+        # ACL/身份漂移不能被当前快照追认成授权，也不能先把坏 installed
+        # 放入 journal，使补偿完成后连冲突日志自身都无法持久化。
+        raise ActivationError("发布节点与已登记 stage 的身份、内容或 ACL 不一致：" + row["path"])
+    row["installed"] = current.value()
+
+
 def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None:
     """先登记 stage inode，后隔离旧节点，再以 no-replace link 发布完整产物。"""
     _application_budget()
@@ -466,11 +500,7 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
         staged = read_at(parent, stage_name)
         if list(staged.identity[:2]) != row["stage_inode"]:
             raise ActivationError("stage 文件在读取前已被替换")
-        # Windows after 保存本次真实 stage Node，不加第二份正文/新 journal 字段；
-        # cleanup/recovery 因而有完整身份与 ACL 授权，而不仅依赖 inode 二元组。
-        after = staged
-        row["after"] = staged.value()
-        row["published_inode"] = list(staged.identity[:2])
+        after = _register_stage(row, staged)
         os.fsync(parent)
         save()
         if read_at(parent, name) != before:
@@ -496,10 +526,7 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
                     raise ActivationError("发布 Skill 缺少已验证固定核心")
                 publish_skill_symlink(stage, name, Path(os.fsdecode(after.payload)), core_root=core.root)
             staged = read_at(stage, name, allow_link=after.kind == "link")
-            if after.kind == "link":
-                after = staged if os.name == "nt" else Node("link", after.payload, staged.mode)
-                row["after"] = after.value()
-            row["published_inode"] = list(staged.identity[:2])
+            after = _register_stage(row, staged)
             os.fsync(stage)
             save()  # 崩溃后只撤回这个 inode，不凭相同字节删除别人的后来保存。
             if read_at(parent, name, allow_link=bool(skill_parts(row["path"]))) != before:
@@ -520,9 +547,7 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
                        src_dir_fd=parent if file_stage else stage, dst_dir_fd=parent, expected=staged)
         os.fsync(parent)
         current = read_at(parent, name, allow_link=bool(skill_parts(row["path"])))
-        if not current.same_content(after):
-            raise ActivationError("发布产物与计划不一致：" + row["path"])
-        row["installed"] = current.value()
+        _register_installed(row, current)
         save()
         tree.check()
     finally:
@@ -585,9 +610,9 @@ def _restore(tree: Tree, journal: dict) -> tuple[list[dict], list[dict]]:
                     raise ActivationError("原文件和旧 inode 均缺失")
             elif _same_moved(actual, before) and backup.kind == "missing":
                 pass
-            elif (actual.same_content(after) and content_mode(actual.mode) == content_mode(after.mode)
-                  and list(actual.identity[:2]) == row.get("published_inode")
-                  and (os.name != "nt" or actual.security == after.security)):
+            elif (list(actual.identity[:2]) == row.get("published_inode")
+                  and (same_published_node(actual, after) if os.name == "nt" else
+                       actual.same_content(after) and content_mode(actual.mode) == content_mode(after.mode))):
                 rolled = Path(row["rollback"]).name
                 if _raw(tree, row["rollback"]).kind != "missing":
                     raise ActivationError("回滚 inode 保留位置发生碰撞")

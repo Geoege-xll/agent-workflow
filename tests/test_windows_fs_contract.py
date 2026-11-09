@@ -47,6 +47,52 @@ class WindowsComponentContractTest(unittest.TestCase):
 
 
 class WindowsAclContractTest(unittest.TestCase):
+    def test_private_restriction_is_idempotent_only_for_complete_policy(self):
+        """真实纯策略决定幂等路径；调用替身只证明写入/后置检查，不冒充原生 ACL。"""
+        user = bytes.fromhex("010100000000000515000000")
+        system = bytes.fromhex("010100000000000512000000")
+        def policy(*, protected=True, rights=0x1F01FF, extra=False, owner=user):
+            sids = (user, system, user) if extra else (user, system)
+            entries = b"".join(bytes((0, 3)) + (8 + len(sid)).to_bytes(2, "little")
+                               + rights.to_bytes(4, "little") + sid for sid in sids)
+            acl = (bytes((2, 0)) + (8 + len(entries)).to_bytes(2, "little")
+                   + len(sids).to_bytes(2, "little") + b"\0\0" + entries)
+            return SimpleNamespace(owner=owner, control=0x1004 if protected else 4, acl_bytes=acl)
+        private = policy()
+        with patch.object(fs, "current_sid", return_value="user"), \
+                patch.object(fs, "_sid_bytes", return_value=user):
+            # 已满足全部 owner/protected/精确 ACE 条件时，不应生成新 SD 或
+            # 调权限写 API。纯判定未被替换，且前像必须从同一个 handle 取得。
+            inspected = Mock(side_effect=lambda handle: nullcontext(private))
+            with patch.object(fs, "_security_policy", inspected), \
+                    patch.object(fs, "private_security", side_effect=AssertionError("verified policy must not be rewritten")), \
+                    patch.object(fs, "_api", side_effect=AssertionError("verified policy must not reach a write API")):
+                fs.restrict_handle(123)
+            inspected.assert_called_once_with(123)
+            for label, before in (("unprotected", policy(protected=False)),
+                                  ("extra-ace", policy(extra=True)), ("insufficient-rights", policy(rights=0x120089))):
+                for repaired in (True, False):
+                    with self.subTest(policy=label, repaired=repaired):
+                        inspected = Mock(side_effect=lambda handle, values=iter((before, private if repaired else before)):
+                                         nullcontext(next(values)))
+                        written = Mock(return_value=0)
+                        api = SimpleNamespace(security=SimpleNamespace(SetSecurityInfo=written))
+                        with patch.object(fs, "_security_policy", inspected), \
+                                patch.object(fs, "private_security", return_value=nullcontext(77)), \
+                                patch.object(fs, "_dacl", return_value=88), patch.object(fs, "_api", return_value=api):
+                            if repaired:
+                                fs.restrict_handle(123)
+                            else:
+                                with self.assertRaisesRegex(ValueError, "postcondition"):
+                                    fs.restrict_handle(123)
+                        written.assert_called_once_with(123, 1, 0x80000004, None, None, 88, None)
+                        self.assertEqual([((123,), {}), ((123,), {})], inspected.call_args_list)
+            # 即使请求私有，未知 owner 仍须在任何权限写入前拒绝。
+            with patch.object(fs, "_security_policy", return_value=nullcontext(policy(owner=b"foreign"))), \
+                    patch.object(fs, "private_security", side_effect=AssertionError("foreign owner must not be mutated")), \
+                    self.assertRaisesRegex(ValueError, "foreign owner"):
+                fs.restrict_handle(123)
+
     def test_private_owner_assignment_only_accepts_current_user_or_elevated_default_admin(self):
         sids = {"user": b"user", "S-1-5-32-544": b"admins"}
         with patch.object(fs, "current_sid", return_value="user"), \
