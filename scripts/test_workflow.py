@@ -86,10 +86,19 @@ GROUPS["windows-native-repair"] = (
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_consuming_regular_move_preserves_identity_and_excludes_existing_target",
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_managed_skill_exact_create_read_move_delete_and_stale_refusal",
 )
+# 中央阶段仅绑定新增消费者及其直接依赖的条件删除原语。已有库与 rename 修复
+# 证据继续按输入有效性复用，不因中央接入重复执行全库；本组仍要求每个方法及
+# 原生子场景真实执行，输入未组合或节点未冻结时不得以缺失/skip 声称验收成功。
+GROUPS["windows-native-central"] = (
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_complete_regular_delete_preserves_acl_writer_replacement_and_deletes_owned",
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_conditional_empty_directory_and_streaming_read_exclude_changes",
+    "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
+    "tests.test_central_project.WindowsCentralComposedNativeTest.test_project_junction_is_rejected_before_resolve_and_writes",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
-NATIVE_GROUPS = frozenset(("windows-native-libraries", "windows-native-repair", "windows-native"))
+NATIVE_GROUPS = frozenset(("windows-native-libraries", "windows-native-repair", "windows-native-central", "windows-native"))
 
 
 def make_parser():
