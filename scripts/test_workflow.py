@@ -109,12 +109,26 @@ GROUPS["windows-native-renderer"] = (
     "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_stage_and_home_junctions_are_rejected",
     "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_node_timeout_terminates_descendants",
 )
+# CI42563956735 已将失败收敛到中央 scratch/installed ACL 投影和共享 Job wait
+# 屏障。下列两组只补真实受影响节点：中央组合消费者复用既有登记，HTML 的已绿
+# junction 方法及未受影响的底层/Job 方法保留原证据，不因共享后端修复全量重跑。
+GROUPS["windows-native-central-acl-repair"] = GROUPS["windows-native-central-repair"] + (
+    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_private_directory_chmod_is_idempotent_and_preserves_security",
+)
+GROUPS["windows-native-renderer-process-repair"] = (
+    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_render_check_preserves_source_and_vendor_bytes",
+    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_node_timeout_terminates_descendants",
+    "tests.test_install_process_windows.NativeWindowsJobTest.test_wait_confirms_normal_descendant_handles",
+    "tests.test_install_process_windows.NativeWindowsJobTest.test_timeout_drains_child_and_grandchild_before_recovery",
+    "tests.test_install_process_windows.NativeWindowsJobTest.test_capture_cancel_file_drains_its_job",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
 NATIVE_GROUPS = frozenset((
     "windows-native-libraries", "windows-native-repair", "windows-native-central",
-    "windows-native-central-repair", "windows-native-renderer", "windows-native",
+    "windows-native-central-repair", "windows-native-renderer",
+    "windows-native-central-acl-repair", "windows-native-renderer-process-repair", "windows-native",
 ))
 
 
