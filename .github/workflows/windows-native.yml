@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run fixed native central-repair and renderer stages or independent capability probe; complete acceptance is still blocked'
+        description: 'Run fixed native central-ACL and renderer-process repair stages or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -113,11 +113,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: windows-native-central-repair
-            methods: 1
+          - group: windows-native-central-acl-repair
+            methods: 2
             node_required: false
-          - group: windows-native-renderer
-            methods: 3
+          - group: windows-native-renderer-process-repair
+            methods: 5
             node_required: true
     defaults:
       run:
@@ -147,12 +147,20 @@ jobs:
           $stream.Dispose()
           $code = 1
           try {
+            # fixture 在清理前把已知 engine/安装日志追加到独立文件。排他创建后
+            # 立即关闭句柄，不能与 Tee 持续写入的主日志共用同一路径而触发 Win
+            # 共享锁冲突；环境变量只存在于本 stage 进程及其测试子进程，不写 GITHUB_ENV。
+            $processLog = [System.IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "${stage}-process.log"))
+            $processStream = [System.IO.File]::Open($processLog, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+            $processStream.Dispose()
+            $env:AWF_TEST_EVIDENCE_LOG = $processLog
+            "process_evidence_path=$processLog" | Tee-Object -FilePath $log -Append
             $PSVersionTable | Out-String | Tee-Object -FilePath $log -Append
             if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell >= 7.0 is required.' }
             $python = $env:NATIVE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
             "stage=$stage" | Tee-Object -FilePath $log -Append
-            "scope=required-methods-only; method_count=$env:NATIVE_METHODS; central_baseline_ci=42559903683; central_previous_ci=42561815311" | Tee-Object -FilePath $log -Append
+            "scope=affected-repair-methods-only; method_count=$env:NATIVE_METHODS; baseline_ci=42563956735" | Tee-Object -FilePath $log -Append
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
             "python_path=$python" | Tee-Object -FilePath $log -Append
             $runtimeCheck = 'import platform,struct,sys; print(sys.version); print(platform.platform()); print("pointer_bits="+str(struct.calcsize("P")*8)); raise SystemExit(0 if sys.version_info >= (3,11) and struct.calcsize("P")==8 else 1)'
@@ -231,7 +239,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-server-${{ matrix.group }}-methods-${{ matrix.methods }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/${{ matrix.group }}.log
+          path: |
+            ${{ runner.temp }}/${{ matrix.group }}.log
+            ${{ runner.temp }}/${{ matrix.group }}-process.log
           if-no-files-found: error
           retention-days: 14
 
