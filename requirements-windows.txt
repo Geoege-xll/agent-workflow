@@ -1,0 +1,19 @@
+# 仅为现有 curses TUI 补齐 Windows 标准库缺失的 _curses/_curses_panel；
+# 库阶段只用 stdlib，不读取或安装本文件。后续 TUI 验证仅在请求自有的全新 venv
+# 中使用 python -m pip --isolated install -r requirements-windows.txt，不全局安装。
+# 官方 PyPI 2.4.2（2026-03-31）和上游发布提交已核对：许可证 PSF2，无 Requires-Dist。
+# 来源：https://pypi.org/project/windows-curses/2.4.2/
+# 上游：https://github.com/zephyrproject-rtos/windows-curses/tree/d08ac00b1d16b4dac2f8db9c2b41da01f9130ada
+# 以下依次锁定普通 GIL CPython 3.11/3.12/3.13/3.14 的 win_amd64 官方 wheel。
+# wheel 供应不代表这些解释器已完成产品验收；首个 TUI 原生验收目标为 CPython 3.11 x64。
+# 仅使用 Windows marker，避免把未锁定解释器/架构静默 skip 为安装成功；不支持的
+# wheel/ABI 应由 pip 拒绝，不回退到源码构建、其它终端框架或下载 Python。
+--index-url https://pypi.org/simple
+--require-hashes
+--only-binary=:all:
+
+windows-curses==2.4.2 ; sys_platform == "win32" \
+    --hash=sha256:03c4ef0095ab8212ed964236d51b4d8c815f302c5a7de94831dae468f05ce333 \
+    --hash=sha256:df782859176f9e8142618e4966d6cee7a53a8b1c819faeb6e606a60fa4f8972a \
+    --hash=sha256:1bf3d0c902374b6c430a954adcb686a5ecd7a31fc4195d31136385b5c1bea925 \
+    --hash=sha256:6c22cb0310500dfbfe54c76354e37070e300d5473596d48ac4f9c65b2d578b6f
