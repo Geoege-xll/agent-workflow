@@ -37,7 +37,11 @@ HTML 公开生成入口及流程要求已暂停，保留实现注释、历史页
 
 后续冻结候选 7413123 的独立原生补验中，真实 PM 自己结算 evidence 原包，活动占用 1→0；PM/Worker 正常完成，unsubscribe 后默认约60秒出现各自 thread/closed。剩余宿主额度无法确认，next 未领取；这不是 PM close 工具或运行子任务跨 parent final 的证明。测试源引用的 symlink 被 setup --check 安全拒绝，不能把该 fixture bootstrap 算通过；原生正向路径与后续边界增量分开保留证据，旧失败原包不改绿。
 
-Windows ConPTY 八项真实原生方法已通过；中央安装、固定核心、薄桥和 Hook 已取得实际证据。偏好 reset 的显式宿主上下文和 restore 的精确 Windows mode 投影已修复，完整链尚待新验收。PowerShell Legacy 与 console API 对照已通过；TUI 测试的访问权及通信文件覆盖问题已按实测重构，新增 Git 多 PATH 单值预检，尚待真实 TUI 三项。唯一原生清单已收敛为8组件、当前101方法，PR/手动发行复用同提交 Windows gate；清单收集不是执行通过。Win11 普通用户桌面和 Codex App 界面仍未验收；App 自动化被工具安全策略禁止，不绕过读取用户会话。
+候选 e4e0cbc 的草稿 PR #1 运行 42630780815 已结束，实际执行的是 PR merge c5708de。macOS、Linux 的既有 ci 全部通过；Windows 入口6项、中央边界3项、ConPTY8项、脚本/API诊断3项通过。唯一原生清单为8组件、当前104方法，PR/手动发行复用同提交 Windows gate；本轮 Windows 整体仍失败，不把清单收集或部分通过当作完整验收。
+
+真实 Windows 已通过短命 helper 退出码37及 IOCP 归零证明；嵌套测试误把可选通知设为必达，修复及独立增量复核正在进行。准入/结果收口41项中两处真实 Git 夹具失败，分别涉及 integration 干净状态及 .git 写入权限，原写者只读定位。TUI 的 Unicode/resize/Ctrl+C 已实际通过，项目与全局草稿暂存后仍未取得保存预览；正在根据原生帧和调用链区分交互与耗时原因，保留全部保存断言和原预算。
+
+中央完整链已通过真实 Hook、偏好覆盖/恢复/重置、停用后的固定 pin 读取及三个项目的 follow/pin 激活，随后 rollback 预览触发4MiB记录容量保护，仍需核查恢复记录与夹具的累积结构。Win11 普通用户桌面和 Codex App 界面仍未验收；App 自动化被工具安全策略禁止，不绕过读取用户会话。
 
 工作在独立请求暂存区与工作树中进行。原主目录五处未提交修改及未跟踪交接文档保持原样，不纳入本轮提交。各包具体状态、任务包和完整日志在本次请求暂存区保存；本计划只保留必要恢复信息。
 
