@@ -200,15 +200,19 @@ class ExampleTest(unittest.TestCase):
             "test_model_commit_read_preparation_keeps_callback_boundary_and_single_scan",
             "test_model_commit_read_preparation_rejects_finish_and_mutable_drift_before_write",
         ))
+        central_preview = tuple("tests.test_central_project.CentralProjectTest." + name for name in (
+            "test_project_previews_share_read_operation_and_preserve_source_inspection",
+            "test_central_preview_separates_pins_and_withholds_plan_on_exit_drift",
+        ))
         role_final_read = tuple("tests.test_role_preferences.RolePreferencesTest." + name for name in (
             "test_native_global_unchanged_projects_batch_final_read_phase",
             "test_native_global_unchanged_projects_recheck_original_observation_and_compensate",
         ))
-        # 中央保存边界必须实际进入 ordinary 原生组；RolePrefs 仍含 POSIX 前置，
+        # 中央保存/预览边界必须实际进入 ordinary 原生组；RolePrefs 仍含 POSIX 前置，
         # 只核对精准 ci，不能因方法带 native 字样就混入 Windows 清单。
         boundaries = runner.NATIVE_COMPONENTS["windows-native-central-boundaries"]
         self.assertEqual("ordinary", boundaries["qualification"])
-        self.assertTrue(set(read_preparation).issubset(runner.component_targets(boundaries)))
+        self.assertTrue(set(read_preparation + central_preview).issubset(runner.component_targets(boundaries)))
         self.assertTrue(set(role_final_read).isdisjoint(runner.GROUPS["windows-native"]))
         for selectors in (("ci",),("central","service","ci")):
             with self.subTest(selectors=selectors):
@@ -221,7 +225,7 @@ class ExampleTest(unittest.TestCase):
                 # 新保存预览的真实 App 回归必须经唯一 ci 清单运行，且组合选择不能重复。
                 self.assertEqual(1, targets.count("tests.test_manager_tui.TuiTest.test_save_preview_blocked_validation_keeps_ui_responsive_and_drafts"))
                 self.assertIn("tests.test_manager_tui.ProjectTuiIntegrationTest.test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize",targets)
-                for target in read_preparation + role_final_read:
+                for target in read_preparation + central_preview + role_final_read:
                     self.assertEqual(1, sum(target == parent or target.startswith(parent + ".") for parent in targets))
                 for component in runner.NATIVE_COMPONENTS.values():
                     for target in component.get("portable_ci_targets", ()):

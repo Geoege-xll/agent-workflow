@@ -135,6 +135,10 @@ NATIVE_COMPONENTS = {
             # 普通 ci 继续由 central_project 整模块覆盖，不增第二次执行选择。
             "tests.test_central_project.CentralProjectTest.test_model_commit_read_preparation_keeps_callback_boundary_and_single_scan",
             "tests.test_central_project.CentralProjectTest.test_model_commit_read_preparation_rejects_finish_and_mutable_drift_before_write",
+            # 项目/中央纯预览共享读取证明及退出漂移拒绝同样属于 ordinary 边界；
+            # 沿用中央 Skill 软链 fixture，无 Node/curses，普通 ci 仍由整模块覆盖。
+            "tests.test_central_project.CentralProjectTest.test_project_previews_share_read_operation_and_preserve_source_inspection",
+            "tests.test_central_project.CentralProjectTest.test_central_preview_separates_pins_and_withholds_plan_on_exit_drift",
         ),
         "qualification": "ordinary",
         "node_required": False, "curses_required": False,
