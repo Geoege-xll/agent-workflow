@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run fixed central and TUI diagnostic stages or capability probe; complete acceptance is still blocked'
+        description: 'Run fixed central and production TUI stages or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -108,8 +108,8 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 15
     strategy:
-      # 中央完整消费者单独验证同调用栈 Hook 和完整 Node 元数据修复；另一组仅
-      # 取验收脚本 Legacy 与 Console 访问诊断，不重跑失败 TUI 三方法或已绿 ConPTY。
+      # 本轮并行补中央 reset 上下文修复和 Console 观察器修复后的生产 TUI 三方法；
+      # 已通过的两诊断与 ConPTY 八方法继续复用证据，不延迟首次真实 UI 完整取证。
       fail-fast: false
       matrix:
         include:
@@ -117,11 +117,9 @@ jobs:
             methods: 1
             node_required: true
             curses_required: false
-          - group: windows-native-tui-diagnostics
-            methods: 2
+          - group: windows-native-tui
+            methods: 3
             node_required: false
-            # Legacy 方法真实调用身份函数，后者导入并校验 windows-curses；
-            # 虽不启动生产 TUI，仍须沿既有哈希锁安装，不能猜成 stdlib-only。
             curses_required: true
     defaults:
       run:
