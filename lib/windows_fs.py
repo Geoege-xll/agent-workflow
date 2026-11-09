@@ -428,12 +428,15 @@ def current_sid() -> str:
 
 
 @contextmanager
-def private_security():
+def private_security(*, inherit=True):
+    # 普通私有目录仍给后代继承 OI/CI；新建 Skill 软链只保护链接这个对象，
+    # 不给 target 传播权限。该可选项只改变新 SD 的 ACE flags，默认合同不变。
     api = _api()
     descriptor = HANDLE()
     sid = current_sid()
+    flags = "OICI" if inherit else ""
     _check(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        f"O:{sid}D:P(A;OICI;GA;;;{sid})(A;OICI;GA;;;SY)", 1, ctypes.byref(descriptor), None))
+        f"O:{sid}D:P(A;{flags};GA;;;{sid})(A;{flags};GA;;;SY)", 1, ctypes.byref(descriptor), None))
     try:
         yield descriptor
     finally:
@@ -467,7 +470,7 @@ def _private_owner_action(policy):
     """只接受本人，或确实提升时 CRT 默认 Administrators owner 的受限迁移。
 
     本边界不启用 SeTakeOwnership、不接管任意 SID；普通读取、权限复制和改名
-    都不调用它，只有调用者明确请求私有 chmod/fchmod 才能进入该策略。
+    都不调用它，只有私有 chmod/fchmod 或排他新建 Skill 的初始化使用该策略。
     """
     if policy.owner == _sid_bytes(current_sid()):
         return False
@@ -1206,6 +1209,62 @@ def move_regular(source, target, *, src_dir_fd=None, dst_dir_fd=None, expected: 
     _move_node(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, expected=expected)
 
 
+def _secure_created_skill(path, skill_name, expected):
+    """只在排他创建成功后固定新 owned link 的权限，随后调用者才冻结 stage。
+
+    不能用普通 chmod：普通句柄拒绝 reparse，跟随路径则会碰到核心 target。
+    始终使用 OPEN_REPARSE_POINT 句柄核对同名中央目标及完整创建见证；设置
+    不继承的两条 ACE，避免 SetSecurityInfo 向已有子对象传播可继承权限。
+    这里不提供既有用户链接的权限迁移入口，任何失败均保留对象而不盲删。
+    """
+    _check_expected(expected, "link")
+    handle = _open_skill_handle(path, 0x60080)  # READ_CONTROL | WRITE_DAC | READ_ATTRIBUTES
+    try:
+        if _opened_snapshot(handle, max_bytes=_LIMIT, skill_name=skill_name) != expected:
+            raise ValueError("new managed Skill changed before private permission initialization")
+        with _security_policy(handle) as before:
+            if before.fingerprint != expected["security"]:
+                raise ValueError("new managed Skill permissions changed before owner validation")
+            assign_owner = _private_owner_action(before)
+        if assign_owner:
+            # 普通用户 owner 不请求 WRITE_OWNER。仅确实提升时的默认 Admins
+            # owner 可转为本人；重开期间仍逐项比较创建时的完整 Node，不能
+            # 把后来替换的 inode、目标或 ACL 追认成本次新建的自有链接。
+            _close(handle)
+            handle = None
+            handle = _open_skill_handle(path, 0xE0080)
+            if _opened_snapshot(handle, max_bytes=_LIMIT, skill_name=skill_name) != expected:
+                raise ValueError("new managed Skill changed while reopening for owner assignment")
+        with private_security(inherit=False) as descriptor:
+            owner, defaulted = HANDLE(), BOOL()
+            if assign_owner:
+                _check(_api().security.GetSecurityDescriptorOwner(
+                    descriptor, ctypes.byref(owner), ctypes.byref(defaulted)))
+            error = _api().security.SetSecurityInfo(
+                handle, 1, 0x80000004 | int(assign_owner),
+                owner if assign_owner else None, None, _dacl(descriptor), None)
+            if error:
+                raise ctypes.WinError(error)
+        with _security_policy(handle) as policy:
+            if not _policy_is_private(policy):
+                raise ValueError("new managed Skill private owner or DACL postcondition failed")
+            # 通用私有策略允许 OI/CI；链接必须更窄，精确两条 ACE 均 flags=0。
+            # 不能仅凭 access mask 等价忽略 inherited/protected 等策略变化。
+            offset = 8
+            for _ in range(2):
+                if policy.acl_bytes[offset + 1] != 0:
+                    raise ValueError("new managed Skill DACL must not contain inheritable ACEs")
+                offset += int.from_bytes(policy.acl_bytes[offset + 2:offset + 4], "little")
+            security = policy.fingerprint
+        after = _opened_snapshot(handle, max_bytes=_LIMIT, skill_name=skill_name)
+        if (after["identity"][:6] != expected["identity"][:6] or after["mode"] != expected["mode"]
+                or after["payload"] != expected["payload"] or after["security"] != security):
+            raise ValueError("new managed Skill identity, target or permissions changed during initialization")
+    finally:
+        if handle is not None:
+            _close(handle)
+
+
 def create_skill_symlink(directory: int, name: str, target: Path, *, core_root: Path) -> None:
     target = _skill_target(target, name)
     if target != absolute_path(core_root) / "platforms/shared/skills" / name:
@@ -1217,6 +1276,10 @@ def create_skill_symlink(directory: int, name: str, target: Path, *, core_root: 
         created = read_skill_symlink(directory, name, skill_name=name)
         if created is None or created["payload"] != _os.fsencode(target):
             raise ValueError("managed Skill link changed immediately after creation")
+        # CreateSymbolicLinkW 不接受创建 SD。仅成功创建的新链接在此通过真实
+        # no-follow 句柄固定私有 owner/protected DACL，避免把 inherited ACL
+        # 冻结成 stage 后在跨父目录发布时继承策略改变而触发安全拒绝。
+        _secure_created_skill(path, name, created)
         flush_directory(path.parent)
 
 
