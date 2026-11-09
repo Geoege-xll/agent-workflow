@@ -43,13 +43,13 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 TUI沿用已确认布局，实际输入、Win32最终屏幕和ConPTY进程生命周期共同取证。Unicode/组合字符、resize、Ctrl+C和终端恢复已有真实通过记录；项目与全局保存预览仍须完整复验。后台预览只复用既有单作业，捕获范围、来源和 expected，保留草稿、取消和提交重验；不改设计，不放宽原超时预算。
 
-当前唯一原生清单为8组件106方法，由 scripts/test_workflow.py 派生聚合与矩阵；PR/发行共用同候选 Windows gate，原生 skip、缺组、取消或未执行都拒绝。最新完整运行42647140927（232f007，实际 merge9840bcac且树相同）整体失败：库41含stage/ACL、瞬时及嵌套Job全部通过，入口6、边界3、脚本3通过；ConPTY Ctrl定向wait超时，另外7项通过；TUI两预览持续忙态超30秒，Unicode项通过；准入跨 pin 领取超60秒，另40项通过。中央在1720.610秒完成回滚，但后续补偿未在30分钟job内验完，不记完整PASS。
+当前唯一原生清单已收拢为9组件119方法，由 scripts/test_workflow.py 派生聚合、矩阵及范围描述；PR/发行只接受包含2项提升NTFS专项的full Windows gate，原生skip、缺组、取消或未执行都拒绝。普通desktop从同一registry派生117方法，明确排除提升2项，所选仍zeroSkip，不按当前权限自动降级。最新旧106项完整运行42647140927（232f007，实际 merge9840bcac且树相同）整体失败：库41含stage/ACL、瞬时及嵌套Job全部通过，入口6、边界3、脚本3通过；ConPTY Ctrl定向wait超时，另外7项通过；TUI两预览持续忙态超30秒，Unicode项通过；准入跨 pin 领取超60秒，另40项通过。中央在1720.610秒完成回滚，但后续补偿未在30分钟job内验完，不记完整PASS。
 
 Ctrl定向夹具的就绪合同、旧PTY等待和收据ID选择已修正审查，尚未新原生结果。42650533280排队时被取消，避免相同生产代码重复运行已知失败。中央公共读取重构在Mac实测preview单pin12scan→1、双pin23→2，fresh双pin claim从28经A去重21降到8scan/pub1；原record/pin、成员复核、退出完整尾检和发布前检查保持，不把计数当Windows时延证明。
 
-新读取增量正处理唯一QA的根身份Important：WindowsPath大小写折叠可把不同实际根视作相等，原owner统一修复租约、session/批读、runner三根与来源边界，再由相同Reviewer复核。精确Store/Records安全节点将纳入原生库；runner节点继承既有受管Skill软链资格，无Node/curses依赖；RolePreferences计数节点有pty/termios/curses既有依赖，仅进POSIX CI，不以skip或模拟冒充原生。
+根身份Important已由同一Reviewer代码复核闭合并运输：租约、session/单读/批读、runner三根/reader及模块来源统一使用保留大小写的绝对字面键，完整core字段与原守卫保留。17个有效红测子边界修后通过，14项精准消费者通过。Store/Records/词法节点已精确登记，runner2继承现有Skill软链资格；RolePreferences仍仅POSIX CI。独立NTFS类的2项仅Server/elevated，本地NTFS/fsutil作用于自有空目录，无Node/curses/WSL/软链前置；生产不设置flag，Mac只编译未运行。
 
-完成源审和精确登记后再运行完整同候选门禁。用户Win11 x64电脑可运行脚本，但已要求先整体开发；稳定候选后提供固定SHA、可审阅的 PowerShell7+ 验收脚本，普通用户实际日志/summary 与 Server证据分别记录。当前未取得Win11桌面、最终整体验收或统一QA；发布和本机升级未执行。
+资格/describe/脚本增量已完成原Reviewer阶段审查并运输，下一步运行完整同候选门禁。用户Win11 x64电脑可运行脚本，已要求先整体开发；稳定候选后提供固定SHA与可审阅的PowerShell7+入口。脚本保存scope.json及acceptance.json，成功status为SCOPED_PASS、scope为windows11-client-ordinary、full_registry_executed=false，实际selected117/excluded2来自同一registry；描述只收集，不算执行通过。普通用户入口保留原CPython/x64/curses版本检查和prefix记录，不新增已装wheel哈希或私有venv准入；requirements锁哈希在CI准备阶段验证。当前新119项Server门禁、Win11桌面与最终统一QA均未完成，发布和本机升级未执行。
 
 原生探针、旧失败、实际修复与源审记录分别保存在 native-windows-20261109、upgrade-214-20261109 请求暂存区和 Git历史。只保留必要源码/当前主题计划，不把阶段清单、模拟、部分通过或后续取消改写为完整验收。
 

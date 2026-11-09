@@ -41,9 +41,9 @@ HTML 计划生成的公开入口和流程要求已暂停，代码以注释保留
 
 Ctrl 定向夹具、真实 PTY 等待及按本次事务ID选择回滚收据已修正并阶段审查。后台保存预览沿用既有单作业和冻结上下文；TUI模块、真实 POSIX PTY 及阻塞校验消费者通过。公共读取重构使同 pin preview 完整扫描12→1、双 pin23→2，合后 fresh core 真实 claim28→A去重21→最终8次，仍实际发布1次，另一请求 bytes/pin不变。这些为 Mac 实际调用计数，不是 Windows 预算已通过。
 
-该读取重构尚未运输：唯一独立 QA 新发现 WindowsPath 大小写折叠不能证明实际根相同，可能在 NTFS 大小写敏感目录中跨根复用 reader。原 C owner 正统一修复租约、单文件/批读和 runner 的根及来源比较；原 Reviewer 将复核完整冻结增量。完整尾检、成员/ACL/身份、原 pin、发布前 CAS/最后证据及原预算全部保留，不能以扩大超时或减少校验取得通过。
+根身份 Important 已由原 owner 统一修复，并经同一 Reviewer 代码复核闭合：授权边界用保留大小写的绝对路径字面键，完整定位字段与原尾检、成员/ACL/身份、pin、发布前 CAS/最后证据及预算保留。11源文件按指纹运输；17个原失败子边界修后通过，14个精准消费者通过，实际NTFS负控仍待原生执行。
 
-下一步依次为根身份修复复核、精确安全节点纳入唯一清单、完整 macOS/Linux 与 Windows 同候选门禁、Win11普通用户桌面验收和最终独立 QA。通过后才能发布 GitHub/Tap 并升级本机中央程序及 current，三个跟随项目自动使用新 current；保留锁版、停用及项目偏好。npm/npx 不恢复。
+验证入口增量也已完成同一 Reviewer 的阶段审查并运输。唯一registry实际收集9组件119方法，Server full包含2项提升资格的NTFS专项；普通desktop范围从同一登记派生117方法，明确排除这2项，所选仍零skip。Win11成功只报告SCOPED_PASS、full_registry_executed=false及实际selected/excluded，不冒充本次执行完整Server集合。矩阵/描述/合同测试证明入口一致，尚非原生执行通过。下一步运行完整macOS/Linux与Windows同候选门禁、Win11普通用户桌面及最终独立QA，通过后发布GitHub/Tap并升级本机中央程序及current；三个跟随项目自动使用新current，保留锁版、停用及项目偏好。npm/npx不恢复。
 
 主目录五处原有未提交修改及未跟踪交接文档逐字节保持，不纳入候选。请求级 graph、任务包、原生事件、profile 与全部原始失败/复核日志保存在 upgrade-214-20261109 暂存区；本计划只保留当前决策与恢复入口，历史阶段可由 Git 与原始日志追溯。
 
