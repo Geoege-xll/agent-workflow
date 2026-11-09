@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class FakeWin32:
     """Exercise the real ctypes setup/Job owner without loading kernel32."""
 
-    def __init__(self, fail=None, active=(0,), exitcode=37, missing_stdin=False):
+    def __init__(self, fail=None, active=(0,), exitcode=37, missing_stdin=False,
+                 members=(9001,), total=None):
         self.fail = fail
         self.events = []
         self.closed = []
@@ -37,6 +38,11 @@ class FakeWin32:
         self.allowed = None
         self.startup = None
         self.creation = None
+        self.members = members
+        self.total = len(members) if total is None else total
+        self.process_handles = {100: 9001}
+        self.next_process_handle = 300
+        self.pending_members = set()
 
     def error(self, operation):
         return OSError(5, operation)
@@ -126,6 +132,15 @@ class FakeWin32:
         return True
 
     def QueryInformationJobObject(self, job, kind, data, size, returned):
+        if kind == 3:  # JobObjectBasicProcessIdList 的真实可变长 ABI。
+            self.record("query_members")
+            header = ctypes.cast(data, ctypes.POINTER(win.DWORD))
+            capacity = (size - 8) // ctypes.sizeof(win.SIZE_T)
+            header[0], header[1] = len(self.members), min(capacity, len(self.members))
+            values = ctypes.cast(ctypes.cast(data, ctypes.c_void_p).value + 8, ctypes.POINTER(win.SIZE_T))
+            for index, pid in enumerate(self.members[:capacity]):
+                values[index] = pid
+            return True
         if not self.record("query_active"):
             return False
         values = self.after_stop if self.terminated else self.active
@@ -134,6 +149,22 @@ class FakeWin32:
             values.pop(0)
         output = ctypes.cast(data, ctypes.POINTER(win.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)).contents
         output.ActiveProcesses = count
+        output.TotalProcesses = self.total
+        return True
+
+    def OpenProcess(self, access, inherit, pid):
+        self.next_process_handle += 1
+        self.process_handles[self.next_process_handle] = pid
+        return self.next_process_handle
+
+    def GetProcessTimes(self, process, created, exited, kernel, user):
+        ctypes.cast(created, ctypes.POINTER(ctypes.c_uint64))[0] = self.process_handles[process] * 10
+        return True
+
+    def IsProcessInJob(self, process, job, output):
+        if not self.record("member_identity"):
+            return False
+        ctypes.cast(output, ctypes.POINTER(win.BOOL))[0] = self.process_handles[process] in self.members
         return True
 
     def TerminateProcess(self, process, exitcode):
@@ -141,6 +172,12 @@ class FakeWin32:
 
     def WaitForSingleObject(self, process, timeout):
         self.record("wait_root")
+        pid = self.process_handles.get(process)
+        self.events.append(("wait_process", pid, timeout))
+        if pid in self.pending_members:
+            if timeout == 0:
+                return win.WAIT_TIMEOUT
+            self.pending_members.remove(pid)
         return win.WAIT_OBJECT_0
 
     def GetExitCodeProcess(self, process, output):
@@ -244,13 +281,15 @@ class WindowsCtypesBackendTest(unittest.TestCase):
         self.assertIn(200, api.closed)
 
     def test_failed_resume_terminates_and_drains_job(self):
-        api = FakeWin32(fail="resume", active=(2,))
-        with patch.object(win.time, "sleep"), self.assertRaises(OSError):
-            self.launch(api)
-        self.assertIn("terminate_job", api.events)
-        self.assertNotIn("discard_suspended", api.events)
-        self.assertEqual(3, api.events.count("query_active"))
-        self.assertLess(api.events.index("exitcode"), api.events.index(("close", 200)))
+        for failure in ("resume", "member_identity"):
+            api = FakeWin32(fail=failure, active=(2,))
+            with self.subTest(failure=failure), patch.object(win.time, "sleep"), self.assertRaises(OSError):
+                self.launch(api)
+            self.assertIn("terminate_job", api.events)
+            self.assertNotIn("discard_suspended", api.events)
+            self.assertLess(api.events.index("exitcode"), api.events.index(("close", 200)))
+            if failure == "member_identity":
+                self.assertNotIn("resume", api.events)
 
     def test_wait_observes_grandchildren_not_just_root_exit(self):
         api = FakeWin32(active=(2, 1, 0), exitcode=17)
@@ -258,7 +297,7 @@ class WindowsCtypesBackendTest(unittest.TestCase):
         with patch.object(win.time, "sleep") as pause:
             self.assertEqual(17, process.wait())
         self.assertEqual(2, pause.call_count)
-        self.assertEqual(3, api.events.count("query_active"))
+        self.assertTrue(process._quiescent)
         self.assertGreater(api.events.index("wait_root"), api.events.index("query_active"))
         process.close()
         self.assertNotIn("terminate_job", api.events)
@@ -271,10 +310,41 @@ class WindowsCtypesBackendTest(unittest.TestCase):
         with patch.object(win.time, "sleep") as pause:
             process.stop()
         self.assertEqual(2, pause.call_count)
-        self.assertEqual(4, api.events.count("query_active"))
+        self.assertTrue(process._quiescent)
         self.assertEqual(37, process.returncode)
         process.close()
         self.assertEqual(1, api.events.count("terminate_job"))
+
+    def test_cumulative_member_gap_never_claims_quiescence(self):
+        # 当前 PID 清单已不含一个瞬时成员，但生命周期累计数仍为 2；错误实现
+        # 仅凭 ActiveProcesses=0 会把无法证明已退出的历史成员当成已安全收尾。
+        api = FakeWin32(total=2)
+        process = self.launch(api)
+        try:
+            with self.assertRaises(win.WindowsJobCleanupError):
+                process.wait(timeout=0)
+            self.assertFalse(process._quiescent)
+        finally:
+            process._close_handles()  # 仅回收 fake；不让故意失败的清理改变测试解释器信号。
+
+    def test_active_zero_waits_for_every_retained_member_handle(self):
+        # 20 成员同时覆盖可变长 Win32 缓冲区的扩容分支；不能默默只保留前 16 个。
+        for members in ((9001, 9002), tuple(range(9001, 9021))):
+            with self.subTest(member_count=len(members)):
+                api = FakeWin32(members=members)
+                api.pending_members.add(9002)
+                process = self.launch(api)
+                try:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        process.wait(timeout=0)
+                    self.assertFalse(process._quiescent)
+                    self.assertEqual(37, process.wait(timeout=1))
+                    self.assertTrue(process._quiescent)
+                    self.assertEqual(len(members), len(process._members))
+                    self.assertTrue(any(event[0] == "wait_process" and event[1] == 9002
+                                        for event in api.events if isinstance(event, tuple)))
+                finally:
+                    process.close()
 
     def test_cleanup_failure_is_outside_transaction_recovery_exception_types(self):
         for failure in ("terminate_job", "query_active"):
@@ -310,7 +380,7 @@ class WindowsCtypesBackendTest(unittest.TestCase):
             self.launch(api)
         self.assertIn("assign_job", api.events)
         self.assertIn("terminate_job", api.events)
-        self.assertEqual(3, api.events.count("query_active"))
+        self.assertIn("exitcode", api.events)
         self.assertIn(200, api.closed)
         self.assertEqual(before, signal.getsignal(signal.SIGINT))
 
@@ -628,6 +698,31 @@ class PosixCancelFileRegressionTest(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "requires native Windows Job Objects; not native-tested on macOS")
 class NativeWindowsJobTest(unittest.TestCase):
+    def test_wait_confirms_normal_descendant_handles(self):
+        """根进程先正常退出，owner 仍须捕获完整成员并等待后代真实句柄。"""
+        with tempfile.TemporaryDirectory(prefix="workflow-native-normal-members-") as raw:
+            child = "import time;print('child-started',flush=True);time.sleep(.4)"
+            parent = ("import subprocess,sys;"
+                      f"subprocess.Popen([sys.executable,'-B','-X','utf8','-c',{child!r}]);"
+                      "raise SystemExit(23)")
+            command = [sys.executable, "-B", "-X", "utf8", "-c", parent]
+            process = win.WindowsJobProcess(command, cwd=raw, stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                output, error = process.communicate(timeout=10)
+                states = [{"pid": pid, "created": created,
+                           "wait": process._api.WaitForSingleObject(handle, 0)}
+                          for (pid, created), handle in process._members.items()]
+                print(json.dumps({"argv": command, "exit": process.returncode,
+                                  "members": states, "stdout": output.decode(), "stderr": error.decode()}))
+                self.assertEqual(23, process.returncode)
+                self.assertIn(b"child-started", output)
+                self.assertGreaterEqual(len(states), 2)
+                self.assertTrue(all(item["wait"] == win.WAIT_OBJECT_0 for item in states))
+                self.assertTrue(process._quiescent)
+            finally:
+                process.close()
+
     def tree(self, root):
         late = root / "late-write"
         ready = root / "grandchild-ready"
