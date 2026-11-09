@@ -344,6 +344,47 @@ class TaskSettlementTest(unittest.TestCase):
 
 
 class SettlementWorktreeConsumerTest(unittest.TestCase):
+    def test_native_registered_worktree_roots_use_physical_identity(self):
+        """实际Git登记解析覆盖Unicode/空格；同一节点在Windows核实native路径表示。"""
+        from lib.delivery.worktree_cli import DeliveryError, common_dir, create, git, head, linked, private_dir
+        with tempfile.TemporaryDirectory(prefix="registered-worktree-", dir=os.environ.get("AWF_TEST_SCRATCH")) as raw:
+            root = Path(raw).resolve()
+            repo, worker = root / "主 仓库", root / "独立 工作树"
+            repo.mkdir()
+            git(repo, "init", "-b", "main")
+            git(repo, "-c", "user.name=Workflow Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "--allow-empty", "-m", "task-owned registration fixture")
+            base = head(repo)
+            self.assertEqual(str(worker), create(repo, worker, base)["root"])
+            self.assertTrue(linked(repo, str(worker)).samefile(worker))
+            self.assertTrue(common_dir(repo).samefile(common_dir(worker)))
+            self.assertFalse(private_dir(repo).samefile(private_dir(worker)))
+            output = git(repo, "worktree", "list", "--porcelain", "-z")
+            roots = [os.fsdecode(item[len(b"worktree "):]) for item in output.split(b"\0") if item.startswith(b"worktree ")]
+            print(f"NATIVE_REGISTERED_WORKTREE: native={str(worker)!r} git_roots={roots!r}; physical identity verified", flush=True)
+            # 以下全部为当前request自有Git资源；不靠伪造登记输出使正向通过。
+            child = worker / "子目录"
+            child.mkdir()
+            other = root / "其他 仓库"
+            other.mkdir()
+            git(other, "init", "-b", "other")
+            git(repo, "branch", "ordinary-branch")
+            fake = root / "复制gitfile但未登记"
+            fake.mkdir()
+            (fake / ".git").write_bytes((worker / ".git").read_bytes())
+            for invalid in (str(repo), str(child), "ordinary-branch", str(other), str(fake), str(worker) + os.sep + "."):
+                with self.subTest(invalid=invalid), self.assertRaises(DeliveryError):
+                    linked(repo, invalid)
+            # 即使目录仍有真实旧登记，也不能共享主checkout的私有HEAD/index。
+            gitfile = worker / ".git"
+            original = gitfile.read_bytes()
+            try:
+                gitfile.write_text(f"gitdir: {private_dir(repo)}\n", encoding="utf-8")
+                with self.assertRaises(DeliveryError):
+                    linked(repo, str(worker))
+            finally:
+                gitfile.write_bytes(original)
+
     def test_actual_merge_check_accepts_result_dependency_but_keeps_writer_qa_gates(self):
         """复用已有真实Git/验证QA夹具，只增加本变更缺失的结果依赖消费者场景。"""
         from tests.test_worktree_delivery import GitDeliveryTest
