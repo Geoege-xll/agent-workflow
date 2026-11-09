@@ -317,6 +317,80 @@ class AdmissionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differs from original"):
             cli.admission("view", self.manifest)
 
+    def test_native_name_equivalence_conflicts_for_existing_and_not_yet_created_resources(self):
+        """使用当前真实卷判断大小写别名，覆盖不存在叶以及不存在中间目录。"""
+        existing = self.project / "CaseArea"
+        existing.mkdir()
+        leaf = existing / "Existing.py"
+        leaf.write_text("fixture\n")
+        insensitive = (self.project / "casearea/existing.PY").exists()
+        for first, second in (("CaseArea/Existing.py", "casearea/existing.PY"),
+                              ("CaseArea/NotYet/New.py", "casearea/notyet/NEW.PY")):
+            with self.subTest(first=first, second=second):
+                self.manifest["records"] = []
+                self.add_record("a", state="RUNNING", owned=first, lock="")
+                candidate = self.add_record("b", owned=second, lock="")
+                projected = cli.admission("view", self.manifest)
+                if insensitive:
+                    self.assertEqual([], projected["candidates"])
+                    self.assertIn("path_conflict", projected["waiting"][1]["reasons"])
+                else:
+                    self.assertEqual([self.key(candidate)], projected["candidates"])
+
+    def test_sensitive_names_stay_distinct_and_unknown_future_names_lock_the_existing_parent(self):
+        """只验证已核实规则的映射合同，不把注入的策略冒充敏感卷实机验收。"""
+        from lib.dispatch_admission import _overlap
+        first = self.project / "NotYet/One.py"
+        second = self.project / "notyet/ONE.PY"
+        with patch.object(cli, "_directory_case_sensitive", return_value=True):
+            self.assertFalse(_overlap(cli._resource_identity(first, {}), cli._resource_identity(second, {})))
+        with patch.object(cli, "_directory_case_sensitive", return_value=None):
+            self.assertTrue(_overlap(cli._resource_identity(first, {}),
+                                     cli._resource_identity(self.project / "independent/new.py", {})))
+        # 大小写规则不能证明未创建 Unicode 名称的卷规范化规则；保守占住现有父树。
+        with patch.object(cli, "_directory_case_sensitive", return_value=True):
+            self.assertTrue(_overlap(cli._resource_identity(self.project / "新文件.py", {}),
+                                     cli._resource_identity(first, {})))
+
+    def test_worktree_qa_uses_its_original_request_integration_root(self):
+        """QA 不伪造 writer-only execution_workspace，从请求集成记录选择审查树。"""
+        from tests.test_scheduler_boundaries import v2_task
+        def git(*arguments):
+            return subprocess.run(["git", "-C", str(self.project), *arguments], check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        git("init", "-q")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture")
+        head = git("rev-parse", "HEAD")
+        for request_id in ("a", "b"):
+            writer = self.workspace / (request_id + "-writer")
+            integration = self.workspace / (request_id + "-integration")
+            for execution in (writer, integration):
+                git("worktree", "add", "--detach", "-q", str(execution), head)
+            path = self.add_record(request_id, state="BUILD_VERIFIED", owned="src/" + request_id, lock="")
+            def bind(value):
+                value["tasks"][0]["execution_workspace"] = {"root": str(writer), "base_revision": head, "head_revision": head}
+                value["tasks"].append(v2_task({"id": "qa", "request_id": request_id, "task_type": "qa", "state": "DECLARED",
+                    "depends_on": [], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": []}))
+                value["worktree_integrations"] = {request_id: {"root": str(integration), "target_branch": "main",
+                    "target_base": head, "head_revision": head,
+                    "verification": [{"command": "fixture-key-entry", "exit_code": 0,
+                                      "log_ref": "fixture-contract-only", "head_revision": head}]}}
+            self.modify(path, bind)
+            next(item for item in self.manifest["records"] if item["path"] == str(path))["execution_roots"] = {
+                "api": str(writer), "qa": str(integration)}
+        projected = cli.admission("view", self.manifest)
+        self.assertEqual(["qa", "qa"], [item["task_id"] for item in projected["candidates"]])
+        qa = projected["candidates"][0]
+        claimed = cli.admission("claim", self.manifest, qa)
+        self.assertEqual("claimed", claimed["status"])
+        original = json.loads(Path(qa["record"]).read_bytes())
+        self.assertNotIn("execution_workspace", original["tasks"][1])
+        self.assertEqual("RUNNING", original["tasks"][1]["state"])
+        self.refresh(Path(qa["record"]))
+        self.manifest["records"][0]["execution_roots"]["qa"] = str(self.project)
+        with self.assertRaisesRegex(ValueError, "differs from original"):
+            cli.admission("view", self.manifest)
+
     def test_detached_installed_cli_mixed_pins_validate_and_claim_through_each_original_core(self):
         """双版本是真实冻结安装，不把调用者的 validated 标志或 mock 当作验证。
 

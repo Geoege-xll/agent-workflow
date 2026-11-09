@@ -24,13 +24,15 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 from typing import Any
+import unicodedata
 
 from lib import task_graph_records as records
 from lib.agent_continuation import active
-from lib.dispatch_admission import RecordView, select_candidates, task_key
+from lib.dispatch_admission import RecordView, ResourceIdentity, select_candidates, task_key
 from lib.platform_fs import directory_lock
 from lib.runtime_pins import PROJECT_ENV, project_root
 from lib.task_graph import TaskGraphError
@@ -86,6 +88,86 @@ def _git_identity(root: Path, *, required: bool = True) -> str:
     if result.returncode or len(rows) != 2 or (required and Path(rows[0]).resolve(strict=True) != root):
         raise TaskGraphError("execution root must be a verified Git worktree root")
     return str(Path(rows[1]).resolve(strict=True))
+
+
+def _directory_case_sensitive(directory: Path) -> bool | None:
+    """只读核实目录的名称比较规则；未知不能自动当作大小写敏感。
+
+    Darwin SDK 的 sys/unistd.h 将 _PC_CASE_SENSITIVE 定义为 11；Python 未
+    暴露该名字，但原生 pathconf 接受相同整数。其他后端用目录内实际 ASCII
+    名称及其换大小写查找来核实当前目录，兼容逐目录大小写规则。空目录、
+    无可判定名称或权限不足返回未知，后续不存在资源保守锁住最近存在目录。
+    不创建探针文件，因此 view 仍然零写；结果只在本次 _load 内按节点身份复用。
+    """
+    if sys.platform == "darwin":
+        try:
+            value = os.pathconf(directory, 11)
+            if value in (0, 1):
+                return bool(value)
+        except (OSError, ValueError):
+            pass
+    try:
+        with os.scandir(directory) as entries:
+            for position, entry in enumerate(entries):
+                if position >= 128:
+                    break
+                if not entry.name.isascii() or not any(character.isalpha() for character in entry.name):
+                    continue
+                before = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(before.st_mode) or getattr(before, "st_file_attributes", 0) & 0x400:
+                    continue
+                try:
+                    alias = (directory / entry.name.swapcase()).lstat()
+                except FileNotFoundError:
+                    return True
+                return (before.st_dev, before.st_ino) != (alias.st_dev, alias.st_ino)
+    except OSError:
+        pass
+    return None
+
+
+def _resource_identity(path: Path, directory_modes: dict[tuple[int, int], bool | None]) -> ResourceIdentity:
+    """在文件边界投影真实节点和名称语义，覆盖不存在叶及不存在中间目录。
+
+    每级现有节点都保留 dev/inode 锚点，不能只比较叶或 resolve 的保留大小写
+    字符串。名称后缀按各自父目录的已核实规则转换；大小写敏感目录保留大小写。
+    现有名称规范等价采用保守 NFD，实际节点仍由 inode 证明。未创建的非 ASCII
+    名称涉及尚未核实的卷 Unicode 规则，或目录大小写规则未知时，直接扩大为
+    最近现有目录的资源锁，而不猜测一个可能放行的名称比较规则。
+    """
+    if os.name == "nt":
+        # 复用原 Windows owner 的组件合同，拒绝尾点/尾空格、设备名及 ADS，
+        # 不能先让 Win32 隐式归一化，再为不存在的资源生成不同锁键。
+        from lib.windows_fs import absolute_path
+        path = absolute_path(path)
+    current = Path(path.anchor)
+    root_info = current.lstat()
+    nodes = [(0, (root_info.st_dev, root_info.st_ino))]
+    names: list[str] = []
+    parts = path.parts[1:]
+    for position, part in enumerate(parts):
+        parent_node = nodes[-1][1]
+        if parent_node not in directory_modes:
+            directory_modes[parent_node] = _directory_case_sensitive(current)
+        sensitive = directory_modes[parent_node]
+        child = current / part
+        try:
+            info = child.lstat()
+        except FileNotFoundError:
+            remaining_parts = parts[position:]
+            if sensitive is not None and all(remaining.isascii() for remaining in remaining_parts):
+                for remaining in remaining_parts:
+                    name = unicodedata.normalize("NFD", remaining)
+                    names.append(name if sensitive else name.casefold())
+            # 名称规则未知时不追加剩余段，当前实际目录空后缀即保守子树锁。
+            break
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise TaskGraphError("resource path must not traverse symlinks or reparse points")
+        name = unicodedata.normalize("NFD", part)
+        names.append(name if sensitive else name.casefold())
+        nodes.append((len(names), (info.st_dev, info.st_ino)))
+        current = child
+    return ResourceIdentity(tuple((node, tuple(names[offset:])) for offset, node in nodes))
 
 
 def _invocation(payload: dict, root: Path, arguments: list[str]) -> tuple[list[str], dict[str, str]]:
@@ -159,6 +241,7 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
     if not isinstance(descriptors, list) or not descriptors or len(descriptors) > 128:
         raise TaskGraphError("records must contain 1..128 explicit authoritative records")
     views, sources, identities = [], {}, set()
+    directory_modes: dict[tuple[int, int], bool | None] = {}
     total = 0
     for descriptor in descriptors:
         _object(descriptor, {"path", "sha256", "execution_roots"}, "record descriptor")
@@ -188,19 +271,22 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
         roots = descriptor["execution_roots"]
         if not isinstance(roots, dict) or set(roots) != {task["id"] for task in tasks}:
             raise TaskGraphError("execution_roots must exactly cover authoritative task IDs")
-        checked_roots = {}
+        checked_roots, resource_paths = {}, {}
         for task in tasks:
             execution = _absolute(roots[task["id"]], directory=True)
             workspace = task.get("execution_workspace")
-            expected = _absolute(workspace["root"], directory=True) if workspace else root
+            integration = (payload.get("worktree_integrations", {}).get(task["request_id"])
+                           if task["task_type"] == "qa" else None)
+            # execution_workspace 属于 Writer，QA 的审查树由其原请求集成记录
+            # 决定；不得要求 QA 伪造 Writer 字段，也不能借 manifest 改绑根。
+            binding = integration or workspace
+            expected = _absolute(binding["root"], directory=True) if binding else root
             if execution != expected:
                 raise TaskGraphError("execution root differs from original task binding")
             if execution != root and _git_identity(execution) != _git_identity(root):
                 raise TaskGraphError("execution worktree does not belong to the actual project")
-            for owned in task.get("owned_paths", ()):
-                location = execution / owned
-                if location.resolve() != location:
-                    raise TaskGraphError("owned resource path must not traverse symlinks")
+            resource_paths[task["id"]] = tuple(_resource_identity(execution / owned, directory_modes)
+                                                for owned in task.get("owned_paths", ()))
             checked_roots[task["id"]] = str(execution)
         # capacity 属于本次全局投影；原 record 的历史数值不能截断局部候选。
         candidate = copy.deepcopy(payload)
@@ -225,10 +311,14 @@ def _load(manifest: dict) -> tuple[Path, tuple[RecordView, ...], dict[str, dict]
                 eligible.add(task["id"])
         known_paths = {item for task in tasks if active(task) for item in task.get("owned_paths", ())}
         known_locks = {item for task in tasks if active(task) for item in task.get("semantic_locks", ())}
+        external_paths = tuple(set(payload.get("active_paths", ())) - known_paths)
         views.append(RecordView(identity, descriptor["sha256"], str(root), tuple(tasks), checked_roots,
                                 frozenset(eligible), semantic_scope=semantic_scope,
-                                external_paths=tuple(set(payload.get("active_paths", ())) - known_paths),
-                                external_semantic_locks=tuple(set(payload.get("active_semantic_locks", ())) - known_locks)))
+                                external_paths=external_paths,
+                                external_semantic_locks=tuple(set(payload.get("active_semantic_locks", ())) - known_locks),
+                                resource_paths=resource_paths,
+                                external_resources=tuple(_resource_identity(root / owned, directory_modes)
+                                                         for owned in external_paths)))
         sources[identity] = payload
     return root, tuple(views), sources
 

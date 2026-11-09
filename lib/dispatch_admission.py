@@ -7,11 +7,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from .agent_continuation import active
 from .task_graph import TaskGraphError
+
+
+@dataclass(frozen=True)
+class ResourceIdentity:
+    """实际存在的每级节点身份，及从该节点到资源的名称语义后缀。
+
+    文件系统读取只在 CLI 完成。同一 inode 的不同名称/硬链接共享空后缀；
+    不存在路径以实际目录为锚点，仍能和该目录及其后代比较资源前缀。
+    """
+
+    anchors: tuple[tuple[tuple[int, int], tuple[str, ...]], ...]
 
 
 @dataclass(frozen=True)
@@ -27,6 +37,8 @@ class RecordView:
     semantic_scope: str | None = None
     external_paths: tuple[str, ...] = ()
     external_semantic_locks: tuple[str, ...] = ()
+    resource_paths: dict[str, tuple[ResourceIdentity, ...]] | None = None
+    external_resources: tuple[ResourceIdentity, ...] | None = None
 
 
 def task_key(record: RecordView, task: dict[str, Any]) -> dict[str, str]:
@@ -34,13 +46,24 @@ def task_key(record: RecordView, task: dict[str, Any]) -> dict[str, str]:
     return {"record": record.path, "request_id": task["request_id"], "task_id": task["id"]}
 
 
-def _paths(record: RecordView, task: dict[str, Any]) -> tuple[Path, ...]:
-    root = Path(record.execution_roots[task["id"]])
-    return tuple(root / path for path in task.get("owned_paths", ()))
+def _paths(record: RecordView, task: dict[str, Any]) -> tuple[ResourceIdentity, ...]:
+    if not task.get("owned_paths"):
+        return ()
+    if record.resource_paths is None or task["id"] not in record.resource_paths:
+        # 词法路径无法证明真实文件系统的名称等价；纯算法拒绝缺失的边界投影，
+        # 不暗中访问文件系统，也不退回原先可能漏锁的 Path 字符串比较。
+        raise TaskGraphError("resource identities must be projected by the admission file boundary")
+    return record.resource_paths[task["id"]]
 
 
-def _overlap(left: Path, right: Path) -> bool:
-    return left == right or left in right.parents or right in left.parents
+def _overlap(left: ResourceIdentity, right: ResourceIdentity) -> bool:
+    for left_node, left_suffix in left.anchors:
+        for right_node, right_suffix in right.anchors:
+            if left_node == right_node:
+                common = min(len(left_suffix), len(right_suffix))
+                if left_suffix[:common] == right_suffix[:common]:
+                    return True
+    return False
 
 
 def select_candidates(records: tuple[RecordView, ...], capacity: dict[str, int]) -> dict[str, Any]:
@@ -57,13 +80,15 @@ def select_candidates(records: tuple[RecordView, ...], capacity: dict[str, int])
         minimum = 0 if name == "host_available_subagents" else 1
         if type(value) is not int or value < minimum:
             raise TaskGraphError(f"{name} must be integer >= {minimum}")
-    paths: list[Path] = []
+    paths: list[ResourceIdentity] = []
     locks: set[tuple[str, str]] = set()
     threads = writers = unbound_claims = 0
     references: set[tuple[str, str]] = set()
     for record in records:
         scope = record.semantic_scope or record.project_root
-        paths.extend(Path(record.project_root) / item for item in record.external_paths)
+        if record.external_paths and record.external_resources is None:
+            raise TaskGraphError("external resource identities must be projected by the admission file boundary")
+        paths.extend(record.external_resources or ())
         locks.update((scope, item) for item in record.external_semantic_locks)
         for task in record.tasks:
             reference = task.get("agent_ref")
