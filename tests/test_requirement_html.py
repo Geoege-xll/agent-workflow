@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import base64
+import ctypes
 from html.parser import HTMLParser
 import json
 import os
@@ -614,7 +615,7 @@ class WindowsRequirementHtmlNativeTest(_RequirementHtmlFixture, unittest.TestCas
                 configured.unlink()
 
     def test_native_node_timeout_terminates_descendants(self):
-        from lib.install.windows_process import _Win32API
+        from lib.install import install_process, windows_process as backend
 
         node = renderer._node_executable()
         self.assertIsNotNone(node, "requires an existing Node >= 20 on explicit absolute PATH")
@@ -634,20 +635,40 @@ class WindowsRequirementHtmlNativeTest(_RequirementHtmlFixture, unittest.TestCas
         parent.write_text("import {spawn} from 'node:child_process';\n"
             f"spawn(process.execPath, [{json.dumps(str(child))}, String(process.pid)], {{stdio:'inherit'}});\n"
             "setInterval(() => {}, 1000);\n", encoding="utf-8")
-        api, handles, observer_errors = _Win32API(), [], []
+        api, handles, observer_errors = backend._Win32API(), [], []
+        owners, observed, returned_states = [], [], []
+        actual_owner = backend.WindowsJobProcess
+
+        def record_owner(*args, **options):
+            # 只保留实际构造出的生产 owner 供查询其具体 Job；不伪造 PID、
+            # communicate、close 或任何内核返回值，也不延迟生产清理。
+            owner = actual_owner(*args, **options)
+            owners.append(owner)
+            return owner
 
         def observe_started_tree():
             try:
                 deadline = time.monotonic() + 6
-                while not ready.exists() and time.monotonic() < deadline:
+                while (not ready.exists() or not owners) and time.monotonic() < deadline:
                     time.sleep(0.01)
                 pids = json.loads(ready.read_text(encoding="utf-8"))
                 for pid in pids:
-                    handle = api.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+                    handle = api.OpenProcess(0x00101000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
                     if not handle:
                         raise api.error("Open live Node fixture process")
                     handles.append(handle)
-                    if api.WaitForSingleObject(handle, 0) != 258:  # WAIT_TIMEOUT
+                    created, exited, kernel, user = (ctypes.c_uint64() for _ in range(4))
+                    if not api.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                               ctypes.byref(kernel), ctypes.byref(user)):
+                        raise api.error("Read Node fixture creation time")
+                    associated = backend.BOOL()
+                    if not api.IsProcessInJob(handle, owners[0]._job, ctypes.byref(associated)):
+                        raise api.error("Query actual Node owner Job association")
+                    state = api.WaitForSingleObject(handle, 0)
+                    observed.append({"pid": pid, "handle": handle, "created": created.value,
+                                     "owner_pid": owners[0].pid, "job": owners[0]._job,
+                                     "in_owner_job": bool(associated.value), "initial_wait": state})
+                    if state != 258:  # WAIT_TIMEOUT
                         raise AssertionError("Node fixture exited before containment was exercised")
             except BaseException as exc:
                 observer_errors.append(exc)
@@ -655,22 +676,36 @@ class WindowsRequirementHtmlNativeTest(_RequirementHtmlFixture, unittest.TestCas
         observer = threading.Thread(target=observe_started_tree)
         observer.start()
         command = [node, str(parent)]
+        error = None
         try:
             with renderer._renderer_stage(stage):
-                with self.assertRaises(subprocess.TimeoutExpired):
-                    renderer._run_node(command, stage=stage, env=renderer.node_environment(stage), timeout=8)
+                with patch.object(backend, "WindowsJobProcess", side_effect=record_owner):
+                    try:
+                        renderer._run_node(command, stage=stage, env=renderer.node_environment(stage), timeout=8)
+                    except BaseException as exc:
+                        error = exc
+                    finally:
+                        # 在退出舞台上下文、join 或写日志之前只取一次即时状态。
+                        # 断言复用这份原始采样，不能靠稍后的二次查询把 258 等成绿。
+                        returned_states = [api.WaitForSingleObject(handle, 0) for handle in handles]
             observer.join(timeout=7)
+            with (self.work / "engine.log").open("a", encoding="utf-8") as log:
+                log.write(json.dumps({"argv": command, "cwd": str(stage), "timeout": 8,
+                    "owner_pids": [owner.pid for owner in owners], "observed": observed,
+                    "immediate_return_waits": returned_states, "exception": repr(error),
+                    "observer_errors": [repr(exc) for exc in observer_errors]}) + "\n")
+            if error is not None and not isinstance(error, subprocess.TimeoutExpired):
+                raise error
+            self.assertIsInstance(error, subprocess.TimeoutExpired)
             self.assertFalse(observer.is_alive(), "Node fixture observer did not finish")
             self.assertFalse(observer_errors, str(observer_errors))
             self.assertEqual(3, len(handles), "root, child and grandchild must all actually start")
+            self.assertEqual(observed[0]["pid"], owners[0].pid)
+            self.assertTrue(all(item["in_owner_job"] for item in observed))
             # 在超时返回之前持有真实进程句柄，既不靠 PID 重用猜测，也不靠 sleep
             # 后没有写文件推断清理成功；三个句柄在返回时都必须已经 signaled。
-            for handle in handles:
-                self.assertEqual(0, api.WaitForSingleObject(handle, 0))  # WAIT_OBJECT_0
+            self.assertEqual([0, 0, 0], returned_states)  # WAIT_OBJECT_0
             self.assertFalse(late.exists())
-            with (self.work / "engine.log").open("a", encoding="utf-8") as log:
-                log.write(json.dumps({"argv": command, "cwd": str(stage), "timeout": 8,
-                    "observed_live_processes": len(handles), "all_signaled_after_timeout": True}) + "\n")
         finally:
             observer.join(timeout=7)
             for handle in handles:

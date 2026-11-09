@@ -34,6 +34,7 @@ STARTF_USESTDHANDLES = 0x00000100
 PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JobObjectBasicAccountingInformation = 1
+JobObjectBasicProcessIdList = 3
 JobObjectExtendedLimitInformation = 9
 DUPLICATE_SAME_ACCESS = 0x00000002
 INFINITE = 0xFFFFFFFF
@@ -147,6 +148,7 @@ class _Win32API:
             "GetCurrentProcess": ([], HANDLE),
             "GetStdHandle": ([DWORD], HANDLE),
             "OpenProcess": ([DWORD, BOOL, DWORD], HANDLE),
+            "IsProcessInJob": ([HANDLE, HANDLE, ctypes.POINTER(BOOL)], BOOL),
             "GetProcessTimes": ([HANDLE, LPVOID, LPVOID, LPVOID, LPVOID], BOOL),
             "CreateToolhelp32Snapshot": ([DWORD, DWORD], HANDLE),
             "Process32FirstW": ([HANDLE, ctypes.POINTER(PROCESSENTRY32W)], BOOL),
@@ -258,7 +260,12 @@ class WindowsJobProcess:
         self._job = None
         self._process = PROCESS_INFORMATION()
         self._assigned = False
+        self._resumed = False
         self._quiescent = False
+        # 只在本 owner 生命周期内持有成员真实句柄。累计成员数用于证明捕获完整性，
+        # 不能把当前 PID 清单/ActiveProcesses=0 当作历史成员均已 signaled 的屏障。
+        self._members = {}
+        self._total_processes = 0
         self.stdin = self.stdout = self.stderr = None
         self._child_fds = []
         self._cancel_event = threading.Event()
@@ -358,8 +365,13 @@ class WindowsJobProcess:
                                           directory, ctypes.byref(startup), ctypes.byref(self._process)), "Create suspended setup")
             self._check(api.AssignProcessToJobObject(self._job, self._process.hProcess), "Assign setup to Job Object")
             self._assigned = True
+            key = self._member_identity(self.pid, self._process.hProcess)
+            if key is None:
+                raise OSError("Suspended setup process is not associated with its Job")
+            self._members[key] = self._process.hProcess
             if api.ResumeThread(self._process.hThread) == DWORD(-1).value:
                 raise api.error("Resume contained setup")
+            self._resumed = True
         finally:
             if initialized:
                 api.DeleteProcThreadAttributeList(attributes)
@@ -376,12 +388,64 @@ class WindowsJobProcess:
     def pid(self):
         return self._process.dwProcessId
 
-    def _active_processes(self):
+    def _member_identity(self, pid, handle):
+        associated = BOOL()
+        self._check(self._api.IsProcessInJob(handle, self._job, ctypes.byref(associated)),
+                    "Verify setup Job member")
+        if not associated.value:
+            return None
+        created, exited, kernel, user = (ctypes.c_uint64() for _ in range(4))
+        self._check(self._api.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                             ctypes.byref(kernel), ctypes.byref(user)), "Read setup member identity")
+        return pid, created.value
+
+    def _capture_members(self):
+        capacity = 16
+        while True:
+            # 官方结构为两个 DWORD 加 ULONG_PTR 可变长数组；Win32/Win64 按
+            # 当前指针宽度分配，完整缓冲区读取前不消费截断的 PID 清单。
+            buffer = ctypes.create_string_buffer(8 + ctypes.sizeof(SIZE_T) * capacity)
+            complete = self._api.QueryInformationJobObject(
+                self._job, JobObjectBasicProcessIdList, buffer, len(buffer), None)
+            counts = ctypes.cast(buffer, ctypes.POINTER(DWORD))
+            assigned, listed = counts[0], counts[1]
+            if listed > capacity or listed > assigned:
+                raise OSError("Invalid setup Job process list bounds")
+            if not complete:
+                error = self._api.error("Query setup Job process list")
+                if getattr(error, "winerror", None) != 234:  # ERROR_MORE_DATA
+                    raise error
+            if complete and listed == assigned:
+                pids = ctypes.cast(ctypes.addressof(buffer) + 8, ctypes.POINTER(SIZE_T))
+                break
+            capacity = max(capacity * 2, assigned)
+        for pid in pids[:listed]:
+            if not 0 < pid <= 0xFFFFFFFF:
+                raise OSError("Invalid setup Job member process identifier")
+            handle = self._api.OpenProcess(0x00101000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+            if not handle:
+                # PID 可能在枚举后退出或被回收；这里绝不据此宣称它已安全结束。
+                # 最终 TotalProcesses 必须与已持有的唯一真实成员句柄数相等，
+                # 捕获前已消失的瞬时成员因此会留下缺口并触发致命失败关闭。
+                continue
+            try:
+                key = self._member_identity(pid, handle)
+                if key is not None and key not in self._members:
+                    self._members[key] = handle
+                    handle = None
+            finally:
+                if handle is not None:
+                    self._api.CloseHandle(handle)
+
+    def _accounting(self):
         accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION()
         self._check(self._api.QueryInformationJobObject(
             self._job, JobObjectBasicAccountingInformation, ctypes.byref(accounting),
             ctypes.sizeof(accounting), None), "Query setup Job active processes")
-        return accounting.ActiveProcesses
+        if accounting.TotalProcesses < self._total_processes:
+            raise WindowsJobCleanupError("Cannot confirm setup Job cumulative member count after counter regression")
+        self._total_processes = accounting.TotalProcesses
+        return accounting
 
     def _root_exitcode(self):
         result = self._api.WaitForSingleObject(self._process.hProcess, INFINITE)
@@ -397,10 +461,33 @@ class WindowsJobProcess:
             return self.returncode
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
-            if self._active_processes() == 0:
-                result = self._root_exitcode()
-                self._quiescent = True
-                return result
+            self._capture_members()
+            accounting = self._accounting()
+            if accounting.ActiveProcesses == 0:
+                if accounting.TotalProcesses != len(self._members):
+                    raise WindowsJobCleanupError(
+                        "Cannot confirm every setup Job member: "
+                        f"cumulative={accounting.TotalProcesses}, retained={len(self._members)}; "
+                        "a transient member may have exited before its handle could be retained"
+                    )
+                # 计数完整只证明每个成员都有句柄。终止是异步的，必须再逐句柄
+                # 等到 signaled；所有等待共用原 deadline，取消/强停后的无预算
+                # 清理仍延用既有“未确认结束不得交给恢复”的策略，不设假定宽限期。
+                for handle in self._members.values():
+                    remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                    milliseconds = INFINITE if remaining is None else min(INFINITE - 1, math.ceil(remaining * 1000))
+                    result = self._api.WaitForSingleObject(handle, milliseconds)
+                    if result == WAIT_TIMEOUT:
+                        raise subprocess.TimeoutExpired(self.args, timeout)
+                    if result != WAIT_OBJECT_0:
+                        raise self._api.error("Wait for setup Job member termination")
+                # 等待期间仍可能发生新的合法成员关联；再次核对累计数。只有完整
+                # 历史成员都已退出且当前 Job 为空时，才没有本 Job 内的后续创建者。
+                confirmed = self._accounting()
+                if confirmed.ActiveProcesses == 0 and confirmed.TotalProcesses == len(self._members):
+                    result = self._root_exitcode()
+                    self._quiescent = True
+                    return result
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise subprocess.TimeoutExpired(self.args, timeout)
@@ -411,7 +498,12 @@ class WindowsJobProcess:
             return
         with _ignore_interrupts():
             try:
-                self._check(self._api.TerminateJobObject(self._job, 1), "Terminate setup Job Object")
+                try:
+                    self._capture_members()
+                finally:
+                    # 捕获失败也必须请求停止 Job；失败随后进入致命清理错误，
+                    # 不能因查询错误让仍可写入的成员被当作普通异常交给事务恢复。
+                    self._check(self._api.TerminateJobObject(self._job, 1), "Terminate setup Job Object")
                 # TerminateJobObject is asynchronous: a root-process wait alone
                 # is insufficient. Do not give recovery an arbitrary grace timer.
                 self.wait()
@@ -490,7 +582,17 @@ class WindowsJobProcess:
         if not self._process.hProcess:
             return
         if self._assigned:
-            self.stop()
+            if self._resumed:
+                self.stop()
+            else:
+                # 根线程从未恢复，不可能生成后代；此时保有的 CreateProcess
+                # 真实句柄足以证明唯一成员退出，不依赖尚未完成的成员身份读取。
+                try:
+                    self._check(self._api.TerminateJobObject(self._job, 1), "Discard suspended setup Job")
+                    self._root_exitcode()
+                    self._quiescent = True
+                except BaseException as exc:
+                    raise WindowsJobCleanupError("Cannot discard suspended setup Job") from exc
             return
         # Assignment failed while still suspended: no user instruction or child
         # can have run. Terminate this never-started process, NOT a running parent
@@ -503,6 +605,10 @@ class WindowsJobProcess:
             raise WindowsJobCleanupError("Cannot discard suspended setup; filesystem recovery was not started") from exc
 
     def _close_handles(self):
+        for handle in self._members.values():
+            if handle != self._process.hProcess:
+                self._api.CloseHandle(handle)
+        self._members.clear()
         for descriptor in self._child_fds:
             os.close(descriptor)
         self._child_fds.clear()
