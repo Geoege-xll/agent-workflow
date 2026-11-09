@@ -145,6 +145,10 @@ GROUPS["windows-native-entry"] = (
     "tests.test_windows_native_entry.WindowsNativeEntryTest.test_explicit_invalid_python_is_refused_without_fallback",
     "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_isolation_precedes_stdlib_imports",
 )
+# 首个直接 Python smoke 已在 CI42576076285 通过；后续仅补剩余五个入口方法。
+# 从同一有序六方法清单派生，保留完整组件组且避免第二份手写名单漂移；本组同样
+# 必须真实运行，不能因夹具隔离/清理修复而用 skip 或已绿 smoke 代替剩余验证。
+GROUPS["windows-native-entry-shells"] = GROUPS["windows-native-entry"][1:]
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -153,7 +157,7 @@ NATIVE_GROUPS = frozenset((
     "windows-native-central-repair", "windows-native-renderer",
     "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
     "windows-native-central-copy-repair", "windows-native-central-link-repair",
-    "windows-native-entry", "windows-native",
+    "windows-native-entry", "windows-native-entry-shells", "windows-native",
 ))
 
 

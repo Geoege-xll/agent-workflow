@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run the fixed native CLI entry stage or capability probe; complete acceptance is still blocked'
+        description: 'Run the fixed native CLI entry-shells stage or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -113,8 +113,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: windows-native-entry
-            methods: 6
+          - group: windows-native-entry-shells
+            methods: 5
             node_required: false
     defaults:
       run:
@@ -157,7 +157,7 @@ jobs:
             $python = $env:NATIVE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
             "stage=$stage" | Tee-Object -FilePath $log -Append
-            "scope=entry-only; method_count=$env:NATIVE_METHODS" | Tee-Object -FilePath $log -Append
+            "scope=entry-shells-only; method_count=$env:NATIVE_METHODS; baseline_ci=42576076285" | Tee-Object -FilePath $log -Append
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
             "python_path=$python" | Tee-Object -FilePath $log -Append
             $runtimeCheck = 'import platform,struct,sys; print(sys.version); print(platform.platform()); print("pointer_bits="+str(struct.calcsize("P")*8)); raise SystemExit(0 if sys.version_info >= (3,11) and struct.calcsize("P")==8 else 1)'
