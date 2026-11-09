@@ -362,17 +362,25 @@ print('AWF_UNICODE:' + value, flush=True)
             print('AWF_BYSTANDER_ALIVE', flush=True)
         """, label="independent-console")
         other.expect(b"AWF_BYSTANDER_READY")
+        # 本节点验证真实 SIGINT 的定向与控制台隔离，不把 READY 等同于 C 层
+        # ReadConsole 已开始读取。默认 handler、模式校验、READY 和字节码等待
+        # 放在同一个异常保护区；实际 input() 取消继续由 modes-ctrl-c 覆盖。
         target = self.launch(CONSOLE_CHILD + """
-print('AWF_CTRL_READY', flush=True)
 try:
-    input()
+    input_mode = mode(hin)
+    assert input_mode & 1, '目标控制台未启用 ENABLE_PROCESSED_INPUT'
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    print(f'AWF_CTRL_CONTEXT:{os.getpid()},{input_mode}', flush=True)
+    print('AWF_CTRL_READY', flush=True)
+    while True:
+        pass
 except KeyboardInterrupt:
     print('AWF_OWNED_CTRL_C', flush=True)
 else:
     raise AssertionError('ETX 未触发自有控制台 KeyboardInterrupt')
 """, label="ctrl-target")
         target.expect(b"AWF_CTRL_READY")
-        target.send_ctrl_c()
+        self.assertEqual(target.send_ctrl_c(), 1)
         self.assertEqual(target.wait(), 0)
         self.assertIn(b"AWF_OWNED_CTRL_C", target.raw_output)
         other.write(b"alive\r")
