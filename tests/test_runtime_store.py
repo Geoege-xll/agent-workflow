@@ -158,6 +158,35 @@ class RuntimeStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(store.RuntimeStoreError, "product/VERSION"):
             self.imported()
 
+    def test_version_line_endings_preserve_raw_identity_and_reject_extra_text(self):
+        """版本标量容忍一次 Git 文本行尾转换，清单仍固定原字节而非规范化副本。"""
+        from manager.release import source_version
+        ids = set()
+        for raw in (b"2.1.3", b"2.1.3\n", b"2.1.3\r\n"):
+            self.write("product/VERSION", raw)
+            with self.subTest(reader="release", raw=raw):
+                self.assertEqual("2.1.3", source_version(self.source))
+            with self.subTest(reader="store", raw=raw):
+                core = self.imported()
+                self.assertEqual("2.1.3", core.label)
+                self.assertEqual("2.1.3", store.load_core(core.binding(), self.state).label)
+                self.assertEqual(raw, store.read_core_source(core, "product/VERSION"))
+                manifest = json.loads((core.root.parent / "manifest.json").read_bytes())
+                row = next(row for row in manifest["files"] if row["path"] == "product/VERSION")
+                self.assertEqual((len(raw), hashlib.sha256(raw).hexdigest()), (row["size"], row["sha256"]))
+                ids.add(core.content_id)
+        self.assertEqual(3, len(ids), "label normalization must not normalize frozen source bytes")
+        # 只能移除一个合法行结束符，不能用 strip/rstrip 接受空白、空行或多行，
+        # 也不能把 BOM、bare CR、前导零变成看似有效的发行标签。
+        for raw in (b" 2.1.3\n", b"2.1.3 \r\n", b"2.1.3\n\n", b"2.1.3\r\n\r\n",
+                    b"2.1.3\n\r\n", b"2.1.3\n2.1.4\n", b"2.1.3\r", b"02.1.3\r\n",
+                    b"\xef\xbb\xbf2.1.3\r\n"):
+            self.write("product/VERSION", raw)
+            with self.subTest(reader="release rejects", raw=raw), self.assertRaises(ValueError):
+                source_version(self.source)
+            with self.subTest(reader="store rejects", raw=raw), self.assertRaises(store.RuntimeStoreError):
+                store.inspect_core(self.source)
+
     def test_state_resolution_and_empty_listing_are_read_only(self):
         expected = self.workspace / "missing" / "state"
         with patch.dict(os.environ, {"AGENT_WORKFLOW_STATE_DIR": str(expected)}):

@@ -1281,6 +1281,8 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             context = NativeContext.for_state(state, host_paths=HostPaths.for_home(workspace / "host-home", environment={}))
             validate_powershell()
             from manager.release import source_version, describe
+            # 仅记录公开版本源的实际字节，回证原生 checkout 行尾，不改来源或断言。
+            print("NATIVE_VERSION_BYTES=" + (source / "product/VERSION").read_bytes().hex())
             version = source_version(source)
             self.assertIn("awf-cli " + version, describe())
             # 真实模型目录只位于该request的显式host-home，不读取个人账户/provider。

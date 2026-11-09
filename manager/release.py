@@ -44,7 +44,10 @@ def _regular_bytes(path: Path, limit: int) -> bytes:
 def source_version(root: Path) -> str:
     """product/VERSION 是唯一人工版本源；构建器与源码诊断使用同一解析边界。"""
     raw = _regular_bytes(Path(root) / "product/VERSION", 128)
-    version = raw.decode("ascii", errors="strict").removesuffix("\n")
+    text = raw.decode("ascii", errors="strict")
+    # Git 的 Windows 文本 checkout 可能把唯一行尾从 LF 转为 CRLF。这里只
+    # 消费一个完整行结束符；不能用 strip/rstrip 放过空白、多行或 bare CR。
+    version = text[:-2] if text.endswith("\r\n") else text.removesuffix("\n")
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError("product/VERSION 必须为不带前导 v 的 X.Y.Z")
     return version
