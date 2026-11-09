@@ -48,10 +48,18 @@ jobs:
       - name: Validate CLI, pins, shared skills, PTY and packaging
         run: bash scripts/test_workflow.sh ci
 
+  windows_gate:
+    # 同仓相对引用使用与调用方相同提交的 workflow；PR/手动发行都真实执行
+    # 同一原生 registry，不复制方法名单、不传发布 secret 或扩大写权限。
+    permissions:
+      contents: read
+    uses: ./.github/workflows/windows-native.yml
+
   release:
-    # PR 只有上面的只读验证；发行仍须手动事件且两系统矩阵全部通过。
+    # PR 执行三平台门禁；只有手动发行且 portable 与完整 Windows gate 均通过
+    # 才能进入资产发布，不能把上游失败或 skip 当作 Windows 已验收。
     if: github.event_name == 'workflow_dispatch'
-    needs: validate
+    needs: [validate, windows_gate]
     runs-on: macos-latest
     permissions:
       contents: write

@@ -1,4 +1,4 @@
-name: Native Windows validation evidence
+name: Native Windows validation gate
 
 on:
   push:
@@ -6,22 +6,26 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run fixed central and production TUI stages or capability probe; complete acceptance is still blocked'
+        description: 'Run complete native acceptance or an independent capabilities-only diagnostic'
         type: choice
-        options: [libraries, capabilities, acceptance]
-        default: libraries
+        options: [acceptance, capabilities]
+        default: acceptance
         required: true
+  # PR 与手动发行通过同仓相对引用消费同一提交；不接受可缩小范围的调用参数，
+  # 也不继承发布 secret。显式 capabilities 模式只属于独立手动诊断。
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-native-${{ github.ref }}
+  # 与调用方 prepare-release 使用不同前缀；调用与独立 push 不会持同一把锁互等。
+  group: windows-native-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   capabilities:
-    # 探针已有独立证据。后续候选 push 只验证当前库阶段，避免每次修改重复探针；
+    # 探针已有独立证据。候选 push 执行完整登记，不在每次修改时重复独立探针；
     # 保留显式模式供有诊断依据时复用原入口，不把此 job 绿色提升为原生验收。
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'capabilities'
     runs-on: windows-2025
@@ -100,27 +104,82 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  libraries:
-    name: Native evidence | ${{ matrix.group }} | methods=${{ matrix.methods }}
-    # 固定阶段选择只来自受控事件条件；不把 inputs 或 commit message 拼入 shell。
-    # 候选分支 push 能运行尚未进入默认分支的 workflow，无需依赖 dispatch 可见性。
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'libraries')
+  plan:
+    # 可复用调用保留 caller 的 github.event_name：PR 是 pull_request，手动发行
+    # 是 workflow_dispatch 且未提供 mode。空 mode 同样进入完整组；只有显式的
+    # capabilities 手动诊断才排除，不能等待一个不会出现的 workflow_call 事件名。
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'capabilities'
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.collect.outputs.matrix }}
+      component_count: ${{ steps.collect.outputs.component_count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+      - name: Collect the complete native registry without running tests
+        id: collect
+        shell: pwsh
+        env:
+          NATIVE_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'windows-native-plan.log'
+          $stream = [System.IO.File]::Open($log, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+          $stream.Dispose()
+          $code = 1
+          try {
+            $python = $env:NATIVE_PYTHON
+            if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
+            $entry = Join-Path $env:GITHUB_WORKSPACE 'scripts/test_workflow.py'
+            "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
+            "command=$python -I -B -X utf8 $entry --matrix windows-native" | Tee-Object -FilePath $log -Append
+            # 唯一 runner 真实导入每个节点并生成实际方法数；这里不执行 TestCase，
+            # 不从 YAML/环境再拼名单。完整 stderr 即使解析失败也保留在计划日志。
+            $lines = @(& $python -I -B -X utf8 $entry --matrix windows-native 2>&1)
+            $nativeCode = $LASTEXITCODE
+            $lines | Tee-Object -FilePath $log -Append
+            "selection_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The full native registry could not be collected.' }
+            $body = ($lines | Out-String).Trim()
+            $matrix = $body | ConvertFrom-Json -ErrorAction Stop
+            if ($null -eq $matrix.include -or @($matrix.include).Count -eq 0) { throw 'An empty native matrix cannot satisfy acceptance.' }
+            # JSON 由受控 runner 单行输出，无用户正文或 shell 求值；只有完整收集
+            # 成功才发布 Actions output。计划成功本身仍不是任何原生方法的 PASS。
+            "matrix=$body" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+            "component_count=$(@($matrix.include).Count)" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+            $code = 0
+          } catch {
+            $_ | Out-String | Tee-Object -FilePath $log -Append
+          } finally {
+            "workflow_exit_code=$code" | Add-Content -LiteralPath $log -Encoding utf8
+          }
+          exit $code
+      - name: Preserve complete native plan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-native-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-native-plan.log
+          if-no-files-found: error
+          retention-days: 14
+
+  native:
+    name: Native evidence | ${{ matrix.group }} | methods=${{ matrix.methods }}
+    needs: plan
+    if: needs.plan.result == 'success'
+    runs-on: windows-2025
+    # 完整组件的 job 预算覆盖环境准备/取证；生产 Hook、消费者与 Job 内部超时
+    # 保持原值，不能用 CI 总时限代替单操作预算或掩盖资源回收失败。
+    timeout-minutes: 30
     strategy:
-      # 本轮并行补中央 reset 上下文修复和 Console 观察器修复后的生产 TUI 三方法；
-      # 已通过的两诊断与 ConPTY 八方法继续复用证据，不延迟首次真实 UI 完整取证。
       fail-fast: false
-      matrix:
-        include:
-          - group: windows-native-central-repair
-            methods: 1
-            node_required: true
-            curses_required: false
-          - group: windows-native-tui
-            methods: 3
-            node_required: false
-            curses_required: true
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     defaults:
       run:
         shell: pwsh
@@ -133,7 +192,7 @@ jobs:
         with:
           python-version: '3.11'
           architecture: 'x64'
-      - name: Run the fixed native stage (methods=${{ matrix.methods }})
+      - name: Run the registered native component (methods=${{ matrix.methods }})
         env:
           NATIVE_PYTHON: ${{ steps.python.outputs.python-path }}
           NATIVE_STAGE: ${{ matrix.group }}
@@ -163,7 +222,7 @@ jobs:
             $python = $env:NATIVE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
             "stage=$stage" | Tee-Object -FilePath $log -Append
-            "scope=fixed-group-only; method_count=$env:NATIVE_METHODS" | Tee-Object -FilePath $log -Append
+            "scope=registered-component; method_count=$env:NATIVE_METHODS" | Tee-Object -FilePath $log -Append
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
             "python_path=$python" | Tee-Object -FilePath $log -Append
             $runtimeCheck = 'import platform,struct,sys; print(sys.version); print(platform.platform()); print("pointer_bits="+str(struct.calcsize("P")*8)); raise SystemExit(0 if sys.version_info >= (3,11) and struct.calcsize("P")==8 else 1)'
@@ -240,7 +299,7 @@ jobs:
             $nativeCode = $LASTEXITCODE
             "selection_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
             if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The fixed native stage selection did not resolve every real node.' }
-            # YAML 只选固定组，方法清单唯一存在 Python GROUPS。runner 同时拒绝
+            # matrix 与方法清单均来自 Python 唯一登记，不在 YAML 重写。runner 同时拒绝
             # 缺失、未执行和方法/子场景 skip，不能把 mock 或全 skip 当成原生成功。
             "command=$python -I -B -X utf8 $entry $stage" | Tee-Object -FilePath $log -Append
             & $python -I -B -X utf8 $entry $stage 2>&1 | Tee-Object -FilePath $log -Append
@@ -267,14 +326,27 @@ jobs:
           retention-days: 14
 
   acceptance:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'acceptance'
+    name: Complete native Windows gate
+    needs: [plan, native]
+    # needs 默认传播失败/skip；必须 always 进入真实汇总并明确拒绝，避免整个
+    # 验收 job 因上游 skip 被展示成可忽略状态。capabilities-only 从不声称完整验收。
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.mode != 'capabilities')
     runs-on: windows-2025
     timeout-minutes: 5
     steps:
-      - name: Block incomplete native acceptance
-        # 中央/TUI 完整组合尚未通过；独立阻断避免条件跳过 capabilities 后，显式
-        # acceptance 模式只剩 skip 而显示成功。Server 库证据也不是 Win11 桌面 PASS。
+      - name: Require the complete nonempty native matrix to succeed
         shell: pwsh
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+          COMPONENT_COUNT: ${{ needs.plan.outputs.component_count }}
         run: |
-          Write-Error 'Native acceptance is not implemented yet. Library or capability evidence is not a Windows 11 support PASS.'
-          exit 1
+          $count = 0
+          if ($env:PLAN_RESULT -ne 'success' -or $env:NATIVE_RESULT -ne 'success' -or
+              -not [int]::TryParse($env:COMPONENT_COUNT, [ref]$count) -or $count -le 0) {
+            Write-Error "Complete native gate rejected: plan=$env:PLAN_RESULT native=$env:NATIVE_RESULT components=$env:COMPONENT_COUNT"
+            exit 1
+          }
+          # 每个矩阵 job 已由 runner 检查方法/子场景零 skip、缺失和未执行，并完成
+          # 双完整日志上传；此处只确认全组件结算，不把 Server 结果改称 Win11 桌面证据。
+          Write-Output "Complete native Windows Server matrix passed: components=$count; Windows 11 client acceptance remains separate."

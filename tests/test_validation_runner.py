@@ -12,7 +12,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 
@@ -259,6 +259,75 @@ class ExampleTest(unittest.TestCase):
             # 普通组仍遵循 unittest 的 skip 语义；只在原生必验集合加严，不改变
             # 原 ci 或既有 portable 组的行为。
             self.assertEqual(0, runner.run_cases([RequiredCase("test_subtest_skip")]))
+
+    def test_native_matrix_counts_collected_cases_and_rejects_empty_or_overlapping_partitions(self):
+        # 这些 TestCase 只提供 unittest 的真实 id，不执行方法；本例验证新公开 JSON
+        # 协议，而不以受控夹具声称任何 Win32/宿主能力已通过。
+        spec = importlib.util.spec_from_file_location("validation_matrix_contract", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+
+        class MatrixCase(unittest.TestCase):
+            def test_one(self):
+                self.fail("矩阵收集不能运行 TestCase")
+
+            def test_two(self):
+                self.fail("矩阵收集不能运行 TestCase")
+
+            def test_unregistered(self):
+                self.fail("未登记方法不能被完整矩阵遗漏")
+
+        first, second = MatrixCase("test_one"), MatrixCase("test_two")
+        components = {
+            "first": {"targets": ("one",), "node_required": False, "curses_required": False},
+            "second": {"targets": ("two",), "node_required": False, "curses_required": True},
+        }
+        parser = runner.make_parser()
+        with patch.object(runner, "NATIVE_COMPONENTS", components):
+            self.assertEqual({"include": [
+                {"group": "first", "methods": 1, "node_required": False, "curses_required": False},
+                {"group": "second", "methods": 1, "node_required": False, "curses_required": True},
+            ]}, runner.native_matrix({"one": [first, first], "two": [second]}, parser))
+            for resolved in ({"one": [], "two": [second]}, {"one": [first], "two": [first]},
+                             {"one": [first], "two": [second], "extra": [MatrixCase("test_unregistered")]}):
+                with self.subTest(resolved=resolved), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    runner.native_matrix(resolved, parser)
+                self.assertEqual(2, error.exception.code)
+            components["second"]["curses_required"] = "true"
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                runner.native_matrix({"one": [first], "two": [second]}, parser)
+            self.assertEqual(2, error.exception.code)
+        with patch.object(runner, "NATIVE_COMPONENTS", {}), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            runner.native_matrix({}, parser)
+        self.assertEqual(2, error.exception.code)
+
+    def test_matrix_cli_accepts_only_full_scope_and_never_executes_cases(self):
+        spec = importlib.util.spec_from_file_location("validation_matrix_cli_contract", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        # 缺范围、局部范围、组合范围与 --list 混用都在导入/执行前拒绝，防止调用方
+        # 将一次窄诊断伪装成完整发行 gate；不会为兼容旧 repair 名称退回 discovery。
+        for arguments in (("--matrix",), ("--matrix", "codex"), ("--matrix", "windows-native-libraries"),
+                          ("--matrix", "windows-native", "codex"), ("--matrix", "--list", "windows-native")):
+            with self.subTest(arguments=arguments), redirect_stderr(io.StringIO()), \
+                    patch.object(sys, "argv", ["test_workflow.py", *arguments]), \
+                    patch.object(runner, "load_target") as collect, patch.object(runner, "run_cases") as execute, \
+                    self.assertRaises(SystemExit) as error:
+                runner.main()
+            self.assertEqual(2, error.exception.code)
+            collect.assert_not_called()
+            execute.assert_not_called()
+        component = {"targets": ("tests.test_protocol",), "node_required": False, "curses_required": False}
+        with patch.object(runner, "NATIVE_COMPONENTS", {"native-protocol": component}), \
+                patch.object(runner, "GROUPS", {"windows-native": component["targets"]}), \
+                patch.object(runner, "load_target", return_value=[self]), \
+                patch.object(runner, "run_cases") as execute, \
+                patch.object(sys, "argv", ["test_workflow.py", "--matrix", "windows-native"]), \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(0, runner.main())
+        execute.assert_not_called()
+        self.assertEqual({"include": [{"group": "native-protocol", "methods": 1,
+                                      "node_required": False, "curses_required": False}]}, json.loads(output.getvalue()))
 
     def test_each_native_stage_rejects_non_windows_before_execution(self):
         # 本例仅验证阶段选择不能绕过平台守卫，实际 Win32 能力由组合 Windows CI

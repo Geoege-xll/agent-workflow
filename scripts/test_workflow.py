@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import json
 import os
 from pathlib import Path
 import re
@@ -65,127 +66,96 @@ GROUPS["ci"] = (
     + GROUPS["pty"] + GROUPS["packaging"]
 )
 
-# 原生库阶段与最终组合使用同一份节点清单；库阶段仅绑定实际交接的 Win32 类，
-# 不引入 POSIX PTY、Git Bash 或 portable mock。新增消费者由本入口 owner 在交接
-# 后补入最终组，缺失节点仍走 load_target 的真实导入/存在性拒绝，不动态忽略。
-GROUPS["windows-native-libraries"] = (
-    "tests.test_windows_runtime.WindowsFilesystemNativeTest",
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest",
-    "tests.test_install_process_windows.NativeWindowsJobTest",
-    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_cmd_actual_command_string_protocol",
-    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_powershell_actual_command_string_protocol",
-    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_payload_preserves_raw_streams_exit_and_authoritative_deadline",
-    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_budget_is_end_to_end_and_discards_partial_output",
-    "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_terminating_outer_powershell_drains_supervised_descendants",
-)
-# CI42550963192 的同一 rename 参数错误只影响以下五个真实方法；保留已绿的
-# 其余二十五方法原始证据，修复后仅补这五方法及其全部原生子场景。完整库组仍
-# 供新环境或完整库验收显式选择；修复组不做动态筛选，不把失败节点退化为 skip。
-GROUPS["windows-native-repair"] = (
-    "tests.test_windows_runtime.WindowsFilesystemNativeTest.test_exhausted_or_context_closed_scandir_does_not_pin_directory",
-    "tests.test_windows_runtime.WindowsFilesystemNativeTest.test_replacement_preserves_acl_protection_and_future_parent_inheritance",
-    "tests.test_windows_runtime.WindowsFilesystemNativeTest.test_successful_backend_file_directory_rename_and_delete",
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_consuming_regular_move_preserves_identity_and_excludes_existing_target",
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_managed_skill_exact_create_read_move_delete_and_stale_refusal",
-)
-# 中央阶段仅绑定新增消费者及其直接依赖的条件删除原语。已有库与 rename 修复
-# 证据继续按输入有效性复用，不因中央接入重复执行全库；本组仍要求每个方法及
-# 原生子场景真实执行，输入未组合或节点未冻结时不得以缺失/skip 声称验收成功。
-GROUPS["windows-native-central"] = (
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_complete_regular_delete_preserves_acl_writer_replacement_and_deletes_owned",
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_conditional_empty_directory_and_streaming_read_exclude_changes",
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_independent_initial_private_gate_rejects_public_acl_before_core",
-    "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
-    "tests.test_central_project.WindowsCentralComposedNativeTest.test_project_junction_is_rejected_before_resolve_and_writes",
-)
-# 中央首轮 CI42559903683 仅此组合消费者在早期 VERSION 解析失败；保留四个
-# 已绿方法的原始证据，修复后只补实际失败方法，不重复原库或以部分阶段冒充全验收。
-GROUPS["windows-native-central-repair"] = (
-    "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
-)
-# CI42563956735 已将失败收敛到中央 scratch/installed ACL 投影和共享 Job wait
-# 屏障。中央组合消费者复用既有登记；HTML 暂停后不再登记历史 renderer 或
-# renderer/process 修复组，三个 Job 方法仍由上方完整 NativeWindowsJobTest 覆盖。
-GROUPS["windows-native-central-acl-repair"] = GROUPS["windows-native-central-repair"] + (
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_private_directory_chmod_is_idempotent_and_preserves_security",
-)
-# CI42566554380 已验证 renderer/process 五方法及私有目录 chmod；后续仅补中央
-# 组合与精确 DACL 复制的新边界。旧 HTML 证据仅作恢复资料；现行组合消费者
-# 验证暂停合同，Node 前置留待实际其它消费者核对，不能凭暂停 HTML 擅自删除。
-GROUPS["windows-native-central-copy-repair"] = GROUPS["windows-native-central-repair"] + (
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_exact_dacl_copy_is_idempotent_and_private_state_republishes",
-)
-# CI42568804698 的精确 DACL 复制已绿，中央消费者后续停在 Skill 发布见证。
-# 此组只补实际 stage→目标父移动的原生见证与完整消费者，不重复已验 copy，
-# 也不在验证入口放宽生产 guard；真实诊断和修复仍由中央 owner 冻结后组合。
-GROUPS["windows-native-central-link-repair"] = GROUPS["windows-native-central-repair"] + (
-    "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_managed_skill_stage_publication_preserves_frozen_witness",
-)
-# 稳定 CLI 组件组只绑定已合入的六个原生方法，分别验证 Python/pwsh/cmd 入口、
-# 字面 argv 与退出码、显式坏解释器拒绝及导入前隔离。它不启动 TUI/HTML，CI
-# 必须独立使用 stdlib venv，不把 Node/curses 或未修复的中央消费者混入本轮取证。
-GROUPS["windows-native-entry"] = (
-    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_help_version_and_empty_list",
-    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_powershell_legacy_help_version_and_empty_list",
-    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_cmd_help_version_and_empty_list",
-    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_shells_preserve_literal_arguments_and_exit_codes",
-    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_explicit_invalid_python_is_refused_without_fallback",
-    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_isolation_precedes_stdlib_imports",
-)
-# 首个直接 Python smoke 已在 CI42576076285 通过；后续仅补剩余五个入口方法。
-# 从同一有序六方法清单派生，保留完整组件组且避免第二份手写名单漂移；本组同样
-# 必须真实运行，不能因夹具隔离/清理修复而用 skip 或已绿 smoke 代替剩余验证。
-GROUPS["windows-native-entry-shells"] = GROUPS["windows-native-entry"][1:]
-# 稳定中央 reader 组件验证单操作显式 core 会话的归属、fresh 校验与递归快照
-# 边界，并复用唯一已有的完整消费者节点；不以跨调用缓存、放宽超时或跳过消费者
-# 替代原生验收。已绿 CLI/Skill/renderer/原语保留各自证据，不纳入本轮重复执行。
-GROUPS["windows-native-central-reader"] = GROUPS["windows-native-central-repair"] + (
-    "tests.test_runtime_store.RuntimeStoreTest.test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member",
-    "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_rejects_unknown_members_and_directory_exchange",
-)
-# 解释器/标准句柄诊断沿用首轮冻结的真实方法；既可单独诊断，也并入下方八方法
-# 组件组。原生必验集合仍拒绝任何方法/子场景 skip 或未执行，不把诊断等同 TUI 验收。
-GROUPS["windows-native-conpty-diagnostics"] = (
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_interpreter_and_standard_handle_diagnostics",
-)
-# 稳定低层 ConPTY 通道独立验证 UTF-8/VT、尺寸、定向 Ctrl+C、输出/退出、Job
-# 静止屏障和资源/console mode 恢复；只需 stdlib。large_output 节点同时真实验证
-# 共享 Job 的 None 默认 capture，不另重复已绿的旧进程组；此组不等同 TUI 验收。
-GROUPS["windows-native-conpty"] = (
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_utf8_input_and_vt_output",
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_resize_reports_console_dimensions",
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_ctrl_c_targets_owned_console",
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_large_output_and_exit_codes",
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_timeout_and_cancel_quiesce_job",
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_console_modes_restore",
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_start_failure_releases_owned_resources",
-) + GROUPS["windows-native-conpty-diagnostics"]
-# TUI 只选择已运输的三个真实生产界面消费者，使用请求私有宿主/项目与只读
-# Win32 Console 观察器；需要锁定 windows-curses 的独立 venv，不混入中央 Hook
-# 长链或重复已通过的低层 ConPTY。三个方法及其子场景同样严格禁止 skip。
-GROUPS["windows-native-tui"] = (
-    "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_project_preferences_lifecycle_and_focus",
-    "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_global_reset_and_monochrome",
-    "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_unicode_resize_and_interrupt_restores_modes",
-)
-# 两个诊断方法分别消费真实验收脚本函数和 Win32 Console 只读观察器，不启动
-# 生产 TUI。脚本身份函数仍真实导入并校验 windows-curses 2.4.2，因此本组需要
-# 已锁依赖；不能仅凭“诊断”二字使用缺依赖的 stdlib 环境，或以 skip 冒充通过。
-GROUPS["windows-native-tui-diagnostics"] = (
-    "tests.test_windows_native_integration.WindowsAcceptanceScriptNativeTest.test_native_acceptance_identity_preserves_legacy_quotes_and_exit_codes",
-    "tests.test_windows_native_integration.NativeConsoleObserverNativeTest.test_native_console_cursor_access_diagnostics",
-)
-GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
-# 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
-# GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
-NATIVE_GROUPS = frozenset((
-    "windows-native-libraries", "windows-native-repair", "windows-native-central",
-    "windows-native-central-repair", "windows-native-central-acl-repair",
-    "windows-native-central-copy-repair", "windows-native-central-link-repair",
-    "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader",
-    "windows-native-conpty", "windows-native-conpty-diagnostics", "windows-native-tui",
-    "windows-native-tui-diagnostics", "windows-native",
-))
+# 稳定原生组件的唯一登记：目标、依赖都归本入口所有；GROUPS、最终聚合与 CI
+# matrix 仅从这里派生。历史 repair/entry-shells 别名已完成使命，不参与现行门禁；
+# 原始 CI 日志保留原名，不通过修改旧证据把阶段成功重标为最终验收。
+NATIVE_COMPONENTS = {
+    "windows-native-libraries": {
+        "targets": (
+            "tests.test_windows_runtime.WindowsFilesystemNativeTest",
+            "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest",
+            "tests.test_install_process_windows.NativeWindowsJobTest",
+            # 只收集当前 cmd/PowerShell 生产协议；旧 Git Bash 和自包含 Hook
+            # 夹具不是原生支持合同，不可把含这些方法的整类静默升级为必跑。
+            "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_cmd_actual_command_string_protocol",
+            "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_powershell_actual_command_string_protocol",
+            "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_payload_preserves_raw_streams_exit_and_authoritative_deadline",
+            "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_supervised_budget_is_end_to_end_and_discards_partial_output",
+            "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_terminating_outer_powershell_drains_supervised_descendants",
+        ),
+        "node_required": False, "curses_required": False,
+    },
+    "windows-native-entry": {
+        "targets": (
+            "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_help_version_and_empty_list",
+            "tests.test_windows_native_entry.WindowsNativeEntryTest.test_powershell_legacy_help_version_and_empty_list",
+            "tests.test_windows_native_entry.WindowsNativeEntryTest.test_cmd_help_version_and_empty_list",
+            "tests.test_windows_native_entry.WindowsNativeEntryTest.test_shells_preserve_literal_arguments_and_exit_codes",
+            "tests.test_windows_native_entry.WindowsNativeEntryTest.test_explicit_invalid_python_is_refused_without_fallback",
+            "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_isolation_precedes_stdlib_imports",
+        ),
+        "node_required": False, "curses_required": False,
+    },
+    "windows-native-central": {
+        "targets": (
+            "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
+        ),
+        # 保留已冻结中央消费者的 Node 前置；HTML 已暂停，不把旧 renderer
+        # 节点放回聚合，也不在收敛清单时擅自改变中央运行时契约。
+        "node_required": True, "curses_required": False,
+    },
+    "windows-native-central-boundaries": {
+        "targets": (
+            "tests.test_central_project.WindowsCentralComposedNativeTest.test_project_junction_is_rejected_before_resolve_and_writes",
+            "tests.test_runtime_store.RuntimeStoreTest.test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member",
+            "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_rejects_unknown_members_and_directory_exchange",
+        ),
+        "node_required": False, "curses_required": False,
+    },
+    "windows-native-conpty": {
+        "targets": (
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_utf8_input_and_vt_output",
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_resize_reports_console_dimensions",
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_ctrl_c_targets_owned_console",
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_large_output_and_exit_codes",
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_timeout_and_cancel_quiesce_job",
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_console_modes_restore",
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_start_failure_releases_owned_resources",
+            "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_interpreter_and_standard_handle_diagnostics",
+        ),
+        "node_required": False, "curses_required": False,
+    },
+    "windows-native-tui": {
+        "targets": (
+            "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_project_preferences_lifecycle_and_focus",
+            "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_global_reset_and_monochrome",
+            "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_unicode_resize_and_interrupt_restores_modes",
+        ),
+        "node_required": False, "curses_required": True,
+    },
+    "windows-native-tui-diagnostics": {
+        "targets": (
+            "tests.test_windows_native_integration.WindowsAcceptanceScriptNativeTest.test_native_acceptance_identity_preserves_legacy_quotes_and_exit_codes",
+            "tests.test_windows_native_integration.NativeConsoleObserverNativeTest.test_native_console_cursor_access_diagnostics",
+        ),
+        # Legacy 方法真实调用身份函数并导入 curses/_curses；不启动 TUI 也需要
+        # 已锁 windows-curses，缺依赖应失败，不以跳过身份边界换取绿色。
+        "node_required": False, "curses_required": True,
+    },
+    "windows-native-intake": {
+        # 三模块的实际 CLI 已按 os.name 选择隔离 Windows bootstrap，且没有
+        # POSIX 专属或 skip 节点；它们验证调度/续用/证据分层合同，不冒充宿主
+        # 消息送达。settlement 的九节点已由 owner 冻结，同样使用隔离 Windows
+        # 入口，无 skip；保留 installed pin 的真实 CAS/准入释放消费者。
+        "targets": modules("dispatch_admission", "agent_continuation", "continuous_intake_capabilities", "task_settlement"),
+        "node_required": False, "curses_required": False,
+    },
+}
+GROUPS.update((name, component["targets"]) for name, component in NATIVE_COMPONENTS.items())
+GROUPS["windows-native"] = tuple(target for component in NATIVE_COMPONENTS.values() for target in component["targets"])
+NATIVE_GROUPS = frozenset((*NATIVE_COMPONENTS, "windows-native"))
+# 新功能在三平台执行同一已冻结模块；这里只复用登记，不再维护第二套模块名单。
+GROUPS["ci"] += NATIVE_COMPONENTS["windows-native-intake"]["targets"]
 
 
 def make_parser():
@@ -196,11 +166,14 @@ def make_parser():
                 "示例：bash scripts/test_workflow.sh --list ci\n"
                 "      bash scripts/test_workflow.sh service tests.test_runtime_store\n"
                 "      python -I -B -X utf8 scripts/test_workflow.py windows-native\n"
-                "原生库阶段：windows-native-libraries；完整中央/TUI 组合验收仍待接入。\n"
+                "Windows 完整验收：windows-native；--matrix windows-native 只校验并输出 CI 组件矩阵。\n"
+                "原生库/CLI/ConPTY 使用 stdlib；TUI/脚本身份需要 requirements-windows.txt 锁定依赖。\n"
                 "依赖：Python >= 3.11；HTML 生成已暂停；ci 保留 Node 前置，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--list", action="store_true", help="校验后逐行显示实际测试目标，不运行测试")
+    display = parser.add_mutually_exclusive_group()
+    display.add_argument("--list", action="store_true", help="校验后逐行显示实际测试目标，不运行测试")
+    display.add_argument("--matrix", action="store_true", help="只收集 windows-native 完整清单，输出含实际方法数和依赖的 JSON 矩阵")
     parser.add_argument("selectors", nargs="*", metavar="组或节点")
     return parser
 
@@ -211,6 +184,27 @@ def flatten(suite):
             yield from flatten(item)
         else:
             yield item
+
+
+def native_matrix(resolved, parser):
+    """发布同一登记的真实组件分区；缺失、空集合或跨组重复都不能成为 CI 计划。"""
+    include, registered_ids = [], set()
+    if not NATIVE_COMPONENTS:
+        parser.error("原生组件矩阵不能为空")
+    for name, component in NATIVE_COMPONENTS.items():
+        identifiers = {case.id() for target in component["targets"] for case in resolved[target]}
+        if not identifiers or registered_ids.intersection(identifiers):
+            parser.error("原生组件为空或测试跨组件重复：" + name)
+        if any(type(component[key]) is not bool for key in ("node_required", "curses_required")):
+            parser.error("原生组件依赖必须是明确布尔值：" + name)
+        registered_ids.update(identifiers)
+        include.append({"group": name, "methods": len(identifiers),
+                        "node_required": component["node_required"], "curses_required": component["curses_required"]})
+    # 拒绝未来调用方另改聚合而漏进矩阵的漂移；客户端完整组与 Server 组件并集
+    # 必须是同一集合，不能只有各组件非空就把未登记的新消费者遗漏为绿色。
+    if registered_ids != {case.id() for cases in resolved.values() for case in cases}:
+        parser.error("原生聚合与组件矩阵的实际测试集合不一致")
+    return {"include": include}
 
 
 def load_target(target, parser):
@@ -284,6 +278,8 @@ def main():
     sys.path.insert(0, str(PACK))
     parser = make_parser()
     args = parser.parse_args()
+    if args.matrix and args.selectors != ["windows-native"]:
+        parser.error("--matrix 必须且只能选择完整 windows-native；不能把局部分组当作完整发布门禁")
     if not args.selectors:
         parser.print_help()
         return 0
@@ -305,6 +301,12 @@ def main():
     plan = [target for target in targets
             if not any(target.startswith(parent + ".") for parent in targets if parent != target)]
     collected = [(target, resolved[target]) for target in plan]
+    if args.matrix:
+        # 收集遵循与 --list/执行相同的真实导入和节点存在性边界；不会运行 TestCase
+        # 或把静态预期计数冒充方法数。单行 JSON 可直接进入 GITHUB_OUTPUT，不能带
+        # 日志或用户输入；实际原生成功仍由随后逐组件执行和汇总确认。
+        print(json.dumps(native_matrix(resolved, parser), separators=(",", ":")))
+        return 0
     if args.list:
         print("\n".join(plan))
         return 0
