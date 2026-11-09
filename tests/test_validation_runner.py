@@ -266,7 +266,7 @@ class ExampleTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("validation_native_stage_contract", PACK / "scripts/test_workflow.py")
         runner = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(runner)
-        for group in ("windows-native-libraries", "windows-native-conpty-diagnostics", "windows-native"):
+        for group in runner.NATIVE_GROUPS:
             with self.subTest(group=group), redirect_stderr(io.StringIO()), \
                     patch.object(runner, "os", SimpleNamespace(name="posix", chdir=lambda _: None)), \
                     patch.object(sys, "argv", ["test_workflow.py", group]), \

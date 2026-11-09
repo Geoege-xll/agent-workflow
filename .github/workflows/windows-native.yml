@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run one fixed ConPTY diagnostic method or capability probe; complete acceptance is still blocked'
+        description: 'Run fixed ConPTY and central consumer stages or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -108,14 +108,17 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 15
     strategy:
-      # 当前只取一次 ConPTY 解释器/标准句柄诊断，不重跑旧七方法失败或中央长
-      # 消费者。完整验收待生产 owner 交接后再收敛，诊断成功不能提升为平台 PASS。
+      # 标准句柄与中央偏好链路已修复，本轮并行验证低层 ConPTY 八方法和完整中央
+      # 消费者一方法；其余既有库证据继续复用，不因组合修复扩大原生重跑范围。
       fail-fast: false
       matrix:
         include:
-          - group: windows-native-conpty-diagnostics
-            methods: 1
+          - group: windows-native-conpty
+            methods: 8
             node_required: false
+          - group: windows-native-central-repair
+            methods: 1
+            node_required: true
     defaults:
       run:
         shell: pwsh
@@ -171,8 +174,9 @@ jobs:
             "runtime_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
             if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The explicit Python must be >= 3.11 and x64.' }
             if ($env:NATIVE_NODE_REQUIRED -eq 'true') {
-              # HTML 只消费运行器已有 Node，不安装/下载或改 PATH。缺失、执行失败和
-              # 不足 20 的真实版本都终止该阶段；完整原始版本输出和退出码必须留证。
+              # 中央阶段沿用既有 Node 前置，待实际 Hook 消费者核对后再决定删减；
+              # HTML 暂停不构成删除其它消费者运行时的依据。不安装/下载或改 PATH，
+              # 缺失、执行失败和不足 20 的真实版本都终止该阶段并完整留证。
               # 精确 .exe 查询仍可能命中多个 PATH 条目；先按命令查找顺序选定单个
               # ApplicationInfo，再读取其单值 Path。禁止将 Source/Path 数组传给
               # 字符串校验或调用运算符；完全限定路径也排除 C:relative 等盘符相对形式。
@@ -192,7 +196,7 @@ jobs:
               $nodeText = ($nodeVersion | Out-String).Trim()
               $nodeMatch = [regex]::Match($nodeText, '^v(?<major>[0-9]+)\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')
               if (-not $nodeMatch.Success) { throw 'The existing Node version is not recognizable.' }
-              if ([int]($nodeMatch.Groups['major'].Value) -lt 20) { throw 'An existing Node >= 20 is required for the renderer stage.' }
+              if ([int]($nodeMatch.Groups['major'].Value) -lt 20) { throw 'An existing Node >= 20 is required for this native stage.' }
             }
             # 库阶段只需 stdlib；自有 venv 不安装 curses、不修改全局解释器或 PATH。
             $venv = Join-Path $env:RUNNER_TEMP 'awf-native-libraries-venv'

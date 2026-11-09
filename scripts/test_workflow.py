@@ -52,7 +52,8 @@ GROUPS["hosts"] = (
               "bootstrap_routing", "astra_instruction_adaptation", "project_role_lifecycle")
 )
 # CI 是有明确合同的组合：当前 CLI/pin/模型收据、记录/见证容量、三宿主共享正文和中央软链、真实
-# PTY、离线归档及 Ruby Formula 消费者。Node 对应需求 HTML 的真实运行时消费者。
+# PTY、离线归档及 Ruby Formula 消费者。HTML 仅验证暂停合同，历史引擎不收集；
+# 其它消费者的既有 Node 前置仍由 CI 保留，不因暂停 HTML 擅自删除。
 GROUPS["ci"] = (
     modules("validation_runner")
     + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
@@ -60,7 +61,8 @@ GROUPS["ci"] = (
     + ("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",
        "tests.test_manager_tui.TuiTest.test_runtime_actions_use_captured_context_and_modal_focus")
     + ("tests.test_unified_host_workflow.UnifiedSetupContractTest.test_all_hosts_generate_core_skills_from_one_shared_source",)
-    + modules("requirement_html") + GROUPS["pty"] + GROUPS["packaging"]
+    + ("tests.test_requirement_html.RequirementHtmlSuspendedTest",)
+    + GROUPS["pty"] + GROUPS["packaging"]
 )
 
 # 原生库阶段与最终组合使用同一份节点清单；库阶段仅绑定实际交接的 Win32 类，
@@ -101,30 +103,15 @@ GROUPS["windows-native-central"] = (
 GROUPS["windows-native-central-repair"] = (
     "tests.test_central_project.WindowsCentralComposedNativeTest.test_source_install_detached_pin_helper_hooks_and_admission",
 )
-# HTML 阶段单独验证真实 Node 消费者的固定源码/vendor 字节、junction 拒绝及
-# Job 后代收尾；仅使用现有 Node >=20 和 stdlib，不引入 curses 或第二套清单。
-# 方法名来自 renderer owner 的冻结接入合同；组合源码缺失仍须真实导入失败。
-GROUPS["windows-native-renderer"] = (
-    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_render_check_preserves_source_and_vendor_bytes",
-    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_stage_and_home_junctions_are_rejected",
-    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_node_timeout_terminates_descendants",
-)
 # CI42563956735 已将失败收敛到中央 scratch/installed ACL 投影和共享 Job wait
-# 屏障。下列两组只补真实受影响节点：中央组合消费者复用既有登记，HTML 的已绿
-# junction 方法及未受影响的底层/Job 方法保留原证据，不因共享后端修复全量重跑。
+# 屏障。中央组合消费者复用既有登记；HTML 暂停后不再登记历史 renderer 或
+# renderer/process 修复组，三个 Job 方法仍由上方完整 NativeWindowsJobTest 覆盖。
 GROUPS["windows-native-central-acl-repair"] = GROUPS["windows-native-central-repair"] + (
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_private_directory_chmod_is_idempotent_and_preserves_security",
 )
-GROUPS["windows-native-renderer-process-repair"] = (
-    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_render_check_preserves_source_and_vendor_bytes",
-    "tests.test_requirement_html.WindowsRequirementHtmlNativeTest.test_native_node_timeout_terminates_descendants",
-    "tests.test_install_process_windows.NativeWindowsJobTest.test_wait_confirms_normal_descendant_handles",
-    "tests.test_install_process_windows.NativeWindowsJobTest.test_timeout_drains_child_and_grandchild_before_recovery",
-    "tests.test_install_process_windows.NativeWindowsJobTest.test_capture_cancel_file_drains_its_job",
-)
 # CI42566554380 已验证 renderer/process 五方法及私有目录 chmod；后续仅补中央
-# 组合与精确 DACL 复制的新边界。组合消费者已执行 Full HTML，CI 需保留现有
-# Node 前置；本阶段不重复已绿节点，临时 repair 名称留待最终稳定清单统一收敛。
+# 组合与精确 DACL 复制的新边界。旧 HTML 证据仅作恢复资料；现行组合消费者
+# 验证暂停合同，Node 前置留待实际其它消费者核对，不能凭暂停 HTML 擅自删除。
 GROUPS["windows-native-central-copy-repair"] = GROUPS["windows-native-central-repair"] + (
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_exact_dacl_copy_is_idempotent_and_private_state_republishes",
 )
@@ -156,6 +143,11 @@ GROUPS["windows-native-central-reader"] = GROUPS["windows-native-central-repair"
     "tests.test_runtime_store.RuntimeStoreTest.test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member",
     "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_rejects_unknown_members_and_directory_exchange",
 )
+# 解释器/标准句柄诊断沿用首轮冻结的真实方法；既可单独诊断，也并入下方八方法
+# 组件组。原生必验集合仍拒绝任何方法/子场景 skip 或未执行，不把诊断等同 TUI 验收。
+GROUPS["windows-native-conpty-diagnostics"] = (
+    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_interpreter_and_standard_handle_diagnostics",
+)
 # 稳定低层 ConPTY 通道独立验证 UTF-8/VT、尺寸、定向 Ctrl+C、输出/退出、Job
 # 静止屏障和资源/console mode 恢复；只需 stdlib。large_output 节点同时真实验证
 # 共享 Job 的 None 默认 capture，不另重复已绿的旧进程组；此组不等同 TUI 验收。
@@ -167,20 +159,13 @@ GROUPS["windows-native-conpty"] = (
     "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_timeout_and_cancel_quiesce_job",
     "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_console_modes_restore",
     "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_start_failure_releases_owned_resources",
-)
-# 当前失败尚待解释器/标准句柄证据定位；仅执行已冻结的一个真实诊断方法，
-# 同时保留完整七方法组供后续修复验收。诊断不重复旧失败，不代表传输或 TUI
-# 已通过；仍纳入原生必验集合，任何方法/子场景 skip 或未执行均必须失败。
-GROUPS["windows-native-conpty-diagnostics"] = (
-    "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_interpreter_and_standard_handle_diagnostics",
-)
+) + GROUPS["windows-native-conpty-diagnostics"]
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
 NATIVE_GROUPS = frozenset((
     "windows-native-libraries", "windows-native-repair", "windows-native-central",
-    "windows-native-central-repair", "windows-native-renderer",
-    "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
+    "windows-native-central-repair", "windows-native-central-acl-repair",
     "windows-native-central-copy-repair", "windows-native-central-link-repair",
     "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader",
     "windows-native-conpty", "windows-native-conpty-diagnostics", "windows-native",
@@ -196,7 +181,7 @@ def make_parser():
                 "      bash scripts/test_workflow.sh service tests.test_runtime_store\n"
                 "      python -I -B -X utf8 scripts/test_workflow.py windows-native\n"
                 "原生库阶段：windows-native-libraries；完整中央/TUI 组合验收仍待接入。\n"
-                "依赖：Python >= 3.11；requirement_html/ci 需要 Node，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
+                "依赖：Python >= 3.11；HTML 生成已暂停；ci 保留 Node 前置，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--list", action="store_true", help="校验后逐行显示实际测试目标，不运行测试")

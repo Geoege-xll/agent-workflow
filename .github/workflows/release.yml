@@ -34,7 +34,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Check existing Node and Ruby consumers
-        # 需求 HTML 执行真实 Node 引擎；Formula 测试执行真实 Ruby。
+        # HTML 当前只验证暂停合同，不启动 Node；保留其它消费者既有 Node 前置，
+        # 不因单一功能暂停擅自删减运行时。Formula 测试继续执行真实 Ruby。
         # 使用托管 runner 已有运行时，缺失则明确失败，不能 skip 后冒充验证完成。
         run: |
           set -euo pipefail
