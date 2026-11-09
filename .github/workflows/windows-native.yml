@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run the fixed central consumer stage or capability probe; complete acceptance is still blocked'
+        description: 'Run the fixed native TUI stage or capability probe; complete acceptance is still blocked'
         type: choice
         options: [libraries, capabilities, acceptance]
         default: libraries
@@ -108,14 +108,15 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 15
     strategy:
-      # CI42598994710 的 ConPTY 八方法已通过且底座未变，本轮仅补中央消费者
-      # 最终 cleanup 计数修复；保留原有 Node 前置，不重跑其它已有效的原生证据。
+      # 当前只验证已运输的三个真实 TUI 方法；ConPTY 八方法复用原生通过证据，
+      # 正在修复的中央 Hook 长链独立处理，不混入本次 curses/生产界面首次取证。
       fail-fast: false
       matrix:
         include:
-          - group: windows-native-central-repair
-            methods: 1
-            node_required: true
+          - group: windows-native-tui
+            methods: 3
+            node_required: false
+            curses_required: true
     defaults:
       run:
         shell: pwsh
@@ -134,6 +135,7 @@ jobs:
           NATIVE_STAGE: ${{ matrix.group }}
           NATIVE_METHODS: ${{ matrix.methods }}
           NATIVE_NODE_REQUIRED: ${{ matrix.node_required }}
+          NATIVE_CURSES_REQUIRED: ${{ matrix.curses_required }}
         run: |
           # stage 仅来自上方固定 matrix 常量，不读取用户输入或提交内容；作为独立
           # argv 单值调用同一 Python 入口，既不求值 shell，也不在 YAML 重复方法名。
@@ -195,19 +197,36 @@ jobs:
               if (-not $nodeMatch.Success) { throw 'The existing Node version is not recognizable.' }
               if ([int]($nodeMatch.Groups['major'].Value) -lt 20) { throw 'An existing Node >= 20 is required for this native stage.' }
             }
-            # 库阶段只需 stdlib；自有 venv 不安装 curses、不修改全局解释器或 PATH。
-            $venv = Join-Path $env:RUNNER_TEMP 'awf-native-libraries-venv'
-            if (Test-Path -LiteralPath $venv) { throw 'The owned library virtual environment already exists.' }
-            "command=python -I -B -X utf8 -m venv --without-pip $venv" | Tee-Object -FilePath $log -Append
-            & $python -I -B -X utf8 -m venv --without-pip $venv 2>&1 | Tee-Object -FilePath $log -Append
+            # 仅 TUI 的固定 matrix 常量允许安装 curses；库阶段仍用无 pip 的 stdlib
+            # 环境。TUI venv 保留解释器自带 ensurepip，不能 --without-pip 后直接调用
+            # 不存在的 pip，也不升级 pip、改全局解释器或 PATH。每个 stage 独占目录。
+            $withCurses = $env:NATIVE_CURSES_REQUIRED -eq 'true'
+            $venv = Join-Path $env:RUNNER_TEMP "awf-${stage}-venv"
+            if (Test-Path -LiteralPath $venv) { throw 'The owned native virtual environment already exists.' }
+            $venvArguments = @('-I', '-B', '-X', 'utf8', '-m', 'venv')
+            if (-not $withCurses) { $venvArguments += '--without-pip' }
+            $venvArguments += $venv
+            "command=$python $($venvArguments -join ' ')" | Tee-Object -FilePath $log -Append
+            & $python @venvArguments 2>&1 | Tee-Object -FilePath $log -Append
             $nativeCode = $LASTEXITCODE
             "venv_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
-            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The owned library virtual environment could not be created.' }
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The owned native virtual environment could not be created.' }
             $python = Join-Path $venv 'Scripts/python.exe'
+            if ($withCurses) {
+              # 唯一依赖源是仓内官方 wheel 哈希锁；isolated 忽略用户 pip 环境/配置，
+              # require-hashes 与 only-binary 拒绝未锁载荷及源码回退。完整安装输出和
+              # 退出码追加同一主日志，失败即终止，不能靠随后 skip 伪造原生通过。
+              $requirements = Join-Path $env:GITHUB_WORKSPACE 'requirements-windows.txt'
+              "command=$python -I -B -X utf8 -m pip --isolated --disable-pip-version-check --no-input install --require-hashes --only-binary=:all: -r $requirements" | Tee-Object -FilePath $log -Append
+              & $python -I -B -X utf8 -m pip --isolated --disable-pip-version-check --no-input install --require-hashes --only-binary=:all: -r $requirements 2>&1 | Tee-Object -FilePath $log -Append
+              $nativeCode = $LASTEXITCODE
+              "dependency_install_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+              if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The locked native TUI dependency could not be installed.' }
+            }
             # 所有测试临时文件均限制在本次 job 自有目录，沿用原测试清理责任；完整
             # 命令日志保留在目录之外，失败后仍可上传，不触碰真实 HOME/state/业务项目。
-            $data = Join-Path $env:RUNNER_TEMP 'awf-native-libraries-data'
-            if (Test-Path -LiteralPath $data) { throw 'The owned library data directory already exists.' }
+            $data = Join-Path $env:RUNNER_TEMP "awf-${stage}-data"
+            if (Test-Path -LiteralPath $data) { throw 'The owned native data directory already exists.' }
             [System.IO.Directory]::CreateDirectory($data) | Out-Null
             $env:TEMP = $data
             $env:TMP = $data
@@ -249,7 +268,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Block incomplete native acceptance
-        # 中央/TUI 真实节点尚未交接；独立阻断避免条件跳过 capabilities 后，显式
+        # 中央/TUI 完整组合尚未通过；独立阻断避免条件跳过 capabilities 后，显式
         # acceptance 模式只剩 skip 而显示成功。Server 库证据也不是 Win11 桌面 PASS。
         shell: pwsh
         run: |

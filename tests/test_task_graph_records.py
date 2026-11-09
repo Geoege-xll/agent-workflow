@@ -1377,6 +1377,18 @@ class RecordInstalledRuntimeTest(unittest.TestCase):
             business.write_bytes(b"module example.test/records\n")
             state = root / "state"
             env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state)}
+            # install.sh 只导入版本并启用项目，不授权中央 current；正式 check 属于
+            # 新任务准入，必须先有已激活控制器。夹具在同一个自有 state 真实导入并
+            # 激活来源，显式宿主根仅落在本例临时目录，不写个人 HOME、不伪造 current，
+            # 也不以 mock/放宽门禁让后续安装态 helper 测试越过生产准入合同。
+            from lib import runtime_store
+            from lib.hosts.native_context import HostPaths, NativeContext
+            from manager import central_runtime
+            core = runtime_store.import_core(PACK, state)
+            context = NativeContext.for_state(state, host_paths=HostPaths.for_home(root / "隔离 HOME", environment={}))
+            activation = central_runtime.preview(state, binding=core.binding(), native_context=context)
+            self.assertTrue(activation.summary["can_apply"], activation.summary)
+            central_runtime.apply(activation)
             result = subprocess.run(["bash", str(PACK / "install.sh"), str(project), "--state-dir", str(state)],
                                     cwd=root, text=True, capture_output=True, check=False, timeout=120)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)

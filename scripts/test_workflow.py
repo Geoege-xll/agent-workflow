@@ -160,6 +160,14 @@ GROUPS["windows-native-conpty"] = (
     "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_console_modes_restore",
     "tests.test_windows_conpty_transport.NativeConPTYTransportTest.test_native_start_failure_releases_owned_resources",
 ) + GROUPS["windows-native-conpty-diagnostics"]
+# TUI 只选择已运输的三个真实生产界面消费者，使用请求私有宿主/项目与只读
+# Win32 Console 观察器；需要锁定 windows-curses 的独立 venv，不混入中央 Hook
+# 长链或重复已通过的低层 ConPTY。三个方法及其子场景同样严格禁止 skip。
+GROUPS["windows-native-tui"] = (
+    "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_project_preferences_lifecycle_and_focus",
+    "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_global_reset_and_monochrome",
+    "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_unicode_resize_and_interrupt_restores_modes",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -168,7 +176,7 @@ NATIVE_GROUPS = frozenset((
     "windows-native-central-repair", "windows-native-central-acl-repair",
     "windows-native-central-copy-repair", "windows-native-central-link-repair",
     "windows-native-entry", "windows-native-entry-shells", "windows-native-central-reader",
-    "windows-native-conpty", "windows-native-conpty-diagnostics", "windows-native",
+    "windows-native-conpty", "windows-native-conpty-diagnostics", "windows-native-tui", "windows-native",
 ))
 
 
