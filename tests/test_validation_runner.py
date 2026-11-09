@@ -200,6 +200,8 @@ class ExampleTest(unittest.TestCase):
                 for name in ("runtime_state","central_runtime","runtime_lifecycle","native_agents","install_cli"):
                     self.assertEqual(1,targets.count("tests.test_"+name))
                 self.assertIn("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",targets)
+                # 新保存预览的真实 App 回归必须经唯一 ci 清单运行，且组合选择不能重复。
+                self.assertEqual(1, targets.count("tests.test_manager_tui.TuiTest.test_save_preview_blocked_validation_keeps_ui_responsive_and_drafts"))
                 self.assertIn("tests.test_manager_tui.ProjectTuiIntegrationTest.test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize",targets)
 
     def test_real_existing_node_runs_through_repository_entry(self):

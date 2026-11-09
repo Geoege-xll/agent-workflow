@@ -59,8 +59,11 @@ GROUPS["ci"] = (
     modules("validation_runner")
     + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
     + modules("central_project", "runtime_state", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli")
+    # 后台保存预览必须在校验阻塞时保持真实 App 可响应并保留草稿；仅纳入已冻结
+    # 的精确消费者，不因新增回归把整个 TUI 模块或现有 PTY 分支重复执行。
     + ("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",
-       "tests.test_manager_tui.TuiTest.test_runtime_actions_use_captured_context_and_modal_focus")
+       "tests.test_manager_tui.TuiTest.test_runtime_actions_use_captured_context_and_modal_focus",
+       "tests.test_manager_tui.TuiTest.test_save_preview_blocked_validation_keeps_ui_responsive_and_drafts")
     + ("tests.test_unified_host_workflow.UnifiedSetupContractTest.test_all_hosts_generate_core_skills_from_one_shared_source",)
     + ("tests.test_requirement_html.RequirementHtmlSuspendedTest",)
     + GROUPS["pty"] + GROUPS["packaging"]
