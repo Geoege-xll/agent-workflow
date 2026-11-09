@@ -384,34 +384,61 @@ sys.setprofile(observe)'''.replace("ALIAS", repr(alias)).replace("RELATIVE", rep
         for relative in (*dependencies, *BUILTIN_STANDARD_SOURCES):
             self.put(source, relative, (PACK / relative).read_bytes())
         pins = source / "lib/runtime_pins.py"
-        pins.write_bytes(pins.read_bytes().replace(b"CORE_READ_OPERATION_PROTOCOL = 1\n", b""))
-        old = store.import_core(source, self.state)
-        project_service.apply_project(project_service.preview_project(
-            self.state, self.project, "use", content_id=old.content_id))
-        path = self.project / "old-graph.json"
-        payload = graph()
-        payload["runtime_binding"] = old.binding()
-        path.write_text(json.dumps(payload), encoding="utf-8")
-        before = path.read_bytes()
-        arguments = ("validate", "--input", str(path))
-        legacy = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=old.binding())
-        self.assertIn(str(old.root / "lib/task_graph_cli.py"), legacy.command)
-        self.assertNotIn("--task-graph-operation", legacy.command)
-        result = subprocess.run(legacy.command, env=legacy.environment, cwd=legacy.cwd,
-                                capture_output=True, text=True, timeout=40)
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual({"status": "valid"}, json.loads(result.stdout))
-        self.assertEqual(before, path.read_bytes())
-        # 同一项目实际已切到old，但完整原pin仍必须用自己的新runner；其环境
-        # 不能接受另一版payload，也不能把旧任务自动绑定到current/new core。
-        current = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=self.core.binding())
-        self.assertIn(str(self.core.root / "lib/runtime_pins.py"), current.command)
-        result = subprocess.run(current.command, env=current.environment, cwd=current.cwd,
-                                capture_output=True, text=True, timeout=40)
-        self.assertEqual(2, result.returncode, result.stderr)
-        self.assertEqual("", result.stdout)
-        self.assertIn("桥执行版本冲突", result.stderr)
-        self.assertEqual(before, path.read_bytes())
+        # Git的Windows检出可使用CRLF；按带结束符的完整声明行移除，不能用
+        # 固定LF后缀替换却默默保留新能力。两种实际字节形式都进入真实消费者，
+        # 其余行结束符保持，避免先全部转换LF掩盖原生失败的输入前提。
+        lf_source = pins.read_bytes().replace(b"\r\n", b"\n")
+        self.assertNotIn(b"\r", lf_source)
+        declaration = b"CORE_READ_OPERATION_PROTOCOL = 1"
+        for newline, supplied in (("LF", lf_source), ("CRLF", lf_source.replace(b"\n", b"\r\n"))):
+            with self.subTest(line_ending=newline):
+                lines = supplied.splitlines(keepends=True)
+                selected = [index for index, line in enumerate(lines) if line.rstrip(b"\r\n") == declaration]
+                self.assertEqual(1, len(selected), "旧能力fixture必须先有且只有一条预期声明，不能空替换")
+                old_source = b"".join(line for index, line in enumerate(lines) if index != selected[0])
+                self.assertNotEqual(supplied, old_source)
+                crlf_count = old_source.count(b"\r\n")
+                bare_lf_count = old_source.count(b"\n") - crlf_count
+                self.assertGreater(crlf_count if newline == "CRLF" else bare_lf_count, 0)
+                self.assertEqual(0, bare_lf_count if newline == "CRLF" else crlf_count)
+                pins.write_bytes(old_source)
+                old = store.import_core(source, self.state)
+                # 先在真实固定core上消费原生产静态能力检查。只有明确旧能力0
+                # 才继续回退断言；不能让新runner命令或其它更早失败冒充旧路径。
+                with store.core_reader(old.binding(), self.state) as reader:
+                    self.assertEqual(old_source, reader.read(old, "lib/runtime_pins.py"))
+                    protocol = bridge._static_protocol(old, "CORE_READ_OPERATION_PROTOCOL", reader=reader,
+                                                       logical_path="lib/runtime_pins.py")
+                    self.assertEqual(0, protocol, "冻结后的旧pin必须真实缺少新runner能力")
+                print("OLD_PIN_FALLBACK_SOURCE " + json.dumps({"line_ending": newline, "protocol": protocol,
+                      "content_id": old.content_id, "source_sha256": hashlib.sha256(old_source).hexdigest(),
+                      "crlf_lines": crlf_count, "bare_lf_lines": bare_lf_count}), flush=True)
+                project_service.apply_project(project_service.preview_project(
+                    self.state, self.project, "use", content_id=old.content_id))
+                path = self.project / ("old-graph-" + newline + ".json")
+                payload = graph()
+                payload["runtime_binding"] = old.binding()
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                before = path.read_bytes()
+                arguments = ("validate", "--input", str(path))
+                legacy = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=old.binding())
+                self.assertIn(str(old.root / "lib/task_graph_cli.py"), legacy.command)
+                self.assertNotIn("--task-graph-operation", legacy.command)
+                result = subprocess.run(legacy.command, env=legacy.environment, cwd=legacy.cwd,
+                                        capture_output=True, text=True, timeout=40)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual({"status": "valid"}, json.loads(result.stdout))
+                self.assertEqual(before, path.read_bytes())
+                # 同一项目实际已切到old，但完整原pin仍必须用自己的新runner；
+                # 不接受另一版payload，不把旧任务自动改绑到current/new core。
+                current = bridge.python_helper(self.state, self.project, "lib/task_graph_cli.py", arguments, binding=self.core.binding())
+                self.assertIn(str(self.core.root / "lib/runtime_pins.py"), current.command)
+                result = subprocess.run(current.command, env=current.environment, cwd=current.cwd,
+                                        capture_output=True, text=True, timeout=40)
+                self.assertEqual(2, result.returncode, result.stderr)
+                self.assertEqual("", result.stdout)
+                self.assertIn("桥执行版本冲突", result.stderr)
+                self.assertEqual(before, path.read_bytes())
 
     def test_single_scope_hook_keeps_old_core_without_command_capability_neutral(self):
         self.enable()
