@@ -48,22 +48,24 @@ jobs:
           $code = 1
           $nativeCode = $null
           try {
+            # 用户目标固定为 PowerShell 7+；记录实际消费者版本，再执行同一薄入口。
+            $PSVersionTable | Out-String | Tee-Object -FilePath $log -Append
+            if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell >= 7.0 is required.' }
             $python = $env:PROBE_PYTHON
             if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
-            $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
             $script = Join-Path $env:GITHUB_WORKSPACE 'scripts/windows_capabilities.ps1'
             $before = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Filter 'awf-windows-capabilities-*' -ErrorAction Stop | ForEach-Object FullName)
             "python_path=$python" | Tee-Object -FilePath $log -Append
-            # 只从 setup-python 的单值绝对路径进入 WinPS 5.1 薄入口；不查询 PATH，
+            # 直接在当前 pwsh 7+ 中从 setup-python 的单值绝对路径进入薄入口；不查询 PATH，
             # 不插值输入、不修改 ExecutionPolicy，也不增加第二次 probe。
-            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File $script -Python $python -OutputParent $env:RUNNER_TEMP 2>&1 | Tee-Object -FilePath $log -Append
+            & $script -Python $python -OutputParent $env:RUNNER_TEMP 2>&1 | Tee-Object -FilePath $log -Append
             $nativeCode = $LASTEXITCODE
             "probe_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
-            if ($null -eq $nativeCode) { throw 'Windows PowerShell did not provide an exit code.' }
+            if ($null -eq $nativeCode) { throw 'PowerShell probe entry did not provide an exit code.' }
             if ($nativeCode -ne 0) {
               $code = [int]$nativeCode
             } else {
-              # -File 在 Ctrl+C 下可能返回 0；只有本次新建根中的完整权威 JSON
+              # 不能只凭退出码确认探针完成；只有本次新建根中的完整权威 JSON
               # 通过检查才确认“报告已产出”。JSON 仍不代表平台支持或桌面验收 PASS。
               $created = @(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory -Filter 'awf-windows-capabilities-*' -ErrorAction Stop | Where-Object { $_.FullName -notin $before })
               if ($created.Count -ne 1) { throw 'Expected exactly one new private probe workspace.' }
