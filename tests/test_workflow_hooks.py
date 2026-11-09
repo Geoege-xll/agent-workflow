@@ -106,6 +106,58 @@ class HookTest(unittest.TestCase):
         installer.process(self.pack, self.project, "claude", "apply")
         self.assertEqual(enabled, path.read_bytes())
 
+    def test_shared_container_transforms_keep_windows_metadata_and_strict_codec(self):
+        from types import SimpleNamespace
+        from lib.central import runtime_project as resources
+        from manager import runtime_state
+        # 这里只构造Windows封闭codec的已知输入，不模拟Win32成功或实际ACL。
+        # 真实原生日志已证明节点含7项identity；本例区分“继承全部既有事实”
+        # 与“只复制identity却丢security”，并直接调用私有记录所用的严格_node。
+        class SnapshotTree:
+            def __init__(self, nodes):
+                self.nodes = nodes
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def read(self, relative):
+                return self.nodes.get(relative, resources.Node())
+        def snapshot(payload):
+            return resources.Node("file", payload, 0o640,
+                                  (11, 22, stat.S_IFREG | 0o640, 1, len(payload), 55, 66), "a" * 64)
+        def assert_codec(after, before):
+            encoded = json.loads(resources.json_bytes(after.value()))
+            self.assertEqual(after, runtime_state._node(encoded))
+            self.assertEqual((before.identity, before.security, before.mode),
+                             (after.identity, after.security, after.mode))
+            # 原始缺权限事实必须继续被拒绝，不能通过放松decoder或抹去身份来修复。
+            with self.assertRaises(ValueError):
+                runtime_state._node({**encoded, "security": ""})
+            with self.assertRaises(ValueError):
+                runtime_state._node({**encoded, "identity": []})
+        config = b"workflow_hooks:\n  mode: assist\n"
+        for host, relative in (("codex", ".codex/hooks.json"), ("claude", ".claude/settings.json"),
+                               ("antigravity", ".agents/hooks.json")):
+            data = installer.merge_json({"user": {"preserve": True}}, self.pack, self.project, host, "assist")
+            before = snapshot(json.dumps(data).encode())
+            tree = SnapshotTree({relative: before, ".codex/config.toml": snapshot(b"[features]\nhooks=true\n")})
+            with self.subTest(host=host), patch.object(resources, "Tree", return_value=tree), \
+                    patch.object(resources, "os", SimpleNamespace(name="nt")), \
+                    patch.object(runtime_state, "os", SimpleNamespace(name="nt")):
+                after = resources.hook_resources(self.project, config, (host,), enabled=False)[relative][0]
+                assert_codec(after, before)
+                self.assertEqual({"user": {"preserve": True}}, json.loads(after.payload))
+        before = snapshot(b'{"user":{"preserve":true}}')
+        tree = SnapshotTree({".claude/settings.json": before})
+        with patch.object(resources, "Tree", return_value=tree), \
+                patch.object(resources, "os", SimpleNamespace(name="nt")), \
+                patch.object(runtime_state, "os", SimpleNamespace(name="nt")):
+            after = resources.claude_write_guard(self.project,
+                b"claude_options:\n  block_writes_outside_working_directories: true\n")[".claude/settings.json"][0]
+            assert_codec(after, before)
+            self.assertEqual({"user": {"preserve": True}, "permissions": {"blockWritesOutsideWorkingDirectories": True}},
+                             json.loads(after.payload))
+
     def test_write_guard_preserves_user_permissions_and_refuses_project_or_local_conflicts(self):
         """明确 false、错误容器都不能被覆盖；配置冲突时整个预检保持只读。"""
         (self.pack / "project.yaml").write_text("claude_options:\n  block_writes_outside_working_directories: true\n")

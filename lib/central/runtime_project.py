@@ -17,7 +17,7 @@ if not __package__:
 import base64
 import ast
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -699,7 +699,11 @@ def hook_resources(project: Path, config: bytes, hosts: tuple[str, ...], *,
                 if managed_json(data, host) != managed_json(merged, host) or guard_missing:
                     raise ProjectRuntimeError(host + " 受管 Hook 或显式写入保护缺失")
                 continue
-            after = existing if merged == data else Node("file", (json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode(), existing.mode or 0o644, existing.identity)
+            # 共享容器只变换正文；身份、ACL等仍是原读取快照的完整事实。使用
+            # replace自动继承Node字段，避免新增metadata后漏传而造出“有身份但
+            # 无权限”的非法快照；发布后的新身份仍由事务真实观察并重新登记。
+            after = existing if merged == data else replace(existing, kind="file",
+                payload=(json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode(), mode=existing.mode or 0o644)
             # off 且从未创建容器时保持真正无操作；不制造空的 JSON 文件。
             desired[relative] = (after, "guard")
     return desired
@@ -725,7 +729,9 @@ def claude_write_guard(project: Path, config: bytes, *, check_only: bool = False
             raise ProjectRuntimeError("已配置的 Claude 项目写入保护尚未落地；请先预览 repair")
         return {}
     after = settings.payload if merged == data and settings.kind == "file" else (json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode()
-    return {".claude/settings.json": (Node("file", after, settings.mode or 0o600, settings.identity), "guard"),
+    # 与Hook合并遵守同一共享文件变换规则：仅更新目标正文，保留真实已有
+    # identity/security及将来的快照字段，不把权限事实降级为planned空字段。
+    return {".claude/settings.json": (replace(settings, kind="file", payload=after, mode=settings.mode or 0o600), "guard"),
             ".claude/settings.local.json": (local, "watch")}
 
 
