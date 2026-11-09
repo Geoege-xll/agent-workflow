@@ -134,6 +134,17 @@ GROUPS["windows-native-central-copy-repair"] = GROUPS["windows-native-central-re
 GROUPS["windows-native-central-link-repair"] = GROUPS["windows-native-central-repair"] + (
     "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest.test_managed_skill_stage_publication_preserves_frozen_witness",
 )
+# 稳定 CLI 组件组只绑定已合入的六个原生方法，分别验证 Python/pwsh/cmd 入口、
+# 字面 argv 与退出码、显式坏解释器拒绝及导入前隔离。它不启动 TUI/HTML，CI
+# 必须独立使用 stdlib venv，不把 Node/curses 或未修复的中央消费者混入本轮取证。
+GROUPS["windows-native-entry"] = (
+    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_help_version_and_empty_list",
+    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_powershell_legacy_help_version_and_empty_list",
+    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_cmd_help_version_and_empty_list",
+    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_shells_preserve_literal_arguments_and_exit_codes",
+    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_explicit_invalid_python_is_refused_without_fallback",
+    "tests.test_windows_native_entry.WindowsNativeEntryTest.test_python_isolation_precedes_stdlib_imports",
+)
 GROUPS["windows-native"] = GROUPS["windows-native-libraries"]
 # 任一原生阶段都必须在 Windows 真正执行所有选定节点。单独声明组名而复用
 # GROUPS 值，防止 CI 或拒绝逻辑另养第二份方法清单，造成新增节点未纳入必验。
@@ -141,7 +152,8 @@ NATIVE_GROUPS = frozenset((
     "windows-native-libraries", "windows-native-repair", "windows-native-central",
     "windows-native-central-repair", "windows-native-renderer",
     "windows-native-central-acl-repair", "windows-native-renderer-process-repair",
-    "windows-native-central-copy-repair", "windows-native-central-link-repair", "windows-native",
+    "windows-native-central-copy-repair", "windows-native-central-link-repair",
+    "windows-native-entry", "windows-native",
 ))
 
 
