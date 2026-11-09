@@ -35,23 +35,21 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 ## 当前进展与恢复入口
 
-基线 main 为1235951，公开和本机版本仍为2.1.3。实现使用独立职责工作树和精简任务包，原用户资料、主目录五处 dirty、未跟踪交接和业务项目保持。用户已授权完成必要验收与独立 QA 后发布、升级，无需重复请求同一授权；此前暂停的 Windows 工作已由本轮明确恢复，npm/npx 渠道不恢复。
+基线main为1235951，公开与本机仍为2.1.3，候选2.1.4。独立职责工作树保留主目录五处dirty、交接及业务资料。用户已授权必要验收与独立QA后发布、升级；此前暂停的Windows已由本轮明确恢复，npm/npx不恢复。
 
-真实 Server 2025 x64/NTFS 探针已证明 PowerShell7+ 薄入口、目录 flush、Skill 软链与关键 Win32 API 在该环境的实际行为；ChangeTime 不能单独作为充分竞争守卫。后续使用完整身份与 ACL 事实，目录锚定、条件发布、创建句柄归属及原 Job/IOCP 收尾。探针和分批失败/修复的原始报告保留，既不冒充 Win11 普通用户，也不宣称已证明耐断电。
+真实Server2025 x64/NTFS探针和消费者已取得目录flush、完整身份/ACL、条件发布、创建句柄归属、中央Skill软链与Job/ConPTY收尾证据；ChangeTime不能单独证明安全，未宣称耐断电或Win11普通用户等价。记录before保完整恢复正文，after只存严格条件守卫，能力选择保护所有相关固定reader，原4MiB/超限零写/pending及旧reader保护保持。
 
-中央消费者已真实完成核心导入、激活、三平台项目安装、薄桥与原 pin helpers、Skill 中央唯一来源软链、Hook 和偏好操作。记录职责重构保留完整 before 恢复正文，after 缩为严格条件守卫，能力选择覆盖所有相关固定 reader；原4MiB、超限零写、pending/旧 reader 保护不变。公开 add/use 后再执行旧 reader 新任务、长短根大记录与生命周期消费者已在 Mac 通过，不推断原生整体通过。
+完整运行42679088902（b8d7a8b，实际merge fcb2243563且树相同）已结束失败。macOS/Linux各273项suite成功，平台专属skip3/4不当Windows证据。Windows119项中库48、入口6、ConPTY8、诊断4、准入41、提升NTFS2及中央完整1项通过；中央1739.339秒完整完成偏好覆盖/恢复/重置、follow/pin、回退、原inode补偿及并发保存保留。边界6中仅旧能力CRLF夹具失败，TUI3为2个body失败+2个cleanup ERROR，整轮未通过。
 
-TUI沿用已确认布局，实际输入、Win32最终屏幕和ConPTY进程生命周期共同取证。Unicode/组合字符、resize、Ctrl+C和终端恢复已有真实通过记录；项目与全局保存预览仍须完整复验。后台预览只复用既有单作业，捕获范围、来源和 expected，保留草稿、取消和提交重验；不改设计，不放宽原超时预算。
+TUI保存预览已通过；项目确认后保存作业超30秒。全局第一次保存29.641秒实际成功，恢复模型/推理跟宿主后的第二次超时。Job.execute含apply和refresh，两段共用busy；新增测试observer复用既有线程记录至多4×24层executor元数据，不读locals、不留frames，预算/屏幕/IPC保持。Unicode body退出130并恢复模式，但本方法因cleanup ERROR不算PASS。原始帧、输入时间线与错误全部保留。
 
-当前唯一原生清单已收拢为9组件119方法，由 scripts/test_workflow.py 派生聚合、矩阵及范围描述；PR/发行只接受包含2项提升NTFS专项的full Windows gate，原生skip、缺组、取消或未执行都拒绝。普通desktop从同一registry派生117方法，明确排除提升2项，所选仍zeroSkip，不按当前权限自动降级。最新旧106项完整运行42647140927（232f007，实际 merge9840bcac且树相同）整体失败：库41含stage/ACL、瞬时及嵌套Job全部通过，入口6、边界3、脚本3通过；ConPTY Ctrl定向wait超时，另外7项通过；TUI两预览持续忙态超30秒，Unicode项通过；准入跨 pin 领取超60秒，另40项通过。中央在1720.610秒完成回滚，但后续补偿未在30分钟job内验完，不记完整PASS。
+保存阶段5生产+2测试已完成同一Reviewer审查并运输：只合并显式纯准备，封口后按完整OwnershipSources固定inventory fresh核对，再走原written/publish/verify与补偿。record/journal retained遗漏已用正式producer真实故障、条件补偿与外部编辑保留闭合；稳定missing历史保留。目录负控区分真实Windows5/32内核阻止与实际替换后的guard拒绝，退出后真实rename证句柄结清，不放宽sharing。Mac同源project apply4scan+refresh1、global两次各4+0；实际产物/journal保持，仍需Windows实测。
 
-Ctrl定向夹具的就绪合同、旧PTY等待和收据ID选择已修正审查，尚未新原生结果。42650533280排队时被取消，避免相同生产代码重复运行已知失败。中央公共读取重构在Mac实测preview单pin12scan→1、双pin23→2，fresh双pin claim从28经A去重21降到8scan/pub1；原record/pin、成员复核、退出完整尾检和发布前检查保持，不把计数当Windows时延证明。
+唯一原生registry实际收集9组件121方法（48/6/1/8/8/3/4/41/2）；PR/发行仅接受Server full，任何selected skip/缺组/取消/未执行均拒。普通desktop从同源登记派生119方法，明确排除提升NTFS2，不按权限自动降级；两个新中央guard节点进ordinary boundaries，RolePrefs两个新回归仅POSIX CI，避免顶层pty/termios/curses依赖冒充原生。提升flag只改测试自有空目录，生产不设置、不新增用户提权/WSL要求。
 
-根身份Important已由同一Reviewer代码复核闭合并运输：租约、session/单读/批读、runner三根/reader及模块来源统一使用保留大小写的绝对字面键，完整core字段与原守卫保留。17个有效红测子边界修后通过，14项精准消费者通过。Store/Records/词法节点已精确登记，runner2继承现有Skill软链资格；RolePreferences仍仅POSIX CI。独立NTFS类的2项仅Server/elevated，本地NTFS/fsutil作用于自有空目录，无Node/curses/WSL/软链前置；生产不设置flag，Mac只编译未运行。
+稳定候选后向用户提供固定SHA、可审阅的PowerShell7+入口；用户Win11机器可运行但已要求先整体开发。脚本保存scope.json及acceptance.json，成功SCOPED_PASS、scope=windows11-client-ordinary、full_registry_executed=false，selected119/excluded2来自同registry；describe仅收集不是执行PASS。脚本保原CPython/x64/curses版本与prefix记录，锁哈希由CI安装准备验证，不新增私有venv或已装wheel哈希准入。当前新121项Server门禁、Win11桌面、最终统一QA与发布/本机升级尚未完成。
 
-资格/describe/脚本增量已完成原Reviewer阶段审查并运输，下一步运行完整同候选门禁。用户Win11 x64电脑可运行脚本，已要求先整体开发；稳定候选后提供固定SHA与可审阅的PowerShell7+入口。脚本保存scope.json及acceptance.json，成功status为SCOPED_PASS、scope为windows11-client-ordinary、full_registry_executed=false，实际selected117/excluded2来自同一registry；描述只收集，不算执行通过。普通用户入口保留原CPython/x64/curses版本检查和prefix记录，不新增已装wheel哈希或私有venv准入；requirements锁哈希在CI准备阶段验证。当前新119项Server门禁、Win11桌面与最终统一QA均未完成，发布和本机升级未执行。
-
-原生探针、旧失败、实际修复与源审记录分别保存在 native-windows-20261109、upgrade-214-20261109 请求暂存区和 Git历史。只保留必要源码/当前主题计划，不把阶段清单、模拟、部分通过或后续取消改写为完整验收。
+探针、原始失败、实际修复及源审分别保存在native-windows-20261109、upgrade-214-20261109暂存区和Git历史。当前主题仅保留必要架构与恢复信息，不以部分节点、模拟或取消改写整体验收。
 
 ## 验收结果与当前已交付行为
 

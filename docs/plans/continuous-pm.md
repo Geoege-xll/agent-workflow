@@ -31,21 +31,19 @@ TUI 沿用已确认布局与交互，属于 UI-Conformance，设计增量为零�
 
 ## 当前进展与恢复入口
 
-HTML 计划生成的公开入口和流程要求已暂停，代码以注释保留；Markdown 计划、原型能力及历史页面保持。跨请求准入共用原 Task.state、原记录 CAS 和平台原生子代理，不引入第二状态机或 Agent 池。各请求保留独立授权、核心 pin、资源占用和 QA 门禁；追加先送达原实例并取得确认，未知结果不重派。
+HTML 计划生成的公开入口和流程要求已暂停，代码以注释保留；Markdown 计划、原型能力及历史页面保持。跨请求准入共用原 Task.state、原记录 CAS 和平台原生子代理，各请求独立授权、核心 pin、资源占用与 QA；追加送达原实例并取得确认，未知结果不重派，不建立第二状态机或 Agent 池。
 
-三平台共享协调规则、宿主能力诊断、结果原子结算与独立版本准入已接入。真实 Codex app-server 已证明 A 运行期间自然 B 引导同一 PM，确认后领取并派发 B，A 追加送到原 ID 且工作者确认。补验中 PM 自己把 evidence 原包结算为 RESULT_VERIFIED，占用1→0；PM/Worker正常结束，unsubscribe 后约60秒观察到 thread/closed。初次失败记录保持原状。此证据不覆盖 Codex App GUI、父回合 final 后仍运行的任务或当前会话所有模型/角色设置；App 自动化被工具安全策略禁止，不绕过读取用户会话。
+真实 Codex app-server 已证明 A 运行期间自然 B 引导同一 PM，确认后领取并派发 B，A 同 ID 追加且工作者确认。补验中 PM 自己结算 evidence 原包至 RESULT_VERIFIED、占用1→0；PM/Worker正常结束，unsubscribe后约60秒出现thread/closed。初次失败记录保持。此证据不覆盖Codex App GUI、父回合final后仍运行的任务或所有模型/角色设置；App自动化被工具安全策略禁止，不绕过读取用户会话。
 
-候选已整合中央记录职责重构：before 保留完整恢复正文，after 只保存完整身份、摘要、精确 mode 与 Windows ACL 条件守卫；仅所有相关固定 reader 都声明能力时启用，终态结算与清除无用途 after 同次原子保存，失败保留 pending proof。普通4MiB及原150000超限零写负控不变。状态暂存的创建句柄归属、条件 ACL 复制和进程 Job 归零证明已经同一 Reviewer 的阶段复核；新 stage/ACL 和嵌套 Job 已在真实 Windows 库41项通过。
+完整运行42679088902（b8d7a8b，实际PR merge fcb2243563且树相同）已结束失败：macOS/Linux CI各收集273项、按既有平台条件分别skip3/4后suite成功；Windows119项中7/9组件通过，包含中央完整生命周期1739.339秒、Hook7秒、真实NTFS两项与库48项。TUI两次保存等待超30秒；全局首次保存29.641秒实际成功，后续恢复宿主继承的第二次超时。Unicode body退出及模式恢复，但cleanup冲突导致该方法整体ERROR。边界失败是CRLF夹具未移除能力声明，生产按能力1选择新runner正确；夹具已修并由原QA接受，待原生复验。
 
-最新完整原生运行42647140927（232f007，实际 PR merge9840bcac、两树相同）整体失败：库41、入口6、边界3、脚本3通过；ConPTY7/8，TUI Unicode/resize/Ctrl+C通过但项目及全局保存预览忙态超过30秒；准入40/41，跨 pin 领取超过60秒。中央实际完成回滚1720.610秒，余下补偿没有在30分钟 job 内验完。原始失败与取消不得改记成功。后续 e99 的已知同生产排队运行42650533280已取消。
+保存链已按职责重构并完成原Reviewer阶段复核：显式CommitReadPreparation只合并完整guard/status/收据的纯准备，普通before_write保持原合同；完整尾验结束后fresh核对可变来源、绑定、Node、目录和必要画像，再进入原备份、写入、独立publish/verify及条件补偿。父读取租约提前拒绝，Plan不留reader。OwnershipSources使global与receipt共用CONFIG/managed、record及journal retained、Skill名、完整Node/目录事实，沿原inventory复核，不重建基准。QA发现的retained遗漏与Windows目录注入两Important均已代码层闭合。
 
-Ctrl 定向夹具、真实 PTY 等待及按本次事务ID选择回滚收据已修正并阶段审查。后台保存预览沿用既有单作业和冻结上下文；TUI模块、真实 POSIX PTY 及阻塞校验消费者通过。公共读取重构使同 pin preview 完整扫描12→1、双 pin23→2，合后 fresh core 真实 claim28→A去重21→最终8次，仍实际发布1次，另一请求 bytes/pin不变。这些为 Mac 实际调用计数，不是 Windows 预算已通过。
+同源真实服务计数：项目完整apply8scan→4、refresh另1；全局首次及恢复宿主继承的第二保存均7→4、refresh0。3个实际native产物与15次journal写入保留，新增4节点18.566秒及6直接消费者12.053秒通过。这些是Mac实际计数，不证明新的Windows30秒预算已过；前轮claim28→21→8的实际证据按各冻结源独立保留。
 
-根身份 Important 已由原 owner 统一修复，并经同一 Reviewer 代码复核闭合：授权边界用保留大小写的绝对路径字面键，完整定位字段与原尾检、成员/ACL/身份、pin、发布前 CAS/最后证据及预算保留。11源文件按指纹运输；17个原失败子边界修后通过，14个精准消费者通过，实际NTFS负控仍待原生执行。
+唯一registry的最终登记已同Reviewer接受并运输，实际9组件121方法；Server full始终包含提升资格的NTFS2。普通desktop从同一登记派生119方法、明确排除2项，所选仍zeroSkip；Win11成功只报告SCOPED_PASS、full_registry_executed=false及实际selected/excluded。下一步用完整同候选运行macOS/Linux及Windows门禁，再取得Win11普通用户桌面与最终独立QA，随后发布GitHub/Tap并升级本机中央程序及current。三个跟随项目自动使用新current，锁版、停用及偏好保留；npm/npx不恢复。
 
-验证入口增量也已完成同一 Reviewer 的阶段审查并运输。唯一registry实际收集9组件119方法，Server full包含2项提升资格的NTFS专项；普通desktop范围从同一登记派生117方法，明确排除这2项，所选仍零skip。Win11成功只报告SCOPED_PASS、full_registry_executed=false及实际selected/excluded，不冒充本次执行完整Server集合。矩阵/描述/合同测试证明入口一致，尚非原生执行通过。下一步运行完整macOS/Linux与Windows同候选门禁、Win11普通用户桌面及最终独立QA，通过后发布GitHub/Tap并升级本机中央程序及current；三个跟随项目自动使用新current，保留锁版、停用及项目偏好。npm/npx不恢复。
-
-主目录五处原有未提交修改及未跟踪交接文档逐字节保持，不纳入候选。请求级 graph、任务包、原生事件、profile 与全部原始失败/复核日志保存在 upgrade-214-20261109 暂存区；本计划只保留当前决策与恢复入口，历史阶段可由 Git 与原始日志追溯。
+实现仍在独立请求工作树中，生产按职责交接、精简任务包，不复制完整PM会话。主目录五处原有未提交修改及用户交接逐字节保持，不纳入候选。全部原始失败、任务图、profile和复核日志保存在upgrade-214-20261109暂存区；本计划保留当前决策与恢复入口，历史由Git和原始日志追溯。
 
 ## 验收结果与当前已交付行为
 
