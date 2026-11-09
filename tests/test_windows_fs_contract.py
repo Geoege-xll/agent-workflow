@@ -7,10 +7,12 @@ import ctypes
 import ast
 import hashlib
 import importlib.util
+import os
 from pathlib import Path, PureWindowsPath
 import stat
 from types import SimpleNamespace
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
@@ -19,6 +21,52 @@ PACK = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("windows_fs_contract", PACK / "lib/windows_fs.py")
 fs = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(fs)
+
+
+class WindowsNativeObserverStreamContractTest(unittest.TestCase):
+    def test_actual_observer_supports_production_stream_shape_and_real_post_close_io(self):
+        """消费原生节点使用的同一代理与真实文件，直接证明接口及关闭后注入。"""
+        from tests.test_windows_fs_native import CloseObservedStream
+        for scenario in ("normal", "body-error", "callback-error"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(prefix="awf-stream-observer-") as temporary:
+                path = Path(temporary) / "owned-stage"
+                raw = path.open("wb")
+                observed = []
+                def inject_after_close():
+                    self.assertTrue(raw.closed)
+                    self.assertEqual(b"APPROVED", path.read_bytes())
+                    observed.append("real-close-before-injection")
+                    # 真正重新打开同一自有文件写外来正文；不以 callback 次数
+                    # 或镜像流替身代替实际关闭之后的文件系统边界。
+                    path.write_bytes(b"FOREIGN")
+                    if scenario == "callback-error":
+                        raise LookupError("fixture callback error")
+                stream = CloseObservedStream(raw, inject_after_close)
+                def consume_as_production():
+                    # 保持 production 的精确形状：没有 as 绑定，进入上下文后
+                    # 仍通过原 stream 变量调用真实 write/flush/fileno。
+                    with stream:
+                        self.assertEqual(len(b"APPROVED"), stream.write(b"APPROVED"))
+                        stream.flush()
+                        self.assertEqual(len(b"APPROVED"), os.fstat(stream.fileno()).st_size)
+                        os.fsync(stream.fileno())
+                        self.assertEqual([], observed)
+                        if scenario == "body-error":
+                            raise ValueError("fixture body error")
+                if scenario == "body-error":
+                    with self.assertRaisesRegex(ValueError, "body error"):
+                        consume_as_production()
+                    self.assertEqual([], observed)
+                    self.assertEqual(b"APPROVED", path.read_bytes())
+                elif scenario == "callback-error":
+                    with self.assertRaisesRegex(LookupError, "callback error"):
+                        consume_as_production()
+                else:
+                    consume_as_production()
+                self.assertTrue(raw.closed)
+                if scenario != "body-error":
+                    self.assertEqual(["real-close-before-injection"], observed)
+                    self.assertEqual(b"FOREIGN", path.read_bytes())
 
 
 class WindowsComponentContractTest(unittest.TestCase):
@@ -144,6 +192,18 @@ class WindowsAclContractTest(unittest.TestCase):
                 fs._copy_permissions(1, 2)
             self.assertEqual(calls[0][2], expected)
 
+    def test_permission_copy_checks_authorized_policy_at_actual_read_before_any_write(self):
+        """外层已核快照后，helper 首次取策略仍不能重新认领后来的 ACL。"""
+        source = SimpleNamespace(fingerprint="a" * 64)
+        destination = SimpleNamespace(fingerprint="b" * 64)
+        for source_expected, destination_expected in (("c" * 64, "b" * 64), ("a" * 64, "c" * 64)):
+            with self.subTest(source_changed=source_expected != source.fingerprint), \
+                    patch.object(fs, "_security_policy", side_effect=[nullcontext(source), nullcontext(destination)]), \
+                    patch.object(fs, "_api", side_effect=AssertionError("未授权策略不能进入 SetSecurityInfo")), \
+                    self.assertRaisesRegex(ValueError, "authorized copy"):
+                fs._copy_permissions(10, 20, expected_source_security=source_expected,
+                                     expected_destination_security=destination_expected)
+
     def test_permission_copy_refuses_stage_parent_inheritance_changes(self):
         source = SimpleNamespace(control=0, acl=42, dacl_key=b"target", owner=b"owner",
                                  fingerprint=b"target", acl_bytes=b"\2\0\10\0\2\0\0\0")
@@ -190,6 +250,80 @@ class WindowsAclContractTest(unittest.TestCase):
         self.assertEqual(fs.project_mode(0o700, directory=True), 0o700)
         with self.assertRaises(ValueError):
             fs.project_mode(0o400)
+
+
+class WindowsConditionalPermissionCopyContractTest(unittest.TestCase):
+    """仅验证 Win32 调用契约与闭集，不把替身结果扩大为真实 NTFS 证据。"""
+
+    def fixture(self):
+        source = {"kind": "file", "payload": b"old", "mode": 0o666,
+                  "identity": (7, 101, stat.S_IFREG | 0o666, 1, 3, 11, 12), "security": "a" * 64}
+        destination = {"kind": "file", "payload": b"approved", "mode": 0o600,
+                       "identity": (7, 202, stat.S_IFREG | 0o600, 1, 8, 21, 22), "security": "b" * 64}
+        return source, destination
+
+    def execute(self, *, actual_source=None, actual_destination=None, source_after=None,
+                destination_after=None, copied_security=None, attributes=(0x20, 0x20, 0x20, 0x20)):
+        source, destination = self.fixture()
+        copied_security = copied_security or destination["security"]
+        with ExitStack() as scope:
+            scope.enter_context(patch.object(fs, "absolute_path", side_effect=Path))
+            scope.enter_context(patch.object(fs, "Directory", side_effect=lambda path: nullcontext()))
+            opening = scope.enter_context(patch.object(fs, "_open_handle", side_effect=[10, 20]))
+            closing = scope.enter_context(patch.object(fs, "_close"))
+            scope.enter_context(patch.object(fs, "_opened_snapshot", side_effect=[actual_source or source, actual_destination or destination]))
+            copying = scope.enter_context(patch.object(fs, "_copy_permissions", return_value=copied_security))
+            scope.enter_context(patch.object(fs, "_metadata", side_effect=[source_after or (source["identity"], source["security"]),
+                                                                          destination_after or (destination["identity"], copied_security)]))
+            scope.enter_context(patch.object(fs, "_information", side_effect=[SimpleNamespace(attributes=value) for value in attributes]))
+            result, failure = None, None
+            try:
+                result = fs.copy_permissions_if_unchanged(Path("/source"), Path("/destination"),
+                                                         expected_source=source, expected_destination=destination)
+            except ValueError as exc:
+                failure = exc
+            self.assertEqual([((20,), {}), ((10,), {})], closing.call_args_list)
+            self.assertEqual(fs.SHARE_READ, opening.call_args_list[0].kwargs["sharing"])
+            self.assertEqual(fs.SHARE_READ, opening.call_args_list[1].kwargs["sharing"])
+            # 目标 HANDLE 仅加 WRITE_DAC，不能重新引入数据 WRITE 权限。
+            self.assertEqual(fs.READ | 0x40000, opening.call_args_list[1].args[1])
+            return result, failure, copying
+
+    def test_full_source_and_destination_are_checked_before_permission_mutation(self):
+        source, destination = self.fixture()
+        for actual_source, actual_destination in (({**source, "security": "c" * 64}, destination),
+                                                  (source, {**destination, "payload": b"foreign!"}),
+                                                  (source, {**destination, "identity": (7, 999, *destination["identity"][2:])})):
+            with self.subTest(source_changed=actual_source != source):
+                _, failure, copying = self.execute(actual_source=actual_source, actual_destination=actual_destination)
+                self.assertIsInstance(failure, ValueError)
+                copying.assert_not_called()
+
+    def test_only_real_acl_change_allows_projected_mode_and_change_time(self):
+        source, destination = self.fixture()
+        result, failure, copying = self.execute()
+        self.assertIsNone(failure)
+        self.assertEqual(destination, result)
+        copying.assert_called_once_with(10, 20, expected_source_security=source["security"],
+                                        expected_destination_security=destination["security"])
+        original = destination["identity"]
+        changed = (*original[:2], stat.S_IFREG | 0o666, *original[3:6], original[6] + 1)
+        result, failure, _ = self.execute(copied_security="c" * 64, destination_after=(changed, "c" * 64))
+        self.assertIsNone(failure)
+        self.assertEqual(changed, result["identity"])
+        self.assertEqual(0o666, result["mode"])
+        for after in (changed, (*original[:5], 999, original[6]), (7, 999, *original[2:])):
+            with self.subTest(unauthorized_metadata=after):
+                _, failure, _ = self.execute(destination_after=(after, destination["security"]))
+                self.assertIsInstance(failure, ValueError)
+        for updates in ({"source_after": (source["identity"], "c" * 64)},
+                        {"attributes": (0x20, 0x20, 0x20, 0x22)},
+                        {"copied_security": "c" * 64, "destination_after": (changed, "d" * 64)},
+                        {"copied_security": "c" * 64,
+                         "destination_after": ((*original[:5], 999, original[6]), "c" * 64)}):
+            with self.subTest(unauthorized_change=updates):
+                _, failure, _ = self.execute(**updates)
+                self.assertIsInstance(failure, ValueError)
 
 
 class WindowsConditionalDeleteContractTest(unittest.TestCase):

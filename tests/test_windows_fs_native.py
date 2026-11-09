@@ -12,11 +12,38 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from lib import windows_fs as fs
 
 
 PACK = Path(__file__).resolve().parents[1]
+
+
+class CloseObservedStream:
+    """只观察真实流正常退出后的时点，保留生产同一变量的完整文件接口。
+
+    write/flush/fileno 等操作全部交给真实流；关闭责任仍只有底层流的
+    __exit__。关闭或写入失败时直接传播原异常，不注入额外竞态；正常关闭
+    完成后才执行观察器，观察器自身的失败同样传播，不伪造成功或再次清理。
+    """
+
+    def __init__(self, stream, after_close):
+        self.stream = stream
+        self.after_close = after_close
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+    def __enter__(self):
+        self.stream.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        result = self.stream.__exit__(exc_type, exc, traceback)
+        if exc_type is None:
+            self.after_close()
+        return result
 
 
 def native_policy_observation(policy):
@@ -75,6 +102,136 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
         finally:
             fs.secure_os.close(descriptor)
         return self.root / name
+
+    def add_world_read_dacl(self, path):
+        """只改自有夹具的真实 DACL，用独立权限事实制造源/目的端变化。"""
+        handle = fs._open_handle(path, 0x60080)
+        descriptor = fs.HANDLE()
+        try:
+            api = fs._api()
+            sddl = f"O:{fs.current_sid()}D:P(A;;GA;;;{fs.current_sid()})(A;;GA;;;SY)(A;;GR;;;WD)"
+            self.assertTrue(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl, 1, ctypes.byref(descriptor), None))
+            self.assertEqual(0, api.security.SetSecurityInfo(
+                handle, 1, 0x80000004, None, None, fs._dacl(descriptor), None))
+        finally:
+            if descriptor.value:
+                fs._api().kernel.LocalFree(descriptor)
+            fs._close(handle)
+
+    def test_anchored_state_stage_close_races_preserve_foreign_nodes(self):
+        """真实 write_state 在写句柄关闭处遭遇改写/换 inode/ACL 源变化均保全现场。"""
+        from manager import state_files
+        approved = b"APPROVED"
+        for existing, race in ((False, "normal"), (True, "normal"),
+                               (False, "same-inode-content"), (True, "same-inode-content"),
+                               (False, "same-content-replacement"), (True, "same-content-replacement"),
+                               (True, "acl-source")):
+            with self.subTest(existing=existing, race=race):
+                state = self.root / (race + ("-existing" if existing else "-missing"))
+                state.mkdir()
+                if existing:
+                    state_files.write_state(state, "control.json", b"OLD")
+                parent = fs.secure_os.open(state, fs.DIRECTORY | fs.NOFOLLOW)
+                before = fs.node_snapshot(parent, "control.json")
+                captured = {}
+                native_fdopen = fs.secure_os.fdopen
+                def inject_after_close():
+                    stages = list(state.glob(".workflow-models-*.tmp"))
+                    self.assertEqual(1, len(stages))
+                    stage = stages[0]
+                    captured["name"] = stage.name
+                    captured["created"] = fs.node_snapshot(parent, stage.name)
+                    if race == "same-inode-content":
+                        stage.write_bytes(b"UNAPPROVED")
+                    elif race == "same-content-replacement":
+                        stage.rename(state / "owned-created-stage")
+                        replacement = fs.secure_os.open(stage, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+                        try:
+                            os.write(replacement, approved)
+                            fs.secure_os.fsync(replacement)
+                        finally:
+                            fs.secure_os.close(replacement)
+                    elif race == "acl-source":
+                        self.add_world_read_dacl(state / "control.json")
+                    captured["stage"] = fs.node_snapshot(parent, stage.name)
+                    captured["attributes"] = fs.secure_os.stat(stage).st_file_attributes
+                    captured["source"] = fs.node_snapshot(parent, "control.json")
+                def close_then_race(descriptor, *args, **kwargs):
+                    # 生产先 stream=fdopen，再 with stream: 并继续用 stream.write；
+                    # 因此必须透明代理真实文件接口，不能仅返回 contextmanager。
+                    # 创建/写入/关闭/快照/移动/删除仍全部走实际 Win32。
+                    return CloseObservedStream(native_fdopen(descriptor, *args, **kwargs), inject_after_close)
+                try:
+                    with patch.object(fs.secure_os, "fdopen", side_effect=close_then_race):
+                        if race == "normal":
+                            state_files.write_state(state, "control.json", approved)
+                        else:
+                            with self.assertRaises(ValueError):
+                                state_files.write_state(state, "control.json", approved)
+                    current = fs.node_snapshot(parent, "control.json")
+                    if race == "normal":
+                        self.assertEqual(approved, current["payload"])
+                        self.assertEqual(captured["created"]["identity"][:6], current["identity"][:6])
+                        self.assertEqual(captured["created"]["security"], current["security"])
+                        self.assertIsNone(fs.node_snapshot(parent, captured["name"]))
+                    elif race == "acl-source":
+                        self.assertEqual(captured["source"], current)
+                        self.assertEqual(before["payload"], current["payload"])
+                        self.assertNotEqual(before["security"], current["security"])
+                        self.assertIsNone(fs.node_snapshot(parent, captured["name"]), "本轮仍自有的 stage 可以条件清理")
+                    else:
+                        self.assertEqual(before, current)
+                        self.assertEqual(captured["stage"], fs.node_snapshot(parent, captured["name"]))
+                        self.assertEqual(captured["attributes"], fs.secure_os.stat(state / captured["name"]).st_file_attributes)
+                        if race == "same-inode-content":
+                            self.assertEqual(captured["created"]["identity"][:2], captured["stage"]["identity"][:2])
+                            self.assertEqual(b"UNAPPROVED", captured["stage"]["payload"])
+                        else:
+                            self.assertNotEqual(captured["created"]["identity"][:2], captured["stage"]["identity"][:2])
+                            self.assertEqual(approved, captured["stage"]["payload"])
+                    print("NATIVE_ANCHORED_STAGE " + json.dumps(
+                        {"existing": existing, "race": race, "created_identity": captured["created"]["identity"],
+                         "observed_identity": captured["stage"]["identity"], "security": captured["stage"]["security"],
+                         "attributes": captured["attributes"], "foreign_preserved": race not in {"normal", "acl-source"}},
+                        sort_keys=True), flush=True)
+                finally:
+                    fs.secure_os.close(parent)
+
+    def test_conditional_permission_copy_preserves_original_stage_and_rejects_stale_source(self):
+        """实际 DACL 变换保留 stage inode/正文/属性，并在原源变化时拒绝任何复制。"""
+        source, target = self.private_file("conditional-source"), self.private_file("conditional-stage", b"APPROVED")
+        self.add_world_read_dacl(source)
+        expected_source = fs.node_snapshot(self.parent, source.name)
+        expected_target = fs.node_snapshot(self.parent, target.name)
+        attributes = fs.secure_os.stat(target).st_file_attributes
+        result = fs.copy_permissions_if_unchanged(source, target, expected_source=expected_source,
+                                                  expected_destination=expected_target)
+        self.assertEqual(result, fs.node_snapshot(self.parent, target.name))
+        self.assertEqual(expected_source, fs.node_snapshot(self.parent, source.name))
+        self.assertEqual(expected_target["payload"], result["payload"])
+        self.assertEqual(expected_target["identity"][:2], result["identity"][:2])
+        self.assertEqual(expected_target["identity"][3:6], result["identity"][3:6])
+        self.assertEqual(attributes, fs.secure_os.stat(target).st_file_attributes)
+        self.assertNotEqual(expected_target["security"], result["security"])
+        old, new = fs._open_handle(source, fs.READ), fs._open_handle(target, fs.READ)
+        try:
+            with fs._security_policy(old) as source_policy, fs._security_policy(new) as target_policy:
+                self.assertEqual(source_policy.dacl_key, target_policy.dacl_key)
+                self.assertEqual(source_policy.owner, target_policy.owner)
+        finally:
+            fs._close(new)
+            fs._close(old)
+        stale_source = self.private_file("stale-source")
+        stale_expected = fs.node_snapshot(self.parent, stale_source.name)
+        self.add_world_read_dacl(stale_source)
+        current_source = fs.node_snapshot(self.parent, stale_source.name)
+        with self.assertRaises(ValueError):
+            fs.copy_permissions_if_unchanged(stale_source, target, expected_source=stale_expected,
+                                             expected_destination=result)
+        self.assertEqual(current_source, fs.node_snapshot(self.parent, stale_source.name))
+        self.assertEqual(result, fs.node_snapshot(self.parent, target.name))
+        print("NATIVE_CONDITIONAL_PERMISSION_COPY: exact DACL, original identity/body/attributes and stale-source preservation", flush=True)
 
     def test_independent_embedded_reader_real_read_hardlink_and_live_writer(self):
         from lib.hosts.claude_instructions import read_file as shared_read

@@ -23,6 +23,140 @@ NONCE = "a" * 32
 BINDING = {"protocol_version": 1, "content_id": "b" * 64, "manifest_sha256": "b" * 64}
 
 
+class AnchoredWindowsStageContractTest(unittest.TestCase):
+    """直接执行生产负责层；内存替身仅控制关闭/发布时点，不冒称原生成功。"""
+
+    def run_stage(self, *, existing=False, on_close=None, fail_publish=False, fail_fdopen=False):
+        import io
+        import stat
+        from types import SimpleNamespace
+        from manager import state_files
+        from lib import windows_fs
+        nodes, published, deleted = {}, [], []
+        before = Node("file", b"OLD", 0o600, (7, 201, stat.S_IFREG | 0o600, 1, 3, 11, 12), "a" * 64)
+        if existing:
+            nodes["control.json"] = before
+        stage_name = None
+        def set_body(body):
+            prior = nodes[stage_name]
+            nodes[stage_name] = Node("file", body, prior.mode,
+                                    (*prior.identity[:4], len(body), 21, 22), prior.security)
+        class Stream(io.BytesIO):
+            def fileno(self): return 1
+            def flush(self): set_body(self.getvalue())
+            def __exit__(self, *args):
+                super().__exit__(*args)
+                if on_close is not None:
+                    on_close(nodes, stage_name)
+        stream = Stream()
+        def opened(name, *args, **kwargs):
+            nonlocal stage_name
+            self.assertEqual(windows_fs.SHARE_READ, kwargs["sharing"])
+            stage_name = name
+            nodes[name] = Node("file", b"", 0o600, (7, 101, stat.S_IFREG | 0o600, 1, 0, 1, 2), "a" * 64)
+            return 1
+        def fdopen(*args):
+            if fail_fdopen:
+                raise OSError("fixture fdopen failed before ownership transfer")
+            return stream
+        def info(descriptor):
+            identity = nodes[stage_name].identity
+            return SimpleNamespace(**dict(zip(("st_dev", "st_ino", "st_mode", "st_nlink", "st_size",
+                                               "st_mtime_ns", "st_ctime_ns"), identity)))
+        def move(source, destination, **kwargs):
+            self.assertEqual(nodes[source], kwargs["expected"])
+            self.assertNotIn(destination, nodes)
+            nodes[destination] = nodes.pop(source)
+        def publish(source, destination, **kwargs):
+            if fail_publish and source == stage_name:
+                raise OSError("fixture publication interrupted")
+            move(source, destination, **kwargs)
+            published.append(destination)
+        def delete(parent, name, **kwargs):
+            self.assertEqual(nodes[name], kwargs["expected"])
+            deleted.append(name)
+            del nodes[name]
+        def clone(source, destination, **kwargs):
+            # 只验证实际调用方传入最初 before；ACL 变换本身由底层合同与原生
+            # 方法覆盖，替身不复制第二份实现来制造通过。
+            self.assertEqual(before, Node(**kwargs["expected_source"]))
+            if nodes["control.json"] != before:
+                raise ValueError("fixture original ACL source changed")
+            self.assertEqual(nodes[stage_name], Node(**kwargs["expected_destination"]))
+            return kwargs["expected_destination"]
+        facade = SimpleNamespace(**{name: getattr(os, name, 0) for name in ("O_WRONLY", "O_CREAT", "O_EXCL", "O_NOFOLLOW")},
+                                 open=opened, fdopen=fdopen, fstat=info, fchmod=lambda *args: None,
+                                 fsync=lambda *args: None, close=lambda *args: None)
+        target = SimpleNamespace(directory=1, name="control.json", path=Path("/memory/control.json"), retainer=None)
+        failure = None
+        with patch.object(state_files, "os", facade), \
+                patch.object(state_files, "read_at", side_effect=lambda parent, name: nodes.get(name, Node())), \
+                patch.object(state_files, "move_at", side_effect=move), patch.object(state_files, "publish_at", side_effect=publish), \
+                patch.object(state_files, "delete_at", side_effect=delete), \
+                patch.object(windows_fs, "security_fingerprint", side_effect=lambda descriptor: nodes[stage_name].security), \
+                patch.object(windows_fs, "copy_permissions_if_unchanged", side_effect=clone):
+            try:
+                state_files.AnchoredFile._write_windows(target, b"APPROVED", 0o600,
+                                                       (before.payload, before.mode) if existing else (None, None))
+            except (ValueError, OSError) as exc:
+                failure = exc
+        return nodes, published, deleted, stage_name, failure
+
+    def test_normal_missing_existing_and_owned_failure_cleanup(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                nodes, published, deleted, stage, failure = self.run_stage(existing=existing)
+                self.assertIsNone(failure)
+                self.assertEqual(b"APPROVED", nodes["control.json"].payload)
+                self.assertNotIn(stage, nodes)
+                self.assertEqual(["control.json"], published)
+        for transfer_failure in (False, True):
+            with self.subTest(fdopen_failure=transfer_failure):
+                nodes, published, deleted, stage, failure = self.run_stage(
+                    existing=True, fail_publish=not transfer_failure, fail_fdopen=transfer_failure)
+                self.assertIsInstance(failure, OSError)
+                self.assertEqual(b"OLD", nodes["control.json"].payload)
+                self.assertNotIn(stage, nodes)
+                self.assertIn(stage, deleted)
+
+    def test_close_foreign_content_identity_acl_and_change_time_are_never_claimed(self):
+        from dataclasses import replace
+        mutations = {
+            "same-inode-content": lambda n: replace(n, payload=b"FOREIGN!"),
+            "same-content-replacement": lambda n: replace(n, identity=(7, 999, *n.identity[2:])),
+            "acl": lambda n: replace(n, security="b" * 64),
+            "mode": lambda n: replace(n, mode=0o666),
+            "change-time": lambda n: replace(n, identity=(*n.identity[:6], n.identity[6] + 1)),
+        }
+        for label, mutate in mutations.items():
+            for existing in (False, True):
+                def inject(nodes, stage, mutate=mutate): nodes[stage] = mutate(nodes[stage])
+                with self.subTest(race=label, existing=existing):
+                    nodes, published, deleted, stage, failure = self.run_stage(existing=existing, on_close=inject)
+                    self.assertIsInstance(failure, ValueError)
+                    self.assertEqual([], published)
+                    self.assertIn(stage, nodes)
+                    self.assertNotIn(stage, deleted)
+                    self.assertEqual(b"OLD" if existing else None,
+                                     nodes["control.json"].payload if existing else nodes.get("control.json"))
+
+    def test_only_close_last_write_time_settlement_is_projected_and_source_is_frozen(self):
+        from dataclasses import replace
+        def settle(nodes, stage):
+            node = nodes[stage]
+            nodes[stage] = replace(node, identity=(*node.identity[:5], node.identity[5] + 1, node.identity[6]))
+        nodes, _, _, _, failure = self.run_stage(on_close=settle)
+        self.assertIsNone(failure)
+        self.assertEqual(b"APPROVED", nodes["control.json"].payload)
+        def source_changed(nodes, stage):
+            nodes["control.json"] = replace(nodes["control.json"], security="b" * 64)
+        nodes, published, deleted, stage, failure = self.run_stage(existing=True, on_close=source_changed)
+        self.assertIsInstance(failure, ValueError)
+        self.assertEqual([], published)
+        self.assertEqual("b" * 64, nodes["control.json"].security)
+        self.assertIn(stage, deleted)
+
+
 class RuntimeStateTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="p3-private-state-")

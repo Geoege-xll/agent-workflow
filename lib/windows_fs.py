@@ -559,9 +559,14 @@ def security_fingerprint(descriptor: int) -> str:
         return policy.fingerprint
 
 
-def _copy_permissions(source, destination):
+def _copy_permissions(source, destination, *, expected_source_security=None, expected_destination_security=None):
     """复制并核实真实 DACL；不同 stage 父继承带来的重写不能当作成功。"""
     with _security_policy(source) as before, _security_policy(destination) as original:
+        # 条件消费者的授权来自创建/前像句柄，不能在 helper 的首次策略读取时
+        # 重新认领权限变化。兼容旧调用：未提供 expected 时保持原双端策略合同。
+        if ((expected_source_security is not None and before.fingerprint != expected_source_security)
+                or (expected_destination_security is not None and original.fingerprint != expected_destination_security)):
+            raise ValueError("Windows permission source or destination changed before its authorized copy")
         # dacl_key 保留 protection/control、ACE 顺序/flags/mask，只排除 owner。
         # 两端已是同一完整 DACL 时不冗余 SetSecurityInfo，避免已正确策略被
         # 系统重新加工；免写仍须复核两句柄，不能以一次相等观察吞掉权限竞态。
@@ -583,6 +588,7 @@ def _copy_permissions(source, destination):
                                  f"source_aces={int.from_bytes(before.acl_bytes[4:6], 'little')}, "
                                  f"target_aces={int.from_bytes(after.acl_bytes[4:6], 'little')}, "
                                  f"source_stable={source_stable}, target_stable={target_stable})")
+            return after.fingerprint
 
 
 def copy_permissions(source: Path, destination: Path) -> None:
@@ -597,6 +603,61 @@ def copy_permissions(source: Path, destination: Path) -> None:
                     _copy_permissions(old, new)
                 except ValueError as exc:
                     raise ValueError(f"Windows permission copy {source.name} -> {destination.name}: {exc}") from exc
+            finally:
+                _close(new)
+        finally:
+            _close(old)
+
+
+def copy_permissions_if_unchanged(source: Path, destination: Path, *, expected_source: dict,
+                                  expected_destination: dict) -> dict:
+    """对两个完整授权前像执行精确 DACL 复制，返回仍属原 stage 的新快照。
+
+    两个打开句柄均拒绝 WRITE/DELETE sharing；正文只读一次，复制过程没有数据
+    写入能力。目标只允许实际 DACL 改变所导致的权限投影 mode 与 ChangeTime
+    变化；未写权限的幂等分支仍要求七标量完全相同。失败不移动或清理任何路径。
+    """
+    _check_expected(expected_source, "file")
+    _check_expected(expected_destination, "file")
+    source, destination = absolute_path(source), absolute_path(destination)
+    with Directory(source.parent), Directory(destination.parent):
+        old = _open_handle(source, READ, sharing=SHARE_READ)
+        try:
+            # WRITE_DAC 不需要 GENERIC_WRITE；避免本 helper 重新引入数据写句柄
+            # 关闭后的 LastWriteTime 结算，也不放宽既定共享来兼容其他写者。
+            new = _open_handle(destination, READ | 0x40000, sharing=SHARE_READ)
+            try:
+                source_before = _opened_snapshot(old, max_bytes=_budget(max(len(expected_source["payload"]), 1)))
+                destination_before = _opened_snapshot(new, max_bytes=_budget(max(len(expected_destination["payload"]), 1)))
+                if source_before != expected_source or destination_before != expected_destination:
+                    raise ValueError("Windows permission copy nodes changed since their expected snapshots")
+                source_attributes = _information(old).attributes
+                destination_attributes = _information(new).attributes
+                copied_security = _copy_permissions(
+                    old, new, expected_source_security=expected_source["security"],
+                    expected_destination_security=expected_destination["security"],
+                )
+                source_after, source_security = _metadata(old)
+                destination_after, destination_security = _metadata(new)
+                original = expected_destination["identity"]
+                # DACL 的真实私有性参与 _stat_info 的 mode 投影；只在安全摘要
+                # 确实改变时允许这一已验证权限变换，文件属性/类型及数据元信息
+                # 均不许变化。相同 DACL 的免写路径不能豁免 mode 或 ChangeTime。
+                changed = copied_security != expected_destination["security"]
+                destination_stable = (destination_after == original if not changed else
+                                      (destination_after[:2] == original[:2]
+                                       and _stat.S_IFMT(destination_after[2]) == _stat.S_IFMT(original[2])
+                                       and destination_after[3:6] == original[3:6]))
+                if (source_after != expected_source["identity"] or source_security != expected_source["security"]
+                        or destination_security != copied_security or not destination_stable
+                        or _information(old).attributes != source_attributes
+                        or _information(new).attributes != destination_attributes):
+                    raise ValueError("Windows permission copy changed data, identity, attributes or authorized security")
+                # 拒绝数据写共享的同一 HANDLE 保证正文未被外来写者改变；ACL 的
+                # owner 保全及精确 DACL 由 _copy_permissions 在实际策略读取处证明。
+                return {"kind": "file", "payload": destination_before["payload"],
+                        "mode": _stat.S_IMODE(destination_after[2]), "identity": destination_after,
+                        "security": destination_security}
             finally:
                 _close(new)
         finally:
