@@ -44,7 +44,14 @@ The graph, qa-ready and mandatory QA steps below apply to Full. Light uses only 
 verification, handoff and audit branches. Both levels follow WORKFLOW's `agent-instance-lifecycle` for
 instance identity, context and closure boundaries, without a separate pool.
 
-1. Establish successful snapshot validation, then run `task_graph_cli.py ready`. Reuse a successful
+1. Follow WORKFLOW's `continuous-pm-intake` while existing work runs. For explicit overlapping request
+   records, run `dispatch_admission_cli.py view --input <current-manifest>` and immediately before native
+   creation run `claim --input <current-manifest> --record <absolute-record> --request-id <id> --task-id <id>`
+   under [shared dispatch](dispatch.md#continuous-intake-dispatch). Reuse the original Task.state; an
+   unbound claim occupies resources but proves no native start. Bind the actual ID after creation, release
+   only definite non-creation, and verify unknown outcomes before redispatch. Do not turn resource delay
+   into a semantic dependency or reopen paused work. Each request retains its own approvals, pin and QA.
+   Establish successful snapshot validation, then run `task_graph_cli.py ready`. Reuse a successful
    `update` result for the same bytes; otherwise run `validate` first. Dispatch every returned task
    within the effective host/thread/writer capacity. Do not wait for unrelated tasks or a global
    design phase. The validator rejects cycles, unknown edges, inconsistent `depends_on`/`blocks`,

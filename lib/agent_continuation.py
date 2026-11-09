@@ -19,6 +19,8 @@ except ImportError:
 
 HOSTS = ("codex", "claude", "antigravity")
 OBSERVED_STATES = ("running", "idle", "cancelled", "missing", "unknown")
+INTENTS = ("observe", "progress", "append", "independent")
+CAPABILITIES = ("non_interrupting_message", "idle_followup")
 MAX_AGENT_ID_LENGTH = 256
 IDENTITY_FIELDS = frozenset({"workflow_level", "module", "role", "agent_alias", "instance_policy", "context_policy"})
 ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
@@ -126,10 +128,24 @@ def check_binding(before: dict[str, Any], reference: Any) -> None:
         raise TaskGraphError("first agent_ref binding requires an existing RUNNING task or explicit qa task in QA")
 
 
-def continuation(task: dict[str, Any], host: str, observed_state: str) -> dict[str, Any]:
-    """返回建议而非执行许可；存活、批准、角色和完整交接仍由 PM 与原宿主确认。"""
+def continuation(task: dict[str, Any], host: str, observed_state: str, *,
+                 intent: str | None = None, capabilities: tuple[str, ...] = ()) -> dict[str, Any]:
+    """按当前观察、动作意图与实际能力返回建议，不执行原生动作。
+
+    不传 intent 的旧调用保留 running→wait、idle→followup 合同；新调用必须显式
+    声明当前工具已核实的能力。文档、版本和配置均不能推导消息不会中断运行。
+    追加的批准、完整修订交接和收到修订的确认仍由 PM 负责，不能由本纯查询生成。
+    """
     if host not in HOSTS or observed_state not in OBSERVED_STATES:
         raise TaskGraphError("continuation requires a supported host and explicit observed-state")
+    if intent is not None and intent not in INTENTS:
+        raise TaskGraphError("unsupported continuation intent")
+    if (not isinstance(capabilities, (tuple, list))
+            or any(not isinstance(item, str) or item not in CAPABILITIES for item in capabilities)
+            or len(set(capabilities)) != len(capabilities)):
+        raise TaskGraphError("continuation capabilities must be unique supported names")
+    if intent is None and capabilities:
+        raise TaskGraphError("explicit capabilities require an explicit continuation intent")
     reference = task.get("agent_ref")
     reason = "unbound"
     if reference is not None:
@@ -145,7 +161,7 @@ def continuation(task: dict[str, Any], host: str, observed_state: str) -> dict[s
     elif task.get("agent_retired"):
         reason = "agent_retired"
     allowed = reason in {"running", "idle"}
-    return {
+    result = {
         "task_id": task["id"], "agent_alias": task["agent_alias"], "agent_ref": reference, "observed_state": observed_state,
         "reuse_allowed": allowed, "reason": reason,
         "action": "wait" if reason == "running" else "followup" if reason == "idle" else "blocked",
@@ -156,3 +172,30 @@ def continuation(task: dict[str, Any], host: str, observed_state: str) -> dict[s
         ),
         "limitations": "ID 不证明存活、角色权限、批准或完成；本结果不派发、不发消息、不改状态。",
     }
+    if intent is None:
+        return result
+
+    # 先保留身份、取消与退役拒绝，再考虑意图；独立任务也不能借此复活旧实例。
+    # 能力只是调用方刚核实的工具事实，不落盘、不形成另一份生命周期状态。
+    result.update(intent=intent, capabilities=list(capabilities), revision_required=intent == "append",
+                  acceptance_requires_ack=intent == "append", runtime_verified=False)
+    if not allowed:
+        return result
+    if intent == "independent":
+        result.update(action="new_task", reason="independent_task", reuse_allowed=False,
+                      advice="由 PM 为独立需求建立各自获批的新记录与新实例；不要追加到原实例或复用旧结果。")
+    elif observed_state == "running":
+        if intent in {"progress", "append"} and "non_interrupting_message" in capabilities:
+            result.update(action="message", reason="non_interrupting_message_available",
+                          advice="通过当前已核实的非打断消息工具向同一原生 ID 发送；保持原任务连续执行，不用 interrupt 替代 steer。")
+        else:
+            result.update(action="wait", reason="running" if intent == "observe" else "non_interrupting_message_unavailable",
+                          advice="等待原实例下一次报告或完成；不打断、不重启、不重复派发，也不轮询历史。")
+    elif "idle_followup" not in capabilities:
+        result.update(action="blocked", reason="idle_followup_unavailable", reuse_allowed=False,
+                      advice="当前未核实原生 idle 续发能力，由 PM 核实；不要用新用户会话冒充同实例续用。")
+    else:
+        result.update(advice="核对当前完整 Task Pack、角色与授权后，用当前原生续发工具恢复同一 idle ID。")
+    if intent == "append":
+        result["advice"] += " 追加前修订完整约定并取得必要批准；确认工作者收到修订后才接受新范围结果，旧结果不证明新范围完成。"
+    return result

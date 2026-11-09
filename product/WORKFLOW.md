@@ -830,6 +830,69 @@ appears a second time; extraction is mandatory on the third occurrence or QA fai
 
 ## 7. Concurrency and Ownership
 
+<a id="continuous-pm-intake"></a>
+
+### Continuous PM intake and task relationships
+
+The main-session PM keeps accepting natural-language requirements while A runs. Users may discuss B or C
+without supplying task IDs, Agent assignments or a dependency graph. The PM maintains the current context,
+clarifies only material unresolved decisions, and gives a brief natural-language account of what is running,
+what can start and why anything waits. Do not finish the parent merely to wait if that client's actual
+parent-final lifecycle would prevent required coordination; use its available native notification/wait path.
+Never promise background survival, message delivery or wakeup without target-session evidence.
+
+Before routing a new requirement, compare the actual goal, scope, role, owned paths, semantic locks and
+available results with current explicit records. Choose the applicable relationship:
+
+- Independent work gets its own Light pack or Full request graph, authorization, strict three-field pin,
+  verification and applicable request QA; when ready and resources permit, dispatch a fresh instance.
+- Reuse a delivered result only after checking its actual inputs, acceptance and provenance still fit;
+  do not treat reuse of an artifact as reuse of its worker identity or old approval for a new request.
+- Same-task continuous work may append to its original instance only within its role and authorized
+  ownership. First revise the complete agreement/plan and affected complete Task Packs, obtain any necessary
+  approval, deliver the revision and confirm the worker received it before accepting new-scope results.
+  An old completion report cannot satisfy the revised scope. A progress-only inquiry changes no scope.
+- Split material role/ownership changes into independent tasks with their own contracts. Use semantic
+  dependencies for actual prerequisite work; use resource waiting for capacity/path/lock contention.
+  Waiting for capacity never becomes a fabricated `depends_on`/`blocks` edge. Paused or cancelled work
+  does not resume automatically because resources become available.
+
+`Task.state` in existing records remains the only task-state authority. For overlapping requests, PM passes
+only explicit current graph/Light-pack paths, observed SHA values and actual execution roots to
+`dispatch_admission_cli.py view`; do not recursively discover unrelated sessions or create a persistent
+ledger, daemon, Agent pool or second scheduler. The manifest is a transient input projection, not state.
+Each record retains its own gates and pin. An incompatible/corrupt pin or stale SHA blocks dispatch rather
+than falling back to the latest core. The PM must provide all activity in its coordinated scope; the helper
+cannot discover omitted records or prove global cross-PM coordination from an incomplete manifest. With
+incomplete activity information, resolve that visibility gap before dispatch. Existing same-request `ready`
+and request-scoped `qa-ready` retain their distinct responsibilities.
+
+Immediately before native creation, `claim` rechecks explicit records, cross-request thread/writer capacity,
+path/semantic ownership and each record's authority, then CAS-claims the selected task as `RUNNING` in its
+original record. A claim without `agent_ref` is allocated work, not proof a native worker started; include
+it in occupancy to prevent duplicate creation. Bind the actual native ID only after confirmed creation.
+Release only when native creation definitely did not occur; an unknown outcome retains the claim while PM
+checks the original result, never automatically retries creation. Do not infer approval, native completion,
+released host threads or QA from a successful query/CAS. Recompute only after relevant inputs change and
+reuse valid observations; do not repeatedly read all records/standards or probe every turn. See
+[shared dispatch](../platforms/shared/skills/xy-workflow/references/dispatch.md#continuous-intake-dispatch)
+for the actual helper calls and manifest contract.
+
+Same-instance continuation uses the current action intent and actual exposed capabilities. `observe`
+with a running worker recommends `wait`. `progress`/`append` may recommend `message` to the same ID only
+when a verified non-interrupting message tool is available; otherwise wait for its report/completion.
+For idle workers, use an actually available native followup tool. Never substitute interrupt/stop for steer,
+restart A, duplicate its dispatch, inspect histories for progress, or silently make independent B part of A.
+Cancelled, missing, unknown, retired, cross-host, unbound or inactive instances block automatic reuse.
+The explicit `agent_continuation_cli.py` query is read-only advice, not execution/approval; the legacy
+`task_graph_cli.py continuation` keeps its original observation-only wait/followup behavior.
+
+Official documentation, generated configuration, version observations and target-session execution are
+separate evidence levels. Diagnose actual delivery of new input, native wait wakeup, A's uninterrupted
+execution, same-ID followup and parent-final/cancellation lifecycle separately. Leave absent evidence
+`runtime_unverified`. Current-host adapters describe only native differences; this section owns the
+cross-platform semantics, and existing Light/Full, approvals, role ownership, pin and QA contracts remain.
+
 For multiple substantive independent features, assess `parallel_worktrees.mode: auto` and prefer
 real isolated worktrees when Git and the host can bind each writer to its own root. `off`, Light without a justified isolation need,
 read-only work, shared semantic dependencies or unavailable isolation preserve safe existing routing.
@@ -972,7 +1035,8 @@ pending gate stays out of `READY`; this evidence does not add a second task-stat
 thread, writer quota, or path lock is currently available, record `capacity_delay`.
 This is a capacity delay, not a semantic block, and it does not change the dependency graph.
 `depends_on` and `gates` express semantic dependencies; a capacity wait must not masquerade as one.
-`RUNNING` means a writer is assigned and executing. `BUILD_VERIFIED` means the writer has completed
+`RUNNING` means a task is allocated for execution; a dispatch claim without a bound native ID is not proof
+that its worker has started. `BUILD_VERIFIED` means the writer has completed
 and returned real build/test evidence. `QA` means unified QA is running on the current request's
 dependency closure. When a semantic dependency is unsatisfied, a gate is unapproved, or an upstream
 task fails, the task remains blocked. An upstream failure blocks only its downstream dependents;
@@ -982,7 +1046,13 @@ An explicit `task_type: qa` node uses `QA_PASSED` only after its current handoff
 reset it to `QA`/`RUNNING` on re-review and `FAILED` on failure. It cannot replace writer verification.
 Worktree delivery rejects unfinished or failed relevant QA nodes even when an old PASS is still present.
 
-Use `xy-workflow/references/runtime-records.md` on demand for same-Agent continuation, native usage, and provenance diagnostics; use `xy-qa-review/references/inputs.md` and the current host pm-integration for structured QA schema/extract. `continuation` only recommends waiting/follow-up from the PM's current running/idle observation; cancelled, unknown, invalid, cross-host, or inactive tasks block automatic continuation, and native actions still require currently exposed authorized tools. An ID proves neither liveness, role, approval, nor completion; check the complete current Task Pack/scope, without adding a runner, state ledger, or Reviewer. Diagnostics distinguish only documented/source_observed/runtime_unverified; do not sum native cumulative usage per record, keep unsampled values unknown, and calculate no costs or savings percentages. Verify the provenance of AGY native grill-me rather than automatically replacing this pack's coverage check; human diff/Artifact review is not independent AI QA. None of this adds gates to ordinary read-only or Light work, or automatically enables native/boost/teamwork modes.
+Use `xy-workflow/references/runtime-records.md` on demand for intent/capability-aware same-Agent continuation,
+native usage and provenance diagnostics under `continuous-pm-intake`; use `xy-qa-review/references/inputs.md`
+and the current host pm-integration for structured QA schema/extract. An ID proves neither liveness, role,
+approval nor completion. Diagnostics distinguish documented/source_observed/runtime_unverified; do not sum
+native cumulative usage per record, replace unknown with zero, or calculate cost/savings rates. Verify AGY
+native grill-me provenance rather than replacing this pack's coverage check; human diff/Artifact review is
+not independent AI QA. This adds no gates to ordinary read-only/Light work or automatic native/boost/teamwork.
 
 Effective dispatch capacity is the minimum of configured remaining subagent slots, configured
 remaining writer slots, and the host's currently available subagent slots. The PM never assumes the

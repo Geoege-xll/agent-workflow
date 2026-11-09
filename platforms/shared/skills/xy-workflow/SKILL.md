@@ -81,6 +81,14 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
 
 ## Main-session contract
 
+- Keep accepting natural-language requirements while existing workers run. Apply
+  `.agent-workflow/product/WORKFLOW.md#continuous-pm-intake` for independent requests, result reuse,
+  same-task append, splitting and resource waiting; do not require users to supply IDs or manage Agents.
+  Before dispatch across explicit current records, use `dispatch_admission_cli.py view` then `claim`
+  through [shared dispatch](references/dispatch.md#continuous-intake-dispatch). Original records own state;
+  separate requests keep their own approval, pin and QA. For same-ID progress/append use the intent and
+  verified capability query in [runtime records](references/runtime-records.md), never interrupt as steer.
+
 - Project Hooks are advisory activation/recovery reminders, not a workflow execution engine.
   They never establish task level, approval, QA PASS, permissions or completion. Missing/disabled
   Hooks do not disable this Skill. Continue related work using current context and valid evidence;

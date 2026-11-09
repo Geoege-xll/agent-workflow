@@ -228,6 +228,13 @@ contracts for AGY's native `/grill-me` and this pack's self-contained requiremen
 automatically substitute, rename aliases or omit this pack's Full requirement coverage, or scan personal
 Skill directories.
 
+`continuous_intake` keeps separate `runtime_checks` for message delivery, native wait wakeup, original
+task continuity, same-ID followup and parent-final/cancellation lifecycle. Each stays `runtime_unverified`
+with no evidence reference until actual target-session evidence exists; doctor does not ingest proofs or
+change these records. `observed_capabilities` remains unknown, never inferred from versions/configuration.
+`not_found` means only that this probe's PATH did not find that executable, not that the user has not installed
+the product. Use the current-host integration for official client controls, without writing host settings or databases.
+
 After explicitly exporting native usage metadata for the currently authorized scope, run the installed
 read-only adapter from the actual business-project root, not the central-management source-pack root or
 `.agent-workflow` directory:
@@ -271,13 +278,27 @@ After observing actual state through exposed tools, PM runs the installed read-o
 business-project root:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py continuation \
+bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/lib/agent_continuation_cli.py \
   --input "${workflow_record:?set current schema 2 graph or Light pack}" --task-id "${task_id:?set existing ID}" \
-  --host codex --observed-state idle
+  --host codex --observed-state running --intent append --capability non_interrupting_message
 ```
 
-For the same task, running recommends wait and idle recommends followup. Short rework may continue on the
-same instance; the original same-round QA Reviewer performs delta review. No automatic continuation for
+In central mode translate this logical helper through the current pin's thin bridge above. `--intent` accepts
+`observe` (default), `progress`, `append` or `independent`. Repeat `--capability` only for names actually
+verified on the current exposed authorized native tools: `non_interrupting_message` and `idle_followup`.
+Do not copy the example capability merely because a product's documentation mentions messaging. Unknown
+or duplicate capability names reject. `observe` + running recommends `wait`; `progress`/`append` + running
+recommends `message` only with `non_interrupting_message`, otherwise `wait`. Idle needs `idle_followup`
+for `followup`, otherwise it blocks. Independent work recommends `new_task`, never reuses the old ID.
+All identity, retirement, cancelled/unknown and active-task checks run before these decisions. The old
+`task_graph_cli.py continuation` still supports its original observation-only wait/followup contract.
+
+Before append, apply WORKFLOW's `continuous-pm-intake`: revise the complete scope/contract and necessary
+approval, send the complete affected pack and confirm receipt before accepting new-scope results. The query's
+`revision_required`/`acceptance_requires_ack` are reminders, not approval/receipt evidence. Execute a suggested
+message only with the verified non-interrupting native tool to the same ID; interrupt/stop is not steer.
+Short rework may continue on the same instance; the original same-round QA Reviewer performs delta review.
+No automatic continuation for
 independent tasks, cross-host work, cancelled／missing／unknown, unbound, completed or retired tasks. The query
 does not probe, dispatch, message, unlock or clear context. A blocking recommendation is a normal query result
 (exit 0); invalid input exits 2. Still hand off current complete pack/scope, reusing or restoring complete

@@ -58,6 +58,29 @@ invoke native review safely, record the technical reason and continue the existi
 
 ## Native Tool Short Path
 
+Apply WORKFLOW's `continuous-pm-intake` and the shared dispatch/admission calls for all relationship,
+authorization, ownership, pin and request-QA decisions; this adapter supplies only Codex-native differences.
+The [current CLI documentation](https://learn.chatgpt.com/docs/developer-commands?surface=cli) says Enter
+injects instructions into the working turn and Tab queues a followup for the next turn; inspect actual
+client/key bindings and use injection when B needs PM coordination during A. The
+[App setting](https://learn.chatgpt.com/docs/reference/settings) is General → Follow-up behavior: steer
+the current run or queue the next run. Do not write an invented universal TOML key, treat IDE
+`chatgpt.followUpQueueMode` as CLI/App configuration, or edit host databases to change this behavior.
+
+The [subagent guide](https://learn.chatgpt.com/docs/agent-configuration/subagents) describes steering,
+stopping and closing; actual tool exposure still controls what PM can do. When exposed and authorized,
+`collaboration.send_message` sends to a running original ID without interrupting; native wait can yield to
+new input/results. `followup_task` may resume an idle original ID. Query `agent_continuation_cli.py` with
+the appropriate intent and only capabilities verified on that current surface. `interrupt_agent` stops
+execution and must not substitute for non-interrupting steer. For direct app-server integrations,
+[`turn/steer`](https://learn.chatgpt.com/docs/app-server) requires the matching `expectedTurnId` and appends
+to an active turn; `turn/interrupt` requests cancellation. This pack does not start another app-server/daemon.
+
+In the actual target CLI and App, separately retain evidence for B delivery, wait wakeup, A continuing on
+the same ID without restart/duplicate dispatch, same-ID followup, and child lifecycle after parent final or
+interruption. A successful version probe/configuration projection proves none of these. Unknown cases remain
+`runtime_unverified`; do not assume final keeps children alive or proactively finish while coordination is needed.
+
 Dispatch new schema 2 tasks through a schema_version: 2 single-task envelope containing only the current task, applicable standards_contract, and necessary approval/UI evidence, without copying complete PM or sibling conversations. Stable agent_alias binds project-relative module and canonical role; create new native instances/IDs on demand for independent tasks, without precreation or filling capacity. Tasks retain workflow_level, instance_policy: fresh, and context_policy: handoff_only. When the current tool is collaboration.spawn_agent, explicitly set `fork_turns: "none"`; other native entries must also prove independent initial context and receive only a self-contained current-task prompt. Report a blocker if unavailable rather than falling back to a parent-history fork. Current effective configuration still determines host permissions, model, and effort. The currently exposed `collaboration.spawn_agent` tool has no native role-selector argument: `task_name` names the task and does not prove a `xy-*` descriptor, model, or effort was selected. Do not report native role/model execution as verified from file parsing or a task label; preserve the existing dispatch flow and report the missing native selection evidence.
 
 Continuous same-task implementation, recent short rework, and same-round Reviewer delta checks may reuse the original ID. After the feedback window, PM acceptance, necessary verification/QA, and safe results/logs, use the currently exposed authorized termination capability. If this session exposes only interrupt_agent, it stops current execution without clearing context or proving closure/thread-capacity release; without close/kill or when execution fails, record agent_retired and prohibit continuation, with native termination unconfirmed. Retirement releases no still-running task locks. Record stop, retirement, closure, and permanent history deletion separately; do not delete history without authority. Observe running and open-thread counts separately using actual host definitions; under pressure reclaim accepted instances with sufficient handoff first, retain executing instances, undelivered evidence, and necessary reviewers, and reserve capacity for later necessary QA/integration. resume/compact restores only original context, not prepareForReuse; create no Agent pool or second state machine.

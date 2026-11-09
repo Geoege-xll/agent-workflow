@@ -106,6 +106,18 @@ review. Findings/FAIL still go to PM for bounded rework, never trigger a differe
 
 ### Background execution and recovery
 
+Apply WORKFLOW's `continuous-pm-intake` and the shared dispatch/admission calls for relationship,
+authorization, ownership, pin and per-request QA. The
+[official subagent guide](https://code.claude.com/docs/en/sub-agents#resume-subagents) describes named
+ordinary background subagents and `SendMessage` by verified ID/name, including same-ID idle resume without
+Teams. Ordinary named agents start fresh from their definitions; a fork copies the parent conversation and
+does not meet this pack's `fresh`/`handoff_only` requirement. Do not enable Teams or nesting to obtain messaging.
+Use `agent_continuation_cli.py` with intent `progress`/`append` and `non_interrupting_message` only after checking
+the current native SendMessage delivery semantics; use `idle_followup` for an actually available same-ID
+resume. A user-cancelled instance is not auto-resumed. `TaskStop` does not replace steer. Background completion
+notifications, new-input delivery, wait wakeup, original-task continuity, followup and parent-final lifecycle
+need their own actual target-session evidence; doctor/version/configuration alone leaves them `runtime_unverified`.
+
 Current clients start main-conversation subagents in the background by default. Wait for their actual
 completion notifications before accepting results, releasing ownership, or entering dependent work;
 an Agent ID or an empty active panel is not completion evidence. Avoid busy polling or foreground
