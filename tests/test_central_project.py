@@ -1326,6 +1326,31 @@ class WindowsCentralComposedNativeTest(unittest.TestCase):
             self.assertEqual(0, queried.returncode, queried.stderr)
             self.assertTrue(json.loads(queried.stdout)["matched"])
             self.assertEqual(1, json.loads(queried.stdout)["checked"])
+            # 复用既有合法 Full 决策，只裁剪为内置工程规范；不补审批、不复制
+            # 规范正文，也不替换新任务门。实际薄桥/Windows 协调锁和私有发布必须
+            # 在来源已移除后真正生成新图，不能用 fingerprints 查询成功代替 init。
+            from tests.test_task_graph_init import BUILTIN_ENGINEERING, decisions
+            init_decisions = decisions()
+            init_decisions["standards"].update(required_engineering_rule_ids=["eng-common-005"],
+                leaves=[{"path": BUILTIN_ENGINEERING, "domain": "engineering", "rule_ids": ["eng-common-005"]}])
+            init_decisions["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+            decision_path, graph_path = project / "native-init-decisions.json", project / "native-enabled-task.json"
+            decision_path.write_text(json.dumps(init_decisions, ensure_ascii=False), encoding="utf-8")
+            initialized = invoke("--binding-b64", pin, "helper", "lib/task_graph_cli.py", "init",
+                                 "--root", str(project), "--input", str(decision_path), "--output", str(graph_path))
+            self.assertEqual(0, initialized.returncode, initialized.stdout + initialized.stderr)
+            self.assertTrue(graph_path.is_file())
+            summary, graph_body = json.loads(initialized.stdout), graph_path.read_bytes()
+            self.assertTrue(summary["initialized"])
+            self.assertEqual(str(graph_path), summary["path"])
+            self.assertEqual(hashlib.sha256(graph_body).hexdigest(), summary["sha256"])
+            graph = json.loads(graph_body)
+            self.assertEqual(2, graph["schema_version"])
+            self.assertEqual({"protocol_version", "content_id", "manifest_sha256"}, set(graph["runtime_binding"]))
+            self.assertEqual(core.binding(), store.validate_binding(graph["runtime_binding"]))
+            self.assertEqual([], graph["approved_gates"])
+            self.assertEqual("DECLARED", graph["tasks"][0]["state"])
+            print("NATIVE_ENABLED_INIT: actual isolated thin bridge persisted schema2 graph with strict task pin and explicit approvals")
             settings = json.loads((project / ".claude/settings.json").read_bytes())
             group = hook_install.managed_json(settings, "claude")["SessionStart"][0]
             command = group["hooks"][0]["command"]
