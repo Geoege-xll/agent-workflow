@@ -1,0 +1,62 @@
+name: Native Windows capability evidence
+
+on:
+  push:
+    branches: ['codex/native-windows-*']
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Capabilities produces evidence only; acceptance is blocked until native integration is ready'
+        type: choice
+        options: [capabilities, acceptance]
+        default: capabilities
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capabilities:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Probe independent Win32 capabilities
+        # 首轮固定 probe；不把原始 workflow input 插值到 shell 中。stdout 与 stderr
+        # 均落完整日志，JSON 保存在脚本排他创建的私有目录；exit 0 仅代表报告已产出。
+        run: |
+          $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+          & $python -I -B -X utf8 scripts/windows_capabilities.py --output-parent $env:RUNNER_TEMP 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'windows-capabilities.log')
+          $code = $LASTEXITCODE
+          "probe_exit_code=$code" | Add-Content -Path (Join-Path $env:RUNNER_TEMP 'windows-capabilities.log')
+          exit $code
+      - name: Preserve complete capability evidence
+        if: always()
+        # 官方 release/commit 与官方 upload-pages-artifact 同一完整 SHA 已核验；只上传证据。
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-server-capabilities-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/windows-capabilities.log
+            ${{ runner.temp }}/awf-windows-capabilities-*/capabilities.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Block incomplete native acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'acceptance'
+        # 这个阶段尚未集成 FS/进程/TUI 完整验收；显式模式必须失败，避免 probe 绿色
+        # 被误读为 Win11 桌面验收。后续只由同一 owner 增补真实节点并解除此阻断。
+        run: |
+          Write-Error 'Native acceptance is not implemented yet. Capability evidence is not a Windows 11 support PASS.'
+          exit 1

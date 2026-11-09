@@ -1,6 +1,8 @@
 """唯一验证入口的进程级合同；受控运行时只记录边界，测试仍由真实 unittest 执行。"""
 
 import json
+import importlib.util
+import io
 import os
 from pathlib import Path
 import shlex
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -31,6 +34,7 @@ class ValidationRunnerTest(unittest.TestCase):
         (self.source / "tests/__init__.py").write_text("", encoding="utf-8")
         for name in ("workflow", "codex", "claude", "antigravity", "prototype"):
             shutil.copyfile(PACK / f"scripts/test_{name}.sh", self.source / f"scripts/test_{name}.sh")
+        shutil.copyfile(PACK / "scripts/test_workflow.py", self.source / "scripts/test_workflow.py")
         self.runtime_calls = self.source / "runtime.calls"
         self.case_calls = self.source / "case.calls"
         runtime = (
@@ -139,7 +143,8 @@ class ExampleTest(unittest.TestCase):
         result = self.invoke(target, entry=alias / "scripts/test_workflow.sh")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         invocation = self.runtime_calls.read_bytes().decode().split("\0")[:-1]
-        self.assertEqual([str(self.source), "-B", "-X", "utf8", "-", target], invocation)
+        self.assertEqual([str(self.source), "-B", "-X", "utf8",
+                          str(self.source / "scripts/test_workflow.py"), target], invocation)
         [case] = self.recorded_cases()
         self.assertEqual(str(self.source), case["cwd"])
         self.assertEqual(sys.executable, case["python"])
@@ -203,6 +208,46 @@ class ExampleTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("Ran 1 test", result.stderr)
         self.assertIn("OK", result.stderr)
+
+    def test_native_python_entry_from_other_cwd_preserves_selection_and_rejection(self):
+        # 同一 Python 文件是真正无 Bash 的入口；-I 下从带空格源码根和其他 cwd
+        # 启动仍使用同一清单，验证错误子节点不会因父模块覆盖而被忽略。
+        entry = self.source / "scripts/test_workflow.py"
+        target = "tests.test_shared_memory_contract.ExampleTest.test_two"
+        command = [sys.executable, "-I", "-B", "-X", "utf8", str(entry)]
+        result = subprocess.run(command + [target], cwd=self.caller, env=self.environment,
+                                capture_output=True, text=True, timeout=40)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        [case] = self.recorded_cases()
+        self.assertEqual(target, case["id"])
+        self.assertEqual(str(self.source), case["cwd"])
+        self.assertTrue(case["no_bytecode"])
+        self.case_calls.unlink()
+        for prefix in ([], ["--list"]):
+            result = subprocess.run(command + prefix + ["tests.test_shared_memory_contract", target + "_typo"],
+                                    cwd=self.caller, env=self.environment, capture_output=True, text=True, timeout=40)
+            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+            self.assertEqual([], self.recorded_cases())
+
+    def test_required_native_cases_cannot_succeed_when_skipped_or_unexecuted(self):
+        # 这里只核对 runner 的拒绝合同，不把夹具执行当成 Win32 能力证据。
+        spec = importlib.util.spec_from_file_location("validation_runner_contract", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+
+        class RequiredCase(unittest.TestCase):
+            def test_ok(self):
+                pass
+
+            @unittest.skip("受控 skip：必须导致原生必验拒绝")
+            def test_skip(self):
+                pass
+
+        with redirect_stderr(io.StringIO()):
+            skipped = RequiredCase("test_skip")
+            self.assertEqual(1, runner.run_cases([skipped], {skipped.id()}))
+            actual = RequiredCase("test_ok")
+            self.assertEqual(1, runner.run_cases([actual], {actual.id(), "required.but.not.executed"}))
 
 
 if __name__ == "__main__":
