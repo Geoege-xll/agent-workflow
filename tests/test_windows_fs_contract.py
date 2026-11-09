@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import ctypes
+import ast
 import hashlib
 import importlib.util
 from pathlib import Path, PureWindowsPath
 import stat
 from types import SimpleNamespace
+import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -45,24 +47,76 @@ class WindowsComponentContractTest(unittest.TestCase):
 
 
 class WindowsAclContractTest(unittest.TestCase):
+    def test_private_owner_assignment_only_accepts_current_user_or_elevated_default_admin(self):
+        sids = {"user": b"user", "S-1-5-32-544": b"admins"}
+        with patch.object(fs, "current_sid", return_value="user"), \
+                patch.object(fs, "_sid_bytes", side_effect=sids.__getitem__):
+            with patch.object(fs, "_token_elevated", side_effect=AssertionError("user owner needs no elevation query")):
+                self.assertFalse(fs._private_owner_action(SimpleNamespace(owner=b"user")))
+            for elevated in (False, True):
+                with self.subTest(elevated=elevated), patch.object(fs, "_token_elevated", return_value=elevated):
+                    if elevated:
+                        self.assertTrue(fs._private_owner_action(SimpleNamespace(owner=b"admins")))
+                    else:
+                        with self.assertRaises(ValueError):
+                            fs._private_owner_action(SimpleNamespace(owner=b"admins"))
+            with patch.object(fs, "_token_elevated", return_value=True), self.assertRaises(ValueError):
+                fs._private_owner_action(SimpleNamespace(owner=b"foreign"))
+
     def test_permission_copy_preserves_protected_or_inheriting_policy(self):
         for protected, expected in ((False, 0x20000004), (True, 0x80000004)):
             calls = []
-            def get_info(source, kind, flags, owner, group, acl, sacl, descriptor):
-                ctypes.cast(acl, ctypes.POINTER(fs.HANDLE))[0] = fs.HANDLE(42)
-                ctypes.cast(descriptor, ctypes.POINTER(fs.HANDLE))[0] = fs.HANDLE(43)
-                return 0
-            def get_control(descriptor, control, revision):
-                ctypes.cast(control, ctypes.POINTER(ctypes.c_uint16))[0] = 0x1000 if protected else 0
-                return True
             api = SimpleNamespace(security=SimpleNamespace(
-                GetSecurityInfo=get_info, GetSecurityDescriptorControl=get_control,
-                SetSecurityInfo=lambda *args: calls.append(args) or 0),
-                kernel=SimpleNamespace(LocalFree=lambda value: calls.append(("free", value))))
-            with self.subTest(protected=protected), patch.object(fs, "_api", return_value=api):
+                SetSecurityInfo=lambda *args: calls.append(args) or 0))
+            policy = SimpleNamespace(control=0x1000 if protected else 0, acl=42, dacl_key=b"same")
+            with self.subTest(protected=protected), patch.object(fs, "_api", return_value=api), \
+                    patch.object(fs, "_security_policy", side_effect=lambda handle: nullcontext(policy)):
                 fs._copy_permissions(1, 2)
             self.assertEqual(calls[0][2], expected)
-            self.assertEqual(calls[-1][0], "free")
+
+    def test_permission_copy_refuses_stage_parent_inheritance_changes(self):
+        policies = [SimpleNamespace(control=0, acl=42, dacl_key=b"target"),
+                    SimpleNamespace(dacl_key=b"stage-parent"), SimpleNamespace(dacl_key=b"target")]
+        api = SimpleNamespace(security=SimpleNamespace(SetSecurityInfo=lambda *args: 0))
+        with patch.object(fs, "_api", return_value=api), \
+                patch.object(fs, "_security_policy", side_effect=lambda handle: nullcontext(policies.pop(0))), \
+                self.assertRaisesRegex(ValueError, "inheritance"):
+            fs._copy_permissions(1, 2)
+
+    def test_security_fingerprint_ignores_unused_acl_tail_but_keeps_order_owner_and_control(self):
+        owner = bytes.fromhex("010100000000000512000000")
+        other = bytes.fromhex("010100000000000513000000")
+        def ace(sid):
+            return b"\0\0" + (8 + len(sid)).to_bytes(2, "little") + (0x1F01FF).to_bytes(4, "little") + sid
+        def acl(entries, tail=b""):
+            data = b"".join(entries) + tail
+            return b"\2\0" + (8 + len(data)).to_bytes(2, "little") + len(entries).to_bytes(2, "little") + b"\0\0" + data
+        before = fs._canonical_security(owner, 0x1004, acl([ace(owner), ace(other)]))
+        self.assertEqual(before, fs._canonical_security(owner, 0x1004, acl([ace(owner), ace(other)], b"padding!")))
+        for changed in (fs._canonical_security(other, 0x1004, acl([ace(owner), ace(other)])),
+                        fs._canonical_security(owner, 4, acl([ace(owner), ace(other)])),
+                        fs._canonical_security(owner, 0x1004, acl([ace(other), ace(owner)]))):
+            self.assertNotEqual(before, changed)
+
+    def test_change_time_remains_real_and_acl_is_not_encoded_into_mode_or_time(self):
+        info = fs._Info()
+        info.links, info.attributes, info.created.low, info.modified.low = 1, 0, 11, 22
+        basic = fs._BasicInfo()
+        basic.changed = fs._EPOCH + 123
+        regular = fs._stat_info(info, basic)
+        private = fs._stat_info(info, basic, private=True)
+        self.assertEqual(regular.st_ctime_ns, 12300)
+        self.assertEqual(private.st_ctime_ns, regular.st_ctime_ns)
+        self.assertEqual(stat.S_IMODE(regular.st_mode), 0o666)
+        self.assertEqual(stat.S_IMODE(private.st_mode), 0o600)
+
+    def test_mode_projection_is_explicit_and_readonly_requests_refuse(self):
+        self.assertEqual(fs.project_mode(0o644), 0o666)
+        self.assertEqual(fs.project_mode(0o600), 0o600)
+        self.assertEqual(fs.project_mode(0o755, directory=True), 0o777)
+        self.assertEqual(fs.project_mode(0o700, directory=True), 0o700)
+        with self.assertRaises(ValueError):
+            fs.project_mode(0o400)
 
 
 class WindowsConditionalDeleteContractTest(unittest.TestCase):
@@ -131,6 +185,133 @@ class WindowsRenameDurabilityContractTest(unittest.TestCase):
                 else:
                     backend._rename(Path("/project/stage"), Path("/project/runtime"), False)
             self.assertEqual(events, ["flush", "rename", "flush"])
+
+
+class WindowsSnapshotContractTest(unittest.TestCase):
+    def test_acl_change_is_detected_even_when_all_seven_stat_scalars_are_identical(self):
+        identity = (7, 9, stat.S_IFREG | 0o666, 1, 4, 11, 12)
+        with patch.object(fs, "_metadata", side_effect=[(identity, "a" * 64), (identity, "b" * 64)]), \
+                patch.object(fs, "_read_handle", return_value=b"same"), \
+                self.assertRaisesRegex(ValueError, "changed"):
+            fs._opened_snapshot(123, max_bytes=4)
+
+    def test_invalid_budget_never_reaches_native_io(self):
+        with patch.object(fs, "_api", side_effect=AssertionError("must reject before native I/O")):
+            for limit in (0, -1, True, 8 * 1024 * 1024 + 1):
+                with self.subTest(limit=limit), self.assertRaises(ValueError):
+                    fs.node_snapshot(123, "file", max_bytes=limit)
+
+    def test_bootstrap_source_is_one_closed_stdlib_function(self):
+        source = fs.bootstrap_reader_source()
+        tree = ast.parse(source)
+        self.assertEqual(len(tree.body), 1)
+        self.assertIsInstance(tree.body[0], ast.FunctionDef)
+        imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertEqual({node.module for node in imports if isinstance(node, ast.ImportFrom)}, {"pathlib"})
+        self.assertEqual({alias.name for node in imports if isinstance(node, ast.Import) for alias in node.names},
+                         {"ctypes", "os"})
+        namespace = {}
+        exec(compile(source, "<embedded-trusted-reader>", "exec"), namespace)
+        # 本检查只证明闭包独立可装载；真正原生读成功由 native 节点单独执行。
+        with patch.object(fs._os, "name", "posix"), self.assertRaisesRegex(OSError, "native Windows"):
+            namespace["read_initial_regular"]("C:/fixture")
+
+    def test_conditional_move_never_renames_a_changed_snapshot(self):
+        expected = {"kind": "file", "payload": b"same", "mode": 0o666,
+                    "identity": (7, 9, stat.S_IFREG | 0o666, 1, 4, 11, 12), "security": "a" * 64}
+        actual = {**expected, "security": "b" * 64}
+        backend = fs.secure_os
+        with patch.object(backend, "_path", side_effect=lambda name, descriptor: Path("/project") / name), \
+                patch.object(fs, "Directory", side_effect=lambda path: nullcontext(SimpleNamespace(handle=10))), \
+                patch.object(fs, "flush_directory"), patch.object(fs, "_open_handle", return_value=123), \
+                patch.object(fs, "_opened_snapshot", return_value=actual), patch.object(fs, "_close"), \
+                patch.object(fs, "_rename_handle") as rename, self.assertRaisesRegex(ValueError, "changed"):
+            fs.move_regular("file", "backup", src_dir_fd=1, dst_dir_fd=2, expected=expected)
+        rename.assert_not_called()
+
+
+class WindowsSkillReparseContractTest(unittest.TestCase):
+    def reparse(self, *, tag=0xA000000C, flags=0):
+        target = "C:\\runtimes\\" + "a" * 64 + "\\core\\platforms\\shared\\skills\\xy-workflow"
+        substitute, display = ("\\??\\" + target).encode("utf-16-le"), target.encode("utf-16-le")
+        names = substitute + display
+        body = (b"\0\0" + len(substitute).to_bytes(2, "little") + len(substitute).to_bytes(2, "little")
+                + len(display).to_bytes(2, "little") + flags.to_bytes(4, "little") + names)
+        return tag.to_bytes(4, "little") + len(body).to_bytes(2, "little") + b"\0\0" + body, target
+
+    def read(self, raw):
+        def device(handle, code, incoming, incoming_size, buffer, size, returned, overlapped):
+            ctypes.memmove(buffer, raw, len(raw))
+            ctypes.cast(returned, ctypes.POINTER(fs.DWORD))[0] = len(raw)
+            return True
+        api = SimpleNamespace(kernel=SimpleNamespace(DeviceIoControl=device))
+        info = SimpleNamespace(attributes=fs.ATTR_REPARSE | fs.ATTR_DIRECTORY, links=1)
+        with patch.object(fs, "_api", return_value=api), patch.object(fs, "_information", return_value=info), \
+                patch.object(fs, "_skill_target", side_effect=lambda target, name: PureWindowsPath(target)):
+            return fs._read_skill_handle(123, "xy-workflow")
+
+    def test_exact_directory_symlink_is_read_without_following_target(self):
+        raw, target = self.reparse()
+        self.assertEqual(self.read(raw), target.encode())
+
+    def test_junction_relative_and_truncated_reparse_buffers_are_rejected(self):
+        for options in ({"tag": 0xA0000003}, {"flags": 1}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.read(self.reparse(**options)[0])
+        with self.assertRaises(ValueError):
+            self.read(self.reparse()[0][:-2])
+
+
+class WindowsLockAndCapabilityContractTest(unittest.TestCase):
+    def test_global_abandoned_mutex_fails_releases_and_does_not_poison_explicit_retry(self):
+        events, names, waits = [], [], [0x80, 0]
+        kernel = SimpleNamespace(
+            CreateMutexW=lambda attributes, initial, name: names.append(name) or 42,
+            WaitForSingleObject=lambda handle, timeout: waits.pop(0),
+            ReleaseMutex=lambda handle: events.append("release") or True)
+        with patch.object(fs, "Directory", side_effect=lambda path: nullcontext(SimpleNamespace(identity=(7, 9)))), \
+                patch.object(fs, "_api", return_value=SimpleNamespace(kernel=kernel)), \
+                patch.object(fs, "current_sid", return_value="S-1-5-21-42"), \
+                patch.object(fs, "private_security", side_effect=lambda: nullcontext(123)), \
+                patch.object(fs, "_security_policy", side_effect=lambda handle, **kwargs: nullcontext(None)), \
+                patch.object(fs, "_policy_is_private", return_value=True), \
+                patch.object(fs, "_close", side_effect=lambda handle: events.append("close")):
+            with self.assertRaisesRegex(ValueError, "abandoned"):
+                with fs.directory_lock(Path("/fixture")):
+                    self.fail("abandoned writer must not enter")
+            with fs.directory_lock(Path("/fixture")):
+                events.append("entered")
+        self.assertEqual(events, ["release", "close", "entered", "release", "close"])
+        self.assertEqual(names[0], names[1])
+        self.assertTrue(names[0].startswith("Global\\AgentWorkflow-S-1-5-21-42-"))
+
+    def test_developer_mode_capability_preflight_performs_no_link_creation(self):
+        create = Mock(side_effect=AssertionError("preview must not create a link"))
+        registry = SimpleNamespace(HKEY_LOCAL_MACHINE=1, KEY_READ=1, KEY_WOW64_64KEY=2, REG_DWORD=4,
+                                   OpenKey=lambda *args: nullcontext(123), QueryValueEx=lambda *args: (1, 4))
+        with patch.dict(sys.modules, {"winreg": registry}), \
+                patch.object(fs, "_api", return_value=SimpleNamespace(kernel=SimpleNamespace(CreateSymbolicLinkW=create))):
+            fs.require_skill_symlinks()
+        create.assert_not_called()
+
+    def test_missing_developer_mode_and_no_enabled_privilege_refuse_without_probe(self):
+        def open_token(process, rights, token):
+            ctypes.cast(token, ctypes.POINTER(fs.HANDLE))[0] = fs.HANDLE(42)
+            return True
+        def privileges(token, kind, data, size, required):
+            ctypes.cast(required, ctypes.POINTER(fs.DWORD))[0] = 4
+            return data is not None
+        registry = SimpleNamespace(HKEY_LOCAL_MACHINE=1, KEY_READ=1, KEY_WOW64_64KEY=2,
+                                   OpenKey=Mock(side_effect=FileNotFoundError()))
+        create = Mock(side_effect=AssertionError("preview must not create a link"))
+        api = SimpleNamespace(kernel=SimpleNamespace(CreateSymbolicLinkW=create, GetCurrentProcess=lambda: 1),
+                              security=SimpleNamespace(OpenProcessToken=open_token, GetTokenInformation=privileges,
+                                                       LookupPrivilegeValueW=lambda *args: True))
+        with patch.dict(sys.modules, {"winreg": registry}), patch.object(fs, "_api", return_value=api), \
+                patch.object(fs, "_close") as close, self.assertRaisesRegex(ValueError, "Developer Mode"):
+            fs.require_skill_symlinks()
+        create.assert_not_called()
+        close.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -179,6 +179,10 @@ class WindowsFilesystemNativeTest(unittest.TestCase):
             os.write(descriptor, b"durable tempfile")
             before = self.fs.secure_os.fstat(descriptor)
             self.fs.secure_os.fchmod(descriptor, 0o600)
+            # 提升令牌的 CRT 默认 owner 也必须经受限私有策略变为当前 user，
+            # 不能仅设 DACL 后在 mode 中伪装 0600；普通 user 则保留原 owner。
+            self.fs.assert_private(Path(name))
+            self.assertEqual(stat.S_IMODE(self.fs.secure_os.fstat(descriptor).st_mode), 0o600)
             self.fs.secure_os.fsync(descriptor)
             after = self.fs.secure_os.fstat(descriptor)
             self.assertEqual((after.st_dev, after.st_ino), (before.st_dev, before.st_ino))

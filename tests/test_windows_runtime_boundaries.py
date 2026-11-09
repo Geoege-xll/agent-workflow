@@ -20,6 +20,8 @@ import lib.project.validate_project_config as config
 import lib.windows_bootstrap as bootstrap
 import lib.windows_fs as windows_fs
 from lib.platform_fs import os as platform_os
+import lib.platform_fs as platform_fs
+from lib.hosts import claude_instructions as instruction_entry
 
 
 class Backend:
@@ -241,6 +243,63 @@ class ConfigurationReadTest(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "validation reached"):
                 config.validate_with_profile(path, root, root / "roles")
             read.assert_called_once_with(path)
+
+    def test_shared_instruction_consumer_uses_initial_reader_and_preserves_utf8_and_missing_contract(self):
+        path = Path(tempfile.gettempdir()).resolve() / "initial-reader-consumer"
+        for body, expected_error in (("中文规则\n".encode(), None), (b"\xff", UnicodeError)):
+            with self.subTest(body=body), patch.object(instruction_entry, "os", SimpleNamespace(name="nt")), \
+                    patch.object(windows_fs, "read_initial_regular", return_value=body) as read:
+                if expected_error:
+                    with self.assertRaises(expected_error):
+                        instruction_entry.read_file(path)
+                else:
+                    self.assertEqual(instruction_entry.read_file(path), body)
+                read.assert_called_once_with(path, 4 * 1024 * 1024)
+        with patch.object(instruction_entry, "os", SimpleNamespace(name="nt")), \
+                patch.object(windows_fs, "read_initial_regular", side_effect=FileNotFoundError()):
+            self.assertIsNone(instruction_entry.read_file(path))
+        with patch.object(instruction_entry, "os", SimpleNamespace(name="nt")), \
+                patch.object(windows_fs, "read_initial_regular", return_value=b"relative") as read:
+            self.assertEqual(instruction_entry.read_file(Path("relative-reader")), b"relative")
+            read.assert_called_once_with(Path("relative-reader").absolute(), 4 * 1024 * 1024)
+
+
+class ConsumingPublicationBoundaryTest(unittest.TestCase):
+    def test_windows_exclusive_publication_consumes_source_and_does_not_unlink_it_again(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source, target = root / "temporary", root / "published"
+            source.write_bytes(b"owned")
+            backend = Backend()
+            backend.name = "nt"
+            expected = {"kind": "file", "payload": b"owned"}
+            def move(name, destination, *, src_dir_fd, expected):
+                self.assertEqual(name, source.name)
+                os.rename(source, destination)
+            with patch.object(platform_fs, "os", backend), \
+                    patch.object(windows_fs, "node_snapshot", return_value=expected), \
+                    patch.object(windows_fs, "move_regular", side_effect=move):
+                platform_fs.publish_exclusive(source, target)
+            self.assertFalse(source.exists())
+            self.assertEqual(target.read_bytes(), b"owned")
+
+    def test_post_move_barrier_failure_keeps_published_recovery_witness(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source, target = root / "temporary", root / "published"
+            source.write_bytes(b"owned")
+            backend = Backend()
+            backend.name = "nt"
+            def move(name, destination, **kwargs):
+                os.rename(source, destination)
+                raise OSError("post-move directory flush failed")
+            with patch.object(platform_fs, "os", backend), \
+                    patch.object(windows_fs, "node_snapshot", return_value={"kind": "file"}), \
+                    patch.object(windows_fs, "move_regular", side_effect=move), \
+                    self.assertRaisesRegex(OSError, "post-move"):
+                platform_fs.publish_exclusive(source, target)
+            self.assertFalse(source.exists())
+            self.assertEqual(target.read_bytes(), b"owned")
 
 
 if __name__ == "__main__":
