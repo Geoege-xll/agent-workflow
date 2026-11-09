@@ -147,13 +147,22 @@ def _directory_case_sensitive(directory: Path) -> bool | None:
                     break
                 if not entry.name.isascii() or not any(character.isalpha() for character in entry.name):
                     continue
-                before = entry.stat(follow_symlinks=False)
+                # scandir 仅提供名称：Windows DirEntry.stat 的 st_dev/st_ino
+                # 恒为零，不能和 Path.lstat 的实际身份混比，否则同一对象会被
+                # 错判为两个对象，进而把不敏感目录误判为敏感目录。原名/alias
+                # 一律 fresh lstat；缺失身份是未知，不能作为“不同对象”的证据。
+                before = (directory / entry.name).lstat()
                 if stat.S_ISLNK(before.st_mode) or getattr(before, "st_file_attributes", 0) & 0x400:
                     continue
+                if not before.st_ino:
+                    return None
                 try:
                     alias = (directory / entry.name.swapcase()).lstat()
                 except FileNotFoundError:
                     return True
+                if (not alias.st_ino or stat.S_ISLNK(alias.st_mode)
+                        or getattr(alias, "st_file_attributes", 0) & 0x400):
+                    return None
                 return (before.st_dev, before.st_ino) != (alias.st_dev, alias.st_ino)
     except OSError:
         pass

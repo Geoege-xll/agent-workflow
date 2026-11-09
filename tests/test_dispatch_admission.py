@@ -341,6 +341,33 @@ class AdmissionTest(unittest.TestCase):
                 else:
                     self.assertEqual([self.key(candidate)], projected["candidates"])
 
+        # Python 官方合同：Windows DirEntry.stat 的身份字段恒零，不能和
+        # Path.lstat 的实际 ID 混用。此处只注入缓存/查找结果的边界差异，
+        # 上面的真实卷与真实 CLI 冲突断言完整保留，不冒充 Windows 实机。
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        fresh = leaf.lstat()
+        different = existing / "Distinct.py"
+        different.write_text("another physical node\n")
+        distinct = different.lstat()
+        unknown = SimpleNamespace(st_mode=fresh.st_mode, st_dev=0, st_ino=0, st_file_attributes=0)
+        entry = SimpleNamespace(name=leaf.name, stat=lambda **kwargs: unknown)
+        for label, original, alias, expected in (("same", fresh, fresh, False),
+                                                  ("different", fresh, distinct, True),
+                                                  ("unknown-original", unknown, fresh, None),
+                                                  ("unknown-alias", fresh, unknown, None)):
+            with self.subTest(cache_zero_and_fresh_identity=label):
+                def lookup(location, *args, **kwargs):
+                    if location.name == leaf.name:
+                        return original
+                    if location.name == leaf.name.swapcase():
+                        return alias
+                    raise AssertionError("unexpected identity lookup")
+                with patch.object(cli.sys, "platform", "case-probe"), \
+                        patch.object(cli.os, "scandir", side_effect=lambda directory: nullcontext([entry])), \
+                        patch.object(Path, "lstat", new=lookup):
+                    self.assertIs(expected, cli._directory_case_sensitive(existing))
+
     def test_sensitive_names_stay_distinct_and_unknown_future_names_lock_the_existing_parent(self):
         """只验证已核实规则的映射合同，不把注入的策略冒充敏感卷实机验收。"""
         from lib.dispatch_admission import _overlap
