@@ -39,15 +39,17 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 真实Server2025 x64/NTFS探针和消费者已取得目录flush、完整身份/ACL、条件发布、创建句柄归属、中央Skill软链与Job/ConPTY收尾证据；ChangeTime不能单独证明安全，未宣称耐断电或Win11普通用户等价。记录before保完整恢复正文，after只存严格条件守卫，能力选择保护所有相关固定reader，原4MiB/超限零写/pending及旧reader保护保持。
 
-完整运行42679088902（b8d7a8b，实际merge fcb2243563且树相同）已结束失败。macOS/Linux各273项suite成功，平台专属skip3/4不当Windows证据。Windows119项中库48、入口6、ConPTY8、诊断4、准入41、提升NTFS2及中央完整1项通过；中央1739.339秒完整完成偏好覆盖/恢复/重置、follow/pin、回退、原inode补偿及并发保存保留。边界6中仅旧能力CRLF夹具失败，TUI3为2个body失败+2个cleanup ERROR，整轮未通过。
+完整运行42699711396（ec0e8f3，实际merge 63076e9且树相同）已结束失败。macOS/Linux CI成功，平台条件skip不当Windows证据。Windows121项中库48、入口6、ConPTY8、诊断4、准入41、提升NTFS2及中央完整1项通过；完整生命周期、原inode补偿与并发保存保留均完成。原CRLF能力夹具及Unicode/cleanup已经原生复验通过，整轮仍因两个组件失败而未通过。
 
-TUI保存预览已通过；项目确认后保存作业超30秒。全局第一次保存29.641秒实际成功，恢复模型/推理跟宿主后的第二次超时。Job.execute含apply和refresh，两段共用busy；新增测试observer复用既有线程记录至多4×24层executor元数据，不读locals、不留frames，预算/屏幕/IPC保持。Unicode body退出130并恢复模式，但本方法因cleanup ERROR不算PASS。原始帧、输入时间线与错误全部保留。
+TUI五次模型/推理保存实际成功，项目保存约19.8秒、两次全局保存约13.5秒，取消与停用也完成；剩余一个body失败为随后项目启用预览30秒未结束。既有observer实际捕获executor停在preview重复核心校验栈，未见refresh或worker异常。三个纯preview入口的操作级完整只读范围和两个精准回归已同Reviewer接受并整合，Mac实际同pin1scan/2verify、双pin2/4；显式source双inspect保留，apply仍fresh。同Reviewer已完成代码阶段复核，等待Windows30秒实际复验，不增加预算或改变curses布局。
+
+中央边界8项的10个错误同在普通既有config.toml的setup：同父stage精确权限复制后source control=0x8004、target=0x8404，有序ACE由3变4，故障注入尚未执行。当前Tree无私有ACL准入，不能强改fixture绕过真实外部配置。同Reviewer接受的最小原生节点与隔离单job已运行42708668152：单方法0.034秒ERROR，SetSecurityInfo实际return0；source owner BA、private stage owner LA，父CREATOR OWNER继承重算新增LA全权ACE，source及父security稳定。完整stage见证还包含owner，不能仅忽略AI/ACE差异。创建时源SD实验42712087273随后实际1方法0.022秒通过：owner BA、control8004、有序ACE及完整security精确保留，READ/WRITE/DELETE重开均真实错误32，seal与关闭首读七标量相同。create+seal两原语及存活creator绑定契约已实现；同Reviewer确认公共replace遗漏后，统一完整快照发布helper已实现并完成代码阶段复核，覆盖项目ID、Claude指令、Codex独立合并、任务记录及Hook原读接缝。原记录三参数发布接口、lock/finish/freshCAS/最后结算来源顺序保留，原有空stage登记及完整ready见证不改。中央/原生/AGY调用侧已代码层闭合两Important，14文件原语/发布与7文件消费者均已完成同一Reviewer代码阶段复核；消费者实际合入真实依赖后5项精准便携测试一次0.735秒通过，真实Windows生产路径仍待执行证明。原始失败保留，临时workflow不进入发行，精确ACL、sharing与rollback合同保持。
 
 保存阶段5生产+2测试已完成同一Reviewer审查并运输：只合并显式纯准备，封口后按完整OwnershipSources固定inventory fresh核对，再走原written/publish/verify与补偿。record/journal retained遗漏已用正式producer真实故障、条件补偿与外部编辑保留闭合；稳定missing历史保留。目录负控区分真实Windows5/32内核阻止与实际替换后的guard拒绝，退出后真实rename证句柄结清，不放宽sharing。Mac同源project apply4scan+refresh1、global两次各4+0；实际产物/journal保持，仍需Windows实测。
 
-唯一原生registry实际收集9组件121方法（48/6/1/8/8/3/4/41/2）；PR/发行仅接受Server full，任何selected skip/缺组/取消/未执行均拒。普通desktop从同源登记派生119方法，明确排除提升NTFS2，不按权限自动降级；两个新中央guard节点进ordinary boundaries，RolePrefs两个新回归仅POSIX CI，避免顶层pty/termios/curses依赖冒充原生。提升flag只改测试自有空目录，生产不设置、不新增用户提权/WSL要求。
+此前完整门禁的唯一原生registry实际收集9组件121方法（48/6/1/8/8/3/4/41/2）；本轮新增生产原语、中央/AGY与独立owner权限节点后，最终数量必须从同一登记重新实际收集。PR/发行仅接受Server full，任何selected skip/缺组/取消/未执行均拒。普通desktop明确排除提升NTFS2与owner权限1共3项，不按权限自动降级；两个新中央guard节点进ordinary boundaries，RolePrefs两个新回归仅POSIX CI，避免顶层pty/termios/curses依赖冒充原生。提升flag只改测试自有空目录，生产不设置、不新增用户提权/WSL要求。
 
-稳定候选后向用户提供固定SHA、可审阅的PowerShell7+入口；用户Win11机器可运行但已要求先整体开发。脚本保存scope.json及acceptance.json，成功SCOPED_PASS、scope=windows11-client-ordinary、full_registry_executed=false，selected119/excluded2来自同registry；describe仅收集不是执行PASS。脚本保原CPython/x64/curses版本与prefix记录，锁哈希由CI安装准备验证，不新增私有venv或已装wheel哈希准入。当前新121项Server门禁、Win11桌面、最终统一QA与发布/本机升级尚未完成。
+稳定候选后向用户提供固定SHA、可审阅的PowerShell7+入口；用户Win11机器可运行但已要求先整体开发。脚本保存scope.json及acceptance.json，成功SCOPED_PASS、scope=windows11-client-ordinary、full_registry_executed=false，selected/excluded实际数量来自同registry；补入新节点后重新派生，describe仅收集不是执行PASS。脚本保原CPython/x64/curses版本与prefix记录，锁哈希由CI安装准备验证，不新增私有venv或已装wheel哈希准入。用户2026-11-10最新授权将本机更新提前：macOS完整检查和真实PTY/TUI通过后先安装2.1.4候选程序与中央current，再继续真实Windows。完整同候选Server门禁、Win11桌面及最终统一QA完成后才正式发布GitHub/Tap；当前本机候选安装、Windows验收及正式发布均尚未完成。
 
 探针、原始失败、实际修复及源审分别保存在native-windows-20261109、upgrade-214-20261109暂存区和Git历史。当前主题仅保留必要架构与恢复信息，不以部分节点、模拟或取消改写整体验收。
 

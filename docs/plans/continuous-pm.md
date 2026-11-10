@@ -21,7 +21,7 @@
 5. Codex CLI/App 及 Claude Code/AGY 的官方能力、当前工具和真实验收分别记录，配置声明或算法测试不得冒充原生交互。主回合结束/中断与子代理生命周期单独验证。
 6. plan HTML 的 CLI、Python 公开入口及流程要求暂停，调用保留为注释和恢复说明；Markdown 计划、授权、原型、验证合同保留。原型需求导航允许仅 Markdown，保留安全边界及旧页面；不删除已有 HTML，不暂停原型 HTML。
 7. Windows 目标为 Win11 x64、PowerShell7+、CPython3.11+；完成中央组合、真实 ConPTY TUI、进程收尾和验收入口。Windows Server CI 与 Win11 普通用户桌面证据明确区分。
-8. 生产实现分给全新职责子代理，精简交接，不复制完整 PM 会话；整合后进行单一独立 QA。必要检查通过后才发布 GitHub/Tap 和升级本机中央程序及 current，保留项目锁版与停用选择。
+8. 生产实现分给全新职责子代理，精简交接，不复制完整 PM 会话；整合后进行单一独立 QA。按用户最新顺序，macOS完整检查与真实PTY通过后，先安装本机2.1.4候选中央程序并切换current；真实Windows、Win11桌面及最终独立QA完成后再正式发布GitHub/Tap。候选安装记录源码与归档来源，保留项目锁版、停用与模型覆盖。
 
 ## 方案与原型关联
 
@@ -35,13 +35,15 @@ HTML 计划生成的公开入口和流程要求已暂停，代码以注释保留
 
 真实 Codex app-server 已证明 A 运行期间自然 B 引导同一 PM，确认后领取并派发 B，A 同 ID 追加且工作者确认。补验中 PM 自己结算 evidence 原包至 RESULT_VERIFIED、占用1→0；PM/Worker正常结束，unsubscribe后约60秒出现thread/closed。初次失败记录保持。此证据不覆盖Codex App GUI、父回合final后仍运行的任务或所有模型/角色设置；App自动化被工具安全策略禁止，不绕过读取用户会话。
 
-完整运行42679088902（b8d7a8b，实际PR merge fcb2243563且树相同）已结束失败：macOS/Linux CI各收集273项、按既有平台条件分别skip3/4后suite成功；Windows119项中7/9组件通过，包含中央完整生命周期1739.339秒、Hook7秒、真实NTFS两项与库48项。TUI两次保存等待超30秒；全局首次保存29.641秒实际成功，后续恢复宿主继承的第二次超时。Unicode body退出及模式恢复，但cleanup冲突导致该方法整体ERROR。边界失败是CRLF夹具未移除能力声明，生产按能力1选择新runner正确；夹具已修并由原QA接受，待原生复验。
+完整运行42699711396（ec0e8f3，实际PR merge 63076e9且树相同）已结束失败：macOS/Linux CI成功；Windows121项中7/9组件通过，中央完整生命周期、入口、库、ConPTY、诊断、准入及提升NTFS全部通过。TUI五次实际模型/推理保存均成功，原Unicode及cleanup问题已复验通过；剩余一个body失败为项目启用预览超30秒。实际executor栈停在preview内重复核心校验，无worker异常或refresh阻塞。原CRLF能力夹具亦已原生通过，历史失败保留。
+
+中央边界8项中10个子例同在准备阶段失败：普通既有config.toml复制权限至同父stage后，DACL control由0x8004变为0x8404、有序ACE由3变4，尚未进入各故障注入。单节点诊断42708668152已原生复现：source owner为BA、private stage owner为当前用户LA，父目录CREATOR OWNER继承在目标owner语境映射为新增LA全权ACE；源及父权限保持稳定。权限复制还需满足包含owner的完整stage见证，不能忽略AI或多出的ACE。最小测试与隔离单job已同Reviewer接受，原0.034秒ERROR及完整SDDL保留；后续创建时源SD实验42712087273实际1方法0.022秒通过，owner/control/ACE、完整安全及三种独占重开错误32均已核实。create+seal及统一完整快照发布按文件系统职责实现，公共replace写者已完成归属审计和统一迁移，14文件原语/发布实现与7文件中央/原生/AGY消费者均已通过同一Reviewer的代码阶段复核。消费者已实际合入真实依赖，5项精准便携消费者一次0.735秒通过；新生产路径的Windows执行及完整门禁仍待。临时workflow不进入发行候选，API实验不当整体验收PASS。
 
 保存链已按职责重构并完成原Reviewer阶段复核：显式CommitReadPreparation只合并完整guard/status/收据的纯准备，普通before_write保持原合同；完整尾验结束后fresh核对可变来源、绑定、Node、目录和必要画像，再进入原备份、写入、独立publish/verify及条件补偿。父读取租约提前拒绝，Plan不留reader。OwnershipSources使global与receipt共用CONFIG/managed、record及journal retained、Skill名、完整Node/目录事实，沿原inventory复核，不重建基准。QA发现的retained遗漏与Windows目录注入两Important均已代码层闭合。
 
 同源真实服务计数：项目完整apply8scan→4、refresh另1；全局首次及恢复宿主继承的第二保存均7→4、refresh0。3个实际native产物与15次journal写入保留，新增4节点18.566秒及6直接消费者12.053秒通过。这些是Mac实际计数，不证明新的Windows30秒预算已过；前轮claim28→21→8的实际证据按各冻结源独立保留。
 
-唯一registry的最终登记已同Reviewer接受并运输，实际9组件121方法；Server full始终包含提升资格的NTFS2。普通desktop从同一登记派生119方法、明确排除2项，所选仍zeroSkip；Win11成功只报告SCOPED_PASS、full_registry_executed=false及实际selected/excluded。下一步用完整同候选运行macOS/Linux及Windows门禁，再取得Win11普通用户桌面与最终独立QA，随后发布GitHub/Tap并升级本机中央程序及current。三个跟随项目自动使用新current，锁版、停用及偏好保留；npm/npx不恢复。
+三个纯preview入口的操作级只读范围已同Reviewer接受并整合，复用既有完整reader与尾验，同pin实际1scan/2verify、双pin2/4，显式source仍双inspect且零导入，writer/apply独立fresh。两个精准节点Mac实跑通过且原Reviewer已完成代码阶段复核，等待原生复验，不修改30秒预算。旧完整门禁的registry为9组件121方法；本轮新增原语、中央/AGY与独立owner权限节点，最终数量由唯一登记实际重新收集，不能沿用旧数字。Server full保留提升NTFS及独立owner权限证明，desktop明确排除这3项提升节点且所选zeroSkip。Win11成功只报告SCOPED_PASS、full_registry_executed=false及实际selected/excluded。用户最新授权先更新本机：先完成macOS完整回归和真实PTY/TUI，安装已复核的2.1.4候选程序与中央current，之后继续真实Windows；完整同候选门禁、Win11桌面及最终独立QA完成后再正式发布GitHub/Tap，必要时用最终正式归档重装同版本本机候选。三个跟随项目自动使用新current，锁版、停用及偏好保留；npm/npx不恢复。
 
 实现仍在独立请求工作树中，生产按职责交接、精简任务包，不复制完整PM会话。主目录五处原有未提交修改及用户交接逐字节保持，不纳入候选。全部原始失败、任务图、profile和复核日志保存在upgrade-214-20261109暂存区；本计划保留当前决策与恢复入口，历史由Git和原始日志追溯。
 
@@ -51,5 +53,5 @@ HTML 计划生成的公开入口和流程要求已暂停，代码以注释保留
 
 ## 批准依据与必要证据
 
-- 批准依据: 用户在讨论七项优化方案后明确“开始优化，同时完成Windows适配，取消plan生成html（代码注释保留），完成后发布新版本并升级本机”；随后明确必要重构和三平台最新官方规范要求。这覆盖实施和最终发布/本机升级，无需重复请求同一授权。
+- 批准依据: 用户在讨论七项优化方案后明确“开始优化，同时完成Windows适配，取消plan生成html（代码注释保留），完成后发布新版本并升级本机”；随后明确必要重构和三平台最新官方规范要求。这覆盖实施和最终发布/本机升级，无需重复请求同一授权；2026-11-10用户进一步明确允许先升级本机、再进入真实Windows验证。
 - 验收证据: 本轮三路职责分析及官方最新主文档；Codex 核心报告 codex-native-test/native-verification.md、收口补验 settlement/native-verification.md 与原事件保存在请求暂存区。Windows CI 42598994710 ConPTY八项通过；42614154168 的Hook通过、reset失败与脚本/API两项通过；42618163143 reset已过、restore与TUI通信失败。修复、原始失败及独立审查记录全部保留。后续只补真实命令、环境、退出结果和定位证据，未运行的原生交互及 Win11 桌面保持未验证。
