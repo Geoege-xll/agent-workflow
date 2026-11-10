@@ -98,6 +98,9 @@ NATIVE_COMPONENTS = {
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_checkpoint_keeps_manifest_version_mode_and_member_guards",
             "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_rejects_source_drift_before_any_temporary_or_publish",
             "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_precedes_last_fresh_cas_and_settlement_sources",
+            # Records 独立脚本/包导入的发布消费者应共享目录 fd 注册与读取
+            # 操作归属；只登记这一合同，不扩选同模块的其他运行时/宿主夹具。
+            "tests.test_task_graph_records.RecordNativePublisherContractTest.test_standalone_and_package_publication_keep_directory_registry_and_read_operation_owner",
             "tests.test_runtime_store.RuntimeStoreTest.test_windows_literal_roots_do_not_alias_operation_or_core_locators",
             # 同一预算消费者同时验证便携 CI 与 Windows 实际文件链；共享登记
             # 避免将含原生/提升类的整个 AGY 模块塞进普通 CI 或重复运行两方法。
