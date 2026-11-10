@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import ctypes as C
+import dis
 import importlib.metadata
+import inspect
 import json
 import os
 from pathlib import Path
@@ -258,6 +260,185 @@ def _main_thread_observation(number, started):
         del frames
 
 
+class PhaseProfile:
+    """测试专用的有界阶段遥测；只存固定标签、整数及 code 绑定，不存执行帧。"""
+
+    MAX_WORKERS, MAX_JOBS, MAX_ACTIVE = 4, 64, 64
+    MAX_PHASE_EVENTS, MAX_WORKER_EVENTS, MAX_EVENTS = 4096, 32768, 65536
+    LABELS = ("apply", "load_context.body", "read_operation.wrapper", "_scan", "_verify_snapshot", "CoreReadOperation.finish")
+
+    def __init__(self, started=None):
+        from lib import runtime_store
+        from manager import model_preferences
+        from manager.tui_state import Job
+
+        self.started = time.monotonic_ns() if started is None else started
+        self.lock = threading.RLock()
+        self.workers = {}
+        self.events = self.recording_ns = 0
+        self.overflow = self.recording_error = False
+        self.previous = None
+        self.job_code = Job.execute.__code__
+        # 只接受 Job.execute 现有的两个唯一 CALL 源位置。3.11..3.14 的 CALL
+        # cache/字节偏移可不同，因此仅用 code identity 与位置元数据，不猜偏移。
+        calls = [row for row in dis.get_instructions(Job.execute) if row.opname == "CALL"]
+        lines = [row.positions.lineno for row in calls]
+        self.binding_incomplete = len(lines) != 2 or None in lines or len(set(lines)) != 2
+        self.sites = dict(zip(lines, ("operation", "refresh"))) if not self.binding_incomplete else {}
+        self.codes = {
+            model_preferences.apply.__code__: "apply",
+            inspect.unwrap(model_preferences.load_context).__code__: "load_context.body",
+            model_preferences.load_context.__code__: "read_operation.wrapper",
+            runtime_store._scan.__code__: "_scan",
+            runtime_store._verify_snapshot.__code__: "_verify_snapshot",
+            runtime_store.CoreReadOperation.finish.__code__: "CoreReadOperation.finish",
+        }
+        # read_operation 的 scoped 被多个来源函数共享，只能聚合为 wrapper，
+        # 绝不把共享 code 的所有调用误标为 load_context。生成器不作普通计时。
+        self.binding_incomplete |= len(self.codes) != 6 or any(code.co_flags & inspect.CO_GENERATOR for code in self.codes)
+
+    @contextmanager
+    def installed(self):
+        """仅影响之后创建的 worker；保留旧 thread hook，不触碰 main 的 sys hook。"""
+        previous = threading.getprofile()
+        self.previous = previous
+        threading.setprofile(self._profile)
+        try:
+            yield self
+        finally:
+            threading.setprofile(previous)
+
+    @staticmethod
+    def _phase():
+        return {"started": None, "ended": None, "incomplete": False, "overflow": False, "events": 0,
+                "functions": {label: {"calls": 0, "returns": 0, "inclusive_ns": 0} for label in PhaseProfile.LABELS}}
+
+    def _overflow(self, worker, job, phase=None):
+        self.overflow = worker["overflow"] = job["incomplete"] = True
+        if phase is not None:phase["incomplete"] = phase["overflow"] = True
+
+    def _accept(self, worker, job, phase):
+        if (phase["events"] >= self.MAX_PHASE_EVENTS or worker["events"] >= self.MAX_WORKER_EVENTS
+                or self.events >= self.MAX_EVENTS):
+            self._overflow(worker, job, phase)
+            return False
+        phase["events"] += 1;worker["events"] += 1;self.events += 1
+        return True
+
+    def _profile(self, frame, event, arg):
+        # 原 hook 总是按原参数透传；不查看 arg（参数/返回值/异常对象），旧 hook
+        # 自身的行为及异常不由本诊断吞掉。未选事件不取时钟、不 resolve 路径。
+        if self.previous is not None:self.previous(frame, event, arg)
+        if self.binding_incomplete or event not in {"call", "return"}:return
+        code, ident = frame.f_code, threading.get_ident()
+        worker = self.workers.get(ident)
+        if code is not self.job_code and (worker is None or worker["job"] is None):return
+        if code is not self.job_code:
+            job = worker["job"]
+            if job["closed"]:return
+            # phase 内未选函数直接走 fastpath；只有等待直系 phase 根调用时
+            # 才检查一个 parent，不对每个事件遍历栈或读取 Job/locals。
+            if job["phase"] is not None and code not in self.codes and not (event == "return" and id(frame) == job["phase_frame"]):return
+        begin = time.monotonic_ns()
+        try:
+            with self.lock:
+                self._record(frame, event, code, ident, begin)
+                # 仅统计选中记录路径的开销，不含旧 hook/未选 fastpath；不能从
+                # phase wall time 扣除此数宣称得到“无插桩业务耗时”。
+                self.recording_ns += time.monotonic_ns() - begin
+        except Exception:
+            # 诊断自身出错只标记不完整；不改变生产调用结果，也不记录异常正文。
+            self.recording_error = True
+            if worker is not None and worker["job"] is not None:worker["job"]["incomplete"] = True
+
+    def _record(self, frame, event, code, ident, now):
+        worker = self.workers.get(ident)
+        frame_id = id(frame)
+        if code is self.job_code and event == "call":
+            name = threading.current_thread().name
+            if not name.startswith("ThreadPoolExecutor-"):return
+            if worker is None:
+                if len(self.workers) >= self.MAX_WORKERS:self.overflow = True;return
+                worker = self.workers[ident] = {"name": name[:128], "events": 0, "jobs": 0, "overflow": False, "job": None}
+            if worker["job"] is not None and not worker["job"]["closed"]:
+                self._overflow(worker, worker["job"]);return
+            if worker["jobs"] >= self.MAX_JOBS:
+                self._overflow(worker, worker["job"]);return
+            worker["jobs"] += 1
+            worker["job"] = {"index": worker["jobs"], "frame": frame_id, "closed": False, "incomplete": False,
+                             "phase": None, "phase_frame": None, "active": {},
+                             "phases": {"operation": self._phase(), "refresh": self._phase()}}
+            return
+        if worker is None or worker["job"] is None:return
+        job = worker["job"]
+        if job["closed"]:return
+        if code is self.job_code and event == "return" and frame_id == job["frame"]:
+            # 非 Python callable 等情况没有可绑定的直系 call 根；明确报告缺口，
+            # 不能把没有 operation 计时的区间伪装成完整的零耗时。
+            if job["phases"]["operation"]["started"] is None:
+                job["incomplete"] = job["phases"]["operation"]["incomplete"] = True
+            if job["phase"] is not None:
+                job["incomplete"] = True
+                job["phases"][job["phase"]]["incomplete"] = True
+            job["closed"] = True;job["active"].clear();return
+        if job["phase"] is None and event == "call":
+            parent = frame.f_back
+            try:
+                phase_name = self.sites.get(parent.f_lineno) if parent is not None and parent.f_code is self.job_code and id(parent) == job["frame"] else None
+            finally:del parent
+            if phase_name is None:return
+            job["phase"], job["phase_frame"] = phase_name, frame_id
+            job["phases"][phase_name]["started"] = now
+        if job["phase"] is None:return
+        phase = job["phases"][job["phase"]]
+        label = self.codes.get(code)
+        if event == "call" and label is not None:
+            if len(job["active"]) >= self.MAX_ACTIVE:self._overflow(worker, job, phase)
+            elif self._accept(worker, job, phase):
+                job["active"][frame_id] = (label, now)
+                phase["functions"][label]["calls"] += 1
+        elif event == "return" and frame_id in job["active"]:
+            label, started = job["active"].pop(frame_id)
+            if self._accept(worker, job, phase):
+                metric = phase["functions"][label]
+                metric["returns"] += 1;metric["inclusive_ns"] += now - started
+        if event == "return" and frame_id == job["phase_frame"]:
+            # 这是 Job 直系 operation/refresh callable 的退出，故包含 lambda
+            # 内装饰器 with 的 lease 尾验；不靠 load_context body 返回判断阶段结束。
+            phase["ended"] = now
+            if job["active"]:phase["incomplete"] = job["incomplete"] = True
+            job["active"].clear();job["phase"] = job["phase_frame"] = None
+
+    def snapshot(self):
+        """只返回当前/最近一次 Job 的固定两阶段，不输出逐事件或历史列表。"""
+        now = time.monotonic_ns()
+        with self.lock:
+            workers = []
+            for ident, worker in self.workers.items():
+                row = {"ident": ident, "name": worker["name"], "jobs": worker["jobs"], "events": worker["events"], "overflow": worker["overflow"], "job": None}
+                job = worker["job"]
+                if job is not None:
+                    phases = {}
+                    for name, phase in job["phases"].items():
+                        # 各函数是包容耗时，可能相互嵌套；active_ns 只描述尚未
+                        # 返回的选中调用，不能把这些值相加或当作无插桩性能结果。
+                        functions = {label: {**metric, "inflight": 0, "active_ns": 0} for label, metric in phase["functions"].items()}
+                        if job["phase"] == name:
+                            for label, started in job["active"].values():
+                                functions[label]["inflight"] += 1;functions[label]["active_ns"] += now - started
+                        phases[name] = {"started_ns": None if phase["started"] is None else phase["started"] - self.started,
+                                        "ended_ns": None if phase["ended"] is None else phase["ended"] - self.started,
+                                        "elapsed_ns": 0 if phase["started"] is None else (phase["ended"] or now) - phase["started"],
+                                        "incomplete": phase["incomplete"], "overflow": phase["overflow"], "events": phase["events"], "functions": functions}
+                    # return/unwind 只表示区间闭合，不表示业务成功；成功事实仍由
+                    # 正式结果/错误/原生屏幕断言决定，不查看 profile 的返回参数。
+                    row["job"] = {"index": job["index"], "closed": job["closed"], "phase": job["phase"], "incomplete": job["incomplete"], "phases": phases}
+                workers.append(row)
+            return {"binding_incomplete": self.binding_incomplete, "recording_error": self.recording_error,
+                    "overflow": self.overflow, "events": self.events, "recording_ns": self.recording_ns,
+                    "workers": workers}
+
+
 def run_observed(root, arguments):
     """真实 CLI/TUI 在主线程运行；原观察线程只读原生控制台与有界栈位置。
 
@@ -272,6 +453,7 @@ def run_observed(root, arguments):
     stop = threading.Event()
     failures = []
     started = time.monotonic_ns()
+    phases = PhaseProfile(started)
 
     def watch():
         number = 1
@@ -283,6 +465,7 @@ def run_observed(root, arguments):
                 read_message(request, number)
                 snapshot = observer.snapshot()
                 snapshot["observation"] = _main_thread_observation(number, started)
+                snapshot["observation"]["phase_profile"] = phases.snapshot()
                 _publish(message_path(root, "responses", number), {"number": number, "snapshot": snapshot})
                 # 响应发布后才推进游标；父端也必须取得该响应才能提交下一请求。
                 # 历史消息保留到进程/线程结束，不在读者打开文件期间回收名字。
@@ -298,7 +481,9 @@ def run_observed(root, arguments):
     worker.start()
     result, error = None, None
     try:
-        result = main(arguments)
+        # 观察线程已启动，profile 仅安装到之后的 App executor；现有 main hook
+        # 保持原状，成功/异常均先恢复 thread hook，再沿原 final/模式出口收尾。
+        with phases.installed():result = main(arguments)
         return result
     except BaseException:
         error = traceback.format_exc()
@@ -311,5 +496,6 @@ def run_observed(root, arguments):
         after = observer.snapshot()
         _publish(root / "final.json", {"before": before, "after": after, "exit": result,
                  "error": error, "observer_errors": failures, "executable": sys.executable,
+                 "phase_profile": phases.snapshot(),
                  "python": list(sys.version_info[:3]),
                  "windows_curses": importlib.metadata.version("windows-curses")})

@@ -7,6 +7,7 @@ ReadConsoleOutputW 等 Win32 读取。Mac 的导入或 skip 不计入任何原�
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import importlib.metadata
 import json
@@ -15,19 +16,22 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import unittest
 from unittest.mock import patch
 import uuid
+import weakref
 
 from lib import runtime_store
 from lib.install.install_process import capture_process
 from lib.central.role_preferences import snapshot as preference_snapshot
 from lib.hosts.native_context import HostPaths, NativeContext
 from manager import central_runtime, model_preferences, project_service, service
+from manager.tui_state import Job
 from tests.windows_conpty import ConPTYProcess
-from tests.windows_console_observer import _publish, message_path, read_message
+from tests.windows_console_observer import PhaseProfile, _publish, message_path, read_message
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -45,6 +49,150 @@ def isolated_environment(home):
     environment.update(HOME=str(home), USERPROFILE=str(home),
                        APPDATA=str(home / "AppData/Roaming"), LOCALAPPDATA=str(home / "AppData/Local"))
     return environment
+
+
+class ConsolePhaseProfilePortableTest(unittest.TestCase):
+    """执行真正 Job/profile/read_operation 的 portable 合同，不依赖终端或原生 API。"""
+
+    def test_job_refresh_profiles_outer_lease_and_preserves_hooks(self):
+        main_before, thread_before = sys.getprofile(), threading.getprofile()
+        hits = {"main": 0, "thread": 0}
+        def marker():return None
+        def main_hook(frame,event,arg):
+            if main_before is not None:main_before(frame,event,arg)
+            if event == "call" and frame.f_code is marker.__code__:hits["main"] += 1
+        def thread_hook(frame,event,arg):
+            if thread_before is not None:thread_before(frame,event,arg)
+            if event == "call":hits["thread"] += 1
+        class PrivateValue:pass
+        original_finish=runtime_store.CoreReadOperation.finish
+        sys.setprofile(main_hook);threading.setprofile(thread_hook)
+        try:
+            for fails in (False,True):
+                with self.subTest(fails=fails):
+                    profile=PhaseProfile();self.assertFalse(profile.binding_incomplete)
+                    body_done,tail_entered,release=threading.Event(),threading.Event(),threading.Event()
+                    resources=[]
+                    def operation():
+                        local=PrivateValue();local.secret="PROFILE-PRIVATE-LOCAL";resources.append(weakref.ref(local))
+                        value=PrivateValue();value.secret="PROFILE-PRIVATE-RETURN"
+                        return value
+                    @runtime_store.read_operation
+                    def body():
+                        local=PrivateValue();local.secret="PROFILE-PRIVATE-BODY";resources.append(weakref.ref(local))
+                        body_done.set()
+                        return "PROFILE-PRIVATE-BODY-RETURN"
+                    @runtime_store.read_operation
+                    def another_body():return None
+                    # 两个真实装饰器 code 相同，但都不是 load_context body；
+                    # 采样只能聚合 wrapper，不能从共用 code 猜测业务函数归属。
+                    self.assertIs(body.__code__,another_body.__code__)
+                    self.assertIs(body.__code__,model_preferences.load_context.__code__)
+                    def controlled_finish(read_operation):
+                        tail_entered.set()
+                        if not release.wait(5):raise RuntimeError("测试未释放 lease 尾验")
+                        result=original_finish(read_operation)
+                        if fails:raise ValueError("controlled tail failure")
+                        return result
+                    job=Job(refresh=lambda result:(body(),another_body()))
+                    raised=False
+                    try:
+                        # 只控制真实 lease 的退出时刻；phase 必须等 Job 的 refresh
+                        # lambda 整体返回，不能在已返回的 body 处提前结束。
+                        with patch.object(runtime_store.CoreReadOperation,"finish",controlled_finish),profile.installed():
+                            marker();self.assertIs(sys.getprofile(),main_hook)
+                            with ThreadPoolExecutor(max_workers=1) as executor:
+                                future=executor.submit(job.execute,operation)
+                                try:
+                                    self.assertTrue(tail_entered.wait(2));self.assertTrue(body_done.is_set())
+                                    self.assertFalse(future.done())
+                                    snapshot=profile.snapshot();current=snapshot["workers"][0]["job"]
+                                    self.assertEqual(current["phase"],"refresh");self.assertFalse(current["closed"])
+                                    self.assertIsNotNone(current["phases"]["operation"]["ended_ns"])
+                                    refresh=current["phases"]["refresh"]
+                                    self.assertIsNone(refresh["ended_ns"])
+                                    self.assertEqual(refresh["functions"]["read_operation.wrapper"]["inflight"],1)
+                                    self.assertEqual(refresh["functions"]["load_context.body"]["calls"],0)
+                                    self.assertTrue(resources);self.assertTrue(all(ref() is None for ref in resources))
+                                    self.assertNotIn("PROFILE-PRIVATE",json.dumps(snapshot))
+                                finally:release.set()
+                                future.result(timeout=5)
+                    except ValueError as exc:
+                        self.assertTrue(fails);self.assertEqual(str(exc),"controlled tail failure");raised=True
+                    self.assertEqual(raised,fails)
+                    self.assertIs(threading.getprofile(),thread_hook);self.assertIs(sys.getprofile(),main_hook)
+                    done=profile.snapshot();self.assertFalse(done["recording_error"])
+                    current=done["workers"][0]["job"];self.assertTrue(current["closed"])
+                    self.assertIsNone(current["phase"]);self.assertFalse(current["incomplete"])
+                    refresh=current["phases"]["refresh"]
+                    self.assertGreaterEqual(refresh["elapsed_ns"],snapshot["workers"][0]["job"]["phases"]["refresh"]["elapsed_ns"])
+                    expected=1 if fails else 2
+                    for label in ("read_operation.wrapper","CoreReadOperation.finish"):
+                        self.assertEqual(refresh["functions"][label]["calls"],expected)
+                        self.assertEqual(refresh["functions"][label]["returns"],expected)
+                        self.assertEqual(refresh["functions"][label]["inflight"],0)
+                    self.assertEqual(set(refresh["functions"]),set(PhaseProfile.LABELS))
+                    # return/unwind 不代表业务成功；异常照常传播，结果无成功标志
+                    # 或参数/返回值/局部对象。正常和异常均不得握持执行帧。
+                    self.assertNotIn("success",current);self.assertNotIn("PROFILE-PRIVATE",json.dumps(done))
+                    self.assertTrue(all(ref() is None for ref in resources));marker()
+            self.assertGreaterEqual(hits["main"],4);self.assertGreater(hits["thread"],0)
+        finally:
+            threading.setprofile(thread_before);sys.setprofile(main_before)
+
+    def test_profile_bounds_and_incomplete_binding(self):
+        @runtime_store.read_operation
+        def leaf():return None
+        profile=PhaseProfile()
+        def many_events():
+            for _ in range(1400):leaf()
+        with profile.installed(),ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(Job().execute,many_events).result(timeout=5)
+            phase=profile.snapshot()["workers"][0]["job"]["phases"]["operation"]
+            self.assertTrue(phase["overflow"]);self.assertTrue(phase["incomplete"])
+            self.assertLessEqual(phase["events"],PhaseProfile.MAX_PHASE_EVENTS)
+            # 超出 job 数也不建立历史列表；后续真实 Job 仍正常执行，只有诊断
+            # 标记不完整，当前/最近记录和所有计数持续受固定上限约束。
+            for _ in range(PhaseProfile.MAX_JOBS+1):executor.submit(Job().execute,lambda:None).result(timeout=2)
+        bounded=profile.snapshot();worker=bounded["workers"][0]
+        self.assertTrue(bounded["overflow"]);self.assertEqual(worker["jobs"],PhaseProfile.MAX_JOBS)
+        self.assertLessEqual(worker["events"],PhaseProfile.MAX_WORKER_EVENTS)
+        self.assertLessEqual(bounded["events"],PhaseProfile.MAX_EVENTS)
+        deep=PhaseProfile()
+        @runtime_store.read_operation
+        def nested(depth):
+            if depth:nested(depth-1)
+        with deep.installed(),ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(Job().execute,lambda:nested(80)).result(timeout=5)
+        phase=deep.snapshot()["workers"][0]["job"]["phases"]["operation"]
+        self.assertTrue(phase["overflow"]);self.assertTrue(phase["incomplete"])
+        self.assertLessEqual(phase["functions"]["read_operation.wrapper"]["calls"],PhaseProfile.MAX_ACTIVE)
+        workers=PhaseProfile();release=threading.Event();ready=[threading.Event() for _ in range(5)]
+        def wait(index):
+            ready[index].set()
+            if not release.wait(5):raise RuntimeError("测试未释放 profile worker")
+        with workers.installed(),ThreadPoolExecutor(max_workers=5) as executor:
+            futures=[executor.submit(Job().execute,lambda index=index:wait(index)) for index in range(5)]
+            try:
+                self.assertTrue(all(event.wait(2) for event in ready))
+                snapshot=workers.snapshot();self.assertTrue(snapshot["overflow"])
+                self.assertEqual(len(snapshot["workers"]),PhaseProfile.MAX_WORKERS)
+            finally:release.set()
+            for future in futures:future.result(timeout=5)
+        # 两个调用位于同一行时无法唯一绑定，明确 incomplete；不能拿 CALL
+        # cache offset 或同名 lambda 猜测 phase。这个函数只用于元数据负控。
+        def ambiguous(self,operation):operation();self.refresh(None)
+        with patch.object(Job,"execute",ambiguous):
+            incomplete=PhaseProfile().snapshot()
+            self.assertTrue(incomplete["binding_incomplete"]);self.assertEqual(incomplete["workers"],[])
+        # 元数据绑定有效但 callable 没有 Python call 根时，也必须明示缺失，
+        # 不把无计时记录当作已经量到零耗时；原任务仍照常返回真实结果。
+        missing=PhaseProfile()
+        with missing.installed(),ThreadPoolExecutor(max_workers=1) as executor:
+            self.assertEqual(executor.submit(Job().execute,list).result(timeout=2),[])
+        job=missing.snapshot()["workers"][0]["job"]
+        self.assertTrue(job["closed"]);self.assertTrue(job["incomplete"])
+        self.assertTrue(job["phases"]["operation"]["incomplete"])
 
 
 @unittest.skipUnless(os.name == "nt", "真实 Legacy/Win32 边界必须在 Windows 执行")
