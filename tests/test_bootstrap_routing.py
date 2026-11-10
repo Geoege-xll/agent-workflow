@@ -75,6 +75,46 @@ class BootstrapReferenceTest(unittest.TestCase):
         return (f"仅 Codex 首次编排时读取 [宿主细则](.agent-workflow/{target})\n"
                 f"<!-- bootstrap-contract: {target} -->\n")
 
+    def test_real_entries_accept_lf_crlf_mixed_and_eof(self):
+        for relative, target in BOOTSTRAP_TARGETS.items():
+            original = (PACK / relative).read_bytes()
+            detail = (PACK / target).read_bytes()
+            lf = original.decode("utf-8").replace("\r\n", "\n")
+            marker = "<!-- bootstrap-contract: " + target + " -->"
+            mixed = "".join(line[:-1] + "\r\n" if index % 2 and line.endswith("\n") else line
+                            for index, line in enumerate(lf.splitlines(keepends=True)))
+            eof = lf.replace(marker + "\n", "", 1).rstrip("\n") + "\n" + marker
+            for name, body in (("LF", lf), ("CRLF", lf.replace("\n", "\r\n")), ("mixed", mixed), ("EOF", eof)):
+                with self.subTest(entry=relative, line_ending=name):
+                    reads = []
+                    def read(reference):
+                        self.assertEqual(target, reference)
+                        reads.append(reference)
+                        return (PACK / reference).read_bytes().decode("utf-8")
+                    expanded = expand_bootstrap_contract(body, read, target)
+                    self.assertEqual([target], reads)
+                    self.assertIn(detail.decode("utf-8").rstrip(), expanded)
+                    self.assertNotIn("<!-- bootstrap-contract:", expanded)
+                    self.assertEqual(original, (PACK / relative).read_bytes())
+                    self.assertEqual(detail, (PACK / target).read_bytes())
+
+    def test_bootstrap_reference_line_damage_is_rejected_before_reading(self):
+        marker = "<!-- bootstrap-contract: " + TARGET + " -->"
+        route = "[Read](.agent-workflow/" + TARGET + ")\r\n"
+        bad = (marker + "\r", marker + "\r\r\n", marker + " extra\n", marker + " \r\n",
+               " " + marker + "\n", "prefix " + marker + "\r\n",
+               marker.replace(TARGET, "../secret.md") + "\r\n",
+               marker.replace(TARGET, "https://example.test/rules.md") + "\r\n")
+        for body in bad:
+            with self.subTest(body=body):
+                reads = []
+                def read(reference):
+                    reads.append(reference)
+                    self.fail("损坏或不在白名单的引用不能触达读取器")
+                with self.assertRaisesRegex(ValueError, "malformed"):
+                    expand_bootstrap_contract(route + body, read, TARGET)
+                self.assertEqual([], reads)
+
     def test_machine_expands_contract_without_expanding_auxiliary_links(self):
         reader = Mock(return_value="审批与 QA 完整约束\n")
         body = self.entry() + "[辅助项目事实](docs/PROJECT.md)\n"

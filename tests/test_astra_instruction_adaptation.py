@@ -7,6 +7,10 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
@@ -58,6 +62,84 @@ def without_model_protocol_literals(body: str, relative: str) -> str:
 
 
 class ProgressiveContractTest(unittest.TestCase):
+    def test_workflow_references_accept_lf_crlf_mixed_and_eof(self) -> None:
+        skill = PACK / "platforms/shared/skills/xy-build-verify"
+        original = (skill / "SKILL.md").read_bytes()
+        reference = "references/verification-scope.md"
+        detail = (skill / reference).read_bytes()
+        lf = original.decode("utf-8").replace("\r\n", "\n")
+        marker = "<!-- workflow-contract: " + reference + " -->"
+        mixed = "".join(line[:-1] + "\r\n" if index % 2 and line.endswith("\n") else line
+                        for index, line in enumerate(lf.splitlines(keepends=True)))
+        # EOF 样本保留完整入口和原路由，只将这一个标记移到文件末尾；不能
+        # 通过删规则、换成空引用或 read_text 的换行转换来掩盖原始字节缺陷。
+        eof = lf.replace(marker + "\n", "", 1).rstrip("\n") + "\n" + marker
+        for name, body in (("LF", lf), ("CRLF", lf.replace("\n", "\r\n")), ("mixed", mixed), ("EOF", eof)):
+            with self.subTest(line_ending=name):
+                reads = []
+                def read(relative):
+                    self.assertEqual(reference, relative)
+                    reads.append(relative)
+                    return (skill / relative).read_bytes().decode("utf-8")
+                expanded = expand_skill_contract(body, read)
+                self.assertEqual([reference], reads)
+                self.assertIn(detail.decode("utf-8").rstrip(), expanded)
+                self.assertNotIn("<!-- workflow-contract:", expanded)
+                self.assertEqual(original, (skill / "SKILL.md").read_bytes())
+                self.assertEqual(detail, (skill / reference).read_bytes())
+
+    def test_workflow_reference_line_damage_is_rejected_before_reading(self) -> None:
+        reference = "references/verification-scope.md"
+        marker = "<!-- workflow-contract: " + reference + " -->"
+        route = "[Read when needed](" + reference + ")\r\n"
+        bad = (marker + "\r", marker + "\r\r\n", marker + " extra\n", marker + " \r\n",
+               " " + marker + "\n", "prefix " + marker + "\r\n",
+               marker.replace(reference, "../secret.md") + "\r\n",
+               marker.replace(reference, "references/nested/rules.md") + "\r\n",
+               marker.replace(reference, "https://example.test/rules.md") + "\r\n")
+        for body in bad:
+            with self.subTest(body=body):
+                reads = []
+                def read(relative):
+                    reads.append(relative)
+                    self.fail("损坏的引用不能触达文件读取器")
+                with self.assertRaisesRegex(ValueError, "malformed"):
+                    expand_skill_contract(route + body, read)
+                self.assertEqual([], reads)
+
+    def test_shared_skill_sync_preserves_source_line_endings(self) -> None:
+        from lib.skills.shared_core_skills import SharedCoreSkillError, sync_skill_tree
+        source = PACK / "platforms/shared/skills/xy-build-verify"
+        lf = (source / "SKILL.md").read_bytes().replace(b"\r\n", b"\n")
+        mixed = b"".join(line[:-1] + b"\r\n" if index % 2 and line.endswith(b"\n") else line
+                         for index, line in enumerate(lf.splitlines(keepends=True)))
+        scratch = os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH") or os.environ.get("AWF_TEST_SCRATCH")
+        with tempfile.TemporaryDirectory(prefix="contract-source-", dir=scratch) as raw:
+            root = Path(raw)
+            for name, body in (("LF", lf), ("CRLF", lf.replace(b"\n", b"\r\n")), ("mixed", mixed)):
+                with self.subTest(line_ending=name):
+                    candidate, installed = root / (name + "-source"), root / (name + "-installed")
+                    shutil.copytree(source, candidate)
+                    (candidate / "SKILL.md").write_bytes(body)
+                    # 实际安全安装器读取原文件树；比较每个源文件摘要，证明解析
+                    # 接受 CRLF 后没有把安装正文/引用静默归一化成 LF。
+                    before = {path.relative_to(candidate): hashlib.sha256(path.read_bytes()).hexdigest()
+                              for path in candidate.rglob("*") if path.is_file()}
+                    sync_skill_tree(candidate, installed, "xy-build-verify")
+                    self.assertEqual(before, {relative: hashlib.sha256((installed / relative).read_bytes()).hexdigest()
+                                              for relative in before})
+                    self.assertEqual(before, {relative: hashlib.sha256((candidate / relative).read_bytes()).hexdigest()
+                                              for relative in before})
+            damaged, target = root / "damaged-source", root / "damaged-installed"
+            shutil.copytree(source, damaged)
+            marker = b"<!-- workflow-contract: references/verification-scope.md -->"
+            body = lf.replace(marker + b"\n", marker + b"\r\r\n")
+            (damaged / "SKILL.md").write_bytes(body)
+            with self.assertRaisesRegex(SharedCoreSkillError, "malformed workflow contract reference"):
+                sync_skill_tree(damaged, target, "xy-build-verify")
+            self.assertFalse(target.exists(), "损坏契约必须在目标创建前拒绝")
+            self.assertEqual(body, (damaged / "SKILL.md").read_bytes())
+
     def test_builtin_model_visible_sources_are_english_with_exact_protocol_exceptions(self) -> None:
         sources = [*(PACK / "product").glob("*.md"), *(PACK / "roles").glob("xy-*.md"),
                    PACK / "platforms/shared/AGENTS.product.tpl", PACK / "platforms/codex/WORKER_CONSTRAINTS.md",

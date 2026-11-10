@@ -11,7 +11,10 @@ import re
 from collections.abc import Callable
 
 
-INCLUDE = re.compile(r"(?m)^<!-- workflow-contract: (references/[a-z0-9-]+\.md) -->$")
+# 描述符安全读取保留原始 CRLF；多行 `$` 只停在 LF 前，会把合法 CR 当作
+# 标记后的内容而误拒绝。显式只容许 LF、CRLF 或 EOF，且不消费终止符，
+# 不归一化入口/安装字节。孤立 CR、重复 CR、空格及尾随文本仍不能形成标记。
+INCLUDE = re.compile(r"(?m)^<!-- workflow-contract: (references/[a-z0-9-]+\.md) -->(?=\r?\n|\Z)")
 
 # 根入口只允许引用已知的本包契约，不能把目录化升级变成任意文件包含机制。
 # 这些注释仅供安装器完整审计；宿主看到普通 Markdown 导航，仍按当前任务读取。
@@ -23,7 +26,7 @@ BOOTSTRAP_TARGETS = {
 BOOTSTRAP_INCLUDE = re.compile(
     r"(?m)^<!-- bootstrap-contract: ("
     + "|".join(re.escape(path) for path in BOOTSTRAP_TARGETS.values())
-    + r") -->$"
+    + r") -->(?=\r?\n|\Z)"
 )
 
 
