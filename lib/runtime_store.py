@@ -912,12 +912,16 @@ def _verify_snapshot(root: int, expected: dict, *, source=False) -> None:
         if (*_identity(os.fstat(descriptor)), *_security(descriptor)) != expected[relative]:
             raise RuntimeStoreError(f"核心快照在操作期间变化：{relative or '.'}")
         for name, path in sorted(children[relative]):
-            info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
             if path in children:
+                # 目录的进入stat、打开后身份核对及退出stat统一归子目录守卫。
+                # visit仍在前后核对完整metadata/ACL/成员；这里预读的stat没有
+                # 参与任何比较，Windows还会为它重开祖先链，因此不重复读取。
                 with _child_directory(descriptor, name) as child:
                     visit(child, path)
-            elif _entry_identity(descriptor, name, info) != expected[path]:
-                raise RuntimeStoreError(f"核心快照在操作期间变化：{path}")
+            else:
+                info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                if _entry_identity(descriptor, name, info) != expected[path]:
+                    raise RuntimeStoreError(f"核心快照在操作期间变化：{path}")
         # 子节点读取期间父目录新增/删除/换名或ACL变化仍须被拒绝；目录链的
         # 叶名身份由 _child_directory 的退出检查独立复核，不能遗漏祖先交换。
         check_members(descriptor, relative)

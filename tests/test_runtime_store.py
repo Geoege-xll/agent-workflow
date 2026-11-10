@@ -443,6 +443,53 @@ class RuntimeStoreTest(unittest.TestCase):
                     finally:
                         fs._close(handle)
 
+    def test_recursive_snapshot_directory_stats_have_one_guard_owner(self):
+        """真实源及reader首尾验证只由目录守卫持有两次stat，文件见证与源过滤不减。"""
+        payload = b"# nested real source\n"
+        self.write("lib/deep/nested/probe.py", payload)
+        (self.source / "manager/empty").mkdir()
+        original_verify, original_stat = store._verify_snapshot, store.os.stat
+        observations, expected_counts = [], []
+
+        def counted_verify(root, expected, *, source=False):
+            # 只在一次完整verify内部观察真实OS边界；不统计建树、scan、成员读取
+            # 或外层祖先守卫，也不伪造stat结果、目录句柄或任何安全验证的返回值。
+            directories = sum(bool(path) and stat.S_ISDIR(value[2]) for path, value in expected.items())
+            files = sum(stat.S_ISREG(value[2]) for value in expected.values())
+            counts = {"directory": 0, "file": 0, "other": 0}
+
+            def counted_stat(*args, **kwargs):
+                info = original_stat(*args, **kwargs)
+                kind = "directory" if stat.S_ISDIR(info.st_mode) else "file" if stat.S_ISREG(info.st_mode) else "other"
+                counts[kind] += 1
+                return info
+
+            with patch.object(store.os, "stat", side_effect=counted_stat):
+                original_verify(root, expected, source=source)
+            observations.append((source, directories, files, counts))
+            # 每个非根目录必须仍有进入/退出两次路径身份见证，每个文件必须仍有
+            # 一次fresh叶名stat。源模式另有成员过滤的前后检查，不能为计数省掉；
+            # 本夹具没有忽略项，根以下每个条目都应贡献这两次独立过滤stat。
+            filtered_directories = sum("/" in path and stat.S_ISDIR(value[2]) for path, value in expected.items()) if source else 0
+            filtered_files = sum("/" in path and stat.S_ISREG(value[2]) for path, value in expected.items()) if source else 0
+            expected_counts.append({"directory": 2 * directories + 2 * filtered_directories,
+                                    "file": files + 2 * filtered_files, "other": 0})
+
+        with store._absolute_directory(self.source) as root:
+            _, _, snapshot = store._scan(root, source=True)
+            counted_verify(root, snapshot, source=True)
+        core = self.imported()
+        # 正常reader必须实际完成初验和退出尾验，不能把只调用一次私有函数的
+        # 计数当成完整消费者证明。已选成员仍按原路径fresh读取并返回原始字节。
+        with patch.object(store, "_verify_snapshot", side_effect=counted_verify):
+            with store.core_reader(core.binding(), self.state) as reader:
+                self.assertEqual(payload, reader.read(core, "lib/deep/nested/probe.py"))
+        self.assertEqual([True, False, False], [row[0] for row in observations])
+        self.assertEqual(1, len({(row[1], row[2]) for row in observations}))
+        self.assertGreater(observations[0][1], len(store.CORE_DIRECTORIES), "夹具必须包含实际嵌套目录及空目录")
+        self.assertEqual(expected_counts, [row[3] for row in observations],
+                         "真实OS计数(source, D, F, counts)：" + repr(observations))
+
     def test_recursive_snapshot_rejects_unknown_members_and_directory_exchange(self):
         """目录句柄复用仍逐成员核验，未知节点不靠可重置mtime判断，源过滤不扩张。"""
         core = self.imported()
