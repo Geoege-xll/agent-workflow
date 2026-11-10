@@ -78,6 +78,9 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_runtime.WindowsFilesystemNativeTest",
             "tests.test_windows_fs_native.WindowsSafePrimitivesNativeTest",
             "tests.test_install_process_windows.NativeWindowsJobTest",
+            # AGY 的发布/补偿/ACL 漂移消费者为普通 Windows fixture；独立
+            # owner-only 提升负控不继承此 TestCase，必须在下方单独组件登记。
+            "tests.test_antigravity_windows_native.AntigravityStageWindowsNativeTest",
             # 只收集当前 cmd/PowerShell 生产协议；旧 Git Bash 和自包含 Hook
             # 夹具不是原生支持合同，不可把含这些方法的整类静默升级为必跑。
             "tests.test_windows_hook_command.NativeWindowsHookProtocolTest.test_cmd_actual_command_string_protocol",
@@ -96,6 +99,10 @@ NATIVE_COMPONENTS = {
             "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_rejects_source_drift_before_any_temporary_or_publish",
             "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_precedes_last_fresh_cas_and_settlement_sources",
             "tests.test_runtime_store.RuntimeStoreTest.test_windows_literal_roots_do_not_alias_operation_or_core_locators",
+            # 同一预算消费者同时验证便携 CI 与 Windows 实际文件链；共享登记
+            # 避免将含原生/提升类的整个 AGY 模块塞进普通 CI 或重复运行两方法。
+            "tests.test_antigravity_windows_native.AntigravityFileBudgetTest.test_large_root_publication_restore_and_cleanup_keep_original_eight_mib_boundary",
+            "tests.test_antigravity_windows_native.AntigravityFileBudgetTest.test_merged_overflow_controlled_docs_and_codex_caps_reject_before_stage_or_backup",
         ),
         "qualification": "ordinary",
         "node_required": False, "curses_required": False,
@@ -124,6 +131,9 @@ NATIVE_COMPONENTS = {
     "windows-native-central-boundaries": {
         "targets": (
             "tests.test_central_project.WindowsCentralComposedNativeTest.test_project_junction_is_rejected_before_resolve_and_writes",
+            # 创建/封口故障与 ready-save 顺序使用独立普通 Windows fixture；
+            # central_project 在便携 CI 已整模块覆盖，不再补精确子方法选择。
+            "tests.test_central_project.WindowsStageConsumerNativeTest",
             "tests.test_runtime_store.RuntimeStoreTest.test_explicit_core_reader_is_scoped_fresh_and_rejects_wrong_core_or_member",
             "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_rejects_unknown_members_and_directory_exchange",
             # central_project 已整体进入普通 ci；这里只补原生侧，不再重复其
@@ -194,6 +204,17 @@ NATIVE_COMPONENTS = {
         "targets": (
             "tests.test_runtime_store.WindowsCaseSensitiveCoreNativeTest.test_case_sensitive_ntfs_roots_get_independent_readers_and_guards",
             "tests.test_runtime_store.WindowsCaseSensitiveCoreNativeTest.test_case_sensitive_ntfs_fixed_runner_rejects_cross_root_before_cas",
+        ),
+        "qualification": "elevated",
+        "node_required": False, "curses_required": False,
+    },
+    "windows-native-security-ownership": {
+        # Server 管理员夹具需真实 BA→当前合法 SID 的 owner-only 差异；可信
+        # System32 whoami/icacls 与既有 PS7 Get-Acl 仅操作本例临时文件。
+        # 无差异/能力不足必须 FAIL，不改产品权限、不要求普通桌面用户提权；
+        # 独立于 NTFS flag 专项，desktop 仍由同一资格规则明确排除此组件。
+        "targets": (
+            "tests.test_antigravity_windows_native.AntigravityOwnerSecurityWindowsElevatedTest.test_owner_only_drift_preserves_published_and_backup_nodes_during_rollback_and_cleanup",
         ),
         "qualification": "elevated",
         "node_required": False, "curses_required": False,

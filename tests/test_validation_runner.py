@@ -213,6 +213,17 @@ class ExampleTest(unittest.TestCase):
         boundaries = runner.NATIVE_COMPONENTS["windows-native-central-boundaries"]
         self.assertEqual("ordinary", boundaries["qualification"])
         self.assertTrue(set(read_preparation + central_preview).issubset(runner.component_targets(boundaries)))
+        self.assertIn("tests.test_central_project.WindowsStageConsumerNativeTest", runner.component_targets(boundaries))
+        libraries = runner.NATIVE_COMPONENTS["windows-native-libraries"]
+        self.assertIn("tests.test_antigravity_windows_native.AntigravityStageWindowsNativeTest", runner.component_targets(libraries))
+        budget = tuple("tests.test_antigravity_windows_native.AntigravityFileBudgetTest." + name for name in (
+            "test_large_root_publication_restore_and_cleanup_keep_original_eight_mib_boundary",
+            "test_merged_overflow_controlled_docs_and_codex_caps_reject_before_stage_or_backup",
+        ))
+        self.assertTrue(set(budget).issubset(libraries["portable_ci_targets"]))
+        ownership = runner.NATIVE_COMPONENTS["windows-native-security-ownership"]
+        self.assertEqual("elevated", ownership["qualification"])
+        self.assertFalse(ownership["node_required"] or ownership["curses_required"])
         self.assertTrue(set(role_final_read).isdisjoint(runner.GROUPS["windows-native"]))
         for selectors in (("ci",),("central","service","ci")):
             with self.subTest(selectors=selectors):
@@ -225,6 +236,9 @@ class ExampleTest(unittest.TestCase):
                 # 新保存预览的真实 App 回归必须经唯一 ci 清单运行，且组合选择不能重复。
                 self.assertEqual(1, targets.count("tests.test_manager_tui.TuiTest.test_save_preview_blocked_validation_keeps_ui_responsive_and_drafts"))
                 self.assertIn("tests.test_manager_tui.ProjectTuiIntegrationTest.test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize",targets)
+                # AGY 只精确共享 budget；整个模块还含 Windows/提升 TestCase，
+                # 不能为满足便携回归而重复运行预算节点或误把平台 skip 当证据。
+                self.assertNotIn("tests.test_antigravity_windows_native", targets)
                 for target in read_preparation + central_preview + role_final_read:
                     self.assertEqual(1, sum(target == parent or target.startswith(parent + ".") for parent in targets))
                 for component in runner.NATIVE_COMPONENTS.values():
@@ -536,6 +550,16 @@ Write-Output 'DESKTOP_SCOPE_REAL_CONSUMER_OK'
             selected, excluded = set(description["selected"]["ids"]), set(description["excluded"]["ids"])
             self.assertFalse(selected.intersection(excluded))
             self.assertEqual(set(description["registry"]["ids"]), selected | excluded)
+            # 实际 PowerShell 消费应随唯一 registry 排除所有提升专项，不能
+            # 固定旧 NTFS 数量。这里复用原 loader 只收集提升节点，不执行夹具。
+            spec = importlib.util.spec_from_file_location("validation_scope_elevated_registry", PACK / "scripts/test_workflow.py")
+            runner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runner)
+            expected = {case.id() for component in runner.NATIVE_COMPONENTS.values()
+                        if component["qualification"] == "elevated"
+                        for target in runner.component_targets(component)
+                        for case in runner.load_target(target, runner.make_parser())}
+            self.assertEqual(expected, excluded)
 
 
 if __name__ == "__main__":
