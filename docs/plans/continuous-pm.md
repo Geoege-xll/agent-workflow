@@ -49,7 +49,9 @@ HTML 计划生成的公开入口和流程要求已暂停，代码以注释保留
 
 ## 验收结果与当前已交付行为
 
-尚未取得本轮整体验收、最终独立 QA 或发布结果。工作树候选为2.1.4，主仓 main、本机及公开渠道仍是2.1.3；不得将候选、静态检查、模拟或部分 Windows 节点作为新版已发布/全平台已验收的证据。
+本机已按最新授权先行更新为2.1.4候选版：同源Mac285项340.176秒exit0（280通过/5 Windows-only skip），真实PTY两节点均通过，同一Reviewer允许本机候选更新。来源提交6eac3ea、双构建归档SHA7c516caf34bf10bdfff3370913c33b83efc55f5d3e51150261b44e10a3168259；实际Homebrew程序根为/opt/homebrew/Cellar/awf-cli/2.1.4/libexec。Homebrew标准README搬移与两Node首行改写已逐字节核实，185文件直接同归档、其余3项仅上述标准处理。实际安装后新CLI预览/导入/激活全部exit0，current为1b9b2b54738c92b27ff64caf1058b854e1daef378a1f32c0c4e7edfbc305da3e。三个登记项目enabled/follow/healthy，零冲突与pending，54个Skill软链指向同一新core，项目角色与全局偏好、主目录五原修改均保持。旧核心/任务pin未清理，公共Tap Formula恢复原字节且clean，brew test临时开启的developer模式已恢复off。详证在请求暂存区local-first-upgrade-result.json及原始日志。
+
+尚未取得本轮整体验收、最终独立QA或稳定发布结果。主仓main与GitHub/Tap正式版仍为2.1.3；本机候选先行不代表Windows生产路径、Win11桌面或全平台已验收。接下来继续唯一registry143方法的真实Windows门禁与固定SHA桌面脚本，必要修复仍由原职责实例与同一Reviewer闭合，正式发行后按最终归档更新本机。
 
 ## 批准依据与必要证据
 

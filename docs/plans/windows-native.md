@@ -35,7 +35,7 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 ## 当前进展与恢复入口
 
-基线main为1235951，公开与本机仍为2.1.3，候选2.1.4。独立职责工作树保留主目录五处dirty、交接及业务资料。用户已授权必要验收与独立QA后发布、升级；此前暂停的Windows已由本轮明确恢复，npm/npx不恢复。
+基线main为1235951，公开仍为2.1.3，本机已按最新授权先行升级为2.1.4候选；Windows尚未最终验收。独立职责工作树保留主目录五处dirty、交接及业务资料。用户已授权必要验收与独立QA后发布、升级；此前暂停的Windows已由本轮明确恢复，npm/npx不恢复。
 
 真实Server2025 x64/NTFS探针和消费者已取得目录flush、完整身份/ACL、条件发布、创建句柄归属、中央Skill软链与Job/ConPTY收尾证据；ChangeTime不能单独证明安全，未宣称耐断电或Win11普通用户等价。记录before保完整恢复正文，after只存严格条件守卫，能力选择保护所有相关固定reader，原4MiB/超限零写/pending及旧reader保护保持。
 
@@ -49,13 +49,13 @@ TUI五次模型/推理保存实际成功，项目保存约19.8秒、两次全局
 
 此前完整门禁的唯一原生registry实际收集9组件121方法（48/6/1/8/8/3/4/41/2）；本轮新增生产原语、中央/AGY与独立owner权限节点后，最终数量必须从同一登记重新实际收集。PR/发行仅接受Server full，任何selected skip/缺组/取消/未执行均拒。普通desktop明确排除提升NTFS2与owner权限1共3项，不按权限自动降级；两个新中央guard节点进ordinary boundaries，RolePrefs两个新回归仅POSIX CI，避免顶层pty/termios/curses依赖冒充原生。提升flag只改测试自有空目录，生产不设置、不新增用户提权/WSL要求。
 
-稳定候选后向用户提供固定SHA、可审阅的PowerShell7+入口；用户Win11机器可运行但已要求先整体开发。脚本保存scope.json及acceptance.json，成功SCOPED_PASS、scope=windows11-client-ordinary、full_registry_executed=false，selected/excluded实际数量来自同registry；补入新节点后重新派生，describe仅收集不是执行PASS。脚本保原CPython/x64/curses版本与prefix记录，锁哈希由CI安装准备验证，不新增私有venv或已装wheel哈希准入。用户2026-11-10最新授权将本机更新提前：macOS完整检查和真实PTY/TUI通过后先安装2.1.4候选程序与中央current，再继续真实Windows。完整同候选Server门禁、Win11桌面及最终统一QA完成后才正式发布GitHub/Tap；当前本机候选安装、Windows验收及正式发布均尚未完成。
+稳定候选后向用户提供固定SHA、可审阅的PowerShell7+入口；用户Win11机器可运行但已要求先整体开发。脚本保存scope.json及acceptance.json，成功SCOPED_PASS、scope=windows11-client-ordinary、full_registry_executed=false，selected/excluded实际数量来自同registry；补入新节点后重新派生，describe仅收集不是执行PASS。脚本保原CPython/x64/curses版本与prefix记录，锁哈希由CI安装准备验证，不新增私有venv或已装wheel哈希准入。用户2026-11-10最新授权将本机更新提前：macOS完整检查和真实PTY/TUI通过后先安装2.1.4候选程序与中央current，再继续真实Windows。完整同候选Server门禁、Win11桌面及最终统一QA完成后才正式发布GitHub/Tap；本机候选安装已完成，Mac285项340.176秒exit0（5项Windows-only skip不作原生证明）、真实PTY2均通过并获同一Reviewer本机候选许可；来源6eac3ea/归档7c516caf…8259。Homebrew实际程序2.1.4与中央current 1b9b2b54738c92b27ff64caf1058b854e1daef378a1f32c0c4e7edfbc305da3e已由原CLI导入/预览/激活exit0，三个登记项目healthy/follow、54软链及模型偏好保持。Windows验收及正式发布仍待。
 
 探针、原始失败、实际修复及源审分别保存在native-windows-20261109、upgrade-214-20261109暂存区和Git历史。当前主题仅保留必要架构与恢复信息，不以部分节点、模拟或取消改写整体验收。
 
 ## 验收结果与当前已交付行为
 
-本主题尚无已验收基线；公开2.1.3及已绑定业务项目保持原状。不得将未来计划、模拟结果、部分节点或Windows Server CI当作Windows11桌面全验收。
+本主题尚无Windows已验收基线；公开渠道仍为2.1.3，本机及三个跟随项目已按最新授权先行使用2.1.4候选中央核心，项目资料/启停选择/模型偏好保留。该Mac本机更新不等于Windows验收；不得将未来计划、模拟结果、部分节点或Windows Server CI当作Windows11桌面全验收。
 
 ## 批准依据与必要证据
 
