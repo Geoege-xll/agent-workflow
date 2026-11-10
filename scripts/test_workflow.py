@@ -96,6 +96,8 @@ NATIVE_COMPONENTS = {
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_checkpoint_rejects_unread_member_and_ancestor_drift",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_isolates_roots_pins_threads_processes_and_module_aliases",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_checkpoint_keeps_manifest_version_mode_and_member_guards",
+            # 递归目录 stat 由单一快照守卫负责，精确验证收束后的目录身份边界。
+            "tests.test_runtime_store.RuntimeStoreTest.test_recursive_snapshot_directory_stats_have_one_guard_owner",
             "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_rejects_source_drift_before_any_temporary_or_publish",
             "tests.test_task_graph_records.RecordPublicationTest.test_operation_finish_precedes_last_fresh_cas_and_settlement_sources",
             # Records 独立脚本/包导入的发布消费者应共享目录 fd 注册与读取
