@@ -66,6 +66,26 @@ def native_policy_observation(policy):
             "owner_sid_sha256": hashlib.sha256(policy.owner).hexdigest(), "security_sha256": policy.fingerprint}
 
 
+def _native_snapshot_preserving_position(handle, *, max_bytes):
+    """完整观测借用HANDLE，不消费生产已读到EOF或仍待写入的文件游标。
+
+    HANDLE不是CRT fd；用官方SetFilePointerEx的64位位置读取/定位接口，在
+    同一HANDLE上临时从0读取真实快照。包括快照读取失败在内，finally始终
+    恢复原位置；不关闭借用HANDLE、不重新开路径、不改变完整前像比较。
+    https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfilepointerex
+    """
+    move = fs._api().kernel.SetFilePointerEx
+    move.argtypes = [fs.HANDLE, ctypes.c_longlong, ctypes.POINTER(ctypes.c_longlong), fs.DWORD]
+    move.restype = fs.BOOL
+    original = ctypes.c_longlong()
+    fs._check(move(handle, 0, ctypes.byref(original), 1))  # FILE_CURRENT + 0只查询当前位置。
+    try:
+        fs._check(move(handle, 0, None, 0))  # FILE_BEGIN，完整观测不能从当前EOF起读。
+        return fs._opened_snapshot(handle, max_bytes=max_bytes)
+    finally:
+        fs._check(move(handle, original.value, None, 0))
+
+
 def _native_clone_observation(handle, *, label):
     """只读同一真实 HANDLE 的权限、SDDL 与元数据，不改变 ACL 或文件游标。
 
@@ -465,14 +485,19 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
         return target, parent, before, approved, invoke
 
     def _invoke_public_custom_with_security_trace(self, writer, target, parent, before, invoke):
-        """只观测原失败夹具的真实SD；原创建/共享/精确比较与异常原样执行。
+        """观测原失败夹具的真实SD及初始化；所有成功均来自真实系统调用。
 
-        生产CreateFile返回时借同一HANDLE采初始stage，不重开未封口stage；
-        只读探针不修ACL、不调整control、不替换预期值。失败后仍保留原异常，
-        finally记录源/父与已保留stage；只输出SDDL的SID标记、原字节摘要和身份。
+        保留raw CreateFile时点，不能将尚缺AI的内核状态写成已完整初始化。
+        真正SetSecurityInfo返回后、首payload前仍借原HANDLE读完整SD；独立
+        READ/WRITE/DELETE重开必须全部报sharing32。探针不修ACL、不替换预期，
+        失败仍保原异常与finally证据；日志不输出正文或原始动态SID。
         """
-        native_open = fs._open_handle
+        native_open, api = fs._open_handle, fs._api()
+        native_set = api.security.SetSecurityInfo
+        get_flags = api.kernel.GetHandleInformation
+        get_flags.argtypes, get_flags.restype = [fs.HANDLE, ctypes.POINTER(fs.DWORD)], fs.BOOL
         stages, snapshots, observations, probe_errors = [], {}, {}, []
+        stage_handles, source_handles, set_calls = {}, [], []
         failure = None
         def emit(event, value):
             print("NATIVE_PUBLIC_WRITER_CUSTOM_SD " + json.dumps(
@@ -484,9 +509,9 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             try:
                 value = _native_clone_observation(handle, label=event)
                 if stat.S_ISREG(value["identity"][2]):
-                    # 初始stage确定为空，读取不会移动其0游标；源/闭合stage也只
-                    # 使用这个自有观测句柄读取，正文仅输出长度与SHA256。
-                    node = fs._opened_snapshot(handle, max_bytes=1 if event == "stage-initial" else fs._LIMIT)
+                    # 源HANDLE由生产借出且可能已完整读至EOF；观测必须从0读
+                    # 全量并恢复原游标，stage也统一守住首写位置。正文只留摘要。
+                    node = _native_snapshot_preserving_position(handle, max_bytes=1 if event in ("stage-initial", "stage-initialized") else fs._LIMIT)
                     if (node["identity"] != tuple(value["identity"])
                             or node["security"] != value["security_sha256"]):
                         raise ValueError("custom SD fixture changed between descriptor and bounded observation")
@@ -514,12 +539,61 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
         observe_path("source-before", target)
         def opening(path, access=0x80, **kwargs):
             handle = native_open(path, access, **kwargs)
+            if Path(path) == target and access == fs.READ:
+                source_handles.append(handle)
             if kwargs.get("create") and kwargs.get("exclusive") and Path(path).parent == target.parent:
                 stages.append(Path(path))
+                stage_handles[handle] = Path(path)
                 observe("stage-initial", handle)
+                try:
+                    flags = fs.DWORD()
+                    fs._check(get_flags(handle, ctypes.byref(flags)))
+                    self.assertEqual(0, flags.value & 1, "创建HANDLE不得可继承")
+                    self.assertEqual(0, kwargs["sharing"])
+                    self.assertEqual(fs.READ | fs.WRITE | (fs.WRITE_DAC if observations["source-before"]["control"] & 0x1400 == 0x1400 else 0), access)
+                    attributes = ctypes.cast(kwargs["security"], ctypes.POINTER(fs._SecurityAttributes)).contents
+                    self.assertEqual(0, attributes.inherit)
+                    emit("stage-create-request", {"access": access, "sharing": kwargs["sharing"],
+                                                 "handle_inheritable": bool(flags.value & 1), "same_handle": True})
+                except BaseException:
+                    # 代理尚未把HANDLE交给生产，自己的断言失败也必须独占关闭。
+                    fs._close(handle)
+                    raise
             return handle
+        def setting(handle, kind, flags, owner, group, dacl, sacl):
+            # 代理只转发原调用一次，不修参数或将失败伪造成成功。该权限写入
+            # 必须仍在CREATE_NEW原HANDLE上，不得设置owner/group/SACL。
+            self.assertIn(handle, stage_handles)
+            self.assertEqual((1, 0x80000004), (kind, flags))
+            self.assertIsNone(owner); self.assertIsNone(group); self.assertIsNone(sacl)
+            self.assertTrue(dacl)
+            set_calls.append(handle)
+            emit("SetSecurityInfo.request", {"same_create_handle": True, "object_type": kind,
+                                              "security_information": flags})
+            result = native_set(handle, kind, flags, owner, group, dacl, sacl)
+            emit("SetSecurityInfo.result", {"return_code": int(result)})
+            if result == 0:
+                observe("stage-initialized", handle)
+                observe("permission-source-after-initialization", source_handles[-1])
+                # share0必须持续覆盖初始化及后续首写，安全权限本身仍由完整
+                # SD守卫负责；这里只证明三种数据/换名访问均被原HANDLE拒绝。
+                for label, access in (("read", fs.READ), ("write", fs.WRITE), ("delete", fs.DELETE)):
+                    foreign = None
+                    try:
+                        foreign = native_open(stage_handles[handle], access,
+                                              sharing=fs.SHARE_READ | fs.SHARE_WRITE | fs.SHARE_DELETE)
+                    except OSError as error:
+                        emit("stage-initialized.sharing", {"access": label, "winerror": error.winerror})
+                        self.assertEqual(32, error.winerror)
+                    else:
+                        self.fail("unfinished initialized stage admitted another " + label + " handle")
+                    finally:
+                        if foreign is not None:
+                            fs._close(foreign)
+            return result
         try:
-            with patch.object(fs, "_open_handle", new=opening):
+            with patch.object(fs, "_open_handle", new=opening), \
+                    patch.object(api.security, "SetSecurityInfo", new=setting):
                 return invoke()
         except BaseException as error:
             failure = error
@@ -538,11 +612,119 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
                 if (old_parent["identity"][:4] != new_parent["identity"][:4]
                         or any(old_parent[key] != new_parent[key] for key in ("security_sha256", "file_attributes"))):
                     probe_error("parent-preservation", ValueError("custom creation changed its parent identity or security"))
+            if failure is None:
+                try:
+                    initial, source = observations["stage-initial"], observations["source-before"]
+                    for key in ("owner_sid_sha256", "acl_sha256", "aces", "file_attributes"):
+                        self.assertEqual(source[key], initial[key], "raw-create." + key)
+                    self.assertEqual(before["mode"], stat.S_IMODE(initial["identity"][2]))
+                    if initial["security_sha256"] == source["security_sha256"]:
+                        self.assertEqual([], set_calls, "已完整相等的创建策略不得冗余改写")
+                    else:
+                        self.assertEqual(0x1400, source["control"] & 0x1400)
+                        self.assertEqual(source["control"] & ~0x400, initial["control"])
+                        self.assertEqual(1, len(set_calls))
+                        complete = observations["stage-initialized"]
+                        self.assertEqual(initial["identity"][:6], complete["identity"][:6])
+                        self.assertEqual(0, complete["identity"][4])
+                        self.assertEqual(before["mode"], stat.S_IMODE(complete["identity"][2]))
+                        for key in ("security_sha256", "control", "owner_sid_sha256", "acl_sha256", "aces", "file_attributes"):
+                            self.assertEqual(source[key], complete[key], "initialized." + key)
+                        self.assertEqual(before, snapshots["permission-source-after-initialization"])
+                except BaseException as error:
+                    probe_error("initialization-contract", error)
             if failure is not None:
                 for error in probe_errors:
                     failure.add_note("custom SD fixture observation failed: " + str(error))
             elif probe_errors:
                 raise probe_errors[0]
+
+    def test_protected_stage_initialization_denial_closes_unreturned_handle_and_preserves_source(self):
+        """只注入真实权限API的失败码；真实文件/HANDLE/关闭与原像不伪造。
+
+        自定义源保持真实P+AI，不强制私有化。若宿主原生创建已完整保留AI，
+        合法免写路径仍须精确匹配且不调用注入点；日志明确区分该情况。当前
+        已取证的9004宿主则必须命中一次失败、不得返回fd或认领清理stage。
+        """
+        import msvcrt
+        target, parent, before, _, _ = self._public_writer_fixture("protected-initialization-denied", "id", policy="custom")
+        name = ".protected-initialization-denied.stage"
+        stage = target.parent / name
+        native_open, native_close = fs._open_handle, fs._close
+        transfer, api = msvcrt.open_osfhandle, fs._api()
+        parent_handle = fs._handle_for_descriptor(parent, fs.secure_os)
+        parent_before = fs._metadata(parent_handle)
+        parent_attributes = fs._information(parent_handle).attributes
+        handles, closed, created, requests = {}, [], {}, []
+        def opening(path, access=0x80, **kwargs):
+            handle = native_open(path, access, **kwargs)
+            try:
+                if Path(path) == target:
+                    handles["source"] = handle
+                elif Path(path) == stage and kwargs.get("exclusive"):
+                    handles["stage"] = handle
+                    created.update(fs._opened_snapshot(handle, max_bytes=1))
+                return handle
+            except BaseException:
+                native_close(handle)
+                raise
+        def closing(handle):
+            closed.append(handle)
+            native_close(handle)
+        def denied(handle, kind, flags, owner, group, dacl, sacl):
+            self.assertEqual(handles["stage"], handle)
+            self.assertEqual((1, 0x80000004), (kind, flags))
+            self.assertIsNone(owner); self.assertIsNone(group); self.assertIsNone(sacl)
+            self.assertTrue(dacl)
+            requests.append(handle)
+            return 5  # 明确模拟拒绝，绝不模拟SetSecurityInfo成功。
+        descriptor, failure = None, None
+        with patch.object(fs, "_open_handle", new=opening), patch.object(fs, "_close", new=closing), \
+                patch.object(api.security, "SetSecurityInfo", new=denied), \
+                patch.object(msvcrt, "open_osfhandle", wraps=transfer) as transferring:
+            try:
+                descriptor, empty = fs.create_regular_stage(parent, name, permission_source=target.name, expected_source=before)
+            except OSError as error:
+                failure = error
+            finally:
+                if descriptor is not None:
+                    fs.secure_os.close(descriptor)
+            if created["security"] == before["security"]:
+                self.assertIsNone(failure)
+                self.assertEqual([], requests)
+                self.assertEqual(before["security"], empty["security"])
+                self.assertEqual(1, transferring.call_count)
+            else:
+                self.assertIsNotNone(failure)
+                self.assertEqual(5, failure.winerror)
+                self.assertEqual([handles["stage"]], requests)
+                self.assertIsNone(descriptor)
+                transferring.assert_not_called()
+                self.assertEqual(1, closed.count(handles["stage"]))
+            self.assertEqual(1, closed.count(handles["source"]))
+            # 在任何新open可能复用HANDLE值之前，先核两份所有权已经释放；
+            # caller借入的parent仍有效，不能由失败构造器关闭。
+            for handle in handles.values():
+                with self.assertRaises(OSError) as invalid:
+                    fs._information(handle)
+                self.assertEqual(6, invalid.exception.winerror)
+            fs._information(parent_handle)
+        after = fs.node_snapshot(parent, name)
+        self.assertEqual(before, fs.node_snapshot(parent, target.name))
+        self.assertEqual(created["identity"][:5], after["identity"][:5])
+        self.assertEqual(created["security"], after["security"])
+        self.assertEqual(b"", after["payload"])
+        parent_after = fs._metadata(parent_handle)
+        self.assertEqual(parent_before[0][:4], parent_after[0][:4])
+        self.assertEqual(parent_before[1], parent_after[1])
+        self.assertEqual(parent_attributes, fs._information(parent_handle).attributes)
+        print("NATIVE_PROTECTED_STAGE_DENIAL " + json.dumps({
+            "api_denial_reached": bool(requests), "unreturned_stage_preserved": descriptor is None,
+            "source_security": before["security"], "stage_security": after["security"],
+            "same_original_inode": after["identity"][:2] == created["identity"][:2],
+            "source_closed_once": closed.count(handles["source"]) == 1,
+            "raw_stage_close_count": closed.count(handles["stage"]), "creator_transfer_count": transferring.call_count,
+            "stage_handle_invalid_after_close": True}, sort_keys=True), flush=True)
 
     def test_public_writers_preserve_original_owner_dacl_and_missing_private_policy(self):
         """真实消费四写者及Hook process：默认/私有/自定义受保护源与missing。"""

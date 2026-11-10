@@ -29,6 +29,7 @@ BACKUP_SEMANTICS, OPEN_REPARSE_POINT = 0x02000000, 0x00200000
 NOFOLLOW, DIRECTORY, NONBLOCK = 0x10000000, 0x20000000, 0x40000000
 _EPOCH = 116444736000000000
 READ_CONTROL = 0x20000
+WRITE_DAC = 0x40000
 _LIMIT = 4 * 1024 * 1024
 
 
@@ -1272,13 +1273,53 @@ class _CreatedStageFile(namedtuple("_CreatedStageFileFacts", "parent handle empt
         self.parent.close()
 
 
+def _initialize_protected_stage_security(source, handle, *, policy, expected_source, created, attributes):
+    """只完成已证实P+AI源在创建时丢失AI的窄初始化，绝不接管其它差异。
+
+    CreateFile会按创建/继承规则构造SD，P并不保证复制AI。官方SetSecurityInfo
+    是NTFS HANDLE入口，当前继承模型可设置AI；保护标志始终保持，不能解除
+    保护重算父ACE。此处复用原严格双端设置/重读守卫，最终完整SD仍须精确相等。
+    https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
+    https://learn.microsoft.com/en-us/windows/win32/secauthz/automatic-propagation-of-inheritable-aces
+    """
+    if (created["payload"] or not _stat.S_ISREG(created["identity"][2])
+            or created["identity"][3:5] != (1, 0)
+            or created["mode"] != expected_source["mode"]):
+        raise ValueError("protected stage initialization requires its unchanged empty creation facts")
+    with _security_policy(handle) as initial:
+        if (initial.fingerprint != created["security"] or policy.control & 0x1400 != 0x1400
+                or initial.control != policy.control & ~0x400
+                or initial.owner != policy.owner or initial.acl_bytes != policy.acl_bytes):
+            raise ValueError("new stage differs beyond the protected source AUTO_INHERITED creation bit")
+    if (_metadata(handle) != (created["identity"], created["security"])
+            or _information(handle).attributes != attributes
+            or _metadata(source) != (expected_source["identity"], expected_source["security"])):
+        raise ValueError("source or empty stage changed before protected security initialization")
+    # 仍是CREATE_NEW原HANDLE，尚无payload/CRT fd/creator登记；这里只能用
+    # 已授权原源DACL+PROTECTED一次初始化，不设置owner/SACL、不开权限回退。
+    _copy_permissions(source, handle, expected_source_security=policy.fingerprint,
+                      expected_destination_security=created["security"])
+    complete = _opened_snapshot(handle, max_bytes=1)
+    # 尚无数据写入，ACL初始化只允许自己的ChangeTime结算；LastWriteTime也
+    # 必须保持原值，不能把额外数据/元信息修改吞成这次权限初始化的副作用。
+    if (complete["payload"] or complete["identity"][:6] != created["identity"][:6]
+            or complete["mode"] != expected_source["mode"] or complete["security"] != policy.fingerprint
+            or _information(handle).attributes != attributes
+            or _metadata(handle) != (complete["identity"], complete["security"])):
+        raise ValueError("protected stage initialization did not preserve its exact complete source security")
+    return complete
+
+
 def create_regular_stage(directory: int, name: str, *, permission_source: str | None = None,
                          expected_source: dict[str, object] | None = None,
                          max_bytes: int = _LIMIT) -> tuple[int, dict[str, object]]:
-    """在创建时精确取得源 SD 或新私有策略，返回唯一写者 fd 与空创建见证。
+    """以原源 SD 创建，首写前完成精确初始化，返回唯一写者 fd 与空见证。
 
     源必须是同一活目录中的单叶，完整前像由上层已授权 Node 投影传入；库不
     认识 manager/Node。源句柄只在同步创建及前后复核期间拥有 SD，返回前释放。
+    原始 SD 直接传给 CREATE_NEW；系统创建规则若只丢失受保护源的 AI，允许
+    同原 HANDLE 在首 payload/CRT 转移前完成窄初始化，再证明完整源策略相等。
+    原内核创建瞬间不声称已有 AI；其余差异均拒绝，无源沿原新私有策略。
     新文件持续 share0，未完成正文不能被另一数据读者/写者或换名者打开；ACL
     不受数据共享位全面封锁，故创建时及 seal 时仍独立核验真实安全事实。
     """
@@ -1316,16 +1357,40 @@ def create_regular_stage(directory: int, name: str, *, permission_source: str | 
                     # 先私有化再解除保护：后者会按不同 owner 重算 CO 继承。
                     if policy.fingerprint != expected_source["security"]:
                         raise ValueError("stage permission source changed before initial security assignment")
+                    # 仅P+AI源需要允许窄初始化的WRITE_DAC。仍使用同一个
+                    # 不可继承、share0创建HANDLE，不重开路径、不启用token特权。
+                    needs_auto_inherit = policy.control & 0x1400 == 0x1400
+                    parent_before = _metadata(parent.handle) if needs_auto_inherit else None
+                    parent_attributes = _information(parent.handle).attributes if needs_auto_inherit else None
                     attributes = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), policy.descriptor, 0)
-                    handle = _open_handle(path, READ | WRITE, create=True, exclusive=True,
-                                          security=ctypes.byref(attributes), sharing=0)
+                    handle = _open_handle(path, READ | WRITE | (WRITE_DAC if needs_auto_inherit else 0),
+                                          create=True, exclusive=True, security=ctypes.byref(attributes), sharing=0)
                     initial_attributes = _information(handle).attributes
                     empty = _opened_snapshot(handle, max_bytes=1)
-                    if (empty["mode"] != expected_source["mode"] or empty["security"] != policy.fingerprint):
+                    if empty["mode"] != expected_source["mode"]:
                         raise ValueError("new stage did not preserve its exact initial source security")
+                    if empty["security"] != policy.fingerprint:
+                        if (initial_attributes != source_attributes
+                                or _information(source).attributes != source_attributes):
+                            raise ValueError("protected security initialization refuses different source and stage attributes")
+                        if parent_before is not None:
+                            parent_current = _metadata(parent.handle)
+                            if (parent_current[0][:4] != parent_before[0][:4]
+                                    or parent_current[1] != parent_before[1]
+                                    or _information(parent.handle).attributes != parent_attributes):
+                                raise ValueError("stage parent changed before protected security initialization")
+                        empty = _initialize_protected_stage_security(source, handle, policy=policy,
+                            expected_source=expected_source, created=empty, attributes=initial_attributes)
                 if (_metadata(source) != (expected_source["identity"], expected_source["security"])
                         or _information(source).attributes != source_attributes):
                     raise ValueError("stage permission source changed during initial security assignment")
+                if parent_before is not None:
+                    parent_after = _metadata(parent.handle)
+                    # 创建stage可合法改变父目录size/mtime/ctime；原devino、类型、
+                    # mode/nlink、完整安全和rawattrs仍须相同，不能追认父ACL漂移。
+                    if (parent_after[0][:4] != parent_before[0][:4] or parent_after[1] != parent_before[1]
+                            or _information(parent.handle).attributes != parent_attributes):
+                        raise ValueError("stage parent identity or security changed during protected initialization")
             finally:
                 _close(source)
         else:

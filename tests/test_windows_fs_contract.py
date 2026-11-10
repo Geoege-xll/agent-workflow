@@ -24,6 +24,81 @@ SPEC.loader.exec_module(fs)
 
 
 class WindowsNativeObserverStreamContractTest(unittest.TestCase):
+    def _borrowed_handle_snapshot(self, offset, *, fail_after_partial=False):
+        """执行实际观测helper→_opened_snapshot→_read_handle，只替DLL边界。
+
+        有状态ReadFile按真实同步文件游标分块读取17B；生产首读后确实停在
+        EOF。SetFilePointerEx边界实际回写64位位置指针，不能直接stub出期望
+        Node；任何CRT寻址、重开或关闭借用HANDLE都会立即失败。
+        """
+        from lib import windows_fs as native_fs
+        from tests.test_windows_fs_native import _native_snapshot_preserving_position
+        token, body = 0x1234567887654321, b"seventeen-byte-FS"
+        identity, security = (7, 202, stat.S_IFREG | 0o666, 1, len(body), 10, 20), "a" * 64
+        state = {"position": 0, "read_count": 0, "armed": False}
+        moves, reads = [], []
+        injected = OSError("fixture ReadFile failed after a real partial buffer")
+        def move(handle, distance, output, method):
+            self.assertEqual(token, handle, "原64位HANDLE不得截断或转成CRT fd")
+            self.assertIn(method, (0, 1))
+            state["position"] = (state["position"] if method == 1 else 0) + distance
+            if output is not None:
+                ctypes.cast(output, ctypes.POINTER(ctypes.c_longlong)).contents.value = state["position"]
+            moves.append((handle, distance, method, state["position"]))
+            return 1
+        def read(handle, buffer, count, received, overlapped):
+            self.assertEqual(token, handle)
+            self.assertIsNone(overlapped)
+            state["read_count"] += 1
+            if state["armed"] and fail_after_partial and state["read_count"] == 2:
+                reads.append("error")
+                raise injected
+            chunk = body[state["position"]:state["position"] + min(count, 5)]
+            ctypes.memmove(buffer, chunk, len(chunk))
+            ctypes.cast(received, ctypes.POINTER(native_fs.DWORD)).contents.value = len(chunk)
+            state["position"] += len(chunk)
+            reads.append(len(chunk))
+            return 1
+        api = SimpleNamespace(kernel=SimpleNamespace(SetFilePointerEx=move, ReadFile=read))
+        forbidden = AssertionError("borrowed HANDLE must not use CRT fd, reopen a path, or close")
+        with patch.object(native_fs, "_api", return_value=api), \
+                patch.object(native_fs, "_metadata", return_value=(identity, security)), \
+                patch.object(native_fs._os, "lseek", side_effect=forbidden), \
+                patch.object(native_fs._os, "close", side_effect=forbidden), \
+                patch.object(native_fs, "_open_handle", side_effect=forbidden), \
+                patch.object(native_fs, "_close", side_effect=forbidden), \
+                patch.object(native_fs.secure_os, "close", side_effect=forbidden):
+            before = native_fs._opened_snapshot(token, max_bytes=len(body))
+            self.assertEqual(body, before["payload"])
+            self.assertEqual(len(body), state["position"], "先实际完整读取至EOF，重现生产source状态")
+            move(token, offset, None, 0)
+            moves.clear(); reads.clear()
+            state.update(read_count=0, armed=True)
+            result = failure = None
+            try:
+                result = _native_snapshot_preserving_position(token, max_bytes=len(body))
+            except OSError as error:
+                failure = error
+        self.assertEqual(offset, state["position"])
+        self.assertEqual([(token, 0, 1, offset), (token, 0, 0, 0), (token, offset, 0, offset)], moves)
+        return SimpleNamespace(**locals())
+
+    def test_borrowed_native_snapshot_reads_full_source_at_eof_and_restores_original_position(self):
+        for offset in (17, 3, 0):
+            with self.subTest(original_position=offset):
+                observed = self._borrowed_handle_snapshot(offset)
+                self.assertIsNone(observed.failure)
+                self.assertEqual(observed.before, observed.result, "必须完整Node全等，不能只保身份/安全摘要")
+                self.assertEqual([5, 5, 5, 2, 0], observed.reads)
+
+    def test_borrowed_native_snapshot_restores_position_even_after_partial_read_failure(self):
+        for offset in (17, 3, 0):
+            with self.subTest(original_position=offset):
+                observed = self._borrowed_handle_snapshot(offset, fail_after_partial=True)
+                self.assertIs(observed.injected, observed.failure, "finally恢复不能吞掉原ReadFile失败")
+                self.assertIsNone(observed.result)
+                self.assertEqual([5, "error"], observed.reads)
+
     def test_actual_observer_supports_production_stream_shape_and_real_post_close_io(self):
         """消费原生节点使用的同一代理与真实文件，直接证明接口及关闭后注入。"""
         from tests.test_windows_fs_native import CloseObservedStream
@@ -364,7 +439,7 @@ class WindowsStageCreationContractTest(unittest.TestCase):
             scope.enter_context(patch.object(fs, "_metadata", side_effect=metadata))
             scope.enter_context(patch.object(fs, "_information", return_value=SimpleNamespace(attributes=32)))
             scope.enter_context(patch.object(fs, "_security_policy", side_effect=lambda handle:
-                                             nullcontext(SimpleNamespace(descriptor=fs.HANDLE(42), fingerprint=source_policy or security))))
+                                             nullcontext(SimpleNamespace(descriptor=fs.HANDLE(42), control=0x8004, fingerprint=source_policy or security))))
             scope.enter_context(patch.object(fs, "private_security", side_effect=lambda: nullcontext(fs.HANDLE(42))))
             scope.enter_context(patch.object(fs, "_policy_is_private", return_value=True))
             scope.enter_context(patch.object(fs, "_close", side_effect=raw_closes.append))
@@ -447,6 +522,170 @@ class WindowsStageCreationContractTest(unittest.TestCase):
                 _, failure, opening, _, _, _ = self.create(max_bytes=limit)
                 self.assertIsInstance(failure, ValueError)
                 self.assertEqual([], opening)
+
+
+
+class WindowsProtectedStageInitializationContractTest(unittest.TestCase):
+    """执行真实create与严格设置函数，只替换Win32读写边界，不声称NTFS支持。"""
+
+    def create(self, *, source_control=0x9404, stage_control=0x9004, fault=None):
+        owner = bytes.fromhex("01020000000000052000000020020000")  # BA，仅作有效SID边界数据。
+        system = bytes.fromhex("010100000000000512000000")
+        world = bytes.fromhex("010100000000000100000000")
+        def acl(read_mask=0x120089):
+            entries = []
+            for sid, rights in ((owner, 0x1F01FF), (system, 0x1F01FF), (world, read_mask)):
+                entries.append(bytes((0, 0)) + (8 + len(sid)).to_bytes(2, "little") + rights.to_bytes(4, "little") + sid)
+            body = b"".join(entries)
+            return bytes((2, 0)) + (8 + len(body)).to_bytes(2, "little") + (3).to_bytes(2, "little") + b"\0\0" + body
+        original_acl = acl()
+        state = dict(created=False, set=False, control=stage_control,
+                     owner=system if fault == "initial-owner" else owner,
+                     acl=acl(0x1200A9) if fault == "initial-acl" else original_acl)
+        events, raw_closes, fd_closes, source_reads, attribute_reads = [], [], [], [], []
+        parent = SimpleNamespace(path=Path("/owned"), handle=303,
+                                 child=lambda name: Path("/owned") / name, close=Mock())
+        def policy(handle):
+            is_source = handle == 101
+            source_drift = state["set"] and fault == "source-after"
+            who = owner if is_source else state["owner"]
+            raw_acl = acl(0x1200A9) if is_source and source_drift else original_acl if is_source else state["acl"]
+            control = source_control if is_source else state["control"]
+            return SimpleNamespace(descriptor=fs.HANDLE(42), acl=fs.HANDLE(43), owner=who,
+                acl_bytes=raw_acl, control=control,
+                fingerprint=hashlib.sha256(fs._canonical_security(who, control, raw_acl)).hexdigest(),
+                dacl_key=fs._canonical_security(b"\1\0" + b"\0" * 6, control & ~1, raw_acl))
+        source = {"kind": "file", "payload": b"old", "mode": 0o666,
+                  "identity": (7, 101, stat.S_IFREG | 0o666, 1, 3, 10, 20), "security": policy(101).fingerprint}
+        def snapshot(handle, **kwargs):
+            if handle == 101: return dict(source)
+            body = b"x" if fault == "initial-body" or (state["set"] and fault == "api-body") else b""
+            return {"kind": "file", "payload": body, "mode": 0o666,
+                    "identity": (7, 999 if state["set"] and fault == "api-inode" else 202,
+                                 stat.S_IFREG | 0o666, 1, len(body),
+                                 31 if state["set"] and fault == "api-mtime" else 30, 41 if state["set"] else 40),
+                    "security": policy(202).fingerprint}
+        def metadata(handle):
+            if handle == 303:
+                # 本轮stage创建合法改变父size/mtime/ctime；原身份与安全不改。
+                return ((7, 303, stat.S_IFDIR | 0o777, 1, int(state["created"]),
+                         5 if state["created"] else 1, 6 if state["created"] else 2),
+                        "f" * 64 if (state["set"] and fault == "parent-after" or
+                                     state["created"] and fault == "parent-before") else "d" * 64)
+            if handle == 101:
+                source_reads.append(True)
+                changed_before = state["created"] and not state["set"] and fault == "source-before"
+                return source["identity"], "c" * 64 if changed_before else policy(101).fingerprint
+            node = snapshot(handle)
+            return node["identity"], node["security"]
+        def information(handle):
+            if handle == 202:
+                attribute_reads.append(True)
+                changed = (fault == "different-initial-attributes" or
+                           fault == "initial-attributes" and len(attribute_reads) >= 2 or
+                           state["set"] and fault == "api-attributes")
+                return SimpleNamespace(attributes=34 if changed else 32)
+            return SimpleNamespace(attributes=16 if handle == 303 else
+                                   34 if state["created"] and fault == "source-attributes-before" else 32)
+        def opened(path, access, **kwargs):
+            events.append(("open", Path(path).name, access, kwargs))
+            if Path(path).name == "source": return 101
+            state["created"] = True
+            return 202
+        def setting(handle, kind, flags, own, group, dacl, sacl):
+            events.append(("set", handle, flags))
+            self.assertEqual((202, 1, 0x80000004), (handle, kind, flags))
+            self.assertIsNone(own); self.assertIsNone(group); self.assertIsNone(sacl)
+            self.assertEqual(43, dacl.value)
+            if fault == "api-denied": return 5
+            state["set"] = True
+            state["control"] = 0x9004 if fault == "api-no-ai" else source_control
+            if fault == "api-acl": state["acl"] = acl(0x1200A9)
+            if fault == "api-owner": state["owner"] = system
+            return 0
+        def transfer(handle, flags): events.append(("transfer", handle, flags)); return 9
+        with ExitStack() as scope:
+            scope.enter_context(patch.dict(sys.modules, {"msvcrt": SimpleNamespace(open_osfhandle=transfer, get_osfhandle=lambda fd: 202)}))
+            scope.enter_context(patch.dict(fs.secure_os._directories, {77: parent}, clear=True))
+            scope.enter_context(patch.dict(fs.secure_os._files, {}, clear=True))
+            scope.enter_context(patch.object(fs, "Directory", return_value=parent))
+            scope.enter_context(patch.object(fs, "_open_handle", side_effect=opened))
+            scope.enter_context(patch.object(fs, "_opened_snapshot", side_effect=snapshot))
+            scope.enter_context(patch.object(fs, "_metadata", side_effect=metadata))
+            scope.enter_context(patch.object(fs, "_information", side_effect=information))
+            scope.enter_context(patch.object(fs, "_security_policy", side_effect=lambda handle: nullcontext(policy(handle))))
+            scope.enter_context(patch.object(fs, "_api", return_value=SimpleNamespace(security=SimpleNamespace(SetSecurityInfo=setting))))
+            scope.enter_context(patch.object(fs.ctypes, "WinError", side_effect=lambda code: PermissionError(code, "fixture SetSecurityInfo denied"), create=True))
+            scope.enter_context(patch.object(fs, "_close", side_effect=raw_closes.append))
+            scope.enter_context(patch.object(fs._os, "close", side_effect=fd_closes.append))
+            scope.enter_context(patch.object(fs._os, "O_BINARY", 0, create=True))
+            scope.enter_context(patch.object(fs._os, "O_NOINHERIT", 0, create=True))
+            removing = scope.enter_context(patch.object(fs, "delete_regular", side_effect=AssertionError("unproved stage cannot be adopted for cleanup")))
+            result = failure = None
+            try:
+                result = fs.create_regular_stage(77, "stage", permission_source="source", expected_source=source)
+                self.assertEqual(result[1], fs.secure_os._files[9].empty)
+                fs.secure_os.close(9)
+                self.assertNotIn(9, fs.secure_os._files)
+            except (ValueError, OSError) as error:
+                failure = error
+            removing.assert_not_called()
+        return SimpleNamespace(**locals())
+
+    def test_only_missing_ai_is_initialized_before_creator_transfer_with_same_handle(self):
+        result = self.create()
+        self.assertIsNone(result.failure)
+        self.assertEqual(result.source["security"], result.result[1]["security"])
+        self.assertEqual(41, result.result[1]["identity"][6], "空见证必须固定本轮初始化后的真实ChangeTime")
+        self.assertEqual(b"", result.result[1]["payload"])
+        self.assertEqual([101], result.raw_closes)
+        self.assertEqual([9], result.fd_closes)
+        self.assertEqual(1, result.parent.close.call_count)
+        stage_open = next(row for row in result.events if row[:2] == ("open", "stage"))
+        self.assertEqual(fs.READ | fs.WRITE | fs.WRITE_DAC, stage_open[2])
+        self.assertEqual(0, stage_open[3]["sharing"])
+        attributes = ctypes.cast(stage_open[3]["security"], ctypes.POINTER(fs._SecurityAttributes)).contents
+        self.assertEqual(0, attributes.inherit, "新加WRITE_DAC不能放宽原HANDLE的不可继承合同")
+        self.assertEqual(1, sum(row[0] == "set" for row in result.events))
+        self.assertLess(next(i for i, row in enumerate(result.events) if row[0] == "set"),
+                        next(i for i, row in enumerate(result.events) if row[0] == "transfer"))
+
+    def test_already_exact_protected_ai_and_original_ordinary_paths_do_not_reset_security(self):
+        for control in (0x9404, 0x9004, 0x8004):
+            with self.subTest(control=hex(control)):
+                result = self.create(source_control=control, stage_control=control)
+                self.assertIsNone(result.failure)
+                self.assertFalse(any(row[0] == "set" for row in result.events))
+                self.assertEqual(result.source["security"], result.result[1]["security"])
+                mask = next(row[2] for row in result.events if row[:2] == ("open", "stage"))
+                self.assertEqual(fs.READ | fs.WRITE | (fs.WRITE_DAC if control == 0x9404 else 0), mask)
+
+    def test_extra_initial_differences_and_source_drift_never_authorize_an_acl_write(self):
+        for kwargs in ({"fault": "initial-owner"}, {"fault": "initial-acl"}, {"fault": "initial-body"},
+                       {"fault": "initial-attributes"}, {"fault": "different-initial-attributes"}, {"fault": "source-before"},
+                       {"fault": "source-attributes-before"}, {"fault": "parent-before"},
+                       {"stage_control": 0x8004}, {"stage_control": 0x9104},
+                       {"source_control": 0x9004, "stage_control": 0x9404},
+                       {"source_control": 0x8404, "stage_control": 0x8004}):
+            with self.subTest(case=kwargs):
+                result = self.create(**kwargs)
+                self.assertIsInstance(result.failure, ValueError)
+                self.assertFalse(any(row[0] in ("set", "transfer") for row in result.events))
+                self.assertEqual([101, 202], result.raw_closes)
+                self.assertEqual([], result.fd_closes)
+                self.assertEqual(1, result.parent.close.call_count)
+
+    def test_api_denial_success_without_ai_and_extra_rewrites_or_parent_drift_fail_closed(self):
+        for fault in ("api-denied", "api-no-ai", "api-acl", "api-owner", "api-body", "api-inode", "api-mtime",
+                      "api-attributes", "source-after", "parent-after"):
+            with self.subTest(fault=fault):
+                result = self.create(fault=fault)
+                self.assertIsInstance(result.failure, (ValueError, OSError))
+                self.assertEqual(1, sum(row[0] == "set" for row in result.events))
+                self.assertFalse(any(row[0] == "transfer" for row in result.events))
+                self.assertEqual([101, 202], result.raw_closes)
+                self.assertEqual([], result.fd_closes)
+                self.assertEqual(1, result.parent.close.call_count)
 
 
 class WindowsStageSealContractTest(unittest.TestCase):
