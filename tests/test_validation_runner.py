@@ -13,7 +13,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 
@@ -480,6 +480,252 @@ class ExampleTest(unittest.TestCase):
         self.assertEqual("one", collect.call_args.args[0])
         self.assertEqual([ordinary.id()], [case.id() for case in execute.call_args.args[0]])
         self.assertEqual({ordinary.id()}, execute.call_args.args[1])
+
+
+class SupervisedPortableBatchTest(unittest.TestCase):
+    """真实短命 child 核对原 CLI 协议；不以便携夹具冒充真实 App/Win32 通过。"""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="validation-supervision-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.source = self.root / "source with spaces"
+        (self.source / "scripts").mkdir(parents=True)
+        (self.source / "tests").mkdir()
+        (self.source / "tests/__init__.py").write_text("", encoding="utf-8")
+        shutil.copyfile(PACK / "scripts/test_workflow.py", self.source / "scripts/test_workflow.py")
+        spec = importlib.util.spec_from_file_location("validation_supervised_contract", PACK / "scripts/test_workflow.py")
+        self.runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.runner)
+        self.identifiers = self.runner._supervised_portable_ids()
+        self.calls = self.root / "actual-calls.jsonl"
+        self.evidence = self.root / "evidence.jsonl"
+
+    def fixture(self, bodies, *, cleanup=""):
+        # 方法身份取自唯一真实登记，不另维护 App ID 表；夹具只实现短小 unittest
+        # 生命周期与原字节写入，child 仍由原 loader、runner 和 process owner 执行。
+        self.calls.unlink(missing_ok=True)
+        parts = [identifier.split(".") for identifier in self.identifiers]
+        self.assertEqual(1, len({tuple(value[:3]) for value in parts}))
+        module_name, class_name = parts[0][1:3]
+        source = "import json,os,time,unittest\nfrom pathlib import Path\n"
+        source += f"class {class_name}(unittest.TestCase):\n"
+        for identifier, body in zip(self.identifiers, bodies, strict=True):
+            source += f"    def {identifier.rsplit('.', 1)[1]}(self):\n"
+            source += f"        with Path({str(self.calls)!r}).open('a',encoding='utf-8') as stream:\n"
+            source += "            stream.write(json.dumps(self.id())+'\\n')\n"
+            source += "".join("        " + line + "\n" for line in body.splitlines())
+        if cleanup:
+            source += "    @classmethod\n    def tearDownClass(cls):\n"
+            source += "".join("        " + line + "\n" for line in cleanup.splitlines())
+        (self.source / "tests" / (module_name + ".py")).write_text(source, encoding="utf-8")
+
+    def invoke_child(self, *, timeout=10, fault=None):
+        # 每例独占 evidence/scratch；真实 raw 走 binary buffer，断言任意字节
+        # 没被文本 codec 改写。测试期限仅缩短此夹具，不改变生产 600s 常量。
+        output, error = io.BytesIO(), io.BytesIO()
+        out_text = io.TextIOWrapper(output, encoding="utf-8", write_through=True)
+        err_text = io.TextIOWrapper(error, encoding="utf-8", write_through=True)
+        console = {"stdout": out_text, "stderr": err_text}
+        if fault is not None:
+            channel, operation = fault
+
+            def write(raw):
+                if operation == "write":
+                    raise BrokenPipeError("controlled binary write failure")
+                return len(raw)
+
+            def flush():
+                if operation == "flush":
+                    raise OSError("controlled binary flush failure")
+
+            # 仅故障 binary 输出层；文本摘要仍可写，分别定位真实 raw 的
+            # write/flush 故障，不把其它 I/O 失败混同为四个目标负控。
+            console[channel] = SimpleNamespace(buffer=SimpleNamespace(write=write, flush=flush),
+                                               flush=lambda: None, write=lambda text: len(text))
+        try:
+            with patch.object(self.runner, "PACK", self.source), \
+                    patch.object(self.runner, "SUPERVISED_EXECUTION_SECONDS", timeout), \
+                    patch.dict(os.environ, {"AWF_TEST_EVIDENCE_LOG": str(self.evidence),
+                                            "AGENT_WORKFLOW_TEST_SCRATCH": str(self.root)}), \
+                    redirect_stdout(console["stdout"]), redirect_stderr(console["stderr"]):
+                code = self.runner._run_supervised_cases(self.identifiers)
+            out_text.flush()
+            err_text.flush()
+            record = json.loads(self.evidence.read_text().splitlines()[-1]) if self.evidence.exists() else None
+            return code, output.getvalue(), error.getvalue(), record
+        finally:
+            out_text.detach()
+            err_text.detach()
+
+    def test_selected_registry_cases_run_once_with_required_ids_and_raw_evidence(self):
+        self.fixture(("os.write(1,b'raw-out-\\xff\\n'); os.write(2,b'raw-err-\\xfe\\n')", "pass"))
+        code, output, error, record = self.invoke_child()
+        self.assertEqual(0, code, error)
+        self.assertIn(b"raw-out-\xff\n", output)
+        self.assertIn(b"raw-err-\xfe\n", error)
+        self.assertEqual([*self.identifiers], [json.loads(line) for line in self.calls.read_text().splitlines()])
+        self.assertEqual(output, base64.b64decode(record["stdout_b64"]))
+        self.assertIn(base64.b64decode(record["stderr_b64"]), error)
+        events = [json.loads(line) for line in base64.b64decode(record["events_b64"]).splitlines()]
+        self.assertEqual(sorted(self.identifiers), events[-1]["expected_ids"])
+        self.assertEqual(len(self.identifiers), events[-1]["tests_run"])
+        self.assertTrue(record["protocol_valid"] and record["owner_quiescent"])
+        self.assertFalse(Path(record["scene"]).exists())
+
+    def test_failure_skip_and_class_cleanup_cannot_be_reported_as_success(self):
+        scenarios = (
+            (("self.fail('real failure')", "pass"), "", "failures"),
+            (("with self.subTest(part='required'):\n    self.skipTest('real subtest skip')", "pass"), "", "skips"),
+            (("pass", "pass"), "raise RuntimeError('class cleanup failure')", "errors"),
+        )
+        for bodies, cleanup, key in scenarios:
+            with self.subTest(key=key):
+                self.fixture(bodies, cleanup=cleanup)
+                code, _, error, record = self.invoke_child()
+                self.assertEqual(1, code, error)
+                self.assertEqual(1, record["child_exit"])
+                self.assertFalse(record["protocol_valid"])
+                events = [json.loads(line) for line in base64.b64decode(record["events_b64"]).splitlines()]
+                # 所有方法都 stop 仍可能类清理失败；结果必须取完整 runner 终态。
+                self.assertEqual(len(self.identifiers), sum(event["kind"] == "stop" for event in events))
+                self.assertEqual(1, events[-1][key])
+                self.assertFalse(Path(record["scene"]).exists())
+
+    def test_timeout_preserves_partial_raw_and_real_started_events(self):
+        self.fixture(("os.write(1,b'partial-out-\\xff'); os.write(2,b'partial-err-\\xfe'); time.sleep(3600)", "pass"))
+        code, output, error, record = self.invoke_child(timeout=3)
+        self.assertEqual(1, code, error)
+        self.assertEqual("TimeoutExpired", record["outcome"])
+        self.assertTrue(record["owner_quiescent"])
+        self.assertFalse(record["raw_complete"])
+        self.assertIn(b"partial-out-\xff", output)
+        self.assertIn(b"partial-err-\xfe", error)
+        events = [json.loads(line) for line in base64.b64decode(record["events_b64"]).splitlines()]
+        self.assertEqual([{"kind": "start", "id": self.identifiers[0]}], events)
+        self.assertFalse(Path(record["scene"]).exists())
+
+    def test_missing_or_forged_terminal_record_is_rejected(self):
+        self.fixture(("os._exit(0)", "pass"))
+        code, _, error, record = self.invoke_child()
+        self.assertEqual(1, code, error)
+        self.assertEqual(0, record["child_exit"])
+        self.assertFalse(record["protocol_valid"])
+        self.fixture(("pass", "pass"))
+        code, _, error, record = self.invoke_child()
+        self.assertEqual(0, code, error)
+        events = [json.loads(line) for line in base64.b64decode(record["events_b64"]).splitlines()]
+        # 在一次真实 child 输出上变更协议字段；不用另造成功事件串替代真实执行。
+        for changes in ({"successful": False}, {"expected_ids": []}, {"tests_run": True},
+                        {"exit_code": False}, {"skips": 1}, {"stopped_ids": []}):
+            with self.subTest(changes=changes):
+                altered = events[:-1] + [{**events[-1], **changes}]
+                raw = ("\n".join(json.dumps(event) for event in altered) + "\n").encode()
+                self.assertFalse(self.runner._validate_supervised_events(raw, self.identifiers, 0))
+        raw = base64.b64decode(record["events_b64"])
+        self.assertFalse(self.runner._validate_supervised_events(raw[:-1], self.identifiers, 0))
+        self.assertFalse(self.runner._validate_supervised_events(raw, self.identifiers, 27))
+
+    def test_unknown_cleanup_retains_private_scene_without_replaying_live_raw(self):
+        from lib.install.install_process import ACTIVE_RUNNER
+        from lib.install.windows_process import WindowsJobCleanupError
+
+        for kind in ("WindowsJobCleanupError", "KeyboardInterrupt", "prelaunch-budget-refusal"):
+            with self.subTest(kind=kind), ExitStack() as stack:
+                if kind == "prelaunch-budget-refusal":
+                    # 实际原 capture_process 在 Popen/WindowsJobProcess 之前拒绝
+                    # 预算；N1 无对应启动收据，宁可 unknown 也不伪造实际 Job 0。
+                    token = ACTIVE_RUNNER.set(SimpleNamespace(deadline=0, cancel_file=None, recovering=False))
+                    stack.callback(ACTIVE_RUNNER.reset, token)
+                    popen = stack.enter_context(patch("lib.install.install_process.subprocess.Popen"))
+                    job = stack.enter_context(patch("lib.install.install_process.WindowsJobProcess"))
+                else:
+                    def unknown_owner(command, *, body, timeout):
+                        # 只注入错误分类，不制造真实失控 Job/启动 race；保留文件
+                        # 是可证结果，非已运行 Windows race 或实际归零证明。
+                        directory = Path(json.loads(body)["directory"])
+                        (directory / "stdout.raw").write_bytes(b"unconfirmed-live-writer")
+                        if kind == "KeyboardInterrupt":
+                            raise KeyboardInterrupt("controlled launch seam interruption")
+                        raise WindowsJobCleanupError("controlled unknown quiescence")
+                    stack.enter_context(patch("lib.install.install_process.capture_process", side_effect=unknown_owner))
+                read = stack.enter_context(patch.object(Path, "read_bytes"))
+                remove = stack.enter_context(patch.object(shutil, "rmtree", wraps=shutil.rmtree))
+                code, output, error, record = self.invoke_child()
+                self.assertEqual(1, code, error)
+                self.assertFalse(record["owner_quiescent"] or record["raw_complete"] or record["windows_job_zero_proved"])
+                self.assertEqual("unconfirmed", record["ownership_evidence"])
+                self.assertTrue(record["scene_retained"])
+                self.assertNotIn("stdout_b64", record)
+                self.assertNotIn(b"unconfirmed-live-writer", output + error)
+                read.assert_not_called()
+                remove.assert_not_called()
+                self.assertTrue((Path(record["scene"]) / "stdout.raw").is_file())
+                if kind == "prelaunch-budget-refusal":
+                    popen.assert_not_called()
+                    job.assert_not_called()
+
+    def test_raw_forward_failures_preserve_durable_evidence_and_fail_closed(self):
+        bodies = ("os.write(1,b'durable-out-\\xff'); os.write(2,b'durable-err-\\xfe')", "pass")
+        for channel in ("stdout", "stderr"):
+            for operation in ("write", "flush"):
+                with self.subTest(channel=channel, operation=operation):
+                    self.fixture(bodies)
+                    code, _, error, record = self.invoke_child(fault=(channel, operation))
+                    self.assertEqual(1, code, error)
+                    self.assertEqual(0, record["child_exit"])
+                    self.assertEqual(1, record["exit_code"])
+                    self.assertEqual("final", record["phase"])
+                    self.assertTrue(record["scene_retained"])
+                    self.assertTrue(Path(record["scene"]).is_dir())
+                    self.assertEqual(channel, record["forward_errors"][0]["stream"])
+                    self.assertIn(b"durable-out-\xff", base64.b64decode(record["stdout_b64"]))
+                    self.assertIn(b"durable-err-\xfe", base64.b64decode(record["stderr_b64"]))
+                    events = base64.b64decode(record["events_b64"])
+                    self.assertTrue(self.runner._validate_supervised_events(events, self.identifiers, 0))
+                    snapshots = [json.loads(line) for line in self.evidence.read_text().splitlines()]
+                    self.assertEqual("captured-before-forward", snapshots[-2]["phase"])
+                    self.assertIsNone(snapshots[-2]["exit_code"])
+
+        for failed_phase in ("captured-before-forward", "final"):
+            with self.subTest(evidence_failure=failed_phase):
+                self.fixture(bodies)
+                self.evidence.unlink(missing_ok=True)
+                publish = self.runner._publish_supervised_evidence
+                attempts = []
+
+                def fail_publication(record):
+                    attempts.append(json.loads(json.dumps(record)))
+                    if record["phase"] == failed_phase:
+                        raise OSError("controlled persistent evidence failure")
+                    publish(record)
+
+                with patch.object(self.runner, "_publish_supervised_evidence", side_effect=fail_publication):
+                    code, _, error, record = self.invoke_child()
+                self.assertEqual(1, code, error)
+                self.assertTrue(Path(attempts[-1]["scene"]).is_dir())
+                self.assertTrue(attempts[-1]["scene_retained"])
+                if record is not None:
+                    # 后置出口失败时，先前快照仍保存完整 raw，且从未宣称最终 0。
+                    self.assertIsNone(record["exit_code"])
+                    self.assertIn(b"durable-out-\xff", base64.b64decode(record["stdout_b64"]))
+                self.assertNotEqual(0, attempts[-1]["exit_code"])
+
+    def test_parent_partitions_only_registry_portable_cases_without_rerun(self):
+        ordinary = "tests.test_controlled.ExampleTest.test_ordinary"
+        selectors = [*self.identifiers, ordinary, self.identifiers[0]]
+        # 原 main 真实解析/去重后，只将登记交集交给 child；普通 case 仍消费
+        # 原 run_cases。这里只 mock 测试执行边界，不加载不存在的新 TUI 方法。
+        with patch.object(sys, "argv", ["test_workflow.py", *selectors]), \
+                patch.object(self.runner, "os", SimpleNamespace(name=os.name, chdir=lambda _: None)), \
+                patch.object(self.runner, "load_target", side_effect=lambda target, _: [SimpleNamespace(id=lambda: target)]), \
+                patch.object(self.runner, "run_cases", return_value=0) as ordinary_run, \
+                patch.object(self.runner, "_run_supervised_cases", return_value=27) as child_run:
+            self.assertEqual(27, self.runner.main())
+        child_run.assert_called_once_with(self.identifiers)
+        ordinary_run.assert_called_once()
+        self.assertEqual([ordinary], [case.id() for case in ordinary_run.call_args.args[0]])
+        self.assertEqual(set(), ordinary_run.call_args.args[1])
 
 
 @unittest.skipUnless(os.name == "nt", "PowerShell scope 消费合同必须由真实 Windows 执行")

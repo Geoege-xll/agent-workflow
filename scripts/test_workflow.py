@@ -1,10 +1,15 @@
 import argparse
+import base64
 import importlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 import unittest
 
 
@@ -122,6 +127,21 @@ NATIVE_COMPONENTS = {
             # 只共享两个便携合同，不扩选同模块的原生 TUI/curses 用例。
             "tests.test_windows_native_integration.ConsolePhaseProfilePortableTest.test_job_refresh_profiles_outer_lease_and_preserves_hooks",
             "tests.test_windows_native_integration.ConsolePhaseProfilePortableTest.test_profile_bounds_and_incomplete_binding",
+            # reset/分层等待谓词仅依赖 stdlib；原 App 两方法仍归下方 curses
+            # 组件并由原 CLI 监督，不将这些纯谓词扩成另一个子执行名单。
+            "tests.test_windows_native_integration.NativeUIResetPredicatePortableTest.test_reset_requires_selected_fields_and_sources_in_one_native_frame",
+            "tests.test_windows_native_integration.NativeUIResetPredicatePortableTest.test_reset_command_rejects_old_toast_and_waits_for_business_transition",
+            "tests.test_windows_native_integration.NativeUIAsyncWaitPortableTest.test_action_wait_uses_input_deadlines_and_requires_new_acknowledgement",
+            "tests.test_windows_native_integration.NativeUIAsyncWaitPortableTest.test_action_wait_preserves_checkpoint_progress_and_terminal_failures",
+            # 监督协议本身也必须在真实 Windows 消费原 Job owner；精确共享
+            # 六个便携合同，不扩选带平台保护的整个 validation_runner 模块。
+            "tests.test_validation_runner.SupervisedPortableBatchTest.test_selected_registry_cases_run_once_with_required_ids_and_raw_evidence",
+            "tests.test_validation_runner.SupervisedPortableBatchTest.test_failure_skip_and_class_cleanup_cannot_be_reported_as_success",
+            "tests.test_validation_runner.SupervisedPortableBatchTest.test_timeout_preserves_partial_raw_and_real_started_events",
+            "tests.test_validation_runner.SupervisedPortableBatchTest.test_missing_or_forged_terminal_record_is_rejected",
+            "tests.test_validation_runner.SupervisedPortableBatchTest.test_unknown_cleanup_retains_private_scene_without_replaying_live_raw",
+            "tests.test_validation_runner.SupervisedPortableBatchTest.test_parent_partitions_only_registry_portable_cases_without_rerun",
+            "tests.test_validation_runner.SupervisedPortableBatchTest.test_raw_forward_failures_preserve_durable_evidence_and_fail_closed",
         ),
         "qualification": "ordinary",
         "node_required": False, "curses_required": False,
@@ -403,8 +423,11 @@ class ExecutionResult(unittest.TextTestResult):
         super().startTest(test)
         self.started_ids.add(test.id())
         self.active_test_id = test.id()
+        self.event("start", test.id())
 
     def stopTest(self, test):
+        self.stopped_ids.add(test.id())
+        self.event("stop", test.id())
         self.active_test_id = None
         super().stopTest(test)
 
@@ -414,23 +437,265 @@ class ExecutionResult(unittest.TextTestResult):
         # wasSuccessful() 为真。使用 start/stop 生命周期记录当前父方法，不依赖
         # 私有 _SubTest 类型；任一原生必验子场景未执行，都使所属方法不能获验收。
         self.skipped_ids.add(self.active_test_id or test.id())
+        self.event("skip", self.active_test_id or test.id())
 
-    def __init__(self, *args, **kwargs):
+    def event(self, kind, identifier):
+        if self.event_stream is not None:
+            _write_execution_event(self.event_stream, {"kind": kind, "id": identifier})
+
+    def __init__(self, *args, event_stream=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.started_ids = set()
+        self.stopped_ids = set()
         self.skipped_ids = set()
         self.active_test_id = None
+        self.event_stream = event_stream
 
 
-def run_cases(cases, required_native_ids=()):
-    result = unittest.TextTestRunner(verbosity=2, resultclass=ExecutionResult).run(unittest.TestSuite(cases))
+def _write_execution_event(stream, event):
+    # start/skip/stop 是真实生命周期证据，及时 flush 使执行 deadline 到达时
+    # 仍可读取已发生的事实；stopTest 只代表方法结束，绝不推导成功。
+    sys.stdout.flush()
+    sys.stderr.flush()
+    stream.write(json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n")
+    stream.flush()
+    os.fsync(stream.fileno())
+
+
+def run_cases(cases, required_native_ids=(), *, _event_stream=None):
+    result = unittest.TextTestRunner(
+        verbosity=2, resultclass=lambda *args, **kwargs: ExecutionResult(
+            *args, event_stream=_event_stream, **kwargs),
+    ).run(unittest.TestSuite(cases))
     # unittest 把全 skip 当成功，但原生必验集合必须真正执行。逐个 required id 核对，
     # 既拒绝全 skip，也拒绝自定义 suite 未执行节点；失败用原退出码 1 向上传播。
     executed = result.started_ids - result.skipped_ids
-    if required_native_ids and not set(required_native_ids).issubset(executed):
+    complete = not required_native_ids or set(required_native_ids).issubset(executed)
+    if not complete:
         print("原生必验节点未实际执行或被 skip；不能作为 Windows 验收成功。", file=sys.stderr)
+    code = 0 if complete and result.wasSuccessful() else 1
+    if _event_stream is not None:
+        # TextTestRunner.run 已返回：包括 tearDownClass/doClassCleanups 和完整
+        # 终端摘要。只有此处的结果才可结算；单个 stop 事件不代表类清理已完成。
+        _write_execution_event(_event_stream, {
+            "kind": "terminal", "expected_ids": sorted(required_native_ids),
+            "started_ids": sorted(result.started_ids), "stopped_ids": sorted(result.stopped_ids),
+            "skipped_ids": sorted(result.skipped_ids), "tests_run": result.testsRun,
+            "failures": len(result.failures), "errors": len(result.errors),
+            "skips": len(result.skipped), "unexpected_successes": len(result.unexpectedSuccesses),
+            "successful": result.wasSuccessful(), "exit_code": code,
+        })
+    return code
+
+
+# 只约束当前登记的 App 子批次执行期限，不改变产品操作 deadline，也不承诺
+# Windows 内核终止/Job 归零有绝对墙钟上限。恢复确认仍完全归原 capture_process。
+SUPERVISED_EXECUTION_SECONDS = 600
+
+
+def _supervised_portable_ids():
+    return tuple(NATIVE_COMPONENTS["windows-native-tui"].get("portable_ci_targets", ()))
+
+
+def _run_supervised_child(body):
+    # 无公共 child 参数或任意模块入口；固定 bootstrap 只进入本函数。请求携带
+    # 的方法必须来自同一 registry，随后仍经原 load_target/run_cases 验证执行。
+    request = json.loads(body)
+    directory = Path(request["directory"])
+    identifiers = request["ids"]
+    if (not identifiers or len(set(identifiers)) != len(identifiers)
+            or not set(identifiers).issubset(_supervised_portable_ids())):
+        raise ValueError("受监督子批次必须来自原 TUI portable_ci_targets")
+    os.chdir(PACK)
+    sys.path.insert(0, str(PACK))
+    # 父进程已用 x 模式在私有独占目录创建三个文件；子进程不截断旧证据。
+    # -u 与 fd 重定向覆盖 Python、原生 fd 写入及异常 traceback，不依赖超时
+    # 异常能否携带 capture 管道的 partial bytes。
+    with (directory / "stdout.raw").open("ab", buffering=0) as output, \
+            (directory / "stderr.raw").open("ab", buffering=0) as error, \
+            (directory / "events.jsonl").open("a", encoding="utf-8", newline="\n") as events:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(output.fileno(), 1)
+        os.dup2(error.fileno(), 2)
+        cases = [case for target in identifiers for case in load_target(target, make_parser())]
+        # 显式传 required，不能因精确 CLI 方法没有 native 组 selector 而变空。
+        code = run_cases(cases, required_native_ids=set(identifiers), _event_stream=events)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.fsync(output.fileno())
+        os.fsync(error.fileno())
+        return code
+
+
+def _validate_supervised_events(raw, identifiers, returncode):
+    # 逐事件核对真实启动/停止与终态；未知、截断、重复、skip、遗漏或 exit
+    # 不匹配都不能变绿。终态必须位于最后，且来自完整 runner 返回后的结果。
+    expected = set(identifiers)
+    try:
+        if not raw.endswith(b"\n"):
+            return False
+        events = [json.loads(line) for line in raw.decode("utf-8").splitlines()]
+        terminal = events[-1]
+        active, started, stopped = set(), set(), set()
+        for event in events[:-1]:
+            identifier = event["id"]
+            if identifier not in expected:
+                return False
+            if event["kind"] == "start" and identifier not in started and not active:
+                active.add(identifier)
+                started.add(identifier)
+            elif event["kind"] == "stop" and identifier in active:
+                active.remove(identifier)
+                stopped.add(identifier)
+            else:
+                return False
+        return (returncode == 0 and not active and started == stopped == expected
+                and terminal["kind"] == "terminal" and terminal["successful"] is True
+                and type(terminal["exit_code"]) is int and terminal["exit_code"] == 0
+                and type(terminal["tests_run"]) is int and terminal["tests_run"] == len(expected)
+                and terminal["expected_ids"] == sorted(expected)
+                and terminal["started_ids"] == sorted(expected)
+                and terminal["stopped_ids"] == sorted(expected)
+                and terminal["skipped_ids"] == []
+                and all(type(terminal[key]) is int and terminal[key] == 0
+                        for key in ("failures", "errors", "skips", "unexpected_successes")))
+    except (KeyError, IndexError, TypeError, ValueError, UnicodeError):
+        return False
+
+
+def _forward_raw(stream, raw):
+    # 真实入口具有 binary buffer，原字节原样转发；StringIO 仅用于进程级
+    # 合同的重定向断言，不能改变生产 stdout/stderr 的原始字节。
+    if hasattr(stream, "buffer"):
+        stream.flush()
+        if stream.buffer.write(raw) != len(raw):
+            raise OSError("原始测试流转发发生短写")
+        stream.buffer.flush()
+    else:
+        text = raw.decode("utf-8", errors="backslashreplace")
+        if stream.write(text) != len(text):
+            raise OSError("测试流转发发生短写")
+        stream.flush()
+
+
+def _publish_supervised_evidence(record):
+    destination = os.environ.get("AWF_TEST_EVIDENCE_LOG")
+    if destination:
+        # 复用 CI/Win11 的现有 artifacts 出口，完整双流 base64 保留任意字节；
+        # 只有成功写入并 flush 后，父进程才可删除已归零的私有临时场景。
+        with Path(destination).open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+
+def _run_supervised_cases(identifiers):
+    from lib.install.install_process import capture_process, SetupRunError
+    from lib.install.windows_process import WindowsJobCleanupError
+
+    identifiers = tuple(identifiers)
+    if (not identifiers or len(set(identifiers)) != len(identifiers)
+            or not set(identifiers).issubset(_supervised_portable_ids())):
+        raise ValueError("受监督目标不在唯一 TUI registry 中")
+    directory = Path(tempfile.mkdtemp(prefix="awf-validation-app-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH")))
+    directory.chmod(0o700)
+    for name in ("stdout.raw", "stderr.raw", "events.jsonl"):
+        with (directory / name).open("xb") as stream:
+            os.chmod(stream.name, 0o600)
+    # 固定代码/固定源码路径，不提供公开 child flag 或任意 target 输入。
+    bootstrap = ("import runpy,sys; scope=runpy.run_path(sys.argv[1]); "
+                 "raise SystemExit(scope['_run_supervised_child'](sys.stdin.buffer.read()))")
+    command = [sys.executable, "-I", "-B", "-u", "-X", "utf8", "-c", bootstrap, str(PACK / "scripts/test_workflow.py")]
+    started = time.monotonic()
+    record = {"kind": "validation-supervised-batch", "expected_ids": sorted(identifiers),
+              "execution_deadline_seconds": SUPERVISED_EXECUTION_SECONDS,
+              # POSIX 只沿原 capture_process 的父进程退出/异常进程组停止合同，
+              # 不将本机回归描述成 Windows Job 全成员归零证明。
+              "owner_protocol": "windows-job-zero" if os.name == "nt" else "posix-capture-process",
+              "owner_quiescent": False, "ownership_evidence": "unconfirmed",
+              "raw_complete": False, "scene": str(directory)}
+    completed = None
+    try:
+        completed = capture_process(command, body=json.dumps({"directory": str(directory), "ids": identifiers}).encode(),
+                                    timeout=SUPERVISED_EXECUTION_SECONDS)
+        record.update(owner_quiescent=True, ownership_evidence="capture-process-returned",
+                      outcome="exited", child_exit=completed.returncode)
+    except subprocess.TimeoutExpired as error:
+        # 现接口的执行超时来自 communicate；底座 stop/close 成功后才传播。
+        # 无法确认 Job 回收则改抛 WindowsJobCleanupError，不进入此分支。
+        record.update(owner_quiescent=True, ownership_evidence="capture-timeout-stop-returned",
+                      outcome=type(error).__name__, child_exit=None, error_detail=str(error))
+    except (WindowsJobCleanupError, KeyboardInterrupt, SetupRunError) as error:
+        # KI 可能来自 POSIX Popen 尚未进入 communicate 清理 try 的接缝；
+        # SetupRunError 同时用于启动前拒绝/取消，现接口没有可区分的 owner
+        # 收据。不能从异常名字追认“已停止”或实际创建过 Windows Job。
+        # 一律保守 unknown，不读可能仍写入的 raw，不删现场，也不造归零证明。
+        record.update(outcome="unknown-" + type(error).__name__, child_exit=None, error_detail=str(error))
+    except Exception as error:
+        # 不理解的启动/回收异常保守保留现场，不读取可能仍在写入的 raw 文件。
+        record.update(outcome="unknown-" + type(error).__name__, child_exit=None, error_detail=str(error))
+    record["elapsed_seconds"] = time.monotonic() - started
+    record["windows_job_zero_proved"] = os.name == "nt" and record["owner_quiescent"]
+    code = 1
+    output = error = b""
+    if record["owner_quiescent"]:
+        output = (directory / "stdout.raw").read_bytes() + (completed.stdout if completed is not None else b"")
+        error = (directory / "stderr.raw").read_bytes() + (completed.stderr if completed is not None else b"")
+        events = (directory / "events.jsonl").read_bytes()
+        valid = completed is not None and _validate_supervised_events(events, identifiers, completed.returncode)
+        record.update(raw_complete=completed is not None, protocol_valid=valid,
+                      stdout_b64=base64.b64encode(output).decode(), stderr_b64=base64.b64encode(error).decode(),
+                      events_b64=base64.b64encode(events).decode())
+        code = (completed.returncode or (0 if valid else 1)) if completed is not None else 1
+    # 首先持久化完整 raw/lifecycle，之后才接触可能 BrokenPipe 的控制台。
+    # 此记录明确是待转发快照，exit_code=None，不能冒充最终 CLI 成功。
+    record.update(phase="captured-before-forward", scene_retained=True, exit_code=None,
+                  child_result_exit=code, forward_errors=[])
+    try:
+        _publish_supervised_evidence(record)
+    except OSError as error:
+        try:
+            print(f"监督证据写入失败，保留场景 {directory}：{error}", file=sys.stderr, flush=True)
+        except OSError:
+            pass
         return 1
-    return 0 if result.wasSuccessful() else 1
+
+    if record["owner_quiescent"]:
+        for name, stream, raw in (("stdout", sys.stdout, output), ("stderr", sys.stderr, error)):
+            try:
+                _forward_raw(stream, raw)
+            except OSError as failure:
+                record["forward_errors"].append({"stream": name, "error": str(failure),
+                                                  "type": type(failure).__name__})
+                code = code or 1
+    # 未知 owner 不读/转发活 raw；任一转发故障也保留已知静止场景，完整字节已
+    # 进入原 AWF 出口，最终记录明确非 0，不依赖 traceback 或临时路径救证据。
+    record.update(phase="final", exit_code=code,
+                  scene_retained=not record["owner_quiescent"] or bool(record["forward_errors"]))
+    try:
+        _publish_supervised_evidence(record)
+        summary = {key: value for key, value in record.items() if key not in ("stdout_b64", "stderr_b64")}
+        print("validation-supervised-batch " + json.dumps(summary, ensure_ascii=True), file=sys.stderr, flush=True)
+    except OSError as failure:
+        # 最终出口/摘要本身也可能失败。保现场并尽力追加非 0 收据；首份 raw
+        # 快照已持久化时仍在，失败的摘要绝不让函数以原 child 的 0 返回。
+        code = code or 1
+        record.update(exit_code=code, scene_retained=True)
+        record["forward_errors"].append({"stream": "final-evidence-or-summary", "error": str(failure),
+                                          "type": type(failure).__name__})
+        try:
+            _publish_supervised_evidence(record)
+        except OSError:
+            pass
+    if not record["scene_retained"]:
+        try:
+            shutil.rmtree(directory)
+        except OSError as failure:
+            code = code or 1
+            record.update(exit_code=code, scene_retained=True, cleanup_error=str(failure))
+            _publish_supervised_evidence(record)
+    return code
 
 
 def main():
@@ -497,7 +762,13 @@ def main():
     for group in native_requested:
         for target in GROUPS[group]:
             required_native_ids.update(case.id() for case in resolved[target])
-    return run_cases(cases.values(), required_native_ids)
+    # 仅从原 TUI portable 字段取交集；即使经 ci/父模块/精确方法选择到达，
+    # App 方法也只进入一次受监督 child，父 runner 不再执行或伪填其 started。
+    child_ids = tuple(identifier for identifier in _supervised_portable_ids() if identifier in cases)
+    ordinary = [case for identifier, case in cases.items() if identifier not in child_ids]
+    ordinary_code = run_cases(ordinary, required_native_ids - set(child_ids)) if ordinary else 0
+    child_code = _run_supervised_cases(child_ids) if child_ids else 0
+    return ordinary_code or child_code
 
 
 if __name__ == "__main__":

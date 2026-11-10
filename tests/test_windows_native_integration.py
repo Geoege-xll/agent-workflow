@@ -13,6 +13,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -445,12 +446,12 @@ class NativeUI:
         (root / "responses").mkdir()
         self.process = ConPTYProcess(argv, cwd=PACK, env=environment, columns=120, rows=36)
 
-    def key(self, value):
+    def key(self, value, *, started_ns=None):
         payload = KEYS.get(value, value)
         # 记录测试输入的写入边界；返回长度只证明 ConPTY 接受了字节，不能推定
         # curses 已消费/派发。组合查询正文不写入诊断，只记录测试单键和字节数。
         event = {"kind": "input", "key": value if value in KEYS or len(value) == 1 else None,
-                 "bytes": len(payload.encode("utf-8")), "started_ns": time.monotonic_ns() - self.started_ns}
+                 "bytes": len(payload.encode("utf-8")), "started_ns": time.monotonic_ns() - self.started_ns if started_ns is None else started_ns}
         try:
             event["accepted_bytes"] = self.process.write(payload)
             self.case.assertEqual(event["accepted_bytes"], event["bytes"])
@@ -524,6 +525,96 @@ class NativeUI:
                          all(unicodedata.normalize("NFC", text) in self.text(frame) for text in values)
                          and not any(text in self.text(frame) for text in absent), timeout)
 
+    @staticmethod
+    def _busy_elapsed(frame, name):
+        # 既定布局的倒数第五行是作业状态。只读原生文字，不把 IPC 序号、
+        # 后台线程活跃或复用 toast 当作本次动作响应/可见绘制进展。
+        if len(frame["lines"]) < 5:return None
+        match = re.search(re.escape(name) + r" · (\d+)s · 执行中\s*┃?$", frame["lines"][-5])
+        return int(match[1]) if match else None
+
+    def action(self, key, label, predicate, *, busy_name, baseline=None):
+        baseline = self.snapshot() if baseline is None else baseline
+        self.case.assertNotIn("执行中", self.text(baseline), "旧作业仍忙，不能发送新动作")
+        self.case.assertFalse(predicate(baseline), "动作目标已在基线成立，缺少本次消费证据")
+        # 输入记录、5s 响应与 60s 结算严格共用这个起点，write 或后续刷新
+        # 都不能重置期限。60s 只是集成测试防挂上限，不是性能/产品 SLA。
+        origin = time.monotonic_ns()
+        self.key(key, started_ns=origin - self.started_ns)
+        return self.wait_action(label, predicate, busy_name=busy_name, origin_ns=origin)
+
+    def wait_action(self, label, predicate, *, busy_name, origin_ns):
+        ack_deadline = origin_ns + 5_000_000_000
+        final_deadline = origin_ns + 60_000_000_000
+        checkpoint = origin_ns + 30_000_000_000
+        event = {"kind": "action", "label": label, "busy_name": busy_name,
+                 "started_ns": origin_ns - self.started_ns,
+                 "ack_deadline_ns": ack_deadline - self.started_ns,
+                 "settlement_deadline_ns": final_deadline - self.started_ns,
+                 "first_number": self.sequence + 1, "outcome": "error", "ack": None,
+                 "checkpoint_30s": None, "busy_samples": 0, "drawing_changes": 0,
+                 "busy_elapsed_first": None, "busy_elapsed_last": None}
+        last = None;previous_lines = None;last_draw = origin_ns;last_elapsed = origin_ns
+        try:
+            while True:
+                now = time.monotonic_ns()
+                limit = final_deadline if event["ack"] is not None else ack_deadline
+                if now >= limit:
+                    event["outcome"] = "settlement-timeout" if event["ack"] is not None else "ack-timeout"
+                    self.case.fail("异步动作未在绝对期限内达到 " + label)
+                # 单次观察也受剩余响应/结算预算约束，不能在最后一帧再借5s。
+                last = self.snapshot(timeout=min(5, (limit - now) / 1_000_000_000))
+                now = time.monotonic_ns();elapsed = now - origin_ns
+                if event["checkpoint_30s"] is None and now >= checkpoint:
+                    event["checkpoint_30s"] = {"elapsed_ns": elapsed, "number": self.sequence,
+                        "stable": last["stable"], "busy_elapsed": self._busy_elapsed(last, busy_name)}
+                    self.frames.append({"label": label + "-30s-checkpoint", "native": last})
+                # 目标再正确也不能接受期限之后才拿到的快照；记录真实超限耗时。
+                if now > limit:
+                    event["outcome"] = "settlement-timeout" if event["ack"] is not None else "ack-timeout"
+                    self.case.fail("异步动作观察返回已超过绝对期限：" + label)
+                complete = last["stable"] and predicate(last)
+                busy_elapsed = self._busy_elapsed(last, busy_name) if last["stable"] else None
+                if event["ack"] is None and (complete or busy_elapsed is not None):
+                    event["ack"] = {"kind": "terminal" if complete else "busy", "elapsed_ns": elapsed,
+                                    "number": self.sequence}
+                    last_draw = last_elapsed = now
+                # 最终帧也不能抹去此前超过5s的可见进展证据缺口；快速完成
+                # 在上面首次响应时建立计时，因此不要求它先出现 busy。
+                if event["ack"] is not None and (now - last_draw > 5_000_000_000 or
+                        event["busy_samples"] > 0 and now - last_elapsed > 5_000_000_000):
+                    event["outcome"] = "drawing-stalled"
+                    self.case.fail("异步动作缺少持续原生绘制/elapsed进展：" + label)
+                if complete:
+                    event["outcome"] = "success"
+                    self.frames.append({"label": label, "native": last})
+                    return last
+                if event["ack"] is not None:
+                    # 响应之后仍须持续可见绘制。真实 busy 的秒数必须推进，
+                    # 仅观察到管道/序号变化或一个长期冻结的 spinner 不算活性。
+                    lines = tuple(last["lines"])
+                    if last["stable"] and lines != previous_lines:
+                        event["drawing_changes"] += 1;last_draw = now;previous_lines = lines
+                    if busy_elapsed is not None:
+                        event["busy_samples"] += 1
+                        previous_elapsed = event["busy_elapsed_last"]
+                        if previous_elapsed is None:event["busy_elapsed_first"] = busy_elapsed
+                        elif busy_elapsed < previous_elapsed:
+                            event["outcome"] = "elapsed-restarted"
+                            self.case.fail("同一动作的可见elapsed回退，不能续期：" + label)
+                        if previous_elapsed is None or busy_elapsed > previous_elapsed:last_elapsed = now
+                        event["busy_elapsed_last"] = busy_elapsed
+                remaining = (final_deadline if event["ack"] is not None else ack_deadline) - time.monotonic_ns()
+                if remaining > 0:time.sleep(min(0.03, remaining / 1_000_000_000))
+        except BaseException:
+            if last is not None:self.frames.append({"label": label + "-failed", "native": last})
+            raise
+        finally:
+            event["last_number"] = self.sequence
+            event["finished_ns"] = time.monotonic_ns() - self.started_ns
+            event["actual_elapsed_ns"] = time.monotonic_ns() - origin_ns
+            self.events.append(event)
+
     def ready(self):
         return self.main_is("角色模型", "后端开发")
 
@@ -581,26 +672,71 @@ class NativeUI:
         return self.wait(next_text, lambda frame:self._choice_ready(frame, next_text))
 
     def model(self, query, effort="high"):
-        self.key("m");self.text_is("选择模型", absent=("执行中",))
+        self.open_choice("m", "选择模型")
         self.choose(query, "选择推理级别")
         self.choose(effort, "已暂存，尚未保存")
 
+    def open_choice(self, key, title):
+        baseline = self.snapshot()
+        hosts = [name for marker, name in (("[1 Codex]", "Codex"), ("[2 Claude Code]", "Claude Code"))
+                 if marker in self.text(baseline)]
+        self.case.assertEqual(len(hosts), 1, "编辑入口必须有唯一实际活动宿主")
+        return self.action(key, title, lambda frame:self._modal_title(frame) == title and "执行中" not in self.text(frame),
+                           busy_name="读取 " + hosts[0] + " 模型目录", baseline=baseline)
+
     def preview(self):
-        self.key("s")
-        return self.wait("保存预览 / 确认备份并保存", lambda frame:
+        return self.action("s", "保存预览 / 确认备份并保存", lambda frame:
                          self._modal_title(frame) == "保存预览" and "确认备份并保存" in self.text(frame)
-                         and "执行中" not in self.text(frame))
+                         and "执行中" not in self.text(frame), busy_name="生成保存预览")
 
     def save(self):
         self.preview()
-        self.key("enter");self.text_is("操作结果", "已保存模型配置", absent=("执行中",))
+        self.action("enter", "操作结果 / 已保存模型配置", lambda frame:self._modal_title(frame) == "操作结果"
+                    and "已保存模型配置" in self.text(frame) and "执行中" not in self.text(frame), busy_name="备份并保存模型配置")
         self.key("esc");self.ready()
 
-    def command(self, query, result):
+    def project_action(self, key, action, *, preview=False):
+        name = {"enable": "启用工作流", "disable": "停用工作流"}[action]
+        title = "项目管理 · 只读预览" if preview else "操作结果"
+        return self.action(key, title + (" / 确认" + name if preview else ""), lambda frame:
+                           self._modal_title(frame) == title and "执行中" not in self.text(frame)
+                           and (not preview or "确认" + name in self.text(frame)),
+                           busy_name=("预览" if preview else "") + name)
+
+    @classmethod
+    def _reset_projection(cls, frame):
+        """只从同一原生主屏取得选中后端角色的两个字段及其来源。"""
+        if not frame["stable"] or not cls._main_ready(frame, ("全局默认 · 工作流子 Agent",)):
+            return None
+        # 直接匹配 ReadConsoleOutputW 已读取的角色行；不借 App 私有状态、
+        # 不用另一个 cell_width 或重新绘制的 Screen 推算字段。选中标记和
+        # 后端角色身份必须同时存在，不能把别行重复的“继承”当成本次结果。
+        roles = []
+        sources = []
+        for line in frame["lines"]:
+            line = unicodedata.normalize("NFC", line)
+            if match := re.search(r"▌[● ]后端开发\s+▸?(\S+)\s+(\S+)\s*┃?$", line):
+                roles.append(match.groups())
+            if match := re.fullmatch(r"xy-backend · 模型来源 (\S+) / 推理来源 (\S+) · v 详情", line.strip("┃ ")):
+                sources.append(match.groups())
+        return (*roles[0], *sources[0]) if len(roles) == len(sources) == 1 else None
+
+    @classmethod
+    def _reset_ready(cls, frame, baseline, target, result):
+        # 两次恢复共用同一个 toast，序号也会在旧画面上继续增长。必须证明
+        # 本次目标相对真实基线发生变化，且字段/来源/无弹层/无忙态在同帧成立。
+        # 允许动作快到来不及观察 busy：业务投影已变化本身就能证明本次完成。
+        return baseline != target and cls._reset_projection(frame) == target and result in cls.text(frame)
+
+    def command(self, query, result, *, before, after):
+        frame = self.wait("恢复前的选中角色值与来源", lambda value:self._reset_projection(value) is not None)
+        baseline = self._reset_projection(frame)
+        self.case.assertEqual(baseline, before, "恢复前实际角色值或来源不符，不能用旧目标画面接受新动作")
+        self.case.assertNotEqual(baseline, after, "本次恢复必须有区别于基线的业务画面证据")
         self.key(":" + query)
-        self.text_is("命令面板", query)
-        self.key("enter")
-        self.text_is(result, absent=("执行中", "命令面板"))
+        menu = self.text_is("命令面板", query)
+        return self.action("enter", result, lambda value:self._reset_ready(value, baseline, after, result),
+                           busy_name="读取 Codex 模型目录", baseline=menu)
 
     def finish(self, interrupted=False):
         if interrupted:self.process.send_ctrl_c()
@@ -631,6 +767,195 @@ class NativeUI:
         if target:
             with open(target, "a", encoding="utf-8") as stream:
                 stream.write(line + "\n")
+
+
+class NativeUIResetPredicatePortableTest(unittest.TestCase):
+    """回放真实原生行的判据合同；不模拟终端，也不声称 portable 等于原生通过。"""
+
+    # 来源：run42783756527、candidate3b5e152，process artifact 的 global 方法。
+    # SHA 是原 native 对象按 sort_keys/紧凑分隔/UTF-8 canonical JSON 计算，
+    # 下方仅保存必要角色行、footer 和弹层标题片段；不带巨型 cells/base64。
+    # 这些常量是原生已观察业务文本，不从被测判据或生产 draw 生成期望画面。
+    RECORDED = {
+        728: ("c5fba78d048cdd706f16fa63de07d1a6592157417a446116c74d9a87bddd6532",
+              "全局默认 · 工作流子 Agent", "▌ 后端开发         ▸fixture-model                                             high",
+              "xy-backend · 模型来源 全局 / 推理来源 全局 · v 详情", "✔ 已保存模型配置 · 全局默认 / Codex"),
+        814: ("7a435f62115ea86b508ada4c4f6049a494b3a00e215b55e4f5f03a15baa552f3",
+              "全局默认 · 工作流子 Agent", "▌●后端开发         ▸继承                                                      high",
+              "xy-backend · 模型来源 宿主 / 推理来源 全局 · v 详情", "▲ 已暂存恢复跟随宿主；尚未保存，按 s 预览"),
+        816: ("c7a4347ff73fe916833806febfd0bc26600c239634dcae46bf54b58dbe41a180",
+              "╭ 命令面板     ─────────────────────────────────────────────────────────────────────────── 1 / 1 ╮", "",
+              "│                                                                                            │", "▲ 已暂存恢复跟随宿主；尚未保存，按 s 预览"),
+        817: ("67e0d1c5225a2fe703c44c0d4b9a5791b2652860daa2727b03ad981f6d4c1f9a",
+              "全局默认 · 工作流子 Agent", "▌●后端开发         ▸继承                                                      high",
+              "│                                                                                            │", "▲ 已暂存恢复跟随宿主；尚未保存，按 s 预览"),
+        1299: ("0eb1c11fc52946743e4abf5008faa9f7caa953d74d960df9397224e179302c69",
+               "全局默认 · 工作流子 Agent", "▌●后端开发         ▸继承                                                      继承",
+               "xy-backend · 模型来源 宿主 / 推理来源 宿主 · v 详情", "▲ 已暂存恢复跟随宿主；尚未保存，按 s 预览"),
+    }
+
+    @classmethod
+    def recorded(cls, number):
+        digest, header, role, source, status = cls.RECORDED[number]
+        # 空行只是省略与纯判据无关的原生行；不实现屏幕写入、宽度或渲染行为。
+        lines = [""] * 36
+        for row, text in ((4, header), (10, role), (29, source), (31, status)):lines[row] = text
+        return {"stable": True, "lines": lines, "recorded_number": number, "source_native_sha256": digest}
+
+    def test_reset_requires_selected_fields_and_sources_in_one_native_frame(self):
+        saved = ("fixture-model", "high", "全局", "全局")
+        model_reset = ("继承", "high", "宿主", "全局")
+        both_reset = ("继承", "继承", "宿主", "宿主")
+        message = "已暂存恢复跟随宿主"
+        self.assertEqual(saved, NativeUI._reset_projection(self.recorded(728)))
+        self.assertTrue(NativeUI._reset_ready(self.recorded(814), saved, model_reset, message))
+        self.assertTrue(NativeUI._reset_ready(self.recorded(1299), model_reset, both_reset, message))
+        for number in (814, 816, 817):
+            with self.subTest(native_number=number):
+                self.assertFalse(NativeUI._reset_ready(self.recorded(number), model_reset, both_reset, message))
+        self.assertFalse(NativeUI._reset_ready(self.recorded(1299), both_reset, both_reset, message))
+        # 在原生完成帧上逐项作负控，证明判据没有仅靠 toast、别行字段、旧来源
+        # 或“无执行中”放行。变体只属于判据测试，不冒充另一份真实原生证据。
+        mutations = {
+            "wrong-role": (10, self.recorded(1299)["lines"][10].replace("后端开发", "独立 QA")),
+            "wrong-source": (29, "xy-backend · 模型来源 全局 / 推理来源 宿主 · v 详情"),
+            "wrong-source-role": (29, "xy-qa · 模型来源 宿主 / 推理来源 宿主 · v 详情"),
+            "modal": (4, self.recorded(816)["lines"][4]),
+            "busy": (31, "读取来源 · 执行中"),
+        }
+        for name, (row, text) in mutations.items():
+            with self.subTest(control=name):
+                frame = self.recorded(1299);frame["lines"][row] = text
+                self.assertFalse(NativeUI._reset_ready(frame, model_reset, both_reset, message))
+        frame = self.recorded(1299);frame["stable"] = False
+        self.assertFalse(NativeUI._reset_ready(frame, model_reset, both_reset, message))
+
+    def test_reset_command_rejects_old_toast_and_waits_for_business_transition(self):
+        before = ("继承", "high", "宿主", "全局")
+        after = ("继承", "继承", "宿主", "宿主")
+        # 执行真实 NativeUI.command/text_is/wait 路由，只把 snapshot 的输入
+        # 换成已记录的原生行。既不启动 WinDLL，也不接触 App 私有状态。
+        for intermediates in ((814, 817), ()):
+            with self.subTest(intermediate_frames=intermediates):
+                ui = object.__new__(NativeUI);ui.case = self;ui.sequence = 0
+                ui.started_ns = time.monotonic_ns();ui.frames = [];ui.events = []
+                modal = self.recorded(816);modal["lines"][7] = "恢复推理跟随宿主"
+                pending = [self.recorded(814), modal, *(self.recorded(n) for n in intermediates), self.recorded(1299)]
+                inputs = [];seen = []
+                def snapshot(timeout=5):
+                    self.assertTrue(pending, "真实 command 路由没有在目标业务帧完成")
+                    ui.sequence += 1;frame = pending.pop(0);seen.append(frame["recorded_number"]);return frame
+                def key(value, **kwargs):inputs.append(value)
+                with patch.object(ui, "snapshot", side_effect=snapshot), patch.object(ui, "key", side_effect=key):
+                    frame = ui.command("恢复推理跟随宿主", "已暂存恢复跟随宿主", before=before, after=after)
+                self.assertEqual(1299, frame["recorded_number"])
+                self.assertEqual([":恢复推理跟随宿主", "enter"], inputs)
+                self.assertEqual([814, 816, *intermediates, 1299], seen)
+                self.assertFalse(pending);self.assertTrue(all(e["outcome"] == "success" for e in ui.events))
+                self.assertEqual(1299, ui.frames[-1]["native"]["recorded_number"])
+
+
+class NativeUIAsyncWaitPortableTest(unittest.TestCase):
+    """真实 action/wait_action 消费者的时限合同；不以受控时钟冒充原生性能。"""
+
+    BEFORE = ("继承", "high", "宿主", "全局")
+    AFTER = ("继承", "继承", "宿主", "宿主")
+    BUSY = "读取 Codex 模型目录"
+    MESSAGE = "已暂存恢复跟随宿主"
+
+    @classmethod
+    def busy(cls, seconds, *, name=None, spinner="/"):
+        # 在真实旧业务行上只变更作业状态，属于明确标记的时限负/正控数据，
+        # 不是 Screen 实现，也不产生任何 native 验收或耗时通过结论。
+        frame = NativeUIResetPredicatePortableTest.recorded(814)
+        frame["lines"][31] = "▲ " + spinner + " " + (name or cls.BUSY) + f" · {seconds}s · 执行中"
+        return frame
+
+    @contextmanager
+    def replay(self, samples, *, baseline=None):
+        ui = object.__new__(NativeUI);ui.case = self;ui.sequence = 0
+        ui.started_ns = 2_000_000_000;ui.frames = [];ui.events = []
+        clock = [10_000_000_000];origin = clock[0];pending = list(samples)
+        inputs = [];calls = [];first = True
+        def snapshot(timeout=5):
+            nonlocal first
+            calls.append({"at_ns":clock[0],"timeout":timeout})
+            self.assertTrue(0 < timeout <= 5)
+            ui.sequence += 1
+            if first:
+                first = False
+                return NativeUIResetPredicatePortableTest.recorded(814) if baseline is None else baseline
+            self.assertTrue(pending, "wait_action 在有界样本结束后仍继续请求")
+            seconds, frame = pending.pop(0);sample_time = origin + round(seconds * 1_000_000_000)
+            self.assertGreaterEqual(sample_time, clock[0], "回放单调时钟不能倒退")
+            clock[0] = sample_time
+            return frame
+        def key(value, **kwargs):inputs.append((value, kwargs))
+        def sleep(seconds):clock[0] += round(seconds * 1_000_000_000)
+        with patch.object(ui,"snapshot",side_effect=snapshot), patch.object(ui,"key",side_effect=key), \
+             patch.object(time,"monotonic_ns",side_effect=lambda:clock[0]), patch.object(time,"sleep",side_effect=sleep):
+            yield ui,inputs,calls
+
+    def perform(self, ui):
+        return ui.action("enter", self.MESSAGE, lambda frame:NativeUI._reset_ready(frame,self.BEFORE,self.AFTER,self.MESSAGE),
+                         busy_name=self.BUSY)
+
+    def test_action_wait_uses_input_deadlines_and_requires_new_acknowledgement(self):
+        target = NativeUIResetPredicatePortableTest.recorded(1299)
+        # 快完成直接用本次业务变化响应；无需人为制造一个 busy 帧。
+        with self.replay([(0.1,target)]) as (ui,inputs,calls):
+            self.assertIs(target,self.perform(ui));event=ui.events[-1]
+            self.assertEqual([("enter",{"started_ns":8_000_000_000})],inputs)
+            self.assertEqual(8_000_000_000,event["started_ns"])
+            self.assertEqual(13_000_000_000,event["ack_deadline_ns"])
+            self.assertEqual(68_000_000_000,event["settlement_deadline_ns"])
+            self.assertEqual("terminal",event["ack"]["kind"]);self.assertEqual(100_000_000,event["actual_elapsed_ns"])
+        for baseline in (self.busy(29), target):
+            with self.subTest(baseline=baseline["lines"][31]), self.replay([],baseline=baseline) as (ui,inputs,calls):
+                with self.assertRaises(AssertionError):self.perform(ui)
+                self.assertEqual([],inputs);self.assertEqual([],ui.events)
+        scenarios = {
+            "old-toast-new-sequence": [(1,NativeUIResetPredicatePortableTest.recorded(814)),
+                                       (3,NativeUIResetPredicatePortableTest.recorded(817)),
+                                       (5,NativeUIResetPredicatePortableTest.recorded(814))],
+            "other-job-busy": [(1,self.busy(1,name="其他作业")),(5,self.busy(5,name="其他作业"))],
+            "late-first-target": [(5.1,target)],
+        }
+        for name,samples in scenarios.items():
+            with self.subTest(control=name), self.replay(samples) as (ui,inputs,calls):
+                with self.assertRaisesRegex(AssertionError,"绝对期限"):self.perform(ui)
+                event=ui.events[-1];self.assertEqual("ack-timeout",event["outcome"])
+                self.assertIsNone(event["ack"]);self.assertEqual(1,len(inputs))
+                for call in calls[1:]:self.assertLessEqual(call["timeout"],(15_000_000_000-call["at_ns"])/1e9)
+
+    def test_action_wait_preserves_checkpoint_progress_and_terminal_failures(self):
+        target=NativeUIResetPredicatePortableTest.recorded(1299)
+        samples=[(n,self.busy(n)) for n in (1,5,9,13,17,21,25,29,30,34,38)]
+        with self.replay([*samples,(40,target)]) as (ui,inputs,calls):
+            self.assertIs(target,self.perform(ui));event=ui.events[-1]
+            self.assertEqual("busy",event["ack"]["kind"])
+            self.assertEqual(30_000_000_000,event["checkpoint_30s"]["elapsed_ns"])
+            self.assertEqual(40_000_000_000,event["actual_elapsed_ns"])
+            self.assertEqual(68_000_000_000,event["settlement_deadline_ns"])
+            self.assertEqual(1,event["busy_elapsed_first"]);self.assertEqual(38,event["busy_elapsed_last"])
+            self.assertEqual(len(samples),event["busy_samples"]);self.assertGreater(event["drawing_changes"],1)
+            self.assertEqual(1,sum(f["label"].endswith("-30s-checkpoint") for f in ui.frames))
+        controls={
+            "spinner-with-frozen-elapsed": ([(1,self.busy(0)),(4,self.busy(0,spinner="-")),(7,self.busy(0))],"drawing-stalled"),
+            "terminal-after-frozen-elapsed": ([(1,self.busy(0)),(4,self.busy(0,spinner="-")),(7,target)],"drawing-stalled"),
+            "elapsed-restart": ([(1,self.busy(1)),(4,self.busy(0))],"elapsed-restarted"),
+            "late-terminal": ([*( (n,self.busy(n)) for n in (1,5,9,13,17,21,25,29,30,34,38,42,46,50,54,58)),
+                               (60.1,target)],"settlement-timeout"),
+        }
+        for name,(values,outcome) in controls.items():
+            with self.subTest(control=name), self.replay(values) as (ui,inputs,calls):
+                with self.assertRaises(AssertionError):self.perform(ui)
+                event=ui.events[-1];self.assertEqual(outcome,event["outcome"])
+                self.assertEqual(68_000_000_000,event["settlement_deadline_ns"])
+                self.assertTrue(ui.frames[-1]["label"].endswith("-failed"));self.assertEqual(1,len(inputs))
+                for call in calls[1:]:self.assertLessEqual(call["timeout"],(70_000_000_000-call["at_ns"])/1e9)
+                if name == "late-terminal":
+                    self.assertIsNotNone(event["checkpoint_30s"]);self.assertLess(calls[-1]["timeout"],5)
 
 
 @unittest.skipUnless(os.name == "nt", "必须真实 Windows 执行；Mac 收集/skip 不是原生验收")
@@ -748,7 +1073,7 @@ class WindowsNativeTUIIntegrationTest(unittest.TestCase):
             ui.key("left");ui.text_is("◈ 项目列表")
             ui.role();ui.text_is("◈ 角色模型")
             before = (self.project / ".agent-workflow/project.yaml").read_bytes()
-            ui.key("m");ui.text_is("选择模型")
+            ui.open_choice("m", "选择模型")
             ui.key("tab");ui.key("right");ui.text_is("选择模型", "[1 Codex]")
             ui.key("esc");ui.text_is("已取消本次选择")
             self.assertEqual((self.project / ".agent-workflow/project.yaml").read_bytes(), before)
@@ -763,7 +1088,7 @@ class WindowsNativeTUIIntegrationTest(unittest.TestCase):
             self.assertEqual((value["model"], value["effort"]), ("fixture-model", "max"))
             # e 的独立字段路径必须保留已经保存的模型，不靠模型向导顺带
             # 选择推理来代替这个合同；真实文件结果与界面成功反馈一起验证。
-            ui.key("e");ui.text_is("选择推理级别", absent=("执行中",))
+            ui.open_choice("e", "选择推理级别")
             ui.choose("high", "已暂存，尚未保存");ui.save()
             value = service.role_settings(self.project, "codex", "xy-backend", state=self.state, native_context=self.context)
             self.assertEqual((value["model"], value["effort"]), ("fixture-model", "high"))
@@ -776,14 +1101,14 @@ class WindowsNativeTUIIntegrationTest(unittest.TestCase):
             ui.key("tab");ui.text_is("[1 Codex]")
             ui.key("backtab");ui.text_is("[3 Antigravity]")
             ui.key("1");ui.text_is("[1 Codex]")
-            ui.key("p");ui.text_is("项目管理 · 只读预览", "确认停用工作流")
+            ui.project_action("p", "disable", preview=True)
             ui.key("esc");ui.ready()
             self.assertTrue(project_service.project_status(self.state, self.project)["enabled"])
-            ui.key("p");ui.text_is("项目管理 · 只读预览", "确认停用工作流")
-            ui.key("enter");ui.text_is("操作结果", absent=("执行中",))
+            ui.project_action("p", "disable", preview=True)
+            ui.project_action("enter", "disable")
             self.assertFalse(project_service.project_status(self.state, self.project)["enabled"])
-            ui.key("esc");ui.key("o");ui.text_is("项目管理 · 只读预览", "确认启用工作流")
-            ui.key("enter");ui.text_is("操作结果", absent=("执行中",))
+            ui.key("esc");ui.project_action("o", "enable", preview=True)
+            ui.project_action("enter", "enable")
             self.assertTrue(project_service.project_status(self.state, self.project)["enabled"])
             ui.key("esc");ui.ready();ui.finish()
 
@@ -797,8 +1122,10 @@ class WindowsNativeTUIIntegrationTest(unittest.TestCase):
             self.assertEqual(defaults, {"model": "fixture-model", "effort": "high"})
             ui.key("v");ui.text_is("当前角色值与来源", "全局", "明确设置")
             ui.key("esc")
-            ui.command("恢复模型跟随宿主", "已暂存恢复跟随宿主")
-            ui.command("恢复推理跟随宿主", "已暂存恢复跟随宿主")
+            ui.command("恢复模型跟随宿主", "已暂存恢复跟随宿主",
+                       before=("fixture-model", "high", "全局", "全局"), after=("继承", "high", "宿主", "全局"))
+            ui.command("恢复推理跟随宿主", "已暂存恢复跟随宿主",
+                       before=("继承", "high", "宿主", "全局"), after=("继承", "继承", "宿主", "宿主"))
             ui.save()
             self.assertEqual(preference_snapshot(self.state)[1].get("codex", {}).get("xy-backend", {}), {})
             followed = service.role_settings(self.project, "codex", "xy-backend", state=self.state, native_context=self.context)

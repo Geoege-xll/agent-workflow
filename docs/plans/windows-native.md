@@ -38,17 +38,15 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 目标保持 Windows11 x64、普通用户 PowerShell7+ 与 Python3.11+。CLI／TUI 共用中央服务，三个平台的入口与内置 Skill 归项目并通过链接使用；不新增兼容升级通道、EXE／MSI／WinGet 或立项入口。既有 curses 布局、真实 ConPTY 与 UI／可访问性验收范围保持。
 
 
-中央读取沿用同根、同 pin 的完整操作级 reader；写入另做 fresh 核对。偏好保存通过明确的纯准备接口与完整 OwnershipSources 固定来源，保留记录、journal retained、目录、完整 Node 与画像核验，再进入原发布、验证和条件补偿。
+中央读取沿用同根、同pin的操作级完整reader，写入另做fresh核对。偏好保存保留完整OwnershipSources、Node、目录、画像、journal及条件补偿。Windows创建、首写和发布集中在lib/windows_fs.py，同一不可继承share0 HANDLE在必要的精确SD初始化后完整重读，再允许payload／CRT转移；完整owner、DACL、control、有序ACE、身份和源守卫保持。Records与façade使用一致的bare／package模块命名空间；默认4MiB、明确入口最高8MiB及原marker／core／GC预算保持。
 
-Windows 文件创建、首写和发布集中在 lib/windows_fs.py。create_regular_stage／seal_regular_stage／write_regular_if_unchanged 保留同一不可继承、share0 HANDLE、完整 owner／DACL／control、有序 ACE、mode／attrs 与源身份守卫；仅在必要的受保护 SD 初始化后完整重读相等才接受。公共写者共用发布边界，Records 的 Windows helper 与 bare／package façade 使用同一模块命名空间；三参数接口、finish → fresh CAS → 最后结算来源顺序保持，不做全局模块 alias。默认 4MiB、明确入口最高 8MiB 及原 marker／core／GC 预算保持。
+两处已审职责整理减少重复工作：directory未消费的stat由原子目录守卫唯一负责；App.apply_project的writer返回后，状态列表和选中Context共用父read_operation。跨pin独立、PowerShell fresh探针、完整来源／安全／退出尾验保持。真实App同pin2scan／4verify→1／2，双pin4／8→2／4，完整数据和私有夹具bytes相等；三个真实tail漂移拒交Context并保已完成写入、journal和旧草稿。调用数减少不等于时延已验收。
 
-唯一 registry 当前实际收集为 10 组件／156 方法；Win11 普通用户范围 153 方法，明确排除提升专项 3 方法，所选方法严格拒绝 skip／未执行。完整运行 [42762760967](https://github.com/Geoege-xll/agent-workflow/actions/runs/42762760967) 对应候选 14bc952，实际 PR 合并 e688d54 与候选树相同：macOS／Linux CI、Windows 9／10 组件通过，包括中央完整生命周期、边界 12 项、准入结算 41 项、原语库 75 项和 owner-only 负控。TUI 的两个首次保存预览超 30 秒，尚未进入 apply／refresh；Unicode 方法通过，整体门禁仍失败。
+当前候选3b5e152／tree84d3323的完整运行[42783756527](https://github.com/Geoege-xll/agent-workflow/actions/runs/42783756527)已结束，实际PR合并bd424a3与候选同树。macOS／Linux与Windows9/10组件通过，包括中央生命周期、边界12项、准入41项、原语库76项、入口及ConPTY。该次完整matrix collector在私有venv按原hash／binary锁准备依赖后真实收集156方法；该次普通桌面153方法，明确排除提升专项3项，严格拒绝所选节点skip／未执行。
 
-新增全调用阶段钩子可能扰动计时，尚未量化因果。测试观察器现改为显式 opt-in：run_observed 的 phase_profile 与 PhaseProfile.enabled 默认 False，关闭时不绑定或触碰 profiler，证据明确 disabled；只有显式 True 才记录有界阶段数据。原启用合同、读屏、worker 栈、IPC、三个真实 TUI 方法、屏幕断言和 30 秒预算保持；产品与后端无此增量。原唯一 Reviewer 已准许精确两测试文件运输；统一原 CLI 两项 0.042 秒 exit0，已有 Python3.11／3.14 两项各通过，registry 数量保持。默认无 hook 对照 [42767872406](https://github.com/Geoege-xll/agent-workflow/actions/runs/42767872406) 已结束：Mac/Linux 与 Windows9/10组件通过，TUI仅项目保存结果30.031秒超时；预览9.172秒两次与全局保存21.313／21.735秒通过，54个留存frame明确disabled，项目final缺失不补断言。末采样仍在refresh的load_context函数体，无法拆分整段30秒，不据此删校验。
+TUI5方法仍有2失败、1错误：项目首保存结果观察30.062秒后超时，末次worker在refresh外层尾验，不能据此认定业务写入失败；双pin App Future等待20秒超时，缺最终计数，不能补记成功；全局第二次恢复因重复toast在字段仍为high时提前通过，后续保存按键实际消费未知。全局首保存、同pin App正控、tail负控及Unicode／模式恢复已有本轮原生通过证据。51／51留存frames与唯一可用final均明确phase_profile disabled，另外两final缺失，不能补终态／恢复断言。
 
-已证实并收束一处遍历职责重复：directory分支未消费的stat由_child_directory的原stat/open/身份核对唯一负责，文件fresh、完整metadata/ACL/member/ancestor与reader尾验不变。真实D12/F15夹具source验证stat83→71、reader首尾102→78；新增回归先红后绿，原四安全节点全过。原Reviewer已准许精确runtime_store.py／tests_runtime_store.py及唯一登记运输；统一CLI新1项0.020秒exit0，实际matrix154/desktop151排3。这仅证明调用数减少，Windows时延与原30秒保存仍待同源完整复验，未引入completion新协议、缓存、UI或SDK改动。
-
-目录优化完整运行[42772624629](https://github.com/Geoege-xll/agent-workflow/actions/runs/42772624629)已结束：Mac/Linux与Windows9/10组件通过，五次模型／推理保存、切换和停用通过；唯一启用确认后30秒未结算，operation已返回，末采样在refresh的状态查询／PowerShell fresh探针等待，不能归因整段30秒。后续仅给App.apply_project.refresh加既有父read_operation，完全位于writer之后，跨pin独立，探针和全部业务来源／安全／尾验保持，无新后端API。原Reviewer已准许精确生产6行、两App回归及唯一登记运输；真实同pin2scan/4verify→1/2，双pin原主/副/主/主4/8→2/4，数据和磁盘bytes相等。三种真实tail漂移拒交Context且保实际启用/journal/草稿来源、阻止重提，下一刷新fresh；统一CLI两项7.269秒OK。新两方法沿现TUI组件curses前置，原3真实UI方法不变，当前TUI共5方法；原预算Windows完整复验与最终QA仍待。
+原唯一Reviewer已核清20／30秒是测试等待而非生产Job或用户指定SLA；生产Job异步结算、单次子进程60秒、PowerShell fresh探针5秒及Hook内部12秒／宿主15秒属于独立合同。原TUI owner已修正本次角色字段／来源的真实屏幕判据，区分动作响应、有限业务结算和测试进程回收；同一Reviewer确认原源码Important均闭合并允许精确运输。新测试合同已在复验前冻结并由原Reviewer核可实施条件：5秒动作响应与60秒结算共用输入起点，保留30秒处状态与实际耗时；原CLI仅对两App方法复用已有Windows Job owner进行600秒执行监督。600秒不承诺内核回收墙钟上界，超时／未知始终失败、保留现场；最终屏幕和业务文件断言保持。此为验证修订，统一源码已按原CLI完成13项消费验证，11.512秒exit0（受监督App2项、父runner11项），最新collector实际为10组件／167方法、普通桌面164方法／排除提升3项；实际Windows复验及最终QA仍待，不把结算／防挂上限当性能通过。观察器全调用profile仅显式opt-in，默认不绑定、不触碰profiler，不再用它推断纯业务性能。
 
 实现、原始失败、完整日志、冻结源及同一 Reviewer 的审查记录保存在请求 upgrade-214-20261109 临时区和 Git 历史；计划只保留当前契约与恢复入口。临时诊断 workflow 从未进入候选或发行载荷，npm／npx 不恢复。用户已明确先完成开发和 CI；Win11 普通用户真机暂缓，最终统一 QA 与正式发布仍待，Server CI 不提升为 Win11 桌面验收。
 
@@ -59,4 +57,4 @@ Windows 文件创建、首写和发布集中在 lib/windows_fs.py。create_regul
 ## 批准依据与必要证据
 
 - 批准依据: 用户要求原生 Windows11 x64/PowerShell7+ 适配，曾暂停后已明确恢复，并授权完成后发布新版本和升级本机；补充要求必要重构、健壮易维护和依据三平台最新官方规范。生产交新子代理、独立 QA、保留资料和现有修复；布局与流程已定版，当前仅原生平台适配。
-- 验收证据: 原始运行、修复与同一 Reviewer 的源审分别保留，最新目录优化完整结果见42772624629（Mac/Linux与Windows9/10组件通过，保存及停用已过，仅启用后的刷新超时）。后置只读共享后的原预算完整复验、Win11普通用户桌面及最终QA尚待；准确命令、环境、stdout/stderr与退出码以原日志为准，不以计划、模拟、部分通过或插桩数据替代整体验收。
+- 验收证据: 原始运行、修复与同一Reviewer的源审分别保留，最新完整结果见42783756527（Mac/Linux与Windows9/10组件通过，TUI5方法仍有2失败和1错误）。测试同步／等待合同修复后的真实Windows复验、Win11普通用户桌面及最终QA尚待；准确命令、环境、stdout/stderr与退出码以原日志为准，不以计划、模拟、部分通过或插桩数据替代整体验收。

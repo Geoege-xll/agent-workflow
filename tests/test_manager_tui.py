@@ -1320,6 +1320,32 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
         except (OSError,ValueError):pass
         self.app.poll_job()
 
+    def wait_app_contract(self, future):
+        """仅供本轮两个 App 合同节点使用；旧节点的 settle/20s 原样保留。"""
+        try:
+            return future.result(timeout=60)
+        except TimeoutError:
+            # 60s 是测试等待上限，超时仍必须失败，不能把随后完成追认为通过。
+            # Future.result 超时不停止写者：保持外层计数/服务 spy，等它真正终态
+            # 才能恢复 patch 或私有核心。这里不另造线程/Job/PID清理器；若线程
+            # 永不返回，由原 CLI 的本批 child600s监督和唯一 owner 回收兜底。
+            drain_error = None
+            if not future.done():
+                try:future.result()
+                except BaseException as failure:
+                    if not future.done():raise
+                    drain_error = type(failure).__name__
+            print("APP_FUTURE_TIMEOUT_DRAIN", json.dumps({"done":future.done(),"drain_error":drain_error,
+                  "phase":self.app.session.job.phase,"operation_completed":self.app.session.job.operation_completed}))
+            raise
+
+    def settle_app_contract(self):
+        future=self.app.future;self.assertIsNotNone(future)
+        try:self.wait_app_contract(future)
+        except TimeoutError:raise  # TimeoutError 也是 OSError，不能被下行领域错误容错吞掉。
+        except (OSError,ValueError):pass
+        self.app.poll_job()
+
     def menu(self,action):
         self.app.modal=None;self.app.frames=[];self.app.filter_text="";self.app.dispatch("g")
         self.app.index=next(index for index,(_,value) in enumerate(self.app.options()) if value == action)
@@ -1367,7 +1393,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                 _=reader.core
         # 在同一个 executor 上另取当前 scope，证明 worker 的 ContextVar 已退出，
         # 而非只在测试主线程观察到默认值。下一次作业必须重新建立完整证明。
-        self.assertIsNone(self.executor.submit(runtime_store._active_operation).result(timeout=20))
+        self.assertIsNone(self.wait_app_contract(self.executor.submit(runtime_store._active_operation)))
 
     def test_apply_project_refresh_shares_core_read_scope_per_pin(self):
         """实际 App 写后刷新按 pin 合并证明；跨 pin 独立，投影和磁盘字节不变。"""
@@ -1389,12 +1415,17 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                 # status+context 两个真实消费者，必须以启用后的刷新作为对照。
                 project_service.apply_project(project_service.preview_project(
                     self.state,self.project,"disable",native_context=self.context))
-                self.app.preview_project(self.project,"enable");self.settle()
+                self.app.preview_project(self.project,"enable");self.settle_app_contract()
                 self.assertTrue(self.app.project_plan.summary["can_apply"],self.app.text)
                 with self.counted_project_refresh() as (counts,bindings), \
                      patch("manager.tui.project_service.apply_project",side_effect=committed) as writer:
                     self.app.dispatch("enter");job=self.app.session.job
-                    job.future.result(timeout=20)
+                    # 同 pin 和双 pin 都必须真正执行 Future.result(timeout=60)。
+                    # 这里绝不注入 synthetic TimeoutError：正控真实超过60s时，
+                    # wait_app_contract 虽会安全drain，仍须把原超时作为失败抛出。
+                    self.wait_app_contract(job.future)
+                    print("REFRESH_SCOPE_REAL_FUTURE60",json.dumps({"pins":pins,"done":job.future.done(),
+                          "operation_completed":job.operation_completed}))
                     refresh=job.refresh;actual=job.refreshed
                 self.assertEqual({"scan":pins,"verify":2*pins},counts)
                 self.assertCountEqual([self.core.binding()]+([self.alternate.binding()] if pins == 2 else []),bindings)
@@ -1427,6 +1458,53 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                 self.assertEqual(context.role_values,self.app.session.displays[key].values)
                 self.assertEqual(context.following_values,self.app.session.displays[key].following)
 
+        # 超时/drain 必须是独立真实 App 作业，不能代替上面任何正常60s正控。
+        # 两个正常场景已完整验证enabled状态、来源、bytes与计数；现在另取停用
+        # 计划，只验证父等待错误的保真与spy安全生命周期，不把它当性能通过。
+        with self.subTest(control="independent-timeout-drain"):
+            self.app.preview_project(self.project,"disable");self.settle_app_contract()
+            self.assertTrue(self.app.project_plan.summary["can_apply"],self.app.text)
+            probe_entered=Event();probe_release=Event()
+            def blocked_commit(plan,**kwargs):
+                self.assertIsNone(runtime_store._active_operation())
+                probe_entered.set()
+                self.assertTrue(probe_release.wait(timeout=5), "timeout drain 负控必须释放实际 App 写者")
+                return apply(plan,**kwargs)
+            with self.counted_project_refresh() as (counts,bindings), \
+                 patch("manager.tui.project_service.apply_project",side_effect=blocked_commit) as writer:
+                self.app.dispatch("enter");job=self.app.session.job
+                try:
+                    self.assertTrue(probe_entered.wait(timeout=5))
+                    original_result=job.future.result;active_scan=runtime_store._scan
+                    timeout=TimeoutError("fixture wait timeout; not a backend deadline")
+                    result_calls=[]
+                    def result(*args,**kwargs):
+                        result_calls.append((args,kwargs))
+                        if len(result_calls) == 1:
+                            self.assertEqual({"timeout":60},kwargs);raise timeout
+                        self.assertIs(active_scan,runtime_store._scan)
+                        probe_release.set()
+                        return original_result(*args,**kwargs)
+                    with patch.object(job.future,"result",side_effect=result), self.assertRaises(TimeoutError) as failure:
+                        self.wait_app_contract(job.future)
+                    self.assertIs(timeout,failure.exception)
+                    self.assertEqual([((),{"timeout":60}),((),{})],result_calls)
+                    self.assertTrue(job.future.done());self.assertIs(active_scan,runtime_store._scan)
+                    self.assertTrue(job.operation_completed);self.assertFalse(job.result["enabled"])
+                    self.assertIsNotNone(job.refreshed);self.assertEqual(1,writer.call_count)
+                finally:
+                    probe_release.set()
+                    # 即使负控自身的准备断言失败，也先在同一spy范围内等待工作
+                    # 终态再撤patch；600s外层监督仍由原入口/唯一owner负责。
+                    if not job.future.done():
+                        try:job.future.result()
+                        except BaseException:
+                            if not job.future.done():raise
+            self.assertEqual({"scan":2,"verify":4},counts)
+            self.assertCountEqual([self.core.binding(),self.alternate.binding()],bindings)
+            self.app.poll_job();self.assertEqual("result",self.app.modal,self.app.text)
+            self.assertFalse(project_service.project_status(self.state,self.project)["enabled"])
+
     def test_apply_project_refresh_tail_drift_preserves_commit_truth_and_drafts(self):
         """真实提交后漂移只使刷新失效；旧草稿不续期，未封口 Context 不能发布。"""
         from manager.runtime_state import read_binding_record, read_journal
@@ -1450,7 +1528,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
             with self.subTest(drift=drift):
                 project_service.apply_project(project_service.preview_project(
                     self.state,self.project,"disable",native_context=self.context))
-                self.app.preview_project(self.project,"enable");self.settle()
+                self.app.preview_project(self.project,"enable");self.settle_app_contract()
                 self.assertTrue(self.app.project_plan.summary["can_apply"],self.app.text)
                 # 使用真正可修改的版本祖先节点集合，不假定 Windows 允许把持有
                 # 不共享 DELETE 句柄的祖先目录换名，也不创建 raw symlink 或跳过。
@@ -1484,7 +1562,7 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                          patch.object(self.app.session,"accept_context",wraps=self.app.session.accept_context) as accepted, \
                          patch("manager.tui.project_service.apply_project",wraps=project_service.apply_project) as writer:
                         self.app.dispatch("enter");job=self.app.session.job
-                        with self.assertRaises(runtime_store.RuntimeStoreError):job.future.result(timeout=20)
+                        with self.assertRaises(runtime_store.RuntimeStoreError):self.wait_app_contract(job.future)
                         self.assertTrue(job.operation_completed);self.assertTrue(job.result["enabled"])
                         self.assertEqual("refresh",job.phase);self.assertIsNone(job.refreshed)
                         self.assertEqual(1,len(seen_context));self.assertEqual(scope[0],str(seen_context[0].project))
@@ -1509,9 +1587,9 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                 self.assertTrue(read_binding_record(self.state,self.project)[1]["enabled"])
                 self.assertEqual("applied",read_journal(self.state,self.project)[1]["phase"])
                 self.assertTrue(project_service.project_status(self.state,self.project)["enabled"])
-                self.app.preview_project(self.project,"disable");self.settle()
+                self.app.preview_project(self.project,"disable");self.settle_app_contract()
                 with self.counted_project_refresh() as (fresh,_):
-                    self.app.dispatch("enter");self.app.future.result(timeout=20);self.app.poll_job()
+                    self.app.dispatch("enter");self.wait_app_contract(self.app.future);self.app.poll_job()
                 self.assertEqual({"scan":1,"verify":2},fresh)
                 self.assertEqual("result",self.app.modal);self.assertIn(scope,self.app.session.displays)
                 self.assertEqual(entries,self.app.session.entries)
