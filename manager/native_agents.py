@@ -16,7 +16,7 @@ import uuid
 
 from lib import role_models, runtime_store
 from lib.central import role_preferences
-from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Resources, Tree, absolute_directory, capacity_node_value, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS, move_at, publish_at, clone_file_permissions, delete_at
+from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Resources, Tree, absolute_directory, capacity_node_value, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS, move_at, publish_at, create_file_stage, seal_file_stage, read_sealed_stage, delete_at
 from lib.hosts import native_agents as native
 from lib.hosts.native_context import HostPaths, NativeContext
 from lib.platform_fs import directory_lock, os
@@ -238,6 +238,32 @@ def _moved_matches(actual: Node, expected: Node) -> bool:
             and actual.identity[4:6] == expected.identity[4:6] and actual.security == expected.security)
 
 
+def _write_stage(parent: int, name: str, after: Node, *, source: str | None, expected_source: Node | None) -> Node:
+    """正常发布与补偿共用写入生命周期，完整写后像才可进入 journal。
+
+    Windows 创建时取得源 SD，并在仍存活的创建 HANDLE 上封口；空像仅是局部
+    变量。POSIX 继续原有 fchmod/fsync 合同，不借 Windows 的逻辑 mode 投影。
+    """
+    if os.name == "nt":
+        descriptor, empty = create_file_stage(parent, name, permission_source=source, expected_source=expected_source)
+    else:
+        descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+    try:
+        stream = os.fdopen(descriptor, "wb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    with stream:
+        stream.write(after.payload)
+        stream.flush()
+        if os.name == "nt":
+            sealed = seal_file_stage(stream.fileno(), expected_created=empty, payload=after.payload, mode=after.mode)
+        else:
+            os.fchmod(stream.fileno(), after.mode)
+            os.fsync(stream.fileno())
+    return read_sealed_stage(parent, name, sealed=sealed) if os.name == "nt" else read_at(parent, name)
+
+
 def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node, *, expected: Node) -> None:
     """从固定plan前像排他发布，绝不重新认领窗口中新出现的同内容inode。
 
@@ -266,15 +292,9 @@ def _publish(state: Path, journal: dict, root: Path, relative: str, after: Node,
         parent, name = tree.parent(relative, create=True)
         if read_at(parent, name) != expected:
             raise ValueError("原生文件在打开父目录后发生变化")
-        descriptor = os.open(stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(after.payload)
-            stream.flush()
-            os.fchmod(stream.fileno(), after.mode)
-            os.fsync(stream.fileno())
-        if expected.kind == "file":
-            clone_file_permissions(parent, name, stage_name)
-        row["staged"] = read_at(parent, stage_name).value()
+        row["staged"] = _write_stage(parent, stage_name, after,
+            source=name if expected.kind == "file" else None,
+            expected_source=expected if expected.kind == "file" else None).value()
         _save(state, journal)
         # stage磁盘写入期间的同内容替换也必须拒绝，完整Node比较包含inode/ctime。
         if read_at(parent, name) != expected:
@@ -614,6 +634,27 @@ def _read_compensation_pair(parent: int, stage: str, name: str, expected: Node) 
     return actual
 
 
+def _retained_permission_source(journal: dict, step: dict, parent: int) -> tuple[str, Node]:
+    """缺失目标的恢复仅使用该原写入行保留的唯一原 inode，不按正文找源。
+
+    journal loader 已验证写入目标、retained 同父目录及命名边界；此处仍固定
+    唯一行和原 after==before 关系，并 fresh 读取实际 held 的合法 rename ctime。
+    不能把旧 before 的 ctime 伪装成当前实体，也不能用另一个同正文文件的 SD。
+    """
+    rows = [row for row in journal["writes"] if (row["root"], row["path"]) == (step["root"], step["path"])]
+    if len(rows) != 1 or rows[0]["before"] != step["after"] or len(rows[0]["retained"]) != 1:
+        raise ValueError("缺失补偿没有唯一原生保留权限模板")
+    row, retained = rows[0], rows[0]["retained"][0]
+    if retained["expected"] != row["before"] or Path(retained["path"]).parent != Path(step["path"]).parent:
+        raise ValueError("缺失补偿权限模板不属于原始写入行")
+    name = Path(retained["path"]).name
+    actual = read_at(parent, name)
+    before = Node.from_value(row["before"])
+    if actual.kind != "file" or before.kind != "file" or actual.mode != before.mode or not _moved_matches(actual, before):
+        raise ValueError("缺失补偿保留权限模板已被替换或编辑")
+    return name, actual
+
+
 def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
     """首次执行和恢复共用的有界推进器；只沿本步骤已有身份向前推进。
 
@@ -634,22 +675,23 @@ def _advance_compensation(state: Path, journal: dict, step: dict) -> Node:
             raise ValueError("补偿宿主物理根已变化")
         parent, name = tree.parent(path)
         if step["result"] is None:
+            # missing 恢复没有当前文件可作 SD 源；必须从原 journal 的 retained
+            # 固定同一实体。该前像同时覆盖创建、ready 保存及发布前的窗口。
+            source, source_node = None, None
+            if os.name == "nt" and after.kind == "file" and expected.kind == "missing":
+                source, source_node = _retained_permission_source(journal, step, parent)
             if stage is not None and step["staged"] is None:
                 # 随机路径本身不证明归属：create成功却未持久Node的中断残留
                 # 不可认领。也不允许已经隔离后再临时创造另一份stage。
                 if (read_at(parent, stage).kind != "missing" or read_at(parent, name) != expected
                         or held is not None and read_at(parent, held).kind != "missing"):
                     raise ValueError("补偿stage缺少持久身份或前像已变化")
-                descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(after.payload)
-                    stream.flush()
-                    os.fchmod(stream.fileno(), after.mode)
-                    os.fsync(stream.fileno())
-                if expected.kind == "file":
-                    clone_file_permissions(parent, name, stage)
-                step["staged"] = read_at(parent, stage).value()
+                step["staged"] = _write_stage(parent, stage, after,
+                    source=name if expected.kind == "file" else source,
+                    expected_source=expected if expected.kind == "file" else source_node).value()
                 _save(state, journal)
+            if source is not None and read_at(parent, source) != source_node:
+                raise ValueError("缺失补偿保留权限模板在发布前发生变化")
             if held is not None:
                 isolated = read_at(parent, held)
                 if isolated.kind == "missing":

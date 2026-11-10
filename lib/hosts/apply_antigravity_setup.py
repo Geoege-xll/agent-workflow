@@ -60,6 +60,8 @@ from lib.hosts.workflow_hook_install import plan_hooks
 
 TRANSACTION_PREFIX = ".agent-workflow-pack-antigravity--"
 MAX_FILE_SIZE = 8 * 1024 * 1024
+DOCUMENT_FILE_SIZE = 4 * 1024 * 1024
+CODEX_ENTRY_SIZE = 32768
 
 
 class ApplyError(ValueError):
@@ -86,6 +88,14 @@ class FileChange:
     published: bool = False
     # 仅本次新建薄索引使用条件撤回，不改变既有入口/原型等历史文件恢复机制。
     created_standard_index: bool = False
+    # 仅此内存事务持有已按原 fixed source/ready 验证的实际移动后像；恢复和
+    # 清理必须继续消费这些事实，不能在失败后以当前同名文件重新建立基准。
+    native_published: dict | None = field(default=None, repr=False)
+    native_backup: dict | None = field(default=None, repr=False)
+    # 文件 I/O 的原入口上界与中央持久 wire 无关：AGY root 的旧源/备份始终
+    # 8MiB，受控文档/Hook 4MiB。Codex 32KiB 只在 compose 约束批准的新输出，
+    # 不能拿它拒绝可合法缩小的旧源。此字段不进入 wire。
+    io_max_bytes: int = MAX_FILE_SIZE
 
 
 @dataclass
@@ -430,9 +440,12 @@ def _compose_agents_md(current: bytes, product_block: bytes, anti_block: bytes, 
     _validate_global_markers(rebuilt, path)
     # 三宿主共用入口后，最后安装的 Antigravity 也要保护已安装 Codex 的既有限额。
     # 这是 Codex 入口保护值，不是 Antigravity/Claude 的官方上下文限制。
-    if CODEX_BEGIN in rebuilt and len(rebuilt.encode("utf-8")) > 32768:
+    body = rebuilt.encode("utf-8")
+    if CODEX_BEGIN in rebuilt and len(body) > CODEX_ENTRY_SIZE:
         raise ApplyError("combined AGENTS.md would exceed the existing Codex 32 KiB guard")
-    return rebuilt.encode("utf-8")
+    if len(body) > MAX_FILE_SIZE:
+        raise ApplyError("combined AGENTS.md would exceed its existing 8 MiB read boundary")
+    return body
 
 
 def _copy_managed_tree(source: Path, target: Path) -> None:
@@ -513,6 +526,7 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         before = _fingerprint(hook_target)
         plan.hook_changes.append(FileChange(
             hook_target, hook_body, before.mode if before.kind == "file" else 0o644, before,
+            io_max_bytes=DOCUMENT_FILE_SIZE,
         ))
 
     agents_root = project / ".agents/agents"
@@ -672,6 +686,7 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
         composed,
         agents_before.mode if agents_before.kind == "file" else 0o644,
         agents_before,
+        io_max_bytes=MAX_FILE_SIZE,
     )
 
     prototype_scaffold, prototype_candidates = _prototype_candidates(
@@ -716,6 +731,7 @@ def build_plan(pack: Path, project: Path, staging: Path) -> Plan:
                     before.mode if before.kind == "file" else 0o644,
                     before,
                     created_standard_index=target in standard_updates and before.kind == "missing",
+                    io_max_bytes=DOCUMENT_FILE_SIZE,
                 )
             )
     return plan
@@ -781,7 +797,10 @@ def _temp_path(target: Path, nonce: str, kind: str) -> Path:
 
 
 def _write_temp(target: Path, body: bytes, mode: int, nonce: str, *,
-                identity_out: list[tuple[int, int]] | None = None) -> Path:
+                identity_out: list[tuple[int, int]] | None = None,
+                native_parent: int | None = None, native_source: dict | None = None,
+                native_ready_out: list[dict] | None = None, max_bytes: int = MAX_FILE_SIZE) -> Path:
+    _check_file_budget(body, max_bytes)
     temporary = _temp_path(target, nonce, "temp")
     flags = (
         os.O_WRONLY
@@ -791,21 +810,48 @@ def _write_temp(target: Path, body: bytes, mode: int, nonce: str, *,
         | getattr(os, "O_NOFOLLOW", 0)
     )
     descriptor = -1
+    owned_parent = None
     try:
-        descriptor = os.open(temporary, flags, 0o600)
+        if os.name == "nt":
+            from lib.windows_fs import create_regular_stage, seal_regular_stage, node_snapshot
+            if native_parent is None:
+                owned_parent = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                native_parent = owned_parent
+            # 唯一 canonical 后端负责完整源 SD 与 creator HANDLE；本层不从
+            # Fingerprint 的摘要重建安全描述符，也不在关闭后再修改权限。
+            descriptor, empty = create_regular_stage(native_parent, temporary.name,
+                permission_source=target.name if native_source is not None else None,
+                expected_source=native_source, max_bytes=max_bytes)
+        else:
+            descriptor = os.open(temporary, flags, 0o600)
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ApplyError(f"atomic temporary is not a single-link regular file: {temporary}")
-        os.fchmod(descriptor, mode)
+        if os.name != "nt":
+            os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "wb") as output:
             descriptor = -1
             output.write(body)
             output.flush()
-            os.fsync(output.fileno())
+            if os.name == "nt":
+                sealed = seal_regular_stage(output.fileno(), expected_created=empty, payload=body, mode=mode,
+                                            max_bytes=max_bytes)
+            else:
+                os.fsync(output.fileno())
             if identity_out is not None:
                 # 只在仍持有本轮创建 fd 时交出身份，不能关闭后再按路径采样，
                 # 否则并发替换成相同字节/权限的文件会被误认成可撤回的原 temp。
                 identity_out.append((info.st_dev, info.st_ino))
+        if os.name == "nt":
+            # 只允许已知 LastWriteTime 关闭结算；其余身份、正文、物理 mode 与
+            # owner/DACL 必须等于同 HANDLE seal，绝不追认关闭窗口中的替换。
+            ready = node_snapshot(native_parent, temporary.name, max_bytes=max_bytes)
+            if (ready is None or any(ready[key] != sealed[key] for key in ("kind", "payload", "mode", "security"))
+                    or ready["identity"][:5] != sealed["identity"][:5]
+                    or ready["identity"][6:] != sealed["identity"][6:]):
+                raise ApplyError(f"atomic temporary changed after its creator closed; preserved: {temporary}")
+            if native_ready_out is not None:
+                native_ready_out.append(ready)
         _fsync_directory(target.parent)
         return temporary
     except OSError as exc:
@@ -813,31 +859,127 @@ def _write_temp(target: Path, body: bytes, mode: int, nonce: str, *,
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+        if owned_parent is not None:
+            os.close(owned_parent)
+
+
+def _check_file_budget(body: bytes | None, max_bytes: int) -> None:
+    """纯准备检查：不把原入口 I/O 预算误作可任意扩大中央记录的许可。"""
+    if type(max_bytes) is not int or max_bytes not in {DOCUMENT_FILE_SIZE, MAX_FILE_SIZE}:
+        raise ApplyError("managed file has an unknown I/O boundary")
+    if body is not None and (not isinstance(body, bytes) or len(body) > max_bytes):
+        raise ApplyError("managed file output exceeds its existing read boundary")
+
+
+def _native_path_snapshot(path: Path, *, max_bytes: int) -> dict | None:
+    from lib.windows_fs import node_snapshot
+    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        return node_snapshot(parent, path.name, max_bytes=max_bytes)
+    finally:
+        os.close(parent)
+
+
+def _native_source_snapshot(parent: int, name: str, before: Fingerprint, *, max_bytes: int) -> dict:
+    """将实际完整源像绑定原计划的实体和正文，Fingerprint 不承担 ACL 职责。"""
+    from lib.windows_fs import node_snapshot
+    source = node_snapshot(parent, name, max_bytes=max_bytes)
+    if (source is None or source["kind"] != "file" or before.kind != "file"
+            or source["mode"] != before.mode
+            or (source["identity"][0], source["identity"][1], source["identity"][3])
+               != (before.device, before.inode, before.nlink)
+            or hashlib.sha256(source["payload"]).hexdigest() != before.payload):
+        raise ApplyError(f"managed file changed before native stage creation: {name}")
+    return source
+
+
+def _check_native_source(path: Path, expected: dict, *, moved: bool = False, max_bytes: int) -> dict:
+    """再次读取固定源；已知备份移动只允许原 rename 的 ctime 结算。"""
+    actual = _native_path_snapshot(path, max_bytes=max_bytes)
+    unchanged = actual == expected
+    if moved and actual is not None:
+        unchanged = (all(actual[key] == expected[key] for key in ("kind", "payload", "mode", "security"))
+                     and actual["identity"][:6] == expected["identity"][:6])
+    if not unchanged:
+        raise ApplyError(f"managed file native source changed; preserved: {path}")
+    return actual
+
+
+def _discard_native_temp(temporary: Path, ready: dict, *, max_bytes: int, allow_missing: bool = True) -> None:
+    """只撤回本次完整 ready 实体；未知或关闭后被编辑的同名文件原样保留。"""
+    from lib.windows_fs import delete_regular, node_snapshot
+    parent = os.open(temporary.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        actual = node_snapshot(parent, temporary.name, max_bytes=max_bytes)
+        if actual is None and not allow_missing:
+            raise ApplyError(f"native backup disappeared; preserved transaction evidence: {temporary}")
+        if actual is not None:
+            if actual != ready:
+                raise ApplyError(f"atomic temporary has an external edit; preserved: {temporary}")
+            delete_regular(parent, temporary.name, expected={"identity": ready["identity"],
+                "security": ready["security"], "sha256": hashlib.sha256(ready["payload"]).hexdigest()}, max_bytes=max_bytes)
+    finally:
+        os.close(parent)
 
 
 def _publish_file(change: FileChange, plan: Plan, *, backup_directory: Path | None = None) -> None:
+    _check_file_budget(change.body, change.io_max_bytes)
     _assert_unchanged(change.target, change.before)
     # 删除同样参与原事务，不把缺失文件当成空文档发布，也不绕过回滚和归属复核。
     deleting = change.body is None
     if deleting and change.before.kind == "missing":
         return
     _ensure_directories(plan, change.target.parent)
+    if os.name == "nt":
+        # 保持父目录锚定到 stage 创建、源隔离与最终排他发布结束；不扩大核心
+        # readonly scope，也不让 Plan 或恢复记录持有 live reader/句柄。
+        parent = os.open(change.target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            _publish_file_ready(change, plan, deleting=deleting, backup_directory=backup_directory, native_parent=parent)
+        finally:
+            os.close(parent)
+    else:
+        _publish_file_ready(change, plan, deleting=deleting, backup_directory=backup_directory)
+
+
+def _publish_file_ready(change: FileChange, plan: Plan, *, deleting: bool,
+                        backup_directory: Path | None, native_parent: int | None = None) -> None:
+    native_source = None
+    native_ready: list[dict] = []
+    if os.name == "nt" and change.before.kind == "file":
+        native_source = _native_source_snapshot(native_parent, change.target.name, change.before, max_bytes=change.io_max_bytes)
     temporary_identity: list[tuple[int, int]] = []
     temporary = None
     if not deleting:
-        if backup_directory is None:
+        if os.name == "nt":
+            temporary = _write_temp(change.target, change.body, change.mode, plan.nonce,
+                identity_out=temporary_identity if backup_directory is not None else None,
+                native_parent=native_parent, native_source=native_source, native_ready_out=native_ready,
+                max_bytes=change.io_max_bytes)
+        elif backup_directory is None:
             temporary = _write_temp(change.target, change.body, change.mode, plan.nonce)
         else:
             temporary = _write_temp(change.target, change.body, change.mode, plan.nonce,
                                     identity_out=temporary_identity)
     if change.before.kind == "missing":
         try:
-            publish_exclusive(temporary, change.target)
+            if os.name == "nt":
+                from lib.windows_fs import move_regular
+                move_regular(temporary.name, change.target.name, src_dir_fd=native_parent,
+                             dst_dir_fd=native_parent, expected=native_ready[0], max_bytes=change.io_max_bytes)
+            else:
+                publish_exclusive(temporary, change.target)
             change.published = True
+            if os.name == "nt":
+                change.native_published = _check_native_source(change.target, native_ready[0], moved=True,
+                                                                max_bytes=change.io_max_bytes)
             _fsync_directory(change.target.parent)
         except OSError as exc:
             if temporary.exists():
-                temporary.unlink()
+                if os.name == "nt":
+                    _discard_native_temp(temporary, native_ready[0], max_bytes=change.io_max_bytes)
+                else:
+                    temporary.unlink()
             raise ApplyError(f"cannot atomically create managed file {change.target}: {exc}") from exc
         return
     backup = _temp_path(change.target, plan.nonce, "backup")
@@ -847,16 +989,29 @@ def _publish_file(change: FileChange, plan: Plan, *, backup_directory: Path | No
         backup = backup_directory / backup.name
     if _fingerprint(backup, read_file=False).kind != "missing":
         if temporary is not None:
-            temporary.unlink()
+            if os.name == "nt":
+                _discard_native_temp(temporary, native_ready[0], max_bytes=change.io_max_bytes)
+            else:
+                temporary.unlink()
         raise ApplyError(f"owned backup path already exists: {backup}")
-    os.replace(change.target, backup)
-    if _fingerprint(backup) != change.before:
-        if _fingerprint(change.target, read_file=False).kind == "missing":
-            os.replace(backup, change.target)
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        raise ApplyError(f"managed file changed during publish: {change.target}")
-    change.backup = backup
+    if os.name == "nt":
+        from lib.windows_fs import move_regular
+        _check_native_source(change.target, native_source, max_bytes=change.io_max_bytes)
+        move_regular(change.target.name, backup, src_dir_fd=native_parent, expected=native_source,
+                     max_bytes=change.io_max_bytes)
+        change.backup = backup
+        # 只在这一次已证明的原件移动中容许 ctime 结算，立即固定实际 backup。
+        # 后面的发布、rollback 和 cleanup 都必须全等，不能再次放宽或晚采样。
+        change.native_backup = _check_native_source(backup, native_source, moved=True, max_bytes=change.io_max_bytes)
+    else:
+        os.replace(change.target, backup)
+        if _fingerprint(backup) != change.before:
+            if _fingerprint(change.target, read_file=False).kind == "missing":
+                os.replace(backup, change.target)
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise ApplyError(f"managed file changed during publish: {change.target}")
+        change.backup = backup
     if backup.parent != change.target.parent:
         # 跨目录移动仍在同一文件系统；先登记回滚归属再刷新新目录，刷新失败也能
         # 按 change.backup 恢复原件，不能留下已移走原件但事务尚不知情的窗口。
@@ -868,7 +1023,10 @@ def _publish_file(change: FileChange, plan: Plan, *, backup_directory: Path | No
                     # 正文尚未发布，外层只会按备份恢复旧文；这里复用既有条件撤回
                     # 原语收口本轮 temp。它先排他移名再核对 inode/字节/权限，避免
                     # “先检查再 unlink”误删间隙替换；已变文件原样保留并报告路径。
-                    remove_created_standard(temporary, change.body, change.mode, temporary_identity[0])
+                    if os.name == "nt":
+                        _discard_native_temp(temporary, native_ready[0], max_bytes=change.io_max_bytes)
+                    else:
+                        remove_created_standard(temporary, change.body, change.mode, temporary_identity[0])
                 except BaseException as cleanup_exc:
                     raise ApplyError(
                         f"{exc}; document temporary preserved at {temporary}: {cleanup_exc}"
@@ -881,13 +1039,25 @@ def _publish_file(change: FileChange, plan: Plan, *, backup_directory: Path | No
         change.published = True
         _fsync_directory(change.target.parent)
         return
+    if os.name == "nt":
+        # backup 可以位于项目根；它仍须是创建前已授权的原 inode/SD，不能从
+        # 一个同正文备份重新选择权限模板。排他发布消费固定 ready，不再重采样。
+        from lib.windows_fs import move_regular
+        _check_native_source(backup, change.native_backup, max_bytes=change.io_max_bytes)
+        try:
+            move_regular(temporary.name, change.target.name, src_dir_fd=native_parent,
+                         dst_dir_fd=native_parent, expected=native_ready[0], max_bytes=change.io_max_bytes)
+            change.published = True
+            change.native_published = _check_native_source(change.target, native_ready[0], moved=True,
+                                                            max_bytes=change.io_max_bytes)
+        finally:
+            _discard_native_temp(temporary, native_ready[0], max_bytes=change.io_max_bytes)
+        _fsync_directory(change.target.parent)
+        return
     if change in plan.doc_changes:
         # 原文件移入备份后，编辑器可能立即重建同名文档；排他创建避免覆盖这个
         # 间隙产生的项目内容。失败时交由事务回滚保留并发文档及原始备份。
         try:
-            if os.name == "nt":
-                from lib.windows_fs import copy_permissions
-                copy_permissions(backup, temporary)
             publish_exclusive(temporary, change.target)
             change.published = True
         except OSError as exc:
@@ -949,6 +1119,52 @@ def _move_stale(plan: Plan, path: Path, before: Fingerprint, kind: str) -> None:
     _fsync_directory(path.parent)
 
 
+def _guard_native_file_change(change: FileChange) -> None:
+    """恢复/清理前沿当场已固定的发布像与备份像复核，拒绝权限或实体漂移。"""
+    if change.published and change.body is not None:
+        if change.native_published is None:
+            raise ApplyError(f"native published file lacks its fixed witness; preserved: {change.target}")
+        _check_native_source(change.target, change.native_published, max_bytes=change.io_max_bytes)
+    elif change.published or change.backup is not None:
+        if _native_path_snapshot(change.target, max_bytes=change.io_max_bytes) is not None:
+            raise ApplyError(f"native target appeared after isolation; preserved current file and backup: {change.target}")
+    if change.backup is not None:
+        if change.native_backup is None:
+            raise ApplyError(f"native backup lacks its fixed witness; preserved: {change.backup}")
+        _check_native_source(change.backup, change.native_backup, max_bytes=change.io_max_bytes)
+
+
+def _rollback_native_file(change: FileChange) -> None:
+    """只撤回本轮已验证产物，再排他回接原 inode；外部更改绝不被覆盖。"""
+    from lib.windows_fs import delete_regular, move_regular
+    _guard_native_file_change(change)
+    if change.published and change.body is not None:
+        parent = os.open(change.target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            expected = change.native_published
+            delete_regular(parent, change.target.name, expected={"identity": expected["identity"],
+                "security": expected["security"], "sha256": hashlib.sha256(expected["payload"]).hexdigest()},
+                max_bytes=change.io_max_bytes)
+        finally:
+            os.close(parent)
+    if change.backup is not None:
+        # 条件 move 在自己的 source HANDLE 内再核原完整像；target 若被重建，
+        # no-replace 使恢复停止，保留原 backup 和并发目标，不做覆盖式 replace。
+        source = os.open(change.backup.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            destination = os.open(change.target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                move_regular(change.backup.name, change.target.name, src_dir_fd=source,
+                             dst_dir_fd=destination, expected=change.native_backup, max_bytes=change.io_max_bytes)
+            finally:
+                os.close(destination)
+        finally:
+            os.close(source)
+        if change.backup.parent != change.target.parent:
+            _fsync_directory(change.backup.parent)
+    _fsync_directory(change.target.parent)
+
+
 def _rollback(plan: Plan) -> None:
     errors: list[str] = []
     for original, moved, _kind in reversed(plan.moved_stale):
@@ -966,6 +1182,10 @@ def _rollback(plan: Plan) -> None:
     changes.extend(plan.agent_changes)
     for change in reversed(changes):
         try:
+            if os.name == "nt" and isinstance(change, FileChange):
+                if change.published or change.backup is not None:
+                    _rollback_native_file(change)
+                continue
             current = _fingerprint(change.target, read_file=False)
             if isinstance(change, FileChange) and (
                 change in plan.hook_changes or change in plan.doc_changes
@@ -1056,7 +1276,20 @@ def _cleanup_committed(plan: Plan) -> None:
         except Exception as exc:
             errors.append(f"{label}: {exc}")
 
-    for change in [*plan.agent_changes, *plan.skill_changes, *plan.doc_changes, *plan.hook_changes]:
+    changes = [*plan.agent_changes, *plan.skill_changes, *plan.doc_changes, *plan.hook_changes]
+    if os.name == "nt" and plan.agents_md is not None:
+        changes.append(plan.agents_md)
+    for change in changes:
+        if os.name == "nt" and isinstance(change, FileChange):
+            try:
+                _guard_native_file_change(change)
+                if change.backup is not None:
+                    _discard_native_temp(change.backup, change.native_backup, max_bytes=change.io_max_bytes,
+                                         allow_missing=False)
+                    note_removal()
+            except Exception as exc:
+                errors.append(f"preserve native file or backup {change.target}: {exc}")
+            continue
         if change.backup is None:
             continue
         if change in plan.doc_changes:
@@ -1071,7 +1304,7 @@ def _cleanup_committed(plan: Plan) -> None:
             tree=change.backup.is_dir(),
             label=f"remove committed backup {change.backup}",
         )
-    if plan.agents_md is not None and plan.agents_md.backup is not None:
+    if os.name != "nt" and plan.agents_md is not None and plan.agents_md.backup is not None:
         remove(
             plan.agents_md.backup,
             tree=False,
@@ -1088,6 +1321,11 @@ def _cleanup_committed(plan: Plan) -> None:
 
 
 def apply_plan(plan: Plan) -> None:
+    # 全部已批准输出在首个项目目录/文件创建前检查；不能写了前几个目标才发现
+    # 最后合并入口超出可重读边界，再依靠补偿将一次本可纯拒绝的操作兜回来。
+    for change in [*plan.agent_changes, *plan.doc_changes, *plan.hook_changes,
+                   *([plan.agents_md] if plan.agents_md is not None else [])]:
+        _check_file_budget(change.body, change.io_max_bytes)
     for path, expected in plan.root_fingerprints.items():
         _assert_unchanged(path, expected)
     try:
@@ -1152,6 +1390,8 @@ def publish_document_changes(project: Path, updates: dict[Path, bytes | None],
     精确备份及并发内容保全。同步失败回滚，跨文件断电原子性不在既有保证范围内。
     """
     from lib.hosts.claude_instructions import read_file
+    for body in updates.values():
+        _check_file_budget(body, DOCUMENT_FILE_SIZE)
     plan = Plan(Path(__file__).resolve().parents[2], project, project, secrets.token_hex(12))
     backup_root = _require_real_directory(project, "document transaction backup root")
     for path, body in updates.items():
@@ -1169,7 +1409,7 @@ def publish_document_changes(project: Path, updates: dict[Path, bytes | None],
                 raise ApplyError(f"owned backup path already exists: {backup}")
         mode = (desired_modes or {}).get(path, before.mode if before.kind == "file" else 0o644)
         plan.doc_changes.append(FileChange(path, body, mode, before,
-            created_standard_index=before.kind == "missing"))
+            created_standard_index=before.kind == "missing", io_max_bytes=DOCUMENT_FILE_SIZE))
     try:
         _assert_unchanged(project, backup_root)
         for change in plan.doc_changes:

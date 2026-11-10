@@ -323,11 +323,45 @@ def delete_at(parent: int, name: str, *, expected: Node, max_bytes: int = LIMIT,
         os.unlink(name, dir_fd=parent)
 
 
-def clone_file_permissions(parent: int, source: str, target: str) -> None:
-    """只为已存在用户文件精确克隆 DACL；不同继承或权限竞态直接失败关闭。"""
-    if os.name == "nt":
-        from lib.windows_fs import copy_permissions, secure_os
-        copy_permissions(secure_os._path(source, parent), secure_os._path(target, parent))
+def create_file_stage(parent: int, name: str, *, permission_source: str | None = None,
+                      expected_source: Node | None = None) -> tuple[int, Node]:
+    """Windows 普通 stage 的薄适配；权限与创建归属仍由唯一 FS 后端负责。
+
+    源必须是调用方已经授权的完整实际 Node，不能用计划正文或摘要拼出 ACL。
+    返回的空像只在本调用内证明创建身份，不是可持久发布的 ready/after 像。
+    """
+    from lib.windows_fs import create_regular_stage
+    descriptor, empty = create_regular_stage(
+        parent, name, permission_source=permission_source,
+        expected_source=native_snapshot(expected_source) if expected_source is not None else None)
+    try:
+        return descriptor, Node(**empty)
+    except BaseException:
+        # 创建返回后尚未交给调用方的流；即便负责层返回形状异常，薄适配也仍
+        # 持有 fd 的关闭责任，不能让构造失败遗留活 HANDLE/creator 登记。
+        os.close(descriptor)
+        raise
+
+
+def seal_file_stage(descriptor: int, *, expected_created: Node, payload: bytes, mode: int) -> Node:
+    """流 flush 后、关闭前消费原创建 HANDLE；不按路径重开或后置修改权限。"""
+    from lib.windows_fs import seal_regular_stage
+    return Node(**seal_regular_stage(descriptor, expected_created=native_snapshot(expected_created),
+                                     payload=payload, mode=mode))
+
+
+def read_sealed_stage(parent: int, name: str, *, sealed: Node) -> Node:
+    """关闭后的首读只容许原 LastWriteTime 结算，不能追认外来 stage。
+
+    Windows 写 HANDLE 关闭可以结算 mtime；正文、物理 mode、owner/DACL、
+    dev/inode/type/nlink/size 及 ctime 仍须与同 HANDLE seal 的固定事实全等。
+    """
+    actual = read_at(parent, name)
+    if (actual.kind != sealed.kind or actual.payload != sealed.payload or actual.mode != sealed.mode
+            or actual.security != sealed.security or actual.identity[:5] != sealed.identity[:5]
+            or actual.identity[6:] != sealed.identity[6:]):
+        raise ProjectRuntimeError("stage 在封口与关闭后首读之间发生变化，已保全未知节点")
+    return actual
 
 
 def capacity_node_value(node: Node) -> dict:

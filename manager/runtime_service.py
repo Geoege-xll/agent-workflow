@@ -28,7 +28,8 @@ from lib.central.runtime_project import (
     CAPACITY_IDENTITY, CONFIG, HOSTS, LOCATOR, Node, Resources, Tree, capacity_node_value,
     absolute_directory, canonical_project, central_block, identity, json_bytes,
     managed_path, merge_central_block, node_id, read_at, relative_path, skill_parts,
-    unique_json, validate_skill_link, move_at, publish_at, clone_file_permissions, content_mode, delete_at,
+    unique_json, validate_skill_link, move_at, publish_at, create_file_stage, seal_file_stage,
+    read_sealed_stage, content_mode, delete_at,
     native_snapshot,
 )
 
@@ -515,18 +516,23 @@ def _publish(tree: Tree, row: dict, core: store.FrozenCore | None, save) -> None
     stage = None
     file_stage = os.name == "nt" and after.kind == "file"
     if file_stage:
-        # 普通文件必须与 target 同父目录。先私有写入，再精确克隆旧 DACL；
-        # 任何克隆/继承复核失败均发生于隔离原件之前，不降级为权限近似。
-        descriptor = os.open(stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             0o600, dir_fd=parent)
-        with os.fdopen(descriptor, "wb") as stream:
+        # 同父目录创建时即固定原 owner/DACL；无原文件才使用私有创建策略。
+        # fdopen 构造成功前由本层拥有 fd，之后只由 stream 关闭一次。
+        descriptor, empty = create_file_stage(parent, stage_name,
+            permission_source=name if before.kind == "file" else None,
+            expected_source=before if before.kind == "file" else None)
+        try:
+            stream = os.fdopen(descriptor, "wb")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with stream:
             row["stage_inode"] = list(node_id(os.fstat(stream.fileno())))
             save()
             stream.write(after.payload); stream.flush()
-            os.fchmod(stream.fileno(), after.mode); os.fsync(stream.fileno())
-        if before.kind == "file":
-            clone_file_permissions(parent, name, stage_name)
-        staged = read_at(parent, stage_name)
+            sealed = seal_file_stage(stream.fileno(), expected_created=empty,
+                                     payload=after.payload, mode=after.mode)
+        staged = read_sealed_stage(parent, stage_name, sealed=sealed)
         if list(staged.identity[:2]) != row["stage_inode"]:
             raise ActivationError("stage 文件在读取前已被替换")
         after = _register_stage(row, staged)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import copy
 import json
 import os
 import subprocess
@@ -49,6 +50,69 @@ class NativeAgentsTest(unittest.TestCase):
         plan = self.preview(**options)
         self.assertTrue(plan.can_apply, plan.summary)
         return native_agents.apply_global(plan)
+
+    def interrupted_missing_compensation(self):
+        """由真实全局发布器留下已隔离原 inode、尚未发布的新 stage。"""
+        self.install(hosts=("codex",))
+        plan = self.preview(hosts=("codex",), preferences={"codex": {"xy-backend": {"model": "new-model"}}})
+        publish = native_agents.publish_at
+        interrupted = []
+        def stop_before_publish(source, target, **kwargs):
+            if target == "xy-backend.toml" and not interrupted:
+                interrupted.append(True)
+                raise KeyboardInterrupt("fixture original inode retained before publish")
+            return publish(source, target, **kwargs)
+        with patch.object(native_agents, "publish_at", side_effect=stop_before_publish):
+            with self.assertRaisesRegex(KeyboardInterrupt, "original inode retained"):
+                native_agents.apply_global(plan)
+        self.assertTrue(interrupted)
+        _, journal = native_agents._load_ref(plan.recovery_ref, self.context)
+        row = next(row for row in journal["writes"] if row["path"] == "agents/xy-backend.toml")
+        self.assertEqual("missing", native.read_node(self.paths.codex, row["path"]).kind)
+        return plan, journal, row
+
+    def test_missing_compensation_retained_source_binds_original_write_and_restores(self):
+        plan, journal, row = self.interrupted_missing_compensation()
+        before = Node.from_value(row["before"])
+        step = native_agents._compensation_value(plan.transaction_id, "a" * 32, self.paths.codex,
+                                                row["path"], Node(), before)
+        with Tree(self.paths.codex) as tree:
+            parent, _ = tree.parent(row["path"])
+            source, actual = native_agents._retained_permission_source(journal, step, parent)
+            self.assertEqual(Path(row["retained"][0]["path"]).name, source)
+            self.assertEqual(before.identity[:2], actual.identity[:2])
+            self.assertEqual(before.payload, actual.payload)
+            # 每个负控使用独立内存副本，不把先前拒绝后的 noop 当成另一根因。
+            for defect in ("no_source", "ambiguous", "wrong_after"):
+                bad, bad_step = copy.deepcopy(journal), copy.deepcopy(step)
+                bad_row = next(item for item in bad["writes"] if item["path"] == row["path"])
+                if defect == "no_source":
+                    bad_row["retained"] = []
+                elif defect == "ambiguous":
+                    bad_row["retained"] *= 2
+                else:
+                    bad_step["after"] = Node("file", b"unauthorized", before.mode).value()
+                with self.subTest(defect=defect), self.assertRaises(ValueError):
+                    native_agents._retained_permission_source(bad, bad_step, parent)
+            self.assertEqual(actual, native.read_node(self.paths.codex, row["retained"][0]["path"]))
+        restored = native_agents.recover_global(plan.recovery_ref, context=self.context)
+        self.assertEqual("compensated", restored["status"], restored["conflicts"])
+        actual = native.read_node(self.paths.codex, row["path"])
+        self.assertEqual(before.payload, actual.payload)
+        self.assertEqual(before.security, actual.security)
+
+    def test_missing_compensation_rejects_replaced_retained_inode_and_preserves_edit(self):
+        plan, journal, row = self.interrupted_missing_compensation()
+        held = self.paths.codex / row["retained"][0]["path"]
+        old = native.read_node(self.paths.codex, row["retained"][0]["path"])
+        held.unlink()
+        held.write_bytes(old.payload)
+        replacement = native.read_node(self.paths.codex, row["retained"][0]["path"])
+        self.assertNotEqual(old.identity[:2], replacement.identity[:2])
+        result = native_agents.recover_global(plan.recovery_ref, context=self.context)
+        self.assertEqual("conflict", result["status"])
+        self.assertEqual(replacement, native.read_node(self.paths.codex, row["retained"][0]["path"]))
+        self.assertFalse((self.paths.codex / row["path"]).exists())
 
     def test_preview_batches_verified_sources_without_changing_role_artifacts(self):
         """实际读取固定核心；每轮角色预览只留加载与批读两次完整 entry 验证。"""

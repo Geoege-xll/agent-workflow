@@ -72,6 +72,103 @@ def make_alternate_source(root: Path) -> None:
     put("lib/wait_probe.py", b'import subprocess,sys,time\nfrom pathlib import Path\nchild=subprocess.Popen([sys.executable,"-c","import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print(1,flush=True); time.sleep(30)"],stdout=subprocess.PIPE,text=True)\nchild.stdout.readline()\nPath(sys.argv[1]).write_text(str(child.pid))\ntime.sleep(30)\n')
 
 
+@unittest.skipUnless(os.name == "nt", "Windows 创建句柄与完整 SD 的真实消费者")
+class WindowsStageConsumerNativeTest(unittest.TestCase):
+    """不依赖 Node/curses/Skill 软链，仅在本方法目录验证真实 FS 创建 API。"""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="central-stage-", dir=os.environ.get("AWF_TEST_SCRATCH"))
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+
+    def row(self, root, before):
+        return {"path": "config.toml", "before": before.value(),
+                "after": resources.Node("file", b"approved configuration\n", 0o644).value(),
+                "backup": ".original.tmp", "stage": ".candidate.tmp", "stage_inode": None,
+                "published_inode": None, "installed": None}
+
+    def test_stage_creation_preserves_source_security_and_ready_save_order(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                root = self.root / str(existing)
+                root.mkdir()
+                target = root / "config.toml"
+                if existing:
+                    # stdlib 默认创建的真实源可能与私有 stage 有不同 owner；断言
+                    # 来自实际完整 SD，不在测试里以权限摘要或 chmod 伪造来源。
+                    target.write_bytes(b"original user configuration\n")
+                with resources.Tree(root) as tree:
+                    parent, name = tree.parent("config.toml")
+                    before = resources.read_at(parent, name)
+                    row, saves, created = self.row(root, before), [], []
+                    original_create = service.create_file_stage
+                    def create(*args, **kwargs):
+                        result = original_create(*args, **kwargs)
+                        created.append(result[1])
+                        return result
+                    def save():
+                        saves.append(json.loads(json.dumps(row)))
+                        (self.root / "saved-journal.json").write_bytes(resources.json_bytes(row))
+                    with patch.object(service, "create_file_stage", side_effect=create):
+                        service._publish(tree, row, None, save)
+                    actual = resources.read_at(parent, name)
+                    self.assertEqual(b"approved configuration\n", actual.payload)
+                    self.assertEqual(created[0].security, actual.security)
+                    self.assertEqual(list(created[0].identity[:2]), saves[0]["stage_inode"])
+                    self.assertEqual([], saves[0]["after"]["identity"], "空创建像不能提前写入 ready")
+                    self.assertIsNone(saves[0]["published_inode"])
+                    ready = resources.Node.from_value(saves[1]["after"])
+                    self.assertEqual(actual.payload, ready.payload)
+                    self.assertEqual(7, len(ready.identity))
+                    self.assertEqual(actual.security, ready.security)
+                    if existing:
+                        self.assertEqual(before.security, actual.security)
+                        retained = resources.read_at(parent, ".original.tmp")
+                        self.assertEqual(before.identity[:2], retained.identity[:2])
+                        self.assertEqual(before.payload, retained.payload)
+
+    def test_stage_fdopen_seal_and_close_window_failures_preserve_unpublished_nodes(self):
+        for failure in ("fdopen", "seal", "close_window"):
+            with self.subTest(failure=failure):
+                root = self.root / failure
+                root.mkdir()
+                target = root / "config.toml"
+                target.write_bytes(b"original user configuration\n")
+                with resources.Tree(root) as tree:
+                    parent, name = tree.parent("config.toml")
+                    before = resources.read_at(parent, name)
+                    row, descriptors = self.row(root, before), []
+                    original_create, original_closed = service.create_file_stage, service.read_sealed_stage
+                    def create(*args, **kwargs):
+                        result = original_create(*args, **kwargs)
+                        descriptors.append(result[0])
+                        return result
+                    def changed_after_close(*args, **kwargs):
+                        (root / ".candidate.tmp").write_bytes(b"external close-window edit\n")
+                        return original_closed(*args, **kwargs)
+                    with ExitStack() as patches:
+                        patches.enter_context(patch.object(service, "create_file_stage", side_effect=create))
+                        if failure == "fdopen":
+                            patches.enter_context(patch.object(service.os, "fdopen", side_effect=OSError("fixture fdopen failure")))
+                        elif failure == "seal":
+                            patches.enter_context(patch.object(service, "seal_file_stage", side_effect=OSError("fixture seal failure")))
+                        else:
+                            patches.enter_context(patch.object(service, "read_sealed_stage", side_effect=changed_after_close))
+                        with self.assertRaises((OSError, ValueError)):
+                            service._publish(tree, row, None, lambda: None)
+                    # 失败后不凭随机名字认领 stage；流构造失败也必须释放原 fd，
+                    # 让同一实体的实际读取成功，最终目标与外部编辑全部保留。
+                    with self.assertRaises(OSError):
+                        service.os.fstat(descriptors[0])
+                    self.assertEqual(before, resources.read_at(parent, name))
+                    stage = resources.read_at(parent, ".candidate.tmp")
+                    self.assertEqual("file", stage.kind)
+                    if failure == "close_window":
+                        self.assertEqual(b"external close-window edit\n", stage.payload)
+                    self.assertIsNone(row["published_inode"])
+                    self.assertFalse((root / ".original.tmp").exists())
+
+
 class CentralProjectTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
