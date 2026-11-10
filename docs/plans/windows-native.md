@@ -57,6 +57,8 @@ TUI五次模型/推理保存实际成功，项目保存约19.8秒、两次全局
 
 SDK完整修复2485cc4已按原soleQA最终许可（新patch8a4875，旧910be2许可撤回）精确合入候选8b9ca0c。独立原生库运行42750791601/18d3131实际72方法72.253秒全部OK、零skip、test_exit_code=0；五写者source/初始化stage完整SD均9404且owner/ACL/ACE/security全等，原源身份/正文不变，同一不可继承HANDLE，三种共享重开均错误32。原probe EOF Important已用64bit位置保存/0起读/finally恢复及真实读取链回归闭合。隔离YAML因延后stdout JSON使末尾摘要断言报错，job仍failure并保留原流，不重标绿；生产gate原样传原CLI退出码，不受此临时包装器影响。临时workflow不进入候选/main/归档，不为临时汇总器再改生产。完整门禁42753036097已结束失败：候选dba7e53，实际PR合并8829398与候选树均ef18e492。macOS CI通过；Linux仅保留inode替换测试的假设失败。Windows 10组件150项中，库72、边界12、ConPTY8、入口6、诊断4及大小写2通过；中央1与准入41暴露standalone Records的bare/package文件描述符注册表混用；owner-only1的backup测试在改owner时连带改变DACL；TUI3的保存操作30秒内未结束，尚待性能归因。完整日志与21份原生文件均保留，原FS/C实例按职责返修，未放宽安全断言或时间预算，未重新标绿失败。Win11普通桌面147项（排3）、最终独立QA及正式发布仍待。
 
+正式门禁返修已按原职责和同一Reviewer精确整合：Records的Windows SDK导入与创建虚拟fd的bare/package façade保持同namespace，原三参数、finish/CAS/最后结算顺序不动；新增回归使用当前原生Python child，无Bash依赖。Linux retained测试在旧inode仍存活时构造不同实体替换，owner-only测试在批准前固定DACL并保留完整安全断言。新增测试专用有界phase观察器不改产品/屏幕/30秒预算：按Job.execute两个唯一CALL positions记录operation/refresh及完整外层尾验，共享wrapper/body分开，不读敏感值或保frame，并有固定caps/hook恢复。两节点在CPython3.14与3.11各实际通过；统一源码原CLI再次2项0.045秒exit0，原Records统一回归1项0.130秒exit0。唯一登记已实际收集为10组件153项、ordinary desktop150项排3，两个新profile ID均唯一；这些便携结果不冒充Windows执行。新同源完整门禁及实际阶段数据仍待，最终Win11桌面/原soleQA/正式发布仍未完成。
+
 ## 验收结果与当前已交付行为
 
 本主题尚无Windows已验收基线；公开渠道仍为2.1.3，本机及三个跟随项目已按最新授权先行使用2.1.4候选中央核心，项目资料/启停选择/模型偏好保留。该Mac本机更新不等于Windows验收；不得将未来计划、模拟结果、部分节点或Windows Server CI当作Windows11桌面全验收。

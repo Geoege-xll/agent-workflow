@@ -53,6 +53,8 @@ SDK完整修复2485cc4已按原soleQA最终许可（新patch8a4875，旧910be2�
 
 mt-shop今日最新主线程“梳理并清理Admin侧边栏”的只读抽查已完成，截至上海2026-11-10 11:48:55。实际A派发后接收B、B范围纠正交回原审计实例；8次新建均fork_turns=none，10次原实例续用包含用户补充与QA返工，独立QA发现键盘问题后已返工。受限样本未证成明显工作流偏移或需回滚bug；仅一组同参数文档查询疑似重试，输出不同且无中间文件SHA，不能认定或量化浪费。373个唯一response的输入去重统计含98.62% cached，不将全部输入当新增消耗，也不据高缓存宣称零冗余。未解密handoff或修改业务项目；此为CLI样本，App GUI未验收。证据mtshop-today-usage-audit.json，SHA1bf8d4b786d9465cc6caa4cb278a43b25d2528e876df1b34d05d25b34f5b4451。
 
+正式门禁返修已按原职责和同一Reviewer精确整合：Records的Windows SDK导入与创建虚拟fd的bare/package façade保持同namespace，原三参数、finish/CAS/最后结算顺序不动；新增回归使用当前原生Python child，无Bash依赖。Linux retained测试在旧inode仍存活时构造不同实体替换，owner-only测试在批准前固定DACL并保留完整安全断言。新增测试专用有界phase观察器不改产品/屏幕/30秒预算：按Job.execute两个唯一CALL positions记录operation/refresh及完整外层尾验，共享wrapper/body分开，不读敏感值或保frame，并有固定caps/hook恢复。两节点在CPython3.14与3.11各实际通过；统一源码原CLI再次2项0.045秒exit0，原Records统一回归1项0.130秒exit0。唯一登记已实际收集为10组件153项、ordinary desktop150项排3，两个新profile ID均唯一；这些便携结果不冒充Windows执行。新同源完整门禁及实际阶段数据仍待，最终Win11桌面/原soleQA/正式发布仍未完成。
+
 ## 验收结果与当前已交付行为
 
 本机已按最新授权先行更新为2.1.4候选版：同源Mac285项340.176秒exit0（280通过/5 Windows-only skip），真实PTY两节点均通过，同一Reviewer允许本机候选更新。来源提交6eac3ea、双构建归档SHA7c516caf34bf10bdfff3370913c33b83efc55f5d3e51150261b44e10a3168259；实际Homebrew程序根为/opt/homebrew/Cellar/awf-cli/2.1.4/libexec。Homebrew标准README搬移与两Node首行改写已逐字节核实，185文件直接同归档、其余3项仅上述标准处理。实际安装后新CLI预览/导入/激活全部exit0，current为1b9b2b54738c92b27ff64caf1058b854e1daef378a1f32c0c4e7edfbc305da3e。三个登记项目enabled/follow/healthy，零冲突与pending，54个Skill软链指向同一新core，项目角色与全局偏好、主目录五原修改均保持。旧核心/任务pin未清理，公共Tap Formula恢复原字节且clean，brew test临时开启的developer模式已恢复off。详证在请求暂存区local-first-upgrade-result.json及原始日志。
