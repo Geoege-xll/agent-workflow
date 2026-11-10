@@ -173,6 +173,42 @@ class ProjectIdNativePublisherContractTest(unittest.TestCase):
             self.assertEqual(original, config.read_bytes(), "此测试不以替身制造真实文件发布成功")
 
 
+    def test_native_write_failure_preserves_public_initialization_error_and_exact_cause(self):
+        """执行真实入口的异常包装合同；物理故障边界独立于NTFS资源验收。"""
+        from unittest.mock import patch
+        from lib import windows_fs
+        class NativeOs:
+            name = "nt"
+            def __init__(self): self.opened, self.closed = [], []
+            def __getattr__(self, name): return getattr(os, name)
+            def open(self, *args, **kwargs):
+                descriptor = os.open(*args, **kwargs); self.opened.append(descriptor); return descriptor
+            def close(self, descriptor):
+                self.closed.append(descriptor); os.close(descriptor)
+        with tempfile.TemporaryDirectory(prefix="project-id-native-error-") as raw:
+            project = Path(raw).resolve() / "My Project"; project.mkdir()
+            config = project / "project.yaml"
+            original = b"memory:\n  project_id: replace-with-unique-project-id\n"
+            config.write_bytes(original); info = config.stat()
+            before = dict(kind="file", payload=original, mode=stat.S_IMODE(info.st_mode), security="a" * 64,
+                identity=(info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+            module = load_helper()
+            for fault in ("fdopen", "write", "fsync"):
+                with self.subTest(fault=fault):
+                    injected = OSError("fixture public boundary " + fault)
+                    backend = NativeOs()
+                    with patch.object(module, "os", backend), patch.object(windows_fs, "node_snapshot", return_value=before), \
+                            patch.object(windows_fs, "write_regular_if_unchanged", side_effect=injected):
+                        with self.assertRaises(module.InitializationError) as caught:
+                            module.initialize_project_id(config, project)
+                    self.assertIs(caught.exception.__cause__, injected)
+                    self.assertIn(str(injected), str(caught.exception))
+                    self.assertEqual(backend.opened, backend.closed, "入口自有目录fd应逐一释放")
+                    self.assertEqual(original, config.read_bytes())
+                    self.assertEqual([config.name], sorted(item.name for item in project.iterdir()))
+
+
+
 class ProjectIdSetupIntegrationTest(unittest.TestCase):
     def make_fixture(
         self, name: str = "Auto Project"

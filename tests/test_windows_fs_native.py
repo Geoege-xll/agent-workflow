@@ -464,13 +464,94 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             return task_graph_records.publish(target, approved, "missing" if before is None else task_graph_records.digest(body))
         return target, parent, before, approved, invoke
 
+    def _invoke_public_custom_with_security_trace(self, writer, target, parent, before, invoke):
+        """只观测原失败夹具的真实SD；原创建/共享/精确比较与异常原样执行。
+
+        生产CreateFile返回时借同一HANDLE采初始stage，不重开未封口stage；
+        只读探针不修ACL、不调整control、不替换预期值。失败后仍保留原异常，
+        finally记录源/父与已保留stage；只输出SDDL的SID标记、原字节摘要和身份。
+        """
+        native_open = fs._open_handle
+        stages, snapshots, observations, probe_errors = [], {}, {}, []
+        failure = None
+        def emit(event, value):
+            print("NATIVE_PUBLIC_WRITER_CUSTOM_SD " + json.dumps(
+                {"writer": writer, "event": event, "value": value}, sort_keys=True), flush=True)
+        def probe_error(event, error):
+            probe_errors.append(error)
+            emit(event + ".observation_error", {"type": type(error).__name__, "message": str(error)})
+        def observe(event, handle):
+            try:
+                value = _native_clone_observation(handle, label=event)
+                if stat.S_ISREG(value["identity"][2]):
+                    # 初始stage确定为空，读取不会移动其0游标；源/闭合stage也只
+                    # 使用这个自有观测句柄读取，正文仅输出长度与SHA256。
+                    node = fs._opened_snapshot(handle, max_bytes=1 if event == "stage-initial" else fs._LIMIT)
+                    if (node["identity"] != tuple(value["identity"])
+                            or node["security"] != value["security_sha256"]):
+                        raise ValueError("custom SD fixture changed between descriptor and bounded observation")
+                    snapshots[event] = node
+                    value.update(payload_bytes=len(node["payload"]), payload_sha256=hashlib.sha256(node["payload"]).hexdigest())
+                observations[event] = value
+                emit(event, value)
+            except BaseException as error:
+                probe_error(event, error)
+        def observe_path(event, path):
+            handle = None
+            try:
+                handle = native_open(path, fs.READ, sharing=fs.SHARE_READ)
+                observe(event, handle)
+            except FileNotFoundError:
+                emit(event, {"missing": True})
+            except BaseException as error:
+                probe_error(event, error)
+            finally:
+                if handle is not None:
+                    try: fs._close(handle)
+                    except BaseException as error: probe_error(event + ".close", error)
+        parent_handle = fs._handle_for_descriptor(parent, fs.secure_os)
+        observe("parent-before", parent_handle)
+        observe_path("source-before", target)
+        def opening(path, access=0x80, **kwargs):
+            handle = native_open(path, access, **kwargs)
+            if kwargs.get("create") and kwargs.get("exclusive") and Path(path).parent == target.parent:
+                stages.append(Path(path))
+                observe("stage-initial", handle)
+            return handle
+        try:
+            with patch.object(fs, "_open_handle", new=opening):
+                return invoke()
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            observe_path("target-after", target)
+            observe("parent-after", parent_handle)
+            for stage in stages:
+                observe_path("stage-after", stage)
+            # 源仅在本轮拒绝时应完整不变；成功发布会合法替换目标。父目录由
+            # stage创建改变mtime/ctime，故只核真正的身份/安全与原生属性。
+            if failure is not None and snapshots.get("target-after") != before:
+                probe_error("target-preservation", ValueError("rejected custom creation changed its original target"))
+            old_parent, new_parent = observations.get("parent-before"), observations.get("parent-after")
+            if old_parent is not None and new_parent is not None:
+                if (old_parent["identity"][:4] != new_parent["identity"][:4]
+                        or any(old_parent[key] != new_parent[key] for key in ("security_sha256", "file_attributes"))):
+                    probe_error("parent-preservation", ValueError("custom creation changed its parent identity or security"))
+            if failure is not None:
+                for error in probe_errors:
+                    failure.add_note("custom SD fixture observation failed: " + str(error))
+            elif probe_errors:
+                raise probe_errors[0]
+
     def test_public_writers_preserve_original_owner_dacl_and_missing_private_policy(self):
         """真实消费四写者及Hook process：默认/私有/自定义受保护源与missing。"""
         for writer in ("id", "claude", "records", "merge", "hook"):
             for policy in ("default", "private", "custom"):
                 with self.subTest(writer=writer, source_policy=policy):
                     target, parent, before, approved, invoke = self._public_writer_fixture(writer + "-" + policy, writer, policy=policy)
-                    result = invoke()
+                    result = (self._invoke_public_custom_with_security_trace(writer, target, parent, before, invoke)
+                              if policy == "custom" else invoke())
                     actual = fs.node_snapshot(parent, target.name)
                     self.assertEqual(before["security"], actual["security"])
                     self.assertEqual(before["mode"], actual["mode"])
@@ -546,30 +627,42 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
 
     def test_public_writer_resource_failures_close_creator_once_and_preserve_partial_stage(self):
         """统一helper实际fdopen/部分写/fsync失败，不能误清理未批准正文。"""
+        from lib.project.ensure_project_id import InitializationError
         native_create, native_fdopen = fs.create_regular_stage, fs.secure_os.fdopen
         native_release, native_sync = fs.secure_os._release, fs.secure_os.fsync
         for fault in ("fdopen", "write", "fsync"):
             with self.subTest(fault=fault):
                 target, parent, before, approved, invoke = self._public_writer_fixture("resource-" + fault, "id")
-                creators, stages, releases = [], [], []
+                creators, stages, releases, injected = [], [], [], []
                 def create(directory, name, **kwargs):
                     result = native_create(directory, name, **kwargs)
                     creators.append(result[0]); stages.append(target.parent / name); return result
                 class PartialStream(CloseObservedStream):
                     def write(self, data):
                         self.stream.write(data[:4]); self.stream.flush()
-                        raise OSError("fixture actual partial public-writer write")
+                        error = OSError("fixture actual partial public-writer write")
+                        injected.append(error); raise error
                 def fdopen(*args, **kwargs):
-                    if fault == "fdopen": raise OSError("fixture public-writer fdopen")
+                    if fault == "fdopen":
+                        error = OSError("fixture public-writer fdopen")
+                        injected.append(error); raise error
                     stream = native_fdopen(*args, **kwargs)
                     return PartialStream(stream, lambda: None) if fault == "write" else stream
                 def release(descriptor): releases.append(descriptor); return native_release(descriptor)
                 def sync(descriptor):
-                    if fault == "fsync" and descriptor in creators: raise OSError("fixture public-writer fsync")
+                    if fault == "fsync" and descriptor in creators:
+                        error = OSError("fixture public-writer fsync")
+                        injected.append(error); raise error
                     return native_sync(descriptor)
                 with patch.object(fs, "create_regular_stage", new=create), patch.object(fs.secure_os, "fdopen", new=fdopen), \
                         patch.object(fs.secure_os, "_release", new=release), patch.object(fs.secure_os, "fsync", new=sync):
-                    with self.assertRaises(OSError): invoke()
+                    # 入口公开合同是InitializationError，并以原OSError为cause；
+                    # 必须证明确实到达本次故障注入，不能用产品异常类型迁就夹具。
+                    with self.assertRaises(InitializationError) as caught:
+                        invoke()
+                self.assertEqual(1, len(injected))
+                self.assertIs(caught.exception.__cause__, injected[0])
+                self.assertIsInstance(caught.exception.__cause__, OSError)
                 self.assertEqual(before, fs.node_snapshot(parent, target.name))
                 self.assertEqual(1, len(creators)); self.assertEqual(1, releases.count(creators[0]))
                 self.assertNotIn(creators[0], fs.secure_os._files)
