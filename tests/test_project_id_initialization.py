@@ -150,16 +150,19 @@ class ProjectIdNativePublisherContractTest(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import patch
         from lib import windows_fs
+        from lib.platform_fs import os as platform_os
         class NativeOs:
             name = "nt"
-            def __getattr__(self, name): return getattr(os, name)
+            # 委托产品实际façade：Windows目录flag和伪目录fd不能交给stdlib。
+            def __getattr__(self, name): return getattr(platform_os, name)
         with tempfile.TemporaryDirectory(prefix="project-id-native-contract-") as raw:
             project = Path(raw).resolve() / "My Project"
             project.mkdir()
             config = project / "project.yaml"
             original = b"memory:\r\n  project_id: replace-with-unique-project-id\r\n"
             config.write_bytes(original)
-            info = config.stat()
+            # 原像的mode/ChangeTime也沿同一后端，与生产完整身份的含义一致。
+            info = platform_os.stat(config, follow_symlinks=False)
             before = dict(kind="file", payload=original, mode=stat.S_IMODE(info.st_mode), security="a" * 64,
                 identity=(info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
             module = load_helper()
@@ -177,19 +180,23 @@ class ProjectIdNativePublisherContractTest(unittest.TestCase):
         """执行真实入口的异常包装合同；物理故障边界独立于NTFS资源验收。"""
         from unittest.mock import patch
         from lib import windows_fs
+        from lib.platform_fs import os as platform_os
         class NativeOs:
             name = "nt"
             def __init__(self): self.opened, self.closed = [], []
-            def __getattr__(self, name): return getattr(os, name)
+            # 委托产品实际façade：Windows目录flag和伪目录fd不能交给stdlib。
+            def __getattr__(self, name): return getattr(platform_os, name)
             def open(self, *args, **kwargs):
-                descriptor = os.open(*args, **kwargs); self.opened.append(descriptor); return descriptor
+                descriptor = platform_os.open(*args, **kwargs); self.opened.append(descriptor); return descriptor
             def close(self, descriptor):
-                self.closed.append(descriptor); os.close(descriptor)
+                self.closed.append(descriptor); platform_os.close(descriptor)
         with tempfile.TemporaryDirectory(prefix="project-id-native-error-") as raw:
             project = Path(raw).resolve() / "My Project"; project.mkdir()
             config = project / "project.yaml"
             original = b"memory:\n  project_id: replace-with-unique-project-id\n"
-            config.write_bytes(original); info = config.stat()
+            config.write_bytes(original)
+            # 使用后端实际mode/ChangeTime，避免Windows原生字段投影提前误拒。
+            info = platform_os.stat(config, follow_symlinks=False)
             before = dict(kind="file", payload=original, mode=stat.S_IMODE(info.st_mode), security="a" * 64,
                 identity=(info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
             module = load_helper()
