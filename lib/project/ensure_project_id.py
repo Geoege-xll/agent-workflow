@@ -44,7 +44,25 @@ def derive_project_id(name: str) -> str:
     return slug
 
 
-def _read_config(path: Path) -> tuple[bytes, os.stat_result]:
+def _read_config(path: Path, *, native_out: list[dict] | None = None) -> tuple[bytes, os.stat_result]:
+    if os.name == "nt":
+        from lib.windows_fs import node_snapshot
+        # 完整原像在第一次读取正文时取得，不能到创建 stage 才重新认领 ACL。
+        parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            original = node_snapshot(parent, path.name, max_bytes=MAX_CONFIG_SIZE)
+            if original is None:
+                raise InitializationError(f"project.yaml is missing: {path}")
+            info = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            identity = (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                        info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            if identity != original["identity"]:
+                raise InitializationError("project.yaml changed during its original native read")
+        finally:
+            os.close(parent)
+        if native_out is not None:
+            native_out.append(original)
+        return original["payload"], info
     flags = (
         os.O_RDONLY
         | getattr(os, "O_CLOEXEC", 0)
@@ -146,11 +164,28 @@ def initialize_project_id(config: Path, project_root: Path) -> str | None:
     root_info = project_root.lstat()
     if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
         raise InitializationError(f"project root must be a real directory: {project_root}")
-    original, original_info = _read_config(config)
+    native_original: list[dict] = []
+    original, original_info = _read_config(config, native_out=native_original)
     project_id = derive_project_id(project_root.name)
     replacement = _replace_placeholder(original, project_id)
     if replacement is None:
         return None
+
+    if os.name == "nt":
+        from lib.windows_fs import write_regular_if_unchanged
+        # 只迁移 Windows 物理发布：正文替换规则、项目根检查与返回值不变。
+        # 共用负责层消费最初完整原像，mode 由原 SD 决定，不能 fchmod 后放宽。
+        parent = os.open(config.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            write_regular_if_unchanged(parent, config.name,
+                f".{config.name}.agent-workflow-project-id-{secrets.token_hex(8)}.tmp",
+                expected=native_original[0], payload=replacement,
+                mode=stat.S_IMODE(original_info.st_mode), max_bytes=MAX_CONFIG_SIZE)
+        except OSError as exc:
+            raise InitializationError(f"cannot atomically initialize project.yaml: {exc}") from exc
+        finally:
+            os.close(parent)
+        return project_id
 
     temporary = config.parent / (
         f".{config.name}.agent-workflow-project-id-{secrets.token_hex(8)}.tmp"

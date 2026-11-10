@@ -421,6 +421,64 @@ class RecordUpdateTest(unittest.TestCase):
             self.assertEqual(records.digest((root / "plan.md").read_bytes()), updated["tasks"][0]["controlled_document_access"]["documents"][-1]["content_fingerprint"])
 
 
+
+class RecordNativePublisherContractTest(unittest.TestCase):
+    def test_original_read_finish_fresh_cas_and_settlement_precede_native_publisher(self):
+        """真实 Records 控制流保持顺序；替身仅接原生物理发布，不假造 NTFS。"""
+        from lib import windows_fs, runtime_store, task_settlement
+        from contextlib import contextmanager
+        class NativeOs:
+            name = "nt"
+            def __getattr__(self, name): return getattr(os, name)
+            def lstat(self, path):
+                # 模拟的是后端与stdlib的投影差异，不模拟NTFS调用成功；
+                # 若消费者误用Path.lstat，此处mode/ChangeTime就会不相符。
+                from types import SimpleNamespace
+                info = Path(path).lstat()
+                return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino,
+                    st_mode=stat.S_IFREG | 0o600, st_size=info.st_size, st_nlink=info.st_nlink,
+                    st_mtime_ns=info.st_mtime_ns, st_ctime_ns=info.st_ctime_ns + 100)
+        for drift in (False, True):
+            with self.subTest(drift_during_finish=drift), tempfile.TemporaryDirectory(prefix="record-native-contract-") as raw:
+                path = Path(raw).resolve() / "graph.json"; path.write_bytes(b"old\n")
+                info = path.stat()
+                before = dict(kind="file", payload=b"old\n", mode=0o600, security="a" * 64,
+                    identity=(info.st_dev, info.st_ino, stat.S_IFREG | 0o600, 1, 4, info.st_mtime_ns, info.st_ctime_ns + 100))
+                events = []
+                @contextmanager
+                def lock(path):
+                    events.append("lock"); yield; events.append("unlock")
+                def snapshot(*args, **kwargs): events.append("original-full-read"); return before
+                def finish():
+                    events.append("finish")
+                    if drift: path.write_bytes(b"external edit\n")
+                original_read = records.read_file
+                def fresh(path): events.append("read-bytes"); return original_read(path)
+                def publish(*args, **kwargs):
+                    events.append("publish")
+                    self.assertEqual(before, kwargs["expected"])
+                    self.assertEqual(4 * 1024 * 1024, kwargs["max_bytes"])
+                with patch.object(records, "os", NativeOs()), patch.object(records, "_publication_lock", new=lock), \
+                        patch.object(records, "read_file", side_effect=fresh), \
+                        patch.object(windows_fs, "node_snapshot", side_effect=snapshot), \
+                        patch.object(runtime_store, "finish_read_operation", side_effect=finish), \
+                        patch.object(task_settlement, "validate_new_settlement_sources", side_effect=lambda *a, **k: events.append("settlement")), \
+                        patch.object(windows_fs, "write_regular_if_unchanged", side_effect=publish) as writing:
+                    if drift:
+                        with self.assertRaisesRegex(ValueError, "fingerprint changed"):
+                            records.publish(path, b"new\n", records.digest(b"old\n"))
+                        writing.assert_not_called()
+                        self.assertNotIn("settlement", events)
+                        self.assertEqual(b"external edit\n", path.read_bytes())
+                    else:
+                        self.assertTrue(records.publish(path, b"new\n", records.digest(b"old\n")))
+                        self.assertLess(events.index("lock"), events.index("original-full-read"))
+                        self.assertLess(events.index("original-full-read"), events.index("finish"))
+                        self.assertLess(events.index("finish"), events.index("read-bytes", events.index("finish")))
+                        self.assertLess(events.index("settlement"), events.index("publish"))
+                        self.assertEqual("unlock", events[-1])
+
+
 class RecordPublicationTest(unittest.TestCase):
     def operation_fixture(self):
         """复用最小真实内容库构造器，所有core与记录都只位于本例临时目录。"""
@@ -519,7 +577,7 @@ class RecordPublicationTest(unittest.TestCase):
                 path.write_bytes(b"concurrent edit\n")
 
             with patch.object(records.os, "fsync", side_effect=edit_after_temporary_write):
-                with self.assertRaisesRegex(ValueError, "changed before publication"):
+                with self.assertRaisesRegex(ValueError, "changed before publication|target changed before atomic replacement"):
                     records.publish(path, b"new\n", records.digest(b"old\n"))
             self.assertEqual(b"concurrent edit\n", path.read_bytes())
             self.assertEqual([path], list(path.parent.iterdir()))
@@ -537,11 +595,27 @@ class RecordPublicationTest(unittest.TestCase):
                 self.assertEqual(b"new\n", records.read_record(path))
                 self.assertEqual(1, path.stat().st_nlink)
 
-            with patch.object(records.os, "replace", side_effect=observe):
-                self.assertTrue(records.publish(path, b"new\n", records.digest(b"old\n")))
-            with patch.object(records.os, "replace", side_effect=OSError("interrupted before replacement")):
-                with self.assertRaisesRegex(OSError, "interrupted"):
-                    records.publish(path, b"later\n", records.digest(b"new\n"))
+            if os.name == "nt":
+                from lib import windows_fs
+                physical = windows_fs.write_regular_if_unchanged
+                def observe_native(*args, **kwargs):
+                    self.assertEqual(b"old\n", records.read_record(path))
+                    self.assertEqual(1, path.stat().st_nlink)
+                    result = physical(*args, **kwargs)
+                    self.assertEqual(b"new\n", records.read_record(path))
+                    self.assertEqual(1, path.stat().st_nlink)
+                    return result
+                with patch.object(windows_fs, "write_regular_if_unchanged", side_effect=observe_native):
+                    self.assertTrue(records.publish(path, b"new\n", records.digest(b"old\n")))
+                with patch.object(windows_fs, "write_regular_if_unchanged", side_effect=OSError("interrupted before replacement")):
+                    with self.assertRaisesRegex(OSError, "interrupted"):
+                        records.publish(path, b"later\n", records.digest(b"new\n"))
+            else:
+                with patch.object(records.os, "replace", side_effect=observe):
+                    self.assertTrue(records.publish(path, b"new\n", records.digest(b"old\n")))
+                with patch.object(records.os, "replace", side_effect=OSError("interrupted before replacement")):
+                    with self.assertRaisesRegex(OSError, "interrupted"):
+                        records.publish(path, b"later\n", records.digest(b"new\n"))
             self.assertEqual(b"new\n", records.read_record(path))
             self.assertEqual([path], list(path.parent.iterdir()))
 

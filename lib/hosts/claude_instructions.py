@@ -17,6 +17,7 @@ else:
     from lib.platform_fs import os
 from pathlib import Path
 import stat
+import secrets
 import tempfile
 
 
@@ -32,9 +33,28 @@ PAIRS = (
 )
 
 
-def read_file(path: Path) -> bytes | None:
+def read_file(path: Path, *, snapshot_out: list[dict | None] | None = None) -> bytes | None:
     """入口必须是单链接普通文件；拒绝链接、特殊节点及危险父目录。"""
     if os.name == "nt":
+        if snapshot_out is not None:
+            from lib.windows_fs import node_snapshot
+            # 正文与完整安全原像必须来自同一次原读。输出只存本轮内存，
+            # 不缓存路径，也不靠 bytes 子类偷偷传递权限归属。
+            try:
+                parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                snapshot_out.append(None)
+                return None
+            try:
+                original = node_snapshot(parent, path.name, max_bytes=4 * 1024 * 1024)
+                data = original["payload"] if original is not None else None
+                if data is not None:
+                    data.decode("utf-8", errors="strict")
+            finally:
+                os.close(parent)
+            # 连目录释放也成功后才交出原像，失败不会留下可误用的半份out。
+            snapshot_out.append(original)
+            return data
         if __package__:
             from lib.windows_fs import read_file as windows_read
         else:
@@ -109,10 +129,18 @@ def replace_block(body: bytes, begin: str, replacement: bytes) -> bytes:
     return body + separator + replacement
 
 
-def render(pack: Path, root: Path):
+def render(pack: Path, root: Path, *, snapshot_out: dict[Path, dict | None] | None = None):
     """正文只写入 AGENTS.md，CLAUDE.md 固定为官方一行导入，无版本分支。"""
-    agents = read_file(root / "AGENTS.md")
-    claude = read_file(root / "CLAUDE.md")
+    pending_snapshots = {}
+    def original(path):
+        if os.name != "nt" or snapshot_out is None:
+            return read_file(path)
+        captured = []
+        body = read_file(path, snapshot_out=captured)
+        pending_snapshots[path] = captured[0]
+        return body
+    agents = original(root / "AGENTS.md")
+    claude = original(root / "CLAUDE.md")
     # 全新安装只接受缺失入口或精确的一行官方导入；不再识别、备份并迁移旧版正文。
     # 拒绝并不等于删除：用户内容、空文件、旧受管正文均原样保留，由用户明确处置。
     if claude not in (None, CLAUDE_IMPORT):
@@ -144,55 +172,72 @@ def render(pack: Path, root: Path):
     # 安装 Codex 的项目沿用其现有总入口保护值，不把它误当 Claude 官方限制。
     if "<!-- pack:codex-begin -->" in next_agents.decode() and len(next_agents) > 32768:
         raise ValueError("combined AGENTS.md would exceed the existing Codex 32 KiB guard")
+    if snapshot_out is not None and os.name == "nt":
+        snapshot_out.update(pending_snapshots)
     return agents, claude, next_agents, next_claude
 
 
-def atomic_write(path: Path, data: bytes | None, mode: int) -> tuple[int, int] | None:
-    """同目录原子发布；Windows 返回所创建文件身份供精确恢复使用。"""
+_UNSET = object()
+
+
+def atomic_write(path: Path, data: bytes | None, mode: int, *, expected=_UNSET,
+                 published_out: list[dict] | None = None) -> tuple[int, int] | None:
+    """同目录原子发布，保持原身份返回值，Windows 显式消费完整原读授权。
+
+    未提供 expected 的直接库调用在本入口第一次读取时建立原像；None 则明确
+    只授权 missing，二者绝不混淆。计划型调用方须传原读快照，不能晚采样。
+    published_out 仅为当前同步回滚保留 helper 返回的完整像，不新增持久字段。
+    """
+    if os.name == "nt":
+        from lib.windows_fs import node_snapshot, write_regular_if_unchanged, delete_regular
+        try:
+            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            if data is None:
+                return None
+            raise
+        try:
+            original = node_snapshot(parent, path.name, max_bytes=4 * 1024 * 1024) if expected is _UNSET else expected
+            if data is None:
+                if original is None and node_snapshot(parent, path.name, max_bytes=4 * 1024 * 1024) is not None:
+                    raise ValueError("Windows deletion target appeared after approved missing state")
+                if original is not None:
+                    # 回滚新文件同样只能删除本轮完整发布像；不能无条件 unlink
+                    # 一个仅因正文相同而被路径首读追认的新 inode/安全策略。
+                    import hashlib
+                    delete_regular(parent, path.name, expected={"identity": original["identity"],
+                        "security": original["security"], "sha256": hashlib.sha256(original["payload"]).hexdigest()},
+                        max_bytes=4 * 1024 * 1024)
+                return None
+            result = write_regular_if_unchanged(parent, path.name,
+                f".{path.name}.workflow-{secrets.token_hex(8)}", expected=original,
+                payload=data, mode=mode, max_bytes=4 * 1024 * 1024)
+            if published_out is not None:
+                published_out.append(result)
+            return result["identity"][:2]
+        finally:
+            os.close(parent)
+    # POSIX 路径保留原 mkstemp/mode/replace 行为；上方 Windows 已返回，
+    # 不保留能落回旧 identity-only 发布或无条件路径清理的 Windows 分支。
     if data is None:
-        if os.name == "nt":
-            try:
-                os.unlink(path)
-            except FileNotFoundError:
-                pass
-        else:
-            path.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
         return None
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
     temporary = Path(name)
-    identity = None
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
             os.fchmod(stream.fileno(), mode)
-            if os.name == "nt":
-                stream.flush()
-                os.fsync(stream.fileno())
-                info = os.fstat(stream.fileno())
-                identity = (info.st_dev, info.st_ino)
-        if os.name == "nt":
-            os.replace_owned(temporary, path, identity)
-        else:
-            os.replace(temporary, path)
-        return identity
+        os.replace(temporary, path)
+        return None
     finally:
-        if os.name == "nt":
-            if identity is not None:
-                if __package__:
-                    from lib.windows_fs import remove_file_if_unchanged
-                else:
-                    from lib.windows_fs import remove_file_if_unchanged
-                import hashlib
-                try:
-                    remove_file_if_unchanged(temporary, hashlib.sha256(data).hexdigest(), identity)
-                except FileNotFoundError:
-                    pass
-        else:
-            temporary.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
 
 
 def process(pack: Path, root: Path, action: str) -> None:
-    agents, claude, next_agents, next_claude = render(pack, root)
+    native_before = {} if os.name == "nt" else None
+    agents, claude, next_agents, next_claude = (render(pack, root, snapshot_out=native_before)
+        if native_before is not None else render(pack, root))
     if action == "preflight-all":
         # 聚合安装必须看最终合成结果，而非分别拿旧入口预检后才在中途发现溢出。
         # 这里只计算字节，不发布文件；各宿主仍执行自己的完整契约和所有权预检。
@@ -231,12 +276,21 @@ def process(pack: Path, root: Path, action: str) -> None:
                 continue
             if read_file(path) != old:
                 raise ValueError(f"instruction changed since preflight: {path}")
-            atomic_write(path, new, mode)
-            changed.append((path, old, new, mode))
+            published = []
+            if native_before is not None:
+                atomic_write(path, new, mode, expected=native_before[path], published_out=published)
+            else:
+                atomic_write(path, new, mode)
+            changed.append((path, old, new, mode, published[0] if published else None))
     except (OSError, ValueError):
         # 若第二个文件发布失败，回滚本轮已发布的第一个；不覆盖并发用户修改。
-        for path, old, new, mode in reversed(changed):
-            if read_file(path) == new:
+        for path, old, new, mode, published in reversed(changed):
+            if native_before is not None:
+                current = []
+                body = read_file(path, snapshot_out=current)
+                if body == new and current[0] == published:
+                    atomic_write(path, old, mode, expected=published)
+            elif read_file(path) == new:
                 atomic_write(path, old, mode)
         raise
     # 薄入口本身就是加载路径，不再报告“CLAUDE.md 遮蔽 AGENTS.md”的误导告警。

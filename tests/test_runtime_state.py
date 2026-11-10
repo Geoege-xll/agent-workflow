@@ -49,12 +49,17 @@ class AnchoredWindowsStageContractTest(unittest.TestCase):
                 if on_close is not None:
                     on_close(nodes, stage_name)
         stream = Stream()
-        def opened(name, *args, **kwargs):
+        def create(parent, name, *, permission_source=None, expected_source=None):
             nonlocal stage_name
-            self.assertEqual(windows_fs.SHARE_READ, kwargs["sharing"])
+            if existing:
+                self.assertEqual("control.json", permission_source)
+                self.assertEqual(before, Node(**expected_source))
+            else:
+                self.assertIsNone(permission_source)
+                self.assertIsNone(expected_source)
             stage_name = name
             nodes[name] = Node("file", b"", 0o600, (7, 101, stat.S_IFREG | 0o600, 1, 0, 1, 2), "a" * 64)
-            return 1
+            return 1, {key: getattr(nodes[name], key) for key in ("kind", "payload", "mode", "identity", "security")}
         def fdopen(*args):
             if fail_fdopen:
                 raise OSError("fixture fdopen failed before ownership transfer")
@@ -76,16 +81,14 @@ class AnchoredWindowsStageContractTest(unittest.TestCase):
             self.assertEqual(nodes[name], kwargs["expected"])
             deleted.append(name)
             del nodes[name]
-        def clone(source, destination, **kwargs):
-            # 只验证实际调用方传入最初 before；ACL 变换本身由底层合同与原生
-            # 方法覆盖，替身不复制第二份实现来制造通过。
-            self.assertEqual(before, Node(**kwargs["expected_source"]))
-            if nodes["control.json"] != before:
-                raise ValueError("fixture original ACL source changed")
-            self.assertEqual(nodes[stage_name], Node(**kwargs["expected_destination"]))
-            return kwargs["expected_destination"]
+        def seal(descriptor, *, expected_created, payload, mode):
+            # 替身只承载写后事实；真实 creator 绑定/ACL/同 HANDLE seal 由
+            # 原语合同和 native 方法验证，本消费者测试专门控制关闭窗口。
+            self.assertEqual(101, expected_created["identity"][1])
+            self.assertEqual(payload, nodes[stage_name].payload)
+            return {key: getattr(nodes[stage_name], key) for key in ("kind", "payload", "mode", "identity", "security")}
         facade = SimpleNamespace(**{name: getattr(os, name, 0) for name in ("O_WRONLY", "O_CREAT", "O_EXCL", "O_NOFOLLOW")},
-                                 open=opened, fdopen=fdopen, fstat=info, fchmod=lambda *args: None,
+                                 fdopen=fdopen, fstat=info,
                                  fsync=lambda *args: None, close=lambda *args: None)
         target = SimpleNamespace(directory=1, name="control.json", path=Path("/memory/control.json"), retainer=None)
         failure = None
@@ -93,8 +96,8 @@ class AnchoredWindowsStageContractTest(unittest.TestCase):
                 patch.object(state_files, "read_at", side_effect=lambda parent, name: nodes.get(name, Node())), \
                 patch.object(state_files, "move_at", side_effect=move), patch.object(state_files, "publish_at", side_effect=publish), \
                 patch.object(state_files, "delete_at", side_effect=delete), \
-                patch.object(windows_fs, "security_fingerprint", side_effect=lambda descriptor: nodes[stage_name].security), \
-                patch.object(windows_fs, "copy_permissions_if_unchanged", side_effect=clone):
+                patch.object(windows_fs, "create_regular_stage", side_effect=create), \
+                patch.object(windows_fs, "seal_regular_stage", side_effect=seal):
             try:
                 state_files.AnchoredFile._write_windows(target, b"APPROVED", 0o600,
                                                        (before.payload, before.mode) if existing else (None, None))

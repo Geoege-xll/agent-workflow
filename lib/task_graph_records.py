@@ -23,6 +23,7 @@ else:
     from platform_fs import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import secrets
 import stat
 import tempfile
 from typing import Any, Callable
@@ -77,7 +78,10 @@ def read_record(path: Path) -> bytes:
 
 
 def _identity(path: Path) -> tuple[int, ...]:
-    info = path.lstat()
+    # 原生Node使用后端的精确私有mode与ChangeTime；stdlib Path.lstat 的
+    # Windows mode/ctime投影不同，不能拿它与完整Node比较后误拒合法私有文件。
+    # 该见证仅在本轮CAS内存中使用，原记录wire/编码与POSIX事实保持不变。
+    info = os.lstat(path) if os.name == "nt" else path.lstat()
     return (info.st_dev, info.st_ino, stat.S_IMODE(info.st_mode), info.st_size,
             info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
 
@@ -122,14 +126,31 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
     """
     path = path.absolute()
     read_file(path)  # 取得目录锁之前也先拒绝危险父目录、符号链接和硬链接目标。
-    with _publication_lock(path):
-        before = read_file(path)
+    with _publication_lock(path), ExitStack() as native_resources:
+        native_before = None
+        if os.name == "nt":
+            from lib.windows_fs import node_snapshot
+            native_parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            native_resources.callback(os.close, native_parent)
+            # 第一次持锁读取就固定独立完整安全原像；后面的 finish/结算仍沿
+            # 原时点执行，不能在 helper 创建之前将变化的 ACL 当成新授权。
+            native_before = node_snapshot(native_parent, path.name, max_bytes=4 * 1024 * 1024)
+            before = native_before["payload"] if native_before is not None else None
+            if before is not None:
+                before.decode("utf-8", errors="strict")
+        else:
+            before = read_file(path)
         actual = "missing" if before is None else digest(before)
         if expected != actual:
             raise TaskGraphError(f"record fingerprint changed: {path}; expected {expected}, got {actual}")
         if before == body:
             return False
         identity = _identity(path) if before is not None else None
+        if native_before is not None:
+            native_id = native_before["identity"]
+            if identity != (native_id[0], native_id[1], stat.S_IMODE(native_id[2]),
+                            native_id[4], native_id[5], native_id[6], native_id[3]):
+                raise TaskGraphError(f"record changed during original native read: {path}")
         # 只有I/O边界知道实际待写原记录。由结算owner比较before/after识别本轮
         # 新收据并拒绝证据自覆写；不向纯update塞隐式源路径或特殊返回对象。
         if __package__:
@@ -149,6 +170,14 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
             raise TaskGraphError(f"record identity changed before publication: {path}")
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         mode = identity[2] if identity else 0o600
+        if os.name == "nt":
+            from lib.windows_fs import write_regular_if_unchanged
+            # 进入 helper 之前，原锁/hash/identity/finish/fresh CAS/settlement
+            # 已依次成功；共享物理层不能重排这些业务校验或重读固定核心。
+            write_regular_if_unchanged(native_parent, path.name,
+                f".{path.name}.workflow-{secrets.token_hex(8)}", expected=native_before,
+                payload=body, mode=mode, max_bytes=4 * 1024 * 1024)
+            return True
         descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
         temporary = Path(raw)
         try:

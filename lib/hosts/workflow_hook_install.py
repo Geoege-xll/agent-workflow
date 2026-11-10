@@ -338,7 +338,8 @@ def project_codex_config(config: bytes, before: bytes | None) -> bytes:
 
 
 def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bool = False,
-               windows_runtime=None, supervisor=None) -> tuple[Path, bytes | None, bytes]:
+               windows_runtime=None, supervisor=None,
+               snapshot_out: dict[Path, dict | None] | None = None) -> tuple[Path, bytes | None, bytes]:
     """预检、发布、验收共用生成结果；预检不会创建项目目录或配置。"""
     # macOS /var、/tmp 等系统别名先解析为真实根；配置文件自身仍保持 no-follow 校验。
     pack, project = pack.resolve(strict=True), project.resolve(strict=True)
@@ -346,11 +347,30 @@ def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bo
     if config is None:
         raise ValueError("missing project.yaml")
     mode = hook_mode(config.decode())
+    # 仅 apply 调用方显式请求此内存输出；默认纯计划 API 仍返回原三元组。
+    # 每个目标的 payload 与完整安全像都来自同一次原读，不缓存路径或晚采样。
+    pending_snapshots = {}
+    def original(path):
+        if os.name != "nt" or snapshot_out is None:
+            return read_file(path)
+        captured = []
+        body = read_file(path, snapshot_out=captured)
+        pending_snapshots[path] = captured[0]
+        return body
+    def completed(path, before, after):
+        # 解析/合成全部成功才交出out；失败保持调用方容器原样，避免半份
+        # snapshot 被错误消费。默认纯计划仍是原来的三元组返回值。
+        if snapshot_out is not None and os.name == "nt":
+            snapshot_out.update(pending_snapshots)
+        return path, before, after
     if host == "codex":
         toml = project / ".codex/config.toml"
-        original_toml = read_file(toml)
+        original_toml = original(toml)
         parsed = tomllib.loads((original_toml or b"").decode())
-        existing_json = read_file(project / ".codex/hooks.json")
+        # 此首次JSON读取参与选择实际发布容器；原生apply须同时固定完整像，
+        # 后面生成JSON候选时复用同次payload，不能再读后重新选择权限来源。
+        capture_native = os.name == "nt" and snapshot_out is not None
+        existing_json = original(project / ".codex/hooks.json") if capture_native else read_file(project / ".codex/hooks.json")
         json_hooks = json_object(existing_json).get("hooks", {})
         if not isinstance(json_hooks, dict):
             raise ValueError("Codex JSON hooks must be an event mapping")
@@ -362,11 +382,11 @@ def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bo
                 # 同文件先由原生 agents 合并器更新，再合并 Hooks。快照需包含这两个
                 # 受管步骤的真实结果，不能将合法并发数更新误认成用户并发修改。
                 projected = project_codex_config(config, original_toml)
-            return toml, original_toml, merge_inline(projected, pack, project, mode, windows_runtime=windows_runtime, supervisor=supervisor)
+            return completed(toml, original_toml, merge_inline(projected, pack, project, mode, windows_runtime=windows_runtime, supervisor=supervisor))
     relative = {"codex": ".codex/hooks.json", "claude": ".claude/settings.json",
                 "antigravity": ".agents/hooks.json"}[host]
     path = project / relative
-    before = read_file(path)
+    before = existing_json if host == "codex" and os.name == "nt" and snapshot_out is not None else original(path)
     data = json_object(before)
     # 文件读取集中在预检入口；纯合并函数不访问磁盘，Windows 命令编解码也可独立验证。
     options = parse_claude_options(config.decode("utf-8")) if host == "claude" else None
@@ -379,19 +399,25 @@ def plan_hooks(pack: Path, project: Path, host: str, *, simulate_codex_setup: bo
         json.dumps(merged, ensure_ascii=False, indent=2) + "\n").encode()
     if before is None and not merged:
         after = b""
-    return path, before, after
+    return completed(path, before, after)
 
 
 def process(pack: Path, project: Path, host: str, action: str) -> None:
     native_publish = action == "apply-codex-config"
     if native_publish and host != "codex":
         raise ValueError("apply-codex-config is Codex-only")
-    path, before, after = plan_hooks(pack, project, host, simulate_codex_setup=native_publish)
+    native_before = {} if os.name == "nt" else None
+    path, before, after = (plan_hooks(pack, project, host, simulate_codex_setup=native_publish,
+                                   snapshot_out=native_before) if native_before is not None else
+                           plan_hooks(pack, project, host, simulate_codex_setup=native_publish))
     if native_publish and path.name != "config.toml":
         # JSON Hooks 与原生配置分属两个文件，没有共享容器的中间态覆盖风险。
         # 本步骤只发布原生配置；JSON Hook 仍在角色与 Skill 同步之后发布。
         path = project.resolve(strict=True) / ".codex/config.toml"
-        before = read_file(path)
+        # 原生配置已在 plan 的第一次读取捕获；不能在此为另一个当前 inode
+        # 或安全策略重新建立基线。POSIX 继续使用原有同步读取合同。
+        source = native_before[path] if native_before is not None else None
+        before = (source["payload"] if source is not None else None) if native_before is not None else read_file(path)
         config = read_file(pack.resolve(strict=True) / "project.yaml")
         if config is None:
             raise ValueError("missing project.yaml")
@@ -404,7 +430,10 @@ def process(pack: Path, project: Path, host: str, action: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if read_file(path) != before:
             raise ValueError("Hook settings changed after preflight; preserve concurrent edit")
-        atomic_write(path, after, mode)
+        if native_before is not None:
+            atomic_write(path, after, mode, expected=native_before[path])
+        else:
+            atomic_write(path, after, mode)
     print(f"[OK] {host} project Hooks / optional settings {action} (native trust preserved)")
 
 

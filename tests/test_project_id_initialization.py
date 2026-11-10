@@ -143,6 +143,36 @@ class ProjectIdInitializationTest(unittest.TestCase):
                 self.assertEqual(before, after)
 
 
+
+class ProjectIdNativePublisherContractTest(unittest.TestCase):
+    def test_original_native_read_is_forwarded_with_original_one_mib_policy(self):
+        """真实初始化器消费原读五字段；这里只替换原生边界，不冒称 Windows。"""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from lib import windows_fs
+        class NativeOs:
+            name = "nt"
+            def __getattr__(self, name): return getattr(os, name)
+        with tempfile.TemporaryDirectory(prefix="project-id-native-contract-") as raw:
+            project = Path(raw).resolve() / "My Project"
+            project.mkdir()
+            config = project / "project.yaml"
+            original = b"memory:\r\n  project_id: replace-with-unique-project-id\r\n"
+            config.write_bytes(original)
+            info = config.stat()
+            before = dict(kind="file", payload=original, mode=stat.S_IMODE(info.st_mode), security="a" * 64,
+                identity=(info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+            module = load_helper()
+            with patch.object(module, "os", NativeOs()), patch.object(windows_fs, "node_snapshot", return_value=before) as reading, \
+                    patch.object(windows_fs, "write_regular_if_unchanged", return_value=before) as writing:
+                self.assertEqual("my-project", module.initialize_project_id(config, project))
+            self.assertEqual(module.MAX_CONFIG_SIZE, reading.call_args.kwargs["max_bytes"])
+            self.assertEqual(before, writing.call_args.kwargs["expected"])
+            self.assertEqual(b"memory:\r\n  project_id: my-project\r\n", writing.call_args.kwargs["payload"])
+            self.assertEqual(module.MAX_CONFIG_SIZE, writing.call_args.kwargs["max_bytes"])
+            self.assertEqual(original, config.read_bytes(), "此测试不以替身制造真实文件发布成功")
+
+
 class ProjectIdSetupIntegrationTest(unittest.TestCase):
     def make_fixture(
         self, name: str = "Auto Project"

@@ -326,6 +326,400 @@ class WindowsConditionalPermissionCopyContractTest(unittest.TestCase):
                 self.assertIsInstance(failure, ValueError)
 
 
+class WindowsStageCreationContractTest(unittest.TestCase):
+    """执行真实负责层函数，仅替换 Win32 边界；不把此层成功冒称 NTFS 成功。"""
+
+    def create(self, *, with_source=True, source_body=b"old", source_payload=None, source_policy=None,
+               source_after=None, collision=False, conversion_failure=False, max_bytes=fs._LIMIT):
+        source = {"kind": "file", "payload": source_body, "mode": 0o666,
+                  "identity": (7, 101, stat.S_IFREG | 0o666, 1, len(source_body), 10, 20), "security": "a" * 64}
+        mode, security = (0o666, "a" * 64) if with_source else (0o600, "b" * 64)
+        empty = {"kind": "file", "payload": b"", "mode": mode,
+                 "identity": (7, 202, stat.S_IFREG | mode, 1, 0, 30, 40), "security": security}
+        parent = SimpleNamespace(path=Path("/owned"), child=lambda name: Path("/owned") / name, close=Mock())
+        opening, raw_closes, fd_closes = [], [], []
+        def opened(path, access, **kwargs):
+            opening.append((Path(path).name, access, kwargs))
+            if Path(path).name == "source":
+                return 101
+            if collision:
+                raise FileExistsError("fixture collision")
+            return 202
+        def snapshot(handle, **kwargs):
+            return {**source, "payload": source_body if source_payload is None else source_payload} if handle == 101 else dict(empty)
+        def metadata(handle):
+            return source_after or (source["identity"], source["security"]) if handle == 101 else (empty["identity"], empty["security"])
+        def convert(handle, flags):
+            if conversion_failure:
+                raise OSError("fixture CRT transfer failure")
+            return 9
+        native = SimpleNamespace(open_osfhandle=convert, get_osfhandle=lambda descriptor: 202)
+        with ExitStack() as scope:
+            scope.enter_context(patch.dict(sys.modules, {"msvcrt": native}))
+            scope.enter_context(patch.dict(fs.secure_os._directories, {77: parent}, clear=True))
+            scope.enter_context(patch.dict(fs.secure_os._files, {}, clear=True))
+            scope.enter_context(patch.object(fs, "Directory", return_value=parent))
+            scope.enter_context(patch.object(fs, "_open_handle", side_effect=opened))
+            scope.enter_context(patch.object(fs, "_opened_snapshot", side_effect=snapshot))
+            scope.enter_context(patch.object(fs, "_metadata", side_effect=metadata))
+            scope.enter_context(patch.object(fs, "_information", return_value=SimpleNamespace(attributes=32)))
+            scope.enter_context(patch.object(fs, "_security_policy", side_effect=lambda handle:
+                                             nullcontext(SimpleNamespace(descriptor=fs.HANDLE(42), fingerprint=source_policy or security))))
+            scope.enter_context(patch.object(fs, "private_security", side_effect=lambda: nullcontext(fs.HANDLE(42))))
+            scope.enter_context(patch.object(fs, "_policy_is_private", return_value=True))
+            scope.enter_context(patch.object(fs, "_close", side_effect=raw_closes.append))
+            scope.enter_context(patch.object(fs._os, "close", side_effect=fd_closes.append))
+            scope.enter_context(patch.object(fs._os, "O_BINARY", 0, create=True))
+            scope.enter_context(patch.object(fs._os, "O_NOINHERIT", 0, create=True))
+            removal = scope.enter_context(patch.object(fs, "delete_regular", side_effect=AssertionError("constructor must not adopt a cleanup path")))
+            result, failure = None, None
+            try:
+                result = fs.create_regular_stage(77, "stage", permission_source="source" if with_source else None,
+                                                 expected_source=source if with_source else None, max_bytes=max_bytes)
+                entry = fs.secure_os._files[result[0]]
+                self.assertIsInstance(entry, fs._CreatedStageFile)
+                self.assertEqual(empty, entry.empty)
+                self.assertEqual(max_bytes, entry.max_bytes)
+                self.assertIsNot(result[1], entry.empty)
+                with self.assertRaises(TypeError):
+                    entry.empty["mode"] = 0o777
+                result[1]["mode"] = 0o777
+                self.assertEqual(mode, entry.empty["mode"], "调用方修改返回dict不能改内部授权")
+                result[1]["mode"] = mode
+                fs.secure_os.close(result[0])
+                self.assertNotIn(9, fs.secure_os._files)
+            except (ValueError, OSError) as exc:
+                failure = exc
+            removal.assert_not_called()
+        return result, failure, opening, raw_closes, fd_closes, parent.close.call_count
+
+    def test_default_and_private_creation_transfer_sole_handle_and_immutable_witness(self):
+        for with_source in (True, False):
+            with self.subTest(with_source=with_source):
+                result, failure, opening, raw_closes, fd_closes, parent_closes = self.create(with_source=with_source)
+                self.assertIsNone(failure)
+                self.assertEqual(b"", result[1]["payload"])
+                self.assertEqual([9], fd_closes)
+                self.assertEqual([101] if with_source else [], raw_closes)
+                self.assertEqual(1, parent_closes)
+                self.assertEqual(fs.READ | fs.WRITE, opening[-1][1])
+                self.assertEqual(0, opening[-1][2]["sharing"])
+                self.assertTrue(opening[-1][2]["exclusive"])
+                if with_source:
+                    self.assertEqual(fs.SHARE_READ, opening[0][2]["sharing"])
+
+    def test_source_drift_collision_and_transfer_failure_preserve_unproved_stage(self):
+        for options, raw, attempted in (({"source_payload": b"new"}, [101], 1),
+                                        ({"source_policy": "c" * 64}, [101], 1),
+                                        ({"with_source": False, "source_policy": "c" * 64}, [202], 1),
+                                        ({"source_after": ((7, 101, stat.S_IFREG | 0o666, 1, 3, 10, 20), "c" * 64)}, [101, 202], 2),
+                                        ({"collision": True}, [101], 2),
+                                        ({"conversion_failure": True}, [101, 202], 2)):
+            with self.subTest(options=options):
+                result, failure, opening, raw_closes, fd_closes, parent_closes = self.create(**options)
+                self.assertIsNone(result)
+                self.assertIsInstance(failure, (ValueError, OSError))
+                self.assertEqual(raw, raw_closes)
+                self.assertEqual([], fd_closes)
+                self.assertEqual(attempted, len(opening))
+                self.assertEqual(1, parent_closes)
+
+    def test_closed_arguments_are_rejected_before_native_io(self):
+        with patch.dict(fs.secure_os._directories, {77: object()}, clear=True), \
+                patch.object(fs, "Directory", side_effect=AssertionError("invalid contract must reject before I/O")):
+            for directory, name, kwargs in ((True, "stage", {}), (88, "stage", {}), (77, "CON", {}),
+                                            (77, "stage", {"permission_source": "source"}),
+                                            (77, "stage", {"permission_source": "stage", "expected_source": {}})):
+                with self.subTest(directory=directory, name=name), self.assertRaises(ValueError):
+                    fs.create_regular_stage(directory, name, **kwargs)
+
+    def test_explicit_host_budget_does_not_change_default_or_admit_invalid_limits(self):
+        body = b"x" * (fs._LIMIT + 1)
+        _, failure, opening, _, _, parent_closes = self.create(source_body=body)
+        self.assertIsInstance(failure, ValueError)
+        self.assertEqual([], opening, "默认4MiB必须在创建/打开源之前拒绝超额前像")
+        self.assertEqual(0, parent_closes)
+        result, failure, _, _, _, _ = self.create(source_body=body, max_bytes=2 * fs._LIMIT)
+        self.assertIsNone(failure)
+        self.assertEqual(b"", result[1]["payload"], "显式file预算不能变更现五字段空见证")
+        for limit in (0, -1, True, 2 * fs._LIMIT + 1):
+            with self.subTest(limit=limit):
+                _, failure, opening, _, _, _ = self.create(max_bytes=limit)
+                self.assertIsInstance(failure, ValueError)
+                self.assertEqual([], opening)
+
+
+class WindowsStageSealContractTest(unittest.TestCase):
+    def seal(self, *, entry_kind="creator", expected_change=None, actual_change=None,
+             metadata_security=None, handle=202, attributes=(32, 32), mode=0o644,
+             read_failure=False, fsync_failure=False, payload=b"APPROVED",
+             creator_budget=fs._LIMIT, seal_budget=fs._LIMIT):
+        empty = {"kind": "file", "payload": b"", "mode": 0o600,
+                 "identity": (7, 202, stat.S_IFREG | 0o600, 1, 0, 30, 40), "security": "b" * 64}
+        actual = {**empty, "payload": payload, "identity": (*empty["identity"][:4], len(payload), 51, 52)}
+        actual.update(actual_change or {})
+        expected = {**empty, **(expected_change or {})}
+        entry = fs._CreatedStageFile(SimpleNamespace(path=Path("/owned"), close=Mock()), 202,
+                                     fs.MappingProxyType(dict(empty)), 32, creator_budget) if entry_kind == "creator" else object()
+        with ExitStack() as scope:
+            scope.enter_context(patch.dict(fs.secure_os._files, {} if entry_kind == "closed" else {9: entry}, clear=True))
+            scope.enter_context(patch.object(fs, "_handle_for_descriptor", return_value=handle))
+            scope.enter_context(patch.object(fs, "_metadata", return_value=(actual["identity"], metadata_security or empty["security"])))
+            scope.enter_context(patch.object(fs, "_information", side_effect=[SimpleNamespace(attributes=value) for value in attributes]))
+            reading = scope.enter_context(patch.object(fs, "_opened_snapshot", side_effect=OSError("fixture native read failure") if read_failure else None,
+                                                       return_value=actual))
+            syncing = scope.enter_context(patch.object(fs.secure_os, "fsync", side_effect=OSError("fixture fsync failure") if fsync_failure else None))
+            seeking = scope.enter_context(patch.object(fs._os, "lseek", side_effect=lambda descriptor, offset, whence: 11 if whence == fs._os.SEEK_CUR else offset))
+            closing = scope.enter_context(patch.object(fs.secure_os, "close", side_effect=AssertionError("seal is not the close owner")))
+            result, failure = None, None
+            try:
+                result = fs.seal_regular_stage(9, expected_created=expected, payload=payload, mode=mode, max_bytes=seal_budget)
+            except (ValueError, OSError) as exc:
+                failure = exc
+            closing.assert_not_called()
+            return result, failure, reading, syncing, seeking
+
+    def test_same_handle_approved_data_and_cursor_restore_without_closing(self):
+        result, failure, reading, syncing, seeking = self.seal()
+        self.assertIsNone(failure)
+        self.assertEqual(b"APPROVED", result["payload"])
+        self.assertEqual(0o600, result["mode"], "逻辑0644不能放宽原私有ACL物理mode")
+        syncing.assert_called_once_with(9)
+        self.assertEqual([((9, 0, fs._os.SEEK_CUR), {}), ((9, 0, fs._os.SEEK_SET), {}),
+                          ((9, 11, fs._os.SEEK_SET), {})], seeking.call_args_list)
+        reading.assert_called_once_with(202, max_bytes=8)
+
+    def test_forged_creator_reused_fd_mode_acl_attributes_and_payload_are_rejected(self):
+        variants = ({"entry_kind": "ordinary"}, {"entry_kind": "closed"}, {"handle": 303},
+                    {"expected_change": {"mode": 0o666}}, {"mode": 0o444},
+                    {"metadata_security": "c" * 64}, {"attributes": (2, 2)}, {"attributes": (32, 2)},
+                    {"actual_change": {"payload": b"FOREIGN!"}},
+                    {"actual_change": {"mode": 0o666}},
+                    {"actual_change": {"security": "c" * 64}},
+                    {"actual_change": {"identity": (7, 999, stat.S_IFREG | 0o600, 1, 8, 51, 52)}})
+        for options in variants:
+            with self.subTest(options=options):
+                result, failure, _, _, _ = self.seal(**options)
+                self.assertIsNone(result)
+                self.assertIsInstance(failure, ValueError)
+
+    def test_read_failure_restores_cursor_and_fsync_failure_keeps_caller_ownership(self):
+        for options in ({"read_failure": True}, {"fsync_failure": True}):
+            with self.subTest(options=options):
+                _, failure, _, _, seeking = self.seal(**options)
+                self.assertIsInstance(failure, OSError)
+                if options.get("read_failure"):
+                    self.assertEqual((9, 11, fs._os.SEEK_SET), seeking.call_args_list[-1].args)
+                else:
+                    seeking.assert_not_called()
+
+    def test_seal_budget_is_explicit_and_cannot_upgrade_the_creator(self):
+        body = b"x" * (fs._LIMIT + 1)
+        _, failure, reading, syncing, _ = self.seal(payload=body, creator_budget=2 * fs._LIMIT)
+        self.assertIsInstance(failure, ValueError)
+        reading.assert_not_called()
+        syncing.assert_not_called()
+        result, failure, reading, _, _ = self.seal(payload=body, creator_budget=2 * fs._LIMIT, seal_budget=2 * fs._LIMIT)
+        self.assertIsNone(failure)
+        self.assertEqual(len(body), len(result["payload"]))
+        reading.assert_called_once_with(202, max_bytes=len(body))
+        for limit in (2 * fs._LIMIT, 0, -1, True, 2 * fs._LIMIT + 1):
+            with self.subTest(requested_seal_budget=limit):
+                _, failure, reading, syncing, _ = self.seal(seal_budget=limit)
+                self.assertIsInstance(failure, ValueError)
+                reading.assert_not_called()
+                syncing.assert_not_called()
+
+
+
+class WindowsClosedWriterContractTest(unittest.TestCase):
+    """调用真实统一发布器，替换仅限原生边界；不将此层作为 NTFS 成功。"""
+
+    def publish(self, *, missing=False, fault=None):
+        empty = {"kind": "file", "payload": b"", "mode": 0o600,
+                 "identity": (7, 202, stat.S_IFREG | 0o600, 1, 0, 30, 40), "security": "b" * 64}
+        ready = {**empty, "payload": b"APPROVED", "identity": (*empty["identity"][:4], 8, 50, 60)}
+        before = None if missing else {**empty, "payload": b"old", "identity": (7, 101, stat.S_IFREG | 0o600, 1, 3, 10, 20)}
+        foreign = {**ready, "payload": b"FOREIGN!"}
+        events, moved = [], False
+        parent = SimpleNamespace(path=Path("/owned"), child=lambda name: Path("/owned") / name)
+        target_reads = 0
+        class Stream:
+            def __enter__(self): return self
+            def __exit__(self, *args): events.append("stream-close"); fs.secure_os._files.pop(9, None)
+            def fileno(self): return 9
+            def write(self, data):
+                events.append(("write", data))
+                if fault == "write": raise OSError("actual stream write boundary")
+            def flush(self): events.append("flush")
+        def creation(*args, **kwargs):
+            events.append("create")
+            fs.secure_os._files[9] = SimpleNamespace(attributes=32)
+            return 9, dict(empty)
+        def opened_stream(*args):
+            if fault in ("fdopen", "fdopen-close"): raise OSError("fdopen boundary")
+            return Stream()
+        def snapshot(directory, name, **kwargs):
+            nonlocal target_reads
+            if name == "target":
+                target_reads += 1
+                return foreign if fault == "target" and target_reads == 2 else before
+            return foreign if fault == "close" else dict(ready)
+        def rename(*args, **kwargs):
+            nonlocal moved
+            moved = True; events.append("rename")
+        def metadata(handle):
+            return ((*ready["identity"][:6], 61) if moved else ready["identity"], ready["security"])
+        with ExitStack() as scope:
+            scope.enter_context(patch.dict(fs.secure_os._directories, {77: parent}, clear=True))
+            scope.enter_context(patch.dict(fs.secure_os._files, {}, clear=True))
+            scope.enter_context(patch.object(fs, "Directory", side_effect=lambda path: nullcontext(parent)))
+            scope.enter_context(patch.object(fs, "node_snapshot", side_effect=snapshot))
+            creating = scope.enter_context(patch.object(fs, "create_regular_stage", side_effect=creation))
+            scope.enter_context(patch.object(fs.secure_os, "fdopen", side_effect=opened_stream))
+            sealing = scope.enter_context(patch.object(fs, "seal_regular_stage", return_value=ready,
+                side_effect=OSError("fsync boundary") if fault == "seal" else None))
+            scope.enter_context(patch.object(fs, "flush_directory"))
+            scope.enter_context(patch.object(fs, "_open_handle", return_value=202))
+            reading = scope.enter_context(patch.object(fs, "_opened_snapshot", return_value=foreign if fault == "ready" else ready))
+            scope.enter_context(patch.object(fs, "_metadata", side_effect=metadata))
+            scope.enter_context(patch.object(fs, "_information", return_value=SimpleNamespace(attributes=2 if fault == "attributes" else 32)))
+            moving = scope.enter_context(patch.object(fs, "_rename_handle", side_effect=rename))
+            cleanup = scope.enter_context(patch.object(fs, "_discard_created_stage"))
+            close_fd = scope.enter_context(patch.object(fs.secure_os, "close",
+                side_effect=OSError("close boundary") if fault == "fdopen-close" else None))
+            close_handle = scope.enter_context(patch.object(fs, "_close"))
+            scope.enter_context(patch.object(fs.secure_os, "replace_owned", side_effect=AssertionError("identity-only publication is forbidden")))
+            result = failure = None
+            try:
+                result = fs.write_regular_if_unchanged(77, "target", "stage", expected=before,
+                    payload=b"APPROVED", mode=0o644)
+            except (ValueError, OSError) as exc:
+                failure = exc
+        return SimpleNamespace(**locals())
+
+    def test_existing_and_missing_use_full_ready_handle_and_return_only_own_rename_facts(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                result = self.publish(missing=missing)
+                self.assertIsNone(result.failure)
+                self.assertEqual((7, 202), result.result["identity"][:2])
+                self.assertEqual(61, result.result["identity"][6])
+                self.assertEqual(b"APPROVED", result.result["payload"])
+                self.assertEqual(1, result.events.count("stream-close"))
+                result.close_fd.assert_not_called()
+                result.close_handle.assert_called_once_with(202)
+                result.reading.assert_called_once_with(202, max_bytes=fs._LIMIT)
+                result.moving.assert_called_once_with(202, result.parent, "target", replace=not missing)
+                result.cleanup.assert_not_called()
+                self.assertEqual(result.before, result.creating.call_args.kwargs["expected_source"])
+
+    def test_closed_ready_target_and_raw_attribute_drift_never_publish_or_adopt_foreign(self):
+        for fault in ("close", "ready", "target", "attributes"):
+            with self.subTest(fault=fault):
+                result = self.publish(fault=fault)
+                self.assertIsInstance(result.failure, ValueError)
+                result.moving.assert_not_called()
+                self.assertEqual(result.ready, result.cleanup.call_args.args[2], "清理只能持有批准原像，不能追认foreign")
+                self.assertEqual(1, result.events.count("stream-close"))
+
+    def test_fdopen_write_and_barrier_failure_keep_single_close_and_known_creation_cleanup(self):
+        for fault in ("fdopen", "fdopen-close", "write", "seal"):
+            with self.subTest(fault=fault):
+                result = self.publish(fault=fault)
+                self.assertIsInstance(result.failure, OSError)
+                result.moving.assert_not_called()
+                self.assertEqual(result.empty, result.cleanup.call_args.args[2])
+                if fault in ("fdopen", "fdopen-close"):
+                    result.close_fd.assert_called_once_with(9)
+                    self.assertNotIn("stream-close", result.events)
+                    self.assertEqual("fdopen boundary", str(result.failure), "关闭错误不能覆盖原始构造异常")
+                    if fault == "fdopen-close":
+                        self.assertTrue(any("close failed" in note for note in result.failure.__notes__))
+                else:
+                    result.close_fd.assert_not_called()
+                    self.assertEqual(1, result.events.count("stream-close"))
+                result.close_handle.assert_not_called()
+
+    def test_invalid_budget_readonly_and_missing_authorization_reject_before_creating(self):
+        with patch.dict(fs.secure_os._directories, {77: object()}, clear=True), \
+                patch.object(fs, "Directory", side_effect=AssertionError("validation must precede native I/O")):
+            for kwargs in ({"mode": 0o444}, {"max_bytes": True}, {"payload": b"x" * (fs._LIMIT + 1)}):
+                values = dict(expected=None, payload=b"new", mode=0o644)
+                values.update(kwargs)
+                with self.subTest(kwargs=list(kwargs)), self.assertRaises(ValueError):
+                    fs.write_regular_if_unchanged(77, "target", "stage", **values)
+
+
+    def test_cleanup_preserves_changed_raw_attributes_even_when_all_five_fields_match(self):
+        expected = {"kind": "file", "payload": b"APPROVED", "mode": 0o600,
+                    "identity": (7, 202, stat.S_IFREG | 0o600, 1, 8, 50, 60), "security": "b" * 64}
+        api = SimpleNamespace(kernel=SimpleNamespace(SetFileInformationByHandle=Mock(return_value=1)))
+        with patch.object(fs.secure_os, "_path", return_value=Path("/owned/stage")), \
+                patch.object(fs, "_open_handle", return_value=202), patch.object(fs, "_opened_snapshot", return_value=expected), \
+                patch.object(fs, "_information", return_value=SimpleNamespace(attributes=34)), \
+                patch.object(fs, "_api", return_value=api), patch.object(fs, "_close") as closing:
+            with self.assertRaisesRegex(ValueError, "external edit"):
+                fs._discard_created_stage(77, "stage", expected, 32, fs._LIMIT)
+            api.kernel.SetFileInformationByHandle.assert_not_called()
+            closing.assert_called_once_with(202)
+
+
+class WindowsExplicitMoveBudgetContractTest(unittest.TestCase):
+    def test_large_expected_move_needs_explicit_budget_before_namespace_effects(self):
+        body = b"x" * (fs._LIMIT + 1)
+        expected = {"kind": "file", "payload": body, "mode": 0o600,
+                    "identity": (7, 202, stat.S_IFREG | 0o600, 1, len(body), 10, 20), "security": "a" * 64}
+        destination = SimpleNamespace(handle=10, child=lambda name: Path("/owned") / name)
+        with patch.object(fs.secure_os, "_path", side_effect=lambda name, descriptor: Path("/owned") / name), \
+                patch.object(fs, "Directory", side_effect=lambda path: nullcontext(destination)), \
+                patch.object(fs, "flush_directory") as flushing, patch.object(fs, "_open_handle", return_value=202) as opening, \
+                patch.object(fs, "_opened_snapshot", return_value=expected) as reading, \
+                patch.object(fs, "_close"), patch.object(fs, "_rename_handle") as moving:
+            with self.assertRaises(ValueError):
+                fs.move_regular("stage", "target", src_dir_fd=1, dst_dir_fd=1, expected=expected)
+            opening.assert_not_called()
+            flushing.assert_not_called()
+            moving.assert_not_called()
+            fs.move_regular("stage", "target", src_dir_fd=1, dst_dir_fd=1, expected=expected, max_bytes=2 * fs._LIMIT)
+            reading.assert_called_once_with(202, max_bytes=len(body), skill_name=None)
+            moving.assert_called_once_with(202, destination, "target")
+
+
+class WindowsReplacementOwnerContractTest(unittest.TestCase):
+    def test_same_dacl_but_different_owner_never_mutates_or_replaces_candidate(self):
+        source, target = Path("/owned/stage"), Path("/owned/target")
+        destination = SimpleNamespace(handle=1, child=lambda name: target.parent / name)
+        metadata = lambda handle: ((7, handle, stat.S_IFREG | 0o600, 1, 8, 10, 20),
+                                   ("a" if handle == 101 else "b") * 64)
+        with patch.object(fs, "Directory", side_effect=lambda path: nullcontext(destination)), \
+                patch.object(fs, "flush_directory"), \
+                patch.object(fs.secure_os, "lstat", return_value=SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_nlink=1)), \
+                patch.object(fs, "_open_handle", side_effect=[202, 101]), \
+                patch.object(fs, "_information", return_value=SimpleNamespace()), \
+                patch.object(fs, "_metadata", side_effect=metadata), patch.object(fs, "_close") as closing, \
+                patch.object(fs, "_copy_permissions") as copying, patch.object(fs, "_rename_handle") as moving:
+            with self.assertRaisesRegex(ValueError, "owner"):
+                fs.secure_os._rename(source, target, True)
+            copying.assert_not_called()
+            moving.assert_not_called()
+            self.assertEqual([((101,), {}), ((202,), {})], closing.call_args_list)
+
+    def test_already_exact_security_is_renamed_without_any_permission_copy(self):
+        destination = SimpleNamespace(handle=1, child=lambda name: Path("/owned") / name)
+        metadata = lambda handle: ((7, handle, stat.S_IFREG | 0o666, 1, 8, 10, 20), "a" * 64)
+        with patch.object(fs, "Directory", side_effect=lambda path: nullcontext(destination)), \
+                patch.object(fs, "flush_directory"), \
+                patch.object(fs.secure_os, "lstat", return_value=SimpleNamespace(st_mode=stat.S_IFREG | 0o666, st_nlink=1)), \
+                patch.object(fs, "_open_handle", side_effect=[202, 101]), \
+                patch.object(fs, "_information", return_value=SimpleNamespace()), \
+                patch.object(fs, "_metadata", side_effect=metadata), patch.object(fs, "_close"), \
+                patch.object(fs, "_copy_permissions", side_effect=AssertionError("exact initial SD must not be reset")), \
+                patch.object(fs, "_rename_handle") as moving:
+            fs.secure_os._rename(Path("/owned/stage"), Path("/owned/target"), True)
+            moving.assert_called_once_with(202, destination, "target", replace=True)
+
+
 class WindowsConditionalDeleteContractTest(unittest.TestCase):
     def run_delete(self, body=b"owned", *, identity=(7, 9), expected_body=b"owned"):
         calls = []

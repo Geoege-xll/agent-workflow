@@ -167,6 +167,68 @@ def run_project_setup(
     )
 
 
+
+class CodexStandaloneNativePublisherContractTest(unittest.TestCase):
+    def test_native_original_full_snapshot_explicit_eight_mib_and_text_newlines(self):
+        """真实 merge/render 控制流保留旧文本换行语义；物理边界留给原生节点。"""
+        from lib.hosts import merge_codex_config as merge
+        from lib import windows_fs
+        from unittest.mock import patch
+        class NativeOs:
+            name = "nt"
+            def __getattr__(self, name): return getattr(os, name)
+        with tempfile.TemporaryDirectory(prefix="codex-native-contract-") as raw:
+            path = Path(raw).resolve() / "config.toml"; path.write_bytes(b'model = "user"\r\n')
+            info = path.stat()
+            before = dict(kind="file", payload=path.read_bytes(), mode=stat.S_IMODE(info.st_mode), security="a" * 64,
+                identity=(info.st_dev, info.st_ino, info.st_mode, 1, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+            with patch.object(merge, "os", NativeOs()), patch.object(windows_fs, "node_snapshot", return_value=before) as reading, \
+                    patch.object(windows_fs, "write_regular_if_unchanged", return_value=before) as writing:
+                merge.merge(path, 8)
+            self.assertEqual(merge.WINDOWS_FILE_LIMIT, reading.call_args.kwargs["max_bytes"])
+            self.assertEqual(before, writing.call_args.kwargs["expected"])
+            self.assertEqual(merge.WINDOWS_FILE_LIMIT, writing.call_args.kwargs["max_bytes"])
+            expected = merge.render(before["payload"].decode(), 8).replace("\n", "\r\n").encode()
+            self.assertEqual(expected, writing.call_args.kwargs["payload"])
+
+    def test_real_render_over_eight_mib_rejects_before_stage_and_help_declares_cap(self):
+        from lib.hosts import merge_codex_config as merge
+        from lib import windows_fs
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        import sys
+        class NativeOs:
+            name = "nt"
+            def __getattr__(self, name): return getattr(os, name)
+        body = b"#" + b"x" * (merge.WINDOWS_FILE_LIMIT - 2) + b"\n"
+        before = dict(kind="file", payload=body, mode=0o666, security="a" * 64,
+            identity=(7, 101, stat.S_IFREG | 0o666, 1, len(body), 10, 20))
+        with tempfile.TemporaryDirectory(prefix="codex-native-budget-") as raw:
+            path = Path(raw).resolve() / "config.toml"
+            with patch.object(merge, "os", NativeOs()), patch.object(windows_fs, "node_snapshot", return_value=before), \
+                    patch.object(windows_fs, "write_regular_if_unchanged") as writing:
+                with self.assertRaisesRegex(ValueError, "approved output exceeds 8 MiB"):
+                    merge.merge(path, 8)
+                writing.assert_not_called()
+                self.assertEqual([], list(path.parent.iterdir()))
+                output = StringIO()
+                with patch.object(sys, "argv", ["merge_codex_config.py", "--help"]), redirect_stdout(output):
+                    self.assertEqual(0, merge.main())
+                self.assertIn("8 MiB", output.getvalue())
+
+    @unittest.skipIf(os.name == "nt", "POSIX standalone原行为由POSIX实际文件I/O验证")
+    def test_posix_standalone_keeps_original_uncapped_io_and_render(self):
+        from lib.hosts import merge_codex_config as merge
+        with tempfile.TemporaryDirectory(prefix="codex-posix-large-") as raw:
+            path = Path(raw).resolve() / "config.toml"
+            body = b"#" + b"x" * (merge.WINDOWS_FILE_LIMIT + 1) + b"\n"
+            path.write_bytes(body)
+            merge.merge(path, 8)
+            expected = merge.render(body.decode(), 8).encode()
+            self.assertTrue(expected == path.read_bytes(), "大正文只比较，不输出多MiB内容")
+
+
 class CodexDiscoveredProfileContractTest(unittest.TestCase):
     """Task 8: Codex generation is derived only from the validated ProjectProfile."""
 

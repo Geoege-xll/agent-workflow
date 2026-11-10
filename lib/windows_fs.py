@@ -8,13 +8,14 @@ volumes and multi-link files are refused, not treated as POSIX no-follow support
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections import namedtuple
 import ctypes
 import hashlib
 import os as _os
 from pathlib import Path, PureWindowsPath
 import re
 import stat as _stat
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 
 DWORD = ctypes.c_uint32
@@ -964,7 +965,7 @@ class _WindowsOS:
                 if parent is not None:
                     parent.close()
         # Broader POSIX modes cannot grant Windows access: inherit the parent's
-        # DACL for new files; replacement copies the exact existing target DACL.
+        # DACL for new files; replacement requires an already exact owner and DACL.
         if not mode & 0o200:
             raise ValueError("read-only POSIX mode needs explicit Windows ACL policy")
 
@@ -977,7 +978,7 @@ class _WindowsOS:
             if not mode & 0o077:
                 with _private_writable_handle(path, directory=directory) as (handle, assign_owner):
                     restrict_handle(handle, assign_owner=assign_owner)
-            # 普通模式不放宽 ACL，也不自动修 owner；替换仍复制并复核原 DACL。
+            # 普通模式不放宽 ACL，也不自动修 owner；替换须保有已匹配的完整 SD。
 
     def fsync(self, descriptor):
         if descriptor not in self._directories:
@@ -1010,9 +1011,22 @@ class _WindowsOS:
                                 or (not _stat.S_ISDIR(target_info.st_mode) and target_info.st_nlink != 1)):
                             raise ValueError(f"unsafe publication target: {target}")
                         if not directory and _stat.S_ISREG(target_info.st_mode):
-                            old = _open_handle(target, READ)
+                            old = _open_handle(target, READ, sharing=SHARE_READ)
                             try:
-                                _copy_permissions(old, handle)
+                                # 替换不能只保住 DACL 而把旧目标 owner 换成新
+                                # stage 的默认 owner。创建者须在创建时准备正确
+                                # SD；这里不能为修权限偷偷重建已登记的候选 inode。
+                                prior, prior_security = _metadata(old)
+                                candidate, candidate_security = _metadata(handle)
+                                if (prior_security != candidate_security
+                                        or _stat.S_IMODE(prior[2]) != _stat.S_IMODE(candidate[2])):
+                                    raise ValueError("Windows replacement candidate owner, mode or security differs from its target")
+                                # 已精确匹配的 SD 原样保留，绝不重复 UNPROTECTED
+                                # SetSecurityInfo 再引发 CO/AI 重算；不匹配则在
+                                # 命名空间变化前拒绝，不能改owner或追认另一inode。
+                                if (_metadata(old) != (prior, prior_security)
+                                        or _metadata(handle) != (candidate, candidate_security)):
+                                    raise ValueError("Windows replacement security or metadata changed before publication")
                             finally:
                                 _close(old)
                 # 普通发布与窄条件移动必须使用同一 Win32 请求构造。源句柄及
@@ -1244,8 +1258,300 @@ def _check_expected(expected, kind):
         raise ValueError("conditional Windows operation requires a complete node snapshot")
 
 
-def _move_node(source, target, *, src_dir_fd, dst_dir_fd, expected, skill_name=None):
+class _CreatedStageFile(namedtuple("_CreatedStageFileFacts", "parent handle empty attributes max_bytes")):
+    """复用 fd 的现有资源登记，仅保存本轮创建事实，不新增持久状态或 fd 池。"""
+
+    __slots__ = ()
+
+    @property
+    def path(self):
+        return self.parent.path
+
+    def close(self):
+        # 文件 HANDLE 已归 CRT/stream；登记只释放自己的目录锚，绝不双关文件。
+        self.parent.close()
+
+
+def create_regular_stage(directory: int, name: str, *, permission_source: str | None = None,
+                         expected_source: dict[str, object] | None = None,
+                         max_bytes: int = _LIMIT) -> tuple[int, dict[str, object]]:
+    """在创建时精确取得源 SD 或新私有策略，返回唯一写者 fd 与空创建见证。
+
+    源必须是同一活目录中的单叶，完整前像由上层已授权 Node 投影传入；库不
+    认识 manager/Node。源句柄只在同步创建及前后复核期间拥有 SD，返回前释放。
+    新文件持续 share0，未完成正文不能被另一数据读者/写者或换名者打开；ACL
+    不受数据共享位全面封锁，故创建时及 seal 时仍独立核验真实安全事实。
+    """
+    _budget(max_bytes)
+    if type(directory) is not int or directory not in secure_os._directories:
+        raise ValueError("stage creation requires a live anchored directory descriptor")
+    name = validate_component(name)
+    if (permission_source is None) != (expected_source is None):
+        raise ValueError("stage permission source and complete expected snapshot must be paired")
+    if permission_source is not None:
+        permission_source = validate_component(permission_source)
+        if permission_source == name:
+            raise ValueError("stage and permission source must be distinct single leaves")
+        _check_expected(expected_source, "file")
+        # 五字段值均已校验为不可变标量/bytes/tuple；私有副本固定本调用授权，
+        # 避免持有调用方可修改的dict并在后续权限采样时改变比较基线。
+        expected_source = dict(expected_source)
+        if len(expected_source["payload"]) > max_bytes:
+            raise ValueError("stage permission source exceeds its explicit file-I/O budget")
+        project_mode(expected_source["mode"])
+    import msvcrt
+    path = secure_os._path(name, directory)
+    parent = Directory(path.parent)
+    handle = descriptor = None
+    try:
+        if permission_source is not None:
+            source = _open_handle(parent.child(permission_source), READ, sharing=SHARE_READ)
+            try:
+                actual = _opened_snapshot(source, max_bytes=max(len(expected_source["payload"]), 1))
+                if actual != expected_source:
+                    raise ValueError("stage permission source changed since its complete expected snapshot")
+                source_attributes = _information(source).attributes
+                with _security_policy(source) as policy:
+                    # 不能在真正取得 SD 时把后来的 ACL 追认为新授权，也不能
+                    # 先私有化再解除保护：后者会按不同 owner 重算 CO 继承。
+                    if policy.fingerprint != expected_source["security"]:
+                        raise ValueError("stage permission source changed before initial security assignment")
+                    attributes = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), policy.descriptor, 0)
+                    handle = _open_handle(path, READ | WRITE, create=True, exclusive=True,
+                                          security=ctypes.byref(attributes), sharing=0)
+                    initial_attributes = _information(handle).attributes
+                    empty = _opened_snapshot(handle, max_bytes=1)
+                    if (empty["mode"] != expected_source["mode"] or empty["security"] != policy.fingerprint):
+                        raise ValueError("new stage did not preserve its exact initial source security")
+                if (_metadata(source) != (expected_source["identity"], expected_source["security"])
+                        or _information(source).attributes != source_attributes):
+                    raise ValueError("stage permission source changed during initial security assignment")
+            finally:
+                _close(source)
+        else:
+            with private_security() as security:
+                attributes = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), security, 0)
+                handle = _open_handle(path, READ | WRITE, create=True, exclusive=True,
+                                      security=ctypes.byref(attributes), sharing=0)
+            initial_attributes = _information(handle).attributes
+            # 无源的新文件沿原私有策略；不把普通既有源改成私有来绕过差异。
+            with _security_policy(handle) as policy:
+                if not _policy_is_private(policy):
+                    raise ValueError("new private stage did not preserve its initial owner and DACL")
+                private_fingerprint = policy.fingerprint
+            empty = _opened_snapshot(handle, max_bytes=1)
+            if empty["mode"] != 0o600 or empty["security"] != private_fingerprint:
+                raise ValueError("new private stage changed its exact private mode or security")
+        if (empty["payload"] or not _stat.S_ISREG(empty["identity"][2])
+                or empty["identity"][3:5] != (1, 0)):
+            raise ValueError("new stage is not an empty single-link regular file")
+        if (_metadata(handle) != (empty["identity"], empty["security"])
+                or _information(handle).attributes != initial_attributes):
+            raise ValueError("new stage changed before its creator descriptor was registered")
+        descriptor = msvcrt.open_osfhandle(handle, _os.O_RDWR | _os.O_BINARY | _os.O_NOINHERIT)
+        handle = None  # 仅 CRT fd 此后拥有原 HANDLE；转换失败时仍由上方原 HANDLE 收口。
+        entry = _CreatedStageFile(parent, msvcrt.get_osfhandle(descriptor),
+                                  MappingProxyType(dict(empty)), initial_attributes, max_bytes)
+        secure_os._files[descriptor] = entry
+        parent = None
+        return descriptor, dict(empty)
+    except BaseException as exc:
+        # 尚未返回见证的失败不认领路径，不为清理而删除碰撞或未知 stage。
+        exc.add_note("unproved stage was not adopted or removed: " + str(path))
+        try:
+            if descriptor is not None:
+                secure_os.close(descriptor)
+            elif handle is not None:
+                _close(handle)
+        finally:
+            if parent is not None:
+                parent.close()
+        raise
+
+
+def seal_regular_stage(descriptor: int, *, expected_created: dict[str, object], payload: bytes,
+                       mode: int, max_bytes: int = _LIMIT) -> dict[str, object]:
+    """调用者 flush 后，同原 creator HANDLE 核准实际正文与完整权限并封口。
+
+    本函数不关闭、不改权限、不发布。创建后合法数据写入可以改变时间和长度，
+    但 inode/type/nlink、精确物理 mode、安全摘要和原生属性仍须为创建事实。
+    fd 登记的私有副本是授权源，普通 fd 或调用方手造空 dict 不能声明创建归属。
+    """
+    _budget(max_bytes)
+    entry = secure_os._files.get(descriptor) if type(descriptor) is int else None
+    if not isinstance(entry, _CreatedStageFile):
+        raise ValueError("stage seal requires its still-live original creator descriptor")
+    if max_bytes > entry.max_bytes:
+        raise ValueError("stage seal cannot increase its registered creator file-I/O budget")
+    _check_expected(expected_created, "file")
+    if expected_created != entry.empty or expected_created["payload"] or expected_created["identity"][4] != 0:
+        raise ValueError("stage seal creation witness does not match its registered creator")
+    if not isinstance(payload, bytes) or len(payload) > max_bytes:
+        raise ValueError("stage seal requires approved bytes within its explicit file-I/O budget")
+    # 沿现 Windows content_mode：可写逻辑模式仍须有效，真实 ACL/mode 由
+    # 已验证 SD 决定；不把 POSIX 0644 等位投影成另一套 Windows 权限。
+    project_mode(mode)
+    handle = _handle_for_descriptor(descriptor, secure_os)
+    if handle != entry.handle:
+        raise ValueError("stage creator descriptor no longer owns its original native handle")
+    before, security = _metadata(handle)
+    if (before[:4] != entry.empty["identity"][:4] or security != entry.empty["security"]
+            or _information(handle).attributes != entry.attributes):
+        raise ValueError("stage creator identity, mode, security or attributes changed before seal")
+    secure_os.fsync(descriptor)
+    position = _os.lseek(descriptor, 0, _os.SEEK_CUR)
+    try:
+        _os.lseek(descriptor, 0, _os.SEEK_SET)
+        actual = _opened_snapshot(handle, max_bytes=max(len(payload), 1))
+        if (actual["payload"] != payload or actual["identity"][:4] != entry.empty["identity"][:4]
+                or actual["identity"][4] != len(payload) or actual["mode"] != entry.empty["mode"]
+                or actual["security"] != entry.empty["security"]
+                or _information(handle).attributes != entry.attributes):
+            raise ValueError("stage bytes, identity, mode, security or attributes do not match the approved seal")
+        return actual
+    finally:
+        # 仅借用同一流的游标，错误也复位；调用者仍是唯一 stream/fd 关闭者。
+        _os.lseek(descriptor, position, _os.SEEK_SET)
+
+
+def _discard_created_stage(directory, name, expected, attributes, max_bytes):
+    """只收口本轮已证实的 stage，额外保留五字段以外的原生属性守护。
+
+    普通 delete_regular 的独立 GC 流式合同不改；这里的正文受 creator 的
+    原调用方固定字节界限约束，并须包括初始 rawattrs，不能删除被改为隐藏等属性的
+    同 inode。核验和 disposition 始终使用同一拒绝数据写入/换名的 HANDLE。
+    """
+    path = secure_os._path(name, directory)
+    try:
+        handle = _open_handle(path, READ | DELETE, sharing=SHARE_READ)
+    except FileNotFoundError:
+        return
+    try:
+        actual = _opened_snapshot(handle, max_bytes=max_bytes)
+        if (actual != expected or _information(handle).attributes != attributes
+                or _metadata(handle) != (expected["identity"], expected["security"])
+                or _information(handle).attributes != attributes):
+            raise ValueError("created stage has an external edit; preserved: " + str(path))
+        disposition = BOOL(True)
+        _check(_api().kernel.SetFileInformationByHandle(
+            handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)), path)
+    finally:
+        _close(handle)
+    flush_directory(path.parent)
+
+
+def write_regular_if_unchanged(directory: int, name: str, temporary: str, *,
+                               expected: dict[str, object] | None, payload: bytes,
+                               mode: int, max_bytes: int = _LIMIT) -> dict[str, object]:
+    """为简单公共字节写者封闭创建、批准、关闭及原子替换的完整生命周期。
+
+    expected 来自原始业务读取；None 仅授权缺失，绝不是任意当前内容。调用方的
+    hash/CAS/结算/业务预检仍在进入本函数之前，不以本函数内的新读替代批准。
+    本层不认识 manager/Node，不创建持久协议，也不承诺最后目标检查与 Win32
+    rename 是一个内核 CAS。需要保留原 inode 的事务仍使用原独立移动/补偿链。
+    """
+    _budget(max_bytes)
+    project_mode(mode)
+    if (type(directory) is not int or directory not in secure_os._directories
+            or not isinstance(payload, bytes) or len(payload) > max_bytes):
+        raise ValueError("conditional Windows write requires a live parent and approved bytes within its file-I/O budget")
+    name, temporary = validate_component(name), validate_component(temporary)
+    if name == temporary:
+        raise ValueError("publication target and creator stage must be distinct single leaves")
+    if expected is not None:
+        _check_expected(expected, "file")
+        expected = dict(expected)
+        project_mode(expected["mode"])
+        if len(expected["payload"]) > max_bytes:
+            raise ValueError("conditional Windows write source exceeds its file-I/O budget")
+    # 独立目录锚覆盖 stream 关闭后的发布时段；借用的调用方 directory 不关闭。
+    with Directory(secure_os._path(name, directory).parent) as parent:
+        if node_snapshot(directory, name, max_bytes=max_bytes) != expected:
+            raise ValueError("Windows publication target changed before stage creation")
+        descriptor = handle = None
+        staged = attributes = None
+        try:
+            descriptor, empty = create_regular_stage(directory, temporary,
+                permission_source=name if expected is not None else None,
+                expected_source=expected, max_bytes=max_bytes)
+            staged = empty
+            attributes = secure_os._files[descriptor].attributes
+            # fdopen 构造前 fd 唯一归当前栈；构造成功后仅由正常后端 stream 关闭。
+            stream = secure_os.fdopen(descriptor, "wb")
+            descriptor = None
+            with stream:
+                stream.write(payload)
+                stream.flush()
+                sealed = seal_regular_stage(stream.fileno(), expected_created=empty,
+                    payload=payload, mode=mode, max_bytes=max_bytes)
+                staged = sealed
+            observed = node_snapshot(directory, temporary, max_bytes=max_bytes)
+            if (observed is None or any(observed[key] != sealed[key] for key in ("kind", "payload", "mode", "security"))
+                    or observed["identity"][:5] != sealed["identity"][:5]
+                    or observed["identity"][6:] != sealed["identity"][6:]):
+                raise ValueError("Windows creator stage changed after close; preserved")
+            staged = observed  # 仅已批准的 LastWriteTime 关闭结算可成为清理见证。
+            flush_directory(parent.path)
+            handle = _open_handle(parent.child(temporary), READ | DELETE, sharing=SHARE_READ)
+            if (_opened_snapshot(handle, max_bytes=max_bytes) != staged
+                    or _information(handle).attributes != attributes):
+                raise ValueError("Windows approved stage changed before publication; preserved")
+            # 候选 HANDLE 持续拒绝其他数据写者/换名者，核验完整正文后不再用
+            # identity-only replace_owned 重开路径。旧目标必须仍是最初完整前像。
+            # 旧目标 READ 句柄需在 rename 前关闭，否则其 no-DELETE sharing 会
+            # 阻挡本轮原子替换；这个检查间隔不被包装成内核 CAS 的保证。
+            if node_snapshot(directory, name, max_bytes=max_bytes) != expected:
+                raise ValueError("Windows publication target changed before atomic replacement")
+            if (_metadata(handle) != (staged["identity"], staged["security"])
+                    or _information(handle).attributes != attributes):
+                raise ValueError("Windows approved stage metadata or security changed before publication")
+            _rename_handle(handle, parent, name, replace=expected is not None)
+            after, security = _metadata(handle)
+            if (after[:6] != staged["identity"][:6] or security != staged["security"]
+                    or _information(handle).attributes != attributes
+                    or _metadata(handle) != (after, security)):
+                raise ValueError("Windows published node changed during its own rename; preserved")
+            # 正文来自仍持有的稳定 HANDLE，只有本轮 rename 的 ctime 可结算；
+            # 不在发布后把某个新的路径对象追认为成功结果。
+            result = {**staged, "identity": after}
+            flush_directory(parent.path)
+            if (_metadata(handle) != (after, security) or _information(handle).attributes != attributes):
+                raise ValueError("Windows published node changed during the final durability barrier; preserved")
+            return result
+        except BaseException as exc:
+            # 先释放本函数的所有数据句柄，再做条件清理；未知/部分写/外来替换
+            # 始终保留。清理异常只附注，不覆盖原始业务或 I/O 错误原因。
+            if descriptor is not None:
+                owned_descriptor, descriptor = descriptor, None
+                try:
+                    secure_os.close(owned_descriptor)
+                except BaseException as close_error:
+                    exc.add_note("creator fd close failed: " + str(close_error))
+            if handle is not None:
+                owned_handle, handle = handle, None
+                try:
+                    _close(owned_handle)
+                except BaseException as close_error:
+                    exc.add_note("publication handle close failed: " + str(close_error))
+            if staged is not None:
+                try:
+                    _discard_created_stage(directory, temporary, staged, attributes, max_bytes)
+                except BaseException as cleanup_error:
+                    exc.add_note("stage preserved at " + str(parent.child(temporary)) + ": " + str(cleanup_error))
+            raise
+        finally:
+            if descriptor is not None:
+                secure_os.close(descriptor)
+            if handle is not None:
+                _close(handle)
+
+
+def _move_node(source, target, *, src_dir_fd, dst_dir_fd, expected, skill_name=None, max_bytes=None):
     _check_expected(expected, "link" if skill_name is not None else "file")
+    # 公共普通文件移动必须显式遵守调用方预算；既有受管链接等内部路径
+    # 仍沿原独立边界，不把此次普通默认4MiB改成内部原语的全局收窄。
+    if max_bytes is not None and len(expected["payload"]) > _budget(max_bytes):
+        raise ValueError("Windows move source exceeds its explicit file-I/O budget")
     source, target = secure_os._path(source, src_dir_fd), secure_os._path(target, dst_dir_fd)
     with Directory(source.parent), Directory(target.parent) as destination:
         parents = tuple(dict.fromkeys((source.parent, target.parent)))
@@ -1265,9 +1571,10 @@ def _move_node(source, target, *, src_dir_fd, dst_dir_fd, expected, skill_name=N
             flush_directory(parent)
 
 
-def move_regular(source, target, *, src_dir_fd=None, dst_dir_fd=None, expected: dict) -> None:
+def move_regular(source, target, *, src_dir_fd=None, dst_dir_fd=None, expected: dict, max_bytes=_LIMIT) -> None:
     """排他消费一个完整快照相符的普通文件；失败后不清除已移动的恢复见证。"""
-    _move_node(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, expected=expected)
+    _budget(max_bytes)
+    _move_node(source, target, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, expected=expected, max_bytes=max_bytes)
 
 
 def _secure_created_skill(path, skill_name, expected):

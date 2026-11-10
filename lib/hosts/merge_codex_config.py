@@ -11,6 +11,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import re
+import secrets
 if __package__:
     from lib.platform_fs import os
 else:
@@ -153,7 +154,47 @@ def render(original: str, max_threads: int) -> str:
     return rendered
 
 
+# 原生 Windows 首次公开支持的 standalone 磁盘入口明确使用8MiB；中央只调用
+# 上方纯 render，POSIX standalone 不继承此边界或改变原有读写行为。
+WINDOWS_FILE_LIMIT = 8 * 1024 * 1024
+
+
+def _merge_windows(path: Path, max_threads: int) -> None:
+    from lib.windows_fs import node_snapshot, write_regular_if_unchanged
+    parent = None
+    try:
+        try:
+            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            before = None  # 原读时父目录缺失，只授权 missing，不追认后来出现的文件。
+        else:
+            try:
+                before = node_snapshot(parent, path.name, max_bytes=WINDOWS_FILE_LIMIT)
+            except ValueError as exc:
+                raise ValueError("native Windows standalone Codex merge requires safe input within 8 MiB: " + str(exc)) from exc
+        original = before["payload"].decode("utf-8") if before is not None else ""
+        rendered = render(original, max_threads)
+        # 原 text-mode Windows 写入会把 LF 译为 CRLF；批准的 bytes 必须是最终
+        # 真实磁盘字节，不能 seal UTF-8/LF 后再让另一文本流改变换行。
+        payload = rendered.replace("\n", "\r\n").encode("utf-8")
+        if len(payload) > WINDOWS_FILE_LIMIT:
+            raise ValueError("native Windows standalone Codex merge approved output exceeds 8 MiB")
+        # 输入和批准输出超界均在 mkdir/stage/替换之前拒绝，不能留半安装目录。
+        if parent is None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        write_regular_if_unchanged(parent, path.name, f".{path.name}.{secrets.token_hex(8)}.tmp",
+            expected=before, payload=payload, mode=before["mode"] if before is not None else 0o600,
+            max_bytes=WINDOWS_FILE_LIMIT)
+    finally:
+        if parent is not None:
+            os.close(parent)
+
+
 def merge(path: Path, max_threads: int) -> None:
+    if os.name == "nt":
+        _merge_windows(path, max_threads)
+        return
     original = path.read_text(encoding="utf-8") if path.exists() else ""
     rendered = render(original, max_threads)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,11 +214,17 @@ def merge(path: Path, max_threads: int) -> None:
 
 
 def main() -> int:
+    if os.name == "nt" and sys.argv[1:] in (["--help"], ["-h"]):
+        print("usage: merge_codex_config.py PATH MAX_THREADS")
+        print("Native Windows standalone input and approved output are each limited to 8 MiB; oversize is rejected before mutation.")
+        return 0
     if len(sys.argv) != 3:
         print(
             "usage: merge_codex_config.py PATH MAX_THREADS",
             file=sys.stderr,
         )
+        if os.name == "nt":
+            print("Native Windows standalone input and approved output limit: 8 MiB (checked before mutation).", file=sys.stderr)
         return 2
     path = Path(sys.argv[1])
     try:

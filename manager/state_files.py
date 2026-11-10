@@ -15,7 +15,7 @@ import stat
 import uuid
 
 from lib import runtime_store
-from lib.central.runtime_project import Node, read_at, move_at, publish_at, delete_at, content_mode, identity
+from lib.central.runtime_project import Node, read_at, move_at, publish_at, delete_at, content_mode, native_snapshot
 
 
 def same_file_state(actual: tuple, expected: tuple) -> bool:
@@ -25,18 +25,6 @@ def same_file_state(actual: tuple, expected: tuple) -> bool:
     if actual[1] is None or expected[1] is None:
         return actual[1] == expected[1]
     return content_mode(actual[1]) == content_mode(expected[1])
-
-
-def _created_windows_node(descriptor: int, body: bytes) -> Node:
-    """从尚未关闭的创建句柄冻结本轮事实，正文授权始终来自批准的写入字节。"""
-    from lib.windows_fs import security_fingerprint
-    before = os.fstat(descriptor)
-    security = security_fingerprint(descriptor)
-    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != len(body)
-            or identity(os.fstat(descriptor)) != identity(before)
-            or security_fingerprint(descriptor) != security):
-        raise ValueError("新建临时文件在冻结创建事实时变化")
-    return Node("file", body, stat.S_IMODE(before.st_mode), identity(before), security)
 
 
 class PreservedEdit(ValueError):
@@ -146,7 +134,7 @@ class AnchoredFile:
         外层历史 tuple API 保持不变；本次操作额外冻结真实 Node/ACL，临时文件
         完成后必须仍等于此完整前像。原 inode 保留器与异常资料归属不改变。
         """
-        from lib.windows_fs import SHARE_READ, copy_permissions_if_unchanged
+        from lib.windows_fs import create_regular_stage, seal_regular_stage
         before = read_at(self.directory, self.name)
         pair = (None, None) if before.kind == "missing" else (before.payload, before.mode)
         if expected is not None and not same_file_state(pair, expected):
@@ -155,12 +143,13 @@ class AnchoredFile:
         previous = None
         staged = None
         try:
-            # 只收紧本轮新 stage 的共享；创建句柄存活时禁止别的数据写者/换名者，
-            # 不修改其他调用者的 os.open 默认共享合同。ACL 仍独立按真实策略核验。
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                 0o600, dir_fd=self.directory, sharing=SHARE_READ)
+            # 完整源 SD 在创建时取得；不再将私有 stage 解除保护后按另一 owner
+            # 重算继承。creator 登记和 share0 由唯一负责层持有，不在这里复制。
+            descriptor, empty = create_regular_stage(
+                self.directory, temporary, permission_source=self.name if before.kind == "file" else None,
+                expected_source=native_snapshot(before) if before.kind == "file" else None)
             try:
-                staged = _created_windows_node(descriptor, b"")
+                staged = Node(**empty)
                 stream = os.fdopen(descriptor, "wb")
             except BaseException:
                 # 只有 fdopen 成功后才转移关闭责任；取 metadata 失败也不能漏句柄。
@@ -168,8 +157,7 @@ class AnchoredFile:
                 raise
             with stream:
                 stream.write(data); stream.flush()
-                os.fchmod(stream.fileno(), mode); os.fsync(stream.fileno())
-                created = _created_windows_node(stream.fileno(), data)
+                created = Node(**seal_regular_stage(stream.fileno(), expected_created=empty, payload=data, mode=mode))
                 staged = created
             observed = read_at(self.directory, temporary)
             # Windows 写句柄关闭可能才结算 LastWriteTime；仅投影这一字段。
@@ -181,14 +169,6 @@ class AnchoredFile:
                     or observed.identity[6:] != created.identity[6:]):
                 raise ValueError("新建临时文件在关闭写句柄后发生其他修改，保留现场")
             staged = observed
-            if before.kind == "file":
-                # 权限源必须仍为最初 before；目的端必须仍为本轮创建事实。
-                # 底层只返回同一 HANDLE 上经过封闭权限变换验证的完整新快照。
-                staged = Node(**copy_permissions_if_unchanged(
-                    self.path, self.path.parent / temporary,
-                    expected_source={key: getattr(before, key) for key in ("kind", "payload", "mode", "identity", "security")},
-                    expected_destination={key: getattr(staged, key) for key in ("kind", "payload", "mode", "identity", "security")},
-                ))
             if read_at(self.directory, self.name) != before:
                 raise ValueError("文件在发布前发生其他修改，停止覆盖")
             if before.kind != "missing":

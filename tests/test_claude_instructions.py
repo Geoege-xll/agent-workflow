@@ -129,10 +129,10 @@ class ClaudeInstructionsTest(unittest.TestCase):
         self.agents.write_bytes(b"existing user instructions\n")
         real_write = entry.atomic_write
 
-        def fail_publication(path, data, mode):
+        def fail_publication(path, data, mode, **kwargs):
             if path == self.claude and data == b"@AGENTS.md\n":
                 raise OSError("simulated failed publication")
-            real_write(path, data, mode)
+            return real_write(path, data, mode, **kwargs)
 
         with patch.object(entry, "atomic_write", side_effect=fail_publication):
             with self.assertRaisesRegex(OSError, "simulated"):
@@ -191,10 +191,10 @@ class ClaudeInstructionsTest(unittest.TestCase):
         """第二个入口发布失败时，撤回本轮新建正文，不能留下半套安装。"""
         real_write = entry.atomic_write
 
-        def fail_publication(path, data, mode):
+        def fail_publication(path, data, mode, **kwargs):
             if path == self.claude:
                 raise OSError("simulated first publication failure")
-            real_write(path, data, mode)
+            return real_write(path, data, mode, **kwargs)
 
         with patch.object(entry, "atomic_write", side_effect=fail_publication):
             with self.assertRaisesRegex(OSError, "simulated"):
@@ -223,6 +223,77 @@ class ClaudeInstructionsTest(unittest.TestCase):
             self.run_entry("preflight-all")
         self.assertEqual(self.agents.read_bytes(), user)
         self.assertFalse((self.root / ".claude").exists())
+
+
+class ClaudeNativePublisherContractTest(unittest.TestCase):
+    def test_explicit_missing_differs_from_unset_and_preserves_identity_return(self):
+        """共同入口显式传授权，成功返回类型保持 tuple；非真实 NTFS 验收。"""
+        from lib import windows_fs
+        import os
+        import stat
+        class NativeOs:
+            name = "nt"
+            def __getattr__(self, name): return getattr(os, name)
+        with tempfile.TemporaryDirectory(prefix="claude-native-contract-") as raw:
+            target = Path(raw).resolve() / "AGENTS.md"
+            target.write_bytes(b"old")
+            info = target.stat()
+            before = dict(kind="file", payload=b"old", mode=stat.S_IMODE(info.st_mode), security="a" * 64,
+                identity=(info.st_dev, info.st_ino, info.st_mode, 1, 3, info.st_mtime_ns, info.st_ctime_ns))
+            published = {**before, "payload": b"new", "identity": (7, 202, stat.S_IFREG | 0o600, 1, 3, 50, 60)}
+            with patch.object(entry, "os", NativeOs()), patch.object(windows_fs, "node_snapshot", return_value=before) as reading, \
+                    patch.object(windows_fs, "write_regular_if_unchanged", return_value=published) as writing:
+                full = []
+                self.assertEqual((7, 202), entry.atomic_write(target, b"new", 0o644, published_out=full))
+                self.assertEqual([published], full)
+                self.assertEqual(before, writing.call_args.kwargs["expected"])
+                reading.reset_mock()
+                entry.atomic_write(target, b"new", 0o644, expected=None)
+                reading.assert_not_called()
+                self.assertIsNone(writing.call_args.kwargs["expected"])
+                self.assertEqual(4 * 1024 * 1024, writing.call_args.kwargs["max_bytes"])
+
+    def test_real_hook_process_uses_original_plan_snapshot_for_native_config(self):
+        """真实 plan/process 贯穿原读像，不在 apply-codex-config 改选权限来源。"""
+        from lib.hosts import workflow_hook_install as hooks
+        from lib import windows_fs
+        import os
+        import stat
+        class NativeOs:
+            name = "nt"
+            def __getattr__(self, name): return getattr(os, name)
+        with tempfile.TemporaryDirectory(prefix="hook-native-contract-") as raw:
+            root = Path(raw).resolve()
+            pack = root / "pack"; pack.mkdir()
+            (pack / "project.yaml").write_bytes(b"workflow_hooks:\n  mode: off\norchestration:\n  max_concurrent_subagents: 8\n")
+            target = root / ".codex/config.toml"; target.parent.mkdir()
+            target.write_bytes(b"model = \"user\"\n")
+            observed = []
+            def snapshot(parent, name, **kwargs):
+                path = root / ".codex" / name
+                if not path.exists(): return None
+                info = path.stat(); body = path.read_bytes()
+                result = dict(kind="file", payload=body, mode=stat.S_IMODE(info.st_mode), security="a" * 64,
+                    identity=(info.st_dev, info.st_ino, info.st_mode, 1, len(body), info.st_mtime_ns, info.st_ctime_ns))
+                observed.append((name, result)); return result
+            def reading(path): return Path(path).read_bytes() if Path(path).exists() else None
+            with patch.object(entry, "os", NativeOs()), patch.object(hooks, "os", NativeOs()), \
+                    patch.object(windows_fs, "node_snapshot", side_effect=snapshot), \
+                    patch.object(windows_fs, "read_file", side_effect=reading), \
+                    patch.object(windows_fs, "write_regular_if_unchanged", return_value={"identity": (7, 202)}) as writing:
+                hooks.process(pack, root, "codex", "apply-codex-config")
+                completed_reads = list(observed)
+                pending = {}
+                with patch.object(hooks, "merge_json", side_effect=ValueError("fixture merge failure")):
+                    with self.assertRaisesRegex(ValueError, "fixture merge failure"):
+                        hooks.plan_hooks(pack, root, "codex", snapshot_out=pending)
+                self.assertEqual({}, pending, "失败的计划不能交出半份原像out")
+                writing.assert_called_once()
+            original = next(value for name, value in completed_reads if name == "config.toml")
+            self.assertEqual(original, writing.call_args.kwargs["expected"])
+            self.assertEqual(1, sum(name == "config.toml" for name, _ in completed_reads), "不得在发布入口重新建立原读像")
+            self.assertIn(b"max_concurrent_threads_per_session = 8", writing.call_args.kwargs["payload"])
+
 
 
 if __name__ == "__main__":
