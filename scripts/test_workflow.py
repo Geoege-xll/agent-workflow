@@ -116,6 +116,10 @@ NATIVE_COMPONENTS = {
             # 公开异常与原 cause 的合同沿实际平台 facade 关闭目录 fd；只注入
             # 发布边界故障，不以此替代真实 NTFS 权限/发布验收或扩选 shell 夹具。
             "tests.test_project_id_initialization.ProjectIdNativePublisherContractTest.test_native_write_failure_preserves_public_initialization_error_and_exact_cause",
+            # 控制台阶段 profile 的外层 lease/hooks 及不完整 binding 边界
+            # 只共享两个便携合同，不扩选同模块的原生 TUI/curses 用例。
+            "tests.test_windows_native_integration.ConsolePhaseProfilePortableTest.test_job_refresh_profiles_outer_lease_and_preserves_hooks",
+            "tests.test_windows_native_integration.ConsolePhaseProfilePortableTest.test_profile_bounds_and_incomplete_binding",
         ),
         "qualification": "ordinary",
         "node_required": False, "curses_required": False,
