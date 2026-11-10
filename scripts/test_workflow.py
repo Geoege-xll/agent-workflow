@@ -192,6 +192,12 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_global_reset_and_monochrome",
             "tests.test_windows_native_integration.WindowsNativeTUIIntegrationTest.test_native_tui_unicode_resize_and_interrupt_restores_modes",
         ),
+        # App 后置刷新的共享读取与尾验漂移合同同样需要 curses；CI/原生
+        # 同源复用两方法，不扩选整个模块或引入其它 POSIX PTY 夹具。
+        "portable_ci_targets": (
+            "tests.test_manager_tui.ProjectTuiIntegrationTest.test_apply_project_refresh_shares_core_read_scope_per_pin",
+            "tests.test_manager_tui.ProjectTuiIntegrationTest.test_apply_project_refresh_tail_drift_preserves_commit_truth_and_drafts",
+        ),
         "qualification": "ordinary",
         "node_required": False, "curses_required": True,
     },
