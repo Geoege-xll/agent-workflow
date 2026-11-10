@@ -103,6 +103,16 @@ NATIVE_COMPONENTS = {
             # 避免将含原生/提升类的整个 AGY 模块塞进普通 CI 或重复运行两方法。
             "tests.test_antigravity_windows_native.AntigravityFileBudgetTest.test_large_root_publication_restore_and_cleanup_keep_original_eight_mib_boundary",
             "tests.test_antigravity_windows_native.AntigravityFileBudgetTest.test_merged_overflow_controlled_docs_and_codex_caps_reject_before_stage_or_backup",
+            # 引用解析与安全同步只需 Python/localFS；精确选择合法换行及损坏
+            # 行负控，避免把同模块中其它 shell 宿主安装夹具扩成原生必跑。
+            "tests.test_astra_instruction_adaptation.ProgressiveContractTest.test_workflow_references_accept_lf_crlf_mixed_and_eof",
+            "tests.test_astra_instruction_adaptation.ProgressiveContractTest.test_workflow_reference_line_damage_is_rejected_before_reading",
+            "tests.test_astra_instruction_adaptation.ProgressiveContractTest.test_shared_skill_sync_preserves_source_line_endings",
+            "tests.test_bootstrap_routing.BootstrapReferenceTest.test_real_entries_accept_lf_crlf_mixed_and_eof",
+            "tests.test_bootstrap_routing.BootstrapReferenceTest.test_bootstrap_reference_line_damage_is_rejected_before_reading",
+            # 公开异常与原 cause 的合同沿实际平台 facade 关闭目录 fd；只注入
+            # 发布边界故障，不以此替代真实 NTFS 权限/发布验收或扩选 shell 夹具。
+            "tests.test_project_id_initialization.ProjectIdNativePublisherContractTest.test_native_write_failure_preserves_public_initialization_error_and_exact_cause",
         ),
         "qualification": "ordinary",
         "node_required": False, "curses_required": False,
