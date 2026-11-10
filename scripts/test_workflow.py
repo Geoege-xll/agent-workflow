@@ -494,7 +494,10 @@ SUPERVISED_EXECUTION_SECONDS = 600
 
 
 def _supervised_portable_ids():
-    return tuple(NATIVE_COMPONENTS["windows-native-tui"].get("portable_ci_targets", ()))
+    # 监督只负责当前登记的 App 子集；合法的最小组件计划可以没有 TUI。
+    # 实际 TUI 存在时仍完整返回其唯一共享字段，不改变 required/noSkip。
+    component = NATIVE_COMPONENTS.get("windows-native-tui")
+    return tuple(component.get("portable_ci_targets", ())) if component is not None else ()
 
 
 def _run_supervised_child(body):
