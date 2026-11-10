@@ -35,29 +35,18 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 ## 当前进展与恢复入口
 
-基线main为1235951，公开仍为2.1.3，本机已按最新授权先行升级为2.1.4候选；Windows尚未最终验收。独立职责工作树保留主目录五处dirty、交接及业务资料。用户已授权必要验收与独立QA后发布、升级；此前暂停的Windows已由本轮明确恢复，npm/npx不恢复。
+目标保持 Windows11 x64、普通用户 PowerShell7+ 与 Python3.11+。CLI／TUI 共用中央服务，三个平台的入口与内置 Skill 归项目并通过链接使用；不新增兼容升级通道、EXE／MSI／WinGet 或立项入口。既有 curses 布局、真实 ConPTY 与 UI／可访问性验收范围保持。
 
-真实Server2025 x64/NTFS探针和消费者已取得目录flush、完整身份/ACL、条件发布、创建句柄归属、中央Skill软链与Job/ConPTY收尾证据；ChangeTime不能单独证明安全，未宣称耐断电或Win11普通用户等价。记录before保完整恢复正文，after只存严格条件守卫，能力选择保护所有相关固定reader，原4MiB/超限零写/pending及旧reader保护保持。
 
-完整运行42699711396（ec0e8f3，实际merge 63076e9且树相同）已结束失败。macOS/Linux CI成功，平台条件skip不当Windows证据。Windows121项中库48、入口6、ConPTY8、诊断4、准入41、提升NTFS2及中央完整1项通过；完整生命周期、原inode补偿与并发保存保留均完成。原CRLF能力夹具及Unicode/cleanup已经原生复验通过，整轮仍因两个组件失败而未通过。
+中央读取沿用同根、同 pin 的完整操作级 reader；写入另做 fresh 核对。偏好保存通过明确的纯准备接口与完整 OwnershipSources 固定来源，保留记录、journal retained、目录、完整 Node 与画像核验，再进入原发布、验证和条件补偿。
 
-TUI五次模型/推理保存实际成功，项目保存约19.8秒、两次全局保存约13.5秒，取消与停用也完成；剩余一个body失败为随后项目启用预览30秒未结束。既有observer实际捕获executor停在preview重复核心校验栈，未见refresh或worker异常。三个纯preview入口的操作级完整只读范围和两个精准回归已同Reviewer接受并整合，Mac实际同pin1scan/2verify、双pin2/4；显式source双inspect保留，apply仍fresh。同Reviewer已完成代码阶段复核，等待Windows30秒实际复验，不增加预算或改变curses布局。
+Windows 文件创建、首写和发布集中在 lib/windows_fs.py。create_regular_stage／seal_regular_stage／write_regular_if_unchanged 保留同一不可继承、share0 HANDLE、完整 owner／DACL／control、有序 ACE、mode／attrs 与源身份守卫；仅在必要的受保护 SD 初始化后完整重读相等才接受。公共写者共用发布边界，Records 的 Windows helper 与 bare／package façade 使用同一模块命名空间；三参数接口、finish → fresh CAS → 最后结算来源顺序保持，不做全局模块 alias。默认 4MiB、明确入口最高 8MiB 及原 marker／core／GC 预算保持。
 
-中央边界8项的10个错误同在普通既有config.toml的setup：同父stage精确权限复制后source control=0x8004、target=0x8404，有序ACE由3变4，故障注入尚未执行。当前Tree无私有ACL准入，不能强改fixture绕过真实外部配置。同Reviewer接受的最小原生节点与隔离单job已运行42708668152：单方法0.034秒ERROR，SetSecurityInfo实际return0；source owner BA、private stage owner LA，父CREATOR OWNER继承重算新增LA全权ACE，source及父security稳定。完整stage见证还包含owner，不能仅忽略AI/ACE差异。创建时源SD实验42712087273随后实际1方法0.022秒通过：owner BA、control8004、有序ACE及完整security精确保留，READ/WRITE/DELETE重开均真实错误32，seal与关闭首读七标量相同。create+seal两原语及存活creator绑定契约已实现；同Reviewer确认公共replace遗漏后，统一完整快照发布helper已实现并完成代码阶段复核，覆盖项目ID、Claude指令、Codex独立合并、任务记录及Hook原读接缝。原记录三参数发布接口、lock/finish/freshCAS/最后结算来源顺序保留，原有空stage登记及完整ready见证不改。中央/原生/AGY调用侧已代码层闭合两Important，14文件原语/发布与7文件消费者均已完成同一Reviewer代码阶段复核；消费者实际合入真实依赖后5项精准便携测试一次0.735秒通过，真实Windows生产路径仍待执行证明。原始失败保留，临时workflow不进入发行，精确ACL、sharing与rollback合同保持。
+唯一 registry 当前实际收集为 10 组件／153 方法；Win11 普通用户范围 150 方法，明确排除提升专项 3 方法，所选方法严格拒绝 skip／未执行。完整运行 [42762760967](https://github.com/Geoege-xll/agent-workflow/actions/runs/42762760967) 对应候选 14bc952，实际 PR 合并 e688d54 与候选树相同：macOS／Linux CI、Windows 9／10 组件通过，包括中央完整生命周期、边界 12 项、准入结算 41 项、原语库 75 项和 owner-only 负控。TUI 的两个首次保存预览超 30 秒，尚未进入 apply／refresh；Unicode 方法通过，整体门禁仍失败。
 
-保存阶段5生产+2测试已完成同一Reviewer审查并运输：只合并显式纯准备，封口后按完整OwnershipSources固定inventory fresh核对，再走原written/publish/verify与补偿。record/journal retained遗漏已用正式producer真实故障、条件补偿与外部编辑保留闭合；稳定missing历史保留。目录负控区分真实Windows5/32内核阻止与实际替换后的guard拒绝，退出后真实rename证句柄结清，不放宽sharing。Mac同源project apply4scan+refresh1、global两次各4+0；实际产物/journal保持，仍需Windows实测。
+新增全调用阶段钩子可能扰动计时，尚未量化因果。测试观察器现改为显式 opt-in：run_observed 的 phase_profile 与 PhaseProfile.enabled 默认 False，关闭时不绑定或触碰 profiler，证据明确 disabled；只有显式 True 才记录有界阶段数据。原启用合同、读屏、worker 栈、IPC、三个真实 TUI 方法、屏幕断言和 30 秒预算保持；产品与后端无此增量。原唯一 Reviewer 已准许精确两测试文件运输；统一原 CLI 两项 0.042 秒 exit0，已有 Python3.11／3.14 两项各通过，registry 数量保持。接下来以相同产品载荷做默认无 hook 的原预算完整对照，不用便携结果冒充 Windows 性能通过。
 
-此前完整门禁的唯一原生registry实际收集9组件121方法（48/6/1/8/8/3/4/41/2）；本轮新增生产原语、中央/AGY与独立owner权限节点后，最终数量必须从同一登记重新实际收集。PR/发行仅接受Server full，任何selected skip/缺组/取消/未执行均拒。普通desktop明确排除提升NTFS2与owner权限1共3项，不按权限自动降级；两个新中央guard节点进ordinary boundaries，RolePrefs两个新回归仅POSIX CI，避免顶层pty/termios/curses依赖冒充原生。提升flag只改测试自有空目录，生产不设置、不新增用户提权/WSL要求。
-
-稳定候选后向用户提供固定SHA、可审阅的PowerShell7+入口；用户Win11机器可运行但已要求先整体开发。脚本保存scope.json及acceptance.json，成功SCOPED_PASS、scope=windows11-client-ordinary、full_registry_executed=false，selected/excluded实际数量来自同registry；补入新节点后重新派生，describe仅收集不是执行PASS。脚本保原CPython/x64/curses版本与prefix记录，锁哈希由CI安装准备验证，不新增私有venv或已装wheel哈希准入。用户2026-11-10最新授权将本机更新提前：macOS完整检查和真实PTY/TUI通过后先安装2.1.4候选程序与中央current，再继续真实Windows。完整同候选Server门禁、Win11桌面及最终统一QA完成后才正式发布GitHub/Tap；本机候选安装已完成，Mac285项340.176秒exit0（5项Windows-only skip不作原生证明）、真实PTY2均通过并获同一Reviewer本机候选许可；来源6eac3ea/归档7c516caf…8259。Homebrew实际程序2.1.4与中央current 1b9b2b54738c92b27ff64caf1058b854e1daef378a1f32c0c4e7edfbc305da3e已由原CLI导入/预览/激活exit0，三个登记项目healthy/follow、54软链及模型偏好保持。Windows验收及正式发布仍待。
-
-探针、原始失败、实际修复及源审分别保存在native-windows-20261109、upgrade-214-20261109暂存区和Git历史。当前主题仅保留必要架构与恢复信息，不以部分节点、模拟或取消改写整体验收。
-
-原生组件42736740442首次65方法69.522秒/9errors后，取证轮42739662508（50518ad，与I cfac28e生产树相同）实际65方法60.182秒/6errors、零skip。公开异常3种真实资源fault已通过；custom五子例的owner、raw ACL、有序ACE、mode0666和attrs32全同，源control9404而初始stage9004，仅AUTO_INHERITED缺失，完整安全守卫正确拒绝。原FS按官方SetSecurityInfo HANDLE规范集中实现首写前精确初始化，保其余完整守卫，仍待冻结/原QA/真实Windows。余下Budget错误所在共享parser合法CRLF缺陷已真实safe-sync红绿验证并获原QA接受；N1已将新六精准合同加入唯一registry，当前10组件149方法、desktop146排3，后续新native方法继续按实际清单派生。携CRLF修复的71项组件42743528209（2ce2503）已实际55.568秒/5errors、零skip：大root预算与新六合同真实Windows通过，仅custom五子例仍拒绝；原始失败、30条SD事件与完整artifact保留在请求暂存区。
-
-SDK完整修复2485cc4已按原soleQA最终许可（新patch8a4875，旧910be2许可撤回）精确合入候选8b9ca0c。独立原生库运行42750791601/18d3131实际72方法72.253秒全部OK、零skip、test_exit_code=0；五写者source/初始化stage完整SD均9404且owner/ACL/ACE/security全等，原源身份/正文不变，同一不可继承HANDLE，三种共享重开均错误32。原probe EOF Important已用64bit位置保存/0起读/finally恢复及真实读取链回归闭合。隔离YAML因延后stdout JSON使末尾摘要断言报错，job仍failure并保留原流，不重标绿；生产gate原样传原CLI退出码，不受此临时包装器影响。临时workflow不进入候选/main/归档，不为临时汇总器再改生产。完整门禁42753036097已结束失败：候选dba7e53，实际PR合并8829398与候选树均ef18e492。macOS CI通过；Linux仅保留inode替换测试的假设失败。Windows 10组件150项中，库72、边界12、ConPTY8、入口6、诊断4及大小写2通过；中央1与准入41暴露standalone Records的bare/package文件描述符注册表混用；owner-only1的backup测试在改owner时连带改变DACL；TUI3的保存操作30秒内未结束，尚待性能归因。完整日志与21份原生文件均保留，原FS/C实例按职责返修，未放宽安全断言或时间预算，未重新标绿失败。Win11普通桌面147项（排3）、最终独立QA及正式发布仍待。
-
-正式门禁返修已按原职责和同一Reviewer精确整合：Records的Windows SDK导入与创建虚拟fd的bare/package façade保持同namespace，原三参数、finish/CAS/最后结算顺序不动；新增回归使用当前原生Python child，无Bash依赖。Linux retained测试在旧inode仍存活时构造不同实体替换，owner-only测试在批准前固定DACL并保留完整安全断言。新增测试专用有界phase观察器不改产品/屏幕/30秒预算：按Job.execute两个唯一CALL positions记录operation/refresh及完整外层尾验，共享wrapper/body分开，不读敏感值或保frame，并有固定caps/hook恢复。两节点在CPython3.14与3.11各实际通过；统一源码原CLI再次2项0.045秒exit0，原Records统一回归1项0.130秒exit0。唯一登记已实际收集为10组件153项、ordinary desktop150项排3，两个新profile ID均唯一；这些便携结果不冒充Windows执行。新同源完整门禁及实际阶段数据仍待，最终Win11桌面/原soleQA/正式发布仍未完成。
+实现、原始失败、完整日志、冻结源及同一 Reviewer 的审查记录保存在请求 upgrade-214-20261109 临时区和 Git 历史；计划只保留当前契约与恢复入口。临时诊断 workflow 从未进入候选或发行载荷，npm／npx 不恢复。用户已明确先完成开发和 CI；Win11 普通用户真机暂缓，最终统一 QA 与正式发布仍待，Server CI 不提升为 Win11 桌面验收。
 
 ## 验收结果与当前已交付行为
 
@@ -66,4 +55,4 @@ SDK完整修复2485cc4已按原soleQA最终许可（新patch8a4875，旧910be2�
 ## 批准依据与必要证据
 
 - 批准依据: 用户要求原生 Windows11 x64/PowerShell7+ 适配，曾暂停后已明确恢复，并授权完成后发布新版本和升级本机；补充要求必要重构、健壮易维护和依据三平台最新官方规范。生产交新子代理、独立 QA、保留资料和现有修复；布局与流程已定版，当前仅原生平台适配。
-- 验收证据: 原语、入口与进程消费者已有对应的真实原生方法证据；ConPTY 八项通过。42614154168 证明真实中央 Hook 通过、偏好 reset 仍失败，并取得两项脚本/API 诊断通过。生产 TUI、中央完整生命周期、最终统一门禁、独立 QA 及 Win11 普通用户桌面尚未验收。后续仅记录真实命令/环境/输出/退出码、原始失败和相应修复，完整证据不以摘要替代。
+- 验收证据: 原始运行、修复与同一 Reviewer 的源审分别保留，最新完整结果见 42762760967（Mac/Linux 与 Windows9/10组件通过，TUI失败）。默认无 hook 的原预算对照、Win11普通用户桌面及最终QA尚待；准确命令、环境、stdout/stderr与退出码以原日志为准，不以计划、模拟、部分通过或插桩数据替代整体验收。
