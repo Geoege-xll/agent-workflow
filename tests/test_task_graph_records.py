@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -423,6 +424,114 @@ class RecordUpdateTest(unittest.TestCase):
 
 
 class RecordNativePublisherContractTest(unittest.TestCase):
+    def test_standalone_and_package_publication_keep_directory_registry_and_read_operation_owner(self):
+        """新进程同时实际导入bare/package；只替DLL边界，不合并fd登记或模块。
+
+        实际调用Records.publish、_WindowsOS.open、node_snapshot与统一写者，
+        让虚拟目录fd真正进入唯一owner的registry。创建前注入原异常作为终点，
+        不mock成功/期望Node；错误namespace会在真实_path/活目录校验处失败。
+        独立进程只隔离Python导入状态，所有文件都在本例自有临时目录。
+        """
+        code = r'''
+import importlib
+import json
+from pathlib import Path
+import sys
+from contextlib import ExitStack, contextmanager
+from types import SimpleNamespace
+from unittest.mock import patch
+
+pack, root = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path[:0] = [str(pack / "lib"), str(pack)]
+from lib.hosts import claude_instructions  # 普通读取保留真实平台入口，不伪造正文。
+from lib import runtime_store
+bare_fs = importlib.import_module("windows_fs")
+package_fs = importlib.import_module("lib.windows_fs")
+bare_platform = importlib.import_module("platform_fs")
+package_platform = importlib.import_module("lib.platform_fs")
+assert bare_fs is not package_fs
+assert bare_fs.secure_os is not package_fs.secure_os
+
+class NativeOs:
+    name = "nt"
+    def __init__(self, backend): self.backend = backend
+    def __getattr__(self, name): return getattr(self.backend, name)
+
+with patch.object(bare_platform, "os", NativeOs(bare_fs.secure_os)), \
+        patch.object(package_platform, "os", NativeOs(package_fs.secure_os)):
+    modules = [importlib.import_module("task_graph_records"), importlib.import_module("lib.task_graph_records")]
+
+for module, owner, foreign in ((modules[0], bare_fs, package_fs), (modules[1], package_fs, bare_fs)):
+    target = root / (module.__name__.replace(".", "-") + ".json")
+    assert not target.exists()
+    events, reached = [], []
+    boundary = OSError("fixture stops before first temporary creation")
+    class Directory:
+        def __init__(self, path): self.path = Path(path)
+        def child(self, name): return self.path / name
+        def close(self): events.append("directory-close")
+        def __enter__(self): return self
+        def __exit__(self, *unused): self.close()
+    @contextmanager
+    def lock(path):
+        events.append("lock")
+        try: yield
+        finally: events.append("unlock")
+    def missing(path, *args, **kwargs):
+        assert Path(path) == target
+        assert not Path(path).exists()
+        events.append("missing-open")
+        raise FileNotFoundError(str(path))
+    def create(directory, temporary, **kwargs):
+        # 此处由实际write_regular_if_unchanged调用；其原活fd检查及完整
+        # missing snapshot已完成。只注入失败，不虚构成功stage或文件内容。
+        assert directory in owner.secure_os._directories
+        assert directory not in foreign.secure_os._directories
+        assert owner.secure_os._directories[directory].path == target.parent
+        assert kwargs == {"permission_source": None, "expected_source": None, "max_bytes": 4 * 1024 * 1024}
+        assert operation._closed  # 实际finish_read_operation已封口同一canonical租约。
+        reached.append(directory)
+        events.append("first-create-boundary")
+        raise boundary
+    with ExitStack() as resources:
+        # POSIX仅补缺失的DLL模块；Windows沿已有msvcrt。目录open分支不
+        # 调CRT函数，任何HANDLE/NTFS支持结论都仍由实际Windows门禁负责。
+        if sys.platform != "win32":
+            resources.enter_context(patch.dict(sys.modules, {"msvcrt": SimpleNamespace()}))
+        for backend in (bare_fs, package_fs):
+            resources.enter_context(patch.object(backend, "absolute_path", side_effect=lambda path: Path(path).absolute()))
+            resources.enter_context(patch.object(backend, "Directory", Directory))
+            resources.enter_context(patch.object(backend, "_open_handle", side_effect=missing))
+        resources.enter_context(patch.object(owner, "create_regular_stage", side_effect=create))
+        resources.enter_context(patch.object(module, "_publication_lock", new=lock))
+        try:
+            with runtime_store.core_read_operation() as operation:
+                module.publish(target, b"approved\n", "missing")
+        except OSError as error:
+            assert error is boundary
+        else:
+            raise AssertionError("publication must reach the deliberate pre-create failure")
+    assert len(reached) == 1 and reached[0] >= 1 << 30
+    assert not owner.secure_os._directories and not foreign.secure_os._directories
+    assert not target.exists() and not list(root.iterdir())
+    assert events[0] == "lock" and events[-1] == "unlock"
+    assert "runtime_store" not in sys.modules  # 不另造bare ContextVar或掩盖别名冲突。
+    assert modules[0].os.backend is bare_fs.secure_os and modules[1].os.backend is package_fs.secure_os
+    print(json.dumps({"namespace": module.__name__, "real_directory_fd": reached[0],
+                      "registry_owner_preserved": True, "operation_finished_before_first_create": operation._closed,
+                      "source_and_temp_missing": True}, sort_keys=True), flush=True)
+'''
+        with tempfile.TemporaryDirectory(prefix="record-namespace-contract-") as raw:
+            # child沿当前已选原生Python运行；namespace回归本身不依赖shell，
+            # 普通Windows没有Bash也必须进入相同的真实registry与封口断言。
+            result = subprocess.run([sys.executable, "-B", "-X", "utf8", "-c", code,
+                                     str(PACK), str(Path(raw).resolve())], capture_output=True, text=True, timeout=20)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        observations = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(["task_graph_records", "lib.task_graph_records"], [row["namespace"] for row in observations])
+        self.assertTrue(all(row["registry_owner_preserved"] and row["operation_finished_before_first_create"]
+                            and row["source_and_temp_missing"] for row in observations))
+
     def test_original_read_finish_fresh_cas_and_settlement_precede_native_publisher(self):
         """真实 Records 控制流保持顺序；替身仅接原生物理发布，不假造 NTFS。"""
         from lib import windows_fs, runtime_store, task_settlement

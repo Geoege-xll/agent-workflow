@@ -129,7 +129,13 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
     with _publication_lock(path), ExitStack() as native_resources:
         native_before = None
         if os.name == "nt":
-            from lib.windows_fs import node_snapshot
+            # 虚拟dirfd只属于创建它的platform_fs.os登记表。standalone入口
+            # 使用bare platform_fs，故SDK也必须按同一package/bare规则选取；
+            # 不能将整数fd交给另一份lib.windows_fs或全局合并模块/registry。
+            if __package__:
+                from .windows_fs import node_snapshot
+            else:
+                from windows_fs import node_snapshot
             native_parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             native_resources.callback(os.close, native_parent)
             # 第一次持锁读取就固定独立完整安全原像；后面的 finish/结算仍沿
@@ -171,7 +177,12 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         mode = identity[2] if identity else 0o600
         if os.name == "nt":
-            from lib.windows_fs import write_regular_if_unchanged
+            # 发布继续借用最初目录fd的同一owner，导入时点仍在最后结算之后；
+            # canonical runtime_store的封口归属不随这个文件系统namespace改变。
+            if __package__:
+                from .windows_fs import write_regular_if_unchanged
+            else:
+                from windows_fs import write_regular_if_unchanged
             # 进入 helper 之前，原锁/hash/identity/finish/fresh CAS/settlement
             # 已依次成功；共享物理层不能重排这些业务校验或重读固定核心。
             write_regular_if_unchanged(native_parent, path.name,
