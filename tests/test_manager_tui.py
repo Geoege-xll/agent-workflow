@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from copy import deepcopy
 import curses
 import codecs
@@ -1264,6 +1265,9 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                      # 原生桥 main 已统一解码三字段 pin；最小核心仍须包含该
                      # 真实入口直接导入的模块及其静态标准路径依赖，不能绕过桥验收。
                      "lib/runtime_pins.py","lib/standard_paths.py",
+                     # Windows 隔离桥会在执行核心模块前逐字节核验这个直接依赖；
+                     # 它只使用标准库/WinAPI，无须复制整仓或在测试中引入 Bash。
+                     "lib/windows_fs.py",
                      "manager/project_service.py", "manager/state_files.py", "manager/runtime_service.py","manager/runtime_state.py","manager/__init__.py","templates/project.yaml.example","templates/docs/PROJECT.md",
                      "platforms/shared/core-skills.txt"):
             put(name,(PACK/name).read_bytes())
@@ -1333,6 +1337,184 @@ class ProjectTuiIntegrationTest(unittest.TestCase):
                 path=Path(directory)/name;relative=str(path.relative_to(root))
                 result[relative]=("link",os.readlink(path)) if path.is_symlink() else ("dir",None) if path.is_dir() else ("file",path.read_bytes())
         return result
+
+    @contextmanager
+    def counted_project_refresh(self, *, phase_only=True):
+        """围绕真实扫描/尾验计数，不替换 reader、服务结果或文件安全判断。"""
+        counts={"scan":0,"verify":0};readers=[];bindings=[]
+        scan=runtime_store._scan;verify=runtime_store._verify_snapshot
+        open_reader=runtime_store.CoreReadOperation.reader
+        def selected():
+            return not phase_only or self.app.session.job.phase == "refresh"
+        def scanned(*args,**kwargs):
+            if selected():counts["scan"]+=1
+            return scan(*args,**kwargs)
+        def verified(*args,**kwargs):
+            if selected():counts["verify"]+=1
+            return verify(*args,**kwargs)
+        def opened(operation,*args,**kwargs):
+            reader=open_reader(operation,*args,**kwargs)
+            if selected() and all(reader is not item for item in readers):
+                readers.append(reader);bindings.append(reader.core.binding())
+            return reader
+        with patch.object(runtime_store,"_scan",scanned), \
+             patch.object(runtime_store,"_verify_snapshot",verified), \
+             patch.object(runtime_store.CoreReadOperation,"reader",opened):
+            yield counts,bindings
+        self.assertTrue(readers,"刷新必须真实消费中央核心")
+        for reader in readers:
+            with self.assertRaisesRegex(runtime_store.RuntimeStoreError,"关闭"):
+                _=reader.core
+        # 在同一个 executor 上另取当前 scope，证明 worker 的 ContextVar 已退出，
+        # 而非只在测试主线程观察到默认值。下一次作业必须重新建立完整证明。
+        self.assertIsNone(self.executor.submit(runtime_store._active_operation).result(timeout=20))
+
+    def test_apply_project_refresh_shares_core_read_scope_per_pin(self):
+        """实际 App 写后刷新按 pin 合并证明；跨 pin 独立，投影和磁盘字节不变。"""
+        project_service.apply_project(project_service.preview_project(
+            self.state,self.project,"add",enable=True,content_id=self.core.content_id,native_context=self.context))
+        apply=project_service.apply_project
+        def committed(plan,**kwargs):
+            # 若误把 writer 包进父只读 scope，真实服务边界应拒绝；这里先把
+            # App 的责任边界说清楚，并继续执行原来的完整提交过程。
+            self.assertIsNone(runtime_store._active_operation())
+            return apply(plan,**kwargs)
+        for pins in (1,2):
+            with self.subTest(pins=pins):
+                if pins == 2:
+                    neighbor=self.root/("另一固定版本-"+uuid.uuid4().hex[:8]);neighbor.mkdir()
+                    project_service.apply_project(project_service.preview_project(
+                        self.state,neighbor,"add",enable=True,content_id=self.alternate.content_id,native_context=self.context))
+                # 已停用项目的角色集合为空，load_context 不消费固定核心；要验证
+                # status+context 两个真实消费者，必须以启用后的刷新作为对照。
+                project_service.apply_project(project_service.preview_project(
+                    self.state,self.project,"disable",native_context=self.context))
+                self.app.preview_project(self.project,"enable");self.settle()
+                self.assertTrue(self.app.project_plan.summary["can_apply"],self.app.text)
+                with self.counted_project_refresh() as (counts,bindings), \
+                     patch("manager.tui.project_service.apply_project",side_effect=committed) as writer:
+                    self.app.dispatch("enter");job=self.app.session.job
+                    job.future.result(timeout=20)
+                    refresh=job.refresh;actual=job.refreshed
+                self.assertEqual({"scan":pins,"verify":2*pins},counts)
+                self.assertCountEqual([self.core.binding()]+([self.alternate.binding()] if pins == 2 else []),bindings)
+                self.assertEqual(1,writer.call_count);self.assertTrue(job.operation_completed)
+                self.assertTrue(job.result["enabled"])
+                self.assertIsNotNone(actual[2])
+                before=self.snapshot(self.root)
+                # 仅解开本次新增的父装饰器，仍执行同一 App 闭包及全部真实服务。
+                # 原独立消费者同 pin 需两份证明；两个 enabled 项目的双 pin 场景
+                # 实测依次主/副/主/主四份，不能以静态预估三份来删掉真实服务工作。
+                # 这个反事实对照既验证减少的工作量，也验证原服务语义/字节未被改变。
+                with self.counted_project_refresh(phase_only=False) as (separate,separate_bindings):
+                    previous=refresh.__wrapped__(job.result)
+                original_count=2 if pins == 1 else 4
+                self.assertEqual({"scan":original_count,"verify":2*original_count},separate,separate_bindings)
+                self.assertEqual([self.core.binding()]+([self.alternate.binding(),self.core.binding()] if pins == 2 else [])+
+                                 [self.core.binding()],separate_bindings)
+                self.assertEqual(actual,previous);self.assertEqual(before,self.snapshot(self.root))
+                # 只记录固定标签、读者顺序和已验证的计数，不输出 Context/配置正文。
+                # 总 scan/verify 是真实计数；per_pin 按每份独立 reader 的既有
+                # 完整扫描及进入/退出校验合同归并，不把它当成逐 pin 独立计时。
+                def evidence(values,order):
+                    names=["main" if item == self.core.binding() else "alternate" for item in order]
+                    return {**values,"readers":names,"per_pin":{
+                        name:{"scan":names.count(name),"verify":2*names.count(name)} for name in dict.fromkeys(names)}}
+                print("REFRESH_SCOPE_EVIDENCE",json.dumps({"pins":pins,"before":evidence(separate,separate_bindings),
+                      "after":evidence(counts,bindings)},sort_keys=True))
+                self.app.poll_job();self.assertEqual("result",self.app.modal,self.app.text)
+                context=actual[2];key=(str(self.project),self.app.host)
+                self.assertEqual(context.role_values,self.app.session.displays[key].values)
+                self.assertEqual(context.following_values,self.app.session.displays[key].following)
+
+    def test_apply_project_refresh_tail_drift_preserves_commit_truth_and_drafts(self):
+        """真实提交后漂移只使刷新失效；旧草稿不续期，未封口 Context 不能发布。"""
+        from manager.runtime_state import read_binding_record, read_journal
+        from lib.central.runtime_project import project_key
+        project_service.apply_project(project_service.preview_project(
+            self.state,self.project,"add",enable=True,content_id=self.core.content_id,native_context=self.context))
+        # 同时保留一个实际坏登记。project_summaries 会把它转成固定 conflict 行，
+        # 但这个局部容错不能吞掉父刷新 scope 的退出失败、交出另一项目的 Context。
+        neighbor=self.root/("坏登记-"+uuid.uuid4().hex[:8]);neighbor.mkdir()
+        project_service.apply_project(project_service.preview_project(self.state,neighbor,"add"))
+        bad_binding=self.state/"bindings"/(project_key(neighbor)+".json")
+        bad_binding.write_bytes(b"{");bad_binding.chmod(0o600)
+        with self.assertRaises(ValueError):project_service.project_status(self.state,neighbor)
+        scope=(str(self.project),self.app.host);role="xy-backend";draft_key=(*scope,role)
+        self.app.session.accept_context(scope,model_preferences.load_context(
+            self.state,self.project,self.app.host,native_context=self.context))
+        self.app.session.stage(draft_key,{"model":"fixture-uncommitted-model"},"fixture-frozen-source")
+        entries=deepcopy(self.app.session.entries)
+        load_context=model_preferences.load_context;query_rows=self.app.query_project_rows
+        for drift in ("unread-member","manifest","version-ancestor"):
+            with self.subTest(drift=drift):
+                project_service.apply_project(project_service.preview_project(
+                    self.state,self.project,"disable",native_context=self.context))
+                self.app.preview_project(self.project,"enable");self.settle()
+                self.assertTrue(self.app.project_plan.summary["can_apply"],self.app.text)
+                # 使用真正可修改的版本祖先节点集合，不假定 Windows 允许把持有
+                # 不共享 DELETE 句柄的祖先目录换名，也不创建 raw symlink 或跳过。
+                target=(self.core.root/"setup_all.sh" if drift == "unread-member" else
+                        self.core.root.parent/"manifest.json" if drift == "manifest" else
+                        self.core.root.parent/"fixture-tail-extra")
+                parent=target.parent;parent_mode=parent.stat().st_mode & 0o777
+                original=target.read_bytes() if target.exists() else None
+                mode=target.stat().st_mode & 0o777 if target.exists() else None
+                seen_rows=[];seen_context=[];read_members=[]
+                member=runtime_store._read_manifest_source
+                def consumed(root,relative,*args,**kwargs):
+                    if self.app.session.job.phase == "refresh":read_members.append(relative)
+                    return member(root,relative,*args,**kwargs)
+                def rows(include):
+                    result=query_rows(include);seen_rows.extend(result);return result
+                def context_then_drift(*args,**kwargs):
+                    context=load_context(*args,**kwargs);seen_context.append(context)
+                    self.assertTrue(self.app.session.job.operation_completed)
+                    if mode is None:parent.chmod(parent_mode | 0o700)
+                    else:target.chmod(mode | 0o600)
+                    target.write_bytes((original or b"")+b"\nfixture-tail-drift\n")
+                    if mode is None:parent.chmod(parent_mode)
+                    else:target.chmod(mode)
+                    return context
+                try:
+                    with self.counted_project_refresh(), \
+                         patch.object(runtime_store,"_read_manifest_source",side_effect=consumed), \
+                         patch.object(self.app,"query_project_rows",side_effect=rows), \
+                         patch("manager.tui.model_preferences.load_context",side_effect=context_then_drift), \
+                         patch.object(self.app.session,"accept_context",wraps=self.app.session.accept_context) as accepted, \
+                         patch("manager.tui.project_service.apply_project",wraps=project_service.apply_project) as writer:
+                        self.app.dispatch("enter");job=self.app.session.job
+                        with self.assertRaises(runtime_store.RuntimeStoreError):job.future.result(timeout=20)
+                        self.assertTrue(job.operation_completed);self.assertTrue(job.result["enabled"])
+                        self.assertEqual("refresh",job.phase);self.assertIsNone(job.refreshed)
+                        self.assertEqual(1,len(seen_context));self.assertEqual(scope[0],str(seen_context[0].project))
+                        bad_row=next(row for row in seen_rows if row["project"] == str(neighbor))
+                        self.assertEqual("conflict",bad_row["state"])
+                        self.assertEqual("状态读取失败，请单独检查项目绑定和受管资源",bad_row["conflicts"][0]["reason"])
+                        if drift == "unread-member":self.assertNotIn("setup_all.sh",read_members)
+                        self.app.poll_job();accepted.assert_not_called()
+                        self.assertEqual("result",self.app.modal);self.assertIn("业务操作已完成；后续状态刷新未完成",self.app.text)
+                        self.assertIsNone(self.app.project_plan);self.assertIsNone(self.app.future)
+                        self.assertNotIn(scope,self.app.session.displays);self.assertIn(scope,self.app.session.display_errors)
+                        self.assertNotIn(str(self.project),self.app.project_rows)
+                        self.assertEqual(entries,self.app.session.entries)
+                        self.app.poll_job();self.app.apply_project();self.assertEqual(1,writer.call_count)
+                finally:
+                    # 仅恢复本测试的私有不可变核心；保留真实项目、绑定及 applied
+                    # journal。恢复后再问生产边界，不能用模拟状态证明已经提交。
+                    if original is None:
+                        parent.chmod(parent_mode | 0o700);target.unlink(missing_ok=True);parent.chmod(parent_mode)
+                    else:
+                        target.chmod(mode | 0o600);target.write_bytes(original);target.chmod(mode)
+                self.assertTrue(read_binding_record(self.state,self.project)[1]["enabled"])
+                self.assertEqual("applied",read_journal(self.state,self.project)[1]["phase"])
+                self.assertTrue(project_service.project_status(self.state,self.project)["enabled"])
+                self.app.preview_project(self.project,"disable");self.settle()
+                with self.counted_project_refresh() as (fresh,_):
+                    self.app.dispatch("enter");self.app.future.result(timeout=20);self.app.poll_job()
+                self.assertEqual({"scan":1,"verify":2},fresh)
+                self.assertEqual("result",self.app.modal);self.assertIn(scope,self.app.session.displays)
+                self.assertEqual(entries,self.app.session.entries)
 
     def test_real_project_lifecycle_versions_details_and_deletion_focus(self):
         self.app.dispatch("a");self.type(str(self.project));self.app.dispatch("enter");self.app.dispatch("enter");self.settle()

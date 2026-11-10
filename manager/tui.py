@@ -512,7 +512,13 @@ class App:
         if plan is None or not plan.summary["can_apply"]:
             self.notify("计划含冲突，不能确认；请返回核对冲突或预览修复","warning");return
         host=self.host;old_index=self.project_index;old_project=self.project;old_role=self.role
+        @runtime_store.read_operation
         def refresh(result):
+            # Job 已先取得 apply_project 的真实完成结果，再进入这个纯读阶段。
+            # 列表各项目状态和选中项目上下文只在本次刷新内按实际根/完整 pin
+            # 借用同一强租约；成员、权限、来源和退出整树校验仍由服务保留。
+            # 装饰器完成外层尾验后才返回，失败时不能把未封口的 Context 交给
+            # Session；writer 不在此 scope 内，下一次作业也不能复用这里的 reader。
             rows=self.query_project_rows(None if plan.action == "del" else plan.project)
             paths=[Path(row["project"]) for row in rows]
             selected=plan.project if plan.project in paths else paths[min(max(0,old_index),len(paths)-1)] if paths else None
