@@ -267,7 +267,13 @@ class PhaseProfile:
     MAX_PHASE_EVENTS, MAX_WORKER_EVENTS, MAX_EVENTS = 4096, 32768, 65536
     LABELS = ("apply", "load_context.body", "read_operation.wrapper", "_scan", "_verify_snapshot", "CoreReadOperation.finish")
 
-    def __init__(self, started=None):
+    def __init__(self, started=None, *, enabled=False):
+        if type(enabled) is not bool:
+            raise TypeError("phase profile 只接受显式 bool")
+        self.enabled = enabled
+        # 正式 TUI 验收默认无全调用 hook：禁用时连 code 绑定/业务模块导入也
+        # 不做，既不查看原 profiler，也不建立零计数来冒充一次有效测量。
+        if not enabled:return
         from lib import runtime_store
         from manager import model_preferences
         from manager.tui_state import Job
@@ -300,6 +306,9 @@ class PhaseProfile:
     @contextmanager
     def installed(self):
         """仅影响之后创建的 worker；保留旧 thread hook，不触碰 main 的 sys hook。"""
+        if not self.enabled:
+            yield self
+            return
         previous = threading.getprofile()
         self.previous = previous
         threading.setprofile(self._profile)
@@ -411,6 +420,7 @@ class PhaseProfile:
 
     def snapshot(self):
         """只返回当前/最近一次 Job 的固定两阶段，不输出逐事件或历史列表。"""
+        if not self.enabled:return {"enabled": False, "state": "disabled"}
         now = time.monotonic_ns()
         with self.lock:
             workers = []
@@ -434,16 +444,17 @@ class PhaseProfile:
                     # 正式结果/错误/原生屏幕断言决定，不查看 profile 的返回参数。
                     row["job"] = {"index": job["index"], "closed": job["closed"], "phase": job["phase"], "incomplete": job["incomplete"], "phases": phases}
                 workers.append(row)
-            return {"binding_incomplete": self.binding_incomplete, "recording_error": self.recording_error,
+            return {"enabled": True, "state": "enabled", "binding_incomplete": self.binding_incomplete, "recording_error": self.recording_error,
                     "overflow": self.overflow, "events": self.events, "recording_ns": self.recording_ns,
                     "workers": workers}
 
 
-def run_observed(root, arguments):
+def run_observed(root, arguments, *, phase_profile=False):
     """真实 CLI/TUI 在主线程运行；原观察线程只读原生控制台与有界栈位置。
 
     请求/响应文件只位于本方法专有目录，最终报告保留 wrapper 前后的实际模式。
     不包装 App、不注入按键、不读取 App 的私有选择状态；交互完全经过 ConPTY。
+    phase_profile 只供测试诊断显式开启；原调用默认关闭，不增加产品 CLI 或环境开关。
     """
     from manager.cli import main
 
@@ -453,7 +464,7 @@ def run_observed(root, arguments):
     stop = threading.Event()
     failures = []
     started = time.monotonic_ns()
-    phases = PhaseProfile(started)
+    phases = PhaseProfile(started, enabled=phase_profile)
 
     def watch():
         number = 1

@@ -70,7 +70,7 @@ class ConsolePhaseProfilePortableTest(unittest.TestCase):
         try:
             for fails in (False,True):
                 with self.subTest(fails=fails):
-                    profile=PhaseProfile();self.assertFalse(profile.binding_incomplete)
+                    profile=PhaseProfile(enabled=True);self.assertFalse(profile.binding_incomplete)
                     body_done,tail_entered,release=threading.Event(),threading.Event(),threading.Event()
                     resources=[]
                     def operation():
@@ -107,6 +107,7 @@ class ConsolePhaseProfilePortableTest(unittest.TestCase):
                                     self.assertTrue(tail_entered.wait(2));self.assertTrue(body_done.is_set())
                                     self.assertFalse(future.done())
                                     snapshot=profile.snapshot();current=snapshot["workers"][0]["job"]
+                                    self.assertTrue(snapshot["enabled"]);self.assertEqual(snapshot["state"],"enabled")
                                     self.assertEqual(current["phase"],"refresh");self.assertFalse(current["closed"])
                                     self.assertIsNotNone(current["phases"]["operation"]["ended_ns"])
                                     refresh=current["phases"]["refresh"]
@@ -141,9 +142,50 @@ class ConsolePhaseProfilePortableTest(unittest.TestCase):
             threading.setprofile(thread_before);sys.setprofile(main_before)
 
     def test_profile_bounds_and_incomplete_binding(self):
+        # 默认无 hook 的控制路径实际执行原 Job，而非只检查一个配置值。
+        # 原 callable/code 身份、参数及返回对象均保留，既不绑定 code，也不
+        # 读取/设置任一 profiler；disabled 证据没有零计数的伪测量字段。
+        main_hook,thread_hook=sys.getprofile(),threading.getprofile()
+        get_main_hook,get_thread_hook=sys.getprofile,threading.getprofile
+        set_main_hook,set_thread_hook=sys.setprofile,threading.setprofile
+        def restore_hooks_if_changed():
+            if get_thread_hook() is not thread_hook:set_thread_hook(thread_hook)
+            if get_main_hook() is not main_hook:set_main_hook(main_hook)
+        self.addCleanup(restore_hooks_if_changed)
+        before=(Job.execute,model_preferences.apply,model_preferences.load_context,
+                model_preferences.load_context.__wrapped__,runtime_store._scan,
+                runtime_store._verify_snapshot,runtime_store.CoreReadOperation.finish)
+        codes=tuple(function.__code__ for function in before)
+        bytecodes=tuple(code.co_code for code in codes)
+        result,refreshed=object(),object()
+        def operation():return result
+        def refresh(value):
+            self.assertIs(value,result)
+            return refreshed
+        job=Job(refresh=refresh)
+        operation_code,refresh_code=operation.__code__,refresh.__code__
+        with patch("tests.windows_console_observer.dis.get_instructions") as bind, \
+             patch.object(threading,"getprofile",wraps=threading.getprofile) as get_thread, \
+             patch.object(threading,"setprofile",wraps=threading.setprofile) as set_thread, \
+             patch.object(sys,"getprofile",wraps=sys.getprofile) as get_main, \
+             patch.object(sys,"setprofile",wraps=sys.setprofile) as set_main:
+            disabled=PhaseProfile()
+            with disabled.installed():self.assertIs(job.execute(operation),result)
+            self.assertIs(job.refreshed,refreshed);self.assertIs(job.refresh,refresh)
+            self.assertEqual(disabled.snapshot(),{"enabled":False,"state":"disabled"})
+            self.assertFalse(hasattr(disabled,"codes"));self.assertFalse(hasattr(disabled,"job_code"))
+            for probe in (bind,get_thread,set_thread,get_main,set_main):probe.assert_not_called()
+        self.assertIs(sys.getprofile(),main_hook);self.assertIs(threading.getprofile(),thread_hook)
+        after=(Job.execute,model_preferences.apply,model_preferences.load_context,
+               model_preferences.load_context.__wrapped__,runtime_store._scan,
+               runtime_store._verify_snapshot,runtime_store.CoreReadOperation.finish)
+        for previous,current,code,bytecode in zip(before,after,codes,bytecodes):
+            self.assertIs(current,previous);self.assertIs(current.__code__,code)
+            self.assertEqual(current.__code__.co_code,bytecode)
+        self.assertIs(operation.__code__,operation_code);self.assertIs(refresh.__code__,refresh_code)
         @runtime_store.read_operation
         def leaf():return None
-        profile=PhaseProfile()
+        profile=PhaseProfile(enabled=True)
         def many_events():
             for _ in range(1400):leaf()
         with profile.installed(),ThreadPoolExecutor(max_workers=1) as executor:
@@ -158,7 +200,7 @@ class ConsolePhaseProfilePortableTest(unittest.TestCase):
         self.assertTrue(bounded["overflow"]);self.assertEqual(worker["jobs"],PhaseProfile.MAX_JOBS)
         self.assertLessEqual(worker["events"],PhaseProfile.MAX_WORKER_EVENTS)
         self.assertLessEqual(bounded["events"],PhaseProfile.MAX_EVENTS)
-        deep=PhaseProfile()
+        deep=PhaseProfile(enabled=True)
         @runtime_store.read_operation
         def nested(depth):
             if depth:nested(depth-1)
@@ -167,7 +209,7 @@ class ConsolePhaseProfilePortableTest(unittest.TestCase):
         phase=deep.snapshot()["workers"][0]["job"]["phases"]["operation"]
         self.assertTrue(phase["overflow"]);self.assertTrue(phase["incomplete"])
         self.assertLessEqual(phase["functions"]["read_operation.wrapper"]["calls"],PhaseProfile.MAX_ACTIVE)
-        workers=PhaseProfile();release=threading.Event();ready=[threading.Event() for _ in range(5)]
+        workers=PhaseProfile(enabled=True);release=threading.Event();ready=[threading.Event() for _ in range(5)]
         def wait(index):
             ready[index].set()
             if not release.wait(5):raise RuntimeError("测试未释放 profile worker")
@@ -183,11 +225,11 @@ class ConsolePhaseProfilePortableTest(unittest.TestCase):
         # cache offset 或同名 lambda 猜测 phase。这个函数只用于元数据负控。
         def ambiguous(self,operation):operation();self.refresh(None)
         with patch.object(Job,"execute",ambiguous):
-            incomplete=PhaseProfile().snapshot()
+            incomplete=PhaseProfile(enabled=True).snapshot()
             self.assertTrue(incomplete["binding_incomplete"]);self.assertEqual(incomplete["workers"],[])
         # 元数据绑定有效但 callable 没有 Python call 根时，也必须明示缺失，
         # 不把无计时记录当作已经量到零耗时；原任务仍照常返回真实结果。
-        missing=PhaseProfile()
+        missing=PhaseProfile(enabled=True)
         with missing.installed(),ThreadPoolExecutor(max_workers=1) as executor:
             self.assertEqual(executor.submit(Job().execute,list).result(timeout=2),[])
         job=missing.snapshot()["workers"][0]["job"]
