@@ -32,7 +32,7 @@ class AntigravityStageFixture:
         finally:
             backend.close(parent)
 
-    def document(self, root, *, private=False):
+    def document(self, root, *, private=False, protected=False):
         root.mkdir()
         target = root / "docs" / "user.md"
         target.parent.mkdir()
@@ -43,6 +43,13 @@ class AntigravityStageFixture:
                 output.write(b"original user document\n")
         else:
             target.write_bytes(b"original user document\n")
+        if protected:
+            # owner-only 负控先在授权前准备固定的受保护 DACL，并保留已有 ACE。
+            # 不能在 published/backup 基准之后关继承，否则会把 ACL 修改追认成
+            # 原权限，或让后续 /setowner 顺带完成继承转换而不再是 owner-only。
+            result = subprocess.run([self.system_program("icacls.exe"), str(target), "/inheritance:d"],
+                                    capture_output=True, timeout=10)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         change = self.applier.FileChange(target, b"approved managed document\n",
             self.applier._fingerprint(target).mode, self.applier._fingerprint(target),
             io_max_bytes=self.applier.DOCUMENT_FILE_SIZE)
@@ -240,8 +247,10 @@ class AntigravityOwnerSecurityWindowsElevatedTest(AntigravityStageFixture, unitt
         executable = shutil.which("pwsh.exe")
         self.assertIsNotNone(executable, "owner 观测要求既有 PS7")
         command = ("$ErrorActionPreference='Stop'; $a=Get-Acl -LiteralPath $env:AWF_OWNER_TEST_TARGET; "
+                   "$raw=[System.Security.AccessControl.RawSecurityDescriptor]::new($a.GetSecurityDescriptorBinaryForm(),0); "
                    "[pscustomobject]@{owner=$a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; "
-                   "access=$a.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)} "
+                   "access=$a.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access); "
+                   "control=[int]$raw.ControlFlags; protected=$a.AreAccessRulesProtected} "
                    "| ConvertTo-Json -Compress")
         result = subprocess.run([str(Path(executable).resolve()), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
             env={**os.environ, "AWF_OWNER_TEST_TARGET": str(path)}, capture_output=True, timeout=15)
@@ -258,10 +267,15 @@ class AntigravityOwnerSecurityWindowsElevatedTest(AntigravityStageFixture, unitt
         for operation in ("rollback", "cleanup"):
             for location in ("published", "backup"):
                 with self.subTest(operation=operation, location=location):
-                    target, change, plan = self.document(self.root / (operation + location))
+                    target, change, plan = self.document(self.root / (operation + location), protected=True)
+                    source_access = self.security_observation(target)
+                    self.assertTrue(source_access["protected"], "授权前必须已固定受保护 DACL")
                     self.applier._publish_file(change, plan, backup_directory=plan.project)
                     selected = target if location == "published" else change.backup
                     before, access = self.snapshot(selected), self.security_observation(selected)
+                    self.assertTrue(access["protected"])
+                    self.assertEqual(source_access["access"], access["access"])
+                    self.assertEqual(source_access["control"], access["control"])
                     # Server 高权限默认创建应由 BA 持有，随后只设为当前合法用户。
                     # 无差异样本直接失败，不能以普通用户已有 LA 冒充 owner 负控。
                     self.assertEqual("S-1-5-32-544", access["owner"])
@@ -271,7 +285,10 @@ class AntigravityOwnerSecurityWindowsElevatedTest(AntigravityStageFixture, unitt
                     self.assertEqual(0, changed_owner.returncode, changed_owner.stdout + changed_owner.stderr)
                     after, after_access = self.snapshot(selected), self.security_observation(selected)
                     self.assertEqual(sid, after_access["owner"])
+                    self.assertNotEqual(access["owner"], after_access["owner"])
                     self.assertEqual(access["access"], after_access["access"], "owner-only 不能同时修改 DACL/control")
+                    self.assertEqual(access["control"], after_access["control"])
+                    self.assertEqual(access["protected"], after_access["protected"])
                     self.assertEqual(before["payload"], after["payload"])
                     self.assertEqual(before["mode"], after["mode"])
                     self.assertEqual(before["identity"][:6], after["identity"][:6])

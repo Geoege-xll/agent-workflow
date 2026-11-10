@@ -105,10 +105,19 @@ class NativeAgentsTest(unittest.TestCase):
         plan, journal, row = self.interrupted_missing_compensation()
         held = self.paths.codex / row["retained"][0]["path"]
         old = native.read_node(self.paths.codex, row["retained"][0]["path"])
-        held.unlink()
-        held.write_bytes(old.payload)
+        # 原件仍存活时先独占创建另一个实体，再原子替换。先 unlink 再创建
+        # 会在 Linux 上复用刚释放的 inode，使测试没有真正构造身份漂移。
+        candidate = held.with_name(held.name + ".external")
+        with candidate.open("xb") as stream:
+            stream.write(old.payload)
+        candidate_info = candidate.stat()
+        candidate_identity = (candidate_info.st_dev, candidate_info.st_ino)
+        self.assertNotEqual(old.identity[:2], candidate_identity)
+        os.replace(candidate, held)
         replacement = native.read_node(self.paths.codex, row["retained"][0]["path"])
         self.assertNotEqual(old.identity[:2], replacement.identity[:2])
+        self.assertEqual(candidate_identity, replacement.identity[:2])
+        self.assertEqual(old.payload, replacement.payload)
         result = native_agents.recover_global(plan.recovery_ref, context=self.context)
         self.assertEqual("conflict", result["status"])
         self.assertEqual(replacement, native.read_node(self.paths.codex, row["retained"][0]["path"]))
