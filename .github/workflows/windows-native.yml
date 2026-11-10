@@ -134,10 +134,43 @@ jobs:
           $stream.Dispose()
           $code = 1
           try {
-            $python = $env:NATIVE_PYTHON
-            if ([string]::IsNullOrWhiteSpace($python)) { throw 'setup-python did not provide python-path.' }
-            $entry = Join-Path $env:GITHUB_WORKSPACE 'scripts/test_workflow.py'
+            $PSNativeCommandUseErrorActionPreference = $false
             "source_sha=$env:GITHUB_SHA" | Tee-Object -FilePath $log -Append
+            $PSVersionTable | Out-String | Tee-Object -FilePath $log -Append
+            $basePython = $env:NATIVE_PYTHON
+            if ([string]::IsNullOrWhiteSpace($basePython)) { throw 'setup-python did not provide python-path.' }
+            "base_python_path=$basePython" | Tee-Object -FilePath $log -Append
+            "command=$basePython -I -B -X utf8 --version" | Tee-Object -FilePath $log -Append
+            & $basePython -I -B -X utf8 --version 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "base_python_version_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The explicit base Python did not report its version.' }
+            # 完整收集会真实导入 TUI 模块，不能等各组件执行时才准备 _curses。
+            # collector 独占本 job 临时 venv；已有目录即失败，不删除或复用未知环境。
+            # 保留 ensurepip 以安装原哈希锁，base 只负责建环境，不向全局 pip 安装。
+            $venv = Join-Path $env:RUNNER_TEMP 'awf-windows-native-plan-venv'
+            if (Test-Path -LiteralPath $venv) { throw 'The owned native collector virtual environment already exists.' }
+            "command=$basePython -I -B -X utf8 -m venv $venv" | Tee-Object -FilePath $log -Append
+            & $basePython -I -B -X utf8 -m venv $venv 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "collector_venv_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The owned native collector virtual environment could not be created.' }
+            $python = Join-Path $venv 'Scripts/python.exe'
+            "collector_python_path=$python" | Tee-Object -FilePath $log -Append
+            "command=$python -I -B -X utf8 --version" | Tee-Object -FilePath $log -Append
+            & $python -I -B -X utf8 --version 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "collector_python_version_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The native collector Python did not report its version.' }
+            # 复用 TUI 的唯一 requirements/hash/binary 安装合同；失败不得退回
+            # base 收集或发布空 matrix。各库组件仍使用各自 stdlib 环境，不受影响。
+            $requirements = Join-Path $env:GITHUB_WORKSPACE 'requirements-windows.txt'
+            "command=$python -I -B -X utf8 -m pip --isolated --disable-pip-version-check --no-input install --require-hashes --only-binary=:all: -r $requirements" | Tee-Object -FilePath $log -Append
+            & $python -I -B -X utf8 -m pip --isolated --disable-pip-version-check --no-input install --require-hashes --only-binary=:all: -r $requirements 2>&1 | Tee-Object -FilePath $log -Append
+            $nativeCode = $LASTEXITCODE
+            "collector_dependency_install_exit_code=$nativeCode" | Tee-Object -FilePath $log -Append
+            if ($null -eq $nativeCode -or $nativeCode -ne 0) { throw 'The locked native collector dependency could not be installed.' }
+            $entry = Join-Path $env:GITHUB_WORKSPACE 'scripts/test_workflow.py'
             "command=$python -I -B -X utf8 $entry --matrix windows-native" | Tee-Object -FilePath $log -Append
             # 唯一 runner 真实导入每个节点并生成实际方法数；这里不执行 TestCase，
             # 不从 YAML/环境再拼名单。完整 stderr 即使解析失败也保留在计划日志。

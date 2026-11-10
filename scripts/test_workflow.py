@@ -283,6 +283,7 @@ def make_parser():
                 "      python -I -B -X utf8 scripts/test_workflow.py windows-native\n"
                 "Windows 完整验收：windows-native；--matrix windows-native 只校验并输出 CI 组件矩阵。\n"
                 "普通用户范围：windows-native-desktop；--describe 输出同一登记派生的所选与排除事实。\n"
+                "Windows 完整 --matrix/--describe 会导入 TUI 模块；所选解释器须先按 requirements-windows.txt 准备依赖。\n"
                 "原生库/CLI/ConPTY 使用 stdlib；TUI/脚本身份需要 requirements-windows.txt 锁定依赖。\n"
                 "依赖：Python >= 3.11；HTML 生成已暂停；ci 保留 Node 前置，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
