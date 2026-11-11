@@ -294,10 +294,27 @@ try {
         path.write_text(body, encoding="utf-8")
         return path
 
-    def install_via_ps(self, script, *, install_root=None):
-        return self.execute(script.stem, [str(self.pwsh), "-NoLogo", "-NoProfile", "-File", str(script),
-            "-Python", sys.executable, "-InstallRoot", str(install_root or self.install),
-            "-StateDir", str(self.state), "-HostHome", str(self.home), "-Json"])
+    def install_via_ps(self, script, *, install_root=None, legacy=False):
+        arguments = ["-Python", sys.executable, "-InstallRoot", str(install_root or self.install),
+                     "-StateDir", str(self.state), "-HostHome", str(self.home), "-Json"]
+        entry = script
+        if legacy:
+            # 仅首次真实安装使用 Legacy 参数路径；设置只存在于本例 pwsh 子进程，
+            # 不写 profile 或宿主偏好。逐项参数转发，不把中文路径拼成 shell 源码。
+            # 这证明现有 pwsh 的 Legacy 行为，不等于运行过旧版 PS7.0 二进制。
+            entry = self.scene / "legacy-first-install.ps1"
+            entry.write_text(r'''param(
+    [string]$Installer, [string]$Python, [string]$InstallRoot,
+    [string]$StateDir, [string]$HostHome, [switch]$Json
+)
+$ErrorActionPreference = 'Stop'
+$global:PSNativeCommandArgumentPassing = 'Legacy'
+[Console]::Error.WriteLine('[TEST] first-install PSNativeCommandArgumentPassing=' + $global:PSNativeCommandArgumentPassing)
+& $Installer -Python $Python -InstallRoot $InstallRoot -StateDir $StateDir -HostHome $HostHome -Json:$Json
+exit $LASTEXITCODE
+''', encoding="utf-8")
+            arguments = ["-Installer", str(script), *arguments]
+        return self.execute(script.stem, [str(self.pwsh), "-NoLogo", "-NoProfile", "-File", str(entry), *arguments])
 
     def snapshot(self, root):
         return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -338,8 +355,9 @@ try {
 
     def test_https_install_cli_repeat_and_failure_preservation(self):
         script = self.render("install")
-        result = self.install_via_ps(script)
+        result = self.install_via_ps(script, legacy=True)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("[TEST] first-install PSNativeCommandArgumentPassing=Legacy", result.stderr)
         value = json.loads(result.stdout)
         self.assertEqual((True, "complete", 0), (value["ok"], value["phase"], value["exit_code"]))
         version_root = Path(value["version_root"])
