@@ -3,6 +3,24 @@
 Read this branch only for production UI or design-standard work. For `standards_only`, use the
 design-standard checks below; do not activate production-page/prototype checks without that scope.
 
+The request QA task remains read-only and may use `surface_kind: non_ui`; its audit surfaces still
+include both UI and accessibility when production UI is in scope. Consume every entry in
+`reviewed_ui_changes`, including each writer's route, affected surfaces, authority, ownership and gates.
+For Full, the PM exports that projection from the current request graph. For Light selected for
+independent QA, the PM supplies the corresponding projection from the current production Writer's
+single-task pack; Light does not create a graph. The production writer fields describe the reviewed
+writer, not permissions granted to QA.
+
+Before accepting production UI review, run the pinned task-graph helper's `verify-ui-scope --input
+<current-qa-pack> --source <current-authoritative-source>`: the source is the Full request graph or
+the Light production Writer pack, respectively. Use the actual current source and QA pack bytes, retain
+the returned SHA-256 values, and independently establish their provenance and current scope from the
+request and implementation evidence. A self-declared digest or this comparison alone cannot authenticate
+a substituted or stale source. Missing source, an empty or altered projection, a mismatch, or inability
+to establish current source provenance is FAIL. Plain `validate` checks structure only and cannot prove
+that a projection is complete. This comparison is not required solely because a non-production review
+mentions UI or accessibility.
+
 Ordinary Light copy enters this review only when PM actually selects independent QA. Still verify
 production_ui, zero design delta and real frozen UI-Conformance authority; do not disguise it as non_ui.
 Reading this branch does not force Full planning, repeated confirmation or a prototype on Light. Return

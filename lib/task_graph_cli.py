@@ -154,7 +154,9 @@ AUTHORITY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 EXCEPTIONAL_GATE_RE = re.compile(r"exceptional:[a-z0-9][a-z0-9._-]*\Z")
 USER_CHOICE_REF_RE = re.compile(r"user:[a-z0-9][a-z0-9._:/-]*\Z")
 PACK_FIELDS = {"schema_version", "task", "standards_contract", "approved_gates",
-               "requirements_fingerprint", "ui_contract", "runtime_binding"}
+               "requirements_fingerprint", "ui_contract", "runtime_binding", "reviewed_ui_changes"}
+REVIEWED_UI_FIELDS = {"id", "task_type", "role", "surface_kind", "workflow_level",
+                      "qa_scope", "ui_change", "owned_paths", "gates", "audit_surfaces"}
 
 
 def _require_version(payload: dict[str, Any]) -> None:
@@ -216,6 +218,11 @@ def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
     if task["task_type"] == "qa":
         closure = request_closure(_tasks(payload), task["request_id"])
         relevant = [item for item in payload["tasks"] if item["id"] in closure and item["task_type"] == "writer"] or [task]
+        # 只投影请求闭包中生产 Writer 的审查合同，不给 QA 写权限或复制其他任务。
+        result["reviewed_ui_changes"] = [
+            {key: copy.deepcopy(item[key]) for key in REVIEWED_UI_FIELDS if key in item}
+            for item in relevant if item.get("surface_kind") == "production_ui"
+        ]
     domains = {domain for item in relevant for domain in (
         ("design",) if item.get("surface_kind") == "design_ui" else
         ("engineering", "design") if item.get("surface_kind") == "production_ui" else ("engineering",))}
@@ -251,9 +258,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate and evaluate a PM task graph JSON snapshot.")
     parser.add_argument(
         "command",
-        choices=("validate", "ready", "qa-ready", "capacity", "init", "update", "task", "fingerprints", "scratch", "cleanup-scratch", "continuation"),
+        choices=("validate", "ready", "qa-ready", "capacity", "init", "update", "task", "fingerprints", "scratch", "cleanup-scratch", "continuation", "verify-ui-scope"),
     )
     parser.add_argument("--input", type=Path, help="JSON graph or explicit init decisions; omit to read UTF-8 JSON from stdin")
+    parser.add_argument("--source", type=Path, help="authoritative Full graph or Light writer pack for UI QA scope verification")
     parser.add_argument("--patch", help="update patch JSON file, or - for stdin")
     parser.add_argument("--expect-sha256", help="old output fingerprint for writes, or prior metadata snapshot for scratch deletion")
     parser.add_argument("--task-id", help="existing task to export")
@@ -1145,6 +1153,8 @@ def _validate_plan_contract(
     role = raw["role"]
     if not isinstance(role, str) or not role.strip():
         raise TaskGraphError(f"tasks[{index}].role must be non-empty")
+    if raw.get("task_type") == "writer" and role == "xy-qa":
+        raise TaskGraphError(f"tasks[{index}] writer cannot use role xy-qa")
     if "surface_kind" not in raw:
         raise TaskGraphError(f"tasks[{index}] with role requires surface_kind")
     if "qa_scope" not in raw and raw.get("workflow_level") != "Light":
@@ -1165,9 +1175,9 @@ def _validate_plan_contract(
     if surface_kind == "production_ui":
         if raw.get("task_type") != "writer":
             raise TaskGraphError(f"tasks[{index}] production_ui must be a writer")
-        if role == "xy-uiux":
-            raise TaskGraphError(f"tasks[{index}] production_ui cannot use role xy-uiux")
-        if "ui_change" not in raw:
+        if role in {"xy-uiux", "xy-qa"}:
+            raise TaskGraphError(f"tasks[{index}] production_ui cannot use role {role}")
+        if not isinstance(raw.get("ui_change"), dict):
             raise TaskGraphError(f"tasks[{index}] production_ui requires ui_change")
         if not {"ui", "accessibility"}.issubset(audit_surfaces):
             raise TaskGraphError(
@@ -1740,6 +1750,50 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
                         _nonempty_string(item, f"task.{field}")
     tasks = _tasks(snapshot, handoff=is_pack)
     validate_graph(tasks)
+    if is_pack and "reviewed_ui_changes" in payload:
+        # 交接包中的投影只能由 QA 消费；逐项复用生产路由校验，防止格式合法但
+        # 不完整或伪造的依据成为审查依据。实际请求范围仍以权威图及其导出字节为准。
+        if payload["task"].get("task_type") != "qa":
+            raise TaskGraphError("reviewed_ui_changes is only valid for QA packs")
+        reviewed = payload["reviewed_ui_changes"]
+        if not isinstance(reviewed, list):
+            raise TaskGraphError("reviewed_ui_changes must be an array")
+        prototype_paths = _resolved_ui_contract(payload, bool(reviewed))
+        contract = _resolved_standards_contract(payload)
+        root = contract["root"] if contract else None
+        fingerprints = {path: leaf["content_fingerprint"] for path, leaf in
+                        (contract["leaves"].items() if contract else ())
+                        if leaf["domain"] == "design"}
+        seen = set()
+        for index, item in enumerate(reviewed):
+            optional = {"qa_scope"} if isinstance(item, dict) and item.get("workflow_level") == "Light" else set()
+            if (not isinstance(item, dict) or set(item) - REVIEWED_UI_FIELDS
+                    or REVIEWED_UI_FIELDS - set(item) - optional):
+                raise TaskGraphError("reviewed_ui_changes entries require complete production writer fields")
+            if item["task_type"] != "writer" or item["surface_kind"] != "production_ui":
+                raise TaskGraphError("reviewed_ui_changes entries must describe production writers")
+            identity = _nonempty_string(item["id"], "reviewed_ui_changes.id")
+            if identity in seen:
+                raise TaskGraphError("reviewed_ui_changes contains duplicate writer IDs")
+            seen.add(identity)
+            _validate_plan_contract(item, index, prototype_paths, root)
+            _validate_ui_change(item, index, prototype_paths, root, fingerprints,
+                                payload.get("requirements_fingerprint"))
+        if reviewed and not {"ui", "accessibility"}.issubset(
+            _string_list(payload["task"].get("audit_surfaces"), "QA audit_surfaces")
+        ):
+            raise TaskGraphError("production UI QA requires ui and accessibility audit surfaces")
+    if not is_pack:
+        # 请求闭包可能包含跨请求的共享 Writer；统一 QA 必须覆盖其中的界面和无障碍。
+        for raw in snapshot["tasks"]:
+            if raw["task_type"] != "qa":
+                continue
+            closure = request_closure(tasks, raw["request_id"])
+            if any(item["id"] in closure and item.get("task_type") == "writer"
+                   and item.get("surface_kind") == "production_ui" for item in snapshot["tasks"]):
+                surfaces = set(_string_list(raw.get("audit_surfaces"), "QA audit_surfaces"))
+                if not {"ui", "accessibility"}.issubset(surfaces):
+                    raise TaskGraphError("production UI QA requires ui and accessibility audit surfaces")
     if not is_pack:
         validate_execution(payload)
     if command == "validate":
@@ -1768,12 +1822,64 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             "request_id": request_id}
 
 
+def _verify_ui_scope(pack: dict[str, Any], source: dict[str, Any]) -> None:
+    """对照现存权威来源确认生产界面范围；单包自报的空列表不能证明完整性。"""
+    _execute("validate", pack)
+    if "task" not in pack or pack["task"].get("task_type") != "qa" or pack["task"].get("role") != "xy-qa":
+        raise TaskGraphError("UI scope verification requires a QA task pack")
+    _execute("validate", source)
+    qa = pack["task"]
+    if "task" in source:
+        # Light 没有图，来源必须是同请求的当前生产 Writer 单包，不能用 QA 自报代替。
+        writer = source["task"]
+        if (qa.get("workflow_level") != "Light" or writer.get("workflow_level") != "Light"
+                or writer.get("task_type") != "writer" or writer.get("surface_kind") != "production_ui"
+                or writer.get("request_id") != qa.get("request_id")):
+            raise TaskGraphError("Light UI scope requires the same request's production writer pack")
+        expected = [{key: copy.deepcopy(writer[key]) for key in REVIEWED_UI_FIELDS if key in writer}]
+        expected_contract = source.get("ui_contract")
+        expected_requirements = source.get("requirements_fingerprint")
+    else:
+        if qa.get("workflow_level") != "Full":
+            raise TaskGraphError("Full graph cannot serve as Light UI scope source")
+        exported = export_task_pack(source, qa.get("id"))
+        if any(exported["task"].get(field) != qa.get(field)
+               for field in ("id", "request_id", "task_type", "role", "agent_alias")):
+            raise TaskGraphError("QA identity does not match the authoritative graph")
+        expected = exported["reviewed_ui_changes"]
+        expected_contract = exported.get("ui_contract")
+        expected_requirements = exported.get("requirements_fingerprint")
+    if source.get("runtime_binding") != pack.get("runtime_binding"):
+        raise TaskGraphError("UI scope source and QA pack runtime bindings differ")
+    if (not expected or pack.get("reviewed_ui_changes") != expected
+            or pack.get("ui_contract") != expected_contract
+            or pack.get("requirements_fingerprint") != expected_requirements):
+        raise TaskGraphError("QA production UI scope differs from its authoritative source")
+    if not {"ui", "accessibility"}.issubset(qa.get("audit_surfaces", [])):
+        raise TaskGraphError("production UI QA requires ui and accessibility audit surfaces")
+
+
 def main() -> int:
     args = _parser().parse_args()
     try:
         if args.command != "cleanup-scratch" and (args.dry_run or args.keep):
             raise TaskGraphError("--dry-run and --keep apply only to cleanup-scratch")
-        if args.command == "continuation":
+        if args.command == "verify-ui-scope":
+            if (not args.input or not args.source or any((args.patch, args.expect_sha256,
+                    args.task_id, args.host, args.observed_state, args.output, args.root,
+                    args.select, args.request_id, args.all))):
+                raise TaskGraphError("verify-ui-scope requires --input and --source only")
+            if __package__:
+                from . import task_graph_records as records
+            else:
+                import task_graph_records as records
+            pack_body, source_body = records.read_record(args.input), records.read_record(args.source)
+            _verify_ui_scope(records.decode(pack_body), records.decode(source_body))
+            result = {"status": "valid", "task_pack_sha256": records.digest(pack_body),
+                      "source_sha256": records.digest(source_body)}
+        elif args.source:
+            raise TaskGraphError("--source applies only to verify-ui-scope")
+        elif args.command == "continuation":
             if (not args.input or not args.task_id or not args.host or not args.observed_state
                     or any((args.patch, args.expect_sha256, args.output, args.root, args.select, args.request_id, args.all))):
                 raise TaskGraphError("continuation requires --input, --task-id, --host and --observed-state only")

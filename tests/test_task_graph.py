@@ -159,6 +159,145 @@ def _standards_payload(payload: dict[str, object]) -> dict[str, object]:
     return with_builtin_standards(v2_graph(upgraded))
 
 
+class RequestUiQaContractTest(unittest.TestCase):
+    def test_export_preserves_each_writer_contract_and_rejects_forgery(self):
+        """QA 审查多个界面时保留各自权威；不能靠伪造投影或角色绕过写入边界。"""
+        import copy
+        from lib.task_graph_cli import _execute, _verify_ui_scope, export_task_pack, REVIEWED_UI_FIELDS
+
+        graph = _builtin_standards_payload()
+        writer = graph["tasks"][0]
+        writer.update(role="xy-web", surface_kind="production_ui",
+                      audit_surfaces=["ui", "accessibility", "standards-conformance"],
+                      ui_change={"route": "UI-Conformance", "design_delta": "none",
+                                 "prototype_policy": "not_applicable", "prototype_decision": None,
+                                 "design_authority_refs": [{"kind": "controlled_document",
+                                     "authority_id": "accepted", "path": "docs/accepted.md",
+                                     "anchor": "ui", "content_fingerprint": "a" * 64,
+                                     "resolution_state": "resolved"}],
+                                 "affected_surfaces": ["settings"], "justification": "恢复已批准界面"})
+        graph["ui_contract"] = {"prototype_paths": ["docs/standards/prototype"]}
+        with_builtin_standards(graph)
+        graph["standards_contract"]["required_design_rule_ids"] = ["des-baseline-001"]
+        second = copy.deepcopy(writer)
+        second["id"] = "second"
+        second["owned_paths"] = ["web/other.py"]
+        second["ui_change"]["affected_surfaces"] = ["other"]
+        for document in second["controlled_document_access"]["documents"]:
+            document["applies_to"] = second["owned_paths"]
+        qa = {"id": "qa", "request_id": writer["request_id"], "task_type": "qa",
+              "depends_on": [writer["id"], second["id"]], "blocks": [], "gates": [],
+              "owned_paths": [], "semantic_locks": [], "state": "DECLARED",
+              "audit_surfaces": ["ui", "accessibility"]}
+        writer["blocks"] = ["qa"]
+        second["blocks"] = ["qa"]
+        graph["tasks"].extend([second, qa])
+        v2_graph(graph)
+        pack = export_task_pack(graph, "qa")
+        # 使用源码 CLI 的真实入口导出，验证交接消费者收到的字节与内存校验一致。
+        cli = Path(__file__).resolve().parents[1] / "lib/task_graph_cli.py"
+        with tempfile.TemporaryDirectory(prefix="ui-qa-graph-") as directory:
+            source = Path(directory).resolve() / "graph.json"
+            source.write_text(json.dumps(graph), encoding="utf-8")
+            command = subprocess.run([sys.executable, str(cli), "task", "--input", str(source),
+                                      "--task-id", "qa"], text=True, capture_output=True, check=False)
+            qa_file = source.with_name("qa.json")
+            qa_file.write_text(json.dumps(pack), encoding="utf-8")
+            comparison = subprocess.run([sys.executable, str(cli), "verify-ui-scope", "--input",
+                                         str(qa_file), "--source", str(source)],
+                                        text=True, capture_output=True, check=False)
+            self.assertEqual(0, comparison.returncode, comparison.stderr)
+            self.assertEqual(hashlib.sha256(qa_file.read_bytes()).hexdigest(),
+                             json.loads(comparison.stdout)["task_pack_sha256"])
+        self.assertEqual(0, command.returncode, command.stderr)
+        self.assertEqual(pack, json.loads(command.stdout))
+        self.assertEqual(["settings", "other"], [entry["ui_change"]["affected_surfaces"][0]
+                                                   for entry in pack["reviewed_ui_changes"]])
+        self.assertEqual({"status": "valid"}, _execute("validate", pack))
+        _verify_ui_scope(pack, graph)
+        for projection in ([], pack["reviewed_ui_changes"][:1], None):
+            invalid = copy.deepcopy(pack)
+            if projection is None:
+                invalid.pop("reviewed_ui_changes")
+            else:
+                invalid["reviewed_ui_changes"] = projection
+            with self.subTest(projection=projection), self.assertRaises(TaskGraphError):
+                _verify_ui_scope(invalid, graph)
+
+        # Light 不生成图：使用同请求的现有 Writer 单包校验 UI 投影和冻结版本。
+        light_writer = copy.deepcopy(writer)
+        light_writer.update(workflow_level="Light", depends_on=[], blocks=[], gates=[],
+                            goal="恢复界面文案", input_contracts=["既有界面依据"],
+                            output_contracts=["保留界面行为"], acceptance_evidence=["界面可运行"],
+                            verification_commands=[{"run": "test", "expected": "成功"}])
+        light_writer.pop("qa_scope", None)
+        light_source = {"schema_version": 2, "task": light_writer,
+                        "standards_contract": copy.deepcopy(graph["standards_contract"]),
+                        "ui_contract": copy.deepcopy(graph["ui_contract"]), "approved_gates": []}
+        light_qa = copy.deepcopy(pack)
+        light_qa["task"].update(workflow_level="Light", depends_on=[], blocks=[])
+        light_qa["reviewed_ui_changes"] = [{key: copy.deepcopy(light_writer[key])
+                                            for key in REVIEWED_UI_FIELDS if key in light_writer}]
+        _verify_ui_scope(light_qa, light_source)
+        with tempfile.TemporaryDirectory(prefix="light-ui-qa-") as directory:
+            folder = Path(directory).resolve()
+            source = folder / "writer.json"
+            target = folder / "qa.json"
+            source.write_text(json.dumps(light_source), encoding="utf-8")
+            target.write_text(json.dumps(light_qa), encoding="utf-8")
+            result = subprocess.run([sys.executable, str(cli), "verify-ui-scope", "--input",
+                                     str(target), "--source", str(source)],
+                                    text=True, capture_output=True, check=False)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),
+                             json.loads(result.stdout)["source_sha256"])
+        invalid = copy.deepcopy(light_qa)
+        invalid["reviewed_ui_changes"] = []
+        with self.assertRaises(TaskGraphError):
+            _verify_ui_scope(invalid, light_source)
+        invalid = copy.deepcopy(light_source)
+        invalid["task"]["request_id"] = "other-request"
+        with self.assertRaises(TaskGraphError):
+            _verify_ui_scope(light_qa, invalid)
+        for mutation in ("missing", "unresolved", "spoofed_role", "scope", "null_contract"):
+            invalid = copy.deepcopy(pack)
+            entry = invalid["reviewed_ui_changes"][0]
+            if mutation == "missing":
+                entry["ui_change"]["design_authority_refs"] = []
+            elif mutation == "unresolved":
+                entry["ui_change"]["design_authority_refs"][0]["resolution_state"] = "unresolved"
+            elif mutation == "spoofed_role":
+                entry["role"] = "xy-qa"
+            elif mutation == "null_contract":
+                entry["ui_change"] = None
+            else:
+                invalid["task"]["audit_surfaces"] = ["ui"]
+            with self.subTest(mutation=mutation), self.assertRaises(TaskGraphError):
+                _execute("validate", invalid)
+        invalid = copy.deepcopy(graph)
+        invalid["tasks"][-1]["audit_surfaces"] = ["ui"]
+        with self.assertRaises(TaskGraphError):
+            export_task_pack(invalid, "qa")
+
+    def test_non_ui_request_exports_empty_ui_scope(self):
+        """无生产界面的请求不凭空制造设计依据或界面审计。"""
+        from lib.task_graph_cli import export_task_pack
+        graph = _builtin_standards_payload()
+        writer = graph["tasks"][0]
+        writer["blocks"] = ["qa"]
+        graph["tasks"].append({"id": "qa", "request_id": writer["request_id"],
+            "task_type": "qa", "depends_on": [writer["id"]], "blocks": [], "gates": [],
+            "owned_paths": [], "semantic_locks": [], "state": "DECLARED"})
+        v2_graph(graph)
+        self.assertEqual([], export_task_pack(graph, "qa")["reviewed_ui_changes"])
+        # 非生产审计可包含无障碍审计面，不能由表面名称推断出生产 UI 合同。
+        pack = export_task_pack(graph, "qa")
+        pack["task"]["audit_surfaces"] = ["accessibility"]
+        pack.pop("reviewed_ui_changes")
+        from lib.task_graph_cli import _execute
+        self.assertEqual({"status": "valid"}, _execute("validate", pack))
+
+
 class BuiltinSourceContractTest(unittest.TestCase):
     def invoke(self, payload):
         cli = Path(__file__).resolve().parents[1] / "lib/task_graph_cli.py"
