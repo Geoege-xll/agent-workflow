@@ -68,8 +68,9 @@ class PluginDeliveryTest(unittest.TestCase):
                 manifest = json.loads((root / builder.MANIFESTS[host]).read_bytes())
                 self.assertEqual(allowed[host], set(manifest))
                 self.assertNotIn("agents", manifest)
-                self.assertEqual("3.0.0-alpha.1", manifest["version"])
-                self.assertEqual("2.1.3", (root / "product/VERSION").read_text().strip())
+                self.assertEqual((PACK / "product/PLUGIN_VERSION").read_text().strip(), manifest["version"])
+                self.assertEqual((PACK / "product/VERSION").read_text().strip(),
+                                 (root / "product/VERSION").read_text().strip())
                 self.assertTrue((root / "skills/xy-workflow/SKILL.md").is_file())
                 self.assertEqual(host != "codex", (root / "agents").exists())
                 if host == "antigravity":
@@ -119,7 +120,10 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertNotIn(name, {"package.json", "package-lock.json", "manager/cli.py", "manager/tui.py"})
                     self.assertFalse(name.startswith(("lib/install/", "packaging/", ".github/")), name)
                     self.assertFalse(Path(name).name.startswith("setup_"), name)
-                self.assertIn("lib/vendor/answer-me-with-html/am.mjs", files.namelist())
+                self.assertIn("lib/documents/safe_documents.py", files.namelist())
+                self.assertIn("lib/documents/validate_prototype_workspace.py", files.namelist())
+                self.assertNotIn("lib/documents/requirement_html.py", files.namelist())
+                self.assertFalse(any(name.startswith("lib/vendor/answer-me-with-html/") for name in files.namelist()))
                 self.assertFalse(any(name.startswith(("plugin_runtime/", "native_config/", "manager/")) for name in files.namelist()))
                 for script in ("scripts/plugin_service.py", "scripts/agent_config.py", "scripts/agent_config.sh"):
                     self.assertNotIn(script, files.namelist())
@@ -226,6 +230,93 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual(str(root / "product/WORKFLOW.md"), resource["path"])
                 self.assertFalse(resource["runtime_verified"])
                 self.assertEqual([], list(project.iterdir()))
+
+    def test_detached_awf_prototype_navigation_fingerprints_and_visual_gate(self):
+        """真实独立包从空项目创建 .awf，原型证据继续约束原有视觉门禁。"""
+        from tests.test_prototype_workspace import (
+            INDEX_HTML, PROTOTYPE_CSS, PAGE_HTML, bind_requirement_documents, tree_snapshot,
+        )
+        from tests.test_plugin_workflow_contract import visual_request
+
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                project = self.root / ("prototype-awf-" + host)
+                project.mkdir()
+                base = ["bash", str(root / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                        str(root / "plugins/source_pack.py"), "helper", "--project", str(project)]
+
+                def invoke(helper, *arguments):
+                    return subprocess.run([*base, helper, *map(str, arguments)], cwd=project,
+                                          env=isolated_environment(self.root / "prototype-context"),
+                                          capture_output=True, text=True, timeout=15)
+
+                applied = invoke("plugins/project_context.py", "apply", "--adapter", ".awf/project.yaml")
+                self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+                self.assertTrue(json.loads(applied.stdout)["created"])
+                prototype = project / "docs/standards/prototype"
+                prototype.mkdir(parents=True)
+                for name, body in (("index.html", INDEX_HTML), ("prototype.css", PROTOTYPE_CSS),
+                                   ("settings.html", PAGE_HTML)):
+                    (prototype / name).write_text(body, encoding="utf-8")
+                source, historical = bind_requirement_documents(project, adapter=".awf/project.yaml")
+                # 当前项目概况由这次原型交付维护，不能要求空项目 apply 自动创建文档。
+                # 没有实际验收基线，因此不把 active 需求冒写成 PROJECT 的已交付链接。
+                (project / "docs/PROJECT.md").write_text(
+                    "# 原型导航测试项目\n\n## 当前项目\n验证设置页原型交付。\n\n"
+                    "## 当前已验收基线\n当前原型尚未验收。\n", encoding="utf-8")
+                self.assertFalse((project / "project.yaml").exists())
+                # 角色的标准文档校验与原型校验消费同一已选适配器；包内原样角色
+                # 通过真实 helper 执行，不能只改示例文字却仍借用源码根配置。
+                role = (root / "roles/xy-uiux.md").read_text(encoding="utf-8")
+                self.assertIn("--adapter <selected-project-adapter>", role)
+                self.assertNotIn("validate_project_docs.py .agent-workflow/project.yaml", role)
+                checked_docs = invoke("lib/validate_project_docs.py", ".awf/project.yaml", project)
+                self.assertEqual(0, checked_docs.returncode, checked_docs.stdout + checked_docs.stderr)
+                before = tree_snapshot(project)
+                arguments = [project, "docs/standards/prototype", "--adapter", ".awf/project.yaml", "--json"]
+                first = invoke("lib/documents/validate_prototype_workspace.py", *arguments)
+                self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+                fingerprint = json.loads(first.stdout)["pages"][0]["dependency_fingerprint"]
+                same = invoke("lib/documents/validate_prototype_workspace.py", *arguments,
+                              "--expect", "settings.html=" + fingerprint)
+                self.assertEqual(0, same.returncode, same.stderr)
+                self.assertEqual(before, tree_snapshot(project))
+                # Markdown 与历史页继续安全导航，但不进入页面的画面依赖闭包。
+                source.write_bytes(source.read_bytes() + b"\nupdated requirements progress")
+                historical.write_bytes(historical.read_bytes() + b"\nretained historical note")
+                unchanged = invoke("lib/documents/validate_prototype_workspace.py", *arguments,
+                                   "--expect", "settings.html=" + fingerprint)
+                self.assertEqual(0, unchanged.returncode, unchanged.stderr)
+                missing_adapter = invoke("lib/documents/validate_prototype_workspace.py",
+                                         project, "docs/standards/prototype", "--json")
+                self.assertEqual(1, missing_adapter.returncode)
+                self.assertIn("--adapter", missing_adapter.stderr)
+                retired = invoke("lib/documents/requirement_html.py", "render")
+                self.assertEqual(2, retired.returncode)
+                self.assertIn("invalid choice", retired.stderr)
+                # 原有实际任务图消费刚取得的证据；没有用户视觉批准仍然不能 ready。
+                value, _ = visual_request("UI-Page")
+                value = json.loads(json.dumps(value).replace("b" * 64, fingerprint))
+                for task in value["tasks"]:
+                    if "controlled_document_access" in task:
+                        task["controlled_document_access"]["adapter"] = ".awf/project.yaml"
+                current = project / "current.json"
+                current.write_text(json.dumps(value), encoding="utf-8")
+                waiting = invoke("lib/task_graph_cli.py", "ready", "--input", current)
+                self.assertEqual(0, waiting.returncode, waiting.stderr)
+                self.assertEqual([], json.loads(waiting.stdout)["ready"])
+                value["approved_gates"].append("visual_approved:settings@" + fingerprint)
+                current.write_text(json.dumps(value), encoding="utf-8")
+                ready = invoke("lib/task_graph_cli.py", "ready", "--input", current)
+                self.assertEqual(0, ready.returncode, ready.stderr)
+                self.assertEqual(["web"], json.loads(ready.stdout)["ready"])
+                (prototype / "prototype.css").write_text(PROTOTYPE_CSS + "\nbody { color: red; }", encoding="utf-8")
+                stale = invoke("lib/documents/validate_prototype_workspace.py", *arguments,
+                               "--expect", "settings.html=" + fingerprint)
+                self.assertEqual(1, stale.returncode)
+                self.assertIn("fingerprint mismatch", stale.stderr)
+                self.assertFalse((project / "project.yaml").exists())
+                self.assertFalse((project / ".agent-workflow").exists())
 
     def test_packaged_interpreter_selector_locates_an_existing_supported_python(self):
         project = self.root / "interpreter-project"

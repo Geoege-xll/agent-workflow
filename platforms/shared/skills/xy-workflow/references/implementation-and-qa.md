@@ -33,8 +33,8 @@ there is no independent prototype QA. Unified QA below still reviews production 
 built-in rules, project-specific standards and real evidence. With a physically missing project index and
 no specific leaves, bind configured paths/null fingerprints; create no GENERAL/empty index or duplicated
 general rules for QA. Requirements review uses one Markdown source; implementers consume the complete
-current source/task pack. Requirements/plan HTML generation and freshness checks are suspended under
-[the retained reference](../../xy-plan/references/requirement-html.md). QA checks the source's actual scoped
+current source/task pack. Requirements/plan Markdown-to-HTML generation is retired under
+[the retained reference](../../xy-plan/references/requirements-markdown.md). QA checks the source's actual scoped
 prototype references and applicable Markdown/navigation contracts, reusing valid evidence without rescanning
 the prototype tree, adding approval or independent prototype QA. Existing HTML remains historical material.
 
@@ -95,6 +95,9 @@ instance identity, context and closure boundaries, without a separate pool.
    unrelated project work.
    QA receives the approved contract, applicable concrete page links/fingerprints, diff, current self-contained
    schema 2 QA pack and necessary approval/standards authority, without full sibling tasks or conversations.
+   The same project/request may declare only one QA task, including failed, passed and retired history;
+   original-Reviewer rework reuses that task and immutable identity. An unavailable Reviewer returns to PM
+   for explicit request recovery/acceptance handling, without automatically creating a replacement task.
    A new Reviewer must not inherit parent history. Bind the current QA pack's request/task/alias/agent_ref
    and byte SHA through schema_version:2 and handoff_ref. QA also receives evidence references,
    any task-relevant start-mode `memory_context` that actually exists, and the

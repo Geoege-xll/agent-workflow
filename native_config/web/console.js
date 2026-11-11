@@ -9,7 +9,7 @@
   const FIELD_LABELS = { model: "模型", effort: "推理级别" };
   const SOURCE_LABELS = { host: "宿主", host_unresolved: "宿主默认未观察", global: "用户级", user: "用户级", project: "项目", plugin: "插件" };
   const DEFINITION_LABELS = { shadowed: "被其他来源遮蔽", ambiguous: "定义存在歧义", disabled: "已禁用", installation_observed: "仅观察到安装，启用状态未知", effective_in_discovered_sources: "在已发现来源中生效，会话加载未验证" };
-  const SAVE_LABELS = { saved: "已保存", not_written: "未写入", rolled_back: "已回滚并恢复前像内容", rollback_conflict: "回滚冲突，已保留相关对象与资料", rolled_back_durability_unverified: "已恢复可见前像内容，磁盘耐久性未验证", recovery_required: "需要人工检查保留资料" };
+  const SAVE_LABELS = { saved: "已保存", published_location_unknown: "新内容已发布，目标当前位置未核实", not_written: "未写入", rolled_back: "已回滚并恢复前像内容", rolled_back_location_unknown: "已恢复前像内容，目标当前位置未核实", rollback_conflict: "回滚冲突，已保留相关对象与资料", rolled_back_durability_unverified: "已恢复可见前像内容，磁盘耐久性未验证", recovery_required: "需要人工检查保留资料" };
   const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
   const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
   const locationKey = location => JSON.stringify([location.host, location.scope, location.scope === "project" ? location.project : null]);
@@ -24,17 +24,27 @@
     const optionalBoolean = (record, key) => !own(record, key) || typeof record[key] === "boolean";
     const mode = value => Number.isInteger(value) && value >= 0 && value <= 0o7777;
     const path = value => typeof value === "string" && value.startsWith("/") && !/[\x00-\x1f]/.test(value);
+    const locationStatus = value => ["verified_at_finalization", "unknown"].includes(value);
+    const identity = value => value === null || (Array.isArray(value) && value.length >= 2 && value.every(Number.isInteger) && value[0] >= 0 && value[1] >= 0);
+    // unknown 必须配合空当前位置和原声明位置；既不能把旧路径继续渲染成可定位，
+    // 也不能接受只给 null 而没有可解释位置状态的任意错误正文。
+    const recoveryLocation = row => row.location_status === "unknown" ? row.backup === null && path(row.declared_backup) :
+      path(row.backup) && (!own(row, "location_status") || locationStatus(row.location_status)) &&
+      (!own(row, "declared_backup") || path(row.declared_backup));
     // HTTP 成功和明确失败共用同一收据边界。恢复路径只能按文字展示，不能据此发起文件操作；
     // isolated_object 可能是外部对象，摘要可为 null，权限数字只作为服务端报告的只读证据。
     if (!object(value) || typeof value.saved !== "boolean" || !object(value.effect) ||
-        ["partial_failure", "published", "namespace_touched", "temporary_visibility_gap", "context_unavailable"].some(key => !optionalBoolean(value, key)) ||
+        ["partial_failure", "published", "namespace_touched", "temporary_visibility_gap", "context_unavailable", "finalization_failed"].some(key => !optionalBoolean(value, key)) ||
         (own(value, "retention_policy") && typeof value.retention_policy !== "string") ||
+        (own(value, "finalization_error_type") && typeof value.finalization_error_type !== "string") ||
+        (own(value, "cleanup_pending_location_status") && !locationStatus(value.cleanup_pending_location_status)) ||
         ["saved", "pending_reload", "runtime_verified"].some(key => !optionalBoolean(value.effect, key)) ||
         (own(value, "results") && (!Array.isArray(value.results) || value.results.some(row => !object(row) || typeof row.role !== "string" || typeof row.status !== "string"))) ||
-        (own(value, "recovery") && (!Array.isArray(value.recovery) || value.recovery.some(row => !object(row) || typeof row.role !== "string" || !path(row.target) || !path(row.backup) ||
+        (own(value, "recovery") && (!Array.isArray(value.recovery) || value.recovery.some(row => !object(row) || typeof row.role !== "string" || !path(row.target) || !recoveryLocation(row) ||
           (own(row, "sha256") && row.sha256 !== null && (typeof row.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(row.sha256))) ||
           ["kind", "sha256_semantics", "retention", "object_role"].some(key => own(row, key) && typeof row[key] !== "string") ||
-          !optionalBoolean(row, "content_may_change") || (own(row, "container_mode") && !mode(row.container_mode)) ||
+          !optionalBoolean(row, "content_may_change") || ["observed_identity", "container_identity"].some(key => own(row, key) && !identity(row[key])) ||
+          (own(row, "container_mode") && !mode(row.container_mode)) ||
           (own(row, "original_mode") && row.original_mode !== null && !mode(row.original_mode))))) ||
         (own(value, "cleanup_pending") && (!Array.isArray(value.cleanup_pending) || value.cleanup_pending.some(item => !path(item))))) {
       throw new ApiError("invalid_response", "保存回执格式无效，草稿已保留；请重新读取配置后确认。", status);
@@ -533,6 +543,7 @@
     details.append(node("p", "", "文件保存标志：" + (result.saved ? "服务报告已保存" : "服务未确认完整保存")));
     const flags = [["published", "新内容正式发布"], ["namespace_touched", "文件命名空间变动"], ["temporary_visibility_gap", "曾出现短暂可见性缺口"]];
     for (const [key, label] of flags) if (own(result, key)) details.append(node("p", "", label + "：" + (result[key] ? "是" : "否")));
+    if (result.finalization_failed === true) details.append(node("p", "", "最终收尾未完成：已发生的发布与命名空间变动仍以本收据为准；当前位置可能未核实。"));
     if (typeof result.effect.pending_reload === "boolean") details.append(node("p", "", result.effect.pending_reload ? "宿主状态：待重新加载" : "宿主状态：未声明待重载，实际加载仍未观察"));
     if (typeof result.retention_policy === "string") details.append(node("p", "", "保留策略：" + (result.retention_policy === "until_explicit_safe_cleanup_contract" ? "等待明确的安全清理约定；本页只展示资料" : result.retention_policy)));
     for (const entry of result.results || []) {
@@ -542,7 +553,15 @@
     for (const entry of result.recovery || []) {
       const recovery = node("div", "recovery-item");
       const kind = entry.kind === "preview_preimage" ? "预览前像副本（与原文件对象分开）" : entry.kind === "isolated_object" ? "隔离保留对象（原文件或外部对象）" : entry.kind ? "保留对象 · " + entry.kind : "保留对象（类型未提供）";
-      recovery.append(node("p", "", "资料类型：" + kind), node("p", "", "目标路径：" + entry.target), node("p", "", "保留资料路径（只读）：" + entry.backup));
+      recovery.append(node("p", "", "资料类型：" + kind), node("p", "", "原声明目标路径：" + entry.target));
+      if (entry.location_status === "unknown") {
+        recovery.append(node("p", "", "保留资料当前位置：未知；父目录位置未完成核实，服务未扫描查找。"),
+          node("p", "", "保留资料原声明位置（非当前位置）：" + entry.declared_backup));
+      } else {
+        recovery.append(node("p", "", "保留资料路径（收尾时核实，只读）：" + entry.backup));
+      }
+      if (Array.isArray(entry.observed_identity)) recovery.append(node("p", "", "观察到的对象身份（设备号 / inode）：" + entry.observed_identity.slice(0, 2).join(" / ")));
+      if (Array.isArray(entry.container_identity)) recovery.append(node("p", "", "观察到的容器身份（设备号 / inode）：" + entry.container_identity.join(" / ")));
       const hashLabel = entry.sha256_semantics === "immutable_preview_bytes" || entry.kind === "preview_preimage" ? "预览副本 SHA256" : entry.sha256_semantics === "observed_at_isolation_not_current" || entry.kind === "isolated_object" ? "隔离时观察 SHA256（非当前内容）" : "服务记录 SHA256（观察时点未提供）";
       recovery.append(node("p", "", hashLabel + "：" + (typeof entry.sha256 === "string" ? entry.sha256 : "服务未提供摘要")));
       if (typeof entry.content_may_change === "boolean") recovery.append(node("p", "", entry.content_may_change ? "对象内容：可能继续变化" : "对象内容：服务声明为不可变副本"));
@@ -553,7 +572,8 @@
       if (entry.kind === "isolated_object") recovery.append(node("p", "", "隔离对象可能继续被已有文件描述符修改；摘要仅表示服务观察时的内容。"));
       details.append(recovery);
     }
-    for (const path of Array.isArray(result.cleanup_pending) ? result.cleanup_pending : []) if (typeof path === "string") details.append(node("p", "", "待清理的暂存文件：" + path));
+    const cleanupLabel = result.cleanup_pending_location_status === "unknown" ? "待清理暂存文件原声明位置（当前位置未核实）：" : "待清理的暂存文件：";
+    for (const path of Array.isArray(result.cleanup_pending) ? result.cleanup_pending : []) if (typeof path === "string") details.append(node("p", "", cleanupLabel + path));
     const serviceError = typeof result.error === "string" ? result.error : object(result.error) && typeof result.error.message === "string" ? result.error.message : null;
     if (serviceError) details.append(node("p", "", "服务错误：" + serviceError));
     if (typeof result.context_diagnostic === "string") details.append(node("p", "", "回读诊断：" + result.context_diagnostic));
@@ -570,7 +590,9 @@
     const reportedSaved = result.saved === true && result.effect.saved !== false && !result.partial_failure && (result.results || []).every(row => row.status === "saved");
     const mixed = !error && reportedSaved && own(result, "error");
     const cleanup = Boolean(result.cleanup_pending?.length);
-    const summary = mixed ? "服务报告文件已保存，同时返回错误或清理事项。请检查逐项结果与保留资料，关闭结果后重新读取。" : failed ? "配置未完整保存。请检查逐项结果与保留资料；当前编辑已保留，关闭结果后重新读取。" : "配置已保存。" + (cleanup ? "另有暂存文件待清理。" : "") + "服务保留的原文件对象与前像资料如下。";
+    const summary = mixed ? "服务报告文件已保存，同时返回错误或清理事项。请检查逐项结果与保留资料，关闭结果后重新读取。" : failed ?
+      (result.finalization_failed === true && result.published === true ? "新内容已发生发布，但完整请求的最终收尾未获确认。" : "配置未完整保存。") +
+      "请检查逐项结果与保留资料；当前编辑已保留，关闭结果后重新读取。" : "配置已保存。" + (cleanup ? "另有暂存文件待清理。" : "") + "服务保留的原文件对象与前像资料如下。";
     message((error ? "HTTP " + error.status + "：" + error.message + " " : "") + summary + applyReloadState(result) + "；实际运行未验证。", mixed || (!failed && cleanup) ? "warning" : failed ? "error" : "success", $("apply-feedback"));
     render();
   }

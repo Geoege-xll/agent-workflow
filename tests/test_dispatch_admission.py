@@ -314,6 +314,97 @@ class AdmissionTest(unittest.TestCase):
         self.assertEqual(1, cli.admission("view", self.manifest)["active_subagents"])
         self.assertEqual(0, cli.admission("view", self.manifest)["active_writers"])
 
+    def test_actual_cli_rejects_same_request_duplicate_qa_before_any_claim(self):
+        """复现两个合法空owned/locks的QA；真实核心校验先拒绝，view/claim均不写记录。"""
+        from tests.test_scheduler_boundaries import v2_task
+        path = self.add_record("a", state="BUILD_VERIFIED")
+        def append_reviewers(value):
+            for task_id in ("qa1", "qa2"):
+                value["tasks"].append(v2_task({"id": task_id, "request_id": "a", "task_type": "qa",
+                    "state": "DECLARED", "depends_on": [], "blocks": [], "gates": [],
+                    "owned_paths": [], "semantic_locks": []}))
+        self.modify(path, append_reviewers)
+        self.manifest["records"][0]["execution_roots"].update(qa1=str(self.project), qa2=str(self.project))
+        manifest = self.workspace / "duplicate-reviewers.json"
+        manifest.write_text(json.dumps(self.manifest), encoding="utf-8")
+        before = path.read_bytes()
+        for command, task_id in (("view", None), ("claim", "qa1"), ("claim", "qa2")):
+            arguments = [*PYTHON, str(PACK / "lib/dispatch_admission_cli.py"), command, "--input", str(manifest)]
+            if task_id:
+                arguments.extend(["--record", str(path), "--request-id", "a", "--task-id", task_id])
+            rejected = subprocess.run(arguments, env=self.environment, cwd=self.project,
+                                      capture_output=True, text=True, timeout=30)
+            self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+            self.assertIn("one QA task per request", rejected.stderr)
+            self.assertEqual(before, path.read_bytes())
+
+    def test_cross_record_qa_identity_stays_unique_including_history_and_requests_remain_independent(self):
+        original = self.add_record("original-review", level="Light", task_type="qa")
+        second = self.add_record("second-review", level="Light", task_type="qa")
+        self.assertEqual([self.key(original), self.key(second)], cli.admission("view", self.manifest)["candidates"])
+        self.modify(second, lambda value: value["task"].update(request_id="original-review"))
+        for state in ("DECLARED", "RUNNING", "QA_PASSED", "FAILED"):
+            self.modify(original, lambda value: value["task"].update(state=state))
+            before = (original.read_bytes(), second.read_bytes())
+            for command in ("view", "claim"):
+                with self.subTest(state=state, command=command), self.assertRaisesRegex(ValueError, "one QA task per request"):
+                    cli.admission(command, self.manifest, self.key(second) if command == "claim" else None)
+            self.assertEqual(before, (original.read_bytes(), second.read_bytes()))
+
+    def test_original_reviewer_delta_review_preserves_identity_and_idempotent_running_update(self):
+        """复查更新同一QA，不能重新claim或换绑；既有失败恢复及幂等状态语义保留。"""
+        path = self.add_record("review", level="Light", task_type="qa")
+        self.assertEqual("claimed", cli.admission("claim", self.manifest, self.key(path))["status"])
+        reference = {"host": "codex", "agent_id": "fixture-original-reviewer"}
+        def update(fields):
+            return subprocess.run([*PYTHON, str(PACK / "lib/task_graph_cli.py"), "update", "--input", str(path),
+                "--expect-sha256", records.digest(path.read_bytes()), "--patch", "-"],
+                input=json.dumps({"tasks": {"api": {"set": fields}}}), env=self.environment,
+                cwd=self.project, capture_output=True, text=True, timeout=30)
+        for fields in ({"agent_ref": reference}, {"state": "RUNNING", "agent_ref": reference},
+                       {"state": "FAILED"}, {"state": "RUNNING"}, {"state": "QA"}):
+            observed = update(fields)
+            self.assertEqual(0, observed.returncode, observed.stdout + observed.stderr)
+        before = path.read_bytes()
+        rejected = update({"agent_ref": {**reference, "agent_id": "another-reviewer"}})
+        self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+        self.assertEqual(before, path.read_bytes())
+        self.refresh(path)
+        self.assertEqual([], cli.admission("view", self.manifest)["candidates"])
+        with self.assertRaisesRegex(ValueError, "not an admitted"):
+            cli.admission("claim", self.manifest, self.key(path))
+        self.assertEqual(reference, json.loads(path.read_bytes())["task"]["agent_ref"])
+
+    def test_actual_git_scopes_share_reviewer_across_worktrees_but_not_other_repositories(self):
+        """以真实Git共同目录投影身份，同名request跨仓独立、跨worktree仍属同请求。"""
+        from lib.dispatch_admission import select_candidates
+        def git(root, *arguments):
+            return subprocess.run(["git", "-C", str(root), *arguments], check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        git(self.project, "init", "-q")
+        git(self.project, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "--allow-empty", "-qm", "fixture")
+        worktree = self.workspace / "review-worktree"
+        git(self.project, "worktree", "add", "--detach", "-q", str(worktree), "HEAD")
+        other = self.workspace / "independent-project"
+        other.mkdir()
+        git(other, "init", "-q")
+        path = self.add_record("shared-request", level="Light", task_type="qa")
+        original = json.loads(path.read_bytes())
+        views = []
+        for index, root in enumerate((self.project, worktree, other)):
+            source = root / f"review-{index}.json"
+            source.write_text(json.dumps(original), encoding="utf-8")
+            manifest = {**self.manifest, "project_root": str(root), "records": [{"path": str(source),
+                "sha256": records.digest(source.read_bytes()), "execution_roots": {"api": str(root)}}]}
+            views.append(cli._load(manifest)[1][0])
+        self.assertEqual(views[0].semantic_scope, views[1].semantic_scope)
+        self.assertNotEqual(views[0].semantic_scope, views[2].semantic_scope)
+        with self.assertRaisesRegex(ValueError, "one QA task per request"):
+            select_candidates(tuple(views[:2]), self.manifest["capacity"])
+        admitted = select_candidates((views[0], views[2]), self.manifest["capacity"])
+        self.assertEqual(2, len(admitted["candidates"]))
+
     def test_actual_source_cli_and_invalid_schema_return_json_exit_two(self):
         path = self.add_record("a")
         manifest = self.workspace / "manifest.json"

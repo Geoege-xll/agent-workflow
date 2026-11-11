@@ -36,7 +36,7 @@ branches, or add confirmation.
   nav.prototype-requirement-links requires one explicit markdown link and allows one html link only
   when the corresponding historical file exists; the body's data-prototype-plan-source binds the
   canonical Markdown under the configured plans directory. Every document link opens independently
-  with target="_blank" and rel containing noopener. HTML generation/freshness checks are suspended.
+  with target="_blank" and rel containing noopener. Plan Markdown-to-HTML generation is retired.
   Leave unbound templates empty without fabricated links. The iOS/PC product area is a horizontally
   centered fixed artboard; the Web product area defaults to a naturally expanding responsive webpage.
   The contract area stays outside the product area and is collapsible by default; it does not consume

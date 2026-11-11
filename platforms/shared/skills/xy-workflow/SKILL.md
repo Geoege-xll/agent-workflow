@@ -67,9 +67,8 @@ always belongs to the actual project's `.agent-workflow/project.yaml`.
 
 Formal Full requirements review uses one Markdown source. PM keeps any pre-approval draft in the current
 request scratch, saves the approved plans `.md` before dispatch, and writes prototype coverage back to it.
-Requirements/plan HTML generation and freshness checks are suspended under
-[the retained reference](../xy-plan/references/requirement-html.md); preserve historical HTML and renderer
-source. Document existence creates no approval and replaces neither requirement nor prototype fingerprints.
+Requirements/plan Markdown-to-HTML generation is retired under
+[the retained reference](../xy-plan/references/requirements-markdown.md); preserve historical plan HTML and the active prototype workflow. Document existence creates no approval and replaces neither requirement nor prototype fingerprints.
 
 Use host-native aliases only when explicit activation is needed. Examples:
 `xy-project-memory` (Codex: `$xy-project-memory`; Claude Code: `/xy-project-memory`;

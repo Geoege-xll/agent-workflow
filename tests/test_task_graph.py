@@ -358,6 +358,17 @@ class BuiltinSourceContractTest(unittest.TestCase):
 
 
 class TaskGraphTest(unittest.TestCase):
+    def test_one_qa_declaration_per_request_includes_pending_active_and_historical_reviewers(self) -> None:
+        """唯一Reviewer属于请求合同，空路径/锁与旧实例失效都不能授权另一个QA声明。"""
+        for state in ("DECLARED", "RUNNING", "QA", "QA_PASSED", "FAILED"):
+            tasks = [Task("original-qa", "request-a", task_type="qa", state=state),
+                     Task("second-qa", "request-a", task_type="qa")]
+            with self.subTest(state=state), self.assertRaisesRegex(TaskGraphError, "one QA task per request"):
+                validate_graph(tasks)
+        # 同一个Reviewer的后续状态仍只有一个QA节点；不同请求独立选择其Reviewer。
+        validate_graph([Task("original-qa", "request-a", task_type="qa", state="QA"),
+                        Task("independent-qa", "request-b", task_type="qa")])
+
     def test_tasks_without_dependencies_are_ready_in_deterministic_order(self) -> None:
         tasks = [
             Task("ui", "req-1", owned_paths=("docs/design/",)),

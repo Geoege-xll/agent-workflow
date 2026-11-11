@@ -12,7 +12,7 @@ Use a new output directory for each candidate. The command emits deterministic
 plugin ZIP files and complete source directories under `local/`, including the
 official local marketplace manifests. Each marketplace references only its own
 real `plugins/agent-workflow` directory. No source checkout, runtime installer,
-Node package installation or configuration service is required after building.
+Node runtime, package installation or configuration service is required after building.
 Each `*-local-source.zip` is a shareable copy of that complete host-specific
 directory. Unpack it into a new folder, then pass the unpacked folder to the
 marketplace/directory commands below. The separate plugin ZIP is not a marketplace

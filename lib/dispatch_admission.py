@@ -84,6 +84,7 @@ def select_candidates(records: tuple[RecordView, ...], capacity: dict[str, int])
     locks: set[tuple[str, str]] = set()
     threads = writers = unbound_claims = 0
     references: set[tuple[str, str]] = set()
+    reviewers: dict[tuple[str, str], dict[str, str]] = {}
     for record in records:
         scope = record.semantic_scope or record.project_root
         if record.external_paths and record.external_resources is None:
@@ -91,6 +92,16 @@ def select_candidates(records: tuple[RecordView, ...], capacity: dict[str, int])
         paths.extend(record.external_resources or ())
         locks.update((scope, item) for item in record.external_semantic_locks)
         for task in record.tasks:
+            if task["task_type"] == "qa":
+                # 单图校验之外，Light包或拆分的权威记录也必须共享同一个请求
+                # Reviewer。scope来自CLI核实的物理Git共同目录（非Git项目为
+                # 实际项目根），不能用执行worktree字符串或全局request_id合并。
+                # 历史节点仍占其请求归属；不按活动状态选另一人，也不持久化账本。
+                request = (scope, task["request_id"])
+                if request in reviewers:
+                    raise TaskGraphError(f"one QA task per request is required across authoritative records: "
+                                         f"{task['request_id']} ({reviewers[request]}, {task_key(record, task)})")
+                reviewers[request] = task_key(record, task)
             reference = task.get("agent_ref")
             if reference is not None:
                 identity = (reference["host"], reference["agent_id"])

@@ -14,7 +14,6 @@ from unittest import mock
 
 from lib.documents import validate_prototype_workspace as validator
 from lib.documents import prototype_navigation
-from lib.documents import requirement_html
 from tests.test_prototype_workspace import (
     PAGE_HTML,
     PROTOTYPE_RELATIVE,
@@ -37,7 +36,7 @@ class PrototypeFingerprintTest(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = validator.main([
                 "validate_prototype_workspace.py", str(self.project),
-                PROTOTYPE_RELATIVE.as_posix(), *arguments,
+                PROTOTYPE_RELATIVE.as_posix(), "--adapter", "project.yaml", *arguments,
             ])
         return code, stdout.getvalue(), stderr.getvalue()
 
@@ -364,21 +363,19 @@ class PrototypeFingerprintTest(unittest.TestCase):
     def test_requirement_documents_are_checked_without_joining_the_render_fingerprint(self) -> None:
         """真实导航安全与资源闭包分开；Markdown 修订不依赖旧 HTML 新鲜度或反向扫描。"""
         source, _ = bind_requirement_documents(self.project)
-        with mock.patch.object(requirement_html, "renderer_identity", side_effect=AssertionError("导航不校验 renderer 身份")), \
-                mock.patch.object(requirement_html, "stage_markdown", side_effect=AssertionError("导航不回扫文档链接")):
-            before = self.fingerprints()
-            # 只修订 Markdown，故意不更新旧 HTML；原稿进度和反向链接变化不能制造
-            # 计划↔原型校验循环，也不能重算无关页面的视觉证据或要求暂停的渲染器。
-            source.write_text(source.read_text(encoding="utf-8") +
-                              "\n[历史关联](../standards/prototype/removed-page.html)\n", encoding="utf-8")
-            after = self.fingerprints()
+        before = self.fingerprints()
+        # 只修订 Markdown，故意不更新旧 HTML；进度和反向链接变化不能制造
+        # 计划与原型校验循环，也不能改变无关页面的视觉证据。
+        source.write_text(source.read_text(encoding="utf-8") +
+                          "\n[历史关联](../standards/prototype/removed-page.html)\n", encoding="utf-8")
+        after = self.fingerprints()
         self.assertEqual(before, after)
 
     def test_requirement_document_replacement_before_success_is_rejected(self) -> None:
         """单独核对新加入的导航输入竞态，现有资源节点身份覆盖不包含 plans 文件。"""
         source, historical_html = bind_requirement_documents(self.project)
         original = prototype_navigation.RequirementNavigation.require_current_inputs
-        for target in (source, historical_html):
+        for target in (source, historical_html, self.project / "project.yaml"):
             # 每次负控只替换当前目标；前一轮完成的字节可以作为下一轮的合法起点，
             # 不要求恢复旧派生记录，也不新增第二份任务夹具。
             def replace_before_result(navigation) -> None:

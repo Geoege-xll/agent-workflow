@@ -11,6 +11,7 @@ import argparse
 import importlib
 from pathlib import Path
 import re
+import shutil
 import sys
 import unittest
 
@@ -23,15 +24,20 @@ def modules(*names):
 # service/tui 与 pty 按真实节点拆开，因此普通单元验证不会隐式启动伪终端。
 GROUPS = {
     # 两个当前产品各自声明真实模块，不混入旧安装器/TUI/PTY或另一产品生命周期。
+    # records 只选择插件实际使用的记录/发布/CLI/临时目录合同；历史三宿主安装
+    # 夹具仍留在 full，不能借此宣称已经修复或通过旧安装器的完整兼容验收。
     "plugin": modules("plugin_delivery", "plugin_resources", "plugin_workflow_contract",
-                      "continuous_intake_capabilities", "agent_continuation", "dispatch_admission", "task_settlement"),
+                      "continuous_intake_capabilities", "agent_continuation", "dispatch_admission", "task_settlement",
+                      "task_graph", "scheduler_boundaries") + tuple(
+                          "tests.test_task_graph_records." + name for name in (
+                              "RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")),
     "native-config": modules("native_config", "native_inventory", "native_config_codecs",
                              "native_config_server", "native_config_mcp", "native_config_packaging", "plugin_console"),
     "codex": modules("codex_workflow", "shared_memory_contract"),
     "claude": modules("claude_workflow", "claude_instructions", "shared_memory_contract"),
     "antigravity": modules("antigravity_workflow"),
-    "prototype": modules("prototype_workspace"),
-    "packaging": modules("homebrew_packaging"),
+    "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace"),
+    "packaging": modules("plugin_delivery", "native_config_packaging", "candidate_delivery"),
     "central": modules("central_project", "runtime_store", "runtime_state", "central_runtime", "runtime_lifecycle") + (
         "tests.test_workflow_manager.CentralCliIntegrationTest",
         "tests.test_workflow_manager.InstalledProjectIntegrationTest",
@@ -59,29 +65,35 @@ GROUPS["hosts"] = (
     + modules("unified_host_workflow", "antigravity_upgrade_boundaries", "claude_options",
               "bootstrap_routing", "astra_instruction_adaptation", "project_role_lifecycle")
 )
-# legacy CI 保留2.x CLI/pin/中央软链、真实PTY、旧归档及Ruby消费者的原有范围，
+# legacy CI 保留2.x CLI/pin/中央软链和真实PTY的显式维护范围，
 # 不代表两个当前产品的3.0全套验收；当前产品请显式选plugin或native-config。
-GROUPS["ci"] = (
+GROUPS["legacy-ci"] = (
     modules("validation_runner")
     + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
     + modules("central_project", "runtime_state", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli")
     + ("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",
        "tests.test_manager_tui.TuiTest.test_runtime_actions_use_captured_context_and_modal_focus")
     + ("tests.test_unified_host_workflow.UnifiedSetupContractTest.test_all_hosts_generate_core_skills_from_one_shared_source",)
-    + modules("requirement_html") + GROUPS["pty"] + GROUPS["packaging"]
+    + GROUPS["pty"]
 )
+# 保留现有显式调用的兼容别名；自动 PR/push 门禁只消费 current。
+GROUPS["ci"] = GROUPS["legacy-ci"]
+GROUPS["current"] = (modules("validation_runner", "candidate_delivery") + GROUPS["plugin"]
+                     + GROUPS["native-config"] + GROUPS["prototype"])
 
 
 def make_parser():
     parser = argparse.ArgumentParser(
         description="唯一 unittest 入口；无参数只显示帮助；full 是混合历史全仓显式发现，不代表3.0全套。",
         epilog=("当前产品组：plugin、native-config；两者均不隐式运行PTY。\n"
-                "legacy/通用预置组：" + ", ".join(name for name in GROUPS if name not in {"plugin", "native-config"}) + "。\n"
+                "current：两个产品、保留原型链、验证入口和候选交付合同；是当前PR/push门禁。\n"
+                "legacy/通用预置组：" + ", ".join(name for name in GROUPS if name not in {"plugin", "native-config", "current"}) + "。\n"
+                "ci 是 legacy-ci 的兼容别名，仅维护2.x；不代表当前产品门禁。\n"
                 "full：显式发现全部现有test_模块，包含尚未退役的2.x夹具。\n"
                 "节点：tests.test_模块[.测试类[.test_方法]]；允许与组组合。\n"
                 "示例：bash scripts/test_workflow.sh --list plugin native-config\n"
                 "      bash scripts/test_workflow.sh plugin tests.test_task_graph_init\n"
-                "依赖：Python >= 3.11；requirement_html/ci 需要 Node，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
+                "依赖：Python >= 3.11；native-config/current 的网页JS需要 Node；PTY 需要 POSIX。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--list", action="store_true", help="校验后逐行显示实际测试目标，不运行测试")
@@ -160,6 +172,11 @@ def main():
     for _, tests in collected:
         for case in tests:
             cases.setdefault(case.id(), case)
+    # 网页 JS 是当前产品的真实消费者。显式选择它却没有 Node 时必须失败，
+    # 避免 unittest 的历史 skip 装饰器让 current 门禁在缺依赖时显示绿色。
+    if (any(name.startswith("tests.test_plugin_console.ConsoleJavascriptTest.") for name in cases)
+            and shutil.which("node") is None):
+        parser.error("原生配置网页 JS 验证需要已有 Node；未执行测试")
     result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(cases.values()))
     return 0 if result.wasSuccessful() else 1
 

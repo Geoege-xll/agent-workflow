@@ -1,138 +1,27 @@
-# 2.x Homebrew 安装与历史发行构建
+# 2.x Homebrew 历史渠道与现有安装维护
 
-本页仅适用于 2.x 现有安装。3.0 使用官方插件载荷，另有独立的原生 Agent 配置工具；见[插件说明](plugin-v3.md)和[配置工具说明](agent-configuration.md)。候选构建不更新 Tap，也不表示下文的旧发行脚本已完成 3.0 适配。
+本页用于识别和维护已有的 2.x 安装。当前 3.0 工作流采用官方插件，原生 Agent 配置工具独立交付；入口见[插件说明](plugin-v3.md)和[配置工具说明](agent-configuration.md)。本轮源码清理不卸载或修改用户已安装的 Tap 程序、中央状态及业务项目。
 
-日常项目管理见[使用手册](usage.md)，源码结构与维护见[开发手册](development.md)，快速入口见 [README](../README.md)。
+## 核对现有来源
 
-源码仓库：<https://github.com/Geoege-xll/agent-workflow>，公开 Tap 为
-`Geoege-xll/homebrew-tap`，Formula 名称为 `Geoege-xll/tap/awf-cli`。
-发行归档、校验文件与 Formula 来自同一次构建。Tap 使用对应 Release 的 Formula，
-安装时核对归档 SHA-256；用已安装入口的 `--version` 核对实际版本和中央程序位置。
+源码仓库为 [agent-workflow](https://github.com/Geoege-xll/agent-workflow)，历史 Tap 为 `Geoege-xll/homebrew-tap`，Formula 名称为 `Geoege-xll/tap/awf-cli`。公开版本与资产分别以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 和 Tap 中的声明为准；当前开发候选不代表这些渠道已经发布相应版本。
 
-当前源码版本为 **2.1.3**，唯一人工维护值在 `product/VERSION`。
-源码版本不代表公开渠道已发布该版本；GitHub 已公开的版本与资产以
-[Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准，Homebrew 版本以 Tap 中的 Formula 为准。
-下面的公共安装命令只安装 Tap 已声明的版本；发布 GitHub Release 不会自动更新公共 Tap，
-安装后应以 `awf-cli --version` 核对实际取得的版本与来源。
-
-## 用户安装
-
-按公共 Tap 当前声明的版本安装或升级：
-
-```bash
-brew install Geoege-xll/tap/awf-cli
-awf-cli
-
-brew update
-brew upgrade Geoege-xll/tap/awf-cli
-```
-
-Homebrew 将完整程序装入当前版本的 `libexec`，并在 Homebrew 的 `bin` 中提供
-`awf-cli`。Formula 声明 `python@3.14` 与 `node`（需求 HTML CLI，要求 >= 20）依赖；包装器仅为其子进程选择默认解释器，
-不修改 PATH、CDPATH 或 shell 配置。非空的 `AGENT_WORKFLOW_PYTHON` 显式设置仍被保留：
-相对解释器仍按调用目录解析，无效解释器仍报错，不自动回退。
-现有 `workflow.sh`、共享 Python 选择器及项目安装编排均不改变。
-同一运行时载荷包含 `lib/documents/requirement_html.py`、原样 bundled CLI/许可证和
-[需求 HTML 方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)。它按需渲染，
-setup 不启动渲染器；不需要全局 npm 安装，缺失 Node 只阻塞需要重新生成的需求页。
-
-无需也不建议再运行 `awf-cli --install-cli`：Homebrew 已经管理命令入口，额外注册的
-用户链接可能在升级后仍指向旧版本。源码入口默认注册 `awf-dev`，不会抢占正式 `awf-cli`；以前安装过源包命令时，先只读检查：
+现有用户可只读核对：
 
 ```bash
 type -a awf-cli
-"$(brew --prefix)/bin/awf-cli" --version
+awf-cli --version
 brew list --versions awf-cli
 ```
 
-如果旧的 `~/.local/bin/awf-cli` 优先，核对后自行决定是否移除旧链接；不要自动覆盖，
-也不要使用 `brew link --overwrite` 解决来源不明的同名入口。本方案不安装或调整
-Homebrew 自身；若 Homebrew 的 `bin` 不在现有 PATH，使用以上完整路径启动。
+Homebrew 管理的命令和源码注册命令应按物理来源区分。来源不明时先查入口和已安装版本，沿用[2.x 使用手册](usage.md)中的检查、事务恢复与固定任务保护规则。CLI 版本、磁盘文件和配置校验不证明宿主会话已经加载或按指定模型运行。
 
-`--version` 不启动 TUI、不读取模型来源，也不创建管理状态。源码入口读取 `product/VERSION`，
-明确显示源码身份；构建发行载荷使用与该值一致的生成元数据，并显示物理载荷根。
-发行元数据仅写入归档中的 `manager/release.json`，随 Formula 复制到 `libexec`，源码不保留发行标记。
-源码、归档与 Cellar 的中央源根可以据此直接比较。
-2.1.3 容量修复使用新的补丁版本归档和 Formula，不覆盖已公开的 2.1.2 资产、标签或校验值。
+## 历史发行来源
 
-`brew upgrade` 只采用 Tap 已声明的版本；GitHub 上另有较新的 Release 或本地候选，不会让旧 Formula 自动升级。
+2.x 的发行与 Formula 构建应使用对应历史源版本。[保全基线中的完整发行说明](https://github.com/Geoege-xll/agent-workflow/blob/de847fd6e10de5b31d04591b4fe596808ae8fa1d/docs/homebrew.md)保留归档、解释器包装、校验、Tap 发布及已有安装恢复边界。
 
-`brew upgrade` 只更新中央程序，不自动安装、选版或同步任何项目，也不会自动恢复未结算中央事务。
-容量中断后沿用原状态和宿主范围，先用 `runtime recover --dry-run` 核对条件恢复，详见使用手册。
-项目使用 `add` / `list` /
-`del` / `open` / `close` 及 `use` / `follow` / `rollback` / `repair` 管理，写入前可用 `--dry-run` 预览。
-先用 `runtime install` 导入核心，再 `runtime activate CONTENT_ID` 激活 current；已启用 follow 项目随中央切版，
-pinned 项目保留锁版，停用项目保持停用。`runtime rollback` 和 `runtime recover` 均先支持只读预览。
-`runtime cleanup` 默认只读盘点备份/核心，`--apply` 才执行；中断后用 `runtime cleanup --recover` 核对，
-再追加 `--apply` 恢复原清理。它不猜测或删除任意旧目录，显式旧归档授权和任务pin保护见使用手册。
-2.1 采用普通中央安装，不提供旧版本兼容升级；旧工作流须在任务收尾和文档、专有配置保全后，
-按明确受管归属单独移除，再运行 `open`。`brew uninstall awf-cli` 不删除项目内工作流、
-项目配置或 `~/.config/agent-workflow` 中的用户数据。
+3.0 开发源码已退役 `packaging/build_release.py`、旧 Formula 模板和专属归档测试。当前主 README 与手册围绕两个独立产品维护，候选分别使用官方插件构建器和原生配置构建器。新的构建入口、输出与原生验收限制见[3.0 插件说明](plugin-v3.md)。
 
-## 本地构建（不联网、不安装、不发布）
+计划 HTML 生成器和专用 vendor 同时退役，计划以 Markdown 交付。原型设计、原型 HTML、原型验收、视觉确认和已有历史计划页面保留。公开旧 Formula 仍可能声明原来的运行依赖，源码退役不会自动重写已发布 Tap 或本机 Cellar。
 
-在源码根目录使用现有 Python 选择器；构建版本必须与 `product/VERSION` 一致：
-
-```bash
-bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.3
-```
-
-生成：
-
-- `dist/agent-workflow-2.1.3.tar.gz`
-- `dist/agent-workflow-2.1.3.tar.gz.sha256`
-- `dist/Formula/awf-cli.rb`
-
-发行包使用运行所需文件/目录白名单，不包含 `.sync-backups`、Git 元数据、发行输出、
-测试、发布工具或 Python 缓存。文档仅显式包含 `docs/usage.md`、`docs/development.md`、
-`docs/homebrew.md`，保留 README 的离线导航；不递归打包整个 docs，历史 plans、原型与私有材料仍排除。
-存在的根目录许可证会一并打包，但构建器不替作者选择
-或生成许可证。发行前应确认代码授权方式及适用许可证。
-
-归档固定排序、时间戳、所有者及权限；在源内容/可执行位及工具链一致时，重复构建得到
-相同字节。Formula 的 URL 指向同一版本的 **Release 资产**，SHA-256 来自本次构建的
-确切压缩包，不能改用 GitHub 自动生成的 Source code 压缩包。
-已有输出一律保留，重建请用新的空目录：
-
-```bash
-bash lib/python_runtime.sh -I -B -X utf8 packaging/build_release.py 2.1.3 --output-dir /path/to/new-output
-```
-
-离线测试在独立临时目录中验证发行包及实际 Formula 的安装方法、模拟 Cellar 启动器、
-路径含空格、相对项目参数、CDPATH/PATH 保留和显式解释器约束；测试不改 PATH、
-不运行 `brew install`、不操作真实项目。模拟安装不等于真实 Homebrew 验收。
-生成 Formula 的测试还会通过安装后的入口核对 `--version` 与 `libexec`，并检查实际归档及安装后手册的相对链接可解析，
-不只检查 Formula 的版本字符串。
-
-## 发布边界
-
-所有创建远端仓库、上传代码、发布资产和推送 Tap 的操作均需明确确认后执行。
-本地构建器不执行这些操作；当前源包也不自动初始化 Git 或同步项目。
-
-1. 核对源码上传清单和授权方式，将审阅过的源文件推送到
-   `Geoege-xll/agent-workflow`。`.gitignore` 排除本地备份、缓存及 `dist/`。
-2. 在源码仓库的 **Actions → Prepare release → Run workflow** 输入与 `product/VERSION` 一致的版本 `2.1.3`
-   （不带 `v`），并选择希望发布的分支。工作流先运行离线打包测试，再构建三份产物，
-   然后创建 **Draft Release**；它不会自动公开 Release，也不会推送 Tap。
-3. 核对 Draft 的目标提交、压缩包、校验文件和 `awf-cli.rb` 后，再手动发布 Release。
-   同名标签若指向另一个提交则拒绝，已有 Release/资产也不会自动替换。
-4. 从该 Release 下载 `awf-cli.rb`，将其作为公开仓库 `Geoege-xll/homebrew-tap`
-   的 `Formula/awf-cli.rb` 更新、提交并推送。
-   应使用该 Release 同一次构建的 Formula，不混用其他本地构建的校验值。
-5. 在获准的机器上完成真实安装验收：
-
-   ```bash
-   brew install --build-from-source Geoege-xll/tap/awf-cli
-   brew test Geoege-xll/tap/awf-cli
-   "$(brew --prefix)/bin/awf-cli" --help
-   ```
-
-工作流仅使用当前仓库的 `GITHUB_TOKEN` 创建草稿，权限限制为该发布任务的
-`contents: write`；无需提供能写其他仓库的个人令牌。GitHub Actions 固定到不可变提交。
-
-## 后续中央程序版本
-
-对新的源代码提交先更新唯一版本源，再手动运行相同工作流并输入一致的未使用版本，审核并
-公开 Release，再将该版本附带的 Formula 更新到 Tap。用户随后运行 `brew update`
-及 `brew upgrade` 即可。不要覆盖同版本 Release 资产：旧 Formula 的校验值和已安装
-版本应继续对应原发行包；需要修正时发布新版本。
+已有 2.x 中央任务继续沿自己的安装和固定资源处理；3.0 的稳定发布、本机替换及旧启用面完整退役仍按实际验收结果推进。

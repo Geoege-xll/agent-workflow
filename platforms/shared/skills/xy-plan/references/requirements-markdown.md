@@ -1,4 +1,4 @@
-# Requirements Markdown delivery — HTML generation suspended
+# Requirements Markdown delivery and retained prototype navigation
 
 Requirements and plans have one editable Markdown source under adapter-resolved `docs.plans`.
 Formal Full review uses that current Markdown draft; PM may keep a pre-approval draft in the current
@@ -6,12 +6,11 @@ request scratch. After requirements approval and any applicable prototype choice
 `.md` before first dispatch. `xy-plan` returns only a draft. Light saves only when actual recovery,
 complexity or user requirements need it; persistence adds no Full plan, DAG, QA or approval stage.
 
-Requirements/plan HTML generation and freshness checks are suspended on every platform. Do not call
-`requirement_html.py render` or `check`, its Python generation entry points, or the vendored CLI as a
-workaround. Public adapter calls explicitly reject with `RequirementHtmlError` or CLI exit 2 before
-reading project input, creating scratch or starting Node. There is no enable flag. Current planning,
-review, dispatch and QA must not require a same-name HTML file or current HTML hash. Node is not needed
-for this suspended feature.
+Requirements/plan Markdown-to-HTML generation has been retired. Its Python module, renderer bundle,
+licenses and helper entry have been removed from current source and packages. Current planning, review,
+dispatch and QA use Markdown and must not require a same-name HTML file or current HTML hash. The
+workflow needs no Node runtime for plan delivery. Prototype design, concrete HTML pages, prototype
+verification, dependency fingerprints and user visual approval remain required wherever applicable.
 
 ## Current source and prototype coverage
 
@@ -36,21 +35,18 @@ identities and source hashes cannot block Markdown edits. An unlinked old HTML i
 canonical paths, project boundaries, safe single-link regular-file reads and concurrent-input rejection.
 Do not bulk-edit historical prototypes merely to remove their retained HTML links.
 
-## Retained implementation and recovery boundary
+## Explicit project adapter and retained material
 
-Keep existing HTML, the fixed `lib/vendor/answer-me-with-html` bundle, its provenance and all licenses.
-They are historical/recovery material, not a second editing authority, current approval or automatic
-execution permission. Do not regenerate, delete, rename or bulk-convert old documents for this pause.
+Use the exact project adapter selected during project inspection and task initialization. Pass that same
+project-relative path through the prototype validator's `--adapter` option and its API's `adapter` argument;
+do not independently search or prefer `.awf/project.yaml`, `project.yaml` or the legacy central adapter.
+Multiple adapters require an explicit selection. The configured `docs.plans` and `docs.standards_root` both
+come from that selected adapter, including custom document roots. Plugin helpers retain the actual physical
+plugin/project boundary; central tasks retain their original fixed runtime and central adapter.
 
-`lib/documents/requirement_html.py` retains its original execution bodies as commented historical code
-under `run_renderer`, `render_candidate`, `process` and `main`, with Chinese recovery instructions. Its
-common safety/parsing/snapshot helpers remain available to current navigation consumers. Historical
-renderer tests are retained as non-discovered reference classes; current required tests exercise the
-pause, zero side effects, source/installed entry points and vendor preservation without reporting skips
-as renderer success.
-
-Restoration needs a new explicit authorization and coordinated changes to all four public entry points,
-workflow/Skill/template rules, active tests and affected source/installed/native consumers. Restore the
-former implementation only together with its source/path integrity, pinned runtime, isolated Node stage,
-resource/cancellation, conditional-publication and race protections, then obtain real required verification.
-No environment variable, direct private call or vendored command may silently restore generation.
+Existing plan HTML, original Markdown, prototype HTML, design standards and project information remain
+historical or active project material according to their existing role. Removing the generation chain does
+not authorize deletion, renaming, regeneration or bulk conversion of those files. Historical HTML has no
+current editing authority and grants no acceptance or approval. Its optional prototype navigation link
+continues to require a safe actual file and concurrent-input verification through the shared
+`lib/documents/safe_documents.py` primitives.

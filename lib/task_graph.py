@@ -100,6 +100,7 @@ def _validate_gate(gate: str, task_id: str) -> None:
 
 def _tasks_by_id(tasks: Iterable[Task]) -> dict[str, Task]:
     indexed: dict[str, Task] = {}
+    reviewers: dict[str, str] = {}
     for task in tasks:
         if not isinstance(task, Task):
             raise TaskGraphError("tasks must contain Task values")
@@ -113,6 +114,14 @@ def _tasks_by_id(tasks: Iterable[Task]) -> dict[str, Task]:
             raise TaskGraphError(f"task {task.id} has unsupported state: {task.state}")
         if task.task_type not in VALID_TASK_TYPES:
             raise TaskGraphError(f"task {task.id} has unsupported task_type: {task.task_type}")
+        if task.task_type == "qa":
+            # 唯一Reviewer是请求合同，不是路径锁或瞬时线程额度。声明时即拒绝
+            # 第二个QA节点，历史、失败或退役也不自动授权换人；原Reviewer的
+            # 差量复查更新同一任务和既有身份，因此不需要另存Reviewer账本。
+            if task.request_id in reviewers:
+                raise TaskGraphError(f"one QA task per request is required: {task.request_id} "
+                                     f"({reviewers[task.request_id]}, {task.id})")
+            reviewers[task.request_id] = task.id
         # 只给显式 QA 节点新增完成态，不能让 Writer 用审查结果冒充自身构建完成。
         if task.state == "QA_PASSED" and task.task_type != "qa":
             raise TaskGraphError(f"task {task.id}: QA_PASSED belongs only to a qa task")

@@ -146,7 +146,13 @@ qa_scope: request    # Current request dependency closure, not the entire projec
 # agent_ref: {host: codex, agent_id: <actual-native-id>}
 ```
 
-`agent_ref` accepts only host (codex/claude/antigravity) and agent_id (1..256 characters, without whitespace/control characters). The PM first confirms actual entry into RUNNING or explicit QA, then records the actual ID through update; the same value is idempotent, but replacement/clearing is forbidden. Different tasks in the same graph, including historical completed tasks, cannot share an ID. Optional bool agent_retired defaults to false and may only become true; it prevents reuse but releases no active lock and does not prove native process termination.
+`agent_ref` accepts only host (codex/claude/antigravity) and agent_id (1..256 characters, without whitespace/control characters). The PM first claims actual RUNNING (or the applicable explicit QA execution state), freezes/exports the complete current pack without an as-yet-unknown native ID, creates the native instance with those bytes, then records its actual ID through a separate update; the same value is idempotent, but replacement/clearing is forbidden. Different tasks in the same graph, including historical completed tasks, cannot share an ID. Optional bool agent_retired defaults to false and may only become true; it prevents reuse but releases no active lock and does not prove native process termination.
+
+Within one physical project and `request_id`, at most one `task_type: qa` task may be declared across
+explicit current records and failed/passed/retired history. Original-Reviewer delta review reuses that task
+and the same immutable `agent_ref`. If the instance is unavailable or retired, PM handles the existing
+request's recovery/acceptance boundary; no automatic second QA task or identity replacement is allowed.
+This rule does not add mandatory QA to Light.
 
 agent_alias binds a normalized module and canonical role; independent tasks may reuse the responsibility alias, but require new instances/IDs. Short rework on the same task and same-round original-Reviewer delta checks may reuse an available original instance. The complete lifecycle is centralized in WORKFLOW's agent-instance-lifecycle: no complete parent/sibling history, inherited forks, prewarming, or pools; protect results, logs, and worktrees before actual native termination or retirement.
 `continuation --input PACK_OR_GRAPH --task-id ID --host HOST --observed-state running|idle|cancelled|missing|unknown` returns advice only, without probing, dispatching, reviving cancellations, clearing history, or creating approval.
@@ -316,7 +322,7 @@ pages; `UI-Conformance` tasks carry frozen `design_authority_refs`; `waived_by_u
 scope-bound `prototype_decision` and no prototype authority. Required-prototype tasks carry the same
 decision record plus concrete page authority.
 
-Only after Full integrated QA PASS, or Light acceptance of actually required verification/audit and assessment of need, does the PM project the current baseline. Each stable topic has one Markdown document in `docs.plans`; requirements/plan HTML generation is suspended and existing HTML is retained as historical material, separating the current goal/execution phase from the last genuinely accepted version/behavior/approval and acceptance evidence. `PROJECT.md` is the current directory, linking only explicit accepted baselines without a size limit or task logs. Further iteration, pause, or cancellation of the current goal must not erase the old baseline; completed creates neither approval nor delivery. An accepted removal marks the same document `removed`, retains reason/date/replacement and necessary history, and removes the current index link; do not create separate feature/ADR documents or renamed copies. Unindexed old execution drafts retain historical boundaries; completion labels do not establish current facts.
+Only after Full integrated QA PASS, or Light acceptance of actually required verification/audit and assessment of need, does the PM project the current baseline. Each stable topic has one Markdown document in `docs.plans`; requirements/plan Markdown-to-HTML generation is retired and existing HTML is retained as historical material, separating the current goal/execution phase from the last genuinely accepted version/behavior/approval and acceptance evidence. `PROJECT.md` is the current directory, linking only explicit accepted baselines without a size limit or task logs. Further iteration, pause, or cancellation of the current goal must not erase the old baseline; completed creates neither approval nor delivery. An accepted removal marks the same document `removed`, retains reason/date/replacement and necessary history, and removes the current index link; do not create separate feature/ADR documents or renamed copies. Unindexed old execution drafts retain historical boundaries; completion labels do not establish current facts.
 
 Light saves only for an actual pause/recovery/handoff or explicit request; the PM saves Full in `docs.plans` after requirements approval and before the first design/implementation dispatch. Reuse the same source for the same topic; see plan-lifecycle for the template's ordinary Chinese metadata and six-section contract. Simplify Light as needed without adding confirmation fields or mandatory documents. Old docs.features may be removed only through an explicit one-time migration, with no runtime alias.
 Existing `input_contracts` carry its reference and current applicable scope; changes
@@ -430,7 +436,11 @@ snapshot, not independently maintained task-pack claims or PM completion lists.
 - `RESULT_VERIFIED`: only `read_only`/`evidence`, after the exclusive evidence-bound record `settle`
   operation accepts the current result. It is neither Writer BUILD_VERIFIED nor implementation QA PASS.
   Bind the original native ID, latest accepted complete Task Pack bytes/SHA, real completion source,
-  revised-scope result and actual declared verification evidence. Unknown/running or stale inputs remain
+  revised-scope result and actual declared verification evidence. An accepted first-dispatch pack may omit
+  `agent_ref`; any included ID and both settlement/completion IDs must match the current immutable binding.
+  Runtime/closeout `state`, `agent_ref`, `agent_retired`, `handoff_assessment` and `acceptance_evidence` do
+  not redefine accepted implementation scope; task/request/role, ownership, contracts, validation,
+  standards and approvals remain strict. Unknown/running or stale inputs remain
   active; retirement never completes them. Settlement atomically releases record execution occupancy,
   not unconfirmed native threads. See WORKFLOW's `Result-task settlement` and runtime-records for wire use.
 

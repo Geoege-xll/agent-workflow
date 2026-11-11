@@ -175,8 +175,7 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         source_files[relative] = digest(body)
 
     for folder in ("product", "roles", "platforms/shared", "platforms/" + host,
-                   "templates", "lib/documents", "lib/delivery", "lib/project", "lib/skills",
-                   "lib/vendor/answer-me-with-html"):
+                   "templates", "lib/documents", "lib/delivery", "lib/project", "lib/skills"):
         for relative in tree_files(source, folder):
             copy(relative)
     for name in LIB_FILES:

@@ -14,10 +14,20 @@ import unittest
 PACK = Path(__file__).resolve().parents[1]
 CURRENT_PRODUCT_MODULES = {
     "plugin": ("plugin_delivery", "plugin_resources", "plugin_workflow_contract", "continuous_intake_capabilities",
-               "agent_continuation", "dispatch_admission", "task_settlement"),
+               "agent_continuation", "dispatch_admission", "task_settlement", "task_graph", "scheduler_boundaries"),
     "native-config": ("native_config", "native_inventory", "native_config_codecs", "native_config_server",
                       "native_config_mcp", "native_config_packaging", "plugin_console"),
 }
+CURRENT_RECORD_CLASSES = ("RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")
+PROTOTYPE_MODULES = ("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace")
+
+
+def current_product_targets():
+    """测试固定声明真实产品范围，防止入口误删模块后由同一实现推导出假通过。"""
+    plugin = ["tests.test_" + name for name in CURRENT_PRODUCT_MODULES["plugin"]]
+    records = ["tests.test_task_graph_records." + name for name in CURRENT_RECORD_CLASSES]
+    native = ["tests.test_" + name for name in CURRENT_PRODUCT_MODULES["native-config"]]
+    return plugin + records + native
 
 
 class ValidationRunnerTest(unittest.TestCase):
@@ -53,16 +63,26 @@ class ValidationRunnerTest(unittest.TestCase):
         for names in CURRENT_PRODUCT_MODULES.values():
             for module in names:
                 self.write_case(module, ("test_ok",))
+        for module in (*PROTOTYPE_MODULES, "validation_runner", "candidate_delivery"):
+            self.write_case(module, ("test_ok",))
+        # records 使用真实类节点作为范围边界；加入历史类诱饵，证明 current 不会
+        # 因模块级收集而悄悄恢复旧安装器夹具，也不会把有效记录断言全部排除。
+        records = self.source / "tests/test_task_graph_records.py"
+        for name in (*CURRENT_RECORD_CLASSES, "RecordInstalledRuntimeTest"):
+            self.write_case("record_class_fixture", ("test_ok",), class_name=name)
+            with records.open("a", encoding="utf-8") as stream:
+                stream.write((self.source / "tests/test_record_class_fixture.py").read_text(encoding="utf-8"))
+        (self.source / "tests/test_record_class_fixture.py").unlink()
         self.write_case("runner_failure", ("test_failure",), failing=True)
 
-    def write_case(self, module, methods, *, failing=False):
+    def write_case(self, module, methods, *, failing=False, class_name="ExampleTest"):
         body = '''import json
 from pathlib import Path
 import sys
 import unittest
 
-class ExampleTest(unittest.TestCase):
 '''
+        body += f'class {class_name}(unittest.TestCase):\n'
         for method in methods:
             body += f'''    def {method}(self):
         with Path({str(self.case_calls)!r}).open("a", encoding="utf-8") as stream:
@@ -139,7 +159,7 @@ class ExampleTest(unittest.TestCase):
         self.assertEqual(2, len(self.recorded_cases()))
 
     def test_current_product_groups_list_deduplicate_and_prevalidate_errors(self):
-        expected = ["tests.test_" + name for names in CURRENT_PRODUCT_MODULES.values() for name in names]
+        expected = current_product_targets()
         selectors = ("plugin", "native-config", "plugin", "tests.test_plugin_delivery.ExampleTest.test_ok")
         listed = self.invoke("--list", *selectors)
         self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
@@ -157,10 +177,66 @@ class ExampleTest(unittest.TestCase):
     def test_real_current_product_groups_have_only_current_existing_targets(self):
         listed = self.invoke("--list", "plugin", "native-config", "plugin", entry=PACK / "scripts/test_workflow.sh")
         self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
-        expected = ["tests.test_" + name for names in CURRENT_PRODUCT_MODULES.values() for name in names]
+        expected = current_product_targets()
         self.assertEqual(expected, listed.stdout.splitlines())
         self.assertFalse(any("pty" in target.lower() or "manager_tui" in target for target in expected))
         self.assertEqual([], self.recorded_cases())
+
+    def test_current_gate_consumes_both_products_retained_prototypes_and_delivery_once(self):
+        expected = (["tests.test_validation_runner", "tests.test_candidate_delivery"]
+                    + current_product_targets() + ["tests.test_" + name for name in PROTOTYPE_MODULES])
+        selectors = ("current", "plugin", "native-config", "prototype", "current")
+        for entry in (self.source / "scripts/test_workflow.sh", PACK / "scripts/test_workflow.sh"):
+            with self.subTest(entry=entry):
+                listed = self.invoke("--list", *selectors, entry=entry)
+                self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
+                self.assertEqual(expected, listed.stdout.splitlines())
+        rejected = self.invoke("current", "tests.test_task_graph_records.RecordUpdateTest.missing")
+        self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+        self.assertEqual([], self.recorded_cases())
+        executed = self.invoke(*selectors)
+        self.assertEqual(0, executed.returncode, executed.stdout + executed.stderr)
+        cases = self.recorded_cases()
+        self.assertEqual(len(expected), len(cases))
+        self.assertEqual(len(cases), len({case["id"] for case in cases}))
+        self.assertFalse(any("RecordInstalledRuntimeTest" in case["id"] for case in cases))
+
+    def test_legacy_ci_alias_keeps_maintenance_scope_without_retired_html(self):
+        legacy = self.invoke("--list", "legacy-ci", entry=PACK / "scripts/test_workflow.sh")
+        alias = self.invoke("--list", "ci", entry=PACK / "scripts/test_workflow.sh")
+        self.assertEqual(0, legacy.returncode, legacy.stdout + legacy.stderr)
+        self.assertEqual(legacy.stdout, alias.stdout)
+        self.assertNotIn("requirement_html", legacy.stdout)
+        self.assertNotIn("tests.test_native_config", legacy.stdout)
+
+    def test_selected_native_javascript_without_node_fails_before_any_case(self):
+        # 提供入口真正需要的 Bash/dirname，但不提供 Node；解释器由受控
+        # python_runtime 的绝对路径调用，避免测试依赖开发机 PATH 的偶然内容。
+        binaries = self.root / "binaries-without-node"
+        binaries.mkdir()
+        for name in ("bash", "dirname"):
+            (binaries / name).symlink_to(shutil.which(name))
+        self.write_case("plugin_console", ("test_javascript",), class_name="ConsoleJavascriptTest")
+        self.environment["PATH"] = str(binaries)
+        result = self.invoke("tests.test_plugin_console")
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("需要已有 Node", result.stderr)
+        self.assertEqual([], self.recorded_cases())
+
+    def test_current_workflow_is_read_only_and_uses_current_gate_and_unique_candidates(self):
+        # 只锁定产品和权限边界，不在测试里实现 YAML 解析器或一套发行系统。
+        workflow = (PACK / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        for fragment in ("  pull_request:", "  push:", "branches: [main, 'codex/plugin-v3-*']",
+                         "os: [ubuntu-latest, macos-latest]", "python-version: '3.11'",
+                         "run: bash scripts/test_workflow.sh --list current",
+                         "run: bash scripts/test_workflow.sh current", "    needs: validate",
+                         "packaging/build_candidates.py", "command -v node", "overwrite: false",
+                         "if-no-files-found: error", "candidate-manifest.json", "SHA256SUMS"):
+            self.assertIn(fragment, workflow)
+        for forbidden in ("contents: write", "pull_request_target", "workflow_dispatch", "GH_TOKEN",
+                          "gh release", "packaging/build_release.py", "windows-latest", "test_workflow.sh ci"):
+            self.assertNotIn(forbidden, workflow)
+        self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", workflow)
 
     def test_explicit_method_runs_only_that_case(self):
         target = "tests.test_shared_memory_contract.ExampleTest.test_two"
@@ -208,7 +284,7 @@ class ExampleTest(unittest.TestCase):
             "codex": {"codex_workflow", "shared_memory_contract"},
             "claude": {"claude_workflow", "claude_instructions", "shared_memory_contract"},
             "antigravity": {"antigravity_workflow"},
-            "prototype": {"prototype_workspace"},
+            "prototype": set(PROTOTYPE_MODULES),
         }
         for host, modules in expected.items():
             with self.subTest(host=host):

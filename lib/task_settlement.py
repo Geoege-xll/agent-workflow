@@ -14,12 +14,12 @@ import re
 from typing import Any, Callable
 
 try:
-    from .agent_continuation import validate_reference
+    from .agent_continuation import validate_identity, validate_reference
     from .task_graph import TaskGraphError
     from .runtime_pins import record_binding
     from .standard_paths import builtin_source_path
 except ImportError:
-    from agent_continuation import validate_reference
+    from agent_continuation import validate_identity, validate_reference
     from task_graph import TaskGraphError
     from runtime_pins import record_binding
     from standard_paths import builtin_source_path
@@ -51,13 +51,17 @@ def _evidence(value: Any, read: Callable, label: str) -> bytes:
     return body
 
 
-def _scope(task: dict) -> dict:
-    """只忽略运行元数据；验收约定、验证命令、标准和路径均属于接受范围。
+def _implementation_contract(task: dict) -> dict:
+    """投影实例实际接受的实现合同，不把可追加的记录事实当成新实现范围。
 
-    Light归一化会补空调度字段；这些语义等价的省略不应误报旧scope。退休可以
-    发生在交接后，但不能掩盖真实范围变化。原生身份在外层逐字段独立核对。
+    任务/请求/角色、目标、输入输出、路径、规范读取及验证约定均逐字段保留。
+    acceptance_evidence承载PM后续记录的实际证据，handoff_assessment承载实际
+    收尾判断；两者与state、退休状态同属记录元数据，不能要求实例为这些事实
+    重新接受完整包。原生身份由外层独立核实，不能借此投影掩盖错绑。
+    Light归一化补出的空调度字段只是同义表达，沿用原先的等价处理。
     """
-    result = {key: value for key, value in task.items() if key not in {"state", "agent_retired", "agent_ref"}}
+    metadata = {"state", "agent_retired", "agent_ref", "handoff_assessment", "acceptance_evidence"}
+    result = {key: value for key, value in task.items() if key not in metadata}
     for field in ("depends_on", "blocks", "gates", "semantic_locks"):
         result.setdefault(field, [])
     return result
@@ -182,9 +186,22 @@ def settle_task(payload: dict, task: dict, value: Any, *, read: Callable, decode
         raise TaskGraphError("3.0 settlement rejects runtime_binding in accepted packs or records")
     if record_binding(pack) is not None or record_binding(payload) is not None:
         raise TaskGraphError("settlement requires current plugin/source-pack resources")
-    if (pack["task"].get("state") != "RUNNING" or pack["task"].get("agent_ref") != reference
-            or _scope(pack["task"]) != _scope(task)):
+    accepted = pack["task"]
+    # 首次create之前，已claim的完整接受包不可能知道宿主随后返回的ID；该包
+    # 原字节及SHA应一直保留。创建后单独bind的当前身份仍是唯一执行归属，若
+    # 接受包已经携带身份则必须同值，不能用“元数据可变”放过另一个实例。
+    validate_identity(accepted)
+    if (accepted.get("state") != "RUNNING"
+            or ("agent_ref" in accepted and accepted["agent_ref"] != reference)
+            or _implementation_contract(accepted) != _implementation_contract(task)):
         raise TaskGraphError("accepted Task Pack does not match the current task scope or identity")
+    # 排除元数据只允许其合法变动，不能让不完整包或任意JSON冒充接受记录。
+    # 原字节、completion/result/verification的来源与SHA仍在本函数和CAS发布锁
+    # 内分别核验；这里不把当前可写记录转换成新的不可变接受证据。
+    for recorded in (accepted, task):
+        evidence = recorded.get("acceptance_evidence")
+        if not isinstance(evidence, list) or any(not isinstance(item, str) or not item.strip() for item in evidence):
+            raise TaskGraphError("accepted and current task acceptance_evidence must be string arrays")
     if pack.get("requirements_fingerprint") != payload.get("requirements_fingerprint"):
         raise TaskGraphError("accepted Task Pack requirements fingerprint changed")
     # Light本身就是完整包；Full采用原导出器的任务相关权威投影。两种来源均只读。

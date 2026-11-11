@@ -18,7 +18,7 @@ This procedure applies only to prototype-mode work. For `design_mode: standards_
 the PM's standard-maintenance task without running these checks, creating prototype files, or
 requesting visual approval. A preloaded Skill is not a mandate to execute an inapplicable procedure.
 
-1. Resolve `project.yaml` -> `docs.standards_root`, then derive its `prototype` child. The
+1. Use the exact project adapter already selected for this task to resolve `docs.standards_root`, then derive its `prototype` child. The
    default active workspace is:
 
    ```text
@@ -34,9 +34,21 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
    ```bash
    bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/documents/validate_prototype_workspace.py \
-     <project-root> docs/standards/prototype --json --page <stable-page>.html
+     <project-root> docs/standards/prototype --adapter <selected-project-adapter> --json --page <stable-page>.html
    ```
 
+   For an official plugin installation, use its verified source-pack entry and the same selected adapter:
+
+   ```bash
+   bash <physical-plugin-root>/lib/python_runtime.sh <physical-plugin-root>/plugins/source_pack.py \
+     helper --project <physical-project-root> lib/documents/validate_prototype_workspace.py \
+     <physical-project-root> <docs.standards_root>/prototype --adapter <selected-project-adapter> \
+     --json --page <stable-page>.html
+   ```
+
+   Use `.awf/project.yaml` for the newly applied plugin adapter, or the explicitly selected existing
+   `project.yaml`. Both may coexist; never choose again by precedence or create a root configuration as
+   a fallback. Central tasks retain their fixed runtime and `.agent-workflow/project.yaml`.
    Substitute the configured project-relative `docs.standards_root` path when it differs. A nonzero
    exit is FAIL. Do not weaken or bypass its path, dependency, structure, contract, or interaction
    checks. Repeat `--page` for multiple scoped concrete pages; omitting it returns all concrete pages.
@@ -75,7 +87,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    root. An unbound source template may leave it empty; do not fabricate links. The validator checks safe
    actual files, canonical target binding and concurrent replacement. It does not scan Markdown's reverse
    prototype links, require historical HTML freshness/records/renderer identities, or add documents to
-   page-rendering dependencies. Requirements/plan HTML generation and freshness checks are suspended;
+   page-rendering dependencies. Requirements/plan Markdown-to-HTML generation is retired;
    old derived content cannot block Markdown revisions.
 4. Confirm every changed prototype path is under the configured
    `docs.standards_root/prototype`, except a separately task-authorized design-standard leaf

@@ -461,6 +461,224 @@ class NativeConfigServiceTest(unittest.TestCase):
         self.assertNotIn("context", result)
         self.assertNotIn("PRIVATE RAW", json.dumps(result))
 
+    def test_final_directory_exit_conflict_keeps_published_receipt_and_unknown_recovery_locations(self):
+        """真实发布和权限收尾后再移动父目录，不能丢收据或猜测恢复资料新路径。"""
+        path = self.make(fields={"model": "before"})
+        original = path.read_bytes()
+        descriptor = os.open(path, os.O_WRONLY | os.O_APPEND)
+        identity = (os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino)
+        opaque = self.context()["roles"][0]["role"]
+        preview = self.preview({opaque: {"model": "new"}})
+        moved = path.parent.with_name("agents-moved")
+        real_fchmod = storage.os.fchmod
+        renamed = []
+
+        def move_parent_after_real_retention_chmod(fd, mode):
+            real_fchmod(fd, mode)
+            observed = os.fstat(fd)
+            if (observed.st_dev, observed.st_ino) == identity and mode == 0o600 and not renamed:
+                # 该 fd 是已隔离的原文件；到这里真实 link 和最后一次显式目录检查均已完成。
+                path.parent.rename(moved)
+                renamed.append(True)
+
+        try:
+            with patch.object(storage.os, "fchmod", side_effect=move_parent_after_real_retention_chmod):
+                result = self.service.apply(preview["preview_id"])
+            os.write(descriptor, b"# OLD FD AFTER FINALIZATION RECEIPT\n")
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        self.assertEqual(renamed, [True])
+        self.assertFalse(path.exists())
+        self.assertIn(b'model = "new"', (moved / path.name).read_bytes())
+        self.assertFalse(result["saved"])
+        self.assertTrue(result["partial_failure"])
+        self.assertTrue(result["published"])
+        self.assertTrue(result["namespace_touched"])
+        self.assertTrue(result["temporary_visibility_gap"])
+        self.assertTrue(result["finalization_failed"])
+        self.assertEqual(result["error_type"], "ConflictError")
+        self.assertEqual(result["results"], [{"role": opaque, "status": "published_location_unknown"}])
+        self.assertTrue(result["effect"]["pending_reload"])
+        self.assertFalse(result["effect"]["runtime_verified"])
+        self.assertEqual(len(result["recovery"]), 2)
+        for entry in result["recovery"]:
+            self.assertIsNone(entry["backup"])
+            self.assertEqual(entry["location_status"], "unknown")
+            self.assertTrue(entry["declared_backup"].startswith(str(path.parent) + "/"))
+            # 新位置只由测试持有的 rename 夹具确定；产品不得扫描用户目录找回。
+            retained = moved / Path(entry["declared_backup"]).relative_to(path.parent)
+            self.assertEqual((retained.stat().st_dev, retained.stat().st_ino), tuple(entry["observed_identity"][:2]))
+            self.assertEqual((retained.parent.stat().st_dev, retained.parent.stat().st_ino), tuple(entry["container_identity"]))
+            if entry["kind"] == "preview_preimage":
+                self.assertEqual(retained.read_bytes(), original)
+                self.assertEqual(entry["sha256"], hashlib.sha256(original).hexdigest())
+            else:
+                self.assertEqual(tuple(entry["observed_identity"][:2]), identity)
+                self.assertIn(b"OLD FD AFTER FINALIZATION RECEIPT", retained.read_bytes())
+        self.assertNotIn("cleanup_pending", result)
+        with self.assertRaises(ConflictError):
+            self.service.apply(preview["preview_id"])
+
+    def test_parent_move_before_namespace_change_still_rejects_without_publication(self):
+        """尚未隔离目标的目录冲突仍直接拒绝；新收据不能掩盖未执行的保存。"""
+        path = self.make(fields={"model": "before"})
+        original = path.read_bytes()
+        preview = self.preview({self.context()["roles"][0]["role"]: {"model": "new"}})
+        moved = path.parent.with_name("agents-moved-before-publish")
+        real_fchmod = storage.os.fchmod
+        renamed = []
+
+        def move_during_staging(fd, mode):
+            real_fchmod(fd, mode)
+            if not renamed:
+                path.parent.rename(moved)
+                renamed.append(True)
+
+        with patch.object(storage.os, "fchmod", side_effect=move_during_staging):
+            with self.assertRaises(ConflictError):
+                self.service.apply(preview["preview_id"])
+        self.assertEqual(renamed, [True])
+        self.assertEqual((moved / path.name).read_bytes(), original)
+        self.assertEqual(list(moved.glob(".native-config-*")), [])
+
+    def test_retention_names_moved_or_replaced_after_publish_are_not_claimed_locatable(self):
+        """只动保留名称、保持父目录及目标不变，也不能把旧路径伪报为当前可定位。"""
+        for index, (name, replace) in enumerate((name, replace) for name in (None, "before", "before.backup") for replace in (False, True)):
+            with self.subTest(retained_name=name or "container", same_bytes_replacement=replace):
+                path = self.make("retention-names-" + str(index), fields={"model": "before"})
+                original = path.read_bytes()
+                parent_identity = (path.parent.stat().st_dev, path.parent.stat().st_ino)
+                descriptor = os.open(path, os.O_WRONLY | os.O_APPEND)
+                observed = os.fstat(descriptor)
+                original_identity = (observed.st_dev, observed.st_ino)
+                opaque = next(row["role"] for row in self.context()["roles"] if row["source_path"] == str(path))
+                preview = self.preview({opaque: {"model": "new"}})
+                real_mkdir, real_fchmod = storage.os.mkdir, storage.os.fchmod
+                containers, moves = [], []
+
+                def observe_real_container_creation(value, *args, **kwargs):
+                    result = real_mkdir(value, *args, **kwargs)
+                    if isinstance(value, str) and value.startswith(".native-config-") and value.endswith(".hold"):
+                        containers.append(path.parent / value)
+                    return result
+
+                def rename_after_real_retention_chmod(fd, mode):
+                    real_fchmod(fd, mode)
+                    info = os.fstat(fd)
+                    if (info.st_dev, info.st_ino) != original_identity or mode != 0o600 or moves:
+                        return
+                    # 只使用夹具捕获的真实创建名称；产品没有扫描目录找回的权限。
+                    container = containers[0]
+                    target = container / name if name is not None else container
+                    moved = target.with_name(target.name + ".moved")
+                    target.rename(moved)
+                    moves.append((target, moved))
+                    if replace:
+                        # 同字节、同节点类型的替身也不能冒充持有 fd 的原 inode。
+                        if name is None:
+                            target.mkdir(mode=0o700)
+                            for child in ("before", "before.backup"):
+                                (target / child).write_bytes(original)
+                        else:
+                            target.write_bytes(original)
+
+                try:
+                    with patch.object(storage.os, "mkdir", side_effect=observe_real_container_creation), \
+                            patch.object(storage.os, "fchmod", side_effect=rename_after_real_retention_chmod):
+                        result = self.service.apply(preview["preview_id"])
+                    os.write(descriptor, b"# OLD FD AFTER RETENTION NAME CHANGE\n")
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                self.assertEqual(len(containers), 1)
+                self.assertEqual(len(moves), 1, "必须先真实发布/fchmod，再真实移动所声明的保留名称")
+                self.assertEqual((path.parent.stat().st_dev, path.parent.stat().st_ino), parent_identity)
+                self.assertIn(b'model = "new"', path.read_bytes())
+                self.assertTrue(result["saved"], "目标保存成功与保留资料位置未知是两个独立事实")
+                self.assertTrue(result["published"])
+                self.assertFalse(result["partial_failure"])
+                self.assertEqual(result["results"], [{"role": opaque, "status": "saved"}])
+                self.assertEqual(len(result["recovery"]), 2)
+                self.assertNotIn("cleanup_pending", result)
+                for entry in result["recovery"]:
+                    declared = Path(entry["declared_backup"])
+                    affected = name is None or declared.name == name
+                    if affected:
+                        self.assertIsNone(entry["backup"])
+                        self.assertEqual(entry["location_status"], "unknown")
+                        actual = moves[0][1] / declared.name if name is None else moves[0][1]
+                    else:
+                        self.assertEqual(entry["backup"], str(declared))
+                        self.assertEqual(entry["location_status"], "verified_at_finalization")
+                        actual = declared
+                    self.assertEqual((actual.stat().st_dev, actual.stat().st_ino), tuple(entry["observed_identity"][:2]))
+                    if entry["kind"] == "preview_preimage":
+                        self.assertEqual(actual.read_bytes(), original)
+                        self.assertEqual(entry["sha256"], hashlib.sha256(original).hexdigest())
+                    else:
+                        self.assertEqual(tuple(entry["observed_identity"][:2]), original_identity)
+                        self.assertIn(b"OLD FD AFTER RETENTION NAME CHANGE", actual.read_bytes())
+                with self.assertRaises(ConflictError):
+                    self.service.apply(preview["preview_id"])
+
+    def test_missing_parent_at_storage_entry_preserves_every_not_written_result(self):
+        """目录尚未成功打开时没有 handle，最终结算仍需保留明确的未写入结果。"""
+        path = self.make(fields={"model": "before"})
+        before = storage.read(path)
+        opaque = self.context()["roles"][0]["role"]
+        change = storage.Write(opaque, path, before, before.body.replace(b'"before"', b'"new"'))
+        moved = path.parent.with_name("agents-moved-before-open")
+        path.parent.rename(moved)
+        result = storage.write_batch((change,), lambda: None)
+        self.assertFalse(result["saved"])
+        self.assertFalse(result["namespace_touched"])
+        self.assertEqual(result["results"], [{"role": opaque, "status": "not_written"}])
+        self.assertEqual(result["recovery"], [])
+        self.assertEqual(result["error_type"], "FileNotFoundError")
+        self.assertEqual((moved / path.name).read_bytes(), before.body)
+
+    def test_real_descriptor_close_failure_is_settled_without_hiding_the_published_objects(self):
+        """已真实关闭隔离目录 fd 后再报错，仍返回发布事实与可人工核对的保留身份。"""
+        path = self.make(fields={"model": "before"})
+        original = path.read_bytes()
+        inode = path.stat().st_ino
+        opaque = self.context()["roles"][0]["role"]
+        preview = self.preview({opaque: {"model": "new"}})
+        real_fchmod, real_close = storage.os.fchmod, storage.os.close
+        armed, failures = [], []
+
+        def arm_after_retention(fd, mode):
+            real_fchmod(fd, mode)
+            if os.fstat(fd).st_ino == inode:
+                armed.append(True)
+
+        def fail_after_real_close(fd):
+            real_close(fd)
+            if armed and not failures:
+                failures.append(True)
+                raise OSError("fixture close failed after real close")
+
+        with patch.object(storage.os, "fchmod", side_effect=arm_after_retention), \
+                patch.object(storage.os, "close", side_effect=fail_after_real_close), \
+                patch.object(self.service, "context", side_effect=ValueError("fixture reread unavailable")):
+            result = self.service.apply(preview["preview_id"])
+        self.assertEqual(failures, [True])
+        self.assertFalse(result["saved"])
+        self.assertTrue(result["published"])
+        self.assertTrue(result["partial_failure"])
+        self.assertTrue(result["finalization_failed"])
+        self.assertEqual(result["finalization_error_type"], "OSError")
+        self.assertTrue(result["context_unavailable"])
+        self.assertEqual(result["results"], [{"role": opaque, "status": "published_location_unknown"}])
+        self.assertIn(b'model = "new"', path.read_bytes())
+        self.assertEqual(len(result["recovery"]), 2)
+        for entry in result["recovery"]:
+            self.assertIsNone(entry["backup"], "目录退出验证被异常打断，即使测试知道位置也不能伪报核实")
+            retained = Path(entry["declared_backup"])
+            self.assertEqual(retained.stat().st_ino, entry["observed_identity"][1])
+            self.assertEqual(retained.read_bytes(), original)
+
     def test_external_edit_during_staging_rejects_whole_batch_before_publication(self):
         first = self.make("first-native")
         second = self.make("second-native")

@@ -42,6 +42,10 @@ class _Directory:
     def __init__(self):
         self.descriptors = []
         self.links = []
+        # 只记录目录上下文正常退出时的观察，不能用发布前的 check 推断收尾位置。
+        # 若某个目录退出抛错，ExitStack 仍会关闭其余描述符；未完成退出检查的
+        # 目录保持 False，收据不得继续把旧绝对路径当作可定位的恢复资料。
+        self.exit_verified = False
 
     @property
     def fd(self):
@@ -81,6 +85,7 @@ def directory(path: Path, *, create: bool = False):
             handle.links.append((parent, name, (info.st_dev, info.st_ino)))
         yield handle
         handle.check()
+        handle.exit_verified = True
     finally:
         for descriptor in reversed(handle.descriptors):
             os.close(descriptor)
@@ -148,6 +153,27 @@ class _Staged:
     descriptor: int
     temporary: set
     captures: dict
+    container_identity: tuple
+    preview_identity: tuple = ()
+
+
+@contextmanager
+def _batch_directories(result):
+    """让目录退出与 fd 清理也进入保存结算，保留已发生的发布事实。
+
+    ExitStack 的 __exit__ 在批量主体及保留资料 finally 之后运行。它可能
+    检出父目录移动，此时目标已经发布、原 inode 和前像也已留下，不能再
+    只抛普通冲突使调用方丢失全部收据；也不能在描述符已关闭后假装回滚。
+    尚未动过公共名字的冲突仍按原合同抛出，由调用方重新读取并预览。
+    """
+    try:
+        with ExitStack() as stack:
+            yield stack
+    except (OSError, ValueError) as exc:
+        if not result["namespace_touched"]:
+            raise
+        result.update(saved=False, partial_failure=result["published"],
+                      finalization_failed=True, finalization_error_type=type(exc).__name__)
 
 
 def _same_after_move(actual: Snapshot, expected: Snapshot) -> bool:
@@ -173,10 +199,10 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
               "retention_policy": "until_explicit_safe_cleanup_contract"}
     if not changes:
         return result
-    prepared, published = {}, {}
+    prepared, published, retained_locations = {}, {}, {}
     statuses = {item.role: "not_written" for item in changes}
     failure = None
-    with ExitStack() as stack:
+    with _batch_directories(result) as stack:
         handles = {}
 
         def stage(slot, name, body, mode=0o600):
@@ -190,6 +216,7 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                 stream.flush()
                 os.fchmod(stream.fileno(), mode)
                 os.fsync(stream.fileno())
+                return _identity(os.fstat(stream.fileno()))
 
         def capture(slot, target, name):
             # 目的名字位于本次排他创建的私有目录中，不指向任何公共/既有对象。
@@ -229,6 +256,29 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
             stage(slot, candidate, node.body, stat.S_IMODE(node.identity[2]))
             return link_candidate(slot, candidate, target)
 
+        def verify_retained_names():
+            # 该回调最后注册、最先退出，因此保留资料 finally 已完成，而父目录
+            # 与隔离目录 fd 仍有效。仅父目录链未变不足以证明完整 backup 路径：
+            # .hold 自身或其中的对象名称可能已被移动，甚至被同字节对象替换。
+            # 每一条声明必须同时对应持有的容器和观察到的对象 dev/ino；只按
+            # 原名称 no-follow 核对，不扫描新位置，也不修改/清理任何失联对象。
+            for entry in result["recovery"]:
+                slot = prepared[entry["role"]]
+                identity = entry["observed_identity"]
+                verified = False
+                try:
+                    container = os.stat(slot.name, dir_fd=slot.parent, follow_symlinks=False)
+                    node = os.stat(Path(entry["backup"]).name, dir_fd=slot.descriptor, follow_symlinks=False)
+                    verified = (stat.S_ISDIR(container.st_mode)
+                                and (container.st_dev, container.st_ino) == slot.container_identity
+                                and stat.S_ISREG(node.st_mode) and identity is not None
+                                and (node.st_dev, node.st_ino) == tuple(identity[:2]))
+                except OSError:
+                    # 无法核实只是位置未知，不能抹掉已成功发布的目标或观察身份。
+                    # 后续目录退出若另有异常，仍由外层结算保留其独立失败收据。
+                    pass
+                retained_locations[entry["backup"]] = verified
+
         try:
             for parent in sorted({item.path.parent for item in changes}, key=str):
                 handle = stack.enter_context(directory(parent))
@@ -247,10 +297,12 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                 os.mkdir(name, 0o700, dir_fd=parent)
                 descriptor = os.open(name, _DIR_FLAGS, dir_fd=parent)
                 stack.callback(os.close, descriptor)
-                slot = _Staged(name, parent, descriptor, set(), {})
+                observed = os.fstat(descriptor)
+                slot = _Staged(name, parent, descriptor, set(), {}, (observed.st_dev, observed.st_ino))
                 prepared[item.role] = slot
                 stage(slot, "candidate.new", item.after, stat.S_IMODE(item.before.identity[2]))
-                stage(slot, "before.backup", item.before.body)
+                slot.preview_identity = stage(slot, "before.backup", item.before.body)
+            stack.callback(verify_retained_names)
             guard()
             for item in changes:
                 slot = prepared[item.role]
@@ -316,6 +368,7 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                             "backup": str(item.path.parent / slot.name / name),
                             "sha256": hashlib.sha256(item.before.body).hexdigest(), "kind": "preview_preimage",
                             "sha256_semantics": "immutable_preview_bytes", "content_may_change": False,
+                            "observed_identity": list(slot.preview_identity),
                             "retention": "until_explicit_safe_cleanup_contract"})
                         continue
                     try:
@@ -348,6 +401,28 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                         os.rmdir(slot.name, dir_fd=slot.parent)
                     except OSError:
                         result.setdefault("cleanup_pending", []).append(str(item.path.parent / slot.name))
+    # 此时所有目录上下文及 fd 清理回调均已执行；合并父目录链与保留名称核验，
+    # 不递归扫描用户目录、猜测 rename 后的位置，也不把旧绝对路径伪称当前位置。
+    # dev/ino 是退出前持有的真实容器/对象观察身份；它们只供人工核对，不是定位器。
+    by_role = {item.role: item for item in changes}
+    for entry in result["recovery"]:
+        item = by_role[entry["role"]]
+        entry["declared_backup"] = entry["backup"]
+        entry["container_identity"] = list(prepared[item.role].container_identity)
+        verified = handles[item.path.parent].exit_verified and retained_locations.get(entry["backup"], False)
+        entry["location_status"] = "verified_at_finalization" if verified else "unknown"
+        if not verified:
+            entry["backup"] = None
+    for item in changes:
+        handle = handles.get(item.path.parent)
+        if handle is None or not handle.exit_verified:
+            statuses[item.role] = {"saved": "published_location_unknown",
+                                   "rolled_back": "rolled_back_location_unknown"}.get(statuses[item.role], statuses[item.role])
+    if result.get("cleanup_pending"):
+        result["cleanup_pending_location_status"] = ("verified_at_finalization" if all(
+            handle.exit_verified for handle in handles.values()) else "unknown")
+    if result.get("finalization_failed"):
+        failure = failure or result["finalization_error_type"]
     result["results"] = [{"role": item.role, "status": statuses[item.role]} for item in changes]
     if failure:
         result["error"] = "Native file batch save failed; external objects were not overwritten. Inspect per-agent results and retained recovery files."

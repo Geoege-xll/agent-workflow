@@ -23,7 +23,7 @@ rule changes only retrieval; it does not remove this Skill or its post-QA closeo
 | Layer | Source | Use |
 |---|---|---|
 | Project entry | `project.yaml` -> `docs.project` (also `memory.portable_checkpoint`) | Current verified scope and links to accepted plan baselines |
-| Topic lifecycle and accepted baseline | `project.yaml` -> `docs.plans` | One editable Markdown per topic; HTML generation and freshness checks are suspended, with existing HTML retained as historical material; separate current execution from last accepted behavior, and link only explicit baselines from PROJECT |
+| Topic lifecycle and accepted baseline | `project.yaml` -> `docs.plans` | One editable Markdown per topic; plan Markdown-to-HTML generation is retired, with existing HTML retained as historical material; separate current execution from last accepted behavior, and link only explicit baselines from PROJECT |
 | Engineering and design truth | `project.yaml` -> remaining `docs.*` paths | Effective engineering, design-system, and UI evidence; paths are an index, not a preload list |
 | UI design evidence | `project.yaml` -> `docs.standards_root/prototype` | Stable concrete pages, in-page contracts, and shared prototype CSS |
 | Working memory | agentmemory | Cross-session observations and retrieval hints |

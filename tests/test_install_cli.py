@@ -13,7 +13,6 @@ import unittest
 from unittest.mock import patch
 
 from manager import install_cli
-from tests import test_homebrew_packaging as packaging_tests
 from tests import test_workflow_manager as launcher_tests
 
 
@@ -185,39 +184,6 @@ class DevelopmentEntryTest(unittest.TestCase):
                 self.assertEqual(json.loads(roles.stdout), {})
         self.assertFalse((self.root / "state").exists())
         self.assertFalse(host_home.exists())
-
-
-@unittest.skipUnless(shutil.which("ruby"), "Ruby is required for the existing Formula install simulation")
-class FormalEntryTest(unittest.TestCase):
-    # 复用既有真实归档→Formula#install 夹具；不再复制一套打包或 wrapper 实现。
-    setUp = packaging_tests.HomebrewLauncherTest.setUp
-    tearDown = packaging_tests.HomebrewLauncherTest.tearDown
-    run_cli = packaging_tests.HomebrewLauncherTest.run_cli
-
-    def test_formal_wrapper_keeps_its_payload_with_development_bin_first(self):
-        development_bin = self.root / "development bin"
-        install_cli.install(development_bin)
-        env = {**self.env, "HOME": str(self.caller / "home"),
-               "CODEX_HOME": str(self.caller / "codex"), "CLAUDE_CONFIG_DIR": str(self.caller / "claude"),
-               "PATH": os.pathsep.join((str(development_bin), str(self.entry.parent), self.env["PATH"]))}
-        self.assertEqual(shutil.which("awf-cli", path=env["PATH"]), str(self.entry))
-        formal = subprocess.run(["awf-cli", "--state-dir", "state", "--version"], cwd=self.caller,
-                                env=env, capture_output=True, text=True, timeout=15)
-        self.assertEqual(formal.returncode, 0, formal.stderr)
-        self.assertEqual(formal.stdout.splitlines(), [f"awf-cli {self.version}",
-                         f"中央源根：{self.prefix / 'libexec'}", "入口来源：formal（发行包）",
-                         f"物理载荷根：{self.prefix / 'libexec'}"])
-        source = subprocess.run(["awf-dev", "--version"], cwd=self.caller, env=env,
-                                capture_output=True, text=True, timeout=15)
-        self.assertEqual(source.returncode, 0, source.stderr)
-        self.assertIn("入口来源：source（显式源码开发）", source.stdout)
-        self.assertIn(f"物理载荷根：{PACK}", source.stdout)
-        self.assertFalse((self.caller / "state").exists())
-        # 正式载荷不能注册成开发入口；拒绝发生于目标目录创建之前。
-        refused = self.run_cli("--install-cli", "--bin-dir", "must stay absent")
-        self.assertEqual(refused.returncode, 2)
-        self.assertIn("请从源码", refused.stderr)
-        self.assertFalse((self.caller / "must stay absent").exists())
 
 
 def load_tests(loader, tests, pattern):

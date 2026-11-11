@@ -20,7 +20,7 @@ Skill 的锚定软链发布，安装在创建项目资源或中央状态前明�
 源包需要 Python 3.11+（含标准库 `tomllib`），无需安装 Python 包。入口从现有 PATH 选择
 支持的 `python3` 或带版本命令；可用 `AGENT_WORKFLOW_PYTHON` 指定解释器路径，显式值无效时
 直接失败，不静默切换环境。安装器不下载运行时，也不改全局 shell、宿主或 Python 配置。
-重新生成需求 HTML 时才需要现有 Node.js >= 20；setup 不启动渲染器，无需全局 npm 安装。
+计划 HTML 生成链已从当前源码退役，计划以 Markdown 交付；原型 HTML 与已有历史计划页面保留。本文的中央安装操作仅适用于仍保留的 2.x 产品面。
 
 ```bash
 bash /path/to/agent_workflow/install.sh
@@ -344,11 +344,11 @@ UI／UX、QA 是基线可用角色，不表示必须做 UI；实施角色仍按�
 
 项目文档只补缺失或空内容，不覆盖已有非空正文。存在实际项目特有规范才维护 `docs/STANDARDS.md` 薄索引和叶，
 不复制内置通用规则、不建 GENERAL／默认设计叶／空索引。`docs/PROJECT.md` 保留项目概况与明确已验收计划基线链接；
-同主题计划只有一份 Markdown 和同名派生 HTML，历史状态或 `completed` 标签不能证明当前功能。plans 仅实际保存时创建，
+同主题计划只有一份权威 Markdown，已有同名 HTML 仅作为可选历史页面；历史状态或 `completed` 标签不能证明当前功能。plans 仅实际保存时创建，
 不创建 features／plans／notes 空目录。旧 `docs.features`、`docs.notes`、`memory.fallback_dir` 和旧权威格式明确拒绝，
 2.1 不提供转换入口；处理前先证明完整原文、批准、验收证据、权限与引用可恢复，未知归属或并发修改时停止。
 详细生命周期与安全保留规则见[计划生命周期](../platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)，
-Full 六节写作形状见 [PLAN 模板](../templates/docs/PLAN.md)，需求 HTML 见[生成方法](../platforms/shared/skills/xy-plan/references/requirement-html.md)。
+Full 六节写作形状见 [PLAN 模板](../templates/docs/PLAN.md)，Markdown 交付及历史页面边界见[需求交付规则](../platforms/shared/skills/xy-plan/references/requirements-markdown.md)。原型设计、原型 HTML、原型验收和视觉确认继续保留。
 
 普通安装在模板占位值仍存在时，自动派生 `memory.project_id` 并原子写入配置；这是项目唯一稳定 slug，不是文件系统路径。
 已配置 ID 不覆盖，自定义命名空间可手改。`--check` 和 `--preflight` 从不初始化该值，保持只读。

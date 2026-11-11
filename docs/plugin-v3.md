@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 插件候选
 
-3.0 使用三平台官方插件机制分发工作流。当前版本为 `3.0.0-alpha.1`，唯一版本源是 `product/PLUGIN_VERSION`。本页描述开发候选，不表示已发布稳定版、替换本机安装或迁移业务项目。Windows 工作暂停。
+3.0 使用三平台官方插件机制分发工作流。当前版本为 `3.0.0-alpha.2`，唯一版本源是 `product/PLUGIN_VERSION`。本页描述开发候选，不表示已发布稳定版、替换本机安装或迁移业务项目。Windows 工作暂停。
 
 ## 工作流保持
 
@@ -8,7 +8,7 @@
 
 主会话是持续接单的 PM，按任务重叠、依赖和真实容量决定并行、复用、追加或等待。新生产任务交给原生子代理，使用 fresh/handoff_only 和当前最小完整任务包，不复制 PM 或兄弟会话。Full 保留请求级唯一独立只读 QA 与原收口顺序。准入 claim 仅代表预留，不能代替原生实例已创建；无法确认的实例不得自动释放并重新派发。
 
-计划维护主题 Markdown。计划 HTML 的公开生成入口暂停，源代码保留；历史 HTML 和原型 HTML 继续保留。
+计划维护主题 Markdown，计划 HTML 生成器、专用 vendor 和运行入口已退役。原型设计、原型 HTML、静态原型验收及视觉确认完整保留，历史计划 HTML 仍可作为可选导航。Markdown 交付与历史页面边界见[需求交付规则](../platforms/shared/skills/xy-plan/references/requirements-markdown.md)。
 
 ## 插件与配置工具
 
@@ -41,7 +41,11 @@ bash lib/python_runtime.sh -B -X utf8 packaging/build_plugin.py \
 
 输出包含三个宿主的插件 ZIP、本地载荷及对应的本地市场来源包。每次候选使用新的输出目录。具体官方加载与安装命令、载荷区别及验收限制见[安装说明](../plugins/INSTALL.md)。这里没有尚未发布的远程一键安装地址。
 
+维护者可在 Git 源码树中用 `packaging/build_candidates.py --output-dir <源码树外的新目录>` 统一调用两个独立构建器，生成七包和 `SHA256SUMS`。编排器检查双 alpha 版本、同一源码修订与树摘要、包种类及版本一致性，拒绝源码漂移和覆盖旧输出。自动 PR/push 工作流运行 `current` 并上传这些候选附件，保持只读仓库权限，不创建 tag 或 Release。
+
 空项目通过包内 `plugins/project_context.py` 显式创建最小 `.awf/project.yaml`；inspect 本身零写入。已有有效根 `project.yaml` 可复用。项目 adapter 和安装插件中的权威资源分开读取；旧中央绑定或混用来源明确拒绝，不靠伪造 pin 或全局指令文件补入口。
+
+原型验证沿本次明确选择的项目 adapter 读取 `docs.plans` 与 `docs.standards_root`，包括新项目 `.awf/project.yaml`。同一项目存在多个候选时，调用方须传递明确选择；原型工具不自行决定优先级，也不创建第二份配置。
 
 ## 验证范围
 
@@ -50,13 +54,15 @@ bash lib/python_runtime.sh -B -X utf8 packaging/build_plugin.py \
 两产品的当前回归使用唯一入口：
 
 ```bash
-bash scripts/test_workflow.sh --list plugin native-config
-bash scripts/test_workflow.sh plugin native-config
+bash scripts/test_workflow.sh --list current
+bash scripts/test_workflow.sh current
 ```
 
-测试组使用真实模块并在执行前校验完整目标，组合时去重。保留的 `ci`、`full` 和旧宿主/中央/TUI 组仍混有 2.x 历史消费者，不能把它们的名称当成 3.0 已完成的全量验收；PTY 与官方客户端运行还需按各自验收范围记录。
+`current` 运行两个产品、保留的原型链、验证入口与候选交付合同，是 PR 和开发分支 push 的门禁。可按实际变更单独选择 `plugin`、`native-config`、`prototype` 或 `packaging`；组合时按真实节点去重。`ci` 保留为 `legacy-ci` 的别名，`full` 仍含 2.x 历史消费者，不能把它们的名称当成当前产品验收。PTY 与官方客户端运行另按实际范围记录。
 
 当前原生观察：Codex CLI 能发现九项插件 Skill，但未发现候选 Hook，默认启动入口仍待验收；Claude Code 能校验并发现 Skill/Agent，但短模型 smoke 未取得有效回答；AGY 仅只读确认了官方插件管理界面，尚未实际加载候选。当前没有三平台原生运行全部通过的结论。
+
+活动任务跨官方插件更新的自动资源保留协议尚未实现，当前 alpha 使用活动任务先收尾再更新的限制。源码与离线包校验不能据此声明自动跨版本恢复通过。
 
 实施范围与证据见[3.0 计划](plans/plugin-v3.md)。旧安装/启用产品面的清理按现有消费者和对应验证分批执行，不自动卸载用户正在使用的 2.x 安装。
 

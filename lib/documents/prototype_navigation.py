@@ -14,20 +14,23 @@ from pathlib import Path, PurePosixPath
 
 if __package__:
     from lib.documents.plan_documents import local_target
-    from lib.documents.requirement_html import digest, normalized_relative, snapshot
+    from lib.documents.safe_documents import digest, normalized_relative, snapshot
     from lib.project.validate_project_config import validate_docs
+    from lib.runtime_pins import adapter_path, record_binding
 else:
     from lib.documents.plan_documents import local_target
-    from lib.documents.requirement_html import digest, normalized_relative, snapshot
+    from lib.documents.safe_documents import digest, normalized_relative, snapshot
     from lib.project.validate_project_config import validate_docs
+    from lib.runtime_pins import adapter_path, record_binding
 
 
 class RequirementNavigation:
     """复用文档模型的安全读取，仅保留本次明确导航输入的并发核对信息。"""
 
-    def __init__(self, project: Path, prototype: PurePosixPath) -> None:
+    def __init__(self, project: Path, prototype: PurePosixPath, *, adapter: str | None) -> None:
         self.project = project.absolute()
         self.prototype = self.project / prototype
+        self.adapter = adapter
         self.plans: Path | None = None
         self.inputs: dict[Path, tuple[str, tuple]] = {}
 
@@ -43,8 +46,14 @@ class RequirementNavigation:
     def _configure(self) -> None:
         if self.plans is not None:
             return
-        installed = self.project / ".agent-workflow/project.yaml"
-        config = installed if installed.exists() or installed.is_symlink() else self.project / "project.yaml"
+        # 适配器是本次项目画像/任务已经选定的输入，不能在原型阶段重新按存在性猜测。
+        # record_binding 同时复用插件物理根、中央桥与实际项目边界；中央模式仍只能
+        # 读取原固定运行时的 .agent-workflow 适配器，不把插件路径混入旧任务。
+        if self.adapter is None:
+            raise ValueError("需求导航必须传入本次明确选择的项目适配器 --adapter")
+        binding = record_binding({}, root=self.project, initialize=True)
+        selected = adapter_path(self.project, self.adapter, binding)
+        config = self.project / normalized_relative(selected)
         errors: list[str] = []
         docs = validate_docs(self._capture(config).decode("utf-8").splitlines(), self.project, errors)
         if errors:
@@ -82,8 +91,7 @@ class RequirementNavigation:
         # 既保留跨页面复用时的竞态拒绝，也不因缓存命中跳过新出现的可选 HTML。
         for kind, _ in links:
             self._capture(expected[kind])
-        # 不调用 process/check、renderer_identity 或 stage_markdown：反向原型链接、
-        # 历史 HTML 的版本记录及渲染器升级都不是页面渲染依赖或视觉重批条件。
+        # 反向原型链接与历史 HTML 的旧版本记录不是页面渲染依赖或视觉重批条件。
 
     def require_current_inputs(self) -> None:
         """返回原型证据前复核已读输入，不能把期间被替换的文档绑定到成功结果。"""

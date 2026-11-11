@@ -184,13 +184,22 @@ bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py claim --inpu
 `view` returns candidates, concrete waiting reasons and occupied threads/writers without writing. Immediately
 before native creation, `claim` revalidates the current manifest and CAS-claims the selected task in its original
 record; retain the exact claim result in the existing request scratch. A claim is occupancy, not a native start.
-After actual creation, bind `agent_ref` through the original record update. If input SHA changed, inspect that
+After claim, export/freeze the complete current RUNNING Task Pack bytes and create the native instance
+with that exact self-contained pack, before its actual ID is known. After confirmed creation, bind the
+returned `agent_ref` through a separate original-record update. For read_only/evidence settlement,
+keep that accepted pack's original bytes and SHA; no resend solely to add the ID is required. QA handoff
+validation retains its existing current complete QA pack with the actual bound identity. If input SHA changed, inspect that
 conflict and refresh only affected observations rather than silently retrying. After claim, update that record's
 manifest SHA from the returned `claimed_sha256` before release/view; do not reuse the pre-claim SHA. For creation that definitely
 did not occur, use the actual claim JSON with `release --input '<manifest>' --receipt '<claim.json>'
 --outcome definitely_not_created`; an unknown creation outcome uses `--outcome unknown`, retains allocation
 and requires native-result verification before any redispatch. The helper does not create workers or a ledger.
 Refresh the transient input when actual records change. This is not a mandatory new report or a Full graph for Light.
+
+Within the same physical project and request, the complete explicit record inventory may declare only
+one QA task, including failed, passed and retired history. Rework uses the same task and original Reviewer.
+A missing/cancelled/retired QA instance returns to PM for request recovery/acceptance handling; ordinary
+non-QA replacement rules cannot create a second Reviewer or replace its immutable identity.
 
 Same-request `ready` and request-scoped `qa-ready` still apply at their existing points; the cross-record
 admission helper adds single-PM explicit-record resource arbitration, never shared approval, cross-request QA
@@ -327,8 +336,8 @@ this reference creates no separate instance-state source.
    and a machine-readable `task_graph`. The graph is internal scheduler input, not user-visible
    output. `xy-plan` does not edit files or dispatch Agents. PM presents the single Markdown draft
    for formal Full review and may keep it in this request's scratch, without writing formal plans
-   before approval. Requirements/plan HTML generation is suspended under
-   [the retained reference](../../xy-plan/references/requirement-html.md).
+   before approval. Requirements/plan Markdown-to-HTML generation is retired under
+   [the retained reference](../../xy-plan/references/requirements-markdown.md).
 7. The PM reviews the draft and decides the post-QA controlled-document projection:
 
    ```yaml

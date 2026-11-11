@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流，正在升级为官方插件。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理；保留适用的两步确认、独立 QA 与原有交付流程。
 
-当前是 **3.0.0-alpha.1 开发候选**，版本源为 `product/PLUGIN_VERSION`，尚未正式发布或替换本机 2.x 安装。Windows 暂停。已公开版本以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
+当前是 **3.0.0-alpha.2 开发候选**，版本源为 `product/PLUGIN_VERSION`，尚未正式发布或替换本机 2.x 安装。Windows 暂停。已公开版本以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
 
 ## 两个独立产品
 
@@ -16,6 +16,15 @@
 ## 本地构建候选
 
 需要已有 Python 3.11+ 和 Bash。构建不安装客户端、不改用户配置：
+
+在 Git 源码树中生成完整的七包候选、源码与版本摘要、校验文件：
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 packaging/build_candidates.py \
+  --output-dir /absolute/new-candidate-output
+```
+
+输出叶目录须尚不存在且位于源码树外。两个独立产品也可分别构建：
 
 ```bash
 # 三宿主插件 ZIP、完整本地来源及市场清单。
@@ -39,8 +48,10 @@ bash scripts/agent_config.sh console --host codex
 
 ## 工作流与维护
 
-产品工作流权威在 [product/WORKFLOW.md](product/WORKFLOW.md)，角色职责在 `roles/`，九个共用 Skill 在 `platforms/shared/skills/`。插件从这些唯一来源装配；项目配置与包内权威资源分开读取，不复制整套规范。计划 HTML 生成入口暂停且代码保留，原型 HTML 保留。
+产品工作流权威在 [product/WORKFLOW.md](product/WORKFLOW.md)，角色职责在 `roles/`，九个共用 Skill 在 `platforms/shared/skills/`。插件从这些唯一来源装配；项目配置与包内权威资源分开读取，不复制整套规范。计划以 Markdown 交付，计划 HTML 生成器及其专用依赖退役。原型设计、原型 HTML、原型验收和视觉确认保留，已有历史计划页面继续作为可选导航。
 
 实施状态与验收边界见 [3.0 计划](docs/plans/plugin-v3.md)。旧中央运行时、项目启停、TUI 和 Homebrew 产品面分批退役；历史项目资料、计划和已有用户安装不自动删除。仓库尚保留的 2.x 代码不属于 3.0 插件载荷，`product/VERSION` 仍记录其保留源码版本。
+
+PR 与开发分支 push 使用 `current` 验证门禁，并构建候选附件；源码中的自动工作流不创建 tag 或 Release。源码、附件和本机保存验证均不替代官方客户端实际运行验收。
 
 [2.x 使用手册](docs/usage.md)、[2.x 开发与文件迁移记录](docs/development.md)、[2.x Homebrew 说明](docs/homebrew.md) 只供现有安装维护与历史追溯，不是 3.0 安装入口。3.0 当前原生验收尚未完成，因此不触发现有本机和业务项目的替换。

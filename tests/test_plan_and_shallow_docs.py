@@ -502,6 +502,6 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         ):
             self.assertIn(reference, read_contract(PACK / relative), relative)
         self.assertTrue((PACK / "templates/docs/PLAN.md").is_file())
-        html_reference = PACK / "platforms/shared/skills/xy-plan/references/requirement-html.md"
+        html_reference = PACK / "platforms/shared/skills/xy-plan/references/requirements-markdown.md"
         self.assertTrue(html_reference.is_file())
-        self.assertIn("references/requirement-html.md", read_contract(PACK / "platforms/shared/skills/xy-plan/SKILL.md"))
+        self.assertIn("references/requirements-markdown.md", read_contract(PACK / "platforms/shared/skills/xy-plan/SKILL.md"))

@@ -40,7 +40,7 @@
 | `lib/central/` | 中央项目受管资源及角色偏好字段解析；事务编排仍归 `manager/runtime_service.py` |
 | `lib/` 固定根文件 | 解释器、自举及存储安全边界、任务图、固定 Hook 与模型／AST 合同；`__init__.py` 仅标识可信普通包 |
 | `scripts/` | 统一验证入口、guard、冲突标记 lint 与宿主检查薄委派 |
-| `packaging/` | 离线归档构建器和 Homebrew Formula 模板，不进入运行时发行载荷 |
+| `packaging/` | 当前两产品离线构建器与候选编排，不进入运行载荷；旧归档/Formula 已退役 |
 | `tests/` | 行为、合同与真实消费者验证，不进入运行时发行载荷 |
 
 CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中央和模型角色／上下文／目录／预览调用透传。
@@ -93,7 +93,7 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 | `project`：项目发现与配置 | `lib/ensure_project_id.py` | [lib/project/ensure_project_id.py](../lib/project/ensure_project_id.py) |
 | `project`：项目发现与配置 | `lib/validate_project_config.py` | [lib/project/validate_project_config.py](../lib/project/validate_project_config.py) |
 | `documents`：文档与原型工具 | `lib/plan_documents.py` | [lib/documents/plan_documents.py](../lib/documents/plan_documents.py) |
-| `documents`：文档与原型工具 | `lib/requirement_html.py` | [lib/documents/requirement_html.py](../lib/documents/requirement_html.py) |
+| `documents`：文档安全读取 | `lib/requirement_html.py`（生成器已退役） | [lib/documents/safe_documents.py](../lib/documents/safe_documents.py)，供保留的原型导航复用 |
 | `documents`：文档与原型工具 | `lib/prototype_navigation.py` | [lib/documents/prototype_navigation.py](../lib/documents/prototype_navigation.py) |
 | `documents`：文档与原型工具 | `lib/validate_prototype_workspace.py` | [lib/documents/validate_prototype_workspace.py](../lib/documents/validate_prototype_workspace.py) |
 | `documents`：文档与原型工具 | `lib/standards_baseline.py` | [lib/documents/standards_baseline.py](../lib/documents/standards_baseline.py) |
@@ -242,8 +242,7 @@ QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口�
 
 ```bash
 # 直接选择真实 unittest 节点仍可用；不必为了单个节点运行整组。
-bash lib/python_runtime.sh -B -X utf8 -m unittest -v \
-  tests.test_homebrew_packaging.ReleaseArchiveTest.test_real_archive_manual_links_resolve_without_private_docs
+bash scripts/test_workflow.sh tests.test_native_config_packaging.StandalonePackageTest.test_extracted_package_real_http_save_and_optional_stdio_share_same_core
 bash lib/python_runtime.sh -B -X utf8 lib/project/project_profile_cli.py json /path/to/agent_workflow /path/to/project
 ```
 
@@ -282,8 +281,9 @@ bash scripts/test_workflow.sh tests.test_runtime_store
 | `central` | 中央项目启停、固定核心／绑定、current 协调、生命周期和中央 CLI／安装消费者 |
 | `tui` | 输入、终端单元格、草稿交互及选定项目流程；不隐式启动 PTY |
 | `pty` | 真实伪终端键盘、窗口缩放与项目生命周期；需要 POSIX |
-| `packaging` | 离线归档、手册、启动器和 Ruby Formula 安装模拟；Formula 消费者需要 Ruby |
-| `ci` | 已明确的入口、中央 current／记录容量／生命周期／原生归属／短命令、pin／模型收据、三宿主共享源、需求 HTML、PTY 和离线发行组合；需要 Node、Ruby 与 POSIX |
+| `packaging` | 当前工作流插件、独立配置包与候选交付合同；旧 Homebrew 归档目标已退役 |
+| `current` | 两产品、原型安全/适配器/指纹、验证入口和候选交付；当前 PR/push 门禁，网页 JS 测试需要 Node |
+| `ci` / `legacy-ci` | 保留的中央运行时、原生归属、短命令和 PTY 历史维护范围；不是当前产品自动门禁 |
 
 `codex`、`claude`、`antigravity`、`prototype` 保留各自聚焦范围，`hosts` 覆盖三宿主及其共享合同。
 旧四个 `scripts/test_codex.sh`、`test_claude.sh`、`test_antigravity.sh`、`test_prototype.sh`

@@ -59,9 +59,9 @@ New risks, invalidated evidence and explicit user/project rereview requirements 
   Mark accepted complete deletion as removed in the same source, retaining reason/date/replacement and
   necessary history, removing the current PROJECT link and repairing references. Do not project after QA
   failure. Project the verified topic plan into its single Markdown source, the sole editing authority.
-  Requirements/plan HTML generation and freshness checks remain suspended; preserve existing HTML as
+  Requirements/plan Markdown-to-HTML generation remains retired; preserve existing HTML as
   historical material without generating, updating or checking its freshness. Follow
-  [the retained HTML boundary](../../xy-plan/references/requirement-html.md).
+  [the retained HTML boundary](../../xy-plan/references/requirements-markdown.md).
 - Full performs PM commit assessment after QA PASS, and Light after acceptance of minimum verification and
   actually mandatory audit, including verified document projection.
   Keep the result internal:

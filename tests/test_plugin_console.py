@@ -219,6 +219,17 @@ assert.equal(applyFailed(applyReceiptContract(retained)),false);
 assert.equal(applyNeedsAttention(retained),true);
 const badResults={...retained,results:[{role:'opaque:a',status:'rolled_back'}]};
 assert.equal(applyFailed(badResults),true);
+// 真实发布后的目录退出冲突仍是完整收据；未知当前位置不能回退显示原绝对路径。
+const finalization={...receipt,published:true,finalization_failed:true,finalization_error_type:'ConflictError',
+  results:[{role:'opaque:a',status:'published_location_unknown'}],
+  recovery:receipt.recovery.map(row=>({...row,backup:null,declared_backup:row.backup,location_status:'unknown',
+    observed_identity:[1,2,33152,1,40,12,13],container_identity:[1,3]}))};
+const finalized=await new ModelApi('test',async()=>response(finalization)).apply('consumed-finalization-plan');
+assert.equal(finalized.published,true);assert.equal(finalized.saved,false);
+assert.equal(finalized.results[0].status,'published_location_unknown');
+assert.equal(finalized.recovery[0].backup,null);
+assert.equal(finalized.recovery[0].declared_backup,'/tmp/preimage.backup');
+assert.equal(applyNeedsAttention(finalized),true);
 for(const [status,code] of [[409,'conflict'],[401,'partial_failure']]) {
   const ordinary=new ModelApi('test',async()=>response({...receipt,error:{code,message:'普通错误'}},status));
   await assert.rejects(ordinary.apply('ordinary-plan'),error=>error.status===status&&error.receipt===undefined);
@@ -230,6 +241,11 @@ const malformed=[
   {...receipt,recovery:[{...receipt.recovery[0],sha256:{digest:'unsafe'}}]},
   {...receipt,recovery:[{...receipt.recovery[1],container_mode:'0700'}]},
   {...receipt,recovery:[{...receipt.recovery[1],content_may_change:'true'}]},
+  {...finalization,recovery:[{...finalization.recovery[0],backup:'/tmp/old-location'}]},
+  {...finalization,recovery:[{...finalization.recovery[0],declared_backup:null}]},
+  {...finalization,recovery:[{...finalization.recovery[0],location_status:'verified_at_finalization'}]},
+  {...finalization,recovery:[{...finalization.recovery[0],observed_identity:{inode:2}}]},
+  {...finalization,finalization_failed:'true'},
   {...receipt,cleanup_pending:[{path:'/tmp/unknown'}]},
   {...receipt,results:[{role:'opaque:a',status:1}]},
   {...receipt,saved:true}

@@ -18,7 +18,6 @@ from pathlib import Path
 from unittest import mock
 
 from lib.documents import validate_prototype_workspace as validator_module
-from lib.documents import requirement_html as requirement_renderer
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -150,13 +149,18 @@ def write_valid_project(parent: Path) -> Path:
     return project
 
 
-def bind_requirement_documents(project: Path, *, source_body: str | None = None) -> tuple[Path, Path]:
-    """保留带旧版本记录的历史 HTML 夹具；当前不执行暂停的渲染器。
+def bind_requirement_documents(project: Path, *, source_body: str | None = None,
+                               adapter: str = "project.yaml") -> tuple[Path, Path]:
+    """保留带旧版本记录的历史 HTML 夹具；不依赖已退役的生成器。
 
     导航只承诺实际文件/路径/竞态安全，不要求历史页记录或摘要与修订后原稿一致，
     也不把 helper 代码变动当作重验所有历史原型的理由。
     """
-    (project / "project.yaml").write_bytes((PACK / "project.yaml").read_bytes())
+    config = project / adapter
+    config.parent.mkdir(parents=True, exist_ok=True)
+    # 插件集成夹具保留实际 apply 创建的适配器字节；普通根配置夹具沿用完整测试配置。
+    if adapter == "project.yaml" or not config.exists():
+        config.write_bytes((PACK / "project.yaml").read_bytes())
     plans = project / "docs/plans"
     plans.mkdir(parents=True, exist_ok=True)
     source = plans / "settings.md"
@@ -176,7 +180,7 @@ def bind_requirement_documents(project: Path, *, source_body: str | None = None)
         "renderer": "retained-renderer-version", "html_sha256": hashlib.sha256(payload).hexdigest(),
     }
     html = source.with_suffix(".html")
-    html.write_bytes(requirement_renderer.MARKER + json.dumps(record, sort_keys=True).encode() + b" -->\n" + payload)
+    html.write_bytes(b"<!-- agent-workflow:requirement-html:v1 " + json.dumps(record, sort_keys=True).encode() + b" -->\n" + payload)
     page = project / PROTOTYPE_RELATIVE / "settings.html"
     body = PAGE_HTML.replace('<body>', '<body data-prototype-plan-source="docs/plans/settings.md">', 1)
     body = body.replace("</main>", (
@@ -272,6 +276,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                     str(VALIDATOR),
                     str(project_argument),
                     PROTOTYPE_RELATIVE.as_posix(),
+                    "--adapter", "project.yaml",
                 ],
                 cwd=cwd,
                 env=environment,
@@ -1461,6 +1466,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                             str(VALIDATOR),
                             str(project.resolve(strict=True)),
                             PROTOTYPE_RELATIVE.as_posix(),
+                    "--adapter", "project.yaml",
                         ]
                     )
             finally:

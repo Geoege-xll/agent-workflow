@@ -82,9 +82,63 @@ class NativeInventoryTest(unittest.TestCase):
         self.assertEqual(by_origin["project"]["effective"], {"model": "haiku", "effort": "inherit"})
         self.assertEqual(by_origin["project"]["sources"]["effort"], "host_unresolved")
         self.assertFalse(by_origin["plugin"]["writable"])
-        self.assertEqual(by_origin["plugin"]["invoke_name"], "review-kit:review:security")
+        self.assertEqual(by_origin["plugin"]["invoke_name"], "review-kit:review:semantic-auditor")
         self.assertEqual(by_origin["plugin"]["source_path"], str(plugin_path))
         self.assertFalse(self.service.resolve_subagent("claude", global_id, self.project)["dispatch_ready"])
+
+    def test_claude_default_scan_and_explicit_manifest_use_frontmatter_with_distinct_subfolder_rules(self):
+        """同一原文件的发现方式决定是否带子目录，最后一段始终来自 frontmatter。"""
+        root, path = claude_plugin(self.home)
+        default = self.service.context("claude")["roles"][0]
+        self.assertEqual(default["invoke_name"], "review-kit:review:semantic-auditor")
+        self.assertNotEqual(default["invoke_name"], "review-kit:review:security")
+        self.assertTrue(default["invoke_ready"])
+        resolved = self.service.resolve_subagent("claude", default["role"])
+        self.assertEqual(resolved["dispatch"]["subagent_type"], "review-kit:review:semantic-auditor")
+        (root / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "review-kit", "agents": ["./agents/review/security.md"]}))
+        explicit = self.service.context("claude")["roles"][0]
+        self.assertEqual(explicit["source_path"], str(path))
+        self.assertEqual(explicit["role"], default["role"], "发现模式改变不能伪造新的源文件身份")
+        self.assertEqual(explicit["invoke_name"], "review-kit:semantic-auditor")
+        self.assertNotEqual(explicit["invoke_name"], default["invoke_name"])
+        self.assertTrue(explicit["invoke_name_verified"])
+        self.assertEqual(self.service.resolve_subagent("claude", explicit["role"])["dispatch"]["subagent_type"], "review-kit:semantic-auditor")
+        custom = write_agent(root / "custom", "claude", "external-auditor", relative="review/other.md")
+        (root / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "review-kit", "agents": "./custom/review/other.md"}))
+        row = self.service.context("claude")["roles"][0]
+        self.assertEqual(row["source_path"], str(custom))
+        self.assertEqual(row["invoke_name"], "review-kit:external-auditor")
+        self.assertTrue(row["invoke_ready"])
+        self.assertFalse(row["writable"])
+
+    def test_claude_native_invocation_collision_blocks_every_source_instead_of_selecting_file_order(self):
+        """文件名不同但原生调用名相同时，默认扫描与 manifest 都必须显示歧义。"""
+        root, first = claude_plugin(self.home)
+        second = write_agent(root / "agents", "claude", "semantic-auditor", relative="review/other.md")
+        for manifest in ({"name": "review-kit"}, {"name": "review-kit", "agents": ["./agents/review/security.md", "./agents/review/other.md"]}):
+            (root / ".claude-plugin/plugin.json").write_text(json.dumps(manifest))
+            rows = self.service.context("claude")["roles"]
+            self.assertEqual({row["source_path"] for row in rows}, {str(first), str(second)})
+            self.assertEqual(len({row["role"] for row in rows}), 2)
+            self.assertEqual(len({row["invoke_name"] for row in rows}), 1)
+            for row in rows:
+                self.assertEqual(row["definition_status"], "ambiguous")
+                self.assertFalse(row["invoke_ready"])
+                self.assertFalse(row["dispatch_ready"])
+                self.assertEqual(self.service.resolve_subagent("claude", row["role"])["dispatch"], {})
+        # 默认扫描保留目录，因此不同目录的同名 agent 可以独立调用；manifest
+        # 改为显式列文件后去掉目录段，必须重新按真正的调用名检出冲突。
+        other = root / "agents/audit/other.md"
+        other.parent.mkdir()
+        second.rename(other)
+        (root / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "review-kit"}))
+        scanned = self.service.context("claude")["roles"]
+        self.assertEqual({row["invoke_name"] for row in scanned}, {"review-kit:review:semantic-auditor", "review-kit:audit:semantic-auditor"})
+        self.assertTrue(all(row["invoke_ready"] for row in scanned))
+        (root / ".claude-plugin/plugin.json").write_text(json.dumps({"name": "review-kit", "agents": ["./agents/review/security.md", "./agents/audit/other.md"]}))
+        explicit = self.service.context("claude")["roles"]
+        self.assertEqual({row["invoke_name"] for row in explicit}, {"review-kit:semantic-auditor"})
+        self.assertTrue(all(row["definition_status"] == "ambiguous" and not row["invoke_ready"] for row in explicit))
 
     def test_same_tree_duplicate_is_ambiguous_and_not_sorted_into_fake_precedence(self):
         root = self.home / ".claude/agents"

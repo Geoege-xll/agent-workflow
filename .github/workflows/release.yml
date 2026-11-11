@@ -1,21 +1,18 @@
-name: Validate and prepare release
+name: Validate current products and build alpha candidates
 
 on:
   pull_request:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version X.Y.Z without a leading v (for example 2.0.0)"
-        required: true
-        type: string
+  push:
+    branches: [main, 'codex/plugin-v3-*']
 
+# PR 与开发分支只读源码并上传当前运行的候选附件，不创建 tag 或 GitHub Release。
+# 旧 2.x 发行源码由 Git 历史保留，不再进入当前产品自动交付链。
 permissions:
   contents: read
 
 concurrency:
-  # PR 与手动发行、不同 ref 各自排队，避免互相占用同一个全局发行锁。
-  group: prepare-release-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: current-products-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -32,59 +29,48 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.11"
-      - name: Check existing Node and Ruby consumers
-        # 需求 HTML 执行真实 Node 引擎；Formula 测试执行真实 Ruby。
-        # 使用托管 runner 已有运行时，缺失则明确失败，不能 skip 后冒充验证完成。
+          python-version: '3.11'
+      - name: Check native console JavaScript runtime
+        # 保留的 Node 消费者是独立配置网页的真实 JS 合同；缺失必须失败，不能 skip 假绿。
         run: |
           set -euo pipefail
           command -v node
           node --version
-          command -v ruby
-          ruby --version
-      - name: Show validation scope
-        run: bash scripts/test_workflow.sh --list ci
-      - name: Validate CLI, pins, shared skills, PTY and packaging
-        run: bash scripts/test_workflow.sh ci
+      - name: Show current products and retained prototype scope
+        run: bash scripts/test_workflow.sh --list current
+      - name: Validate plugin, native configuration and retained prototype chain
+        run: bash scripts/test_workflow.sh current
 
-  release:
-    # PR 只有上面的只读验证；发行仍须手动事件且两系统矩阵全部通过。
-    if: github.event_name == 'workflow_dispatch'
+  candidate:
     needs: validate
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     permissions:
-      contents: write
-    env:
-      RELEASE_VERSION: ${{ inputs.version }}
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.11"
-      # packaging 已由 needs 的同一 ci 入口验证，发行阶段仅生成并发布候选资产。
-      - name: Build archive, checksum and Formula
-        run: bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py "$RELEASE_VERSION"
-      - name: Create draft release without replacing published assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          tag="v$RELEASE_VERSION"
-          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
-            if [ "$(git rev-list -n 1 "$tag")" != "$GITHUB_SHA" ]; then
-              printf '%s\n' 'Existing tag points at another commit; refusing mismatched release.' >&2
-              exit 1
-            fi
-          fi
-          gh release create "$tag" \
-            --target "$GITHUB_SHA" \
-            --draft \
-            --title "Agent Workflow $tag" \
-            --generate-notes \
-            "dist/agent-workflow-$RELEASE_VERSION.tar.gz" \
-            "dist/agent-workflow-$RELEASE_VERSION.tar.gz.sha256" \
-            dist/Formula/awf-cli.rb
+          python-version: '3.11'
+      - name: Build both independent alpha products from the checked source
+        run: bash lib/python_runtime.sh -B -X utf8 packaging/build_candidates.py --output-dir "$RUNNER_TEMP/awf-candidate"
+      - name: Summarize exact source, independent versions and artifact checksums
+        run: cat "$RUNNER_TEMP/awf-candidate/CANDIDATE.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload seven candidate packages and provenance
+        # 官方 v4.6.2 release 对应的完整提交；只上传 ZIP/摘要，不上传展开的临时市场目录。
+        # https://github.com/actions/upload-artifact/releases/tag/v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha-candidate-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/awf-candidate/workflow/*.zip
+            ${{ runner.temp }}/awf-candidate/workflow/*.zip.sha256
+            ${{ runner.temp }}/awf-candidate/native/*.zip
+            ${{ runner.temp }}/awf-candidate/native/*.zip.sha256
+            ${{ runner.temp }}/awf-candidate/candidate-manifest.json
+            ${{ runner.temp }}/awf-candidate/SHA256SUMS
+            ${{ runner.temp }}/awf-candidate/CANDIDATE.md
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

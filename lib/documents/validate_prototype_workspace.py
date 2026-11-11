@@ -1530,6 +1530,7 @@ def validate_workspace(
     *,
     pages: list[str] | None = None,
     expected: dict[str, str] | None = None,
+    adapter: str | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """验证整个工作区，返回选定具体页的证据；指纹相等不代表授予用户批准。"""
     prototype_relative = _safe_relative_path(
@@ -1541,7 +1542,7 @@ def validate_workspace(
     pages_fd = -1
     try:
         prototype_fd = _walk_directory(project_fd, prototype_relative, "prototype root")
-        navigation = RequirementNavigation(Path(project_root), prototype_relative)
+        navigation = RequirementNavigation(Path(project_root), prototype_relative, adapter=adapter)
         dependencies = DependencyValidator(prototype_fd, navigation=navigation)
         index_body = dependencies.text(PurePosixPath("index.html"), size_limit=MAX_TEXT_FILE_SIZE)
         try:
@@ -1686,6 +1687,7 @@ def main(argv: list[str]) -> int:
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("project_root")
     parser.add_argument("prototype_root")
+    parser.add_argument("--adapter", help="explicitly selected project-relative adapter; required for requirements navigation")
     parser.add_argument("--json", action="store_true", dest="json_output")
     parser.add_argument("--page", action="append", help="concrete page relative to the prototype root; repeatable")
     parser.add_argument("--expect", action="append", default=[], metavar="PAGE=SHA256")
@@ -1703,7 +1705,8 @@ def main(argv: list[str]) -> int:
             if name in expected and expected[name] != fingerprint.lower():
                 raise ValidationError(f"conflicting expected fingerprints for page: {name}")
             expected[name] = fingerprint.lower()
-        result = validate_workspace(args.project_root, args.prototype_root, pages=args.page, expected=expected)
+        result = validate_workspace(args.project_root, args.prototype_root, pages=args.page, expected=expected,
+                                    adapter=args.adapter)
     except Exception as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 1

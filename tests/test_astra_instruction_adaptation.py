@@ -31,7 +31,7 @@ MODEL_PROTOCOL_EXCEPTIONS = {
         "`需求与验收`", "`方案与原型关联`", "`当前进展与恢复入口`", "`验收结果与当前已交付行为`",
         "`批准依据与必要证据`", "`批准依据`", "`验收证据`",
     ),
-    "platforms/shared/skills/xy-plan/references/requirement-html.md": ("`验收结果与当前已交付行为`",),
+    "platforms/shared/skills/xy-plan/references/requirements-markdown.md": ("`验收结果与当前已交付行为`",),
     "platforms/shared/skills/xy-workflow/references/dispatch.md": (
         "#完整读取必需长文", "# 上游快照生成失败时不要进入本段；校验失败时 && 会阻止依赖查询继续执行。",
     ),

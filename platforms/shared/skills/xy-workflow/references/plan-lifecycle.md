@@ -16,8 +16,8 @@ applicable project constraints and permission boundaries still apply.
 
 Formal Full review uses the single Markdown draft. Before approval, PM may keep that draft in the current
 request scratch. Only after approval does PM save `docs.plans/<name>.md` before dispatch. Markdown remains
-the sole editing authority. Requirements/plan HTML generation and freshness checks are suspended; preserve
-existing HTML and renderer code under [the retained reference](../../xy-plan/references/requirement-html.md).
+the sole editing authority. Requirements/plan Markdown-to-HTML generation is retired; preserve
+existing plan HTML and active prototype HTML under [the retained reference](../../xy-plan/references/requirements-markdown.md).
 Light selects persistence by existing save needs, complexity or user requirements, without upgrading the
 workflow. Document existence and checkbox selections do not create approval.
 
@@ -80,7 +80,7 @@ The design Agent returns coverage from REQ IDs to concrete prototype pages/actua
 handoff. PM writes it into this Markdown source, without generating HTML, a separate mapping file or
 prototype QA. Progress, link or presentation-only changes do not automatically reopen requirements approval.
 requirements_fingerprint and prototype dependency fingerprints retain their separate responsibilities;
-historical HTML freshness is not required while generation is suspended.
+historical HTML freshness is not required after generation retirement.
 
 ## Visual iteration and task replacement
 
@@ -205,8 +205,8 @@ carrier of outstanding decisions or work. Report the smallest missing approval o
 - Mark accepted deletion as removed in the same source, retaining necessary dates, reason, replacement and
   history. Remove its current index entry; do not rename it or create a feature/ADR document.
 - Unindexed old execution drafts retain historical boundaries. Do not auto-index by completed, bulk-edit
-  history or replay old tasks by default. Existing same-name HTML is retained historical material while
-  generation is suspended; it is not a second standard or approval source.
+  history or replay old tasks by default. Existing same-name HTML is retained historical material after
+  generation retirement; it is not a second standard or approval source.
 - Old `docs.features` and FEATURE templates are outside the current runtime contract, and version 2.1
   provides no old-document conversion CLI. Preserve complete text, approvals/evidence and index references
   under README's document-protection boundary before removing rejected old keys; stop for conflicts or

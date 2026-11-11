@@ -28,9 +28,9 @@ plan_state: draft
   adapter-resolved `docs.plans` before first dispatch, following
   `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
 - Formal Full requirements review uses one Markdown source. PM owns the pre-approval scratch draft
-  and post-approval `.md` persistence before dispatch. Requirements/plan HTML generation is suspended;
-  existing HTML and renderer source remain historical/recovery material under
-  [the suspended HTML delivery reference](references/requirement-html.md). This Skill returns only a draft.
+  and post-approval `.md` persistence before dispatch. Requirements/plan Markdown-to-HTML generation is retired;
+  existing plan HTML remains historical material; prototype HTML and verification remain active under
+  [the Markdown delivery reference](references/requirements-markdown.md). This Skill returns only a draft.
   Reserve concrete prototype page/state coverage with stable REQ IDs; page state is not approval.
 
 ## Drafting procedure
@@ -96,4 +96,4 @@ unless requested. The PM, not this Skill, decides projection, resolves user choi
 approved plan and dispatches.
 
 <!-- workflow-contract: references/task-graph.md -->
-<!-- workflow-contract: references/requirement-html.md -->
+<!-- workflow-contract: references/requirements-markdown.md -->

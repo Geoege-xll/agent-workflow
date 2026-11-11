@@ -199,8 +199,12 @@ Replace all placeholders with actual current identities, accepted pack and evide
 real tool observation, not a CLI host probe or a worker's unsupported completion assertion. Bind original
 Task Pack bytes with existing `fingerprints` and reuse the complete pack actually delivered/acknowledged.
 Keep necessary accepted-pack bytes and evidence readable for review. The helper compares the complete
-current task contract/authority, allowing only state/retirement metadata and omitted empty Light graph
-fields to differ. Changed scope, approvals, standards, resource authority, wrong identity or old result SHA rejects.
+current implementation contract/authority separately from runtime/closeout `state`, `agent_ref`,
+`agent_retired`, `handoff_assessment` and `acceptance_evidence`, plus omitted empty Light graph fields.
+An accepted first-dispatch pack may omit the not-yet-known native ID; any included `agent_ref` must match
+the current immutable binding, and `settle.agent_ref` plus `completion.agent_ref` always match it exactly.
+Legitimate metadata updates do not authorize changed task/request/role, ownership, contracts, validation,
+standards or approvals. Changed scope, approvals, standards, resource authority, wrong identity or old result SHA rejects.
 Use the explicit complete Task Pack snapshot actually delivered/acknowledged, physically separate from
 the mutable original record. Existing `task` export supports the task artifact; retain its delivered bytes
 and SHA. A Light record cannot serve simultaneously as the accepted snapshot being preserved and the
@@ -329,10 +333,18 @@ authority. This file describes existing record tools only, without another pool.
 
 Record `agent_ref: {host: codex|claude|antigravity, agent_id: <actual-native-ID>}` only after PM verifies
 actual authorized dispatch results. First put the task into actual RUNNING (an explicit qa may also use QA),
-then bind the ID in a separate update, never combined with first execution-state entry. After first binding,
+freeze/export its complete current pack, create the native instance with those bytes, then bind the actual
+returned ID in a separate update, never combined with first execution-state entry. The accepted complete
+pack can omit `agent_ref`; read_only/evidence settlement keeps its original byte SHA without requiring a
+resend solely to add the ID. QA handoff still binds its current complete QA pack and actual identity. After first binding,
 only same-value idempotent writes are allowed, without overwrite/clear. Different tasks in one graph,
 including historically completed tasks, cannot share identities. A valid ID shape proves neither actual
 liveness, role, approval nor completion.
+
+Request QA uses at most one task across the same physical project's explicit records for that request,
+including failed/passed/retired history. Delta review uses that same task and original immutable identity.
+Missing/cancelled/retired Reviewer state returns to PM for explicit request recovery/acceptance handling;
+it does not authorize a second QA task, automatic replacement or identity rebinding.
 
 `agent_retired` is an optional bool, default false. It may move only from absent/false to true, irreversibly.
 Retirement prevents misdispatch; it cannot change an executing task's state or release path/semantic locks,

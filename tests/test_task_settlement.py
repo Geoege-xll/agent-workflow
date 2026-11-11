@@ -49,6 +49,10 @@ class TaskSettlementTest(unittest.TestCase):
         self.source.write_text(json.dumps(payload), encoding="utf-8")
         pack = copy.deepcopy(payload) if light else export_task_pack(payload, "api")
         self.accepted.write_text(json.dumps(pack), encoding="utf-8")
+        return payload, self.settlement_patch(task)
+
+    def settlement_patch(self, task):
+        """仅为当前已冻结接受包构造结果夹具；不声称执行了真实原生模型。"""
         evidence = {"path": str(self.evidence), "sha256": records.digest(self.evidence.read_bytes())}
         sha = records.digest(self.accepted.read_bytes())
         reference = task["agent_ref"]
@@ -58,7 +62,46 @@ class TaskSettlementTest(unittest.TestCase):
                  "result": {"task_pack_sha256": sha, "evidence": [evidence]},
                  "verification": [{"command": task["verification_commands"][0], "exit_code": 0, "evidence": evidence}],
                  "retire": True}
-        return payload, {"tasks": {"api": {"settle": value}}}
+        return {"tasks": {"api": {"settle": value}}}
+
+    def first_dispatch(self, *, kind="evidence", light=False):
+        """真实走claim、导出未绑定包和单独bind；原生create返回值只用明确夹具表示。
+
+        这与从已绑定记录反造接受包不同：传给新实例的原字节在create之前已固定，
+        后续绑定和交接评估不得改写它，也不能为补入创建后才有的ID要求重新接受。
+        """
+        from lib.dispatch_admission_cli import admission
+        payload = graph()
+        task = payload["tasks"][0]
+        task["task_type"] = kind
+        if light:
+            payload = export_task_pack(payload, "api")
+            payload["task"]["workflow_level"] = "Light"
+        self.source.write_text(json.dumps(payload), encoding="utf-8")
+        manifest = {"schema_version": 1, "project_root": str(self.root),
+                    "records": [{"path": str(self.source), "sha256": records.digest(self.source.read_bytes()),
+                                 "execution_roots": {"api": str(self.root)}}],
+                    "capacity": {"configured_subagents": 2, "configured_writers": 1,
+                                 "host_available_subagents": 2}}
+        claim = admission("claim", manifest, {"record": str(self.source), "request_id": task["request_id"], "task_id": "api"})
+        self.assertEqual("claimed", claim["status"])
+        command = [*PYTHON, str(PACK / "lib/task_graph_cli.py"), "task", "--input", str(self.source),
+                   "--output", str(self.accepted), "--expect-sha256", "missing"]
+        if not light:
+            command.extend(["--task-id", "api"])
+        exported = subprocess.run(command, text=True, capture_output=True, timeout=60)
+        self.assertEqual(0, exported.returncode, exported.stdout + exported.stderr)
+        accepted = records.decode(self.accepted.read_bytes())
+        self.assertEqual("RUNNING", accepted["task"]["state"])
+        self.assertNotIn("agent_ref", accepted["task"])
+        # 本夹具没有调用宿主工具；该ID只模拟create成功之后可观察到的返回值。
+        reference = {"host": "codex", "agent_id": "fixture-native-first-create"}
+        current = records.decode(self.source.read_bytes())
+        bound, _ = self.invoke(current, {"tasks": {"api": {"set": {"agent_ref": reference}}}})
+        self.assertEqual(0, bound.returncode, bound.stderr)
+        current = records.decode(self.source.read_bytes())
+        task = current.get("task") or current["tasks"][0]
+        return current, self.settlement_patch(task)
 
     def update(self, payload, patch):
         if "task" not in payload:
@@ -97,6 +140,61 @@ class TaskSettlementTest(unittest.TestCase):
                     self.assertEqual(["external/"], updated["active_paths"])
                     self.assertEqual(["external-lock"], updated["active_semantic_locks"])
                 self.assertEqual(before, payload)
+
+    def test_first_native_creation_accepts_pre_binding_pack_and_legitimate_closeout_metadata(self):
+        for kind in ("read_only", "evidence"):
+            for light in (False, True):
+                with self.subTest(kind=kind, light=light):
+                    self.accepted.unlink(missing_ok=True)
+                    payload, change = self.first_dispatch(kind=kind, light=light)
+                    accepted_bytes = self.accepted.read_bytes()
+                    metadata = {"handoff_assessment": {"independent_qa": "not_required" if light else "required",
+                                "documentation": "not_required", "reason": "当前只读结果的实际交接评估"},
+                                "acceptance_evidence": ["已核实当前结果，完整证据保留在结果日志"]}
+                    recorded, _ = self.invoke(payload, {"tasks": {"api": {"set": metadata}}})
+                    self.assertEqual(0, recorded.returncode, recorded.stderr)
+                    current = records.decode(self.source.read_bytes())
+                    settled, _ = self.invoke(current, change)
+                    self.assertEqual(0, settled.returncode, settled.stderr)
+                    task = records.decode(self.source.read_bytes())
+                    task = task.get("task") or task["tasks"][0]
+                    self.assertEqual("RESULT_VERIFIED", task["state"])
+                    self.assertEqual(metadata["acceptance_evidence"], task["acceptance_evidence"][:-1])
+                    self.assertEqual(accepted_bytes, self.accepted.read_bytes())
+
+    def test_pre_binding_acceptance_keeps_scope_approvals_and_completion_identity_strict(self):
+        payload, change = self.first_dispatch()
+        mutations = (
+            lambda p, s: p["tasks"][0]["input_contracts"].append("未被原实例接受的新范围"),
+            lambda p, s: p.update(approved_gates=[]),
+            lambda p, s: s["completion"].update(agent_ref={"host": "codex", "agent_id": "other-native-instance"}),
+        )
+        for index, mutate in enumerate(mutations):
+            current, patch_value = copy.deepcopy(payload), copy.deepcopy(change)
+            mutate(current, patch_value["tasks"]["api"]["settle"])
+            with self.subTest(index=index):
+                rejected, before = self.invoke(current, patch_value)
+                self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                self.assertEqual(before, self.source.read_bytes())
+
+    def test_bound_accepted_pack_cannot_claim_another_native_identity_or_drop_contract(self):
+        for mutation in ("wrong-reference", "empty-task"):
+            payload, change = self.fixture()
+            pack = records.decode(self.accepted.read_bytes())
+            if mutation == "wrong-reference":
+                pack["task"]["agent_ref"] = {"host": "codex", "agent_id": "other-native-instance"}
+            else:
+                pack["task"] = {}
+            self.accepted.write_text(json.dumps(pack), encoding="utf-8")
+            sha = records.digest(self.accepted.read_bytes())
+            value = change["tasks"]["api"]["settle"]
+            value["task_pack"]["sha256"] = sha
+            value["completion"]["task_pack_sha256"] = sha
+            value["result"]["task_pack_sha256"] = sha
+            with self.subTest(mutation=mutation):
+                rejected, before = self.invoke(payload, change)
+                self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                self.assertEqual(before, self.source.read_bytes())
 
     def test_refuses_unknown_running_old_scope_unbound_and_failed_or_changed_evidence(self):
         mutations = (

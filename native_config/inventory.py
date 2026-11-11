@@ -142,7 +142,7 @@ def _files(inventory: Inventory, root: Path, *, style: str, depth=0):
                 yield from _files(inventory, path, style=style, depth=depth + 1)
 
 
-def _add(inventory, root, path, *, origin, scope, source_id, rank, plugin=None, enabled=True, logical=None, invoke_verified=True):
+def _add(inventory, root, path, *, origin, scope, source_id, rank, plugin=None, enabled=True, folders=(), invoke_verified=True):
     if len(inventory.agents) >= MAX_AGENTS:
         raise ConfigError("原生 Agent 数量超过限制")
     try:
@@ -156,7 +156,10 @@ def _add(inventory, root, path, *, origin, scope, source_id, rank, plugin=None, 
         opaque = hashlib.sha256(json_bytes(material)).hexdigest()
         invoke_name = document.name
         if plugin and inventory.host == "claude":
-            invoke_name = plugin + ":" + (logical or relative).removesuffix(".md").replace("/", ":")
+            # 官方命名的最后一段来自 frontmatter.name，不能拿源文件名代替。
+            # folders 仅由发现入口提供：默认 agents/ 递归保留子目录，manifest
+            # 显式列出的文件不带子目录；源 relative 仍单独参与 opaque ID。
+            invoke_name = ":".join((plugin, *folders, document.name))
         inventory.agents.append(Agent("agent_" + opaque, inventory.host, origin, source_id, path, relative,
                                       document, node, scope, rank, plugin, enabled, invoke_name,
                                       invoke_name_verified=invoke_verified))
@@ -248,14 +251,15 @@ def _claude_plugins(inventory, directory, roots):
                         path = _relative(root, raw)
                         if path.suffix != ".md":
                             raise ConfigError("Claude 插件 agents 只允许 Markdown 文件")
-                        within_default = path.is_relative_to(root / "agents")
-                        files.append((path, path.relative_to(root / "agents").as_posix() if within_default else path.name, within_default))
+                        # agents 字段取代默认扫描。显式文件即使恰在 agents/ 的
+                        # 子目录中，也只以 <plugin>:<frontmatter.name> 注册。
+                        files.append((path, ()))
                 else:
-                    files = [(path, path.relative_to(root / "agents").as_posix(), True)
+                    files = [(path, path.relative_to(root / "agents").parent.parts)
                              for path in _files(inventory, root / "agents", style="claude")]
-                for path, logical, verified in files:
+                for path, folders in files:
                     _add(inventory, root, path, origin="plugin", scope=scope, source_id=source_id,
-                         rank=1000, plugin=name, enabled=enabled.get(plugin_id), logical=logical, invoke_verified=verified)
+                         rank=1000, plugin=name, enabled=enabled.get(plugin_id), folders=folders)
             except (OSError, ValueError):
                 inventory.diagnostic("invalid_or_unsafe_plugin_install", directory / "plugins/installed_plugins.json")
 

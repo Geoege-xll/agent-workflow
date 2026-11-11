@@ -26,7 +26,6 @@ CENTRAL_ENV = (
 HELPERS = frozenset({
     "lib/task_graph_cli.py", "lib/agent_continuation_cli.py", "lib/documents/context_read.py",
     "lib/dispatch_admission_cli.py",
-    "lib/documents/requirement_html.py",
     "lib/documents/validate_prototype_workspace.py",
     "lib/validate_project_docs.py",
     "lib/project/validate_project_config.py", "lib/project/ensure_project_id.py",

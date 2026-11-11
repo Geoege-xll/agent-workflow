@@ -3,8 +3,8 @@
 The plugin version comes only from `product/PLUGIN_VERSION`. The packaged 2.x
 `product/VERSION` identifies preserved source authority, not the plugin release.
 Python 3.11+ is required. Windows delivery is paused. The build is offline and
-uses Python's standard library; the preserved requirements HTML helper also needs
-an existing Node runtime when that branch is actually used.
+uses Python's standard library. Plan delivery uses Markdown; the retired plan HTML
+generator and its dedicated renderer are excluded. Prototype HTML and visual approval remain active.
 Use the unchanged `lib/python_runtime.sh` interpreter selector because a machine's
 default `python3` can be older even when a supported version is already installed.
 It selects existing Python only, without installing software or changing PATH.

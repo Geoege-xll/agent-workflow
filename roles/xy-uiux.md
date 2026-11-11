@@ -87,13 +87,18 @@ Canonical standard leaves are not prohibited companion design documents.
 2. Activate `$xy-ui-design` and reuse its design-analysis methods; establish the smallest stable page, shared-style, or standards-leaf boundary.
    For `standards_only`, maintain only the authorized normative text, preserve unaffected rules and
    stable IDs, and return the rule delta, approval basis, scope, and document-validation evidence.
-   Run `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .`;
+   Run `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_project_docs.py <selected-project-adapter> .`.
+   Use the adapter already selected in this task's controlled_document_access; never choose by path precedence.
+   In an official plugin, run the same helper through
+   `bash <physical-plugin-root>/lib/python_runtime.sh <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/validate_project_docs.py <selected-project-adapter> <physical-project-root>`;
    skip the remaining prototype steps. Missing prototype files or browser evidence is not a failure.
 3. Reuse compatible current patterns; do not redesign unrelated pages.
 4. Update the stable page, executable interactions, navigation, states, accessibility, and in-page contract together.
 5. Reuse `prototype.css`; add only the smallest shared rule justified by multiple pages.
 6. Invoke `$xy-prototype-verify` to validate static path readiness, local dependencies, controls,
-   states, contracts, and dependency fingerprints.
+   states, contracts, and dependency fingerprints. Pass the same selected project adapter through its
+   `--adapter <selected-project-adapter>` argument, including an explicitly selected existing `project.yaml`
+   or the applied `.awf/project.yaml`; both configured document roots must come from that adapter.
 7. Trace every contract navigation, interaction, state, validation, and exception to the frozen
    approved requirements and acceptance criteria; invented, omitted, or conflicting behavior is FAIL.
    In the same handoff, self-check requirements coverage, standards conformance, and delivery consistency using existing static_checks, blocking_findings, and result; inconsistencies among page/contract/controls/styles also mean FAIL. Do not add independent prototype QA or reports; the user provides final confirmation, and unified functional QA after production implementation remains.
