@@ -379,6 +379,11 @@ class TaskSettlementTest(unittest.TestCase):
         """真实当前插件helper结算原记录；不运行旧中央安装器，不生成pin。"""
         project = self.root / "project"
         project.mkdir()
+        # 本例要证明任务释放自有资源后，仍保留的外部锁不会阻塞独立现有资源。
+        # 必须提供真实资源节点：Linux无法从空目录只读确认未来名称规则，不存在
+        # 的src/one和external/会正确地共同保守锁住项目父树，不能把它误作未释放。
+        (project / "src/one").mkdir(parents=True)
+        (project / "external").mkdir()
         installed = plugin_fixture(self.root)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("AGENT_WORKFLOW_") and key != "PYTHONPATH"}
@@ -417,8 +422,42 @@ class TaskSettlementTest(unittest.TestCase):
         after = view()
         self.assertEqual(0, after["active_subagents"])
         self.assertEqual(0, after["active_writers"])
-        self.assertEqual("next", after["candidates"][0]["task_id"])
+        self.assertEqual(["next"], [candidate["task_id"] for candidate in after["candidates"]],
+                         json.dumps(after, ensure_ascii=False, sort_keys=True))
+        # 独立包的真实CLI已覆盖当前卷；额外固定“名称规则未知”的文件边界，
+        # 防止此夹具仅因Darwin的pathconf可用而通过，遗漏Linux空目录的保守投影。
+        from lib import dispatch_admission_cli as admission_cli
+        with patch.object(admission_cli, "_directory_case_sensitive", return_value=None):
+            unknown_names = admission_cli.admission("view", data)
+        self.assertEqual(["next"], [candidate["task_id"] for candidate in unknown_names["candidates"]],
+                         json.dumps(unknown_names, ensure_ascii=False, sort_keys=True))
         print("PLUGIN_SETTLEMENT: actual packaged update/admission; RESULT_VERIFIED; record slots 1->0; native close unverified", flush=True)
+
+    def test_settlement_keeps_external_subtree_when_future_directory_names_are_unknown(self):
+        """槽位释放不能解除保留的外部父树锁，空目录继续按未知名称规则保守等待。"""
+        from lib import dispatch_admission_cli as admission_cli
+        project = self.root / "empty-project"
+        project.mkdir()
+        payload, change = self.fixture(downstream=True)
+        settled, _ = self.invoke(payload, change)
+        self.assertEqual(0, settled.returncode, settled.stdout + settled.stderr)
+        manifest = {"schema_version": 1, "project_root": str(project),
+                    "records": [{"path": str(self.source), "sha256": records.digest(self.source.read_bytes()),
+                                 "execution_roots": {"api": str(project), "next": str(project)}}],
+                    "capacity": {"configured_subagents": 1, "configured_writers": 1,
+                                 "host_available_subagents": 1}}
+        # 明确执行非Darwin的只读探测分支；这不是宣称在本机运行了真实Linux。
+        # 空目录没有可观察名称，因此结果应为未知，不能为让候选通过假定其敏感。
+        with patch.object(admission_cli.sys, "platform", "linux"):
+            self.assertIsNone(admission_cli._directory_case_sensitive(project))
+            projected = admission_cli.admission("view", manifest)
+        diagnostic = json.dumps(projected, ensure_ascii=False, sort_keys=True)
+        self.assertEqual(0, projected["active_subagents"], diagnostic)
+        self.assertEqual(1, projected["remaining_subagent_slots"], diagnostic)
+        self.assertEqual([], projected["candidates"], diagnostic)
+        pending = next(item for item in projected["waiting"] if item["task_id"] == "next")
+        self.assertEqual(["path_conflict"], pending["reasons"], diagnostic)
+        self.assertEqual([], list(project.iterdir()))
 
 
 

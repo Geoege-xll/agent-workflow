@@ -58,6 +58,17 @@ Full 的需求确认和适用的视觉确认保留；Light 已有授权、一致
 
 这些结果属于源码与临时夹具验证，不证明官方会话已加载、真实模型派发或推理生效。远端 Mac/Linux 结果按对应源码提交的 GitHub Actions 实际运行记录判断。
 
+### 首次真实 CI 补充修复
+
+提交 `4bf00b86a32d06460a041fdfcc251f66b003f9e0` 的首次真实 [GitHub 运行](https://github.com/Geoege-xll/agent-workflow/actions/runs/43026041701)保留原失败：Linux 为一个结算后继候选夹具错误，macOS 为八个进程启动超时，候选作业正确未执行。两平台额外三个 skip 均因没有 Claude CLI，另一个仍为 Codex 官方隔离入口限制，不当作原生运行通过。
+
+- Linux：空项目中两个不存在的未来路径在名称规则未知时被安全地保守锁到同一父树。生产保护保持；正控改为真实 `src/one` 与 `external` 资源，另加非 Darwin 未知名称规则空目录负控，并使失败输出完整等待原因。仅修改测试，2/2 通过；红绿日志 `/private/tmp/awf-v3r-ci-r1-red.log`、`/private/tmp/awf-v3r-ci-r1-green.log`。
+- macOS：HTTPServer 默认绑定调用 `getfqdn → gethostbyaddr`，不需要的反向解析可阻塞本地服务启动。受控真实子进程记录到此调用栈，阻塞解析器 30 秒即在原五秒预算内失败；修复只复用 TCPServer 真实绑定并记录数字回环地址，不改启动超时、健康认证、关闭与锁顺序。新负控 2/2、受影响 server/MCP/独立包 23/23 通过；证据 `/private/tmp/awf-native-startup-build-verified.json`。
+
+上述追加只涉及一个生产文件及两个测试文件，按同一 Reviewer 的三路径冻结差量复核，不重跑无关本地全套。修复后的真实跨平台结果必须取新提交对应的运行；首轮失败不会被相同代码重试或跳过掩盖。
+
+该三文件差量已由同一 Reviewer 首尾核 SHA，独立资源正负对照与真实启动/健康/关闭合计 5/5 通过，无新增 P1/P2；报告 `/private/tmp/awf-v3r-ci-fix-independent-qa.json`。前一候选七包仅作为历史保留，新差量从新提交重新构建和验核。
+
 ## 交付与清理边界
 
 `packaging/build_candidates.py` 仅编排两个既有构建器，在源码树外全新目录生成三宿主 plugin/local-source 六包和一个 native 独立包、校验与源码摘要。版本和包摘要从实际构建生成，不手工维护另一份版本源。拒绝源码漂移、混包、错版与覆盖旧输出；运行验证标志保持 false。自动工作流只读源码并上传候选附件，不创建 tag 或 Release。

@@ -229,6 +229,20 @@ class ConsoleHttpTest(unittest.TestCase):
             self.assertNotIn("temporary_visibility_gap", result)
 
 
+class ConsoleStartupTest(unittest.TestCase):
+    def test_literal_loopback_bind_does_not_require_reverse_dns(self):
+        """真实绑定固定回环地址时，不应为不使用的主机名触发系统反向解析。"""
+        with mock.patch("native_config.server.socket.gethostbyaddr", side_effect=AssertionError("回环绑定不应依赖反向DNS")) as resolver:
+            server = ConsoleServer(object(), version="0.1.0-test")
+        try:
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertEqual(server.server_address, ("127.0.0.1", server.server_port))
+            self.assertGreater(server.server_port, 0)
+            resolver.assert_not_called()
+        finally:
+            server.server_close()
+
+
 class ConsoleProcessTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -281,6 +295,41 @@ class ConsoleProcessTest(unittest.TestCase):
         line = child.stdout.readline()
         self.assertTrue(line, child.stderr.read().decode() if child.poll() is not None else "无启动信息")
         return child, json.loads(line)
+
+    def test_real_startup_and_health_handshake_ignore_blocked_reverse_dns(self):
+        """仅阻塞测试子进程的系统反向解析，原五秒启动及认证健康握手仍须完成。"""
+        marker = Path(self.temporary.name).resolve() / "reverse-dns-stage.json"
+        bootstrap = ("import json,socket,sys,time,traceback\nfrom pathlib import Path\n" +
+                     f"sys.path.insert(0,{str(ROOT)!r})\n" +
+                     "def blocked_reverse_lookup(address):\n" +
+                     f" Path({str(marker)!r}).write_text(json.dumps({{'phase':'reverse_lookup','address':address,'stack':traceback.format_stack()}}))\n" +
+                     " time.sleep(30)\n" +
+                     " return ('localhost',[],[address])\n" +
+                     "socket.gethostbyaddr=blocked_reverse_lookup\n" +
+                     "from native_config.cli import main\nraise SystemExit(main(sys.argv[1:]))\n")
+        try:
+            child, started = self.start_serve("--idle-timeout", "0", bootstrap=bootstrap)
+        except AssertionError:
+            if marker.exists():
+                stage = json.loads(marker.read_text())
+                self.fail("启动停在受控阶段 " + stage["phase"] + "：" + "".join(stage["stack"]))
+            raise
+        self.assertFalse(marker.exists(), "固定回环服务不能触发系统反向解析")
+        record = read_connection(self.data_dir / "console")
+        parsed = urlsplit(started["url"])
+        connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=3)
+        try:
+            connection.request("GET", "/api/health", headers={"Authorization": "Bearer " + parse_qs(parsed.fragment)["token"][0]})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            health = json.loads(response.read())
+            self.assertEqual(health["instance_id"], record["instance_id"])
+            self.assertEqual(health["configuration_identity"], record["configuration_identity"])
+        finally:
+            connection.close()
+        child.terminate()
+        self.assertEqual(child.wait(timeout=5), 0)
+        self.assertFalse((self.data_dir / "console/connection.json").exists())
 
     def test_sigterm_waits_for_active_catalog_and_reaps_owned_client(self):
         """真实 fake app-server 超过关闭时刻，退出必须等查询 finally 回收该进程组。"""

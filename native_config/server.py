@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+from socketserver import TCPServer
 import stat
 import threading
 import time
@@ -154,6 +155,16 @@ class ConsoleServer(ThreadingHTTPServer):
         self.last_activity = time.monotonic()
         super().__init__(("127.0.0.1", port), ConsoleHandler)
         self.origin = f"http://127.0.0.1:{self.server_port}"
+
+    def server_bind(self):
+        """绑定固定数字回环地址，不为未使用的主机名依赖系统反向 DNS。"""
+        # HTTPServer.server_bind 在真实 bind 后额外调用 socket.getfqdn，后者
+        # 会进入 gethostbyaddr；系统解析器的等待不受 CLI 启动/健康握手预算约束。
+        # 本服务的监听、Origin 校验、连接记录和健康请求都只使用 127.0.0.1，
+        # 因此直接复用 TCPServer 的真实绑定与端口分配，再记录实际数字地址。
+        # 不修改全局解析器，不提前宣布就绪；CLI 仍在写连接记录后输出启动收据。
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
