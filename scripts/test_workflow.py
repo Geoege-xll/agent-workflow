@@ -113,11 +113,11 @@ NATIVE_COMPONENTS = {
         # 普通与原生 CI 共同消费的操作租约负控只在这里声明一次；原生分组
         # 自动包含，普通 ci 也由这个字段派生，不另抄 Store/Records 方法清单。
         "portable_ci_targets": (
-            # codec 纯协议在便携/原生共用同一精确登记；同模块的 POSIX publisher
-            # 场景仍只由 portable 父模块收集，不能当作 Windows FS 原生证据。
-            "tests.test_native_agents.NativeJournalCodecTest.test_lossless_deterministic_shared_body_and_independent_containers",
-            "tests.test_native_agents.NativeJournalCodecTest.test_physical_limit_and_repeated_body_logical_limit_are_separate",
-            "tests.test_native_agents.NativeJournalCodecTest.test_malformed_references_tables_cycles_and_unknown_schema_fail_closed",
+            # codec 独立纯模块在便携/原生共用同一精确登记；原 native_agents
+            # 的 POSIX publisher 仍只由 portable 父模块收集，不扩成原生证据。
+            "tests.test_native_journal.NativeJournalCodecTest.test_lossless_deterministic_shared_body_and_independent_containers",
+            "tests.test_native_journal.NativeJournalCodecTest.test_physical_limit_and_repeated_body_logical_limit_are_separate",
+            "tests.test_native_journal.NativeJournalCodecTest.test_malformed_references_tables_cycles_and_unknown_schema_fail_closed",
             # 可信路径纯策略及 SID 长度接口合同精确共享；所属模块
             # 还有 Windows 专属类，不能整模块纳入普通 CI 或破坏原生零 skip。
             "tests.test_windows_fs_native.TrustedPathPolicyTest.test_effective_masks_inherit_only_owner_and_unknown_acl_fail_closed",
