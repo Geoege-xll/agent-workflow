@@ -485,7 +485,27 @@ exit $LASTEXITCODE
         fs.secure_os.mkdir(parent, 0o700)
         private_root = parent / "private-root"
         fs.secure_os.mkdir(private_root, 0o700)
-        self.grant_owned_node_world_access(parent, "DC")
+        # SDDL 的 DC 属于目录服务权利（位 0x2），落到文件目录是 ADD_FILE，
+        # 不能按名称把它当作文件系统 DELETE_CHILD。这里明确用 FILE_DELETE_CHILD
+        # 的 0x40，并读回真实 ACE 验证，防止负控误变成守卫允许的纯创建权限。
+        # 来源：Microsoft Learn /windows/win32/secauthz/ace-strings 与
+        # /windows/win32/fileio/file-access-rights-constants。
+        self.grant_owned_node_world_access(parent, "0x40")
+        with fs.Directory(parent) as directory, fs._security_policy(directory.handle) as policy:
+            masks = []
+            everyone = fs._sid_bytes("S-1-1-0")
+            for index in range(int.from_bytes(policy.acl_bytes[4:6], "little")):
+                pointer = fs.HANDLE()
+                self.assertTrue(fs._api().security.GetAce(policy.acl, index, ctypes.byref(pointer)))
+                header = ctypes.string_at(pointer, 8)
+                size = int.from_bytes(header[2:4], "little")
+                self.assertTrue(8 <= size <= len(policy.acl_bytes))
+                ace = ctypes.string_at(pointer, size)
+                if ace[0] == 0 and ace[8:] == everyone:
+                    self.assertEqual(0, ace[1], "Everyone ACE 必须直接作用于父目录")
+                    masks.append(int.from_bytes(ace[4:8], "little"))
+            self.assertEqual([0x40], masks, "必须真实授予且只授予 Everyone FILE_DELETE_CHILD")
+        print("[native delete-child ACE readback] Everyone allow masks=" + json.dumps(masks), flush=True)
         fs.assert_private(private_root)
         scenarios.append(("parent-delete-child", private_root, parent))
         for label, relative, leaf in (("bin", "bin", False), ("versions", "versions", False),
