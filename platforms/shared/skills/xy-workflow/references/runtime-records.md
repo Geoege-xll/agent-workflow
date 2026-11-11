@@ -101,7 +101,7 @@ if it is unknown, use `fingerprints` on just this graph file, not a whole-projec
 The patch supports:
 
 - `tasks`: an object keyed by existing task ID. Each operation may contain `set`, `append`,
-  `documents`, and `checkpoint`. `set` accepts `state`, `owned_paths`, `semantic_locks`, `input_contracts`,
+  `documents`, and `checkpoint`, or the exclusive result-task `settle` below. `set` accepts `state`, `owned_paths`, `semantic_locks`, `input_contracts`,
   `output_contracts`, `acceptance_evidence`, `verification_commands`, and
   `controlled_document_access`, and optional `agent_ref`, `agent_retired`, `handoff_assessment`; `append` supports their existing arrays,
   except non-array fields; agent_ref, agent_retired and handoff_assessment cannot be appended.
@@ -165,6 +165,75 @@ again on unchanged bytes. Recompute `ready` when state, gates, capacity or locks
 QA readiness does not imply an empty READY queue. Avoid repeated identical queries only while their
 relevant inputs are unchanged. Queries remain read-only and never dispatch an Agent.
 
+<a id="result-task-settlement"></a>
+
+## Result-task settlement
+
+Apply WORKFLOW's `Result-task settlement` for `task_type: read_only|evidence` only. PM first verifies the
+actual native completion, accepted current-scope result and latest revised-pack acknowledgement. Then use
+the existing `update` CLI with exactly one task's exclusive `settle`; no new CLI, state store or report is
+required. Source example below uses absolute task-owned files. Plugin execution uses the verified
+current source-pack entry for this same logical helper. 3.0 rejects every old runtime_binding in either
+record or accepted pack and never enters an older bridge/content store.
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/task_graph_cli.py update \
+  --input '<absolute-original-record>' --expect-sha256 '<current-original-record-sha>' --patch - <<'JSON'
+{"tasks":{"existing-task-id":{"settle":{
+  "schema_version":1,
+  "agent_ref":{"host":"codex","agent_id":"actual-original-native-id"},
+  "task_pack":{"path":"/absolute/accepted-current-task-pack.json","sha256":"<original-pack-byte-sha>"},
+  "completion":{"state":"completed","agent_ref":{"host":"codex","agent_id":"actual-original-native-id"},
+    "task_pack_sha256":"<same-original-pack-byte-sha>",
+    "evidence":{"path":"/absolute/existing-native-events-or-result.json","sha256":"<evidence-byte-sha>"}},
+  "result":{"task_pack_sha256":"<same-original-pack-byte-sha>",
+    "evidence":[{"path":"/absolute/existing-current-result.log","sha256":"<result-byte-sha>"}]},
+  "verification":[{"command":"<exact-current-verification-command>","exit_code":0,
+    "evidence":{"path":"/absolute/existing-verification.log","sha256":"<log-byte-sha>"}}],
+  "retire":true
+}}}}
+JSON
+```
+
+Replace all placeholders with actual current identities, accepted pack and evidence; `completion` is PM's
+real tool observation, not a CLI host probe or a worker's unsupported completion assertion. Bind original
+Task Pack bytes with existing `fingerprints` and reuse the complete pack actually delivered/acknowledged.
+Keep necessary accepted-pack bytes and evidence readable for review. The helper compares the complete
+current task contract/authority, allowing only state/retirement metadata and omitted empty Light graph
+fields to differ. Changed scope, approvals, standards, resource authority, wrong identity or old result SHA rejects.
+Use the explicit complete Task Pack snapshot actually delivered/acknowledged, physically separate from
+the mutable original record. Existing `task` export supports the task artifact; retain its delivered bytes
+and SHA. A Light record cannot serve simultaneously as the accepted snapshot being preserved and the
+record being overwritten. No new report or second ledger is required.
+
+Evidence references reuse explicit existing task-owned native exports/results/logs. Each is an absolute
+single-link regular file with exact SHA and the existing safe-reader 4MiB limit; do not scan histories or
+replace raw evidence with summaries. A large native export may use an already exported scoped native
+result; no new per-task report or mandatory ledger is introduced. PM verifies the actual latest-scope
+acknowledgement and meaning of the source; file shape/SHA alone cannot prove native execution.
+
+`verification` follows the current declared commands in order, exactly once. Ordinary string commands
+require actual exit 0 and their real logs. A frozen `{run, expected}` command additionally requires matching
+`expected` text in its verification item, allowing an explicitly expected negative-control result; PM
+verifies that the observed exit/output actually satisfies that contract. An observation-only task may
+declare no shell commands and use `verification: []`; its real result/native evidence remains required.
+Do not manufacture shell success for a native observation or human audit.
+
+`retire` is optional boolean; true only records logical non-reuse. Success publishes RESULT_VERIFIED,
+the compact settlement/evidence references in existing acceptance_evidence, and optional retirement in
+one original CAS. It releases record execution occupancy and owned locks; actual native close/capacity is
+still unknown until observed separately. A stale original SHA, failed check or busy publication lock leaves
+the original unchanged; inspect conflicts before retry. Plain `set.state=RESULT_VERIFIED`, mixed settle/set,
+multi-task settlement and Writer/QA settlement reject. Existing Writer build and QA handoff gates remain.
+Current 3.0 result records reject legacy Writer success values BUILD_VERIFIED, QA_SCOPE_READY and QA;
+only evidence-bound RESULT_VERIFIED completes read_only/evidence work. Historical files remain ordinary
+read-only audit material without migration or fabricated settlement evidence. At publication,
+the original locked CAS boundary rechecks this round's new receipt sources and rejects every accepted-pack,
+completion, result or verification source physically aliasing the target record. Independent copies with the same bytes remain valid; unrelated updates do not rescan old receipts.
+Refresh the admission manifest SHA after success, then use `view` only when its relevant inputs changed.
+Old runtime bindings are rejected, not migrated; never mutate old cores or hand-edit historical native
+failure fixtures to make current settlement pass.
+
 ## Export a complete changed Task Pack
 
 Use `task --input <graph> --task-id <existing-id>` to return the complete current task object.
@@ -224,6 +293,13 @@ contracts for AGY's native `/grill-me` and this pack's self-contained requiremen
 automatically substitute, rename aliases or omit this pack's Full requirement coverage, or scan personal
 Skill directories.
 
+`continuous_intake` keeps separate `runtime_checks` for message delivery, native wait wakeup, original
+task continuity, same-ID followup and parent-final/cancellation lifecycle. Each stays `runtime_unverified`
+with no evidence reference until actual target-session evidence exists; doctor does not ingest proofs or
+change these records. `observed_capabilities` remains unknown, never inferred from versions/configuration.
+`not_found` means only that this probe's PATH did not find that executable, not that the user has not installed
+the product. Use the current-host integration for official client controls, without writing host settings or databases.
+
 After explicitly exporting native usage metadata for the currently authorized scope, run the installed
 read-only adapter from the actual business-project root, not the central-management source-pack root or
 `.agent-workflow` directory:
@@ -267,13 +343,27 @@ After observing actual state through exposed tools, PM runs the installed read-o
 business-project root:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/task_graph_cli.py continuation \
+bash .agent-workflow/lib/python_runtime.sh -B -X utf8 .agent-workflow/lib/agent_continuation_cli.py \
   --input "${workflow_record:?set current schema 2 graph or Light pack}" --task-id "${task_id:?set existing ID}" \
-  --host codex --observed-state idle
+  --host codex --observed-state running --intent append --capability non_interrupting_message
 ```
 
-For the same task, running recommends wait and idle recommends followup. Short rework may continue on the
-same instance; the original same-round QA Reviewer performs delta review. No automatic continuation for
+In central mode translate this logical helper through the current pin's thin bridge above. `--intent` accepts
+`observe` (default), `progress`, `append` or `independent`. Repeat `--capability` only for names actually
+verified on the current exposed authorized native tools: `non_interrupting_message` and `idle_followup`.
+Do not copy the example capability merely because a product's documentation mentions messaging. Unknown
+or duplicate capability names reject. `observe` + running recommends `wait`; `progress`/`append` + running
+recommends `message` only with `non_interrupting_message`, otherwise `wait`. Idle needs `idle_followup`
+for `followup`, otherwise it blocks. Independent work recommends `new_task`, never reuses the old ID.
+All identity, retirement, cancelled/unknown and active-task checks run before these decisions. The old
+`task_graph_cli.py continuation` still supports its original observation-only wait/followup contract.
+
+Before append, apply WORKFLOW's `continuous-pm-intake`: revise the complete scope/contract and necessary
+approval, send the complete affected pack and confirm receipt before accepting new-scope results. The query's
+`revision_required`/`acceptance_requires_ack` are reminders, not approval/receipt evidence. Execute a suggested
+message only with the verified non-interrupting native tool to the same ID; interrupt/stop is not steer.
+Short rework may continue on the same instance; the original same-round QA Reviewer performs delta review.
+No automatic continuation for
 independent tasks, cross-host work, cancelled／missing／unknown, unbound, completed or retired tasks. The query
 does not probe, dispatch, message, unlock or clear context. A blocking recommendation is a normal query result
 (exit 0); invalid input exits 2. Still hand off current complete pack/scope, reusing or restoring complete

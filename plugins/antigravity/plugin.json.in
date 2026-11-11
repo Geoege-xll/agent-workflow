@@ -1,0 +1,8 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "agent-workflow",
+  "displayName": "Agent Workflow",
+  "version": "@PLUGIN_VERSION@",
+  "description": "Repository-driven Light and Full workflows with native delegation and independent QA.",
+  "author": {"name": "Agent Workflow"}
+}

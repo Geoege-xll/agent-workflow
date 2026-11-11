@@ -31,14 +31,14 @@ import unicodedata
 try:
     from .agent_continuation import active as _running, check_binding
     from lib.hosts.claude_instructions import read_file
-    from .task_graph import TaskGraphError
-    from .runtime_pins import project_root, read_builtin_source, record_binding
+    from .task_graph import TaskGraphError, SATISFIED_DEPENDENCY_STATES
+    from .runtime_pins import PLUGIN_ENV, project_root, read_builtin_source, record_binding
     from .standard_paths import builtin_source_path
 except ImportError:
     from agent_continuation import active as _running, check_binding
     from lib.hosts.claude_instructions import read_file
-    from task_graph import TaskGraphError
-    from runtime_pins import project_root, read_builtin_source, record_binding
+    from task_graph import TaskGraphError, SATISFIED_DEPENDENCY_STATES
+    from runtime_pins import PLUGIN_ENV, project_root, read_builtin_source, record_binding
     from standard_paths import builtin_source_path
 
 
@@ -48,7 +48,7 @@ SET_FIELDS = frozenset({
     "acceptance_evidence", "verification_commands", "controlled_document_access",
 })
 APPEND_FIELDS = SET_FIELDS - {"state", "controlled_document_access", "agent_ref", "agent_retired", "handoff_assessment"}
-COMPLETED_STATES = {"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED"}
+COMPLETED_STATES = {"BUILD_VERIFIED", "QA_SCOPE_READY", "QA", "QA_PASSED", "RESULT_VERIFIED"}
 
 
 def digest(body: bytes) -> str:
@@ -130,6 +130,13 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
         if before == body:
             return False
         identity = _identity(path) if before is not None else None
+        # 发布锁内复核本轮新结算的独立证据，拒绝把待覆盖记录用作自己的完成证据。
+        # 普通发布与历史收据不新增扫描；纯 update 仍不持有隐式输出路径。
+        if __package__:
+            from .task_settlement import validate_new_settlement_sources
+        else:
+            from task_settlement import validate_new_settlement_sources
+        validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         mode = identity[2] if identity else 0o600
         descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
         temporary = Path(raw)
@@ -206,7 +213,10 @@ def document_digest(root: Path, relative: str, *, binding: dict | None = None) -
     外部 core_root 获得读取权限。项目索引、专项叶及其他文档仍使用 file_digest。
     """
     project_root(root)
-    if binding is not None and builtin_source_path(relative) is not None:
+    if PLUGIN_ENV in os.environ:
+        # 插件只改变精确内置来源的定位；普通项目指纹仍使用下方原有根内读取器。
+        record_binding({"runtime_binding": binding} if binding is not None else {}, root=root)
+    if (binding is not None or PLUGIN_ENV in os.environ) and builtin_source_path(relative) is not None:
         return digest(read_builtin_source(binding, relative))
     return file_digest(root, relative)
 
@@ -270,6 +280,15 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
            validate: Callable[[str, dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
     """只更新明确选定的现有任务；批准、依赖、角色和 QA 策略不由本工具改写。"""
     patch = _object(patch, "update patch")
+    changes = patch.get("tasks", {})
+    if isinstance(changes, dict) and any(isinstance(operation, dict) and "settle" in operation
+                                         for operation in changes.values()):
+        selected_root = project_root(root)
+        marker = selected_root / ".agent-workflow/runtime.json"
+        if ("runtime_binding" in payload or marker.exists() or marker.is_symlink()
+                or any(name in os.environ for name in ("AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
+                                                       "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CORE_ROOT"))):
+            raise TaskGraphError("3.0 settlement rejects central runtime_binding and bridge context")
     # update 从原记录读取 pin，补丁白名单不允许添加／替换它；刷新也不能偷用项目当前版。
     binding = record_binding(payload, root=root)
     if set(patch) - {"tasks", "capacity", "refresh_documents", "integrations"}:
@@ -283,13 +302,31 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if task_id not in indexed:
             raise TaskGraphError(f"unknown task ID: {task_id}")
         operations = _object(operations, f"patch.tasks.{task_id}")
-        if set(operations) - {"set", "append", "documents", "checkpoint"}:
+        if set(operations) - {"set", "append", "documents", "checkpoint", "settle"}:
             raise TaskGraphError(f"unsupported task update operation: {task_id}")
         task = indexed[task_id]
+        if "settle" in operations:
+            # 结果态、证据引用与可选退休必须作为同一事实原子发布；拒绝同补丁
+            # 修改范围或其他任务，避免先改约定再拿旧结果结算。CAS仍由原CLI统一发布。
+            if set(operations) != {"settle"} or set(patch) != {"tasks"} or len(changes) != 1:
+                raise TaskGraphError("settle must be the only operation for exactly one task")
+            if __package__:
+                from .task_settlement import settle_task
+            else:
+                from task_settlement import settle_task
+            task.update(settle_task(payload, old[task_id], operations["settle"],
+                                    read=read_record, decode=decode))
         fields = _object(operations.get("set", {}), "task.set")
         additions = _object(operations.get("append", {}), "task.append")
         if set(fields) - SET_FIELDS or set(additions) - APPEND_FIELDS:
             raise TaskGraphError("task update attempts to modify a protected or unsupported field")
+        if fields.get("state") == "RESULT_VERIFIED":
+            raise TaskGraphError("RESULT_VERIFIED requires the evidence-bound settle operation")
+        if (task["task_type"] in {"read_only", "evidence"} and "state" in fields
+                and fields["state"] != old[task_id]["state"]
+                and isinstance(fields["state"], str) and fields["state"] in SATISFIED_DEPENDENCY_STATES):
+            # 只读/证据任务不能借 Writer 的成功值绕开本轮证据结算。
+            raise TaskGraphError("new read_only/evidence completion requires settle")
         for field, value in fields.items():
             if field == "agent_ref":
                 # 在套用状态变更之前检查旧记录，身份不是新派发或完成态的凭据。

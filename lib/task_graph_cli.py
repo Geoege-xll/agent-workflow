@@ -21,6 +21,7 @@ try:
     from .standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
     from .validate_project_docs import builtin_standard_rule_catalog
     from .runtime_pins import project_root, record_binding
+    from .plugin_resources import plugin_root
     from .task_graph import (
         Task,
         TaskGraphError,
@@ -36,6 +37,7 @@ except ImportError:
     from standard_paths import canonical_standard_path, standard_domain, builtin_source_path, source_domain, canonical_standard_source_path
     from validate_project_docs import builtin_standard_rule_catalog
     from runtime_pins import project_root, record_binding
+    from plugin_resources import plugin_root
     from task_graph import (  # type: ignore[no-redef]
         Task,
         TaskGraphError,
@@ -194,6 +196,12 @@ def replace_pack_task(payload: dict[str, Any], task: dict[str, Any]) -> dict[str
     """写回同一Light单包，剔除仅为核心校验补出的空调度边。"""
     result = copy.deepcopy(payload)
     result["task"] = copy.deepcopy(task)
+    if payload["task"].get("task_type") == "qa" and task.get("task_type") == "read_only":
+        # 原QA包先按完整合同校验，不能先丢审查范围再把伪造元数据当作有效输入。
+        # 仅records的临时就绪副本不携带QA专属字段；正式写回仍是qa，因此其范围
+        # 不经过本分支，原包/导出/验收和verify-ui-scope的防伪逻辑保持完整。
+        _execute("validate", payload)
+        result.pop("reviewed_ui_changes", None)
     for field in ("depends_on", "blocks", "semantic_locks", "gates"):
         if field not in payload["task"] and not result["task"].get(field):
             result["task"].pop(field, None)
@@ -656,9 +664,13 @@ def _validate_standards_access(
             f"tasks[{index}].controlled_document_access has unsupported field(s): "
             f"{', '.join(sorted(unknown))}"
         )
-    if value["adapter"] != "project.yaml":
+    # 只有资源模块核验的插件进程可以使用新的实际适配器位置；普通源包与中央
+    # 合同仍用原逻辑label，不接受任意相对路径或伪造的插件环境。
+    allowed_adapters = {"project.yaml", ".awf/project.yaml"} if plugin_root() is not None else {"project.yaml"}
+    if not isinstance(value["adapter"], str) or value["adapter"] not in allowed_adapters:
         raise TaskGraphError(
             f"tasks[{index}].controlled_document_access.adapter must be 'project.yaml'"
+            + (" or '.awf/project.yaml' in verified plugin mode" if len(allowed_adapters) > 1 else "")
         )
     documents = value["documents"]
     if not isinstance(documents, list):

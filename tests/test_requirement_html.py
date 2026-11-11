@@ -1,8 +1,10 @@
-"""需求投影独立职责：真实 CLI、唯一原稿、路径/故障保护和安装消费者。"""
+"""当前暂停契约的真实入口验证；旧引擎用例保留为不收集的恢复资料。"""
 
 from __future__ import annotations
 
 import hashlib
+import contextlib
+import io
 import base64
 from html.parser import HTMLParser
 import json
@@ -54,7 +56,7 @@ class Page(HTMLParser):
         self.hrefs.extend(value for key, value in attrs if tag == "a" and key == "href")
 
 
-class RequirementHtmlTest(unittest.TestCase):
+class _RequirementHtmlFixture:
     def setUp(self):
         supplied = os.environ.get("AWF_TEST_SCRATCH")
         parent = Path(supplied) / "requirement-html-fixtures" if supplied else None
@@ -102,6 +104,12 @@ class RequirementHtmlTest(unittest.TestCase):
         page.write_text('<!doctype html><html><body><section id="error-state">错误</section></body></html>', encoding="utf-8")
         return page
 
+class RequirementHtmlEngineHistory(_RequirementHtmlFixture):
+    """暂停前的真实渲染用例，无 TestCase 基类，当前不收集，也不报告 skip。
+
+    原有源码和依赖用例保留，恢复时须一起验证；保留正文不代表本轮已执行引擎。
+    当前入口的零副作用拒绝由下方 RequirementHtmlSuspendedTest 覆盖。
+    """
     def test_vendor_and_real_render_fresh_stale_source_properties(self):
         upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text())
         for name, facts in upstream["files"].items():
@@ -473,6 +481,121 @@ class RequirementHtmlTest(unittest.TestCase):
             self.assertEqual(json.loads(result.stdout)["status"], "fresh")
         self.assertIn("svg", Page((plans / "installed.html").read_bytes()).tags)
 
+
+class RequirementHtmlSuspendedTest(_RequirementHtmlFixture, unittest.TestCase):
+    """当前必须通过的暂停行为；实际源入口和安装态入口都不能产生派生文件。"""
+
+    def test_public_python_entries_reject_before_any_input_or_side_effect(self):
+        # 故意保留手写旧页且给部分调用无效路径：暂停必须先于输入校验，不能为了
+        # 返回“暂停”先读用户文档、验证 Node、建 scratch 或覆盖已有 HTML。
+        self.target.write_bytes(b"<!doctype html><html>historical user material</html>")
+        before = (renderer.snapshot(self.source), renderer.snapshot(self.target))
+        nodes = sorted(path.relative_to(self.root).as_posix() for path in self.root.rglob("*"))
+        calls = (
+            lambda: renderer.process("render", self.root, "docs/plans/change.md", REQUEST),
+            lambda: renderer.process("check", self.root, "../invalid.md"),
+            lambda: renderer.process("render", self.work / "missing", "missing.md", draft=True),
+            lambda: renderer.render_candidate(self.root, self.source, SAMPLE.encode(), self.source,
+                self.root / "docs/standards/prototype", REQUEST),
+            lambda: renderer.run_renderer(self.work / "never-create-stage", SAMPLE.encode()),
+        )
+        with contextlib.ExitStack() as stack:
+            for name in ("resolve_inputs", "stage_markdown", "scratch_workspace", "publish", "renderer_identity"):
+                stack.enter_context(patch.object(renderer, name, side_effect=AssertionError(name + " must not run")))
+            for index, invoke in enumerate(calls):
+                with self.subTest(entry=index), self.assertRaisesRegex(renderer.RequirementHtmlError, "HTML 生成功能已暂停"):
+                    invoke()
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(2, renderer.main(["render", "--project", str(self.root), "--source", "../invalid.md"]))
+            self.assertEqual("", stdout.getvalue())
+            self.assertIn(renderer.SUSPENDED_MESSAGE, stderr.getvalue())
+        self.assertEqual(before, (renderer.snapshot(self.source), renderer.snapshot(self.target)))
+        self.assertEqual(nodes, sorted(path.relative_to(self.root).as_posix() for path in self.root.rglob("*")))
+        self.assertFalse((self.work / "never-create-stage").exists())
+
+    def test_real_source_cli_render_check_and_draft_are_suspended(self):
+        # 直接执行仓库真实入口，以选定 Python wrapper 固定解释器；不使用 mock 输出。
+        # 空项目和错误路径同样只得到暂停，不会创建计划、scratch 或访问 Node。
+        self.target.write_bytes(b"historical HTML must stay byte-for-byte")
+        before = (renderer.snapshot(self.source), renderer.snapshot(self.target))
+        for action, extra in (("render", ["--request-id", REQUEST]), ("check", []),
+                              ("render", ["--draft"]), ("render", [])):
+            with self.subTest(action=action, extra=extra):
+                command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                           str(PACK / "lib/documents/requirement_html.py"), action,
+                           "--project", str(self.root), "--source", "docs/plans/change.md", *extra]
+                result = subprocess.run(command, cwd=self.work, capture_output=True, text=True, timeout=20)
+                with (self.work / "engine.log").open("a", encoding="utf-8") as log:
+                    log.write(json.dumps({"argv": command, "exit": result.returncode}, ensure_ascii=False) + "\n")
+                    log.write(result.stdout + result.stderr)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertEqual("", result.stdout)
+                self.assertIn("HTML 生成功能已暂停", result.stderr)
+        # --help 只展示用法，继续保持原有成功退出，便于安装包/消费者检查入口可用性。
+        help_command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                        str(PACK / "lib/documents/requirement_html.py"), "--help"]
+        help_result = subprocess.run(help_command, cwd=self.work, capture_output=True, text=True, timeout=20)
+        with (self.work / "engine.log").open("a", encoding="utf-8") as log:
+            log.write(json.dumps({"argv": help_command, "exit": help_result.returncode}) + "\n")
+            log.write(help_result.stdout + help_result.stderr)
+        self.assertEqual(0, help_result.returncode, help_result.stdout + help_result.stderr)
+        self.assertIn("--source", help_result.stdout)
+        self.assertEqual(before, (renderer.snapshot(self.source), renderer.snapshot(self.target)))
+        self.assertEqual({"project.yaml", "docs"}, {path.name for path in self.root.iterdir()})
+
+    def test_retained_vendor_payload_preserves_original_hashes_and_licenses(self):
+        """按既有来源清单核对真实载荷及许可证；不引入未迁入的 Windows checkout 规则。"""
+        upstream = json.loads((renderer.VENDOR / "UPSTREAM.json").read_text(encoding="utf-8"))
+        for name, facts in upstream["files"].items():
+            body = (renderer.VENDOR / name).read_bytes()
+            self.assertEqual(facts["sha256"], hashlib.sha256(body).hexdigest(), name)
+            blob = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
+            self.assertEqual(facts["git_blob"], blob, name)
+
+    def test_installed_runtime_preserves_payload_and_rejects_generation(self):
+        project = self.work / "installed-project"
+        project.mkdir(exist_ok=True)
+        state = self.work / "installed-state"
+        command = ["bash", str(PACK / "lib/python_runtime.sh"), "-X", "utf8", "-B",
+                   str(PACK / "lib/install/install_workflow.py"), str(project), "--state-dir", str(state)]
+        installed = subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=120)
+        (self.work / "install.log").write_text(json.dumps(command) + "\n" + installed.stdout + installed.stderr, encoding="utf-8")
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        runtime = project / ".agent-workflow"
+        reference = "xy-plan/references/requirement-html.md"
+        from manager import runtime_service
+        binding = runtime_service.status(state, project)["runtime_binding"]
+        core = runtime_store.load_core(binding, state)
+        for host in (project / ".agents/skills", project / ".claude/skills"):
+            self.assertEqual((host / reference).read_bytes(), (PACK / "platforms/shared/skills" / reference).read_bytes())
+        for relative in ("lib/documents/requirement_html.py", "lib/documents/plan_documents.py",
+                         "lib/documents/prototype_navigation.py", "lib/documents/validate_prototype_workspace.py",
+                         *("templates/prototype/" + name for name in ("index.html", "page.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")),
+                         "templates/docs/PLAN.md", "lib/vendor/answer-me-with-html/am.mjs",
+                         "lib/vendor/answer-me-with-html/LICENSE", "lib/vendor/answer-me-with-html/OFL-Bangers.txt"):
+            self.assertEqual(runtime_store.read_core_source(core, relative), (PACK / relative).read_bytes())
+        plans = project / "docs/plans"
+        self.assertFalse((project / "docs/features").exists())
+        self.assertFalse(plans.exists())
+        plans.mkdir()
+        (plans / "installed.md").write_text(SAMPLE, encoding="utf-8")
+        # 使用安装态 wrapper、cwd 与清空的 PYTHONPATH；没有源包参数或源目录导入路径。
+        env = {**os.environ, "PYTHONPATH": "", "AGENT_WORKFLOW_STATE_DIR": str(state)}
+        for action in ("render", "check"):
+            command = ["bash", str(runtime / "lib/python_runtime.sh"), "-X", "utf8", "-B",
+                       str(runtime / "runtime.py"), "--binding", json.dumps(binding), "helper",
+                       "lib/documents/requirement_html.py", "--", action, "--project", str(project),
+                       "--source", "docs/plans/installed.md"]
+            if action == "render":
+                command.extend(["--request-id", REQUEST])
+            result = subprocess.run(command, cwd=project, env=env, capture_output=True, text=True, timeout=45)
+            (self.work / f"installed-{action}.log").write_text(json.dumps(command) + "\n" + result.stdout + result.stderr, encoding="utf-8")
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertEqual("", result.stdout)
+            self.assertIn("HTML 生成功能已暂停", result.stderr)
+        self.assertFalse((plans / "installed.html").exists())
+        self.assertEqual(SAMPLE, (plans / "installed.md").read_text(encoding="utf-8"))
 
 if __name__ == "__main__":
     unittest.main()

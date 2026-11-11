@@ -69,8 +69,9 @@ generate, save, attach, or present screenshots. Do not automate prototype browse
 default; preserve only the user-request/failure-diagnosis exceptions in the existing verification
 contract. PM semantic review and QA boundaries continue to use that contract.
 In the existing handoff, return requirement coverage by stable REQ identifiers with concrete pages
-and actual state anchors. The PM writes these back to the single requirements Markdown and rerenders
-the same-named HTML under [requirements HTML delivery](../xy-plan/references/requirement-html.md).
+and actual state anchors. The PM writes these back to the single requirements Markdown.
+Requirements/plan HTML generation is suspended under [the retained reference](../xy-plan/references/requirement-html.md);
+keep any existing HTML as historical material without requiring an update.
 The design Agent does not edit the PM's source or create a mapping report; this association does not
 change the prototype page, dependency fingerprint, or visual-approval contract.
 

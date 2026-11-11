@@ -61,22 +61,8 @@ def payload(choices: dict) -> bytes:
 
 
 def resolve(global_choices: dict, project_choices: dict, host: str, role: str) -> tuple[dict, dict]:
-    """逐字段取项目、全局、宿主；显式 inherit 总是越过全局直达宿主。"""
-    if host not in role_models.HOSTS or role not in role_models.ROLES:
-        raise ValueError("未知平台或角色")
-    project = project_choices.get(host, {}).get(role, {})
-    defaults = global_choices.get(host, {}).get(role, {})
-    values, sources = {}, {}
-    for field in FIELDS:
-        if field in project:
-            values[field] = project[field]
-            sources[field] = "host" if project[field] == "inherit" else "project"
-        elif field in defaults:
-            values[field] = defaults[field]
-            sources[field] = "host" if defaults[field] == "inherit" else "global"
-        else:
-            values[field], sources[field] = "inherit", "host"
-    return role_models.validate(host, values), sources
+    """保留既有调用签名；唯一逐字段继承算法由纯模型合同维护。"""
+    return role_models.resolve(global_choices, project_choices, host, role)
 
 
 def revision(node: Node) -> dict:

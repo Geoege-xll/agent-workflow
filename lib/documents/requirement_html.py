@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""把唯一需求 Markdown 投影为同目录 HTML；不产生批准、功能事实或原型指纹。"""
+"""需求/计划 HTML 生成已暂停；安全读取工具与原渲染代码保留供审查和后续恢复。
+
+恢复必须先取得新的明确授权，再同时恢复本模块四个公开入口的注释执行体、对应的
+现行测试和工作流规则，并通过真实安装态/原生平台验证；不能只删除某一处拒绝或
+添加环境变量开关。旧 HTML、固定 vendor 载荷及许可证均保留，不因暂停而清理。
+通用解析、快照与历史记录读取仍供安全导航等消费者使用，不代表允许重新生成。
+"""
 
 from __future__ import annotations
 
@@ -56,6 +62,9 @@ CODE_LANGUAGES = frozenset({
     "shell", "javascript", "js", "typescript", "ts", "sql", "diff", "swift", "java",
     "go", "rust", "c", "cpp", "css", "toml", "markdown", "md", "flow", "sequence",
 })
+
+
+SUSPENDED_MESSAGE = '需求/计划 HTML 生成功能已暂停；请维护和审阅唯一 Markdown，现有 HTML 保留为历史资料。'
 
 
 class RequirementHtmlError(ValueError):
@@ -329,99 +338,111 @@ def node_environment(stage: Path) -> dict[str, str]:
 
 
 def run_renderer(stage: Path, markdown: bytes) -> bytes:
-    node = shutil.which("node")
-    if node is None:
-        raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；请提供现有 Node 运行时后重试")
-    env = node_environment(stage)
-    try:
-        version = subprocess.run([node, "--version"], env=env, capture_output=True, timeout=5, check=True)
-        found = re.fullmatch(rb"v(\d+)\.\d+\.\d+\s*", version.stdout)
-        if not found or int(found.group(1)) < 20:
-            raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；当前 Node 版本不满足要求")
-        for path in stage.rglob("*"):
-            info = path.lstat()
-            if stat.S_ISLNK(info.st_mode) or (not stat.S_ISDIR(info.st_mode) and
-                    (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)):
-                raise RequirementHtmlError(f"渲染舞台存在链接或特殊节点：{path}")
-        # 固定私有舞台不接受额外主题和配置，以免上游隐式消费非本轮内容。
-        home = stage / "am-home"
-        if (home / "config.json").exists() or (home / "themes").exists():
-            raise RequirementHtmlError("渲染舞台出现非本轮配置/主题，拒绝消费")
-        input_path, output_path = stage / "input.md", stage / "output.html"
-        snapshot(input_path, required=False)
-        snapshot(output_path, required=False)
-        atomic_write(input_path, markdown, 0o600)
-        command = [node, str(VENDOR / "am.mjs"), "render", str(input_path), "-o", str(output_path),
-                   "--no-open", "--template", "doc", "--style", "off"]
-        result = subprocess.run(command, cwd=stage, env=env, capture_output=True, timeout=30)
-        if result.returncode:
-            # 上游报错可能回显正文，因此主 CLI 仅给定位诊断；完整过程输出不注入用户页面。
-            raise RequirementHtmlError(f"内置 render 失败（exit {result.returncode}），原稿和原 HTML 保留")
-        html, _ = snapshot(output_path)
-        if b"<html" not in html or b"am-source" not in html:
-            raise RequirementHtmlError("内置 render 未返回完整 HTML，原页保留")
-        return project_branding(html)
-    except subprocess.TimeoutExpired:
-        raise RequirementHtmlError("Node 渲染超时并已结束，原稿和原 HTML 保留") from None
-    except subprocess.CalledProcessError:
-        raise RequirementHtmlError("无法取得 Node 版本，原稿和原 HTML 保留") from None
+    """暂停态入口：在读取输入、创建 scratch 或启动 Node 前明确拒绝。"""
+    raise RequirementHtmlError(SUSPENDED_MESSAGE)
+
+    # 以下是暂停前的完整执行体，仅作恢复资料；当前不可达，也没有隐藏启用开关。
+    # node = shutil.which("node")
+    # if node is None:
+    #     raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；请提供现有 Node 运行时后重试")
+    # env = node_environment(stage)
+    # try:
+    #     version = subprocess.run([node, "--version"], env=env, capture_output=True, timeout=5, check=True)
+    #     found = re.fullmatch(rb"v(\d+)\.\d+\.\d+\s*", version.stdout)
+    #     if not found or int(found.group(1)) < 20:
+    #         raise RequirementHtmlError("需求 HTML 渲染需要 Node.js >= 20；当前 Node 版本不满足要求")
+    #     for path in stage.rglob("*"):
+    #         info = path.lstat()
+    #         if stat.S_ISLNK(info.st_mode) or (not stat.S_ISDIR(info.st_mode) and
+    #                 (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)):
+    #             raise RequirementHtmlError(f"渲染舞台存在链接或特殊节点：{path}")
+    #     # 固定私有舞台不接受额外主题和配置，以免上游隐式消费非本轮内容。
+    #     home = stage / "am-home"
+    #     if (home / "config.json").exists() or (home / "themes").exists():
+    #         raise RequirementHtmlError("渲染舞台出现非本轮配置/主题，拒绝消费")
+    #     input_path, output_path = stage / "input.md", stage / "output.html"
+    #     snapshot(input_path, required=False)
+    #     snapshot(output_path, required=False)
+    #     atomic_write(input_path, markdown, 0o600)
+    #     command = [node, str(VENDOR / "am.mjs"), "render", str(input_path), "-o", str(output_path),
+    #                "--no-open", "--template", "doc", "--style", "off"]
+    #     result = subprocess.run(command, cwd=stage, env=env, capture_output=True, timeout=30)
+    #     if result.returncode:
+    #         # 上游报错可能回显正文，因此主 CLI 仅给定位诊断；完整过程输出不注入用户页面。
+    #         raise RequirementHtmlError(f"内置 render 失败（exit {result.returncode}），原稿和原 HTML 保留")
+    #     html, _ = snapshot(output_path)
+    #     if b"<html" not in html or b"am-source" not in html:
+    #         raise RequirementHtmlError("内置 render 未返回完整 HTML，原页保留")
+    #     return project_branding(html)
+    # except subprocess.TimeoutExpired:
+    #     raise RequirementHtmlError("Node 渲染超时并已结束，原稿和原 HTML 保留") from None
+    # except subprocess.CalledProcessError:
+    #     raise RequirementHtmlError("无法取得 Node 版本，原稿和原 HTML 保留") from None
 
 
 def render_candidate(root: Path, source: Path, body: bytes, base: Path, prototype: Path,
                      request_id: str, *, draft: bool = False) -> bytes:
-    """只在当前请求 scratch 渲染候选字节，绝不发布/替换原稿或正式 HTML。
+    """暂停态入口：在读取输入、创建 scratch 或启动 Node 前明确拒绝。"""
+    raise RequirementHtmlError(SUSPENDED_MESSAGE)
 
-    普通投影和多文件迁移共用相同输入校验、固定渲染器、隔离环境与版本记录。
-    调用者保有原稿/页面前像，并在自己的条件发布边界重新核对；这里不假定跨文件
-    原子性，也不让迁移先写 Markdown 再以补渲染掩盖失败或覆盖用户原页。
-    """
-    staged = stage_markdown(body, root, source, base, prototype)
-    binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
-               "draft": draft}
-    expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity(staged)}
-    if not request_id:
-        raise RequirementHtmlError("render 必须提供 --request-id")
-    scratch = Path(scratch_workspace(root, request_id)["scratch_dir"])
-    stage = scratch / "requirement-html"
-    # scratch 锁只保护固定舞台的建立；草案 HTML 也发布到 scratch，不能持有此锁
-    # 再进入 publish 的同目录锁。实际渲染互斥交给舞台目录锁，二者不嵌套。
-    with directory_lock(scratch, "requirement-html"):
-        try:
-            os.mkdir(stage, 0o700)
-        except FileExistsError:
-            pass
-    with directory_lock(stage, "requirement-html"):
-        html = run_renderer(stage, staged)
-        expected["html_sha256"] = digest(html)
-        # 路径属于外部输入；转义尖括号，避免特殊文件名提前结束 HTML 注释。
-        header = json.dumps(expected, ensure_ascii=True, sort_keys=True).replace("<", "\\u003c").replace(">", "\\u003e")
-        return MARKER + header.encode() + b" -->\n" + html
+    # 以下是暂停前的完整执行体，仅作恢复资料；当前不可达，也没有隐藏启用开关。
+    # """只在当前请求 scratch 渲染候选字节，绝不发布/替换原稿或正式 HTML。
+    #
+    # 普通投影和多文件迁移共用相同输入校验、固定渲染器、隔离环境与版本记录。
+    # 调用者保有原稿/页面前像，并在自己的条件发布边界重新核对；这里不假定跨文件
+    # 原子性，也不让迁移先写 Markdown 再以补渲染掩盖失败或覆盖用户原页。
+    # """
+    # staged = stage_markdown(body, root, source, base, prototype)
+    # binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
+    #            "draft": draft}
+    # expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity(staged)}
+    # if not request_id:
+    #     raise RequirementHtmlError("render 必须提供 --request-id")
+    # scratch = Path(scratch_workspace(root, request_id)["scratch_dir"])
+    # stage = scratch / "requirement-html"
+    # # scratch 锁只保护固定舞台的建立；草案 HTML 也发布到 scratch，不能持有此锁
+    # # 再进入 publish 的同目录锁。实际渲染互斥交给舞台目录锁，二者不嵌套。
+    # with directory_lock(scratch, "requirement-html"):
+    #     try:
+    #         os.mkdir(stage, 0o700)
+    #     except FileExistsError:
+    #         pass
+    # with directory_lock(stage, "requirement-html"):
+    #     html = run_renderer(stage, staged)
+    #     expected["html_sha256"] = digest(html)
+    #     # 路径属于外部输入；转义尖括号，避免特殊文件名提前结束 HTML 注释。
+    #     header = json.dumps(expected, ensure_ascii=True, sort_keys=True).replace("<", "\\u003c").replace(">", "\\u003e")
+    #     return MARKER + header.encode() + b" -->\n" + html
 
 
 def process(action: str, project: Path, source_raw: str, request_id: str | None = None,
             *, draft: bool = False) -> dict:
-    root, source, body, before_identity, base, prototype = resolve_inputs(project, source_raw, draft, request_id)
-    staged = stage_markdown(body, root, source, base, prototype)
-    binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
-               "draft": draft}
-    expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity(staged)}
-    target = source.with_suffix(".html")
-    old, target_identity = snapshot(target, required=False)
-    if old is not None:
-        record, _ = page_record(old, binding)
-        if all(record.get(key) == value for key, value in expected.items()):
-            if snapshot(source) != (body, before_identity) or snapshot(target) != (old, target_identity):
-                raise RequirementHtmlError("检查期间原稿或目标被并发修改")
-            return {"status": "fresh", "source": str(source), "html": str(target), "rendered": False}
-    if action == "check":
-        raise RequirementHtmlError("需求 HTML 缺失或已过期，请对同一 Markdown 执行 render")
-    page = render_candidate(root, source, body, base, prototype, request_id, draft=draft)
-    # 候选准备完成后再复核原稿与原页；publish 继续以旧摘要条件原子替换，
-    # 多文件迁移则直接消费候选字节并由既有文档事务统一发布，不调用本入口补渲染。
-    if snapshot(source) != (body, before_identity) or snapshot(target, required=False) != (old, target_identity):
-        raise RequirementHtmlError("生成期间原稿或目标被并发修改，原稿和原 HTML 保留")
-    publish(target, page, "missing" if old is None else digest(old))
-    return {"status": "fresh", "source": str(source), "html": str(target), "rendered": True}
+    """暂停态入口：在读取输入、创建 scratch 或启动 Node 前明确拒绝。"""
+    raise RequirementHtmlError(SUSPENDED_MESSAGE)
+
+    # 以下是暂停前的完整执行体，仅作恢复资料；当前不可达，也没有隐藏启用开关。
+    # root, source, body, before_identity, base, prototype = resolve_inputs(project, source_raw, draft, request_id)
+    # staged = stage_markdown(body, root, source, base, prototype)
+    # binding = {"project": str(root), "source": str(source.relative_to(root)) if not draft else str(source),
+    #            "draft": draft}
+    # expected = {**binding, "source_sha256": digest(body), "renderer": renderer_identity(staged)}
+    # target = source.with_suffix(".html")
+    # old, target_identity = snapshot(target, required=False)
+    # if old is not None:
+    #     record, _ = page_record(old, binding)
+    #     if all(record.get(key) == value for key, value in expected.items()):
+    #         if snapshot(source) != (body, before_identity) or snapshot(target) != (old, target_identity):
+    #             raise RequirementHtmlError("检查期间原稿或目标被并发修改")
+    #         return {"status": "fresh", "source": str(source), "html": str(target), "rendered": False}
+    # if action == "check":
+    #     raise RequirementHtmlError("需求 HTML 缺失或已过期，请对同一 Markdown 执行 render")
+    # page = render_candidate(root, source, body, base, prototype, request_id, draft=draft)
+    # # 候选准备完成后再复核原稿与原页；publish 继续以旧摘要条件原子替换，
+    # # 多文件迁移则直接消费候选字节并由既有文档事务统一发布，不调用本入口补渲染。
+    # if snapshot(source) != (body, before_identity) or snapshot(target, required=False) != (old, target_identity):
+    #     raise RequirementHtmlError("生成期间原稿或目标被并发修改，原稿和原 HTML 保留")
+    # publish(target, page, "missing" if old is None else digest(old))
+    # return {"status": "fresh", "source": str(source), "html": str(target), "rendered": True}
 
 
 def main(argv=None) -> int:
@@ -432,15 +453,20 @@ def main(argv=None) -> int:
     parser.add_argument("--request-id")
     parser.add_argument("--draft", action="store_true")
     args = parser.parse_args(argv)
-    try:
-        if args.action == "render" and not args.request_id:
-            raise RequirementHtmlError("render 必须提供 --request-id")
-        result = process(args.action, args.project, args.source, args.request_id, draft=args.draft)
-    except (OSError, ValueError) as exc:
-        print(f"[ERROR] {exc}", file=sys.stderr)
-        return 2
-    print(json.dumps(result, ensure_ascii=False))
-    return 0
+    # 参数解析及 --help 保持可用；暂停必须先于请求校验、输入读取或任何生成动作。
+    print(f"[ERROR] {SUSPENDED_MESSAGE}", file=sys.stderr)
+    return 2
+
+    # 以下是暂停前的完整执行体，仅作恢复资料；当前不可达，也没有隐藏启用开关。
+    # try:
+    #     if args.action == "render" and not args.request_id:
+    #         raise RequirementHtmlError("render 必须提供 --request-id")
+    #     result = process(args.action, args.project, args.source, args.request_id, draft=args.draft)
+    # except (OSError, ValueError) as exc:
+    #     print(f"[ERROR] {exc}", file=sys.stderr)
+    #     return 2
+    # print(json.dumps(result, ensure_ascii=False))
+    # return 0
 
 
 if __name__ == "__main__":

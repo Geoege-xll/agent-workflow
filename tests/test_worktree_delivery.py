@@ -241,7 +241,7 @@ class GitDeliveryTest(unittest.TestCase):
         self.tasks[1]["depends_on"] = ["evidence"]
         self.tasks.append(v2_task({"id": "evidence", "request_id": "req", "task_type": "evidence", "depends_on": ["a"],
                            "blocks": ["b"], "gates": [], "owned_paths": [], "semantic_locks": [],
-                           "state": "QA_SCOPE_READY"}))
+                           "state": "RESULT_VERIFIED"}))
         with self.assertRaises(DeliveryError):
             merge(self.repo, self.config, self.payload)
         self.assertEqual(self.base, head(self.repo))

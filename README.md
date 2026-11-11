@@ -1,54 +1,46 @@
-# Agent Workflow Pack 2.1
+# Agent Workflow 3.0
 
-面向项目的原生多 Agent 工作流，支持 **Claude Code、Codex、Antigravity**。
-当前源码版本为 **2.1.3**，唯一版本源为 `product/VERSION`；源码版本不代表公开渠道已发布该版本。
-公共版本与资产以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 和 Tap 声明为准。
-2.1.3 修复中央事务记录与发布见证的容量处理，并在写入前检查容量；未结算事务的核对与恢复见使用手册。
+面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流，正在升级为官方插件。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理；保留适用的两步确认、独立 QA 与原有交付流程。
 
-在 macOS/Linux 使用中央程序管理已有项目：项目仅保留配置、薄桥和宿主原生入口，
-内置 Skill 软链到不可变中央核心，已有任务继续使用自己的固定版本。
-2.1 仅接受 Light／Full 与 schema 2 任务／交接格式，不提供旧版本兼容升级。
+当前是 **3.0.0-alpha.1 开发候选**，版本源为 `product/PLUGIN_VERSION`，尚未正式发布或替换本机 2.x 安装。Windows 暂停。已公开版本以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
 
-## 快速开始
+## 两个独立产品
 
-通过 Homebrew 安装 Tap 当前声明的版本：
+| 产品 | 职责 | 入口 |
+| --- | --- | --- |
+| Agent Workflow 插件 | PM 工作流、Skill、平台角色与任务 helper | [插件说明](docs/plugin-v3.md)、[本地构建与安装](plugins/INSTALL.md) |
+| Native Agent Config | 发现平台原生 Agent，配置模型与推理，网页预览保存 | [配置工具说明](docs/agent-configuration.md) |
 
-```bash
-brew install Geoege-xll/tap/awf-cli
-awf-cli
-```
+插件无需中央登记、TUI 启用或配置服务。配置工具识别用户级、项目级和插件角色，使用稳定原生身份，不限工作流角色；网页、脚本与可选 MCP 共用核心，客户端实际运行状态另行验证。
 
-Homebrew 已管理短命令，无需再注册 `--install-cli`。安装、升级与来源排查见
-[Homebrew 说明](docs/homebrew.md)。升级中央程序、导入不可变核心和激活中央 current 是三个独立动作。首次使用先 `runtime install`、
-`runtime activate CONTENT_ID`，再启用项目；日常用法见使用手册。
+## 本地构建候选
 
-已有源包也可直接启动；需要现有 **Python 3.11+**，不安装 Python 包或下载运行时：
+需要已有 Python 3.11+ 和 Bash。构建不安装客户端、不改用户配置：
 
 ```bash
-# 选择已有项目；也可省略路径，在提示后拖入项目目录。
-bash /path/to/agent_workflow/install.sh /path/to/project
-# 从任意目录启动管理器。
-bash /path/to/agent_workflow/workflow.sh
-# 可选：注册到 ~/.local/bin，不修改 PATH 或 shell 配置。
-bash /path/to/agent_workflow/workflow.sh --install-cli
-# 源码默认注册 awf-dev，与 Homebrew 的 awf-cli 并存。
-awf-dev --version
+# 三宿主插件 ZIP、完整本地来源及市场清单。
+bash lib/python_runtime.sh -B -X utf8 packaging/build_plugin.py \
+  --host all --output-dir /absolute/new-plugin-output --local-source
+
+# 独立配置工具，不夹带工作流或中央管理器。
+bash scripts/python_runtime.sh -B -X utf8 packaging/build_agent_config.py \
+  --output-dir /absolute/new-config-output
 ```
 
-安装先执行只读发现和预检，保留项目专属配置及已有非空文档；未知受管修改会停止覆盖。
-中央项目后续使用 `awf-cli check --project /path/to/project` 检查，使用
-`awf-cli repair /path/to/project --dry-run` 预览修复。根 `setup_*.sh` 是源包开发生成器，
-普通项目通过 `install.sh` 或 `awf-cli` 管理。
+插件官方本地加载命令见[安装说明](plugins/INSTALL.md)。目前没有已验证的远程一键安装地址。插件格式、离线构建及源码检查通过，不等同于三个官方客户端的新会话默认 PM 入口和实际派发均已通过。
 
-## 阅读入口
+配置网页可从源码按需打开：
 
-| 需要做什么 | 文档 |
-| --- | --- |
-| 登记／启停项目、固定版本、模型配置、TUI 键位、失败恢复 | [使用手册](docs/usage.md) |
-| 源码结构、开发生成器、验证范围、文档归属与历史保留 | [开发手册](docs/development.md) |
-| Homebrew 来源诊断、离线发行构建与发布边界 | [Homebrew 说明](docs/homebrew.md) |
-| 查询工作流规则权威 | [产品工作流](product/WORKFLOW.md) 与 [工作流 Skill](platforms/shared/skills/xy-workflow/SKILL.md) |
+```bash
+bash scripts/agent_config.sh console --host codex
+```
 
-当前安装支持 macOS/Linux。未发布的 npm／npx Windows 安装渠道已移除；Windows 安全后端
-尚不能发布受管 Skill 锚定软链，会在创建项目资源或中央状态前拒绝安装。保留的跨平台工具不代表
-Windows 安装已经验收。完整支持与恢复边界见[使用手册](docs/usage.md#支持范围与安装保护)。
+默认读取本机真实原生配置，应用预览会修改所选可写定义。测试隔离参数、只读插件限制、并发冲突、部分失败与重载语义见[配置工具说明](docs/agent-configuration.md)。MCP 仅在主动选择时启动，不是网页或插件的前置。
+
+## 工作流与维护
+
+产品工作流权威在 [product/WORKFLOW.md](product/WORKFLOW.md)，角色职责在 `roles/`，九个共用 Skill 在 `platforms/shared/skills/`。插件从这些唯一来源装配；项目配置与包内权威资源分开读取，不复制整套规范。计划 HTML 生成入口暂停且代码保留，原型 HTML 保留。
+
+实施状态与验收边界见 [3.0 计划](docs/plans/plugin-v3.md)。旧中央运行时、项目启停、TUI 和 Homebrew 产品面分批退役；历史项目资料、计划和已有用户安装不自动删除。仓库尚保留的 2.x 代码不属于 3.0 插件载荷，`product/VERSION` 仍记录其保留源码版本。
+
+[2.x 使用手册](docs/usage.md)、[2.x 开发与文件迁移记录](docs/development.md)、[2.x Homebrew 说明](docs/homebrew.md) 只供现有安装维护与历史追溯，不是 3.0 安装入口。3.0 当前原生验收尚未完成，因此不触发现有本机和业务项目的替换。

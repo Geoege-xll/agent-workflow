@@ -316,7 +316,7 @@ pages; `UI-Conformance` tasks carry frozen `design_authority_refs`; `waived_by_u
 scope-bound `prototype_decision` and no prototype authority. Required-prototype tasks carry the same
 decision record plus concrete page authority.
 
-Only after Full integrated QA PASS, or Light acceptance of actually required verification/audit and assessment of need, does the PM project the current baseline. Each stable topic has one Markdown document and same-name derived HTML in `docs.plans`, separating the current goal/execution phase from the last genuinely accepted version/behavior/approval and acceptance evidence. `PROJECT.md` is the current directory, linking only explicit accepted baselines without a size limit or task logs. Further iteration, pause, or cancellation of the current goal must not erase the old baseline; completed creates neither approval nor delivery. An accepted removal marks the same document `removed`, retains reason/date/replacement and necessary history, and removes the current index link; do not create separate feature/ADR documents or renamed copies. Unindexed old execution drafts retain historical boundaries; completion labels do not establish current facts.
+Only after Full integrated QA PASS, or Light acceptance of actually required verification/audit and assessment of need, does the PM project the current baseline. Each stable topic has one Markdown document in `docs.plans`; requirements/plan HTML generation is suspended and existing HTML is retained as historical material, separating the current goal/execution phase from the last genuinely accepted version/behavior/approval and acceptance evidence. `PROJECT.md` is the current directory, linking only explicit accepted baselines without a size limit or task logs. Further iteration, pause, or cancellation of the current goal must not erase the old baseline; completed creates neither approval nor delivery. An accepted removal marks the same document `removed`, retains reason/date/replacement and necessary history, and removes the current index link; do not create separate feature/ADR documents or renamed copies. Unindexed old execution drafts retain historical boundaries; completion labels do not establish current facts.
 
 Light saves only for an actual pause/recovery/handoff or explicit request; the PM saves Full in `docs.plans` after requirements approval and before the first design/implementation dispatch. Reuse the same source for the same topic; see plan-lifecycle for the template's ordinary Chinese metadata and six-section contract. Simplify Light as needed without adding confirmation fields or mandatory documents. Old docs.features may be removed only through an explicit one-time migration, with no runtime alias.
 Existing `input_contracts` carry its reference and current applicable scope; changes
@@ -421,12 +421,18 @@ snapshot, not independently maintained task-pack claims or PM completion lists.
   the task may be dispatched when capacity is available. Unmet, failed, or pending prerequisites
   keep the task out of READY instead of creating another task-state enum value. If no slot is
   available, record `capacity_delay`; never disguise it as a new semantic dependency.
-- `RUNNING`: a writer is assigned and executing.
+- `RUNNING`: allocated for execution; an unbound claim is not proof a native worker started.
 - `BUILD_VERIFIED`: the writer has completed and returned real build/test evidence.
 - `QA`: unified QA is running on the current request dependency closure. The QA barrier includes
   only `task_type: writer`; read-only, evidence, and QA tasks cannot make it wait on itself.
 - `QA_PASSED`: only an explicit `task_type: qa` node may use it, after its current PASS handoff validates.
   Re-review/failure resets its state; stale PASS cannot override a running or failed review at delivery.
+- `RESULT_VERIFIED`: only `read_only`/`evidence`, after the exclusive evidence-bound record `settle`
+  operation accepts the current result. It is neither Writer BUILD_VERIFIED nor implementation QA PASS.
+  Bind the original native ID, latest accepted complete Task Pack bytes/SHA, real completion source,
+  revised-scope result and actual declared verification evidence. Unknown/running or stale inputs remain
+  active; retirement never completes them. Settlement atomically releases record execution occupancy,
+  not unconfirmed native threads. See WORKFLOW's `Result-task settlement` and runtime-records for wire use.
 
 The PM dispatches all currently ready independent tasks within configured limits and re-evaluates
 downstream readiness after each completion. `depends_on` and `gates` are semantic dependency fields;

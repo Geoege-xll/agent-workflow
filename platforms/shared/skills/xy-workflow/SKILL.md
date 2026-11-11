@@ -65,10 +65,11 @@ from a previous tool call. Source-pack development retains its source entry poin
 old self-contained execution branch. The central adapter
 always belongs to the actual project's `.agent-workflow/project.yaml`.
 
-Formal Full requirements review uses HTML while the model maintains one Markdown source. PM follows
-[requirements HTML delivery](../xy-plan/references/requirement-html.md) for pre-approval scratch drafts,
-post-approval same-name plans `.md`/`.html`, and prototype-coverage writeback. HTML freshness creates no
-approval and replaces neither requirement nor prototype fingerprints.
+Formal Full requirements review uses one Markdown source. PM keeps any pre-approval draft in the current
+request scratch, saves the approved plans `.md` before dispatch, and writes prototype coverage back to it.
+Requirements/plan HTML generation and freshness checks are suspended under
+[the retained reference](../xy-plan/references/requirement-html.md); preserve historical HTML and renderer
+source. Document existence creates no approval and replaces neither requirement nor prototype fingerprints.
 
 Use host-native aliases only when explicit activation is needed. Examples:
 `xy-project-memory` (Codex: `$xy-project-memory`; Claude Code: `/xy-project-memory`;
@@ -77,6 +78,14 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
 `/xy-build-verify`). The procedure below otherwise uses host-neutral Skill names.
 
 ## Main-session contract
+
+- Keep accepting natural-language requirements while existing workers run. Apply
+  `.agent-workflow/product/WORKFLOW.md#continuous-pm-intake` for independent requests, result reuse,
+  same-task append, splitting and resource waiting; do not require users to supply IDs or manage Agents.
+  Before dispatch, PM checks explicit current records and actual native occupancy through
+  [shared dispatch](references/dispatch.md#continuous-intake-dispatch). Original records own state;
+  separate requests keep their own approval, execution-resource authority and QA. For same-ID progress/append use the intent and
+  verified capability query in [runtime records](references/runtime-records.md), never interrupt as steer.
 
 - Project Hooks are advisory activation/recovery reminders, not a workflow execution engine.
   They never establish task level, approval, QA PASS, permissions or completion. Missing/disabled

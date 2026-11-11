@@ -12,6 +12,12 @@ import unittest
 
 
 PACK = Path(__file__).resolve().parents[1]
+CURRENT_PRODUCT_MODULES = {
+    "plugin": ("plugin_delivery", "plugin_resources", "plugin_workflow_contract", "continuous_intake_capabilities",
+               "agent_continuation", "dispatch_admission", "task_settlement"),
+    "native-config": ("native_config", "native_inventory", "native_config_codecs", "native_config_server",
+                      "native_config_mcp", "native_config_packaging", "plugin_console"),
+}
 
 
 class ValidationRunnerTest(unittest.TestCase):
@@ -44,6 +50,9 @@ class ValidationRunnerTest(unittest.TestCase):
                        "antigravity_workflow", "prototype_workspace", "shared_memory_contract"):
             methods = ("test_one", "test_two") if module == "shared_memory_contract" else ("test_ok",)
             self.write_case(module, methods)
+        for names in CURRENT_PRODUCT_MODULES.values():
+            for module in names:
+                self.write_case(module, ("test_ok",))
         self.write_case("runner_failure", ("test_failure",), failing=True)
 
     def write_case(self, module, methods, *, failing=False):
@@ -84,6 +93,9 @@ class ExampleTest(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertIn("full", result.stdout)
                 self.assertIn("--list", result.stdout)
+                self.assertIn("当前产品组：plugin、native-config", result.stdout)
+                self.assertIn("legacy/通用", result.stdout)
+                self.assertIn("不代表3.0全套", result.stdout)
                 self.assertEqual([], self.recorded_cases())
 
     def test_unknown_arguments_groups_and_nodes_reject_before_any_case(self):
@@ -125,6 +137,30 @@ class ExampleTest(unittest.TestCase):
         result = self.invoke(child, parent)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(2, len(self.recorded_cases()))
+
+    def test_current_product_groups_list_deduplicate_and_prevalidate_errors(self):
+        expected = ["tests.test_" + name for names in CURRENT_PRODUCT_MODULES.values() for name in names]
+        selectors = ("plugin", "native-config", "plugin", "tests.test_plugin_delivery.ExampleTest.test_ok")
+        listed = self.invoke("--list", *selectors)
+        self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
+        self.assertEqual(expected, listed.stdout.splitlines())
+        self.assertEqual([], self.recorded_cases())
+        rejected = self.invoke("plugin", "native-config", "tests.test_native_config.ExampleTest.missing")
+        self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+        self.assertEqual([], self.recorded_cases())
+        executed = self.invoke(*selectors)
+        self.assertEqual(0, executed.returncode, executed.stdout + executed.stderr)
+        cases = self.recorded_cases()
+        self.assertEqual(len(expected), len(cases))
+        self.assertEqual(len(cases), len({case["id"] for case in cases}))
+
+    def test_real_current_product_groups_have_only_current_existing_targets(self):
+        listed = self.invoke("--list", "plugin", "native-config", "plugin", entry=PACK / "scripts/test_workflow.sh")
+        self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
+        expected = ["tests.test_" + name for names in CURRENT_PRODUCT_MODULES.values() for name in names]
+        self.assertEqual(expected, listed.stdout.splitlines())
+        self.assertFalse(any("pty" in target.lower() or "manager_tui" in target for target in expected))
+        self.assertEqual([], self.recorded_cases())
 
     def test_explicit_method_runs_only_that_case(self):
         target = "tests.test_shared_memory_contract.ExampleTest.test_two"

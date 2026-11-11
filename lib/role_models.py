@@ -40,6 +40,29 @@ def explicit(host: str, value: dict) -> dict[str, str]:
     return {field: checked[field] for field in value}
 
 
+def resolve(global_choices: dict, project_choices: dict, host: str, role: str) -> tuple[dict, dict]:
+    """逐字段取项目、全局、宿主；显式 inherit 总是越过全局直达宿主。
+
+    继承算法属于纯模型合同，中央管理器和独立官方插件共用这一份实现；
+    调用不读取文件、不依赖中央登记，也不推测宿主正在运行的具体模型。
+    """
+    if host not in HOSTS or role not in ROLES:
+        raise ValueError("未知平台或角色")
+    project = project_choices.get(host, {}).get(role, {})
+    defaults = global_choices.get(host, {}).get(role, {})
+    values, sources = {}, {}
+    for field in ("model", "effort"):
+        if field in project:
+            values[field] = project[field]
+            sources[field] = "host" if project[field] == "inherit" else "project"
+        elif field in defaults:
+            values[field] = defaults[field]
+            sources[field] = "host" if defaults[field] == "inherit" else "global"
+        else:
+            values[field], sources[field] = "inherit", "host"
+    return validate(host, values), sources
+
+
 def block_span(lines: list[str]) -> tuple[int, int] | None:
     """读取与替换共用边界：顶格注释不结束映射，末尾外部注释留给后续章节。"""
     starts = [i for i,line in enumerate(lines) if re.match(r"^role_models:",line)]

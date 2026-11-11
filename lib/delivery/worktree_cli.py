@@ -28,7 +28,7 @@ sys.dont_write_bytecode = True
 
 if __package__:
     from lib.delivery.qa_handoff_cli import QAHandoffError, validate_qa_handoff
-    from lib.task_graph import TaskGraphError, request_closure
+    from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
     from lib.task_graph_records import read_record, decode
     from lib.project.validate_project_config import validate_docs
@@ -36,7 +36,7 @@ if __package__:
     from lib.worktree_policy import WorktreePolicyError, revision, settings
 else:
     from lib.delivery.qa_handoff_cli import QAHandoffError, validate_qa_handoff
-    from lib.task_graph import TaskGraphError, request_closure
+    from lib.task_graph import TaskGraphError, request_closure, delivery_complete
     from lib.task_graph_cli import _execute, _tasks
     from lib.task_graph_records import read_record, decode
     from lib.project.validate_project_config import validate_docs
@@ -71,14 +71,20 @@ textconv，避免审计指纹依赖可执行转换器或用户显示偏好。
 def repository(path: Path) -> Path:
     """调用者必须给仓库根，而不是让相对路径或子目录偷偷扩大文件作用域。"""
     root = path.resolve(strict=True)
-    actual = Path(git(root, "rev-parse", "--show-toplevel").decode().strip()).resolve()
-    if root != actual:
+    actual = Path(git(root, "rev-parse", "--show-toplevel").decode().strip()).resolve(strict=True)
+    # WindowsPath相等会隐含折叠大小写，不能用它证明真实卷上的根目录身份。
+    if not root.samefile(actual):
         raise DeliveryError("--repo must identify the exact repository/worktree root")
     return root
 
 
 def common_dir(repo: Path) -> Path:
-    return (repo / git(repo, "rev-parse", "--git-common-dir").decode().strip()).resolve()
+    return (repo / git(repo, "rev-parse", "--git-common-dir").decode().strip()).resolve(strict=True)
+
+
+def private_dir(repo: Path) -> Path:
+    """Git原生返回每个checkout的私有目录；共用对象库不能代替独立HEAD/index。"""
+    return Path(git(repo, "rev-parse", "--absolute-git-dir").decode().strip()).resolve(strict=True)
 
 
 def object_id(repo: Path, value: str) -> str:
@@ -110,12 +116,33 @@ def clean(repo: Path) -> None:
 def linked(repo: Path, raw: str) -> Path:
     """只有同一个仓库登记的真实根目录才是 worktree，普通 branch 名称不构成隔离。"""
     path = Path(raw)
+    if not path.is_absolute():
+        raise DeliveryError("worktree requires a canonical absolute root")
     actual = repository(path)
-    if str(actual) != raw or actual == repo or common_dir(actual) != common_dir(repo):
+    if (str(actual) != raw or actual.samefile(repo)
+            or not common_dir(actual).samefile(common_dir(repo))
+            or private_dir(actual).samefile(private_dir(repo))):
         raise DeliveryError("worktree must be a distinct canonical root in the same repository")
     entries = git(repo, "worktree", "list", "--porcelain", "-z").split(b"\0")
-    roots = {os.fsdecode(item[len(b"worktree "):]) for item in entries if item.startswith(b"worktree ")}
-    if raw not in roots:
+    matched = False
+    for item in entries:
+        if not item.startswith(b"worktree "):
+            continue
+        # porcelain -z保证属性/NUL结构，不保证与Python原生路径逐字同形。
+        # 只转换Git返回值的表示，调用方raw仍严格规范；逐条比较物理身份，
+        # 不用slash替换、casefold或WindowsPath集合合并真实不同的登记根。
+        registered = Path(os.fsdecode(item[len(b"worktree "):]))
+        if not registered.is_absolute():
+            raise DeliveryError("Git registered a non-absolute worktree root")
+        try:
+            registered = registered.resolve(strict=True)
+        except FileNotFoundError:
+            # Git可以列出stale/prunable旧登记；缺失项不构成当前目标的登记证明。
+            continue
+        if not registered.is_dir():
+            raise DeliveryError("Git registered worktree root is not a directory")
+        matched |= registered.samefile(actual)
+    if not matched:
         raise DeliveryError("worktree root is not registered by Git")
     return actual
 
@@ -198,8 +225,7 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     indexed = {task["id"]: task for task in selected}
     for task in selected:
         # qa-ready 只表示可以开始审查；显式 QA 节点必须实际完成，旧 PASS 不能覆盖复审中或失败态。
-        completed = {"QA_PASSED"} if task["task_type"] == "qa" else {"BUILD_VERIFIED", "QA_SCOPE_READY"}
-        if task["state"] not in completed:
+        if not delivery_complete(task["task_type"], task["state"]):
             raise DeliveryError(f"request task is not complete: {task['id']}")
         if task["task_type"] == "writer" and not set(task["gates"]) <= set(graph.get("approved_gates", [])):
             raise DeliveryError(f"request writer has an unapproved gate: {task['id']}")

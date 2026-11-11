@@ -25,13 +25,13 @@ try:
     from lib.skills.business_confirmation_policy import read_instruction_contract
     from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs
     from lib.documents.plan_documents import validate_plan_index
-    from .runtime_pins import read_builtin_source, record_binding
+    from .runtime_pins import PLUGIN_ENV, read_builtin_source, record_binding
 except ImportError:
     from standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from lib.skills.business_confirmation_policy import read_instruction_contract
     from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
     from lib.documents.plan_documents import validate_plan_index
-    from runtime_pins import read_builtin_source, record_binding
+    from runtime_pins import PLUGIN_ENV, read_builtin_source, record_binding
 
 
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
@@ -63,8 +63,9 @@ def read_builtin_standard_sources(pack_root: Path, *, binding: dict | None = Non
     owners: dict[str, str] = {}
     errors: list[str] = []
     for relative, domain in BUILTIN_STANDARD_SOURCES.items():
-        # 显式 pin 时只信内容库原字节；旧 source 调用仍走原安全本地读取，互不回退。
-        body = (read_builtin_source(binding, relative).decode("utf-8") if binding is not None
+        # 插件和显式 pin 都只信各自固定来源；旧 source 调用仍走原安全本地读取。
+        body = (read_builtin_source(binding, relative).decode("utf-8")
+                if binding is not None or PLUGIN_ENV in os.environ
                 else read_instruction_contract(pack_root, relative))
         validate_rule_definitions(body, relative, errors)
         if re.findall(r"(?im)^- Domain: (engineering|design)\s*$", body) != [domain]:
@@ -203,6 +204,15 @@ def validate(config: Path, project_root: Path, *, body: bytes | None = None,
                                           root=root, initialize=True)
         if selected_binding is not None and config.absolute() != root / ".agent-workflow/project.yaml":
             raise ValueError("中央文档校验只能读取本项目 .agent-workflow/project.yaml")
+        if PLUGIN_ENV in os.environ:
+            # 适配器必须由调用方指向实际项目文件，不能用插件附带配置充当业务事实。
+            if ".." in config.parts or not config.absolute().is_relative_to(root):
+                raise ValueError("插件文档校验必须显式读取实际项目中的适配器")
+            if body is None:
+                from lib.hosts.claude_instructions import read_file
+                body = read_file(config.absolute())
+                if body is None:
+                    raise ValueError("实际项目适配器不存在")
     except (OSError, ValueError) as exc:
         return [f"invalid runtime binding: {exc}"]
     text = config.read_text(encoding="utf-8") if body is None else body.decode("utf-8")

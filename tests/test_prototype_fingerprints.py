@@ -362,32 +362,35 @@ class PrototypeFingerprintTest(unittest.TestCase):
             self.assertNotEqual(before[page], after[page])
 
     def test_requirement_documents_are_checked_without_joining_the_render_fingerprint(self) -> None:
-        """真实导航绑定与资源闭包分开；历史 renderer 和反向链接不触发全图扫描。"""
+        """真实导航安全与资源闭包分开；Markdown 修订不依赖旧 HTML 新鲜度或反向扫描。"""
         source, _ = bind_requirement_documents(self.project)
         with mock.patch.object(requirement_html, "renderer_identity", side_effect=AssertionError("导航不校验 renderer 身份")), \
                 mock.patch.object(requirement_html, "stage_markdown", side_effect=AssertionError("导航不回扫文档链接")):
             before = self.fingerprints()
-            # 这代表文档按自己的流程更新且保持来源绑定；失效的反向原型链接由文档交付负责，
-            # 页面导航不能因此制造计划↔原型校验循环或重算无关页面的视觉证据。
-            bind_requirement_documents(self.project, source_body=source.read_text(encoding="utf-8") +
-                                       "\n[历史关联](../standards/prototype/removed-page.html)\n")
+            # 只修订 Markdown，故意不更新旧 HTML；原稿进度和反向链接变化不能制造
+            # 计划↔原型校验循环，也不能重算无关页面的视觉证据或要求暂停的渲染器。
+            source.write_text(source.read_text(encoding="utf-8") +
+                              "\n[历史关联](../standards/prototype/removed-page.html)\n", encoding="utf-8")
             after = self.fingerprints()
         self.assertEqual(before, after)
 
     def test_requirement_document_replacement_before_success_is_rejected(self) -> None:
         """单独核对新加入的导航输入竞态，现有资源节点身份覆盖不包含 plans 文件。"""
-        source, _ = bind_requirement_documents(self.project)
+        source, historical_html = bind_requirement_documents(self.project)
         original = prototype_navigation.RequirementNavigation.require_current_inputs
+        for target in (source, historical_html):
+            # 每次负控只替换当前目标；前一轮完成的字节可以作为下一轮的合法起点，
+            # 不要求恢复旧派生记录，也不新增第二份任务夹具。
+            def replace_before_result(navigation) -> None:
+                target.write_bytes(target.read_bytes() + b"\nconcurrent edit")
+                original(navigation)
 
-        def replace_before_result(navigation) -> None:
-            source.write_bytes(source.read_bytes() + b"\nconcurrent edit")
-            original(navigation)
-
-        with mock.patch.object(prototype_navigation.RequirementNavigation, "require_current_inputs", replace_before_result):
-            code, stdout, stderr = self.run_cli("--json")
-        self.assertEqual(1, code)
-        self.assertEqual("", stdout)
-        self.assertIn("requirement navigation changed during validation", stderr)
+            with self.subTest(target=target.suffix), mock.patch.object(
+                    prototype_navigation.RequirementNavigation, "require_current_inputs", replace_before_result):
+                code, stdout, stderr = self.run_cli("--json")
+                self.assertEqual(1, code)
+                self.assertEqual("", stdout)
+                self.assertIn("requirement navigation changed during validation", stderr)
 
     def test_index_preview_preserves_independent_page_fingerprints_and_workspace_safety(self) -> None:
         """index承载选中页不反向成为业务页资源；缩小输出也不能绕过嵌入页安全扫描。"""

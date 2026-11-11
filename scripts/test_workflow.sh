@@ -22,6 +22,11 @@ def modules(*names):
 # 分组只声明真实模块/类/方法，不导入 TestCase 作为夹具。旧入口的模块范围保持不变；
 # service/tui 与 pty 按真实节点拆开，因此普通单元验证不会隐式启动伪终端。
 GROUPS = {
+    # 两个当前产品各自声明真实模块，不混入旧安装器/TUI/PTY或另一产品生命周期。
+    "plugin": modules("plugin_delivery", "plugin_resources", "plugin_workflow_contract",
+                      "continuous_intake_capabilities", "agent_continuation", "dispatch_admission", "task_settlement"),
+    "native-config": modules("native_config", "native_inventory", "native_config_codecs",
+                             "native_config_server", "native_config_mcp", "native_config_packaging", "plugin_console"),
     "codex": modules("codex_workflow", "shared_memory_contract"),
     "claude": modules("claude_workflow", "claude_instructions", "shared_memory_contract"),
     "antigravity": modules("antigravity_workflow"),
@@ -54,8 +59,8 @@ GROUPS["hosts"] = (
     + modules("unified_host_workflow", "antigravity_upgrade_boundaries", "claude_options",
               "bootstrap_routing", "astra_instruction_adaptation", "project_role_lifecycle")
 )
-# CI 是有明确合同的组合：当前 CLI/pin/模型收据、记录/见证容量、三宿主共享正文和中央软链、真实
-# PTY、离线归档及 Ruby Formula 消费者。Node 对应需求 HTML 的真实运行时消费者。
+# legacy CI 保留2.x CLI/pin/中央软链、真实PTY、旧归档及Ruby消费者的原有范围，
+# 不代表两个当前产品的3.0全套验收；当前产品请显式选plugin或native-config。
 GROUPS["ci"] = (
     modules("validation_runner")
     + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
@@ -69,11 +74,13 @@ GROUPS["ci"] = (
 
 def make_parser():
     parser = argparse.ArgumentParser(
-        description="唯一 unittest 入口；无参数只显示帮助，全套必须显式选择 full。",
-        epilog=("组：" + ", ".join((*GROUPS, "full")) + "。\n"
+        description="唯一 unittest 入口；无参数只显示帮助；full 是混合历史全仓显式发现，不代表3.0全套。",
+        epilog=("当前产品组：plugin、native-config；两者均不隐式运行PTY。\n"
+                "legacy/通用预置组：" + ", ".join(name for name in GROUPS if name not in {"plugin", "native-config"}) + "。\n"
+                "full：显式发现全部现有test_模块，包含尚未退役的2.x夹具。\n"
                 "节点：tests.test_模块[.测试类[.test_方法]]；允许与组组合。\n"
-                "示例：bash scripts/test_workflow.sh --list ci\n"
-                "      bash scripts/test_workflow.sh service tests.test_runtime_store\n"
+                "示例：bash scripts/test_workflow.sh --list plugin native-config\n"
+                "      bash scripts/test_workflow.sh plugin tests.test_task_graph_init\n"
                 "依赖：Python >= 3.11；requirement_html/ci 需要 Node，packaging/ci 需要 Ruby；PTY 需要 POSIX。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

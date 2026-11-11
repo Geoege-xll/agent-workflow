@@ -158,6 +158,47 @@ These are command-execution boundaries within existing steps, not additional wor
 
 ## Route
 
+<a id="continuous-intake-dispatch"></a>
+
+### Continuous intake across explicit current records
+
+Apply `.agent-workflow/product/WORKFLOW.md#continuous-pm-intake` for relationship decisions and authority.
+Use the verified plugin source-pack entry under `workflow-helper-execution` above. The logical calls
+below are source-pack examples; plugin execution uses its verified physical root and helper allowlist.
+3.0 rejects old runtime_binding, central project markers and bridge environments before any older-core
+loading; it calls only the current physical same-package record helper.
+
+PM supplies one transient manifest with `schema_version: 1`: `project_root` is the canonical absolute physical project
+directory; `records` contains only explicitly selected current graph/Light-pack entries
+`{path: <absolute file>, sha256: <current SHA>, execution_roots: {<task-id>: <absolute execution root>}}`;
+`capacity` contains `configured_subagents` and `configured_writers` (integers >= 1), and current
+`host_available_subagents` (integer >= 0). Include actual roots needed to compare physical ownership across
+worktrees and claims without bound IDs. Keep each record's gates and execution authority independent. Do not scan other sessions.
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py view --input '<explicit-manifest.json>'
+bash lib/python_runtime.sh -B -X utf8 lib/dispatch_admission_cli.py claim --input '<same-current-manifest.json>' \
+  --record '<absolute-selected-record>' --request-id '<selected-request>' --task-id '<selected-task>'
+```
+
+`view` returns candidates, concrete waiting reasons and occupied threads/writers without writing. Immediately
+before native creation, `claim` revalidates the current manifest and CAS-claims the selected task in its original
+record; retain the exact claim result in the existing request scratch. A claim is occupancy, not a native start.
+After actual creation, bind `agent_ref` through the original record update. If input SHA changed, inspect that
+conflict and refresh only affected observations rather than silently retrying. After claim, update that record's
+manifest SHA from the returned `claimed_sha256` before release/view; do not reuse the pre-claim SHA. For creation that definitely
+did not occur, use the actual claim JSON with `release --input '<manifest>' --receipt '<claim.json>'
+--outcome definitely_not_created`; an unknown creation outcome uses `--outcome unknown`, retains allocation
+and requires native-result verification before any redispatch. The helper does not create workers or a ledger.
+Refresh the transient input when actual records change. This is not a mandatory new report or a Full graph for Light.
+
+Same-request `ready` and request-scoped `qa-ready` still apply at their existing points; the cross-record
+admission helper adds single-PM explicit-record resource arbitration, never shared approval, cross-request QA
+or capacity dependencies. One PM must provide the complete current active-record inventory and fresh native
+capacity; this helper cannot discover omissions or guarantee independent-PM global scheduling.
+See [record tools](runtime-records.md#task-identity-same-task-continuation-and-retirement) for the explicit
+intent/capability continuation query; use only actual authorized native tools to execute advice.
+
 Before dispatch, judge current risk and actual consumers under WORKFLOW's Light／Full definitions. Both
 levels default to the corresponding native implementer; only explicit authority for PM itself to implement
 creates an exception. A document suffix cannot expand ownership. Both levels use original Validation,
@@ -284,9 +325,10 @@ this reference creates no separate instance-state source.
    Antigravity CLI: `/xy-plan`). It returns a self-contained proposal with `plan_state: draft`,
    exact paths, interfaces, task packs, verification commands and expected results, semantic locks,
    and a machine-readable `task_graph`. The graph is internal scheduler input, not user-visible
-   output. `xy-plan` does not edit files or dispatch Agents. PM follows
-   [requirements HTML delivery](../../xy-plan/references/requirement-html.md) to render the single Markdown
-   draft in this request's scratch for formal Full review, without writing formal plans before approval.
+   output. `xy-plan` does not edit files or dispatch Agents. PM presents the single Markdown draft
+   for formal Full review and may keep it in this request's scratch, without writing formal plans
+   before approval. Requirements/plan HTML generation is suspended under
+   [the retained reference](../../xy-plan/references/requirement-html.md).
 7. The PM reviews the draft and decides the post-QA controlled-document projection:
 
    ```yaml
@@ -313,7 +355,7 @@ this reference creates no separate instance-state source.
    implementation tasks consume that frozen contract directly. A material requirement,
    affected-surface, or plan-boundary change returns the plan to draft and reopens approval.
    The PM now saves the Full plan in adapter-resolved `docs.plans`, before any design/implementation
-   dispatch, then renders its same-name HTML from the single Markdown. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
+   dispatch, retaining the single Markdown without generating HTML. One independent requirement owns one plan; pending UI decisions remain explicit. Do not
    write accepted PROJECT/plans baselines just to save intended work. Merge subsequent effective changes into
    this same plan and replace affected complete Task Packs, including in-flight worker/QA inputs,
    before accepting their results. Preserve unaffected work; apply the linked plan lifecycle.

@@ -31,10 +31,12 @@ branches, or add confirmation.
   product styles with an entire file. Without write authority, return to the PM to adjust current
   scope. Top-of-page layout explanations, actual display mode/dimensions, and contract records must agree.
 - Arrange each concrete HTML vertically: current page name, compact summary, and circular back control
-  → high-fidelity product view → requirements HTML/Markdown, platform/dimensions, and necessary demo
-  explanations → a five-section contract collapsed by default. Requirements links use the two explicit
-  html/markdown types in the single nav.prototype-requirement-links; the body's
-  data-prototype-plan-source binds the same-named Markdown under the configured plans directory.
+  → high-fidelity product view → requirements Markdown, optional historical HTML, platform/dimensions,
+  and necessary demo explanations → a five-section contract collapsed by default. The single
+  nav.prototype-requirement-links requires one explicit markdown link and allows one html link only
+  when the corresponding historical file exists; the body's data-prototype-plan-source binds the
+  canonical Markdown under the configured plans directory. Every document link opens independently
+  with target="_blank" and rel containing noopener. HTML generation/freshness checks are suspended.
   Leave unbound templates empty without fabricated links. The iOS/PC product area is a horizontally
   centered fixed artboard; the Web product area defaults to a naturally expanding responsive webpage.
   The contract area stays outside the product area and is collapsible by default; it does not consume

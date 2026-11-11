@@ -33,6 +33,8 @@ BINDING_ENV = "AGENT_WORKFLOW_RUNTIME_BINDING"
 PROJECT_ENV = "AGENT_WORKFLOW_PROJECT_ROOT"
 CONFIG_ENV = "AGENT_WORKFLOW_CONFIG_PATH"
 CORE_ENV = "AGENT_WORKFLOW_CORE_ROOT"
+# 插件模式与中央桥分开判断；此键绝不加入 _central_context 的旧桥变量集合。
+PLUGIN_ENV = "AGENT_WORKFLOW_PLUGIN_ROOT"
 CENTRAL_ADAPTER = ".agent-workflow/project.yaml"
 CENTRAL_MARKER = ".agent-workflow/runtime.json"
 
@@ -88,6 +90,16 @@ def record_binding(record: dict[str, Any], *, root: Path | None = None,
     既有记录缺 pin 时不能采用环境当前版。已有 pin 与桥执行版必须相同，未知／损坏
     版本直接由内容库拒绝。源包和旧自包含安装在没有中央上下文时保持无 pin 行为。
     """
+    if PLUGIN_ENV in os.environ:
+        # 只在明确启用插件模式时导入新模块，使未携带它的既有 2.x 固定核心保持
+        # 原合同。插件并不伪造 pin，任何旧图 pin 都必须回到原中央运行时执行。
+        from lib.plugin_resources import plugin_root
+        plugin_root()
+        selected_root = project_root(root)
+        marker = selected_root / CENTRAL_MARKER
+        if "runtime_binding" in record or marker.exists() or marker.is_symlink():
+            raise RuntimePinError("插件不能接管已有 runtime_binding 或中央项目任务")
+        return None
     selected_root = project_root(root)
     environment = environment_binding()
     if "runtime_binding" in record:
@@ -161,11 +173,18 @@ def read_source(binding: dict, logical_path: str) -> bytes:
     return store.read_core_source(store.load_core(checked), logical_path)
 
 
-def read_builtin_source(binding: dict, path: str) -> bytes:
+def read_builtin_source(binding: dict | None, path: str) -> bytes:
     """仅三份内置规范及其既有安装别名使用此分支，不能扩大普通 file_digest 权限。"""
     relative = builtin_source_path(path)
     if relative is None:
         raise RuntimePinError("不是精确的内置规范来源")
+    if PLUGIN_ENV in os.environ:
+        # 即使直接调用此窄接口，也不能把有 pin 的旧来源静默改读为插件当前版本。
+        record_binding({"runtime_binding": binding} if binding is not None else {})
+        from lib.plugin_resources import read_source as read_plugin_source
+        return read_plugin_source(relative)
+    if binding is None:
+        raise RuntimePinError("内置来源读取需要明确的固定版本或插件安装上下文")
     return read_source(binding, relative)
 
 

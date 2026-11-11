@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Callable
+from lib.plugin_resources import plugin_root
 
 try:
     from lib import task_graph_records as records
@@ -157,6 +158,8 @@ def initialize(decisions: Any, root: Path, output: Path,
     raw_standards = _object(source["standards"], "standards", STANDARDS_FIELDS,
                             {"required_engineering_rule_ids", "required_design_rule_ids", "leaves", "protected_paths"})
     standards = copy.deepcopy(raw_standards)
+    # 回执沿用本次实际校验的适配器；显式内联规范路径的旧源包分支保留原默认。
+    adapter = "project.yaml"
     if ("index_path" in standards) != ("root" in standards):
         raise TaskGraphError("standards.index_path and standards.root must be provided together")
     if binding is not None:
@@ -288,7 +291,7 @@ def initialize(decisions: Any, root: Path, output: Path,
                 document.update(mode="full", reason="PM 明确选择本任务完整读取并遵守此文档",
                                 sections_or_queries=[], applies_to=copy.deepcopy(task["owned_paths"]),
                                 content_fingerprint=fingerprint(document["path"]))
-            task["controlled_document_access"] = {"adapter": "project.yaml", "documents": documents}
+            task["controlled_document_access"] = {"adapter": adapter if plugin_root() is not None else "project.yaml", "documents": documents}
         tasks.append(task)
     graph["tasks"] = tasks
     if any(task.get("surface_kind") in {"production_ui", "design_ui"} for task in tasks):

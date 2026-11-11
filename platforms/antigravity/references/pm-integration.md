@@ -67,6 +67,24 @@ only for Hook setup or diagnostics.
 
 ## Native Tool Short Path
 
+After actual `read_only`/`evidence` completion, accept its current-scope result/revision receipt and use
+shared `runtime-records.md#result-task-settlement` exclusive `update`/`settle`, binding the original AGY ID,
+accepted full pack bytes and actual native result/verification evidence. RESULT_VERIFIED ends record
+execution occupancy; idle, retirement or kill alone is not accepted result evidence. Preserve necessary
+worktree results and logs before kill; native closure/capacity and Writer/QA gates remain separate.
+
+Apply WORKFLOW's `continuous-pm-intake` and shared dispatch checks for cross-request relationships,
+authority, ownership, pin and QA; this adapter supplies native differences. The
+[official lifecycle](https://antigravity.google/docs/subagents?app=cli#subagent-lifecycle-and-states) says
+Running → Parent control permits the parent to interrupt by sending a message or terminating the child.
+Therefore do not infer `non_interrupting_message` from AGY message support: for a running instance with
+no independently verified non-interrupting tool, `agent_continuation_cli.py` with intent `progress`/`append`
+recommends waiting for its report/completion. Do not send an interrupting progress request or stop/restart A
+to coordinate B. The documented idle re-awakening preserves prior context; when the actual native message
+tool is available, declare `idle_followup` for the same task/ID. Killed agents cannot be re-awoken.
+Target-session delivery, wait wakeup, A's continuity, idle followup and parent-final/cancellation lifecycle
+remain separate runtime checks; documentation/configuration/version probes cannot make them verified.
+
 Dispatch only current schema_version: 2 single-task packs: task, applicable standards_contract, and necessary approval/UI evidence. Stable agent_alias binds project-relative module and canonical role; instance_policy: fresh and context_policy: handoff_only forbid complete PM/sibling history copies. Invoke invoke_subagent on demand for each independent task, obtaining a new ID with a self-contained current-task initial Prompt; still read required current files and standards completely. If native independent initial context cannot be proven, report a blocker without falling back to a parent-history fork, precreating instances, or filling platform capacity.
 
 Continuous same-task implementation, recent short rework, and same-round Reviewer delta checks may follow up to the original ID. After the feedback window, PM acceptance, and necessary verification/QA, first protect temporary-worktree results, unique logs, and necessary evidence, then use the currently exposed authorized native termination capability. Official kill removes temporary worktrees and prevents recovery while retaining historical transcripts; never kill before retrieving the only delivery, or claim permanent history deletion. Without native capabilities such as manage_subagents kill, or if invocation fails, only record agent_retired and prohibit continuation, with native termination unconfirmed; do not claim destruction, context clearing, or thread-capacity release. Retirement releases no still-running task locks. Observe running/open-thread counts separately under actual host definitions; under pressure reclaim accepted instances with sufficient handoff first, retain executing instances, undelivered evidence, and necessary reviewers, and reserve later necessary QA/integration capacity. resume/compact is not prepareForReuse; create no Agent pool, runner, daemon, or second state machine.

@@ -1,4 +1,6 @@
-# Homebrew 安装与 2.1 发行构建
+# 2.x Homebrew 安装与历史发行构建
+
+本页仅适用于 2.x 现有安装。3.0 使用官方插件载荷，另有独立的原生 Agent 配置工具；见[插件说明](plugin-v3.md)和[配置工具说明](agent-configuration.md)。候选构建不更新 Tap，也不表示下文的旧发行脚本已完成 3.0 适配。
 
 日常项目管理见[使用手册](usage.md)，源码结构与维护见[开发手册](development.md)，快速入口见 [README](../README.md)。
 

@@ -1,0 +1,6 @@
+{
+  "name": "agent-workflow",
+  "version": "@PLUGIN_VERSION@",
+  "description": "Repository-driven Light and Full workflows with native delegation and independent QA.",
+  "author": {"name": "Agent Workflow"}
+}

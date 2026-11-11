@@ -127,7 +127,7 @@ Current facts, historical decisions, design evidence, and working memory must re
 | Type | Path or capability | Rule |
 |---|---|---|
 | Project entry | `project.yaml` -> `docs.project` (same as `memory.portable_checkpoint`) | Current project overview and accepted-baseline links; no task state or historical logs, and no line/byte limit |
-| Topic lifecycle | `project.yaml` -> `docs.plans` | One editable Markdown document and same-name derived HTML per stable topic; separately record the current goal, execution recovery, and last accepted behavior, with complete history in Git |
+| Topic lifecycle | `project.yaml` -> `docs.plans` | One editable Markdown document per stable topic; requirements/plan HTML generation is suspended and historical HTML is retained; separately record the current goal, execution recovery, and last accepted behavior, with complete history in Git |
 | Other current facts | `project.yaml` -> remaining `docs.*` paths | Store currently effective engineering, design-system, and UI evidence; paths are an index, not an instruction to preload every file |
 | Active UI contract | `project.yaml` -> `docs.standards_root/prototype` | Keep stable interactive pages, their in-page contracts, and shared prototype CSS; approval remains in workflow task state |
 | Working memory | agentmemory | Optional cross-session observation and retrieval hints; it must never be the sole carrier of mandatory rules |
@@ -347,7 +347,7 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   pending. Later effective changes update the same plan and affected complete Task Packs before
   dispatch. Existing running workers and QA must acknowledge their updated scope before their results
   can satisfy it; preserve unaffected completed work and approvals.
-- Formal Full requirements review uses HTML while the model maintains one Markdown source. Before approval, the PM may render a working draft in the current request scratch; after approval, save `docs.plans/<name>.md` and generate same-name `.html`. Detailed invocation, controlled syntax, draft link bases, and atomic publishing boundaries live only in `.agent-workflow/platforms/shared/skills/xy-plan/references/requirement-html.md`. Light selects this by complexity/user request, without adding Full planning or QA because of rendering. Page existence, checkboxes, source copying, and check do not create requirements approval, prototype choice, or visual approval. In the existing handoff, the design Agent returns coverage from stable REQ IDs to concrete prototype pages/actual state anchors; the PM writes it into the same source and rerenders, without a new mapping report or independent prototype QA. HTML freshness, requirements_fingerprint, and prototype dependency fingerprints have separate responsibilities; progress/link/presentation-only changes do not automatically reopen requirements approval. Implementers still receive complete current Markdown/task packs. Preserve the accepted baseline in the same document; completed/cancelled execution details and old HTML retain historical boundaries, and PROJECT may index only explicit baselines.
+- Formal Full requirements review uses the single current Markdown draft. Before approval, PM may keep that draft in the current request scratch; after approval, save `docs.plans/<name>.md` before dispatch. Requirements/plan HTML generation and freshness checks are suspended; retain existing HTML, renderer source and licenses as historical/recovery material, following `.agent-workflow/platforms/shared/skills/xy-plan/references/requirement-html.md`. Light selects persistence by actual need without adding Full planning or QA. Document existence, checkboxes and source copying do not create requirements approval, prototype choice or visual approval. In the existing handoff, the design Agent returns coverage from stable REQ IDs to concrete prototype pages/actual state anchors; PM writes it into the same Markdown, without a new mapping report or independent prototype QA. Requirement and prototype dependency fingerprints retain separate responsibilities; progress/link/presentation-only changes do not automatically reopen requirements approval. Implementers receive complete current Markdown/task packs. Preserve the accepted baseline in the same document; completed/cancelled execution details and old HTML retain historical boundaries, and PROJECT may index only explicit baselines.
 - The PM must not inventory or manually enumerate locally installed specialist Skills. Task packs
   declare only mandatory `required_skills` and task-fact `audit_surfaces`; Codex matches installed
   Skills on demand from their descriptions.
@@ -713,8 +713,8 @@ complete procedure or require a browser, and its machine output stays internal.
 
 Page registration comes from ordinary relative page links inside the unique `nav#prototype-pages` in `index.html`; native `details/summary` may group modules or business logic, without a separate Manifest or script registration copy. The first direct summary in a native disclosure may record interaction results with a stable ID and `data-contract-for`.
 The workspace index may directly display one registered local concrete page through the unique `iframe#prototype-preview`, preserving an accessible name and using the exact canonical page name as static src; reject srcdoc, external/out-of-boundary/unregistered paths, self-nesting, and extra frames. The iframe is a real rendering resource, so still verify the concrete page and local dependency closure; this capability belongs only to the index, and product pages must not embed frames.
-Concrete pages bind the canonical Markdown path under configured `docs.plans` through `body[data-prototype-plan-source]`. HTML/Markdown anchors in the unique `nav.prototype-requirement-links` set `data-prototype-document="html"` / `"markdown"` respectively and target the same-name file pair; both use `target="_blank"` and `rel` containing `noopener` to open documents independently while preserving the workspace, with related duplicate attributes rejected. The source template may leave the binding empty until configured.
-This grants document-navigation permission only in explicit slots; other resources, embeds, and ordinary links remain subject to the prototype-root boundary. Verification checks safe regular files, source path/content binding, and HTML integrity without invoking complete render/check, scanning reverse prototype references from documents, requiring a current historical renderer identity, or creating document-render dependency edges. Document delivery separately ensures current delivered HTML freshness; a renderer code/version change alone does not trigger project-wide prototype reverification or visual reapproval. Static checks never create approval.
+Concrete pages bind the canonical Markdown path under configured `docs.plans` through `body[data-prototype-plan-source]`. The unique `nav.prototype-requirement-links` must contain one `data-prototype-document="markdown"` anchor to that source; it may additionally contain one `data-prototype-document="html"` anchor to an existing same-name historical HTML file. Every document anchor uses `target="_blank"` and `rel` containing `noopener` to open independently while preserving the workspace; related duplicate attributes are rejected. The source template may leave the binding empty until configured.
+This grants document-navigation permission only in explicit slots; other resources, embeds and ordinary links remain subject to the prototype-root boundary. Verification checks safe actual regular files, canonical source/target paths and concurrent replacement without invoking render/check, scanning reverse prototype references or adding document-render dependency edges. Historical HTML source hashes, records and renderer identities are not freshness requirements and cannot block Markdown revisions; an unlinked old HTML is not read. Requirements/plan HTML generation remains suspended. A renderer code/version change alone does not trigger project-wide prototype reverification or visual reapproval. Static checks never create approval.
 
 A fingerprint change first requires a scoped evidence refresh, not automatically another user
 confirmation. To carry an existing visual approval forward after a non-material edit, the PM must
@@ -784,7 +784,7 @@ product page. Use ordinary relative links. Every page must load directly through
 package installation, a build, framework, router, external CDN, live API, database, account,
 credential, or real user data.
 
-Only the index loads workspace.css/js; prototype.css and minimal page-shell.js belong to concrete pages. Empty registration shows an explicit empty state with the iframe hidden and no src; once registered, the single local controller derives loading from nav links without bulk preloading. After the current page name and compact brief, show the high-fidelity canvas first, followed by requirements HTML/Markdown, platform/size, necessary demo guidance, and finally the five contract sections collapsed by default. A circular back control with a light background, fine border, and black chevron locates the current group/page, separately from sidebar toggling; product navigation, overlays, and scrolling belong only to the canvas. Source-template updates do not bulk-rebuild existing nonempty business prototypes.
+Only the index loads workspace.css/js; prototype.css and minimal page-shell.js belong to concrete pages. Empty registration shows an explicit empty state with the iframe hidden and no src; once registered, the single local controller derives loading from nav links without bulk preloading. After the current page name and compact brief, show the high-fidelity canvas first, followed by requirements Markdown (and an optional existing historical HTML link), platform/size, necessary demo guidance, and finally the five contract sections collapsed by default. A circular back control with a light background, fine border, and black chevron locates the current group/page, separately from sidebar toggling; product navigation, overlays, and scrolling belong only to the canvas. Source-template updates do not bulk-rebuild existing nonempty business prototypes.
 
 `prototype.js` is not part of the standard tree. Create it only when two or more pages genuinely
 share the same native interaction; otherwise keep trivial behavior page-local.
@@ -827,6 +827,105 @@ Reuse rule: reuse existing expressive capability; evaluate extraction when the s
 appears a second time; extraction is mandatory on the third occurrence or QA fails.
 
 ## 7. Concurrency and Ownership
+
+<a id="continuous-pm-intake"></a>
+
+### Continuous PM intake and task relationships
+
+The main-session PM keeps accepting natural-language requirements while A runs. Users may discuss B or C
+without supplying task IDs, Agent assignments or a dependency graph. The PM maintains the current context,
+clarifies only material unresolved decisions, and gives a brief natural-language account of what is running,
+what can start and why anything waits. Do not finish the parent merely to wait if that client's actual
+parent-final lifecycle would prevent required coordination; use its available native notification/wait path.
+Never promise background survival, message delivery or wakeup without target-session evidence.
+
+Before routing a new requirement, compare the actual goal, scope, role, owned paths, semantic locks and
+available results with current explicit records. Choose the applicable relationship:
+
+- Independent work gets its own Light pack or Full request graph, authorization, execution-resource
+  authority, verification and applicable request QA; when ready and resources permit, dispatch a fresh
+  instance. Current source-pack/plugin resources follow the verified installation authority without
+  fabricating or importing a central binding.
+- Reuse a delivered result only after checking its actual inputs, acceptance and provenance still fit;
+  do not treat reuse of an artifact as reuse of its worker identity or old approval for a new request.
+- Same-task continuous work may append to its original instance only within its role and authorized
+  ownership. First revise the complete agreement/plan and affected complete Task Packs, obtain any necessary
+  approval, deliver the revision and confirm the worker received it before accepting new-scope results.
+  An old completion report cannot satisfy the revised scope. A progress-only inquiry changes no scope.
+- Split material role/ownership changes into independent tasks with their own contracts. Use semantic
+  dependencies for actual prerequisite work; use resource waiting for capacity/path/lock contention.
+  Waiting for capacity never becomes a fabricated `depends_on`/`blocks` edge. Paused or cancelled work
+  does not resume automatically because resources become available.
+
+`Task.state` in existing records remains the only task-state authority. For overlapping requests, PM passes
+only explicit current graph/Light-pack paths, current byte SHA values and actual execution roots to
+`dispatch_admission_cli.py view`. The transient schema 1 manifest also carries configured thread/writer
+limits and actual available native capacity. View writes nothing; it does not scan sessions or create a
+persistent ledger, daemon, Agent pool or second scheduler. Single-PM coordination requires all activity
+in its scope; the helper cannot discover omitted records or guarantee independent-PM global arbitration.
+
+Immediately before native creation, `claim` revalidates each current record's approvals, dependencies,
+physical execution roots, path/semantic resources and shared capacity under a short cooperative scratch
+lock, then CAS-publishes RUNNING in the selected original record. An unbound claim reserves occupancy,
+not evidence that a native worker started. Bind `agent_ref` only after confirmed creation. Release an
+unchanged unbound claim only for `definitely_not_created`; `unknown` retains it while PM checks the
+original creation result. Never automatically retry an uncertain creation or infer native idempotence.
+
+Each request retains its own approvals, complete pack, execution-resource authority and QA. This 3.0
+helper accepts only the current verified plugin/source pack and rejects every old `runtime_binding`,
+central project marker or bridge context; it never invokes an older core or falls back to latest. Existing
+same-request `ready`, `capacity` and request-scoped `qa-ready` keep their responsibilities. Recompute only
+after relevant inputs change, without repeatedly reading all records/standards or probing every turn.
+See [shared dispatch](../platforms/shared/skills/xy-workflow/references/dispatch.md#continuous-intake-dispatch)
+for the manifest and commands. Continuous intake requires no MCP connection, HTTP service or model
+configuration before normal workflow entry.
+
+Same-instance continuation uses the current action intent and actual exposed capabilities. `observe`
+with a running worker recommends `wait`. `progress`/`append` may recommend `message` to the same ID only
+when a verified non-interrupting message tool is available; otherwise wait for its report/completion.
+For idle workers, use an actually available native followup tool. Never substitute interrupt/stop for steer,
+restart A, duplicate its dispatch, inspect histories for progress, or silently make independent B part of A.
+Cancelled, missing, unknown, retired, cross-host, unbound or inactive instances block automatic reuse.
+The explicit `agent_continuation_cli.py` query is read-only advice, not execution/approval; the legacy
+`task_graph_cli.py continuation` keeps its original observation-only wait/followup behavior.
+
+Official documentation, generated configuration, version observations and target-session execution are
+separate evidence levels. Diagnose actual delivery of new input, native wait wakeup, A's uninterrupted
+execution, same-ID followup and parent-final/cancellation lifecycle separately. Leave absent evidence
+`runtime_unverified`. Current-host adapters describe only native differences; this section owns the
+cross-platform semantics, and existing Light/Full, approvals, role ownership, pin and QA contracts remain.
+
+### Result-task settlement
+
+`read_only` and `evidence` tasks finish as `RESULT_VERIFIED` only after PM accepts their actual latest-scope
+results and verification evidence. This means successful delivery of an audit or evidence result, including
+findings of defects; it does not mean product correctness, a build or implementation QA PASS. Writers cannot
+use this state. Their existing `BUILD_VERIFIED` and request-QA gates remain; explicit QA still requires the
+validated current handoff before `QA_PASSED`. A standalone audit gets no implementation/QA loop.
+Current 3.0 read_only/evidence records reject Writer success values BUILD_VERIFIED, QA_SCOPE_READY and QA.
+This closes result identity and evidence acceptance; it changes no requirements/visual confirmation,
+Writer build or unique-QA stage. Old source records remain ordinary read-only historical material;
+do not migrate them, rewrite them or invent evidence to make them current result tasks.
+
+Use the existing record `update` with one exclusive `settle` operation under the shared runtime-records
+reference. Bind the original native ID, accepted complete Task Pack's original-byte SHA, actual native
+completion observation/source, current revised-scope result and declared verification evidence. PM checks
+the real completion and latest revision acknowledgement in the authorized host; a supplied `completed` word,
+JSON shape or SHA is not a host probe. Preserve any accepted-pack bytes and full logs needed for review using
+existing task artifacts, not a mandatory new report. Running, unknown, unbound, wrong-ID, stale-scope,
+changed/missing-evidence or rejected verification keeps the original task active. Do not hand-edit a result
+state, use retirement as completion, or turn old failed native fixtures green.
+The accepted Task Pack snapshot and every completion/result/verification evidence source must be physically
+independent of the authoritative record being overwritten. The locked publication boundary checks new
+settlement references against the actual target physical identity; equal bytes in
+an independent file are allowed. Do not use the mutable Light record itself as its accepted snapshot.
+
+After all checks, the original CAS publishes `RESULT_VERIFIED`, evidence references and optional logical
+retirement together, releasing only record execution occupancy/owned locks. Native closure and actual host
+open-thread capacity remain separately observed; no capacity release is inferred from retirement or state.
+Subsequent dependencies can use the verified result, but it adds no Writer or request QA PASS.
+Only current plugin/source-pack execution can settle; an accepted pack or record with runtime_binding
+rejects before legacy resource loading. Do not mutate old cores or synthesize bindings/evidence.
 
 For multiple substantive independent features, assess `parallel_worktrees.mode: auto` and prefer
 real isolated worktrees when Git and the host can bind each writer to its own root. `off`, Light without a justified isolation need,
@@ -958,7 +1057,7 @@ canonical `role`, stable `agent_alias`, `instance_policy: fresh`, and `context_p
   candidate head and revision-bound verification. No independent ledger or user-visible JSON is added.
 - `agent_ref`: actual native reference after dispatch, `{host: codex|claude|antigravity, agent_id: <actual-ID>}`. Record it through existing `update` after the task enters execution; once bound, it cannot be changed/cleared. Different tasks cannot share identities, and historical references do not authorize new tasks. `agent_retired: true` is irreversible and does not release active locks.
 - `state`: the scheduler's single state source: `DECLARED`, `BLOCKED`, `READY`, `RUNNING`,
-  `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, or `FAILED`.
+  `BUILD_VERIFIED`, `QA_SCOPE_READY`, `QA`, `QA_PASSED`, `RESULT_VERIFIED`, or `FAILED`.
 - `qa_scope`: required for tasks with a `role` and exactly `request`, meaning the current request's
   dependency closure rather than the entire project.
 
@@ -970,7 +1069,8 @@ pending gate stays out of `READY`; this evidence does not add a second task-stat
 thread, writer quota, or path lock is currently available, record `capacity_delay`.
 This is a capacity delay, not a semantic block, and it does not change the dependency graph.
 `depends_on` and `gates` express semantic dependencies; a capacity wait must not masquerade as one.
-`RUNNING` means a writer is assigned and executing. `BUILD_VERIFIED` means the writer has completed
+`RUNNING` means allocated execution; an unbound claim does not prove native creation.
+`BUILD_VERIFIED` means the writer has completed
 and returned real build/test evidence. `QA` means unified QA is running on the current request's
 dependency closure. When a semantic dependency is unsatisfied, a gate is unapproved, or an upstream
 task fails, the task remains blocked. An upstream failure blocks only its downstream dependents;
@@ -980,7 +1080,13 @@ An explicit `task_type: qa` node uses `QA_PASSED` only after its current handoff
 reset it to `QA`/`RUNNING` on re-review and `FAILED` on failure. It cannot replace writer verification.
 Worktree delivery rejects unfinished or failed relevant QA nodes even when an old PASS is still present.
 
-Use `xy-workflow/references/runtime-records.md` on demand for same-Agent continuation, native usage, and provenance diagnostics; use `xy-qa-review/references/inputs.md` and the current host pm-integration for structured QA schema/extract. `continuation` only recommends waiting/follow-up from the PM's current running/idle observation; cancelled, unknown, invalid, cross-host, or inactive tasks block automatic continuation, and native actions still require currently exposed authorized tools. An ID proves neither liveness, role, approval, nor completion; check the complete current Task Pack/scope, without adding a runner, state ledger, or Reviewer. Diagnostics distinguish only documented/source_observed/runtime_unverified; do not sum native cumulative usage per record, keep unsampled values unknown, and calculate no costs or savings percentages. Verify the provenance of AGY native grill-me rather than automatically replacing this pack's coverage check; human diff/Artifact review is not independent AI QA. None of this adds gates to ordinary read-only or Light work, or automatically enables native/boost/teamwork modes.
+Use `xy-workflow/references/runtime-records.md` on demand for intent/capability-aware same-Agent continuation,
+native usage and provenance diagnostics under `continuous-pm-intake`; use `xy-qa-review/references/inputs.md`
+and the current host pm-integration for structured QA schema/extract. An ID proves neither liveness, role,
+approval nor completion. Diagnostics distinguish documented/source_observed/runtime_unverified; do not sum
+native cumulative usage per record, replace unknown with zero, or calculate cost/savings rates. Verify AGY
+native grill-me provenance rather than replacing this pack's coverage check; human diff/Artifact review is
+not independent AI QA. This adds no gates to ordinary read-only/Light work or automatic native/boost/teamwork.
 
 Effective dispatch capacity is the minimum of configured remaining subagent slots, configured
 remaining writer slots, and the host's currently available subagent slots. The PM never assumes the

@@ -32,8 +32,11 @@ FEATURE_DOCS = {
 AGY_REFERENCE = "https://antigravity.google/docs/cli/reference/"
 AGY_HEADLESS = "https://antigravity.google/docs/cli/headless/"
 AGY_DISCOVERY = "https://antigravity.google/docs/customization-discovery"
-AGY_SUBAGENTS = "https://antigravity.google/docs/subagents?tab=cli"
+AGY_SUBAGENTS = "https://antigravity.google/docs/subagents?app=cli"
 CODEX_SUBAGENTS = "https://learn.chatgpt.com/docs/agent-configuration/subagents"
+CODEX_COMMANDS = "https://learn.chatgpt.com/docs/developer-commands?surface=cli"
+CODEX_SETTINGS = "https://learn.chatgpt.com/docs/reference/settings"
+CODEX_APP_SERVER = "https://learn.chatgpt.com/docs/app-server"
 CLAUDE_SUBAGENTS = "https://code.claude.com/docs/en/sub-agents"
 # 以下描述一手文档中的能力及本包调用约束，不由 CLI 版本、文件存在或角色名称推导本会话工具。
 # 特别是停止与关闭不能互换，fresh 字段也不能代替原生上下文隔离的实际核验。
@@ -44,6 +47,12 @@ CODEX_CAPABILITIES = {
                                "boundary": "collaboration.spawn_agent 时显式 fork_turns:none；其他入口须核对实际独立上下文能力，禁止父历史 fork 降级"},
     "native_stop_and_close": {"documentation": CODEX_SUBAGENTS, "interface": "steer / stop / close subagents",
                               "boundary": "文档入口不证明当前有 close；interrupt 只停止当前执行，未确认关闭时退役禁止复用"},
+    "cli_mid_turn_input": {"documentation": CODEX_COMMANDS, "interface": "Enter / Tab",
+                           "boundary": "当前文档 Enter 注入当前 turn，Tab 排队到下一 turn；具体客户端与快捷键仍须实测，不写假想 TOML"},
+    "app_followup_behavior": {"documentation": CODEX_SETTINGS, "interface": "General > Follow-up behavior",
+                              "boundary": "App 可选 steer 当前运行或 queue 下一运行；不读写宿主数据库，IDE chatgpt.followUpQueueMode 不是通用 TOML"},
+    "app_server_steer": {"documentation": CODEX_APP_SERVER, "interface": "turn/steer",
+                         "boundary": "向活动 turn 追加输入且 expectedTurnId 必须匹配；不同于 turn/interrupt 的取消，不证明本会话暴露或已调用此API"},
 }
 CLAUDE_CAPABILITIES = {
     "fresh_named_subagent_context": {"documentation": CLAUDE_SUBAGENTS, "interface": "Agent(xy-*)",
@@ -61,6 +70,8 @@ AGY_CAPABILITIES = {
                                "boundary": "初始 Prompt 自包含当前任务；新实例不继承父会话历史，当前规范仍须读取"},
     "send_message_resume": {"documentation": AGY_SUBAGENTS, "interface": "message idle agent",
                             "boundary": "文档描述空闲 Agent 收消息后保留上下文续用；已终止 Agent 不可唤醒"},
+    "running_parent_message": {"documentation": AGY_SUBAGENTS, "interface": "Running > Parent control",
+                               "boundary": "官方说明父消息可以 interrupt 正在运行的子代理；不得据此声明 non_interrupting_message，缺少实证时等待"},
     "subagent_kill": {"documentation": AGY_SUBAGENTS, "interface": "native subagent termination",
                       "boundary": "kill 后不可唤醒且会清理临时 worktree；先保护成果、唯一日志和必要证据，历史转录并不永久删除"},
     "conversation_resume": {"documentation": AGY_REFERENCE, "interface": "--continue / --conversation / /resume"},
@@ -218,8 +229,9 @@ def diagnose(host: str, *, project: Path | None = None, probe: bool = False,
     lifecycle = {"recovery_event": "SessionStart(compact)", "runtime_verified": False,
                  "pre_post_compact_registered": False,
                  "reason": "恢复指令通过 SessionStart 注入；不为无恢复上下文作用的事件增加命令或压缩门禁"} if host in {"codex", "claude"} else None
-    return {"platform": host, "documentation_snapshot": "2026-11-03", "client": client,
+    return {"platform": host, "documentation_snapshot": "2026-11-11", "client": client,
             "documented_capabilities": capabilities,
+            "continuous_intake": continuous_intake_diagnostics(host),
             "agent_lifecycle_boundary": {
                 "workflow_schema_version": 2, "context_policy": "handoff_only",
                 "instance_policy": "fresh", "runtime_verified": False,
@@ -239,3 +251,30 @@ def diagnose(host: str, *, project: Path | None = None, probe: bool = False,
             "execution": catalog.execution, "notes": catalog.notes,
             "runtime_verified": False, "runtime_status": "runtime_unverified",
             "verification_boundary": "配置投影和版本信息不证明原生信任、事件触发、模型可用或实际角色完成；应在目标宿主会话验收"}
+
+
+def continuous_intake_diagnostics(host: str) -> dict:
+    """给出人工验收入口，不把配置/版本或另一次会话观察提升为运行事实。
+
+    五项行为失败方式不同：收到 B 不证明 A 未中断，wait 返回不证明 parent-final
+    后子实例仍可工作。分别保持 unknown，并由 PM 在获授权的目标原生会话留证。
+    本诊断不扫描其他会话、不改宿主设置，也不探测模型或偷偷启动后台进程。
+    """
+    checks = (
+        ("message_delivery", "A 运行时发送 B，记录 PM 实际收到 B 的时点与目标会话"),
+        ("wait_wakeup", "PM 使用当前原生 wait 时接收新用户输入/工作者结果，确认能唤回协调"),
+        ("original_task_continuity", "接收及派发 B 后确认 A 同一实例连续执行，未停止、重启或重复派发"),
+        ("same_agent_followup", "确认同任务已修订完整约定的消息送到原 ID；idle 续用与运行中非打断追加分别核实"),
+        ("parent_final_lifecycle", "单独观察主回合 final/中断后的子实例状态、结果送达和后续恢复能力"),
+    )
+    return {
+        "current_tool_surface": "not_inspected",
+        "observed_capabilities": {"non_interrupting_message": None, "idle_followup": None},
+        "runtime_checks": [{"name": name, "status": "runtime_unverified", "runtime_verified": False,
+                            "evidence_ref": None, "verification_hint": hint} for name, hint in checks],
+        "documentation": {"codex": CODEX_SUBAGENTS, "claude": CLAUDE_SUBAGENTS, "antigravity": AGY_SUBAGENTS}[host],
+        "source_boundary": ("AGY Running Parent control 允许父消息 interrupt；未核实非打断能力时 running 只能等待，idle 可核实原生恢复"
+                            if host == "antigravity" else "按本会话实际暴露且获授权的工具核实能力；不从产品名、配置或版本推导"),
+        "client_not_found_scope": "not_found 仅代表当前探测 PATH 未发现可执行文件，不代表用户未安装",
+        "settings_policy": "只给目标客户端的官方操作入口；不修改用户设置、环境或宿主数据库",
+    }
