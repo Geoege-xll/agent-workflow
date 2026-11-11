@@ -78,6 +78,20 @@ GROUPS["ci"] = (
 # matrix 仅从这里派生。历史 repair/entry-shells 别名已完成使命，不参与现行门禁；
 # 原始 CI 日志保留原名，不通过修改旧证据把阶段成功重标为最终验收。
 NATIVE_COMPONENTS = {
+    "windows-native-delivery": {
+        "targets": (
+            "tests.test_windows_delivery.WindowsDeliveryNativeTest.test_https_install_cli_repeat_and_failure_preservation",
+            "tests.test_windows_delivery.WindowsDeliveryNativeTest.test_real_child_stdin_failure_retains_unknown_lifecycle_scene",
+        ),
+        # 发布策略只操作环境输入和本地输出，不依赖 PowerShell/网络；从唯一登记
+        # 派生便携 CI，避免维护第二份 curl 安装验收名单。真实安装会自行在最终
+        # 私有 venv 按原 hash/binary 锁准备 curses，组件 runner 本身只需 stdlib。
+        "portable_ci_targets": (
+            "tests.test_windows_delivery.ReleaseWorkflowPortableTest.test_release_policy_routes_stable_and_candidate_and_rejects_invalid_identity",
+        ),
+        "qualification": "ordinary",
+        "node_required": True, "curses_required": False,
+    },
     "windows-native-libraries": {
         "targets": (
             "tests.test_windows_runtime.WindowsFilesystemNativeTest",

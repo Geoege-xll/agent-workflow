@@ -8,6 +8,11 @@ on:
         description: "Version X.Y.Z without a leading v (for example 2.0.0)"
         required: true
         type: string
+      release_tag:
+        description: "Optional candidate tag vX.Y.Z-rc.N; empty creates a stable draft"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -65,6 +70,7 @@ jobs:
       contents: write
     env:
       RELEASE_VERSION: ${{ inputs.version }}
+      REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,27 +79,61 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
-      # packaging 已由 needs 的同一 ci 入口验证，发行阶段仅生成并发布候选资产。
-      - name: Build archive, checksum and Formula
-        run: bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py "$RELEASE_VERSION"
-      - name: Create draft release without replacing published assets
+      - name: Validate release identity and visibility
+        id: identity
+        shell: bash
+        run: |
+          bash lib/python_runtime.sh -B -X utf8 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          # 环境输入始终作为数据处理，不把 workflow 输入插值进 shell 代码。
+          # 发行身份必须与当前产品版本一致；候选标签不改变 VERSION 或元数据。
+          version = os.environ["RELEASE_VERSION"]
+          requested = os.environ["REQUESTED_RELEASE_TAG"]
+          if (not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version)
+                  or version != Path("product/VERSION").read_text(encoding="ascii").strip()):
+              sys.exit("Release version must match product/VERSION exactly.")
+          tag, kind = "v" + version, "draft"
+          if requested:
+              if not re.fullmatch(re.escape("v" + version) + r"-rc\.(?:0|[1-9][0-9]*)", requested):
+                  sys.exit("Candidate tag must be vX.Y.Z-rc.N for the current product version.")
+              tag, kind = requested, "prerelease"
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
+              stream.write(f"tag={tag}\nkind={kind}\n")
+          PY
+      # packaging 已由 needs 的同一 ci 入口验证；正式构建保持固定 GitHub 下载源，
+      # 此处不传 fixture URL/CA，也不把本地 HTTPS 成功当成公开 URL 消费证据。
+      - name: Build all six release assets
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+        run: bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py "$RELEASE_VERSION" --release-tag "$RELEASE_TAG"
+      - name: Create release without replacing any tag or asset
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          RELEASE_KIND: ${{ steps.identity.outputs.kind }}
         run: |
           set -euo pipefail
-          tag="v$RELEASE_VERSION"
-          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
-            if [ "$(git rev-list -n 1 "$tag")" != "$GITHUB_SHA" ]; then
-              printf '%s\n' 'Existing tag points at another commit; refusing mismatched release.' >&2
-              exit 1
-            fi
+          # git/refs 的 create 是远端原子“不存在才创建”：任何同名 tag（即便指向
+          # 同一 SHA）都拒绝，不用先读再写，也不 force 更新或覆盖现有资产。
+          # 创建后发布失败时保留该 tag 供人工检查，不自动删除远端状态后重试。
+          gh api --method POST "repos/$GH_REPO/git/refs" \
+            -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
+          visibility=(--draft)
+          if [ "$RELEASE_KIND" = prerelease ]; then
+            visibility=(--prerelease --latest=false)
           fi
-          gh release create "$tag" \
+          gh release create "$RELEASE_TAG" \
             --target "$GITHUB_SHA" \
-            --draft \
-            --title "Agent Workflow $tag" \
+            --verify-tag "${visibility[@]}" \
+            --title "Agent Workflow $RELEASE_TAG" \
             --generate-notes \
             "dist/agent-workflow-$RELEASE_VERSION.tar.gz" \
             "dist/agent-workflow-$RELEASE_VERSION.tar.gz.sha256" \
-            dist/Formula/awf-cli.rb
+            dist/Formula/awf-cli.rb \
+            "dist/agent-workflow-windows-$RELEASE_TAG.pyz" \
+            "dist/install-agent-workflow-$RELEASE_TAG.ps1" \
+            "dist/agent-workflow-$RELEASE_TAG-manifest.json"

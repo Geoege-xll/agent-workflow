@@ -297,8 +297,10 @@ jobs:
               if (-not $nodeMatch.Success) { throw 'The existing Node version is not recognizable.' }
               if ([int]($nodeMatch.Groups['major'].Value) -lt 20) { throw 'An existing Node >= 20 is required for this native stage.' }
             }
-            # 仅明确需要 curses 的固定 matrix 常量允许安装；库阶段仍用无 pip 的 stdlib
-            # 环境。TUI venv 保留解释器自带 ensurepip，不能 --without-pip 后直接调用
+            # 仅明确需要 curses 的唯一 registry 字段允许在 runner venv 安装；curl
+            # 交付组件自身仅用 stdlib，其真实引擎仍在最终私有 venv 安装原 hash/binary
+            # 锁并从那里启动 TUI，不以 runner 预装依赖冒充用户安装的消费结果。
+            # TUI runner venv 保留解释器自带 ensurepip，不能 --without-pip 后直接调用
             # 不存在的 pip，也不升级 pip、改全局解释器或 PATH。每个 stage 独占目录。
             $withCurses = $env:NATIVE_CURSES_REQUIRED -eq 'true'
             $venv = Join-Path $env:RUNNER_TEMP "awf-${stage}-venv"
@@ -356,9 +358,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-server-${{ matrix.group }}-methods-${{ matrix.methods }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # 交付组件的附加目录只含摘要去重的下载资产/安装收据；fixture CA/key
+          # 和宿主配置不上传。其它组件继续消费两份原始日志，无平行验收入口。
           path: |
             ${{ runner.temp }}/${{ matrix.group }}.log
             ${{ runner.temp }}/${{ matrix.group }}-process.log
+            ${{ runner.temp }}/${{ matrix.group }}-process.delivery/
           if-no-files-found: error
           retention-days: 14
 

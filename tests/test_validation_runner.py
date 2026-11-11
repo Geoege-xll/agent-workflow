@@ -259,6 +259,33 @@ class ExampleTest(unittest.TestCase):
         self.assertIn("Ran 1 test", result.stderr)
         self.assertIn("OK", result.stderr)
 
+    def test_delivery_registry_collects_real_exact_consumers_once_with_owned_dependencies(self):
+        spec = importlib.util.spec_from_file_location("validation_delivery_registry", PACK / "scripts/test_workflow.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        from tests import test_windows_delivery as delivery
+        component = runner.NATIVE_COMPONENTS["windows-native-delivery"]
+        self.assertEqual("ordinary", component["qualification"])
+        self.assertTrue(component["node_required"])
+        # runner 只用 stdlib，真实 pip/curses 安装和 TUI 消费归交付的最终私有
+        # venv；若此处预装 curses，就不能区分安装器是否准备了用户环境。
+        self.assertFalse(component["curses_required"])
+        loader = unittest.TestLoader()
+        native_ids = {case.id() for case in loader.loadTestsFromTestCase(delivery.WindowsDeliveryNativeTest)}
+        portable_ids = {case.id() for case in loader.loadTestsFromTestCase(delivery.ReleaseWorkflowPortableTest)}
+        self.assertTrue(native_ids)
+        self.assertEqual(native_ids, set(component["targets"]))
+        self.assertEqual(portable_ids, set(component["portable_ci_targets"]))
+        for target in runner.component_targets(component):
+            # 每条注册必须是可解析的精确 caseID；只收集不执行 Windows 用例，
+            # 不能把本机 skip、测试夹具或整个模块误记成真实安装验收。
+            self.assertEqual([target], [case.id() for case in runner.load_target(target, runner.make_parser())])
+            self.assertEqual(1, runner.GROUPS["windows-native"].count(target))
+            self.assertEqual(1, runner.GROUPS["windows-native-desktop"].count(target))
+        for target in portable_ids:
+            self.assertEqual(1, runner.GROUPS["ci"].count(target))
+        self.assertTrue(native_ids.isdisjoint(runner.GROUPS["ci"]))
+
     def test_native_python_entry_from_other_cwd_preserves_selection_and_rejection(self):
         # 同一 Python 文件是真正无 Bash 的入口；-I 下从带空格源码根和其他 cwd
         # 启动仍使用同一清单，验证错误子节点不会因父模块覆盖而被忽略。
