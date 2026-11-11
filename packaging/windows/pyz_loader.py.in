@@ -1,0 +1,51 @@
+import base64
+import hashlib
+import importlib.abc
+import importlib.util
+import io
+import sys
+import zipfile
+
+_payload = base64.b64decode("__AWF_PYZ_BASE64__", validate=True)
+if hashlib.sha256(_payload).hexdigest() != "@PYZ_SHA256@":
+    raise SystemExit("Installer memory digest mismatch")
+_files = @MODULE_FILES@
+with zipfile.ZipFile(io.BytesIO(_payload)) as _archive:
+    _entries = _archive.infolist()
+    if len(_entries) != len(_files) or {item.filename for item in _entries} != set(_files):
+        raise SystemExit("Installer module allowlist mismatch")
+    if any(item.file_size > 4 * 1024 * 1024 for item in _entries):
+        raise SystemExit("Installer module size exceeded")
+    _sources = {name: _archive.read(name) for name in _files}
+
+_modules = {}
+for _name in _files:
+    if _name == "__main__.py":
+        continue
+    _package = _name.endswith("/__init__.py")
+    _fullname = _name[:-12].replace("/", ".") if _package else _name[:-3].replace("/", ".")
+    if _fullname in sys.modules:
+        raise SystemExit("Installer module namespace already occupied")
+    _modules[_fullname] = (_name, _package)
+
+
+class _InstallerModules(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in _modules:
+            return importlib.util.spec_from_loader(fullname, self, is_package=_modules[fullname][1])
+        return None
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        name, package = _modules[module.__name__]
+        module.__file__ = "<awf-installer>/" + name
+        if package:
+            module.__path__ = []
+        exec(compile(_sources[name], module.__file__, "exec"), module.__dict__)
+
+
+sys.meta_path.insert(0, _InstallerModules())
+exec(compile(_sources["__main__.py"], "<awf-installer>/__main__.py", "exec"),
+     {"__name__": "__main__", "__file__": "<awf-installer>/__main__.py"})

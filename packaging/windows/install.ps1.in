@@ -1,0 +1,121 @@
+#requires -Version 7.0
+<#
+固定发布标签：@RELEASE_TAG@；产品版本：@VERSION@。
+仅下载本脚本绑定的 HTTPS 资产，使用现有 CPython 3.11+ 与 Node 20+。
+安装引擎负责私有目录、venv、中央 runtime install/activate 及受管启动入口。
+#>
+[CmdletBinding()]
+param(
+    [string]$Python = 'python',
+    [string]$InstallRoot = '',
+    [string]$StateDir = '',
+    [string]$HostHome = '',
+    [switch]$Json
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$temporary = $null
+$exitCode = 2
+$phase = 'preflight'
+$engineExitUnknown = $false
+
+function Receive-ReleaseAsset {
+    param([string]$Curl, [string]$Url, [string]$Destination)
+    # --disable 必须排首位，禁止用户 curlrc 悄悄覆盖本固定交付的代理/协议/输出选项。
+    # 只允许 HTTPS 初始请求与重定向，连接、总时长和重定向次数均有有限预算。
+    & $Curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' @CURL_CA_ARGUMENT@ `
+        --max-redirs 3 --connect-timeout 15 --max-time 120 --retry 0 --max-filesize 268435456 `
+        --output $Destination --url $Url
+    if ($LASTEXITCODE -ne 0) {
+        throw "固定发行资产下载失败（curl 退出码 $LASTEXITCODE）：$Url"
+    }
+}
+
+try {
+    if (-not $IsWindows) { throw '该安装入口需要 Windows 11 x64 和 PowerShell 7.0+。' }
+    if ([string]::IsNullOrWhiteSpace($Python)) { throw '-Python 不能为空。' }
+    $pythonCommand = Get-Command -Name $Python -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $pythonPath = $pythonCommand.Source
+    $curlPath = (Get-Command -Name 'curl.exe' -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    # 仅探测调用者选定的现有解释器；不下载运行时、不改 PATH/profile/ExecutionPolicy。
+    & $pythonPath -I -B -X utf8 -c 'import sys; raise SystemExit(0 if sys.platform == "win32" and sys.version_info >= (3, 11) and sys.maxsize > 2**32 else 2)'
+    if ($LASTEXITCODE -ne 0) { throw '需要现有 Windows x64 CPython 3.11+；请使用 -Python 指定解释器。' }
+    if ([string]::IsNullOrEmpty($InstallRoot)) {
+        if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA 缺失；请显式指定 -InstallRoot。' }
+        $InstallRoot = Join-Path $env:LOCALAPPDATA 'AgentWorkflow'
+    }
+
+    $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ('awf-delivery-' + [guid]::NewGuid().ToString('N'))
+    [System.IO.Directory]::CreateDirectory($temporary) | Out-Null
+    $pyzPath = Join-Path $temporary '@PYZ_NAME@'
+    $archivePath = Join-Path $temporary '@ARCHIVE_NAME@'
+    $phase = 'download-installer'
+    Receive-ReleaseAsset -Curl $curlPath -Url '@BASE_URL@/@PYZ_NAME@' -Destination $pyzPath
+    # 在同一次读取中固定内存字节。后续哈希与执行都消费此数组，不把可替换路径交给 Python。
+    $installerBytes = [System.IO.File]::ReadAllBytes($pyzPath)
+    if ($installerBytes.Length -gt 16777216) { throw '安装器超过允许大小。' }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $actualDigest = [BitConverter]::ToString($sha.ComputeHash($installerBytes)).Replace('-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+    if ($actualDigest -cne '@PYZ_SHA256@') { throw '安装器 SHA256 不匹配；拒绝执行。' }
+    $phase = 'download-archive'
+    Receive-ReleaseAsset -Curl $curlPath -Url '@BASE_URL@/@ARCHIVE_NAME@' -Destination $archivePath
+
+    # 固定 ASCII stdin 载入器只解码上述数组，并再次核对摘要和同源模块白名单。
+    # 业务路径始终通过 ArgumentList 传递，空格/中文/引号不拼成命令代码。
+    $loader = @'
+@LOADER@
+'@
+    $loader = $loader.Replace('__AWF_PYZ_BASE64__', [Convert]::ToBase64String($installerBytes))
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $pythonPath
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    foreach ($argument in @('-I', '-B', '-X', 'utf8', '-', '--archive', $archivePath,
+                           '--archive-sha256', '@ARCHIVE_SHA256@', '--version', '@VERSION@',
+                           '--install-root', $InstallRoot)) {
+        $start.ArgumentList.Add($argument)
+    }
+    if ($StateDir) { $start.ArgumentList.Add('--state-dir'); $start.ArgumentList.Add($StateDir) }
+    if ($HostHome) { $start.ArgumentList.Add('--host-home'); $start.ArgumentList.Add($HostHome) }
+    if ($Json) { $start.ArgumentList.Add('--json') }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    try {
+        # Start/写 stdin/等待期间的异常不证明引擎已停止。直到确认取得退出码，
+        # 都保留它可能仍在使用的下载现场；Dispose 只是释放本层对象，不是收尾证明。
+        $phase = 'start-engine'
+        $engineExitUnknown = $true
+        if (-not $process.Start()) {
+            $engineExitUnknown = $false
+            throw '无法启动独立安装器。'
+        }
+        $phase = 'engine-running'
+        $process.StandardInput.Write($loader)
+        $process.StandardInput.Close()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $phase = 'engine-exited'
+        $engineExitUnknown = $false
+    } finally {
+        # 引擎是其 setup Job 的唯一所有者；此层不强杀子树或推测中央激活能否回滚。
+        $process.Dispose()
+    }
+} catch {
+    [Console]::Error.WriteLine('[ERROR] phase=' + $phase + '：' + $_.Exception.Message)
+    $exitCode = 2
+} finally {
+    if ($temporary) {
+        # 下载缓存不属于中央状态或版本保留策略。本薄引导没有锚定目录删除能力，
+        # 因此成功/失败都保留它，不按可替换路径删除同名文件或递归扫未知内容。
+        # 说明只走 stderr，-Json 的唯一结果 stdout 始终归安装引擎所有。
+        if ($engineExitUnknown) {
+            [Console]::Error.WriteLine('[WARN] phase=' + $phase + '：引擎未确认退出，暂勿删除下载现场：' + $temporary)
+        } else {
+            [Console]::Error.WriteLine('[INFO] phase=' + $phase + '：下载缓存保留：' + $temporary + '；可在确认无安装进程后删除。')
+        }
+    }
+}
+exit $exitCode
