@@ -30,6 +30,191 @@ import zipfile
 PACK = Path(__file__).resolve().parents[1]
 
 
+# 固定失败诊断只在已失败的升级后运行；证据输出目录独立于 state/宿主根。
+# 不导入另一套 runner、不取得协调锁，也不调用任何 apply/recover/save 入口。
+UPGRADE_STATE_DIAGNOSTIC = r'''
+import hashlib
+import json
+from pathlib import Path
+import stat
+import sys
+import traceback
+
+payload, state, home, evidence = map(Path, sys.argv[1:5])
+content_id, engine_phase = sys.argv[5:7]
+sys.path.insert(0, str(payload))
+from lib import role_models, runtime_store
+from lib.central.runtime_project import LIMIT, Node, Tree, identity, unique_json
+from lib.hosts import native_agents as native
+from lib.hosts.native_context import HostPaths, NativeContext
+from lib.platform_fs import os
+from manager import central_runtime, native_agents, runtime_policy
+
+context = NativeContext.for_state(state, host_paths=HostPaths.for_home(home, environment={}))
+errors = []
+def emit(step, **value):
+    print(json.dumps({'step': step, **value}, ensure_ascii=False), flush=True)
+
+def attempt(label, function):
+    # 每个独立事实保留完整原 traceback；读取一处失败不能阻断其它已授权根。
+    # 不吞掉诊断失败：末尾非零退出；父测试仍保留最初升级 FAIL 和其余四诊断。
+    try:
+        return function()
+    except Exception:
+        errors.append(label)
+        emit('state-read-error', fact=label)
+        traceback.print_exc()
+        return None
+
+def fact(node):
+    return {'kind': node.kind, 'mode': node.mode, 'identity': list(node.identity),
+            'security': node.security, 'bytes': len(node.payload),
+            'sha256': hashlib.sha256(node.payload).hexdigest()}
+
+def snapshot():
+    # 仅完整遍历本例显式授权的 state 和三个 HostPaths 根，不遍历 HOME。
+    # Tree 锚定每级目录且拒绝换链；文件使用既有有界 reader，不跟随未知链接。
+    # atime 不属身份，正常读取不会误报写入；ACL 摘要使用原 SDK 而非复制权限判定。
+    result = {}
+    for label, root in [('state', state), *((host, context.host_paths.root(host)) for host in role_models.HOSTS)]:
+        rows = {}
+        result[label] = rows
+        def collect():
+            try:
+                with Tree(root) as tree:
+                    pending = ['']
+                    while pending:
+                        relative = pending.pop()
+                        descriptor = tree.directory(relative)
+                        info = os.fstat(descriptor)
+                        rows[relative] = {'kind': 'directory', 'identity': list(identity(info)),
+                                          'security': list(runtime_store._security(descriptor))}
+                        for name in sorted(os.listdir(descriptor)):
+                            child = relative + '/' + name if relative else name
+                            if sum(map(len, result.values())) > 10000:
+                                raise ValueError('只读快照条目超过固定诊断预算，不能声称完整零写')
+                            observed = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                            if stat.S_ISDIR(observed.st_mode):
+                                pending.append(child)
+                            else:
+                                value = attempt(label + '/' + child, lambda: tree.read(child, skill_link=True, max_bytes=2 * LIMIT))
+                                rows[child] = fact(value) if value is not None else {'read_error': True}
+            except FileNotFoundError:
+                # 只有根自身缺失才是有效事实；子目录中途消失必须保留失败。
+                if root.exists():
+                    raise
+                rows[''] = {'kind': 'missing'}
+        attempt('snapshot-' + label, collect)
+    return result
+
+def save_node(name, node):
+    # 只把三个固定记录的原始有界 bytes 写入本例证据目录，不写回其来源。
+    # 文件名由测试代码固定；不使用记录正文中的路径生成 artifact 路径。
+    if node.kind == 'file':
+        with (evidence / name).open('xb') as stream:
+            stream.write(node.payload)
+    emit('raw-state-node', artifact=name if node.kind == 'file' else None, **fact(node))
+    return node
+
+def read_raw(root, relative, name):
+    with Tree(root) as tree:
+        return save_node(name, tree.read(relative))
+
+emit('state-diagnostic-context', python=sys.executable, payload=str(payload), state=str(state),
+     home=str(home), target_content_id=content_id, engine_phase=engine_phase)
+before_errors = len(errors)
+before = snapshot()
+before_complete = len(errors) == before_errors
+activation_node = attempt('raw-activation', lambda: read_raw(state, runtime_policy.ACTIVATION, 'activation.json'))
+current_node = attempt('raw-current', lambda: read_raw(state, runtime_policy.CURRENT, 'current.json'))
+activation = attempt('validate-activation', lambda: central_runtime._validate_journal(unique_json(activation_node.payload))) if activation_node and activation_node.kind == 'file' else None
+current = attempt('validate-current', lambda: runtime_policy.validate_current(unique_json(current_node.payload))) if current_node and current_node.kind == 'file' else None
+if activation is not None:
+    emit('central-persistent-stop', phase=activation['phase'], action=activation['action'],
+         activation_id=activation['id'], activation_content_id=activation['runtime_binding']['content_id'],
+         activation_matches_target=activation['runtime_binding']['content_id'] == content_id,
+         conflicts=activation['conflicts'], current_generation=current['generation'] if current else None,
+         generation_matches_activation=current['generation'] == activation['id'] if current else None,
+         current_content_id=current['runtime_binding']['content_id'] if current else None)
+
+    def authorized_ref():
+        # 先限定 state、宿主根和精确 nonce，允许即使完整 loader 拒绝正文也保存
+        # 原 wire；此头校验绝不授权读取日志中的 target/stage/held/retained。
+        ref = activation['native_ref']
+        if (not isinstance(ref, dict) or ref.get('schema_version') != 1 or ref.get('state') != str(state)
+                or not isinstance(ref.get('targets'), list)):
+            raise ValueError('取证 native_ref 未限定同一显式 state')
+        for target in ref['targets']:
+            if (not isinstance(target, dict) or set(target) != {'host', 'native_root'}
+                    or target['host'] not in role_models.HOSTS
+                    or target['native_root'] != str(context.host_paths.root(target['host']))):
+                raise ValueError('取证 native_ref 超出显式 HostPaths')
+        relative = native_agents._journal_relative(ref['transaction_id'])
+        attempt('raw-native-wire', lambda: read_raw(state, relative, 'native-wire.json'))
+        return ref
+
+    ref = attempt('native-ref-header', authorized_ref)
+    loaded = attempt('native-load-ref', lambda: native_agents._load_ref(ref, context)) if ref is not None else None
+    if loaded is not None and loaded[1] is not None:
+        journal = loaded[1]
+        emit('native-persistent-stop', transaction_id=journal['transaction_id'], status=journal['status'],
+             conflicts=journal['conflicts'], root_identities=journal['root_identities'],
+             writes=len(journal['writes']), compensations=len(journal.get('compensations', [])))
+        # 只有完整 _load_ref 验证成功后，日志登记的同父临时节点才获准 fresh 读。
+        # 每行拆开输出以保留已推进字段；不把 planned Node 当成实际磁盘事实。
+        for group, node_keys in [('writes', ('before', 'after', 'published', 'staged', 'restored')),
+                                  ('compensations', ('expected', 'after', 'staged', 'isolated', 'result'))]:
+            for number, row in enumerate(journal.get(group, [])):
+                emit('native-row', group=group, row=number, root=row['root'], path=row['path'],
+                     returned=row.get('returned'), stage=row.get('stage'), held=row.get('held'))
+                for key in node_keys:
+                    if row.get(key) is not None:
+                        attempt(group + '-node-' + str(number) + '-' + key,
+                                lambda: emit('native-recorded-node', group=group, row=number, field=key,
+                                             **fact(Node.from_value(row[key]))))
+                paths = [('target', row['path'])] + [(key, row[key]) for key in ('stage', 'held') if row.get(key) is not None]
+                for number_retained, retained in enumerate(row.get('retained', [])):
+                    attempt('retained-recorded-node', lambda: emit('native-recorded-node', group=group, row=number,
+                            field='retained-' + str(number_retained), **fact(Node.from_value(retained['expected']))))
+                    paths.append(('retained-' + str(number_retained), retained['path']))
+                for field, relative in paths:
+                    attempt(group + '-actual-' + str(number) + '-' + field,
+                            lambda: emit('native-actual-node', group=group, row=number, field=field,
+                                         root=row['root'], path=relative, **fact(native.read_node(Path(row['root']), relative))))
+        attempt('native-verify-global', lambda: emit('native-verification', conflicts=native_agents.verify_global(ref, context=context)))
+
+# owner/index 根授权独立于日志是否能加载；即使一个宿主损坏仍继续其它宿主。
+for host in role_models.HOSTS:
+    root = context.host_paths.root(host)
+    owner = attempt(host + '-owner', lambda: native.read_node(root, native.OWNER))
+    index = attempt(host + '-index', lambda: native.read_node(state, native.record_relative(root)))
+    if owner is not None:
+        emit('host-owner', host=host, root=str(root), **fact(owner))
+    if index is not None:
+        emit('host-index', host=host, path=native.record_relative(root), **fact(index))
+    if owner is not None and index is not None:
+        emit('host-owner-index-conditions', host=host, payload_equal=owner.payload == index.payload,
+             owner_is_file=owner.kind == 'file', owner_mode=owner.mode, owner_mode_is_0600=owner.mode == 0o600,
+             index_kind=index.kind, index_mode=index.mode, owner_without_index=index.kind == 'missing' and owner.kind != 'missing')
+        attempt(host + '-parse-index', lambda: emit('host-index-validation', host=host,
+                valid=native.parse_record(index, state=state, root=root, host=host, identity=native.root_identity(root)) is not None))
+
+after_errors = len(errors)
+after = snapshot()
+after_complete = len(errors) == after_errors
+# 保存完整逐节点摘要，供复核差异；不导出整私有 state 或任意宿主正文。
+with (evidence / 'snapshots.json').open('x', encoding='utf-8') as stream:
+    json.dump({'before': before, 'after': after, 'before_complete': before_complete,
+               'after_complete': after_complete}, stream, ensure_ascii=False, sort_keys=True, indent=2)
+unchanged = before_complete and after_complete and before == after
+emit('state-host-zero-write', unchanged=unchanged, before_complete=before_complete,
+     after_complete=after_complete, errors=errors)
+assert unchanged, '只读诊断未证明完整 state/宿主零写；保留前后快照及原始 traceback'
+if errors:
+    raise RuntimeError('只读诊断部分事实读取失败：' + ', '.join(errors))
+'''
+
+
 # 只在真实升级已经失败后，由现有 execute/Job 调用的固定只读诊断代码。
 # 两个解释器均以 argv 接收同一新 payload/state/home/CID，不拼接路径到代码，
 # 不创建第二测试实例，也不把诊断成功或失败算作安装/激活重试。
@@ -365,8 +550,8 @@ try {
             record["cwd"] = result.cwd
         target = os.environ.get("AWF_TEST_EVIDENCE_LOG")
         if target:
-            # CI 只导出生成 PS、已知下载资产和程序收据；证书私钥、宿主配置、环境与整个
-            # 私有 state 不进入 artifact。按内容摘要去重，既保留坏资产的原字节，
+            # CI 导出生成 PS、已知下载资产、程序收据及固定失败诊断原记录；证书私钥、
+            # 环境与整个私有 state 不进入 artifact。按内容摘要去重，既保留坏资产的原字节，
             # 又不为每个子场景重复复制相同发行包。此目录不参与任何测试选择/执行。
             destination = Path(target).with_suffix(".delivery")
             destination.mkdir(exist_ok=True)
@@ -400,6 +585,20 @@ try {
                 if not exported.exists():
                     with exported.open("xb") as stream:
                         stream.write(body)
+            # 文件名封闭到此诊断的四个产物；不递归导出 state/HOME，也不从恢复
+            # 日志接受 artifact 路径。原始记录与逐节点前后摘要均由现有 writer 留存。
+            state_evidence = []
+            for name in ("activation.json", "current.json", "native-wire.json", "snapshots.json"):
+                path = self.scene / "upgrade-state-evidence" / name
+                if path.is_file():
+                    body = path.read_bytes()
+                    digest = hashlib.sha256(body).hexdigest()
+                    exported = destination / (digest + "-upgrade-" + name)
+                    if not exported.exists():
+                        with exported.open("xb") as stream:
+                            stream.write(body)
+                    state_evidence.append({"source": str(path), "sha256": digest, "artifact": exported.name})
+            record["upgrade_state_evidence"] = state_evidence
         print(json.dumps(record, ensure_ascii=False), flush=True)
         if target:
             with Path(target).open("a", encoding="utf-8") as stream:
@@ -715,6 +914,18 @@ exit $LASTEXITCODE
             # 核心。实际 CID 由既有只读 SDK 算法读取，绝不按目录/摘要虚构 pin。
             self.assertTrue(new_python.is_file() and (new_payload / "workflow.py").is_file(), result.stdout + result.stderr)
             inspected = runtime_store.inspect_core(new_payload)
+            # 先保真实持久停点，再运行可能只报告“未结算”的旧预览诊断。记录本次
+            # engine.phase/CID，不能把先前已结算冷装事务误认成本次升级失败事务。
+            # 证据目录在本例 scene；诊断 exit 非零只留双流，绝不掩盖最初升级 FAIL。
+            evidence = self.scene / "upgrade-state-evidence"
+            evidence.mkdir()
+            try:
+                engine_phase = json.loads(result.stdout).get("phase")
+            except (ValueError, AttributeError):
+                engine_phase = "unparsed-engine-output"
+            self.execute("upgrade-readonly-persistent-state", [str(new_python), "-I", "-B", "-X", "utf8", "-c",
+                UPGRADE_STATE_DIAGNOSTIC, str(new_payload), str(self.state), str(self.home), str(evidence),
+                inspected["content_id"], str(engine_phase)])
             diagnostic = self.execute("upgrade-activate-preview-text-diagnostic", [str(new_python), "-I", "-B", "-X", "utf8",
                 str(new_payload / "workflow.py"), "--state-dir", str(self.state), "--host-home", str(self.home),
                 "runtime", "activate", inspected["content_id"], "--dry-run"])
@@ -726,7 +937,7 @@ exit $LASTEXITCODE
                     self.execute("upgrade-readonly-" + interpreter + "-" + mode,
                         [str(python), "-I", "-B", "-X", "utf8", "-c", UPGRADE_READ_ONLY_DIAGNOSTIC,
                          str(new_payload), str(self.state), str(self.home), inspected["content_id"], mode])
-            self.fail("真实跨私有解释器升级失败；已保存文本预览及旧/新解释器只读原始诊断：\n" + result.stdout + result.stderr
+            self.fail("真实跨私有解释器升级失败；已保存持久状态、文本预览及旧/新解释器只读原始诊断：\n" + result.stdout + result.stderr
                       + "\n[diagnostic]\n" + diagnostic.stdout + diagnostic.stderr)
         value = json.loads(result.stdout)
         self.assertEqual((True, "complete", 0), (value["ok"], value["phase"], value["exit_code"]))
