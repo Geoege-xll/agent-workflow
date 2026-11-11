@@ -171,13 +171,25 @@ try {
             print("[保留未确认收尾的测试现场] " + str(cls.root), flush=True)
 
     @classmethod
-    def capture_native(cls, command, *, env, timeout):
+    def capture_native(cls, command, *, env, timeout, cwd=None):
         from lib.install.install_process import capture_process
-        from lib.install.windows_process import WindowsJobCleanupError
+        from lib.install.windows_process import WindowsJobCleanupError, WindowsJobProcess
         try:
             # 真实 PS/curl/Python/venv/pip 共用原 Windows Job owner；超时只能在
             # 子树归零后传播，禁止 subprocess.run 只杀 PowerShell 留下安装进程。
-            return capture_process(command, env=env, timeout=timeout)
+            if cwd is None:
+                return capture_process(command, env=env, timeout=timeout)
+            # 原捕获薄桥没有 cwd 参数；需要调用目录负控时直接消费同一 Job
+            # owner 已有的 cwd 能力，不临时改变测试父进程或 HTTPS 线程的 cwd。
+            process = None
+            try:
+                process = WindowsJobProcess(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                output, error = process.communicate(timeout=timeout)
+                return subprocess.CompletedProcess(command, process.returncode, output, error)
+            finally:
+                if process is not None:
+                    process.close()
         except WindowsJobCleanupError:
             cls.cleanup_confirmed = False
             raise
@@ -224,6 +236,8 @@ try {
         if hasattr(result, "raw_stdout"):
             record.update(stdout_base64=base64.b64encode(result.raw_stdout).decode("ascii"),
                           stderr_base64=base64.b64encode(result.raw_stderr).decode("ascii"))
+        if hasattr(result, "cwd"):
+            record["cwd"] = result.cwd
         target = os.environ.get("AWF_TEST_EVIDENCE_LOG")
         if target:
             # CI 只导出生成 PS、已知下载资产和程序收据；证书私钥、宿主配置、环境与整个
@@ -266,9 +280,9 @@ try {
             with Path(target).open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(record, ensure_ascii=True) + "\n")
 
-    def execute(self, label, command, *, timeout=1200):
+    def execute(self, label, command, *, timeout=1200, cwd=None, env=None):
         try:
-            raw = self.capture_native(command, env=self.env, timeout=timeout)
+            raw = self.capture_native(command, env=self.env if env is None else env, timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired as error:
             result = subprocess.CompletedProcess(command, None,
                 repr(error.output), "执行超时；原 Job owner 已返回收尾后传播：" + repr(error.stderr))
@@ -277,6 +291,7 @@ try {
         result = subprocess.CompletedProcess(command, raw.returncode,
             raw.stdout.decode("utf-8", errors="replace"), raw.stderr.decode("utf-8", errors="replace"))
         result.raw_stdout, result.raw_stderr = raw.stdout, raw.stderr
+        result.cwd = str(cwd) if cwd is not None else None
         self.record(label, command, result)
         return result
 
@@ -332,6 +347,36 @@ exit $LASTEXITCODE
     def snapshot(self, root):
         return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in root.rglob("*") if path.is_file()} if root.exists() else {}
+
+    def installed_cmd(self, label, arguments, *, cwd):
+        # 复用既有 Windows 源码入口测试的 cmd 单次引用规则：/d 禁用 AutoRun，
+        # /v:off 禁用延迟展开，内层引号不再经过 C-runtime argv 编码器改写。
+        quoted = []
+        for argument in arguments:
+            self.assertFalse(any(char in argument for char in ('"', '\r', '\n')))
+            trailing = len(argument) - len(argument.rstrip('\\'))
+            quoted.append('"' + argument + '\\' * trailing + '"')
+        command = f'"{self.cmd}" /d /v:off /c ""{self.install / "bin/awf-cli.cmd"}" ' + ' '.join(quoted) + '"'
+        return self.execute(label, command, cwd=cwd)
+
+    def installed_legacy(self, label, arguments):
+        launcher = self.install / "bin/awf-cli.ps1"
+        environment = {**self.env, "AWF_DELIVERY_TEST_SCRIPT": str(launcher),
+            "AWF_DELIVERY_TEST_ARGV": json.dumps(arguments, ensure_ascii=False),
+            "AWF_DELIVERY_TEST_CWD": str(self.scene)}
+        # PS7.0/Legacy 模式只作用于本子进程。参数经 JSON 传给 PS 字符串数组，
+        # 受验者是安装产出的正式入口。故意让初始 OS cwd 与 Set-Location 不同，
+        # 让相对扫描根能够验证正式入口采用调用者的真实 FileSystem 位置。
+        script = ("$ErrorActionPreference='Stop';$global:PSNativeCommandArgumentPassing='Legacy';"
+            "[Console]::Error.WriteLine('[TEST] installed-launcher PSNativeCommandArgumentPassing=Legacy');"
+            "Set-Location -LiteralPath $env:AWF_DELIVERY_TEST_CWD;"
+            "$vector=@(ConvertFrom-Json -InputObject $env:AWF_DELIVERY_TEST_ARGV);"
+            "& $env:AWF_DELIVERY_TEST_SCRIPT @vector;exit $LASTEXITCODE")
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        result = self.execute(label, [str(self.pwsh), "-NoLogo", "-NoProfile", "-NonInteractive",
+            "-EncodedCommand", encoded], env=environment, cwd=self.home)
+        self.assertIn("[TEST] installed-launcher PSNativeCommandArgumentPassing=Legacy", result.stderr)
+        return result
 
     def tui_smoke(self, version_root):
         from tests.windows_conpty import ConPTYProcess
@@ -391,12 +436,38 @@ exit $LASTEXITCODE
         self.assertIn("awf-cli " + self.version, version.stdout)
         self.assertNotIn("源码未打包", version.stdout)
         self.assertNotIn(str(PACK), version.stdout)
-        # cmd /c 有自己的引号协议，沿用既有原生入口测试的单次 shell 引用层；
-        # 不能把内层引号交给 C-runtime argv 编码器再次转义。所有值来自本例路径。
-        command = f'"{self.cmd}" /d /v:off /c ""{self.install / "bin/awf-cli.cmd"}" "--json" "--scan-root" "{self.scan}" "list""'
-        listing = self.execute("installed-cmd-list", command)
+        shadow = self.scene / "cmd-shadow"
+        shadow.mkdir()
+        decoy = shadow / "pwsh.exe"
+        decoy.write_bytes(b"invalid executable: cwd must not select this pwsh")
+        cmd_version = self.installed_cmd("installed-cmd-version-with-cwd-shadow", ["--version"], cwd=shadow)
+        self.assertEqual(0, cmd_version.returncode, cmd_version.stdout + cmd_version.stderr)
+        self.assertEqual(version.stdout, cmd_version.stdout)
+        self.assertEqual(b"invalid executable: cwd must not select this pwsh", decoy.read_bytes())
+        listing = self.installed_cmd("installed-cmd-list", ["--json", "--scan-root", str(self.scan), "list"], cwd=shadow)
         self.assertEqual(0, listing.returncode, listing.stdout + listing.stderr)
         self.assertEqual([], json.loads(listing.stdout)["result"])
+        legacy_version = self.installed_legacy("installed-legacy-version", ["--version"])
+        self.assertEqual(0, legacy_version.returncode, legacy_version.stdout + legacy_version.stderr)
+        self.assertEqual(version.stdout, legacy_version.stdout)
+        with tempfile.TemporaryDirectory(prefix="caller-project-", dir=self.scan) as raw:
+            project = Path(raw)
+            marker = project / ".agent-workflow/project.yaml"
+            marker.parent.mkdir()
+            marker.write_text("schema: 1\n", encoding="utf-8")
+            original = marker.read_bytes()
+            legacy_list = self.installed_legacy("installed-legacy-relative-list", ["--json", "--scan-root", "projects", "list"])
+            self.assertEqual(0, legacy_list.returncode, legacy_list.stdout + legacy_list.stderr)
+            self.assertEqual([str(project.resolve())], [row["project"] for row in json.loads(legacy_list.stdout)["result"]])
+            self.assertEqual(original, marker.read_bytes())
+        from tests.test_windows_native_entry import LITERAL
+        for label, arguments in (("quoted-argument", ["list", "--unexpected", LITERAL]),
+                                 ("empty-argument", ["list", ""])):
+            with self.subTest(legacy_boundary=label):
+                rejected = self.installed_legacy("installed-legacy-" + label, arguments)
+                self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                if label == "quoted-argument":
+                    self.assertIn(LITERAL, rejected.stderr)
         status = self.execute("installed-runtime-status", [str(self.pwsh), "-NoLogo", "-NoProfile", "-File", str(launcher), "--json", "runtime", "status"])
         self.assertEqual(0, status.returncode, status.stdout + status.stderr)
         central = json.loads(status.stdout)["result"]
