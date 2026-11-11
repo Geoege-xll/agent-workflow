@@ -22,7 +22,9 @@
 | `manager/service.py` | 模型配置应用、备份／恢复、收据与精确回滚事务 |
 | `manager/runtime_service.py` | 单项目启停、选版、回滚与修复的唯一事务编排 |
 | `manager/central_runtime.py`、`manager/runtime_policy.py` | 中央 current 激活／恢复协调、follow／pinned 策略与准入门 |
-| `manager/native_agents.py`、`lib/hosts/native_context.py` | 用户级原生资源归属与显式不可变宿主上下文 |
+| `manager/native_agents.py` | 用户级原生资源归属、容量证明与条件发布／恢复推进器 |
+| `lib/hosts/native_context.py` | 显式不可变宿主上下文与宿主路径 |
+| `lib/hosts/native_journal.py` | 原生单事务日志的有界无损编解码；不承担文件系统或授权职责 |
 | `manager/runtime_lifecycle.py` | 固定任务／历史引用保护的生命周期 preview/apply/status/recover，CLI `runtime cleanup` 是公开维护入口 |
 | `manager/state_files.py` | 管理状态普通文件的有界读取、前像核对与安全发布 |
 | `lib/install/project_paths.py` | 规范项目路径与目录身份边界，供实际服务调用者复用 |
@@ -71,6 +73,14 @@ CLI/TUI 入口只构造一次 `NativeContext`／`HostPaths` 并向项目、中�
 中央终态与失败补偿诊断的序列化预算；超限先拒绝，不截断历史原文、权限或归属前像。
 容量占位只用于内存中的预算证明，不作为真实 Node/收据发布。恢复沿原固定计划与精确前像核验，
 仍拒绝后续未知修改；程序升级不会自动执行恢复。`tests.test_runtime_state` 纳入实际 `ci` 组以保护这些容量边界。
+
+原生事务的磁盘 wire2 在同一日志内合并重复的 Node 正文；内存业务记录仍为完整 schema1，
+所有权、根归属、公开恢复引用与收据保持原格式。`_save` 与容量证明使用同一 encoder，
+恢复与 GC 使用同一 decoder；解码不授予路径或节点权限，恢复仍经过原完整校验。
+物理 JSON 读写及单 Node 保持 4 MiB；wire2 逻辑展开的 8 MiB 流式计量仅为内存防扩张边界，
+还受深度、节点、引用和独立正文总量限制。旧 wire1 沿原有界读取与验证接受。
+旧管理程序遇到新事务格式会安全拒绝恢复，GC 保守保活；新格式中断事务须由保留的新程序 CLI 恢复。
+中央核心回退不切换已安装 CLI 程序入口，结算后的旧项目桥与固定任务读取分别沿自身原合同验证。
 
 显式固定任务的资源读取继续保留；helper 协议 0 的旧核心仍由合格 current 控制器在父锁保护下执行，
 不会因不能担任 current 而被删除。最小协议测试夹具复制源码中真实的桥及声明，只验证各自实际覆盖的消费者；
