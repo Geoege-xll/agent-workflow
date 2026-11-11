@@ -207,7 +207,13 @@ try {
 
     def record(self, label, command, result):
         record = {"kind": "windows-delivery-consumer", "label": label, "command": command,
-                  "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+                  "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
+                  # archive 摘要绑定本次真实构建的载荷字节；GITHUB_SHA 只是 CI 的
+                  # 来源索引，不能替代资产摘要或把 fixture 成功提升为公开 URL 成功。
+                  "delivery_identity": {"source_root": str(PACK), "source_sha": os.environ.get("GITHUB_SHA"),
+                      "product_version": self.version, "release_tag": self.tag,
+                      "archive": self.archive.name, "archive_sha256": self.fields["ARCHIVE_SHA256"],
+                      "pyz": self.pyz.name, "pyz_sha256": self.fields["PYZ_SHA256"]}}
         if hasattr(result, "raw_stdout"):
             record.update(stdout_base64=base64.b64encode(result.raw_stdout).decode("ascii"),
                           stderr_base64=base64.b64encode(result.raw_stderr).decode("ascii"))
