@@ -391,6 +391,19 @@ def _launcher_before(tree: Tree, name: str) -> Node:
     return node
 
 
+def _require_private_install_root(path: Path) -> None:
+    """受管写入前只读断言根的真实 owner/protected DACL，不修复未知权限。
+
+    新根由已有 mkdir(0700) 原语创建私有 SD；既有空根也必须通过同一 SDK
+    的真实 ACL 断言，不能凭空目录、POSIX mode 或持锁认领共享可写位置。
+    Directory 的祖先锚仅在活句柄期禁止换名；本断言不评估父目录授予外部
+    用户的 DELETE_CHILD，因此不代表关闭安装句柄后整条父链的持久安全证明。
+    """
+    if os.name == "nt":
+        from lib.windows_fs import assert_private
+        assert_private(path)
+
+
 def install(args) -> dict:
     """执行程序安装；失败保留现场，绝不自行回退中央 current 或删除旧版本。"""
     phase, root = "preflight", None
@@ -414,6 +427,7 @@ def install(args) -> dict:
         data = _verified_archive(archive, args.archive_sha256)
         with ExitStack() as stack:
             stack.enter_context(absolute_directory(install_root, create=True))
+            _require_private_install_root(install_root)
             stack.enter_context(directory_lock(install_root, "windows-program-install"))
             tree = stack.enter_context(Tree(install_root))
             root_node = tree.read(ROOT_RECEIPT)
