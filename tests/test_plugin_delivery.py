@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 
@@ -59,7 +60,7 @@ class PluginDeliveryTest(unittest.TestCase):
 
     def test_native_manifest_shapes_use_only_documented_fields(self):
         allowed = {
-            "codex": {"$schema", "name", "version", "description", "author", "extensions"},
+            "codex": {"name", "version", "description", "author", "skills", "hooks"},
             "claude": {"name", "version", "description", "author"},
             "antigravity": {"$schema", "name", "displayName", "version", "description", "author"},
         }
@@ -73,6 +74,13 @@ class PluginDeliveryTest(unittest.TestCase):
                                  (root / "product/VERSION").read_text().strip())
                 self.assertTrue((root / "skills/xy-workflow/SKILL.md").is_file())
                 self.assertEqual(host != "codex", (root / "agents").exists())
+                if host == "codex":
+                    # 真实 CLI 0.167.0 遇到 portable 根清单会漏发现 Hook；禁止
+                    # 构建再次同时输出两套入口，从而掩盖默认 PM 入口的缺失。
+                    self.assertEqual(".codex-plugin/plugin.json", builder.MANIFESTS[host])
+                    self.assertFalse((root / "plugin.json").exists())
+                    self.assertEqual("./skills/", manifest["skills"])
+                    self.assertEqual("./hooks/hooks.json", manifest["hooks"])
                 if host == "antigravity":
                     self.assertIn("skills/xy-workflow/SKILL.md", (root / "rules/AGENTS.md").read_text())
                 if host == "claude":
@@ -98,9 +106,45 @@ class PluginDeliveryTest(unittest.TestCase):
         self.assertFalse((self.root / "hook-home").exists())
         self.assertTrue(json.loads((root / "sources.json").read_bytes())["hook_trust_required"])
 
+    def test_antigravity_preserves_authority_with_its_recorded_adapter_and_native_body_budget(self):
+        # 原生 CLI 已证明旧通用适配会让主技能超过 24KB；核对每个实际发现技能
+        # 的完整源正文、真实适配来源和字节预算，不能靠删掉流程末尾通过校验。
+        root = self.installed["antigravity"]
+        adapter_source = "plugins/antigravity/plugin-context.md"
+        adapter = (PACK / adapter_source).read_bytes()
+        self.assertIn("完整连续覆盖".encode("utf-8"), adapter)
+        self.assertIn("按缺失行范围续读".encode("utf-8"), adapter)
+        self.assertIn("不重复读取已覆盖内容".encode("utf-8"), adapter)
+        metadata = json.loads((root / "sources.json").read_bytes())
+        self.assertEqual(adapter, (root / adapter_source).read_bytes())
+        self.assertEqual(hashlib.sha256(adapter).hexdigest(), metadata["source_files"][adapter_source])
+        for skill in builder.CORE_SKILLS:
+            relative = f"skills/{skill}/SKILL.md"
+            original = (PACK / "platforms/shared" / relative).read_bytes()
+            header, original_body = builder.split_frontmatter(original)
+            generated = (root / relative).read_bytes()
+            self.assertEqual(header + b"\n" + adapter + b"\n" + original_body, generated)
+            self.assertEqual(adapter_source, metadata["projections"][relative]["adapter"])
+            self.assertLessEqual(len(builder.split_frontmatter(generated)[1].strip()), 24_000)
+
+    def test_antigravity_rejects_native_truncation_before_creating_an_archive(self):
+        # 模拟适配文本将来增长；UTF-8 中文按字节计数，不能把字符数误当预算。
+        # 使用真实构建路径验证会在创建输出目录前失败，避免产生可安装的残缺候选。
+        read_source = builder.read_source
+        def oversized_adapter(source, relative):
+            original = read_source(source, relative)
+            if relative == "plugins/antigravity/plugin-context.md":
+                return original + ("中" * 2_000).encode("utf-8")
+            return original
+        output = self.root / "oversized-antigravity-output"
+        with mock.patch.object(builder, "read_source", side_effect=oversized_adapter):
+            with self.assertRaisesRegex(ValueError, "Antigravity skill body exceeds 24000 bytes"):
+                builder.build(PACK, output, "antigravity")
+        self.assertFalse(output.exists())
+
     def test_builder_rejects_an_undocumented_codex_agents_field(self):
         root = self.installed["codex"]
-        manifest = json.loads((root / "plugin.json").read_bytes())
+        manifest = json.loads((root / builder.MANIFESTS["codex"]).read_bytes())
         manifest["agents"] = "./agents/"
         with self.assertRaisesRegex(ValueError, "undocumented"):
             builder.validate_manifest("codex", manifest, "3.0.0-alpha.1")

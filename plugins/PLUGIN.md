@@ -97,9 +97,9 @@ Every built package starts with `runtime_verified: false` in `sources.json`.
 
 | Host | Main-session entry | Native role discovery | Actual acceptance status |
 | --- | --- | --- | --- |
-| Codex | Packaged SessionStart reminder, with actual CLI default-startup acceptance currently blocked; explicit discovered `agent-workflow:xy-workflow` remains available | No documented portable `agents` manifest key; use complete role instructions through a supported fresh native handoff | CLI 0.167.0 isolated install/list and app-server skills/list discovered nine enabled plugin skills; hooks/list did not discover the packaged Hook |
-| Claude Code | Plugin `settings.json` selects the packaged `pm` entry in the main conversation; explicit `/agent-workflow:xy-workflow` also works | Seven native worker agents with complete role bodies plus the separate main-session entry | Native validate and `--plugin-dir ... plugin details` inventory accepted; model-backed startup/dispatch remain unverified |
-| Antigravity | Plugin-owned `rules/AGENTS.md` points main-session task intake to `xy-workflow` | Packaged `agents/` with full role bodies | Desktop 2.29.0 has official Marketplace/Installed plugin management; no official `agy` CLI was found in PATH or the app bundle. This candidate has not been loaded in the desktop, so its rules/agents are not verified |
+| Codex | Packaged SessionStart reminder after official Hook review; explicit discovered `agent-workflow:xy-workflow` is also available | No plugin `agents` manifest field is claimed; use complete role instructions through a supported fresh native handoff or verified native role definition | CLI 0.167.0 discovers nine candidate skills. Alpha.3 uses the official compatibility manifest so the Hook is discoverable and can be reviewed through `/hooks`; native behavior is recorded per acceptance case |
+| Claude Code | Plugin `settings.json` selects the packaged `pm` entry in the main conversation; explicit `/agent-workflow:xy-workflow` also works | Seven native worker agents with complete role bodies plus the separate main-session entry | CLI 2.1.311 confirms the default main agent, fresh native dispatch, same-ID continuation and configured model/effort through host events; this does not establish unrelated client surfaces |
+| Antigravity | Plugin-owned `rules/AGENTS.md` points main-session task intake to `xy-workflow` | Packaged `agents/` with full role bodies | CLI 1.5.5 strict validation and official install/list confirm nine skills, seven agents and one rule. The AGY-specific resource adapter keeps the complete shared Skill body within the host's 24,000-byte limit; actual model dispatch is assessed separately |
 
 Claude's plugin default is below the user's own default-agent setting; it changes
 no global configuration or model. The `pm` entry only points the main session to
@@ -110,10 +110,12 @@ documents plugin hooks for manually installed desktop/local plugins and excludes
 hook-containing plugins from its public directory; this package makes no public
 directory eligibility claim. CLI local-marketplace installation does not prove
 the CLI delivered a trusted Hook to a new model session.
-The current CLI result remains an explicit default-startup acceptance blocker,
-including after declaring `extensions.com.openai.hooks` explicitly. Do not fill
-that gap by writing global/project instruction files, hook trust or permission
-overrides. The actual host must prove supported plugin startup delivery first.
+Real CLI 0.167.0 install controls found that a portable root `plugin.json` omitted
+Hooks even with `extensions.com.openai.hooks` or a compatibility manifest present.
+This Codex payload therefore emits only `.codex-plugin/plugin.json`, whose Hook
+is discovered by the actual client. Do not reintroduce both formats or substitute
+global/project instruction files, direct trust writes or permission overrides.
+Default-startup behavior still requires its own authenticated native-session evidence.
 
 Neither inventory discovery, direct Hook-script output nor manifest validation
 establishes a complete newly opened session or native worker dispatch. That still

@@ -40,12 +40,13 @@ audit. Light requires no Full graph, but selected independent QA still needs cur
     stale_or_conflicting: []
   ```
 
-- the task pack's specialist policy:
+- the task's specialist policy fields, directly inside `task`:
 
-  ```yaml
-  skill_policy:
-    required_skills: []
-    audit_surfaces: []
+  ```json
+  {
+    "required_skills": [],
+    "audit_surfaces": []
+  }
   ```
 
 - the single reviewer's selected-method evidence:

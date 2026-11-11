@@ -27,7 +27,13 @@ from lib.validate_antigravity_artifacts import ROLE_TOOLS as ANTIGRAVITY_ROLE_TO
 
 
 HOSTS = ("codex", "claude", "antigravity")
-MANIFESTS = {"codex": "plugin.json", "claude": ".claude-plugin/plugin.json",
+# 官方 CLI 1.5.5 的真实严格校验确认：技能正文最多加载 24,000 个 UTF-8
+# 字节。构建阶段按同一正文边界拒绝超限，避免分发后才发现末尾流程被截断。
+ANTIGRAVITY_SKILL_BODY_LIMIT = 24_000
+# CLI 0.167.0 的真实插件读取仅在纯兼容清单形态发现 Hook；即使同时提供
+# portable 根清单和兼容清单也会丢失 Hook。使用官方仍支持的单一兼容入口，
+# 不同时写 root plugin.json，确保安装后的 review/trust 能列出当前定义。
+MANIFESTS = {"codex": ".codex-plugin/plugin.json", "claude": ".claude-plugin/plugin.json",
              "antigravity": ".antigravity-plugin/plugin.json"}
 # 原有 helper 的源包依赖显式列出。不给插件夹入中央管理器、TUI、旧安装器、
 # Windows 启动器、原生Agent配置产品或任何模型服务/MCP装配入口。
@@ -42,7 +48,7 @@ HOST_LIB_FILES = ("__init__.py", "claude_instructions.py", "claude_options.py",
                   "workflow_hook_settings.py")
 VERSION_RE = re.compile(r"3\.0\.0-alpha\.[1-9][0-9]*\Z")
 MANIFEST_FIELDS = {
-    "codex": {"$schema", "name", "version", "description", "author", "extensions"},
+    "codex": {"name", "version", "description", "author", "skills", "hooks"},
     "claude": {"name", "version", "description", "author"},
     "antigravity": {"$schema", "name", "displayName", "version", "description", "author"},
 }
@@ -68,10 +74,8 @@ def validate_manifest(host: str, manifest: dict, version: str) -> None:
     if manifest["author"] != {"name": "Agent Workflow"}:
         raise ValueError("manifest author must match the product publisher")
     if host == "codex":
-        if manifest["$schema"] != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json":
-            raise ValueError("Codex manifest must declare the portable Agent Plugins schema")
-        if manifest["extensions"] != {"com.openai": {"requires_local_executor": True, "hooks": "./hooks/hooks.json"}}:
-            raise ValueError("Codex manifest must declare only the documented local executor extension")
+        if manifest["skills"] != "./skills/" or manifest["hooks"] != "./hooks/hooks.json":
+            raise ValueError("Codex compatibility manifest must declare the packaged skills and hooks")
     if host == "antigravity":
         if manifest["$schema"] != "https://antigravity.google/schemas/v1/plugin.json":
             raise ValueError("Antigravity manifest must declare its official schema")
@@ -121,6 +125,15 @@ def split_frontmatter(body: bytes) -> tuple[bytes, bytes]:
 def render_skill(body: bytes, envelope: bytes) -> bytes:
     header, original_body = split_frontmatter(body)
     return header + b"\n" + envelope + b"\n" + original_body
+
+
+def validate_antigravity_skill_body(relative: str, body: bytes) -> None:
+    """按原生加载口径去掉 frontmatter 与边界空白，校验实际 UTF-8 字节预算。"""
+    _, loaded_body = split_frontmatter(body)
+    size = len(loaded_body.strip())
+    if size > ANTIGRAVITY_SKILL_BODY_LIMIT:
+        raise ValueError(f"Antigravity skill body exceeds {ANTIGRAVITY_SKILL_BODY_LIMIT} bytes: "
+                         f"{relative} ({size} bytes); the native host would truncate it")
 
 
 def render_agent(role: str, body: bytes, envelope: bytes, host: str) -> bytes:
@@ -187,7 +200,13 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     copy("plugins/PLUGIN.md", "PLUGIN.md")
     copy("plugins/INSTALL.md", "INSTALL.md")
     result["README.md"] = result["PLUGIN.md"]
-    envelope = result["plugins/plugin-context.md"]
+    # AGY 的原生 24KB 正文上限要求使用宿主专属的精简资源适配，不能裁剪唯一
+    # 共享正文。实际适配来源保留原文件与摘要，并写入每个生成组件的来源记录。
+    envelope_source = ("plugins/antigravity/plugin-context.md" if host == "antigravity"
+                       else "plugins/plugin-context.md")
+    if envelope_source not in result:
+        copy(envelope_source)
+    envelope = result[envelope_source]
     skills = sorted(CORE_SKILLS)
     for relative in sorted(result.copy()):
         if not relative.startswith("platforms/shared/skills/"):
@@ -195,25 +214,32 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         target = relative.removeprefix("platforms/shared/")
         if relative.endswith("/SKILL.md"):
             result[target] = render_skill(result[relative], envelope)
+            if host == "antigravity":
+                validate_antigravity_skill_body(target, result[target])
             transform = "skill-plugin-envelope-v1"
         else:
             result[target] = result[relative]
             transform = "identity"
         projections[target] = {"source": relative, "transform": transform}
+        if transform != "identity":
+            projections[target]["adapter"] = envelope_source
     for role in sorted(ROLE_SKILLS):
         if host == "codex":
             continue
         relative, target = "roles/" + role + ".md", "agents/" + role + ".md"
         result[target] = render_agent(role, result[relative], envelope, host)
-        projections[target] = {"source": relative, "transform": host + "-agent-frontmatter-envelope-v1"}
+        projections[target] = {"source": relative, "transform": host + "-agent-frontmatter-envelope-v1",
+                               "adapter": envelope_source}
     if host == "claude":
         copy("plugins/claude/pm.md")
         copy("plugins/claude/settings.json", "settings.json")
         result["agents/pm.md"] = render_skill(result["plugins/claude/pm.md"], envelope)
-        projections["agents/pm.md"] = {"source": "plugins/claude/pm.md", "transform": "main-session-entry-envelope-v1"}
+        projections["agents/pm.md"] = {"source": "plugins/claude/pm.md", "transform": "main-session-entry-envelope-v1",
+                                      "adapter": envelope_source}
         projections["settings.json"] = {"source": "plugins/claude/settings.json", "transform": "identity"}
     if host == "codex":
-        # 官方扩展明确指向hooks/hooks.json；本包不写trust，宿主必须先完成原生信任。
+        # 官方兼容清单明确指向 hooks/hooks.json；只装配资源，不写任何 trust。
+        # 安装后必须由宿主原生 review/trust 确认当前定义及脚本才允许运行。
         copy("plugins/codex/hooks/hooks.json", "hooks/hooks.json")
         copy("plugins/codex/hooks/session_start.py", "hooks/session_start.py")
         for name in ("hooks.json", "session_start.py"):

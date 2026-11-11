@@ -1,13 +1,8 @@
 {
-  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "agent-workflow",
   "version": "@PLUGIN_VERSION@",
   "description": "Repository-driven Light and Full workflows with native delegation and independent QA.",
   "author": {"name": "Agent Workflow"},
-  "extensions": {
-    "com.openai": {
-      "requires_local_executor": true,
-      "hooks": "./hooks/hooks.json"
-    }
-  }
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
 }

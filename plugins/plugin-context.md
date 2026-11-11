@@ -7,6 +7,14 @@ Do not use the current working directory or a guessed cache path.
 Read `PLUGIN.md` there before using workflow helpers. Treat this paragraph as a
 resource/transport adapter; it grants no business approval, role ownership or QA PASS.
 
+读取必需长文时，核对宿主返回的起始范围、实际范围、总长度和截断标志。
+若 `Read` 受 token／行数上限截断（如 `truncatedByTokenCap`，或末行小于
+`totalLines`），只续读缺失范围，或经下述既有 helper 调用
+`lib/documents/context_read.py`，遵守其 `offset`／`next_offset`／`sha256`
+续页合同。确认同一版本所需范围连续、完整后，再执行依赖该内容的流程；
+不能将部分输出当作完整已读，也不要从头重复全量 `Read` 来补缺。
+这只是资源传输完整性要求，不新增业务门禁、阅读台账或上下文复制。
+
 Use that root's `product/WORKFLOW.md`, `roles/`, and
 `platforms/shared/skills/` as the unchanged workflow authority. The appended shared
 text retains historical `.agent-workflow/` examples. In plugin mode, resolve managed

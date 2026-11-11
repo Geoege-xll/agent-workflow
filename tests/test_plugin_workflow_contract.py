@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -89,12 +90,21 @@ class PluginWorkflowContractTest(unittest.TestCase):
     def test_loaded_skills_retain_complete_frontmatter_body_and_references(self):
         for host, root in self.installed.items():
             with self.subTest(host=host):
-                envelope = (root / "plugins/plugin-context.md").read_bytes()
+                # 宿主适配路径由测试独立明确，不能读取生成器选择结果再自我验证。
+                # AGY 只精简资源说明；所有共享正文与引用仍必须逐字节完整交付。
+                adapter_source = ("plugins/antigravity/plugin-context.md" if host == "antigravity"
+                                  else "plugins/plugin-context.md")
+                envelope = (PACK / adapter_source).read_bytes()
+                metadata = json.loads((root / "sources.json").read_bytes())
+                self.assertEqual(envelope, (root / adapter_source).read_bytes())
+                self.assertEqual(hashlib.sha256(envelope).hexdigest(), metadata["source_files"][adapter_source])
                 for skill in CORE_SKILLS:
                     original = PACK / "platforms/shared/skills" / skill / "SKILL.md"
                     header, body = builder.split_frontmatter(original.read_bytes())
                     loaded = (root / "skills" / skill / "SKILL.md").read_bytes()
                     self.assertEqual(header + b"\n" + envelope + b"\n" + body, loaded)
+                    self.assertEqual(adapter_source,
+                                     metadata["projections"][f"skills/{skill}/SKILL.md"]["adapter"])
                     for reference in original.parent.rglob("*"):
                         if reference.is_file() and reference != original:
                             self.assertEqual(reference.read_bytes(),
@@ -104,6 +114,10 @@ class PluginWorkflowContractTest(unittest.TestCase):
     def test_native_role_prompts_keep_full_original_body_and_no_history_fork(self):
         for host, root in self.installed.items():
             with self.subTest(host=host):
+                metadata = json.loads((root / "sources.json").read_bytes())
+                adapter_source = ("plugins/antigravity/plugin-context.md" if host == "antigravity"
+                                  else "plugins/plugin-context.md")
+                envelope = (PACK / adapter_source).read_bytes()
                 for role in ROLE_SKILLS:
                     original = (PACK / "roles" / (role + ".md")).read_bytes()
                     self.assertEqual(original, (root / "roles" / (role + ".md")).read_bytes())
@@ -111,7 +125,10 @@ class PluginWorkflowContractTest(unittest.TestCase):
                         _, body = builder.split_frontmatter(original)
                         native = (root / "agents" / (role + ".md")).read_bytes()
                         self.assertTrue(native.endswith(body))
-                        header, _ = builder.split_frontmatter(native)
+                        header, native_body = builder.split_frontmatter(native)
+                        self.assertEqual(b"\n" + envelope + b"\n" + body, native_body)
+                        self.assertEqual(adapter_source,
+                                         metadata["projections"][f"agents/{role}.md"]["adapter"])
                         if host == "claude":
                             self.assertIn(b", Skill", header)
                             self.assertNotIn(b", Agent", header)
@@ -125,8 +142,12 @@ class PluginWorkflowContractTest(unittest.TestCase):
                                 self.assertNotIn(b"  - write_to_file", header)
                         self.assertIn(b"context_policy: handoff_only", native)
                         self.assertIn(b"instance_policy: fresh", native)
-                        self.assertIn(b"never fork PM or", native)
-                metadata = json.loads((root / "sources.json").read_bytes())
+                        # 两种宿主说明表达同一不可继承历史的强约束；不能删掉负控
+                        # 或只保留 fresh 标签，从而放任父会话/兄弟代理历史进入任务包。
+                        if host == "antigravity":
+                            self.assertIn("不得继承 PM 或其他代理历史".encode("utf-8"), native)
+                        else:
+                            self.assertIn(b"never fork PM or", native)
                 self.assertFalse(metadata["runtime_verified"])
 
     def test_loaded_confirmation_policy_rejects_a_third_business_gate(self):
@@ -199,6 +220,44 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertFalse((project / "platforms").exists())
                 self.assertFalse((project / ".agent-workflow").exists())
                 self.assertFalse((project / "docs").exists())
+
+    def test_packaged_qa_specialist_example_passes_the_actual_task_schema(self):
+        """把已装配权威里的真实示例送入原init，防止文档诱导PM构造非法字段。"""
+        marker = "- the task's specialist policy fields, directly inside `task`:"
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                text = (root / "skills/xy-qa-review/references/inputs.md").read_text(encoding="utf-8")
+                # 示例使用JSON这一可独立解析的YAML子集；测试不另造一份同名
+                # 常量，更不只断言文案中包含字段名，而是消费包内原始示例。
+                example = text.split(marker, 1)[1].split("```json\n", 1)[1].split("\n  ```", 1)[0]
+                specialist = json.loads(example)
+                project = self.root / ("qa-specialist-example-" + host)
+                project.mkdir()
+                (project / "project.yaml").write_text(ADAPTER, encoding="utf-8")
+                value = decisions()
+                value["standards"]["leaves"] = value["standards"]["leaves"][:1]
+                value["standards"]["required_engineering_rule_ids"] = ["eng-common-005"]
+                value["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+                value["tasks"][0].update(specialist)
+                decision = project / "decisions.json"
+                decision.write_text(json.dumps(value), encoding="utf-8")
+                target = project / "graph.json"
+                accepted = self.helper(host, project, "init", "--root", project,
+                                       "--input", decision, "--output", target)
+                self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
+                self.assertEqual(0, self.helper(host, project, "validate", "--input", target).returncode)
+                # 回归真实验收中被拒绝的旧嵌套形态：它必须仍被原schema拒绝，
+                # 修复只改变示例，不把非法容器放进业务合同或放宽现有门禁。
+                invalid = copy.deepcopy(value)
+                for field in specialist:
+                    invalid["tasks"][0].pop(field)
+                invalid["tasks"][0]["skill_policy"] = specialist
+                decision.write_text(json.dumps(invalid), encoding="utf-8")
+                rejected = self.helper(host, project, "init", "--root", project,
+                                       "--input", decision, "--output", project / "invalid.json")
+                self.assertEqual(2, rejected.returncode)
+                self.assertIn("unsupported field(s): skill_policy", rejected.stderr)
+                self.assertFalse((project / "invalid.json").exists())
 
     def test_detached_ui_routes_wait_for_the_exact_applicable_visual_gate(self):
         project = self.root / "visual-project"

@@ -29,9 +29,14 @@ codex plugin list --json
 These user-run install commands modify the official client's own installation
 state. They are provided for an intentional local install; build and verification
 do not run them against the user's environment. The current CLI does not provide
-a documented `--plugin-dir` temporary load argument. Packaged Hook discovery and
-default-startup delivery remain an explicit acceptance blocker in CLI 0.167.0.
-Never bypass Hook trust or add global instruction files to hide that limitation.
+a documented `--plugin-dir` temporary load argument. For CLI 0.167.0, this candidate
+uses the official `.codex-plugin/plugin.json` compatibility format without a root
+`plugin.json`: real local-install controls found that the portable root format
+silently omitted bundled Hooks. After installation, open the official `/hooks`
+manager, inspect the candidate SessionStart command and trust its current definition
+through the client. Installing or enabling the plugin alone does not grant Hook trust.
+Never write trust records directly or add global instruction files to substitute
+for this review. Start a new conversation after the official review.
 
 Claude Code can load a candidate without a persistent marketplace installation:
 
@@ -58,10 +63,12 @@ agy plugin validate --strict /absolute/new-output-directory/local/antigravity/ag
 agy plugin install /absolute/new-output-directory/local/antigravity/agent-workflow
 ```
 
-The installed desktop has official Marketplace/Installed plugin management, but
-this candidate has not been loaded there and no official `agy` CLI was found in
-the inspected app bundle. These commands describe the documented CLI route, not
-a completed local-host acceptance result.
+The installed desktop has official Marketplace/Installed plugin management. The
+native acceptance work uses the vendor's CLI 1.5.5, downloaded into a temporary
+directory and checked against its official SHA-512 manifest, without changing PATH
+or installing a second shell environment. The strict validator also checks the
+24,000-byte Skill body limit; the builder rejects a payload that would be truncated.
+Validation and an installation receipt alone do not establish model-backed execution.
 
 No remote release asset, public plugin listing, tag or remotely installable branch
 has been published for this alpha. There is currently no verified remote one-line
