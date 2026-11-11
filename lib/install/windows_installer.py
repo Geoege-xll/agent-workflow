@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import ExitStack
 import gzip
 import hashlib
@@ -40,6 +41,9 @@ ROOT_BYTES = json_bytes({"schema_version": 1, "owner": "agent-workflow-windows-i
 VERSION_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", re.ASCII)
 DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}", re.ASCII)
 LAUNCHER_HEADER = "Agent Workflow managed Windows launcher v1"
+# 4096 字节 JSON 的 base64 行小于 CMD 的 8191 字符解析界；超长身份必须在
+# 程序/中央写入前拒绝，不能生成 CMD 无法消费的 rem 行并事后冒充入口就绪。
+LAUNCHER_IDENTITY_LIMIT = 4096
 
 
 class InstallerError(ValueError):
@@ -284,18 +288,58 @@ def _cli(root: Path, options: list[str], command: list[str], *, dry_run=False) -
 
 def _launcher_bodies(identity: dict) -> dict[str, bytes]:
     root = Path(identity["install_root"]) / "versions" / (identity["version"] + "-" + identity["archive_sha256"])
-    # cmd 只把调用参数交给固定 PowerShell 脚本；用户数据不拼接进 cmd 的命令文本。
-    # PS 使用单引号数据和 argv 数组，路径空格、中文和单引号均不经过二次求值。
+    # CMD 的 rem 仍会经历变量展开和元字符解析，不是安全的数据容器。身份行
+    # 只写 URL-safe base64；原始路径与选项只出现在 PS 的单引号数据字面量。
     quote = lambda value: "'" + str(value).replace("'", "''") + "'"
-    metadata = json.dumps(identity, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    options = ", ".join(quote(value) for value in identity["cli_options"])
+    identity_bytes = json.dumps(identity, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+    if len(identity_bytes) > LAUNCHER_IDENTITY_LIMIT:
+        raise InstallerError("程序入口身份超过有界容量")
+    metadata = base64.urlsafe_b64encode(identity_bytes).decode("ascii")
+    arguments = ", ".join(quote(value) for value in (
+        "-I", "-B", "-X", "utf8", root / "payload/workflow.py", *identity["cli_options"]))
+    # 与物理 payload/workflow.ps1 使用相同 .NET ArgumentList 边界。直接
+    # & python @args 会受 PowerShell 7.0/Legacy 原生参数拼接影响，丢失空串或
+    # 嵌入双引号；不能靠修改用户的全局 NativeCommandArgumentPassing 弥补。
+    # 工作目录取 FileSystem provider 的当前位置，标准流直接继承；无需修改
+    # AGENT_WORKFLOW_PYTHON，因此异常、业务拒绝及取消均不会污染调用者环境。
     ps = (f"# {LAUNCHER_HEADER}\r\n# {metadata}\r\n"
+          "#requires -Version 7.0\r\n"
           "$ErrorActionPreference = 'Stop'\r\n"
-          f"$workflowOptions = @({options})\r\n"
-          f"& {quote(_python(root))} -I -B -X utf8 {quote(root / 'payload/workflow.py')} @workflowOptions @args\r\n"
-          "exit $LASTEXITCODE\r\n")
+          "try {\r\n"
+          "    if (-not $IsWindows) { throw '此受管入口需要原生 Windows PowerShell 7。' }\r\n"
+          "    $start = [System.Diagnostics.ProcessStartInfo]::new()\r\n"
+          f"    $start.FileName = {quote(_python(root))}\r\n"
+          "    $start.UseShellExecute = $false\r\n"
+          "    $location = Get-Location\r\n"
+          "    if ($location.Provider.Name -ne 'FileSystem') { throw '请从文件系统目录调用受管入口。' }\r\n"
+          "    $start.WorkingDirectory = $location.ProviderPath\r\n"
+          f"    foreach ($argument in @({arguments})) {{\r\n"
+          "        $start.ArgumentList.Add($argument)\r\n"
+          "    }\r\n"
+          "    foreach ($argument in $args) {\r\n"
+          "        if ($argument -isnot [string] -or $argument.IndexOf([char]0) -ge 0) {\r\n"
+          "            throw 'CLI 参数必须为不含 NUL 的字符串。'\r\n"
+          "        }\r\n"
+          "        $start.ArgumentList.Add($argument)\r\n"
+          "    }\r\n"
+          "    $process = [System.Diagnostics.Process]::Start($start)\r\n"
+          "    try {\r\n"
+          "        $process.WaitForExit()\r\n"
+          "        $result = $process.ExitCode\r\n"
+          "    }\r\n"
+          "    finally { $process.Dispose() }\r\n"
+          "}\r\n"
+          "catch {\r\n"
+          "    [Console]::Error.WriteLine('[错误] 受管入口启动失败：' + $_.Exception.Message)\r\n"
+          "    exit 2\r\n"
+          "}\r\n"
+          "exit $result\r\n")
+    # 沿已有 workflow.cmd 的固定 PowerShell 安装入口；不按 cwd/PATH 搜索
+    # pwsh.exe，不用 CALL 二次求值，关闭 delayed expansion 保留正常 CMD 引用。
     cmd = (f"@rem {LAUNCHER_HEADER}\r\n@rem {metadata}\r\n"
-           '@echo off\r\npwsh.exe -NoLogo -NoProfile -File "%~dp0awf-cli.ps1" %*\r\nexit /b %ERRORLEVEL%\r\n')
+           '@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n'
+           '"%ProgramFiles%\\PowerShell\\7\\pwsh.exe" -NoLogo -NoProfile -File "%~dp0awf-cli.ps1" %*\r\n'
+           'exit /b %errorlevel%\r\n')
     return {"awf-cli.ps1": ps.encode("utf-8"), "awf-cli.cmd": cmd.encode("utf-8")}
 
 
@@ -322,7 +366,17 @@ def _launcher_before(tree: Tree, name: str) -> Node:
     comment = "# " if name.endswith(".ps1") else "@rem "
     if len(lines) < 2 or lines[0] != comment + LAUNCHER_HEADER or not lines[1].startswith(comment):
         raise InstallerError("已有入口不属于受管 Windows 安装器，拒绝覆盖")
-    identity = unique_json(lines[1][len(comment):].encode())
+    encoded = lines[1][len(comment):]
+    if (len(encoded) > ((LAUNCHER_IDENTITY_LIMIT + 2) // 3) * 4
+            or not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", encoded, re.ASCII)):
+        raise InstallerError("已有入口的受管身份编码不合法，拒绝覆盖")
+    try:
+        decoded = base64.b64decode(encoded, altchars=b"-_", validate=True)
+        if len(decoded) > LAUNCHER_IDENTITY_LIMIT:
+            raise ValueError("受管身份超过有界容量")
+        identity = unique_json(decoded)
+    except (ValueError, UnicodeError) as exc:
+        raise InstallerError("已有入口的受管身份编码不合法，拒绝覆盖") from exc
     if (not isinstance(identity, dict) or set(identity) != {"install_root", "version", "archive_sha256", "cli_options"}
             or identity["install_root"] != str(tree.root)
             or not isinstance(identity["version"], str) or not VERSION_PATTERN.fullmatch(identity["version"])
@@ -354,6 +408,9 @@ def install(args) -> dict:
             options += ["--host-home", str(_absolute(args.host_home))]
         if (args.state_dir or os.environ.get("AGENT_WORKFLOW_STATE_DIR")) and not args.host_home:
             raise InstallerError("独立状态目录的激活需要显式 --host-home")
+        identity = {"install_root": str(install_root), "version": args.version,
+                    "archive_sha256": args.archive_sha256, "cli_options": options}
+        launcher_bodies = _launcher_bodies(identity)
         data = _verified_archive(archive, args.archive_sha256)
         with ExitStack() as stack:
             stack.enter_context(absolute_directory(install_root, create=True))
@@ -428,9 +485,7 @@ def install(args) -> dict:
             record["phase"] = "activated"
             record_node = _write(version_tree, VERSION_RECEIPT, json_bytes(record), expected=record_node)
             phase = "publish_launchers"
-            identity = {"install_root": str(install_root), "version": args.version,
-                        "archive_sha256": args.archive_sha256, "cli_options": options}
-            for name, body in _launcher_bodies(identity).items():
+            for name, body in launcher_bodies.items():
                 _write(tree, "bin/" + name, body, expected=before[name])
             record["phase"] = "complete"
             _write(version_tree, VERSION_RECEIPT, json_bytes(record), expected=record_node)

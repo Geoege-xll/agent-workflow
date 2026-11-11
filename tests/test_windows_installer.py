@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import base64
 import contextlib
 import hashlib
 import io
@@ -195,7 +196,8 @@ class InstallationTransactionTest(unittest.TestCase):
         self.assertNotIn("--dry-run", commands[2])
         ps = Path(result["launchers"][0]).read_text()
         self.assertIn(str(installer._python(self.version_root)), ps)
-        self.assertIn("@workflowOptions @args", ps)
+        self.assertIn("foreach ($argument in $args)", ps)
+        self.assertIn("$start.ArgumentList.Add($argument)", ps)
         self.assertEqual("complete", self.receipt()["phase"])
         with patch.object(installer, "_prepare_environment", side_effect=AssertionError("不得重建环境")):
             self.assertEqual("complete", installer.install(self.args)["phase"])
@@ -244,6 +246,17 @@ class InstallationTransactionTest(unittest.TestCase):
         self.assertEqual("保留", unknown.read_text())
         unknown.unlink()
         self.install()
+        cmd = self.args.install_root / "bin/awf-cli.cmd"
+        owned_cmd = cmd.read_bytes()
+        changed_cmd = owned_cmd.replace(b'"%ProgramFiles%\\PowerShell\\7\\pwsh.exe"', b"pwsh.exe")
+        self.assertNotEqual(owned_cmd, changed_cmd)
+        cmd.write_bytes(changed_cmd)
+        prior_commands = (self.version_root / "commands.jsonl").read_bytes()
+        with self.assertRaisesRegex(installer.InstallerError, "已有入口与受管程序收据不一致"):
+            installer.install(self.args)
+        self.assertEqual(changed_cmd, cmd.read_bytes())
+        self.assertEqual(prior_commands, (self.version_root / "commands.jsonl").read_bytes())
+        cmd.write_bytes(owned_cmd)
         launcher = self.args.install_root / "bin/awf-cli.ps1"
         launcher.write_text("用户入口")
         with self.assertRaises(installer.InstallerError):
@@ -291,6 +304,59 @@ class InstallationTransactionTest(unittest.TestCase):
         envelope = json.loads(output.getvalue())
         self.assertFalse(envelope["ok"])
         self.assertEqual("activation_started", envelope["phase"])
+
+
+class LauncherContractTest(unittest.TestCase):
+    def test_generated_launcher_uses_argument_list_and_safe_bounded_identity(self):
+        # 此处只验证发行生成/条件认领合同，实际 Legacy argv/cwd/退出码及
+        # CMD 当前目录遮蔽负控交给原生 Windows 消费者，不能凭文本宣告通过。
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            identity = {"install_root": str(root), "version": VERSION, "archive_sha256": "a" * 64,
+                        "cli_options": ["--state-dir", r"C:\配置\%TEMP% &^! ' state", "--host-home", r"C:\用户\家"]}
+            bodies = installer._launcher_bodies(identity)
+            for name, comment in (("awf-cli.ps1", "# "), ("awf-cli.cmd", "@rem ")):
+                body = bodies[name].decode("utf-8")
+                encoded = body.splitlines()[1].removeprefix(comment)
+                self.assertRegex(encoded, r"\A[A-Za-z0-9_-]+={0,2}\Z")
+                self.assertEqual(identity, unique_json(base64.b64decode(encoded, altchars=b"-_", validate=True)))
+            ps = bodies["awf-cli.ps1"].decode("utf-8")
+            self.assertIn("$start.UseShellExecute = $false", ps)
+            self.assertIn("$start.WorkingDirectory = $location.ProviderPath", ps)
+            self.assertIn("$start.ArgumentList.Add($argument)", ps)
+            self.assertIn("$result = $process.ExitCode", ps)
+            self.assertIn("finally { $process.Dispose() }", ps)
+            self.assertNotIn("AGENT_WORKFLOW_PYTHON", ps)
+            self.assertNotIn("PSNativeCommandArgumentPassing", ps)
+            cmd = bodies["awf-cli.cmd"].decode("utf-8")
+            self.assertIn('"%ProgramFiles%\\PowerShell\\7\\pwsh.exe"', cmd)
+            self.assertIn("setlocal EnableExtensions DisableDelayedExpansion", cmd)
+            self.assertIn('"%~dp0awf-cli.ps1" %*', cmd)
+            self.assertNotIn(identity["cli_options"][1], cmd)
+            self.assertNotIn("%TEMP%", cmd)
+            (root / "bin").mkdir()
+            target = root / "bin/awf-cli.cmd"
+            target.write_bytes(bodies["awf-cli.cmd"])
+            with Tree(root) as tree, patch.object(installer, "LAUNCHER_IDENTITY_LIMIT", 32):
+                with self.assertRaisesRegex(installer.InstallerError, "身份编码不合法"):
+                    installer._launcher_before(tree, "awf-cli.cmd")
+                with self.assertRaisesRegex(installer.InstallerError, "身份超过"):
+                    installer._launcher_bodies(identity)
+            # 原始 JSON、无效 base64 及含 CMD 元字符的身份都不能被重新认领。
+            for encoded in (json.dumps(identity), "%TEMP% & whoami", "AAAA=", "_"):
+                target.write_text("@rem " + installer.LAUNCHER_HEADER + "\n@rem " + encoded + "\n")
+                before = target.read_bytes()
+                with Tree(root) as tree, self.assertRaises(installer.InstallerError):
+                    installer._launcher_before(tree, "awf-cli.cmd")
+                self.assertEqual(before, target.read_bytes())
+            args = Namespace(archive=root / "missing.tar.gz", archive_sha256="a" * 64, version=VERSION,
+                             install_root=root / "must-not-exist", state_dir=root / "state", host_home=root / "home")
+            with patch.object(installer, "_validate_host"), patch.object(installer, "LAUNCHER_IDENTITY_LIMIT", 32):
+                with self.assertRaisesRegex(installer.InstallerError, "身份超过") as caught:
+                    installer.install(args)
+            self.assertEqual("preflight", caught.exception.phase)
+            self.assertFalse(args.install_root.exists())
+            self.assertFalse(args.state_dir.exists())
 
 
 class NativeHostGateTest(unittest.TestCase):
