@@ -222,42 +222,60 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertFalse((project / "docs").exists())
 
     def test_packaged_qa_specialist_example_passes_the_actual_task_schema(self):
-        """把已装配权威里的真实示例送入原init，防止文档诱导PM构造非法字段。"""
-        marker = "- the task's specialist policy fields, directly inside `task`:"
+        """三个已装配权威的真实示例均经过原init/validate，防止非法容器回归。"""
+        examples = (
+            ("qa-inputs", "skills/xy-qa-review/references/inputs.md",
+             "- the task's specialist policy fields, directly inside `task`:"),
+            ("workflow", "product/WORKFLOW.md",
+             "Every Full task pack and applicable Light task pack also includes these fields directly inside `task`:"),
+            ("dispatch", "skills/xy-workflow/references/dispatch.md",
+             "The following `non_ui` example shows the direct members of `task`:"),
+        )
         for host, root in self.installed.items():
-            with self.subTest(host=host):
-                text = (root / "skills/xy-qa-review/references/inputs.md").read_text(encoding="utf-8")
-                # 示例使用JSON这一可独立解析的YAML子集；测试不另造一份同名
-                # 常量，更不只断言文案中包含字段名，而是消费包内原始示例。
-                example = text.split(marker, 1)[1].split("```json\n", 1)[1].split("\n  ```", 1)[0]
-                specialist = json.loads(example)
-                project = self.root / ("qa-specialist-example-" + host)
-                project.mkdir()
-                (project / "project.yaml").write_text(ADAPTER, encoding="utf-8")
-                value = decisions()
-                value["standards"]["leaves"] = value["standards"]["leaves"][:1]
-                value["standards"]["required_engineering_rule_ids"] = ["eng-common-005"]
-                value["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
-                value["tasks"][0].update(specialist)
-                decision = project / "decisions.json"
-                decision.write_text(json.dumps(value), encoding="utf-8")
-                target = project / "graph.json"
-                accepted = self.helper(host, project, "init", "--root", project,
-                                       "--input", decision, "--output", target)
-                self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
-                self.assertEqual(0, self.helper(host, project, "validate", "--input", target).returncode)
-                # 回归真实验收中被拒绝的旧嵌套形态：它必须仍被原schema拒绝，
-                # 修复只改变示例，不把非法容器放进业务合同或放宽现有门禁。
-                invalid = copy.deepcopy(value)
-                for field in specialist:
-                    invalid["tasks"][0].pop(field)
-                invalid["tasks"][0]["skill_policy"] = specialist
-                decision.write_text(json.dumps(invalid), encoding="utf-8")
-                rejected = self.helper(host, project, "init", "--root", project,
-                                       "--input", decision, "--output", project / "invalid.json")
-                self.assertEqual(2, rejected.returncode)
-                self.assertIn("unsupported field(s): skill_policy", rejected.stderr)
-                self.assertFalse((project / "invalid.json").exists())
+            for name, relative, marker in examples:
+                with self.subTest(host=host, example=name):
+                    text = (root / relative).read_text(encoding="utf-8")
+                    # 示例使用JSON这一可独立解析的YAML子集；测试不另造一份同名
+                    # 常量，更不只断言文案中包含字段名，而是消费包内原始示例。
+                    example = text.split(marker, 1)[1].split("```json", 1)[1].split("```", 1)[0]
+                    members = json.loads(example)
+                    # qa_scope是原init生成的派发成员，不是精简决定输入。其余
+                    # 示例成员全部原样交init；再把qa_scope交真实运行时validate，
+                    # 不过滤未知字段，保证skill_policy回归时会被原schema拒绝。
+                    initialization = copy.deepcopy(members)
+                    runtime_only = {field: initialization.pop(field) for field in ("qa_scope",)
+                                    if field in initialization}
+                    project = self.root / ("qa-specialist-example-" + host + "-" + name)
+                    project.mkdir()
+                    (project / "project.yaml").write_text(ADAPTER, encoding="utf-8")
+                    value = decisions()
+                    value["standards"]["leaves"] = value["standards"]["leaves"][:1]
+                    value["standards"]["required_engineering_rule_ids"] = ["eng-common-005"]
+                    value["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING]
+                    value["tasks"][0].update(initialization)
+                    decision = project / "decisions.json"
+                    decision.write_text(json.dumps(value), encoding="utf-8")
+                    target = project / "graph.json"
+                    accepted = self.helper(host, project, "init", "--root", project,
+                                           "--input", decision, "--output", target)
+                    self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
+                    graph = json.loads(target.read_bytes())
+                    graph["tasks"][0].update(runtime_only)
+                    target.write_text(json.dumps(graph), encoding="utf-8")
+                    self.assertEqual(0, self.helper(host, project, "validate", "--input", target).returncode)
+                    # 回归真实验收中被拒绝的旧嵌套形态：它必须仍被原schema拒绝，
+                    # 修复只改变示例，不把非法容器放进业务合同或放宽现有门禁。
+                    invalid = copy.deepcopy(value)
+                    specialist = {field: members[field] for field in ("required_skills", "audit_surfaces")}
+                    for field in specialist:
+                        invalid["tasks"][0].pop(field)
+                    invalid["tasks"][0]["skill_policy"] = specialist
+                    decision.write_text(json.dumps(invalid), encoding="utf-8")
+                    rejected = self.helper(host, project, "init", "--root", project,
+                                           "--input", decision, "--output", project / "invalid.json")
+                    self.assertEqual(2, rejected.returncode)
+                    self.assertIn("unsupported field(s): skill_policy", rejected.stderr)
+                    self.assertFalse((project / "invalid.json").exists())
 
     def test_detached_ui_routes_wait_for_the_exact_applicable_visual_gate(self):
         project = self.root / "visual-project"

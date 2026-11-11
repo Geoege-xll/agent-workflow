@@ -1308,13 +1308,17 @@ new topic document, a PROJECT entry, or a change chronology.
 After acceptance, project only actual changes to the current baseline: the same topic retains requirements, solutions, recovery entry points, accepted behavior, and necessary approvals/evidence; PROJECT links only genuinely accepted versions. Never infer delivery from task phase or create separate feature documents or ADRs. For `change_type: removed`, mark the same source `removed`, remove the current PROJECT link, and repair references while retaining necessary deletion rationale and history; do not rename it or manufacture intermediate removal states. QA failure preserves original accepted facts.
 
 
-Every Full task pack and applicable Light task pack also includes:
+Every Full task pack and applicable Light task pack also includes these fields directly inside `task`:
 
-```yaml
-skill_policy:
-  required_skills: []  # List only hard gates without which work cannot continue
-  audit_surfaces: []   # For example: standards-conformance, ui, accessibility, concurrency
+```json
+{
+  "required_skills": [],
+  "audit_surfaces": []
+}
 ```
+
+`required_skills` lists only hard gates without which work cannot continue. Example audit surfaces
+include `standards-conformance`, `ui`, `accessibility`, and `concurrency`.
 
 When an exceptional user decision is genuinely required, the same task pack also includes the
 complete `additional_business_confirmation` record defined in section 5. Omit the field otherwise.

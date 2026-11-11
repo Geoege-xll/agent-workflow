@@ -377,12 +377,16 @@ this reference creates no separate instance-state source.
    automatic full-suite requirement. QA independently audits source and valid evidence without
    automatically rerunning all implementer checks.
 
-   ```yaml
-   surface_kind: production_ui | design_ui | non_ui
-   qa_scope: request
-   skill_policy:
-     required_skills: []
-     audit_surfaces: []
+   Select `surface_kind` from `production_ui`, `design_ui`, or `non_ui` for the current task.
+   The following `non_ui` example shows the direct members of `task`:
+
+   ```json
+   {
+     "surface_kind": "non_ui",
+     "qa_scope": "request",
+     "required_skills": [],
+     "audit_surfaces": []
+   }
    ```
 
    `required_skills` contains only hard gates. `audit_surfaces` describes the work to
