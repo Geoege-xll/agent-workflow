@@ -56,6 +56,22 @@ def release_identity(version: str, release_tag: str | None = None) -> str:
     return tag
 
 
+def release_paths(output: Path, version: str, release_tag: str | None = None) -> tuple[Path, ...]:
+    """统一六项资产名称与顺序；构建和 CLI 报告都消费此清单，避免新增资产被静默遗漏。
+
+    只组合路径、不写文件；前面三项继续对应 build 的既有三元组返回合同。
+    输出目录的解析和写入安全边界仍由 build 统一负责。
+    """
+    tag = release_identity(version, release_tag)
+    archive = output / f"agent-workflow-{version}.tar.gz"
+    return (
+        archive, output / f"{archive.name}.sha256", output / "Formula" / "awf-cli.rb",
+        output / f"agent-workflow-windows-{tag}.pyz",
+        output / f"install-agent-workflow-{tag}.ps1",
+        output / f"agent-workflow-{tag}-manifest.json",
+    )
+
+
 def source_file(source: Path, relative: str) -> bytes:
     """读取白名单普通文件，拒绝源包外的父目录软链和缺失模块。"""
     path = source / relative
@@ -204,15 +220,11 @@ def build(source: Path, version: str, output: Path, release_tag: str | None = No
         for name in (*RELEASE_FILES, *RELEASE_DIRECTORIES, *OPTIONAL_FILES, "packaging", "tests", "docs")
     ):
         raise ValueError("Output must not be inside the release payload or source/tooling directories")
-    archive = output / f"agent-workflow-{version}.tar.gz"
-    checksum = output / f"{archive.name}.sha256"
-    formula = output / "Formula" / "awf-cli.rb"
-    installer = output / f"agent-workflow-windows-{tag}.pyz"
-    bootstrap = output / f"install-agent-workflow-{tag}.ps1"
-    manifest = output / f"agent-workflow-{tag}-manifest.json"
+    paths = release_paths(output, version, tag)
+    archive, checksum, formula, installer, bootstrap, manifest = paths
     if formula.parent.is_symlink():
         raise ValueError(f"Formula output directory cannot be a symlink: {formula.parent}")
-    for path in (archive, checksum, formula, installer, bootstrap, manifest):
+    for path in paths:
         if path.exists() or path.is_symlink():
             raise FileExistsError(f"Existing output preserved; choose a new --output-dir: {path}")
 
@@ -263,7 +275,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--release-tag", help="fixed release tag, vX.Y.Z or vX.Y.Z-rc.N")
     args = parser.parse_args(argv)
     try:
-        for path in build(ROOT, args.version, args.output_dir, release_tag=args.release_tag):
+        archive, _, _ = build(ROOT, args.version, args.output_dir, release_tag=args.release_tag)
+        # build 保持原三元组 API，CLI 则显示本次真正写出的全部资产；只有构建完成才报告。
+        for path in release_paths(archive.parent, args.version, args.release_tag):
             print(path)
         return 0
     except (OSError, ValueError) as exc:

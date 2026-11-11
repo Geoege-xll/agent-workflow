@@ -219,6 +219,30 @@ class ReleaseArchiveTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("固定发行版本或归档摘要不匹配", result.stderr)
 
+    def test_cli_reports_all_six_actual_candidate_assets(self):
+        # 从用户实际使用的 CLI 构建组合后的真实源码，独立列出消费方所需的六项；
+        # 不从 release_paths 反推期望，才能捕获构建器和输出清单一起漏列新资产的回归。
+        version = (PACK / "product/VERSION").read_text(encoding="ascii").strip()
+        tag = f"v{version}-rc.1"
+        output = self.root / "CLI 输出目录"
+        result = subprocess.run(
+            ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+             str(PACK / "packaging/build_release.py"), version, "--output-dir", str(output),
+             "--release-tag", tag],
+            cwd=self.root, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = [
+            output / f"agent-workflow-{version}.tar.gz",
+            output / f"agent-workflow-{version}.tar.gz.sha256", output / "Formula/awf-cli.rb",
+            output / f"agent-workflow-windows-{tag}.pyz",
+            output / f"install-agent-workflow-{tag}.ps1", output / f"agent-workflow-{tag}-manifest.json",
+        ]
+        self.assertEqual(result.stdout.splitlines(), [str(path) for path in expected])
+        for path in expected:
+            self.assertTrue(path.is_file(), path)
+            self.assertGreater(path.stat().st_size, 0)
+
     def test_source_release_metadata_is_rejected_without_output(self):
         # 不允许把源码中的旧发行标记当成可信输入，也不能静默覆盖它制造双重版本来源。
         metadata=self.source / "manager/release.json"
