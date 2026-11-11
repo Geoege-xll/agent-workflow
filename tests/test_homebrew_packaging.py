@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from urllib.parse import unquote, urlsplit
 
 
@@ -73,6 +75,15 @@ class ReleaseArchiveTest(unittest.TestCase):
         template = self.source / "packaging/homebrew/awf-cli.rb.in"
         template.parent.mkdir(parents=True)
         shutil.copyfile(PACK / "packaging/homebrew/awf-cli.rb.in", template)
+        # 最小夹具只验证构建合同，不运行这些占位模块；真实 pyz 启动另从 PACK 构建。
+        for name in release.WINDOWS_INSTALLER_FILES:
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"# fixture: {name}\n", encoding="utf-8")
+        for name in (release.WINDOWS_TEMPLATE, release.WINDOWS_LOADER):
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(PACK / name, path)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -83,6 +94,11 @@ class ReleaseArchiveTest(unittest.TestCase):
         second = release.build(self.source, "0.1.0", self.root / "second")
         for before, after in zip(first, second):
             self.assertEqual(before.read_bytes(), after.read_bytes())
+        # 新 Windows 资产同样必须与时间、输出目录无关，不能只证明旧三元组可重现。
+        for before in (self.root / "first").rglob("*"):
+            if before.is_file():
+                after = self.root / "second" / before.relative_to(self.root / "first")
+                self.assertEqual(before.read_bytes(), after.read_bytes(), before.name)
         archive, checksum, formula = first
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         self.assertEqual(checksum.read_text(), f"{digest}  {archive.name}\n")
@@ -99,6 +115,109 @@ class ReleaseArchiveTest(unittest.TestCase):
             self.assertEqual(json.loads(metadata), {"schema_version": 1, "version": "0.1.0"})
             self.assertEqual(stream.getmember("agent-workflow-0.1.0/manager/release.json").mode, 0o644)
         self.assertFalse((self.source / "manager/release.json").exists())
+
+    def test_candidate_manifest_binds_real_asset_bytes_without_self_hash(self):
+        archive, checksum, formula = release.build(self.source, "0.1.0", self.root / "out", release_tag="v0.1.0-rc.1")
+        output = archive.parent
+        manifest_path = output / "agent-workflow-v0.1.0-rc.1-manifest.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        self.assertEqual((manifest["product_version"], manifest["release_tag"]), ("0.1.0", "v0.1.0-rc.1"))
+        expected = {archive.name, "agent-workflow-windows-v0.1.0-rc.1.pyz", "install-agent-workflow-v0.1.0-rc.1.ps1"}
+        self.assertEqual({asset["filename"] for asset in manifest["assets"]}, expected)
+        for asset in manifest["assets"]:
+            data = (output / asset["filename"]).read_bytes()
+            self.assertEqual(asset["sha256"], hashlib.sha256(data).hexdigest())
+            self.assertEqual(asset["size"], len(data))
+            self.assertEqual(asset["url"], f'{release.RELEASE_BASE_URL}/v0.1.0-rc.1/{asset["filename"]}')
+        self.assertNotIn(manifest_path.name, manifest_path.read_text())
+        self.assertIn("/releases/download/v0.1.0-rc.1/agent-workflow-0.1.0.tar.gz", formula.read_text())
+        with zipfile.ZipFile(output / "agent-workflow-windows-v0.1.0-rc.1.pyz") as pyz:
+            self.assertEqual(set(pyz.namelist()), {*release.WINDOWS_INSTALLER_FILES, "__main__.py"})
+            self.assertIn(hashlib.sha256(archive.read_bytes()).hexdigest().encode(), pyz.read("__main__.py"))
+            for name in release.WINDOWS_INSTALLER_FILES:
+                self.assertEqual(pyz.read(name), (self.source / name).read_bytes())
+            for member in pyz.infolist():
+                self.assertEqual(member.date_time, (1980, 1, 1, 0, 0, 0))
+        self.assertEqual(checksum.read_text().split()[0], hashlib.sha256(archive.read_bytes()).hexdigest())
+        if shutil.which("ruby"):
+            # 沿用既有真实 Ruby Formula DSL 与 install 消费器，检查实际读到的候选 URL；
+            # 仅匹配 Python 渲染文本会漏掉 Ruby 字符串转义或元数据调用错误。
+            extracted = self.root / "candidate-extracted"
+            extracted.mkdir()
+            with tarfile.open(archive) as stream:
+                stream.extractall(extracted, filter="data")
+            harness = self.root / "candidate-formula.rb"
+            harness.write_text(FORMULA_HARNESS, encoding="utf-8")
+            result = subprocess.run(
+                [shutil.which("ruby"), str(harness), str(formula), str(extracted / "agent-workflow-0.1.0"),
+                 str(self.root / "candidate-cellar"), str(self.root / "python-opt")],
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"{release.RELEASE_BASE_URL}/v0.1.0-rc.1/{archive.name}")
+
+    def test_bad_release_tags_and_missing_installer_inputs_do_not_write(self):
+        for tag in ("0.1.0", "v0.1.1", "v0.1.0-rc", "v0.1.0-rc.01", "v0.1.0/escape", "v0.1.0\n"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                release.build(self.source, "0.1.0", self.root / "out", release_tag=tag)
+            self.assertFalse((self.root / "out").exists())
+        missing = self.source / "lib/install/windows_installer.py"
+        original = missing.read_bytes()
+        missing.unlink()
+        with self.assertRaisesRegex(ValueError, "windows_installer"):
+            release.build(self.source, "0.1.0", self.root / "out")
+        self.assertFalse((self.root / "out").exists())
+        missing.write_bytes(original)
+        bootstrap = self.root / "out/install-agent-workflow-v0.1.0.ps1"
+        bootstrap.parent.mkdir()
+        bootstrap.write_bytes(b"existing external content")
+        with self.assertRaises(FileExistsError):
+            release.build(self.source, "0.1.0", bootstrap.parent)
+        self.assertEqual(bootstrap.read_bytes(), b"existing external content")
+        self.assertEqual(list(bootstrap.parent.iterdir()), [bootstrap])
+
+    def test_memory_loader_rejects_changed_bytes_before_loading_modules(self):
+        release.build(self.source, "0.1.0", self.root / "out")
+        powershell = (self.root / "out/install-agent-workflow-v0.1.0.ps1").read_text(encoding="utf-8")
+        loader = powershell.split("    $loader = @'\n", 1)[1].split("\n'@", 1)[0]
+        loader.encode("ascii")
+        # 只测试生成载入器的摘要拒绝边界；夹具占位模块绝不能被误报为真实安装器启动。
+        loader = loader.replace("__AWF_PYZ_BASE64__", base64.b64encode(b"changed zip bytes").decode("ascii"))
+        result = subprocess.run(
+            ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-I", "-"],
+            input=loader, cwd=self.root, capture_output=True, text=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Installer memory digest mismatch", result.stderr)
+        self.assertNotIn("SyntaxError", result.stderr)
+        self.assertNotIn("--cacert", powershell)
+        self.assertNotRegex(powershell, r"@[A-Z_]+@")
+
+    def test_real_pyz_and_same_byte_loader_run_without_source_imports(self):
+        # 此用例必须消费实际同源引擎；引擎缺失属于组合阻塞，不能用 stub 或 skip 伪造通过。
+        version = (PACK / "product/VERSION").read_text(encoding="ascii").strip()
+        archive, _, _ = release.build(PACK, version, self.root / "real-output")
+        pyz = archive.parent / f"agent-workflow-windows-v{version}.pyz"
+        powershell = (archive.parent / f"install-agent-workflow-v{version}.ps1").read_text(encoding="utf-8")
+        loader = powershell.split("    $loader = @'\n", 1)[1].split("\n'@", 1)[0]
+        loader = loader.replace("__AWF_PYZ_BASE64__", base64.b64encode(pyz.read_bytes()).decode("ascii"))
+        for arguments, code in (([str(pyz), "--help"], None), (["-", "--help"], loader)):
+            with self.subTest(entry=arguments[0]):
+                result = subprocess.run(
+                    ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-I", *arguments],
+                    input=code, cwd=self.root, capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for option in ("--archive", "--archive-sha256", "--version", "--install-root", "--state-dir", "--host-home", "--json"):
+                    self.assertIn(option, result.stdout)
+        # 固定 pyz 的身份门禁先拒绝另一归档，不执行 Windows 安装副作用。
+        result = subprocess.run(
+            ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-I", str(pyz),
+             "--version", version, "--archive-sha256", "0" * 64],
+            cwd=self.root, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("固定发行版本或归档摘要不匹配", result.stderr)
 
     def test_source_release_metadata_is_rejected_without_output(self):
         # 不允许把源码中的旧发行标记当成可信输入，也不能静默覆盖它制造双重版本来源。
@@ -237,7 +356,8 @@ end
 class Formula
   def self.desc(*args); end
   def self.homepage(*args); end
-  def self.url(*args); end
+  def self.url(value); @download_url = value; end
+  def self.download_url; @download_url; end
   def self.version(*args); end
   def self.sha256(*args); end
   def self.depends_on(*args); end
@@ -250,6 +370,7 @@ class Formula
   def bin; Pathname.new(ARGV.fetch(2))/"bin"; end
 end
 load ARGV.fetch(0)
+puts AwfCli.download_url
 Dir.chdir(ARGV.fetch(1)) { AwfCli.new.install }
 '''
 
@@ -293,6 +414,7 @@ class HomebrewLauncherTest(unittest.TestCase):
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), f"{release.RELEASE_BASE_URL}/v{self.version}/{archive.name}")
         commands = self.root / "Homebrew bin"
         commands.mkdir()
         self.entry = commands / "awf-cli"
