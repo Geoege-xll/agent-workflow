@@ -344,6 +344,18 @@ class ExampleTest(unittest.TestCase):
         self.assertEqual(proof["rendered"]["max_redirs_line"], proof["fixed_fixture"]["max_redirs_line"])
         print("[delivery line-ending proof] " + json.dumps(proof, ensure_ascii=False), flush=True)
 
+    def test_delivery_tui_header_is_not_ready_before_initial_read_settles(self):
+        from tests.test_windows_delivery import initial_tui_read_settled
+        header = "◈ awf-cli │ 角色模型".encode("utf-8")
+        busy = header + "▲ 读取项目与固定版本状态 · 0s · 执行中 / [等待] 操作完成后继续".encode("utf-8")
+        toast = "✔ 已读取预览 / 状态，尚未写入".encode("utf-8")
+        # 直接验证 native smoke 所消费的真实谓词；忙首帧/只有标题/半条 toast
+        # 都不能放行 q。累计 VT 保留旧 busy，但本新进程首次成功 toast 可以结算。
+        for raw in (b"", header, busy, busy + toast[:-1], toast):
+            with self.subTest(raw=raw):
+                self.assertFalse(initial_tui_read_settled(raw))
+        self.assertTrue(initial_tui_read_settled(busy + b"\x1b[32;3H" + toast))
+
     def test_native_python_entry_from_other_cwd_preserves_selection_and_rejection(self):
         # 同一 Python 文件是真正无 Bash 的入口；-I 下从带空格源码根和其他 cwd
         # 启动仍使用同一清单，验证错误子节点不会因父模块覆盖而被忽略。

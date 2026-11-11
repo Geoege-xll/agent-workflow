@@ -39,6 +39,16 @@ def loopback_environment(environment):
             "NO_PROXY": "127.0.0.1,localhost"}
 
 
+def initial_tui_read_settled(raw):
+    # 仅用于本例全新进程、尚未发送任何输入时的首次读取：App.poll_job 完成
+    # 回调与 finish_job 后，下一次 draw 才能画出这条成功 toast。标题本身在
+    # 作业忙时已经可见，此时 dispatch 会丢弃 q。VT 是累积流，历史忙态不能
+    # 用“全文不含执行中”来排除；这里也不把此单次判据扩成通用 TUI 等待器。
+    header = raw.find(b"awf-cli")
+    settled = raw.find("✔ 已读取预览 / 状态，尚未写入".encode("utf-8"))
+    return header >= 0 and settled > header
+
+
 class ReleaseWorkflowPortableTest(unittest.TestCase):
     def test_release_policy_routes_stable_and_candidate_and_rejects_invalid_identity(self):
         workflow = (PACK / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -380,24 +390,29 @@ exit $LASTEXITCODE
 
     def tui_smoke(self, version_root):
         from tests.windows_conpty import ConPTYProcess
+        self.assertEqual([], list(self.scan.iterdir()), "只读参数用例的临时项目必须先回收，TUI 使用正常空扫描根")
         python = version_root / "venv/Scripts/python.exe"
         argv = [str(python), "-I", "-B", "-X", "utf8", str(version_root / "payload/workflow.py"),
                 "--state-dir", str(self.state), "--host-home", str(self.home),
                 "--scan-root", str(self.scan), "tui"]
         process = ConPTYProcess(argv, cwd=self.scene, env=self.env, columns=120, rows=36)
+        ready_vt_bytes, q_accepted_bytes = None, None
         try:
-            # 等待真实 curses 绘制的生产界面，再发送 q；仅进入/退出，不复制已有
-            # 完整项目生命周期。原始 VT 与最终 Job 收尾证据沿原 ConPTY owner 留存。
+            # 等待本次初始只读作业真正结算后才发 q；标题/首帧不能证明输入就绪。
+            # 仍只进入/退出，不复制已有完整生命周期，也不延长原等待或退出预算。
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
-                if b"awf-cli" in process.raw_output:
+                output = process.raw_output
+                if initial_tui_read_settled(output):
+                    ready_vt_bytes = len(output)
                     break
                 if process.returncode is not None:
-                    self.fail("安装后 TUI 在首帧前退出：" + repr(process.raw_output))
+                    self.fail("安装后 TUI 在初始读取结算前退出：" + repr(output))
                 time.sleep(0.05)
             else:
-                self.fail("安装后 TUI 首帧超时：" + repr(process.raw_output[-4000:]))
-            process.write("q")
+                self.fail("安装后 TUI 初始读取结算超时：" + repr(process.raw_output[-4000:]))
+            q_accepted_bytes = process.write("q")
+            self.assertEqual(1, q_accepted_bytes)
             self.assertEqual(0, process.wait(timeout=15), repr(process.raw_output))
             self.assertTrue(process.closed)
         finally:
@@ -408,7 +423,9 @@ exit $LASTEXITCODE
                 type(self).cleanup_confirmed = False
                 raise
             raw = process.raw_output
-            result = subprocess.CompletedProcess(argv, process.returncode, base64.b64encode(raw).decode("ascii"), "raw_stdout_encoding=base64; owner=ConPTYProcess; closed=" + str(process.closed))
+            result = subprocess.CompletedProcess(argv, process.returncode, base64.b64encode(raw).decode("ascii"),
+                "raw_stdout_encoding=base64; owner=ConPTYProcess; closed=" + str(process.closed)
+                + "; initial_read_settled_vt_bytes=" + str(ready_vt_bytes) + "; q_accepted_bytes=" + str(q_accepted_bytes))
             self.record("installed-tui-q", argv, result)
 
     def test_https_install_cli_repeat_and_failure_preservation(self):
