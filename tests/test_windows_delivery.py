@@ -31,6 +31,14 @@ def python_command():
             ["bash", str(PACK / "lib/python_runtime.sh")]) + ["-I", "-B", "-X", "utf8"]
 
 
+def loopback_environment(environment):
+    # Windows 环境变量名不区分大小写；先移除继承环境中 NO_PROXY 的所有别名，
+    # 再写唯一规范名。只为本机 HTTPS fixture 绕过代理，不放宽 SDK 对其它重复
+    # 环境名的拒绝，也不修改调用者原环境或全局代理设置。
+    return {**{key: value for key, value in environment.items() if key.casefold() != "no_proxy"},
+            "NO_PROXY": "127.0.0.1,localhost"}
+
+
 class ReleaseWorkflowPortableTest(unittest.TestCase):
     def test_release_policy_routes_stable_and_candidate_and_rejects_invalid_identity(self):
         workflow = (PACK / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -190,13 +198,12 @@ try {
         self.downloads, self.scan = self.scene / "downloads", self.scene / "projects"
         for path in (self.home, self.downloads, self.scan):
             path.mkdir()
-        self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+        self.env = loopback_environment({**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
             "APPDATA": str(self.home / "AppData/Roaming"), "LOCALAPPDATA": str(self.home / "AppData/Local"),
             "HOMEDRIVE": self.home.drive, "HOMEPATH": str(self.home)[2:],
             "TEMP": str(self.downloads), "TMP": str(self.downloads),
-            "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
             "CODEX_HOME": str(self.home / ".codex"), "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),
-            "PYTHONDONTWRITEBYTECODE": "1", "AGENT_WORKFLOW_PWSH": str(self.pwsh)}
+            "PYTHONDONTWRITEBYTECODE": "1", "AGENT_WORKFLOW_PWSH": str(self.pwsh)})
         for key in ("AGENT_WORKFLOW_STATE_DIR", "AGENT_WORKFLOW_RUNTIME_BINDING", "AGENT_WORKFLOW_PROJECT_ROOT",
                     "AGENT_WORKFLOW_CORE_ROOT", "AGENT_WORKFLOW_CONFIG_PATH", "AGENT_WORKFLOW_CALLER_DIR"):
             self.env.pop(key, None)

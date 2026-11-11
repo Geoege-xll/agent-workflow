@@ -286,6 +286,22 @@ class ExampleTest(unittest.TestCase):
             self.assertEqual(1, runner.GROUPS["ci"].count(target))
         self.assertTrue(native_ids.isdisjoint(runner.GROUPS["ci"]))
 
+    def test_delivery_loopback_fixture_has_one_windows_proxy_environment_name(self):
+        from tests.test_windows_delivery import loopback_environment
+        from lib.install.windows_process import _environment_block
+        inherited = {"NO_PROXY": "old-uppercase", "no_proxy": "old-lowercase",
+                     "No_Proxy": "old-mixed", "PATH": "fixture-path", "UNRELATED": "preserved"}
+        original = dict(inherited)
+        with self.assertRaisesRegex(ValueError, "Duplicate Windows environment name"):
+            _environment_block(inherited)
+        actual = loopback_environment(inherited)
+        self.assertEqual(original, inherited, "夹具不得改写继承环境")
+        self.assertEqual({"NO_PROXY": "127.0.0.1,localhost", "PATH": "fixture-path", "UNRELATED": "preserved"}, actual)
+        self.assertEqual(len(actual), len({key.casefold() for key in actual}))
+        # 真实消费 SDK 的纯环境编码边界，不替换 Win32 API 或启动子进程；该
+        # 便携证据只证明首轮启动前拒绝的根因已修，不声称 PS/curl 已执行。
+        self.assertIn("NO_PROXY=127.0.0.1,localhost", _environment_block(actual)[:].split("\0"))
+
     def test_native_python_entry_from_other_cwd_preserves_selection_and_rejection(self):
         # 同一 Python 文件是真正无 Bash 的入口；-I 下从带空格源码根和其他 cwd
         # 启动仍使用同一清单，验证错误子节点不会因父模块覆盖而被忽略。
