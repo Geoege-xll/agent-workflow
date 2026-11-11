@@ -30,6 +30,69 @@ import zipfile
 PACK = Path(__file__).resolve().parents[1]
 
 
+# 只在真实升级已经失败后，由现有 execute/Job 调用的固定只读诊断代码。
+# 两个解释器均以 argv 接收同一新 payload/state/home/CID，不拼接路径到代码，
+# 不创建第二测试实例，也不把诊断成功或失败算作安装/激活重试。
+UPGRADE_READ_ONLY_DIAGNOSTIC = r'''
+import copy
+import json
+from pathlib import Path
+import sys
+
+payload, state, home = map(Path, sys.argv[1:4])
+content_id, mode = sys.argv[4:6]
+# -I 保证标准库隔离；业务模块只来自同一份新物理 payload，旧/新解释器的
+# 对照仅改变 sys.executable，不混入旧 payload 或源码仓的业务实现。
+sys.path.insert(0, str(payload))
+from lib.hosts.native_context import HostPaths, NativeContext
+from manager import central_runtime, native_agents, project_service
+
+# 显式 HostPaths 是原 CLI --host-home 的同一边界，不读取真实用户宿主覆盖。
+context = NativeContext.for_state(state, host_paths=HostPaths.for_home(home, environment={}))
+binding = project_service.runtime_binding(state, content_id)
+print(json.dumps({'step': 'context', 'python': sys.executable, 'payload': str(payload),
+                  'state': str(state), 'home': str(home), 'binding': binding, 'mode': mode},
+                 ensure_ascii=False), flush=True)
+
+original_json_bytes = native_agents.json_bytes
+def observe_json_bytes(value, **kwargs):
+    # 已核实真实 json_bytes：ensure_ascii=False、sort_keys=True、indent=2、
+    # 末尾 LF，再以 UTF-8 编码。先仅在 RAM 测长，才能在原4MiB拒绝前留证。
+    # deepcopy 只投影“已发布行的 staged=None”，不改原对象/Node/编译器/归属；
+    # 不调用 _save，不把投影当作可应用记录。最后仍调用原函数保留真实异常。
+    if isinstance(value, dict) and isinstance(value.get('writes'), list):
+        wire = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode('utf-8')
+        projected = copy.deepcopy(value)
+        cleared = 0
+        for row in projected['writes']:
+            if isinstance(row, dict) and row.get('published') is not None:
+                row['staged'] = None
+                cleared += 1
+        smaller = (json.dumps(projected, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode('utf-8')
+        print(json.dumps({'step': 'native-wire-size', 'status': value.get('status'),
+                          'writes': len(value['writes']), 'compensations': len(value.get('compensations', [])),
+                          'wire_bytes': len(wire), 'published_staged_none_bytes': len(smaller),
+                          'published_rows': cleared}, ensure_ascii=False), flush=True)
+    return original_json_bytes(value, **kwargs)
+
+# 观察器仅存于这个短命诊断子进程；不替换生产源码或持久状态中的任何入口。
+native_agents.json_bytes = observe_json_bytes
+native_plan = native_agents.preview_global(state, binding, context=context)
+summary = native_plan.summary
+print(json.dumps({'step': 'native-preview', 'summary': summary,
+                  'preview_write_count': sum(row.get('operation') == 'write' for row in summary['changes']),
+                  'desired_resources': len(native_plan.desired)}, ensure_ascii=False), flush=True)
+if mode == 'native-budget':
+    print(json.dumps({'step': 'native-receipt-budget', 'bytes': native_agents.receipt_budget(native_plan)}), flush=True)
+elif mode == 'central-preview':
+    central_plan = central_runtime.preview(state, 'activate', binding=binding, native_context=context)
+    print(json.dumps({'step': 'central-preview', 'summary': central_plan.summary}, ensure_ascii=False), flush=True)
+else:
+    raise ValueError('unknown fixed diagnostic mode')
+# 故意不捕获异常：预算或预览抛出的原生 traceback 必须完整进入 execute 双流。
+'''
+
+
 def python_command():
     # 非 Windows 子消费者沿用仓库运行时入口；Windows 必须使用当前明确的
     # 原生解释器，不经 Git Bash、WSL 或 PATH 上的另一个 Python 冒充消费。
@@ -652,10 +715,18 @@ exit $LASTEXITCODE
             # 核心。实际 CID 由既有只读 SDK 算法读取，绝不按目录/摘要虚构 pin。
             self.assertTrue(new_python.is_file() and (new_payload / "workflow.py").is_file(), result.stdout + result.stderr)
             inspected = runtime_store.inspect_core(new_payload)
-            diagnostic = self.execute("upgrade-activate-preview-diagnostic", [str(new_python), "-I", "-B", "-X", "utf8",
+            diagnostic = self.execute("upgrade-activate-preview-text-diagnostic", [str(new_python), "-I", "-B", "-X", "utf8",
                 str(new_payload / "workflow.py"), "--state-dir", str(self.state), "--host-home", str(self.home),
-                "runtime", "activate", inspected["content_id"], "--dry-run", "--json"])
-            self.fail("真实跨私有解释器升级失败；已保存只读预览诊断：\n" + result.stdout + result.stderr
+                "runtime", "activate", inspected["content_id"], "--dry-run"])
+            # receipt_budget 可能先抛；拆为两个只读模式才能让 central.preview
+            # 也获得独立原始 traceback，且无需吞掉/重写任何异常。四个子进程仍
+            # 使用同一 state/home/新 payload，只改变解释器和诊断入口，不做 apply。
+            for interpreter, python in (("old", old_root / "venv/Scripts/python.exe"), ("new", new_python)):
+                for mode in ("native-budget", "central-preview"):
+                    self.execute("upgrade-readonly-" + interpreter + "-" + mode,
+                        [str(python), "-I", "-B", "-X", "utf8", "-c", UPGRADE_READ_ONLY_DIAGNOSTIC,
+                         str(new_payload), str(self.state), str(self.home), inspected["content_id"], mode])
+            self.fail("真实跨私有解释器升级失败；已保存文本预览及旧/新解释器只读原始诊断：\n" + result.stdout + result.stderr
                       + "\n[diagnostic]\n" + diagnostic.stdout + diagnostic.stderr)
         value = json.loads(result.stdout)
         self.assertEqual((True, "complete", 0), (value["ok"], value["phase"], value["exit_code"]))
