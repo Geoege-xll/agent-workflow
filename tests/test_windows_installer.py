@@ -26,6 +26,14 @@ PACK = Path(__file__).resolve().parents[1]
 VERSION = "2.1.4"
 PREFIX = "agent-workflow-" + VERSION
 BINDING = {"protocol_version": 1, "content_id": "a" * 64, "manifest_sha256": "a" * 64}
+
+
+def temporary_directory():
+    # 新权限守卫不能为 GitHub RUNNER_TEMP 开白名单；原生正控使用真正的
+    # 本人 profile 路径。这里只安排测试自有资料，不修改该父目录的权限。
+    return tempfile.TemporaryDirectory(dir=os.environ["LOCALAPPDATA"] if os.name == "nt" else None)
+
+
 # 此物理 CLI fixture 只隔离中央业务，仍实际启动最终路径的私有解释器、消费
 # argv 并写可观察副作用；不能把它的成功报告成真实中央激活或 Windows 通过。
 CLI_FIXTURE = '''import json
@@ -77,7 +85,7 @@ def archive_bytes(extra=(), *, cli=CLI_FIXTURE):
 
 class ArchiveConsumptionTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        self.temporary = temporary_directory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
 
@@ -157,7 +165,7 @@ def shutil_remove_payload(root):
 
 class InstallationTransactionTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        self.temporary = temporary_directory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name).resolve()
         self.archive = self.directory / "release.tar.gz"
@@ -178,7 +186,7 @@ class InstallationTransactionTest(unittest.TestCase):
             (root / "test-mode").write_text(mode)
 
     def install(self, mode=""):
-        with patch.object(installer, "_prepare_environment", side_effect=lambda root, runner: self.environment(root, runner, mode)):
+        with patch.object(installer, "_prepare_environment", side_effect=lambda root, runner, install_root: self.environment(root, runner, mode)):
             return installer.install(self.args)
 
     def receipt(self):
@@ -312,6 +320,43 @@ class InstallationTransactionTest(unittest.TestCase):
         self.assertFalse(self.args.host_home.exists())
         self.assertEqual(archive_before, self.archive.read_bytes())
 
+    def test_trusted_path_preflight_covers_existing_execution_tree_and_rejects_before_writes(self):
+        # 真实枚举已有树，仅替换 Windows ACL 判定；叶不按扩展名筛选，防止
+        # .pth、pyvenv.cfg、DLL 或普通文本 python.exe 因“私有父”被跳过。
+        root = self.args.install_root
+        leaves = [root / "bin/awf-cli.ps1", root / "bin/awf-cli.cmd",
+                  self.version_root / "payload/manager/main.py", self.version_root / "venv/pyvenv.cfg",
+                  self.version_root / "venv/Lib/import.pth", self.version_root / "venv/Scripts/python.exe",
+                  self.version_root / "venv/Scripts/runtime.dll", self.version_root / "venv/Lib/module.pyd"]
+        for path in leaves:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"owned fixture")
+        observed = []
+
+        class Backend:
+            name = "nt"
+
+            def __getattr__(self, name):
+                return getattr(os, name)
+
+        with patch.object(installer, "os", Backend()):
+            with patch("lib.windows_fs.assert_trusted_path", side_effect=lambda path, **_: observed.append(path)):
+                installer._require_trusted_program_paths(root, self.version_root)
+        self.assertTrue(set(leaves).issubset(observed))
+        for path in (root, root / "bin", root / "versions", self.version_root, self.version_root / "venv/Scripts"):
+            self.assertIn(path, observed)
+        failure = "untrusted Windows program path permissions: " + str(self.version_root / "venv/Scripts/python.exe")
+        with patch.object(installer, "_require_trusted_program_paths", side_effect=ValueError(failure)):
+            with patch.object(installer, "directory_lock") as lock, patch.object(installer, "_write") as write:
+                with self.assertRaises(installer.InstallerError) as caught:
+                    installer.install(self.args)
+        self.assertEqual(failure, str(caught.exception))
+        self.assertEqual(("preflight", 2, None), (caught.exception.phase, caught.exception.exit_code, caught.exception.retained))
+        lock.assert_not_called(); write.assert_not_called()
+        self.assertFalse((root / installer.ROOT_RECEIPT).exists())
+        self.assertTrue(all(path.read_bytes() == b"owned fixture" for path in leaves))
+        self.assertFalse(self.args.state_dir.exists())
+
     def test_actual_source_cli_readonly_install_envelope(self):
         # 真正消费仓库 CLI 的只读 inspect，不向实际中央状态、宿主或项目安装。
         self.version_root.mkdir(parents=True)
@@ -330,7 +375,7 @@ class InstallationTransactionTest(unittest.TestCase):
                      "--install-root", str(self.args.install_root), "--state-dir", str(self.args.state_dir),
                      "--host-home", str(self.args.host_home), "--json"]
         output = io.StringIO()
-        with patch.object(installer, "_prepare_environment", side_effect=lambda root, runner: self.environment(root, runner, "fail")):
+        with patch.object(installer, "_prepare_environment", side_effect=lambda root, runner, install_root: self.environment(root, runner, "fail")):
             with contextlib.redirect_stdout(output):
                 code = installer.main(arguments)
         self.assertEqual(17, code)
@@ -343,7 +388,7 @@ class LauncherContractTest(unittest.TestCase):
     def test_generated_launcher_uses_argument_list_and_safe_bounded_identity(self):
         # 此处只验证发行生成/条件认领合同，实际 Legacy argv/cwd/退出码及
         # CMD 当前目录遮蔽负控交给原生 Windows 消费者，不能凭文本宣告通过。
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary).resolve()
             identity = {"install_root": str(root), "version": VERSION, "archive_sha256": "a" * 64,
                         "cli_options": ["--state-dir", r"C:\配置\%TEMP% &^! ' state", "--host-home", r"C:\用户\家"]}
@@ -396,7 +441,7 @@ class NativeHostGateTest(unittest.TestCase):
     def test_real_venv_and_pip_use_final_private_path_without_network(self):
         # 真正执行生产 venv/pip 入口，只以空且禁网的本地锁清单避免访问 PyPI。
         # windows-curses wheel、原生 TUI 与 ACL/Job 的结果仍由 Windows CI 负责。
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary).resolve() / "最终 环境"
             (root / "payload").mkdir(parents=True)
             (root / "payload/requirements-windows.txt").write_text(
@@ -404,7 +449,7 @@ class NativeHostGateTest(unittest.TestCase):
             runner = installer.SetupRunner(timeout=120)
             token = installer.ACTIVE_RUNNER.set(runner)
             try:
-                installer._prepare_environment(root, runner)
+                installer._prepare_environment(root, runner, root)
                 process = installer.capture_process(
                     [str(installer._python(root)), "-I", "-B", "-X", "utf8", "-c",
                      "import sys; print(sys.prefix)"], timeout=30)
@@ -416,7 +461,7 @@ class NativeHostGateTest(unittest.TestCase):
 
     @unittest.skipIf(sys.platform == "win32", "非 Windows 拒绝分支只在便携宿主执行")
     def test_non_windows_main_fails_without_creating_install_root(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with temporary_directory() as temporary:
             root = Path(temporary) / "must-not-exist"
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
