@@ -22,13 +22,20 @@ def _fail() -> ProjectRuntimeError:
     return ProjectRuntimeError("原生事务日志编码、引用或逻辑容量无效")
 
 
-def _logical_budget(value: dict) -> None:
-    """流式累计规范 compact UTF-8，绝不先组装可能被引用放大的展开正文。"""
-    size = 0
+def _json_budget(value: dict, *, max_bytes: int, pretty: bool) -> None:
+    """分别流式证明逻辑量和实际文件量，绝不先组装超限展开或缩进正文。
+
+    compact 逻辑界只限制引用展开。实际文件还必须按 json_bytes 完全相同的
+    ensure_ascii/sort_keys/indent=2 和末尾LF预检；否则很深且很宽的合法图会
+    在最终serializer事后检查之前，先为缩进分配远超4MiB的字符串。
+    """
+    size = 1 if pretty else 0
     try:
-        for chunk in json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(",", ":")).iterencode(value):
+        encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, indent=2 if pretty else None,
+                                   separators=None if pretty else (",", ":"))
+        for chunk in encoder.iterencode(value):
             size += len(chunk.encode("utf-8"))
-            if size > LOGICAL_LIMIT:
+            if size > max_bytes:
                 raise _fail()
     except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise _fail() from exc
@@ -126,8 +133,9 @@ def encode(journal: dict) -> bytes:
         return {**{name: item for name, item in fields.items() if name != "body"}, "body_ref": indexes[body]}
 
     wire = _transform(journal, intern)
-    _logical_budget(journal)
+    _json_budget(journal, max_bytes=LOGICAL_LIMIT, pretty=False)
     wire["schema_version"], wire["bodies"] = 2, bodies
+    _json_budget(wire, max_bytes=LIMIT, pretty=True)
     return json_bytes(wire)
 
 
@@ -179,5 +187,5 @@ def decode(payload: bytes) -> dict:
     if len(used) != len(bodies):
         raise _fail()
     logical["schema_version"] = 1
-    _logical_budget(logical)
+    _json_budget(logical, max_bytes=LOGICAL_LIMIT, pretty=False)
     return logical
