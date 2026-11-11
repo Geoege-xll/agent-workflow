@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -119,7 +120,21 @@ class WindowsDeliveryNativeTest(unittest.TestCase):
         spec.loader.exec_module(cls.release)
         cls.root = Path(tempfile.mkdtemp(prefix="awf-curl-", dir=os.environ.get("AGENT_WORKFLOW_TEST_SCRATCH"))).resolve()
         cls.cleanup_confirmed = True
+        cls.program_parent_owned = False
         cls.addClassCleanup(cls.cleanup_scene)
+        # RUNNER_TEMP 的祖先可能允许共享用户删除子项，不适合持久程序信任边界。
+        # 只把程序测试根放到真实 LOCALAPPDATA 下的自有私有目录；下载、证书、
+        # state 与原始日志仍归请求 scratch。生产守卫会真实核验这条链，无 CI 豁免。
+        from lib import windows_fs as fs
+        local = Path(os.environ["LOCALAPPDATA"])
+        if not local.is_absolute() or not local.is_dir():
+            raise RuntimeError("真实程序根验证需要已有的绝对 LOCALAPPDATA 用户目录")
+        cls.program_parent = local / ("awf-delivery-test-" + uuid.uuid4().hex)
+        fs.secure_os.mkdir(cls.program_parent, 0o700)
+        cls.program_parent_owned = True
+        fs.assert_private(cls.program_parent)
+        print("[native program fixture] " + json.dumps({"program_parent": str(cls.program_parent),
+            "scratch": str(cls.root), "reason": "程序持久祖先必须真实可信；下载/日志仍归原 scratch"}, ensure_ascii=False), flush=True)
         cls.assets = cls.root / "assets"
         cls.version = (PACK / "product/VERSION").read_text(encoding="ascii").strip()
         cls.tag = f"v{cls.version}-rc.1"
@@ -177,9 +192,12 @@ try {
         # 原 Job owner 无法证明归零时不递归回收测试现场；这个场景也不得算作
         # 成功。正常的 HTTPS server 会先停止，所有已知子进程均由 owner 收尾。
         if cls.cleanup_confirmed:
+            if cls.program_parent_owned and cls.program_parent.exists():
+                shutil.rmtree(cls.program_parent)
             shutil.rmtree(cls.root)
         else:
-            print("[保留未确认收尾的测试现场] " + str(cls.root), flush=True)
+            print("[保留未确认收尾的测试现场] " + str(cls.root)
+                  + "; program_parent=" + str(getattr(cls, "program_parent", None)), flush=True)
 
     @classmethod
     def capture_native(cls, command, *, env, timeout, cwd=None):
@@ -217,7 +235,8 @@ try {
     def setUp(self):
         self.scene = self.root / self._testMethodName.removeprefix("test_")
         self.scene.mkdir()
-        self.home, self.state, self.install = (self.scene / "home", self.scene / "state", self.scene / "程序 空格")
+        self.home, self.state = self.scene / "home", self.scene / "state"
+        self.install = self.program_parent / ("程序 空格-" + uuid.uuid4().hex[:8])
         self.downloads, self.scan = self.scene / "downloads", self.scene / "projects"
         for path in (self.home, self.downloads, self.scan):
             path.mkdir()
@@ -389,38 +408,52 @@ exit $LASTEXITCODE
         self.assertIn("[TEST] installed-launcher PSNativeCommandArgumentPassing=Legacy", result.stderr)
         return result
 
-    def reject_shared_empty_root(self, script, installed_before):
+    @staticmethod
+    def observe_program_node_security(path):
         from lib import windows_fs as fs
-        shared = self.scene / "shared-empty-root"
-        fs.secure_os.mkdir(shared, 0o700)
-        fs.assert_private(shared)
+        # 原句柄边界读取完整 owner/control/DACL 字节；比较不只依赖摘要或
+        # POSIX mode。日志只公开摘要和目录身份，不写出本机用户 SID 正文。
+        with fs.Directory(path.parent):
+            handle = fs._open_handle(path, fs.READ_CONTROL | 0x80, directory=path.is_dir())
+            try:
+                information = fs._information(handle)
+                with fs._security_policy(handle) as policy:
+                    return {"identity": (information.volume, information.index_high << 32 | information.index_low),
+                            "owner": policy.owner, "control": policy.control,
+                            "acl": policy.acl_bytes, "security": policy.fingerprint}
+            finally:
+                fs._close(handle)
 
-        def observe():
-            # 原句柄边界读取完整 owner/control/DACL 字节；比较不只依赖摘要或
-            # POSIX mode。日志只公开摘要和目录身份，不写出本机用户 SID 正文。
-            with fs.Directory(shared) as directory, fs._security_policy(directory.handle) as policy:
-                return {"identity": directory.identity, "owner": policy.owner,
-                        "control": policy.control, "acl": policy.acl_bytes, "security": policy.fingerprint}
-
-        private_before = observe()
-        handle = fs._open_handle(shared, 0x60080, directory=True)
+    def grant_owned_node_world_access(self, path, rights, *, directory=True):
+        from lib import windows_fs as fs
+        self.assertTrue(path.is_relative_to(self.program_parent), "只允许改变本例自有程序夹具节点权限")
+        handle = fs._open_handle(path, 0x60080, directory=directory)
         descriptor = fs.HANDLE()
         try:
             # 复用既有 WindowsRuntime 原生夹具的 SDDL/SetSecurityInfo 授权方式。
-            # 只给本例新建空目录增加 Everyone 完全控制（含写入、删除子项），
+            # 只给本例已拥有节点增加指定的 Everyone ACE（不向子项继承），
             # 不操作系统/用户目录，不改变 owner，也不让生产代码修正这份未知 ACL。
             api = fs._api()
             sid = fs.current_sid()
-            sddl = f"D:P(A;OICI;GA;;;{sid})(A;OICI;GA;;;SY)(A;OICI;GA;;;WD)"
+            flags = "OICI" if directory else ""
+            sddl = f"D:P(A;{flags};GA;;;{sid})(A;{flags};GA;;;SY)(A;;{rights};;;WD)"
             self.assertTrue(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl, 1, ctypes.byref(descriptor), None))
             self.assertEqual(0, api.security.SetSecurityInfo(handle, 1, 0x80000004,
-                None, None, fs._dacl(descriptor), None), "无法为自有空根准备真实弱 ACL 负控")
+                None, None, fs._dacl(descriptor), None), "无法准备自有节点的真实弱 ACL 负控")
         finally:
             if descriptor.value:
                 fs._api().kernel.LocalFree(descriptor)
             fs._close(handle)
-        weak_before = observe()
+
+    def reject_shared_empty_root(self, script, installed_before):
+        from lib import windows_fs as fs
+        shared = self.program_parent / "shared-empty-root"
+        fs.secure_os.mkdir(shared, 0o700)
+        fs.assert_private(shared)
+        private_before = self.observe_program_node_security(shared)
+        self.grant_owned_node_world_access(shared, "GA")
+        weak_before = self.observe_program_node_security(shared)
         self.assertEqual(private_before["identity"], weak_before["identity"])
         self.assertEqual(private_before["owner"], weak_before["owner"])
         self.assertNotEqual(private_before["acl"], weak_before["acl"])
@@ -431,16 +464,79 @@ exit $LASTEXITCODE
         self.assertEqual(2, failed.returncode, failed.stdout + failed.stderr)
         value = json.loads(failed.stdout)
         self.assertEqual((False, "preflight", 2), (value["ok"], value["phase"], value["exit_code"]))
-        self.assertIn("private Windows node requires current-user/SYSTEM protected DACL", value["error"])
+        self.assertIn("untrusted Windows program path permissions: " + str(shared), value["error"])
         self.assertIsNone(value["retained_version_root"])
         self.assertEqual([], list(shared.iterdir()), "弱 ACL 拒绝前不得写 root marker、bin 或 versions")
-        after = observe()
+        after = self.observe_program_node_security(shared)
         self.assertEqual(weak_before, after, "拒绝必须保全原目录身份、owner、控制位和完整 DACL")
         self.assertEqual(installed_before, (self.snapshot(self.install), self.snapshot(self.state)))
         print("[native shared-root preserved] " + json.dumps({"identity": after["identity"],
             "private_security_sha256": private_before["security"], "weak_security_sha256": weak_before["security"],
-            "after_security_sha256": after["security"], "grant": "Everyone OICI GA (includes write/delete-child)",
+            "after_security_sha256": after["security"], "grant": "Everyone GA (includes write/delete-child)",
             "phase": value["phase"], "exit_code": failed.returncode, "root_empty": True}, ensure_ascii=False), flush=True)
+
+    def reject_untrusted_program_paths(self, script, installed_before):
+        from lib import windows_fs as fs
+        version_name = self.version + "-" + self.fields["ARCHIVE_SHA256"]
+        # 每个负控独占本例一个私有程序根；危险目录不共用，避免前一个弱 ACL
+        # 掩盖后一个边界，也无需把 venv 的继承 ACL 用 chmod 猜测恢复。
+        scenarios = []
+        parent = self.program_parent / "delete-child-parent"
+        fs.secure_os.mkdir(parent, 0o700)
+        private_root = parent / "private-root"
+        fs.secure_os.mkdir(private_root, 0o700)
+        self.grant_owned_node_world_access(parent, "DC")
+        fs.assert_private(private_root)
+        scenarios.append(("parent-delete-child", private_root, parent))
+        for label, relative, leaf in (("bin", "bin", False), ("versions", "versions", False),
+                                     ("version-root", "versions/" + version_name, False),
+                                     ("venv-scripts", "versions/" + version_name + "/venv/Scripts", False),
+                                     ("interpreter-leaf", "versions/" + version_name + "/venv/Scripts/python.exe", True)):
+            root = self.program_parent / ("unsafe-" + label)
+            fs.secure_os.mkdir(root, 0o700)
+            current = root
+            parts = relative.split("/")
+            for part in parts[:-1] if leaf else parts:
+                current /= part
+                fs.secure_os.mkdir(current, 0o700)
+            if leaf:
+                # 叶只用已拥有的普通文本夹具，不创建或复制第二套 venv；权限
+                # 守卫必须在解释器格式/收据消费之前拒绝这个实际危险叶。
+                current /= parts[-1]
+                descriptor = fs.secure_os.open(current, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(descriptor, b"owned fixture, not an interpreter; preflight must reject first")
+                    fs.secure_os.fsync(descriptor)
+                finally:
+                    fs.secure_os.close(descriptor)
+            self.grant_owned_node_world_access(current, "GA", directory=not leaf)
+            fs.assert_private(root)
+            scenarios.append((label, root, current))
+        for label, root, rejected_node in scenarios:
+            with self.subTest(program_permission=label):
+                nodes = [root, *sorted(root.rglob("*"))]
+                if rejected_node == parent:
+                    nodes.append(parent)
+                before_security = {str(path): self.observe_program_node_security(path) for path in nodes}
+                before_members = sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+                before_payload = self.snapshot(root)
+                failed = self.install_via_ps(script, install_root=root)
+                self.assertEqual(2, failed.returncode, failed.stdout + failed.stderr)
+                value = json.loads(failed.stdout)
+                self.assertEqual((False, "preflight", 2), (value["ok"], value["phase"], value["exit_code"]))
+                self.assertIsNone(value["retained_version_root"])
+                # 由公共 FS 守卫给出实际失败节点；测试只核对其错误合同，绝不
+                # 自行复制“哪些 SID/ACL mask 可受信”的生产权限判定。
+                self.assertIn("untrusted Windows program path permissions: " + str(rejected_node), value["error"])
+                self.assertEqual(before_members, sorted(path.relative_to(root).as_posix() for path in root.rglob("*")))
+                self.assertEqual(before_payload, self.snapshot(root))
+                self.assertEqual(before_security, {str(path): self.observe_program_node_security(path) for path in nodes})
+                self.assertEqual(installed_before, (self.snapshot(self.install), self.snapshot(self.state)))
+                print("[native untrusted-program-path preserved] " + json.dumps({"scenario": label,
+                    "root": str(root), "rejected_node": str(rejected_node), "phase": value["phase"],
+                    "exit_code": failed.returncode, "members_unchanged": True,
+                    "security": {name: {"identity": observation["identity"], "sha256": observation["security"]}
+                                 for name, observation in before_security.items()}}, ensure_ascii=False), flush=True)
 
     def tui_smoke(self, version_root):
         from tests.windows_conpty import ConPTYProcess
@@ -578,8 +674,12 @@ exit $LASTEXITCODE
                 self.assertNotEqual(0, failed.returncode, failed.stdout + failed.stderr)
                 self.assertIn(expected, failed.stdout + failed.stderr)
                 self.assertEqual(before, (self.snapshot(self.install), self.snapshot(self.state)))
-        foreign = self.scene / "foreign"
-        (foreign / "bin").mkdir(parents=True)
+        foreign = self.program_parent / "foreign"
+        # 未受管入口负控仍需先满足权限前置，避免被新的可信路径守卫提前拒绝，
+        # 从而把“权限不安全”误当作“未知入口不得认领”的原有证据。
+        from lib import windows_fs as fs
+        fs.secure_os.mkdir(foreign, 0o700)
+        fs.secure_os.mkdir(foreign / "bin", 0o700)
         old_entry = foreign / "bin/awf-cli.cmd"
         old_entry.write_bytes(b"@echo foreign entry\r\n")
         original = self.snapshot(foreign)
@@ -588,6 +688,7 @@ exit $LASTEXITCODE
         self.assertEqual(original, self.snapshot(foreign))
         self.assertEqual(before[1], self.snapshot(self.state))
         self.reject_shared_empty_root(script, before)
+        self.reject_untrusted_program_paths(script, before)
 
     def test_real_child_stdin_failure_retains_unknown_lifecycle_scene(self):
         failed = self.install_via_ps(self.render("stdin-fault", stdin_fault=True))
