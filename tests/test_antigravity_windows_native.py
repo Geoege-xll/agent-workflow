@@ -172,7 +172,9 @@ class AntigravityStageWindowsNativeTest(AntigravityStageFixture, unittest.TestCa
         with project.Tree(root) as tree:
             parent, name = tree.parent(target.name)
             before = project.read_at(parent, name)
-        journal = {"transaction_id": "b" * 32, "writes": [], "root_identities": {}}
+        # private _publish 的最小夹具也必须声明逻辑 schema 1，才能通过真实
+        # codec 写前入口；仅补协议身份，不放宽保留源权限/补偿负控的原断言。
+        journal = {"schema_version": 1, "transaction_id": "b" * 32, "writes": [], "root_identities": {}}
         # 真实生产者先保存路径、完整 stage、原 inode retained；注入仅截断最后
         # publish，绝不手写 retained 身份或把空创建像伪装成 ready。
         with patch.object(native_agents, "publish_at", side_effect=KeyboardInterrupt("fixture before native publish")):
