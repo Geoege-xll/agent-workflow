@@ -1664,7 +1664,7 @@ class CentralCliIntegrationTest(unittest.TestCase):
         for directory in runtime_store.CORE_DIRECTORIES:(source/directory).mkdir(parents=True)
         for relative in runtime_store.SETUP_FILES:cls.put(source,relative,b"#!/bin/sh\nexit 0\n")
         # 真实薄桥和 context_read 的直接依赖显式列出；其余产品文件用最小夹具。
-        selected=("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/central/runtime_project.py","lib/hosts/native_context.py","lib/hosts/native_agents.py","manager/native_agents.py","lib/runtime_bridge.py",
+        selected=("lib/__init__.py", "lib/install/__init__.py", "lib/central/__init__.py", "lib/hosts/__init__.py", "lib/skills/__init__.py", "lib/documents/__init__.py", "lib/install/project_paths.py", "lib/install/install_process.py", "lib/install/windows_process.py", "lib/platform_fs.py","lib/runtime_store.py","lib/central/runtime_project.py","lib/hosts/native_context.py","lib/hosts/native_agents.py","lib/hosts/native_journal.py","manager/native_agents.py","lib/runtime_bridge.py",
                   "lib/runtime_pins.py","lib/standard_paths.py","lib/hosts/claude_instructions.py","lib/documents/context_read.py",
                   "lib/skills/shared_core_skills.py","lib/python_runtime.sh","lib/role_models.py","lib/central/role_preferences.py","lib/hosts/claude_options.py",
                   "lib/validate_antigravity_artifacts.py","lib/hosts/workflow_hook_install.py","lib/hosts/workflow_hook_settings.py",
