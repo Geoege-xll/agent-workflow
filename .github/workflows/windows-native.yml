@@ -358,7 +358,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-server-${{ matrix.group }}-methods-${{ matrix.methods }}-${{ github.run_id }}-${{ github.run_attempt }}
-          # 交付组件的附加目录只含摘要去重的下载资产/安装收据；fixture CA/key
+          # 交付组件的附加目录只含摘要去重的生成 PS/下载资产/安装收据；fixture CA/key
           # 和宿主配置不上传。其它组件继续消费两份原始日志，无平行验收入口。
           path: |
             ${{ runner.temp }}/${{ matrix.group }}.log

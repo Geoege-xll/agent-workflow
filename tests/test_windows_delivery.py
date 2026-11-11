@@ -226,7 +226,7 @@ try {
                           stderr_base64=base64.b64encode(result.raw_stderr).decode("ascii"))
         target = os.environ.get("AWF_TEST_EVIDENCE_LOG")
         if target:
-            # CI 只导出已知下载资产和程序收据；证书私钥、宿主配置、环境与整个
+            # CI 只导出生成 PS、已知下载资产和程序收据；证书私钥、宿主配置、环境与整个
             # 私有 state 不进入 artifact。按内容摘要去重，既保留坏资产的原字节，
             # 又不为每个子场景重复复制相同发行包。此目录不参与任何测试选择/执行。
             destination = Path(target).with_suffix(".delivery")
@@ -245,6 +245,16 @@ try {
                             stream.write(body)
                     downloads.append({"source": str(path), "sha256": digest, "artifact": exported.name})
             record["download_evidence"] = downloads
+            scripts = []
+            for script in self.scene.glob("*.ps1"):
+                body = script.read_bytes()
+                digest = hashlib.sha256(body).hexdigest()
+                exported = destination / (digest + "-" + script.name)
+                if not exported.exists():
+                    with exported.open("xb") as stream:
+                        stream.write(body)
+                scripts.append({"source": str(script), "sha256": digest, "artifact": exported.name})
+            record["script_evidence"] = scripts
             for receipt in self.install.glob("versions/*/install.json") if self.install.exists() else ():
                 body = receipt.read_bytes()
                 exported = destination / (hashlib.sha256(body).hexdigest() + "-install.json")
@@ -291,7 +301,10 @@ try {
                 "        $process.WaitForExit()\n"
                 "        [Console]::Error.WriteLine('[TEST] fault_child_exit=' + $process.ExitCode)\n" + anchor)
         path = self.scene / (name + ".ps1")
-        path.write_text(body, encoding="utf-8")
+        # 渲染器保留模板原始 CRLF；Windows 的 write_text 会再次把 LF 换成
+        # CRLF，制造 CRCRLF 并破坏 PowerShell 反引号续行。这里只写渲染后的
+        # 原字节，包含测试注入也不再经过平台文本换行转换。
+        path.write_bytes(body.encode("utf-8"))
         return path
 
     def install_via_ps(self, script, *, install_root=None, legacy=False):
