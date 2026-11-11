@@ -39,8 +39,22 @@ try {
     $pythonPath = $pythonCommand.Source
     $curlPath = (Get-Command -Name 'curl.exe' -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     # 仅探测调用者选定的现有解释器；不下载运行时、不改 PATH/profile/ExecutionPolicy。
-    & $pythonPath -I -B -X utf8 -c 'import sys; raise SystemExit(0 if sys.platform == "win32" and sys.version_info >= (3, 11) and sys.maxsize > 2**32 else 2)'
-    if ($LASTEXITCODE -ne 0) { throw '需要现有 Windows x64 CPython 3.11+；请使用 -Python 指定解释器。' }
+    # PowerShell 7.0–7.2 的 Legacy 原生参数拼接会丢失 -c 代码内的双引号。
+    # 与主引擎相同，逐项交给 .NET ArgumentList 编码；不改变调用者的全局参数模式。
+    $probeStart = [System.Diagnostics.ProcessStartInfo]::new()
+    $probeStart.FileName = $pythonPath
+    $probeStart.UseShellExecute = $false
+    foreach ($argument in @('-I', '-B', '-X', 'utf8', '-c',
+                           'import sys; raise SystemExit(0 if sys.platform == "win32" and sys.version_info >= (3, 11) and sys.maxsize > 2**32 else 2)')) {
+        $probeStart.ArgumentList.Add($argument)
+    }
+    $probe = [System.Diagnostics.Process]::new()
+    $probe.StartInfo = $probeStart
+    try {
+        if (-not $probe.Start()) { throw '无法启动现有 Python 解释器探测。' }
+        $probe.WaitForExit()
+        if ($probe.ExitCode -ne 0) { throw '需要现有 Windows x64 CPython 3.11+；请使用 -Python 指定解释器。' }
+    } finally { $probe.Dispose() }
     if ([string]::IsNullOrEmpty($InstallRoot)) {
         if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA 缺失；请显式指定 -InstallRoot。' }
         $InstallRoot = Join-Path $env:LOCALAPPDATA 'AgentWorkflow'
