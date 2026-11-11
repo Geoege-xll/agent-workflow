@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 from functools import partial
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -388,6 +389,59 @@ exit $LASTEXITCODE
         self.assertIn("[TEST] installed-launcher PSNativeCommandArgumentPassing=Legacy", result.stderr)
         return result
 
+    def reject_shared_empty_root(self, script, installed_before):
+        from lib import windows_fs as fs
+        shared = self.scene / "shared-empty-root"
+        fs.secure_os.mkdir(shared, 0o700)
+        fs.assert_private(shared)
+
+        def observe():
+            # 原句柄边界读取完整 owner/control/DACL 字节；比较不只依赖摘要或
+            # POSIX mode。日志只公开摘要和目录身份，不写出本机用户 SID 正文。
+            with fs.Directory(shared) as directory, fs._security_policy(directory.handle) as policy:
+                return {"identity": directory.identity, "owner": policy.owner,
+                        "control": policy.control, "acl": policy.acl_bytes, "security": policy.fingerprint}
+
+        private_before = observe()
+        handle = fs._open_handle(shared, 0x60080, directory=True)
+        descriptor = fs.HANDLE()
+        try:
+            # 复用既有 WindowsRuntime 原生夹具的 SDDL/SetSecurityInfo 授权方式。
+            # 只给本例新建空目录增加 Everyone 完全控制（含写入、删除子项），
+            # 不操作系统/用户目录，不改变 owner，也不让生产代码修正这份未知 ACL。
+            api = fs._api()
+            sid = fs.current_sid()
+            sddl = f"D:P(A;OICI;GA;;;{sid})(A;OICI;GA;;;SY)(A;OICI;GA;;;WD)"
+            self.assertTrue(api.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl, 1, ctypes.byref(descriptor), None))
+            self.assertEqual(0, api.security.SetSecurityInfo(handle, 1, 0x80000004,
+                None, None, fs._dacl(descriptor), None), "无法为自有空根准备真实弱 ACL 负控")
+        finally:
+            if descriptor.value:
+                fs._api().kernel.LocalFree(descriptor)
+            fs._close(handle)
+        weak_before = observe()
+        self.assertEqual(private_before["identity"], weak_before["identity"])
+        self.assertEqual(private_before["owner"], weak_before["owner"])
+        self.assertNotEqual(private_before["acl"], weak_before["acl"])
+        with self.assertRaises(ValueError):
+            fs.assert_private(shared)
+        self.assertEqual([], list(shared.iterdir()))
+        failed = self.install_via_ps(script, install_root=shared)
+        self.assertEqual(2, failed.returncode, failed.stdout + failed.stderr)
+        value = json.loads(failed.stdout)
+        self.assertEqual((False, "preflight", 2), (value["ok"], value["phase"], value["exit_code"]))
+        self.assertIn("private Windows node requires current-user/SYSTEM protected DACL", value["error"])
+        self.assertIsNone(value["retained_version_root"])
+        self.assertEqual([], list(shared.iterdir()), "弱 ACL 拒绝前不得写 root marker、bin 或 versions")
+        after = observe()
+        self.assertEqual(weak_before, after, "拒绝必须保全原目录身份、owner、控制位和完整 DACL")
+        self.assertEqual(installed_before, (self.snapshot(self.install), self.snapshot(self.state)))
+        print("[native shared-root preserved] " + json.dumps({"identity": after["identity"],
+            "private_security_sha256": private_before["security"], "weak_security_sha256": weak_before["security"],
+            "after_security_sha256": after["security"], "grant": "Everyone OICI GA (includes write/delete-child)",
+            "phase": value["phase"], "exit_code": failed.returncode, "root_empty": True}, ensure_ascii=False), flush=True)
+
     def tui_smoke(self, version_root):
         from tests.windows_conpty import ConPTYProcess
         self.assertEqual([], list(self.scan.iterdir()), "只读参数用例的临时项目必须先回收，TUI 使用正常空扫描根")
@@ -533,6 +587,7 @@ exit $LASTEXITCODE
         self.assertNotEqual(0, failed.returncode, failed.stdout + failed.stderr)
         self.assertEqual(original, self.snapshot(foreign))
         self.assertEqual(before[1], self.snapshot(self.state))
+        self.reject_shared_empty_root(script, before)
 
     def test_real_child_stdin_failure_retains_unknown_lifecycle_scene(self):
         failed = self.install_via_ps(self.render("stdin-fault", stdin_fault=True))
