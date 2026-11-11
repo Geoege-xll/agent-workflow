@@ -63,7 +63,9 @@ GROUPS["hosts"] = (
 GROUPS["ci"] = (
     modules("validation_runner")
     + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
-    + modules("central_project", "runtime_state", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli")
+    # 安装引擎的纯逻辑/事务模块只归便携 CI；其非 Windows 负控在 Windows
+    # 会明确 skip，因此不能整模块放进要求零 skip 的原生组件共享清单。
+    + modules("central_project", "runtime_state", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli", "windows_installer")
     # 后台保存预览必须在校验阻塞时保持真实 App 可响应并保留草稿；仅纳入已冻结
     # 的精确消费者，不因新增回归把整个 TUI 模块或现有 PTY 分支重复执行。
     + ("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",
