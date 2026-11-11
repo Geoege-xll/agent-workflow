@@ -159,6 +159,12 @@ Windows 的 `workflow.py`、`workflow.ps1`、`workflow.cmd` 是同一 `manager.c
 不建立第二套安装或服务实现。PowerShell 7 使用 .NET `ArgumentList` 逐项转发并保留调用目录；
 cmd 只按普通 cmd 引用合同转发一次。直接 Python 使用 `-I -B -X utf8`，隔离与 CPython 3.11+ x64 检查在导入业务模块前完成。
 `requirements-windows.txt` 只为 curses TUI 锁定 Windows wheel；CLI／库不读取它自动安装。
+curl 下载入口由 `packaging/windows/` 的模板和构建器生成，生产资产来源固定到 GitHub Release 标签。
+安装用 pyz 的最小 SDK 从同一次 tar 快照取字节；PowerShell 校验并以内存中的同一字节交给隔离 Python，
+归档验证、私有程序环境与受管入口归 `lib/install/windows_installer.py`，中央导入／激活仍调用物理载荷 CLI。
+安装程序生命周期记录只描述程序环境与入口，不替代中央 current、项目登记或任务 pin。
+真实 HTTPS fixture 只通过内部渲染 API 注入测试 URL／临时 CA；生产没有镜像或关闭 TLS 的运行时选项。
+公开标签的实际下载消费仍需独立核对，本地 fixture 或解压模拟不能替代。
 前置、权限与当前未验收项见[原生 Windows 入口](usage.md#原生-windows-入口)。
 中央项目内仅有 `.agent-workflow/` 配置、locator、薄桥和原生资源，没有 `.agent-workflow/setup_*.sh`。
 检查／修复中央项目分别用 `check` 和先预览的 `repair`，不在项目内执行根 setup。

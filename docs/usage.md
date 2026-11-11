@@ -62,6 +62,63 @@ Homebrew 已管理入口，无需再注册；来源排查见 [Homebrew 说明](h
 
 ## 原生 Windows 入口
 
+### curl 下载与中央安装（候选入口）
+
+该入口随新的候选资产交付；只有目标 Release 已公开并包含对应文件时才能使用。当前稳定版 2.1.3 没有这些资产，
+不要把下面的标签占位值直接执行。使用 Release 页面核对的完整标签（例如候选的 `vX.Y.Z-rc.N`）；
+下载脚本、安装器与归档均固定到该标签，升级时重新选择经核对的新标签。
+
+需要已有的 Windows 11 x64、本地 NTFS、PowerShell 7+、CPython 3.11+ x64 和 Node 20+。
+安装受管 Skill 还需要已有的软链权限。下载入口不会替你下载 Python／Node、开启 Developer Mode、提升权限，
+也不修改全局 PATH、profile 或 ExecutionPolicy。普通用户 PowerShell 7 中先下载到文件并核对：
+
+```powershell
+$Tag = '<替换为Release页面已核对的完整标签>'
+$Base = "https://github.com/Geoege-xll/agent-workflow/releases/download/$Tag"
+$Script = "install-agent-workflow-$Tag.ps1"
+$Manifest = "agent-workflow-$Tag-manifest.json"
+curl.exe --disable --fail --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 180 --output $Script --url "$Base/$Script"
+if ($LASTEXITCODE -ne 0) { throw '安装脚本下载失败' }
+curl.exe --disable --fail --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 180 --output $Manifest --url "$Base/$Manifest"
+if ($LASTEXITCODE -ne 0) { throw '交付清单下载失败' }
+$Delivery = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+$Entry = @($Delivery.assets | Where-Object { $_.filename -ceq $Script })
+if ($Delivery.release_tag -cne $Tag -or $Entry.Count -ne 1 -or
+    (Get-FileHash -LiteralPath $Script -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Entry[0].sha256) {
+    throw '标签或脚本摘要不匹配'
+}
+# 查看本地脚本后，指定已有的控制台解释器。
+& (Join-Path $PWD $Script) -Python 'C:\Python311\python.exe'
+if ($LASTEXITCODE -ne 0) { throw '安装未完成；请保留并查看输出的阶段与现场路径' }
+```
+
+安装器校验下载的同一份安装器字节及归档，安全解包，在最终物理路径创建私有 venv，
+按随包的哈希／二进制锁准备 TUI 依赖，再调用既有中央服务导入与激活该核心。
+现有 follow 项目通过原服务采用新版本；pinned、停用和项目偏好保留。新项目仍由用户显式添加／启用，
+安装器不替你登记业务目录。目标默认是 `%LOCALAPPDATA%\AgentWorkflow`，可用 `-InstallRoot` 显式改到其他本地绝对目录。
+
+正常成功会输出两个命令入口的完整路径。没有自动修改 PATH；默认位置可直接使用：
+
+```powershell
+$Awf = Join-Path $env:LOCALAPPDATA 'AgentWorkflow\bin\awf-cli.ps1'
+& $Awf --version
+& $Awf list --json
+& $Awf tui
+```
+
+程序版本环境放在安装根的版本目录中；中央核心仍由原 state 管理，不新增第二套 current。
+重复安装只接受可核实的受管内容，不覆盖同名未知文件。失败输出准确阶段；中央激活已开始而结果未知时，
+保留程序、解释器及中央现场，先用输出的物理 CLI 核对／恢复，不手动删目录或盲目回滚。
+
+下载缓存保留在输出的临时路径中。确认安装进程已结束后可移除该次缓存；若提示“未确认退出”，暂勿删除。
+该缓存与保留给旧任务使用的程序版本、中央核心不同，不可按下载缓存规则清理后两者。
+`-Json` 仅将机器结果放到 stdout，说明与缓存路径走 stderr。
+
+curl 安装消费与完整源码验收分别记录。发行归档不含 Git 元数据／完整测试；下面的 Git checkout 验收入口保持，
+下载、SHA-256 或 Windows Server 检查通过不等于 Win11 桌面整体验收。
+
+### 已有源包的原生入口
+
 先核对源包或 [GitHub Release](https://github.com/Geoege-xll/agent-workflow/releases) 的目标提交、版本与归档
 SHA-256，再解压到本地目录。采用已审阅的本地文件，不建议直接执行来源未核对的下载脚本。
 以下示例在 PowerShell 7 中运行，路径替换为已有的 CPython 控制台解释器与已核对载荷；环境变量只设置当前进程：
@@ -79,7 +136,7 @@ CPython、最低版本与 x64。显式解释器无效时拒绝，不从 PATH、`
 `%ProgramFiles%\PowerShell\7\pwsh.exe`；非标准 PowerShell 位置可直接使用 PowerShell 或 Python 入口。
 程序化复杂参数使用 PowerShell 字符串数组或直接 Python；cmd 仍遵循普通 cmd 引用及变量展开规则。
 
-本手册后续的 `awf-cli` 示例，在 Windows 改用 `& "$Source\workflow.ps1"` 前缀，使用 Windows 绝对路径。
+本手册后续的 `awf-cli` 示例，curl 安装后可使用安装器输出的 PowerShell 入口完整路径；已有源包改用 `& "$Source\workflow.ps1"` 前缀，使用 Windows 绝对路径。
 中央服务仍按 `runtime install`、`runtime activate`、`open` 顺序显式执行，可先用 `--dry-run --json` 核对。
 写入仅支持本地 NTFS，受管 Skill 软链只指向已验证的中央核心同名 Skill。预检要求系统已经启用
 Developer Mode，或当前令牌已经启用 `SeCreateSymbolicLinkPrivilege`；实际创建还受目录 ACL 和系统策略约束。
@@ -87,7 +144,7 @@ Developer Mode，或当前令牌已经启用 `SeCreateSymbolicLinkPrivilege`；�
 已有资料的权限和继承策略按事务前像保留；不修改 PATH、profile、ExecutionPolicy 或全局宿主设置。
 远程卷、未知 reparse／junction 和不安全多硬链仍拒绝。
 
-CLI 和库不自动安装 TUI 依赖。需要运行 curses TUI 时，由用户选择一个独立 venv，显式安装随包哈希锁定清单：
+普通 CLI 和库不自动安装 TUI 依赖；curl 安装器显式准备自己的私有环境。已有源包需要运行 curses TUI 时，由用户选择一个独立 venv，显式安装随包哈希锁定清单：
 
 ```powershell
 & 'C:\Python311\python.exe' -I -B -X utf8 -m venv 'C:\Tools\awf-venv'

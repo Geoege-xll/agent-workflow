@@ -99,6 +99,9 @@ bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py 2.1.4
 - `dist/agent-workflow-2.1.4.tar.gz`
 - `dist/agent-workflow-2.1.4.tar.gz.sha256`
 - `dist/Formula/awf-cli.rb`
+- `dist/agent-workflow-windows-v2.1.4.pyz`
+- `dist/install-agent-workflow-v2.1.4.ps1`
+- `dist/agent-workflow-v2.1.4-manifest.json`
 
 发行包使用运行所需文件/目录白名单，不包含 `.sync-backups`、Git 元数据、发行输出、
 测试、发布工具或 Python 缓存。文档仅显式包含 `docs/usage.md`、`docs/development.md`、
@@ -106,6 +109,9 @@ bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py 2.1.4
 归档同时包含 `workflow.py`、`workflow.ps1`、`workflow.cmd` 与 `requirements-windows.txt`，
 缺任一入口或锁文件会在写输出前拒绝。Windows 使用同一归档，不通过 Homebrew 安装；目标、依赖和未验收项见
 [使用手册](usage.md#原生-windows-入口)。文件完整不代表 PowerShell、中央服务或 TUI 已在 Win11 桌面通过验收。
+Windows 下载入口与最小同源 SDK 安装器是归档外的独立资产，避免安装器反向嵌入自身归档摘要。
+交付清单记录归档、pyz、PowerShell 脚本的文件名、大小、SHA-256 与固定标签 URL，不记录自身摘要。
+`manager/release.json` 仍仅保存既有 schema 与产品版本，不能把下载来源当作中央绑定。
 存在的根目录许可证会一并打包，但构建器不替作者选择
 或生成许可证。发行前应确认代码授权方式及适用许可证。
 
@@ -117,6 +123,11 @@ bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py 2.1.4
 ```bash
 bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py 2.1.4 --output-dir /path/to/new-output
 ```
+
+原生安装候选使用独立且不可变的 `v2.1.4-rc.N` 标签；产品版本仍是 2.1.4，归档名不变。
+构建候选时传 `--release-tag v2.1.4-rc.1`，脚本、安装器、清单和 Formula URL 均绑定该候选标签。
+重复输出目录、已有标签或已有资产拒绝覆盖。候选通过后，从同一审核源码生成稳定标签的交付资产；
+稳定版发布和 Tap 更新仍需实际验收，不能把候选 Formula 推到公共稳定 Tap。
 
 离线测试在独立临时目录中验证发行包及实际 Formula 的安装方法、模拟 Cellar 启动器、
 路径含空格、相对项目参数、CDPATH/PATH 保留和显式解释器约束；测试不改 PATH、
@@ -134,10 +145,11 @@ bash lib/python_runtime.sh -B -X utf8 -I packaging/build_release.py 2.1.4 --outp
    `Geoege-xll/agent-workflow`。`.gitignore` 排除本地备份、缓存及 `dist/`。
 2. 在源码仓库的 **Actions → Validate and prepare release → Run workflow** 输入与 `product/VERSION` 一致的版本 `2.1.4`
    （不带 `v`），并选择希望发布的分支。工作流先执行 macOS/Linux 的 `ci` 组合及同提交的可复用 Windows Server 完整门禁，
-   两者成功后才构建三份产物，
-   然后创建 **Draft Release**；它不会自动公开 Release，也不会推送 Tap。
-3. 核对 Draft 的目标提交、压缩包、校验文件和 `awf-cli.rb` 后，再手动发布 Release。
-   同名标签若指向另一个提交则拒绝，已有 Release/资产也不会自动替换。
+   两者成功后才构建六份产物。`release_tag` 留空时创建稳定标签的 **Draft Release**，不会公开或推送 Tap；
+   指定与产品版本匹配的 `vX.Y.Z-rc.N` 时，创建可匿名下载的 prerelease，且不设为 Latest，用于真实安装验收。
+3. 发布前核对审查结果、目标提交、归档与校验文件、Formula、Windows 安装器、脚本及交付清单。
+   标签由明确的提交原子创建，已有标签或 Release 一律拒绝，不覆盖资产。候选验收失败后使用新的 rc 标签，不能移动旧标签。
+   Win11 真机通过后才按稳定标签构建并审核公开稳定 Release；原候选保留自身身份，不改写成稳定版。
 4. 从该 Release 下载 `awf-cli.rb`，将其作为公开仓库 `Geoege-xll/homebrew-tap`
    的 `Formula/awf-cli.rb` 更新、提交并推送。
    应使用该 Release 同一次构建的 Formula，不混用其他本地构建的校验值。

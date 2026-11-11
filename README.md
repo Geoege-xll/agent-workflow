@@ -53,5 +53,5 @@ awf-dev --version
 Windows 目标为 **Windows 11 x64、PowerShell 7+、CPython 3.11+、本地 NTFS**；使用同一发行归档中的
 Python／PowerShell／cmd 原生入口，TUI 另需锁定的 `windows-curses==2.4.2`。受管 Skill 需要实际软链权限。
 Windows Server 原生检查与 Win11 普通用户桌面验收分别记录；当前 Win11 桌面与 Codex App 原生会话／CUA
-仍未验收，不能把载荷存在或 Server 检查当作全平台通过。未发布的 npm／npx 渠道保持移除，不新增安装渠道。
+仍未验收，不能把载荷存在或 Server 检查当作全平台通过。未发布的 npm／npx 渠道保持移除。Windows 新候选提供 curl 下载引导与私有环境安装，目标资产、前置和验收边界见[使用手册](docs/usage.md#curl-下载与中央安装候选入口)。
 完整支持与恢复边界见[使用手册](docs/usage.md#支持范围与安装保护)。
