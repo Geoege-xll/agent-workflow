@@ -29,7 +29,7 @@
 
 TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run及tui_support.py的Layout/Theme/TextInput/draw_frame作为冻结生产基线，工程与设计规范均适用。本轮没有新的视觉或交互选择，不创建原型或修改设计标准；实际UI及可访问性证据仍需独立QA。
 
-实施职责：原生探针/测试入口 → 文件系统原语与进程后端 → 中央库/事务/薄桥接入 → TUI/原生整体验收/使用说明 → 单一独立QA。后续验证入口由独立写者伴随库/整体阶段接入，始终维护同一个Python清单；已完成探针检查点不随下游验证改写。下游仅在前置接口与证据冻结后开始。所有生产写者为独立交接的xy-backend实例，规划分析不复用为实施实例。
+实施职责：原生探针/测试入口 → 文件系统原语与进程后端 → 中央库/事务/薄桥接入 → TUI/原生整体验收/使用说明 → 单一独立QA。后续验证入口由独立写者伴随库/整体阶段接入，始终维护同一个Python清单；已完成探针检查点不随下游验证改写。下游仅在前置接口与证据冻结后开始。所有生产写者按后端职责独立交接；源码仓开发使用支持无中央绑定的职责实例，已绑定业务项目使用xy-backend实例，规划分析不复用为实施实例。
 
 首先在真实Windows记录目录flush、创建软链权限、ACL、ChangeTime、本地卷、句柄移动/删除等能力。调用成功不等于已证明耐断电；若现有持久化假设不成立，先记录真实错误和可验证方案，不静默删除屏障或虚报支持。
 
@@ -42,13 +42,9 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 两处已审职责整理减少重复工作：directory未消费的stat由原子目录守卫唯一负责；App.apply_project的writer返回后，状态列表和选中Context共用父read_operation。跨pin独立、PowerShell fresh探针、完整来源／安全／退出尾验保持。真实App同pin2scan／4verify→1／2，双pin4／8→2／4，完整数据和私有夹具bytes相等；三个真实tail漂移拒交Context并保已完成写入、journal和旧草稿。调用数减少不等于时延已验收。
 
-当前候选3b5e152／tree84d3323的完整运行[42783756527](https://github.com/Geoege-xll/agent-workflow/actions/runs/42783756527)已结束，实际PR合并bd424a3与候选同树。macOS／Linux与Windows9/10组件通过，包括中央生命周期、边界12项、准入41项、原语库76项、入口及ConPTY。该次完整matrix collector在私有venv按原hash／binary锁准备依赖后真实收集156方法；该次普通桌面153方法，明确排除提升专项3项，严格拒绝所选节点skip／未执行。
+当前源码候选为 ccd8ba9e102d511b0a1740deea406a86d908e51c，tree 5b8aee01990578186b467ac2f185ae0bb261b27e。完整运行 [42799003531](https://github.com/Geoege-xll/agent-workflow/actions/runs/42799003531) 已通过 macOS、Linux 与 Windows Server 门禁；PR 合并 checkout 与候选同树。Windows 组件 10 个、实际方法 167 个；普通桌面范围排除提升专项 3 个，为 164 个。原 TUI 等待／屏幕判据问题已修复，动作响应、业务结算与进程回收仍是独立合同，不以防挂上限冒充性能指标。
 
-TUI5方法仍有2失败、1错误：项目首保存结果观察30.062秒后超时，末次worker在refresh外层尾验，不能据此认定业务写入失败；双pin App Future等待20秒超时，缺最终计数，不能补记成功；全局第二次恢复因重复toast在字段仍为high时提前通过，后续保存按键实际消费未知。全局首保存、同pin App正控、tail负控及Unicode／模式恢复已有本轮原生通过证据。51／51留存frames与唯一可用final均明确phase_profile disabled，另外两final缺失，不能补终态／恢复断言。
-
-原唯一Reviewer已核清20／30秒是测试等待而非生产Job或用户指定SLA；生产Job异步结算、单次子进程60秒、PowerShell fresh探针5秒及Hook内部12秒／宿主15秒属于独立合同。原TUI owner已修正本次角色字段／来源的真实屏幕判据，区分动作响应、有限业务结算和测试进程回收；同一Reviewer确认原源码Important均闭合并允许精确运输。新测试合同已在复验前冻结并由原Reviewer核可实施条件：5秒动作响应与60秒结算共用输入起点，保留30秒处状态与实际耗时；原CLI仅对两App方法复用已有Windows Job owner进行600秒执行监督。600秒不承诺内核回收墙钟上界，超时／未知始终失败、保留现场；最终屏幕和业务文件断言保持。此为验证修订，统一源码已按原CLI完成13项消费验证，11.512秒exit0（受监督App2项、父runner11项），最新collector实际为10组件／167方法、普通桌面164方法／排除提升3项；实际Windows复验及最终QA仍待，不把结算／防挂上限当性能通过。观察器全调用profile仅显式opt-in，默认不绑定、不触碰profiler，不再用它推断纯业务性能。
-
-实现、原始失败、完整日志、冻结源及同一 Reviewer 的审查记录保存在请求 upgrade-214-20261109 临时区和 Git 历史；计划只保留当前契约与恢复入口。临时诊断 workflow 从未进入候选或发行载荷，npm／npx 不恢复。用户已明确先完成开发和 CI；Win11 普通用户真机暂缓，最终统一 QA 与正式发布仍待，Server CI 不提升为 Win11 桌面验收。
+该候选已完成开发与 CI 阶段的独立 QA；原始日志、观察帧、最终状态、可重复构建及消费证据位于请求 upgrade-214-20261109 的 candidate-ccd8ba9-* 记录。Windows Server 结果不替代 Win11 普通用户真机与 Codex App 人工观察。后续新增 curl 安装入口仅复用仍适用的证据，对新资产、下载与安装路径补齐原生验证；未通过真机前不宣称 Windows 已验收。
 
 ## 验收结果与当前已交付行为
 
@@ -57,4 +53,25 @@ TUI5方法仍有2失败、1错误：项目首保存结果观察30.062秒后超�
 ## 批准依据与必要证据
 
 - 批准依据: 用户要求原生 Windows11 x64/PowerShell7+ 适配，曾暂停后已明确恢复，并授权完成后发布新版本和升级本机；补充要求必要重构、健壮易维护和依据三平台最新官方规范。生产交新子代理、独立 QA、保留资料和现有修复；布局与流程已定版，当前仅原生平台适配。
-- 验收证据: 原始运行、修复与同一Reviewer的源审分别保留，最新完整结果见42783756527（Mac/Linux与Windows9/10组件通过，TUI5方法仍有2失败和1错误）。测试同步／等待合同修复后的真实Windows复验、Win11普通用户桌面及最终QA尚待；准确命令、环境、stdout/stderr与退出码以原日志为准，不以计划、模拟、部分通过或插桩数据替代整体验收。
+- 验收证据: ccd8ba9 的开发与 CI 阶段见运行 42799003531；Win11 普通用户真机仍待。curl 新入口的验证必须绑定组合后的实际源码与资产，不能直接沿用旧候选成功。
+
+## curl 下载入口补充（2026-11-11）
+
+用户在下载方案讨论后明确“开始”，批准直接实施。沿用本主题，工程与只读独立 QA 继续，TUI 布局不变，无原型任务。
+
+目标：Windows11 x64 普通用户 PowerShell7+ 通过 curl.exe 下载固定候选/稳定资产，使用现有 CPython3.11+ 与 Node20+，私有 venv，复用中央 runtime install/activate。无 npm/npx、WinGet、EXE、自动下载解释器、全局PATH/profile/ExecutionPolicy修改。
+
+安装协议：独立确定性 pyz 包含同源最小SDK和 lib/install/windows_installer.py；PS执行已校验的同一字节而不重新信任路径。引擎入口 --archive PATH --archive-sha256 HEX --version X.Y.Z --install-root ABS [--state-dir ABS] [--host-home ABS] [--json]；引擎 main(argv=None)。默认程序目录 LOCALAPPDATA/AgentWorkflow，版本摘要目录 payload/venv，bin/awf-cli.ps1与cmd。独立核心状态仍用现有服务。venv在最终物理路径创建，禁迁移。
+
+解压同一已校验流，拒绝逃逸/链接/特殊项/Windows名称别名/重复；每成员和总量设预算，逐项复用锚定SDK，不使用extractall。依赖按原requirements-windows.txt hash/binary锁；子进程复用现有Job/process所有者。
+
+程序环境就绪→物理payload CLI runtime install→activate dry-run→activate→受管launcher条件发布。激活开始后失败/未知保留现场，不盲删解释器或回滚中央；未知目录/入口不覆盖。重复与升级保留旧版和任务pin，诚实报告阶段/退出码。
+
+build(source,version,output)原3元组返回保持；扩展可选 release_tag，允许vX.Y.Z及vX.Y.Z-rc.N，产品VERSION仍2.1.4。资产tar.gz→pyz→PS→manifest单向依赖，无自引用hash。manager/release.json严格原两字段，不塞交付身份。
+
+验收延用scripts/test_workflow.py唯一组件清单，新增真实Windows交付消费测试。Mac静态/纯逻辑不能冒充Windows。原Git完整验收不替换为ZIP模拟。
+
+
+先并行完成引擎与交付资产，再接原生消费测试／CI，冻结组合候选后由单一独立 QA 审查。候选使用不可变 rc 标签，公开候选资产可下载后进入 Win11 普通用户真机验收；真实验收通过前不发布稳定版、不声称 Win11 已通过。
+
+原候选 ccd8ba9 的开发与 CI 阶段已通过，真实运行见 https://github.com/Geoege-xll/agent-workflow/actions/runs/42799003531 。原 Windows 167 方法、普通桌面 164 方法为旧候选证据，新下载入口需新增原生消费验证；保留原 Git 源码完整验收。Mac 本机仍为先前 2.1.4 候选，不能称为最终版本。
