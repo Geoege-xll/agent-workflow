@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import venv
@@ -278,6 +279,38 @@ class InstallationTransactionTest(unittest.TestCase):
             with self.assertRaisesRegex(installer.InstallerError, "已有版本目录未完成"):
                 installer.install(self.args)
         self.assertEqual("不能覆盖", user_file.read_text())
+
+    def test_nonprivate_install_root_is_refused_before_any_managed_write(self):
+        # 便携宿主只替换真实 ACL 的判定结果，验证 SDK 适配和写入顺序；
+        # Everyone ACE 的真实拒绝、原 owner/DACL 保留由 Windows 消费测试证明。
+        root = self.args.install_root
+        root.mkdir(mode=0o777)
+        root.chmod(0o777)
+        refusal = ValueError("private Windows node requires current-user/SYSTEM protected DACL")
+        with patch.object(installer, "os", SimpleNamespace(name="nt")):
+            with patch("lib.windows_fs.assert_private", side_effect=refusal) as native_assert:
+                with self.assertRaisesRegex(ValueError, "protected DACL"):
+                    installer._require_private_install_root(root)
+                native_assert.assert_called_once_with(root)
+        before = root.stat()
+        archive_before = self.archive.read_bytes()
+        with patch.object(installer, "_require_private_install_root", side_effect=refusal) as guard:
+            with patch.object(installer, "directory_lock") as lock, patch.object(installer, "_write") as write:
+                with self.assertRaisesRegex(installer.InstallerError, "protected DACL") as caught:
+                    installer.install(self.args)
+                guard.assert_called_once_with(root)
+                lock.assert_not_called()
+                write.assert_not_called()
+        self.assertEqual("preflight", caught.exception.phase)
+        self.assertEqual(2, caught.exception.exit_code)
+        self.assertIsNone(caught.exception.retained)
+        self.assertEqual([], list(root.iterdir()))
+        after = root.stat()
+        for field in ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_mtime_ns", "st_ctime_ns"):
+            self.assertEqual(getattr(before, field), getattr(after, field))
+        self.assertFalse(self.args.state_dir.exists())
+        self.assertFalse(self.args.host_home.exists())
+        self.assertEqual(archive_before, self.archive.read_bytes())
 
     def test_actual_source_cli_readonly_install_envelope(self):
         # 真正消费仓库 CLI 的只读 inspect，不向实际中央状态、宿主或项目安装。
