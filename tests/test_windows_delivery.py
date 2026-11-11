@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import ctypes
 from functools import partial
+import gzip
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -16,11 +18,13 @@ import shutil
 import ssl
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
 import unittest
 import uuid
+import zipfile
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -49,6 +53,30 @@ def initial_tui_read_settled(raw):
     header = raw.find(b"awf-cli")
     settled = raw.find("✔ 已读取预览 / 状态，尚未写入".encode("utf-8"))
     return header >= 0 and settled > header
+
+
+def upgrade_archive_bytes(data, version):
+    """从本次真实归档快照派生最窄升级夹具；不落地源码或改变生产版本。"""
+    target = f"agent-workflow-{version}/product/WORKFLOW.md"
+    output, changed = io.BytesIO(), False
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as source:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as destination:
+                for member in source:
+                    if not (member.isdir() or member.isfile()):
+                        raise ValueError("升级夹具只接受正式归档中的普通成员")
+                    body = source.extractfile(member).read() if member.isfile() else None
+                    if member.name == target:
+                        if changed or body is None:
+                            raise ValueError("升级资源必须是唯一的普通文件")
+                        # product 是真实 core 清单的一部分；只追加无行为注释，使
+                        # 内容 ID 改变，SDK/代码/VERSION/严格 release.json 均保持原字节。
+                        body += b"\n<!-- awf-curl upgrade fixture: no behavior change -->\n"
+                        member.size, changed = len(body), True
+                    destination.addfile(member, io.BytesIO(body) if body is not None else None)
+    if not changed:
+        raise ValueError("真实归档缺少升级夹具资源 product/WORKFLOW.md")
+    return output.getvalue()
 
 
 class ReleaseWorkflowPortableTest(unittest.TestCase):
@@ -263,6 +291,10 @@ try {
                       "product_version": self.version, "release_tag": self.tag,
                       "archive": self.archive.name, "archive_sha256": self.fields["ARCHIVE_SHA256"],
                       "pyz": self.pyz.name, "pyz_sha256": self.fields["PYZ_SHA256"]}}
+        if hasattr(self, "fixture_derivation"):
+            # source_sha 仅是原始快照来源；第二包的真实内容由新摘要及固定派生
+            # 说明绑定，不能误标成首包字节或暗示公开发布的候选已被修改。
+            record["delivery_identity"]["fixture_derivation"] = self.fixture_derivation
         if hasattr(result, "raw_stdout"):
             record.update(stdout_base64=base64.b64encode(result.raw_stdout).decode("ascii"),
                           stderr_base64=base64.b64encode(result.raw_stderr).decode("ascii"))
@@ -558,6 +590,95 @@ exit $LASTEXITCODE
                     "security": {name: {"identity": observation["identity"], "sha256": observation["security"]}
                                  for name, observation in before_security.items()}}, ensure_ascii=False), flush=True)
 
+    def prepare_upgrade_assets(self):
+        from lib.runtime_store import CORE_DIRECTORIES
+        self.assertIn("product", CORE_DIRECTORIES, "修改的资源必须实际参与核心身份")
+        original = self.archive.read_bytes()
+        data = upgrade_archive_bytes(original, self.version)
+        digest = hashlib.sha256(data).hexdigest()
+        self.assertNotEqual(self.fields["ARCHIVE_SHA256"], digest)
+        tag = f"v{self.version}-rc.2"
+        self.release.release_identity(self.version, tag)
+        pyz = self.release.installer_bytes(data, self.version, digest)
+        prefix = f"agent-workflow-{self.version}/"
+        with tarfile.open(fileobj=io.BytesIO(original), mode="r:gz") as before, \
+                tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as after, \
+                zipfile.ZipFile(io.BytesIO(pyz)) as installer:
+            self.assertEqual(before.getnames(), after.getnames())
+            changed = [item.name for item in after if item.isfile()
+                       and before.extractfile(item.name).read() != after.extractfile(item).read()]
+            self.assertEqual([prefix + "product/WORKFLOW.md"], changed)
+            self.assertEqual(before.extractfile(prefix + "product/VERSION").read(), after.extractfile(prefix + "product/VERSION").read())
+            metadata = after.extractfile(prefix + "manager/release.json").read()
+            self.assertEqual(before.extractfile(prefix + "manager/release.json").read(), metadata)
+            self.assertEqual({"schema_version": 1, "version": self.version}, json.loads(metadata))
+            self.assertEqual(set((*self.release.WINDOWS_INSTALLER_FILES, "__main__.py")), set(installer.namelist()))
+            for name in self.release.WINDOWS_INSTALLER_FILES:
+                self.assertEqual(after.extractfile(prefix + name).read(), installer.read(name), "升级 pyz SDK 必须来自同一 tar 快照")
+        directory = self.assets / "upgrade"
+        directory.mkdir()
+        archive = directory / self.archive.name
+        installer = directory / f"agent-workflow-windows-{tag}.pyz"
+        for path, body in ((archive, data), (installer, pyz)):
+            with path.open("xb") as stream:
+                stream.write(body)
+        fields = {"VERSION": self.version, "RELEASE_TAG": tag,
+            "ARCHIVE_NAME": archive.name, "ARCHIVE_SHA256": digest,
+            "PYZ_NAME": installer.name, "PYZ_SHA256": hashlib.sha256(pyz).hexdigest(),
+            "BASE_URL": self.fields["BASE_URL"] + "/upgrade"}
+        return archive, installer, fields
+
+    def upgrade_same_install(self, old_root, old_binding):
+        from lib import runtime_store
+        old_environment = self.snapshot(old_root)
+        old_receipt = (old_root / "install.json").read_bytes()
+        old_manifest = self.state / "runtimes" / old_binding["content_id"] / "manifest.json"
+        old_manifest_bytes = old_manifest.read_bytes()
+        original_digest = self.fields["ARCHIVE_SHA256"]
+        archive, installer, fields = self.prepare_upgrade_assets()
+        # 此方法位于正常方法最后；只切换当前 TestCase 的资产身份，第二个原生
+        # 方法仍从类的原始资产初始化。所有 upgrade execute/诊断记录因此均绑定
+        # 第二包，不沿用首包字段；同一 install-root/state/home 和 HTTPS owner 不变。
+        self.archive, self.pyz, self.fields, self.tag = archive, installer, fields, fields["RELEASE_TAG"]
+        self.fixture_derivation = {"base_archive_sha256": original_digest, "changed_member": "product/WORKFLOW.md",
+                                   "change": "append fixed behavior-free HTML comment"}
+        result = self.install_via_ps(self.render("upgrade"))
+        self.assertIn("/upgrade/" + archive.name, self.server.requests)
+        self.assertIn("/upgrade/" + installer.name, self.server.requests)
+        new_root = self.install / "versions" / (self.version + "-" + fields["ARCHIVE_SHA256"])
+        new_python, new_payload = new_root / "venv/Scripts/python.exe", new_root / "payload"
+        if result.returncode:
+            # 仅消费已保留的新物理载荷做只读诊断；不重试激活、不修冲突或修改
+            # 核心。实际 CID 由既有只读 SDK 算法读取，绝不按目录/摘要虚构 pin。
+            self.assertTrue(new_python.is_file() and (new_payload / "workflow.py").is_file(), result.stdout + result.stderr)
+            inspected = runtime_store.inspect_core(new_payload)
+            diagnostic = self.execute("upgrade-activate-preview-diagnostic", [str(new_python), "-I", "-B", "-X", "utf8",
+                str(new_payload / "workflow.py"), "--state-dir", str(self.state), "--host-home", str(self.home),
+                "runtime", "activate", inspected["content_id"], "--dry-run", "--json"])
+            self.fail("真实跨私有解释器升级失败；已保存只读预览诊断：\n" + result.stdout + result.stderr
+                      + "\n[diagnostic]\n" + diagnostic.stdout + diagnostic.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual((True, "complete", 0), (value["ok"], value["phase"], value["exit_code"]))
+        self.assertEqual(str(new_root), value["version_root"])
+        self.assertNotEqual(old_root, new_root)
+        self.assertNotEqual(old_binding["content_id"], value["runtime_binding"]["content_id"])
+        inspected = runtime_store.inspect_core(new_payload)
+        self.assertEqual(inspected["content_id"], value["runtime_binding"]["content_id"])
+        self.assertFalse(os.path.samefile(old_root / "venv/Scripts/python.exe", new_python))
+        launcher = self.install / "bin/awf-cli.ps1"
+        self.assertIn(str(new_python).replace("'", "''"), launcher.read_text(encoding="utf-8"))
+        version = self.execute("upgrade-launcher-version", [str(self.pwsh), "-NoLogo", "-NoProfile", "-File", str(launcher), "--version"])
+        self.assertEqual(0, version.returncode, version.stdout + version.stderr)
+        self.assertIn(str(new_payload), version.stdout)
+        status = self.execute("upgrade-runtime-status", [str(self.pwsh), "-NoLogo", "-NoProfile", "-File", str(launcher), "--json", "runtime", "status"])
+        self.assertEqual(0, status.returncode, status.stdout + status.stderr)
+        current = json.loads(status.stdout)["result"]
+        self.assertEqual(value["runtime_binding"], current["runtime_binding"])
+        self.assertTrue(current["new_task_allowed"])
+        self.assertEqual(old_environment, self.snapshot(old_root), "升级不得重建或删除旧私有环境")
+        self.assertEqual(old_receipt, (old_root / "install.json").read_bytes())
+        self.assertEqual(old_manifest_bytes, old_manifest.read_bytes())
+
     def tui_smoke(self, version_root):
         from tests.windows_conpty import ConPTYProcess
         self.assertEqual([], list(self.scan.iterdir()), "只读参数用例的临时项目必须先回收，TUI 使用正常空扫描根")
@@ -709,6 +830,7 @@ exit $LASTEXITCODE
         self.assertEqual(before[1], self.snapshot(self.state))
         self.reject_shared_empty_root(script, before)
         self.reject_untrusted_program_paths(script, before)
+        self.upgrade_same_install(version_root, value["runtime_binding"])
 
     def test_real_child_stdin_failure_retains_unknown_lifecycle_scene(self):
         failed = self.install_via_ps(self.render("stdin-fault", stdin_fault=True))
