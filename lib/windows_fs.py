@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from collections import namedtuple
+from functools import lru_cache
 import ctypes
 import hashlib
 import os as _os
@@ -108,6 +109,8 @@ def _api():
     security_prototypes = {
         "OpenProcessToken": (BOOL, [HANDLE, DWORD, ctypes.POINTER(HANDLE)]),
         "GetTokenInformation": (BOOL, [HANDLE, DWORD, HANDLE, DWORD, ctypes.POINTER(DWORD)]),
+        "LookupAccountNameW": (BOOL, [ctypes.c_wchar_p, ctypes.c_wchar_p, HANDLE, ctypes.POINTER(DWORD),
+                                      ctypes.c_wchar_p, ctypes.POINTER(DWORD), ctypes.POINTER(DWORD)]),
         "LookupPrivilegeValueW": (BOOL, [ctypes.c_wchar_p, ctypes.c_wchar_p, HANDLE]),
         "ConvertSidToStringSidW": (BOOL, [HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]),
         "ConvertStringSidToSidW": (BOOL, [ctypes.c_wchar_p, ctypes.POINTER(HANDLE)]),
@@ -544,6 +547,145 @@ def assert_private(path):
                     raise ValueError("private Windows node requires current-user/SYSTEM protected DACL")
         finally:
             _close(handle)
+
+
+@lru_cache(maxsize=1)
+def _trusted_path_sids(user_sid: str) -> frozenset[bytes]:
+    """只缓存进程用户对应的固定身份，不缓存可变 ACL 或路径准入结论。
+
+    完全限定服务名由 Windows 解析为精确 SID，不能信任所有 S-1-5-80 服务。
+    SID/域缓冲分别受标准 SID 最大长度和固定域名预算约束；失败不降级。
+    https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-lookupaccountnamew
+    """
+    sid, domain = ctypes.create_string_buffer(68), ctypes.create_unicode_buffer(256)
+    length, domain_length, kind = DWORD(68), DWORD(256), DWORD()
+    _check(_api().security.LookupAccountNameW(
+        None, "NT SERVICE\\TrustedInstaller", sid, ctypes.byref(length), domain,
+        ctypes.byref(domain_length), ctypes.byref(kind)))
+    if (not 8 <= length.value <= 68 or not _api().security.IsValidSid(sid)
+            or _api().security.GetLengthSid(sid) != length.value or domain.value.upper() != "NT SERVICE"):
+        raise ValueError("invalid bounded Windows TrustedInstaller identity")
+    return frozenset((_sid_bytes(user_sid), _sid_bytes("S-1-5-18"),
+                      _sid_bytes("S-1-5-32-544"), sid.raw[:length.value]))
+
+
+def _mapped_file_rights(mask: int) -> int:
+    """按官方文件映射展开 generic bits，不能把 GENERIC_WRITE 误判为无写权限。"""
+    result = mask & 0x0FFFFFFF
+    for generic, mapped in ((0x80000000, 0x120089), (0x40000000, 0x120116),
+                            (0x20000000, 0x1200A0), (0x10000000, 0x1F01FF)):
+        if mask & generic:
+            result |= mapped
+    return result
+
+
+def _untrusted_path_policy(owner: bytes, control: int, acl: bytes, *, trusted: frozenset[bytes],
+                           directory: bool, managed: bool) -> str | None:
+    """保守证明有效危险 grant 不属于外部主体，不实现任意 token/组关系求解器。
+
+    所有实际节点分别检查，IO ACE 不控制当前节点；只用同 SID 的前置 deny
+    扣减其后 allow，绝不以组名猜成员关系。Everyone 默认不包含 Anonymous，
+    因而也不能当作可抵消任意 SID grant 的万能 deny。未知条件/object ACE
+    失败关闭，不能把无法解释的安全描述符当作安全；不排序原 ACE。
+    https://learn.microsoft.com/en-us/windows/win32/secauthz/order-of-aces-in-a-dacl
+    https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp/628ebb1d-c509-4ea0-a10f-77ef97ca4586
+    """
+    try:
+        _canonical_security(owner, control, acl)
+    except (TypeError, ValueError):
+        return "unsupported ACL"
+    if owner not in trusted:
+        return "owner"
+    # 文件：data/append/EA/attributes + DELETE/WRITE_DAC/WRITE_OWNER。
+    # 目录还检查 DELETE_CHILD；managed_root 内的创建权也能植入导入模块。
+    # 外部祖先的纯创建新兄弟权不授权替换既有路径，正常系统盘根允许该权限。
+    # https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants
+    danger = 0xD0116 if not directory else 0xD0156 if managed else 0xD0150
+    denied, offset = {}, 8
+    owner_rights = bytes.fromhex("010100000000000304000000")
+    for _ in range(int.from_bytes(acl[4:6], "little")):
+        size = int.from_bytes(acl[offset + 2:offset + 4], "little")
+        ace, offset = acl[offset:offset + size], offset + size
+        if ace[1] & 0x08:  # INHERIT_ONLY_ACE 不影响当前对象；实际后代另行检查。
+            continue
+        if ace[0] not in (0, 1) or ace[1] & ~0x1F or len(ace) < 16:
+            return "unsupported ACL"
+        sid, mask = ace[8:], int.from_bytes(ace[4:8], "little")
+        if (sid[0] != 1 or sid[1] > 15 or len(sid) != 8 + sid[1] * 4
+                or mask & ~0xF01F01FF):
+            return "unsupported ACL"
+        if sid == owner_rights:
+            sid = owner
+        effective = _mapped_file_rights(mask) & danger
+        if ace[0] == 1:
+            denied[sid] = denied.get(sid, 0) | effective
+        elif sid not in trusted and effective & ~denied.get(sid, 0):
+            return "permissions"
+    return None
+
+
+def assert_trusted_path(path, *, managed_root, allow_missing=False) -> None:
+    """只读守护程序路径全链及叶对象，排除其他普通用户的持久改写/替换能力。
+
+    managed_root 是调用者拥有的程序树边界，不是路径白名单：树内拒绝外部
+    创建权，树外祖先仍拒绝 DELETE/DELETE_CHILD/ACL-owner/属性 EA 写权限。
+    owner/有效危险写者仅为本人、SYSTEM、Builtin Administrators 和精确的
+    TrustedInstaller。管理员/本人主动改 ACL 不属于对不可信普通用户的保证。
+    allow_missing 只允许尚不存在的后缀；每个实际存在的祖先仍须检查，且本
+    API 不创建目录、不修复权限。Directory 活锚加前后 SD 核对覆盖判定期间。
+    父对象不能替代叶 ACL：BYPASS_TRAVERSE_CHECKING 允许穿过无遍历权限的父。
+    https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights
+    https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-deletefilew
+    """
+    if type(allow_missing) is not bool:
+        raise ValueError("trusted Windows path missing policy must be Boolean")
+    path, root = absolute_path(path), absolute_path(managed_root)
+    if not path.is_relative_to(root):
+        raise ValueError("trusted Windows path must be inside its explicit managed root")
+    def existing_prefix():
+        candidate = path
+        while True:
+            try:
+                return candidate, secure_os.lstat(candidate)
+            except FileNotFoundError:
+                if not allow_missing or candidate == Path(candidate.anchor):
+                    raise
+                candidate = candidate.parent
+
+    candidate, info = existing_prefix()
+    trusted = _trusted_path_sids(current_sid())
+
+    def check(handle, node, *, directory):
+        try:
+            before = _metadata(handle)
+            with _security_policy(handle) as policy:
+                reason = _untrusted_path_policy(policy.owner, policy.control, policy.acl_bytes,
+                                                 trusted=trusted, directory=directory, managed=node.is_relative_to(root))
+            after = _metadata(handle)
+        except ValueError as exc:
+            raise ValueError(f"untrusted Windows program path unsupported ACL: {node}") from exc
+        if after != before:
+            raise ValueError(f"untrusted Windows program path changed during check: {node}")
+        if reason:
+            raise ValueError(f"untrusted Windows program path {reason}: {node}")
+
+    directory = _stat.S_ISDIR(info.st_mode)
+    with Directory(candidate if directory else candidate.parent) as ancestors:
+        node = Path(ancestors.path.anchor)
+        for index, handle in enumerate(ancestors.handles):
+            if index:
+                node /= ancestors.path.parts[index]
+            check(handle, node, directory=True)
+        if not directory:
+            handle = _open_handle(candidate, READ_CONTROL | 0x80, sharing=SHARE_READ)
+            try:
+                check(handle, candidate, directory=False)
+            finally:
+                _close(handle)
+        # 缺失后缀的判断不能静默省略检查期间新出现的中间目录。调用方创建后
+        # 还须再次调用本守卫，检查从预检到 CREATE_NEW 之间可能出现的现存链。
+        if existing_prefix()[0] != candidate:
+            raise ValueError(f"untrusted Windows program path changed during check: {path}")
 
 
 def _handle_for_descriptor(descriptor, backend):

@@ -145,6 +145,52 @@ def native_skill_observation(path, skill_name):
             fs._close(handle)
 
 
+class TrustedPathPolicyTest(unittest.TestCase):
+    """仅纯 ACL 判定的便携负控，不替代下方真实 Win32 SID/SD/路径消费。"""
+
+    @staticmethod
+    def sid(authority, *parts):
+        return bytes((1, len(parts))) + authority.to_bytes(6, "big") + b"".join(part.to_bytes(4, "little") for part in parts)
+
+    @staticmethod
+    def acl(*entries):
+        body = b"".join(bytes((kind, flags)) + (8 + len(sid)).to_bytes(2, "little")
+                        + mask.to_bytes(4, "little") + sid for kind, flags, mask, sid in entries)
+        return b"\x02\0" + (8 + len(body)).to_bytes(2, "little") + len(entries).to_bytes(2, "little") + b"\0\0" + body
+
+    def test_effective_masks_inherit_only_owner_and_unknown_acl_fail_closed(self):
+        user, world = self.sid(5, 21, 7, 8, 9, 1001), self.sid(1, 0)
+        trusted = frozenset((user, self.sid(5, 18), self.sid(5, 32, 544)))
+        rows = [
+            ((0, 0, 0x80000000, world), True, True, None),
+            ((0, 8, 0x10000000, world), True, True, None),
+            ((0, 0, 4, world), True, False, None),
+            ((0, 0, 4, world), True, True, "permissions"),
+            ((0, 0, 0x40, world), True, False, "permissions"),
+            ((0, 0, 2, world), False, True, "permissions"),
+            ((0, 0, 0x40000000, world), False, True, "permissions"),
+            ((0, 0, 0xD0116, user), False, True, None),
+            ((9, 0, 2, world), False, True, "unsupported ACL"),
+            ((0, 0, 0x02000000, world), False, True, "unsupported ACL"),
+        ]
+        for entry, directory, managed, expected in rows:
+            with self.subTest(entry=entry, directory=directory, managed=managed):
+                self.assertEqual(expected, fs._untrusted_path_policy(user, 4, self.acl(entry),
+                    trusted=trusted, directory=directory, managed=managed))
+        self.assertEqual("owner", fs._untrusted_path_policy(world, 4, self.acl(),
+            trusted=trusted, directory=True, managed=False))
+
+    def test_only_same_sid_prior_deny_can_discharge_a_dangerous_grant(self):
+        user, world, anonymous = self.sid(5, 21, 1001), self.sid(1, 0), self.sid(5, 7)
+        trusted = frozenset((user,))
+        denied, allowed = (1, 0, 2, world), (0, 0, 2, world)
+        for entries, expected in (((denied, allowed), None), ((allowed, denied), "permissions"),
+                                  ((denied, (0, 0, 2, anonymous)), "permissions")):
+            with self.subTest(entries=entries):
+                self.assertEqual(expected, fs._untrusted_path_policy(user, 4, self.acl(*entries),
+                    trusted=trusted, directory=False, managed=True))
+
+
 @unittest.skipUnless(os.name == "nt", "requires actual native Windows local NTFS")
 class WindowsSafePrimitivesNativeTest(unittest.TestCase):
     def setUp(self):
@@ -179,6 +225,83 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             if descriptor.value:
                 fs._api().kernel.LocalFree(descriptor)
             fs._close(handle)
+
+    def test_trusted_program_path_checks_real_ancestors_io_and_leaf_without_permission_writes(self):
+        # 新守卫的正控必须落在真实可信用户链，不能因为 CI 的共享 _temp 不安全
+        # 而白名单该祖先。既有其他原语测试的临时根与权限策略不受此安排影响。
+        with tempfile.TemporaryDirectory(prefix="awf-trust-", dir=os.environ["LOCALAPPDATA"]) as temporary:
+            task = Path(temporary)
+            parent, root = task / "parent", task / "parent/program"
+            fs.secure_os.mkdir(parent, 0o700)
+            fs.secure_os.mkdir(root, 0o700)
+            leaf = root / "import.pth"
+            descriptor = fs.secure_os.open(leaf, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with fs.secure_os.fdopen(descriptor, "wb") as stream:
+                stream.write(b"owned fixture")
+
+            def policy(path, extra):
+                directory = path.is_dir()
+                handle = fs._open_handle(path, fs.READ_CONTROL | fs.WRITE_DAC | 0x80, directory=directory)
+                descriptor = fs.HANDLE()
+                try:
+                    sddl = f"D:P(A;OICI;GA;;;{fs.current_sid()})(A;OICI;GA;;;SY)" + extra
+                    fs._check(fs._api().security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                        sddl, 1, ctypes.byref(descriptor), None))
+                    self.assertEqual(0, fs._api().security.SetSecurityInfo(
+                        handle, 1, 0x80000004, None, None, fs._dacl(descriptor), None))
+                finally:
+                    if descriptor.value:
+                        fs._api().kernel.LocalFree(descriptor)
+                    fs._close(handle)
+
+            def snapshot(path):
+                handle = fs._open_handle(path, fs.READ_CONTROL | 0x80, directory=path.is_dir())
+                try:
+                    before = fs._metadata(handle)
+                    with fs._security_policy(handle) as observed:
+                        return before, observed.owner, observed.control, observed.acl_bytes
+                finally:
+                    fs._close(handle)
+
+            fs.assert_trusted_path(leaf, managed_root=root)
+            # 纯建兄弟目录不授权替换既有 program，不能误杀正常系统盘同类 ACL。
+            policy(parent, "(A;;0x4;;;WD)")
+            before = snapshot(parent)
+            fs.assert_trusted_path(leaf, managed_root=root)
+            self.assertEqual(before, snapshot(parent))
+            policy(parent, "(A;;0x40;;;WD)")
+            before = snapshot(parent)
+            for target in (leaf, root / "missing/child"):
+                with self.subTest(target=target), self.assertRaises(ValueError) as caught:
+                    fs.assert_trusted_path(target, managed_root=root, allow_missing=True)
+                self.assertEqual("untrusted Windows program path permissions: " + str(parent), str(caught.exception))
+            self.assertEqual(before, snapshot(parent))
+            self.assertFalse((root / "missing").exists())
+            policy(parent, "")
+            # IO 不约束当前对象；受保护的既有叶不接受父 IO ACE 的重新传播。
+            policy(root, "(A;OICIIO;GA;;;WD)")
+            fs.assert_trusted_path(root, managed_root=root)
+            fs.assert_trusted_path(leaf, managed_root=root)
+            policy(leaf, "(A;;0x2;;;WD)")
+            before = snapshot(leaf)
+            with self.assertRaises(ValueError) as caught:
+                fs.assert_trusted_path(leaf, managed_root=root)
+            self.assertEqual("untrusted Windows program path permissions: " + str(leaf), str(caught.exception))
+            self.assertEqual(before, snapshot(leaf))
+            self.assertEqual(b"owned fixture", leaf.read_bytes())
+            policy(leaf, "(D;;0x2;;;WD)(A;;0x2;;;WD)")
+            fs.assert_trusted_path(leaf, managed_root=root)
+            policy(leaf, "(A;;0x2;;;WD)(D;;0x2;;;WD)")
+            with self.assertRaisesRegex(ValueError, "untrusted Windows program path permissions"):
+                fs.assert_trusted_path(leaf, managed_root=root)
+            policy(leaf, "")
+            policy(root, "(A;;GW;;;WD)")
+            before = snapshot(root)
+            with self.assertRaises(ValueError) as caught:
+                fs.assert_trusted_path(leaf, managed_root=root)
+            self.assertEqual("untrusted Windows program path permissions: " + str(root), str(caught.exception))
+            self.assertEqual(before, snapshot(root))
+            print("NATIVE_TRUSTED_PATH: real user/system ancestry, pure-create/IO/same-SID deny, parent DELETE_CHILD and writable leaf; SD/identity unchanged", flush=True)
 
     def test_legacy_permission_copy_preserves_exact_dacl_or_rejects_inheritance_rewrite(self):
         """旧 copy 不得接受继承重算；原 ERROR 证据保留，新生产走 initial SD。"""

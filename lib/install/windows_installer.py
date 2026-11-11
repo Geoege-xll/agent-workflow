@@ -226,14 +226,18 @@ def _python(version_root: Path) -> Path:
     return version_root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
-def _prepare_environment(root: Path, runner: SetupRunner):
+def _prepare_environment(root: Path, runner: SetupRunner, install_root: Path):
     # venv 的配置和脚本包含绝对路径，必须直接在最终路径创建，不能先建 stage
     # 再重命名。任何中途失败都保留该目录；下次拒绝没有完整收据的目录。
     commands = [[sys.executable, "-I", "-B", "-X", "utf8", "-m", "venv", "--copies", str(root / "venv")],
                 [str(_python(root)), "-I", "-B", "-X", "utf8", "-m", "pip", "--isolated",
                 "--disable-pip-version-check", "install", "--require-hashes", "--only-binary=:all:",
                 "-r", str(root / "payload/requirements-windows.txt")]]
-    for command in commands:
+    for index, command in enumerate(commands):
+        if index:
+            # pip 首次执行新私有解释器前，检查全部 venv 叶（含 cfg/.pth/DLL），
+            # 不能用父目录私有或“刚创建”推断实际解释器及导入资源的 ACL 安全。
+            _require_trusted_tree(root / "venv", install_root=install_root)
         # capture_process 消费 ACTIVE_RUNNER 的共同预算和 Job 所有者，同时
         # 隔离 pip/venv 的过程输出，保证安装器 --json 的 stdout 只有结果信封。
         process = capture_process(command, env=_environment(), timeout=1200)
@@ -404,6 +408,46 @@ def _require_private_install_root(path: Path) -> None:
         assert_private(path)
 
 
+def _require_trusted_tree(path: Path, *, install_root: Path) -> None:
+    """权限判断属于 FS；这里只按程序所有权枚举实际目录和全部叶，不筛扩展名。"""
+    if os.name != "nt":
+        return
+    from lib.windows_fs import assert_trusted_path
+    assert_trusted_path(path, managed_root=install_root)
+    with Tree(path) as tree:
+        pending, count = [""], 0
+        while pending:
+            relative = pending.pop()
+            parent = tree.directory(relative)
+            for name in sorted(os.listdir(parent)):
+                validate_component(name)
+                child = relative + "/" + name if relative else name
+                assert_trusted_path(path / child, managed_root=install_root)
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(child)
+                count += 1
+                if count > MEMBER_COUNT_LIMIT:
+                    raise InstallerError("程序权限检查节点超过有界容量")
+
+
+def _require_trusted_program_paths(install_root: Path, version_root: Path) -> None:
+    """首个 mkdir 前及执行/发布前复核本安装器拥有的路径，不扩张到旧中央服务。"""
+    if os.name != "nt":
+        return
+    from lib.windows_fs import assert_trusted_path
+    for path in (install_root, install_root / ROOT_RECEIPT, install_root / "bin", install_root / "versions", version_root):
+        assert_trusted_path(path, managed_root=install_root, allow_missing=True)
+    for path in (install_root / "bin", version_root):
+        # 只有初始目录确实不存在才省略树遍历；存在的后缀、重解析点或不安全
+        # 叶不能因 allow_missing 被略过。后续新建由 SDK 排他创建并再次检查。
+        try:
+            os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        _require_trusted_tree(path, install_root=install_root)
+
+
 def install(args) -> dict:
     """执行程序安装；失败保留现场，绝不自行回退中央 current 或删除旧版本。"""
     phase, root = "preflight", None
@@ -425,8 +469,13 @@ def install(args) -> dict:
                     "archive_sha256": args.archive_sha256, "cli_options": options}
         launcher_bodies = _launcher_bodies(identity)
         data = _verified_archive(archive, args.archive_sha256)
+        version_path = install_root / "versions" / (args.version + "-" + args.archive_sha256)
+        _require_trusted_program_paths(install_root, version_path)
         with ExitStack() as stack:
             stack.enter_context(absolute_directory(install_root, create=True))
+            # CREATE_NEW 前的缺失预检不是永久授权；原锚内创建完成后再检查
+            # 全链，拒绝预检与创建之间才出现的不可信祖先，再开始任何受管写入。
+            _require_trusted_program_paths(install_root, version_path)
             _require_private_install_root(install_root)
             stack.enter_context(directory_lock(install_root, "windows-program-install"))
             tree = stack.enter_context(Tree(install_root))
@@ -460,7 +509,7 @@ def install(args) -> dict:
                 phase = "environment"
                 version_tree.check()
                 version_tree.directory("venv", create=True)
-                _prepare_environment(root, runner)
+                _prepare_environment(root, runner, install_root)
                 record = {"schema_version": 1, "version": args.version, "archive_sha256": args.archive_sha256,
                           "phase": "environment_ready", "files": files, "cli_options": options}
                 record_node = _write(version_tree, VERSION_RECEIPT, json_bytes(record))
@@ -480,9 +529,11 @@ def install(args) -> dict:
                 raise InstallerError("私有解释器不是普通文件")
             phase = "runtime_install"
             tree.check(); version_tree.check()
+            _require_trusted_program_paths(install_root, root)
             result = _cli(root, options, ["runtime", "install", str(root / "payload")])
             binding = validate_binding(result.get("runtime_binding"))
             phase = "activate_preview"
+            _require_trusted_program_paths(install_root, root)
             preview = _cli(root, options, ["runtime", "activate", binding["content_id"], "--dry-run"], dry_run=True)
             if preview.get("can_apply") is not True or preview.get("runtime_binding") != binding:
                 raise InstallerError("中央激活预览存在冲突或版本不一致")
@@ -491,6 +542,7 @@ def install(args) -> dict:
             phase = "activation_started"
             record.update(phase=phase, cli_options=options)
             record_node = _write(version_tree, VERSION_RECEIPT, json_bytes(record), expected=record_node)
+            _require_trusted_program_paths(install_root, root)
             applied = _cli(root, options, ["runtime", "activate", binding["content_id"]])
             if (applied.get("new_task_allowed") is not True or applied.get("management_write_allowed") is not True
                     or applied.get("pending_activation") is not None or applied.get("issues") != []
@@ -499,6 +551,7 @@ def install(args) -> dict:
             record["phase"] = "activated"
             record_node = _write(version_tree, VERSION_RECEIPT, json_bytes(record), expected=record_node)
             phase = "publish_launchers"
+            _require_trusted_program_paths(install_root, root)
             for name, body in launcher_bodies.items():
                 _write(tree, "bin/" + name, body, expected=before[name])
             record["phase"] = "complete"
