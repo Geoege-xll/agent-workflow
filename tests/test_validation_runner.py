@@ -302,6 +302,48 @@ class ExampleTest(unittest.TestCase):
         # 便携证据只证明首轮启动前拒绝的根因已修，不声称 PS/curl 已执行。
         self.assertIn("NO_PROXY=127.0.0.1,localhost", _environment_block(actual)[:].split("\0"))
 
+    def test_delivery_fixture_preserves_rendered_crlf_bytes_without_text_retranslation(self):
+        from tests import test_windows_delivery as delivery
+        spec = importlib.util.spec_from_file_location("delivery_line_ending_release", PACK / "packaging/build_release.py")
+        release = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(release)
+        original_read = release.source_file
+
+        def windows_checkout(source, relative):
+            # 只把真实两份模板的数据行尾变成 Windows Git checkout 的 CRLF；
+            # 仍执行真实渲染器和真实 fixture 写入方法，不启动或冒称 PowerShell。
+            return original_read(source, relative).replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+        consumer = delivery.WindowsDeliveryNativeTest("test_https_install_cli_repeat_and_failure_preservation")
+        consumer.release, consumer.scene, consumer.cert = release, self.root, self.root / "fixture-ca.pem"
+        consumer.fields = {"VERSION": "2.1.4", "RELEASE_TAG": "v2.1.4-rc.1",
+            "ARCHIVE_NAME": "fixture.tar.gz", "ARCHIVE_SHA256": "a" * 64,
+            "PYZ_NAME": "fixture.pyz", "PYZ_SHA256": "b" * 64, "BASE_URL": "https://127.0.0.1:1234"}
+        with patch.object(release, "source_file", side_effect=windows_checkout):
+            expected = release.render_windows_installer(PACK, consumer.fields, test_ca_path=str(consumer.cert))
+            # 显式使用 Windows 文本流的 newline 参数，在本机也真实复现旧写入：
+            # 已有 CRLF 再转换一次就成 CRCRLF，续行位置会因额外空行而约翻倍。
+            broken_path = self.root / "old-windows-text-write.ps1"
+            with broken_path.open("w", encoding="utf-8", newline="\r\n") as stream:
+                stream.write(expected.decode("utf-8"))
+            broken = broken_path.read_bytes()
+            self.assertIn(b"`\r\r\n        --max-redirs", broken)
+            actual = consumer.render("byte-preserved").read_bytes()
+            self.assertEqual(expected, actual)
+            self.assertNotIn(b"\r\r\n", actual)
+            for name, options in (("stdin-fault-bytes", {"stdin_fault": True}),
+                                  ("replace-cache-bytes", {"replace_cached_pyz": True})):
+                self.assertNotIn(b"\r\r\n", consumer.render(name, **options).read_bytes())
+        proof = {}
+        for name, body in (("rendered", expected), ("old_text_write", broken), ("fixed_fixture", actual)):
+            begin = body.index(b"    & $Curl --disable")
+            end = body.index(b"    if ($LASTEXITCODE", begin)
+            proof[name] = {"max_redirs_line": next(index for index, line in enumerate(body.decode("utf-8").splitlines(), 1) if "--max-redirs" in line),
+                           "crcrlf_count": body.count(b"\r\r\n"), "adjacent_raw": repr(body[begin:end])}
+        self.assertEqual(2 * proof["rendered"]["max_redirs_line"] - 1, proof["old_text_write"]["max_redirs_line"])
+        self.assertEqual(proof["rendered"]["max_redirs_line"], proof["fixed_fixture"]["max_redirs_line"])
+        print("[delivery line-ending proof] " + json.dumps(proof, ensure_ascii=False), flush=True)
+
     def test_native_python_entry_from_other_cwd_preserves_selection_and_rejection(self):
         # 同一 Python 文件是真正无 Bash 的入口；-I 下从带空格源码根和其他 cwd
         # 启动仍使用同一清单，验证错误子节点不会因父模块覆盖而被忽略。
