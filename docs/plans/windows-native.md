@@ -88,4 +88,6 @@ build(source,version,output)原3元组返回保持；扩展可选 release_tag，
 
 原生角色事务容量的真实原因已在[诊断运行 42974825962](https://github.com/Geoege-xll/agent-workflow/actions/runs/42974825962)确认：Windows 解释器路径变化会合法刷新三平台全部角色。对同一新载荷、核心、state 与 home，旧解释器两个预览均成功且没有角色变更；新解释器产生 21 个合法更新、零冲突，补偿预算 4,911,823B，真实 traceback 位于 `receipt_budget` 的 4MiB 检查。只释放已消费的 stage 副本仍达 4,603,698B，不能独立修复。
 
-当前实现将正文去重收口到纯 `lib/hosts/native_journal.py`，manager 保留原授权、完整 Node 校验及推进器；物理记录仍受 4MiB 限制，内存业务记录、公开归属与恢复引用保持原合同。组合源码 `a258f34` 的定向验证已通过纯 codec、完整角色刷新、两次持久中断、旧 wire1 恢复和未知编辑负控；这属于本地真实 POSIX 发布／补偿消费及 Windows 正文编译证据，不冒充原生 Windows 修复结果。原生精确注册增加三个纯 codec 方法，复用同一测试清单。真实旧控制器与桥的一次性取证、修复后的完整 CI 和原独立 QA 尚待，不能将诊断红证或旧成功记为当前发行通过。
+当前实现将正文去重收口到纯 `lib/hosts/native_journal.py`，manager 保留原授权、完整 Node 校验及推进器；物理记录仍受 4MiB 限制，内存业务记录、公开归属与恢复引用保持原合同。定向验证已通过纯 codec、完整角色刷新、两次持久中断、旧 wire1 恢复和未知编辑负控；物理 pretty JSON 在实际组装前另作流式预检，拒绝 compact 小而缩进放大的记录。纯用例归独立 `tests/test_native_journal.py`，原生精确注册三个方法，不导入 POSIX 夹具，复用同一测试清单。
+
+真实旧完整 `691a9bc` 的独立进程对照已取得有效 POSIX 证据：新程序完成回退后，旧桥 check 与旧 pin 读取通过；旧管理器验证／恢复新 wire2 明确拒绝、GC 保守保活，完整身份／内容快照保留；current 已发布但未结算时，旧管理器拒绝、新管理器可恢复。核心差异由真实角色 description 产生，未替换编译器或所有权。这些本地消费及 Windows 正文编译证据不冒充原生 Windows 修复结果。修复后的完整 CI 和原独立 QA 尚待，不能将诊断红证或旧成功记为当前发行通过；精确发行源码与最终门禁以本 PR／Release 的同源记录为准。
