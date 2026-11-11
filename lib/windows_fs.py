@@ -634,6 +634,19 @@ def _untrusted_path_policy(owner: bytes, control: int, acl: bytes, *, trusted: f
     return None
 
 
+def _trusted_path_metadata_equal(before, after, *, external_directory: bool) -> bool:
+    """只排除外部目录祖先的成员活动，不能把活动时间当成实体或权限身份。
+
+    同一活句柄的 volume/file-ID/mode/nlink 与完整 SD 仍须全等，前后也必须
+    仍是目录；reparse/type、owner/DACL 变化均不因时间投影被豁免。受管目录
+    与普通叶仍保留完整快照合同。本窄投影绝不改变通用 _metadata 或写入 CAS。
+    """
+    if external_directory:
+        return (_stat.S_ISDIR(before[0][2]) and _stat.S_ISDIR(after[0][2])
+                and before[0][:4] == after[0][:4] and before[1] == after[1])
+    return before == after
+
+
 def assert_trusted_path(path, *, managed_root, allow_missing=False) -> None:
     """只读守护程序路径全链及叶对象，排除其他普通用户的持久改写/替换能力。
 
@@ -674,7 +687,7 @@ def assert_trusted_path(path, *, managed_root, allow_missing=False) -> None:
             after = _metadata(handle)
         except ValueError as exc:
             raise ValueError(f"untrusted Windows program path unsupported ACL: {node}") from exc
-        if after != before:
+        if not _trusted_path_metadata_equal(before, after, external_directory=directory and not node.is_relative_to(root)):
             raise ValueError(f"untrusted Windows program path changed during check: {node}")
         if reason:
             raise ValueError(f"untrusted Windows program path {reason}: {node}")

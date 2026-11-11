@@ -233,6 +233,29 @@ class TrustedPathPolicyTest(unittest.TestCase):
                 else:
                     get_length.assert_not_called()
 
+    def test_external_ancestor_activity_comparison_keeps_security_and_managed_guards(self):
+        # 纯比较合同：只能证明字段分类，不声称执行过真实 Windows 的旧 guard。
+        identity = (7, 42, stat.S_IFDIR | 0o700, 1, 0, 10, 20)
+        before = identity, "a" * 64
+        activity = (*identity[:4], 4096, 11, 21), before[1]
+        self.assertTrue(fs._trusted_path_metadata_equal(before, activity, external_directory=True))
+        self.assertFalse(fs._trusted_path_metadata_equal(before, activity, external_directory=False))
+        for index, value in ((0, 8), (1, 43), (2, stat.S_IFDIR | 0o777), (3, 2),
+                             (2, stat.S_IFLNK | 0o777), (2, stat.S_IFREG | 0o600)):
+            changed = list(identity)
+            changed[index] = value
+            with self.subTest(index=index, value=value):
+                self.assertFalse(fs._trusted_path_metadata_equal(before, (tuple(changed), before[1]), external_directory=True))
+        self.assertFalse(fs._trusted_path_metadata_equal(before, (identity, "b" * 64), external_directory=True))
+        link = ((*identity[:2], stat.S_IFLNK | 0o777, *identity[3:]), before[1])
+        self.assertFalse(fs._trusted_path_metadata_equal(link, link, external_directory=True))
+        leaf = ((*identity[:2], stat.S_IFREG | 0o600, *identity[3:]), before[1])
+        for index in (4, 5, 6):
+            changed = list(leaf[0])
+            changed[index] += 1
+            with self.subTest(leaf_field=index):
+                self.assertFalse(fs._trusted_path_metadata_equal(leaf, (tuple(changed), leaf[1]), external_directory=False))
+
 
 @unittest.skipUnless(os.name == "nt", "requires actual native Windows local NTFS")
 class WindowsSafePrimitivesNativeTest(unittest.TestCase):
@@ -268,6 +291,62 @@ class WindowsSafePrimitivesNativeTest(unittest.TestCase):
             if descriptor.value:
                 fs._api().kernel.LocalFree(descriptor)
             fs._close(handle)
+
+    def test_trusted_external_ancestor_membership_activity_keeps_identity_and_security(self):
+        # 只在自有可信目录创建/关闭真实兄弟文件，不触碰 LocalAppData 自身。
+        # sampler 仍消费原始 Win32 HANDLE；没有改写返回快照或 stub 时间/ACL。
+        with tempfile.TemporaryDirectory(prefix="awf-ancestor-", dir=os.environ["LOCALAPPDATA"]) as temporary:
+            parent = Path(temporary) / "external"
+            root = parent / "program"
+            fs.secure_os.mkdir(parent, 0o700)
+            fs.secure_os.mkdir(root, 0o700)
+            leaf = root / "entry.py"
+            descriptor = fs.secure_os.open(leaf, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with fs.secure_os.fdopen(descriptor, "wb") as stream:
+                stream.write(b"owned entry")
+            native_metadata = fs._metadata
+            for directory, sibling, rejected in ((parent, parent / "sibling.tmp", False),
+                                                  (root, root / "managed-member.tmp", True)):
+                with self.subTest(managed=rejected), fs.Directory(directory) as anchor:
+                    target_id, trace = anchor.identity, {}
+
+                    def metadata(handle, *, link=False):
+                        actual = native_metadata(handle, link=link)
+                        if actual[0][:2] == target_id and "before" not in trace:
+                            trace["before"] = actual
+                            with fs._security_policy(handle) as policy:
+                                trace["sd_before"] = policy.owner, policy.control, policy.acl_bytes
+                            descriptor = fs.secure_os.open(sibling, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                            with fs.secure_os.fdopen(descriptor, "wb") as stream:
+                                stream.write(b"real directory membership change")
+                                stream.flush()
+                                fs.secure_os.fsync(stream.fileno())
+                            fs.flush_directory(directory)
+                            trace["after"] = native_metadata(handle)
+                            with fs._security_policy(handle) as policy:
+                                trace["sd_after"] = policy.owner, policy.control, policy.acl_bytes
+                        return actual
+
+                    with patch.object(fs, "_metadata", side_effect=metadata):
+                        if rejected:
+                            with self.assertRaises(ValueError) as caught:
+                                fs.assert_trusted_path(leaf, managed_root=root)
+                            self.assertEqual("untrusted Windows program path changed during check: " + str(root), str(caught.exception))
+                        else:
+                            fs.assert_trusted_path(leaf, managed_root=root)
+                    before, after = trace["before"], trace["after"]
+                    self.assertEqual(before[0][:4], after[0][:4])
+                    self.assertEqual(before[1], after[1])
+                    self.assertEqual(trace["sd_before"], trace["sd_after"])
+                    self.assertNotEqual(before[0][4:], after[0][4:], "真实成员活动未产生可观察字段差异，不能据此宣称回归通过")
+                    self.assertTrue(sibling.is_file())
+                    print("NATIVE_TRUSTED_ANCESTOR_ACTIVITY " + json.dumps({
+                        "managed": rejected, "guard_rejected": rejected,
+                        "before_identity": list(before[0]), "after_identity": list(after[0]),
+                        "before_security": before[1], "after_security": after[1], "raw_sd_unchanged": True,
+                        # 下项仅是旧全值条件对真实两快照的数学判定，不是旧代码红执行。
+                        "old_full_value_condition_would_reject": before != after, "old_guard_executed": False,
+                    }, sort_keys=True), flush=True)
 
     def test_trusted_program_path_checks_real_ancestors_io_and_leaf_without_permission_writes(self):
         # 新守卫的正控必须落在真实可信用户链，不能因为 CI 的共享 _temp 不安全
