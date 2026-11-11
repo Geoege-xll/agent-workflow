@@ -42,7 +42,7 @@ TUI为UI-Conformance：design_delta为none，复用manager/tui.py的App.draw/run
 
 两处已审职责整理减少重复工作：directory未消费的stat由原子目录守卫唯一负责；App.apply_project的writer返回后，状态列表和选中Context共用父read_operation。跨pin独立、PowerShell fresh探针、完整来源／安全／退出尾验保持。真实App同pin2scan／4verify→1／2，双pin4／8→2／4，完整数据和私有夹具bytes相等；三个真实tail漂移拒交Context并保已完成写入、journal和旧草稿。调用数减少不等于时延已验收。
 
-当前源码候选为 ccd8ba9e102d511b0a1740deea406a86d908e51c，tree 5b8aee01990578186b467ac2f185ae0bb261b27e。完整运行 [42799003531](https://github.com/Geoege-xll/agent-workflow/actions/runs/42799003531) 已通过 macOS、Linux 与 Windows Server 门禁；PR 合并 checkout 与候选同树。Windows 组件 10 个、实际方法 167 个；普通桌面范围排除提升专项 3 个，为 164 个。原 TUI 等待／屏幕判据问题已修复，动作响应、业务结算与进程回收仍是独立合同，不以防挂上限冒充性能指标。
+上轮冻结开发基线为 ccd8ba9e102d511b0a1740deea406a86d908e51c，tree 5b8aee01990578186b467ac2f185ae0bb261b27e。完整运行 [42799003531](https://github.com/Geoege-xll/agent-workflow/actions/runs/42799003531) 已通过 macOS、Linux 与 Windows Server 门禁；PR 合并 checkout 与候选同树。Windows 组件 10 个、实际方法 167 个；普通桌面范围排除提升专项 3 个，为 164 个。原 TUI 等待／屏幕判据问题已修复，动作响应、业务结算与进程回收仍是独立合同，不以防挂上限冒充性能指标。
 
 该候选已完成开发与 CI 阶段的独立 QA；原始日志、观察帧、最终状态、可重复构建及消费证据位于请求 upgrade-214-20261109 的 candidate-ccd8ba9-* 记录。Windows Server 结果不替代 Win11 普通用户真机与 Codex App 人工观察。后续新增 curl 安装入口仅复用仍适用的证据，对新资产、下载与安装路径补齐原生验证；未通过真机前不宣称 Windows 已验收。
 
@@ -75,3 +75,9 @@ build(source,version,output)原3元组返回保持；扩展可选 release_tag，
 先并行完成引擎与交付资产，再接原生消费测试／CI，冻结组合候选后由单一独立 QA 审查。候选使用不可变 rc 标签，公开候选资产可下载后进入 Win11 普通用户真机验收；真实验收通过前不发布稳定版、不声称 Win11 已通过。
 
 原候选 ccd8ba9 的开发与 CI 阶段已通过，真实运行见 https://github.com/Geoege-xll/agent-workflow/actions/runs/42799003531 。原 Windows 167 方法、普通桌面 164 方法为旧候选证据，新下载入口需新增原生消费验证；保留原 Git 源码完整验收。Mac 本机仍为先前 2.1.4 候选，不能称为最终版本。
+
+恢复入口为 [草稿 PR #1](https://github.com/Geoege-xll/agent-workflow/pull/1) 的 `codex/upgrade-2.1.4-20261109` 分支；主工作区原五处修改及交接文件不纳入本轮运输。curl 组合 495863f 的[完整运行 42956603721](https://github.com/Geoege-xll/agent-workflow/actions/runs/42956603721)实际通过三平台和 11 个 Windows 组件／170 方法，原生所选节点零 skip；Mac/Linux 各自有平台／文件系统 skip，不得写成三平台全部零 skip。该成功不直接授予发行资格：独立 QA 随后发现自定义程序路径的持久 ACL 信任缺口，作为本主题必修回归收口。
+
+安全职责固定为 `lib/windows_fs.py` 的只读可信路径原语，安装器复用，不在业务层复制 Win32／ACE 解析或修改既有 ACL。创建根之前检查所有现存祖先；受管根、bin、版本树、venv 与实际执行叶均按真实权限检查，pip 首用、CLI 调用及入口发布前重新核对。外部祖先纯创建新子项与删除／替换已有路径的权限明确区分；未知权限保守失败。真实原生负控覆盖弱根、私有根加不可信父目录 DELETE_CHILD、既有危险子目录及执行叶，核对零受管写入、ACL／身份和原正常程序／中央快照不变。受验程序位置必须本身可信，不对白名单 CI 路径放宽。
+
+守卫只对本安装器拥有的程序树签署结论；state／host 高级位置沿既有服务职责，用户预装 Python／Node 沿运行环境边界，不将本次程序路径修复描述成全部旧服务路径安全审计完成。最终修复须回原独立 QA 实例，核对实际组合源码、原生结果与完整门禁后才可发布可下载 rc；Win11 普通用户真机、公开 URL 消费及稳定发布仍各自留证。精确后续源码与运行号以该 PR 最终同源证据和对应 Release 为准，旧成功不得重新绑定为修复后成功。

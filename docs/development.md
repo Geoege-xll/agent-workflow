@@ -163,6 +163,9 @@ curl 下载入口由 `packaging/windows/` 的模板和构建器生成，生产�
 安装用 pyz 的最小 SDK 从同一次 tar 快照取字节；PowerShell 校验并以内存中的同一字节交给隔离 Python，
 归档验证、私有程序环境与受管入口归 `lib/install/windows_installer.py`，中央导入／激活仍调用物理载荷 CLI。
 安装程序生命周期记录只描述程序环境与入口，不替代中央 current、项目登记或任务 pin。
+Windows 程序路径的持久权限准入归 `lib/windows_fs.py`；安装器调用同一只读守卫检查祖先、
+受管目录及执行叶，不在业务层复制 ACE／SID 解析，也不把短期目录句柄锚误当成安装后的权限保证。
+守卫与原中央 state／宿主资源服务保持各自职责，不将程序树验证扩大描述为旧服务全路径安全通过。
 真实 HTTPS fixture 只通过内部渲染 API 注入测试 URL／临时 CA；生产没有镜像或关闭 TLS 的运行时选项。
 公开标签的实际下载消费仍需独立核对，本地 fixture 或解压模拟不能替代。
 前置、权限与当前未验收项见[原生 Windows 入口](usage.md#原生-windows-入口)。
