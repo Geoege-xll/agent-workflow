@@ -17,7 +17,7 @@ import uuid
 from lib import role_models, runtime_store
 from lib.central import role_preferences
 from lib.central.runtime_project import CAPACITY_IDENTITY, Node, Resources, Tree, absolute_directory, capacity_node_value, json_bytes, unique_json, read_at, identity, LIMIT, READ_FLAGS, move_at, publish_at, create_file_stage, seal_file_stage, read_sealed_stage, delete_at
-from lib.hosts import native_agents as native
+from lib.hosts import native_agents as native, native_journal
 from lib.hosts.native_context import HostPaths, NativeContext
 from lib.platform_fs import directory_lock, os
 from . import state_files
@@ -229,7 +229,7 @@ def _save(state: Path, journal: dict) -> None:
     relative = _journal_relative(journal["transaction_id"])
     with absolute_directory(state / "native-agents/transactions", create=True):
         pass
-    state_files.write_state(state, relative, json_bytes(journal))
+    state_files.write_state(state, relative, native_journal.encode(journal))
 
 
 def _moved_matches(actual: Node, expected: Node) -> bool:
@@ -354,6 +354,14 @@ def receipt_budget(plan: GlobalNativePlan) -> int:
     和补偿副本仅用于长度计算，最终只返回整数，不能冒充真实receipt/归属。
     按真实正文、固定名字长度和推进器每条目标最多一次逆操作计算，不按项目
     个数猜预留；两个metadata目标另外各有一次旧身份投影重建。
+
+    wire2 仅合并正文，不按未来 identity 合并 Node。角色 before/desired 的正文
+    已固定；旧 metadata 也是实际字节。新 owner/index 共用同一次 builder 的
+    payload，重建二者也共用同一角色恢复投影，这是可证明的同源去重。发生
+    更新的宿主，其新/旧角色正文不同，因而新 metadata 不会与旧像/恢复像因
+    CAPACITY 占位碰巧相等而合并；旧像与恢复像的 expected stat-mode 则分别
+    为真实模式与全宽容量占位，仍必不同。不同宿主由 host/path 字段分离。
+    未变宿主额外计入的 metadata 写入及恢复只扩大上界，不产生漏算。
     """
     if not isinstance(plan, GlobalNativePlan) or not plan.can_apply:
         raise ValueError("原生提案缺少可证明的容量预算")
@@ -404,7 +412,7 @@ def receipt_budget(plan: GlobalNativePlan) -> int:
         journal["status"] = "applied"
         receipt = _receipt(journal)
         journal["applied_evidence"] = receipt
-        json_bytes(journal)
+        native_journal.encode(journal)
         rollback = copy.deepcopy(journal)
         rollback["status"] = "compensated"
         rollback["compensations"] = []
@@ -431,7 +439,7 @@ def receipt_budget(plan: GlobalNativePlan) -> int:
             "宿主物理根已替换、链接化或删除"))
         rollback["conflicts"] = [{"root": root, "path": path, "type": "native_root_conflict", "reason": "x" * reason_bytes}
                                  for root, path in targets]
-        json_bytes(rollback)
+        native_journal.encode(rollback)
     # receipt不是单行：由生产者按与中央相同的嵌入深度计入缩进，避免单独
     # len(receipt)遗漏每行新增空格。中央只能消费增量数字，不复制本模块wire。
     return len(json_bytes({"native_receipt": receipt})) - len(json_bytes({"native_receipt": None}))
@@ -504,7 +512,7 @@ def _load_ref(recovery_ref, context: NativeContext) -> tuple[Path, dict | None]:
     node = native.read_node(state, _journal_relative(recovery_ref["transaction_id"]))
     if node.kind == "missing":
         return state, None
-    journal = unique_json(node.payload)
+    journal = native_journal.decode(node.payload)
     journal_keys = {"schema_version", "transaction_id", "recovery_ref", "status", "writes", "conflicts", "applied_evidence", "root_identities", "desired"}
     if (not isinstance(journal, dict) or set(journal) not in (journal_keys, journal_keys | {"compensations"})
             or journal["schema_version"] != 1 or journal["recovery_ref"] != recovery_ref
@@ -1098,7 +1106,8 @@ def referenced_bindings(state: Path) -> tuple:
                     if not name.endswith(".json") or "/" in name:
                         raise ValueError("原生记录含未知条目")
                     node = native.read_node(state, directory + "/" + name)
-                    value = unique_json(node.payload)
+                    value = (native_journal.decode(node.payload) if directory.endswith("transactions")
+                             else unique_json(node.payload))
                     if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 1:
                         raise ValueError("原生记录 schema 未知，不能判定 GC 引用")
         except FileNotFoundError:

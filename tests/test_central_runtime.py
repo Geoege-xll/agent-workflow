@@ -918,6 +918,7 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
 
     def test_native_budget_covers_owned_update_and_compensation(self):
         from manager import native_agents
+        from lib.hosts import native_journal
         native_agents.apply_global(native_agents.preview_global(self.state, self.core.binding(), context=self.context))
         plan = native_agents.preview_global(self.state, self.core.binding(), context=self.context,
                     preferences={"codex": {"xy-qa": {"model": "capacity-fixture-model"}}})
@@ -925,7 +926,7 @@ class CentralNativeIntegrationTest(RuntimeFixture, unittest.TestCase):
         saved_sizes = []
         save = native_agents._save
         def observe(state, journal):
-            saved_sizes.append(len(json_bytes(journal)))
+            saved_sizes.append(len(native_journal.encode(journal)))
             return save(state, journal)
         # 更改已经归属的真实角色，覆盖旧owner/index前像与身份投影重建；
         # 全程仍用正式producer发布/恢复，不把预算占位传给任何写入入口。

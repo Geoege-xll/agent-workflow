@@ -5,21 +5,93 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import copy
+import base64
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from lib import role_models, runtime_store
 from lib.central.runtime_project import CONFIG, Node, Resources, Tree, json_bytes, prepare
 from lib.hosts.native_context import HostPaths, NativeContext
-from lib.hosts import native_agents as native
+from lib.hosts import native_agents as native, native_journal
 from manager import native_agents
 from tests import test_workflow_manager as fixtures
+
+
+class NativeJournalCodecTest(unittest.TestCase):
+    def test_lossless_deterministic_shared_body_and_independent_containers(self):
+        for security in (None, "a" * 64):
+            node = Node("file", b"exact bytes\x00\xff", 0o600, (1, 2, 3, 1, 13, 5, 6)).value()
+            if security is not None:
+                node["security"] = security
+            logical = {"schema_version": 1, "first": node, "second": node}
+            with self.subTest(security=security):
+                encoded = native_journal.encode(logical)
+                wire = json.loads(encoded)
+                self.assertEqual(2, wire["schema_version"])
+                self.assertEqual(1, len(wire["bodies"]))
+                reordered = {key: (dict(reversed(list(value.items()))) if isinstance(value, dict) else value)
+                             for key, value in reversed(list(logical.items()))}
+                self.assertEqual(encoded, native_journal.encode(reordered))
+                restored = native_journal.decode(encoded)
+                self.assertEqual(logical, restored)
+                self.assertIs(restored["first"]["body"], restored["second"]["body"])
+                self.assertIsNot(restored["first"], restored["second"])
+                self.assertIsNot(restored["first"]["identity"], restored["second"]["identity"])
+                self.assertEqual(encoded, native_journal.encode(restored))
+                self.assertEqual(1, logical["schema_version"])
+                self.assertNotIn("body_ref", logical["first"])
+
+    def test_physical_limit_and_repeated_body_logical_limit_are_separate(self):
+        from lib.central.runtime_project import LIMIT
+        node = Node("file", b"x" * 600000, 0o600).value()
+        logical = {"schema_version": 1, "nodes": [node] * 9}
+        with self.assertRaises(ValueError):
+            json_bytes(logical)
+        encoded = native_journal.encode(logical)
+        self.assertLess(len(encoded), LIMIT)
+        self.assertEqual(logical, native_journal.decode(encoded))
+        # 物理表仍只有一份正文，扩大引用次数必须被独立的 RAM 展开界拒绝。
+        wire = json.loads(encoded)
+        wire["nodes"] *= 2
+        with self.assertRaises(ValueError):
+            native_journal.decode(json_bytes(wire))
+        with self.assertRaises(ValueError):
+            native_journal.encode({"schema_version": 1, "nodes": [node] * 18})
+        with self.assertRaises(ValueError):
+            native_journal.decode(b" " * (LIMIT + 1))
+        legacy = {"schema_version": 1, "legacy": {"body_ref": "not a v2 reference"}}
+        self.assertEqual(legacy, native_journal.decode(json_bytes(legacy)))
+
+    def test_malformed_references_tables_cycles_and_unknown_schema_fail_closed(self):
+        wire = json.loads(native_journal.encode({"schema_version": 1, "node": Node("file", b"one", 0o600).value()}))
+        candidates = []
+        for reference in (True, -1, 1, "0", None):
+            bad = copy.deepcopy(wire)
+            bad["node"]["body_ref"] = reference
+            candidates.append(bad)
+        for body in (wire["bodies"][0], base64.b64encode(b"unused").decode()):
+            candidates.append({**copy.deepcopy(wire), "bodies": [*wire["bodies"], body]})
+        candidates += [{**copy.deepcopy(wire), "bodies": ["not base64!"]},
+                       {**copy.deepcopy(wire), "bodies": [{}]},
+                       {**copy.deepcopy(wire), "schema_version": 3},
+                       {**copy.deepcopy(wire), "node": {**wire["node"], "unknown": True}},
+                       {**copy.deepcopy(wire), "node": Node("file", b"one", 0o600).value()}]
+        for index, bad in enumerate(candidates):
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                native_journal.decode(json_bytes(bad))
+        with self.assertRaises(ValueError):
+            native_journal.decode(b'{"schema_version":2,"schema_version":2,"bodies":[]}')
+        logical = {"schema_version": 1}
+        logical["cycle"] = logical
+        with self.assertRaises(ValueError):
+            native_journal.encode(logical)
 
 
 class NativeAgentsTest(unittest.TestCase):
@@ -70,6 +142,94 @@ class NativeAgentsTest(unittest.TestCase):
         row = next(row for row in journal["writes"] if row["path"] == "agents/xy-backend.toml")
         self.assertEqual("missing", native.read_node(self.paths.codex, row["path"]).kind)
         return plan, journal, row
+
+    def test_owned_full_windows_refresh_budget_and_recovery(self):
+        from lib.central import runtime_project
+        from lib.central.runtime_project import LIMIT
+        compile_role = native.compile_role
+        prefix = r"C:\Users\runneradmin\AppData\Local\awf-delivery-test-" + "a" * 32 + "\\程序 空格\\versions\\2.1.4-"
+
+        def windows_compiler(version):
+            def compile_current(*args, **kwargs):
+                # 只在已预载的纯角色编译器内使用 Windows 正文分支；所有权、
+                # 发布、补偿和日志均走本机真实生产路径，不宣称 Win32/ACL 取证。
+                with patch.object(runtime_project, "os", SimpleNamespace(name="nt")), patch.object(
+                        runtime_project.sys, "executable", prefix + version * 64 + r"\venv\Scripts\python.exe"):
+                    return compile_role(*args, **kwargs)
+            return compile_current
+
+        with patch.object(native, "compile_role", side_effect=windows_compiler("a")):
+            self.install()
+        originals = {(host, path): native.read_node(self.paths.root(host), path).payload
+                     for host, path, _ in self.preview().desired}
+        with patch.object(native, "compile_role", side_effect=windows_compiler("b")):
+            plan = self.preview()
+        self.assertTrue(plan.can_apply, plan.summary)
+        self.assertEqual([], plan.conflicts)
+        self.assertEqual(21, len(plan.summary["changes"]))
+        encode = native_journal.encode
+        projection_sizes = []
+
+        def observe_projection(journal):
+            encoded = encode(journal)
+            projection_sizes.append((len(json.dumps(journal, ensure_ascii=False, sort_keys=True, indent=2).encode()) + 1,
+                                     len(encoded)))
+            return encoded
+
+        with patch.object(native_journal, "encode", side_effect=observe_projection):
+            bound = native_agents.receipt_budget(plan)
+        self.assertGreater(max(logical for logical, _ in projection_sizes), LIMIT)
+        self.assertLessEqual(max(wire for _, wire in projection_sizes), LIMIT)
+        save, saved_sizes = native_agents._save, []
+        interruption = ["staged", "result"]
+
+        def observe_save(state, journal):
+            save(state, journal)
+            payload = native.read_node(state, native_agents._journal_relative(journal["transaction_id"])).payload
+            saved_sizes.append(len(payload))
+            self.assertEqual(2, json.loads(payload)["schema_version"])
+            self.assertEqual(journal, native_journal.decode(payload))
+            steps = journal.get("compensations", [])
+            if steps and interruption:
+                latest = steps[-1]
+                ready = (latest["staged"] is not None if interruption[0] == "staged" else latest["result"] is not None)
+                if ready:
+                    raise KeyboardInterrupt("fixture durable compensation " + interruption.pop(0))
+
+        with patch.object(native_agents, "_save", side_effect=observe_save):
+            receipt = native_agents.apply_global(plan)
+            actual = len(json_bytes({"native_receipt": receipt})) - len(json_bytes({"native_receipt": None}))
+            self.assertLessEqual(actual, bound)
+            self.assertEqual([], native_agents.verify_global(plan.recovery_ref, context=self.context))
+            # 同一真实逆操作先在 stage、再在 result 已持久后中断；恢复不得
+            # 追加另一份授权或吞掉隔离资料，第三次才完成全部条件清理。
+            for _ in range(2):
+                with self.assertRaises(KeyboardInterrupt):
+                    native_agents.recover_global(plan.recovery_ref, context=self.context)
+            recovered = native_agents.recover_global(plan.recovery_ref, context=self.context)
+        self.assertEqual("compensated", recovered["status"], recovered["conflicts"])
+        self.assertEqual("compensated", native_agents.recover_global(plan.recovery_ref, context=self.context)["status"])
+        self.assertLessEqual(max(saved_sizes), max(wire for _, wire in projection_sizes))
+        self.assertEqual(3, len(native_agents.verified_hosts(self.state, context=self.context)))
+        for (host, path), body in originals.items():
+            self.assertEqual(body, native.read_node(self.paths.root(host), path).payload)
+        print("native_full_windows_shape", {"largest_logical_projection": max(logical for logical, _ in projection_sizes),
+                                            "largest_wire_projection": max(wire for _, wire in projection_sizes),
+                                            "largest_real_wire": max(saved_sizes), "receipt_bound": bound})
+
+    def test_recovers_real_prepared_wire1_with_original_inode_evidence(self):
+        plan, journal, row = self.interrupted_missing_compensation()
+        path = self.state / native_agents._journal_relative(plan.transaction_id)
+        # 只把真实 prepared 日志转为旧 producer 的原 JSON 格式；宿主文件、
+        # retained/stage inode、ACL 与全部授权前像不作任何伪造或替换。
+        path.write_bytes(json_bytes(journal))
+        self.assertEqual(1, json.loads(path.read_bytes())["schema_version"])
+        recovered = native_agents.recover_global(plan.recovery_ref, context=self.context)
+        self.assertEqual("compensated", recovered["status"], recovered["conflicts"])
+        actual = native.read_node(self.paths.codex, row["path"])
+        self.assertEqual(Node.from_value(row["before"]).payload, actual.payload)
+        self.assertEqual(Node.from_value(row["before"]).security, actual.security)
+        self.assertEqual(2, json.loads(path.read_bytes())["schema_version"])
 
     def test_missing_compensation_retained_source_binds_original_write_and_restores(self):
         plan, journal, row = self.interrupted_missing_compensation()
@@ -358,7 +518,7 @@ class NativeAgentsTest(unittest.TestCase):
         self.assertEqual(target.read_bytes(), body)
         self.assertEqual(result["status"], "conflict")
         journal_path = self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")
-        journal = json.loads(journal_path.read_bytes())
+        journal = native_journal.decode(journal_path.read_bytes())
         self.assertTrue(any(row.get("path") == "agents/xy-backend.toml" for row in journal["conflicts"]))
         self.assertIn(str(replaced[0][1]), json.dumps(journal))
         self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "conflict")
@@ -437,7 +597,7 @@ class NativeAgentsTest(unittest.TestCase):
             os.close(descriptor)
         self.assertEqual(result["status"], "conflict", result)
         self.assertEqual(target.read_bytes(), published_body)
-        journal = json.loads((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
+        journal = native_journal.decode((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
         row = next(row for row in journal["writes"] if row["path"] == "agents/xy-backend.toml")
         retained = self.paths.codex / row["retained"][0]["path"]
         self.assertIn(b"late original fd save", retained.read_bytes())
@@ -467,7 +627,7 @@ class NativeAgentsTest(unittest.TestCase):
                     with self.assertRaisesRegex(KeyboardInterrupt, "after exact result"):
                         native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
                 self.assertTrue(interrupted)
-                journal = json.loads((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
+                journal = native_journal.decode((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
                 saved = next(step for step in reversed(journal["compensations"]) if step["path"] == "agents/xy-backend.toml")
                 self.assertEqual(native.read_node(self.paths.codex, "agents/xy-backend.toml"), Node.from_value(saved["result"]))
                 result = native_agents.recover_global(receipt["recovery_ref"], context=self.context)
@@ -525,7 +685,7 @@ class NativeAgentsTest(unittest.TestCase):
                         native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
                 self.assertEqual(interrupted, [boundary])
                 journal_path = self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")
-                before = json.loads(journal_path.read_bytes())
+                before = native_journal.decode(journal_path.read_bytes())
                 backend_steps = [step for step in before["compensations"] if step["path"] == "agents/xy-backend.toml"]
                 self.assertEqual(len(backend_steps), 1)
                 self.assertIsNone(backend_steps[0]["result"])
@@ -536,7 +696,7 @@ class NativeAgentsTest(unittest.TestCase):
                 if before_file:
                     self.assertEqual(target.read_bytes(), original_body)
                     self.assertEqual(native_agents.verified_hosts(self.state, context=self.context), ("codex",))
-                after = json.loads(journal_path.read_bytes())
+                after = native_journal.decode(journal_path.read_bytes())
                 self.assertEqual(len([step for step in after["compensations"] if step["path"] == "agents/xy-backend.toml"]), 1)
                 stable = native.read_node(self.paths.codex, "agents/xy-backend.toml")
                 self.assertEqual(native_agents.recover_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
@@ -575,7 +735,7 @@ class NativeAgentsTest(unittest.TestCase):
                     with self.assertRaisesRegex(KeyboardInterrupt, "unowned boundary"):
                         native_agents.compensate_global(receipt["recovery_ref"], context=self.context)
                 self.assertEqual(stopped, [True])
-                journal = json.loads((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
+                journal = native_journal.decode((self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")).read_bytes())
                 step = next(step for step in journal["compensations"] if step["path"] == "agents/xy-backend.toml")
                 if boundary == "unrecorded_stage":
                     self.assertIsNone(step["staged"])
@@ -627,7 +787,7 @@ class NativeAgentsTest(unittest.TestCase):
                   preferences={"codex": {"xy-backend": {"model": "new-model"}}}))
         self.assertEqual(native_agents.compensate_global(receipt["recovery_ref"], context=self.context)["status"], "compensated")
         journal_path = self.state / "native-agents/transactions" / (receipt["transaction_id"] + ".json")
-        original = json.loads(journal_path.read_bytes())
+        original = native_journal.decode(journal_path.read_bytes())
         outside = self.case / "outside.txt"
         outside.write_bytes(b"preserve foreign bytes")
         before = native.read_node(self.paths.codex, "agents/xy-backend.toml")
