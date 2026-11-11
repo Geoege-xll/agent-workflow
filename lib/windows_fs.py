@@ -562,11 +562,21 @@ def _trusted_path_sids(user_sid: str) -> frozenset[bytes]:
     _check(_api().security.LookupAccountNameW(
         None, "NT SERVICE\\TrustedInstaller", sid, ctypes.byref(length), domain,
         ctypes.byref(domain_length), ctypes.byref(kind)))
-    if (not 8 <= length.value <= 68 or not _api().security.IsValidSid(sid)
-            or _api().security.GetLengthSid(sid) != length.value or domain.value.upper() != "NT SERVICE"):
-        raise ValueError("invalid bounded Windows TrustedInstaller identity")
+    # cbSid 输入是缓冲区容量；文档仅承诺不足时返回所需容量，不能把成功后
+    # 仍为 68 的 cbSid 误当作 SID 真长度。必须先验证，再由 GetLengthSid 取
+    # 实际长度，并同时保持真实缓冲区、返回容量和完全限定域的封闭边界。
+    # https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-getlengthsid
+    valid = bool(_api().security.IsValidSid(sid))
+    actual = _api().security.GetLengthSid(sid) if valid else 0
+    domain_match = domain.value.upper() == "NT SERVICE"
+    if (not valid or not 8 <= actual <= length.value <= len(sid)
+            or not 0 < domain_length.value <= len(domain) or not domain_match):
+        # 仅报告公共长度/匹配布尔值，便于一次原生诊断；不输出 SID/域名正文。
+        raise ValueError("invalid bounded Windows TrustedInstaller identity "
+                         f"(reported_bytes={length.value}, sid_bytes={actual}, valid_sid={valid}, "
+                         f"domain_chars={domain_length.value}, domain_match={domain_match})")
     return frozenset((_sid_bytes(user_sid), _sid_bytes("S-1-5-18"),
-                      _sid_bytes("S-1-5-32-544"), sid.raw[:length.value]))
+                      _sid_bytes("S-1-5-32-544"), sid.raw[:actual]))
 
 
 def _mapped_file_rights(mask: int) -> int:

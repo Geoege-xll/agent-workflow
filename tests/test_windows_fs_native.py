@@ -12,8 +12,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from lib import windows_fs as fs
 
@@ -189,6 +190,48 @@ class TrustedPathPolicyTest(unittest.TestCase):
             with self.subTest(entries=entries):
                 self.assertEqual(expected, fs._untrusted_path_policy(user, 4, self.acl(*entries),
                     trusted=trusted, directory=False, managed=True))
+
+    def test_trusted_installer_lookup_uses_validated_sid_length_within_capacity(self):
+        # 真正调用生产 SID 解析函数，只替换 Win32 API 结果。成功保留输入
+        # capacity=68 与回写实际长度两种形态均合法，返回集合不能夹带尾部零。
+        # 这只证明接口契约，不把便携 fake API 称作真实 Windows SID 观测。
+        installer_sid = self.sid(5, 80, 1, 2, 3, 4, 5)
+        known = {"S-1-5-21-1001": self.sid(5, 21, 1001), "S-1-5-18": self.sid(5, 18),
+                 "S-1-5-32-544": self.sid(5, 32, 544)}
+        variants = [(68, 32, True, "NT SERVICE", 256, True), (32, 32, True, "NT SERVICE", 10, True),
+                    (68, 32, False, "NT SERVICE", 256, False), (68, 7, True, "NT SERVICE", 256, False),
+                    (68, 69, True, "NT SERVICE", 256, False), (16, 32, True, "NT SERVICE", 256, False),
+                    (69, 32, True, "NT SERVICE", 256, False), (68, 32, True, "NT AUTHORITY", 256, False),
+                    (68, 32, True, "NT SERVICE", 257, False), (68, 32, True, "NT SERVICE", 0, False)]
+        for reported, actual, valid, domain_name, domain_chars, accepted in variants:
+            with self.subTest(reported=reported, actual=actual, valid=valid, domain_chars=domain_chars, accepted=accepted):
+                def lookup(system, account, target, length, domain, domain_length, kind):
+                    self.assertIsNone(system)
+                    self.assertEqual("NT SERVICE" + chr(92) + "TrustedInstaller", account)
+                    self.assertEqual(1, account.count(chr(92)))
+                    self.assertEqual(68, ctypes.cast(length, ctypes.POINTER(fs.DWORD)).contents.value)
+                    self.assertEqual(256, ctypes.cast(domain_length, ctypes.POINTER(fs.DWORD)).contents.value)
+                    ctypes.memmove(target, installer_sid, len(installer_sid))
+                    ctypes.cast(length, ctypes.POINTER(fs.DWORD)).contents.value = reported
+                    domain.value = domain_name
+                    ctypes.cast(domain_length, ctypes.POINTER(fs.DWORD)).contents.value = domain_chars
+                    return 1
+
+                get_length = Mock(return_value=actual)
+                api = SimpleNamespace(security=SimpleNamespace(
+                    LookupAccountNameW=lookup, IsValidSid=Mock(return_value=valid), GetLengthSid=get_length))
+                with patch.object(fs, "_api", return_value=api), patch.object(fs, "_sid_bytes", side_effect=known.__getitem__):
+                    if accepted:
+                        result = fs._trusted_path_sids.__wrapped__("S-1-5-21-1001")
+                        self.assertEqual(frozenset((*known.values(), installer_sid)), result)
+                        self.assertEqual(32, len(installer_sid))
+                    else:
+                        with self.assertRaisesRegex(ValueError, "invalid bounded Windows TrustedInstaller identity"):
+                            fs._trusted_path_sids.__wrapped__("S-1-5-21-1001")
+                if valid:
+                    get_length.assert_called_once()
+                else:
+                    get_length.assert_not_called()
 
 
 @unittest.skipUnless(os.name == "nt", "requires actual native Windows local NTFS")
