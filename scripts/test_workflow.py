@@ -113,10 +113,11 @@ NATIVE_COMPONENTS = {
         # 普通与原生 CI 共同消费的操作租约负控只在这里声明一次；原生分组
         # 自动包含，普通 ci 也由这个字段派生，不另抄 Store/Records 方法清单。
         "portable_ci_targets": (
-            # 可信路径的有效权限/同 SID deny 两个纯策略边界精确共享；所属模块
+            # 可信路径纯策略及 SID 长度接口合同精确共享；所属模块
             # 还有 Windows 专属类，不能整模块纳入普通 CI 或破坏原生零 skip。
             "tests.test_windows_fs_native.TrustedPathPolicyTest.test_effective_masks_inherit_only_owner_and_unknown_acl_fail_closed",
             "tests.test_windows_fs_native.TrustedPathPolicyTest.test_only_same_sid_prior_deny_can_discharge_a_dangerous_grant",
+            "tests.test_windows_fs_native.TrustedPathPolicyTest.test_trusted_installer_lookup_uses_validated_sid_length_within_capacity",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_unifies_load_batch_and_builtin_catalog_then_expires",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_checkpoint_rejects_unread_member_and_ancestor_drift",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_isolates_roots_pins_threads_processes_and_module_aliases",
