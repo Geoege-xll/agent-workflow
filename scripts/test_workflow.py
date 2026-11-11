@@ -123,6 +123,7 @@ NATIVE_COMPONENTS = {
             "tests.test_windows_fs_native.TrustedPathPolicyTest.test_effective_masks_inherit_only_owner_and_unknown_acl_fail_closed",
             "tests.test_windows_fs_native.TrustedPathPolicyTest.test_only_same_sid_prior_deny_can_discharge_a_dangerous_grant",
             "tests.test_windows_fs_native.TrustedPathPolicyTest.test_trusted_installer_lookup_uses_validated_sid_length_within_capacity",
+            "tests.test_windows_fs_native.TrustedPathPolicyTest.test_external_ancestor_activity_comparison_keeps_security_and_managed_guards",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_unifies_load_batch_and_builtin_catalog_then_expires",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_checkpoint_rejects_unread_member_and_ancestor_drift",
             "tests.test_runtime_store.RuntimeStoreTest.test_operation_isolates_roots_pins_threads_processes_and_module_aliases",
