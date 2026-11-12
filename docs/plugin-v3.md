@@ -8,7 +8,7 @@
 
 主会话是持续接单的 PM，按任务重叠、依赖和真实容量决定并行、复用、追加或等待。新生产任务交给原生子代理，使用 fresh/handoff_only 和当前最小完整任务包，不复制 PM 或兄弟会话。Full 保留请求级唯一独立只读 QA 与原收口顺序。准入 claim 仅代表预留，不能代替原生实例已创建；无法确认的实例不得自动释放并重新派发。
 
-计划维护主题 Markdown，计划 HTML 生成器、专用 vendor 和运行入口已退役。原型设计、原型 HTML、静态原型验收及视觉确认完整保留，历史计划 HTML 仍可作为可选导航。Markdown 交付与历史页面边界见[需求交付规则](../platforms/shared/skills/xy-plan/references/requirements-markdown.md)。
+计划维护主题 Markdown，计划 HTML 生成器、专用 vendor 和运行入口已退役。原型设计、原型 HTML、静态原型验收及视觉确认完整保留；本仓库的退役计划 HTML 已清理，业务项目历史资料仍按原归属保护。Markdown 交付与历史页面边界见[需求交付规则](../platforms/shared/skills/xy-plan/references/requirements-markdown.md)。
 
 ## 插件与配置工具
 
@@ -33,7 +33,7 @@
 | `packaging/build_config_distribution.py` | 独立组件发行描述；已发布模式核验真实下载字节，不编造资产 |
 | `tests/`、`scripts/test_workflow.sh` | 行为/合同/真实消费者验证，不进入运行载荷 |
 
-网页、HTTP 和 MCP 只能调用配置核心，不能各自实现一份校验、保存或恢复。模型定义字段、命名 Agent 调用和单次覆盖参数分开表达；平台能力未知时返回诊断，不生成猜测参数。两套产品版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，旧 `product/VERSION` 仅属于保留的 2.x 源码。
+网页、HTTP 和 MCP 只能调用配置核心，不能各自实现一份校验、保存或恢复。模型定义字段、命名 Agent 调用和单次覆盖参数分开表达；平台能力未知时返回诊断，不生成猜测参数。两套产品版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`；`product/VERSION` 不表示插件版本。
 
 构建需要已有 Python 3.11+。源码入口通过选择器运行，不依赖系统默认 `python3` 恰好满足版本：
 
@@ -65,11 +65,11 @@ bash scripts/test_workflow.sh current
 
 原生验收发现并修复了两项仅靠离线构建无法发现的问题：Codex CLI 0.167.0 对根级 portable 清单漏载 Hook，候选改用单一官方 `.codex-plugin/plugin.json` 格式；AGY CLI 1.5.5 会截断超过 24,000 字节的 Skill 正文，候选改用宿主专属适配说明并在构建时阻断超限，共用工作流正文保持完整。
 
-本机已取得两端 CLI 的真实模型响应；Claude 默认 PM、新鲜子代理、原生定义保存、新子代理运行与推理档位差异、A/B/C 持续接单及向原 Agent ID 追加已有宿主事件证据。Codex 候选 Hook 已通过官方发现、审阅、普通默认启动与停用对照，原生子代理也已执行当前任务。各行为的最终范围与负控以[本轮原生验收记录](plans/plugin-v3-native-acceptance.md)为准，不按单项成功扩大为三平台全部通过。
+当前精确本机候选已完成三端本地安装：Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；AGY 安装通过待登录；App GUI 未验。较早 alpha 候选的单项真实模型响应、PM、原生子代理与持续接单证据按[原生验收记录](plans/plugin-v3-native-acceptance.md)的历史范围保留，不扩大为当前三端全部通过。
 
 活动任务跨官方插件更新的自动资源保留协议尚未实现，当前 alpha 使用活动任务先收尾再更新的限制。源码与离线包校验不能据此声明自动跨版本恢复通过。
 
-实施范围与证据见[3.0 计划](plans/plugin-v3.md)。旧安装/启用产品面的清理按现有消费者和对应验证分批执行，不自动卸载用户正在使用的 2.x 安装。
+实施范围与证据见[3.0 计划](plans/plugin-v3.md)。当前导航已移除旧安装、中央运行时、TUI 与旧同步资料；有效工作流要求归入[使用手册](usage.md)和[文档与原型指南](plans/workflow-document-lifecycle.md)。本仓文档清理不自动操作其他用户或业务项目的安装。
 
 ## 官方依据
 

@@ -1,9 +1,9 @@
-# Agent Workflow 2.1 — Product Discipline and Workflow (Cross-Platform Source of Truth)
+# Agent Workflow 3.0 — Product Discipline and Workflow (Cross-Platform Source of Truth)
 
 This document defines the portable product workflow. Platform adapters only expose the
 entry points required by each host. They must not copy and rewrite a parallel workflow.
 
-Version 2.1 accepts only `Light | Full` and the current `schema_version: 2` task/handoff contract; it does not parse old levels, old formats, or compatibility aliases. A version switch does not authorize deleting user history, results, or evidence that must still be retained.
+Version 3.0 accepts only `Light | Full` and the current `schema_version: 2` task/handoff contract; it does not parse old levels, old formats, or compatibility aliases. A version switch does not authorize deleting user history, results, or evidence that must still be retained.
 
 ## 1. Instruction Priority
 
@@ -13,21 +13,26 @@ Version 2.1 accepts only `Light | Full` and the current `schema_version: 2` task
 4. Role boundaries and technology stacks in `roles/xy-*.md`
 5. Platform default behavior
 
-### Centrally Pinned Versions and Project Adapters
+### Official Plugin Lifecycle and Project Adapters
 
-Central program upgrades, immutable core import (`runtime install`) and current activation (`runtime activate ID`) are separate operations. First project enablement requires an explicitly installed and activated current; do not silently import source. Projects default to `follow`; explicit `use` and project rollback establish `pinned`, while `follow` clears that lock. Central activation/rollback applies only to enabled follow projects, preserving pinned and disabled projects. Disabled follow projects adopt the effective current on later enablement. Preview and result expose declared enablement, resource health, history recoverability, admission/write permission, desired/effective binding and actual applied binding separately. An incomplete central transaction closes new-task admission until conditional recovery settles it; old task pins remain readable.
+Each official host owns plugin installation, enablement, trust, cache and updates. Use the verified host-specific local marketplace or plugin-directory payload described in the installed plugin root's `INSTALL.md` (source input: `plugins/INSTALL.md`); discovery and installation receipts do not prove actual execution. Finish active tasks before replacing or updating this alpha plugin because automatic retention of their plugin resources across updates is not implemented. Do not create central registration, activation or recovery state, install project bridges, or edit root `AGENTS.md`/`CLAUDE.md` to make the plugin work.
 
-User-level native role/Skill resources use explicit immutable `NativeContext`/`HostPaths` resolved once at the entry point. A custom state directory does not authorize guessing the real HOME; use explicit `--host-home` for isolated host targets. Project role/model preferences stay outside immutable cores. Current-project/current-platform all-role reset is an independent read-only proposal over persisted owned fields, including disabled or uninstalled roles; cancellation/failure preserves draft authorization, successful confirmation consumes only captured owned keys (including a service-validated persistent no-op), and no-op creates no write or backup. Global-default pages do not expose bulk reset.
+Select the actual project adapter explicitly: reuse a verified `project.yaml`, or invoke the packaged `plugins/project_context.py` through the helper wrapper to inspect and explicitly apply a missing `.awf/project.yaml`. Inspect is read-only; apply creates only the missing minimal adapter, never project documents or business approval. Multiple adapters require an explicit selection. References to `project.yaml` in shared examples mean this selected actual adapter; pass its exact path through initialization and later consumers rather than choosing it again by existence or precedence.
 
-`runtime cleanup` is the single lifecycle maintenance entry: default/`--dry-run` is read-only preview, and `--apply` invokes the same service plan in one process. Repeated `--approved-backup-root` authorizes only exact old workflow archive batches; `--backups-only` excludes core GC, and repeated `--task-record` adds explicit pin retention. The service alone owns reference discovery, protected backups, deletion and recovery. `--recover` reads the existing public lifecycle status; `--recover --apply` resumes only the previously confirmed plan and cannot accept new candidate/retention options. Activation recovery remains `runtime recover`, separate from cleanup recovery. Pending cleanup is a management-write gate, never permission to guess HOME or run temporary private recovery scripts.
+Resolve the verified plugin/source-pack root from the loaded component's physical location, following that root's `PLUGIN.md`; never infer it from the project working directory or a guessed cache. Read workflow authority, canonical roles and common Skills from that root. Historical `.agent-workflow/` resource examples are logical aliases resolved with `plugins/source_pack.py resource`; translate their adapter paths to the selected actual project adapter. Replace historical thin-bridge helper commands with the current packaged wrapper on every independent invocation:
 
-Native resource parsing, ownership checks and model catalogs do not verify native role selection or actual model/effort execution. Where a host tool has no native role selector, `task_name` is a label and cannot prove role/model selection. Keep `runtime_verified: false` until an actual native session proves the corresponding behavior.
+```bash
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
+  helper --project "<absolute-project>" <original-helper-path> <original-arguments>
+```
 
-In central mode, `.agent-workflow/runtime.json` identifies only the project's selected version; discovering host Skill symlinks does not prove local activation. Before starting each new workflow, verify local activation through the project's thin entry point with `runtime.py check`; if a cloned project lacks a machine binding, stop automatic orchestration without installing or guessing a version. Source-pack development retains its source entry points; version 2.1 provides no legacy self-contained execution or upgrade branch. Central mode does not replace the entire `.agent-workflow` with a symlink to an external directory.
+The wrapper verifies the packaged source and payload digests, fixes the actual project working directory and executes only its helper allowlist. Project documents, task records and production code remain in that physical project; a packaged example is never its adapter. Do not infer project, adapter and plugin roots from one another or depend on shell environment surviving across tool calls.
 
-Central schema 2 graphs/single-task packs freeze top-level `runtime_binding`, whose object permits only `protocol_version: 1`, `content_id`, and `manifest_sha256`, with no machine paths. Freeze a new graph from verified bridge context or an explicitly verified binding, preserve it unchanged on export, and never change an existing pin on update. A later project version switch affects only new tasks; fail on a missing pin, execution-version conflict, or unknown/damaged core rather than filling an old pack from the project's current version.
+This alpha uses the existing unpinned source-pack `schema_version: 2` graph and single-task contract. Do not add or rewrite a central `runtime_binding`, manufacture a pin, or migrate an old task to the current plugin. Plugin execution rejects old binding records, central project markers and bridge context; retain historical records and unique evidence without using them as new-task authority or falling back to an older core.
 
-For every helper invocation during execution, select the core through the thin entry point using the current Task Pack's pin and export an independent process environment; do not rely on shell environment surviving across tool calls. See [helper execution boundaries](../platforms/shared/skills/xy-workflow/references/dispatch.md#workflow-helper-execution) for the shared invocation method, and [runtime record tools](../platforms/shared/skills/xy-workflow/references/runtime-records.md) for graph/single-pack, standards, and pagination consumers. Read central project configuration only from that physical project's `.agent-workflow/project.yaml`; do not infer project, configuration, and core roots from one another. Obtain built-in text, rule IDs, severity, and fingerprints from the core pinned by the task; continue safely reading project-specific leaves and indexes from actual project files. Keep an absent project index null; do not create GENERAL or an empty index.
+Native resource parsing, ownership checks, model catalogs and successful configuration saves do not verify native role selection or actual model/effort execution. Where a host tool has no native role selector, `task_name` is a label and cannot prove role/model selection. Keep `runtime_verified: false` until an actual native session proves the corresponding behavior. Plugin cache definitions are read-only; an optional explicit `agent-config` maintenance action does not create new host capabilities or business approval.
+
+See [helper execution boundaries](../platforms/shared/skills/xy-workflow/references/dispatch.md#workflow-helper-execution) and [runtime record tools](../platforms/shared/skills/xy-workflow/references/runtime-records.md) for the original helper arguments and task-record consumers, applying the plugin wrapper above. Obtain built-in text, rule IDs, severity and fingerprints from this verified plugin's packaged sources; continue reading project-specific leaves and indexes from actual project files. Keep an absent project index null; do not create GENERAL or an empty index.
 
 ## 2. PM and Roles
 
@@ -178,7 +183,7 @@ This section's mandatory post-QA projection order applies to Full. Light updates
 - Only the PM projects controlled documents: Full waits for integrated QA PASS; Light waits for acceptance of minimum verification and its actually selected necessary independent audit. Update the topic baseline and necessary PROJECT links in place; do not manufacture document changes or new entries without current fact changes.
 - PROJECT has no line/byte limit and retains only the current overview and accepted-topic links; execution and logs stay in their assigned locations.
 - After an accepted complete removal, remove the current PROJECT link and mark the same topic `removed`, with the actual reason, date, and replacement relationship; explicitly label any necessary old behavior as historical. Do not rename it to `.removed.md` or create separate feature/ADR documents. QA failure preserves the existing accepted baseline.
-- After projection, run `bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/validate_project_docs.py .agent-workflow/project.yaml .` and require exit 0. The validator checks stable topics, unique baselines, current indexes, and standards boundaries; it does not infer approval from `completed` or HTML freshness.
+- After projection, run `bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/validate_project_docs.py "<selected-project-adapter>" .` and require exit 0. The validator checks stable topics, unique baselines, current indexes, and standards boundaries; it does not infer approval from `completed` or HTML freshness.
 - Keep functionality, architecture solutions, and necessary tradeoffs in the same topic. A cross-topic shared solution may have an independent stable topic referenced by related documents.
 - Keep design-change UI approval in workflow task state, bound to the approved concrete pages, changed scope,
   declared operation sequence, and verified page dependency fingerprints. Do not duplicate approval
@@ -702,13 +707,13 @@ task state. Web implementation and QA recompute it; a mismatch invalidates use o
 Use the same machine entry from the project root; repeat `--page` and `--expect` for scoped pages:
 
 ```bash
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/documents/validate_prototype_workspace.py \
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
+  helper --project "<absolute-project>" lib/documents/validate_prototype_workspace.py \
   . <docs.standards_root>/prototype --adapter <selected-project-adapter> --json --page <page>.html --expect <page>.html=<approved-sha256>
 ```
 
 Pass the actual project-relative adapter selected for this task, including `.awf/project.yaml` for a
-new plugin project or explicitly selected `project.yaml` for an existing project. A central task uses
-its original `.agent-workflow/project.yaml` and fixed runtime. Never choose an adapter again by existence
+new plugin project or explicitly selected `project.yaml` for an existing project. Never choose an adapter again by existence
 or precedence; both configured document roots come from this exact input. In a plugin installation, run
 the same validator through the packaged `source_pack.py helper --project` entry shown by
 `xy-prototype-verify`, preserving `--adapter` unchanged.
@@ -1007,9 +1012,9 @@ The PM materializes the approved `xy-plan` graph as a runtime JSON snapshot and 
 CLI rather than re-interpreting graph prose differently on each host:
 
 ```text
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/task_graph_cli.py validate --input <runtime-task-graph.json>
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/task_graph_cli.py ready --input <runtime-task-graph.json>
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/task_graph_cli.py qa-ready --input <runtime-task-graph.json>
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py validate --input <runtime-task-graph.json>
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py ready --input <runtime-task-graph.json>
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py qa-ready --input <runtime-task-graph.json>
 ```
 
 Successful validation is mandatory before the first dispatch and after graph structure changes;
@@ -1237,7 +1242,7 @@ When updating or closing out, the PM locates current plan, feature, and standard
 
 The PM freezes the unified standards authority once per runtime snapshot:
 
-Common text accepts only three exact built-in sources: `platforms/shared/skills/xy-code-standards/references/rules.md`, `platforms/shared/skills/xy-ui-design/references/foundations-rules.md`, and `platforms/shared/skills/xy-ui-design/references/components-rules.md`; installed paths add only the `.agent-workflow/` prefix. Built-in sources declare Domain/Scope, retaining stable IDs, hard/advisory severity, applicability, and exceptions. They are managed read-only authority; inclusion in leaves or UI-task reading grants no project write authority. Project-specific standards still live directly in `docs.standards_root`; design leaves use `DESIGN_*.md` and `- Domain: design`, and other leaves declare engineering. Do not create empty leaves or copy common text. Project indexes link only actual specific leaves; page exceptions remain in contracts, and prototypes stay in `docs.standards_root/prototype`.
+Common text accepts only three exact built-in sources: `platforms/shared/skills/xy-code-standards/references/rules.md`, `platforms/shared/skills/xy-ui-design/references/foundations-rules.md`, and `platforms/shared/skills/xy-ui-design/references/components-rules.md`; read them from the verified plugin root, treating historical `.agent-workflow/` prefixes only as logical aliases. Built-in sources declare Domain/Scope, retaining stable IDs, hard/advisory severity, applicability, and exceptions. They are managed read-only authority; inclusion in leaves or UI-task reading grants no project write authority. Project-specific standards still live directly in `docs.standards_root`; design leaves use `DESIGN_*.md` and `- Domain: design`, and other leaves declare engineering. Do not create empty leaves or copy common text. Project indexes link only actual specific leaves; page exceptions remain in contracts, and prototypes stay in `docs.standards_root/prototype`.
 
 `index_path` always retains the adapter-configured relative path, and `root` remains the project-specific standards root. With no project rule leaves and a physically absent configured index, `index_fingerprint` is null; if the index exists, record its actual SHA, without presenting an explanatory retained index as absent. init/document validation checks the filesystem; JSON-only graph validation proves structure, not actual-file verification. leaves and controlled_document_access retain existing fields, binding built-in sources and applicable project leaves with their current SHA/rule IDs.
 
@@ -1488,7 +1493,7 @@ but returns FAIL for task correction/rework rather than silently repairing the c
 result with:
 
 ```text
-bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>
 ```
 
 Missing changed-path classification, missing required rules, evidence-free conclusions, stale
@@ -1518,7 +1523,10 @@ approval evidence; there is no screenshot artifact on disk.
 2. Do not commit credentials or execute unauthorized destructive actions.
 3. Do not perform unauthorized cross-path refactors or drive-by edits.
 4. Never fabricate real validation results.
-5. Treat project `.agent-workflow/` as managed adapter and thin bridge resources. Change workflow
-   sources in the standalone source pack, then explicitly import/select the verified central version;
-   preview `repair` for managed-resource regeneration instead of hand-editing host artifacts.
-   Preserve project configuration and user-owned content when reconciling resource conflicts.
+5. Verify the current installed plugin's resource digests through its packaged resource/helper entry,
+   the explicitly selected project adapter through `plugins/project_context.py`, and the actual
+   applicable standards paths before dependent dispatch. Missing, damaged or conflicting resources
+   stop that dispatch with an accurate diagnostic. Preserve project configuration and user-owned
+   content; do not edit plugin caches, regenerate bridges, or automatically modify unknown user
+   configuration or installations to make a check pass. Use the official host's plugin lifecycle
+   and only explicitly authorized adapter operations when resolving an installation conflict.

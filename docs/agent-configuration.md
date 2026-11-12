@@ -6,7 +6,7 @@
 
 配置核心只实现一次发现、字段校验、读取、预览、条件保存、恢复和诊断。网页通过本机 HTTP 使用它；命令行脚本复用相同核心；MCP 保留为按需开启的接入方式。普通网页配置和脚本查询无需 MCP。工作流核心不导入服务，也不读取服务版本。
 
-独立核心位于 `native_config/`，版本源为该目录的 `VERSION`，当前为 `0.1.0-alpha.3`。HTTP、网页、脚本和可选 MCP 共用该核心。早期 `plugin_runtime/`、插件可选服务装配和专属旧测试已清理；新增插件维护入口仅带薄启动器，不恢复后端内嵌装配，也不把旧 AWF 七角色 JSON 偏好升级为原生配置。
+独立核心位于 `native_config/`，版本源为该目录的 `VERSION`，当前为已发布的 [0.1.0-alpha.3 预发行](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.0-alpha.3)。HTTP、网页、脚本和可选 MCP 共用该核心。早期 `plugin_runtime/`、插件可选服务装配和专属旧测试已清理；新增插件维护入口仅带薄启动器，不恢复后端内嵌装配，也不把旧 AWF 七角色 JSON 偏好升级为原生配置。
 
 ## 插件内打开
 

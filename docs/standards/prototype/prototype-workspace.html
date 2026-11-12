@@ -90,9 +90,9 @@
             </section>
           </section>
 
-          <!-- 需求导航只指向同一 plans 主题的现有文件对，不作为渲染资源；独立打开保留工作区，noopener 隔离新文档对来源窗口的访问。 -->
+          <!-- 需求导航只指向当前 plans 主题的唯一 Markdown；旧计划 HTML 已退役，不再登记。文档不作为渲染资源；独立打开保留工作区，noopener 隔离来源窗口。 -->
           <footer class="workspace-page-information">
-            <div class="workspace-information-top"><nav class="prototype-requirement-links" aria-label="关联需求文档"><span class="workspace-info-label">关联需求</span><a id="workspace-requirement-html" href="../../plans/workflow-document-lifecycle.html" target="_blank" rel="noopener" data-prototype-document="html"><span class="document-format">HTML</span>阅读需求<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a><a id="workspace-requirement-markdown" href="../../plans/workflow-document-lifecycle.md" target="_blank" rel="noopener" data-prototype-document="markdown"><span class="document-format">MD</span>需求原稿<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a></nav><p class="workspace-display-label"><span>Web</span><span>响应式 · CSS px</span></p></div>
+            <div class="workspace-information-top"><nav class="prototype-requirement-links" aria-label="关联需求文档"><span class="workspace-info-label">关联需求</span><a id="workspace-requirement-markdown" href="../../plans/workflow-document-lifecycle.md" target="_blank" rel="noopener" data-prototype-document="markdown"><span class="document-format">MD</span>需求原稿<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a></nav><p class="workspace-display-label"><span>Web</span><span>响应式 · CSS px</span></p></div>
             <p class="workspace-demo-note"><strong>演示说明</strong> 左侧三页为虚构内容，在本页模拟切换；正式需求链接可直接打开。刷新恢复侧栏默认展开；页面锚点保留当前选择。</p>
           </footer>
 
@@ -114,7 +114,7 @@
     <section data-contract-section="purpose">
       <h2>页面职责</h2>
       <p>本页是“原型浏览工作区”这一产品界面的虚构高保真交互设计样稿，覆盖 REQ-004、REQ-005 和 REQ-006 的可见设计范围。Platform: Web. Display: responsive. 页面按可用宽度自然展开，使用 CSS px，不采用固定设备窗口；窄空间将侧栏移到内容之前，列表保留可读顺序。</p>
-      <p>候选产品 token 集中在 prototype.css 的 --workspace-*，仅适用于本样稿；外层 --prototype-* 复用模板中性展示基线，不宣称项目已采用新主题。真实需求为 docs/plans/workflow-document-lifecycle.md 及其同名 HTML。</p>
+      <p>候选产品 token 集中在 prototype.css 的 --workspace-*，仅适用于本样稿；外层 --prototype-* 复用模板中性展示基线，不宣称项目已采用新主题。有效需求与文档维护规则见 docs/plans/workflow-document-lifecycle.md。</p>
     </section>
     <section data-contract-section="navigation">
       <h2>导航</h2>
@@ -131,7 +131,6 @@
       <p data-contract-for="workspace-page-requirement">需求详情：点击或 Enter 选择 demo-requirement，按同一规则更新当前页面与预览，其他示例画面隐藏。</p>
       <p data-contract-for="workspace-group-reference">原型浏览分组：按原生 details/summary 方式折叠或展开，不改变当前预览。</p>
       <p data-contract-for="workspace-page-guidance">页面说明：点击或 Enter 选择 demo-guidance，同步选中反馈、页头与只读说明画面。</p>
-      <p data-contract-for="workspace-requirement-html">阅读需求：点击或 Enter 在独立标签页或窗口打开现有 ../../plans/workflow-document-lifecycle.html，保留当前工作区；它是正式需求导航，不是预览依赖，新文档不能通过 opener 访问来源窗口。</p>
       <p data-contract-for="workspace-requirement-markdown">需求原稿：点击或 Enter 在独立标签页或窗口打开同主题 ../../plans/workflow-document-lifecycle.md，保留当前工作区并隔离 opener；由浏览器按本地 Markdown 支持方式展示、下载或交给关联应用。</p>
       <p data-contract-for="workspace-demo-contract-toggle">页面设计与交互契约：原生 summary 展开或折叠样稿内的页面说明，不覆盖预览或占用浏览器固定浮层。</p>
       <p data-contract-for="prototype-contract-toggle">本页契约：原生 summary 展开或折叠这五节实际设计契约，默认折叠；位于产品插槽之外。</p>

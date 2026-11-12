@@ -1,4 +1,4 @@
-# Global Mandatory Constraints — 2.1
+# Global Mandatory Constraints — 3.0
 
 Applies to every subagent. Complements PM orchestration in `$xy-workflow`.
 

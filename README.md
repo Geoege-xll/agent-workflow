@@ -1,65 +1,94 @@
 # Agent Workflow 3.0
 
-面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流，正在升级为官方插件。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理；保留适用的两步确认、独立 QA 与原有交付流程。
+面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-当前是 **3.0.0-alpha.4 开发候选**，版本源为 `product/PLUGIN_VERSION`，不表示已替换业务项目的 2.x 安装。Windows 暂停。已公开资产及是否为预发行以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
+当前版本为 **3.0.0-alpha.4**，已验证官方客户端的本地插件安装，尚未完成官方市场稳定发行。各端运行验收范围见下表。**Windows 暂停**。
+
+## 工作流保持
+
+- PM 持续接单：A 执行期间可以继续讨论 B、C，按真实依赖选择并行、复用、追加或等待。
+- 需要原型的 Full UI 设计变更保留两步业务确认：需求确认、原型完成后的视觉确认。Light、非 UI、一致性任务及用户明确选择直接开发，仍按各自原有规则执行。
+- 原型设计、可交互 HTML、原型验收与视觉确认保留；计划使用 Markdown 交付。
+- 实现交给对应原生子代理，使用独立上下文和明确职责；Full 保留请求级唯一独立只读 QA 与原收口顺序。
+
+完整规则以 [WORKFLOW](product/WORKFLOW.md) 和实际任务适用的 Skill 为准。安装插件或打开模型配置不会产生业务批准。
 
 ## 两个独立产品
 
-| 产品 | 职责 | 入口 |
+| 产品 | 职责 | 说明 |
 | --- | --- | --- |
-| Agent Workflow 插件 | PM 工作流、Skill、平台角色与任务 helper | [插件说明](docs/plugin-v3.md)、[本地构建与安装](plugins/INSTALL.md) |
-| Native Agent Config | 发现平台原生 Agent，配置模型与推理，网页预览保存 | [配置工具说明](docs/agent-configuration.md) |
+| Agent Workflow 插件 | PM 入口、工作流 Skill、角色和任务 helper | [3.0 插件说明](docs/plugin-v3.md) |
+| Native Agent Config | 发现原生 Agent，预览和保存受支持的模型、推理设置 | [配置工具说明](docs/agent-configuration.md) |
 
-插件业务流程无需中央登记、TUI 启用或配置服务。新增显式“模型配置”维护 Skill，按需定位并打开独立配置工具；未调用时不启动服务、不准备组件。配置工具识别用户级、项目级和插件角色，使用稳定原生身份，不限工作流角色；网页、脚本与可选 MCP 共用核心，客户端实际运行状态另行验证。
+工作流通过各官方客户端安装到插件缓存，无需中央登记、配置服务或 MCP。项目使用轻量 adapter，业务文档继续保留在项目内。
 
-## 安装插件后打开模型配置
+## 克隆、构建与本地安装
 
-在 Claude Code 使用 `/agent-workflow:agent-config`；Codex 从 `/skills` 或 `$` 选择器选择插件的 `agent-config`；AGY 当前载荷使用 `/agent-config`，以客户端实际发现项为准。省略动作等价 `open`，另有 `status` 和 `doctor`。入口由插件携带，用户无需寻找开发工作树。
-
-首次缺少独立配置组件时先显示准备信息，确认后才获取并校验组件。后续复用本用户已安装的版本和健康服务；自动定位当前平台及明确的项目，没有项目时进入用户级。准备组件不修改模型配置，网页仍先预览、再确认保存。状态与诊断为只读，不安装、不启动服务，也不查询模型目录。
-
-组件是否已发布由包内发行描述及真实资产决定；待发布候选不会猜测下载地址。当前工具仍需已有 Python 3.11+ 和 Bash；配置组件与工作流分别版本化。使用范围和错误状态见[配置工具说明](docs/agent-configuration.md)，实施与验证见[入口计划](docs/plans/agent-config-entry.md)。
-
-## 本地构建候选
-
-需要已有 Python 3.11+ 和 Bash。构建不安装客户端、不改用户配置：
-
-在 Git 源码树中生成完整的七包候选、源码与版本摘要、校验文件：
+需要已有 Git、Bash、**Python 3.11+** 和所用平台的官方客户端；模型运行还需要完成该客户端登录。构建只生成文件，不安装客户端或修改原生配置。
 
 ```bash
-bash lib/python_runtime.sh -B -X utf8 packaging/build_candidates.py \
-  --output-dir /absolute/new-candidate-output
-```
+git clone https://github.com/Geoege-xll/agent-workflow.git
+cd agent-workflow
 
-输出叶目录须尚不存在且位于源码树外。两个独立产品也可分别构建：
-
-```bash
-# 三宿主插件 ZIP、完整本地来源及市场清单。
+# 每次构建使用新的持久目录，保留该来源供官方客户端使用。
+AWF_PLUGIN_OUTPUT="$HOME/.local/share/agent-workflow/plugin-sources/3.0.0-alpha.4/$(date +%Y%m%d-%H%M%S)"
 bash lib/python_runtime.sh -B -X utf8 packaging/build_plugin.py \
-  --host all --output-dir /absolute/new-plugin-output --local-source
-
-# 独立配置工具，不夹带工作流或中央管理器。
-bash scripts/python_runtime.sh -B -X utf8 packaging/build_agent_config.py \
-  --output-dir /absolute/new-config-output
+  --host all --output-dir "$AWF_PLUGIN_OUTPUT" --local-source
 ```
 
-插件官方本地加载命令见[安装说明](plugins/INSTALL.md)。目前没有已验证的远程一键安装地址。插件格式、离线构建及源码检查通过，不等同于三个官方客户端的新会话默认 PM 入口和实际派发均已通过。
+输出包含三个宿主的插件 ZIP、完整 `local/` 来源和各自的本地来源 ZIP。以下命令沿用同一终端的 `AWF_PLUGIN_OUTPUT`，按所用宿主选择执行。
 
-开发者仍可从源码按需打开独立配置网页：
+### Codex CLI
 
 ```bash
-bash scripts/agent_config.sh open --host codex
+codex plugin marketplace add "$AWF_PLUGIN_OUTPUT/local/codex"
+codex plugin add agent-workflow@agent-workflow-local
+codex plugin list --json
 ```
 
-默认读取本机真实原生配置，应用预览会修改所选可写定义。测试隔离参数、只读插件限制、并发冲突、部分失败与重载语义见[配置工具说明](docs/agent-configuration.md)。MCP 仅在主动选择时启动，不是网页或插件的前置。
+安装后在官方 `/hooks` 中审阅并信任当前 SessionStart 定义，再启动新会话；安装或启用本身不授予 Hook 信任。Codex App 的实际 GUI 验证单独进行。
 
-## 工作流与维护
+### Claude Code
 
-产品工作流权威在 [product/WORKFLOW.md](product/WORKFLOW.md)，角色职责在 `roles/`，九个共用 Skill 在 `platforms/shared/skills/`。可选维护 Skill 独立位于 `plugins/maintenance/`，不进入角色预载。插件从这些唯一来源装配；项目配置与包内权威资源分开读取，不复制整套规范。计划以 Markdown 交付，计划 HTML 生成器及其专用依赖退役。原型设计、原型 HTML、原型验收和视觉确认保留，已有历史计划页面继续作为可选导航。
+```bash
+claude plugin marketplace add "$AWF_PLUGIN_OUTPUT/local/claude"
+claude plugin install agent-workflow@agent-workflow-local --scope user --json
+```
 
-实施状态与验收边界见 [3.0 计划](docs/plans/plugin-v3.md)。旧中央运行时、项目启停、TUI 和 Homebrew 产品面分批退役；历史项目资料、计划和已有用户安装不自动删除。仓库尚保留的 2.x 代码不属于 3.0 插件载荷，`product/VERSION` 仍记录其保留源码版本。
+安装后启动新会话，检查插件发现与启用状态；用户原生设置仍按客户端规则优先。
 
-PR 与开发分支 push 使用 `current` 验证门禁，并构建候选附件；源码中的自动工作流不创建 tag 或 Release。源码、附件和本机保存验证均不替代官方客户端实际运行验收。
+### Antigravity CLI
 
-[2.x 使用手册](docs/usage.md)、[2.x 开发与文件迁移记录](docs/development.md)、[2.x Homebrew 说明](docs/homebrew.md) 只供现有安装维护与历史追溯，不是 3.0 安装入口。3.0 当前原生验收尚未完成，因此不触发现有本机和业务项目的替换。
+```bash
+agy plugin validate --strict "$AWF_PLUGIN_OUTPUT/local/antigravity/agent-workflow"
+agy plugin install "$AWF_PLUGIN_OUTPUT/local/antigravity/agent-workflow"
+agy plugin enable agent-workflow
+agy plugin list --json
+```
+
+AGY 使用本地插件目录安装，没有上述本地市场注册步骤。详细载荷区别、官方信任和加载说明见 [INSTALL](plugins/INSTALL.md)。当前不提供未经验证的远程一键安装地址。
+
+## 项目与模型配置
+
+在实际项目目录中开启新会话。新项目通过插件 helper 显式创建最小 `.awf/project.yaml`，已有有效根 `project.yaml` 可复用；不会复制整套规范或覆盖业务文档。项目引导与权威读取方式见 [3.0 插件说明](docs/plugin-v3.md)。
+
+维护入口名为 `agent-config`：Claude 使用 `/agent-workflow:agent-config`；Codex 从 `/skills` 或 `$` 选择器选择插件实际发现的入口；AGY 使用 `/agent-config`，以客户端实际发现项为准。省略动作等价 `open`，另有只读 `status` 和 `doctor`。
+
+首次缺少独立配置组件时，入口先报告版本、来源及诊断，**用户明确同意本次准备后**才获取并校验固定组件。正常业务流程不准备组件或启动配置服务；配置修改先预览、再确认保存。
+
+**插件缓存角色只读**。用户级、项目级对象能否写入，以及模型、推理字段和重载方式，取决于平台的真实支持；保存成功与实际模型运行分别验证。详情见 [配置工具说明](docs/agent-configuration.md)。
+
+## 当前验证范围
+
+| 范围 | 当前状态 |
+| --- | --- |
+| 本地插件安装 | Codex、Claude Code、AGY 的本地安装已验证 |
+| Codex CLI | 新插件启动验证通过，不代表全部业务与模型行为均已验收 |
+| Claude Code PM 运行 | 现有默认模型调用在 90 秒内未响应，尚未验收 |
+| AGY CLI 模型运行 | 待完成登录后验证 |
+| Codex App GUI | 尚未实际验证 |
+| 官方市场稳定发行 | 尚未完成；当前为 alpha 本地安装 |
+
+活动任务应先收尾再更新插件；当前 alpha 尚不提供活动任务跨更新的自动资源保留。独立配置组件的发行与工作流插件分别管理，已公开资产以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
+
+继续阅读：[使用指南](docs/usage.md)、[开发指南](docs/development.md)、[3.0 计划](docs/plans/plugin-v3.md)。构建、静态校验和安装收据不替代官方客户端实际运行证据。

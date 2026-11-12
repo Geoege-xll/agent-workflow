@@ -92,7 +92,7 @@ class DocumentSafetyTest(unittest.TestCase):
         self.assertFalse((PACK / "lib/documents/requirement_html.py").exists())
         self.assertFalse((PACK / "lib/vendor/answer-me-with-html").exists())
         self.assertNotIn("lib/documents/requirement_html.py", source_pack.HELPERS)
-        # 历史页面与原型仍然属于资料，不以生成器退役为由删除实际内容。
-        self.assertTrue(any((PACK / "docs/plans").glob("*.html")))
+        # 计划生成器退役与原型能力是独立边界：本仓库按用户新授权清理旧计划 HTML，
+        # 因此不要求仓库保留历史页；通用原型模板和安全导航仍须存在并继续受检。
         self.assertTrue((PACK / "templates/prototype/page.html").is_file())
         self.assertTrue((PACK / "lib/documents/prototype_navigation.py").is_file())
