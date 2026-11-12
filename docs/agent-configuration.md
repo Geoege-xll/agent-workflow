@@ -6,13 +6,33 @@
 
 配置核心只实现一次发现、字段校验、读取、预览、条件保存、恢复和诊断。网页通过本机 HTTP 使用它；命令行脚本复用相同核心；MCP 保留为按需开启的接入方式。普通网页配置和脚本查询无需 MCP。工作流核心不导入服务，也不读取服务版本。
 
-独立核心位于 `native_config/`，版本源为该目录的 `VERSION`，当前为 `0.1.0-alpha.2`。HTTP、网页、脚本和可选 MCP 已切换到该核心。早期 `plugin_runtime/`、插件可选服务装配和专属旧测试已清理；不把旧 AWF 七角色 JSON 偏好升级或冒充原生配置。
+独立核心位于 `native_config/`，版本源为该目录的 `VERSION`，当前为 `0.1.0-alpha.3`。HTTP、网页、脚本和可选 MCP 共用该核心。早期 `plugin_runtime/`、插件可选服务装配和专属旧测试已清理；新增插件维护入口仅带薄启动器，不恢复后端内嵌装配，也不把旧 AWF 七角色 JSON 偏好升级为原生配置。
+
+## 插件内打开
+
+维护 Skill 为 `agent-config`，显示“模型配置”。Claude Code 使用 `/agent-workflow:agent-config`；Codex 在 `/skills` 或 `$` 选择器选择插件的实际发现项；AGY 使用实际发现的插件限定 Skill。省略动作等价 open：
+
+| 动作 | 用户可见行为 |
+| --- | --- |
+| open | 定位当前平台和明确的项目，验证组件与服务后尝试打开浏览器 |
+| status | 只读报告组件、服务和范围，不准备组件或启动服务 |
+| doctor | 只读诊断依赖、发行完整性、来源及连接，不刷新模型目录或调用官方客户端 |
+
+仅主会话中用户显式调用维护 Skill 才进入该路径；讨论“实现 agent-config”等业务需求仍走原业务流程。维护操作不读取整份 WORKFLOW、不建任务图、不派代理。普通工作流无需配置组件或 MCP。
+
+首次缺组件时先显示待准备信息，用户确认后才执行固定准备动作。组件来自发行描述指定的真实独立包；校验 SHA、ZIP 和 BUILD 完整闭包后，放入用户级不可覆盖版本目录并原子登记。未发布描述没有下载地址，不尝试猜测地址；明确提供离线 ZIP 也必须匹配固定摘要。安装失败保留旧活动版本，更新不覆盖旧服务正在使用的程序目录。
+
+插件缓存只保存薄入口、固定组件描述和维护 Skill。组件程序、真实发行快照与 registry 位于 `~/.local/share/agent-workflow/components/native-agent-config/`；配置服务的连接及恢复资料仍使用独立数据目录。代码、运行态和业务项目分开存放，不改 PATH、HOME、认证、宿主信任或项目根指令文件。
+
+成功回执分别报告服务与浏览器状态。浏览器打开失败时服务仍为 ready，并保留 0600 的私有 HTML 打开入口；重新运行命令可重取入口，不会因浏览器失败重装组件或重启健康服务。普通机器回执不包含认证片段，status/doctor 不创建链接文件或修复权限。
 
 ## 配置对象与写入范围
 
 发现结果区分宿主、原生名称、用户/项目/插件来源、真实文件身份、调用名称和有效状态。同名对象并列展示，内部使用稳定 ID；不把不同来源按名称合并。尚未观察的 CLI 会话角色、托管策略或插件启用状态必须保持未知，不能扫描缓存就宣布已安装并生效。
 
 用户级和项目级的受支持原生定义可以修改 `model` 与对应宿主推理字段。插件缓存只读；没有官方覆盖接口时明确不可编辑。模型、推理级别和重载方式按宿主能力处理。项目级完整定义覆盖用户级定义的语义，不能用旧工作流的逐字段偏好合并算法代替。
+
+页面中的“用户级”表示用户级 Agent 定义，并不等价于 Codex `[agents]` 的统一子代理默认设置。当前入口不新增该默认设置的写入能力，也不把插件只读角色变成可写覆盖；模型配置核心的这些能力边界仍须按平台实际接口分别处理。
 
 清除字段表示恢复该宿主的实际继承，不删除 Agent 提示词、工具约束或其他配置。保存必须保留非目标字段、注释、正文和换行；复杂格式无法安全定位时明确拒绝。路径由服务端当前发现结果决定，网页或 MCP 不提供任意文件写入入口。
 
@@ -41,18 +61,22 @@
 需要本机已有 Python 3.11+ 和 Bash，不安装解释器、不修改 PATH。源码目录可运行：
 
 ```bash
-bash scripts/agent_config.sh console --host codex
+bash scripts/agent_config.sh open --host codex
+bash scripts/agent_config.sh status --host codex
+bash scripts/agent_config.sh doctor --host codex
 bash scripts/agent_config.sh list --host claude
 bash scripts/agent_config.sh list --host codex --project /absolute/project
 bash scripts/agent_config.sh resolve --host codex --role <list返回的AgentID>
 ```
 
-`console` 默认尝试打开网页，`--no-browser` 只输出本地地址；地址片段包含访问令牌，应按本地配置入口处理。`serve --port 0 --idle-timeout 1800` 可前台启动服务。默认读取本机实际用户配置，保存会修改所选的可写原生定义。
+安全 `open` 默认尝试打开网页；`--no-browser` 只准备私有打开入口。open/status/doctor 返回稳定 JSON，地址不带认证片段，服务就绪与浏览器结果分别结算。启动锁、首行读取、健康握手及失败自有子进程回收使用有限总预算；版本或配置根不一致时不强制复用、终止旧服务。
+
+原 `console`、`serve` 和 MCP 接口保留。开发者直接使用 console 时，其输出 URL 的片段包含访问令牌，应按本地配置入口处理；插件薄入口调用安全 open，不转发原 console 输出。`serve --port 0 --idle-timeout 1800` 可前台运行。默认读取本机真实原生配置，保存会修改所选的可写原生定义。
 
 测试须使用显式临时根，与真实用户配置隔离：
 
 ```bash
-bash scripts/agent_config.sh console --no-browser --host codex \
+bash scripts/agent_config.sh open --no-browser --host codex \
   --home /absolute/test-home --data-dir /absolute/test-state
 ```
 
@@ -66,6 +90,8 @@ bash scripts/python_runtime.sh -B -X utf8 packaging/build_agent_config.py \
 ```
 
 解压后可从任意目录运行包内 `scripts/agent_config.sh`，不需要工作流源码、manager 或插件。普通网页使用无需 MCP；只有主动运行 `mcp` 子命令才启用 stdio 接口，不自动注册客户端。目前未提供跨进程的 preview/apply 脚本命令，网页保留同一服务端计划完成预览与应用。
+
+维护者可用 `packaging/build_config_distribution.py --artifact <真实ZIP> --output <descriptor>` 从真实包生成未发布发行描述。加入 `--url <已发布资产URL>` 时，工具必须实际下载并核对同一 SHA/BUILD 后才写 published，没有跳过在线核验的参数。alpha 包始终标为 alpha，不能冒充稳定发行；插件业务流程不等待组件发布或启动。
 
 ## 当前验证与限制
 

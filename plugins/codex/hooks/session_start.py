@@ -14,12 +14,11 @@ def main() -> int:
     不写trust、不访问账户/历史、不启动服务，未受宿主信任时由官方客户端跳过。
     """
     root = Path(__file__).resolve().parents[1]
-    context = (
-        "Apply the installed Agent Workflow xy-workflow Skill at main-session task intake. "
-        f"Plugin root: {root}. Read {root / 'skills/xy-workflow/SKILL.md'} and its "
-        "unchanged product authority before orchestration. The main session remains PM. "
-        "This is an entry reminder only; it creates no approvals and dispatches no agents."
-    )
+    # SessionStart 不能证明当前用户调用了哪个 Skill，故这里只载入主会话分支规则，
+    # 不解析 stdin 中的历史或任意文本，更不会提前读取业务权威、启动维护或创建任务。
+    # 主会话在实际任务进入时依据宿主当前用户的显式调用证据选择对应分支。
+    context = (f"插件物理根：{root}。业务分支的工作流路径：{root / 'skills/xy-workflow/SKILL.md'}。\n\n"
+               + (root / "main-session-context.md").read_text(encoding="utf-8"))
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}))
     return 0
 

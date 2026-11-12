@@ -14,7 +14,7 @@ import time
 import webbrowser
 
 from .contracts import HOSTS
-from .server import (ConsoleServer, ROOT, configuration_identity, console_result, private_runtime_dir,
+from .server import (ConsoleLifecycleError, ConsoleServer, ROOT, configuration_identity, console_result, private_runtime_dir,
                      process_lock, read_connection, reusable_connection,
                      service_version, validate_location, write_connection)
 
@@ -26,18 +26,63 @@ def default_data_dir():
     return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "native-agent-config"
 
 
-def open_console(data_dir, host="codex", project=None, *, home=None, open_browser=False):
-    """只有控制台请求才启动 HTTP；MCP 初始化及模型查询不会创建连接记录。"""
+OPEN_TIMEOUT = 10.0
+
+
+def _startup_line(child, deadline):
+    """只读取启动收据的第一行；部分行、持续滴入和无换行输出共享同一预算。"""
+    raw = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        while len(raw) <= 8192:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(timeout=remaining):
+                raise ConsoleLifecycleError("launch_timeout", "控制台服务启动超时")
+            chunk = os.read(child.stdout.fileno(), min(4096, 8193 - len(raw)))
+            if not chunk:
+                raise ConsoleLifecycleError("startup_failed", "控制台服务未能启动")
+            raw.extend(chunk)
+            if b"\n" in raw:
+                if raw.index(b"\n") >= 8192:
+                    raise ConsoleLifecycleError("startup_failed", "控制台服务启动输出超限")
+                return
+    raise ConsoleLifecycleError("startup_failed", "控制台服务启动输出超限")
+
+
+def _reap_starting_child(child, deadline):
+    """只回收本次拉起且尚未通过握手的子进程，不触碰连接记录中的旧服务。"""
+    if child.poll() is not None:
+        return
+    child.terminate()
+    try:
+        child.wait(timeout=max(0.001, min(0.5, deadline - time.monotonic())))
+    except subprocess.TimeoutExpired:
+        child.kill()
+        try:
+            child.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            # kill 已发给本次 owned 子进程；不能为了等待 OS 回收越过客户端总预算。
+            pass
+
+
+def open_console(data_dir, host="codex", project=None, *, home=None, open_browser=False, timeout=OPEN_TIMEOUT):
+    """只有控制台请求才启动 HTTP；锁、输出、健康握手和失败回收共用总预算。"""
     validate_location(host, project)
+    deadline = time.monotonic() + timeout
+    # 预留最多一秒给失败时的 terminate/kill；不能把每个阶段各自的超时相加。
+    work_deadline = deadline - min(1.0, timeout / 4)
     data_dir = Path(data_dir).expanduser().resolve()
     from .service import ModelService
     identity = configuration_identity(ModelService(data_dir, home=home))
     version = service_version()
     directory = private_runtime_dir(data_dir)
-    with process_lock(directory / "launch.lock"):
-        connection = reusable_connection(directory, version, identity)
+    with process_lock(directory / "launch.lock", timeout=max(0, work_deadline - time.monotonic())):
+        connection = reusable_connection(directory, version, identity,
+                                         timeout=min(1, max(0, work_deadline - time.monotonic())))
         reused = connection is not None
         if connection is None:
+            if time.monotonic() >= work_deadline:
+                raise ConsoleLifecycleError("launch_timeout", "控制台服务启动超时")
             command = [sys.executable, "-B", str(ROOT / "scripts" / "agent_config.py"),
                        "serve", "--data-dir", str(data_dir), "--host", host]
             if home is not None:
@@ -48,23 +93,13 @@ def open_console(data_dir, host="codex", project=None, *, home=None, open_browse
             child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
             try:
-                with selectors.DefaultSelector() as selector:
-                    selector.register(child.stdout, selectors.EVENT_READ)
-                    if not selector.select(timeout=8):
-                        raise ValueError("控制台服务启动超时")
-                    raw = child.stdout.readline(8193)
-                if not raw or len(raw) > 8192:
-                    raise ValueError("控制台服务未能启动")
-                connection = reusable_connection(directory, version, identity)
+                _startup_line(child, work_deadline)
+                connection = reusable_connection(directory, version, identity,
+                                                 timeout=min(1, max(0, work_deadline - time.monotonic())))
                 if connection is None:
-                    raise ValueError("控制台服务启动握手失败")
+                    raise ConsoleLifecycleError("handshake_failed", "控制台服务启动握手失败")
             except BaseException:
-                child.terminate()
-                try:
-                    child.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait(timeout=3)
+                _reap_starting_child(child, deadline)
                 raise
             finally:
                 child.stdout.close()
@@ -119,13 +154,13 @@ def serve(data_dir, host="codex", project=None, *, home=None, port=0, idle_timeo
 def parser():
     result = argparse.ArgumentParser(description="独立三平台原生 Agent 配置服务（Python 3.11+）")
     commands = result.add_subparsers(dest="command", required=True)
-    for command in ("console", "serve", "list", "resolve", "mcp"):
+    for command in ("console", "serve", "list", "resolve", "mcp", "open", "status", "doctor"):
         sub = commands.add_parser(command)
         sub.add_argument("--data-dir", type=Path, default=None)
         sub.add_argument("--host", choices=HOSTS, default="codex")
         sub.add_argument("--project", default=None)
         sub.add_argument("--home", type=Path, default=None, help="明确选择原生配置根；测试请使用临时目录")
-        if command == "console":
+        if command in {"console", "open"}:
             sub.add_argument("--no-browser", action="store_true")
         elif command == "serve":
             sub.add_argument("--port", type=int, default=0)
@@ -140,6 +175,13 @@ def parser():
 def main(argv=None):
     argument_parser = parser()
     args = argument_parser.parse_args(argv)
+    if args.command in {"open", "status", "doctor"}:
+        from .commands import execute
+        result, exit_code = execute(args.command, args.data_dir or default_data_dir(), args.host,
+                                    args.project, home=args.home,
+                                    no_browser=getattr(args, "no_browser", False))
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return exit_code
     try:
         validate_location(args.host, args.project)
         service_version()

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "product": "native-agent-config",
+  "version": "0.1.0-alpha.3",
+  "channel": "alpha",
+  "cli_protocol": 1,
+  "service_protocol": 2,
+  "release_status": "unpublished",
+  "artifact": {
+    "name": "native-agent-config-0.1.0-alpha.3.zip",
+    "sha256": "",
+    "url": ""
+  }
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -36,7 +37,7 @@ ANTIGRAVITY_SKILL_BODY_LIMIT = 24_000
 MANIFESTS = {"codex": ".codex-plugin/plugin.json", "claude": ".claude-plugin/plugin.json",
              "antigravity": ".antigravity-plugin/plugin.json"}
 # 原有 helper 的源包依赖显式列出。不给插件夹入中央管理器、TUI、旧安装器、
-# Windows 启动器、原生Agent配置产品或任何模型服务/MCP装配入口。
+# Windows 启动器、原生配置业务本体或任何模型服务/MCP装配入口。
 LIB_FILES = (
     "__init__.py", "agent_continuation.py", "agent_continuation_cli.py", "platform_fs.py", "plugin_resources.py", "role_models.py",
     "python_runtime.sh", "runtime_pins.py", "runtime_store.py", "standard_paths.py", "task_graph.py",
@@ -46,6 +47,13 @@ LIB_FILES = (
 )
 HOST_LIB_FILES = ("__init__.py", "claude_instructions.py", "claude_options.py",
                   "workflow_hook_settings.py")
+# 维护入口单独封闭白名单：既不遍历维护目录，也不读取独立产品源码或网页。
+# 新的薄模块必须经显式审查后加入；Skill 不属于九个业务核心或角色预载列表。
+MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
+MAINTENANCE_SKILL = "plugins/maintenance/skills/agent-config/SKILL.md"
+MAINTENANCE_CODEX_POLICY = "plugins/maintenance/skills/agent-config/agents/openai.yaml"
+MAINTENANCE_INVOCATIONS = {"codex": "$agent-workflow:agent-config",
+                          "claude": "/agent-workflow:agent-config", "antigravity": "/agent-config"}
 VERSION_RE = re.compile(r"3\.0\.0-alpha\.[1-9][0-9]*\Z")
 MANIFEST_FIELDS = {
     "codex": {"name", "version", "description", "author", "skills", "hooks"},
@@ -125,6 +133,42 @@ def split_frontmatter(body: bytes) -> tuple[bytes, bytes]:
 def render_skill(body: bytes, envelope: bytes) -> bytes:
     header, original_body = split_frontmatter(body)
     return header + b"\n" + envelope + b"\n" + original_body
+
+
+def render_main_context(body: bytes, host: str, envelope_source: str) -> bytes:
+    """主会话适配仅提供分支，不将业务适配注入维护 Skill 或 Worker。
+
+    host 和调用名称来自构建枚举而非用户输入；项目路径留给真实 session/workspace，
+    不在构建时写入开发机 cwd、源码路径或默认项目。业务适配在业务分支中延迟读取。
+    """
+    return (body.replace(b"@HOST@", host.encode("ascii"))
+            .replace(b"@INVOCATION@", MAINTENANCE_INVOCATIONS[host].encode("ascii"))
+            .replace(b"@BUSINESS_ADAPTER@", envelope_source.encode("ascii")))
+
+
+def render_maintenance_skill(body: bytes, host: str) -> bytes:
+    """只应用宿主支持的显式调用元数据，正文不叠加 workflow envelope。"""
+    header, original_body = split_frontmatter(body)
+    if host in {"claude", "antigravity"}:
+        # 两宿主官方插件 Skill 均支持此 frontmatter；不添加 fork 或宽泛工具批准。
+        header = header.removesuffix(b"---\n") + b"disable-model-invocation: true\n---\n"
+    return (header + original_body).replace(b"@HOST@", host.encode("ascii")).replace(
+        b"@INVOCATION@", MAINTENANCE_INVOCATIONS[host].encode("ascii"))
+
+
+def validate_maintenance_descriptor(source: Path) -> None:
+    """复用薄组件的只读描述符校验；插件构建始终不导入 native_config。
+
+    仅加载已经过 read_source 普通文件/软链检查的固定白名单模块。该模块只依赖
+    标准库；descriptor 不创建目录、不下载、不安装，因此独立业务源码缺席仍可构建。
+    """
+    spec = importlib.util.spec_from_file_location("awf_build_component_store", source / "plugins/maintenance/component_store.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        module.descriptor(source / "plugins/maintenance/component.json")
+    except module.ComponentError as error:
+        raise ValueError("maintenance component descriptor is invalid: " + str(error)) from None
 
 
 def validate_antigravity_skill_body(relative: str, body: bytes) -> None:
@@ -207,6 +251,26 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     if envelope_source not in result:
         copy(envelope_source)
     envelope = result[envelope_source]
+    copy("plugins/main-session-context.md")
+    main_context = render_main_context(result["plugins/main-session-context.md"], host, envelope_source)
+    # 规范源保留原样用于摘要；只对主会话实际加载的投影应用固定宿主适配。
+    result["main-session-context.md"] = main_context
+    projections["main-session-context.md"] = {"source": "plugins/main-session-context.md",
+                                               "transform": host + "-main-session-route-v1"}
+    for name in MAINTENANCE_FILES:
+        copy("plugins/maintenance/" + name)
+    validate_maintenance_descriptor(source)
+    copy(MAINTENANCE_SKILL)
+    target = "skills/agent-config/SKILL.md"
+    result[target] = render_maintenance_skill(result[MAINTENANCE_SKILL], host)
+    projections[target] = {"source": MAINTENANCE_SKILL,
+                           "transform": host + "-maintenance-explicit-v1"}
+    if host == "antigravity":
+        validate_antigravity_skill_body(target, result[target])
+    if host == "codex":
+        copy(MAINTENANCE_CODEX_POLICY, "skills/agent-config/agents/openai.yaml")
+        projections["skills/agent-config/agents/openai.yaml"] = {
+            "source": MAINTENANCE_CODEX_POLICY, "transform": "identity"}
     skills = sorted(CORE_SKILLS)
     for relative in sorted(result.copy()):
         if not relative.startswith("platforms/shared/skills/"):
@@ -233,9 +297,9 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     if host == "claude":
         copy("plugins/claude/pm.md")
         copy("plugins/claude/settings.json", "settings.json")
-        result["agents/pm.md"] = render_skill(result["plugins/claude/pm.md"], envelope)
-        projections["agents/pm.md"] = {"source": "plugins/claude/pm.md", "transform": "main-session-entry-envelope-v1",
-                                      "adapter": envelope_source}
+        result["agents/pm.md"] = render_skill(result["plugins/claude/pm.md"], main_context)
+        projections["agents/pm.md"] = {"source": "plugins/claude/pm.md", "transform": "main-session-entry-route-v1",
+                                      "adapter": "plugins/main-session-context.md"}
         projections["settings.json"] = {"source": "plugins/claude/settings.json", "transform": "identity"}
     if host == "codex":
         # 官方兼容清单明确指向 hooks/hooks.json；只装配资源，不写任何 trust。
@@ -247,11 +311,9 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     if host == "antigravity":
         # AGY官方默认发现的always-on入口属于插件rules目录，不修改项目AGENTS。
         # 只给主会话已有Skill的入口；角色正文继续约束Worker，不能把它变成PM。
-        result["rules/AGENTS.md"] = (
-            b"# Agent Workflow main-session entry\n\n"
-            b"At main-session task intake, apply the packaged skills/xy-workflow/SKILL.md "
-            b"and its unchanged product authority. The main session remains PM; worker "
-            b"roles execute only their current fresh task pack.\n\n" + envelope)
+        result["rules/AGENTS.md"] = main_context
+        projections["rules/AGENTS.md"] = {"source": "plugins/main-session-context.md",
+                                           "transform": "antigravity-main-session-route-v1"}
     template = "plugins/" + host + "/plugin.json.in"
     manifest = json.loads(read_source(source, template).decode("utf-8").replace("@PLUGIN_VERSION@", version))
     validate_manifest(host, manifest, version)
@@ -289,7 +351,8 @@ def write_archive(files: dict[str, bytes], target: Path) -> None:
         for relative, body in sorted(files.items()):
             entry = zipfile.ZipInfo(relative, (1980, 1, 1, 0, 0, 0))
             entry.create_system = 3
-            executable = relative in {"plugins/source_pack.py", "lib/python_runtime.sh"}
+            executable = relative in {"plugins/source_pack.py", "lib/python_runtime.sh",
+                                      "plugins/maintenance/launcher.sh"}
             entry.external_attr = (stat.S_IFREG | (0o755 if executable else 0o644)) << 16
             entry.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(entry, body, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)

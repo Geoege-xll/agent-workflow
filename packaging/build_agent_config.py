@@ -27,11 +27,16 @@ README = """# Native Agent Config
 
 ```sh
 bash <解压根>/scripts/agent_config.sh console --host codex
+bash <解压根>/scripts/agent_config.sh open --host codex
+bash <解压根>/scripts/agent_config.sh status --host codex
+bash <解压根>/scripts/agent_config.sh doctor --host codex
 bash <解压根>/scripts/agent_config.sh list --host claude
 bash <解压根>/scripts/agent_config.sh resolve --host codex --role <list返回的AgentID>
 ```
 
 网页入口输出包含片段令牌的本地 URL；console 默认尝试打开浏览器，--no-browser 仅输出。
+插件使用的 open/status/doctor 返回脱敏 JSON；status/doctor 不安装、不启动服务或浏览器。
+open 的浏览器失败会保留 ready 服务及权限为 0600 的私有 HTML 打开入口。
 serve 可前台运行并使用 --port 0 和 --idle-timeout 1800；mcp 是手动选择的 stdio 子命令，
 不注册到宿主、不作为网页或工作流运行前置。脚本查询与网页保存调用同一业务核心。
 尚未提供跨进程 preview/apply 脚本；网页预览在服务端保留同一确认计划。

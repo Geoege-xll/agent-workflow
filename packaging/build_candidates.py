@@ -51,6 +51,37 @@ def source_state(source):
             "dirty": bool(git(source, "status", "--porcelain", "--untracked-files=normal"))}
 
 
+def validate_component_binding(descriptor, archive, version):
+    """交付层只核对两个独立产品的绑定，不下载组件或读取原生源码。
+
+    未发布描述符允许尚未冻结摘要；一旦有摘要，即使仍为离线 unpublished，也必须
+    与本次真实独立 ZIP 字节一致。published 则必须同时具备真实发行 URL 与摘要。
+    描述符的完整安全解析由薄启动器负责，此处只检查候选装配需要的稳定 ABI。
+    """
+    component = json.loads(descriptor)
+    artifact = component["artifact"]
+    if (component["schema_version"] != 1 or component["product"] != "native-agent-config"
+            or component["version"] != version or component["channel"] != "alpha"
+            or component["cli_protocol"] != 1 or component["service_protocol"] != 2
+            or artifact["name"] != archive.name):
+        raise ValueError("插件组件描述符与独立候选身份或协议不一致")
+    if component["release_status"] not in {"unpublished", "published"}:
+        raise ValueError("组件描述符发行状态无效")
+    expected = artifact["sha256"]
+    url = artifact["url"]
+    if not isinstance(expected, str) or not isinstance(url, str):
+        raise ValueError("组件描述符摘要和 URL 必须为字符串")
+    if component["release_status"] == "unpublished" and url:
+        raise ValueError("未发布组件描述符不能声明下载 URL")
+    if component["release_status"] == "published" and (not expected or not url.startswith("https://")):
+        raise ValueError("已发布组件描述符缺少冻结摘要或 HTTPS 发行 URL")
+    if expected and (not re.fullmatch(r"[a-f0-9]{64}", expected) or expected != digest(archive.read_bytes())):
+        raise ValueError("插件组件描述符摘要与独立 ZIP 不一致")
+    return {"version": version, "release_status": component["release_status"],
+            "descriptor_sha256": digest(descriptor), "artifact_sha256": expected,
+            "artifact_matches_candidate": bool(expected)}
+
+
 def build(source, output):
     """只编排构建及交付元数据；载荷、白名单和宿主转换规则仍由原构建器唯一负责。"""
     source = source.resolve(strict=True)
@@ -78,6 +109,7 @@ def build(source, output):
     if source_state(source) != before:
         raise ValueError("构建期间源码发生变化；本目录不构成同源码候选，请冻结来源后换新目录")
     artifacts = []
+    component_descriptor = None
     for host in ("codex", "claude", "antigravity"):
         primary = output / "workflow" / f"agent-workflow-{host}-{versions['workflow']}.zip"
         with zipfile.ZipFile(primary) as archive:
@@ -85,11 +117,19 @@ def build(source, output):
             record = json.loads(provenance)
             if record["plugin_version"] != versions["workflow"] or record["host"] != host:
                 raise ValueError("工作流包身份与候选版本源不一致")
+            descriptor = archive.read("plugins/maintenance/component.json")
+            if component_descriptor is not None and descriptor != component_descriptor:
+                raise ValueError("三个宿主插件必须携带相同组件描述符")
+            component_descriptor = descriptor
         local = primary.with_name(primary.stem + "-local-source.zip")
         with zipfile.ZipFile(local) as archive:
             matches = [name for name in archive.namelist() if name.endswith("/sources.json")]
             if len(matches) != 1 or archive.read(matches[0]) != provenance:
                 raise ValueError("本地安装源与对应插件包不一致")
+            component_matches = [name for name in archive.namelist()
+                                 if name.endswith("/plugins/maintenance/component.json")]
+            if len(component_matches) != 1 or archive.read(component_matches[0]) != descriptor:
+                raise ValueError("本地安装源组件描述符与对应插件包不一致")
         for path, kind in ((primary, "plugin"), (local, "local-source")):
             artifacts.append({"path": path.relative_to(output).as_posix(), "product": "workflow",
                               "host": host, "kind": kind, "version": versions["workflow"]})
@@ -97,6 +137,7 @@ def build(source, output):
     with zipfile.ZipFile(native) as archive:
         if json.loads(archive.read("BUILD.json"))["version"] != versions["native-config"]:
             raise ValueError("原生配置独立包与候选版本源不一致")
+    component_binding = validate_component_binding(component_descriptor, native, versions["native-config"])
     artifacts.append({"path": native.relative_to(output).as_posix(), "product": "native-config",
                       "kind": "standalone", "version": versions["native-config"]})
     if set(output.rglob("*.zip")) != {output / row["path"] for row in artifacts}:
@@ -109,6 +150,7 @@ def build(source, output):
                 "runtime_verified": False, "source": before, "versions": versions,
                 "version_sources": {"workflow": "product/PLUGIN_VERSION", "native-config": "native_config/VERSION"},
                 "builders_sha256": builders, "artifacts": artifacts,
+                "maintenance_component": component_binding,
                 "pending_acceptance": ["official host loading, dispatch, model and effort behavior",
                                        "in-flight task resource retention across plugin updates"],
                 "installation": {"products_are_independent": True, "mcp_required": False}}

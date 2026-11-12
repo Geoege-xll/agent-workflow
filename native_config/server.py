@@ -19,7 +19,6 @@ import stat
 import threading
 import time
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
-from urllib.request import ProxyHandler, Request, build_opener
 
 from .contracts import HOSTS
 
@@ -416,7 +415,7 @@ def private_runtime_dir(data_dir: Path) -> Path:
 
 
 @contextmanager
-def process_lock(path: Path, *, blocking=True):
+def process_lock(path: Path, *, blocking=True, timeout=None):
     """文件锁随进程退出自动释放；不使用 PID 猜测，也不代管任何 Agent。"""
     descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
@@ -424,10 +423,19 @@ def process_lock(path: Path, *, blocking=True):
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
             raise ValueError("连接锁无效")
         os.fchmod(descriptor, 0o600)
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError as exc:
-            raise ValueError("同一数据目录的控制台服务已运行") from exc
+        # serve 保留非阻塞唯一锁；open 显式传总预算的剩余秒数，避免另一个
+        # 启动进程持锁或失去响应时让当前客户端永久挂起。锁超时不代管持锁进程。
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | (0 if blocking and deadline is None else fcntl.LOCK_NB))
+                break
+            except BlockingIOError as exc:
+                if not blocking:
+                    raise ConsoleLifecycleError("service_busy", "同一数据目录的控制台服务已运行") from exc
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise ConsoleLifecycleError("launch_timeout", "等待控制台启动锁超时") from exc
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())) if deadline is not None else 0.05)
         yield
     finally:
         os.close(descriptor)
@@ -473,25 +481,72 @@ def read_connection(directory: Path):
     return result
 
 
-def reusable_connection(directory: Path, version: str, identity: str):
+class ConsoleLifecycleError(ValueError):
+    """只使用固定错误码的生命周期拒绝，安全命令不转发异常正文。"""
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def _health(record, timeout):
+    """认证健康探测共用一个单调时钟预算，滴入头部或正文不能重置预算。"""
+    deadline = time.monotonic() + max(0, timeout)
+    payload = bytearray()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection.settimeout(max(0.001, deadline - time.monotonic()))
+        connection.connect(("127.0.0.1", record["port"]))
+        request = (f"GET /api/health HTTP/1.0\r\nHost: 127.0.0.1:{record['port']}\r\n"
+                   f"Authorization: Bearer {record['token']}\r\nConnection: close\r\n\r\n")
+        connection.settimeout(max(0.001, deadline - time.monotonic()))
+        connection.sendall(request.encode("ascii"))
+        # 本组件固定返回 HTTP/1.0 + Content-Length，不接受重定向、分块或任意地址。
+        # 每次 recv 都只做一次 socket 读取，重新扣减预算，避免 readline/read(n)
+        # 内部多次读取使持续滴入的数据绕过超时。健康内容和头部各限制 8 KiB。
+        while len(payload) <= 16384:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("健康探测超时")
+            connection.settimeout(remaining)
+            chunk = connection.recv(min(4096, 16385 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if b"\r\n\r\n" not in payload:
+                if len(payload) > 8192:
+                    raise ValueError("健康响应头超限")
+                continue
+            headers, body = payload.split(b"\r\n\r\n", 1)
+            lines = headers.split(b"\r\n")
+            if len(headers) > 8192 or not re.fullmatch(rb"HTTP/1\.[01] 200(?: [^\r\n]*)?", lines[0]):
+                raise ValueError("健康响应无效")
+            lengths = [line.split(b":", 1)[1].strip() for line in lines[1:]
+                       if line.lower().startswith(b"content-length:")]
+            if (len(lengths) != 1 or not lengths[0].isdigit() or int(lengths[0]) > 8192
+                    or any(line.lower().startswith(b"transfer-encoding:") for line in lines[1:])):
+                raise ValueError("健康响应长度无效")
+            if len(body) >= int(lengths[0]):
+                if len(body) != int(lengths[0]):
+                    raise ValueError("健康响应长度不匹配")
+                return parse_json(body)
+    raise ValueError("健康响应未完成")
+
+
+def reusable_connection(directory: Path, version: str, identity: str, *, timeout=1):
     record = read_connection(directory)
     if record is None:
         return None
     # 禁止把新版本页面接到旧版本服务；安装更新后由旧服务正常空闲退出。
     if record.get("protocol_version") != PROTOCOL_VERSION or record.get("service_version") != version:
-        raise ValueError("已记录的控制台版本不兼容，请先关闭旧服务")
+        raise ConsoleLifecycleError("incompatible_service", "已记录的控制台版本不兼容，请先关闭旧服务")
     if record.get("configuration_identity") != identity:
-        raise ValueError("同一数据目录已经关联其他配置根，请使用独立 --data-dir")
-    request = Request(f"http://127.0.0.1:{record['port']}/api/health",
-                      headers={"Authorization": "Bearer " + record["token"]})
+        raise ConsoleLifecycleError("configuration_conflict", "同一数据目录已经关联其他配置根，请使用独立 --data-dir")
     try:
-        with build_opener(ProxyHandler({})).open(request, timeout=1) as response:
-            health = parse_json(response.read(8193))
+        health = _health(record, timeout)
     except (OSError, ValueError):
         return None
     if not isinstance(health, dict) or any(health.get(key) != record.get(key)
                for key in ("protocol_version", "service_version", "instance_id", "configuration_identity")):
-        raise ValueError("控制台版本握手失败")
+        raise ConsoleLifecycleError("handshake_failed", "控制台版本握手失败")
     return record
 
 

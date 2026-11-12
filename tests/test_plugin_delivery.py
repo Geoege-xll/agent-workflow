@@ -391,7 +391,8 @@ class PluginDeliveryTest(unittest.TestCase):
                                  "plugin", "details", "agent-workflow"],
                                 cwd=home, env=isolated_environment(home), capture_output=True, text=True, timeout=30)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("Skills (9)", result.stdout)
+        self.assertIn("Skills (10)", result.stdout)
+        self.assertIn("agent-config", result.stdout)
         self.assertIn("Agents (8)", result.stdout)
         self.assertIn("pm", result.stdout)
         self.assertIn("MCP servers (0)", result.stdout)

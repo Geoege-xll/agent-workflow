@@ -22,16 +22,21 @@ class CandidateDeliveryTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.source = self.root / "source with spaces"
-        for name in ("packaging", "product", "native_config"):
+        for name in ("packaging", "product", "native_config", "plugins/maintenance"):
             (self.source / name).mkdir(parents=True)
         shutil.copyfile(ROOT / "packaging/build_candidates.py", self.source / "packaging/build_candidates.py")
         (self.source / "product/PLUGIN_VERSION").write_text("3.0.0-alpha.2\n", encoding="ascii")
         (self.source / "native_config/VERSION").write_text("0.1.0-alpha.2\n", encoding="ascii")
+        (self.source / "plugins/maintenance/component.json").write_text(json.dumps({
+            "schema_version": 1, "product": "native-agent-config", "version": "0.1.0-alpha.2",
+            "channel": "alpha", "cli_protocol": 1, "service_protocol": 2,
+            "release_status": "unpublished", "artifact": {
+                "name": "native-agent-config-0.1.0-alpha.2.zip", "sha256": "", "url": ""}}), encoding="utf-8")
         self.calls = self.root / "builder-calls.jsonl"
         self.environment = {**os.environ, "AWF_TEST_CALLS": str(self.calls)}
         # 夹具只实现既有 CLI/归档元数据协议。真实产品白名单、离线加载和可复现
         # 由各自的 delivery/packaging 测试负责，此处检查顺序、同源和失败传播。
-        common = '''import argparse, json, os, sys, zipfile
+        common = '''import argparse, hashlib, io, json, os, sys, zipfile
 from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--source", type=Path, required=True)
@@ -44,18 +49,37 @@ with Path(os.environ["AWF_TEST_CALLS"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps({"builder": Path(__file__).name, "source": str(args.source),
                              "host": args.host, "local_source": args.local_source,
                              "python": sys.executable, "no_bytecode": sys.dont_write_bytecode}) + "\\n")
-def archive(name, files):
-    with zipfile.ZipFile(args.output_dir / name, "w") as package:
+def archive_bytes(files):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
         for path, body in files.items():
-            package.writestr(path, body)
+            package.writestr(zipfile.ZipInfo(path, (1980, 1, 1, 0, 0, 0)), body)
+    return buffer.getvalue()
+def archive(name, files):
+    (args.output_dir / name).write_bytes(archive_bytes(files))
 '''
         plugin = '''version = (args.source / "product/PLUGIN_VERSION").read_text().strip()
+mode = os.environ.get("AWF_CASE")
+component = json.loads((args.source / "plugins/maintenance/component.json").read_text())
+if mode == "wrong-component-version":
+    component["version"] = "0.1.0-alpha.999"
+if mode == "component-hash":
+    component["artifact"]["sha256"] = "a" * 64
+if mode == "frozen-sha":
+    native_version = (args.source / "native_config/VERSION").read_text().strip()
+    component["artifact"]["sha256"] = hashlib.sha256(archive_bytes({
+        "BUILD.json": json.dumps({"version": native_version})})).hexdigest()
 for host in ("codex", "claude", "antigravity"):
     record = json.dumps({"plugin_version": version, "host": host})
     stem = "agent-workflow-" + host + "-" + version
-    archive(stem + ".zip", {"sources.json": record})
+    descriptor = json.dumps(component)
+    if mode == "component-host-mismatch" and host == "claude":
+        descriptor = json.dumps({**component, "version": "0.1.0-alpha.999"})
+    archive(stem + ".zip", {"sources.json": record, "plugins/maintenance/component.json": descriptor})
     local = "{}" if os.environ.get("AWF_CASE") == "local-mismatch" else record
-    archive(stem + "-local-source.zip", {"plugins/plugin/sources.json": local})
+    local_component = "{}" if mode == "component-local-mismatch" else descriptor
+    archive(stem + "-local-source.zip", {"plugins/plugin/sources.json": local,
+        "plugins/plugin/plugins/maintenance/component.json": local_component})
 '''
         native = '''version = (args.source / "native_config/VERSION").read_text().strip()
 mode = os.environ.get("AWF_CASE")
@@ -106,6 +130,9 @@ if mode == "extra":
                 self.assertEqual("BUILD_VERIFIED", manifest["status"])
                 self.assertFalse(manifest["runtime_verified"])
                 self.assertEqual({"products_are_independent": True, "mcp_required": False}, manifest["installation"])
+                self.assertEqual("unpublished", manifest["maintenance_component"]["release_status"])
+                self.assertEqual("0.1.0-alpha.2", manifest["maintenance_component"]["version"])
+                self.assertFalse(manifest["maintenance_component"]["artifact_matches_candidate"])
                 self.assertEqual(7, len(manifest["artifacts"]))
                 self.assertEqual(6, sum(row["product"] == "workflow" for row in manifest["artifacts"]))
                 for row in manifest["artifacts"]:
@@ -157,7 +184,8 @@ if mode == "extra":
         self.assertFalse((self.source / "new-output").exists())
 
     def test_builder_failures_source_drift_and_mixed_artifacts_do_not_emit_manifest(self):
-        for mode in ("fail", "drift", "wrong-version", "local-mismatch", "extra"):
+        for mode in ("fail", "drift", "wrong-version", "local-mismatch", "extra", "wrong-component-version",
+                     "component-host-mismatch", "component-local-mismatch", "component-hash"):
             with self.subTest(mode=mode):
                 output = self.root / mode
                 result = self.invoke(output, mode=mode)
@@ -168,6 +196,15 @@ if mode == "extra":
                     self.assertIn("构建器真实拒绝", result.stderr)
                 # 恢复的是本例自己的临时夹具；不接触共享工作树或其他作者的源码。
                 (self.source / "native_config/VERSION").write_text("0.1.0-alpha.2\n", encoding="ascii")
+
+    def test_frozen_offline_component_hash_matches_the_actual_standalone_zip(self):
+        output = self.root / "frozen-offline"
+        result = self.invoke(output, mode="frozen-sha")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        manifest = json.loads(result.stdout)
+        native = next(row for row in manifest["artifacts"] if row["product"] == "native-config")
+        self.assertTrue(manifest["maintenance_component"]["artifact_matches_candidate"])
+        self.assertEqual(native["sha256"], manifest["maintenance_component"]["artifact_sha256"])
 
 
 if __name__ == "__main__":

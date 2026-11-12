@@ -11,27 +11,31 @@ It selects existing Python only, without installing software or changing PATH.
 
 The host owns plugin installation, enablement, disablement and updates. No central
 runtime import, activation, project registration or instruction-file writes are
-prerequisites. The default build contains the workflow core only: product authority,
-shared skills, roles, native host resources, original workflow helpers and their
-required dependencies. It contains no model configuration service, configuration
-web page, model MCP declaration, or service launch script. Core dispatch uses the
+prerequisites. The build contains product authority, shared skills, roles, native
+host resources, original workflow helpers and their required dependencies.
+另有独立的 `agent-config` 维护 Skill、固定轻量启动器和组件发行描述，仅在用户显式
+调用时定位或准备独立组件。插件不包含配置服务实现、网页、独立组件 ZIP 或模型 MCP。
+Core dispatch uses the
 official host's default or already configured model/reasoning settings. Missing
 configuration software never blocks the core workflow.
 
 Native Agent Configuration is a separate product implemented in `native_config/`
-and delivered by its own builder and version source. This workflow builder has no
-configuration-service or MCP integration mode. Its plugin payload, source manifest,
-version and startup do not depend on that product. The earlier AWF-only seven-role
+and delivered by its own builder and version source. 插件构建器只装配薄入口及固定发行
+元数据，不导入或读取独立配置核心源码；业务流程不依赖组件已安装或服务运行。
+核心与网页仍分别发布，模型配置维护失败不能阻断普通工作流。The earlier AWF-only seven-role
 configuration experiment and its integrated assembly have been retired.
 
-The generated `skills/` tree is a discovery projection of the single source at
-`platforms/shared/skills/`. Its SKILL frontmatter and original body remain intact;
-only the resource adapter from `plugins/plugin-context.md` is inserted after the
-frontmatter. Reference files are copied byte-for-byte. `roles/` and `product/`
+生成的九个核心 Skill 来自 `platforms/shared/skills/`，`agent-config` 来自独立维护
+目录，不计入 CORE_SKILLS 或任何 Worker 的预载。核心 Skill 的前置元数据与原正文
+完整保留，只在前置元数据后插入实际宿主的资源适配说明；引用文件逐字节复制。
+`roles/` and `product/`
 remain canonical; native agent prompts retain complete original role bodies.
 `sources.json` records source hashes, generated projections, package hashes and
 the result of the existing business-confirmation/execution-contract validators.
 These hashes prove content fidelity, not actual host dispatch.
+维护 Skill 不注入工作流 envelope。三端主会话先读取短路由，仅用户真正显式调用
+维护 Skill 时执行固定启动器；“实现 agent-config”等普通需求继续读取原完整工作流。
+维护动作不建任务图、不派子代理，不替代网页的预览确认，也不授予业务批准。
 See `INSTALL.md` for commands that build a complete local marketplace/source
 payload and install or temporarily load it with the official clients. No remote
 one-line installation route has been published for this alpha.
@@ -97,9 +101,9 @@ Every built package starts with `runtime_verified: false` in `sources.json`.
 
 | Host | Main-session entry | Native role discovery | Actual acceptance status |
 | --- | --- | --- | --- |
-| Codex | Packaged SessionStart reminder after official Hook review; explicit discovered `agent-workflow:xy-workflow` is also available | No plugin `agents` manifest field is claimed; use complete role instructions through a supported fresh native handoff or verified native role definition | CLI 0.167.0 discovers nine candidate skills. Alpha.3 uses the official compatibility manifest so the Hook is discoverable and can be reviewed through `/hooks`; native behavior is recorded per acceptance case |
+| Codex | Packaged SessionStart reminder after official Hook review; explicit discovered `agent-workflow:xy-workflow` is also available | No plugin `agents` manifest field is claimed; use complete role instructions through a supported fresh native handoff or verified native role definition | CLI 0.167.0 已验 Alpha.3 的九个核心 Skill 与 Hook；当前候选另增维护 Skill，按当前构建和实际宿主发现记录单独验收 |
 | Claude Code | Plugin `settings.json` selects the packaged `pm` entry in the main conversation; explicit `/agent-workflow:xy-workflow` also works | Seven native worker agents with complete role bodies plus the separate main-session entry | CLI 2.1.311 confirms the default main agent, fresh native dispatch, same-ID continuation and configured model/effort through host events; this does not establish unrelated client surfaces |
-| Antigravity | Plugin-owned `rules/AGENTS.md` points main-session task intake to `xy-workflow` | Packaged `agents/` with full role bodies | CLI 1.5.5 strict validation and official install/list confirm nine skills, seven agents and one rule. The AGY-specific resource adapter keeps the complete shared Skill body within the host's 24,000-byte limit; actual model dispatch is assessed separately |
+| Antigravity | Plugin-owned `rules/AGENTS.md` routes business intake to `xy-workflow` and explicit maintenance to `agent-config` | Packaged `agents/` with full role bodies | CLI 1.5.5 已验 Alpha.3 的九个核心 Skill、七个 Agent 和一条规则；当前维护 Skill 单独验核。每个实际发现 Skill 继续受 24,000 字节构建上限保护；真实派发另判 |
 
 Claude's plugin default is below the user's own default-agent setting; it changes
 no global configuration or model. The `pm` entry only points the main session to
