@@ -75,7 +75,7 @@ AGY 使用 GitHub `tree/分支` 地址，不能替换为 Claude 的 `#分支` �
 | 范围 | 当前状态 |
 | --- | --- |
 | alpha.4 本地安装 | Codex、Claude Code、AGY 已验证；属于上一候选记录 |
-| alpha.5 远程渠道 | 本轮按 CI 与发布回执分别记录；安装发现不代表模型运行 |
+| alpha.5 远程渠道 | 三个 Git 来源已发布；安装发现与文件校验结果见[原生安装 CI](https://github.com/Geoege-xll/agent-workflow/actions/workflows/native-install-smoke.yml)，不代表模型运行 |
 | alpha.4 Codex CLI | 新插件启动验证通过，不代表全部业务与模型行为均已验收 |
 | alpha.4 Claude Code PM 运行 | 现有默认模型调用在 90 秒内未响应，尚未验收 |
 | AGY CLI 模型运行（沿用未验项） | 待完成登录后验证 |

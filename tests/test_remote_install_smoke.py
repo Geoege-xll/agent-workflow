@@ -117,6 +117,93 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         SMOKE.verify_installed(plugin, record, host, revision, version)
 
+    def create_agy_git_fixture(self, root):
+        # 夹具只在临时目录创建真实 Git 元数据，不联网、不运行宿主客户端或用户 hook。
+        version, revision = "3.0.0-alpha.5", "a" * 40
+        (root / "sources.json").write_text(json.dumps({"host": "antigravity", "plugin_version": version}))
+        (root / "run.sh").write_text("#!/bin/sh\n# 中文夹具：只核验，不执行。\n")
+        (root / "run.sh").chmod(0o755)
+        files = {path.name: {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                            "mode": "100755" if path.name == "run.sh" else "100644"}
+                 for path in root.iterdir()}
+        record = {"schema_version": 1, "managed_by": "agent-workflow-plugin-source-v1",
+                  "repository": "Geoege-xll/agent-workflow", "host": "antigravity", "channel": "alpha",
+                  "ref": "refs/heads/plugins-antigravity-alpha", "source_revision": revision,
+                  "version": version, "files": files, "candidate_sha256": "c" * 64,
+                  "source_tree_sha256": "d" * 64, "plugin_zip_sha256": "e" * 64,
+                  "artifacts_sha256": {**{str(index): "f" * 64 for index in range(6)},
+                      "workflow/agent-workflow-antigravity-" + version + ".zip": "e" * 64}}
+        SMOKE.command(["git", "init", "--quiet", "--initial-branch=plugins-antigravity-alpha"], root)
+        SMOKE.command(["git", "add", "sources.json", "run.sh"], root)
+        SMOKE.command(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                       "-c", "user.name=Smoke fixture", "-c", "user.email=smoke@example.invalid",
+                       "commit", "--quiet", "-m", "Fixture only"], root)
+        SMOKE.command(["git", "remote", "add", "origin", SMOKE.REMOTE], root)
+        commit = SMOKE.command(["git", "rev-parse", "HEAD"], root)
+        return record, revision, version, commit
+
+    def test_agy_git_metadata_requires_identity_and_preserves_payload_checks(self):
+        with tempfile.TemporaryDirectory(prefix="native-smoke-git-") as temporary:
+            root = Path(temporary).resolve()
+            record, revision, version, commit = self.create_agy_git_fixture(root)
+            def verify(expected=commit):
+                return SMOKE.verify_installed(root, record, "antigravity", revision, version,
+                                              distribution_commit=expected)
+            report = verify()
+            self.assertEqual(2, report["files"])
+            self.assertEqual(commit, report["verified_git_metadata"]["head"])
+            self.assertEqual("plugins-antigravity-alpha", report["verified_git_metadata"]["branch"])
+            self.assertEqual(SMOKE.REMOTE, report["verified_git_metadata"]["origin"])
+            self.assertGreater(report["verified_git_metadata"]["files"], 0)
+            for other_host in ("codex", "claude"):
+                self.assertEqual((set(), None), SMOKE.verified_git_metadata(root, other_host, commit))
+            for expected in (None, "0" * 40):
+                with self.subTest(expected=expected), self.assertRaises(ValueError):
+                    verify(expected)
+            SMOKE.command(["git", "remote", "set-url", "origin", "https://github.com/other/repository.git"], root)
+            with self.assertRaises(ValueError):
+                verify()
+            SMOKE.command(["git", "remote", "set-url", "origin", SMOKE.REMOTE], root)
+            SMOKE.command(["git", "branch", "-m", "unexpected"], root)
+            with self.assertRaises(ValueError):
+                verify()
+            SMOKE.command(["git", "branch", "-m", "plugins-antigravity-alpha"], root)
+            (root / "unexpected.bin").write_bytes(b"not Git metadata")
+            with self.assertRaises(SMOKE.FileClosureMismatch) as failure:
+                verify()
+            self.assertEqual(["unexpected.bin"], failure.exception.details["extra_files"])
+            (root / "unexpected.bin").unlink()
+            (root / "run.sh").chmod(0o644)
+            with self.assertRaises(ValueError):
+                verify()
+            (root / "run.sh").chmod(0o755)
+            (root / "sources.json").write_text("changed payload")
+            with self.assertRaises(ValueError):
+                verify()
+
+    def test_agy_git_metadata_rejects_symlinks_and_redirected_gitdir(self):
+        with tempfile.TemporaryDirectory(prefix="native-smoke-git-") as temporary:
+            root = Path(temporary).resolve()
+            record, revision, version, commit = self.create_agy_git_fixture(root)
+            def verify():
+                return SMOKE.verify_installed(root, record, "antigravity", revision, version,
+                                              distribution_commit=commit)
+            link = root / ".git/redirected-file"
+            link.symlink_to(root / "sources.json")
+            with self.assertRaises(ValueError):
+                verify()
+            link.unlink()
+            metadata = root / ".git"
+            backup = root / ".git-backup"
+            metadata.rename(backup)
+            metadata.symlink_to(backup, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                verify()
+            metadata.unlink()
+            metadata.write_text("gitdir: .git-backup\n")
+            with self.assertRaises(ValueError):
+                verify()
+
     def test_failed_receipt_retains_completed_hosts_and_precise_safe_diagnostics(self):
         with tempfile.TemporaryDirectory(prefix="native-smoke-receipt-") as temporary:
             output = Path(temporary) / "receipt.json"

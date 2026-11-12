@@ -134,7 +134,33 @@ def evidence_receipt(output, evidence):
         output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
 
 
-def verify_installed(root, record, host, expected_revision, expected_version):
+def verified_git_metadata(root, host, distribution_commit):
+    """只分离真实 CI 已证实由 AGY Git 安装保留的 .git；身份未核实则仍拒绝验收。"""
+    metadata = root / ".git"
+    if host != "antigravity" or (not metadata.exists() and not metadata.is_symlink()):
+        return set(), None
+    if (metadata.is_symlink() or not metadata.is_dir()
+            or not re.fullmatch(r"[0-9a-f]{40}", distribution_commit or "")):
+        raise ValueError("AGY Git 管理目录必须是普通目录，并绑定本次分发完整 commit")
+    entries = list(metadata.rglob("*"))
+    if any(path.is_symlink() or not (path.is_file() or path.is_dir()) for path in entries):
+        raise ValueError("AGY Git 管理目录不能包含符号链接或非普通文件")
+    # 不读出 config 原文，也不运行任何 hook；仅向 Git 查询工作树和公开来源身份。
+    git_root = command(["git", "rev-parse", "--show-toplevel"], root)
+    git_dir = command(["git", "rev-parse", "--absolute-git-dir"], root)
+    head = command(["git", "rev-parse", "HEAD"], root)
+    branch = command(["git", "symbolic-ref", "--short", "HEAD"], root)
+    origin = command(["git", "remote", "get-url", "origin"], root)
+    if (Path(git_root).resolve() != root or Path(git_dir).resolve() != metadata
+            or head != distribution_commit or branch != "plugins-antigravity-alpha"
+            or origin not in {REMOTE, REMOTE.removesuffix(".git")}):
+        raise ValueError("AGY 缓存 Git 工作树/HEAD/分支/origin 与本次官方分发身份不一致")
+    names = {path.relative_to(root).as_posix() for path in entries if path.is_file()}
+    return names, {"path": ".git", "files": len(names), "head": head,
+                   "branch": branch, "origin": origin}
+
+
+def verify_installed(root, record, host, expected_revision, expected_version, *, distribution_commit=None):
     """以分发提交的完整文件摘要核对真实安装缓存；不修补、重打包或写入缓存。"""
     validate_distribution(record, host, expected_revision, expected_version)
     prefix = "" if host == "antigravity" else "plugins/agent-workflow/"
@@ -145,6 +171,10 @@ def verify_installed(root, record, host, expected_revision, expected_version):
     actual = {path.relative_to(root).as_posix(): path for path in root.rglob("*") if path.is_file()}
     # AGY 从整个分发根安装，可能保留额外的只读分发记录；不把它误计入原始插件 ZIP。
     actual.pop("distribution.json", None)
+    # 诊断 run43189367154 已证明只有 AGY 保留 .git；先核管理身份，再精确分离该目录。
+    # 不删除/改写缓存，不忽略其他额外文件，原始插件载荷的所有字节和执行位继续严格核对。
+    metadata_files, metadata_evidence = verified_git_metadata(root, host, distribution_commit)
+    actual = {name: path for name, path in actual.items() if name not in metadata_files}
     if set(actual) != set(files):
         raise FileClosureMismatch(host, set(files) - set(actual), set(actual) - set(files))
     for name, item in files.items():
@@ -155,8 +185,11 @@ def verify_installed(root, record, host, expected_revision, expected_version):
     sources = json.loads((root / "sources.json").read_text())
     if sources["host"] != host or sources["plugin_version"] != expected_version:
         raise ValueError("已安装 sources.json 宿主/版本不一致")
-    return {"files": len(files), "source_revision": expected_revision, "version": expected_version,
-            "sources_sha256": hashlib.sha256((root / "sources.json").read_bytes()).hexdigest()}
+    detail = {"files": len(files), "source_revision": expected_revision, "version": expected_version,
+              "sources_sha256": hashlib.sha256((root / "sources.json").read_bytes()).hexdigest()}
+    if metadata_evidence is not None:
+        detail["verified_git_metadata"] = metadata_evidence
+    return detail
 
 
 def smoke(vendor, output):
@@ -243,7 +276,7 @@ def smoke(vendor, output):
             if not installed.is_relative_to(home):
                 raise ValueError("官方安装结果不在自然 runner HOME 中：" + host)
             evidence["progress"]["stage"] = "installed_file_closure_verification"
-            detail = verify_installed(installed, record, host, source_revision, version)
+            detail = verify_installed(installed, record, host, source_revision, version, distribution_commit=commit)
             evidence["progress"]["stage"] = "distribution_tip_recheck"
             command(["git", "fetch", "--quiet", "--depth=1", REMOTE, branch], reference)
             if command(["git", "rev-parse", "FETCH_HEAD"], reference) != commit:

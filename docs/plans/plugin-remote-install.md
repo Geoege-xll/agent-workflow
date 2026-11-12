@@ -2,7 +2,7 @@
 
 - 主题：`PLAN-PLUGIN-REMOTE-INSTALL`。
 - 当前候选：工作流 `3.0.0-alpha.5`；独立配置 `0.1.0-alpha.3` 保持不变。
-- 阶段：远程来源发布与文档实现进行中；真实公开分支、CI 和安装发现按交付收据追加，不预填模型运行通过。
+- 阶段：实现与远程分发已完成；原生安装验收以对应 CI 记录为准，不预填模型运行通过。
 
 ## 目标与范围
 
@@ -28,7 +28,11 @@
 
 本机官方 help 已分别核对：Codex marketplace upgrade 声明刷新 Git 快照；Claude marketplace update 与 plugin update 为不同命令；AGY 1.5.6 未提供 plugin update 子命令。文档据此保留真实边界，不承诺一条命令完成所有客户端更新。
 
-三个分支由 CI 通过与同一独立 QA 后的实际发布建立，最终仓库 SHA、CI/artifact 与分支回执由 PM 记录。自有 Git 市场不是官方公开目录，许可证和公开目录审核不因此视为通过；stable 若将来提供需另行定义，不在本轮承诺内。
+三个分支已在 CI 与同一独立 QA 通过后实际建立，发布来源为 `94968efcd65f8d3e0812aa4905039028bd423656`。[来源 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43187303295)和[原子发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43187991545)均已成功。验证脚本修订与已发布载荷的来源分别记录，不因文档或验证器更新重写已发布的同版载荷。
+
+[首轮原生安装](https://github.com/Geoege-xll/agent-workflow/actions/runs/43188261825)在 AGY 文件集合检查失败；[诊断运行](https://github.com/Geoege-xll/agent-workflow/actions/runs/43189367154)确认缺失文件为空，额外的 27 个文件均在官方 Git 安装保留的 `.git` 目录。该目录须经仓库、分支和提交身份核验后作为客户端管理元数据区分，原载荷的文件集合、摘要和执行位校验仍保留。[原生安装工作流](https://github.com/Geoege-xll/agent-workflow/actions/workflows/native-install-smoke.yml)提供后续实际结果和安全收据，失败记录不改写为通过。
+
+自有 Git 市场不是官方公开目录，许可证和公开目录审核不因此视为通过；stable 若将来提供需另行定义，不在本轮承诺内。
 
 ## 已验收基线与未验证范围
 
