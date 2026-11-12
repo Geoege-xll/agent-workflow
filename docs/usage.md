@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前插件候选为 `3.0.0-alpha.5`，独立原生 Agent 配置工具为 `0.1.0-alpha.3`。默认使用自有 Git 远程 alpha 分发；官方公开目录与稳定发行尚未就绪，Windows 暂停。运行 helper 需要已有 Python 3.11+ 与 Bash；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码插件候选为 `3.0.0-alpha.7`，独立原生 Agent 配置工具为 `0.1.0-alpha.3`。默认使用自有 Git 远程 alpha 分发；官方公开目录与稳定发行尚未就绪，Windows 暂停。运行 helper 需要已有 Python 3.11+ 与 Bash；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
@@ -37,6 +37,8 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 ## 原型、验证与独立 QA
 
 需要原型的 UI 任务由设计 Agent 在所选 adapter 的 `docs.standards_root/prototype` 内制作可交互 HTML，并返回需求覆盖、规范符合性和交付一致性的三维自检。PM 将 REQ 到具体页面及实际状态锚点的关联写入同一主题计划；原型 HTML、静态验收、依赖指纹与视觉确认继续保留，不恢复计划 Markdown 转 HTML 生成链，也不增加第二个原型 QA。
+
+需要节点反馈时，PM 用当前物理插件根的白名单 `prototype_feedback_cli.py prepare`，显式指定实际项目、同一 adapter、唯一需求 Markdown 和请求 ID，提供返回的 `review_url`。用户直接在链接中记录“必须改／建议／疑问”、REQ 关联与局部修改提案，无需填写 SHA；当前文字摘录与建议文字不代表历史批准。浏览器导出的意见由 `validate` 复核实际需求 SHA 与原依赖指纹，再交回原 UI Agent 在当前授权范围修订 HTML。链接仅声明版本；旧绑定或非法内容明确失败并保留意见，反馈不自动改需求、页面或批准，也不增加业务确认。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 实施者按实际改动完成必要构建、运行或文档检查，提交真实证据。Full 由请求级唯一独立只读 QA 检查集成范围，失败交原职责作者修复并由原 Reviewer 复查。Light 按风险与明确请求选择必要独立审查；未做独立 QA 时只报告真实验证结果，不宣称 QA PASS。
 

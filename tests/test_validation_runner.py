@@ -24,7 +24,10 @@ CURRENT_PRODUCT_MODULES = {
                       "native_config_mcp", "native_config_packaging", "plugin_console", "plugin_config_launcher", "config_distribution"),
 }
 CURRENT_RECORD_CLASSES = ("RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")
-PROTOTYPE_MODULES = ("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace")
+# 独立声明运行时与反馈模块，证明两个当前入口确实纳入它们；不能从被测
+# GROUPS 反推期望值，否则误删运行时模块也会由同一实现自证通过。
+PROTOTYPE_MODULES = ("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
+                     "prototype_workspace_runtime", "prototype_feedback")
 
 
 def current_product_targets():

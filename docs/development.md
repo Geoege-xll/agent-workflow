@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生 Agent 配置工具。插件版本来自 `product/PLUGIN_VERSION`（`3.0.0-alpha.5`），独立工具版本来自 `native_config/VERSION`（`0.1.0-alpha.3`）；两者分别构建和交付。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+当前产品是官方工作流插件与独立原生 Agent 配置工具。插件版本来自 `product/PLUGIN_VERSION`（`3.0.0-alpha.7`），独立工具版本来自 `native_config/VERSION`（`0.1.0-alpha.3`）；两者分别构建和交付。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
 ## 权威与职责
 
@@ -70,6 +70,8 @@ CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。
 
 原型工具必须接收任务已选择的同一 adapter，沿其 `docs.plans` 和 `docs.standards_root` 读取。计划仅维护 Markdown；具体原型 HTML、工作区、静态校验和视觉依赖指纹继续保留。通用工作台见[原型入口](standards/prototype/index.html)，维护规则见[文档与原型指南](plans/workflow-document-lifecycle.md)。
 
+反馈入口复用 `lib/documents` 与 `templates/prototype` 的现有白名单打包，不增加构建链。三宿主包中的 `source_pack.py resource templates/prototype/index.html` 解析真实物理模板；`helper --project <project> lib/documents/prototype_feedback_cli.py prepare --root <project> --adapter <selected-adapter> --plan <project-relative-Markdown> --request-id <id>` 返回 `review_url`，`validate --root <project> --adapter <selected-adapter> --input <explicit-feedback-file>` 只读复核后输出 `changes`。接口和边界见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)，不把 JSON 输入当作需求权威或批准。
+
 ## 验证与证据
 
 当前门禁入口为：
@@ -78,6 +80,8 @@ CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。
 bash scripts/test_workflow.sh --list current
 bash scripts/test_workflow.sh current
 ```
+
+`prototype` 及继承它的 `current` 包含既有 `prototype_workspace_runtime` 和反馈核心 `prototype_feedback` 的真实模块，runtime 用例消费生产模板，不是业务原型自动化授权。三宿主独立包的 prepare／validate 集成由 `plugin_delivery` 覆盖；浏览器、CLI、静态证据与宿主模型运行分层报告。
 
 按影响可选 `plugin`、`native-config`、`prototype` 或 `packaging`，组合节点按实际入口去重。`current` 覆盖两个当前产品、原型及交付合同；`ci` 是 `legacy-ci` 别名，`full` 仍含历史消费者，不用名称推断当前产品验收。纯文档整理以受影响引用、链接、原型静态合同及独立文档复核为准，不重复无关全量回归。
 

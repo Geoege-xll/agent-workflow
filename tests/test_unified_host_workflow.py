@@ -7173,6 +7173,8 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 Path("docs/standards/prototype/workspace.css"),
                 Path("docs/standards/prototype/workspace.js"),
                 Path("docs/standards/prototype/page-shell.js"),
+                Path("docs/standards/prototype/feedback.css"),
+                Path("docs/standards/prototype/feedback.js"),
             },
             files,
         )
@@ -7192,6 +7194,18 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
             (pack / "templates/prototype/prototype.css").read_bytes(),
             (project / "docs/standards/prototype/prototype.css").read_bytes(),
         )
+        # 库存存在不足以证明新入口可用：核对反馈资产原字节，并由夹具中真实
+        # CLI 校验刚发布的空工作区，保持现有路径/脚本/依赖安全检查全部生效。
+        for name in ("feedback.css", "feedback.js"):
+            self.assertEqual((pack / "templates/prototype" / name).read_bytes(),
+                             (project / "docs/standards/prototype" / name).read_bytes())
+        checked = subprocess.run(
+            [sys.executable, str(pack / "lib/documents/validate_prototype_workspace.py"),
+             str(project), "docs/standards/prototype", "--adapter", "agent_workflow/project.yaml", "--json"],
+            cwd=project, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        self.assertIn('"pages": []', checked.stdout)
         index = (project / "docs/standards/prototype/index.html").read_text(
             encoding="utf-8"
         )

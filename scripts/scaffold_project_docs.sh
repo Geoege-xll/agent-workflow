@@ -351,8 +351,11 @@ if ui_enabled:
             )
         prototype_active = any(prototype_root.iterdir())
     if not prototype_active:
-        # 初始化才发布工作区控制器与页面桥接；非空旧项目仍保留原索引、样式和业务页。
-        for name in ("index.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js"):
+        # 初始化时完整发布同版本工作区、反馈辅助资源与页面桥接，避免入口引用
+        # 尚未复制的反馈文件。非空旧项目仍保留原索引、样式和业务页，不补写
+        # 新资产或覆盖既有活跃原型；升级仍须取得该项目当前明确写入授权。
+        for name in ("index.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js",
+                     "feedback.css", "feedback.js"):
             candidates.append((prototype_root / name, regular_source(pack_root / "templates/prototype" / name)))
 
 snapshots: dict[Path, tuple[str, int, int, int, int, int]] = {}

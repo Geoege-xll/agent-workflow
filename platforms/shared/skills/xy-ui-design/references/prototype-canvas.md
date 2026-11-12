@@ -17,8 +17,9 @@ branches, or add confirmation.
   Ordinary relative links in the single `nav#prototype-pages` are the registration source; groups use
   native details/summary. Keep an empty state when no actual pages are registered; do not register
   the page.html template or invented business pages. The workspace uses separate workspace.css/js;
-  concrete pages load only prototype.css and the minimal page-shell.js bridge to prevent navigation
-  styles from contaminating page fingerprints.
+  concrete pages load prototype.css, shared feedback.css target-highlight styles, and the minimal
+  page-shell.js bridge. workspace.css/js and feedback.js remain index-only, keeping navigation
+  styles and feedback state outside page fingerprints.
 - For new pages, directly reuse `.agent-workflow/templates/prototype/page.html` and the project
   prototype directory's `prototype.css` without regenerating the presentation shell. Preserve the
   unified page header, `.prototype-stage`, `.prototype-frame`, product slot
@@ -83,3 +84,5 @@ branches, or add confirmation.
   browser operations, or QA process. Apply only to the currently authorized prototype task without
   automatically reworking all existing prototypes; this creates no prototype tasks for
   `standards_only` or user-selected direct-development branches.
+
+- 当前任务使用节点反馈时，按需读取 [反馈修订消费合同](prototype-feedback.md)。反馈工具保持在默认折叠的展示外壳内；用户修改提案不成为产品 DOM、已批准基线或任务批准。继续在原路径修改稳定 HTML，并沿原静态验收与适用视觉确认交付，不新建 spec、sidecar 或独立设计报告。

@@ -27,6 +27,8 @@ HELPERS = frozenset({
     "lib/task_graph_cli.py", "lib/agent_continuation_cli.py", "lib/documents/context_read.py",
     "lib/dispatch_admission_cli.py",
     "lib/documents/validate_prototype_workspace.py",
+    # 反馈 helper 仅输出只读链接/节点交接，不提供 HTML patch 或批准入口。
+    "lib/documents/prototype_feedback_cli.py",
     "lib/validate_project_docs.py",
     "lib/project/validate_project_config.py", "lib/project/ensure_project_id.py",
     "lib/delivery/qa_handoff_cli.py", "lib/delivery/worktree_cli.py",

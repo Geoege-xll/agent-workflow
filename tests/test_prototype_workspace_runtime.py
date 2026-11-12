@@ -66,6 +66,7 @@ function matches(node, selector) {
 class Element extends Events {
   constructor(tag, attrs = {}, owner) {
     super(); this.tagName = tag.toUpperCase(); this.attrs = {...attrs}; this.childNodes = [];
+    this.value = ""; this.checked = false;
     this.parentElement = null; this.ownerDocument = owner; this.srcWrites = [];
     const self = this;
     this.classList = {
@@ -96,6 +97,7 @@ class Element extends Events {
   hasAttribute(name) { return Object.hasOwn(this.attrs, name); }
   setAttribute(name, value) { this.attrs[name] = String(value); if (name === 'src') this.srcWrites.push(String(value)); }
   removeAttribute(name) { delete this.attrs[name]; }
+  replaceChildren(...nodes) { this.childNodes = []; this.append(...nodes); }
   append(...nodes) { for (const node of nodes) { this.childNodes.push(node); if (typeof node !== 'string') node.parentElement = this; } }
   contains(node) { return node === this || this.children.some(child => child.contains(node)); }
   querySelectorAll(selector) {
@@ -122,10 +124,13 @@ function environment(tree, href, embedded = false) {
   document.append(...tree.children.map(build));
   document.getElementById = id => document.querySelector(`#${id}`);
   document.body = document.querySelector('body'); document.activeElement = document.body;
-  const window = new Events(); window.location = new URL(href); window.crypto = webcrypto;
+  const window = new Events();
+  const storage = new Map();
+  window.setTimeout = () => 1; window.clearTimeout = () => {};
+  window.sessionStorage = {getItem(key) { return storage.get(key) || null; }, setItem(key, value) { storage.set(key, value); }}; window.location = new URL(href); window.crypto = webcrypto;
   window.parent = embedded ? {messages: [], postMessage(data, origin) { this.messages.push({data, origin}); }} : window;
   window.history = {replaceState(_state, _title, url) { window.location = new URL(url); }};
-  const context = vm.createContext({window, document, URL, Uint8Array, console,
+  const context = vm.createContext({window, document, URL, URLSearchParams, Uint8Array, TextDecoder, TextEncoder, atob, console,
     fetch() { throw Error('禁止网络访问'); }, XMLHttpRequest: class { constructor() { throw Error('禁止网络访问'); } }});
   return {window, document, frame: document.getElementById('prototype-preview'), run(source) { vm.runInContext(source, context); }};
 }
@@ -274,12 +279,74 @@ console.log('真实双控制器：独立页深链、认证前隐藏、唯一开�
 }
 
 
+# 这两组补上真实新增边界：上下文解析/草稿隔离与页面自己提供的有限节点目录。
+# 仍直接执行生产脚本，浏览器布局、原生dialog与file来源策略由实际浏览器证据补充。
+SCENARIOS["feedback_state"] = r"""
+const context = {schema_version: 1, request_id: 'review-1', adapter: 'project.yaml', prototype_root: 'docs/prototype', plan_source: 'docs/plans/review.md', plan_sha256: 'a'.repeat(64), requirements: [{id: 'REQ-007', label: '节点反馈'}], pages: [{path: 'docs/prototype/settings.html', dependency_fingerprint: 'b'.repeat(64)}, {path: 'docs/prototype/reports.html', dependency_fingerprint: 'c'.repeat(64)}]};
+const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+const hash = '#page=settings.html&review=' + encode(context);
+const env = index('file:///offline/prototype/index.html' + hash); env.run(fixture.feedback);
+const parser = env.window.PrototypeFeedback.parseFragment;
+assert.equal(parser(hash).context.request_id, 'review-1');
+for (const broken of [hash + '&review=a', hash + '&page=reports.html', hash + '&unknown=x', '#page=settings.html&review=%%', '#page=settings.html&review=YWJj', '#page=settings.html&review=' + Buffer.from(JSON.stringify(context).replace('{', '{"schema_version":1,')).toString('base64url'), '#page=settings.html&review=' + encode({...context, request_id: 123}), '#page=settings.html&review=' + encode({...context, approved: true}), '#page=settings.html&review=' + encode({...context, pages: [...context.pages, context.pages[0]]}), '#page=settings.html&review=' + encode({...context, pages: Array(17).fill(context.pages[0])}), '#page=settings.html&review=' + encode({...context, request_id: 'x'.repeat(9000)})]) assert.ok(parser(broken).error);
+const brokenEnv = index(); brokenEnv.run(fixture.feedback); const disabled = brokenEnv.window.PrototypeFeedback.create({send() {}}); disabled.bind(parser(hash + '&review=x')); disabled.select('settings.html'); assert.ok(brokenEnv.document.getElementById('feedback-status').textContent.includes('损坏'));
+const sends = []; const api = env.window.PrototypeFeedback.create({send: (...args) => sends.push(args)});
+api.bind(parser(hash)); api.select('settings.html');
+const payload = {type: 'prototype-workspace:catalog', nodes: [{id: 'save-button', text: '<img src=x onerror=alert(1)>', interaction_id: 'save-interaction', interaction_text: '保存设置', interface_refs: ['api-spec.md#save']}]};
+api.receive(payload);
+const get = id => env.document.getElementById('feedback-' + id);
+get('target').value = 'save-button'; get('kind').value = 'must_change'; get('message').value = '需要清晰说明'; get('after').value = '建议文案';
+get('requirements').querySelector('input').checked = true;
+get('form').fire('input'); get('form').fire('submit', {preventDefault() {}}); api.receive(payload);
+assert.equal(get('count').textContent, '1 条'); assert.ok(get('items').textContent.includes('<img src=x onerror=alert(1)>'));
+assert.equal(get('items').querySelector('img'), null); assert.equal(get('message').value, '');
+const stored = JSON.parse([...env.window.sessionStorage.getItem('prototype-feedback:' + encode(context))].join(''));
+assert.equal(stored.items[0].page, 'docs/prototype/settings.html'); assert.equal(stored.items[0].req_ids[0], 'REQ-007');
+assert.equal(stored.items[0].comparison.before_text, '<img src=x onerror=alert(1)>'); assert.equal(stored.items[0].interaction_id, 'save-interaction');
+get('message').value = '未保存输入'; get('form').fire('input'); api.select('reports.html'); api.receive(payload); get('target').value = 'save-button';
+get('message').value = '另一页输入'; get('form').fire('input'); api.select('settings.html'); api.receive(payload);
+assert.equal(get('message').value, '未保存输入');
+// 同一上下文刷新恢复；另一个标签页使用独立sessionStorage，不能混写或读到本页草稿。
+const refreshed = index('file:///offline/prototype/index.html' + hash); refreshed.window.sessionStorage = env.window.sessionStorage; refreshed.run(fixture.feedback);
+const recovered = refreshed.window.PrototypeFeedback.create({send() {}}); recovered.bind(parser(hash)); recovered.select('settings.html'); recovered.receive(payload);
+assert.equal(refreshed.document.getElementById('feedback-message').value, '未保存输入'); assert.equal(refreshed.document.getElementById('feedback-count').textContent, '1 条');
+const other = index('file:///offline/prototype/index.html' + hash); other.run(fixture.feedback); const isolated = other.window.PrototypeFeedback.create({send() {}}); isolated.bind(parser(hash));
+assert.equal(other.document.getElementById('feedback-count').textContent, '0 条');
+// 拒绝存储和超限保存时，不清空输入，也不声称保存成功。
+get('message').value = '长'.repeat(4001); get('form').fire('submit', {preventDefault() {}}); api.receive(payload); assert.equal(get('message').value.length, 4001); assert.equal(get('count').textContent, '1 条');
+env.window.sessionStorage.setItem = () => {throw Error('denied');}; get('message').value = '仍在内存'; get('form').fire('input'); assert.ok(get('storage').textContent.includes('不可用')); assert.equal(get('message').value, '仍在内存');
+console.log('真实反馈模块：封闭context/重复片段/超限拒绝、纯文本渲染、保存比较和关联、本标签页恢复与隔离、存储失败输入保留通过');
+"""
+
+SCENARIOS["review_catalog"] = r"""
+const child = environment(fixture.page, 'file:///offline/prototype/settings.html', true);
+const root = child.document.querySelector('[data-prototype-page-content]');
+const unique = node(child, 'button', {id: 'save-button'}, ['保存']); root.append(unique);
+root.append(node(child, 'p', {id: 'duplicate'}, ['重复1']), node(child, 'p', {id: 'duplicate'}, ['重复2']));
+child.document.body.append(node(child, 'p', {id: 'outside'}, ['外壳不在节点目录']));
+const mapping = node(child, 'p', {id: 'save-interaction', 'data-contract-for': 'save-button', 'data-interface-ref': 'spec.md#save'}, ['点击保存']);
+child.document.body.append(mapping); child.run(fixture.shell);
+const connect = {type: 'prototype-workspace:connect', version: 1, page: 'settings.html', token: 'a'.repeat(32), sidebarExpanded: true};
+const receive = (data, patch = {}) => child.window.fire('message', {source: child.window.parent, origin: 'null', data, ...patch});
+receive(connect);
+const catalog = child.window.parent.messages.find(item => item.data.type === 'prototype-workspace:catalog').data;
+assert.equal(catalog.nodes.length, 1); assert.equal(catalog.nodes[0].id, 'save-button'); assert.equal(catalog.nodes[0].interface_refs[0], 'spec.md#save'); assert.equal(catalog.nodes[0].interaction_id, 'save-interaction');
+const locate = {...connect, type: 'prototype-workspace:review', action: 'locate', target: 'save-button'};
+for (const [patch, event] of [[{token: 'b'.repeat(32)}, {}], [{page: 'reports.html'}, {}], [{target: '#save-button'}, {}], [{}, {source: {}}], [{}, {origin: 'https://example.test'}]]) { receive({...locate, ...patch}, event); assert.notEqual(child.document.activeElement, unique); }
+receive({...locate, target: 'duplicate'}); assert.notEqual(child.document.activeElement, unique);
+receive(locate); assert.equal(child.document.activeElement, unique); assert.equal(unique.getAttribute('data-prototype-feedback-highlight'), '');
+assert.equal(child.document.getElementById('prototype-page-feedback').hidden, false);
+click(child.document.getElementById('prototype-page-feedback')); assert.equal(child.window.parent.messages.at(-1).data.intent, 'open-feedback');
+console.log('真实页面桥：仅产品插槽唯一稳定ID、实际交互/接口引用、任意selector与旧token/伪来源拒绝、定位焦点和紧凑入口通过');
+"""
+
+
 class PrototypeWorkspaceRuntimeTest(unittest.TestCase):
     def run_node(self, scenario: str) -> None:
         self.assertIsNotNone(shutil.which("node"), "真实控制器验证必须提供 Node，不能以跳过替代成功")
-        sources = {name: (TEMPLATES / name).read_text(encoding="utf-8") for name in ("index.html", "page.html", "workspace.js", "page-shell.js")}
+        sources = {name: (TEMPLATES / name).read_text(encoding="utf-8") for name in ("index.html", "page.html", "workspace.js", "page-shell.js", "feedback.js")}
         payload = {"index": TemplateTree(sources["index.html"]).root, "page": TemplateTree(sources["page.html"]).root,
-                   "workspace": sources["workspace.js"], "shell": sources["page-shell.js"]}
+                   "workspace": sources["workspace.js"], "shell": sources["page-shell.js"], "feedback": sources["feedback.js"]}
         script = "const fixture = " + json.dumps(payload, ensure_ascii=False) + ";\n" + NODE_DOM + SCENARIOS[scenario]
         result = subprocess.run(["node", "-"], input=script, text=True, capture_output=True, cwd=PACK, timeout=20)
         # 完整节点输出与确切输入 SHA 随 unittest 日志保留；不建立预览树或额外依赖缓存。
@@ -288,6 +355,12 @@ class PrototypeWorkspaceRuntimeTest(unittest.TestCase):
                           "source_sha256": {name: hashlib.sha256(text.encode()).hexdigest() for name, text in sources.items()},
                           "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr}, ensure_ascii=False))
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_feedback_context_drafts_and_failure_preservation(self):
+        self.run_node("feedback_state")
+
+    def test_review_node_catalog_and_authenticated_location(self):
+        self.run_node("review_catalog")
 
     def test_real_controller_navigation_and_focus(self):
         self.run_node("navigation")

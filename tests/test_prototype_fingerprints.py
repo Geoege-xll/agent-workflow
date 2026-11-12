@@ -433,7 +433,10 @@ class PrototypeFingerprintTest(unittest.TestCase):
     def test_real_workspace_assets_do_not_invalidate_the_concrete_page(self) -> None:
         """真实生产控制器/侧栏样式仅由index承载，修改它们不改变产品页资源闭包。"""
         templates = Path(__file__).resolve().parents[1] / 'templates/prototype'
-        for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js'):
+        # 真实模板依赖必须完整进入同一夹具；反馈样式由具体页使用，不能通过
+        # 放宽缺失依赖校验掩盖旧五资源列表。原工作区指纹隔离断言继续保留。
+        for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js',
+                     'feedback.css', 'feedback.js'):
             (self.prototype / name).write_bytes((templates / name).read_bytes())
         (self.prototype / 'settings.html').write_bytes((templates / 'page.html').read_bytes())
         self.rewrite('index.html', '</nav>', '<a href="settings.html">设置</a></nav>')

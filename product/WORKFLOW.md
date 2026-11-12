@@ -783,6 +783,8 @@ docs/standards/prototype/
 ├── prototype.css
 ├── workspace.css
 ├── workspace.js
+├── feedback.css
+├── feedback.js
 ├── page-shell.js
 └── <stable-page>.html
 ```
@@ -797,7 +799,11 @@ product page. Use ordinary relative links. Every page must load directly through
 package installation, a build, framework, router, external CDN, live API, database, account,
 credential, or real user data.
 
-Only the index loads workspace.css/js; prototype.css and minimal page-shell.js belong to concrete pages. Empty registration shows an explicit empty state with the iframe hidden and no src; once registered, the single local controller derives loading from nav links without bulk preloading. After the current page name and compact brief, show the high-fidelity canvas first, followed by requirements Markdown (and an optional existing historical HTML link), platform/size, necessary demo guidance, and finally the five contract sections collapsed by default. A circular back control with a light background, fine border, and black chevron locates the current group/page, separately from sidebar toggling; product navigation, overlays, and scrolling belong only to the canvas. Source-template updates do not bulk-rebuild existing nonempty business prototypes.
+Only the index loads workspace.css/js and the local feedback.js; prototype.css and minimal page-shell.js belong to concrete pages. Shared feedback.css supports the outer feedback panel and page-local target highlighting. Empty registration shows an explicit empty state with the iframe hidden and no src; once registered, the single local controller derives loading from nav links without bulk preloading. After the current page name and compact brief, show the high-fidelity canvas first, followed by requirements Markdown (and an optional existing historical HTML link), platform/size, necessary demo guidance, and finally the five contract sections collapsed by default. A circular back control with a light background, fine border, and black chevron locates the current group/page, separately from sidebar toggling; product navigation, overlays, and scrolling belong only to the canvas. Source-template updates do not bulk-rebuild existing nonempty business prototypes.
+
+反馈评审仅在当前原型修订范围内按需使用 [prototype-feedback](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。从当前物理插件根解析模板及白名单 `prototype_feedback_cli.py`；`prepare` 显式接收项目 root、同一 adapter、唯一需求 Markdown 和 request_id，返回带有界版本 context 的 `review_url`，用户无需填写 SHA。链接仅声明版本，浏览器仅导出 `context/items` 修订输入；`validate` 依据显式 adapter 重算实际需求字节 SHA 与既有逐页依赖指纹，拒绝旧绑定、越界和未知字段，再输出按节点归属的 `changes`。草稿、comparison 的当前文字／建议文字、REQ／交互／接口引用均不可执行，也不产生需求或视觉批准。没有可信已批准基线时明确说明，不把当前文字冒称历史。
+
+PM 将有效反馈交回原 `xy-uiux`，设计 Agent 只在当前 `owned_paths` 内原位修改稳定 HTML，更新五节契约并返回原静态校验与指纹证据；实际需求变化和视觉批准继续沿原规则处理。反馈工具不 patch HTML、不写需求或批准、不增业务 gate，也不恢复计划转 HTML 或创建 spec/sidecar。上下文损坏仅停用反馈，普通浏览仍可用；复核失败保留意见，不自动重绑到新版本。反馈面板属于默认折叠的展示外壳，不侵入产品画板。生产模板工具自身的风险驱动或明确授权浏览器测试与业务原型静态验收分开，不能据此自动化业务原型。
 
 `prototype.js` is not part of the standard tree. Create it only when two or more pages genuinely
 share the same native interaction; otherwise keep trivial behavior page-local.

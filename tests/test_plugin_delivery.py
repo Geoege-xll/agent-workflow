@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 import zipfile
 
 
@@ -166,6 +167,12 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertFalse(Path(name).name.startswith("setup_"), name)
                 self.assertIn("lib/documents/safe_documents.py", files.namelist())
                 self.assertIn("lib/documents/validate_prototype_workspace.py", files.namelist())
+                # 文档与模板沿现有声明目录进入三端包，不能依靠开发仓补齐反馈依赖。
+                for relative in ("lib/documents/prototype_feedback.py",
+                                 "lib/documents/prototype_feedback_cli.py",
+                                 "templates/prototype/feedback.js", "templates/prototype/feedback.css",
+                                 "platforms/shared/skills/xy-ui-design/references/prototype-feedback.md"):
+                    self.assertIn(relative, files.namelist())
                 self.assertNotIn("lib/documents/requirement_html.py", files.namelist())
                 self.assertFalse(any(name.startswith("lib/vendor/answer-me-with-html/") for name in files.namelist()))
                 self.assertFalse(any(name.startswith(("plugin_runtime/", "native_config/", "manager/")) for name in files.namelist()))
@@ -361,6 +368,137 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertIn("fingerprint mismatch", stale.stderr)
                 self.assertFalse((project / "project.yaml").exists())
                 self.assertFalse((project / ".agent-workflow").exists())
+
+    def test_detached_feedback_prepare_validate_rejects_stale_unknown_and_central_binding(self):
+        """三宿主独立包消费真实模板；反馈复核只能产生交接，不能改项目权威。"""
+        from tests.test_prototype_workspace import tree_snapshot
+
+        # 同一最小项目依次消费三端载荷，不复制业务项目、用户配置或旧宿主环境。
+        project = self.root / "feedback-project"
+        project.mkdir()
+        adapter = ".awf/project.yaml"
+        plan = "docs/plans/feedback.md"
+        page = "docs/standards/prototype/feedback.html"
+        prototype = project / "docs/standards/prototype"
+        prototype.mkdir(parents=True)
+        source = project / plan
+        source.parent.mkdir(parents=True)
+        source.write_text("# 反馈需求\n\nREQ-001：查看当前状态。\n", encoding="utf-8")
+
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                base = ["bash", str(root / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                        str(root / "plugins/source_pack.py")]
+
+                def invoke(*arguments):
+                    return subprocess.run([*base, *map(str, arguments)], cwd=project,
+                                          env=isolated_environment(self.root / "feedback-context"),
+                                          capture_output=True, text=True, timeout=20)
+
+                def helper(*arguments):
+                    return invoke("helper", "--project", project, *arguments)
+
+                applied = helper("plugins/project_context.py", "apply", "--adapter", adapter)
+                self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+                # 必须由物理安装的 resource 解析器取得模板及摘要，项目同名路径
+                # 和源码树不能让独立载荷缺失时偶然通过。复制仅构成这次最小项目。
+                for name in ("index.html", "page.html", "prototype.css", "workspace.css",
+                             "workspace.js", "page-shell.js", "feedback.css", "feedback.js"):
+                    relative = "templates/prototype/" + name
+                    located = invoke("resource", relative)
+                    self.assertEqual(0, located.returncode, located.stdout + located.stderr)
+                    resource = json.loads(located.stdout)
+                    self.assertEqual(str(root / relative), resource["path"])
+                    body = Path(resource["path"]).read_bytes()
+                    self.assertEqual(hashlib.sha256(body).hexdigest(), resource["sha256"])
+                    (prototype / ("feedback.html" if name == "page.html" else name)).write_bytes(body)
+                index = prototype / "index.html"
+                index.write_text(index.read_text(encoding="utf-8").replace(
+                    'aria-label="Prototype pages"></nav>',
+                    'aria-label="Prototype pages"><a href="feedback.html">反馈页</a></nav>'), encoding="utf-8")
+                concrete = project / page
+                html = concrete.read_text(encoding="utf-8").replace(
+                    'data-prototype-plan-source=""', 'data-prototype-plan-source="' + plan + '"')
+                html = html.replace('<span>尚未绑定需求文档</span>',
+                    '<a data-prototype-document="markdown" href="../../plans/feedback.md" '
+                    'target="_blank" rel="noopener">需求</a>')
+                html = html.replace('<div class="prototype-placeholder">',
+                                    '<div id="feedback-state" class="prototype-placeholder">')
+                concrete.write_text(html, encoding="utf-8")
+                before = tree_snapshot(project)
+                command = ("lib/documents/prototype_feedback_cli.py", "prepare", "--root", project,
+                           "--adapter", adapter, "--plan", plan, "--request-id", "feedback-packaged",
+                           "--pages", page)
+                prepared = helper(*command)
+                self.assertEqual(0, prepared.returncode, prepared.stdout + prepared.stderr)
+                ready = json.loads(prepared.stdout)
+                self.assertEqual("ready", ready["status"])
+                self.assertEqual(before, tree_snapshot(project))
+                self.assertEqual(adapter, ready["context"]["adapter"])
+                self.assertEqual(plan, ready["context"]["plan_source"])
+                self.assertEqual([page], [item["path"] for item in ready["context"]["pages"]])
+                self.assertEqual(["REQ-001"], [item["id"] for item in ready["context"]["requirements"]])
+                fragment = parse_qs(urlsplit(ready["review_url"]).fragment)
+                self.assertEqual({"page", "review"}, set(fragment))
+                self.assertEqual(["feedback.html"], fragment["page"])
+
+                # JSON 仅是显式交接输入。以整树字节/节点快照证明 validate 没有
+                # 写需求、HTML、adapter、批准或新 spec/sidecar；错误输入也不能写。
+                item = {"id": "feedback-1", "page": page, "target_id": "feedback-state",
+                        "kind": "suggestion", "message": "建议说明当前状态 approved", "req_ids": ["REQ-001"],
+                        "comparison": {"before_text": "产品页面内容", "after_text": "当前状态"}}
+                feedback = {"schema_version": 1, "context": ready["context"], "items": [item]}
+                exported = self.root / "feedback-input.json"
+
+                def validate(value):
+                    exported.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+                    original = exported.read_bytes()
+                    result = helper("lib/documents/prototype_feedback_cli.py", "validate",
+                                    "--root", project, "--adapter", adapter, "--input", exported)
+                    self.assertEqual(original, exported.read_bytes())
+                    return result
+
+                validated = validate(feedback)
+                self.assertEqual(0, validated.returncode, validated.stdout + validated.stderr)
+                current = json.loads(validated.stdout)
+                self.assertEqual("current", current["status"])
+                self.assertEqual([{"page": page, "target_id": "feedback-state", "items": [item]}], current["changes"])
+                self.assertEqual(before, tree_snapshot(project))
+                unknown = json.loads(json.dumps(feedback))
+                unknown["items"][0]["approved"] = True
+                rejected = validate(unknown)
+                self.assertNotEqual(0, rejected.returncode, rejected.stdout + rejected.stderr)
+                self.assertEqual("error", json.loads(rejected.stdout)["status"])
+                self.assertIn("未知字段", json.loads(rejected.stdout)["error"]["message"])
+                self.assertEqual(before, tree_snapshot(project))
+                # 需求字节变化即使没有改变页面画面依赖，也必须让旧反馈失败。
+                original_plan = source.read_bytes()
+                source.write_bytes(original_plan + "\n修订需求字节。\n".encode())
+                changed = tree_snapshot(project)
+                stale = validate(feedback)
+                self.assertNotEqual(0, stale.returncode, stale.stdout + stale.stderr)
+                self.assertEqual("error", json.loads(stale.stdout)["status"])
+                self.assertEqual(changed, tree_snapshot(project))
+                source.write_bytes(original_plan)
+                # 原型公共依赖变化由既有算法重算，不能只信任 context 声明。
+                css = prototype / "prototype.css"
+                original_css = css.read_bytes()
+                css.write_bytes(original_css + b"\nbody { color: red; }\n")
+                changed = tree_snapshot(project)
+                stale = validate(feedback)
+                self.assertNotEqual(0, stale.returncode, stale.stdout + stale.stderr)
+                self.assertEqual("error", json.loads(stale.stdout)["status"])
+                self.assertEqual(changed, tree_snapshot(project))
+                css.write_bytes(original_css)
+                marker = project / ".agent-workflow/runtime.json"
+                marker.parent.mkdir(exist_ok=True)
+                marker.write_text("{}\n", encoding="utf-8")
+                central = helper(*command)
+                self.assertNotEqual(0, central.returncode)
+                self.assertIn("original pinned runtime", central.stderr)
+                marker.unlink()
+                marker.parent.rmdir()
+                self.assertFalse((project / "project.yaml").exists())
 
     def test_packaged_interpreter_selector_locates_an_existing_supported_python(self):
         project = self.root / "interpreter-project"

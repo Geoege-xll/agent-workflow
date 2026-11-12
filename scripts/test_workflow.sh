@@ -37,7 +37,10 @@ GROUPS = {
     "codex": modules("codex_workflow", "shared_memory_contract"),
     "claude": modules("claude_workflow", "claude_instructions", "shared_memory_contract"),
     "antigravity": modules("antigravity_workflow"),
-    "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace"),
+    # 原型当前入口同时消费生产控制器的既有 Node 用例与只读反馈核心，避免
+    # current 只验证静态结构却漏掉真实脚本。此分组不授权自动操作业务原型。
+    "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
+                         "prototype_workspace_runtime", "prototype_feedback"),
     "packaging": modules("plugin_delivery", "native_config_packaging", "candidate_delivery",
                          "plugin_config_launcher", "config_distribution", "plugin_source_publication", "remote_install_smoke"),
     "central": modules("central_project", "runtime_store", "runtime_state", "central_runtime", "runtime_lifecycle") + (

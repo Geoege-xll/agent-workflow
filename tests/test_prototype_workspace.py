@@ -322,7 +322,8 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         css_path = TEMPLATE_ROOT / "prototype.css"
         missing = [
             path.name
-            for path in (index_path, page_path, css_path, *(TEMPLATE_ROOT / name for name in ("workspace.css", "workspace.js", "page-shell.js")))
+            for path in (index_path, page_path, css_path, *(TEMPLATE_ROOT / name for name in
+                         ("workspace.css", "workspace.js", "page-shell.js", "feedback.css", "feedback.js")))
             if not path.is_file()
         ]
         self.assertEqual([], missing, f"missing prototype templates: {missing}")
@@ -437,6 +438,9 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                 shutil.copy2(TEMPLATE_ROOT / "page.html", self.page(project))
                 shutil.copy2(TEMPLATE_ROOT / "prototype.css", self.prototype(project) / "prototype.css")
                 shutil.copy2(TEMPLATE_ROOT / "page-shell.js", self.prototype(project) / "page-shell.js")
+                # 定位反馈样式是实际页面渲染依赖；夹具必须使用同版本真实资源，
+                # 不可通过放宽缺失依赖检查让旧模板复制路径继续显示绿色。
+                shutil.copy2(TEMPLATE_ROOT / "feedback.css", self.prototype(project) / "feedback.css")
                 if mode == "fixed":
                     # 按模板声明的扩展点切换为一个测试窗口，不把该尺寸写成项目默认规范。
                     self.replace_once(self.page(project), 'data-prototype-display="responsive"',
@@ -542,11 +546,12 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             self.assert_rejected_without_mutation(project, 'external transitive resource of the embedded page')
 
     def test_production_workspace_accepts_empty_and_registered_controller_startup(self) -> None:
-        """消费真实生产五资产：空登记不加载假页面，有登记时由唯一控制器派生加载。"""
+        """消费真实生产资产：空登记不加载假页面，固定反馈模块不成为第二路由。"""
         with tempfile.TemporaryDirectory(prefix="prototype-controller-startup-") as temporary:
             project = write_valid_project(Path(temporary)).resolve()
             self.page(project).unlink()
-            for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js'):
+            for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js',
+                         'feedback.js', 'feedback.css'):
                 shutil.copy2(TEMPLATE_ROOT / name, self.prototype(project) / name)
             self.assertEqual({'pages': []}, validator_module.validate_workspace(project, PROTOTYPE_RELATIVE.as_posix()))
             shutil.copy2(TEMPLATE_ROOT / 'page.html', self.page(project))
@@ -558,17 +563,54 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             self.assertEqual(before, tree_snapshot(project))
             index_body = index.read_text(encoding='utf-8')
             page_body = self.page(project).read_text(encoding='utf-8')
+            # 表单/section/dialog 使用真实模板结构；静态 checkbox 只补上生产
+            # 控制器按需生成需求选项的同一输入边界，不能把 input 全局放开。
+            index.write_text(index_body.replace('<form id="feedback-form">',
+                '<form id="feedback-form"><input type="checkbox" id="feedback-fixture-input">'), encoding='utf-8')
+            before = tree_snapshot(project)
+            accepted = self.run_validator(project)
+            self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
+            self.assertEqual(before, tree_snapshot(project))
             for case, body in {
                 'foreign controller': index_body.replace('src="workspace.js"', 'src="other.js"'),
                 'duplicate controller': index_body.replace('</head>', '<script src="workspace.js"></script></head>'),
                 'inline controller body': index_body.replace('src="workspace.js" defer></script>', 'src="workspace.js" defer>alert(1)</script>'),
+                'duplicate feedback helper': index_body.replace('</head>', '<script src="feedback.js"></script></head>'),
+                'unknown feedback helper': index_body.replace('src="feedback.js"', 'src="other-feedback.js"'),
+                'module feedback helper': index_body.replace('src="feedback.js"', 'type="module" src="feedback.js"'),
+                'unsupported feedback script type': index_body.replace('src="feedback.js"', 'type="application/json" src="feedback.js"'),
+                'inline feedback body': index_body.replace('src="feedback.js" defer></script>', 'src="feedback.js" defer>alert(1)</script>'),
+                'external feedback helper': index_body.replace('src="feedback.js"', 'src="https://example.test/feedback.js"'),
+                'escaping feedback helper': index_body.replace('src="feedback.js"', 'src="../feedback.js"'),
+                'duplicate feedback stylesheet': index_body.replace('</head>', '<link rel="stylesheet" href="feedback.css"></head>'),
+                'feedback helper without routing controller': index_body.replace('<script src="workspace.js" defer></script>', ''),
+                'feedback region without helper': index_body.replace('<script src="feedback.js" defer></script>', ''),
+                'feedback region without stylesheet': index_body.replace('<link rel="stylesheet" href="feedback.css">', ''),
+                'form outside feedback': index_body.replace('</body>', '<form></form></body>'),
+                'input outside feedback': index_body.replace('</body>', '<input type="checkbox"></body>'),
+                'section outside feedback': index_body.replace('</body>', '<section>产品画面</section></body>'),
+                'dialog outside feedback': index_body.replace('</body>', '<dialog id="unrelated-dialog"></dialog></body>'),
+                'feedback details wrong element': index_body.replace('<details id="prototype-feedback"', '<div id="prototype-feedback"'),
+                'feedback dialog wrong element': index_body.replace('<dialog id="feedback-manual"', '<div id="feedback-manual"'),
+                'duplicate feedback details': index_body.replace('</body>', '<details id="prototype-feedback"><summary>重复</summary></details></body>'),
+                'duplicate feedback dialog': index_body.replace('</body>', '<dialog id="feedback-manual"></dialog></body>'),
+                'feedback details inside navigation': index_body.replace('</nav>', '<details id="prototype-feedback"><summary>越界</summary></details></nav>'),
+                'feedback panel initially expanded': index_body.replace('<details id="prototype-feedback"', '<details open id="prototype-feedback"'),
+                'duplicate feedback summary': index_body.replace('<summary id="feedback-heading"', '<summary>重复</summary><summary id="feedback-heading"'),
+                # 模板注释也含示例 </details>；只删真实根的独立结束行，避免
+                # 负控修改注释却没有改变待验证 DOM，形成无效失败断言。
+                'unclosed feedback root': index_body.replace('\n      </details>', '', 1),
+                'feedback nested dialog': index_body.replace('<form id="feedback-form">', '<dialog></dialog><form id="feedback-form">'),
+                'feedback form navigation': index_body.replace('<form id="feedback-form">', '<form action="https://example.test/submit" id="feedback-form">'),
+                'feedback input resource': index_body.replace('<form id="feedback-form">', '<form id="feedback-form"><input type="image" src="https://example.test/pixel">'),
+                'feedback nested preview': index_body.replace('<form id="feedback-form">', '<iframe id="extra-preview" src="settings.html" title="额外画面"></iframe><form id="feedback-form">'),
                 'visible uninitialized frame': index_body.replace('referrerpolicy="no-referrer" hidden', 'referrerpolicy="no-referrer"'),
             }.items():
                 with self.subTest(case=case):
                     index.write_text(body, encoding='utf-8')
                     self.assert_rejected_without_mutation(project, case)
             index.write_text(index_body, encoding='utf-8')
-            for asset in ('workspace.js', 'workspace.css'):
+            for asset in ('workspace.js', 'workspace.css', 'feedback.js'):
                 with self.subTest(asset=asset):
                     reference = f'<script src="{asset}"></script>' if asset.endswith('.js') else f'<link rel="stylesheet" href="{asset}">'
                     self.page(project).write_text(page_body.replace('</head>', reference + '</head>'), encoding='utf-8')
