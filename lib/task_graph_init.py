@@ -50,7 +50,7 @@ TASK_FIELDS = {
     "id", "task_type", "role", "surface_kind", "design_mode", "goal", "depends_on",
     "blocks", "gates", "owned_paths", "semantic_locks", "input_contracts",
     "output_contracts", "acceptance_evidence", "verification_commands", "ui_change",
-    "required_skills", "audit_surfaces", "standards_exceptions", "selected_standards",
+    "required_skills", "audit_surfaces", "standards_exceptions", "selected_standards", "foundation_task_id",
 }
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 # 当前控制桥只从已验证清单内源码读取这个静态协议常量。旧核心没有声明时由

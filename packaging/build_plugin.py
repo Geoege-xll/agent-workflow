@@ -41,7 +41,7 @@ MANIFESTS = {"codex": ".codex-plugin/plugin.json", "claude": ".claude-plugin/plu
 LIB_FILES = (
     "__init__.py", "agent_continuation.py", "agent_continuation_cli.py", "platform_fs.py", "plugin_resources.py", "role_models.py",
     "python_runtime.sh", "runtime_pins.py", "runtime_store.py", "standard_paths.py", "task_graph.py",
-    "dispatch_admission.py", "dispatch_admission_cli.py", "task_settlement.py",
+    "dispatch_admission.py", "dispatch_admission_cli.py", "task_settlement.py", "foundation_qa.py",
     "task_graph_cli.py", "task_graph_init.py", "task_graph_records.py",
     "validate_project_docs.py", "worktree_policy.py",
 )

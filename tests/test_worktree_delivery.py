@@ -56,16 +56,15 @@ class GitDeliveryTest(unittest.TestCase):
         (self.repo / "docs/standards/GENERAL.md").write_text(
             "# General\n- Domain: engineering\n[eng-source-boundary] [hard] Preserve ownership.\n")
         builtin_path = "platforms/shared/skills/xy-code-standards/references/rules.md"
-        builtin = self.repo / builtin_path
-        builtin.parent.mkdir(parents=True)
-        builtin.write_bytes((PACK / builtin_path).read_bytes())
+        # 内置来源只存在于执行中的源包；业务仓库不复制规则来掩盖来源定位缺陷。
+        builtin = PACK / builtin_path
         (self.repo / "docs/plans").mkdir()
         (self.repo / "docs/plans/baseline.md").write_text("# 已验收基线\n- 主题 ID: baseline\n- 阶段: active\n- 模块: .\n- 任务等级: Light\n- 已验收版本: v1\n"
             "## 验收结果与当前已交付行为\n已有行为。\n## 批准依据与必要证据\n"
             "- 批准依据: 既有用户批准\n- 验收证据: 既有验收记录\n")
         (self.repo / "docs/PROJECT.md").write_text("# Project\n[Baseline](plans/baseline.md)\n")
         git(self.repo, "add", "agent_workflow/project.yaml", "src/a.py", "src/b.py",
-            "docs/STANDARDS.md", "docs/standards/GENERAL.md", "docs/PROJECT.md", "docs/plans/baseline.md", builtin_path)
+            "docs/STANDARDS.md", "docs/standards/GENERAL.md", "docs/PROJECT.md", "docs/plans/baseline.md")
         git(self.repo, "commit", "-m", "fixture baseline")
         self.base = head(self.repo)
         template = _writer_payload()

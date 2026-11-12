@@ -18,7 +18,8 @@ import zipfile
 PACK = Path(__file__).resolve().parents[1]
 CURRENT_PRODUCT_MODULES = {
     "plugin": ("plugin_delivery", "plugin_resources", "plugin_workflow_contract", "plugin_maintenance_contract", "continuous_intake_capabilities",
-               "agent_continuation", "dispatch_admission", "task_settlement", "task_graph", "scheduler_boundaries"),
+               "agent_continuation", "dispatch_admission", "task_settlement", "task_graph", "scheduler_boundaries",
+               "foundation_qa", "plugin_worktree_delivery"),
     "native-config": ("native_config", "native_inventory", "native_config_codecs", "native_config_commands", "native_config_server",
                       "native_config_mcp", "native_config_packaging", "plugin_console", "plugin_config_launcher", "config_distribution"),
 }

@@ -79,6 +79,7 @@ PLAN_ONLY_FIELDS = {
     "qa_scope",
     "controlled_document_access",
     "standards_exceptions",
+    "foundation_task_id", "foundation_receipt", "request_receipt",
 }
 UI_CHANGE_FIELDS = {
     "route",
@@ -156,7 +157,8 @@ AUTHORITY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 EXCEPTIONAL_GATE_RE = re.compile(r"exceptional:[a-z0-9][a-z0-9._-]*\Z")
 USER_CHOICE_REF_RE = re.compile(r"user:[a-z0-9][a-z0-9._:/-]*\Z")
 PACK_FIELDS = {"schema_version", "task", "standards_contract", "approved_gates",
-               "requirements_fingerprint", "ui_contract", "runtime_binding", "reviewed_ui_changes"}
+               "requirements_fingerprint", "ui_contract", "runtime_binding", "reviewed_ui_changes",
+               "qa_checkpoint", "qa_checkpoint_fingerprint"}
 REVIEWED_UI_FIELDS = {"id", "task_type", "role", "surface_kind", "workflow_level",
                       "qa_scope", "ui_change", "owned_paths", "gates", "audit_surfaces"}
 
@@ -202,6 +204,8 @@ def replace_pack_task(payload: dict[str, Any], task: dict[str, Any]) -> dict[str
         # 不经过本分支，原包/导出/验收和verify-ui-scope的防伪逻辑保持完整。
         _execute("validate", payload)
         result.pop("reviewed_ui_changes", None)
+        result.pop("qa_checkpoint", None)
+        result.pop("qa_checkpoint_fingerprint", None)
     for field in ("depends_on", "blocks", "semantic_locks", "gates"):
         if field not in payload["task"] and not result["task"].get(field):
             result["task"].pop(field, None)
@@ -224,7 +228,12 @@ def export_task_pack(payload: dict[str, Any], task_id: str) -> dict[str, Any]:
     # 闭包的Writer，因此保留该闭包所需规则，而不把整图其他请求的规范一起交接。
     relevant = [task]
     if task["task_type"] == "qa":
-        closure = request_closure(_tasks(payload), task["request_id"])
+        from lib.foundation_qa import checkpoint, fingerprint
+        selected = checkpoint(payload, task) if task.get("foundation_task_id") else None
+        closure = set(selected["writer_ids"]) if selected else request_closure(_tasks(payload), task["request_id"])
+        if selected:
+            result["qa_checkpoint"] = selected
+            result["qa_checkpoint_fingerprint"] = fingerprint(payload, task)
         relevant = [item for item in payload["tasks"] if item["id"] in closure and item["task_type"] == "writer"] or [task]
         # 只投影请求闭包中生产 Writer 的审查合同，不给 QA 写权限或复制其他任务。
         result["reviewed_ui_changes"] = [
@@ -1704,6 +1713,8 @@ def _tasks(payload: dict[str, Any], *, handoff: bool = False) -> list[Task]:
         )
     if not handoff:
         _validate_ui_dependencies(typed_raw_tasks, prototype_paths)
+    from lib.foundation_qa import validate_contract
+    validate_contract(payload, handoff=handoff)
     # 原生ID只作身份元数据；退役标记仅排除后续派发，不另存宿主存活或任务状态。
     validate_references(typed_raw_tasks)
     return tasks
@@ -1762,6 +1773,23 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
                         _nonempty_string(item, f"task.{field}")
     tasks = _tasks(snapshot, handoff=is_pack)
     validate_graph(tasks)
+    if is_pack:
+        checkpoint = payload.get("qa_checkpoint")
+        foundation = payload["task"].get("foundation_task_id")
+        if foundation:
+            if (not isinstance(checkpoint, dict) or set(checkpoint) != {"kind", "writer_ids"}
+                    or checkpoint.get("kind") not in {"foundation", "request"}
+                    or not isinstance(checkpoint.get("writer_ids"), list) or not checkpoint["writer_ids"]
+                    or any(not isinstance(item, str) or not item for item in checkpoint["writer_ids"])
+                    or checkpoint["writer_ids"] != sorted(set(checkpoint["writer_ids"]))
+                    or foundation not in checkpoint["writer_ids"]
+                    or not isinstance(payload.get("qa_checkpoint_fingerprint"), str)
+                    or not SHA256_RE.fullmatch(payload["qa_checkpoint_fingerprint"])):
+                raise TaskGraphError("Foundation QA pack requires its current checkpoint and fingerprint")
+        elif "qa_checkpoint" in payload or "qa_checkpoint_fingerprint" in payload:
+            raise TaskGraphError("QA checkpoint metadata requires Foundation QA")
+    if is_pack and payload["task"].get("foundation_task_id") and "reviewed_ui_changes" not in payload:
+        raise TaskGraphError("Foundation QA pack requires complete reviewed_ui_changes")
     if is_pack and "reviewed_ui_changes" in payload:
         # 交接包中的投影只能由 QA 消费；逐项复用生产路由校验，防止格式合法但
         # 不完整或伪造的依据成为审查依据。实际请求范围仍以权威图及其导出字节为准。
@@ -1791,6 +1819,8 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
             _validate_plan_contract(item, index, prototype_paths, root)
             _validate_ui_change(item, index, prototype_paths, root, fingerprints,
                                 payload.get("requirements_fingerprint"))
+        if payload.get("qa_checkpoint") and (not seen or not seen <= set(payload["qa_checkpoint"]["writer_ids"])):
+            raise TaskGraphError("Foundation checkpoint must include its production UI review scope")
         if reviewed and not {"ui", "accessibility"}.issubset(
             _string_list(payload["task"].get("audit_surfaces"), "QA audit_surfaces")
         ):
@@ -1812,7 +1842,7 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"status": "valid"}
     if command == "ready":
         return {
-            "ready": ready_tasks(
+            "ready": _foundation_ready(snapshot, ready_tasks(
                 tasks,
                 approved_gates=set(
                     _string_list(snapshot.get("approved_gates", []), "approved_gates")
@@ -1823,15 +1853,37 @@ def _execute(command: str, payload: dict[str, Any]) -> dict[str, Any]:
                         snapshot.get("active_semantic_locks"), "active_semantic_locks"
                     )
                 ),
-                capacity=_nonnegative_integer(snapshot, "capacity"),
-            )
+                capacity=len(tasks),
+            ))
         }
     request_id = snapshot.get("request_id")
     if not isinstance(request_id, str) or not request_id.strip():
         raise TaskGraphError("request_id must be a non-empty string")
     # 分支各自验证成功不等于组合正确；只有 worktree 分支额外检查集成证据。
-    return {"qa_ready": qa_ready(tasks, request_id) and integration_ready(payload, request_id),
+    from lib.foundation_qa import checkpoint
+    qa = next((task for task in snapshot["tasks"] if task["task_type"] == "qa"
+               and task["request_id"] == request_id and task.get("foundation_task_id")), None)
+    if qa:
+        ids = set(checkpoint(snapshot, qa)["writer_ids"])
+        ready = qa_ready(tasks, request_id, writer_ids=ids)
+    else:
+        ready = qa_ready(tasks, request_id)
+    return {"qa_ready": ready and integration_ready(payload, request_id),
             "request_id": request_id}
+
+
+def _foundation_ready(payload: dict[str, Any], candidates: list[str]) -> list[str]:
+    """复用原依赖/批准/锁计算，只追加 Foundation 的受证据前置条件。"""
+    from lib.foundation_qa import valid_receipt, closure
+    blocked = set()
+    for qa in payload["tasks"]:
+        if not qa.get("foundation_task_id") or valid_receipt(payload, qa):
+            continue
+        foundation_ids = closure(payload, qa["foundation_task_id"])
+        blocked.update(task["id"] for task in payload["tasks"]
+                       if task["request_id"] == qa["request_id"] and task["task_type"] == "writer"
+                       and task.get("surface_kind") == "production_ui" and task["id"] not in foundation_ids)
+    return [task_id for task_id in candidates if task_id not in blocked][:_nonnegative_integer(payload, "capacity")]
 
 
 def _verify_ui_scope(pack: dict[str, Any], source: dict[str, Any]) -> None:
@@ -1861,6 +1913,9 @@ def _verify_ui_scope(pack: dict[str, Any], source: dict[str, Any]) -> None:
         expected = exported["reviewed_ui_changes"]
         expected_contract = exported.get("ui_contract")
         expected_requirements = exported.get("requirements_fingerprint")
+    if "task" not in source and (pack.get("qa_checkpoint") != exported.get("qa_checkpoint")
+            or pack.get("qa_checkpoint_fingerprint") != exported.get("qa_checkpoint_fingerprint")):
+        raise TaskGraphError("QA checkpoint differs from its authoritative source")
     if source.get("runtime_binding") != pack.get("runtime_binding"):
         raise TaskGraphError("UI scope source and QA pack runtime bindings differ")
     if (not expected or pack.get("reviewed_ui_changes") != expected

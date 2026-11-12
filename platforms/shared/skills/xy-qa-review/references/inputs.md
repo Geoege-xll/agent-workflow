@@ -4,7 +4,16 @@ Receive only the current self-contained schema 2 QA pack: `schema_version: 2`, t
 applicable standards, approval/UI authority, current review scope and evidence. The task includes
 workflow_level, module, role, agent_alias, instance_policy:fresh, context_policy:handoff_only and actual
 agent_ref. A new Reviewer must not inherit/copy full PM or sibling history. Full retains request-closure
-audit. Light requires no Full graph, but selected independent QA still needs current identity/evidence binding.
+audit. A new-project Foundation request uses the same QA node and original native Reviewer twice:
+first its graph-derived `qa_checkpoint.kind: foundation` closure, then `kind: request` for the full writer
+closure. The pack carries `qa_checkpoint.writer_ids` and `qa_checkpoint_fingerprint`; never self-select a
+subset or treat a Foundation PASS as final request acceptance. `qa_scope` remains `request`. PM accepts
+the first validated current-byte PASS through exclusive `accept_foundation`; QA returns to `DECLARED`
+with its identity intact. PM checks actual native completion separately, then resumes this same Reviewer
+for final request review through `accept_request`. Old/mixed checkpoint packs, missing UI/standards
+scope and changed Foundation evidence fail acceptance. Existing three-round recovery limits apply to
+this same request; no second Reviewer or business approval is added.
+Light requires no Full graph, but selected independent QA still needs current identity/evidence binding.
 
 
 - approved task contract, request dependency closure, and exact owned paths;

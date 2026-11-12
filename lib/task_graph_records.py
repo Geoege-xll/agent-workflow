@@ -137,6 +137,8 @@ def publish(path: Path, body: bytes, expected: str) -> bool:
         else:
             from task_settlement import validate_new_settlement_sources
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
+        from lib.foundation_qa import validate_publication
+        validate_publication(path, before, body)
         mode = identity[2] if identity else 0o600
         descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.workflow-", dir=path.parent)
         temporary = Path(raw)
@@ -302,9 +304,17 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if task_id not in indexed:
             raise TaskGraphError(f"unknown task ID: {task_id}")
         operations = _object(operations, f"patch.tasks.{task_id}")
-        if set(operations) - {"set", "append", "documents", "checkpoint", "settle"}:
+        if set(operations) - {"set", "append", "documents", "checkpoint", "settle", "accept_foundation", "accept_request"}:
             raise TaskGraphError(f"unsupported task update operation: {task_id}")
         task = indexed[task_id]
+        acceptance = set(operations) & {"accept_foundation", "accept_request"}
+        if acceptance:
+            if len(acceptance) != 1 or set(operations) != acceptance or set(patch) != {"tasks"} or len(changes) != 1:
+                raise TaskGraphError("QA checkpoint acceptance must be the only operation for one task")
+            from lib.foundation_qa import accept
+            operation = next(iter(acceptance))
+            task.update(accept(payload, old[task_id], operations[operation], root=root,
+                               kind="foundation" if operation == "accept_foundation" else "request"))
         if "settle" in operations:
             # 结果态、证据引用与可选退休必须作为同一事实原子发布；拒绝同补丁
             # 修改范围或其他任务，避免先改约定再拿旧结果结算。CAS仍由原CLI统一发布。
@@ -320,6 +330,8 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         additions = _object(operations.get("append", {}), "task.append")
         if set(fields) - SET_FIELDS or set(additions) - APPEND_FIELDS:
             raise TaskGraphError("task update attempts to modify a protected or unsupported field")
+        if old[task_id].get("foundation_task_id") and fields.get("state") == "QA_PASSED":
+            raise TaskGraphError("Foundation request QA_PASSED requires accept_request")
         if fields.get("state") == "RESULT_VERIFIED":
             raise TaskGraphError("RESULT_VERIFIED requires the evidence-bound settle operation")
         if (task["task_type"] in {"read_only", "evidence"} and "state" in fields
@@ -387,6 +399,15 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
         if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
             raise TaskGraphError("capacity must be an integer >= 0")
         result["capacity"] = capacity
+    from lib.foundation_qa import valid_receipt
+    for qa in result["tasks"]:
+        if qa.get("foundation_receipt") and not valid_receipt(result, qa, root=root):
+            qa.pop("foundation_receipt", None)
+            qa.pop("request_receipt", None)
+            # 已完成的最终QA不能在Foundation返工后复活；活跃Reviewer仍保留原状态
+            # 与占用，PM必须先核实实际原生完成，再按同一节点恢复本轮审查。
+            if qa["state"] == "QA_PASSED":
+                qa["state"] = "DECLARED"
     # 先校验字段类型与完整合同，再派生锁，避免错误补丁在集合操作中抛出 TypeError。
     validate("validate", result)
     for task_id in changed_contracts:
@@ -417,6 +438,9 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
                         if not validate("qa-ready", candidate)["qa_ready"]:
                             raise TaskGraphError("QA running-state update is blocked by the existing request QA barrier")
                     task["task_type"] = "read_only"
+                    task.pop("foundation_task_id", None)
+                    task.pop("foundation_receipt", None)
+                    task.pop("request_receipt", None)
         for key, field in (("active_paths", "owned_paths"), ("active_semantic_locks", "semantic_locks")):
             candidate[key] = sorted((set(payload.get(key, [])) - {
                 value for task in payload["tasks"] if _running(task) for value in task[field]

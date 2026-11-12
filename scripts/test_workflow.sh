@@ -28,7 +28,7 @@ GROUPS = {
     # 夹具仍留在 full，不能借此宣称已经修复或通过旧安装器的完整兼容验收。
     "plugin": modules("plugin_delivery", "plugin_resources", "plugin_workflow_contract", "plugin_maintenance_contract",
                       "continuous_intake_capabilities", "agent_continuation", "dispatch_admission", "task_settlement",
-                      "task_graph", "scheduler_boundaries") + tuple(
+                      "task_graph", "scheduler_boundaries", "foundation_qa", "plugin_worktree_delivery") + tuple(
                           "tests.test_task_graph_records." + name for name in (
                               "RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")),
     "native-config": modules("native_config", "native_inventory", "native_config_codecs", "native_config_commands",
