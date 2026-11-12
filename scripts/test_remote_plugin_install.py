@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import io
 import json
@@ -106,6 +107,33 @@ def validate_distribution(record, host, expected_revision, expected_version):
         raise ValueError("Git 分发记录缺少七候选摘要或宿主主 ZIP 摘要绑定")
 
 
+class FileClosureMismatch(ValueError):
+    """只携带缓存根以内的相对文件名；不读取或输出宿主配置、认证或文件内容。"""
+
+    def __init__(self, host, missing, extra):
+        self.details = {"missing_files": sorted(missing), "extra_files": sorted(extra)}
+        super().__init__("官方安装缓存文件集合与分发记录不一致：" + host + "；"
+                         + json.dumps(self.details, ensure_ascii=False, sort_keys=True))
+
+
+@contextmanager
+def evidence_receipt(output, evidence):
+    """失败仍保留已经完成的宿主证据与精确失败阶段，随后继续抛错保持 CI 红灯。"""
+    try:
+        yield
+    except Exception as error:
+        progress = evidence.pop("progress", {})
+        evidence["status"] = "INSTALL_DISCOVERY_BYTES_FAILED"
+        evidence["failure"] = {**progress, "type": type(error).__name__, "message": str(error),
+                               **getattr(error, "details", {})}
+        raise
+    else:
+        evidence.pop("progress", None)
+    finally:
+        # 证据仅含版本、公开提交/摘要、阶段及缓存相对名单，不收集 HOME 配置或原始列表。
+        output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
+
+
 def verify_installed(root, record, host, expected_revision, expected_version):
     """以分发提交的完整文件摘要核对真实安装缓存；不修补、重打包或写入缓存。"""
     validate_distribution(record, host, expected_revision, expected_version)
@@ -118,7 +146,7 @@ def verify_installed(root, record, host, expected_revision, expected_version):
     # AGY 从整个分发根安装，可能保留额外的只读分发记录；不把它误计入原始插件 ZIP。
     actual.pop("distribution.json", None)
     if set(actual) != set(files):
-        raise ValueError("官方安装缓存文件集合与分发记录不一致：" + host)
+        raise FileClosureMismatch(host, set(files) - set(actual), set(actual) - set(files))
     for name, item in files.items():
         path = actual[name]
         if (path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]
@@ -146,9 +174,10 @@ def smoke(vendor, output):
                 "version": version, "runtime_verified": False, "model_sessions_started": 0, "hosts": {}}
     published_revision = None
     candidate_binding = None
-    with tempfile.TemporaryDirectory(prefix="awf-official-install-", dir=runner_temp) as temporary:
+    with tempfile.TemporaryDirectory(prefix="awf-official-install-", dir=runner_temp) as temporary, evidence_receipt(output, evidence):
         work = Path(temporary)
         for host, client in clients.items():
+            evidence["progress"] = {"host": host, "stage": "client_preflight"}
             cli_version = command([client, "--version"], work)
             if not re.search(r"(?<![0-9.])" + re.escape(VERSIONS[host]) + r"(?![0-9.])", cli_version):
                 raise ValueError("官方客户端版本与固定测试版本不符：" + host)
@@ -157,6 +186,7 @@ def smoke(vendor, output):
                    for row in installed_rows(host, before)):
                 raise ValueError("临时 runner 已有同名插件；拒绝覆盖：" + host)
             # 先读取服务器分发提交；安装后再 fetch 一次，拒绝验收期间分支移动导致的混源。
+            evidence["progress"]["stage"] = "distribution_source_verification"
             reference = work / host
             reference.mkdir()
             command(["git", "init", "--quiet", reference], work)
@@ -189,6 +219,7 @@ def smoke(vendor, output):
                 body = command(["git", "show", commit + ":" + name], reference, raw=True)
                 if hashlib.sha256(body).hexdigest() != item["sha256"]:
                     raise ValueError("远程 Git 文件摘要与分发记录不一致：" + host)
+            evidence["progress"]["stage"] = "official_git_installation"
             if host in {"codex", "claude"}:
                 source = REMOTE if host == "codex" else REMOTE + "#plugins-claude-alpha"
                 arguments = [client, "plugin", "marketplace", "add", source]
@@ -202,6 +233,7 @@ def smoke(vendor, output):
             else:
                 command([client, "plugin", "install", "https://github.com/" + REPOSITORY + "/tree/plugins-antigravity-alpha"], work)
                 command([client, "plugin", "enable", PLUGIN], work)
+            evidence["progress"]["stage"] = "native_list_discovery"
             after = command([client, "plugin", "list", "--json"], work, as_json=True)
             row = plugin_row(host, after)
             if row.get("version") != version or not row.get("enabled"):
@@ -210,13 +242,14 @@ def smoke(vendor, output):
                              row["installPath"] if host == "claude" else row["path"]).resolve(strict=True)
             if not installed.is_relative_to(home):
                 raise ValueError("官方安装结果不在自然 runner HOME 中：" + host)
+            evidence["progress"]["stage"] = "installed_file_closure_verification"
             detail = verify_installed(installed, record, host, source_revision, version)
+            evidence["progress"]["stage"] = "distribution_tip_recheck"
             command(["git", "fetch", "--quiet", "--depth=1", REMOTE, branch], reference)
             if command(["git", "rev-parse", "FETCH_HEAD"], reference) != commit:
                 raise ValueError("验收期间 Git 分发分支移动；本轮证据无效")
             evidence["hosts"][host] = {**detail, "cli_version": VERSIONS[host], "distribution_commit": commit,
                                        "native_list_discovered": True, "enabled": True}
-    output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
 
 
 def main():

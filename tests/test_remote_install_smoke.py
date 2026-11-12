@@ -45,7 +45,9 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
         for fragment in ("  workflow_dispatch:", "  contents: read", "runs-on: ubuntu-latest",
                          "github.ref == 'refs/heads/main'", "persist-credentials: false",
                          "ref: ${{ github.sha }}", "npm ci", "--registry https://registry.npmjs.org",
-                         "scripts/test_remote_plugin_install.py", "if-no-files-found: error", "overwrite: false"):
+                         "scripts/test_remote_plugin_install.py", "if-no-files-found: error", "overwrite: false",
+                         "      - name: Summarize installation evidence\n        if: always()",
+                         "      - name: Upload the installation-only evidence\n        if: always()"):
             self.assertIn(fragment, workflow)
         for forbidden in ("contents: write", "  push:", "  pull_request:", "inputs:", "CODEX_HOME",
                           "CLAUDE_CONFIG_DIR", "HOME:", "export HOME", "secrets.", "windows-latest"):
@@ -90,6 +92,15 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
                         record["files"][".marketplace/ignored.json"] = {"sha256": "0" * 64, "mode": "100644"}
                     report = SMOKE.verify_installed(plugin, record, host, revision, version)
                     self.assertEqual(2, report["files"])
+                    # 真实缓存不匹配时仍严拒；异常只报告精确相对名单，不忽略任何额外载荷。
+                    modified = copy.deepcopy(record)
+                    modified["files"][prefix + "missing.bin"] = {"sha256": "0" * 64, "mode": "100644"}
+                    (plugin / "unexpected.bin").write_bytes(b"extra")
+                    with self.assertRaises(SMOKE.FileClosureMismatch) as failure:
+                        SMOKE.verify_installed(plugin, modified, host, revision, version)
+                    self.assertEqual({"missing_files": ["missing.bin"], "extra_files": ["unexpected.bin"]},
+                                     failure.exception.details)
+                    (plugin / "unexpected.bin").unlink()
                     for field, wrong in (("schema_version", 2), ("managed_by", "other-publisher"),
                                          ("plugin_zip_sha256", "0" * 64), ("source_revision", "b" * 40), ("version", "3.0.0-alpha.4"),
                                          ("repository", "other/repo"), ("host", "wrong"),
@@ -105,6 +116,39 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
                     (plugin / "sources.json").write_text("changed")
                     with self.assertRaises(ValueError):
                         SMOKE.verify_installed(plugin, record, host, revision, version)
+
+    def test_failed_receipt_retains_completed_hosts_and_precise_safe_diagnostics(self):
+        with tempfile.TemporaryDirectory(prefix="native-smoke-receipt-") as temporary:
+            output = Path(temporary) / "receipt.json"
+            evidence = {"status": "INSTALL_DISCOVERY_BYTES_VERIFIED", "runtime_verified": False,
+                        "model_sessions_started": 0, "hosts": {"codex": {"files": 3}},
+                        "progress": {"host": "antigravity", "stage": "installed_file_closure_verification"}}
+            with self.assertRaises(SMOKE.FileClosureMismatch):
+                with SMOKE.evidence_receipt(output, evidence):
+                    raise SMOKE.FileClosureMismatch("antigravity", ["missing.bin"], [".git/HEAD"])
+            receipt = json.loads(output.read_text())
+            self.assertEqual("INSTALL_DISCOVERY_BYTES_FAILED", receipt["status"])
+            self.assertEqual({"codex": {"files": 3}}, receipt["hosts"])
+            self.assertEqual("antigravity", receipt["failure"]["host"])
+            self.assertEqual("installed_file_closure_verification", receipt["failure"]["stage"])
+            self.assertEqual(["missing.bin"], receipt["failure"]["missing_files"])
+            self.assertEqual([".git/HEAD"], receipt["failure"]["extra_files"])
+            self.assertFalse(receipt["runtime_verified"])
+            self.assertEqual(0, receipt["model_sessions_started"])
+            self.assertNotIn("progress", receipt)
+
+    def test_success_receipt_drops_progress_and_preserves_verified_status(self):
+        with tempfile.TemporaryDirectory(prefix="native-smoke-receipt-") as temporary:
+            output = Path(temporary) / "receipt.json"
+            evidence = {"status": "INSTALL_DISCOVERY_BYTES_VERIFIED", "hosts": {},
+                        "progress": {"host": "antigravity", "stage": "distribution_tip_recheck"}}
+            with SMOKE.evidence_receipt(output, evidence):
+                evidence["hosts"]["antigravity"] = {"files": 3}
+            receipt = json.loads(output.read_text())
+            self.assertEqual("INSTALL_DISCOVERY_BYTES_VERIFIED", receipt["status"])
+            self.assertEqual({"antigravity": {"files": 3}}, receipt["hosts"])
+            self.assertNotIn("progress", receipt)
+            self.assertNotIn("failure", receipt)
 
     def test_native_list_discovery_requires_unique_plugin_identity(self):
         for host in ("codex", "claude", "antigravity"):
