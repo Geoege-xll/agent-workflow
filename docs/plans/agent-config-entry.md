@@ -55,3 +55,15 @@ P1 独立工具安全命令与原生命周期定向 35 项通过，唯一 Review
 P2 初审发现并保留两项 Important：版本目录已发布而 registry 发布失败时无法重试，以及 HTTP 持续滴入可越过外层下载预算。原作者改为完整核验精确残留版本后幂等补登记，并用剩余 socket 预算加本次下载 worker 的硬总预算监督连接、响应头、重定向和正文。作者修复后 26 项通过，原进程日志 `/private/tmp/awf-p2-freeze/p2-important-fixed-full.log`；旧冻结与失败证据保留，同一 Reviewer 已复核关闭两问题。
 
 本轮构建、真实发行、净源 CI、宿主前向与精确安装结论按最终收据追加，不能把阶段通过扩展为已经发布或完整原生运行通过。
+
+## 交付收据
+
+首个净源提交为 `b43ebc4fb655c813d21054570d5db8855f07f362`。本机 current 为 443 项、442 通过、一个既有 Codex 官方临时隔离限制跳过；[该提交实际 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43136571691) 的 macOS、Linux 各 443 项、439 通过、四项跳过，分别为三个 CI 未安装 Claude CLI 的原生检查及一个 Codex 隔离限制。两平台验证和候选构建均成功；下载七个真实 CI 附件后，逐包 SHA 与独立 QA 审核包一致。
+
+独立组件已发布为 [Native Agent Config 0.1.0-alpha.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.0-alpha.3)，target 为上述净源提交，标记 prerelease 且不设为 latest。ZIP 为 86,481 字节，SHA-256 为 `74d015e0c005c980694acf09985345ae342c15ffc3ff8b448b1cb406843181dd`。发行描述由工具实际下载同一公开资产、核验 SHA 与 BUILD 后生成 published；这项独立组件预发行不代表工作流插件已进入公开市场或稳定发行。
+
+原作者在显式临时组件根验证真实公开下载及首次准备：未确认的 open 零安装；准备后服务就绪，第二次 open 复用同一进程、实例及 URL；status/doctor 不改变文件字节、权限、inode、mtime 或服务进程；doctor 核验发行完整性通过。网页 GET 返回 200，内容摘要与包内资源一致，没有保存配置。通过正式 SIGTERM 生命周期关闭本次自有服务后，连接记录移除、进程为零，后续只读检查返回 stopped。安全报告位于 `/private/tmp/awf-config-entry-remote/`，交由同一 Reviewer 独立复核，不冒充完整 UI 操作验收。
+
+AGY 官方 strict 校验识别十个 Skill、七个 Agent 和一个 Rule，alpha.4 安装文件全等；真实模型前向停在新临时目录信任确认。自动审批拒绝授予整个目录的读、写、执行信任，理由是超出本次精确只读命令测试范围；未绕过该信任门，未执行 launcher，业务负控也未启动。测试结束官方停用，其他插件保留，自有进程为零。因此 AGY 本轮实际维护路由仍为 blocked，不能由静态校验推导通过。
+
+Codex 实际正向已使用原生发现的维护 Skill 调用固定 status 启动器，未读取业务 WORKFLOW、创建任务图或派发子代理。其余前向结果、最终 published 描述候选及精确安装仍须以同一轮最终收据为准；本段中的首个 CI 不是后续元数据差量提交的 CI 结果。

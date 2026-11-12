@@ -10,7 +10,7 @@
 
 ## 插件内打开
 
-维护 Skill 为 `agent-config`，显示“模型配置”。Claude Code 使用 `/agent-workflow:agent-config`；Codex 在 `/skills` 或 `$` 选择器选择插件的实际发现项；AGY 使用实际发现的插件限定 Skill。省略动作等价 open：
+维护 Skill 为 `agent-config`，显示“模型配置”。Claude Code 使用 `/agent-workflow:agent-config`；Codex 在 `/skills` 或 `$` 选择器选择插件的实际发现项；AGY 当前载荷使用 `/agent-config`，以客户端实际发现项为准。省略动作等价 open：
 
 | 动作 | 用户可见行为 |
 | --- | --- |

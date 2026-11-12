@@ -74,7 +74,8 @@ Validation and an installation receipt alone do not establish model-backed execu
 
 维护 Skill 名为 `agent-config`，省略动作即打开配置台。Claude 使用
 `/agent-workflow:agent-config`，Codex 在原生 `/skills` 或 `$` 选择器中选择实际发现的
-插件 Skill，AGY 使用实际发现的插件限定名称。可加 `status` 或 `doctor` 做只读检查。
+插件 Skill，AGY 当前载荷使用 `/agent-config`，以实际发现项为准。可加 `status` 或
+`doctor` 做只读检查。
 
 平台由当前插件构建固定；项目使用当前会话明确的绝对目录，没有项目时进入用户级。
 缺少独立组件时先报告准备信息，用户确认后才调用固定准备参数。组件来自已核验的

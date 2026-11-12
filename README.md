@@ -15,7 +15,7 @@
 
 ## 安装插件后打开模型配置
 
-在 Claude Code 使用 `/agent-workflow:agent-config`；Codex 从 `/skills` 或 `$` 选择器选择插件的 `agent-config`；AGY 使用客户端实际发现的插件限定 Skill。省略动作等价 `open`，另有 `status` 和 `doctor`。入口由插件携带，用户无需寻找开发工作树。
+在 Claude Code 使用 `/agent-workflow:agent-config`；Codex 从 `/skills` 或 `$` 选择器选择插件的 `agent-config`；AGY 当前载荷使用 `/agent-config`，以客户端实际发现项为准。省略动作等价 `open`，另有 `status` 和 `doctor`。入口由插件携带，用户无需寻找开发工作树。
 
 首次缺少独立配置组件时先显示准备信息，确认后才获取并校验组件。后续复用本用户已安装的版本和健康服务；自动定位当前平台及明确的项目，没有项目时进入用户级。准备组件不修改模型配置，网页仍先预览、再确认保存。状态与诊断为只读，不安装、不启动服务，也不查询模型目录。
 
