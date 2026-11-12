@@ -1,6 +1,6 @@
 # 安装或加载 3.0 本地插件
 
-当前工作流插件为 `3.0.0-alpha.4` 本地候选，公开市场与稳定发行尚未就绪；Windows 暂停。工作流使用官方插件机制，独立模型配置组件另行交付。日常流程见[使用手册](../docs/usage.md)，载荷边界见[插件说明](PLUGIN.md)。
+当前工作流插件为 `3.0.0-alpha.4` 本地候选，公开市场与稳定发行尚未就绪；Windows 暂停。工作流使用官方插件机制，独立模型配置组件另行交付。日常流程见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷边界见[插件说明](PLUGIN.md)。
 
 ## 生成完整来源包
 
@@ -60,7 +60,7 @@ agy plugin enable agent-workflow
 
 ## 当前本机结论
 
-当前候选已在本机三端完成本地安装。Codex CLI 新插件实际启动通过；Claude 插件发现通过，默认模型在 90 秒预算内未回应，PM 实际接管未验；AGY 安装通过，后续模型运行待登录；Codex App GUI 未验。较早候选的 CLI 原生实验按其[验收记录](../docs/plans/plugin-v3-native-acceptance.md)单独保留，不扩大为所有宿主与界面均通过。
+当前候选已在本机三端完成本地安装。Codex CLI 新插件实际启动通过；Claude 插件发现通过，默认模型在 90 秒预算内未回应，PM 实际接管未验；AGY 安装通过，后续模型运行待登录；Codex App GUI 未验。较早候选的 CLI 原生实验按其[验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)单独保留，不扩大为所有宿主与界面均通过。
 
 活动任务跨插件缓存更新的自动资源保留协议尚未实现；更新前先收尾或交接活动任务。插件公开市场与远程一键安装以实际发布记录为准，本地构建命令不代表已发布稳定插件。
 
@@ -72,6 +72,6 @@ agy plugin enable agent-workflow
 
 缺少独立组件时先报告准备信息，经用户确认才调用固定准备参数。组件来自已发布且实际核验的独立发行包，安装到用户级版本目录；插件只包含薄入口，不夹带核心、网页、组件 ZIP 或 MCP。显式离线包也必须匹配固定摘要。服务与浏览器分别报告状态，浏览器失败保留 ready 服务及私有打开入口。
 
-status/doctor 不准备组件、创建连接或权限记录，不启动 HTTP、浏览器或模型查询。普通业务无需组件或 MCP；显式维护不读取整份 WORKFLOW、不建业务任务图或派发子代理。插件缓存角色只读，各平台可写原生字段和覆盖范围见[原生配置说明](../docs/agent-configuration.md)。
+status/doctor 不准备组件、创建连接或权限记录，不启动 HTTP、浏览器或模型查询。普通业务无需组件或 MCP；显式维护不读取整份 WORKFLOW、不建业务任务图或派发子代理。插件缓存角色只读，各平台可写原生字段和覆盖范围见[原生配置说明](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/agent-configuration.md)。
 
 独立配置工具 `0.1.0-alpha.3` 已作为预发行资产发布；这一事实不代表工作流插件已上架公开市场或成为稳定发行。当前固定组件描述只采用真实下载核验的地址与摘要。

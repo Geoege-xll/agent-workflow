@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 官方插件候选
 
-插件唯一版本源为 `product/PLUGIN_VERSION`，当前 `3.0.0-alpha.4`；独立配置工具版本源为 `native_config/VERSION`，当前 `0.1.0-alpha.3`。插件公开市场与稳定发行尚未就绪，Windows 暂停。本页说明载荷合同，实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](../docs/usage.md)。
+插件唯一版本源为 `product/PLUGIN_VERSION`，当前 `3.0.0-alpha.4`；独立配置工具版本源为 `native_config/VERSION`，当前 `0.1.0-alpha.3`。插件公开市场与稳定发行尚未就绪，Windows 暂停。本页说明载荷合同，实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
 
 ## 载荷与职责
 
@@ -46,7 +46,7 @@ inspect 只读；显式 apply 只创建缺失 adapter，复用已有有效配置
 
 Codex 0.167.0 的实际对照发现根 portable 清单漏载 Hook，候选只生成 `.codex-plugin/plugin.json`。客户端官方 Hook 审阅和信任不可绕过，不直接写信任记录或以全局指令替代。安装成功不自动授予 Hook 信任。AGY 构建继续保护每个 Skill 的 24,000 字节正文上限。
 
-较早 alpha 候选的默认 PM、原生派发、同 ID 追加、配置与推理实验见[原生验收记录](../docs/plans/plugin-v3-native-acceptance.md)，保留当时具体范围与失败。当前 App GUI 未验；发现、安装、真实模型响应与完整工作流收口分层判定。每个新包仍从 `runtime_verified:false` 开始，不因构建、静态验证或安装回执宣称完整原生运行通过。
+较早 alpha 候选的默认 PM、原生派发、同 ID 追加、配置与推理实验见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)，保留当时具体范围与失败。当前 App GUI 未验；发现、安装、真实模型响应与完整工作流收口分层判定。每个新包仍从 `runtime_verified:false` 开始，不因构建、静态验证或安装回执宣称完整原生运行通过。
 
 活动任务跨插件更新的自动资源保留协议尚未实现，更新前先收尾或交接。独立配置预发行不代表插件公开市场稳定发行；本机安装也不代表全局替换所有用户或业务项目。
 
