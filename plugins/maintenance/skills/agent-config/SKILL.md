@@ -18,14 +18,17 @@ Worker，返回主会话处理，不继续执行。本 Skill 在当前会话内�
 
 从本次加载的 Skill 物理路径 `skills/agent-config/SKILL.md` 向上确定所属插件根；
 固定使用该插件的 `plugins/maintenance/launcher.sh`，宿主固定为 `@HOST@`。
-当前项目只取实际 session/workspace 明确给出的项目物理绝对目录，不使用插件根、
-相邻 ZIP、源码仓、中央登记或历史项目。项目明确时执行：
+插件资源路径相对上述插件物理根解析；本地项目路径独立取自宿主在本次 session 中
+明确提供的实际 workspace 或项目工作目录。已知唯一项目物理绝对目录时，必须将其
+作为独立引用参数传给 `--project`，不使用插件根、相邻 ZIP、源码仓、中央登记或历史
+项目。`AGY CLI` 的项目 ID/name 与这里的本地文件系统目录不是同一层信息，不得将其
+当作目录或据此推导、拼接文件路径。项目目录明确时执行：
 
 ```sh
 bash "<插件物理根>/plugins/maintenance/launcher.sh" <动作> --host @HOST@ --project "<当前实际项目物理绝对目录>"
 ```
 
-没有明确项目时省略 `--project`，启动器按用户级范围处理：
+只有没有明确的本地项目目录时才省略 `--project`，启动器按用户级范围处理：
 
 ```sh
 bash "<插件物理根>/plugins/maintenance/launcher.sh" <动作> --host @HOST@

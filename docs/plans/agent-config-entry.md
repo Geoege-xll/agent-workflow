@@ -64,6 +64,28 @@ P2 初审发现并保留两项 Important：版本目录已发布而 registry 发
 
 原作者在显式临时组件根验证真实公开下载及首次准备：未确认的 open 零安装；准备后服务就绪，第二次 open 复用同一进程、实例及 URL；status/doctor 不改变文件字节、权限、inode、mtime 或服务进程；doctor 核验发行完整性通过。网页 GET 返回 200，内容摘要与包内资源一致，没有保存配置。通过正式 SIGTERM 生命周期关闭本次自有服务后，连接记录移除、进程为零，后续只读检查返回 stopped。安全报告位于 `/private/tmp/awf-config-entry-remote/`，交由同一 Reviewer 独立复核，不冒充完整 UI 操作验收。
 
-AGY 官方 strict 校验识别十个 Skill、七个 Agent 和一个 Rule，alpha.4 安装文件全等；真实模型前向停在新临时目录信任确认。自动审批拒绝授予整个目录的读、写、执行信任，理由是超出本次精确只读命令测试范围；未绕过该信任门，未执行 launcher，业务负控也未启动。测试结束官方停用，其他插件保留，自有进程为零。因此 AGY 本轮实际维护路由仍为 blocked，不能由静态校验推导通过。
+AGY 初次官方 strict 校验识别十个 Skill、七个 Agent 和一个 Rule，alpha.4 安装文件全等；该阶段真实模型前向停在新临时目录信任确认。自动审批拒绝授予整个目录的读、写、执行信任，理由是超出当时精确只读命令测试范围；未绕过该信任门，未执行 launcher，业务负控也未启动。该阶段测试结束官方停用，其他插件保留，自有进程为零。这个初次 blocked 结果作为历史保留，不能由静态校验推导通过。
 
-Codex 实际正向已使用原生发现的维护 Skill 调用固定 status 启动器，未读取业务 WORKFLOW、创建任务图或派发子代理。其余前向结果、最终 published 描述候选及精确安装仍须以同一轮最终收据为准；本段中的首个 CI 不是后续元数据差量提交的 CI 结果。
+published 描述对应的净源为 `489b99a2630a10822760cdd123932d3e51b20e7f`，[该提交的实际 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43137630707) 两平台验证与候选构建均成功。两端仍各 443 项、439 通过、四个已知跳过；实际下载的七 ZIP、sidecar、总 SHA 和 manifest 与本机净源候选一致。此结果只属于该提交，不代替后续两份路径澄清文本的新净源验证。
+
+Codex、Claude 的四项实际路由观察已由同一 Reviewer 独立审查：两个显式正向真实执行固定 status，得到 preparation_required 并完成回合，没有读取业务 WORKFLOW、创建任务图、派发子代理或修改项目；两个业务负控真实读取原业务权威、没有执行维护启动器，但完整方案均在 90 秒预算内未结束。Claude 负控出现连接拒绝重试；其正向提交至 Stop 为 32.748 秒，118.69 秒进程总时长包含首次正式信任等待，不能混为模型耗时。安全收据位于 `/private/tmp/awf-config-entry-forward/summary.json`。
+
+Codex 的 161 文件实际安装载荷与上述净源候选全等，Hook 已通过官方逐项复审及 trusted 查询；用户级停用，仅本轮临时 Codex 项目启用，旧 App 临时项目停用，原用户 Hook 保留。Claude 的结论限临时 plugin-dir 加载与官方 validator/inventory，没有新建持久用户级安装。Claude manifest 校验成功，但公开目录检查仍有 LICENSE_MISSING blocking/error、ICON_MISSING 非阻断 warning 和 README 安装行建议；公开目录上架尚未就绪，未推定或添加 LICENSE/SPDX。
+
+## AGY 授权补测与路径澄清
+
+用户随后单独批准两个测试目录的官方读、写、执行信任：`/private/tmp/awf-config-entry-forward/agy/explicit-status-project` 与 `/private/tmp/awf-config-entry-forward/agy/business-negative-project`。权限不扩展到业务项目或全局策略。官方 CLI 在实际启动时自动升级至 1.5.6，后续只读 strict 仍为十 Skill、七 Agent、一个 Rule。
+
+首次授权正向确实读取维护 Skill，并执行唯一固定 status，但省略本地项目参数，回执为 antigravity/global/project=null。启动 cwd、官方信任目录和 UI cwd 一致，尚无结构化证据证明模型实际收到本地 workspace 字段，因此不能直接认定模型忽略了可见项目。该次 Bash completed 距起点 97 秒，超过事前 90 秒预算；159 秒仅为人工 ESC 后观察最终 ready 的窗口，没有官方 Done 时间戳。记录为验收控制失误，不计合格 PASS；该次已正常退出、官方停用，自有 CLI/服务为零，两个目录及维护目录未改动。
+
+针对已确认的文字歧义，仅澄清 `plugins/main-session-context.md` 与维护 Skill：相对插件根解析的是插件资源，本地项目物理目录独立来自宿主实际 session/workspace；已知唯一目录必须传 `--project`，没有明确目录才使用用户级。AGY CLI 的项目 ID/name 与配置工具所需的本地目录分属两层，不推导文件路径。[官方项目说明](https://antigravity.google/docs/projects/)及[命令参考](https://antigravity.google/docs/cli/reference/)支持这一区分。未增加 cwd 探针、隐式 PWD 推断、元数据解析器、关键词分流或宽权限。作者沿用三端实际构建与维护/业务合同，22 项通过；同一 Reviewer 复核源码及七包投影通过，native 已发布包字节保持不变。
+
+新的两项 AGY 测试事前采用原生 `--add-dir` 将已授权目录明确注册到 workspace，纯用户提示不注入预期行为；信任与模型计时分开，正向 180 秒硬预算、负控 90 秒硬预算。独立 PTY 父控制器在同一操作中启动单调时钟并提交提示，预算前分阶段中断、终止及回收本次自有进程组；本地无网络定时自检和同一 Reviewer 的控制器审查通过。原无效用例不改记。
+
+正向在 130.015 秒观察到 native-ready 上界，130.785 秒正常退出并回收，处于 180 秒预算内。公开工具记录中的实际固定 status 命令带正确的 approved 项目物理路径；没有业务 WORKFLOW 读取、代理派发或写入。原生工具 JSON 在 TUI 中折叠，当时的 `location` 字段未直接取得，不以助手摘要冒充工具证据。另一次明确分栏的非模型 direct_readonly_replay 使用同一实际 argv，只读返回 exit 2、preparation_required、antigravity/project/正确目录，browser 为 not_requested，service 为 unknown，无 URL 或链接文件；它不补造历史模型工具响应。
+
+业务负控的初始 90 秒阶段只完成只读目录检查，85.915 秒正常退出；没有维护命令执行，但尚未到达完整业务讨论。随后从该次官方退出提示精确确认自有会话 ID，在同一会话、同一批准目录和同一载荷下，仅发“继续刚才的只读讨论”，单次 300 秒硬预算续跑；没有扫描他人会话或注入预期工作流路径。续跑于 262.420 秒观察到 ready 上界，263.310 秒正常退出，形成实现与边界讨论。公共工具记录包括 README、插件目录、AGY 业务适配和作为源码参考的维护 Skill 读取；维护启动器、Agent 和写工具均为零。初始未完成结果与续跑结果分别保留，不改写为一次 90 秒通过。
+
+该精确负控会话是否原生提供了完整 `xy-workflow` 正文和本次讨论所需产品权威，仍未获可靠时点证据。仅发现名称/路径不能当正文已加载，公共 Read 缺失也不能排除宿主原生提供或同实例复用。源码确认短规则未内联业务全文，独立 WORKFLOW 为 129,121 字节；不把全篇强塞进 always-on rule，也不要求每轮重复全文读取。停用后重新打开当前 context 快照不足以证明历史，故未重新注入规则补证。结论限维护命令参数及维护执行隔离的实际观察，不扩展为完整 AGY 业务 bootstrap、完整 UI 或整体 runtime PASS。
+
+AGY 最终官方停用，其他插件保持原状，两个批准目录逐文件无新增、删除或修改，组件/服务目录未变，本次 CLI、控制器及配置服务进程均为零。scope-review 两份文案也已通过 Codex 官方精确同步与 Hook 复审，161 文件全等，新 Hook 查询为 trusted；全局停用、原临时项目启用、旧 App 临时项目停用。Claude 168 文件清单与 manifest 校验通过，公开目录许可证阻断保留，没有新增模型用例。后续净源构建须核已安装载荷与最终 ZIP 字节相同，不能用旧 dirty 来源代替最终提交的 CI。
