@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 插件候选
 
-3.0 使用三平台官方插件机制分发工作流。当前版本为 `3.0.0-alpha.4`，唯一版本源是 `product/PLUGIN_VERSION`。本页描述开发候选，不表示已发布稳定版或迁移业务项目。本机官方客户端的候选安装与原生验收独立记录；Windows 工作暂停。
+3.0 使用三平台官方插件机制分发工作流。当前版本为 `3.0.0-alpha.5`，唯一版本源是 `product/PLUGIN_VERSION`。本页描述 alpha 候选与自有 Git 分发，不表示官方公开目录上架、稳定发行或自动迁移业务项目。本机官方客户端的候选安装与原生验收独立记录；Windows 工作暂停。
 
 ## 工作流保持
 
@@ -18,7 +18,7 @@
 
 显式调用插件的 `agent-config [open|status|doctor]` 仅走维护路径，不读取整份 WORKFLOW、不创建业务任务图或派发子代理。入口不会因普通需求里出现命令名而触发；三端主会话的业务分支仍加载完整原权威。组件首次准备需要用户确认，使用固定发行描述和真实包摘要；独立核心、网页和 ZIP 不进入插件。
 
-## 构建与本地加载
+## 安装与构建
 
 源码按职责单向依赖：
 
@@ -35,16 +35,11 @@
 
 网页、HTTP 和 MCP 只能调用配置核心，不能各自实现一份校验、保存或恢复。模型定义字段、命名 Agent 调用和单次覆盖参数分开表达；平台能力未知时返回诊断，不生成猜测参数。两套产品版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`；`product/VERSION` 不表示插件版本。
 
-构建需要已有 Python 3.11+。源码入口通过选择器运行，不依赖系统默认 `python3` 恰好满足版本：
+普通用户通过官方客户端直接安装三个固定 Git 分发分支，无需克隆或本地构建。Codex/Claude 远程市场统一为 `agent-workflow-alpha`，插件名为 `agent-workflow`；AGY 直接安装宿主专属分支的 GitHub tree URL。各端完整命令、登录、Hook 信任、来源检查和更新区别见[安装说明](../plugins/INSTALL.md)。运行 helper 仍需已有 Python 3.11+ 和 Bash。
 
-```bash
-bash lib/python_runtime.sh -B -X utf8 packaging/build_plugin.py \
-  --host all --output-dir /absolute/new-output-directory --local-source
-```
+源码构建只供开发与维护，沿既有 `packaging/build_plugin.py` 与 `build_candidates.py` 唯一构建链生成三宿主插件、本地来源与独立组件七包，详见[开发手册](development.md)。开发市场 `agent-workflow-local` 不与远程市场自动迁移或同时启用。
 
-输出包含三个宿主的插件 ZIP、本地载荷及对应的本地市场来源包。每次候选使用新的输出目录。具体官方加载与安装命令、载荷区别及验收限制见[安装说明](../plugins/INSTALL.md)。这里没有尚未发布的远程一键安装地址。
-
-维护者可在 Git 源码树中用 `packaging/build_candidates.py --output-dir <源码树外的新目录>` 统一调用两个独立构建器，生成七包和 `SHA256SUMS`。编排器检查双 alpha 版本、同一源码修订与树摘要、包种类及版本一致性，拒绝源码漂移和覆盖旧输出。自动 PR/push 工作流运行 `current` 并上传这些候选附件，保持只读仓库权限，不创建 tag 或 Release。
+新手动发布工作流仅从 main 固定源码 SHA，读取同 SHA 成功 `release.yml` 的唯一候选 artifact。独立发布 job 校验来源、候选摘要、版本与干净输入后，将三个宿主来源普通 atomic push 到 `plugins-codex-alpha`、`plugins-claude-alpha`、`plugins-antigravity-alpha`；不另建构建链、不 force 覆盖未知分支，拒绝同版不同载荷，相同候选可幂等重发。发布是自有 Git alpha 渠道，不代替官方公开目录或稳定发行审查。实际发布证据见[远程安装计划](plans/plugin-remote-install.md)。
 
 空项目通过包内 `plugins/project_context.py` 显式创建最小 `.awf/project.yaml`；inspect 本身零写入。已有有效根 `project.yaml` 可复用。项目 adapter 和安装插件中的权威资源分开读取；旧中央绑定或混用来源明确拒绝，不靠伪造 pin 或全局指令文件补入口。
 
@@ -65,7 +60,7 @@ bash scripts/test_workflow.sh current
 
 原生验收发现并修复了两项仅靠离线构建无法发现的问题：Codex CLI 0.167.0 对根级 portable 清单漏载 Hook，候选改用单一官方 `.codex-plugin/plugin.json` 格式；AGY CLI 1.5.5 会截断超过 24,000 字节的 Skill 正文，候选改用宿主专属适配说明并在构建时阻断超限，共用工作流正文保持完整。
 
-当前精确本机候选已完成三端本地安装：Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；AGY 安装通过待登录；App GUI 未验。较早 alpha 候选的单项真实模型响应、PM、原生子代理与持续接单证据按[原生验收记录](plans/plugin-v3-native-acceptance.md)的历史范围保留，不扩大为当前三端全部通过。
+上一 alpha.4 精确本机候选已完成三端本地安装：Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；AGY 安装通过待登录；App GUI 未验。alpha.5 的远程发布与安装发现单独验收，不从来源可用、状态列表或安装回执推断 PM 模型运行。较早 alpha 候选的单项真实模型响应、PM、原生子代理与持续接单证据按[原生验收记录](plans/plugin-v3-native-acceptance.md)的历史范围保留，不扩大为当前三端全部通过。
 
 活动任务跨官方插件更新的自动资源保留协议尚未实现，当前 alpha 使用活动任务先收尾再更新的限制。源码与离线包校验不能据此声明自动跨版本恢复通过。
 

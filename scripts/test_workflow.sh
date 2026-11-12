@@ -39,7 +39,7 @@ GROUPS = {
     "antigravity": modules("antigravity_workflow"),
     "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace"),
     "packaging": modules("plugin_delivery", "native_config_packaging", "candidate_delivery",
-                         "plugin_config_launcher", "config_distribution"),
+                         "plugin_config_launcher", "config_distribution", "plugin_source_publication", "remote_install_smoke"),
     "central": modules("central_project", "runtime_store", "runtime_state", "central_runtime", "runtime_lifecycle") + (
         "tests.test_workflow_manager.CentralCliIntegrationTest",
         "tests.test_workflow_manager.InstalledProjectIntegrationTest",
@@ -80,7 +80,7 @@ GROUPS["legacy-ci"] = (
 )
 # 保留现有显式调用的兼容别名；自动 PR/push 门禁只消费 current。
 GROUPS["ci"] = GROUPS["legacy-ci"]
-GROUPS["current"] = (modules("validation_runner", "candidate_delivery") + GROUPS["plugin"]
+GROUPS["current"] = (modules("validation_runner", "candidate_delivery", "plugin_source_publication", "remote_install_smoke") + GROUPS["plugin"]
                      + GROUPS["native-config"] + GROUPS["prototype"])
 
 

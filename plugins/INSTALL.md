@@ -1,68 +1,73 @@
-# 安装或加载 3.0 本地插件
+# 安装 Agent Workflow 3.0 alpha 插件
 
-当前工作流插件为 `3.0.0-alpha.4` 本地候选，公开市场与稳定发行尚未就绪；Windows 暂停。工作流使用官方插件机制，独立模型配置组件另行交付。日常流程见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷边界见[插件说明](PLUGIN.md)。
+当前候选为 `3.0.0-alpha.5`，默认使用官方客户端从自有 Git alpha 渠道安装；无需克隆工作流源码或本地构建。此渠道不等于官方公开目录上架或稳定发行，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
 
-## 生成完整来源包
+## 前置条件
 
-仓库中的清单模板是构建输入，不能直接当作完整安装目录。先使用已有 Python 3.11+ 生成候选：
+已有对应宿主的官方客户端、Python 3.11+ 和 Bash。helper 使用包内解释器选择器发现现有 Python，不安装软件或改变 PATH。模型运行需完成宿主登录与实际权限确认；普通工作流不要求配置组件、配置 HTTP 服务或 MCP。
 
-```bash
-bash lib/python_runtime.sh -B -X utf8 packaging/build_plugin.py \
-  --host all --output-dir /absolute/new-output-directory --local-source
-```
-
-每次使用新的输出目录。输出包含确定性插件 ZIP 和 `local/` 下完整的宿主来源目录及实际本地市场清单；各市场只引用自身的 `plugins/agent-workflow`。`*-local-source.zip` 是可分享的完整宿主来源目录，解压到新目录后再交给下列官方命令。单独插件 ZIP 不是市场 ZIP，Codex 安装市场还需要其中的市场清单。
-
-构建不安装到用户环境。构建后的工作流载荷不要求源码 checkout、中央运行时、Node、包管理器或配置服务。下列命令在用户主动执行时修改对应客户端的安装状态；不会自动替换其他用户或业务项目的既有安装。
+以下命令只管理对应客户端当前安装范围，不自动替换其他用户、业务项目或旧来源。Codex/Claude 的远程市场名为 `agent-workflow-alpha`，插件名为 `agent-workflow`。三个 Git 分支分别提供对应宿主的已构建载荷，不要使用 main 源码目录充当插件来源。
 
 ## Codex CLI
 
-已核对的 CLI 0.167.0 本地市场入口：
-
 ```bash
-codex plugin marketplace add /absolute/new-output-directory/local/codex
-codex plugin add agent-workflow@agent-workflow-local
+codex plugin marketplace add https://github.com/Geoege-xll/agent-workflow.git --ref plugins-codex-alpha
+codex plugin add agent-workflow@agent-workflow-alpha
 codex plugin list --json
 ```
 
-该版本没有已文档化的 `--plugin-dir` 临时加载参数。候选使用单一官方 `.codex-plugin/plugin.json` 清单；实际对照发现根级 portable 格式会漏载打包 Hook，不能同时放两种清单掩盖问题。
-
-安装后进入官方 `/hooks` 管理界面，审阅候选 SessionStart 命令并信任当前定义，再开始新会话。安装或启用不自动授予 Hook 信任，不直接写 trust 记录，不以全局或项目指令文件替代客户端审阅。
+安装后在官方 `/hooks` 中审阅并信任当前 SessionStart 定义，再开始新会话。安装或启用不授予 Hook 信任，不直接写 trust 记录，不以全局或项目指令文件替代官方审阅。候选保留单一 `.codex-plugin/plugin.json` 清单，避免已发现的 portable 根清单漏载 Hook 问题。
 
 ## Claude Code
 
-可临时加载完整插件目录：
-
 ```bash
-claude --plugin-dir /absolute/new-output-directory/local/claude/plugins/agent-workflow
+claude plugin marketplace add 'https://github.com/Geoege-xll/agent-workflow.git#plugins-claude-alpha'
+claude plugin install agent-workflow@agent-workflow-alpha --scope user
+claude plugin list --json
 ```
 
-需要持久本地安装时：
+安装后开始新会话。插件主会话默认 PM 低于用户自有默认设置优先级；发现插件不证明模型已经接管。
+
+## Antigravity CLI
 
 ```bash
-claude plugin marketplace add /absolute/new-output-directory/local/claude
-claude plugin install agent-workflow@agent-workflow-local --scope user
-```
-
-Claude Code 2.1.311 也接受 `--plugin-dir` 传入插件 ZIP；完整目录便于检查来源。安装后开始新会话，客户端才能应用插件主会话默认入口；用户自有默认设置仍保持其优先级。
-
-## Antigravity
-
-使用官方 CLI 的本地目录路径：
-
-```bash
-agy plugin validate --strict /absolute/new-output-directory/local/antigravity/agent-workflow
-agy plugin install /absolute/new-output-directory/local/antigravity/agent-workflow
+agy plugin install https://github.com/Geoege-xll/agent-workflow/tree/plugins-antigravity-alpha
 agy plugin enable agent-workflow
+agy plugin list --json
 ```
 
-桌面端也提供官方 Marketplace/Installed 管理入口。严格校验包含 Skill 正文 24,000 字节限制，构建器会拒绝超限载荷。安装、登录和模型执行分别判定，不从 strict 或安装回执推断模型派发通过。
+AGY 使用 GitHub `tree/分支` URL，不能使用 Claude 的 `#分支` 写法。严格校验与构建继续保护每个 Skill 正文的 24,000 字节上限。安装、登录、模型执行分别判定。
 
-## 当前本机结论
+## 检查安装与来源
 
-当前候选已在本机三端完成本地安装。Codex CLI 新插件实际启动通过；Claude 插件发现通过，默认模型在 90 秒预算内未回应，PM 实际接管未验；AGY 安装通过，后续模型运行待登录；Codex App GUI 未验。较早候选的 CLI 原生实验按其[验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)单独保留，不扩大为所有宿主与界面均通过。
+先通过客户端官方列表确认实际 installed/enabled 状态、版本、来源及安装范围；不同客户端暴露字段不同，缺失项保持未知，不根据缓存存在补写成功。Codex/Claude 可进一步查看其官方 marketplace 列表，核对 `agent-workflow-alpha` 指向本页对应分支。
 
-活动任务跨插件缓存更新的自动资源保留协议尚未实现；更新前先收尾或交接活动任务。插件公开市场与远程一键安装以实际发布记录为准，本地构建命令不代表已发布稳定插件。
+需要只读资源健康检查时，从官方安装信息中取得当前实际插件物理目录，将下列 `<plugin-root>` 和 `<absolute-project>` 替换为明确路径：
+
+```text
+bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py resource .agent-workflow/product/WORKFLOW.md
+bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py helper --project <absolute-project> plugins/project_context.py inspect
+```
+
+resource 检查打包权威路径与摘要；inspect 检查明确项目及 adapter，不创建文件、不改配置、不启动模型或配置服务。资源可读、安装成功和状态列表均不代表新会话实际进入 PM，默认 PM 与原生子代理运行需要独立的真实宿主证据。
+
+## 更新、旧来源与卸载
+
+先收尾或交接活动任务，再更新插件；当前 alpha 没有活动任务跨缓存更新的自动资源保留协议。保留官方登录、权限和 Hook 信任流程，更新后检查实际来源、版本、启用状态并开始新会话。
+
+- Codex：`codex plugin marketplace upgrade agent-workflow-alpha` 刷新 Git 市场快照。该命令的帮助只承诺刷新来源，不据此宣布已安装插件更新完成；随后检查 `codex plugin list --json`，按当前客户端提供的插件安装/更新流程处理实际版本。不要编造 `codex plugin update`。
+- Claude：先执行 `claude plugin marketplace update agent-workflow-alpha` 刷新目录，再执行 `claude plugin update agent-workflow@agent-workflow-alpha --scope user` 更新已安装插件；完成后重启会话。市场刷新与插件更新是不同操作。
+- AGY：本机 1.5.6 的 `agy plugin` 帮助没有 `update` 子命令。通过官方插件管理确认来源和版本，按客户端实际提供的安装/替换流程处理相同 Git 目标；不承诺重新执行 install 会热更新活动会话。
+
+旧 `agent-workflow-local` 是开发本地来源，与远程 alpha 不是同一市场。已有 alpha.4 测试安装不会自动迁移；先在官方客户端确认旧来源与范围，停用旧候选或按其卸载流程移除，再启用所选 alpha 来源，避免两个同名插件同时生效。不要删除共享用户 Hook、改写信任记录或批量清理其他项目。
+
+停用与卸载使用各官方客户端的插件管理；Codex 提供 `plugin remove` 和 `plugin marketplace remove`，Claude 提供 `plugin disable/uninstall` 和 `plugin marketplace remove`，AGY 提供 `plugin disable/uninstall`。移除市场来源与卸载插件不是同一行为，按实际来源/范围确认后操作，不手工删客户端缓存当作卸载。
+
+## 当前验收边界
+
+本轮远程 alpha 的 CI、发布、安装和发现以[远程安装记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-remote-install.md)为准，未先行声明三平台真实模型运行通过。上一 alpha.4 本机记录为：三端本地安装通过，Codex CLI 新插件启动通过；Claude 默认模型在 90 秒预算内未回应，PM 接管未验；AGY 后续模型运行待登录；Codex App GUI 未验。更早实验见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)。
+
+自有 Git 分发不绕过许可证、官方公开目录审核或客户端信任。稳定渠道如将来建立会另行记录，本页仅给 alpha；源码构建与临时本地加载见[开发手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/development.md)。
 
 ## 安装后的模型配置入口
 

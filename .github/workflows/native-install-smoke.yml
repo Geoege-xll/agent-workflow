@@ -1,0 +1,52 @@
+name: Verify official remote plugin installation
+
+# 发布后的独立真实安装验收；只读 Git 分发，不调用模型或复制任何用户认证。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-plugin-install-smoke
+  cancel-in-progress: false
+
+jobs:
+  install:
+    if: github.repository == 'Geoege-xll/agent-workflow' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Install fixed official clients as isolated CI test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Node 只用于固定官方 CLI 的测试依赖，不是工作流产品的用户安装渠道。
+          node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
+          mkdir "$RUNNER_TEMP/awf-native-vendor"
+          cp tests/fixtures/native-install/package.json tests/fixtures/native-install/package-lock.json "$RUNNER_TEMP/awf-native-vendor/"
+          # lockfile 包含每个官方包的完整 SRI；Claude 官方 postinstall 负责链接同版原生包。
+          npm ci --prefix "$RUNNER_TEMP/awf-native-vendor" --registry https://registry.npmjs.org \
+            --cache "$RUNNER_TEMP/awf-native-npm-cache" --no-audit --no-fund
+      - name: Install from official Git URLs and verify discovery and exact published bytes
+        run: >-
+          python3 -B -X utf8 scripts/test_remote_plugin_install.py
+          --vendor-dir "${{ runner.temp }}/awf-native-vendor"
+          --output "${{ runner.temp }}/native-install-smoke.json"
+      - name: Summarize installation evidence
+        run: cat "$RUNNER_TEMP/native-install-smoke.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the installation-only evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-install-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/native-install-smoke.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14

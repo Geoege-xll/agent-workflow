@@ -1,16 +1,18 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前插件候选为 `3.0.0-alpha.4`，独立原生 Agent 配置工具为 `0.1.0-alpha.3`。插件公开市场与稳定发行尚未就绪，Windows 暂停；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前插件候选为 `3.0.0-alpha.5`，独立原生 Agent 配置工具为 `0.1.0-alpha.3`。默认使用自有 Git 远程 alpha 分发；官方公开目录与稳定发行尚未就绪，Windows 暂停。运行 helper 需要已有 Python 3.11+ 与 Bash；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
-先生成或取得对应宿主的完整本地来源包，再由官方客户端安装或加载。Codex 本地市场需要包内市场清单，单独插件 ZIP 不能代替市场来源；Claude 可临时加载插件目录；Antigravity 使用官方插件目录安装。具体命令与 Hook 审阅要求见安装说明，不需要中央运行时、项目登记、TUI、Homebrew 或 npm 安装步骤。
+普通用户由官方客户端直接安装远程 alpha，无需克隆本仓库或构建。Codex 使用 Git 市场的 `--ref plugins-codex-alpha`，Claude 使用 Git URL 的 `#plugins-claude-alpha`，两者市场名均为 `agent-workflow-alpha`；AGY 使用 GitHub `tree/plugins-antigravity-alpha` URL。具体完整命令与检查步骤见安装说明；不要把不同宿主的分支语法互换。安装不需要中央运行时、项目登记、TUI、Homebrew 或 npm 安装步骤。
+
+开发用 `agent-workflow-local` 与远程 alpha 来源分开，已有本机 alpha.4 候选不会自动迁移。按官方客户端确认来源与范围，停用旧候选或使用其卸载流程移除，避免两个同名插件同时启用。源码构建及临时加载仅供开发，见[开发手册](development.md)。
 
 安装后开启新会话，并按宿主实际发现的入口使用工作流。Codex 的 SessionStart Hook 需要在官方客户端审阅并信任；Claude 的插件默认 PM 仍受用户设置优先级约束；Antigravity 由插件规则路由业务请求。发现 Skill、安装成功和配置文件正确，分别只能证明对应层次的状态，不能代替模型实际接管证据。
 
-本机已安装本次 3.0 候选。当前精确安装检查中，Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；Antigravity 安装通过，后续运行等待登录；App 图形界面未验。较早候选的原生单项证据见[原生验收记录](plans/plugin-v3-native-acceptance.md)，不能扩大为当前所有客户端均通过。
+本轮远程 alpha.5 的 CI、发布与安装发现按[远程安装记录](plans/plugin-remote-install.md)分别验收，不从发布推断模型运行。上一 alpha.4 本机精确安装检查中，Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；Antigravity 安装通过，后续运行等待登录；App 图形界面未验。较早候选的原生单项证据见[原生验收记录](plans/plugin-v3-native-acceptance.md)，不能扩大为当前所有客户端均通过。
 
-插件更新前先收尾或交接活动任务；当前 alpha 尚无活动任务跨缓存更新的自动资源保留协议。仓库清理和本机安装不代表自动替换其他用户、其他项目或所有旧安装。
+市场刷新与已安装插件更新按宿主分别处理，具体步骤见[安装说明](../plugins/INSTALL.md)。插件更新前先收尾或交接活动任务；当前 alpha 尚无活动任务跨缓存更新的自动资源保留协议。仓库清理和本机安装不代表自动替换其他用户、其他项目或所有旧安装。
 
 ## 项目接入
 

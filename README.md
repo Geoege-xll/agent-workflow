@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-当前版本为 **3.0.0-alpha.4**，已验证官方客户端的本地插件安装，尚未完成官方市场稳定发行。各端运行验收范围见下表。**Windows 暂停**。
+当前候选版本为 **3.0.0-alpha.5**。本轮提供自有 Git 远程 alpha 分发渠道，默认由官方客户端直接安装，无需克隆本仓库或本地构建；公开官方目录与稳定发行仍分别待验。远程发布和安装发现按实际交付记录判断，模型运行范围见下表。**Windows 暂停**。
 
 ## 工作流保持
 
@@ -22,51 +22,43 @@
 
 工作流通过各官方客户端安装到插件缓存，无需中央登记、配置服务或 MCP。项目使用轻量 adapter，业务文档继续保留在项目内。
 
-## 克隆、构建与本地安装
+## 远程安装 alpha 插件
 
-需要已有 Git、Bash、**Python 3.11+** 和所用平台的官方客户端；模型运行还需要完成该客户端登录。构建只生成文件，不安装客户端或修改原生配置。
-
-```bash
-git clone https://github.com/Geoege-xll/agent-workflow.git
-cd agent-workflow
-
-# 每次构建使用新的持久目录，保留该来源供官方客户端使用。
-AWF_PLUGIN_OUTPUT="$HOME/.local/share/agent-workflow/plugin-sources/3.0.0-alpha.4/$(date +%Y%m%d-%H%M%S)"
-bash lib/python_runtime.sh -B -X utf8 packaging/build_plugin.py \
-  --host all --output-dir "$AWF_PLUGIN_OUTPUT" --local-source
-```
-
-输出包含三个宿主的插件 ZIP、完整 `local/` 来源和各自的本地来源 ZIP。以下命令沿用同一终端的 `AWF_PLUGIN_OUTPUT`，按所用宿主选择执行。
+需要已有对应平台官方客户端、**Python 3.11+** 和 **Bash**；模型运行还需要完成客户端登录。helper 通过包内选择器发现现有解释器，不自动安装依赖或更改 PATH。按所用平台执行以下命令。
 
 ### Codex CLI
 
 ```bash
-codex plugin marketplace add "$AWF_PLUGIN_OUTPUT/local/codex"
-codex plugin add agent-workflow@agent-workflow-local
+codex plugin marketplace add https://github.com/Geoege-xll/agent-workflow.git --ref plugins-codex-alpha
+codex plugin add agent-workflow@agent-workflow-alpha
 codex plugin list --json
 ```
 
-安装后在官方 `/hooks` 中审阅并信任当前 SessionStart 定义，再启动新会话；安装或启用本身不授予 Hook 信任。Codex App 的实际 GUI 验证单独进行。
+安装后在官方 `/hooks` 中审阅并信任当前 SessionStart 定义，再开始新会话。安装或启用不自动授予 Hook 信任；Codex App GUI 的运行验证单独判定。
 
 ### Claude Code
 
 ```bash
-claude plugin marketplace add "$AWF_PLUGIN_OUTPUT/local/claude"
-claude plugin install agent-workflow@agent-workflow-local --scope user --json
+claude plugin marketplace add 'https://github.com/Geoege-xll/agent-workflow.git#plugins-claude-alpha'
+claude plugin install agent-workflow@agent-workflow-alpha --scope user
+claude plugin list --json
 ```
 
-安装后启动新会话，检查插件发现与启用状态；用户原生设置仍按客户端规则优先。
+安装后开始新会话；用户自有默认设置仍按客户端规则优先。
 
 ### Antigravity CLI
 
 ```bash
-agy plugin validate --strict "$AWF_PLUGIN_OUTPUT/local/antigravity/agent-workflow"
-agy plugin install "$AWF_PLUGIN_OUTPUT/local/antigravity/agent-workflow"
+agy plugin install https://github.com/Geoege-xll/agent-workflow/tree/plugins-antigravity-alpha
 agy plugin enable agent-workflow
 agy plugin list --json
 ```
 
-AGY 使用本地插件目录安装，没有上述本地市场注册步骤。详细载荷区别、官方信任和加载说明见 [INSTALL](plugins/INSTALL.md)。当前不提供未经验证的远程一键安装地址。
+AGY 使用 GitHub `tree/分支` 地址，不能替换为 Claude 的 `#分支` 写法。
+
+三个分发分支只承载已校验的宿主构建产物。Codex 和 Claude 的市场名均为 `agent-workflow-alpha`，插件名为 `agent-workflow`；旧开发来源 `agent-workflow-local` 不会自动迁移。已有本地测试版本时先在官方客户端确认来源、范围与启用状态，再停用旧候选或按其官方卸载流程移除，避免两个同名候选同时启用。
+
+安装后的状态检查、更新与退出渠道见 [INSTALL](plugins/INSTALL.md)。源码构建仅供开发、离线候选和维护验证，见[开发指南](docs/development.md)。自有 Git 市场不等于官方公开目录审查或稳定发行。
 
 ## 项目与模型配置
 
@@ -82,13 +74,14 @@ AGY 使用本地插件目录安装，没有上述本地市场注册步骤。详�
 
 | 范围 | 当前状态 |
 | --- | --- |
-| 本地插件安装 | Codex、Claude Code、AGY 的本地安装已验证 |
-| Codex CLI | 新插件启动验证通过，不代表全部业务与模型行为均已验收 |
-| Claude Code PM 运行 | 现有默认模型调用在 90 秒内未响应，尚未验收 |
-| AGY CLI 模型运行 | 待完成登录后验证 |
+| alpha.4 本地安装 | Codex、Claude Code、AGY 已验证；属于上一候选记录 |
+| alpha.5 远程渠道 | 本轮按 CI 与发布回执分别记录；安装发现不代表模型运行 |
+| alpha.4 Codex CLI | 新插件启动验证通过，不代表全部业务与模型行为均已验收 |
+| alpha.4 Claude Code PM 运行 | 现有默认模型调用在 90 秒内未响应，尚未验收 |
+| AGY CLI 模型运行（沿用未验项） | 待完成登录后验证 |
 | Codex App GUI | 尚未实际验证 |
-| 官方市场稳定发行 | 尚未完成；当前为 alpha 本地安装 |
+| 官方公开目录与稳定发行 | 尚未完成；自有 Git alpha 分发不代替上架审查 |
 
 活动任务应先收尾再更新插件；当前 alpha 尚不提供活动任务跨更新的自动资源保留。独立配置组件的发行与工作流插件分别管理，已公开资产以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 为准。
 
-继续阅读：[使用指南](docs/usage.md)、[开发指南](docs/development.md)、[3.0 计划](docs/plans/plugin-v3.md)。构建、静态校验和安装收据不替代官方客户端实际运行证据。
+继续阅读：[使用指南](docs/usage.md)、[开发指南](docs/development.md)、[远程安装计划](docs/plans/plugin-remote-install.md)、[3.0 计划](docs/plans/plugin-v3.md)。构建、静态校验和安装收据不替代官方客户端实际运行证据。

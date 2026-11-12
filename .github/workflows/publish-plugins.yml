@@ -1,0 +1,138 @@
+name: Publish verified alpha plugin Git sources
+
+# 只允许维护者在 main 手动发布当前完整 SHA；没有任意 ref、路径或脚本输入。
+on:
+  workflow_dispatch:
+
+# 查验候选只需读取 actions；写权限仅放行最后一个发布 job。
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publish-alpha-plugin-sources
+  cancel-in-progress: false
+
+jobs:
+  verify-candidate:
+    if: github.repository == 'Geoege-xll/agent-workflow' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.candidate.outputs.artifact-id }}
+      artifact-digest: ${{ steps.candidate.outputs.artifact-digest }}
+      run-id: ${{ steps.candidate.outputs.run-id }}
+    steps:
+      - name: Locate a successful main push candidate for this exact revision
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 只读服务端运行记录，不能靠附件名字或外部输入伪称已经过 current 门禁。
+          gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs" \
+            -f branch=main -f event=push -f status=success -f head_sha="$GITHUB_SHA" \
+            -f per_page=100 --paginate --slurp > "$RUNNER_TEMP/candidate-runs.json"
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          sha = os.environ["GITHUB_SHA"]
+          repository = os.environ["GITHUB_REPOSITORY"]
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("发布来源必须是完整 Git SHA")
+          pages = json.loads((Path(os.environ["RUNNER_TEMP"]) / "candidate-runs.json").read_text())
+          runs = [run for page in pages for run in page["workflow_runs"]
+                  if run["head_sha"] == sha and run["head_branch"] == "main"
+                  and run["event"] == "push" and run["status"] == "completed"
+                  and run["conclusion"] == "success"
+                  and run["path"] == ".github/workflows/release.yml"
+                  and run["head_repository"]["full_name"] == repository]
+          if not runs:
+              raise SystemExit("当前 main SHA 没有成功的 release.yml push 门禁；请先完成验证")
+          # 重跑也只选择最新成功 run；同一 run 的目标 artifact 必须唯一。
+          run = max(runs, key=lambda item: item["id"])
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write(f"run-id={int(run['id'])}\n")
+          PY
+          run_id="$(sed -n 's/^run-id=//p' "$GITHUB_OUTPUT")"
+          gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+            -f per_page=100 --paginate --slurp > "$RUNNER_TEMP/candidate-artifacts.json"
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          pages = json.loads((Path(os.environ["RUNNER_TEMP"]) / "candidate-artifacts.json").read_text())
+          expected = "alpha-candidate-" + os.environ["GITHUB_SHA"]
+          matches = [artifact for page in pages for artifact in page["artifacts"]
+                     if artifact["name"] == expected]
+          if len(matches) != 1 or matches[0]["expired"] or matches[0]["size_in_bytes"] <= 0:
+              raise SystemExit("成功门禁必须恰有一个未过期且非空的当前 SHA 候选附件")
+          artifact = matches[0]
+          digest = artifact.get("digest", "")
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("候选附件缺少 GitHub 提供的不可变 SHA-256 摘要")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write(f"artifact-id={int(artifact['id'])}\nartifact-digest={digest}\n")
+          PY
+
+  publish:
+    needs: verify-candidate
+    if: github.repository == 'Geoege-xll/agent-workflow' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Download and verify the immutable candidate artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.verify-candidate.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ needs.verify-candidate.outputs.artifact-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/candidate.zip"
+          python3 - <<'PY'
+          import hashlib, os, stat, zipfile
+          from pathlib import Path, PurePosixPath
+          root = Path(os.environ["RUNNER_TEMP"])
+          body = (root / "candidate.zip").read_bytes()
+          if "sha256:" + hashlib.sha256(body).hexdigest() != os.environ["ARTIFACT_DIGEST"]:
+              raise SystemExit("下载附件与已验证的 GitHub artifact 摘要不一致")
+          # 解压前拒绝逃逸路径、重复成员与链接；载荷身份/所有内部摘要由 publisher 再验。
+          with zipfile.ZipFile(root / "candidate.zip") as archive:
+              members = archive.infolist()
+              names = [member.filename for member in members]
+              if len(names) != len(set(names)):
+                  raise SystemExit("候选附件含重复路径")
+              for member in members:
+                  path = PurePosixPath(member.filename)
+                  if (path.is_absolute() or ".." in path.parts or "\\" in member.filename
+                          or stat.S_ISLNK(member.external_attr >> 16)):
+                      raise SystemExit("候选附件含不安全路径或符号链接")
+              archive.extractall(root / "awf-verified-candidate")
+          PY
+      - name: Publish the three official alpha Git sources atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 凭证只由 runner 上的 gh credential helper 读取；不进入 remote URL、JSON 或提交。
+          gh auth setup-git --hostname github.com
+          python3 -B -X utf8 packaging/publish_plugin_sources.py \
+            --candidate-dir "$RUNNER_TEMP/awf-verified-candidate" \
+            --source-revision "$GITHUB_SHA" \
+            --repository Geoege-xll/agent-workflow \
+            --remote https://github.com/Geoege-xll/agent-workflow.git \
+            --channel alpha --apply > "$RUNNER_TEMP/plugin-publication.json"
+          cat "$RUNNER_TEMP/plugin-publication.json" >> "$GITHUB_STEP_SUMMARY"

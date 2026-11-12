@@ -1,14 +1,18 @@
 """唯一验证入口的进程级合同；受控运行时只记录边界，测试仍由真实 unittest 执行。"""
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
+import zipfile
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -63,7 +67,7 @@ class ValidationRunnerTest(unittest.TestCase):
         for names in CURRENT_PRODUCT_MODULES.values():
             for module in names:
                 self.write_case(module, ("test_ok",))
-        for module in (*PROTOTYPE_MODULES, "validation_runner", "candidate_delivery"):
+        for module in (*PROTOTYPE_MODULES, "validation_runner", "candidate_delivery", "plugin_source_publication", "remote_install_smoke"):
             self.write_case(module, ("test_ok",))
         # records 使用真实类节点作为范围边界；加入历史类诱饵，证明 current 不会
         # 因模块级收集而悄悄恢复旧安装器夹具，也不会把有效记录断言全部排除。
@@ -183,7 +187,7 @@ import unittest
         self.assertEqual([], self.recorded_cases())
 
     def test_current_gate_consumes_both_products_retained_prototypes_and_delivery_once(self):
-        expected = (["tests.test_validation_runner", "tests.test_candidate_delivery"]
+        expected = (["tests.test_validation_runner", "tests.test_candidate_delivery", "tests.test_plugin_source_publication", "tests.test_remote_install_smoke"]
                     + current_product_targets() + ["tests.test_" + name for name in PROTOTYPE_MODULES])
         selectors = ("current", "plugin", "native-config", "prototype", "current")
         for entry in (self.source / "scripts/test_workflow.sh", PACK / "scripts/test_workflow.sh"):
@@ -237,6 +241,136 @@ import unittest
                           "gh release", "packaging/build_release.py", "windows-latest", "test_workflow.sh ci"):
             self.assertNotIn(forbidden, workflow)
         self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", workflow)
+
+    def test_plugin_publication_is_manual_main_only_and_writes_in_one_job(self):
+        # 自动验证继续只读；发布必须显式触发、绑定 main 当前 SHA 与成功 push 附件。
+        # 静态合同锁定权限/来源边界，publisher 的真实 Git 原子发布另有行为测试。
+        workflow = (PACK / ".github/workflows/publish-plugins.yml").read_text(encoding="utf-8")
+        for fragment in ("  workflow_dispatch:", "  contents: read", "  actions: read",
+                         "cancel-in-progress: false", "    needs: verify-candidate",
+                         "ref: ${{ github.sha }}", "persist-credentials: false",
+                         'actions/workflows/release.yml/runs', '-f event=push -f status=success',
+                         '-f head_sha="$GITHUB_SHA"', 'run["head_branch"] == "main"',
+                         'run["conclusion"] == "success"',
+                         'run["path"] == ".github/workflows/release.yml"',
+                         'run["head_repository"]["full_name"] == repository',
+                         '"alpha-candidate-" + os.environ["GITHUB_SHA"]',
+                         'len(matches) != 1', 'matches[0]["expired"]',
+                         'artifact.get("digest", "")', 'hashlib.sha256(body).hexdigest()',
+                         "packaging/publish_plugin_sources.py", '--source-revision "$GITHUB_SHA"',
+                         "--repository Geoege-xll/agent-workflow", "--channel alpha --apply"):
+            self.assertIn(fragment, workflow)
+        self.assertEqual(2, workflow.count("github.ref == 'refs/heads/main'"))
+        self.assertEqual(2, workflow.count("github.event_name == 'workflow_dispatch'"))
+        self.assertEqual(1, workflow.count("contents: write"))
+        before_publish, publish = workflow.split("\n  publish:\n", 1)
+        self.assertNotIn("contents: write", before_publish)
+        self.assertIn("contents: write", publish)
+        for forbidden in ("  push:", "  pull_request:", "pull_request_target", "workflow_run:",
+                          "inputs:", "github.event.inputs", "--force", "gh release", "tags: write",
+                          "windows-latest", "git push", "packaging/build_candidates.py"):
+            self.assertNotIn(forbidden, workflow)
+
+    def publication_python_blocks(self):
+        # 直接执行工作流中实际使用的校验块，避免测试复制过滤逻辑后两边一起假绿。
+        workflow = (PACK / ".github/workflows/publish-plugins.yml").read_text(encoding="utf-8")
+        blocks = re.findall(r"(?ms)^          python3 - <<'PY'\n(.*?)^          PY$", workflow)
+        self.assertEqual(3, len(blocks))
+        return [textwrap.dedent(block) for block in blocks]
+
+    def invoke_publication_block(self, block, extra_environment=None):
+        output = self.root / "publication-output"
+        output.unlink(missing_ok=True)
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", block], cwd=self.root,
+            env={**self.environment, "RUNNER_TEMP": str(self.root), "GITHUB_OUTPUT": str(output),
+                 "GITHUB_SHA": "a" * 40, "GITHUB_REPOSITORY": "Geoege-xll/agent-workflow",
+                 **(extra_environment or {})},
+            capture_output=True, text=True, timeout=10,
+        )
+        return result, output.read_text() if output.exists() else ""
+
+    def test_publication_gate_rejects_unverified_runs_and_selects_latest_exact_source(self):
+        block = self.publication_python_blocks()[0]
+        valid = {"id": 21, "head_sha": "a" * 40, "head_branch": "main", "event": "push",
+                 "status": "completed", "conclusion": "success", "path": ".github/workflows/release.yml",
+                 "head_repository": {"full_name": "Geoege-xll/agent-workflow"}}
+        path = self.root / "candidate-runs.json"
+        # GitHub API 会分页；混入更新但非当前来源的 run 不能越过任何一个来源条件。
+        path.write_text(json.dumps([{"workflow_runs": [valid]},
+                                    {"workflow_runs": [{**valid, "id": 22},
+                                                       {**valid, "id": 99, "event": "pull_request"}]}]))
+        result, output = self.invoke_publication_block(block)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("run-id=22\n", output)
+        changes = ({"head_sha": "b" * 40}, {"head_branch": "feature"}, {"event": "pull_request"},
+                   {"status": "in_progress"}, {"conclusion": "failure"},
+                   {"path": ".github/workflows/other.yml"},
+                   {"head_repository": {"full_name": "other/repository"}})
+        for change in changes:
+            with self.subTest(change=change):
+                path.write_text(json.dumps([{"workflow_runs": [{**valid, **change}]}]))
+                result, output = self.invoke_publication_block(block)
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", output)
+
+    def test_publication_gate_requires_unique_live_artifact_and_server_digest(self):
+        block = self.publication_python_blocks()[1]
+        valid = {"id": 123, "name": "alpha-candidate-" + "a" * 40,
+                 "expired": False, "size_in_bytes": 10, "digest": "sha256:" + "c" * 64}
+        path = self.root / "candidate-artifacts.json"
+        path.write_text(json.dumps([{"artifacts": [valid]}]))
+        result, output = self.invoke_publication_block(block)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("artifact-id=123\nartifact-digest=sha256:" + "c" * 64 + "\n", output)
+        invalid = ([], [valid, valid], [{**valid, "name": "alpha-candidate-other"}],
+                   [{**valid, "expired": True}], [{**valid, "size_in_bytes": 0}],
+                   [{**valid, "digest": ""}], [{**valid, "digest": "sha256:invalid"}])
+        for artifacts in invalid:
+            with self.subTest(artifacts=artifacts):
+                path.write_text(json.dumps([{"artifacts": artifacts}]))
+                result, output = self.invoke_publication_block(block)
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", output)
+
+    def test_publication_download_verifies_server_digest_before_safe_extraction(self):
+        block = self.publication_python_blocks()[2]
+        archive = self.root / "candidate.zip"
+        extracted = self.root / "awf-verified-candidate"
+        with zipfile.ZipFile(archive, "w") as stream:
+            stream.writestr("workflow/package.zip", b"candidate")
+        digest = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+        result, _ = self.invoke_publication_block(block, {"ARTIFACT_DIGEST": digest})
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(b"candidate", (extracted / "workflow/package.zip").read_bytes())
+        shutil.rmtree(extracted)
+        result, _ = self.invoke_publication_block(block, {"ARTIFACT_DIGEST": "sha256:" + "0" * 64})
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(extracted.exists())
+        # 外层 artifact 即使服务端摘要正确，也不能在 publisher 校验前写出目标目录。
+        for name in ("../escaped", "/absolute", "nested/../../escaped", "nested\\escaped"):
+            with self.subTest(name=name):
+                with zipfile.ZipFile(archive, "w") as stream:
+                    stream.writestr(name, b"unsafe")
+                digest = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+                result, _ = self.invoke_publication_block(block, {"ARTIFACT_DIGEST": digest})
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(extracted.exists())
+                self.assertFalse((self.root / "escaped").exists())
+        with zipfile.ZipFile(archive, "w") as stream:
+            link = zipfile.ZipInfo("symlink")
+            link.create_system = 3
+            link.external_attr = 0o120777 << 16
+            stream.writestr(link, "../escaped")
+        digest = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+        result, _ = self.invoke_publication_block(block, {"ARTIFACT_DIGEST": digest})
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(extracted.exists())
+
+    def test_packaging_group_covers_remote_publication_contract(self):
+        listed = self.invoke("--list", "packaging", entry=PACK / "scripts/test_workflow.sh")
+        self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
+        self.assertEqual(1, listed.stdout.splitlines().count("tests.test_plugin_source_publication"))
 
     def test_explicit_method_runs_only_that_case(self):
         target = "tests.test_shared_memory_contract.ExampleTest.test_two"

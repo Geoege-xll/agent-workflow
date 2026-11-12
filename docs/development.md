@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生 Agent 配置工具。插件版本来自 `product/PLUGIN_VERSION`（`3.0.0-alpha.4`），独立工具版本来自 `native_config/VERSION`（`0.1.0-alpha.3`）；两者分别构建和交付。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+当前产品是官方工作流插件与独立原生 Agent 配置工具。插件版本来自 `product/PLUGIN_VERSION`（`3.0.0-alpha.5`），独立工具版本来自 `native_config/VERSION`（`0.1.0-alpha.3`）；两者分别构建和交付。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
 ## 权威与职责
 
@@ -19,6 +19,8 @@
 | `packaging/build_agent_config.py` | 独立配置组件 ZIP 与依赖闭包核验 |
 | `packaging/build_config_distribution.py` | 根据真实资产下载与校验生成组件发行描述 |
 | `packaging/build_candidates.py` | 两个独立构建器的候选编排、七包与摘要 |
+| `packaging/publish_plugin_sources.py` | 校验已构建候选并投影三个 alpha Git 分发分支，不另建插件构建链 |
+| `.github/workflows/publish-plugins.yml` | 仅 main 手动触发，固定来源 SHA 并发布同 SHA 成功 CI 的候选 |
 | `tests/`、`scripts/test_workflow.sh` | 当前产品行为、合同、原型与候选交付验证 |
 
 产品、角色和 Skill 保持单一权威；使用文档说明入口与边界，不复制完整执行规则。插件不导入配置核心，普通业务不依赖组件、HTTP 或 MCP。配置网页、HTTP、脚本和 MCP 复用同一核心，不各写一套校验或保存。插件缓存只读，原生配置能力按宿主字段与覆盖语义处理，不恢复固定七角色的旧偏好合并机制。
@@ -26,6 +28,8 @@
 3.0 不以中央登记、CLI/TUI 管理器、Homebrew/npm 或旧项目同步作为当前入口。尚存的历史源码和测试只按真实消费者维护；`product/VERSION` 不表示插件版本，不将旧安装机制重新包装成默认流程。
 
 ## 本地构建
+
+普通用户优先使用[远程安装](../plugins/INSTALL.md)；本节仅供源码开发、离线候选和发布维护，不作为普通用户安装前置。源码开发需要 Git、已有 Python 3.11+ 和 Bash。
 
 使用已有 Python 3.11+；选择器只发现已安装解释器，不安装软件或修改 PATH。每次输出使用源码树外的新目录：
 
@@ -36,7 +40,27 @@ bash lib/python_runtime.sh -B -X utf8 packaging/build_candidates.py \
   --output-dir /absolute/another-new-output-directory
 ```
 
-插件 ZIP、完整 local-source ZIP 与本地市场目录用途不同；构建本身不安装到用户客户端。完整本地来源目录及官方安装步骤见[INSTALL](../plugins/INSTALL.md)。候选编排核验两产品版本、同一修订与源码摘要、包种类和包摘要，拒绝混包、源码漂移及覆盖旧输出。
+插件 ZIP、完整 local-source ZIP 与本地市场目录用途不同；构建本身不安装到用户客户端。Codex/Claude 本地市场名继续为 `agent-workflow-local`，不能当作远程 `agent-workflow-alpha` 的自动迁移入口。候选编排核验两产品版本、同一修订与源码摘要、包种类和包摘要，拒绝混包、源码漂移及覆盖旧输出。
+
+开发候选可按实际宿主本地加载：
+
+```bash
+codex plugin marketplace add /absolute/new-output-directory/local/codex
+codex plugin add agent-workflow@agent-workflow-local
+claude --plugin-dir /absolute/new-output-directory/local/claude/plugins/agent-workflow
+agy plugin validate --strict /absolute/new-output-directory/local/antigravity/agent-workflow
+agy plugin install /absolute/new-output-directory/local/antigravity/agent-workflow
+```
+
+这些官方命令在执行时会改变对应客户端状态，构建本身不安装。保留来源目录，不将临时测试安装误报为用户全局迁移。Codex Hook 仍须官方审阅与信任；本地和远程同名候选避免同时启用。
+
+## alpha 分发维护
+
+唯一构建器继续生成三宿主 plugin/local-source 六包及独立配置一包。手动发布工作流只允许 main，固定触发时的 `github.sha`，从成功的 `release.yml` push/main 运行中读取同 SHA 的唯一候选 artifact；不是再从发布分支另行构建。
+
+发布器校验候选来源、摘要、版本与干净输入，向固定仓库 `Geoege-xll/agent-workflow` 的 `plugins-codex-alpha`、`plugins-claude-alpha`、`plugins-antigravity-alpha` 投影对应宿主完整来源。Codex/Claude 仅将分发市场名投影为 `agent-workflow-alpha`，开发本地市场仍为 `agent-workflow-local`。拒绝未知分支和同版不同载荷；相同输入重发幂等，三个分支通过普通 Git atomic push 一并发布，不 force 覆盖未知历史。
+
+CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。alpha-only 不承诺 stable 渠道，也不代表许可证或官方公开目录审查完成。实际分支与安装发现应在发布后分别核对，并与源码 SHA、artifact 和载荷摘要对应；设计与验收见[远程安装计划](plans/plugin-remote-install.md)。
 
 独立工具的源码命令、HTTP 生命周期、包结构和恢复资料边界见[原生配置说明](agent-configuration.md)。组件发行描述只登记实际发布且下载校验过的资产，不猜测 URL，不把本地构建成功写成公开稳定发行。
 
@@ -59,7 +83,7 @@ bash scripts/test_workflow.sh current
 
 离线包清单、来源 SHA、静态配置和安装发现只证明各自层次。默认 PM、fresh/handoff_only、新 Agent 模型与推理生效、持续接单、同 ID 追加和独立 QA 收口需要对应真实宿主事件。包内 `runtime_verified:false` 不因构建成功自动改为 true。
 
-当前本机精确安装结论：Codex CLI 实际启动通过；Claude 发现通过、默认模型 90 秒无回应，PM 接管未验；AGY 安装通过待登录；App GUI 未验。以前候选的单项原生证据在[验收记录](plans/plugin-v3-native-acceptance.md)中按历史范围保留。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
+上一 alpha.4 本机精确安装结论：Codex CLI 实际启动通过；Claude 发现通过、默认模型 90 秒无回应，PM 接管未验；AGY 安装通过待登录；App GUI 未验。本轮 alpha.5 远程发布和安装发现单独记录，不将安装成功升级为 PM/模型通过。以前候选的单项原生证据在[验收记录](plans/plugin-v3-native-acceptance.md)中按历史范围保留。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
 
 ## 交付与文档维护
 
