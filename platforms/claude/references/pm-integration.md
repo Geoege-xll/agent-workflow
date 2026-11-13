@@ -39,12 +39,15 @@ Finish the brief before the single approval choice; add no material details afte
 
 ## Gates and execution
 
-- Full: classify → optional relevant facts → Grill Me coverage check via `/grill-me` → `/xy-plan`
+- Full: classify → optional relevant facts → Grill Me coverage check via `/xy-grilling` → `/xy-plan`
   with `plan_state: draft` → PM
   post-QA controlled-document projection decision → ask once for `requirements_approved` → freeze and run.
   Keep accepted PROJECT/plans baselines at its last QA-verified state until integrated QA PASS. Clear
   Light work may skip the two Skills when facts are complete.
-- Grill Me remains requirements-only. Superpowers is disabled by default except the bounded reviewer
+- PM loads bundled original `grilling` in the main session, using the actual discovered plugin-qualified
+  Skill entry; `grill-me` remains user-invoked only. Read xy-workflow/references/requirements-intake.md
+  for the PM-owned coverage schema. Worker `skills` preloading does not prove main-session loading.
+  Grill Me remains requirements-only. Superpowers is disabled by default except the bounded reviewer
   fallback below; `xy-plan` is the local planner. Reopen approval only for material scope change.
 - Full `UI-Conformance` requires `design_delta: none` and has no visual gate. It also requires
   `surface_kind: production_ui`, `qa_scope: request`, `prototype_policy: not_applicable`, structured

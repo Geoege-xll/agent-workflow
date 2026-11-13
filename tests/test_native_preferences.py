@@ -93,6 +93,33 @@ class NativePreferencesTest(unittest.TestCase):
         self.assertFalse(row["invoke_name_verified"])
         self.save({name: {"model": None}}, host="claude")
 
+    def test_known_legacy_claude_roles_fill_fields_at_each_layer_without_writes(self):
+        """七个精确旧键只补新键缺失字段，四层优先级和原文件字节都保留。"""
+        identity = contract.load_identity(contract.PACKAGE_ROOT)
+        for role in identity["managed_roles"]:
+            old, new = "agent-workflow:" + role, "xy-workflow:" + role
+            document = {**contract.empty_document("claude"), "defaults": {"model": "sonnet", "effort": "low"},
+                "agents": {old: {"model": "opus", "effort": "medium"}, new: {"effort": "high"}},
+                "projects": {str(self.project): {"defaults": {"model": "haiku"},
+                    "agents": {old: {"effort": "max"}, new: {"model": "fable"}}}}}
+            path = contract.preference_path("claude", self.home)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(document))
+            before = path.read_bytes()
+            user = contract.resolve_preferences("claude", new, home=self.home)
+            self.assertEqual(user["preferences"], {"model": "opus", "effort": "high"})
+            result = contract.resolve_preferences("claude", new, self.project, self.home)
+            self.assertEqual(result["preferences"], {"model": "fable", "effort": "max"})
+            self.assertEqual(result["sources"], {"model": "project_agent", "effort": "project_agent"})
+            self.assertEqual(path.read_bytes(), before)
+            # 未知角色、其他插件及 opaque inventory ID 没有别名回退。
+            for unknown in ("xy-workflow:unknown", "other:" + role, "agent_opaque_123"):
+                self.assertEqual(contract.project_preferences(document, unknown)["preferences"], document["defaults"])
+            # Codex 身份不使用 Claude 命名空间回退。
+            document["host"] = "codex"
+            self.assertEqual(contract.project_preferences(document, new)["preferences"], {"model": "sonnet", "effort": "high"})
+        self.assertFalse(self.service.data_dir.exists())
+
     def test_exclusive_preview_no_writes_cancel_revision_once_and_null(self):
         context = self.service.context("codex")
         payload = {"host": "codex", "revision": context["revision"], "dispatch_preferences": {"edits": {"*": {"effort": "high"}}}}

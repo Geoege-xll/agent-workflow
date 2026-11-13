@@ -79,6 +79,11 @@ Local resource loading/runtime verification does not inherently require browser/
 only for concrete rendering risk, necessary runnable evidence unobtainable through smaller checks, or explicit
 user/project requirements. Verify only the affected scope; do not expand to every page, flow or independent QA.
 
+For production Web browser interaction that remains necessary after existing project tests/evidence,
+follow [Web browser verification](web-browser-verification.md): bundled `xy-playwright` first, other
+browser tools only for a specific capability/environment/user reason, and computer control only for an
+actual desktop need. The prototype, screenshot, independent QA and host permission boundaries remain.
+
 ## Information gained from continued work
 
 Explain judgments/evidence in the current Task Pack's original Validation, `input_contracts`/`output_contracts`

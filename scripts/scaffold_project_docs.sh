@@ -71,7 +71,6 @@ if validation.errors or validation.profile is None:
         + "; ".join(validation.errors or ("profile is missing",))
     )
 profile = validation.profile
-# UI/UX 是基础可用角色；是否初始化设计文档仍由当前项目形态决定。
 ui_enabled = profile.design_scaffold_required
 
 
@@ -335,6 +334,9 @@ candidates: list[tuple[Path, bytes | None]] = [
     (within_project(doc_project), render(template_root / "PROJECT.md", values)),
 ]
 
+# 通用浏览、反馈与桥接资源由插件的不可变评审包持有；脚手架不再向业务项目
+# 投放工具副本，也不触碰现有原型目录。具体页面和确有需要的业务共享样式，
+# 只在设计任务取得精确路径权限后创建；旧壳清理必须另走只读预览和显式迁移。
 if ui_enabled:
     prototype_root = within_project(f"{doc_design_dir}/prototype")
     inspect_parent(prototype_root)
@@ -343,20 +345,13 @@ if ui_enabled:
     except FileNotFoundError:
         prototype_active = False
     else:
-        if stat.S_ISLNK(prototype_info.st_mode) or not stat.S_ISDIR(
-            prototype_info.st_mode
-        ):
-            raise SystemExit(
-                f"prototype workspace must be a real directory: {prototype_root}"
-            )
+        if stat.S_ISLNK(prototype_info.st_mode) or not stat.S_ISDIR(prototype_info.st_mode):
+            raise SystemExit(f"prototype workspace must be a real directory: {prototype_root}")
         prototype_active = any(prototype_root.iterdir())
     if not prototype_active:
-        # 初始化时完整发布同版本工作区、反馈辅助资源与页面桥接，避免入口引用
-        # 尚未复制的反馈文件。非空旧项目仍保留原索引、样式和业务页，不补写
-        # 新资产或覆盖既有活跃原型；升级仍须取得该项目当前明确写入授权。
-        for name in ("index.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js",
-                     "feedback.css", "feedback.js"):
-            candidates.append((prototype_root / name, regular_source(pack_root / "templates/prototype" / name)))
+        # CSS 是项目可继续维护的展示/业务样式种子；只在空目录初始化，保证已有
+        # 业务样式和混合资产不会因插件升级被替换或补写。
+        candidates.append((prototype_root / "prototype.css", regular_source(pack_root / "templates/prototype/prototype.css")))
 
 snapshots: dict[Path, tuple[str, int, int, int, int, int]] = {}
 for target, _body in candidates:

@@ -54,6 +54,31 @@ class NativeInventoryTest(unittest.TestCase):
         self.project.mkdir()
         self.service = ModelService(self.root / "state", self.home)
 
+    def test_activation_new_legacy_ambiguous_and_unknown_sources_preserve_files(self):
+        """真实原生配置观察新旧族；歧义与未知来源只读，不批量修改插件。"""
+        directory = self.home / ".codex"
+        directory.mkdir()
+        config = directory / "config.toml"
+        def content(names, *, repository="https://github.com/Geoege-xll/agent-workflow.git"):
+            return "".join('[marketplaces."' + name + '-alpha"]\nsource_type="git"\nsource="' + repository +
+                '"\nref="plugins-codex-alpha"\n[plugins."' + name + '@' + name + '-alpha"]\nenabled=true\n' for name in names)
+        for name in ("xy-workflow", "agent-workflow"):
+            config.write_text(content([name]))
+            before = config.read_bytes()
+            observed = self.service.context("codex")["workflow_activation"]
+            self.assertTrue(observed["writable"], observed)
+            self.assertEqual(observed["plugin_id"], name + "@" + name + "-alpha")
+            self.assertEqual(config.read_bytes(), before)
+        for body in (content(["xy-workflow", "agent-workflow"]),
+                     content(["xy-workflow"], repository="https://example.invalid/fork"),
+                     content(["xy-workflow"]) + '[plugins."xy-workflow@unknown"]\nenabled=true\n'):
+            config.write_text(body)
+            before = config.read_bytes()
+            observed = self.service.context("codex")["workflow_activation"]
+            self.assertFalse(observed["writable"])
+            self.assertIsNotNone(observed["read_only_reason"])
+            self.assertEqual(config.read_bytes(), before)
+
     def test_arbitrary_native_names_are_discovered_at_documented_locations(self):
         roots = {"codex": self.home / ".codex/agents", "claude": self.home / ".claude/agents",
                  "antigravity": self.home / ".gemini/config/agents"}

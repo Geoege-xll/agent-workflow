@@ -8,11 +8,16 @@ import os
 from pathlib import Path
 import shlex
 
-from . import activation_codecs as codec, inventory, storage
+from . import activation_codecs as codec, inventory, storage, preference_contract
 from .contracts import ConfigError, MAX_INVENTORY_BYTES, absolute_path, json_bytes, unique_json
 
 
-PLUGIN_IDS = ("agent-workflow@agent-workflow-alpha", "agent-workflow@agent-workflow-local")
+# 身份只从同物理包的产品声明读取；新旧受管族都能观察，但只能唯一选择。
+IDENTITY = preference_contract.load_identity(preference_contract.PACKAGE_ROOT)
+PLUGIN_IDS = tuple(name + "@" + market for name, markets in (
+    (IDENTITY["plugin_name"], IDENTITY["marketplaces"]),
+    (IDENTITY["legacy_plugin_name"], IDENTITY["legacy_marketplaces"])) for market in markets.values())
+PLUGIN_NAMES = (IDENTITY["plugin_name"], IDENTITY["legacy_plugin_name"])
 DOCUMENTATION = {"codex": "https://learn.chatgpt.com/docs/config-file/config-reference",
                  "claude": "https://code.claude.com/docs/en/plugins/cli-reference",
                  "antigravity": "https://antigravity.google/docs/plugins?tab=cli"}
@@ -98,10 +103,16 @@ def capture(host, scope, project, host_root, *, data_dir, home, environment):
         if host == "codex":
             config = read_config(user)
             plugins = config.get("plugins", {})
+            # 当前项目若显式引用另一受管族，也构成身份歧义；不能仅看用户默认猜选。
+            if scope == "project":
+                project_plugins = read_config(target).get("plugins", {})
+                if not isinstance(plugins, dict) or not isinstance(project_plugins, dict):
+                    raise ConfigError("Codex 插件配置映射无效")
+                plugins = {**plugins, **project_plugins}
             markets = config.get("marketplaces", {})
             if not isinstance(plugins, dict) or not isinstance(markets, dict):
                 raise ConfigError("Codex 插件或市场配置映射无效")
-            if any(key.startswith("agent-workflow@") and key not in PLUGIN_IDS for key in plugins):
+            if any(any(key.startswith(name + "@") for name in PLUGIN_NAMES) and key not in PLUGIN_IDS for key in plugins):
                 raise ConfigError("存在其他同名工作流市场来源，不能猜测所选身份")
             candidates = [key for key in PLUGIN_IDS if key in plugins]
             if len(candidates) != 1:
@@ -111,7 +122,7 @@ def capture(host, scope, project, host_root, *, data_dir, home, environment):
             source = markets.get(market_name)
             if not isinstance(source, dict):
                 raise ConfigError("缺少所选工作流的实际市场来源配置")
-            if market_name == "agent-workflow-alpha":
+            if market_name in {IDENTITY["marketplaces"]["alpha"], IDENTITY["legacy_marketplaces"]["alpha"]}:
                 if (source.get("source_type") != "git"
                         or source.get("source", "").removesuffix(".git").removesuffix("/") != "https://github.com/Geoege-xll/agent-workflow"
                         or source.get("ref") != "plugins-codex-alpha"):
@@ -126,12 +137,12 @@ def capture(host, scope, project, host_root, *, data_dir, home, environment):
                 declarations = manifest.get("plugins")
                 if not isinstance(declarations, list):
                     raise ConfigError("local 市场插件声明未确认")
-                entries = [entry for entry in declarations if isinstance(entry, dict) and entry.get("name") == "agent-workflow"]
+                entries = [entry for entry in declarations if isinstance(entry, dict) and entry.get("name") == plugin_id.split("@", 1)[0]]
                 if len(entries) != 1 or not isinstance(entries[0].get("source"), dict) or entries[0]["source"].get("source") != "local":
                     raise ConfigError("local 市场必须包含唯一的本地工作流插件")
                 plugin_root = inventory._relative(root, entries[0]["source"].get("path"))
                 plugin_manifest = unique_json(read(plugin_root / ".codex-plugin/plugin.json").body or b"{}")
-                if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != "agent-workflow":
+                if not isinstance(plugin_manifest, dict) or plugin_manifest.get("name") != plugin_id.split("@", 1)[0]:
                     raise ConfigError("local 工作流插件清单身份未确认")
             diagnostic("configured_identity_observed", "已观察原生插件键及对应市场来源；未据此声称实际安装、信任或运行成功。")
         else:
@@ -139,7 +150,7 @@ def capture(host, scope, project, host_root, *, data_dir, home, environment):
             if (not isinstance(registry, dict) or registry.get("version") != 2
                     or not isinstance(registry.get("plugins"), dict)):
                 raise ConfigError("未观察到可识别的 Claude 安装记录")
-            if any(key.startswith("agent-workflow@") and key not in PLUGIN_IDS for key in registry["plugins"]):
+            if any(any(key.startswith(name + "@") for name in PLUGIN_NAMES) and key not in PLUGIN_IDS for key in registry["plugins"]):
                 raise ConfigError("存在其他同名工作流市场安装来源")
             candidates = []
             for key in PLUGIN_IDS:
@@ -155,7 +166,7 @@ def capture(host, scope, project, host_root, *, data_dir, home, environment):
                                                     and entry.get("projectPath") == str(project)):
                         root = absolute_path(entry.get("installPath"))
                         manifest = unique_json(read(root / ".claude-plugin/plugin.json").body or b"{}")
-                        if not isinstance(manifest, dict) or manifest.get("name") != "agent-workflow":
+                        if not isinstance(manifest, dict) or manifest.get("name") != key.split("@", 1)[0]:
                             raise ConfigError("Claude 插件安装清单身份无效")
                         applicable.append(entry)
                 if applicable:

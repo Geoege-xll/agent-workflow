@@ -16,7 +16,6 @@ from tests.skill_contract_helpers import read_bootstrap_contract, read_contract,
 
 PACK = Path(__file__).resolve().parents[1]
 EXPECTED_SKILLS = {
-    "grill-me",
     "xy-workflow",
     "xy-plan",
     "xy-prototype-verify",
@@ -423,8 +422,9 @@ developer_instructions = "Audit security without editing files."
 
         # 聚合夹具可以只有设计/QA；本夹具实际发现五种生产角色，补足它们的 Codex 绑定消费者。
         for role in CANONICAL_DISCOVERED_ROLES:
-            expected = (("xy-ui-design", "xy-prototype-verify") if role == "xy-uiux" else
+            expected = (("xy-ui-design", "xy-taste", "xy-prototype-verify") if role == "xy-uiux" else
                         ("xy-qa-review",) if role == "xy-qa" else
+                        ("xy-code-standards", "xy-build-verify", "xy-playwright") if role == "xy-web" else
                         ("xy-code-standards", "xy-build-verify"))
             data = tomllib.loads((self.project / ".codex/agents" / f"{role}.toml").read_text(encoding="utf-8"))
             actual = tuple(line.split("`$")[1].split("`")[0]
@@ -538,7 +538,7 @@ developer_instructions = "Audit security without editing files."
 
     def test_pm_grilling_is_conditional_not_global(self) -> None:
         body = self.read(".agents/skills/xy-workflow/SKILL.md")
-        self.assertIn("$grill-me", body)
+        self.assertIn("$xy-grilling", body)
         self.assertIn("Every `Full` request performs a **Grill Me coverage check**", body)
         self.assertIn("full_interview", body)
         self.assertIn("Clear Light work", body)
@@ -558,11 +558,11 @@ developer_instructions = "Audit security without editing files."
         ):
             self.assertIn(phrase, body)
 
-    def test_uiux_requires_ui_ux_pro_max_and_stable_prototype_evidence(self) -> None:
+    def test_uiux_requires_taste_and_stable_prototype_evidence(self) -> None:
         role = tomllib.loads(self.read(".codex/agents/xy-uiux.toml"))
         body = role["developer_instructions"]
         for phrase in (
-            "$ui-ux-pro-max",
+            "$xy-taste",
             "$xy-prototype-verify",
             "<stable-page>.html",
             "dependency fingerprints",
@@ -599,7 +599,7 @@ developer_instructions = "Audit security without editing files."
             "controlled_document_access",
             "mode: targeted | full | skip",
             "required_skills",
-            "$ui-ux-pro-max",
+            "$xy-taste",
         ):
             self.assertIn(phrase, body)
 
@@ -1899,7 +1899,7 @@ managed-looking text without an end marker
                 "ui-required-skill",
                 "agent_workflow/roles/xy-uiux.md",
                 ".codex/agents/xy-uiux.toml",
-                "$ui-ux-pro-max",
+                "$xy-taste",
                 "$generic-design-fallback",
             ),
             (

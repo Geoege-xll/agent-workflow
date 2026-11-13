@@ -70,30 +70,39 @@ class PluginSourcePublicationTest(unittest.TestCase):
         for host in publisher.HOSTS:
             files = {"README.md": (payload, "100644"), "lib/python_runtime.sh": (b"#!/bin/sh\n", "100755"),
                 "plugins/maintenance/component.json": (descriptor, "100644"),
-                publisher.MANIFEST[host]: (publisher.json_bytes({"name": "agent-workflow", "version": version}), "100644")}
+                "product/command_identity.json": ((ROOT / "product/command_identity.json").read_bytes(), "100644"),
+                publisher.MANIFEST[host]: (publisher.json_bytes({"name": "xy-workflow", "version": version}), "100644")}
+            # 最小锁定资源保留真实三提供者包的关键差异：带市场前缀后，官方
+            # runtime 可执行文件仍为755，本地启动器则按构建器规则投影为644。
+            executable = "runtime/tool.sh"
+            locked_file = "third_party/selected-skills/playwright-cli/" + executable
+            files[locked_file] = (b"#!/bin/sh\nexit 0\n", "100755")
+            files["third_party/selected-skills.lock.json"] = (publisher.json_bytes({"dependencies": {
+                "playwright-cli": {"files": {executable: {"mode": 0o755}}}}}), "100644")
             provenance = {"schema_version": 1, "host": host, "plugin_version": version,
                 "product": "workflow-core", "source_files": {},
                 "payload_sha256": {key: publisher.digest(value[0]) for key, value in files.items()}}
             files["sources.json"] = (publisher.json_bytes(provenance), "100644")
-            stem = f"workflow/agent-workflow-{host}-{version}"
+            stem = f"workflow/xy-workflow-{host}-{version}"
             metadata = {"host": host, "version": version, "product": "workflow"}
             artifact(stem + ".zip", files, {**metadata, "kind": "plugin"})
-            prefix = "agent-workflow/" if host == "antigravity" else "plugins/agent-workflow/"
-            # 固定保留真实构建器已有的前缀源 ZIP 全 644 合同。
-            local = {prefix + key: (value[0], "100644") for key, value in files.items()}
+            prefix = "xy-workflow/" if host == "antigravity" else "plugins/xy-workflow/"
+            local = {prefix + key: (value[0], "100755" if key == locked_file else "100644")
+                     for key, value in files.items()}
             if host == "codex":
-                market = {"name": "agent-workflow-local", "plugins": [{"name": "agent-workflow",
-                    "source": {"source": "local", "path": "./plugins/agent-workflow"},
+                market = {"name": "xy-workflow-local", "plugins": [{"name": "xy-workflow",
+                    "source": {"source": "local", "path": "./plugins/xy-workflow"},
                     "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Productivity"}]}
             elif host == "claude":
-                market = {"name": "agent-workflow-local", "owner": {"name": "Agent Workflow"},
-                    "plugins": [{"name": "agent-workflow", "source": "./plugins/agent-workflow"}]}
+                market = {"name": "xy-workflow-local", "owner": {"name": "Agent Workflow"},
+                    "plugins": [{"name": "xy-workflow", "source": "./plugins/xy-workflow"}]}
             if host in publisher.MARKET:
                 local[publisher.MARKET[host]] = (publisher.json_bytes(market), "100644")
             artifact(stem + "-local-source.zip", local, {**metadata, "kind": "local-source"})
         native_name = f"native/native-agent-config-{native_version}.zip"
         artifact(native_name, {"BUILD.json": (publisher.json_bytes({"name": "native-agent-config",
-                     "version": native_version, "files": {}}), "100644")},
+                     "version": native_version, "files": {"product/command_identity.json": publisher.digest((ROOT / "product/command_identity.json").read_bytes())}}), "100644"),
+            "product/command_identity.json": ((ROOT / "product/command_identity.json").read_bytes(), "100644")},
                  {"product": "native-config", "kind": "standalone", "version": native_version})
         candidate = {"schema_version": 1, "channel": "alpha", "status": "BUILD_VERIFIED",
             "source": {"dirty": False, "revision": self.revision, "tree_sha256": "b" * 64},
@@ -136,14 +145,14 @@ class PluginSourcePublicationTest(unittest.TestCase):
         self.assertEqual(["create"] * 3, [row["action"] for row in result["branches"]])
         for host in publisher.HOSTS:
             files = publisher.tree_files(self.remote, "plugins-" + host + "-alpha")
-            prefix = "" if host == "antigravity" else "plugins/agent-workflow/"
-            primary = self.candidate / f"workflow/agent-workflow-{host}-3.0.0-alpha.5.zip"
+            prefix = "" if host == "antigravity" else "plugins/xy-workflow/"
+            primary = self.candidate / f"workflow/xy-workflow-{host}-3.0.0-alpha.5.zip"
             for name, value in publisher.archive_files(primary.read_bytes()).items():
                 self.assertEqual(value, files[prefix + name])
             record = json.loads(files["distribution.json"][0])
             self.assertEqual(self.revision, record["source_revision"])
             if host in publisher.MARKET:
-                self.assertEqual("agent-workflow-alpha", json.loads(files[publisher.MARKET[host]][0])["name"])
+                self.assertEqual("xy-workflow-alpha", json.loads(files[publisher.MARKET[host]][0])["name"])
             else:
                 self.assertIn(".antigravity-plugin/plugin.json", files)
 
@@ -226,6 +235,52 @@ class PluginSourcePublicationTest(unittest.TestCase):
                     self.publish(apply=True)
                 archive.write_bytes(original_archive)
                 manifest_path.write_bytes(original_manifest)
+
+    def test_locked_and_local_projection_modes_reject_tampering_and_unsafe_permissions(self):
+        """主包与本地源同时改成同一错误模式也必须拒绝，不能只比较两包相等。"""
+        for permission in (0o600, 0o777, 0o4755):
+            with self.subTest(permission=oct(permission)):
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w") as package:
+                    entry = zipfile.ZipInfo("ordinary-file")
+                    entry.external_attr = (stat.S_IFREG | permission) << 16
+                    package.writestr(entry, b"content")
+                with self.assertRaisesRegex(ValueError, "模式"):
+                    publisher.archive_files(buffer.getvalue())
+
+        manifest_path = self.candidate / "candidate-manifest.json"
+        original_manifest = manifest_path.read_bytes()
+        for host in publisher.HOSTS:
+            stem = f"workflow/xy-workflow-{host}-3.0.0-alpha.5"
+            primary = self.candidate / (stem + ".zip")
+            local = self.candidate / (stem + "-local-source.zip")
+            original_primary, original_local = primary.read_bytes(), local.read_bytes()
+            prefix = "xy-workflow/" if host == "antigravity" else "plugins/xy-workflow/"
+            executable = "third_party/selected-skills/playwright-cli/runtime/tool.sh"
+            for change in ("local_drop_execute", "local_add_execute", "primary_drop_execute", "both_drop_execute"):
+                with self.subTest(host=host, change=change):
+                    files = publisher.archive_files(original_primary)
+                    projected = publisher.archive_files(original_local)
+                    if change in {"primary_drop_execute", "both_drop_execute"}:
+                        files[executable] = (files[executable][0], "100644")
+                    if change in {"local_drop_execute", "both_drop_execute"}:
+                        projected[prefix + executable] = (projected[prefix + executable][0], "100644")
+                    if change == "local_add_execute":
+                        projected[prefix + "README.md"] = (projected[prefix + "README.md"][0], "100755")
+                    primary.write_bytes(zip_bytes(files))
+                    local.write_bytes(zip_bytes(projected))
+                    # 重新绑定ZIP摘要以直达模式边界，避免仅证明外层摘要能拒绝篡改。
+                    manifest = json.loads(original_manifest)
+                    for row in manifest["artifacts"]:
+                        if row["path"] in {stem + ".zip", stem + "-local-source.zip"}:
+                            row["sha256"] = publisher.digest((self.candidate / row["path"]).read_bytes())
+                    manifest_path.write_bytes(publisher.json_bytes(manifest))
+                    with self.assertRaisesRegex(ValueError, "模式|精确插件包"):
+                        publisher.load_candidate(self.candidate, self.revision, publisher.REPOSITORY)
+                    primary.write_bytes(original_primary)
+                    local.write_bytes(original_local)
+                    manifest_path.write_bytes(original_manifest)
+        self.assertEqual("", self.refs())
 
     def test_non_fast_forward_race_fails_atomically(self):
         initial = self.publish(apply=True)

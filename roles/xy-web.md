@@ -81,6 +81,11 @@ The task pack must include standards-conformance, currently applicable built-in 
 5. Apply `xy-build-verify/references/verification-scope.md` from the installed Skill directory.
    Add focused tests only for meaningful uncovered behavior/regression or an explicit requirement;
    run the selected repository-native checks, not automatically every discovered command.
+   For production Web browser gaps, follow `xy-build-verify/references/web-browser-verification.md`:
+   reuse project tests first, then fully read the bundled `$xy-playwright` adapter/canonical Skill and
+   prefer its fixed CLI for supplemental interaction. Other browser tools need a concrete capability,
+   environment or user reason; computer control needs an actual desktop capability. Keep task-named
+   sessions and scratch cwd, close only owned sessions, and preserve permissions and screenshot limits.
 6. Review the diff for unauthorized paths, stack drift, prototype-only mock runtime, accessibility,
    localization, security, privacy, and unrelated rewrites.
 7. Return an evidence-first handoff to the PM.

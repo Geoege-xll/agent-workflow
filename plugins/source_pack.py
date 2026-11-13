@@ -27,7 +27,8 @@ HELPERS = frozenset({
     "lib/task_graph_cli.py", "lib/agent_continuation_cli.py", "lib/documents/context_read.py",
     "lib/dispatch_admission_cli.py",
     "lib/documents/validate_prototype_workspace.py",
-    # 反馈 helper 仅输出只读链接/节点交接，不提供 HTML patch 或批准入口。
+    # 同一个反馈 CLI 装配用户级不可变离线包并只读复核节点意见；有界迁移必须
+    # 另给精确 preview，不能把 helper 白名单误当作项目写权限或 HTML patch 批准。
     "lib/documents/prototype_feedback_cli.py",
     "lib/validate_project_docs.py",
     "lib/project/validate_project_config.py", "lib/project/ensure_project_id.py",
@@ -75,6 +76,10 @@ def verify() -> dict:
     for relative, expected in metadata["payload_sha256"].items():
         if hashlib.sha256(_file(relative).read_bytes()).hexdigest() != expected:
             raise ValueError("package payload digest mismatch: " + relative)
+    # 发行摘要不能代替外部依赖闭包：额外文件、链接与错误声明同样拒绝。
+    sys.path.insert(0, str(ROOT))
+    from lib.skills.selected_skills import snapshot
+    snapshot(ROOT)
     return metadata
 
 
@@ -124,10 +129,22 @@ def _dispatch_preferences(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    sys.path.insert(0, str(ROOT))
+    from product.command_identity import load_identity
+    try:
+        identity = load_identity(ROOT)
+        playwright_command = next(name for name, original in identity["skill_aliases"].items() if original == "playwright-cli")
+    except (ValueError, OSError, StopIteration) as exc:
+        print("[ERROR] " + str(exc), file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     resource = commands.add_parser("resource", help="locate a verified packaged resource")
     resource.add_argument("path")
+    selected = commands.add_parser("selected-skills", help="check, diagnose or read the bundled original selected skills")
+    selected.add_argument("arguments", nargs=argparse.REMAINDER)
+    playwright = commands.add_parser(playwright_command, help="run the fixed bundled Playwright CLI; doctor reports readiness")
+    playwright.add_argument("arguments", nargs=argparse.REMAINDER)
     helper = commands.add_parser("helper", help="execute an original packaged workflow helper")
     helper.add_argument("--project", required=True, type=Path)
     helper.add_argument("path", choices=sorted(HELPERS))
@@ -142,6 +159,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "dispatch-preferences":
             return _dispatch_preferences(args)
         metadata = verify()
+        if args.command == playwright_command:
+            from lib.skills.playwright_runtime import run as playwright_run
+            return playwright_run(args.arguments, root=ROOT)
+        if args.command == "selected-skills":
+            from lib.skills.selected_skills import main as selected_main
+            return selected_main(args.arguments, root=ROOT)
         if args.command == "resource":
             # 历史受管路径只是只读逻辑别名；项目适配器绝不走这条映射。
             relative = args.path.removeprefix(".agent-workflow/")

@@ -15,9 +15,8 @@
     <aside id="prototype-sidebar" class="workspace-sidebar" aria-label="页面侧栏">
       <div class="workspace-brand"><span class="workspace-brand-icon" aria-hidden="true"></span><strong>原型工作区</strong></div>
       <p class="workspace-sidebar-label">页面导航 <span id="prototype-page-count">0 页</span></p>
-      <!-- 唯一登记源：真实页面直接放在原型根，每页只登记一次普通相对链接。
-           不登记 page.html 模板或复制 JS 清单；分组使用原生 details/summary。
-           例如：<details open><summary>模块名称</summary><a href="actual-page.html">实际页面名称</a></details> -->
+      <!-- prepare把明确选择的项目页面、原标签和分组写入唯一非执行启动数据；
+           工作区从该快照投影导航，不要求业务项目复制本入口或通用工具资源。 -->
       <nav id="prototype-pages" class="workspace-page-tree" aria-label="Prototype pages"></nav>
     </aside>
     <div class="workspace-view">
@@ -26,7 +25,7 @@
         <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg>
         <span id="prototype-sidebar-toggle-label">收起侧栏</span>
       </button>
-      <!-- 未登记时不设置 src，不加载模板或假页面；只向唯一 iframe 写入登记页名。 -->
+      <!-- 未登记时不设置 src，不加载模板或假页面；只向唯一 iframe 写入快照映射URL。 -->
       <iframe id="prototype-preview" title="当前原型页面" referrerpolicy="no-referrer" hidden></iframe>
       <!-- 反馈始终位于预览之后的自然文档流，展开时不压缩高保真画板。 -->
       <details id="prototype-feedback" class="prototype-feedback">

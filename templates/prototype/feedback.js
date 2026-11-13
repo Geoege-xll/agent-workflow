@@ -5,47 +5,54 @@
   const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
     && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
   const text = (value, max = 4096) => typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= max && !value.includes("\0");
-  const path = (value) => text(value, 1024) && !value.startsWith("/") && !/[\\:#?%]/.test(value)
+  const path = (value) => text(value, 1024) && !value.startsWith("/") && !/[\\:#?%\x00-\x1f\x7f]/.test(value)
     && value.split("/").every((part) => part && part !== "." && part !== "..");
   const sha = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
   const stableId = (value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value);
-  function parseFragment(hash) {
-    // 先限制原始片段大小及参数重复；损坏的评审绑定不影响普通页面浏览。
-    const params = new URLSearchParams(hash.slice(1));
-    const page = params.getAll("page").length === 1 ? params.get("page") : null;
-    const result = { page, rawReview: params.getAll("review").length === 1 ? params.get("review") : null, context: null, error: "" };
-    if (!params.has("review")) return result;
+  function parseStartup(raw) {
+    const result = { rawReview: "", context: null, pages: [], error: "" };
     try {
-      if (hash.slice(1).length > 12288 || params.getAll("page").length !== 1 || params.getAll("review").length !== 1
-          || Array.from(params.keys()).some((key) => key !== "page" && key !== "review")) throw Error();
-      const encoded = result.rawReview;
-      if (!encoded || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw Error();
-      const binary = atob(encoded.replace(/-/g, "+").replace(/_/g, "/"));
-      if (binary.length > 8192) throw Error();
-      const raw = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
-      const context = JSON.parse(raw);
-      // prepare只产出紧凑UTF8 JSON；严格往返比对拒绝重复键、尾部空白及替代转义，
-      // 防止JSON.parse悄悄采用最后一个同名字段，把坏绑定洗成可用context。
-      if (JSON.stringify(context) !== raw) throw Error();
-      if (!exact(context, ["schema_version", "request_id", "adapter", "prototype_root", "plan_source", "plan_sha256", "requirements", "pages"])
-          || context.schema_version !== 1 || typeof context.request_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(context.request_id) || !path(context.adapter)
-          || !path(context.prototype_root) || !path(context.plan_source) || !context.plan_source.endsWith(".md") || !sha(context.plan_sha256)
+      // 数据只来自prepare写入的唯一非执行script。紧凑JSON安全转义往返检查同时
+      // 拒绝重复键，不能把JSON.parse最后同名值洗成可信启动绑定；不读取hash中的context。
+      if (typeof raw !== "string") throw Error();
+      const boot = JSON.parse(raw);
+      const safe = JSON.stringify(boot).replace(/[<>&\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+      if (safe !== raw || !exact(boot, ["schema_version", "context", "pages"]) || boot.schema_version !== 2) throw Error();
+      const context = boot.context;
+      if (!exact(context, ["schema_version", "request_id", "project_id", "adapter", "adapter_sha256", "prototype_root", "plan_source", "plan_sha256", "navigation_sha256", "requirements", "pages", "tool", "review_id"])
+          || context.schema_version !== 2 || new TextEncoder().encode(JSON.stringify(context)).length > 8192
+          || typeof context.request_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(context.request_id)
+          || !path(context.adapter) || !path(context.prototype_root) || !path(context.plan_source) || !context.plan_source.endsWith(".md")
+          || ![context.project_id, context.adapter_sha256, context.plan_sha256, context.navigation_sha256, context.review_id].every(sha)
+          || !exact(context.tool, ["version", "payload_sha256"]) || typeof context.tool.version !== "string"
+          || !/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$/.test(context.tool.version) || !sha(context.tool.payload_sha256)
           || !Array.isArray(context.requirements) || !context.requirements.length || !Array.isArray(context.pages) || !context.pages.length || context.pages.length > 16) throw Error();
       const requirements = new Set();
       for (const req of context.requirements) {
-        if (!exact(req, ["id", "label"]) || !/^REQ-[0-9]{3,}$/.test(req.id) || !text(req.label, 8192) || requirements.has(req.id)) throw Error();
+        if (!exact(req, ["id", "label"]) || typeof req.id !== "string" || !/^REQ-[0-9]{3,}$/.test(req.id) || !text(req.label, 8192) || requirements.has(req.id)) throw Error();
         requirements.add(req.id);
       }
       const pages = new Set();
       for (const item of context.pages) {
-        const name = item.path?.slice(context.prototype_root.length + 1);
+        const name = typeof item?.path === "string" ? item.path.slice(context.prototype_root.length + 1) : "";
         if (!exact(item, ["path", "dependency_fingerprint"]) || !path(item.path) || !item.path.startsWith(`${context.prototype_root}/`)
             || !/^[a-z0-9][a-z0-9-]*\.html$/.test(name) || name === "index.html" || !sha(item.dependency_fingerprint) || pages.has(item.path)) throw Error();
         pages.add(item.path);
       }
-      result.context = context;
+      if (!Array.isArray(boot.pages) || boot.pages.length !== pages.size) throw Error();
+      const registered = new Set();
+      for (const entry of boot.pages) {
+        // URL不是可推导的消息输入，只接受核心给出的project/精确源路径映射。
+        // 全部校验成功后才生成导航和设置iframe src，任何损坏都不能留下部分可用清单。
+        if (!exact(entry, ["name", "path", "url", "label", "groups"]) || !pages.has(entry.path) || registered.has(entry.path)
+            || entry.name !== entry.path.slice(context.prototype_root.length + 1) || entry.url !== `project/${entry.path}`
+            || !text(entry.label, 1024) || !Array.isArray(entry.groups)
+            || !entry.groups.every((group) => exact(group, ["label", "open"]) && text(group.label, 1024) && typeof group.open === "boolean")) throw Error();
+        registered.add(entry.path);
+      }
+      result.context = context; result.rawReview = JSON.stringify(context); result.pages = boot.pages;
     } catch {
-      result.error = "本轮评审链接损坏或超出范围。页面仍可浏览，请重新使用准备好的评审链接；已有输入不会自动重绑。";
+      result.error = "本轮评审快照数据损坏或超出范围，请重新准备评审包；已有输入不会自动重绑。";
     }
     return result;
   }
@@ -151,7 +158,7 @@
     function exportText() {
       if (!context) throw Error("缺少有效评审绑定");
       // 没有任何approved字段或工作流状态；JSON只是用户输入，必须经过核心validate复核。
-      const value = JSON.stringify({ schema_version: 1, context, items }, null, 2);
+      const value = JSON.stringify({ schema_version: 2, context, items }, null, 2);
       if (new TextEncoder().encode(value).length > 1048576) throw Error("反馈超过1MiB");
       return value;
     }
@@ -169,7 +176,7 @@
       const index = items.findIndex((entry) => entry.id === editing);
       const candidate = [...items];
       if (index < 0) candidate.push(item); else candidate[index] = item;
-      if (new TextEncoder().encode(JSON.stringify({ schema_version: 1, context, items: candidate }, null, 2)).length > 1048576) {
+      if (new TextEncoder().encode(JSON.stringify({ schema_version: 2, context, items: candidate }, null, 2)).length > 1048576) {
         announce("反馈超过 1 MiB，无法保存本条。请缩短内容或撤回部分意见；输入已保留。"); return;
       }
       items = candidate;
@@ -209,6 +216,14 @@
       finally { if (url) window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
     });
     get("close").addEventListener("click", () => manual.close());
+    manual.addEventListener("keydown", (event) => {
+      // 保留原生dialog的模态/inert、Esc和关闭后焦点恢复，仅约束首末Tab边界；
+      // Chromium在末项Tab可能先把焦点交给浏览器viewport，故不能仅凭showModal
+      // 推定表单键盘循环已满足。两个入口固定，不扫描或接管页面其他可聚焦节点。
+      if (event.key !== "Tab") return;
+      if (event.shiftKey && document.activeElement === output) { event.preventDefault(); get("close").focus(); }
+      else if (!event.shiftKey && document.activeElement === get("close")) { event.preventDefault(); output.focus(); }
+    });
     return {
       bind(fragment) {
         if (bindingBlocked || (fragment.rawReview === binding && context)) return;
@@ -227,7 +242,7 @@
           if (saved) {
             if (JSON.stringify(saved.context) !== JSON.stringify(context) || !Array.isArray(saved.items)
                 || saved.items.length > 256 || !saved.items.every(validItem) || new Set(saved.items.map((item) => item.id)).size !== saved.items.length
-                || new TextEncoder().encode(JSON.stringify({ schema_version: 1, context, items: saved.items }, null, 2)).length > 1048576) throw Error("草稿无效");
+                || new TextEncoder().encode(JSON.stringify({ schema_version: 2, context, items: saved.items }, null, 2)).length > 1048576) throw Error("草稿无效");
             items = saved.items;
             // 编辑器快照只恢复已知纯文本字段；不执行存储对象提供的路径、selector或动作。
             if (saved.drafts && typeof saved.drafts === "object" && !Array.isArray(saved.drafts)) {
@@ -253,10 +268,10 @@
         announce(bindingNotice || (context ? "等待当前页确认唯一稳定节点……" : "普通浏览模式，反馈未启用。"));
       },
       receive(data) {
-        if (data.type === "prototype-workspace:located") {
+        if (data.type === "prototype-review:located") {
           announce(data.ok ? `已定位当前节点：${data.target}。` : "节点当前不可定位，请先在画板中显示对应状态。输入与意见保持不变。"); return;
         }
-        if (!context || bindingBlocked || data.type !== "prototype-workspace:catalog" || !context.pages.some((entry) => entry.path === pagePath()) || !Array.isArray(data.nodes) || data.nodes.length > 512) return;
+        if (!context || bindingBlocked || data.type !== "prototype-review:catalog" || !context.pages.some((entry) => entry.path === pagePath()) || !Array.isArray(data.nodes) || data.nodes.length > 512) return;
         // 父壳仍验证消息来源/session；此处再验证有限数据，所有显示均textContent，不执行HTML或路径。
         if (!data.nodes.every((node) => exact(node, ["id", "text", "interaction_id", "interaction_text", "interface_refs"])
             && stableId(node.id) && typeof node.text === "string" && Array.from(node.text).length <= 4000
@@ -284,5 +299,5 @@
       open() { if (context && !bindingBlocked) send("refresh"); panel.open = true; panel.scrollIntoView({ block: "start" }); get("heading").focus(); },
     };
   }
-  window.PrototypeFeedback = Object.freeze({ parseFragment, create });
+  window.PrototypeFeedback = Object.freeze({ parseStartup, create });
 })();

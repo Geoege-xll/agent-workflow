@@ -899,7 +899,7 @@ workflow_skill = skill_bodies.get("xy-workflow", "")
 workflow_contract = normalized(workflow_skill)
 prototype_skill = skill_bodies.get("xy-prototype-verify", "")
 prototype_contract = normalized(prototype_skill)
-require("$grill-me" in workflow_skill, "xy-workflow missing $grill-me routing")
+require("$xy-grilling" in workflow_skill, "xy-workflow missing $xy-grilling routing")
 # Full 请求必须经过覆盖检查与草案计划；Light 使用当前单任务轻量分支。
 require(
     "Every `Full` request performs a **Grill Me coverage check**" in workflow_contract,
@@ -941,7 +941,8 @@ for phrase in (
 require(
     bool(
         re.search(
-            r"skill_policy:\s*\n\s*required_skills:\s*\[\]\s*\n\s*audit_surfaces:\s*\[\]",
+            # 当前原文是直接task成员的JSON示例；旧skill_policy嵌套由真实schema负控拒绝。
+            r'"required_skills":\s*\[\],\s*"audit_surfaces":\s*\[\]',
             workflow_skill,
         )
     ),
@@ -1020,7 +1021,8 @@ qa_contract = normalized(qa_skill)
 require(
     bool(
         re.search(
-            r"skill_policy:\s*\n\s*required_skills:\s*\[\]\s*\n\s*audit_surfaces:\s*\[\]",
+            # 当前原文是直接task成员的JSON示例；旧skill_policy嵌套由真实schema负控拒绝。
+            r'"required_skills":\s*\[\],\s*"audit_surfaces":\s*\[\]',
             qa_skill,
         )
     ),
@@ -1207,6 +1209,7 @@ for role in discovered_roles:
     for anchor in ("schema_version: 2", "instance_policy: fresh", "context_policy: handoff_only", "agent_alias"):
         require(anchor in data.get("developer_instructions", ""), f"{path.name} missing 2.0 boundary {anchor}")
     # 绑定名称从共用静态策略取得；只校验当前角色入口，不把条件引用展开为常驻上下文。
+    # 当前公开入口均为xy-*；共享策略继续检查顺序与完整集合，不接受旧canonical发现名。
     bound = re.findall(r"^- Bound Skill: `\$(xy-[a-z0-9-]+)`;", data.get("developer_instructions", ""), re.M)
     require(tuple(bound) == ROLE_SKILLS[role], f"{path.name} Skill bindings differ from shared policy")
 
@@ -1219,7 +1222,7 @@ if uiux.exists():
     for phrase in (
         "docs.standards_root/DESIGN_*.md",
         "xy-prototype-verify",
-        "$ui-ux-pro-max",
+        "$xy-taste",
         "one stable interactive HTML page",
         "Page design and interaction contract",
         "purpose",

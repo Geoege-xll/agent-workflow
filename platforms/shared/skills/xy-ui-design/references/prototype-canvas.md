@@ -12,16 +12,17 @@ branches, or add confirmation.
   files and add files only for new pages. Output separately the different platform pages that need
   design; do not combine multiple product pages in one HTML or force presentation of all three
   platforms. Demonstrate a page's dialogs, loading, empty, error, and success states interactively in
-  that HTML without separate state pages. `index.html` enters the grouped browsing workspace directly,
-  hosting only the current page, without a separate directory landing layer or extra global header.
-  Ordinary relative links in the single `nav#prototype-pages` are the registration source; groups use
-  native details/summary. Keep an empty state when no actual pages are registered; do not register
-  the page.html template or invented business pages. The workspace uses separate workspace.css/js;
-  concrete pages load prototype.css, shared feedback.css target-highlight styles, and the minimal
-  page-shell.js bridge. workspace.css/js and feedback.js remain index-only, keeping navigation
-  styles and feedback state outside page fingerprints.
-- For new pages, directly reuse `.agent-workflow/templates/prototype/page.html` and the project
-  prototype directory's `prototype.css` without regenerating the presentation shell. Preserve the
+  that HTML without separate state pages. The plugin-owned offline review `index.html` enters the
+  grouped browsing workspace directly, hosting only the current page. Projects retain concrete
+  pages and business assets; do not copy workspace.css/js, feedback.css/js, page-shell.js or the
+  generic index into a new project. An existing project index remains preserved navigation input:
+  its relative links and native details/summary labels are read without executing its scripts.
+  Prepare the review from explicitly selected pages; it generates navigation from bounded metadata
+  and injects the version 2 bridge into derived copies only. No invented business pages or spec JSON.
+- For new pages, resolve `templates/prototype/page.html` through the current physical plugin's
+  resource entry, and reuse the project's compatible `prototype.css` when present. Remove template
+  references to plugin-only feedback/bridge resources from the project page; prepare supplies them
+  in the derived review. Create only authorized page/business-style paths. Preserve the
   unified page header, `.prototype-stage`, `.prototype-frame`, product slot
   `data-prototype-page-content`, and bottom page contract. Fill in page information and explanations
   and set `data-prototype-platform` and `data-prototype-display`; Web defaults to `responsive`, while
@@ -49,7 +50,8 @@ branches, or add confirmation.
 - At the top of the current page, use a circular back control with a light background, thin border,
   and black left chevron, providing a name and visible focus without relying on browser history.
   Inside the workspace, back only expands the sidebar/current group and focuses the current link
-  while preserving the view; a standalone page returns to its page deep link in index. Use a separate
+  while preserving the view; a standalone source page stays directly openable without requiring a
+  project index. The injected review bridge handles locating the page even without an old back button. Use a separate
   toggle to expand/collapse the sidebar. Demo data, reset-on-refresh behavior, unimplemented scope,
   and necessary pending confirmations belong to the explanations after the view; actual business
   messages remain inside the artboard. The product's own navigation, scrolling, and overlays do not

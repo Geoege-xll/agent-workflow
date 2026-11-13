@@ -169,7 +169,7 @@
       this.token = token; this.fetcher = fetcher; this.timeout = timeout;
     }
     async request(path, body, signal, errorReceipt) {
-      if (!this.token) throw new ApiError("authentication", "连接令牌缺失。请回到宿主主会话，显式运行 agent-workflow:agent-config Skill 重新打开配置页。");
+      if (!this.token) throw new ApiError("authentication", "连接令牌缺失。请回到宿主主会话，显式运行 xy-workflow:xy-config Skill 重新打开配置页。");
       const controller = new AbortController();
       let timedOut = false;
       const cancel = () => controller.abort();
@@ -188,7 +188,7 @@
         if (!response.ok) {
           const error = object(value?.error) ? value.error : {};
           const code = typeof error.code === "string" ? error.code : "request_failed";
-          const message = response.status === 401 || response.status === 403 ? "连接验证失败。请回到宿主主会话，显式运行 agent-workflow:agent-config Skill 重新打开配置页。" :
+          const message = response.status === 401 || response.status === 403 ? "连接验证失败。请回到宿主主会话，显式运行 xy-workflow:xy-config Skill 重新打开配置页。" :
             typeof error.message === "string" ? error.message : "请求未完成，请重试。";
           const failure = new ApiError(code, message, response.status);
           // 错误正文也可能携带核心已发生写入的正式收据；由所属业务API显式识别与校验，
@@ -323,7 +323,7 @@
     constructor(location) {
       super(location);
       this.activation = new ActivationDraft(); this.preferences = new FieldDraft(location);
-      this.catalogRevision = null; this.catalogStamp = null; this.catalogAttempt = null;
+      this.lastSave = "尚未在本页保存"; this.receipt = null; this.catalogRevision = null; this.catalogStamp = null; this.catalogAttempt = null;
     }
     accept(context, clear = false) {
       super.accept(context, clear);
@@ -350,6 +350,28 @@
     clear() { this.edit = null; }
   }
 
+  function resolvedField(draft, id, field, preferences = false) {
+    const row = draft.row(id);
+    if (!row) return {value:null, source:"来源未提供", pending:true};
+    const value = draft.value(id, field);
+    if (value) return {value, source:draft.edits.get(id) && own(draft.edits.get(id), field) ? "本层草稿" : sourceLabel(row.sources[field]), pending:false};
+    // 本层覆盖被清除后，context 不含其遮蔽的上层前像；必须交给真实预览解析，不能猜宿主默认。
+    if (own(row.overrides, field)) return {value:null, source:"继承值待预览", pending:true};
+    if (preferences && id !== "*") {
+      const source = row.sources[field];
+      const ownAgentSource = draft.location.scope === "project" ? "project_agent" : "user_agent";
+      const defaultEdits = draft.edits.get("*");
+      if (source !== ownAgentSource && defaultEdits && own(defaultEdits, field)) {
+        const next = draft.value("*", field);
+        if (next) return {value:next, source:"本层通用草稿", pending:false};
+        // 只有被清除的默认字段原本参与了解析，才会遮蔽下层；其他目标继续保留权威基线。
+        const defaultSource = draft.location.scope === "project" ? "project_default" : "user_default";
+        if (source === defaultSource) return {value:null, source:"继承值待预览", pending:true};
+      }
+    }
+    return {value:row.effective[field] ?? null, source:sourceLabel(row.sources[field]), pending:false};
+  }
+
   class RequestOwner {
     constructor() { this.generation = 0; this.controller = null; }
     begin() { this.controller?.abort(); this.controller = new AbortController(); return { generation: ++this.generation, signal: this.controller.signal }; }
@@ -358,7 +380,7 @@
   }
 
   // Node 用例直接消费同一协议/草稿逻辑，避免测试内重新实现继承或请求规则。
-  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions };
+  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField };
   if (typeof document === "undefined") return;
 
   const $ = id => document.getElementById(id);
@@ -375,6 +397,10 @@
   const previewOwner = new RequestOwner();
   let active = null;
   let editorMode = "dispatch_preferences";
+  let section = "models";
+  let switchNoticeTimer = null;
+  const kindName = () => section === "activation" ? "工作流启停" : preferenceMode() ? "调用偏好" : "原生定义文件";
+  const visibleRows = () => editorRows().filter(row => !preferenceMode() || row.role !== "*");
   const preferenceMode = () => editorMode === "dispatch_preferences";
   const editorDraft = () => preferenceMode() ? active.preferences : active;
   const editorRows = () => editorDraft().context?.roles || [];
@@ -408,10 +434,7 @@
       typeof row.writable_reason === "string" ? row.writable_reason : row.writable === false ? "此 Agent 不允许在当前范围写入。" : "服务端未提供写入权限，暂不可编辑。";
   }
   function effectiveDraftModel(id) {
-    const draft = editorDraft(), row = draft.row(id);
-    // 清除本层模型后，精确跨层继承由服务端预览给出；本地不臆算另一字段或默认目标的新值。
-    const value = draft.value(id, "model");
-    return value || (draft.edits.get(id) && own(draft.edits.get(id), "model") ? null : row?.effective.model);
+    return resolvedField(editorDraft(), id, "model", preferenceMode()).value;
   }
   function currentCatalog() {
     // 模型来源有独立指纹；偏好或启停保存改变 revision 不意味着模型目录失效。
@@ -494,7 +517,7 @@
     for (const [label, text] of [["已保存本层值", activationLabel(value?.state)], ["继承值", activationLabel(value?.inherited_state)],
       ["继承来源", value?.inherited_source || "未知／未观察到"], ["已观察配置结果", activationLabel(value?.effective_state)],
       ["插件身份", value?.plugin_id || "未知"], ["目标配置路径", value?.source_path || "未确定"]]) {
-      facts.append(node("dt", "", label), node("dd", "", text));
+      const fact = node("div"); fact.append(node("dt", "", label), node("dd", "", text)); facts.append(fact);
     }
     $("activation-state").value = ACTIVATION_STATES.includes(active.activation.value) ? active.activation.value : "";
     $("activation-status").textContent = active.activation.dirty ? "工作流启停有未保存草稿；请独立预览后保存。" : "工作流启停无未保存更改。";
@@ -508,127 +531,182 @@
     const available = Boolean(active.context) && !loading && !mutation;
     const editable = available && editorRows().some(writable);
     const invalid = editorDraft().unavailableEdits.length > 0;
-    const activationEditable = available && active.activation.saved?.writable === true;
-    $("activation-state").disabled = !activationEditable;
-    $("preview-activation").disabled = !activationEditable || !active.activation.dirty || active.conflicted;
-    $("discard-activation").disabled = !active.activation.dirty || mutation;
+    const activation = section === "activation";
+    const current = activation ? active.activation : editorDraft();
+    $("activation-state").disabled = !available || active.activation.saved?.writable !== true;
     $("role-list").setAttribute("aria-busy", String(loading));
-    for (const button of document.querySelectorAll("[data-host], input[name=scope], input[name=editor-mode]")) button.disabled = mutation;
+    for (const control of document.querySelectorAll("[data-host], [data-section], input[name=scope], #open-native, #back-preferences")) control.disabled = mutation;
     $("load-project").disabled = mutation;
     $("reload-context").disabled = mutation || loading;
     $("refresh-catalog").disabled = !available || refreshing;
     $("refresh-catalog").textContent = refreshing ? "正在刷新…" : "刷新模型目录";
-    $("preview-changes").disabled = !available || !editorDraft().dirty || active.conflicted || invalid;
-    $("preview-changes").textContent = mutation && !$("preview-dialog").open ? "正在预览…" : preferenceMode() ? "预览调用偏好" : "预览原生字段";
-    $("discard-draft").disabled = !editorDraft().dirty || mutation;
-    $("reset-platform").disabled = !editable;
+    $("preview-changes").disabled = !available || !current.dirty || active.conflicted || (activation ? active.activation.saved?.writable !== true : invalid);
+    $("preview-changes").textContent = mutation && !$("preview-dialog").open ? "正在预览…" : "预览并保存";
+    $("discard-draft").disabled = !current.dirty || mutation;
+    $("reset-platform").disabled = !editable || !editorRows().some(row => FIELDS.some(field => editorDraft().value(row.role, field)));
     $("reset-platform").textContent = preferenceMode() ? "清除本范围调用偏好" : "清除本范围原生字段";
     $("batch-model").disabled = !editable || !$("batch-model-enabled").checked;
     $("batch-effort-enabled").disabled = !editable || editorCaps().effort === false;
     $("batch-effort").disabled = !editable || !$("batch-effort-enabled").checked || editorCaps().effort === false;
     $("batch-model-enabled").disabled = !editable;
     $("apply-batch").disabled = !editable || !editorDraft().selected.size || (!$("batch-model-enabled").checked && !$("batch-effort-enabled").checked);
-    const selectable = editorRows().filter(writable) || [];
-    $("select-all").disabled = !editable;
-    $("select-all").checked = selectable.length > 0 && editorDraft().selected.size === selectable.length;
-    $("select-all").indeterminate = editorDraft().selected.size > 0 && editorDraft().selected.size < selectable.length;
-    $("batch-summary").textContent = "批量修改 · 已选 " + editorDraft().selected.size + " 个目标";
-    $("draft-status").textContent = editorDraft().dirty ? "未保存 · " + editorDraft().edits.size + " 个目标，" + editorDraft().count + " 项字段更改" : "无未保存更改";
-    if (invalid) $("draft-status").textContent += " · 有 Agent 已消失或变为只读，请先放弃其草稿";
-    for (const control of document.querySelectorAll("#agent-rows input, #agent-rows select")) {
+    const selectable = visibleRows().filter(writable);
+    $("select-all").disabled = !available || !selectable.length;
+    $("select-all").checked = selectable.length > 0 && selectable.every(row => editorDraft().selected.has(row.role));
+    $("select-all").indeterminate = selectable.some(row => editorDraft().selected.has(row.role)) && !$("select-all").checked;
+    $("batch-summary").textContent = "已选 " + editorDraft().selected.size + " 个 Agent · 仅更新勾选字段，预览后保存";
+    $("draft-status").textContent = current.dirty ? (activation ? "1 项未保存更改" : editorDraft().count + " 项未保存更改") : "无未保存更改";
+    if (!activation && invalid) $("draft-status").textContent += " · 有身份已消失或变为只读，请先放弃草稿";
+    if (active.conflicted) $("draft-status").textContent += " · 需重新读取";
+    $("recovery-context").hidden = !active.conflicted;
+    $("recovery-context").disabled = mutation || loading;
+    $("view-receipt").hidden = !active.receipt;
+    $("view-receipt").disabled = mutation;
+    $("draft-context").textContent = describeLocation(active.location) + " · " + kindName();
+    $("save-boundary").textContent = (activation || !preferenceMode() ? "等待新会话加载" : "供后续派发读取") + " · 实际运行未验证";
+    $("save-bar").dataset.dirty = String(current.dirty);
+    $("save-bar").hidden = section === "diagnostics";
+    $("nav-models").dataset.dirty = active.count + active.preferences.count ? String(active.count + active.preferences.count) : "";
+    $("nav-activation").dataset.dirty = active.activation.dirty ? "1" : "";
+    for (const control of document.querySelectorAll("#agent-rows input, #agent-rows select, #default-settings input, #default-settings select, [data-reset]")) {
       const row = editorDraft().row(control.dataset.agent);
-      control.disabled = !available || !row || !writable(row) || (control.dataset.field === "effort" && editorCaps().effort === false && !editorDraft().value(row.role, "effort"));
+      control.disabled = !available || !row || !writable(row) || (control.dataset.field === "effort" && editorCaps().effort === false && !editorDraft().value(row.role, "effort")) ||
+        (control.dataset.reset !== undefined && !FIELDS.some(field => editorDraft().value(row.role, field)));
+    }
+  }
+  function rowState(row, target) {
+    const draft = editorDraft();
+    const dirty = draft.edits.has(row.role);
+    target.replaceChildren();
+    const status = node("span", "row-state", dirty ? "未保存草稿" : FIELDS.some(field => row.overrides[field]) ? "本层覆盖" : "继承");
+    status.dataset.dirty = String(dirty); target.append(status);
+    if (dirty) target.append(node("p", "row-hint", "已保存：" + FIELDS.map(field => row.overrides[field] || "继承").join(" / ")));
+    else target.append(node("p", "row-hint", FIELDS.some(field => row.overrides[field]) ? preferenceMode() ? "已保存 · 后续派发读取" : "已保存 · 等待新会话加载" : "未设置本层字段"));
+    const reset = node("button", "text-button row-reset", preferenceMode() ? "恢复继承" : "清除字段"); reset.type = "button";
+    reset.dataset.agent = row.role; reset.dataset.reset = "true"; reset.setAttribute("aria-label", (row.role === "*" ? "通用默认" : row.name || row.role) + " · " + reset.textContent);
+    reset.addEventListener("click", () => {
+      for (const field of FIELDS) draft.set(row.role, field, null);
+      render(); message("已更新当前目标草稿；预览保存后才记录。");
+      // 重绘后回到同一真实身份的模型字段；不拼接opaque ID为选择器，避免特殊字符改变匹配。
+      [...document.querySelectorAll("[data-field='model']")].find(control => control.dataset.agent === row.role)?.focus();
+    });
+    target.append(reset);
+    if (!preferenceMode() && row.dispatch_ready === false) target.append(node("p", "blocked-reason", "派发受阻：" + (row.blocked_reason || "当前调用能力未确认")));
+    if (object(row.per_invocation) && row.per_invocation.ready === false) target.append(node("p", "row-hint", "单次调用覆盖受阻；原生文件可写性独立判断。"));
+  }
+  function fieldControl(row, field, index) {
+    const container = node("div", "field-cell");
+    const id = "agent-" + index + "-" + field;
+    const label = node("label", row.role === "*" ? "field-label" : "cell-label", FIELD_LABELS[field]); label.htmlFor = id; container.append(label);
+    const input = node(field === "model" ? "input" : "select"); input.id = id; input.dataset.agent = row.role; input.dataset.field = field;
+    const displayName = row.role === "*" ? "通用默认" : row.name || row.role;
+    input.setAttribute("aria-label", displayName + " 的" + FIELD_LABELS[field] + "（" + row.role + "）");
+    input.setAttribute("aria-describedby", id + "-hint " + id + "-error");
+    input.addEventListener("focus", ensureCatalog);
+    if (field === "model") {
+      // 原生 input+datalist 保留任意已保存ID与目录为空时的输入能力；绝不以第一候选替换历史值。
+      input.type = "text"; input.maxLength = 200; input.spellcheck = false; input.autocomplete = "off"; input.setAttribute("list", "model-options");
+      input.value = editorDraft().value(row.role, field) ?? "";
+    }
+    container.append(input);
+    const hint = node("p", "row-hint"); hint.id = id + "-hint"; container.append(hint);
+    const error = node("p", "row-error"); error.id = id + "-error"; error.hidden = true; container.append(error);
+    input.addEventListener(field === "model" ? "input" : "change", () => {
+      editorDraft().set(row.role, field, input.value || null);
+      // 只刷新推导的候选、来源和状态；不重建正编辑的input，避免丢失光标和输入法组合。
+      refreshFieldDisplays(); updateBatchEfforts(); setControls();
+    });
+    return container;
+  }
+  function refreshFieldDisplays() {
+    for (const root of document.querySelectorAll("[data-row]")) {
+      const row = editorDraft().row(root.dataset.row); if (!row) continue;
+      root.classList.toggle("is-dirty", editorDraft().edits.has(row.role));
+      for (const field of FIELDS) {
+        const input = root.querySelector('[data-field="' + field + '"]');
+        const resolved = resolvedField(editorDraft(), row.role, field, preferenceMode());
+        const current = editorDraft().value(row.role, field);
+        const hint = $(input.id + "-hint"), error = $(input.id + "-error");
+        if (field === "model") {
+          input.placeholder = resolved.pending ? "继承值待预览" : (resolved.value || "宿主默认") + " · 继承";
+          const known = modelCandidates(active.context, currentCatalog(), preferenceMode()).some(item => item.id === current);
+          hint.textContent = "来源：" + resolved.source + (current && !known ? " · 当前值未列出，原值保留" : "") + (!current ? " · 留空继承" : "");
+        } else {
+          const options = fillEfforts(input, current, effectiveDraftModel(row.role));
+          input.options[0].textContent = editorCaps().effort === false ? "不支持独立推理" : resolved.pending ? "继承值待预览" : (resolved.value || "宿主默认") + " · 继承";
+          const effectiveEffort = current || (!resolved.pending ? resolved.value : null);
+          const incompatible = Boolean(effectiveEffort && (editorCaps().effort === false || options.verified && !options.values.includes(effectiveEffort)));
+          error.textContent = incompatible ? "已有推理值与当前模型不兼容；请重选或清除。原值已保留。" : "";
+          error.hidden = !incompatible; input.setAttribute("aria-invalid", String(incompatible));
+          hint.textContent = editorCaps().effort === false ? "当前平台不支持独立推理；已有值可显式清除" : "来源：" + resolved.source + (!options.verified ? " · 模型能力未核实" : "");
+        }
+      }
+      rowState(row, root.querySelector(".state-cell"));
     }
   }
   function renderRows() {
-    const body = $("agent-rows"); body.replaceChildren();
-    const rows = editorRows() || [];
+    const body = $("agent-rows"); body.replaceChildren(); $("default-settings").replaceChildren();
+    const rows = visibleRows();
+    const defaultRow = preferenceMode() ? editorDraft().row("*") : null;
+    $("default-settings").hidden = !defaultRow;
+    if (defaultRow) {
+      const root = $("default-settings"); root.dataset.row = "*";
+      const name = node("div", "default-name"); name.append(node("h3", "", "通用默认"), node("p", "help", "未设置的 Agent 按来源继承"));
+      const state = node("div", "state-cell default-status");
+      root.append(name, fieldControl(defaultRow, "model", "default"), fieldControl(defaultRow, "effort", "default"), state);
+    } else delete $("default-settings").dataset.row;
+    $("agent-count").textContent = String(rows.length);
+    $("agent-table").hidden = !rows.length;
+    $("batch-toggle").hidden = !rows.some(writable);
+    if (!rows.some(writable)) { $("batch-panel").hidden = true; $("batch-toggle").setAttribute("aria-expanded", "false"); }
     $("empty-state").hidden = rows.length > 0;
-    $("empty-state").textContent = loading ? "正在读取当前平台的 Agent…" : active.context ? "当前范围未发现 Agent。可重新读取或载入其他项目。" : "配置尚未载入。请检查连接或项目路径后重新读取。";
+    $("empty-state").textContent = loading ? "正在读取当前平台的 Agent…" : active.context ? preferenceMode() ? "未发现独立调用身份。仍可在上方编辑通用默认。" : "当前范围未发现原生定义；可返回调用偏好，或载入所属项目。" : "配置尚未载入。请在诊断中重新读取，或检查项目路径。";
     rows.forEach((row, index) => {
-      const tr = node("tr", editorDraft().edits.has(row.role) ? "is-dirty" : "");
-      const selection = node("td", "selection-cell");
-      const selectLabel = node("label"); const checkbox = node("input"); checkbox.type = "checkbox";
-      checkbox.dataset.agent = row.role; checkbox.setAttribute("aria-label", "选择 " + row.role);
-      checkbox.checked = editorDraft().selected.has(row.role);
+      const tr = node("tr"); tr.dataset.row = row.role;
+      const identity = node("th"); identity.scope = "row";
+      const label = node("label", "identity-label"); const checkbox = node("input"); checkbox.type = "checkbox"; checkbox.dataset.agent = row.role;
+      checkbox.setAttribute("aria-label", "选择 " + row.role); checkbox.checked = editorDraft().selected.has(row.role);
       checkbox.addEventListener("change", () => { checkbox.checked ? editorDraft().selected.add(row.role) : editorDraft().selected.delete(row.role); updateBatchEfforts(); setControls(); });
-      selectLabel.append(checkbox); selection.append(selectLabel); tr.append(selection);
-      const displayName = typeof row.name === "string" && row.name ? row.name : row.role;
-      const nameCell = node("td"); nameCell.append(node("strong", "agent-name", displayName));
-      const meta = node("div", "row-meta");
-      meta.append(node("span", "", "范围：" + (typeof row.scope === "string" ? sourceLabel(row.scope) : sourceLabel(active.location.scope))));
-      meta.append(node("span", "", "来源：" + (typeof row.origin === "string" ? sourceLabel(row.origin) : "未提供")));
-      meta.append(node("span", "", row.writable === true ? "可编辑" : row.writable === false ? "只读" : "写入权限未知"));
-      if (typeof row.invoke_name === "string") meta.append(node("span", "", "调用名：" + row.invoke_name));
-      if (typeof row.native_name === "string" && row.native_name !== displayName) meta.append(node("span", "", "原生名称：" + row.native_name));
-      if (row.shadowed_by) meta.append(node("span", "", "遮蔽来源 ID：" + String(row.shadowed_by)));
-      if (typeof row.definition_status === "string") meta.append(node("span", "", "定义状态：" + (DEFINITION_LABELS[row.definition_status] || row.definition_status)));
-      if (typeof row.source_path === "string") meta.append(node("span", "", "文件：" + row.source_path));
-      if (!writable(row)) meta.append(node("span", "", readOnlyReason(row)));
-      nameCell.append(meta); tr.append(nameCell);
-      for (const field of FIELDS) {
-        const td = node("td"); const id = "agent-" + index + "-" + field;
-        const label = node("label", "cell-label", FIELD_LABELS[field]); label.htmlFor = id; td.append(label);
-        const input = node(field === "model" ? "input" : "select"); input.id = id; input.dataset.agent = row.role; input.dataset.field = field;
-        input.setAttribute("aria-label", displayName + " 的" + FIELD_LABELS[field] + "（" + row.role + "）");
-        input.setAttribute("aria-describedby", id + "-hint");
-        input.addEventListener("focus", ensureCatalog);
-        if (field === "model") { input.type = "text"; input.maxLength = 200; input.spellcheck = false; input.autocomplete = "off"; input.setAttribute("list", "model-options"); input.placeholder = followLabel(); input.value = editorDraft().value(row.role, field) ?? ""; }
-        else fillEfforts(input, editorDraft().value(row.role, field), effectiveDraftModel(row.role));
-        input.addEventListener(field === "model" ? "input" : "change", () => {
-          editorDraft().set(row.role, field, input.value === "" ? null : input.value);
-          tr.classList.toggle("is-dirty", editorDraft().edits.has(row.role));
-          if (field === "model") updateRowEffort(tr, row);
-          updateBatchEfforts(); setControls();
-        });
-        td.append(input);
-        const hint = node("p", "row-hint"); hint.id = id + "-hint"; td.append(hint);
-        tr.append(td);
-      }
-      const stateCell = node("td"); stateCell.append(node("span", "cell-label", "已保存定义值 / 状态"));
-      const values = node("div", "effective-value");
-      for (const field of FIELDS) values.append(node("span", "", FIELD_LABELS[field] + "：本层 " + (row.overrides[field] ?? "未配置") + "；解析 " + (row.effective[field] === undefined ? preferenceMode() ? "宿主默认" : "未知" : fieldValue(row.effective[field])) + " · " + sourceLabel(row.sources[field])));
-      stateCell.append(values);
-      const status = row.dispatch_ready === false ? "派发受阻" : row.dispatch_ready === true ? "可生成派发参数 · 运行未验证" : "派发状态未知";
-      stateCell.append(node("p", "row-hint state-label" + (row.dispatch_ready === false ? " blocked" : ""), status));
-      if (row.blocked_reason) stateCell.append(node("p", "blocked-reason", String(row.blocked_reason)));
-      if (object(row.per_invocation) && row.per_invocation.ready === false) {
-        stateCell.append(node("p", "blocked-reason", "可选的单次调用覆盖受阻；不代表原生定义不可写。"));
-        if (row.per_invocation.blocked_reason) stateCell.append(node("p", "blocked-reason", String(row.per_invocation.blocked_reason)));
-      }
-      if (preferenceMode()) {
-        meta.append(node("span", "", row.target === "*" ? "默认目标（不是原生 Agent）" : row.discovered ? "已发现身份；调用工具仍须核实" : "历史身份未发现；仅管理偏好，不据此派发"));
-        stateCell.querySelector(".state-label").textContent = "已保存基线／继承结果 · 后续派发读取 · 实际运行未验证";
-      }
-      tr.append(stateCell); body.append(tr); updateRowEffort(tr, row);
+      label.append(checkbox,node("strong", "", preferenceMode() ? row.role : row.name || row.role)); identity.append(label);
+      identity.append(node("p", "row-hint", sourceLabel(row.origin) + " · " + (writable(row) ? "可编辑" : "只读") + (preferenceMode() && !row.discovered ? " · 历史身份未发现" : "")));
+      const details = node("details", "row-details"); details.append(node("summary", "", "身份与来源详情"));
+      for (const [caption,value] of [["稳定身份",row.role],["调用名",row.invoke_name],["原生名称",row.native_name],["文件",row.source_path],["范围",sourceLabel(row.scope || active.location.scope)],["定义状态",DEFINITION_LABELS[row.definition_status] || row.definition_status],["遮蔽来源",row.shadowed_by]]) if (value) details.append(node("p", "", caption + "：" + value));
+      if (!writable(row)) details.append(node("p", "", readOnlyReason(row)));
+      if (row.per_invocation?.blocked_reason) details.append(node("p", "", "单次调用覆盖：" + row.per_invocation.blocked_reason));
+      identity.append(details); tr.append(identity);
+      for (const field of FIELDS) { const td = node("td"); td.append(fieldControl(row, field, index)); tr.append(td); }
+      const state = node("td", "state-cell"); tr.append(state); body.append(tr);
     });
+    refreshFieldDisplays();
   }
-  function updateRowEffort(tr, row) {
-    const input = tr.querySelector('[data-field="model"]'), select = tr.querySelector('[data-field="effort"]');
-    const options = fillEfforts(select, editorDraft().value(row.role, "effort"), effectiveDraftModel(row.role));
-    const current = editorDraft().value(row.role, "effort");
-    document.getElementById(select.id + "-hint").textContent = current && options.verified && !options.values.includes(current) ? "已有推理值与当前模型不兼容；保留原值，请重选或清除后预览。" : options.note;
-    const known = modelCandidates(active.context, currentCatalog(), preferenceMode()).some(item => item.id === input.value);
-    document.getElementById(input.id + "-hint").textContent = !input.value ? preferenceMode() ? "留空移除本层模型；继承结果以服务端预览为准。" : "留空删除原生字段，恢复宿主默认。" : known ? "目录候选或工具合同值；来源见本机目录说明。" : "当前值不在已读取目录中，保留为未知值；预览时由服务端校验。";
+  function announceSwitch() {
+    clearTimeout(switchNoticeTimer);
+    const count = [...drafts.values()].reduce((total, draft) => total + draft.count + draft.preferences.count + (draft.activation.dirty ? 1 : 0), 0);
+    $("switch-status").textContent = describeLocation(active.location) + " · " + kindName() + (count ? "。共 " + count + " 项草稿已按平台、范围与事务保留。" : "");
+    $("switch-status").hidden = false;
+    // 只隐藏可推导的导航回执；错误、保存结果和底部当前事务始终可定位。
+    switchNoticeTimer = setTimeout(() => { $("switch-status").hidden = true; }, 4000);
   }
   function render() {
     const location = active.location;
-    for (const tab of document.querySelectorAll("[data-host]")) {
-      const selected = tab.dataset.host === location.host;
-      tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1;
-    }
+    for (const tab of document.querySelectorAll("[data-host]")) { const selected = tab.dataset.host === location.host; tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1; }
     $("config-panel").setAttribute("aria-labelledby", "tab-" + location.host);
     for (const radio of document.querySelectorAll("input[name=scope]")) radio.checked = radio.value === location.scope;
-    $("editor-title").textContent = location.scope === "global" ? "用户级配置" : "当前项目配置";
+    for (const nav of document.querySelectorAll("[data-section]")) { if (nav.dataset.section === section) nav.setAttribute("aria-current", "page"); else nav.removeAttribute("aria-current"); }
+    for (const name of ["models","activation","diagnostics"]) $("section-" + name).hidden = section !== name;
     $("scope-location").textContent = describeLocation(location);
-    $("context-summary").textContent = loading ? "正在读取配置…" : active.context ? HOST_LABELS[location.host] + " · " + active.context.roles.length + " 个原生定义 · " + (active.context.dispatch_preferences?.targets.filter(writable).length || 0) + " 个可编辑调用偏好目标" : "尚未载入配置";
-    $("inherit-help").textContent = preferenceMode() ? "调用偏好字段留空移除本层覆盖，继承上层；* 是通用默认目标，不是原生 Agent。" : "原生字段留空会清除完整定义的对应字段；宿主决定默认值与同名来源优先级。";
-    for (const radio of document.querySelectorAll("input[name=editor-mode]")) radio.checked = radio.value === editorMode;
+    $("scope-subtitle").textContent = location.scope === "global" ? "此平台的所有项目默认使用" : "仅此项目覆盖 · 其他项目继承用户级";
+    $("editor-title").textContent = preferenceMode() ? "模型与推理" : "原生定义文件";
+    $("context-summary").textContent = loading ? "正在读取配置…" : preferenceMode() ? "为后续派发设置偏好，未设置的字段按来源继承。" : "完整定义独立保存，宿主规则决定优先级。";
+    $("inherit-help").textContent = preferenceMode() ? "* 是通用默认目标，不是原生 Agent；清除覆盖后若上层值被遮蔽，由真实预览解析。" : "原生字段留空只删除对应字段；宿主决定默认值与同名来源优先级。";
+    $("editing-help").textContent = preferenceMode() ? "用户通用 → 用户该 Agent → 项目通用 → 项目该 Agent。完整原生定义可能按宿主规则优先。" : "每份原生文件是完整定义；其他范围和插件缓存只读。";
     $("preference-location").textContent = preferenceMode() && active.context?.dispatch_preferences?.source_path ? "偏好保存位置：" + active.context.dispatch_preferences.source_path : "";
-    $("editing-help").textContent = preferenceMode() ? "调用偏好：用户通用 → 用户该 Agent → 项目通用 → 项目该 Agent。留空只移除本层字段；完整原生定义可能按宿主规则优先。" : "原生文件：每份文件为完整定义；插件缓存保持只读。调用偏好可在另一入口独立管理。";
+    $("save-result").textContent = active.lastSave;
+    $("technical-location").textContent = describeLocation(location) + " · revision " + (active.context?.revision || "未读取") + " · 目录来源 " + (active.context?.catalog_source_stamp || "未确认");
+    $("native-heading").hidden = preferenceMode(); $("advanced-entry").hidden = !preferenceMode();
+    $("list-title").firstChild.textContent = preferenceMode() ? "逐 Agent 覆盖 " : "原生定义 ";
     $("native-readonly-summary").hidden = preferenceMode() || editorRows().some(writable);
-    updateBatchEfforts();
-    renderModels(); renderCapabilities(); renderDiagnostics(); renderActivation(); renderRows(); setControls();
+    renderModels(); renderCapabilities(); renderDiagnostics(); renderActivation(); renderRows(); updateBatchEfforts(); setControls();
   }
   function validProject(path) {
     // 这里只做输入反馈；真实路径权限、链接身份和存在性仍由服务端权威检查。
@@ -651,23 +729,32 @@
     if (!drafts.has(key)) drafts.set(key, new Draft(location));
     active = drafts.get(key);
     if (location.scope === "project") $("project-path").value = location.project;
-    message(""); loadContext();
+    message(""); loadContext(); announceSwitch();
   }
-  function askDecision(kind, action) {
+  function askDecision(action) {
     decision = action; decisionTrigger = document.activeElement;
-    $("draft-dialog-title").textContent = kind === "discard" ? "放弃当前草稿？" : "保留当前草稿？";
-    $("draft-dialog-description").textContent = kind === "discard" ? "当前范围的未保存更改将被丢弃，已保存的配置不会改变。" : "当前范围有未保存更改。切换后草稿会保留，返回此范围可以继续编辑。";
-    $("confirm-decision").textContent = kind === "discard" ? "放弃草稿" : "保留草稿并切换";
-    $("cancel-decision").textContent = kind === "discard" ? "继续编辑" : "留在这里";
+    $("confirm-decision").textContent = "放弃草稿";
+    $("cancel-decision").textContent = "继续编辑";
     $("draft-dialog").showModal(); $("cancel-decision").focus();
+  }
+  function restoreDecisionFocus() {
+    const operable = control => control?.isConnected && !control.disabled && control.getClientRects().length > 0;
+    if (operable(decisionTrigger)) { decisionTrigger.focus(); return; }
+    // 确认放弃会清空当前事务并重绘，原“放弃”按钮随之禁用。
+    // 原生 dialog 的返回焦点不能保证这一步之后仍可操作，因此回到当前事务的真实编辑控件；
+    // 取消/Esc 没有清草稿，仍优先保留有效的原触发器，不改变用户键盘位置。
+    const candidates = section === "activation" ? [$("activation-state")] :
+      [...document.querySelectorAll("#section-models [data-field='model']")];
+    const target = candidates.find(operable) ||
+      [...document.querySelectorAll("[data-section][aria-current='page']")].find(operable);
+    target?.focus();
   }
   function requestSwitch(location) {
     if (mutation || locationKey(location) === locationKey(active.location)) { render(); return; }
     if (location.scope === "project" && !validProject(location.project)) {
       render(); message("请填写不含 .. 的项目绝对路径，再点击“载入项目”。", "error"); $("project-path").focus(); return;
     }
-    if (active.anyDirty) { render(); askDecision("switch", () => switchTo(location)); }
-    else switchTo(location);
+    switchTo(location);
   }
   function ensureCatalog() {
     if (!currentCatalog() && active.catalogAttempt !== (active.context?.catalog_source_stamp || active.context?.revision)) refreshCatalog();
@@ -703,7 +790,7 @@
       message(error.message + " " + draft.catalogFailure, "error");
     } finally { if (catalogOwner.current(ticket) && active === draft) { refreshing = false;
       renderModels(); renderCapabilities(); renderActivation();
-      for (const tr of $("agent-rows").children) { const id = tr.querySelector('[data-field="model"]')?.dataset.agent; const row = editorDraft().row(id); if (row) updateRowEffort(tr, row); }
+      refreshFieldDisplays();
       updateBatchEfforts(); setControls();
     } }
   }
@@ -725,9 +812,10 @@
         item.append(node("p", "help", change.after === "inherit" ? "仅移除本层覆盖；Claude 项目仍可能继承共享项目设置。" : change.after === "disabled" ? "停用写入本层配置；当前会话已经加载的上下文不会因此清除。" : "启用写入本层配置；宿主信任、启动参数和托管策略仍由宿主决定。"));
         changes.append(item); continue;
       }
-      const row = (preferences ? active.preferences : active).row(change.role);
-      const item = node("section", "change-item"); item.append(node("h3", "", (row?.name || change.role) + " · " + FIELD_LABELS[change.field]));
-      if (row) item.append(node("p", "help", sourceLabel(row.origin) + " · " + sourceLabel(row.scope) + " · " + change.role));
+      const identity = preferences ? change.target : change.role;
+      const row = (preferences ? active.preferences : active).row(identity);
+      const item = node("section", "change-item"); item.append(node("h3", "", (row?.name || identity) + " · " + FIELD_LABELS[change.field]));
+      if (row) item.append(node("p", "help", sourceLabel(row.origin) + " · " + sourceLabel(row.scope) + " · " + identity));
       const values = node("div", "change-values");
       for (const [label, raw] of [["保存前", change.before], ["保存后", change.after]]) {
         const part = node("div"); part.append(node("small", "", label), node("span", "", fieldValue(raw))); values.append(part);
@@ -758,13 +846,17 @@
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
     if (!active.context || mutation || loading) return;
+    if (!activation) {
+      const invalid = [...document.querySelectorAll("#section-models [aria-invalid='true']")].find(control => !control.disabled);
+      if (invalid) { message("推理值与当前模型不兼容，请重选或清除后再预览。", "error"); invalid.focus(); return; }
+    }
     const intendedDraft = active;
     if (!activation && active.catalog && !currentCatalog()) {
       // 草稿可能在启停保存或外部配置变化前已完成编辑；直接点预览也必须先更新能力来源。
       // 这是用户触发的按需读取，不放进 render；目录失败不能借旧候选继续生成计划。
       await refreshCatalog();
       // 读取目录期间可切换范围或编辑入口；原预览意图不能晚到并应用到另一个范围。
-      if (active !== intendedDraft || editorMode !== kind || mutation || loading) return;
+      if (active !== intendedDraft || editorMode !== kind || section !== "models" || mutation || loading) return;
       if (!currentCatalog()) { message("当前模型目录来源未确认；草稿已保留，请刷新目录成功后再预览。", "error"); return; }
     }
     if (active.conflicted || (activation && (!active.activation.dirty || active.activation.saved?.writable !== true))) return;
@@ -791,7 +883,7 @@
   function restorePreviewFocus() {
     // 冲突/部分失败后原预览按钮会禁用，焦点应回到可继续恢复的重新读取入口。
     if (dialogTrigger?.isConnected && !dialogTrigger.disabled) dialogTrigger.focus();
-    else $("reload-context").focus();
+    else { section = "diagnostics"; render(); $("reload-context").focus(); }
   }
   function renderSaveDetails(result, draft) {
     const details = $("apply-results"); details.replaceChildren();
@@ -850,6 +942,8 @@
     const failed = Boolean(error) || applyFailed(result);
     if (result.context) draft.accept(result.context, failed ? false : kind);
     draft.conflicted = failed || !result.context; preview = null;
+    draft.lastSave = failed ? "保存未完整确认 · 逐项收据已保留" : "已保存 · 实际运行未验证";
+    draft.receipt = {result, error};
     renderSaveDetails(result, draft);
     const reportedSaved = result.saved === true && result.effect.saved !== false && !result.partial_failure && (result.results || []).every(row => row.status === "saved");
     const mixed = !error && reportedSaved && own(result, "error");
@@ -875,10 +969,12 @@
         // 原生文件已完成发布而回读失败是独立结果，不能把已知保存成功降级成“请求失败”，
         // 也不能清空旧基线上的草稿后继续编辑；先保留逐项收据，再要求重新读取。
         plan.draft.conflicted = true; preview = null;
+        plan.draft.receipt = {result};
         renderSaveDetails(result, plan.draft);
         message("原生文件已保存，但配置回读失败。草稿暂时保留，请保留逐项结果并在关闭预览后重新读取。" + reload + "；实际运行未验证。", "warning", $("apply-feedback"));
       } else {
         plan.draft.accept(result.context, plan.kind);
+        plan.draft.lastSave = "已保存 · " + reload + " · 实际运行未验证";
         const gap = result.temporary_visibility_gap === true ? " · 文件曾有短暂可见性缺口" : "";
         message((plan.kind === "workflow_activation" ? "工作流启停已保存；其他草稿已保留" : plan.kind === "dispatch_preferences" ? "调用偏好已保存；原生字段与启停草稿已保留" : "原生字段已保存；调用偏好与启停草稿已保留") + " · " + reload + gap + " · 实际运行未验证。", "success");
         preview = null; $("preview-dialog").close(); render();
@@ -887,6 +983,7 @@
       // apply 的计划可能已被服务端消费，网络失败不能重发旧 ID 或伪报保存失败。
       // 保留草稿，关闭后重新读取、重新预览；409 也必须用新 revision 形成新计划。
       preview = null; plan.draft.conflicted = true;
+      plan.draft.lastSave = "保存结果未确认 · 请重新读取并核对收据";
       if (error.receipt) showApplyAttention(error.receipt, plan.draft, error, plan.kind);
       else message(error.message + " 保存结果未确认；草稿已保留。请关闭预览，重新读取配置后再预览。", "error", $("apply-feedback"));
     } finally {
@@ -909,29 +1006,45 @@
   }
   for (const radio of document.querySelectorAll("input[name=scope]")) radio.addEventListener("change", () => requestSwitch({ host: active.location.host, scope: radio.value, ...(radio.value === "project" ? { project: $("project-path").value.trim() } : {}) }));
   $("project-form").addEventListener("submit", event => { event.preventDefault(); requestSwitch({ host: active.location.host, scope: "project", project: $("project-path").value.trim() }); });
-  for (const radio of document.querySelectorAll("input[name=editor-mode]")) radio.addEventListener("change", () => {
-    editorMode = radio.value; render(); message("编辑入口已切换；调用偏好、原生字段与启停草稿分别保留、分别预览保存。");
-  });
-  $("reload-context").addEventListener("click", () => {
+  for (const nav of document.querySelectorAll("[data-section]")) nav.addEventListener("click", () => { section = nav.dataset.section; render(); announceSwitch(); });
+  function setEditorMode(mode) { editorMode = mode; render(); announceSwitch(); }
+  $("open-native").addEventListener("click", () => setEditorMode("model"));
+  $("back-preferences").addEventListener("click", () => setEditorMode("dispatch_preferences"));
+  $("batch-toggle").addEventListener("click", () => { $("batch-panel").hidden = !$("batch-panel").hidden; $("batch-toggle").setAttribute("aria-expanded", String(!$("batch-panel").hidden)); });
+  function reloadContext() {
     // context 内的来源指纹决定缓存是否仍有效；相同来源复用，变化只失效目录，不碰草稿。
     catalogOwner.cancel(); refreshing = false; active.catalogAttempt = null; loadContext();
+  }
+  $("reload-context").addEventListener("click", reloadContext);
+  $("recovery-context").addEventListener("click", reloadContext);
+  $("view-receipt").addEventListener("click", () => {
+    if (!active.receipt || mutation) return;
+    dialogTrigger = document.activeElement; preview = null;
+    $("preview-title").textContent = "保存收据与恢复资料";
+    $("preview-location").textContent = describeLocation(active.location);
+    $("preview-changes-list").replaceChildren(); $("preview-warnings").hidden = true; $("preview-activation-recovery").hidden = true;
+    message("原始保存收据已保留；本页仅展示恢复路径，不根据路径自动回滚或清理。", "info", $("preview-status"));
+    message("", "info", $("apply-feedback"));
+    renderSaveDetails(active.receipt.result, active);
+    $("preview-effect").textContent = "此处展示服务端原始保存与恢复收据。文件保存、宿主加载与实际运行分别核实；本页不根据路径自动恢复或清理文件。";
+    $("confirm-apply").disabled = true; $("cancel-preview").textContent = "关闭结果";
+    $("preview-dialog").showModal(); $("preview-title").focus();
   });
   $("refresh-catalog").addEventListener("click", refreshCatalog);
   $("activation-state").addEventListener("change", () => { active.activation.set($("activation-state").value); renderActivation(); setControls(); });
-  $("preview-activation").addEventListener("click", () => openPreview(false, "workflow_activation"));
-  $("discard-activation").addEventListener("click", () => {
-    askDecision("discard", () => { active.activation.clear(); render(); message("工作流启停草稿已放弃；已保存配置未改变。"); });
-    $("draft-dialog-title").textContent = "放弃工作流启停草稿？";
-    $("draft-dialog-description").textContent = "只放弃当前范围的工作流启停草稿；模型草稿和已保存配置会保留。";
+  $("preview-changes").addEventListener("click", () => openPreview(false, section === "activation" ? "workflow_activation" : editorMode));
+  $("reset-platform").addEventListener("click", () => {
+    for (const row of editorRows().filter(writable)) for (const field of FIELDS) editorDraft().set(row.role, field, null);
+    render(); message("本范围字段已在草稿中清除；预览保存后才记录，其他事务保留。");
   });
-  $("preview-changes").addEventListener("click", () => openPreview());
-  $("reset-platform").addEventListener("click", () => openPreview(true));
   $("discard-draft").addEventListener("click", () => {
-    askDecision("discard", () => { editorDraft().clear(); render(); message("当前编辑入口草稿已放弃；其他两类草稿和已保存配置已保留。"); });
-    $("draft-dialog-title").textContent = preferenceMode() ? "放弃调用偏好草稿？" : "放弃原生字段草稿？";
-    $("draft-dialog-description").textContent = "只放弃当前编辑入口的模型与推理字段草稿；其他两类草稿和已保存配置会保留。";
+    const activation = section === "activation";
+    const draft = activation ? active.activation : editorDraft();
+    askDecision(() => { draft.clear(); render(); message("当前事务草稿已放弃；其他事务和已保存配置保留。"); });
+    $("draft-dialog-title").textContent = "放弃" + kindName() + "草稿？";
+    $("draft-dialog-description").textContent = "只放弃当前平台、范围与事务的草稿；其他草稿和已保存配置保留。";
   });
-  $("select-all").addEventListener("change", () => { editorDraft().selected = new Set($("select-all").checked ? editorRows().filter(writable).map(row => row.role) : []); renderRows(); updateBatchEfforts(); setControls(); });
+  $("select-all").addEventListener("change", () => { editorDraft().selected = new Set($("select-all").checked ? visibleRows().filter(writable).map(row => row.role) : []); renderRows(); updateBatchEfforts(); setControls(); });
   for (const id of ["batch-model-enabled", "batch-effort-enabled"]) $(id).addEventListener("change", () => {updateBatchEfforts(); setControls();});
   $("batch-model").addEventListener("input", updateBatchEfforts);
   $("batch-model").addEventListener("focus", ensureCatalog);
@@ -947,9 +1060,9 @@
   for (const id of ["close-preview", "cancel-preview"]) $(id).addEventListener("click", closePreview);
   $("confirm-apply").addEventListener("click", applyPreview);
   $("preview-dialog").addEventListener("cancel", event => { event.preventDefault(); closePreview(); });
-  $("cancel-decision").addEventListener("click", () => { decision = null; $("draft-dialog").close(); decisionTrigger?.focus(); });
-  $("confirm-decision").addEventListener("click", () => { const action = decision; decision = null; $("draft-dialog").close(); action?.(); if (decisionTrigger?.isConnected) decisionTrigger.focus(); });
-  $("draft-dialog").addEventListener("cancel", event => { event.preventDefault(); decision = null; $("draft-dialog").close(); decisionTrigger?.focus(); });
+  $("cancel-decision").addEventListener("click", () => { decision = null; $("draft-dialog").close(); restoreDecisionFocus(); });
+  $("confirm-decision").addEventListener("click", () => { const action = decision; decision = null; $("draft-dialog").close(); action?.(); restoreDecisionFocus(); });
+  $("draft-dialog").addEventListener("cancel", event => { event.preventDefault(); decision = null; $("draft-dialog").close(); restoreDecisionFocus(); });
   for (const dialog of [$("preview-dialog"), $("draft-dialog")]) dialog.addEventListener("keydown", event => {
     if (event.key !== "Tab") return;
     // 原生 dialog 已负责背景 inert；补齐首尾 Tab 循环，防止浏览器把焦点送到文档 body。
@@ -967,6 +1080,6 @@
   window.addEventListener("beforeunload", event => {
     if ([...drafts.values()].some(draft => draft.anyDirty) || mutation) { event.preventDefault(); event.returnValue = ""; }
   });
-  window.addEventListener("pagehide", () => { loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
+  window.addEventListener("pagehide", () => { clearTimeout(switchNoticeTimer); loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
   switchTo({ host: initialHost, scope: initialProject ? "project" : "global", ...(initialProject ? { project: initialProject } : {}) });
 })();

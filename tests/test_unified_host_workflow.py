@@ -384,7 +384,7 @@ TASK6_SHARED_BOOTSTRAP_ANCHORS = (
 )
 
 TASK6_DETAILED_SKILL_MATRIX = {
-    "platforms/shared/skills/grill-me/SKILL.md": (
+    "platforms/shared/skills/xy-workflow/references/requirements-intake.md": (
         "coverage_check",
         "full_interview",
         "ready_for_planning",
@@ -441,7 +441,7 @@ LIGHTWEIGHT_SKILL_POLICY_SOURCES = (
 
 LIGHTWEIGHT_SKILL_POLICY_ANCHORS = (
     "external_workflow_policy:",
-    "requirements_provider: grill-me",
+    "requirements_provider: xy-grilling",
     "planning_provider: xy-plan",
     "planning_methodology: superpowers-writing-plans-adapted",
     "superpowers_default: disabled",
@@ -1725,7 +1725,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
         self.assertIn("selected:", schema)
         self.assertIn("capability_evidence:", schema)
 
-    def test_full_work_uses_self_contained_grill_and_draft_planning_before_approval(self) -> None:
+    def test_full_work_uses_bundled_grilling_and_draft_planning_before_approval(self) -> None:
         """Full 前置链必须跨事实源一致，且 QA 前不得污染正式项目真相。"""
 
         sources = (
@@ -1751,28 +1751,31 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                     self.assertIn(anchor, body)
 
         for relative in (
-            "product/WORKFLOW.md",
-            "product/GLOBAL_CONSTRAINTS.md",
+            "product/WORKFLOW.md", "product/GLOBAL_CONSTRAINTS.md",
             "platforms/shared/skills/xy-workflow/SKILL.md",
-            "platforms/shared/skills/grill-me/SKILL.md",
         ):
             with self.subTest(source=relative):
-                self.assertNotIn("/grilling", self._text(relative))
+                self.assertIn("grilling", self._text(relative))
+                self.assertNotIn("grill-me` is this pack's self-contained", self._text(relative))
 
-    def test_planning_and_grilling_skills_are_self_contained_core_sources(self) -> None:
-        """运行时不能再次依赖用户机器上的 Superpowers 或缺失二级原语。"""
-
-        manifest = {
-            line.strip()
-            for line in self._text("platforms/shared/core-skills.txt").splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        }
-        self.assertIn("grill-me", manifest)
-        self.assertIn("xy-plan", manifest)
-
-        grill = self._text("platforms/shared/skills/grill-me/SKILL.md")
+    def test_planning_is_core_and_grilling_is_a_bundled_upstream_primitive(self) -> None:
+        """内部规划与第三方原版分离，不能通过伪本地Grill Me隐藏二级primitive。"""
+        from lib.skills.role_skills import CORE_SKILLS, PM_SKILLS, SELECTED_SKILLS
+        self.assertNotIn("grill-me", CORE_SKILLS)
+        self.assertEqual({"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}, set(SELECTED_SKILLS))
+        self.assertEqual(("xy-grilling",), PM_SKILLS)
+        self.assertIn("xy-plan", CORE_SKILLS)
+        canonical = PACK / "third_party/selected-skills/grill-me/skills/productivity"
+        entry = (canonical / "grill-me/SKILL.md").read_text(encoding="utf-8")
+        primitive = (canonical / "grilling/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("disable-model-invocation: true", entry)
+        self.assertIn("grilling", entry)
+        self.assertIn("frontier", primitive)
+        intake = self._text("platforms/shared/skills/xy-workflow/references/requirements-intake.md")
+        self.assertIn("grill_result:", intake)
+        self.assertIn("不是上游 Grill Me 的 schema", intake)
+        self.assertNotIn("grill_result", entry + primitive)
         plan = self._text("platforms/shared/skills/xy-plan/SKILL.md")
-        self.assertNotIn("/grilling", grill)
         self.assertNotIn("subagent-driven-development", plan)
         self.assertNotIn("executing-plans", plan)
         self.assertIn("methodology_reference: superpowers-writing-plans", plan)
@@ -1784,7 +1787,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
         # 四个共享 Skill 分别产生需求覆盖、记忆、计划和运行时编排数据。这里锁定的只是
         # 展示边界：结构本身仍然存在，PM 对用户只投影自然语言结论，避免误删调度能力。
         skill_expectations = {
-            "platforms/shared/skills/grill-me/SKILL.md": (
+            "platforms/shared/skills/xy-workflow/references/requirements-intake.md": (
                 "Internal PM record",
                 "must not emit the raw `grill_result` YAML",
             ),
@@ -1812,7 +1815,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                     self.assertIn(anchor, body)
 
         # 输出优化不能删除内部真值；这些字段和 CLI 仍然必须存在并保持可调度。
-        self.assertIn("grill_result:", self._text("platforms/shared/skills/grill-me/SKILL.md"))
+        self.assertIn("grill_result:", self._text("platforms/shared/skills/xy-workflow/references/requirements-intake.md"))
         self.assertIn(
             "memory_context:",
             self._text("platforms/shared/skills/xy-project-memory/SKILL.md"),
@@ -7158,77 +7161,16 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
                 self.assertFalse((project / forbidden).exists(), forbidden)
 
     def test_fresh_ui_profile_adds_only_the_minimal_prototype_workspace(self) -> None:
+        """新项目仅种下项目可维护CSS，通用查看器由插件的派生评审包提供。"""
         temporary, project, pack = self.make_docs_profile_fixture(ui_enabled=True)
         self.addCleanup(temporary.cleanup)
-
         result = self.run_script(project, "scripts/scaffold_project_docs.sh")
-
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         files, directories = self.docs_inventory(project)
-        self.assertEqual(
-            {
-                Path("docs/PROJECT.md"),
-                Path("docs/standards/prototype/index.html"),
-                Path("docs/standards/prototype/prototype.css"),
-                Path("docs/standards/prototype/workspace.css"),
-                Path("docs/standards/prototype/workspace.js"),
-                Path("docs/standards/prototype/page-shell.js"),
-                Path("docs/standards/prototype/feedback.css"),
-                Path("docs/standards/prototype/feedback.js"),
-            },
-            files,
-        )
-        self.assertEqual(
-            {
-                Path("docs"),
-                Path("docs/standards"),
-                Path("docs/standards/prototype"),
-            },
-            directories,
-        )
-        self.assertEqual(
-            (pack / "templates/prototype/index.html").read_bytes(),
-            (project / "docs/standards/prototype/index.html").read_bytes(),
-        )
-        self.assertEqual(
-            (pack / "templates/prototype/prototype.css").read_bytes(),
-            (project / "docs/standards/prototype/prototype.css").read_bytes(),
-        )
-        # 库存存在不足以证明新入口可用：核对反馈资产原字节，并由夹具中真实
-        # CLI 校验刚发布的空工作区，保持现有路径/脚本/依赖安全检查全部生效。
-        for name in ("feedback.css", "feedback.js"):
-            self.assertEqual((pack / "templates/prototype" / name).read_bytes(),
-                             (project / "docs/standards/prototype" / name).read_bytes())
-        checked = subprocess.run(
-            [sys.executable, str(pack / "lib/documents/validate_prototype_workspace.py"),
-             str(project), "docs/standards/prototype", "--adapter", "agent_workflow/project.yaml", "--json"],
-            cwd=project, capture_output=True, text=True, timeout=30,
-        )
-        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
-        self.assertIn('"pages": []', checked.stdout)
-        index = (project / "docs/standards/prototype/index.html").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('aria-label="Prototype pages"', index)
-        for forbidden in (
-            "prototype-contract",
-            "manifest",
-            "screenshot",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, index.casefold())
-        for forbidden in (
-            "docs/OPERATIONS.md",
-            "docs/design/README.md",
-            "docs/ADR",
-            "docs/notes",
-            "docs/standards/prototype/prototype.js",
-            "docs/standards/prototype/manifest.json",
-            "docs/standards/prototype/screenshots",
-            "docs/standards/prototype/evidence",
-        ):
-            with self.subTest(path=forbidden):
-                self.assertFalse((project / forbidden).exists(), forbidden)
+        self.assertEqual({Path("docs/PROJECT.md"), Path("docs/standards/prototype/prototype.css")}, files)
+        self.assertEqual({Path("docs"), Path("docs/standards"), Path("docs/standards/prototype")}, directories)
+        self.assertEqual((pack / "templates/prototype/prototype.css").read_bytes(),
+                         (project / "docs/standards/prototype/prototype.css").read_bytes())
 
     def test_new_project_templates_use_only_the_reduced_docs_schema(self) -> None:
         for relative in ("templates/project.yaml.example", "project.yaml"):
@@ -7436,41 +7378,48 @@ class UnifiedSetupContractTest(UnifiedHostFixture, unittest.TestCase):
         self.assertEqual(1, target.stat().st_nlink)
         self.assertFalse((project / "docs/features").exists())
 
+    def test_antigravity_prototype_seed_candidates_preserve_empty_and_active_directories(self) -> None:
+        """真实候选入口覆盖归属变化；此节点不冒称旧宿主整条安装链通过。"""
+        from lib.hosts.apply_antigravity_setup import _prototype_candidates
+
+        with tempfile.TemporaryDirectory(prefix="prototype-seeds-") as temporary:
+            root = Path(temporary).resolve()
+            pack, project = root / "pack", root / "project"
+            pack.mkdir()
+            project.mkdir()
+            (pack / "project.yaml").write_text("docs:\n  standards_root: docs/standards\n", encoding="utf-8")
+            css = pack / "templates/prototype/prototype.css"
+            css.parent.mkdir(parents=True)
+            css.write_bytes((PACK / "templates/prototype/prototype.css").read_bytes())
+            prototype = project / "docs/standards/prototype"
+            for state in ("missing", "empty", "active"):
+                with self.subTest(state=state):
+                    if state == "empty":
+                        prototype.mkdir(parents=True)
+                    if state == "active":
+                        (prototype / "index.html").write_bytes(b"user-owned legacy page")
+                    before = {p.relative_to(project): p.read_bytes() for p in project.rglob("*") if p.is_file()}
+                    scaffold, candidates = _prototype_candidates(pack, project, ui_enabled=True)
+                    if state == "active":
+                        self.assertIsNone(scaffold)
+                        self.assertEqual([], candidates)
+                    else:
+                        self.assertEqual(prototype, scaffold.root)
+                        self.assertEqual([(prototype / "prototype.css", css.read_bytes())], candidates)
+                    self.assertEqual(before, {p.relative_to(project): p.read_bytes() for p in project.rglob("*") if p.is_file()})
+            self.assertEqual((None, []), _prototype_candidates(pack, project, ui_enabled=False))
+
     def test_direct_antigravity_ui_setup_scaffolds_exact_minimal_docs_inventory(self) -> None:
+        """直接宿主脚手架遵循同一归属，不再投放独立通用壳副本。"""
         temporary, project, pack = self.make_docs_profile_fixture(ui_enabled=True)
         self.addCleanup(temporary.cleanup)
-
         result = self.run_antigravity_applier(project, pack)
-
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         files, directories = self.docs_inventory(project)
-        self.assertEqual(
-            {
-                Path("docs/PROJECT.md"),
-                Path("docs/standards/prototype/index.html"),
-                Path("docs/standards/prototype/prototype.css"),
-                Path("docs/standards/prototype/workspace.css"),
-                Path("docs/standards/prototype/workspace.js"),
-                Path("docs/standards/prototype/page-shell.js"),
-            },
-            files,
-        )
-        self.assertEqual(
-            {
-                Path("docs"),
-                Path("docs/standards"),
-                Path("docs/standards/prototype"),
-            },
-            directories,
-        )
-        self.assertEqual(
-            (pack / "templates/prototype/index.html").read_bytes(),
-            (project / "docs/standards/prototype/index.html").read_bytes(),
-        )
-        self.assertEqual(
-            (pack / "templates/prototype/prototype.css").read_bytes(),
-            (project / "docs/standards/prototype/prototype.css").read_bytes(),
-        )
+        self.assertEqual({Path("docs/PROJECT.md"), Path("docs/standards/prototype/prototype.css")}, files)
+        self.assertEqual({Path("docs"), Path("docs/standards"), Path("docs/standards/prototype")}, directories)
+        self.assertEqual((pack / "templates/prototype/prototype.css").read_bytes(),
+                         (project / "docs/standards/prototype/prototype.css").read_bytes())
 
     def test_role_refresh_preserves_custom_design_index_without_injecting_unlinked_leaf(self) -> None:
         """重现 kf：已有设计基础及自定义目录，不因角色刷新新增未索引的组件规范。"""

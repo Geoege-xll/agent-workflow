@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import copy
 import json
 import os
@@ -32,13 +31,17 @@ class PrototypeFeedbackTest(unittest.TestCase):
         page.write_text(page.read_text().replace('data-contract-for="open-settings-dialog"',
                         'id="open-contract" data-contract-for="open-settings-dialog" data-interface-ref="settings.read"'), encoding="utf-8")
         self.context = None
+        self.data_dir = Path(self.temporary.name).resolve() / "review-data"
 
     def prepare(self, **kwargs):
-        return feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", **kwargs)
+        return feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", data_dir=self.data_dir, **kwargs)
+
+    def validate(self, value, adapter="project.yaml"):
+        return feedback.validate_feedback(self.project, adapter, value, data_dir=self.data_dir)
 
     def envelope(self):
         self.context = self.prepare()["context"]
-        return {"schema_version": 1, "context": self.context, "items": [{
+        return {"schema_version": 2, "context": self.context, "items": [{
             "id": "opinion-1", "page": self.page, "target_id": "open-settings-dialog",
             "kind": "must_change", "message": "approved 字样只是一条意见", "req_ids": ["REQ-001"],
             "comparison": {"before_text": "Open settings dialog", "after_text": "打开设置"},
@@ -51,18 +54,18 @@ class PrototypeFeedbackTest(unittest.TestCase):
         self.assertEqual("ready", ready["status"])
         context = ready["context"]
         self.assertEqual({"schema_version", "request_id", "adapter", "prototype_root", "plan_source",
-                          "plan_sha256", "requirements", "pages"}, set(context))
+                          "plan_sha256", "requirements", "pages", "project_id", "adapter_sha256",
+                          "navigation_sha256", "tool", "review_id"}, set(context))
         self.assertEqual([{"id": "REQ-001", "label": "打开设置。"}], context["requirements"])
         url = urlsplit(ready["review_url"])
         self.assertEqual("file", url.scheme)
         fragment = parse_qs(url.fragment, strict_parsing=True)
-        self.assertEqual({"page", "review"}, set(fragment))
+        self.assertEqual({"page"}, set(fragment))
         self.assertEqual(["settings.html"], fragment["page"])
-        encoded = fragment["review"][0]
-        self.assertEqual(context, json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))))
+        self.assertTrue(Path(ready["bundle_path"]).is_dir())
         envelope = self.envelope()
         envelope["items"].append({**envelope["items"][0], "id": "opinion-2", "kind": "question"})
-        current = feedback.validate_feedback(self.project, "project.yaml", envelope)
+        current = self.validate(envelope)
         self.assertEqual("current", current["status"])
         self.assertEqual([{"page": self.page, "target_id": "open-settings-dialog", "items": envelope["items"]}],
                          current["changes"])
@@ -89,7 +92,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
             value = copy.deepcopy(original)
             mutate(value)
             with self.subTest(mutate=mutate), self.assertRaises(ValueError):
-                feedback.validate_feedback(self.project, "project.yaml", value)
+                self.validate(value)
         for raw in ['{"schema_version":1,"schema_version":1}', '{"items":NaN}', '[1]', '"' + 'x' * 1048576 + '"']:
             with self.subTest(raw=raw[:60]), self.assertRaises(ValueError):
                 feedback.parse_feedback(raw.encode())
@@ -102,7 +105,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
             path.write_bytes(old + b"\n ")
             before = tree_snapshot(self.project)
             with self.subTest(path=path.name), self.assertRaises(ValueError):
-                feedback.validate_feedback(self.project, "project.yaml", value)
+                self.validate(value)
             self.assertEqual(before, tree_snapshot(self.project))
             path.write_bytes(old)
 
@@ -121,9 +124,9 @@ class PrototypeFeedbackTest(unittest.TestCase):
         value = self.envelope()
         value["context"]["prototype_root"] = "docs/elsewhere/prototype"
         with self.assertRaises(ValueError):
-            feedback.validate_feedback(self.project, "project.yaml", value)
+            self.validate(value)
         with self.assertRaises(ValueError):
-            feedback.validate_feedback(self.project, "other.yaml", self.envelope())
+            self.validate(self.envelope(), "other.yaml")
 
     def test_unknown_target_requirement_and_interaction_are_rejected(self):
         original = self.envelope()
@@ -133,7 +136,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
             value = copy.deepcopy(original)
             value["items"][0].update(change)
             with self.subTest(change=change), self.assertRaises(ValueError):
-                feedback.validate_feedback(self.project, "project.yaml", value)
+                self.validate(value)
         page = self.project / self.page
         page.write_text(page.read_text().replace("</main>", '<p id="open-settings-dialog">重复</p></main>'), encoding="utf-8")
         with self.assertRaises(ValueError):
@@ -162,7 +165,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
         value = self.envelope()
         value["context"]["request_id"] = "x" * 9000
         with self.assertRaises(ValueError):
-            feedback.validate_feedback(self.project, "project.yaml", value)
+            self.validate(value)
         self.plan.write_text("# 需求\n" + "\n".join(f"REQ-{i:03}: " + "长" * 150 for i in range(100)), encoding="utf-8")
         with self.assertRaises(ValueError):
             self.prepare()
@@ -175,17 +178,17 @@ class PrototypeFeedbackTest(unittest.TestCase):
         body = body.replace('<main>', '<main data-interface-ref="outside.contract">')
         page.write_text(body, encoding="utf-8")
         value = self.envelope()
-        self.assertEqual("current", feedback.validate_feedback(self.project, "project.yaml", value)["status"])
+        self.assertEqual("current", self.validate(value)["status"])
         for refs in (["outside.contract"], ["settings.read", "settings.read"], []):
             value["items"][0]["interface_refs"] = refs
             with self.subTest(refs=refs), self.assertRaises(ValueError):
-                feedback.validate_feedback(self.project, "project.yaml", value)
+                self.validate(value)
         page.write_text(body.replace('id="open-contract"', ''), encoding="utf-8")
         value = self.envelope()
         with self.assertRaises(ValueError):
-            feedback.validate_feedback(self.project, "project.yaml", value)
+            self.validate(value)
         del value["items"][0]["interaction_id"]
-        self.assertEqual("current", feedback.validate_feedback(self.project, "project.yaml", value)["status"])
+        self.assertEqual("current", self.validate(value)["status"])
         page.write_text(body.replace('id="open-settings-dialog"', 'id=" open-settings-dialog "'), encoding="utf-8")
         with self.assertRaises(ValueError):
             self.prepare()
@@ -201,10 +204,10 @@ class PrototypeFeedbackTest(unittest.TestCase):
         selected = [(PROTOTYPE_RELATIVE / f"screen-{number}.html").as_posix() for number in range(16)]
         ready = self.prepare(pages=selected)
         self.assertEqual(16, len(ready["context"]["pages"]))
-        value = {"schema_version": 1, "context": ready["context"], "items": []}
+        value = {"schema_version": 2, "context": ready["context"], "items": []}
         value["context"]["requirements"][0]["label"] = "伪造标签"
         with self.assertRaises(ValueError):
-            feedback.validate_feedback(self.project, "project.yaml", value)
+            self.validate(value)
 
     def test_hardlinks_nested_duplicate_keys_and_read_races_fail_closed(self):
         # snapshot 的安全属性也必须贯穿新入口，不因文件字节相同就信任硬链接或换入节点。
@@ -217,14 +220,14 @@ class PrototypeFeedbackTest(unittest.TestCase):
             backup.unlink()
         with self.assertRaises(ValueError):
             feedback.parse_feedback(b'{"schema_version":1,"context":{"adapter":"a","adapter":"b"},"items":[]}')
-        original = feedback.workspace.validate_workspace
+        original = feedback.workspace.capture_selected_pages
 
         def mutate_after_validation(*args, **kwargs):
             result = original(*args, **kwargs)
             self.plan.write_bytes(self.plan.read_bytes() + b"changed")
             return result
 
-        with mock.patch.object(feedback.workspace, "validate_workspace", side_effect=mutate_after_validation):
+        with mock.patch.object(feedback.workspace, "capture_selected_pages", side_effect=mutate_after_validation):
             with self.assertRaises(ValueError):
                 self.prepare()
         alias = self.project.parent / "linked-project"
@@ -237,7 +240,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
                    str(PACK / "lib/documents/prototype_feedback_cli.py")]
         before = tree_snapshot(self.project)
         result = subprocess.run(command + ["prepare", "--root", str(self.project), "--adapter", "project.yaml",
-                                "--plan", "docs/plans/settings.md", "--request-id", "review-1", "--pages", self.page],
+                                "--plan", "docs/plans/settings.md", "--request-id", "review-1", "--pages", self.page, "--data-dir", str(self.data_dir)],
                                 capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr + result.stdout)
         self.assertEqual("ready", json.loads(result.stdout)["status"])
@@ -245,12 +248,12 @@ class PrototypeFeedbackTest(unittest.TestCase):
         input_file = Path(self.temporary.name).resolve() / "feedback.json"
         input_file.write_text(json.dumps(self.envelope(), ensure_ascii=False), encoding="utf-8")
         result = subprocess.run(command + ["validate", "--root", str(self.project), "--adapter", "project.yaml",
-                                "--input", str(input_file)], capture_output=True, text=True)
+                                "--input", str(input_file), "--data-dir", str(self.data_dir)], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual("current", json.loads(result.stdout)["status"])
         input_file.write_text('{"schema_version":1,"schema_version":1}', encoding="utf-8")
         result = subprocess.run(command + ["validate", "--root", str(self.project), "--adapter", "project.yaml",
-                                "--input", str(input_file)], capture_output=True, text=True)
+                                "--input", str(input_file), "--data-dir", str(self.data_dir)], capture_output=True, text=True)
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("error", json.loads(result.stdout)["status"])
         self.assertEqual('{"schema_version":1,"schema_version":1}', input_file.read_text())

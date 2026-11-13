@@ -216,6 +216,9 @@ class PluginConfigLauncherTest(unittest.TestCase):
         if previous:
             source = self.base / "previous-source"
             shutil.copytree(ROOT / "native_config", source / "native_config", ignore=shutil.ignore_patterns("__pycache__"))
+            (source / "product").mkdir()
+            for filename in ("__init__.py", "command_identity.py", "command_identity.json"):
+                shutil.copyfile(ROOT / "product" / filename, source / "product" / filename)
             (source / "scripts").mkdir()
             for filename in ("agent_config.py", "agent_config.sh", "python_runtime.sh"):
                 shutil.copyfile(ROOT / "scripts" / filename, source / "scripts" / filename)

@@ -7,6 +7,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import runpy
 import selectors
 import shlex
 import shutil
@@ -86,6 +87,8 @@ class StandalonePackageTest(unittest.TestCase):
         installed = self.unpack()
         relative = "native_config/preference_contract.py"
         self.assertEqual((ROOT / relative).read_bytes(), (installed / relative).read_bytes())
+        self.assertEqual((ROOT / "product/command_identity.json").read_bytes(),
+                         (installed / "product/command_identity.json").read_bytes())
         # 独立包从包外读取同一显式 home；查询不需要 data-dir 或服务。宿主间仅
         # 根位置不同，内容与逐字段继承均由唯一合同负责，不在打包器另写解析。
         for host, suffix in (("codex", ".codex"), ("claude", ".claude"), ("antigravity", ".gemini/config")):
@@ -115,8 +118,8 @@ class StandalonePackageTest(unittest.TestCase):
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with zipfile.ZipFile(first) as package:
             names = package.namelist()
-            self.assertTrue(all(name.startswith(("native_config/", "scripts/")) or name in {"README.md", "BUILD.json"} for name in names))
-            self.assertFalse(any(name.startswith(("lib/", "manager/", "plugin_runtime/", "plugins/", "product/")) for name in names))
+            self.assertTrue(all(name.startswith(("native_config/", "scripts/")) or name in {"README.md", "BUILD.json", "product/command_identity.json", "product/command_identity.py", "product/__init__.py"} for name in names))
+            self.assertFalse(any(name.startswith(("lib/", "manager/", "plugin_runtime/", "plugins/")) for name in names))
             self.assertEqual(package.read("scripts/python_runtime.sh"), (ROOT / "lib/python_runtime.sh").read_bytes())
             self.assertEqual(package.read("native_config/VERSION"), (ROOT / "native_config/VERSION").read_bytes())
             self.assertIn("native_config/activation.py", names)
@@ -271,9 +274,47 @@ class StandalonePackageTest(unittest.TestCase):
 
         self.assertNotEqual(attempt().returncode, 0)
         version.write_bytes(saved_version)
-        (source / "native_config/cli.py").write_text("import manager\n")
-        self.assertNotEqual(attempt().returncode, 0)
+        # 补齐真实必要身份闭包后，拒绝必须来自依赖审查，不能被缺 JSON 提前遮蔽。
+        (source / "product").mkdir()
+        for name in ("__init__.py", "command_identity.py", "command_identity.json"):
+            shutil.copyfile(ROOT / "product" / name, source / "product" / name)
+        payload = runpy.run_path(str(ROOT / "packaging/build_agent_config.py"))["payload"]
+        for dependency in ("import manager", "from product import command_identity",
+                           "from product.command_identity import *", "from .product.command_identity import load_identity",
+                           "from ..product.command_identity import load_identity", "from . import missing_module",
+                           "from .missing_module import value", "import native_config.missing_module"):
+            with self.subTest(dependency=dependency):
+                (source / "native_config/cli.py").write_text(dependency + "\n")
+                # CLI 有意隐藏内部错误；在公开构建函数边界验证真实拒绝原因。
+                with self.assertRaisesRegex(ValueError, "独立核心包含非标准库或工作流依赖"):
+                    payload(source)
         self.assertFalse((self.base / "invalid").exists())
+
+    def test_identity_content_pin_rejects_safe_but_unapproved_changes(self):
+        """唯一数据声明经规范化 pin 约束；安全形状不能放宽插件、别名或旧角色权限。"""
+        from product.command_identity import load_identity
+        source = self.base / "identity-source"
+        (source / "product").mkdir(parents=True)
+        identity = source / "product/command_identity.json"
+        approved = json.loads((ROOT / "product/command_identity.json").read_bytes())
+        identity.write_text(json.dumps(approved, sort_keys=True))
+        self.assertEqual(load_identity(source), approved)
+        for field, value in (("schema_version", True), ("plugin_name", "other-plugin"),
+                             ("skill_aliases", {**approved["skill_aliases"], "xy-taste": "grill-me"}),
+                             ("managed_roles", approved["managed_roles"][:-1] + ["xy-unknown"]),
+                             ("legacy_plugin_name", "other-legacy"),
+                             ("marketplaces", {"alpha": "other-alpha", "local": "xy-workflow-local"})):
+            with self.subTest(field=field):
+                identity.write_text(json.dumps({**approved, field: value}))
+                with self.assertRaises(ValueError):
+                    load_identity(source)
+        identity.write_text('{"schema_version":1,"schema_version":1}')
+        with self.assertRaises(ValueError):
+            load_identity(source)
+        identity.unlink()
+        identity.symlink_to(ROOT / "product/command_identity.json")
+        with self.assertRaises(ValueError):
+            load_identity(source)
 
     def test_disabled_workflow_recovers_by_reopening_extracted_independent_package(self):
         """停用后关闭服务，真实执行解压包给出的 open 命令并恢复；不借工作流源码导入。"""

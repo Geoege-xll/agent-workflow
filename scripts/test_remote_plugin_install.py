@@ -14,6 +14,7 @@ import platform
 import pwd
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -22,8 +23,11 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "Geoege-xll/agent-workflow"
 REMOTE = "https://github.com/" + REPOSITORY + ".git"
-MARKETPLACE = "agent-workflow-alpha"
-PLUGIN = "agent-workflow"
+sys.path.insert(0, str(ROOT))
+from product.command_identity import load_identity
+IDENTITY = load_identity(ROOT)
+MARKETPLACE = IDENTITY["marketplaces"]["alpha"]
+PLUGIN = IDENTITY["plugin_name"]
 FIXTURES = ROOT / "tests/fixtures/native-install"
 VERSIONS = {"codex": "0.167.0", "claude": "2.1.311", "antigravity": "1.5.6"}
 
@@ -98,7 +102,7 @@ def validate_distribution(record, host, expected_revision, expected_version):
             or record["channel"] != "alpha" or record["ref"] != branch
             or record["source_revision"] != expected_revision or record["version"] != expected_version):
         raise ValueError("Git 分发记录与本次来源/版本/宿主不一致")
-    primary = "workflow/agent-workflow-" + host + "-" + expected_version + ".zip"
+    primary = "workflow/" + IDENTITY["artifact_prefix"] + "-" + host + "-" + expected_version + ".zip"
     if (not re.fullmatch(r"[0-9a-f]{64}", record["candidate_sha256"])
             or not re.fullmatch(r"[0-9a-f]{64}", record["source_tree_sha256"])
             or len(record["artifacts_sha256"]) != 7
@@ -163,7 +167,7 @@ def verified_git_metadata(root, host, distribution_commit):
 def verify_installed(root, record, host, expected_revision, expected_version, *, distribution_commit=None):
     """以分发提交的完整文件摘要核对真实安装缓存；不修补、重打包或写入缓存。"""
     validate_distribution(record, host, expected_revision, expected_version)
-    prefix = "" if host == "antigravity" else "plugins/agent-workflow/"
+    prefix = "" if host == "antigravity" else "plugins/" + IDENTITY["plugin_name"] + "/"
     files = {name[len(prefix):]: row for name, row in record["files"].items()
              if name.startswith(prefix) and name != "distribution.json"}
     if not files or "sources.json" not in files:

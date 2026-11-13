@@ -77,7 +77,7 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
                     (plugin / "sources.json").write_text(json.dumps({"host": host, "plugin_version": version}))
                     (plugin / "run.sh").write_text("#!/bin/sh\n# 中文夹具：仅核验字节与执行位，不执行。\n")
                     (plugin / "run.sh").chmod(0o755)
-                    prefix = "" if host == "antigravity" else "plugins/agent-workflow/"
+                    prefix = "" if host == "antigravity" else "plugins/xy-workflow/"
                     files = {prefix + path.name: {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                                                   "mode": "100755" if path.name == "run.sh" else "100644"}
                              for path in plugin.iterdir()}
@@ -87,7 +87,7 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
                               "version": version, "files": files, "candidate_sha256": "c" * 64,
                               "source_tree_sha256": "d" * 64, "plugin_zip_sha256": "e" * 64,
                               "artifacts_sha256": {**{str(index): "f" * 64 for index in range(6)},
-                                  "workflow/agent-workflow-" + host + "-" + version + ".zip": "e" * 64}}
+                                  "workflow/xy-workflow-" + host + "-" + version + ".zip": "e" * 64}}
                     if host != "antigravity":
                         record["files"][".marketplace/ignored.json"] = {"sha256": "0" * 64, "mode": "100644"}
                     report = SMOKE.verify_installed(plugin, record, host, revision, version)
@@ -132,7 +132,7 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
                   "version": version, "files": files, "candidate_sha256": "c" * 64,
                   "source_tree_sha256": "d" * 64, "plugin_zip_sha256": "e" * 64,
                   "artifacts_sha256": {**{str(index): "f" * 64 for index in range(6)},
-                      "workflow/agent-workflow-antigravity-" + version + ".zip": "e" * 64}}
+                      "workflow/xy-workflow-antigravity-" + version + ".zip": "e" * 64}}
         SMOKE.command(["git", "init", "--quiet", "--initial-branch=plugins-antigravity-alpha"], root)
         SMOKE.command(["git", "add", "sources.json", "run.sh"], root)
         SMOKE.command(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
@@ -239,8 +239,8 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
 
     def test_native_list_discovery_requires_unique_plugin_identity(self):
         for host in ("codex", "claude", "antigravity"):
-            row = {"pluginId": "agent-workflow@agent-workflow-alpha"} if host == "codex" else \
-                  {"id": "agent-workflow@agent-workflow-alpha"} if host == "claude" else {"name": "agent-workflow"}
+            row = {"pluginId": "xy-workflow@xy-workflow-alpha"} if host == "codex" else \
+                  {"id": "xy-workflow@xy-workflow-alpha"} if host == "claude" else {"name": "xy-workflow"}
             payload = {"installed": [row]} if host == "codex" else [row]
             self.assertEqual(row, SMOKE.plugin_row(host, payload))
             for rows in ([], [row, row]):

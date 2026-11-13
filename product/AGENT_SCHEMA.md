@@ -58,7 +58,8 @@ Claude generation rules:
   and generate `.codex/agents/xy-*.toml` and `.claude/agents/xy-*.md`, respectively.
 - Implementation roles preload `xy-code-standards` and `xy-build-verify`; production UI reads
   the applicable `xy-ui-design` branch only when `surface_kind: production_ui`.
-- `xy-uiux` preloads `xy-ui-design`, `ui-ux-pro-max` and `xy-prototype-verify`; a missing hard gate blocks UI design.
+- `xy-web` additionally binds `xy-playwright` for scoped production Web verification; other implementers do not preload it.
+- `xy-uiux` preloads `xy-ui-design`, `xy-taste` and `xy-prototype-verify`; missing/corrupt resources or an incomplete canonical read blocks UI design; declarations do not prove actual loading.
   Preloading does not execute an inapplicable branch: `standards_only` never runs prototype verification.
 - `xy-qa` preloads `xy-qa-review`; other local specialist Skills are matched on demand from
   `audit_surfaces` and are not written into the role manifest.

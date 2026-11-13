@@ -11,7 +11,10 @@
 - Standalone read-only audits use WORKFLOW's matching branch and stop at the scoped conclusion,
   without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 - `$xy-project-memory`: retrieve only needed cross-session/history facts; retain post-QA closeout.
-- Load `.agents/skills/` progressively, using only Codex `$xy-*` aliases, never other hosts' slash commands.
+- Load `.agents/skills/` progressively, using Codex aliases, never other hosts' slash commands.
+  Full PM coverage loads original `$xy-grilling` under xy-workflow/references/requirements-intake.md;
+  `$xy-grill-me` is user-invoked only. Without a Skill tool, fully read the packaged canonical primitive;
+  discovery and handoff declarations do not prove loading or runtime execution.
 - Central custom agents use canonical `xy-*` IDs in the configured user Codex root's `agents/` (normally `~/.codex/agents/`). Projects keep only required sparse overrides in `.codex/agents/`; absence of a local role file does not prove the role is unavailable. Project settings in `.codex/config.toml` come from `project.yaml` → `orchestration`. Managed Skills remain project discovery symlinks in `.agents/skills/`, pointing to the verified immutable core.
 - Source observation for Codex `rust-v0.166.0`: enabled configuration layers load from low to high; a trusted project role definition takes precedence over the same user role name, subject to other native overrides. See [role loader](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/agent-roles/src/loader.rs) and [configuration layer priorities](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/config/src/config_layer_source.rs). This is source-observed behavior, not proof of actual role/model execution in the current session.
 - Plan revision/recovery: `$xy-workflow`'s `references/plan-lifecycle.md`.

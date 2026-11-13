@@ -76,7 +76,7 @@ class ConsoleJavascriptTest(unittest.TestCase):
         # Node 直接导入生产函数；令牌只用测试字符串，不接触本机连接记录或真实配置。
         script = r"""
 const assert = require('node:assert/strict');
-const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions} = require('./native_config/web/console.js');
+const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField} = require('./native_config/web/console.js');
 const row = (id, fields = {}) => ({role: id, name: '同名 Agent', origin: 'user', scope: 'global', writable: true,
   overrides: {model: 'saved/unknown:model', effort: 'high'}, effective: {model: 'saved/unknown:model', effort: 'high'},
   sources: {model: 'user', effort: 'user'}, dispatch_ready: false, blocked_reason: '尚未观察到客户端版本', ...fields});
@@ -278,6 +278,28 @@ const calls=[];const api=new ModelApi('test',async(path,init)=>{calls.push(JSON.
 await api.previewPreferences({host:'codex',scope:'project',project:'/tmp/isolated'},'rev',{ '*':{model:null,effort:'low'} });
 assert.deepEqual(calls[0],{host:'codex',scope:'project',project:'/tmp/isolated',revision:'rev',dispatch_preferences:{edits:{'*':{model:null,effort:'low'}},reset:false}});
 assert.equal(Object.hasOwn(calls[0],'edits'),false);assert.equal(Object.hasOwn(calls[0],'reset'),false);assert.equal(Object.hasOwn(calls[0],'workflow_activation'),false);
+""")
+
+    def test_visible_draft_resolution_preserves_hidden_inheritance_and_custom_ids(self):
+        # 只投影公开的当前层/最终来源；清除被遮蔽字段必须等后端预览，不能猜测上层。
+        self.run_javascript(r"""
+const draft = new Draft({host:'codex',scope:'global'});
+const target=(id,overrides,effective,sources)=>({target:id,name:id,origin:'user',writable:true,overrides,effective,sources});
+draft.accept({...context([]),dispatch_preferences:{status:'ready',runtime_verified:false,capabilities:{model:true,effort:true},targets:[
+ target('*',{model:'saved/unknown:model'},{model:'saved/unknown:model'},{model:'user_default'}),
+ target('vendor:worker',{}, {model:'saved/unknown:model'}, {model:'user_default'})]}});
+assert.equal(resolvedField(draft.preferences,'*','model',true).value,'saved/unknown:model');
+draft.preferences.set('*','model','future/custom-id');
+assert.equal(resolvedField(draft.preferences,'vendor:worker','model',true).value,'future/custom-id');
+draft.preferences.set('*','model',null);
+assert.equal(resolvedField(draft.preferences,'*','model',true).pending,true);
+assert.equal(resolvedField(draft.preferences,'vendor:worker','model',true).value,null);
+assert.equal(resolvedField(draft.preferences,'vendor:worker','model',true).source,'继承值待预览');
+assert.deepEqual(draft.preferences.payload(),{'*':{model:null}});
+// 逐身份的本层覆盖高于通用草稿，不能跟着默认联动被悄悄改值。
+draft.preferences.set('vendor:worker','model','private-model');
+assert.equal(resolvedField(draft.preferences,'vendor:worker','model',true).value,'private-model');
+assert.equal(draft.preferences.value('*','effort'),null);
 """)
 
     def test_apply_error_receipts_keep_recovery_and_reject_untrusted_shapes(self):

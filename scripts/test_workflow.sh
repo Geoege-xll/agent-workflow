@@ -26,7 +26,7 @@ GROUPS = {
     # 两个当前产品各自声明真实模块，不混入旧安装器/TUI/PTY或另一产品生命周期。
     # records 只选择插件实际使用的记录/发布/CLI/临时目录合同；历史三宿主安装
     # 夹具仍留在 full，不能借此宣称已经修复或通过旧安装器的完整兼容验收。
-    "plugin": modules("plugin_delivery", "plugin_resources", "plugin_workflow_contract", "plugin_maintenance_contract",
+    "plugin": modules("plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract", "plugin_maintenance_contract",
                       "continuous_intake_capabilities", "agent_continuation", "dispatch_admission", "task_settlement",
                       "task_graph", "scheduler_boundaries", "foundation_qa", "plugin_worktree_delivery") + tuple(
                           "tests.test_task_graph_records." + name for name in (
@@ -42,7 +42,7 @@ GROUPS = {
     # 原型当前入口同时消费生产控制器的既有 Node 用例与只读反馈核心，避免
     # current 只验证静态结构却漏掉真实脚本。此分组不授权自动操作业务原型。
     "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
-                         "prototype_workspace_runtime", "prototype_feedback"),
+                         "prototype_workspace_runtime", "prototype_feedback", "prototype_review"),
     "packaging": modules("plugin_delivery", "native_config_packaging", "candidate_delivery",
                          "plugin_config_launcher", "config_distribution", "plugin_source_publication", "remote_install_smoke"),
     "central": modules("central_project", "runtime_store", "runtime_state", "central_runtime", "runtime_lifecycle") + (

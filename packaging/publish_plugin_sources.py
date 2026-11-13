@@ -17,6 +17,11 @@ import tempfile
 import zipfile
 
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from product.command_identity import load_identity
+IDENTITY = load_identity(ROOT)
+
 HOSTS = ("codex", "claude", "antigravity")
 REPOSITORY = "Geoege-xll/agent-workflow"
 OWNER = "agent-workflow-plugin-source-v1"
@@ -67,12 +72,47 @@ def archive_files(body):
             if (name in files or entry.is_dir() or stat.S_IFMT(mode) not in {0, stat.S_IFREG}
                     or entry.flag_bits & 1):
                 raise ValueError("ZIP 只能包含不重复的普通文件：" + name)
+            if stat.S_IMODE(mode) not in {0o644, 0o755}:
+                raise ValueError("ZIP 普通文件模式仅允许 0644 或 0755：" + name)
             files[name] = (package.read(entry), "100755" if mode & 0o111 else "100644")
     # 文件与父路径冲突也必须在产生工作树之前明确拒绝。
     if any(str(parent) in files for name in files for parent in PurePosixPath(name).parents
            if str(parent) != "."):
         raise ValueError("ZIP 文件路径与目录冲突")
     return files
+
+
+def validate_local_source(plugin, local, host):
+    """核对主包和本地源的唯一构建模式，返回保留主包执行位的官方分发投影。"""
+    from build_plugin import archive_modes
+
+    # 模式权威仍由唯一构建器负责，且读取主ZIP中的同一份锁，不能只允许两包
+    # 彼此相等：攻击者同时去掉锁定执行位时，也必须拒绝。
+    modes = archive_modes({name: value[0] for name, value in plugin.items()})
+    if any(value[1] != f"{modes[name]:o}" for name, value in plugin.items()):
+        raise ValueError("主插件包模式与唯一构建合同不一致：" + host)
+    prefix = IDENTITY["plugin_name"] + "/" if host == "antigravity" else "plugins/" + IDENTITY["plugin_name"] + "/"
+    projected = {prefix + name: value for name, value in plugin.items()}
+    if host in MARKET:
+        market_name = MARKET[host]
+        original = {"name": IDENTITY["marketplaces"]["local"], "plugins": [{"name": IDENTITY["plugin_name"],
+            "source": {"source": "local", "path": "./plugins/" + IDENTITY["plugin_name"]},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Productivity"}]} if host == "codex" else {
+                "name": IDENTITY["marketplaces"]["local"], "owner": {"name": "Agent Workflow"},
+                "plugins": [{"name": IDENTITY["plugin_name"], "source": "./plugins/" + IDENTITY["plugin_name"]}]}
+        projected[market_name] = (json_bytes(original), "100644")
+    # 加前缀后，本地启动器按构建规则成为644；同包锁中的上游755仍应保留。
+    # 直接复用模式函数，避免再次把这两种资源错误归为统一权限。
+    modes = archive_modes({name: value[0] for name, value in projected.items()})
+    expected_local = {name: (value[0], f"{modes[name]:o}") for name, value in projected.items()}
+    if local != expected_local:
+        raise ValueError("本地源与精确插件包不一致：" + host)
+    if host in MARKET:
+        original["name"] = IDENTITY["marketplaces"]["alpha"]
+        projected[market_name] = (json_bytes(original), "100644")
+        return projected
+    return dict(plugin)
 
 
 def load_candidate(candidate_dir, source_revision, repository):
@@ -98,7 +138,7 @@ def load_candidate(candidate_dir, source_revision, repository):
     expected = {}
     for host in HOSTS:
         for kind, suffix in (("plugin", ""), ("local-source", "-local-source")):
-            name = f"workflow/agent-workflow-{host}-{versions['workflow']}{suffix}.zip"
+            name = f"workflow/{IDENTITY['artifact_prefix']}-{host}-{versions['workflow']}{suffix}.zip"
             expected[name] = {"product": "workflow", "host": host, "kind": kind, "version": versions["workflow"]}
     expected[f"native/native-agent-config-{versions['native-config']}.zip"] = {
         "product": "native-config", "kind": "standalone", "version": versions["native-config"]}
@@ -123,11 +163,16 @@ def load_candidate(candidate_dir, source_revision, repository):
             or build["files"] != {name: digest(value[0]) for name, value in native.items()
                                   if name != "BUILD.json"}):
         raise ValueError("独立配置包身份或来源闭包不一致")
+    identity_body = native["product/command_identity.json"][0]
+    if json.loads(identity_body) != IDENTITY:
+        raise ValueError("候选命令身份不匹配固定产品合同")
     distributions = {}
     descriptors = set()
     for host in HOSTS:
-        stem = f"workflow/agent-workflow-{host}-{versions['workflow']}"
+        stem = f"workflow/{IDENTITY['artifact_prefix']}-{host}-{versions['workflow']}"
         plugin = archives[stem + ".zip"]
+        if plugin["product/command_identity.json"][0] != identity_body:
+            raise ValueError("两个独立产品的命令身份源字节不一致")
         provenance = json.loads(plugin["sources.json"][0])
         if (provenance["schema_version"] != 1 or provenance["host"] != host
                 or provenance["plugin_version"] != versions["workflow"]
@@ -141,36 +186,11 @@ def load_candidate(candidate_dir, source_revision, repository):
             if name in plugin and digest(plugin[name][0]) != sha:
                 raise ValueError("插件规范源摘要不一致：" + name)
         identity = json.loads(plugin[MANIFEST[host]][0])
-        if identity["name"] != "agent-workflow" or identity["version"] != versions["workflow"]:
+        if identity["name"] != IDENTITY["plugin_name"] or identity["version"] != versions["workflow"]:
             raise ValueError("插件清单身份不一致")
         descriptors.add(plugin["plugins/maintenance/component.json"][0])
         local = archives[stem + "-local-source.zip"]
-        prefix = "agent-workflow/" if host == "antigravity" else "plugins/agent-workflow/"
-        projected = {prefix + name: value for name, value in plugin.items()}
-        # 既有源 ZIP 构建器按完整相对路径设置执行位；加前缀后的资源均为 644。
-        # 逐字节验证原源包这一既有合同，远程 Git 树则保留主插件 ZIP 的真实执行位。
-        # 不为远程安装修改构建器，也不悄悄重打已核验 ZIP。
-        expected_local = {name: (value[0], "100644") for name, value in projected.items()}
-        if host in MARKET:
-            market_name = MARKET[host]
-            # 只允许构建器现有的单一市场记录，再仅替换发布市场名称。
-            original = {"name": "agent-workflow-local", "plugins": [{"name": "agent-workflow",
-                "source": {"source": "local", "path": "./plugins/agent-workflow"},
-                "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-                "category": "Productivity"}]} if host == "codex" else {
-                    "name": "agent-workflow-local", "owner": {"name": "Agent Workflow"},
-                    "plugins": [{"name": "agent-workflow", "source": "./plugins/agent-workflow"}]}
-            projected[market_name] = (json_bytes(original), "100644")
-            expected_local[market_name] = projected[market_name]
-            if local != expected_local:
-                raise ValueError("本地市场源与精确插件包不一致：" + host)
-            original["name"] = "agent-workflow-alpha"
-            projected[market_name] = (json_bytes(original), "100644")
-            distributions[host] = projected
-        else:
-            if local != expected_local:
-                raise ValueError("AGY 本地源与精确插件包不一致")
-            distributions[host] = dict(plugin)
+        distributions[host] = validate_local_source(plugin, local, host)
     if len(descriptors) != 1:
         raise ValueError("三个插件的组件描述符不同")
     # 复用候选构建器的组件 ABI 校验，不在发布器复制独立产品的安装规则。
@@ -187,7 +207,7 @@ def load_candidate(candidate_dir, source_revision, repository):
             "version": versions["workflow"], "source_revision": source_revision,
             "source_tree_sha256": source["tree_sha256"], "candidate_sha256": digest(manifest_body),
             "artifacts_sha256": hashes,
-            "plugin_zip_sha256": hashes[f"workflow/agent-workflow-{host}-{versions['workflow']}.zip"],
+            "plugin_zip_sha256": hashes[f"workflow/{IDENTITY['artifact_prefix']}-{host}-{versions['workflow']}.zip"],
             "files": file_closure(files)}
         files["distribution.json"] = (json_bytes(record), "100644")
     return distributions

@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 插件候选
 
-3.0 使用三平台官方插件机制分发工作流。当前源码版本为 `3.0.0-alpha.7`，唯一版本源是 `product/PLUGIN_VERSION`；独立配置组件为 `0.1.0-alpha.4`。本页描述 alpha 与自有 Git 分发，不表示官方公开目录上架、稳定发行或自动迁移业务项目。本机官方客户端安装与原生运行分别记录；Windows 工作暂停。
+3.0 使用三平台官方插件机制分发工作流。当前源码候选为 `3.0.0-alpha.8`，唯一版本源是 `product/PLUGIN_VERSION`；独立配置组件为 `0.1.0-alpha.5`。本轮源码范围已独立验收，发行和本机切换尚未执行。本页描述 alpha 与自有 Git 分发，不表示官方公开目录上架、稳定发行或自动迁移业务项目；Windows 工作暂停。
 
 ## 工作流保持
 
@@ -18,7 +18,7 @@
 
 插件角色模型配置使用独立的调用偏好，不写缓存或复制完整角色。PM 在后续原生派发前读取同源纯标准库解析器：没有配置时使用宿主默认，存在配置时按实际原生工具字段处理，无法表达时明确报告。插件仅包含该只读合同的投影，不携带配置服务、网页或写入接口；普通业务不需要启动独立组件。
 
-显式调用插件的 `agent-config [open|status|doctor]` 仅走维护路径，不读取整份 WORKFLOW、不创建业务任务图或派发子代理。入口不会因普通需求里出现命令名而触发；三端主会话的业务分支仍加载完整原权威。组件首次准备需要用户确认，使用固定发行描述和真实包摘要；独立核心、网页和 ZIP 不进入插件。
+显式调用插件的 `xy-config [open|status|doctor]` 仅走维护路径，不读取整份 WORKFLOW、不创建业务任务图或派发子代理。入口不会因普通需求里出现命令名而触发；三端主会话的业务分支仍加载完整原权威。组件首次准备需要用户确认，使用固定发行描述和真实包摘要；独立核心、网页和 ZIP 不进入插件。
 
 ## 安装与构建
 
@@ -29,6 +29,9 @@
 | `product/`、`roles/`、`platforms/shared/skills/` | 工作流唯一权威与共用角色/Skill；不依赖配置服务 |
 | `plugins/` | 三宿主清单、发现入口、精确资源、项目引导及白名单维护启动器；不夹带配置核心 |
 | `lib/` | 任务图、持续接单、准入与结算、文档和交付合同；插件路径拒绝旧中央绑定 |
+| `product/command_identity.*` | 两产品共享的公开命名单一数据及标准库校验 |
+| `third_party/`、`plugins/selected-skills/` | 固定上游原版／锁／许可证与无 Hook 薄适配分开，运行发现只暴露精选入口 |
+| `lib/documents/`、`templates/prototype/` | schema 2 私有离线评审快照、反馈复核、有界迁移及单一工具载荷；项目保留具体设计资产 |
 | `packaging/build_plugin.py` | 从白名单装配三宿主离线载荷及真实本地市场，不夹带配置服务 |
 | `native_config/` | 独立原生发现、编解码、预览/保存核心及 HTTP/网页/可选 MCP；不导入 `lib`、`manager` 或 AWF 角色枚举 |
 | `packaging/build_agent_config.py` | 标准库依赖闭包检查与独立配置 ZIP |
@@ -37,9 +40,9 @@
 
 网页、HTTP 和 MCP 只能调用配置核心，不能各自实现一份校验、保存或恢复。模型定义字段、命名 Agent 调用和单次覆盖参数分开表达；平台能力未知时返回诊断，不生成猜测参数。两套产品版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`；`product/VERSION` 不表示插件版本。
 
-普通用户通过官方客户端直接安装三个固定 Git 分发分支，无需克隆或本地构建。Codex/Claude 远程市场统一为 `agent-workflow-alpha`，插件名为 `agent-workflow`；AGY 直接安装宿主专属分支的 GitHub tree URL。各端完整命令、登录、Hook 信任、来源检查和更新区别见[安装说明](../plugins/INSTALL.md)。运行 helper 仍需已有 Python 3.11+ 和 Bash。
+普通用户通过官方客户端直接安装三个固定 Git 分发分支，无需克隆或本地构建。新候选 Codex/Claude 远程市场为 `xy-workflow-alpha`，插件名为 `xy-workflow`；AGY 直接安装宿主专属分支的 GitHub tree URL。新旧身份不自动混用，发行后按官方客户端确认范围再切换。完整命令、登录、Hook 信任、来源检查和更新区别见[安装说明](../plugins/INSTALL.md)。运行 helper 仍需已有 Python 3.11+ 和 Bash。
 
-源码构建只供开发与维护，沿既有 `packaging/build_plugin.py` 与 `build_candidates.py` 唯一构建链生成三宿主插件、本地来源与独立组件七包，详见[开发手册](development.md)。开发市场 `agent-workflow-local` 不与远程市场自动迁移或同时启用。
+源码构建只供开发与维护，沿既有 `packaging/build_plugin.py` 与 `build_candidates.py` 唯一构建链生成三宿主插件、本地来源与独立组件七包，详见[开发手册](development.md)。开发市场 `xy-workflow-local` 不与远程市场自动迁移或同时启用。八个内部核心、四个精选别名与独立维护入口分别管理，不把第三方原版直接混入核心发现目录。
 
 新手动发布工作流仅从 main 固定源码 SHA，读取同 SHA 成功 `release.yml` 的唯一候选 artifact。独立发布 job 校验来源、候选摘要、版本与干净输入后，将三个宿主来源普通 atomic push 到 `plugins-codex-alpha`、`plugins-claude-alpha`、`plugins-antigravity-alpha`；不另建构建链、不 force 覆盖未知分支，拒绝同版不同载荷，相同候选可幂等重发。发布是自有 Git alpha 渠道，不代替官方公开目录或稳定发行审查。实际发布证据见[远程安装计划](plans/plugin-remote-install.md)。
 

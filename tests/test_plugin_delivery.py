@@ -32,6 +32,36 @@ def isolated_environment(root: Path) -> dict[str, str]:
     return environment
 
 
+class ArchiveModesTest(unittest.TestCase):
+    def test_shared_archive_modes_preserve_root_and_prefixed_locked_resources(self):
+        """同一权限权威同时覆盖ZIP写入、根启动器与带prefix的上游可执行文件。"""
+        vendor = "third_party/selected-skills/playwright-cli/runtime/tool.sh"
+        lock = json.dumps({"dependencies": {"playwright-cli": {"files": {"runtime/tool.sh": {"mode": 0o755}}}}}).encode()
+        files = {"README.md": b"readme", "plugins/source_pack.py": b"entry",
+                 "lib/python_runtime.sh": b"python", "plugins/maintenance/launcher.sh": b"launcher",
+                 builder.SELECTED_LOCK: lock, vendor: b"tool"}
+        expected = {name: 0o100644 for name in files}
+        expected.update({name: 0o100755 for name in ("plugins/source_pack.py", "lib/python_runtime.sh", "plugins/maintenance/launcher.sh", vendor)})
+        self.assertEqual(expected, builder.archive_modes(files))
+        prefix = "plugins/xy-workflow/"
+        local = {prefix + name: body for name, body in files.items()}
+        local_modes = {name: 0o100644 for name in local}
+        local_modes[prefix + vendor] = 0o100755
+        self.assertEqual(local_modes, builder.archive_modes(local))
+        with tempfile.TemporaryDirectory(prefix="awf-archive-modes-") as temporary:
+            target = Path(temporary) / "plugin.zip"
+            builder.write_archive(local, target)
+            with zipfile.ZipFile(target) as archive:
+                self.assertEqual(local_modes, {entry.filename: entry.external_attr >> 16 for entry in archive.infolist()})
+
+    def test_archive_modes_reject_permissions_outside_the_fixed_file_contract(self):
+        for mode in (0o600, 0o777, 0o4755, True, "755"):
+            with self.subTest(mode=mode):
+                lock = json.dumps({"dependencies": {"playwright-cli": {"files": {"runtime/tool.sh": {"mode": mode}}}}}).encode()
+                with self.assertRaisesRegex(ValueError, "644 or 755"):
+                    builder.archive_modes({builder.SELECTED_LOCK: lock})
+
+
 class PluginDeliveryTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -158,9 +188,15 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertFalse(stat.S_ISLNK(entry.external_attr >> 16), name)
                     self.assertNotIn("..", Path(name).parts)
                     self.assertFalse(name.startswith("/"), name)
-                    self.assertNotIn("windows", name.casefold())
-                    self.assertNotIn("node_modules", name)
-                    self.assertNotIn("npm", name.casefold())
+                    # 上游完整资产含技术品牌图标，不是被暂停的Windows发行入口。
+                    if not name.startswith("third_party/selected-skills/taste/skills/taste-skill/assets/"):
+                        self.assertNotIn("windows", name.casefold())
+                    # 原版Playwright完整闭包允许其精确vendor/node_modules根，不能放行任意依赖目录。
+                    playwright_runtime = name.startswith("third_party/selected-skills/playwright-cli/runtime/node_modules/")
+                    if not playwright_runtime:
+                        self.assertNotIn("node_modules", name)
+                    if not playwright_runtime and not name.startswith("third_party/selected-skills/taste/skills/taste-skill/assets/"):
+                        self.assertNotIn("npm", name.casefold())
                     self.assertNotIn("npx", name.casefold())
                     self.assertNotIn(name, {"package.json", "package-lock.json", "manager/cli.py", "manager/tui.py"})
                     self.assertFalse(name.startswith(("lib/install/", "packaging/", ".github/")), name)
@@ -169,6 +205,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertIn("lib/documents/validate_prototype_workspace.py", files.namelist())
                 # 文档与模板沿现有声明目录进入三端包，不能依靠开发仓补齐反馈依赖。
                 for relative in ("lib/documents/prototype_feedback.py",
+                                 "lib/documents/prototype_review.py",
                                  "lib/documents/prototype_feedback_cli.py",
                                  "templates/prototype/feedback.js", "templates/prototype/feedback.css",
                                  "platforms/shared/skills/xy-ui-design/references/prototype-feedback.md"):
@@ -270,8 +307,10 @@ class PluginDeliveryTest(unittest.TestCase):
                 metadata = json.loads((root / "sources.json").read_bytes())
                 projection = metadata["projections"][builder.PREFERENCE_PROJECTION]
                 digest = hashlib.sha256(expected).hexdigest()
+                dependencies = {relative: hashlib.sha256((PACK / relative).read_bytes()).hexdigest()
+                                for relative in ("product/__init__.py", "product/command_identity.py", "product/command_identity.json")}
                 self.assertEqual({"source": builder.PREFERENCE_SOURCE, "transform": "identity",
-                                  "source_sha256": digest, "projection_sha256": digest}, projection)
+                                  "source_sha256": digest, "projection_sha256": digest, "dependencies": dependencies}, projection)
                 self.assertEqual(digest, metadata["source_files"][builder.PREFERENCE_SOURCE])
         for body in (b"from .service import ConfigService", b"import native_config.server", b"import lib.role_models"):
             with self.subTest(forbidden_import=body):
@@ -372,6 +411,92 @@ class PluginDeliveryTest(unittest.TestCase):
                 resource = json.loads(result.stdout)
                 self.assertEqual(str(root / "product/WORKFLOW.md"), resource["path"])
                 self.assertFalse(resource["runtime_verified"])
+                self.assertEqual([], list(project.iterdir()))
+
+    def test_detached_selected_skill_failures_reject_before_any_script(self):
+        from lib.skills.selected_skills import VENDOR, skill_path
+        root = self.installed["codex"]
+        command = [sys.executable, "-B", str(root / "plugins/source_pack.py"), "selected-skills", "check"]
+        target = root / skill_path("grilling")
+        original = target.read_bytes()
+        extra = root / VENDOR / "unexpected-file"
+        environment = isolated_environment(self.root / "selected-rejection")
+        def rejected():
+            result = subprocess.run(command, cwd=self.root, env=environment, capture_output=True, text=True, timeout=20)
+            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        try:
+            target.unlink()
+            rejected()
+            target.write_bytes(original + b"tampered")
+            rejected()
+            target.unlink()
+            target.symlink_to(root / skill_path("grill-me"))
+            rejected()
+            target.unlink()
+            target.write_bytes(original)
+            extra.write_bytes(b"not in upstream inventory")
+            rejected()
+            extra.unlink()
+            result = subprocess.run([sys.executable, "-B", str(root / "plugins/source_pack.py"), "resource", "../outside"], cwd=self.root, env=environment, capture_output=True, text=True, timeout=20)
+            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        finally:
+            target.unlink(missing_ok=True)
+            target.write_bytes(original)
+            extra.unlink(missing_ok=True)
+
+    def test_selected_skills_are_complete_detached_and_do_not_register_taste_hooks(self):
+        """真实三端载荷消费同一原文，连续读取覆盖全部字节，绝不执行原版脚本。"""
+        from lib.skills.selected_skills import LOCK, VENDOR, SPECS, snapshot, skill_path
+        lock, originals = snapshot(PACK)
+        project = self.root / "selected-skills-project"
+        project.mkdir()
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                self.assertEqual((PACK / LOCK).read_bytes(), (root / LOCK).read_bytes())
+                metadata = json.loads((root / "sources.json").read_bytes())
+                for relative, body in originals.items():
+                    self.assertEqual(body, (root / relative).read_bytes())
+                    self.assertEqual(hashlib.sha256(body).hexdigest(), metadata["source_files"][relative])
+                from lib.skills.role_skills import SELECTED_SKILL_ALIASES
+                for alias, canonical in SELECTED_SKILL_ALIASES.items():
+                    self.assertEqual((PACK / "plugins/selected-skills" / alias / "SKILL.md").read_bytes(),
+                                     (root / "skills" / alias / "SKILL.md").read_bytes())
+                    self.assertFalse((root / "skills" / canonical).exists())
+                adapter = (root / "skills/xy-taste/SKILL.md").read_bytes()
+                header, _ = builder.split_frontmatter(adapter)
+                self.assertNotIn(b"hooks:", header)
+                self.assertNotIn(b"gate.mjs", (root / "hooks/hooks.json").read_bytes() if host == "codex" else b"")
+                self.assertFalse((root / "skills/xy-taste/scripts").exists())
+                command = ["bash", str(root / "lib/python_runtime.sh"), "-B", "-X", "utf8", str(root / "plugins/source_pack.py")]
+                environment = isolated_environment(self.root / "selected-home")
+                checked = subprocess.run([*command, "selected-skills", "check"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+                self.assertFalse(json.loads(checked.stdout)["upstream_scripts_executed"])
+                # 包外真实启动固定官方CLI，不依赖全局旧版；doctor不启动或安装browser。
+                version = subprocess.run([*command, "xy-playwright", "--", "--version"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, version.returncode, version.stdout + version.stderr)
+                self.assertEqual("0.1.24", version.stdout.strip())
+                diagnosis = subprocess.run([*command, "xy-playwright", "--", "doctor"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, diagnosis.returncode, diagnosis.stdout + diagnosis.stderr)
+                ready = json.loads(diagnosis.stdout)
+                self.assertEqual("0.1.24", ready["cli"]["version"])
+                self.assertTrue(ready["node"]["ready"])
+                self.assertFalse(ready["browser"]["runtime_verified"])
+                self.assertFalse(ready["upstream_browser_launched"])
+                chunks, offset = [], 0
+                while True:
+                    result = subprocess.run([*command, "selected-skills", "read", "xy-taste", "--offset", str(offset), "--length", "12000"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    page = json.loads(result.stdout)
+                    self.assertEqual(offset, page["offset"])
+                    chunks.append(page["content"].encode("utf-8"))
+                    offset = page["next_offset"]
+                    if page["eof"]:
+                        break
+                self.assertEqual(originals[skill_path("design-taste-frontend")], b"".join(chunks))
+                resource = subprocess.run([*command, "resource", skill_path("design-taste-frontend")], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, resource.returncode, resource.stdout + resource.stderr)
+                self.assertEqual(str(root / skill_path("design-taste-frontend")), json.loads(resource.stdout)["path"])
                 self.assertEqual([], list(project.iterdir()))
 
     def test_detached_awf_prototype_navigation_fingerprints_and_visual_gate(self):
@@ -494,8 +619,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
                 # 必须由物理安装的 resource 解析器取得模板及摘要，项目同名路径
                 # 和源码树不能让独立载荷缺失时偶然通过。复制仅构成这次最小项目。
-                for name in ("index.html", "page.html", "prototype.css", "workspace.css",
-                             "workspace.js", "page-shell.js", "feedback.css", "feedback.js"):
+                for name in ("page.html", "prototype.css"):
                     relative = "templates/prototype/" + name
                     located = invoke("resource", relative)
                     self.assertEqual(0, located.returncode, located.stdout + located.stderr)
@@ -504,10 +628,11 @@ class PluginDeliveryTest(unittest.TestCase):
                     body = Path(resource["path"]).read_bytes()
                     self.assertEqual(hashlib.sha256(body).hexdigest(), resource["sha256"])
                     (prototype / ("feedback.html" if name == "page.html" else name)).write_bytes(body)
-                index = prototype / "index.html"
-                index.write_text(index.read_text(encoding="utf-8").replace(
-                    'aria-label="Prototype pages"></nav>',
-                    'aria-label="Prototype pages"><a href="feedback.html">反馈页</a></nav>'), encoding="utf-8")
+                # 旧索引只是导航来源，不要求其采用当前通用壳结构，更不执行其脚本。
+                # 别名和hash保留原语义；新项目实际只需上方具体页面和CSS。
+                (prototype / "index.html").write_text(
+                    '<!doctype html><html><body><details open><summary>业务分组</summary>'
+                    '<a href="./feedback.html#state">原业务反馈页</a></details></body></html>', encoding="utf-8")
                 concrete = project / page
                 html = concrete.read_text(encoding="utf-8").replace(
                     'data-prototype-plan-source=""', 'data-prototype-plan-source="' + plan + '"')
@@ -520,7 +645,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 before = tree_snapshot(project)
                 command = ("lib/documents/prototype_feedback_cli.py", "prepare", "--root", project,
                            "--adapter", adapter, "--plan", plan, "--request-id", "feedback-packaged",
-                           "--pages", page)
+                           "--pages", page, "--data-dir", self.root / "review-data")
                 prepared = helper(*command)
                 self.assertEqual(0, prepared.returncode, prepared.stdout + prepared.stderr)
                 ready = json.loads(prepared.stdout)
@@ -531,22 +656,42 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual([page], [item["path"] for item in ready["context"]["pages"]])
                 self.assertEqual(["REQ-001"], [item["id"] for item in ready["context"]["requirements"]])
                 fragment = parse_qs(urlsplit(ready["review_url"]).fragment)
-                self.assertEqual({"page", "review"}, set(fragment))
+                self.assertEqual({"page"}, set(fragment))
                 self.assertEqual(["feedback.html"], fragment["page"])
+                bundle = Path(ready["bundle_path"])
+                self.assertTrue(bundle.is_relative_to(self.root / "review-data"))
+                self.assertEqual(2, ready["context"]["schema_version"])
+                self.assertEqual((root / "product/PLUGIN_VERSION").read_text().strip(),
+                                 ready["context"]["tool"]["version"])
+                self.assertEqual((root / "lib/documents/prototype_review.py").read_bytes(),
+                                 (PACK / "lib/documents/prototype_review.py").read_bytes())
+                derived = (bundle / "project" / page).read_text(encoding="utf-8")
+                self.assertEqual(1, derived.count('data-prototype-review-bridge'))
+                self.assertNotIn('data-prototype-review-bridge', concrete.read_text(encoding="utf-8"))
+                for name in ("index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js", "page-shell.js"):
+                    self.assertEqual((root / "templates/prototype" / name).read_bytes(),
+                                     (bundle / "tool" / name).read_bytes())
+                    if name != "index.html":
+                        self.assertFalse((prototype / name).exists())
+                repeated = helper(*command)
+                self.assertEqual(0, repeated.returncode, repeated.stdout + repeated.stderr)
+                self.assertTrue(json.loads(repeated.stdout)["reused"])
+                self.assertEqual(ready["review_url"], json.loads(repeated.stdout)["review_url"])
 
                 # JSON 仅是显式交接输入。以整树字节/节点快照证明 validate 没有
                 # 写需求、HTML、adapter、批准或新 spec/sidecar；错误输入也不能写。
                 item = {"id": "feedback-1", "page": page, "target_id": "feedback-state",
                         "kind": "suggestion", "message": "建议说明当前状态 approved", "req_ids": ["REQ-001"],
                         "comparison": {"before_text": "产品页面内容", "after_text": "当前状态"}}
-                feedback = {"schema_version": 1, "context": ready["context"], "items": [item]}
+                feedback = {"schema_version": 2, "context": ready["context"], "items": [item]}
                 exported = self.root / "feedback-input.json"
 
                 def validate(value):
                     exported.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
                     original = exported.read_bytes()
                     result = helper("lib/documents/prototype_feedback_cli.py", "validate",
-                                    "--root", project, "--adapter", adapter, "--input", exported)
+                                    "--root", project, "--adapter", adapter, "--input", exported,
+                                    "--data-dir", self.root / "review-data")
                     self.assertEqual(original, exported.read_bytes())
                     return result
 
@@ -618,11 +763,11 @@ class PluginDeliveryTest(unittest.TestCase):
         home = self.root / "claude-inventory-home"
         home.mkdir()
         result = subprocess.run([shutil.which("claude"), "--plugin-dir", str(self.installed["claude"]),
-                                 "plugin", "details", "agent-workflow"],
+                                 "plugin", "details", "xy-workflow"],
                                 cwd=home, env=isolated_environment(home), capture_output=True, text=True, timeout=30)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("Skills (10)", result.stdout)
-        self.assertIn("agent-config", result.stdout)
+        self.assertIn("Skills (13)", result.stdout)
+        self.assertIn("xy-config", result.stdout)
         self.assertIn("Agents (8)", result.stdout)
         self.assertIn("pm", result.stdout)
         self.assertIn("MCP servers (0)", result.stdout)

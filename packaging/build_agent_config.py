@@ -16,6 +16,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 if sys.version_info < (3, 11):
     raise SystemExit("需要 Python >= 3.11；请使用 bash scripts/python_runtime.sh packaging/build_agent_config.py")
+sys.path.insert(0, str(ROOT))
+from product.command_identity import load_identity
 
 README = """# Native Agent Config
 
@@ -116,7 +118,22 @@ def payload(source: Path):
     root = source / "native_config"
     if root.is_symlink():
         raise ValueError("核心目录不能使用符号链接")
-    files = {"native_config/VERSION": read_source(source, "native_config/VERSION")}
+    # 两个独立产品只共享这三个标准库身份文件，不把工作流本体带入配置组件。
+    load_identity(source)
+    files = {name: read_source(source, name) for name in (
+        "native_config/VERSION", "product/__init__.py", "product/command_identity.py", "product/command_identity.json")}
+    for name in ("product/__init__.py", "product/command_identity.py"):
+        for node in ast.walk(ast.parse(files[name], filename=name)):
+            modules = [item.name for item in node.names] if isinstance(node, ast.Import) else [node.module or ""] if isinstance(node, ast.ImportFrom) else []
+            if any(module.split(".")[0] not in sys.stdlib_module_names for module in modules):
+                raise ValueError("共用身份合同包含非标准库依赖：" + name)
+    # 模块表只来自这次实际打包的 Python 文件。相对依赖必须能在当前包中解析，
+    # 不能因为省略绝对根名就绕过闭包检查，也不能越出 native_config 包边界。
+    local_modules = set()
+    for path in root.rglob("*.py"):
+        if "__pycache__" not in path.parts:
+            parts = path.relative_to(source).with_suffix("").parts
+            local_modules.add(".".join(parts[:-1] if parts[-1] == "__init__" else parts))
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
             raise ValueError("核心载荷不能使用符号链接")
@@ -128,11 +145,29 @@ def payload(source: Path):
         for node in ast.walk(ast.parse(body, filename=relative)):
             if isinstance(node, ast.Import):
                 modules = [item.name for item in node.names]
-            elif isinstance(node, ast.ImportFrom) and not node.level:
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    package = path.relative_to(source).parts[:-1]
+                    if node.level > len(package):
+                        raise ValueError("独立核心包含非标准库或工作流依赖：" + relative)
+                    base = ".".join(package[:len(package) - node.level + 1])
+                    # from . import x 导入实际子模块；from .x import y 只需 x 属于闭包，
+                    # y 的运行时导出合同由真实独立包导入/启动验证，不伪造静态执行器。
+                    dependencies = ([base + "." + node.module] if node.module else
+                                    [base + "." + item.name for item in node.names])
+                    if any(module not in local_modules for module in dependencies):
+                        raise ValueError("独立核心包含非标准库或工作流依赖：" + relative)
+                    continue
                 modules = [node.module or ""]
             else:
                 continue
-            if any(module.split(".")[0] not in sys.stdlib_module_names | {"native_config"} for module in modules):
+            # 身份合同是唯一获准的本地依赖：精确模块、绝对导入与唯一函数都需匹配。
+            # 不接受 product 的其他正文、星号或相对导入，避免白名单扩成工作流依赖。
+            identity_import = (isinstance(node, ast.ImportFrom) and node.level == 0
+                               and node.module == "product.command_identity"
+                               and [(item.name, item.asname) for item in node.names] == [("load_identity", None)])
+            if any(module.split(".")[0] not in sys.stdlib_module_names and module not in local_modules
+                   and not identity_import for module in modules):
                 raise ValueError("独立核心包含非标准库或工作流依赖：" + relative)
         files[relative] = body
     for name in ("index.html", "console.js", "console.css"):

@@ -17,7 +17,7 @@ import zipfile
 
 PACK = Path(__file__).resolve().parents[1]
 CURRENT_PRODUCT_MODULES = {
-    "plugin": ("plugin_delivery", "plugin_resources", "plugin_workflow_contract", "plugin_maintenance_contract", "continuous_intake_capabilities",
+    "plugin": ("plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract", "plugin_maintenance_contract", "continuous_intake_capabilities",
                "agent_continuation", "dispatch_admission", "task_settlement", "task_graph", "scheduler_boundaries",
                "foundation_qa", "plugin_worktree_delivery"),
     # 此独立期望同时驱动最小隔离样本；新增偏好模块后两者必须一起存在，才能
@@ -29,7 +29,7 @@ CURRENT_RECORD_CLASSES = ("RecordUpdateTest", "RecordPublicationTest", "RecordCl
 # 独立声明运行时与反馈模块，证明两个当前入口确实纳入它们；不能从被测
 # GROUPS 反推期望值，否则误删运行时模块也会由同一实现自证通过。
 PROTOTYPE_MODULES = ("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
-                     "prototype_workspace_runtime", "prototype_feedback")
+                     "prototype_workspace_runtime", "prototype_feedback", "prototype_review")
 
 
 def current_product_targets():

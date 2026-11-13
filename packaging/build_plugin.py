@@ -25,10 +25,15 @@ from lib.skills.business_confirmation_policy import (
 )
 from lib.skills.qa_review_policy import validate_pack_qa_review_policy
 from lib.skills.role_skills import CORE_SKILLS, ROLE_SKILLS
+from product.command_identity import load_identity
+from lib.skills.selected_skills import LOCK as SELECTED_LOCK, VENDOR as SELECTED_VENDOR, SPECS as SELECTED_SPECS, snapshot as selected_snapshot
 from lib.validate_antigravity_artifacts import ROLE_TOOLS as ANTIGRAVITY_ROLE_TOOLS
 
 
 HOSTS = ("codex", "claude", "antigravity")
+IDENTITY = load_identity(ROOT)
+PLUGIN_NAME = IDENTITY["plugin_name"]
+CONFIG_SKILL = next(name for name, original in IDENTITY["skill_aliases"].items() if original == "agent-config")
 PREFERENCE_SOURCE = "native_config/preference_contract.py"
 PREFERENCE_PROJECTION = "plugins/dispatch_preferences.py"
 # 官方 CLI 1.5.5 的真实严格校验确认：技能正文最多加载 24,000 个 UTF-8
@@ -53,10 +58,10 @@ HOST_LIB_FILES = ("__init__.py", "claude_instructions.py", "claude_options.py",
 # 维护入口单独封闭白名单：既不遍历维护目录，也不读取独立产品源码或网页。
 # 新的薄模块必须经显式审查后加入；Skill 不属于九个业务核心或角色预载列表。
 MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
-MAINTENANCE_SKILL = "plugins/maintenance/skills/agent-config/SKILL.md"
-MAINTENANCE_CODEX_POLICY = "plugins/maintenance/skills/agent-config/agents/openai.yaml"
-MAINTENANCE_INVOCATIONS = {"codex": "$agent-workflow:agent-config",
-                          "claude": "/agent-workflow:agent-config", "antigravity": "/agent-config"}
+MAINTENANCE_SKILL = "plugins/maintenance/skills/" + CONFIG_SKILL + "/SKILL.md"
+MAINTENANCE_CODEX_POLICY = "plugins/maintenance/skills/" + CONFIG_SKILL + "/agents/openai.yaml"
+MAINTENANCE_INVOCATIONS = {"codex": "$" + PLUGIN_NAME + ":" + CONFIG_SKILL,
+                          "claude": "/" + PLUGIN_NAME + ":" + CONFIG_SKILL, "antigravity": "/" + CONFIG_SKILL}
 VERSION_RE = re.compile(r"3\.0\.0-alpha\.[1-9][0-9]*\Z")
 MANIFEST_FIELDS = {
     "codex": {"name", "version", "description", "author", "skills", "hooks"},
@@ -74,14 +79,26 @@ def digest(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
-def validate_preference_reader(body: bytes) -> None:
-    """唯一共享源必须保持纯标准库闭包；不能借投影夹入服务或包相对依赖。"""
+def validate_preference_reader(body: bytes, identity_body: bytes | None = None) -> None:
+    """偏好只读源只允许一个明确本地依赖，且该身份源码闭包本身必须仅用stdlib。
+
+    不把允许product根等同于允许任意产品模块；不允许动态import绕开静态闭包。
+    身份三文件原样进入两个产品，避免偏好投影各维护一份解析/常量。
+    """
     for node in ast.walk(ast.parse(body, filename=PREFERENCE_SOURCE)):
+        if isinstance(node, ast.Call) and (isinstance(node.func, ast.Name) and node.func.id == "__import__" or isinstance(node.func, ast.Attribute) and node.func.attr == "import_module"):
+            raise ValueError("dispatch preference reader must not use dynamic imports")
         if isinstance(node, ast.Import):
             modules = [item.name for item in node.names]
         elif isinstance(node, ast.ImportFrom):
             if node.level:
                 raise ValueError("dispatch preference reader must not use relative imports")
+            if node.module == "product.command_identity" and [item.name for item in node.names] == ["load_identity"]:
+                if identity_body is None:
+                    raise ValueError("dispatch identity dependency must be supplied for closure validation")
+                # 同一检查器在第二层不再提供本地依赖，确保身份模块不能继续引入本地树。
+                validate_preference_reader(identity_body)
+                continue
             modules = [node.module or ""]
         else:
             continue
@@ -93,7 +110,7 @@ def validate_manifest(host: str, manifest: dict, version: str) -> None:
     """对本产品实际使用的官方字段做封闭校验，不默默保留未文档化扩展。"""
     if not isinstance(manifest, dict) or set(manifest) != MANIFEST_FIELDS[host]:
         raise ValueError("manifest contains missing or undocumented product fields")
-    if manifest["name"] != "agent-workflow" or manifest["version"] != version:
+    if manifest["name"] != PLUGIN_NAME or manifest["version"] != version:
         raise ValueError("manifest identity/version must match this plugin build")
     if not isinstance(manifest["description"], str) or not manifest["description"].strip():
         raise ValueError("manifest description must be a nonempty string")
@@ -105,7 +122,7 @@ def validate_manifest(host: str, manifest: dict, version: str) -> None:
     if host == "antigravity":
         if manifest["$schema"] != "https://antigravity.google/schemas/v1/plugin.json":
             raise ValueError("Antigravity manifest must declare its official schema")
-        if manifest["displayName"] != "Agent Workflow":
+        if manifest["displayName"] != "XY Workflow":
             raise ValueError("Antigravity display name must match the product")
 
 
@@ -213,7 +230,7 @@ def render_agent(role: str, body: bytes, envelope: bytes, host: str) -> bytes:
         lines.append("tools: " + tools)
         # 使用官方插件命名空间引用既有技能；不内联第二份方法论。
         lines.append("skills:")
-        lines.extend("  - agent-workflow:" + skill for skill in ROLE_SKILLS[role])
+        lines.extend("  - " + PLUGIN_NAME + ":" + skill for skill in ROLE_SKILLS[role])
     else:
         lines.extend(("model: inherit", "mainAgent: false", "subagent: true", "inheritMcp: true",
                       "inheritCustomizations: true"))
@@ -249,6 +266,8 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         result[target or relative] = body
         source_files[relative] = digest(body)
 
+    # documents 是唯一核心载荷白名单根，包含 prototype_review 及其安全读取、
+    # 依赖校验闭包；templates 同源装配离线工具和页面起点，不在宿主间维护副本。
     for folder in ("product", "roles", "platforms/shared", "platforms/" + host,
                    "templates", "lib/documents", "lib/delivery", "lib/project", "lib/skills"):
         for relative in tree_files(source, folder):
@@ -259,16 +278,43 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         copy("lib/hosts/" + name)
     for name in ("plugins/__init__.py", "plugins/source_pack.py", "plugins/project_context.py", "plugins/plugin-context.md"):
         copy(name)
+    # 第三方依赖在非发现vendor区原样装配；统一锁先拒绝缺失/额外/篡改/链接。
+    # 构建消费同一批已验证字节，不执行上游脚本、不联网，也不套内部Skill envelope。
+    selected_lock, selected_files = selected_snapshot(source)
+    copy(SELECTED_LOCK)
+    for relative, body in selected_files.items():
+        result[relative] = body
+        source_files[relative] = digest(body)
+    # 发现目录只接本项目xy别名薄适配，第三方原name/frontmatter永远留在vendor。
+    adapters = tree_files(source, "plugins/selected-skills")
+    public = set(IDENTITY["skill_aliases"]) - {CONFIG_SKILL}
+    if {path.split("/")[2] for path in adapters} != public:
+        raise ValueError("selected adapters must match the unique public identity")
+    for adapter in adapters:
+        copy(adapter)
+        target = adapter.replace("plugins/selected-skills/", "skills/", 1)
+        if target.endswith("/SKILL.md"):
+            header, _ = split_frontmatter(result[adapter])
+            name = target.split("/")[1]
+            if not re.search(rb"(?m)^name: " + name.encode("ascii") + rb"$", header) or re.search(rb"(?m)^(hooks|allowed-tools):", header):
+                raise ValueError("selected adapter must use its public name without permission/hook metadata")
+        result[target] = result[adapter]
+        projections[target] = {"source": adapter, "transform": "identity"}
+        if host == "antigravity" and target.endswith("/SKILL.md"):
+            validate_antigravity_skill_body(target, result[target])
     # 唯一允许进入工作流插件的独立配置来源：只读合同按字节原样投影，包内不建
     # native_config 目录，也不复制业务服务。双摘要显式说明来源与投影的同源关系。
     preference_reader = read_source(source, PREFERENCE_SOURCE)
-    validate_preference_reader(preference_reader)
+    validate_preference_reader(preference_reader, read_source(source, "product/command_identity.py"))
     result[PREFERENCE_PROJECTION] = preference_reader
     source_files[PREFERENCE_SOURCE] = digest(preference_reader)
     projections[PREFERENCE_PROJECTION] = {
         "source": PREFERENCE_SOURCE, "transform": "identity",
         "source_sha256": digest(preference_reader),
         "projection_sha256": digest(result[PREFERENCE_PROJECTION]),
+        "dependencies": {"product/command_identity.py": digest(result["product/command_identity.py"]),
+                         "product/command_identity.json": digest(result["product/command_identity.json"]),
+                         "product/__init__.py": digest(result["product/__init__.py"])},
     }
     copy("plugins/PLUGIN.md", "PLUGIN.md")
     copy("plugins/INSTALL.md", "INSTALL.md")
@@ -290,15 +336,15 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         copy("plugins/maintenance/" + name)
     validate_maintenance_descriptor(source)
     copy(MAINTENANCE_SKILL)
-    target = "skills/agent-config/SKILL.md"
+    target = "skills/" + CONFIG_SKILL + "/SKILL.md"
     result[target] = render_maintenance_skill(result[MAINTENANCE_SKILL], host)
     projections[target] = {"source": MAINTENANCE_SKILL,
                            "transform": host + "-maintenance-explicit-v1"}
     if host == "antigravity":
         validate_antigravity_skill_body(target, result[target])
     if host == "codex":
-        copy(MAINTENANCE_CODEX_POLICY, "skills/agent-config/agents/openai.yaml")
-        projections["skills/agent-config/agents/openai.yaml"] = {
+        copy(MAINTENANCE_CODEX_POLICY, "skills/" + CONFIG_SKILL + "/agents/openai.yaml")
+        projections["skills/" + CONFIG_SKILL + "/agents/openai.yaml"] = {
             "source": MAINTENANCE_CODEX_POLICY, "transform": "identity"}
     skills = sorted(CORE_SKILLS)
     for relative in sorted(result.copy()):
@@ -344,7 +390,7 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         projections["rules/AGENTS.md"] = {"source": "plugins/main-session-context.md",
                                            "transform": "antigravity-main-session-route-v1"}
     template = "plugins/" + host + "/plugin.json.in"
-    manifest = json.loads(read_source(source, template).decode("utf-8").replace("@PLUGIN_VERSION@", version))
+    manifest = json.loads(read_source(source, template).decode("utf-8").replace("@PLUGIN_VERSION@", version).replace("@PLUGIN_NAME@", PLUGIN_NAME))
     validate_manifest(host, manifest, version)
     source_files[template] = digest(read_source(source, template))
     result[MANIFESTS[host]] = json_bytes(manifest)
@@ -360,13 +406,17 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     if loaded_errors:
         raise ValueError("loaded workflow contract failed: " + "; ".join(loaded_errors))
     result["sources.json"] = json_bytes({
-        "schema_version": 1, "plugin_version": version, "host": host,
+        "schema_version": 1, "plugin_version": version, "plugin_name": PLUGIN_NAME, "host": host,
         "product": "workflow-core",
         "hook_trust_required": host == "codex",
         "source_files": source_files, "projections": projections,
         "payload_sha256": {name: digest(body) for name, body in result.items()},
         "validation": {"business_confirmation_policy": "passed", "execution_contract": "passed",
-                       "single_qa_policy": "passed", "loaded_confirmation_policy": "passed"},
+                       "single_qa_policy": "passed", "loaded_confirmation_policy": "passed",
+                       "selected_skills_integrity": "passed"},
+        "selected_dependencies": {name: {"repository": item["repository"], "commit": item["commit"],
+                                         "lock": SELECTED_LOCK, "canonical_root": SELECTED_VENDOR + "/" + name}
+                                  for name, item in selected_lock["dependencies"].items()},
         "runtime_verified": False,
         "pending_acceptance": ["native dispatch and independent context", "native model and effort application",
                                "in-flight task resource retention across host plugin updates"],
@@ -374,15 +424,37 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     return result
 
 
+def archive_modes(files: dict[str, bytes]) -> dict[str, int]:
+    """唯一归档模式权威：返回含普通文件类型位的100644或100755。
+
+    官方包的可执行资源从同一锁读取，锁所在前缀同时用于local-source投影；
+    自有三个启动入口只在主包根为可执行，带前缀二次封装保持原有默认644语义。
+    producer与publisher必须共用本函数，不能各自猜测扩展名或复制可执行白名单。
+    """
+    locked_modes = {}
+    for name, body in files.items():
+        if name == SELECTED_LOCK or name.endswith("/" + SELECTED_LOCK):
+            prefix = name.removesuffix(SELECTED_LOCK)
+            for dependency, item in json.loads(body)["dependencies"].items():
+                for relative, record in item["files"].items():
+                    mode = record.get("mode", 0o644)
+                    # 即使调用者尚未完成完整锁校验，也不能让归档或发行比较放宽权限。
+                    if type(mode) is not int or mode not in {0o644, 0o755}:
+                        raise ValueError("archive file mode must be 644 or 755")
+                    locked_modes[prefix + SELECTED_VENDOR + "/" + dependency + "/" + relative] = mode
+    executable = {"plugins/source_pack.py", "lib/python_runtime.sh", "plugins/maintenance/launcher.sh"}
+    return {name: stat.S_IFREG | locked_modes.get(name, 0o755 if name in executable else 0o644)
+            for name in files}
+
+
 def write_archive(files: dict[str, bytes], target: Path) -> None:
     """插件ZIP和市场源ZIP共用固定顺序、时间、权限与压缩参数。"""
+    modes = archive_modes(files)
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for relative, body in sorted(files.items()):
             entry = zipfile.ZipInfo(relative, (1980, 1, 1, 0, 0, 0))
             entry.create_system = 3
-            executable = relative in {"plugins/source_pack.py", "lib/python_runtime.sh",
-                                      "plugins/maintenance/launcher.sh"}
-            entry.external_attr = (stat.S_IFREG | (0o755 if executable else 0o644)) << 16
+            entry.external_attr = modes[relative] << 16
             entry.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(entry, body, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
     target.with_suffix(".zip.sha256").write_text(digest(target.read_bytes()) + "  " + target.name + "\n", encoding="ascii")
@@ -393,7 +465,7 @@ def build(source: Path, output: Path, host: str) -> Path:
     files = payload(source, host)
     version = json.loads(files["sources.json"])["plugin_version"]
     output.mkdir(parents=True, exist_ok=True)
-    target = output / f"agent-workflow-{host}-{version}.zip"
+    target = output / f"{IDENTITY['artifact_prefix']}-{host}-{version}.zip"
     write_archive(files, target)
     return target
 
@@ -406,7 +478,7 @@ def local_source(archive: Path, output: Path, host: str) -> Path:
     """
     market = output / "local" / host
     market.mkdir(parents=True, exist_ok=False)
-    plugin = market / ("agent-workflow" if host == "antigravity" else "plugins/agent-workflow")
+    plugin = market / (PLUGIN_NAME if host == "antigravity" else "plugins/" + PLUGIN_NAME)
     plugin.mkdir(parents=True)
     with zipfile.ZipFile(archive) as package:
         for entry in package.infolist():
@@ -418,14 +490,14 @@ def local_source(archive: Path, output: Path, host: str) -> Path:
             target.write_bytes(package.read(entry))
             target.chmod((entry.external_attr >> 16) & 0o777)
     if host == "codex":
-        manifest = {"name": "agent-workflow-local", "plugins": [{
-            "name": "agent-workflow", "source": {"source": "local", "path": "./plugins/agent-workflow"},
+        manifest = {"name": IDENTITY["marketplaces"]["local"], "plugins": [{
+            "name": PLUGIN_NAME, "source": {"source": "local", "path": "./plugins/" + PLUGIN_NAME},
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Productivity",
         }]}
         target = market / ".agents/plugins/marketplace.json"
     elif host == "claude":
-        manifest = {"name": "agent-workflow-local", "owner": {"name": "Agent Workflow"},
-                    "plugins": [{"name": "agent-workflow", "source": "./plugins/agent-workflow"}]}
+        manifest = {"name": IDENTITY["marketplaces"]["local"], "owner": {"name": "Agent Workflow"},
+                    "plugins": [{"name": PLUGIN_NAME, "source": "./plugins/" + PLUGIN_NAME}]}
         target = market / ".claude-plugin/marketplace.json"
     else:
         write_archive({path.relative_to(market).as_posix(): path.read_bytes()

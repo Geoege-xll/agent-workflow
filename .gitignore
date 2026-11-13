@@ -5,3 +5,6 @@ __pycache__/
 .DS_Store
 .pytest_cache/
 .venv/
+# 仅此固定官方依赖闭包随插件交付；其它项目或用户node_modules不进入仓库。
+!third_party/selected-skills/playwright-cli/runtime/node_modules/
+!third_party/selected-skills/playwright-cli/runtime/node_modules/**

@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 import zipfile
 
-from lib.skills.role_skills import CORE_SKILLS, ROLE_SKILLS
+from lib.skills.role_skills import CORE_SKILLS, ROLE_SKILLS, SELECTED_SKILLS
 from tests.test_plugin_delivery import PACK, builder, isolated_environment
 
 
@@ -34,27 +34,28 @@ class PluginMaintenanceContractTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def test_ten_discoverable_skills_keep_nine_core_and_unchanged_worker_preloads(self):
-        self.assertEqual(9, len(CORE_SKILLS))
-        self.assertNotIn("agent-config", CORE_SKILLS)
+    def test_discoverable_skills_keep_eight_core_and_unchanged_worker_preloads(self):
+        # Grill Me 已移入四个精选 adapter；核心表精确保留八项，维护入口独立发现。
+        self.assertEqual(8, len(CORE_SKILLS))
+        self.assertNotIn("xy-config", CORE_SKILLS)
         for role, skills in ROLE_SKILLS.items():
-            self.assertNotIn("agent-config", skills, role)
+            self.assertNotIn("xy-config", skills, role)
         for host, root in self.installed.items():
             with self.subTest(host=host):
                 actual = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
-                self.assertEqual(set(CORE_SKILLS) | {"agent-config"}, actual)
+                self.assertEqual(set(CORE_SKILLS) | set(SELECTED_SKILLS) | {"xy-config"}, actual)
                 for role in ROLE_SKILLS:
                     self.assertEqual((PACK / "roles" / (role + ".md")).read_bytes(),
                                      (root / "roles" / (role + ".md")).read_bytes())
                     if host != "codex":
                         header, _ = builder.split_frontmatter((root / "agents" / (role + ".md")).read_bytes())
-                        self.assertNotIn(b"agent-config", header)
+                        self.assertNotIn(b"xy-config", header)
 
     def test_host_metadata_is_explicit_only_and_maintenance_has_no_business_envelope(self):
-        original = (PACK / "plugins/maintenance/skills/agent-config/SKILL.md").read_bytes()
+        original = (PACK / "plugins/maintenance/skills/xy-config/SKILL.md").read_bytes()
         for host, root in self.installed.items():
             with self.subTest(host=host):
-                loaded = (root / "skills/agent-config/SKILL.md").read_bytes()
+                loaded = (root / "skills/xy-config/SKILL.md").read_bytes()
                 header, body = builder.split_frontmatter(loaded)
                 # 直接检查实际发现目录中的官方字段与工具授权面；不是只对源文案断言。
                 self.assertNotIn(b"allowed-tools:", header)
@@ -67,9 +68,9 @@ class PluginMaintenanceContractTest(unittest.TestCase):
                 self.assertEqual(builder.render_maintenance_skill(original, host), loaded)
                 adapter = "plugins/antigravity/plugin-context.md" if host == "antigravity" else "plugins/plugin-context.md"
                 self.assertNotIn((PACK / adapter).read_bytes(), body)
-                policy = root / "skills/agent-config/agents/openai.yaml"
+                policy = root / "skills/xy-config/agents/openai.yaml"
                 if host == "codex":
-                    self.assertEqual((PACK / "plugins/maintenance/skills/agent-config/agents/openai.yaml").read_bytes(),
+                    self.assertEqual((PACK / "plugins/maintenance/skills/xy-config/agents/openai.yaml").read_bytes(),
                                      policy.read_bytes())
                     self.assertIn(b"policy:\n  allow_implicit_invocation: false\n", policy.read_bytes())
                     self.assertNotIn(b"disable-model-invocation:", header)
@@ -98,7 +99,7 @@ class PluginMaintenanceContractTest(unittest.TestCase):
                     try:
                         result = subprocess.run([sys.executable, "-B", str(root / "hooks/session_start.py")],
                             cwd=self.root, env=isolated_environment(self.root / "hook-scope"),
-                            input='{"prompt":"实现 agent-config status"}', capture_output=True, text=True, timeout=10)
+                            input='{"prompt":"实现 xy-config status"}', capture_output=True, text=True, timeout=10)
                     finally:
                         for path in authorities:
                             path.with_suffix(".temporarily-absent").rename(path)
@@ -158,7 +159,7 @@ print(json.dumps({"report": report, "exit": status}))
     def test_antigravity_budget_includes_maintenance_and_rejects_its_own_overflow(self):
         root = self.installed["antigravity"]
         actual = list((root / "skills").glob("*/SKILL.md"))
-        self.assertEqual(10, len(actual))
+        self.assertEqual(len(CORE_SKILLS | SELECTED_SKILLS) + 1, len(actual))
         for path in actual:
             self.assertLessEqual(len(builder.split_frontmatter(path.read_bytes())[1].strip()), 24_000)
         read_source = builder.read_source
@@ -167,7 +168,7 @@ print(json.dumps({"report": report, "exit": status}))
             return body + ("中" * 8_001).encode() if relative == builder.MAINTENANCE_SKILL else body
         output = self.root / "oversized-maintenance"
         with mock.patch.object(builder, "read_source", side_effect=oversized):
-            with self.assertRaisesRegex(ValueError, "skills/agent-config/SKILL.md"):
+            with self.assertRaisesRegex(ValueError, "skills/xy-config/SKILL.md"):
                 builder.build(PACK, output, "antigravity")
         self.assertFalse(output.exists())
 

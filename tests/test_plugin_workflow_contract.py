@@ -111,6 +111,62 @@ class PluginWorkflowContractTest(unittest.TestCase):
                                              (root / "skills" / skill / reference.relative_to(original.parent)).read_bytes())
                 self.assertEqual([], policy.validate_business_confirmation_pack(root, host))
 
+    def test_selected_skill_consumers_preserve_native_workflow_boundaries(self):
+        """消费已构建三端的真实接入文字，锁定自动/显式入口与默认原型权限边界。"""
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                workflow = (root / "skills/xy-workflow/SKILL.md").read_text(encoding="utf-8")
+                intake = (root / "skills/xy-workflow/references/requirements-intake.md").read_text(encoding="utf-8")
+                design = (root / "skills/xy-ui-design/SKILL.md").read_text(encoding="utf-8")
+                adapter = (root / "skills/xy-taste/SKILL.md").read_text(encoding="utf-8")
+                original = root / "third_party/selected-skills/taste/skills/taste-skill/SKILL.md"
+                self.assertIn("requirements_provider: xy-grilling", workflow)
+                self.assertIn("`grill-me` 是上游用户显式入口", intake)
+                self.assertIn("不是上游 Grill Me 的 schema", intake)
+                self.assertIn("同一已验证插件", intake)
+                for boundary in ("next_offset", "eof", "sha256", "total_bytes", "standards_only",
+                                 "compact application consoles", "QA PASS"):
+                    self.assertIn(boundary, design)
+                self.assertIn("third_party/selected-skills/taste/skills/taste-skill/SKILL.md", adapter)
+                self.assertNotIn(b"hooks:", builder.split_frontmatter(adapter.encode())[0])
+                self.assertGreater(len(builder.split_frontmatter(original.read_bytes())[1]), 24000)
+                # 原版仍在非发现目录，默认原型必须保留静态验收和截图禁令。
+                self.assertIn("Do not automate prototype browser operations by", design)
+                self.assertIn("Do not generate, save, attach, or present screenshots", " ".join(design.split()))
+                self.assertNotIn("ui-ux-pro-max", workflow + intake + design)
+                for role in ("roles/xy-uiux.md", "product/ROLES.yaml"):
+                    self.assertIn("xy-taste", (root / role).read_text(encoding="utf-8"))
+
+    def test_web_browser_policy_uses_bundled_cli_without_widening_qa(self):
+        """检查真实三端包的公开绑定和权限边界，避免原Skill安装段扩权或全体QA预载。"""
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                policy_path = "skills/xy-build-verify/references/web-browser-verification.md"
+                browser_policy = (root / policy_path).read_text(encoding="utf-8")
+                for boundary in ("项目已有", "xy-playwright", "具体能力", "桌面能力", "只读权限",
+                                 "本任务命名会话", "snapshot", "非上游原生命令", "-- doctor"):
+                    self.assertIn(boundary, browser_policy)
+                self.assertIn("不因本政策自动启动浏览器或生成截图", browser_policy)
+                adapter = (root / "skills/xy-playwright/SKILL.md").read_bytes()
+                header, _ = builder.split_frontmatter(adapter)
+                self.assertIn(b"name: xy-playwright", header)
+                self.assertNotIn(b"allowed-tools:", header)
+                self.assertNotIn(b"hooks:", header)
+                canonical = root / ("third_party/selected-skills/playwright-cli/runtime/node_modules/"
+                                    "@playwright/cli/skills/playwright-cli/SKILL.md")
+                original_header, _ = builder.split_frontmatter(canonical.read_bytes())
+                self.assertIn(b"name: playwright-cli", original_header)
+                self.assertIn(b"allowed-tools:", original_header)
+                if host != "codex":
+                    web_header, _ = builder.split_frontmatter((root / "agents/xy-web.md").read_bytes())
+                    qa_header, _ = builder.split_frontmatter((root / "agents/xy-qa.md").read_bytes())
+                    self.assertIn(b"xy-playwright", web_header)
+                    self.assertNotIn(b"xy-playwright", qa_header)
+                # 发现目录只能暴露xy-*薄入口，原版名称保留在非发现vendor。
+                discovered = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
+                self.assertTrue({"xy-config", "xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"} <= discovered)
+                self.assertTrue(all(name.startswith("xy-") for name in discovered))
+
     def test_native_role_prompts_keep_full_original_body_and_no_history_fork(self):
         for host, root in self.installed.items():
             with self.subTest(host=host):

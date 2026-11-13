@@ -332,9 +332,10 @@ def _prototype_candidates(
         raise ApplyError(f"prototype workspace must be a real directory: {root}")
     return (
         PrototypeScaffold(root, root_before),
-        # 仅初始化缺失/空工作区，五个运行资产随同一候选事务发布；已有业务工作区原样保留。
+        # 仅初始化缺失/空目录中的项目样式种子；通用查看器和通信资产归插件评审包。
+        # 沿用原候选事务的并发/恢复保护，已有非空业务目录不补写、不迁移、不删除。
         [(root / name, _read_regular(pack / "templates/prototype" / name, f"prototype {name} template"))
-         for name in ("index.html", "prototype.css", "workspace.css", "workspace.js", "page-shell.js")],
+         for name in ("prototype.css",)],
     )
 
 

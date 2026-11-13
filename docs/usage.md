@@ -1,16 +1,16 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码插件为 `3.0.0-alpha.7`，独立原生 Agent 配置工具为 `0.1.0-alpha.4`；实际远程版本以客户端列表及发行资产为准。默认使用自有 Git 远程 alpha 分发；官方公开目录与稳定发行尚未就绪，Windows 暂停。运行 helper 需要已有 Python 3.11+ 与 Bash；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码候选采用 `xy-workflow` 命名，插件版本为 `3.0.0-alpha.8`，独立原生 Agent 配置工具为 `0.1.0-alpha.5`；三项本轮源码范围已独立验收，尚未发布或更新本机，组件仍为 unpublished。实际远程版本以客户端列表及发行资产为准。默认使用自有 Git 远程 alpha 分发；官方公开目录与稳定发行尚未就绪，Windows 暂停。运行 helper 需要已有 Python 3.11+ 与 Bash；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
-普通用户由官方客户端直接安装远程 alpha，无需克隆本仓库或构建。Codex 使用 Git 市场的 `--ref plugins-codex-alpha`，Claude 使用 Git URL 的 `#plugins-claude-alpha`，两者市场名均为 `agent-workflow-alpha`；AGY 使用 GitHub `tree/plugins-antigravity-alpha` URL。具体完整命令与检查步骤见安装说明；不要把不同宿主的分支语法互换。安装不需要中央运行时、项目登记、TUI、Homebrew 或 npm 安装步骤。
+普通用户由官方客户端直接安装远程 alpha，无需克隆本仓库或构建。Codex 使用 Git 市场的 `--ref plugins-codex-alpha`，Claude 使用 Git URL 的 `#plugins-claude-alpha`，两者市场名均为 `xy-workflow-alpha`；AGY 使用 GitHub `tree/plugins-antigravity-alpha` URL。具体完整命令与检查步骤见安装说明；不要把不同宿主的分支语法互换。安装不需要中央运行时、项目登记、TUI、Homebrew 或 npm 安装步骤。
 
-开发用 `agent-workflow-local` 与远程 alpha 来源分开，已有本机 alpha.4 候选不会自动迁移。按官方客户端确认来源与范围，停用旧候选或使用其卸载流程移除，避免两个同名插件同时启用。源码构建及临时加载仅供开发，见[开发手册](development.md)。
+开发用 `xy-workflow-local` 与远程 alpha 来源分开，已有本机 alpha.4 候选不会自动迁移。按官方客户端确认来源与范围，停用旧候选或使用其卸载流程移除，避免两个同名插件同时启用。源码构建及临时加载仅供开发，见[开发手册](development.md)。
 
 安装后开启新会话，并按宿主实际发现的入口使用工作流。Codex 的 SessionStart Hook 需要在官方客户端审阅并信任；Claude 的插件默认 PM 仍受用户设置优先级约束；Antigravity 由插件规则路由业务请求。发现 Skill、安装成功和配置文件正确，分别只能证明对应层次的状态，不能代替模型实际接管证据。
 
-本轮远程 alpha.5 的 CI、发布与安装发现按[远程安装记录](plans/plugin-remote-install.md)分别验收，不从发布推断模型运行。上一 alpha.4 本机精确安装检查中，Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；Antigravity 安装通过，后续运行等待登录；App 图形界面未验。较早候选的原生单项证据见[原生验收记录](plans/plugin-v3-native-acceptance.md)，不能扩大为当前所有客户端均通过。
+历史工作流插件 alpha.5 的 CI、发布与安装发现按[远程安装记录](plans/plugin-remote-install.md)分别验收，不从发布推断模型运行。更早插件 alpha.4 的本机精确安装检查中，Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；Antigravity 安装通过，后续运行等待登录；App 图形界面未验。这些历史插件版本不等同本轮独立组件 `0.1.0-alpha.5` 候选；较早的单项证据见[原生验收记录](plans/plugin-v3-native-acceptance.md)，不能扩大为当前所有客户端均通过。
 
 市场刷新与已安装插件更新按宿主分别处理，具体步骤见[安装说明](../plugins/INSTALL.md)。插件更新前先收尾或交接活动任务；当前 alpha 尚无活动任务跨缓存更新的自动资源保留协议。仓库清理和本机安装不代表自动替换其他用户、其他项目或所有旧安装。
 
@@ -38,7 +38,9 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 需要原型的 UI 任务由设计 Agent 在所选 adapter 的 `docs.standards_root/prototype` 内制作可交互 HTML，并返回需求覆盖、规范符合性和交付一致性的三维自检。PM 将 REQ 到具体页面及实际状态锚点的关联写入同一主题计划；原型 HTML、静态验收、依赖指纹与视觉确认继续保留，不恢复计划 Markdown 转 HTML 生成链，也不增加第二个原型 QA。
 
-需要节点反馈时，PM 用当前物理插件根的白名单 `prototype_feedback_cli.py prepare`，显式指定实际项目、同一 adapter、唯一需求 Markdown 和请求 ID，提供返回的 `review_url`。用户直接在链接中记录“必须改／建议／疑问”、REQ 关联与局部修改提案，无需填写 SHA；当前文字摘录与建议文字不代表历史批准。浏览器导出的意见由 `validate` 复核实际需求 SHA 与原依赖指纹，再交回原 UI Agent 在当前授权范围修订 HTML。链接仅声明版本；旧绑定或非法内容明确失败并保留意见，反馈不自动改需求、页面或批准，也不增加业务确认。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+需要节点反馈时，PM 用当前物理插件根的白名单 `prototype_feedback_cli.py prepare`，显式指定实际项目、同一 adapter、唯一需求 Markdown 和请求 ID，提供返回的 `review_url`。通用导航／画板／批注工具随插件交付，prepare 将明确页面的必要依赖与工具生成用户级私有离线快照，不向项目复制通用壳，不要求项目存在 index 或插件专用样式；项目具体页面仍是编辑权威。快照固定工具版本与内容、需求和逐页依赖，插件升级不覆盖已打开的评审。
+
+用户直接在链接中记录“必须改／建议／疑问”、REQ 关联与局部修改提案，无需填写 SHA；当前文字摘录与建议文字不代表历史批准。schema 2 导出由 `validate` 重读项目当前源并核对原快照，再交回原 UI Agent 在当前授权范围修订 HTML。旧绑定、损坏与非法内容明确失败并保留意见，不自动重绑、改需求、改页面或授予批准，也不增加业务确认。旧壳迁移另有预览／执行／恢复入口，只清理可证明归属的纯工具文件，混合或未知业务资产保留。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 实施者按实际改动完成必要构建、运行或文档检查，提交真实证据。Full 由请求级唯一独立只读 QA 检查集成范围，失败交原职责作者修复并由原 Reviewer 复查。Light 按风险与明确请求选择必要独立审查；未做独立 QA 时只报告真实验证结果，不宣称 QA PASS。
 
@@ -54,10 +56,10 @@ agentmemory 是可选服务。只有工具能强制按项目过滤并返回匹�
 
 ## 模型配置与工作流启停
 
-没有调用偏好时，工作流沿宿主当前模型与推理设置。显式调用插件的 `agent-config [open|status|doctor]` 可打开配置页，省略动作等价 open；操作细节见[原生 Agent 配置工具](agent-configuration.md)。普通业务请求中出现命令名称不会触发维护路径。
+没有调用偏好时，工作流沿宿主当前模型与推理设置。显式调用插件的 `xy-config [open|status|doctor]` 可打开配置页，省略动作等价 open；操作细节见[原生 Agent 配置工具](agent-configuration.md)。普通业务请求中出现命令名称不会触发维护路径。
 
 首次缺组件时先展示固定版本、来源和准备信息，经确认才下载已核验发行包。配置页默认管理“调用偏好”，提供用户级和当前项目的通用默认／逐 Agent 设置；没有原生文件时也有通用入口。设置先预览再保存，PM 在下一次派发前通过纯只读 helper 解析，不需要常驻 HTTP 或 MCP。无法表达的已配置字段会明确报告，不会悄悄忽略。
 
 “原生定义文件”保留原来的完整定义编辑，插件缓存始终只读；模型目录按本机对应客户端／有效配置读取，推理选项按当前模型处理。调用偏好保存、原生文件重新加载和实际指定模型运行分别判断，不改变当前主会话或运行中的 Agent。
 
-组件 `0.1.0-alpha.4` 同页提供 Codex／Claude 工作流用户级默认与项目三态设置；Claude 当前项目使用个人 local 范围，AGY 启停为只读官方管理说明。调用偏好、原生字段和启停分开保存，停用后可用页面给出的独立命令重新打开。发行状态与准确安装版本按固定描述和官方客户端回执判断，不把本地源码功能当作现有安装已具备。
+组件提供 Codex／Claude 工作流用户级默认与项目三态设置；Claude 当前项目使用个人 local 范围，AGY 启停为只读官方管理说明。alpha.5 候选将通用默认和动态 Agent 表格集中呈现，模型、原生字段和启停使用独立草稿，当前事务统一预览保存；普通切换保留草稿。停用后可用页面给出的独立命令重新打开。发行状态与准确安装版本按固定描述和官方客户端回执判断，不把已接受源码功能当作现有安装已具备。

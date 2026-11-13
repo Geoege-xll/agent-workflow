@@ -367,12 +367,15 @@ this reference creates no separate instance-state source.
    Do not select a prototype policy for a design-change route yet. Record the exact affected
    surfaces and prepare both consequences so the PM can recommend one branch and the user can choose
    `required` or `waived_by_user` during requirements confirmation.
-5. Every `Full` request performs a **Grill Me coverage check** by activating `grill-me`
-   (Codex: `$grill-me`; Claude Code and Antigravity CLI: `/grill-me`). Use
-   `coverage_check` when project facts may already be complete and `full_interview` only for the
-   unresolved material gaps it identifies. A complete request returns without artificial
+5. Every `Full` request performs a **Grill Me coverage check** using upstream `grilling`
+   (Codex: `$xy-grilling`; Claude Code and Antigravity CLI: `/xy-grilling`, using the actual discovered
+   plugin-qualified entry). First read [requirements intake](requirements-intake.md) completely:
+   it owns PM `coverage_check`, `full_interview` and `grill_result`; these are not upstream schema.
+   Original `grill-me` is user-invoked only; never automatically activate it. Reuse settled facts,
+   ask only the unresolved frontier with recommendations, and fold shared-understanding confirmation
+   into the existing requirements approval after the draft. A complete request returns without artificial
    questions. Clear Light work does not run this merely because the Skill is installed.
-   Keep its complete `grill_result` internal. If the Skill is unavailable, use the local
+   Keep the complete `grill_result` internal. If `grilling` is unavailable, use the local
    clarification fallback and record it internally.
 6. After Full coverage is complete, activate `xy-plan` (Codex: `$xy-plan`; Claude Code and
    Antigravity CLI: `/xy-plan`). It returns a self-contained proposal with `plan_state: draft`,

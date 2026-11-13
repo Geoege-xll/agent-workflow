@@ -18,7 +18,7 @@ roles:
     toolsets: write
     tags: [web, browser, frontend, accessibility, localization, ui-implementation]
     deliverables: [production-web-change, repository-native-verification-evidence, prototype-contract-mapping]
-    claude_skills: [xy-code-standards, xy-build-verify]
+    claude_skills: [xy-code-standards, xy-build-verify, xy-playwright]
     codex_effort: medium
     codex_sandbox: workspace-write
     claude_color: cyan
@@ -88,7 +88,7 @@ roles:
     toolsets: write
     tags: [ui, ux, wireframe, prototype, design-system]
     deliverables: [stable-html-page, page-interaction-contract, prototype-verification, scoped-design-standard-update]
-    claude_skills: [xy-ui-design, ui-ux-pro-max, xy-prototype-verify]
+    claude_skills: [xy-ui-design, xy-taste, xy-prototype-verify]
     codex_effort: medium
     codex_sandbox: workspace-write
     claude_color: purple

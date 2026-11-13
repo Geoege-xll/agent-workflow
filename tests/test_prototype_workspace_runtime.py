@@ -122,6 +122,10 @@ function environment(tree, href, embedded = false) {
     node.append(...spec.children.map(build)); return node;
   }
   document.append(...tree.children.map(build));
+  if (tree === fixture.page) {
+    const back = new Element('a', {id: 'prototype-back-index', href: 'index.html'}, document);
+    document.querySelector('header').append(back);
+  }
   document.getElementById = id => document.querySelector(`#${id}`);
   document.body = document.querySelector('body'); document.activeElement = document.body;
   const window = new Events();
@@ -139,23 +143,33 @@ function node(env, tag, attrs = {}, children = []) {
   for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
   element.append(...children); return element;
 }
-function index(href = 'file:///offline/prototype/index.html', names = ['settings.html', 'reports.html', 'guide.html']) {
+function boot(names = ['settings.html', 'reports.html', 'guide.html']) {
+  const context = {schema_version: 2, request_id: 'review-1', project_id: '1'.repeat(64), adapter: 'project.yaml', adapter_sha256: '2'.repeat(64),
+    prototype_root: 'docs/prototype', plan_source: 'docs/plans/review.md', plan_sha256: 'a'.repeat(64), navigation_sha256: '3'.repeat(64),
+    tool: {version: '3.0.0-alpha.7', payload_sha256: '4'.repeat(64)}, review_id: '5'.repeat(64), requirements: [{id: 'REQ-007', label: '节点反馈'}],
+    pages: names.map(name => ({path: 'docs/prototype/' + name, dependency_fingerprint: 'b'.repeat(64)}))};
+  return {schema_version: 2, context, pages: names.map((name, i) => ({name, path: 'docs/prototype/' + name, url: 'project/docs/prototype/' + name, label: `页面 ${i + 1}`,
+    groups: [{label: i < 2 ? '主要页面' : '其他页面', open: false}]}))};
+}
+const encode = value => JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+function index(href = 'file:///offline/prototype/index.html', names) {
   const env = environment(fixture.index, href); const nav = env.document.getElementById('prototype-pages');
-  const groups = [node(env, 'details', {id: 'group-main'}, [node(env, 'summary', {}, ['主要页面'])]),
-    node(env, 'details', {id: 'group-more'}, [node(env, 'summary', {}, ['其他页面'])])];
-  const links = names.map((name, i) => node(env, 'a', {href: name}, [`页面 ${i + 1}`]));
-  links.forEach((link, i) => groups[i < 2 ? 0 : 1].append(link)); nav.append(...groups);
-  env.links = links; env.groups = groups; return env;
+  env.startup = node(env, 'script', {id: 'prototype-review-data', type: 'application/json'}, [encode(boot(names))]);
+  env.document.querySelector('head').append(env.startup); env.run(fixture.feedback);
+  // 导航DOM由真实生产控制器生成；测试只读派生项，不重新实现导航算法。
+  Object.defineProperty(env, 'links', {get: () => nav.querySelectorAll('a[href]')});
+  Object.defineProperty(env, 'groups', {get: () => nav.querySelectorAll('details')});
+  return env;
 }
 function click(target, extra = {}) {
   const event = {target, button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra};
   for (let node = target; node; node = node.parentElement) node.fire('click', event);
   return event;
 }
-function load(env) { env.frame.fire('load'); return env.frame.contentWindow.messages.findLast(item => item.data.type === 'prototype-workspace:connect').data; }
+function load(env) { env.frame.fire('load'); return env.frame.contentWindow.messages.findLast(item => item.data.type === 'prototype-review:connect').data; }
 function intent(env, connection, patch = {}, eventPatch = {}) {
   env.window.fire('message', {source: env.frame.contentWindow, origin: env.window.location.protocol === 'file:' ? 'null' : env.window.location.origin,
-    data: {...connection, type: 'prototype-workspace:intent', intent: 'reveal-navigation', ...patch}, ...eventPatch});
+    data: {...connection, type: 'prototype-review:intent', intent: 'reveal-navigation', ...patch}, ...eventPatch});
 }
 const chosen = env => env.links.filter(link => link.getAttribute('aria-current') === 'page');
 """
@@ -164,12 +178,12 @@ const chosen = env => env.links.filter(link => link.getAttribute('aria-current')
 SCENARIOS = {
     "navigation": r"""
 const env = index('file:///offline/prototype/index.html#page=reports.html'); env.run(fixture.workspace);
-assert.deepEqual(env.frame.srcWrites, ['reports.html']); assert.equal(chosen(env)[0], env.links[1]);
+assert.deepEqual(env.frame.srcWrites, ['project/docs/prototype/reports.html']); assert.equal(chosen(env)[0], env.links[1]);
 assert.equal(env.document.getElementById('prototype-page-count').textContent, '3 页');
 assert.equal(env.groups[0].open, true); assert.equal(env.groups[1].open, false);
 env.groups[0].open = false; env.groups[0].fire('toggle');
 assert.equal(env.groups[0].children[0].getAttribute('aria-expanded'), 'false');
-assert.deepEqual(env.frame.srcWrites, ['reports.html']);
+assert.deepEqual(env.frame.srcWrites, ['project/docs/prototype/reports.html']);
 assert.equal(click(env.links[2]).defaultPrevented, true); assert.equal(chosen(env).length, 1);
 assert.equal(chosen(env)[0], env.links[2]); assert.equal(env.window.location.hash, '#page=guide.html');
 assert.equal(env.groups[1].open, true); assert.equal(env.frame.getAttribute('aria-busy'), 'true');
@@ -183,7 +197,7 @@ assert.equal(env.links[2].lastScroll.block, 'nearest');
 const before = env.frame.srcWrites.length; click(env.links[2]); assert.equal(env.frame.srcWrites.length, before);
 assert.equal(click(env.links[0], {ctrlKey: true}).defaultPrevented, false);
 env.window.location.hash = '#page=settings.html'; env.window.fire('hashchange');
-assert.equal(env.frame.getAttribute('src'), 'settings.html'); assert.equal(chosen(env)[0], env.links[0]);
+assert.equal(env.frame.getAttribute('src'), 'project/docs/prototype/settings.html'); assert.equal(chosen(env)[0], env.links[0]);
 env.window.location.hash = '#page=guide.html'; env.window.fire('hashchange'); assert.equal(chosen(env)[0], env.links[2]);
 assert.equal(env.document.querySelectorAll('iframe').length, 1);
 assert.equal(env.document.querySelectorAll('[data-prototype-current-marker]').filter(item => !item.hidden).length, 1);
@@ -192,18 +206,18 @@ console.log('真实控制器：单页按需加载、唯一选中、深链/历史
     "security": r"""
 for (const hash of ['#page=../../secret.html', '#page=https%3A%2F%2Fexample.test%2Fa.html', '#page=missing.html', '#page=index.html', '#page=%', '#page=%252e%252e%252fsecret.html', '#other']) {
   const env = index(`file:///offline/prototype/index.html${hash}`); env.run(fixture.workspace);
-  assert.deepEqual(env.frame.srcWrites, ['settings.html']); assert.equal(env.window.location.hash, '#page=settings.html');
+  assert.deepEqual(env.frame.srcWrites, ['project/docs/prototype/settings.html']); assert.equal(env.window.location.hash, '#page=settings.html');
 }
 const env = index(); env.run(fixture.workspace); let connection = load(env);
 const toggle = env.document.getElementById('prototype-sidebar-toggle'); click(toggle);
-for (const [patch, event] of [ [{token: '0'.repeat(32)}, {}], [{page: 'reports.html'}, {}], [{version: 2}, {}],
+for (const [patch, event] of [ [{token: '0'.repeat(32)}, {}], [{page: 'reports.html'}, {}], [{version: 1}, {}],
   [{type: 'unknown'}, {}], [{intent: 'execute'}, {}], [{}, {source: {}}], [{}, {origin: 'https://example.test'}] ]) {
   intent(env, connection, patch, event); assert.equal(env.document.getElementById('prototype-sidebar').hidden, true);
 }
 for (const target of ['../secret.html', 'https://example.test/a.html', 'index.html', 'missing.html', './reports.html', 'reports.html#state']) {
-  intent(env, connection, {intent: 'navigate', target}); assert.deepEqual(env.frame.srcWrites, ['settings.html']);
+  intent(env, connection, {intent: 'navigate', target}); assert.deepEqual(env.frame.srcWrites, ['project/docs/prototype/settings.html']);
 }
-intent(env, connection, {intent: 'navigate', target: 'reports.html'}); assert.equal(env.frame.getAttribute('src'), 'reports.html');
+intent(env, connection, {intent: 'navigate', target: 'reports.html'}); assert.equal(env.frame.getAttribute('src'), 'project/docs/prototype/reports.html');
 // 原 WindowProxy 在导航后可以保持不变；旧页/旧会话均不能驱动新的选择或侧栏。
 intent(env, connection); assert.equal(env.document.getElementById('prototype-sidebar').hidden, true);
 const next = load(env); assert.notEqual(next.token, connection.token);
@@ -220,7 +234,7 @@ const empty = index(undefined, []); empty.run(fixture.workspace);
 assert.equal(empty.frame.hasAttribute('src'), false); assert.equal(empty.frame.hidden, true); assert.equal(empty.frame.srcWrites.length, 0);
 for (const names of [['../bad.html'], ['https://example.test/a.html'], ['index.html'], ['a.html', 'a.html'], ['UPPER.html'], ['%61.html']]) {
   const env = index(undefined, names); env.run(fixture.workspace); assert.equal(env.frame.srcWrites.length, 0);
-  assert.equal(env.frame.hidden, true); assert.equal(click(env.links[0], {ctrlKey: true}).defaultPrevented, true);
+  assert.equal(env.frame.hidden, true); assert.equal(env.links.length, 0);
 }
 const nested = index(); nested.window.parent = {}; nested.run(fixture.workspace); assert.equal(nested.frame.srcWrites.length, 0);
 const extra = index(); extra.document.body.append(node(extra, 'iframe')); extra.run(fixture.workspace); assert.equal(extra.frame.srcWrites.length, 0);
@@ -230,7 +244,7 @@ console.log('真实控制器：空登记无加载、非法/重复登记、额外
 """,
     "page_bridge": r"""
 const direct = environment(fixture.page, 'file:///offline/prototype/settings.html'); direct.run(fixture.shell);
-assert.equal(direct.document.getElementById('prototype-back-index').getAttribute('href'), 'index.html#page=settings.html');
+assert.equal(direct.document.getElementById('prototype-back-index').getAttribute('href'), 'index.html');
 assert.equal(direct.document.getElementById('prototype-page-sidebar-toggle').hidden, true);
 const parent = index(); parent.run(fixture.workspace);
 function attach(name) {
@@ -241,7 +255,7 @@ function attach(name) {
 }
 const child = attach('settings.html'); const pageToggle = child.document.getElementById('prototype-page-sidebar-toggle');
 // 未认证和错误上下文都不显示开关。
-const forged = {type: 'prototype-workspace:connect', version: 1, page: 'settings.html', token: 'a'.repeat(32), sidebarExpanded: true};
+const forged = {type: 'prototype-review:connect', version: 2, page: 'settings.html', token: 'a'.repeat(32), sidebarExpanded: true};
 for (const event of [{source: {}, origin: 'null', data: forged}, {source: child.window.parent, origin: 'https://example.test', data: forged},
   {source: child.window.parent, origin: 'null', data: {...forged, page: 'other.html'}},
   {source: child.window.parent, origin: 'null', data: {...forged, token: 'bad'}}]) child.window.fire('message', event);
@@ -250,14 +264,14 @@ assert.equal(pageToggle.hidden, false); assert.equal(parent.document.getElementB
 click(pageToggle); assert.equal(parent.document.getElementById('prototype-sidebar').hidden, true);
 assert.equal(pageToggle.getAttribute('aria-expanded'), 'false');
 // 父级的正确窗口也不能用旧 token 覆盖页头状态。
-child.window.fire('message', {source: child.window.parent, origin: 'null', data: {...forged, type: 'prototype-workspace:state'}});
+child.window.fire('message', {source: child.window.parent, origin: 'null', data: {...forged, type: 'prototype-review:state'}});
 assert.equal(pageToggle.getAttribute('aria-expanded'), 'false');
 const back = child.document.getElementById('prototype-back-index'); assert.equal(click(back).defaultPrevented, true);
 assert.equal(parent.document.getElementById('prototype-sidebar').hidden, false);
 assert.equal(pageToggle.getAttribute('aria-expanded'), 'true'); assert.equal(parent.document.activeElement, parent.links[0]);
 const content = child.document.querySelector('main[data-prototype-page-content]');
 const local = node(child, 'a', {href: 'reports.html'}, ['下页']); content.append(local); click(local);
-assert.equal(parent.frame.getAttribute('src'), 'reports.html');
+assert.equal(parent.frame.getAttribute('src'), 'project/docs/prototype/reports.html');
 // 切换后旧页开关仍有旧会话，但不能更改父级当前状态。
 click(pageToggle); assert.equal(parent.document.getElementById('prototype-sidebar').hidden, false);
 assert.equal(parent.document.getElementById('prototype-sidebar-toggle').hidden, false);
@@ -267,13 +281,13 @@ assert.equal(next.document.activeElement, next.document.getElementById('prototyp
 assert.equal(parent.document.getElementById('prototype-sidebar-toggle').hidden, true);
 for (const href of ['../secret.html', 'https://example.test/a.html', 'javascript:alert(1)', './settings.html']) {
   const link = node(next, 'a', {href}, ['拒绝']); next.document.body.append(link); assert.equal(click(link).defaultPrevented, true);
-  assert.equal(parent.frame.getAttribute('src'), 'reports.html');
+  assert.equal(parent.frame.getAttribute('src'), 'project/docs/prototype/reports.html');
 }
 const state = node(next, 'a', {href: '#details'}, ['本页状态']); next.document.body.append(state); assert.equal(click(state).defaultPrevented, false);
 const documents = next.document.querySelector('nav.prototype-requirement-links');
 const requirement = node(next, 'a', {href: '../../plans/topic.html', 'data-prototype-document': 'html', target: '_blank', rel: 'noopener'}, ['需求']);
 documents.append(requirement); assert.equal(click(requirement).defaultPrevented, false);
-assert.equal(parent.frame.getAttribute('src'), 'reports.html');
+assert.equal(parent.frame.getAttribute('src'), 'project/docs/prototype/reports.html');
 console.log('真实双控制器：独立页深链、认证前隐藏、唯一开关、父级 expanded 同步、返回焦点、切换旧消息拒绝及文档独立导航通过');
 """,
 }
@@ -282,17 +296,21 @@ console.log('真实双控制器：独立页深链、认证前隐藏、唯一开�
 # 这两组补上真实新增边界：上下文解析/草稿隔离与页面自己提供的有限节点目录。
 # 仍直接执行生产脚本，浏览器布局、原生dialog与file来源策略由实际浏览器证据补充。
 SCENARIOS["feedback_state"] = r"""
-const context = {schema_version: 1, request_id: 'review-1', adapter: 'project.yaml', prototype_root: 'docs/prototype', plan_source: 'docs/plans/review.md', plan_sha256: 'a'.repeat(64), requirements: [{id: 'REQ-007', label: '节点反馈'}], pages: [{path: 'docs/prototype/settings.html', dependency_fingerprint: 'b'.repeat(64)}, {path: 'docs/prototype/reports.html', dependency_fingerprint: 'c'.repeat(64)}]};
-const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
-const hash = '#page=settings.html&review=' + encode(context);
-const env = index('file:///offline/prototype/index.html' + hash); env.run(fixture.feedback);
-const parser = env.window.PrototypeFeedback.parseFragment;
-assert.equal(parser(hash).context.request_id, 'review-1');
-for (const broken of [hash + '&review=a', hash + '&page=reports.html', hash + '&unknown=x', '#page=settings.html&review=%%', '#page=settings.html&review=YWJj', '#page=settings.html&review=' + Buffer.from(JSON.stringify(context).replace('{', '{"schema_version":1,')).toString('base64url'), '#page=settings.html&review=' + encode({...context, request_id: 123}), '#page=settings.html&review=' + encode({...context, approved: true}), '#page=settings.html&review=' + encode({...context, pages: [...context.pages, context.pages[0]]}), '#page=settings.html&review=' + encode({...context, pages: Array(17).fill(context.pages[0])}), '#page=settings.html&review=' + encode({...context, request_id: 'x'.repeat(9000)})]) assert.ok(parser(broken).error);
-const brokenEnv = index(); brokenEnv.run(fixture.feedback); const disabled = brokenEnv.window.PrototypeFeedback.create({send() {}}); disabled.bind(parser(hash + '&review=x')); disabled.select('settings.html'); assert.ok(brokenEnv.document.getElementById('feedback-status').textContent.includes('损坏'));
+const initial = boot(['settings.html', 'reports.html']); const context = initial.context;
+const env = index(); const parser = env.window.PrototypeFeedback.parseStartup;
+assert.equal(parser(encode(initial)).context.request_id, 'review-1');
+for (const patch of [{schema_version: 1}, {unknown: true}, {context: {...context, request_id: 123}}, {context: {...context, approved: true}},
+  {context: {...context, tool: {...context.tool, version: 7}}}, {context: {...context, pages: [...context.pages, context.pages[0]]}},
+  {context: {...context, pages: Array(17).fill(context.pages[0])}}, {context: {...context, request_id: 'x'.repeat(9000)}},
+  {pages: [{...initial.pages[0], url: '../secret.html'}, initial.pages[1]]}, {pages: [{...initial.pages[0], path: 'docs/prototype/other.html'}, initial.pages[1]]}]) {
+  assert.ok(parser(encode({...initial, ...patch})).error);
+}
+for (const raw of ['%%', encode(initial).replace('{', '{"schema_version":2,'), encode(initial).replace('project/docs', 'https://evil.test/docs')]) assert.ok(parser(raw).error);
+const brokenEnv = index(); const disabled = brokenEnv.window.PrototypeFeedback.create({send() {}});
+disabled.bind(parser('broken')); disabled.select('settings.html'); assert.ok(brokenEnv.document.getElementById('feedback-status').textContent.includes('损坏'));
 const sends = []; const api = env.window.PrototypeFeedback.create({send: (...args) => sends.push(args)});
-api.bind(parser(hash)); api.select('settings.html');
-const payload = {type: 'prototype-workspace:catalog', nodes: [{id: 'save-button', text: '<img src=x onerror=alert(1)>', interaction_id: 'save-interaction', interaction_text: '保存设置', interface_refs: ['api-spec.md#save']}]};
+api.bind(parser(encode(initial))); api.select('settings.html');
+const payload = {type: 'prototype-review:catalog', nodes: [{id: 'save-button', text: '<img src=x onerror=alert(1)>', interaction_id: 'save-interaction', interaction_text: '保存设置', interface_refs: ['api-spec.md#save']}]};
 api.receive(payload);
 const get = id => env.document.getElementById('feedback-' + id);
 get('target').value = 'save-button'; get('kind').value = 'must_change'; get('message').value = '需要清晰说明'; get('after').value = '建议文案';
@@ -300,21 +318,28 @@ get('requirements').querySelector('input').checked = true;
 get('form').fire('input'); get('form').fire('submit', {preventDefault() {}}); api.receive(payload);
 assert.equal(get('count').textContent, '1 条'); assert.ok(get('items').textContent.includes('<img src=x onerror=alert(1)>'));
 assert.equal(get('items').querySelector('img'), null); assert.equal(get('message').value, '');
-const stored = JSON.parse([...env.window.sessionStorage.getItem('prototype-feedback:' + encode(context))].join(''));
+const stored = JSON.parse([...env.window.sessionStorage.getItem('prototype-feedback:' + JSON.stringify(context))].join(''));
 assert.equal(stored.items[0].page, 'docs/prototype/settings.html'); assert.equal(stored.items[0].req_ids[0], 'REQ-007');
 assert.equal(stored.items[0].comparison.before_text, '<img src=x onerror=alert(1)>'); assert.equal(stored.items[0].interaction_id, 'save-interaction');
 get('message').value = '未保存输入'; get('form').fire('input'); api.select('reports.html'); api.receive(payload); get('target').value = 'save-button';
 get('message').value = '另一页输入'; get('form').fire('input'); api.select('settings.html'); api.receive(payload);
 assert.equal(get('message').value, '未保存输入');
 // 同一上下文刷新恢复；另一个标签页使用独立sessionStorage，不能混写或读到本页草稿。
-const refreshed = index('file:///offline/prototype/index.html' + hash); refreshed.window.sessionStorage = env.window.sessionStorage; refreshed.run(fixture.feedback);
-const recovered = refreshed.window.PrototypeFeedback.create({send() {}}); recovered.bind(parser(hash)); recovered.select('settings.html'); recovered.receive(payload);
+const refreshed = index(); refreshed.window.sessionStorage = env.window.sessionStorage; refreshed.run(fixture.feedback);
+const recovered = refreshed.window.PrototypeFeedback.create({send() {}}); recovered.bind(parser(encode(initial))); recovered.select('settings.html'); recovered.receive(payload);
 assert.equal(refreshed.document.getElementById('feedback-message').value, '未保存输入'); assert.equal(refreshed.document.getElementById('feedback-count').textContent, '1 条');
-const other = index('file:///offline/prototype/index.html' + hash); other.run(fixture.feedback); const isolated = other.window.PrototypeFeedback.create({send() {}}); isolated.bind(parser(hash));
+const other = index(); other.run(fixture.feedback); const isolated = other.window.PrototypeFeedback.create({send() {}}); isolated.bind(parser(encode(initial)));
 assert.equal(other.document.getElementById('feedback-count').textContent, '0 条');
 // 拒绝存储和超限保存时，不清空输入，也不声称保存成功。
 get('message').value = '长'.repeat(4001); get('form').fire('submit', {preventDefault() {}}); api.receive(payload); assert.equal(get('message').value.length, 4001); assert.equal(get('count').textContent, '1 条');
 env.window.sessionStorage.setItem = () => {throw Error('denied');}; get('message').value = '仍在内存'; get('form').fire('input'); assert.ok(get('storage').textContent.includes('不可用')); assert.equal(get('message').value, '仍在内存');
+api.bind(parser(encode({...initial, context: {...context, tool: {...context.tool, version: 'next'}, review_id: '6'.repeat(64)}})));
+assert.equal(get('fields').disabled, true); assert.ok(get('status').textContent.includes('已改变')); assert.equal(get('message').value, '仍在内存');
+// 手动复制弹窗仅约束既有两个控件的首末Tab边界，不影响原生Esc与关闭语义。
+get('close').focus(); const tab = {key:'Tab', shiftKey:false, prevented:false, preventDefault(){this.prevented=true;}};
+get('manual').fire('keydown', tab); assert.equal(tab.prevented, true); assert.equal(env.document.activeElement, get('output'));
+const reverse = {...tab, shiftKey:true, prevented:false}; get('manual').fire('keydown', reverse);
+assert.equal(reverse.prevented, true); assert.equal(env.document.activeElement, get('close'));
 console.log('真实反馈模块：封闭context/重复片段/超限拒绝、纯文本渲染、保存比较和关联、本标签页恢复与隔离、存储失败输入保留通过');
 """
 
@@ -326,18 +351,49 @@ root.append(node(child, 'p', {id: 'duplicate'}, ['重复1']), node(child, 'p', {
 child.document.body.append(node(child, 'p', {id: 'outside'}, ['外壳不在节点目录']));
 const mapping = node(child, 'p', {id: 'save-interaction', 'data-contract-for': 'save-button', 'data-interface-ref': 'spec.md#save'}, ['点击保存']);
 child.document.body.append(mapping); child.run(fixture.shell);
-const connect = {type: 'prototype-workspace:connect', version: 1, page: 'settings.html', token: 'a'.repeat(32), sidebarExpanded: true};
+const connect = {type: 'prototype-review:connect', version: 2, page: 'settings.html', token: 'a'.repeat(32), sidebarExpanded: true};
 const receive = (data, patch = {}) => child.window.fire('message', {source: child.window.parent, origin: 'null', data, ...patch});
 receive(connect);
-const catalog = child.window.parent.messages.find(item => item.data.type === 'prototype-workspace:catalog').data;
+const catalog = child.window.parent.messages.find(item => item.data.type === 'prototype-review:catalog').data;
 assert.equal(catalog.nodes.length, 1); assert.equal(catalog.nodes[0].id, 'save-button'); assert.equal(catalog.nodes[0].interface_refs[0], 'spec.md#save'); assert.equal(catalog.nodes[0].interaction_id, 'save-interaction');
-const locate = {...connect, type: 'prototype-workspace:review', action: 'locate', target: 'save-button'};
+const locate = {...connect, type: 'prototype-review:review', action: 'locate', target: 'save-button'};
 for (const [patch, event] of [[{token: 'b'.repeat(32)}, {}], [{page: 'reports.html'}, {}], [{target: '#save-button'}, {}], [{}, {source: {}}], [{}, {origin: 'https://example.test'}]]) { receive({...locate, ...patch}, event); assert.notEqual(child.document.activeElement, unique); }
 receive({...locate, target: 'duplicate'}); assert.notEqual(child.document.activeElement, unique);
 receive(locate); assert.equal(child.document.activeElement, unique); assert.equal(unique.getAttribute('data-prototype-feedback-highlight'), '');
 assert.equal(child.document.getElementById('prototype-page-feedback').hidden, false);
 click(child.document.getElementById('prototype-page-feedback')); assert.equal(child.window.parent.messages.at(-1).data.intent, 'open-feedback');
 console.log('真实页面桥：仅产品插槽唯一稳定ID、实际交互/接口引用、任意selector与旧token/伪来源拒绝、定位焦点和紧凑入口通过');
+"""
+
+
+SCENARIOS["optional_bridge"] = r"""
+const child = environment(fixture.page, 'file:///offline/project/docs/prototype/settings.html', true);
+// 具体源页没有任何工具控件也能启动；旧defer桥发来的v1握手无权建立新会话。
+for (const parent of child.document.querySelectorAll('header')) parent.childNodes = parent.childNodes.filter(item => typeof item === 'string' || !['prototype-back-index', 'prototype-page-sidebar-toggle', 'prototype-page-sidebar-toggle-label', 'prototype-page-feedback'].includes(item.getAttribute('id')));
+const root = child.document.querySelector('[data-prototype-page-content]'); root.append(node(child, 'button', {id: 'save-button'}, ['保存']));
+child.run(fixture.shell); child.run(fixture.shell);
+const connect = {type: 'prototype-review:connect', version: 2, page: 'settings.html', token: 'a'.repeat(32), sidebarExpanded: true};
+const receive = data => child.window.fire('message', {source: child.window.parent, origin: 'null', data});
+receive({...connect, type: 'prototype-workspace:connect', version: 1}); assert.equal(child.window.parent.messages.length, 0);
+receive(connect); receive(connect);
+assert.equal(child.window.parent.messages.filter(item => item.data.type === 'prototype-review:ready').length, 1);
+assert.equal(child.window.parent.messages.filter(item => item.data.type === 'prototype-review:catalog').length, 1);
+assert.equal(child.window.parent.messages[0].data.supportsSidebarToggle, false);
+const count = child.window.parent.messages.length;
+receive({...connect, type: 'prototype-workspace:review', version: 1, action: 'refresh'}); assert.equal(child.window.parent.messages.length, count);
+root.removeAttribute('data-prototype-page-content');
+receive({...connect, type: 'prototype-review:review', action: 'refresh'});
+assert.equal(child.window.parent.messages.at(-1).data.nodes.length, 0);
+const env = index(); env.run(fixture.workspace); const connection = load(env);
+intent(env, connection, {type: 'prototype-review:ready', supportsSidebarToggle: false});
+assert.equal(env.document.getElementById('prototype-sidebar-toggle').hidden, false);
+const payload = {...connection, type: 'prototype-review:catalog', nodes: [{id: 'save-button', text: '保存', interaction_id: '', interaction_text: '', interface_refs: []}]};
+env.window.fire('message', {source: env.frame.contentWindow, origin: 'null', data: payload});
+env.document.getElementById('feedback-target').value = 'save-button'; env.document.getElementById('feedback-message').value = '意见';
+env.document.getElementById('feedback-form').fire('submit', {preventDefault() {}});
+assert.equal(env.frame.contentWindow.messages.at(-1).data.action, 'refresh');
+assert.equal(env.frame.contentWindow.messages.at(-1).data.version, 2);
+console.log('真实v2桥：无返回/开关仍可反馈、重复注入和重复握手幂等、旧v1协议忽略、无内容标记返回空目录通过');
 """
 
 
@@ -355,6 +411,9 @@ class PrototypeWorkspaceRuntimeTest(unittest.TestCase):
                           "source_sha256": {name: hashlib.sha256(text.encode()).hexdigest() for name, text in sources.items()},
                           "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr}, ensure_ascii=False))
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_optional_bridge_idempotence_and_legacy_protocol_rejection(self):
+        self.run_node("optional_bridge")
 
     def test_feedback_context_drafts_and_failure_preservation(self):
         self.run_node("feedback_state")

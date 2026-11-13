@@ -14,6 +14,9 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from product.command_identity import load_identity
+IDENTITY = load_identity(ROOT)
 
 
 def json_bytes(value):
@@ -110,9 +113,12 @@ def build(source, output):
         raise ValueError("构建期间源码发生变化；本目录不构成同源码候选，请冻结来源后换新目录")
     artifacts = []
     component_descriptor = None
+    identity_body = (source / "product/command_identity.json").read_bytes()
     for host in ("codex", "claude", "antigravity"):
-        primary = output / "workflow" / f"agent-workflow-{host}-{versions['workflow']}.zip"
+        primary = output / "workflow" / f"{IDENTITY['artifact_prefix']}-{host}-{versions['workflow']}.zip"
         with zipfile.ZipFile(primary) as archive:
+            if archive.read("product/command_identity.json") != identity_body:
+                raise ValueError("插件包命令身份与唯一源不一致")
             provenance = archive.read("sources.json")
             record = json.loads(provenance)
             if record["plugin_version"] != versions["workflow"] or record["host"] != host:
@@ -135,6 +141,8 @@ def build(source, output):
                               "host": host, "kind": kind, "version": versions["workflow"]})
     native = output / "native" / f"native-agent-config-{versions['native-config']}.zip"
     with zipfile.ZipFile(native) as archive:
+        if archive.read("product/command_identity.json") != identity_body:
+            raise ValueError("独立包命令身份与插件唯一源不一致")
         if json.loads(archive.read("BUILD.json"))["version"] != versions["native-config"]:
             raise ValueError("原生配置独立包与候选版本源不一致")
     component_binding = validate_component_binding(component_descriptor, native, versions["native-config"])

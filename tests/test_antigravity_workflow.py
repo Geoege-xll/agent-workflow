@@ -18,7 +18,6 @@ from tests.skill_contract_helpers import read_contract, read_bootstrap_contract,
 
 PACK = Path(__file__).resolve().parents[1]
 SHARED_CORE_SKILLS = {
-    "grill-me",
     "xy-build-verify",
     "xy-code-standards",
     "xy-ui-design",
@@ -479,7 +478,7 @@ class AntigravityGeneratedArtifactTest(
         }.items():
             with self.subTest(artifact=name):
                 # 共用 Skill 必须说明三宿主的原生别名；常驻入口和宿主产物才禁止串用。
-                self.assertNotRegex(pm_entry if name == "pm" else body, r"\$(?:xy-|ui-ux-pro-max)")
+                self.assertNotRegex(pm_entry if name == "pm" else body, r"\$(?:xy-|xy-taste)")
                 self.assertNotIn("PASS_WITH_NITS", body)
                 self.assertNotIn("Return the prototype path, screenshots, current revision", body)
 
@@ -493,7 +492,7 @@ class AntigravityGeneratedArtifactTest(
         self.assertIn("Final QA outcome: PASS | FAIL", pm)
 
         self.assertRegex(uiux, r"(?m)^name: xy-uiux$")
-        self.assertIn("/ui-ux-pro-max", uiux)
+        self.assertIn("/xy-taste", uiux)
         self.assertIn("/xy-prototype-verify", uiux)
         self.assertIn("purpose", uiux)
         self.assertIn("navigation", uiux)
@@ -550,7 +549,7 @@ class AntigravityGeneratedArtifactTest(
         )
         self.assertEqual(self.tree_snapshot(self.pack), pack_before)
         root_agents = self.read("AGENTS.md")
-        self.assertNotRegex(root_agents, r"\$(?:xy-|ui-ux-pro-max)")
+        self.assertNotRegex(root_agents, r"\$(?:xy-|xy-taste)")
         self.assertIn("`/xy-workflow`", root_agents)
         self.assertIn("pm-integration.md", root_agents)
         self.assertIn("`/xy-project-memory`", read_contract(
@@ -617,7 +616,7 @@ class AntigravityGeneratedArtifactTest(
                 )
                 self.assertIn("Return the result to the PM only", agent_body)
                 self.assertIn("Do not report completion directly to the user", agent_body)
-                self.assertNotRegex(agent_body, r"\$(?:xy-|ui-ux-pro-max)")
+                self.assertNotRegex(agent_body, r"\$(?:xy-|xy-taste)")
                 self.assertNotIn("Project required reads", agent_body)
                 role_heading = next(
                     line
@@ -636,8 +635,8 @@ class AntigravityGeneratedArtifactTest(
                     self.assertIn("exact `owned_paths`", agent_body)
                     self.assertIn("/xy-build-verify", agent_body)
                 elif role == "xy-uiux":
-                    self.assertEqual(fields["skills"], ["skills/xy-ui-design", "skills/xy-prototype-verify"])
-                    self.assertIn("/ui-ux-pro-max", agent_body)
+                    self.assertEqual(fields["skills"], ["skills/xy-ui-design", "skills/xy-taste", "skills/xy-prototype-verify"])
+                    self.assertIn("/xy-taste", agent_body)
                     self.assertIn("docs.standards_root/DESIGN_*.md", agent_body)
                     self.assertIn("docs.standards_root/DESIGN_*.md", agent_body)
                     # 原型是用户确认材料；Antigravity 即使暴露 /browser，也不能把它升级成
@@ -4646,6 +4645,34 @@ xy-workflow
         )
         self.assertNotIn("Run `$xy-project-memory`", workflow)
         self.assertNotIn("returns `$xy-build-verify`", workflow)
+
+
+class SelectedSkillHostContractTest(unittest.TestCase):
+    def test_taste_binding_keeps_the_strict_antigravity_reference_boundary(self):
+        """真实验证器接受固定Taste入口，同时继续拒绝任意外部名称和跨根路径。"""
+        from lib.validate_antigravity_artifacts import validate_skill_ref
+        available = {"xy-taste", "xy-ui-design", "xy-prototype-verify"}
+        accepted = []
+        validate_skill_ref("skills/xy-taste", available, "xy-uiux", accepted)
+        self.assertEqual([], accepted)
+        for reference in ("skills/../xy-taste", "/skills/xy-taste",
+                          "skills/unknown-external", "skills/xy-taste/other"):
+            with self.subTest(reference=reference):
+                errors = []
+                validate_skill_ref(reference, available, "xy-uiux", errors)
+                self.assertTrue(any("unsafe Skill reference" in error for error in errors))
+        missing = []
+        validate_skill_ref("skills/xy-taste", set(), "xy-uiux", missing)
+        self.assertTrue(any("unresolved Skill" in error for error in missing))
+
+    def test_antigravity_ui_adapter_preserves_upstream_execution_limits(self):
+        from lib.hosts.render_antigravity_agent import role_boundary
+        from lib.validate_antigravity_artifacts import render_antigravity_host_aliases
+        body = role_boundary("xy-uiux")
+        for boundary in ("no-hooks", "complete canonical Taste", "standards_only",
+                         "Do not automatically", "compact console", "MUST NOT generate"):
+            self.assertIn(boundary, body)
+        self.assertEqual("/xy-taste", render_antigravity_host_aliases("$xy-taste"))
 
 
 if __name__ == "__main__":

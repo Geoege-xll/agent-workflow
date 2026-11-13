@@ -35,8 +35,8 @@ STAGE_PREFIX = ".agent-workflow-pack-stage--"
 BACKUP_PREFIX = ".agent-workflow-pack-backup--"
 TOMBSTONE_PREFIX = ".agent-workflow-pack-tombstone--"
 TEMP_PREFIX = ".agent-workflow-pack-temp--"
-# 共享核心 Skill 通常使用 xy- 前缀；Grill Me 是既有用户入口名，因此仅为它保留
-# 一个精确例外，避免把校验规则放宽成任意无前缀目录都可进入受管安装事务。
+# 内部核心使用xy-前缀；grill-me精确例外仅用于识别历史磁盘所有权。
+# 当前外部原版由selected_skills锁定和随插件交付，不能混入内部managed事务。
 SKILL_NAME_RE = re.compile(r"^(?:xy-[a-z0-9]+(?:-[a-z0-9]+)*|grill-me)$")
 TRANSACTION_NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
 YAML_IMPLICIT_WORDS = {

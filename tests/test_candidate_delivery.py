@@ -25,6 +25,8 @@ class CandidateDeliveryTest(unittest.TestCase):
         for name in ("packaging", "product", "native_config", "plugins/maintenance"):
             (self.source / name).mkdir(parents=True)
         shutil.copyfile(ROOT / "packaging/build_candidates.py", self.source / "packaging/build_candidates.py")
+        for name in ("__init__.py", "command_identity.py", "command_identity.json"):
+            shutil.copyfile(ROOT / "product" / name, self.source / "product" / name)
         (self.source / "product/PLUGIN_VERSION").write_text("3.0.0-alpha.2\n", encoding="ascii")
         (self.source / "native_config/VERSION").write_text("0.1.0-alpha.2\n", encoding="ascii")
         (self.source / "plugins/maintenance/component.json").write_text(json.dumps({
@@ -50,6 +52,8 @@ with Path(os.environ["AWF_TEST_CALLS"]).open("a", encoding="utf-8") as stream:
                              "host": args.host, "local_source": args.local_source,
                              "python": sys.executable, "no_bytecode": sys.dont_write_bytecode}) + "\\n")
 def archive_bytes(files):
+    # 候选编排器检查两产品身份同源；伪构建器也遵守真实JSON载荷协议。
+    files = {**files, "product/command_identity.json": (args.source / "product/command_identity.json").read_bytes()}
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as package:
         for path, body in files.items():
@@ -71,7 +75,7 @@ if mode == "frozen-sha":
         "BUILD.json": json.dumps({"version": native_version})})).hexdigest()
 for host in ("codex", "claude", "antigravity"):
     record = json.dumps({"plugin_version": version, "host": host})
-    stem = "agent-workflow-" + host + "-" + version
+    stem = "xy-workflow-" + host + "-" + version
     descriptor = json.dumps(component)
     if mode == "component-host-mismatch" and host == "claude":
         descriptor = json.dumps({**component, "version": "0.1.0-alpha.999"})

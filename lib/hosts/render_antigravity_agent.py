@@ -108,7 +108,9 @@ Read the Task Pack's STANDARDS index and selected applicable leaves before editi
 
 - Write only task-owned paths in `docs.standards_root/prototype`; other design-standard
   leaves require explicit authority,
-  never production UI. Invoke `ui-ux-pro-max`, or block if it is unavailable.
+  never production UI. Read the no-hooks `xy-taste` adapter and complete canonical Taste
+  under `xy-ui-design`; missing/corrupt resources or incomplete reads block design. Do not automatically
+  run scripts/hooks/screenshots. User/project rules and compact console layouts take precedence.
 - Return direct links for every concrete changed HTML page and its verified page
   dependency fingerprint, scope, interactions, shared impact, and pending `visual_approved`.
 - These prototype deliverables apply only to prototype mode. With `design_mode: standards_only`,

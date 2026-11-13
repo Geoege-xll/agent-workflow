@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  // 登记只读取 index 的普通链接；Map 是该 DOM 的派生索引，不维护第二份页面清单。
+  // 导航只由不可变快照内的封闭启动数据投影；业务旧index不在浏览器执行。
   const navigation = document.getElementById("prototype-pages");
   const preview = document.getElementById("prototype-preview");
   const layout = document.getElementById("prototype-workspace");
@@ -13,23 +13,22 @@
   const count = document.getElementById("prototype-page-count");
   if (!navigation || !preview || !layout || !sidebar || !toggle || !toggleLabel || !empty || !status || !count) return;
 
-  const links = Array.from(navigation.querySelectorAll("a[href]"));
+  let links = [];
   const entries = new Map();
-  const canonicalPage = /^[a-z0-9][a-z0-9-]*\.html$/;
   let current = null;
   let session = "";
   let focusAfterLoad = false;
   let initialized = false;
   let bridgeReady = false;
 
-  // 反馈模块可渐进缺席；普通浏览和现有消息桥始终由工作区独立维护。
+  // 反馈模块提供封闭启动解析与草稿管理；缺失时入口拒绝加载未知页面。
   const feedback = window.PrototypeFeedback?.create({ send: (action, target) => {
     if (action === "navigate") {
       const entry = entries.get(target);
       if (!entry) return false;
       select(entry, { updateHash: true, focus: false }); return true;
     }
-    if (bridgeReady && current) preview.contentWindow.postMessage({ type: "prototype-workspace:review", version: 1, page: current.name, token: session, action, target }, targetOrigin);
+    if (bridgeReady && current) preview.contentWindow.postMessage({ type: "prototype-review:review", version: 2, page: current.name, token: session, action, target }, targetOrigin);
   } });
   let fragment = null;
   const announce = (text) => { status.textContent = text; };
@@ -43,32 +42,42 @@
     empty.textContent = text;
     announce(text);
   };
-  for (const link of links) {
-    link.addEventListener("click", (event) => {
-      const entry = entries.get(link.getAttribute("href"));
-      if (!initialized || !entry || entry.link !== link) { event.preventDefault(); return; }
-      // 有效链接保留修饰键独立打开的原生能力；无效登记连这种点击也拒绝。
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      event.preventDefault();
-      select(entry, { updateHash: true, focus: true });
-    });
-  }
-
-  // 被其他文档嵌入的 index 不启动承载器，防止旧页面普通返回链接造成递归自嵌套。
+  // 被其他文档嵌入的入口不启动承载器，且启动数据必须来自prepare的唯一JSON槽。
+  const startup = document.querySelectorAll("script#prototype-review-data");
+  fragment = startup.length === 1 && startup[0].getAttribute("type") === "application/json"
+    ? window.PrototypeFeedback?.parseStartup(startup[0].textContent) : null;
   if (window.parent !== window || document.querySelectorAll("nav#prototype-pages").length !== 1
-      || document.querySelectorAll("iframe, frame, frameset").length !== 1 || preview.hasAttribute("srcdoc")) {
-    failClosed("工作区结构无效，请独立打开原型入口。");
+      || document.querySelectorAll("iframe, frame, frameset").length !== 1 || preview.hasAttribute("srcdoc")
+      || !fragment?.context) {
+    failClosed(fragment?.error || "工作区结构或评审数据无效，请独立打开准备好的评审包。");
     return;
   }
-  for (const link of links) {
-    const name = link.getAttribute("href");
-    const label = link.textContent.trim();
-    if (!canonicalPage.test(name) || name === "index.html" || entries.has(name) || !label) {
-      failClosed("页面登记无效，请检查页面导航。");
-      return;
+  feedback?.bind(fragment);
+  navigation.replaceChildren();
+  let previousGroups = [], containers = [navigation];
+  for (const item of fragment.pages) {
+    // 分组沿核心提供的外到内顺序重建，连续相同祖先复用原生details；所有标签
+    // 只写textContent，旧index里的HTML/脚本/链接地址没有执行或加载权限。
+    let shared = 0;
+    while (shared < item.groups.length && shared < previousGroups.length
+      && item.groups[shared].label === previousGroups[shared].label && item.groups[shared].open === previousGroups[shared].open) shared++;
+    containers = containers.slice(0, shared + 1);
+    for (const group of item.groups.slice(shared)) {
+      const details = document.createElement("details"), summary = document.createElement("summary");
+      summary.textContent = group.label; details.open = group.open; details.append(summary);
+      containers.at(-1).append(details); containers.push(details);
     }
-    entries.set(name, Object.freeze({ name, label, link }));
+    previousGroups = item.groups;
+    const link = document.createElement("a"); link.setAttribute("href", item.url); link.textContent = item.label;
+    containers.at(-1).append(link);
+    const entry = Object.freeze({ ...item, link }); entries.set(item.name, entry);
+    link.addEventListener("click", (event) => {
+      if (!initialized) { event.preventDefault(); return; }
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault(); select(entry, { updateHash: true, focus: true });
+    });
   }
+  links = Array.from(navigation.querySelectorAll("a[href]"));
   count.textContent = `${entries.size} 页`;
   if (entries.size === 0) { failClosed("暂无原型页面。添加实际页面后，可在此分组浏览。"); return; }
 
@@ -92,7 +101,7 @@
     toggle.setAttribute("aria-expanded", String(expanded));
     toggleLabel.textContent = expanded ? "收起侧栏" : "展开侧栏";
     // 页头只是导航桥接消费者，不自行维护一份侧栏状态。
-    if (bridgeReady) preview.contentWindow.postMessage({ type: "prototype-workspace:state", version: 1, page: current.name, token: session, sidebarExpanded: expanded }, targetOrigin);
+    if (bridgeReady) preview.contentWindow.postMessage({ type: "prototype-review:state", version: 2, page: current.name, token: session, sidebarExpanded: expanded }, targetOrigin);
   };
   const revealNavigation = () => {
     setSidebar(true);
@@ -111,15 +120,16 @@
   toggle.addEventListener("click", toggleSidebar);
 
   const readHash = () => {
-    // page与review各自只允许一个值；page只用于命中登记表，绝不直接作为地址。
+    // hash只有页面选择权；旧review片段或运行中修改启动绑定都只会停用编辑，
+    // 不读取路径/context，也不会把原草稿自动归属给另一版本。
     const params = new URLSearchParams(window.location.hash.slice(1));
-    fragment = window.PrototypeFeedback?.parseFragment(window.location.hash);
-    if (fragment) feedback?.bind(fragment);
+    const latest = window.PrototypeFeedback?.parseStartup(startup[0].textContent);
+    if (params.has("review")) feedback?.bind({ rawReview: "invalid-fragment", context: null, error: "旧评审片段已失效，请重新 prepare。" });
+    else if (latest) feedback?.bind(latest);
     return params.getAll("page").length === 1 ? entries.get(params.get("page")) || null : null;
   };
   const writeHash = (entry, replace) => {
-    const rawReview = new URLSearchParams(window.location.hash.slice(1)).getAll("review");
-    const hash = `#page=${encodeURIComponent(entry.name)}${rawReview.length === 1 ? `&review=${encodeURIComponent(rawReview[0])}` : ""}`;
+    const hash = `#page=${encodeURIComponent(entry.name)}`;
     if (window.location.hash === hash) return;
     if (replace) {
       // file:// 仅替换当前文档片段；宿主限制 History API 时退回同页片段导航。
@@ -162,8 +172,8 @@
     preview.hidden = false;
     preview.setAttribute("aria-busy", "true");
     preview.setAttribute("title", entry.label);
-    // src 唯一写入点仅接受登记项内的规范页名，不执行消息或 hash 提供的地址。
-    preview.setAttribute("src", entry.name);
+    // src唯一写入点只消费已校验的固定快照URL，不从hash、context或消息拼路径。
+    preview.setAttribute("src", entry.url);
     document.title = `${entry.label} · 原型工作区`;
     announce(`正在载入：${entry.label}。`);
     if (updateHash) writeHash(entry, replaceHash);
@@ -177,24 +187,24 @@
     announce(`当前预览：${current.label}。`);
     if (focusAfterLoad) preview.focus();
     // 跨 file 文档只通过消息握手，不读取 contentDocument、location 或子页 DOM。
-    preview.contentWindow.postMessage({ type: "prototype-workspace:connect", version: 1, page: current.name, token: session, focusHeading: focusAfterLoad, sidebarExpanded: !sidebar.hidden }, targetOrigin);
+    preview.contentWindow.postMessage({ type: "prototype-review:connect", version: 2, page: current.name, token: session, focusHeading: focusAfterLoad, sidebarExpanded: !sidebar.hidden }, targetOrigin);
     focusAfterLoad = false;
   });
   window.addEventListener("message", (event) => {
     const data = event.data;
     // origin=null 不具身份意义：同时核对真实 WindowProxy、当前登记页和本轮会话。
     if (!current || event.source !== preview.contentWindow || event.origin !== expectedOrigin
-        || !data || typeof data !== "object" || data.version !== 1 || data.page !== current.name
+        || !data || typeof data !== "object" || data.version !== 2 || data.page !== current.name
         || data.token !== session || !entries.has(data.page)) return;
-    if (data.type === "prototype-workspace:ready") {
-      bridgeReady = data.supportsSidebarToggle === true;
-      toggle.hidden = bridgeReady;
+    if (data.type === "prototype-review:ready") {
+      bridgeReady = true;
+      toggle.hidden = data.supportsSidebarToggle === true;
       if (bridgeReady) setSidebar(!sidebar.hidden);
       return;
     }
-    if (data.type === "prototype-workspace:catalog") { feedback?.receive(data); return; }
-    if (data.type === "prototype-workspace:located") { feedback?.receive(data); return; }
-    if (data.type !== "prototype-workspace:intent") return;
+    if (data.type === "prototype-review:catalog") { feedback?.receive(data); return; }
+    if (data.type === "prototype-review:located") { feedback?.receive(data); return; }
+    if (data.type !== "prototype-review:intent") return;
     if (data.intent === "open-feedback") { feedback?.open(); return; }
     if (data.intent === "reveal-navigation") revealNavigation();
     else if (data.intent === "toggle-sidebar") toggleSidebar();

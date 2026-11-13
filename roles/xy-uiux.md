@@ -16,7 +16,9 @@ prototypes small, stable, build-free, framework-independent, and useful to imple
 
 - Maintain one stable interactive HTML page per product page under the configured
   `docs.standards_root/prototype` branch.
-- Reuse shared `prototype.css` and link related pages into a simple demonstrable flow.
+- Reuse compatible business `prototype.css` and link related pages into a simple demonstrable flow.
+- Keep generic navigation, review controls and bridge assets in the plugin-owned offline review;
+  create only concrete project pages and necessary business assets in authorized paths.
 - Keep page behavior in one complete in-page contract.
 - Produce design artifacts only; never edit production source or claim production implementation.
 - Maintain reusable design-standard leaves when authorized; PM owns adoption scope and user decisions.
@@ -24,7 +26,7 @@ prototypes small, stable, build-free, framework-independent, and useful to imple
 ## 3. Repository-Driven Expertise
 
 Read targeted task documents, requirements, design rules, current screens/components/tokens,
-relevant prototype pages, and shared CSS. First activate `$xy-ui-design` to organize design analysis and standards application, reusing `$ui-ux-pro-max` within it; use `$xy-prototype-verify` before handoff only in prototype mode. Existing product facts and approved
+relevant prototype pages, and shared CSS. First activate `$xy-ui-design` to organize design analysis and standards application, completely reading the canonical Taste original via the no-hooks `$xy-taste` adapter within it; use `$xy-prototype-verify` before handoff only in prototype mode. Existing product facts and approved
 contracts override generic recommendations. Inspect only relevant pages and dependencies; do not load
 the whole design workspace without a concrete shared dependency.
 
@@ -109,8 +111,9 @@ Canonical standard leaves are not prohibited companion design documents.
 
 ## 7. Technical Deliverables
 
-- Stable build-free `index.html`, shared `prototype.css`, and concrete `<stable-page>.html` edits
-  only as required by the approved scope.
+- Stable build-free concrete `<stable-page>.html` and necessary business `prototype.css` edits
+  only as required by the approved scope. Preserve an existing `index.html` and its group semantics;
+  do not scaffold a generic index or copy plugin review/bridge assets into the project.
 - Exactly one contract per active page with these non-empty regions:
   - `<section data-contract-section="purpose">`
   - `<section data-contract-section="navigation">`

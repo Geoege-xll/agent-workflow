@@ -324,7 +324,7 @@ def render_antigravity_host_aliases(body: str) -> str:
     """Render portable/Codex Skill calls with Antigravity slash syntax."""
 
     body = re.sub(r"\$(xy-[a-z0-9]+(?:-[a-z0-9]+)*)", r"/\1", body)
-    return body.replace("$ui-ux-pro-max", "/ui-ux-pro-max")
+    return body
 
 
 def require_real_root(path: Path, label: str) -> None:
@@ -692,6 +692,7 @@ def validate_skill_ref(
     role: str,
     errors: list[str],
 ) -> None:
+    # 公开入口统一xy-*；实际资源必须可解析，角色绑定仍由共享策略精确校验。
     if not re.fullmatch(r"skills/xy-[a-z0-9]+(?:-[a-z0-9]+)*", ref):
         errors.append(f"Agent {role} has unsafe Skill reference: {ref!r}")
         return
@@ -1172,12 +1173,12 @@ def validate_semantic_sources(
                     f"managed block marker must not be embedded in source template "
                     f"{source_path}: {marker}"
                 )
-    if re.search(r"\$(?:xy-[a-z0-9-]+|ui-ux-pro-max)", template):
+    if re.search(r"\$(?:xy-[a-z0-9-]+|xy-taste)", template):
         errors.append(
             f"Antigravity template uses the wrong host alias in {paths['template']}"
         )
     if re.search(
-        r"(?:\$|(?<![A-Za-z0-9])/)(?:xy-[a-z0-9-]+|ui-ux-pro-max)",
+        r"(?:\$|(?<![A-Za-z0-9])/)(?:xy-[a-z0-9-]+|xy-taste)",
         entry_bodies.get("product_template", ""),
     ):
         errors.append(
@@ -1661,7 +1662,7 @@ def validate_staged_blocks(
             errors.append(f"invalid staged product bootstrap: {exc}")
             return
         if re.search(
-            r"(?:\$|(?<![A-Za-z0-9])/)(?:xy-[a-z0-9-]+|ui-ux-pro-max)",
+            r"(?:\$|(?<![A-Za-z0-9])/)(?:xy-[a-z0-9-]+|xy-taste)",
             product_entry,
         ):
             errors.append(
@@ -1711,7 +1712,7 @@ def validate_staged_blocks(
         except (OSError, UnicodeError, ValueError) as exc:
             errors.append(f"invalid staged Antigravity bootstrap: {exc}")
             return
-        if re.search(r"\$(?:xy-[a-z0-9-]+|ui-ux-pro-max)", antigravity):
+        if re.search(r"\$(?:xy-[a-z0-9-]+|xy-taste)", antigravity):
             errors.append(
                 f"staged Antigravity block retains the wrong host alias: "
                 f"{root / 'AGENTS.antigravity.block'}"

@@ -335,13 +335,15 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         self.assertEqual(1, index.count('<iframe id="prototype-preview"'))
         self.assertIn('<script src="workspace.js" defer></script>', index)
         self.assertIn('href="prototype.css"', page)
-        self.assertIn('href="index.html"', page)
+        self.assertNotIn('href="index.html"', page)
         self.assertEqual(1, page.count('class="prototype-contract"'))
         self.assertEqual(
             list(MANDATORY_SECTIONS),
             re.findall(r'data-contract-section="([^"]+)"', page),
         )
-        self.assertIn('<script src="page-shell.js" defer></script>', page)
+        # 新源页不携带通用工具；prepare仅在项目外快照副本注入版本绑定桥。
+        self.assertNotIn('src="page-shell.js"', page)
+        self.assertNotIn('href="feedback.css"', page)
 
     def test_page_template_separates_header_frame_content_and_contract(self) -> None:
         """三功能区保持独立；普通 Web 默认不带固定尺寸或多余的滚动焦点入口。"""
@@ -359,14 +361,12 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
 
         header = one_class("prototype-header")
         description = one_class("prototype-description")
-        back = one_class("prototype-back-link")
         stage = one_class("prototype-stage")
         frame = one_class("prototype-frame")
         contract = one_class("prototype-contract")
         self.assertEqual("header", parser.nodes[header][0])
-        self.assertEqual("index.html", parser.nodes[back][1].get("href"))
-        self.assertNotIn("onclick", parser.nodes[back][1])
-        self.assertIn(header, parser.nodes[back][2])
+        self.assertFalse(any("prototype-back-link" in (attrs.get("class") or "").split()
+                             for _, attrs, _ in parser.nodes))
         self.assertIn(header, parser.nodes[description][2])
         self.assertIn(stage, parser.nodes[frame][2])
         self.assertNotIn("style", parser.nodes[frame][1])
@@ -437,10 +437,9 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                 project = write_valid_project(Path(temporary))
                 shutil.copy2(TEMPLATE_ROOT / "page.html", self.page(project))
                 shutil.copy2(TEMPLATE_ROOT / "prototype.css", self.prototype(project) / "prototype.css")
-                shutil.copy2(TEMPLATE_ROOT / "page-shell.js", self.prototype(project) / "page-shell.js")
-                # 定位反馈样式是实际页面渲染依赖；夹具必须使用同版本真实资源，
-                # 不可通过放宽缺失依赖检查让旧模板复制路径继续显示绿色。
-                shutil.copy2(TEMPLATE_ROOT / "feedback.css", self.prototype(project) / "feedback.css")
+                # 明确移除业务目录索引并不复制通用工具，验证新页的真实standalone合同；
+                # 旧validate_workspace严格入口仍由其余原场景单独保护。
+                (self.prototype(project) / "index.html").unlink()
                 if mode == "fixed":
                     # 按模板声明的扩展点切换为一个测试窗口，不把该尺寸写成项目默认规范。
                     self.replace_once(self.page(project), 'data-prototype-display="responsive"',
@@ -459,8 +458,9 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                                       'Display: fixed. 固定预览 1200 × 800 CSS px，按原尺寸显示。')
                     self.replace_once(self.page(project), '初始显示响应式产品插槽', '初始显示固定尺寸产品插槽')
                 before = tree_snapshot(project)
-                result = self.run_validator(project)
-                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                result = validator_module.validate_workspace(project.resolve(), PROTOTYPE_RELATIVE.as_posix(),
+                    standalone=True, pages=["settings.html"], adapter="project.yaml")
+                self.assertEqual(1, len(result["pages"]))
                 self.assertEqual(before, tree_snapshot(project))
 
     def test_minimal_valid_workspace_passes_without_mutation(self) -> None:

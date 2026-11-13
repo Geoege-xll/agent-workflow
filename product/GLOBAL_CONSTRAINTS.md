@@ -21,8 +21,10 @@ sibling histories or a parent-history fork. Alias binds module/role; independent
 After acceptance and evidence preservation, use actual native close or irreversibly retire when
 unavailable; retirement neither proves destruction/history erasure nor releases still-active locks.
 
-The pack is the only workflow orchestrator. `grill-me` is the self-contained Full-request coverage
-check and requirements interview; `xy-plan` is the self-contained draft-planning procedure. Neither
+The pack is the only workflow orchestrator. The Full-request coverage
+check is PM-owned, using bundled upstream `grilling`; original `grill-me` is user-invoked only.
+`grill_result` is this workflow's internal schema in `xy-workflow/references/requirements-intake.md`,
+not an upstream contract. `xy-plan` is the self-contained draft-planning procedure. Neither
 is an implementation workflow. Superpowers is disabled by default except that the same single `xy-qa` reviewer may use the installed
 `requesting-code-review/code-reviewer.md` prompt as one external review method when host-native
 review is technically unavailable. `xy-plan` adapts writing-plans methodology locally without

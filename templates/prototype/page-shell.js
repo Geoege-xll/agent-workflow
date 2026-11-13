@@ -2,12 +2,22 @@
   "use strict";
 
   const back = document.getElementById("prototype-back-index");
-  if (!back) return;
   const name = window.location.pathname.split("/").pop();
   if (!/^[a-z0-9][a-z0-9-]*\.html$/.test(name) || name === "index.html") return;
-  // 独立打开也能恢复本页登记项；index 仍查登记表，未知页名不会变成任意路径。
-  back.setAttribute("href", `index.html#page=${encodeURIComponent(name)}`);
   if (window.parent === window) return;
+  // 派生页在body尾注入本桥；源页面可能还保留旧defer桥或重复加载同一v2资源。
+  // 只注册一次v2监听，且不依赖返回按钮；v1桥得不到新协议会话，不能抢握手。
+  if (window.__prototypeReviewBridgeV2) return;
+  window.__prototypeReviewBridgeV2 = true;
+  // 新源页不再复制feedback.css。只有prepare注入的真实工具脚本才可从自身
+  // 固定目录加载同包反馈样式，不能根据hash、消息或业务链接寻找资源。
+  const injectedScript = document.currentScript;
+  if (injectedScript?.hasAttribute("data-prototype-review-bridge")) {
+    const stylesheet = document.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = new URL("feedback.css", injectedScript.src).href;
+    document.head.append(stylesheet);
+  }
 
   let session = "";
   let highlighted = null;
@@ -39,7 +49,7 @@
     // 不静默截断节点/文字/接口；超限节点仍可浏览，反馈目录显式停止，避免导出冒充完整摘录。
     const valid = nodes.length <= 512 && nodes.every((node) => Array.from(node.text).length <= 4000 && Array.from(node.interaction_text).length <= 4000
       && node.interface_refs.length <= 32 && node.interface_refs.every((ref) => Array.from(ref).length <= 512));
-    window.parent.postMessage({ type: "prototype-workspace:catalog", version: 1, page: name, token: session, nodes: valid ? nodes : [], error: valid ? "" : "节点文字或引用超过反馈限额。" }, targetOrigin);
+    window.parent.postMessage({ type: "prototype-review:catalog", version: 2, page: name, token: session, nodes: valid ? nodes : [], error: valid ? "" : "节点文字或引用超过反馈限额。" }, targetOrigin);
   };
   const toggle = document.getElementById("prototype-page-sidebar-toggle");
   const toggleLabel = document.getElementById("prototype-page-sidebar-toggle-label");
@@ -52,14 +62,14 @@
   const targetOrigin = window.location.protocol === "file:" ? "*" : window.location.origin;
   const expectedOrigin = window.location.protocol === "file:" ? "null" : window.location.origin;
   const sendIntent = (intent, target) => {
-    window.parent.postMessage({ type: "prototype-workspace:intent", version: 1, page: name, token: session, intent, ...(target ? { target } : {}) }, targetOrigin);
+    window.parent.postMessage({ type: "prototype-review:intent", version: 2, page: name, token: session, intent, ...(target ? { target } : {}) }, targetOrigin);
   };
   window.addEventListener("message", (event) => {
     const data = event.data;
     // 只接受真实父窗口为本页建立的会话；不凭 origin=null 或消息名称认定可信。
     if (event.source !== window.parent || event.origin !== expectedOrigin || !data || typeof data !== "object"
-        || data.version !== 1 || data.page !== name) return;
-    if (data.type === "prototype-workspace:review") {
+        || data.version !== 2 || data.page !== name) return;
+    if (data.type === "prototype-review:review") {
       if (!session || data.token !== session) return;
       if (data.action === "refresh") { sendCatalog(); return; }
       if (data.action !== "locate" || !stableId(data.target)) return;
@@ -78,25 +88,26 @@
         }
         node.focus({ preventScroll: true });
       }
-      window.parent.postMessage({ type: "prototype-workspace:located", version: 1, page: name, token: session, target: data.target, ok: Boolean(ok) }, targetOrigin);
+      window.parent.postMessage({ type: "prototype-review:located", version: 2, page: name, token: session, target: data.target, ok: Boolean(ok) }, targetOrigin);
       return;
     }
-    if (data.type === "prototype-workspace:state") {
+    if (data.type === "prototype-review:state") {
       if (session && data.token === session && typeof data.sidebarExpanded === "boolean") syncSidebar(data.sidebarExpanded);
       return;
     }
-    if (data.type !== "prototype-workspace:connect" || typeof data.token !== "string"
+    if (data.type !== "prototype-review:connect" || typeof data.token !== "string"
         || !/^[a-f0-9]{32}$/.test(data.token) || typeof data.sidebarExpanded !== "boolean") return;
+    if (session === data.token) return; // 同一握手重发不重复发目录或移动焦点。
     session = data.token;
     document.body.classList.add("prototype-embedded");
     syncSidebar(data.sidebarExpanded);
     if (feedbackButton) feedbackButton.hidden = false;
-    window.parent.postMessage({ type: "prototype-workspace:ready", version: 1, page: name, token: session, supportsSidebarToggle: Boolean(toggle && toggleLabel) }, targetOrigin);
+    window.parent.postMessage({ type: "prototype-review:ready", version: 2, page: name, token: session, supportsSidebarToggle: Boolean(toggle && toggleLabel) }, targetOrigin);
     sendCatalog();
     if (data.focusHeading === true) document.getElementById("prototype-page-title")?.focus();
   });
   feedbackButton?.addEventListener("click", () => { if (session) sendIntent("open-feedback"); });
-  back.addEventListener("click", (event) => {
+  back?.addEventListener("click", (event) => {
     if (!session || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     sendIntent("reveal-navigation");

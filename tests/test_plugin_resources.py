@@ -40,6 +40,9 @@ class PluginResourcesTest(unittest.TestCase):
         originals = {
             relative: (PACK / relative).read_bytes() for relative in BUILTIN_STANDARD_SOURCES
         }
+        # role_skills现在消费唯一身份解析器；独立安装夹具必须包含真实三文件闭包。
+        originals.update({"product/" + name: (PACK / "product" / name).read_bytes()
+                          for name in ("__init__.py", "command_identity.py", "command_identity.json")})
         originals[ENGINEERING] += "\n<!-- 本次独立插件安装的规范字节 -->\n".encode()
         originals.update({
             "product/WORKFLOW.md": "插件工作流正文\r\n".encode(),

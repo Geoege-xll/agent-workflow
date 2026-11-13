@@ -18,7 +18,6 @@ MANAGED_AGENT_MARKER = "<!-- agent-workflow-pack:managed-agent -->"
 CLAUDE_BEGIN = "<!-- agent-workflow-pack:claude-begin -->"
 CLAUDE_END = "<!-- agent-workflow-pack:claude-end -->"
 CORE_SKILLS = (
-    "grill-me",
     "xy-workflow",
     "xy-plan",
     "xy-project-memory",
@@ -306,11 +305,10 @@ class ClaudeSourceContractTest(unittest.TestCase):
             "filter_enforced",
             "capability_evidence",
             "provenance_refs",
-            "skill_policy",
             "required_skills",
             "audit_surfaces",
             "grill-me",
-            "ui-ux-pro-max",
+            "xy-taste",
             "xy-prototype-verify",
             "xy-build-verify",
             "xy-qa-review",
@@ -705,7 +703,7 @@ class ClaudeGeneratedAgentTest(ClaudeFixtureMixin, unittest.TestCase):
 
         uiux = self.read_agent(project, "xy-uiux")
         self.assertIn("  - xy-ui-design", uiux)
-        self.assertIn("  - ui-ux-pro-max", uiux)
+        self.assertIn("  - xy-taste", uiux)
         self.assertIn("  - xy-prototype-verify", uiux)
         self.assertIn("/xy-prototype-verify", uiux)
 
@@ -1438,7 +1436,7 @@ class ClaudeDocumentationTest(unittest.TestCase):
             "docs/development.md": (
                 "Claude 原生生成合同", "xy-project-memory",
                 "仅合并 `.claude/settings.json` 中带签名的辅助 Hook 条目",
-                "`ui-ux-pro-max`", "按描述匹配", "`claude doctor`",
+                "`xy-taste`", "按描述匹配", "`claude doctor`",
             ),
         }
         for relative, phrases in expected.items():
@@ -1463,7 +1461,7 @@ class ClaudeDocumentationTest(unittest.TestCase):
         for phrase in (
             "Skill tool",
             "xy-build-verify",
-            "ui-ux-pro-max",
+            "xy-taste",
             "xy-prototype-verify",
             "xy-qa-review",
         ):

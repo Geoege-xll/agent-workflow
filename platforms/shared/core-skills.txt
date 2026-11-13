@@ -1,4 +1,3 @@
-grill-me
 xy-build-verify
 xy-code-standards
 xy-project-memory
