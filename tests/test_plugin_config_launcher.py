@@ -9,7 +9,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
 import stat
 import tempfile
 from types import SimpleNamespace
@@ -209,23 +208,50 @@ class PluginConfigLauncherTest(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(len(self.calls), 1)
 
-    def real_release(self, *, previous=False):
+    def real_release(self):
         """使用真实独立构建器和全部原生源文件，不以缩小载荷或模拟准备过程代替发行 ZIP。"""
-        source = ROOT
-        name = "real-current-release"
-        if previous:
-            source = self.base / "previous-source"
-            shutil.copytree(ROOT / "native_config", source / "native_config", ignore=shutil.ignore_patterns("__pycache__"))
-            (source / "product").mkdir()
-            for filename in ("__init__.py", "command_identity.py", "command_identity.json"):
-                shutil.copyfile(ROOT / "product" / filename, source / "product" / filename)
-            (source / "scripts").mkdir()
-            for filename in ("agent_config.py", "agent_config.sh", "python_runtime.sh"):
-                shutil.copyfile(ROOT / "scripts" / filename, source / "scripts" / filename)
-            (source / "native_config/VERSION").write_text("0.1.0-alpha.2\n")
-            name = "real-previous-release"
-        report = builder.build(source, self.base / name)
+        report = builder.build(ROOT, self.base / "real-current-release")
         return Path(report["artifact"]), report["version"]
+
+    def retain_historical_release(self):
+        """重建真实 alpha4 的 30 成员／29 BUILD 项形态，模拟旧安装器已经发布的库存。
+
+        当前构建器已强制加入身份合同，不能再用当前 prepare 安装旧形态来布置前置状态。
+        这里仅保留当时封闭的文件集合、原始 ZIP 和登记；旧源码不会作为运行入口执行，
+        因此回归不依赖开发者本机库存、历史下载或 CI 工作区之外的文件。
+        """
+        version = "0.1.0-alpha.4"
+        bodies = {name: body for name, body in self.bodies.items()
+                  if name != "BUILD.json" and not name.startswith("product/")}
+        bodies["native_config/VERSION"] = (version + "\n").encode("ascii")
+        manifest = {"name": store.PRODUCT, "version": version, "third_party_dependencies": [],
+                    "files": {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()}}
+        bodies["BUILD.json"] = json.dumps(manifest, sort_keys=True).encode()
+        self.assertEqual((len(bodies), len(manifest["files"])), (30, 29))
+        artifact = self.write_package(bodies)
+        self.write_descriptor(artifact, version=version)
+        self.root.mkdir(mode=0o700)
+        versions = self.root / "versions"
+        versions.mkdir(mode=0o700)
+        artifacts = self.root / "artifacts"
+        artifacts.mkdir(mode=0o700)
+        digest = self.data["artifact"]["sha256"]
+        cached = artifacts / (digest + ".zip")
+        cached.write_bytes(artifact.read_bytes())
+        cached.chmod(0o600)
+        target = versions / store.directory_name(self.data)
+        target.mkdir(mode=0o700)
+        for name, body in bodies.items():
+            destination = target / name
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            destination.write_bytes(body)
+            destination.chmod(0o700 if name.endswith(".sh") else 0o600)
+        registry = self.root / "registry.json"
+        registry.write_text(json.dumps({"schema_version": 1, "product": store.PRODUCT,
+                                       "version": version, "sha256": digest,
+                                       "directory": "versions/" + target.name}))
+        registry.chmod(0o600)
+        return target
 
     def fail_registry_publish_once(self, artifact):
         """故障只发生在最后一次原子登记；ZIP、解包、目录发布和重试均走真实文件系统实现。"""
@@ -261,18 +287,20 @@ class PluginConfigLauncherTest(unittest.TestCase):
         self.assertFalse(list(self.root.glob(".preparing-*")))
 
     def test_real_zip_upgrade_registry_publish_failure_keeps_old_active_and_retries(self):
-        old_artifact, old_version = self.real_release(previous=True)
-        self.write_descriptor(old_artifact, version=old_version)
+        old_target = self.retain_historical_release()
         old_data = self.data
-        old_target = store.prepare(self.root, old_data, old_artifact)
         old_files = self.version_snapshot(old_target)
         old_registry = (self.root / "registry.json").read_bytes()
         artifact, version = self.real_release()
+        pinned = store.descriptor(ROOT / "plugins/maintenance/component.json")
+        self.assertEqual((version, hashlib.sha256(artifact.read_bytes()).hexdigest()),
+                         (pinned["version"], pinned["artifact"]["sha256"]))
         self.write_descriptor(artifact, version=version)
         self.assertNotEqual(self.data["version"], old_data["version"])
         target = self.fail_registry_publish_once(artifact)
         self.assertEqual((self.root / "registry.json").read_bytes(), old_registry)
-        self.assertEqual(store.installed(self.root, old_data), old_target)
+        # 旧库存可认证和保留，但不能因为登记中的版本/摘要自洽就充当当前 ABI。
+        self.assertIsNone(store.installed(self.root, self.data))
         self.assertEqual(self.version_snapshot(old_target), old_files)
         new_files = self.version_snapshot(target)
         retried = store.prepare(self.root, self.data, artifact)
@@ -281,6 +309,47 @@ class PluginConfigLauncherTest(unittest.TestCase):
         self.assertEqual(self.version_snapshot(target), new_files)
         self.assertEqual(self.version_snapshot(old_target), old_files)
         self.assertEqual(len(list((self.root / "versions").iterdir())), 2)
+        response, code = self.run_launcher("open", "--no-browser")
+        self.assertEqual(code, 0, response)
+        self.assertEqual(self.calls[0][0][1], str(target / "scripts/agent_config.sh"))
+
+    def test_current_release_missing_identity_is_rejected_with_consistent_manifest(self):
+        # 重算 BUILD 与外层摘要，确保拒绝原因是当前 ABI 缺失，而不是普通摘要损坏。
+        for missing in ("product/__init__.py", "product/command_identity.py", "product/command_identity.json"):
+            with self.subTest(missing=missing):
+                bodies = {name: body for name, body in self.bodies.items() if name != missing}
+                manifest = json.loads(bodies["BUILD.json"])
+                del manifest["files"][missing]
+                bodies["BUILD.json"] = json.dumps(manifest, sort_keys=True).encode()
+                artifact = self.write_package(bodies)
+                self.write_descriptor(artifact)
+                with self.assertRaises(store.ComponentError) as error:
+                    store.archive_payload(artifact, self.version, self.data["artifact"]["sha256"])
+                self.assertEqual(str(error.exception), "invalid_build_manifest")
+                response, code = self.run_launcher("open", "--prepare", "--artifact", str(artifact))
+                self.assertEqual((code, response["code"]), (1, "invalid_build_manifest"))
+                self.assertFalse((self.root / "registry.json").exists())
+                self.assertEqual(list((self.root / "versions").iterdir()), [])
+        self.assertFalse(self.calls)
+
+    def test_historical_inventory_cannot_bypass_current_abi_on_selection_or_retry(self):
+        target = self.retain_historical_release()
+        # 同一个已认证旧库存若被显式选为当前发行，仍不得返回运行路径。
+        before = self.snapshot()
+        with self.assertRaises(store.ComponentError) as error:
+            store.installed(self.root, self.data)
+        self.assertEqual(str(error.exception), "invalid_build_manifest")
+        self.assertEqual(self.snapshot(), before)
+        # 模拟版本已发布、最后登记未成功的状态；重试也不能借历史认证补成当前版本。
+        (self.root / "registry.json").unlink()
+        with store.preparation_lock(self.root):
+            pass
+        before = self.snapshot()
+        with self.assertRaises(store.ComponentError) as error:
+            store.prepare(self.root, self.data, self.artifact)
+        self.assertEqual(str(error.exception), "invalid_build_manifest")
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue(target.is_dir())
 
     def test_registry_retry_rejects_tampered_retained_real_zip_version(self):
         artifact, version = self.real_release()
