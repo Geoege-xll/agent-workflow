@@ -1,14 +1,14 @@
 # 本机模型目录与子代理调用偏好
 
-状态：已发布／本机基线为工作流 alpha.7 与组件 alpha.4；第四版配置工作台的 alpha.5 源码已通过独立 QA，待新候选发行与安装。源码、远程发行和本机状态分别验收，指定模型实际运行仍按以下边界记录。
+状态：工作流 alpha.9 与组件 alpha.5 已发布，本机三端已更新并通过实际载荷、偏好保留、完整性与配置服务核验。第四版正式工作台已打开；新会话重新加载、指定模型实际运行与 App GUI 仍按以下边界记录。
 
 ## 当前交付
 
-工作流 [3.0.0-alpha.7](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.0-alpha.7) 与独立配置组件 [0.1.0-alpha.4](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.0-alpha.4) 已发布。最终载荷来自 `d61b8c4b997e93d91664abd1807476af768027e9` 的 [Linux／macOS current CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43370630507)，三个官方 Git 来源经[发布作业](https://github.com/Geoege-xll/agent-workflow/actions/runs/43371302213)验证并更新。
+工作流 [3.0.0-alpha.9](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.0-alpha.9) 与独立配置组件 [0.1.0-alpha.5](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.0-alpha.5) 已发布。插件载荷来自 `aa3b6f559cc692b738618d16f66009f8ec02f9d2` 的 [Linux／macOS current CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43436450887)，各 590 项测试通过、保留 4 项既有跳过；三个官方 Git 来源经[发布作业](https://github.com/Geoege-xll/agent-workflow/actions/runs/43438890253)更新，完整文件与权限匹配同一候选。
 
-本机通过官方客户端更新后，Codex、Claude、AGY 均实际报告 alpha.7 且启用；169／176／174 个安装载荷文件分别与最终 CI ZIP 逐字节一致。组件 alpha.4 实际 Release 下载与摘要核验、安装及 doctor 完整性检查通过；服务 ready。三端只读 context 均包含可写通用偏好入口，Codex 无原生文件、Claude 仅插件角色的入口问题已覆盖；现有模型／提供方／推理和默认 Agent 字段保持原值。完整记录位于 `dist/evidence/native-model-preferences/`，不会提交用户配置或认证内容。
+本机通过官方客户端更新后，Codex、Claude、AGY 均实际报告 alpha.9 且启用；2015／2022／2020 个安装文件分别与最终 CI ZIP 字节及执行位一致，旧名称安装已移除。真实 alpha.4 原库存保留，正式 alpha.9 启动器成功下载校验并准备 alpha.5；三端 doctor 完整性通过，服务 ready，浏览器打开成功。三个调用偏好文件和 Codex／Claude 的原生模型、推理、默认 Agent 字段与升级前一致；其他 AGY 插件保持原状态。完整本地交付证据留存，不提交用户配置或认证内容。
 
-源 CI 首轮发现测试运行器的独立清单／隔离样本遗漏新偏好模块；原作者补齐后 23 项验证和同一 Reviewer 增量复核通过，随后两系统 CI 成功。真实发行描述也经同一 Reviewer 单文件复核；原失败、源码 PASS、CI 修复 PASS 和发行绑定 PASS 均保留。
+原 alpha.7 的偏好模块与发行绑定验收记录保留于下节。此次 alpha.8 首轮 CI 暴露两项夹具遗漏，修复后经独立 QA 和两系统 CI；真实本机准备再发现历史组件被套用新 ABI 的缺陷，alpha.9 修复后重新独立验收、通过完整 CI 并完成原库存上的实际准备。所有原失败、精准修复与成功证据分别保留，不将源码 PASS 冒充安装通过。
 
 安装成功不等于当前会话已重新加载。更新后使用新会话；Codex Hook 仍遵循官方 `/hooks` 审阅，未改写信任。Codex App GUI、指定子代理模型实际采纳及后台 A/B 并行不因本次安装核验而宣称通过；Windows 继续暂停。
 
@@ -71,7 +71,7 @@ QA 通过后再更新当前功能说明、发布说明与主页；发布配置�
 
 ## 配置工作台重设计（源码已验收，待发布与安装）
 
-2026-11-13 用户选择先交互原型、确认后实现，并明确认可第四版。上述 alpha.7／组件 alpha.4 仍为已发布和本机基线；本节记录已经接受的正式 UI 源码，不表示新候选已远程发布或安装。具体原型为 `docs/standards/prototype/agent-configuration.html`，通过既有 index 普通链接登记，不另造页面清单。
+2026-11-13 用户选择先交互原型、确认后实现，并明确认可第四版。本节保留正式 UI 的设计与源码验收权威；实际发行与本机基线已更新为本页“当前交付”中的 alpha.9／组件 alpha.5。具体原型为 `docs/standards/prototype/agent-configuration.html`，通过既有 index 普通链接登记，不另造页面清单。
 
 - **REQ-101：信息架构。** 顶部统一切换 Codex／Claude Code／Antigravity；“模型与推理”“工作流启停”“诊断与帮助”使用紧凑的横向分类切换，取消常驻大侧栏，首屏默认进入模型设置。提供统一的用户级／当前项目范围，项目路径按需展开，始终能判断当前编辑对象。
 - **REQ-102：模型与推理。** 通用默认独立展示；逐 Agent 列表突出真实调用身份、模型、推理、继承来源和草稿状态。原生定义文件为明确的高级入口，不与调用偏好混成同一个编辑范围。保留批量修改、刷新模型目录和清除覆盖；不伪造 Codex 原生角色或将 AGY 会话模型当作子代理 tier。
@@ -90,6 +90,8 @@ REQ-101 对应顶部平台／范围／项目载入与分类；REQ-102 对应 `se
 
 本请求唯一 Reviewer 已最终 PASS：四路径、62 条规则，Pack SHA `1d21b53194e4522f9d80a4e152c405fecbae5ad88d7ee63d0807bd119c50b65f`、diff SHA `c5482b04afe365404012be5cdae5c00ef08254342b66a2c97cc85ff2516dac63`；PM 已实际校验 schema 2 交接。初审发现确认放弃后焦点落在已禁用按钮，以及导航 CSS 字面换行；原作者修复后以三事务旧负控／新正控、后续 Tab、桌面 flex／4px 与窄屏完成增量复核。初始规则选择遗漏也已补齐，没有换 Reviewer 或重复无关全套。
 
-独立 alpha.5 ZIP 已构建并核对三网页、33 成员及全部 BUILD 摘要，当前本地候选 SHA `0c8c7e07de79c18b8747c0686555085020955b820fa0c5fbedeeb090e58f52ad`。完整生产证据为 `dist/evidence/console-prototype/production-implementation-evidence.zip`，返工及原 FAIL 资料在本请求 scratch 的 `production-rework-evidence.zip`／`qa-initial-review.zip`。该 ZIP 是未提交源码候选，组件 descriptor 保持 unpublished；后续以真实 CI 资产和下载摘要绑定，不能拿本地 SHA 冒充已发布成品。三宿主重新加载、指定模型实际采纳、Windows 和完整读屏认证不由本次 UI QA 推断完成。
+独立 alpha.5 ZIP 的三网页、33 成员及全部 BUILD 摘要已核对，SHA 为 `0c8c7e07de79c18b8747c0686555085020955b820fa0c5fbedeeb090e58f52ad`。原本地候选、成功 CI 包、真实 Release 下载及本机安装逐字节一致，固定 descriptor 为 published；alpha.9 薄安装器修复未改变该组件。完整生产证据为 `dist/evidence/console-prototype/production-implementation-evidence.zip`，返工及原 FAIL 资料在本请求 scratch 的 `production-rework-evidence.zip`／`qa-initial-review.zip`。三宿主重新加载、指定模型实际采纳、Windows 和完整读屏认证仍不由 UI QA 或安装回执推断完成。
+
+alpha.9 将历史库存 BUILD／原包完整性认证与当前完整 ABI 校验分开。公开归档入口、发行装配消费者、当前运行选择和登记重试仍严格；旧包只认证保留，不执行旧代码，不做 2.0 兼容。已补真实历史形态升级、准备失败保留／重试和三个身份文件逐项缺失负控，并在保留本机原 alpha.4 库存的情况下完成正式 alpha.5 准备。独立 QA 接受五路径及 30 条工程规则；既有完整失败日志保留。
 
 通用评审工具随插件交付、项目只保存具体原型与业务资产的归属升级见 `workflow-document-lifecycle.md`；不向本项目复制新版通用壳，不批量迁移三个业务项目。本主题已投影已接受源码事实，Windows 继续暂停；不新建空索引、feature／ADR 或第二份当前设计文档。

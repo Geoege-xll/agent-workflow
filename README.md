@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-当前源码候选为 **3.0.0-alpha.8**，独立配置组件为 **0.1.0-alpha.5**。精选 Grill Me／Taste／Playwright CLI、统一 `xy-workflow` 命名、插件托管离线原型评审工具，以及重新设计的 Agent 配置工作台均已通过各自独立 QA；当前尚未发布或更新本机。以下新命名命令适用于对应真实发行完成后；实际发行以 [GitHub Releases](https://github.com/Geoege-xll/agent-workflow/releases) 和客户端列表为准。公开官方目录、稳定发行与模型运行分别验收，**Windows 暂停**。
+已发布 **[3.0.0-alpha.9](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.0-alpha.9)**，独立配置组件为 **[0.1.0-alpha.5](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.0-alpha.5)**。精选 Grill Me／Taste／Playwright CLI、统一 `xy-workflow` 命名、插件托管离线原型评审工具，以及用户确认的第四版 Agent 配置工作台均已独立验收。三个 Git 渠道与本机 Codex／Claude／AGY 已更新；配置组件完整性、服务与浏览器打开已核验，模型偏好保持。公开官方目录、稳定发行与指定模型实际运行分别验收，**Windows 暂停**。
 
 ## 工作流保持
 
@@ -56,7 +56,7 @@ agy plugin list --json
 
 AGY 使用 GitHub `tree/分支` 地址，不能替换为 Claude 的 `#分支` 写法。
 
-三个分发分支只承载已校验的宿主构建产物。Codex 和 Claude 的市场名均为 `xy-workflow-alpha`，插件名为 `xy-workflow`；旧开发来源 `xy-workflow-local` 不会自动迁移。旧 3.0 身份为 `agent-workflow@agent-workflow-alpha`／`agent-workflow@agent-workflow-local`；新旧身份同时存在时配置工具拒绝猜选。活动任务收尾、新资产真实发布并核验后，才使用官方客户端确认来源和范围并切换；本轮未执行本机切换。
+三个分发分支只承载已校验的宿主构建产物。Codex 和 Claude 的市场名均为 `xy-workflow-alpha`，插件名为 `xy-workflow`；旧开发来源 `xy-workflow-local` 不会自动迁移。旧 3.0 身份为 `agent-workflow@agent-workflow-alpha`／`agent-workflow@agent-workflow-local`；新旧身份同时存在时配置工具拒绝猜选。更新前先收尾活动任务，再按官方客户端确认来源和范围；本轮本机已切换到新名称并清除旧名称安装，未改写 Hook 信任或模型偏好。
 
 安装后的状态检查、更新与退出渠道见 [INSTALL](plugins/INSTALL.md)。源码构建仅供开发、离线候选和维护验证，见[开发指南](docs/development.md)。自有 Git 市场不等于官方公开目录审查或稳定发行。
 
@@ -80,10 +80,11 @@ AGY 使用 GitHub `tree/分支` 地址，不能替换为 Claude 的 `#分支` �
 
 | 范围 | 当前状态 |
 | --- | --- |
-| alpha.8／组件 alpha.5 源码候选 | 精选依赖、公开命名、离线评审工具和正式工作台已独立 QA；尚未远程发布／本机安装 |
+| alpha.9／组件 alpha.5 | 精选依赖、公开命名、离线评审工具、正式工作台及组件升级修复均已独立 QA；真实发行与本机安装完成 |
 | 生产配置网页 | 实际 Chromium 覆盖动态身份、保存回读、两项目与三草稿、目录／来源失败、真实写入故障恢复、放弃焦点、键盘与窄屏；使用隔离配置 |
 | 离线评审工具 | 真实 file 浏览、旧桥共存、批注／比较／导出、无主题 token 高亮及三端包外消费通过；未实际迁移业务项目 |
-| 远程渠道 | 当前公开基线仍为 alpha.7／组件 alpha.4；新候选需真实 CI、组件下载绑定和固定 Git 分发，安装发现不代表模型运行 |
+| 远程渠道 | [Linux／macOS CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43436450887)各 590 项测试通过，保留 4 项既有跳过；[三个 Git 渠道](https://github.com/Geoege-xll/agent-workflow/actions/runs/43438890253)完整文件与权限匹配同一候选 |
+| 本机安装与配置入口 | 三端 alpha.9 启用，2015／2022／2020 个安装文件与 CI 包字节及执行位一致；组件 alpha.4 原库存保留并成功准备 alpha.5，三端 doctor 完整性通过、服务 ready、浏览器打开成功 |
 | alpha.6 Codex CLI | 默认新会话加载工作流、显式维护入口隔离已实际验证；新版本指定子代理模型仍须单独核实 |
 | alpha.6 Claude Code | 实际新会话选中 PM；用户会话中前台规划与排队追问正常，未覆盖后台 A/B 并行派发 |
 | AGY CLI 模型运行 | 本机模型目录可读取，指定子代理模型与调用能力仍按真实接口分别验证 |
@@ -96,4 +97,4 @@ AGY 使用 GitHub `tree/分支` 地址，不能替换为 Claude 的 `#分支` �
 
 公开入口还包括 `xy-grill-me`（仅用户显式调用）、`xy-grilling`（PM 自动需求访谈）、`xy-taste` 与 `xy-playwright`。原版 canonical 技能和固定运行依赖完整保留在非发现资源中；只暴露本地薄 adapter，不要求另装全局 Skill 或 playwright-cli。Node 与匹配浏览器仍是明确运行前提。
 
-独立配置 alpha.5 需先真实发布资产、核验下载摘要，再将插件组件描述标记 published 并发行插件；当前 descriptor 为 unpublished，不提供可猜测的远程下载地址。既有用户／项目偏好与资料不迁移、不重写；精确七个旧 Claude 角色键只在读取新角色偏好时按层补缺。
+独立配置 alpha.5 已真实发布并下载校验，插件固定 descriptor 为 published。alpha.9 修复了合法旧组件库存被套用新 ABI 而阻断准备的问题：历史完整性认证与新目标严格校验分开，失败时保留原登记，成功后原子切换；无须删除旧缓存绕过检查。既有用户／项目偏好与资料不迁移、不重写；精确七个旧 Claude 角色键只在读取新角色偏好时按层补缺。
