@@ -1,6 +1,16 @@
 # 本机模型目录与子代理调用偏好
 
-状态：源码已通过集成独立 QA，正在交付。用户已选择完整方案、沿用现有规范直接实现，并要求完成后发布 GitHub 新版本、同步本机。源码验收与远程发行、本机更新分别记录，尚未发生的发布不当作完成。
+状态：已发布并完成本机安装核验。用户已选择完整方案、沿用现有规范直接实现；源码独立 QA、远程发行和本机安装分别验收，指定模型实际运行仍按以下边界记录。
+
+## 当前交付
+
+工作流 [3.0.0-alpha.7](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.0-alpha.7) 与独立配置组件 [0.1.0-alpha.4](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.0-alpha.4) 已发布。最终载荷来自 `d61b8c4b997e93d91664abd1807476af768027e9` 的 [Linux／macOS current CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43370630507)，三个官方 Git 来源经[发布作业](https://github.com/Geoege-xll/agent-workflow/actions/runs/43371302213)验证并更新。
+
+本机通过官方客户端更新后，Codex、Claude、AGY 均实际报告 alpha.7 且启用；169／176／174 个安装载荷文件分别与最终 CI ZIP 逐字节一致。组件 alpha.4 实际 Release 下载与摘要核验、安装及 doctor 完整性检查通过；服务 ready。三端只读 context 均包含可写通用偏好入口，Codex 无原生文件、Claude 仅插件角色的入口问题已覆盖；现有模型／提供方／推理和默认 Agent 字段保持原值。完整记录位于 `dist/evidence/native-model-preferences/`，不会提交用户配置或认证内容。
+
+源 CI 首轮发现测试运行器的独立清单／隔离样本遗漏新偏好模块；原作者补齐后 23 项验证和同一 Reviewer 增量复核通过，随后两系统 CI 成功。真实发行描述也经同一 Reviewer 单文件复核；原失败、源码 PASS、CI 修复 PASS 和发行绑定 PASS 均保留。
+
+安装成功不等于当前会话已重新加载。更新后使用新会话；Codex Hook 仍遵循官方 `/hooks` 审阅，未改写信任。Codex App GUI、指定子代理模型实际采纳及后台 A/B 并行不因本次安装核验而宣称通过；Windows 继续暂停。
 
 ## 已接受的源码基线
 
