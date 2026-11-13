@@ -7,6 +7,9 @@
   const HOST_LABELS = { codex: "Codex", claude: "Claude Code", antigravity: "Antigravity" };
   const FIELDS = ["model", "effort"];
   const FIELD_LABELS = { model: "模型", effort: "推理级别" };
+  const ACTIVATION_STATES = ["inherit", "enabled", "disabled"];
+  const ACTIVATION_LABELS = { inherit: "继承（无本层覆盖）", enabled: "启用", disabled: "停用", unknown: "未知" };
+  const activationLabel = value => ACTIVATION_LABELS[value] || "未知";
   const SOURCE_LABELS = { host: "宿主", host_unresolved: "宿主默认未观察", global: "用户级", user: "用户级", project: "项目", plugin: "插件" };
   const DEFINITION_LABELS = { shadowed: "被其他来源遮蔽", ambiguous: "定义存在歧义", disabled: "已禁用", installation_observed: "仅观察到安装，启用状态未知", effective_in_discovered_sources: "在已发现来源中生效，会话加载未验证" };
   const SAVE_LABELS = { saved: "已保存", published_location_unknown: "新内容已发布，目标当前位置未核实", not_written: "未写入", rolled_back: "已回滚并恢复前像内容", rolled_back_location_unknown: "已恢复前像内容，目标当前位置未核实", rollback_conflict: "回滚冲突，已保留相关对象与资料", rolled_back_durability_unverified: "已恢复可见前像内容，磁盘耐久性未验证", recovery_required: "需要人工检查保留资料" };
@@ -49,6 +52,14 @@
         (own(value, "cleanup_pending") && (!Array.isArray(value.cleanup_pending) || value.cleanup_pending.some(item => !path(item))))) {
       throw new ApiError("invalid_response", "保存回执格式无效，草稿已保留；请重新读取配置后确认。", status);
     }
+    // 首次创建失败也可能已经留下真实目录或文件；只读展示核心收据，不据路径提供删除/回滚操作。
+    // location_status=unknown 时目标只能标作原声明位置，不能冒称文件仍在该路径。
+    if ((own(value, "created_directories") && (!Array.isArray(value.created_directories) || value.created_directories.some(item => !path(item)))) ||
+        (own(value, "created_files") && (!Array.isArray(value.created_files) || value.created_files.some(row => !object(row) ||
+          typeof row.role !== "string" || !path(row.target) || row.before_absent !== true || typeof row.published !== "boolean" ||
+          !identity(row.observed_identity) || !locationStatus(row.location_status) || typeof row.recovery_action !== "string")))) {
+      throw new ApiError("invalid_response", "首次创建收据格式无效，草稿已保留；请重新读取配置。", status);
+    }
     if (value.context) value.context = contextContract(value.context);
     else if (value.saved && !applyFailed(value) && value.context_unavailable !== true) {
       throw new ApiError("invalid_response", "保存状态缺少配置回读，请重新读取后确认。", status);
@@ -81,6 +92,29 @@
         throw new ApiError("invalid_response", "Agent 配置行无效；已保留当前草稿。");
       }
       identifiers.add(row.role);
+    }
+    if (own(value, "workflow_activation")) {
+      activationContract(value.workflow_activation);
+      if (value.workflow_activation.scope !== value.scope) throw new ApiError("invalid_response", "工作流配置范围不一致，草稿已保留。");
+    }
+    return value;
+  }
+
+  function activationContract(value) {
+    // 启停是独立协议，未知值绝不能按“启用”回退；可写身份完全以核心的明确报告为准。
+    const nullableString = value => value === null || typeof value === "string";
+    if (!object(value) || typeof value.supported !== "boolean" || typeof value.writable !== "boolean" ||
+        ![...ACTIVATION_STATES, "unknown"].includes(value.state) ||
+        !["enabled", "disabled", "unknown"].includes(value.effective_state) ||
+        !["enabled", "disabled", "unknown"].includes(value.inherited_state) ||
+        !nullableString(value.plugin_id) || !nullableString(value.source_path) || !nullableString(value.inherited_source) ||
+        !["global", "project"].includes(value.scope) || value.runtime_verified !== false ||
+        !Array.isArray(value.diagnostics) || value.diagnostics.some(row => !object(row) || typeof row.code !== "string" || typeof row.message !== "string") ||
+        !object(value.recovery) || typeof value.recovery.open_command !== "string" ||
+        !Array.isArray(value.recovery.official_steps) || value.recovery.official_steps.some(step => typeof step !== "string") ||
+        !nullableString(value.recovery.documentation_url) || !nullableString(value.read_only_reason) ||
+        (value.writable && (!value.supported || !value.plugin_id || !value.source_path || value.state === "unknown"))) {
+      throw new ApiError("invalid_response", "工作流启停数据无效，草稿已保留，请重新读取。");
     }
     return value;
   }
@@ -154,6 +188,22 @@
       }
       return value;
     }
+    async previewActivation(location, revision, state, signal) {
+      if (!ACTIVATION_STATES.includes(state)) throw new ApiError("invalid_input", "请选择继承、启用或停用。");
+      // 服务端拒绝混合 edits/reset，包括空对象和 false；专用入口从构造时保证请求互斥。
+      const body = { host: location.host, scope: location.scope, revision, workflow_activation: { state } };
+      if (location.scope === "project") body.project = location.project;
+      const value = await this.request("/api/preview", body, signal);
+      if (typeof value.preview_id !== "string" || !Array.isArray(value.changes) ||
+          value.changes.some(row => !object(row) || row.kind !== "workflow_activation" || row.field !== "enabled" ||
+            row.scope !== location.scope || typeof row.source_path !== "string" || typeof row.plugin_id !== "string" ||
+            !ACTIVATION_STATES.includes(row.before) || !ACTIVATION_STATES.includes(row.after) ||
+            !["enabled", "disabled", "unknown"].includes(row.effective_before) || !["enabled", "disabled", "unknown"].includes(row.effective_after)) ||
+          !Array.isArray(value.warnings) || !object(value.effect)) {
+        throw new ApiError("invalid_response", "工作流启停预览格式无效，未执行保存。");
+      }
+      return value;
+    }
     async apply(previewId) {
       const value = await this.request("/api/apply", { preview_id: previewId }, undefined, (body, status, code) => {
         if (status !== 409 || code !== "partial_failure") return undefined;
@@ -171,6 +221,7 @@
     constructor(location) {
       this.location = { ...location }; this.context = null; this.edits = new Map();
       this.selected = new Set(); this.catalog = null; this.catalogFailure = null; this.conflicted = false;
+      this.activation = new ActivationDraft();
     }
     row(identifier) { return this.context?.roles.find(row => row.role === identifier); }
     value(identifier, field) {
@@ -189,8 +240,10 @@
     }
     accept(context, clear = false) {
       this.context = context;
+      // 一类操作保存成功只能清除自己的草稿；另一类草稿应在新 revision 上继续保留。
+      this.activation.accept(context.workflow_activation, clear === "workflow_activation");
       // 重新读取只更新基线；保留用户明确改过的字段，避免冲突恢复时丢失草稿。
-      const previous = clear ? [] : [...this.edits].map(([id, fields]) => [id, { ...fields }]);
+      const previous = clear === true || clear === "model" ? [] : [...this.edits].map(([id, fields]) => [id, { ...fields }]);
       this.edits.clear();
       for (const [id, fields] of previous) {
         // 已消失或变为只读的 Agent 保留草稿供用户看到并明确放弃，绝不静默保存到别的 ID。
@@ -201,6 +254,7 @@
       this.conflicted = false;
     }
     get dirty() { return this.edits.size > 0; }
+    get anyDirty() { return this.dirty || this.activation.dirty; }
     get count() { return [...this.edits.values()].reduce((total, fields) => total + Object.keys(fields).length, 0); }
     get unavailableEdits() { return [...this.edits.keys()].filter(id => this.row(id)?.writable !== true); }
     payload() {
@@ -208,6 +262,21 @@
       return Object.fromEntries([...this.edits].map(([id, fields]) => [id, { ...fields }]));
     }
     clear() { this.edits.clear(); this.conflicted = false; }
+  }
+
+  class ActivationDraft {
+    constructor() { this.saved = null; this.edit = null; }
+    accept(value, clear = false) {
+      this.saved = value || null;
+      if (clear || this.edit === value?.state) this.edit = null;
+    }
+    get value() { return this.edit ?? this.saved?.state ?? "unknown"; }
+    get dirty() { return this.edit !== null; }
+    set(value) {
+      if (this.saved?.writable !== true || !ACTIVATION_STATES.includes(value)) return;
+      this.edit = value === this.saved.state ? null : value;
+    }
+    clear() { this.edit = null; }
   }
 
   class RequestOwner {
@@ -218,7 +287,7 @@
   }
 
   // Node 用例直接消费同一协议/草稿逻辑，避免测试内重新实现继承或请求规则。
-  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, RequestOwner, contextContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey };
+  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey };
   if (typeof document === "undefined") return;
 
   const $ = id => document.getElementById(id);
@@ -315,10 +384,48 @@
       list.append(node("li", "", code + (typeof item.source === "string" && item.source ? " · " + item.source : "")));
     }
   }
+  function renderActivationRecovery(target, value) {
+    target.replaceChildren();
+    if (!value) { target.append(node("p", "help", "恢复信息尚未读取。")); return; }
+    target.append(node("p", "help", "独立配置组件重新打开命令（请自行在终端执行）："));
+    target.append(node("code", "recovery-command", value.recovery.open_command || "服务未提供重新打开命令"));
+    const steps = node("ol", "help");
+    for (const step of value.recovery.official_steps) steps.append(node("li", "", step));
+    target.append(steps);
+    // 仅展示官方 HTTP(S) 资料链接，服务数据不能提供 javascript: 等可执行导航。
+    try {
+      const url = new URL(value.recovery.documentation_url);
+      if (["https:", "http:"].includes(url.protocol)) {
+        const link = node("a", "", "查看平台官方管理说明"); link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer"; target.append(link);
+      }
+    } catch (_) { /* 未提供有效官方链接时保留文字步骤，不生成猜测链接。 */ }
+  }
+  function renderActivation() {
+    const value = active.activation.saved;
+    $("activation-card").setAttribute("aria-busy", String(loading));
+    $("activation-scope").textContent = describeLocation(active.location) + (active.location.scope === "global" ? " · 用户级默认" : active.location.host === "claude" ? " · 仅本机当前项目（local）" : " · 当前项目覆盖");
+    const facts = $("activation-saved"); facts.replaceChildren();
+    for (const [label, text] of [["已保存本层值", activationLabel(value?.state)], ["继承值", activationLabel(value?.inherited_state)],
+      ["继承来源", value?.inherited_source || "未知／未观察到"], ["已观察配置结果", activationLabel(value?.effective_state)],
+      ["插件身份", value?.plugin_id || "未知"], ["目标配置路径", value?.source_path || "未确定"]]) {
+      facts.append(node("dt", "", label), node("dd", "", text));
+    }
+    $("activation-state").value = ACTIVATION_STATES.includes(active.activation.value) ? active.activation.value : "";
+    $("activation-status").textContent = active.activation.dirty ? "工作流启停有未保存草稿；请独立预览后保存。" : "工作流启停无未保存更改。";
+    $("activation-readonly").textContent = !value ? "工作流状态尚未读取，暂不可编辑。" : value.supported === false ? "当前平台不支持此启停设置。" + (value.read_only_reason || "") : value.writable !== true ? value.read_only_reason || "当前来源无法安全写入。" : "";
+    const diagnostics = $("activation-diagnostics"); diagnostics.replaceChildren();
+    for (const item of value?.diagnostics || []) diagnostics.append(node("li", "", item.message + "（" + item.code + "）"));
+    diagnostics.hidden = !diagnostics.childElementCount;
+    renderActivationRecovery($("activation-recovery"), value);
+  }
   function setControls() {
     const available = Boolean(active.context) && !loading && !mutation;
     const editable = available && active.context.roles.some(writable);
     const invalid = active.unavailableEdits.length > 0;
+    const activationEditable = available && active.activation.saved?.writable === true;
+    $("activation-state").disabled = !activationEditable;
+    $("preview-activation").disabled = !activationEditable || !active.activation.dirty || active.conflicted;
+    $("discard-activation").disabled = !active.activation.dirty || mutation;
     $("role-list").setAttribute("aria-busy", String(loading));
     for (const button of document.querySelectorAll("[data-host], input[name=scope]")) button.disabled = mutation;
     $("load-project").disabled = mutation;
@@ -415,7 +522,7 @@
     $("context-summary").textContent = loading ? "正在读取配置…" : active.context ? HOST_LABELS[location.host] + " · " + active.context.roles.length + " 个 Agent · 模型与推理字段可分别修改" : "尚未载入配置";
     $("inherit-help").textContent = "字段留空会清除原生定义中的字段。每个文件都是完整定义，不逐字段合并同名来源；优先级与默认值由宿主规则决定。";
     fillEfforts($("batch-effort"), $("batch-effort").value || "");
-    renderModels(); renderCapabilities(); renderDiagnostics(); renderRows(); setControls();
+    renderModels(); renderCapabilities(); renderDiagnostics(); renderActivation(); renderRows(); setControls();
   }
   function validProject(path) {
     // 这里只做输入反馈；真实路径权限、链接身份和存在性仍由服务端权威检查。
@@ -426,7 +533,7 @@
     try {
       const context = await api.context(draft.location, ticket.signal);
       if (!loadOwner.current(ticket) || active !== draft) return;
-      draft.accept(context); message(draft.dirty ? "配置已重新读取；当前草稿已保留，请再次预览后保存。" : "");
+      draft.accept(context); message(draft.anyDirty ? "配置已重新读取；当前草稿已保留，请再次预览后保存。重新读取不会重新加载宿主。" : "配置已重新读取；宿主会话未重新加载，实际运行未验证。");
     } catch (error) {
       if (!loadOwner.current(ticket) || active !== draft || error.code === "cancelled") return;
       message(error.message + (draft.context ? " 当前显示的是上次读取的配置。" : ""), "error");
@@ -453,7 +560,7 @@
     if (location.scope === "project" && !validProject(location.project)) {
       render(); message("请填写不含 .. 的项目绝对路径，再点击“载入项目”。", "error"); $("project-path").focus(); return;
     }
-    if (active.dirty) { render(); askDecision("switch", () => switchTo(location)); }
+    if (active.anyDirty) { render(); askDecision("switch", () => switchTo(location)); }
     else switchTo(location);
   }
   async function refreshCatalog() {
@@ -480,11 +587,23 @@
       message(error.message + " " + draft.catalogFailure, "error");
     } finally { if (catalogOwner.current(ticket) && active === draft) { refreshing = false; render(); } }
   }
-  function renderPreview(value, reset) {
+  function renderPreview(value, reset, kind = "model") {
+    const activation = kind === "workflow_activation";
     const changes = $("preview-changes-list"); changes.replaceChildren();
-    $("preview-title").textContent = reset ? "确认清除本范围模型覆盖" : "确认配置更改";
+    $("preview-title").textContent = activation ? "确认工作流启停" : reset ? "确认清除本范围模型覆盖" : "确认模型配置更改";
     $("preview-location").textContent = describeLocation(active.location);
     for (const change of value.changes) {
+      if (activation) {
+        const item = node("section", "change-item"); item.append(node("h3", "", "工作流插件 · " + change.plugin_id));
+        item.append(node("p", "help", "目标范围：" + (change.scope === "global" ? "用户级默认" : active.location.host === "claude" ? "仅本机当前项目（local）" : "当前项目")), node("p", "help", "目标路径：" + change.source_path));
+        const values = node("div", "change-values");
+        for (const [label, raw] of [["保存前", change.before], ["保存后", change.after]]) {
+          const part = node("div"); part.append(node("small", "", label), node("span", "", activationLabel(raw))); values.append(part);
+        }
+        item.append(values, node("p", "change-effective", "已观察配置结果：" + activationLabel(change.effective_before) + " → " + activationLabel(change.effective_after)));
+        item.append(node("p", "help", change.after === "inherit" ? "仅移除本层覆盖；Claude 项目仍可能继承共享项目设置。" : change.after === "disabled" ? "停用写入本层配置；当前会话已经加载的上下文不会因此清除。" : "启用写入本层配置；宿主信任、启动参数和托管策略仍由宿主决定。"));
+        changes.append(item); continue;
+      }
       const row = active.row(change.role);
       const item = node("section", "change-item"); item.append(node("h3", "", (row?.name || change.role) + " · " + FIELD_LABELS[change.field]));
       if (row) item.append(node("p", "help", sourceLabel(row.origin) + " · " + sourceLabel(row.scope) + " · " + change.role));
@@ -498,7 +617,9 @@
     }
     if (!value.changes.length) changes.append(node("p", "help", "此范围没有需要保存的字段更改。"));
     const blocked = value.dispatch_ready === false;
-    message(blocked ? "配置可以保存，但当前派发受阻。原因：" + (value.blocked_reason || "服务端未提供具体原因，请重新读取。") : value.dispatch_ready === true ? "预览已生成；保存后仍需由宿主采纳，实际运行尚未验证。" : "预览已生成；派发状态未知。", blocked ? "warning" : "info", $("preview-status"));
+    message(activation ? "此预览仅保存工作流启停；模型草稿会保留。文件保存后等待新会话加载，实际运行未验证。" : blocked ? "配置可以保存，但当前派发受阻。原因：" + (value.blocked_reason || "服务端未提供具体原因，请重新读取。") : value.dispatch_ready === true ? "预览已生成；保存后仍需由宿主采纳，实际运行尚未验证。" : "预览已生成；派发状态未知。", !activation && blocked ? "warning" : "info", $("preview-status"));
+    $("preview-activation-recovery").hidden = !activation;
+    if (activation) renderActivationRecovery($("preview-activation-recovery"), active.activation.saved);
     const warnings = $("warning-list"); warnings.replaceChildren();
     for (const warning of value.warnings) warnings.append(node("li", "", String(warning)));
     $("preview-warnings").hidden = !value.warnings.length;
@@ -511,15 +632,18 @@
     message("", "info", $("apply-feedback"));
     $("apply-results").replaceChildren(); $("apply-results").hidden = true;
   }
-  async function openPreview(reset = false) {
+  async function openPreview(reset = false, kind = "model") {
+    const activation = kind === "workflow_activation";
     if (!active.context || mutation || loading) return;
-    if (!reset && active.unavailableEdits.length) { message("部分草稿对应的 Agent 已消失或变为只读，请先放弃草稿。", "error"); return; }
+    if (active.conflicted || (activation && (!active.activation.dirty || active.activation.saved?.writable !== true))) return;
+    if (!activation && !reset && active.unavailableEdits.length) { message("部分草稿对应的 Agent 已消失或变为只读，请先放弃草稿。", "error"); return; }
+    loadOwner.cancel();
     catalogOwner.cancel(); refreshing = false;
     const draft = active; const ticket = previewOwner.begin(); mutation = true; dialogTrigger = document.activeElement; setControls();
     try {
-      const value = await api.preview(draft.location, draft.context.revision, reset ? {} : draft.payload(), reset, ticket.signal);
+      const value = activation ? await api.previewActivation(draft.location, draft.context.revision, draft.activation.value, ticket.signal) : await api.preview(draft.location, draft.context.revision, reset ? {} : draft.payload(), reset, ticket.signal);
       if (!previewOwner.current(ticket) || active !== draft) return;
-      preview = { value, draft }; renderPreview(value, reset);
+      preview = { value, draft, kind }; renderPreview(value, reset, kind);
       $("preview-dialog").showModal(); $("preview-title").focus();
     } catch (error) {
       if (!previewOwner.current(ticket) || active !== draft || error.code === "cancelled") return;
@@ -546,6 +670,14 @@
     if (result.finalization_failed === true) details.append(node("p", "", "最终收尾未完成：已发生的发布与命名空间变动仍以本收据为准；当前位置可能未核实。"));
     if (typeof result.effect.pending_reload === "boolean") details.append(node("p", "", result.effect.pending_reload ? "宿主状态：待重新加载" : "宿主状态：未声明待重载，实际加载仍未观察"));
     if (typeof result.retention_policy === "string") details.append(node("p", "", "保留策略：" + (result.retention_policy === "until_explicit_safe_cleanup_contract" ? "等待明确的安全清理约定；本页只展示资料" : result.retention_policy)));
+    for (const directory of result.created_directories || []) details.append(node("p", "", "请求期间创建过的目录（原声明位置，当前位置请自行核对）：" + directory));
+    for (const entry of result.created_files || []) {
+      const item = node("section", "recovery-item");
+      item.append(node("p", "", "首次创建文件：" + entry.role + " · " + (entry.published ? "已发生发布" : "未报告发布")),
+        node("p", "", (entry.location_status === "unknown" ? "原声明路径（当前位置未核实）：" : "收尾时核实路径：") + entry.target),
+        node("p", "", entry.recovery_action));
+      details.append(item);
+    }
     for (const entry of result.results || []) {
       const row = draft.row(entry.role);
       details.append(node("p", "", (row?.name ? row.name + "（" + entry.role + "）" : entry.role) + "：" + (SAVE_LABELS[entry.status] || entry.status)));
@@ -582,9 +714,9 @@
   function applyReloadState(result) {
     return result.effect.pending_reload === true ? "宿主待重新加载（内容发布或命名空间曾变动）" : "宿主重新加载状态未知";
   }
-  function showApplyAttention(result, draft, error) {
+  function showApplyAttention(result, draft, error, kind = "model") {
     const failed = Boolean(error) || applyFailed(result);
-    if (result.context) draft.accept(result.context, !failed);
+    if (result.context) draft.accept(result.context, failed ? false : kind);
     draft.conflicted = failed || !result.context; preview = null;
     renderSaveDetails(result, draft);
     const reportedSaved = result.saved === true && result.effect.saved !== false && !result.partial_failure && (result.results || []).every(row => row.status === "saved");
@@ -606,7 +738,7 @@
       const result = await api.apply(plan.value.preview_id);
       const reload = applyReloadState(result);
       if (applyNeedsAttention(result)) {
-        showApplyAttention(result, plan.draft);
+        showApplyAttention(result, plan.draft, undefined, plan.kind);
       } else if (!result.context) {
         // 原生文件已完成发布而回读失败是独立结果，不能把已知保存成功降级成“请求失败”，
         // 也不能清空旧基线上的草稿后继续编辑；先保留逐项收据，再要求重新读取。
@@ -614,16 +746,16 @@
         renderSaveDetails(result, plan.draft);
         message("原生文件已保存，但配置回读失败。草稿暂时保留，请保留逐项结果并在关闭预览后重新读取。" + reload + "；实际运行未验证。", "warning", $("apply-feedback"));
       } else {
-        plan.draft.accept(result.context, true);
+        plan.draft.accept(result.context, plan.kind);
         const gap = result.temporary_visibility_gap === true ? " · 文件曾有短暂可见性缺口" : "";
-        message("配置已保存 · " + reload + gap + " · 实际运行未验证。", "success");
+        message((plan.kind === "workflow_activation" ? "工作流启停已保存；模型草稿已保留" : "模型配置已保存；工作流启停草稿已保留") + " · " + reload + gap + " · 等待新会话加载 · 实际运行未验证。", "success");
         preview = null; $("preview-dialog").close(); render();
       }
     } catch (error) {
       // apply 的计划可能已被服务端消费，网络失败不能重发旧 ID 或伪报保存失败。
       // 保留草稿，关闭后重新读取、重新预览；409 也必须用新 revision 形成新计划。
       preview = null; plan.draft.conflicted = true;
-      if (error.receipt) showApplyAttention(error.receipt, plan.draft, error);
+      if (error.receipt) showApplyAttention(error.receipt, plan.draft, error, plan.kind);
       else message(error.message + " 保存结果未确认；草稿已保留。请关闭预览，重新读取配置后再预览。", "error", $("apply-feedback"));
     } finally {
       mutation = false; $("confirm-apply").textContent = "确认保存";
@@ -647,9 +779,20 @@
   $("project-form").addEventListener("submit", event => { event.preventDefault(); requestSwitch({ host: active.location.host, scope: "project", project: $("project-path").value.trim() }); });
   $("reload-context").addEventListener("click", () => { catalogOwner.cancel(); refreshing = false; loadContext(); });
   $("refresh-catalog").addEventListener("click", refreshCatalog);
+  $("activation-state").addEventListener("change", () => { active.activation.set($("activation-state").value); renderActivation(); setControls(); });
+  $("preview-activation").addEventListener("click", () => openPreview(false, "workflow_activation"));
+  $("discard-activation").addEventListener("click", () => {
+    askDecision("discard", () => { active.activation.clear(); render(); message("工作流启停草稿已放弃；已保存配置未改变。"); });
+    $("draft-dialog-title").textContent = "放弃工作流启停草稿？";
+    $("draft-dialog-description").textContent = "只放弃当前范围的工作流启停草稿；模型草稿和已保存配置会保留。";
+  });
   $("preview-changes").addEventListener("click", () => openPreview());
   $("reset-platform").addEventListener("click", () => openPreview(true));
-  $("discard-draft").addEventListener("click", () => askDecision("discard", () => { active.clear(); render(); message("当前草稿已放弃，已保存配置未改变。"); }));
+  $("discard-draft").addEventListener("click", () => {
+    askDecision("discard", () => { active.clear(); render(); message("模型草稿已放弃；工作流启停草稿和已保存配置已保留。"); });
+    $("draft-dialog-title").textContent = "放弃模型草稿？";
+    $("draft-dialog-description").textContent = "只放弃当前范围的模型与推理字段草稿；工作流启停草稿和已保存配置会保留。";
+  });
   $("select-all").addEventListener("change", () => { active.selected = new Set($("select-all").checked ? active.context.roles.filter(writable).map(row => row.role) : []); renderRows(); setControls(); });
   for (const id of ["batch-model-enabled", "batch-effort-enabled"]) $(id).addEventListener("change", setControls);
   $("batch-form").addEventListener("submit", event => {
@@ -671,7 +814,7 @@
     if (event.key !== "Tab") return;
     // 原生 dialog 已负责背景 inert；补齐首尾 Tab 循环，防止浏览器把焦点送到文档 body。
     // 保存中按钮全部禁用时仍留在当前对话框，不能把键盘操作落到背景配置表。
-    const controls = [...dialog.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex='0']")].filter(control => !control.hidden);
+    const controls = [...dialog.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex='0']")].filter(control => !control.hidden && control.getClientRects().length > 0);
     const first = controls[0], last = controls[controls.length - 1];
     const focused = document.activeElement;
     if (!first) { event.preventDefault(); return; }
@@ -682,7 +825,7 @@
     }
   });
   window.addEventListener("beforeunload", event => {
-    if ([...drafts.values()].some(draft => draft.dirty) || mutation) { event.preventDefault(); event.returnValue = ""; }
+    if ([...drafts.values()].some(draft => draft.anyDirty) || mutation) { event.preventDefault(); event.returnValue = ""; }
   });
   window.addEventListener("pagehide", () => { loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
   switchTo({ host: initialHost, scope: initialProject ? "project" : "global", ...(initialProject ? { project: initialProject } : {}) });

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import stat
 import subprocess
 import sys
@@ -821,6 +822,297 @@ class NativeConfigServiceTest(unittest.TestCase):
         result = subprocess.run([sys.executable, "-I", "-B", "-X", "utf8", "-c", script,
                                  str(isolated), str(self.data), str(self.home)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class WorkflowActivationTest(unittest.TestCase):
+    """在隔离 HOME 和项目中验证真正原生路径、首次发布及来源冲突。"""
+    setUp = NativeConfigServiceTest.setUp
+
+    def codex(self, *, second=False):
+        target = self.home / ".codex/config.toml"
+        target.parent.mkdir(exist_ok=True)
+        target.write_text('[marketplaces."agent-workflow-alpha"]\nsource_type="git"\n'
+                          'source="https://github.com/Geoege-xll/agent-workflow.git"\nref="plugins-codex-alpha"\n'
+                          '[plugins."agent-workflow@agent-workflow-alpha"]\nenabled=true\n'
+                          + ('[plugins."agent-workflow@agent-workflow-local"]\nenabled=false\n' if second else ''))
+        return target
+
+    def claude(self):
+        root, _ = claude_plugin(self.home, name="agent-workflow")
+        registry = self.home / ".claude/plugins/installed_plugins.json"
+        raw = json.loads(registry.read_bytes())
+        raw["plugins"]["agent-workflow@agent-workflow-alpha"] = raw["plugins"].pop("agent-workflow@market")
+        registry.write_text(json.dumps(raw))
+        target = self.home / ".claude/settings.json"
+        target.write_text('{"enabledPlugins":{"agent-workflow@agent-workflow-alpha":true},"other":42}\n')
+        return target, root
+
+    def preview(self, host="codex", *, state="disabled", project=False, context=None):
+        context = context or self.service.context(host, "project" if project else "global", self.project if project else None)
+        return self.service.preview({"host": host, "scope": context["scope"], "project": context["project"],
+                                     "revision": context["revision"], "workflow_activation": {"state": state}})
+
+    def test_codex_project_first_create_preview_zero_write_inherit_and_recovery_command(self):
+        user = self.codex()
+        before = user.read_bytes()
+        context = self.service.context("codex", "project", self.project)
+        row = context["workflow_activation"]
+        self.assertTrue(row["writable"])
+        self.assertEqual((row["state"], row["inherited_state"], row["effective_state"]), ("inherit", "enabled", "enabled"))
+        self.assertEqual(row["inherited_source"], str(user))
+        preview = self.preview(project=True, context=context)
+        target = self.project / ".codex/config.toml"
+        self.assertFalse(target.parent.exists())
+        self.assertEqual(preview["changes"][0]["kind"], "workflow_activation")
+        self.assertEqual(preview["changes"][0]["before"], "inherit")
+        result = self.service.apply(preview["preview_id"])
+        self.assertTrue(result["saved"], result)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+        self.assertIn(b'enabled = false', target.read_bytes())
+        self.assertEqual(user.read_bytes(), before)
+        self.assertTrue(result["effect"]["pending_reload"])
+        self.assertFalse(result["context"]["workflow_activation"]["runtime_verified"])
+        self.assertTrue(Path(__file__).resolve().parents[1].as_posix() in row["recovery"]["open_command"])
+        result = self.service.apply(self.preview(project=True, state="inherit")["preview_id"])
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["context"]["workflow_activation"]["effective_state"], "enabled")
+        self.assertNotIn(b'enabled', target.read_bytes())
+        with self.assertRaises(ConflictError):
+            self.service.apply(preview["preview_id"])
+
+    def test_recovery_command_preserves_explicit_and_environment_roots(self):
+        """用真实 CLI parser 重建服务参数，识别缺参及环境根被 --home 屏蔽的回归。"""
+        from native_config.cli import parser
+        from native_config.server import configuration_identity
+        selected_home = self.root / "home with space ' $(untrusted)"
+        selected_home.mkdir()
+        selected_data = self.root / "state with space ' $(untrusted)"
+        environment = {"HOME": str(selected_home),
+                       "CODEX_HOME": str(self.root / "custom codex ' $(untrusted)"),
+                       "CLAUDE_CONFIG_DIR": str(self.root / "custom claude ' $(untrusted)"),
+                       "UNRELATED_SECRET_TOKEN": "must-not-appear-in-recovery"}
+        for explicit in (True, False):
+            with self.subTest(explicit_home=explicit), patch.dict(os.environ, environment):
+                before_environment = dict(os.environ)
+                service = ModelService(selected_data, selected_home if explicit else None)
+                for host in ("codex", "claude"):
+                    for scope in ("global", "project"):
+                        context = service.context(host, scope, self.project if scope == "project" else None)
+                        command = context["workflow_activation"]["recovery"]["open_command"]
+                        self.assertNotIn(environment["UNRELATED_SECRET_TOKEN"], command)
+                        parts = shlex.split(command)
+                        recovered_environment = {**os.environ, "HOME": str(self.home),
+                                                 "CODEX_HOME": str(self.home / "wrong-codex"),
+                                                 "CLAUDE_CONFIG_DIR": str(self.home / "wrong-claude")}
+                        if not explicit:
+                            self.assertEqual(parts.pop(0), "env")
+                            assignments = [parts.pop(0) for _ in range(3)]
+                            self.assertEqual({entry.split("=", 1)[0] for entry in assignments},
+                                             {"HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"})
+                            recovered_environment.update(dict(entry.split("=", 1) for entry in assignments))
+                        self.assertEqual(parts[0], "bash")
+                        self.assertEqual(Path(parts[1]), Path(__file__).resolve().parents[1] / "scripts/agent_config.sh")
+                        args = parser().parse_args(parts[2:])
+                        self.assertEqual(args.command, "open")
+                        self.assertEqual(args.host, host)
+                        self.assertEqual(args.data_dir, selected_data)
+                        self.assertEqual(args.home, selected_home if explicit else None)
+                        self.assertEqual(args.project, str(self.project) if scope == "project" else None)
+                        with patch.dict(os.environ, recovered_environment, clear=True):
+                            reopened = ModelService(args.data_dir, args.home)
+                        self.assertEqual(reopened.host_roots, service.host_roots)
+                        self.assertEqual(reopened.home, service.home)
+                        self.assertEqual(configuration_identity(reopened), configuration_identity(service))
+                self.assertEqual(dict(os.environ), before_environment, "生成恢复命令不能改写服务进程环境")
+
+    def test_claude_local_inherits_shared_before_user_and_install_change_invalidates_preview(self):
+        user, root = self.claude()
+        shared = self.project / ".claude/settings.json"
+        shared.parent.mkdir()
+        shared.write_text('{"enabledPlugins":{"agent-workflow@agent-workflow-alpha":false},"shared":true}\n')
+        context = self.service.context("claude", "project", self.project)
+        row = context["workflow_activation"]
+        self.assertEqual(row["source_path"], str(shared.with_name("settings.local.json")))
+        self.assertEqual((row["state"], row["inherited_state"]), ("inherit", "disabled"))
+        self.assertEqual(row["inherited_source"], str(shared))
+        self.assertIn("--scope local", row["recovery"]["official_steps"][0])
+        before = (user.read_bytes(), shared.read_bytes())
+        result = self.service.apply(self.preview("claude", project=True, state="enabled", context=context)["preview_id"])
+        self.assertTrue(result["saved"], result)
+        self.assertEqual(result["context"]["workflow_activation"]["effective_state"], "enabled")
+        self.assertEqual((user.read_bytes(), shared.read_bytes()), before)
+        result = self.service.apply(self.preview("claude", project=True, state="inherit")["preview_id"])
+        self.assertEqual(result["context"]["workflow_activation"]["effective_state"], "disabled")
+        preview = self.preview("claude", state="disabled")
+        (root / ".claude-plugin/plugin.json").write_text('{"name":"agent-workflow","version":"external"}')
+        with self.assertRaises(ConflictError):
+            self.service.apply(preview["preview_id"])
+        self.assertEqual(user.read_bytes(), before[0])
+
+    def test_source_ambiguity_unknown_and_unsupported_do_not_write(self):
+        for host in ("codex", "claude", "antigravity"):
+            context = self.service.context(host)
+            row = context["workflow_activation"]
+            self.assertFalse(row["writable"])
+            self.assertEqual(row["effective_state"], "unknown")
+            with self.assertRaises(ValueError):
+                self.preview(host, context=context)
+        self.codex(second=True)
+        self.assertFalse(self.service.context("codex")["workflow_activation"]["writable"])
+        self.codex()
+        context = self.service.context("codex")
+        base = {"host": "codex", "revision": context["revision"], "workflow_activation": {"state": "disabled"}}
+        for extra in ({"edits": {}}, {"reset": False}, {"source_path": "/tmp/injected"},
+                      {"workflow_activation": {"state": []}}, {"workflow_activation": {"state": "unknown"}},
+                      {"workflow_activation": {"state": "enabled", "plugin_id": "bad"}}):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                self.service.preview({**base, **extra})
+
+    def test_first_create_external_file_parent_swap_and_inherited_source_change_reject_old_plan(self):
+        user = self.codex()
+        for kind in ("new_file", "new_parent", "source", "symlink"):
+            with self.subTest(kind=kind):
+                parent = self.project / ".codex"
+                if parent.exists():
+                    shutil.rmtree(parent)
+                context = self.service.context("codex", "project", self.project)
+                preview = self.preview(project=True, context=context)
+                target = parent / "config.toml"
+                if kind in {"new_file", "new_parent"}:
+                    parent.mkdir()
+                    if kind == "new_file":
+                        target.write_text('# external\n')
+                elif kind == "source":
+                    user.write_bytes(user.read_bytes() + b'# external source\n')
+                else:
+                    parent.symlink_to(user.parent, target_is_directory=True)
+                with self.assertRaises(ConflictError):
+                    self.service.apply(preview["preview_id"])
+                if kind == "new_file":
+                    self.assertEqual(target.read_bytes(), b'# external\n')
+                if kind == "symlink":
+                    parent.unlink()
+
+    def test_first_create_link_race_and_post_publish_failure_preserve_actual_files(self):
+        self.codex()
+        parent = self.project / ".codex"
+        parent.mkdir()
+        target = parent / "config.toml"
+        real_link = storage.os.link
+        preview = self.preview(project=True)
+        def external_creation(source, destination, **kwargs):
+            if source == "candidate.new":
+                target.write_bytes(b'# external winner\n')
+            return real_link(source, destination, **kwargs)
+        with patch.object(storage.os, "link", side_effect=external_creation):
+            result = self.service.apply(preview["preview_id"])
+        self.assertFalse(result["saved"])
+        self.assertFalse(result["published"])
+        self.assertEqual(target.read_bytes(), b'# external winner\n')
+        target.unlink()
+        preview = self.preview(project=True)
+        real_fsync = storage.os.fsync
+        published = []
+        def publish(source, destination, **kwargs):
+            result = real_link(source, destination, **kwargs)
+            if source == "candidate.new":
+                published.append(True)
+            return result
+        def fail_sync(descriptor):
+            if published and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError("fixture post publication sync failure")
+            return real_fsync(descriptor)
+        with patch.object(storage.os, "link", side_effect=publish), patch.object(storage.os, "fsync", side_effect=fail_sync):
+            result = self.service.apply(preview["preview_id"])
+        self.assertFalse(result["saved"])
+        self.assertTrue(result["published"])
+        self.assertTrue(result["partial_failure"])
+        self.assertEqual(result["results"][0]["status"], "recovery_required")
+        self.assertTrue(result["created_files"][0]["before_absent"])
+        self.assertIn(b'enabled = false', target.read_bytes())
+
+    def test_first_parent_exclusive_publication_rejects_external_directory_and_detects_move(self):
+        self.codex()
+        parent = self.project / ".codex"
+        real_publish = storage._rename_directory_exclusive
+        for race in ("external_directory", "move_after_publication"):
+            with self.subTest(race=race):
+                preview = self.preview(project=True)
+                def publish(descriptor, source, destination):
+                    if race == "external_directory":
+                        parent.mkdir()
+                        (parent / "external").write_text("preserve")
+                        return real_publish(descriptor, source, destination)
+                    real_publish(descriptor, source, destination)
+                    parent.rename(self.project / "moved-own-config")
+                    parent.mkdir()
+                    (parent / "external").write_text("preserve")
+                with patch.object(storage, "_rename_directory_exclusive", side_effect=publish):
+                    if race == "external_directory":
+                        with self.assertRaises(ConflictError):
+                            self.service.apply(preview["preview_id"])
+                    else:
+                        result = self.service.apply(preview["preview_id"])
+                        self.assertFalse(result["saved"])
+                        self.assertFalse(result["published"])
+                        self.assertTrue(result["namespace_touched"])
+                self.assertEqual((parent / "external").read_text(), "preserve")
+                self.assertFalse((parent / "config.toml").exists())
+                shutil.rmtree(parent)
+
+    def test_local_codex_identity_and_marketplace_manifest_changes_are_bound_to_revision(self):
+        config = self.codex()
+        market = self.root / "market"
+        manifest = market / ".agents/plugins/marketplace.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"name": "agent-workflow-local", "plugins": [{"name": "agent-workflow", "source": {"source": "local", "path": "./plugins/agent-workflow"}}]}))
+        plugin = market / "plugins/agent-workflow/.codex-plugin/plugin.json"
+        plugin.parent.mkdir(parents=True)
+        plugin.write_text('{"name":"agent-workflow"}')
+        config.write_text('[marketplaces."agent-workflow-local"]\nsource_type="local"\nsource=' + json.dumps(str(market))
+                          + '\n[plugins."agent-workflow@agent-workflow-local"]\nenabled=true\n')
+        context = self.service.context("codex")
+        self.assertTrue(context["workflow_activation"]["writable"])
+        self.assertEqual(context["workflow_activation"]["plugin_id"], "agent-workflow@agent-workflow-local")
+        preview = self.preview(context=context)
+        plugin.write_text('{"name":"agent-workflow","version":"external-change"}')
+        with self.assertRaises(ConflictError):
+            self.service.apply(preview["preview_id"])
+
+    def test_activation_existing_file_keeps_old_handle_and_rejects_readonly_permissions(self):
+        target = self.codex()
+        original = target.read_bytes()
+        descriptor = os.open(target, os.O_WRONLY | os.O_APPEND)
+        try:
+            result = self.service.apply(self.preview()["preview_id"])
+            self.assertTrue(result["saved"], result)
+            os.write(descriptor, b'# external old handle\n')
+        finally:
+            os.close(descriptor)
+        retained = next(item for item in result["recovery"] if item["kind"] == "isolated_object")
+        self.assertEqual(Path(retained["backup"]).read_bytes(), original + b'# external old handle\n')
+        self.assertNotIn(b'old handle', target.read_bytes())
+        target.chmod(0o400)
+        self.assertFalse(self.service.context("codex")["workflow_activation"]["writable"])
+        with self.assertRaises(ValueError):
+            self.preview(state="enabled")
+
+    def test_first_creation_concurrent_services_have_only_one_publication(self):
+        self.codex()
+        other = ModelService(self.data, self.home)
+        context = self.service.context("codex", "project", self.project)
+        one = self.preview(project=True, context=context)
+        two = other.preview({"host": "codex", "scope": "project", "project": str(self.project),
+                             "revision": context["revision"], "workflow_activation": {"state": "enabled"}})
+        def save(pair):
+            try:
+                return pair[0].apply(pair[1]["preview_id"])["saved"]
+            except ConflictError:
+                return False
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            self.assertEqual(sorted(executor.map(save, ((self.service, one), (other, two)))), [False, True])
+        self.assertTrue((self.project / ".codex/config.toml").is_file())
 
 
 if __name__ == "__main__":

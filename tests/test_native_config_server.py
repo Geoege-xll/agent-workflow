@@ -168,6 +168,38 @@ class ConsoleHttpTest(unittest.TestCase):
         self.assertEqual(set(health), {"instance_id", "service_version", "protocol_version", "configuration_identity"})
         self.assertNotIn(self.server.token.encode(), raw)
 
+    def test_real_activation_http_preview_and_apply_use_same_authorized_boundary(self):
+        from native_config import ModelService
+        root = Path(self.temporary.name).resolve()
+        home = root / "isolated-home"
+        config = home / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('[marketplaces."agent-workflow-alpha"]\nsource_type="git"\n'
+                          'source="https://github.com/Geoege-xll/agent-workflow.git"\nref="plugins-codex-alpha"\n'
+                          '[plugins."agent-workflow@agent-workflow-alpha"]\nenabled=true\n')
+        self.server.service = ModelService(root / "data", home)
+        before = config.read_bytes()
+        status, _, raw = self.request("GET", "/api/context?host=codex")
+        self.assertEqual(status, 200)
+        context = json.loads(raw)
+        self.assertEqual(context["workflow_activation"]["state"], "enabled")
+        request = {"host": "codex", "revision": context["revision"], "workflow_activation": {"state": "disabled"}}
+        self.assertEqual(self.request("POST", "/api/preview", request, auth=False)[0], 401)
+        self.assertEqual(self.request("POST", "/api/preview", {**request, "edits": {}})[0], 400)
+        self.assertEqual(self.request("POST", "/api/preview", {**request, "source_path": "/tmp/injection"})[0], 400)
+        status, _, raw = self.request("POST", "/api/preview", request)
+        self.assertEqual(status, 200)
+        preview = json.loads(raw)
+        self.assertEqual(preview["changes"][0]["kind"], "workflow_activation")
+        self.assertEqual(config.read_bytes(), before)
+        status, _, raw = self.request("POST", "/api/apply", {"preview_id": preview["preview_id"]})
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["context"]["workflow_activation"]["state"], "disabled")
+        self.assertFalse(result["effect"]["runtime_verified"])
+        self.assertEqual(self.request("POST", "/api/apply", {"preview_id": preview["preview_id"]})[0], 409)
+
     def test_partial_save_preserves_every_recovery_field(self):
         status, _, raw = self.request("POST", "/api/apply", {"preview_id": "partial"})
         self.assertEqual(status, 200)

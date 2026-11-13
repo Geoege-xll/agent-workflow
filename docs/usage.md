@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码插件候选为 `3.0.0-alpha.7`，独立原生 Agent 配置工具为 `0.1.0-alpha.3`。默认使用自有 Git 远程 alpha 分发；官方公开目录与稳定发行尚未就绪，Windows 暂停。运行 helper 需要已有 Python 3.11+ 与 Bash；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码插件候选为 `3.0.0-alpha.7`，独立原生 Agent 配置工具源码候选为 `0.1.0-alpha.4`，已发布组件仍为 `0.1.0-alpha.3`。默认使用自有 Git 远程 alpha 分发；官方公开目录与稳定发行尚未就绪，Windows 暂停。运行 helper 需要已有 Python 3.11+ 与 Bash；实际安装方法见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
@@ -52,8 +52,10 @@ QA 通过后由 PM 接收结果，按当前事实评估并原位更新受控文�
 
 agentmemory 是可选服务。只有工具能强制按项目过滤并返回匹配出处时才 recall/save；不足时沿现有计划、规范与交接继续工作，不阻塞普通工作流，也不把未经审计的背景记忆当作批准或权限。
 
-## 模型配置
+## 模型配置与工作流启停
 
 工作流默认使用宿主当前模型与推理设置。显式调用插件的 `agent-config [open|status|doctor]` 可管理独立原生配置，省略动作等价 open；操作细节见[原生 Agent 配置工具](agent-configuration.md)。普通业务请求中出现命令名称不会触发维护路径。
 
 独立工具已发布 `0.1.0-alpha.3` 预发行；首次缺组件时先展示准备信息，经确认才下载已核验发行包。插件缓存角色只读，用户级、项目级模型与推理字段的支持范围按平台实际接口处理；打开配置页不代表所有角色都可写，也不表示当前会话已重新加载或实际按新模型执行。配置工具失败不阻断业务工作流。
+
+源码候选 `0.1.0-alpha.4` 在同一网页增加 Codex／Claude 的工作流用户级默认与项目三态设置；Claude 当前项目使用个人 local 范围，AGY 暂为只读官方管理说明。停用后可用页面给出的独立命令重新打开，保存与新会话实际加载分别判断。该候选尚未发布或安装，当前插件固定描述仍指向 alpha.3；不要把源码功能当成现有安装已具备。详见[配置工具说明](agent-configuration.md)。

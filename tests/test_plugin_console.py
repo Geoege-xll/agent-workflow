@@ -42,6 +42,8 @@ class ConsoleEntryTest(unittest.TestCase):
         self.assertEqual(sum(tab["aria-selected"] == "true" for tab in tabs), 1)
         self.assertEqual(len([tag for tag, _ in page.elements if tag == "dialog"]), 2)
         self.assertTrue(any(attrs.get("aria-live") == "polite" for _, attrs in page.elements))
+        self.assertTrue(any(tag == "label" and attrs.get("for") == "activation-state" for tag, attrs in page.elements))
+        self.assertTrue(any(attrs.get("id") == "activation-state" and attrs.get("aria-describedby") for _, attrs in page.elements))
 
         # 真实回环服务消费本次生产文件；无宿主/用户目录参与，不依赖测试替身静态页面。
         server = ConsoleServer(object(), version="3.0.0-test")
@@ -74,7 +76,7 @@ class ConsoleJavascriptTest(unittest.TestCase):
         # Node 直接导入生产函数；令牌只用测试字符串，不接触本机连接记录或真实配置。
         script = r"""
 const assert = require('node:assert/strict');
-const {ModelApi, ApiError, Draft, RequestOwner, contextContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey} = require('./native_config/web/console.js');
+const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey} = require('./native_config/web/console.js');
 const row = (id, fields = {}) => ({role: id, name: '同名 Agent', origin: 'user', scope: 'global', writable: true,
   overrides: {model: 'saved/unknown:model', effort: 'high'}, effective: {model: 'saved/unknown:model', effort: 'high'},
   sources: {model: 'user', effort: 'user'}, dispatch_ready: false, blocked_reason: '尚未观察到客户端版本', ...fields});
@@ -182,6 +184,54 @@ const published = await unavailable.apply('saved-without-context');
 assert.equal(published.saved,true);
 assert.equal(published.context_unavailable,true);
 assert.equal(published.results[0].status,'saved');
+""")
+
+    def test_activation_contract_independent_drafts_and_exclusive_preview(self):
+        # 同一生产 Draft/API 验证两类草稿的归属与请求边界；不以页面文案快照替代业务断言。
+        self.run_javascript(r"""
+const activation = {supported:true,writable:true,state:'inherit',plugin_id:'agent-workflow@market',
+  source_path:'/tmp/project/.codex/config.toml',inherited_state:'disabled',inherited_source:'/tmp/home/.codex/config.toml',
+  effective_state:'disabled',diagnostics:[],recovery:{open_command:'bash /tmp/agent_config.sh open',official_steps:['使用官方插件设置恢复'],documentation_url:'https://example.test/plugins'},
+  runtime_verified:false,scope:'global',read_only_reason:null};
+const ctx = state => ({...context(), workflow_activation:{...activation,state}});
+const draft = new Draft({host:'codex',scope:'global'});
+draft.accept(contextContract(ctx('inherit')));
+draft.set('opaque:a','model','new-model'); draft.activation.set('enabled');
+assert.equal(draft.anyDirty,true);
+draft.accept(ctx('inherit'), 'model');
+assert.equal(draft.dirty,false); assert.equal(draft.activation.value,'enabled'); assert.equal(draft.activation.dirty,true);
+draft.set('opaque:a','effort','low');
+draft.accept(ctx('enabled'), 'workflow_activation');
+assert.equal(draft.activation.dirty,false); assert.equal(draft.value('opaque:a','effort'),'low');
+const created = {saved:false,partial_failure:true,effect:{saved:false,pending_reload:true,runtime_verified:false},
+  created_directories:['/tmp/project/.codex'],created_files:[{role:'workflow_activation',target:'/tmp/project/.codex/config.toml',
+  before_absent:true,published:true,observed_identity:[1,2],location_status:'unknown',recovery_action:'保留实际发布对象并重新预览'}]};
+assert.equal(applyReceiptContract(created).created_files[0].published,true);
+for (const bad of [{...created,created_directories:['../unsafe']},{...created,created_files:[{...created.created_files[0],location_status:'assumed'}]}])
+  assert.throws(()=>applyReceiptContract(bad), error=>error.code==='invalid_response');
+draft.activation.set('disabled'); draft.accept(ctx('inherit'));
+assert.equal(draft.activation.value,'disabled','重新读取不能丢弃启停草稿');
+draft.clear(); assert.equal(draft.activation.dirty,true,'放弃模型草稿不能丢弃启停草稿');
+draft.activation.clear(); assert.equal(draft.anyDirty,false);
+draft.accept({...context(),workflow_activation:{...activation,supported:false,writable:false,state:'unknown',plugin_id:null,source_path:null}});
+draft.activation.set('enabled'); assert.equal(draft.activation.value,'unknown'); assert.equal(draft.activation.dirty,false);
+for (const bad of [{...activation,state:'yes'},{...activation,effective_state:'inherit'},
+  {...activation,supported:false},{...activation,plugin_id:null},{...activation,recovery:{...activation.recovery,official_steps:[false]}},
+  {...activation,runtime_verified:true}]) assert.throws(() => activationContract(bad), error => error.code==='invalid_response');
+assert.throws(() => contextContract({...context(),workflow_activation:{...activation,scope:'project'}}));
+const change = {kind:'workflow_activation',field:'enabled',scope:'project',source_path:activation.source_path,
+  plugin_id:activation.plugin_id,before:'inherit',after:'disabled',effective_before:'unknown',effective_after:'disabled'};
+const plan = {preview_id:'activation-plan',changes:[change],warnings:[],effect:{saved:false,runtime_verified:false}};
+const calls=[]; const api = new ModelApi('test',async (path, init) => {calls.push(JSON.parse(init.body));return response(plan);});
+const location={host:'claude',scope:'project',project:'/tmp/project'};
+await api.previewActivation(location,'revision-a','disabled');
+assert.deepEqual(calls[0],{...location,revision:'revision-a',workflow_activation:{state:'disabled'}});
+assert.equal(Object.hasOwn(calls[0],'edits'),false); assert.equal(Object.hasOwn(calls[0],'reset'),false);
+await assert.rejects(api.previewActivation(location,'revision-a','unknown'), error => error.code==='invalid_input');
+const mixed = new ModelApi('test',async () => response({...plan,changes:[{role:'opaque:a',field:'model'}]}));
+await assert.rejects(mixed.previewActivation(location,'revision-a','enabled'), error => error.code==='invalid_response');
+const wrongScope = new ModelApi('test',async () => response({...plan,changes:[{...change,scope:'global'}]}));
+await assert.rejects(wrongScope.previewActivation(location,'revision-a','enabled'), error => error.code==='invalid_response');
 """)
 
     def test_apply_error_receipts_keep_recovery_and_reject_untrusted_shapes(self):

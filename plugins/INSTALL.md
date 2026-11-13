@@ -80,3 +80,5 @@ resource 检查打包权威路径与摘要；inspect 检查明确项目及 adapt
 status/doctor 不准备组件、创建连接或权限记录，不启动 HTTP、浏览器或模型查询。普通业务无需组件或 MCP；显式维护不读取整份 WORKFLOW、不建业务任务图或派发子代理。插件缓存角色只读，各平台可写原生字段和覆盖范围见[原生配置说明](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/agent-configuration.md)。
 
 独立配置工具 `0.1.0-alpha.3` 已作为预发行资产发布；这一事实不代表工作流插件已上架公开市场或成为稳定发行。当前固定组件描述只采用真实下载核验的地址与摘要。
+
+`0.1.0-alpha.4` 源码候选已增加工作流项目启停，但尚未发布；当前安装命令不会自动获得该候选功能。停用后的独立恢复方式及各平台边界见[配置工具说明](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/agent-configuration.md)。

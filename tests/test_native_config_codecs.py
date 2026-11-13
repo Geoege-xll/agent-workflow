@@ -4,10 +4,44 @@ from __future__ import annotations
 
 import unittest
 
-from native_config import codecs
+from native_config import activation_codecs, codecs
 
 
 class NativeCodecsTest(unittest.TestCase):
+    def test_activation_toml_preserves_comments_crlf_and_unrelated_plugin_settings(self):
+        plugin = "agent-workflow@agent-workflow-alpha"
+        raw = (b'# retain\r\nmodel="x"\r\n[plugins."agent-workflow@agent-workflow-alpha"]\r\n'
+               b'enabled = true # retain explanation\r\nother = "unchanged"\r\n'
+               b'[[unrelated]]\r\nname="preserve"\r\n')
+        changed = activation_codecs.patch("codex", raw, plugin, "disabled")
+        self.assertEqual(changed, raw.replace(b'enabled = true', b'enabled = false'))
+        cleared = activation_codecs.patch("codex", raw, plugin, "inherit")
+        self.assertEqual(cleared, raw.replace(b'enabled = true #', b'#'))
+        self.assertEqual(activation_codecs.state("codex", cleared, plugin), "inherit")
+        dotted = b'plugins."agent-workflow@agent-workflow-alpha".enabled = true\n'
+        self.assertEqual(activation_codecs.patch("codex", dotted, plugin, "disabled"), dotted.replace(b'true', b'false'))
+        with self.assertRaises(ValueError):
+            activation_codecs.patch("codex", b'plugins = {"agent-workflow@agent-workflow-alpha"={enabled=true}}\n', plugin, "disabled")
+
+    def test_activation_json_precise_edit_delete_and_insert_preserve_other_bytes(self):
+        plugin = "agent-workflow@agent-workflow-alpha"
+        for mapping in ('"other": false, "' + plugin + '": true', '"' + plugin + '": true, "other": false', '"' + plugin + '": true'):
+            raw = ('{\r\n "enabledPlugins": {' + mapping + '},\r\n "permissions": {"allow":["Read(a,b)"]}\r\n}\r\n').encode()
+            changed = activation_codecs.patch("claude", raw, plugin, "disabled")
+            self.assertEqual(changed, raw.replace(('"' + plugin + '": true').encode(), ('"' + plugin + '": false').encode()))
+            cleared = activation_codecs.patch("claude", raw, plugin, "inherit")
+            self.assertEqual(activation_codecs.state("claude", cleared, plugin), "inherit")
+            self.assertIn(b'"permissions": {"allow":["Read(a,b)"]}', cleared)
+            self.assertNotIn(b'\n', cleared.replace(b'\r\n', b''))
+        raw = b'{"extra": {"text": "enabledPlugins:{fake},"}}\n'
+        inserted = activation_codecs.patch("claude", raw, plugin, "enabled")
+        self.assertIn(b'"extra": {"text": "enabledPlugins:{fake},"}', inserted)
+        self.assertEqual(activation_codecs.state("claude", inserted, plugin), "enabled")
+        self.assertEqual(activation_codecs.state("claude", None, plugin), "inherit")
+        for raw in (b'{"enabledPlugins": []}', b'{"enabledPlugins":{"agent-workflow@agent-workflow-alpha":"true"}}', b'{"x":1,"x":2}'):
+            with self.assertRaises(ValueError):
+                activation_codecs.patch("claude", raw, plugin, "enabled")
+
     def test_toml_adjacent_inline_comment_is_not_replaced_as_part_of_value(self):
         raw = b'name="a"\ndescription="x"\nmodel="old"#comment\ndeveloper_instructions="x"\n'
         updated = codecs.patch("codex", raw, {"model": "new"})

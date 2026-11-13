@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+import ctypes
+import errno
 import fcntl
 import hashlib
 import os
 from pathlib import Path
 import secrets
 import stat
+import sys
 from typing import Callable
 
 from .contracts import ConfigError, ConflictError, MAX_FILE_BYTES as MAX_BYTES, absolute_path
@@ -17,6 +20,25 @@ from .contracts import ConfigError, ConflictError, MAX_FILE_BYTES as MAX_BYTES, 
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 _READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+
+
+def _rename_directory_exclusive(parent, source, destination):
+    """使用宿主的排他 rename 发布目录，禁止覆盖抢先出现的空目录。
+
+    mkdir 后重新按名字 open 无法证明打开的是自己创建的目录；先持有随机
+    私有目录 inode，再以内核 no-replace 语义发布固定名字，才能关闭这个
+    首次创建窗口。macOS/Linux 均使用标准 libc；不支持时失败关闭，不退回
+    可覆盖的 os.rename。Windows 本轮不在支持范围。
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, "renameatx_np" if sys.platform == "darwin" else "renameat2", None)
+    if function is None:
+        raise OSError(errno.ENOTSUP, "exclusive directory publication unavailable")
+    function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    function.restype = ctypes.c_int
+    if function(parent, os.fsencode(source), parent, os.fsencode(destination), 4 if sys.platform == "darwin" else 1):
+        code = ctypes.get_errno()
+        raise OSError(code, "exclusive directory publication failed")
 
 
 def _identity(info) -> tuple:
@@ -134,6 +156,47 @@ def read(path: Path) -> Snapshot:
         raise ConfigError("模型配置无法安全读取") from exc
 
 
+def directory_stamp(path: Path) -> tuple:
+    """记录完整目录链（含缺失边界），不创建目录也不使用 mtime 充当身份。
+
+    本服务 staging 会改变目录时间；稳定身份只含 dev/ino/权限/属主。
+    缺失父目录只允许在其直接父目录已经存在时首次创建，避免任意递归造路径。
+    """
+    path = absolute_path(path)
+    with directory(path.anchor) as handle:
+        result = []
+        descriptors, links = [], []
+        parent = handle.fd
+        def checked(value):
+            for descriptor, name, expected in links:
+                current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != expected:
+                    raise ConflictError("配置父目录在观察期间变化")
+            return value
+        try:
+            for index, name in enumerate(path.parts[1:]):
+                try:
+                    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    result.append((name, None))
+                    result.extend((part, None) for part in path.parts[index + 2:])
+                    return checked(tuple(result))
+                if not stat.S_ISDIR(info.st_mode):
+                    raise ConfigError("配置父路径不能是链接或特殊节点")
+                descriptor = os.open(name, _DIR_FLAGS, dir_fd=parent)
+                descriptors.append(descriptor)
+                actual = os.fstat(descriptor)
+                if (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
+                    raise ConflictError("配置父目录在观察时变化")
+                result.append((name, info.st_dev, info.st_ino, info.st_mode, info.st_uid))
+                links.append((parent, name, (info.st_dev, info.st_ino)))
+                parent = descriptor
+            return checked(tuple(result))
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
+
 
 @dataclass(frozen=True)
 class Write:
@@ -142,6 +205,7 @@ class Write:
     path: Path
     before: Snapshot
     after: bytes
+    parent_stamp: tuple = ()
 
 
 
@@ -237,6 +301,7 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                     follow_symlinks=False)
             if item is not None:
                 result["published"] = True
+                result["namespace_touched"] = True
                 published[item.role] = staged
                 statuses[item.role] = "saved"
             os.unlink(candidate, dir_fd=slot.descriptor)
@@ -280,8 +345,48 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                 retained_locations[entry["backup"]] = verified
 
         try:
+            # 新文件也复用同一事务。先验证预览目录链，再在既有父目录锁下
+            # mkdir（不接受外部抢先创建），绝不覆盖外部新出现的配置文件。
+            guard()
             for parent in sorted({item.path.parent for item in changes}, key=str):
+                expected = next(item.parent_stamp for item in changes if item.path.parent == parent)
+                if expected and directory_stamp(parent) != expected:
+                    raise ConflictError("配置父目录在预览后变化")
+                if expected and expected[-1][1] is None:
+                    if len(expected) > 1 and expected[-2][1] is None:
+                        raise ConfigError("只允许创建固定配置的直接父目录")
+                    anchor = stack.enter_context(directory(parent.parent))
+                    fcntl.flock(anchor.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if directory_stamp(parent) != expected:
+                        raise ConflictError("配置父目录在首次创建前变化")
+                    temporary = ".native-config-" + secrets.token_hex(16) + ".new"
+                    os.mkdir(temporary, 0o700, dir_fd=anchor.fd)
+                    created_fd = os.open(temporary, _DIR_FLAGS, dir_fd=anchor.fd)
+                    stack.callback(os.close, created_fd)
+                    created_identity = os.fstat(created_fd)
+                    try:
+                        _rename_directory_exclusive(anchor.fd, temporary, parent.name)
+                        result["namespace_touched"] = True
+                        result.setdefault("created_directories", []).append(str(parent))
+                        os.fsync(anchor.fd)
+                    except FileExistsError as exc:
+                        raise ConflictError("配置父目录已由外部创建") from exc
+                    finally:
+                        try:
+                            info = os.stat(temporary, dir_fd=anchor.fd, follow_symlinks=False)
+                            if (info.st_dev, info.st_ino) == (created_identity.st_dev, created_identity.st_ino):
+                                os.rmdir(temporary, dir_fd=anchor.fd)
+                        except FileNotFoundError:
+                            pass
+                    # 发布后按名字打开时若目录已换位，必须拒绝写入替代目录。
+                    published_info = os.stat(parent.name, dir_fd=anchor.fd, follow_symlinks=False)
+                    if (published_info.st_dev, published_info.st_ino) != (created_identity.st_dev, created_identity.st_ino):
+                        raise ConflictError("首次创建的配置父目录已换位")
                 handle = stack.enter_context(directory(parent))
+                if expected and expected[-1][1] is None:
+                    opened = os.fstat(handle.fd)
+                    if (opened.st_dev, opened.st_ino) != (created_identity.st_dev, created_identity.st_ino):
+                        raise ConflictError("首次创建的配置父目录在打开前换位")
                 try:
                     fcntl.flock(handle.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError as exc:
@@ -300,8 +405,9 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                 observed = os.fstat(descriptor)
                 slot = _Staged(name, parent, descriptor, set(), {}, (observed.st_dev, observed.st_ino))
                 prepared[item.role] = slot
-                stage(slot, "candidate.new", item.after, stat.S_IMODE(item.before.identity[2]))
-                slot.preview_identity = stage(slot, "before.backup", item.before.body)
+                stage(slot, "candidate.new", item.after, stat.S_IMODE(item.before.identity[2]) if item.before.identity else 0o600)
+                if item.before.body is not None:
+                    slot.preview_identity = stage(slot, "before.backup", item.before.body)
             stack.callback(verify_retained_names)
             guard()
             for item in changes:
@@ -312,11 +418,12 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                         raise ConflictError("原生 Agent 在批量提交期间变化")
                 for handle in handles.values():
                     handle.check()
-                actual = capture(slot, item.path.name, "before")
-                if not _same_after_move(actual, item.before):
-                    raise ConflictError("实际隔离的目标不是预览前像，已保留外部对象")
-                os.fsync(slot.descriptor)
-                os.fsync(slot.parent)
+                if item.before.body is not None:
+                    actual = capture(slot, item.path.name, "before")
+                    if not _same_after_move(actual, item.before):
+                        raise ConflictError("实际隔离的目标不是预览前像，已保留外部对象")
+                    os.fsync(slot.descriptor)
+                    os.fsync(slot.parent)
                 link_candidate(slot, "candidate.new", item.path.name, item=item)
                 os.fsync(slot.parent)
             for handle in handles.values():
@@ -329,6 +436,11 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
             result["partial_failure"] = bool(published)
             for item in reversed(changes):
                 slot = prepared.get(item.role)
+                if slot is not None and item.before.body is None and item.role in published:
+                    # 首次创建没有前像可恢复。保留已发布对象和实际位置，避免
+                    # 为“回滚到缺失”而删除并发编辑者已经打开/更新的唯一文件。
+                    statuses[item.role] = "recovery_required"
+                    continue
                 if slot is None or "before" not in slot.captures:
                     continue
                 try:
@@ -424,6 +536,23 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
     if result.get("finalization_failed"):
         failure = failure or result["finalization_error_type"]
     result["results"] = [{"role": item.role, "status": statuses[item.role]} for item in changes]
+    created = [item for item in changes if item.before.body is None]
+    if created:
+        result["created_files"] = []
+        for item in created:
+            node = published.get(item.role)
+            verified = False
+            if node is not None and handles.get(item.path.parent) and handles[item.path.parent].exit_verified:
+                try:
+                    actual = read(item.path)
+                    verified = actual.identity[:2] == node.identity[:2]
+                except (OSError, ValueError):
+                    pass
+            result["created_files"].append({"role": item.role, "target": str(item.path), "before_absent": True,
+                                           "published": item.role in published,
+                                           "observed_identity": list(node.identity) if node is not None else None,
+                                           "location_status": "verified_at_finalization" if verified else "unknown",
+                                           "recovery_action": "保留实际发布对象，核对内容后通过新预览修改；不会自动删除首次创建的文件。"})
     if failure:
         result["error"] = "Native file batch save failed; external objects were not overwritten. Inspect per-agent results and retained recovery files."
         result["error_type"] = failure

@@ -12,7 +12,7 @@ import secrets
 import threading
 import time
 
-from . import adapters, catalog as model_catalog, codecs, inventory, storage
+from . import activation, activation_codecs, adapters, catalog as model_catalog, codecs, inventory, storage
 from .contracts import (ConfigError, ConflictError, FIELDS, HOSTS, MAX_BATCH,
                         MAX_INVENTORY_BYTES, absolute_path, host_name, json_bytes,
                         unique_json, validate_fields)
@@ -25,6 +25,7 @@ class _Context:
     scope: str
     project: Path | None
     inventory: inventory.Inventory
+    activation: activation.Activation
     revision: str
 
 
@@ -36,13 +37,17 @@ class _Plan:
 
     @property
     def cost(self):
-        return self.before.inventory.total_bytes + sum(len(item.after) for item in self.writes)
+        return self.before.inventory.total_bytes + self.before.activation.total_bytes + sum(len(item.after) for item in self.writes)
 
 
 class ModelService:
     def __init__(self, data_dir: Path, home: Path | None = None, *, client_versions: dict | None = None):
         self.data_dir = absolute_path(data_dir)
         self.home = absolute_path(home if home is not None else Path.home())
+        # 恢复入口必须保留“显式隔离 home”与“宿主环境选根”的区别。
+        # 仅保存最终 home 路径会丢失这一来源，重开时无条件传 --home 将使
+        # CODEX_HOME / CLAUDE_CONFIG_DIR 原有覆盖语义失效。
+        self._explicit_home = home is not None
         self.environment = dict(os.environ)
         self.environment["HOME"] = str(self.home)
         # 显式 home 是测试/脚本隔离边界；父进程的真实宿主定位不能覆盖它。
@@ -71,8 +76,11 @@ class ModelService:
         path = absolute_path(project) if project is not None else None
         identity = storage.project_identity(path) if path is not None else ()
         found = inventory.discover(host, self.home, path, host_roots=self.host_roots)
-        revision = hashlib.sha256(json_bytes([host, scope, str(path) if path else None, identity, found.revision()])).hexdigest()
-        return _Context(host, scope, path, found, revision)
+        enabled = activation.capture(host, scope, path, self.host_roots[host], data_dir=self.data_dir,
+                                     home=self.home if self._explicit_home else None,
+                                     environment=self.environment)
+        revision = hashlib.sha256(json_bytes([host, scope, str(path) if path else None, identity, found.revision(), enabled.revision()])).hexdigest()
+        return _Context(host, scope, path, found, enabled, revision)
 
     def _capabilities(self, host):
         return adapters.capabilities(host, self._versions.get(host), self._version_status.get(host, "not_probed"))
@@ -112,6 +120,7 @@ class ModelService:
         return {"host": state.host, "scope": state.scope, "project": str(state.project) if state.project else None,
                 "revision": state.revision, "roles": [self._row(agent, state.scope, complete=state.inventory.complete) for agent in state.inventory.agents],
                 "capabilities": self._capabilities(state.host), "diagnostics": state.inventory.diagnostics,
+                "workflow_activation": state.activation.public,
                 "runtime_verified": False, "inventory_complete": state.inventory.complete,
                 "discovery_scope": "documented_local_files_and_observed_install_records"}
 
@@ -138,11 +147,16 @@ class ModelService:
     def preview(self, request):
         request = unique_json(json_bytes(request))
         if (not isinstance(request, dict) or "host" not in request
-                or set(request) - {"host", "scope", "project", "revision", "edits", "reset"}):
+                or set(request) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation"}):
             raise ConfigError("预览请求字段无效")
+        if "workflow_activation" in request and ({"edits", "reset"} & set(request)):
+            raise ConfigError("工作流启停不能与模型编辑或重置混合预览")
         state = self._capture(request["host"], request.get("scope", "global"), request.get("project"))
         if not isinstance(request.get("revision"), str) or request["revision"] != state.revision:
             raise ConflictError("原生 Agent 清单或文件在编辑后变化")
+        if "workflow_activation" in request:
+            writes, changes, warnings = activation.preview(state.activation, request["workflow_activation"])
+            return self._store_preview(state, writes, changes, warnings)
         edits, reset = request.get("edits", {}), request.get("reset", False)
         if not isinstance(edits, dict) or type(reset) is not bool or (reset and edits):
             raise ConfigError("编辑与重置参数无效")
@@ -181,6 +195,10 @@ class ModelService:
                                     "source_after": agent.origin if new is not None else "host_unresolved"})
         if sum(len(item.after) for item in writes) > 8 * 1024 * 1024:
             raise ConfigError("一次批量原生文件超过容量限制")
+        return self._store_preview(state, writes, changes, warnings)
+
+    def _store_preview(self, state, writes, changes, warnings):
+        """启停和模型共用容量、TTL、单次消费与保存计划，不创建第二事务通道。"""
         plan = _Plan(state, tuple(writes), time.monotonic())
         with self._lock:
             self._plans = {key: value for key, value in self._plans.items() if plan.created - value.created < 900}
@@ -188,7 +206,8 @@ class ModelService:
                 raise ConfigError("服务端预览容量已满，请稍后重新预览")
             opaque = secrets.token_urlsafe(32)
             self._plans[opaque] = plan
-        selected = [self._row(agents[item.role], state.scope, complete=state.inventory.complete) for item in writes]
+        agents = {agent.id: agent for agent in state.inventory.agents}
+        selected = [self._row(agents[item.role], state.scope, complete=state.inventory.complete) for item in writes if item.role in agents]
         blocked = [row["blocked_reason"] for row in selected if row["blocked_reason"]]
         return {"preview_id": opaque, "changes": changes, "warnings": list(dict.fromkeys(warnings)),
                 "effect": adapters.effect(), "dispatch_ready": not blocked,
@@ -202,13 +221,25 @@ class ModelService:
             if plan is None or time.monotonic() - plan.created >= 900:
                 raise ConflictError("预览不存在、已使用或已过期")
             before = plan.before
-            def guard():
+            creating = any(item.before.body is None for item in plan.writes)
+            def guard(*, initial=False):
                 now = self._capture(before.host, before.scope, before.project)
-                if now.revision != before.revision:
+                # 首次 mkdir 是 storage 已核实目录链后的自有变化。其余文件、
+                # 安装身份、继承来源仍逐次检查；目标父目录由 storage 的原链
+                # 前像检查及全程持有的 no-follow 描述符负责，不能被普通回读替代。
+                same = now.revision == before.revision
+                if creating and not initial:
+                    same = (now.inventory.revision() == before.inventory.revision()
+                            and now.activation.revision(include_target_parent=False)
+                            == before.activation.revision(include_target_parent=False))
+                if not same:
                     raise ConflictError("原生 Agent 来源在预览后变化，请重新预览")
                 for item in plan.writes:
-                    codecs.parse(before.host, item.after)
-            guard()
+                    if item.role == "workflow_activation":
+                        activation_codecs.parse(before.host, item.after)
+                    else:
+                        codecs.parse(before.host, item.after)
+            guard(initial=True)
             result = storage.write_batch(plan.writes, guard)
             response = {**result, "effect": adapters.effect(saved=result["saved"],
                         published=result["published"] or result.get("namespace_touched", False))}

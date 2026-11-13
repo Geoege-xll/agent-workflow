@@ -20,6 +20,7 @@ if sys.version_info < (3, 11):
 README = """# Native Agent Config
 
 独立管理 Codex、Claude Code 与 Antigravity 已发现的原生 Agent 模型字段。
+网页同时提供 Codex、Claude Code 工作流的用户级默认与当前项目继承／启用／停用。
 配置工具与任何工作流插件、角色清单、安装器及中央项目绑定相互独立。
 
 需要本机已有 Python 3.11+ 和 Bash；当前构建验证覆盖 macOS，本包不安装解释器。
@@ -45,6 +46,31 @@ serve 可前台运行并使用 --port 0 和 --idle-timeout 1800；mcp 是手动�
 可加 --project <绝对项目目录>。这些选项不修改 HOME、CODEX_HOME 或 PATH。
 默认直接读取本机实际用户配置根。保存直接修改所选可写原生定义；插件来源保持只读。
 保存结果包含逐项状态、必要的备份恢复路径与清理状态；磁盘保存不证明当前会话已加载。
+
+工作流卡与模型编辑分别预览、分别保存。继承只移除本层工作流启停键；Codex 项目写
+.codex/config.toml，Claude 项目写 .claude/settings.local.json，后者仅影响本机当前项目，
+继承后仍可能采用共享 .claude/settings.json。工具只编辑已明确识别的工作流插件身份，
+其他插件和模型字段保持。Codex 项目信任、启动参数及托管策略仍由宿主决定。
+Antigravity 的用户／项目启停文件合同尚未核实，因此本页只提供官方管理说明。
+
+停用工作流之前，请保留本独立包的解压目录和页面提供的重新打开命令。停用插件后，
+可离开工作流项目目录，在终端直接运行以下独立入口，重新预览并保存启用或继承：
+
+```sh
+bash <解压根>/scripts/agent_config.sh open --host codex --project <绝对项目目录>
+bash <解压根>/scripts/agent_config.sh open --host claude --project <绝对项目目录>
+```
+
+恢复用户级默认时省略 --project；若之前明确选择了其他配置根或状态目录，恢复时继续
+传入相同 --home 和 --data-dir。该入口无需已启用的工作流 Skill、工作流源码或 MCP。
+也可在 Codex 官方 /plugins 或桌面插件管理中重新启用；Claude 可在项目目录执行
+claude plugin enable <页面确认的插件ID> --scope local，用户级使用 --scope user。
+保存成功后请启动新会话核实加载和实际工作流行为；工具始终区分已保存、等待新会话加载
+与实际运行未验证，当前会话已加载的上下文不会随停用清除。
+官方配置与管理说明：
+- Codex：https://learn.chatgpt.com/docs/config-file/config-reference
+- Claude：https://code.claude.com/docs/en/plugins/cli-reference
+- Antigravity：https://antigravity.google/docs/plugins?tab=cli
 
 包内仅包含本项目源代码、网页资源及已有 Python 选择器。运行依赖全部由本机 Python
 标准库提供，没有新增第三方库、远程脚本、字体或需随包附带的第三方许可证。

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import shlex
 import shutil
 import signal
 import subprocess
@@ -90,6 +91,8 @@ class StandalonePackageTest(unittest.TestCase):
             self.assertFalse(any(name.startswith(("lib/", "manager/", "plugin_runtime/", "plugins/", "product/")) for name in names))
             self.assertEqual(package.read("scripts/python_runtime.sh"), (ROOT / "lib/python_runtime.sh").read_bytes())
             self.assertEqual(package.read("native_config/VERSION"), (ROOT / "native_config/VERSION").read_bytes())
+            self.assertIn("native_config/activation.py", names)
+            self.assertIn("native_config/activation_codecs.py", names)
             record = json.loads(package.read("BUILD.json"))
             self.assertEqual(record["third_party_dependencies"], [])
             for name, digest in record["files"].items():
@@ -228,13 +231,10 @@ class StandalonePackageTest(unittest.TestCase):
 
     def test_missing_version_and_workflow_dependency_are_rejected(self):
         source = self.base / "source"
-        shutil.copytree(ROOT / "native_config", source / "native_config", ignore=shutil.ignore_patterns("__pycache__"))
-        (source / "scripts").mkdir()
-        for name in ("agent_config.py", "agent_config.sh", "python_runtime.sh"):
-            shutil.copyfile(ROOT / "scripts" / name, source / "scripts" / name)
+        # 负向边界在版本与导入审查处即应拒绝；仅构造最小输入，避免复制真实源码树。
+        (source / "native_config").mkdir(parents=True)
         version = source / "native_config/VERSION"
-        saved_version = version.read_bytes()
-        version.unlink()
+        saved_version = (ROOT / "native_config/VERSION").read_bytes()
 
         def attempt():
             return subprocess.run([sys.executable, "-B", str(ROOT / "packaging/build_agent_config.py"),
@@ -243,10 +243,106 @@ class StandalonePackageTest(unittest.TestCase):
 
         self.assertNotEqual(attempt().returncode, 0)
         version.write_bytes(saved_version)
-        with (source / "native_config/cli.py").open("a", encoding="utf-8") as stream:
-            stream.write("\nimport manager\n")
+        (source / "native_config/cli.py").write_text("import manager\n")
         self.assertNotEqual(attempt().returncode, 0)
         self.assertFalse((self.base / "invalid").exists())
+
+    def test_disabled_workflow_recovers_by_reopening_extracted_independent_package(self):
+        """停用后关闭服务，真实执行解压包给出的 open 命令并恢复；不借工作流源码导入。"""
+        installed = self.unpack()
+        user_config = self.home / ".codex/config.toml"
+        user_config.parent.mkdir(parents=True)
+        user_config.write_text('[marketplaces."agent-workflow-alpha"]\nsource_type="git"\n'
+                               'source="https://github.com/Geoege-xll/agent-workflow.git"\n'
+                               'ref="plugins-codex-alpha"\n'
+                               '[plugins."agent-workflow@agent-workflow-alpha"]\nenabled=true\n')
+        target = self.project / ".codex/config.toml"
+        original = (b'# Preserve native preferences\nmodel = "existing-model"\n'
+                    b'[plugins."unrelated@market"]\nenabled = true\n')
+        target.write_bytes(original)
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        connection_path = self.state / "console/connection.json"
+        record = None
+
+        def stop():
+            nonlocal record
+            if record is None:
+                return
+            # PID 仅取本测试独立状态根的连接记录；不搜索或回收本机其他用户服务。
+            try:
+                os.kill(record["pid"], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 6
+            while connection_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(connection_path.exists(), "本测试独立服务应完成关闭及连接清理")
+            connection = http.client.HTTPConnection("127.0.0.1", record["port"], timeout=1)
+            try:
+                with self.assertRaises(OSError):
+                    connection.connect()
+            finally:
+                connection.close()
+            record = None
+
+        def start(command):
+            nonlocal record
+            result = subprocess.run(command, cwd=self.base, env=environment,
+                                    capture_output=True, text=True, timeout=12)
+            # 即使 open 返回失败也保留自有 PID，以便 finally 真正关闭可能已启动的服务。
+            if connection_path.exists():
+                record = json.loads(connection_path.read_text())
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            opened = json.loads(result.stdout)
+            self.assertEqual(opened["state"], "ready")
+            self.assertEqual(Path(opened["component"]["root"]), installed)
+            self.assertEqual(opened["component"]["source"], "release")
+            self.assertFalse(opened["service"]["reused"])
+
+        def api(method, path, data=None):
+            connection = http.client.HTTPConnection("127.0.0.1", record["port"], timeout=4)
+            try:
+                headers = {"Authorization": "Bearer " + record["token"],
+                           "Origin": f'http://127.0.0.1:{record["port"]}', "Content-Type": "application/json"}
+                connection.request(method, path, body=json.dumps(data) if data is not None else None, headers=headers)
+                response = connection.getresponse()
+                raw = response.read()
+                self.assertEqual(response.status, 200, raw)
+                return json.loads(raw)
+            finally:
+                connection.close()
+
+        query = "/api/context?" + urlencode({"host": "codex", "scope": "project", "project": str(self.project)})
+        try:
+            start(self.command(installed, "open", "--no-browser"))
+            context = api("GET", query)
+            recovery = context["workflow_activation"]["recovery"]["open_command"]
+            self.assertEqual(Path(shlex.split(recovery)[1]), installed / "scripts/agent_config.sh")
+            for state in ("disabled", "enabled", "inherit"):
+                before = target.read_bytes()
+                plan = api("POST", "/api/preview", {"host": "codex", "scope": "project",
+                           "project": str(self.project), "revision": context["revision"],
+                           "workflow_activation": {"state": state}})
+                self.assertEqual(target.read_bytes(), before)
+                outcome = api("POST", "/api/apply", {"preview_id": plan["preview_id"]})
+                self.assertTrue(outcome["saved"])
+                self.assertFalse(outcome["effect"]["runtime_verified"])
+                context = outcome["context"]
+                self.assertEqual(context["workflow_activation"]["state"], state)
+                self.assertEqual(self.native_file.read_bytes(), self.before)
+                self.assertIn(b'model = "existing-model"', target.read_bytes())
+                self.assertIn(b'[plugins."unrelated@market"]\nenabled = true', target.read_bytes())
+                if state == "disabled":
+                    stop()
+                    # 页面命令必须自行携带原配置根与状态根，消费者只关闭浏览器打开行为；
+                    # 手工补根参数会掩盖停用后重开到错误配置位置的恢复缺陷。
+                    start(shlex.split(recovery) + ["--no-browser"])
+                    context = api("GET", query)
+                    self.assertEqual(context["workflow_activation"]["state"], "disabled")
+            self.assertEqual(context["workflow_activation"]["effective_state"], "enabled")
+        finally:
+            stop()
 
     def test_thin_plugin_prepares_real_zip_outside_repository_and_reuses_safe_service(self):
         """真实源码包只通过显式 ZIP 进入独立根；插件目录始终没有配置核心或网页。"""

@@ -355,7 +355,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         data = self._json_body()
         with self.server.business_request(self.connection):
             if path == "/api/preview":
-                if set(data) - {"host", "scope", "project", "revision", "edits", "reset"}:
+                if set(data) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation"}:
                     raise ValueError("未知预览字段")
                 validate_location(data.get("host"), data.get("project"))
                 result = self.server.service.preview(data)

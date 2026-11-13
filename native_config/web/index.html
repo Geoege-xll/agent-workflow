@@ -5,19 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <meta name="referrer" content="no-referrer">
-  <title>Agent 模型配置</title>
+  <title>Agent 与工作流配置</title>
   <link rel="stylesheet" href="/console.css">
   <script src="/console.js" defer></script>
 </head>
 <body>
   <main class="page">
     <header class="page-header">
-      <div><p class="eyebrow">原生 AGENT 设置</p><h1>Agent 模型配置</h1></div>
+      <div><p class="eyebrow">原生 AGENT 设置</p><h1>Agent 与工作流配置</h1></div>
       <p class="header-note">三平台 · 用户级与项目配置</p>
     </header>
-    <p class="intro">为原生 Agent 选择模型与推理级别。按真实定义分别显示用户级、项目级和插件来源；可写权限与实际状态以当前平台返回的信息为准。</p>
+    <p class="intro">管理工作流启停，为原生 Agent 选择模型与推理级别。按真实定义分别显示用户级、项目级和插件来源；可写权限与实际状态以当前平台返回的信息为准。</p>
 
-    <section class="workspace" aria-label="模型配置工作区">
+    <section class="workspace" aria-label="Agent 与工作流配置工作区">
       <div class="platform-tabs" role="tablist" aria-label="选择平台">
         <button id="tab-codex" role="tab" aria-selected="true" aria-controls="config-panel" tabindex="0" data-host="codex">Codex</button>
         <button id="tab-claude" role="tab" aria-selected="false" aria-controls="config-panel" tabindex="-1" data-host="claude">Claude Code</button>
@@ -34,7 +34,7 @@
           <form id="project-form" class="project-section">
             <label for="project-path">项目绝对路径</label>
             <input id="project-path" type="text" maxlength="4096" placeholder="/path/to/project" autocomplete="off" spellcheck="false" aria-describedby="project-help">
-            <p id="project-help" class="help">载入已存在的项目目录；此页面不负责项目启停。</p>
+            <p id="project-help" class="help">载入已存在的项目目录；工作流启停与模型分别预览和保存。</p>
             <button id="load-project" type="submit" class="secondary">载入项目</button>
           </form>
           <div class="sidebar-note">
@@ -50,6 +50,19 @@
             <div class="toolbar"><button id="reload-context" class="secondary" type="button">重新读取</button><button id="refresh-catalog" class="secondary" type="button">刷新模型目录</button></div>
           </header>
           <div id="feedback" class="feedback" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+          <section id="activation-card" class="activation-card" aria-labelledby="activation-title" aria-busy="true">
+            <h2 id="activation-title">工作流启停</h2>
+            <p id="activation-scope" class="help"></p>
+            <dl id="activation-saved" class="activation-facts"></dl>
+            <div class="field"><label for="activation-state">本层工作流设置</label><select id="activation-state" aria-describedby="activation-help activation-status" disabled><option value="" disabled>状态未知</option><option value="inherit">继承（移除本层覆盖）</option><option value="enabled">启用</option><option value="disabled">停用</option></select></div>
+            <p id="activation-help" class="help">继承仅移除本层工作流键；上层设置仍由宿主决定。此草稿与模型更改分别保存。</p>
+            <p id="activation-status" class="help" role="status" aria-atomic="true"></p>
+            <p id="activation-readonly" class="help"></p>
+            <ul id="activation-diagnostics" class="help"></ul>
+            <details class="activation-recovery"><summary>停用后的重新打开与官方恢复方式</summary><div id="activation-recovery"></div></details>
+            <p class="help">文件保存、等待新会话加载、实际运行未验证是独立状态。重新读取仅回读文件；当前会话已加载的上下文不会因此清除。</p>
+            <div class="footer-actions"><button id="discard-activation" class="secondary" type="button" disabled>放弃启停草稿</button><button id="preview-activation" class="primary" type="button" disabled>预览工作流启停</button></div>
+          </section>
           <div id="catalog-info" class="catalog-info"><span id="catalog-status">模型目录尚未刷新。初次打开只读取配置。</span><p id="capability-status" class="help"></p></div>
           <details id="discovery-diagnostics" class="discovery-diagnostics" hidden>
             <summary id="discovery-summary">发现诊断</summary>
@@ -89,6 +102,7 @@
     <p id="preview-location" class="help"></p>
     <div id="preview-status" class="feedback" hidden></div>
     <div id="preview-changes-list" class="change-list"></div>
+    <div id="preview-activation-recovery" class="apply-results" hidden></div>
     <div id="preview-warnings" class="preview-warnings" hidden><h3>请留意</h3><ul id="warning-list"></ul></div>
     <p id="preview-effect" class="effect-note">保存仅记录配置，供后续派发使用。宿主可能需要重新加载，并可能执行更强策略；当前 Agent 与真实模型运行结果尚未验证。</p>
     <p id="apply-feedback" role="status" aria-live="polite" class="feedback" hidden></p>

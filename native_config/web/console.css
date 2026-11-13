@@ -93,6 +93,20 @@ h3 { font-size: 14px; }
 .feedback[data-tone="success"] { background: var(--success-bg); color: var(--success-ink); }
 .catalog-info { margin-top: 22px; color: var(--workspace-muted); font-size: 12px; }
 .catalog-info > p { margin-top: 5px; }
+/* 启停卡复用生产页边框、反馈和按钮语义；路径与命令自然换行，窄屏无需横向浏览。 */
+.activation-card { display: grid; gap: 12px; margin-top: 20px; padding: 18px; border: 1px solid var(--workspace-control-line); border-radius: 6px; min-width: 0; overflow-wrap: anywhere; }
+.activation-card h2 { font-size: 16px; }
+.activation-card .field { max-width: 420px; }
+.activation-facts { display: grid; grid-template-columns: minmax(110px, auto) minmax(0, 1fr); gap: 6px 16px; margin: 0; font-size: 12px; }
+.activation-facts dt { color: var(--workspace-muted); }
+.activation-facts dd { margin: 0; min-width: 0; }
+.activation-card ul { margin: 0; padding-left: 18px; }
+.activation-recovery summary { display: flex; align-items: center; min-height: 44px; font-size: 12px; text-decoration: underline; }
+.activation-recovery summary::before { content: "▸"; margin-right: 8px; }
+.activation-recovery[open] summary::before { content: "▾"; }
+.recovery-command { display: block; margin-block: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.activation-recovery a, .apply-results a { color: var(--workspace-selected-ink); }
+.activation-recovery a:focus-visible, .apply-results a:focus-visible { outline: 2px solid var(--workspace-focus); outline-offset: 3px; }
 .discovery-diagnostics { margin-top: 16px; padding: 12px 14px; border: 1px dashed var(--workspace-control-line); border-radius: 6px; font-size: 12px; overflow-wrap: anywhere; }
 .discovery-diagnostics summary { min-height: 28px; font-weight: 550; }
 .discovery-diagnostics ul { margin: 10px 0 0; padding-left: 18px; color: var(--workspace-muted); }
@@ -187,6 +201,9 @@ h3 { font-size: 14px; }
   .project-section { margin-top: 18px; padding: 18px 0; border-left: 0; border-block: 1px dashed var(--workspace-control-line); }
   .sidebar-note { margin-top: 16px; }
   .editor { padding: 22px 18px 0; }
+  .activation-card { padding: 14px; }
+  .activation-facts { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .activation-facts dd { margin-bottom: 6px; }
   .editor-header { align-items: flex-start; }
   .batch-form { grid-template-columns: minmax(0, 1fr); }
   .batch-form button { justify-self: start; }

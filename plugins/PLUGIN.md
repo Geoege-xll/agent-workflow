@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 官方插件候选
 
-插件唯一版本源为 `product/PLUGIN_VERSION`，当前源码候选为 `3.0.0-alpha.7`，原型评审与增量反馈进展见[同一主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/workflow-document-lifecycle.md)；远程已发布版本为 `3.0.0-alpha.6`。独立配置工具版本源为 `native_config/VERSION`，当前 `0.1.0-alpha.3`。默认安装使用自有 Git alpha 分发，官方公开目录与稳定发行尚未就绪，Windows 暂停。本页说明载荷合同，实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
+插件唯一版本源为 `product/PLUGIN_VERSION`，当前源码候选为 `3.0.0-alpha.7`，原型评审与增量反馈进展见[同一主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/workflow-document-lifecycle.md)；远程已发布版本为 `3.0.0-alpha.6`。独立配置工具版本源为 `native_config/VERSION`，源码候选为 `0.1.0-alpha.4`，已发布版本及本插件固定组件描述仍为 `0.1.0-alpha.3`，项目启停新功能尚未通过发行替换现有安装。默认安装使用自有 Git alpha 分发，官方公开目录与稳定发行尚未就绪，Windows 暂停。本页说明载荷合同，实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
 
 ## 载荷与职责
 
