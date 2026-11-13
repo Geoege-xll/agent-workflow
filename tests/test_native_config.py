@@ -1017,15 +1017,26 @@ class NativeConfigServiceTest(unittest.TestCase):
     def test_package_import_and_context_work_without_workflow_or_manager_package(self):
         isolated = self.root / "isolated"
         isolated.mkdir()
-        source = Path(__file__).resolve().parents[1] / "native_config"
-        shutil.copytree(source, isolated / "native_config")
+        source = Path(__file__).resolve().parents[1]
+        shutil.copytree(source / "native_config", isolated / "native_config")
+        # 独立发布包合法携带这三个仅依赖标准库的身份合同文件。按确切清单补齐
+        # 最小载荷，禁止复制整个 product/工作流或用源码路径回退掩盖漏打包依赖。
+        identity_files = {"__init__.py", "command_identity.py", "command_identity.json"}
+        (isolated / "product").mkdir()
+        for name in identity_files:
+            shutil.copyfile(source / "product" / name, isolated / "product" / name)
+        self.assertEqual({"native_config", "product"}, {path.name for path in isolated.iterdir()})
+        self.assertEqual(identity_files, {path.name for path in (isolated / "product").iterdir()})
         script = ("import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+                  "import native_config; from product import command_identity; "
+                  "assert all(Path(module.__file__).resolve().is_relative_to(Path(sys.argv[1])) for module in (native_config,command_identity)); "
                   "from native_config import ModelService; "
                   "service=ModelService(Path(sys.argv[2]),Path(sys.argv[3])); "
                   "assert service.context('codex')['roles']==[]; "
                   "assert not any(key=='lib' or key.startswith('lib.') or key=='manager' or key.startswith('manager.') for key in sys.modules)")
         result = subprocess.run([sys.executable, "-I", "-B", "-X", "utf8", "-c", script,
-                                 str(isolated), str(self.data), str(self.home)], capture_output=True, text=True, timeout=10)
+                                 str(isolated), str(self.data), str(self.home)], cwd=isolated,
+                                capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

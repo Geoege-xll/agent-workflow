@@ -1,6 +1,7 @@
 """精选依赖的独立来源、锁定、危险路径和显式更新边界。"""
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -163,21 +164,45 @@ class SelectedSkillsTest(unittest.TestCase):
                 selected.read_chunk(files, "design-taste-frontend", offset, length)
 
     def test_playwright_archives_require_exact_graph_integrity_and_full_inventory(self):
-        evidence = PACK / "dist/evidence/selected-upstream-skills/upstream/playwright"
-        manifest = json.loads((evidence / "runtime-manifest.json").read_bytes())
-        # 文件名不是来源authority；按已审阅发布记录的摘要定位同目录原始tarball。
-        archives = [next(path for path in evidence.glob("*.tgz") if hashlib.sha256(path.read_bytes()).hexdigest() == package["tarball_sha256"])
-                    for package in manifest["packages"]]
+        expected_item = copy.deepcopy(self.original_lock["dependencies"]["playwright-cli"])
+        prefix = selected.VENDOR + "/playwright-cli/"
+        expected_files = {path.removeprefix(prefix): body for path, body in self.original_files.items()
+                          if path.startswith(prefix)}
+        archives = []
+        # clean checkout 只消费已提交的完整 vendor/lock。这里重新封装的是本地合成
+        # tarball，不能冒充官方 npm 原始归档；仅将归档层的摘要/大小替换为合成值，
+        # 原版文件字节、mode、包版本、精确依赖图及完整清单仍须全部通过生产验证器。
+        for package in expected_item["packages"]:
+            package_prefix = "runtime/node_modules/" + package["name"] + "/"
+            archive = self.root / (package["name"].replace("/", "-") + ".tgz")
+            with tarfile.open(archive, "w:gz") as stream:
+                for path, record in sorted(expected_item["files"].items()):
+                    if path.startswith(package_prefix):
+                        entry = tarfile.TarInfo("package/" + path.removeprefix(package_prefix))
+                        entry.size, entry.mode = record["size"], record["mode"]
+                        stream.addfile(entry, io.BytesIO(expected_files[path]))
+            raw = archive.read_bytes()
+            package.update(compressed_bytes=len(raw), tarball_sha256=hashlib.sha256(raw).hexdigest(),
+                           integrity="sha512-" + base64.b64encode(hashlib.sha512(raw).digest()).decode("ascii"))
+            archives.append(archive)
+        manifest = {"packages": expected_item["packages"], "files": [
+            {"path": path.removeprefix("runtime/"), "sha256": record["sha256"], "bytes": record["size"]}
+            for path, record in sorted(expected_item["files"].items())]}
+        manifest_path = self.root / "synthetic-runtime-manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         item, files = selected.load_playwright_archives(manifest, archives)
-        self.assertEqual(self.original_lock["dependencies"]["playwright-cli"], item)
+        self.assertEqual(expected_item, item)
+        self.assertEqual(expected_files, files)
         self.assertEqual(192, len(files))
         output = self.root / "playwright-update-candidate"
-        report = update.candidate("playwright-cli", item["commit"], archives, output, evidence / "runtime-manifest.json")
+        report = update.candidate("playwright-cli", item["commit"], archives, output, manifest_path)
         self.assertEqual([], report["changed"])
         self.assertEqual("unverified_local_archive", report["source_authenticity"])
         self.assertTrue(report["review_required"])
         self.assertFalse(report["upstream_scripts_executed"])
-        self.assertEqual((self.original_lock, self.original_files), selected.snapshot(output))
+        expected_lock = copy.deepcopy(self.original_lock)
+        expected_lock["dependencies"]["playwright-cli"] = expected_item
+        self.assertEqual((expected_lock, self.original_files), selected.snapshot(output))
         for change in (lambda value: value["packages"][0].update(integrity="sha512-AAAA"),
                        lambda value: value["packages"][0].update(dependencies={"playwright": "latest"}),
                        lambda value: value["files"].pop(),
