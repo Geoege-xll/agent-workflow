@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -28,6 +29,8 @@ from lib.validate_antigravity_artifacts import ROLE_TOOLS as ANTIGRAVITY_ROLE_TO
 
 
 HOSTS = ("codex", "claude", "antigravity")
+PREFERENCE_SOURCE = "native_config/preference_contract.py"
+PREFERENCE_PROJECTION = "plugins/dispatch_preferences.py"
 # 官方 CLI 1.5.5 的真实严格校验确认：技能正文最多加载 24,000 个 UTF-8
 # 字节。构建阶段按同一正文边界拒绝超限，避免分发后才发现末尾流程被截断。
 ANTIGRAVITY_SKILL_BODY_LIMIT = 24_000
@@ -69,6 +72,21 @@ def json_bytes(value: object) -> bytes:
 
 def digest(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
+
+
+def validate_preference_reader(body: bytes) -> None:
+    """唯一共享源必须保持纯标准库闭包；不能借投影夹入服务或包相对依赖。"""
+    for node in ast.walk(ast.parse(body, filename=PREFERENCE_SOURCE)):
+        if isinstance(node, ast.Import):
+            modules = [item.name for item in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                raise ValueError("dispatch preference reader must not use relative imports")
+            modules = [node.module or ""]
+        else:
+            continue
+        if any(module.split(".")[0] not in sys.stdlib_module_names for module in modules):
+            raise ValueError("dispatch preference reader must use only the standard library")
 
 
 def validate_manifest(host: str, manifest: dict, version: str) -> None:
@@ -241,6 +259,17 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         copy("lib/hosts/" + name)
     for name in ("plugins/__init__.py", "plugins/source_pack.py", "plugins/project_context.py", "plugins/plugin-context.md"):
         copy(name)
+    # 唯一允许进入工作流插件的独立配置来源：只读合同按字节原样投影，包内不建
+    # native_config 目录，也不复制业务服务。双摘要显式说明来源与投影的同源关系。
+    preference_reader = read_source(source, PREFERENCE_SOURCE)
+    validate_preference_reader(preference_reader)
+    result[PREFERENCE_PROJECTION] = preference_reader
+    source_files[PREFERENCE_SOURCE] = digest(preference_reader)
+    projections[PREFERENCE_PROJECTION] = {
+        "source": PREFERENCE_SOURCE, "transform": "identity",
+        "source_sha256": digest(preference_reader),
+        "projection_sha256": digest(result[PREFERENCE_PROJECTION]),
+    }
     copy("plugins/PLUGIN.md", "PLUGIN.md")
     copy("plugins/INSTALL.md", "INSTALL.md")
     result["README.md"] = result["PLUGIN.md"]
@@ -360,7 +389,7 @@ def write_archive(files: dict[str, bytes], target: Path) -> None:
 
 
 def build(source: Path, output: Path, host: str) -> Path:
-    """内容变化才改变归档摘要；工作流交付不读取独立配置产品的任何源目录。"""
+    """内容变化才改变摘要；独立配置产品仅共享经闭包检查的唯一只读合同。"""
     files = payload(source, host)
     version = json.loads(files["sources.json"])["plugin_version"]
     output.mkdir(parents=True, exist_ok=True)

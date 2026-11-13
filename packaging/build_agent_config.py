@@ -19,7 +19,7 @@ if sys.version_info < (3, 11):
 
 README = """# Native Agent Config
 
-独立管理 Codex、Claude Code 与 Antigravity 已发现的原生 Agent 模型字段。
+独立管理 Codex、Claude Code 与 Antigravity 已发现的原生 Agent 模型字段与调用偏好。
 网页同时提供 Codex、Claude Code 工作流的用户级默认与当前项目继承／启用／停用。
 配置工具与任何工作流插件、角色清单、安装器及中央项目绑定相互独立。
 
@@ -46,6 +46,22 @@ serve 可前台运行并使用 --port 0 和 --idle-timeout 1800；mcp 是手动�
 可加 --project <绝对项目目录>。这些选项不修改 HOME、CODEX_HOME 或 PATH。
 默认直接读取本机实际用户配置根。保存直接修改所选可写原生定义；插件来源保持只读。
 保存结果包含逐项状态、必要的备份恢复路径与清理状态；磁盘保存不证明当前会话已加载。
+
+调用偏好按用户通用、用户实际 Agent、当前项目通用、当前项目实际 Agent 逐字段继承。
+独立文件固定保存在实际宿主配置根的 native-agent-config/dispatch-preferences.json，
+不跟随 --data-dir 或安装版本迁移；插件缓存始终只读。默认目标 * 不是原生 Agent 名。
+Codex 的本机模型目录来自实际 app-server 或显式目录，Claude 使用实际设置与菜单的
+只读投影；目录可见不证明账户可调用。AGY 会话模型 slug 与子代理 inherit/flash/pro
+分开处理，不支持的参数不伪造。模型变化后必须重新确认该模型可用的推理档位。
+可从包外使用同源纯标准库只读入口，缺文件无偏好，损坏/危险来源/未知版本明确失败：
+
+```sh
+bash <解压根>/scripts/python_runtime.sh -B -X utf8 <解压根>/native_config/preference_contract.py --host codex --agent '*' --project <绝对项目目录>
+```
+
+该查询不启动 HTTP、不准备组件、不安装 MCP、不修改宿主设置；测试可显式加 --home。
+model=inherit 表示不传模型覆盖；当前派发 schema 无法表达已配置字段时必须报告并阻断，
+不能静默丢弃。完整原生定义仍可能按宿主规则优先，runtime_verified 始终为 false。
 
 工作流卡与模型编辑分别预览、分别保存。继承只移除本层工作流启停键；Codex 项目写
 .codex/config.toml，Claude 项目写 .claude/settings.local.json，后者仅影响本机当前项目，

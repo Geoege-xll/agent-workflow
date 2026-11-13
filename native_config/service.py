@@ -12,7 +12,7 @@ import secrets
 import threading
 import time
 
-from . import activation, activation_codecs, adapters, catalog as model_catalog, codecs, inventory, storage
+from . import activation, activation_codecs, adapters, catalog as model_catalog, codecs, inventory, preferences, storage
 from .contracts import (ConfigError, ConflictError, FIELDS, HOSTS, MAX_BATCH,
                         MAX_INVENTORY_BYTES, absolute_path, host_name, json_bytes,
                         unique_json, validate_fields)
@@ -27,6 +27,7 @@ class _Context:
     inventory: inventory.Inventory
     activation: activation.Activation
     revision: str
+    preferences: preferences.Preferences
 
 
 @dataclass(frozen=True)
@@ -34,10 +35,12 @@ class _Plan:
     before: _Context
     writes: tuple[storage.Write, ...]
     created: float
+    kind: str = "native"
+    catalog_stamp: str | None = None
 
     @property
     def cost(self):
-        return self.before.inventory.total_bytes + self.before.activation.total_bytes + sum(len(item.after) for item in self.writes)
+        return self.before.inventory.total_bytes + self.before.activation.total_bytes + len(self.before.preferences.snapshot.body or b"") + sum(len(item.after) for item in self.writes)
 
 
 class ModelService:
@@ -51,12 +54,8 @@ class ModelService:
         self.environment = dict(os.environ)
         self.environment["HOME"] = str(self.home)
         # 显式 home 是测试/脚本隔离边界；父进程的真实宿主定位不能覆盖它。
-        self.host_roots = {"codex": self.home / ".codex", "claude": self.home / ".claude",
-                           "antigravity": self.home / ".gemini/config"}
-        if home is None:
-            for host, variable in (("codex", "CODEX_HOME"), ("claude", "CLAUDE_CONFIG_DIR")):
-                if self.environment.get(variable):
-                    self.host_roots[host] = absolute_path(self.environment[variable])
+        # 配置服务与脱离服务的插件 reader 共用唯一路径规则；data_dir 只定位服务。
+        self.host_roots = {host: preferences.contract.host_root(host, home, self.environment) for host in HOSTS}
         self.environment.update(CODEX_HOME=str(self.host_roots["codex"]),
                                 CLAUDE_CONFIG_DIR=str(self.host_roots["claude"]))
         if client_versions is not None and (not isinstance(client_versions, dict) or set(client_versions) - set(HOSTS)):
@@ -79,8 +78,9 @@ class ModelService:
         enabled = activation.capture(host, scope, path, self.host_roots[host], data_dir=self.data_dir,
                                      home=self.home if self._explicit_home else None,
                                      environment=self.environment)
-        revision = hashlib.sha256(json_bytes([host, scope, str(path) if path else None, identity, found.revision(), enabled.revision()])).hexdigest()
-        return _Context(host, scope, path, found, enabled, revision)
+        preferred = preferences.capture(host, self.host_roots[host], path)
+        revision = hashlib.sha256(json_bytes([host, scope, str(path) if path else None, identity, found.revision(), enabled.revision(), preferred.revision()])).hexdigest()
+        return _Context(host, scope, path, found, enabled, revision, preferred)
 
     def _capabilities(self, host):
         return adapters.capabilities(host, self._versions.get(host), self._version_status.get(host, "not_probed"))
@@ -117,10 +117,24 @@ class ModelService:
                 "runtime_verified": False}
 
     def _public(self, state):
+        # 目录缓存来源与配置写入 CAS 是两个独立概念。这里只检查同源摘要，
+        # 不启动宿主、不续期缓存；来源变化由界面比对 catalog.source_stamp 后
+        # 标记目录过期，不能因此清空已有草稿或改变 context.revision。
+        diagnostics = list(state.inventory.diagnostics)
+        try:
+            catalog_stamp = model_catalog.source_stamp(self.host_roots[state.host], state.project,
+                                                        self.environment, host=state.host)
+        except (ValueError, OSError, TypeError, RecursionError):
+            catalog_stamp = None
+            diagnostics.append({"code": "catalog_source_unavailable",
+                                "message": "模型目录来源暂时无法安全读取；现有目录不能视为最新，请修复来源后刷新。调用偏好仍可编辑。",
+                                "runtime_verified": False})
         return {"host": state.host, "scope": state.scope, "project": str(state.project) if state.project else None,
-                "revision": state.revision, "roles": [self._row(agent, state.scope, complete=state.inventory.complete) for agent in state.inventory.agents],
-                "capabilities": self._capabilities(state.host), "diagnostics": state.inventory.diagnostics,
+                "revision": state.revision, "catalog_source_stamp": catalog_stamp,
+                "roles": [self._row(agent, state.scope, complete=state.inventory.complete) for agent in state.inventory.agents],
+                "capabilities": self._capabilities(state.host), "diagnostics": diagnostics,
                 "workflow_activation": state.activation.public,
+                "dispatch_preferences": preferences.public(state.preferences, state.scope, state.inventory.agents),
                 "runtime_verified": False, "inventory_complete": state.inventory.complete,
                 "discovery_scope": "documented_local_files_and_observed_install_records"}
 
@@ -132,11 +146,11 @@ class ModelService:
         if cached is None or state.host != "codex":
             return "Model and effort capability are unverified; saving a definition does not verify execution."
         try:
-            fresh = model_catalog.source_stamp(self.host_roots[state.host], state.project)
+            fresh = model_catalog.source_stamp(self.host_roots[state.host], state.project, self.environment, host=state.host)
         except (ValueError, OSError):
             return "Model capability source is unavailable; capability remains unverified."
         if cached.get("source_stamp") != fresh:
-            return "Model capability source changed; explicitly refresh the catalog."
+            raise ConflictError("模型能力来源已变化，请刷新目录后重新预览")
         selected = next((row for row in cached["models"] if row["id"] == values.get("model")), None)
         if selected is not None and selected.get("efforts_verified") and "effort" in values:
             if values["effort"] not in selected["efforts"]:
@@ -147,16 +161,22 @@ class ModelService:
     def preview(self, request):
         request = unique_json(json_bytes(request))
         if (not isinstance(request, dict) or "host" not in request
-                or set(request) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation"}):
+                or set(request) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation", "dispatch_preferences"}):
             raise ConfigError("预览请求字段无效")
+        if "dispatch_preferences" in request and ({"edits", "reset", "workflow_activation"} & set(request)):
+            raise ConfigError("调用偏好必须独占预览，不与原生定义或启停混合")
         if "workflow_activation" in request and ({"edits", "reset"} & set(request)):
             raise ConfigError("工作流启停不能与模型编辑或重置混合预览")
         state = self._capture(request["host"], request.get("scope", "global"), request.get("project"))
         if not isinstance(request.get("revision"), str) or request["revision"] != state.revision:
             raise ConflictError("原生 Agent 清单或文件在编辑后变化")
+        if "dispatch_preferences" in request:
+            writes, changes, warnings = preferences.preview(state.preferences, state.scope, request["dispatch_preferences"],
+                                                            state.inventory.agents, lambda values: self._selection(state, values))
+            return self._store_preview(state, writes, changes, warnings, kind="dispatch_preferences")
         if "workflow_activation" in request:
             writes, changes, warnings = activation.preview(state.activation, request["workflow_activation"])
-            return self._store_preview(state, writes, changes, warnings)
+            return self._store_preview(state, writes, changes, warnings, kind="workflow_activation")
         edits, reset = request.get("edits", {}), request.get("reset", False)
         if not isinstance(edits, dict) or type(reset) is not bool or (reset and edits):
             raise ConfigError("编辑与重置参数无效")
@@ -197,9 +217,27 @@ class ModelService:
             raise ConfigError("一次批量原生文件超过容量限制")
         return self._store_preview(state, writes, changes, warnings)
 
-    def _store_preview(self, state, writes, changes, warnings):
+    def _store_preview(self, state, writes, changes, warnings, *, kind="native"):
         """启停和模型共用容量、TTL、单次消费与保存计划，不创建第二事务通道。"""
-        plan = _Plan(state, tuple(writes), time.monotonic())
+        cached = self._catalogs.get((state.host, str(state.project)))
+        stamp = None
+        if kind != "workflow_activation" and cached and cached.get("status") == "ready":
+            try:
+                fresh = model_catalog.source_stamp(self.host_roots[state.host], state.project,
+                                                   self.environment, host=state.host)
+            except (ValueError, OSError, TypeError, RecursionError):
+                # _selection 已把不可得来源明确降为未知；手输偏好未采用目录
+                # 能力，不能在保存阶段又偷偷绑定此前缓存而使其必然失败。
+                fresh = None
+            if fresh is None:
+                warnings.append("模型目录来源无法安全读取，本次偏好按未知能力保存；旧目录能力不作为当前证据。")
+            elif fresh != cached.get("source_stamp"):
+                # _selection 与计划存储之间也可能换源；可读的新来源绝不能
+                # 被当成未知手输而绕过此前目录选择的并发保护。
+                raise ConflictError("模型目录来源在预览期间变化，请刷新后重新预览")
+            else:
+                stamp = fresh
+        plan = _Plan(state, tuple(writes), time.monotonic(), kind, stamp)
         with self._lock:
             self._plans = {key: value for key, value in self._plans.items() if plan.created - value.created < 900}
             if len(self._plans) >= 128 or sum(item.cost for item in self._plans.values()) + plan.cost > 32 * 1024 * 1024:
@@ -210,8 +248,8 @@ class ModelService:
         selected = [self._row(agents[item.role], state.scope, complete=state.inventory.complete) for item in writes if item.role in agents]
         blocked = [row["blocked_reason"] for row in selected if row["blocked_reason"]]
         return {"preview_id": opaque, "changes": changes, "warnings": list(dict.fromkeys(warnings)),
-                "effect": adapters.effect(), "dispatch_ready": not blocked,
-                "blocked_reason": "; ".join(dict.fromkeys(blocked)) or None}
+                "effect": preferences.effect() if kind == "dispatch_preferences" else adapters.effect(), "dispatch_ready": False if kind == "dispatch_preferences" else not blocked,
+                "blocked_reason": "调用偏好等待当前宿主工具能力映射；保存不证明运行生效。" if kind == "dispatch_preferences" else "; ".join(dict.fromkeys(blocked)) or None}
 
     def apply(self, preview_id):
         if not isinstance(preview_id, str) or not 1 <= len(preview_id) <= 128:
@@ -223,6 +261,10 @@ class ModelService:
             before = plan.before
             creating = any(item.before.body is None for item in plan.writes)
             def guard(*, initial=False):
+                if plan.catalog_stamp is not None:
+                    fresh = model_catalog.source_stamp(self.host_roots[before.host], before.project, self.environment, host=before.host)
+                    if fresh != plan.catalog_stamp:
+                        raise ConflictError("模型目录来源在预览后变化，请刷新后重新预览")
                 now = self._capture(before.host, before.scope, before.project)
                 # 首次 mkdir 是 storage 已核实目录链后的自有变化。其余文件、
                 # 安装身份、继承来源仍逐次检查；目标父目录由 storage 的原链
@@ -231,17 +273,21 @@ class ModelService:
                 if creating and not initial:
                     same = (now.inventory.revision() == before.inventory.revision()
                             and now.activation.revision(include_target_parent=False)
-                            == before.activation.revision(include_target_parent=False))
+                            == before.activation.revision(include_target_parent=False)
+                            and now.preferences.revision(include_parent=False) == before.preferences.revision(include_parent=False))
                 if not same:
                     raise ConflictError("原生 Agent 来源在预览后变化，请重新预览")
                 for item in plan.writes:
                     if item.role == "workflow_activation":
                         activation_codecs.parse(before.host, item.after)
+                    elif item.role == "dispatch_preferences":
+                        preferences.contract.parse_document(item.after, before.host)
                     else:
                         codecs.parse(before.host, item.after)
             guard(initial=True)
             result = storage.write_batch(plan.writes, guard)
-            response = {**result, "effect": adapters.effect(saved=result["saved"],
+            effect_factory = preferences.effect if plan.kind == "dispatch_preferences" else adapters.effect
+            response = {**result, "effect": effect_factory(saved=result["saved"],
                         published=result["published"] or result.get("namespace_touched", False))}
             try:
                 response["context"] = self.context(before.host, before.scope, before.project)
@@ -266,8 +312,7 @@ class ModelService:
                 self._versions[host] = observed["version"]
         try:
             result = model_catalog.discover(host, self.host_roots[host], state.project, self.environment)
-            if host == "codex":
-                result["source_stamp"] = model_catalog.source_stamp(self.host_roots[host], state.project)
+
         except (ValueError, OSError, TypeError, RecursionError):
             result = {"host": host, "status": "failed", "models": [], "notes": ["Official model discovery failed; native saved values remain visible."], "runtime_verified": False}
         self._catalogs[(host, str(state.project))] = copy.deepcopy(result)

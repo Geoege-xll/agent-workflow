@@ -1,6 +1,6 @@
 # 安装 Agent Workflow 3.0 alpha 插件
 
-当前候选为 `3.0.0-alpha.5`，默认使用官方客户端从自有 Git alpha 渠道安装；无需克隆工作流源码或本地构建。此渠道不等于官方公开目录上架或稳定发行，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
+当前源码版本为 `3.0.0-alpha.7`，配置组件为 `0.1.0-alpha.4`。默认使用官方客户端从自有 Git alpha 渠道安装，无需克隆工作流源码或本地构建；实际版本以客户端列表与发行资产为准。此渠道不等于官方公开目录上架或稳定发行，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
 
 ## 前置条件
 
@@ -79,6 +79,6 @@ resource 检查打包权威路径与摘要；inspect 检查明确项目及 adapt
 
 status/doctor 不准备组件、创建连接或权限记录，不启动 HTTP、浏览器或模型查询。普通业务无需组件或 MCP；显式维护不读取整份 WORKFLOW、不建业务任务图或派发子代理。插件缓存角色只读，各平台可写原生字段和覆盖范围见[原生配置说明](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/agent-configuration.md)。
 
-独立配置工具 `0.1.0-alpha.3` 已作为预发行资产发布；这一事实不代表工作流插件已上架公开市场或成为稳定发行。当前固定组件描述只采用真实下载核验的地址与摘要。
+本轮组件 `0.1.0-alpha.4` 提供本机模型目录、用户／项目调用偏好和工作流项目启停；准确发行状态以 Release 资产与固定描述为准，不从源码版本推断已经安装。配置页默认进入“调用偏好”，原生定义文件为独立模式；Codex 零原生文件或 Claude 仅有只读插件角色时仍有通用偏好入口。纯只读解析器随插件交付，不需要常驻配置服务。
 
-`0.1.0-alpha.4` 源码候选已增加工作流项目启停，但尚未发布；当前安装命令不会自动获得该候选功能。停用后的独立恢复方式及各平台边界见[配置工具说明](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/agent-configuration.md)。
+组件首次准备仍须单独确认，并只采用实际下载核验的固定地址与摘要。它不代表工作流已上架公开目录或成为稳定发行；停用后的独立恢复、字段支持和实际运行边界见[配置工具说明](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/agent-configuration.md)。

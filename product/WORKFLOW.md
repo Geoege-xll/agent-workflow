@@ -32,6 +32,15 @@ This alpha uses the existing unpinned source-pack `schema_version: 2` graph and 
 
 Native resource parsing, ownership checks, model catalogs and successful configuration saves do not verify native role selection or actual model/effort execution. Where a host tool has no native role selector, `task_name` is a label and cannot prove role/model selection. Keep `runtime_verified: false` until an actual native session proves the corresponding behavior. Plugin cache definitions are read-only; an optional explicit `agent-config` maintenance action does not create new host capabilities or business approval.
 
+Before each business native dispatch, PM reads optional logical preferences through the fixed
+`plugins/source_pack.py dispatch-preferences` entry and maps them only to the current native
+tool's observed schema, following [dispatch preferences](../platforms/shared/skills/xy-workflow/references/dispatch.md#read-only-native-dispatch-preferences).
+This same-source standard-library reader requires no configuration service, web console,
+component preparation or MCP. Missing preferences retain native defaults; corrupt preferences
+or configured fields that cannot be mapped block that dispatch with a clear reason. Explicit
+maintenance Skill routing never enters this business step. No read or argument projection
+proves effective native model/effort execution or overrides a higher-priority native definition.
+
 See [helper execution boundaries](../platforms/shared/skills/xy-workflow/references/dispatch.md#workflow-helper-execution) and [runtime record tools](../platforms/shared/skills/xy-workflow/references/runtime-records.md) for the original helper arguments and task-record consumers, applying the plugin wrapper above. Obtain built-in text, rule IDs, severity and fingerprints from this verified plugin's packaged sources; continue reading project-specific leaves and indexes from actual project files. Keep an absent project index null; do not create GENERAL or an empty index.
 
 ## 2. PM and Roles

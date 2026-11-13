@@ -31,7 +31,9 @@ GROUPS = {
                       "task_graph", "scheduler_boundaries", "foundation_qa", "plugin_worktree_delivery") + tuple(
                           "tests.test_task_graph_records." + name for name in (
                               "RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")),
-    "native-config": modules("native_config", "native_inventory", "native_config_codecs", "native_config_commands",
+    # 调用偏好属于独立配置核心；current 直接继承本组，确保实际 CI 同时执行其
+    # 解析合同与事务安全回归，不能只依赖作者临时显式点选这些测试节点。
+    "native-config": modules("native_config", "native_preferences", "native_inventory", "native_config_codecs", "native_config_commands",
                              "native_config_server", "native_config_mcp", "native_config_packaging", "plugin_console",
                              "plugin_config_launcher", "config_distribution"),
     "codex": modules("codex_workflow", "shared_memory_contract"),

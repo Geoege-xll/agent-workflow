@@ -76,7 +76,7 @@ class ConsoleJavascriptTest(unittest.TestCase):
         # Node 直接导入生产函数；令牌只用测试字符串，不接触本机连接记录或真实配置。
         script = r"""
 const assert = require('node:assert/strict');
-const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey} = require('./native_config/web/console.js');
+const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions} = require('./native_config/web/console.js');
 const row = (id, fields = {}) => ({role: id, name: '同名 Agent', origin: 'user', scope: 'global', writable: true,
   overrides: {model: 'saved/unknown:model', effort: 'high'}, effective: {model: 'saved/unknown:model', effort: 'high'},
   sources: {model: 'user', effort: 'user'}, dispatch_ready: false, blocked_reason: '尚未观察到客户端版本', ...fields});
@@ -232,6 +232,52 @@ const mixed = new ModelApi('test',async () => response({...plan,changes:[{role:'
 await assert.rejects(mixed.previewActivation(location,'revision-a','enabled'), error => error.code==='invalid_response');
 const wrongScope = new ModelApi('test',async () => response({...plan,changes:[{...change,scope:'global'}]}));
 await assert.rejects(wrongScope.previewActivation(location,'revision-a','enabled'), error => error.code==='invalid_response');
+""")
+
+    def test_preferences_empty_native_inventory_three_drafts_and_model_specific_options(self):
+        # 直接运行生产状态/API：Codex 空定义与 Claude 只读插件都不能让独立偏好入口失效。
+        self.run_javascript(r"""
+const target = (id, fields={}) => ({target:id,name:id,origin:id==='*'?'default':'plugin',overrides:{},effective:{},
+  sources:{model:'host_default',effort:'host_default'},writable:true,read_only_reason:null,dispatch_ready:false,
+  discovered:id!=='*',invoke_name_verified:id!=='*',runtime_verified:false,...fields});
+const preferences = targets => ({status:'ready',targets,capabilities:{model:true,effort:true,model_format:'model_id',efforts:['low','high','ultra']},runtime_verified:false});
+const draft = new Draft({host:'codex',scope:'global'});
+const ctx={...context([]),dispatch_preferences:preferences([target('*')])};
+draft.accept(contextContract(ctx));
+draft.preferences.set('*','model','model-a'); draft.preferences.set('*','effort','high');
+assert.equal(draft.preferences.dirty,true,'无原生 Agent 仍可编辑 *');
+assert.equal(draft.dirty,false); assert.equal(draft.anyDirty,true);
+draft.accept(ctx); assert.equal(draft.preferences.value('*','effort'),'high','重读保留偏好草稿');
+draft.accept({...ctx,roles:[row('native-user')],dispatch_preferences:preferences([target('*'),target('vendor:worker')])});
+draft.set('native-user','model','native-draft'); draft.preferences.set('vendor:worker','model','model-b');
+draft.accept(draft.context,'dispatch_preferences');
+assert.equal(draft.preferences.dirty,false);assert.equal(draft.value('native-user','model'),'native-draft');
+draft.preferences.set('*','model','model-a'); draft.accept(draft.context,'model');
+assert.equal(draft.dirty,false);assert.equal(draft.preferences.dirty,true);
+const claude={...ctx,host:'claude',roles:[row('plugin-only',{writable:false,origin:'plugin'})],
+ dispatch_preferences:{...preferences([target('*'),target('agent-workflow:xy-web')]),
+ capabilities:{model:true,effort:true,model_format:'alias',model_aliases:['sonnet','opus','inherit'],efforts:['low','high']}}};
+draft.accept(contextContract(claude));draft.preferences.set('agent-workflow:xy-web','model','opus');
+assert.equal(draft.preferences.value('agent-workflow:xy-web','model'),'opus');assert.equal(draft.context.roles[0].writable,false);
+assert.throws(()=>preferenceContract({...ctx.dispatch_preferences,targets:[]}),ApiError);
+assert.throws(()=>preferenceContract({...ctx.dispatch_preferences,targets:[target('*'),target('*')]}),ApiError);
+const catalog={models:[{id:'model-a',efforts:['low'],efforts_verified:true},{id:'model-b',efforts:['high'],efforts_verified:true},
+{id:'sonnet',label:'sonnet → local-full-id',usage:'dispatch_alias',efforts:[],efforts_verified:false},
+{id:'full-id',usage:'native_definition_only'}]};
+assert.deepEqual(effortOptions(ctx,catalog,'model-a',true).values,['low']);
+assert.deepEqual(effortOptions(ctx,catalog,'model-b',true).values,['high']);
+assert.equal(effortOptions(ctx,catalog,'unknown',true).verified,false);
+assert.equal(modelCandidates(claude,catalog,true).some(row=>row.id==='full-id'),false);
+assert.equal(modelCandidates(claude,catalog,false).some(row=>row.id==='full-id'),true);
+assert.equal(modelCandidates(claude,catalog,true).find(row=>row.id==='sonnet').label,'sonnet → local-full-id');
+const agy={...ctx,host:'antigravity',dispatch_preferences:{...ctx.dispatch_preferences,
+capabilities:{model:true,effort:false,model_format:'tier',model_tiers:['inherit','flash','pro']}}};
+assert.deepEqual(modelCandidates(agy,{models:[{id:'session-only',usage:'session_only'}],subagent_models:[{id:'pro',usage:'subagent_tier'}]},true).map(row=>row.id),['inherit','flash','pro']);
+assert.deepEqual(effortOptions(agy,catalog,'pro',true).values,[]);
+const calls=[];const api=new ModelApi('test',async(path,init)=>{calls.push(JSON.parse(init.body));return response({preview_id:'preference-plan',changes:[{target:'*',role:'*',field:'model'}],warnings:[],effect:{kind:'dispatch_preferences',runtime_verified:false}});});
+await api.previewPreferences({host:'codex',scope:'project',project:'/tmp/isolated'},'rev',{ '*':{model:null,effort:'low'} });
+assert.deepEqual(calls[0],{host:'codex',scope:'project',project:'/tmp/isolated',revision:'rev',dispatch_preferences:{edits:{'*':{model:null,effort:'low'}},reset:false}});
+assert.equal(Object.hasOwn(calls[0],'edits'),false);assert.equal(Object.hasOwn(calls[0],'reset'),false);assert.equal(Object.hasOwn(calls[0],'workflow_activation'),false);
 """)
 
     def test_apply_error_receipts_keep_recovery_and_reject_untrusted_shapes(self):

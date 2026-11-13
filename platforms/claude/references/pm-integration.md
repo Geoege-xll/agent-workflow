@@ -1,5 +1,10 @@
 # Claude Code — PM bootstrap
 
+业务派发遵守共享 [只读偏好合同](../../shared/skills/xy-workflow/references/dispatch.md#read-only-native-dispatch-preferences)，
+以当前已核实插件的实际 plugin-qualified `subagent_type` 为调用身份；通用入口查 `*`。
+调用 model 只接受官方 alias；inherit 不传覆盖。effort 需实际观察客户端 >= 2.1.292 且当前
+Agent schema 暴露支持，任一缺失则已配置 effort 明确阻断本次派发；不改权限或启动服务。
+
 This entire managed section applies only when the current host is Claude Code.
 Codex and Antigravity use their own integration sections; do not apply their tool aliases here.
 

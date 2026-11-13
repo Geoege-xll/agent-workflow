@@ -86,6 +86,25 @@ class McpProtocolTest(unittest.TestCase):
             self.assertNotIn("secret", json.dumps(result))
             self.assertNotIn("机密", json.dumps(result, ensure_ascii=False))
 
+    def test_existing_readonly_query_projects_actual_dispatch_preferences(self):
+        from native_config import ModelService
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw).resolve()
+            service = ModelService(home / "state", home)
+            before = service.context("codex")
+            plan = service.preview({"host": "codex", "revision": before["revision"],
+                                    "dispatch_preferences": {"edits": {"*": {"model": "gpt-6", "effort": "high"}}}})
+            self.assertTrue(service.apply(plan["preview_id"])["saved"])
+            self.session.service = service
+            self.ready()
+            result = self.call("get_model_preferences")["result"]
+            self.assertFalse(result["isError"])
+            self.assertRegex(result["structuredContent"]["catalog_source_stamp"], r"^[0-9a-f]{64}$")
+            preferences = result["structuredContent"]["dispatch_preferences"]
+            self.assertEqual(preferences["targets"][0]["effective"], {"model": "gpt-6", "effort": "high"})
+            self.assertFalse(preferences["runtime_verified"])
+            self.assertFalse((home / "state").exists())
+
     def test_version_negotiation_and_malformed_json_capacity_recovery(self):
         negotiated = self.session.handle(initialize(version="2099-01-01"))["result"]
         self.assertEqual(negotiated["protocolVersion"], "2025-11-25")

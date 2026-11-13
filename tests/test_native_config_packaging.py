@@ -82,6 +82,34 @@ class StandalonePackageTest(unittest.TestCase):
                 "--data-dir", str(self.state), "--home", str(self.home), "--host", "codex",
                 "--project", str(self.project), *extra]
 
+    def test_detached_preference_reader_matches_source_for_all_hosts(self):
+        installed = self.unpack()
+        relative = "native_config/preference_contract.py"
+        self.assertEqual((ROOT / relative).read_bytes(), (installed / relative).read_bytes())
+        # 独立包从包外读取同一显式 home；查询不需要 data-dir 或服务。宿主间仅
+        # 根位置不同，内容与逐字段继承均由唯一合同负责，不在打包器另写解析。
+        for host, suffix in (("codex", ".codex"), ("claude", ".claude"), ("antigravity", ".gemini/config")):
+            with self.subTest(host=host):
+                path = self.home / suffix / "native-agent-config/dispatch-preferences.json"
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps({"schema_version": 1, "host": host,
+                    "defaults": {"model": "inherit"}, "agents": {}, "projects": {str(self.project): {
+                        "defaults": {"model": "inherit"}, "agents": {}}}}))
+                before = path.read_bytes()
+                arguments = ["--host", host, "--agent", "*", "--home", str(self.home),
+                             "--project", str(self.project)]
+                values = []
+                for source in (installed / relative, ROOT / relative):
+                    result = subprocess.run([sys.executable, "-I", "-B", str(source), *arguments],
+                        cwd=self.base, capture_output=True, text=True, timeout=8)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    values.append(json.loads(result.stdout))
+                self.assertEqual(values[0], values[1])
+                self.assertEqual({"model": "inherit"}, values[0]["preferences"])
+                self.assertFalse(values[0]["runtime_verified"])
+                self.assertEqual(before, path.read_bytes())
+        self.assertFalse(self.state.exists())
+
     def test_reproducible_offline_payload_and_shell_queries_have_no_http_prerequisite(self):
         first, second = self.build(self.base / "first"), self.build(self.base / "second")
         self.assertEqual(first.read_bytes(), second.read_bytes())

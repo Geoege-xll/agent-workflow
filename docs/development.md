@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生 Agent 配置工具。插件版本来自 `product/PLUGIN_VERSION`（`3.0.0-alpha.7`），独立工具版本来自 `native_config/VERSION`（`0.1.0-alpha.3`）；两者分别构建和交付。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+当前产品是官方工作流插件与独立原生 Agent 配置工具。插件版本来自 `product/PLUGIN_VERSION`（`3.0.0-alpha.7`），独立工具版本来自 `native_config/VERSION`（`0.1.0-alpha.4`）；两者分别构建和交付。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
 ## 权威与职责
 
@@ -23,7 +23,9 @@
 | `.github/workflows/publish-plugins.yml` | 仅 main 手动触发，固定来源 SHA 并发布同 SHA 成功 CI 的候选 |
 | `tests/`、`scripts/test_workflow.sh` | 当前产品行为、合同、原型与候选交付验证 |
 
-产品、角色和 Skill 保持单一权威；使用文档说明入口与边界，不复制完整执行规则。插件不导入配置核心，普通业务不依赖组件、HTTP 或 MCP。配置网页、HTTP、脚本和 MCP 复用同一核心，不各写一套校验或保存。插件缓存只读，原生配置能力按宿主字段与覆盖语义处理，不恢复固定七角色的旧偏好合并机制。
+产品、角色和 Skill 保持单一权威；使用文档说明入口与边界，不复制完整执行规则。插件不导入配置服务，普通业务不依赖组件、HTTP 或 MCP。配置网页、HTTP、脚本和 MCP 复用同一核心，不各写一套校验或保存。插件缓存只读，原生完整定义的覆盖语义不变。
+
+调用偏好的唯一只读合同源是 `native_config/preference_contract.py`，纯标准库且不导入服务。插件构建逐字节投影为 `plugins/dispatch_preferences.py` 并记录来源摘要，`source_pack.py dispatch-preferences` 校验出处后调用；源包开发运行原文件。两边共用固定宿主根、版本化格式与字段解析，不手写第二份验证逻辑，也不恢复只支持固定七角色的旧管理器。目录发现、偏好预览和保存仍由独立核心持有，UI 不直接写文件。
 
 3.0 不以中央登记、CLI/TUI 管理器、Homebrew/npm 或旧项目同步作为当前入口。尚存的历史源码和测试只按真实消费者维护；`product/VERSION` 不表示插件版本，不将旧安装机制重新包装成默认流程。
 

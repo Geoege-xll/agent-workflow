@@ -15,7 +15,7 @@
       <div><p class="eyebrow">原生 AGENT 设置</p><h1>Agent 与工作流配置</h1></div>
       <p class="header-note">三平台 · 用户级与项目配置</p>
     </header>
-    <p class="intro">管理工作流启停，为原生 Agent 选择模型与推理级别。按真实定义分别显示用户级、项目级和插件来源；可写权限与实际状态以当前平台返回的信息为准。</p>
+    <p class="intro">管理工作流启停与后续子代理调用偏好，或编辑可写的原生定义。插件缓存保持只读；保存配置、后续派发读取与实际运行是独立状态。</p>
 
     <section class="workspace" aria-label="Agent 与工作流配置工作区">
       <div class="platform-tabs" role="tablist" aria-label="选择平台">
@@ -63,7 +63,15 @@
             <p class="help">文件保存、等待新会话加载、实际运行未验证是独立状态。重新读取仅回读文件；当前会话已加载的上下文不会因此清除。</p>
             <div class="footer-actions"><button id="discard-activation" class="secondary" type="button" disabled>放弃启停草稿</button><button id="preview-activation" class="primary" type="button" disabled>预览工作流启停</button></div>
           </section>
-          <div id="catalog-info" class="catalog-info"><span id="catalog-status">模型目录尚未刷新。初次打开只读取配置。</span><p id="capability-status" class="help"></p></div>
+          <fieldset class="editing-modes" aria-describedby="editing-help">
+            <legend>模型编辑入口</legend>
+            <label class="scope-choice"><input type="radio" name="editor-mode" value="dispatch_preferences" checked><span><strong>调用偏好</strong><small>通用默认与真实调用身份</small></span></label>
+            <label class="scope-choice"><input type="radio" name="editor-mode" value="model"><span><strong>原生定义文件</strong><small>用户／项目文件；插件只读</small></span></label>
+          </fieldset>
+          <p id="editing-help" class="help"></p>
+          <p id="preference-location" class="location"></p>
+          <p id="native-readonly-summary" class="feedback" hidden>当前范围没有可写的原生定义。可切换到“调用偏好”编辑通用默认或已发现调用身份；插件缓存不可在此改写。用户或项目定义需要切换到所属范围。</p>
+          <div id="catalog-info" class="catalog-info"><span id="catalog-status">模型目录尚未刷新。初次打开只读取配置。</span><p id="capability-status" class="help"></p><details><summary>本机目录来源与参数映射</summary><ul id="catalog-sources"></ul></details></div>
           <details id="discovery-diagnostics" class="discovery-diagnostics" hidden>
             <summary id="discovery-summary">发现诊断</summary>
             <p id="discovery-completeness" class="help"></p>
@@ -75,14 +83,14 @@
               <div class="field"><label class="check-label"><input id="batch-model-enabled" type="checkbox">修改模型</label><label for="batch-model" class="sr-only">批量模型 ID</label><input id="batch-model" type="text" list="model-options" placeholder="留空以清除原生字段" maxlength="200" spellcheck="false" disabled></div>
               <div class="field"><label class="check-label"><input id="batch-effort-enabled" type="checkbox">修改推理级别</label><label for="batch-effort" class="sr-only">批量推理级别</label><select id="batch-effort" disabled></select></div>
               <button id="apply-batch" type="submit" class="secondary" disabled>应用到所选</button>
-              <p class="help batch-help">仅修改勾选的字段。此操作先更新草稿，预览确认后才保存。</p>
+              <p class="help batch-help">仅修改勾选的字段。此操作先更新当前入口草稿，预览确认后才保存。</p><p id="batch-effort-help" class="help batch-help"></p>
             </form>
           </details>
           <datalist id="model-options"></datalist>
           <div id="role-list" class="role-list" aria-busy="true">
             <table class="agents-table">
               <caption class="sr-only">Agent 模型配置；每一行显示原生定义的已保存字段和当前草稿，实际运行模型未验证</caption>
-              <thead><tr><th class="selection-cell"><input id="select-all" type="checkbox" aria-label="选择所有可编辑的 Agent"></th><th scope="col">Agent / 来源</th><th scope="col">模型</th><th scope="col">推理级别</th><th scope="col">已保存定义值 / 状态</th></tr></thead>
+              <thead><tr><th class="selection-cell"><input id="select-all" type="checkbox" aria-label="选择所有可编辑目标"></th><th scope="col">目标 / 来源</th><th scope="col">模型</th><th scope="col">推理级别</th><th scope="col">已保存值 / 解析来源 / 状态</th></tr></thead>
               <tbody id="agent-rows"></tbody>
             </table>
             <p id="empty-state" class="empty-state">正在读取当前平台的 Agent…</p>

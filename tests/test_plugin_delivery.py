@@ -192,7 +192,8 @@ class PluginDeliveryTest(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes((PACK / relative).read_bytes())
         self.assertFalse((source / "plugin_runtime").exists())
-        self.assertFalse((source / "native_config").exists())
+        self.assertEqual([source / builder.PREFERENCE_SOURCE],
+                         list((source / "native_config").rglob("*")))
         self.assertFalse((source / "manager").exists())
         self.assertFalse((source / "scripts/plugin_service.py").exists())
         for host in builder.HOSTS:
@@ -203,6 +204,8 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertEqual("workflow-core", metadata["product"])
                     self.assertNotIn("model_service_included", metadata)
                     self.assertIn("lib/task_graph_cli.py", files.namelist())
+                    self.assertIn(builder.PREFERENCE_PROJECTION, files.namelist())
+                    self.assertFalse(any(name.startswith("native_config/") for name in files.namelist()))
 
     def test_local_sources_have_complete_payloads_and_real_relative_marketplace_targets(self):
         output = self.root / "local-source-output"
@@ -252,9 +255,98 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertFalse(metadata["runtime_verified"])
                 self.assertEqual("workflow-core", metadata["product"])
                 self.assertNotIn("model_service_included", metadata)
-                self.assertFalse(any(name.startswith(("plugin_runtime/", "native_config/", "manager/"))
+                self.assertEqual({builder.PREFERENCE_SOURCE},
+                                 {name for name in metadata["source_files"] if name.startswith("native_config/")})
+                self.assertFalse(any(name.startswith(("plugin_runtime/", "manager/"))
                                      for name in metadata["source_files"]))
                 self.assertTrue(metadata["pending_acceptance"])
+
+    def test_dispatch_reader_is_identical_to_its_only_standard_library_source(self):
+        expected = (PACK / builder.PREFERENCE_SOURCE).read_bytes()
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                actual = (root / builder.PREFERENCE_PROJECTION).read_bytes()
+                self.assertEqual(expected, actual)
+                metadata = json.loads((root / "sources.json").read_bytes())
+                projection = metadata["projections"][builder.PREFERENCE_PROJECTION]
+                digest = hashlib.sha256(expected).hexdigest()
+                self.assertEqual({"source": builder.PREFERENCE_SOURCE, "transform": "identity",
+                                  "source_sha256": digest, "projection_sha256": digest}, projection)
+                self.assertEqual(digest, metadata["source_files"][builder.PREFERENCE_SOURCE])
+        for body in (b"from .service import ConfigService", b"import native_config.server", b"import lib.role_models"):
+            with self.subTest(forbidden_import=body):
+                with self.assertRaisesRegex(ValueError, "standard library|relative imports"):
+                    builder.validate_preference_reader(body)
+
+    def test_detached_dispatch_preferences_use_same_source_without_http_or_configuration_writes(self):
+        # 三宿主均离开源码执行真正投影与 wrapper；fixture 只写显式隔离 home，
+        # 缺失、继承与损坏负控共享同一个根。有效结果与源包入口逐字段一致。
+        base = self.root / "dispatch-preferences"
+        home, project = base / "home", base / "project"
+        project.mkdir(parents=True)
+        suffixes = {"codex": ".codex", "claude": ".claude", "antigravity": ".gemini/config"}
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                arguments = ["dispatch-preferences", "--host", host, "--agent", "*",
+                             "--project", str(project), "--home", str(home)]
+                command = [sys.executable, "-I", "-B", str(root / "plugins/source_pack.py"), *arguments]
+                env = isolated_environment(base)
+                def query(argv):
+                    return subprocess.run(argv, cwd=base, env=env, capture_output=True, text=True, timeout=10)
+                missing = query(command)
+                self.assertEqual(0, missing.returncode, missing.stderr)
+                self.assertEqual({"schema_version", "host", "agent", "status", "configured", "preferences",
+                                  "sources", "runtime_verified"}, set(json.loads(missing.stdout)))
+                self.assertFalse(json.loads(missing.stdout)["configured"])
+                path = home / suffixes[host] / "native-agent-config/dispatch-preferences.json"
+                self.assertFalse(path.parent.exists())
+                path.parent.mkdir(parents=True)
+                document = {"schema_version": 1, "host": host, "defaults": {"model": "inherit"},
+                            "agents": {"agent-workflow:xy-qa": {"model": "ignored-agent-model"}} if host == "codex" else {},
+                            "projects": {str(project): {"defaults": {"model": "inherit"}, "agents": {}}}}
+                path.write_text(json.dumps(document))
+                before = path.read_bytes()
+                result = query(command)
+                source = query([sys.executable, "-I", "-B", str(PACK / "plugins/source_pack.py"), *arguments])
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(0, source.returncode, source.stderr)
+                self.assertEqual(json.loads(source.stdout), json.loads(result.stdout))
+                value = json.loads(result.stdout)
+                self.assertEqual({"model": "inherit"}, value["preferences"])
+                self.assertEqual("project_default", value["sources"]["model"])
+                self.assertFalse(value["runtime_verified"])
+                self.assertEqual(before, path.read_bytes())
+                path.write_text('{"secret_fixture":"must-never-echo"}')
+                rejected = query(command)
+                self.assertNotEqual(0, rejected.returncode)
+                self.assertEqual("invalid_preferences", json.loads(rejected.stdout)["error"]["code"])
+                self.assertNotIn("must-never-echo", rejected.stdout + rejected.stderr)
+                path.unlink()
+        self.assertFalse(any(path.name in {"launch.json", "token", "service.json"} for path in base.rglob("*")))
+
+    def test_dispatch_reader_keeps_central_context_and_project_boundaries(self):
+        root = self.installed["codex"]
+        base = self.root / "dispatch-boundaries"
+        project = base / "project"
+        project.mkdir(parents=True)
+        command = [sys.executable, "-I", "-B", str(root / "plugins/source_pack.py"), "dispatch-preferences",
+                   "--host", "codex", "--agent", "*", "--home", str(base / "home")]
+        env = isolated_environment(base)
+        linked = base / "linked-parent"
+        linked.symlink_to(base, target_is_directory=True)
+        for target, changed in ((root, {}), (project, {"AGENT_WORKFLOW_CORE_ROOT": str(root)}),
+                                (project, {"AGENT_WORKFLOW_PLUGIN_ROOT": str(base)}),
+                                (linked / "project", {})):
+            with self.subTest(target=target, environment=changed):
+                result = subprocess.run([*command, "--project", str(target)], cwd=base,
+                    env={**env, **changed}, capture_output=True, text=True, timeout=10)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        marker = project / ".agent-workflow/runtime.json"
+        marker.parent.mkdir()
+        marker.write_text("{}")
+        result = subprocess.run([*command, "--project", str(project)], cwd=base, env=env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
 
     def test_retired_integration_option_rejects_before_creating_output(self):
         # 旧调用不能静默构建另一个产品；参数预校验失败也不能留下半套安装载荷。

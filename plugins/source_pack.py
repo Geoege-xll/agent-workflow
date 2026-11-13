@@ -78,6 +78,51 @@ def verify() -> dict:
     return metadata
 
 
+def _execution_context(project: Path | None) -> Path | None:
+    """共享原有项目与旧中央拒绝边界；只读偏好也不能绕过当前物理源包。"""
+    if any(name in os.environ for name in CENTRAL_ENV):
+        raise ValueError("central bridge environment cannot be mixed with plugin source-pack execution")
+    supplied = os.environ.get("AGENT_WORKFLOW_PLUGIN_ROOT")
+    if supplied is not None and Path(supplied).resolve() != ROOT:
+        raise ValueError("plugin root environment conflicts with this physical installation")
+    if project is None:
+        return None
+    # 在 resolve 前检查所有祖先；否则祖先软链会被规范化抹去，使唯一 reader
+    # 看见另一物理项目路径并错误命中该项目偏好，削弱既有物理目录边界。
+    if (not project.is_absolute() or ".." in project.parts
+            or any(node.is_symlink() for node in (project, *project.parents))):
+        raise ValueError("project must be an existing physical absolute directory")
+    project = project.resolve(strict=True)
+    if not project.is_dir() or project == ROOT or ROOT in project.parents:
+        raise ValueError("workflow project must be outside the installed plugin")
+    marker = project / ".agent-workflow/runtime.json"
+    if marker.exists() or marker.is_symlink():
+        raise ValueError("central project tasks must stay with their original pinned runtime")
+    return project
+
+
+def _dispatch_preferences(args) -> int:
+    """只选择固定同源入口，不解析或重写偏好，且不加载服务、启动器或安装器。"""
+    # 已安装包必须完整验证摘要；源码开发只使用自身物理根中的唯一纯合同。任何
+    # 元数据残缺仍进入 verify 并拒绝，不能借删除一份元数据退回源码模式。
+    if any((ROOT / name).exists() or (ROOT / name).is_symlink()
+           for name in ("workflow-sources.json", "sources.json")):
+        verify()
+        entry = _file("plugins/dispatch_preferences.py")
+    else:
+        entry = _file("native_config/preference_contract.py")
+    project = _execution_context(args.project)
+    arguments = ["--host", args.host, "--agent", args.agent]
+    if project is not None:
+        arguments.extend(("--project", str(project)))
+    if args.home is not None:
+        arguments.extend(("--home", str(args.home)))
+    # run_path 不导入 native_config/__init__，避免源码模式碰巧加载服务依赖；
+    # reader 本身的 main 返回固定八字段或脱敏失败，保持原始退出码与语义。
+    sys.dont_write_bytecode = True
+    return runpy.run_path(str(entry))["main"](arguments)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -87,8 +132,15 @@ def main(argv: list[str] | None = None) -> int:
     helper.add_argument("--project", required=True, type=Path)
     helper.add_argument("path", choices=sorted(HELPERS))
     helper.add_argument("arguments", nargs=argparse.REMAINDER)
+    preferences = commands.add_parser("dispatch-preferences", help="read logical native dispatch preferences without starting a service")
+    preferences.add_argument("--host", choices=("codex", "claude", "antigravity"), required=True)
+    preferences.add_argument("--agent", required=True)
+    preferences.add_argument("--project", type=Path)
+    preferences.add_argument("--home", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "dispatch-preferences":
+            return _dispatch_preferences(args)
         metadata = verify()
         if args.command == "resource":
             # 历史受管路径只是只读逻辑别名；项目适配器绝不走这条映射。
@@ -99,20 +151,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                               "plugin_version": metadata["plugin_version"], "runtime_verified": False}))
             return 0
-        project = args.project
-        if not project.is_absolute() or ".." in project.parts or project.is_symlink():
-            raise ValueError("project must be an existing physical absolute directory")
-        project = project.resolve(strict=True)
-        if not project.is_dir() or project == ROOT or ROOT in project.parents:
-            raise ValueError("workflow project must be outside the installed plugin")
-        if any(name in os.environ for name in CENTRAL_ENV):
-            raise ValueError("central bridge environment cannot be mixed with plugin source-pack execution")
-        marker = project / ".agent-workflow/runtime.json"
-        if marker.exists() or marker.is_symlink():
-            raise ValueError("central project tasks must stay with their original pinned runtime")
-        supplied = os.environ.get("AGENT_WORKFLOW_PLUGIN_ROOT")
-        if supplied is not None and Path(supplied).resolve() != ROOT:
-            raise ValueError("plugin root environment conflicts with this physical installation")
+        project = _execution_context(args.project)
         # 不改变旧中央变量或猜测 HOME。项目 cwd、插件根和当前参数在这一次进程
         # 内同时确定；原 CLI 自己继续校验 Task Pack、门禁、规范和写入授权。
         os.environ["AGENT_WORKFLOW_PLUGIN_ROOT"] = str(ROOT)

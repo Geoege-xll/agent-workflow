@@ -809,6 +809,211 @@ class NativeConfigServiceTest(unittest.TestCase):
         self.assertEqual(models[0].efforts, ("ultra", "nextlevel"))
         self.assertEqual(models[0].default_effort, "ultra")
 
+    def test_explicit_catalog_home_visibility_labels_dedup_and_empty_fallback(self):
+        directory = self.home / ".codex"
+        directory.mkdir()
+        config = directory / "config.toml"
+        config.write_text('model_catalog_json="~/explicit-models.json"\n')
+        (self.home / "explicit-models.json").write_text(json.dumps({"models": [
+            {"id": "visible", "display_name": "Readable Model", "supported_reasoning_levels": ["ultra", "nextlevel", "ultra"]},
+            {"id": "visible", "display_name": "Duplicate"}, {"id": "secret-hidden", "visibility": "hidden"}]}))
+        result = self.service.catalog("codex")
+        self.assertEqual([(row["id"], row["label"]) for row in result["models"]], [("visible", "Readable Model")])
+        self.assertEqual(result["models"][0]["efforts"], ["ultra", "nextlevel"])
+        config.write_text('model_catalog_json=""\n')
+        native = codex_models.NativeModels((codex_models.NativeModel("native", "Native", ("high",), "high"),))
+        with patch.object(codex_models, "query", return_value=native):
+            result = self.service.catalog("codex")
+        self.assertEqual(result["models"][0]["id"], "native")
+
+    def test_catalog_query_guard_identity_provider_binary_and_apply_source_conflict(self):
+        directory = self.home / ".codex"
+        directory.mkdir()
+        config = directory / "config.toml"
+        config.write_text('model_provider="first"\n')
+        auth = directory / "auth.json"
+        auth.write_text("do-not-read-credentials")
+        native = codex_models.NativeModels((codex_models.NativeModel("observed", "Observed", ("high",), "high"),))
+        original_read = storage.read
+        def forbid_auth(path):
+            self.assertNotEqual(path, auth, "auth body must never be read")
+            return original_read(path)
+        def change_provider(*_args):
+            config.write_text('model_provider="second"\n')
+            return native
+        with patch.object(storage, "read", side_effect=forbid_auth), patch.object(codex_models, "query", side_effect=change_provider):
+            discarded = self.service.catalog("codex")
+        self.assertEqual(discarded["status"], "failed")
+        self.assertEqual(discarded["models"], [])
+        with patch.object(codex_models, "query", return_value=native):
+            self.assertEqual(self.service.catalog("codex")["status"], "ready")
+        context = self.context()
+        plan = self.service.preview({"host": "codex", "revision": context["revision"],
+                                     "dispatch_preferences": {"edits": {"*": {"model": "observed", "effort": "high"}}}})
+        auth.write_text("identity-changed-without-reading")
+        with self.assertRaises(ConflictError):
+            self.service.apply(plan["preview_id"])
+        with self.assertRaises(ConflictError):
+            self.service.preview({"host": "codex", "revision": self.context()["revision"],
+                                  "dispatch_preferences": {"edits": {"*": {"model": "observed", "effort": "high"}}}})
+        # 可执行文件身份同样参与失效，不依赖路径字符串是否变化。
+        from native_config import catalog
+        binary = self.root / "codex-fixture"
+        binary.write_text("binary-one")
+        with patch.object(codex_models, "executable", return_value=str(binary)):
+            first = catalog.source_stamp(directory, None, self.service.environment)
+            binary.write_text("binary-two")
+            self.assertNotEqual(first, catalog.source_stamp(directory, None, self.service.environment))
+
+    def test_context_catalog_source_changes_without_changing_config_revision_or_querying_cli(self):
+        directory = self.home / ".codex"
+        directory.mkdir()
+        auth = directory / "auth.json"
+        auth.write_text("fixture-credentials-never-read")
+        real_read = storage.read
+        def forbid_credentials(path):
+            self.assertNotEqual(path, auth)
+            return real_read(path)
+        with patch.object(storage, "read", side_effect=forbid_credentials), \
+                patch.object(codex_models, "query", side_effect=AssertionError("context must not query a native CLI")):
+            first = self.context()
+            self.service.environment["OPENAI_BASE_URL"] = "https://provider-fixture.invalid"
+            provider_changed = self.context()
+            auth.write_text("fixture-account-metadata-changed")
+            identity_changed = self.context()
+        self.assertEqual(first["revision"], provider_changed["revision"])
+        self.assertEqual(first["revision"], identity_changed["revision"])
+        self.assertNotEqual(first["catalog_source_stamp"], provider_changed["catalog_source_stamp"])
+        self.assertNotEqual(provider_changed["catalog_source_stamp"], identity_changed["catalog_source_stamp"])
+        self.assertRegex(identity_changed["catalog_source_stamp"], r"^[0-9a-f]{64}$")
+        from native_config import catalog
+        self.assertEqual(identity_changed["catalog_source_stamp"], catalog.source_stamp(directory, None, self.service.environment))
+
+    def test_context_unavailable_catalog_source_is_null_without_disabling_preferences(self):
+        directory = self.home / ".codex"
+        directory.mkdir()
+        (directory / "config.toml").write_text('model_catalog_json="models.json"\n')
+        explicit = directory / "models.json"
+        explicit.write_text(json.dumps({"models": [{"id": "old-candidate", "supported_reasoning_levels": ["high"]}]}))
+        found = self.service.catalog("codex")
+        self.assertEqual(found["status"], "ready")
+        first = self.context()
+        self.assertEqual(first["catalog_source_stamp"], found["source_stamp"])
+        explicit.unlink()
+        external = self.root / "unsafe-model-source"
+        external.write_text("must-not-be-read")
+        explicit.symlink_to(external)
+        with patch.object(codex_models, "query", side_effect=AssertionError("context must not query a native CLI")):
+            unavailable = self.context()
+        self.assertEqual(first["revision"], unavailable["revision"])
+        self.assertIsNone(unavailable["catalog_source_stamp"])
+        diagnostics = [row for row in unavailable["diagnostics"] if row["code"] == "catalog_source_unavailable"]
+        self.assertEqual(len(diagnostics), 1)
+        self.assertIn("无法安全读取", diagnostics[0]["message"])
+        self.assertNotIn("must-not-be-read", json.dumps(unavailable))
+        self.assertTrue(unavailable["dispatch_preferences"]["targets"][0]["writable"])
+        self.assertEqual(self.service._catalogs[("codex", "None")]["source_stamp"], found["source_stamp"])
+        # 来源不可得不把旧目录更新为新目录，也不阻断独立偏好的正常编辑保存。
+        plan = self.service.preview({"host": "codex", "revision": unavailable["revision"],
+                                     "dispatch_preferences": {"edits": {"*": {"model": "manual-unverified"}}}})
+        # 该预览没有采用旧目录能力，因此保存不绑定已不可得的目录摘要。
+        self.assertEqual(plan["changes"][0]["after"], "manual-unverified")
+        saved = self.service.apply(plan["preview_id"])
+        self.assertTrue(saved["saved"])
+        self.assertIsNone(saved["context"]["catalog_source_stamp"])
+        self.assertEqual(saved["context"]["dispatch_preferences"]["targets"][0]["effective"], {"model": "manual-unverified"})
+
+    def test_catalog_final_stamp_window_rejects_new_identity_on_old_models(self):
+        from native_config import catalog
+        directory = self.home / ".codex"
+        directory.mkdir()
+        config = directory / "config.toml"
+        config.write_text('model_provider="first"\n')
+        native = codex_models.NativeModels((codex_models.NativeModel("old-account-model", "Old", ("high",), "high"),))
+        original = catalog.source_stamp
+        def switch_at_binding(*args, **kwargs):
+            if kwargs.get("include_cache", True):
+                config.write_text('model_provider="new-account"\n')
+            return original(*args, **kwargs)
+        with patch.object(codex_models, "query", return_value=native), patch.object(catalog, "source_stamp", side_effect=switch_at_binding):
+            result = self.service.catalog("codex")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["models"], [])
+        self.assertNotIn("source_stamp", result)
+
+    def test_query_cache_identity_refresh_is_adopted_only_after_stable_source(self):
+        directory = self.home / ".codex"
+        directory.mkdir()
+        cache = directory / "models_cache.json"
+        cache.write_text(json.dumps({"identity": "old", "models": [{"id": "untrusted-cache-only"}]}))
+        native = codex_models.NativeModels((codex_models.NativeModel("official", "Official", ("high",), "high"),))
+        def refresh(*_args):
+            cache.write_text(json.dumps({"identity": "new"}))
+            return native
+        with patch.object(codex_models, "query", side_effect=refresh):
+            found = self.service.catalog("codex")
+        self.assertEqual([row["id"] for row in found["models"]], ["official"])
+        from native_config import catalog
+        self.assertEqual(found["source_stamp"], catalog.source_stamp(directory, None, self.service.environment))
+        cache.write_text(json.dumps({"identity": "another-account"}))
+        self.assertNotEqual(found["source_stamp"], catalog.source_stamp(directory, None, self.service.environment))
+
+    def test_claude_local_menu_current_and_mapping_do_not_claim_effort_or_account(self):
+        directory = self.home / ".claude"
+        directory.mkdir()
+        (directory / "settings.json").write_text(json.dumps({"model": "user-current", "env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "mapped-opus"},
+            "modelPicker": {"options": [{"value": "menu-id", "label": "Local menu"}]}, "modelSettings": {"menu-id": {"effort": "high"}}}))
+        local = self.project / ".claude"
+        local.mkdir()
+        (local / "settings.json").write_text(json.dumps({"model": "project-current", "modelPicker": {"options": ["must-ignore-project-menu"]}}))
+        (local / "settings.local.json").write_text(json.dumps({"env": {"ANTHROPIC_MODEL": "local-current", "ANTHROPIC_DEFAULT_OPUS_MODEL": "mapped-local-opus"}}))
+        with patch("native_config.service.observe_claude_version", return_value={"status": "probe_failed", "version": None}):
+            result = self.service.catalog("claude", self.project)
+        by_id = {row["id"]: row for row in result["models"]}
+        self.assertIn("mapped-local-opus", by_id["opus"]["label"])
+        self.assertIn("menu-id", by_id)
+        self.assertIn("local-current", by_id)
+        self.assertNotIn("must-ignore-project-menu", by_id)
+        self.assertFalse(any(row["efforts_verified"] for row in by_id.values()))
+        self.assertEqual(by_id["menu-id"]["usage"], "native_definition_only")
+
+    def test_agy_known_text_protocol_session_scope_and_invalid_mixed_output(self):
+        from native_config import agy_models
+        body = b"gemini-4-argon-medium Gemini 4 Argon (Medium)\nclaude-opus-5-5-low Claude Opus 5.5 (Low)\n"
+        parsed = agy_models.parse_output(body)
+        self.assertEqual(parsed[0]["label"], "Gemini 4 Argon (Medium)")
+        self.assertTrue(all(row["usage"] == "session_only" for row in parsed))
+        for value in (b"", body + b"Warning: internal diagnostic\n", b"bad/id Label\n"):
+            with self.assertRaises(ValueError):
+                agy_models.parse_output(value)
+        with patch.object(agy_models, "query", return_value={"status": "ready", "models": parsed, "notes": []}):
+            result = self.service.catalog("antigravity")
+        self.assertEqual([row["id"] for row in result["subagent_models"]], ["inherit", "flash", "pro"])
+        self.assertTrue(all(row["usage"] == "session_only" for row in result["models"]))
+
+    def test_agy_real_fixture_cli_bounded_output_timeout_and_process_cleanup(self):
+        from native_config import agy_models
+        binary = self.root / "agy-fixture"
+        marker = self.root / "agy-pid"
+        binary.write_text("#!" + sys.executable + "\n" +
+            "import os,sys,time\n" +
+            "from pathlib import Path\n" +
+            "Path(os.environ['AGY_PID']).write_text(str(os.getpid()))\n" +
+            "mode=os.environ.get('AGY_MODE','normal')\n" +
+            "if mode=='slow': time.sleep(10)\n" +
+            "print('gemini-4-argon-medium Gemini 4 Argon (Medium)' if mode=='normal' else 'x'*2048,flush=True)\n")
+        binary.chmod(0o700)
+        env = {**self.service.environment, "AGY_PID": str(marker)}
+        normal = agy_models.query(str(binary), self.root, env)
+        self.assertEqual(normal["status"], "ready")
+        for mode in ("slow", "large"):
+            with patch.object(agy_models, "TIMEOUT_SECONDS", 0.15), patch.object(agy_models, "MAX_OUTPUT_BYTES", 512):
+                failed = agy_models.query(str(binary), self.root, {**env, "AGY_MODE": mode})
+            self.assertEqual(failed["status"], "failed")
+            pid = int(marker.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
     def test_package_import_and_context_work_without_workflow_or_manager_package(self):
         isolated = self.root / "isolated"
         isolated.mkdir()

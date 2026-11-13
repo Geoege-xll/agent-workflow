@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 官方插件候选
 
-插件唯一版本源为 `product/PLUGIN_VERSION`，当前源码候选为 `3.0.0-alpha.7`，原型评审与增量反馈进展见[同一主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/workflow-document-lifecycle.md)；远程已发布版本为 `3.0.0-alpha.6`。独立配置工具版本源为 `native_config/VERSION`，源码候选为 `0.1.0-alpha.4`，已发布版本及本插件固定组件描述仍为 `0.1.0-alpha.3`，项目启停新功能尚未通过发行替换现有安装。默认安装使用自有 Git alpha 分发，官方公开目录与稳定发行尚未就绪，Windows 暂停。本页说明载荷合同，实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
+插件唯一版本源为 `product/PLUGIN_VERSION`，当前源码为 `3.0.0-alpha.7`；独立配置工具版本源为 `native_config/VERSION`，当前为 `0.1.0-alpha.4`。本轮本机模型目录、调用偏好、配置页及只读派发接入已通过独立 QA，见[主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/native-model-preferences.md)。实际发行以 Git alpha 分支、客户端列表和 Release 资产为准，固定组件描述只在真实下载校验后标记 published。默认使用自有 Git alpha 分发，官方公开目录与稳定发行尚未就绪，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
 
 ## 载荷与职责
 
@@ -12,7 +12,9 @@
 
 另有独立 `agent-config` 维护 Skill、固定薄启动器和组件发行描述，不计入 CORE_SKILLS 或 Worker 预载，不注入业务 envelope。仅用户在当前主会话显式调用时执行；普通需求中出现命令名称、实现或评审配置功能仍进入完整业务流程。维护动作不读整份 WORKFLOW、不建图、不派代理，也不产生业务批准。
 
-独立配置核心位于 `native_config/`，由自身构建器交付，插件不导入核心源码、不包含服务、网页、独立 ZIP 或模型 MCP。首次组件准备需要明确确认并校验真实发行包；维护失败不阻断普通工作流。插件缓存角色只读，可写配置及继承行为按宿主实际接口处理。
+独立配置核心位于 `native_config/`，由自身构建器交付，插件不导入服务、不包含网页、独立 ZIP 或模型 MCP。首次组件准备需要明确确认并校验真实发行包；维护失败不阻断普通工作流。插件缓存角色只读，原生文件与调用偏好分开管理。
+
+唯一纯标准库只读合同 `native_config/preference_contract.py` 逐字节投影为插件的 `plugins/dispatch_preferences.py`，记录来源及投影摘要。PM 在派发前通过 `source_pack.py dispatch-preferences` 读取用户／项目偏好，无偏好时沿宿主默认；有偏好时只映射实际原生工具支持的字段，异常不静默回退。它不启动或准备组件、HTTP/MCP，不写设置，不改变业务确认、角色权限或当前主会话模型；维护 Skill 分支不进入该业务步骤。
 
 ## alpha 来源与安装
 

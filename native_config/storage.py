@@ -160,7 +160,7 @@ def directory_stamp(path: Path) -> tuple:
     """记录完整目录链（含缺失边界），不创建目录也不使用 mtime 充当身份。
 
     本服务 staging 会改变目录时间；稳定身份只含 dev/ino/权限/属主。
-    缺失父目录只允许在其直接父目录已经存在时首次创建，避免任意递归造路径。
+    缺失边界也进入前像；实际创建仅由服务端固定目标的写计划授权，逐级排他发布。
     """
     path = absolute_path(path)
     with directory(path.anchor) as handle:
@@ -352,38 +352,48 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                 expected = next(item.parent_stamp for item in changes if item.path.parent == parent)
                 if expected and directory_stamp(parent) != expected:
                     raise ConflictError("配置父目录在预览后变化")
+                created_identity = None
                 if expected and expected[-1][1] is None:
-                    if len(expected) > 1 and expected[-2][1] is None:
-                        raise ConfigError("只允许创建固定配置的直接父目录")
-                    anchor = stack.enter_context(directory(parent.parent))
+                    # 固定宿主偏好路径允许首次缺少多级目录，但每一级都在最近既有
+                    # 祖先的排他锁下发布私有 inode。绝不 mkdir 后盲目接受抢先出现
+                    # 的同名目录；每步保留 fd/祖先链，路径被换位就拒绝后续写入。
+                    missing_index = next(index for index, entry in enumerate(expected) if entry[1] is None)
+                    anchor_path = Path(parent.anchor).joinpath(*(entry[0] for entry in expected[:missing_index]))
+                    anchor = stack.enter_context(directory(anchor_path))
                     fcntl.flock(anchor.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     if directory_stamp(parent) != expected:
                         raise ConflictError("配置父目录在首次创建前变化")
-                    temporary = ".native-config-" + secrets.token_hex(16) + ".new"
-                    os.mkdir(temporary, 0o700, dir_fd=anchor.fd)
-                    created_fd = os.open(temporary, _DIR_FLAGS, dir_fd=anchor.fd)
-                    stack.callback(os.close, created_fd)
-                    created_identity = os.fstat(created_fd)
-                    try:
-                        _rename_directory_exclusive(anchor.fd, temporary, parent.name)
-                        result["namespace_touched"] = True
-                        result.setdefault("created_directories", []).append(str(parent))
-                        os.fsync(anchor.fd)
-                    except FileExistsError as exc:
-                        raise ConflictError("配置父目录已由外部创建") from exc
-                    finally:
+                    for entry in expected[missing_index:]:
+                        temporary = ".native-config-" + secrets.token_hex(16) + ".new"
+                        os.mkdir(temporary, 0o700, dir_fd=anchor.fd)
+                        created_fd = os.open(temporary, _DIR_FLAGS, dir_fd=anchor.fd)
+                        stack.callback(os.close, created_fd)
+                        created_identity = os.fstat(created_fd)
                         try:
-                            info = os.stat(temporary, dir_fd=anchor.fd, follow_symlinks=False)
-                            if (info.st_dev, info.st_ino) == (created_identity.st_dev, created_identity.st_ino):
-                                os.rmdir(temporary, dir_fd=anchor.fd)
-                        except FileNotFoundError:
-                            pass
-                    # 发布后按名字打开时若目录已换位，必须拒绝写入替代目录。
-                    published_info = os.stat(parent.name, dir_fd=anchor.fd, follow_symlinks=False)
-                    if (published_info.st_dev, published_info.st_ino) != (created_identity.st_dev, created_identity.st_ino):
-                        raise ConflictError("首次创建的配置父目录已换位")
+                            _rename_directory_exclusive(anchor.fd, temporary, entry[0])
+                            result["namespace_touched"] = True
+                            anchor_path = anchor_path / entry[0]
+                            result.setdefault("created_directories", []).append(str(anchor_path))
+                            os.fsync(anchor.fd)
+                        except FileExistsError as exc:
+                            raise ConflictError("配置父目录已由外部创建") from exc
+                        finally:
+                            try:
+                                info = os.stat(temporary, dir_fd=anchor.fd, follow_symlinks=False)
+                                if (info.st_dev, info.st_ino) == (created_identity.st_dev, created_identity.st_ino):
+                                    os.rmdir(temporary, dir_fd=anchor.fd)
+                            except FileNotFoundError:
+                                pass
+                        anchor.check()
+                        published_info = os.stat(entry[0], dir_fd=anchor.fd, follow_symlinks=False)
+                        if (published_info.st_dev, published_info.st_ino) != (created_identity.st_dev, created_identity.st_ino):
+                            raise ConflictError("首次创建的配置父目录已换位")
+                        anchor = stack.enter_context(directory(anchor_path))
+                        opened = os.fstat(anchor.fd)
+                        if (opened.st_dev, opened.st_ino) != (created_identity.st_dev, created_identity.st_ino):
+                            raise ConflictError("首次创建的配置父目录在打开前换位")
                 handle = stack.enter_context(directory(parent))
-                if expected and expected[-1][1] is None:
+                if created_identity is not None:
                     opened = os.fstat(handle.fd)
                     if (opened.st_dev, opened.st_ino) != (created_identity.st_dev, created_identity.st_ino):
                         raise ConflictError("首次创建的配置父目录在打开前换位")
