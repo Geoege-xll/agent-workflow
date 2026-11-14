@@ -5,10 +5,10 @@
   "channel": "stable",
   "cli_protocol": 1,
   "service_protocol": 2,
-  "release_status": "unpublished",
+  "release_status": "published",
   "artifact": {
     "name": "native-agent-config-0.1.1.zip",
     "sha256": "ad7c60fdbf5a417adaa67620f4c41d8315a36eb75cdec54e70601d8184a2a567",
-    "url": ""
+    "url": "https://github.com/Geoege-xll/agent-workflow/releases/download/native-agent-config-v0.1.1/native-agent-config-0.1.1.zip"
   }
 }

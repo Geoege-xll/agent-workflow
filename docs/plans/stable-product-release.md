@@ -32,18 +32,18 @@
 - 已观察：候选／发布器的正则、组件 store 的 VERSION 与 channel 限定 alpha；只改两行版本会无法发行。
 - 已实现：单一版本／渠道模块、正式市场身份与三分支、候选和组件校验、CI 附件消费，以及 stable 发布必须绑定真实 published 组件的门禁。
 - 已验证：指定 70 项首轮仅真实回环 socket 节点受沙箱限制；原失败保留，该单节点获准重跑通过。remote／渠道 11 项、最终 publisher 14 项、受影响原生消费者 2＋1 项通过。实际本地 0.1.1 ZIP 为 34 文件，SHA `ad7c60fdbf5a417adaa67620f4c41d8315a36eb75cdec54e70601d8184a2a567`，包外只读 status 通过。
-- 当前描述：按真实 ZIP 生成 stable／unpublished，URL 为空；这是首次 CI 的候选绑定，不是发布。
-- 当前 CI：首轮 main `0dd2eea24c785f17fb4c57751e11f18e972b5cdf` 的两系统各运行 628 项，唯一失败为维护测试仍写死 8 个入口；候选被门禁阻止。原日志保留，已将测试改为独立明确的 8 基础＋2 条件入口及真实非预载断言，原作者单节点三端 fixture 验证通过。生产源码与原生 ZIP 未变。
-- 下一步：原发行 Reviewer 对该测试与本节做增量复核，再提交并进入成功 CI；使用 CI 原生包发布并下载核验，生成 published 描述交同 Reviewer delta，随后最终 CI／工作流发布与本机升级。
+- 当前 CI：维护测试的旧入口计数已修复并经原 Reviewer 复核。main `101f29dd7d51fe70c595d1480327d3a443b1b421` 的[成功 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43547467879)两系统各运行 628 项，624 项通过、4 项既有跳过；七包已生成。唯一服务端 artifact 摘要和全部包内摘要实际校验通过，原失败日志继续保留。
+- 当前资产：[Native Agent Config 0.1.1](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.1) 已正式发布（非 prerelease），附件使用该成功 CI 原包；GitHub 资产摘要及生产装配器实际下载校验均与冻结 `ad7c60fd…a2a567` 一致。描述已由同一装配器生成 published，仅新增已证实的真实 URL 和发行状态。
+- 下一步：原 Reviewer 增量复核 published 固定绑定与本节，提交后进入同 SHA 最终 CI；再使用成功候选发布三个 stable Git 来源及工作流 3.0.1 Release，最后升级本机并核实际载荷和偏好。
 - 当前本机仍是工作流 alpha.9、配置组件 alpha.5，尚未变更。
 
 ## 验收结果与当前已交付行为
 
-当前没有正式版本的已验收基线。既有 alpha.9 与组件 alpha.5 的已交付事实不因本计划或版本文件修改而变成正式发行。
+整套正式发行及本机升级尚未完成。Native Agent Config `0.1.1` 已单独正式发布并完成真实下载核验；工作流 `3.0.1` 尚待最终绑定复核、CI 与三渠道发布。本机仍使用旧安装，不能以源版本或组件发布推断已升级。
 
 ## 批准依据与必要证据
 
 - 批准依据：用户“升级完成后叠加新版本，去掉 alpha，xy-workflow 3.0.1、Native Agent Config 0.1.1；发布 GitHub 并升级本机”。
-- 验收证据：none
+- 验收证据：源码及维护 CI 单点修复已由同一 Reviewer 验证；当前成功来源为 `101f29dd7d51fe70c595d1480327d3a443b1b421`／CI `43547467879`，artifact `14095705490` 的服务端摘要为 `829dce211fca2a757669535e736cfe6716d157c83c5202f1f1791ad275e7fa0e`。原生资产 SHA 为 `ad7c60fdbf5a417adaa67620f4c41d8315a36eb75cdec54e70601d8184a2a567`；完整发行与本机结果仍待后续真实验收。
 
 原始验证、发行与下载证据保存在本请求 scratch，验收后转存既有 dist/evidence；不记录凭据或配置正文。受保护旧未跟踪迁移稿不读、不改、不暂存。
