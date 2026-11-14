@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-当前源码候选版本为 **xy-workflow 3.0.2** 和独立配置工具 **Native Agent Config 0.1.2**，正在完成生产评审工作台、包外消费验证和正式发行验收；候选尚未发布或安装到本机，组件描述保持 `unpublished`，下载地址和摘要待成功 CI 的真实发行产物确认后填写。现有正式版为 **[xy-workflow 3.0.1](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.1)** 和 **[Native Agent Config 0.1.1](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.1)**。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
+当前工作流源码候选为 **xy-workflow 3.0.2**，仍待最终组件绑定 CI 与正式发布。独立配置工具 **[Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)** 已正式发布，固定组件描述经真实下载核验后标记 `published`。工作流现有正式版仍为 **[xy-workflow 3.0.1](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.1)**；本机插件／配置组件尚为 `3.0.1`／`0.1.1`，没有升级。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
 
 ## 工作流保持
 
@@ -67,7 +67,7 @@ AGY 使用 GitHub `tree/分支` 地址，不能换成 Claude 的 `#分支` 写�
 
 配置页默认进入“调用偏好”，提供用户级和项目级的通用默认及逐 Agent 设置，插件缓存角色保持只读。模型目录来自本机对应客户端或有效配置，推理选项按当前模型处理；设置先预览、再确认保存，PM 在后续派发前读取。保存、原生文件重新加载与指定模型实际运行分别判断，不改变当前主会话或运行中的 Agent。
 
-Codex／Claude 提供用户级和项目级工作流启停、恢复继承；AGY 保留官方管理说明。0.1.2 候选包含已通过独立验收的第六版工作台：深石墨主题、148px 窄导航、顶部平台与范围上下文、统一选择器，以及就近的恢复继承按钮；保留独立草稿、未知值和失败收据。停用前保存页面给出的独立恢复命令；候选的源码验收不表示本机现有 0.1.1 已升级。
+Codex／Claude 提供用户级和项目级工作流启停、恢复继承；AGY 保留官方管理说明。0.1.2 包含已通过独立验收的第六版工作台：深石墨主题、148px 窄导航、顶部平台与范围上下文、统一选择器，以及就近的恢复继承按钮；保留独立草稿、未知值和失败收据。停用前保存页面给出的独立恢复命令；新版发布不表示本机现有 0.1.1 已升级。
 
 ## 精选技能与文档
 
@@ -83,13 +83,13 @@ Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付
 
 | 范围 | 已有证据与边界 |
 | --- | --- |
-| 3.0.2／0.1.2 候选 | 当前源码版本已冻结，尚待生产工作台验收、成功 CI 正式产物、发布及本机升级；下列正式发行及本机记录均属已有 3.0.1／0.1.1 |
+| 3.0.2 候选／0.1.2 正式组件 | [成功 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43600866794)两系统各 633 项、4 项既有跳过；Native 0.1.2 已发布并核验真实下载，工作流仍待最终组件绑定 CI 与发布，本机尚未升级 |
 | 3.0.1／0.1.1 | 文档规范、技能接入和发行合同分别完成唯一独立 QA；两产品为正式非 prerelease 资产 |
 | 最终 CI | [Linux／macOS](https://github.com/Geoege-xll/agent-workflow/actions/runs/43549655014)各 628 项，624 通过、4 项既有跳过，七包与摘要通过 |
 | 远程分发 | [stable 发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43550996430)三分支完整文件与权限匹配同一候选，Release 八附件摘要匹配 |
 | 本机安装 | Codex／Claude／AGY 均为启用的 3.0.1；2306／2313／2311 个插件文件的字节和执行位匹配 CI 原包 |
-| 独立配置组件 | 0.1.1 实际准备成功，三端 doctor 完整性 verified、服务 ready；浏览器打开回执成功。本轮未保存模型设置 |
-| 生产网页及原型工具 | 配置工作台已验收字节保持；3.0.2 评审工作台候选待独立验收，不用既有原型或打开回执代替生产运行证据 |
+| 独立配置组件 | 0.1.2 发行资产与成功 CI ZIP 同字节；本机仍为已准备的 0.1.1，其三端 doctor／服务／浏览器回执属于历史安装证据 |
+| 生产网页及原型工具 | 配置工作台与评审工作台的生产验证已完成；本轮组件绑定变更交原 Reviewer 增量复核，不用原型或打开回执代替生产运行证据 |
 | 新会话与模型采纳 | 历史单项见[原生记录](docs/plans/plugin-v3-native-acceptance.md)；不扩大为 3.0.1 三端指定模型均已实测。Codex App GUI 尚未实际验证 |
 | 官方公开目录、Windows | 公开目录尚未上架；Windows 继续暂停 |
 

@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码候选为 `xy-workflow 3.0.2` 与独立配置工具 `0.1.2`，候选待验收、发布及本机升级，组件固定描述保持 unpublished。已有正式发行 `3.0.1`／`0.1.1` 的 stable 来源与安装载荷证据见[发行主题](plans/stable-product-release.md)，不能作为当前候选已发布或安装的证明。官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前工作流源码候选为 `xy-workflow 3.0.2`，仍待最终组件绑定 CI 与正式发布；独立配置工具 [Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 已正式发布，组件固定描述经真实下载核验后标记 published。本机插件／组件仍为 `3.0.1`／`0.1.1`，尚未升级；其 stable 来源与安装载荷历史证据见[发行主题](plans/stable-product-release.md)，不能作为当前工作流候选已发布或安装的证明。官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 

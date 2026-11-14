@@ -29,7 +29,9 @@
 
 ## 当前进展与恢复入口
 
-本轮配置工作台与评审工作台源码、真实浏览器、三端包外消费及各自唯一QA已通过，原失败与有界修复保留。首个源码提交 `d01095bd1ab0e6bf0b741775b796cf7ee3fba2ac` 已推送；[首轮CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43599159117)两系统各633项，均因两个旧测试期望／fixture失败，保留4项既有跳过，candidate未生成。原职责作者已分别修复写死0.1.1版本的断言和复制旧壳的指纹fixture，两个精准节点通过；当前原Reviewer对扩展32路径做有界复核，随后重提完整CI。组件与工作流均未发布、本机未升级。完整首轮两个作业日志与失败记录保留，不以精准成功冒充原CI全通过。
+本轮配置工作台与评审工作台源码、真实浏览器、三端包外消费及各自唯一QA已通过。首轮[CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43599159117)两系统各633项、2项旧测试失败／4项既有跳过，原日志与修复历史保留。两个精准修复经原Reviewer扩展32路径PASS后，以 `cae70ccf40e2608e0a4cb8b6212db3f72e7c1dff` 推送，新的[成功CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43600866794)两系统各633项OK、保留4项既有跳过，候选成功。
+
+CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)已实际正式发布，真实重新下载与CI相同，SHA `db5b3bdf225bce5a788f3a6894e7ca27d59ffc250f6e8fd12887e3d55a2b2ce0`；包内三个已批准网页源同字节。原作者通过既有公开入口再次下载生成published固定描述，ABI仍1／2；当前原Reviewer仅核四文件绑定／状态说明delta，随后提交该最终源码并等成功CI，才能发布workflow3.0.2、三stable及升级本机。本机目前仍3.0.1／0.1.1，工作流3.0.2未发布。
 
 以下保留上一3.0.1／0.1.1发行证据，不是本轮完成声明。
 
@@ -43,7 +45,7 @@
 
 ## 验收结果与当前已交付行为
 
-当前正式产品为 xy-workflow 3.0.1 与 Native Agent Config 0.1.1，已发布并核对本机安装。正式／alpha 严格版本与渠道判定、候选来源及唯一附件门禁、先组件后插件、同 SHA 成功 CI、真实下载绑定、历史库存认证分离等均保留；没有新增模型能力或修改 UI。
+上一已完整验收并安装的正式组合为 xy-workflow 3.0.1 与 Native Agent Config 0.1.1；本轮部分发行与未完成安装见第4节。正式／alpha 严格版本与渠道判定、候选来源及唯一附件门禁、先组件后插件、同 SHA 成功 CI、真实下载绑定、历史库存认证分离等均保留；没有新增模型能力或修改 UI。
 
 三端 dispatch 偏好文件升级前后均不存在，Codex 原生模型字段投影摘要一致；本轮未执行任何模型配置保存。Claude 原生模型字段旧采样的序列化方式未保全，无法完成同口径摘要对比，因此其字段保持明确未证实，未猜测或恢复用户值。Claude 列表显示用户级 enabled=true、projectEnabled=false；不据此宣布当前项目或新会话已经加载。
 
