@@ -1,23 +1,23 @@
-# 工作流与配置工具首个正式发行
+# 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`completed`
+- 阶段：`active`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
 - 已验收版本：`3.0.1`
 
 ## 目标与范围
 
-用户明确要求本轮升级后去掉 alpha：xy-workflow 发布 `3.0.1`，Native Agent Config 发布 `0.1.1`，推送 GitHub 并升级本机。本主题只负责正式版本与发行合同；计划文档规范、角色技能接入仍分别由原请求及唯一 QA 验收。
+本轮用户要求将历史讨论已确认的Agent配置工作台与原型评审需求全部落地，统一验收无误后发布xy-workflow `3.0.2`／Native Agent Config `0.1.2`，并升级本机。上一正式基线3.0.1／0.1.1与完整证据保留；本轮未发布前不更新已验收版本。功能分别由模型偏好、原型评审主题及其唯一QA验收，本主题负责发行和安装合同。
 
-现有构建、组件描述和远程发布器都显式只接受 alpha，必须贯通正式版本，不能仅改显示标签。保留两独立产品、唯一构建来源、实际下载摘要、正式宿主入口和配置偏好；不恢复 2.x、Windows 或其它安装渠道。
+现有构建、组件描述和远程发布器已支持正式渠道，复用唯一版本与发行来源。保留两独立产品、唯一构建来源、实际下载摘要、正式宿主入口和配置偏好；不恢复 2.x、Windows 或其它安装渠道。
 
 ## 需求与验收
 
-- REQ-601：源版本为工作流 3.0.1、配置工具 0.1.1；构建、描述、provenance、归档和 GitHub Release 使用真实正式版本，不带 prerelease 标记。
+- REQ-601：源版本为工作流 3.0.2、配置工具 0.1.2；构建、描述、provenance、归档和 GitHub Release 使用真实正式版本，不带 prerelease 标记。
 - REQ-602：正式与预发行版本／渠道必须匹配，拒绝混合、降级和同版不同载荷；复用唯一版本判定，不增加手工第二套发布器。
 - REQ-603：三平台具备正式 Git 分发引用与对应市场身份；历史 alpha 来源保留可审计，公开安装说明以当前正式入口为准。命令名 xy-workflow 与现有调用偏好身份保持。
-- REQ-604：组件先正式发布，下载校验后生成 published 的 0.1.1 固定描述；再从同一最终源码的成功 CI 候选发布插件及三渠道，拒绝未发布地址或本地重建包冒充 CI 产物。
+- REQ-604：组件先正式发布，下载校验后生成 published 的 0.1.2 固定描述；再从同一最终源码的成功 CI 候选发布插件及三渠道，拒绝未发布地址或本地重建包冒充 CI 产物。
 - REQ-605：覆盖正式／alpha 版本匹配、候选消费、发行摘要、上游历史库存保留及固定身份文件；必要 CI 入口真实收集，不删除旧负控造绿。
 - REQ-606：任务／资源收尾后通过官方客户端升级本机 Codex、Claude、AGY；核对真实版本、载荷与偏好保留。安装、重新加载和实际模型采纳分别说明。
 
@@ -25,11 +25,13 @@
 
 版本与渠道判定、构建者、候选编排、发行描述、发布消费者和宿主安装各有单一职责。新增正式渠道由现有发布器投影，不建立新脚本平行维护；命名仍由唯一 command_identity 声明。组件内容只随源版本与其必要身份变化，不引入新配置功能。
 
-本轮不修改产品 UI，沿用已验收第四版工作台，不需要新原型。来源技能及公共按需加载见 [角色技能主题](role-skill-routing.md)，文档质量见 [计划规范主题](plan-document-quality.md)。
+本轮按已批准第六版配置工作台和最终评审工作台实现后发版，UI依据、功能验收分别见[模型偏好主题](native-model-preferences.md)和[评审主题](workflow-document-lifecycle.md)。来源技能及公共按需加载见 [角色技能主题](role-skill-routing.md)，文档质量见 [计划规范主题](plan-document-quality.md)。
 
 ## 当前进展与恢复入口
 
-正式发行与本机升级均已完成。组件先用首个成功 CI 原生包正式发布并真实下载核验；published 描述提交后，最终来源为 `9a602babf924723c5d74d18692be173d8481de34` 的[成功 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43549655014)，两系统各 628 项，624 通过、4 项既有跳过。原唯一旧计数失败及同作者／同 Reviewer 修复证据保留。
+本轮配置工作台与评审工作台源码、真实浏览器、三端包外消费及各自唯一QA已通过，原失败与有界修复保留。当前进入新版本CI、组件先发／真实下载绑定、工作流及三stable发布、本机升级；尚未发生的操作不计完成。以下保留上一3.0.1／0.1.1发行证据，不是本轮完成声明。
+
+上一正式发行与本机升级均已完成。组件先用首个成功 CI 原生包正式发布并真实下载核验；published 描述提交后，最终来源为 `9a602babf924723c5d74d18692be173d8481de34` 的[成功 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43549655014)，两系统各 628 项，624 通过、4 项既有跳过。原唯一旧计数失败及同作者／同 Reviewer 修复证据保留。
 
 [三 stable 发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43550996430)普通 atomic push 成功，完整路径／字节／模式与最终 CI 投影一致。工作流 [3.0.1](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.1) 和组件 [0.1.1](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.1) 均为真实非 prerelease Release；工作流八资产摘要与候选匹配，组件为冻结 SHA `ad7c60fdbf5a417adaa67620f4c41d8315a36eb75cdec54e70601d8184a2a567`。
 

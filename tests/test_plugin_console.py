@@ -76,7 +76,7 @@ class ConsoleJavascriptTest(unittest.TestCase):
         # Node 直接导入生产函数；令牌只用测试字符串，不接触本机连接记录或真实配置。
         script = r"""
 const assert = require('node:assert/strict');
-const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField} = require('./native_config/web/console.js');
+const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices} = require('./native_config/web/console.js');
 const row = (id, fields = {}) => ({role: id, name: '同名 Agent', origin: 'user', scope: 'global', writable: true,
   overrides: {model: 'saved/unknown:model', effort: 'high'}, effective: {model: 'saved/unknown:model', effort: 'high'},
   sources: {model: 'user', effort: 'user'}, dispatch_ready: false, blocked_reason: '尚未观察到客户端版本', ...fields});
@@ -289,6 +289,7 @@ draft.accept({...context([]),dispatch_preferences:{status:'ready',runtime_verifi
  target('*',{model:'saved/unknown:model'},{model:'saved/unknown:model'},{model:'user_default'}),
  target('vendor:worker',{}, {model:'saved/unknown:model'}, {model:'user_default'})]}});
 assert.equal(resolvedField(draft.preferences,'*','model',true).value,'saved/unknown:model');
+assert.equal(resolvedField(draft.preferences,'*','model',true,true).pending,true,'继承选项不能把被删除的已保存覆盖冒充继承值');
 draft.preferences.set('*','model','future/custom-id');
 assert.equal(resolvedField(draft.preferences,'vendor:worker','model',true).value,'future/custom-id');
 draft.preferences.set('*','model',null);
@@ -300,6 +301,20 @@ assert.deepEqual(draft.preferences.payload(),{'*':{model:null}});
 draft.preferences.set('vendor:worker','model','private-model');
 assert.equal(resolvedField(draft.preferences,'vendor:worker','model',true).value,'private-model');
 assert.equal(draft.preferences.value('*','effort'),null);
+""")
+
+    def test_picker_projection_preserves_unknown_ids_and_validates_custom_input(self):
+        # 真实选择器使用同一投影/字符校验函数：搜索内容不能暗自裁剪成配置值，
+        # 未知历史ID必须仍可见可选，名称只负责展示，不代替提交的原始ID。
+        self.run_javascript(r"""
+const choices = modelChoices([{id:'known/id',label:'完整模型名称'}], 'saved/unknown:model', '继承值待预览');
+assert.deepEqual(choices.map(row => row.value), ['', 'known/id', 'saved/unknown:model']);
+assert.equal(choices[0].inherited, true);
+assert.equal(choices[1].label, '完整模型名称');
+assert.equal(choices[2].unknown, true);
+assert.equal(modelChoices([{id:'known/id'}], 'known/id', '宿主默认').length, 2);
+for (const value of ['a', 'vendor/model-v2:preview+fast@1[beta]', 'a'.repeat(200)]) assert.equal(validCustomModelId(value), true);
+for (const value of ['', ' a', 'a ', 'a\n', 'a\r', 'a\u2028', '中文', '<img>', 'a'.repeat(201)]) assert.equal(validCustomModelId(value), false, JSON.stringify(value));
 """)
 
     def test_apply_error_receipts_keep_recovery_and_reject_untrusted_shapes(self):

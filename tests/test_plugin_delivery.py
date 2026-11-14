@@ -114,8 +114,13 @@ class GuidanceProjectionTest(unittest.TestCase):
 class PluginDeliveryTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temporary = tempfile.TemporaryDirectory(prefix="awf-plugin-delivery-")
-        cls.root = Path(cls.temporary.name).resolve()
+        # 请求级验证可显式复用 scratch 内固定位置并保留真实包外证据；普通测试
+        # 仍用既有临时目录。绝不把该入口当成本机插件安装或改写宿主配置。
+        retained = os.environ.get("AGENT_WORKFLOW_DELIVERY_FIXTURE_ROOT")
+        cls.temporary = None if retained else tempfile.TemporaryDirectory(prefix="awf-plugin-delivery-")
+        cls.root = Path(retained if retained else cls.temporary.name).resolve()
+        if retained:
+            cls.root.mkdir(parents=True, exist_ok=True)
         cls.archives, cls.installed = {}, {}
         for host in builder.HOSTS:
             archive = builder.build(PACK, cls.root / "first", host)
@@ -127,7 +132,8 @@ class PluginDeliveryTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.temporary.cleanup()
+        if cls.temporary is not None:
+            cls.temporary.cleanup()
 
     def test_two_offline_builds_are_byte_identical(self):
         # 第二个输出目录及归档mtime不同，ZIP内固定元数据仍必须让字节完全相同。
@@ -252,7 +258,7 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertFalse(Path(name).name.startswith("setup_"), name)
                 self.assertIn("lib/documents/safe_documents.py", files.namelist())
                 self.assertIn("lib/documents/validate_prototype_workspace.py", files.namelist())
-                # 文档与模板沿现有声明目录进入三端包，不能依靠开发仓补齐反馈依赖。
+                # 文档和明确模板闭包进入三端包，不能依靠开发仓补齐反馈依赖。
                 for relative in ("lib/documents/prototype_feedback.py",
                                  "lib/documents/prototype_review.py",
                                  "lib/documents/prototype_feedback_cli.py",
@@ -262,6 +268,17 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertNotIn("lib/documents/requirement_html.py", files.namelist())
                 self.assertFalse(any(name.startswith("lib/vendor/answer-me-with-html/") for name in files.namelist()))
                 self.assertFalse(any(name.startswith(("plugin_runtime/", "native_config/", "manager/")) for name in files.namelist()))
+                expected_tools = {"index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js",
+                                  "page-shell.js", "review-state.js", "review-camera.js", "THIRD_PARTY_NOTICES.txt"}
+                self.assertEqual(expected_tools, set(builder.PROTOTYPE_TOOL_ASSETS))
+                self.assertEqual({"templates/" + name for name in builder.TEMPLATE_FILES},
+                                 {name for name in files.namelist() if name.startswith("templates/")})
+                # 三端工具、来源定位核心与上游许可按字节同源；许可不是仅有一个空文件名。
+                for name in expected_tools:
+                    relative = "templates/prototype/" + name
+                    self.assertEqual((PACK / relative).read_bytes(), files.read(relative))
+                self.assertIn("lib/documents/prototype_targets.py", files.namelist())
+                self.assertIn(b"MIT License", files.read("templates/prototype/THIRD_PARTY_NOTICES.txt"))
                 for script in ("scripts/plugin_service.py", "scripts/agent_config.py", "scripts/agent_config.sh"):
                     self.assertNotIn(script, files.namelist())
                 self.assertTrue({"mcp.json", ".mcp.json", "mcp_config.json"}.isdisjoint(files.namelist()))
@@ -282,6 +299,9 @@ class PluginDeliveryTest(unittest.TestCase):
                          list((source / "native_config").rglob("*")))
         self.assertFalse((source / "manager").exists())
         self.assertFalse((source / "scripts/plugin_service.py").exists())
+        # 在已声明模板根放入未登记脚本，证明真实构建不会因目录中新增文件而
+        # 扩大工具闭包；不复制或扫描业务计划与任何用户未跟踪资料。
+        (source / "templates/prototype/unlisted-tool.js").write_bytes(b"unlisted template must stay outside the package\n")
         for host in builder.HOSTS:
             with self.subTest(host=host):
                 archive = builder.build(source, self.root / "core-only-build", host)
@@ -291,6 +311,7 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertNotIn("model_service_included", metadata)
                     self.assertIn("lib/task_graph_cli.py", files.namelist())
                     self.assertIn(builder.PREFERENCE_PROJECTION, files.namelist())
+                    self.assertNotIn("templates/prototype/unlisted-tool.js", files.namelist())
                     self.assertFalse(any(name.startswith("native_config/") for name in files.namelist()))
 
     def test_local_sources_have_complete_payloads_and_real_relative_marketplace_targets(self):
@@ -695,9 +716,16 @@ class PluginDeliveryTest(unittest.TestCase):
                         str(root / "plugins/source_pack.py")]
 
                 def invoke(*arguments):
-                    return subprocess.run([*base, *map(str, arguments)], cwd=project,
-                                          env=isolated_environment(self.root / "feedback-context"),
-                                          capture_output=True, text=True, timeout=20)
+                    command = [*base, *map(str, arguments)]
+                    result = subprocess.run(command, cwd=project,
+                                            env=isolated_environment(self.root / "feedback-context"),
+                                            capture_output=True, text=True, timeout=20)
+                    # 完整保留三端每次真实 helper 的命令、退出码与原始输出，包含
+                    # 预期拒绝的负例；请求级 fixture 保留时，QA 可直接复核原日志。
+                    with (self.root / ("delivery-feedback-" + host + ".log")).open("a", encoding="utf-8") as log:
+                        log.write(json.dumps({"command": command, "exit_code": result.returncode}, ensure_ascii=False) + "\n")
+                        log.write(result.stdout + result.stderr + "\n")
+                    return result
 
                 def helper(*arguments):
                     return invoke("helper", "--project", project, *arguments)
@@ -715,11 +743,9 @@ class PluginDeliveryTest(unittest.TestCase):
                     body = Path(resource["path"]).read_bytes()
                     self.assertEqual(hashlib.sha256(body).hexdigest(), resource["sha256"])
                     (prototype / ("feedback.html" if name == "page.html" else name)).write_bytes(body)
-                # 旧索引只是导航来源，不要求其采用当前通用壳结构，更不执行其脚本。
-                # 别名和hash保留原语义；新项目实际只需上方具体页面和CSS。
-                (prototype / "index.html").write_text(
-                    '<!doctype html><html><body><details open><summary>业务分组</summary>'
-                    '<a href="./feedback.html#state">原业务反馈页</a></details></body></html>', encoding="utf-8")
+                # 新项目只有具体页面和业务 CSS，不先复制 index 或通信脚本来掩盖
+                # 包外 prepare 的真实依赖缺失；旧薄目录由已有导航分支独立覆盖。
+                self.assertFalse((prototype / "index.html").exists())
                 concrete = project / page
                 html = concrete.read_text(encoding="utf-8").replace(
                     'data-prototype-plan-source=""', 'data-prototype-plan-source="' + plan + '"')
@@ -727,7 +753,7 @@ class PluginDeliveryTest(unittest.TestCase):
                     '<a data-prototype-document="markdown" href="../../plans/feedback.md" '
                     'target="_blank" rel="noopener">需求</a>')
                 html = html.replace('<div class="prototype-placeholder">',
-                                    '<div id="feedback-state" class="prototype-placeholder">')
+                                    '<div id="feedback-state" data-req-ids="REQ-001" class="prototype-placeholder">')
                 concrete.write_text(html, encoding="utf-8")
                 before = tree_snapshot(project)
                 command = ("lib/documents/prototype_feedback_cli.py", "prepare", "--root", project,
@@ -755,7 +781,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 derived = (bundle / "project" / page).read_text(encoding="utf-8")
                 self.assertEqual(1, derived.count('data-prototype-review-bridge'))
                 self.assertNotIn('data-prototype-review-bridge', concrete.read_text(encoding="utf-8"))
-                for name in ("index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js", "page-shell.js"):
+                for name in builder.PROTOTYPE_TOOL_ASSETS:
                     self.assertEqual((root / "templates/prototype" / name).read_bytes(),
                                      (bundle / "tool" / name).read_bytes())
                     if name != "index.html":
@@ -767,10 +793,12 @@ class PluginDeliveryTest(unittest.TestCase):
 
                 # JSON 仅是显式交接输入。以整树字节/节点快照证明 validate 没有
                 # 写需求、HTML、adapter、批准或新 spec/sidecar；错误输入也不能写。
-                item = {"id": "feedback-1", "page": page, "target_id": "feedback-state",
-                        "kind": "suggestion", "message": "建议说明当前状态 approved", "req_ids": ["REQ-001"],
+                target = {"scope": "node", "page": page, "locator": {"type": "id", "id": "feedback-state"}}
+                anchor = {"id": "anchor-1", "number": 1, "target": target}
+                item = {"id": "feedback-1", "number": 1, "operation": "modify", "target": target,
+                        "message": "建议说明当前状态 approved", "req_ids": ["REQ-001"], "reference_ids": ["anchor-1"],
                         "comparison": {"before_text": "产品页面内容", "after_text": "当前状态"}}
-                feedback = {"schema_version": 2, "context": ready["context"], "items": [item]}
+                feedback = {"schema_version": 3, "context": ready["context"], "anchors": [anchor], "items": [item]}
                 exported = self.root / "feedback-input.json"
 
                 def validate(value):
@@ -786,7 +814,21 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual(0, validated.returncode, validated.stdout + validated.stderr)
                 current = json.loads(validated.stdout)
                 self.assertEqual("current", current["status"])
-                self.assertEqual([{"page": page, "target_id": "feedback-state", "items": [item]}], current["changes"])
+                self.assertEqual([anchor], current["anchors"])
+                self.assertEqual([{"target": target, "items": [item]}], current["changes"])
+                self.assertEqual(before, tree_snapshot(project))
+                # Markdown 复用真实 CLI 解析，和 JSON 返回同一业务交接；不以 mock 或
+                # 仅解析围栏替代包外 prepare/validate 的完整来源与不可变工具核验。
+                markdown = self.root / "feedback-input.md"
+                markdown.write_text("# 评审意见\n\n## Agent Workflow Feedback Payload\n\n```json\n" +
+                                    json.dumps(feedback, ensure_ascii=False) + "\n```\n", encoding="utf-8")
+                markdown_original = markdown.read_bytes()
+                validated_markdown = helper("lib/documents/prototype_feedback_cli.py", "validate",
+                                            "--root", project, "--adapter", adapter, "--input", markdown,
+                                            "--data-dir", self.root / "review-data")
+                self.assertEqual(0, validated_markdown.returncode, validated_markdown.stdout + validated_markdown.stderr)
+                self.assertEqual(current, json.loads(validated_markdown.stdout))
+                self.assertEqual(markdown_original, markdown.read_bytes())
                 self.assertEqual(before, tree_snapshot(project))
                 unknown = json.loads(json.dumps(feedback))
                 unknown["items"][0]["approved"] = True
@@ -848,12 +890,15 @@ class PluginDeliveryTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("claude"), "Claude Code CLI unavailable; actual inventory discovery pending")
     def test_claude_native_inventory_discovers_skills_workers_and_main_entry(self):
         home = self.root / "claude-inventory-home"
-        home.mkdir()
+        home.mkdir(exist_ok=True)
         result = subprocess.run([shutil.which("claude"), "--plugin-dir", str(self.installed["claude"]),
                                  "plugin", "details", "xy-workflow"],
                                 cwd=home, env=isolated_environment(home), capture_output=True, text=True, timeout=30)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("Skills (13)", result.stdout)
+        # guidance 已纳入当前可发现技能，原生清单必须与唯一产品声明完整一致，
+        # 不能继续硬编码旧的 13 项，也不能仅凭总数正确就漏验实际名称。
+        skills = sorted(builder.CORE_SKILLS | set(builder.IDENTITY["skill_aliases"]))
+        self.assertIn("Skills (" + str(len(skills)) + ")  " + ", ".join(skills), result.stdout)
         self.assertIn("xy-config", result.stdout)
         self.assertIn("Agents (8)", result.stdout)
         self.assertIn("pm", result.stdout)

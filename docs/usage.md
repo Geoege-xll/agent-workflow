@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前正式发行 `xy-workflow 3.0.1` 与独立配置工具 `0.1.1` 已发布并更新本机，组件固定描述为 published。三个 stable 来源与安装载荷匹配同一最终 CI；实际证据及未验证边界见[发行主题](plans/stable-product-release.md)。官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码候选为 `xy-workflow 3.0.2` 与独立配置工具 `0.1.2`，候选待验收、发布及本机升级，组件固定描述保持 unpublished。已有正式发行 `3.0.1`／`0.1.1` 的 stable 来源与安装载荷证据见[发行主题](plans/stable-product-release.md)，不能作为当前候选已发布或安装的证明。官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
@@ -62,7 +62,13 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 需要节点反馈时，PM 用当前物理插件根的白名单 `prototype_feedback_cli.py prepare`，显式指定实际项目、同一 adapter、唯一需求 Markdown 和请求 ID，提供返回的 `review_url`。通用导航／画板／批注工具随插件交付，prepare 将明确页面的必要依赖与工具生成用户级私有离线快照，不向项目复制通用壳，不要求项目存在 index 或插件专用样式；项目具体页面仍是编辑权威。快照固定工具版本与内容、需求和逐页依赖，插件升级不覆盖已打开的评审。
 
-用户直接在链接中记录“必须改／建议／疑问”、REQ 关联与局部修改提案，无需填写 SHA；当前文字摘录与建议文字不代表历史批准。schema 2 导出由 `validate` 重读项目当前源并核对原快照，再交回原 UI Agent 在当前授权范围修订 HTML。旧绑定、损坏与非法内容明确失败并保留意见，不自动重绑、改需求、改页面或授予批准，也不增加业务确认。旧壳迁移另有预览／执行／恢复入口，只清理可证明归属的纯工具文件，混合或未知业务资产保留。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+评审工作台固定设计视口，通过相机缩放和移动查看，浏览模式保留页面自身按钮、表单、滚动与导航；批注模式选择节点。导航抽屉默认收起，侧面板以“整改／标记”两个 Tab 管理数据，开发说明在独立大对话框阅读。标记 A 只引用具体节点，整改支持节点修改／新增／删除、页面修改／新增和全局修改；不再设置意见等级。整改可关联多个已存在的 A，跨页引用保持稳定编号；正文与建议各不超过 4000 字符，修改／新增必须填写正文，删除原因可空，局部比较只用于节点修改。
+
+新导出的 JSON 是严格四字段 `schema_version: 3`、`context`、`anchors`、`items`，其中 `context` 仍为严格版本 2 绑定。Markdown 导出在唯一标题 `## Agent Workflow Feedback Payload` 下提供单个 JSON 代码围栏，承载同一真实 envelope；两种格式都交给同一 `validate` 入口。目标优先采用源页面唯一稳定 ID；匿名源元素由装配工具生成来源键并只注入派生副本，重读源时独立重建。动态新增且无源的节点不能独立确认；保留输入，由用户显式选择有来源父层。业务 REQ 只来自源元素明确的 `data-req-ids` 映射，未声明时为 `[]`，不从文本猜测。
+
+`validate` 重读项目当前源并核对原快照后，才把当前修订输入交回原 UI Agent。快照联合核对来源窗口、origin、页面及 token 的桥，父壳不跨 `file://` 读取子页面 DOM；子页面负责命中、局部几何、高亮与有限摘录，摘录本身不是来源证明。草稿、相机和撤回只属于绑定 `review_id` 的独立会话快照，不进入反馈 envelope，旧草稿不迁移。旧版已发布的 feedback 2／manifest 2／bridge 2 仅走原严格只读消费分支；不把新反馈降级或旧反馈静默重绑。
+
+旧绑定、损坏、未知字段与非法内容明确失败并保留意见，不自动改需求、页面或授予批准，也不增加业务确认。旧壳迁移另有预览／执行／恢复入口，只清理可证明归属的纯工具文件，混合或未知业务资产保留。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 实施者按实际改动完成必要构建、运行或文档检查，提交真实证据。Full 由请求级唯一独立只读 QA 检查集成范围，失败交原职责作者修复并由原 Reviewer 复查。Light 按风险与明确请求选择必要独立审查；未做独立 QA 时只报告真实验证结果，不宣称 QA PASS。
 

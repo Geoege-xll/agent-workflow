@@ -25,6 +25,7 @@ from lib.skills.business_confirmation_policy import (
 )
 from lib.skills.qa_review_policy import validate_pack_qa_review_policy
 from lib.skills.role_skills import CORE_SKILLS, ROLE_SKILLS
+from lib.documents.prototype_review import TOOL_ASSETS as PROTOTYPE_TOOL_ASSETS
 from product.command_identity import load_identity
 from product.release_channels import version_channel
 from lib.skills.selected_skills import LOCK as SELECTED_LOCK, VENDOR as SELECTED_VENDOR, SPECS as SELECTED_SPECS, snapshot as selected_snapshot
@@ -59,6 +60,11 @@ HOST_LIB_FILES = ("__init__.py", "claude_instructions.py", "claude_options.py",
 # 维护入口单独封闭白名单：既不遍历维护目录，也不读取独立产品源码或网页。
 # 新的薄模块必须经显式审查后加入；Skill 不属于九个业务核心或角色预载列表。
 MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
+# 模板只装配声明过的起点和当前评审工具闭包，不遍历 templates 整树。评审资产名
+# 复用 prepare 的唯一白名单，三端原样复制同一资源及随附许可；未知临时文件不会入包。
+TEMPLATE_FILES = ("project.yaml.example", "docs/STANDARDS.md", "docs/PLAN.md", "docs/PROJECT.md",
+                  "prototype/page.html", "prototype/prototype.css",
+                  *("prototype/" + name for name in PROTOTYPE_TOOL_ASSETS))
 MAINTENANCE_SKILL = "plugins/maintenance/skills/" + CONFIG_SKILL + "/SKILL.md"
 MAINTENANCE_CODEX_POLICY = "plugins/maintenance/skills/" + CONFIG_SKILL + "/agents/openai.yaml"
 MAINTENANCE_INVOCATIONS = {"codex": "$" + PLUGIN_NAME + ":" + CONFIG_SKILL,
@@ -267,11 +273,13 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         source_files[relative] = digest(body)
 
     # documents 是唯一核心载荷白名单根，包含 prototype_review 及其安全读取、
-    # 依赖校验闭包；templates 同源装配离线工具和页面起点，不在宿主间维护副本。
+    # 依赖校验闭包；模板在下方按明确文件白名单同源装配，不在宿主间维护副本。
     for folder in ("product", "roles", "platforms/shared", "platforms/" + host,
-                   "templates", "lib/documents", "lib/delivery", "lib/project", "lib/skills"):
+                   "lib/documents", "lib/delivery", "lib/project", "lib/skills"):
         for relative in tree_files(source, folder):
             copy(relative)
+    for relative in TEMPLATE_FILES:
+        copy("templates/" + relative)
     for name in LIB_FILES:
         copy("lib/" + name)
     for name in HOST_LIB_FILES:

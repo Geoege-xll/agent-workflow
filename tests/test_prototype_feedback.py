@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
+import zipfile
 import json
 import os
 from pathlib import Path
@@ -19,6 +21,42 @@ from tests.test_prototype_workspace import (
 )
 
 
+LEGACY_REVISION = "a99cd86356f5574fe99273b2cec323feea8a16af"
+
+
+@lru_cache(maxsize=1)
+def legacy_fixture():
+    """CI直接读取固定真实旧包，不需要Git历史、旧安装或旧源码执行。"""
+    with zipfile.ZipFile(PACK / "tests/fixtures/prototype-review-v2.zip") as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    metadata = json.loads(entries["fixture.json"])
+    if metadata["revision"] != LEGACY_REVISION: raise AssertionError("旧包来源提交不匹配")
+    return metadata, entries
+
+
+def prepare_legacy(project, data_dir, page):
+    """常规旧协议用真实冻结六资源；独立旧包用例验证原派生物逐字节一致。"""
+    from lib.documents import prototype_review as review
+    fixture, entries = legacy_fixture()
+    tools = {name.removeprefix("bundle/"): body for name, body in entries.items() if name.startswith("bundle/tool/")}
+    context, _, files, navigation = feedback.capture_review(project, "project.yaml", "docs/plans/settings.md", "review-1", None, tool=fixture["context"]["tool"], format_version=2)
+    assembled = review._assemble_v2(context, files, tools, navigation)
+    assembled["manifest.json"] = review.json_bytes({"schema_version": 2, "context": context, "files": [
+        {"path": path, "size": len(body), "sha256": review.digest(body)} for path, body in sorted(assembled.items())]})
+    with review._request_directory(context, data_dir, create=True) as (request_path, request_fd):
+        bundle_path = request_path / context["review_id"]
+        if not bundle_path.exists():
+            descriptor = review._child(request_fd, context["review_id"])
+            try:
+                for name, body in assembled.items(): review._write_at(descriptor, name, body)
+                review._tree(descriptor, freeze=True)
+                os.fchmod(descriptor, 0o500)
+            finally: os.close(descriptor)
+        else:
+            review._check_bundle(request_fd, context, expected=assembled)
+    return {"status": "ready", "context": context, "review_url": (bundle_path / "index.html").as_uri() + "#page=settings.html", "bundle_path": str(bundle_path), "reused": False}
+
+
 class PrototypeFeedbackTest(unittest.TestCase):
     def setUp(self) -> None:
         # 每个用例只保有当前最小项目；夹具复用真实校验器合同，不复制任何业务原型。
@@ -28,13 +66,15 @@ class PrototypeFeedbackTest(unittest.TestCase):
         self.plan, _ = bind_requirement_documents(self.project)
         self.page = (PROTOTYPE_RELATIVE / "settings.html").as_posix()
         page = self.project / self.page
-        page.write_text(page.read_text().replace('data-contract-for="open-settings-dialog"',
+        page.write_text(page.read_text().replace("<main>", "<main data-prototype-page-content>").replace('data-contract-for="open-settings-dialog"',
                         'id="open-contract" data-contract-for="open-settings-dialog" data-interface-ref="settings.read"'), encoding="utf-8")
         self.context = None
         self.data_dir = Path(self.temporary.name).resolve() / "review-data"
 
     def prepare(self, **kwargs):
-        return feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", data_dir=self.data_dir, **kwargs)
+        if kwargs:
+            return feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", data_dir=self.data_dir, **kwargs)
+        return prepare_legacy(self.project, self.data_dir, self.page)
 
     def validate(self, value, adapter="project.yaml"):
         return feedback.validate_feedback(self.project, adapter, value, data_dir=self.data_dir)
@@ -197,7 +237,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
         index = self.project / PROTOTYPE_RELATIVE / "index.html"
         for number in range(16):
             name = f"screen-{number}.html"
-            (index.parent / name).write_text(PAGE_HTML, encoding="utf-8")
+            (index.parent / name).write_text(PAGE_HTML.replace("<main>", "<main data-prototype-page-content>"), encoding="utf-8")
             index.write_text(index.read_text().replace('</nav>', f'<a href="{name}">页面</a></nav>'), encoding="utf-8")
         with self.assertRaises(ValueError):
             self.prepare()
@@ -258,6 +298,88 @@ class PrototypeFeedbackTest(unittest.TestCase):
         self.assertEqual("error", json.loads(result.stdout)["status"])
         self.assertEqual('{"schema_version":1,"schema_version":1}', input_file.read_text())
         self.assertEqual(before, tree_snapshot(self.project))
+
+
+    def envelope_v3(self, pages=None):
+        ready = feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", pages or [self.page], data_dir=self.data_dir)
+        return {"schema_version": 3, "context": ready["context"], "anchors": [
+            {"id": "anchor-1", "number": 3, "target": {"scope": "node", "page": self.page, "locator": {"type": "id", "id": "open-settings-dialog"}}}],
+            "items": [{"id": "opinion-1", "number": 7, "operation": "modify", "target": {"scope": "node", "page": self.page,
+                      "locator": {"type": "id", "id": "open-settings-dialog"}}, "message": "实际修改意见", "req_ids": [], "reference_ids": ["anchor-1"]}]}
+
+    def test_v3_real_source_anonymous_scopes_references_and_read_only(self):
+        from lib.documents.prototype_targets import capture_targets
+        source_path = self.project / self.page
+        source = source_path.read_bytes()
+        other_page = (PROTOTYPE_RELATIVE / "another.html").as_posix()
+        (self.project / other_page).write_bytes(source)
+        metadata = capture_targets(other_page, source)
+        key = next(key for key, locator in metadata["source_keys"].items() if locator["type"] == "source")
+        before = tree_snapshot(self.project)
+        value = self.envelope_v3([self.page, other_page])
+        # 节点整改可以引用另一个登记页面上的A；引用关系不能按当前页面裁掉。
+        anonymous = {"scope": "node", "page": other_page, "locator": {"type": "source", "key": key}}
+        value["anchors"].append({"id": "anchor-2", "number": 9, "target": anonymous})
+        value["items"][0]["reference_ids"].append("anchor-2")
+        value["items"].extend([
+            {"id": "opinion-2", "number": 20, "operation": "add", "target": {"scope": "page", "page": self.page}, "message": "新增页面模块", "req_ids": [], "reference_ids": []},
+            {"id": "opinion-3", "number": 21, "operation": "modify", "target": {"scope": "global"}, "message": "统一视觉", "req_ids": [], "reference_ids": ["anchor-1"]},
+            {"id": "opinion-4", "number": 22, "operation": "delete", "target": anonymous, "message": "", "req_ids": [], "reference_ids": []}])
+        current = self.validate(value)
+        self.assertEqual("current", current["status"])
+        self.assertEqual(value["anchors"], current["anchors"])
+        self.assertEqual(4, sum(len(change["items"]) for change in current["changes"]))
+        self.assertEqual(before, tree_snapshot(self.project))
+        self.assertEqual(source, source_path.read_bytes())
+
+    def test_v3_closed_boundaries_and_business_mapping(self):
+        value = self.envelope_v3()
+        mutations = [
+            lambda v: v["items"][0].update(kind="must_change"),
+            lambda v: v["items"][0].update(severity="high"),
+            lambda v: v["items"][0].update(position="after"),
+            lambda v: v["items"][0].update(number=True),
+            lambda v: v["items"][0].update(target={"scope": []}),
+            lambda v: v["items"][0].update(reference_ids=["missing"]),
+            lambda v: v["items"][0].update(req_ids=["REQ-001"]),
+            lambda v: v["items"][0].update(target={"scope": "page", "page": self.page}, operation="delete"),
+            lambda v: v["items"][0].update(target={"scope": "global"}, operation="add"),
+            lambda v: v["items"][0].update(target={"scope": "node", "page": self.page, "locator": {"type": "source", "key": "source-" + "0" * 64}}),
+            lambda v: v["items"][0].update(target={"scope": "node", "page": self.page, "locator": {"type": "id", "id": "prototype-page-title"}}),
+            lambda v: v["anchors"].append({**v["anchors"][0], "id": "anchor-other", "number": 4}),
+            lambda v: v["items"][0].update(operation="add", comparison={"before_text": "a", "after_text": "b"}),
+        ]
+        for mutate in mutations:
+            bad = copy.deepcopy(value); mutate(bad)
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError): self.validate(bad)
+        source = self.project / self.page
+        original = source.read_text()
+        source.write_text(original.replace('id="open-settings-dialog"', 'id="open-settings-dialog" data-req-ids="REQ-001"'))
+        value = self.envelope_v3(); value["items"][0]["req_ids"] = ["REQ-001"]
+        self.assertEqual("current", self.validate(value)["status"])
+        source.write_text(original.replace('<main', '<main data-prototype-review-source="forged"', 1))
+        with self.assertRaises(ValueError): self.envelope_v3()
+
+    def test_v3_markdown_unique_payload_and_cross_version_binding(self):
+        value = self.envelope_v3()
+        markdown = "# 可读摘要\n这些文字不授予批准。\n\n" + feedback.MARKDOWN_PAYLOAD_HEADING + "\n```json\n" + json.dumps(value, ensure_ascii=False) + "\n```\n"
+        self.assertEqual(value, feedback.parse_feedback(markdown.encode()))
+        self.assertEqual("current", self.validate(feedback.parse_feedback(markdown.encode()))["status"])
+        input_path = Path(self.temporary.name).resolve() / "feedback.md"
+        input_path.write_text(markdown, encoding="utf-8")
+        command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8", str(PACK / "lib/documents/prototype_feedback_cli.py"),
+                   "validate", "--root", str(self.project), "--adapter", "project.yaml", "--input", str(input_path), "--data-dir", str(self.data_dir)]
+        result = subprocess.run(command, text=True, capture_output=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("current", json.loads(result.stdout)["status"])
+        self.assertEqual(markdown, input_path.read_text())
+        for bad in (markdown + markdown, markdown + "\n```json\n{}\n```", markdown.replace("```json", "```javascript"), markdown.replace(feedback.MARKDOWN_PAYLOAD_HEADING, "## 近似标题")):
+            with self.subTest(bad=bad[-40:]), self.assertRaises(ValueError): feedback.parse_feedback(bad.encode())
+        legacy = self.envelope()
+        legacy["context"] = value["context"]
+        with self.assertRaises(ValueError): self.validate(legacy)
+        value["context"] = self.context
+        with self.assertRaises(ValueError): self.validate(value)
 
 
 if __name__ == "__main__":

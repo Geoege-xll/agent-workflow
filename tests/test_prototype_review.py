@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 from lib.documents import prototype_feedback as feedback
 from lib.documents import prototype_review as review
+from tests.test_prototype_feedback import legacy_fixture
+from lib.documents.prototype_targets import inject_source_targets
 from tests.test_prototype_workspace import PACK, PROTOTYPE_RELATIVE, bind_requirement_documents, tree_snapshot, write_valid_project
 
 
@@ -26,6 +28,8 @@ class PrototypeReviewTest(unittest.TestCase):
         self.project = write_valid_project(self.base / "project").resolve()
         self.plan, _ = bind_requirement_documents(self.project)
         self.page = (PROTOTYPE_RELATIVE / "settings.html").as_posix()
+        source = self.project / self.page
+        source.write_text(source.read_text().replace("<main>", "<main data-prototype-page-content>"), encoding="utf-8")
         self.prototype = self.project / PROTOTYPE_RELATIVE
         self.data = self.base / "data"
 
@@ -33,10 +37,29 @@ class PrototypeReviewTest(unittest.TestCase):
         return feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", [self.page], data_dir=self.data, **kwargs)
 
     def validate(self, ready):
-        return feedback.validate_feedback(self.project, "project.yaml", {"schema_version": 2, "context": ready["context"], "items": []}, data_dir=self.data)
+        return feedback.validate_feedback(self.project, "project.yaml", {"schema_version": 3, "context": ready["context"], "anchors": [], "items": []}, data_dir=self.data)
 
     def preview(self, **kwargs):
         return review.migration_preview(self.project, "project.yaml", "docs/plans/settings.md", "review-1", [self.page], **kwargs)
+
+    def test_released_v2_bundle_is_readable_without_new_assets_or_new_assembly(self):
+        """把原提交真实派生包原样落盘，旧分支不可借新白名单或新装配通过。"""
+        fixture, entries = legacy_fixture()
+        context = fixture["context"]
+        source = {name.removeprefix("source/"): body for name, body in entries.items() if name.startswith("source/")}
+        bundle = {name.removeprefix("bundle/"): body for name, body in entries.items() if name.startswith("bundle/")}
+        with review._request_directory(context, self.data, create=True) as (_, request_fd):
+            descriptor = review._child(request_fd, context["review_id"])
+            try:
+                for name, body in bundle.items(): review._write_at(descriptor, name, body)
+                review._tree(descriptor, freeze=True); os.fchmod(descriptor, 0o500)
+            finally: os.close(descriptor)
+        with mock.patch.object(review, "TOOL_ASSETS", ("nonexistent-new.js",)), mock.patch.object(review, "_assemble", side_effect=AssertionError("旧包调用了新装配")):
+            result = review.validate_bundle(context, data_dir=self.data, source_files=source, navigation=fixture["navigation"], format_version=2)
+        self.assertEqual(2, result["schema_version"])
+        self.assertEqual(6, len([name for name in bundle if name.startswith("tool/") and name != "tool/version.txt"]))
+        corrupted = dict(source); corrupted[self.page] += b"changed"
+        with self.assertRaises(ValueError): review.validate_bundle(context, data_dir=self.data, source_files=corrupted, navigation=fixture["navigation"], format_version=2)
 
     def test_standalone_selected_page_has_no_index_or_tool_requirement(self):
         (self.prototype / "index.html").unlink()
@@ -52,8 +75,8 @@ class PrototypeReviewTest(unittest.TestCase):
         self.assertTrue((bundle / "project" / self.page).is_file())
         original = (self.project / self.page).read_text()
         derived = (bundle / "project" / self.page).read_text()
-        injection = '<script src="../../../../tool/page-shell.js" data-prototype-review-bridge></script>'
-        self.assertEqual(original.replace("</body>", injection + "</body>"), derived)
+        injection = '<script src="../../../../tool/page-shell.js" data-prototype-review-bridge="3"></script>'
+        self.assertEqual(inject_source_targets(self.page, original.encode()).decode().replace("</body>", injection + "</body>"), derived)
         self.assertEqual("current", self.validate(ready)["status"])
         self.assertTrue(self.prepare()["reused"])
         command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
@@ -62,6 +85,24 @@ class PrototypeReviewTest(unittest.TestCase):
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(ready["context"]["pages"], json.loads(result.stdout)["pages"])
+
+    def test_existing_standalone_main_gets_only_derived_content_marker(self):
+        """旧合法HTML不必改源；唯一main兼容只发生在项目外派生快照中。"""
+        source = self.project / self.page
+        original = source.read_bytes().replace(b" data-prototype-page-content", b"")
+        source.write_bytes(original)
+        before = tree_snapshot(self.project)
+        ready = self.prepare()
+        derived = (Path(ready["bundle_path"]) / "project" / self.page).read_bytes()
+        self.assertEqual(1, derived.count(b" data-prototype-page-content"))
+        self.assertIn(b"data-prototype-review-source=", derived)
+        self.assertEqual("current", self.validate(ready)["status"])
+        self.assertEqual(original, source.read_bytes())
+        self.assertEqual(before, tree_snapshot(self.project))
+        for invalid in (original.replace(b"</body>", b"<main>ambiguous</main></body>"), original.replace(b"<main>", b"<section>").replace(b"</main>", b"</section>")):
+            source.write_bytes(invalid)
+            with self.assertRaises(ValueError): self.prepare()
+            self.assertEqual(invalid, source.read_bytes())
 
     def test_custom_navigation_groups_labels_and_script_safe_boot(self):
         index = self.prototype / "index.html"

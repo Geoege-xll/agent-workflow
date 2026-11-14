@@ -1,152 +1,770 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>原型浏览工作区 · 交互设计样稿</title>
-  <link rel="stylesheet" href="prototype.css">
-  <script src="workspace-design.js" defer></script>
-</head>
-<body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive" data-prototype-plan-source="docs/plans/workflow-document-lifecycle.md">
-  <!-- 工作区直接作为首屏，名称、简述和返回只保留在内部当前页头部，不再叠加展示头部。 -->
-  <div class="prototype-stage" role="region" aria-label="原型浏览工作区高保真设计样稿">
-    <div class="prototype-frame">
-      <!-- 产品插槽模拟未来工作区本身。示例画面是本页状态，不是另一份页面注册表或生产承载器。 -->
-      <main class="prototype-content workspace-layout" data-prototype-page-content id="workspace-design">
-        <aside class="workspace-sidebar" id="workspace-sidebar" aria-label="页面侧栏">
-          <div class="workspace-brand">
-            <span class="workspace-brand-icon" aria-hidden="true"><span></span><span></span></span>
-            <div><strong>原型工作区</strong><span>示例项目</span></div>
-          </div>
-          <div class="workspace-sidebar-label">页面导航 <span>3 页</span></div>
-          <nav class="workspace-page-tree" aria-label="虚构示例页面">
-            <details class="workspace-group" open>
-              <summary id="workspace-group-documents"><span class="group-chevron" aria-hidden="true"></span><span>文档中心</span><span class="workspace-group-count">2</span></summary>
-              <div class="workspace-group-pages">
-                <a id="workspace-page-overview" class="workspace-page-link" href="#demo-overview" data-demo-page aria-current="page"><span class="page-outline-icon" aria-hidden="true"></span><span>文档概览</span><span class="workspace-current-marker" data-current-marker>当前</span></a>
-                <a id="workspace-page-requirement" class="workspace-page-link" href="#demo-requirement" data-demo-page><span class="page-outline-icon" aria-hidden="true"></span><span>需求详情</span><span class="workspace-current-marker" data-current-marker hidden>当前</span></a>
-              </div>
-            </details>
-            <details class="workspace-group" open>
-              <summary id="workspace-group-reference"><span class="group-chevron" aria-hidden="true"></span><span>原型浏览</span><span class="workspace-group-count">1</span></summary>
-              <div class="workspace-group-pages">
-                <a id="workspace-page-guidance" class="workspace-page-link" href="#demo-guidance" data-demo-page><span class="page-outline-icon" aria-hidden="true"></span><span>页面说明</span><span class="workspace-current-marker" data-current-marker hidden>当前</span></a>
-              </div>
-            </details>
-          </nav>
-          <div class="workspace-sidebar-foot"><span class="sidebar-project-mark" aria-hidden="true"></span><span>示例项目的原型页面</span></div>
-        </aside>
-
-        <div class="workspace-view">
-          <header class="workspace-page-heading">
-            <!-- 返回负责定位当前页；侧栏开关只改变布局。两个动作始终使用独立控件。 -->
-            <button id="workspace-back-to-navigation" class="workspace-back-button" type="button" aria-label="返回当前页面导航" title="返回当前页面导航"><span class="back-chevron" aria-hidden="true"></span></button>
-            <div class="workspace-heading-copy">
-              <p class="workspace-breadcrumb" id="workspace-current-group">文档中心</p>
-              <h1 id="workspace-page-title" tabindex="-1">文档概览</h1>
-              <p id="workspace-page-description">集中查看项目文档的名称、用途与当前阶段。</p>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>原型评审工作台 · 整改与定位</title>
+    <link rel="stylesheet" href="prototype.css">
+    <link rel="stylesheet" href="prototype-review.css">
+    <script src="workspace-design.js" defer></script>
+  </head>
+  <body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive" data-prototype-plan-source="docs/plans/workflow-document-lifecycle.md">
+    <div class="prototype-stage">
+      <div class="prototype-frame">
+        <main id="review-workspace" class="review" data-prototype-page-content>
+          <h1 class="visually-hidden">原型评审工作台</h1>
+          <header class="review-toolbar">
+            <div class="review-toolbar-start">
+              <button id="navigation-toggle" type="button" class="review-quiet" aria-controls="navigation-drawer" aria-expanded="false">☰ 原型页面</button>
+              <span class="review-toolbar-divider"></span>
+              <strong id="current-page-title">调用偏好页</strong>
             </div>
-            <button id="workspace-sidebar-toggle" class="workspace-sidebar-toggle" type="button" aria-controls="workspace-sidebar" aria-expanded="true"><svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect><path d="M7.25 3.5v13"></path></svg><span id="workspace-sidebar-toggle-label">收起侧栏</span></button>
+            <fieldset class="review-segment mode-segment">
+              <legend class="visually-hidden">操作模式</legend>
+              <label><input id="mode-browse" name="review-mode" type="radio" value="browse" checked><span>浏览</span></label>
+              <label><input id="mode-annotate" name="review-mode" type="radio" value="annotate"><span>⌖ 批注</span></label>
+            </fieldset>
+            <div class="review-toolbar-end">
+              <button id="open-developer" type="button" class="review-quiet">开发说明</button>
+              <button id="open-feedback" class="review-secondary review-mobile-panel" type="button" aria-controls="review-panel" aria-expanded="false">整改清单 <span id="feedback-count">0</span></button>
+            </div>
           </header>
-
-          <section class="workspace-preview" aria-label="当前示例页面高保真画面">
-            <div class="workspace-preview-caption"><span>高保真预览</span><span class="workspace-preview-current"><span aria-hidden="true"></span>当前页面</span></div>
-
-            <!-- 下列三块仅是同一设计页内互斥的只读示例。只显示当前块，不请求或预载独立页面。 -->
-            <section class="demo-page" id="demo-overview" data-demo-screen data-screen-title="文档概览" data-screen-description="集中查看项目文档的名称、用途与当前阶段。" data-screen-group="文档中心" aria-label="文档概览虚构画面">
-              <div class="demo-topline"><span class="demo-project-name"><span class="demo-project-logo" aria-hidden="true"></span>示例项目</span><span class="demo-context">文档中心</span></div>
-              <div class="demo-document-body">
-                <div class="demo-page-intro"><div><p class="demo-eyebrow">项目文档</p><h3>把项目共识，放在同一处。</h3><p>从需求到设计，查看每份文档的用途与当前阶段。</p></div><span class="demo-readonly-label">只读示例</span></div>
-                <div class="demo-featured-document"><span class="demo-file-icon" aria-hidden="true"><span></span></span><div><p class="demo-featured-kicker">当前主题</p><h4>原型浏览工作区</h4><p>分组浏览、画面优先与需求关联</p></div><span class="demo-status demo-status-progress">设计中</span></div>
-                <div class="demo-list-heading"><h4>文档列表</h4><span>3 份示例文档</span></div>
-                <div class="demo-document-table" role="table" aria-label="示例文档列表">
-                  <div class="demo-document-row demo-table-head" role="row"><span role="columnheader">文档名称</span><span role="columnheader">阶段</span><span role="columnheader">类型</span></div>
-                  <div class="demo-document-row" role="row"><span role="cell"><strong>项目需求说明</strong><small>目标、范围与验收依据</small></span><span role="cell"><span class="demo-status demo-status-confirmed">需求确认</span></span><span class="demo-document-kind" role="cell">需求文档</span></div>
-                  <div class="demo-document-row" role="row"><span role="cell"><strong>原型浏览工作区</strong><small>布局、导航与演示行为</small></span><span role="cell"><span class="demo-status demo-status-progress">设计中</span></span><span class="demo-document-kind" role="cell">设计原型</span></div>
-                  <div class="demo-document-row" role="row"><span role="cell"><strong>界面设计规范</strong><small>共享组件与页面约定</small></span><span role="cell"><span class="demo-status">参考</span></span><span class="demo-document-kind" role="cell">设计规范</span></div>
+          <div class="review-body">
+            <section class="review-canvas-column" aria-label="设计稿画布">
+              <!-- 视口工具不在world内，不随相机缩放；中央只保留实际HTML稿件。 -->
+              <div id="canvas-viewport" class="cv-vp" role="region" aria-label="设计稿画布，方向键平移" tabindex="0">
+                <div id="canvas-world" class="cv-world">
+                  <div id="sample-canvas">
+                    <article id="sample-preferences" class="design-artboard" data-sample-page="preferences" aria-label="调用偏好完整虚构设计稿">
+                      <header class="design-topbar">
+                        <div class="design-brand">
+                          <span class="design-brand-mark" aria-hidden="true">A</span>
+                          <strong>Agent 工作台</strong>
+                        </div>
+                        <div class="design-context">
+                          <span>Codex</span>
+                          <span>/</span>
+                          <span>项目级 · agent_workflow</span>
+                        </div>
+                        <button id="demo-preferences-project" type="button" class="design-quiet" data-demo-action="project">项目位置 ↗</button>
+                      </header>
+                      <div class="design-app-body">
+                        <nav class="design-navigation" aria-label="工作台功能">
+                          <p>配置</p>
+                          <button id="demo-preferences-nav-preferences" type="button" data-demo-navigation="preferences" aria-current="page"><span aria-hidden="true">☷</span>调用偏好</button>
+                          <button id="demo-preferences-nav-native" type="button" data-demo-navigation="native"><span aria-hidden="true">▤</span>原生定义</button>
+                          <div class="design-navigation-footer">
+                            <i></i>
+                            本地配置
+                            <small>当前项目独立生效</small>
+                          </div>
+                        </nav>
+                        <section class="design-editor">
+                          <div class="design-title-row">
+                            <div>
+                              <p class="design-eyebrow">项目级偏好</p>
+                              <h3 id="sample-preferences-title">调用偏好</h3>
+                              <p>通用默认作为继承起点，也可以逐个 Agent 覆盖。</p>
+                            </div>
+                            <button id="sample-refresh" type="button" data-demo-action="refresh">↻ 刷新目录</button>
+                          </div>
+                          <section id="sample-defaults" class="design-defaults">
+                            <div>
+                              <h4>通用默认</h4>
+                              <p>项目内全部 Agent</p>
+                            </div>
+                            <div class="design-field">
+                              <label for="sample-default-model">模型</label>
+                              <select id="sample-default-model">
+                                <option>gpt-6.1</option>
+                                <option>gpt-6</option>
+                                <option>继承用户级</option>
+                              </select>
+                              <small>本层覆盖 · 用户级为 gpt-6</small>
+                            </div>
+                            <div class="design-field">
+                              <label for="sample-default-effort">推理强度</label>
+                              <select id="sample-default-effort">
+                                <option>high</option>
+                                <option>medium</option>
+                                <option>xhigh</option>
+                              </select>
+                              <small>本层覆盖 · 用户级为 medium</small>
+                            </div>
+                            <span class="design-status">已保存</span>
+                          </section>
+                          <div class="design-section-heading">
+                            <h4>逐 Agent 偏好 <span>4</span></h4>
+                            <p>留空继承通用默认；只影响后续派发。</p>
+                          </div>
+                          <div id="sample-batch-bar" class="design-batch">
+                            <label><input id="sample-select-all" type="checkbox"> 选择全部</label>
+                            <span id="sample-selected-count">未选择身份</span>
+                            <button id="sample-batch-inherit" type="button" data-demo-action="inherit">恢复所选继承</button>
+                          </div>
+                          <table class="design-table">
+                            <thead>
+                              <tr>
+                                <th>
+                                  调用身份
+                                </th>
+                                <th>
+                                  模型
+                                </th>
+                                <th>
+                                  推理强度
+                                </th>
+                                <th>
+                                  状态
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr id="sample-agent-designer">
+                                <td>
+                                  <label class="design-agent-label"><input id="sample-select-designer" type="checkbox" data-demo-selection><span><strong>xy-uiux</strong><small>界面与交互设计</small></span></label>
+                                </td>
+                                <td>
+                                  <select id="sample-model-designer" class="design-select-button" data-demo-choice="model" aria-label="xy-uiux 模型">
+                                    <option>继承 · gpt-6.1</option>
+                                    <option>gpt-6.1</option>
+                                    <option>gpt-6</option>
+                                  </select>
+                                  <small>来自通用默认</small>
+                                </td>
+                                <td>
+                                  <select id="sample-effort-designer" class="design-select-button" data-demo-choice="effort" aria-label="xy-uiux 推理强度">
+                                    <option>继承 · high</option>
+                                    <option>medium</option>
+                                    <option>high</option>
+                                    <option>xhigh</option>
+                                  </select>
+                                </td>
+                                <td>
+                                  <span class="design-status">继承</span>
+                                </td>
+                              </tr>
+                              <tr id="sample-agent-web">
+                                <td>
+                                  <label class="design-agent-label"><input id="sample-select-web" type="checkbox" data-demo-selection><span><strong>xy-web</strong><small>Web 界面实现</small></span></label>
+                                </td>
+                                <td>
+                                  <select id="sample-model-web" class="design-select-button" data-demo-choice="model" aria-label="xy-web 模型">
+                                    <option>gpt-6.1</option>
+                                    <option>gpt-6</option>
+                                  </select>
+                                  <small>本层覆盖</small>
+                                </td>
+                                <td>
+                                  <select id="sample-effort-web" class="design-select-button" data-demo-choice="effort" aria-label="xy-web 推理强度">
+                                    <option>xhigh</option>
+                                    <option>medium</option>
+                                    <option>high</option>
+                                  </select>
+                                </td>
+                                <td>
+                                  <span class="design-status">本层覆盖</span>
+                                </td>
+                              </tr>
+                              <tr id="sample-agent-python">
+                                <td>
+                                  <label class="design-agent-label"><input id="sample-select-python" type="checkbox" data-demo-selection><span><strong>xy-python</strong><small>Python 工具实现</small></span></label>
+                                </td>
+                                <td>
+                                  <select id="sample-model-python" class="design-select-button" data-demo-choice="model" aria-label="xy-python 模型">
+                                    <option>继承 · gpt-6.1</option>
+                                    <option>gpt-6.1</option>
+                                    <option>gpt-6</option>
+                                  </select>
+                                  <small>来自通用默认</small>
+                                </td>
+                                <td>
+                                  <select id="sample-effort-python" class="design-select-button" data-demo-choice="effort" aria-label="xy-python 推理强度">
+                                    <option>继承 · high</option>
+                                    <option>medium</option>
+                                    <option>high</option>
+                                    <option>xhigh</option>
+                                  </select>
+                                </td>
+                                <td>
+                                  <span class="design-status">继承</span>
+                                </td>
+                              </tr>
+                              <tr id="sample-agent-qa">
+                                <td>
+                                  <label class="design-agent-label"><input id="sample-select-qa" type="checkbox" data-demo-selection><span><strong>xy-qa</strong><small>独立验证</small></span></label>
+                                </td>
+                                <td>
+                                  <select id="sample-model-qa" class="design-select-button" data-demo-choice="model" aria-label="xy-qa 模型">
+                                    <option>继承 · gpt-6.1</option>
+                                    <option>gpt-6.1</option>
+                                    <option>gpt-6</option>
+                                  </select>
+                                  <small>来自通用默认</small>
+                                </td>
+                                <td>
+                                  <select id="sample-effort-qa" class="design-select-button" data-demo-choice="effort" aria-label="xy-qa 推理强度">
+                                    <option>继承 · high</option>
+                                    <option>medium</option>
+                                    <option>high</option>
+                                    <option>xhigh</option>
+                                  </select>
+                                </td>
+                                <td>
+                                  <span class="design-status">继承</span>
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div id="sample-deletion-anchor" class="design-deletion-anchor" aria-hidden="true">
+                          </div>
+                          <div class="design-inheritance-note">
+                            <span aria-hidden="true">ⓘ</span>
+                            <p><strong>继承顺序</strong><span>用户通用 → 用户逐身份 → 项目通用 → 项目逐身份</span></p>
+                            <button id="sample-inheritance-help" class="design-quiet" type="button" data-demo-action="help">查看说明</button>
+                          </div>
+                          <footer class="design-savebar">
+                            <div>
+                              <strong id="sample-save-state">没有未保存更改</strong>
+                              <p id="sample-business-status" role="status">后续派发读取当前保存值；运行采纳待实际会话确认。</p>
+                            </div>
+                            <button id="sample-discard" type="button" data-demo-action="discard">放弃更改</button>
+                            <button id="sample-preview" type="button" class="design-primary" data-demo-action="preview">预览并保存 ↗</button>
+                          </footer>
+                        </section>
+                      </div>
+                    </article>
+                    <article id="sample-native" class="design-artboard" data-sample-page="native" aria-label="原生定义完整虚构设计稿" hidden>
+                      <header class="design-topbar">
+                        <div class="design-brand">
+                          <span class="design-brand-mark" aria-hidden="true">A</span>
+                          <strong>Agent 工作台</strong>
+                        </div>
+                        <div class="design-context">
+                          <span>Claude</span>
+                          <span>/</span>
+                          <span>项目级 · agent_workflow</span>
+                        </div>
+                        <button id="demo-native-project" type="button" class="design-quiet" data-demo-action="project">项目位置 ↗</button>
+                      </header>
+                      <div class="design-app-body">
+                        <nav class="design-navigation" aria-label="工作台功能">
+                          <p>配置</p>
+                          <button id="demo-native-nav-preferences" type="button" data-demo-navigation="preferences"><span aria-hidden="true">☷</span>调用偏好</button>
+                          <button id="demo-native-nav-native" type="button" data-demo-navigation="native" aria-current="page"><span aria-hidden="true">▤</span>原生定义</button>
+                          <div class="design-navigation-footer">
+                            <i></i>
+                            本地配置
+                            <small>当前项目独立生效</small>
+                          </div>
+                        </nav>
+                        <section class="design-editor">
+                          <div class="design-title-row">
+                            <div>
+                              <p class="design-eyebrow">宿主原生配置</p>
+                              <h3 id="sample-native-title">原生定义</h3>
+                              <p>查看宿主能发现的 Agent，以及定义所在的来源。</p>
+                            </div>
+                            <button id="sample-native-refresh" type="button" data-demo-action="refresh">↻ 刷新定义</button>
+                          </div>
+                          <div class="design-native-layout">
+                            <aside class="design-definition-list">
+                              <label for="sample-native-search">查找 Agent</label>
+                              <input id="sample-native-search" type="search" placeholder="名称或职责">
+                              <button id="sample-native-item-designer" class="design-definition-item is-selected" type="button" data-definition="xy-uiux"><strong>xy-uiux</strong><small>界面与交互设计</small><span>插件缓存</span></button>
+                              <button id="sample-native-item-web" class="design-definition-item" type="button" data-definition="xy-web"><strong>xy-web</strong><small>Web 界面实现</small><span>插件缓存</span></button>
+                              <button id="sample-native-item-qa" class="design-definition-item" type="button" data-definition="xy-qa"><strong>xy-qa</strong><small>独立验证</small><span>项目定义</span></button>
+                              <p id="sample-native-empty" hidden>没有匹配的定义</p>
+                            </aside>
+                            <section id="sample-native-definition" class="design-definition">
+                              <div class="design-definition-title">
+                                <span class="design-avatar" aria-hidden="true">UI</span>
+                                <div>
+                                  <h4 id="sample-native-name">xy-uiux</h4>
+                                  <p id="sample-native-role">界面与交互设计</p>
+                                </div>
+                                <span class="design-status">只读</span>
+                              </div>
+                              <section id="sample-native-source" class="design-source">
+                                <h5>定义来源</h5>
+                                <p><strong>插件缓存</strong><span class="design-source-tag">由宿主管理</span></p>
+                                <code>plugins / xy-workflow / agents / xy-uiux.md</code>
+                                <small>缓存内容只读。需要覆盖时，请在项目层维护定义。</small>
+                                <button id="sample-source-action" type="button" class="design-quiet" data-demo-action="source">查看项目覆盖位置 ↗</button>
+                              </section>
+                              <dl class="design-definition-fields">
+                                <div>
+                                  <dt>
+                                    模型
+                                  </dt>
+                                  <dd>
+                                    继承宿主默认
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>
+                                    权限
+                                  </dt>
+                                  <dd>
+                                    读取项目、维护授权设计资源
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>
+                                    启用状态
+                                  </dt>
+                                  <dd>
+                                    启用 · 新会话加载
+                                  </dd>
+                                </div>
+                              </dl>
+                              <h5>职责摘要</h5>
+                              <p class="design-definition-description">根据已确认需求维护界面与交互设计，提供可直接查看的原型；实现与独立验证由对应角色负责。</p>
+                              <button id="sample-show-definition" type="button" data-demo-action="definition">查看完整定义摘要 ↗</button>
+                              <p id="sample-native-status" class="design-native-status" role="status">定义与调用偏好分别管理，不修改插件缓存。</p>
+                            </section>
+                          </div>
+                          <footer class="design-native-footer">
+                            <span aria-hidden="true">ⓘ</span>
+                            <p>原生定义遵循宿主读取顺序。来源说明与可编辑性单独呈现。</p>
+                          </footer>
+                        </section>
+                      </div>
+                    </article>
+                  </div>
+                  <div id="annotation-overlays" class="annotation-overlays" data-review-ui>
+                    <div id="rectification-overlays">
+                    </div>
+                    <div id="anchor-overlays">
+                    </div>
+                    <div id="selection-outline" class="selection-outline" hidden>
+                    </div>
+                    <div id="hover-outline" class="hover-outline" hidden>
+                    </div>
+                  </div>
                 </div>
-                <p class="demo-page-footnote">示例内容 · 用于展示文档界面的信息层级</p>
+                <div class="canvas-floating-controls" data-review-ui>
+                  <div class="canvas-tool-cluster">
+                    <div id="canvas-zoom-tools" class="canvas-zoom-tools" role="toolbar" focusgroup="toolbar wrap" aria-label="画布缩放" aria-controls="canvas-world">
+                      <button id="canvas-fit" type="button">适应</button>
+                      <span role="separator" aria-orientation="vertical"></span>
+                      <button id="canvas-zoom-out" type="button" aria-label="缩小画布" title="缩小">−</button>
+                      <button id="canvas-zoom-reset" type="button" title="恢复100%">100%</button>
+                      <button id="canvas-zoom-in" type="button" aria-label="放大画布" title="放大">+</button>
+                    </div>
+                    <div class="canvas-display-options">
+                      <label><input id="show-rectifications" type="checkbox" checked> 整改</label>
+                      <label><input id="show-anchors" type="checkbox" checked> 定位</label>
+                    </div>
+                  </div>
+                  <button id="page-rectification" type="button" class="canvas-page-action">页面整改 <span id="page-rectification-count"></span></button>
+                </div>
+                <div id="selection-tools" class="selection-tools" data-review-ui hidden>
+                  <div id="selection-actions" role="toolbar" focusgroup="toolbar wrap" aria-label="所选目标操作">
+                    <button id="select-parent" type="button" class="review-quiet">选择父层</button>
+                    <button id="mark-location" type="button">标记位置</button>
+                    <button id="add-rectification" type="button" class="review-primary">添加整改</button>
+                    <button id="remove-selected-anchor" type="button" hidden>移除标记</button>
+                    <button id="withdraw-selected-item" type="button" hidden>撤回整改</button>
+                    <button id="view-anchor-references" type="button" class="review-quiet" hidden>查看引用</button>
+                  </div>
+                  <p id="selection-reference-reason" class="review-field-help" hidden></p>
+                </div>
+                <details id="target-picker" class="canvas-target-picker" data-review-ui>
+                  <summary id="target-picker-toggle">键盘选取目标</summary>
+                  <div>
+                    <label for="target-directory">当前页可见元素</label>
+                    <select id="target-directory">
+                      <option value="">选择目标</option>
+                    </select>
+                  </div>
+                </details>
+                <p id="review-status" class="canvas-status" role="status" aria-live="polite">浏览模式 · 整改与定位标记均为空</p>
               </div>
             </section>
-
-            <section class="demo-page" id="demo-requirement" data-demo-screen data-screen-title="需求详情" data-screen-description="先阅读主题与目标，再核对具体需求和验收条件。" data-screen-group="文档中心" aria-label="需求详情虚构画面" hidden>
-              <div class="demo-topline"><span class="demo-project-name"><span class="demo-project-logo" aria-hidden="true"></span>示例项目</span><span class="demo-context">文档中心 / 需求详情</span></div>
-              <div class="demo-document-body demo-reader">
-                <p class="demo-eyebrow">需求说明</p><h3>原型浏览工作区</h3><p class="demo-reader-description">让页面浏览、设计画面与对应需求形成连续的阅读路径。</p>
-                <div class="demo-reader-meta"><span class="demo-status demo-status-progress">设计中 · 示例</span><span>主题文档</span></div>
-                <section class="demo-reader-section"><h4>目标与范围</h4><p>通过左侧分组查找页面，在右侧查看当前画面，再按需阅读需求与交互约定。</p></section>
-                <section class="demo-reader-section"><h4>需求与验收</h4><div class="demo-requirement-row"><span>01</span><div><strong>页面集中浏览</strong><p>分组可以折叠；当前页面有明确选中状态。</p></div></div><div class="demo-requirement-row"><span>02</span><div><strong>优先展示设计画面</strong><p>名称与简述之后直接呈现高保真内容。</p></div></div><div class="demo-requirement-row"><span>03</span><div><strong>需求就近可达</strong><p>在画面下方提供需求 HTML 和 Markdown 入口。</p></div></div></section>
-                <p class="demo-page-footnote">虚构阅读界面 · 正式需求入口位于预览下方</p>
+            <div id="review-panel-slot" class="review-panel-slot">
+              <aside id="review-panel" class="review-panel" aria-label="整改清单">
+                <header class="review-panel-heading">
+                  <div id="record-tabs" class="record-tabs" role="tablist" focusgroup="tablist nomemory" aria-label="评审记录类型">
+                    <button id="tab-rectifications" type="button" role="tab" aria-selected="true" focusgroupstart>整改 <span id="rectification-count">0</span></button>
+                    <button id="tab-anchors" type="button" role="tab" aria-selected="false" tabindex="-1">标记 <span id="anchor-count">0</span></button>
+                  </div>
+                  <button id="close-panel" type="button" class="review-quiet review-mobile-panel" aria-label="收起评审记录">×</button>
+                </header>
+                <div id="review-panel-scroll" class="review-panel-scroll">
+                  <section id="rectification-tab-panel" role="tabpanel" aria-labelledby="tab-rectifications">
+                    <details class="rectification-filters">
+                      <summary id="filter-toggle">筛选整改</summary>
+                      <div class="review-filters">
+                        <div>
+                          <label for="filter-scope" class="visually-hidden">整改范围</label>
+                          <select id="filter-scope">
+                            <option value="current">当前页及整体</option>
+                            <option value="all">全部页面</option>
+                            <option value="global">仅本轮整体</option>
+                          </select>
+                        </div>
+                      </div>
+                    </details>
+                    <div id="rectification-list">
+                    </div>
+                    <div id="rectification-empty" class="review-empty">
+                      <h3>从一处整改开始</h3>
+                      <p id="empty-description">在批注模式点选元素，写下修改、新增或删除建议。</p>
+                      <button id="start-annotation" type="button" class="review-secondary">开始批注</button>
+                    </div>
+                    <div id="withdraw-notice" class="review-withdraw" hidden>
+                      <span id="withdraw-message"></span>
+                      <button id="undo-withdraw" type="button" class="review-inline">恢复</button>
+                    </div>
+                  </section>
+                  <section id="anchor-tab-panel" class="anchor-section" role="tabpanel" aria-labelledby="tab-anchors" hidden>
+                    <p class="anchor-section-help">A编号只标位置，与整改编号独立。</p>
+                    <div id="anchor-list">
+                    </div>
+                  </section>
+                </div>
+                <footer class="review-panel-footer">
+                  <button id="write-global" type="button" class="review-secondary">本轮整体意见</button>
+                  <button id="copy-feedback" type="button" class="review-primary">复制给 Agent ↗</button>
+                  <p id="panel-footer-status" class="visually-hidden" role="status">尚无整改或定位标记</p>
+                </footer>
+              </aside>
+            </div>
+          </div>
+          <dialog id="navigation-drawer" class="review-nav-drawer" aria-labelledby="navigation-title" closedby="any">
+            <div class="review-nav-drawer-heading">
+              <h2 id="navigation-title">原型页面</h2>
+              <button id="close-navigation" type="button" class="review-quiet" aria-label="关闭原型页面">×</button>
+            </div>
+            <nav id="page-navigation" aria-label="原型页面切换">
+              <a id="page-preferences" href="#preferences" class="review-page" aria-current="page">
+                <svg class="review-page-icon" viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M5 2.75h6l4 4v10.5H5z">
+                  </path>
+                  <path d="M11 2.75v4h4M7.5 10h5M7.5 13h5">
+                  </path>
+                </svg>
+                <span class="review-page-copy"><strong>调用偏好页</strong><small id="nav-count-preferences">0 条整改</small></span>
+              </a>
+              <a id="page-native" href="#native" class="review-page">
+                <svg class="review-page-icon" viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M5 2.75h6l4 4v10.5H5z">
+                  </path>
+                  <path d="M11 2.75v4h4M7.5 10h5M7.5 13h5">
+                  </path>
+                </svg>
+                <span class="review-page-copy"><strong>原生定义页</strong><small id="nav-count-native">0 条整改</small></span>
+              </a>
+            </nav>
+            <p class="review-navigation-foot">切换保留视口与草稿。</p>
+          </dialog>
+          <dialog id="panel-drawer" class="review-drawer" aria-label="整改清单">
+            <div id="drawer-panel-host">
+            </div>
+          </dialog>
+          <!-- 三个范围入口共用这个表单；取消只暂存，不分配编号。 -->
+          <dialog id="rectification-dialog" class="rectification-dialog" aria-labelledby="rectification-title">
+            <header class="modal-heading">
+              <div>
+                <p id="rectification-scope" class="modal-eyebrow">节点整改</p>
+                <h2 id="rectification-title">添加整改</h2>
               </div>
-            </section>
-
-            <section class="demo-page" id="demo-guidance" data-demo-screen data-screen-title="页面说明" data-screen-description="查看原型页面的阅读顺序，以及导航、预览和说明的边界。" data-screen-group="原型浏览" aria-label="页面说明虚构画面" hidden>
-              <div class="demo-topline"><span class="demo-project-name"><span class="demo-project-logo" aria-hidden="true"></span>示例项目</span><span class="demo-context">原型浏览 / 页面说明</span></div>
-              <div class="demo-document-body demo-reader">
-                <p class="demo-eyebrow">阅读指南</p><h3>从画面开始，按需深入。</h3><p class="demo-reader-description">导航保持清楚，说明留在画面之外，让每个页面都容易核对。</p>
-                <ol class="demo-reading-steps"><li><span>01</span><div><h4>选择一个页面</h4><p>左侧按模块分组，页面名称与当前选中项保持一致。</p></div></li><li><span>02</span><div><h4>先看高保真画面</h4><p>产品自己的导航、内容和滚动属于预览画面。</p></div></li><li><span>03</span><div><h4>再读需求与契约</h4><p>需求、平台及演示说明紧随画面，详细契约按需展开。</p></div></li></ol>
-                <div class="demo-guidance-note"><span class="demo-note-mark" aria-hidden="true">i</span><p>此处为只读示例页面。可交互的工作区导航与侧栏开关位于画面之外。</p></div>
+              <button id="rectification-close" type="button" class="review-quiet" aria-label="关闭并保留草稿">×</button>
+            </header>
+            <form id="rectification-form" novalidate aria-label="完成整改">
+              <div class="rectification-modal-scroll">
+                <fieldset class="operation-segment">
+                  <legend>整改类型</legend>
+                  <label><input id="operation-modify" type="radio" name="operation" value="modify" checked><span>修改</span></label>
+                  <label id="operation-add-label"><input id="operation-add" type="radio" name="operation" value="add"><span>新增内容</span></label>
+                  <label id="operation-delete-label"><input id="operation-delete" type="radio" name="operation" value="delete"><span>删除建议</span></label>
+                </fieldset>
+                <div class="review-field">
+                  <label for="rectification-message"><span id="message-field-label">期望效果</span><span id="message-required">必填</span></label>
+                  <textarea id="rectification-message" rows="5" maxlength="4000" required aria-describedby="message-help message-error" placeholder="说明希望如何调整，以及原因或预期效果。">
+                  </textarea>
+                  <p id="message-help" class="review-field-help">⌘ / Ctrl + Enter 完成 · 取消也会保留草稿</p>
+                  <p id="message-error" class="review-error" role="alert" hidden></p>
+                </div>
+                <div id="selected-references" class="selected-references">
+                </div>
+                <p id="conflict-warning" class="conflict-warning" role="status" hidden></p>
+                <details id="reference-details" class="reference-details">
+                  <summary id="reference-toggle">引用定位标记 <span id="selected-reference-count">0</span></summary>
+                  <p class="review-field-help">选中已有位置即可插入引用；引用可点击定位，正文始终是纯文字。</p>
+                  <div id="reference-options">
+                  </div>
+                </details>
+                <details id="additional-details" class="additional-details">
+                  <summary id="additional-toggle">更多信息 <span>原文 / 建议文字</span></summary>
+                  <div id="node-extra">
+                    <label for="original-excerpt">当前摘录 · 只读</label>
+                    <textarea id="original-excerpt" rows="2" readonly>
+                    </textarea>
+                    <div id="comparison-field">
+                      <label for="comparison-after">建议文字 · 可选</label>
+                      <textarea id="comparison-after" rows="2" maxlength="4000">
+                      </textarea>
+                    </div>
+                  </div>
+                </details>
               </div>
-            </section>
-          </section>
-
-          <!-- 需求导航只指向当前 plans 主题的唯一 Markdown；旧计划 HTML 已退役，不再登记。文档不作为渲染资源；独立打开保留工作区，noopener 隔离来源窗口。 -->
-          <footer class="workspace-page-information">
-            <div class="workspace-information-top"><nav class="prototype-requirement-links" aria-label="关联需求文档"><span class="workspace-info-label">关联需求</span><a id="workspace-requirement-markdown" href="../../plans/workflow-document-lifecycle.md" target="_blank" rel="noopener" data-prototype-document="markdown"><span class="document-format">MD</span>需求原稿<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 12 12 4M4.5 4H12v7.5"></path></svg></a></nav><p class="workspace-display-label"><span>Web</span><span>响应式 · CSS px</span></p></div>
-            <p class="workspace-demo-note"><strong>演示说明</strong> 左侧三页为虚构内容，在本页模拟切换；正式需求链接可直接打开。刷新恢复侧栏默认展开；页面锚点保留当前选择。</p>
-          </footer>
-
-          <!-- 折叠内容模拟被浏览页面的说明，不重复使用外层五节契约的结构属性。 -->
-          <details class="workspace-page-contract" id="workspace-demo-contract">
-            <summary id="workspace-demo-contract-toggle"><span class="group-chevron" aria-hidden="true"></span><span>页面设计与交互契约</span><span class="workspace-contract-hint">按需展开</span></summary>
-            <div class="workspace-page-contract-copy"><h3>页面职责</h3><p>展示当前选中的虚构示例页面；目标平台为 Web，采用响应式内容区。</p><h3>导航</h3><p>通过左侧分组切换页面，选中项、名称和预览同步更新。</p><h3>交互</h3><p>分组可折叠，侧栏可收起；圆形返回按钮展开侧栏并定位当前页面入口。</p><h3>状态</h3><p>只有一个当前页面。页面选择与分组展开状态分别保留，侧栏收起不会改变当前选择。</p><h3>例外</h3><p>本设计样稿的预览内容为只读模拟，未实现生产页面承载器；没有其他页面特例。</p></div>
-          </details>
-          <p id="workspace-status" class="visually-hidden" role="status" aria-live="polite">当前预览：文档概览。</p>
-          <noscript><p class="workspace-noscript">页面切换与侧栏开关需要本地 JavaScript；当前仍可阅读默认画面、展开原生分组和打开正式需求。</p></noscript>
-        </div>
-      </main>
+              <footer class="rectification-modal-footer">
+                <span id="draft-state">草稿自动保留</span>
+                <button id="rectification-cancel" type="button" class="review-secondary">取消，保留草稿</button>
+                <button id="complete-rectification" type="submit" class="review-primary">完成整改</button>
+              </footer>
+            </form>
+          </dialog>
+          <dialog id="export-dialog" class="review-export" aria-labelledby="export-title">
+            <div class="review-export-heading">
+              <span class="review-export-symbol" aria-hidden="true">↗</span>
+              <div>
+                <h2 id="export-title">把整改交还给 Agent</h2>
+                <p>复制后粘贴到当前对话，再发送。</p>
+              </div>
+              <button id="export-close" type="button" class="review-quiet" aria-label="关闭交还反馈">×</button>
+            </div>
+            <div class="review-export-counts">
+              <p class="export-anchor-total">另有 <span id="export-anchor-count">0</span> 个定位标记</p>
+              <div>
+                <strong id="export-saved-count">0</strong>
+                <span>条已完成整改</span>
+              </div>
+              <div>
+                <strong id="export-draft-count">0</strong>
+                <span>份未完成草稿</span>
+              </div>
+            </div>
+            <p id="export-warning" class="review-export-warning">将交还本轮已完成整改及其引用的定位关系。</p>
+            <div id="export-result" class="review-export-result" role="status">
+            </div>
+            <div class="review-export-actions">
+              <button id="export-cancel" class="review-secondary" type="button">取消，保留输入</button>
+              <button id="export-save-copy" class="review-primary" type="button" hidden>完成草稿并复制</button>
+              <button id="export-copy" class="review-primary" type="button">复制已完成整改</button>
+            </div>
+            <details class="review-export-backup">
+              <summary id="export-backup-toggle">手动复制 / 下载备用</summary>
+              <p>演示反馈，不能作为真实来源校验输入。</p>
+              <label for="export-text">可读摘要与唯一演示载荷</label>
+              <textarea id="export-text" rows="8" readonly>
+              </textarea>
+              <div>
+                <button id="select-export" class="review-secondary" type="button">选中全部文字</button>
+                <button id="download-feedback" class="review-secondary" type="button">下载反馈 .md</button>
+              </div>
+            </details>
+            <p class="review-export-note">意见只表达修改建议；复制与下载不会批准方案或自动启动实现。</p>
+          </dialog>
+          <dialog id="developer-dialog" class="developer-dialog" aria-labelledby="developer-title">
+            <header class="modal-heading">
+              <div>
+                <p class="modal-eyebrow">交互原型</p>
+                <h2 id="developer-title" tabindex="-1">开发说明</h2>
+              </div>
+              <button id="developer-close" type="button" class="review-quiet" aria-label="关闭开发说明">×</button>
+            </header>
+            <div class="developer-scroll">
+              <nav class="prototype-requirement-links" aria-label="关联需求">
+                <span>关联需求</span>
+                <a id="workspace-requirement-markdown" href="../../plans/workflow-document-lifecycle.md" target="_blank" rel="noopener" data-prototype-document="markdown">需求原稿 ↗</a>
+              </nav>
+              <p class="developer-demo-note">中央是完整虚构HTML稿；这是评审器交互样例，不是已批准配置工作台副本或真实项目快照。所有整改与定位标记只留在本页内存，刷新恢复为空。导出为demo_only，无真实review_id，不表示生产工具可消费；复制不代表Agent收到或批准方案。</p>
+              <div class="review-demo-controls">
+                <label for="demo-state">恢复场景演示</label>
+                <select id="demo-state">
+                  <option value="normal">正常状态</option>
+                  <option value="save-error">模拟完成失败，保留草稿</option>
+                  <option value="copy-error">模拟复制失败，提供备用</option>
+                  <option value="stale">模拟来源过期，阻止保存/交还</option>
+                </select>
+              </div>
+              <details id="prototype-contract" class="prototype-contract">
+                <summary id="prototype-contract-toggle">Page design and interaction contract</summary>
+                <section data-contract-section="purpose">
+                  <h2>页面职责</h2>
+                  <p>REQ-801—812：顶层深色原型评审工具，HTML是唯一设计稿。浏览保留业务交互，批注点选后浮条可标记位置或添加整改；node/page/global三入口共用唯一模态，完成才生成用户整改编号与三色建议，A定位标记独立。右侧“整改 / 标记”两实体Tab管理统一状态与各自计数，移除旧Agent版本差异双页签和侧栏长表单。</p>
+                  <p>Platform: Web. Display: responsive. 工作台铺满可用视口，两页HTML稿固定1120×860 CSS px基准，相机整体缩放/平移不重排；工具固定浮于画布视口，不随world缩放。开发说明大dialog内部滚动，唯一五段契约打开即读，不占底部空间。</p>
+                </section>
+                <section data-contract-section="navigation">
+                  <h2>导航</h2>
+                  <p>保持同一prototype-workspace.html与#preferences/#native。原型页面抽屉默认关闭，左侧是独立原型页切换，与稿件内部业务导航分开；关闭/Esc/外点回焦点。切页暂存目标草稿并保留各页相机；首次fit，之后恢复。浏览不拦原生select/input/button，并优先交还稿件内真实可滚动列表/正文的原生滚轮，逐Agent演示下拉改为可展开的本地原生select，无真实目录/API。</p>
+                  <p>批注命中当前稿件可见有意义DOM，排除隐藏/工具/overlay；浮条只呈现简短固定动作，目标长摘要与摘录归入更多信息；已有A/彩色编号点选后提供受保护移除/撤回。标记位置可选，不是整改前提。画布右上页面整改不要求节点；底部整体入口覆盖本轮多页。列表/彩色编号/引用双向定位仅平移并滚动右栏，不卷走顶层toolbar或重置缩放。所有编辑/取消/定位离开均保留目标草稿。</p>
+                </section>
+                <section id="interaction-contracts" data-contract-section="interactions">
+                  <h2>交互</h2>
+                  <p data-contract-for="navigation-toggle">REQ-809：打开原型页面抽屉，默认收起；独立页导航保留hash、每页相机和目标草稿，覆盖而不挤压画板。</p>
+                  <p data-contract-for="mode-browse">REQ-801：恢复稿件原生下拉/输入/按钮/业务跳页，优先稿件真实滚动区域；只在明确空白/Space/中键及相机手势平移。</p>
+                  <p data-contract-for="mode-annotate">REQ-801：显式批注，点击/键盘捕获可见有意义DOM，暂停业务默认动作；只选择不创建编号。</p>
+                  <p data-contract-for="open-developer">REQ-812：打开大尺寸原生开发说明dialog，先设置唯一details.open=true，直接可读五段契约，不要求第二次展开；聚焦标题。</p>
+                  <p data-contract-for="open-feedback">REQ-809：窄屏显示同一整改清单面板，原生右抽屉，不复制列表或编辑器。</p>
+                  <p data-contract-for="demo-preferences-project">REQ-801：浏览时执行本地“project”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="demo-preferences-nav-preferences">REQ-801：浏览时在两个完整HTML稿件之间切页，同步原型页导航/每页相机，评审草稿保持。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="demo-preferences-nav-native">REQ-801：浏览时在两个完整HTML稿件之间切页，同步原型页导航/每页相机，评审草稿保持。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-refresh">REQ-801：浏览时执行本地“refresh”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-default-model">REQ-801：浏览时真实原生下拉选择演示值，显示业务未保存状态；评审输入独立。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-default-effort">REQ-801：浏览时真实原生下拉选择演示值，显示业务未保存状态；评审输入独立。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-select-all">REQ-801：浏览时真实全选/取消四个身份，更新计数，不保存真实偏好。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-batch-inherit">REQ-801：浏览时执行本地“inherit”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-select-designer">REQ-801：浏览时选择/取消此身份，原生复选框和批量计数同步。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-model-designer">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-effort-designer">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-select-web">REQ-801：浏览时选择/取消此身份，原生复选框和批量计数同步。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-model-web">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-effort-web">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-select-python">REQ-801：浏览时选择/取消此身份，原生复选框和批量计数同步。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-model-python">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-effort-python">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-select-qa">REQ-801：浏览时选择/取消此身份，原生复选框和批量计数同步。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-model-qa">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-effort-qa">REQ-801：浏览模式真实展开本地原生下拉并选择模型/推理演示值，只更新本页内存状态，不承诺真实目录/API或保存配置。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-inheritance-help">REQ-801：浏览时执行本地“help”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-discard">REQ-801：浏览时执行本地“discard”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-preview">REQ-801：浏览时执行本地“preview”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="demo-native-project">REQ-801：浏览时执行本地“project”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="demo-native-nav-preferences">REQ-801：浏览时在两个完整HTML稿件之间切页，同步原型页导航/每页相机，评审草稿保持。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="demo-native-nav-native">REQ-801：浏览时在两个完整HTML稿件之间切页，同步原型页导航/每页相机，评审草稿保持。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-native-refresh">REQ-801：浏览时执行本地“refresh”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-native-search">REQ-801：浏览时筛选定义并显示无结果，当前可见DOM目录随之更新。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-native-item-designer">REQ-801：浏览时选择该虚构定义并同步名称/职责。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-native-item-web">REQ-801：浏览时选择该虚构定义并同步名称/职责。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-native-item-qa">REQ-801：浏览时选择该虚构定义并同步名称/职责。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-source-action">REQ-801：浏览时执行本地“source”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="sample-show-definition">REQ-801：浏览时执行本地“definition”演示，字段/状态就近反馈，不调用真实宿主或写磁盘。批注模式才拦截并选此DOM，不触发业务动作；画布平移不抢正常原生控件/滚动。</p>
+                  <p data-contract-for="canvas-fit">REQ-802、809：以1120×860基准整幅适应画布，给浮动工具保留边缘空间；只改相机不重排HTML。</p>
+                  <p data-contract-for="canvas-zoom-out">缩小1/1.25，以视口中心保持世界坐标，8%—300%，不改变编号/目标。</p>
+                  <p data-contract-for="canvas-zoom-reset">百分比按钮点击恢复100%，保留中心世界坐标；选择/定位不自动重置比例。</p>
+                  <p data-contract-for="canvas-zoom-in">放大1.25，以视口中心保持世界坐标，8%—300%。</p>
+                  <p data-contract-for="show-rectifications">REQ-808：显示/隐藏用户整改彩色覆盖层，不删整改、编号或引用，完成前没有彩色标记。</p>
+                  <p data-contract-for="show-anchors">REQ-811：显示/隐藏独立中性A定位标记，绑定和引用保持。</p>
+                  <p data-contract-for="page-rectification">REQ-803：无需选择节点，打开唯一弹窗并固定当前page范围；支持风格/布局调整或页级新增，不删除整页。</p>
+                  <p data-contract-for="select-parent">REQ-801：选当前实际DOM的最近有意义父层，更新轮廓；按钮固定“选择父层”，不拼接目标长摘要；没有父层则隐藏。</p>
+                  <p data-contract-for="remove-selected-anchor">REQ-811：点选已有A编号后就地移除，复用removeAnchor；被完成项或草稿引用时禁用并显示原因，不删除稿件控件。</p>
+                  <p data-contract-for="withdraw-selected-item">REQ-804：点选彩色整改编号后就地撤回，复用withdrawItem及单次恢复，编号不复用，同目标其他条不动。</p>
+                  <p data-contract-for="view-anchor-references">REQ-811：切换右侧标记Tab并显示已有定位引用关系；窄屏复用同一整改清单抽屉，保持标记及引用。</p>
+                  <p data-contract-for="mark-location">REQ-811：仅创建中性A01/A02位置标记，不写整改；同节点重复选择既有标记，编号独立且不复用。过期/失配拒绝并保留。</p>
+                  <p data-contract-for="add-rectification">REQ-801、802：把选中真实目标带入唯一节点整改弹窗；标记位置不是前提。打开不分配编号，目标草稿可恢复。</p>
+                  <p data-contract-for="target-picker-toggle">REQ-801：原生披露键盘后备目录，浮于视口；不改变模式或目标。</p>
+                  <p data-contract-for="target-directory">REQ-801：目录只列当前稿件可见有意义DOM，选择进入批注、锁定精确目标并只平移定位；不创建整改。</p>
+                  <p data-contract-for="close-panel">关闭整改清单抽屉并回入口，数据和来源关联不变；宽屏右栏固定。</p>
+                  <p data-contract-for="filter-toggle">REQ-804：按需展开轻量范围筛选，不改变条目、编号或导出集合。</p>
+                  <p data-contract-for="filter-scope">REQ-804：筛选当前页及整体/全部页面/仅整体；不重编号，定位可恢复该条可见范围。</p>
+                  <p data-contract-for="start-annotation">空清单时进入批注并关闭窄屏面板；有条目但筛选为空时恢复全部范围。无预置整改。</p>
+                  <p data-contract-for="undo-withdraw">REQ-804：单次恢复撤回整改原编号及该条编辑草稿；失效A引用保留并要求解除后交还，不自动重绑。</p>
+                  <p data-contract-for="tab-rectifications">REQ-804、811：选择整改实体列表，独立计数，显示既有筛选/整改清单；切Tab不改画布、选择、编号或草稿。</p>
+                  <p data-contract-for="tab-anchors">REQ-811：选择完整A标记实体列表，独立计数，保留定位/移除/引用保护；左右箭头/Home/End按焦点选择，Tab离开。</p>
+                  <p data-contract-for="write-global">REQ-803：底部常达，打开同一弹窗并固定global范围，无需节点，仅多页调整，不提供删除项目。</p>
+                  <p data-contract-for="copy-feedback">REQ-805：集中展示完成条数、A标记数和全部草稿数；窄屏先关闭父抽屉，交还结束恢复，不嵌套多个模态。</p>
+                  <p data-contract-for="close-navigation">关闭原型页抽屉，不切页，原生dialog回到触发入口；Esc/外点等价。</p>
+                  <p data-contract-for="page-preferences">REQ-809：切到调用偏好页并关闭导航，恢复本页相机；不新建整改或A标记。</p>
+                  <p data-contract-for="page-native">REQ-809：切到原生定义页，保持#native稳定直达；草稿按原目标保留，不自动重绑。</p>
+                  <p data-contract-for="rectification-close">REQ-802：关闭唯一整改弹窗并暂存目标草稿，Esc同义；不创建条目/占号，编辑时原条不变。</p>
+                  <p data-contract-for="operation-modify">REQ-802：原生radio选修改，要求期望效果；仅完成才生成黄整改。</p>
+                  <p data-contract-for="operation-add">REQ-802、808：选择新增内容，填写新增内容并可引用A标记，点击目标只是参照语境，不承诺精确落点；页面可描述新增模块，不复制/改稿件DOM。整体范围隐藏。</p>
+                  <p data-contract-for="operation-delete">REQ-802、808：节点删除建议，原因可选；只标红建议不删原型。页/整体不提供此操作。</p>
+                  <p data-contract-for="rectification-message">REQ-802：4000字符安全纯文字，修改/新增必填、删除原因可选；输入仅清旧错误/暂存，Ctrl/Cmd+Enter完成且避开IME。</p>
+                  <p data-contract-for="reference-toggle">REQ-811：原生展开已有A标记供多选插入结构化引用；选择不是正文HTML，引用可点击定位。</p>
+                  <p data-contract-for="additional-toggle">按需展开当前节点摘录和建议文字，主流程保留范围/类型/正文；不展示关联需求手选或演示定位debug字段，真实目标绑定保留。</p>
+                  <p data-contract-for="original-excerpt">仅节点显示有限当前摘录，最多4000字符，只读；不是已批准历史。</p>
+                  <p data-contract-for="comparison-after">仅节点修改可附4000字符纯文字建议，完成时带comparison；不执行HTML/结构补丁。</p>
+                  <p data-contract-for="rectification-cancel">REQ-802：取消保留意见、操作及引用草稿，不分配新编号；可从同目标/原条编辑恢复。</p>
+                  <p data-contract-for="complete-rectification">REQ-802、804：验证范围/来源/内容/引用后完成；新条才分配稳定01，编辑保留原编号。同目标多条允许，潜在冲突只提示不取舍。失败保留并聚焦错误。</p>
+                  <p data-contract-for="export-close">关闭交还弹窗，数据不变；原生Esc等价，窄屏恢复清单。</p>
+                  <p data-contract-for="export-cancel">REQ-805：取消并保留全部输入，不执行复制/下载或暗示Agent收到。</p>
+                  <p data-contract-for="export-save-copy">REQ-805：先验证所有活跃草稿，通过后统一完成/分配必要编号再复制；任一失败回对应草稿，不部分交还；已撤回编辑草稿不参与。</p>
+                  <p data-contract-for="export-copy">REQ-805：无未完成草稿且来源/引用有效、有完成项或A标记时实际Clipboard复制。只有成功才称已复制，失败打开备用。</p>
+                  <p data-contract-for="export-backup-toggle">原生展开同一状态生成的可读摘要和唯一demo_only机器载荷/备用交还，不绕过未完成草稿或过期状态。</p>
+                  <p data-contract-for="export-text">只读同一摘要及唯一演示载荷，含A目标和reference_ids，不只自由文字A编号；无真实review_id，不声明生产CLI可消费。</p>
+                  <p data-contract-for="select-export">全选全文并提示Ctrl/Cmd+C，不谎称已复制；未处理草稿/失配/空内容禁用。</p>
+                  <p data-contract-for="download-feedback">请求同一全文.md下载，仅称已请求下载；失败保留并可手动复制，草稿/来源/引用异常时禁用。</p>
+                  <p data-contract-for="developer-close">REQ-812：关闭开发说明，Esc同义，回原入口；不清空整改或草稿。</p>
+                  <p data-contract-for="workspace-requirement-markdown">独立打开唯一绑定的需求Markdown，target=_blank且rel=noopener，不替换工作台。</p>
+                  <p data-contract-for="demo-state">开发说明内模拟完成失败/复制失败/过期，保留整改/A位置/草稿；回正常仅清模拟场景，不重绑真实来源。</p>
+                  <p data-contract-for="prototype-contract-toggle">唯一五段原生details位于开发说明dialog；每次打开dialog前强制open，直接可读，无需二次展开，可自行折叠。</p>
+                  <p data-target-contract="visible-dom-catalog">REQ-801：全部可见有意义文字/图标/容器来自同一DOM派生目录与确定demo_locator；工具/隐藏/overlay排除。动态整改、A定位、引用控件各按稳定ID生成唯一data-contract-for，不以自由文字推断引用或权限。</p>
+                </section>
+                <section data-contract-section="states">
+                  <h2>状态与恢复</h2>
+                  <p>刷新默认浏览、导航关闭，整改与A定位标记均为空。浮动条与主弹窗不呈现拼接的目标长摘要，摘录放更多信息，真实目标元数据仅保留在内部绑定；已有编号可点选后就地移除标记或撤回整改，引用保护保持。选择目标不创建编号；标记位置生成A01，重复同目标选择已有标记；完成修改/新增/删除建议才生成01。两序列独立、稳定、单调增加，撤回/编辑/筛选/导出不重编号，取消/Esc不占号。右侧空态引导进入批注；范围筛选按需，完成整改时恢复该条可见范围并只滚动右栏到该条，不保留旧双轨状态。</p>
+                  <p>唯一弹窗由入口固定node/page/global。节点支持修改、新增内容、删除原因可选；修改/新增必填。页面支持风格/布局及新增模块，整体只多页调整，不提供删除整页/项目。正文和建议各4000字符；只保留修改/新增/删除操作类型，不记录或导出kind/severity。关联需求手选和演示目标debug字段已移除；当前虚构稿没有真实业务需求映射，req_ids接口保留但默认、草稿、保存和导出均为空，context不提供伪业务REQ目录，不把工具REQ801—812当样例业务需求。输入暂存；完成失败/过期/缺内容就近报错并保留。编辑同弹窗，取消不覆盖原条，完成保留原编号。同目标多条允许，删除与修改/新增并存提示潜在冲突但不自动取舍。</p>
+                  <p>黄修改框、绿新增建议编号锚点、红删除建议框仅表达待整改，不写稿件DOM/源文件。新增仅内容描述及可选A引用，目标是参照语境，不选择之前/之后/内部或画伪精确插入线，不把现有容器冒充新增；删除不移除原型。多条编号错开，当前项突出；撤回只移该条与覆盖层，并把该条edit草稿随单次撤回快照暂存、退出活跃交还集合，防止集中完成时复活；恢复才重新激活原编号和该编辑草稿，其他目标草稿不动。页/整体通过入口/清单数量表达，不铺整页色块。隐藏彩色/A标记不删绑定。</p>
+                  <p>右栏以紧凑Tab/独立数量作为唯一标题，筛选按需一行展开；条目以编号/类型/完整正文为主，目标/引用为次，动作统一，细分隔替代套框。底部单行共用操作带，核心正文13—14px，不截断意见。右栏默认整改Tab，标记Tab呈现完整A列表，两类独立计数；切Tab不改变画布/选择/编号/草稿。新建A不强制跳Tab，点击已有A切到标记Tab并只内部定位，完成整改回整改Tab；底部整体/复制共用且交还包含两类。A标记独立中性编号，弹窗可多选插入结构化引用，引用是可点击定位按钮；正文只作安全纯文字。多整改可引用同标记，一条可多引用。标记被完成项或草稿引用时不能直接移除，显示引用关系；先解除或撤回才允许移除。编号不复用，失配/已移除引用明确保留并报错，不静默重绑；恢复一条后若原A引用已移除，保留整改及失效引用并要求解除后交还。</p>
+                  <p>复制前显示完成整改/定位标记/全部未完成草稿数；集中完成先验证全部，通过才一起完成并分配编号；失败回对应草稿，不部分交还。取消/Esc/复制拒绝保持数据；实际Clipboard成功才称已复制，失败可手动复制/下载；下载只称已请求下载。唯一demo_only机器载荷带node/page/global、A目标与reference_ids，不只正文A文字；envelope3/context2独立，无真实review_id，不称Agent收到、批准或自动实现。</p>
+                </section>
+                <section data-contract-section="exceptions">
+                  <h2>例外与实现边界</h2>
+                  <p>用户明确工具页例外优先通用展示壳：无外层标题/浅底/大边距/卡片，画布无独立路径页名背景条；工具直接浮在视口。唯一五段details在大原生dialog内，打开强制open直接可读，关闭/Esc回开发说明入口；不是底部展开区。本工具真实需求Markdown链接和演示场景仍在该dialog内，与虚构稿的空业务关联分开；不改公共样式/验证器。</p>
+                  <p>仅三个授权原型文件，file://无构建/服务/CDN/账户，中央稿件虚构完整；本轮仅移除旧差异属性和把伪下拉改成本地原生select，其他稿件产品视觉保持。唯一state划分页面/模式/相机/选择、定位标记、整改/引用、目标草稿、模态和导出；派生DOM目录不是第二spec。上游applyCam/fitCam/zoomAt/平移代码继续实质复用，固定提交1f6d786dddd36a33b002ce8afff70d43d08a9460、Copyright (c) 2026 box与MIT全文保留。无组件拖拽/连线/patch/spec renderer/上游批准。</p>
+                  <p>用户已采用当前布局与整改流程；真实插件装配、跨file桥source/origin/page/token、Python独立来源/范围校验与协议及运行模块整理由后续独立职责实例实施；旧不可变快照不改、不自动迁移草稿或重绑。原型source_stamp仅演示绑定，不可作为生产证明。未运行浏览器/新截图/读屏或生产QA；静态/语法/配色只证明原型就绪，不作为生产实现或独立QA结论。</p>
+                </section>
+              </details>
+            </div>
+          </dialog>
+        </main>
+      </div>
     </div>
-  </div>
-
-  <!-- 外层契约描述这份独立设计样稿；它位于产品插槽之外，默认折叠，不冒充示例页的生产实现。 -->
-  <details class="prototype-contract">
-    <summary id="prototype-contract-toggle">Page design and interaction contract</summary>
-    <section data-contract-section="purpose">
-      <h2>页面职责</h2>
-      <p>本页是“原型浏览工作区”这一产品界面的虚构高保真交互设计样稿，覆盖 REQ-004、REQ-005 和 REQ-006 的可见设计范围。Platform: Web. Display: responsive. 页面按可用宽度自然展开，使用 CSS px，不采用固定设备窗口；窄空间将侧栏移到内容之前，列表保留可读顺序。</p>
-      <p>候选产品 token 集中在 prototype.css 的 --workspace-*，仅适用于本样稿；外层 --prototype-* 复用模板中性展示基线，不宣称项目已采用新主题。有效需求与文档维护规则见 docs/plans/workflow-document-lifecycle.md。</p>
-    </section>
-    <section data-contract-section="navigation">
-      <h2>导航</h2>
-      <p>index.html 的唯一 nav#prototype-pages 登记本独立页面，隐藏登记导航后以唯一 iframe#prototype-preview 直接承载本页，不展示独立目录或附加头部。本页也可按独立 HTML 路径直接打开。</p>
-      <p>产品区三个锚点只是本页的虚构预览状态，未登记额外独立页面，也不代表生产模板的文件导航协议；同页状态不拆新文件。工作区圆形返回负责展开侧栏并聚焦当前入口，与侧栏开关独立，不再提供外层目录返回。</p>
-      <p>右侧画面后的 nav.prototype-requirement-links 只提供已绑定主题的 HTML/Markdown 两个普通相对导航链接；两者以 target="_blank" 在独立标签页或窗口打开，并用 rel="noopener" 隔离来源窗口访问，不替换当前预览或顶层工作区。没有脚本读取文档、跨文档 DOM 或资源预载。具体页不含 iframe；入口的静态本地承载仍须验证登记目标与既有资源闭包，生产多页面切换与安全路由由后续实现者完成。</p>
-    </section>
-    <section data-contract-section="interactions">
-      <h2>交互</h2>
-      <p data-contract-for="workspace-back-to-navigation">返回当前页面导航：展开侧栏及当前页面所在原生分组，保留当前预览，并将焦点移到当前页面链接；状态区宣布当前定位结果。</p>
-      <p data-contract-for="workspace-sidebar-toggle">收起/展开侧栏：点击或 Enter/Space 切换侧栏可见性，aria-expanded 与按钮名称同步更新，右侧预览扩展或恢复；不改变当前页面和分组状态。</p>
-      <p data-contract-for="workspace-group-documents">文档中心分组：原生 summary 通过点击、Enter 或 Space 切换 details 的展开状态，不切换当前页面。</p>
-      <p data-contract-for="workspace-page-overview">文档概览：点击或 Enter 选择 demo-overview，同步标题、简述、分组名称、唯一 aria-current 和“当前”文字标记；显示对应画面并聚焦页面标题。</p>
-      <p data-contract-for="workspace-page-requirement">需求详情：点击或 Enter 选择 demo-requirement，按同一规则更新当前页面与预览，其他示例画面隐藏。</p>
-      <p data-contract-for="workspace-group-reference">原型浏览分组：按原生 details/summary 方式折叠或展开，不改变当前预览。</p>
-      <p data-contract-for="workspace-page-guidance">页面说明：点击或 Enter 选择 demo-guidance，同步选中反馈、页头与只读说明画面。</p>
-      <p data-contract-for="workspace-requirement-markdown">需求原稿：点击或 Enter 在独立标签页或窗口打开同主题 ../../plans/workflow-document-lifecycle.md，保留当前工作区并隔离 opener；由浏览器按本地 Markdown 支持方式展示、下载或交给关联应用。</p>
-      <p data-contract-for="workspace-demo-contract-toggle">页面设计与交互契约：原生 summary 展开或折叠样稿内的页面说明，不覆盖预览或占用浏览器固定浮层。</p>
-      <p data-contract-for="prototype-contract-toggle">本页契约：原生 summary 展开或折叠这五节实际设计契约，默认折叠；位于产品插槽之外。</p>
-    </section>
-    <section data-contract-section="states">
-      <h2>状态</h2>
-      <p>初始状态为侧栏展开、两个分组展开、文档概览选中，内外契约均折叠。合法的本页示例锚点可恢复对应选择；未知锚点不会成为页面路径或加载目标，回到默认示例。</p>
-      <p>切换页面时只有一块示例画面可见，标题与导航一致；选中既有颜色也有“当前”文字，键盘焦点独立显示。收起侧栏后右上角保留展开按钮；返回当前导航会恢复侧栏、展开对应分组并移交焦点。打开任一关联需求文档不会替换当前预览或顶层工作区，当前页面选择、分组及侧栏状态保留。</p>
-      <p>控件具有默认、hover、pressed 和 focus-visible 状态，链接有当前选中状态；遵循 reduced-motion。此样稿没有异步请求、提交、真实账户或业务写入，因此加载、提交成功、业务错误、空列表、禁用和弹窗状态不适用，不制造假成功反馈。</p>
-      <p>窄屏通过自然换行和单列布局保留必要操作；没有固定页面高度、远程字体或图像。静态检查不能证明实际渲染、键盘实操或辅助技术效果，默认没有调用浏览器及截图。</p>
-    </section>
-    <section data-contract-section="exceptions">
-      <h2>例外</h2>
-      <p>本页按当前批准的设计任务在产品插槽中模拟未来工作区；三个预览状态不是业务项目交付页。设计入口只实现单登记页的静态本地承载，不实现生产模板的多页面控制器，不修改源模板，不新增搜索、编辑器、拖拽或截图功能。样稿内页面说明与产品区外实际五节契约分离；除此之外没有页面特例。</p>
-      <p>当前只呈现候选视觉，用户最终视觉确认由 PM 处理；静态验证或演示内容不代表需求已实施或项目已验收。</p>
-    </section>
-  </details>
-</body>
+    <noscript>
+      <p class="noscript-notice">交互需要本地JavaScript，当前完整稿件可读；不执行真实业务。</p>
+    </noscript>
+    <script>
+      // 实际原生模态入口直接连线；所有范围、草稿和数据仍属于唯一工作台状态。
+      const navigationDialog = document.getElementById("navigation-drawer");
+      const panelDialog = document.getElementById("panel-drawer");
+      const rectificationDialog = document.getElementById("rectification-dialog");
+      const exportDialog = document.getElementById("export-dialog");
+      const developerDialog = document.getElementById("developer-dialog");
+      document.getElementById("navigation-toggle").addEventListener("click", () => {
+        window.reviewPrototype.prepareNavigation();
+        navigationDialog.showModal();
+      });
+      document.getElementById("close-navigation").addEventListener("click", () => {
+        navigationDialog.close();
+      });
+      document.getElementById("open-feedback").addEventListener("click", () => {
+        window.reviewPrototype.preparePanel();
+        panelDialog.showModal();
+      });
+      document.getElementById("close-panel").addEventListener("click", () => {
+        panelDialog.close();
+      });
+      document.getElementById("add-rectification").addEventListener("click", () => {
+        if (window.reviewPrototype.prepareNodeEdit()) rectificationDialog.showModal();
+      });
+      document.getElementById("page-rectification").addEventListener("click", () => {
+        window.reviewPrototype.preparePageEdit();
+        rectificationDialog.showModal();
+      });
+      document.getElementById("write-global").addEventListener("click", () => {
+        window.reviewPrototype.prepareGlobalEdit();
+        rectificationDialog.showModal();
+      });
+      document.getElementById("rectification-close").addEventListener("click", () => {
+        rectificationDialog.close();
+      });
+      document.getElementById("rectification-cancel").addEventListener("click", () => {
+        rectificationDialog.close();
+      });
+      document.getElementById("copy-feedback").addEventListener("click", () => {
+        window.reviewPrototype.prepareExport();
+        exportDialog.showModal();
+      });
+      document.getElementById("export-close").addEventListener("click", () => {
+        exportDialog.close();
+      });
+      document.getElementById("export-cancel").addEventListener("click", () => {
+        exportDialog.close();
+      });
+      document.getElementById("open-developer").addEventListener("click", () => {
+        document.getElementById("prototype-contract").open = true;
+        developerDialog.showModal();
+        document.getElementById("developer-title").focus();
+      });
+      document.getElementById("developer-close").addEventListener("click", () => {
+        developerDialog.close();
+      });
+    </script>
+  </body>
 </html>

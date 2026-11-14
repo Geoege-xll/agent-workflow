@@ -323,15 +323,16 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         missing = [
             path.name
             for path in (index_path, page_path, css_path, *(TEMPLATE_ROOT / name for name in
-                         ("workspace.css", "workspace.js", "page-shell.js", "feedback.css", "feedback.js")))
+                         ("workspace.css", "workspace.js", "page-shell.js", "feedback.css", "feedback.js", "review-state.js", "review-camera.js", "THIRD_PARTY_NOTICES.txt")))
             if not path.is_file()
         ]
         self.assertEqual([], missing, f"missing prototype templates: {missing}")
 
         index = index_path.read_text(encoding="utf-8")
         page = page_path.read_text(encoding="utf-8")
-        self.assertIn('aria-label="Prototype pages"', index)
-        self.assertNotIn("prototype-contract", index)
+        self.assertIn('aria-label="原型页面切换"', index)
+        self.assertIn('<dialog id="developer-dialog"', index)
+        self.assertNotIn("data-contract-section", index)
         self.assertEqual(1, index.count('<iframe id="prototype-preview"'))
         self.assertIn('<script src="workspace.js" defer></script>', index)
         self.assertIn('href="prototype.css"', page)
@@ -418,15 +419,41 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         self.assertNotIn("position", declarations(".prototype-contract"))
 
     def test_directory_template_remains_a_thin_page_link_directory(self) -> None:
-        """入口只有一个当前页承载器，不汇总多个产品画板或复制页面契约。"""
+        """生产工具入口只有单页承载器；业务目录的薄目录约束仍由其他fixture校验。"""
         parser = PrototypeTemplateParser()
         parser.feed((TEMPLATE_ROOT / "index.html").read_text(encoding="utf-8"))
-        self.assertEqual(1, sum(tag == "nav" and attrs.get("aria-label") == "Prototype pages"
-                                for tag, attrs, _ in parser.nodes))
+        by_id = {attrs["id"]: (index, tag, attrs, parents)
+                 for index, (tag, attrs, parents) in enumerate(parser.nodes) if "id" in attrs}
+        self.assertEqual("main", by_id["review-workspace"][1])
+        navigation_index, tag, attrs, _ = by_id["prototype-pages"]
+        self.assertEqual("nav", tag)
+        self.assertEqual("原型页面切换", attrs["aria-label"])
+        self.assertFalse(any(navigation_index in parents for _, _, parents in parser.nodes),
+                         "页面登记由prepare启动数据投影，模板不能预置虚构页面链接")
+        frames = [(tag, attrs) for tag, attrs, _ in parser.nodes if tag in {"iframe", "frame", "frameset"}]
+        self.assertEqual(1, len(frames))
+        self.assertEqual(("iframe", "prototype-preview"), (frames[0][0], frames[0][1]["id"]))
+        self.assertIn("hidden", frames[0][1])
+        self.assertNotIn("src", frames[0][1])
+        self.assertNotIn("srcdoc", frames[0][1])
+        self.assertEqual({"navigation-drawer", "panel-drawer", "rectification-dialog", "export-dialog", "developer-dialog"},
+                         {attrs.get("id") for tag, attrs, _ in parser.nodes if tag == "dialog"})
+        # 整改/标记使用同一清单的两个实体Tab；三范围入口共用一个编辑器。
+        self.assertEqual("tab", by_id["tab-rectifications"][2]["role"])
+        self.assertEqual("true", by_id["tab-rectifications"][2]["aria-selected"])
+        self.assertEqual("tab", by_id["tab-anchors"][2]["role"])
+        self.assertEqual("false", by_id["tab-anchors"][2]["aria-selected"])
+        self.assertEqual(1, sum(attrs.get("id") == "rectification-form" for _, attrs, _ in parser.nodes))
+        contract_index, contract_tag, _, contract_parents = by_id["page-contract"]
+        self.assertEqual("details", contract_tag)
+        self.assertIn(by_id["developer-dialog"][0], contract_parents)
+        self.assertEqual(1, sum("prototype-contract" in (attrs.get("class") or "").split()
+                                for _, attrs, _ in parser.nodes))
+        self.assertEqual(1, sum(tag == "summary" and contract_index in parents for tag, _, parents in parser.nodes))
         for _, attrs, _ in parser.nodes:
-            classes = (attrs.get("class") or "").split()
-            self.assertFalse({"prototype-frame", "prototype-stage", "prototype-contract"}.intersection(classes))
             self.assertNotIn("data-prototype-page-content", attrs)
+            self.assertNotIn("data-contract-section", attrs,
+                             "真实五段由当前child投影，工具模板不能复制一份业务契约")
 
     def test_new_page_template_passes_existing_validator_without_mutation(self) -> None:
         """两种显示模式都兼容现有路径／控件／契约校验，不为模板变化增加验证门禁。"""
@@ -545,76 +572,16 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             self.replace_once(self.page(project), '</head>', '<link rel="stylesheet" href="assets/embedded.css"></head>')
             self.assert_rejected_without_mutation(project, 'external transitive resource of the embedded page')
 
-    def test_production_workspace_accepts_empty_and_registered_controller_startup(self) -> None:
-        """消费真实生产资产：空登记不加载假页面，固定反馈模块不成为第二路由。"""
-        with tempfile.TemporaryDirectory(prefix="prototype-controller-startup-") as temporary:
+    def test_production_tool_shell_is_not_a_business_directory(self) -> None:
+        """新版工具壳只在prepare包边界验证，业务index的薄目录约束不能因工具升级放宽。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-tool-boundary-") as temporary:
             project = write_valid_project(Path(temporary)).resolve()
-            self.page(project).unlink()
-            for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js',
-                         'feedback.js', 'feedback.css'):
+            # 工具源是真实交付文件；拒绝将其误放业务目录，无须构造另一个演示工具壳。
+            for name in ('index.html', 'workspace.css', 'workspace.js', 'page-shell.js',
+                         'feedback.js', 'feedback.css', 'review-state.js', 'review-camera.js',
+                         'THIRD_PARTY_NOTICES.txt'):
                 shutil.copy2(TEMPLATE_ROOT / name, self.prototype(project) / name)
-            self.assertEqual({'pages': []}, validator_module.validate_workspace(project, PROTOTYPE_RELATIVE.as_posix()))
-            shutil.copy2(TEMPLATE_ROOT / 'page.html', self.page(project))
-            index = self.prototype(project) / 'index.html'
-            self.replace_once(index, '</nav>', '<a href="settings.html">设置</a></nav>')
-            before = tree_snapshot(project)
-            result = self.run_validator(project)
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            self.assertEqual(before, tree_snapshot(project))
-            index_body = index.read_text(encoding='utf-8')
-            page_body = self.page(project).read_text(encoding='utf-8')
-            # 表单/section/dialog 使用真实模板结构；静态 checkbox 只补上生产
-            # 控制器按需生成需求选项的同一输入边界，不能把 input 全局放开。
-            index.write_text(index_body.replace('<form id="feedback-form">',
-                '<form id="feedback-form"><input type="checkbox" id="feedback-fixture-input">'), encoding='utf-8')
-            before = tree_snapshot(project)
-            accepted = self.run_validator(project)
-            self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
-            self.assertEqual(before, tree_snapshot(project))
-            for case, body in {
-                'foreign controller': index_body.replace('src="workspace.js"', 'src="other.js"'),
-                'duplicate controller': index_body.replace('</head>', '<script src="workspace.js"></script></head>'),
-                'inline controller body': index_body.replace('src="workspace.js" defer></script>', 'src="workspace.js" defer>alert(1)</script>'),
-                'duplicate feedback helper': index_body.replace('</head>', '<script src="feedback.js"></script></head>'),
-                'unknown feedback helper': index_body.replace('src="feedback.js"', 'src="other-feedback.js"'),
-                'module feedback helper': index_body.replace('src="feedback.js"', 'type="module" src="feedback.js"'),
-                'unsupported feedback script type': index_body.replace('src="feedback.js"', 'type="application/json" src="feedback.js"'),
-                'inline feedback body': index_body.replace('src="feedback.js" defer></script>', 'src="feedback.js" defer>alert(1)</script>'),
-                'external feedback helper': index_body.replace('src="feedback.js"', 'src="https://example.test/feedback.js"'),
-                'escaping feedback helper': index_body.replace('src="feedback.js"', 'src="../feedback.js"'),
-                'duplicate feedback stylesheet': index_body.replace('</head>', '<link rel="stylesheet" href="feedback.css"></head>'),
-                'feedback helper without routing controller': index_body.replace('<script src="workspace.js" defer></script>', ''),
-                'feedback region without helper': index_body.replace('<script src="feedback.js" defer></script>', ''),
-                'feedback region without stylesheet': index_body.replace('<link rel="stylesheet" href="feedback.css">', ''),
-                'form outside feedback': index_body.replace('</body>', '<form></form></body>'),
-                'input outside feedback': index_body.replace('</body>', '<input type="checkbox"></body>'),
-                'section outside feedback': index_body.replace('</body>', '<section>产品画面</section></body>'),
-                'dialog outside feedback': index_body.replace('</body>', '<dialog id="unrelated-dialog"></dialog></body>'),
-                'feedback details wrong element': index_body.replace('<details id="prototype-feedback"', '<div id="prototype-feedback"'),
-                'feedback dialog wrong element': index_body.replace('<dialog id="feedback-manual"', '<div id="feedback-manual"'),
-                'duplicate feedback details': index_body.replace('</body>', '<details id="prototype-feedback"><summary>重复</summary></details></body>'),
-                'duplicate feedback dialog': index_body.replace('</body>', '<dialog id="feedback-manual"></dialog></body>'),
-                'feedback details inside navigation': index_body.replace('</nav>', '<details id="prototype-feedback"><summary>越界</summary></details></nav>'),
-                'feedback panel initially expanded': index_body.replace('<details id="prototype-feedback"', '<details open id="prototype-feedback"'),
-                'duplicate feedback summary': index_body.replace('<summary id="feedback-heading"', '<summary>重复</summary><summary id="feedback-heading"'),
-                # 模板注释也含示例 </details>；只删真实根的独立结束行，避免
-                # 负控修改注释却没有改变待验证 DOM，形成无效失败断言。
-                'unclosed feedback root': index_body.replace('\n      </details>', '', 1),
-                'feedback nested dialog': index_body.replace('<form id="feedback-form">', '<dialog></dialog><form id="feedback-form">'),
-                'feedback form navigation': index_body.replace('<form id="feedback-form">', '<form action="https://example.test/submit" id="feedback-form">'),
-                'feedback input resource': index_body.replace('<form id="feedback-form">', '<form id="feedback-form"><input type="image" src="https://example.test/pixel">'),
-                'feedback nested preview': index_body.replace('<form id="feedback-form">', '<iframe id="extra-preview" src="settings.html" title="额外画面"></iframe><form id="feedback-form">'),
-                'visible uninitialized frame': index_body.replace('referrerpolicy="no-referrer" hidden', 'referrerpolicy="no-referrer"'),
-            }.items():
-                with self.subTest(case=case):
-                    index.write_text(body, encoding='utf-8')
-                    self.assert_rejected_without_mutation(project, case)
-            index.write_text(index_body, encoding='utf-8')
-            for asset in ('workspace.js', 'workspace.css', 'feedback.js'):
-                with self.subTest(asset=asset):
-                    reference = f'<script src="{asset}"></script>' if asset.endswith('.js') else f'<link rel="stylesheet" href="{asset}">'
-                    self.page(project).write_text(page_body.replace('</head>', reference + '</head>'), encoding='utf-8')
-                    self.assert_rejected_without_mutation(project, 'index-only asset loaded by a business page')
+            self.assert_rejected_without_mutation(project, 'production shell cannot replace a business directory')
 
     def test_index_rejects_meta_refresh_redirects(self) -> None:
         """refresh会在登记路由之外离开入口，外部和任意本地目标都不获得此权限。"""

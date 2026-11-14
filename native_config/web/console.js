@@ -350,10 +350,12 @@
     clear() { this.edit = null; }
   }
 
-  function resolvedField(draft, id, field, preferences = false) {
+  function resolvedField(draft, id, field, preferences = false, removing = false) {
     const row = draft.row(id);
     if (!row) return {value:null, source:"来源未提供", pending:true};
-    const value = draft.value(id, field);
+    // 选择器中的“继承”选项需要展示移除本字段后的投影；只忽略当前目标值，
+    // 不修改草稿。被已保存覆盖遮蔽的上层仍只能等真实预览，不能冒称当前覆盖为继承。
+    const value = removing ? null : draft.value(id, field);
     if (value) return {value, source:draft.edits.get(id) && own(draft.edits.get(id), field) ? "本层草稿" : sourceLabel(row.sources[field]), pending:false};
     // 本层覆盖被清除后，context 不含其遮蔽的上层前像；必须交给真实预览解析，不能猜宿主默认。
     if (own(row.overrides, field)) return {value:null, source:"继承值待预览", pending:true};
@@ -379,8 +381,21 @@
     cancel() { this.controller?.abort(); this.generation++; }
   }
 
+  function validCustomModelId(value) {
+    // 与核心模型ID合同一致：不裁剪输入、不接受结尾换行，避免搜索词被暗改成另一配置值。
+    return typeof value === "string" && value.length > 0 && value.length <= 200 &&
+      /^[A-Za-z0-9]/.test(value) && !/[^A-Za-z0-9._:/+@\[\]-]/.test(value);
+  }
+  function modelChoices(candidates, current, inherited) {
+    // 展示名与原始ID分离；目录遗漏的历史值仍是显式选项，不能被首个候选替换。
+    const entries = [{value:"", label:inherited, inherited:true}];
+    for (const row of candidates) entries.push({value:row.id, label:row.label || row.id});
+    if (current && !entries.some(row => row.value === current)) entries.push({value:current, label:current, unknown:true});
+    return entries;
+  }
+
   // Node 用例直接消费同一协议/草稿逻辑，避免测试内重新实现继承或请求规则。
-  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField };
+  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices };
   if (typeof document === "undefined") return;
 
   const $ = id => document.getElementById(id);
@@ -419,6 +434,191 @@
     if (text !== undefined) result.textContent = text;
     return result;
   }
+  /* 选择浮层只拥有展开、搜索和键盘活动项；原生input/select继续持有字段投影，
+     FieldDraft仍是唯一草稿所有者。所有外部名称/ID仅通过node/textContent进入DOM。 */
+  class ChoiceController {
+    constructor() {
+      this.panel = $("choice-panel"); this.list = $("choice-options"); this.search = $("choice-search"); this.current = null;
+      this.popover = typeof this.panel.showPopover === "function"; this.frame = 0;
+      // 不支持Popover API时移除增强属性，避免部分实现的UA隐藏规则压住同一可访问浮层。
+      // 回退保留相同DOM、键盘和取消行为，不引入库或另一个选择状态机。
+      if (!this.popover) this.panel.removeAttribute("popover");
+      $("choice-close").addEventListener("click", () => this.close());
+      $("choice-custom").addEventListener("click", () => { const value = this.customValue(); if (value) this.commit(value); });
+      this.search.addEventListener("input", () => this.draw());
+      this.panel.addEventListener("keydown", event => this.keydown(event));
+      document.addEventListener("pointerdown", event => {
+        if (this.current && !this.panel.contains(event.target) && !this.current.trigger.contains(event.target)) this.close(false);
+      });
+      document.addEventListener("focusin", event => {
+        if (this.current && !this.panel.contains(event.target) && !this.current.trigger.contains(event.target)) this.close(false);
+      });
+      const reposition = () => {
+        if (!this.current || this.frame) return;
+        this.frame = requestAnimationFrame(() => { this.frame = 0; this.position(); });
+      };
+      window.addEventListener("resize", reposition); document.addEventListener("scroll", reposition, true);
+      window.visualViewport?.addEventListener("resize", reposition); window.visualViewport?.addEventListener("scroll", reposition);
+    }
+    attach(source) {
+      if (source.nextElementSibling?.dataset.pickerFor === source.id) return;
+      const trigger = node("button", "picker-trigger"); trigger.type = "button"; trigger.id = source.id + "-picker";
+      trigger.dataset.pickerFor = source.id; trigger.setAttribute("aria-haspopup", "dialog");
+      trigger.setAttribute("aria-controls", "choice-panel"); trigger.setAttribute("aria-expanded", "false");
+      trigger.append(node("span", "picker-value"), node("span", "picker-chevron")); trigger.lastChild.setAttribute("aria-hidden", "true");
+      source.after(trigger); source.hidden = true;
+      // label明确指向可见按钮，保留来源与错误描述；基础原生字段不再产生重复Tab停靠点。
+      const label = [...source.parentElement.querySelectorAll("label"), ...document.querySelectorAll("label")].find(item => item.htmlFor === source.id);
+      if (label) { trigger.dataset.label = label.textContent; label.htmlFor = trigger.id; }
+      trigger.addEventListener("click", () => this.open(source, trigger));
+      trigger.addEventListener("keydown", event => {
+        if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); this.open(source, trigger, event.key === "ArrowUp"); }
+      });
+    }
+    entries(source) {
+      if (source.tagName === "SELECT") return [...source.options].filter(item => !item.disabled).map(item => ({value:item.value, label:item.textContent, inherited:item.value === ""}));
+      return modelChoices(modelCandidates(active.context, currentCatalog(), preferenceMode()), source.value, source.placeholder || "沿用继承设置");
+    }
+    sync() {
+      for (const trigger of document.querySelectorAll("[data-picker-for]")) {
+        const source = $(trigger.dataset.pickerFor); if (!source) continue;
+        const entry = this.entries(source).find(item => item.value === source.value);
+        trigger.querySelector(".picker-value").textContent = entry?.label || source.value || "请选择";
+        trigger.disabled = source.disabled; trigger.setAttribute("aria-invalid", source.getAttribute("aria-invalid") || "false");
+        trigger.setAttribute("aria-label", (source.getAttribute("aria-label") || trigger.dataset.label || "选择") + "：" + trigger.textContent);
+        trigger.setAttribute("aria-describedby", source.getAttribute("aria-describedby") || "");
+      }
+      if (!this.current) return;
+      const source = $(this.current.source.id), trigger = source && $(source.id + "-picker");
+      // 目录回读会重绘字段；只在同一上下文、同一opaque身份/字段上移交短暂浮层归属。
+      // 身份变更或导航必须关闭，不能把旧搜索确认到新的同名行。
+      if (!source || !trigger || trigger.disabled || this.current.context !== locationKey(active.location) + editorMode ||
+          source.dataset.agent !== this.current.agent) { this.close(false); return; }
+      this.current.source = source; this.current.trigger = trigger; trigger.setAttribute("aria-expanded", "true"); this.draw();
+    }
+    open(source, trigger, last = false) {
+      if (trigger.disabled) return;
+      if (this.current?.source === source) { this.close(); return; }
+      this.close(false); closeContextMenus();
+      const model = source.tagName === "INPUT";
+      this.current = {source, trigger, model, agent:source.dataset.agent, context:locationKey(active.location) + editorMode, index:0};
+      $("choice-title").textContent = model ? "选择模型" : source.id === "activation-state" ? "本层工作流设置" : "选择推理强度";
+      $("choice-search-area").hidden = !model; this.list.tabIndex = model ? -1 : 0;
+      this.list.setAttribute("aria-label", $("choice-title").textContent); this.search.value = "";
+      this.search.setAttribute("aria-expanded", String(model)); trigger.setAttribute("aria-expanded", "true");
+      this.panel.hidden = false; if (this.popover) this.panel.showPopover();
+      this.draw(); if (last) this.activate(this.list.children.length - 1);
+      (model ? this.search : this.list).focus({preventScroll:true}); this.position();
+      // 确认展开意图后才按需读取目录。若在pointerdown产生的focus中立即回读，
+      // 表格高度可能在pointerup前改变，导致原按钮收不到click；展开后回读由同一浮层接管。
+      if (model) ensureCatalog();
+    }
+    customAllowed() {
+      // 提交入口与帮助文字共用同一能力判断：alias/tier偏好不接受完整模型ID，
+      // 原生定义和model_id偏好仍保留原有自定义能力，不从搜索文本推断平台权限。
+      return Boolean(this.current?.model && (!preferenceMode() || editorCaps().model_format === "model_id"));
+    }
+    customValue() {
+      const source = this.current?.source, value = this.search.value;
+      return this.customAllowed() && validCustomModelId(value) && !this.entries(source).some(row => row.value === value) ? value : "";
+    }
+    draw() {
+      if (!this.current) return;
+      const {source, model} = this.current, query = model ? this.search.value.trim().toLocaleLowerCase() : "";
+      const entries = this.entries(source).filter(row => !query || (row.label + " " + row.value).toLocaleLowerCase().includes(query));
+      this.list.replaceChildren();
+      entries.forEach((entry, index) => {
+        const option = node("div", "choice-option"); option.id = "choice-option-" + index; option.dataset.value = entry.value;
+        option.setAttribute("role", "option"); option.setAttribute("aria-selected", String(entry.value === source.value));
+        option.dataset.inherited = String(entry.inherited === true);
+        const check = node("span", "option-check", entry.value === source.value ? "✓" : ""); check.setAttribute("aria-hidden", "true");
+        const copy = node("span", "option-copy"); copy.append(node("strong", "", entry.label));
+        if (model && entry.value) copy.append(node("small", "", entry.value)); option.append(check, copy);
+        const badge = entry.unknown ? "目录未列出" : entry.inherited ? "继承" : entry.value === source.value ? "当前" : "";
+        if (badge) option.append(node("span", "option-badge", badge));
+        option.addEventListener("pointermove", () => this.activate(index, false));
+        option.addEventListener("pointerdown", event => event.preventDefault());
+        option.addEventListener("click", () => this.commit(entry.value)); this.list.append(option);
+      });
+      $("choice-empty").hidden = entries.length > 0;
+      const custom = this.customValue(); $("choice-custom").hidden = !custom;
+      $("choice-custom").textContent = custom ? "＋ 使用自定义 ID：" + custom : "使用自定义模型 ID";
+      // 非法模型ID仍可作为搜索词，但不能形成自定义提交；说明准确指出修正方法。
+      // 受限平台直接说明alias/tier合同，避免展示一个实际上不可用的泛化自定义承诺。
+      const invalidCustomInput = model && this.customAllowed() && this.search.value && !validCustomModelId(this.search.value);
+      $("choice-help").textContent = invalidCustomInput ?
+        "仅用于搜索：自定义 ID 须以英文字母/数字开头，最多200位，仅含字母、数字及 . _ : / + @ [ ] -" :
+        !model ? "↑ ↓ / Home End 选择 · Enter 确认 · Esc 取消" :
+        this.customAllowed() ? "↑ ↓ 选择 · Enter 确认 · Esc 取消 · 自定义值的模型能力待核实" :
+        active.location.host === "antigravity" ? "仅使用子代理 flash / pro tier · 会话模型 ID 不适用" :
+        "调用偏好仅接受官方别名 · 完整 ID 请在原生定义编辑";
+      this.activate(Math.max(0, entries.findIndex(row => row.value === source.value)), false); this.position();
+    }
+    activate(index, scroll = true) {
+      if (!this.current) return;
+      const rows = [...this.list.children]; this.current.index = rows.length ? Math.max(0, Math.min(index, rows.length - 1)) : -1;
+      rows.forEach((row, i) => { row.dataset.active = String(i === this.current.index); });
+      const receiver = this.current.model ? this.search : this.list, option = rows[this.current.index];
+      if (option) { receiver.setAttribute("aria-activedescendant", option.id); if (scroll) option.scrollIntoView({block:"nearest"}); }
+      else receiver.removeAttribute("aria-activedescendant");
+    }
+    commit(value) {
+      if (!this.current) return;
+      const {source, trigger} = this.current;
+      // 搜索、方向键、取消绝不触发配置事件；确认才经过原字段既有事件更新唯一Draft。
+      this.close(false); source.value = value;
+      source.dispatchEvent(new Event(source.tagName === "INPUT" ? "input" : "change", {bubbles:true}));
+      this.sync(); if (trigger.isConnected && !trigger.disabled) trigger.focus();
+    }
+    close(returnFocus = true) {
+      if (!this.current) return;
+      const trigger = this.current.trigger; this.current = null;
+      if (this.popover && this.panel.matches(":popover-open")) this.panel.hidePopover();
+      this.panel.hidden = true; trigger.setAttribute("aria-expanded", "false");
+      this.search.setAttribute("aria-expanded", "false"); this.search.removeAttribute("aria-activedescendant"); this.list.removeAttribute("aria-activedescendant");
+      if (returnFocus && trigger.isConnected && !trigger.disabled) trigger.focus();
+    }
+    position() {
+      if (!this.current) return;
+      const rect = this.current.trigger.getBoundingClientRect(), viewport = window.visualViewport;
+      const left = (viewport?.offsetLeft || 0) + 8, top = (viewport?.offsetTop || 0) + 8;
+      const width = viewport?.width || document.documentElement.clientWidth, height = viewport?.height || window.innerHeight;
+      // 视觉视口同时覆盖缩放和软键盘；表格不裁切浮层，过长候选仅在自身滚动。
+      this.panel.style.width = Math.min(Math.max(rect.width, this.current.model ? 360 : 280), width - 16) + "px";
+      this.panel.style.maxHeight = Math.max(40, Math.min(440, height - 16)) + "px";
+      const above = rect.top - top - 6, below = top + height - 16 - rect.bottom - 6;
+      const upwards = below < Math.min(this.panel.scrollHeight, 240) && above > below;
+      this.panel.style.maxHeight = Math.max(40, Math.min(440, upwards ? above : below, height - 16)) + "px";
+      const box = this.panel.getBoundingClientRect();
+      this.panel.style.left = Math.max(left, Math.min(rect.left, left + width - 16 - box.width)) + "px";
+      this.panel.style.top = Math.max(top, Math.min(upwards ? rect.top - box.height - 6 : rect.bottom + 6, top + height - 16 - box.height)) + "px";
+    }
+    keydown(event) {
+      if (!this.current || event.isComposing) return;
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); this.close(); return; }
+      if (event.key === "Tab") {
+        const local = [...this.panel.querySelectorAll("button,input,[tabindex='0']")].filter(item => !item.disabled && item.tabIndex >= 0 && item.getClientRects().length);
+        const next = local[local.indexOf(document.activeElement) + (event.shiftKey ? -1 : 1)]; event.preventDefault();
+        if (next) next.focus();
+        else {
+          const trigger = this.current.trigger;
+          const targets = [...document.querySelectorAll("a[href],button,input,select,summary,[tabindex='0']")].filter(item => !this.panel.contains(item) && !item.disabled && item.tabIndex >= 0 && item.getClientRects().length);
+          const target = targets[targets.indexOf(trigger) + (event.shiftKey ? -1 : 1)]; this.close(false); (target || trigger).focus();
+        }
+        return;
+      }
+      if (![this.search, this.list].includes(event.target)) return;
+      const count = this.list.children.length;
+      if (["ArrowDown", "ArrowUp"].includes(event.key) || event.target === this.list && ["Home", "End"].includes(event.key)) {
+        event.preventDefault(); this.activate(event.key === "Home" ? 0 : event.key === "End" ? count - 1 : count ? (this.current.index + (event.key === "ArrowDown" ? 1 : -1) + count) % count : -1);
+      } else if (event.key === "Enter" || event.key === " " && event.target === this.list) {
+        event.preventDefault(); const option = this.list.children[this.current.index];
+        if (option) this.commit(option.dataset.value); else if (this.customValue()) this.commit(this.customValue());
+      }
+    }
+  }
+  const choices = new ChoiceController();
+
   function message(text, tone = "info", target = $("feedback")) {
     target.textContent = text; target.dataset.tone = tone; target.hidden = !text;
   }
@@ -539,7 +739,7 @@
     $("load-project").disabled = mutation;
     $("reload-context").disabled = mutation || loading;
     $("refresh-catalog").disabled = !available || refreshing;
-    $("refresh-catalog").textContent = refreshing ? "正在刷新…" : "刷新模型目录";
+    $("refresh-catalog").textContent = refreshing ? "正在刷新…" : "刷新目录";
     $("preview-changes").disabled = !available || !current.dirty || active.conflicted || (activation ? active.activation.saved?.writable !== true : invalid);
     $("preview-changes").textContent = mutation && !$("preview-dialog").open ? "正在预览…" : "预览并保存";
     $("discard-draft").disabled = !current.dirty || mutation;
@@ -573,6 +773,7 @@
       control.disabled = !available || !row || !writable(row) || (control.dataset.field === "effort" && editorCaps().effort === false && !editorDraft().value(row.role, "effort")) ||
         (control.dataset.reset !== undefined && !FIELDS.some(field => editorDraft().value(row.role, field)));
     }
+    choices.sync();
   }
   function rowState(row, target) {
     const draft = editorDraft();
@@ -581,16 +782,20 @@
     const status = node("span", "row-state", dirty ? "未保存草稿" : FIELDS.some(field => row.overrides[field]) ? "本层覆盖" : "继承");
     status.dataset.dirty = String(dirty); target.append(status);
     if (dirty) target.append(node("p", "row-hint", "已保存：" + FIELDS.map(field => row.overrides[field] || "继承").join(" / ")));
-    else target.append(node("p", "row-hint", FIELDS.some(field => row.overrides[field]) ? preferenceMode() ? "已保存 · 后续派发读取" : "已保存 · 等待新会话加载" : "未设置本层字段"));
+
     const reset = node("button", "text-button row-reset", preferenceMode() ? "恢复继承" : "清除字段"); reset.type = "button";
     reset.dataset.agent = row.role; reset.dataset.reset = "true"; reset.setAttribute("aria-label", (row.role === "*" ? "通用默认" : row.name || row.role) + " · " + reset.textContent);
     reset.addEventListener("click", () => {
       for (const field of FIELDS) draft.set(row.role, field, null);
       render(); message("已更新当前目标草稿；预览保存后才记录。");
       // 重绘后回到同一真实身份的模型字段；不拼接opaque ID为选择器，避免特殊字符改变匹配。
-      [...document.querySelectorAll("[data-field='model']")].find(control => control.dataset.agent === row.role)?.focus();
+      [...document.querySelectorAll("[data-field='model']")].find(control => control.dataset.agent === row.role)?.nextElementSibling?.focus();
     });
-    target.append(reset);
+    if (row.role === "*") {
+      // 默认状态说明与恢复操作组成同一可换行组；6px间隔由共享CSS控制，绝不推到行尾。
+      const group = node("div", "default-state-actions"); group.append(status, reset);
+      target.prepend(node("span", "state-label", "当前层"), group);
+    } else target.append(reset);
     if (!preferenceMode() && row.dispatch_ready === false) target.append(node("p", "blocked-reason", "派发受阻：" + (row.blocked_reason || "当前调用能力未确认")));
     if (object(row.per_invocation) && row.per_invocation.ready === false) target.append(node("p", "row-hint", "单次调用覆盖受阻；原生文件可写性独立判断。"));
   }
@@ -616,6 +821,7 @@
       // 只刷新推导的候选、来源和状态；不重建正编辑的input，避免丢失光标和输入法组合。
       refreshFieldDisplays(); updateBatchEfforts(); setControls();
     });
+    choices.attach(input);
     return container;
   }
   function refreshFieldDisplays() {
@@ -625,15 +831,16 @@
       for (const field of FIELDS) {
         const input = root.querySelector('[data-field="' + field + '"]');
         const resolved = resolvedField(editorDraft(), row.role, field, preferenceMode());
+        const inherited = resolvedField(editorDraft(), row.role, field, preferenceMode(), true);
         const current = editorDraft().value(row.role, field);
         const hint = $(input.id + "-hint"), error = $(input.id + "-error");
         if (field === "model") {
-          input.placeholder = resolved.pending ? "继承值待预览" : (resolved.value || "宿主默认") + " · 继承";
+          input.placeholder = inherited.pending ? "继承值待预览" : (inherited.value || "宿主默认") + " · 继承";
           const known = modelCandidates(active.context, currentCatalog(), preferenceMode()).some(item => item.id === current);
           hint.textContent = "来源：" + resolved.source + (current && !known ? " · 当前值未列出，原值保留" : "") + (!current ? " · 留空继承" : "");
         } else {
           const options = fillEfforts(input, current, effectiveDraftModel(row.role));
-          input.options[0].textContent = editorCaps().effort === false ? "不支持独立推理" : resolved.pending ? "继承值待预览" : (resolved.value || "宿主默认") + " · 继承";
+          input.options[0].textContent = editorCaps().effort === false ? "不支持独立推理" : inherited.pending ? "继承值待预览" : (inherited.value || "宿主默认") + " · 继承";
           const effectiveEffort = current || (!resolved.pending ? resolved.value : null);
           const incompatible = Boolean(effectiveEffort && (editorCaps().effort === false || options.verified && !options.values.includes(effectiveEffort)));
           error.textContent = incompatible ? "已有推理值与当前模型不兼容；请重选或清除。原值已保留。" : "";
@@ -641,6 +848,9 @@
           hint.textContent = editorCaps().effort === false ? "当前平台不支持独立推理；已有值可显式清除" : "来源：" + resolved.source + (!options.verified ? " · 模型能力未核实" : "");
         }
       }
+      const modelHint = $(root.querySelector('[data-field="model"]').id + "-hint");
+      const effortHint = $(root.querySelector('[data-field="effort"]').id + "-hint");
+      effortHint.classList.toggle("sr-only", modelHint.textContent === effortHint.textContent);
       rowState(row, root.querySelector(".state-cell"));
     }
   }
@@ -689,6 +899,9 @@
   }
   function render() {
     const location = active.location;
+    $("current-platform").textContent = HOST_LABELS[location.host];
+    $("current-scope").textContent = location.scope === "global" ? "用户级" : "项目 · " + location.project.split("/").filter(Boolean).pop();
+    $("project-location-label").textContent = location.scope === "project" ? "项目位置 · " + location.project.split("/").filter(Boolean).pop() : "项目位置";
     for (const tab of document.querySelectorAll("[data-host]")) { const selected = tab.dataset.host === location.host; tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1; }
     $("config-panel").setAttribute("aria-labelledby", "tab-" + location.host);
     for (const radio of document.querySelectorAll("input[name=scope]")) radio.checked = radio.value === location.scope;
@@ -703,7 +916,7 @@
     $("preference-location").textContent = preferenceMode() && active.context?.dispatch_preferences?.source_path ? "偏好保存位置：" + active.context.dispatch_preferences.source_path : "";
     $("save-result").textContent = active.lastSave;
     $("technical-location").textContent = describeLocation(location) + " · revision " + (active.context?.revision || "未读取") + " · 目录来源 " + (active.context?.catalog_source_stamp || "未确认");
-    $("native-heading").hidden = preferenceMode(); $("advanced-entry").hidden = !preferenceMode();
+    $("native-heading").hidden = preferenceMode(); $("open-native").hidden = !preferenceMode();
     $("list-title").firstChild.textContent = preferenceMode() ? "逐 Agent 覆盖 " : "原生定义 ";
     $("native-readonly-summary").hidden = preferenceMode() || editorRows().some(writable);
     renderModels(); renderCapabilities(); renderDiagnostics(); renderActivation(); renderRows(); updateBatchEfforts(); setControls();
@@ -712,18 +925,22 @@
     // 这里只做输入反馈；真实路径权限、链接身份和存在性仍由服务端权威检查。
     return path.startsWith("/") && path.length <= 4096 && !path.split("/").includes("..") && !/[\x00-\x1f]/.test(path);
   }
-  async function loadContext() {
+  async function loadContext(announce = false) {
     const draft = active; const ticket = loadOwner.begin(); loading = true; render();
     try {
       const context = await api.context(draft.location, ticket.signal);
       if (!loadOwner.current(ticket) || active !== draft) return;
-      draft.accept(context); message(draft.anyDirty ? "配置已重新读取；当前草稿已保留，请再次预览后保存。重新读取不会重新加载宿主。" : "配置已重新读取；宿主会话未重新加载，实际运行未验证。");
+      draft.accept(context);
+      // 初次载入与普通导航由上下文/底部状态说明；只在用户明确重新读取后给出持续回执，
+      // 避免把常规读成功变成占据编辑首屏的重复提示。错误仍始终就近保留。
+      if (announce) message(draft.anyDirty ? "配置已重新读取；当前草稿已保留，请再次预览后保存。重新读取不会重新加载宿主。" : "配置已重新读取；宿主会话未重新加载，实际运行未验证。");
     } catch (error) {
       if (!loadOwner.current(ticket) || active !== draft || error.code === "cancelled") return;
       message(error.message + (draft.context ? " 当前显示的是上次读取的配置。" : ""), "error");
     } finally { if (loadOwner.current(ticket) && active === draft) { loading = false; render(); } }
   }
   function switchTo(location) {
+    choices.close(false); closeContextMenus();
     catalogOwner.cancel(); previewOwner.cancel(); refreshing = false;
     const key = locationKey(location);
     if (!drafts.has(key)) drafts.set(key, new Draft(location));
@@ -743,8 +960,8 @@
     // 确认放弃会清空当前事务并重绘，原“放弃”按钮随之禁用。
     // 原生 dialog 的返回焦点不能保证这一步之后仍可操作，因此回到当前事务的真实编辑控件；
     // 取消/Esc 没有清草稿，仍优先保留有效的原触发器，不改变用户键盘位置。
-    const candidates = section === "activation" ? [$("activation-state")] :
-      [...document.querySelectorAll("#section-models [data-field='model']")];
+    const candidates = section === "activation" ? [$("activation-state-picker")] :
+      [...document.querySelectorAll("#section-models .picker-trigger")];
     const target = candidates.find(operable) ||
       [...document.querySelectorAll("[data-section][aria-current='page']")].find(operable);
     target?.focus();
@@ -752,7 +969,7 @@
   function requestSwitch(location) {
     if (mutation || locationKey(location) === locationKey(active.location)) { render(); return; }
     if (location.scope === "project" && !validProject(location.project)) {
-      render(); message("请填写不含 .. 的项目绝对路径，再点击“载入项目”。", "error"); $("project-path").focus(); return;
+      render(); message("请填写不含 .. 的项目绝对路径，再点击“载入项目”。", "error"); $("project-menu").open = true; $("project-path").focus(); return;
     }
     switchTo(location);
   }
@@ -795,6 +1012,7 @@
     } }
   }
   function renderPreview(value, reset, kind = "model") {
+    choices.close(false);
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
     const changes = $("preview-changes-list"); changes.replaceChildren();
@@ -843,12 +1061,13 @@
     $("apply-results").replaceChildren(); $("apply-results").hidden = true;
   }
   async function openPreview(reset = false, kind = editorMode) {
+    choices.close(false);
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
     if (!active.context || mutation || loading) return;
     if (!activation) {
       const invalid = [...document.querySelectorAll("#section-models [aria-invalid='true']")].find(control => !control.disabled);
-      if (invalid) { message("推理值与当前模型不兼容，请重选或清除后再预览。", "error"); invalid.focus(); return; }
+      if (invalid) { message("推理值与当前模型不兼容，请重选或清除后再预览。", "error"); (invalid.hidden ? $(invalid.id + "-picker") : invalid)?.focus(); return; }
     }
     const intendedDraft = active;
     if (!activation && active.catalog && !currentCatalog()) {
@@ -882,8 +1101,14 @@
   }
   function restorePreviewFocus() {
     // 冲突/部分失败后原预览按钮会禁用，焦点应回到可继续恢复的重新读取入口。
-    if (dialogTrigger?.isConnected && !dialogTrigger.disabled) dialogTrigger.focus();
-    else { section = "diagnostics"; render(); $("reload-context").focus(); }
+    if (dialogTrigger?.isConnected && !dialogTrigger.disabled) { dialogTrigger.focus(); return; }
+    // 成功保存后预览按钮会禁用，此时继续留在当前事务编辑面；只有来源冲突才去重新读取。
+    // 可见增强按钮接管焦点，不能聚焦已隐藏的原生字段或无故切换到另一分类。
+    if (!active.conflicted) {
+      const control = section === "activation" ? $("activation-state-picker") : document.querySelector("#section-models .picker-trigger:not(:disabled)");
+      if (control && !control.disabled && control.getClientRects().length) { control.focus(); return; }
+    }
+    section = "diagnostics"; render(); $("reload-context").focus();
   }
   function renderSaveDetails(result, draft) {
     const details = $("apply-results"); details.replaceChildren();
@@ -996,24 +1221,36 @@
   }
 
   for (const tab of document.querySelectorAll("[data-host]")) {
-    tab.addEventListener("click", () => requestSwitch({ ...active.location, host: tab.dataset.host }));
+    tab.addEventListener("click", () => { requestSwitch({ ...active.location, host: tab.dataset.host }); closeContextMenus(); $("platform-switch").focus(); });
     tab.addEventListener("keydown", event => {
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
       event.preventDefault(); const tabs = [...document.querySelectorAll("[data-host]")]; const index = tabs.indexOf(tab);
       // 数据读取并非即时，方向键仅移动焦点，Enter/Space 激活以遵循手动 Tab 模式。
-      tabs[event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length].focus();
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length;
+      tabs.forEach((item, i) => { item.tabIndex = i === next ? 0 : -1; }); tabs[next].focus();
     });
   }
-  for (const radio of document.querySelectorAll("input[name=scope]")) radio.addEventListener("change", () => requestSwitch({ host: active.location.host, scope: radio.value, ...(radio.value === "project" ? { project: $("project-path").value.trim() } : {}) }));
-  $("project-form").addEventListener("submit", event => { event.preventDefault(); requestSwitch({ host: active.location.host, scope: "project", project: $("project-path").value.trim() }); });
-  for (const nav of document.querySelectorAll("[data-section]")) nav.addEventListener("click", () => { section = nav.dataset.section; render(); announceSwitch(); });
-  function setEditorMode(mode) { editorMode = mode; render(); announceSwitch(); }
-  $("open-native").addEventListener("click", () => setEditorMode("model"));
-  $("back-preferences").addEventListener("click", () => setEditorMode("dispatch_preferences"));
+  for (const radio of document.querySelectorAll("input[name=scope]")) radio.addEventListener("change", () => {
+    closeContextMenus();
+    if (radio.value === "project" && !validProject($("project-path").value.trim())) { requestSwitch({host:active.location.host, scope:"project", project:$("project-path").value.trim()}); return; }
+    requestSwitch({host:active.location.host, scope:radio.value, ...(radio.value === "project" ? {project:$("project-path").value.trim()} : {})});
+    $("scope-switch").focus();
+  });
+  $("project-form").addEventListener("submit", event => {
+    event.preventDefault(); if (event.isComposing) return;
+    const project = $("project-path").value.trim();
+    requestSwitch({host:active.location.host, scope:"project", project});
+    // 有效载入会收起项目披露；焦点回到持续可见的项目入口，非法输入仍保留就近修正位置。
+    if (validProject(project)) $("project-toggle").focus();
+  });
+  for (const nav of document.querySelectorAll("[data-section]")) nav.addEventListener("click", () => { choices.close(false); section = nav.dataset.section; render(); announceSwitch(); });
+  function setEditorMode(mode) { choices.close(false); editorMode = mode; render(); announceSwitch(); }
+  $("open-native").addEventListener("click", () => { setEditorMode("model"); $("back-preferences").focus(); });
+  $("back-preferences").addEventListener("click", () => { setEditorMode("dispatch_preferences"); document.querySelector("#default-settings .picker-trigger")?.focus(); });
   $("batch-toggle").addEventListener("click", () => { $("batch-panel").hidden = !$("batch-panel").hidden; $("batch-toggle").setAttribute("aria-expanded", String(!$("batch-panel").hidden)); });
   function reloadContext() {
     // context 内的来源指纹决定缓存是否仍有效；相同来源复用，变化只失效目录，不碰草稿。
-    catalogOwner.cancel(); refreshing = false; active.catalogAttempt = null; loadContext();
+    catalogOwner.cancel(); refreshing = false; active.catalogAttempt = null; loadContext(true);
   }
   $("reload-context").addEventListener("click", reloadContext);
   $("recovery-context").addEventListener("click", reloadContext);
@@ -1063,23 +1300,27 @@
   $("cancel-decision").addEventListener("click", () => { decision = null; $("draft-dialog").close(); restoreDecisionFocus(); });
   $("confirm-decision").addEventListener("click", () => { const action = decision; decision = null; $("draft-dialog").close(); action?.(); restoreDecisionFocus(); });
   $("draft-dialog").addEventListener("cancel", event => { event.preventDefault(); decision = null; $("draft-dialog").close(); restoreDecisionFocus(); });
-  for (const dialog of [$("preview-dialog"), $("draft-dialog")]) dialog.addEventListener("keydown", event => {
-    if (event.key !== "Tab") return;
-    // 原生 dialog 已负责背景 inert；补齐首尾 Tab 循环，防止浏览器把焦点送到文档 body。
-    // 保存中按钮全部禁用时仍留在当前对话框，不能把键盘操作落到背景配置表。
-    const controls = [...dialog.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex='0']")].filter(control => !control.hidden && control.getClientRects().length > 0);
-    const first = controls[0], last = controls[controls.length - 1];
-    const focused = document.activeElement;
-    if (!first) { event.preventDefault(); return; }
-    if (event.shiftKey && (focused === first || !dialog.contains(focused) || focused.tabIndex === -1)) {
-      event.preventDefault(); last.focus();
-    } else if (!event.shiftKey && (focused === last || !dialog.contains(focused))) {
-      event.preventDefault(); first.focus();
-    }
-  });
+  // 原生showModal负责背景inert及模态焦点语义；关闭后的业务焦点仍由对应恢复函数判定。
   window.addEventListener("beforeunload", event => {
     if ([...drafts.values()].some(draft => draft.anyDirty) || mutation) { event.preventDefault(); event.returnValue = ""; }
   });
-  window.addEventListener("pagehide", () => { clearTimeout(switchNoticeTimer); loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
+  window.addEventListener("pagehide", () => { choices.close(false); if (choices.frame) cancelAnimationFrame(choices.frame); clearTimeout(switchNoticeTimer); loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
+  const contextMenus = [$("platform-menu"), $("scope-menu"), $("project-menu")];
+  function closeContextMenus() { for (const menu of contextMenus) menu.open = false; }
+  for (const menu of contextMenus) {
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) return;
+      choices.close(false); for (const other of contextMenus) if (other !== menu) other.open = false;
+    });
+    menu.addEventListener("keydown", event => {
+      if (event.key === "Escape" && menu.open) { event.preventDefault(); menu.open = false; menu.querySelector("summary").focus(); }
+    });
+    menu.addEventListener("focusout", event => { if (!menu.contains(event.relatedTarget)) menu.open = false; });
+  }
+  document.addEventListener("pointerdown", event => { for (const menu of contextMenus) if (menu.open && !menu.contains(event.target)) menu.open = false; });
+  $("platform-switch").addEventListener("keydown", event => {
+    if (event.key === "ArrowDown") { event.preventDefault(); $("platform-menu").open = true; $("tab-" + active.location.host).focus(); }
+  });
+  for (const id of ["batch-model", "batch-effort", "activation-state"]) choices.attach($(id));
   switchTo({ host: initialHost, scope: initialProject ? "project" : "global", ...(initialProject ? { project: initialProject } : {}) });
 })();
