@@ -1,14 +1,14 @@
 # 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`active`
+- 阶段：`completed`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
-- 已验收版本：`3.0.1`
+- 已验收版本：`3.0.2`
 
 ## 目标与范围
 
-本轮用户要求将历史讨论已确认的Agent配置工作台与原型评审需求全部落地，统一验收无误后发布xy-workflow `3.0.2`／Native Agent Config `0.1.2`，并升级本机。上一正式基线3.0.1／0.1.1与完整证据保留；本轮未发布前不更新已验收版本。功能分别由模型偏好、原型评审主题及其唯一QA验收，本主题负责发行和安装合同。
+本轮用户要求将历史讨论已确认的Agent配置工作台与原型评审需求全部落地，统一验收无误后发布xy-workflow `3.0.2`／Native Agent Config `0.1.2`，并升级本机。当前两产品均已正式发布、本机升级完成；上一正式基线3.0.1／0.1.1与完整证据保留。功能分别由模型偏好、原型评审主题及其唯一QA验收，本主题负责发行和安装合同。
 
 现有构建、组件描述和远程发布器已支持正式渠道，复用唯一版本与发行来源。保留两独立产品、唯一构建来源、实际下载摘要、正式宿主入口和配置偏好；不恢复 2.x、Windows 或其它安装渠道。
 
@@ -31,7 +31,11 @@
 
 本轮配置工作台与评审工作台源码、真实浏览器、三端包外消费及各自唯一QA已通过。首轮[CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43599159117)两系统各633项、2项旧测试失败／4项既有跳过，原日志与修复历史保留。两个精准修复经原Reviewer扩展32路径PASS后，以 `cae70ccf40e2608e0a4cb8b6212db3f72e7c1dff` 推送，新的[成功CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43600866794)两系统各633项OK、保留4项既有跳过，候选成功。
 
-CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)已实际正式发布，真实重新下载与CI相同，SHA `db5b3bdf225bce5a788f3a6894e7ca27d59ffc250f6e8fd12887e3d55a2b2ce0`；包内三个已批准网页源同字节。原作者通过既有公开入口再次下载生成published固定描述，ABI仍1／2；当前原Reviewer仅核四文件绑定／状态说明delta，随后提交该最终源码并等成功CI，才能发布workflow3.0.2、三stable及升级本机。本机目前仍3.0.1／0.1.1，工作流3.0.2未发布。
+CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)已实际正式发布，真实重新下载与CI相同，SHA `db5b3bdf225bce5a788f3a6894e7ca27d59ffc250f6e8fd12887e3d55a2b2ce0`；包内三个已批准网页源同字节。原作者通过既有公开入口再次下载生成published固定描述，ABI仍1／2；原Reviewer对四文件绑定／状态说明完成最小delta PASS，未重做未变功能审查。
+
+最终产品来源为 `5186d48822d2358379223d1d50b2ffc3920ff144`，[最终CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43603486736)两系统各633项OK（4项既有跳过）及candidate成功。工作流 [3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2)八个正式资产的服务端摘要逐项匹配同一CI候选；[三stable发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43605162892)核对同一来源与不可变附件后普通atomic push成功。Native正式发行固定首个成功CI的 `cae70ccf40e2608e0a4cb8b6212db3f72e7c1dff`，最终CI重建Native仍为相同字节；未重建本地包冒充发行来源。
+
+本机通过官方客户端升级Codex、Claude及AGY后，实际清单均为3.0.2且启用；2310／2317／2315个载荷文件的字节和执行位与CI相同，AGY额外仅官方分发记录。配置组件0.1.2真实准备成功，浏览器打开，三个已安装启动器的doctor均报告完整性verified、服务ready。前后同口径模型偏好摘要相同，启停覆盖及安装范围保持；Claude当前项目仍为projectEnabled=false，不能宣称所有项目均启用。无剩余已批准的本轮实现／发行任务。
 
 以下保留上一3.0.1／0.1.1发行证据，不是本轮完成声明。
 
@@ -45,17 +49,22 @@ CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1
 
 ## 验收结果与当前已交付行为
 
-上一已完整验收并安装的正式组合为 xy-workflow 3.0.1 与 Native Agent Config 0.1.1；本轮部分发行与未完成安装见第4节。正式／alpha 严格版本与渠道判定、候选来源及唯一附件门禁、先组件后插件、同 SHA 成功 CI、真实下载绑定、历史库存认证分离等均保留；没有新增模型能力或修改 UI。
+当前已完整验收、发布并安装的正式组合为xy-workflow 3.0.2与Native Agent Config 0.1.2。已交付第六版深石墨配置工作台、HTML整改评审工作台及其职责整理，具体能力与证据分别见两功能主题。正式／alpha严格版本与渠道判定、候选来源及唯一附件门禁、先组件后插件、同SHA成功CI、真实下载绑定、历史库存认证分离等均保留；没有新增宿主模型能力。
 
-三端 dispatch 偏好文件升级前后均不存在，Codex 原生模型字段投影摘要一致；本轮未执行任何模型配置保存。Claude 原生模型字段旧采样的序列化方式未保全，无法完成同口径摘要对比，因此其字段保持明确未证实，未猜测或恢复用户值。Claude 列表显示用户级 enabled=true、projectEnabled=false；不据此宣布当前项目或新会话已经加载。
+本轮三端dispatch偏好文件及原生模型、推理和Agent字段，均由保全的同一采样脚本生成前后摘要，完全一致；未执行任何真实模型配置保存，未改写用户值。清单的目标启用／范围和其他插件采样摘要保持；Codex清单检查范围仅xy-workflow市场，不能扩大为所有市场。Claude列表仍显示用户级enabled=true、projectEnabled=false；不据此宣布当前项目或新会话已经加载。上一3.0.1升级时Claude采样口径缺失仍属历史未证，本轮新采样不补造旧结论。
 
-安装、服务可达与浏览器打开分别只是相应层证据。三端指定模型／推理实际采纳、Codex App GUI、官方公开目录尚未验收；Windows 继续暂停。新会话仍按宿主原生权限与 Hook 信任处理，不直接改写信任。
+安装、服务可达与浏览器打开分别只是相应层证据。Codex CLI／App共享插件缓存已升级，但App图形界面新会话、三端指定模型／推理实际采纳及完整读屏未在本轮实测；官方公开目录尚未上架，Windows继续暂停。新会话仍按宿主原生权限与Hook信任处理，不直接改写信任。三个业务项目的具体原型迁移不是插件升级动作，本轮未执行。
 
 ## 批准依据与必要证据
 
-- 批准依据：用户“升级完成后叠加新版本，去掉 alpha，xy-workflow 3.0.1、Native Agent Config 0.1.1；发布 GitHub 并升级本机”。
-- 验收证据：同一 Reviewer 的 published 源码 Pack SHA `75cf292db7c1de1958f39ea289ee09957933c86da7b0609094d8bbb7c7bac1af`，有效交接 SHA `7b9cc768e201c88c0f50a90bd9f9eff1a3d24e06e1d790050285683cc5901f43`，PM validate 退出 0；原 Reviewer 另只读复核最终 CI、远端与本机操作，结论及未证边界记录在 `qa-final-ops-evidence.json`。
+- 批准依据：用户要求“历史讨论定下的需求全部修改完毕后，再做一次验收；验收无误后发布新版，并升级本机为最新版本”。第六版配置工作台和最终整改工作台分别绑定各自已采用的具体原型，不把发行授权当作新设计批准。
+- 验收证据：原唯一Reviewer的32路径published绑定Pack SHA `df57db345fe636c61b8a566a3228b81b7f4413f6f21243d6ab98591119d4fce1`，有效交接SHA `d0cda1bbdb08b150c3a1c1e7a73e4966e622d1c2617465894ceb74b2870c3e7b`，PM实际validate退出0；最终操作与事实投影由同Reviewer只读复核，不重跑未变功能。
+- 最终artifact `14117960812`外ZIP SHA `8b495c1027039d8c566b1aa6e73675637df1856f5bba269ace2f1205664e571b`与服务端一致；17成员安全，七包和sidecar全部匹配。三个primary ZIP摘要为Codex `c748ecf380ca68af99706777cc898ce12c1576172fcfd7630f4f6625319a5df5`、Claude `9e44809a2799e18c60503a3f4e3860f57944a8b0df46e5ecded9d45d1d38b7f8`、AGY `615eaad705951c112766073d0eb4e34e30261faddb892d06b03ec2e922c9d8f8`。
+- 完整原失败／成功日志、分阶段Pack与交接、最终CI／Release／分发及本机回执保全于 `dist/evidence/stable-product-release/stable-302-012-delivery-evidence.zip`；配置UI及原型前像归档保持原位。大型候选与实际发行包从固定CI及Release恢复，不重复纳入证据归档。下列3.0.1记录明确为历史。
+
+- 历史3.0.1批准：用户“升级完成后叠加新版本，去掉 alpha，xy-workflow 3.0.1、Native Agent Config 0.1.1；发布 GitHub 并升级本机”。
+- 历史3.0.1验收：同一 Reviewer 的 published 源码 Pack SHA `75cf292db7c1de1958f39ea289ee09957933c86da7b0609094d8bbb7c7bac1af`，有效交接 SHA `7b9cc768e201c88c0f50a90bd9f9eff1a3d24e06e1d790050285683cc5901f43`，PM validate 退出 0；旧Reviewer另只读复核当时CI、远端与本机操作，记录在旧归档内 `qa-final-ops-evidence.json`，与本次同名证据分属独立请求。
 - 最终 artifact `14096580701` 的外 ZIP SHA `27e3f6fee07cc9c5089d2b6624aed0b9dcb00042f1d19eb8352bc100728b68f3` 与服务端一致；17 成员安全，七包及 sidecar 全部匹配，native 与先行正式资产为同一字节。
 - 完整原失败／成功日志、分阶段 Pack 与交接、Release／Git 树及安装回执保全于 `dist/evidence/stable-product-release/stable-301-011-delivery-evidence.zip`，128 个证据文件，SHA `2c2ab8227cc9ea0b99c091c9bdfddb582ee568876160f8c2fe1b6b5dc9542636`。不重复归档大型候选，原 CI 及真实 Release 可恢复相应资产。
 
-受保护旧未跟踪迁移稿不读、不改、不暂存。文档事实投影为发行后的独立提交，不改变已发布 3.0.1 的源码／产物身份。
+受保护旧未跟踪迁移稿不读、不改、不暂存。文档事实投影为发行后的独立提交，不改变已发布3.0.2的源码／产物身份，也不移动既有3.0.1标签或重发同版不同载荷。

@@ -1,14 +1,14 @@
 # 3.0 主题文档与原型评审工作区
 
 - 主题 ID：`workflow-document-lifecycle`
-- 阶段：`active`
+- 阶段：`completed`
 - 模块：主题文档、原型模板、反馈输入与修订交接
 - 任务等级：`Full`
-- 已验收版本：`3.0.1`
+- 已验收版本：`3.0.2`
 
 ## 目标与范围
 
-提供单一主题 Markdown 生命周期、高保真原型评审与增量反馈，以及随插件维护的通用离线评审工具。当前正式基线3.0.1延续alpha.9的节点反馈与资源归属能力；本轮新增评审操作流重设计，旧交付和当前候选分开记录。
+提供单一主题 Markdown 生命周期、高保真原型评审与增量反馈，以及随插件维护的通用离线评审工具。当前正式基线3.0.2已交付本轮整改操作流和职责整理；旧交付证据保留，历史等级与版本差异界面不作为当前功能。
 
 借鉴外部项目的稳定节点、结构化反馈和局部修改交接，保留两步确认、唯一独立 QA、需求 Markdown 权威及原生角色职责。通用工具由插件交付，项目只保存具体原型、业务 CSS／JS、需求和设计规范。三个业务项目实际迁移尚未执行。
 
@@ -65,7 +65,7 @@
 
 路线已确定：用户在核对HTML／spec及拖拽取舍后明确“按照你推荐开始，拖拽功能暂时不做”。HTML为唯一设计稿，轻量数据只保存目标、整改和引用，实质复用上游相机／面板适用代码；不维护完整双spec或高保真spec渲染器。最新三色按用户整改生成，取消历史版本差异清单，但来源版本绑定继续保留。此前暂停与重组解析失败原始日志保留，当前已采用最终原型，生产验收另行完成。
 
-上一候选已按视觉反馈重做两侧面板，其三色改动／双页签／侧栏表单仍属于旧交互，已被本次确定的弹窗整改流程替代。成熟深色工具视觉、页面导航和中央设计稿方向保留；仍由原设计实例修改同三文件，不改已批准配置工作台及正式运行模块。用户最新明确“就按照梳理的建议，确定需求”，同时采用画布浮动工具与开发契约大弹窗；同目标多条整改、潜在冲突提示和被引用定位标记保护按建议执行。本次为需求批准，不是视觉批准或生产交付。
+上一候选的三色版本差异／双页签／侧栏表单属于旧交互，已被本次弹窗整改流程替代。用户当时明确“就按照梳理的建议，确定需求”，采用画布浮动工具、开发契约大弹窗、同目标多条整改、潜在冲突提示和被引用定位标记保护；该次确认本身只批准需求。随后用户采用最终原型布局与流程并要求正式落地，当前实现与验收依据见以下章节。
 
 ## 方案与原型关联
 
@@ -91,10 +91,10 @@
 ## 当前进展与恢复入口
 
 - **已验证：** 最终原型静态与外部／内联JS语法exit0，178唯一ID、88唯一静态控件映射及五段完整；无新增颜色，复用有效9组配色。PM已核五段当前语义。HTML／JS／CSS SHA分别为 `b60a72f419f79cfbed37c1d201be6cc069d96a57ea9afc20aaf82a1b645d629a`、`c8a6bc63077612e8032002157ab11c53484b4418314facfefe48e69653cf4926`、`2ef1d9f239f22c85bb593c1329ef4c5fa29670047c7b8f961edbeeecc86cde97`。原型不作为生产浏览器或独立QA结论。
-- **已实现待最终接收：** 核心、Web和三端交付已落地；核心27项、状态／模板节点、真实file浏览器与三端包外JSON／Markdown消费有原日志。配置工作台第六版另由其唯一Reviewer完成PASS。版本为3.0.2／0.1.2 unpublished，尚未发布／安装。
+- **已交付：** 核心、Web和三端交付已落地；核心27项、状态／模板节点、真实file浏览器与三端包外JSON／Markdown消费有原日志。配置工作台第六版另由其唯一Reviewer完成PASS。工作流3.0.2／配置组件0.1.2已正式发布，三stable分发与本机升级完成。
 - **源码验收通过：** 原唯一Reviewer完成首轮返工delta PASS，PM实际校验schema2交接valid。恢复条数／候选字节预算、实际Markdown全文限制及旧模板测试三项发现均关闭；当前6项runtime与原失败模板节点精准通过，三端最终生产formatter生成Markdown后真实包外校验current。原FAIL与全部复现保留。
-- **剩余工作：** 源码提交及Linux／macOS成功CI候选；先发布配置组件0.1.2，真实下载核验后冻结published描述并交原Reviewer复核；再发布工作流3.0.2／三stable和本机升级。当前尚未发行，不把源码PASS当作本机已更新，Windows保持暂停。
-- **恢复依据：** 全部已确认需求见第2节，现行原型见第3节，最后有效发行3.0.1／0.1.1见[发行主题](stable-product-release.md)。Windows保持暂停；本轮不恢复2.x/TUI/npm，也不擅自迁移三个业务项目的具体原型文件。
+- **发行验收：** 最终来源 `5186d48822d2358379223d1d50b2ffc3920ff144` 的[Linux／macOS CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43603486736)两系统各633项OK（4项既有跳过），候选成功；[三stable发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43605162892)成功。本机三端3.0.2载荷与CI逐字节及执行位一致，组件0.1.2三端doctor通过。没有剩余已批准的工作台实现，Windows保持暂停。
+- **恢复依据：** 全部已确认需求见第2节，现行原型见第3节，当前正式组合3.0.2／0.1.2及最终操作证据见[发行主题](stable-product-release.md)。本轮不恢复2.x/TUI/npm，也未迁移三个业务项目的具体原型文件。
 
 最终84成员完整原型与历史日志证据在 `dist/evidence/plugin-prototype-viewer/rectification-no-severity-evidence.zip`，SHA `0067a375016b91b2da68600e18cb0b4b4f02e3d99980f596bba305d810975003`。归档包含精修前完整本主题、各轮原型、成功与失败日志、上游原文和许可，前版归档均保留，替换的历史讨论不再作为当前执行输入。
 
@@ -104,9 +104,11 @@
 
 alpha.9 已由[两系统 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43436450887)及[三渠道发布作业](https://github.com/Geoege-xll/agent-workflow/actions/runs/43438890253)完成分发，本机三端文件树与候选匹配。安装成功不证明 Hook 信任、指定模型采纳或三个业务项目原型迁移。
 
-节点反馈支持默认折叠工具、等级、REQ 与已声明交互／接口关联、当前摘录、用户提案对比、草稿和安全导出；prepare 自动绑定真实需求与逐页依赖，validate 生成按节点聚合的修订交接。用户文字、界面状态或链接均不授予批准，修改由原 UI Agent 在既有归属内实施。
+当前3.0.2提供顶层深色工作台、默认收起的原型页抽屉、实际HTML固定视口画布、浮动工具和紧凑右侧整改／标记Tab。浏览保留稿件真实交互，批注点选后以浮条进入唯一整改弹窗；支持节点、页面和本轮整体意见。彩色整改与独立A标记稳定编号、双向定位，编辑保号、撤回与单次恢复、引用保护均已验证；没有意见等级、新增位置选择、拖拽或连线。开发契约完整保留在大弹窗，主画布不再被大标题背景或底部契约挤占。
 
-已接受的行为包括：schema 2 准备与回传校验；用户级私有、按工具版本和内容固定的离线快照；明确页面闭包和既有导航分组投影；`prototype-review:*` v2 幂等桥与旧 v1 隔离；无项目工具控件也能批注；无内容标记时明确空节点；来源变化拒绝反馈；先预览再按同一来源执行的有界迁移与冲突保留。新项目脚手架只提供项目可维护的 `prototype.css`，不复制通用 index／workspace／feedback／page-shell；原有非空业务原型保持。指定新核心测试已纳入 `prototype`／`current` 显式组及 runner 独立清单。
+新manifest3／bridge3及feedback3已通过真实离线通信、JSON和Markdown回传；context2与工作流Task Pack2保持各自合同。源唯一ID优先，匿名源键只注入派生快照，缺显式内容标记时只接受原始HTML唯一main；无源动态元素不静默代绑。单一状态与唯一formatter保证条数及UTF-8全文预算，失败保留草稿且不导出陈旧备用。后端重读源验证指纹、真实目标、引用和字段，旧3.0的v2不可变包仍走固定原资产严格只读分支。用户文字、界面状态或导出均不授予批准，不自动改写业务页面。
+
+通用工具继续随插件维护，项目仅保留具体HTML／CSS／JS和业务资料；prepare按明确页面闭包生成用户级私有、固定工具版本／内容的不可变快照。既有导航分组、来源变化拒绝、有界迁移预览／执行／恢复、脚手架不复制通用壳继续有效。当前核心、状态、模板和指纹测试已进入实际current CI；三个业务项目的具体原型迁移仍未执行，安装升级不推断其已迁移。
 
 ### 继续有效的文档与原型合同
 
@@ -150,10 +152,11 @@ QA 检查当前受影响链接、主题归属与实际变更，不把本次文�
 
 ## 批准依据与必要证据
 
-本轮源码验收：当前QA Pack SHA `736507879a267ccaabee9619b8b039abd97aea9002ca384daac62c8d2b683c1a`，完整30路径diff SHA `45624a53b89a1548493e84f4a16341e0108b85f5579432cea400081139f51d01`，交接 `qa-handoff-rework-pass.json` SHA `e528058a937d7fa857289ff5fec22a39ec19431a9ec0e1392d9ea2e6d7e3abb5`，PM实际validate退出0。初审114成员完整源／Pack／失败日志归档 `dist/evidence/plugin-prototype-viewer/workbench-302-initial-qa-evidence.zip`，SHA `9925ac62144e9e70b0d30dee701e72cb5bd085ec9fa4f96352af440fe0fd46bc`；本轮最终成功及QA003相邻复现继续保留在当前请求证据区，后续发行收口时一并保全。
+本轮最终源码验收为完整32路径、原唯一Reviewer的published绑定delta PASS：Pack SHA `df57db345fe636c61b8a566a3228b81b7f4413f6f21243d6ab98591119d4fce1`，交接 `qa-handoff-published-pass.json` SHA `d0cda1bbdb08b150c3a1c1e7a73e4966e622d1c2617465894ceb74b2870c3e7b`，PM实际validate退出0。原30路径功能返工PASS、EOF格式delta、CI两项旧测试修复及原FAIL全部保留。初审114成员完整源／Pack／失败日志归档 `dist/evidence/plugin-prototype-viewer/workbench-302-initial-qa-evidence.zip`，SHA `9925ac62144e9e70b0d30dee701e72cb5bd085ec9fa4f96352af440fe0fd46bc`；最终成功、QA003全文预算复现、CI／发行／本机回执保全于 `dist/evidence/stable-product-release/stable-302-012-delivery-evidence.zip`，摘要和操作复核见[发行主题](stable-product-release.md)。
 
-- 批准依据：用户明确“按照你的推荐进行升级，需要借鉴优秀部分融入项目”；本轮界面选择为“沿用现在规范，参考示例项目的良好交互，直接实现”。
-- 验收证据：前轮独立 Reviewer 对 31 路径及 57 项规范给出 PASS，结构化交接经严格校验为 valid。QA 包 SHA 为 `2400015a37749c1cdabba501d1195a2949be50cf31d25cbb3a567c91354504f2`；交接 SHA 为 `f823269ff498663959665028f03b73f8db42b13921fd56612ed4eb3384aab5c3`；完整 tracked／untracked 差异 SHA 为 `9f8a76d6a36401fcad0cede840104fc3ce3e0cc40ba4a5d5d0b0c14d003e5735`。当时的请求证据区为 `/private/tmp/awf-prototype-feedback-evidence`；2026-11-13 已核实该目录缺失，目前仅保留本页历史记录、摘要及 Git 源码，后续交付已保全新的实际证据，但不补造上述缺失原件。
+- 批准依据：用户采用最终工作台布局和整改流程，明确要求历史讨论已定需求全部正式实现，验收后发布和升级本机；具体原型与指纹见第3节。早期“沿用规范直接实现”的选择不取代当前已采用原型。
+- 验收证据：本节当前32路径有效QA交接、最终CI／发行／本机证据和原失败保全；配置工作台的独立验收归其主题，不由本页替代。
+- 早期验收历史：旧Reviewer对31路径及57项规范给出PASS，交接当时校验valid。QA包SHA `2400015a37749c1cdabba501d1195a2949be50cf31d25cbb3a567c91354504f2`；交接SHA `f823269ff498663959665028f03b73f8db42b13921fd56612ed4eb3384aab5c3`；完整tracked／untracked差异SHA `9f8a76d6a36401fcad0cede840104fc3ce3e0cc40ba4a5d5d0b0c14d003e5735`。当时请求证据区为 `/private/tmp/awf-prototype-feedback-evidence`；2026-11-13已核实缺失，目前仅有本页历史记录、摘要及Git源码，不补造缺失原件。
 - 浏览器权限依据：用户对本轮唯一最小 fixture 的临时文件访问明确回复“授权”；已完成 file:// 验收并关闭对应浏览器，未扩大到业务／账号、旧 Hook 信任或其他安装发布操作。
 - 参考边界：已静态查看外部 smyw 固定提交 `1f6d786dddd36a33b002ce8afff70d43d08a9460`，借鉴稳定节点、分级意见、局部差异和增量反馈；不复用其宽泛默认触发、线框代替高保真、数字版本代替原型指纹或导出文本即批准的语义。具体来源与采用关系如下。
 
@@ -161,16 +164,18 @@ QA 检查当前受影响链接、主题归属与实际变更，不把本次文�
 
 - 项目：[nishuzumi/show-me-you-want-skill（smyw）](https://github.com/nishuzumi/show-me-you-want-skill)。
 - 固定参考版本：[1f6d786dddd36a33b002ce8afff70d43d08a9460](https://github.com/nishuzumi/show-me-you-want-skill/tree/1f6d786dddd36a33b002ce8afff70d43d08a9460)。本记录不随其默认分支移动；未来参考新版本先重新评估差异。
-- 参考性质：借鉴原型评审交互与增量输入思路，没有安装该 Skill、执行其脚本或引入其运行时；外部材料不成为本项目指令权威。
+- 参考性质：借鉴原型评审交互与增量输入思路，并在3.0.2实质复用固定上游适用相机代码；没有安装该Skill、执行其构建／补丁脚本或引入完整spec运行时。外部材料不成为本项目指令权威。
 
-| 固定参考材料 | 已借鉴的优秀部分 | 在本项目中的落点与边界 |
+下表保留早期参考评估的采用关系；其中分级意见已被本轮无等级整改替代，当前操作以REQ-801—812及第5节为准。
+
+| 固定参考材料 | 早期借鉴的优秀部分 | 在本项目中的落点与边界 |
 | --- | --- | --- |
 | [Skill 使用说明](https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/skills/smyw/SKILL.md) | 用户在页面上定位、批注、选择必须改／建议／疑问，再回传 Agent。 | `templates/prototype/feedback.js` 与页面桥，工具位于外壳，保留高保真画板和原两步确认。 |
 | [Spec 与反馈格式](https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/skills/smyw/references/spec-format.md) | 稳定节点 ID、局部前后关系、需求／流程／接口关联。 | 复用现有控件、data-contract-for 和 REQ；比较当前摘录与用户提案，不引入第二套 UI spec，也不把片段当真实已批准历史。 |
 | [增量反馈处理脚本](https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/skills/smyw/scripts/apply-feedback.mjs) | 只回传改动、检查所基于的版本，减少完整方案重复加载。 | `lib/documents/prototype_feedback.py` 重算需求 SHA 与原依赖指纹，生成按节点聚合的修订交接；不执行其补丁算法，不自动写 HTML 或授予批准。 |
 | [离线预览生成与检查](https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/skills/smyw/scripts/build.mjs) | 离线打开、明确校验错误和可交回的反馈。 | 延用既有无构建原型及静态校验器，采用有界评审链接和反馈导出；不引入 JSON 渲染引擎、服务或额外生成链。 |
 
-固定版本的[许可证为 MIT](https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/LICENSE)。未来若拟直接复用源码或资源，须先核对具体来源及许可、保留要求的声明，并单独评估依赖和维护边界；本次借鉴不代表已批准后续整包引入。
+固定版本的[许可证为 MIT](https://github.com/nishuzumi/show-me-you-want-skill/blob/1f6d786dddd36a33b002ce8afff70d43d08a9460/LICENSE)。3.0.2相机代码的实际复用记录、准确Copyright (c) 2026 box和完整MIT声明随 `templates/prototype/THIRD_PARTY_NOTICES.txt` 进入三端九资产白名单；不代表整包引入上游编辑器或其批准流程。
 
 ### 资源归属升级验收
 
@@ -178,4 +183,4 @@ QA 检查当前受影响链接、主题归属与实际变更，不把本次文�
 
 旧 `hosts` 组两条 direct Antigravity 整链仍在退役合同处失败，原记录保留；当前 CI 和正式插件消费不调用它们，没有删除或 skip 造绿，也不声称 `hosts` 全通过。其它浏览器、Windows 和三宿主模型实际运行不属于此验收。
 
-本轮仅重组正文，原完整记录与参考来源可从[整理前 Git 原文](https://github.com/Geoege-xll/agent-workflow/blob/f63a98bedd9613dbfcf35dd5bbd97253f26f8c56/docs/plans/workflow-document-lifecycle.md)恢复；原始成功与失败证据保持原位。
+此前文档整理的完整记录与参考来源可从[整理前 Git 原文](https://github.com/Geoege-xll/agent-workflow/blob/f63a98bedd9613dbfcf35dd5bbd97253f26f8c56/docs/plans/workflow-document-lifecycle.md)恢复；原始成功与失败证据保持原位。
