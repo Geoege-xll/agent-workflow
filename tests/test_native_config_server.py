@@ -370,6 +370,8 @@ class ConsoleProcessTest(unittest.TestCase):
         binaries.mkdir()
         marker = root / "catalog-active.json"
         fake = binaries / "codex"
+        # 目标文件存在即表示 PID JSON 已可读取；直接打开目标会先暴露空文件，触发跨进程竞态。
+        # 先在同目录临时文件中完整写入并关闭句柄，再原子替换目标，使轮询只能观察到完整通知。
         fake.write_text("#!" + sys.executable + "\n" +
                         "import json,os,sys,time\n" +
                         "for line in sys.stdin:\n" +
@@ -377,7 +379,10 @@ class ConsoleProcessTest(unittest.TestCase):
                         " if request.get('method')=='initialize':\n" +
                         "  print(json.dumps({'id':request['id'],'result':{}}),flush=True)\n" +
                         " elif request.get('method')=='model/list':\n" +
-                        "  open(os.environ['CATALOG_ACTIVE_MARKER'],'w').write(json.dumps({'pid':os.getpid()}))\n" +
+                        "  marker=os.environ['CATALOG_ACTIVE_MARKER']\n" +
+                        "  with open(marker+'.tmp','w') as output:\n" +
+                        "   output.write(json.dumps({'pid':os.getpid()}))\n" +
+                        "  os.replace(marker+'.tmp',marker)\n" +
                         "  time.sleep(30)\n", encoding="utf-8")
         fake.chmod(0o700)
         child, started = self.start_serve("--idle-timeout", "0", env={**os.environ, "PATH": str(binaries),
