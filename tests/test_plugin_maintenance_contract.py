@@ -34,22 +34,43 @@ class PluginMaintenanceContractTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def test_discoverable_skills_keep_eight_core_and_unchanged_worker_preloads(self):
-        # Grill Me 已移入四个精选 adapter；核心表精确保留八项，维护入口独立发现。
-        self.assertEqual(8, len(CORE_SKILLS))
+    def test_discoverable_base_and_conditional_guidance_keep_maintenance_and_worker_preloads_separate(self):
+        # 期望名称独立于生产注册表：八个基础入口继续存在，两个指导入口只增加可发现
+        # 资源。精确集合同时防止误删旧入口或无意加入新入口，不能只把历史计数8改为10。
+        base_skills = {
+            "xy-build-verify", "xy-project-memory", "xy-plan", "xy-prototype-verify",
+            "xy-qa-review", "xy-workflow", "xy-code-standards", "xy-ui-design",
+        }
+        conditional_guidance = {"xy-web-guidance", "xy-apple-guidance"}
+        selected_skills = {"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}
+        self.assertEqual(base_skills | conditional_guidance, set(CORE_SKILLS))
+        self.assertEqual(selected_skills, set(SELECTED_SKILLS))
         self.assertNotIn("xy-config", CORE_SKILLS)
         for role, skills in ROLE_SKILLS.items():
             self.assertNotIn("xy-config", skills, role)
+            self.assertTrue(conditional_guidance.isdisjoint(skills), role)
+        expected_discovery = base_skills | conditional_guidance | selected_skills | {"xy-config"}
         for host, root in self.installed.items():
             with self.subTest(host=host):
                 actual = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
-                self.assertEqual(set(CORE_SKILLS) | set(SELECTED_SKILLS) | {"xy-config"}, actual)
+                self.assertEqual(expected_discovery, actual)
                 for role in ROLE_SKILLS:
                     self.assertEqual((PACK / "roles" / (role + ".md")).read_bytes(),
                                      (root / "roles" / (role + ".md")).read_bytes())
-                    if host != "codex":
+                    if host == "codex":
+                        # Codex的原生生成器从名称CLI取得预载列表；运行实际包内入口，
+                        # 不能以源码注册表未绑定就代替验证打包后仍按需选用的行为。
+                        projected = subprocess.run([sys.executable, "-B", str(root / "lib/skills/role_skills.py"), role],
+                            cwd=self.root, env=isolated_environment(self.root / "preload-scope"),
+                            capture_output=True, text=True, timeout=10)
+                        self.assertEqual(0, projected.returncode, projected.stdout + projected.stderr)
+                        self.assertTrue((conditional_guidance | {"xy-config"}).isdisjoint(projected.stdout.splitlines()), role)
+                    else:
+                        # Claude/AGY核对三包fixture里的原生header，不读取正文来误判
+                        # 按需选用说明；维护与两个条件指导入口均不得被自动预载。
                         header, _ = builder.split_frontmatter((root / "agents" / (role + ".md")).read_bytes())
-                        self.assertNotIn(b"xy-config", header)
+                        for skill in conditional_guidance | {"xy-config"}:
+                            self.assertNotIn(skill.encode(), header, role)
 
     def test_host_metadata_is_explicit_only_and_maintenance_has_no_business_envelope(self):
         original = (PACK / "plugins/maintenance/skills/xy-config/SKILL.md").read_bytes()
