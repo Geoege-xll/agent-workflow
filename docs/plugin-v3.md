@@ -1,6 +1,6 @@
-# Agent Workflow 3.0 插件候选
+# xy-workflow 3.0 插件
 
-3.0 使用三平台官方插件机制分发工作流。已发布插件 `3.0.0-alpha.9`，唯一版本源是 `product/PLUGIN_VERSION`；独立配置组件为 `0.1.0-alpha.5`。本轮源码已独立验收，三个 Git 渠道及本机三端安装与载荷均已核验，配置组件完整性、服务及浏览器打开通过，详见[当前交付](plans/native-model-preferences.md)。本页描述 alpha 与自有 Git 分发，不表示官方公开目录上架、稳定发行、实际模型采纳或自动迁移业务项目；Windows 工作暂停。
+3.0 使用三平台官方插件机制分发工作流。已正式发布插件 `3.0.1`，唯一版本源为 `product/PLUGIN_VERSION`；独立组件为 `0.1.1`。三个 stable Git 来源及本机三端载荷已核对，组件完整性、服务及浏览器打开回执通过，详见[正式发行主题](plans/stable-product-release.md)。自有 Git 正式发行不表示官方公开目录上架或指定模型实际采纳；Windows 暂停。
 
 ## 工作流保持
 
@@ -40,11 +40,11 @@
 
 网页、HTTP 和 MCP 只能调用配置核心，不能各自实现一份校验、保存或恢复。模型定义字段、命名 Agent 调用和单次覆盖参数分开表达；平台能力未知时返回诊断，不生成猜测参数。两套产品版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`；`product/VERSION` 不表示插件版本。
 
-普通用户通过官方客户端直接安装三个固定 Git 分发分支，无需克隆或本地构建。新候选 Codex/Claude 远程市场为 `xy-workflow-alpha`，插件名为 `xy-workflow`；AGY 直接安装宿主专属分支的 GitHub tree URL。新旧身份不自动混用，发行后按官方客户端确认范围再切换。完整命令、登录、Hook 信任、来源检查和更新区别见[安装说明](../plugins/INSTALL.md)。运行 helper 仍需已有 Python 3.11+ 和 Bash。
+普通用户通过官方客户端直接安装三个固定 Git 分发分支，无需克隆或本地构建。正式 Codex/Claude 远程市场为 `xy-workflow`，插件名为 `xy-workflow`；AGY 直接安装宿主专属分支的 GitHub tree URL。新旧身份不自动混用，发行后按官方客户端确认范围再切换。完整命令、登录、Hook 信任、来源检查和更新区别见[安装说明](../plugins/INSTALL.md)。运行 helper 仍需已有 Python 3.11+ 和 Bash。
 
-源码构建只供开发与维护，沿既有 `packaging/build_plugin.py` 与 `build_candidates.py` 唯一构建链生成三宿主插件、本地来源与独立组件七包，详见[开发手册](development.md)。开发市场 `xy-workflow-local` 不与远程市场自动迁移或同时启用。八个内部核心、四个精选别名与独立维护入口分别管理，不把第三方原版直接混入核心发现目录。
+源码构建只供开发与维护，沿既有 `packaging/build_plugin.py` 与 `build_candidates.py` 唯一构建链生成三宿主插件、本地来源与独立组件七包，详见[开发手册](development.md)。开发市场 `xy-workflow-local` 不与远程市场自动迁移或同时启用。八个基础核心、两个条件指导、四个精选别名与独立维护入口分别管理；两个指导入口可发现但不进入角色无条件预载，不把第三方原版直接混入核心发现目录。
 
-新手动发布工作流仅从 main 固定源码 SHA，读取同 SHA 成功 `release.yml` 的唯一候选 artifact。独立发布 job 校验来源、候选摘要、版本与干净输入后，将三个宿主来源普通 atomic push 到 `plugins-codex-alpha`、`plugins-claude-alpha`、`plugins-antigravity-alpha`；不另建构建链、不 force 覆盖未知分支，拒绝同版不同载荷，相同候选可幂等重发。发布是自有 Git alpha 渠道，不代替官方公开目录或稳定发行审查。实际发布证据见[远程安装计划](plans/plugin-remote-install.md)。
+新手动发布工作流仅从 main 固定源码 SHA，读取同 SHA 成功 `release.yml` 的唯一候选 artifact。独立发布 job 校验来源、候选摘要、版本与干净输入后，将三个宿主来源普通 atomic push 到 所选渠道的 `plugins-codex-*`、`plugins-claude-*`、`plugins-antigravity-*`；不另建构建链、不 force 覆盖未知分支，拒绝同版不同载荷，相同候选可幂等重发。正式渠道为 stable、历史预发行渠道为 alpha，不代替官方公开目录审查。实际发布证据见[远程安装计划](plans/plugin-remote-install.md)。
 
 空项目通过包内 `plugins/project_context.py` 显式创建最小 `.awf/project.yaml`；inspect 本身零写入。已有有效根 `project.yaml` 可复用。项目 adapter 和安装插件中的权威资源分开读取；旧中央绑定或混用来源明确拒绝，不靠伪造 pin 或全局指令文件补入口。
 
@@ -67,7 +67,7 @@ bash scripts/test_workflow.sh current
 
 上一 alpha.4 精确本机候选已完成三端本地安装：Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；AGY 安装通过待登录；App GUI 未验。alpha.5 的远程发布与安装发现单独验收，不从来源可用、状态列表或安装回执推断 PM 模型运行。较早 alpha 候选的单项真实模型响应、PM、原生子代理与持续接单证据按[原生验收记录](plans/plugin-v3-native-acceptance.md)的历史范围保留，不扩大为当前三端全部通过。
 
-活动任务跨官方插件更新的自动资源保留协议尚未实现，当前 alpha 使用活动任务先收尾再更新的限制。源码与离线包校验不能据此声明自动跨版本恢复通过。
+活动任务跨官方插件更新的自动资源保留协议尚未实现，当前版本要求活动任务先收尾再更新。源码与离线包校验不能据此声明自动跨版本恢复通过。
 
 实施范围与证据见[3.0 计划](plans/plugin-v3.md)。当前导航已移除旧安装、中央运行时、TUI 与旧同步资料；有效工作流要求归入[使用手册](usage.md)和[文档与原型指南](plans/workflow-document-lifecycle.md)。本仓文档清理不自动操作其他用户或业务项目的安装。
 

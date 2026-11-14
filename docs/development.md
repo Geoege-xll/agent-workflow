@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生 Agent 配置工具。本轮正式发行候选为 `xy-workflow 3.0.1` 与 `Native Agent Config 0.1.1`，版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`。计划文档规范已完成独立 QA；角色技能与正式发行合同正在集成验收。当前本机仍为工作流 alpha.9／组件 alpha.5；发布、下载校验和本机升级结果分别记录，不由源版本推断。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+当前产品是官方工作流插件与独立原生 Agent 配置工具。已正式发布 `xy-workflow 3.0.1` 与 `Native Agent Config 0.1.1`，版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`。文档规范、角色技能与正式发行合同分别完成唯一独立 QA；最终 CI、三 stable 来源和本机三端载荷均已核验，组件完整性及服务 ready。真实来源与边界见[发行主题](plans/stable-product-release.md)，不从安装推断新会话或模型采纳。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
 ## 权威与职责
 
