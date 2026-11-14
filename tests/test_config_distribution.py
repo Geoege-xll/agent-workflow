@@ -45,7 +45,10 @@ class ConfigDistributionTest(unittest.TestCase):
     def test_unpublished_uses_actual_zip_sha_and_has_no_download_url(self):
         report = distribution.assemble(self.artifact)
         self.assertEqual(report["release_status"], "unpublished")
-        self.assertEqual((report["version"], report["channel"]), ("0.1.1", "stable"))
+        # 真实独立包必须跟随唯一版本源，不能让旧发行号把正确的新版本构建误判
+        # 为失败；渠道仍由现有严格合同推导，不从待验证的 report 自证期望值。
+        version = (ROOT / "native_config/VERSION").read_text(encoding="ascii").strip()
+        self.assertEqual((report["version"], report["channel"]), (version, version_channel(version)))
         self.assertEqual(report["artifact"]["url"], "")
         self.assertEqual(report["artifact"]["sha256"], hashlib.sha256(self.artifact.read_bytes()).hexdigest())
         self.assertEqual((report["cli_protocol"], report["service_protocol"]), (1, 2))

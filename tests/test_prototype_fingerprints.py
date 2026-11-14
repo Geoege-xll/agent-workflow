@@ -431,20 +431,49 @@ class PrototypeFingerprintTest(unittest.TestCase):
                 self.assertIn('[ERROR]', stderr)
 
     def test_real_workspace_assets_do_not_invalidate_the_concrete_page(self) -> None:
-        """真实生产控制器/侧栏样式仅由index承载，修改它们不改变产品页资源闭包。"""
-        templates = Path(__file__).resolve().parents[1] / 'templates/prototype'
-        # 真实模板依赖必须完整进入同一夹具；反馈样式由具体页使用，不能通过
-        # 放宽缺失依赖校验掩盖旧五资源列表。原工作区指纹隔离断言继续保留。
-        for name in ('index.html', 'prototype.css', 'workspace.css', 'workspace.js', 'page-shell.js',
-                     'feedback.css', 'feedback.js'):
-            (self.prototype / name).write_bytes((templates / name).read_bytes())
-        (self.prototype / 'settings.html').write_bytes((templates / 'page.html').read_bytes())
-        self.rewrite('index.html', '</nav>', '<a href="settings.html">设置</a></nav>')
+        """插件工具身份随真实资产更新，项目具体页指纹仍只取合法业务资源闭包。"""
+        from lib.documents import prototype_review
+
+        pack = Path(__file__).resolve().parents[1]
+        # 与既有self.project一致固定真实路径，避免macOS的/var别名被安全读取器
+        # 正确识别为符号链接祖先；不改变生产快照对不安全路径的拒绝策略。
+        tool_fixture = Path(self.temporary.name).resolve() / 'tool-fixture'
+        templates = tool_fixture / 'templates/prototype'
+        templates.mkdir(parents=True)
+        (tool_fixture / 'product').mkdir()
+        version_path = tool_fixture / 'product/PLUGIN_VERSION'
+        version_path.write_bytes((pack / 'product/PLUGIN_VERSION').read_bytes())
+        # 只复制固定白名单的9个真实工具资产和版本，不复制源码树。工具根与项目
+        # 根保持分离；项目继续使用setUp创建的合法薄目录、具体HTML和业务CSS，
+        # 不把生产工具index放回业务目录，也不放宽原有静态安全校验。
+        for name in prototype_review.TOOL_ASSETS:
+            (templates / name).write_bytes((pack / 'templates/prototype' / name).read_bytes())
+        project_before = tree_snapshot(self.project)
         before = self.fingerprints()
-        for name in ('workspace.css', 'workspace.js'):
-            path = self.prototype / name
-            path.write_bytes(path.read_bytes() + b'\n/* sidebar-only update */\n')
-        self.assertEqual(before, self.fingerprints())
+        self.assertEqual({(PROTOTYPE_RELATIVE / 'settings.html').as_posix()}, set(before))
+        with mock.patch.object(prototype_review, 'TOOL_ROOT', tool_fixture):
+            tool_before, _ = prototype_review.capture_tool()
+            for name in ('workspace.css', 'workspace.js'):
+                with self.subTest(asset=name):
+                    path = templates / name
+                    previous_bytes = path.read_bytes()
+                    path.write_bytes(previous_bytes + b'\n/* tool-only update */\n')
+                    tool_after, captured = prototype_review.capture_tool()
+                    # 同版本工具字节真实改变时，其内容身份必须变化；同时重新执行
+                    # 项目指纹计算，证明稳定结果来自资源归属隔离，而不是同值自比较。
+                    self.assertNotEqual(previous_bytes, captured['tool/' + name])
+                    self.assertEqual(path.read_bytes(), captured['tool/' + name])
+                    self.assertEqual(tool_before['version'], tool_after['version'])
+                    self.assertNotEqual(tool_before['payload_sha256'], tool_after['payload_sha256'])
+                    self.assertEqual(before, self.fingerprints())
+                    self.assertEqual(project_before, tree_snapshot(self.project))
+                    tool_before = tool_after
+            version_path.write_text(tool_before['version'] + '-fixture-next\n', encoding='utf-8')
+            tool_after, _ = prototype_review.capture_tool()
+            self.assertNotEqual(tool_before['version'], tool_after['version'])
+            self.assertNotEqual(tool_before['payload_sha256'], tool_after['payload_sha256'])
+            self.assertEqual(before, self.fingerprints())
+            self.assertEqual(project_before, tree_snapshot(self.project))
 
     def test_cyclic_dependencies_are_finite_and_stable(self) -> None:
         self.add_script('import "feature.js";\n')
