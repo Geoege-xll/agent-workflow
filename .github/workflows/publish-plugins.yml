@@ -1,4 +1,4 @@
-name: Publish verified alpha plugin Git sources
+name: Publish verified release plugin Git sources
 
 # 只允许维护者在 main 手动发布当前完整 SHA；没有任意 ref、路径或脚本输入。
 on:
@@ -10,7 +10,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: publish-alpha-plugin-sources
+  group: publish-plugin-sources
   cancel-in-progress: false
 
 jobs:
@@ -62,7 +62,7 @@ jobs:
           import json, os, re
           from pathlib import Path
           pages = json.loads((Path(os.environ["RUNNER_TEMP"]) / "candidate-artifacts.json").read_text())
-          expected = "alpha-candidate-" + os.environ["GITHUB_SHA"]
+          expected = "product-candidate-" + os.environ["GITHUB_SHA"]
           matches = [artifact for page in pages for artifact in page["artifacts"]
                      if artifact["name"] == expected]
           if len(matches) != 1 or matches[0]["expired"] or matches[0]["size_in_bytes"] <= 0:
@@ -121,7 +121,7 @@ jobs:
                       raise SystemExit("候选附件含不安全路径或符号链接")
               archive.extractall(root / "awf-verified-candidate")
           PY
-      - name: Publish the three official alpha Git sources atomically
+      - name: Publish the three official release Git sources atomically
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -134,5 +134,5 @@ jobs:
             --source-revision "$GITHUB_SHA" \
             --repository Geoege-xll/agent-workflow \
             --remote https://github.com/Geoege-xll/agent-workflow.git \
-            --channel alpha --apply > "$RUNNER_TEMP/plugin-publication.json"
+            --channel stable --apply > "$RUNNER_TEMP/plugin-publication.json"
           cat "$RUNNER_TEMP/plugin-publication.json" >> "$GITHUB_STEP_SUMMARY"

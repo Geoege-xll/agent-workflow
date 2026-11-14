@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plugin_name": "xy-workflow",
-  "marketplaces": {"alpha": "xy-workflow-alpha", "local": "xy-workflow-local"},
+  "marketplaces": {"stable": "xy-workflow", "alpha": "xy-workflow-alpha", "local": "xy-workflow-local"},
   "artifact_prefix": "xy-workflow",
   "skill_aliases": {
     "xy-config": "agent-config",

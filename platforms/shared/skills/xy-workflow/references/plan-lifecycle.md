@@ -27,7 +27,8 @@ have separate documents. Light persistence still depends on actual need; an old 
 not automatically make an unrelated small correction Full.
 
 The standard template is `templates/docs/PLAN.md`, using ordinary Markdown metadata rather than frontmatter.
-Preserve these literal protocol fields: `主题 ID`, `阶段`, `模块`, `任务等级`, `已验收版本`.
+Preserve these literal protocol fields: `主题 ID`, `阶段`, `模块`, `任务等级`, `已验收版本`;
+each field has one current value, not a list of alternatives or revision history.
 Stage accepts only draft／active／paused／completed／cancelled／removed; task level is Full／Light;
 the accepted version is `none` when no real baseline exists. Preserve the six Full section-title literals
 in this order: `目标与范围`, `需求与验收`, `方案与原型关联`, `当前进展与恢复入口`,
@@ -37,6 +38,11 @@ are not authorization. Simplify a baseline-free Light recovery draft as needed w
 confirmation. If PROJECT links it as a current baseline, it must still state the version, delivered behavior
 and existing evidence. Create directories only when saving an actual topic. Installation creates no
 requirements page, empty index or placeholder plans／features directories.
+
+For drafting, substantive refinement, save/handoff self-check or the existing QA's plan review, read
+[document quality](../../xy-plan/references/document-quality.md). It supplies section refinement and reader
+checks without adding a reader Agent, report or approval gate. Preserve the existing requirements confirmation
+and applicable final visual confirmation; format or wording fixes do not create a new business confirmation.
 
 Discussion alone requires neither a saved document nor a plan. When persistence is needed, keep
 necessary questions and conclusions in the relevant existing plan or authorized requirement/proposal
@@ -81,6 +87,38 @@ handoff. PM writes it into this Markdown source, without generating HTML, a sepa
 prototype QA. Progress, link or presentation-only changes do not automatically reopen requirements approval.
 requirements_fingerprint and prototype dependency fingerprints retain their separate responsibilities;
 historical HTML freshness is not required after generation retirement.
+
+## Validate the selected saved plan
+
+After initial persistence and after substantive updates or a handoff checkpoint, PM validates the current
+selected plan(s), not every tool write or every historical plan. From the workflow source root, use:
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/validate_project_docs.py --root PROJECT_ROOT --plan PLAN_PATH [--plan PLAN_PATH ...]
+```
+
+插件模式先从已加载组件的物理位置确定当前插件根，遵守该根的 `PLUGIN.md`；
+经同一插件的现有 helper 执行，不从业务项目推断插件位置或假定项目含复制的核心：
+
+```bash
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" \
+  helper --project "<absolute-project>" lib/validate_project_docs.py \
+  --root "<absolute-project>" --plan "<plan-path>" [--plan "<plan-path>" ...]
+```
+
+`--project` 指向真实业务项目的物理绝对目录，`--root` 指向同一项目根；
+每个 `--plan` 选择该根下的计划。helper 校验当前物理插件的源包／载荷摘要并以该项目为 cwd，
+不创建项目桥或 `.agent-workflow/lib`。No config or PROJECT file is required for this independent plan
+format check. It checks only selected files and link/path safety, without reading link-target bodies,
+scanning unselected plans or using the network. Explicit selection must not silently skip a new plan missing
+metadata as historical material. The original two-positional-argument mode and its historical recognition
+remain available for their existing callers.
+
+Return format failures to PM for in-place correction under the same scope, with actual command/exit/log
+evidence; do not dispatch from a malformed selected Full plan. A successful check proves only its format/path
+scope, not reader comprehension, approval, QA PASS or accepted delivery. Light retains its allowed simplified
+recovery shape. Apply the reader check within existing PM self-check and the single QA when selected,
+without a second gate or additional reviewer.
 
 ## Visual iteration and task replacement
 

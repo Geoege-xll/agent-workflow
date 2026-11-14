@@ -25,7 +25,7 @@ class CandidateDeliveryTest(unittest.TestCase):
         for name in ("packaging", "product", "native_config", "plugins/maintenance"):
             (self.source / name).mkdir(parents=True)
         shutil.copyfile(ROOT / "packaging/build_candidates.py", self.source / "packaging/build_candidates.py")
-        for name in ("__init__.py", "command_identity.py", "command_identity.json"):
+        for name in ("__init__.py", "command_identity.py", "command_identity.json", "release_channels.py"):
             shutil.copyfile(ROOT / "product" / name, self.source / "product" / name)
         (self.source / "product/PLUGIN_VERSION").write_text("3.0.0-alpha.2\n", encoding="ascii")
         (self.source / "native_config/VERSION").write_text("0.1.0-alpha.2\n", encoding="ascii")
@@ -156,7 +156,28 @@ if mode == "extra":
                                     and row["no_bytecode"] for row in calls))
                 self.assertEqual([], list(self.source.rglob("*.pyc")))
 
-    def test_stable_beta_or_missing_versions_fail_before_building(self):
+    def test_formal_versions_produce_stable_candidate_and_reject_mixed_descriptor_channel(self):
+        # 同一编排协议同时验证正式版本，不删去上方历史 alpha 来源覆盖。
+        (self.source / "product/PLUGIN_VERSION").write_text("3.0.1\n", encoding="ascii")
+        (self.source / "native_config/VERSION").write_text("0.1.1\n", encoding="ascii")
+        path = self.source / "plugins/maintenance/component.json"
+        descriptor = json.loads(path.read_text())
+        descriptor.update(version="0.1.1", channel="stable")
+        descriptor["artifact"]["name"] = "native-agent-config-0.1.1.zip"
+        path.write_text(json.dumps(descriptor))
+        result = self.invoke(self.root / "formal-candidate")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        manifest = json.loads(result.stdout)
+        self.assertEqual("stable", manifest["channel"])
+        self.assertEqual({"workflow": "3.0.1", "native-config": "0.1.1"}, manifest["versions"])
+        self.assertIn("正式候选", (self.root / "formal-candidate/CANDIDATE.md").read_text())
+        descriptor["channel"] = "alpha"
+        path.write_text(json.dumps(descriptor))
+        rejected = self.invoke(self.root / "mixed-descriptor")
+        self.assertEqual(1, rejected.returncode, rejected.stdout + rejected.stderr)
+        self.assertFalse((self.root / "mixed-descriptor/candidate-manifest.json").exists())
+
+    def test_mixed_beta_or_missing_versions_fail_before_building(self):
         for relative, version in (("product/PLUGIN_VERSION", "3.0.0"),
                                   ("native_config/VERSION", "0.1.0-beta.1"),
                                   ("native_config/VERSION", None)):

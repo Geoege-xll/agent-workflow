@@ -145,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
     selected.add_argument("arguments", nargs=argparse.REMAINDER)
     playwright = commands.add_parser(playwright_command, help="run the fixed bundled Playwright CLI; doctor reports readiness")
     playwright.add_argument("arguments", nargs=argparse.REMAINDER)
+    web = commands.add_parser("xy-web-guidance", help="query the fixed official local modern Web package")
+    web.add_argument("arguments", nargs=argparse.REMAINDER)
+    apple = commands.add_parser("apple-skills", help="check/read local Xcode original SwiftUI guidance without launching Xcode")
+    apple.add_argument("arguments", nargs=argparse.REMAINDER)
     helper = commands.add_parser("helper", help="execute an original packaged workflow helper")
     helper.add_argument("--project", required=True, type=Path)
     helper.add_argument("path", choices=sorted(HELPERS))
@@ -159,6 +163,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "dispatch-preferences":
             return _dispatch_preferences(args)
         metadata = verify()
+        if args.command == "xy-web-guidance":
+            from lib.skills.modern_web_runtime import run as web_run
+            return web_run(args.arguments, root=ROOT)
+        if args.command == "apple-skills":
+            from lib.skills.apple_guidance import main as apple_main
+            return apple_main(args.arguments)
         if args.command == playwright_command:
             from lib.skills.playwright_runtime import run as playwright_run
             return playwright_run(args.arguments, root=ROOT)

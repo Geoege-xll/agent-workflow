@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import stat
 import subprocess
@@ -33,6 +34,19 @@ def isolated_environment(root: Path) -> dict[str, str]:
 
 
 class ArchiveModesTest(unittest.TestCase):
+    def test_builder_accepts_stable_and_historical_alpha_through_shared_version_contract(self):
+        # 在版本门禁之后停止，不重复装配三宿主；真实载荷与依赖闭包由统一冻结构建验证。
+        for version in ("3.0.1", "3.0.0-alpha.10"):
+            with self.subTest(version=version), \
+                 mock.patch.object(builder, "read_source", return_value=version.encode()), \
+                 mock.patch.object(builder, "validate_business_confirmation_pack", side_effect=RuntimeError("reached-source-contract")):
+                with self.assertRaisesRegex(RuntimeError, "reached-source-contract"):
+                    builder.payload(PACK, "codex")
+        for version in ("03.0.1", "3.0.1-beta.1", "3.0.1+local", "3.0.1-alpha.01"):
+            with self.subTest(version=version), mock.patch.object(builder, "read_source", return_value=version.encode()):
+                with self.assertRaisesRegex(ValueError, "发行版本"):
+                    builder.payload(PACK, "codex")
+
     def test_shared_archive_modes_preserve_root_and_prefixed_locked_resources(self):
         """同一权限权威同时覆盖ZIP写入、根启动器与带prefix的上游可执行文件。"""
         vendor = "third_party/selected-skills/playwright-cli/runtime/tool.sh"
@@ -60,6 +74,41 @@ class ArchiveModesTest(unittest.TestCase):
                 lock = json.dumps({"dependencies": {"playwright-cli": {"files": {"runtime/tool.sh": {"mode": mode}}}}}).encode()
                 with self.assertRaisesRegex(ValueError, "644 or 755"):
                     builder.archive_modes({builder.SELECTED_LOCK: lock})
+
+
+class GuidanceProjectionTest(unittest.TestCase):
+    def test_guidance_stays_discoverable_without_unconditional_native_role_preload(self):
+        from lib.skills.role_skills import CLAUDE_ROLE_SKILLS, ANTIGRAVITY_ROLE_SKILLS
+        optional = {"xy-web-guidance", "xy-apple-guidance"}
+        self.assertTrue(optional <= builder.CORE_SKILLS)
+        for host in builder.HOSTS:
+            envelope_path = "plugins/antigravity/plugin-context.md" if host == "antigravity" else "plugins/plugin-context.md"
+            envelope = (PACK / envelope_path).read_bytes()
+            for skill in optional:
+                # 走与实包相同的三端资源渲染入口，保留可发现frontmatter和完整适配正文。
+                original = (PACK / "platforms/shared/skills" / skill / "SKILL.md").read_bytes()
+                header, body = builder.split_frontmatter(builder.render_skill(original, envelope))
+                self.assertIn(("name: " + skill + "\n").encode(), header)
+                self.assertNotIn(b"disable-model-invocation: true", header)
+                self.assertTrue(body.endswith(builder.split_frontmatter(original)[1]))
+            for role, bound in builder.ROLE_SKILLS.items():
+                self.assertTrue(optional.isdisjoint(bound))
+                if host == "codex":
+                    # Codex既有Shell生成器消费同一名称CLI，实际输出不能自动加新指导入口。
+                    projected = subprocess.run([sys.executable, "-B", str(PACK / "lib/skills/role_skills.py"), role],
+                                               capture_output=True, text=True, timeout=10)
+                    self.assertEqual(0, projected.returncode, projected.stdout + projected.stderr)
+                    self.assertEqual(list(bound), projected.stdout.splitlines())
+                else:
+                    header, _ = builder.split_frontmatter(builder.render_agent(
+                        role, (PACK / "roles" / (role + ".md")).read_bytes(), envelope, host))
+                    for skill in optional:
+                        native = (builder.PLUGIN_NAME + ":" if host == "claude" else "skills/") + skill
+                        self.assertNotIn(("  - " + native + "\n").encode(), header)
+        for skills in CLAUDE_ROLE_SKILLS.values():
+            self.assertTrue(optional.isdisjoint(skills))
+        for skills in ANTIGRAVITY_ROLE_SKILLS.values():
+            self.assertTrue({"skills/" + name for name in optional}.isdisjoint(skills))
 
 
 class PluginDeliveryTest(unittest.TestCase):
@@ -450,6 +499,19 @@ class PluginDeliveryTest(unittest.TestCase):
         lock, originals = snapshot(PACK)
         project = self.root / "selected-skills-project"
         project.mkdir()
+        # 包外最小原始布局夹具只验证CLI消费，不冒称当前机器的Apple官方资源证据。
+        from lib.skills.apple_guidance import RESOURCE_DIRECTORY, SKILLS
+        apple_contents = self.root / "apple-layout-fixture/Xcode.app/Contents"
+        apple_developer = apple_contents / "Developer"
+        apple_developer.mkdir(parents=True)
+        apple_resources = apple_contents / RESOURCE_DIRECTORY
+        apple_resources.mkdir(parents=True)
+        (apple_contents / "version.plist").write_bytes(plistlib.dumps({
+            "CFBundleShortVersionString": "27.2", "ProductBuildVersion": "27B52"}))
+        for native in SKILLS:
+            (apple_resources / (native + ".idechatprompttemplate")).write_text(
+                "---\nname: " + native + "\n---\n`references/example.md`\n", encoding="utf-8")
+            (apple_resources / (native + "-ref-example.md.packaged")).write_text("官方布局夹具引用\n", encoding="utf-8")
         for host, root in self.installed.items():
             with self.subTest(host=host):
                 self.assertEqual((PACK / LOCK).read_bytes(), (root / LOCK).read_bytes())
@@ -483,6 +545,31 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertTrue(ready["node"]["ready"])
                 self.assertFalse(ready["browser"]["runtime_verified"])
                 self.assertFalse(ready["upstream_browser_launched"])
+                self.assertEqual((PACK / "product/release_channels.py").read_bytes(),
+                                 (root / "product/release_channels.py").read_bytes())
+                for skill in ("xy-web-guidance", "xy-apple-guidance"):
+                    self.assertTrue((root / "skills" / skill / "SKILL.md").is_file())
+                web_read = subprocess.run([*command, "selected-skills", "read", "modern-web-guidance"],
+                                          cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, web_read.returncode, web_read.stdout + web_read.stderr)
+                page = json.loads(web_read.stdout)
+                self.assertTrue(page["eof"])
+                self.assertEqual(originals[skill_path("modern-web-guidance")], page["content"].encode())
+                web_search = subprocess.run([*command, "xy-web-guidance", "--", "search", "confirmation modal dialog"],
+                                            cwd=project, env=environment, capture_output=True, text=True, timeout=40)
+                self.assertEqual(0, web_search.returncode, web_search.stdout + web_search.stderr)
+                self.assertIn("dialog", {row["id"] for row in json.loads(web_search.stdout)})
+                apple_check = subprocess.run([*command, "apple-skills", "check", "--developer-dir", str(apple_developer)],
+                                             cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, apple_check.returncode, apple_check.stdout + apple_check.stderr)
+                apple_source = json.loads(apple_check.stdout)
+                self.assertFalse(apple_source["xcode_launched"])
+                apple_read = subprocess.run([*command, "apple-skills", "read", "--developer-dir", str(apple_developer),
+                                             "--skill", SKILLS[0], "--resource", "references/example.md",
+                                             "--expect-source-sha256", apple_source["source_sha256"]],
+                                            cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, apple_read.returncode, apple_read.stdout + apple_read.stderr)
+                self.assertEqual("官方布局夹具引用\n", json.loads(apple_read.stdout)["content"])
                 chunks, offset = [], 0
                 while True:
                     result = subprocess.run([*command, "selected-skills", "read", "xy-taste", "--offset", str(offset), "--length", "12000"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)

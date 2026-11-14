@@ -45,6 +45,13 @@ See [helper execution boundaries](../platforms/shared/skills/xy-workflow/referen
 
 ## 2. PM and Roles
 
+Every Agent, including the PM, designers, reviewers and planning-Skill consumers, follows the single
+[on-demand Skill selection policy](../platforms/shared/skills/xy-workflow/references/skill-selection.md)
+when selecting or applying Skills for the current task. Read that policy before Skill selection.
+Role recommendations are candidates, not mandatory selection, a closed whitelist or permission to
+preload every Skill. Select the packaged Web/Apple guidance only for actual task risks or gaps,
+unless an explicit higher-priority requirement or genuinely required Task Pack dependency applies.
+
 - **PM (main session)**: retains requirements, decisions, approvals, task decomposition,
   dispatch, result synthesis, and user communication.
 - **Implementation subagents**: modify only paths authorized by the task pack, run real
@@ -365,11 +372,9 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
   dispatch. Existing running workers and QA must acknowledge their updated scope before their results
   can satisfy it; preserve unaffected completed work and approvals.
 - Formal Full requirements review uses the single current Markdown draft. Before approval, PM may keep that draft in the current request scratch; after approval, save `docs.plans/<name>.md` before dispatch. Requirements/plan Markdown-to-HTML generation is retired; retain existing plan HTML and project material; the generator and its dedicated renderer bundle are removed, following `.agent-workflow/platforms/shared/skills/xy-plan/references/requirements-markdown.md`. Light selects persistence by actual need without adding Full planning or QA. Document existence, checkboxes and source copying do not create requirements approval, prototype choice or visual approval. In the existing handoff, the design Agent returns coverage from stable REQ IDs to concrete prototype pages/actual state anchors; PM writes it into the same Markdown, without a new mapping report or independent prototype QA. Requirement and prototype dependency fingerprints retain separate responsibilities; progress/link/presentation-only changes do not automatically reopen requirements approval. Implementers receive complete current Markdown/task packs. Preserve the accepted baseline in the same document; completed/cancelled execution details and old HTML retain historical boundaries, and PROJECT may index only explicit baselines.
-- The PM must not inventory or manually enumerate locally installed specialist Skills. Task packs
-  declare only mandatory `required_skills` and task-fact `audit_surfaces`; Codex matches installed
-  Skills on demand from their descriptions.
-- A missing `required_skills` entry blocks the corresponding phase. A missing optional specialist
-  Skill does not block the base workflow, but QA must report the uncovered surface.
+- All hosts use the shared [on-demand Skill selection policy](../platforms/shared/skills/xy-workflow/references/skill-selection.md).
+  Task packs declare mandatory `required_skills` and task-fact `audit_surfaces`; every Agent may
+  select additional host-exposed Skills for its actual responsibilities without inventorying private directories.
 
 Built-in `xy-code-standards` supplies code implementation and read-only review methods; `xy-ui-design` supplies conditional branches for high-fidelity prototypes, `standards_only`, and production/QA consumption of existing design authority. The five implementation roles are statically bound to the code method and `xy-build-verify`; `xy-uiux` is bound to the design method and existing specialist/prototype Skills. QA remains statically bound only to `xy-qa-review`, reading the relevant method for actual code or UI review surfaces. Production UI implementation reads design rules under `surface_kind: production_ui`; backend work does not preload UI. Common engineering rule text lives in `xy-code-standards/references/rules.md`; common design rule text lives in `xy-ui-design/references/foundations-rules.md` and `components-rules.md`. Projects add only specific standards; source, stable rule IDs, and current fingerprints together establish applicable authority, without copying common text into projects. The code method also applies to Light and explicitly authorized PM code implementation; reading creates no write authority, extra confirmation, or QA stage, and uses the current level's task-pack, verification, and stop conditions.
 

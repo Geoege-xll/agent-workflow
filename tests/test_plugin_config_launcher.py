@@ -18,6 +18,7 @@ import warnings
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+from product.release_channels import version_channel
 
 
 def load(name, path):
@@ -64,7 +65,7 @@ class PluginConfigLauncherTest(unittest.TestCase):
 
     def write_descriptor(self, artifact=None, *, version=None):
         self.data = {"schema_version": 1, "product": "native-agent-config", "version": version or self.version,
-                     "channel": "alpha", "cli_protocol": 1, "service_protocol": 2, "release_status": "unpublished",
+                     "channel": version_channel(version or self.version), "cli_protocol": 1, "service_protocol": 2, "release_status": "unpublished",
                      "artifact": {"name": f"native-agent-config-{version or self.version}.zip",
                                   "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest() if artifact else "", "url": ""}}
         self.descriptor.write_text(json.dumps(self.data))
@@ -292,9 +293,10 @@ class PluginConfigLauncherTest(unittest.TestCase):
         old_files = self.version_snapshot(old_target)
         old_registry = (self.root / "registry.json").read_bytes()
         artifact, version = self.real_release()
-        pinned = store.descriptor(ROOT / "plugins/maintenance/component.json")
-        self.assertEqual((version, hashlib.sha256(artifact.read_bytes()).hexdigest()),
-                         (pinned["version"], pinned["artifact"]["sha256"]))
+        # 升级重试测试使用真实构建 ZIP；仓库 descriptor 只有真实资产发布下载后才
+        # 允许更新，不能把当前源码版本尚未发布的时段误判为库存准备回归。固定发行
+        # 的摘要绑定由候选／发行装配消费者独立验证。
+        self.assertEqual(version_channel(version), "stable")
         self.write_descriptor(artifact, version=version)
         self.assertNotEqual(self.data["version"], old_data["version"])
         target = self.fail_registry_publish_once(artifact)
@@ -315,7 +317,7 @@ class PluginConfigLauncherTest(unittest.TestCase):
 
     def test_current_release_missing_identity_is_rejected_with_consistent_manifest(self):
         # 重算 BUILD 与外层摘要，确保拒绝原因是当前 ABI 缺失，而不是普通摘要损坏。
-        for missing in ("product/__init__.py", "product/command_identity.py", "product/command_identity.json"):
+        for missing in ("product/__init__.py", "product/command_identity.py", "product/command_identity.json", "product/release_channels.py"):
             with self.subTest(missing=missing):
                 bodies = {name: body for name, body in self.bodies.items() if name != missing}
                 manifest = json.loads(bodies["BUILD.json"])
@@ -362,6 +364,20 @@ class PluginConfigLauncherTest(unittest.TestCase):
         self.assertEqual(str(error.exception), "build_digest_mismatch")
         self.assertFalse((self.root / "registry.json").exists())
         self.assertEqual(self.version_snapshot(target), before)
+
+    def test_installed_stable_rejects_downgrade_and_same_version_rebinding(self):
+        self.prepare()
+        before = self.snapshot()
+        # 旧库存认证仍走自身原包；拒绝发生在选择新目标阶段，不覆盖任何活动版本。
+        for version, digest, code in (("0.1.0-alpha.5", "a" * 64, "component_downgrade"),
+                                      (self.version, "b" * 64, "component_version_conflict")):
+            data = {**self.data, "version": version, "channel": version_channel(version),
+                    "artifact": {**self.data["artifact"], "sha256": digest,
+                                 "name": f"native-agent-config-{version}.zip"}}
+            with self.subTest(version=version), self.assertRaises(store.ComponentError) as error:
+                store.prepare(self.root, data, self.artifact)
+            self.assertEqual(code, str(error.exception))
+            self.assertEqual(before, self.snapshot())
 
     def test_concurrent_preparation_registers_one_immutable_version(self):
         def prepare(_):

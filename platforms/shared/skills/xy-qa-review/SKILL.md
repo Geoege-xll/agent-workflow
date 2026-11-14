@@ -90,6 +90,13 @@ Read [input contracts](references/inputs.md) and [implementation checks](referen
 for Full acceptance or Light acceptance requiring independent QA. They retain mandatory evidence, independent standards coverage, memory
 authority, worktree integration and bounded rework. Missing mandatory evidence blocks PASS.
 
+When the current scope includes a saved plan or plan-writing rules, read
+[document quality](../xy-plan/references/document-quality.md) and apply its reader check within this same
+review. Inspect only the selected current plan and necessary references; return ambiguous scope, conflicting
+status/baselines or missing authority to PM. Reuse applicable selected-plan validation evidence from
+[plan lifecycle](../xy-workflow/references/plan-lifecycle.md); a format pass is not approval or QA PASS.
+Do not launch reader Agents, add a reader report/gate or require another business confirmation for wording fixes.
+
 <!-- workflow-contract: references/inputs.md -->
 <!-- workflow-contract: references/implementation-acceptance.md -->
 

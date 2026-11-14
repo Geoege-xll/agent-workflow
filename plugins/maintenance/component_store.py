@@ -29,7 +29,10 @@ MAX_ARCHIVE = 32 * 1024 * 1024
 MAX_CONTENT = 64 * 1024 * 1024
 MAX_FILE = 8 * 1024 * 1024
 DOWNLOAD_BUDGET = 60
-VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+")
+# 下载子进程使用 -I，导入根必须由本文件物理位置决定，绝不搜索 cwd 或用户配置。
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from product.release_channels import VERSION, compare_versions, validate_channel
+
 DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -71,10 +74,11 @@ def descriptor(path: Path):
             raise ComponentError("invalid_descriptor")
         data = json.loads(path.read_text(encoding="utf-8"))
         if (set(data) != {"schema_version", "product", "version", "channel", "cli_protocol", "service_protocol", "release_status", "artifact"}
-                or data["schema_version"] != 1 or data["product"] != PRODUCT or data["channel"] != "alpha"
+                or data["schema_version"] != 1 or data["product"] != PRODUCT
                 or data["cli_protocol"] != 1 or data["service_protocol"] != 2
                 or not VERSION.fullmatch(data["version"]) or data["release_status"] not in {"unpublished", "published"}):
             raise ComponentError("invalid_descriptor")
+        validate_channel(data["version"], data["channel"])
         artifact = data["artifact"]
         if (set(artifact) != {"name", "sha256", "url"}
                 or artifact["name"] != f"{PRODUCT}-{data['version']}.zip"
@@ -99,7 +103,7 @@ def payload_name(name):
             or any(part in {".", ".."} for part in name.split("/"))
             or name.startswith("/") or PurePosixPath(name).as_posix() != name):
         raise ComponentError("unsafe_archive_path")
-    return (name in {"BUILD.json", "README.md", "product/command_identity.json", "product/command_identity.py", "product/__init__.py", "native_config/VERSION", "scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh"}
+    return (name in {"BUILD.json", "README.md", "product/command_identity.json", "product/command_identity.py", "product/release_channels.py", "product/__init__.py", "native_config/VERSION", "scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh"}
             or name in {"native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css"}
             or len(parts) >= 2 and parts[0] == "native_config" and name.endswith(".py"))
 
@@ -126,7 +130,7 @@ def checked_release_payload(bodies, expected_version):
     """当前发行/运行入口的完整 ABI；新输入、当前活动版本和登记重试都必须满足。"""
     build = checked_build(bodies, expected_version)
     required = {"scripts/agent_config.sh", "scripts/agent_config.py", "scripts/python_runtime.sh",
-                "native_config/__init__.py", "native_config/cli.py", "native_config/VERSION", "product/command_identity.json", "product/command_identity.py", "product/__init__.py",
+                "native_config/__init__.py", "native_config/cli.py", "native_config/VERSION", "product/command_identity.json", "product/command_identity.py", "product/release_channels.py", "product/__init__.py",
                 "native_config/web/index.html", "native_config/web/console.js", "native_config/web/console.css", "README.md"}
     if not required.issubset(bodies):
         raise ComponentError("invalid_build_manifest")
@@ -363,6 +367,13 @@ def installed(root: Path, data):
         # 合法旧版本只认证和保留，绝不返回旧代码供启动器执行。精确匹配当前固定
         # 发行后仍须检查当前 ABI，不能用历史认证路径绕过当前运行要求。
         if (record["version"], record["sha256"]) != (data["version"], data["artifact"]["sha256"]):
+            # 先完成旧库存原包认证，再做升级判定；历史版本无需新身份文件，但不得
+            # 以旧 descriptor 回滚已安装新版本，同一版本也不可改绑另一份载荷。
+            order = compare_versions(record["version"], data["version"])
+            if order > 0:
+                raise ComponentError("component_downgrade")
+            if order == 0:
+                raise ComponentError("component_version_conflict")
             return None
         checked_release_payload(bodies, data["version"])
         return target

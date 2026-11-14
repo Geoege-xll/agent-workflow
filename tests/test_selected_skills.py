@@ -7,7 +7,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import plistlib
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -16,6 +20,8 @@ from unittest import mock
 from lib.skills import selected_skills as selected
 from lib.skills.role_skills import CORE_SKILLS, LEGACY_CORE_SKILLS, PM_SKILLS, ROLE_SKILLS, SELECTED_SKILLS, SELECTED_SKILL_ALIASES
 from lib.skills import playwright_runtime as runtime
+from lib.skills import modern_web_runtime as web_runtime
+from lib.skills import apple_guidance as apple
 
 PACK = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("selected_update", PACK / "scripts/update_selected_skills.py")
@@ -36,7 +42,7 @@ class SelectedSkillsTest(unittest.TestCase):
         self.lock = {"schema_version": 1, "dependencies": {}}
         # 最小来源夹具只服务拒绝合同；真实原版身份另由独立的固定闭包摘要断言。
         for name, spec in selected.SPECS.items():
-            if name == "playwright-cli":
+            if name in {"playwright-cli", "modern-web-guidance"}:
                 # npm边界必须使用完整且合法的三包闭包，不能沿用Git技能的两文件伪装。
                 self.lock["dependencies"][name] = copy.deepcopy(self.original_lock["dependencies"][name])
                 prefix = selected.VENDOR + "/" + name + "/"
@@ -291,6 +297,206 @@ class SelectedSkillsTest(unittest.TestCase):
                 update.candidate("grill-me", ref, archive, output)
             self.assertFalse(output.exists())
             self.assertFalse((self.root / "outside").exists())
+
+
+class ModernWebProviderTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.lock, cls.files = selected.snapshot(PACK)
+
+    def test_official_published_identity_complete_models_and_licenses(self):
+        item = self.lock["dependencies"]["modern-web-guidance"]
+        self.assertEqual("544c250575f7811d87fef8b1c064bc9571cbfb80", item["commit"])
+        self.assertEqual("1.0.0", item["package"]["version"])
+        self.assertEqual("bd7aa623ad10710a9ad6678fdbcc0b890c903c54fd6abfc126ff42de01f0e577", item["package"]["tarball_sha256"])
+        self.assertEqual((280, 16503129), (len(item["files"]), sum(r["size"] for r in item["files"].values())))
+        inventory = "".join(r["sha256"] + "  " + path + "\n" for path, r in sorted(item["files"].items()))
+        self.assertEqual("b23044950246d5d8f28b00947e9fdecac86deef77d2b7ae0409a42a2327475b1", hashlib.sha256(inventory.encode()).hexdigest())
+        prefix = selected.VENDOR + "/modern-web-guidance/"
+        self.assertIn(b"Creative Commons Attribution 4.0", self.files[prefix + "runtime/README.md"])
+        self.assertEqual("25181107e30dfdd5f884f25fa2e3a9df762027954873a7d2c27808e645f26b9e", item["files"]["runtime/THIRD_PARTY_NOTICES"]["sha256"])
+        self.assertIn("xy-web-guidance", CORE_SKILLS)
+        self.assertIn("xy-apple-guidance", CORE_SKILLS)
+        for skills in ROLE_SKILLS.values():
+            self.assertTrue({"xy-web-guidance", "xy-apple-guidance"}.isdisjoint(skills))
+        self.assertNotIn("modern-web-guidance", SELECTED_SKILLS)
+        for change in (lambda x: x["files"].pop("runtime/THIRD_PARTY_NOTICES"),
+                       lambda x: x["package"].update(version="latest"),
+                       lambda x: x["package"].update(gitHead="a" * 40)):
+            invalid = copy.deepcopy(item)
+            change(invalid)
+            with self.assertRaises(ValueError):
+                selected.validate_modern_web_package(invalid)
+
+    def test_real_fixed_cli_search_and_retrieve_work_with_unreachable_proxy_and_no_telemetry(self):
+        # 真正运行固定Node CLI而非doctor；坏代理不影响本地检索，无联网下载作为成功前提。
+        environment = {**os.environ, "HTTP_PROXY": "http://127.0.0.1:1", "HTTPS_PROXY": "http://127.0.0.1:1",
+                       "ALL_PROXY": "http://127.0.0.1:1", "DISABLE_TELEMETRY": "0", "ENABLE_FILE_LOGGING": "true"}
+        command = [sys.executable, "-B", str(PACK / "lib/skills/modern_web_runtime.py"), "--"]
+        searched = subprocess.run([*command, "search", "confirmation modal dialog"], env=environment,
+                                  capture_output=True, text=True, timeout=40)
+        self.assertEqual(0, searched.returncode, searched.stdout + searched.stderr)
+        results = json.loads(searched.stdout)
+        self.assertIn("dialog", {item["id"] for item in results})
+        retrieved = subprocess.run([*command, "retrieve", "platform-controls-dismiss-dialog"], env=environment,
+                                   capture_output=True, text=True, timeout=40)
+        self.assertEqual(0, retrieved.returncode, retrieved.stdout + retrieved.stderr)
+        self.assertIn("Guide for platform-controls-dismiss-dialog", retrieved.stdout)
+        self.assertNotIn("Search failed", searched.stderr)
+
+    def test_launcher_denies_unlocked_commands_injection_missing_node_and_timeout(self):
+        with mock.patch.object(web_runtime, "snapshot", return_value=(self.lock, self.files)), \
+             mock.patch.object(web_runtime, "node_runtime", return_value=("/existing/node", "v22.0.0", True)), \
+             mock.patch.object(web_runtime.subprocess, "run") as execute:
+            for arguments in (["install"], ["update"], ["legacy-scan", "."], ["set-baseline", "limited"],
+                              ["search", "--eval"], ["list", "--choose"], ["search", "dialog", "--skill-version", "latest"]):
+                with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                    web_runtime.run(arguments, PACK)
+            execute.assert_not_called()
+
+            execute.return_value.returncode = 7
+            with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require=/unlocked.js", "NODE_PATH": "/unlocked", "DISABLE_TELEMETRY": "0"}):
+                self.assertEqual(7, web_runtime.run(["--", "search", "modal dialog"], PACK))
+            arguments = execute.call_args.args[0]
+            self.assertEqual(["/existing/node", str(PACK / web_runtime.ENTRY), "search", "modal dialog", "--skill-version", "2026_11_09-5bcc021b"], arguments)
+            environment = execute.call_args.kwargs["env"]
+            self.assertEqual("1", environment["DISABLE_TELEMETRY"])
+            self.assertEqual("false", environment["ENABLE_FILE_LOGGING"])
+            self.assertNotIn("NODE_OPTIONS", environment)
+            self.assertNotIn("NODE_PATH", environment)
+            execute.side_effect = subprocess.TimeoutExpired(arguments, 30)
+            with self.assertRaisesRegex(ValueError, "timed out"):
+                web_runtime.run(["list"], PACK)
+        with mock.patch.object(web_runtime, "snapshot", return_value=(self.lock, self.files)), \
+             mock.patch.object(web_runtime, "node_runtime", return_value=(None, None, False)), \
+             mock.patch.object(web_runtime.subprocess, "run") as execute:
+            with self.assertRaisesRegex(ValueError, "existing Node >=22"):
+                web_runtime.run(["list"], PACK)
+            execute.assert_not_called()
+
+    def test_explicit_modern_web_update_consumes_one_complete_reviewed_archive(self):
+        # 这是受测离线更新路径的合成归档，不冒充registry原始tar；原版280文件全部保持。
+        with tempfile.TemporaryDirectory(prefix="awf-modern-update-", dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            root = Path(temporary)
+            item = copy.deepcopy(self.lock["dependencies"]["modern-web-guidance"])
+            archive = root / "synthetic.tgz"
+            prefix = selected.VENDOR + "/modern-web-guidance/"
+            with tarfile.open(archive, "w:gz") as stream:
+                for path, record in sorted(item["files"].items()):
+                    entry = tarfile.TarInfo("package/" + path.removeprefix("runtime/"))
+                    entry.size, entry.mode = record["size"], record["mode"]
+                    stream.addfile(entry, io.BytesIO(self.files[prefix + path]))
+            raw = archive.read_bytes()
+            item["package"].update(compressed_bytes=len(raw), tarball_sha256=hashlib.sha256(raw).hexdigest(),
+                                   integrity="sha512-" + base64.b64encode(hashlib.sha512(raw).digest()).decode())
+            manifest = {"package": item["package"], "files": item["files"]}
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest))
+            parsed, bodies = selected.load_modern_web_archive(manifest, archive)
+            self.assertEqual(item, parsed)
+            self.assertEqual({path.removeprefix(prefix): body for path, body in self.files.items() if path.startswith(prefix)}, bodies)
+            output = root / "candidate"
+            report = update.candidate("modern-web-guidance", item["commit"], archive, output, manifest_path)
+            self.assertEqual([], report["changed"])
+            self.assertEqual("unverified_local_archive", report["source_authenticity"])
+            expected = copy.deepcopy(self.lock)
+            expected["dependencies"]["modern-web-guidance"] = item
+            self.assertEqual((expected, self.files), selected.snapshot(output))
+            archive.write_bytes(raw + b"tampered")
+            with self.assertRaisesRegex(ValueError, "integrity mismatch"):
+                selected.load_modern_web_archive(manifest, archive)
+            with self.assertRaisesRegex(ValueError, "one fixed official archive"):
+                update.candidate("modern-web-guidance", item["commit"], archive, root / "rejected")
+            for invalid in ({"package": None, "files": {}}, {"package": item["package"], "files": {"x": None}}):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    selected.load_modern_web_archive(invalid, archive)
+
+
+class AppleGuidanceProviderTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="awf-apple-guidance-", dir=Path(tempfile.gettempdir()).resolve())
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.contents = self.root / "Xcode.app/Contents"
+        self.developer = self.contents / "Developer"
+        self.developer.mkdir(parents=True)
+        self.resources = self.contents / apple.RESOURCE_DIRECTORY
+        self.resources.mkdir(parents=True)
+        self.version = self.contents / "version.plist"
+        self.version.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "27.2", "ProductBuildVersion": "27B52"}))
+        for skill in apple.SKILLS:
+            (self.resources / (skill + ".idechatprompttemplate")).write_text(
+                "---\nname: " + skill + "\ndescription: fixture\n---\n官方夹具\n`references/example.md`\n", encoding="utf-8")
+            (self.resources / (skill + "-ref-example.md.packaged")).write_text("参考正文\n中文ABC\n", encoding="utf-8")
+
+    def test_check_only_reads_templates_and_version_then_complete_chunked_reference_is_bound(self):
+        calls = []
+        original = apple.read_regular
+        def observe(root, relative, **kwargs):
+            calls.append(relative)
+            return original(root, relative, **kwargs)
+        with mock.patch.object(apple, "read_regular", side_effect=observe), \
+             mock.patch.object(apple.subprocess, "run") as execute:
+            source, _, _ = apple.source_snapshot(self.developer)
+            execute.assert_not_called()
+        self.assertFalse(any(name.endswith(".packaged") for name in calls))
+        self.assertEqual(("available", "27.2", "27B52", False), (source["status"], source["xcode_version"], source["xcode_build"], source["xcode_launched"]))
+        for resource in ("SKILL.md", "references/example.md"):
+            offset, chunks = 0, []
+            while True:
+                page = apple.read(self.developer, apple.SKILLS[0], resource, source["source_sha256"], offset, 4)
+                self.assertEqual(source["source_sha256"], page["source_sha256"])
+                chunks.append(page["content"])
+                offset = page["next_offset"]
+                if page["eof"]:
+                    break
+            physical_name = apple.SKILLS[0] + (".idechatprompttemplate" if resource == "SKILL.md" else "-ref-example.md.packaged")
+            self.assertEqual((self.resources / physical_name).read_text(), "".join(chunks))
+        with self.assertRaisesRegex(ValueError, "UTF-8"):
+            apple.read(self.developer, apple.SKILLS[0], "references/example.md", source["source_sha256"], 1, 4)
+
+    def test_rejects_missing_references_paths_links_oversize_and_unsupported_versions(self):
+        reference = self.resources / (apple.SKILLS[0] + "-ref-example.md.packaged")
+        original = reference.read_bytes()
+        reference.unlink()
+        with self.assertRaises(FileNotFoundError):
+            apple.source_snapshot(self.developer)
+        outside = self.root / "outside"
+        outside.write_bytes(original)
+        for link in (lambda: reference.symlink_to(outside), lambda: reference.hardlink_to(outside), lambda: os.mkfifo(reference)):
+            link()
+            with self.assertRaisesRegex(apple.SourceError, "links|single-link"):
+                apple.source_snapshot(self.developer)
+            reference.unlink()
+        reference.write_bytes(b"x" * (apple.MAX_RESOURCE_BYTES + 1))
+        with self.assertRaisesRegex(apple.SourceError, "bounded"):
+            apple.source_snapshot(self.developer)
+        reference.write_bytes(original)
+        source = apple.source_snapshot(self.developer)[0]
+        for resource in ("../version.plist", "/etc/passwd", "references/other.md", "references/../example.md"):
+            with self.subTest(resource=resource), self.assertRaises(ValueError):
+                apple.read(self.developer, apple.SKILLS[0], resource, source["source_sha256"], 0, 100)
+        alias = self.root / "Alias.app"
+        alias.symlink_to(self.root / "Xcode.app")
+        with self.assertRaisesRegex(apple.SourceError, "links"):
+            apple.source_snapshot(alias / "Contents/Developer")
+        self.version.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "28.0", "ProductBuildVersion": "28A1"}))
+        with self.assertRaisesRegex(apple.SourceError, "outside the observed"):
+            apple.source_snapshot(self.developer)
+
+    def test_reference_and_xcode_version_changes_fail_before_mixing_content(self):
+        source = apple.source_snapshot(self.developer)[0]
+        reference = self.resources / (apple.SKILLS[0] + "-ref-example.md.packaged")
+        original_identity = apple.file_identity(reference)
+        reference.write_text("changed\n")
+        with self.assertRaisesRegex(ValueError, "identity changed before read"):
+            apple.read_bound(reference, original_identity)
+        with self.assertRaisesRegex(apple.SourceError, "identity changed"):
+            apple.read(self.developer, apple.SKILLS[0], "references/example.md", source["source_sha256"], 0, 100)
+        source = apple.source_snapshot(self.developer)[0]
+        self.version.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "27.2", "ProductBuildVersion": "27B53"}))
+        with self.assertRaisesRegex(apple.SourceError, "identity changed"):
+            apple.read(self.developer, apple.SKILLS[0], "SKILL.md", source["source_sha256"], 0, 100)
 
 
 if __name__ == "__main__":

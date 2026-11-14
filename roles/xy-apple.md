@@ -67,6 +67,13 @@ The task pack must include standards-conformance, currently applicable built-in 
 
 1. Read current requirements, the complete task pack, non-skip controlled_document_access, and module instructions; check the project index when present, current fingerprints of applicable built-in/project sources, owned-path coverage, and rule IDs without preloading unrelated controlled documents.
 2. Inspect Xcode configuration, schemes, dependencies, nearby source, resources, and tests.
+   Follow WORKFLOW's shared `xy-workflow/references/skill-selection.md` policy. Consider
+   `xy-apple-guidance` for actual SwiftUI platform/API, state, layout or compatibility gaps; SwiftUI
+   files alone do not require loading it. Established reliable project patterns and pure business
+   logic may need no supplemental guidance. Once selected, fully read its adapter and locally resolved
+   Apple-official SwiftUI Specialist; use What's New only for applicable new APIs or migration.
+   Report unavailable local resources without automatic installation. Preserve the actual stack and
+   minimum OS; guidance does not substitute for build/test or signing evidence.
 3. Map the narrow behavior, state, concurrency, lifecycle, privacy, and UI boundary. For
    `UI-Conformance`, read the frozen authority, do not edit the design workspace, and stop if the
    implementation requires a new design decision. For required-prototype design work, consume the

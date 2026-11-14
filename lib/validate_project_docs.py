@@ -10,6 +10,7 @@ if not __package__:
     from pathlib import Path as _Path
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
+import argparse
 import re
 import hashlib
 import os
@@ -24,13 +25,13 @@ try:
     from .standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from lib.skills.business_confirmation_policy import read_instruction_contract
     from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs
-    from lib.documents.plan_documents import validate_plan_index
+    from lib.documents.plan_documents import validate_plan_index, validate_selected_plans
     from .runtime_pins import PLUGIN_ENV, read_builtin_source, record_binding
 except ImportError:
     from standard_paths import BUILTIN_STANDARD_SOURCES, canonical_standard_path, standard_domain
     from lib.skills.business_confirmation_policy import read_instruction_contract
     from lib.project.validate_project_config import section_lines, strip_inline_comment, validate_docs  # type: ignore[no-redef]
-    from lib.documents.plan_documents import validate_plan_index
+    from lib.documents.plan_documents import validate_plan_index, validate_selected_plans
     from runtime_pins import PLUGIN_ENV, read_builtin_source, record_binding
 
 
@@ -340,6 +341,21 @@ def validate(config: Path, project_root: Path, *, body: bytes | None = None,
 
 
 def main() -> int:
+    # 选中文件模式只路由到计划核心，不读 adapter/PROJECT、初始化 pin 或扫描文档树。
+    # 既有两位置参数继续进入原 validate，保留历史识别与中央运行时消费者合同。
+    if any(argument.startswith("--") for argument in sys.argv[1:]):
+        parser = argparse.ArgumentParser(description="只读校验指定受管计划，无需 PROJECT 或项目配置")
+        parser.add_argument("--root", required=True, type=Path, help="实际项目根")
+        parser.add_argument("--plan", required=True, action="append", type=Path,
+                            help="根内绝对或相对 Markdown 路径；可重复指定")
+        arguments = parser.parse_args()
+        errors = validate_selected_plans(arguments.root, arguments.plan)
+        if errors:
+            for error in errors:
+                print(f"[ERROR] {error}", file=sys.stderr)
+            return 1
+        print(f"[OK] selected plans: {len(arguments.plan)}；机械检查通过不代表批准或验收")
+        return 0
     if len(sys.argv) != 3:
         print("usage: validate_project_docs.py PROJECT_YAML PROJECT_ROOT", file=sys.stderr)
         return 2

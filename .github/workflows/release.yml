@@ -1,4 +1,4 @@
-name: Validate current products and build alpha candidates
+name: Validate current products and build release candidates
 
 on:
   pull_request:
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      - name: Build both independent alpha products from the checked source
+      - name: Build both independent release products from the checked source
         run: bash lib/python_runtime.sh -B -X utf8 packaging/build_candidates.py --output-dir "$RUNNER_TEMP/awf-candidate"
       - name: Summarize exact source, independent versions and artifact checksums
         run: cat "$RUNNER_TEMP/awf-candidate/CANDIDATE.md" >> "$GITHUB_STEP_SUMMARY"
@@ -62,7 +62,7 @@ jobs:
         # https://github.com/actions/upload-artifact/releases/tag/v4.6.2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: alpha-candidate-${{ github.sha }}
+          name: product-candidate-${{ github.sha }}
           path: |
             ${{ runner.temp }}/awf-candidate/workflow/*.zip
             ${{ runner.temp }}/awf-candidate/workflow/*.zip.sha256

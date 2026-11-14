@@ -26,6 +26,7 @@ from lib.skills.business_confirmation_policy import (
 from lib.skills.qa_review_policy import validate_pack_qa_review_policy
 from lib.skills.role_skills import CORE_SKILLS, ROLE_SKILLS
 from product.command_identity import load_identity
+from product.release_channels import version_channel
 from lib.skills.selected_skills import LOCK as SELECTED_LOCK, VENDOR as SELECTED_VENDOR, SPECS as SELECTED_SPECS, snapshot as selected_snapshot
 from lib.validate_antigravity_artifacts import ROLE_TOOLS as ANTIGRAVITY_ROLE_TOOLS
 
@@ -62,7 +63,6 @@ MAINTENANCE_SKILL = "plugins/maintenance/skills/" + CONFIG_SKILL + "/SKILL.md"
 MAINTENANCE_CODEX_POLICY = "plugins/maintenance/skills/" + CONFIG_SKILL + "/agents/openai.yaml"
 MAINTENANCE_INVOCATIONS = {"codex": "$" + PLUGIN_NAME + ":" + CONFIG_SKILL,
                           "claude": "/" + PLUGIN_NAME + ":" + CONFIG_SKILL, "antigravity": "/" + CONFIG_SKILL}
-VERSION_RE = re.compile(r"3\.0\.0-alpha\.[1-9][0-9]*\Z")
 MANIFEST_FIELDS = {
     "codex": {"name", "version", "description", "author", "skills", "hooks"},
     "claude": {"name", "version", "description", "author"},
@@ -248,8 +248,8 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         raise ValueError("unsupported plugin host")
     source = source.resolve(strict=True)
     version = read_source(source, "product/PLUGIN_VERSION").decode("ascii").strip()
-    if not VERSION_RE.fullmatch(version):
-        raise ValueError("PLUGIN_VERSION must be an explicit 3.0.0-alpha.N version")
+    # 正式版与历史alpha的语法/渠道由两个产品共用的唯一纯合同验证。
+    version_channel(version)
     errors = validate_business_confirmation_pack(source, host)
     errors.extend(validate_pack_qa_review_policy(source))
     if errors:

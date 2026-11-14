@@ -1,5 +1,11 @@
 # Worker execution boundaries
 
+- Before selecting or applying Skills, read the verified plugin's
+  `platforms/shared/skills/xy-workflow/references/skill-selection.md`, referenced by WORKFLOW.
+  This shared policy covers every role, including design and read-only QA. Web/Apple recommendations
+  are selected for actual task risks or gaps, without unconditional loading/querying; role defaults
+  do not restrict relevant host-exposed user/project/other-plugin Skills or authorize bulk preloading.
+
 - The PM is the sole orchestrator; workers do not delegate nested Agents. Follow the latest complete
   task pack and exact `owned_paths`. Discovered modules are soft routing preferences, never write
   authority. Return missing authority, scope changes and cross-role work to PM; preserve other work.

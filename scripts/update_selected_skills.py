@@ -11,7 +11,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from lib.skills.selected_skills import LOCK, VENDOR, SPECS, read_regular, snapshot, validate_lock, unique_object, load_git_archive, load_playwright_archives
+from lib.skills.selected_skills import LOCK, VENDOR, SPECS, read_regular, snapshot, validate_lock, unique_object, load_git_archive, load_playwright_archives, load_modern_web_archive
 
 
 def candidate(dependency: str, ref: str, archive: Path | list[Path], output: Path, runtime_manifest: Path | None = None) -> dict:
@@ -30,7 +30,15 @@ def candidate(dependency: str, ref: str, archive: Path | list[Path], output: Pat
     lock, files = snapshot(ROOT)
     archives = [archive] if isinstance(archive, Path) else archive
     ignored = 0
-    if dependency == "playwright-cli":
+    if dependency == "modern-web-guidance":
+        if runtime_manifest is None or len(archives) != 1:
+            raise ValueError("modern Web update requires one fixed official archive and --runtime-manifest")
+        manifest = json.loads(read_regular(runtime_manifest.parent, runtime_manifest.name), object_pairs_hook=unique_object)
+        item, selected = load_modern_web_archive(manifest, archives[0])
+        if item["commit"] != ref:
+            raise ValueError("requested ref must match the modern Web package gitHead")
+        archive_digest = item["package"]["tarball_sha256"]
+    elif dependency == "playwright-cli":
         if runtime_manifest is None:
             raise ValueError("Playwright update requires the reviewed --runtime-manifest and three --archive arguments")
         manifest = json.loads(read_regular(runtime_manifest.parent, runtime_manifest.name), object_pairs_hook=unique_object)

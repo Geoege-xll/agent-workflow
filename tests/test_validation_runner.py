@@ -30,6 +30,20 @@ CURRENT_RECORD_CLASSES = ("RecordUpdateTest", "RecordPublicationTest", "RecordCl
 # GROUPS 反推期望值，否则误删运行时模块也会由同一实现自证通过。
 PROTOTYPE_MODULES = ("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
                      "prototype_workspace_runtime", "prototype_feedback", "prototype_review")
+# 独立期望固定六个历史基线节点，避免被测入口误收整个旧文档/UI模块后自证通过。
+PLAN_BASELINE_METHODS = (
+    "test_template_and_config_share_the_real_lifecycle_model",
+    "test_iteration_pause_and_cancellation_preserve_old_accepted_baseline",
+    "test_unindexed_legacy_completed_plan_is_preserved_but_cannot_be_indexed",
+    "test_completed_unaccepted_or_removed_plan_cannot_be_current_baseline",
+    "test_duplicate_topic_and_missing_baseline_proof_are_rejected",
+    "test_plan_lifecycle_reference_is_shipped_and_discoverable",
+)
+
+
+def plan_targets():
+    return ["tests.test_plan_and_shallow_docs.SelectedPlanValidationTest"] + [
+        "tests.test_plan_and_shallow_docs.PlanAndShallowDocsTest." + name for name in PLAN_BASELINE_METHODS]
 
 
 def current_product_targets():
@@ -83,6 +97,12 @@ class ValidationRunnerTest(unittest.TestCase):
             with records.open("a", encoding="utf-8") as stream:
                 stream.write((self.source / "tests/test_record_class_fixture.py").read_text(encoding="utf-8"))
         (self.source / "tests/test_record_class_fixture.py").unlink()
+        self.write_case("plan_and_shallow_docs", ("test_selected",), class_name="SelectedPlanValidationTest")
+        plan_fixture = self.source / "tests/test_plan_and_shallow_docs.py"
+        selected_fixture = plan_fixture.read_text(encoding="utf-8")
+        self.write_case("plan_and_shallow_docs", (*PLAN_BASELINE_METHODS, "test_unselected_legacy_transaction"),
+                        class_name="PlanAndShallowDocsTest")
+        plan_fixture.write_text(selected_fixture + plan_fixture.read_text(encoding="utf-8"), encoding="utf-8")
         self.write_case("runner_failure", ("test_failure",), failing=True)
 
     def write_case(self, module, methods, *, failing=False, class_name="ExampleTest"):
@@ -194,8 +214,8 @@ import unittest
 
     def test_current_gate_consumes_both_products_retained_prototypes_and_delivery_once(self):
         expected = (["tests.test_validation_runner", "tests.test_candidate_delivery", "tests.test_plugin_source_publication", "tests.test_remote_install_smoke"]
-                    + current_product_targets() + ["tests.test_" + name for name in PROTOTYPE_MODULES])
-        selectors = ("current", "plugin", "native-config", "prototype", "current")
+                    + current_product_targets() + ["tests.test_" + name for name in PROTOTYPE_MODULES] + plan_targets())
+        selectors = ("current", "plugin", "native-config", "prototype", "plans", "current")
         for entry in (self.source / "scripts/test_workflow.sh", PACK / "scripts/test_workflow.sh"):
             with self.subTest(entry=entry):
                 listed = self.invoke("--list", *selectors, entry=entry)
@@ -210,6 +230,19 @@ import unittest
         self.assertEqual(len(expected), len(cases))
         self.assertEqual(len(cases), len({case["id"] for case in cases}))
         self.assertFalse(any("RecordInstalledRuntimeTest" in case["id"] for case in cases))
+        self.assertFalse(any("test_unselected_legacy_transaction" in case["id"] for case in cases))
+
+    def test_plans_group_collects_only_selected_validator_and_six_baseline_nodes(self):
+        for entry in (self.source / "scripts/test_workflow.sh", PACK / "scripts/test_workflow.sh"):
+            with self.subTest(entry=entry):
+                listed = self.invoke("--list", "plans", entry=entry)
+                self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
+                self.assertEqual(plan_targets(), listed.stdout.splitlines())
+        result = self.invoke("plans")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        cases = self.recorded_cases()
+        self.assertEqual(7, len(cases))
+        self.assertFalse(any("test_unselected_legacy_transaction" in case["id"] for case in cases))
 
     def test_legacy_ci_alias_keeps_maintenance_scope_without_retired_html(self):
         legacy = self.invoke("--list", "legacy-ci", entry=PACK / "scripts/test_workflow.sh")
@@ -260,11 +293,11 @@ import unittest
                          'run["conclusion"] == "success"',
                          'run["path"] == ".github/workflows/release.yml"',
                          'run["head_repository"]["full_name"] == repository',
-                         '"alpha-candidate-" + os.environ["GITHUB_SHA"]',
+                         '"product-candidate-" + os.environ["GITHUB_SHA"]',
                          'len(matches) != 1', 'matches[0]["expired"]',
                          'artifact.get("digest", "")', 'hashlib.sha256(body).hexdigest()',
                          "packaging/publish_plugin_sources.py", '--source-revision "$GITHUB_SHA"',
-                         "--repository Geoege-xll/agent-workflow", "--channel alpha --apply"):
+                         "--repository Geoege-xll/agent-workflow", "--channel stable --apply"):
             self.assertIn(fragment, workflow)
         self.assertEqual(2, workflow.count("github.ref == 'refs/heads/main'"))
         self.assertEqual(2, workflow.count("github.event_name == 'workflow_dispatch'"))
@@ -322,14 +355,14 @@ import unittest
 
     def test_publication_gate_requires_unique_live_artifact_and_server_digest(self):
         block = self.publication_python_blocks()[1]
-        valid = {"id": 123, "name": "alpha-candidate-" + "a" * 40,
+        valid = {"id": 123, "name": "product-candidate-" + "a" * 40,
                  "expired": False, "size_in_bytes": 10, "digest": "sha256:" + "c" * 64}
         path = self.root / "candidate-artifacts.json"
         path.write_text(json.dumps([{"artifacts": [valid]}]))
         result, output = self.invoke_publication_block(block)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("artifact-id=123\nartifact-digest=sha256:" + "c" * 64 + "\n", output)
-        invalid = ([], [valid, valid], [{**valid, "name": "alpha-candidate-other"}],
+        invalid = ([], [valid, valid], [{**valid, "name": "product-candidate-other"}],
                    [{**valid, "expired": True}], [{**valid, "size_in_bytes": 0}],
                    [{**valid, "digest": ""}], [{**valid, "digest": "sha256:invalid"}])
         for artifacts in invalid:

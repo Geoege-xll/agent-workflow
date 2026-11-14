@@ -8,7 +8,9 @@ description: Draft a Full request implementation plan after Grill Me coverage an
 # xy-plan
 
 Adapt the mature exactness and self-review ideas of Superpowers writing-plans to this pack's PM-owned
-Task Pack and READY-DAG model.
+Task Pack and READY-DAG model. For plan drafting or substantive refinement, read
+[document quality](references/document-quality.md): it adapts doc-coauthoring's section refinement and
+reader checks within the existing PM/QA route, without adding interviews or approval stages.
 
 ```yaml
 methodology_reference: superpowers-writing-plans
@@ -88,7 +90,8 @@ plan_state: draft
 7. Include no placeholders such as TBD, generic "add validation", "handle edge cases", or "write
    tests". Name the behavior, boundary, command, and expected evidence.
 8. Self-review requirement coverage, task independence, interface consistency, path/semantic
-   conflicts, verification completeness, and missing failure cases. Fix gaps inline.
+   conflicts, verification completeness, and missing failure cases. Apply the document-quality
+   reader check to this draft, fixing gaps inline for the PM; do not launch a reader Agent or gate.
 
 ## Output projections
 
@@ -99,3 +102,4 @@ approved plan and dispatches.
 
 <!-- workflow-contract: references/task-graph.md -->
 <!-- workflow-contract: references/requirements-markdown.md -->
+<!-- workflow-contract: references/document-quality.md -->

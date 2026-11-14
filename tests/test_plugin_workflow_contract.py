@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,6 +137,72 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertNotIn("ui-ux-pro-max", workflow + intake + design)
                 for role in ("roles/xy-uiux.md", "product/ROLES.yaml"):
                     self.assertIn("xy-taste", (root / role).read_text(encoding="utf-8"))
+
+    def test_all_roles_resolve_one_shared_skill_selection_authority(self):
+        """沿三端已装配 WORKFLOW 的真实链接读取权威，防止只有实现角色能消费新规则。"""
+        relative = "platforms/shared/skills/xy-workflow/references/skill-selection.md"
+        expected = (PACK / relative).read_bytes()
+        for host, root in self.installed.items():
+            project = self.root / ("skill-selection-project-" + host)
+            project.mkdir()
+            # 项目同名内容故意冲突；真实 resource/pager 必须读取当前物理插件，
+            # 不能仅靠复制字符串的断言掩盖清单漏收或项目同名文件覆盖权威的问题。
+            decoy = project / relative
+            decoy.parent.mkdir(parents=True)
+            decoy.write_text("project-owned skill-selection decoy", encoding="utf-8")
+            with self.subTest(host=host):
+                workflow = root / "product/WORKFLOW.md"
+                links = re.findall(r"\]\(([^)]+skill-selection\.md)\)", workflow.read_text(encoding="utf-8"))
+                self.assertTrue(links, "WORKFLOW must route every Agent to the shared policy")
+                self.assertEqual({root / relative}, {(workflow.parent / link).resolve() for link in links})
+                self.assertEqual(expected, (root / "skills/xy-workflow/references/skill-selection.md").read_bytes())
+                base = [sys.executable, "-B", str(root / "plugins/source_pack.py")]
+                located = subprocess.run([*base, "resource", relative], cwd=project,
+                    env=isolated_environment(self.root / "home"), capture_output=True, text=True, timeout=15)
+                self.assertEqual(0, located.returncode, located.stdout + located.stderr)
+                resource = json.loads(located.stdout)
+                self.assertEqual(root / relative, Path(resource["path"]))
+                self.assertEqual(hashlib.sha256(expected).hexdigest(), resource["sha256"])
+                loaded = subprocess.run(
+                    [*base, "helper", "--project", str(project), "lib/documents/context_read.py",
+                     ".agent-workflow/" + relative, "--root", str(project), "--limit", "24000"],
+                    cwd=project, env=isolated_environment(self.root / "home"),
+                    capture_output=True, text=True, timeout=15)
+                self.assertEqual(0, loaded.returncode, loaded.stdout + loaded.stderr)
+                page = json.loads(loaded.stdout)
+                self.assertTrue(page["eof"])
+                self.assertEqual(expected.decode("utf-8"), page["text"])
+                # 两个新入口必须实际可发现，但不进入原生角色的无条件预载列表。
+                # 消费包内真实角色CLI与宿主frontmatter，避免只检查源码绑定常量。
+                candidates = ("xy-web-guidance", "xy-apple-guidance")
+                for candidate in candidates:
+                    header, _ = builder.split_frontmatter((root / "skills" / candidate / "SKILL.md").read_bytes())
+                    self.assertIn(("name: " + candidate).encode(), header)
+                for role in ROLE_SKILLS:
+                    selected = subprocess.run(
+                        [sys.executable, "-B", str(root / "lib/skills/role_skills.py"), role],
+                        cwd=project, env=isolated_environment(self.root / "home"),
+                        capture_output=True, text=True, timeout=15)
+                    self.assertEqual(0, selected.returncode, selected.stdout + selected.stderr)
+                    self.assertTrue(set(candidates).isdisjoint(selected.stdout.splitlines()))
+                # 共用包络让设计与 QA 同样到达 WORKFLOW；计划 Skill 也走相同入口。
+                # 验证真实投影而非为七角色复制七份细则或强制预载全部 Skill。
+                envelope = "plugins/antigravity/plugin-context.md" if host == "antigravity" else "plugins/plugin-context.md"
+                envelope_body = (root / envelope).read_bytes()
+                self.assertIn(b"product/WORKFLOW.md", envelope_body)
+                self.assertIn(envelope_body, (root / "skills/xy-plan/SKILL.md").read_bytes())
+                if host != "codex":
+                    for role in ROLE_SKILLS:
+                        self.assertIn(envelope_body, (root / "agents" / (role + ".md")).read_bytes())
+                        header, _ = builder.split_frontmatter((root / "agents" / (role + ".md")).read_bytes())
+                        for candidate in candidates:
+                            self.assertNotIn(candidate.encode(), header)
+                    if host == "claude":
+                        header, _ = builder.split_frontmatter((root / "agents/pm.md").read_bytes())
+                        for candidate in candidates:
+                            self.assertNotIn(candidate.encode(), header)
+                else:
+                    self.assertIn(relative, (root / "platforms/codex/WORKER_CONSTRAINTS.md").read_text(encoding="utf-8"))
 
     def test_web_browser_policy_uses_bundled_cli_without_widening_qa(self):
         """检查真实三端包的公开绑定和权限边界，避免原Skill安装段扩权或全体QA预载。"""

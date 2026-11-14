@@ -40,9 +40,9 @@ class PluginResourcesTest(unittest.TestCase):
         originals = {
             relative: (PACK / relative).read_bytes() for relative in BUILTIN_STANDARD_SOURCES
         }
-        # role_skills现在消费唯一身份解析器；独立安装夹具必须包含真实三文件闭包。
+        # 身份解析和发行版本是独立包共用的纯合同；夹具必须携带真实产品依赖闭包。
         originals.update({"product/" + name: (PACK / "product" / name).read_bytes()
-                          for name in ("__init__.py", "command_identity.py", "command_identity.json")})
+                          for name in ("__init__.py", "command_identity.py", "command_identity.json", "release_channels.py")})
         originals[ENGINEERING] += "\n<!-- 本次独立插件安装的规范字节 -->\n".encode()
         originals.update({
             "product/WORKFLOW.md": "插件工作流正文\r\n".encode(),
@@ -119,6 +119,12 @@ class PluginResourcesTest(unittest.TestCase):
             f"assert read_page(Path({str(external)!r}), root=Path.cwd())['text'] == 'legacy explicit path\\n'\n",
             environment=environment,
         )
+
+    def test_release_contract_imports_from_detached_product_closure(self):
+        self.assert_success(
+            "from product.release_channels import validate_channel\n"
+            "assert validate_channel('3.0.1', 'stable') == 'stable'\n"
+            "assert validate_channel('3.0.0-alpha.10', 'alpha') == 'alpha'\n")
 
     def test_builtin_digest_and_catalog_only_accept_current_installation_bytes(self):
         expected = self.manifest["files"][ENGINEERING]

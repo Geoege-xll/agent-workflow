@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 VENDOR = "third_party/selected-skills"
 LOCK = "third_party/selected-skills.lock.json"
 SPECS = {
+    "modern-web-guidance": {"repository": "https://github.com/GoogleChrome/modern-web-guidance-src", "roots": ["runtime"], "license": "runtime/LICENSE", "skills": {"modern-web-guidance": "runtime/skills/modern-web-guidance/SKILL.md"}},
     "grill-me": {"repository": "https://github.com/mattpocock/skills", "roots": ["skills/productivity/grill-me", "skills/productivity/grilling"], "license": "LICENSE", "skills": {"grill-me": "skills/productivity/grill-me/SKILL.md", "grilling": "skills/productivity/grilling/SKILL.md"}},
     "taste": {"repository": "https://github.com/Leonxlnx/taste-skill", "roots": ["skills/taste-skill"], "license": "LICENSE", "skills": {"design-taste-frontend": "skills/taste-skill/SKILL.md"}},
     "playwright-cli": {"repository": "https://github.com/microsoft/playwright-cli", "roots": ["runtime/node_modules/@playwright/cli", "runtime/node_modules/playwright", "runtime/node_modules/playwright-core"], "license": "runtime/node_modules/@playwright/cli/LICENSE", "skills": {"playwright-cli": "runtime/node_modules/@playwright/cli/skills/playwright-cli/SKILL.md"}},
@@ -36,7 +37,8 @@ def canonical(value: str) -> str:
     return value
 
 
-def read_regular(root: Path, relative: str) -> bytes:
+def read_regular(root: Path, relative: str, *, max_bytes: int | None = None,
+                 expected_stat: tuple[int, ...] | None = None) -> bytes:
     """逐级使用不跟随链接的目录描述符，避免校验后路径被换成软链的时间窗口。
 
     不执行上游代码。硬链接亦拒绝，确保依赖闭包不能借外部共享inode改变内容。
@@ -54,9 +56,21 @@ def read_regular(root: Path, relative: str) -> bytes:
             info = os.fstat(file_descriptor)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise ValueError("selected skill resource must be a single-link regular file: " + relative)
+            identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            if expected_stat is not None and identity(info) != expected_stat:
+                raise ValueError("resource identity changed before read: " + relative)
+            if max_bytes is not None and info.st_size > max_bytes:
+                raise ValueError("resource exceeds read budget: " + relative)
             chunks = []
+            total = 0
             while chunk := os.read(file_descriptor, 1024 * 1024):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise ValueError("resource exceeds read budget: " + relative)
                 chunks.append(chunk)
+            # Apple按需引用采用打开的同一inode验证，避免lstat与open之间换文件后混入正文。
+            if expected_stat is not None and identity(os.fstat(file_descriptor)) != expected_stat:
+                raise ValueError("resource identity changed during read: " + relative)
             return b"".join(chunks)
         finally:
             os.close(file_descriptor)
@@ -88,10 +102,10 @@ def validate_lock(lock: dict) -> dict:
         raise ValueError("unsupported selected skill lock")
     dependencies = lock["dependencies"]
     if not isinstance(dependencies, dict) or set(dependencies) != set(SPECS):
-        raise ValueError("selected dependencies must be exactly grill-me, taste and playwright-cli")
+        raise ValueError("selected dependencies must match the fixed source registry")
     for name, spec in SPECS.items():
         item = dependencies[name]
-        fields = set(spec) | {"commit", "files"} | ({"packages"} if name == "playwright-cli" else set())
+        fields = set(spec) | {"commit", "files"} | ({"packages"} if name == "playwright-cli" else {"package"} if name == "modern-web-guidance" else set())
         if not isinstance(item, dict) or set(item) != fields:
             raise ValueError("invalid dependency contract: " + name)
         if any(item[k] != v for k, v in spec.items()) or not isinstance(item["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", item["commit"]):
@@ -107,12 +121,14 @@ def validate_lock(lock: dict) -> dict:
                     or not isinstance(record["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])
                     or type(record["size"]) is not int or record["size"] < 0):
                 raise ValueError("invalid selected file digest: " + relative)
-            if "mode" in record and (name != "playwright-cli" or type(record["mode"]) is not int or record["mode"] not in {0o644, 0o755}):
+            if "mode" in record and (name not in {"playwright-cli", "modern-web-guidance"} or type(record["mode"]) is not int or record["mode"] not in {0o644, 0o755}):
                 raise ValueError("invalid selected resource mode: " + relative)
             if name == "playwright-cli" and "mode" not in record:
                 raise ValueError("Playwright file modes must be locked")
         if name == "playwright-cli":
             validate_playwright_packages(item)
+        elif name == "modern-web-guidance":
+            validate_modern_web_package(item)
     return lock
 
 
@@ -153,6 +169,76 @@ def validate_playwright_packages(item: dict) -> None:
             raise ValueError("Playwright package counts or bytes mismatch")
     if indexed["@playwright/cli"]["gitHead"] != item["commit"]:
         raise ValueError("Playwright CLI commit must match its published package gitHead")
+
+
+def validate_modern_web_package(item: dict) -> None:
+    """官方单包已捆绑查询模型，无外部运行依赖；许可、完整文件数和字节数同时锁定。"""
+    package = item["package"]
+    fields = {"name", "version", "gitHead", "tarball", "integrity", "compressed_bytes", "tarball_sha256", "file_count", "unpacked_bytes"}
+    if not isinstance(package, dict) or set(package) != fields:
+        raise ValueError("invalid modern Web package provenance")
+    if (any(not isinstance(package[k], str) for k in ("name", "version", "gitHead", "tarball", "integrity", "tarball_sha256"))
+            or not re.fullmatch(r"[0-9a-f]{40}", package["gitHead"])):
+        raise ValueError("invalid modern Web package identity fields")
+    if (package["name"] != "modern-web-guidance" or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", package.get("version", ""))
+            or package["gitHead"] != item["commit"]
+            or not re.fullmatch(r"[0-9a-f]{64}", package.get("tarball_sha256", ""))
+            or not re.fullmatch(r"sha512-[A-Za-z0-9+/]+={0,2}", package.get("integrity", ""))):
+        raise ValueError("modern Web requires exact official package identity and integrity")
+    if package["tarball"] != "https://registry.npmjs.org/modern-web-guidance/-/modern-web-guidance-" + package["version"] + ".tgz":
+        raise ValueError("modern Web package must use its official registry tarball")
+    if any(type(package[k]) is not int or package[k] <= 0 for k in ("compressed_bytes", "file_count", "unpacked_bytes")):
+        raise ValueError("invalid modern Web package sizes")
+    required = {"runtime/" + p for p in ("LICENSE", "README.md", "THIRD_PARTY_NOTICES", "package.json")}
+    required |= {"runtime/skills/modern-web-guidance/" + p for p in (
+        "SKILL.md", "modern-web.mjs", "search.mjs", "skill-version.txt", "gen/guides.json",
+        "gen/guide-chunks.json.gz", "gen/guide-chunks.i8", "gen/guide-chunks.scale.f32",
+        "gen/query-words.json", "gen/query-words.i8", "gen/query-words.scale.f32")}
+    if (not isinstance(item.get("files"), dict) or not required <= set(item["files"]) or len(item["files"]) != package["file_count"]
+            or sum(r["size"] for r in item["files"].values()) != package["unpacked_bytes"]
+            or any("mode" not in r for r in item["files"].values())):
+        raise ValueError("modern Web complete package/license/model closure is missing")
+
+
+def load_modern_web_archive(manifest: dict, archive: Path) -> tuple[dict, dict[str, bytes]]:
+    """只读取显式审阅的官方发布tar；不执行npm、构建器、安装器或归档内脚本。"""
+    try:
+        return _load_modern_web_archive(manifest, archive)
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("invalid modern Web archive manifest") from exc
+
+
+def _load_modern_web_archive(manifest: dict, archive: Path) -> tuple[dict, dict[str, bytes]]:
+    """与既有Playwright入口一致，将不可信manifest结构错误统一为明确拒绝。"""
+    if (not isinstance(manifest, dict) or set(manifest) != {"package", "files"}
+            or not isinstance(manifest["package"], dict)):
+        raise ValueError("modern Web manifest requires package and complete files")
+    item = {**SPECS["modern-web-guidance"], "commit": manifest.get("package", {}).get("gitHead"), **manifest}
+    # 完整单依赖校验在读取任何成员前执行；它不会信任归档自己的包版本声明。
+    validate_modern_web_package(item)
+    raw = read_regular(archive.parent, archive.name, max_bytes=30 * 1024 * 1024)
+    package = item["package"]
+    if (len(raw) != package["compressed_bytes"] or hashlib.sha256(raw).hexdigest() != package["tarball_sha256"]
+            or "sha512-" + base64.b64encode(hashlib.sha512(raw).digest()).decode("ascii") != package["integrity"]):
+        raise ValueError("modern Web archive integrity mismatch")
+    files, records, expanded = {}, {}, 0
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as stream:
+        for entry in stream:
+            name = canonical(entry.name)
+            if not name.startswith("package/") or not entry.isfile() or entry.mode not in {0o644, 0o755}:
+                raise ValueError("modern Web archive requires canonical regular files and safe modes")
+            relative = "runtime/" + name.removeprefix("package/")
+            if relative in files:
+                raise ValueError("duplicate modern Web archive entry")
+            expanded += entry.size
+            if expanded > 60 * 1024 * 1024:
+                raise ValueError("modern Web expanded package exceeds review budget")
+            body = stream.extractfile(entry).read()
+            files[relative] = body
+            records[relative] = {"sha256": hashlib.sha256(body).hexdigest(), "size": len(body), "mode": entry.mode}
+    if records != item["files"]:
+        raise ValueError("modern Web archive complete inventory mismatch")
+    return item, files
 
 
 def load_playwright_archives(manifest: dict, archives: list[Path]) -> tuple[dict, dict[str, bytes]]:
@@ -282,6 +368,12 @@ def snapshot(root: Path = ROOT) -> tuple[dict, dict[str, bytes]]:
                 or actual.get("dependencies", {}) != package["dependencies"] or actual.get("optionalDependencies", {}) != {}
                 or actual.get("engines", {}) != package["engines"]):
             raise ValueError("Playwright package metadata disagrees with locked dependency graph")
+    package = lock["dependencies"]["modern-web-guidance"]["package"]
+    metadata = json.loads(result[VENDOR + "/modern-web-guidance/runtime/package.json"], object_pairs_hook=unique_object)
+    if (not isinstance(metadata, dict) or metadata.get("name") != "modern-web-guidance" or metadata.get("version") != package["version"]
+            or not isinstance(metadata.get("engines"), dict) or metadata["engines"].get("node") != ">=22.0.0"
+            or metadata.get("dependencies", {}) or metadata.get("optionalDependencies", {})):
+        raise ValueError("modern Web package metadata disagrees with the fixed local closure")
     return lock, result
 
 
@@ -301,7 +393,11 @@ def skill_path(name: str) -> str:
 def read_chunk(files: dict[str, bytes], name: str, offset: int, length: int) -> dict:
     """返回原文连续字节区间，UTF-8跨块边界不能丢字符；调用者以next_offset续读。"""
     path = skill_path(name)
-    body = files[path]
+    return read_bytes_chunk(files[path], path, offset, length)
+
+
+def read_bytes_chunk(body: bytes, path: str, offset: int, length: int) -> dict:
+    """已绑定来源的原文字节共用同一个连续UTF-8读取合同。"""
     body.decode("utf-8")
     if offset < 0 or offset > len(body) or length < 4 or length > 16000:
         raise ValueError("offset out of range or length must be 4..16000")

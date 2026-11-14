@@ -8,7 +8,6 @@ import ast
 import hashlib
 import json
 from pathlib import Path
-import re
 import stat
 import sys
 import zipfile
@@ -18,6 +17,7 @@ if sys.version_info < (3, 11):
     raise SystemExit("需要 Python >= 3.11；请使用 bash scripts/python_runtime.sh packaging/build_agent_config.py")
 sys.path.insert(0, str(ROOT))
 from product.command_identity import load_identity
+from product.release_channels import version_channel
 
 README = """# Native Agent Config
 
@@ -113,16 +113,15 @@ def read_source(source: Path, relative: str):
 def payload(source: Path):
     source = source.resolve(strict=True)
     version = read_source(source, "native_config/VERSION").decode("ascii").strip()
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", version):
-        raise ValueError("独立版本文件无效")
+    version_channel(version)
     root = source / "native_config"
     if root.is_symlink():
         raise ValueError("核心目录不能使用符号链接")
-    # 两个独立产品只共享这三个标准库身份文件，不把工作流本体带入配置组件。
+    # 两个独立产品只共享这些标准库身份与发行文件，不把工作流本体带入配置组件。
     load_identity(source)
     files = {name: read_source(source, name) for name in (
-        "native_config/VERSION", "product/__init__.py", "product/command_identity.py", "product/command_identity.json")}
-    for name in ("product/__init__.py", "product/command_identity.py"):
+        "native_config/VERSION", "product/__init__.py", "product/command_identity.py", "product/command_identity.json", "product/release_channels.py")}
+    for name in ("product/__init__.py", "product/command_identity.py", "product/release_channels.py"):
         for node in ast.walk(ast.parse(files[name], filename=name)):
             modules = [item.name for item in node.names] if isinstance(node, ast.Import) else [node.module or ""] if isinstance(node, ast.ImportFrom) else []
             if any(module.split(".")[0] not in sys.stdlib_module_names for module in modules):

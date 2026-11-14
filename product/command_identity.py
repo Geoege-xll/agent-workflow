@@ -12,7 +12,7 @@ import stat
 # 合同获准调整时，从唯一 JSON 读取后以 sort_keys=True、separators=(",", ":")、
 # ensure_ascii=False 序列化 UTF-8，再重算 SHA256；同步调用方与发行 provenance。
 # 该摘要不是签名或新的业务批准步骤，只防止独立包读取被替换的身份声明。
-_APPROVED_CONTENT_SHA256 = "e48a574f9111430bcfbea8a5c01214a7e478bab908cad91d572661b8697d14a5"
+_APPROVED_CONTENT_SHA256 = "7412f10cb54157d9ef2bf538b37fbd77977a289e4866af7e971621fef6ca6276"
 _FIELDS = {"schema_version", "plugin_name", "marketplaces", "artifact_prefix", "skill_aliases",
            "managed_roles", "legacy_plugin_name", "legacy_marketplaces"}
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
@@ -52,7 +52,9 @@ def load_identity(root: Path) -> dict:
             raise ValueError("命令身份包含不安全标识")
     for field in ("marketplaces", "legacy_marketplaces"):
         markets = data[field]
-        if not isinstance(markets, dict) or set(markets) != {"alpha", "local"} or not all(map(safe, markets.values())):
+        # 当前正式市场是新增身份；历史产品从未发行 stable，不能替 legacy 伪造入口。
+        required_channels = {"stable", "alpha", "local"} if field == "marketplaces" else {"alpha", "local"}
+        if not isinstance(markets, dict) or set(markets) != required_channels or not all(map(safe, markets.values())):
             raise ValueError("命令身份市场映射无效")
     aliases = data["skill_aliases"]
     roles = data["managed_roles"]

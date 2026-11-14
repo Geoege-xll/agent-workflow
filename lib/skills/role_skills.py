@@ -21,7 +21,8 @@ LEGACY_CORE_SKILLS = frozenset({
     "xy-prototype-verify", "xy-qa-review", "xy-workflow",
 })
 # 外部原版与内部受管Skill分开，历史集合只证明旧磁盘所有权。
-CORE_SKILLS = (LEGACY_CORE_SKILLS - {"grill-me"}) | {"xy-code-standards", "xy-ui-design"}
+# 两个新指导入口只声明可发现资源，不能据此自动写入角色原生skills；实际选用由当前任务决定。
+CORE_SKILLS = (LEGACY_CORE_SKILLS - {"grill-me"}) | {"xy-code-standards", "xy-ui-design", "xy-web-guidance", "xy-apple-guidance"}
 COMMAND_IDENTITY = load_identity(Path(__file__).resolve().parents[2])
 SELECTED_SKILL_ALIASES = {public: canonical for public, canonical in COMMAND_IDENTITY["skill_aliases"].items()
                           if canonical != "agent-config"}

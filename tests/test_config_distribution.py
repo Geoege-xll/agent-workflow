@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -16,6 +17,8 @@ import unittest
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+from product.command_identity import load_identity
+from product.release_channels import compare_versions, validate_channel, version_channel
 
 
 def load(name, path):
@@ -42,6 +45,7 @@ class ConfigDistributionTest(unittest.TestCase):
     def test_unpublished_uses_actual_zip_sha_and_has_no_download_url(self):
         report = distribution.assemble(self.artifact)
         self.assertEqual(report["release_status"], "unpublished")
+        self.assertEqual((report["version"], report["channel"]), ("0.1.1", "stable"))
         self.assertEqual(report["artifact"]["url"], "")
         self.assertEqual(report["artifact"]["sha256"], hashlib.sha256(self.artifact.read_bytes()).hexdigest())
         self.assertEqual((report["cli_protocol"], report["service_protocol"]), (1, 2))
@@ -67,6 +71,49 @@ class ConfigDistributionTest(unittest.TestCase):
                     "https://github.com/Geoege-xll/agent-workflow/releases/download/native-v1/wrong.zip"):
             with self.subTest(url=url), self.assertRaises(distribution.store.ComponentError):
                 distribution.assemble(self.artifact, url=url)
+
+    def test_unique_release_contract_strictly_matches_versions_channels_and_order(self):
+        self.assertEqual("stable", version_channel("3.0.1"))
+        self.assertEqual("alpha", version_channel("3.0.0-alpha.9"))
+        for value in ("03.0.1", "3.00.1", "3.0.01", "3.0.1-alpha.0", "3.0.1-alpha.01",
+                      "3.0.1-beta.1", "3.0.1+build.1", "3.0.1\n", None, 301):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                version_channel(value)
+        for version, channel in (("3.0.1", "alpha"), ("3.0.1-alpha.1", "stable"), ("3.0.1", "beta")):
+            with self.subTest(version=version, channel=channel), self.assertRaises(ValueError):
+                validate_channel(version, channel)
+        ordered = ("3.0.0-alpha.9", "3.0.0-alpha.10", "3.0.0", "3.0.1-alpha.1", "3.0.1", "3.1.0")
+        for left, right in zip(ordered, ordered[1:]):
+            self.assertEqual(-1, compare_versions(left, right))
+            self.assertEqual(1, compare_versions(right, left))
+            self.assertEqual(0, compare_versions(left, left))
+
+    def test_stable_identity_is_pinned_without_inventing_legacy_market_or_aliases(self):
+        identity = load_identity(ROOT)
+        self.assertEqual("xy-workflow", identity["marketplaces"]["stable"])
+        self.assertEqual({"alpha", "local"}, set(identity["legacy_marketplaces"]))
+        isolated = self.base / "identity-fixture"
+        (isolated / "product").mkdir(parents=True)
+        for mutate in (lambda item: item["marketplaces"].update(stable="unapproved"),
+                       lambda item: item["marketplaces"].update(beta="xy-workflow-beta"),
+                       lambda item: item["legacy_marketplaces"].update(stable="agent-workflow"),
+                       lambda item: item["skill_aliases"].update({"xy-config": "other"})):
+            value = json.loads((ROOT / "product/command_identity.json").read_bytes())
+            mutate(value)
+            (isolated / "product/command_identity.json").write_text(json.dumps(value))
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                load_identity(isolated)
+
+    def test_descriptor_rejects_mixed_or_unknown_channel_without_changing_published_source(self):
+        descriptor = distribution.assemble(self.artifact)
+        path = self.base / "descriptor.json"
+        for channel in ("alpha", "beta", "local"):
+            path.write_text(json.dumps({**descriptor, "channel": channel}))
+            with self.subTest(channel=channel), self.assertRaises(distribution.store.ComponentError):
+                distribution.store.descriptor(path)
+        # 新共享模块是真实发行闭包的一部分，不能仅在源码 checkout 中碰巧可导入。
+        _, bodies = distribution.store.archive_payload(self.artifact, self.report["version"])
+        self.assertEqual(bodies["product/release_channels.py"], (ROOT / "product/release_channels.py").read_bytes())
 
     def test_redirects_allow_only_bounded_https_github_asset_hosts(self):
         handler = distribution.store.ReleaseRedirect()

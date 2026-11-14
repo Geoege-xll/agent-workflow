@@ -23,7 +23,7 @@ from tests.skill_contract_helpers import read_contract
 from lib.standard_paths import canonical_standard_path, standard_domain, source_domain, canonical_standard_source_path
 from lib.project.validate_project_config import validate_docs
 from lib.validate_project_docs import validate as validate_documents
-from lib.documents.plan_documents import SECTIONS, parse_plan
+from lib.documents.plan_documents import SECTIONS, parse_plan, validate_selected_plans
 from lib.documents.validate_prototype_workspace import ValidationError, validate_workspace
 from tests import test_design_standards_lifecycle as design_cases
 from tests import test_prototype_workspace as prototype_cases
@@ -33,6 +33,188 @@ from tests.test_scheduler_boundaries import v2_graph
 
 
 PACK = Path(__file__).resolve().parents[1]
+
+
+class SelectedPlanValidationTest(unittest.TestCase):
+    """指定计划的真实 CLI 和安全负控；不依赖 PROJECT，也不扩大历史计划的读取范围。"""
+
+    def setUp(self) -> None:
+        supplied = os.environ.get("AWF_TEST_SCRATCH")
+        if supplied:
+            self.root = Path(supplied) / "selected-plan-fixtures" / self._testMethodName
+            self.root.mkdir(parents=True, exist_ok=True)
+        else:
+            temporary = tempfile.TemporaryDirectory(prefix="selected-plan-")
+            self.addCleanup(temporary.cleanup)
+            self.root = Path(temporary.name).resolve()
+        self.plans = self.root / "docs/plans"
+        self.plans.mkdir(parents=True, exist_ok=True)
+
+    def write_plan(self, body=None, name="selected.md") -> Path:
+        path = self.plans / name
+        path.write_text(PlanAndShallowDocsTest.lifecycle() if body is None else body, encoding="utf-8")
+        return path
+
+    def invoke(self, *plans, legacy=False):
+        arguments = ([str(self.root / "project.yaml"), str(self.root)] if legacy else
+                     ["--root", str(self.root), *[value for plan in plans for value in ("--plan", str(plan))]])
+        return subprocess.run(
+            ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+             str(PACK / "lib/validate_project_docs.py"), *arguments],
+            cwd=self.root, capture_output=True, text=True, timeout=20,
+        )
+
+    def assert_rejected(self, body, reason):
+        path = self.write_plan(body)
+        errors = validate_selected_plans(self.root, [path])
+        self.assertTrue(any(reason in error for error in errors), errors)
+
+    def test_real_cli_without_project_repeats_absolute_and_relative_plans_without_writes(self):
+        full = self.write_plan()
+        light = self.write_plan(PlanAndShallowDocsTest.lifecycle().replace(
+            "`Full`", "`Light`").split("\n## ", 1)[0] + "\n恢复本次小改动。\n", "light.md")
+        # 同目录放置故意损坏的未选计划和软链：扫描目录会失败，选中文件入口应成功。
+        ignored = self.write_plan("坏的未选计划", "unselected.md")
+        ignored.chmod(0)
+        self.addCleanup(ignored.chmod, 0o600)
+        (self.plans / "unselected-link.md").symlink_to(self.root / "missing.md")
+        before = {path: path.read_bytes() for path in (full, light)}
+        result = self.invoke(full.relative_to(self.root), light)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("selected plans: 2", result.stdout)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertFalse((self.root / "project.yaml").exists())
+        self.assertFalse((self.root / "docs/PROJECT.md").exists())
+        self.assertFalse((self.root / ".agent-workflow").exists())
+        self.assertEqual([], list(self.root.rglob("*.pyc")))
+
+    def test_real_cli_reports_every_selected_failure_and_never_rewrites(self):
+        first = self.write_plan("# 缺少生命周期元信息\n", "first.md")
+        second = self.write_plan(PlanAndShallowDocsTest.lifecycle() + "\n## 多余专题\n", "second.md")
+        before = {path: path.read_bytes() for path in (first, second)}
+        result = self.invoke(first, second)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn(str(first), result.stderr)
+        self.assertIn("主题 ID", result.stderr)
+        self.assertIn(str(second), result.stderr)
+        self.assertIn("H2", result.stderr)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+
+    def test_all_five_metadata_fields_are_required_unique_and_single_valued(self):
+        body = PlanAndShallowDocsTest.lifecycle()
+        fields = ("主题 ID", "阶段", "模块", "任务等级", "已验收版本")
+        for field in fields:
+            line = next(line for line in body.splitlines() if line.startswith("- " + field + ":"))
+            with self.subTest(field=field, defect="missing"):
+                self.assert_rejected(body.replace(line + "\n", ""), field)
+            for duplicate in (line, "- " + field + ":"):
+                with self.subTest(field=field, defect=duplicate):
+                    self.assert_rejected(body.replace(line, line + "\n" + duplicate), field)
+        for old, new, reason in (("`active`", "`active, paused`", "阶段"),
+                                 ("`Full`", "`Full / Light`", "任务等级"),
+                                 ("`none`", "`v1, v2`", "已验收版本"),
+                                 ("`TOPIC-ONE`", "`ONE TWO`", "主题 ID"),
+                                 ("- 模块: `.`", "- 模块: ``", "模块")):
+            with self.subTest(value=new):
+                self.assert_rejected(body.replace(old, new), reason)
+
+    def test_fenced_examples_cannot_supply_metadata_headings_or_baseline_evidence(self):
+        body = PlanAndShallowDocsTest.lifecycle()
+        for fence in ("```", "~~~~"):
+            with self.subTest(fence=fence):
+                self.assert_rejected(f"# 示例\n{fence}markdown\n{body}\n{fence}\n", "主题 ID")
+                header, sections = body.split("\n## ", 1)
+                self.assert_rejected(header + f"\n{fence}\n## " + sections + f"\n{fence}\n", "六节")
+        accepted = PlanAndShallowDocsTest.lifecycle(version="v1")
+        accepted = accepted.replace("- 批准依据: 原始用户批准记录 request-old", "```\n- 批准依据: 原始用户批准记录 request-old\n```")
+        self.assert_rejected(accepted, "批准依据")
+        # 示例内的额外标题、重复字段和坏链接均不属于真实文档合同。
+        valid = body + "\n   ````md\n- 阶段: cancelled\n## 示例标题\n[示例](../../../../outside.md)\n```\n   ````\n"
+        self.assertEqual([], validate_selected_plans(self.root, [self.write_plan(valid)]))
+
+    def test_full_rejects_extra_duplicate_reordered_h2_but_accepts_h3(self):
+        body = PlanAndShallowDocsTest.lifecycle()
+        swapped = body.replace("## 目标与范围", "## 临时").replace(
+            "## 需求与验收", "## 目标与范围").replace("## 临时", "## 需求与验收")
+        for modified, reason in ((body + "\n## 新专题\n", "H2"),
+                                 (body + "\n## 目标与范围\n", "重复"),
+                                 (swapped, "乱序"),
+                                 (body.replace("## 需求与验收", "## 方案与原型关联"), "重复")):
+            with self.subTest(reason=reason):
+                self.assert_rejected(modified, reason)
+        self.assertEqual([], validate_selected_plans(self.root, [self.write_plan(body + "\n### 额外专题\n说明。\n")]))
+
+    def test_light_simplifies_without_baseline_and_accepted_baseline_requires_proof(self):
+        light = PlanAndShallowDocsTest.lifecycle().replace("`Full`", "`Light`")
+        self.assertEqual([], validate_selected_plans(self.root, [self.write_plan(light.split("\n## ", 1)[0])]))
+        accepted = PlanAndShallowDocsTest.lifecycle(version="v1").replace("`Full`", "`Light`")
+        self.assertEqual([], validate_selected_plans(self.root, [self.write_plan(accepted)]))
+        self.assert_rejected(accepted.replace("- 验收证据: 已有验收记录 qa-old", "- 验收证据: none"), "不能是待定")
+        self.assert_rejected(accepted.split("\n## ", 1)[0], "必要证据")
+
+    def test_paths_reject_escape_symlink_hardlink_special_missing_and_invalid_utf8(self):
+        selected = self.write_plan()
+        link = self.plans / "link.md"
+        link.symlink_to(selected)
+        hard = self.plans / "hard.md"
+        os.link(selected, hard)
+        directory_link = self.root / "alias"
+        directory_link.symlink_to(self.plans, target_is_directory=True)
+        invalid = self.plans / "invalid.md"
+        invalid.write_bytes(b"\xff")
+        fifo = self.plans / "special.md"
+        os.mkfifo(fifo)
+        for path in (selected, link, hard, directory_link / "selected.md", directory_link / "../docs/plans/invalid.md",
+                     Path("../outside.md"), self.root.parent / "outside.md", self.plans / "missing.md", invalid,
+                     fifo, self.plans, Path("docs/plans/../../../outside.md")):
+            with self.subTest(path=path):
+                self.assertTrue(validate_selected_plans(self.root, [path]))
+        self.assertTrue(validate_selected_plans(directory_link, [Path("selected.md")]))
+        hard.unlink()
+        self.assertEqual([], validate_selected_plans(self.root, [Path("docs/plans/../plans/selected.md")]))
+
+    def test_links_check_existence_and_safety_without_reading_target_or_unselected_body(self):
+        target = self.root / "opaque.md"
+        target.write_bytes(b"\xffnot UTF-8")
+        target.chmod(0)
+        self.addCleanup(target.chmod, 0o600)
+        selected = self.write_plan(PlanAndShallowDocsTest.lifecycle() +
+                                   "\n[本地](../../opaque.md) [目录](../) [页内](#x) "
+                                   "[远程](https://invalid.example/no-request) [邮件](mailto:reader@example.test)\n")
+        from lib.documents import plan_documents
+        original = plan_documents.read_file
+        with patch.object(plan_documents, "read_file", wraps=original) as reader:
+            self.assertEqual([], validate_selected_plans(self.root, [selected]))
+        self.assertEqual([selected], [call.args[0] for call in reader.call_args_list])
+        result = self.invoke(selected)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_links_reject_missing_escape_encoded_escape_and_soft_or_hardlinks(self):
+        target = self.root / "target.bin"
+        target.write_bytes(b"not a document")
+        (self.root / "link.bin").symlink_to(target)
+        os.link(target, self.root / "hard.bin")
+        (self.root / "alias").symlink_to(self.plans, target_is_directory=True)
+        for raw in ("missing.md", "../../../outside.md", "../../%2e%2e/outside.md", "/absolute.md",
+                    "file:///outside.md", "../../link.bin", "../../hard.bin", "../../target.bin",
+                    "../../alias/../target.bin", "../../target.bin?query=1", "..%5coutside.md"):
+            for label in ("[错误链接]", "![图片]"):
+                with self.subTest(link=raw, label=label):
+                    self.assert_rejected(PlanAndShallowDocsTest.lifecycle() + f"\n{label}({raw})\n", "")
+
+    def test_legacy_cli_and_default_parser_keep_unindexed_history_behavior(self):
+        legacy = self.write_plan("# 历史计划\n- Status: completed\n", "legacy.md")
+        self.assertIsNone(parse_plan(legacy.read_text(), str(legacy)))
+        old_extra = PlanAndShallowDocsTest.lifecycle() + "\n## 历史额外标题\n"
+        self.assertIsNotNone(parse_plan(old_extra, "old"))
+        (self.root / "project.yaml").write_bytes((PACK / "project.yaml").read_bytes())
+        (self.root / "docs/PROJECT.md").write_text("# 项目\n", encoding="utf-8")
+        result = self.invoke(legacy=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("PROJECT/plans baseline", result.stdout)
+        selected = self.invoke(legacy)
+        self.assertEqual(1, selected.returncode)
+        self.assertIn("主题 ID", selected.stderr)
 
 
 class PlanAndShallowDocsTest(unittest.TestCase):

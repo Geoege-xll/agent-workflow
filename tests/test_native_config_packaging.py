@@ -118,7 +118,7 @@ class StandalonePackageTest(unittest.TestCase):
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with zipfile.ZipFile(first) as package:
             names = package.namelist()
-            self.assertTrue(all(name.startswith(("native_config/", "scripts/")) or name in {"README.md", "BUILD.json", "product/command_identity.json", "product/command_identity.py", "product/__init__.py"} for name in names))
+            self.assertTrue(all(name.startswith(("native_config/", "scripts/")) or name in {"README.md", "BUILD.json", "product/command_identity.json", "product/command_identity.py", "product/release_channels.py", "product/__init__.py"} for name in names))
             self.assertFalse(any(name.startswith(("lib/", "manager/", "plugin_runtime/", "plugins/")) for name in names))
             self.assertEqual(package.read("scripts/python_runtime.sh"), (ROOT / "lib/python_runtime.sh").read_bytes())
             self.assertEqual(package.read("native_config/VERSION"), (ROOT / "native_config/VERSION").read_bytes())
@@ -276,7 +276,7 @@ class StandalonePackageTest(unittest.TestCase):
         version.write_bytes(saved_version)
         # 补齐真实必要身份闭包后，拒绝必须来自依赖审查，不能被缺 JSON 提前遮蔽。
         (source / "product").mkdir()
-        for name in ("__init__.py", "command_identity.py", "command_identity.json"):
+        for name in ("__init__.py", "command_identity.py", "command_identity.json", "release_channels.py"):
             shutil.copyfile(ROOT / "product" / name, source / "product" / name)
         payload = runpy.run_path(str(ROOT / "packaging/build_agent_config.py"))["payload"]
         for dependency in ("import manager", "from product import command_identity",
@@ -420,10 +420,17 @@ class StandalonePackageTest(unittest.TestCase):
         thin.mkdir(parents=True)
         for name in ("launcher.py", "launcher.sh", "component_store.py"):
             shutil.copyfile(ROOT / "plugins/maintenance" / name, thin / name)
+        # 薄插件必须包含真实生产依赖闭包；-I 子进程从包外启动，不借源码根
+        # 的 product 模块掩盖缺失资源，也不引入配置核心或网页。
+        product = thin.parents[1] / "product"
+        product.mkdir()
+        for name in ("__init__.py", "release_channels.py"):
+            shutil.copyfile(ROOT / "product" / name, product / name)
         with zipfile.ZipFile(archive) as package:
             version = package.read("native_config/VERSION").decode("ascii").strip()
+        from product.release_channels import version_channel
         component = {"schema_version": 1, "product": "native-agent-config", "version": version,
-                     "channel": "alpha", "cli_protocol": 1, "service_protocol": 2, "release_status": "unpublished",
+                     "channel": version_channel(version), "cli_protocol": 1, "service_protocol": 2, "release_status": "unpublished",
                      "artifact": {"name": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "url": ""}}
         descriptor = thin / "component.json"
         descriptor.write_text(json.dumps(component))

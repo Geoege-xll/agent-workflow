@@ -25,8 +25,9 @@ REPOSITORY = "Geoege-xll/agent-workflow"
 REMOTE = "https://github.com/" + REPOSITORY + ".git"
 sys.path.insert(0, str(ROOT))
 from product.command_identity import load_identity
+from product.release_channels import CHANNELS, validate_channel, version_channel
 IDENTITY = load_identity(ROOT)
-MARKETPLACE = IDENTITY["marketplaces"]["alpha"]
+MARKETPLACE = IDENTITY["marketplaces"]["stable"]
 PLUGIN = IDENTITY["plugin_name"]
 FIXTURES = ROOT / "tests/fixtures/native-install"
 VERSIONS = {"codex": "0.167.0", "claude": "2.1.311", "antigravity": "1.5.6"}
@@ -85,21 +86,25 @@ def installed_rows(host, payload):
     return payload["installed"] if host == "codex" else payload
 
 
-def plugin_row(host, payload):
+def plugin_row(host, payload, channel="stable"):
+    if channel not in CHANNELS:
+        raise ValueError("未知安装渠道")
+    marketplace = IDENTITY["marketplaces"][channel]
     rows = installed_rows(host, payload)
     matches = [row for row in rows if (row.get("name") == PLUGIN if host == "antigravity"
-               else row.get("pluginId", row.get("id")) == PLUGIN + "@" + MARKETPLACE)]
+               else row.get("pluginId", row.get("id")) == PLUGIN + "@" + marketplace)]
     if len(matches) != 1:
         raise ValueError("官方列表没有唯一发现当前插件：" + host)
     return matches[0]
 
 
-def validate_distribution(record, host, expected_revision, expected_version):
+def validate_distribution(record, host, expected_revision, expected_version, channel=None):
     """安装前先拒绝错误宿主、来源和版本，避免先安装再发现分发记录不属于本次验收。"""
-    branch = "refs/heads/plugins-" + host + "-alpha"
+    channel = version_channel(expected_version) if channel is None else validate_channel(expected_version, channel)
+    branch = "refs/heads/plugins-" + host + "-" + channel
     if (record["schema_version"] != 1 or record["managed_by"] != "agent-workflow-plugin-source-v1"
             or record["repository"] != REPOSITORY or record["host"] != host
-            or record["channel"] != "alpha" or record["ref"] != branch
+            or record["channel"] != channel or record["ref"] != branch
             or record["source_revision"] != expected_revision or record["version"] != expected_version):
         raise ValueError("Git 分发记录与本次来源/版本/宿主不一致")
     primary = "workflow/" + IDENTITY["artifact_prefix"] + "-" + host + "-" + expected_version + ".zip"
@@ -138,7 +143,7 @@ def evidence_receipt(output, evidence):
         output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
 
 
-def verified_git_metadata(root, host, distribution_commit):
+def verified_git_metadata(root, host, distribution_commit, channel="alpha"):
     """只分离真实 CI 已证实由 AGY Git 安装保留的 .git；身份未核实则仍拒绝验收。"""
     metadata = root / ".git"
     if host != "antigravity" or (not metadata.exists() and not metadata.is_symlink()):
@@ -156,7 +161,7 @@ def verified_git_metadata(root, host, distribution_commit):
     branch = command(["git", "symbolic-ref", "--short", "HEAD"], root)
     origin = command(["git", "remote", "get-url", "origin"], root)
     if (Path(git_root).resolve() != root or Path(git_dir).resolve() != metadata
-            or head != distribution_commit or branch != "plugins-antigravity-alpha"
+            or head != distribution_commit or branch != "plugins-antigravity-" + channel
             or origin not in {REMOTE, REMOTE.removesuffix(".git")}):
         raise ValueError("AGY 缓存 Git 工作树/HEAD/分支/origin 与本次官方分发身份不一致")
     names = {path.relative_to(root).as_posix() for path in entries if path.is_file()}
@@ -164,9 +169,10 @@ def verified_git_metadata(root, host, distribution_commit):
                    "branch": branch, "origin": origin}
 
 
-def verify_installed(root, record, host, expected_revision, expected_version, *, distribution_commit=None):
+def verify_installed(root, record, host, expected_revision, expected_version, *, distribution_commit=None, channel=None):
     """以分发提交的完整文件摘要核对真实安装缓存；不修补、重打包或写入缓存。"""
-    validate_distribution(record, host, expected_revision, expected_version)
+    channel = version_channel(expected_version) if channel is None else validate_channel(expected_version, channel)
+    validate_distribution(record, host, expected_revision, expected_version, channel)
     prefix = "" if host == "antigravity" else "plugins/" + IDENTITY["plugin_name"] + "/"
     files = {name[len(prefix):]: row for name, row in record["files"].items()
              if name.startswith(prefix) and name != "distribution.json"}
@@ -177,7 +183,7 @@ def verify_installed(root, record, host, expected_revision, expected_version, *,
     actual.pop("distribution.json", None)
     # 诊断 run43189367154 已证明只有 AGY 保留 .git；先核管理身份，再精确分离该目录。
     # 不删除/改写缓存，不忽略其他额外文件，原始插件载荷的所有字节和执行位继续严格核对。
-    metadata_files, metadata_evidence = verified_git_metadata(root, host, distribution_commit)
+    metadata_files, metadata_evidence = verified_git_metadata(root, host, distribution_commit, channel)
     actual = {name: path for name, path in actual.items() if name not in metadata_files}
     if set(actual) != set(files):
         raise FileClosureMismatch(host, set(files) - set(actual), set(actual) - set(files))
@@ -196,7 +202,7 @@ def verify_installed(root, record, host, expected_revision, expected_version, *,
     return detail
 
 
-def smoke(vendor, output):
+def smoke(vendor, output, channel="stable"):
     home = require_fresh_runner(os.environ)
     runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve()
     vendor = vendor.resolve(strict=True)
@@ -204,11 +210,13 @@ def smoke(vendor, output):
     if not vendor.is_relative_to(runner_temp) or not output.is_relative_to(runner_temp):
         raise ValueError("官方客户端与证据必须位于本次 runner 临时目录")
     version = (ROOT / "product/PLUGIN_VERSION").read_text().strip()
+    validate_channel(version, channel)
+    marketplace = IDENTITY["marketplaces"][channel]
     revision = os.environ["GITHUB_SHA"]
     clients = {"codex": vendor / "node_modules/.bin/codex", "claude": vendor / "node_modules/.bin/claude",
                "antigravity": install_agy(vendor)}
     evidence = {"status": "INSTALL_DISCOVERY_BYTES_VERIFIED", "verification_revision": revision,
-                "version": version, "runtime_verified": False, "model_sessions_started": 0, "hosts": {}}
+                "version": version, "channel": channel, "runtime_verified": False, "model_sessions_started": 0, "hosts": {}}
     published_revision = None
     candidate_binding = None
     with tempfile.TemporaryDirectory(prefix="awf-official-install-", dir=runner_temp) as temporary, evidence_receipt(output, evidence):
@@ -227,7 +235,7 @@ def smoke(vendor, output):
             reference = work / host
             reference.mkdir()
             command(["git", "init", "--quiet", reference], work)
-            branch = "refs/heads/plugins-" + host + "-alpha"
+            branch = "refs/heads/plugins-" + host + "-" + channel
             command(["git", "fetch", "--quiet", "--depth=1", REMOTE, branch], reference)
             commit = command(["git", "rev-parse", "FETCH_HEAD"], reference)
             record_body = command(["git", "show", commit + ":distribution.json"], reference)
@@ -242,7 +250,7 @@ def smoke(vendor, output):
                 evidence["source_revision"] = source_revision
             if source_revision != published_revision:
                 raise ValueError("三个宿主的 Git 分发来源 SHA 不一致")
-            validate_distribution(record, host, source_revision, version)
+            validate_distribution(record, host, source_revision, version, channel)
             binding = (record["source_tree_sha256"], record["candidate_sha256"], record["artifacts_sha256"])
             if candidate_binding is None:
                 candidate_binding = binding
@@ -258,21 +266,21 @@ def smoke(vendor, output):
                     raise ValueError("远程 Git 文件摘要与分发记录不一致：" + host)
             evidence["progress"]["stage"] = "official_git_installation"
             if host in {"codex", "claude"}:
-                source = REMOTE if host == "codex" else REMOTE + "#plugins-claude-alpha"
+                source = REMOTE if host == "codex" else REMOTE + "#plugins-claude-" + channel
                 arguments = [client, "plugin", "marketplace", "add", source]
                 if host == "codex":
-                    arguments.extend(["--ref", "plugins-codex-alpha"])
+                    arguments.extend(["--ref", "plugins-codex-" + channel])
                 command(arguments + ["--json"], work, as_json=True)
-                install = [client, "plugin", "add" if host == "codex" else "install", PLUGIN + "@" + MARKETPLACE]
+                install = [client, "plugin", "add" if host == "codex" else "install", PLUGIN + "@" + marketplace]
                 if host == "claude":
                     install.extend(["--scope", "user"])
                 result = command(install + ["--json"], work, as_json=True)
             else:
-                command([client, "plugin", "install", "https://github.com/" + REPOSITORY + "/tree/plugins-antigravity-alpha"], work)
+                command([client, "plugin", "install", "https://github.com/" + REPOSITORY + "/tree/plugins-antigravity-" + channel], work)
                 command([client, "plugin", "enable", PLUGIN], work)
             evidence["progress"]["stage"] = "native_list_discovery"
             after = command([client, "plugin", "list", "--json"], work, as_json=True)
-            row = plugin_row(host, after)
+            row = plugin_row(host, after, channel)
             if row.get("version") != version or not row.get("enabled"):
                 raise ValueError("官方宿主没有发现并启用预期版本：" + host)
             installed = Path(result["installedPath"] if host == "codex" else
@@ -280,7 +288,7 @@ def smoke(vendor, output):
             if not installed.is_relative_to(home):
                 raise ValueError("官方安装结果不在自然 runner HOME 中：" + host)
             evidence["progress"]["stage"] = "installed_file_closure_verification"
-            detail = verify_installed(installed, record, host, source_revision, version, distribution_commit=commit)
+            detail = verify_installed(installed, record, host, source_revision, version, distribution_commit=commit, channel=channel)
             evidence["progress"]["stage"] = "distribution_tip_recheck"
             command(["git", "fetch", "--quiet", "--depth=1", REMOTE, branch], reference)
             if command(["git", "rev-parse", "FETCH_HEAD"], reference) != commit:
@@ -293,8 +301,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vendor-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--channel", choices=CHANNELS, default="stable", help="显式安装渠道；必须匹配源码版本")
     arguments = parser.parse_args()
-    smoke(arguments.vendor_dir, arguments.output)
+    smoke(arguments.vendor_dir, arguments.output, arguments.channel)
 
 
 if __name__ == "__main__":

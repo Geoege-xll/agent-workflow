@@ -1,6 +1,6 @@
-# 安装 xy-workflow 3.0 alpha 插件
+# 安装 xy-workflow 正式插件
 
-插件唯一版本源为 `product/PLUGIN_VERSION`，独立配置工具版本源为 `native_config/VERSION`；实际发行以 Git alpha 分支和真实 Release 资产为准，独立组件固定发行与发布状态以 `plugins/maintenance/component.json` 为准，本机安装状态以客户端列表和实际安装回执为准。默认使用官方客户端从自有 Git alpha 渠道安装，无需克隆工作流源码或本地构建。此渠道不等于官方公开目录上架或稳定发行，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
+插件唯一版本源为 `product/PLUGIN_VERSION`，独立配置工具版本源为 `native_config/VERSION`；实际发行以 Git stable 分支和真实 Release 资产为准，独立组件固定发行与发布状态以 `plugins/maintenance/component.json` 为准，本机安装状态以客户端列表和实际安装回执为准。默认使用官方客户端从自有 Git stable 渠道安装，无需克隆工作流源码或本地构建。自有 Git 正式渠道不等于官方公开目录上架，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
 
 本页 `xy-workflow` 身份由 `product/command_identity.json` 唯一维护；使用下列命令时核对匹配的远程分发资产与客户端回执，
 不能仅凭源码版本或命令说明判断本机已经切换。活动任务使用原物理资源完成后再按官方客户端切换。
@@ -9,7 +9,7 @@
 
 已有对应宿主的官方客户端、Python 3.11+ 和 Bash。helper 使用包内解释器选择器发现现有 Python，不安装软件或改变 PATH。模型运行需完成宿主登录与实际权限确认；普通工作流不要求配置组件、配置 HTTP 服务或 MCP。
 
-以下命令只管理对应客户端当前安装范围，不自动替换其他用户、业务项目或旧来源。Codex/Claude 的远程市场名为 `xy-workflow-alpha`，插件名为 `xy-workflow`。三个 Git 分支分别提供对应宿主的已构建载荷，不要使用 main 源码目录充当插件来源。
+以下命令只管理对应客户端当前安装范围，不自动替换其他用户、业务项目或旧来源。Codex/Claude 的正式远程市场名为 `xy-workflow`，插件名为 `xy-workflow`。三个 Git 分支分别提供对应宿主的已构建载荷，不要使用 main 源码目录充当插件来源。
 
 ## 随包精选 Skill
 
@@ -42,13 +42,13 @@ doctor是本项目诊断，不是上游CLI命令。CLI原版固定版本与Node>
 `install-browser chromium` 和宿主审批准备，复用官方缓存、不改PATH、不清理旧版本缓存。
 资源齐全、版本输出及静态doctor均不等于真实open/snapshot/close通过。所有公开别名/namespace
 以 `product/command_identity.json` 为唯一命名权威；当前插件 `xy-workflow`、市场
-`xy-workflow-alpha`／`xy-workflow-local`，GitHub仓库地址和宿主分发分支保留。
+`xy-workflow`（stable）、`xy-workflow-alpha`（历史预发行）／`xy-workflow-local`，GitHub仓库地址和宿主分发分支保留。
 
 ## Codex CLI
 
 ```bash
-codex plugin marketplace add https://github.com/Geoege-xll/agent-workflow.git --ref plugins-codex-alpha
-codex plugin add xy-workflow@xy-workflow-alpha
+codex plugin marketplace add https://github.com/Geoege-xll/agent-workflow.git --ref plugins-codex-stable
+codex plugin add xy-workflow@xy-workflow
 codex plugin list --json
 ```
 
@@ -57,8 +57,8 @@ codex plugin list --json
 ## Claude Code
 
 ```bash
-claude plugin marketplace add 'https://github.com/Geoege-xll/agent-workflow.git#plugins-claude-alpha'
-claude plugin install xy-workflow@xy-workflow-alpha --scope user
+claude plugin marketplace add 'https://github.com/Geoege-xll/agent-workflow.git#plugins-claude-stable'
+claude plugin install xy-workflow@xy-workflow --scope user
 claude plugin list --json
 ```
 
@@ -67,7 +67,7 @@ claude plugin list --json
 ## Antigravity CLI
 
 ```bash
-agy plugin install https://github.com/Geoege-xll/agent-workflow/tree/plugins-antigravity-alpha
+agy plugin install https://github.com/Geoege-xll/agent-workflow/tree/plugins-antigravity-stable
 agy plugin enable xy-workflow
 agy plugin list --json
 ```
@@ -76,7 +76,7 @@ AGY 使用 GitHub `tree/分支` URL，不能使用 Claude 的 `#分支` 写法�
 
 ## 检查安装与来源
 
-先通过客户端官方列表确认实际 installed/enabled 状态、版本、来源及安装范围；不同客户端暴露字段不同，缺失项保持未知，不根据缓存存在补写成功。Codex/Claude 可进一步查看其官方 marketplace 列表，核对 `xy-workflow-alpha` 指向本页对应分支。
+先通过客户端官方列表确认实际 installed/enabled 状态、版本、来源及安装范围；不同客户端暴露字段不同，缺失项保持未知，不根据缓存存在补写成功。Codex/Claude 可进一步查看其官方 marketplace 列表，核对 `xy-workflow` 指向本页对应分支。
 
 需要只读资源健康检查时，从官方安装信息中取得当前实际插件物理目录，将下列 `<plugin-root>` 和 `<absolute-project>` 替换为明确路径：
 
@@ -89,21 +89,21 @@ resource 检查打包权威路径与摘要；inspect 检查明确项目及 adapt
 
 ## 更新、旧来源与卸载
 
-先收尾或交接活动任务，再更新插件；当前 alpha 没有活动任务跨缓存更新的自动资源保留协议。保留官方登录、权限和 Hook 信任流程，更新后检查实际来源、版本、启用状态并开始新会话。
+先收尾或交接活动任务，再更新插件；当前插件没有活动任务跨缓存更新的自动资源保留协议。保留官方登录、权限和 Hook 信任流程，更新后检查实际来源、版本、启用状态并开始新会话。
 
-- Codex：`codex plugin marketplace upgrade xy-workflow-alpha` 刷新 Git 市场快照。该命令的帮助只承诺刷新来源，不据此宣布已安装插件更新完成；随后检查 `codex plugin list --json`，按当前客户端提供的插件安装/更新流程处理实际版本。不要编造 `codex plugin update`。
-- Claude：先执行 `claude plugin marketplace update xy-workflow-alpha` 刷新目录，再执行 `claude plugin update xy-workflow@xy-workflow-alpha --scope user` 更新已安装插件；完成后重启会话。市场刷新与插件更新是不同操作。
+- Codex：`codex plugin marketplace upgrade xy-workflow` 刷新 Git 市场快照。该命令的帮助只承诺刷新来源，不据此宣布已安装插件更新完成；随后检查 `codex plugin list --json`，按当前客户端提供的插件安装/更新流程处理实际版本。不要编造 `codex plugin update`。
+- Claude：先执行 `claude plugin marketplace update xy-workflow` 刷新目录，再执行 `claude plugin update xy-workflow@xy-workflow --scope user` 更新已安装插件；完成后重启会话。市场刷新与插件更新是不同操作。
 - AGY：本机 1.5.6 的 `agy plugin` 帮助没有 `update` 子命令。通过官方插件管理确认来源和版本，按客户端实际提供的安装/替换流程处理相同 Git 目标；不承诺重新执行 install 会热更新活动会话。
 
-旧 `xy-workflow-local` 是开发本地来源，与远程 alpha 不是同一市场。已有 alpha.4 测试安装不会自动迁移；先在官方客户端确认旧来源与范围，停用旧候选或按其卸载流程移除，再启用所选 alpha 来源，避免两个同名插件同时生效。不要删除共享用户 Hook、改写信任记录或批量清理其他项目。
+旧 `xy-workflow-local` 是开发本地来源，与远程 stable／历史 alpha 不是同一市场。已有 alpha.4 测试安装不会自动迁移；先在官方客户端确认旧来源与范围，停用旧候选或按其卸载流程移除，再启用所选 stable 来源，避免两个同名插件同时生效。不要删除共享用户 Hook、改写信任记录或批量清理其他项目。
 
 停用与卸载使用各官方客户端的插件管理；Codex 提供 `plugin remove` 和 `plugin marketplace remove`，Claude 提供 `plugin disable/uninstall` 和 `plugin marketplace remove`，AGY 提供 `plugin disable/uninstall`。移除市场来源与卸载插件不是同一行为，按实际来源/范围确认后操作，不手工删客户端缓存当作卸载。
 
 ## 当前验收边界
 
-本轮远程 alpha 的 CI、发布、安装和发现以[远程安装记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-remote-install.md)为准，未先行声明三平台真实模型运行通过。上一 alpha.4 本机记录为：三端本地安装通过，Codex CLI 新插件启动通过；Claude 默认模型在 90 秒预算内未回应，PM 接管未验；AGY 后续模型运行待登录；Codex App GUI 未验。更早实验见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)。
+历史远程 alpha 的 CI、发布、安装和发现以[远程安装记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-remote-install.md)为准，未先行声明三平台真实模型运行通过。上一 alpha.4 本机记录为：三端本地安装通过，Codex CLI 新插件启动通过；Claude 默认模型在 90 秒预算内未回应，PM 接管未验；AGY 后续模型运行待登录；Codex App GUI 未验。更早实验见[原生验收记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/plugin-v3-native-acceptance.md)。
 
-自有 Git 分发不绕过许可证、官方公开目录审核或客户端信任。稳定渠道如将来建立会另行记录，本页仅给 alpha；源码构建与临时本地加载见[开发手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/development.md)。
+自有 Git 分发不绕过许可证、官方公开目录审核或客户端信任。正式版本及三端 stable 分支必须在实际发布后才可安装；历史 alpha 分支保留审计，不能替代当前正式入口；源码构建与临时本地加载见[开发手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/development.md)。
 
 ## 安装后的模型配置入口
 

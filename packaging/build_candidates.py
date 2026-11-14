@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""复用两个唯一构建器，汇总同一源码的七个独立 alpha 候选及精确摘要。"""
+"""复用两个唯一构建器，汇总同一源码的七个独立发行候选及精确摘要。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from product.command_identity import load_identity
+from product.release_channels import validate_channel, version_channel
 IDENTITY = load_identity(ROOT)
 
 
@@ -64,7 +65,7 @@ def validate_component_binding(descriptor, archive, version):
     component = json.loads(descriptor)
     artifact = component["artifact"]
     if (component["schema_version"] != 1 or component["product"] != "native-agent-config"
-            or component["version"] != version or component["channel"] != "alpha"
+            or component["version"] != version or component["channel"] != version_channel(version)
             or component["cli_protocol"] != 1 or component["service_protocol"] != 2
             or artifact["name"] != archive.name):
         raise ValueError("插件组件描述符与独立候选身份或协议不一致")
@@ -94,9 +95,10 @@ def build(source, output):
         raise ValueError("请使用源码树外尚不存在的候选输出目录")
     versions = {"workflow": (source / "product/PLUGIN_VERSION").read_text(encoding="ascii").strip(),
                 "native-config": (source / "native_config/VERSION").read_text(encoding="ascii").strip()}
-    if any(not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*", value)
-           for value in versions.values()):
-        raise ValueError("候选交付只接受两个版本源中的显式 alpha.N，不发布稳定版本")
+    # 两个产品独立版本化，但同一次候选的发行渠道必须一致；不能把未发布 alpha
+    # 组件与正式工作流混装后交给发布消费者决定如何解释。
+    channel = version_channel(versions["workflow"])
+    validate_channel(versions["native-config"], channel)
     before = source_state(source)
     builders = {name: digest((source / "packaging" / name).read_bytes()) for name in
                 ("build_candidates.py", "build_plugin.py", "build_agent_config.py")}
@@ -154,7 +156,7 @@ def build(source, output):
         path = output / row["path"]
         row["sha256"] = digest(path.read_bytes())
         path.with_suffix(".zip.sha256").write_text(row["sha256"] + "  " + path.name + "\n", encoding="ascii")
-    manifest = {"schema_version": 1, "channel": "alpha", "status": "BUILD_VERIFIED",
+    manifest = {"schema_version": 1, "channel": channel, "status": "BUILD_VERIFIED",
                 "runtime_verified": False, "source": before, "versions": versions,
                 "version_sources": {"workflow": "product/PLUGIN_VERSION", "native-config": "native_config/VERSION"},
                 "builders_sha256": builders, "artifacts": artifacts,
@@ -165,11 +167,11 @@ def build(source, output):
     (output / "candidate-manifest.json").write_bytes(json_bytes(manifest))
     (output / "SHA256SUMS").write_text("".join(row["sha256"] + "  " + row["path"] + "\n"
                                                for row in artifacts), encoding="ascii")
-    summary = ("# Alpha 候选\n\n" + f"源码：`{before['revision']}`；工作树有改动：`{str(before['dirty']).lower()}`。\n\n"
+    summary = ("# " + ("正式" if channel == "stable" else "Alpha") + "候选\n\n" + f"源码：`{before['revision']}`；工作树有改动：`{str(before['dirty']).lower()}`。\n\n"
                + f"源码文件摘要：`{before['tree_sha256']}`。\n\n"
                + f"工作流：`{versions['workflow']}`；独立原生配置：`{versions['native-config']}`。\n\n"
                + "状态：`BUILD_VERIFIED`，`runtime_verified=false`。官方宿主实际加载、派发、模型/推理及跨更新保留仍待验收。\n\n"
-               + "两个产品分别安装；工作流不需要配置网页、HTTP 服务或 MCP。此流程仅生成 alpha 附件，不创建 tag 或 Release。\n\n"
+               + "两个产品分别安装；工作流不需要配置网页、HTTP 服务或 MCP。此流程仅生成候选附件，不创建 tag 或 Release。\n\n"
                + "| 产物 | SHA-256 |\n| --- | --- |\n"
                + "".join(f"| `{row['path']}` | `{row['sha256']}` |\n" for row in artifacts))
     (output / "CANDIDATE.md").write_text(summary, encoding="utf-8")

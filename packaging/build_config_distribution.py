@@ -12,6 +12,8 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from product.release_channels import version_channel
 spec = importlib.util.spec_from_file_location("config_component_store", ROOT / "plugins/maintenance/component_store.py")
 store = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(store)
@@ -33,7 +35,7 @@ def assemble(artifact: Path, *, url="", downloader=None):
         if artifact.name != name:
             raise store.ComponentError("invalid_artifact_name")
         digest, _ = store.archive_payload(artifact, version)
-        result = {"schema_version": 1, "product": store.PRODUCT, "version": version, "channel": "alpha",
+        result = {"schema_version": 1, "product": store.PRODUCT, "version": version, "channel": version_channel(version),
                   "cli_protocol": 1, "service_protocol": 2, "release_status": "published" if url else "unpublished",
                   "artifact": {"name": name, "sha256": digest, "url": url}}
         if url:

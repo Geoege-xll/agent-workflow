@@ -51,14 +51,27 @@ class PluginSourcePublicationTest(unittest.TestCase):
     def refs(self):
         return self.git("for-each-ref", "--format=%(refname) %(objectname)")
 
-    def make_candidate(self, name, version="3.0.0-alpha.5", payload=b"payload\n"):
+    def make_candidate(self, name, version="3.0.0-alpha.5", payload=b"payload\n", native_version="0.1.0-alpha.2", channel="alpha",
+                       component_published=None, native_build_suffix=b"", component_url=None):
         directory = self.root / name
         directory.mkdir()
-        native_version = "0.1.0-alpha.2"
+        identity_body = (ROOT / "product/command_identity.json").read_bytes()
+        native_files = {"BUILD.json": (publisher.json_bytes({"name": "native-agent-config",
+            "version": native_version, "files": {"product/command_identity.json": publisher.digest(identity_body)}})
+            + native_build_suffix, "100644"), "product/command_identity.json": (identity_body, "100644")}
+        published = channel == "stable" if component_published is None else component_published
+        # 此 URL 仅是临时协议夹具；生产 descriptor 继续由真实下载装配器生成。
+        # 夹具先计算真实临时 ZIP 字节，让正式发布门禁核对同一组件摘要。
+        url = (f"https://github.com/{publisher.REPOSITORY}/releases/download/native-v{native_version}/"
+               f"native-agent-config-{native_version}.zip") if published else ""
+        if component_url is not None:
+            url = component_url
         descriptor = publisher.json_bytes({"schema_version": 1, "product": "native-agent-config",
-            "version": native_version, "channel": "alpha", "cli_protocol": 1, "service_protocol": 2,
-            "release_status": "unpublished", "artifact": {
-                "name": f"native-agent-config-{native_version}.zip", "sha256": "", "url": ""}})
+            "version": native_version, "channel": channel, "cli_protocol": 1, "service_protocol": 2,
+            "release_status": "published" if published else "unpublished", "artifact": {
+                "name": f"native-agent-config-{native_version}.zip",
+                "sha256": publisher.digest(zip_bytes(native_files)) if published or channel == "stable" else "",
+                "url": url}})
         rows = []
 
         def artifact(path, files, metadata):
@@ -100,11 +113,8 @@ class PluginSourcePublicationTest(unittest.TestCase):
                 local[publisher.MARKET[host]] = (publisher.json_bytes(market), "100644")
             artifact(stem + "-local-source.zip", local, {**metadata, "kind": "local-source"})
         native_name = f"native/native-agent-config-{native_version}.zip"
-        artifact(native_name, {"BUILD.json": (publisher.json_bytes({"name": "native-agent-config",
-                     "version": native_version, "files": {"product/command_identity.json": publisher.digest((ROOT / "product/command_identity.json").read_bytes())}}), "100644"),
-            "product/command_identity.json": ((ROOT / "product/command_identity.json").read_bytes(), "100644")},
-                 {"product": "native-config", "kind": "standalone", "version": native_version})
-        candidate = {"schema_version": 1, "channel": "alpha", "status": "BUILD_VERIFIED",
+        artifact(native_name, native_files, {"product": "native-config", "kind": "standalone", "version": native_version})
+        candidate = {"schema_version": 1, "channel": channel, "status": "BUILD_VERIFIED",
             "source": {"dirty": False, "revision": self.revision, "tree_sha256": "b" * 64},
             "versions": {"workflow": version, "native-config": native_version}, "artifacts": rows,
             "maintenance_component": validate_component_binding(descriptor, directory / native_name, native_version)}
@@ -155,6 +165,76 @@ class PluginSourcePublicationTest(unittest.TestCase):
                 self.assertEqual("xy-workflow-alpha", json.loads(files[publisher.MARKET[host]][0])["name"])
             else:
                 self.assertIn(".antigravity-plugin/plugin.json", files)
+
+    def test_stable_refs_keep_alpha_history_and_reject_same_version_payload_and_downgrade(self):
+        # 真实 bare 远端先保留已发布 alpha，再通过同一发布器产生独立 stable 引用。
+        self.publish(apply=True)
+        alpha_refs = self.refs()
+        stable = self.make_candidate("stable", "3.0.1", native_version="0.1.1", channel="stable")
+        result = self.publish(stable, channel="stable", apply=True)
+        self.assertEqual(6, len(self.refs().splitlines()))
+        for line in alpha_refs.splitlines():
+            self.assertIn(line, self.refs().splitlines())
+        for row in result["branches"]:
+            self.assertTrue(row["ref"].endswith("-stable"))
+            files = publisher.tree_files(self.remote, row["ref"])
+            record = json.loads(files["distribution.json"][0])
+            self.assertEqual(("stable", "3.0.1"), (record["channel"], record["version"]))
+            if row["host"] in publisher.MARKET:
+                self.assertEqual("xy-workflow", json.loads(files[publisher.MARKET[row["host"]]][0])["name"])
+        before = self.refs()
+        self.assertEqual(["unchanged"] * 3,
+                         [row["action"] for row in self.publish(stable, channel="stable", apply=True)["branches"]])
+        altered = self.make_candidate("stable-altered", "3.0.1", b"changed", "0.1.1", "stable")
+        with self.assertRaisesRegex(ValueError, "同一版本"):
+            self.publish(altered, channel="stable", apply=True)
+        older = self.make_candidate("stable-older", "3.0.0", native_version="0.1.1", channel="stable")
+        with self.assertRaisesRegex(ValueError, "向前递增"):
+            self.publish(older, channel="stable", apply=True)
+        with self.assertRaises(ValueError):
+            self.publish(stable, channel="alpha", apply=True)
+        with self.assertRaises(ValueError):
+            self.publish(stable, channel="beta", apply=True)
+        self.assertEqual(before, self.refs())
+
+    def test_workflow_upgrade_cannot_downgrade_or_rebind_same_native_version(self):
+        stable = self.make_candidate("stable", "3.0.1", native_version="0.1.1", channel="stable")
+        self.publish(stable, channel="stable", apply=True)
+        before = self.refs()
+        older = self.make_candidate("older-component", "3.0.2", native_version="0.1.0", channel="stable")
+        with self.assertRaisesRegex(ValueError, "组件版本必须向前"):
+            self.publish(older, channel="stable", apply=True)
+        # 仅改变合法 BUILD JSON 空白，让内部闭包、descriptor 与 ZIP 摘要都一致；
+        # 失败必须来自跨工作流同版组件改绑，不能只证明普通哈希损坏能被拒绝。
+        altered = self.make_candidate("rebound-component", "3.0.2", native_version="0.1.1", channel="stable",
+                                      native_build_suffix=b"\n")
+        with self.assertRaisesRegex(ValueError, "同一组件版本"):
+            self.publish(altered, channel="stable", apply=True)
+        self.assertEqual(before, self.refs())
+
+    def test_stable_unpublished_candidate_cannot_become_git_install_source(self):
+        unpublished = self.make_candidate("unpublished-stable", "3.0.1", native_version="0.1.1", channel="stable",
+                                          component_published=False)
+        with self.assertRaisesRegex(ValueError, "必须先发布并固定验证原生组件"):
+            self.publish(unpublished, channel="stable", apply=True)
+        self.assertEqual("", self.refs())
+        foreign = self.make_candidate("foreign-published", "3.0.1", native_version="0.1.1", channel="stable",
+                                      component_url="https://example.com/native-agent-config-0.1.1.zip")
+        with self.assertRaisesRegex(ValueError, "固定发行来源无效"):
+            self.publish(foreign, channel="stable", apply=True)
+        self.assertEqual("", self.refs())
+
+    def test_mixed_product_and_declared_channels_are_rejected_before_remote_mutation(self):
+        path = self.candidate / "candidate-manifest.json"
+        original = path.read_bytes()
+        for change in (lambda item: item.update(channel="stable"),
+                       lambda item: item["versions"].update(workflow="3.0.1"),
+                       lambda item: item["versions"].update(**{"native-config": "0.1.0-beta.1"})):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.change_manifest(change)
+                self.publish(apply=True)
+            self.assertEqual("", self.refs())
+            path.write_bytes(original)
 
     def test_same_version_is_idempotent_and_candidate_document_only_change_is_ignored(self):
         self.publish(apply=True)

@@ -67,6 +67,12 @@ The task pack must include standards-conformance, currently applicable built-in 
 
 1. Read current requirements, the complete task pack, non-skip controlled_document_access, and module instructions; check the project index when present, current fingerprints of applicable built-in/project sources, owned-path coverage, and rule IDs without preloading unrelated controlled documents.
 2. Inspect the real Web application and its manifests, components, tokens, routes, state, and tests.
+   Follow WORKFLOW's shared `xy-workflow/references/skill-selection.md` policy. Consider
+   `xy-web-guidance` for actual Web API, compatibility or implementation risks/gaps; HTML/CSS/client-side
+   JavaScript files alone do not require selection or queries. Established reliable project patterns
+   and pure business logic may need no supplemental guidance. Once selected, fully read its adapter/
+   canonical and follow applicable query instructions, preserving project browser compatibility,
+   approved design authority and production-test priorities. It grants no extra permissions.
 3. For `UI-Conformance`, require `design_delta: none`, read every frozen
    resolved and SHA-256-fingerprinted `design_authority_refs` entry, and stop if the target needs a new design decision. Do not edit the
    design workspace or require a visual gate. For `UI-Patch`, `UI-Page`, or `UI-Flow` with

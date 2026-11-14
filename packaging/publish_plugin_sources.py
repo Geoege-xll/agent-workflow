@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从已核验 alpha 候选发布三个官方远程安装源；默认只预览。"""
+"""从已核验发行候选发布三个官方远程安装源；默认只预览。"""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from product.command_identity import load_identity
+from product.release_channels import CHANNELS, compare_versions, validate_channel
 IDENTITY = load_identity(ROOT)
 
 HOSTS = ("codex", "claude", "antigravity")
@@ -82,7 +83,7 @@ def archive_files(body):
     return files
 
 
-def validate_local_source(plugin, local, host):
+def validate_local_source(plugin, local, host, channel="alpha"):
     """核对主包和本地源的唯一构建模式，返回保留主包执行位的官方分发投影。"""
     from build_plugin import archive_modes
 
@@ -109,13 +110,13 @@ def validate_local_source(plugin, local, host):
     if local != expected_local:
         raise ValueError("本地源与精确插件包不一致：" + host)
     if host in MARKET:
-        original["name"] = IDENTITY["marketplaces"]["alpha"]
+        original["name"] = IDENTITY["marketplaces"][channel]
         projected[market_name] = (json_bytes(original), "100644")
         return projected
     return dict(plugin)
 
 
-def load_candidate(candidate_dir, source_revision, repository):
+def load_candidate(candidate_dir, source_revision, repository, channel="alpha"):
     """完整核对七包身份、哈希、ZIP 安全及来源闭包，不读取当前源码工作树。"""
     if repository != REPOSITORY or not re.fullmatch(r"[0-9a-f]{40}", source_revision):
         raise ValueError("发布仅接受指定仓库和完整 40 位源码修订")
@@ -125,16 +126,17 @@ def load_candidate(candidate_dir, source_revision, repository):
     manifest_body = read_regular(root, "candidate-manifest.json")
     candidate = json.loads(manifest_body)
     source = candidate["source"]
-    if (candidate["schema_version"] != 1 or candidate["channel"] != "alpha"
+    if (candidate["schema_version"] != 1 or candidate["channel"] != channel
             or candidate["status"] != "BUILD_VERIFIED" or source["dirty"] is not False
             or source["revision"] != source_revision
             or not re.fullmatch(r"[a-f0-9]{64}", source["tree_sha256"])):
         raise ValueError("候选来源、干净状态或核验状态不匹配")
     versions = candidate["versions"]
-    if (set(versions) != {"workflow", "native-config"}
-            or not re.fullmatch(r"3\.0\.0-alpha\.[1-9][0-9]*", versions["workflow"])
-            or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*", versions["native-config"])):
-        raise ValueError("候选仅支持显式 alpha 版本")
+    if set(versions) != {"workflow", "native-config"}:
+        raise ValueError("候选产品版本集合无效")
+    # 两个独立版本都必须匹配显式发布渠道，不能靠候选 channel 字段冒充正式发行。
+    for version in versions.values():
+        validate_channel(version, channel)
     expected = {}
     for host in HOSTS:
         for kind, suffix in (("plugin", ""), ("local-source", "-local-source")):
@@ -190,7 +192,7 @@ def load_candidate(candidate_dir, source_revision, repository):
             raise ValueError("插件清单身份不一致")
         descriptors.add(plugin["plugins/maintenance/component.json"][0])
         local = archives[stem + "-local-source.zip"]
-        distributions[host] = validate_local_source(plugin, local, host)
+        distributions[host] = validate_local_source(plugin, local, host, channel)
     if len(descriptors) != 1:
         raise ValueError("三个插件的组件描述符不同")
     # 复用候选构建器的组件 ABI 校验，不在发布器复制独立产品的安装规则。
@@ -199,11 +201,26 @@ def load_candidate(candidate_dir, source_revision, repository):
         root / f"native/native-agent-config-{versions['native-config']}.zip", versions["native-config"])
     if binding != candidate["maintenance_component"]:
         raise ValueError("候选组件绑定记录不一致")
+    # 首轮正式 CI 可产出 unpublished 候选供独立组件发行；Git 安装源只能消费
+    # 后续已发布、下载核验并精确绑定同一原生 ZIP 的候选，避免先插件后组件。
+    # 历史 alpha 的离线候选合同保持原样，不把新正式门禁追溯到旧渠道。
+    if channel == "stable" and (binding["release_status"] != "published"
+                                or binding["artifact_matches_candidate"] is not True):
+        raise ValueError("正式插件发布前必须先发布并固定验证原生组件")
+    if channel == "stable":
+        # 下载地址的仓库／资产安全规则由组件仓唯一维护；不因 publisher 只读 ZIP
+        # 就退化成接受任意 HTTPS。这里不重新下载，也不启动配置业务或读取用户根。
+        from plugins.maintenance.component_store import ComponentError, release_url
+        descriptor = json.loads(next(iter(descriptors)))
+        try:
+            release_url(descriptor["artifact"]["url"], descriptor["artifact"]["name"])
+        except ComponentError as error:
+            raise ValueError("正式组件固定发行来源无效") from error
     for host, files in distributions.items():
         if "distribution.json" in files:
             raise ValueError("插件不能占用外层分发记录路径")
         record = {"schema_version": 1, "managed_by": OWNER, "repository": repository,
-            "host": host, "channel": "alpha", "ref": "refs/heads/plugins-" + host + "-alpha",
+            "host": host, "channel": channel, "ref": "refs/heads/plugins-" + host + "-" + channel,
             "version": versions["workflow"], "source_revision": source_revision,
             "source_tree_sha256": source["tree_sha256"], "candidate_sha256": digest(manifest_body),
             "artifacts_sha256": hashes,
@@ -257,15 +274,28 @@ def validate_owned(files, expected):
     return record
 
 
+def native_binding(record):
+    """从已冻结七包记录取唯一配置组件绑定；兼容历史记录而不猜版本或来源。"""
+    prefix = "native/native-agent-config-"
+    artifacts = record["artifacts_sha256"]
+    names = [name for name in artifacts if name.startswith(prefix) and name.endswith(".zip")]
+    if len(names) != 1:
+        raise ValueError("已有分发缺少唯一原生组件绑定")
+    name = names[0]
+    version = name[len(prefix):-4]
+    validate_channel(version, record["channel"])
+    return version, artifacts[name]
+
+
 def publish(candidate_dir, source_revision, repository, remote, channel="alpha", apply=False):
     """预检三分支后一次原子快进；不使用 force，不创建 tag、Release 或远程配置。"""
-    if channel != "alpha" or not remote or remote.startswith("-"):
-        raise ValueError("仅支持 alpha 和显式远程地址")
-    distributions = load_candidate(Path(candidate_dir), source_revision, repository)
+    if channel not in CHANNELS or not remote or remote.startswith("-"):
+        raise ValueError("仅支持正式／alpha 渠道和显式远程地址")
+    distributions = load_candidate(Path(candidate_dir), source_revision, repository, channel)
     with tempfile.TemporaryDirectory(prefix="awf-plugin-publish-") as temporary:
         work = Path(temporary)
         git(work, "init", "--quiet")
-        refs = ["refs/heads/plugins-" + host + "-alpha" for host in HOSTS]
+        refs = ["refs/heads/plugins-" + host + "-" + channel for host in HOSTS]
         advertised = git(work, "ls-remote", "--refs", remote, *refs).decode().splitlines()
         tips = {line.split()[1]: line.split()[0] for line in advertised}
         if tips:
@@ -288,9 +318,20 @@ def publish(candidate_dir, source_revision, repository, remote, channel="alpha",
                     pushes.append(parent + ":" + ref)
                     plans.append({"host": host, "ref": ref, "action": "unchanged", "commit": parent})
                     continue
-                if (not re.fullmatch(r"3\.0\.0-alpha\.[1-9][0-9]*", old["version"])
-                        or int(old["version"].rsplit(".", 1)[1]) >= int(record["version"].rsplit(".", 1)[1])):
+                # 远端旧声明同样是不可信输入；先验证所属渠道，再按统一版本顺序拒绝降级。
+                validate_channel(old["version"], channel)
+                if compare_versions(old["version"], record["version"]) >= 0:
                     raise ValueError("发布版本必须向前递增")
+                # 工作流与配置工具分别版本化：工作流前进不授权组件倒退，也不授权
+                # 将同一组件版本重绑不同 ZIP。旧记录从原始 artifact 名提取已知身份，
+                # 不向历史 schema 追加必需字段；alpha 记录仍可按其原合同验证。
+                old_native, old_digest = native_binding(old)
+                new_native, new_digest = native_binding(record)
+                native_order = compare_versions(old_native, new_native)
+                if native_order > 0:
+                    raise ValueError("原生组件版本必须向前递增或保持原包")
+                if native_order == 0 and old_digest != new_digest:
+                    raise ValueError("同一组件版本已绑定不同候选字节")
             # 使用独立临时 index 直接写对象；不 checkout 或覆盖任何本地安装树。
             git(work, "read-tree", "--empty")
             entries = []
@@ -317,7 +358,7 @@ def main():
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--remote", required=True)
-    parser.add_argument("--channel", choices=("alpha",), required=True)
+    parser.add_argument("--channel", choices=CHANNELS, required=True)
     parser.add_argument("--apply", action="store_true", help="实际原子推送；省略时仅核验和预览")
     args = parser.parse_args()
     try:

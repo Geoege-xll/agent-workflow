@@ -43,6 +43,15 @@ GROUPS = {
     # current 只验证静态结构却漏掉真实脚本。此分组不授权自动操作业务原型。
     "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
                          "prototype_workspace_runtime", "prototype_feedback", "prototype_review"),
+    # 只收指定计划入口及六个真实生命周期基线；不把同模块旧事务/UI大类带入 current。
+    "plans": ("tests.test_plan_and_shallow_docs.SelectedPlanValidationTest",) + tuple(
+        "tests.test_plan_and_shallow_docs.PlanAndShallowDocsTest." + name for name in (
+            "test_template_and_config_share_the_real_lifecycle_model",
+            "test_iteration_pause_and_cancellation_preserve_old_accepted_baseline",
+            "test_unindexed_legacy_completed_plan_is_preserved_but_cannot_be_indexed",
+            "test_completed_unaccepted_or_removed_plan_cannot_be_current_baseline",
+            "test_duplicate_topic_and_missing_baseline_proof_are_rejected",
+            "test_plan_lifecycle_reference_is_shipped_and_discoverable")),
     "packaging": modules("plugin_delivery", "native_config_packaging", "candidate_delivery",
                          "plugin_config_launcher", "config_distribution", "plugin_source_publication", "remote_install_smoke"),
     "central": modules("central_project", "runtime_store", "runtime_state", "central_runtime", "runtime_lifecycle") + (
@@ -86,7 +95,7 @@ GROUPS["legacy-ci"] = (
 # 保留现有显式调用的兼容别名；自动 PR/push 门禁只消费 current。
 GROUPS["ci"] = GROUPS["legacy-ci"]
 GROUPS["current"] = (modules("validation_runner", "candidate_delivery", "plugin_source_publication", "remote_install_smoke") + GROUPS["plugin"]
-                     + GROUPS["native-config"] + GROUPS["prototype"])
+                     + GROUPS["native-config"] + GROUPS["prototype"] + GROUPS["plans"])
 
 
 def make_parser():

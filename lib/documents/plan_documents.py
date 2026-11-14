@@ -29,6 +29,8 @@ SECTIONS = (
 FIELDS = ("主题 ID", "阶段", "模块", "任务等级", "已验收版本")
 STAGES = frozenset({"draft", "active", "paused", "completed", "cancelled", "removed"})
 LINK = re.compile(r"(?<!!)\[[^\]\n]+\]\(([^)\n]+)\)")
+# 选中计划中的图片同样携带本地路径，必须检查节点；旧索引链接识别保持原合同。
+SELECTED_LINK = re.compile(r"!?\[[^\]\n]*\]\(([^)\n]+)\)")
 EMPTY = frozenset({"", "none", "todo", "pending", "待确认", "无", "未验收"})
 
 
@@ -68,20 +70,47 @@ def evidence_value(section: str, key: str, label: str) -> str:
     return value
 
 
-def parse_plan(body: str, label: str, *, required: bool = False) -> PlanDocument | None:
+def without_fenced_code(body: str) -> str:
+    """屏蔽 Markdown 围栏示例，保留行和偏移，避免示例冒充受管字段或链接。"""
+    result = []
+    fence = ""
+    width = 0
+    for line in body.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
+        if fence:
+            closing = marker and marker[1][0] == fence and len(marker[1]) >= width and not marker[2].strip()
+            result.append(re.sub(r"[^\r\n]", " ", line))
+            if closing:
+                fence = ""
+        elif marker and not (marker[1][0] == "`" and "`" in marker[2]):
+            fence, width = marker[1][0], len(marker[1])
+            result.append(re.sub(r"[^\r\n]", " ", line))
+        else:
+            result.append(line)
+    return "".join(result)
+
+
+def parse_plan(body: str, label: str, *, required: bool = False,
+               selected: bool = False) -> PlanDocument | None:
     """只认明确的中文元信息合同；未索引旧稿不因标题或 completed 成为当前基线。
 
     Full 采用六节完整形状。Light 的无基线恢复稿可以少节；一旦 PROJECT 引用其
     已验收行为，仍须具备基线和证据两节。字段仅描述可恢复的既有事实，不授予批准。
     """
-    header = re.split(r"(?m)^## ", body, maxsplit=1)[0]
+    # 严格形状只用于显式选择的受管计划；旧入口仍保留未索引历史稿的识别合同。
+    if selected:
+        body = without_fenced_code(body)
+    header = re.split(r"(?m)^ {0,3}##(?:[ \t]|$)" if selected else r"(?m)^## ", body, maxsplit=1)[0]
     if not re.search(r"(?m)^- 主题 ID[:：]", header):
+        if selected:
+            raise ValueError(f"{label}: 显式计划缺少生命周期元信息 主题 ID")
         if required:
             raise ValueError(f"{label}: PROJECT 不能把无生命周期元信息的历史计划作为当前基线")
         return None
     values = {}
     for field in FIELDS:
-        matches = re.findall(r"(?m)^- " + re.escape(field) + r"[:：][ \t]*(.+)$", header)
+        matches = re.findall(r"(?m)^- " + re.escape(field) + r"[:：][ \t]*(.*)$" if selected else
+                             r"(?m)^- " + re.escape(field) + r"[:：][ \t]*(.+)$", header)
         if len(matches) != 1:
             raise ValueError(f"{label}: 须有唯一的元信息 {field}")
         values[field] = scalar(matches[0])
@@ -93,8 +122,11 @@ def parse_plan(body: str, label: str, *, required: bool = False) -> PlanDocument
         raise ValueError(f"{label}: 无效的阶段或任务等级")
     if not values["模块"] or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}|none", values["已验收版本"]):
         raise ValueError(f"{label}: 模块不能为空，已验收版本须为明确标识或 none")
-    headings = list(re.finditer(r"(?m)^## (" + "|".join(map(re.escape, SECTIONS)) + r")[ \t]*$", body))
+    headings = list(re.finditer(r"(?m)^ {0,3}##(?:[ \t]+(.*?)[ \t]*|[ \t]*)$" if selected else
+                               r"(?m)^## (" + "|".join(map(re.escape, SECTIONS)) + r")[ \t]*$", body))
     names = [match[1] for match in headings]
+    if selected and any(name not in SECTIONS for name in names):
+        raise ValueError(f"{label}: 额外 H2 标题须改用 H3；只允许六节生命周期标题")
     if len(names) != len(set(names)) or names != [name for name in SECTIONS if name in names]:
         raise ValueError(f"{label}: 六节生命周期标题不得重复或乱序")
     sections = {
@@ -113,7 +145,17 @@ def parse_plan(body: str, label: str, *, required: bool = False) -> PlanDocument
                         values["已验收版本"], sections, approval, evidence)
 
 
-def local_target(root: Path, source: Path, raw: str) -> Path | None:
+def inspect_local_target(target: Path) -> None:
+    """只检查链接节点与存在性，不打开目标正文；目录可链接，特殊节点与软硬链不可。"""
+    for parent in target.parents:
+        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+            raise ValueError(f"文档路径包含不安全父目录：{parent}")
+    info = target.lstat()
+    if not (stat.S_ISDIR(info.st_mode) or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)):
+        raise ValueError(f"文档目标须为真实目录或单链接普通文件：{target}")
+
+
+def local_target(root: Path, source: Path, raw: str, *, inspect_only: bool = False) -> Path | None:
     """按项目根解析普通文件链接，拒绝歧义、外逃和链接祖先；不跟随系统外资料。"""
     split = urlsplit(raw)
     if ((split.scheme in {"https", "http"} and split.netloc)
@@ -131,12 +173,16 @@ def local_target(root: Path, source: Path, raw: str) -> Path | None:
         if part == "..":
             if not parts:
                 raise ValueError(f"文档链接越出项目：{raw!r}")
+            if inspect_only:
+                inspect_local_target(root.joinpath(*parts))
             parts.pop()
         elif part not in {"", "."}:
             parts.append(part)
     target = root.joinpath(*parts)
-    # 共用安全读取同时拒绝符号链接祖先与多硬链接文件；目录链接不充当基线。
-    if target.suffix == ".md":
+    # 显式计划只对目标做安全元数据检查，不能因链接而扩展正文读取范围；旧入口不变。
+    if inspect_only:
+        inspect_local_target(target)
+    elif target.suffix == ".md":
         read_file(target)
     else:
         current = root
@@ -145,6 +191,47 @@ def local_target(root: Path, source: Path, raw: str) -> Path | None:
             if current.is_symlink():
                 raise ValueError(f"文档链接包含符号链接：{raw!r}")
     return target
+
+
+def validate_selected_plans(root: Path, plans: list[Path]) -> list[str]:
+    """独立校验指定计划，不需要配置/PROJECT，不枚举目录，不修改任何受验文件。"""
+    errors: list[str] = []
+    root = root.absolute()
+    try:
+        inspect_local_target(root)
+        if not root.is_dir():
+            raise ValueError(f"项目根须为真实目录：{root}")
+        root = root.resolve()
+    except (OSError, ValueError) as exc:
+        return [str(exc)]
+    for selected_path in plans:
+        path = selected_path if selected_path.is_absolute() else root / selected_path
+        try:
+            # 不先 resolve：它会吞掉软链边界。逐段禁止越根，且检查折叠前的链接祖先。
+            if not path.is_relative_to(root):
+                raise ValueError("计划路径须位于项目根内")
+            parts: list[str] = []
+            for part in path.relative_to(root).parts:
+                if part == "..":
+                    if not parts:
+                        raise ValueError("计划路径越出项目根")
+                    inspect_local_target(root.joinpath(*parts))
+                    parts.pop()
+                elif part != ".":
+                    parts.append(part)
+            path = root.joinpath(*parts)
+            if path.suffix != ".md":
+                raise ValueError("计划须为 Markdown .md 文件")
+            data = read_file(path)
+            if data is None:
+                raise ValueError("计划文件不存在")
+            body = data.decode("utf-8")
+            parse_plan(body, str(path), required=True, selected=True)
+            for raw in SELECTED_LINK.findall(without_fenced_code(body)):
+                local_target(root, path, raw, inspect_only=True)
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors.append(f"{path}: {exc}")
+    return errors
 
 
 def collect_plans(plans_root: Path) -> dict[Path, str]:

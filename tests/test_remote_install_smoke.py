@@ -237,15 +237,48 @@ class RemoteInstallSmokeContractTest(unittest.TestCase):
             self.assertNotIn("progress", receipt)
             self.assertNotIn("failure", receipt)
 
+    def test_stable_distribution_and_git_metadata_require_exact_channel(self):
+        # 使用同一真实 AGY Git 夹具转换正式版本／分支，既保留历史 alpha 用例，
+        # 又验证默认源码版本推导和显式 stable 不会放宽来源、载荷或 Git 身份检查。
+        with tempfile.TemporaryDirectory(prefix="native-smoke-stable-") as temporary:
+            root = Path(temporary).resolve()
+            record, revision, _, _ = self.create_agy_git_fixture(root)
+            version = "3.0.1"
+            (root / "sources.json").write_text(json.dumps({"host": "antigravity", "plugin_version": version}))
+            SMOKE.command(["git", "branch", "-m", "plugins-antigravity-stable"], root)
+            SMOKE.command(["git", "add", "sources.json"], root)
+            SMOKE.command(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                           "-c", "user.name=Smoke fixture", "-c", "user.email=smoke@example.invalid",
+                           "commit", "--quiet", "-m", "Stable fixture only"], root)
+            commit = SMOKE.command(["git", "rev-parse", "HEAD"], root)
+            record.update(version=version, channel="stable", ref="refs/heads/plugins-antigravity-stable")
+            record["files"]["sources.json"]["sha256"] = hashlib.sha256((root / "sources.json").read_bytes()).hexdigest()
+            del record["artifacts_sha256"]["workflow/xy-workflow-antigravity-3.0.0-alpha.5.zip"]
+            record["artifacts_sha256"]["workflow/xy-workflow-antigravity-3.0.1.zip"] = "e" * 64
+            report = SMOKE.verify_installed(root, record, "antigravity", revision, version,
+                                            distribution_commit=commit, channel="stable")
+            self.assertEqual("plugins-antigravity-stable", report["verified_git_metadata"]["branch"])
+            SMOKE.validate_distribution(record, "antigravity", revision, version)
+            for channel in ("alpha", "beta"):
+                with self.subTest(channel=channel), self.assertRaises(ValueError):
+                    SMOKE.validate_distribution(record, "antigravity", revision, version, channel)
+            with self.assertRaises(ValueError):
+                SMOKE.verified_git_metadata(root, "antigravity", commit, "alpha")
+            with self.assertRaises(ValueError):
+                SMOKE.plugin_row("codex", {"installed": []}, "local")
+
     def test_native_list_discovery_requires_unique_plugin_identity(self):
-        for host in ("codex", "claude", "antigravity"):
-            row = {"pluginId": "xy-workflow@xy-workflow-alpha"} if host == "codex" else \
-                  {"id": "xy-workflow@xy-workflow-alpha"} if host == "claude" else {"name": "xy-workflow"}
-            payload = {"installed": [row]} if host == "codex" else [row]
-            self.assertEqual(row, SMOKE.plugin_row(host, payload))
-            for rows in ([], [row, row]):
-                with self.subTest(host=host, rows=rows), self.assertRaises(ValueError):
-                    SMOKE.plugin_row(host, {"installed": rows} if host == "codex" else rows)
+        for channel, marketplace in (("stable", "xy-workflow"), ("alpha", "xy-workflow-alpha")):
+            for host in ("codex", "claude", "antigravity"):
+                row = {"pluginId": "xy-workflow@" + marketplace} if host == "codex" else \
+                      {"id": "xy-workflow@" + marketplace} if host == "claude" else {"name": "xy-workflow"}
+                payload = {"installed": [row]} if host == "codex" else [row]
+                self.assertEqual(row, SMOKE.plugin_row(host, payload, channel))
+                if channel == "stable":
+                    self.assertEqual(row, SMOKE.plugin_row(host, payload), "默认仅发现正式市场")
+                for rows in ([], [row, row]):
+                    with self.subTest(host=host, channel=channel, rows=rows), self.assertRaises(ValueError):
+                        SMOKE.plugin_row(host, {"installed": rows} if host == "codex" else rows, channel)
 
 
 if __name__ == "__main__":

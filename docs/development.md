@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生 Agent 配置工具。当前源码候选采用 `xy-workflow` 命名，插件版本来自 `product/PLUGIN_VERSION`（`3.0.0-alpha.8`），独立工具版本来自 `native_config/VERSION`（`0.1.0-alpha.5`）；两者分别构建和交付。精选依赖／命名、离线评审工具及第四版正式配置工作台均已通过各自唯一独立 QA，尚未发布或更新本机，组件 descriptor 仍为 unpublished；实际发行与客户端版本分别核对。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+当前产品是官方工作流插件与独立原生 Agent 配置工具。本轮正式发行候选为 `xy-workflow 3.0.1` 与 `Native Agent Config 0.1.1`，版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`。计划文档规范已完成独立 QA；角色技能与正式发行合同正在集成验收。当前本机仍为工作流 alpha.9／组件 alpha.5；发布、下载校验和本机升级结果分别记录，不由源版本推断。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
 ## 权威与职责
 
@@ -8,7 +8,7 @@
 | --- | --- |
 | `product/WORKFLOW.md` | 工作流唯一产品权威：Light/Full、确认、调度、所有权、QA 与收口 |
 | `roles/xy-*.md` | 角色职责、技术边界与权限 |
-| `platforms/shared/skills/` | 八个内部核心 Skill 共用源及按需 references |
+| `platforms/shared/skills/` | 内部公共 Skill、条件适配与按需 references |
 | `product/command_identity.json`、`product/command_identity.py` | 公开命名的唯一数据定义及标准库校验；两个独立产品按原字节交付 |
 | `third_party/selected-skills.lock.json`、`third_party/selected-skills/` | 精选上游固定来源、完整文件与许可清单及原版资源；不混入本地流程修改 |
 | `lib/skills/selected_skills.py` | 精选资源完整性、安全读取和候选归档校验的公共实现 |
@@ -23,7 +23,7 @@
 | `packaging/build_agent_config.py` | 独立配置组件 ZIP 与依赖闭包核验 |
 | `packaging/build_config_distribution.py` | 根据真实资产下载与校验生成组件发行描述 |
 | `packaging/build_candidates.py` | 两个独立构建器的候选编排、七包与摘要 |
-| `packaging/publish_plugin_sources.py` | 校验已构建候选并投影三个 alpha Git 分发分支，不另建插件构建链 |
+| `packaging/publish_plugin_sources.py` | 校验已构建候选并投影所选 stable／alpha 的三宿主 Git 分支，不另建插件构建链 |
 | `.github/workflows/publish-plugins.yml` | 仅 main 手动触发，固定来源 SHA 并发布同 SHA 成功 CI 的候选 |
 | `tests/`、`scripts/test_workflow.sh` | 当前产品行为、合同、原型与候选交付验证 |
 
@@ -46,7 +46,7 @@ bash lib/python_runtime.sh -B -X utf8 packaging/build_candidates.py \
   --output-dir /absolute/another-new-output-directory
 ```
 
-插件 ZIP、完整 local-source ZIP 与本地市场目录用途不同；构建本身不安装到用户客户端。Codex/Claude 本地市场名继续为 `xy-workflow-local`，不能当作远程 `xy-workflow-alpha` 的自动迁移入口。候选编排核验两产品版本、同一修订与源码摘要、包种类和包摘要，拒绝混包、源码漂移及覆盖旧输出。
+插件 ZIP、完整 local-source ZIP 与本地市场目录用途不同；构建本身不安装到用户客户端。Codex/Claude 开发本地市场名为 `xy-workflow-local`，正式远程市场为 `xy-workflow`，历史 alpha 市场为 `xy-workflow-alpha`；来源变更通过官方客户端明确执行，不能当作自动迁移。候选编排核验两产品版本、同一修订与源码摘要、包种类和包摘要，拒绝混包、源码漂移及覆盖旧输出。
 
 开发候选可按实际宿主本地加载：
 
@@ -60,13 +60,13 @@ agy plugin install /absolute/new-output-directory/local/antigravity/xy-workflow
 
 这些官方命令在执行时会改变对应客户端状态，构建本身不安装。保留来源目录，不将临时测试安装误报为用户全局迁移。Codex Hook 仍须官方审阅与信任；本地和远程同名候选避免同时启用。
 
-## alpha 分发维护
+## 发行分发维护
 
 唯一构建器继续生成三宿主 plugin/local-source 六包及独立配置一包。手动发布工作流只允许 main，固定触发时的 `github.sha`，从成功的 `release.yml` push/main 运行中读取同 SHA 的唯一候选 artifact；不是再从发布分支另行构建。
 
-发布器校验候选来源、摘要、版本与干净输入，向固定仓库 `Geoege-xll/agent-workflow` 的 `plugins-codex-alpha`、`plugins-claude-alpha`、`plugins-antigravity-alpha` 投影对应宿主完整来源。Codex/Claude 仅将分发市场名投影为 `xy-workflow-alpha`，开发本地市场仍为 `xy-workflow-local`。拒绝未知分支和同版不同载荷；相同输入重发幂等，三个分支通过普通 Git atomic push 一并发布，不 force 覆盖未知历史。
+发布器校验候选来源、摘要、版本与干净输入，向固定仓库 `Geoege-xll/agent-workflow` 的 所选渠道的 `plugins-codex-*`、`plugins-claude-*`、`plugins-antigravity-*` 投影对应宿主完整来源。正式渠道市场名为 `xy-workflow`；历史 alpha 市场为 `xy-workflow-alpha`，开发本地市场为 `xy-workflow-local`，均取自唯一命令身份声明。拒绝未知分支和同版不同载荷；相同输入重发幂等，三个分支通过普通 Git atomic push 一并发布，不 force 覆盖未知历史。
 
-CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。alpha-only 不承诺 stable 渠道，也不代表许可证或官方公开目录审查完成。实际分支与安装发现应在发布后分别核对，并与源码 SHA、artifact 和载荷摘要对应；设计与验收见[远程安装计划](plans/plugin-remote-install.md)。
+CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。正式 Git 分发与官方公开目录审查分别判断，渠道名不授予额外权限。实际分支与安装发现应在发布后分别核对，并与源码 SHA、artifact 和载荷摘要对应；设计与验收见[远程安装计划](plans/plugin-remote-install.md)。
 
 独立工具的源码命令、HTTP 生命周期、包结构和恢复资料边界见[原生配置说明](agent-configuration.md)。组件发行描述只登记实际发布且下载校验过的资产，不猜测 URL，不把本地构建成功写成公开稳定发行。
 
@@ -79,6 +79,14 @@ CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。
 反馈入口复用 `lib/documents` 与 `templates/prototype` 的现有白名单打包，不增加构建链。`prototype_review.py` 负责封闭 schema 2、明确依赖快照、工具摘要和有界迁移；`prototype_feedback.py` 负责反馈项及项目当前源校验，CLI 只路由。三宿主包中的 `source_pack.py resource templates/prototype/index.html` 解析真实物理模板；`helper --project <project> lib/documents/prototype_feedback_cli.py prepare --root <project> --adapter <selected-adapter> --plan <project-relative-Markdown> --request-id <id>` 返回私有不可变快照的 `review_url`，`validate --root <project> --adapter <selected-adapter> --input <explicit-feedback-file>` 只读复核当前源和原包后输出 `changes`。工具代码随插件，快照独立于插件缓存保留；业务源不注入桥。接口和边界见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)，不把 JSON 输入当需求或批准。
 
 ## 验证与证据
+
+指定计划可独立做只读机械校验，无需 `PROJECT.md` 或项目配置；路径相对实际项目根，也可使用根内绝对路径：
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/validate_project_docs.py --root /path/to/project --plan docs/plans/topic.md --plan docs/plans/another.md
+```
+
+该模式只读取显式选中的计划，检查五项元信息、Full 六节的标题与顺序，以及本地链接的安全路径和存在性；代码围栏示例不参与合同识别，链接目标不读取正文，远程链接不请求。Light 无基线计划仍可简化。校验不会扫描未选计划、创建配置或修改文档。通过仅代表机械结构成立，内容是否去重、前后一致、能回答读者问题，仍由 PM 和适用的独立 QA 判断；文档、勾选与校验成功不能代替用户批准或验收。原两位置参数入口保留 PROJECT 基线与规范校验及历史计划识别行为。
 
 当前门禁入口为：
 
@@ -93,7 +101,7 @@ bash scripts/test_workflow.sh current
 
 离线包清单、来源 SHA、静态配置和安装发现只证明各自层次。默认 PM、fresh/handoff_only、新 Agent 模型与推理生效、持续接单、同 ID 追加和独立 QA 收口需要对应真实宿主事件。包内 `runtime_verified:false` 不因构建成功自动改为 true。
 
-历史工作流插件 alpha.4 的本机精确安装结论为：Codex CLI 实际启动通过；Claude 发现通过、默认模型 90 秒无回应，PM 接管未验；AGY 安装通过待登录；App GUI 未验。历史插件 alpha.5 的远程发布和安装发现单独记录，这些版本号不等同当前独立组件 `0.1.0-alpha.5` 候选，也不代表本轮新命名已发布。以前候选的单项原生证据在[验收记录](plans/plugin-v3-native-acceptance.md)中按历史范围保留。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
+历史工作流插件 alpha.4 的本机精确安装结论为：Codex CLI 实际启动通过；Claude 发现通过、默认模型 90 秒无回应，PM 接管未验；AGY 安装通过待登录；App GUI 未验。历史插件 alpha.5 的远程发布和安装发现单独记录，这些插件序号不等同独立配置组件的同名 alpha 序号，也不证明当前正式候选已发布或实际运行通过。以前候选的单项原生证据在[验收记录](plans/plugin-v3-native-acceptance.md)中按历史范围保留。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
 
 ## 交付与文档维护
 
@@ -101,4 +109,4 @@ bash scripts/test_workflow.sh current
 
 旧渠道与旧计划执行记录可从 Git 追溯。当前导航不保留退役 TUI、中央运行时或旧同步说明；有效的确认、PM 调度、原型、QA、交付、主题文档与 notes 归属要求已归入使用手册和文档指南，执行权威仍由产品与 Skill 源维护。
 
-命令身份统一由 `product/command_identity.json` 管理，加载器严格拒绝未知字段、修改身份、重复键或不安全来源；两个独立产品原样投影并记录摘要。配置业务不导入工作流服务，构建器只负责封闭标准库载荷与同源投影。alpha.5 独立配置组件当前为 unpublished 候选，真实发布资产并核验下载后才可更新插件发布绑定。
+命令身份统一由 `product/command_identity.json` 管理，加载器严格拒绝未知字段、修改身份、重复键或不安全来源；两个独立产品原样投影并记录摘要。配置业务不导入工作流服务，构建器只负责封闭标准库载荷与同源投影。组件状态以真实 `plugins/maintenance/component.json` 为准；正式候选先从实际独立 ZIP 生成空 URL 的 unpublished 描述，经成功 CI、真实发布与下载核验后才更新为 published。
