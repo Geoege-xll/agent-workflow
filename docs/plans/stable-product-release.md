@@ -1,14 +1,14 @@
 # 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`active`
+- 阶段：`completed`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
-- 已验收版本：`3.0.3`
+- 已验收版本：`3.0.4`
 
 ## 目标与范围
 
-本轮在具体file HTML完整交付入口整改通过唯一独立QA后，发布xy-workflow `3.0.4`并升级本机三端插件，再用正式入口处理mt-shop交付目录。Native Agent Config保持已发布 `0.1.3`，不修改descriptor或重复发布。当前实际正式基线仍为3.0.3／0.1.3，不能把候选或源码PASS写成发行／安装完成；功能依据和当前证据见[评审主题](workflow-document-lifecycle.md)。
+本轮已在具体file HTML完整交付入口整改通过唯一独立QA后，发布xy-workflow `3.0.4`、升级本机三端插件，并用正式入口处理mt-shop交付目录。Native Agent Config保持已发布 `0.1.3`，不修改descriptor或重复发布。当前实际正式基线为3.0.4／0.1.3；功能依据和证据见[评审主题](workflow-document-lifecycle.md)，不把安装或服务就绪当作实际模型采纳或业务视觉批准。
 
 上一轮3.0.3／0.1.3已完成配置页连接与指定布局、双网页／唯一原稿评审、feedback4精简及live5升级；3.0.2／0.1.2作为历史保留，功能分别归模型偏好和原型评审主题，旧证据保持。
 
@@ -31,7 +31,15 @@
 
 ## 当前进展与恢复入口
 
-3.0.4源码功能已由唯一Reviewer验收，原F1 FAIL及修复后完整Pack绑定PASS均保留，PM实际validate有效。下一步是本轮源码提交／成功双系统CI候选、三stable与3.0.4正式发行、本机官方更新及mt-shop受管入口；这些操作尚未完成，不重复未变的0.1.3发行或功能审查。
+3.0.4源码功能已由唯一Reviewer验收，原F1 FAIL及修复后完整Pack绑定PASS均保留，PM实际validate有效。最终生产来源为`484760aab0fc3010dbce8e7b18bc7defeca62baf`，源码QA后仅作两行长期文案收口。[正式CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43852641432)Ubuntu／macOS各681项OK，含4项既有跳过；唯一artifact `14221082620`外摘要为`bf9e8df70d4b0e6e7650da94917be357d45acb5322201e6667b60e7b091239d1`，17文件／七包及sidecar核验通过。Native仍是原0.1.3的`368faac571dfa438a25c103ec2b1ab27b1483ee7692eaa982d248c5647618c26`。
+
+[3.0.4 Release](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.4)已发布，八资产服务端摘要与同一CI匹配，标签指向最终来源。Actions发布运行`43856230433`持续显示排队，取消响应却称已结束，未拿该状态冒充发布成功。PM复用仓库现有发布器、同一已核验CI附件和原版本／摘要／原子约束，在本机执行普通atomic push成功；临时Git工作区限本请求目录，未本地重建或force。三个实际远端提交为Codex `e5198f8ca957cb476dd4bf6e1b621e1dd262b620`、Claude `b1aadd7ccfe02322d16f9ec94cd6aa46913daf3d`、AGY `4510e94ecba708f34fab374c31c9bb10fc0ceaa9`，`git ls-remote`及不可变分发记录与CI完整比较均通过。过期本机watch进程已停止；同输入幂等，不扩大为Actions运行成功。
+
+本机官方客户端已更新Codex／Claude／AGY到3.0.4，2325／2332／2330个载荷文件字节和执行位匹配最终CI；AGY额外仅distribution.json与Git控制资料，其他插件不变。模型偏好三平台摘要一致；Claude当前源码项目停用、用户级安装范围保留。配置组件0.1.3未重复prepare、doctor或发行，不把上一轮相关证据写成新执行。mt-shop55页入口已准备、原文除entry外不变、业务依赖保持，纯导航index保全原件后清理，当前三页评审服务ready。
+
+开发手册同流程文档delta和本轮实际交付事实已由原Reviewer验收，最终Pack SHA `25cde05b131450a5e244e8f1dcc94e46c3a1a410379646cbaeaf8bc80e8bfc8c`、交接SHA `0d6bd2b376b220c488c78b83cbc04e83e35d6b15137cf6eb82b99ef4139e4317`，PM实际validate有效；后续普通接受／归档事实投影不重启功能QA。Codex App共享缓存已升级，GUI新会话、指定模型采纳和完整读屏仍按各自实际证据判断。实际业务原型未自动化，Windows暂停。
+
+本轮私有证据归`dist/evidence/stable-product-release/stable-304-013-delivery-evidence.zip`，594文件加索引，SHA `a034ae66b4ac9dd25135347f6729116af1b7f5fcc2f3a44cf4183f0e45c0b7d2`；完整原失败／成功日志、源码diff、机器交接、CI／Release／分发／安装及实际项目旧导航原件均保留。6994项可恢复的正式容器或已展开包按索引保留摘要与恢复来源，不重复存二进制；原未发布first三包与F1代表包保留。归档CRC与逐项摘要已复核。唯一请求临时目录按元数据快照绑定精确回收，`cleanup-304-*.json`保留实际回执；正式mt-shop服务清理后仍ready。无本轮待发布、待安装或待迁移事项，旧归档和用户资料保持。
 
 以下为上一轮3.0.3／0.1.3已完成的真实发行事实，不作为本轮3.0.4的完成证据。
 

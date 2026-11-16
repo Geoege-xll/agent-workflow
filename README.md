@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-**当前源码为 xy-workflow 3.0.4 未发布候选**，正在整改具体 file HTML 完整交付入口；尚未发布、分发或安装 3.0.4，Native Agent Config 保持 `0.1.3` 及原 published descriptor，不新增 Native 发行或修改模型功能。此前 **[xy-workflow 3.0.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.3)** 与独立配置工具 **[Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3)** 均已正式发布，三个 stable Git 来源已更新。本机 Codex／Claude／AGY 插件已升级到 `3.0.3`、组件升级到 `0.1.3`，实际载荷与最终 CI 字节及执行位一致，模型偏好和原有项目启停／安装范围保持；不表示全部项目启用。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
+**当前正式版本为 [xy-workflow 3.0.4](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.4)**，提供具体 HTML 文件直接进入完整交付界面及同页独立评审。三个 stable Git 来源和本机 Codex／Claude／AGY 已更新，安装载荷字节及执行位与成功最终 CI 一致。独立配置工具保持已发布的 **[Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3)**，模型偏好摘要不变；Claude 当前源码项目的停用状态与用户级安装范围保留，不表示全部项目启用。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
 
 ## 工作流保持
 
@@ -81,25 +81,27 @@ Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付
 
 3.0.3 提供 feedback 4 精简交接：复制／导出仅携带短 `review` 引用、必要标记和用户整改，完整 context 3 保留在本机真实快照中；缺包或来源变化明确拒绝。PM 只把复核为 `current` 的精简结果和当前完整任务包交原 UI Agent，反馈仍不构成需求或视觉批准。旧 feedback 2／3 与各自已生成评审包继续严格只读消费；当前新交付使用下述 live 5，历史 prepare／feedback 4 保持原合同。工作流 3.0.3 与组件 0.1.3 均已正式发布，本机也已升级；历史评审包仍保持各自固定工具和严格读取合同。调用细节见[反馈消费合同](platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
-3.0.4 候选修正完整交付入口：Agent／PM 交付前先用可信 `prototype_feedback_cli.py prepare-delivery --root --adapter --pages` 幂等准备受管入口，再用 `open` 显式登记项目、同一 adapter、需求、request-id 与具体页并启动受限评审服务。open 缺准备返回 `preparation_required`，不暗改业务 HTML。正式 `delivery_url` 是当前具体 HTML 的 file URI，`delivery_urls` 列出各页；file 入口提供完整缩放／移动／复位画布及默认收起目录。未准备的裸模板不能作为完整交付。
+3.0.4 修正完整交付入口：Agent／PM 交付前先用可信 `prototype_feedback_cli.py prepare-delivery --root --adapter --pages` 幂等准备受管入口，再用 `open` 显式登记项目、同一 adapter、需求、request-id 与具体页并启动受限评审服务。open 缺准备返回 `preparation_required`，不暗改业务 HTML。正式 `delivery_url` 是当前具体 HTML 的 file URI，`delivery_urls` 列出各页；file 入口提供完整缩放／移动／复位画布及默认收起目录。未准备的裸模板不能作为完整交付。
 
 “进入评审”只用当前页无秘密 binding，以 noopener 新标签导航到同页独立 HTTP 引导；file 壳不创建控制连接、不获取 token。公开 binding 只代表最后登记入口，不证明服务当前 ready；stop 后 file 仍可看稿，需要 Agent 显式重开恢复评审，不新增探测或后台连接。评审进入即批注，无目录、持久模式切换或开发说明；原稿只在独立 file 设计 iframe 执行业务一次，HTTP 评审仍隔离为 allow-scripts。共用相机保留真实 stage/frame 和平台尺寸，不统一为 1120×860。原稿变化保护、CAS 草稿、boot／feedback 5 和历史 feedback 2／3／4 合同保留。
 
 项目只保留具体页、业务资产、固定相对 entry 标签、受管 `.xy-prototype-entry` 链接及精确忽略项，不生成导航 index，不复制业务 HTML 或完整工具。唯一 delivery.html 模板投影到中央经典 shell；通用同 payload 工具只缓存一份。目录按项目登记元数据合并，最多256页；单次open仍只绑定本次已批准需求的最多16页。不同页可绑定不同请求，不扫描未登记页面。未准备／失效显示准确恢复说明，由交付方重跑相同显式 prepare-delivery／open，不猜端口、不冷启动、不虚称服务 ready。具体命令及安全边界见[使用说明](docs/usage.md)和[反馈消费合同](platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
-3.0.3 的历史 QA、正式发行、stable 分发和本机升级记录保留；这些证据不证明 3.0.4 新行为已经通过 QA，也不证明指定模型实际运行。3.0.4 当前仅为源码候选，按本轮真实构建与唯一独立 QA 结果评估。
+3.0.4 已完成本轮唯一独立 QA、真实生产工具浏览器验证、双系统 CI、正式发行及本机升级；原失败及同 Reviewer 返工记录保留。mt-shop 的55份具体原稿已接入文件交付工具，除受管入口标签外原文及业务依赖保持，旧纯导航页保全原件后移除，当前3页评审服务就绪。历史版本证据继续保留，安装与服务就绪不代表指定模型实际运行或业务原型已获视觉批准。
 
 ## 当前验证范围
 
 | 范围 | 已有证据与边界 |
 | --- | --- |
-| 3.0.3／0.1.3 当前正式发行 | 配置连接恢复、指定布局与 live 5 双网页已分别完成独立功能 QA；[最终 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43824452436)两系统各 666 项 OK、4 项既有跳过，candidate 成功。组件先正式发布并真实下载核验；工作流八个 Release 资产摘要逐项匹配同一最终 CI |
+| 3.0.4／0.1.3 当前正式发行 | 文件入口与平台画布通过独立 QA；[最终 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43852641432)两系统各681项 OK，含4项既有跳过。3.0.4八个Release资产摘要匹配同一CI，Native与原0.1.3同字节 |
+| 3.0.4 远程分发 | 复用现有发布器从同一成功CI附件普通atomic push三个stable分支；来源为`484760a`，远端提交及完整分发记录已核对，见[发行主题](docs/plans/stable-product-release.md) |
+| 3.0.3／0.1.3 历史正式发行 | 配置连接恢复、指定布局与 live 5 双网页已分别完成独立功能 QA；[最终 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43824452436)两系统各 666 项 OK、4 项既有跳过，candidate 成功。组件先正式发布并真实下载核验；工作流八个 Release 资产摘要逐项匹配同一最终 CI |
 | 3.0.3 远程分发 | [stable 发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43825922146)三个分支从同一成功 CI 附件原子发布，来源为 `f65c290` |
 | [3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2)／[0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 历史正式发行 | [最终 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43603486736)两系统各 633 项、4 项既有跳过，候选成功；两个产品均已正式发布 |
 | 3.0.2 远程分发 | [stable 发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43605162892)三分支成功，Release 八附件摘要匹配同一最终 CI 产物 |
-| 本机升级 | Codex／Claude／AGY 均已升级为 3.0.3；2320／2327／2325 个载荷文件字节及执行位匹配最终 CI，AGY 额外文件仅为 distribution.json。原有项目启停／安装范围及其他 AGY 插件保持；Claude 当前源码项目仍为停用 |
+| 本机升级 | Codex／Claude／AGY 均已升级为3.0.4；2325／2332／2330个载荷文件字节及执行位匹配最终CI，AGY额外文件仅为distribution.json。模型偏好摘要及其他AGY插件保持；Claude当前源码项目仍为停用，安装范围仍为用户级 |
 | 3.0.2 历史安装 | 当时 2310／2317／2315 个插件文件字节及执行位匹配对应 CI，原有项目启停／范围保留 |
-| 独立配置组件 | 0.1.3 已实际准备并以 no-browser 打开；三端 doctor 均为 service ready／integrity verified，模型偏好升级前后同口径一致，未声称浏览器或模型实际运行 |
+| 独立配置组件既有验证 | 上一轮0.1.3已实际准备并以no-browser打开，三端doctor报告ready／verified；本轮保持同一正式包与模型偏好摘要，不重复prepare／doctor，不声称指定模型实际运行 |
 | 0.1.2 历史组件 | 当时已真实准备并打开浏览器，三端 doctor 为 ready／integrity verified，模型偏好升级前后摘要一致 |
 | 3.0.1／0.1.1 历史 | 文档规范、技能接入和发行合同分别完成唯一独立 QA；两产品为正式非 prerelease 资产 |
 | 3.0.1 历史 CI | [Linux／macOS](https://github.com/Geoege-xll/agent-workflow/actions/runs/43549655014)各 628 项，624 通过、4 项既有跳过，七包与摘要通过 |

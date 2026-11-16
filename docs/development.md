@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生 Agent 配置工具。已正式发布 `xy-workflow 3.0.1` 与 `Native Agent Config 0.1.1`，版本分别来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`。文档规范、角色技能与正式发行合同分别完成唯一独立 QA；最终 CI、三 stable 来源和本机三端载荷均已核验，组件完整性及服务 ready。真实来源与边界见[发行主题](plans/stable-product-release.md)，不从安装推断新会话或模型采纳。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+当前产品是官方工作流插件与独立原生Agent配置工具。当前正式版本为`xy-workflow 3.0.4`与`Native Agent Config 0.1.3`，分别来自`product/PLUGIN_VERSION`和`native_config/VERSION`。3.0.4文件交付行为通过唯一独立QA及双系统最终CI，三个stable来源和本机三端载荷均已核验；独立配置组件保持原0.1.3正式包，本轮未重复发行或执行doctor。真实来源与边界见[发行主题](plans/stable-product-release.md)，不从安装推断新会话或模型采纳。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
 ## 权威与职责
 
@@ -74,9 +74,11 @@ CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。
 
 插件资源从同一安装版本精确解析，helper 在明确的实际项目目录执行；项目 adapter 与插件权威分开。inspect 只读，显式 apply 仅创建缺失的最小 `.awf/project.yaml`。不能写全局或项目指令替代官方发现、Hook 信任和权限审阅。
 
-原型工具必须接收任务已选择的同一 adapter，沿其 `docs.plans` 和 `docs.standards_root` 读取。计划仅维护 Markdown；具体原型 HTML、静态校验和视觉依赖指纹继续保留。项目只维护具体页、契约和业务资产；新项目只初始化可维护的 `prototype.css`，不复制通用查看器。本项目既有[原型入口](standards/prototype/index.html)继续保留为导航，当前通用评审工具通过 prepare 生成私有快照，不把项目旧壳当作最新工具。维护规则见[文档与原型指南](plans/workflow-document-lifecycle.md)。
+原型工具必须接收任务已选择的同一adapter，沿其`docs.plans`和`docs.standards_root`读取。计划仅维护Markdown；具体HTML、五段设计与交互契约、业务资产和视觉依赖指纹继续保留。3.0.4交付前先从物理插件解析`templates/prototype/page.html`，再通过白名单helper执行`prepare-delivery --root --adapter --pages`，最后以相同项目／adapter及本轮需求、request-id、明确pages执行`open`。正式入口是项目具体HTML的file URI；文件页提供默认收起的浮动目录、可缩放画布与开发说明弹窗，“进入评审”新开同一页。评审进入即批注，无目录、预览切换和开发说明。缺少准备准确报`preparation_required`；file按钮不负责启动Python，服务由Agent在交付时准备并启动。
 
-反馈入口复用 `lib/documents` 与 `templates/prototype` 的现有白名单打包，不增加构建链。`prototype_review.py` 负责封闭 schema 2、明确依赖快照、工具摘要和有界迁移；`prototype_feedback.py` 负责反馈项及项目当前源校验，CLI 只路由。三宿主包中的 `source_pack.py resource templates/prototype/index.html` 解析真实物理模板；`helper --project <project> lib/documents/prototype_feedback_cli.py prepare --root <project> --adapter <selected-adapter> --plan <project-relative-Markdown> --request-id <id>` 返回私有不可变快照的 `review_url`，`validate --root <project> --adapter <selected-adapter> --input <explicit-feedback-file>` 只读复核当前源和原包后输出 `changes`。工具代码随插件，快照独立于插件缓存保留；业务源不注入桥。接口和边界见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)，不把 JSON 输入当需求或批准。
+业务HTML只增加固定受管入口，不复制业务稿或通用工具；`.xy-prototype-entry`连接到用户级共享工具，唯一`delivery.html`投影中央shell。目录最多256页，单次open仍只绑定同一已批准需求的最多16页，其他页可有独立请求绑定。已有index及旧壳属于历史资料，不作为新交付入口；只有明确证明纯导航／工具、保留可恢复原件并获得对应项目清理授权后才清理，不按文件名删除业务首页或共享CSS／JS。维护规则见[文档与原型指南](plans/workflow-document-lifecycle.md)。
+
+反馈入口复用`lib/documents`与`templates/prototype`的现有白名单打包。`prototype_file_entry.py`管理受管入口、公开目录与共享缓存；`prototype_live.py`、`prototype_service.py`和`prototype_server.py`分别负责活跃来源、生命周期及受限HTTP；来源定位、反馈消费与历史不可变包沿原模块分工。当前live反馈为5，控制凭据不进入文件页或业务iframe。历史`prepare`及feedback2／3／4继续按原协议只读消费，不替代当前`prepare-delivery → open`路线；`validate`严格复核来源后输出精简修订输入，不产生需求或批准。完整命令与安全合同只在[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)维护，避免此处复制第二套格式权威。
 
 ## 验证与证据
 
