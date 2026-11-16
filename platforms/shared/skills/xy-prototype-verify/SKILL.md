@@ -80,7 +80,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    an explicit src pointing to a registered page. The index rejects meta refresh, arbitrary scripts and inline
    routing. These index/controller rules apply to existing legacy workspaces only. New projects
    keep workspace.css/js, feedback.css/js and page-shell.js in the plugin and derived review bundle;
-   prepare injects the bridge into derived HTML without changing source pages.
+   live 服务只在 HTTP 内存响应装桥，不改原稿或落盘业务 HTML 副本；历史 prepare 保持原派生包语义。
    Shared feedback.css provides the outer panel and target highlight styles; it remains a real local dependency.
    Requirements-bound concrete pages declare the canonical Markdown path under configured plans with
    `body[data-prototype-plan-source]`, and provide one `data-prototype-document="markdown"` link in a
@@ -96,9 +96,11 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    `docs.standards_root/prototype`, except a separately task-authorized design-standard leaf
    update under `docs.standards_root/DESIGN_*.md`. Reject revision-suffixed, dated, `final`, `new`, or
    task-scoped page copies.
-5. Confirm the workspace opens through `file://` with ordinary relative navigation and without a
+5. Confirm each source page opens through `file://` with its real interactions and without a
    build, package installation, framework, router, external CDN, live API, database, account,
-   credential, or real user data.
+   credential, or real user data. 完整交付／评审工具使用交付时可信 open 返回的 HTTP 具体页 delivery_url。
+   离线 HTML 不能冷启动 Python 或发现随机端口；服务不可用由交付方重跑相同显式 open 参数并提供
+   新链接，不向项目原稿写认证信息、机器路径或随机端口。
 6. Use the same command's per-page dependency fingerprints, computed from the safe local transitive
    dependency closure defined by `product/WORKFLOW.md`. Do not reconstruct the algorithm in a separate
    script. To compare approved evidence, add `--expect <stable-page>.html=<approved-sha256>` for every
@@ -123,7 +125,16 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
 
 ## 按需反馈复核
 
-仅当前任务使用评审反馈时，读取 [反馈消费合同](../xy-ui-design/references/prototype-feedback.md)，通过当前物理插件根白名单 helper 的 `prepare`／`validate` 消费当前绑定；它复用本校验器的安全依赖闭包，不替代上述静态检查。新 JSON／Markdown 均承载 feedback 3 的 `schema_version/context/anchors/items` 四字段，context 仍为严格版本 2；Markdown 只在唯一 `## Agent Workflow Feedback Payload` 标题下包含单个 JSON 代码围栏。节点／页面／全局目标、独立 A 与整改编号、显式 `reference_ids` 和源 `data-req-ids` 经同一后端验证，未映射的 REQ 为 `[]`。匿名源节点的 `data-prototype-review-source` 仅由 prepare 注入派生快照，不写业务源；无来源动态节点不能凭摘录确认。旧 feedback 2／manifest 2／bridge 2 继续严格只读消费，不用新装配逻辑回验旧格式。`validate` 失败、需求 SHA 或页面依赖失效时保留原意见，返回 PM 处理；输出 `changes` 只用于当前授权原型修订。修订后仍返回上述 `prototype_verify` 证据，适用需求／视觉批准沿既有规则，反馈不产生批准、自动 patch 或新增业务 gate。
+仅当前任务使用评审反馈时，读取 [反馈消费合同](../xy-ui-design/references/prototype-feedback.md)。
+新交付通过白名单 helper 的 `open` 显式选择项目、adapter、plan、request-id 和 pages，返回 HTTP
+具体页 delivery_url／review_url；复用本校验器的安全闭包，不替代静态检查或用户视觉确认。
+交付与评审读取同一物理原稿、共享画布组件，来源键与桥只注入 HTTP 响应，不落盘业务 HTML 副本。
+新 boot 5 沿严格 context 3，feedback 5 为 schema_version/review/anchors/items；源修订绑定的
+live 元数据及 CAS 草稿独立于历史包，原稿变化保留意见并明确拒绝错误提交。validate 只接受真实
+来源并返回 current 精简 changes、必要 anchors 和短 review；动态无源目标不能静默改绑。
+历史 prepare 及 feedback 2／3／4 与各自不可变包仍按原资产／装配／提取合同严格只读消费；
+不迁移旧包／草稿，不用新名单回验旧包。反馈只用于当前授权原型修订，不产生批准、自动 patch
+或新增业务 gate。修订后返回当前静态证据，适用需求／视觉批准沿既有规则。
 
 生产 `templates/prototype` 工具的真实浏览器集成验证用于验证模板产品本身，不能扩张为业务原型默认浏览器操作，亦不改变以下边界。
 
@@ -174,7 +185,7 @@ the real production implementation.
 
 The PM MUST provide a direct link to each concrete changed page.
 
-The root prototype index alone is not sufficient.
+新交付提供可信 open 准备好的具体页 HTTP delivery_url，同时保留原稿 HTML 的直接路径；单独根 index 不足以交付。
 
 The visual-confirmation workflow MUST NOT generate, persist, attach, or present screenshots.
 Do not create image assets unless the user explicitly requests an image asset; an image never
@@ -205,5 +216,5 @@ prototype_verify:
   pending_business_gate: none | visual_approved
 ```
 
-Use `localhost_url` only when one already exists as a convenience. The concrete HTML path remains
-authoritative.
+交付时在 `localhost_url` 填写可信 open 返回的具体页 HTTP delivery_url，认证 fragment 不进入公开日志。
+物理 HTML 路径仍是原稿权威；离线链接不承诺启动／发现服务或提供完整画布工具。

@@ -25,7 +25,7 @@ from lib.skills.business_confirmation_policy import (
 )
 from lib.skills.qa_review_policy import validate_pack_qa_review_policy
 from lib.skills.role_skills import CORE_SKILLS, ROLE_SKILLS
-from lib.documents.prototype_review import TOOL_ASSETS as PROTOTYPE_TOOL_ASSETS
+from lib.documents.prototype_review import LIVE_TOOL_ASSETS as PROTOTYPE_LIVE_TOOL_ASSETS, V4_TOOL_ASSETS as PROTOTYPE_V4_TOOL_ASSETS
 from product.command_identity import load_identity
 from product.release_channels import version_channel
 from lib.skills.selected_skills import LOCK as SELECTED_LOCK, VENDOR as SELECTED_VENDOR, SPECS as SELECTED_SPECS, snapshot as selected_snapshot
@@ -60,8 +60,9 @@ HOST_LIB_FILES = ("__init__.py", "claude_instructions.py", "claude_options.py",
 # 维护入口单独封闭白名单：既不遍历维护目录，也不读取独立产品源码或网页。
 # 新的薄模块必须经显式审查后加入；Skill 不属于九个业务核心或角色预载列表。
 MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
-# 模板只装配声明过的起点和当前评审工具闭包，不遍历 templates 整树。评审资产名
-# 复用 prepare 的唯一白名单，三端原样复制同一资源及随附许可；未知临时文件不会入包。
+# 新交付服务与历史离线包分别消费各自冻结白名单；发行载荷取有序并集，不能用
+# live 名单回验或扩写旧 V4 包。仍不遍历 templates 整树，未知文件不会借目录入包。
+PROTOTYPE_TOOL_ASSETS = tuple(dict.fromkeys((*PROTOTYPE_V4_TOOL_ASSETS, *PROTOTYPE_LIVE_TOOL_ASSETS)))
 TEMPLATE_FILES = ("project.yaml.example", "docs/STANDARDS.md", "docs/PLAN.md", "docs/PROJECT.md",
                   "prototype/page.html", "prototype/prototype.css",
                   *("prototype/" + name for name in PROTOTYPE_TOOL_ASSETS))

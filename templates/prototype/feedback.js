@@ -42,20 +42,21 @@
     });
     narrow.addEventListener("change", () => { if (!narrow.matches && drawer.open) drawer.close(); });
     for (const [open, close, dialog] of [["navigation-toggle", "close-navigation", $("navigation-drawer")], ["open-developer", "developer-close", $("developer-dialog")]]) {
+      if (!$(open) || !$(close) || !dialog) continue;
       $(open).addEventListener("click", () => { if (open === "open-developer") $("page-contract").open = true; dialog.showModal(); $(open).setAttribute("aria-expanded", "true"); if (open === "open-developer") $("developer-title").focus(); });
       $(close).addEventListener("click", () => dialog.close());
       dialog.addEventListener("close", () => { $(open).setAttribute("aria-expanded", "false"); dialog.returnValue = ""; });
     }
     // closedby仅作渐进增强，Safari等宿主仍通过几何检测提供原型约定的抽屉外点关闭。
-    if (!("closedBy" in HTMLDialogElement.prototype)) {
+    if ($("navigation-drawer") && !("closedBy" in HTMLDialogElement.prototype)) {
       const nav = $("navigation-drawer"); let pressedOutside = false;
       const outside = (e) => { const r = nav.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom; };
       nav.addEventListener("pointerdown", (e) => { pressedOutside = outside(e); });
       nav.addEventListener("pointerup", (e) => { if (pressedOutside && outside(e)) nav.close(); });
     }
     $("open-feedback").addEventListener("click", openPanel); $("close-panel").addEventListener("click", () => drawer.close());
-    $("mode-browse").addEventListener("change", () => setMode("browse")); $("mode-annotate").addEventListener("change", () => setMode("annotate"));
-    function setMode(mode) { model.setMode(mode); send("mode", { mode }); $("mode-browse").checked = mode === "browse"; $("mode-annotate").checked = mode === "annotate"; announce(mode === "browse" ? "浏览模式：原生控件、滚动与业务导航保持可用。" : "批注模式：点选元素后标记位置或添加整改。"); }
+    $("mode-browse")?.addEventListener("change", () => setMode("browse")); $("mode-annotate")?.addEventListener("change", () => setMode("annotate"));
+    function setMode(mode) { model.setMode(mode); send("mode", { mode }); if ($("mode-browse")) $("mode-browse").checked = mode === "browse"; if ($("mode-annotate")) $("mode-annotate").checked = mode === "annotate"; announce(mode === "browse" ? "浏览模式：原生控件、滚动与业务导航保持可用。" : "批注模式：点选元素后标记位置或添加整改。"); }
     $("canvas-fit").addEventListener("click", camera.fit); $("canvas-zoom-out").addEventListener("click", () => camera.zoom(1 / 1.25));
     $("canvas-zoom-in").addEventListener("click", () => camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", () => camera.zoom(1 / state.cameras[state.page].k));
     $("show-anchors").addEventListener("change", () => model.setView({ showAnchors: $("show-anchors").checked }));
@@ -272,7 +273,7 @@
       },
       contract(sections) {
         if (!Array.isArray(sections) || sections.length !== 5 || !sections.every((entry, index) => entry?.name === ["purpose", "navigation", "interactions", "states", "exceptions"][index] && typeof entry.text === "string" && entry.text.length <= 65536)) return;
-        const content = $("page-contract-content"); content.replaceChildren();
+        const content = $("page-contract-content"); if (!content) return; content.replaceChildren();
         for (const entry of sections) { const section = make("section"), heading = make("h2", ({ purpose: "页面职责", navigation: "导航", interactions: "交互", states: "状态与恢复", exceptions: "例外与实现边界" })[entry.name]); section.append(heading, make("p", entry.text)); content.append(section); }
       },
     });

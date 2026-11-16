@@ -9,15 +9,22 @@
     && value.split("/").every((part) => part && part !== "." && part !== "..");
   const sha = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
   const stableId = (value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value);
+  function validLiveURL(value, registeredPath) {
+    // live内容地址只能来自本服务的登记cap；禁止绝对地址、转义路径与额外query。
+    // bridge是只读内容能力上的随机握手值，与控制API Bearer完全分离。
+    if (typeof value !== "string") return false;
+    const match = value.match(/^\/content\/([a-f0-9]{32,128})\/(.+)#bridge=([a-f0-9]{32,128})$/);
+    return Boolean(match && match[2] === registeredPath);
+  }
   function parseStartup(raw) {
-    const result = { rawReview: "", context: null, pages: [], error: "" };
+    const result = { schema_version: 0, rawReview: "", context: null, pages: [], error: "" };
     try {
       // 数据只来自prepare写入的唯一非执行script。紧凑JSON安全转义往返检查同时
       // 拒绝重复键，不能把JSON.parse最后同名值洗成可信启动绑定；不读取hash中的context。
       if (typeof raw !== "string") throw Error();
       const boot = JSON.parse(raw);
       const safe = JSON.stringify(boot).replace(/[<>&\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
-      if (safe !== raw || !exact(boot, ["schema_version", "context", "pages"]) || boot.schema_version !== 4) throw Error();
+      if (safe !== raw || !exact(boot, ["schema_version", "context", "pages"]) || ![4, 5].includes(boot.schema_version)) throw Error();
       const context = boot.context;
       if (!exact(context, ["schema_version", "request_id", "project_id", "adapter", "adapter_sha256", "prototype_root", "plan_source", "plan_sha256", "navigation_sha256", "requirements", "pages", "tool", "review_id"])
           || context.schema_version !== 3 || new TextEncoder().encode(JSON.stringify(context)).length > 8192
@@ -46,12 +53,12 @@
         // URL不是可推导的消息输入，只接受核心给出的project/精确源路径映射。
         // 全部校验成功后才生成导航和设置iframe src，任何损坏都不能留下部分可用清单。
         if (!exact(entry, ["name", "path", "url", "label", "groups"]) || !pages.has(entry.path) || registered.has(entry.path)
-            || entry.name !== entry.path.slice(context.prototype_root.length + 1) || entry.url !== `project/${entry.path}`
+            || entry.name !== entry.path.slice(context.prototype_root.length + 1) || (boot.schema_version === 4 ? entry.url !== `project/${entry.path}` : !validLiveURL(entry.url, entry.path))
             || !text(entry.label, 1024) || !Array.isArray(entry.groups)
             || !entry.groups.every((group) => exact(group, ["label", "open"]) && text(group.label, 1024) && typeof group.open === "boolean")) throw Error();
         registered.add(entry.path);
       }
-      result.context = context; result.rawReview = JSON.stringify(context); result.pages = boot.pages;
+      result.schema_version = boot.schema_version; result.context = context; result.rawReview = JSON.stringify(context); result.pages = boot.pages;
     } catch {
       result.error = "本轮评审快照数据损坏或超出范围，请重新准备评审包；已有输入不会自动重绑。";
     }
@@ -61,7 +68,18 @@
   const plain = (value, empty = true) => typeof value === "string" && Array.from(value).length <= 4000 && !value.includes("\0") && (empty || value.trim().length > 0);
   const identifier = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
   const sourceKey = (value) => typeof value === "string" && /^source-[a-f0-9]{64}$/.test(value);
-  const targetKey = (target) => JSON.stringify(target);
+  function targetKey(target) {
+    // 来源身份只由封闭合同字段决定。HTTP持久化会排序JSON对象键，不能把运输键序
+    // 当作新目标，也不能因此拒绝原节点草稿。固定投影沿用原合法key格式，不迁移编号。
+    // 白名单合法性仍由validTarget在每个输入边界校验；这里不放宽或删除未知字段。
+    if (exact(target, ["scope"]) && target.scope === "global") return JSON.stringify({ scope: "global" });
+    if (exact(target, ["scope", "page"]) && target.scope === "page") return JSON.stringify({ scope: "page", page: target.page });
+    if (exact(target, ["scope", "page", "locator"]) && target.scope === "node"
+      && ((exact(target.locator, ["type", "id"]) && target.locator.type === "id")
+        || (exact(target.locator, ["type", "key"]) && target.locator.type === "source"))) return JSON.stringify({ scope: "node", page: target.page,
+      locator: target.locator?.type === "id" ? { type: "id", id: target.locator.id } : { type: "source", key: target.locator?.key } });
+    return JSON.stringify(target);
+  }
   const positive = (value) => Number.isSafeInteger(value) && value > 0;
   function checkFeedbackBytes(value, label = "反馈") {
     // 核心先限制整个输入文件的UTF8字节数，再提取机器载荷；JSON与Markdown
@@ -71,12 +89,13 @@
   }
   function create(boot, storage = null) {
     if (!boot.context || boot.error) throw Error(boot.error || "评审绑定无效");
+    const version = boot.schema_version === 5 ? 5 : 4;
     const context = clone(boot.context), pages = new Set(context.pages.map((entry) => entry.path));
     const listeners = new Set(), catalogs = new Map();
     const state = { context, pages: clone(boot.pages), page: boot.pages[0]?.path || "", mode: "browse", cameras: {}, selection: null,
       anchors: [], items: [], drafts: {}, withdrawn: null, nextAnchor: 1, nextItem: 1, editor: null,
       activeAnchor: null, activeItem: null, tab: "rectifications", filter: "current", showAnchors: true, showItems: true, storageMessage: "", blocked: false };
-    const storageKey = `prototype-review:v4:${context.review_id}`;
+    const storageKey = `prototype-review:v${version}:${context.review_id}`;
     // 读取sessionStorage本身也可能被宿主拒绝，和setItem失败采用同一内存保留策略。
     if (!storage) { try { storage = window.sessionStorage; } catch { storage = { getItem() { throw Error("存储拒绝"); }, setItem() { throw Error("存储拒绝"); } }; } }
     function validTarget(target) {
@@ -116,7 +135,7 @@
     }
     function persist() {
       // 封闭会话格式与导出协议彻底分开，旧版本草稿不读取、不迁移或重绑。存储失败保留内存。
-      const snapshot = { schema_version: 4, review_id: context.review_id, anchors: state.anchors, items: state.items,
+      const snapshot = { schema_version: version, review_id: context.review_id, anchors: state.anchors, items: state.items,
         drafts: state.drafts, withdrawn: state.withdrawn, nextAnchor: state.nextAnchor, nextItem: state.nextItem, cameras: state.cameras };
       try { storage.setItem(storageKey, JSON.stringify(snapshot)); state.storageMessage = "草稿仅保存在本标签页；同一评审包刷新可恢复。"; }
       catch { state.storageMessage = "浏览器存储失败：输入仍在当前内存，刷新可能丢失，请及时交还。"; }
@@ -131,7 +150,7 @@
       if (raw) {
         const saved = JSON.parse(raw);
         if (!exact(saved, ["schema_version", "review_id", "anchors", "items", "drafts", "withdrawn", "nextAnchor", "nextItem", "cameras"])
-          || saved.schema_version !== 4 || saved.review_id !== context.review_id || !Array.isArray(saved.anchors) || saved.anchors.length > 256
+          || saved.schema_version !== version || saved.review_id !== context.review_id || !Array.isArray(saved.anchors) || saved.anchors.length > 256
           || !Array.isArray(saved.items) || saved.items.length > 256 || !saved.anchors.every(validAnchor) || !saved.items.every(validItem)
           || !uniqueSequence(saved.anchors) || !uniqueSequence(saved.items) || !positive(saved.nextAnchor) || !positive(saved.nextItem)
           || saved.anchors.some((anchor) => anchor.number >= saved.nextAnchor) || saved.items.some((item) => item.number >= saved.nextItem)
@@ -183,7 +202,7 @@
         if (item.target.scope === "node" && item.operation === "modify" && item.comparison?.after_text.trim()) value.after_text = item.comparison.after_text;
         return value;
       });
-      const value = { schema_version: 4, review: { request_id: context.request_id, review_id: context.review_id }, anchors: handoffAnchors(items, anchors), items: exported };
+      const value = { schema_version: version, review: { request_id: context.request_id, review_id: context.review_id }, anchors: handoffAnchors(items, anchors), items: exported };
       checkFeedbackBytes(JSON.stringify(value));
       return value;
     }
@@ -213,7 +232,9 @@
     function anchorUsers(id) {
       return { items: state.items.filter((item) => item.reference_ids.includes(id)), drafts: activeDrafts().filter(([, draft]) => draft.reference_ids.includes(id)).map(([key]) => key) };
     }
-    return Object.freeze({ state, validTarget, recordFor, targetKey,
+    return Object.freeze({ state,
+      setStorageMessage(message) { state.storageMessage = String(message); emit(false); },
+      validTarget, recordFor, targetKey,
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
       setPage(page) { if (!pages.has(page)) throw Error("未登记页面"); state.page = page; state.selection = null; emit(); },
       setMode(mode) { if (!["browse", "annotate"].includes(mode)) return; state.mode = mode; emit(false); },
@@ -266,6 +287,7 @@
       activeDrafts, handoffAnchors,
       anchorUsers,
       addAnchor() {
+        if (state.blocked) throw Error("原稿已变化，当前意见保留，不能新增定位标记。");
         const target = state.selection?.target;
         if (!target || !recordFor(target)) throw Error("此动态元素没有可确认来源，请显式选择有来源的父层。");
         const previous = state.anchors.find((anchor) => targetKey(anchor.target) === targetKey(target)); if (previous) return clone(previous);

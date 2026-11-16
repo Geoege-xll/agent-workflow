@@ -48,13 +48,13 @@ def parse_feedback(raw: bytes) -> dict:
     except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise FeedbackError("反馈不是有效的 UTF-8 JSON 对象") from exc
     version = value.get("schema_version") if isinstance(value, dict) else None
-    fields = {"schema_version", "review", "anchors", "items"} if type(version) is int and version == 4 else {"schema_version", "context", "anchors", "items"} if type(version) is int and version == 3 else {"schema_version", "context", "items"}
+    fields = {"schema_version", "review", "anchors", "items"} if type(version) is int and version in {4, 5} else {"schema_version", "context", "anchors", "items"} if type(version) is int and version == 3 else {"schema_version", "context", "items"}
     _object(value, fields, "反馈")
-    if type(version) is int and version == 4 and wrapper is not None:
+    if type(version) is int and version in {4, 5} and wrapper is not None:
         lines, start, end = wrapper
         # 旧2/3包装按原契约读取；新4复制只有唯一机器载荷，不再携带同义摘要。
         if any(line.strip() for line in lines[:start] if line != MARKDOWN_PAYLOAD_HEADING) or any(line.strip() for line in lines[end + 1:]):
-            raise FeedbackError("反馈4 Markdown仅允许固定标题和单个JSON围栏")
+            raise FeedbackError("反馈4/5 Markdown仅允许固定标题和单个JSON围栏")
     return value
 
 
@@ -79,6 +79,10 @@ def validate_feedback(root: str | Path, adapter: str, feedback: dict, *,
     # 公开 Python API 与 CLI 使用同样的限额和封闭字段，不信任调用方已做前端校验。
     if len(_json_bytes(feedback)) > MAX_FEEDBACK_BYTES:
         raise FeedbackError("反馈文件超过 1 MiB 限额")
+    if isinstance(feedback, dict) and type(feedback.get("schema_version")) is int and feedback["schema_version"] == 5:
+        # 活动源只读取独立live元数据，不把旧不可变包或最新服务指针当作来源身份。
+        from lib.documents.prototype_live import validate_live_feedback
+        return validate_live_feedback(root, adapter, feedback, data_dir=data_dir)
     if isinstance(feedback, dict) and type(feedback.get("schema_version")) is int and feedback["schema_version"] == 4:
         return _validate_feedback_v4(root, adapter, feedback, data_dir=data_dir)
     if isinstance(feedback, dict) and type(feedback.get("schema_version")) is int and feedback["schema_version"] == 3:

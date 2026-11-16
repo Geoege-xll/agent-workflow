@@ -31,7 +31,13 @@ from lib.runtime_pins import adapter_path, record_binding
 TOOL_ROOT = Path(__file__).resolve().parents[2]
 LEGACY_TOOL_ASSETS = ("index.html", "workspace.css", "workspace.js", "feedback.css", "feedback.js", "page-shell.js")
 V3_TOOL_ASSETS = LEGACY_TOOL_ASSETS + ("review-state.js", "review-camera.js", "THIRD_PARTY_NOTICES.txt")
-TOOL_ASSETS = V3_TOOL_ASSETS
+# 不可变包4必须永久使用发布时的九项名单；活动源5的工具升级不得使历史包失效。
+V4_TOOL_ASSETS = V3_TOOL_ASSETS
+LIVE_TOOL_ASSETS = ("delivery.html", "review.html", "live-workspace.js", "live-connection.js",
+               "canvas-host.js", "live.css", "workspace.css", "review-state.js", "review-camera.js",
+               "feedback.js", "feedback.css", "page-shell.js", "THIRD_PARTY_NOTICES.txt")
+# 公开旧别名仍属于默认prepare/capture_tool的V4语义；新消费者必须明确选择live。
+TOOL_ASSETS = V4_TOOL_ASSETS
 MAX_BUNDLE_FILES = 300
 MAX_MANIFEST_BYTES = 256 * 1024
 
@@ -56,12 +62,13 @@ def _payload(version: bytes, files: dict[str, bytes], *, format_version: int = 4
     return value.hexdigest()
 
 
-def capture_tool() -> tuple[dict, dict[str, bytes]]:
+def capture_tool(*, format_version: int = 4) -> tuple[dict, dict[str, bytes]]:
     """只读取当前物理代码根中的固定白名单，不接受项目或 CLI 指定工具根。"""
     version_path = TOOL_ROOT / "product/PLUGIN_VERSION"
     captures = {version_path: snapshot(version_path)}
     assets = {}
-    for name in TOOL_ASSETS:
+    if format_version not in {4, 5}: raise ValueError("工具捕获仅支持格式4或5")
+    for name in V4_TOOL_ASSETS if format_version == 4 else LIVE_TOOL_ASSETS:
         path = TOOL_ROOT / "templates/prototype" / name
         captures[path] = snapshot(path)
         assets[name] = captures[path][0]
@@ -72,7 +79,7 @@ def capture_tool() -> tuple[dict, dict[str, bytes]]:
     for path, expected in captures.items():
         if snapshot(path) != expected:
             raise ValueError("工具载荷在读取期间变化")
-    return {"version": version, "payload_sha256": _payload(version_raw, assets)}, {
+    return {"version": version, "payload_sha256": _payload(version_raw, assets, format_version=format_version)}, {
         **{"tool/" + name: body for name, body in assets.items()}, "tool/version.txt": version_raw}
 
 
@@ -142,10 +149,13 @@ def navigation_data(index: bytes | None, pages: list[dict], files: dict[str, byt
 
 
 def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
-                    pages: list[str] | None, *, tool: dict, format_version: int = 4) -> tuple[dict, dict, dict, list]:
+                    pages: list[str] | None, *, tool: dict, format_version: int = 4,
+                    navigation_source: str = "legacy_index") -> tuple[dict, dict, dict, list]:
     """无条件确认项目画像与来源，再复用原校验器；导航缺失不能跳过这些边界。"""
     if type(format_version) is not int or format_version not in {2, 3, 4}:
         raise FeedbackError("来源捕获仅支持明确的包格式2、3或4")
+    if navigation_source not in ("legacy_index", "registered_pages") or (navigation_source == "registered_pages" and format_version != 4):
+        raise FeedbackError("导航来源须为历史索引或活动源登记页；旧格式仅允许历史索引")
     project = Path(root)
     if not project.is_absolute() or ".." in project.parts or "\\" in str(project):
         raise FeedbackError("项目根必须是无父跳转的实际绝对目录")
@@ -219,24 +229,31 @@ def capture_review(root: str | Path, adapter: str, plan: str, request_id: str,
     # 沿用同一 DependencyValidator 与指纹域；独立页不再依赖项目通用外壳。
     evidence = workspace.capture_selected_pages(project, prototype, pages=[Path(page).name for page in chosen], adapter=adapter)
     index_path = prototype_path / "index.html"
-    index_snapshot = snapshot(index_path, required=False)
-    index_body = index_snapshot[0]
+    # 默认分支永久保留历史2/3/4对旧索引字节、标签、分组及读取竞态的原合同。
+    # live必须显式选择登记页：完全不读取可选旧index，防止已退役工具壳的新增/
+    # 改字让业务原稿不变的评审失效，也不能从旧壳重新引入过期目录标签或分组。
+    index_snapshot = snapshot(index_path, required=False) if navigation_source == "legacy_index" else None
+    index_body = index_snapshot[0] if index_snapshot is not None else None
+    registered_navigation = (navigation_data(None, evidence["pages"], evidence["files"])
+                             if navigation_source == "registered_pages" else None)
+    navigation_digest = (digest(index_body or b"") if navigation_source == "legacy_index"
+                         else digest(json_bytes(registered_navigation)))
     context_version = 3 if format_version == 4 else 2
     context = {"schema_version": context_version, "request_id": request_id, "adapter": adapter, "prototype_root": prototype,
                "plan_source": plan, "plan_sha256": digest(plan_body), "requirements": _requirements(plan_body, ids_only=format_version == 4),
                "pages": evidence["pages"], "project_id": project_id(project),
-               "adapter_sha256": digest(adapter_body), "navigation_sha256": digest(index_body or b""),
+               "adapter_sha256": digest(adapter_body), "navigation_sha256": navigation_digest,
                "tool": copy.deepcopy(tool)}
     context["review_id"] = review_id(context)
     check_context(context, schema_version=context_version)
     # adapter/Markdown/节点元数据均由 snapshot 末尾复查，防止绑定检查与结果之间被替换。
     for path in tuple(captures):
         capture(path)
-    if snapshot(index_path, required=False) != index_snapshot:
+    if navigation_source == "legacy_index" and snapshot(index_path, required=False) != index_snapshot:
         raise FeedbackError("旧索引在评审捕获期间发生变化")
     files = dict(evidence["files"])
     files[plan] = plan_body
-    navigation = navigation_data(index_body, evidence["pages"], files)
+    navigation = navigation_data(index_body, evidence["pages"], files) if navigation_source == "legacy_index" else registered_navigation
     return context, metadata, files, navigation
 
 
@@ -440,7 +457,7 @@ def _check_bundle(request_fd: int, context: dict, *, expected: dict[str, bytes] 
             raise ValueError("评审包包含清单外文件或缺失文件")
         # 格式由已校验清单决定，旧包永不按新资产白名单或新装配算法回验。
         format_version = manifest["schema_version"]
-        asset_names = LEGACY_TOOL_ASSETS if format_version == 2 else V3_TOOL_ASSETS if format_version == 3 else TOOL_ASSETS
+        asset_names = LEGACY_TOOL_ASSETS if format_version == 2 else V3_TOOL_ASSETS if format_version == 3 else V4_TOOL_ASSETS
         tool_paths = {"tool/" + name for name in asset_names} | {"tool/version.txt"}
         if not tool_paths.issubset(files): raise ValueError("评审包缺少工具载荷")
         if (files["tool/version.txt"].decode("utf-8").strip() != context["tool"]["version"]
@@ -533,7 +550,7 @@ def _assemble_v3(context: dict, files: dict[str, bytes], tools: dict[str, bytes]
 
 
 def _assemble(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict]) -> dict[str, bytes]:
-    return _assemble_source_bundle(context, files, tools, navigation, format_version=4, asset_names=TOOL_ASSETS)
+    return _assemble_source_bundle(context, files, tools, navigation, format_version=4, asset_names=V4_TOOL_ASSETS)
 
 
 def _assemble_source_bundle(context: dict, files: dict[str, bytes], tools: dict[str, bytes], navigation: list[dict], *, format_version: int, asset_names: tuple) -> dict[str, bytes]:

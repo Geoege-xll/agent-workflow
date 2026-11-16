@@ -7,8 +7,9 @@
   <link rel="stylesheet" href="prototype.css">
 </head>
 <body class="prototype-canvas" data-prototype-platform="web" data-prototype-display="responsive" data-prototype-plan-source="">
-  <!-- 项目维护具体页面和 prototype.css 展示/业务样式；prepare 只在项目外不可变快照
-       注入评审桥与来源键，不把通用壳或保留的 data-prototype-review-source 写回业务源。
+  <!-- 项目只维护这份具体原稿与必要业务样式；交付时通过可信 CLI open 启动本机服务，
+       delivery_url / review_url 读取同一物理原稿，仅在 HTTP 响应内注入桥与来源键。
+       不落盘活动业务 HTML 副本，不把 token、机器路径、随机端口或保留属性写回原稿。
        业务元素可明确声明 data-req-ids="REQ-001 REQ-002"；没有映射时保留空数组语义，
        不从元素文字猜测需求。匿名来源键由工具装配并在 validate 重读源时独立重建。 -->
   <header class="prototype-header prototype-shell">
@@ -44,9 +45,9 @@
   <details class="prototype-contract">
     <summary id="prototype-contract-toggle">Page design and interaction contract</summary>
     <section data-contract-section="purpose"><h2>页面职责</h2><p>此源模板提供独立页面外壳，不代表已批准的业务设计。Platform: Web. Display: responsive. 内容按可用宽度自然展开，使用 CSS px，无固定窗口。创建实际页面时替换为批准的职责与范围；iOS／PC 固定预览须记录实际平台、宽高和显示比例。</p></section>
-    <section data-contract-section="navigation"><h2>导航</h2><p>实际页面可直接离线打开；评审时通过插件prepare明确选择本页，由用户级不可变快照生成导航，不复制通用查看器或通信脚本到项目。已有项目目录如实际存在可保留圆形返回；评审包内返回只定位当前导航，不改写项目源。</p><p>画面后的唯一需求槽尚未绑定。实际交付须声明配置 plans 下的 Markdown 来源，并提供唯一 Markdown 普通相对链接；可选同名历史 HTML 链接仅在实际文件存在时提供。每个文档链接均以 target="_blank" 和 rel="noopener" 独立打开；计划 Markdown→HTML 生成链已退役，旧页过期不阻断 Markdown 修订，文档导航不属于画面渲染依赖。</p></section>
-    <section data-contract-section="interactions"><h2>交互</h2><p data-contract-for="prototype-page-sidebar-toggle">历史侧栏预留入口保持隐藏。当前评审由项目外工作台的浮动导航控件收放默认关闭的抽屉；不改变当前页或分组状态。</p><p data-contract-for="prototype-page-feedback">历史页面反馈预留入口保持隐藏。当前页面整改由工作台入口打开唯一编辑对话框，填写页面修改或新增；意见只作为修订输入，不产生批准。</p><p data-contract-for="prototype-contract-toggle">页面契约：原生 summary 通过点击、Enter 或 Space 展开和折叠此五节，初始折叠，不覆盖产品画面。实际页面新增的重要产品操作须在此逐项映射稳定 ID。节点整改与 A 标记优先绑定产品插槽内唯一稳定 ID，匿名源元素使用派生来源键；动态无来源节点保留输入，由用户显式选有来源父层。交互条目自身可声明唯一 id，明确来源的接口引用使用 data-interface-ref 属性字面值（不推测或请求接口）。父子桥核对 source、origin、当前页与 token，父壳不跨 file:// 读取子 DOM。</p></section>
-    <section data-contract-section="states"><h2>状态</h2><p>初始显示响应式产品插槽，五节契约折叠。标题、简述、画面、需求与平台说明依次可读；只有实际提供目录时才添加可选返回。评审快照采用固定设计视口相机缩放，浏览保留业务输入、按钮、滚动和导航，批注才拦截节点选择；导航默认收起，整改与标记由父工作台唯一状态维护，开发说明在独立对话框阅读。草稿、相机及撤回不进入 feedback 3 导出；JSON 与 Markdown 先经 validate 复核，再交当前授权作者修订，无意见等级或批准状态。源模板没有业务请求或提交，因此业务加载、成功、错误和弹窗状态不适用；实际页面需在本 HTML 实现获准状态。</p></section>
+    <section data-contract-section="navigation"><h2>导航</h2><p>实际原稿可通过 file:// 离线查看与操作；完整工具入口由交付时可信 CLI open 返回的 HTTP delivery_url 提供，目录默认收起，共用画布读取这份物理原稿。“进入评审”以新标签页准确打开当前具体页，保留交付页。新项目不生成导航 index 或复制通用工具；既有业务首页与未知文件不得按名称删除。离线 HTML 不能自行冷启动 Python 或发现随机服务端口；服务不可用时由交付方使用原先显式项目、adapter、需求、request-id 和 pages 参数重新运行 prototype_feedback_cli.py open，并提供新链接。</p><p>画面后的唯一需求槽尚未绑定。实际交付须声明配置 plans 下的 Markdown 来源，并提供唯一 Markdown 普通相对链接；可选同名历史 HTML 链接仅在实际文件存在时提供。每个文档链接均以 target="_blank" 和 rel="noopener" 独立打开；计划 Markdown→HTML 生成链已退役，旧页过期不阻断 Markdown 修订，文档导航不属于画面渲染依赖。</p></section>
+    <section data-contract-section="interactions"><h2>交互</h2><p data-contract-for="prototype-page-sidebar-toggle">历史侧栏预留入口保持隐藏。HTTP 交付页由统一元数据派生默认收起的目录；独立评审页没有目录或浏览／批注切换。</p><p data-contract-for="prototype-page-feedback">历史页面反馈预留入口保持隐藏。当前页面整改由工作台入口打开唯一编辑对话框，填写页面修改或新增；意见只作为修订输入，不产生批准。</p><p data-contract-for="prototype-contract-toggle">页面契约：原生 summary 通过点击、Enter 或 Space 展开和折叠此五节，初始折叠，不覆盖产品画面。实际页面新增的重要产品操作须在此逐项映射稳定 ID。节点整改与 A 标记优先绑定产品插槽内唯一稳定 ID，匿名源元素使用派生来源键；动态无来源节点保留输入，由用户显式选有来源父层。交互条目自身可声明唯一 id，明确来源的接口引用使用 data-interface-ref 属性字面值（不推测或请求接口）。HTTP 内容 iframe 仅允许 allow-scripts；桥联合核对真实 source、origin=null、当前页与随机 token，父壳不跨隔离边界读取子 DOM。</p></section>
+    <section data-contract-section="states"><h2>状态</h2><p>初始显示响应式产品插槽，五节契约折叠。标题、简述、画面、需求与平台说明依次可读；只有实际提供目录时才添加可选返回。交付页和评审页使用同一画布组件及独立相机状态。交付页保留业务输入、按钮、滚动和导航；评审进入即批注，通过工具提示的修饰键临时操作，释放回批注。评审页没有目录、模式切换或开发说明；整改和标记由父工具唯一状态维护。刷新恢复绑定本次来源修订的草稿；并发冲突明确提示，原稿变化保留旧意见并阻止错误提交。草稿、相机及撤回不进入 feedback 5 导出；JSON 与 Markdown 先经 validate 复核，再交当前授权作者修订，无意见等级或批准状态。源模板没有业务请求或提交，因此业务加载、成功、错误和弹窗状态不适用；实际页面需在本 HTML 实现获准状态。</p></section>
     <section data-contract-section="exceptions"><h2>页面特例</h2><p>此源模板允许未绑定需求的空槽；真实交付页必须绑定正式需求。没有其他页面特例。复用中性共享外壳，产品 token 来自实际项目规范，不将外壳颜色当作产品主题或业务视觉批准。</p></section>
   </details>
 </body>

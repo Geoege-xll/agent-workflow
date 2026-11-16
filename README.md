@@ -81,6 +81,12 @@ Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付
 
 3.0.3 提供 feedback 4 精简交接：复制／导出仅携带短 `review` 引用、必要标记和用户整改，完整 context 3 保留在本机真实快照中；缺包或来源变化明确拒绝。PM 只把复核为 `current` 的精简结果和当前完整任务包交原 UI Agent，反馈仍不构成需求或视觉批准。旧 feedback 2／3 与各自已生成评审包继续严格只读消费；3.0.3／0.1.3 当前仍为未发布候选，本机已安装的 3.0.2／0.1.2 尚未升级。调用细节见[反馈消费合同](platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
+当前源码新增双网页交付：交付时用可信 `prototype_feedback_cli.py open` 显式登记项目、adapter、需求、request-id 与具体页并启动本机服务。返回的 HTTP `delivery_url` 提供共用可缩放画布及默认收起目录，“进入评审”以新标签页打开当前页；评审进入即批注，不再显示目录、持久模式切换或开发说明。两页读取交付目录同一物理原稿，来源键与桥只在 HTTP 响应装配，不落盘活动业务 HTML 副本。新 live 使用 boot／feedback 5、context 3 与带冲突检测的持久草稿，历史 prepare 和 feedback 2／3／4 保留原消费合同。
+
+交付目录只显示本次 `--pages` 显式登记、属于同一需求且通过安全校验的 1—16 个具体页。单页示例只登记一页，不会自动扫描整个项目、其他需求或未登记页面。同一次 `open` 登记多页时，使用 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`，共用该次 `--plan`、`--request-id` 和安全边界；[使用说明](docs/usage.md)提供完整命令示例。
+
+新项目不生成导航 index 或复制通用工具。file:// 原稿仍可离线操作，但不能冷启动 Python 或发现随机端口；服务不可用时由交付方重跑同样显式 open 参数并提供新链接，status／stop 管理精确请求实例。原稿不写认证信息、机器路径或随机端口，不配置系统自启动；具体命令见[使用说明](docs/usage.md)。这仍是源码能力，未表示本轮独立 QA、发行或本机升级已完成。
+
 ## 当前验证范围
 
 | 范围 | 已有证据与边界 |

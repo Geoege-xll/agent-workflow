@@ -316,6 +316,16 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
     def test_validator_entrypoint_exists(self) -> None:
         self.assertTrue(VALIDATOR.is_file(), "missing future prototype validator entrypoint")
 
+    def test_repository_concrete_pages_use_standalone_source_validation(self) -> None:
+        """本仓库交付验证明确两份原稿，不借历史导航index成为第二页面权威。"""
+        # 只读取这两个实际页面及校验器捕获的安全依赖；不遍历仓库、未跟踪计划或
+        # 其他作者资料。旧index的结构与唯一登记断言仍由下方历史fixture独立保留。
+        names = ["agent-configuration.html", "prototype-workspace.html"]
+        result = validator_module.validate_workspace(PACK, PROTOTYPE_RELATIVE.as_posix(),
+            standalone=True, pages=names, adapter="project.yaml")
+        self.assertEqual([(PROTOTYPE_RELATIVE / name).as_posix() for name in names],
+                         [page["path"] for page in result["pages"]])
+
     def test_minimal_templates_are_build_free_and_self_describing(self) -> None:
         index_path = TEMPLATE_ROOT / "index.html"
         page_path = TEMPLATE_ROOT / "page.html"

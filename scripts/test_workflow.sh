@@ -41,10 +41,11 @@ GROUPS = {
     "codex": modules("codex_workflow", "shared_memory_contract"),
     "claude": modules("claude_workflow", "claude_instructions", "shared_memory_contract"),
     "antigravity": modules("antigravity_workflow"),
-    # 原型当前入口同时消费生产控制器的既有 Node 用例与只读反馈核心，避免
-    # current 只验证静态结构却漏掉真实脚本。此分组不授权自动操作业务原型。
+    # 原型入口同时覆盖既有 Node 控制器、历史只读包和 live 来源/HTTP 生命周期；
+    # 新旧协议分别验证，不能把服务成功冒称旧包或业务原型的视觉批准。
     "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
-                         "prototype_workspace_runtime", "prototype_feedback", "prototype_review"),
+                         "prototype_workspace_runtime", "prototype_feedback", "prototype_review",
+                         "prototype_live", "prototype_server"),
     # 只收指定计划入口及六个真实生命周期基线；不把同模块旧事务/UI大类带入 current。
     "plans": ("tests.test_plan_and_shallow_docs.SelectedPlanValidationTest",) + tuple(
         "tests.test_plan_and_shallow_docs.PlanAndShallowDocsTest." + name for name in (

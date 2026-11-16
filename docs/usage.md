@@ -60,17 +60,27 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 需要原型的 UI 任务由设计 Agent 在所选 adapter 的 `docs.standards_root/prototype` 内制作可交互 HTML，并返回需求覆盖、规范符合性和交付一致性的三维自检。PM 将 REQ 到具体页面及实际状态锚点的关联写入同一主题计划；原型 HTML、静态验收、依赖指纹与视觉确认继续保留，不恢复计划 Markdown 转 HTML 生成链，也不增加第二个原型 QA。
 
-需要节点反馈时，PM 用当前物理插件根的白名单 `prototype_feedback_cli.py prepare`，显式指定实际项目、同一 adapter、唯一需求 Markdown 和请求 ID，提供返回的 `review_url`。通用导航／画板／批注工具随插件交付，prepare 将明确页面的必要依赖与工具生成用户级私有离线快照，不向项目复制通用壳，不要求项目存在 index 或插件专用样式；项目具体页面仍是编辑权威。快照固定工具版本与内容、需求和逐页依赖，插件升级不覆盖已打开的评审。
+新原型交付使用当前物理插件根的白名单 `prototype_feedback_cli.py open`，显式指定实际项目、同一 adapter、唯一需求 Markdown、request-id 和本轮 pages。交付时启动本机服务，提供返回的具体页 `delivery_url`：共用可缩放画布保留真实产品交互，左目录默认收起且由统一元数据派生；“进入评审”通过 noopener 新标签页准确打开当前页，原交付页保留。评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放后继续批注。两页共享画布组件，分别保留相机与交互状态。
 
-评审工作台固定设计视口，通过相机缩放和移动查看，浏览模式保留页面自身按钮、表单、滚动与导航；批注模式选择节点。导航抽屉默认收起，侧面板以“整改／标记”两个 Tab 管理数据，开发说明在独立大对话框阅读。标记 A 只引用具体节点，整改支持节点修改／新增／删除、页面修改／新增和全局修改；不再设置意见等级。整改可关联多个已存在的 A，跨页引用保持稳定编号；正文与建议各不超过 4000 字符，修改／新增必须填写正文，删除原因可空，局部比较只用于节点修改。
+```text
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML>
+```
 
-3.0.3 的 feedback 4 精确包含 `schema_version:4`、`review:{request_id,review_id}`、`anchors`、`items`；完整 context 3 留在本机真实不可变快照，requirements 仅保留完整真实 REQ ID 字符串数组。复制只有固定标题 `## Agent Workflow Feedback Payload` 和单个 json 围栏内的紧凑 JSON，不附重复摘要；纯 JSON 输入同样支持。item 只携带用户整改与可选非空 A 引用，节点修改可带非空 `after_text`；不再交还 context、REQ／交互／接口映射、before_text 或 comparison。实际目标优先使用唯一源 ID，匿名源元素的来源键只注入派生副本，动态无来源节点保留输入并要求显式选择有来源父层。
+目录只包含本次 `--pages` 明确登记、属于同一需求且通过安全校验的 1—16 个具体页；上面的单页示例只显示一页，不会扫描整个项目、其他需求或未登记页面。需要多页目录时，在同一次 `open` 中传入各实际页面路径，共用同一个 `--plan` 和 `--request-id`：
 
-`validate` 以显式实际项目与同一 adapter 定位短引用的既有私有不可变包，完整核验包并重读当前源；缺包、来源变化、损坏或未知字段明确失败，不扫描、不接受外部 context 回退、不自动绑定 latest。成功只返回 `status:current`、短 `review`、必要 `anchors`、按 target 分组的精简 `changes` 和“修订输入非批准”短 notice。REQ／交互／接口关联从真实目标在组层还原一次，无值省略。PM 只将这些 current 结果与当前完整任务包交原 UI Agent，不重复传原反馈全文或完整 context。普通整改只交还明确引用的 A；无整改时交还全部明确标记且不推断整改。
+```text
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML-1> <project-relative-HTML-2>
+```
 
-快照桥联合核对真实来源窗口、origin、页面及 token；父壳不跨 `file://` 读取子页面 DOM，子页面负责命中、局部几何、高亮与有限摘录，摘录本身不是来源证明。草稿、相机和撤回仅属于绑定 review_id 的独立会话快照。新 manifest／boot／bridge 4 与 context 3 分开声明；已生成旧 feedback 2／3、context 2、manifest 2／3 及各自资产和装配／提取语义严格只读保留，不静默迁移旧包或草稿。上述是 3.0.3 的版本能力；当前 3.0.3／0.1.3 为未发布候选，本机仍为上一正式基线 3.0.2／0.1.2，不因源码能力自动升级。
+两页从交付目录读取同一物理原稿，桥和来源键只在 HTTP 内存响应注入，不为活动评审在磁盘维护业务 HTML 副本。项目只保存具体页面、五段契约和必要业务资产；新项目不生成通用导航 index、不复制工具脚本或样式。既有业务首页与未知文件不能按名称删除。原稿通过 file:// 仍可离线查看与操作，但不承诺完整目录／相机、一键冷启动或发现随机服务端口。服务不可用时，由交付方用同样显式参数重跑 open 并提供新链接；status 查询指定项目请求的有限状态，stop 停止精确实例并保留意见。不把 token、随机端口或机器绝对路径写回原稿，也不配置系统自启动或系统 URL 协议。
 
-旧绑定、损坏、未知字段与非法内容明确失败并保留意见，不自动改需求、页面或授予批准，也不增加业务确认。旧壳迁移另有预览／执行／恢复入口，只清理可证明归属的纯工具文件，混合或未知业务资产保留。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+新 live 使用 boot 5、严格 context 3 与 feedback 5 四字段 `schema_version/review/anchors/items`。短 review 只有 request_id/review_id，绑定真实来源修订；复制和下载采用相同紧凑 JSON／Markdown，不附重复摘要。标记 A 与整改分别编号且不设等级；节点修改／新增／删除、页面修改／新增、整体修改及显式跨页引用保持。REQ／交互／接口只从真实目标源还原，匿名来源键仅在响应注入，动态无来源节点明确要求选择真实源父层。
+
+草稿通过带 revision 的 CAS 保存，刷新或重新进入可恢复；冲突明确提示，不静默覆盖。原稿变化保留旧意见并阻止错误定位与交还，不用活动指针重绑旧 review_id。validate 以相同项目和 adapter 核验显式反馈及其真实 live 修订，只返回 current、短 review、必要 anchors、按目标分组的精简 changes 和“修订输入非批准”提示；PM 将这些结果连同当前完整任务包交回原 UI Agent。普通整改只交还明确引用的 A，无整改时交还全部明确标记，不推断整改。
+
+本机服务仅绑定 127.0.0.1 随机端口，严格验证 Host／Origin／认证，网页没有任意 root、argv 或 file 接口。设计内容处于只读资源闭包与 allow-scripts sandbox 内，不能读取父控制认证；桥联合核验 source、当前页、token 与 null origin。认证 URL 仅用于受信本机入口，不进入公开日志。新工具与旧 V4 资产分别冻结，三端携带相同核心与完整白名单。
+
+历史 prepare 及 feedback 2／3／4 的离线不可变包继续按原合同只读装配／消费，原 index、浏览／批注、开发说明及对应 manifest／boot／bridge 不受 live 分支替换；不迁移旧包或草稿。已验收的 feedback 4 精简交接和配置恢复仍保留。当前源码能力不代表本机已安装的 3.0.2／0.1.2 自动升级，候选状态与发布边界保持。旧壳迁移仍需明确授权的预览／执行／恢复，只清理可证明归属的纯工具，保留混合及未知业务资产。调用与封闭格式见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 实施者按实际改动完成必要构建、运行或文档检查，提交真实证据。Full 由请求级唯一独立只读 QA 检查集成范围，失败交原职责作者修复并由原 Reviewer 复查。Light 按风险与明确请求选择必要独立审查；未做独立 QA 时只报告真实验证结果，不宣称 QA PASS。
 

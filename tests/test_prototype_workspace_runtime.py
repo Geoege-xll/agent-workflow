@@ -251,6 +251,126 @@ assert.equal(model.exportPayload().items.length,256);
                                         text=True, capture_output=True, check=False)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def test_live_boot_and_draft_protocol_are_separate(self) -> None:
+        """真实模型验证live登记cap、草稿恢复、反馈5与旧快照互不混用。"""
+        scenario = r"""
+const liveBoot={...boot,schema_version:5,pages:boot.pages.map(entry=>({...entry,url:'/content/'+'a'.repeat(48)+'/'+entry.path+'#bridge='+'b'.repeat(32)}))};
+const live=window.PrototypeReviewState.parseStartup(encode(liveBoot)); assert.ok(live.context,live.error); assert.equal(live.schema_version,5);
+for(const url of ['https://evil.test/content/'+ 'a'.repeat(48)+'/'+boot.pages[0].path, '/content/'+'a'.repeat(48)+'/../escape#bridge='+'b'.repeat(32), 'project/'+boot.pages[0].path]) {
+  assert.equal(window.PrototypeReviewState.parseStartup(encode({...liveBoot,pages:[{...liveBoot.pages[0],url},liveBoot.pages[1]]})).context,null);
+}
+const liveModel=window.PrototypeReviewState.create(live,storage);
+liveModel.openEditor({scope:'global'}); liveModel.updateDraft({message:'新协议意见'}); liveModel.completeEditor();
+assert.equal(liveModel.exportPayload().schema_version,5);
+assert.equal(JSON.parse(store.get('prototype-review:v5:'+boot.context.review_id)).schema_version,5);
+assert.equal(window.PrototypeReviewState.create(live,storage).state.items[0].message,'新协议意见');
+assert.equal(window.PrototypeReviewState.create(parsed,storage).state.items.length,0);
+assert.equal(liveModel.exportPayload().review.review_id,boot.context.review_id);
+liveModel.block(); assert.throws(()=>liveModel.exportPayload()); assert.throws(()=>liveModel.addAnchor(),/原稿已变化/); assert.equal(liveModel.state.items[0].message,'新协议意见');
+"""
+        result = subprocess.run(["node", "-e", STATE_SETUP + scenario],
+                                input=json.dumps({"source": (TEMPLATES / "review-state.js").read_text(encoding="utf-8")}),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_live_connection_keeps_cas_and_credentials_at_boundary(self) -> None:
+        """HTTP边界不重放冲突PUT，首次凭据清除fragment且刷新只恢复本轮受限凭据。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict');
+const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+const saved=new Map(),calls=[]; let cleaned='';
+const location={origin:'http://127.0.0.1:45123',pathname:'/review/a.html',search:'',hash:'#token='+'a'.repeat(64)};
+const context={review_id:'b'.repeat(64)},window={};
+const response={revision:0,draft:null};
+vm.runInNewContext(source,{window,location,URLSearchParams,sessionStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)},
+  history:{replaceState(a,b,url){cleaned=url;}},AbortController,setTimeout,clearTimeout,
+  fetch:async(path,options)=>{calls.push({path,options});return options.method==='PUT'?{ok:false,status:409,json:async()=>({status:'error',error:{code:'draft_conflict',message:'冲突'}})}:{ok:true,json:async()=>response};}});
+(async()=>{
+const api=window.PrototypeLiveConnection.create(context); assert.equal(cleaned,'/review/a.html');
+assert.equal(saved.size,1); assert.ok([...saved.keys()][0].includes(context.review_id));
+assert.equal((await api.readDraft()).revision,0);
+await assert.rejects(api.saveDraft(0,{schema_version:5}),error=>error.code==='draft_conflict');
+assert.equal(calls.filter(call=>call.options.method==='PUT').length,1);
+assert.equal(calls[1].options.credentials,'omit'); assert.equal(calls[1].options.headers.Authorization,'Bearer '+'a'.repeat(64));
+assert.equal(JSON.parse(calls[1].options.body).revision,0);
+assert.ok(api.reviewURL('a.html').startsWith(location.origin+'/review/a.html#token='));
+api.close(); await assert.rejects(api.readDraft()); assert.equal(calls.length,2);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(["node", "-e", script],
+                                input=json.dumps((TEMPLATES / "live-connection.js").read_text(encoding="utf-8")),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_live_link_intents_keep_legacy_modifier_semantics(self) -> None:
+        """执行真实click监听器：live Alt交由登记导航，旧V4修饰键边界保持。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict');
+const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+// 此节点只验证生产监听器的事件决策；真实iframe导航和重新握手另由浏览器覆盖。
+const begin=source.indexOf('  document.addEventListener("click", (event) => {');
+const end=source.indexOf('  document.addEventListener("pointermove"',begin);
+assert.ok(begin>=0 && end>begin);
+function run({live=true,mode='annotate',temporary=false,altKey=false,href='details.html',ctrlKey=false,metaKey=false,shiftKey=false}={}) {
+ let listener,chosen=false;const messages=[];
+ const target={closest(selector){return selector==='a[href]'?{getAttribute(){return href;}}:null;}};
+ const event={target,button:0,altKey,ctrlKey,metaKey,shiftKey,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;},stopImmediatePropagation(){}};
+ vm.runInNewContext(source.slice(begin,end),{document:{addEventListener(type,callback){listener=callback;}},session:'active',panMoved:false,live,mode,temporary,inContent:()=>target,choose(){chosen=true;},send(type,body){messages.push({type,...body});}});
+ listener(event);return {prevented:event.defaultPrevented,chosen,messages};
+}
+let result=run({altKey:true,temporary:true});assert.equal(result.prevented,true,'live Alt链接必须阻止iframe默认导航');
+assert.equal(result.messages[0]?.intent,'navigate');assert.equal(result.messages[0]?.target,'details.html');
+result=run({mode:'browse'});assert.equal(result.prevented,true);assert.equal(result.messages[0]?.target,'details.html');
+result=run();assert.equal(result.chosen,true);assert.equal(result.messages.length,0);
+for(const href of ['missing.html','../outside.html','https://example.invalid/']) {result=run({altKey:true,temporary:true,href});assert.equal(result.prevented,true);assert.equal(result.messages[0]?.target,href);}
+for(const modifier of [{altKey:true},{ctrlKey:true},{metaKey:true},{shiftKey:true}]) {result=run({live:false,mode:'browse',...modifier});assert.equal(result.prevented,false);assert.equal(result.messages.length,0);}
+"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "page-shell.js").read_text(encoding="utf-8")),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_bridge_resolve_accepts_persisted_key_order(self) -> None:
+        """真实resolve按字段语义解析服务排序JSON，不能把同一来源误判为失效。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict');const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+const begin=source.indexOf('  function resolve(value) {'),end=source.indexOf('  function parentNode(',begin);assert.ok(begin>=0&&end>begin);
+const exact=(value,keys)=>value&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+for(const locator of [{type:'id',id:'title'},{type:'source',key:'source-'+'a'.repeat(64)}]){
+ const node={},actual={scope:'node',page:'docs/prototype/details.html',locator};
+ const context={exact,sourceAttr:'data-prototype-review-source',page:actual.page,stableId:value=>value==='title',sourceKey:value=>value===locator.key,unique:(attr,value)=>value===(locator.id||locator.key)?node:null,target:()=>actual};
+ vm.createContext(context);vm.runInContext(source.slice(begin,end)+';globalThis.invoke=resolve;',context);
+ const ordered=JSON.parse(JSON.stringify(actual,(key,value)=>value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.entries(value).sort()):value));
+ assert.equal(context.invoke(ordered),node,'服务JSON键排序不应破坏真实目标解析');
+ assert.equal(context.invoke({...ordered,page:'docs/prototype/other.html'}),null);
+ assert.equal(context.invoke({...ordered,unknown:true}),null);
+ assert.equal(context.invoke({...ordered,locator:{...ordered.locator,unknown:true}}),null);
+}
+"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "page-shell.js").read_text(encoding="utf-8")),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_live_sorted_node_draft_restores_same_target(self) -> None:
+        """消费服务同样排序的真实快照，节点草稿与定位身份必须按封闭字段语义恢复。"""
+        scenario = r"""
+const liveBoot={...boot,schema_version:5,pages:boot.pages.map(entry=>({...entry,url:'/content/'+'a'.repeat(48)+'/'+entry.path+'#bridge='+'b'.repeat(32)}))};
+const live=window.PrototypeReviewState.parseStartup(encode(liveBoot));const original=window.PrototypeReviewState.create(live,storage);
+original.setCatalog('docs/prototype/settings.html',[record('first'),record('second')]);original.select(record('first'));const anchor=original.addAnchor();
+original.openEditor(target('second'));original.updateDraft({message:'排序后节点草稿保留',reference_ids:[anchor.id]});
+const key='prototype-review:v5:'+boot.context.review_id;
+const sortJSON=value=>JSON.stringify(value,(name,entry)=>entry&&typeof entry==='object'&&!Array.isArray(entry)?Object.fromEntries(Object.entries(entry).sort()):entry);
+store.set(key,sortJSON(JSON.parse(store.get(key))));
+const restored=window.PrototypeReviewState.create(live,storage);assert.equal(restored.state.anchors.length,1);assert.equal(restored.activeDrafts().length,1);
+restored.setCatalog('docs/prototype/settings.html',[record('first'),record('second')]);assert.ok(restored.recordFor(restored.state.anchors[0].target));
+assert.equal(restored.targetKey(restored.state.anchors[0].target),restored.targetKey(target('first')));
+restored.openEditor(target('second'));assert.equal(restored.state.drafts[restored.state.editor].message,'排序后节点草稿保留');assert.equal(restored.completeEditor()[0].reference_ids[0],anchor.id);
+for(const bad of [{...target('first'),unknown:true},{scope:'node',page:'docs/prototype/settings.html',locator:{type:'id',id:'first',unknown:true}}])assert.equal(restored.validTarget(bad),false);
+for(const legal of [{scope:'global'},{scope:'page',page:'docs/prototype/settings.html'},target('first'),{scope:'node',page:'docs/prototype/settings.html',locator:{type:'source',key:'source-'+'a'.repeat(64)}}])assert.equal(restored.targetKey(legal),JSON.stringify(legal));
+"""
+        result = subprocess.run(["node", "-e", STATE_SETUP + scenario], input=json.dumps({"source": (TEMPLATES / "review-state.js").read_text(encoding="utf-8")}),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_camera_preserves_world_point_and_scale(self) -> None:
         """复用相机的缩放中心和仅平移定位不改变缩放。"""
         source = (TEMPLATES / "review-camera.js").read_text(encoding="utf-8")
@@ -267,7 +387,7 @@ assert.ok(window.PrototypeReviewCamera.fitCam(390,600).k>=.08);
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_production_scripts_compile(self) -> None:
-        for name in ("workspace.js", "feedback.js", "page-shell.js", "review-state.js", "review-camera.js"):
+        for name in ("workspace.js", "feedback.js", "page-shell.js", "review-state.js", "review-camera.js", "live-connection.js", "canvas-host.js", "live-workspace.js"):
             with self.subTest(name=name):
                 result = subprocess.run(["node", "--check", str(TEMPLATES / name)], text=True, capture_output=True, check=False)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)

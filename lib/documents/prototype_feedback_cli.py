@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""原型反馈的薄只读 CLI：仅输出准备链接或节点修订交接。"""
+"""原型反馈与可信本机服务入口；反馈消费保持只读，不自动修订或批准。"""
 
 from __future__ import annotations
 
@@ -27,26 +27,37 @@ def main(argv: list[str] | None = None) -> int:
     parser = Parser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("prepare", help="准备带有限上下文的原型评审链接")
+    live_open = commands.add_parser("open", help="登记唯一原稿并启动或复用本机交付/评审服务")
+    status = commands.add_parser("status", help="查询当前项目请求的服务有限状态")
+    stop = commands.add_parser("stop", help="停止精确登记的本机服务实例，保留全部意见")
     validate = commands.add_parser("validate", help="复核导出的意见并输出节点交接")
     preview = commands.add_parser("migration-preview", help="只读预览纯工具归属和安全迁移影响")
     apply = commands.add_parser("migration-apply", help="凭同一来源 preview 显式迁移；不处理未知业务资产")
     recover = commands.add_parser("migration-recover", help="恢复中断迁移，保留冲突的用户新内容")
-    for command in (prepare, validate, preview, apply, recover):
+    for command in (prepare, validate, preview, apply, recover, live_open, status, stop):
         command.add_argument("--root", required=True, type=Path, help="实际项目的绝对目录")
-        command.add_argument("--adapter", required=True, help="本次显式选择的项目相对适配器")
+        if command not in (status, stop):
+            command.add_argument("--adapter", required=True, help="本次显式选择的项目相对适配器")
         if command is not preview:
             command.add_argument("--data-dir", type=Path, help="用户级私有数据目录；测试应显式指定临时目录")
-    for command in (prepare, preview):
+    for command in (prepare, preview, live_open):
         command.add_argument("--plan", required=True, help="项目相对需求 Markdown")
         command.add_argument("--request-id", required=True, help="当前请求的稳定 ID")
-        command.add_argument("--pages", nargs="+", help="可选的项目相对具体 HTML 路径")
+        command.add_argument("--pages", nargs="+", required=command is live_open, help="项目相对具体 HTML 路径；open须显式登记")
+    for command in (status, stop): command.add_argument("--request-id", required=True, help="当前请求的稳定 ID")
     preview.add_argument("--confirm-no-active-use", action="store_true", help="明确已排除本轮待迁移资产的活动使用；否则只报告保留")
     for command in (apply, recover):
         command.add_argument("--preview", required=True, type=Path, help="已审阅的原 preview JSON 文件")
     validate.add_argument("--input", required=True, type=Path, help="显式选择的反馈 JSON 或固定机器载荷 Markdown 文件")
     try:
         args = parser.parse_args(argv)
-        if args.command == "prepare":
+        if args.command in {"open", "status", "stop"}:
+            from lib.documents.prototype_service import open_service, service_status, stop_service
+            if args.command == "open":
+                result = open_service(args.root, args.adapter, args.plan, args.request_id, args.pages, data_dir=args.data_dir)
+            elif args.command == "status": result = service_status(args.root, args.request_id, data_dir=args.data_dir)
+            else: result = stop_service(args.root, args.request_id, data_dir=args.data_dir)
+        elif args.command == "prepare":
             result = prepare_review(args.root, args.adapter, args.plan, args.request_id, args.pages, data_dir=args.data_dir)
         elif args.command == "migration-preview":
             result = migration_preview(args.root, args.adapter, args.plan, args.request_id, args.pages,
