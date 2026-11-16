@@ -8,6 +8,7 @@ import os
 import posixpath
 import re
 import secrets
+from socketserver import TCPServer
 import threading
 import time
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -50,6 +51,16 @@ class PrototypeServer(ThreadingHTTPServer):
         self.timeout = .25
         self.host = "127.0.0.1:" + str(self.server_port)
         self.origin = "http://" + self.host
+
+    def server_bind(self):
+        """数字环回服务直接完成真实TCP绑定，不依赖未使用的反向DNS主机名。"""
+        # HTTPServer的默认绑定还会调用socket.getfqdn/gethostbyaddr；其系统解析
+        # 等待不受可信CLI的12秒握手预算控制。本服务全部Host/Origin、连接记录与
+        # 健康请求均使用固定127.0.0.1，沿项目既有环回传输模式略过这一无关副作用。
+        # 仍由内核分配随机端口，仍在完整来源/连接发布后才报告ready；不改全局DNS、
+        # 启动预算、目录锁或权限检查，也不以提前输出就绪掩盖启动失败。
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def process_request(self, request, client_address):
         # 请求线程和读取超时同时有界，慢客户端不能无限占用本机服务资源。

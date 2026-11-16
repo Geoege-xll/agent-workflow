@@ -23,7 +23,10 @@ from tests.test_prototype_workspace import (write_valid_project, bind_requiremen
 @lru_cache(maxsize=1)
 def live_fixture():
     selected = os.environ.get("AGENT_WORKFLOW_PROTOTYPE_FIXTURE")
-    base = Path(selected) if selected else Path(tempfile.mkdtemp(prefix="prototype-live-"))
+    # macOS默认临时根可能经由/var别名返回。这里只规范化provider刚分配且拥有的
+    # 临时目录，使project/data共享同一真实根；显式override仍原样交给生产安全
+    # 边界，不得借测试修复放宽用户路径的no-follow拒绝或偷偷resolve外部输入。
+    base = Path(selected) if selected else Path(tempfile.mkdtemp(prefix="prototype-live-")).resolve()
     if not selected: atexit.register(shutil.rmtree, base, ignore_errors=True)
     base.mkdir(parents=True, exist_ok=True)
     project = base / "Project"

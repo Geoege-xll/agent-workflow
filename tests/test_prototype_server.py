@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import unittest
+from unittest import mock
 from urllib.parse import urlsplit
 
 from lib.documents import prototype_review as review
@@ -19,6 +20,23 @@ from lib.documents.prototype_server import PrototypeServer
 from lib.documents.prototype_service import open_service, service_status, stop_service
 from tests.test_prototype_live import live_fixture, empty_draft
 from tests.test_prototype_workspace import tree_snapshot
+
+
+class PrototypeServerBindingTest(unittest.TestCase):
+    def test_numeric_loopback_bind_has_no_dns_dependency(self):
+        """服务只绑定数字环回地址，真实socket启动不应等待任何名称解析器。"""
+        source = mock.Mock()
+        source.current.return_value = ({}, {}, [])
+        # 这里只替换与合同无关的DNS副作用；实际TCP bind和内核随机端口照常执行，
+        # 无磁盘fixture/业务源/认证输出。旧HTTPServer会在此负控精确失败。
+        with mock.patch("socket.getfqdn", side_effect=AssertionError("数字环回服务不应执行DNS解析")):
+            server = PrototypeServer(source, {}, [])
+        try:
+            self.assertEqual("127.0.0.1", server.server_address[0])
+            self.assertEqual("127.0.0.1", server.server_name)
+            self.assertEqual(server.server_address[1], server.server_port)
+            self.assertGreater(server.server_port, 0)
+        finally: server.server_close()
 
 
 class PrototypeServerTest(unittest.TestCase):

@@ -31,7 +31,7 @@
 
 当前安全顺序为各功能源码独立验收 → 双系统CI候选 → 组件0.1.3发布及真实下载固定绑定 → 最终同SHA CI → 插件3.0.3与三stable发布 → 官方客户端更新及本机载荷／配置保留核对。配置页原Reviewer的规范delta PASS已实际校验；检查点`b309dc2392ac0111b1122aaf3eca08a473f279e5`已普通推送。其[首轮CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43805980053)两平台各649项出现验证器独立清单／fixture遗漏引起的5失败和4既有skip，未生成候选；原失败已保全，清单已补新模块、精准4方法退出0。
 
-后续双网页／live5升级已完成作者验证、三端消费及原唯一QA三项返工delta PASS（40路径／57规范），详见[评审主题](workflow-document-lifecycle.md)。下一步提交当前已验收候选并重新跑双系统CI；当前仍未正式发布3.0.3／0.1.3、未更新三stable或本机。未变的feedback4与配置源码证据继续复用，不能用作者精准验证代替全CI。
+后续双网页／live5升级已完成作者验证、三端消费及原唯一QA三项返工delta PASS（40路径／57规范），详见[评审主题](workflow-document-lifecycle.md)。已以e3d135a普通推送；[第二轮CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43815691133)的Ubuntu通过、macOS失败，原始日志已保留。默认临时路径与数字环回启动的窄修复已有作者红绿证据，待同Reviewer复核及新双系统CI；本机未复现CI解析器的实际等待，不将假设当作全部超时的既定原因。当前仍未正式发布3.0.3／0.1.3、未更新三stable或本机。未变的feedback4与配置源码证据继续复用，不能用作者精准验证代替全CI。
 
 ### 3.0.2／0.1.2已完成历史
 
