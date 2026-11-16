@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码候选为 `3.0.3`／`0.1.3`，尚未正式发布，本机尚未升级到候选版本。上一正式基线 [xy-workflow 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2) 与独立配置工具 [Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 均已正式发布，三个 stable 来源已更新。本机三端插件已升级到 `3.0.2`、组件升级到 `0.1.2`，载荷字节及执行位与最终 CI 一致，模型偏好和原有项目启停／范围保留；不表示所有项目均启用。当前及历史发行证据见[发行主题](plans/stable-product-release.md)。Codex App 共享缓存已更新，App GUI 新会话、指定模型实际运行及读屏未在本轮实测；官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。独立配置工具 [Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3) 已正式发布并完成真实下载核验；工作流 `3.0.3` 仍为候选，等待 published 绑定后的最终 CI、插件发行与三 stable 分发。本机仍为 `3.0.2`／`0.1.2`，尚未升级。上一正式基线 [xy-workflow 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2) 与独立配置工具 [Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 均已正式发布，三个 stable 来源已更新。本机三端插件已升级到 `3.0.2`、组件升级到 `0.1.2`，载荷字节及执行位与最终 CI 一致，模型偏好和原有项目启停／范围保留；不表示所有项目均启用。当前及历史发行证据见[发行主题](plans/stable-product-release.md)。Codex App 共享缓存已更新，App GUI 新会话、指定模型实际运行及读屏未在本轮实测；官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
@@ -60,7 +60,7 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 需要原型的 UI 任务由设计 Agent 在所选 adapter 的 `docs.standards_root/prototype` 内制作可交互 HTML，并返回需求覆盖、规范符合性和交付一致性的三维自检。PM 将 REQ 到具体页面及实际状态锚点的关联写入同一主题计划；原型 HTML、静态验收、依赖指纹与视觉确认继续保留，不恢复计划 Markdown 转 HTML 生成链，也不增加第二个原型 QA。
 
-新原型交付使用当前物理插件根的白名单 `prototype_feedback_cli.py open`，显式指定实际项目、同一 adapter、唯一需求 Markdown、request-id 和本轮 pages。交付时启动本机服务，提供返回的具体页 `delivery_url`：共用可缩放画布保留真实产品交互，左目录默认收起且由统一元数据派生；“进入评审”通过 noopener 新标签页准确打开当前页，原交付页保留。评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放后继续批注。两页共享画布组件，分别保留相机与交互状态。
+已完成独立功能 QA 的 live 5 双网页交付使用当前物理插件根的白名单 `prototype_feedback_cli.py open`，显式指定实际项目、同一 adapter、唯一需求 Markdown、request-id 和本轮 pages。交付时启动本机服务，提供返回的具体页 `delivery_url`：共用可缩放画布保留真实产品交互，左目录默认收起且由统一元数据派生；“进入评审”通过 noopener 新标签页准确打开当前页，原交付页保留。评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放后继续批注。两页共享画布组件，分别保留相机与交互状态。
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML>
@@ -80,7 +80,7 @@ bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-ro
 
 本机服务仅绑定 127.0.0.1 随机端口，严格验证 Host／Origin／认证，网页没有任意 root、argv 或 file 接口。设计内容处于只读资源闭包与 allow-scripts sandbox 内，不能读取父控制认证；桥联合核验 source、当前页、token 与 null origin。认证 URL 仅用于受信本机入口，不进入公开日志。新工具与旧 V4 资产分别冻结，三端携带相同核心与完整白名单。
 
-历史 prepare 及 feedback 2／3／4 的离线不可变包继续按原合同只读装配／消费，原 index、浏览／批注、开发说明及对应 manifest／boot／bridge 不受 live 分支替换；不迁移旧包或草稿。已验收的 feedback 4 精简交接和配置恢复仍保留。当前源码能力不代表本机已安装的 3.0.2／0.1.2 自动升级，候选状态与发布边界保持。旧壳迁移仍需明确授权的预览／执行／恢复，只清理可证明归属的纯工具，保留混合及未知业务资产。调用与封闭格式见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+历史 prepare 及 feedback 2／3／4 的离线不可变包继续按原合同只读装配／消费，原 index、浏览／批注、开发说明及对应 manifest／boot／bridge 不受 live 分支替换；不迁移旧包或草稿。已验收的 feedback 4 精简交接和配置恢复仍保留。工作流 3.0.3 尚未发布，组件 0.1.3 已正式发布；本机已安装的 3.0.2／0.1.2 尚未升级，源码与功能 QA 不替代最终绑定 CI、插件发行、三 stable 分发或本机升级。旧壳迁移仍需明确授权的预览／执行／恢复，只清理可证明归属的纯工具，保留混合及未知业务资产。调用与封闭格式见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 实施者按实际改动完成必要构建、运行或文档检查，提交真实证据。Full 由请求级唯一独立只读 QA 检查集成范围，失败交原职责作者修复并由原 Reviewer 复查。Light 按风险与明确请求选择必要独立审查；未做独立 QA 时只报告真实验证结果，不宣称 QA PASS。
 

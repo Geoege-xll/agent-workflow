@@ -6,7 +6,7 @@
 
 配置核心只实现一次发现、字段校验、读取、预览、条件保存、恢复和诊断。网页通过本机 HTTP 使用它；命令行脚本复用相同核心；MCP 保留为按需开启的接入方式。普通网页配置和脚本查询无需 MCP。工作流核心不导入服务，也不读取服务版本。
 
-独立核心位于 `native_config/`，版本源为该目录的 `VERSION`，当前源码候选为 `0.1.3`，工作流候选为 `3.0.3`；两者尚未正式发布，本机尚未升级。候选固定描述从真实本地 ZIP 生成，保持 `unpublished` 且下载 URL 为空。上一正式基线 [0.1.2 已正式发布](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)，插件固定描述经真实下载与 CI ZIP／BUILD 核验后标记 published。[工作流 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2) 与三个 stable 来源已正式发布更新，本机三端插件／组件已升级为 `3.0.2`／`0.1.2`，模型偏好和项目启停／范围保留；[0.1.1 独立发行](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.1)保留为历史记录。HTTP、网页、脚本和可选 MCP 共用该核心。早期 `plugin_runtime/`、插件可选服务装配和专属旧测试已清理；插件不包含服务或网页，也不把旧 AWF 七角色 JSON 偏好迁移为原生配置。
+独立核心位于 `native_config/`，版本源为该目录的 `VERSION`，当前 [0.1.3 已正式发布](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3)，固定描述由公开装配入口消费成功 CI 的原始组件 ZIP，并重新下载正式资产核验相同 SHA／完整 BUILD 后生成 `published`。工作流 `3.0.3` 仍为候选，等待绑定后的最终 CI、插件发行与三 stable 分发；本机插件／组件仍为 `3.0.2`／`0.1.2`，尚未升级。上一正式基线 [0.1.2 已正式发布](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)，插件固定描述经真实下载与 CI ZIP／BUILD 核验后标记 published。[工作流 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2) 与三个 stable 来源已正式发布更新，本机三端插件／组件已升级为 `3.0.2`／`0.1.2`，模型偏好和项目启停／范围保留；[0.1.1 独立发行](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.1)保留为历史记录。HTTP、网页、脚本和可选 MCP 共用该核心。早期 `plugin_runtime/`、插件可选服务装配和专属旧测试已清理；插件不包含服务或网页，也不把旧 AWF 七角色 JSON 偏好迁移为原生配置。
 
 ## 插件内打开
 
@@ -94,7 +94,7 @@ PM 在派发前读取同源纯标准库解析器，只有当前宿主真实工�
 
 ## 网页交互范围
 
-`0.1.3` 候选对齐指定中央业务稿：品牌与顶部平台／范围／项目上下文、窄功能导航、通用默认与逐身份表格，以及原生定义搜索列表和详情双栏。详情只展示真实 context 中的身份、来源、模型、推理、说明、可写性与启用观察；未提供的信息保持未知，插件缓存只读。调用偏好、原生定义和启停分别形成草稿与事务。上一已发布并安装版本为 `0.1.2`，其第六版验收和更早发行／安装记录作为历史保留，具体边界见[交付记录](plans/native-model-preferences.md)。
+`0.1.3` 对齐指定中央业务稿：品牌与顶部平台／范围／项目上下文、窄功能导航、通用默认与逐身份表格，以及原生定义搜索列表和详情双栏。详情只展示真实 context 中的身份、来源、模型、推理、说明、可写性与启用观察；未提供的信息保持未知，插件缓存只读。调用偏好、原生定义和启停分别形成草稿与事务。上一已发布并安装版本为 `0.1.2`，其第六版验收和更早发行／安装记录作为历史保留，具体边界见[交付记录](plans/native-model-preferences.md)。
 
 首次合法入口兑换服务签发的短期派生会话后清除地址认证片段，普通刷新恢复原平台、用户／项目范围及真实项目路径。原入口令牌不写 localStorage、sessionStorage、history 或日志；派生凭据绑定精确 origin 与当前服务实例，有过期时间和容量上限。浏览器会话存储可能被同源 opener 复制，不能据此声明严格标签页独占。存储拒绝时当前有效页仅内存工作，刷新须重新打开；无认证、过期、权限失败或实例变化时说明重开路径，不显示可保存的空编辑区，也不自动保存草稿。
 
@@ -148,7 +148,7 @@ bash scripts/python_runtime.sh -B -X utf8 packaging/build_agent_config.py \
 
 当前源码的原生读写、条件发布、退出结算、清单身份、传输和网页各有临时真实夹具与负控，具体命令、范围、退出码及独立 QA 状态统一记录在[3.0 计划](plans/plugin-v3.md)。源码与临时保存流程的证据不替代官方客户端实际模型执行验收。部分失败与恢复冲突须保留逐项收据和唯一前像，不能展示为全部成功。
 
-复杂 YAML 无法安全定位时拒绝编辑；未文档化或未观察到的来源保持诊断；AGY 调用 schema 未确认时不生成派发参数。当前 0.1.3 为未发布候选；上一独立正式版与本机组件均为 0.1.2，三端 doctor 为 ready／integrity verified，偏好升级前后摘要一致，原有项目启停和范围保留，不代表全部项目启用。Codex App 共享缓存已更新，但 App GUI 新会话、指定模型实际运行及读屏未在本轮实测；正式发布、本机升级与完整原生模型运行验收仍分别判断。
+复杂 YAML 无法安全定位时拒绝编辑；未文档化或未观察到的来源保持诊断；AGY 调用 schema 未确认时不生成派发参数。当前独立正式版为 0.1.3，连接恢复与指定布局已完成独立功能 QA，发行资产已由成功 CI 原包及真实下载核验。本机组件仍为 0.1.2；上一升级基线的三端 doctor 为 ready／integrity verified、偏好升级前后摘要一致，原有项目启停和范围保留，不代表全部项目启用，也不代表本机已升级到 0.1.3。Codex App 共享缓存已更新，但 App GUI 新会话、指定模型实际运行及读屏未在本轮实测；正式发布、本机升级与完整原生模型运行验收仍分别判断。
 
 命名 authority 为 `product/command_identity.json`，工作流包和独立配置包携带同源原始字节。0.1.2 已完成独立资产发布及下载核验、固定插件描述；工作流 3.0.2 已通过最终绑定 CI、插件正式发行与三 stable 更新，本机升级亦已核对真实载荷。已有 0.1.1 的完整发行链作为历史记录保留。合法历史库存认证与当前发行 ABI 保持分开：历史库存按原发行 ZIP、BUILD 与文件字节认证；0.1.3 当前 ABI 还必须包含连接脚本、原生定义脚本及 browser_sessions.py，公开归档入口、新目标准备、当前运行选择和登记重试严格校验，不迁移或重写旧库存。旧 `agent-workflow` 与新 `xy-workflow` 受管身份均可观察，未知市场、来源不匹配或多个候选一律只读诊断。
 
