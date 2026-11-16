@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-**[xy-workflow 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2)** 与独立配置工具 **[Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)** 均已正式发布，三个 stable Git 来源已更新。本机 Codex／Claude／AGY 插件已升级到 `3.0.2`，组件已升级到 `0.1.2`，实际载荷与 CI 一致，原有模型偏好和项目启停／范围保留。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
+当前源码候选为 **xy-workflow 3.0.3／Native Agent Config 0.1.3**，尚未正式发布，本机尚未升级到这两个版本。上一正式基线 **[xy-workflow 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2)** 与独立配置工具 **[Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2)** 均已正式发布，三个 stable Git 来源已更新。本机 Codex／Claude／AGY 插件已升级到 `3.0.2`，组件已升级到 `0.1.2`，实际载荷与 CI 一致，原有模型偏好和项目启停／范围保留。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
 
 ## 工作流保持
 
@@ -67,7 +67,7 @@ AGY 使用 GitHub `tree/分支` 地址，不能换成 Claude 的 `#分支` 写�
 
 配置页默认进入“调用偏好”，提供用户级和项目级的通用默认及逐 Agent 设置，插件缓存角色保持只读。模型目录来自本机对应客户端或有效配置，推理选项按当前模型处理；设置先预览、再确认保存，PM 在后续派发前读取。保存、原生文件重新加载与指定模型实际运行分别判断，不改变当前主会话或运行中的 Agent。
 
-Codex／Claude 提供用户级和项目级工作流启停、恢复继承；AGY 保留官方管理说明。0.1.2 包含已通过独立验收的第六版工作台：深石墨主题、148px 窄导航、顶部平台与范围上下文、统一选择器，以及就近的恢复继承按钮；保留独立草稿、未知值和失败收据。本机已升级，原有项目启停设置保持，不代表所有项目均启用；停用前保存页面给出的独立恢复命令。
+Codex／Claude 提供用户级和项目级工作流启停、恢复继承；AGY 保留官方管理说明。0.1.3 候选增加普通刷新后的短期连接恢复，保持原平台、范围与真实项目路径；连接失效或存储拒绝时明确提示重新打开。界面对齐指定中央业务稿，提供通用默认和逐身份表格、原生定义搜索列表与详情双栏；保留三类独立草稿、只读边界、未知值和失败收据。停用前保存页面给出的独立恢复命令。上一已安装组件为 0.1.2，原有项目启停设置保持，不代表所有项目均启用。
 
 ## 精选技能与文档
 
@@ -79,13 +79,14 @@ Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付
 
 3.0.2 的通用评审工作台提供浏览／批注、固定视口相机、独立 A 标记和节点／页面／全局整改，不设置意见等级。JSON 与 Markdown 交还同一 feedback 3，先通过后端重读源复核。项目保留具体页面及业务资产；私有离线评审快照固定工具版本，插件更新不覆盖正在使用的快照，原型阶段完整保留。
 
-当前源码正在开发 feedback 4 精简交接：复制／导出仅携带短 `review` 引用、必要标记和用户整改，完整 context 3 保留在本机真实快照中；缺包或来源变化明确拒绝。PM 只把复核为 `current` 的精简结果和当前完整任务包交原 UI Agent，反馈仍不构成需求或视觉批准。旧 feedback 2／3 与各自已生成评审包继续严格只读消费；这不表示本机已安装的 3.0.2 已升级，当前发布版本与组件版本保持不变。调用细节见[反馈消费合同](platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+3.0.3 提供 feedback 4 精简交接：复制／导出仅携带短 `review` 引用、必要标记和用户整改，完整 context 3 保留在本机真实快照中；缺包或来源变化明确拒绝。PM 只把复核为 `current` 的精简结果和当前完整任务包交原 UI Agent，反馈仍不构成需求或视觉批准。旧 feedback 2／3 与各自已生成评审包继续严格只读消费；3.0.3／0.1.3 当前仍为未发布候选，本机已安装的 3.0.2／0.1.2 尚未升级。调用细节见[反馈消费合同](platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 ## 当前验证范围
 
 | 范围 | 已有证据与边界 |
 | --- | --- |
-| 3.0.2／0.1.2 正式发行 | [最终 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43603486736)两系统各 633 项、4 项既有跳过，候选成功；两个产品均已正式发布 |
+| 3.0.3／0.1.3 当前候选 | feedback 4、配置连接恢复与指定布局已纳入源码；等待本请求唯一 QA、正式发行与本机升级，不能以候选构建代替完成 |
+| 3.0.2／0.1.2 上一正式发行 | [最终 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43603486736)两系统各 633 项、4 项既有跳过，候选成功；两个产品均已正式发布 |
 | 3.0.2 远程分发 | [stable 发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43605162892)三分支成功，Release 八附件摘要匹配同一最终 CI 产物 |
 | 本机升级 | Codex／Claude／AGY 均已升级为 3.0.2；2310／2317／2315 个插件文件字节及执行位匹配 CI，原有项目启停／范围与其他插件采样保持 |
 | 独立配置组件 | 0.1.2 已真实准备并打开浏览器，三端 doctor 为 ready／integrity verified；模型偏好升级前后摘要一致 |

@@ -32,7 +32,7 @@ class ConsoleEntryTest(unittest.TestCase):
     def test_self_hosted_entry_has_accessible_forms_and_real_static_routes(self):
         page = PageParser()
         page.feed((WEB / "index.html").read_text(encoding="utf-8"))
-        self.assertEqual([attrs["src"] for tag, attrs in page.elements if tag == "script"], ["/console.js"])
+        self.assertEqual([attrs["src"] for tag, attrs in page.elements if tag == "script"], ["/connection.js", "/native-definitions.js", "/console.js"])
         self.assertEqual([attrs["href"] for tag, attrs in page.elements if tag == "link"], ["/console.css"])
         self.assertFalse(any(key.startswith("on") for _, attrs in page.elements for key in attrs))
         ids = [attrs["id"] for _, attrs in page.elements if "id" in attrs]
@@ -52,6 +52,8 @@ class ConsoleEntryTest(unittest.TestCase):
         try:
             for path, filename, content_type in (("/", "index.html", "text/html"),
                                                    ("/console.js", "console.js", "javascript"),
+                                                   ("/connection.js", "connection.js", "javascript"),
+                                                   ("/native-definitions.js", "native-definitions.js", "javascript"),
                                                    ("/console.css", "console.css", "text/css")):
                 with self.subTest(path=path):
                     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -90,6 +92,73 @@ const response = (value, status = 200) => ({ok: status < 400, status, json: asyn
         result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
                                 text=True, capture_output=True, timeout=12)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_connection_exchange_reload_priority_expiry_and_storage_boundaries(self):
+        # 同一生产连接模块验证原token只交换一次、恢复先健康核验，且不损坏其它history消费者。
+        self.run_javascript(r"""
+const {Connection, STORAGE_KEY, HISTORY_KEY, sessionContract} = require('./native_config/web/connection.js');
+const values = new Map(), origin = 'http://127.0.0.1:43210';
+const storage = {getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+const history = {state:{unrelated:'preserved'},replaceState(value, _title, url){this.state=value;assert.equal(url,'/');}};
+const env = {origin,history,storage:()=>storage,cleanUrl:'/'};
+const derived = {schema_version:1,session_token:'a'.repeat(43),instance_id:'b'.repeat(32),origin,expires_at:Date.now()+1700000};
+const calls=[]; const api = new ModelApi('',async(path,init)=>{
+ calls.push({path,authorization:init.headers.Authorization,body:init.body});
+ return response(path==='/api/session'?derived:{protocol_version:2,instance_id:derived.instance_id});
+});
+const connection = new Connection(api,env);api.connection=connection;
+await connection.start(new URLSearchParams({token:'original-entry',host:'claude',project:'/fixture/project'}));
+assert.equal(connection.ready,true);assert.equal(calls[0].body,'{}');assert.equal(calls[0].authorization,'Bearer original-entry');
+assert.equal(calls[1].authorization,'Bearer '+derived.session_token);
+assert.equal(values.get(STORAGE_KEY).includes('original-entry'),false);
+assert.equal(JSON.stringify(history.state).includes('original-entry'),false);assert.equal(history.state.unrelated,'preserved');
+connection.remember({host:'antigravity',scope:'project',project:'/fixture/very long project'},'native');
+const restored = new Connection(api,env);api.connection=restored;
+await restored.start(new URLSearchParams());
+assert.deepEqual(restored.initial,{host:'antigravity',scope:'project',project:'/fixture/very long project',view:'native'});
+assert.equal(calls.filter(call=>call.path==='/api/session').length,1,'普通reload不能再签发/延长');
+assert.equal(history.state[HISTORY_KEY].project,'/fixture/very long project');
+// 新有效入口优先，旧项目目标不能覆盖新host/global；非法会话和实例切换均撤销恢复凭据。
+const replacement = new Connection(api,env);api.connection=replacement;
+await replacement.start(new URLSearchParams({token:'new-original',host:'codex'}));
+assert.equal(replacement.initial.scope,'global');assert.equal(replacement.initial.host,'codex');
+const badApi = new ModelApi('',async()=>response({protocol_version:2,instance_id:'c'.repeat(32)}));
+const mismatched = new Connection(badApi,env);badApi.connection=mismatched;
+await assert.rejects(mismatched.start(new URLSearchParams()),error=>error.code==='instance_changed');
+assert.equal(values.has(STORAGE_KEY),false);assert.equal(badApi.token,'');
+assert.equal(sessionContract({...derived,expires_at:Date.now()-1},origin),null);
+assert.equal(sessionContract({...derived,origin:'http://127.0.0.1:other'},origin),null);
+const missing = new Connection(api,env);api.connection=missing;
+await assert.rejects(missing.start(new URLSearchParams()),error=>error.code==='authentication');
+const blockedEnv={...env,storage:()=>{throw Error('blocked');}};
+const memory = new Connection(api,blockedEnv);api.connection=memory;
+await memory.start(new URLSearchParams({token:'memory-original'}));assert.equal(memory.ready,true);assert.equal(memory.storageAvailable,false);
+memory.session.expires_at=0;assert.throws(()=>memory.authorize(),error=>error.code==='authentication');assert.equal(api.token,'');
+// 401/403从共享请求层失效，不能继续使用上次context保存。
+for(const status of [401,403]) {
+ let invalidated=0; const denied=new ModelApi('derived',async()=>response({error:{code:'unauthorized'}},status));
+ denied.connection={authorize(){},clear(){denied.token='';}};denied.onInvalidConnection=()=>invalidated++;
+ await assert.rejects(denied.context({host:'codex',scope:'global'}));assert.equal(invalidated,1);assert.equal(denied.token,'');
+}
+""")
+
+    def test_native_search_keeps_opaque_selection_and_truthful_unknown_facts(self):
+        # 搜索无结果与同名不同来源不能偷换保存身份；没有权限/启用字段必须明确未知。
+        self.run_javascript(r"""
+const {NativeDefinitions,facts} = require('./native_config/web/native-definitions.js');
+const view=new NativeDefinitions();
+const rows=[row('user:a',{name:'same',description:'用户定义',source_path:'/user/same.md'}),row('plugin:b',{name:'same',description:'插件职责',source_path:'/plugin/same.md',writable:false})];
+assert.equal(view.project('global',rows).selected.role,'user:a');
+view.select('global','plugin:b',rows);view.search('global','用户');
+assert.deepEqual(view.project('global',rows).rows.map(row=>row.role),['user:a']);
+assert.equal(view.project('global',rows).selected.role,'plugin:b');
+view.search('global','no-match');assert.equal(view.project('global',rows).rows.length,0);
+assert.equal(view.project('global',rows).selected.role,'plugin:b');
+assert.equal(view.project('global',[rows[0]]).selected,null,'消失身份不能回退到同名首项');
+assert.equal(view.project('project',rows).selected.role,'user:a','不同上下文独立选中');
+assert.equal(facts(rows[0]).find(row=>row[0]==='权限')[1],'宿主未提供可核验权限信息');
+assert.equal(facts({...rows[0],enabled:false}).find(row=>row[0]==='启用状态')[1],'已观察到停用');
+""")
 
     def test_dynamic_identity_independent_fields_read_only_and_draft_recovery(self):
         self.run_javascript(r"""
@@ -301,6 +370,17 @@ assert.deepEqual(draft.preferences.payload(),{'*':{model:null}});
 draft.preferences.set('vendor:worker','model','private-model');
 assert.equal(resolvedField(draft.preferences,'vendor:worker','model',true).value,'private-model');
 assert.equal(draft.preferences.value('*','effort'),null);
+// 真实原生context的inherit仅表示宿主默认未观察，不能冒充模型ID或有效推理值。
+const native = new Draft({host:'codex',scope:'global'});
+native.accept(context([row('native-inherits',{overrides:{},effective:{model:'inherit',effort:'inherit'},sources:{model:'host_unresolved',effort:'host_unresolved'}})]));
+assert.equal(resolvedField(native,'native-inherits','effort').value,null);
+assert.equal(resolvedField(native,'native-inherits','model').value,null);
+native.set('native-inherits','model','fixture-model');assert.equal(resolvedField(native,'native-inherits','model').value,'fixture-model');
+native.set('native-inherits','model','inherit');assert.equal(resolvedField(native,'native-inherits','model').value,'inherit','明确草稿覆盖不能被占位规范化吞掉');
+native.accept(context([row('known-inherit',{overrides:{},effective:{model:'inherit'},sources:{model:'user'}})]));
+assert.equal(resolvedField(native,'known-inherit','model').value,'inherit','已知来源不能被当作宿主未观察占位');
+
+
 """)
 
     def test_picker_projection_preserves_unknown_ids_and_validates_custom_input(self):

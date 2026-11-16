@@ -33,8 +33,10 @@ GROUPS = {
                               "RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")),
     # 调用偏好属于独立配置核心；current 直接继承本组，确保实际 CI 同时执行其
     # 解析合同与事务安全回归，不能只依赖作者临时显式点选这些测试节点。
+    # browser_sessions 独立覆盖派生凭据的过期、容量及实例边界，显式加入才会被
+    # current 的双系统 CI 收集；不使用全树发现替代这里的当前产品合同。
     "native-config": modules("native_config", "native_preferences", "native_inventory", "native_config_codecs", "native_config_commands",
-                             "native_config_server", "native_config_mcp", "native_config_packaging", "plugin_console",
+                             "native_config_server", "browser_sessions", "native_config_mcp", "native_config_packaging", "plugin_console",
                              "plugin_config_launcher", "config_distribution"),
     "codex": modules("codex_workflow", "shared_memory_contract"),
     "claude": modules("claude_workflow", "claude_instructions", "shared_memory_contract"),

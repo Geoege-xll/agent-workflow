@@ -290,6 +290,73 @@ class StandalonePackageTest(unittest.TestCase):
                     payload(source)
         self.assertFalse((self.base / "invalid").exists())
 
+    def test_current_abi_rejects_missing_session_and_web_resources_with_valid_build(self):
+        """摘要自洽仍不足以执行当前包；历史认证与当前 ABI 拒绝保持两条边界。"""
+        store = runpy.run_path(str(ROOT / "plugins/maintenance/component_store.py"))
+        archive = self.build(self.base / "build")
+        with zipfile.ZipFile(archive) as package:
+            complete = {name: package.read(name) for name in package.namelist()}
+        version = complete["native_config/VERSION"].decode("ascii").strip()
+        # 每次只移除一个实际运行资源，并同步重算 BUILD 与 ZIP 摘要，防止
+        # 普通完整性报错遮蔽当前 ABI 的缺失拒绝。无需启动或修改任何用户组件。
+        rejected = self.base / "incomplete.zip"
+        for missing in ("native_config/web/connection.js", "native_config/web/native-definitions.js",
+                        "native_config/browser_sessions.py"):
+            with self.subTest(missing=missing):
+                bodies = {name: body for name, body in complete.items() if name != missing}
+                manifest = json.loads(bodies["BUILD.json"])
+                del manifest["files"][missing]
+                bodies["BUILD.json"] = json.dumps(manifest, sort_keys=True).encode()
+                self.assertEqual(store["checked_build"](bodies, version), manifest)
+                with zipfile.ZipFile(rejected, "w") as package:
+                    for name, body in bodies.items():
+                        package.writestr(name, body)
+                digest = hashlib.sha256(rejected.read_bytes()).hexdigest()
+                with self.assertRaisesRegex(store["ComponentError"], "invalid_build_manifest"):
+                    store["archive_payload"](rejected, version, digest)
+
+    def test_detached_package_consumes_session_and_exact_static_resource_closure(self):
+        """包外真实 HTTP 兑换并使用派生会话，同时逐字节消费两个新增页面脚本。"""
+        installed = self.unpack()
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        server = subprocess.Popen(self.command(installed, "serve", "--idle-timeout", "0"),
+            cwd=self.base, env=environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.children.append(server)
+        started = self.read_line(server)
+        parsed = urlsplit(started["url"])
+        origin = f"http://127.0.0.1:{parsed.port}"
+
+        def request(method, path, headers, data=None):
+            connection = http.client.HTTPConnection("127.0.0.1", parsed.port, timeout=4)
+            try:
+                connection.request(method, path, body=json.dumps(data) if data is not None else None,
+                                   headers=headers)
+                response = connection.getresponse()
+                return response.status, response.read()
+            finally:
+                connection.close()
+
+        headers = {"Authorization": "Bearer " + parse_qs(parsed.fragment)["token"][0],
+                   "Origin": origin, "Content-Type": "application/json"}
+        status, raw = request("POST", "/api/session", headers, {})
+        self.assertEqual(status, 200, raw)
+        session = json.loads(raw)
+        headers["Authorization"] = "Bearer " + session["session_token"]
+        status, raw = request("GET", "/api/context?" + urlencode({"host": "codex", "scope": "project",
+                              "project": str(self.project)}), headers)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(json.loads(raw)["host"], "codex")
+        # 静态资源通过公开 HTTP 路由读取；不能只看 ZIP 名称就声称浏览器可加载。
+        for name in ("index.html", "console.css", "console.js", "connection.js", "native-definitions.js"):
+            with self.subTest(resource=name):
+                path = "/" if name == "index.html" else "/" + name
+                status, body = request("GET", path, {})
+                self.assertEqual(status, 200, body)
+                self.assertEqual(body, (ROOT / "native_config/web" / name).read_bytes())
+        self.assertEqual(self.native_file.read_bytes(), self.before)
+
     def test_identity_content_pin_rejects_safe_but_unapproved_changes(self):
         """唯一数据声明经规范化 pin 约束；安全形状不能放宽插件、别名或旧角色权限。"""
         from product.command_identity import load_identity

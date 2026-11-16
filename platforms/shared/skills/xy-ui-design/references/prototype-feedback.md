@@ -4,7 +4,7 @@
 
 ## 准备和交还
 
-以下新格式描述当前源码开发行为，不代表本机已发布安装的 3.0.2 已具备 feedback 4；版本号与安装事实保持不变。实际调用使用当前待验证版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
+以下格式是 3.0.3 的 feedback 4 消费合同；3.0.3 当前为未发布候选，本机已安装的 3.0.2 不因源码版本更新自动具备该能力。实际调用使用当前所选版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py resource templates/prototype/page.html

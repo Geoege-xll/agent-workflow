@@ -114,7 +114,7 @@ Requirements/plan Markdown-to-HTML generation is retired under [the retained ref
 keep any existing HTML as historical material without requiring an update.
 需要评审整改时，按需读取 [反馈消费合同](references/prototype-feedback.md)，通过当前物理插件根
 `prepare` 生成项目外不可变快照；项目只保留具体 HTML/CSS/JS 与五段页面契约，不复制通用壳。
-当前源码的新复制／导出承载相同的 feedback 4 四字段 envelope：`schema_version/review/anchors/items`，
+3.0.3 的复制／导出承载相同的 feedback 4 四字段 envelope：`schema_version/review/anchors/items`，
 短 `review` 仅含 `request_id/review_id`；完整 context 3 留在本机真实不可变包内。先由 `validate`
 按显式项目／adapter 重读源及核验原包；缺包或来源变化明确失败，不扫描或自动绑定 latest。
 只消费 `current` 的精简 `changes`、必要 `anchors`、短 `review` 及当前完整任务包，不重复转交
@@ -124,8 +124,8 @@ keep any existing HTML as historical material without requiring an update.
 动态无来源节点保留输入并提示显式选有来源父层；不得凭局部摘录或静默改绑确认来源。
 标记 A 与整改独立编号，不恢复意见等级；普通整改只交还明确引用的 A，无整改时交还全部明确
 标记且不推断整改。反馈不构成批准，需求与适用视觉确认仍沿原规则。已生成旧 feedback 2／3、
-context 2 与 manifest 2／3 保留原严格只读消费，不迁移旧包／草稿；源码新格式不表示本机已发布
-安装的 3.0.2 已具有该能力。
+context 2 与 manifest 2／3 保留原严格只读消费，不迁移旧包／草稿；3.0.3 候选尚未正式发布，本机已发布
+安装的 3.0.2 不因源码版本变更自动具有该能力。
 The design Agent does not edit the PM's source or create a mapping report; this association does not
 change the prototype page, dependency fingerprint, or visual-approval contract.
 

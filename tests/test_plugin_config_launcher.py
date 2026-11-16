@@ -222,8 +222,13 @@ class PluginConfigLauncherTest(unittest.TestCase):
         因此回归不依赖开发者本机库存、历史下载或 CI 工作区之外的文件。
         """
         version = "0.1.0-alpha.4"
+        # 当前 0.1.3 增加的会话模块与两个页面脚本不属于 alpha.4 的发行闭包。
+        # 显式剔除新资源来恢复历史形态，保留下方 30／29 的旧合同；不能把
+        # 当前构建器持续增加的资源倒灌进历史库存，或通过放宽数量断言造绿。
+        current_only = {"native_config/browser_sessions.py", "native_config/web/connection.js",
+                        "native_config/web/native-definitions.js"}
         bodies = {name: body for name, body in self.bodies.items()
-                  if name != "BUILD.json" and not name.startswith("product/")}
+                  if name != "BUILD.json" and not name.startswith("product/") and name not in current_only}
         bodies["native_config/VERSION"] = (version + "\n").encode("ascii")
         manifest = {"name": store.PRODUCT, "version": version, "third_party_dependencies": [],
                     "files": {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()}}

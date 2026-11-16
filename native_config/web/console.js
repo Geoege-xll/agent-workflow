@@ -1,5 +1,5 @@
 /* 原生 Agent 配置页面：请求协议、草稿状态和 DOM 展示分别在本文件的三个边界内维护。
- * 不缓存令牌到磁盘，不根据 Agent 名字推断权限，也不把保存成功当作实际模型运行收据。 */
+ * 连接模块仅在会话存储中保留短期派生凭据；不根据 Agent 名字推断权限，不把保存成功当作运行收据。 */
 (() => {
   "use strict";
 
@@ -166,9 +166,14 @@
 
   class ModelApi {
     constructor(token, fetcher = globalThis.fetch.bind(globalThis), timeout = 45000) {
-      this.token = token; this.fetcher = fetcher; this.timeout = timeout;
+      this.token = token; this.fetcher = fetcher; this.timeout = timeout; this.connection = null; this.onInvalidConnection = null;
     }
     async request(path, body, signal, errorReceipt) {
+      // 会话交换与首次健康校验由连接模块启动；其余请求均在唯一请求边界核验绝对期限。
+      if (this.connection && !["/api/session", "/api/health"].includes(path)) {
+        try { this.connection.authorize(); }
+        catch (error) { this.onInvalidConnection?.(); throw error; }
+      }
       if (!this.token) throw new ApiError("authentication", "连接令牌缺失。请回到宿主主会话，显式运行 xy-workflow:xy-config Skill 重新打开配置页。");
       const controller = new AbortController();
       let timedOut = false;
@@ -191,6 +196,9 @@
           const message = response.status === 401 || response.status === 403 ? "连接验证失败。请回到宿主主会话，显式运行 xy-workflow:xy-config Skill 重新打开配置页。" :
             typeof error.message === "string" ? error.message : "请求未完成，请重试。";
           const failure = new ApiError(code, message, response.status);
+          if ([401, 403].includes(response.status) && this.connection) {
+            this.connection.clear(); this.onInvalidConnection?.();
+          }
           // 错误正文也可能携带核心已发生写入的正式收据；由所属业务API显式识别与校验，
           // 普通鉴权/冲突错误不获得恢复收据，不能借任意错误JSON冒充保存结果。
           const receipt = errorReceipt?.(value, response.status, code);
@@ -371,7 +379,10 @@
         if (source === defaultSource) return {value:null, source:"继承值待预览", pending:true};
       }
     }
-    return {value:row.effective[field] ?? null, source:sourceLabel(row.sources[field]), pending:false};
+    // 原生context以inherit标记“宿主默认未观察”，它不是实际模型ID或推理档位。
+    // 只有明确本层覆盖才保留字面inherit；空原生字段不能因此被能力校验误判为不兼容。
+    const effective = !preferences && row.sources[field] === "host_unresolved" && row.effective[field] === "inherit" ? null : row.effective[field] ?? null;
+    return {value:effective, source:sourceLabel(row.sources[field]), pending:false};
   }
 
   class RequestOwner {
@@ -400,12 +411,13 @@
 
   const $ = id => document.getElementById(id);
   const fragment = new URLSearchParams(window.location.hash.slice(1));
-  const api = new ModelApi(fragment.get("token") || "");
-  const initialHost = HOSTS.includes(fragment.get("host")) ? fragment.get("host") : "codex";
-  const initialProject = fragment.get("project") || "";
-  // fragment 只在当前内存使用。尽早从地址栏移除令牌，避免复制链接或浏览历史泄露。
-  try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch (_) { /* 受限浏览器允许继续，不复制令牌到其他存储。 */ }
-  $("project-path").value = initialProject;
+  const api = new ModelApi("");
+  const connection = new globalThis.ConsoleConnection.Connection(api, {
+    origin:window.location.origin, cleanUrl:window.location.pathname + window.location.search,
+    history:window.history, storage:() => window.sessionStorage
+  });
+  api.connection = connection;
+  const nativeDefinitions = new globalThis.ConsoleNativeDefinitions.NativeDefinitions();
   const drafts = new Map();
   const loadOwner = new RequestOwner();
   const catalogOwner = new RequestOwner();
@@ -427,6 +439,7 @@
   let decision = null;
   let dialogTrigger = null;
   let decisionTrigger = null;
+  let connectionExpiryTimer = null;
 
   function node(tag, className, text) {
     const result = document.createElement(tag);
@@ -728,7 +741,7 @@
     renderActivationRecovery($("activation-recovery"), value);
   }
   function setControls() {
-    const available = Boolean(active.context) && !loading && !mutation;
+    const available = connection.ready && Boolean(active.context) && !loading && !mutation;
     const editable = available && editorRows().some(writable);
     const invalid = editorDraft().unavailableEdits.length > 0;
     const activation = section === "activation";
@@ -740,6 +753,8 @@
     $("reload-context").disabled = mutation || loading;
     $("refresh-catalog").disabled = !available || refreshing;
     $("refresh-catalog").textContent = refreshing ? "正在刷新…" : "刷新目录";
+    $("refresh-native").disabled = !connection.ready || loading || mutation;
+    for (const button of document.querySelectorAll("[data-definition]")) button.disabled = mutation || loading;
     $("preview-changes").disabled = !available || !current.dirty || active.conflicted || (activation ? active.activation.saved?.writable !== true : invalid);
     $("preview-changes").textContent = mutation && !$("preview-dialog").open ? "正在预览…" : "预览并保存";
     $("discard-draft").disabled = !current.dirty || mutation;
@@ -766,9 +781,10 @@
     $("save-boundary").textContent = (activation || !preferenceMode() ? "等待新会话加载" : "供后续派发读取") + " · 实际运行未验证";
     $("save-bar").dataset.dirty = String(current.dirty);
     $("save-bar").hidden = section === "diagnostics";
-    $("nav-models").dataset.dirty = active.count + active.preferences.count ? String(active.count + active.preferences.count) : "";
+    $("nav-models").dataset.dirty = active.preferences.count ? String(active.preferences.count) : "";
+    $("nav-native").dataset.dirty = active.count ? String(active.count) : "";
     $("nav-activation").dataset.dirty = active.activation.dirty ? "1" : "";
-    for (const control of document.querySelectorAll("#agent-rows input, #agent-rows select, #default-settings input, #default-settings select, [data-reset]")) {
+    for (const control of document.querySelectorAll("#agent-rows input, #agent-rows select, #default-settings input, #default-settings select, #native-detail input, #native-detail select, [data-reset]")) {
       const row = editorDraft().row(control.dataset.agent);
       control.disabled = !available || !row || !writable(row) || (control.dataset.field === "effort" && editorCaps().effort === false && !editorDraft().value(row.role, "effort")) ||
         (control.dataset.reset !== undefined && !FIELDS.some(field => editorDraft().value(row.role, field)));
@@ -857,6 +873,8 @@
   function renderRows() {
     const body = $("agent-rows"); body.replaceChildren(); $("default-settings").replaceChildren();
     const rows = visibleRows();
+    if (preferenceMode()) $("native-detail").replaceChildren();
+    if (!preferenceMode()) { delete $("default-settings").dataset.row; renderNative(); return; }
     const defaultRow = preferenceMode() ? editorDraft().row("*") : null;
     $("default-settings").hidden = !defaultRow;
     if (defaultRow) {
@@ -889,6 +907,50 @@
     });
     refreshFieldDisplays();
   }
+  function renderNative() {
+    const key = locationKey(active.location), rows = active.context?.roles || [];
+    const projection = nativeDefinitions.project(key, rows);
+    const list = $("native-items"); list.replaceChildren();
+    $("native-search").value = projection.query;
+    $("native-search-status").textContent = loading ? "正在读取原生定义…" : rows.length ? projection.rows.length + " / " + rows.length + " 个定义" : "";
+    for (const row of projection.rows) {
+      const button = node("button", "definition-item"); button.type = "button"; button.dataset.definition = row.role;
+      button.setAttribute("aria-pressed", String(projection.selected?.role === row.role));
+      button.append(node("strong", "", row.name || row.role), node("small", "", row.description || "宿主未提供职责说明"),
+        node("span", "", sourceLabel(row.origin) + " · " + (writable(row) ? "可编辑" : "只读")), node("small", "definition-path", row.source_path || "来源路径未提供"));
+      button.addEventListener("click", () => {
+        choices.close(false); nativeDefinitions.select(key, row.role, rows); renderNative(); setControls();
+        [...list.querySelectorAll("[data-definition]")].find(item => item.dataset.definition === row.role)?.focus();
+      });
+      list.append(button);
+    }
+    if (!projection.rows.length) list.append(node("p", "help", rows.length ? "没有匹配的定义；当前选中项与草稿保持。" : loading ? "正在读取…" : "当前发现范围没有自定义定义。"));
+    const detail = $("native-detail"); detail.replaceChildren();
+    const row = projection.selected;
+    if (!row) {
+      detail.append(node("h3", "", rows.length ? "先前选择的定义已不可用" : "尚未发现自定义原生定义"), node("p", "help",
+        rows.length ? "请明确选择清单中的真实定义；已有草稿不会迁移到同名来源。" : active.location.host === "codex" ?
+          "此清单只显示当前用户或项目文件中实际发现的自定义定义；Codex 内置身份和当前会话 subagent 不在磁盘清单内。仍可通过调用偏好编辑通用默认。" :
+          "此清单来自当前用户、项目与宿主可发现的插件来源；可重新读取或载入定义所属项目。"));
+      return;
+    }
+    const title = node("header", "definition-title");
+    const copy = node("div"); copy.append(node("h3", "", row.name || row.role), node("p", "help", row.invoke_name || row.native_name || row.role));
+    title.append(copy, node("span", "row-state", writable(row) ? "可编辑" : "只读")); detail.append(title);
+    const source = node("section", "definition-source"); source.append(node("h4", "", "定义来源"), node("p", "", sourceLabel(row.origin)),
+      node("code", "location", row.source_path || "宿主未提供来源路径"), node("p", "help", writable(row) ? "仅编辑此稳定身份对应的原生模型与推理字段；预览后保存。" : readOnlyReason(row)));
+    detail.append(source);
+    const fields = node("div", "definition-edit-fields"); fields.dataset.row = row.role;
+    fields.append(fieldControl(row, "model", "native"), fieldControl(row, "effort", "native"), node("div", "state-cell"));
+    detail.append(fields);
+    const facts = node("dl", "definition-facts");
+    for (const [label, value] of globalThis.ConsoleNativeDefinitions.facts(row)) {
+      const item = node("div"); item.append(node("dt", "", label), node("dd", "", label === "定义状态" ? DEFINITION_LABELS[value] || value : value)); facts.append(item);
+    }
+    detail.append(facts, node("h4", "", "职责摘要"), node("p", "definition-description", row.description || "宿主未提供职责说明。"),
+      node("p", "help native-status", "原生定义遵循宿主读取顺序；文件保存、会话加载与真实模型运行分别核实。"));
+    refreshFieldDisplays();
+  }
   function announceSwitch() {
     clearTimeout(switchNoticeTimer);
     const count = [...drafts.values()].reduce((total, draft) => total + draft.count + draft.preferences.count + (draft.activation.dirty ? 1 : 0), 0);
@@ -905,21 +967,27 @@
     for (const tab of document.querySelectorAll("[data-host]")) { const selected = tab.dataset.host === location.host; tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1; }
     $("config-panel").setAttribute("aria-labelledby", "tab-" + location.host);
     for (const radio of document.querySelectorAll("input[name=scope]")) radio.checked = radio.value === location.scope;
-    for (const nav of document.querySelectorAll("[data-section]")) { if (nav.dataset.section === section) nav.setAttribute("aria-current", "page"); else nav.removeAttribute("aria-current"); }
+    for (const nav of document.querySelectorAll("[data-section]")) { if (nav.dataset.section === section && (!nav.dataset.mode || nav.dataset.mode === editorMode)) nav.setAttribute("aria-current", "page"); else nav.removeAttribute("aria-current"); }
     for (const name of ["models","activation","diagnostics"]) $("section-" + name).hidden = section !== name;
     $("scope-location").textContent = describeLocation(location);
     $("scope-subtitle").textContent = location.scope === "global" ? "此平台的所有项目默认使用" : "仅此项目覆盖 · 其他项目继承用户级";
-    $("editor-title").textContent = preferenceMode() ? "模型与推理" : "原生定义文件";
+    $("editor-title").textContent = preferenceMode() ? "调用偏好" : "原生定义";
+    $("editor-eyebrow").textContent = preferenceMode() ? location.scope === "project" ? "项目级偏好" : "用户级偏好" : "宿主原生配置";
+    document.title = (section === "models" ? $("editor-title").textContent : section === "activation" ? "工作流启停" : "诊断与帮助") + " · Agent 配置工作台";
     $("context-summary").textContent = loading ? "正在读取配置…" : preferenceMode() ? "为后续派发设置偏好，未设置的字段按来源继承。" : "完整定义独立保存，宿主规则决定优先级。";
     $("inherit-help").textContent = preferenceMode() ? "* 是通用默认目标，不是原生 Agent；清除覆盖后若上层值被遮蔽，由真实预览解析。" : "原生字段留空只删除对应字段；宿主决定默认值与同名来源优先级。";
     $("editing-help").textContent = preferenceMode() ? "用户通用 → 用户该 Agent → 项目通用 → 项目该 Agent。完整原生定义可能按宿主规则优先。" : "每份原生文件是完整定义；其他范围和插件缓存只读。";
     $("preference-location").textContent = preferenceMode() && active.context?.dispatch_preferences?.source_path ? "偏好保存位置：" + active.context.dispatch_preferences.source_path : "";
     $("save-result").textContent = active.lastSave;
     $("technical-location").textContent = describeLocation(location) + " · revision " + (active.context?.revision || "未读取") + " · 目录来源 " + (active.context?.catalog_source_stamp || "未确认");
-    $("native-heading").hidden = preferenceMode(); $("open-native").hidden = !preferenceMode();
+    $("native-heading").hidden = true; $("open-native").hidden = true;
+    $("refresh-catalog").hidden = !preferenceMode(); $("refresh-native").hidden = preferenceMode();
+    $("preference-sheet").hidden = !preferenceMode(); $("native-layout").hidden = preferenceMode();
+    $("secondary-links").hidden = !preferenceMode();
     $("list-title").firstChild.textContent = preferenceMode() ? "逐 Agent 覆盖 " : "原生定义 ";
-    $("native-readonly-summary").hidden = preferenceMode() || editorRows().some(writable);
+    $("native-readonly-summary").hidden = true;
     renderModels(); renderCapabilities(); renderDiagnostics(); renderActivation(); renderRows(); updateBatchEfforts(); setControls();
+    connection.remember(location, section === "models" ? preferenceMode() ? "preferences" : "native" : section);
   }
   function validProject(path) {
     // 这里只做输入反馈；真实路径权限、链接身份和存在性仍由服务端权威检查。
@@ -927,6 +995,13 @@
   }
   async function loadContext(announce = false) {
     const draft = active; const ticket = loadOwner.begin(); loading = true; render();
+    if (!connection.ready) {
+      // 失效后仍允许检查/切换目标，但任何导航都必须保留可执行的重开说明，
+      // 不能清掉错误后呈现一个仿佛可以重新读取或保存的空编辑面。
+      loading = false; render();
+      message("连接未建立或已失效；当前平台与项目目标已保留，禁止保存。" + globalThis.ConsoleConnection.REOPEN, "error");
+      return;
+    }
     try {
       const context = await api.context(draft.location, ticket.signal);
       if (!loadOwner.current(ticket) || active !== draft) return;
@@ -936,6 +1011,7 @@
       if (announce) message(draft.anyDirty ? "配置已重新读取；当前草稿已保留，请再次预览后保存。重新读取不会重新加载宿主。" : "配置已重新读取；宿主会话未重新加载，实际运行未验证。");
     } catch (error) {
       if (!loadOwner.current(ticket) || active !== draft || error.code === "cancelled") return;
+      if (!connection.ready) draft.conflicted = true;
       message(error.message + (draft.context ? " 当前显示的是上次读取的配置。" : ""), "error");
     } finally { if (loadOwner.current(ticket) && active === draft) { loading = false; render(); } }
   }
@@ -977,7 +1053,7 @@
     if (!currentCatalog() && active.catalogAttempt !== (active.context?.catalog_source_stamp || active.context?.revision)) refreshCatalog();
   }
   async function refreshCatalog() {
-    if (refreshing || loading || mutation) return;
+    if (!connection.ready || refreshing || loading || mutation) return;
     const draft = active; const ticket = catalogOwner.begin(); refreshing = true; draft.catalogAttempt = draft.context?.catalog_source_stamp || draft.context?.revision; setControls();
     message("正在读取当前平台的模型目录；已有选择与草稿会保留。");
     try {
@@ -1064,7 +1140,7 @@
     choices.close(false);
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
-    if (!active.context || mutation || loading) return;
+    if (!connection.ready || !active.context || mutation || loading) return;
     if (!activation) {
       const invalid = [...document.querySelectorAll("#section-models [aria-invalid='true']")].find(control => !control.disabled);
       if (invalid) { message("推理值与当前模型不兼容，请重选或清除后再预览。", "error"); (invalid.hidden ? $(invalid.id + "-picker") : invalid)?.focus(); return; }
@@ -1180,7 +1256,7 @@
     render();
   }
   async function applyPreview() {
-    if (!preview || mutation) return;
+    if (!connection.ready || !preview || mutation) return;
     const plan = preview; mutation = true; $("confirm-apply").disabled = true;
     $("confirm-apply").textContent = "正在保存…";
     $("cancel-preview").disabled = true; $("close-preview").disabled = true; setControls();
@@ -1243,7 +1319,16 @@
     // 有效载入会收起项目披露；焦点回到持续可见的项目入口，非法输入仍保留就近修正位置。
     if (validProject(project)) $("project-toggle").focus();
   });
-  for (const nav of document.querySelectorAll("[data-section]")) nav.addEventListener("click", () => { choices.close(false); section = nav.dataset.section; render(); announceSwitch(); });
+  for (const nav of document.querySelectorAll("[data-section]")) nav.addEventListener("click", () => {
+    choices.close(false); section = nav.dataset.section;
+    if (nav.dataset.mode) editorMode = nav.dataset.mode;
+    render(); announceSwitch();
+  });
+  $("native-search").addEventListener("input", () => {
+    // 搜索只改变清单投影，不更新FieldDraft，也不以筛选首项替代当前选定稳定身份。
+    nativeDefinitions.search(locationKey(active.location), $("native-search").value); renderNative(); setControls();
+  });
+  $("refresh-native").addEventListener("click", reloadContext);
   function setEditorMode(mode) { choices.close(false); editorMode = mode; render(); announceSwitch(); }
   $("open-native").addEventListener("click", () => { setEditorMode("model"); $("back-preferences").focus(); });
   $("back-preferences").addEventListener("click", () => { setEditorMode("dispatch_preferences"); document.querySelector("#default-settings .picker-trigger")?.focus(); });
@@ -1304,7 +1389,7 @@
   window.addEventListener("beforeunload", event => {
     if ([...drafts.values()].some(draft => draft.anyDirty) || mutation) { event.preventDefault(); event.returnValue = ""; }
   });
-  window.addEventListener("pagehide", () => { choices.close(false); if (choices.frame) cancelAnimationFrame(choices.frame); clearTimeout(switchNoticeTimer); loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
+  window.addEventListener("pagehide", () => { choices.close(false); if (choices.frame) cancelAnimationFrame(choices.frame); clearTimeout(switchNoticeTimer); clearTimeout(connectionExpiryTimer); loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
   const contextMenus = [$("platform-menu"), $("scope-menu"), $("project-menu")];
   function closeContextMenus() { for (const menu of contextMenus) menu.open = false; }
   for (const menu of contextMenus) {
@@ -1322,5 +1407,26 @@
     if (event.key === "ArrowDown") { event.preventDefault(); $("platform-menu").open = true; $("tab-" + active.location.host).focus(); }
   });
   for (const id of ["batch-model", "batch-effort", "activation-state"]) choices.attach($(id));
-  switchTo({ host: initialHost, scope: initialProject ? "project" : "global", ...(initialProject ? { project: initialProject } : {}) });
+  api.onInvalidConnection = () => {
+    // 身份失效立即撤销所有待显示请求和可写入口，保留当前目标及未提交草稿供恢复说明。
+    loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); loading = false; refreshing = false;
+    if (active) { active.conflicted = true; choices.close(false); setControls(); }
+    $("confirm-apply").disabled = true;
+    message("连接已失效，禁止保存；当前平台与项目目标和未提交草稿已保留。请回到宿主主会话，显式运行 xy-workflow:xy-config Skill 重新打开配置页。", "error");
+  };
+  (async () => {
+    let failure = null;
+    try { await connection.start(fragment); } catch (error) { failure = error; }
+    if (connection.ready) {
+      // 固定绝对期限到达时主动关闭可写入口；不自动续签，不等待用户下一次写入才报告过期。
+      connectionExpiryTimer = setTimeout(() => { connection.clear(); api.onInvalidConnection(); }, Math.max(0, connection.session.expires_at - Date.now()));
+    }
+    const initial = connection.initial;
+    editorMode = initial.view === "native" ? "model" : "dispatch_preferences";
+    section = ["activation", "diagnostics"].includes(initial.view) ? initial.view : "models";
+    $("project-path").value = initial.project || "";
+    switchTo(initial);
+    if (failure) message(failure.message, "error");
+    else if (!connection.storageAvailable) message("浏览器拒绝会话存储；当前页面可继续使用内存连接。刷新后须显式运行 xy-workflow:xy-config 重新打开。", "warning");
+  })();
 })();

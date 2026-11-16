@@ -76,7 +76,7 @@ class ConsoleHttpTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         web = Path(self.temporary.name)
-        for name in ("index.html", "console.js", "console.css"):
+        for name in ("index.html", "console.js", "console.css", "connection.js", "native-definitions.js"):
             (web / name).write_text("test " + name, encoding="utf-8")
         self.service = FakeService()
         self.server = ConsoleServer(self.service, version="0.1.0-alpha.1", web_root=web)
@@ -115,6 +115,11 @@ class ConsoleHttpTest(unittest.TestCase):
         self.assertNotIn("https:", headers["Content-Security-Policy"])
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertNotIn("Access-Control-Allow-Origin", headers)
+        for name in ("connection.js", "native-definitions.js"):
+            status, headers, body = self.request("GET", "/" + name, auth=False, origin=False)
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
+            self.assertEqual(body, ("test " + name).encode())
         status, _, raw = self.request("GET", "/api/context?host=codex&scope=project&project=%2Ftmp%2Fexample")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw)["project"], "/tmp/example")
@@ -134,6 +139,114 @@ class ConsoleHttpTest(unittest.TestCase):
         self.assertEqual(self.request("OPTIONS", "/api/apply")[0], 405)
         self.assertEqual(self.request("PATCH", "/api/apply")[0], 405)
         self.assertEqual(self.service.calls, [])
+
+    def test_browser_session_exchange_and_all_existing_api_permissions(self):
+        before = time.time() * 1000
+        status, headers, raw = self.request("POST", "/api/session", {})
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertEqual(set(result), {"schema_version", "session_token", "instance_id", "origin", "expires_at"})
+        self.assertEqual(result["schema_version"], 1)
+        self.assertRegex(result["session_token"], r"^[A-Za-z0-9_-]{43}$")
+        self.assertNotEqual(result["session_token"], self.server.token)
+        self.assertEqual(result["instance_id"], self.server.instance_id)
+        self.assertEqual(result["origin"], self.server.origin)
+        self.assertIs(type(result["expires_at"]), int)
+        self.assertGreaterEqual(result["expires_at"], before + 1_800_000 - 1)
+        self.assertLessEqual(result["expires_at"], time.time() * 1000 + 1_800_000)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+        self.assertNotIn("Set-Cookie", headers)
+        derived = {"Authorization": "Bearer " + result["session_token"]}
+        # 真实回环请求覆盖所有现有 API，派生凭据经过同一个传输入口和业务授权边界。
+        for method, path, body in (("GET", "/api/health", None),
+                                   ("GET", "/api/context?host=codex", None),
+                                   ("GET", "/api/catalog?host=codex", None),
+                                   ("POST", "/api/preview", {"host": "codex", "revision": "a" * 64}),
+                                   ("POST", "/api/apply", {"preview_id": "plan-1"})):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(method, path, body, extra=derived)[0], 200)
+        self.assertEqual(self.request("POST", "/api/session", {}, extra=derived)[0], 401)
+        self.assertEqual(self.server.connection()["token"], self.server.token)
+        self.assertNotIn("session_token", self.server.connection())
+        self.assertEqual(self.request("GET", "/api/health", origin=False)[0], 200)
+
+    def test_browser_session_rejects_invalid_exchange_and_duplicate_headers(self):
+        for data in ({"unknown": True}, [], b'{"x":1,"x":2}'):
+            self.assertEqual(self.request("POST", "/api/session", data)[0], 400)
+        for path in ("/api/session?unknown=1", "/api/session?"):
+            self.assertEqual(self.request("POST", path, {})[0], 400)
+        self.assertEqual(self.request("POST", "/api/session", {}, auth=False)[0], 401)
+        self.assertEqual(self.request("POST", "/api/session", {}, extra={"Authorization": "Bearer wrong"})[0], 401)
+        self.assertEqual(self.request("POST", "/api/session", {}, origin=False)[0], 403)
+        self.assertEqual(self.request("POST", "/api/session", {}, extra={"Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/session", {}, extra={"Host": "evil.example"})[0], 403)
+        # 高层 headers 字典不能表达重复头，使用真实 HTTP 低层接口验证无歧义要求。
+        for duplicate, expected in (("Authorization", 401), ("Origin", 403), ("Host", 403)):
+            with self.subTest(duplicate=duplicate):
+                connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+                try:
+                    connection.putrequest("POST", "/api/session", skip_host=True)
+                    values = {"Host": f"127.0.0.1:{self.server.server_port}", "Origin": self.server.origin,
+                              "Authorization": "Bearer " + self.server.token,
+                              "Content-Type": "application/json", "Content-Length": "2"}
+                    for key, value in values.items():
+                        connection.putheader(key, value)
+                        if key == duplicate:
+                            connection.putheader(key, value)
+                    connection.endheaders(b"{}")
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, expected)
+                    response.read()
+                finally:
+                    connection.close()
+        self.assertEqual(self.service.calls, [])
+
+    def test_browser_session_expiry_capacity_restart_and_request_guards(self):
+        from native_config.browser_sessions import MAX_BROWSER_SESSIONS, SESSION_TTL_SECONDS
+
+        # 夹具显式允许同端口立即复用，避开内核 TIME_WAIT 的等待；只改此测试
+        # 已拥有的 socket，新实例构造也仅临时覆盖类属性，生产绑定策略保持不变。
+        self.server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        status, _, raw = self.request("POST", "/api/session", {})
+        self.assertEqual(status, 200)
+        token = json.loads(raw)["session_token"]
+        derived = {"Authorization": "Bearer " + token}
+        self.assertEqual(self.request("GET", "/api/context?host=codex", extra={**derived, "Host": "evil.example"})[0], 403)
+        self.assertEqual(self.request("GET", "/api/context?host=codex", extra={**derived, "Origin": "null"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/apply", {"preview_id": "plan-1"}, origin=False, extra=derived)[0], 403)
+        self.assertEqual(self.request("POST", "/api/apply", {"preview_id": "plan-1", "unknown": True}, extra=derived)[0], 400)
+        for _ in range(MAX_BROWSER_SESSIONS - 1):
+            self.assertEqual(self.request("POST", "/api/session", {})[0], 200)
+        status, _, raw = self.request("POST", "/api/session", {})
+        self.assertEqual(status, 429)
+        self.assertEqual(json.loads(raw)["error"]["code"], "session_limit")
+        self.assertEqual(self.request("GET", "/api/health", extra=derived)[0], 200)
+        # 只控制会话模块时钟，真实 socket/HTTP/授权逻辑继续运行；过期必须由服务端拒绝。
+        with mock.patch("native_config.browser_sessions.time") as clock:
+            clock.monotonic.return_value = time.monotonic() + SESSION_TTL_SECONDS + 1
+            clock.time.return_value = time.time()
+            self.assertEqual(self.request("GET", "/api/health", extra=derived)[0], 401)
+            status, _, raw = self.request("POST", "/api/session", {})
+            self.assertEqual(status, 200)
+        token = json.loads(raw)["session_token"]
+        derived = {"Authorization": "Bearer " + token}
+        self.assertTrue(self.server.browser_sessions.valid(token))
+        self.assertEqual(self.request("GET", "/api/health")[0], 200)
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=3)
+        self.assertFalse(self.server.browser_sessions.valid(token))
+        # 真正关闭并重新绑定同一端口，证明旧凭据不能随端口复用跨越服务实例。
+        port, old_instance = self.server.server_port, self.server.instance_id
+        with mock.patch.object(ConsoleServer, "allow_reuse_address", True):
+            self.server = ConsoleServer(self.service, port=port, version="0.1.0-alpha.1",
+                                        web_root=Path(self.temporary.name))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.assertNotEqual(self.server.instance_id, old_instance)
+        self.assertEqual(self.request("GET", "/api/health", extra=derived)[0], 401)
+        self.assertEqual(self.request("GET", "/api/health")[0], 200)
 
     def test_traversal_and_unbounded_inputs_are_rejected(self):
         for path in ("/../product/PLUGIN_VERSION", "/%2e%2e/product/PLUGIN_VERSION", "/foo\\bar", "/%00", "/console.js/../server.py"):

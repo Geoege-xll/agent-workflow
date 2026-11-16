@@ -38,6 +38,10 @@ bash <解压根>/scripts/agent_config.sh resolve --host codex --role <list返回
 ```
 
 网页入口输出包含片段令牌的本地 URL；console 默认尝试打开浏览器，--no-browser 仅输出。
+0.1.3 首次连接后清除入口片段，以服务签发的短期派生会话恢复普通刷新及原平台／范围／
+项目；原入口令牌不写浏览器存储。派生凭据按精确 origin 绑定且有过期与容量上限；
+会话存储可能被同源 opener 复制，不代表严格标签页独占。存储拒绝时当前页仅内存运行，
+刷新或服务变化后须用原独立命令重新打开，不自动保存未提交草稿。
 插件使用的 open/status/doctor 返回脱敏 JSON；status/doctor 不安装、不启动服务或浏览器。
 open 的浏览器失败会保留 ready 服务及权限为 0600 的私有 HTML 打开入口。
 serve 可前台运行并使用 --port 0 和 --idle-timeout 1800；mcp 是手动选择的 stdio 子命令，
@@ -169,7 +173,9 @@ def payload(source: Path):
                    and not identity_import for module in modules):
                 raise ValueError("独立核心包含非标准库或工作流依赖：" + relative)
         files[relative] = body
-    for name in ("index.html", "console.js", "console.css"):
+    # 网页的连接生命周期和原生定义视图已拆成独立脚本；精确列入发行闭包，
+    # 避免源码服务正常、解压后的页面却因脚本缺失而无法恢复连接或编辑真实定义。
+    for name in ("index.html", "console.js", "console.css", "connection.js", "native-definitions.js"):
         relative = "native_config/web/" + name
         files[relative] = read_source(source, relative)
     for name in ("agent_config.py", "agent_config.sh", "python_runtime.sh"):

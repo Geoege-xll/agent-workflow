@@ -363,3 +363,46 @@ a { color: var(--workspace-selected-ink); }
 }
 @media (max-width:700px) { .page { padding: 16px; } }
 @media (max-width:440px) { .page { padding: 8px; } .change-values { grid-template-columns: 1fr; } }
+
+/* 中央原生业务稿映射：230px搜索清单与详情双栏，复用现有深石墨token和字段选择器。
+   不复制评审外壳；长路径与未知职责自然换行，搜索清单不建立固定高度或额外页面滚动区。 */
+.management-label { margin-block-start: 28px; font-size: 12px; }
+.workspace-toolbar { min-block-size: 560px; }
+.editor-header h2 { font-size: 24px; line-height: 1.3; }
+.editor-header .eyebrow { font-size: 11px; }
+.native-layout { display: grid; grid-template-columns: 230px minmax(0,1fr); align-items: start; gap: 24px; }
+.definition-list { min-inline-size: 0; padding: 17px 14px; border: 1px solid var(--workspace-line); border-radius: 6px; background: var(--workspace-sidebar); }
+.definition-list > label { font-size: 12px; }
+#native-search-status { margin-block: 0 10px; font-size: 11px; }
+.definition-item { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; inline-size: 100%; min-block-size: 84px; gap: 4px; padding: 12px; margin-block-end: 5px; border-color: transparent; background: transparent; text-align: start; }
+.definition-item[aria-pressed="true"] { border-color: var(--workspace-control-line); background: var(--workspace-subtle); }
+.definition-item strong { font: 500 13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap: anywhere; }
+.definition-item small,.definition-item span { color: var(--workspace-muted); font-size: 11px; font-weight: 400; overflow-wrap: anywhere; }
+.definition-item .definition-path { font-size: 10px; }
+.definition-detail { min-inline-size: 0; padding-block: 5px; }
+.definition-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-block-end: 22px; }
+.definition-title h3 { font: 500 17px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap: anywhere; }
+.definition-title .row-state { flex-shrink: 0; }
+.definition-detail h4 { margin-block: 0 9px; font-size: 13px; font-weight: 500; }
+.definition-source { padding: 17px; background: var(--workspace-subtle); border-radius: 5px; }
+.definition-source code { display: block; margin-block: 10px; }
+.definition-edit-fields { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; margin-block: 20px; }
+.definition-edit-fields .state-cell { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.definition-edit-fields .cell-label { display: block !important; }
+.definition-facts { margin-block: 17px; }
+.definition-facts > div { display: grid; grid-template-columns: 80px minmax(0,1fr); gap: 12px; padding-block: 9px; border-block-end: 1px solid var(--workspace-line); font-size: 12px; }
+.definition-facts dt { color: var(--workspace-muted); }
+.definition-facts dd { margin: 0; overflow-wrap: anywhere; }
+.definition-description { color: var(--workspace-muted); font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.native-status { margin-block-start: 22px; padding-block-start: 18px; border-block-start: 1px solid var(--workspace-line); }
+/* 恢复继承紧跟状态说明；窄屏也不把按钮推往最右端。 */
+.state-cell .row-reset { margin-inline-start: 0 !important; }
+@container configuration (inline-size < 900px) {
+ .workspace-toolbar { min-block-size: 0; }.management-label { display: none; }
+ .workspace-toolbar { align-items: center; }.workspace-toolbar nav { flex-wrap: wrap; }
+}
+@container configuration (inline-size < 700px) {
+ .native-layout { grid-template-columns: minmax(0,1fr); gap: 20px; }
+ .definition-edit-fields { grid-template-columns: minmax(0,1fr); }
+ .definition-title { flex-wrap: wrap; }
+}

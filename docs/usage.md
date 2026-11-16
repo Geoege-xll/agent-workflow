@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。[xy-workflow 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2) 与独立配置工具 [Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 均已正式发布，三个 stable 来源已更新。本机三端插件已升级到 `3.0.2`、组件升级到 `0.1.2`，载荷字节及执行位与最终 CI 一致，模型偏好和原有项目启停／范围保留；不表示所有项目均启用。当前及历史发行证据见[发行主题](plans/stable-product-release.md)。Codex App 共享缓存已更新，App GUI 新会话、指定模型实际运行及读屏未在本轮实测；官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。当前源码候选为 `3.0.3`／`0.1.3`，尚未正式发布，本机尚未升级到候选版本。上一正式基线 [xy-workflow 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2) 与独立配置工具 [Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 均已正式发布，三个 stable 来源已更新。本机三端插件已升级到 `3.0.2`、组件升级到 `0.1.2`，载荷字节及执行位与最终 CI 一致，模型偏好和原有项目启停／范围保留；不表示所有项目均启用。当前及历史发行证据见[发行主题](plans/stable-product-release.md)。Codex App 共享缓存已更新，App GUI 新会话、指定模型实际运行及读屏未在本轮实测；官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
@@ -64,11 +64,11 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 评审工作台固定设计视口，通过相机缩放和移动查看，浏览模式保留页面自身按钮、表单、滚动与导航；批注模式选择节点。导航抽屉默认收起，侧面板以“整改／标记”两个 Tab 管理数据，开发说明在独立大对话框阅读。标记 A 只引用具体节点，整改支持节点修改／新增／删除、页面修改／新增和全局修改；不再设置意见等级。整改可关联多个已存在的 A，跨页引用保持稳定编号；正文与建议各不超过 4000 字符，修改／新增必须填写正文，删除原因可空，局部比较只用于节点修改。
 
-当前源码开发的新 feedback 4 精确包含 `schema_version:4`、`review:{request_id,review_id}`、`anchors`、`items`；完整 context 3 留在本机真实不可变快照，requirements 仅保留完整真实 REQ ID 字符串数组。复制只有固定标题 `## Agent Workflow Feedback Payload` 和单个 json 围栏内的紧凑 JSON，不附重复摘要；纯 JSON 输入同样支持。item 只携带用户整改与可选非空 A 引用，节点修改可带非空 `after_text`；不再交还 context、REQ／交互／接口映射、before_text 或 comparison。实际目标优先使用唯一源 ID，匿名源元素的来源键只注入派生副本，动态无来源节点保留输入并要求显式选择有来源父层。
+3.0.3 的 feedback 4 精确包含 `schema_version:4`、`review:{request_id,review_id}`、`anchors`、`items`；完整 context 3 留在本机真实不可变快照，requirements 仅保留完整真实 REQ ID 字符串数组。复制只有固定标题 `## Agent Workflow Feedback Payload` 和单个 json 围栏内的紧凑 JSON，不附重复摘要；纯 JSON 输入同样支持。item 只携带用户整改与可选非空 A 引用，节点修改可带非空 `after_text`；不再交还 context、REQ／交互／接口映射、before_text 或 comparison。实际目标优先使用唯一源 ID，匿名源元素的来源键只注入派生副本，动态无来源节点保留输入并要求显式选择有来源父层。
 
 `validate` 以显式实际项目与同一 adapter 定位短引用的既有私有不可变包，完整核验包并重读当前源；缺包、来源变化、损坏或未知字段明确失败，不扫描、不接受外部 context 回退、不自动绑定 latest。成功只返回 `status:current`、短 `review`、必要 `anchors`、按 target 分组的精简 `changes` 和“修订输入非批准”短 notice。REQ／交互／接口关联从真实目标在组层还原一次，无值省略。PM 只将这些 current 结果与当前完整任务包交原 UI Agent，不重复传原反馈全文或完整 context。普通整改只交还明确引用的 A；无整改时交还全部明确标记且不推断整改。
 
-快照桥联合核对真实来源窗口、origin、页面及 token；父壳不跨 `file://` 读取子页面 DOM，子页面负责命中、局部几何、高亮与有限摘录，摘录本身不是来源证明。草稿、相机和撤回仅属于绑定 review_id 的独立会话快照。新 manifest／boot／bridge 4 与 context 3 分开声明；已生成旧 feedback 2／3、context 2、manifest 2／3 及各自资产和装配／提取语义严格只读保留，不静默迁移旧包或草稿。上述为源码开发状态，不表示本机已发布安装的 3.0.2 已具有新格式；正式插件 3.0.2 与组件 0.1.2 保持不变。
+快照桥联合核对真实来源窗口、origin、页面及 token；父壳不跨 `file://` 读取子页面 DOM，子页面负责命中、局部几何、高亮与有限摘录，摘录本身不是来源证明。草稿、相机和撤回仅属于绑定 review_id 的独立会话快照。新 manifest／boot／bridge 4 与 context 3 分开声明；已生成旧 feedback 2／3、context 2、manifest 2／3 及各自资产和装配／提取语义严格只读保留，不静默迁移旧包或草稿。上述是 3.0.3 的版本能力；当前 3.0.3／0.1.3 为未发布候选，本机仍为上一正式基线 3.0.2／0.1.2，不因源码能力自动升级。
 
 旧绑定、损坏、未知字段与非法内容明确失败并保留意见，不自动改需求、页面或授予批准，也不增加业务确认。旧壳迁移另有预览／执行／恢复入口，只清理可证明归属的纯工具文件，混合或未知业务资产保留。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
@@ -90,6 +90,8 @@ agentmemory 是可选服务。只有工具能强制按项目过滤并返回匹�
 
 首次缺组件时先展示固定版本、来源和准备信息，经确认才下载已核验发行包。配置页默认管理“调用偏好”，提供用户级和当前项目的通用默认／逐 Agent 设置；没有原生文件时也有通用入口。设置先预览再保存，PM 在下一次派发前通过纯只读 helper 解析，不需要常驻 HTTP 或 MCP。无法表达的已配置字段会明确报告，不会悄悄忽略。
 
-“原生定义文件”保留原来的完整定义编辑，插件缓存始终只读；模型目录按本机对应客户端／有效配置读取，推理选项按当前模型处理。调用偏好保存、原生文件重新加载和实际指定模型运行分别判断，不改变当前主会话或运行中的 Agent。
+0.1.3 通过短期派生会话恢复普通刷新后的平台／范围／真实项目；原入口片段首次使用后清除，原入口令牌不写浏览器存储。派生会话绑定精确 origin 与服务实例并有期限；存储拒绝时当前有效页面仅内存运行，刷新须重新打开。失效页面明确提示重开，恢复不会自动保存草稿。
+
+“原生定义文件”采用搜索列表与详情双栏，保留实际身份、来源和未知状态以及完整定义编辑，插件缓存始终只读；模型目录按本机对应客户端／有效配置读取，推理选项按当前模型处理。调用偏好保存、原生文件重新加载和实际指定模型运行分别判断，不改变当前主会话或运行中的 Agent。
 
 组件提供 Codex／Claude 工作流用户级默认与项目三态设置；Claude 当前项目使用个人 local 范围，AGY 启停为只读官方管理说明。当前工作台将通用默认和动态 Agent 表格集中呈现，模型、原生字段和启停使用独立草稿，当前事务统一预览保存；普通切换保留草稿。停用后可用页面给出的独立命令重新打开。发行状态与准确安装版本按固定描述和官方客户端回执判断，不把已接受源码功能当作现有安装已具备。

@@ -20,6 +20,7 @@ import threading
 import time
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
+from .browser_sessions import BrowserSessionLimitError, BrowserSessions
 from .contracts import HOSTS
 
 PROTOCOL_VERSION = 2
@@ -145,6 +146,8 @@ class ConsoleServer(ThreadingHTTPServer):
         self.token = token or secrets.token_urlsafe(32)
         self.version = version or service_version()
         self.instance_id = secrets.token_hex(16)
+        # 派生浏览器凭据只属于此实例，不能写入原 CLI 的连接记录。
+        self.browser_sessions = BrowserSessions()
         self.web_root = Path(web_root) if web_root else WEB_ROOT
         self.service_lock = threading.Lock()
         self.request_lock = threading.Lock()
@@ -224,7 +227,11 @@ class ConsoleServer(ThreadingHTTPServer):
                 pass
         # ThreadingMixIn 在非 daemon 模式 join 所有工作线程。业务 finally 已执行、
         # 响应发送/读取已结束后才返回，CLI 随后方可删连接记录并释放 service.lock。
-        super().server_close()
+        try:
+            super().server_close()
+        finally:
+            # 工作线程收尾后统一撤销；关闭期间的签发同样受 business_request 保护。
+            self.browser_sessions.clear()
 
     def connection(self):
         return {"port": self.server_port, "token": self.token, "pid": os.getpid(),
@@ -304,6 +311,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             assets = {"/": ("index.html", "text/html; charset=utf-8"),
                       "/index.html": ("index.html", "text/html; charset=utf-8"),
                       "/console.js": ("console.js", "text/javascript; charset=utf-8"),
+                      "/connection.js": ("connection.js", "text/javascript; charset=utf-8"),
+                      "/native-definitions.js": ("native-definitions.js", "text/javascript; charset=utf-8"),
                       "/console.css": ("console.css", "text/css; charset=utf-8")}
             if path not in assets:
                 raise RequestError(404, "not_found", "页面不存在")
@@ -317,7 +326,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         headers = self.headers.get_all("Authorization", [])
         expected = "Bearer " + self.server.token
-        if len(headers) != 1 or not hmac.compare_digest(headers[0].encode("utf-8"), expected.encode("utf-8")):
+        # 一个请求只能携带一个明确 Bearer。原令牌仍供 CLI 和私有入口使用，
+        # 派生凭据只增加同权限的短期调用能力，不能改变 Host/Origin 等原保护。
+        original_auth = (len(headers) == 1 and
+                         hmac.compare_digest(headers[0].encode("utf-8"), expected.encode("utf-8")))
+        derived_auth = (not original_auth and len(headers) == 1 and headers[0].startswith("Bearer ")
+                        and self.server.browser_sessions.valid(headers[0][7:]))
+        if not original_auth and not derived_auth:
             raise RequestError(401, "unauthorized", "需要本地控制台令牌")
         if method == "POST" and origins != [self.server.origin]:
             raise RequestError(403, "invalid_origin", "写入请求必须来自当前控制台")
@@ -349,6 +364,25 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 else:
                     result = self.server.service.catalog(host, project=project)
             self._send(200, result)
+            return
+        if path == "/api/session":
+            # 会话交换仅由入口原令牌发起；派生凭据不能递归签发或延长自己的权限。
+            # 空查询同样禁止，避免把携带 '?' 的变体误认为精确签发入口。
+            if not original_auth:
+                raise RequestError(401, "unauthorized", "签发会话需要原入口令牌")
+            if query or "?" in self.path:
+                raise RequestError(400, "invalid_query", "签发会话不接受查询参数")
+            data = self._json_body()
+            if data:
+                raise ValueError("签发会话只接受空对象")
+            with self.server.business_request(self.connection):
+                try:
+                    token, expires_at = self.server.browser_sessions.issue()
+                except BrowserSessionLimitError:
+                    raise RequestError(429, "session_limit", "活跃浏览器会话已达上限，请等待会话过期") from None
+            self._send(200, {"schema_version": 1, "session_token": token,
+                             "instance_id": self.server.instance_id, "origin": self.server.origin,
+                             "expires_at": expires_at})
             return
         if query or path not in {"/api/preview", "/api/apply"}:
             raise RequestError(404, "not_found", "接口不存在")
