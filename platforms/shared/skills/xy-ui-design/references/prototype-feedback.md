@@ -4,7 +4,7 @@
 
 ## 当前交付：具体 file HTML 与同页独立评审
 
-3.0.4 当前为未发布候选，不代表本机正式 3.0.3 已升级。Agent 交付前，先从当前物理插件的白名单 helper 显式执行 `prepare-delivery --root --adapter --pages`，准备受管入口与公开目录；此命令幂等、不启动服务、不执行业务请求。再以同一项目、adapter、需求、request-id 和具体 pages 执行 `open`。`open` 先验证已准备，缺失返回准确的 `preparation_required`，不会悄悄修改业务 HTML。历史 `prepare` 仍是下节独立的不可变离线评审合同；处理新的 prepared 源时，先按原始字节注入来源键再移除精确 entry，旧无标签 2／3／4 字节及 V4 九项资产不变。
+3.0.4 的具体 file HTML 交付入口按本节操作；实际安装版本以官方客户端清单为准。Agent 交付前，先从当前物理插件的白名单 helper 显式执行 `prepare-delivery --root --adapter --pages`，准备受管入口与公开目录；此命令幂等、不启动服务、不执行业务请求。再以同一项目、adapter、需求、request-id 和具体 pages 执行 `open`。`open` 先验证已准备，缺失返回准确的 `preparation_required`，不会悄悄修改业务 HTML。历史 `prepare` 仍是下节独立的不可变离线评审合同；处理新的 prepared 源时，先按原始字节注入来源键再移除精确 entry，旧无标签 2／3／4 字节及 V4 九项资产不变。
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py prepare-delivery --root <physical-project-root> --adapter <selected-project-adapter> --pages <project-relative-HTML>
@@ -37,7 +37,7 @@ live 固定 17 项资产：`delivery.html`、`review.html`、`live-workspace.js`
 本节的快照、index、浏览／批注、开发说明及 manifest／boot／bridge 4 仅描述历史离线分支。`prepare` 继续保留原只读装配与严格消费语义；新交付使用上面的 open 路线，不因下文而重新生成项目导航壳。
 
 
-以下格式是历史 feedback 4 消费合同；3.0.3 是已发布基线，3.0.4 候选的 file 交付不会改变旧包合同。实际调用使用当前所选版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
+以下格式是历史 feedback 4 消费合同；3.0.4 的 file 交付不会改变这些旧包合同。实际调用使用当前所选版本的物理插件根，先从 `resource` 解析模板，不从 cwd 猜测缓存或使用项目同名诱饵。新页面按原授权消费模板；不批量覆盖现有业务原型。所有 helper 通过包内解释器选择器和白名单入口调用，项目使用任务已选的同一 adapter：
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py resource templates/prototype/page.html
