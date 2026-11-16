@@ -828,13 +828,21 @@ adapter、唯一需求 Markdown、request_id 和本轮具体 `--pages`，生成�
 必要渲染依赖与需求导航文档。新导航来自安全元数据；旧 index 只提供链接文本及 details/summary
 分组，不执行旧脚本。评审入口 `index.html#page=<文件名>` 不承载 base64 context。
 
-封闭 schema 2 context 绑定物理项目身份、adapter、需求字节、导航摘要、逐页依赖、工具版本／
-载荷摘要及 review_id；导出为 `{schema_version:2,context,items}`，拒绝旧 schema 1。桥只注入
-派生页面并幂等处理 `prototype-review:* version:2`，忽略旧 `prototype-workspace:* version:1`。
-插件更新不覆盖旧评审包；`validate` 重读项目当前源并核验原包，不自动重绑 latest。
-草稿、comparison 的当前文字／建议文字、REQ／交互／接口引用均不可执行，不产生需求或视觉批准。
+当前源码新生成 manifest／boot／bridge 4 与封闭 context 3 分开声明；context 绑定物理项目身份、
+adapter、需求字节、导航摘要、逐页依赖、工具版本／载荷摘要及 review_id，requirements 仅投影
+真实 REQ ID 字符串数组。新复制只有固定标题 `## Agent Workflow Feedback Payload` 和单个 json
+围栏内的紧凑 `{schema_version:4,review:{request_id,review_id},anchors,items}`，也接受纯 JSON。
+短引用仅定位当前真实项目及指定请求的本机既有不可变包；缺包、来源变化或完整性错误明确失败，
+不扫描、不接受外部 context 回退或自动重绑 latest。桥仅注入派生页，项目源不加入保留来源属性。
+已生成旧 feedback 2／3、context 2、manifest 2／3 保持各自严格只读分支及原资产／装配语义，
+不迁移旧包／草稿，不覆盖旧评审，也不表示已发布安装的 3.0.2 已具备源码新格式。
 
-PM 将复核为 `current` 的按节点 `changes` 交回原 `xy-uiux`；设计 Agent 仅在当前 owned_paths 内
+`validate` 只读重读项目与真实目标，成功只返回 `status:current/review/anchors/changes/notice`；
+changes 按 target 分组，item 不重复 target，源 REQ／交互／接口关联仅在组层还原一次且无值省略。
+PM 只将该精简 changes、必要 anchors 和短 review 引用连同当前完整任务包交回原 `xy-uiux`，
+不再转发完整 context／需求目录／自动摘录或原反馈全文。普通整改只交还明确引用的 A；无整改
+时交还全部明确标记且不推断整改。反馈、草稿和建议文字均不可执行，notice 明确修订输入不等于批准。
+设计 Agent 仅在当前 owned_paths 内
 原位修改具体 HTML、实际交互与五节契约，返回静态校验和指纹。需求变化与适用视觉批准仍沿原规则；
 工具不 patch HTML、不写需求或批准、不增业务 gate，不恢复计划转 HTML，也不创建业务 spec/sidecar。
 反馈工具位于默认折叠的展示外壳，不侵入产品画板。生产工具自身的授权浏览器测试不扩张为业务原型

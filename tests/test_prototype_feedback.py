@@ -34,14 +34,23 @@ def legacy_fixture():
     return metadata, entries
 
 
-def prepare_legacy(project, data_dir, page):
+@lru_cache(maxsize=1)
+def legacy_v3_fixture():
+    """原3.0.2验收归档里的真实v3派生包及原源，不依赖新装配制造旧成功。"""
+    with zipfile.ZipFile(PACK / "tests/fixtures/prototype-review-v3.zip") as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    return json.loads(entries["fixture.json"]), entries
+
+
+def prepare_legacy(project, data_dir, page, *, format_version=2, pages=None):
     """常规旧协议用真实冻结六资源；独立旧包用例验证原派生物逐字节一致。"""
     from lib.documents import prototype_review as review
-    fixture, entries = legacy_fixture()
+    fixture, entries = legacy_fixture() if format_version == 2 else legacy_v3_fixture()
     tools = {name.removeprefix("bundle/"): body for name, body in entries.items() if name.startswith("bundle/tool/")}
-    context, _, files, navigation = feedback.capture_review(project, "project.yaml", "docs/plans/settings.md", "review-1", None, tool=fixture["context"]["tool"], format_version=2)
-    assembled = review._assemble_v2(context, files, tools, navigation)
-    assembled["manifest.json"] = review.json_bytes({"schema_version": 2, "context": context, "files": [
+    context, _, files, navigation = feedback.capture_review(project, "project.yaml", "docs/plans/settings.md", "review-1", pages, tool=fixture["context"]["tool"], format_version=format_version)
+    assembler = review._assemble_v2 if format_version == 2 else review._assemble_v3
+    assembled = assembler(context, files, tools, navigation)
+    assembled["manifest.json"] = review.json_bytes({"schema_version": format_version, "context": context, "files": [
         {"path": path, "size": len(body), "sha256": review.digest(body)} for path, body in sorted(assembled.items())]})
     with review._request_directory(context, data_dir, create=True) as (request_path, request_fd):
         bundle_path = request_path / context["review_id"]
@@ -242,7 +251,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.prepare()
         selected = [(PROTOTYPE_RELATIVE / f"screen-{number}.html").as_posix() for number in range(16)]
-        ready = self.prepare(pages=selected)
+        ready = prepare_legacy(self.project, self.data_dir, self.page, pages=selected)
         self.assertEqual(16, len(ready["context"]["pages"]))
         value = {"schema_version": 2, "context": ready["context"], "items": []}
         value["context"]["requirements"][0]["label"] = "伪造标签"
@@ -301,7 +310,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
 
 
     def envelope_v3(self, pages=None):
-        ready = feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", pages or [self.page], data_dir=self.data_dir)
+        ready = prepare_legacy(self.project, self.data_dir, self.page, format_version=3, pages=pages or [self.page])
         return {"schema_version": 3, "context": ready["context"], "anchors": [
             {"id": "anchor-1", "number": 3, "target": {"scope": "node", "page": self.page, "locator": {"type": "id", "id": "open-settings-dialog"}}}],
             "items": [{"id": "opinion-1", "number": 7, "operation": "modify", "target": {"scope": "node", "page": self.page,
@@ -380,6 +389,128 @@ class PrototypeFeedbackTest(unittest.TestCase):
         with self.assertRaises(ValueError): self.validate(legacy)
         value["context"] = self.context
         with self.assertRaises(ValueError): self.validate(value)
+
+    def envelope_v4(self, pages=None):
+        ready = feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1",
+                pages or [self.page], data_dir=self.data_dir)
+        target = {"scope": "node", "page": self.page, "locator": {"type": "id", "id": "open-settings-dialog"}}
+        return {"schema_version": 4, "review": {key: ready["context"][key] for key in ("request_id", "review_id")},
+                "anchors": [{"id": "anchor-1", "number": 3, "target": target}],
+                "items": [{"id": "opinion-1", "number": 7, "operation": "modify", "target": target,
+                           "message": "实际修改意见", "reference_ids": ["anchor-1"], "after_text": "打开设置"}]}
+
+    def test_v4_long_requirement_labels_keep_all_real_ids_and_validate(self):
+        """真实 prepare/validate 保留28个REQ；标签长度不能再挤掉合法需求。"""
+        requirements = [f"REQ-{number:03}" for number in range(1, 29)]
+        self.plan.write_text("# 需求\n" + "\n".join(f"{req}: " + "长需求说明" * 150 for req in requirements), encoding="utf-8")
+        ready = feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "long-req",
+                [self.page], data_dir=self.data_dir)
+        self.assertEqual(3, ready["context"]["schema_version"])
+        self.assertEqual(requirements, ready["context"]["requirements"])
+        self.assertLessEqual(len(feedback._json_bytes(ready["context"])), 8192)
+        value = {"schema_version": 4, "review": {key: ready["context"][key] for key in ("request_id", "review_id")}, "anchors": [], "items": []}
+        current = self.validate(value)
+        self.assertEqual({"status", "review", "anchors", "changes", "notice"}, set(current))
+        self.assertEqual("current", current["status"])
+        self.assertNotIn("长需求", json.dumps(current, ensure_ascii=False))
+
+    def test_v4_grouped_source_associations_and_only_referenced_cross_page_anchors(self):
+        source = self.project / self.page
+        source.write_text(source.read_text().replace('id="open-settings-dialog"', 'id="open-settings-dialog" data-req-ids="REQ-001"'), encoding="utf-8")
+        other = (PROTOTYPE_RELATIVE / "other.html").as_posix()
+        (self.project / other).write_bytes(source.read_bytes())
+        value = self.envelope_v4([self.page, other])
+        other_anchor = {"id": "anchor-2", "number": 9, "target": {**value["anchors"][0]["target"], "page": other}}
+        unused = {"id": "anchor-3", "number": 10, "target": {"scope": "node", "page": self.page, "locator": {"type": "id", "id": "settings-dialog"}}}
+        value["anchors"].extend([other_anchor, unused])
+        value["items"][0]["reference_ids"].append("anchor-2")
+        value["items"].append({**value["items"][0], "id": "opinion-9", "number": 49, "message": "保留第二条独立意见"})
+        before = copy.deepcopy(value)
+        current = self.validate(value)
+        self.assertEqual(value, before)
+        self.assertEqual(value["anchors"][:2], current["anchors"])
+        self.assertEqual(1, len(current["changes"]))
+        group = current["changes"][0]
+        self.assertEqual(["REQ-001"], group["req_ids"])
+        self.assertEqual("open-contract", group["interaction_id"])
+        self.assertEqual(["settings.read"], group["interface_refs"])
+        self.assertEqual([{key: entry for key, entry in item.items() if key != "target"} for item in value["items"]], group["items"])
+        self.assertEqual(1, json.dumps(group).count('"target"'))
+        value["items"] = []
+        current = self.validate(value)
+        self.assertEqual(value["anchors"], current["anchors"])
+        self.assertEqual([], current["changes"])
+        # 匿名节点沿同一个真实source键精确定位，不能在新分组投影中
+        # 被误当作ID或自动获得邻近节点的需求/接口关联。
+        from lib.documents.prototype_targets import capture_targets
+        metadata = capture_targets(other, (self.project / other).read_bytes())
+        source_key = next(key for key, locator in metadata["source_keys"].items() if locator["type"] == "source")
+        anonymous = {"scope": "node", "page": other, "locator": {"type": "source", "key": source_key}}
+        value["anchors"] = [{"id": "anchor-anonymous", "number": 15, "target": anonymous}]
+        value["items"] = [{"id": "anonymous-change", "number": 55, "operation": "delete", "target": anonymous,
+                           "message": "", "reference_ids": ["anchor-anonymous"]}]
+        current = self.validate(value)
+        self.assertEqual(value["anchors"], current["anchors"])
+        self.assertEqual(anonymous, current["changes"][0]["target"])
+        self.assertEqual({"target", "items"}, set(current["changes"][0]))
+
+    def test_v4_closed_fields_numbers_text_and_markdown(self):
+        value = self.envelope_v4()
+        mutations = [
+            lambda v: v.update(context={}), lambda v: v["review"].update(bundle_path="/tmp/forged"),
+            lambda v: v["review"].update(review_id="0" * 63), lambda v: v["review"].update(request_id="../escape"),
+            lambda v: v["items"][0].update(req_ids=[]), lambda v: v["items"][0].update(interaction_id="open-contract"),
+            lambda v: v["items"][0].update(interface_refs=[]), lambda v: v["items"][0].update(before_text="旧摘录"),
+            lambda v: v["items"][0].update(comparison={"before_text": "a", "after_text": "b"}),
+            lambda v: v["items"][0].update(number=True), lambda v: v["items"][0].update(number=9007199254740992),
+            lambda v: v["items"][0].update(reference_ids=[]), lambda v: v["items"][0].update(reference_ids=["missing"]),
+            lambda v: v["items"][0].update(after_text=""), lambda v: v["items"][0].update(after_text="x" * 4001),
+            lambda v: v["items"][0].update(message=""), lambda v: v["items"][0].update(message="x" * 4001),
+            lambda v: v["items"][0].update(operation="delete"),
+            lambda v: v["items"][0].update(target={"scope": "page", "page": self.page}),
+            lambda v: v["items"].append(copy.deepcopy(v["items"][0])),
+            lambda v: v["anchors"].append({**v["anchors"][0], "id": "other-anchor", "number": 4}),
+            lambda v: v.update(items=v["items"] * 257),
+        ]
+        for mutate in mutations:
+            bad = copy.deepcopy(value); mutate(bad)
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError): self.validate(bad)
+        markdown = feedback.MARKDOWN_PAYLOAD_HEADING + "\n```json\n" + json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n```\n"
+        self.assertEqual(value, feedback.parse_feedback(markdown.encode()))
+        self.assertEqual("current", self.validate(feedback.parse_feedback(markdown.encode()))["status"])
+        for raw in ("# 同义摘要\n" + markdown, markdown + "额外文字", markdown + markdown,
+                    markdown.replace('"number":7', '"number":7,"number":8'),
+                    markdown.replace('"number":7', '"number":NaN'), " " * (1024 * 1024 + 1)):
+            with self.subTest(raw=raw[:50]), self.assertRaises(ValueError): feedback.parse_feedback(raw.encode())
+        # 删除可以没有正文；无显式来源关联的页面/整体不凭需求目录猜测关联。
+        item = value["items"][0]; del item["after_text"]; del item["reference_ids"]
+        item.update(operation="delete", message="")
+        self.assertEqual("current", self.validate(value)["status"])
+        item.update(operation="add", message="新增页面模块", target={"scope": "page", "page": self.page})
+        self.assertEqual({"target", "items"}, set(self.validate(value)["changes"][0]))
+        item.update(operation="modify", target={"scope": "global"})
+        self.assertEqual({"target", "items"}, set(self.validate(value)["changes"][0]))
+
+    def test_v4_reference_project_missing_bundle_and_changed_sources_fail_closed(self):
+        value = self.envelope_v4()
+        for replacement in ({"request_id": "missing-request"}, {"review_id": "0" * 64}):
+            bad = copy.deepcopy(value); bad["review"].update(replacement)
+            with self.subTest(replacement=replacement), self.assertRaises((ValueError, OSError)): self.validate(bad)
+        other = write_valid_project(Path(self.temporary.name) / "other").resolve()
+        bind_requirement_documents(other)
+        with self.assertRaises((ValueError, OSError)):
+            feedback.validate_feedback(other, "project.yaml", value, data_dir=self.data_dir)
+        for source in (self.plan, self.project / self.page, self.project / "project.yaml",
+                       self.project / PROTOTYPE_RELATIVE / "index.html", self.project / PROTOTYPE_RELATIVE / "prototype.css"):
+            original = source.read_bytes(); source.write_bytes(original + b"\n ")
+            snapshot = tree_snapshot(self.project)
+            with self.subTest(source=source.name), self.assertRaises(ValueError): self.validate(value)
+            self.assertEqual(snapshot, tree_snapshot(self.project))
+            source.write_bytes(original)
+        with self.assertRaises(ValueError): self.validate(value, "other.yaml")
+        for version in (2, 3):
+            bad = copy.deepcopy(value); bad["schema_version"] = version
+            with self.subTest(version=version), self.assertRaises(ValueError): self.validate(bad)
 
 
 if __name__ == "__main__":

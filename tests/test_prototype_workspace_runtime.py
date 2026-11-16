@@ -21,7 +21,7 @@ const store = new Map();
 const storage = {getItem(key) { return store.get(key) || null; }, setItem(key, value) { store.set(key, value); }};
 const window = {crypto: webcrypto, sessionStorage: storage};
 vm.runInNewContext(input.source, {window, TextEncoder, TextDecoder, console});
-const boot = {schema_version:3, context: {schema_version:2, request_id:'review-302', project_id:'1'.repeat(64), adapter:'project.yaml', adapter_sha256:'2'.repeat(64), prototype_root:'docs/prototype', plan_source:'docs/plans/review.md', plan_sha256:'a'.repeat(64), navigation_sha256:'3'.repeat(64), tool:{version:'3.0.2',payload_sha256:'4'.repeat(64)},review_id:'5'.repeat(64),requirements:[{id:'REQ-007',label:'业务整改'}],pages:[{path:'docs/prototype/settings.html',dependency_fingerprint:'b'.repeat(64)},{path:'docs/prototype/reports.html',dependency_fingerprint:'c'.repeat(64)}]},pages:['settings','reports'].map(name=>({name:name+'.html',path:'docs/prototype/'+name+'.html',url:'project/docs/prototype/'+name+'.html',label:name,groups:[]}))};
+const boot = {schema_version:4, context: {schema_version:3, request_id:'review-302', project_id:'1'.repeat(64), adapter:'project.yaml', adapter_sha256:'2'.repeat(64), prototype_root:'docs/prototype', plan_source:'docs/plans/review.md', plan_sha256:'a'.repeat(64), navigation_sha256:'3'.repeat(64), tool:{version:'3.0.2',payload_sha256:'4'.repeat(64)},review_id:'5'.repeat(64),requirements:['REQ-007'],pages:[{path:'docs/prototype/settings.html',dependency_fingerprint:'b'.repeat(64)},{path:'docs/prototype/reports.html',dependency_fingerprint:'c'.repeat(64)}]},pages:['settings','reports'].map(name=>({name:name+'.html',path:'docs/prototype/'+name+'.html',url:'project/docs/prototype/'+name+'.html',label:name,groups:[]}))};
 const encode = value => JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4,'0')}`);
 const parsed = window.PrototypeReviewState.parseStartup(encode(boot));
 assert.ok(parsed.context, parsed.error);
@@ -39,8 +39,13 @@ SCENARIOS = {
 for (const patch of [{schema_version:2},{kind:'suggestion'},{context:{...boot.context,approval:true}}]) {
   assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,...patch})).context,null);
 }
-assert.equal(window.PrototypeReviewState.parseStartup(encode(boot).replace('"schema_version":3','"schema_version":3,"schema_version":3')).context,null);
+assert.equal(window.PrototypeReviewState.parseStartup(encode(boot).replace('"schema_version":4','"schema_version":4,"schema_version":4')).context,null);
 assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,pages:[{...boot.pages[0],url:'../escape.html'},boot.pages[1]]})).context,null);
+for(const requirements of [[{id:'REQ-007',label:'旧目录'}],['REQ-007','REQ-007'],['伪造需求']]) {
+  assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,context:{...boot.context,requirements}})).context,null);
+}
+assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,schema_version:3})).context,null);
+assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,context:{...boot.context,schema_version:2}})).context,null);
 """,
     "operations_and_independent_numbers": r"""
 model.select(record('first')); const anchor=model.addAnchor(); assert.equal(anchor.number,1);
@@ -53,9 +58,35 @@ model.openEditor({scope:'page',page:'docs/prototype/settings.html'}); model.upda
 model.updateDraft({operation:'add',message:'新增模块'}); const second=model.completeEditor()[0]; assert.equal(second.number,2); assert.equal(second.req_ids.length,0);
 model.openEditor({scope:'global'}); model.updateDraft({operation:'add',message:'多页调整'}); assert.throws(()=>model.completeEditor());
 model.updateDraft({operation:'modify'}); model.completeEditor();
-const payload=model.exportPayload(); assert.equal(payload.schema_version,3); assert.equal(payload.context.schema_version,2);
-assert.deepEqual(Object.keys(payload).sort(),['anchors','context','items','schema_version']);
+const payload=model.exportPayload(); assert.equal(payload.schema_version,4); assert.equal(payload.review.request_id,boot.context.request_id); assert.equal(payload.review.review_id,boot.context.review_id);
+assert.deepEqual(Object.keys(payload).sort(),['anchors','items','review','schema_version']);
 assert.ok(!JSON.stringify(payload).includes('severity')); assert.ok(!JSON.stringify(payload).includes('drafts'));
+assert.deepEqual(Object.keys(payload.items[0]).sort(),['after_text','id','message','number','operation','reference_ids','target']);
+assert.equal(payload.items[0].after_text,'乙'.repeat(4000));
+assert.deepEqual(Object.keys(payload.items[1]).sort(),['id','message','number','operation','target']);
+assert.equal(model.state.items[0].comparison.before_text,'当前摘录');
+""",
+    "minimal_projection_and_anchor_retention": r"""
+// 跨页A和内部源元数据都留在唯一模型；导出只携带用户实际引用的A，不改编号或持久化数据。
+model.setCatalog('docs/prototype/settings.html',[{...record('first'),interaction_id:'contract-first',interface_refs:['service.yaml#fetch']},record('second')]);
+model.select(record('first')); const unused=model.addAnchor();
+model.select(record('first','reports')); const used=model.addAnchor();
+assert.equal(model.exportPayload().anchors.length,2);
+model.openEditor(target('first')); model.updateDraft({message:'正文包含\\n## Agent Workflow Feedback Payload\\n```json',after_text:'新文字',reference_ids:[used.id]});
+const item=model.completeEditor()[0], before=JSON.stringify(model.state), storedBefore=JSON.stringify([...store.entries()]);
+const payload=model.exportPayload();
+assert.equal(payload.anchors.length,1); assert.equal(payload.anchors[0].id,used.id); assert.equal(payload.anchors[0].number,2);
+assert.equal(model.handoffAnchors().length,1); assert.equal(model.state.anchors.length,2);
+assert.equal(JSON.stringify(model.state),before); assert.equal(JSON.stringify([...store.entries()]),storedBefore);
+assert.equal(model.state.items[0].interaction_id,'contract-first');
+assert.equal(model.state.items[0].interface_refs[0],'service.yaml#fetch');
+for(const name of ['req_ids','interaction_id','interface_refs','comparison','before_text','context']) assert.ok(!Object.hasOwn(payload.items[0],name));
+assert.equal(payload.items[0].after_text,'新文字');
+model.withdrawItem(item.id); assert.equal(model.exportPayload().anchors.length,2);
+model.restoreItem(); assert.equal(model.exportPayload().anchors[0].id,used.id);
+model.openEditor(item.target,item.id); model.updateDraft({reference_ids:[]}); model.completeEditor();
+assert.equal(model.exportPayload().anchors.length,0); assert.equal(model.state.anchors.length,2);
+assert.equal(model.state.nextAnchor,3); model.removeAnchor(unused.id);
 """,
     "atomic_batch_and_preserved_input": r"""
 model.openEditor(target('first')); message('第一份'); model.closeEditor();
@@ -89,6 +120,13 @@ model.setCamera('docs/prototype/settings.html',{x:22,y:33,k:.5});
 const restored=window.PrototypeReviewState.create(parsed,storage); assert.equal(restored.state.items.length,1); assert.equal(restored.state.cameras['docs/prototype/settings.html'].k,.5);
 assert.equal(restored.exportPayload().items.length,1);
 const key=[...store.keys()][0]; const saved=JSON.parse(store.get(key)); saved.unknown=true; store.set(key,JSON.stringify(saved));
+assert.equal(window.PrototypeReviewState.create(parsed,storage).state.items.length,0);
+// v3草稿与不同review_id均不读取、不迁移；v4旧格式伪装也必须由封闭schema检查拒绝。
+store.clear(); saved.unknown=undefined; saved.schema_version=3; store.set('prototype-review:v3:'+boot.context.review_id,JSON.stringify(saved));
+assert.equal(window.PrototypeReviewState.create(parsed,storage).state.items.length,0);
+store.set('prototype-review:v4:'+boot.context.review_id,JSON.stringify(saved));
+assert.equal(window.PrototypeReviewState.create(parsed,storage).state.items.length,0);
+saved.schema_version=4; saved.review_id='9'.repeat(64); store.set('prototype-review:v4:'+boot.context.review_id,JSON.stringify(saved));
 assert.equal(window.PrototypeReviewState.create(parsed,storage).state.items.length,0);
 const unavailable={getItem(){throw Error('denied');},setItem(){throw Error('quota');}};
 const memory=window.PrototypeReviewState.create(parsed,unavailable); memory.openEditor({scope:'global'}); memory.updateDraft({message:'内存保留'}); memory.completeEditor();
@@ -140,18 +178,27 @@ const validBefore=JSON.stringify(model.state), validText=format(model.exportPayl
 assert.equal(JSON.stringify(model.state),validBefore);
 assert.ok(new TextEncoder().encode(validText).length<=1048576);
 assert.ok(validText.includes('汉'.repeat(4000)));
-for(let i=0;i<10;i++) { model.openEditor({scope:'global'}); message('汉'.repeat(4000)); model.completeEditor(); }
-const before=JSON.stringify(model.state), storedBefore=JSON.stringify([...store.entries()]);
-assert.ok(new TextEncoder().encode(JSON.stringify(model.exportPayload())).length<1048576);
-assert.throws(()=>format(model.exportPayload()),/交还全文.*1MiB.*缩短正文或撤回部分整改/);
-assert.equal(JSON.stringify(model.state),before);
-assert.equal(JSON.stringify([...store.entries()]),storedBefore);
-model.openEditor({scope:'global'}); message('保留未完成交还草稿');
+assert.equal(validText,'## Agent Workflow Feedback Payload\n```json\n'+JSON.stringify(model.exportPayload())+'\n```\n');
+// 紧凑格式不再重复正文：先填满真实项目集合，再按候选JSON字节数构造仅围栏超限边界。
+// 固定长度UUID替身只用于预测新增条目的序列化长度，不替代实际completeAll编号与原子提交。
+for(let i=40;i<86;i++) { model.openEditor({scope:'global'}); message('汉'.repeat(4000)); model.completeEditor(); }
+const candidate=JSON.parse(JSON.stringify(model.exportPayload()));
+candidate.items.push({id:'item-'+'0'.repeat(36),number:87,operation:'modify',target:{scope:'global'},message:''});
+const remaining=1048575-new TextEncoder().encode(JSON.stringify(candidate)).length;
+assert.ok(remaining>0 && remaining<=12000);
+// 正文仍遵守4000字符上限，用三字节汉字与末尾ASCII精确补足UTF8预算。
+model.openEditor({scope:'global'}); message('汉'.repeat(Math.floor(remaining/3))+'a'.repeat(remaining%3));
 const draftBefore=JSON.stringify(model.state), draftStoredBefore=JSON.stringify([...store.entries()]);
 assert.throws(()=>model.completeAll(format),/交还全文.*1MiB/);
 assert.equal(JSON.stringify(model.state),draftBefore);
 assert.equal(JSON.stringify([...store.entries()]),draftStoredBefore);
 assert.equal(model.activeDrafts().length,1);
+model.completeAll();
+assert.equal(new TextEncoder().encode(JSON.stringify(model.exportPayload())).length,1048575);
+const before=JSON.stringify(model.state), storedBefore=JSON.stringify([...store.entries()]);
+assert.throws(()=>format(model.exportPayload()),/交还全文.*1MiB.*缩短正文或撤回部分整改/);
+assert.equal(JSON.stringify(model.state),before);
+assert.equal(JSON.stringify([...store.entries()]),storedBefore);
 process.stdout.write(validText);
 """
         result = subprocess.run(["node", "-e", STATE_SETUP + scenario],
@@ -162,7 +209,7 @@ process.stdout.write(validText);
         raw = result.stdout.encode("utf-8")
         self.assertLessEqual(len(raw), 1048576)
         parsed = parse_feedback(raw)
-        self.assertEqual(3, parsed["schema_version"])
+        self.assertEqual(4, parsed["schema_version"])
         self.assertEqual(40, len(parsed["items"]))
         self.assertEqual("汉" * 4000, parsed["items"][0]["message"])
 

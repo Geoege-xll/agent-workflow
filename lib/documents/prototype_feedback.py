@@ -9,6 +9,7 @@ import re
 from urllib.parse import urlencode
 
 from lib.documents import prototype_review as review
+from lib.documents.prototype_handoff import check_feedback, compact_handoff
 from lib.documents.prototype_targets import (canonical_target, validate_source_target,
     check_context as _check_context, FeedbackError, _json_bytes, _unique_object, _object,
     _text, _identifier, _relative, _strings, _version, MAX_FEEDBACK_BYTES, MAX_ITEMS,
@@ -30,6 +31,7 @@ def parse_feedback(raw: bytes) -> dict:
     # 摘要既不能再携带第二份机器输入，也不能靠近似标题制造解释歧义。
     try:
         decoded = raw.decode("utf-8", errors="strict")
+        wrapper = None
         if not decoded.lstrip().startswith("{"):
             lines = decoded.splitlines()
             if lines.count(MARKDOWN_PAYLOAD_HEADING) != 1:
@@ -40,11 +42,19 @@ def parse_feedback(raw: bytes) -> dict:
             if index >= len(lines) or lines[index] != "```json" or len(fences) != 2 or fences[0] != index or lines[fences[1]] != "```":
                 raise FeedbackError("Markdown 仅允许标题后单个 fenced JSON 机器载荷")
             decoded = "\n".join(lines[index + 1:fences[1]])
+            wrapper = (lines, index, fences[1])
         value = json.loads(decoded, object_pairs_hook=_unique_object,
                            parse_constant=lambda _: (_ for _ in ()).throw(FeedbackError("反馈不得含非标准 JSON 数字")))
     except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise FeedbackError("反馈不是有效的 UTF-8 JSON 对象") from exc
-    _object(value, {"schema_version", "context", "anchors", "items"} if isinstance(value, dict) and value.get("schema_version") == 3 else {"schema_version", "context", "items"}, "反馈")
+    version = value.get("schema_version") if isinstance(value, dict) else None
+    fields = {"schema_version", "review", "anchors", "items"} if type(version) is int and version == 4 else {"schema_version", "context", "anchors", "items"} if type(version) is int and version == 3 else {"schema_version", "context", "items"}
+    _object(value, fields, "反馈")
+    if type(version) is int and version == 4 and wrapper is not None:
+        lines, start, end = wrapper
+        # 旧2/3包装按原契约读取；新4复制只有唯一机器载荷，不再携带同义摘要。
+        if any(line.strip() for line in lines[:start] if line != MARKDOWN_PAYLOAD_HEADING) or any(line.strip() for line in lines[end + 1:]):
+            raise FeedbackError("反馈4 Markdown仅允许固定标题和单个JSON围栏")
     return value
 
 
@@ -69,6 +79,8 @@ def validate_feedback(root: str | Path, adapter: str, feedback: dict, *,
     # 公开 Python API 与 CLI 使用同样的限额和封闭字段，不信任调用方已做前端校验。
     if len(_json_bytes(feedback)) > MAX_FEEDBACK_BYTES:
         raise FeedbackError("反馈文件超过 1 MiB 限额")
+    if isinstance(feedback, dict) and type(feedback.get("schema_version")) is int and feedback["schema_version"] == 4:
+        return _validate_feedback_v4(root, adapter, feedback, data_dir=data_dir)
     if isinstance(feedback, dict) and type(feedback.get("schema_version")) is int and feedback["schema_version"] == 3:
         return _validate_feedback_v3(root, adapter, feedback, data_dir=data_dir)
     envelope = _object(feedback, {"schema_version", "context", "items"}, "反馈")
@@ -181,7 +193,7 @@ def _validate_feedback_v3(root, adapter, envelope, *, data_dir=None):
         if set(item["reference_ids"]) - anchor_ids: raise FeedbackError("引用了不存在的定位标记")
     # 先检查当前包身份，再重读项目输入。两个格式互不迁移，也不借新工具验证旧包。
     review.validate_bundle(context, data_dir=data_dir, format_version=3)
-    current, metadata, files, navigation = capture_review(root, adapter, context["plan_source"], context["request_id"], pages, tool=context["tool"])
+    current, metadata, files, navigation = capture_review(root, adapter, context["plan_source"], context["request_id"], pages, tool=context["tool"], format_version=3)
     review.validate_bundle(context, data_dir=data_dir, source_files=files, navigation=navigation, format_version=3)
     if current != context: raise FeedbackError("反馈绑定已过期或来源不匹配；请保留原意见并重新准备评审")
     for entry in anchors + items:
@@ -206,6 +218,21 @@ def _validate_feedback_v3(root, adapter, envelope, *, data_dir=None):
         changes.setdefault(key, {"target": copy.deepcopy(item["target"]), "items": []})["items"].append(copy.deepcopy(item))
     return {"status": "current", "context": current, "anchors": copy.deepcopy(anchors),
             "changes": [changes[key] for key in sorted(changes)], "notice": NOTICE}
+
+
+def _validate_feedback_v4(root, adapter, envelope, *, data_dir=None):
+    """先解析当前项目的真实包，再重读来源；短引用不提供任何可信源数据。"""
+    _object(envelope, {"schema_version", "review", "anchors", "items"}, "反馈")
+    context = review.resolve_review_reference(root, envelope["review"], data_dir=data_dir)
+    if adapter != context["adapter"]: raise FeedbackError("反馈适配器与显式选择不一致")
+    pages = [page["path"] for page in context["pages"]]
+    check_feedback(envelope, pages)
+    current, metadata, files, navigation = capture_review(root, adapter, context["plan_source"],
+            context["request_id"], pages, tool=context["tool"], format_version=4)
+    review.validate_bundle(context, data_dir=data_dir, source_files=files, navigation=navigation, format_version=4)
+    if current != context:
+        raise FeedbackError("反馈绑定已过期或来源不匹配；请保留原意见并重新准备评审")
+    return compact_handoff(envelope, current, metadata)
 
 
 _capture_review = capture_review

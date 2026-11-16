@@ -1,5 +1,5 @@
 /* 父工作台只负责登记路由、会话握手和跨file消息；不跨文档读取DOM。
- * 所有页面URL来自boot3白名单，page/token/source/origin缺一即拒绝。 */
+ * 所有页面URL来自boot4白名单，page/token/source/origin缺一即拒绝。 */
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id), preview = $("prototype-preview"), navigation = $("prototype-pages");
@@ -10,12 +10,12 @@
     || document.querySelectorAll("nav#prototype-pages").length !== 1) { fail(boot?.error || "请独立打开prepare生成的评审包。"); return; }
   const model = window.PrototypeReviewState.create(boot), state = model.state, entries = new Map(boot.pages.map((entry) => [entry.path, entry]));
   const targetOrigin = location.protocol === "file:" ? "*" : location.origin, expectedOrigin = location.protocol === "file:" ? "null" : location.origin;
-  let current = null, token = "", ready = false, readyWaiters = [], navigationVersion = 0, views = null, presenting = false;
+  let current = null, token = "", ready = false, catalogReady = false, readyWaiters = [], navigationVersion = 0, views = null, presenting = false;
   const requests = new Map();
   const announce = (message) => { $("review-status").textContent = message; };
   function send(action, payload = {}) {
     if (!ready || !current) return false;
-    preview.contentWindow.postMessage({ type: "prototype-review:review", version: 3, page: current.path, token, action, ...payload }, targetOrigin); return true;
+    preview.contentWindow.postMessage({ type: "prototype-review:review", version: 4, page: current.path, token, action, ...payload }, targetOrigin); return true;
   }
   const camera = window.PrototypeReviewCamera.create({ viewport: $("canvas-viewport"), world: $("canvas-world"),
     read: () => state.cameras[state.page], write: (cam) => model.setCamera(state.page, cam),
@@ -36,18 +36,26 @@
     location.hash = hash;
   }
   function readHash() { const params = new URLSearchParams(location.hash.slice(1)); return params.getAll("page").length === 1 ? boot.pages.find((entry) => entry.name === params.get("page")) : null; }
+  function settleReady() {
+    // child的ready与catalog是两条异步消息。逐页校验返回原页后，只有两者都属于当前
+    // 已认证会话且目录已通过模型校验，才允许调用者完成草稿；否则会把尚未抵达的目录
+    // 误判为源目标失效。重载/导航仍先清空目录并轮换token，不借旧目录提前放行。
+    if (!ready || !catalogReady || !readyWaiters.length) return;
+    for (const waiter of readyWaiters) { clearTimeout(waiter.timer); waiter.resolve(); }
+    readyWaiters = []; announce("浏览模式保留稿件业务交互；切到批注后点选元素。");
+  }
   function navigate(path, options = {}) {
     const entry = entries.get(path); if (!entry) return Promise.reject(Error("页面未登记，当前稿件保持不变。"));
     if (current === entry) {
       if (options.hash !== false) setHash(entry, options.replace);
-      if (ready) return Promise.resolve();
+      if (ready && catalogReady) return Promise.resolve();
       // 同页hashchange只能等待既有握手，不能再次重载iframe并使原token无限失效。
       return new Promise((resolve, reject) => { const waiter = { resolve, reject, timer: setTimeout(() => { readyWaiters = readyWaiters.filter((item) => item !== waiter); reject(Error("当前页面握手超时。")); }, 5000) }; readyWaiters.push(waiter); });
     }
     // 切换使旧会话立即失效；挂起请求拒绝而不是把迟到响应送给新页面。
     for (const [, request] of requests) { clearTimeout(request.timer); request.reject(Error("页面已切换，请重试；输入保留。")); } requests.clear();
     readyWaiters.forEach((waiter) => { clearTimeout(waiter.timer); waiter.reject(Error("页面已切换。")); }); readyWaiters = [];
-    current = entry; token = randomToken(); ready = false; const version = ++navigationVersion;
+    current = entry; token = randomToken(); ready = false; catalogReady = false; const version = ++navigationVersion;
     model.setPage(path); $("current-page-title").textContent = entry.label; document.title = `${entry.label} · 原型评审工作台`;
     for (const link of navigation.querySelectorAll("a")) {
       if (link.dataset.page === path) { link.setAttribute("aria-current", "page"); for (let parent = link.parentElement; parent && parent !== navigation; parent = parent.parentElement) if (parent.tagName === "DETAILS") parent.open = true; }
@@ -99,25 +107,25 @@
   preview.addEventListener("load", () => {
     if (!current) return;
     // 业务脚本或浏览器可独立触发iframe重载。每次load都撤销旧ready、目录和token，
-    // 不让未认证的新文档继承前一页权限；真正的bridge3重新握手后才恢复编辑。
-    ready = false; token = randomToken(); preview.setAttribute("aria-busy", "true"); model.clearCatalog(current.path); views?.catalog();
+    // 不让未认证的新文档继承前一页权限；真正的bridge4重新握手后才恢复编辑。
+    ready = false; catalogReady = false; token = randomToken(); preview.setAttribute("aria-busy", "true"); model.clearCatalog(current.path); views?.catalog();
     for (const [, pending] of requests) { clearTimeout(pending.timer); pending.reject(Error("设计页已重新载入，输入保留，请重试。")); } requests.clear();
     announce("设计页已载入，正在重新确认来源通信……");
     // file://只能使用*投递；接收端还严格核真实window身份、null来源、page与随机会话。
-    preview.contentWindow.postMessage({ type: "prototype-review:connect", version: 3, page: current.path, token, mode: state.mode }, targetOrigin);
+    preview.contentWindow.postMessage({ type: "prototype-review:connect", version: 4, page: current.path, token, mode: state.mode }, targetOrigin);
   });
   window.addEventListener("message", (event) => {
     const data = event.data;
     if (!current || event.source !== preview.contentWindow || event.origin !== expectedOrigin || !data || typeof data !== "object" || Array.isArray(data)
-      || data.version !== 3 || data.page !== current.path || data.token !== token || !entries.has(data.page)) return;
+      || data.version !== 4 || data.page !== current.path || data.token !== token || !entries.has(data.page)) return;
     if (data.type === "prototype-review:ready") {
       ready = true; preview.setAttribute("aria-busy", "false");
       if (!state.cameras[state.page]) camera.fit(); else camera.applyCam();
       send("mode", { mode: state.mode }); present();
-      for (const waiter of readyWaiters) { clearTimeout(waiter.timer); waiter.resolve(); } readyWaiters = []; announce("浏览模式保留稿件业务交互；切到批注后点选元素。"); return;
+      settleReady(); return;
     }
     if (data.type === "prototype-review:catalog") {
-      if (model.setCatalog(current.path, data.nodes)) { views?.catalog(); if (data.error) announce(String(data.error).slice(0, 4000)); } return;
+      if (model.setCatalog(current.path, data.nodes)) { catalogReady = true; views?.catalog(); settleReady(); if (data.error) announce(String(data.error).slice(0, 4000)); } return;
     }
     if (data.type === "prototype-review:contract") { views?.contract(data.sections); return; }
     if (!ready) return;

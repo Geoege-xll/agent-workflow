@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from lib.documents import prototype_feedback as feedback
 from lib.documents import prototype_review as review
-from tests.test_prototype_feedback import legacy_fixture
+from tests.test_prototype_feedback import legacy_fixture, legacy_v3_fixture
 from lib.documents.prototype_targets import inject_source_targets
 from tests.test_prototype_workspace import PACK, PROTOTYPE_RELATIVE, bind_requirement_documents, tree_snapshot, write_valid_project
 
@@ -37,7 +37,8 @@ class PrototypeReviewTest(unittest.TestCase):
         return feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "review-1", [self.page], data_dir=self.data, **kwargs)
 
     def validate(self, ready):
-        return feedback.validate_feedback(self.project, "project.yaml", {"schema_version": 3, "context": ready["context"], "anchors": [], "items": []}, data_dir=self.data)
+        return feedback.validate_feedback(self.project, "project.yaml", {"schema_version": 4,
+            "review": {key: ready["context"][key] for key in ("request_id", "review_id")}, "anchors": [], "items": []}, data_dir=self.data)
 
     def preview(self, **kwargs):
         return review.migration_preview(self.project, "project.yaml", "docs/plans/settings.md", "review-1", [self.page], **kwargs)
@@ -61,6 +62,27 @@ class PrototypeReviewTest(unittest.TestCase):
         corrupted = dict(source); corrupted[self.page] += b"changed"
         with self.assertRaises(ValueError): review.validate_bundle(context, data_dir=self.data, source_files=corrupted, navigation=fixture["navigation"], format_version=2)
 
+    def test_released_v3_original_bundle_keeps_context_assets_and_assembly(self):
+        """读取真实旧验收包原字节；篡改原源会失败，新资产变化不会影响旧包。"""
+        fixture, entries = legacy_v3_fixture()
+        context = fixture["context"]
+        source = {name.removeprefix("source/"): body for name, body in entries.items() if name.startswith("source/")}
+        bundle = {name.removeprefix("bundle/"): body for name, body in entries.items() if name.startswith("bundle/")}
+        self.assertEqual(2, context["schema_version"])
+        self.assertEqual(9, len([name for name in bundle if name.startswith("tool/") and name != "tool/version.txt"]))
+        with review._request_directory(context, self.data, create=True) as (_, request_fd):
+            descriptor = review._child(request_fd, context["review_id"])
+            try:
+                for name, body in bundle.items(): review._write_at(descriptor, name, body)
+                review._tree(descriptor, freeze=True); os.fchmod(descriptor, 0o500)
+            finally: os.close(descriptor)
+        with mock.patch.object(review, "TOOL_ASSETS", ("nonexistent-new.js",)), mock.patch.object(review, "_assemble", side_effect=AssertionError("旧v3包调用了新装配")):
+            result = review.validate_bundle(context, data_dir=self.data, source_files=source, navigation=fixture["navigation"], format_version=3)
+        self.assertEqual(3, result["schema_version"])
+        source[next(page["path"] for page in context["pages"])] += b"changed"
+        with self.assertRaises(ValueError):
+            review.validate_bundle(context, data_dir=self.data, source_files=source, navigation=fixture["navigation"], format_version=3)
+
     def test_standalone_selected_page_has_no_index_or_tool_requirement(self):
         (self.prototype / "index.html").unlink()
         (self.prototype / "broken-unselected.html").write_text("unrelated unfinished business page")
@@ -75,7 +97,7 @@ class PrototypeReviewTest(unittest.TestCase):
         self.assertTrue((bundle / "project" / self.page).is_file())
         original = (self.project / self.page).read_text()
         derived = (bundle / "project" / self.page).read_text()
-        injection = '<script src="../../../../tool/page-shell.js" data-prototype-review-bridge="3"></script>'
+        injection = '<script src="../../../../tool/page-shell.js" data-prototype-review-bridge="4"></script>'
         self.assertEqual(inject_source_targets(self.page, original.encode()).decode().replace("</body>", injection + "</body>"), derived)
         self.assertEqual("current", self.validate(ready)["status"])
         self.assertTrue(self.prepare()["reused"])

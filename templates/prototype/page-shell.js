@@ -1,10 +1,10 @@
 /* 派生设计页唯一DOM所有者：命中、局部几何、可见目录与覆盖层都留在子文档。
- * 只响应prepare注入的bridge3，独立打开项目源时不改变外观或业务行为。 */
+ * 只响应prepare注入的bridge4，独立打开项目源时不改变外观或业务行为。 */
 (() => {
   "use strict";
   const injected = document.currentScript;
-  if (window.parent === window || injected?.getAttribute("data-prototype-review-bridge") !== "3" || window.__prototypeReviewBridgeV3) return;
-  window.__prototypeReviewBridgeV3 = true;
+  if (window.parent === window || injected?.getAttribute("data-prototype-review-bridge") !== "4" || window.__prototypeReviewBridgeV4) return;
+  window.__prototypeReviewBridgeV4 = true;
   const expectedOrigin = window.location.protocol === "file:" ? "null" : window.location.origin;
   const targetOrigin = window.location.protocol === "file:" ? "*" : window.location.origin;
   const roots = document.querySelectorAll("[data-prototype-page-content]");
@@ -67,7 +67,7 @@
       interaction_text: mapping ? Array.from(mapping.textContent.trim()).slice(0, 4000).join("") : "",
       interaction_id: stableId(interactionId) && unique("id", interactionId) === mapping ? interactionId : "", interface_refs: [...new Set(refs)] };
   }
-  const send = (type, body = {}) => { if (session) window.parent.postMessage({ type: `prototype-review:${type}`, version: 3, page, token: session, ...body }, targetOrigin); };
+  const send = (type, body = {}) => { if (session) window.parent.postMessage({ type: `prototype-review:${type}`, version: 4, page, token: session, ...body }, targetOrigin); };
   function catalog() {
     nodes = new Map();
     for (const node of [root, ...root.querySelectorAll("*")]) if (meaningful(node) && visible(node)) nodes.set(keyFor(node), node);
@@ -127,7 +127,7 @@
   window.addEventListener("message", (event) => {
     const data = event.data;
     // null来源仅对固定parent窗口有意义，还必须联合登记page和随机token；任何单项都不授予权限。
-    if (event.source !== window.parent || event.origin !== expectedOrigin || !data || data.version !== 3 || typeof data.page !== "string") return;
+    if (event.source !== window.parent || event.origin !== expectedOrigin || !data || data.version !== 4 || typeof data.page !== "string") return;
     if (data.type === "prototype-review:connect") {
       if (session || !/^[a-f0-9]{32}$/.test(data.token) || !window.location.pathname.endsWith(`/${data.page}`)) return;
       page = data.page; session = data.token; mode = data.mode === "annotate" ? "annotate" : "browse";

@@ -5,15 +5,13 @@
   const operations = { modify: "修改", add: "新增内容", delete: "删除建议" };
   const number = (entry, anchor = false) => `${anchor ? "A" : ""}${String(entry.number).padStart(2, "0")}`;
   const make = (tag, text, className) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; };
-  function formatExport(payload, scopeLabel) {
+  function formatExport(payload) {
     // 唯一实际交还formatter同时供复制、备用文字、下载及原子完成的提交前验证使用。
-    // 用户正文逐行作为引用，防止正文中的机器标题/反引号产生第二个机器块。
-    const summary = ["# 原型评审反馈", `已完成整改：${payload.items.length}；定位标记：${payload.anchors.length}。`];
-    for (const item of payload.items) summary.push(`\n${number(item)} · ${operations[item.operation]} · ${scopeLabel(item.target)}`, ...item.message.split("\n").map((line) => `> ${line}`));
-    for (const anchor of payload.anchors) summary.push(`${number(anchor, true)} · ${scopeLabel(anchor.target)}`);
-    const value = `${summary.join("\n")}\n\n## Agent Workflow Feedback Payload\n\x60\x60\x60json\n${JSON.stringify(payload, null, 2)}\n\x60\x60\x60\n`;
-    // 摘要和pretty JSON会额外占字节，只有最终全文通过同一UTF8预算才能对外交还。
-    return window.PrototypeReviewState.checkFeedbackBytes(value, "交还全文（含摘要与机器载荷）");
+    // JSON.stringify将正文换行转义，用户文字中的标题或反引号不会形成第二个机器块；
+    // 不再生成语义相同的可读摘要，复制、备用文字与下载始终消费同一紧凑机器载荷。
+    const value = `## Agent Workflow Feedback Payload\n\x60\x60\x60json\n${JSON.stringify(payload)}\n\x60\x60\x60\n`;
+    // 固定标题和围栏也占UTF8字节；原子完成必须校验最终全文，不能仅检查JSON长度。
+    return window.PrototypeReviewState.checkFeedbackBytes(value, "交还全文（含标题与机器载荷）");
   }
   function create({ model, send, locate, verifySources, camera, announce, present }) {
     const $ = (id) => document.getElementById(id), state = model.state;
@@ -192,11 +190,20 @@
       finally { saving = false; $("complete-rectification").disabled = false; $("draft-state").textContent = "草稿自动保留"; }
     });
     editor.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $("rectification-form").requestSubmit(); } });
-    function allTargets(includeDrafts = false) { return [...state.items, ...state.anchors, ...(includeDrafts ? model.activeDrafts().map(([, value]) => value) : [])].map((entry) => entry.target); }
-    function exportText() {
-      return formatExport(model.exportPayload(), scopeLabel);
+    function allTargets(includeDrafts = false) {
+      const items = [...state.items, ...(includeDrafts ? model.activeDrafts().map(([, value]) => value) : [])];
+      return [...items, ...model.handoffAnchors(items)].map((entry) => entry.target);
     }
-    function counts() { $("export-saved-count").textContent = state.items.length; $("export-anchor-count").textContent = state.anchors.length; $("export-draft-count").textContent = model.activeDrafts().length; }
+    function exportText() {
+      return formatExport(model.exportPayload());
+    }
+    function counts() {
+      const anchors = model.handoffAnchors(), retained = state.anchors.length - anchors.length;
+      $("export-saved-count").textContent = state.items.length; $("export-anchor-count").textContent = anchors.length; $("export-draft-count").textContent = model.activeDrafts().length;
+      $("export-warning").textContent = state.items.length
+        ? `将交还已完成整改及其引用的定位标记。${retained ? `${retained}个未引用标记保留在本轮草稿，不随本次交还。` : ""}`
+        : "仅交还明确的定位标记，不据此推断整改意见。";
+    }
     function enableExport(enabled) { for (const id of ["export-copy", "select-export", "download-feedback"]) $(id).disabled = !enabled; $("export-save-copy").disabled = busy; }
     function exportResult(message, failed = false) { $("export-result").textContent = message; $("export-result").classList.toggle("is-error", failed); }
     async function refreshExport() {
@@ -215,7 +222,7 @@
       try {
         await verifySources(allTargets(finishDrafts));
         if (epoch !== exportEpoch || !exporter.open) return;
-        if (finishDrafts) model.completeAll((payload) => formatExport(payload, scopeLabel));
+        if (finishDrafts) model.completeAll(formatExport);
         backup = exportText(); $("export-text").value = backup; counts(); $("export-save-copy").hidden = true; $("export-copy").hidden = false;
         await navigator.clipboard.writeText(backup);
         if (epoch === exportEpoch) exportResult("反馈已复制。请粘贴到当前对话后发送。");

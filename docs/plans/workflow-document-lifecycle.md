@@ -4,11 +4,13 @@
 - 阶段：`completed`
 - 模块：主题文档、原型模板、反馈输入与修订交接
 - 任务等级：`Full`
-- 已验收版本：`3.0.2`
+- 已验收版本：`unreleased-feedback4`
 
 ## 目标与范围
 
 提供单一主题 Markdown 生命周期、高保真原型评审与增量反馈，以及随插件维护的通用离线评审工具。当前正式基线3.0.2已交付本轮整改操作流和职责整理；旧交付证据保留，历史等级与版本差异界面不作为当前功能。
+
+本轮用户已批准精简“复制给Agent”：只交还来源引用、当前整改、准确目标和必要A标记，完整来源资料由本地快照及程序负责校验。需求整行被当作标签导致context超限的问题已修复；保持现有界面和单一复制入口，不改需求确认、视觉确认或交付流程。本轮源码已通过唯一独立QA，使用`unreleased-feedback4`区分验收基线；尚未发布或安装，正式版及本机仍为3.0.2／0.1.2。
 
 借鉴外部项目的稳定节点、结构化反馈和局部修改交接，保留两步确认、唯一独立 QA、需求 Markdown 权威及原生角色职责。通用工具由插件交付，项目只保存具体原型、业务 CSS／JS、需求和设计规范。三个业务项目实际迁移尚未执行。
 
@@ -27,6 +29,15 @@
 | REQ-010 指纹与增量交接 | 反馈绑定需求字节 SHA 与逐页依赖指纹；过期、越界、错误定位或非法字段明确失败。修订交接区分节点／页面／本轮整体，并携带被引用定位标记；不自动改写HTML、需求或授予批准。来源绑定不等于展示Agent版本差异。 |
 | REQ-011 反馈使用体验 | 用户通过准备好的原型链接进入，不手填指纹；节点／页面／本轮整体入口带入范围，共用弹窗。完成后整改编号与画布同号同色，A标记独立；切页保留绑定，取消及保存／导出／复制失败保留草稿，窄屏、键盘、焦点与状态播报可用。 |
 | REQ-012 安装消费与回归 | 三平台插件带入同一核心、模板和白名单入口；实际安装布局下能 prepare／validate；真实浏览器验证生产模板的 file:// 通信、反馈与导出，独立唯一 QA 验收。 |
+
+### 精简反馈（本轮已批准）
+
+- **REQ-901：必要内容。** 复制和下载使用同一紧凑反馈，不再附带重复正文摘要、全量需求标签、全部页面／工具清单、自动大段当前文字摘录或来源可还原的REQ／交互／接口字段。保留整改稳定ID和编号、操作、准确目标、用户意见及明确填写的建议文字；不缩写成无法理解的字段。完整来源只存本地不可变评审快照，短引用不能作为权限或批准。
+- **REQ-902：来源与容量。** 新feedback4使用短review引用，由显式项目／adapter和request_id／review_id在既有私有目录定位唯一快照，不扫描其他项目或请求。新context3只存真实REQ ID目录，完整需求仍在原Markdown；新manifest／boot／bridge各为4。保持8KiB上下文、1MiB反馈与256条目等现有边界，不能靠放大上限掩盖冗余。未知字段、危险路径、跨项目、缺包、过期源及损坏均明确拒绝，意见不丢失。
+- **REQ-903：精简修订交接。** validate成功后返回短来源和按目标分组的整改，目标只出现一次；REQ／交互／接口关联从已重读的真实源按需投影，省略空的可选数据，不回传完整context。被引用A标记完整交给UI Agent，不只交reference_ids；未引用A保留工作台状态，普通整改交还可过滤；仅有标记时仍能交还这些明确标记，不猜测整改。
+- **REQ-904：现有交互保持。** 沿用已验收顶层深色工作台和唯一交还弹窗，复制、手动备用及下载同一数据；交还计数对应实际复制内容。页面／整体／节点范围、编号、引用保护、草稿、撤回恢复、来源变化拒绝、失败反馈及键盘行为保持。没有新视觉决策，不改原型、样式规范或布局，不增完整版／精简版切换。
+- **REQ-905：版本与架构。** 已生成3.x的feedback2／3、context2和对应不可变包按原格式严格只读复核，旧草稿不迁移；新增格式只由当前工具生成。协议与投影、快照读取／装配、状态与浏览器呈现分别归既有职责，必要拆分纯合同，不新增服务、MCP、项目伴随文件或第二份页面权威。不修改第三方vendor、2.x安装兼容和Native Agent Config；Codex列表排查为另一个只读请求。
+- **REQ-906：验收。** 用当前长需求Markdown真实prepare与严格validate证明不再因长标签超限；验证跨页A、仅标记、匿名源目标、节点／页／整体、建议文字、来源变化及缺包／损坏／越界负控。生产模板的真实file浏览器复制／失败备用／下载结果交给同一Python入口，比较等价意见的UTF-8字节而不伪称token节省；三平台包外消费及唯一独立QA覆盖当前源码与必要标准。原失败、旧包和原始导出证据保留。
 
 ### 插件统一评审工具的已验收归属基线
 
@@ -69,6 +80,12 @@
 
 ## 方案与原型关联
 
+本轮精简按REQ-901—906实施。采用UI-Conformance：界面、按钮、弹窗、计数位置、成功／失败呈现和键盘行为复用当前正式模板，只调整交还数据及对应准确说明；以当前生产模板的交还区域冻结视觉依据，不将历史原型的详细JSON展示当成新格式规则。用户在审计结论及精简建议后明确“开始优化”，范围和实现已获批准，无待决原型选择；不改具体原型HTML／CSS／JS。
+
+实现先冻结新格式与来源解析公共合同，再由核心、Web、交付职责并行实现各自路径；核心只负责验证与快照，Web只负责单一状态／导出视图，交付者维护调用说明、白名单及三端真实消费，PM独写本文，唯一QA在集成后独立审查。反馈4精确字段、兼容分支和失败语义以本轮当前Task Pack为执行依据，不复制完整PM会话。
+
+### 3.0.2已验收设计与实现依据
+
 用户已采用当前布局与整改流程，并明确要求全部历史已定需求正式落地后验收、发布和本机升级。唯一设计依据为[评审工作台](../standards/prototype/prototype-workspace.html)，支持[调用偏好](../standards/prototype/prototype-workspace.html#preferences)和[原生定义](../standards/prototype/prototype-workspace.html#native)。最终依赖指纹 `2b998313f926be0738e4487e7549680e8c974d7fb53481f74a607459cd9f7c38`。Agent配置工作台有其[独立已批准依据与生产QA](native-model-preferences.md)，两者不互相授予批准。
 
 | 有效需求 | 本页具体状态与控件 |
@@ -84,23 +101,29 @@
 
 正式结构按职责整理：Python源目标／反馈校验和不可变包；父壳页面／会话协调；子页DOM命中／高亮／摘录；唯一评审状态；编辑／列表视图；平台中性相机；三端打包及消费。项目只维护真实HTML/CSS/JS，不引入第二份完整spec。直接复用上游适用相机及面板思路，固定提交 `1f6d786dddd36a33b002ce8afff70d43d08a9460`，保留Copyright (c) 2026 box与MIT全文，不带入拖拽、patch、连线或上游批准流程。
 
-新反馈envelope3只有context、anchors、items与版本：target明确node／page／global，node定位优先源唯一ID，其次装配派生source键；A与整改独立稳定编号，reference_ids多对多，不从正文推断。没有意见等级、position、关联需求手选或目标debug摘要。REQ只采用节点明确data-req-ids与真实需求目录的映射，缺省为空；浏览器摘录不是源证明。Markdown交还仅一个固定“Agent Workflow Feedback Payload”标题与唯一json代码块；CLI继续接受纯JSON。未知字段、过期源、无效定位和引用封闭拒绝。
+3.0.2正式交付的反馈envelope3只有context、anchors、items与版本：target明确node／page／global，node定位优先源唯一ID，其次装配派生source键；A与整改独立稳定编号，reference_ids多对多，不从正文推断。没有意见等级、position、关联需求手选或目标debug摘要。REQ只采用节点明确data-req-ids与真实需求目录的映射，缺省为空；浏览器摘录不是源证明。Markdown交还仅一个固定“Agent Workflow Feedback Payload”标题与唯一json代码块；CLI继续接受纯JSON。未知字段、过期源、无效定位和引用封闭拒绝。本轮未发布源码改用第5节的feedback4，不覆盖已生成旧包。
 
-新manifest3／boot3／bridge3与原context2／工作流Task Pack2分开版本化。源键只注入项目外派生页；重读源独立校验。动态无来源节点明确提示不可独立确认并保留意见，用户显式选择可证明父层，不静默代绑。旧3.0已发布v2评审包通过固定六资产和原装配分支严格只读复核，不用最新资产／装配算法去否定旧不可变包，不迁移或重绑旧草稿。
+3.0.2正式交付的manifest3／boot3／bridge3与原context2／工作流Task Pack2分开版本化。源键只注入项目外派生页；重读源独立校验。动态无来源节点明确提示不可独立确认并保留意见，用户显式选择可证明父层，不静默代绑。旧3.0已发布v2评审包通过固定六资产和原装配分支严格只读复核，不用最新资产／装配算法去否定旧不可变包，不迁移或重绑旧草稿。
 
 ## 当前进展与恢复入口
 
-- **已验证：** 最终原型静态与外部／内联JS语法exit0，178唯一ID、88唯一静态控件映射及五段完整；无新增颜色，复用有效9组配色。PM已核五段当前语义。HTML／JS／CSS SHA分别为 `b60a72f419f79cfbed37c1d201be6cc069d96a57ea9afc20aaf82a1b645d629a`、`c8a6bc63077612e8032002157ab11c53484b4418314facfefe48e69653cf4926`、`2ef1d9f239f22c85bb593c1329ef4c5fa29670047c7b8f961edbeeecc86cde97`。原型不作为生产浏览器或独立QA结论。
-- **已交付：** 核心、Web和三端交付已落地；核心27项、状态／模板节点、真实file浏览器与三端包外JSON／Markdown消费有原日志。配置工作台第六版另由其唯一Reviewer完成PASS。工作流3.0.2／配置组件0.1.2已正式发布，三stable分发与本机升级完成。
-- **源码验收通过：** 原唯一Reviewer完成首轮返工delta PASS，PM实际校验schema2交接valid。恢复条数／候选字节预算、实际Markdown全文限制及旧模板测试三项发现均关闭；当前6项runtime与原失败模板节点精准通过，三端最终生产formatter生成Markdown后真实包外校验current。原FAIL与全部复现保留。
-- **发行验收：** 最终来源 `5186d48822d2358379223d1d50b2ffc3920ff144` 的[Linux／macOS CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43603486736)两系统各633项OK（4项既有跳过），候选成功；[三stable发布](https://github.com/Geoege-xll/agent-workflow/actions/runs/43605162892)成功。本机三端3.0.2载荷与CI逐字节及执行位一致，组件0.1.2三端doctor通过。没有剩余已批准的工作台实现，Windows保持暂停。
-- **恢复依据：** 全部已确认需求见第2节，现行原型见第3节，当前正式组合3.0.2／0.1.2及最终操作证据见[发行主题](stable-product-release.md)。本轮不恢复2.x/TUI/npm，也未迁移三个业务项目的具体原型文件。
+- **初始审计：** 旧实现把原28项需求的11,271字节正文当作标签，实际校验层复现context12,279字节超过8KiB；原结论和旧导出样本保留，不改写为整链成功。
+- **已实现并验证：** 核心32项及后补匿名目标单节点通过；当前真实34REQ的公开prepare／validate通过，context为1,186字节。生产file浏览器完成跨页A、三类整改、建议文字、复制拒绝备用／实际下载及公开validate；真实导出3项整改和1个引用A共1,123字节。跨页ready先于catalog的时序误拒已修复，原失败与握手／原子草稿负控保留。
+- **交付与体积：** 三端两个精准节点通过；网页最终资源冻结后，仅刷新三端包和真实formatter／公开入口消费，同源验证通过。既有同语义两整改格式对比为全文2,293→609字节、紧凑JSON1,589→561字节；该对比不代表旧review能按新格式校验，也不代表真实token节省。
+- **独立验收：** 唯一Reviewer对25项声明路径、21项实际改动及51条适用规范给出PASS，PM已实际校验当前绑定交接为valid。未重跑已有效测试；原失败、源码、真实输出及不可变快照归`dist/evidence/plugin-prototype-viewer/compact-feedback-evidence.zip`，归档内`request/qa-handoff.json`为原始结果。
+- **恢复入口：** REQ-901—906已完成源码验收，无待修复的本轮QA发现；发布与本机安装不在本次实施范围。正式组合仍为3.0.2／0.1.2，记录见第5节和[发行主题](stable-product-release.md)。Windows暂停，三个业务项目的具体原型未迁移。
 
 最终84成员完整原型与历史日志证据在 `dist/evidence/plugin-prototype-viewer/rectification-no-severity-evidence.zip`，SHA `0067a375016b91b2da68600e18cb0b4b4f02e3d99980f596bba305d810975003`。归档包含精修前完整本主题、各轮原型、成功与失败日志、上游原文和许可，前版归档均保留，替换的历史讨论不再作为当前执行输入。
 
 历史缺口继续明确：2026-11-13核实旧 `/private/tmp/awf-prototype-feedback` 和 `awf-prototype-feedback-evidence` 已缺失，原因未知；Git源码及摘要不能替代缺失原件。后续alpha.9／3.0.1有各自实际交付证据，不反推旧日志已恢复。
 
 ## 验收结果与当前已交付行为
+
+### feedback4 未发布源码验收
+
+`unreleased-feedback4`已实现并通过本轮唯一独立QA。新feedback4只交还短review引用、用户整改和必要A标记；context3只列真实REQ ID，完整需求与来源绑定保留在本地不可变快照。后端先核完整包、再重读当前源，还原必要关联并按目标分组交接，未知字段、过期源、跨项目及缺包继续拒绝。旧feedback2／3与原不可变包维持各自严格只读合同。
+
+现有界面、唯一复制入口与两步确认保持。复制、失败后的手动备用及下载消费同一紧凑文本；未引用A保留内部状态，仅标记交还仍可用，草稿及全文超限失败保持原子性。跨页ready先于catalog导致的时序误拒已修复。实际file浏览器、公开CLI与三端物理插件包消费通过；同语义体积对比不代表真实token节省，受控剪贴板拒绝后的备用验证不代表OS授权成功。本节是源码验收，以下3.0.2发行及本机事实未被更新。
 
 alpha.9 已由[两系统 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43436450887)及[三渠道发布作业](https://github.com/Geoege-xll/agent-workflow/actions/runs/43438890253)完成分发，本机三端文件树与候选匹配。安装成功不证明 Hook 信任、指定模型采纳或三个业务项目原型迁移。
 
@@ -152,7 +175,9 @@ QA 检查当前受影响链接、主题归属与实际变更，不把本次文�
 
 ## 批准依据与必要证据
 
-本轮最终源码验收为完整32路径、原唯一Reviewer的published绑定delta PASS：Pack SHA `df57db345fe636c61b8a566a3228b81b7f4413f6f21243d6ab98591119d4fce1`，交接 `qa-handoff-published-pass.json` SHA `d0cda1bbdb08b150c3a1c1e7a73e4966e622d1c2617465894ceb74b2870c3e7b`，PM实际validate退出0。原30路径功能返工PASS、EOF格式delta、CI两项旧测试修复及原FAIL全部保留。初审114成员完整源／Pack／失败日志归档 `dist/evidence/plugin-prototype-viewer/workbench-302-initial-qa-evidence.zip`，SHA `9925ac62144e9e70b0d30dee701e72cb5bd085ec9fa4f96352af440fe0fd46bc`；最终成功、QA003全文预算复现、CI／发行／本机回执保全于 `dist/evidence/stable-product-release/stable-302-012-delivery-evidence.zip`，摘要和操作复核见[发行主题](stable-product-release.md)。
+本轮精简反馈批准依据为用户在必要内容方案后明确“开始优化”，范围REQ-901—906。验收证据为本请求唯一Reviewer的`qa-handoff.json`，SHA `e4c13c662730b8db0d2d39dc0bdef05cc68672a231a5df366cc53e3c03602a10`，绑定Pack SHA `b4b37e7f540b586316690be60435d83786c9892025dbe3e8af96386f768dad04`；PM实际交接校验退出0。完整原命令、成功／失败日志、源码diff、真实导出及不可变快照保全于`dist/evidence/plugin-prototype-viewer/compact-feedback-evidence.zip`。其中固定指导原文与查询内容可解析，原canonical／search终端退出状态未保留，不补称退出0；这不替代已完成的源码与消费验收。以下为正式3.0.2及更早的原验收历史。
+
+正式3.0.2最终源码验收为完整32路径、原唯一Reviewer的published绑定delta PASS：Pack SHA `df57db345fe636c61b8a566a3228b81b7f4413f6f21243d6ab98591119d4fce1`，交接 `qa-handoff-published-pass.json` SHA `d0cda1bbdb08b150c3a1c1e7a73e4966e622d1c2617465894ceb74b2870c3e7b`，PM实际validate退出0。原30路径功能返工PASS、EOF格式delta、CI两项旧测试修复及原FAIL全部保留。初审114成员完整源／Pack／失败日志归档 `dist/evidence/plugin-prototype-viewer/workbench-302-initial-qa-evidence.zip`，SHA `9925ac62144e9e70b0d30dee701e72cb5bd085ec9fa4f96352af440fe0fd46bc`；最终成功、QA003全文预算复现、CI／发行／本机回执保全于 `dist/evidence/stable-product-release/stable-302-012-delivery-evidence.zip`，摘要和操作复核见[发行主题](stable-product-release.md)。
 
 - 批准依据：用户采用最终工作台布局和整改流程，明确要求历史讨论已定需求全部正式实现，验收后发布和升级本机；具体原型与指纹见第3节。早期“沿用规范直接实现”的选择不取代当前已采用原型。
 - 验收证据：本节当前32路径有效QA交接、最终CI／发行／本机证据和原失败保全；配置工作台的独立验收归其主题，不由本页替代。

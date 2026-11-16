@@ -1,5 +1,5 @@
 /* 唯一评审状态所有者：输入、编号、引用与原子完成都在此处；视图只消费公开方法。
- * context2 是只读来源绑定，feedback3 才承载本次整改；相机/草稿永不混入机器载荷。 */
+ * context3 是只读来源绑定，feedback4 仅投影修订输入；相机/草稿与源派生元数据永不混入机器载荷。 */
 (() => {
   "use strict";
   const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
@@ -17,10 +17,10 @@
       if (typeof raw !== "string") throw Error();
       const boot = JSON.parse(raw);
       const safe = JSON.stringify(boot).replace(/[<>&\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
-      if (safe !== raw || !exact(boot, ["schema_version", "context", "pages"]) || boot.schema_version !== 3) throw Error();
+      if (safe !== raw || !exact(boot, ["schema_version", "context", "pages"]) || boot.schema_version !== 4) throw Error();
       const context = boot.context;
       if (!exact(context, ["schema_version", "request_id", "project_id", "adapter", "adapter_sha256", "prototype_root", "plan_source", "plan_sha256", "navigation_sha256", "requirements", "pages", "tool", "review_id"])
-          || context.schema_version !== 2 || new TextEncoder().encode(JSON.stringify(context)).length > 8192
+          || context.schema_version !== 3 || new TextEncoder().encode(JSON.stringify(context)).length > 8192
           || typeof context.request_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(context.request_id)
           || !path(context.adapter) || !path(context.prototype_root) || !path(context.plan_source) || !context.plan_source.endsWith(".md")
           || ![context.project_id, context.adapter_sha256, context.plan_sha256, context.navigation_sha256, context.review_id].every(sha)
@@ -29,8 +29,9 @@
           || !Array.isArray(context.requirements) || !context.requirements.length || !Array.isArray(context.pages) || !context.pages.length || context.pages.length > 16) throw Error();
       const requirements = new Set();
       for (const req of context.requirements) {
-        if (!exact(req, ["id", "label"]) || typeof req.id !== "string" || !/^REQ-[0-9]{3,}$/.test(req.id) || !text(req.label, 8192) || requirements.has(req.id)) throw Error();
-        requirements.add(req.id);
+        // 启动绑定只接受真实REQ ID；需求正文仍从独立原稿查看，不能在浏览器补造目录标签。
+        if (typeof req !== "string" || !/^REQ-[0-9]{3,}$/.test(req) || requirements.has(req)) throw Error();
+        requirements.add(req);
       }
       const pages = new Set();
       for (const item of context.pages) {
@@ -75,7 +76,7 @@
     const state = { context, pages: clone(boot.pages), page: boot.pages[0]?.path || "", mode: "browse", cameras: {}, selection: null,
       anchors: [], items: [], drafts: {}, withdrawn: null, nextAnchor: 1, nextItem: 1, editor: null,
       activeAnchor: null, activeItem: null, tab: "rectifications", filter: "current", showAnchors: true, showItems: true, storageMessage: "", blocked: false };
-    const storageKey = `prototype-review:v3:${context.review_id}`;
+    const storageKey = `prototype-review:v4:${context.review_id}`;
     // 读取sessionStorage本身也可能被宿主拒绝，和setItem失败采用同一内存保留策略。
     if (!storage) { try { storage = window.sessionStorage; } catch { storage = { getItem() { throw Error("存储拒绝"); }, setItem() { throw Error("存储拒绝"); } }; } }
     function validTarget(target) {
@@ -86,7 +87,7 @@
         || (exact(target.locator, ["type", "key"]) && target.locator.type === "source" && sourceKey(target.locator.key));
     }
     const validRefs = (refs) => Array.isArray(refs) && refs.length <= 256 && new Set(refs).size === refs.length && refs.every(identifier);
-    const validReqs = (reqs) => Array.isArray(reqs) && new Set(reqs).size === reqs.length && reqs.every((id) => context.requirements.some((req) => req.id === id));
+    const validReqs = (reqs) => Array.isArray(reqs) && new Set(reqs).size === reqs.length && reqs.every((id) => context.requirements.includes(id));
     const validComparison = (value) => exact(value, ["before_text", "after_text"]) && plain(value.before_text) && plain(value.after_text);
     const optionalMetadata = (entry) => (!Object.hasOwn(entry, "interaction_id") || stableId(entry.interaction_id))
       && (!Object.hasOwn(entry, "interface_refs") || (Array.isArray(entry.interface_refs) && entry.interface_refs.length <= 32
@@ -115,7 +116,7 @@
     }
     function persist() {
       // 封闭会话格式与导出协议彻底分开，旧版本草稿不读取、不迁移或重绑。存储失败保留内存。
-      const snapshot = { schema_version: 3, review_id: context.review_id, anchors: state.anchors, items: state.items,
+      const snapshot = { schema_version: 4, review_id: context.review_id, anchors: state.anchors, items: state.items,
         drafts: state.drafts, withdrawn: state.withdrawn, nextAnchor: state.nextAnchor, nextItem: state.nextItem, cameras: state.cameras };
       try { storage.setItem(storageKey, JSON.stringify(snapshot)); state.storageMessage = "草稿仅保存在本标签页；同一评审包刷新可恢复。"; }
       catch { state.storageMessage = "浏览器存储失败：输入仍在当前内存，刷新可能丢失，请及时交还。"; }
@@ -130,7 +131,7 @@
       if (raw) {
         const saved = JSON.parse(raw);
         if (!exact(saved, ["schema_version", "review_id", "anchors", "items", "drafts", "withdrawn", "nextAnchor", "nextItem", "cameras"])
-          || saved.schema_version !== 3 || saved.review_id !== context.review_id || !Array.isArray(saved.anchors) || saved.anchors.length > 256
+          || saved.schema_version !== 4 || saved.review_id !== context.review_id || !Array.isArray(saved.anchors) || saved.anchors.length > 256
           || !Array.isArray(saved.items) || saved.items.length > 256 || !saved.anchors.every(validAnchor) || !saved.items.every(validItem)
           || !uniqueSequence(saved.anchors) || !uniqueSequence(saved.items) || !positive(saved.nextAnchor) || !positive(saved.nextItem)
           || saved.anchors.some((anchor) => anchor.number >= saved.nextAnchor) || saved.items.some((item) => item.number >= saved.nextItem)
@@ -167,8 +168,22 @@
       if (!validItem(item)) throw Error("整改内容超过限额或字段无效，输入已保留。");
       return item;
     }
+    function handoffAnchors(items = state.items, anchors = state.anchors) {
+      // A过滤只发生在交还投影：无整改时全部明确标记仍能单独交还；有整改时只携带被引用者。
+      // 内部集合、独立编号、未引用标记和受保护引用关系保持原样，不能以导出精简为由删除草稿状态。
+      const referenced = new Set(items.flatMap((item) => item.reference_ids));
+      return clone(items.length ? anchors.filter((anchor) => referenced.has(anchor.id)) : anchors);
+    }
     function envelope(items = state.items, anchors = state.anchors) {
-      const value = { schema_version: 3, context: clone(context), anchors: clone(anchors), items: clone(items) };
+      // 此处是唯一模型到协议的投影边界。内部保留摘录/REQ/交互/接口信息供编辑与恢复，
+      // 机器块只传用户字段和短review绑定；可信源关联统一交给CLI重读不可变快照后还原。
+      const exported = items.map((item) => {
+        const value = { id: item.id, number: item.number, operation: item.operation, target: clone(item.target), message: item.message };
+        if (item.reference_ids.length) value.reference_ids = [...item.reference_ids];
+        if (item.target.scope === "node" && item.operation === "modify" && item.comparison?.after_text.trim()) value.after_text = item.comparison.after_text;
+        return value;
+      });
+      const value = { schema_version: 4, review: { request_id: context.request_id, review_id: context.review_id }, anchors: handoffAnchors(items, anchors), items: exported };
       checkFeedbackBytes(JSON.stringify(value));
       return value;
     }
@@ -187,7 +202,7 @@
         else { item.id = `item-${window.crypto.randomUUID()}`; item.number = next++; items.push(item); }
       }
       if (items.length > 256) throw Error("本轮最多256条整改，请先撤回部分条目。");
-      // 交还可以在此校验含摘要的实际传输全文。校验失败时编号、草稿、集合与存储
+      // 交还可以在此校验含固定标题与围栏的实际传输全文。校验失败时编号、草稿、集合与存储
       // 均尚未提交，避免“完成草稿并复制”因全文超限而先清掉全部原始草稿。
       validatePayload(envelope(items));
       state.items = items; state.nextItem = next;
@@ -248,7 +263,7 @@
       closeEditor() { state.editor = null; emit(); },
       completeEditor() { return complete([state.editor]); },
       completeAll(validatePayload) { return complete(activeDrafts().map(([key]) => key), validatePayload); },
-      activeDrafts,
+      activeDrafts, handoffAnchors,
       anchorUsers,
       addAnchor() {
         const target = state.selection?.target;

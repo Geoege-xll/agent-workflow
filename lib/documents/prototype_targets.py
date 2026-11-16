@@ -281,11 +281,14 @@ def _version(value: object, label: str) -> None:
         raise FeedbackError(f"{label}仅支持 schema_version 2（旧协议须重新 prepare）")
 
 
-def check_context(value: object) -> dict:
+def check_context(value: object, *, schema_version: int = 2) -> dict:
     context = _object(value, CONTEXT_FIELDS, "评审上下文")
     if len(_json_bytes(context)) > MAX_CONTEXT_BYTES:
         raise FeedbackError("评审上下文超过 8 KiB 限额")
-    _version(context["schema_version"], "评审上下文")
+    # context 与包、反馈各有独立版本。旧消费者必须显式保持 context2，
+    # 不能把旧标签对象悄悄解释成 context3 的短需求引用。
+    if type(context["schema_version"]) is not int or context["schema_version"] != schema_version or schema_version not in {2, 3}:
+        raise FeedbackError("评审上下文版本不匹配")
     _identifier(context["request_id"], "请求 ID")
     for key in ("adapter", "prototype_root", "plan_source"):
         _relative(context[key], key)
@@ -303,11 +306,13 @@ def check_context(value: object) -> dict:
         raise FeedbackError("需求标签须为非空数组")
     req_ids = []
     for requirement in requirements:
-        _object(requirement, {"id", "label"}, "需求标签")
-        if not isinstance(requirement["id"], str) or not REQ_PATTERN.fullmatch(requirement["id"]):
+        if schema_version == 2:
+            _object(requirement, {"id", "label"}, "需求标签")
+            _text(requirement["label"], "需求标签", MAX_CONTEXT_BYTES)
+            requirement = requirement["id"]
+        if not isinstance(requirement, str) or not REQ_PATTERN.fullmatch(requirement):
             raise FeedbackError("需求 ID 无效")
-        _text(requirement["label"], "需求标签", MAX_CONTEXT_BYTES)
-        req_ids.append(requirement["id"])
+        req_ids.append(requirement)
     if len(req_ids) != len(set(req_ids)):
         raise FeedbackError("需求标签 ID 不得重复")
     pages = context["pages"]
@@ -326,7 +331,7 @@ def check_context(value: object) -> dict:
 
 
 
-def _requirements(body: bytes) -> list[dict[str, str]]:
+def _requirements(body: bytes, *, ids_only: bool = False) -> list:
     """投影现有 Markdown 标签，不生成 REQ，也不把重复导航提及当作新需求。"""
     result = {}
     fence = None
@@ -350,7 +355,9 @@ def _requirements(body: bytes) -> list[dict[str, str]]:
             result[req_id] = {"id": req_id, "label": label or req_id}
     if not result:
         raise FeedbackError("选定 Markdown 中没有已存在的 REQ 标签")
-    return list(result.values())
+    # 直接投影真实 Markdown 中全部去重 ID；不通过截断标签或裁掉末尾需求
+    # 来满足上下文限额，超限仍由 check_context 明确拒绝。
+    return list(result) if ids_only else list(result.values())
 
 
 class _ContractReferences(HTMLParser):

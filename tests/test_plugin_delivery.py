@@ -123,9 +123,23 @@ class PluginDeliveryTest(unittest.TestCase):
             cls.root.mkdir(parents=True, exist_ok=True)
         cls.archives, cls.installed = {}, {}
         for host in builder.HOSTS:
-            archive = builder.build(PACK, cls.root / "first", host)
+            if retained:
+                # 请求级真实交付沿正式单平台 CLI 入口构建，同一个 fixture 持有三端
+                # 载荷及原始日志；不借 build_candidates 或安装宿主插件制造通过。
+                command = ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                           str(PACK / "packaging/build_plugin.py"), "--host", host,
+                           "--output-dir", str(cls.root / "first")]
+                built = subprocess.run(command, capture_output=True, text=True, timeout=120)
+                with (cls.root / ("delivery-build-" + host + ".log")).open("a", encoding="utf-8") as log:
+                    log.write(json.dumps({"command": command, "exit_code": built.returncode}, ensure_ascii=False) + "\n")
+                    log.write(built.stdout + built.stderr + "\n")
+                if built.returncode:
+                    raise AssertionError(built.stdout + built.stderr)
+                archive = Path(built.stdout.strip())
+            else:
+                archive = builder.build(PACK, cls.root / "first", host)
             installed = cls.root / "installed" / host
-            installed.mkdir(parents=True)
+            installed.mkdir(parents=True, exist_ok=bool(retained))
             with zipfile.ZipFile(archive) as payload:
                 payload.extractall(installed)
             cls.archives[host], cls.installed[host] = archive, installed
@@ -260,6 +274,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertIn("lib/documents/validate_prototype_workspace.py", files.namelist())
                 # 文档和明确模板闭包进入三端包，不能依靠开发仓补齐反馈依赖。
                 for relative in ("lib/documents/prototype_feedback.py",
+                                 "lib/documents/prototype_handoff.py",
                                  "lib/documents/prototype_review.py",
                                  "lib/documents/prototype_feedback_cli.py",
                                  "templates/prototype/feedback.js", "templates/prototype/feedback.css",
@@ -700,15 +715,16 @@ class PluginDeliveryTest(unittest.TestCase):
 
         # 同一最小项目依次消费三端载荷，不复制业务项目、用户配置或旧宿主环境。
         project = self.root / "feedback-project"
-        project.mkdir()
+        project.mkdir(exist_ok=True)
         adapter = ".awf/project.yaml"
         plan = "docs/plans/feedback.md"
         page = "docs/standards/prototype/feedback.html"
         prototype = project / "docs/standards/prototype"
-        prototype.mkdir(parents=True)
+        prototype.mkdir(parents=True, exist_ok=True)
         source = project / plan
-        source.parent.mkdir(parents=True)
+        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("# 反馈需求\n\nREQ-001：查看当前状态。\n", encoding="utf-8")
+        common_feedback = None
 
         for host, root in self.installed.items():
             with self.subTest(host=host):
@@ -767,17 +783,21 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual(adapter, ready["context"]["adapter"])
                 self.assertEqual(plan, ready["context"]["plan_source"])
                 self.assertEqual([page], [item["path"] for item in ready["context"]["pages"]])
-                self.assertEqual(["REQ-001"], [item["id"] for item in ready["context"]["requirements"]])
+                self.assertEqual(["REQ-001"], ready["context"]["requirements"])
                 fragment = parse_qs(urlsplit(ready["review_url"]).fragment)
                 self.assertEqual({"page"}, set(fragment))
                 self.assertEqual(["feedback.html"], fragment["page"])
                 bundle = Path(ready["bundle_path"])
+                bundle_before = tree_snapshot(bundle)
                 self.assertTrue(bundle.is_relative_to(self.root / "review-data"))
-                self.assertEqual(2, ready["context"]["schema_version"])
+                self.assertEqual(3, ready["context"]["schema_version"])
+                self.assertEqual(4, json.loads((bundle / "manifest.json").read_bytes())["schema_version"])
                 self.assertEqual((root / "product/PLUGIN_VERSION").read_text().strip(),
                                  ready["context"]["tool"]["version"])
                 self.assertEqual((root / "lib/documents/prototype_review.py").read_bytes(),
                                  (PACK / "lib/documents/prototype_review.py").read_bytes())
+                self.assertEqual((root / "lib/documents/prototype_handoff.py").read_bytes(),
+                                 (PACK / "lib/documents/prototype_handoff.py").read_bytes())
                 derived = (bundle / "project" / page).read_text(encoding="utf-8")
                 self.assertEqual(1, derived.count('data-prototype-review-bridge'))
                 self.assertNotIn('data-prototype-review-bridge', concrete.read_text(encoding="utf-8"))
@@ -796,9 +816,16 @@ class PluginDeliveryTest(unittest.TestCase):
                 target = {"scope": "node", "page": page, "locator": {"type": "id", "id": "feedback-state"}}
                 anchor = {"id": "anchor-1", "number": 1, "target": target}
                 item = {"id": "feedback-1", "number": 1, "operation": "modify", "target": target,
-                        "message": "建议说明当前状态 approved", "req_ids": ["REQ-001"], "reference_ids": ["anchor-1"],
-                        "comparison": {"before_text": "产品页面内容", "after_text": "当前状态"}}
-                feedback = {"schema_version": 3, "context": ready["context"], "anchors": [anchor], "items": [item]}
+                        "message": "建议说明当前状态 approved", "reference_ids": ["anchor-1"],
+                        "after_text": "当前状态"}
+                reference = {key: ready["context"][key] for key in ("request_id", "review_id")}
+                feedback = {"schema_version": 4, "review": reference, "anchors": [anchor], "items": [item]}
+                # 三端不仅消费同一结构，还必须接受完全相同的短引用和用户载荷；
+                # 不允许为每个宿主重新捏造不同输入来掩盖资源／工具来源漂移。
+                if common_feedback is None:
+                    common_feedback = feedback
+                else:
+                    self.assertEqual(common_feedback, feedback)
                 exported = self.root / "feedback-input.json"
 
                 def validate(value):
@@ -814,14 +841,20 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual(0, validated.returncode, validated.stdout + validated.stderr)
                 current = json.loads(validated.stdout)
                 self.assertEqual("current", current["status"])
+                self.assertEqual({"status", "review", "anchors", "changes", "notice"}, set(current))
+                self.assertEqual(reference, current["review"])
                 self.assertEqual([anchor], current["anchors"])
-                self.assertEqual([{"target": target, "items": [item]}], current["changes"])
+                # REQ 映射必须由真实源在分组层还原一次，item 不重复目标或自动摘录；
+                # 用户写 approved 仍只是意见，返回 notice 不能成为批准证据。
+                compact_item = {key: value for key, value in item.items() if key != "target"}
+                self.assertEqual([{"target": target, "items": [compact_item], "req_ids": ["REQ-001"]}], current["changes"])
+                self.assertIn("批准", current["notice"])
                 self.assertEqual(before, tree_snapshot(project))
                 # Markdown 复用真实 CLI 解析，和 JSON 返回同一业务交接；不以 mock 或
                 # 仅解析围栏替代包外 prepare/validate 的完整来源与不可变工具核验。
                 markdown = self.root / "feedback-input.md"
-                markdown.write_text("# 评审意见\n\n## Agent Workflow Feedback Payload\n\n```json\n" +
-                                    json.dumps(feedback, ensure_ascii=False) + "\n```\n", encoding="utf-8")
+                markdown.write_text("## Agent Workflow Feedback Payload\n\n```json\n" +
+                                    json.dumps(feedback, ensure_ascii=False, separators=(",", ":")) + "\n```\n", encoding="utf-8")
                 markdown_original = markdown.read_bytes()
                 validated_markdown = helper("lib/documents/prototype_feedback_cli.py", "validate",
                                             "--root", project, "--adapter", adapter, "--input", markdown,
@@ -837,6 +870,28 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual("error", json.loads(rejected.stdout)["status"])
                 self.assertIn("未知字段", json.loads(rejected.stdout)["error"]["message"])
                 self.assertEqual(before, tree_snapshot(project))
+                # 短引用缺包不能从外部 context 或 latest 回退；未知源 ID 也不能
+                # 靠合法 review_id 获得 current。真实 CLI 覆盖包外安全读取入口。
+                missing = json.loads(json.dumps(feedback))
+                missing["review"]["review_id"] = "0" * 64
+                rejected = validate(missing)
+                self.assertNotEqual(0, rejected.returncode, rejected.stdout + rejected.stderr)
+                wrong_source = json.loads(json.dumps(feedback))
+                wrong_source["items"][0]["target"]["locator"]["id"] = "missing-source-node"
+                rejected = validate(wrong_source)
+                self.assertNotEqual(0, rejected.returncode, rejected.stdout + rejected.stderr)
+                self.assertEqual(before, tree_snapshot(project))
+                # 新投影模块必须由实际物理包提供；暂时移除后必须拒绝，而非隐式
+                # 回到开发仓导入。原字节仅驻内存，finally 恢复同一个包文件。
+                handoff = root / "lib/documents/prototype_handoff.py"
+                handoff_body = handoff.read_bytes()
+                try:
+                    handoff.unlink()
+                    missing_module = validate(feedback)
+                    self.assertNotEqual(0, missing_module.returncode,
+                                        missing_module.stdout + missing_module.stderr)
+                finally:
+                    handoff.write_bytes(handoff_body)
                 # 需求字节变化即使没有改变页面画面依赖，也必须让旧反馈失败。
                 original_plan = source.read_bytes()
                 source.write_bytes(original_plan + "\n修订需求字节。\n".encode())
@@ -865,6 +920,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 marker.unlink()
                 marker.parent.rmdir()
                 self.assertFalse((project / "project.yaml").exists())
+                self.assertEqual(bundle_before, tree_snapshot(bundle))
 
     def test_packaged_interpreter_selector_locates_an_existing_supported_python(self):
         project = self.root / "interpreter-project"

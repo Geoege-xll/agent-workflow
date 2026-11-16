@@ -64,9 +64,11 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 评审工作台固定设计视口，通过相机缩放和移动查看，浏览模式保留页面自身按钮、表单、滚动与导航；批注模式选择节点。导航抽屉默认收起，侧面板以“整改／标记”两个 Tab 管理数据，开发说明在独立大对话框阅读。标记 A 只引用具体节点，整改支持节点修改／新增／删除、页面修改／新增和全局修改；不再设置意见等级。整改可关联多个已存在的 A，跨页引用保持稳定编号；正文与建议各不超过 4000 字符，修改／新增必须填写正文，删除原因可空，局部比较只用于节点修改。
 
-新导出的 JSON 是严格四字段 `schema_version: 3`、`context`、`anchors`、`items`，其中 `context` 仍为严格版本 2 绑定。Markdown 导出在唯一标题 `## Agent Workflow Feedback Payload` 下提供单个 JSON 代码围栏，承载同一真实 envelope；两种格式都交给同一 `validate` 入口。目标优先采用源页面唯一稳定 ID；匿名源元素由装配工具生成来源键并只注入派生副本，重读源时独立重建。动态新增且无源的节点不能独立确认；保留输入，由用户显式选择有来源父层。业务 REQ 只来自源元素明确的 `data-req-ids` 映射，未声明时为 `[]`，不从文本猜测。
+当前源码开发的新 feedback 4 精确包含 `schema_version:4`、`review:{request_id,review_id}`、`anchors`、`items`；完整 context 3 留在本机真实不可变快照，requirements 仅保留完整真实 REQ ID 字符串数组。复制只有固定标题 `## Agent Workflow Feedback Payload` 和单个 json 围栏内的紧凑 JSON，不附重复摘要；纯 JSON 输入同样支持。item 只携带用户整改与可选非空 A 引用，节点修改可带非空 `after_text`；不再交还 context、REQ／交互／接口映射、before_text 或 comparison。实际目标优先使用唯一源 ID，匿名源元素的来源键只注入派生副本，动态无来源节点保留输入并要求显式选择有来源父层。
 
-`validate` 重读项目当前源并核对原快照后，才把当前修订输入交回原 UI Agent。快照联合核对来源窗口、origin、页面及 token 的桥，父壳不跨 `file://` 读取子页面 DOM；子页面负责命中、局部几何、高亮与有限摘录，摘录本身不是来源证明。草稿、相机和撤回只属于绑定 `review_id` 的独立会话快照，不进入反馈 envelope，旧草稿不迁移。旧版已发布的 feedback 2／manifest 2／bridge 2 仅走原严格只读消费分支；不把新反馈降级或旧反馈静默重绑。
+`validate` 以显式实际项目与同一 adapter 定位短引用的既有私有不可变包，完整核验包并重读当前源；缺包、来源变化、损坏或未知字段明确失败，不扫描、不接受外部 context 回退、不自动绑定 latest。成功只返回 `status:current`、短 `review`、必要 `anchors`、按 target 分组的精简 `changes` 和“修订输入非批准”短 notice。REQ／交互／接口关联从真实目标在组层还原一次，无值省略。PM 只将这些 current 结果与当前完整任务包交原 UI Agent，不重复传原反馈全文或完整 context。普通整改只交还明确引用的 A；无整改时交还全部明确标记且不推断整改。
+
+快照桥联合核对真实来源窗口、origin、页面及 token；父壳不跨 `file://` 读取子页面 DOM，子页面负责命中、局部几何、高亮与有限摘录，摘录本身不是来源证明。草稿、相机和撤回仅属于绑定 review_id 的独立会话快照。新 manifest／boot／bridge 4 与 context 3 分开声明；已生成旧 feedback 2／3、context 2、manifest 2／3 及各自资产和装配／提取语义严格只读保留，不静默迁移旧包或草稿。上述为源码开发状态，不表示本机已发布安装的 3.0.2 已具有新格式；正式插件 3.0.2 与组件 0.1.2 保持不变。
 
 旧绑定、损坏、未知字段与非法内容明确失败并保留意见，不自动改需求、页面或授予批准，也不增加业务确认。旧壳迁移另有预览／执行／恢复入口，只清理可证明归属的纯工具文件，混合或未知业务资产保留。详细调用与格式仅在使用时阅读[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
