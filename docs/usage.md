@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 使用手册
 
-Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。独立配置工具 [Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3) 已正式发布并完成真实下载核验；工作流 `3.0.3` 仍为候选，等待 published 绑定后的最终 CI、插件发行与三 stable 分发。本机仍为 `3.0.2`／`0.1.2`，尚未升级。上一正式基线 [xy-workflow 3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2) 与独立配置工具 [Native Agent Config 0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 均已正式发布，三个 stable 来源已更新。本机三端插件已升级到 `3.0.2`、组件升级到 `0.1.2`，载荷字节及执行位与最终 CI 一致，模型偏好和原有项目启停／范围保留；不表示所有项目均启用。当前及历史发行证据见[发行主题](plans/stable-product-release.md)。Codex App 共享缓存已更新，App GUI 新会话、指定模型实际运行及读屏未在本轮实测；官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
+Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。[xy-workflow 3.0.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.3) 与独立配置工具 [Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3) 均已正式发布，三个 stable 来源已从同一成功最终 CI 更新。本机三端插件／组件已升级为 `3.0.3`／`0.1.3`，载荷字节及执行位核对一致，模型偏好和原有项目启停／安装范围保持；Claude 当前源码项目仍停用，不表示全部项目启用。三端组件 doctor 均为 service ready／integrity verified，组件以 no-browser 打开；服务就绪与安装不证明指定模型实际运行。上一 [3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2)／[0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 发行和安装记录保留为历史，完整证据见[发行主题](plans/stable-product-release.md)。Codex App 共享缓存已更新，但 App GUI 新会话、三平台指定模型实际运行及完整读屏未在本轮实测；官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
 
@@ -80,7 +80,7 @@ bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-ro
 
 本机服务仅绑定 127.0.0.1 随机端口，严格验证 Host／Origin／认证，网页没有任意 root、argv 或 file 接口。设计内容处于只读资源闭包与 allow-scripts sandbox 内，不能读取父控制认证；桥联合核验 source、当前页、token 与 null origin。认证 URL 仅用于受信本机入口，不进入公开日志。新工具与旧 V4 资产分别冻结，三端携带相同核心与完整白名单。
 
-历史 prepare 及 feedback 2／3／4 的离线不可变包继续按原合同只读装配／消费，原 index、浏览／批注、开发说明及对应 manifest／boot／bridge 不受 live 分支替换；不迁移旧包或草稿。已验收的 feedback 4 精简交接和配置恢复仍保留。工作流 3.0.3 尚未发布，组件 0.1.3 已正式发布；本机已安装的 3.0.2／0.1.2 尚未升级，源码与功能 QA 不替代最终绑定 CI、插件发行、三 stable 分发或本机升级。旧壳迁移仍需明确授权的预览／执行／恢复，只清理可证明归属的纯工具，保留混合及未知业务资产。调用与封闭格式见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+历史 prepare 及 feedback 2／3／4 的离线不可变包继续按原合同只读装配／消费，原 index、浏览／批注、开发说明及对应 manifest／boot／bridge 不受 live 分支替换；不迁移旧包或草稿。已验收的 feedback 4 精简交接和配置恢复仍保留。工作流 3.0.3 与组件 0.1.3 已正式发布，最终绑定 CI、三 stable 分发与本机升级均已完成；这些证据不替代真实宿主的指定模型运行采纳。旧壳迁移仍需明确授权的预览／执行／恢复，只清理可证明归属的纯工具，保留混合及未知业务资产。调用与封闭格式见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 实施者按实际改动完成必要构建、运行或文档检查，提交真实证据。Full 由请求级唯一独立只读 QA 检查集成范围，失败交原职责作者修复并由原 Reviewer 复查。Light 按风险与明确请求选择必要独立审查；未做独立 QA 时只报告真实验证结果，不宣称 QA PASS。
 
