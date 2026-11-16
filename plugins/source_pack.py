@@ -27,8 +27,9 @@ HELPERS = frozenset({
     "lib/task_graph_cli.py", "lib/agent_continuation_cli.py", "lib/documents/context_read.py",
     "lib/dispatch_admission_cli.py",
     "lib/documents/validate_prototype_workspace.py",
-    # 同一个反馈 CLI 提供显式项目的 open/status/stop 与历史 prepare/validate。
-    # open 只登记已允许源并启动本机受限服务，不接受网页任意 root/argv/file；
+    # 同一个反馈 CLI 提供显式项目的 prepare-delivery/open/status/stop 与历史 prepare/validate。
+    # prepare-delivery 仅准备受管文件入口；open 验证准备后登记已允许源并启动本机受限服务，
+    # 二者均不接受网页任意 root/argv/file；
     # 白名单不授予项目写权限、HTML patch 批准或系统自启动权限。
     "lib/documents/prototype_feedback_cli.py",
     "lib/validate_project_docs.py",

@@ -62,6 +62,7 @@ HOST_LIB_FILES = ("__init__.py", "claude_instructions.py", "claude_options.py",
 MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
 # 新交付服务与历史离线包分别消费各自冻结白名单；发行载荷取有序并集，不能用
 # live 名单回验或扩写旧 V4 包。仍不遍历 templates 整树，未知文件不会借目录入包。
+# file 入口四项由 live 权威名单提供；这里只按稳定顺序去重并集，避免装配层复制第二份名单。
 PROTOTYPE_TOOL_ASSETS = tuple(dict.fromkeys((*PROTOTYPE_V4_TOOL_ASSETS, *PROTOTYPE_LIVE_TOOL_ASSETS)))
 TEMPLATE_FILES = ("project.yaml.example", "docs/STANDARDS.md", "docs/PLAN.md", "docs/PROJECT.md",
                   "prototype/page.html", "prototype/prototype.css",

@@ -27,11 +27,11 @@ CURRENT_PRODUCT_MODULES = {
                       "browser_sessions", "native_config_mcp", "native_config_packaging", "plugin_console", "plugin_config_launcher", "config_distribution"),
 }
 CURRENT_RECORD_CLASSES = ("RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")
-# 独立声明历史反馈与 live 来源/服务模块，证明两个当前入口确实纳入它们；不能从被测
+# 独立声明历史反馈、live 来源/服务与受管 file 入口模块，证明两个当前入口确实纳入它们；不能从被测
 # GROUPS 反推期望值，否则误删运行时模块也会由同一实现自证通过。
 PROTOTYPE_MODULES = ("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
                      "prototype_workspace_runtime", "prototype_feedback", "prototype_review",
-                     "prototype_live", "prototype_server")
+                     "prototype_live", "prototype_server", "prototype_file_entry")
 # 独立期望固定六个历史基线节点，避免被测入口误收整个旧文档/UI模块后自证通过。
 PLAN_BASELINE_METHODS = (
     "test_template_and_config_share_the_real_lifecycle_model",

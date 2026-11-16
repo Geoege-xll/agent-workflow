@@ -45,7 +45,7 @@ GROUPS = {
     # 新旧协议分别验证，不能把服务成功冒称旧包或业务原型的视觉批准。
     "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
                          "prototype_workspace_runtime", "prototype_feedback", "prototype_review",
-                         "prototype_live", "prototype_server"),
+                         "prototype_live", "prototype_server", "prototype_file_entry"),
     # 只收指定计划入口及六个真实生命周期基线；不把同模块旧事务/UI大类带入 current。
     "plans": ("tests.test_plan_and_shallow_docs.SelectedPlanValidationTest",) + tuple(
         "tests.test_plan_and_shallow_docs.PlanAndShallowDocsTest." + name for name in (

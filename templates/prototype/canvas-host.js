@@ -5,11 +5,12 @@
   function create({ boot, model, announce, onNavigate = () => {}, reviewing = false }) {
     const $ = (id) => document.getElementById(id), preview = $("prototype-preview"), viewport = $("canvas-viewport");
     const entries = new Map(boot.pages.map((entry) => [entry.path, entry]));
-    let current = null, token = "", ready = false, catalogReady = false, views = null, marks = [], closed = false;
+    let autoFit = false, current = null, token = "", ready = false, catalogReady = false, views = null, marks = [], closed = false;
     let waiters = [], pinnedOrigin = null, activationEpoch = 0;
     const requests = new Map(), layer = document.createElement("div"); layer.className = "live-overlays"; viewport.append(layer);
+    const presentation = window.PrototypeCanvasPresentation.create({ viewport, world: $("canvas-world"), preview, entry: boot.pages[0] });
     const camera = window.PrototypeReviewCamera.create({ viewport, world: $("canvas-world"), read: () => model.state.cameras[model.state.page],
-      write: (cam) => model.setCamera(model.state.page, cam), topInset: () => $("canvas-zoom-tools").offsetHeight + 40,
+      write: (cam) => model.setCamera(model.state.page, cam), dimensions: presentation.read, topInset: () => $("canvas-zoom-tools").offsetHeight + 40,
       onApply: (cam) => { $("canvas-zoom-reset").textContent = `${Math.round(cam.k * 100)}%`; render(); } });
     function send(action, body = {}) {
       if (!ready || closed) return false;
@@ -28,7 +29,7 @@
     function navigate(path) {
       const entry = entries.get(path); if (!entry) return Promise.reject(Error("未登记的页面不能载入。"));
       if (entry === current) return waitReady();
-      rejectPending("页面已切换，输入保留，请重试。"); current = entry; ready = false; catalogReady = false; pinnedOrigin = null; marks = []; render();
+      rejectPending("页面已切换，输入保留，请重试。"); current = entry; autoFit = !model.state.cameras[entry.path]; presentation.select(entry); ready = false; catalogReady = false; pinnedOrigin = null; marks = []; render();
       token = new URL(entry.url, location.origin).hash.slice("#bridge=".length);
       model.setPage(path); $("current-page-title").textContent = entry.label; document.title = `${entry.label} · ${reviewing ? "原型评审" : "原型交付"}`;
       preview.title = entry.label; preview.hidden = false; preview.setAttribute("aria-busy", "true"); $("prototype-empty").hidden = true;
@@ -79,6 +80,9 @@
         || data.version !== 5 || data.page !== current.path || data.token !== token) return;
       // 支持Origin API时额外固定真实opaque origin；旧浏览器由event.source与随机token提供等效隔离。
       if ("Origin" in globalThis) { try { const origin = Origin.from(event); if (!origin.opaque || (pinnedOrigin && !origin.isSameOrigin(pinnedOrigin))) return; pinnedOrigin ||= origin; } catch { return; } }
+      if (data.type === "prototype-review:size" && window.PrototypeCanvasPresentation.validSize(data)) {
+        const previous = presentation.read(); if (previous.width !== data.width || previous.height !== data.height) { presentation.resize(data, true); if (autoFit) camera.fit(); else camera.applyCam(); } return;
+      }
       if (data.type === "prototype-review:ready") { ready = true; preview.setAttribute("aria-busy", "false"); if (!model.state.cameras[current.path]) camera.fit(); else camera.applyCam(); present(); settle(); return; }
       if (data.type === "prototype-review:catalog") { if (model.setCatalog(current.path, data.nodes)) { catalogReady = true; views?.catalog?.(); settle(); if (typeof data.error === "string" && data.error) announce(data.error.slice(0, 4000)); } return; }
       if (data.type === "prototype-review:contract") { views?.contract?.(data.sections); return; }
@@ -106,7 +110,7 @@
     }
     preview.addEventListener("load", loaded); window.addEventListener("message", message);
     const unsubscribe = model.subscribe(() => { camera.applyCam(); present(); });
-    return Object.freeze({ camera, send, present, navigate, locate, verifySources, attachViews(value) { views = value; }, close() { closed = true; rejectPending("画布已关闭。"); unsubscribe(); preview.removeEventListener("load", loaded); window.removeEventListener("message", message); layer.remove(); } });
+    return Object.freeze({ camera, send, present, navigate, locate, verifySources, attachViews(value) { views = value; }, close() { closed = true; presentation.close(); camera.close(); rejectPending("画布已关闭。"); unsubscribe(); preview.removeEventListener("load", loaded); window.removeEventListener("message", message); layer.remove(); } });
   }
   window.PrototypeCanvasHost = Object.freeze({ create });
 })();

@@ -127,15 +127,24 @@
   function queueRender() { if (frame) return; frame = requestAnimationFrame(() => { frame = 0; render(); }); }
   function embed() {
     document.body.classList.add("prototype-review-embedded");
-    // 只在认证派生页隐藏真实画板之外的展示壳。祖先保留DOM与业务监听，以contents解除外层边距。
-    let child = root;
+    // 只在认证派生页隐藏真实画板之外的展示壳，祖先保留DOM与业务监听。
+    // 保留原始stage/frame；只剥离外围说明，不清空固定尺寸、overflow或媒体查询约束。
+    let child = document.querySelector(".prototype-stage") || document.querySelector(".prototype-frame") || root;
     while (child && child !== document.body) {
       for (const sibling of child.parentElement.children) if (sibling !== child && !["SCRIPT", "STYLE", "LINK"].includes(sibling.tagName)) sibling.classList.add("prototype-review-shell-hidden");
       child = child.parentElement; if (child !== document.body) child.classList.add("prototype-review-shell-ancestor");
     }
+    const designFrame = document.querySelector(".prototype-frame") || root;
+    for (let ancestor = designFrame.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+      ancestor.style.margin = "0"; ancestor.style.padding = "0"; ancestor.style.minHeight = "0";
+      if (getComputedStyle(ancestor).display.includes("flex")) { ancestor.style.justifyContent = "flex-start"; ancestor.style.alignItems = "flex-start"; }
+    }
+    const measure = () => { if (document.body.dataset.prototypeDisplay === "responsive") return; const rect = designFrame.getBoundingClientRect();
+      if (rect.width >= 1 && rect.width <= 16384 && rect.height >= 1 && rect.height <= 16384) send("size", { width: rect.width, height: rect.height }); };
+    new ResizeObserver(measure).observe(designFrame); measure();
     overlay = document.createElement("div"); overlay.setAttribute("data-prototype-review-overlay", ""); overlay.className = "pr-overlays"; document.body.append(overlay);
     const stylesheet = document.createElement("link"); stylesheet.rel = "stylesheet"; stylesheet.href = new URL("feedback.css", injected.src).href; document.head.append(stylesheet);
-    stylesheet.addEventListener("load", () => { catalog(); render(); });
+    stylesheet.addEventListener("load", () => { measure(); catalog(); render(); });
     const contract = Array.from(document.querySelectorAll("details")).find((el) => el.querySelector("summary")?.textContent.trim() === "Page design and interaction contract");
     const sections = ["purpose", "navigation", "interactions", "states", "exceptions"].map((name) => ({ name, text: Array.from(contract?.querySelectorAll(`[data-contract-section="${name}"]`) || []).map((node) => node.textContent.trim()).join("\n") }));
     send("contract", { sections });

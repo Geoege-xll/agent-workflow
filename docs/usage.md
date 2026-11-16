@@ -1,5 +1,7 @@
 # Agent Workflow 3.0 使用手册
 
+当前源码 `xy-workflow 3.0.4` 是未发布候选，尚未发布、分发或安装。Native Agent Config 保持 `0.1.3` 和原 published descriptor，不新增 Native 发行或修改模型功能。
+
 Agent Workflow 3.0 通过 Codex、Claude Code、Antigravity 的官方插件运行。[xy-workflow 3.0.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.3) 与独立配置工具 [Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3) 均已正式发布，三个 stable 来源已从同一成功最终 CI 更新。本机三端插件／组件已升级为 `3.0.3`／`0.1.3`，载荷字节及执行位核对一致，模型偏好和原有项目启停／安装范围保持；Claude 当前源码项目仍停用，不表示全部项目启用。三端组件 doctor 均为 service ready／integrity verified，组件以 no-browser 打开；服务就绪与安装不证明指定模型实际运行。上一 [3.0.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.2)／[0.1.2](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.2) 发行和安装记录保留为历史，完整证据见[发行主题](plans/stable-product-release.md)。Codex App 共享缓存已更新，但 App GUI 新会话、三平台指定模型实际运行及完整读屏未在本轮实测；官方公开目录尚未上架，Windows 暂停。helper 需要已有 Python 3.11+ 与 Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
 
 ## 安装与会话入口
@@ -60,27 +62,30 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 需要原型的 UI 任务由设计 Agent 在所选 adapter 的 `docs.standards_root/prototype` 内制作可交互 HTML，并返回需求覆盖、规范符合性和交付一致性的三维自检。PM 将 REQ 到具体页面及实际状态锚点的关联写入同一主题计划；原型 HTML、静态验收、依赖指纹与视觉确认继续保留，不恢复计划 Markdown 转 HTML 生成链，也不增加第二个原型 QA。
 
-已完成独立功能 QA 的 live 5 双网页交付使用当前物理插件根的白名单 `prototype_feedback_cli.py open`，显式指定实际项目、同一 adapter、唯一需求 Markdown、request-id 和本轮 pages。交付时启动本机服务，提供返回的具体页 `delivery_url`：共用可缩放画布保留真实产品交互，左目录默认收起且由统一元数据派生；“进入评审”通过 noopener 新标签页准确打开当前页，原交付页保留。评审进入即批注，没有目录、持久浏览模式切换或开发说明；按工具提示的修饰键临时操作设计，释放后继续批注。两页共享画布组件，分别保留相机与交互状态。
+3.0.4 候选的完整交付入口是具体 file HTML。Agent／PM 交付前先从当前物理插件白名单 helper 执行 `prepare-delivery`，显式指定实际项目、同一 adapter 和本轮 pages；它幂等准备受管入口／公开目录，不启动服务或业务请求。再用 `open` 指定相同项目／adapter、唯一需求 Markdown、request-id 与 pages。open 先验证准备，缺失返回准确的 `preparation_required`，不会暗改业务 HTML。未准备模板不可作为完整交付。
 
 ```text
+bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py prepare-delivery --root <physical-project-root> --adapter <selected-project-adapter> --pages <project-relative-HTML>
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML>
 ```
 
-目录只包含本次 `--pages` 明确登记、属于同一需求且通过安全校验的 1—16 个具体页；上面的单页示例只显示一页，不会扫描整个项目、其他需求或未登记页面。需要多页目录时，在同一次 `open` 中传入各实际页面路径，共用同一个 `--plan` 和 `--request-id`：
+ready 返回 `delivery_url` 为首个具体页 file URI、`delivery_urls` 为各页；`review_url` 是无秘密导航引导，保留的 HTTP 交付诊断链接另称 `http_delivery_url` 且无 fragment 秘密，正式 file／review URL 均无秘密。file 入口具有完整缩放／移动／复位画布、真实平台画板尺寸，并保留业务交互。目录默认收起并浮出，相机工具浮于画布，不挤占画面；取消旧大标题背景。五段契约仍在具体 HTML，由交付壳以大弹窗查看，不占主画布。目录来自项目公开登记元数据，并以 directory_sha256 校验当前 prototype 目录 canonical file URI（末尾带 `/`）的 UTF-8 SHA256，防止拷贝目录沿旧链接错绑；缺失、不匹配或 WebCrypto 不可用时保留画稿、拒绝旧评审绑定并提示 Agent 重新准备。label 最多1024字符，viewport 每轴为有限正数1..16384。各页可绑定不同请求，不能单一 active_request 覆盖其他页。项目完整交付目录最多256页，与单次review的16页限额分离；一次 open 仅绑定本次已批准同需求 1—16 页，不扫描全项目或旧 index；多页的 prepare-delivery 和 open 都使用 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`。
 
-```text
-bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py open --root <physical-project-root> --adapter <selected-project-adapter> --plan <project-relative-Markdown> --request-id <request-id> --pages <project-relative-HTML-1> <project-relative-HTML-2>
-```
+“进入评审”仅按当前具体页公开 binding，用 noopener 新标签导航到 `/_entry-review/<instance>/<review_id>/<registered-name>`，保留交付页；file 壳不创建控制连接、不获取 token。公开 binding 只是最后登记的入口，不证明当前服务 ready，不新增探测或后台连接；stop 后 file 仍可看稿，需要 Agent 显式重开服务恢复评审。引导严格核验实例、修订、登记页、Host 与可核浏览器顶层 document/navigate，拒绝 Origin:null 和 iframe/script/object/fetch 取得秘密；公开 ID／Fetch Metadata 不是秘密认证。token 仅在合法顶层响应的独立安全转义 script#prototype-browser-connection 中提供，使用 no-store／no-referrer／nosniff／禁止嵌套和 COOP 隔离；没有 cookie、凭据 CORS、JSONP 或秘密跳转 URL。可信 HTTP 父工具核对同 review_id 后消费连接，业务 frame 永不取得控制 token。
 
-两页从交付目录读取同一物理原稿，桥和来源键只在 HTTP 内存响应注入，不为活动评审在磁盘维护业务 HTML 副本。项目只保存具体页面、五段契约和必要业务资产；新项目不生成通用导航 index、不复制工具脚本或样式。既有业务首页与未知文件不能按名称删除。原稿通过 file:// 仍可离线查看与操作，但不承诺完整目录／相机、一键冷启动或发现随机服务端口。服务不可用时，由交付方用同样显式参数重跑 open 并提供新链接；status 查询指定项目请求的有限状态，stop 停止精确实例并保留意见。不把 token、随机端口或机器绝对路径写回原稿，也不配置系统自启动或系统 URL 协议。
+项目仅保留具体页、五段契约、必要业务资产、固定相对经典 entry 标签、受管 `.xy-prototype-entry` 链接和精确 `.gitignore` 项；prepare-delivery 在任何业务脚本前幂等插入标签，不把机器路径、端口、控制／管理 cap 或动态 review_id 写入源 HTML。唯一 delivery.html 模板生成中央 shell，通用同 payload 工具只缓存一份，不复制业务 HTML 或完整工具，不生成导航 index，保留既有首页、未知文件和用户修改。普通 symlink/hardlink 仍拒绝，精确受管入口通过属主／版本／摘要验证后才获窄例外。
+
+file 顶层经典 bootstrap 不依赖 file fetch 或 ES 模块，业务只在一层独立 file 设计 iframe 执行一次；仅此明确 file 分支允许 allow-scripts allow-same-origin，以支持相对 CSS／经典 JS。HTTP 评审内容仍仅 allow-scripts。父子同时验证真实 source、当前页、nonce 和 null origin，不单凭 null 字符串信任。共用相机保留原始 stage/frame、声明或受限实际测量的尺寸，不统一为 1120×860。原始字节先定位来源，再在 HTTP 内存响应移除精确 file 标签及装桥，不落盘业务 HTML 副本。
+
+独立评审进入即批注，无目录、持久浏览模式切换或开发说明；按工具提示修饰键临时操作设计，释放回批注。两页读取同一原稿并分别保留相机和交互状态。未准备、binding 失效或服务不可用时，准确显示恢复说明，由交付方重跑相同显式 prepare-delivery／open；不猜端口、不冷启动、不虚称 ready。status／stop 管理精确项目请求实例且保留意见，不配置系统自启动或 URL 协议。
 
 新 live 使用 boot 5、严格 context 3 与 feedback 5 四字段 `schema_version/review/anchors/items`。短 review 只有 request_id/review_id，绑定真实来源修订；复制和下载采用相同紧凑 JSON／Markdown，不附重复摘要。标记 A 与整改分别编号且不设等级；节点修改／新增／删除、页面修改／新增、整体修改及显式跨页引用保持。REQ／交互／接口只从真实目标源还原，匿名来源键仅在响应注入，动态无来源节点明确要求选择真实源父层。
 
 草稿通过带 revision 的 CAS 保存，刷新或重新进入可恢复；冲突明确提示，不静默覆盖。原稿变化保留旧意见并阻止错误定位与交还，不用活动指针重绑旧 review_id。validate 以相同项目和 adapter 核验显式反馈及其真实 live 修订，只返回 current、短 review、必要 anchors、按目标分组的精简 changes 和“修订输入非批准”提示；PM 将这些结果连同当前完整任务包交回原 UI Agent。普通整改只交还明确引用的 A，无整改时交还全部明确标记，不推断整改。
 
-本机服务仅绑定 127.0.0.1 随机端口，严格验证 Host／Origin／认证，网页没有任意 root、argv 或 file 接口。设计内容处于只读资源闭包与 allow-scripts sandbox 内，不能读取父控制认证；桥联合核验 source、当前页、token 与 null origin。认证 URL 仅用于受信本机入口，不进入公开日志。新工具与旧 V4 资产分别冻结，三端携带相同核心与完整白名单。
+本机服务仅绑定 127.0.0.1 随机端口，严格验证 Host／Origin／认证，网页没有任意 root、argv 或 file 接口。设计内容处于只读资源闭包与 allow-scripts sandbox 内，不能读取父控制认证；桥联合核验 source、当前页、token 与 null origin。公开 binding 无认证权限；控制 Bearer／精确 Origin 和私有管理 cap 保持，不进入公开日志。新工具与旧 V4 资产分别冻结，三端携带相同核心与完整白名单。
 
-历史 prepare 及 feedback 2／3／4 的离线不可变包继续按原合同只读装配／消费，原 index、浏览／批注、开发说明及对应 manifest／boot／bridge 不受 live 分支替换；不迁移旧包或草稿。已验收的 feedback 4 精简交接和配置恢复仍保留。工作流 3.0.3 与组件 0.1.3 已正式发布，最终绑定 CI、三 stable 分发与本机升级均已完成；这些证据不替代真实宿主的指定模型运行采纳。旧壳迁移仍需明确授权的预览／执行／恢复，只清理可证明归属的纯工具，保留混合及未知业务资产。调用与封闭格式见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+历史 prepare 及 feedback 2／3／4 的离线不可变包继续按原合同只读装配／消费，原 index、浏览／批注、开发说明及对应 manifest／boot／bridge 不受 live 分支替换；不迁移旧包或草稿。已验收的 feedback 4 精简交接和配置恢复仍保留。工作流 3.0.3 与组件 0.1.3 的历史发行、CI、stable 分发与本机升级记录保留，3.0.4 当前未发布候选尚未安装；旧证据不代表新 file 交付行为通过独立 QA，也不替代真实宿主指定模型运行采纳。旧壳迁移仍需明确授权的预览／执行／恢复，只清理可证明归属的纯工具，保留混合及未知业务资产。调用与封闭格式见[反馈消费合同](../platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
 实施者按实际改动完成必要构建、运行或文档检查，提交真实证据。Full 由请求级唯一独立只读 QA 检查集成范围，失败交原职责作者修复并由原 Reviewer 复查。Light 按风险与明确请求选择必要独立审查；未做独立 QA 时只报告真实验证结果，不宣称 QA PASS。
 

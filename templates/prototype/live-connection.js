@@ -7,6 +7,19 @@
     const fragment = new URLSearchParams(location.hash.slice(1));
     let token = "";
     if (fragment.getAll("token").length === 1 && /^[a-f0-9]{32,128}$/.test(fragment.get("token"))) token = fragment.get("token");
+    // 无秘密URL的浏览器顶层引导把凭据放在独立JSON槽，必须与startup同一review_id。
+    // file分支根本不调用此边界；业务iframe没有此槽，也不会收到控制token。
+    if (typeof document !== "undefined") {
+      const slots = document.querySelectorAll("script#prototype-browser-connection");
+      if (slots.length && (slots.length !== 1 || slots[0].type !== "application/json")) throw Error("评审引导无效，请重新打开交付入口。");
+      if (slots.length === 1) {
+        try { const value = JSON.parse(slots[0].textContent);
+          if (value && Object.keys(value).length === 3 && value.schema_version === 1 && value.review_id === context.review_id && /^[a-f0-9]{32,128}$/.test(value.token)) token = value.token;
+          else throw Error("invalid_bootstrap");
+        } catch { throw Error("评审引导与当前修订不匹配，请重新打开交付入口。"); }
+        slots[0].remove();
+      }
+    }
     try {
       if (token) sessionStorage.setItem(key, token);
       else token = sessionStorage.getItem(key) || "";

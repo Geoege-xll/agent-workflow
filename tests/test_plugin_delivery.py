@@ -17,7 +17,8 @@ import tempfile
 import unittest
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 import zipfile
 
 
@@ -289,12 +290,13 @@ class PluginDeliveryTest(unittest.TestCase):
                                   "page-shell.js", "review-state.js", "review-camera.js", "THIRD_PARTY_NOTICES.txt"}
                 self.assertEqual(expected_tools, set(builder.PROTOTYPE_V4_TOOL_ASSETS))
                 expected_live = {"delivery.html", "review.html", "live-workspace.js", "live-connection.js",
-                                 "canvas-host.js", "live.css", "workspace.css", "review-state.js",
+                                 "canvas-host.js", "file-entry.js", "file-delivery.js", "file-page.js",
+                                 "canvas-presentation.js", "live.css", "workspace.css", "review-state.js",
                                  "review-camera.js", "feedback.js", "feedback.css", "page-shell.js",
                                  "THIRD_PARTY_NOTICES.txt"}
                 self.assertEqual(expected_live, set(builder.PROTOTYPE_LIVE_TOOL_ASSETS))
                 self.assertEqual(expected_tools | expected_live, set(builder.PROTOTYPE_TOOL_ASSETS))
-                self.assertEqual(15, len(builder.PROTOTYPE_TOOL_ASSETS))
+                self.assertEqual(19, len(builder.PROTOTYPE_TOOL_ASSETS))
                 self.assertEqual({"templates/" + name for name in builder.TEMPLATE_FILES},
                                  {name for name in files.namelist() if name.startswith("templates/")})
                 # 三端工具、来源定位核心与上游许可按字节同源；许可不是仅有一个空文件名。
@@ -719,7 +721,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertFalse((project / ".agent-workflow").exists())
 
     def test_detached_live_open_reads_same_source_and_validates_feedback_five(self):
-        """三端实际包外启动同一原稿；HTTP响应装桥，磁盘不产生业务HTML副本。"""
+        """三端实际包外准备file入口与同页引导；HTTP装桥，不复制业务HTML。"""
         from tests.test_prototype_workspace import tree_snapshot
 
         project = self.root / "live-project"
@@ -738,7 +740,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 base = ["bash", str(root / "lib/python_runtime.sh"), "-B", "-X", "utf8",
                         str(root / "plugins/source_pack.py")]
 
-                def invoke(*arguments):
+                def invoke(*arguments, expected=0):
                     command = [*base, *map(str, arguments)]
                     result = subprocess.run(command, cwd=project,
                         env=isolated_environment(self.root / "live-context"),
@@ -748,7 +750,7 @@ class PluginDeliveryTest(unittest.TestCase):
                     output = re.sub(r"#token=[A-Za-z0-9_-]+", "#token=<redacted>", result.stdout + result.stderr)
                     with (self.root / ("delivery-live-" + host + ".log")).open("a", encoding="utf-8") as log:
                         log.write(json.dumps({"command": command, "exit_code": result.returncode}, ensure_ascii=False) + "\n" + output + "\n")
-                    self.assertEqual(0, result.returncode, output)
+                    self.assertEqual(expected, result.returncode, output)
                     return json.loads(result.stdout)
 
                 def helper(*arguments):
@@ -766,7 +768,6 @@ class PluginDeliveryTest(unittest.TestCase):
                     '<span>尚未绑定需求文档</span>',
                     '<a data-prototype-document="markdown" href="../../plans/live.md" target="_blank" rel="noopener">需求</a>')
                 concrete.write_text(html, encoding="utf-8")
-                before = tree_snapshot(project)
                 self.assertFalse((prototype / "index.html").exists())
                 # 新交付明确走 standalone；旧默认 index 校验仍保留给历史工作区，
                 # 不通过复制一个通用目录或工具到项目来满足旧分支。
@@ -775,22 +776,71 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual([page], [entry["path"] for entry in verified["pages"]])
                 arguments = ("lib/documents/prototype_feedback_cli.py", "open", "--root", project,
                     "--adapter", adapter, "--plan", plan, "--request-id", "live-packaged", "--pages", page, "--data-dir", data)
+                # 未准备不能默默改原稿；这条负控与随后真实prepare/open共享同一项目和数据根。
+                unprepared = invoke("helper", "--project", project, *arguments, expected=1)
+                self.assertEqual("preparation_required", unprepared["error"]["code"])
+                prepared = helper("lib/documents/prototype_feedback_cli.py", "prepare-delivery", "--root", project,
+                    "--adapter", adapter, "--pages", page, "--data-dir", data)
+                self.assertEqual("prepared", prepared["status"])
+                prepared_source = concrete.read_bytes()
+                self.assertTrue((prototype / ".xy-prototype-entry").is_symlink())
+                self.assertIn(b'.xy-prototype-entry/entry.js', prepared_source)
+                # 同一次准备必须幂等，不改变用户业务字节或重复插入活动标签。
+                self.assertEqual("prepared", helper("lib/documents/prototype_feedback_cli.py", "prepare-delivery",
+                    "--root", project, "--adapter", adapter, "--pages", page, "--data-dir", data)["status"])
+                self.assertEqual(prepared_source, concrete.read_bytes())
+                before = tree_snapshot(project)
                 try:
                     ready = helper(*arguments)
                     self.assertEqual("ready", ready["status"])
                     delivery, review_url = urlsplit(ready["delivery_url"]), urlsplit(ready["review_url"])
-                    self.assertEqual("http", delivery.scheme)
-                    self.assertEqual("127.0.0.1", delivery.hostname)
-                    self.assertEqual("/delivery/live.html", delivery.path)
-                    self.assertEqual("/review/live.html", review_url.path)
-                    self.assertTrue(delivery.netloc == review_url.netloc)
-                    self.assertEqual({"token"}, set(parse_qs(delivery.fragment)))
-                    origin = delivery.scheme + "://" + delivery.netloc
+                    self.assertEqual("file", delivery.scheme)
+                    self.assertEqual(concrete.as_uri(), ready["delivery_url"])
+                    self.assertEqual([concrete.as_uri()], ready["delivery_urls"])
+                    self.assertFalse(delivery.fragment or review_url.fragment or review_url.query)
+                    self.assertFalse(urlsplit(ready.get("http_delivery_url", "")).fragment)
+                    self.assertEqual("http", review_url.scheme)
+                    self.assertEqual("127.0.0.1", review_url.hostname)
+                    self.assertTrue(review_url.path.startswith("/_entry-review/"))
+                    self.assertTrue(review_url.path.endswith("/" + ready["review_id"] + "/live.html"))
+                    origin = review_url.scheme + "://" + review_url.netloc
+                    # 使用真实file URI公开入口读取源，再消费受管经典入口、目录和唯一shell；
+                    # 真实浏览器装配由Web作者生产工具证据覆盖，不把字节检查称为浏览器通过。
+                    with urlopen(ready["delivery_url"], timeout=10) as response:
+                        self.assertEqual(prepared_source, response.read())
+                    mount = prototype / ".xy-prototype-entry"
+                    self.assertEqual((root / "templates/prototype/file-entry.js").read_bytes(), (mount / "entry.js").read_bytes())
+                    shell_script = (mount / "shell.js").read_text(encoding="utf-8")
+                    shell_prefix = "window.XYFileDeliveryEntry.receiveShell("
+                    self.assertTrue(shell_script.startswith(shell_prefix))
+                    projected_shell = json.loads(shell_script[len(shell_prefix):].removesuffix(";\n").removesuffix(")"))
+                    self.assertEqual((root / "templates/prototype/delivery.html").read_text(encoding="utf-8").replace('"/assets/', '"assets/'), projected_shell)
+                    public = (mount / "catalog.js").read_text(encoding="utf-8")
+                    prefix = "window.XYFileDeliveryEntry.receiveCatalog("
+                    self.assertTrue(public.startswith(prefix))
+                    catalog = json.loads(public[len(prefix):].removesuffix(";\n").removesuffix(")"))
+                    self.assertEqual({"schema_version", "project_id", "directory_sha256", "tool", "pages"}, set(catalog))
+                    # 目录绑定必须来自当前真实file位置；拷贝页面沿旧挂载不能借原项目的绑定进入评审。
+                    self.assertEqual(hashlib.sha256((prototype.as_uri() + "/").encode("utf-8")).hexdigest(), catalog["directory_sha256"])
+                    self.assertEqual([page], [entry["path"] for entry in catalog["pages"]])
+                    binding = catalog["pages"][0]["binding"]
+                    self.assertEqual({"request_id", "review_id", "instance", "origin"}, set(binding))
+                    self.assertEqual(ready["review_id"], binding["review_id"])
+                    self.assertEqual(origin, binding["origin"])
+                    self.assertNotIn("token", public)
 
-                    def read_http(path):
-                        with urlopen(origin + path, timeout=10) as response:
+                    def read_http(path, *, navigation=False):
+                        headers = {"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none"} if navigation else {}
+                        with urlopen(Request(origin + path, headers=headers), timeout=10) as response:
                             body = response.read()
                             self.assertEqual(200, response.status)
+                            if navigation:
+                                self.assertEqual("no-store", response.headers["Cache-Control"])
+                                self.assertEqual("no-referrer", response.headers["Referrer-Policy"])
+                                self.assertEqual("nosniff", response.headers["X-Content-Type-Options"])
+                                self.assertEqual("DENY", response.headers["X-Frame-Options"])
+                                self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+                                self.assertEqual("same-origin", response.headers["Cross-Origin-Opener-Policy"])
                         # 内容cap不进入日志；摘要只证明本次真实HTTP返回与字节身份。
                         with (self.root / ("delivery-live-" + host + ".log")).open("a", encoding="utf-8") as log:
                             log.write(json.dumps({"http_status": 200, "bytes": len(body),
@@ -799,8 +849,19 @@ class PluginDeliveryTest(unittest.TestCase):
 
                     self.assertEqual({"status": "ready"}, json.loads(read_http("/health")))
                     boots = []
-                    for route in (delivery.path, review_url.path):
-                        shell = read_http(route).decode("utf-8")
+                    # 普通fetch形态不能取得引导秘密；只有明确顶层document/navigate被接受。
+                    with self.assertRaises(HTTPError) as denied:
+                        read_http(review_url.path)
+                    self.assertEqual(403, denied.exception.code)
+                    for route in ("/review/live.html", review_url.path):
+                        shell = read_http(route, navigation=route == review_url.path).decode("utf-8")
+                        connections = re.findall(r'<script type="application/json" id="prototype-browser-connection">(.*?)</script>', shell, re.S)
+                        self.assertEqual(1 if route == review_url.path else 0, len(connections))
+                        if connections:
+                            connection = json.loads(connections[0])
+                            self.assertEqual({"schema_version", "review_id", "token"}, set(connection))
+                            self.assertEqual(ready["review_id"], connection["review_id"])
+                            self.assertTrue(connection["token"])
                         matches = re.findall(r'<script type="application/json" id="prototype-review-data">(.*?)</script>', shell, re.S)
                         self.assertEqual(1, len(matches))
                         boot = json.loads(matches[0])
@@ -817,10 +878,14 @@ class PluginDeliveryTest(unittest.TestCase):
                     served = read_http(content_url.path).decode("utf-8")
                     self.assertIn("产品页面内容", served)
                     self.assertIn('data-prototype-review-bridge="5"', served)
+                    self.assertNotIn('<script src=".xy-prototype-entry/entry.js"', re.sub(r'<!--.*?-->', '', served, flags=re.S))
                     self.assertNotIn('data-prototype-review-bridge="5"', concrete.read_text(encoding="utf-8"))
                     for name in builder.PROTOTYPE_LIVE_TOOL_ASSETS:
+                        packaged = (root / "templates/prototype" / name).read_bytes()
+                        self.assertEqual((PACK / "templates/prototype" / name).read_bytes(), packaged)
+                        self.assertEqual(packaged, (mount / "assets" / name).read_bytes())
                         if name not in {"delivery.html", "review.html"}:
-                            self.assertEqual((root / "templates/prototype" / name).read_bytes(), read_http("/assets/" + name))
+                            self.assertEqual(packaged, read_http("/assets/" + name))
                     self.assertTrue(helper(*arguments)["reused"])
                     feedback.write_text(json.dumps({"schema_version": 5,
                         "review": {"request_id": "live-packaged", "review_id": ready["review_id"]},
@@ -830,7 +895,10 @@ class PluginDeliveryTest(unittest.TestCase):
                         "--adapter", adapter, "--input", feedback, "--data-dir", data)
                     self.assertEqual("current", current["status"])
                     self.assertEqual("包外验证", current["changes"][0]["items"][0]["message"])
-                    self.assertEqual([], list(data.rglob("*.html")))
+                    # 用户级磁盘中的HTML只能是固定工具模板；不能把活动业务原稿改名落盘。
+                    for stored in data.rglob("*.html"):
+                        self.assertIn(stored.name, {"delivery.html", "review.html"})
+                        self.assertEqual((PACK / "templates/prototype" / stored.name).read_bytes(), stored.read_bytes())
                     self.assertEqual(before, tree_snapshot(project))
                 finally:
                     stopped = helper("lib/documents/prototype_feedback_cli.py", "stop", "--root", project,

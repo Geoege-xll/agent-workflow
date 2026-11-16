@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-**[xy-workflow 3.0.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.3)** 与独立配置工具 **[Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3)** 均已正式发布，三个 stable Git 来源已更新。本机 Codex／Claude／AGY 插件已升级到 `3.0.3`、组件升级到 `0.1.3`，实际载荷与最终 CI 字节及执行位一致，模型偏好和原有项目启停／安装范围保持；不表示全部项目启用。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
+**当前源码为 xy-workflow 3.0.4 未发布候选**，正在整改具体 file HTML 完整交付入口；尚未发布、分发或安装 3.0.4，Native Agent Config 保持 `0.1.3` 及原 published descriptor，不新增 Native 发行或修改模型功能。此前 **[xy-workflow 3.0.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.3)** 与独立配置工具 **[Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3)** 均已正式发布，三个 stable Git 来源已更新。本机 Codex／Claude／AGY 插件已升级到 `3.0.3`、组件升级到 `0.1.3`，实际载荷与最终 CI 字节及执行位一致，模型偏好和原有项目启停／安装范围保持；不表示全部项目启用。官方公开目录上架、客户端新会话与指定模型实际采纳分别验收；**Windows 暂停**。
 
 ## 工作流保持
 
@@ -81,11 +81,13 @@ Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付
 
 3.0.3 提供 feedback 4 精简交接：复制／导出仅携带短 `review` 引用、必要标记和用户整改，完整 context 3 保留在本机真实快照中；缺包或来源变化明确拒绝。PM 只把复核为 `current` 的精简结果和当前完整任务包交原 UI Agent，反馈仍不构成需求或视觉批准。旧 feedback 2／3 与各自已生成评审包继续严格只读消费；当前新交付使用下述 live 5，历史 prepare／feedback 4 保持原合同。工作流 3.0.3 与组件 0.1.3 均已正式发布，本机也已升级；历史评审包仍保持各自固定工具和严格读取合同。调用细节见[反馈消费合同](platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
 
-3.0.3 提供已完成独立功能 QA 的 live 5 双网页交付：交付时用可信 `prototype_feedback_cli.py open` 显式登记项目、adapter、需求、request-id 与具体页并启动本机服务。返回的 HTTP `delivery_url` 提供共用可缩放画布及默认收起目录，“进入评审”以新标签页打开当前页；评审进入即批注，不再显示目录、持久模式切换或开发说明。两页读取交付目录同一物理原稿，来源键与桥只在 HTTP 响应装配，不落盘活动业务 HTML 副本。新 live 使用 boot／feedback 5、context 3 与带冲突检测的持久草稿，历史 prepare 和 feedback 2／3／4 保留原消费合同。
+3.0.4 候选修正完整交付入口：Agent／PM 交付前先用可信 `prototype_feedback_cli.py prepare-delivery --root --adapter --pages` 幂等准备受管入口，再用 `open` 显式登记项目、同一 adapter、需求、request-id 与具体页并启动受限评审服务。open 缺准备返回 `preparation_required`，不暗改业务 HTML。正式 `delivery_url` 是当前具体 HTML 的 file URI，`delivery_urls` 列出各页；file 入口提供完整缩放／移动／复位画布及默认收起目录。未准备的裸模板不能作为完整交付。
 
-交付目录只显示本次 `--pages` 显式登记、属于同一需求且通过安全校验的 1—16 个具体页。单页示例只登记一页，不会自动扫描整个项目、其他需求或未登记页面。同一次 `open` 登记多页时，使用 `--pages <project-relative-HTML-1> <project-relative-HTML-2>`，共用该次 `--plan`、`--request-id` 和安全边界；[使用说明](docs/usage.md)提供完整命令示例。
+“进入评审”只用当前页无秘密 binding，以 noopener 新标签导航到同页独立 HTTP 引导；file 壳不创建控制连接、不获取 token。公开 binding 只代表最后登记入口，不证明服务当前 ready；stop 后 file 仍可看稿，需要 Agent 显式重开恢复评审，不新增探测或后台连接。评审进入即批注，无目录、持久模式切换或开发说明；原稿只在独立 file 设计 iframe 执行业务一次，HTTP 评审仍隔离为 allow-scripts。共用相机保留真实 stage/frame 和平台尺寸，不统一为 1120×860。原稿变化保护、CAS 草稿、boot／feedback 5 和历史 feedback 2／3／4 合同保留。
 
-新项目不生成导航 index 或复制通用工具。file:// 原稿仍可离线操作，但不能冷启动 Python 或发现随机端口；服务不可用时由交付方重跑同样显式 open 参数并提供新链接，status／stop 管理精确请求实例。原稿不写认证信息、机器路径或随机端口，不配置系统自启动；具体命令见[使用说明](docs/usage.md)。配置修复与 live 5 双网页功能已分别完成独立 QA；工作流 3.0.3 已完成最终绑定 CI、插件正式发行、三 stable 分发和本机升级，安装与服务就绪仍不等于指定模型实际运行已验证。
+项目只保留具体页、业务资产、固定相对 entry 标签、受管 `.xy-prototype-entry` 链接及精确忽略项，不生成导航 index，不复制业务 HTML 或完整工具。唯一 delivery.html 模板投影到中央经典 shell；通用同 payload 工具只缓存一份。目录按项目登记元数据合并，最多256页；单次open仍只绑定本次已批准需求的最多16页。不同页可绑定不同请求，不扫描未登记页面。未准备／失效显示准确恢复说明，由交付方重跑相同显式 prepare-delivery／open，不猜端口、不冷启动、不虚称服务 ready。具体命令及安全边界见[使用说明](docs/usage.md)和[反馈消费合同](platforms/shared/skills/xy-ui-design/references/prototype-feedback.md)。
+
+3.0.3 的历史 QA、正式发行、stable 分发和本机升级记录保留；这些证据不证明 3.0.4 新行为已经通过 QA，也不证明指定模型实际运行。3.0.4 当前仅为源码候选，按本轮真实构建与唯一独立 QA 结果评估。
 
 ## 当前验证范围
 

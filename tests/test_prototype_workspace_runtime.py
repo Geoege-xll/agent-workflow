@@ -302,6 +302,33 @@ api.close(); await assert.rejects(api.readDraft()); assert.equal(calls.length,2)
                                 text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def test_browser_bootstrap_binds_exact_review_without_url_secret(self) -> None:
+        """执行正式连接边界：顶层引导同修订可用，错修订/重复槽不能回退旧缓存。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict');
+const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+function load(value, duplicate=false) {
+ const window={},saved=new Map(),calls=[];let removed=false;
+ const slot={type:'application/json',textContent:JSON.stringify(value),remove(){removed=true;}};
+ vm.runInNewContext(source,{window,location:{origin:'http://127.0.0.1:45123',pathname:'/review/a.html',search:'',hash:''},
+  document:{querySelectorAll:()=>duplicate?[slot,slot]:[slot]},URLSearchParams,
+  sessionStorage:{getItem:()=> 'c'.repeat(64),setItem:(key,value)=>saved.set(key,value)},history:{replaceState(){}},
+  AbortController,setTimeout,clearTimeout,fetch:async(path,options)=>{calls.push(options);return {ok:true,json:async()=>({revision:0,draft:null})};}});
+ return {window,calls,saved,removed:()=>removed};
+}
+(async()=>{
+ const value={schema_version:1,review_id:'b'.repeat(64),token:'a'.repeat(64)};
+ const good=load(value),api=good.window.PrototypeLiveConnection.create({review_id:value.review_id});
+ await api.readDraft();assert.equal(good.calls[0].headers.Authorization,'Bearer '+value.token);assert.equal(good.removed(),true);api.close();
+ for(const [bad,duplicate] of [[{...value,review_id:'d'.repeat(64)},false],[{...value,token:''},false],[value,true]]) {
+   const result=load(bad,duplicate);assert.throws(()=>result.window.PrototypeLiveConnection.create({review_id:value.review_id}));assert.equal(result.calls.length,0);
+ }
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "live-connection.js").read_text(encoding="utf-8")),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_live_link_intents_keep_legacy_modifier_semantics(self) -> None:
         """执行真实click监听器：live Alt交由登记导航，旧V4修饰键边界保持。"""
         script = r"""
@@ -382,12 +409,56 @@ assert.equal((100-cam.x)/cam.k,(100-next.x)/next.k); assert.equal((200-cam.y)/ca
 assert.equal(window.PrototypeReviewCamera.focusBounds(cam,{x:40,y:50,w:200,h:100},800,600).k,.5);
 assert.equal(window.PrototypeReviewCamera.zoomAt(cam,100,0,0).k,3);
 assert.ok(window.PrototypeReviewCamera.fitCam(390,600).k>=.08);
+// 固定手机的适应比例由真实尺寸决定，不能继续暗用桌面1120×860。
+const mobile=window.PrototypeReviewCamera.fitCam(900,1000,390,844,76);
+assert.equal(mobile.k,1); assert.equal(mobile.x,255);
+const desktop=window.PrototypeReviewCamera.fitCam(900,1000,1440,900,76);
+assert.ok(desktop.k<mobile.k);
 """
         result = subprocess.run(["node", "-e", script], input=json.dumps(source), text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def test_presentation_keeps_frozen_positive_viewport_bounds(self) -> None:
+        """尺寸合同接受最小正数与最大16384，拒绝零、负数、无穷与越界；不默认为桌面尺寸。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict'),window={};
+vm.runInNewContext(JSON.parse(require('node:fs').readFileSync(0,'utf8')),{window});
+const valid=window.PrototypeCanvasPresentation.validSize;
+for(const size of [{width:1,height:1},{width:390,height:844},{width:16384,height:16384}]) assert.equal(valid(size),true);
+for(const size of [{width:0,height:844},{width:-1,height:844},{width:16385,height:844},{width:Infinity,height:844},{width:'390',height:844}]) assert.equal(valid(size),false);
+"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "canvas-presentation.js").read_text(encoding="utf-8")),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_file_delivery_without_crypto_keeps_untrusted_original(self) -> None:
+        """整个crypto不可用时实际执行生产入口：保留原稿src，但不伪造nonce或启用旧评审绑定。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict');
+const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+function node() {return {style:{},dataset:{},hidden:false,attrs:{},textContent:'',children:[],addEventListener(){},append(value){this.children.push(value);},replaceChildren(){this.children=[];},querySelectorAll(){return [];},setAttribute(key,value){this.attrs[key]=value;},removeAttribute(key){delete this.attrs[key];}};}
+const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,node());return elements.get(id);};
+const original='file:///fixture/prototype/settings.html';
+const window={addEventListener(){},XYFileDeliveryEntry:{state:{name:'settings.html',originalFileURL:original,catalog:{schema_version:1,directory_sha256:'a'.repeat(64),pages:[{name:'settings.html',path:'docs/prototype/settings.html',label:'Settings',viewport:null,binding:{request_id:'one',review_id:'b'.repeat(64),instance:'c'.repeat(48),origin:'http://127.0.0.1:12345'}}]}}},
+ PrototypeCanvasPresentation:{create(){return {select(){},read:()=>({width:800,height:600}),close(){}};}},
+ PrototypeReviewCamera:{create(options){return {fit(){options.write({x:0,y:0,k:1});},zoom(){},close(){}};}}};
+const context={window,parent:window,location:{protocol:'file:',href:original,assign(){throw Error('不能跳到旧目录');}},URL,URLSearchParams,TextEncoder,
+ document:{getElementById:get,createElement:node},setTimeout(){throw Error('无握手降级不能等待伪ready');},clearTimeout(){}};
+(async()=>{
+ await assert.doesNotReject(vm.runInNewContext(source,context));
+ assert.equal(get('prototype-preview').src,original,'整个crypto缺失仍必须载入原稿');
+ assert.equal(get('prototype-preview').hidden,false);assert.equal(get('prototype-preview').attrs['aria-busy'],'false');
+ assert.equal(get('open-review').attrs.href,undefined);assert.equal(get('open-review').attrs['aria-disabled'],'true');
+ assert.ok(get('review-status').textContent.includes('位置校验'));
+ assert.equal(get('prototype-pages').children.length,1,'不能启用旧目录中的其他页面');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "file-delivery.js").read_text(encoding="utf-8")),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_production_scripts_compile(self) -> None:
-        for name in ("workspace.js", "feedback.js", "page-shell.js", "review-state.js", "review-camera.js", "live-connection.js", "canvas-host.js", "live-workspace.js"):
+        for name in ("workspace.js", "feedback.js", "page-shell.js", "review-state.js", "review-camera.js", "live-connection.js", "canvas-host.js", "live-workspace.js", "file-entry.js", "file-delivery.js", "file-page.js", "canvas-presentation.js"):
             with self.subTest(name=name):
                 result = subprocess.run(["node", "--check", str(TEMPLATES / name)], text=True, capture_output=True, check=False)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)

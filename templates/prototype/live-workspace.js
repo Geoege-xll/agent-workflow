@@ -2,6 +2,8 @@
  * 交付页无评审写入；评审页使用服务CAS保存，任何冲突/来源变化均保留本页输入并停止自动写入。 */
 (() => {
   "use strict";
+  // file交付由经典只读编排器负责，绝不创建HTTP控制连接。
+  if (location.protocol === "file:") return;
   const $ = (id) => document.getElementById(id), reviewing = document.body.classList.contains("live-review");
   const announce = (message) => { $("review-status").textContent = message; };
   const slots = document.querySelectorAll("script#prototype-review-data");
@@ -46,12 +48,7 @@
     if (reviewing) host.attachViews(window.PrototypeFeedback.create({ model, send: host.send, locate: host.locate, verifySources: async (targets) => { await checkSource(); if (model.state.blocked) throw Error(warning.textContent); await host.verifySources(targets); }, camera: host.camera, announce, present: host.present }));
     else {
       // 合同仍属于交付说明，只投影子页声明的五段纯文本；评审壳不维护说明入口或副本。
-      host.attachViews({ contract(sections) {
-        if (!Array.isArray(sections) || sections.length !== 5 || !sections.every((entry, index) => entry?.name === ["purpose", "navigation", "interactions", "states", "exceptions"][index] && typeof entry.text === "string" && entry.text.length <= 65536)) return;
-        const content = $("page-contract-content"); content.replaceChildren();
-        for (const entry of sections) { const section = document.createElement("section"), title = document.createElement("h3"), text = document.createElement("p");
-          title.textContent = ({ purpose: "页面职责", navigation: "导航", interactions: "交互", states: "状态与恢复", exceptions: "例外与实现边界" })[entry.name]; text.textContent = entry.text; section.append(title, text); content.append(section); }
-      } });
+      host.attachViews({ contract: window.PrototypeCanvasPresentation.contract });
       $("open-review").addEventListener("click", (event) => {
         event.preventDefault();
         // 认证fragment只传给受信同源新窗口，不常驻可见链接/浏览器悬停地址；新窗口即刻清除。

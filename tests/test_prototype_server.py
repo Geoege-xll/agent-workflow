@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -18,6 +19,7 @@ from lib.documents import prototype_feedback as feedback
 from lib.documents.prototype_live import LiveSource, capture_live, register_live
 from lib.documents.prototype_server import PrototypeServer
 from lib.documents.prototype_service import open_service, service_status, stop_service
+from lib.documents.prototype_file_entry import prepare_delivery, ENTRY
 from tests.test_prototype_live import live_fixture, empty_draft
 from tests.test_prototype_workspace import tree_snapshot
 
@@ -42,6 +44,7 @@ class PrototypeServerBindingTest(unittest.TestCase):
 class PrototypeServerTest(unittest.TestCase):
     def setUp(self):
         self.base, self.project, self.page, self.data = live_fixture()
+        prepare_delivery(self.project, "project.yaml", [self.page], data_dir=self.data)
         self.context, _, _, navigation = capture_live(self.project, "project.yaml", "docs/plans/settings.md", "http-test", [self.page])
         register_live(self.project, self.context, data_dir=self.data)
         _, tools = review.capture_tool(format_version=5)
@@ -142,11 +145,33 @@ class PrototypeServerTest(unittest.TestCase):
         self.assertFalse(self.thread.is_alive())
         with self.assertRaises(OSError): self.request("GET", "/health")
 
+    def test_public_top_level_bootstrap_rejects_opaque_and_subresources(self):
+        path = "/_entry-review/" + self.server.instance + "/" + self.context["review_id"] + "/settings.html"
+        browser = {"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site"}
+        status, headers, body = self.request("GET", path, headers=browser)
+        self.assertEqual(200, status)
+        self.assertEqual(1, body.count(b'id="prototype-browser-connection"'))
+        self.assertIn(self.server.token.encode(), body)
+        self.assertEqual("same-origin", headers["Cross-Origin-Opener-Policy"])
+        self.assertEqual("DENY", headers["X-Frame-Options"])
+        for denied in ({}, {**browser, "Origin": "null"}, {**browser, "Sec-Fetch-Dest": "iframe"},
+                       {**browser, "Sec-Fetch-Dest": "script"}, {**browser, "Sec-Fetch-Dest": "object"},
+                       {**browser, "Sec-Fetch-Mode": "cors"}, {**browser, "Sec-Fetch-Dest": "empty"}):
+            code, denied_headers, denied_body = self.request("GET", path, headers=denied)
+            self.assertEqual(403, code)
+            self.assertNotIn(self.server.token.encode(), denied_body)
+            self.assertNotIn("Access-Control-Allow-Origin", denied_headers)
+        for wrong in (path.replace(self.server.instance, "a" * 48), path.replace(self.context["review_id"], "a" * 64), path.replace("settings.html", "unknown.html")):
+            self.assertEqual(404, self.request("GET", wrong, headers=browser)[0])
+        content = self.request("GET", urlsplit(self.server.navigation[0]["url"]).path)[2]
+        self.assertNotIn(ENTRY.encode(), content)
+
 
 class PrototypeServiceLifecycleTest(unittest.TestCase):
     def test_cli_live_keeps_registered_revision_after_legacy_index_changes(self):
         """用公开CLI证明旧壳新增/改字后复用同实例，反馈5仍绑定原登记修订。"""
         base, project, page, data = live_fixture()
+        prepare_delivery(project, "project.yaml", [page], data_dir=data)
         index = project / "docs/standards/prototype/index.html"
         original = index.read_bytes() if index.exists() else None
         request_id = "index-cli-test"
@@ -166,10 +191,15 @@ class PrototypeServiceLifecycleTest(unittest.TestCase):
                 self.assertEqual(opened["review_id"], again["review_id"])
                 envelope = {"schema_version": 5, "review": {"request_id": request_id, "review_id": opened["review_id"]}, "anchors": [], "items": []}
                 self.assertEqual("current", feedback.validate_feedback(project, "project.yaml", envelope, data_dir=data)["status"])
-                url = urlsplit(again["delivery_url"])
-                token = url.fragment.removeprefix("token=")
+                url = urlsplit(again["review_url"])
                 client = http.client.HTTPConnection(url.hostname, url.port, timeout=3)
                 try:
+                    client.request("GET", url.path, headers={"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none"})
+                    response = client.getresponse()
+                    self.assertEqual(200, response.status)
+                    boot = re.search(rb'<script type="application/json" id="prototype-browser-connection">(.*?)</script>', response.read())
+                    self.assertIsNotNone(boot)
+                    token = json.loads(boot[1])["token"]
                     client.request("GET", "/api/context?name=settings.html", headers={"Origin": "http://" + url.netloc, "Authorization": "Bearer " + token})
                     response = client.getresponse()
                     self.assertEqual(200, response.status)
@@ -182,9 +212,13 @@ class PrototypeServiceLifecycleTest(unittest.TestCase):
 
     def test_real_cli_process_open_reuse_status_stop_and_private_state(self):
         base, project, page, data = live_fixture()
-        before = tree_snapshot(project)
         command = [sys.executable, "-B", str(review.TOOL_ROOT / "lib/documents/prototype_feedback_cli.py")]
         args = ["--root", str(project), "--request-id", "lifecycle-test", "--data-dir", str(data)]
+        prepared = subprocess.run(command + ["prepare-delivery", "--root", str(project), "--adapter", "project.yaml",
+            "--pages", page, "--data-dir", str(data)], text=True, capture_output=True, timeout=20)
+        self.assertEqual(0, prepared.returncode, prepared.stderr + prepared.stdout)
+        self.assertEqual("prepared", json.loads(prepared.stdout)["status"])
+        before = tree_snapshot(project)
         def run(operation, *extra):
             result = subprocess.run(command + [operation] + args + list(extra), text=True, capture_output=True, timeout=20)
             self.assertEqual(0, result.returncode, result.stderr + result.stdout)
@@ -194,6 +228,12 @@ class PrototypeServiceLifecycleTest(unittest.TestCase):
             again = run("open", "--adapter", "project.yaml", "--plan", "docs/plans/settings.md", "--pages", page)
             self.assertTrue(opened["review_url"] == again["review_url"], "重复打开未复用同一实例链接")
             self.assertTrue(again["reused"])
+            self.assertEqual("file", urlsplit(opened["delivery_url"]).scheme)
+            self.assertEqual([opened["delivery_url"]], opened["delivery_urls"])
+            self.assertFalse(urlsplit(opened["review_url"]).fragment)
+            self.assertFalse(urlsplit(opened["http_delivery_url"]).fragment)
+            for link in (opened["delivery_url"], opened["review_url"], opened["http_delivery_url"]):
+                self.assertNotIn("token", link)
             state = run("status")
             self.assertEqual("ready", state["status"])
             self.assertNotIn("token", json.dumps(state))
