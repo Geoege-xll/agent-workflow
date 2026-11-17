@@ -98,6 +98,72 @@ class SafeCommandTest(unittest.TestCase):
         self.assertFalse(result["native_preparation"]["supported"])
         self.assertTrue(any(row["code"] == "native_preparation_source_unavailable" for row in result["diagnostics"]))
 
+    def test_open_fills_user_definitions_before_reusing_console_for_project(self):
+        from tests.test_native_preparation import make_source, TEST_NAMES
+        source = make_source(self.root / "plugin")
+        opened = {"url": "http://127.0.0.1:12345/#token=" + "s" * 43,
+                  "reused": True, "protocol_version": 2, "service_version": service_version()}
+
+        project_agent = self.project / ".codex/agents/xy-web.toml"
+        project_agent.parent.mkdir(parents=True)
+        project_agent.write_text('name="xy-web"\ndescription="project"\ndeveloper_instructions="keep"\n')
+        project_before = project_agent.read_bytes(), project_agent.stat().st_mtime_ns
+
+        def inspect_open(*args, **kwargs):
+            # 不模拟文件创建或 storage：控制台启动替身只验证真实创建已在调用前完成。
+            parent = self.home / ".codex/agents"
+            self.assertEqual({path.stem for path in parent.glob("*.toml")}, set(TEST_NAMES) - {"xy-web"})
+            self.assertEqual(project_before, (project_agent.read_bytes(), project_agent.stat().st_mtime_ns))
+            return opened
+
+        with mock.patch("native_config.cli.open_console", side_effect=inspect_open), \
+             mock.patch("native_config.commands._private_launch_file", return_value="private-launch"):
+            result, code = self.execute("open", preparation_source=source, project=str(self.project), no_browser=True)
+            self.assertEqual((code, result["native_preparation"]["created"]), (0, 6), result)
+            self.assertEqual(result["native_preparation"]["project_provided"], 1)
+            self.assertTrue(result["service"]["reused"])
+            before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                      for path in (self.home / ".codex/agents").glob("*.toml")}
+            result, code = self.execute("open", preparation_source=source, project=str(self.project), no_browser=True)
+            self.assertEqual((code, result["native_preparation"]["status"]), (0, "unchanged"))
+            self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before})
+
+    def test_invalid_source_permission_and_conflict_refuse_start_without_raw_errors(self):
+        from tests.test_native_preparation import make_source
+        from native_config import storage
+        from native_config.contracts import ConflictError
+        source = make_source(self.root / "plugin")
+        sensitive = "private-secret-do-not-expose"
+        for failure in (PermissionError(sensitive), ConflictError(sensitive)):
+            with self.subTest(error=type(failure).__name__), \
+                 mock.patch.object(storage, "write_batch", side_effect=failure), \
+                 mock.patch("native_config.cli.open_console") as opener:
+                result, code = self.execute("open", preparation_source=source, no_browser=True)
+            self.assertEqual(code, 1)
+            self.assertEqual(result["code"], "native_preparation_permission_denied" if isinstance(failure, PermissionError) else "native_preparation_conflict")
+            self.assertNotIn(sensitive, json.dumps(result))
+            self.assertFalse(self.home.exists())
+            opener.assert_not_called()
+        (source / "roles/xy-web.md").unlink()
+        with mock.patch("native_config.cli.open_console") as opener:
+            result, code = self.execute("open", preparation_source=source, no_browser=True)
+        self.assertEqual((code, result["code"]), (1, "native_preparation_source_unavailable"))
+        opener.assert_not_called()
+        self.assertFalse(self.home.exists())
+
+    def test_other_hosts_never_create_codex_definitions(self):
+        from tests.test_native_preparation import make_source
+        source = make_source(self.root / "plugin")
+        opened = {"url": "http://127.0.0.1:12345/#token=" + "s" * 43,
+                  "reused": True, "protocol_version": 2, "service_version": service_version()}
+        for host in ("claude", "antigravity"):
+            with mock.patch("native_config.cli.open_console", return_value=opened), \
+                 mock.patch("native_config.commands._private_launch_file", return_value="private-launch"), \
+                 mock.patch.object(ModelService, "prepare_missing_builtins", side_effect=AssertionError("其他宿主补齐Codex文件")):
+                result, code = self.execute("open", host=host, preparation_source=source, no_browser=True)
+            self.assertEqual(code, 0, result)
+            self.assertFalse(self.home.exists())
+
     def test_bad_records_and_version_conflicts_are_unchanged_and_sanitized(self):
         target, record = self.record(protocol_version=999)
         for action in ("status", "doctor", "open"):

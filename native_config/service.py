@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import copy
 import hashlib
 import os
@@ -29,6 +29,7 @@ class _Context:
     revision: str
     preferences: preferences.Preferences
     preparation: preparation.Source | None = None
+    project_identity: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,7 @@ class ModelService:
         preferred = preferences.capture(host, self.host_roots[host], path)
         revision = hashlib.sha256(json_bytes([host, scope, str(path) if path else None, identity, found.revision(), enabled.revision(), preferred.revision()])).hexdigest()
         prepared = preparation.capture(self.preparation_source) if host == "codex" else None
-        return _Context(host, scope, path, found, enabled, revision, preferred, prepared)
+        return _Context(host, scope, path, found, enabled, revision, preferred, prepared, identity)
 
     def _capabilities(self, host):
         return adapters.capabilities(host, self._versions.get(host), self._version_status.get(host, "not_probed"))
@@ -148,7 +149,6 @@ class ModelService:
                 "capabilities": self._capabilities(state.host), "diagnostics": diagnostics,
                 "workflow_activation": state.activation.public,
                 "dispatch_preferences": preferences.public(state.preferences, state.scope, state.inventory.agents),
-                "native_preparation": preparation.public(state.preparation, state, self.host_roots[state.host]),
                 "runtime_verified": False, "inventory_complete": state.inventory.complete,
                 "discovery_scope": "documented_local_files_and_observed_install_records"}
 
@@ -175,10 +175,8 @@ class ModelService:
     def preview(self, request):
         request = unique_json(json_bytes(request))
         if (not isinstance(request, dict) or "host" not in request
-                or set(request) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation", "dispatch_preferences", "native_preparation"}):
+                or set(request) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation", "dispatch_preferences"}):
             raise ConfigError("预览请求字段无效")
-        if "native_preparation" in request and ({"edits", "reset", "workflow_activation", "dispatch_preferences"} & set(request)):
-            raise ConfigError("原生 Agent 准备必须独占预览")
         if "dispatch_preferences" in request and ({"edits", "reset", "workflow_activation"} & set(request)):
             raise ConfigError("调用偏好必须独占预览，不与原生定义或启停混合")
         if "workflow_activation" in request and ({"edits", "reset"} & set(request)):
@@ -186,9 +184,6 @@ class ModelService:
         state = self._capture(request["host"], request.get("scope", "global"), request.get("project"))
         if not isinstance(request.get("revision"), str) or request["revision"] != state.revision:
             raise ConflictError("原生 Agent 清单或文件在编辑后变化")
-        if "native_preparation" in request:
-            writes, changes, warnings = preparation.preview(state.preparation, state, self.host_roots[state.host], request["native_preparation"])
-            return self._store_preview(state, writes, changes, warnings, kind="native_preparation")
         if "dispatch_preferences" in request:
             writes, changes, warnings = preferences.preview(state.preferences, state.scope, request["dispatch_preferences"],
                                                             state.inventory.agents, lambda values: self._selection(state, values))
@@ -240,7 +235,7 @@ class ModelService:
         """启停和模型共用容量、TTL、单次消费与保存计划，不创建第二事务通道。"""
         cached = self._catalogs.get((state.host, str(state.project)))
         stamp = None
-        if kind not in {"workflow_activation", "native_preparation"} and cached and cached.get("status") == "ready":
+        if kind != "workflow_activation" and cached and cached.get("status") == "ready":
             try:
                 fresh = model_catalog.source_stamp(self.host_roots[state.host], state.project,
                                                    self.environment, host=state.host)
@@ -266,11 +261,8 @@ class ModelService:
         agents = {agent.id: agent for agent in state.inventory.agents}
         selected = [self._row(agents[item.role], state.scope, complete=state.inventory.complete) for item in writes if item.role in agents]
         blocked = [row["blocked_reason"] for row in selected if row["blocked_reason"]]
-        # 准备候选尚未成为原生清单条目，不能因 selected 为空就把预览标成
-        # 可派发。保存后的真实定义再走既有发现/宿主能力规则判断。
-        deferred = kind in {"dispatch_preferences", "native_preparation"}
-        blocked_reason = ("原生定义等待确认创建及宿主新会话加载；保存不证明运行生效。" if kind == "native_preparation" else
-                          "调用偏好等待当前宿主工具能力映射；保存不证明运行生效。" if kind == "dispatch_preferences" else
+        deferred = kind == "dispatch_preferences"
+        blocked_reason = ("调用偏好等待当前宿主工具能力映射；保存不证明运行生效。" if kind == "dispatch_preferences" else
                           "; ".join(dict.fromkeys(blocked)) or None)
         return {"preview_id": opaque, "kind": kind, "changes": changes, "warnings": list(dict.fromkeys(warnings)),
                 "effect": preferences.effect() if kind == "dispatch_preferences" else adapters.effect(), "dispatch_ready": False if deferred else not blocked,
@@ -283,57 +275,116 @@ class ModelService:
             plan = self._plans.pop(preview_id, None)
             if plan is None or time.monotonic() - plan.created >= 900:
                 raise ConflictError("预览不存在、已使用或已过期")
-            before = plan.before
-            creating = any(item.before.body is None for item in plan.writes)
-            created_directories = {}
-            def guard(*, initial=False):
-                # 每轮只刷新一次完整权威上下文，来源 CAS 与目录/文件 CAS 必须
-                # 使用同一轮观察。另行先读来源再忽略 now.preparation，既重复
-                # 读取，也可能让先前有效的来源掩盖这次回读已失效或换修订的事实。
-                now = self._capture(before.host, before.scope, before.project)
+            return self._apply_plan(plan)
+
+    def prepare_missing_builtins(self, project=None):
+        """维护入口 open 专用补缺；普通 context、预览与服务构造绝不触发创建。
+
+        原生模板只落到用户级目录。本次明确项目已提供的同名定义也视为
+        已存在，避免新增用户副本使原单一定义变成优先级未知的重复来源。
+        缺失判定与 guard 共用包含该项目的完整快照，不扫描其他业务项目。
+        复用现有事务与来源 CAS，不存公开 preview_id，也不修改模型、推理、
+        调用偏好、启停或信任设置。
+        """
+        with self._lock:
+            state = self._capture("codex", "project" if project is not None else "global", project)
+            if state.preparation is None:
+                raise ConfigError("显式 Codex 插件来源无法安全验证")
+            writes = preparation.missing_plan(state.preparation, state, self.host_roots["codex"])
+            # 回执区分当前明确项目已提供与其他保留项；两者都不修改。计数以
+            # 模板名为单位，完整项目清单同样进入下面唯一计划的 CAS。
+            project_names = {agent.document.name for agent in state.inventory.agents if agent.origin == "project"}
+            project_provided = sum(item.name in project_names for item in state.preparation.candidates)
+            preserved = len(state.preparation.candidates) - len(writes) - project_provided
+            if not writes:
+                # 幂等快路径连 storage 都不调用，避免已存在定义的 mtime 或目录受影响。
+                return {"status": "unchanged", "created": 0, "preserved": preserved,
+                        "project_provided": project_provided, "runtime_verified": False}
+            result = self._apply_plan(_Plan(state, writes, time.monotonic(), "native_preparation"))
+            if result.get("error_type") == "PermissionError":
+                raise PermissionError("原生定义补齐因目录权限不足被拒绝")
+            if result.get("error_type") in {"ConflictError", "BlockingIOError", "FileExistsError"}:
+                raise ConflictError("原生定义补齐遇到并发变化")
+            if (not result["saved"] or result.get("context_unavailable") or "context" not in result):
+                raise ConfigError("原生定义补齐未完成，请检查权限或并发修改后重新打开")
+            # 保存回执之外再核对实际文件字节与发现结果；不能把计划本身当成已创建证据。
+            found = {row["source_path"] for row in result["context"]["roles"]}
+            if any(str(item.path) not in found or storage.read(item.path).body != item.after for item in writes):
+                raise ConflictError("原生定义补齐后回读不一致")
+            return {"status": "created", "created": len(writes),
+                    "preserved": preserved, "project_provided": project_provided, "runtime_verified": False}
+
+    def _apply_plan(self, plan):
+        """唯一事务通路；调用方持有服务锁，外部进程仍由原有完整 guard/CAS 防护。"""
+        before = plan.before
+        creating = any(item.before.body is None for item in plan.writes)
+        created_directories = {}
+        def guard(*, initial=False):
+            # 每轮只刷新一次完整权威上下文，来源 CAS 与目录/文件 CAS 必须
+            # 使用同一轮观察。另行先读来源再忽略 now.preparation，既重复
+            # 读取，也可能让先前有效的来源掩盖这次回读已失效或换修订的事实。
+            now = self._capture(before.host, before.scope, before.project)
+            # 自有用户目录创建可归一化，明确项目根身份绝不能随之被忽略。
+            if now.project_identity != before.project_identity:
+                raise ConflictError("明确项目目录在保存期间变化")
+            if plan.kind == "native_preparation":
+                if now.preparation is None or now.preparation.revision != before.preparation.revision:
+                    raise ConflictError("准备来源在预览后变化，请重新预览")
+            if plan.catalog_stamp is not None:
+                fresh = model_catalog.source_stamp(self.host_roots[before.host], before.project, self.environment, host=before.host)
+                if fresh != plan.catalog_stamp:
+                    raise ConflictError("模型目录来源在预览后变化，请刷新后重新预览")
+            # 首次 mkdir 是 storage 已核实目录链后的自有变化。其余文件、
+            # 安装身份、继承来源仍逐次检查；目标父目录由 storage 的原链
+            # 前像检查及全程持有的 no-follow 描述符负责，不能被普通回读替代。
+            same = now.revision == before.revision
+            if creating and not initial:
+                # 只放行 storage 以排他 rename 创建、且 inode 与空目录都已
+                # 核实的自身目录变化；并发加入的文件/来源仍改变完整清单摘要。
                 if plan.kind == "native_preparation":
-                    if now.preparation is None or now.preparation.revision != before.preparation.revision:
-                        raise ConflictError("准备来源在预览后变化，请重新预览")
-                if plan.catalog_stamp is not None:
-                    fresh = model_catalog.source_stamp(self.host_roots[before.host], before.project, self.environment, host=before.host)
-                    if fresh != plan.catalog_stamp:
-                        raise ConflictError("模型目录来源在预览后变化，请刷新后重新预览")
-                # 首次 mkdir 是 storage 已核实目录链后的自有变化。其余文件、
-                # 安装身份、继承来源仍逐次检查；目标父目录由 storage 的原链
-                # 前像检查及全程持有的 no-follow 描述符负责，不能被普通回读替代。
-                same = now.revision == before.revision
-                if creating and not initial:
-                    # 只放行 storage 以排他 rename 创建、且 inode 与空目录都已
-                    # 核实的自身目录变化；并发加入的文件/来源仍改变完整清单摘要。
-                    inventory_revision = (preparation.inventory_revision(now.inventory, created_directories)
-                                          if plan.kind == "native_preparation" else now.inventory.revision())
-                    same = (inventory_revision == before.inventory.revision()
+                    # 用户级首次 mkdir 也会改变项目快照中的用户继承目录链。
+                    # 仅凭 storage 的自有 inode 证据还原 missing 边界，完整项目
+                    # 目录、启停内容、偏好与同名清单仍参加同一轮 CAS。
+                    normalized_activation = copy.copy(now.activation)
+                    normalized_activation.directories = {
+                        path: preparation.directory_stamp_before_own_creation(
+                            path, stamp, before.activation.directories.get(path, ()), created_directories)
+                        for path, stamp in now.activation.directories.items()}
+                    normalized_preferences = replace(now.preferences,
+                        parent_stamp=preparation.directory_stamp_before_own_creation(
+                            now.preferences.path.parent, now.preferences.parent_stamp,
+                            before.preferences.parent_stamp, created_directories))
+                    same = (preparation.inventory_revision(now.inventory, created_directories) == before.inventory.revision()
+                            and normalized_activation.revision() == before.activation.revision()
+                            and normalized_preferences.revision() == before.preferences.revision())
+                else:
+                    same = (now.inventory.revision() == before.inventory.revision()
                             and now.activation.revision(include_target_parent=False)
                             == before.activation.revision(include_target_parent=False)
                             and now.preferences.revision(include_parent=False) == before.preferences.revision(include_parent=False))
-                if not same:
-                    raise ConflictError("原生 Agent 来源在预览后变化，请重新预览")
-                for item in plan.writes:
-                    if item.role == "workflow_activation":
-                        activation_codecs.parse(before.host, item.after)
-                    elif item.role == "dispatch_preferences":
-                        preferences.contract.parse_document(item.after, before.host)
-                    else:
-                        codecs.parse(before.host, item.after)
-            guard(initial=True)
-            result = (storage.write_batch(plan.writes, guard, created_directories=created_directories)
-                      if plan.kind == "native_preparation" else storage.write_batch(plan.writes, guard))
-            effect_factory = preferences.effect if plan.kind == "dispatch_preferences" else adapters.effect
-            response = {**result, "effect": effect_factory(saved=result["saved"],
-                        published=result["published"] or result.get("namespace_touched", False))}
-            try:
-                response["context"] = self.context(before.host, before.scope, before.project)
-            except (ValueError, OSError):
-                # 发布结果和恢复资料比刷新展示更重要；回读失败不能掩盖已发生的
-                # 部分写入，也不能要求调用方重复提交已经消费的同一计划。
-                response.update(context_unavailable=True,
-                                context_diagnostic="Native files could not be reread safely; preserve per-agent save and recovery results before refreshing.")
-            return response
+            if not same:
+                raise ConflictError("原生 Agent 来源在预览后变化，请重新预览")
+            for item in plan.writes:
+                if item.role == "workflow_activation":
+                    activation_codecs.parse(before.host, item.after)
+                elif item.role == "dispatch_preferences":
+                    preferences.contract.parse_document(item.after, before.host)
+                else:
+                    codecs.parse(before.host, item.after)
+        guard(initial=True)
+        result = (storage.write_batch(plan.writes, guard, created_directories=created_directories)
+                  if plan.kind == "native_preparation" else storage.write_batch(plan.writes, guard))
+        effect_factory = preferences.effect if plan.kind == "dispatch_preferences" else adapters.effect
+        response = {**result, "effect": effect_factory(saved=result["saved"],
+                    published=result["published"] or result.get("namespace_touched", False))}
+        try:
+            response["context"] = self.context(before.host, before.scope, before.project)
+        except (ValueError, OSError):
+            # 发布结果和恢复资料比刷新展示更重要；回读失败不能掩盖已发生的
+            # 部分写入，也不能要求调用方重复提交已经消费的同一计划。
+            response.update(context_unavailable=True,
+                            context_diagnostic="Native files could not be reread safely; preserve per-agent save and recovery results before refreshing.")
+        return response
 
     def catalog(self, host, project=None):
         state = self._capture(host, "project" if project is not None else "global", project)

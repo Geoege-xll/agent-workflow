@@ -78,7 +78,7 @@ class ConsoleJavascriptTest(unittest.TestCase):
         # Node 直接导入生产函数；令牌只用测试字符串，不接触本机连接记录或真实配置。
         script = r"""
 const assert = require('node:assert/strict');
-const {ModelApi, ApiError, Draft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices} = require('./native_config/web/console.js');
+const {ModelApi, ApiError, Draft, RequestOwner, CatalogLoader, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices} = require('./native_config/web/console.js');
 const row = (id, fields = {}) => ({role: id, name: '同名 Agent', origin: 'user', scope: 'global', writable: true,
   overrides: {model: 'saved/unknown:model', effort: 'high'}, effective: {model: 'saved/unknown:model', effort: 'high'},
   sources: {model: 'user', effort: 'user'}, dispatch_ready: false, blocked_reason: '尚未观察到客户端版本', ...fields});
@@ -262,6 +262,10 @@ assert.equal(view.project('global',rows).selected.role,'user:a');
 view.select('global','plugin:b',rows);view.search('global','用户');
 assert.deepEqual(view.project('global',rows).rows.map(row=>row.role),['user:a']);
 assert.equal(view.project('global',rows).selected.role,'plugin:b');
+// 名称导航简化后仍按职责和来源路径搜索，且筛选不改变原始稳定身份。
+view.search('global','/plugin/');
+assert.deepEqual(view.project('global',rows).rows.map(row=>row.role),['plugin:b']);
+assert.equal(view.project('global',rows).selected.role,'plugin:b');
 view.search('global','no-match');assert.equal(view.project('global',rows).rows.length,0);
 assert.equal(view.project('global',rows).selected.role,'plugin:b');
 assert.equal(view.project('global',[rows[0]]).selected,null,'消失身份不能回退到同名首项');
@@ -315,66 +319,100 @@ assert.throws(() => contextContract(context([row('same'),row('same')])), ApiErro
 assert.equal(contextContract(context([row(longId)] )).roles[0].role, longId);
 """)
 
-    def test_native_preparation_isolated_preview_source_validation_and_inventory_readback(self):
-        # 候选来源只能生成独占准备请求；预览既不写入，也不能把模板冒充已发现身份。
-        # 使用同一生产投影/API/草稿，覆盖已有定义继续可编辑和准备回读后保留三类草稿。
+    def test_preference_consecutive_saves_automatically_prepare_and_reuse_catalog(self):
+        # 同一生产草稿、目录所有者和HTTP协议连续预览/确认两次，模拟同页继续编辑。
+        # 服务端每次保存推进revision但保持模型来源，验证无需人工刷新且仍提交最新CAS基线。
         self.run_javascript(r"""
-const {preparationState,preparationPayload} = require('./native_config/web/native-definitions.js');
-const candidate = (id,status='missing') => ({candidate_id:id,name:'真实来源角色 '+id,description:'来源职责',status,target_path:'/fixture/.codex/agents/'+id+'.toml'});
-const preparation = {supported:true,source_id:'plugin:fixture',source_revision:'source-v1',
-  candidates:[candidate('dynamic-a'),candidate('keep','existing'),candidate('collision','conflict'),candidate('unsafe','blocked')]};
-const ctx={...context(),native_preparation:preparation};
-assert.equal(preparationState(preparation,'codex').missing.length,1);
-assert.deepEqual(preparationPayload(ctx),{source_id:'plugin:fixture',source_revision:'source-v1',candidate_ids:['dynamic-a']});
-const draft=new Draft({host:'codex',scope:'global'});draft.accept(contextContract(ctx));
-assert.deepEqual(draft.context.roles.map(row=>row.role),['opaque:a']);
-draft.set('opaque:a','model','retained-model');
-draft.activation.saved={writable:true,state:'inherit'};draft.activation.set('enabled');
-draft.preferences.accept({roles:[row('*')]});draft.preferences.set('*','effort','low');
-const payload=preparationPayload(draft.context);
-assert.equal(JSON.stringify(payload).includes('target_path'),false);
-assert.equal(JSON.stringify(payload).includes('description'),false);
-for(const invalid of [undefined,{...preparation,source_revision:null},
-  {...preparation,candidates:[candidate('x'),candidate('x')]},
-  {...preparation,candidates:[candidate('x','invented-success')]},
-  {supported:false,source_id:null,source_revision:null,candidates:[]}]) {
-  assert.equal(preparationState(invalid,'codex').available,false);
-  assert.equal(preparationPayload({...ctx,native_preparation:invalid}),null);
-  assert.equal(contextContract({...ctx,native_preparation:invalid}).roles[0].role,'opaque:a','来源异常不遮盖已有定义');
+let revision=1, saved='model-a', catalogReads=0, applies=0, pending;
+const ctx=()=>({...context(),revision:'rev-'+revision,catalog_source_stamp:'source-stable',
+  dispatch_preferences:{status:'ready',runtime_verified:false,capabilities:{model:true,effort:true,efforts:['low','high']},
+    targets:[{target:'*',writable:true,overrides:{model:saved},effective:{model:saved},sources:{model:'user_default'}}]}});
+const api=new ModelApi('test',async(path,init)=>{
+  if(path.startsWith('/api/catalog')) {catalogReads++;return response({status:'ready',source_stamp:'source-stable',models:[]});}
+  if(path.startsWith('/api/context')) return response(ctx());
+  const body=JSON.parse(init.body);
+  if(path==='/api/preview') {
+    assert.equal(body.revision,'rev-'+revision,'预览必须保留服务端最新CAS');
+    pending=body.dispatch_preferences.edits['*'].model;
+    return response({preview_id:'plan-'+revision,changes:[{target:'*',field:'model',before:saved,after:pending}],warnings:[],effect:{kind:'dispatch_preferences',runtime_verified:false}});
+  }
+  assert.equal(path,'/api/apply');assert.equal(body.preview_id,'plan-'+revision);
+  saved=pending;revision++;applies++;
+  return response({saved:true,effect:{saved:true,runtime_verified:false},context:ctx()});
+});
+const draft=new Draft({host:'codex',scope:'global'});draft.accept(contextContract(ctx()));
+const loader=new CatalogLoader(api,value=>value===draft);
+assert.equal(loader.current(draft),null,'首次编辑没有目录缓存');
+for(const model of ['model-b','model-c']) {
+  draft.preferences.set('*','model',model);
+  assert.ok(await loader.load(draft),'每次预览自动准备目录，首次缺失也不能跳过');
+  assert.equal(draft.preferences.value('*','model'),model,'目录回读必须保留编辑');
+  const plan=await api.previewPreferences(draft.location,draft.context.revision,draft.preferences.payload(),false);
+  const receipt=await api.apply(plan.preview_id);
+  draft.accept(receipt.context,'dispatch_preferences');
+  assert.equal(draft.preferences.dirty,false);assert.equal(draft.preferences.value('*','model'),model);
 }
-const change={role:'dynamic-a',name:'真实来源角色',origin:'user',field:'native_definition',before:null,
-  after:'name = "dynamic-a"\n',path:'/fixture/.codex/agents/dynamic-a.toml',source_id:preparation.source_id,source_revision:preparation.source_revision};
-const plan={kind:'native_preparation',preview_id:'prepare-plan',changes:[change],warnings:[],effect:{saved:false,runtime_verified:false}};
-const calls=[];const api=new ModelApi('test',async(path,init)=>{calls.push({path,body:JSON.parse(init.body)});return response(plan);});
-await api.previewPreparation(draft.location,draft.context);
-assert.deepEqual(calls,[{path:'/api/preview',body:{host:'codex',scope:'global',revision:'rev-1',native_preparation:payload}}]);
-assert.equal(draft.context.roles.length,1,'未确认预览不能新增身份');
-assert.equal(draft.dirty,true);assert.equal(draft.preferences.dirty,true);assert.equal(draft.activation.dirty,true);
-await api.previewPreparation({host:'codex',scope:'project',project:'/fixture/project'},ctx);
-assert.equal(calls[1].body.scope,'project');assert.equal(calls[1].body.project,'/fixture/project','项目选择不能静默切用户级');
-for(const badPlan of [{...plan,kind:'model'}, {...plan,changes:[{...change,source_revision:'changed'}]},
-  {...plan,changes:[{...change,role:'not-requested'}]}, {...plan,changes:[{...change,field:'model'}]}]) {
-  const invalid=new ModelApi('test',async()=>response(badPlan));
-  await assert.rejects(invalid.previewPreparation(draft.location,ctx),error=>error.code==='invalid_response');
-}
-const conflict=new ModelApi('test',async()=>response({error:{code:'conflict',message:'来源已变化'}},409));
-await assert.rejects(conflict.previewPreparation(draft.location,ctx),error=>error.code==='conflict');
-// 清单只能来自正式保存回读；准备事务不能清除其他事务在旧 revision 上的明确编辑。
-const discovered=row('native:dynamic-a',{name:'回读实际身份'});
-draft.accept({...ctx,revision:'rev-2',roles:[row('opaque:a'),discovered],native_preparation:{...preparation,
-  source_revision:'source-v2',candidates:preparation.candidates.map(row=>({...row,status:row.status==='missing'?'existing':row.status}))}},'native_preparation');
-assert.equal(draft.row('native:dynamic-a').name,'回读实际身份');
-assert.equal(draft.value('opaque:a','model'),'retained-model');
-assert.equal(draft.activation.value,'enabled');assert.equal(draft.preferences.edits.get('*').effort,'low');
-assert.equal(preparationPayload(draft.context),null,'回读已有定义不得再次准备');
-const owner=new RequestOwner(),old=owner.begin();
-let release;const lateApi=new ModelApi('test',async()=>new Promise(resolve=>{release=resolve;}));
-const pending=lateApi.previewPreparation(draft.location,ctx,old.signal);
-owner.cancel();release(response(plan));await pending;
-assert.equal(owner.current(old),false,'即使底层晚到成功，已切换范围/宿主的归属也不能恢复');
-const expired=new ModelApi('test',async()=>{throw Error('失效连接不应到达网络');});
-expired.connection={authorize(){throw new ApiError('authentication','expired');}};
-await assert.rejects(expired.previewPreparation(draft.location,ctx),error=>error.code==='authentication');
+assert.equal(applies,2);assert.equal(catalogReads,1,'来源不变时后续保存不能全量刷新目录');
+""")
+
+    def test_catalog_stale_inflight_join_bounded_source_retry_and_failures(self):
+        # 目录实际异步所有者处理空缓存、过期、同范围去重及最多一次来源变化重读。
+        self.run_javascript(r"""
+const draft=new Draft({host:'codex',scope:'global'});draft.accept({...context(),catalog_source_stamp:'source-new'});
+draft.catalog={status:'ready',source_stamp:'source-old',models:[]};draft.catalogStamp='source-old';
+draft.set('opaque:a','model','keep-draft');
+let release, reads=0, contexts=0;
+const loader=new CatalogLoader({catalog:()=>{reads++;return new Promise(resolve=>{release=resolve;});},
+  context:async()=>{contexts++;return {...context(),catalog_source_stamp:'source-new'};}},value=>value===draft);
+assert.equal(loader.current(draft),null);
+const first=loader.load(draft), second=loader.load(draft,true);
+assert.equal(first,second,'预览与已进行读取必须等待同一个promise');
+let joined=false;second.then(()=>{joined=true;});await Promise.resolve();
+assert.equal(joined,false,'目录未响应时不能让第二个等待者提前继续');
+release({status:'ready',source_stamp:'source-new',models:[]});await Promise.all([first,second]);
+assert.equal(reads,1);assert.equal(contexts,1);assert.ok(loader.current(draft));
+assert.equal(draft.value('opaque:a','model'),'keep-draft');
+// 单次来源漂移自动恢复，持续漂移与真实读取失败均有明确拒绝，草稿不清空。
+let drift=0;
+const changing=new CatalogLoader({catalog:async()=>({status:'ready',source_stamp:++drift===1?'old':'stable',models:[]}),
+  context:async()=>({...context(),catalog_source_stamp:'stable'})},()=>true);
+draft.catalogStamp=null;assert.ok(await changing.load(draft));assert.equal(drift,2);
+let unstableReads=0;
+const unstable=new CatalogLoader({catalog:async()=>{unstableReads++;return {status:'ready',source_stamp:'always-old',models:[]};},
+  context:async()=>({...context(),catalog_source_stamp:'always-new'})},()=>true);
+await assert.rejects(unstable.load(draft,true),error=>error.code==='catalog_changed');assert.equal(unstableReads,2);
+const unavailable=new CatalogLoader({catalog:async()=>({status:'failed',models:[]}),context:async()=>context()},()=>true);
+await assert.rejects(unavailable.load(draft,true),error=>error.code==='catalog_unavailable');
+assert.equal(draft.value('opaque:a','model'),'keep-draft');
+let networkAttempts=0;
+const transient=new CatalogLoader({catalog:async()=>{
+  if(++networkAttempts===1)throw new ApiError('network','临时读取失败');
+  return {status:'ready',source_stamp:'recovered',models:[]};
+},context:async()=>({...context(),catalog_source_stamp:'recovered'})},()=>true);
+await assert.rejects(transient.load(draft),error=>error.code==='network');
+assert.ok(await transient.load(draft),'下次预览可重试同一来源，不要求人工刷新');assert.equal(networkAttempts,2);
+""")
+
+    def test_catalog_scope_switch_cancels_late_context_and_preview_intent(self):
+        # 取消期间fetch可忽略AbortSignal；真实owner仍须阻止晚到回读和后续预览/保存。
+        self.run_javascript(r"""
+const old=new Draft({host:'codex',scope:'global'});old.accept({...context(),catalog_source_stamp:'old'});
+const next=new Draft({host:'codex',scope:'project',project:'/fixture/other'});next.accept({...context(),scope:'project',project:'/fixture/other',catalog_source_stamp:'next'});
+let active=old, release, previews=0, applies=0;
+const loader=new CatalogLoader({catalog:async()=>({status:'ready',source_stamp:'late',models:[]}),
+  context:()=>new Promise(resolve=>{release=resolve;})},value=>value===active);
+const intended=old;
+const previewIntent=loader.load(old).then(catalog=>{
+  if(!catalog||active!==intended)return;
+  previews++;applies++;
+});
+await Promise.resolve();assert.equal(typeof release,'function');
+loader.cancel();active=next;
+release({...context(),revision:'late-revision',catalog_source_stamp:'late'});await previewIntent;
+assert.equal(old.context.revision,'rev-1');assert.equal(old.catalog,null);
+assert.equal(previews,0);assert.equal(applies,0);
+// 返回相同Draft对象也不能复活已取消的预览意图。
+active=old;assert.equal(loader.current(old),null);
 """)
 
     def test_protocol_scope_null_preview_apply_and_recoverable_errors(self):

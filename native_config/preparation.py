@@ -1,4 +1,4 @@
-"""显式插件来源的只读候选与原生文件创建计划，不执行插件内任何代码。"""
+"""显式插件来源的静态校验与内部补缺计划，不执行插件内任何代码。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import tomllib
 
 from . import codecs, storage
@@ -35,7 +37,6 @@ def _relative(root, value):
 class Candidate:
     id: str
     name: str
-    description: str
     body: bytes
 
 
@@ -153,7 +154,7 @@ def load(root: Path) -> Source:
         names.add(entry["name"])
         paths.add(entry["path"])
         candidates.append(Candidate("candidate_" + _hash((source_id + "\0" + entry["name"]).encode()),
-                                    entry["name"], entry["description"], rendered))
+                                    entry["name"], rendered))
     index_projection = projections.get(INDEX)
     if (not isinstance(index_projection, dict) or index_projection.get("source") != "product/ROLES.yaml"
             or index_projection.get("transform") != "codex-native-template-index-v1"
@@ -201,56 +202,31 @@ def unavailable_diagnostic(root):
             "runtime_verified": False}
 
 
-def public(source, state, host_root):
-    result = {"supported": source is not None, "source_id": source.id if source else None,
-              "source_revision": source.revision if source else None, "candidates": []}
-    if source is None:
-        return result
-    parent = (state.project / ".codex" if state.scope == "project" else host_root) / "agents"
+def missing_plan(source, state, host_root):
+    """仅供维护 open 内部使用：固定用户级写入目标，保留当前范围全部同名定义。
+
+    名称与正文以显式已验证的规范投影索引为准，不另维护第二份角色名表。
+    计划仍使用 storage.Write 与后续服务 guard，不提供客户端候选选择、目标路径
+    或任意正文入口。未能完整读取清单时失败关闭，防止误判同名定义不存在。
+    """
+    if (source is None or state.host != "codex" or state.scope not in {"global", "project"}
+            or (state.scope == "project") != (state.project is not None)):
+        raise ConfigError("当前来源不支持用户级原生定义补齐")
+    if not state.inventory.complete or any(row.get("code") in {"invalid_agent", "unsupported_format", "agent_missing"}
+                                          for row in state.inventory.diagnostics):
+        raise ConfigError("原生定义清单无法安全读取，未自动补齐")
+    parent = host_root / "agents"
+    parent_stamp = storage.directory_stamp(parent)
+    existing_names = {agent.document.name for agent in state.inventory.agents}
+    writes = []
     for item in source.candidates:
         path = parent / (item.name + ".toml")
-        status = "missing"
-        try:
-            storage.directory_stamp(parent)
-            node = storage.read(path)
-            same = [agent for agent in state.inventory.agents if agent.document.name == item.name]
-            if node.body is not None or same:
-                status = "existing" if len(same) == 1 and same[0].path == path else "conflict"
-            if not state.inventory.complete or any(row.get("code") in {"invalid_agent", "unsupported_format", "agent_missing"}
-                                                    for row in state.inventory.diagnostics):
-                status = "blocked"
-        except (ValueError, OSError):
-            status = "blocked"
-        result["candidates"].append({"candidate_id": item.id, "name": item.name, "description": item.description,
-                                     "status": status, "target_path": str(path)})
-    return result
-
-
-def preview(source, state, host_root, request):
-    """客户端只能选择服务端候选 ID；路径、正文和替换项完全由已校验来源决定。"""
-    if (source is None or not isinstance(request, dict)
-            or set(request) != {"source_id", "source_revision", "candidate_ids"}):
-        raise ConfigError("当前来源不支持原生 Agent 准备")
-    if request["source_id"] != source.id or request["source_revision"] != source.revision:
-        raise ConflictError("准备来源已变化，请重新读取并预览")
-    selected = request["candidate_ids"]
-    if (not isinstance(selected, list) or not 1 <= len(selected) <= MAX_BATCH
-            or any(not isinstance(value, str) for value in selected) or len(set(selected)) != len(selected)):
-        raise ConfigError("准备候选选择无效")
-    candidates = {item.id: item for item in source.candidates}
-    rows = {row["candidate_id"]: row for row in public(source, state, host_root)["candidates"]}
-    writes, changes = [], []
-    for opaque in selected:
-        if opaque not in candidates or rows[opaque]["status"] != "missing":
-            raise ConfigError("只能准备当前缺失且无冲突的候选；现有定义保持原样")
-        item, row = candidates[opaque], rows[opaque]
-        path = Path(row["target_path"])
-        writes.append(storage.Write(opaque, path, storage.Snapshot(), item.body, storage.directory_stamp(path.parent)))
-        changes.append({"role": opaque, "name": item.name, "origin": "project" if state.scope == "project" else "user",
-                        "field": "native_definition", "before": None, "after": item.body.decode(), "path": str(path),
-                        "source_id": source.id, "source_revision": source.revision})
-    return writes, changes, ["仅创建缺失原生定义，保留全部现有文件；未设置模型或推理默认。",
-                             "文件保存后请启动新会话核实宿主加载；保存不证明实际执行。"]
+        # 已占用用户路径与本次完整清单里的同名定义均受保护，包括明确项目
+        # 已提供的定义；不因模型/正文不同新增重复用户定义，也不更改项目文件。
+        if storage.read(path).body is not None or item.name in existing_names:
+            continue
+        writes.append(storage.Write(item.id, path, storage.Snapshot(), item.body, parent_stamp))
+    return tuple(writes)
 
 
 def inventory_revision(found, created):
@@ -268,3 +244,25 @@ def inventory_revision(found, created):
         else:
             adjusted.directories.append(entry)
     return adjusted.revision()
+
+
+def directory_stamp_before_own_creation(path, stamp, previous, created):
+    """只还原本事务已排他创建目录的缺失前像，保留项目与所有非自有目录身份。
+
+    项目范围的启停快照也会记录用户配置根，首次创建用户目录会改变该继承
+    来源的目录链。不能整体忽略继承来源；只允许 storage 交付的同 inode、
+    同用户且仍为私有 0700 目录与旧 missing 边界匹配，其余变化保持 CAS 拒绝。
+    """
+    if len(stamp) != len(previous):
+        return stamp
+    cursor = Path(path.anchor)
+    adjusted = []
+    for current, before in zip(stamp, previous):
+        cursor /= current[0]
+        expected = created.get(cursor)
+        if (before == (current[0], None) and len(current) == 5 and expected == tuple(current[1:3])
+                and stat.S_IMODE(current[3]) == 0o700 and current[4] == os.getuid()):
+            adjusted.append(before)
+        else:
+            adjusted.append(current)
+    return tuple(adjusted)

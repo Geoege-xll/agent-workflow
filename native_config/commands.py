@@ -232,6 +232,29 @@ def execute(action, data_dir, host="codex", project=None, *, home=None, preparat
     if state not in {"ready", "recorded", "stopped", "unreachable"}:
         result["diagnostics"].append(_diagnostic(state, "现有连接记录或服务不兼容；未终止旧服务。"))
         return result, 1
+    if host == "codex" and preparation_source is not None:
+        # 维护 open 是唯一自动补齐边界。先完成用户级创建和实际回读，再启动或
+        # 复用控制台；status/doctor 以及 HTTP GET 永远不会走入该写入路径。
+        # 同一宿主的并发 open 由现有 storage CAS 拒绝竞态，不自动重试或重装。
+        from .contracts import ConflictError
+        try:
+            if not supported:
+                result.update(state="error", code="native_preparation_source_unavailable")
+                result["native_preparation"].update(status="failed", runtime_verified=False)
+                return result, 1
+            result["native_preparation"].update(service.prepare_missing_builtins(project=project))
+        except (OSError, ValueError, TypeError, RecursionError) as exc:
+            if isinstance(exc, ConflictError):
+                code, message = "native_preparation_conflict", "用户级原生定义补齐遇到并发变化，已安全拒绝；请检查实际文件后重新打开。"
+            elif isinstance(exc, PermissionError):
+                code, message = "native_preparation_permission_denied", "用户级原生定义补齐因目录权限不足被拒绝；请检查配置目录权限和实际文件后重新打开。"
+            else:
+                code, message = "native_preparation_failed", "用户级原生定义无法安全补齐或回读；请检查来源、目录权限和实际文件。"
+            result.update(state="error", code=code)
+            result["native_preparation"].update(status="failed", runtime_verified=False)
+            result["diagnostics"].append(_diagnostic(code, message +
+                "可能已有部分缺失定义被创建，现有定义未被覆盖；本次未启动或复用控制台，也未自动重试。"))
+            return result, 1
     try:
         from .cli import open_console
         opened = open_console(data_dir, host, project, home=home, preparation_source=preparation_source, open_browser=False)

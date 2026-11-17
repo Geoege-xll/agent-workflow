@@ -35,12 +35,8 @@
           <header class="editor-header"><div><p id="editor-eyebrow" class="eyebrow">调用偏好</p><h2 id="editor-title">调用偏好</h2><p id="context-summary" class="help">正在读取配置…</p></div><div id="advanced-entry" class="heading-actions"><button id="refresh-catalog" class="text-button" type="button">刷新目录</button><button id="open-native" type="button" hidden>原生定义</button><button id="refresh-native" class="text-button" type="button" hidden>刷新定义</button></div></header>
           <div id="native-heading" class="native-heading" hidden><button id="back-preferences" class="text-button" type="button">← 返回调用偏好</button><p class="help">高级 · 完整原生定义，插件缓存只读</p></div>
           <p id="native-readonly-summary" class="feedback" hidden>当前范围没有可写的原生定义。插件缓存不可改写；可返回调用偏好编辑通用默认或已发现调用身份。</p>
-          <!-- 准备来源独立于真实定义清单；复用本页预览确认，取消前不会创建任何文件。 -->
-          <section id="native-preparation" class="native-preparation" aria-label="准备原生 Agent" hidden>
-            <div class="preparation-entry"><div><p id="preparation-scope" class="help"></p><p id="preparation-status" class="help" role="status" aria-live="polite"></p></div><button id="prepare-native" class="secondary" type="button" aria-haspopup="dialog" aria-controls="preview-dialog" aria-describedby="preparation-scope preparation-status" disabled>准备原生 Agent</button></div>
-            <details id="preparation-candidates" class="disclosure" hidden><summary id="preparation-summary">来源与候选</summary><p id="preparation-source" class="help location"></p><ul id="preparation-items" class="preparation-items"></ul></details>
-          </section>
-          <!-- 原生清单与详情沿中央稿布局；所有内容由真实 context.roles 安全文字投影。 -->
+          <!-- 内置定义由 xy-config 打开入口自动补齐；网页只投影真实 context.roles，
+               普通读取、搜索和切换范围均不创建定义。 -->
           <div id="native-layout" class="native-layout" hidden>
             <aside class="definition-list" aria-label="原生定义清单"><label for="native-search">查找 Agent</label><input id="native-search" type="search" placeholder="名称、职责或来源" maxlength="200" autocomplete="off" aria-describedby="native-search-status"><p id="native-search-status" class="help" role="status" aria-live="polite"></p><div id="native-items"></div></aside>
             <section id="native-detail" class="definition-detail" aria-label="所选原生定义"></section>

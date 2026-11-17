@@ -1,14 +1,14 @@
 # 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`completed`
+- 阶段：`in_progress`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
 - 已验收版本：`3.0.5`
 
 ## 目标与范围
 
-本轮在配置范围切换与刷新恢复修复、Codex原生准备及代码清理通过唯一独立QA后，已发布xy-workflow `3.0.5`／Native Agent Config `0.1.4`并升级本机。新启动器固定已正式下载核验的0.1.4，不继续绑定0.1.3。当前实际正式安装为3.0.5／0.1.4；功能依据和验收见[模型配置主题](native-model-preferences.md)。
+本轮准备xy-workflow `3.0.6`／Native Agent Config `0.1.5`，交付默认补齐内置原生Agent、简洁名称列表、单一搜索焦点和调用偏好无需手动刷新。候选已完成源码审阅与隔离浏览器验证，尚待成功CI、先组件后插件正式发行及本机更新；当前实际正式安装仍为3.0.5／0.1.4。功能与边界见[模型配置主题](native-model-preferences.md)。
 
 只消费同一完整来源SHA的成功CI候选：先独立组件发布并真实下载核验，再生成published描述和最终插件来源，最后发布插件、三条stable及本机官方更新。保留现有模型、启停、安装范围和旧服务；插件安装不自动创建全局原生定义。源码QA、正式安装、宿主新会话和真实模型执行分别取证。
 
@@ -40,6 +40,10 @@
 本轮按已批准第六版配置工作台和最终评审工作台实现后发版，UI依据、功能验收分别见[模型偏好主题](native-model-preferences.md)和[评审主题](workflow-document-lifecycle.md)。来源技能及公共按需加载见 [角色技能主题](role-skill-routing.md)，文档质量见 [计划规范主题](plan-document-quality.md)。
 
 ## 当前进展与恢复入口
+
+3.0.6／0.1.5候选已冻结21路径，diff SHA `8429453c819f5384cfa62f3aabcd1a0b63687e635a02d6411e4606df591174c4`；唯一Reviewer源码审查无剩余重要问题。独立Native候选ZIP38成员／BUILD37项逐字节匹配冻结闭包，当前unpublished绑定无下载URL。早期9项版本target仅保留于原执行会话工具输出，未单独落盘完整日志；不补造历史日志，后续CI另保留完整权威输出。正式发行与安装尚未执行。
+
+以下为3.0.5／0.1.4已完成的发行与本机更新，不代表上述候选已发布。
 
 本轮功能、清理、恢复与published绑定均由同一Reviewer按实际delta复核PASS，PM实际机器validate有效；初始有效包SHA `124a419bb512676281b505847ee6b56dffa2601070660da6acba67356b59ff87`、交接SHA `ef437fa6b0fd8f6d55e5c1077f99f30bc60777401abd9d3512b20945b5d305b0`及后续各交接均完整保留。正式Release、三stable及本机升级已完成，不重复不变功能测试或新建Reviewer。
 

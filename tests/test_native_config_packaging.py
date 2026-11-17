@@ -138,7 +138,7 @@ class StandalonePackageTest(unittest.TestCase):
                                 capture_output=True, text=True, timeout=8)
         self.assertEqual(listed.returncode, 0, listed.stderr)
         context = json.loads(listed.stdout)
-        self.assertFalse(context["native_preparation"]["supported"])
+        self.assertNotIn("native_preparation", context)
         self.assertEqual(len(context["roles"]), 1)
         role = context["roles"][0]["role"]
         self.assertTrue(role.startswith("agent_"))

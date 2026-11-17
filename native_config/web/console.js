@@ -3,8 +3,6 @@
 (() => {
   "use strict";
 
-  const nativeModule = typeof module !== "undefined" && module.exports ? require("./native-definitions.js") : globalThis.ConsoleNativeDefinitions;
-
   const HOSTS = ["codex", "claude", "antigravity"];
   const HOST_LABELS = { codex: "Codex", claude: "Claude Code", antigravity: "Antigravity" };
   const FIELDS = ["model", "effort"];
@@ -271,22 +269,6 @@
       }
       return value;
     }
-    async previewPreparation(location, context, signal) {
-      const payload = nativeModule.preparationPayload(context);
-      if (!payload) throw new ApiError("invalid_input", "当前没有可准备的缺失定义，请刷新定义并核对来源。");
-      // 准备是第四种独占事务：复用鉴权与预览确认，但不发送 edits/reset、偏好或启停字段。
-      const body = {host:location.host, scope:location.scope, revision:context.revision, native_preparation:payload};
-      if (location.scope === "project") body.project = location.project;
-      const value = await this.request("/api/preview", body, signal);
-      if (typeof value.preview_id !== "string" || value.kind !== "native_preparation" || !Array.isArray(value.changes) ||
-          value.changes.some(row => !object(row) || !payload.candidate_ids.includes(row.role) || row.field !== "native_definition" ||
-            typeof row.name !== "string" || typeof row.path !== "string" || row.before !== null || typeof row.after !== "string" ||
-            row.source_id !== payload.source_id || row.source_revision !== payload.source_revision) ||
-          !Array.isArray(value.warnings) || !object(value.effect)) {
-        throw new ApiError("invalid_response", "原生 Agent 准备预览无效，未执行保存；请刷新定义后重试。");
-      }
-      return value;
-    }
     async apply(previewId) {
       const value = await this.request("/api/apply", { preview_id: previewId }, undefined, (body, status, code) => {
         if (status !== 409 || code !== "partial_failure") return undefined;
@@ -349,7 +331,7 @@
     constructor(location) {
       super(location);
       this.activation = new ActivationDraft(); this.preferences = new FieldDraft(location);
-      this.lastSave = "尚未在本页保存"; this.receipt = null; this.catalogRevision = null; this.catalogStamp = null; this.catalogAttempt = null;
+      this.lastSave = "尚未在本页保存"; this.receipt = null; this.catalogStamp = null; this.catalogAttempt = null;
     }
     accept(context, clear = false) {
       super.accept(context, clear);
@@ -410,6 +392,59 @@
     cancel() { this.controller?.abort(); this.generation++; }
   }
 
+  class CatalogLoader {
+    constructor(api, isCurrent, onState = () => {}) {
+      this.api = api; this.isCurrent = isCurrent; this.onState = onState;
+      this.owner = new RequestOwner(); this.inflight = null;
+    }
+    current(draft) {
+      // 模型来源与配置 revision 分开：保存调用偏好或启停不应让有效目录失效。
+      // 缺少来源指纹时绝不冒称旧目录有效，仍由下一次显式编辑/预览自动核实。
+      return draft.catalog && draft.catalogStamp && draft.catalogStamp === draft.context?.catalog_source_stamp ? draft.catalog : null;
+    }
+    cancel() { this.owner.cancel(); this.inflight = null; }
+    load(draft, force = false) {
+      // 同一范围的焦点读取、刷新按钮与预览必须等待同一个请求；不能因“正在读取”提前返回。
+      // 切换范围会取消 owner，即使底层忽略 AbortSignal，晚到结果也不能回写原草稿或触发预览。
+      if (this.inflight?.draft === draft && this.owner.current(this.inflight.ticket)) return this.inflight.promise;
+      if (!force && this.current(draft)) return Promise.resolve(this.current(draft));
+      const operation = {draft, ticket:this.owner.begin()};
+      draft.catalogAttempt = draft.context?.catalog_source_stamp || draft.context?.revision;
+      this.inflight = operation;
+      operation.promise = this.read(operation).catch(error => {
+        if (!this.owner.current(operation.ticket) || !this.isCurrent(draft)) return null;
+        draft.catalogFailure = error.message;
+        throw error;
+      }).finally(() => {
+        if (this.inflight !== operation) return;
+        this.inflight = null;
+        if (this.isCurrent(draft)) this.onState(draft, false);
+      });
+      this.onState(draft, true);
+      return operation.promise;
+    }
+    async read({draft, ticket}) {
+      const current = () => this.owner.current(ticket) && this.isCurrent(draft);
+      // 目录查询可能更新宿主版本/能力，因此随后回读 context；两份来源必须一致。
+      // 来源恰好变化时最多自动再读一次，持续变化则明确失败，不无限刷新或放松服务端 CAS。
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const catalog = await this.api.catalog(draft.location, ticket.signal);
+        if (!current()) return null;
+        const context = await this.api.context(draft.location, ticket.signal);
+        if (!current()) return null;
+        draft.accept(context);
+        draft.catalogAttempt = context.catalog_source_stamp || context.revision;
+        if (catalog.status !== "ready") throw new ApiError("catalog_unavailable", "模型目录读取未成功，草稿已保留；请稍后再次预览。");
+        if (catalog.source_stamp && catalog.source_stamp === context.catalog_source_stamp) {
+          draft.catalog = catalog; draft.catalogStamp = catalog.source_stamp; draft.catalogFailure = null;
+          return catalog;
+        }
+        draft.catalogStamp = null;
+      }
+      throw new ApiError("catalog_changed", "模型目录来源在读取期间持续变化，草稿已保留；请在来源稳定后再次预览。");
+    }
+  }
+
   function validCustomModelId(value) {
     // 与核心模型ID合同一致：不裁剪输入、不接受结尾换行，避免搜索词被暗改成另一配置值。
     return typeof value === "string" && value.length > 0 && value.length <= 200 &&
@@ -442,7 +477,7 @@
   }
 
   // Node 用例直接消费同一协议、草稿和菜单监听逻辑，避免测试内另写一份生产规则。
-  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices, bindContextMenus };
+  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, CatalogLoader, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices, bindContextMenus };
   if (typeof document === "undefined") return;
 
   const $ = id => document.getElementById(id);
@@ -457,7 +492,6 @@
   const nativeDefinitions = new globalThis.ConsoleNativeDefinitions.NativeDefinitions();
   const drafts = new Map();
   const loadOwner = new RequestOwner();
-  const catalogOwner = new RequestOwner();
   const previewOwner = new RequestOwner();
   let active = null;
   let editorMode = "dispatch_preferences";
@@ -477,6 +511,15 @@
   let dialogTrigger = null;
   let decisionTrigger = null;
   let connectionExpiryTimer = null;
+  const catalogLoader = new CatalogLoader(api, draft => active === draft, (draft, busy) => {
+    if (active !== draft) return;
+    refreshing = busy;
+    if (!busy) {
+      // 在预览继续前同步重算真实兼容性，避免旧目录留下的 aria-invalid 抢先拒绝有效草稿。
+      renderModels(); renderCapabilities(); renderActivation(); refreshFieldDisplays(); updateBatchEfforts();
+    }
+    setControls();
+  });
 
   function node(tag, className, text) {
     const result = document.createElement(tag);
@@ -687,9 +730,7 @@
     return resolvedField(editorDraft(), id, "model", preferenceMode()).value;
   }
   function currentCatalog() {
-    // 模型来源有独立指纹；偏好或启停保存改变 revision 不意味着模型目录失效。
-    // 空指纹代表来源不可确认，不能把旧目录绑定为当前来源。
-    return active.catalog && active.catalogStamp && active.catalogStamp === active.context?.catalog_source_stamp ? active.catalog : null;
+    return catalogLoader.current(active);
   }
   function fillEfforts(select, current, model) {
     select.replaceChildren();
@@ -791,7 +832,6 @@
     $("refresh-catalog").disabled = !available || refreshing;
     $("refresh-catalog").textContent = refreshing ? "正在刷新…" : "刷新目录";
     $("refresh-native").disabled = !connection.ready || loading || mutation;
-    $("prepare-native").disabled = !available || active.conflicted || !nativeModule.preparationPayload(active.context);
     for (const button of document.querySelectorAll("[data-definition]")) button.disabled = mutation || loading;
     $("preview-changes").disabled = !available || !current.dirty || active.conflicted || (activation ? active.activation.saved?.writable !== true : invalid);
     $("preview-changes").textContent = mutation && !$("preview-dialog").open ? "正在预览…" : "预览并保存";
@@ -946,7 +986,6 @@
     refreshFieldDisplays();
   }
   function renderNative() {
-    renderPreparation();
     const key = locationKey(active.location), rows = active.context?.roles || [];
     const projection = nativeDefinitions.project(key, rows);
     const list = $("native-items"); list.replaceChildren();
@@ -955,8 +994,9 @@
     for (const row of projection.rows) {
       const button = node("button", "definition-item"); button.type = "button"; button.dataset.definition = row.role;
       button.setAttribute("aria-pressed", String(projection.selected?.role === row.role));
-      button.append(node("strong", "", row.name || row.role), node("small", "", row.description || "宿主未提供职责说明"),
-        node("span", "", sourceLabel(row.origin) + " · " + (writable(row) ? "可编辑" : "只读")), node("small", "definition-path", row.source_path || "来源路径未提供"));
+      // 左侧只承担按名称选择的导航职责；来源、路径、权限与职责仍在右侧详情显示。
+      // 搜索继续使用完整真实行，不删搜索字段，也不把长描述重复塞进可访问名称。
+      button.append(node("strong", "", row.name || row.role));
       button.addEventListener("click", () => {
         choices.close(false); nativeDefinitions.select(key, row.role, rows); renderNative(); setControls();
         [...list.querySelectorAll("[data-definition]")].find(item => item.dataset.definition === row.role)?.focus();
@@ -969,7 +1009,7 @@
     if (!row) {
       detail.append(node("h3", "", rows.length ? "先前选择的定义已不可用" : "尚未发现自定义原生定义"), node("p", "help",
         rows.length ? "请明确选择清单中的真实定义；已有草稿不会迁移到同名来源。" : active.location.host === "codex" ?
-          "此清单只显示当前用户或项目文件中实际发现的自定义定义；Codex 内置身份和当前会话 subagent 不在磁盘清单内。仍可通过调用偏好编辑通用默认。" :
+          "此清单只显示磁盘中实际发现的原生定义。请从 Codex 的 xy-config 入口重新打开，以自动补齐缺失的内置定义；项目范围可继承用户级定义。仍可通过调用偏好编辑通用默认。" :
           "此清单来自当前用户、项目与宿主可发现的插件来源；可重新读取或载入定义所属项目。"));
       return;
     }
@@ -989,23 +1029,6 @@
     detail.append(facts, node("h4", "", "职责摘要"), node("p", "definition-description", row.description || "宿主未提供职责说明。"),
       node("p", "help native-status", "原生定义遵循宿主读取顺序；文件保存、会话加载与真实模型运行分别核实。"));
     refreshFieldDisplays();
-  }
-  function renderPreparation() {
-    const state = nativeModule.preparationState(active.context?.native_preparation, active.location.host);
-    $("native-preparation").hidden = preferenceMode();
-    $("preparation-scope").textContent = active.location.scope === "project" ?
-      "仅为本项目准备；其他项目不会获得这些定义。推荐用户级准备，可在顶部明确切换范围。" :
-      "推荐：为当前用户准备，供此用户的后续项目发现。";
-    $("preparation-status").textContent = loading ? "正在核对准备来源…" : state.message;
-    $("preparation-candidates").hidden = !state.available;
-    $("preparation-summary").textContent = "来源与候选 · " + state.missing.length + " 个可准备";
-    $("preparation-source").textContent = state.available ? "来源：" + state.source_id + " · 修订：" + state.source_revision : "";
-    const list = $("preparation-items"); list.replaceChildren();
-    for (const row of state.candidates) {
-      const item = node("li"); item.append(node("strong", "", row.name), node("span", "help", " · " + nativeModule.PREPARATION_STATUSES[row.status]),
-        node("p", "help", row.description || "来源未提供职责说明"), node("code", "location", row.target_path));
-      list.append(item);
-    }
   }
   function announceSwitch() {
     clearTimeout(switchNoticeTimer);
@@ -1039,7 +1062,6 @@
     $("native-heading").hidden = true; $("open-native").hidden = true;
     $("refresh-catalog").hidden = !preferenceMode(); $("refresh-native").hidden = preferenceMode();
     $("preference-sheet").hidden = !preferenceMode(); $("native-layout").hidden = preferenceMode();
-    $("native-preparation").hidden = preferenceMode();
     $("secondary-links").hidden = !preferenceMode();
     $("list-title").firstChild.textContent = preferenceMode() ? "逐 Agent 覆盖 " : "原生定义 ";
     $("native-readonly-summary").hidden = true;
@@ -1070,7 +1092,7 @@
   }
   function switchTo(location) {
     choices.close(false); closeContextMenus();
-    catalogOwner.cancel(); previewOwner.cancel(); refreshing = false;
+    catalogLoader.cancel(); previewOwner.cancel(); refreshing = false;
     const key = locationKey(location);
     if (!drafts.has(key)) drafts.set(key, new Draft(location));
     active = drafts.get(key);
@@ -1103,59 +1125,34 @@
     switchTo(location);
   }
   function ensureCatalog() {
-    if (!currentCatalog() && active.catalogAttempt !== (active.context?.catalog_source_stamp || active.context?.revision)) refreshCatalog();
+    // 焦点事件只对相同失败来源尝试一次，避免重绘/返回焦点形成请求循环；
+    // 用户预览始终可重新尝试，因此一次临时失败不会要求先手动刷新目录。
+    if (!currentCatalog() && active.catalogAttempt !== (active.context?.catalog_source_stamp || active.context?.revision)) return refreshCatalog(false);
+    return Promise.resolve(currentCatalog());
   }
-  async function refreshCatalog() {
-    if (!connection.ready || refreshing || loading || mutation) return;
-    const draft = active; const ticket = catalogOwner.begin(); refreshing = true; draft.catalogAttempt = draft.context?.catalog_source_stamp || draft.context?.revision; setControls();
-    message("正在读取当前平台的模型目录；已有选择与草稿会保留。");
+  async function refreshCatalog(force = true) {
+    if (!connection.ready || loading || mutation) return null;
+    const draft = active;
+    if (!force && currentCatalog() && !catalogLoader.inflight) return currentCatalog();
+    if (catalogLoader.inflight?.draft !== draft) message("正在读取当前平台的模型目录；已有选择与草稿会保留。");
     try {
-      const catalog = await api.catalog(draft.location, ticket.signal);
-      if (!catalogOwner.current(ticket) || active !== draft) return;
-      if (catalog.status !== "ready") {
-        draft.catalogFailure = "模型目录刷新未成功，已保留已有候选与草稿。";
-        message(draft.catalogFailure, "warning");
-      } else {
-        draft.catalog = catalog; draft.catalogFailure = null;
-        message("模型目录已刷新。已有字段与草稿未被重置。");
-      }
-      // Claude 真实 --version 可能改变派发能力，随后只读一次 context 以获取权威 blocked 状态。
-      const context = await api.context(draft.location, ticket.signal);
-      if (!catalogOwner.current(ticket) || active !== draft) return;
-      draft.accept(context);
-      if (catalog.status === "ready") {
-        // context 再确认目录返回期间来源未变化；晚到或换身份的目录不能盖成新来源。
-        draft.catalogRevision = context.revision;
-        draft.catalogStamp = catalog.source_stamp === context.catalog_source_stamp ? catalog.source_stamp : null;
-        if (!draft.catalogStamp) draft.catalogFailure = "目录读取后来源已变化或不可确认，候选已失效；请显式刷新。草稿保留。";
-      }
-      draft.catalogAttempt = context.catalog_source_stamp || context.revision;
+      const catalog = await catalogLoader.load(draft, force);
+      if (active === draft && catalog) message("模型目录已读取。已有字段与草稿未被重置。");
+      return catalog;
     } catch (error) {
-      if (!catalogOwner.current(ticket) || active !== draft || error.code === "cancelled") return;
-      draft.catalogFailure = "刷新失败，已有候选与选择已保留。";
-      message(error.message + " " + draft.catalogFailure, "error");
-    } finally { if (catalogOwner.current(ticket) && active === draft) { refreshing = false;
-      renderModels(); renderCapabilities(); renderActivation();
-      refreshFieldDisplays();
-      updateBatchEfforts(); setControls();
-    } }
+      if (active !== draft || error.code === "cancelled" || !connection.ready) return null;
+      message(error.message + " 目录读取失败，已有选择与草稿已保留。", "error");
+      return null;
+    }
   }
   function renderPreview(value, reset, kind = "model") {
     choices.close(false);
-    const preparation = kind === "native_preparation";
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
     const changes = $("preview-changes-list"); changes.replaceChildren();
-    $("preview-title").textContent = preparation ? "确认准备原生 Agent" : activation ? "确认工作流启停" : preferences ? reset ? "确认清除本范围调用偏好" : "确认调用偏好更改" : reset ? "确认清除本范围模型覆盖" : "确认模型配置更改";
+    $("preview-title").textContent = activation ? "确认工作流启停" : preferences ? reset ? "确认清除本范围调用偏好" : "确认调用偏好更改" : reset ? "确认清除本范围模型覆盖" : "确认模型配置更改";
     $("preview-location").textContent = describeLocation(active.location);
     for (const change of value.changes) {
-      if (preparation) {
-        // 正文与路径仅展示服务端预览结果；浏览器从不将其作为可编辑文件或新身份回传。
-        const item = node("section", "change-item"); item.append(node("h3", "", change.name + " · 创建缺失定义"),
-          node("p", "help", "目标路径：" + change.path), node("p", "help", "来源：" + change.source_id + " · 修订：" + change.source_revision));
-        const contents = node("details", "disclosure"); contents.append(node("summary", "", "查看将创建的定义"), node("pre", "preparation-content", change.after));
-        item.append(contents); changes.append(item); continue;
-      }
       if (activation) {
         const item = node("section", "change-item"); item.append(node("h3", "", "工作流插件 · " + change.plugin_id));
         item.append(node("p", "help", "目标范围：" + (change.scope === "global" ? "用户级默认" : active.location.host === "claude" ? "仅本机当前项目（local）" : "当前项目")), node("p", "help", "目标路径：" + change.source_path));
@@ -1181,10 +1178,10 @@
     }
     if (!value.changes.length) changes.append(node("p", "help", "此范围没有需要保存的字段更改。"));
     const blocked = value.dispatch_ready === false;
-    message(preparation ? "此预览仅创建缺失的原生定义；模型、调用偏好与启停草稿均保留。尚未写入，取消不会创建文件。" : activation ? "此预览仅保存工作流启停；其他两类草稿会保留。文件保存后等待新会话加载，实际运行未验证。" : preferences ? "此预览仅保存调用偏好；原生文件与启停草稿保留。保存后供后续派发前读取，不改变当前会话；实际运行未验证。" : blocked ? "配置可以保存，但当前派发受阻。原因：" + (value.blocked_reason || "服务端未提供具体原因，请重新读取。") : value.dispatch_ready === true ? "预览已生成；保存后仍需由宿主采纳，实际运行尚未验证。" : "预览已生成；派发状态未知。", !preparation && !activation && blocked ? "warning" : "info", $("preview-status"));
+    message(activation ? "此预览仅保存工作流启停；其他两类草稿会保留。文件保存后等待新会话加载，实际运行未验证。" : preferences ? "此预览仅保存调用偏好；原生文件与启停草稿保留。保存后供后续派发前读取，不改变当前会话；实际运行未验证。" : blocked ? "配置可以保存，但当前派发受阻。原因：" + (value.blocked_reason || "服务端未提供具体原因，请重新读取。") : value.dispatch_ready === true ? "预览已生成；保存后仍需由宿主采纳，实际运行尚未验证。" : "预览已生成；派发状态未知。", !activation && blocked ? "warning" : "info", $("preview-status"));
     $("preview-activation-recovery").hidden = !activation;
     if (activation) renderActivationRecovery($("preview-activation-recovery"), active.activation.saved);
-    $("preview-effect").textContent = preparation ? (active.location.scope === "project" ? "仅为本项目创建定义。" : "为当前用户创建定义。") + "已有文件不会覆盖。确认后以服务端回读发现结果更新身份清单；保存不等于新会话已加载，实际运行未验证。" : preferences ? "调用偏好保存后供下一次派发前读取；当前会话不会因此改用模型。原生完整定义的优先级、当前工具参数与实际模型执行仍须宿主确认。" : activation ? "启停保存只改变本层文件，等待新会话加载；当前会话已加载上下文不受影响，实际工作流运行未验证。" : "原生定义保存后需要宿主重新加载或重新发现。当前 Agent 不会因此切换模型，实际模型运行未验证；多文件发布不具有跨文件系统崩溃原子性。";
+    $("preview-effect").textContent = preferences ? "调用偏好保存后供下一次派发前读取；当前会话不会因此改用模型。原生完整定义的优先级、当前工具参数与实际模型执行仍须宿主确认。" : activation ? "启停保存只改变本层文件，等待新会话加载；当前会话已加载上下文不受影响，实际工作流运行未验证。" : "原生定义保存后需要宿主重新加载或重新发现。当前 Agent 不会因此切换模型，实际模型运行未验证；多文件发布不具有跨文件系统崩溃原子性。";
     const warnings = $("warning-list"); warnings.replaceChildren();
     for (const warning of value.warnings) warnings.append(node("li", "", String(warning)));
     $("preview-warnings").hidden = !value.warnings.length;
@@ -1199,34 +1196,28 @@
   }
   async function openPreview(reset = false, kind = editorMode) {
     choices.close(false);
-    const preparation = kind === "native_preparation";
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
     if (!connection.ready || !active.context || mutation || loading) return;
-    if (!activation && !preparation) {
+    const intendedDraft = active;
+    if (!activation) {
+      // 首次无缓存、来源过期和已有读取均走同一准备入口；有效缓存直接复用。
+      // 保留本次预览意图等待目录完成，随后才根据当前来源重算的状态校验兼容性。
+      const catalog = await refreshCatalog(false);
+      // 读取目录期间可切换范围或编辑入口；原预览意图不能晚到并应用到另一个范围。
+      if (active !== intendedDraft || editorMode !== kind || section !== "models" || mutation || loading) return;
+      if (!catalog) return;
       const invalid = [...document.querySelectorAll("#section-models [aria-invalid='true']")].find(control => !control.disabled);
       if (invalid) { message("推理值与当前模型不兼容，请重选或清除后再预览。", "error"); (invalid.hidden ? $(invalid.id + "-picker") : invalid)?.focus(); return; }
     }
-    const intendedDraft = active;
-    if (!activation && !preparation && active.catalog && !currentCatalog()) {
-      // 草稿可能在启停保存或外部配置变化前已完成编辑；直接点预览也必须先更新能力来源。
-      // 这是用户触发的按需读取，不放进 render；目录失败不能借旧候选继续生成计划。
-      await refreshCatalog();
-      // 读取目录期间可切换范围或编辑入口；原预览意图不能晚到并应用到另一个范围。
-      if (active !== intendedDraft || editorMode !== kind || section !== "models" || mutation || loading) return;
-      if (!currentCatalog()) { message("当前模型目录来源未确认；草稿已保留，请刷新目录成功后再预览。", "error"); return; }
-    }
     if (active.conflicted || (activation && (!active.activation.dirty || active.activation.saved?.writable !== true))) return;
-    if (preparation && !nativeModule.preparationPayload(active.context)) return;
-    if (!activation && !preparation && !reset && (preferences ? active.preferences : active).unavailableEdits.length) { message("部分草稿对应的 Agent 已消失或变为只读，请先放弃草稿。", "error"); return; }
+    if (!activation && !reset && (preferences ? active.preferences : active).unavailableEdits.length) { message("部分草稿对应的 Agent 已消失或变为只读，请先放弃草稿。", "error"); return; }
     loadOwner.cancel();
-    catalogOwner.cancel(); refreshing = false;
-    const draft = active, baseline = draft.context; const ticket = previewOwner.begin(); mutation = true; dialogTrigger = document.activeElement; setControls();
+    catalogLoader.cancel(); refreshing = false;
+    const draft = active; const ticket = previewOwner.begin(); mutation = true; dialogTrigger = document.activeElement; setControls();
     try {
-      const value = preparation ? await api.previewPreparation(draft.location, baseline, ticket.signal) : activation ? await api.previewActivation(draft.location, draft.context.revision, draft.activation.value, ticket.signal) : preferences ? await api.previewPreferences(draft.location, draft.context.revision, reset ? {} : draft.preferences.payload(), reset, ticket.signal) : await api.preview(draft.location, draft.context.revision, reset ? {} : draft.payload(), reset, ticket.signal);
+      const value = activation ? await api.previewActivation(draft.location, draft.context.revision, draft.activation.value, ticket.signal) : preferences ? await api.previewPreferences(draft.location, draft.context.revision, reset ? {} : draft.preferences.payload(), reset, ticket.signal) : await api.preview(draft.location, draft.context.revision, reset ? {} : draft.payload(), reset, ticket.signal);
       if (!previewOwner.current(ticket) || active !== draft) return;
-      // 即使同一范围被异步回读更新，也不能把旧来源指纹形成的准备计划展示为当前候选。
-      if (preparation && draft.context !== baseline) { message("准备来源已重新读取；未执行保存，请根据当前候选再次预览。", "warning"); return; }
       preview = { value, draft, kind }; renderPreview(value, reset, kind);
       $("preview-dialog").showModal(); $("preview-title").focus();
     } catch (error) {
@@ -1342,7 +1333,7 @@
         plan.draft.accept(result.context, plan.kind);
         plan.draft.lastSave = "已保存 · " + reload + " · 实际运行未验证";
         const gap = result.temporary_visibility_gap === true ? " · 文件曾有短暂可见性缺口" : "";
-        message((plan.kind === "native_preparation" ? "原生定义已准备，已按服务端回读更新清单；模型、调用偏好与启停草稿已保留" : plan.kind === "workflow_activation" ? "工作流启停已保存；其他草稿已保留" : plan.kind === "dispatch_preferences" ? "调用偏好已保存；原生字段与启停草稿已保留" : "原生字段已保存；调用偏好与启停草稿已保留") + " · " + reload + gap + " · 实际运行未验证。", "success");
+        message((plan.kind === "workflow_activation" ? "工作流启停已保存；其他草稿已保留" : plan.kind === "dispatch_preferences" ? "调用偏好已保存；原生字段与启停草稿已保留" : "原生字段已保存；调用偏好与启停草稿已保留") + " · " + reload + gap + " · 实际运行未验证。", "success");
         preview = null; $("preview-dialog").close(); render();
       }
     } catch (error) {
@@ -1394,14 +1385,13 @@
     nativeDefinitions.search(locationKey(active.location), $("native-search").value); renderNative(); setControls();
   });
   $("refresh-native").addEventListener("click", reloadContext);
-  $("prepare-native").addEventListener("click", () => openPreview(false, "native_preparation"));
   function setEditorMode(mode) { choices.close(false); editorMode = mode; render(); announceSwitch(); }
   $("open-native").addEventListener("click", () => { setEditorMode("model"); $("back-preferences").focus(); });
   $("back-preferences").addEventListener("click", () => { setEditorMode("dispatch_preferences"); document.querySelector("#default-settings .picker-trigger")?.focus(); });
   $("batch-toggle").addEventListener("click", () => { $("batch-panel").hidden = !$("batch-panel").hidden; $("batch-toggle").setAttribute("aria-expanded", String(!$("batch-panel").hidden)); });
   function reloadContext() {
     // context 内的来源指纹决定缓存是否仍有效；相同来源复用，变化只失效目录，不碰草稿。
-    catalogOwner.cancel(); refreshing = false; active.catalogAttempt = null; loadContext(true);
+    catalogLoader.cancel(); refreshing = false; active.catalogAttempt = null; loadContext(true);
   }
   $("reload-context").addEventListener("click", reloadContext);
   $("recovery-context").addEventListener("click", reloadContext);
@@ -1418,7 +1408,7 @@
     $("confirm-apply").disabled = true; $("cancel-preview").textContent = "关闭结果";
     $("preview-dialog").showModal(); $("preview-title").focus();
   });
-  $("refresh-catalog").addEventListener("click", refreshCatalog);
+  $("refresh-catalog").addEventListener("click", () => refreshCatalog());
   $("activation-state").addEventListener("change", () => { active.activation.set($("activation-state").value); renderActivation(); setControls(); });
   $("preview-changes").addEventListener("click", () => openPreview(false, section === "activation" ? "workflow_activation" : editorMode));
   $("reset-platform").addEventListener("click", () => {
@@ -1455,7 +1445,7 @@
   window.addEventListener("beforeunload", event => {
     if ([...drafts.values()].some(draft => draft.anyDirty) || mutation) { event.preventDefault(); event.returnValue = ""; }
   });
-  window.addEventListener("pagehide", () => { choices.close(false); if (choices.frame) cancelAnimationFrame(choices.frame); clearTimeout(switchNoticeTimer); clearTimeout(connectionExpiryTimer); loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
+  window.addEventListener("pagehide", () => { choices.close(false); if (choices.frame) cancelAnimationFrame(choices.frame); clearTimeout(switchNoticeTimer); clearTimeout(connectionExpiryTimer); loadOwner.cancel(); catalogLoader.cancel(); previewOwner.cancel(); });
   const contextMenus = [$("platform-menu"), $("scope-menu"), $("project-menu")];
   function closeContextMenus() { for (const menu of contextMenus) menu.open = false; }
   bindContextMenus(contextMenus, document, () => choices.close(false));
@@ -1465,7 +1455,7 @@
   for (const id of ["batch-model", "batch-effort", "activation-state"]) choices.attach($(id));
   api.onInvalidConnection = () => {
     // 身份失效立即撤销所有待显示请求和可写入口，保留当前目标及未提交草稿供恢复说明。
-    loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); loading = false; refreshing = false;
+    loadOwner.cancel(); catalogLoader.cancel(); previewOwner.cancel(); loading = false; refreshing = false;
     if (active) { active.conflicted = true; choices.close(false); setControls(); }
     $("confirm-apply").disabled = true;
     message("连接已失效，禁止保存；当前平台与项目目标和未提交草稿已保留。请回到宿主主会话，显式运行 xy-workflow:xy-config Skill 重新打开配置页。", "error");

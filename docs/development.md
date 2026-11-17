@@ -1,8 +1,8 @@
 # Agent Workflow 3.0 开发手册
 
-本源码对应工作流插件 `xy-workflow 3.0.5` 和固定配套的独立配置工具 `Native Agent Config 0.1.4`，版本源分别为 `product/PLUGIN_VERSION`、`native_config/VERSION`。[Native 0.1.4](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.4) 已采用成功 CI 原始包正式发布并真实下载核验，固定描述为 `published`。插件真实发行以 GitHub Release 和三个 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本及 QA、CI、发行、本机操作记录统一见[发行主题](plans/stable-product-release.md)；用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+本源码对应工作流插件 `xy-workflow 3.0.6` 和固定配套的独立配置工具 `Native Agent Config 0.1.5`，版本源分别为 `product/PLUGIN_VERSION`、`native_config/VERSION`。当前为待发行版本，组件固定描述暂为 `unpublished`；须采用同 SHA 成功 CI 原始包正式发布并真实下载核验后再生成 `published`。插件真实发行以 GitHub Release 和三个 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本及 QA、CI、发行、本机操作记录统一见[发行主题](plans/stable-product-release.md)；用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
-薄启动器向独立组件传入 `--preparation-source`，必须由固定 `component.json` 精确绑定支持该参数的 `0.1.4`，不能沿用旧 `0.1.3` 或仅凭库存活动版本启动。
+薄启动器向独立组件传入 `--preparation-source`，必须由固定 `component.json` 精确绑定本轮 `0.1.5`，不能沿用旧组件或仅凭库存活动版本启动。
 
 ## 权威与职责
 
@@ -72,9 +72,9 @@ CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。
 
 独立工具的源码命令、HTTP 生命周期、包结构和恢复资料边界见[原生配置说明](agent-configuration.md)。组件发行描述只登记实际发布且下载校验过的资产，不猜测 URL，不把本地构建成功写成公开稳定发行。
 
-两个产品分别版本化：先消费独立组件同 SHA 成功 CI 的原始包正式发布，实际下载核验后由唯一 `build_config_distribution.py` 生成 `published` 描述，再由最终插件 CI 固定绑定。最终候选的 Native ZIP 必须与已发布正式包同字节，之后才能发布插件及三个 stable 来源；同一版本不得重绑不同字节。Native `0.1.4` 已完成正式资产和固定描述核验，其源码与独立包 README 保持发行冻结；后者来源于 `packaging/build_agent_config.py` 内的 `README` 常量，不得以同版本修改载荷。
+两个产品分别版本化：先消费独立组件同 SHA 成功 CI 的原始包正式发布，实际下载核验后由唯一 `build_config_distribution.py` 生成 `published` 描述，再由最终插件 CI 固定绑定。最终候选的 Native ZIP 必须与已发布正式包同字节，之后才能发布插件及三个 stable 来源；同一版本不得重绑不同字节。Native `0.1.5` 的正式来源确定后，其源码与独立包 README 即保持发行冻结；后者来源于 `packaging/build_agent_config.py` 内的 `README` 常量，不得以同版本修改载荷。既有 `0.1.4` 发行资产保持原样。
 
-Codex 七角色的完整原生定义只由同源角色生成到插件非发现目录`native-agent-templates/codex`；安装和更新不向用户或项目根自动写入。用户须在`xy-config`的原生定义中明确选用户级或项目级、预览并确认缺失定义；已存在的同名定义保持，模型与推理默认不随准备写入，已准备定义也不随升级自动维护。启动器的`state/<host>`仅隔离各宿主控制台连接状态，不迁移模型或原生配置；旧`state`服务不自动停止或删除。
+Codex 七角色的完整原生定义只由同源角色生成到插件非发现目录`native-agent-templates/codex`；插件安装和更新本身不向用户或项目根自动写入。从完整 Codex 插件显式执行`xy-config open`时，按来源校验和 CAS 自动补齐用户级缺失定义；当前项目已有同名则跳过，不写项目文件。已有定义、正文、模型与推理字段保持，重复打开及升级不重写。网页不再提供手动准备入口，模型与偏好保存仍须预览确认。启动器的`state/<host>`仅隔离各宿主控制台连接状态，不迁移模型或原生配置；旧`state`服务不自动停止或删除。
 
 原生文件创建、发现、宿主加载、按名称调用与实际模型分别验收。项目信任不足或会话未暴露 `agent_type` 时，保留实际能力边界；不能将该限制替代功能 QA 的通过或失败证据，也不能改写用户信任或功能开关补造运行结论。
 

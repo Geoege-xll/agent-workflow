@@ -21,7 +21,9 @@
 :is(h2,h3) { text-wrap: balance; }
 p { text-wrap: pretty; }
 :is(button,input,select) { font: inherit; }
-:is(button,input,select,summary,a,[role="listbox"]):focus-visible { outline: 2px solid var(--workspace-focus); outline-offset: 3px; }
+/* 复合搜索框的可见边界和焦点指示统一归外层；这里只覆盖独立控件，
+   避免实际接收焦点的原生输入框再次叠加内层焦点环。其余控件保留原焦点规则。 */
+:is(button,input,select,summary,a,[role="listbox"]):where(:not(.choice-search input)):focus-visible { outline: 2px solid var(--workspace-focus); outline-offset: 3px; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-block-size: var(--console-control-height); min-inline-size: 32px; padding: 6px 12px; border: 1px solid var(--workspace-control-line); border-radius: var(--console-radius); background: var(--console-subtle); color: var(--workspace-ink); font-weight: 500; line-height: 1.4; cursor: pointer; transition: background-color 120ms ease,border-color 120ms ease; }
 button:hover { background: var(--workspace-hover); }
 button:active { background: var(--workspace-pressed); }
@@ -161,9 +163,12 @@ button.picker-trigger { display: flex; justify-content: space-between; gap: 10px
 .choice-panel { position: fixed; z-index: 100; inset: auto; display: flex; flex-direction: column; inline-size: 340px; max-inline-size: calc(100vw - 16px); margin: 0; padding: 6px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--workspace-control-line); border-radius: 9px; background: var(--console-subtle); color: var(--workspace-ink); box-shadow: 0 10px 28px #0005; }
 .choice-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-inline: 7px 0; }
 .choice-heading strong { font-size: 13px; font-weight: 500; color: var(--workspace-muted); }
-.choice-search { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; margin: 4px 2px 8px; padding-inline: 10px 2px; border: 1px solid var(--workspace-control-line); border-radius: 5px; color: var(--workspace-muted); background: var(--console-subtle); }
-.choice-search:focus-within { border-color: var(--workspace-focus); outline: 2px solid var(--workspace-focus); outline-offset: 1px; }
-.choice-search input { inline-size: 100%; min-inline-size: 0; min-block-size: var(--console-control-height); padding: 6px 8px 6px 0; border: 0; background: transparent; color: var(--workspace-ink); outline: none; }
+/* 搜索是一个复合控件：外层独占边框，输入框只负责原生搜索与文字。
+   高度 token 包含外层上下各 1px 边框，桌面外高为 36px；粗指针仍随既有 token 扩展。
+   焦点环沿同一边界内收绘制，不再形成分离的多层框；原生搜索清除按钮及键盘行为不变。 */
+.choice-search { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; min-block-size: var(--console-control-height); margin: 4px 2px 8px; padding-inline: 10px 2px; border: 1px solid var(--workspace-control-line); border-radius: var(--console-radius); color: var(--workspace-muted); background: var(--console-subtle); }
+.choice-search:has(input:focus-visible) { border-color: var(--workspace-focus); outline: 2px solid var(--workspace-focus); outline-offset: -2px; }
+.choice-search input { inline-size: 100%; min-inline-size: 0; min-block-size: calc(var(--console-control-height) - 2px); padding: 6px 8px 6px 0; border: 0; background: transparent; color: var(--workspace-ink); outline: none; }
 .choice-options { min-block-size: 0; flex: 0 1 auto; overflow: auto; overscroll-behavior: contain; border-radius: 5px; }
 .choice-option { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 7px; min-block-size: 42px; padding: 7px 9px; margin-block: 1px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
 .choice-option[data-inherited="true"] { margin-block-end: 6px; border-block-end-color: var(--workspace-line); border-end-start-radius: 0; border-end-end-radius: 0; padding-block-end: 11px; }
@@ -289,7 +294,9 @@ button.picker-trigger { display: flex; justify-content: space-between; gap: 10px
  :root { --workspace-bg: Canvas; --workspace-sidebar: Canvas; --workspace-subtle: Canvas; --workspace-ink: CanvasText; --workspace-muted: CanvasText; --workspace-faint: GrayText; --workspace-line: GrayText; --workspace-control-line: ButtonText; --workspace-selected-bg: Canvas; --workspace-selected-ink: LinkText; --workspace-focus: Highlight; --console-on-action: HighlightText; }
  .workspace-toolbar [data-section][aria-current="page"],.platform-tabs button[aria-selected="true"],.scope-options label:has(input:checked),.choice-option[data-active="true"] { outline: 1px solid Highlight; }
  .workspace-toolbar [data-section][aria-current="page"]::before { background: Highlight; }.choice-option[aria-selected="true"] { color: Highlight; }
- :is(button,input,select,summary,[role="listbox"]):focus-visible { outline: 2px solid Highlight; }
+ /* 高对比模式沿用相同焦点归属；搜索外层通过 --workspace-focus 使用 Highlight，
+    不能在此重新给内层 input 加框，否则会再次出现双焦点指示。 */
+ :is(button,input,select,summary,[role="listbox"]):where(:not(.choice-search input)):focus-visible { outline: 2px solid Highlight; }
  .chrome,.workspace-toolbar,.editor-footer,.context-menu,.dialog,.choice-panel { background: Canvas; color: CanvasText; }
 }
 
@@ -305,7 +312,9 @@ body { margin: 0; background: #111216; color: var(--workspace-ink); font: 14px/1
 #config-panel { min-width: 0; }
 .help,.location,.row-details { color: var(--workspace-muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .location,code { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; }
-input:not([type="checkbox"]):not([type="radio"]), select { width: 100%; min-width: 0; min-height: var(--console-control-height); padding: 6px 10px; border: 1px solid var(--workspace-control-line); border-radius: var(--console-radius); background: var(--console-subtle); color: var(--workspace-ink); }
+/* 独立字段才拥有完整表单外观；复合搜索框由自己的组件规则负责，
+   在通用规则入口排除它，避免高特异性覆盖组件的无边框输入与内高。 */
+input:not([type="checkbox"]):not([type="radio"]):where(:not(.choice-search input)), select { width: 100%; min-width: 0; min-height: var(--console-control-height); padding: 6px 10px; border: 1px solid var(--workspace-control-line); border-radius: var(--console-radius); background: var(--console-subtle); color: var(--workspace-ink); }
 input::placeholder { color: var(--workspace-muted); opacity: 1; }
 input:disabled { color: var(--workspace-muted); border-color: var(--workspace-line); background: var(--console-subtle); }
 input[type="radio"] { accent-color: var(--console-action); }
@@ -371,24 +380,14 @@ a { color: var(--workspace-selected-ink); }
 .editor-header h2 { font-size: 24px; line-height: 1.3; }
 .editor-header .eyebrow { font-size: 11px; }
 .native-layout { display: grid; grid-template-columns: 230px minmax(0,1fr); align-items: start; gap: 24px; }
-/* 准备入口沿用现有表面、文字与分隔线；候选是折叠说明，不形成第三层编辑器。 */
-.native-preparation { margin-block-end: 20px; padding-block-end: 16px; border-block-end: 1px solid var(--workspace-line); min-inline-size: 0; }
-.preparation-entry { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-.preparation-entry > div { flex: 1 1 300px; min-inline-size: 0; }
-.preparation-entry button { flex-shrink: 0; }
-.native-preparation .disclosure { margin-block: 10px 0; }
-.preparation-items { padding-inline-start: 20px; }
-.preparation-items li { padding-block: 8px; font-size: 13px; overflow-wrap: anywhere; }
-.preparation-items code { display: block; margin-block-start: 4px; }
-.preparation-content { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .definition-list { min-inline-size: 0; padding: 17px 14px; border: 1px solid var(--workspace-line); border-radius: 6px; background: var(--workspace-sidebar); }
 .definition-list > label { font-size: 12px; }
 #native-search-status { margin-block: 0 10px; font-size: 11px; }
-.definition-item { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; inline-size: 100%; min-block-size: 84px; gap: 4px; padding: 12px; margin-block-end: 5px; border-color: transparent; background: transparent; text-align: start; }
+/* 单行名称导航复用控件高度；长名称自然换行增高，触屏仍跟随原有尺寸 token。
+   选中态保留独立边界与背景，右侧详情继续承担来源、职责和可编辑状态说明。 */
+.definition-item { display: flex; align-items: center; justify-content: flex-start; inline-size: 100%; min-block-size: var(--console-control-height); padding: 6px 12px; margin-block-end: 5px; border-color: transparent; background: transparent; text-align: start; }
 .definition-item[aria-pressed="true"] { border-color: var(--workspace-control-line); background: var(--workspace-subtle); }
 .definition-item strong { font: 500 13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap: anywhere; }
-.definition-item small,.definition-item span { color: var(--workspace-muted); font-size: 11px; font-weight: 400; overflow-wrap: anywhere; }
-.definition-item .definition-path { font-size: 10px; }
 .definition-detail { min-inline-size: 0; padding-block: 5px; }
 .definition-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-block-end: 22px; }
 .definition-title h3 { font: 500 17px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap: anywhere; }
