@@ -64,6 +64,90 @@ class PrototypeFileEntryTest(unittest.TestCase):
             self.assertNotIn(forbidden, text)
         self.assertFalse(any(path.suffix == ".html" for path in (self.data / catalog["project_id"] / "delivery").iterdir()))
 
+    @staticmethod
+    def historical_file_tool(version):
+        """构造已冻结17项schema的有界测试输入，不把它冒称历史发行运行时。"""
+        _, captured = review.capture_tool(format_version=5)
+        # 这是旧发布schema的fixture数据，独立于当前LIVE名单；今后当前包再新增资产
+        # 不能悄悄进入历史测试输入，也不能靠引用生产私有常量掩盖历史名单被改动。
+        historical_names = (
+            "delivery.html", "review.html", "live-workspace.js", "live-connection.js",
+            "canvas-host.js", "live.css", "workspace.css", "review-state.js", "review-camera.js",
+            "feedback.js", "feedback.css", "page-shell.js", "THIRD_PARTY_NOTICES.txt",
+            "file-entry.js", "file-delivery.js", "file-page.js", "canvas-presentation.js",
+        )
+        tools = {"tool/" + name: captured["tool/" + name] for name in historical_names}
+        raw_version = (version + "\n").encode()
+        tools["tool/version.txt"] = raw_version
+        assets = {name.removeprefix("tool/"): body for name, body in tools.items()
+                  if name != "tool/version.txt"}
+        # 真实3.0.5 helper→当前helper的原字节升级另有发行证据；此处执行生产发布/
+        # 验证路径，专门保护封闭名单、version/catalog绑定、完整摘要与补偿边界。
+        return {"version": version, "payload_sha256": review._payload(raw_version, assets, format_version=5)}, tools
+
+    def verify_current_mount(self):
+        fd = workspace._open_root(self.prototype, "受管历史工具负控")
+        try:
+            return entry.verify_mount(fd, self.project, str(Path(self.page).parent), expected_data_dir=self.data)
+        finally:
+            os.close(fd)
+
+    def test_published_file_tool_schema_upgrades_without_rewriting_original(self):
+        """旧3.0.4/3.0.5完整挂载可维护升级，不能因当前新增主题资产而误判篡改。"""
+        self.prepare()
+        original = (self.project / self.page).read_bytes()
+        for version in ("3.0.4", "3.0.5"):
+            with self.subTest(version=version):
+                historical = self.historical_file_tool(version)
+                with mock.patch.object(review, "capture_tool", return_value=historical):
+                    self.prepare()
+                self.assertEqual(historical[0], self.verify_current_mount()["tool"])
+                # 识别旧完整挂载并不把旧代码当作当前正式工具；open仍要求重新prepare。
+                with self.assertRaisesRegex(entry.PreparationError, "交付工具版本已更新"):
+                    entry.require_prepared(self.project, "project.yaml", [self.page], data_dir=self.data)
+                self.assertEqual("prepared", self.prepare()["status"])
+                current, _ = review.capture_tool(format_version=5)
+                self.assertEqual(current, self.verify_current_mount()["tool"])
+                self.assertEqual(original, (self.project / self.page).read_bytes())
+
+    def test_file_tool_schema_never_accepts_missing_unknown_or_tampered_assets(self):
+        """新闭包缺主题、历史闭包变造/多项与新版本伪装旧schema均保持拒绝。"""
+        self.prepare()
+        original = (self.project / self.page).read_bytes()
+        cache = self.prototype / entry.MOUNT / "assets"
+        for missing in (("tool-theme.css",), ("tool-theme.css", "solid-glass-LICENSE.txt")):
+            saved = {name: ((cache / name).read_bytes(), (cache / name).stat().st_mode & 0o777) for name in missing}
+            try:
+                for name in missing: (cache / name).unlink()
+                with self.subTest(missing=missing), self.assertRaises(entry.PreparationError):
+                    self.verify_current_mount()
+            finally:
+                for name, (body, mode) in saved.items():
+                    (cache / name).write_bytes(body); (cache / name).chmod(mode)
+        historical = self.historical_file_tool("3.0.5")
+        with mock.patch.object(review, "capture_tool", return_value=historical):
+            self.prepare()
+        self.verify_current_mount()
+        for name, body in (("unknown.js", b"unknown"), ("file-page.js", b"changed"), ("shell.js", b"changed"), ("version.txt", b"3.0.6\n")):
+            path = cache / name
+            before = path.read_bytes() if path.exists() else None
+            mode = path.stat().st_mode & 0o777 if path.exists() else None
+            try:
+                if mode is not None: path.chmod(0o600)
+                path.write_bytes(body)
+                with self.subTest(changed=name), self.assertRaises(entry.PreparationError):
+                    self.verify_current_mount()
+            finally:
+                if before is None: path.unlink()
+                else: path.write_bytes(before); path.chmod(mode)
+        self.prepare()
+        for version in ("3.0.3", "3.0.6", "2.9.9"):
+            before = tree_snapshot(self.project)
+            with self.subTest(impostor_version=version), mock.patch.object(review, "capture_tool", return_value=self.historical_file_tool(version)):
+                with self.assertRaises(entry.PreparationError): self.prepare()
+            self.assertEqual(before, tree_snapshot(self.project), "被拒绝的schema不能改业务原稿或现有挂载")
+        self.assertEqual(original, (self.project / self.page).read_bytes())
+
     def test_tampering_mount_cache_tag_and_hardlink_rejected_without_source_mutation(self):
         self.prepare()
         original = (self.project / self.page).read_bytes()

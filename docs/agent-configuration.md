@@ -6,7 +6,7 @@
 
 配置核心只实现一次发现、字段校验、读取、预览、条件保存、恢复和诊断。网页通过本机 HTTP 使用它；命令行脚本复用相同核心；MCP 保留为按需开启的接入方式。普通网页配置和脚本查询无需 MCP。工作流核心不导入服务，也不读取服务版本。
 
-本源码配置工具版本为 `Native Agent Config 0.1.5`，版本源为 `native_config/VERSION`，与插件 `xy-workflow 3.0.6` 固定配套。当前为待发行版本，固定描述暂为 `unpublished`；须采用同 SHA 成功 CI 原始 ZIP 正式发布，实际下载与完整 BUILD 核验通过后，再由唯一装配入口生成 `published`。插件真实发行以 GitHub Release 和对应 stable 来源为准，本机版本、启用及范围以官方客户端实际列表和安装回执为准；历史与操作证据见[发行主题](plans/stable-product-release.md)。HTTP、网页、脚本和可选 MCP 共用该核心，插件不包含配置服务或网页，也不把旧 AWF 七角色 JSON 偏好迁移为原生配置。
+本源码配置工具版本为 `Native Agent Config 0.1.5`，版本源为 `native_config/VERSION`，与插件 `xy-workflow 3.0.6` 固定配套。Native `0.1.5` 已采用同 SHA 成功 CI 原始 ZIP 正式发布，实际下载与完整 BUILD 核验通过，唯一装配入口已生成 `published` 固定描述。插件真实发行以 GitHub Release 和对应 stable 来源为准，本机版本、启用及范围以官方客户端实际列表和安装回执为准；历史与操作证据见[发行主题](plans/stable-product-release.md)。HTTP、网页、脚本和可选 MCP 共用该核心，插件不包含配置服务或网页，也不把旧 AWF 七角色 JSON 偏好迁移为原生配置。
 
 ## 插件内打开
 

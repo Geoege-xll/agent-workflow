@@ -1,6 +1,6 @@
 # Agent Workflow 3.0 开发手册
 
-本源码对应工作流插件 `xy-workflow 3.0.6` 和固定配套的独立配置工具 `Native Agent Config 0.1.5`，版本源分别为 `product/PLUGIN_VERSION`、`native_config/VERSION`。当前为待发行版本，组件固定描述暂为 `unpublished`；须采用同 SHA 成功 CI 原始包正式发布并真实下载核验后再生成 `published`。插件真实发行以 GitHub Release 和三个 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本及 QA、CI、发行、本机操作记录统一见[发行主题](plans/stable-product-release.md)；用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+本源码对应工作流插件 `xy-workflow 3.0.6` 和固定配套的独立配置工具 `Native Agent Config 0.1.5`，版本源分别为 `product/PLUGIN_VERSION`、`native_config/VERSION`。固定 Native 组件已采用同 SHA 成功 CI 原始包正式发布并真实下载核验，唯一生成器已生成 `published` 固定描述。插件真实发行以 GitHub Release 和三个 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本及 QA、CI、发行、本机操作记录统一见[发行主题](plans/stable-product-release.md)；用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
 薄启动器向独立组件传入 `--preparation-source`，必须由固定 `component.json` 精确绑定本轮 `0.1.5`，不能沿用旧组件或仅凭库存活动版本启动。
 

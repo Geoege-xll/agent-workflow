@@ -1,6 +1,6 @@
 # xy-workflow 3.0.6 官方插件
 
-本包版本为 `xy-workflow 3.0.6`，唯一版本源为 `product/PLUGIN_VERSION`；固定配套 Native Agent Config `0.1.5`，其版本源为 `native_config/VERSION`。本轮源码与隔离验收已通过，正在按成功 CI 原包先发布组件、真实下载绑定，再发布插件和三端 stable 来源；组件描述当前仍为 `unpublished`。插件真实发行以 GitHub Release 和对应 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本、QA、CI、发行及本机操作记录见[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。自有 Git stable 分发不等同官方公开目录上架，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
+本包版本为 `xy-workflow 3.0.6`，唯一版本源为 `product/PLUGIN_VERSION`；固定配套 Native Agent Config `0.1.5`，其版本源为 `native_config/VERSION`。固定 Native `0.1.5` 已采用同 SHA 成功 CI 原包正式发布并真实下载核验，唯一生成器已生成 `published` 绑定。插件真实发行以 GitHub Release 和对应 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本、QA、CI、发行及本机操作记录见[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。自有 Git stable 分发不等同官方公开目录上架，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
 
 ## 载荷与职责
 

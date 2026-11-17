@@ -1,6 +1,6 @@
 # 安装 xy-workflow 正式插件
 
-本说明对应待发行的 `xy-workflow 3.0.6`，固定配套的 Native Agent Config `0.1.5` 尚待正式发布和真实下载核验，组件描述暂为 `unpublished`。插件唯一版本源为 `product/PLUGIN_VERSION`，独立配置工具版本源为 `native_config/VERSION`；真实发行以 GitHub Release 和 Git stable 来源为准，固定组件绑定以 `plugins/maintenance/component.json` 为准，本机安装以官方客户端实际列表和安装回执为准。默认通过官方客户端安装，无需克隆源码或本地构建。历史及操作记录见[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。自有 Git 正式渠道不等于官方公开目录上架，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
+本说明对应 `xy-workflow 3.0.6`，固定配套的 Native Agent Config `0.1.5` 已采用同 SHA 成功 CI 原包正式发布并真实下载核验，组件描述已由唯一生成器生成 `published` 绑定。插件唯一版本源为 `product/PLUGIN_VERSION`，独立配置工具版本源为 `native_config/VERSION`；真实发行以 GitHub Release 和 Git stable 来源为准，固定组件绑定以 `plugins/maintenance/component.json` 为准，本机安装以官方客户端实际列表和安装回执为准。默认通过官方客户端安装，无需克隆源码或本地构建。历史及操作记录见[发行主题](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md)。自有 Git 正式渠道不等于官方公开目录上架，Windows 暂停。工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)，载荷合同见[PLUGIN](PLUGIN.md)。
 
 本页 `xy-workflow` 身份由 `product/command_identity.json` 唯一维护；使用下列命令时核对匹配的远程分发资产与客户端回执，
 不能仅凭源码版本或命令说明判断本机已经切换。活动任务使用原物理资源完成后再按官方客户端切换。
@@ -117,8 +117,8 @@ status/doctor 不准备组件、创建连接或权限记录，不启动 HTTP、�
 
 既有组件功能提供本机模型目录、用户／项目调用偏好和工作流项目启停；准确发行状态以 Release 资产与固定描述为准，不从源码版本推断已经安装。配置页默认进入“调用偏好”，原生定义文件为独立模式；Codex 零原生文件或 Claude 仅有只读插件角色时仍有通用偏好入口。纯只读解析器随插件交付，不需要常驻配置服务。
 
-`3.0.6／0.1.5` 正式发行并安装后，从完整 Codex 插件显式执行 `xy-config open` 会按来源校验和 CAS 自动补齐用户级缺失内置原生定义，实际回读后打开控制台。当前项目已有同名定义时跳过，不写项目文件；现有定义、正文及模型和推理字段保持，重复打开与升级不重写。网页不再提供手动准备按钮，模型与调用偏好仍先预览再确认保存。插件安装本身不创建原生文件，来源版本变化需显式维护；用户级完整定义不代表统一全局模型已生效。
+使用 `3.0.6／0.1.5` 组合时，从完整 Codex 插件显式执行 `xy-config open` 会按来源校验和 CAS 自动补齐用户级缺失内置原生定义，实际回读后打开控制台。当前项目已有同名定义时跳过，不写项目文件；现有定义、正文及模型和推理字段保持，重复打开与升级不重写。网页不再提供手动准备按钮，模型与调用偏好仍先预览再确认保存。插件安装本身不创建原生文件，来源版本变化需显式维护；用户级完整定义不代表统一全局模型已生效。
 
-新版启动器须使用固定描述绑定的 `0.1.5` 组件，不能沿用旧组件。固定配套组件须先正式发行与真实下载核验，实际安装版本和范围仍须通过官方客户端核对。控制台连接状态使用 `state/<host>/<组件版本>/source-<插件物理根SHA-256>`，按宿主、已校验组件版本和解析后的插件物理来源隔离，同一身份重复打开复用服务。原生定义与调用偏好仍位于各宿主唯一实际配置根，不随连接目录复制或迁移；升级不会自动停止或删除旧 `state` 根服务。
+新版启动器须使用固定描述绑定的 `0.1.5` 组件，不能沿用旧组件。固定配套组件已完成正式发行与真实下载核验，实际安装版本和范围仍须通过官方客户端核对。控制台连接状态使用 `state/<host>/<组件版本>/source-<插件物理根SHA-256>`，按宿主、已校验组件版本和解析后的插件物理来源隔离，同一身份重复打开复用服务。原生定义与调用偏好仍位于各宿主唯一实际配置根，不随连接目录复制或迁移；升级不会自动停止或删除旧 `state` 根服务。
 
 组件首次准备仍须单独确认，并只采用实际下载核验的固定地址与摘要。它不代表工作流已上架公开目录或成为稳定发行；停用后的独立恢复、字段支持和实际运行边界见[配置工具说明](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/agent-configuration.md)。
