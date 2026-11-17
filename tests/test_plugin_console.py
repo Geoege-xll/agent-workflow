@@ -157,7 +157,7 @@ assert.equal(choiceCloses,menus.length);
     def test_connection_exchange_reload_priority_expiry_and_storage_boundaries(self):
         # 同一生产连接模块验证原token只交换一次、恢复先健康核验，且不损坏其它history消费者。
         self.run_javascript(r"""
-const {Connection, STORAGE_KEY, HISTORY_KEY, sessionContract} = require('./native_config/web/connection.js');
+const {Connection, STORAGE_KEY, HISTORY_KEY, sessionContract, navigation, validProject} = require('./native_config/web/connection.js');
 const values = new Map(), origin = 'http://127.0.0.1:43210';
 const storage = {getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
 const history = {state:{unrelated:'preserved'},replaceState(value, _title, url){this.state=value;assert.equal(url,'/');}};
@@ -179,10 +179,49 @@ await restored.start(new URLSearchParams());
 assert.deepEqual(restored.initial,{host:'antigravity',scope:'project',project:'/fixture/very long project',view:'native'});
 assert.equal(calls.filter(call=>call.path==='/api/session').length,1,'普通reload不能再签发/延长');
 assert.equal(history.state[HISTORY_KEY].project,'/fixture/very long project');
+// 精确重现项目 → 用户级 → 普通刷新：当前 API 范围保持 global，独立导航提示应保留已知项目。
+restored.remember({host:'antigravity',scope:'global'},'native');
+const globalReload = new Connection(api,env);api.connection=globalReload;
+await globalReload.start(new URLSearchParams());
+assert.deepEqual(globalReload.initial,{host:'antigravity',scope:'global',view:'native'});
+assert.equal(globalReload.knownProject,'/fixture/very long project','普通刷新不应丢失已知项目导航提示');
+assert.equal(Object.hasOwn(history.state[HISTORY_KEY],'project'),false,'global 历史导航不能冒充项目范围');
+assert.equal(history.state[HISTORY_KEY].knownProject,globalReload.knownProject);
+assert.equal(Object.hasOwn(JSON.parse(values.get(STORAGE_KEY)),'knownProject'),false,'会话存储仍只有派生凭据');
+// 用真实业务 API 验证提示不会混入 global 请求，再由实际导航合同切回该项目。
+const contextRequests=[];
+const contextApi=new ModelApi('test',async path=>{
+  contextRequests.push(path);const query=new URL(path,origin).searchParams;
+  return response({...context(),host:query.get('host'),scope:query.get('scope'),project:query.get('project')});
+});
+await contextApi.context(globalReload.initial);
+assert.equal(new URL(contextRequests[0],origin).searchParams.has('project'),false);
+const returnLocation=navigation({...globalReload.initial,scope:'project',project:globalReload.knownProject});
+assert.equal(returnLocation.project,'/fixture/very long project');
+globalReload.remember(returnLocation,'native');
+await contextApi.context(returnLocation);
+assert.equal(new URL(contextRequests[1],origin).searchParams.get('project'),'/fixture/very long project');
+// history 是可篡改输入；非法提示只能被忽略，不能扩大当前范围或保留到下一次历史记录。
+for(const hint of [undefined,null,42,{},'relative/project','/fixture/../other','/'+'a'.repeat(4096),'/fixture/\ncontrol','/fixture/\x00control']) {
+  assert.equal(validProject(hint),false);
+  history.state[HISTORY_KEY]={host:'codex',scope:'global',view:'native',knownProject:hint};
+  const invalidHint=new Connection(api,env);api.connection=invalidHint;
+  await invalidHint.start(new URLSearchParams());
+  assert.deepEqual(invalidHint.initial,{host:'codex',scope:'global',view:'native'});
+  assert.equal(invalidHint.knownProject,null);
+  assert.equal(Object.hasOwn(history.state[HISTORY_KEY],'knownProject'),false);
+}
+history.state[HISTORY_KEY]={host:'antigravity',scope:'global',view:'native',knownProject:'/fixture/old'};
 // 新有效入口优先，旧项目目标不能覆盖新host/global；非法会话和实例切换均撤销恢复凭据。
 const replacement = new Connection(api,env);api.connection=replacement;
 await replacement.start(new URLSearchParams({token:'new-original',host:'codex'}));
 assert.equal(replacement.initial.scope,'global');assert.equal(replacement.initial.host,'codex');
+assert.equal(replacement.knownProject,null);assert.equal(Object.hasOwn(history.state[HISTORY_KEY],'knownProject'),false);
+history.state[HISTORY_KEY]={host:'antigravity',scope:'global',view:'native',knownProject:'/fixture/old'};
+const newProject=new Connection(api,env);api.connection=newProject;
+await newProject.start(new URLSearchParams({token:'new-project-entry',host:'claude',project:'/fixture/new'}));
+assert.equal(newProject.initial.project,'/fixture/new');assert.equal(newProject.knownProject,'/fixture/new');
+assert.equal(history.state[HISTORY_KEY].knownProject,'/fixture/new','新项目入口优先于旧提示');
 const badApi = new ModelApi('',async()=>response({protocol_version:2,instance_id:'c'.repeat(32)}));
 const mismatched = new Connection(badApi,env);badApi.connection=mismatched;
 await assert.rejects(mismatched.start(new URLSearchParams()),error=>error.code==='instance_changed');
@@ -191,10 +230,20 @@ assert.equal(sessionContract({...derived,expires_at:Date.now()-1},origin),null);
 assert.equal(sessionContract({...derived,origin:'http://127.0.0.1:other'},origin),null);
 const missing = new Connection(api,env);api.connection=missing;
 await assert.rejects(missing.start(new URLSearchParams()),error=>error.code==='authentication');
+assert.equal(missing.knownProject,'/fixture/new','认证失败只保留导航提示，不恢复可写连接');assert.equal(missing.ready,false);
 const blockedEnv={...env,storage:()=>{throw Error('blocked');}};
 const memory = new Connection(api,blockedEnv);api.connection=memory;
-await memory.start(new URLSearchParams({token:'memory-original'}));assert.equal(memory.ready,true);assert.equal(memory.storageAvailable,false);
+await memory.start(new URLSearchParams({token:'memory-original',project:'/fixture/memory'}));assert.equal(memory.ready,true);assert.equal(memory.storageAvailable,false);
+memory.remember({host:'codex',scope:'global'},'native');
+const blockedReload=new Connection(api,blockedEnv);api.connection=blockedReload;
+await assert.rejects(blockedReload.start(new URLSearchParams()),error=>error.code==='authentication');
+assert.equal(blockedReload.initial.scope,'global');assert.equal(blockedReload.knownProject,'/fixture/memory');assert.equal(blockedReload.ready,false);
 memory.session.expires_at=0;assert.throws(()=>memory.authorize(),error=>error.code==='authentication');assert.equal(api.token,'');
+values.set(STORAGE_KEY,JSON.stringify({...derived,expires_at:Date.now()-1}));
+const expiredReload=new Connection(api,env);api.connection=expiredReload;
+await assert.rejects(expiredReload.start(new URLSearchParams()),error=>error.code==='authentication');
+assert.equal(expiredReload.initial.scope,'global');assert.equal(expiredReload.knownProject,'/fixture/memory');
+assert.equal(values.has(STORAGE_KEY),false);assert.equal(api.token,'');
 // 401/403从共享请求层失效，不能继续使用上次context保存。
 for(const status of [401,403]) {
  let invalidated=0; const denied=new ModelApi('derived',async()=>response({error:{code:'unauthorized'}},status));

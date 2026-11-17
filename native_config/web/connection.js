@@ -6,9 +6,14 @@
   const HOSTS = ["codex", "claude", "antigravity"];
   const REOPEN = "请回到宿主主会话，显式运行 xy-workflow:xy-config Skill 重新打开配置页。";
   const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  function validProject(value) {
+    // 导航提示与项目输入共用同一语法边界；这不是路径授权，真实目录仍由服务端核验。
+    return typeof value === "string" && value.startsWith("/") && value.length <= 4096 &&
+      !value.split("/").includes("..") && !/[\x00-\x1f]/.test(value);
+  }
   function navigation(value) {
     if (!object(value) || !HOSTS.includes(value.host) || !["global", "project"].includes(value.scope)) return null;
-    if (value.scope === "project" && (typeof value.project !== "string" || !value.project.startsWith("/") || value.project.length > 4096 || value.project.split("/").includes("..") || /[\x00-\x1f]/.test(value.project))) return null;
+    if (value.scope === "project" && !validProject(value.project)) return null;
     return {host:value.host, scope:value.scope, ...(value.scope === "project" ? {project:value.project} : {}),
       view:["preferences", "native", "activation", "diagnostics"].includes(value.view) ? value.view : "preferences"};
   }
@@ -22,6 +27,7 @@
   class Connection {
     constructor(api, environment) {
       this.api = api; this.environment = environment; this.session = null; this.ready = false; this.storageAvailable = true;
+      this.knownProject = null;
     }
     error(code, message) { const error = new Error(message + " " + REOPEN); error.code = code; return error; }
     clear() {
@@ -31,6 +37,10 @@
     remember(location, view) {
       // history只记录非秘密导航，并合并其它消费者已有state；原入口/派生令牌均不进入history。
       const value = navigation({...location, view}); if (!value) return;
+      // 当前范围与“返回已知项目”的非秘密提示分开：global 导航绝不带 project，
+      // 也不清掉本页已经明确选择的项目。提示仅进入 history，不混入会话凭据或 API location。
+      if (value.scope === "project") this.knownProject = value.project;
+      if (validProject(this.knownProject)) value.knownProject = this.knownProject;
       const {history} = this.environment;
       try { history.replaceState({...(object(history.state) ? history.state : {}), [HISTORY_KEY]:value}, "", this.environment.cleanUrl); }
       catch (_) { /* history受限不影响当前合法会话；刷新上下文恢复能力由浏览器决定。 */ }
@@ -38,10 +48,15 @@
     async start(fragment) {
       const env = this.environment;
       const fresh = Boolean(fragment.get("token"));
-      const storedNavigation = navigation(env.history.state?.[HISTORY_KEY]);
+      const stored = env.history.state?.[HISTORY_KEY];
+      const storedNavigation = navigation(stored);
       this.initial = fresh ? navigation({host:HOSTS.includes(fragment.get("host")) ? fragment.get("host") : "codex",
         scope:fragment.get("project") ? "project" : "global", project:fragment.get("project"), view:"preferences"}) : storedNavigation;
       this.initial ||= {host:"codex", scope:"global", view:"preferences"};
+      // 新入口只认本次明确传入的项目；普通刷新才恢复已校验的提示。
+      // 提示不能把 initial 从 global 变成 project，旧历史也不能污染新入口。
+      this.knownProject = this.initial.scope === "project" ? this.initial.project :
+        !fresh && storedNavigation && validProject(stored?.knownProject) ? stored.knownProject : null;
       // 清片段发生在第一个异步点前；失败也不会将带认证片段的地址保留给复制操作。
       this.remember(this.initial, this.initial.view);
       try {
@@ -76,7 +91,7 @@
       this.clear(); throw this.error("authentication", "连接凭据缺失或已过期，禁止保存；当前平台与项目目标已保留。");
     }
   }
-  const exports = {Connection, navigation, sessionContract, STORAGE_KEY, HISTORY_KEY, REOPEN};
+  const exports = {Connection, navigation, validProject, sessionContract, STORAGE_KEY, HISTORY_KEY, REOPEN};
   if (typeof module !== "undefined" && module.exports) module.exports = exports;
   else globalThis.ConsoleConnection = exports;
 })();

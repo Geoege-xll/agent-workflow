@@ -452,6 +452,7 @@
     origin:window.location.origin, cleanUrl:window.location.pathname + window.location.search,
     history:window.history, storage:() => window.sessionStorage
   });
+  const validProject = globalThis.ConsoleConnection.validProject;
   api.connection = connection;
   const nativeDefinitions = new globalThis.ConsoleNativeDefinitions.NativeDefinitions();
   const drafts = new Map();
@@ -1045,10 +1046,6 @@
     renderModels(); renderCapabilities(); renderDiagnostics(); renderActivation(); renderRows(); updateBatchEfforts(); setControls();
     connection.remember(location, section === "models" ? preferenceMode() ? "preferences" : "native" : section);
   }
-  function validProject(path) {
-    // 这里只做输入反馈；真实路径权限、链接身份和存在性仍由服务端权威检查。
-    return path.startsWith("/") && path.length <= 4096 && !path.split("/").includes("..") && !/[\x00-\x1f]/.test(path);
-  }
   async function loadContext(announce = false) {
     const draft = active; const ticket = loadOwner.begin(); loading = true; render();
     if (!connection.ready) {
@@ -1483,7 +1480,8 @@
     const initial = connection.initial;
     editorMode = initial.view === "native" ? "model" : "dispatch_preferences";
     section = ["activation", "diagnostics"].includes(initial.view) ? initial.view : "models";
-    $("project-path").value = initial.project || "";
+    // 只填回项目导航输入，不改变当前 API 范围，也不恢复任何未保存草稿。
+    $("project-path").value = initial.project || connection.knownProject || "";
     switchTo(initial);
     if (failure) message(failure.message, "error");
     else if (!connection.storageAvailable) message("浏览器拒绝会话存储；当前页面可继续使用内存连接。刷新后须显式运行 xy-workflow:xy-config 重新打开。", "warning");
