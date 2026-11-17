@@ -1,8 +1,8 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生Agent配置工具。当前已交付正式版本为`xy-workflow 3.0.4`与`Native Agent Config 0.1.3`，两个源码版本源分别为`product/PLUGIN_VERSION`和`native_config/VERSION`。3.0.4文件交付行为通过唯一独立QA及双系统最终CI，三个stable来源和本机三端载荷均已核验；该轮独立配置组件保持原0.1.3正式包，未重复发行或执行doctor。真实来源与边界见[发行主题](plans/stable-product-release.md)，不从安装推断新会话或模型采纳。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+本源码对应工作流插件 `xy-workflow 3.0.5` 和固定配套的独立配置工具 `Native Agent Config 0.1.4`，版本源分别为 `product/PLUGIN_VERSION`、`native_config/VERSION`。[Native 0.1.4](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.4) 已采用成功 CI 原始包正式发布并真实下载核验，固定描述为 `published`。插件真实发行以 GitHub Release 和三个 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本及 QA、CI、发行、本机操作记录统一见[发行主题](plans/stable-product-release.md)；用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
 
-当前源码版本源已准备为`3.0.5／0.1.4`，功能 QA 已通过，正式发行和本机升级尚未完成；前段`3.0.4／0.1.3`为已交付基线。新版薄启动器向独立组件传入`--preparation-source`，必须由固定`component.json`精确绑定支持该参数的`0.1.4`，不能沿用旧`0.1.3`或仅凭库存活动版本启动。
+薄启动器向独立组件传入 `--preparation-source`，必须由固定 `component.json` 精确绑定支持该参数的 `0.1.4`，不能沿用旧 `0.1.3` 或仅凭库存活动版本启动。
 
 ## 权威与职责
 
@@ -72,11 +72,11 @@ CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。
 
 独立工具的源码命令、HTTP 生命周期、包结构和恢复资料边界见[原生配置说明](agent-configuration.md)。组件发行描述只登记实际发布且下载校验过的资产，不猜测 URL，不把本地构建成功写成公开稳定发行。
 
-本轮先以`0.1.4 stable/unpublished`描述提交功能与版本，消费同 SHA 成功 CI 的独立组件原包正式发布；真实下载核验后，使用现有`build_config_distribution.py`生成`published`描述，再提交并等待最终插件 CI。最终候选的 Native ZIP 必须与先行正式包同字节；之后才能发布插件及三个 stable 来源。同一版本不得重绑不同字节，独立包 README 的源码是`packaging/build_agent_config.py`内的`README`常量，也须在首次组件发行前冻结。
+两个产品分别版本化：先消费独立组件同 SHA 成功 CI 的原始包正式发布，实际下载核验后由唯一 `build_config_distribution.py` 生成 `published` 描述，再由最终插件 CI 固定绑定。最终候选的 Native ZIP 必须与已发布正式包同字节，之后才能发布插件及三个 stable 来源；同一版本不得重绑不同字节。Native `0.1.4` 已完成正式资产和固定描述核验，其源码与独立包 README 保持发行冻结；后者来源于 `packaging/build_agent_config.py` 内的 `README` 常量，不得以同版本修改载荷。
 
 Codex 七角色的完整原生定义只由同源角色生成到插件非发现目录`native-agent-templates/codex`；安装和更新不向用户或项目根自动写入。用户须在`xy-config`的原生定义中明确选用户级或项目级、预览并确认缺失定义；已存在的同名定义保持，模型与推理默认不随准备写入，已准备定义也不随升级自动维护。启动器的`state/<host>`仅隔离各宿主控制台连接状态，不迁移模型或原生配置；旧`state`服务不自动停止或删除。
 
-本轮真实 CLI 探针的临时项目未受信任，会话未暴露`agent_type`，因此只记录文件创建和发现；按名称调用及实际模型仍未验证。该限制不能替代功能 QA 的通过或失败证据，不能为补齐证据改写用户信任或功能开关。
+原生文件创建、发现、宿主加载、按名称调用与实际模型分别验收。项目信任不足或会话未暴露 `agent_type` 时，保留实际能力边界；不能将该限制替代功能 QA 的通过或失败证据，也不能改写用户信任或功能开关补造运行结论。
 
 ## 项目与原型边界
 
@@ -111,7 +111,7 @@ bash scripts/test_workflow.sh current
 
 离线包清单、来源 SHA、静态配置和安装发现只证明各自层次。默认 PM、fresh/handoff_only、新 Agent 模型与推理生效、持续接单、同 ID 追加和独立 QA 收口需要对应真实宿主事件。包内 `runtime_verified:false` 不因构建成功自动改为 true。
 
-历史工作流插件 alpha.4 的本机精确安装结论为：Codex CLI 实际启动通过；Claude 发现通过、默认模型 90 秒无回应，PM 接管未验；AGY 安装通过待登录；App GUI 未验。历史插件 alpha.5 的远程发布和安装发现单独记录，这些插件序号不等同独立配置组件的同名 alpha 序号，也不证明当前正式候选已发布或实际运行通过。以前候选的单项原生证据在[验收记录](plans/plugin-v3-native-acceptance.md)中按历史范围保留。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
+历史宿主安装、模型运行、失败及未验证范围在[原生验收记录](plans/plugin-v3-native-acceptance.md)和[发行主题](plans/stable-product-release.md)中按实际版本保留。插件与独立组件的版本号分别管理，历史单项成功不能扩大为新版本实际运行通过。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
 
 ## 交付与文档维护
 
