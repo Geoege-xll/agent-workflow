@@ -317,14 +317,28 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         self.assertTrue(VALIDATOR.is_file(), "missing future prototype validator entrypoint")
 
     def test_repository_concrete_pages_use_standalone_source_validation(self) -> None:
-        """本仓库交付验证明确两份原稿，不借历史导航index成为第二页面权威。"""
-        # 只读取这两个实际页面及校验器捕获的安全依赖；不遍历仓库、未跟踪计划或
-        # 其他作者资料。旧index的结构与唯一登记断言仍由下方历史fixture独立保留。
-        names = ["agent-configuration.html", "prototype-workspace.html"]
+        """本仓库只有实际业务原稿走standalone，不把交付/评审工具壳当成第二份原稿。"""
+        # standalone 的对象是明确登记的业务原稿。prototype-delivery/workspace 已获
+        # 批准为承载同一原稿的工具壳；它们包含隔离 iframe，不能借仓库测试扩大业务页
+        # 的嵌入权限。这里只读取该原稿及校验器安全捕获的依赖，不遍历其他作者资料。
+        # 历史受控 index 的唯一登记/iframe权限仍由专门fixture正负控独立覆盖。
+        names = ["agent-configuration.html"]
         result = validator_module.validate_workspace(PACK, PROTOTYPE_RELATIVE.as_posix(),
             standalone=True, pages=names, adapter="project.yaml")
         self.assertEqual([(PROTOTYPE_RELATIVE / name).as_posix() for name in names],
                          [page["path"] for page in result["pages"]])
+
+    def test_repository_tool_wrappers_are_rejected_as_standalone_business_pages(self) -> None:
+        """真实工具原型不获得业务页特权：含单个隔离iframe也必须被standalone拒绝。"""
+        # 直接消费已批准工具文件而不复制/改写它们，防止今后再次把工具壳加入业务原稿
+        # 正控。错误必须来自既有受控index边界，不用跳过测试或放宽生产validator造绿。
+        for name in ("prototype-delivery.html", "prototype-workspace.html"):
+            with self.subTest(page=name), self.assertRaisesRegex(
+                validator_module.ValidationError,
+                "embedded frames are supported only by the controlled prototype index, not " + re.escape(name),
+            ):
+                validator_module.validate_workspace(PACK, PROTOTYPE_RELATIVE.as_posix(),
+                    standalone=True, pages=[name], adapter="project.yaml")
 
     def test_minimal_templates_are_build_free_and_self_describing(self) -> None:
         index_path = TEMPLATE_ROOT / "index.html"
