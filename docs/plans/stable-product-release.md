@@ -1,14 +1,14 @@
 # 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`in_progress`
+- 阶段：`completed`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
-- 已验收版本：`3.0.4`
+- 已验收版本：`3.0.5`
 
 ## 目标与范围
 
-本轮在配置范围切换修复与Codex原生准备机制通过唯一独立QA后，准备发布xy-workflow `3.0.5`／Native Agent Config `0.1.4`并升级本机。新启动器需要显式来源参数，必须先发行新独立组件，再固定其已发布摘要，不能继续绑定0.1.3。当前实际正式安装仍为3.0.4／0.1.3；功能依据和验收见[模型配置主题](native-model-preferences.md)。
+本轮在配置范围切换与刷新恢复修复、Codex原生准备及代码清理通过唯一独立QA后，已发布xy-workflow `3.0.5`／Native Agent Config `0.1.4`并升级本机。新启动器固定已正式下载核验的0.1.4，不继续绑定0.1.3。当前实际正式安装为3.0.5／0.1.4；功能依据和验收见[模型配置主题](native-model-preferences.md)。
 
 只消费同一完整来源SHA的成功CI候选：先独立组件发布并真实下载核验，再生成published描述和最终插件来源，最后发布插件、三条stable及本机官方更新。保留现有模型、启停、安装范围和旧服务；插件安装不自动创建全局原生定义。源码QA、正式安装、宿主新会话和真实模型执行分别取证。
 
@@ -41,11 +41,21 @@
 
 ## 当前进展与恢复入口
 
-本轮完整功能QA已PASS且PM实际validate有效：有效包SHA `124a419bb512676281b505847ee6b56dffa2601070660da6acba67356b59ff87`，同Reviewer交接SHA `ef437fa6b0fd8f6d55e5c1077f99f30bc60777401abd9d3512b20945b5d305b0`。版本与描述已准备；当前在原包导航恢复返工后等待新的成功候选，正式Release与本机更新尚未完成。后续由同Reviewer复核实际变动，复用已验功能证据，不重做功能审查或新建Reviewer。
+本轮功能、清理、恢复与published绑定均由同一Reviewer按实际delta复核PASS，PM实际机器validate有效；初始有效包SHA `124a419bb512676281b505847ee6b56dffa2601070660da6acba67356b59ff87`、交接SHA `ef437fa6b0fd8f6d55e5c1077f99f30bc60777401abd9d3512b20945b5d305b0`及后续各交接均完整保留。正式Release、三stable及本机升级已完成，不重复不变功能测试或新建Reviewer。
 
 首轮A `30f2e93cf52bf9e19215ed622c062aebbf670ec2` 的CI `44004116389` 两系统各697项、5个验证入口夹具断言失败、4项既有跳过，候选跳过；原失败完整保留。单处独立名单补齐后，A2 `ca52dcaee79aa73796eddb79ad1716f3a46b1886` 的CI `44006177251` 两系统各697项OK、4项既有跳过，唯一附件 `14294208318` 外摘要 `b194b8c0d7d3af1ce0338bfb01f706a9917fe288418e193b647dc5477141f71c` 已核验。A2原始插件正常拒绝未发布组件准备；Native原包的临时七定义闭环、真实Codex8模型／8推理只读选择放弃和配置摘要一致均通过。
 
-A2原包追加导航测试发现项目→用户级→刷新后丢已知项目，继续阻断发行。原作者精准修复、同Reviewer增量PASS，源码候选真实Chromium复验已绿；尚待A3同SHA成功CI原包重验该场景及静态摘要。Native 0.1.4未正式发布，A2未发布包的摘要不作为最终固定绑定；没有修改A2原包或把源码绿测当成正式包结果。
+A2原包追加导航测试发现项目→用户级→刷新后丢已知项目，当时继续阻断发行。原作者精准修复、同Reviewer增量PASS后，A3 `6edaa59dc65bfbb9ebf970b5992910d0eba5e6b6` 的CI `44010918923`双系统各697项OK／4项既有跳过，实际原包恢复同场景通过并核对静态摘要；A2原包红、A3源码绿、A3原包绿分别保留，未修改旧包或混用结果。
+
+Native [0.1.4正式发行](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.4)的tag精确指向A3，非draft／prerelease、latest=false；原ZIP与sidecar两资产摘要、真实重新下载及37项BUILD均匹配，ZIP SHA为`82a50eb69457d7d486491934f4cf6443881d4274a3fece06b613589c350fb8f6`。唯一描述生成器再次实际下载后写published绑定；Native源码及独立README常量自此冻结，旧A2未发布包摘要不作最终绑定。
+
+最终插件来源B为`140f4642dcff6d10c90be4ece9f54562011789f6`。[最终CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/44016392056)两系统各运行697项OK、4项既有跳过，唯一附件`14299815879`外SHA `c1ba7bb1d3b6e5d9008e397c811e67772950ce05abced76f5248dee9065eba36`，17文件／七包及sidecar通过。Native ZIP逐字节等于已正式包。B原始薄启动器仅隔离component_root／home、未覆盖descriptor／invoke的真实安装链ready／verified；本机默认根另行正控，不用隔离结果替代。
+
+工作流[3.0.5正式Release](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.5)八资产摘要均已核验：七资产直接匹配B的CI外包原成员，`PLUGIN-SHA256SUMS`为同一候选三个正式插件ZIP摘要生成的专用单，内容及发布摘要一致；不是外包根校验单改名。tag精确B、latest=true、非draft／prerelease。现有唯一publisher本机预览后普通atomic apply一次，没有Actions发布run或force；实际Codex `6c8378aff9236b980cff398bf8d4b4b669cd06ad`、Claude `0dbc1f9b523801a76034ccbd8734c77f8743bb5b`、AGY `df7fc00b4af3174c73595e842f3f74d395ec233f`。真实远端2336／2334／2331分发文件的完整blob字节与mode匹配B投影，source_revision=B；没有把本地生成或排队状态当远端成功。
+
+本机已通过官方客户端升级，仅xy-workflow目标：Codex、Claude、AGY分别2334／2332／2330载荷文件逐字节与执行位匹配B；Codex App／CLI持久共享cache的3.0.5也独立核对。模型、推理、原生字段、dispatch、用户文档／设置、启停、范围及其他插件同口径摘要前后均为`98882273fa8868e33c9b4eecc9a7d59e43244237d247a59c5a5e50ab033efd8a`。Claude官方列表仍user／enabled=true、当前源码项目projectEnabled=false；静态activation观察不替代官方启停事实。
+
+实际持久Codex cache原始launcher在真实默认组件根open／status／doctor均ready、integrity=verified，Native0.1.4正式字节与来源绑定正确，用户新服务留ready。市场临时根先前正控仅本轮PID正常退役，完整过程保留；真实默认根未传--home或注入组件根。只读context为原生定义0／missing候选7，未创建Agent或保存模型／启停。GUI新会话、named调用和实际模型执行仍未验，Windows暂停。
 
 以下为已完成的3.0.4及更早真实发行、安装与归档事实。
 
@@ -93,13 +103,19 @@ CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1
 
 ## 验收结果与当前已交付行为
 
-当前已完整验收、发布并安装的正式组合为xy-workflow 3.0.3与Native Agent Config 0.1.3。已交付配置连接恢复与指定布局，以及唯一原稿、共享画布和独立交付／评审网页、紧凑feedback5，具体能力与证据分别见两功能主题。正式／alpha严格版本与渠道判定、候选来源及唯一附件门禁、先组件后插件、同SHA成功CI、真实下载绑定、历史库存认证分离等均保留；没有新增宿主模型能力。
+当前已完整验收、发布并安装的正式组合为xy-workflow 3.0.5与Native Agent Config 0.1.4，包含本轮范围点击／刷新恢复、显式原生准备、单快照来源CAS和上下文去重复。配置连接与既有布局、原型交付／评审能力保持，具体证据见对应功能主题。先组件后插件、同SHA成功CI、真实下载绑定和历史库存认证分离均保留；不声称新增或验证宿主模型调用能力。
 
-本轮三端dispatch偏好文件及原生模型、推理和Agent字段，均由保全的同一采样脚本生成前后摘要，完全一致；未执行任何真实模型配置保存，未改写用户值。清单的目标启用／范围和其他插件采样摘要保持；Codex清单检查范围仅xy-workflow市场，不能扩大为所有市场。Claude列表仍显示用户级enabled=true、projectEnabled=false；不据此宣布当前项目或新会话已经加载。上一3.0.1升级时Claude采样口径缺失仍属历史未证，本轮新采样不补造旧结论。
+本轮保留摘要与官方列表结论见上节，真实Agent首次创建仍需用户在产品中明确预览确认。以下3.0.3及更早的证据保留为历史，不替代本轮操作结果；历史采样缺失不由本轮补造。
 
 安装、服务可达与浏览器打开分别只是相应层证据。Codex CLI／App共享插件缓存已升级，但App图形界面新会话、三端指定模型／推理实际采纳及完整读屏未在本轮实测；官方公开目录尚未上架，Windows继续暂停。新会话仍按宿主原生权限与Hook信任处理，不直接改写信任。三个业务项目的具体原型迁移不是插件升级动作，本轮未执行。
 
 ## 批准依据与必要证据
+
+本轮完整日志、红绿回归、浏览器脚本与结果、六组原QA包／交接、CI、发行、分发及本机回执保全于 `dist/evidence/stable-product-release/stable-305-014-configuration-evidence.zip`：233个证据文件加映射索引，SHA `729a53ca9e1c755b67dd0f6052cfc3d769349ce900e6f68f681be5fffce4b299`，逐项SHA与ZIP CRC均核验。保留A2未发布失败Native小包；大型CI容器、正式包及分发Git对象由索引中的固定CI／Release恢复，不归档认证入口、服务状态和浏览器配置。
+
+同一Reviewer最后只核操作证据，未重开代码QA或新增测试；`qa-final-operations-evidence.json`结论CONSISTENT，SHA `54990abfa6bc832c332edaadaa93398c95408f5f6a991877e69361d88f14e9f9`，已纳入上述归档。默认根context原响应只在进程内解析断言，未保存原始字节；提取结果保存在`installed-default-launcher-receipt.json`，不补造原响应。任务实例已逻辑退役；本轮临时目录按归属及元数据快照精确回收，用户正式服务及旧state不在清理范围。
+
+### 3.0.3历史证据
 
 - 本轮published绑定Pack SHA `3725f762511d0e7f00aaa33ef9a9a7f4e93c84aeb697bdebad6f791207e60100`，同Reviewer交接SHA `655e8a225461673eaca59c51f229bc758d55d55b99bb52a4c47efe4dd52cdf05`，PM实际validate valid。配置功能与原型独立QA完整证据分别保留，不互相替代。
 - 最终artifact `14206591282`外摘要 `ea352ab5ea2fef6711d0c3dca72cf89bb6e42778c3e7e0d686103979a8c38e87`与GitHub一致，17成员、七包及sidecar安全且匹配；八个Release资产服务端摘要与最终CI相同。
@@ -117,4 +133,4 @@ CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1
 - 最终 artifact `14096580701` 的外 ZIP SHA `27e3f6fee07cc9c5089d2b6624aed0b9dcb00042f1d19eb8352bc100728b68f3` 与服务端一致；17 成员安全，七包及 sidecar 全部匹配，native 与先行正式资产为同一字节。
 - 完整原失败／成功日志、分阶段 Pack 与交接、Release／Git 树及安装回执保全于 `dist/evidence/stable-product-release/stable-301-011-delivery-evidence.zip`，128 个证据文件，SHA `2c2ab8227cc9ea0b99c091c9bdfddb582ee568876160f8c2fe1b6b5dc9542636`。不重复归档大型候选，原 CI 及真实 Release 可恢复相应资产。
 
-受保护旧未跟踪迁移稿不读、不改、不暂存。文档事实投影为发行后的独立提交，不改变已发布3.0.3的源码／产物身份，也不移动既有3.0.1标签或重发同版不同载荷。
+受保护旧未跟踪迁移稿不读、不改、不暂存。文档事实投影为发行后的独立提交，不改变已发布3.0.5／0.1.4的源码与产物身份，不移动既有标签或重发同版不同载荷。
