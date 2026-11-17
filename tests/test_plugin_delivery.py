@@ -352,10 +352,10 @@ class PluginDeliveryTest(unittest.TestCase):
                                  "canvas-host.js", "file-entry.js", "file-delivery.js", "file-page.js",
                                  "canvas-presentation.js", "live.css", "workspace.css", "review-state.js",
                                  "review-camera.js", "feedback.js", "feedback.css", "page-shell.js",
-                                 "THIRD_PARTY_NOTICES.txt"}
+                                 "THIRD_PARTY_NOTICES.txt", "tool-theme.css", "solid-glass-LICENSE.txt"}
                 self.assertEqual(expected_live, set(builder.PROTOTYPE_LIVE_TOOL_ASSETS))
                 self.assertEqual(expected_tools | expected_live, set(builder.PROTOTYPE_TOOL_ASSETS))
-                self.assertEqual(19, len(builder.PROTOTYPE_TOOL_ASSETS))
+                self.assertEqual(21, len(builder.PROTOTYPE_TOOL_ASSETS))
                 self.assertEqual({"templates/" + name for name in builder.TEMPLATE_FILES},
                                  {name for name in files.namelist() if name.startswith("templates/")})
                 # 三端工具、来源定位核心与上游许可按字节同源；许可不是仅有一个空文件名。
@@ -364,6 +364,8 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertEqual((PACK / relative).read_bytes(), files.read(relative))
                 self.assertIn("lib/documents/prototype_targets.py", files.namelist())
                 self.assertIn(b"MIT License", files.read("templates/prototype/THIRD_PARTY_NOTICES.txt"))
+                self.assertIn(b"Copyright (c) 2026 DeepLethe", files.read("templates/prototype/solid-glass-LICENSE.txt"))
+                self.assertIn(b"Permission is hereby granted", files.read("templates/prototype/solid-glass-LICENSE.txt"))
                 for script in ("scripts/plugin_service.py", "scripts/agent_config.py", "scripts/agent_config.sh"):
                     self.assertNotIn(script, files.namelist())
                 self.assertTrue({"mcp.json", ".mcp.json", "mcp_config.json"}.isdisjoint(files.namelist()))
@@ -931,6 +933,7 @@ class PluginDeliveryTest(unittest.TestCase):
                         self.assertEqual([page], [entry["path"] for entry in boot["pages"]])
                         self.assertIn('sandbox="allow-scripts"', shell)
                         self.assertNotIn("allow-same-origin", shell)
+                        self.assertIn('href="/assets/tool-theme.css"', shell)
                         boots.append(boot)
                     self.assertTrue(boots[0] == boots[1])
                     content_url = urlsplit(boots[0]["pages"][0]["url"])
@@ -939,6 +942,8 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertIn('data-prototype-review-bridge="5"', served)
                     self.assertNotIn('<script src=".xy-prototype-entry/entry.js"', re.sub(r'<!--.*?-->', '', served, flags=re.S))
                     self.assertNotIn('data-prototype-review-bridge="5"', concrete.read_text(encoding="utf-8"))
+                    self.assertNotIn("tool-theme.css", served)
+                    self.assertNotIn("tool-theme.css", concrete.read_text(encoding="utf-8"))
                     for name in builder.PROTOTYPE_LIVE_TOOL_ASSETS:
                         packaged = (root / "templates/prototype" / name).read_bytes()
                         self.assertEqual((PACK / "templates/prototype" / name).read_bytes(), packaged)

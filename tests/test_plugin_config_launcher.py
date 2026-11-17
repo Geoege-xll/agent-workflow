@@ -223,11 +223,13 @@ class PluginConfigLauncherTest(unittest.TestCase):
         """
         version = "0.1.0-alpha.4"
         # 0.1.3 增加的会话模块与两个页面脚本，以及 0.1.4 新增的原生准备
-        # 模块都不属于 alpha.4 的发行闭包，不能随当前源码倒灌进历史库存。
+        # 模块，以及后来加入的共享主题与许可，都不属于 alpha.4 的发行闭包，
+        # 不能随当前源码倒灌进历史库存。BUILD 继续重建历史四字段，不扩展格式。
         # 显式剔除新资源来恢复历史形态，保留下方 30／29 的旧合同；不能把
         # 当前构建器持续增加的资源倒灌进历史库存，或通过放宽数量断言造绿。
         current_only = {"native_config/browser_sessions.py", "native_config/web/connection.js",
-                        "native_config/web/native-definitions.js", "native_config/preparation.py"}
+                        "native_config/web/native-definitions.js", "native_config/preparation.py",
+                        "templates/prototype/tool-theme.css", "templates/prototype/solid-glass-LICENSE.txt"}
         bodies = {name: body for name, body in self.bodies.items()
                   if name != "BUILD.json" and not name.startswith("product/") and name not in current_only}
         bodies["native_config/VERSION"] = (version + "\n").encode("ascii")
@@ -321,9 +323,10 @@ class PluginConfigLauncherTest(unittest.TestCase):
         self.assertEqual(code, 0, response)
         self.assertEqual(self.calls[0][0][1], str(target / "scripts/agent_config.sh"))
 
-    def test_current_release_missing_identity_is_rejected_with_consistent_manifest(self):
+    def test_current_release_missing_identity_or_theme_is_rejected_with_consistent_manifest(self):
         # 重算 BUILD 与外层摘要，确保拒绝原因是当前 ABI 缺失，而不是普通摘要损坏。
-        for missing in ("product/__init__.py", "product/command_identity.py", "product/command_identity.json", "product/release_channels.py"):
+        for missing in ("product/__init__.py", "product/command_identity.py", "product/command_identity.json", "product/release_channels.py",
+                        "templates/prototype/tool-theme.css", "templates/prototype/solid-glass-LICENSE.txt"):
             with self.subTest(missing=missing):
                 bodies = {name: body for name, body in self.bodies.items() if name != missing}
                 manifest = json.loads(bodies["BUILD.json"])

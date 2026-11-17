@@ -68,7 +68,8 @@
         if (mark.kind !== "anchor" && mark.operation !== "add") layer.append(outline);
         if (!["anchor", "item"].includes(mark.kind)) continue;
         const button = document.createElement("button"); button.type = "button"; button.className = `live-marker ${mark.kind} ${["modify", "add", "delete"].includes(mark.operation) ? mark.operation : ""}`;
-        button.textContent = `${mark.kind === "anchor" ? "A" : ""}${String(mark.number).padStart(2, "0")}`;
+        // 父画布与清单统一显示 R/A；这里只投影标签，绝不改写来源记录或协议。
+        button.textContent = `${mark.kind === "anchor" ? "A" : "R"}${String(mark.number).padStart(2, "0")}`;
         button.setAttribute("aria-label", `${mark.kind === "anchor" ? "定位标记" : "整改"} ${button.textContent}`);
         Object.assign(button.style, { left: `${Math.max(0, cam.x + r.x * cam.k + mark.offset * 46)}px`, top: `${Math.max(0, cam.y + r.y * cam.k - 28)}px` });
         button.addEventListener("click", () => { activateMarker(mark.kind, mark.id).catch((error) => announce(error.message)); }); layer.append(button);

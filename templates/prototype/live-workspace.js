@@ -47,6 +47,9 @@
     } });
     if (reviewing) host.attachViews(window.PrototypeFeedback.create({ model, send: host.send, locate: host.locate, verifySources: async (targets) => { await checkSource(); if (model.state.blocked) throw Error(warning.textContent); await host.verifySources(targets); }, camera: host.camera, announce, present: host.present }));
     else {
+      const toggle = $("navigation-toggle"), navigation = $("delivery-navigation");
+      // 收起只改变工具目录和焦点，不重建原稿或重置相机；HTTP 与 file 各自仅注册一次。
+      function closeNavigation() { navigation.hidden = true; toggle.setAttribute("aria-expanded", "false"); toggle.focus(); }
       // 合同仍属于交付说明，只投影子页声明的五段纯文本；评审壳不维护说明入口或副本。
       host.attachViews({ contract: window.PrototypeCanvasPresentation.contract });
       $("open-review").addEventListener("click", (event) => {
@@ -57,8 +60,9 @@
       $("open-developer").addEventListener("click", () => { $("developer-dialog").showModal(); $("developer-title").focus(); });
       $("developer-close").addEventListener("click", () => $("developer-dialog").close());
       for (const entry of boot.pages) { const link = document.createElement("a"); link.textContent = entry.label; link.dataset.page = entry.path; link.href = `/delivery/${encodeURIComponent(entry.name)}`;
-        link.addEventListener("click", (event) => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); host.navigate(entry.path).catch((error) => announce(error.message)); }); $("prototype-pages").append(link); }
-      $("navigation-toggle").addEventListener("click", () => { $("delivery-navigation").hidden = !$("delivery-navigation").hidden; $("navigation-toggle").setAttribute("aria-expanded", String(!$("delivery-navigation").hidden)); });
+        link.addEventListener("click", (event) => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); closeNavigation(); host.navigate(entry.path).catch((error) => announce(error.message)); }); $("prototype-pages").append(link); }
+      toggle.addEventListener("click", () => { navigation.hidden = !navigation.hidden; toggle.setAttribute("aria-expanded", String(!navigation.hidden)); });
+      document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !navigation.hidden) { event.preventDefault(); closeNavigation(); } });
       $("canvas-fit").addEventListener("click", host.camera.fit); $("canvas-zoom-out").addEventListener("click", () => host.camera.zoom(1 / 1.25)); $("canvas-zoom-in").addEventListener("click", () => host.camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", () => host.camera.zoom(1 / model.state.cameras[model.state.page].k));
     }
     const name = decodeURIComponent(location.pathname.split("/").at(-1)), initial = boot.pages.find((entry) => entry.name === name);

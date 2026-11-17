@@ -4,8 +4,12 @@
      平台/范围/事务是三个独立键；保存、放弃与恢复均只触达当前事务。 */
   const $ = id => document.getElementById(id);
   const copy = value => JSON.parse(JSON.stringify(value));
+  const roleIds = ["a", "b", "c", "d", "e", "f", "g"];
+  const builtinNames = ["xy-web", "xy-desktop", "xy-backend", "xy-apple", "xy-android", "xy-uiux", "xy-qa"];
+  const roleDescriptions = ["Web 页面与前端实现", "桌面应用实现", "后端服务与接口实现", "Apple 平台实现", "Android 平台实现", "UI 设计与交互原型", "独立质量审查"];
+  let selectedNative = "a";
   const hosts = {
-    codex: { label: "Codex", models: { "demo-balanced": ["low", "medium", "high"], "demo-fast": ["low", "medium"], "demo-long-context-reasoning-model-2026-preview": ["medium", "high"], "demo-code-review-specialist-extended": ["low", "medium", "high"] }, fallback: "demo-balanced", effort: "medium", identities: [], source: "原生 model/list（离线目录样本）", boundary: "展示模型自身的推理元数据。此处模型ID为虚构样本；零原生角色也可编辑通用默认，不把任务标签视为调用身份。" },
+    codex: { label: "Codex", models: { "demo-balanced": ["low", "medium", "high"], "demo-fast": ["low", "medium"], "demo-long-context-reasoning-model-2026-preview": ["medium", "high"], "demo-code-review-specialist-extended": ["low", "medium", "high"] }, fallback: "demo-balanced", effort: "medium", identities: builtinNames, source: "原生 model/list（离线目录样本）", boundary: "展示模型自身的推理元数据。此处模型ID为虚构样本；本样本展示 xy-config open 自动补齐的七个内置角色；网页不手动创建定义。" },
     claude: { label: "Claude Code", models: { sonnet: ["low", "medium", "high"], haiku: ["low", "medium"], opus: ["low", "medium", "high"] }, fallback: "sonnet", effort: "medium", identities: ["demo-tools:reviewer", "researcher"], source: "配置根、用户菜单与别名映射（离线目录样本）", boundary: "调用偏好使用官方别名。目录出现不代表账户可调用，推理候选不证明当前工具参数支持；实际运行未验证。原生文件可接受受支持的完整ID。" },
     antigravity: { label: "Antigravity", models: { flash: [], pro: [] }, fallback: "flash", effort: "", identities: ["reviewer", "planner"], source: "agy models 会话目录＋子代理 tier 合同（离线样本）", boundary: "完整会话ID demo-session-model-01 仅供会话目录展示，不出现在子代理候选中。子代理只使用 inherit / flash / pro；独立推理与调用schema未核实，此原型不生成调用参数。" }
   };
@@ -16,13 +20,15 @@
   // 切换回执可短时收起；草稿数量、当前对象、保存结果不依赖该计时器。
   let switchNoticeTimer = null;
   const key = (h = host, s = scope) => `${h}:${s}${s === "project" ? ":" + project : ""}`;
+  const visibleRoleIds = () => roleIds.slice(0, hosts[host].identities.length);
+  const nativeKey = () => host === "codex" ? selectedNative : "user";
   // 首次创建独立样本：项目的继承来源是已保存的用户级值，不偷用其他范围的未保存草稿。
   function location(h = host, s = scope) {
     const id = key(h, s);
     if (!locations.has(id)) {
-      const preferences = { default: { model: "", effort: "" }, a: { model: "", effort: "" }, b: { model: "", effort: "" } };
+      const preferences = Object.fromEntries(["default", ...roleIds].map(id => [id, { model: "", effort: "" }]));
       if (h === "claude" && s === "global") preferences.a.model = "opus";
-      const native = { user: { model: s === "global" ? hosts[h].fallback : "", effort: h === "antigravity" ? "" : "medium" } };
+      const native = Object.fromEntries(["user", ...roleIds].map(id => [id, { model: s === "global" ? hosts[h].fallback : "", effort: h === "antigravity" ? "" : "medium" }]));
       const values = { preferences, native, activation: { state: "inherit" } };
       const result = { selected: new Set(), needsReload: false, lastSave: "演示初始值" };
       for (const [name, value] of Object.entries(values)) result[name] = { saved: copy(value), draft: copy(value), partial: null, receipt: "", savedOnce: false };
@@ -34,7 +40,7 @@
   const current = () => location()[currentKind()];
   const scopeName = () => scope === "global" ? "用户级" : `当前项目 · ${project.split("/").pop()}`;
   const contextName = () => `${hosts[host].label} · ${scopeName()}`;
-  const targetName = id => id === "default" ? "通用默认" : id === "user" ? `原生定义 ${host === "antigravity" ? "planner" : "researcher"}` : hosts[host].identities[id === "a" ? 0 : 1];
+  const targetName = id => id === "default" ? "通用默认" : id === "user" ? `原生定义 ${host === "antigravity" ? "planner" : "researcher"}` : hosts[host].identities[roleIds.indexOf(id)];
   function changes(store = current()) {
     const rows = [];
     if ("state" in store.draft) {
@@ -143,20 +149,21 @@
   }
   function render() {
     const config = hosts[host], loc = location();
+    if (!roleIds.includes(selectedNative)) selectedNative = "a";
     document.querySelectorAll("[data-host]").forEach(node => { const active = node.dataset.host === host; node.setAttribute("aria-selected", String(active)); node.tabIndex = active ? 0 : -1; });
     $("platform-content").setAttribute("aria-labelledby", `platform-${host}`);
     $("scope-label").textContent = contextName(); $("loaded-project").textContent = project;
     $("current-platform").textContent = config.label;
     $("current-scope").textContent = scope === "global" ? "用户级" : `项目 · ${project.split("/").pop()}`;
-    $("open-native").hidden = mode === "native"; $("back-preferences").hidden = mode !== "native";
+    $("open-native").hidden = true; $("back-preferences").hidden = true;
     $("project-location-label").textContent = `项目位置 · ${project.split("/").pop()}`;
     $("scope-subtitle").textContent = scope === "global" ? "此平台的所有项目默认使用" : "仅此项目覆盖 · 其他项目继承用户级";
-    document.querySelectorAll("[data-section]").forEach(node => { if (node.dataset.section === section) node.setAttribute("aria-current", "page"); else node.removeAttribute("aria-current"); });
+    document.querySelectorAll("[data-section]").forEach(node => { if (node.dataset.section === section && (!node.dataset.mode || node.dataset.mode === mode)) node.setAttribute("aria-current", "page"); else node.removeAttribute("aria-current"); });
     for (const name of ["models", "activation", "diagnostics"]) $(`section-${name}`).hidden = section !== name;
     $("preferences-editor").hidden = mode !== "preferences";
     $("native-editor").hidden = mode !== "native";
     $("editor-kicker").textContent = mode === "native" ? "高级 · 原生定义文件" : "调用偏好";
-    $("models-title").textContent = mode === "native" ? "原生定义文件" : "模型与推理";
+    $("models-title").textContent = mode === "native" ? "原生定义" : "调用偏好";
     $("editor-description").textContent = mode === "native" ? "编辑受支持的完整定义，插件缓存始终只读。" : "为后续调用设置偏好，未设置字段按来源继承。";
     prefField("default", "default-model", "default-effort", "default-error");
     for (const field of ["model", "effort"]) { const resolved = resolve("default", field); $(`default-${field}-source`).textContent = field === "effort" && host === "antigravity" ? "当前平台不支持独立推理级别" : `${resolved.source}${!Object.hasOwn(config.models, resolve("default", "model").value) ? field === "model" ? " · 目录未列出，能力未核实" : " · 工具合同候选，模型能力未核实" : ""}`; }
@@ -169,7 +176,8 @@
     const hasAgents = config.identities.length > 0;
     $("agent-count").textContent = String(config.identities.length); $("agent-empty").hidden = hasAgents; $("agent-table").hidden = !hasAgents; $("batch-toggle").disabled = !hasAgents; $("batch-toggle").hidden = !hasAgents;
     if (!hasAgents) { $("batch-editor").hidden = true; $("batch-toggle").setAttribute("aria-expanded", "false"); }
-    if (hasAgents) for (const id of ["a", "b"]) {
+    for (const id of roleIds) $(`agent-row-${id}`).hidden = !visibleRoleIds().includes(id);
+    if (hasAgents) for (const id of visibleRoleIds()) {
       $(`identity-${id}`).textContent = targetName(id);
       $(`origin-${id}`).textContent = host === "claude" && id === "a" ? "插件调用身份" : `${scope === "project" ? "项目" : "用户"}调用身份`;
       prefField(id, `model-${id}`, `effort-${id}`, `error-${id}`);
@@ -188,18 +196,20 @@
       $(`reset-${id}`).disabled = !loc.preferences.draft[id].model && !loc.preferences.draft[id].effort;
       $(`select-${id}`).checked = loc.selected.has(id); $(`select-${id}`).setAttribute("aria-label", `选择 ${targetName(id)}`);
     }
-    $("select-all").checked = loc.selected.size === 2; $("select-all").indeterminate = loc.selected.size === 1;
+    $("select-all").checked = loc.selected.size === config.identities.length; $("select-all").indeterminate = loc.selected.size > 0 && loc.selected.size < config.identities.length;
     $("preference-path").textContent = `演示保存位置：/demo/${host}/native-agent-config/dispatch-preferences.json${scope === "project" ? ` → projects[${project}]` : " → defaults / agents"}`;
-    $("native-empty").hidden = host !== "codex"; $("native-fields").hidden = host === "codex";
+    $("native-empty").hidden = true; $("native-fields").hidden = false;
+    renderNativeList();
     $("native-plugin-readonly").hidden = host !== "claude";
-    if (host !== "codex") {
-      $("native-identity").textContent = host === "claude" ? "researcher" : "planner";
-      $("native-path").textContent = `演示文件：/demo/${scope === "global" ? "user" : project.slice(6)}/${host}/agents/${host === "claude" ? "researcher.md" : "planner.yaml"}`;
-      const value = loc.native.draft.user; setOptions($("native-model"), modelEntries(), value.model); setOptions($("native-effort"), effortEntries(value.model || config.fallback), value.effort); $("native-effort").disabled = host === "antigravity";
+    {
+      $("native-identity").textContent = host === "codex" ? targetName(selectedNative) : host === "claude" ? "researcher" : "planner";
+      $("native-description").textContent = host === "codex" ? roleDescriptions[roleIds.indexOf(selectedNative)] : "用户原生定义 · 完整内容按宿主规则读取";
+      $("native-path").textContent = `演示文件：/demo/${scope === "global" ? "user" : project.slice(6)}/${host}/agents/${host === "codex" ? targetName(selectedNative) + ".toml" : host === "claude" ? "researcher.md" : "planner.yaml"}`;
+      const value = loc.native.draft[nativeKey()]; setOptions($("native-model"), modelEntries(), value.model); setOptions($("native-effort"), effortEntries(value.model || config.fallback), value.effort); $("native-effort").disabled = host === "antigravity";
       $("native-capability-note").hidden = !value.model || Object.hasOwn(config.models, value.model);
-      $("native-error").textContent = targetError("user", "native"); $("native-error").hidden = !targetError("user", "native");
+      $("native-error").textContent = targetError(nativeKey(), "native"); $("native-error").hidden = !targetError(nativeKey(), "native");
       // 高级编辑器复用与调用偏好相同的字段错误语义，错误不会只依靠边框颜色传达。
-      $("native-effort").setAttribute("aria-invalid", String(Boolean(targetError("user", "native"))));
+      $("native-effort").setAttribute("aria-invalid", String(Boolean(targetError(nativeKey(), "native"))));
       $("native-effort").setAttribute("aria-describedby", "native-error");
     }
     $("activation-supported").hidden = host === "antigravity"; $("activation-unsupported").hidden = host !== "antigravity";
@@ -212,10 +222,27 @@
     $("diagnostic-saved").textContent = loc.lastSave;
     $("catalog-source").textContent = config.source; $("catalog-boundary").textContent = config.boundary;
     $("diagnostic-location").textContent = `演示配置根 /demo/${host}；项目 ${project}。${host === "claude" && scope === "project" ? "启停目标为 .claude/settings.local.json，仅本机当前项目；清除后先继承 .claude/settings.json。" : host === "codex" && scope === "project" ? "启停目标为 .codex/config.toml；项目须受信任，Hook信任与更高层策略保持宿主规则。" : "位置由当前发现来源决定，不提供任意路径写入。"}`;
-    $("refresh-catalog").disabled = refreshing;
+    $("refresh-catalog").disabled = refreshing; $("refresh-catalog").hidden = section !== "diagnostics";
     $("clear-overrides").disabled = !Object.values(loc.preferences.draft).some(value => value.model || value.effort);
     renderBatch(); updateFooter(); syncPickers(); $("refresh-catalog").setAttribute("aria-busy", String(refreshing)); $("refresh-catalog").querySelector("span").textContent = refreshing ? "读取中…" : "刷新目录"; if (!allDirty()) $("switch-status").hidden = true;
   }
+  function renderNativeList() {
+    const query = $("native-search").value.trim().toLocaleLowerCase();
+    const ids = host === "codex" ? roleIds : ["user"];
+    $("native-items").replaceChildren();
+    let count = 0;
+    for (const id of ids) {
+      const name = host === "codex" ? targetName(id) : host === "claude" ? "researcher" : "planner";
+      const description = host === "codex" ? roleDescriptions[roleIds.indexOf(id)] : "用户定义";
+      if (!`${name} ${description} 用户级 内置`.toLocaleLowerCase().includes(query)) continue;
+      const button = document.createElement("button"); button.type = "button"; button.textContent = name;
+      button.id = `native-item-${id}`; button.setAttribute("aria-pressed", String(nativeKey() === id));
+      button.addEventListener("click", () => { selectedNative = id; render(); $(button.id)?.focus(); });
+      $("native-items").append(button); count++;
+    }
+    $("native-search-status").textContent = count ? `${count} 个定义` : "没有匹配的定义";
+  }
+  $("native-search").addEventListener("input", renderNativeList);
   function announceSwitch() {
     window.clearTimeout(switchNoticeTimer);
     const count = allDirty();
@@ -241,22 +268,22 @@
   });
   $("project-path").addEventListener("keydown", event => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); $("load-project").click(); } });
   for (const s of ["global", "project"]) $(`scope-${s}`).addEventListener("change", () => { changeContext(() => { scope = s; }); $("scope-switch").focus(); });
-  document.querySelectorAll("[data-section]").forEach(node => node.addEventListener("click", () => changeContext(() => { section = node.dataset.section; })));
+  document.querySelectorAll("[data-section]").forEach(node => node.addEventListener("click", () => changeContext(() => { section = node.dataset.section; if (node.dataset.mode) mode = node.dataset.mode; })));
   // 高级入口和返回控件在切换后会隐藏，焦点移到新事务可见入口，避免遗留在隐藏按钮。
   $("open-native").addEventListener("click", () => { changeContext(() => { mode = "native"; }); $("back-preferences").focus(); });
   $("back-preferences").addEventListener("click", () => { changeContext(() => { mode = "preferences"; }); focusField("default-model"); });
   // 各个字段显式绑定当前事务，模型变化只重新计算可选项，绝不自动清空 effort。
-  for (const id of ["default", "a", "b"]) for (const field of ["model", "effort"]) {
+  for (const id of ["default", ...roleIds]) for (const field of ["model", "effort"]) {
     const control = id === "default" ? `default-${field}` : `${field}-${id}`;
     $(control).addEventListener("change", () => { location().preferences.draft[id][field] = $(control).value; notify(""); render(); });
   }
-  for (const id of ["default", "a", "b"]) $(id === "default" ? "default-reset" : `reset-${id}`).addEventListener("click", () => { location().preferences.draft[id] = { model: "", effort: "" }; render(); notify(`${targetName(id)} 已在草稿中恢复继承；预览保存后才记录。`); });
+  for (const id of ["default", ...roleIds]) $(id === "default" ? "default-reset" : `reset-${id}`).addEventListener("click", () => { location().preferences.draft[id] = { model: "", effort: "" }; render(); notify(`${targetName(id)} 已在草稿中恢复继承；预览保存后才记录。`); });
   $("clear-overrides").addEventListener("click", () => { const store = location().preferences; for (const id of Object.keys(store.draft)) store.draft[id] = { model: "", effort: "" }; render(); notify("本范围调用偏好已在草稿中清除；其他范围与原生/启停草稿保持独立。"); });
-  for (const field of ["model", "effort"]) $(`native-${field}`).addEventListener("change", () => { location().native.draft.user[field] = $(`native-${field}`).value; render(); });
-  $("native-reset").addEventListener("click", () => { location().native.draft.user = { model: "", effort: "" }; render(); notify("原生字段已在草稿中清除；完整定义中的提示词与其他字段不变。"); });
+  for (const field of ["model", "effort"]) $(`native-${field}`).addEventListener("change", () => { location().native.draft[nativeKey()][field] = $(`native-${field}`).value; render(); });
+  $("native-reset").addEventListener("click", () => { location().native.draft[nativeKey()] = { model: "", effort: "" }; render(); notify("原生字段已在草稿中清除；完整定义中的提示词与其他字段不变。"); });
   $("activation-state").addEventListener("change", () => { location().activation.draft.state = $("activation-state").value; render(); });
-  for (const id of ["a", "b"]) $(`select-${id}`).addEventListener("change", () => { if ($(`select-${id}`).checked) location().selected.add(id); else location().selected.delete(id); render(); });
-  $("select-all").addEventListener("change", () => { location().selected = new Set($("select-all").checked ? ["a", "b"] : []); render(); });
+  for (const id of roleIds) $(`select-${id}`).addEventListener("change", () => { if ($(`select-${id}`).checked) location().selected.add(id); else location().selected.delete(id); render(); });
+  $("select-all").addEventListener("change", () => { location().selected = new Set($("select-all").checked ? visibleRoleIds() : []); render(); });
   $("batch-toggle").addEventListener("click", () => { $("batch-editor").hidden = !$("batch-editor").hidden; $("batch-toggle").setAttribute("aria-expanded", String(!$("batch-editor").hidden)); renderBatch(); });
   $("batch-model").addEventListener("change", renderBatch);
   $("batch-apply").addEventListener("click", () => {
@@ -301,7 +328,7 @@
     if (store.partial) { plan = { ...store.partial.plan, store, recovering: true }; drawPreview(plan.rows); showReceipt(store); notify("此演示事务存在已发布项，请先核对收据并恢复。", "warning", "save-result"); $("confirm-save").disabled = true; }
     else {
       if (location().needsReload) { notify("来源已变化，请到“诊断与帮助”重新读取后再预览。草稿已保留。", "error"); return false; }
-      const ids = kind === "native" ? host === "codex" ? [] : ["user"] : kind === "preferences" ? ["default", ...(hosts[host].identities.length ? ["a", "b"] : [])] : [];
+      const ids = kind === "native" ? Object.keys(store.draft) : kind === "preferences" ? ["default", ...visibleRoleIds()] : [];
       const invalid = ids.find(id => targetError(id, kind));
       if (invalid) { notify(targetError(invalid, kind), "error"); focusField(kind === "native" ? "native-effort" : invalid === "default" ? "default-effort" : `effort-${invalid}`); return false; }
       const rows = changes(store); if (!rows.length) return false;

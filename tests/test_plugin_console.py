@@ -33,7 +33,7 @@ class ConsoleEntryTest(unittest.TestCase):
         page = PageParser()
         page.feed((WEB / "index.html").read_text(encoding="utf-8"))
         self.assertEqual([attrs["src"] for tag, attrs in page.elements if tag == "script"], ["/connection.js", "/native-definitions.js", "/console.js"])
-        self.assertEqual([attrs["href"] for tag, attrs in page.elements if tag == "link"], ["/console.css"])
+        self.assertEqual([attrs["href"] for tag, attrs in page.elements if tag == "link"], ["/tool-theme.css", "/console.css"])
         self.assertFalse(any(key.startswith("on") for _, attrs in page.elements for key in attrs))
         ids = [attrs["id"] for _, attrs in page.elements if "id" in attrs]
         self.assertEqual(len(ids), len(set(ids)))

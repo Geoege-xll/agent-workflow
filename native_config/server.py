@@ -320,10 +320,21 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                       "/connection.js": ("connection.js", "text/javascript; charset=utf-8"),
                       "/native-definitions.js": ("native-definitions.js", "text/javascript; charset=utf-8"),
                       "/console.css": ("console.css", "text/css; charset=utf-8")}
-            if path not in assets:
+            # 共享主题只映射组件根中的同一物理路径；源码和独立解压包一致，
+            # 不扫描其他安装、不使用软链，也不把 templates 整目录开放成静态目录。
+            shared_assets = {"/tool-theme.css": ("tool-theme.css", "text/css; charset=utf-8"),
+                             "/solid-glass-LICENSE.txt": ("solid-glass-LICENSE.txt", "text/plain; charset=utf-8")}
+            if path in shared_assets:
+                name, content_type = shared_assets[path]
+                asset_root = ROOT / "templates" / "prototype"
+                if (ROOT / "templates").is_symlink() or asset_root.is_symlink():
+                    raise RequestError(404, "not_found", "页面资源尚未就绪")
+                target = asset_root / name
+            elif path in assets:
+                name, content_type = assets[path]
+                target = self.server.web_root / name
+            else:
                 raise RequestError(404, "not_found", "页面不存在")
-            name, content_type = assets[path]
-            target = self.server.web_root / name
             if target.is_symlink() or not target.is_file():
                 raise RequestError(404, "not_found", "页面资源尚未就绪")
             if target.stat().st_size > MAX_RESPONSE:

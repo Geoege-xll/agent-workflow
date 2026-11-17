@@ -21,6 +21,8 @@ PRODUCT = "native-agent-config"
 REQUIRED_FILES = {"native_config/VERSION", "native_config/cli.py", "native_config/commands.py",
                   "native_config/server.py", "native_config/service.py", "native_config/preparation.py", "native_config/web/index.html",
                   "native_config/web/console.js", "native_config/web/console.css",
+                  "native_config/web/connection.js", "native_config/web/native-definitions.js",
+                  "templates/prototype/tool-theme.css", "templates/prototype/solid-glass-LICENSE.txt",
                   "scripts/agent_config.py", "scripts/agent_config.sh", "scripts/python_runtime.sh"}
 
 

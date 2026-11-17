@@ -877,7 +877,7 @@
     status.dataset.dirty = String(dirty); target.append(status);
     if (dirty) target.append(node("p", "row-hint", "已保存：" + FIELDS.map(field => row.overrides[field] || "继承").join(" / ")));
 
-    const reset = node("button", "text-button row-reset", preferenceMode() ? "恢复继承" : "清除字段"); reset.type = "button";
+    const reset = node("button", "text-button sg-quiet row-reset", preferenceMode() ? "恢复继承" : "清除字段"); reset.type = "button";
     reset.dataset.agent = row.role; reset.dataset.reset = "true"; reset.setAttribute("aria-label", (row.role === "*" ? "通用默认" : row.name || row.role) + " · " + reset.textContent);
     reset.addEventListener("click", () => {
       for (const field of FIELDS) draft.set(row.role, field, null);
@@ -992,7 +992,7 @@
     $("native-search").value = projection.query;
     $("native-search-status").textContent = loading ? "正在读取原生定义…" : rows.length ? projection.rows.length + " / " + rows.length + " 个定义" : "";
     for (const row of projection.rows) {
-      const button = node("button", "definition-item"); button.type = "button"; button.dataset.definition = row.role;
+      const button = node("button", "definition-item sg-quiet"); button.type = "button"; button.dataset.definition = row.role;
       button.setAttribute("aria-pressed", String(projection.selected?.role === row.role));
       // 左侧只承担按名称选择的导航职责；来源、路径、权限与职责仍在右侧详情显示。
       // 搜索继续使用完整真实行，不删搜索字段，也不把长描述重复塞进可访问名称。
@@ -1016,7 +1016,7 @@
     const title = node("header", "definition-title");
     const copy = node("div"); copy.append(node("h3", "", row.name || row.role), node("p", "help", row.invoke_name || row.native_name || row.role));
     title.append(copy, node("span", "row-state", writable(row) ? "可编辑" : "只读")); detail.append(title);
-    const source = node("section", "definition-source"); source.append(node("h4", "", "定义来源"), node("p", "", sourceLabel(row.origin)),
+    const source = node("section", "definition-source sg-card"); source.append(node("h4", "", "定义来源"), node("p", "", sourceLabel(row.origin)),
       node("code", "location", row.source_path || "宿主未提供来源路径"), node("p", "help", writable(row) ? "仅编辑此稳定身份对应的原生模型与推理字段；预览后保存。" : readOnlyReason(row)));
     detail.append(source);
     const fields = node("div", "definition-edit-fields"); fields.dataset.row = row.role;

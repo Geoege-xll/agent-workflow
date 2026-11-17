@@ -1,4 +1,5 @@
-/* 第六版：将上下文、功能导航、编辑与提交拆为清楚的职责层。
+/* 原有紧凑布局与交互样式保留，末尾 SolidGlass 映射只影响本页工具。
+   第六版：将上下文、功能导航、编辑与提交拆为清楚的职责层。
    当前页面明确展示深石墨方向；只重用公共外壳，不改公共CSS或生产token。 */
 .prototype-stage,.prototype-header,.prototype-page-information,.prototype-contract { max-inline-size: 1320px; }
 .ac {
@@ -158,7 +159,7 @@
 .ac-choice-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-inline: 7px 0; }
 .ac-choice-heading strong { font-size: 13px; font-weight: 500; color: var(--workspace-muted); }
 .ac-choice-search { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; margin: 4px 2px 8px; padding-inline: 10px 2px; border: 1px solid var(--workspace-control-line); border-radius: 5px; color: var(--workspace-muted); background: var(--ac-subtle); }
-.ac-choice-search:focus-within { border-color: var(--workspace-focus); outline: 2px solid var(--workspace-focus); outline-offset: 1px; }
+.ac-choice-search:has(input:focus-visible) { outline: 2px solid var(--workspace-focus); outline-offset: -2px; }
 .ac .ac-choice-search input { inline-size: 100%; min-inline-size: 0; min-block-size: var(--ac-control-height); padding: 6px 8px 6px 0; border: 0; background: transparent; color: var(--workspace-ink); outline: none; }
 .ac-choice-options { min-block-size: 0; flex: 0 1 auto; overflow: auto; overscroll-behavior: contain; border-radius: 5px; }
 .ac-choice-option { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 7px; min-block-size: 42px; padding: 7px 9px; margin-block: 1px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
@@ -288,3 +289,64 @@
  .ac :is(button,input,select,summary,[role="listbox"]):focus-visible { outline: 2px solid Highlight; }
  .ac-chrome,.ac-navigation,.ac-savebar,.ac-context-menu,.ac-dialog,.ac-choice-panel { background: Canvas; color: CanvasText; }
 }
+
+/* 本轮 SolidGlass 材质映射：复用原有组件/响应式/事务，不改变其他业务原稿。
+   panel / card / popover 的区分由细 rim、接触阴影和厚度给出，面上不画渐变。 */
+.ac.sg-scope {
+ --workspace-bg: var(--sg-bg); --workspace-sidebar: var(--sg-panel); --workspace-subtle: #242424;
+ --workspace-ink: var(--sg-ink); --workspace-muted: var(--sg-muted); --workspace-faint: #aaa;
+ --workspace-line: var(--sg-line); --workspace-control-line: #737373;
+ --workspace-hover: var(--sg-state); --workspace-pressed: var(--sg-state);
+ --workspace-selected-bg: var(--sg-state); --workspace-selected-ink: #f2f2f2; --workspace-focus: #ddd;
+ --ac-action: #e7e7e7; --ac-on-action: #202020; --ac-radius: 10px;
+ --ac-surface: var(--sg-panel); --ac-subtle: #242424; --ac-control-height: 36px; --ac-compact-height: 32px;
+ --ac-identity-col: 27%; --ac-model-col: 31%; --ac-effort-col: 23%; --ac-state-col: 19%;
+ border-radius: 14px; box-shadow: inset 0 1px var(--sg-rim), 0 0 0 1px var(--sg-edge), 0 12px 32px -14px #0009;
+}
+.ac.sg-scope .ac-chrome { min-block-size: 60px; background: #202020; border-radius: 14px 14px 0 0; box-shadow: inset 0 1px var(--sg-rim); }
+.ac.sg-scope .ac-navigation { background: #1b1b1b; }
+.ac.sg-scope .ac-navigation .ac-nav { min-block-size: 36px; border-radius: 9px; }
+.ac.sg-scope .ac-navigation .ac-nav[aria-current="page"] { background: var(--sg-state); color: var(--sg-ink); box-shadow: inset 0 1px var(--sg-state-rim), inset 0 0 0 1px var(--sg-edge); }
+.ac.sg-scope .ac-navigation .ac-nav[aria-current="page"]::before { display: none; }
+.ac.sg-scope .ac-editor-body { padding-block: 25px 20px; }
+.ac.sg-scope .ac-heading { margin-block-end: 22px; }
+.ac.sg-scope .ac-heading h2 { font-size: 24px; letter-spacing: -.6px; }
+.ac.sg-scope .ac-default { background: #242424; border: 0; border-radius: 12px; box-shadow: inset 0 1px var(--sg-rim), inset 0 0 0 1px var(--sg-inner), 0 0 0 1px var(--sg-edge), 0 8px 22px -16px #000a; }
+.ac.sg-scope .ac-default > div { padding-block: 16px; }
+.ac.sg-scope #agent-table tbody :is(th,td) { padding-block: 10px; }
+.ac.sg-scope .ac-savebar { background: #202020; padding-block: 15px; }
+.ac.sg-scope :is(.ac-primary,.ac-primary:hover,.ac-primary:active) { background: var(--sg-primary); color: var(--sg-primary-ink); border-color: #ffffff42; box-shadow: inset 0 1px #fff, inset 0 -1px #0003, 0 2px 3px #0002; }
+.ac.sg-scope :is(.ac-context-menu,.ac-choice-panel,.ac-dialog) { border: 0; background: var(--sg-popover); border-radius: 14px; box-shadow: inset 0 1px var(--sg-rim), 0 0 0 1px var(--sg-edge), 0 24px 60px -18px #000a, 0 6px 16px -6px #0005; }
+.ac.sg-scope :is(button:hover,button[aria-pressed="true"],.ac-choice-option[aria-selected="true"],.ac-choice-option[data-active="true"],.ac-context-dropdown[open]>summary) { background: var(--sg-state); color: var(--sg-ink); }
+.ac.sg-scope :is(input:not([type="checkbox"]):not([type="radio"]),select,.ac-picker-trigger) { min-block-size: 36px; border-radius: 10px; }
+.ac.sg-scope :is(.ac-text,.ac-quiet-button,.ac-back-button) { min-block-size: 32px; }
+.ac.sg-scope .ac-native-layout { display: grid; grid-template-columns: 210px minmax(0,1fr); gap: 28px; min-block-size: 440px; }
+.ac.sg-scope .ac-native-list { border-inline-end: 1px solid var(--sg-line); padding-inline-end: 20px; }
+.ac.sg-scope .ac-native-list>label { margin-block-end: 10px; }
+.ac.sg-scope .ac-native-list .ac-hint { margin-block: 9px 12px; }
+.ac.sg-scope #native-items { display: grid; gap: 4px; }
+.ac.sg-scope #native-items button { justify-content: start; inline-size: 100%; border-color: transparent; background: transparent; min-block-size: 36px; }
+.ac.sg-scope #native-items button[aria-pressed="true"],.ac.sg-scope #native-items button:hover { background: var(--sg-state); box-shadow: inset 0 1px var(--sg-state-rim), inset 0 0 0 1px var(--sg-edge); }
+.ac.sg-scope .ac-native-heading { margin-block-end: 6px; }
+.ac.sg-scope .ac-native-heading strong { font-size: 20px; }
+.ac.sg-scope .ac-native-description { margin-block-end: 12px; color: var(--sg-muted); }
+.ac.sg-scope #native-path { margin-block-end: 24px; }
+/* 搜索复合控件由唯一外框拥有焦点线，内部 input 永远不叠第二个边框。 */
+.ac.sg-scope .sg-search input { border: 0; background: transparent; padding-inline: 0; min-block-size: 34px; }
+.ac.sg-scope .sg-search input:focus-visible { outline: none; }
+.ac.sg-scope .sg-search:has(input:focus-visible) { outline: 2px solid var(--workspace-focus); outline-offset: -2px; }
+.ac.sg-scope .ac-choice-search { border-color: var(--workspace-control-line); background: #ffffff0f; }
+.ac.sg-scope .ac-choice-search:has(input:focus-visible) { outline: 2px solid var(--workspace-focus); outline-offset: -2px; }
+.ac.sg-scope .ac-choice-search input:focus-visible { outline: none; }
+html[data-prototype-embedded] body { padding: 0; margin: 0; background: #161616; }
+html[data-prototype-embedded] .prototype-shell, html[data-prototype-embedded] .prototype-contract { display: none; }
+html[data-prototype-embedded] .prototype-stage { padding: 0; margin: 0; max-inline-size: none; }
+html[data-prototype-embedded] .prototype-frame { border: 0; border-radius: 0; box-shadow: none; background: none; }
+html[data-prototype-embedded] .ac { min-block-size: 900px; border-radius: 0; }
+@container configuration (inline-size < 700px) { .ac.sg-scope .ac-native-layout { grid-template-columns: 1fr; gap: 18px; } .ac.sg-scope .ac-native-list { border-inline-end: 0; padding-inline-end: 0; } .ac.sg-scope #native-items { display: flex; flex-wrap: wrap; } .ac.sg-scope #native-items button { inline-size: auto; } }
+@media (pointer: coarse) { .ac.sg-scope { --ac-control-height: 48px; --ac-compact-height: 44px; } .ac.sg-scope :is(button,input:not([type="radio"]):not([type="checkbox"]),select,.ac-picker-trigger,.ac-nav) { min-block-size: 44px; } }
+@media (forced-colors: active) { .ac.sg-scope { --workspace-bg: Canvas; --workspace-sidebar: Canvas; --workspace-subtle: Canvas; --workspace-ink: CanvasText; --workspace-muted: CanvasText; --workspace-line: GrayText; --workspace-control-line: ButtonText; --workspace-selected-ink: CanvasText; --workspace-focus: Highlight; --ac-action: ButtonFace; --ac-on-action: ButtonText; } .ac.sg-scope :is(.ac-chrome,.ac-navigation,.ac-savebar,.ac-default,.ac-context-menu,.ac-choice-panel,.ac-dialog) { background: Canvas; border: 1px solid CanvasText; box-shadow: none; } .ac.sg-scope #native-items button[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; } }
+
+.ac.sg-scope .ac-default { padding-block: 0; }
+.ac.sg-scope .ac-default>div:first-child { padding-inline-start: 16px; }
+.ac.sg-scope #agent-table tbody tr:hover { background: #ffffff06; }

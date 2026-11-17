@@ -212,9 +212,96 @@ print(json.dumps({"report": report, "exit": status, "calls": calls}))
                     self.assertEqual(1, command.count("--preparation-source"))
                     self.assertEqual(str(root.resolve()), command[command.index("--preparation-source") + 1])
                     self.assertEqual(1, command.count("--data-dir"))
-                    self.assertEqual(str(absent / "state" / host), command[command.index("--data-dir") + 1])
+                    # 生命周期状态绑定组件版本与物理来源，不与项目配置根混同。
+                    version = value["report"]["component"]["version"]
+                    source_identity = "source-" + hashlib.sha256(str(root.resolve()).encode()).hexdigest()
+                    self.assertEqual(str(absent / "state" / host / version / source_identity),
+                                     command[command.index("--data-dir") + 1])
                     self.assertFalse(value["calls"][0]["shell"])
                     self.assertFalse(absent.exists())
+
+    def test_launcher_version_source_slots_preserve_legacy_ready_and_share_cross_project(self):
+        # 运行两个真实打包物理入口，只替换独立组件选择/进程边界。旧连接记录代表
+        # 仍在服务的旧版本：启动器不得为打开新组件重写、迁移或删除它们。
+        # fake组件仅模拟自己的open写连接；只读命令主动禁止mkdir以防隐式修复。
+        code = '''import json, runpy, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+root = Path(sys.argv[3])
+legacy = [root / "state/console/connection.json", root / "state/codex/console/connection.json"]
+for path in legacy:
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"state": "ready", "service_version": "0.1.4", "instance_id": "legacy-live"}))
+legacy_before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in legacy]
+projects = [root.parent / "project-a", root.parent / "project-b"]
+for project in projects:
+    project.mkdir()
+home = root.parent / "isolated-native-home"
+calls = []
+def snapshot():
+    return {str(path.relative_to(root)): (path.stat().st_mode, path.stat().st_mtime_ns,
+            path.read_bytes() if path.is_file() else None) for path in root.rglob("*")}
+def launch(source, version, action, project):
+    module = runpy.run_path(source)
+    data = module["descriptor"](Path(source).with_name("component.json"))
+    data["version"] = version
+    data["artifact"]["name"] = "native-agent-config-" + version + ".zip"
+    module["run"].__globals__["descriptor"] = lambda path: data
+    module["run"].__globals__["installed"] = lambda component_root, selected: component_root / "component"
+    argv = [action, "--host", "codex", "--home", str(home), "--project", str(project)]
+    if action == "open":
+        argv.append("--no-browser")
+    args = module["arguments"](argv)
+    def invoke(command, **options):
+        state = Path(command[command.index("--data-dir") + 1])
+        calls.append({"action": action, "version": version, "source": str(Path(source).resolve().parents[2]),
+                      "project": str(project), "command": command, "slot": str(state)})
+        if action == "open":
+            (state / "console").mkdir(parents=True, exist_ok=True)
+            (state / "console/connection.json").write_text(json.dumps({"state": "ready", "service_version": version}))
+        response = module["receipt"](args, data, "ready", "ready")
+        response["service"] = {"state": "ready", "reused": True}
+        return SimpleNamespace(stdout=json.dumps(response), returncode=0)
+    before = snapshot()
+    if action == "open":
+        report, status = module["run"](argv, component_root=root, invoke=invoke)
+    else:
+        with mock.patch.object(Path, "mkdir", side_effect=AssertionError("只读入口创建目录")):
+            report, status = module["run"](argv, component_root=root, invoke=invoke)
+        assert snapshot() == before, "只读入口改动状态目录"
+    assert status == 0 and report["state"] == "ready", report
+# 同组件同来源跨项目复用；同host更换组件版本、或同版本更换物理来源必须分流。
+launch(sys.argv[1], "0.1.5", "status", projects[0])
+launch(sys.argv[1], "0.1.5", "doctor", projects[0])
+launch(sys.argv[1], "0.1.5", "open", projects[0])
+launch(sys.argv[1], "0.1.5", "open", projects[1])
+launch(sys.argv[1], "0.1.4", "open", projects[0])
+launch(sys.argv[2], "0.1.5", "open", projects[0])
+assert legacy_before == [(path.read_bytes(), path.stat().st_mtime_ns) for path in legacy], "旧ready记录被改动"
+assert not home.exists(), "生命周期分流不能复制真实配置根"
+print(json.dumps({"calls": calls, "legacy_preserved": True, "home_unchanged": True}))
+'''
+        component_root = self.root / "slot-lifecycle-components"
+        result = subprocess.run(["bash", str(self.installed["codex"] / "lib/python_runtime.sh"),
+            "-B", "-X", "utf8", "-c", code,
+            str(self.installed["codex"] / "plugins/maintenance/launcher.py"),
+            str(self.installed["claude"] / "plugins/maintenance/launcher.py"), str(component_root)],
+            cwd=self.root, env=isolated_environment(self.root / "slot-lifecycle-home"),
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["legacy_preserved"])
+        self.assertTrue(report["home_unchanged"])
+        calls = report["calls"]
+        self.assertEqual(len(calls), 6)
+        self.assertEqual({row["slot"] for row in calls[:4]}, {calls[0]["slot"]})
+        self.assertEqual(len({calls[index]["slot"] for index in (2, 4, 5)}), 3)
+        for row in calls:
+            source_identity = "source-" + hashlib.sha256(row["source"].encode()).hexdigest()
+            self.assertEqual(Path(row["slot"]), component_root / "state/codex" / row["version"] / source_identity)
+            self.assertEqual(row["command"][row["command"].index("--home") + 1], str(self.root / "isolated-native-home"))
+            self.assertEqual(row["command"][row["command"].index("--project") + 1], row["project"])
 
     def test_antigravity_budget_includes_maintenance_and_rejects_its_own_overflow(self):
         root = self.installed["antigravity"]

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only dark">
+<title>原型交付外壳 · SolidGlass 交互原型</title>
+<link rel="stylesheet" href="solid-glass-shell.css">
+<link rel="stylesheet" href="prototype-review.css">
+<script src="workspace-design.js" defer>
+</script>
+</head>
+<body class="sg-page" data-prototype-platform="web" data-prototype-display="responsive" data-prototype-plan-source="docs/plans/workbench-solid-glass-style.md" data-workspace-mode="delivery">
+<div class="prototype-stage">
+<div class="prototype-frame">
+<main id="review-workspace" class="ws sg-scope ws-delivery" data-prototype-page-content>
+<h1 class="sg-sr-only">原型交付外壳</h1>
+<header class="ws-toolbar">
+<div class="ws-toolbar-start">
+<button id="navigation-toggle" class="sg-quiet" type="button" aria-controls="delivery-navigation" aria-expanded="false">
+<span aria-hidden="true">☰</span> 页面目录</button>
+<span class="ws-toolbar-divider" aria-hidden="true">
+</span>
+<strong id="current-page-title">Agent 配置工作台</strong>
+</div>
+<div class="ws-toolbar-end">
+<a id="open-review" class="sg-button sg-primary" href="prototype-workspace.html?page=preferences" target="_blank" rel="noopener">进入评审 <span aria-hidden="true">↗</span>
+</a>
+</div>
+</header>
+<div class="ws-body">
+<section class="ws-canvas" aria-label="设计稿画布">
+<div id="canvas-viewport" class="ws-viewport" tabindex="0" aria-label="设计稿画布">
+<div id="canvas-world" class="ws-world">
+<!-- 唯一真实原稿通过文档边界隔离；外壳不读子文档DOM、不复制整套业务稿。 -->
+<iframe id="prototype-preview" title="Agent 配置工作台原稿" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden data-prototype-src="agent-configuration.html">
+</iframe>
+<div id="canvas-overlays" class="ws-overlays">
+</div>
+</div>
+<aside id="delivery-navigation" class="ws-navigation sg-card" hidden>
+<p class="sg-eyebrow">页面目录</p>
+<nav aria-label="原型页面">
+<button id="delivery-page-preferences" data-page="preferences" type="button" aria-current="page">
+<span>01</span>调用偏好</button>
+<button id="delivery-page-native" data-page="native" type="button">
+<span>02</span>原生定义</button>
+<button id="delivery-page-activation" data-page="activation" type="button">
+<span>03</span>工作流启停</button>
+<button id="delivery-page-diagnostics" data-page="diagnostics" type="button">
+<span>04</span>诊断与帮助</button>
+</nav>
+</aside>
+<div class="ws-canvas-controls">
+<div class="ws-zoom sg-card" role="group" aria-label="画布缩放">
+<button id="canvas-fit" class="sg-quiet" type="button">适应</button>
+<span aria-hidden="true">
+</span>
+<button id="canvas-zoom-out" class="sg-quiet" type="button" aria-label="缩小画布">−</button>
+<button id="canvas-zoom-reset" class="sg-quiet ws-zoom-value" type="button">100%</button>
+<button id="canvas-zoom-in" class="sg-quiet" type="button" aria-label="放大画布">+</button>
+</div>
+</div>
+<p id="review-status" class="ws-canvas-status sg-muted" role="status">独立原稿 · 可直接操作页面</p>
+</div>
+</section>
+</div>
+</main>
+</div>
+</div>
+<footer class="prototype-page-information prototype-shell">
+<nav class="prototype-requirement-links" aria-label="关联需求文档">
+<a href="../../plans/workbench-solid-glass-style.md" data-prototype-document="markdown" target="_blank" rel="noopener">本轮样式需求</a>
+</nav>
+<p>Web · responsive · 原型工具外壳。数据仅保留在当前页面内存；刷新重置，不连接生产配置或评审服务。</p>
+</footer>
+<details class="prototype-contract">
+<summary>Page design and interaction contract</summary>
+<section data-contract-section="purpose">
+<h2>页面职责</h2>
+<p>Platform: Web. Display: responsive. 本页只设计 SolidGlass 工具外壳。业务画布通过独立 iframe 加载同一 agent-configuration.html，产品字体、颜色、布局与交互由原稿独立决定。</p>
+</section>
+<section data-contract-section="navigation">
+<h2>导航与范围</h2>
+<p>交付页有默认收起的左悬浮目录、缩放和独立新网页评审入口；评审页进入即评审，无左目录、无浏览/批注模式切换、无开发说明按钮。两页共享同一原稿与相机比例逻辑。</p>
+</section>
+<section data-contract-section="interactions">
+<h2>交互与结果</h2>
+<p>目录切换同一原稿的起始视图；适应、缩小、100%与放大可操作。评审点击原稿节点选中，通过“添加整改”填写修改/新增/删除；页面整改独立入口；标记使用 A 编号，整改使用 R 编号。右侧双 Tab 清单支持定位、编辑与删除，编号和画布相对应。Alt 临时操作原稿。普通滚轮/触控板双指只滚动稿内内容，根滚动到边界不平移外画布；Space+拖动或中键拖动平移外画布，Ctrl/⌘+滚轮或按钮缩放。右侧清单只滚自身，不提供节点拖拽。</p>
+<p data-contract-for="navigation-toggle">展开或收起左悬浮目录；Esc关闭并回焦点，不挤压原稿。</p>
+<p data-contract-for="open-review">以 noopener 独立新网页进入当前具体页的评审原型。</p>
+<p data-contract-for="delivery-page-preferences">切换唯一原稿的对应业务起始视图，收起目录并保持评审链接指向同一页。</p>
+<p data-contract-for="delivery-page-native">切换唯一原稿的对应业务起始视图，收起目录并保持评审链接指向同一页。</p>
+<p data-contract-for="delivery-page-activation">切换唯一原稿的对应业务起始视图，收起目录并保持评审链接指向同一页。</p>
+<p data-contract-for="delivery-page-diagnostics">切换唯一原稿的对应业务起始视图，收起目录并保持评审链接指向同一页。</p>
+<p data-contract-for="canvas-fit">让设计视口按当前可用画布等比例缩放；长内容在原稿内滚动，不把整页高度压缩成一屏，不改变原稿字体或布局。</p>
+<p data-contract-for="canvas-zoom-out">等比例缩小10%，最小25%。</p>
+<p data-contract-for="canvas-zoom-reset">恢复100%原始逻辑尺寸。</p>
+<p data-contract-for="canvas-zoom-in">等比例放大10%，最大150%。</p>
+</section>
+<section data-contract-section="states">
+<h2>状态与恢复</h2>
+<p>模态使用原生 dialog；关闭/取消保留当前草稿，提交缺少正文时就近错误并回到输入。记录只在本页内存，空列表给出明确动作。强制色以系统边框补足细 rim/阴影；粗指针增大目标；键盘焦点可见。稿内既有嵌套滚动区保留原生滚动；只在 iframe 根设置滚动链 containment，在不支持该行为的宿主上为渐进增强，外相机仍不消费普通 wheel。</p>
+</section>
+<section data-contract-section="exceptions">
+<h2>边界与例外</h2>
+<p>这是工具本身的静态交互原型，不是正式交付运行时。file:// 下采用 sandbox allow-scripts 的隔离 iframe，通过有限消息仅演示当前原稿的节点选择；不读取跨文档 DOM、不获取机器配置、不建服务、不保存真实反馈协议。业务原稿只执行一次，不复制完整业务稿。视觉与真实浏览器交互尚未验收；未运行浏览器、截图或 Taste gate。</p>
+</section>
+</details>
+<noscript>
+<p>此工具外壳原型需要本地 JavaScript；可直接打开 agent-configuration.html 查看原稿。</p>
+</noscript>
+</body>
+</html>

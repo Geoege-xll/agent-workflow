@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""离线构建独立原生 Agent 配置工具；零第三方依赖、零工作流安装依赖。"""
+"""离线构建独立原生 Agent 配置工具；Python 标准库运行、零工作流安装依赖。"""
 
 from __future__ import annotations
 
@@ -103,8 +103,12 @@ claude plugin enable <页面确认的插件ID> --scope local，用户级使用 -
 - Claude：https://code.claude.com/docs/en/plugins/cli-reference
 - Antigravity：https://antigravity.google/docs/plugins?tab=cli
 
-包内仅包含本项目源代码、网页资源及已有 Python 选择器。运行依赖全部由本机 Python
-标准库提供，没有新增第三方库、远程脚本、字体或需随包附带的第三方许可证。
+包内包含本项目源代码、网页资源及已有 Python 选择器。Python 运行依赖全部由本机
+标准库提供，没有新增第三方 Python 库、远程脚本或字体。工具外壳共享静态主题
+templates/prototype/tool-theme.css 改编自 deeplethe/solid-glass，固定上游提交
+6e8903e494a15491ceda38fafea5056c95a74d44，采用 MIT 许可；完整版权及许可正文
+随包保存在 templates/prototype/solid-glass-LICENSE.txt。主题仅用于工具界面，
+不注入业务原稿；Native 独立包在同一物理路径携带它，无需工作流代码或远程资源。
 本机官方宿主的发现、加载与实际运行能力需要各宿主真实验收，不能从 BUILD_VERIFIED 推断。
 """
 
@@ -187,10 +191,17 @@ def payload(source: Path):
     for name in ("index.html", "console.js", "console.css", "connection.js", "native-definitions.js"):
         relative = "native_config/web/" + name
         files[relative] = read_source(source, relative)
+    # 两产品读取同一份物理主题；独立包只显式复制这两个静态文件，不能递归夹入
+    # 原型模板、业务页面或工作流模块，也不能通过工作流安装位置寻找兜底资源。
+    for name in ("tool-theme.css", "solid-glass-LICENSE.txt"):
+        relative = "templates/prototype/" + name
+        files[relative] = read_source(source, relative)
     for name in ("agent_config.py", "agent_config.sh", "python_runtime.sh"):
         relative = "scripts/" + name
         files[relative] = read_source(source, relative)
     files["README.md"] = README.encode("utf-8")
+    # 保留既有 BUILD 四字段合同：third_party_dependencies 描述 Python 运行库，
+    # 静态 MIT 主题的来源在 CSS 头与 README，完整许可与主题均由 files 摘要封闭。
     provenance = {"name": "native-agent-config", "version": version, "third_party_dependencies": [],
                   "files": {name: hashlib.sha256(body).hexdigest() for name, body in sorted(files.items())}}
     files["BUILD.json"] = (json.dumps(provenance, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()

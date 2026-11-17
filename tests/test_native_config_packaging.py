@@ -118,7 +118,14 @@ class StandalonePackageTest(unittest.TestCase):
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with zipfile.ZipFile(first) as package:
             names = package.namelist()
-            self.assertTrue(all(name.startswith(("native_config/", "scripts/")) or name in {"README.md", "BUILD.json", "product/command_identity.json", "product/command_identity.py", "product/release_channels.py", "product/__init__.py"} for name in names))
+            shared_assets = {"templates/prototype/tool-theme.css", "templates/prototype/solid-glass-LICENSE.txt"}
+            self.assertTrue(all(name.startswith(("native_config/", "scripts/")) or name in shared_assets | {"README.md", "BUILD.json", "product/command_identity.json", "product/command_identity.py", "product/release_channels.py", "product/__init__.py"} for name in names))
+            # 独立产品只携带相同物理源的主题和完整许可，不借主题把原型工具带入包中。
+            self.assertEqual(shared_assets, {name for name in names if name.startswith("templates/")})
+            for name in shared_assets:
+                self.assertEqual(package.read(name), (ROOT / name).read_bytes())
+            self.assertIn(b"Copyright (c) 2026 DeepLethe", package.read("templates/prototype/solid-glass-LICENSE.txt"))
+            self.assertIn(b"Permission is hereby granted", package.read("templates/prototype/solid-glass-LICENSE.txt"))
             self.assertFalse(any(name.startswith(("lib/", "manager/", "plugin_runtime/", "plugins/")) for name in names))
             self.assertEqual(package.read("scripts/python_runtime.sh"), (ROOT / "lib/python_runtime.sh").read_bytes())
             self.assertEqual(package.read("native_config/VERSION"), (ROOT / "native_config/VERSION").read_bytes())
@@ -303,7 +310,8 @@ class StandalonePackageTest(unittest.TestCase):
         # 普通完整性报错遮蔽当前 ABI 的缺失拒绝。无需启动或修改任何用户组件。
         rejected = self.base / "incomplete.zip"
         for missing in ("native_config/web/connection.js", "native_config/web/native-definitions.js",
-                        "native_config/browser_sessions.py"):
+                        "native_config/browser_sessions.py", "templates/prototype/tool-theme.css",
+                        "templates/prototype/solid-glass-LICENSE.txt"):
             with self.subTest(missing=missing):
                 bodies = {name: body for name, body in complete.items() if name != missing}
                 manifest = json.loads(bodies["BUILD.json"])
@@ -318,7 +326,7 @@ class StandalonePackageTest(unittest.TestCase):
                     store["archive_payload"](rejected, version, digest)
 
     def test_detached_package_consumes_session_and_exact_static_resource_closure(self):
-        """包外真实 HTTP 兑换并使用派生会话，同时逐字节消费两个新增页面脚本。"""
+        """包外真实 HTTP 消费派生会话、页面脚本及共享主题与完整许可闭包。"""
         installed = self.unpack()
         environment = dict(os.environ)
         environment.pop("PYTHONPATH", None)
@@ -357,6 +365,29 @@ class StandalonePackageTest(unittest.TestCase):
                 status, body = request("GET", path, {})
                 self.assertEqual(status, 200, body)
                 self.assertEqual(body, (ROOT / "native_config/web" / name).read_bytes())
+        for name in ("tool-theme.css", "solid-glass-LICENSE.txt"):
+            with self.subTest(shared_resource=name):
+                status, body = request("GET", "/" + name, {})
+                self.assertEqual(status, 200, body)
+                self.assertEqual(body, (ROOT / "templates/prototype" / name).read_bytes())
+        status, body = request("GET", "/", {})
+        self.assertEqual(status, 200, body)
+        self.assertIn(b'href="/tool-theme.css"', body)
+        # 路由白名单不能扩成 templates 目录发布，也不接受替代搜索路径。
+        for path in ("/templates/prototype/tool-theme.css", "/tool-theme.css/", "/solid-glass-shell.css"):
+            with self.subTest(unlisted_resource=path):
+                self.assertEqual(404, request("GET", path, {})[0])
+        # 同一包外进程运行 doctor，证实共享资产在当前 ABI 必要文件及 BUILD 摘要中。
+        checked = subprocess.run(self.command(installed, "doctor"), cwd=self.base, env=environment,
+                                 capture_output=True, text=True, timeout=8)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual(json.loads(checked.stdout)["component"]["integrity"], "verified")
+        # 独立包缺主题时，不能从工作流源码或其他版本兜底并谎报组件就绪。
+        (installed / "templates/prototype/tool-theme.css").unlink()
+        self.assertEqual(404, request("GET", "/tool-theme.css", {})[0])
+        missing = subprocess.run(self.command(installed, "doctor"), cwd=self.base, env=environment,
+                                 capture_output=True, text=True, timeout=8)
+        self.assertNotEqual(missing.returncode, 0, missing.stdout)
         self.assertEqual(self.native_file.read_bytes(), self.before)
 
     def test_identity_content_pin_rejects_safe_but_unapproved_changes(self):
@@ -486,19 +517,20 @@ class StandalonePackageTest(unittest.TestCase):
         """真实源码包只通过显式 ZIP 进入独立根；插件目录始终没有配置核心或网页。"""
         archive = self.build(self.base / "release")
         hosts = ("codex", "claude", "antigravity")
+        from tests.test_plugin_delivery import builder
         thins = {}
         for host in hosts:
-            thin = self.base / (host + " standalone plugin with spaces") / "plugins" / "maintenance"
-            thin.mkdir(parents=True)
-            thins[host] = thin
-            for name in ("launcher.py", "launcher.sh", "component_store.py"):
-                shutil.copyfile(ROOT / "plugins/maintenance" / name, thin / name)
-            # 三个物理插件根共享同一真实组件，但来源身份不同。-I 子进程从包外
-            # 启动，不借源码根掩盖缺失依赖，也不在薄插件里放核心或网页。
-            product = thin.parents[1] / "product"
-            product.mkdir()
-            for name in ("__init__.py", "release_channels.py"):
-                shutil.copyfile(ROOT / "product" / name, product / name)
+            # 当前 Codex open 会真实校验模板、规范投影与双摘要后自动补齐，
+            # 仅手工复制 launcher 的旧夹具已不满足消费者合同。复用现有真实
+            # 插件构建器交付完整来源，不模拟自动准备，也不放宽源验证。
+            plugin_archive = builder.build(ROOT, self.base / "plugin-archives", host)
+            plugin_root = self.base / (host + " standalone plugin with spaces")
+            plugin_root.mkdir()
+            with zipfile.ZipFile(plugin_archive) as package:
+                package.extractall(plugin_root)
+            thins[host] = plugin_root / "plugins/maintenance"
+            # 三个明确物理插件根共享同一真实组件。-I 子进程在包外运行，
+            # 完整薄插件仍不包含独立配置核心/网页，也不复制整个源码树。
         with zipfile.ZipFile(archive) as package:
             version = package.read("native_config/VERSION").decode("ascii").strip()
         from product.release_channels import version_channel
@@ -506,8 +538,10 @@ class StandalonePackageTest(unittest.TestCase):
                      "channel": version_channel(version), "cli_protocol": 1, "service_protocol": 2, "release_status": "unpublished",
                      "artifact": {"name": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "url": ""}}
         descriptors = {}
-        for host, thin in thins.items():
-            descriptors[host] = thin / "component.json"
+        for host in thins:
+            # 本地独立 ZIP 的离线描述仅通过已存在的测试 API 注入；放在插件
+            # 外部，保持真实插件归档的来源文件、双摘要和固定描述字节原样。
+            descriptors[host] = self.base / (host + "-offline-component.json")
             descriptors[host].write_text(json.dumps(component))
         component_root = self.base / "independent user components"
         environment = dict(os.environ)
@@ -525,7 +559,11 @@ class StandalonePackageTest(unittest.TestCase):
                                     capture_output=True, text=True, timeout=45)
             return result, json.loads(result.stdout)
 
-        connection_paths = {host: component_root / "state" / host / "console/connection.json" for host in hosts}
+        # 插件状态按组件版本和明确物理来源隔离；原生配置根仍由 --home 唯一定位。
+        state_paths = {host: component_root / "state" / host / version /
+                       ("source-" + hashlib.sha256(str(thins[host].parents[1].resolve()).encode()).hexdigest())
+                       for host in hosts}
+        connection_paths = {host: state_paths[host] / "console/connection.json" for host in hosts}
         connection_path = connection_paths["codex"]
         pids = {}
         try:
@@ -578,7 +616,7 @@ class StandalonePackageTest(unittest.TestCase):
             independent = Path(opened["component"]["root"]) / "scripts/agent_config.sh"
             for action in ("open", "status"):
                 command = ["bash", str(independent), action, "--host", "codex", "--home", str(self.home),
-                           "--project", str(self.project), "--data-dir", str(component_root / "state/codex"),
+                           "--project", str(self.project), "--data-dir", str(state_paths["codex"]),
                            "--preparation-source", str(thins["claude"].parents[1])]
                 if action == "open":
                     command.append("--no-browser")

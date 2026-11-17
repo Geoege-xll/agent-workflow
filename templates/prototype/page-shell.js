@@ -127,6 +127,11 @@
   function queueRender() { if (frame) return; frame = requestAnimationFrame(() => { frame = 0; render(); }); }
   function embed() {
     document.body.classList.add("prototype-review-embedded");
+    // 只约束 iframe 根 scrollport 的滚动链。稿内 nested scrollport 沿用原有规则，
+    // 普通 wheel 永不由评审桥消费或转发为画布平移。旧宿主若不支持根 containment，
+    // 父相机仍不接普通 wheel，因此不会将浏览器边界滚动误写为相机状态。
+    document.documentElement.style.overscrollBehavior = "contain";
+    if (document.scrollingElement) document.scrollingElement.style.overscrollBehavior = "contain";
     // 只在认证派生页隐藏真实画板之外的展示壳，祖先保留DOM与业务监听。
     // 保留原始stage/frame；只剥离外围说明，不清空固定尺寸、overflow或媒体查询约束。
     let child = document.querySelector(".prototype-stage") || document.querySelector(".prototype-frame") || root;
@@ -139,7 +144,7 @@
       ancestor.style.margin = "0"; ancestor.style.padding = "0"; ancestor.style.minHeight = "0";
       if (getComputedStyle(ancestor).display.includes("flex")) { ancestor.style.justifyContent = "flex-start"; ancestor.style.alignItems = "flex-start"; }
     }
-    const measure = () => { if (document.body.dataset.prototypeDisplay === "responsive") return; const rect = designFrame.getBoundingClientRect();
+    const measure = () => { if (document.body.dataset.prototypeDisplay !== "fixed") return; const rect = designFrame.getBoundingClientRect();
       if (rect.width >= 1 && rect.width <= 16384 && rect.height >= 1 && rect.height <= 16384) send("size", { width: rect.width, height: rect.height }); };
     new ResizeObserver(measure).observe(designFrame); measure();
     overlay = document.createElement("div"); overlay.setAttribute("data-prototype-review-overlay", ""); overlay.className = "pr-overlays"; document.body.append(overlay);
@@ -185,9 +190,22 @@
         for (let parent = node.parentElement; parent && root.contains(parent); parent = parent.parentElement) {
           if (parent.scrollHeight > parent.clientHeight || parent.scrollWidth > parent.clientWidth) {
             const r = node.getBoundingClientRect(), p = parent.getBoundingClientRect();
-            parent.scrollTop += r.top - p.top - parent.clientHeight / 2 + r.height / 2;
-            parent.scrollLeft += r.left - p.left - parent.clientWidth / 2 + r.width / 2;
+            // 显式定位需立即完成；不覆盖业务 scroll-behavior 样式，避免 smooth
+            // 滚动尚未到位时向父相机提交旧的屏外坐标。
+            parent.scrollTo({ top: parent.scrollTop + r.top - p.top - parent.clientHeight / 2 + r.height / 2,
+              left: parent.scrollLeft + r.left - p.left - parent.clientWidth / 2 + r.width / 2, behavior: "instant" });
           }
+        }
+        // nested scrollport 完成后，再滚实际文档根。长 responsive 页现在保留一屏
+        // iframe，根不再被不断撑高；必须使用滚后的 viewport 坐标，不能把根的
+        // document-space rect.top 再减一次，否则滚过的长页会重复累加偏移。
+        const scrollRoot = document.scrollingElement;
+        if (scrollRoot && (scrollRoot.scrollHeight > scrollRoot.clientHeight || scrollRoot.scrollWidth > scrollRoot.clientWidth)) {
+          const r = node.getBoundingClientRect();
+          // 已在视口内的 sticky/fixed 目标不要求根再居中，也不解除其原有定位样式。
+          const top = r.top < 0 || r.top + r.height > innerHeight ? scrollRoot.scrollTop + r.top - innerHeight / 2 + r.height / 2 : scrollRoot.scrollTop;
+          const left = r.left < 0 || r.left + r.width > innerWidth ? scrollRoot.scrollLeft + r.left - innerWidth / 2 + r.width / 2 : scrollRoot.scrollLeft;
+          if (top !== scrollRoot.scrollTop || left !== scrollRoot.scrollLeft) scrollRoot.scrollTo({ top, left, behavior: "instant" });
         }
         choose(node); send("located", { request: data.request, ok: true, bounds: bounds(node) });
       } else send("located", { request: data.request, ok: false }); return;
@@ -226,9 +244,9 @@
   const endPan = () => { pan = null; setTimeout(() => { panMoved = false; }, 0); };
   document.addEventListener("pointerup", endPan); document.addEventListener("pointercancel", endPan);
   document.addEventListener("wheel", (event) => {
-    if (!session || !(event.ctrlKey || event.metaKey || space)) return;
-    event.preventDefault(); send("gesture", { gesture: event.ctrlKey || event.metaKey ? "zoom" : "pan", x: event.clientX, y: event.clientY,
-      factor: Math.exp(-event.deltaY * .0022), dx: -event.deltaX, dy: -event.deltaY });
+    // Space 只修饰拖动，不修饰 wheel；普通滚动与 nested scroll 的边界处理全部留给浏览器。
+    if (!session || event.defaultPrevented || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault(); send("gesture", { gesture: "zoom", x: event.clientX, y: event.clientY, factor: Math.exp(-event.deltaY * .0022) });
   }, { passive: false });
   document.addEventListener("keydown", (event) => {
     if (!session) return;
@@ -236,7 +254,7 @@
     if (event.code === "Space" && !event.target.closest?.("input,select,textarea,button,a,[contenteditable]")) { space = true; event.preventDefault(); }
     if (mode === "annotate" && !temporary && !event.altKey && ["Enter", " "].includes(event.key) && inContent(event)) { event.preventDefault(); event.stopImmediatePropagation(); choose(inContent(event)); }
   }, true);
-  document.addEventListener("keyup", (event) => { space = false; if (live && !event.altKey) { temporary = false; document.body.classList.toggle("pr-annotating", mode === "annotate"); queueRender(); } });
+  document.addEventListener("keyup", (event) => { if (event.code === "Space") space = false; if (live && !event.altKey) { temporary = false; document.body.classList.toggle("pr-annotating", mode === "annotate"); queueRender(); } });
   window.addEventListener("blur", () => { space = false; pan = null; temporary = false; document.body.classList.toggle("pr-annotating", mode === "annotate"); });
   window.addEventListener("scroll", queueRender, true); window.addEventListener("resize", queueRender);
 })();

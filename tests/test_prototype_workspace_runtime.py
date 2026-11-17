@@ -403,7 +403,8 @@ for(const legal of [{scope:'global'},{scope:'page',page:'docs/prototype/settings
         source = (TEMPLATES / "review-camera.js").read_text(encoding="utf-8")
         script = r"""
 const vm=require('node:vm'),assert=require('node:assert/strict'); const window={};
-vm.runInNewContext(JSON.parse(require('node:fs').readFileSync(0,'utf8')), {window});
+const context={window};
+vm.runInNewContext(JSON.parse(require('node:fs').readFileSync(0,'utf8')), context);
 const cam={x:10,y:20,k:.5}, next=window.PrototypeReviewCamera.zoomAt(cam,2,100,200);
 assert.equal((100-cam.x)/cam.k,(100-next.x)/next.k); assert.equal((200-cam.y)/cam.k,(200-next.y)/next.k);
 assert.equal(window.PrototypeReviewCamera.focusBounds(cam,{x:40,y:50,w:200,h:100},800,600).k,.5);
@@ -414,6 +415,26 @@ const mobile=window.PrototypeReviewCamera.fitCam(900,1000,390,844,76);
 assert.equal(mobile.k,1); assert.equal(mobile.x,255);
 const desktop=window.PrototypeReviewCamera.fitCam(900,1000,1440,900,76);
 assert.ok(desktop.k<mobile.k);
+// 实际 create 注册的事件决定相机归属：不复制 wheel/pan 实现，也不以宿主证明浏览器滚动。
+const listeners=new Map(),windowEvents=new Map();let value={x:10,y:20,k:1},writes=0;
+window.addEventListener=(type,fn)=>windowEvents.set(type,fn);window.removeEventListener=()=>{};
+context.ResizeObserver=class {observe(){} disconnect(){}};
+const viewport={addEventListener:(type,fn)=>listeners.set(type,fn),getBoundingClientRect:()=>({left:0,top:0,width:900,height:700}),setPointerCapture(){},classList:{add(){},remove(){}}};
+const world={style:{},offsetWidth:800,offsetHeight:600};
+const camera=window.PrototypeReviewCamera.create({viewport,world,read:()=>value,write:next=>{value=next;writes++;}});
+const event=patch=>({target:viewport,button:0,pointerId:1,clientX:10,clientY:20,deltaX:30,deltaY:90,preventDefault(){this.prevented=true;},...patch});
+viewport.closest=()=>null;
+for(const patch of [{},{shiftKey:true},{deltaY:-90}]) {const e=event(patch),before=JSON.stringify(value);listeners.get('wheel')(e);assert.equal(e.prevented,undefined);assert.equal(JSON.stringify(value),before);}
+listeners.get('pointerdown')(event());listeners.get('pointermove')(event({clientX:30,clientY:40}));assert.equal(writes,0,'普通左键空白拖动不接管相机');
+listeners.get('keydown')(event({code:'Space'}));const ordinary=event();listeners.get('wheel')(ordinary);assert.equal(ordinary.prevented,undefined);assert.equal(writes,0,'Space+wheel也不能平移');
+listeners.get('pointerdown')(event());listeners.get('pointermove')(event({clientX:30,clientY:50}));assert.equal(value.x,30);assert.equal(value.y,50);listeners.get('pointerup')();
+listeners.get('keyup')(event({code:'ShiftLeft'}));listeners.get('pointerdown')(event());listeners.get('pointermove')(event({clientX:20,clientY:30}));assert.equal(value.x,40,'释放其他键不结束仍按住的Space');listeners.get('pointercancel')();
+listeners.get('keyup')(event({code:'Space'}));
+for(const modifier of ['ctrlKey','metaKey']) {const e=event({[modifier]:true,clientX:100,clientY:200}),before={...value};listeners.get('wheel')(e);assert.equal(e.prevented,true);assert.notEqual(value.k,before.k);assert.ok(Math.abs((100-before.x)/before.k-(100-value.x)/value.k)<1e-9);}
+const beforeMiddle={...value};listeners.get('pointerdown')(event({button:1}));listeners.get('pointermove')(event({clientX:35,clientY:45}));assert.equal(value.x,beforeMiddle.x+25);assert.equal(value.y,beforeMiddle.y+25);listeners.get('pointerup')();
+listeners.get('keydown')(event({code:'Space'}));windowEvents.get('blur')();const beforeBlur=JSON.stringify(value);listeners.get('pointerdown')(event());listeners.get('pointermove')(event({clientX:99}));assert.equal(JSON.stringify(value),beforeBlur,'失焦后不保留Space状态');
+listeners.get('keydown')(event({key:'ArrowLeft'}));assert.equal(value.x,JSON.parse(beforeBlur).x+40,'聚焦画布的既有方向键可访问性保留');
+camera.close();
 """
         result = subprocess.run(["node", "-e", script], input=json.dumps(source), text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -422,13 +443,94 @@ assert.ok(desktop.k<mobile.k);
         """尺寸合同接受最小正数与最大16384，拒绝零、负数、无穷与越界；不默认为桌面尺寸。"""
         script = r"""
 const vm=require('node:vm'),assert=require('node:assert/strict'),window={};
-vm.runInNewContext(JSON.parse(require('node:fs').readFileSync(0,'utf8')),{window});
+const context={window};vm.runInNewContext(JSON.parse(require('node:fs').readFileSync(0,'utf8')),context);
 const valid=window.PrototypeCanvasPresentation.validSize;
 for(const size of [{width:1,height:1},{width:390,height:844},{width:16384,height:16384}]) assert.equal(valid(size),true);
 for(const size of [{width:0,height:844},{width:-1,height:844},{width:16385,height:844},{width:Infinity,height:844},{width:'390',height:844}]) assert.equal(valid(size),false);
+let observer;context.ResizeObserver=class {constructor(fn){observer=fn;}observe(){}disconnect(){}};
+let rect={width:900,height:700};const viewport={getBoundingClientRect:()=>rect},world={style:{}},preview={style:{}};
+const presentation=window.PrototypeCanvasPresentation.create({viewport,world,preview,entry:{display:'responsive',viewport:null}});
+assert.equal(presentation.read().height,652);assert.equal(presentation.read().width,852);
+assert.equal(presentation.resize({width:852,height:12000},true),false,'长内容不能扩大responsive iframe');assert.equal(preview.style.height,'652px');
+rect={width:800,height:600};observer();assert.equal(preview.style.height,'552px','窗口变化更新可用设计视口');
+presentation.select({display:'fixed',viewport:{width:390,height:844}});assert.equal(preview.style.height,'844px');
+assert.equal(presentation.resize({width:390,height:12000},true),false,'子稿不能覆盖固定声明');assert.equal(preview.style.height,'844px');
+presentation.select({display:'fixed',viewport:null});assert.equal(presentation.resize({width:390,height:844},true),true);
+assert.equal(presentation.resize({width:390,height:12000},true),false,'只接受首次真实fixed frame测量');assert.equal(preview.style.height,'844px');
+presentation.select({display:'responsive',viewport:{width:390,height:844}});assert.equal(preview.style.width,'752px','responsive按父可用视口而非历史设备尺寸');
+let frameHeight=12000;context.document={body:{dataset:{prototypeDisplay:'responsive'}},querySelectorAll:()=>[{getBoundingClientRect:()=>({width:390,height:frameHeight})}]};context.innerWidth=752;context.innerHeight=552;
+assert.equal(window.PrototypeCanvasPresentation.measure().height,552,'responsive测量返回视口而非自然长内容');
+context.document.body.dataset.prototypeDisplay='fixed';frameHeight=844;assert.equal(window.PrototypeCanvasPresentation.measure().height,844);
+presentation.close();
 """
         result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "canvas-presentation.js").read_text(encoding="utf-8")),
                                 text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_child_wheel_and_drag_keep_native_scroll_ownership(self) -> None:
+        """执行两种真实子稿入口：根containment、普通wheel/边界不接管、显式缩放与拖动。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict');
+const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+function run(file) {
+ const documentEvents=new Map(),windowEvents=new Map(),messages=[],scrollCalls=[];
+ class Node {
+  constructor(tag='DIV'){this.tagName=tag;this.style={};this.dataset={};this.attrs={};this.children=[];this.classList={add(){},toggle(){},remove(){}};this.textContent='Long content';this.innerText='Long content';this.id='';}
+  append(child){this.children.push(child);child.parentElement=this;}addEventListener(){}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k]??null;}querySelectorAll(){return [];}querySelector(){return null;}closest(){return null;}matches(){return false;}contains(node){return node===this || this.children.some(child=>child.contains(node));}getBoundingClientRect(){return {left:0,top:0,x:0,y:0,width:800,height:12000};}setPointerCapture(){}replaceChildren(){this.children=[];}scrollTo(options){scrollCalls.push({node:this,options});this.scrollTop=options.top;this.scrollLeft=options.left;}
+ }
+ const html=new Node('HTML'),body=new Node('BODY'),head=new Node('HEAD'),frame=new Node(),root=new Node('MAIN'),nested=new Node();html.append(body);body.append(frame);frame.append(root);
+ nested.style={overflow:'auto',overscrollBehavior:'auto'};nested.scrollTop=0;root.append(nested);
+ body.dataset.prototypeDisplay='responsive';root.id='design';root.attrs.id='design';root.attrs['data-prototype-review-source']='source-'+'a'.repeat(64);
+ Object.assign(html,{scrollTop:0,scrollLeft:0,scrollHeight:12000,clientHeight:600,scrollWidth:800,clientWidth:800});
+ root.getBoundingClientRect=()=>({left:20,top:2400-html.scrollTop,x:20,y:2400-html.scrollTop,width:200,height:40});
+ const document={documentElement:html,scrollingElement:html,body,head,readyState:'complete',
+ currentScript:{src:'http://127.0.0.1:12345/assets/page-shell.js',getAttribute:key=>({'data-prototype-review-bridge':'5','data-prototype-review-page':'docs/prototype/settings.html','data-prototype-review-token':'a'.repeat(48)})[key]},
+ querySelector(selector){if(selector==='[data-prototype-page-content]')return root;if(selector==='.prototype-frame')return frame;return null;},
+ querySelectorAll(selector){return ['[data-prototype-page-content]','[id]','[data-prototype-review-source]'].includes(selector)?[root]:[];},createElement:tag=>new Node(tag.toUpperCase()),addEventListener:(type,fn)=>documentEvents.set(type,fn)};
+ const parent={postMessage:value=>messages.push(value)},window={parent,location:{protocol:file?'file:':'http:',pathname:'/docs/prototype/settings.html'},XYFilePageContext:{name:'settings.html',nonce:'b'.repeat(48)},addEventListener:(type,fn)=>windowEvents.set(type,fn)};
+ const context={window,parent,document,location:window.location,URL,Element:Node,HTMLElement:Node,getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),ResizeObserver:class{observe(){}},MutationObserver:class{observe(){}},requestAnimationFrame:()=>1,setTimeout:()=>1,innerWidth:800,innerHeight:600};
+ vm.runInNewContext(file?source.file:source.review,context);
+ windowEvents.get('message')({source:parent,origin:file?'null':'http://127.0.0.1:12345',data:file?{type:'xy-file:connect',page:'settings.html',nonce:'b'.repeat(48)}:{type:'prototype-review:connect',version:5,page:'docs/prototype/settings.html',token:'a'.repeat(48),mode:'browse'}});
+ assert.equal(html.style.overscrollBehavior,'contain');assert.deepEqual(nested.style,{overflow:'auto',overscrollBehavior:'auto'},'不得修改业务nested scrollport');
+ assert.equal(messages.some(value=>value.type.endsWith(':size')),false,'responsive长内容不再向父层上报整页高度');
+ if(!file) {
+  const locate=()=>windowEvents.get('message')({source:parent,origin:'http://127.0.0.1:12345',data:{type:'prototype-review:review',version:5,page:'docs/prototype/settings.html',token:'a'.repeat(48),action:'locate',request:'root-location',target:{scope:'node',page:'docs/prototype/settings.html',locator:{type:'id',id:'design'}}}});
+  locate();const first=html.scrollTop,located=messages.findLast(value=>value.type==='prototype-review:located');
+  assert.equal(first,2120);assert.equal(located.ok,true);assert.equal(located.bounds.y,280,'回传滚后viewport坐标而非旧屏外坐标');
+  locate();assert.equal(html.scrollTop,first,'再次定位不能重复减document根偏移');
+  root.getBoundingClientRect=()=>({left:20,top:30,x:20,y:30,width:200,height:40});const styles=JSON.stringify(root.style);
+  locate();assert.equal(html.scrollTop,first,'视口内sticky/fixed几何不强迫根再居中');assert.equal(JSON.stringify(root.style),styles,'不改节点原定位样式');
+  // 实际消息路径先完成业务既有nested定位，再滚根；宿主scrollTo只实现原生位置赋值。
+  const target=new Node('BUTTON');target.id='nested-target';target.attrs.id=target.id;target.attrs['data-prototype-review-source']='source-'+'b'.repeat(64);nested.append(target);
+  Object.assign(nested,{scrollTop:0,scrollLeft:0,scrollHeight:1200,clientHeight:200,scrollWidth:400,clientWidth:400});html.scrollTop=0;scrollCalls.length=0;
+  nested.getBoundingClientRect=()=>({left:0,top:2400-html.scrollTop,width:400,height:200});
+  target.getBoundingClientRect=()=>({left:20,top:3000-nested.scrollTop-html.scrollTop,width:100,height:40});
+  const oldQuery=document.querySelectorAll;document.querySelectorAll=selector=>selector==='[id]'||selector==='[data-prototype-review-source]'?[root,target]:oldQuery(selector);
+  windowEvents.get('message')({source:parent,origin:'http://127.0.0.1:12345',data:{type:'prototype-review:review',version:5,page:'docs/prototype/settings.html',token:'a'.repeat(48),action:'locate',request:'nested-location',target:{scope:'node',page:'docs/prototype/settings.html',locator:{type:'id',id:target.id}}}});
+  assert.equal(scrollCalls[0].node,nested);assert.equal(scrollCalls[1].node,html);assert.ok(scrollCalls.every(call=>call.options.behavior==='instant'),'不受业务smooth滚动影响而回传旧geometry');
+  assert.equal(nested.scrollTop,520);assert.equal(messages.findLast(value=>value.request==='nested-location').bounds.y,280);
+  assert.deepEqual(nested.style,{overflow:'auto',overscrollBehavior:'auto'});
+ }
+ const gestures=()=>messages.filter(value=>value.type.endsWith(':gesture'));
+ const event=patch=>({target:nested,button:0,pointerId:1,clientX:10,clientY:20,deltaX:20,deltaY:100,preventDefault(){this.prevented=true;},stopImmediatePropagation(){this.stopped=true;},...patch});
+ for(const position of [0,10000]) {nested.scrollTop=position;const before=gestures().length,e=event();documentEvents.get('wheel')(e);assert.equal(e.prevented,undefined);assert.equal(gestures().length,before,'顶部/底部普通wheel均不发送外相机手势');assert.equal(nested.scrollTop,position,'桥不手动滚动业务内容');}
+ documentEvents.get('keydown')(event({target:root,code:'Space',key:' '}));let e=event(),before=gestures().length;documentEvents.get('wheel')(e);assert.equal(e.prevented,undefined);assert.equal(gestures().length,before,'Space+wheel仍为原生滚动');
+ for(const modifier of ['ctrlKey','metaKey']) {e=event({[modifier]:true});documentEvents.get('wheel')(e);assert.equal(e.prevented,true);assert.equal(gestures().at(-1).gesture,'zoom');}
+ e=event({ctrlKey:true,defaultPrevented:true});before=gestures().length;documentEvents.get('wheel')(e);assert.equal(gestures().length,before,'尊重已由业务消费的组合键事件');
+ documentEvents.get('keyup')(event({code:'Space'}));before=gestures().length;documentEvents.get('pointerdown')(event());documentEvents.get('pointermove')(event({clientX:40,clientY:60}));assert.equal(gestures().length,before,'普通稿内拖动不能变成外画布平移');
+ for(const space of [false,true]) {
+  if(space)documentEvents.get('keydown')(event({target:root,code:'Space',key:' '}));
+  e=event({button:space?0:1});documentEvents.get('pointerdown')(e);assert.equal(e.prevented,true);documentEvents.get('pointermove')(event({clientX:35,clientY:50}));assert.equal(gestures().at(-1).gesture,'pan');assert.equal(gestures().at(-1).dx,25);assert.equal(gestures().at(-1).dy,30);
+  documentEvents.get('pointercancel')(event());before=gestures().length;documentEvents.get('pointermove')(event({clientX:50,clientY:90}));assert.equal(gestures().length,before,'取消手势后不继续平移');
+ }
+ windowEvents.get('blur')();before=gestures().length;documentEvents.get('pointerdown')(event());documentEvents.get('pointermove')(event({clientX:80}));assert.equal(gestures().length,before,'失焦后没有残留Space/pan');
+}
+run(true);run(false);
+"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps({
+            "file": (TEMPLATES / "file-page.js").read_text(encoding="utf-8"),
+            "review": (TEMPLATES / "page-shell.js").read_text(encoding="utf-8")}),
+            text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_file_delivery_without_crypto_keeps_untrusted_original(self) -> None:
@@ -443,7 +545,7 @@ const window={addEventListener(){},XYFileDeliveryEntry:{state:{name:'settings.ht
  PrototypeCanvasPresentation:{create(){return {select(){},read:()=>({width:800,height:600}),close(){}};}},
  PrototypeReviewCamera:{create(options){return {fit(){options.write({x:0,y:0,k:1});},zoom(){},close(){}};}}};
 const context={window,parent:window,location:{protocol:'file:',href:original,assign(){throw Error('不能跳到旧目录');}},URL,URLSearchParams,TextEncoder,
- document:{getElementById:get,createElement:node},setTimeout(){throw Error('无握手降级不能等待伪ready');},clearTimeout(){}};
+ document:{getElementById:get,createElement:node,addEventListener(){}},setTimeout(){throw Error('无握手降级不能等待伪ready');},clearTimeout(){}};
 (async()=>{
  await assert.doesNotReject(vm.runInNewContext(source,context));
  assert.equal(get('prototype-preview').src,original,'整个crypto缺失仍必须载入原稿');
@@ -454,6 +556,93 @@ const context={window,parent:window,location:{protocol:'file:',href:original,ass
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
         result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "file-delivery.js").read_text(encoding="utf-8")),
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_delivery_navigation_closes_and_returns_to_real_toggle(self) -> None:
+        """执行 file/HTTP 的生产监听器：切页和 Esc 都收起同一目录并回焦真实触发 ID。"""
+        script = r"""
+const vm=require('node:vm'),assert=require('node:assert/strict'),{webcrypto}=require('node:crypto');
+const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
+async function run(file) {
+ const elements=new Map(),events=new Map();let focused='',assigned='';
+ function node(){return {children:[],style:{},attrs:{},dataset:{},hidden:false,listeners:new Map(),classList:{contains(){return false;}},addEventListener(type,fn){this.listeners.set(type,fn);},append(...items){this.children.push(...items);},replaceChildren(){this.children=[];},setAttribute(k,v){this.attrs[k]=v;},getAttribute(k){return this.attrs[k];},removeAttribute(k){delete this.attrs[k];},querySelectorAll(){return this.children;},focus(){focused=this.id;},showModal(){},close(){}};}
+ const get=id=>{if(!elements.has(id)){const value=node();value.id=id;elements.set(id,value);}return elements.get(id);};
+ get('delivery-navigation').hidden=true;get('prototype-preview').attrs.sandbox='allow-scripts';get('prototype-preview').contentWindow={postMessage(){}};
+ const pages=['settings','details'].map(name=>({name:name+'.html',path:'docs/prototype/'+name+'.html',label:name}));
+ const original='file:///fixture/prototype/settings.html';
+ const digest=await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(new URL('.',original).href));
+ const directory_sha256=Buffer.from(digest).toString('hex'),context={review_id:'a'.repeat(64)};
+ const boot={schema_version:5,context,pages};
+ const window={addEventListener(){},XYFileDeliveryEntry:{state:{name:'settings.html',originalFileURL:original,catalog:{schema_version:1,directory_sha256,pages}}},
+ PrototypeCanvasPresentation:{create:()=>({select(){},read(){},close(){}})},
+ PrototypeReviewCamera:{create:options=>({fit(){options.write({x:0,y:0,k:1});},zoom(){},close(){}})},
+ PrototypeReviewState:{parseStartup:()=>boot,create:()=>({state:{page:pages[0].path,cameras:{}},setStorageMessage(){}})},
+ PrototypeLiveConnection:{create:()=>({context:async()=>({context}),close(){}})},
+ PrototypeCanvasHost:{create:options=>({attachViews(){},camera:{fit(){},zoom(){}},navigate:async path=>options.onNavigate(pages.find(page=>page.path===path)),close(){}})}};
+ const document={body:{classList:{contains:()=>false}},getElementById:get,createElement:node,
+ querySelectorAll:selector=>selector==='script#prototype-review-data'?[{type:'application/json',textContent:'boot'}]:[get('prototype-preview')],
+ querySelector:()=>({nextSibling:null}),addEventListener(type,fn){events.set(type,fn);}};
+ get('review-workspace').insertBefore=()=>{};
+ const location={protocol:file?'file:':'http:',href:original,pathname:'/delivery/settings.html',assign(value){assigned=value;}};
+ const runtime={window,parent:window,document,location,crypto:webcrypto,URL,URLSearchParams,TextEncoder,history:{replaceState(){}},setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,clearInterval(){}};
+ await vm.runInNewContext(file?source.file:source.live,runtime);await new Promise(resolve=>setImmediate(resolve));
+ const toggle=get('navigation-toggle'),nav=get('delivery-navigation');
+ toggle.listeners.get('click')();assert.equal(nav.hidden,false);assert.equal(toggle.attrs['aria-expanded'],'true');
+ const event={key:'Escape',preventDefault(){this.prevented=true;}};events.get('keydown')(event);
+ assert.equal(nav.hidden,true);assert.equal(toggle.attrs['aria-expanded'],'false');assert.equal(focused,'navigation-toggle');assert.equal(event.prevented,true);
+ toggle.listeners.get('click')();const link=get('prototype-pages').children[1];assert.equal(link.dataset.page,file?'details.html':pages[1].path);
+ const click={button:0,preventDefault(){this.prevented=true;}};link.listeners.get('click')(click);
+ assert.equal(click.prevented,true);assert.equal(nav.hidden,true);assert.equal(toggle.attrs['aria-expanded'],'false');assert.equal(focused,'navigation-toggle');
+ if(file)assert.equal(assigned,'file:///fixture/prototype/details.html');
+}
+(async()=>{await run(true);await run(false);})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps({
+            "file": (TEMPLATES / "file-delivery.js").read_text(encoding="utf-8"),
+            "live": (TEMPLATES / "live-workspace.js").read_text(encoding="utf-8")}),
+            text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_review_labels_keep_independent_numbers_and_payload(self) -> None:
+        """执行真实清单渲染：R/A 文案不同，底层序号、ID 与反馈载荷保持原样。"""
+        scenario = r"""
+model.select(record('first'));const anchor=model.addAnchor();
+model.openEditor(target('first'));message('修订');model.updateDraft({reference_ids:[anchor.id]});model.completeEditor();
+const before=JSON.stringify(model.exportPayload());
+const nodes=new Map();
+function node() {return {children:[],style:{},attrs:{},hidden:false,classList:{toggle(){}},addEventListener(){},append(...values){this.children.push(...values);},replaceChildren(...values){this.children=[...values];},setAttribute(k,v){this.attrs[k]=v;},focus(){},querySelectorAll(){return [];}};}
+const get=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
+// 此宿主只覆盖真实视图的文本投影，不替代浏览器的 dialog、布局或通信验收。
+const document={getElementById:get,createElement:node,querySelectorAll(){return [];}};
+const context={window,document,TextEncoder,TextDecoder,matchMedia:()=>({matches:false,addEventListener(){}}),HTMLDialogElement:{prototype:{closedBy:''}}};
+vm.runInNewContext(input.feedback,context);
+window.PrototypeFeedback.create({model,send(){},locate(){},verifySources(){},camera:{},announce(){}});
+const row=get('rectification-list').children[0],anchorRow=get('anchor-list').children[0];
+assert.equal(row.id,'item-'+model.state.items[0].id);
+assert.equal(row.children[0].children[0].textContent,'R01');
+assert.equal(anchorRow.children[0].children[0].textContent,'A01');
+model.setCamera(boot.pages[0].path,{x:0,y:0,k:1});
+let receive;window.addEventListener=(type,handler)=>{if(type==='message')receive=handler;};
+window.PrototypeCanvasPresentation={create:()=>({select(){},read:()=>({width:800,height:600}),close(){}})};
+window.PrototypeReviewCamera={create:()=>({applyCam(){},fit(){},close(){}})};
+get('prototype-preview').contentWindow={postMessage(){}};
+Object.assign(context,{URL,location:{origin:'http://127.0.0.1:12345'},setTimeout:()=>1,clearTimeout(){}});
+vm.runInNewContext(input.host,context);
+const host=window.PrototypeCanvasHost.create({boot,model,reviewing:true,announce(){}});
+const pending=host.navigate(boot.pages[0].path);
+const emit=data=>receive({source:get('prototype-preview').contentWindow,origin:'null',data:{version:5,page:boot.pages[0].path,token:'',...data}});
+emit({type:'prototype-review:ready'});emit({type:'prototype-review:catalog',nodes:[record('first'),record('second')]});
+const item=model.state.items[0];
+emit({type:'prototype-review:geometry',marks:[{kind:'item',id:item.id,number:item.number,offset:0,operation:item.operation,bounds:{x:1,y:1,w:20,h:20}},{kind:'anchor',id:anchor.id,number:anchor.number,offset:1,bounds:{x:1,y:1,w:20,h:20}}]});
+const markers=get('canvas-viewport').children[0].children.filter(child=>child.className?.startsWith('live-marker'));
+assert.deepEqual(markers.map(child=>child.textContent),['R01','A01']);
+assert.equal(JSON.stringify(model.exportPayload()),before);
+"""
+        result = subprocess.run(["node", "-e", STATE_SETUP + scenario],
+                                input=json.dumps({"source": (TEMPLATES / "review-state.js").read_text(encoding="utf-8"),
+                                                  "feedback": (TEMPLATES / "feedback.js").read_text(encoding="utf-8"),
+                                                  "host": (TEMPLATES / "canvas-host.js").read_text(encoding="utf-8")}),
                                 text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
