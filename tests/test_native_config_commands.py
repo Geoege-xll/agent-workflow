@@ -81,6 +81,23 @@ class SafeCommandTest(unittest.TestCase):
             self.assertFalse(self.home.exists())
             self.assertEqual(result["location"], {"host": "codex", "scope": "global", "project": None})
 
+    def test_explicit_preparation_source_identity_and_invalid_source_are_read_only(self):
+        from tests.test_native_preparation import make_source
+        source = make_source(self.root / "plugin")
+        # 记录来自无来源旧服务；即使配置根一致，也不能串用准备候选。
+        target, record = self.record()
+        for action in ("status", "doctor"):
+            result, code = self.assert_read_only(action, "configuration_conflict", preparation_source=source)
+            self.assertEqual(code, 1)
+            self.assertTrue(result["native_preparation"]["supported"])
+            self.assertEqual(json.loads(target.read_text()), record)
+        target.unlink()
+        missing = self.root / "missing-plugin"
+        result, code = self.assert_read_only("doctor", "stopped", preparation_source=missing)
+        self.assertEqual(code, 0)
+        self.assertFalse(result["native_preparation"]["supported"])
+        self.assertTrue(any(row["code"] == "native_preparation_source_unavailable" for row in result["diagnostics"]))
+
     def test_bad_records_and_version_conflicts_are_unchanged_and_sanitized(self):
         target, record = self.record(protocol_version=999)
         for action in ("status", "doctor", "open"):

@@ -107,6 +107,34 @@ class ConsoleHttpTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_native_preparation_uses_authenticated_existing_preview_apply_routes(self):
+        from native_config.service import ModelService
+        from tests.test_native_preparation import make_source
+        root = Path(self.temporary.name).resolve()
+        home = root / "isolated-home"
+        source = make_source(root / "plugin")
+        self.server.service = ModelService(root / "state", home=home, preparation_source=source)
+        status, _, raw = self.request("GET", "/api/context?host=codex&scope=global")
+        self.assertEqual(status, 200)
+        context = json.loads(raw)
+        native = context["native_preparation"]
+        request = {"host": "codex", "scope": "global", "revision": context["revision"],
+                   "native_preparation": {"source_id": native["source_id"], "source_revision": native["source_revision"],
+                                          "candidate_ids": [native["candidates"][0]["candidate_id"]]}}
+        status, _, _ = self.request("POST", "/api/preview", request, auth=False)
+        self.assertEqual(status, 401)
+        status, _, raw = self.request("POST", "/api/preview", request)
+        self.assertEqual(status, 200, raw)
+        plan = json.loads(raw)
+        self.assertEqual(plan["kind"], "native_preparation")
+        self.assertFalse(home.exists())
+        status, _, raw = self.request("POST", "/api/apply", {"preview_id": plan["preview_id"]})
+        self.assertEqual(status, 200, raw)
+        result = json.loads(raw)
+        self.assertTrue(result["saved"], result)
+        self.assertEqual(len(result["context"]["roles"]), 1)
+        self.assertEqual(result["context"]["roles"][0]["overrides"], {})
+
     def test_static_and_api_share_secure_headers_without_cors(self):
         status, headers, body = self.request("GET", "/", auth=False, origin=False)
         self.assertEqual(status, 200)

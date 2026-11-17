@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 from urllib.parse import parse_qs, urlsplit
@@ -192,6 +193,64 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertNotIn(b"model:", header)
                     self.assertNotIn(b"tools:", header)
                     self.assertNotIn(b"permissionMode:", header)
+
+    def test_codex_preparation_templates_are_complete_non_discovered_and_digest_bound(self):
+        # 检查真实 ZIP 解包产物：生成资源不能冒充宿主发现条目，每份 TOML
+        # 必须完整保留规范正文，并由索引、投影及外层 payload 三重摘要关联。
+        for host, root in self.installed.items():
+            with self.subTest(host=host):
+                candidate_root = root / "native-agent-templates/codex"
+                if host != "codex":
+                    self.assertFalse(candidate_root.exists())
+                    self.assertFalse((root / builder.CODEX_NATIVE_CONTEXT).exists())
+                    continue
+                index = json.loads((root / builder.CODEX_NATIVE_INDEX).read_bytes())
+                metadata = json.loads((root / "sources.json").read_bytes())
+                originals = json.loads((root / "workflow-sources.json").read_bytes())["files"]
+                self.assertEqual({"schema_version", "product", "host", "version", "templates"}, set(index))
+                self.assertEqual((1, "xy-workflow", "codex", metadata["plugin_version"]),
+                                 (index["schema_version"], index["product"], index["host"], index["version"]))
+                self.assertEqual(sorted(builder.ROLE_SKILLS), [item["name"] for item in index["templates"]])
+                self.assertEqual({"index.json", *(role + ".toml" for role in builder.ROLE_SKILLS)},
+                                 {path.name for path in candidate_root.iterdir()})
+                for item in index["templates"]:
+                    self.assertEqual({"name", "description", "path", "sha256"}, set(item))
+                    body = (root / item["path"]).read_bytes()
+                    definition = tomllib.loads(body.decode("utf-8"))
+                    self.assertEqual({"name", "description", "developer_instructions"}, set(definition))
+                    self.assertEqual((item["name"], item["description"]),
+                                     (definition["name"], definition["description"]))
+                    self.assertEqual(item["sha256"], hashlib.sha256(body).hexdigest())
+                    instructions = definition["developer_instructions"]
+                    self.assertEqual(1, instructions.count(builder.CODEX_PLUGIN_ROOT_PLACEHOLDER))
+                    for canonical in ("roles/" + item["name"] + ".md",
+                                      "platforms/codex/WORKER_CONSTRAINTS.md", builder.CODEX_NATIVE_CONTEXT):
+                        self.assertIn((root / canonical).read_text(), instructions)
+                        expected = hashlib.sha256((root / canonical).read_bytes()).hexdigest()
+                        self.assertIn(expected, instructions)
+                        self.assertEqual(expected, metadata["source_files"][canonical])
+                        self.assertEqual(expected, originals[canonical])
+                    projection = metadata["projections"][item["path"]]
+                    self.assertEqual("roles/" + item["name"] + ".md", projection["source"])
+                    self.assertEqual(item["sha256"], projection["projection_sha256"])
+                    self.assertEqual(item["sha256"], metadata["payload_sha256"][item["path"]])
+                    for canonical, expected in projection["dependencies"].items():
+                        self.assertEqual(expected, hashlib.sha256((root / canonical).read_bytes()).hexdigest())
+                self.assertEqual(hashlib.sha256((root / builder.CODEX_NATIVE_INDEX).read_bytes()).hexdigest(),
+                                 metadata["payload_sha256"][builder.CODEX_NATIVE_INDEX])
+                self.assertFalse((root / "agents").exists())
+                self.assertFalse((root / "native_config").exists())
+
+    def test_codex_template_encoding_preserves_literal_instruction_data(self):
+        # 角色正文的引号、反斜杠和多行文本必须完整往返；没有模型、推理或
+        # 权限字段可被正文意外逃逸生成，准备组件随后再对路径安全序列化。
+        body = b'---\nname: xy-backend\ndescription: literal "quoted" role\n---\n\nvalue = "x"\\path\nsecond line\n'
+        description, encoded = builder.render_codex_native_template(
+            "xy-backend", body, b"constraints\n", (PACK / builder.CODEX_NATIVE_CONTEXT).read_bytes(), b"roles\n")
+        definition = tomllib.loads(encoded.decode("utf-8"))
+        self.assertEqual('literal "quoted" role', description)
+        self.assertEqual({"name", "description", "developer_instructions"}, set(definition))
+        self.assertTrue(definition["developer_instructions"].endswith(body.decode()))
 
     def test_codex_hook_is_only_an_entry_reminder_with_explicit_trust_boundary(self):
         root = self.installed["codex"]

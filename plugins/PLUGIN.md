@@ -1,6 +1,6 @@
 # xy-workflow 3.0 官方插件候选
 
-插件唯一版本源为 `product/PLUGIN_VERSION`；独立配置工具版本源为 `native_config/VERSION`。本轮本机模型目录、调用偏好、配置页及只读派发接入已通过独立 QA，见[主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/native-model-preferences.md)。实际发行以 Git alpha 分支和真实 Release 资产为准，独立组件固定发行与发布状态以 `plugins/maintenance/component.json` 为准；固定组件描述只在真实下载校验后标记 published。本机安装状态以客户端列表和实际安装回执为准。默认使用自有 Git alpha 分发，官方公开目录与稳定发行尚未就绪，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
+插件唯一版本源为 `product/PLUGIN_VERSION`；独立配置工具版本源为 `native_config/VERSION`。当前源码准备发布 `3.0.5／0.1.4`，Codex 显式原生准备及范围菜单已通过独立功能 QA，见[主题计划](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/native-model-preferences.md)；正式发行、三 stable 更新和本机升级尚未完成，已交付基线仍为 `3.0.4／0.1.3`。实际发行以 Git stable 分支和真实 Release 资产为准，独立组件固定发行与发布状态以 `plugins/maintenance/component.json` 为准；固定组件描述只在真实下载校验后标记 published。本机安装状态以客户端列表和实际安装回执为准。默认使用自有 Git stable 分发，官方公开目录尚未上架，Windows 暂停。实际命令见 [INSTALL](INSTALL.md)，工作方式见[使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)。
 
 ## 载荷与职责
 
@@ -54,14 +54,16 @@ Specialist，新 API／迁移才读 What's New；本机资源不随插件复制�
 
 独立配置核心位于 `native_config/`，由自身构建器交付，插件不导入服务、不包含网页、独立 ZIP 或模型 MCP。首次组件准备需要明确确认并校验真实发行包；维护失败不阻断普通工作流。插件缓存角色只读，原生文件与调用偏好分开管理。
 
+Codex 七角色的完整定义由同源角色生成到非发现目录 `native-agent-templates/codex`。需要原生文件时，进入 `xy-config` →“原生定义”→明确选“用户级（推荐）”或“项目级”→“准备原生 Agent”→预览完整定义→确认保存；只创建缺失定义，保留现有同名定义，不写模型或推理默认。插件安装不创建这些文件，升级也不自动更新或删除已准备定义，来源版本变化后需显式维护。用户级完整定义不等于统一模型默认，文件创建和发现不证明宿主按名称调用或指定模型已生效。新版启动器的 `--preparation-source` 只与固定描述绑定的 `0.1.4` 组件配套，不能调用旧 `0.1.3`。
+
 唯一纯标准库只读合同 `native_config/preference_contract.py` 逐字节投影为插件的 `plugins/dispatch_preferences.py`，记录来源及投影摘要。PM 在派发前通过 `source_pack.py dispatch-preferences` 读取用户／项目偏好，无偏好时沿宿主默认；有偏好时只映射实际原生工具支持的字段，异常不静默回退。它不启动或准备组件、HTTP/MCP，不写设置，不改变业务确认、角色权限或当前主会话模型；维护 Skill 分支不进入该业务步骤。
 
 当前公开命名由 `product/command_identity.json` 唯一维护；远程分发与组件可用性以真实 Release 资产和
 `plugins/maintenance/component.json` 为准，本机是否已切换以客户端列表和实际安装回执为准；先完成当前活动任务。
 
-## alpha 来源与安装
+## 正式来源与历史 alpha
 
-三个分发分支为 `plugins-codex-alpha`、`plugins-claude-alpha`、`plugins-antigravity-alpha`。Codex/Claude 的远程市场名统一为 `xy-workflow-alpha`，插件名为 `xy-workflow`；开发本地来源仍为 `xy-workflow-local`。完整官方命令见 [INSTALL](INSTALL.md)，不要交换 Codex 的 `--ref`、Claude 的 `#分支` 和 AGY 的 GitHub `tree/分支` 语法。
+三个正式分发分支为 `plugins-codex-stable`、`plugins-claude-stable`、`plugins-antigravity-stable`，Codex/Claude 的正式远程市场名为 `xy-workflow`，插件名为 `xy-workflow`。历史 `plugins-codex-alpha`、`plugins-claude-alpha`、`plugins-antigravity-alpha` 与 `xy-workflow-alpha` 市场保留审计；开发本地来源仍为 `xy-workflow-local`。完整官方命令见 [INSTALL](INSTALL.md)，不要交换 Codex 的 `--ref`、Claude 的 `#分支` 和 AGY 的 GitHub `tree/分支` 语法。
 
 载荷来自同一成功 CI 的固定源码 SHA 与校验候选，发布过程不创建第二条构建链。旧来源不会自动迁移；已有本地测试安装按官方客户端确认来源与范围，避免同名候选同时启用。官方登录、权限和 Codex Hook 信任保持原流程；自有 Git 市场不代表官方公开目录审核通过。
 

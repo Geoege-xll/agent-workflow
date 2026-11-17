@@ -93,6 +93,67 @@ const response = (value, status = 200) => ({ok: status < 400, status, json: asyn
                                 text=True, capture_output=True, timeout=12)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_context_menus_wait_for_focus_destination_and_preserve_dismissal(self):
+        # 直接绑定生产监听器；这里只验证事件边界，不模拟浏览器的 label 默认激活。
+        # 真实点击与范围切换仍需浏览器验收，避免用测试替身冒充原生表单行为。
+        self.run_javascript(r"""
+const {bindContextMenus} = require('./native_config/web/console.js');
+const root = new EventTarget();
+const emit = (receiver, type, target, fields = {}) => {
+  const event = new Event(type, {cancelable:true});
+  Object.defineProperty(event, 'target', {value:target});
+  for (const [key,value] of Object.entries(fields)) Object.defineProperty(event,key,{value});
+  receiver.dispatchEvent(event);
+  return event;
+};
+let focused = null, choiceCloses = 0;
+class Menu extends EventTarget {
+  constructor(id) {
+    super(); this.id = id; this.open = false;
+    this.summary = {parent:this,focus:()=>{focused=this.summary;emit(root,'focusin',this.summary);}};
+  }
+  contains(target) { for (let node = target; node; node = node.parent) if (node === this) return true; return false; }
+  querySelector(selector) { assert.equal(selector,'summary'); return this.summary; }
+}
+const menus = ['platform','scope','project'].map(id => new Menu(id));
+bindContextMenus(menus,root,()=>choiceCloses++);
+const outside = {};
+for (const menu of menus) {
+  const label = {parent:menu}, control = {parent:label};
+  menu.open = true;
+  // 对应真实 Chrome：按下菜单内文字后 summary 先失焦，relatedTarget 暂时为 null。
+  emit(root,'pointerdown',label);
+  emit(menu,'focusout',menu.summary,{relatedTarget:null});
+  assert.equal(menu.open,true,menu.id+'：未知焦点落点不能提前隐藏待激活控件');
+  emit(root,'focusin',control);
+  assert.equal(menu.open,true,menu.id+'：菜单内焦点移动保持展开');
+  emit(root,'focusin',outside);
+  assert.equal(menu.open,false,menu.id+'：Tab/程序焦点离开时关闭');
+
+  menu.open = true;
+  emit(root,'pointerdown',outside);
+  assert.equal(menu.open,false,menu.id+'：不接收焦点的外部区域仍可关闭');
+
+  menu.open = true;
+  const enter = emit(menu,'keydown',control,{key:'Enter'});
+  assert.equal(enter.defaultPrevented,false,'不接管原生控件的激活按键');
+  assert.equal(menu.open,true);
+  const escape = emit(menu,'keydown',control,{key:'Escape'});
+  assert.equal(escape.defaultPrevented,true);
+  assert.equal(menu.open,false);
+  assert.equal(focused,menu.summary,menu.id+'：Esc 返回自身 summary');
+
+  menus.forEach(item=>{item.open=true;});
+  emit(menu,'toggle',menu);
+  assert.deepEqual(menus.map(item=>item.open),menus.map(item=>item===menu),'展开仍保持互斥');
+  menu.open = false;
+  const before = choiceCloses;
+  emit(menu,'toggle',menu);
+  assert.equal(choiceCloses,before,'关闭事件不额外关闭字段选择浮层');
+}
+assert.equal(choiceCloses,menus.length);
+""")
+
     def test_connection_exchange_reload_priority_expiry_and_storage_boundaries(self):
         # 同一生产连接模块验证原token只交换一次、恢复先健康核验，且不损坏其它history消费者。
         self.run_javascript(r"""
@@ -203,6 +264,68 @@ unknown.set('unknown-permission','model','unsafe');
 assert.equal(unknown.dirty, false);
 assert.throws(() => contextContract(context([row('same'),row('same')])), ApiError);
 assert.equal(contextContract(context([row(longId)] )).roles[0].role, longId);
+""")
+
+    def test_native_preparation_isolated_preview_source_validation_and_inventory_readback(self):
+        # 候选来源只能生成独占准备请求；预览既不写入，也不能把模板冒充已发现身份。
+        # 使用同一生产投影/API/草稿，覆盖已有定义继续可编辑和准备回读后保留三类草稿。
+        self.run_javascript(r"""
+const {preparationState,preparationPayload} = require('./native_config/web/native-definitions.js');
+const candidate = (id,status='missing') => ({candidate_id:id,name:'真实来源角色 '+id,description:'来源职责',status,target_path:'/fixture/.codex/agents/'+id+'.toml'});
+const preparation = {supported:true,source_id:'plugin:fixture',source_revision:'source-v1',
+  candidates:[candidate('dynamic-a'),candidate('keep','existing'),candidate('collision','conflict'),candidate('unsafe','blocked')]};
+const ctx={...context(),native_preparation:preparation};
+assert.equal(preparationState(preparation,'codex').missing.length,1);
+assert.deepEqual(preparationPayload(ctx),{source_id:'plugin:fixture',source_revision:'source-v1',candidate_ids:['dynamic-a']});
+const draft=new Draft({host:'codex',scope:'global'});draft.accept(contextContract(ctx));
+assert.deepEqual(draft.context.roles.map(row=>row.role),['opaque:a']);
+draft.set('opaque:a','model','retained-model');
+draft.activation.saved={writable:true,state:'inherit'};draft.activation.set('enabled');
+draft.preferences.accept({roles:[row('*')]});draft.preferences.set('*','effort','low');
+const payload=preparationPayload(draft.context);
+assert.equal(JSON.stringify(payload).includes('target_path'),false);
+assert.equal(JSON.stringify(payload).includes('description'),false);
+for(const invalid of [undefined,{...preparation,source_revision:null},
+  {...preparation,candidates:[candidate('x'),candidate('x')]},
+  {...preparation,candidates:[candidate('x','invented-success')]},
+  {supported:false,source_id:null,source_revision:null,candidates:[]}]) {
+  assert.equal(preparationState(invalid,'codex').available,false);
+  assert.equal(preparationPayload({...ctx,native_preparation:invalid}),null);
+  assert.equal(contextContract({...ctx,native_preparation:invalid}).roles[0].role,'opaque:a','来源异常不遮盖已有定义');
+}
+const change={role:'dynamic-a',name:'真实来源角色',origin:'user',field:'native_definition',before:null,
+  after:'name = "dynamic-a"\n',path:'/fixture/.codex/agents/dynamic-a.toml',source_id:preparation.source_id,source_revision:preparation.source_revision};
+const plan={kind:'native_preparation',preview_id:'prepare-plan',changes:[change],warnings:[],effect:{saved:false,runtime_verified:false}};
+const calls=[];const api=new ModelApi('test',async(path,init)=>{calls.push({path,body:JSON.parse(init.body)});return response(plan);});
+await api.previewPreparation(draft.location,draft.context);
+assert.deepEqual(calls,[{path:'/api/preview',body:{host:'codex',scope:'global',revision:'rev-1',native_preparation:payload}}]);
+assert.equal(draft.context.roles.length,1,'未确认预览不能新增身份');
+assert.equal(draft.dirty,true);assert.equal(draft.preferences.dirty,true);assert.equal(draft.activation.dirty,true);
+await api.previewPreparation({host:'codex',scope:'project',project:'/fixture/project'},ctx);
+assert.equal(calls[1].body.scope,'project');assert.equal(calls[1].body.project,'/fixture/project','项目选择不能静默切用户级');
+for(const badPlan of [{...plan,kind:'model'}, {...plan,changes:[{...change,source_revision:'changed'}]},
+  {...plan,changes:[{...change,role:'not-requested'}]}, {...plan,changes:[{...change,field:'model'}]}]) {
+  const invalid=new ModelApi('test',async()=>response(badPlan));
+  await assert.rejects(invalid.previewPreparation(draft.location,ctx),error=>error.code==='invalid_response');
+}
+const conflict=new ModelApi('test',async()=>response({error:{code:'conflict',message:'来源已变化'}},409));
+await assert.rejects(conflict.previewPreparation(draft.location,ctx),error=>error.code==='conflict');
+// 清单只能来自正式保存回读；准备事务不能清除其他事务在旧 revision 上的明确编辑。
+const discovered=row('native:dynamic-a',{name:'回读实际身份'});
+draft.accept({...ctx,revision:'rev-2',roles:[row('opaque:a'),discovered],native_preparation:{...preparation,
+  source_revision:'source-v2',candidates:preparation.candidates.map(row=>({...row,status:row.status==='missing'?'existing':row.status}))}},'native_preparation');
+assert.equal(draft.row('native:dynamic-a').name,'回读实际身份');
+assert.equal(draft.value('opaque:a','model'),'retained-model');
+assert.equal(draft.activation.value,'enabled');assert.equal(draft.preferences.edits.get('*').effort,'low');
+assert.equal(preparationPayload(draft.context),null,'回读已有定义不得再次准备');
+const owner=new RequestOwner(),old=owner.begin();
+let release;const lateApi=new ModelApi('test',async()=>new Promise(resolve=>{release=resolve;}));
+const pending=lateApi.previewPreparation(draft.location,ctx,old.signal);
+owner.cancel();release(response(plan));await pending;
+assert.equal(owner.current(old),false,'即使底层晚到成功，已切换范围/宿主的归属也不能恢复');
+const expired=new ModelApi('test',async()=>{throw Error('失效连接不应到达网络');});
+expired.connection={authorize(){throw new ApiError('authentication','expired');}};
+await assert.rejects(expired.previewPreparation(draft.location,ctx),error=>error.code==='authentication');
 """)
 
     def test_protocol_scope_null_preview_apply_and_recoverable_errors(self):

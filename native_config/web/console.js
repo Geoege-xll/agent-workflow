@@ -3,6 +3,8 @@
 (() => {
   "use strict";
 
+  const nativeModule = typeof module !== "undefined" && module.exports ? require("./native-definitions.js") : globalThis.ConsoleNativeDefinitions;
+
   const HOSTS = ["codex", "claude", "antigravity"];
   const HOST_LABELS = { codex: "Codex", claude: "Claude Code", antigravity: "Antigravity" };
   const FIELDS = ["model", "effort"];
@@ -269,6 +271,22 @@
       }
       return value;
     }
+    async previewPreparation(location, context, signal) {
+      const payload = nativeModule.preparationPayload(context);
+      if (!payload) throw new ApiError("invalid_input", "当前没有可准备的缺失定义，请刷新定义并核对来源。");
+      // 准备是第四种独占事务：复用鉴权与预览确认，但不发送 edits/reset、偏好或启停字段。
+      const body = {host:location.host, scope:location.scope, revision:context.revision, native_preparation:payload};
+      if (location.scope === "project") body.project = location.project;
+      const value = await this.request("/api/preview", body, signal);
+      if (typeof value.preview_id !== "string" || value.kind !== "native_preparation" || !Array.isArray(value.changes) ||
+          value.changes.some(row => !object(row) || !payload.candidate_ids.includes(row.role) || row.field !== "native_definition" ||
+            typeof row.name !== "string" || typeof row.path !== "string" || row.before !== null || typeof row.after !== "string" ||
+            row.source_id !== payload.source_id || row.source_revision !== payload.source_revision) ||
+          !Array.isArray(value.warnings) || !object(value.effect)) {
+        throw new ApiError("invalid_response", "原生 Agent 准备预览无效，未执行保存；请刷新定义后重试。");
+      }
+      return value;
+    }
     async apply(previewId) {
       const value = await this.request("/api/apply", { preview_id: previewId }, undefined, (body, status, code) => {
         if (status !== 409 || code !== "partial_failure") return undefined;
@@ -405,8 +423,26 @@
     return entries;
   }
 
-  // Node 用例直接消费同一协议/草稿逻辑，避免测试内重新实现继承或请求规则。
-  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices };
+  // 三个上下文菜单共用展开互斥、关闭与焦点恢复规则；不接管范围切换或草稿状态。
+  function bindContextMenus(contextMenus, root, closeChoices) {
+    for (const menu of contextMenus) {
+      menu.addEventListener("toggle", () => {
+        if (!menu.open) return;
+        closeChoices(); for (const other of contextMenus) if (other !== menu) other.open = false;
+      });
+      menu.addEventListener("keydown", event => {
+        if (event.key === "Escape" && menu.open) { event.preventDefault(); menu.open = false; menu.querySelector("summary").focus(); }
+      });
+    }
+    // 点击 label 文字时，summary 可能先 focusout 且 relatedTarget 为 null；此时隐藏
+    // details 会阻断后续 label 对 radio 的原生激活。等 focusin 的落点明确后再关闭，
+    // 保留菜单内的文字/控件交互，也让 Tab 或程序移到外部焦点时正常收起菜单。
+    root.addEventListener("focusin", event => { for (const menu of contextMenus) if (menu.open && !menu.contains(event.target)) menu.open = false; });
+    root.addEventListener("pointerdown", event => { for (const menu of contextMenus) if (menu.open && !menu.contains(event.target)) menu.open = false; });
+  }
+
+  // Node 用例直接消费同一协议、草稿和菜单监听逻辑，避免测试内另写一份生产规则。
+  if (typeof module !== "undefined" && module.exports) module.exports = { ModelApi, ApiError, Draft, ActivationDraft, RequestOwner, contextContract, activationContract, applyReceiptContract, applyFailed, applyNeedsAttention, locationKey, preferenceContract, modelCandidates, effortOptions, resolvedField, validCustomModelId, modelChoices, bindContextMenus };
   if (typeof document === "undefined") return;
 
   const $ = id => document.getElementById(id);
@@ -754,6 +790,7 @@
     $("refresh-catalog").disabled = !available || refreshing;
     $("refresh-catalog").textContent = refreshing ? "正在刷新…" : "刷新目录";
     $("refresh-native").disabled = !connection.ready || loading || mutation;
+    $("prepare-native").disabled = !available || active.conflicted || !nativeModule.preparationPayload(active.context);
     for (const button of document.querySelectorAll("[data-definition]")) button.disabled = mutation || loading;
     $("preview-changes").disabled = !available || !current.dirty || active.conflicted || (activation ? active.activation.saved?.writable !== true : invalid);
     $("preview-changes").textContent = mutation && !$("preview-dialog").open ? "正在预览…" : "预览并保存";
@@ -908,6 +945,7 @@
     refreshFieldDisplays();
   }
   function renderNative() {
+    renderPreparation();
     const key = locationKey(active.location), rows = active.context?.roles || [];
     const projection = nativeDefinitions.project(key, rows);
     const list = $("native-items"); list.replaceChildren();
@@ -951,6 +989,23 @@
       node("p", "help native-status", "原生定义遵循宿主读取顺序；文件保存、会话加载与真实模型运行分别核实。"));
     refreshFieldDisplays();
   }
+  function renderPreparation() {
+    const state = nativeModule.preparationState(active.context?.native_preparation, active.location.host);
+    $("native-preparation").hidden = preferenceMode();
+    $("preparation-scope").textContent = active.location.scope === "project" ?
+      "仅为本项目准备；其他项目不会获得这些定义。推荐用户级准备，可在顶部明确切换范围。" :
+      "推荐：为当前用户准备，供此用户的后续项目发现。";
+    $("preparation-status").textContent = loading ? "正在核对准备来源…" : state.message;
+    $("preparation-candidates").hidden = !state.available;
+    $("preparation-summary").textContent = "来源与候选 · " + state.missing.length + " 个可准备";
+    $("preparation-source").textContent = state.available ? "来源：" + state.source_id + " · 修订：" + state.source_revision : "";
+    const list = $("preparation-items"); list.replaceChildren();
+    for (const row of state.candidates) {
+      const item = node("li"); item.append(node("strong", "", row.name), node("span", "help", " · " + nativeModule.PREPARATION_STATUSES[row.status]),
+        node("p", "help", row.description || "来源未提供职责说明"), node("code", "location", row.target_path));
+      list.append(item);
+    }
+  }
   function announceSwitch() {
     clearTimeout(switchNoticeTimer);
     const count = [...drafts.values()].reduce((total, draft) => total + draft.count + draft.preferences.count + (draft.activation.dirty ? 1 : 0), 0);
@@ -983,6 +1038,7 @@
     $("native-heading").hidden = true; $("open-native").hidden = true;
     $("refresh-catalog").hidden = !preferenceMode(); $("refresh-native").hidden = preferenceMode();
     $("preference-sheet").hidden = !preferenceMode(); $("native-layout").hidden = preferenceMode();
+    $("native-preparation").hidden = preferenceMode();
     $("secondary-links").hidden = !preferenceMode();
     $("list-title").firstChild.textContent = preferenceMode() ? "逐 Agent 覆盖 " : "原生定义 ";
     $("native-readonly-summary").hidden = true;
@@ -1089,12 +1145,20 @@
   }
   function renderPreview(value, reset, kind = "model") {
     choices.close(false);
+    const preparation = kind === "native_preparation";
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
     const changes = $("preview-changes-list"); changes.replaceChildren();
-    $("preview-title").textContent = activation ? "确认工作流启停" : preferences ? reset ? "确认清除本范围调用偏好" : "确认调用偏好更改" : reset ? "确认清除本范围模型覆盖" : "确认模型配置更改";
+    $("preview-title").textContent = preparation ? "确认准备原生 Agent" : activation ? "确认工作流启停" : preferences ? reset ? "确认清除本范围调用偏好" : "确认调用偏好更改" : reset ? "确认清除本范围模型覆盖" : "确认模型配置更改";
     $("preview-location").textContent = describeLocation(active.location);
     for (const change of value.changes) {
+      if (preparation) {
+        // 正文与路径仅展示服务端预览结果；浏览器从不将其作为可编辑文件或新身份回传。
+        const item = node("section", "change-item"); item.append(node("h3", "", change.name + " · 创建缺失定义"),
+          node("p", "help", "目标路径：" + change.path), node("p", "help", "来源：" + change.source_id + " · 修订：" + change.source_revision));
+        const contents = node("details", "disclosure"); contents.append(node("summary", "", "查看将创建的定义"), node("pre", "preparation-content", change.after));
+        item.append(contents); changes.append(item); continue;
+      }
       if (activation) {
         const item = node("section", "change-item"); item.append(node("h3", "", "工作流插件 · " + change.plugin_id));
         item.append(node("p", "help", "目标范围：" + (change.scope === "global" ? "用户级默认" : active.location.host === "claude" ? "仅本机当前项目（local）" : "当前项目")), node("p", "help", "目标路径：" + change.source_path));
@@ -1120,10 +1184,10 @@
     }
     if (!value.changes.length) changes.append(node("p", "help", "此范围没有需要保存的字段更改。"));
     const blocked = value.dispatch_ready === false;
-    message(activation ? "此预览仅保存工作流启停；其他两类草稿会保留。文件保存后等待新会话加载，实际运行未验证。" : preferences ? "此预览仅保存调用偏好；原生文件与启停草稿保留。保存后供后续派发前读取，不改变当前会话；实际运行未验证。" : blocked ? "配置可以保存，但当前派发受阻。原因：" + (value.blocked_reason || "服务端未提供具体原因，请重新读取。") : value.dispatch_ready === true ? "预览已生成；保存后仍需由宿主采纳，实际运行尚未验证。" : "预览已生成；派发状态未知。", !activation && blocked ? "warning" : "info", $("preview-status"));
+    message(preparation ? "此预览仅创建缺失的原生定义；模型、调用偏好与启停草稿均保留。尚未写入，取消不会创建文件。" : activation ? "此预览仅保存工作流启停；其他两类草稿会保留。文件保存后等待新会话加载，实际运行未验证。" : preferences ? "此预览仅保存调用偏好；原生文件与启停草稿保留。保存后供后续派发前读取，不改变当前会话；实际运行未验证。" : blocked ? "配置可以保存，但当前派发受阻。原因：" + (value.blocked_reason || "服务端未提供具体原因，请重新读取。") : value.dispatch_ready === true ? "预览已生成；保存后仍需由宿主采纳，实际运行尚未验证。" : "预览已生成；派发状态未知。", !preparation && !activation && blocked ? "warning" : "info", $("preview-status"));
     $("preview-activation-recovery").hidden = !activation;
     if (activation) renderActivationRecovery($("preview-activation-recovery"), active.activation.saved);
-    $("preview-effect").textContent = preferences ? "调用偏好保存后供下一次派发前读取；当前会话不会因此改用模型。原生完整定义的优先级、当前工具参数与实际模型执行仍须宿主确认。" : activation ? "启停保存只改变本层文件，等待新会话加载；当前会话已加载上下文不受影响，实际工作流运行未验证。" : "原生定义保存后需要宿主重新加载或重新发现。当前 Agent 不会因此切换模型，实际模型运行未验证；多文件发布不具有跨文件系统崩溃原子性。";
+    $("preview-effect").textContent = preparation ? (active.location.scope === "project" ? "仅为本项目创建定义。" : "为当前用户创建定义。") + "已有文件不会覆盖。确认后以服务端回读发现结果更新身份清单；保存不等于新会话已加载，实际运行未验证。" : preferences ? "调用偏好保存后供下一次派发前读取；当前会话不会因此改用模型。原生完整定义的优先级、当前工具参数与实际模型执行仍须宿主确认。" : activation ? "启停保存只改变本层文件，等待新会话加载；当前会话已加载上下文不受影响，实际工作流运行未验证。" : "原生定义保存后需要宿主重新加载或重新发现。当前 Agent 不会因此切换模型，实际模型运行未验证；多文件发布不具有跨文件系统崩溃原子性。";
     const warnings = $("warning-list"); warnings.replaceChildren();
     for (const warning of value.warnings) warnings.append(node("li", "", String(warning)));
     $("preview-warnings").hidden = !value.warnings.length;
@@ -1138,15 +1202,16 @@
   }
   async function openPreview(reset = false, kind = editorMode) {
     choices.close(false);
+    const preparation = kind === "native_preparation";
     const activation = kind === "workflow_activation";
     const preferences = kind === "dispatch_preferences";
     if (!connection.ready || !active.context || mutation || loading) return;
-    if (!activation) {
+    if (!activation && !preparation) {
       const invalid = [...document.querySelectorAll("#section-models [aria-invalid='true']")].find(control => !control.disabled);
       if (invalid) { message("推理值与当前模型不兼容，请重选或清除后再预览。", "error"); (invalid.hidden ? $(invalid.id + "-picker") : invalid)?.focus(); return; }
     }
     const intendedDraft = active;
-    if (!activation && active.catalog && !currentCatalog()) {
+    if (!activation && !preparation && active.catalog && !currentCatalog()) {
       // 草稿可能在启停保存或外部配置变化前已完成编辑；直接点预览也必须先更新能力来源。
       // 这是用户触发的按需读取，不放进 render；目录失败不能借旧候选继续生成计划。
       await refreshCatalog();
@@ -1155,13 +1220,16 @@
       if (!currentCatalog()) { message("当前模型目录来源未确认；草稿已保留，请刷新目录成功后再预览。", "error"); return; }
     }
     if (active.conflicted || (activation && (!active.activation.dirty || active.activation.saved?.writable !== true))) return;
-    if (!activation && !reset && (preferences ? active.preferences : active).unavailableEdits.length) { message("部分草稿对应的 Agent 已消失或变为只读，请先放弃草稿。", "error"); return; }
+    if (preparation && !nativeModule.preparationPayload(active.context)) return;
+    if (!activation && !preparation && !reset && (preferences ? active.preferences : active).unavailableEdits.length) { message("部分草稿对应的 Agent 已消失或变为只读，请先放弃草稿。", "error"); return; }
     loadOwner.cancel();
     catalogOwner.cancel(); refreshing = false;
-    const draft = active; const ticket = previewOwner.begin(); mutation = true; dialogTrigger = document.activeElement; setControls();
+    const draft = active, baseline = draft.context; const ticket = previewOwner.begin(); mutation = true; dialogTrigger = document.activeElement; setControls();
     try {
-      const value = activation ? await api.previewActivation(draft.location, draft.context.revision, draft.activation.value, ticket.signal) : preferences ? await api.previewPreferences(draft.location, draft.context.revision, reset ? {} : draft.preferences.payload(), reset, ticket.signal) : await api.preview(draft.location, draft.context.revision, reset ? {} : draft.payload(), reset, ticket.signal);
+      const value = preparation ? await api.previewPreparation(draft.location, baseline, ticket.signal) : activation ? await api.previewActivation(draft.location, draft.context.revision, draft.activation.value, ticket.signal) : preferences ? await api.previewPreferences(draft.location, draft.context.revision, reset ? {} : draft.preferences.payload(), reset, ticket.signal) : await api.preview(draft.location, draft.context.revision, reset ? {} : draft.payload(), reset, ticket.signal);
       if (!previewOwner.current(ticket) || active !== draft) return;
+      // 即使同一范围被异步回读更新，也不能把旧来源指纹形成的准备计划展示为当前候选。
+      if (preparation && draft.context !== baseline) { message("准备来源已重新读取；未执行保存，请根据当前候选再次预览。", "warning"); return; }
       preview = { value, draft, kind }; renderPreview(value, reset, kind);
       $("preview-dialog").showModal(); $("preview-title").focus();
     } catch (error) {
@@ -1277,7 +1345,7 @@
         plan.draft.accept(result.context, plan.kind);
         plan.draft.lastSave = "已保存 · " + reload + " · 实际运行未验证";
         const gap = result.temporary_visibility_gap === true ? " · 文件曾有短暂可见性缺口" : "";
-        message((plan.kind === "workflow_activation" ? "工作流启停已保存；其他草稿已保留" : plan.kind === "dispatch_preferences" ? "调用偏好已保存；原生字段与启停草稿已保留" : "原生字段已保存；调用偏好与启停草稿已保留") + " · " + reload + gap + " · 实际运行未验证。", "success");
+        message((plan.kind === "native_preparation" ? "原生定义已准备，已按服务端回读更新清单；模型、调用偏好与启停草稿已保留" : plan.kind === "workflow_activation" ? "工作流启停已保存；其他草稿已保留" : plan.kind === "dispatch_preferences" ? "调用偏好已保存；原生字段与启停草稿已保留" : "原生字段已保存；调用偏好与启停草稿已保留") + " · " + reload + gap + " · 实际运行未验证。", "success");
         preview = null; $("preview-dialog").close(); render();
       }
     } catch (error) {
@@ -1329,6 +1397,7 @@
     nativeDefinitions.search(locationKey(active.location), $("native-search").value); renderNative(); setControls();
   });
   $("refresh-native").addEventListener("click", reloadContext);
+  $("prepare-native").addEventListener("click", () => openPreview(false, "native_preparation"));
   function setEditorMode(mode) { choices.close(false); editorMode = mode; render(); announceSwitch(); }
   $("open-native").addEventListener("click", () => { setEditorMode("model"); $("back-preferences").focus(); });
   $("back-preferences").addEventListener("click", () => { setEditorMode("dispatch_preferences"); document.querySelector("#default-settings .picker-trigger")?.focus(); });
@@ -1392,17 +1461,7 @@
   window.addEventListener("pagehide", () => { choices.close(false); if (choices.frame) cancelAnimationFrame(choices.frame); clearTimeout(switchNoticeTimer); clearTimeout(connectionExpiryTimer); loadOwner.cancel(); catalogOwner.cancel(); previewOwner.cancel(); });
   const contextMenus = [$("platform-menu"), $("scope-menu"), $("project-menu")];
   function closeContextMenus() { for (const menu of contextMenus) menu.open = false; }
-  for (const menu of contextMenus) {
-    menu.addEventListener("toggle", () => {
-      if (!menu.open) return;
-      choices.close(false); for (const other of contextMenus) if (other !== menu) other.open = false;
-    });
-    menu.addEventListener("keydown", event => {
-      if (event.key === "Escape" && menu.open) { event.preventDefault(); menu.open = false; menu.querySelector("summary").focus(); }
-    });
-    menu.addEventListener("focusout", event => { if (!menu.contains(event.relatedTarget)) menu.open = false; });
-  }
-  document.addEventListener("pointerdown", event => { for (const menu of contextMenus) if (menu.open && !menu.contains(event.target)) menu.open = false; });
+  bindContextMenus(contextMenus, document, () => choices.close(false));
   $("platform-switch").addEventListener("keydown", event => {
     if (event.key === "ArrowDown") { event.preventDefault(); $("platform-menu").open = true; $("tab-" + active.location.host).focus(); }
   });

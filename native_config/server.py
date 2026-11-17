@@ -47,7 +47,13 @@ def configuration_identity(service) -> str:
     """服务复用同时绑定配置根；同一状态目录不能串用不同测试 home 或宿主根。"""
     home = str(getattr(service, "home", Path.home()))
     roots = {key: str(value) for key, value in getattr(service, "host_roots", {}).items()}
-    material = json.dumps({"home": home, "roots": roots}, sort_keys=True).encode("utf-8")
+    # 显式插件来源及其初始化修订也是服务身份；相同 data_dir 中的旧服务不能
+    # 静默替另一版本/另一物理插件根提供候选，即使宿主配置根完全相同。
+    identity = {"home": home, "roots": roots}
+    source = getattr(service, "preparation_identity", [None, None])
+    if source[0] is not None:
+        identity["preparation"] = source
+    material = json.dumps(identity, sort_keys=True).encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
@@ -389,7 +395,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         data = self._json_body()
         with self.server.business_request(self.connection):
             if path == "/api/preview":
-                if set(data) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation", "dispatch_preferences"}:
+                if set(data) - {"host", "scope", "project", "revision", "edits", "reset", "workflow_activation", "dispatch_preferences", "native_preparation"}:
                     raise ValueError("未知预览字段")
                 validate_location(data.get("host"), data.get("project"))
                 result = self.server.service.preview(data)

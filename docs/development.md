@@ -1,6 +1,8 @@
 # Agent Workflow 3.0 开发手册
 
-当前产品是官方工作流插件与独立原生Agent配置工具。当前正式版本为`xy-workflow 3.0.4`与`Native Agent Config 0.1.3`，分别来自`product/PLUGIN_VERSION`和`native_config/VERSION`。3.0.4文件交付行为通过唯一独立QA及双系统最终CI，三个stable来源和本机三端载荷均已核验；独立配置组件保持原0.1.3正式包，本轮未重复发行或执行doctor。真实来源与边界见[发行主题](plans/stable-product-release.md)，不从安装推断新会话或模型采纳。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+当前产品是官方工作流插件与独立原生Agent配置工具。当前已交付正式版本为`xy-workflow 3.0.4`与`Native Agent Config 0.1.3`，两个源码版本源分别为`product/PLUGIN_VERSION`和`native_config/VERSION`。3.0.4文件交付行为通过唯一独立QA及双系统最终CI，三个stable来源和本机三端载荷均已核验；该轮独立配置组件保持原0.1.3正式包，未重复发行或执行doctor。真实来源与边界见[发行主题](plans/stable-product-release.md)，不从安装推断新会话或模型采纳。用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+
+当前源码版本源已准备为`3.0.5／0.1.4`，功能 QA 已通过，正式发行和本机升级尚未完成；前段`3.0.4／0.1.3`为已交付基线。新版薄启动器向独立组件传入`--preparation-source`，必须由固定`component.json`精确绑定支持该参数的`0.1.4`，不能沿用旧`0.1.3`或仅凭库存活动版本启动。
 
 ## 权威与职责
 
@@ -69,6 +71,12 @@ agy plugin install /absolute/new-output-directory/local/antigravity/xy-workflow
 CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。正式 Git 分发与官方公开目录审查分别判断，渠道名不授予额外权限。实际分支与安装发现应在发布后分别核对，并与源码 SHA、artifact 和载荷摘要对应；设计与验收见[远程安装计划](plans/plugin-remote-install.md)。
 
 独立工具的源码命令、HTTP 生命周期、包结构和恢复资料边界见[原生配置说明](agent-configuration.md)。组件发行描述只登记实际发布且下载校验过的资产，不猜测 URL，不把本地构建成功写成公开稳定发行。
+
+本轮先以`0.1.4 stable/unpublished`描述提交功能与版本，消费同 SHA 成功 CI 的独立组件原包正式发布；真实下载核验后，使用现有`build_config_distribution.py`生成`published`描述，再提交并等待最终插件 CI。最终候选的 Native ZIP 必须与先行正式包同字节；之后才能发布插件及三个 stable 来源。同一版本不得重绑不同字节，独立包 README 的源码是`packaging/build_agent_config.py`内的`README`常量，也须在首次组件发行前冻结。
+
+Codex 七角色的完整原生定义只由同源角色生成到插件非发现目录`native-agent-templates/codex`；安装和更新不向用户或项目根自动写入。用户须在`xy-config`的原生定义中明确选用户级或项目级、预览并确认缺失定义；已存在的同名定义保持，模型与推理默认不随准备写入，已准备定义也不随升级自动维护。启动器的`state/<host>`仅隔离各宿主控制台连接状态，不迁移模型或原生配置；旧`state`服务不自动停止或删除。
+
+本轮真实 CLI 探针的临时项目未受信任，会话未暴露`agent_type`，因此只记录文件创建和发现；按名称调用及实际模型仍未验证。该限制不能替代功能 QA 的通过或失败证据，不能为补齐证据改写用户信任或功能开关。
 
 ## 项目与原型边界
 

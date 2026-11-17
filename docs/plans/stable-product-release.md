@@ -1,20 +1,30 @@
 # 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`completed`
+- 阶段：`in_progress`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
 - 已验收版本：`3.0.4`
 
 ## 目标与范围
 
-本轮已在具体file HTML完整交付入口整改通过唯一独立QA后，发布xy-workflow `3.0.4`、升级本机三端插件，并用正式入口处理mt-shop交付目录。Native Agent Config保持已发布 `0.1.3`，不修改descriptor或重复发布。当前实际正式基线为3.0.4／0.1.3；功能依据和证据见[评审主题](workflow-document-lifecycle.md)，不把安装或服务就绪当作实际模型采纳或业务视觉批准。
+本轮在配置范围切换修复与Codex原生准备机制通过唯一独立QA后，准备发布xy-workflow `3.0.5`／Native Agent Config `0.1.4`并升级本机。新启动器需要显式来源参数，必须先发行新独立组件，再固定其已发布摘要，不能继续绑定0.1.3。当前实际正式安装仍为3.0.4／0.1.3；功能依据和验收见[模型配置主题](native-model-preferences.md)。
+
+只消费同一完整来源SHA的成功CI候选：先独立组件发布并真实下载核验，再生成published描述和最终插件来源，最后发布插件、三条stable及本机官方更新。保留现有模型、启停、安装范围和旧服务；插件安装不自动创建全局原生定义。源码QA、正式安装、宿主新会话和真实模型执行分别取证。
+
+上一轮已在具体file HTML完整交付入口整改通过唯一独立QA后，发布xy-workflow `3.0.4`、升级本机三端插件，并用正式入口处理mt-shop交付目录。当时Native Agent Config保持已发布 `0.1.3`，没有修改descriptor或重复发布；旧证据继续保留，见[评审主题](workflow-document-lifecycle.md)。
 
 上一轮3.0.3／0.1.3已完成配置页连接与指定布局、双网页／唯一原稿评审、feedback4精简及live5升级；3.0.2／0.1.2作为历史保留，功能分别归模型偏好和原型评审主题，旧证据保持。
 
 现有构建、组件描述和远程发布器已支持正式渠道，复用唯一版本与发行来源。保留两独立产品、唯一构建来源、实际下载摘要、正式宿主入口和配置偏好；不恢复 2.x、Windows 或其它安装渠道。
 
 ## 需求与验收
+
+- 本轮发行目标3.0.5／0.1.4；版本与独立组件绑定一致，首轮unpublished仅供候选，正式插件必须使用实际已发布0.1.4摘要。P1／P2协议不变，不把新增CLI选项传给旧目标版本。
+- Native首次发行后其产物闭包冻结；最终插件CI重建Native须与首次正式包同字节。只使用现有构建者、描述生成器和publisher，不在本机运行会扫描未跟踪资料的build_candidates。
+- 官方升级后逐项核对版本、载荷及偏好保留。新控制台仅在固定宿主子state保存连接，不自动删除或停止旧state中的65352；不修改用户信任、特性开关或实际全局Agent文件。
+
+以下REQ-601—606为上一轮3.0.4已完成发行范围，历史语义保持。
 
 - REQ-601：本轮目标为工作流3.0.4、配置工具仍为已发行0.1.3；构建、provenance、归档和GitHub Release使用真实正式版本，不带prerelease标记。尚未发布／安装时不先写成完成；保留旧基线。
 - REQ-602：正式与预发行版本／渠道必须匹配，拒绝混合、降级和同版不同载荷；复用唯一版本判定，不增加手工第二套发布器。
@@ -30,6 +40,10 @@
 本轮按已批准第六版配置工作台和最终评审工作台实现后发版，UI依据、功能验收分别见[模型偏好主题](native-model-preferences.md)和[评审主题](workflow-document-lifecycle.md)。来源技能及公共按需加载见 [角色技能主题](role-skill-routing.md)，文档质量见 [计划规范主题](plan-document-quality.md)。
 
 ## 当前进展与恢复入口
+
+本轮完整功能QA已PASS且PM实际validate有效：有效包SHA `124a419bb512676281b505847ee6b56dffa2601070660da6acba67356b59ff87`，同Reviewer交接SHA `ef437fa6b0fd8f6d55e5c1077f99f30bc60777401abd9d3512b20945b5d305b0`。当前正收口版本、固定描述和必要使用说明；尚无本轮CI／正式Release／本机更新完成证据。后续由同Reviewer复核发行delta，复用已验功能证据，不重做功能审查或新建Reviewer。
+
+以下为已完成的3.0.4及更早真实发行、安装与归档事实。
 
 3.0.4源码功能已由唯一Reviewer验收，原F1 FAIL及修复后完整Pack绑定PASS均保留，PM实际validate有效。最终生产来源为`484760aab0fc3010dbce8e7b18bc7defeca62baf`，源码QA后仅作两行长期文案收口。[正式CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/43852641432)Ubuntu／macOS各681项OK，含4项既有跳过；唯一artifact `14221082620`外摘要为`bf9e8df70d4b0e6e7650da94917be357d45acb5322201e6667b60e7b091239d1`，17文件／七包及sidecar核验通过。Native仍是原0.1.3的`368faac571dfa438a25c103ec2b1ab27b1483ee7692eaa982d248c5647618c26`。
 

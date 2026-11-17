@@ -124,6 +124,7 @@ class StandalonePackageTest(unittest.TestCase):
             self.assertEqual(package.read("native_config/VERSION"), (ROOT / "native_config/VERSION").read_bytes())
             self.assertIn("native_config/activation.py", names)
             self.assertIn("native_config/activation_codecs.py", names)
+            self.assertIn("native_config/preparation.py", names)
             record = json.loads(package.read("BUILD.json"))
             self.assertEqual(record["third_party_dependencies"], [])
             for name, digest in record["files"].items():
@@ -137,6 +138,7 @@ class StandalonePackageTest(unittest.TestCase):
                                 capture_output=True, text=True, timeout=8)
         self.assertEqual(listed.returncode, 0, listed.stderr)
         context = json.loads(listed.stdout)
+        self.assertFalse(context["native_preparation"]["supported"])
         self.assertEqual(len(context["roles"]), 1)
         role = context["roles"][0]["role"]
         self.assertTrue(role.startswith("agent_"))
@@ -483,24 +485,30 @@ class StandalonePackageTest(unittest.TestCase):
     def test_thin_plugin_prepares_real_zip_outside_repository_and_reuses_safe_service(self):
         """真实源码包只通过显式 ZIP 进入独立根；插件目录始终没有配置核心或网页。"""
         archive = self.build(self.base / "release")
-        thin = self.base / "standalone plugin with spaces" / "plugins" / "maintenance"
-        thin.mkdir(parents=True)
-        for name in ("launcher.py", "launcher.sh", "component_store.py"):
-            shutil.copyfile(ROOT / "plugins/maintenance" / name, thin / name)
-        # 薄插件必须包含真实生产依赖闭包；-I 子进程从包外启动，不借源码根
-        # 的 product 模块掩盖缺失资源，也不引入配置核心或网页。
-        product = thin.parents[1] / "product"
-        product.mkdir()
-        for name in ("__init__.py", "release_channels.py"):
-            shutil.copyfile(ROOT / "product" / name, product / name)
+        hosts = ("codex", "claude", "antigravity")
+        thins = {}
+        for host in hosts:
+            thin = self.base / (host + " standalone plugin with spaces") / "plugins" / "maintenance"
+            thin.mkdir(parents=True)
+            thins[host] = thin
+            for name in ("launcher.py", "launcher.sh", "component_store.py"):
+                shutil.copyfile(ROOT / "plugins/maintenance" / name, thin / name)
+            # 三个物理插件根共享同一真实组件，但来源身份不同。-I 子进程从包外
+            # 启动，不借源码根掩盖缺失依赖，也不在薄插件里放核心或网页。
+            product = thin.parents[1] / "product"
+            product.mkdir()
+            for name in ("__init__.py", "release_channels.py"):
+                shutil.copyfile(ROOT / "product" / name, product / name)
         with zipfile.ZipFile(archive) as package:
             version = package.read("native_config/VERSION").decode("ascii").strip()
         from product.release_channels import version_channel
         component = {"schema_version": 1, "product": "native-agent-config", "version": version,
                      "channel": version_channel(version), "cli_protocol": 1, "service_protocol": 2, "release_status": "unpublished",
                      "artifact": {"name": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "url": ""}}
-        descriptor = thin / "component.json"
-        descriptor.write_text(json.dumps(component))
+        descriptors = {}
+        for host, thin in thins.items():
+            descriptors[host] = thin / "component.json"
+            descriptors[host].write_text(json.dumps(component))
         component_root = self.base / "independent user components"
         environment = dict(os.environ)
         environment.pop("PYTHONPATH", None)
@@ -510,22 +518,23 @@ class StandalonePackageTest(unittest.TestCase):
                    "result,code=launcher.run(json.loads(sys.argv[2]),component_root=Path(sys.argv[3]),"
                    "descriptor_path=Path(sys.argv[4]));print(json.dumps(result));raise SystemExit(code)")
 
-        def launch(action, *extra):
-            args = [action, "--host", "codex", "--home", str(self.home), "--project", str(self.project), *extra]
-            result = subprocess.run([sys.executable, "-I", "-B", "-c", harness, str(thin), json.dumps(args),
-                                     str(component_root), str(descriptor)], cwd=self.base, env=environment,
+        def launch(action, *extra, host="codex"):
+            args = [action, "--host", host, "--home", str(self.home), "--project", str(self.project), *extra]
+            result = subprocess.run([sys.executable, "-I", "-B", "-c", harness, str(thins[host]), json.dumps(args),
+                                     str(component_root), str(descriptors[host])], cwd=self.base, env=environment,
                                     capture_output=True, text=True, timeout=45)
             return result, json.loads(result.stdout)
 
-        connection_path = component_root / "state/console/connection.json"
-        pid = None
+        connection_paths = {host: component_root / "state" / host / "console/connection.json" for host in hosts}
+        connection_path = connection_paths["codex"]
+        pids = {}
         try:
             result, missing = launch("open", "--no-browser")
             self.assertEqual((result.returncode, missing["state"]), (2, "preparation_required"))
             self.assertFalse(component_root.exists())
             result, opened = launch("open", "--prepare", "--artifact", str(archive), "--no-browser")
             if connection_path.exists():
-                pid = json.loads(connection_path.read_text())["pid"]
+                pids["codex"] = json.loads(connection_path.read_text())["pid"]
             self.assertEqual(result.returncode, 0, (result.stderr, opened))
             self.assertEqual((opened["state"], opened["service"]["reused"]), ("ready", False))
             self.assertNotIn("token=", json.dumps(opened))
@@ -537,35 +546,68 @@ class StandalonePackageTest(unittest.TestCase):
             result, reused = launch("open", "--no-browser")
             self.assertEqual((result.returncode, reused["service"]["reused"]), (0, True), reused)
             self.assertEqual(opened["console_url"], reused["console_url"])
-            self.assertEqual(json.loads(connection_path.read_text())["pid"], pid)
+            self.assertEqual(json.loads(connection_path.read_text())["pid"], pids["codex"])
+            # 连续从三个不同物理插件入口真实打开，组件只安装一份；宿主状态
+            # 各有来源绑定，不能要求用户先停止另一宿主的控制台才能打开本宿主。
+            for host in hosts[1:]:
+                result, other = launch("open", "--no-browser", host=host)
+                if connection_paths[host].exists():
+                    pids[host] = json.loads(connection_paths[host].read_text())["pid"]
+                self.assertEqual((result.returncode, other["state"]), (0, "ready"), (host, other, result.stderr))
+                self.assertFalse(other["service"]["reused"])
+            self.assertEqual(len(set(pids.values())), 3)
+            identities = [json.loads(path.read_text())["configuration_identity"] for path in connection_paths.values()]
+            self.assertEqual(len(set(identities)), 3)
+            self.assertFalse((component_root / "state/console").exists())
+            for host in hosts:
+                result, repeated = launch("open", "--no-browser", host=host)
+                self.assertEqual((result.returncode, repeated["state"], repeated["service"]["reused"]), (0, "ready", True), (host, repeated))
+                self.assertEqual(json.loads(connection_paths[host].read_text())["pid"], pids[host])
             before = {str(path.relative_to(component_root)): (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
                       for path in component_root.rglob("*")}
-            for action in ("status", "doctor"):
-                result, readonly = launch(action)
-                self.assertEqual((result.returncode, readonly["state"]), (0, "ready"), readonly)
-                self.assertIsNone(readonly["launch_file"])
-                self.assertNotIn("token=", json.dumps(readonly))
-                if action == "doctor":
-                    self.assertEqual(readonly["component"]["integrity"], "verified")
+            for host in hosts:
+                for action in ("status", "doctor"):
+                    result, readonly = launch(action, host=host)
+                    self.assertEqual((result.returncode, readonly["state"]), (0, "ready"), (host, readonly))
+                    self.assertIsNone(readonly["launch_file"])
+                    self.assertNotIn("token=", json.dumps(readonly))
+                    if action == "doctor":
+                        self.assertEqual(readonly["component"]["integrity"], "verified")
+            # 启动器的隔离不能削弱独立 CLI：手工复用同一 data-dir 却换来源，
+            # 仍必须明确拒绝，而非复用旧服务或悄悄重新绑定现有连接记录。
+            independent = Path(opened["component"]["root"]) / "scripts/agent_config.sh"
+            for action in ("open", "status"):
+                command = ["bash", str(independent), action, "--host", "codex", "--home", str(self.home),
+                           "--project", str(self.project), "--data-dir", str(component_root / "state/codex"),
+                           "--preparation-source", str(thins["claude"].parents[1])]
+                if action == "open":
+                    command.append("--no-browser")
+                conflict = subprocess.run(command, cwd=self.base, env=environment, capture_output=True, text=True, timeout=15)
+                response = json.loads(conflict.stdout)
+                self.assertEqual((conflict.returncode, response["code"]), (1, "configuration_conflict"), response)
             after = {str(path.relative_to(component_root)): (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
                      for path in component_root.rglob("*")}
             self.assertEqual(after, before)
-            self.assertFalse((thin / "native_config").exists())
+            self.assertTrue(all(not (thin / "native_config").exists() for thin in thins.values()))
             self.assertFalse((self.project / ".awf").exists())
             self.assertFalse((self.project / "AGENTS.md").exists())
             self.assertEqual(self.native_file.read_bytes(), self.before)
             self.assertEqual({key: environment.get(key) for key in before_environment}, before_environment)
         finally:
             # 只回收本测试独立根记录的真实服务，绝不探测或终止本机已有用户服务。
-            if pid is None and connection_path.exists():
-                pid = json.loads(connection_path.read_text())["pid"]
-            if pid is not None:
+            # 兼容断言失败时的旧单 state 路径，仅清理本测试临时根内真正启动的
+            # 子服务，不扫描用户目录，也不迁移或关闭任何生产旧控制台。
+            cleanup_paths = [*connection_paths.values(), component_root / "state/console/connection.json"]
+            for path in cleanup_paths:
+                if not path.exists():
+                    continue
+                pid = json.loads(path.read_text())["pid"]
                 try:
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
                 deadline = time.monotonic() + 5
-                while connection_path.exists() and time.monotonic() < deadline:
+                while path.exists() and time.monotonic() < deadline:
                     time.sleep(0.05)
 
 

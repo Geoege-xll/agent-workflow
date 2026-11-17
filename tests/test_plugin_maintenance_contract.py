@@ -177,6 +177,45 @@ print(json.dumps({"report": report, "exit": status}))
                     self.assertIsNone(value["report"]["launch_file"])
                     self.assertFalse(absent.exists())
 
+    def test_detached_launcher_binds_every_action_to_its_own_physical_plugin_root(self):
+        # 使用真实打包 launcher 的解析和响应校验，只替换外部组件选择/调用。
+        # 来源不可由用户输入，open/status/doctor 都以单个 argv 传递自身根；
+        # 独立组件会据此执行来源摘要校验和服务身份绑定。
+        code = '''import json, runpy, sys
+from pathlib import Path
+from types import SimpleNamespace
+module = runpy.run_path(sys.argv[1])
+calls = []
+module["run"].__globals__["installed"] = lambda root, data: root / "component"
+def invoke(command, **options):
+    calls.append({"command": command, "shell": options.get("shell", False)})
+    args = module["arguments"]([sys.argv[3], "--host", sys.argv[4]])
+    data = module["descriptor"](Path(sys.argv[1]).with_name("component.json"))
+    response = module["receipt"](args, data, "ok", "stopped")
+    return SimpleNamespace(stdout=json.dumps(response), returncode=0)
+report, status = module["run"]([sys.argv[3], "--host", sys.argv[4]], component_root=Path(sys.argv[2]), invoke=invoke)
+print(json.dumps({"report": report, "exit": status, "calls": calls}))
+'''
+        for host, root in self.installed.items():
+            for action in ("open", "status", "doctor"):
+                with self.subTest(host=host, action=action):
+                    absent = self.root / ("source-bound-component-" + host + "-" + action)
+                    result = subprocess.run(["bash", str(root / "lib/python_runtime.sh"), "-B", "-X", "utf8", "-c", code,
+                        str(root / "plugins/maintenance/launcher.py"), str(absent), action, host],
+                        cwd=self.root, env=isolated_environment(self.root / "source-bound-home"),
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    value = json.loads(result.stdout)
+                    self.assertEqual(0, value["exit"], value)
+                    self.assertEqual(1, len(value["calls"]))
+                    command = value["calls"][0]["command"]
+                    self.assertEqual(1, command.count("--preparation-source"))
+                    self.assertEqual(str(root.resolve()), command[command.index("--preparation-source") + 1])
+                    self.assertEqual(1, command.count("--data-dir"))
+                    self.assertEqual(str(absent / "state" / host), command[command.index("--data-dir") + 1])
+                    self.assertFalse(value["calls"][0]["shell"])
+                    self.assertFalse(absent.exists())
+
     def test_antigravity_budget_includes_maintenance_and_rejects_its_own_overflow(self):
         root = self.installed["antigravity"]
         actual = list((root / "skills").glob("*/SKILL.md"))

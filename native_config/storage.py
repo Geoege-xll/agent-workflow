@@ -246,7 +246,7 @@ def _same_after_move(actual: Snapshot, expected: Snapshot) -> bool:
             and actual.identity[:6] == expected.identity[:6])
 
 
-def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
+def write_batch(changes: tuple[Write, ...], guard: Callable[[], None], *, created_directories=None) -> dict:
     """隔离实际目标后核对前像，再排他发布；任何新出现的目标都不能被覆盖。
 
     标准库没有跨平台的 rename-CAS。这里使用同目录 0700 私有隔离目录和
@@ -392,6 +392,11 @@ def write_batch(changes: tuple[Write, ...], guard: Callable[[], None]) -> dict:
                         opened = os.fstat(anchor.fd)
                         if (opened.st_dev, opened.st_ino) != (created_identity.st_dev, created_identity.st_ino):
                             raise ConflictError("首次创建的配置父目录在打开前换位")
+                        # 只有排他发布、祖先链与重开 inode 三项均已核实，才向业务
+                        # guard 交付自身创建证据。它只允许归一化这一个空目录，
+                        # 不能用于忽略该目录下并发出现的原生文件或其他来源。
+                        if created_directories is not None:
+                            created_directories[anchor_path] = (opened.st_dev, opened.st_ino)
                 handle = stack.enter_context(directory(parent))
                 if created_identity is not None:
                     opened = os.fstat(handle.fd)

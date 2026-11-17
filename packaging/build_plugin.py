@@ -38,6 +38,11 @@ PLUGIN_NAME = IDENTITY["plugin_name"]
 CONFIG_SKILL = next(name for name, original in IDENTITY["skill_aliases"].items() if original == "agent-config")
 PREFERENCE_SOURCE = "native_config/preference_contract.py"
 PREFERENCE_PROJECTION = "plugins/dispatch_preferences.py"
+# Codex 候选放在宿主不会自动发现的资源目录；显式准备组件消费此索引后，
+# 才能创建用户或项目的原生定义。插件清单不因此增加未文档化的 agents 字段。
+CODEX_NATIVE_CONTEXT = "plugins/codex/native-agent-context.md"
+CODEX_NATIVE_INDEX = "native-agent-templates/codex/index.json"
+CODEX_PLUGIN_ROOT_PLACEHOLDER = "__XY_WORKFLOW_PLUGIN_ROOT__"
 # 官方 CLI 1.5.5 的真实严格校验确认：技能正文最多加载 24,000 个 UTF-8
 # 字节。构建阶段按同一正文边界拒绝超限，避免分发后才发现末尾流程被截断。
 ANTIGRAVITY_SKILL_BODY_LIMIT = 24_000
@@ -251,6 +256,33 @@ def render_agent(role: str, body: bytes, envelope: bytes, host: str) -> bytes:
     return ("\n".join(lines) + "\n---\n\n").encode("utf-8") + envelope + b"\n" + original_body
 
 
+def render_codex_native_template(role: str, body: bytes, constraints: bytes,
+                                 context: bytes, metadata: bytes) -> tuple[str, bytes]:
+    """机械投影完整规范角色与 Codex 边界，不引入第二份流程或宿主设置。
+
+    原生定义离开插件目录后无法按自身父目录定位资源，因此正文只保留固定的
+    物理插件根占位符；准备组件解析 TOML 后替换该字符串并重新安全序列化。
+    JSON 字符串转义属于 TOML basic string 的兼容子集，正文中的引号、反斜杠、
+    换行均作为数据编码，绝不拼接可执行 shell 或用 eval 生成定义。
+    """
+    header, _ = split_frontmatter(body)
+    match = re.search(rb"(?m)^description: (.+)$", header)
+    if match is None:
+        raise ValueError("role is missing canonical description: " + role)
+    description = match.group(1).decode("utf-8").strip()
+    # 记录准备时的规范指纹，使原生定义后续发现源缺失或变化时明确失败；
+    # 当前缓存中的另一安装版本即使名称相同，也不能替代原始来源。
+    provenance = {"roles/" + role + ".md": digest(body),
+                  "platforms/codex/WORKER_CONSTRAINTS.md": digest(constraints),
+                  "product/ROLES.yaml": digest(metadata), CODEX_NATIVE_CONTEXT: digest(context)}
+    instructions = (context.decode("utf-8") + "\n\n准备时规范来源摘要：\n"
+                    + json.dumps(provenance, ensure_ascii=False, sort_keys=True) + "\n\n"
+                    + constraints.decode("utf-8") + "\n\n" + body.decode("utf-8"))
+    fields = {"name": role, "description": description, "developer_instructions": instructions}
+    return description, ("\n".join(key + " = " + json.dumps(value, ensure_ascii=False)
+                                   for key, value in fields.items()) + "\n").encode("utf-8")
+
+
 def payload(source: Path, host: str) -> dict[str, bytes]:
     if host not in HOSTS:
         raise ValueError("unsupported plugin host")
@@ -379,6 +411,30 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         result[target] = render_agent(role, result[relative], envelope, host)
         projections[target] = {"source": relative, "transform": host + "-agent-frontmatter-envelope-v1",
                                "adapter": envelope_source}
+    if host == "codex":
+        copy(CODEX_NATIVE_CONTEXT)
+        entries = []
+        dependencies = {name: digest(result[name]) for name in
+                        ("product/ROLES.yaml", "platforms/codex/WORKER_CONSTRAINTS.md", CODEX_NATIVE_CONTEXT)}
+        for role in sorted(ROLE_SKILLS):
+            relative = "roles/" + role + ".md"
+            target = "native-agent-templates/codex/" + role + ".toml"
+            description, result[target] = render_codex_native_template(
+                role, result[relative], result["platforms/codex/WORKER_CONSTRAINTS.md"],
+                result[CODEX_NATIVE_CONTEXT], result["product/ROLES.yaml"])
+            entries.append({"name": role, "description": description,
+                            "path": target, "sha256": digest(result[target])})
+            projections[target] = {"source": relative, "transform": "codex-native-template-v1",
+                                   "adapter": CODEX_NATIVE_CONTEXT, "dependencies": dependencies,
+                                   "source_sha256": digest(result[relative]),
+                                   "projection_sha256": digest(result[target])}
+        result[CODEX_NATIVE_INDEX] = json_bytes({"schema_version": 1, "product": PLUGIN_NAME,
+                                                "host": "codex", "version": version, "templates": entries})
+        projections[CODEX_NATIVE_INDEX] = {
+            "source": "product/ROLES.yaml", "transform": "codex-native-template-index-v1",
+            "source_sha256": digest(result["product/ROLES.yaml"]),
+            "projection_sha256": digest(result[CODEX_NATIVE_INDEX]),
+            "dependencies": {item["path"]: item["sha256"] for item in entries}}
     if host == "claude":
         copy("plugins/claude/pm.md")
         copy("plugins/claude/settings.json", "settings.json")

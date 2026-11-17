@@ -65,7 +65,7 @@ def _reap_starting_child(child, deadline):
             pass
 
 
-def open_console(data_dir, host="codex", project=None, *, home=None, open_browser=False, timeout=OPEN_TIMEOUT):
+def open_console(data_dir, host="codex", project=None, *, home=None, preparation_source=None, open_browser=False, timeout=OPEN_TIMEOUT):
     """只有控制台请求才启动 HTTP；锁、输出、健康握手和失败回收共用总预算。"""
     validate_location(host, project)
     deadline = time.monotonic() + timeout
@@ -73,7 +73,7 @@ def open_console(data_dir, host="codex", project=None, *, home=None, open_browse
     work_deadline = deadline - min(1.0, timeout / 4)
     data_dir = Path(data_dir).expanduser().resolve()
     from .service import ModelService
-    identity = configuration_identity(ModelService(data_dir, home=home))
+    identity = configuration_identity(ModelService(data_dir, home=home, preparation_source=preparation_source))
     version = service_version()
     directory = private_runtime_dir(data_dir)
     with process_lock(directory / "launch.lock", timeout=max(0, work_deadline - time.monotonic())):
@@ -87,6 +87,9 @@ def open_console(data_dir, host="codex", project=None, *, home=None, open_browse
                        "serve", "--data-dir", str(data_dir), "--host", host]
             if home is not None:
                 command.extend(("--home", str(home)))
+            # 唯一来源由调用方显式绑定并透传，子进程不扫描插件缓存或环境猜测来源。
+            if preparation_source is not None:
+                command.extend(("--preparation-source", str(preparation_source)))
             if project is not None:
                 command.extend(("--project", project))
             # 只拉起独立配置工具的固定入口，不接受外部命令或启动 Agent。
@@ -109,13 +112,13 @@ def open_console(data_dir, host="codex", project=None, *, home=None, open_browse
     return result
 
 
-def serve(data_dir, host="codex", project=None, *, home=None, port=0, idle_timeout=1800):
+def serve(data_dir, host="codex", project=None, *, home=None, preparation_source=None, port=0, idle_timeout=1800):
     from .service import ModelService
 
     validate_location(host, project)
     directory = private_runtime_dir(data_dir)
     with process_lock(directory / "service.lock", blocking=False):
-        server = ConsoleServer(ModelService(data_dir=Path(data_dir), home=home), port=port)
+        server = ConsoleServer(ModelService(data_dir=Path(data_dir), home=home, preparation_source=preparation_source), port=port)
         connection = server.connection()
         previous_handlers = {}
         stopping = False
@@ -160,6 +163,7 @@ def parser():
         sub.add_argument("--host", choices=HOSTS, default="codex")
         sub.add_argument("--project", default=None)
         sub.add_argument("--home", type=Path, default=None, help="明确选择原生配置根；测试请使用临时目录")
+        sub.add_argument("--preparation-source", type=Path, default=None, help="显式绑定当前插件的物理准备来源；省略时不提供准备能力")
         if command in {"console", "open"}:
             sub.add_argument("--no-browser", action="store_true")
         elif command == "serve":
@@ -178,7 +182,7 @@ def main(argv=None):
     if args.command in {"open", "status", "doctor"}:
         from .commands import execute
         result, exit_code = execute(args.command, args.data_dir or default_data_dir(), args.host,
-                                    args.project, home=args.home,
+                                    args.project, home=args.home, preparation_source=args.preparation_source,
                                     no_browser=getattr(args, "no_browser", False))
         print(json.dumps(result, ensure_ascii=False), flush=True)
         return exit_code
@@ -190,14 +194,14 @@ def main(argv=None):
         home = args.home.expanduser().absolute() if args.home is not None else None
         if args.command == "console":
             print(json.dumps(open_console(data_dir, args.host, args.project,
-                                          home=home, open_browser=not args.no_browser), ensure_ascii=False), flush=True)
+                                          home=home, preparation_source=args.preparation_source, open_browser=not args.no_browser), ensure_ascii=False), flush=True)
             return 0
         if args.command == "serve":
             if not 0 <= args.port <= 65535 or not 0 <= args.idle_timeout <= 86400:
                 argument_parser.error("端口须为0至65535，空闲秒数须为0至86400")
-            return serve(data_dir, args.host, args.project, home=home, port=args.port, idle_timeout=args.idle_timeout)
+            return serve(data_dir, args.host, args.project, home=home, preparation_source=args.preparation_source, port=args.port, idle_timeout=args.idle_timeout)
         from .service import ModelService
-        service = ModelService(data_dir=data_dir, home=home)
+        service = ModelService(data_dir=data_dir, home=home, preparation_source=args.preparation_source)
         if args.command == "list":
             scope = args.scope or ("project" if args.project else "global")
             print(json.dumps(service.context(args.host, scope=scope, project=args.project), ensure_ascii=False), flush=True)

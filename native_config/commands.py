@@ -19,7 +19,7 @@ from .server import (ConsoleLifecycleError, PROTOCOL_VERSION, ROOT, configuratio
 CLI_PROTOCOL = 1
 PRODUCT = "native-agent-config"
 REQUIRED_FILES = {"native_config/VERSION", "native_config/cli.py", "native_config/commands.py",
-                  "native_config/server.py", "native_config/service.py", "native_config/web/index.html",
+                  "native_config/server.py", "native_config/service.py", "native_config/preparation.py", "native_config/web/index.html",
                   "native_config/web/console.js", "native_config/web/console.css",
                   "scripts/agent_config.py", "scripts/agent_config.sh", "scripts/python_runtime.sh"}
 
@@ -181,7 +181,7 @@ def _private_launch_file(data_dir, authenticated_url):
     return str(path)
 
 
-def execute(action, data_dir, host="codex", project=None, *, home=None, no_browser=False):
+def execute(action, data_dir, host="codex", project=None, *, home=None, preparation_source=None, no_browser=False):
     """返回安全回执及退出码：0 正常，1 服务/组件失败，2 参数错误，3 浏览器失败。"""
     component, diagnostics = _component(action)
     result = {"schema_version": 1, "action": action, "state": "error", "code": "invalid_component",
@@ -196,8 +196,17 @@ def execute(action, data_dir, host="codex", project=None, *, home=None, no_brows
         data_dir = Path(data_dir).expanduser().resolve()
         home = Path(home).expanduser().absolute() if home is not None else None
         from .service import ModelService
-        service = ModelService(data_dir, home=home)
+        service = ModelService(data_dir, home=home, preparation_source=preparation_source)
         identity = configuration_identity(service)
+        if preparation_source is not None:
+            # status/doctor 仍纯读取；来源坏包不能因“服务已启动”被报告成可准备。
+            # 保持既有原生编辑入口可用，同时用固定诊断诚实披露准备能力不可用。
+            from .preparation import capture, unavailable_diagnostic
+            supported = host == "codex" and capture(service.preparation_source) is not None
+            result["native_preparation"] = {"supported": supported}
+            if host == "codex" and not supported:
+                diagnostic = unavailable_diagnostic(service.preparation_source)
+                result["diagnostics"].append(_diagnostic(diagnostic["code"], diagnostic["message"], "warning"))
         if project is not None and not Path(project).is_dir():
             result["diagnostics"].append(_diagnostic("project_unavailable", "指定项目目录当前不可用。", "warning"))
         if action == "doctor":
@@ -225,7 +234,7 @@ def execute(action, data_dir, host="codex", project=None, *, home=None, no_brows
         return result, 1
     try:
         from .cli import open_console
-        opened = open_console(data_dir, host, project, home=home, open_browser=False)
+        opened = open_console(data_dir, host, project, home=home, preparation_source=preparation_source, open_browser=False)
         result.update(state="ready", code="ready", console_url=opened["url"].split("#", 1)[0])
         result["service"].update(state="ready", reused=opened["reused"],
                                   protocol_version=opened["protocol_version"], version=opened["service_version"])
