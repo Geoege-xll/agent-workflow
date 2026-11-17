@@ -20,10 +20,10 @@ CURRENT_PRODUCT_MODULES = {
     "plugin": ("plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract", "plugin_maintenance_contract", "continuous_intake_capabilities",
                "agent_continuation", "dispatch_admission", "task_settlement", "task_graph", "scheduler_boundaries",
                "foundation_qa", "plugin_worktree_delivery"),
-    # 此独立期望同时驱动最小协议样本；browser_sessions 已是当前配置产品的
-    # 真实会话边界，必须连同其他模块生成样本，才能验证预校验、去重与执行。
+    # 此独立期望同时驱动最小协议样本；原生准备与 browser_sessions 分别覆盖
+    # 当前配置产品的准备写入和真实会话边界，均须生成样本并验证预校验、去重与执行。
     # 不能读取被测 GROUPS 来补名单，否则入口漏收模块会被同一实现自证通过。
-    "native-config": ("native_config", "native_preferences", "native_inventory", "native_config_codecs", "native_config_commands", "native_config_server",
+    "native-config": ("native_config", "native_preparation", "native_preferences", "native_inventory", "native_config_codecs", "native_config_commands", "native_config_server",
                       "browser_sessions", "native_config_mcp", "native_config_packaging", "plugin_console", "plugin_config_launcher", "config_distribution"),
 }
 CURRENT_RECORD_CLASSES = ("RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")
