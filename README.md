@@ -2,7 +2,9 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
 
-当前正式版为 **xy-workflow 3.0.6**，配套 **Native Agent Config 0.1.5**。本工作树的下一补丁候选为 3.0.7／0.1.6，尚未发布。三个 stable 来源提供正式插件，候选配套组件的发行状态由随包描述记录。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+本源码为 **xy-workflow 3.0.7**，配套 **Native Agent Config 0.1.6**。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+
+`3.0.7` 将普通 Full 的验收绑定到实际差异和同一 Reviewer 的回执，统一普通和原生 QA 校验。文档按现有主题更新，PROJECT 基线索引去重，评审只收录明确的当前需求。工程、UI 与移动端指导按实际语言、框架和运行端选读，合法微信原生小程序可通过配置和真实入口识别。
 
 `3.0.6` 修正配置页搜索选择控件的重复边框，原生定义左侧列表仅显示名称；Codex 显式打开时自动补齐用户级缺失内置原生定义，并跳过当前项目已有同名。调用偏好预览会按需准备缺失或过期模型目录并复用进行中查询；模型字段、调用偏好与工作流启停仍分别预览确认，保存、宿主加载和实际模型运行分别验收。该发行版启动器使用固定配套的 Native `0.1.5`。
 
