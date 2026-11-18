@@ -1,16 +1,16 @@
 # 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`active`
+- 阶段：`completed`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
-- 已验收版本：`3.0.6`
+- 已验收版本：`3.0.7`
 
 ## 目标与范围
 
-当前迭代交付 `xy-workflow 3.0.7` 和 Native Agent Config `0.1.6`。合入已验收的 [UI 与 QA 整改](ui-qa-audit-remediation.md) 与 [受管计划改进](plan-document-quality.md)，按 GitHub CI 的同源归档正式发布并通过三个官方客户端更新本机。以下保留 `3.0.6` 的既有已验收基线。
+本轮已发布 `xy-workflow 3.0.7` 和 Native Agent Config `0.1.6`，并通过三个官方客户端完成本机升级。两项独立验收分别记录在 [UI 与 QA 整改](ui-qa-audit-remediation.md) 和 [受管计划改进](plan-document-quality.md)。
 
-本轮已正式发布xy-workflow `3.0.6`／Native Agent Config `0.1.5`，并通过官方客户端升级本机三端插件和独立组件。交付自动补齐缺失内置原生Agent、简洁名称列表、单一搜索焦点、调用偏好自动准备目录、统一工具外壳及画布原生滚动边界。升级后已完成旧版本与重复产物清理，保留模型、推理、项目启停、原稿及评审记录。功能与边界见[模型配置主题](native-model-preferences.md)和[工具外壳主题](workbench-solid-glass-style.md)。
+上一版已正式发布xy-workflow `3.0.6`／Native Agent Config `0.1.5`，并通过官方客户端升级本机三端插件和独立组件。交付自动补齐缺失内置原生Agent、简洁名称列表、单一搜索焦点、调用偏好自动准备目录、统一工具外壳及画布原生滚动边界。升级后已完成旧版本与重复产物清理，保留模型、推理、项目启停、原稿及评审记录。功能与边界见[模型配置主题](native-model-preferences.md)和[工具外壳主题](workbench-solid-glass-style.md)。
 
 只消费同一完整来源SHA的成功CI候选：先独立组件发布并真实下载核验，再生成published描述和最终插件来源，最后发布插件、三条stable及本机官方更新。保留现有模型、启停、安装范围和旧服务；插件安装不自动创建全局原生定义。源码QA、正式安装、宿主新会话和真实模型执行分别取证。
 
@@ -22,7 +22,8 @@
 
 ## 需求与验收
 
-- 本轮发行目标3.0.6／0.1.5；版本与独立组件绑定一致，首轮unpublished仅供候选，正式插件必须使用实际已发布0.1.5摘要。P1／P2协议不变，不把新增CLI选项传给旧目标版本。
+- 本轮在两个整改任务各自验收后，先发出独立 `0.1.6` 并核对下载，再由最终插件来源绑定其正式地址和摘要。两个 GitHub CI 作业和三端实际本机安装均有独立回执。
+- 3.0.6 阶段的首轮 unpublished 描述仅供候选，正式插件绑定实际发布的 0.1.5 摘要。P1／P2 协议沿用既有版本。
 - Native首次发行后其产物闭包冻结；最终插件CI重建Native须与首次正式包同字节。只使用现有构建者、描述生成器和publisher，不在本机运行会扫描未跟踪资料的build_candidates。
 - 官方升级后逐项核对版本、载荷及偏好保留。新控制台仅在固定宿主子state保存连接，不自动删除或停止旧state中的65352；不修改用户信任、特性开关或实际全局Agent文件。
 
@@ -42,6 +43,16 @@
 本轮按已批准第六版配置工作台和最终评审工作台实现后发版，UI依据、功能验收分别见[模型偏好主题](native-model-preferences.md)和[评审主题](workflow-document-lifecycle.md)。来源技能及公共按需加载见 [角色技能主题](role-skill-routing.md)，文档质量见 [计划规范主题](plan-document-quality.md)。
 
 ## 当前进展与恢复入口
+
+### 3.0.7／0.1.6 最终交付
+
+独立组件先由 [组件候选 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/44284219147) 生成，经实际下载验证后固定到插件。最终插件来源为 `e9c1f3043accc64e01155de833cbf62add2f73f5`，[最终 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/44287770931) 在 macOS 和 Ubuntu 各收集 1,053 项，1,049 项通过、4 项因宿主或隔离能力跳过。最终归档 `14421430972` 的七包及校验单通过复核，独立组件包和已发行包逐字节一致。
+
+[三端分发](https://github.com/Geoege-xll/agent-workflow/actions/runs/44291116380) 完成正式分支更新，实际 Git 树的路径、内容及执行位与最终归档一致。[xy-workflow 3.0.7](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.7) 已设为 Latest，八份资产的服务端摘要及重新下载一致。[Native Agent Config 0.1.6](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.6) 为独立正式发行。
+
+本机三个官方客户端均回读到已启用的 3.0.7，安装文件与正式包逐项匹配。Claude 保持原用户级安装范围及项目启用状态，Claude 和 Antigravity 的官方插件校验通过。三端均核对了组件 0.1.6 的安装完整性，Codex 控制台服务就绪。Codex 七份既有原生定义已重绑新版资源，模型、推理字段和其余用户内容逐项核对保留。此次本机证据覆盖安装、发现、组件状态与重绑，未执行 Codex App 图形界面新会话或真实模型推理。
+
+两项独立 QA 的任务包及回执和发布、分发、本机证据已在本机归档 `dist/evidence/stable-product-release/stable-307-016-delivery-evidence.zip`。共 41 项证据及摘要索引，SHA-256 `861570acf5fa0822f2c00d7739851f8a34822571a1a2dbdfd08c01176723f36f`。
 
 ### 3.0.6／0.1.5最终交付
 
@@ -129,7 +140,9 @@ CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1
 
 ## 验收结果与当前已交付行为
 
-当前正式组合为xy-workflow3.0.6／Native Agent Config0.1.5，GitHub发行、三stable、本机官方安装、配置保留、受管路径切换和旧版本清理均已完成。上述最终事实及同一QA的阶段回执为当前结论；下列3.0.5及更早记录是历史，不替代本轮实际执行。Codex App持久字节已核对，现有宿主会话需重新启动／新建后加载；本轮没有用安装结果冒称GUI新会话、三端指定模型或完整读屏认证通过。
+当前正式组合为 xy-workflow 3.0.7 和 Native Agent Config 0.1.6。已发布 GitHub 正式版、更新三条稳定分支和本机三端。前一节记录本轮实际验收，以下为历史。
+
+3.0.6 阶段完成 GitHub 发行、三端稳定分支、本机官方安装、配置保留、受管路径切换和旧版本清理。Codex App 持久缓存逐项核对。
 
 此前3.0.5阶段已完整验收、发布并安装xy-workflow 3.0.5与Native Agent Config 0.1.4，包含当时的范围点击／刷新恢复、显式原生准备、单快照来源CAS和上下文去重复。配置连接与既有布局、原型交付／评审能力保持，具体证据见对应功能主题。先组件后插件、同SHA成功CI、真实下载绑定和历史库存认证分离均保留；不声称新增或验证宿主模型调用能力。
 
@@ -139,7 +152,9 @@ CI附件17文件的外摘要、七包和sidecar已核。Native Agent Config [0.1
 
 ## 批准依据与必要证据
 
-本轮用户先明确“开始发布与本机升级”，随后追加“本机升级完成后，对本地历史老版本等进行清理”。代码／浏览器既有QA、两轮成功CI、真实Release下载、publisher及远端闭包、官方安装、60项配置保留、七路径CAS、55页原稿／评审保留和四组清理回执统一保全于`dist/evidence/stable-product-release/stable-306-015-delivery-evidence.zip`；大CI容器及重复展开已移除，固定run／artifact摘要、原资产摘要和正式Release恢复入口保留。认证入口、私有launch HTML内容和浏览器profile不进入归档。
+本轮用户在文档治理审计后明确要求修复、提交 GitHub 新版本并升级本机。实际操作证据见 3.0.7 最终交付记录。
+
+3.0.6 阶段用户先明确“开始发布与本机升级”，随后追加“本机升级完成后，对本地历史老版本等进行清理”。代码／浏览器既有QA、两轮成功CI、真实Release下载、publisher及远端闭包、官方安装、60项配置保留、七路径CAS、55页原稿／评审保留和四组清理回执统一保全于`dist/evidence/stable-product-release/stable-306-015-delivery-evidence.zip`；大CI容器及重复展开已移除，固定run／artifact摘要、原资产摘要和正式Release恢复入口保留。认证入口、私有launch HTML内容和浏览器profile不进入归档。
 
 下文为3.0.5及更早发行的历史证据。
 
