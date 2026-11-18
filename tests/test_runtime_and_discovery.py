@@ -208,6 +208,10 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
         self.interpreter("python3", supported=False)
         self.interpreter("python3.11", supported=True)
         self.documented_scheduler()
+        # 调度示例夹具会加入系统目录来提供 Git 等工具。诊断命令只需要从 PATH 找到 Bash，
+        # 因此单独提供 Bash 并隔离系统目录，确保版本回退只在本用例控制的 Python 候选中进行。
+        (self.bin / "bash").symlink_to("/bin/bash")
+        self.environment["PATH"] = str(self.bin)
         body = (PACK / "platforms/shared/skills/xy-workflow/references/dispatch.md").read_text(
             encoding="utf-8"
         )
