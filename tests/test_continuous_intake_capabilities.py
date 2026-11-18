@@ -10,7 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from manager.capabilities import diagnose
+from lib.hosts.capabilities import diagnose
+from tests.test_dispatch_admission import plugin_fixture, plugin_helper
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -24,8 +25,8 @@ class ContinuousIntakeCapabilitiesTest(unittest.TestCase):
 
     def test_documented_client_controls_never_grant_actual_messaging_or_runtime_proof(self):
         for host in ("codex", "claude", "antigravity"):
-            with self.subTest(host=host), patch("manager.capabilities.subprocess.run", side_effect=AssertionError("不启动宿主")):
-                result = diagnose(host, home=self.home, environment={})
+            with self.subTest(host=host), patch("lib.hosts.capabilities.subprocess.run", side_effect=AssertionError("不启动宿主")):
+                result = diagnose(host, environment={})
             intake = result["continuous_intake"]
             self.assertEqual("not_inspected", intake["current_tool_surface"])
             self.assertEqual({"non_interrupting_message": None, "idle_followup": None}, intake["observed_capabilities"])
@@ -47,13 +48,13 @@ class ContinuousIntakeCapabilitiesTest(unittest.TestCase):
 
     def test_observed_version_and_missing_path_keep_all_runtime_cases_unverified(self):
         version = subprocess.CompletedProcess(["codex", "--version"], 0, "codex-cli 0.167.0\n", "")
-        with patch("manager.capabilities.shutil.which", return_value="/fixture/codex"), \
-                patch("manager.capabilities.subprocess.run", return_value=version):
-            observed = diagnose("codex", home=self.home, environment={}, probe=True)
+        with patch("lib.hosts.capabilities.shutil.which", return_value="/fixture/codex"), \
+                patch("lib.hosts.capabilities.subprocess.run", return_value=version):
+            observed = diagnose("codex", environment={}, probe=True)
         self.assertEqual("source_observed", observed["client"]["evidence_level"])
         self.assertTrue(all(row["status"] == "runtime_unverified" for row in observed["continuous_intake"]["runtime_checks"]))
-        with patch("manager.capabilities.shutil.which", return_value=None):
-            missing = diagnose("antigravity", home=self.home, environment={}, probe=True)
+        with patch("lib.hosts.capabilities.shutil.which", return_value=None):
+            missing = diagnose("antigravity", environment={}, probe=True)
         self.assertEqual("not_found", missing["client"]["status"])
         self.assertIn("PATH", missing["continuous_intake"]["client_not_found_scope"])
         self.assertFalse(missing["runtime_verified"])
@@ -63,13 +64,14 @@ class ContinuousIntakeCapabilitiesTest(unittest.TestCase):
         env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home), "CODEX_HOME": str(self.home / ".codex"),
                "CLAUDE_CONFIG_DIR": str(self.home / ".claude"), "GEMINI_CLI_HOME": str(self.home / ".gemini"),
                "AGENT_WORKFLOW_STATE_DIR": str(self.home / "state")}
-        # 此基线公开管理入口为 workflow.sh，由它选择实际解释器并进入 manager.cli。
-        completed = subprocess.run(["bash", str(PACK / "workflow.sh"), "--host-home", str(self.home), "doctor", "--platform", "codex"],
-                                   cwd=PACK, env=env, text=True, capture_output=True, check=False, timeout=20)
+        # 在独立目录构建并解包正式插件，以实际白名单入口验证诊断与配置隔离。
+        with tempfile.TemporaryDirectory() as raw:
+            installed = plugin_fixture(Path(raw))
+            command = plugin_helper(installed, self.home, "lib/hosts/capabilities.py")
+            completed = subprocess.run([*command, "--platform", "codex"], cwd=PACK, env=env,
+                                       text=True, capture_output=True, check=False, timeout=20)
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
-        result = json.loads(completed.stdout)
-        # 管理入口返回宿主数组；验证真实公开结构而不是模拟输出。
-        selected = result[0]
+        selected = json.loads(completed.stdout)
         self.assertEqual("not_probed", selected["client"]["status"])
         self.assertEqual(5, len(selected["continuous_intake"]["runtime_checks"]))
         self.assertEqual([], list(self.home.iterdir()))

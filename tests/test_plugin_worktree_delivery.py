@@ -18,7 +18,6 @@ import zipfile
 from lib.delivery import worktree_cli as delivery
 from tests import test_plugin_delivery as plugin_fixtures
 from tests import test_worktree_delivery as git_fixtures
-from tests import test_qa_handoff as qa_fixtures
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -29,16 +28,8 @@ class DeliveryFixture:
     """复用真实 Git 夹具方法，不继承旧 TestCase，防止额外收集历史宿主测试。"""
 
     setUp = git_fixtures.GitDeliveryTest.setUp
+    accept_candidate = git_fixtures.GitDeliveryTest.accept_candidate
     refresh_candidate = git_fixtures.GitDeliveryTest.refresh_candidate
-
-    def refresh_pack(self):
-        """合同变更后生成实际当前 QA 包，不能只改 handoff 中的自报指纹。"""
-        pack = {"schema_version": 2, "task": copy.deepcopy(self.qa_task),
-                "standards_contract": copy.deepcopy(self.graph["standards_contract"]), "approved_gates": []}
-        pack["task"]["state"] = "QA"
-        body = json.dumps(pack).encode("utf-8")
-        self.qa_pack_file.write_bytes(body)
-        self.payload["qa_handoff"]["handoff_ref"] = qa_fixtures.handoff_ref(pack, body)
 
     def allow_writer_path(self, relative):
         """增加夹具 Writer 的明确所有权及规范覆盖，不以 PM 投影放行代码或配置。"""
@@ -46,10 +37,10 @@ class DeliveryFixture:
         for document in self.tasks[0]["controlled_document_access"]["documents"]:
             document["applies_to"].append(relative)
 
-    def commit_candidate(self, *paths):
+    def commit_candidate(self, *paths, accept=True):
         delivery.git(self.integration, "add", "-A", "--", *paths)
         delivery.git(self.integration, "commit", "-m", "fixture reviewed candidate update")
-        self.refresh_candidate()
+        self.refresh_candidate(accept=accept)
 
     def writer_adapter(self, transform):
         """让实际 Writer 检查点携带配置修改，并重新集成、刷新完整 QA 与授权。"""
@@ -85,16 +76,7 @@ class DeliveryFixture:
                         task_pack_rule_ids=["eng-common-005"], required_engineering_rule_ids=["eng-common-005"])
         coverage["rule_checks"] = [check for check in coverage["rule_checks"] if check["source_path"] == BUILTIN]
         self.refresh_candidate(current_base)
-        # refresh_candidate 的通用夹具默认使用项目规则；这里改回当前真正的内置来源。
-        for check in coverage["path_checks"]:
-            check["applicable_rule_ids"] = ["eng-common-005"]
-        self.refresh_pack()
         self.base = current_base
-
-    def refresh_builtin_candidate(self):
-        self.refresh_candidate()
-        for check in self.payload["qa_handoff"]["standards_policy_coverage"]["path_checks"]:
-            check["applicable_rule_ids"] = ["eng-common-005"]
 
     def add_projection(self):
         """提交真实 PM 主题投影并刷新候选指纹，保持文档验收和最终完整 diff 绑定。"""
@@ -140,7 +122,6 @@ class SourceWorktreeDeliveryTest(DeliveryFixture, unittest.TestCase):
             next(doc for doc in task["controlled_document_access"]["documents"] if doc["path"] == BUILTIN)["path"] = alias
         next(check for check in self.payload["qa_handoff"]["standards_policy_coverage"]["rule_checks"]
              if check["source_path"] == BUILTIN)["source_path"] = alias
-        self.refresh_pack()
         for relative in (BUILTIN, alias):
             decoy = self.integration / relative
             decoy.parent.mkdir(parents=True, exist_ok=True)
@@ -158,8 +139,7 @@ class SourceWorktreeDeliveryTest(DeliveryFixture, unittest.TestCase):
         self.builtin_only()
         (self.integration / "docs/STANDARDS.md").write_text("# 新项目规范索引\n")
         self.allow_writer_path("docs/STANDARDS.md")
-        self.commit_candidate("docs/STANDARDS.md")
-        self.refresh_builtin_candidate()
+        self.commit_candidate("docs/STANDARDS.md", accept=False)
         self.assertIn("refresh standards contract and QA", self.assert_rejected().stderr)
         fingerprint = hashlib.sha256((self.integration / "docs/STANDARDS.md").read_bytes()).hexdigest()
         self.graph["standards_contract"]["index_fingerprint"] = fingerprint
@@ -170,7 +150,7 @@ class SourceWorktreeDeliveryTest(DeliveryFixture, unittest.TestCase):
                 "path": "docs/STANDARDS.md", "mode": "full", "reason": "读取新增的真实项目索引",
                 "sections_or_queries": [], "content_fingerprint": fingerprint,
                 "applies_to": list(task["owned_paths"]), "rule_ids": []})
-        self.refresh_pack()
+        self.accept_candidate()
         self.assert_merged()
 
     def test_null_index_rejects_symlink_directory_and_hardlink(self):
@@ -193,8 +173,7 @@ class SourceWorktreeDeliveryTest(DeliveryFixture, unittest.TestCase):
                     (index / "entry").write_text("unsafe index directory\n")
                 else:
                     os.link(outside, index)
-                self.commit_candidate(relative)
-                self.refresh_builtin_candidate()
+                self.commit_candidate(relative, accept=False)
                 self.assert_rejected()
 
     def test_null_index_rejects_invalid_or_symlink_ancestor(self):
@@ -202,13 +181,11 @@ class SourceWorktreeDeliveryTest(DeliveryFixture, unittest.TestCase):
         self.allow_writer_path("docs/index")
         ancestor = self.integration / "docs/index"
         ancestor.write_text("ancestor is a regular file\n")
-        self.commit_candidate("docs/index")
-        self.refresh_builtin_candidate()
+        self.commit_candidate("docs/index", accept=False)
         self.assert_rejected()
         ancestor.unlink()
         ancestor.symlink_to(self.root / "missing-index-directory")
-        self.commit_candidate("docs/index")
-        self.refresh_builtin_candidate()
+        self.commit_candidate("docs/index", accept=False)
         self.assert_rejected()
 
     def test_changed_project_index_or_rule_fingerprint_blocks_merge(self):
@@ -218,7 +195,7 @@ class SourceWorktreeDeliveryTest(DeliveryFixture, unittest.TestCase):
                 original = document.read_text()
                 document.write_text(original + "\nchanged after standards freeze\n")
                 self.allow_writer_path(relative)
-                self.commit_candidate(relative)
+                self.commit_candidate(relative, accept=False)
                 self.assertIn(relative, self.assert_rejected().stderr)
                 document.write_text(original)
                 self.commit_candidate(relative)

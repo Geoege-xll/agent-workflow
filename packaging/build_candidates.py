@@ -56,6 +56,11 @@ def source_state(source):
 
 
 def validate_component_binding(descriptor, archive, version):
+    """候选构建器从实际 ZIP 计算摘要；安装验收读取发布记录中的同一摘要。"""
+    return validate_component_metadata(descriptor, archive.name, version, digest(archive.read_bytes()))
+
+
+def validate_component_metadata(descriptor, archive_name, version, archive_sha256):
     """交付层只核对两个独立产品的绑定，不下载组件或读取原生源码。
 
     未发布描述符允许尚未冻结摘要；一旦有摘要，即使仍为离线 unpublished，也必须
@@ -64,10 +69,13 @@ def validate_component_binding(descriptor, archive, version):
     """
     component = json.loads(descriptor)
     artifact = component["artifact"]
-    if (component["schema_version"] != 1 or component["product"] != "native-agent-config"
+    # JSON 布尔值和浮点数均不属于整数协议号；Python 的 True == 1 和 1.0 == 1
+    # 不能作为发行合同对类型与数值的联合校验。
+    if (any(type(component[key]) is not int for key in ("schema_version", "cli_protocol", "service_protocol"))
+            or component["schema_version"] != 1 or component["product"] != "native-agent-config"
             or component["version"] != version or component["channel"] != version_channel(version)
             or component["cli_protocol"] != 1 or component["service_protocol"] != 2
-            or artifact["name"] != archive.name):
+            or artifact["name"] != archive_name):
         raise ValueError("插件组件描述符与独立候选身份或协议不一致")
     if component["release_status"] not in {"unpublished", "published"}:
         raise ValueError("组件描述符发行状态无效")
@@ -79,7 +87,7 @@ def validate_component_binding(descriptor, archive, version):
         raise ValueError("未发布组件描述符不能声明下载 URL")
     if component["release_status"] == "published" and (not expected or not url.startswith("https://")):
         raise ValueError("已发布组件描述符缺少冻结摘要或 HTTPS 发行 URL")
-    if expected and (not re.fullmatch(r"[a-f0-9]{64}", expected) or expected != digest(archive.read_bytes())):
+    if expected and (not re.fullmatch(r"[a-f0-9]{64}", expected) or expected != archive_sha256):
         raise ValueError("插件组件描述符摘要与独立 ZIP 不一致")
     return {"version": version, "release_status": component["release_status"],
             "descriptor_sha256": digest(descriptor), "artifact_sha256": expected,

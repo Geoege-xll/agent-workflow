@@ -104,11 +104,11 @@ class PluginResourcesTest(unittest.TestCase):
         external = self.root / "legacy-explicit.md"
         external.write_bytes(b"legacy explicit path\n")
         self.assert_success(
-            "from lib import runtime_pins, task_graph_records as records\n"
+            "from lib import task_sources, task_graph_records as records\n"
             "from lib.validate_project_docs import builtin_standard_rule_catalog\n"
             "from lib.documents.context_read import read_page\n"
             "assert resources.plugin_root() is None\n"
-            "assert runtime_pins.record_binding({}) is None\n"
+            "assert task_sources.validate_task_source({}) is None\n"
             f"assert records.document_digest(Path.cwd(), {ENGINEERING!r}) == "
             f"hashlib.sha256((Path.cwd() / {ENGINEERING!r}).read_bytes()).hexdigest()\n"
             f"catalog = builtin_standard_rule_catalog(Path({str(PACK)!r}))\n"
@@ -129,10 +129,10 @@ class PluginResourcesTest(unittest.TestCase):
     def test_builtin_digest_and_catalog_only_accept_current_installation_bytes(self):
         expected = self.manifest["files"][ENGINEERING]
         self.assert_success(
-            "from lib import runtime_pins, task_graph_records as records\n"
+            "from lib import task_sources, task_graph_records as records\n"
             "from lib.validate_project_docs import builtin_standard_rule_catalog\n"
             "assert resources.plugin_root() == Path(sys.argv[1])\n"
-            "assert runtime_pins.record_binding({}, initialize=True) is None\n"
+            "assert task_sources.validate_task_source({}) is None\n"
             f"assert records.document_digest(Path.cwd(), {ENGINEERING!r}) == {expected!r}\n"
             f"assert records.document_digest(Path.cwd(), {'.agent-workflow/' + ENGINEERING!r}) == {expected!r}\n"
             f"assert records.file_digest(Path.cwd(), {ENGINEERING!r}) != {expected!r}\n"
@@ -180,8 +180,8 @@ class PluginResourcesTest(unittest.TestCase):
 
     def test_existing_pin_and_central_marker_never_enter_plugin_source_mode(self):
         self.assert_rejected(
-            "from lib.runtime_pins import record_binding\n"
-            "record_binding({'runtime_binding': {}}, root=Path.cwd())\n",
+            "from lib.task_sources import validate_task_source\n"
+            "validate_task_source({'runtime_binding': {}}, root=Path.cwd())\n",
             "不能接管已有 runtime_binding",
         )
         marker = self.project / ".agent-workflow/runtime.json"
@@ -193,8 +193,8 @@ class PluginResourcesTest(unittest.TestCase):
                 else:
                     marker.write_bytes(b"{}\n")
                 self.assert_rejected(
-                    "from lib.runtime_pins import record_binding\n"
-                    "record_binding({}, root=Path.cwd())\n",
+                    "from lib.task_sources import validate_task_source\n"
+                    "validate_task_source({}, root=Path.cwd())\n",
                     "不能接管已有 runtime_binding",
                 )
                 marker.unlink()
@@ -265,7 +265,7 @@ class PluginResourcesTest(unittest.TestCase):
     def test_missing_manifest_authority_cannot_be_replaced_by_project_decoys(self):
         # 不能只保护三份builtin：工作流、角色以及其余platforms来源同样是插件权威。
         # 每个逻辑路径和既有别名都创建真实项目诱饵，防止测试只因文件缺失而通过。
-        paths = ("product/WORKFLOW.md", "roles/xy-qa.md", "platforms/shared/AGENTS.product.tpl")
+        paths = ("product/WORKFLOW.md", "roles/xy-qa.md", "platforms/codex/references/pm-integration.md")
         for relative in paths:
             self.manifest["files"].pop(relative, None)
             installed = self.install / relative

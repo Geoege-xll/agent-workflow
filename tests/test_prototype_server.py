@@ -174,6 +174,8 @@ class PrototypeServiceLifecycleTest(unittest.TestCase):
         prepare_delivery(project, "project.yaml", [page], data_dir=data)
         index = project / "docs/standards/prototype/index.html"
         original = index.read_bytes() if index.exists() else None
+        plan = project / "docs/plans/settings.md"
+        original_plan = plan.read_bytes()
         request_id = "index-cli-test"
         command = [sys.executable, "-B", str(review.TOOL_ROOT / "lib/documents/prototype_feedback_cli.py")]
         args = ["--root", str(project), "--request-id", request_id, "--data-dir", str(data)]
@@ -183,6 +185,8 @@ class PrototypeServiceLifecycleTest(unittest.TestCase):
             return json.loads(result.stdout)
         try:
             index.unlink(missing_ok=True)
+            # 从公开open启动的子进程重读相同原稿，API返回的需求目录应过滤嵌套示例。
+            plan.write_bytes(original_plan + b"\n````md\n```\nREQ-900\n```\n````\nREQ-002\n")
             opened = open_registered()
             for label in ("Legacy label A", "Legacy label B"):
                 index.write_text('<html><body><a href="settings.html">' + label + '</a></body></html>', encoding="utf-8")
@@ -203,10 +207,13 @@ class PrototypeServiceLifecycleTest(unittest.TestCase):
                     client.request("GET", "/api/context?name=settings.html", headers={"Origin": "http://" + url.netloc, "Authorization": "Bearer " + token})
                     response = client.getresponse()
                     self.assertEqual(200, response.status)
-                    self.assertEqual("ready", json.loads(response.read())["status"])
+                    current = json.loads(response.read())
+                    self.assertEqual("ready", current["status"])
+                    self.assertEqual(["REQ-001", "REQ-002"], current["context"]["requirements"])
                 finally: client.close()
         finally:
             stop_service(project, request_id, data_dir=data)
+            plan.write_bytes(original_plan)
             if original is None: index.unlink(missing_ok=True)
             else: index.write_bytes(original)
 

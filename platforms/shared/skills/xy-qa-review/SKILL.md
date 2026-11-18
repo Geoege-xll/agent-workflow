@@ -7,6 +7,11 @@ description: Accept build-verified request-scoped implementation using native co
 
 # xy-qa-review
 
+相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper`
+调用 `lib/documents/context_read.py` 分页时，从已验证的插件包读取，使用包内规范路径，例如
+`platforms/shared/skills/xy-qa-review/references/inputs.md`。跨 Skill 引用使用目标 Skill
+在 `platforms/shared/skills/` 下的规范路径。
+
 Use the latest complete PM-issued scope and acceptance. A saved plan helps recover an actual gap;
 it is not approval or completion evidence. Acknowledge scope replacements before returning a result,
 reuse unaffected valid evidence, and never apply an old-scope PASS to a revised request.
@@ -60,7 +65,7 @@ qa_review_policy:
 
 Use the current host's native review when its exposed capability, fixed scope, effective read-only
 permissions and non-recursive execution are established; read only that host's existing
-`.agent-workflow/platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
+`platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
 or installed binary alone does not prove this reviewer can invoke it safely.
 
 Otherwise select at most one host-exposed installed Skill proven code-review capable, read-only,
@@ -100,10 +105,10 @@ Do not launch reader Agents, add a reader report/gate or require another busines
 <!-- workflow-contract: references/inputs.md -->
 <!-- workflow-contract: references/implementation-acceptance.md -->
 
-For production UI or design-standard work, also read [UI audit branches](references/ui-review.md),
-selecting only the current scoped route. Keep production UI/accessibility audit and current design
-authority. Required prototypes use frozen designer evidence, the exact in-page contract and
-deterministic fingerprint validation; waived surfaces do not read old prototypes.
+审查生产 UI 或设计规范时，读取 [UI 审查分支](references/ui-review.md)。生产 UI 逐项使用 QA 包
+中 `reviewed_ui_changes` 的生产 Writer 投影，并按实际运行端核对界面与无障碍证据。仅
+`prototype_policy: required` 触发原型静态身份复核、设计交接及页内契约审查；其余生产分支
+按本轮冻结依据核对生产行为，无须复读旧原型。
 
 <!-- workflow-contract: references/ui-review.md -->
 
@@ -138,7 +143,7 @@ List only Skills actually applied; unavailable required Skills block PASS. Sugge
 findings within PASS or blockers within FAIL, never a third outcome. Return FAIL to PM for rework.
 Before accepting PASS, PM validates the internal `review_method.scope_ref` and
 `standards_policy_coverage` using
-`bash .agent-workflow/lib/python_runtime.sh -X utf8 .agent-workflow/lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
+`bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/delivery/qa_handoff_cli.py validate --input <qa-handoff.json> --task-pack <current-qa-task-pack.json>`.
 Only valid PASS lets Full enter `QA PASS -> controlled-document projection -> PM commit assessment -> memory closeout -> final report`. Light performs its actually selected audit and closeout assessment.
 Keep raw records internal and stop after valid acceptance; ordinary closeout does not trigger another audit.
 
@@ -147,3 +152,7 @@ actual agent_ref and task_pack_sha256. Both validate/extract require current --t
 identities or old-pack PASS are rejected. The same Reviewer checks rework deltas under the current complete
 pack. Stop after valid PASS; close natively or retire after PM accepts evidence and the necessary feedback
 window ends. Retirement does not prove physical erasure or lock release.
+
+原生结构化交接在同一份回执的 `review_details` 提供 `findings` 和 `verification`，携带有证据的
+发现、返工角色、验证命令、退出码与完整日志引用。字段合同见[输入约定](references/inputs.md)。
+现有文本型交接继续适用。复用同一次回执校验，无须再发一次调用收集这些字段。

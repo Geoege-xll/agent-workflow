@@ -1,6 +1,6 @@
-# Role metadata (see AGENT_SCHEMA.md). description MUST be a single line (setup parser).
-# toolsets: write | write+delegation | write-tests | read
-# claude_skills: preloaded into .claude/agents frontmatter
+# Role metadata (see AGENT_SCHEMA.md). description is a single line.
+# Worker toolsets: write | read
+# claude_skills: projected into the Claude plugin agents/ frontmatter
 
 pm:
   name: PM
@@ -12,11 +12,11 @@ pm:
 
 roles:
   xy-web:
-    description: Repository-driven Web engineer. Implement independent production browser applications with the project's actual framework, components, tokens, and verification commands.
+    description: Repository-driven Web engineer for independent browser applications and WeChat Mini Programs, using the project's actual framework, components, and verification tooling.
     division: engineering
     sandbox_key: xy-web
     toolsets: write
-    tags: [web, browser, frontend, accessibility, localization, ui-implementation]
+    tags: [web, browser, wechat-miniprogram, frontend, accessibility, localization, ui-implementation]
     deliverables: [production-web-change, repository-native-verification-evidence, prototype-contract-mapping]
     claude_skills: [xy-code-standards, xy-build-verify, xy-playwright]
     codex_effort: medium

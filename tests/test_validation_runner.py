@@ -16,44 +16,33 @@ import zipfile
 
 
 PACK = Path(__file__).resolve().parents[1]
-CURRENT_PRODUCT_MODULES = {
-    "plugin": ("plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract", "plugin_maintenance_contract", "continuous_intake_capabilities",
-               "agent_continuation", "dispatch_admission", "task_settlement", "task_graph", "scheduler_boundaries",
-               "foundation_qa", "plugin_worktree_delivery"),
-    # 此独立期望同时驱动最小协议样本；原生准备与 browser_sessions 分别覆盖
-    # 当前配置产品的准备写入和真实会话边界，均须生成样本并验证预校验、去重与执行。
-    # 不能读取被测 GROUPS 来补名单，否则入口漏收模块会被同一实现自证通过。
-    "native-config": ("native_config", "native_preparation", "native_preferences", "native_inventory", "native_config_codecs", "native_config_commands", "native_config_server",
-                      "browser_sessions", "native_config_mcp", "native_config_packaging", "plugin_console", "plugin_config_launcher", "config_distribution"),
+# 这些模块由各产品与交付合同独立确定。plugin 的完整范围由仓库清单扣除其它组的
+# 专属模块得到；这样既能识别关键用例误分组，又不用维护两份随核心模块增长的清单。
+NATIVE_CONFIG_MODULES = {
+    "native_config", "native_preparation", "native_preferences", "native_inventory",
+    "native_config_codecs", "native_config_commands", "native_config_server", "browser_sessions",
+    "native_config_mcp", "native_config_packaging", "plugin_console", "plugin_config_launcher",
+    "config_distribution",
 }
-CURRENT_RECORD_CLASSES = ("RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")
-# 独立声明历史反馈、live 来源/服务与受管 file 入口模块，证明两个当前入口确实纳入它们；不能从被测
-# GROUPS 反推期望值，否则误删运行时模块也会由同一实现自证通过。
-PROTOTYPE_MODULES = ("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
-                     "prototype_workspace_runtime", "prototype_feedback", "prototype_review",
-                     "prototype_live", "prototype_server", "prototype_file_entry")
-# 独立期望固定六个历史基线节点，避免被测入口误收整个旧文档/UI模块后自证通过。
-PLAN_BASELINE_METHODS = (
-    "test_template_and_config_share_the_real_lifecycle_model",
-    "test_iteration_pause_and_cancellation_preserve_old_accepted_baseline",
-    "test_unindexed_legacy_completed_plan_is_preserved_but_cannot_be_indexed",
-    "test_completed_unaccepted_or_removed_plan_cannot_be_current_baseline",
-    "test_duplicate_topic_and_missing_baseline_proof_are_rejected",
-    "test_plan_lifecycle_reference_is_shipped_and_discoverable",
-)
+PROTOTYPE_MODULES = {
+    "document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
+    "prototype_workspace_runtime", "prototype_feedback", "prototype_review", "prototype_live",
+    "prototype_server", "prototype_file_entry",
+}
+PACKAGING_MODULES = {
+    "plugin_delivery", "native_config_packaging", "candidate_delivery", "plugin_config_launcher",
+    "config_distribution", "plugin_source_publication", "remote_install_smoke",
+}
+PLAN_MODULES = {"plan_and_shallow_docs"}
 
 
-def plan_targets():
-    return ["tests.test_plan_and_shallow_docs.SelectedPlanValidationTest"] + [
-        "tests.test_plan_and_shallow_docs.PlanAndShallowDocsTest." + name for name in PLAN_BASELINE_METHODS]
+def repository_targets():
+    """独立使用磁盘上的模块作对照，即使入口与夹具一起漏掉某个组也能发现。"""
+    return {"tests." + path.stem for path in (PACK / "tests").glob("test_*.py")}
 
 
-def current_product_targets():
-    """测试固定声明真实产品范围，防止入口误删模块后由同一实现推导出假通过。"""
-    plugin = ["tests.test_" + name for name in CURRENT_PRODUCT_MODULES["plugin"]]
-    records = ["tests.test_task_graph_records." + name for name in CURRENT_RECORD_CLASSES]
-    native = ["tests.test_" + name for name in CURRENT_PRODUCT_MODULES["native-config"]]
-    return plugin + records + native
+def targets_for(modules):
+    return {"tests.test_" + module for module in modules}
 
 
 class ValidationRunnerTest(unittest.TestCase):
@@ -71,7 +60,7 @@ class ValidationRunnerTest(unittest.TestCase):
         (self.source / "lib").mkdir()
         (self.source / "tests").mkdir()
         (self.source / "tests/__init__.py").write_text("", encoding="utf-8")
-        for name in ("workflow", "codex", "claude", "antigravity", "prototype"):
+        for name in ("workflow", "prototype"):
             shutil.copyfile(PACK / f"scripts/test_{name}.sh", self.source / f"scripts/test_{name}.sh")
         self.runtime_calls = self.source / "runtime.calls"
         self.case_calls = self.source / "case.calls"
@@ -82,30 +71,10 @@ class ValidationRunnerTest(unittest.TestCase):
         )
         (self.source / "lib/python_runtime.sh").write_text(runtime, encoding="utf-8")
         self.environment = {**os.environ, "AGENT_WORKFLOW_PYTHON": sys.executable}
-        for module in ("codex_workflow", "claude_workflow", "claude_instructions",
-                       "antigravity_workflow", "prototype_workspace", "shared_memory_contract"):
-            methods = ("test_one", "test_two") if module == "shared_memory_contract" else ("test_ok",)
-            self.write_case(module, methods)
-        for names in CURRENT_PRODUCT_MODULES.values():
-            for module in names:
-                self.write_case(module, ("test_ok",))
-        for module in (*PROTOTYPE_MODULES, "validation_runner", "candidate_delivery", "plugin_source_publication", "remote_install_smoke"):
-            self.write_case(module, ("test_ok",))
-        # records 使用真实类节点作为范围边界；加入历史类诱饵，证明 current 不会
-        # 因模块级收集而悄悄恢复旧安装器夹具，也不会把有效记录断言全部排除。
-        records = self.source / "tests/test_task_graph_records.py"
-        for name in (*CURRENT_RECORD_CLASSES, "RecordInstalledRuntimeTest"):
-            self.write_case("record_class_fixture", ("test_ok",), class_name=name)
-            with records.open("a", encoding="utf-8") as stream:
-                stream.write((self.source / "tests/test_record_class_fixture.py").read_text(encoding="utf-8"))
-        (self.source / "tests/test_record_class_fixture.py").unlink()
-        self.write_case("plan_and_shallow_docs", ("test_selected",), class_name="SelectedPlanValidationTest")
-        plan_fixture = self.source / "tests/test_plan_and_shallow_docs.py"
-        selected_fixture = plan_fixture.read_text(encoding="utf-8")
-        self.write_case("plan_and_shallow_docs", (*PLAN_BASELINE_METHODS, "test_unselected_legacy_transaction"),
-                        class_name="PlanAndShallowDocsTest")
-        plan_fixture.write_text(selected_fixture + plan_fixture.read_text(encoding="utf-8"), encoding="utf-8")
-        self.write_case("runner_failure", ("test_failure",), failing=True)
+        # 每个真实模块分配一个可记录的轻量用例，避免验证调度器时再次启动真实
+        # 组件或读取项目数据；完整仓库入口的 --list 另行核对实际可导入的用例。
+        for target in repository_targets():
+            self.write_case(target.removeprefix("tests.test_"), ("test_ok",))
 
     def write_case(self, module, methods, *, failing=False, class_name="ExampleTest"):
         body = '''import json
@@ -138,6 +107,18 @@ import unittest
             return []
         return [json.loads(line) for line in self.case_calls.read_text(encoding="utf-8").splitlines()]
 
+    def test_repository_tests_take_precedence_over_installed_tests_package(self):
+        # 用普通空包模拟解释器环境中同名 tests 依赖。仓库入口必须从本仓加载
+        # 测试模块，即使外部包自带 __init__.py，也不能影响 current 的目标解析。
+        external = self.root / "external"
+        (external / "tests").mkdir(parents=True)
+        (external / "tests/__init__.py").write_text("", encoding="utf-8")
+        self.environment["PYTHONPATH"] = str(external)
+        target = "tests.test_validation_runner.ValidationRunnerTest.test_no_arguments_and_help_do_not_run_tests"
+        result = self.invoke("--list", target, entry=PACK / "scripts/test_workflow.sh")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual([target], result.stdout.splitlines())
+
     def test_no_arguments_and_help_do_not_run_tests(self):
         for arguments in ((), ("--help",)):
             with self.subTest(arguments=arguments):
@@ -145,41 +126,39 @@ import unittest
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertIn("full", result.stdout)
                 self.assertIn("--list", result.stdout)
-                self.assertIn("当前产品组：plugin、native-config", result.stdout)
-                self.assertIn("legacy/通用", result.stdout)
-                self.assertIn("不代表3.0全套", result.stdout)
+                self.assertIn("plugin、native-config、prototype、plans、packaging", result.stdout)
+                self.assertIn("3.x", result.stdout)
                 self.assertEqual([], self.recorded_cases())
 
     def test_unknown_arguments_groups_and_nodes_reject_before_any_case(self):
         invalid = (
-            "--unknown", "typo", "tests.test_missing", "tests.test_codex_workflow.Missing",
-            "tests.test_codex_workflow.ExampleTest.missing",
-            "tests.test_codex_workflow.ExampleTest.setUp", "../tests/test_codex_workflow.py",
+            "--unknown", "typo", "tests.test_missing", "tests.test_plugin_delivery.Missing",
+            "tests.test_plugin_delivery.ExampleTest.missing",
+            "tests.test_plugin_delivery.ExampleTest.setUp", "../tests/test_plugin_delivery.py",
         )
         for argument in invalid:
             with self.subTest(argument=argument):
                 self.case_calls.unlink(missing_ok=True)
-                result = self.invoke("codex", argument)
+                result = self.invoke("plugin", argument)
                 self.assertEqual(2, result.returncode, result.stdout + result.stderr)
                 self.assertIn("error:", result.stderr)
                 self.assertEqual([], self.recorded_cases())
 
     def test_groups_deduplicate_shared_targets_in_list_and_execution(self):
-        result = self.invoke("--list", "codex", "claude", "codex")
+        selectors = ("packaging", "native-config", "packaging")
+        expected = targets_for(PACKAGING_MODULES | NATIVE_CONFIG_MODULES)
+        result = self.invoke("--list", *selectors)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual([
-            "tests.test_codex_workflow", "tests.test_shared_memory_contract",
-            "tests.test_claude_workflow", "tests.test_claude_instructions",
-        ], result.stdout.splitlines())
+        self.assertCountEqual(expected, result.stdout.splitlines())
         self.assertEqual([], self.recorded_cases())
-        result = self.invoke("codex", "claude", "codex")
+        result = self.invoke(*selectors)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        cases = self.recorded_cases()
-        self.assertEqual(5, len(cases))
-        self.assertEqual(5, len({row["id"] for row in cases}))
+        self.assertCountEqual({target + ".ExampleTest.test_ok" for target in expected},
+                              [row["id"] for row in self.recorded_cases()])
 
     def test_parent_target_suppresses_child_nodes_in_either_order(self):
-        parent = "tests.test_shared_memory_contract"
+        self.write_case("plugin_delivery", ("test_one", "test_two"))
+        parent = "tests.test_plugin_delivery"
         child = parent + ".ExampleTest.test_one"
         for targets in ((parent, child), (child, parent)):
             with self.subTest(targets=targets):
@@ -190,69 +169,50 @@ import unittest
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(2, len(self.recorded_cases()))
 
-    def test_current_product_groups_list_deduplicate_and_prevalidate_errors(self):
-        expected = current_product_targets()
-        selectors = ("plugin", "native-config", "plugin", "tests.test_plugin_delivery.ExampleTest.test_ok")
-        listed = self.invoke("--list", *selectors)
-        self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
-        self.assertEqual(expected, listed.stdout.splitlines())
-        self.assertEqual([], self.recorded_cases())
-        rejected = self.invoke("plugin", "native-config", "tests.test_native_config.ExampleTest.missing")
+    def test_real_product_groups_collect_their_maintained_modules(self):
+        # plugin_delivery 同时受 plugin 与 packaging 使用，配置产品同样有安装器/交付
+        # 交集。按各组真实职责核对名单，再由组合测试证明这些交集只执行一次。
+        outside_plugin = ((NATIVE_CONFIG_MODULES | PROTOTYPE_MODULES | PLAN_MODULES | PACKAGING_MODULES)
+                          - {"plugin_delivery"}) | {"validation_runner"}
+        groups = {
+            "plugin": repository_targets() - targets_for(outside_plugin),
+            "native-config": targets_for(NATIVE_CONFIG_MODULES),
+            "prototype": targets_for(PROTOTYPE_MODULES),
+            "plans": targets_for(PLAN_MODULES),
+            "packaging": targets_for(PACKAGING_MODULES),
+        }
+        for group, expected in groups.items():
+            with self.subTest(group=group):
+                result = self.invoke("--list", group, entry=PACK / "scripts/test_workflow.sh")
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertCountEqual(expected, result.stdout.splitlines())
+
+    def test_current_gate_collects_every_repository_module_and_runs_each_case_once(self):
+        selectors = ("current", "plugin", "native-config", "prototype", "plans", "packaging", "current")
+        expected = repository_targets()
+        for entry in (self.source / "scripts/test_workflow.sh", PACK / "scripts/test_workflow.sh"):
+            with self.subTest(entry=entry):
+                # 单独校验 CI 实际传入的 current；同时传入所有产品组会掩盖 current 遗漏的模块。
+                listed = self.invoke("--list", "current", entry=entry)
+                self.assertEqual(0, listed.returncode, listed.stderr)
+                self.assertCountEqual(expected, listed.stdout.splitlines())
+        # 在执行任何夹具前拒绝被有效父模块覆盖的错误子节点。
+        rejected = self.invoke("current", "tests.test_task_graph_records.ExampleTest.missing")
         self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
         self.assertEqual([], self.recorded_cases())
         executed = self.invoke(*selectors)
         self.assertEqual(0, executed.returncode, executed.stdout + executed.stderr)
-        cases = self.recorded_cases()
-        self.assertEqual(len(expected), len(cases))
-        self.assertEqual(len(cases), len({case["id"] for case in cases}))
+        self.assertCountEqual({target + ".ExampleTest.test_ok" for target in expected},
+                              [case["id"] for case in self.recorded_cases()])
 
-    def test_real_current_product_groups_have_only_current_existing_targets(self):
-        listed = self.invoke("--list", "plugin", "native-config", "plugin", entry=PACK / "scripts/test_workflow.sh")
-        self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
-        expected = current_product_targets()
-        self.assertEqual(expected, listed.stdout.splitlines())
-        self.assertFalse(any("pty" in target.lower() or "manager_tui" in target for target in expected))
+    def test_retired_groups_are_rejected_before_collecting_cases(self):
+        for group in ("codex", "claude", "antigravity", "hosts", "central", "service", "tui",
+                      "pty", "ci", "legacy-ci"):
+            with self.subTest(group=group):
+                result = self.invoke(group)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("未知测试组或节点", result.stderr)
         self.assertEqual([], self.recorded_cases())
-
-    def test_current_gate_consumes_both_products_retained_prototypes_and_delivery_once(self):
-        expected = (["tests.test_validation_runner", "tests.test_candidate_delivery", "tests.test_plugin_source_publication", "tests.test_remote_install_smoke"]
-                    + current_product_targets() + ["tests.test_" + name for name in PROTOTYPE_MODULES] + plan_targets())
-        selectors = ("current", "plugin", "native-config", "prototype", "plans", "current")
-        for entry in (self.source / "scripts/test_workflow.sh", PACK / "scripts/test_workflow.sh"):
-            with self.subTest(entry=entry):
-                listed = self.invoke("--list", *selectors, entry=entry)
-                self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
-                self.assertEqual(expected, listed.stdout.splitlines())
-        rejected = self.invoke("current", "tests.test_task_graph_records.RecordUpdateTest.missing")
-        self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
-        self.assertEqual([], self.recorded_cases())
-        executed = self.invoke(*selectors)
-        self.assertEqual(0, executed.returncode, executed.stdout + executed.stderr)
-        cases = self.recorded_cases()
-        self.assertEqual(len(expected), len(cases))
-        self.assertEqual(len(cases), len({case["id"] for case in cases}))
-        self.assertFalse(any("RecordInstalledRuntimeTest" in case["id"] for case in cases))
-        self.assertFalse(any("test_unselected_legacy_transaction" in case["id"] for case in cases))
-
-    def test_plans_group_collects_only_selected_validator_and_six_baseline_nodes(self):
-        for entry in (self.source / "scripts/test_workflow.sh", PACK / "scripts/test_workflow.sh"):
-            with self.subTest(entry=entry):
-                listed = self.invoke("--list", "plans", entry=entry)
-                self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
-                self.assertEqual(plan_targets(), listed.stdout.splitlines())
-        result = self.invoke("plans")
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        cases = self.recorded_cases()
-        self.assertEqual(7, len(cases))
-        self.assertFalse(any("test_unselected_legacy_transaction" in case["id"] for case in cases))
-
-    def test_legacy_ci_alias_keeps_maintenance_scope_without_retired_html(self):
-        legacy = self.invoke("--list", "legacy-ci", entry=PACK / "scripts/test_workflow.sh")
-        alias = self.invoke("--list", "ci", entry=PACK / "scripts/test_workflow.sh")
-        self.assertEqual(0, legacy.returncode, legacy.stdout + legacy.stderr)
-        self.assertEqual(legacy.stdout, alias.stdout)
-        self.assertNotIn("requirement_html", legacy.stdout)
-        self.assertNotIn("tests.test_native_config", legacy.stdout)
 
     def test_selected_native_javascript_without_node_fails_before_any_case(self):
         # 提供入口真正需要的 Bash/dirname，但不提供 Node；解释器由受控
@@ -414,7 +374,8 @@ import unittest
         self.assertEqual(1, listed.stdout.splitlines().count("tests.test_plugin_source_publication"))
 
     def test_explicit_method_runs_only_that_case(self):
-        target = "tests.test_shared_memory_contract.ExampleTest.test_two"
+        self.write_case("plugin_delivery", ("test_one", "test_two"))
+        target = "tests.test_plugin_delivery.ExampleTest.test_two"
         result = self.invoke(target)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual([target], [row["id"] for row in self.recorded_cases()])
@@ -422,7 +383,7 @@ import unittest
     def test_physical_source_root_and_existing_runtime_flags_from_other_cwd(self):
         alias = self.root / "source alias"
         alias.symlink_to(self.source, target_is_directory=True)
-        target = "tests.test_codex_workflow.ExampleTest.test_ok"
+        target = "tests.test_plugin_delivery.ExampleTest.test_ok"
         result = self.invoke(target, entry=alias / "scripts/test_workflow.sh")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         invocation = self.runtime_calls.read_bytes().decode().split("\0")[:-1]
@@ -435,6 +396,7 @@ import unittest
         self.assertEqual([], list(self.source.rglob("*.pyc")))
 
     def test_unittest_failure_is_nonzero_and_runs_once(self):
+        self.write_case("runner_failure", ("test_failure",), failing=True)
         result = self.invoke("tests.test_runner_failure")
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertIn("FAILED (failures=1)", result.stderr)
@@ -443,49 +405,29 @@ import unittest
 
     def test_runtime_failure_exit_status_is_preserved(self):
         (self.source / "lib/python_runtime.sh").write_text("exit 23\n", encoding="utf-8")
-        result = self.invoke("codex")
+        result = self.invoke("plugin")
         self.assertEqual(23, result.returncode, result.stdout + result.stderr)
         self.assertEqual([], self.recorded_cases())
 
     def test_full_is_explicit_and_lists_each_existing_module_once(self):
-        result = self.invoke("--list", "full", "codex")
+        # 新增但尚未登记的模块也必须出现在 full 的发现结果中。
+        self.write_case("new_module", ("test_ok",))
+        result = self.invoke("--list", "full", "plugin")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         expected = ["tests." + path.stem for path in sorted((self.source / "tests").glob("test_*.py"))]
         self.assertEqual(expected, result.stdout.splitlines())
         self.assertEqual([], self.recorded_cases())
 
-    def test_legacy_entries_keep_original_module_scope(self):
-        expected = {
-            "codex": {"codex_workflow", "shared_memory_contract"},
-            "claude": {"claude_workflow", "claude_instructions", "shared_memory_contract"},
-            "antigravity": {"antigravity_workflow"},
-            "prototype": set(PROTOTYPE_MODULES),
-        }
-        for host, modules in expected.items():
-            with self.subTest(host=host):
-                self.case_calls.unlink(missing_ok=True)
-                result = self.invoke(entry=self.source / f"scripts/test_{host}.sh")
-                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                actual = {row["id"].split(".")[1].removeprefix("test_") for row in self.recorded_cases()}
-                self.assertEqual(modules, actual)
-
-    def test_real_central_service_ci_include_212_consumers_without_duplicates(self):
-        # 单独核对真实ci，避免central组已含runtime_state而掩盖ci漏纳该模块；
-        # 再核对组合计划去重，确保重叠组不会重复执行有状态的容量/恢复测试。
-        for selectors in (("ci",),("central","service","ci")):
-            with self.subTest(selectors=selectors):
-                result=self.invoke("--list",*selectors,entry=PACK/"scripts/test_workflow.sh")
-                self.assertEqual(0,result.returncode,result.stdout+result.stderr)
-                targets=result.stdout.splitlines();self.assertEqual(len(targets),len(set(targets)))
-                for name in ("runtime_state","central_runtime","runtime_lifecycle","native_agents","install_cli"):
-                    self.assertEqual(1,targets.count("tests.test_"+name))
-                self.assertIn("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",targets)
-                self.assertIn("tests.test_manager_tui.ProjectTuiIntegrationTest.test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize",targets)
+    def test_prototype_entry_runs_the_prototype_group(self):
+        result = self.invoke(entry=self.source / "scripts/test_prototype.sh")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        targets = [row["id"].rsplit(".", 2)[0] for row in self.recorded_cases()]
+        self.assertCountEqual(targets_for(PROTOTYPE_MODULES), targets)
 
     def test_real_existing_node_runs_through_repository_entry(self):
         # 受控夹具只能证明调度边界；另经真实入口执行既有生产消费者，证明当前
         # 源根、真实 python_runtime.sh 和 unittest 节点能一起运行，而非仅录制 mock。
-        target = "tests.test_claude_options.ClaudeOptionsTest.test_missing_options_inherit_and_model_edits_preserve_native_window"
+        target = "tests.test_light_ui_copy.LightUICopyContractTest.test_light_ui_uses_real_conformance_contract_without_full_graph_or_approval"
         result = self.invoke(target, entry=PACK / "scripts/test_workflow.sh")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("Ran 1 test", result.stderr)

@@ -14,15 +14,12 @@ IMPLEMENTER_ROLES = frozenset({
     "xy-web", "xy-desktop", "xy-backend", "xy-apple", "xy-android",
 })
 
-# 历史集合仅作为磁盘所有权证明，允许安装器在不覆盖未知用户内容的前提下替换资源。
-# 它不是 2.0 运行合同；当前源、staging 和 --check 始终要求全部技能齐全，不能接受旧绑定。
-LEGACY_CORE_SKILLS = frozenset({
-    "grill-me", "xy-build-verify", "xy-project-memory", "xy-plan",
-    "xy-prototype-verify", "xy-qa-review", "xy-workflow",
+# 此集合只决定随包发现的共享资源。平台指导按任务选用，角色的固定预载仍由 ROLE_SKILLS 决定。
+CORE_SKILLS = frozenset({
+    "xy-build-verify", "xy-project-memory", "xy-plan", "xy-prototype-verify", "xy-qa-review",
+    "xy-workflow", "xy-code-standards", "xy-ui-design", "xy-web-guidance", "xy-apple-guidance",
+    "xy-mobile-ui",
 })
-# 外部原版与内部受管Skill分开，历史集合只证明旧磁盘所有权。
-# 两个新指导入口只声明可发现资源，不能据此自动写入角色原生skills；实际选用由当前任务决定。
-CORE_SKILLS = (LEGACY_CORE_SKILLS - {"grill-me"}) | {"xy-code-standards", "xy-ui-design", "xy-web-guidance", "xy-apple-guidance"}
 COMMAND_IDENTITY = load_identity(Path(__file__).resolve().parents[2])
 SELECTED_SKILL_ALIASES = {public: canonical for public, canonical in COMMAND_IDENTITY["skill_aliases"].items()
                           if canonical != "agent-config"}
@@ -48,13 +45,6 @@ ANTIGRAVITY_ROLE_SKILLS = {
     role: tuple(f"skills/{skill}" for skill in skills)
     for role, skills in ROLE_SKILLS.items()
 }
-LEGACY_ANTIGRAVITY_ROLE_SKILLS = {
-    **{role: ("skills/xy-build-verify",) for role in IMPLEMENTER_ROLES},
-    "xy-uiux": ("skills/xy-prototype-verify",),
-    "xy-qa": ("skills/xy-qa-review",),
-}
-
-
 def main(arguments: list[str] | None = None) -> int:
     """Codex 的 Shell 生成器只读取名称；所有激活与模式仍由原角色合同决定。"""
     arguments = sys.argv[1:] if arguments is None else arguments

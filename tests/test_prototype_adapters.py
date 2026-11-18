@@ -96,12 +96,17 @@ class PrototypeAdapterTest(unittest.TestCase):
     def test_role_and_skill_commands_preserve_the_selected_adapter(self) -> None:
         """模型调用合同覆盖两个实际入口，动态包测试另核对实际 .awf 消费结果。"""
         role = (PACK / "roles/xy-uiux.md").read_text(encoding="utf-8")
-        self.assertIn("validate_project_docs.py <selected-project-adapter>", role)
+        self.assertRegex(role, r"plugins/source_pack\.py[^\n]*helper --project [^\n]*lib/validate_project_docs\.py <selected-project-adapter>")
+        self.assertIn("Invoke `$xy-prototype-verify`", role)
         self.assertIn("--adapter <selected-project-adapter>", role)
         self.assertNotIn("validate_project_docs.py .agent-workflow/project.yaml", role)
         skill = (PACK / "platforms/shared/skills/xy-prototype-verify/SKILL.md").read_text(encoding="utf-8")
         commands = [command for command in re.findall(r"```bash\n(.*?)```", skill, re.S)
                     if "validate_prototype_workspace.py" in command]
-        self.assertEqual(2, len(commands))
-        for command in commands:
-            self.assertIn("--adapter <selected-project-adapter>", command)
+        self.assertEqual(1, len(commands))
+        # 验证宿主、已选项目和具体页面参数在同一条受检命令上联通，防止退回裸 helper。
+        command = " ".join(commands[0].replace(chr(92) + "\n", " ").split())
+        self.assertIn("plugins/source_pack.py helper --project <physical-project-root> "
+                      "lib/documents/validate_prototype_workspace.py", command)
+        self.assertIn("--adapter <selected-project-adapter>", command)
+        self.assertIn("--standalone --json --page <stable-page>.html", command)

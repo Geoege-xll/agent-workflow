@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from lib.skills import selected_skills as selected
-from lib.skills.role_skills import CORE_SKILLS, LEGACY_CORE_SKILLS, PM_SKILLS, ROLE_SKILLS, SELECTED_SKILLS, SELECTED_SKILL_ALIASES
+from lib.skills.role_skills import CORE_SKILLS, PM_SKILLS, ROLE_SKILLS, SELECTED_SKILLS, SELECTED_SKILL_ALIASES
 from lib.skills import playwright_runtime as runtime
 from lib.skills import modern_web_runtime as web_runtime
 from lib.skills import apple_guidance as apple
@@ -84,7 +84,6 @@ class SelectedSkillsTest(unittest.TestCase):
         explicit = files[selected.skill_path("grill-me")]
         self.assertIn(b"disable-model-invocation: true", explicit)
         self.assertNotIn("grill-me", CORE_SKILLS)
-        self.assertIn("grill-me", LEGACY_CORE_SKILLS)
         self.assertEqual({"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}, set(SELECTED_SKILLS))
         self.assertEqual(("xy-grilling",), PM_SKILLS)
         self.assertIn("xy-taste", ROLE_SKILLS["xy-uiux"])

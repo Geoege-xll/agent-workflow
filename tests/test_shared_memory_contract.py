@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
-import shutil
-import subprocess
-import tempfile
 from tests.skill_contract_helpers import read_contract
 
 
@@ -76,47 +73,6 @@ class SharedMemoryContractTest(unittest.TestCase):
         self.assertIn("memory_smart_search", body)
         self.assertIn("memory_save", body)
 
-    def test_claude_check_has_no_hidden_traceback_in_a_temp_fixture(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="agent-workflow-claude-check-") as temp:
-            project = Path(temp) / "Project"
-            pack = project / "agent_workflow"
-            project.mkdir()
-            shutil.copytree(
-                PACK,
-                pack,
-                ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"),
-                symlinks=True,
-            )
-            shutil.copy2(pack / "templates/project.yaml.example", pack / "project.yaml")
-            config = pack / "project.yaml"
-            config.write_text(
-                config.read_text(encoding="utf-8").replace(
-                    "project_id: replace-with-unique-project-id",
-                    "project_id: claudecontractfixture",
-                ),
-                encoding="utf-8",
-            )
-            setup = subprocess.run(
-                ["bash", "agent_workflow/setup_claude.sh"],
-                cwd=project,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(setup.returncode, 0, setup.stdout + setup.stderr)
-            check = subprocess.run(
-                ["bash", "agent_workflow/setup_claude.sh", "--check"],
-                cwd=project,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
-            self.assertNotIn("Traceback", check.stdout + check.stderr)
-            self.assertFalse((project / "docs/notes").exists())
-            installed_memory = (project / ".claude/skills/xy-project-memory/SKILL.md").read_text(encoding="utf-8")
-            for retired in ("memory.fallback_dir", "docs.notes", "fallback_note:"):
-                self.assertNotIn(retired, installed_memory)
 
     def test_shared_skills_keep_memory_below_pages_and_controlled_docs(self) -> None:
         for relative in SHARED_AUTHORITY_SOURCES:

@@ -236,6 +236,8 @@ class RequestUiQaContractTest(unittest.TestCase):
                         "ui_contract": copy.deepcopy(graph["ui_contract"]), "approved_gates": []}
         light_qa = copy.deepcopy(pack)
         light_qa["task"].update(workflow_level="Light", depends_on=[], blocks=[])
+        light_qa.pop("qa_checkpoint")
+        light_qa.pop("qa_checkpoint_fingerprint")
         light_qa["reviewed_ui_changes"] = [{key: copy.deepcopy(light_writer[key])
                                             for key in REVIEWED_UI_FIELDS if key in light_writer}]
         _verify_ui_scope(light_qa, light_source)
@@ -322,7 +324,7 @@ class BuiltinSourceContractTest(unittest.TestCase):
         result = self.invoke(payload)
         self.assertNotEqual(0, result.returncode)
         self.assertIn("selected builtin engineering baseline", result.stderr)
-        # 2.0项目叶只能补充，删除内置来源后即使项目规则完整也不能替代底线。
+        # schema 2项目叶只能补充，删除内置来源后即使项目规则完整也不能替代底线。
         standards["leaves"] = [project]
         result = self.invoke(payload)
         self.assertNotEqual(0, result.returncode)
@@ -537,6 +539,28 @@ class TaskGraphTest(unittest.TestCase):
         ]
 
         validate_graph(tasks)
+
+    def test_deep_dependency_chain_can_share_a_path_at_both_ends(self) -> None:
+        """编号靠前的任务依赖靠后的任务，验证不能依赖 ID 排序碰巧缩短调用栈。"""
+        depth = sys.getrecursionlimit() + 1
+        ids = [f"step-{number:08d}" for number in range(depth)]
+        tasks = [
+            Task(task_id, "req-1",
+                 depends_on=(ids[index + 1],) if index + 1 < depth else (),
+                 blocks=(ids[index - 1],) if index else (),
+                 owned_paths=("services/checkout/",) if index in (0, depth - 1) else ())
+            for index, task_id in enumerate(ids)
+        ]
+        # 两端存在传递依赖，允许写同一路径。只有没有前置依赖的末端可以被派发。
+        self.assertEqual([ids[-1]], ready_tasks(
+            tasks, approved_gates=set(), active_paths=set(), active_semantic_locks=set(), capacity=2
+        ))
+
+    def test_dependency_cycle_is_reported_as_graph_error(self) -> None:
+        tasks = [Task("a", "req-1", depends_on=("b",), blocks=("b",)),
+                 Task("b", "req-1", depends_on=("a",), blocks=("a",))]
+        with self.assertRaisesRegex(TaskGraphError, "dependency cycle detected"):
+            validate_graph(tasks)
 
     def test_unordered_ancestor_paths_and_semantic_locks_are_rejected(self) -> None:
         """并行候选即使路径字符串不同，也不能绕过父子路径或共享契约锁。"""
@@ -850,7 +874,7 @@ class TaskGraphTest(unittest.TestCase):
             )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
-        # 2.0内置规则是唯一通用底线。项目规则可在GENERAL或专项叶补充，不能强制
+        # schema 2内置规则是唯一通用底线。项目规则可在GENERAL或专项叶补充，不能强制
         # 一个空GENERAL作为兼容门禁；移到专项叶后仍保留当前真实内置读取来源。
         omitted_baseline = json.loads(json.dumps(payload))
         omitted_baseline["standards_contract"]["leaves"][0]["rule_ids"] = [

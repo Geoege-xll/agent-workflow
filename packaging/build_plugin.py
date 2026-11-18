@@ -24,13 +24,54 @@ from lib.skills.business_confirmation_policy import (
     validate_business_confirmation_pack, validate_business_confirmation_texts,
 )
 from lib.skills.qa_review_policy import validate_pack_qa_review_policy
-from lib.skills.role_skills import CORE_SKILLS, ROLE_SKILLS
+from lib.skills.role_skills import CORE_SKILLS, IMPLEMENTER_ROLES, ROLE_SKILLS
 from lib.documents.prototype_review import LIVE_TOOL_ASSETS as PROTOTYPE_LIVE_TOOL_ASSETS, V4_TOOL_ASSETS as PROTOTYPE_V4_TOOL_ASSETS
 from product.command_identity import load_identity
 from product.release_channels import version_channel
 from lib.skills.selected_skills import LOCK as SELECTED_LOCK, VENDOR as SELECTED_VENDOR, SPECS as SELECTED_SPECS, snapshot as selected_snapshot
-from lib.validate_antigravity_artifacts import ROLE_TOOLS as ANTIGRAVITY_ROLE_TOOLS
 
+
+# 宿主原生角色的工具白名单随构建器一同校验摘要，避免交付已退役安装器的实现。
+IMPLEMENTER_TOOLS = (
+    "view_file",
+    "list_dir",
+    "find_by_name",
+    "grep_search",
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "run_command",
+    "manage_task",
+)
+UIUX_TOOLS = (
+    "view_file",
+    "list_dir",
+    "find_by_name",
+    "grep_search",
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "run_command",
+    "manage_task",
+    "search_web",
+    "read_url_content",
+    "generate_image",
+)
+QA_TOOLS = (
+    "view_file",
+    "list_dir",
+    "find_by_name",
+    "grep_search",
+    "run_command",
+    "manage_task",
+    "search_web",
+    "read_url_content",
+)
+ANTIGRAVITY_ROLE_TOOLS = {
+    **{role: IMPLEMENTER_TOOLS for role in IMPLEMENTER_ROLES},
+    "xy-uiux": UIUX_TOOLS,
+    "xy-qa": QA_TOOLS,
+}
 
 HOSTS = ("codex", "claude", "antigravity")
 IDENTITY = load_identity(ROOT)
@@ -53,15 +94,20 @@ MANIFESTS = {"codex": ".codex-plugin/plugin.json", "claude": ".claude-plugin/plu
              "antigravity": ".antigravity-plugin/plugin.json"}
 # 原有 helper 的源包依赖显式列出。不给插件夹入中央管理器、TUI、旧安装器、
 # Windows 启动器、原生配置业务本体或任何模型服务/MCP装配入口。
+# 产品合同只发布当前工作流和身份解析需要的文件。旧 checkout 即使遗留独立的
+# product/VERSION，或向 product/ 放入其他未登记文件，也不能污染插件的版本权威。
+PRODUCT_FILES = (
+    "PLUGIN_VERSION", "WORKFLOW.md", "GLOBAL_CONSTRAINTS.md", "AGENT_SCHEMA.md", "ROLES.yaml",
+    "__init__.py", "command_identity.json", "command_identity.py", "release_channels.py",
+)
 LIB_FILES = (
-    "__init__.py", "agent_continuation.py", "agent_continuation_cli.py", "platform_fs.py", "plugin_resources.py", "role_models.py",
-    "python_runtime.sh", "runtime_pins.py", "runtime_store.py", "standard_paths.py", "task_graph.py",
+    "__init__.py", "safe_text.py", "agent_continuation.py", "agent_continuation_cli.py", "platform_fs.py", "plugin_resources.py",
+    "python_runtime.sh", "task_sources.py", "standard_paths.py", "task_graph.py",
     "dispatch_admission.py", "dispatch_admission_cli.py", "task_settlement.py", "foundation_qa.py",
     "task_graph_cli.py", "task_graph_init.py", "task_graph_records.py",
     "validate_project_docs.py", "worktree_policy.py",
 )
-HOST_LIB_FILES = ("__init__.py", "claude_instructions.py", "claude_options.py",
-                  "workflow_hook_settings.py")
+HOST_LIB_FILES = ("__init__.py", "capabilities.py")
 # 维护入口单独封闭白名单：既不遍历维护目录，也不读取独立产品源码或网页。
 # 新的薄模块必须经显式审查后加入；Skill 不属于九个业务核心或角色预载列表。
 MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
@@ -183,15 +229,21 @@ def render_skill(body: bytes, envelope: bytes) -> bytes:
     return header + b"\n" + envelope + b"\n" + original_body
 
 
+def render_maintenance_route(body: bytes, host: str) -> bytes:
+    """主会话和维护 Skill 使用同一宿主调用名及允许动作；重绑仅在 Codex 入口可选。"""
+    actions = b"open|status|doctor|rebind" if host == "codex" else b"open|status|doctor"
+    return (body.replace(b"@HOST@", host.encode("ascii"))
+            .replace(b"@INVOCATION@", MAINTENANCE_INVOCATIONS[host].encode("ascii"))
+            .replace(b"@MAINTENANCE_ACTIONS@", actions))
+
+
 def render_main_context(body: bytes, host: str, envelope_source: str) -> bytes:
     """主会话适配仅提供分支，不将业务适配注入维护 Skill 或 Worker。
 
     host 和调用名称来自构建枚举而非用户输入；项目路径留给真实 session/workspace，
     不在构建时写入开发机 cwd、源码路径或默认项目。业务适配在业务分支中延迟读取。
     """
-    return (body.replace(b"@HOST@", host.encode("ascii"))
-            .replace(b"@INVOCATION@", MAINTENANCE_INVOCATIONS[host].encode("ascii"))
-            .replace(b"@BUSINESS_ADAPTER@", envelope_source.encode("ascii")))
+    return render_maintenance_route(body, host).replace(b"@BUSINESS_ADAPTER@", envelope_source.encode("ascii"))
 
 
 def render_maintenance_skill(body: bytes, host: str) -> bytes:
@@ -200,8 +252,7 @@ def render_maintenance_skill(body: bytes, host: str) -> bytes:
     if host in {"claude", "antigravity"}:
         # 两宿主官方插件 Skill 均支持此 frontmatter；不添加 fork 或宽泛工具批准。
         header = header.removesuffix(b"---\n") + b"disable-model-invocation: true\n---\n"
-    return (header + original_body).replace(b"@HOST@", host.encode("ascii")).replace(
-        b"@INVOCATION@", MAINTENANCE_INVOCATIONS[host].encode("ascii"))
+    return render_maintenance_route(header + original_body, host)
 
 
 def validate_maintenance_descriptor(source: Path) -> None:
@@ -291,13 +342,12 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     # 正式版与历史alpha的语法/渠道由两个产品共用的唯一纯合同验证。
     version_channel(version)
     errors = validate_business_confirmation_pack(source, host)
-    errors.extend(validate_pack_qa_review_policy(source))
+    errors.extend(validate_pack_qa_review_policy(source, host))
     if errors:
         raise ValueError("source workflow contract failed: " + "; ".join(errors))
     result: dict[str, bytes] = {}
     source_files: dict[str, str] = {
         "packaging/build_plugin.py": digest(read_source(source, "packaging/build_plugin.py")),
-        "lib/validate_antigravity_artifacts.py": digest(read_source(source, "lib/validate_antigravity_artifacts.py")),
     }
     projections = {}
 
@@ -308,7 +358,9 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
 
     # documents 是唯一核心载荷白名单根，包含 prototype_review 及其安全读取、
     # 依赖校验闭包；模板在下方按明确文件白名单同源装配，不在宿主间维护副本。
-    for folder in ("product", "roles", "platforms/shared", "platforms/" + host,
+    for name in PRODUCT_FILES:
+        copy("product/" + name)
+    for folder in ("roles", "platforms/shared", "platforms/" + host,
                    "lib/documents", "lib/delivery", "lib/project", "lib/skills"):
         for relative in tree_files(source, folder):
             copy(relative)

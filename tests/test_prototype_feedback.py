@@ -170,6 +170,10 @@ class PrototypeFeedbackTest(unittest.TestCase):
         (self.project / "other.yaml").write_text("docs:\n  plans: docs/plans/\n", encoding="utf-8")
         with self.assertRaises(ValueError):
             feedback.prepare_review(self.project, "other.yaml", "docs/plans/settings.md", "review-1")
+        duplicate = self.project / "duplicate.yaml"
+        duplicate.write_bytes((self.project / "project.yaml").read_bytes() + b"\ndocs: # duplicate\n  plans: docs/plans/\n")
+        with self.assertRaisesRegex(feedback.FeedbackError, "必须包含唯一 docs 配置"):
+            feedback.prepare_review(self.project, duplicate.name, "docs/plans/settings.md", "review-1")
         value = self.envelope()
         value["context"]["prototype_root"] = "docs/elsewhere/prototype"
         with self.assertRaises(ValueError):
@@ -405,7 +409,7 @@ class PrototypeFeedbackTest(unittest.TestCase):
         self.plan.write_text("# 需求\n" + "\n".join(f"{req}: " + "长需求说明" * 150 for req in requirements), encoding="utf-8")
         ready = feedback.prepare_review(self.project, "project.yaml", "docs/plans/settings.md", "long-req",
                 [self.page], data_dir=self.data_dir)
-        self.assertEqual(3, ready["context"]["schema_version"])
+        self.assertEqual(4, ready["context"]["schema_version"])
         self.assertEqual(requirements, ready["context"]["requirements"])
         self.assertLessEqual(len(feedback._json_bytes(ready["context"])), 8192)
         value = {"schema_version": 4, "review": {key: ready["context"][key] for key in ("request_id", "review_id")}, "anchors": [], "items": []}
@@ -413,6 +417,157 @@ class PrototypeFeedbackTest(unittest.TestCase):
         self.assertEqual({"status", "review", "anchors", "changes", "notice"}, set(current))
         self.assertEqual("current", current["status"])
         self.assertNotIn("长需求", json.dumps(current, ensure_ascii=False))
+
+    def test_current_requirement_marker_scopes_new_live_and_offline_reviews_without_rebinding_old_v4(self):
+        from lib.documents import prototype_live as live
+        from lib.documents import prototype_review as review
+
+        body = ("# 旧项目名称 REQ-901\n\n## 需求与验收\n- REQ-902 原合同\n"
+                "```md\n<!--\n### 当前有效需求\n- REQ-903 围栏示例\n```\n"
+                "### 当前有效需求\n- **REQ-001** 与 REQ-904 的关联\n"
+                "保留 `<!--` 作为语法示例。\n<!--\n- REQ-908 已退役的定义\n"
+                "~~~md\n- REQ-909 注释内围栏示例\n~~~\n-->\n"
+                "<!-- REQ-910 内联旧引用 -->\n| REQ-002 设置访问 | 支持快捷键 |\n#### REQ-003 设置退出\n"
+                "### 历史合同 REQ-905\n- REQ-906 旧要求\n"
+                "## 方案与原型关联\n原型映射 REQ-907。\n").encode("utf-8")
+        self.plan.write_bytes(body)
+        args = (self.project, "project.yaml", "docs/plans/settings.md", "review-marker", [self.page])
+        source = self.project / self.page
+        source.write_text(source.read_text().replace('id="open-settings-dialog"',
+                'id="open-settings-dialog" data-req-ids="REQ-906"'), encoding="utf-8")
+
+        offline = feedback.prepare_review(*args, data_dir=self.data_dir)["context"]
+        online, _, _, _ = live.capture_live(*args)
+        live.register_live(self.project, online, data_dir=self.data_dir)
+        historical = ["REQ-901", "REQ-902", "REQ-001", "REQ-904", "REQ-908", "REQ-910",
+                      "REQ-002", "REQ-003", "REQ-905", "REQ-906", "REQ-907"]
+
+        for version in (2, 3):
+            previous = prepare_legacy(self.project, self.data_dir, self.page, format_version=version)["context"]
+            self.assertEqual(historical, [entry["id"] for entry in previous["requirements"]])
+            payload = {"schema_version": version, "context": previous, "items": []}
+            if version == 3:
+                payload["anchors"] = []
+            self.assertEqual("current", self.validate(payload)["status"])
+
+        def historical_context(context):
+            # 原 context4 将同名标题视作普通 Markdown；原工具清单与完整 plan SHA
+            # 保持不动，仅按发布时的完整目录重建该历史修订的真实身份。
+            old = {**context, "requirements": historical}
+            old["review_id"] = review.review_id(old)
+            return old
+
+        tool, assets = review.capture_tool()
+        _, _, files, navigation = review.capture_review(*args, tool=tool)
+        old_offline = historical_context(offline)
+        review.publish_bundle(old_offline, files, assets, navigation, data_dir=self.data_dir)
+        old_online = historical_context(online)
+        live.register_live(self.project, old_online, data_dir=self.data_dir)
+
+        def envelope(context, version):
+            return {"schema_version": version, "anchors": [], "items": [],
+                    "review": {key: context[key] for key in ("request_id", "review_id")}}
+
+        compact_offline, _, compact_files, compact_navigation = review.capture_review(*args, tool=tool, context_version=3)
+        review.publish_bundle(compact_offline, compact_files, assets, compact_navigation, data_dir=self.data_dir)
+        compact_online, _, _, _ = live.capture_live(*args, context_version=3)
+        live.register_live(self.project, compact_online, data_dir=self.data_dir)
+        for context, version in ((compact_offline, 4), (compact_online, 5)):
+            self.assertEqual(historical, context["requirements"])
+            self.assertEqual("current", self.validate(envelope(context, version))["status"])
+
+        item = {"id": "item-1", "number": 1, "operation": "modify", "message": "修改设置",
+                "target": {"scope": "node", "page": self.page,
+                           "locator": {"type": "id", "id": "open-settings-dialog"}}}
+        for current, old, version in ((offline, old_offline, 4), (online, old_online, 5)):
+            with self.subTest(version=version):
+                self.assertEqual(["REQ-001", "REQ-002", "REQ-003"], current["requirements"])
+                self.assertEqual(review.digest(body), current["plan_sha256"])
+                self.assertEqual(current["plan_sha256"], old["plan_sha256"])
+                self.assertNotEqual(current["review_id"], old["review_id"])
+                self.assertEqual("current", self.validate(envelope(current, version))["status"])
+                self.assertEqual(["REQ-906"], self.validate({**envelope(old, version), "items": [item]})["changes"][0]["req_ids"])
+                with self.assertRaisesRegex(ValueError, "需求关联"):
+                    self.validate({**envelope(current, version), "items": [item]})
+        self.assertEqual(body, self.plan.read_bytes())
+
+        self.plan.write_bytes(body + "历史说明修订。\n".encode("utf-8"))
+        changed, _, _, _ = live.capture_live(*args)
+        self.assertEqual(online["requirements"], changed["requirements"])
+        self.assertNotEqual(online["plan_sha256"], changed["plan_sha256"])
+        for context, version in ((offline, 4), (old_offline, 4), (online, 5), (old_online, 5)):
+            with self.subTest(version=version, review=context["review_id"]), self.assertRaises(ValueError):
+                self.validate(envelope(context, version))
+
+    def test_new_review_rejects_empty_duplicate_and_misplaced_current_requirements(self):
+        from lib.documents import prototype_live as live
+
+        args = (self.project, "project.yaml", "docs/plans/settings.md", "review-marker", [self.page])
+        for markdown, reason in (
+            ("## 需求与验收\n### 当前有效需求\n参见 REQ-900。\n### 历史\n- REQ-900\n", "至少定义一个 REQ ID"),
+            ("## 需求与验收\n### 当前有效需求\n- REQ-001\n### 当前有效需求\n- REQ-002\n", "须唯一"),
+            ("## 方案与原型关联\n### 当前有效需求\n- REQ-001\n", "直接属于"),
+        ):
+            self.plan.write_text(markdown, encoding="utf-8")
+            with self.subTest(markdown=markdown), self.assertRaisesRegex(ValueError, reason):
+                feedback.prepare_review(*args, data_dir=self.data_dir)
+            with self.subTest(markdown=markdown), self.assertRaisesRegex(ValueError, reason):
+                live.capture_live(*args)
+
+    def test_review_rereads_fences_using_the_registered_source_revision(self):
+        from lib.documents import prototype_live as live
+        from lib.documents import prototype_review as review
+
+        # 较短的同类标记、混用另一种围栏或带文字的伪闭栏都不能暴露示例内容。
+        # 旧算法却会收录900/901并忽略最后的003；这个差异可以区分真正的历史重读。
+        self.plan.write_bytes(b"REQ-001\r\n   ````md\r\n~~~\r\n```\r\nREQ-900\r\n```\r\n`````\r\n"
+                              b"REQ-002\r\n~~~md\r\n~~~~text\r\nREQ-901\r\n~~~\r\nREQ-003\r\n")
+        historical = ["REQ-001", "REQ-900", "REQ-002", "REQ-901"]
+        args = (self.project, "project.yaml", "docs/plans/settings.md", "review-1", [self.page])
+        source = self.project / self.page
+        source.write_text(source.read_text().replace('id="open-settings-dialog"',
+                'id="open-settings-dialog" data-req-ids="REQ-900"'), encoding="utf-8")
+
+        for version in (2, 3):
+            old = prepare_legacy(self.project, self.data_dir, self.page, format_version=version)["context"]
+            self.assertEqual(historical, [req["id"] for req in old["requirements"]])
+            envelope = {"schema_version": version, "context": old, "items": []}
+            if version == 3:
+                envelope["anchors"] = []
+            self.assertEqual("current", self.validate(envelope)["status"])
+
+        old_tool, assets = review.capture_tool()
+        previous, _, files, navigation = review.capture_review(*args, tool=old_tool, context_version=3)
+        review.publish_bundle(previous, files, assets, navigation, data_dir=self.data_dir)
+        old_live, _, _, _ = live.capture_live(*args, context_version=3)
+        live.register_live(self.project, old_live, data_dir=self.data_dir)
+        offline = feedback.prepare_review(*args, data_dir=self.data_dir)["context"]
+        current_live, _, _, _ = live.capture_live(*args)
+        live.register_live(self.project, current_live, data_dir=self.data_dir)
+        contexts = (previous, old_live, offline, current_live)
+        self.assertEqual(4, len({context["review_id"] for context in contexts}))
+
+        for context, version in zip(contexts, (4, 5, 4, 5)):
+            envelope = {"schema_version": version, "anchors": [], "items": [],
+                        "review": {key: context[key] for key in ("request_id", "review_id")}}
+            self.assertEqual("current", self.validate(envelope)["status"])
+            with self.assertRaises(ValueError):
+                self.validate({**envelope, "schema_version": 5 if version == 4 else 4})
+            envelope["items"] = [{"id": "item-1", "number": 1, "operation": "modify", "message": "修改设置",
+                    "target": {"scope": "node", "page": self.page, "locator": {"type": "id", "id": "open-settings-dialog"}}}]
+            if context["schema_version"] == 3:
+                self.assertEqual(historical, context["requirements"])
+                self.assertEqual(["REQ-900"], self.validate(envelope)["changes"][0]["req_ids"])
+            else:
+                self.assertEqual(["REQ-001", "REQ-002", "REQ-003"], context["requirements"])
+                with self.assertRaisesRegex(ValueError, "需求关联"):
+                    self.validate(envelope)
+        # 即使重新计算内容哈希，也不能将离线修订登记为活动源；只改协议字段
+        # 或新增来源字段而沿用旧review_id，必须在发布或草稿重读前被识别。
+        with self.assertRaisesRegex(ValueError, "来源种类"):
+            live.register_live(self.project, offline, data_dir=self.data_dir)
+        with self.assertRaisesRegex(ValueError, "身份"):
+            live.register_live(self.project, {**offline, "source_kind": "live"}, data_dir=self.data_dir)
 
     def test_v4_grouped_source_associations_and_only_referenced_cross_page_anchors(self):
         source = self.project / self.page

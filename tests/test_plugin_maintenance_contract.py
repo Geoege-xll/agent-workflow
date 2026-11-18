@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -35,13 +36,13 @@ class PluginMaintenanceContractTest(unittest.TestCase):
         cls.temporary.cleanup()
 
     def test_discoverable_base_and_conditional_guidance_keep_maintenance_and_worker_preloads_separate(self):
-        # 期望名称独立于生产注册表：八个基础入口继续存在，两个指导入口只增加可发现
-        # 资源。精确集合同时防止误删旧入口或无意加入新入口，不能只把历史计数8改为10。
+        # 期望名称独立于生产注册表：基础入口保持，条件指导增加可发现资源。
+        # 精确集合也能捕捉旧入口被误删或其余入口被意外装配。
         base_skills = {
             "xy-build-verify", "xy-project-memory", "xy-plan", "xy-prototype-verify",
             "xy-qa-review", "xy-workflow", "xy-code-standards", "xy-ui-design",
         }
-        conditional_guidance = {"xy-web-guidance", "xy-apple-guidance"}
+        conditional_guidance = {"xy-web-guidance", "xy-apple-guidance", "xy-mobile-ui"}
         selected_skills = {"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}
         self.assertEqual(base_skills | conditional_guidance, set(CORE_SKILLS))
         self.assertEqual(selected_skills, set(SELECTED_SKILLS))
@@ -67,7 +68,7 @@ class PluginMaintenanceContractTest(unittest.TestCase):
                         self.assertTrue((conditional_guidance | {"xy-config"}).isdisjoint(projected.stdout.splitlines()), role)
                     else:
                         # Claude/AGY核对三包fixture里的原生header，不读取正文来误判
-                        # 按需选用说明；维护与两个条件指导入口均不得被自动预载。
+                        # 按需选用说明；维护与条件指导入口均不得被自动预载。
                         header, _ = builder.split_frontmatter((root / "agents" / (role + ".md")).read_bytes())
                         for skill in conditional_guidance | {"xy-config"}:
                             self.assertNotIn(skill.encode(), header, role)
@@ -87,6 +88,11 @@ class PluginMaintenanceContractTest(unittest.TestCase):
                 self.assertNotIn(b"@INVOCATION@", loaded)
                 self.assertIn(b"--host " + host.encode(), body)
                 self.assertEqual(builder.render_maintenance_skill(original, host), loaded)
+                # 从实际发现正文与主会话路由分别核对同一显式调用；测试期望独立于构建替换函数。
+                actions = "open|status|doctor|rebind" if host == "codex" else "open|status|doctor"
+                syntax = f"{builder.MAINTENANCE_INVOCATIONS[host]} [{actions}]".encode()
+                self.assertIn(syntax, body)
+                self.assertIn(syntax, (root / "main-session-context.md").read_bytes())
                 adapter = "plugins/antigravity/plugin-context.md" if host == "antigravity" else "plugins/plugin-context.md"
                 self.assertNotIn((PACK / adapter).read_bytes(), body)
                 policy = root / "skills/xy-config/agents/openai.yaml"
@@ -220,6 +226,61 @@ print(json.dumps({"report": report, "exit": status, "calls": calls}))
                     self.assertFalse(value["calls"][0]["shell"])
                     self.assertFalse(absent.exists())
 
+    def test_detached_rebind_previews_then_applies_only_the_confirmed_user_definition(self):
+        # 组件与插件分别从当前源码离线构建。只用测试专用 home/组件目录；不启动控制台，
+        # 预览和确认均执行真实打包启动器与真实组件子进程，不替换命令或伪造成功回执。
+        root = self.installed["codex"]
+        case = self.root / "detached-rebind"
+        case.mkdir()
+        home = case / "home"
+        home.mkdir()
+        component_build = runpy.run_path(str(PACK / "packaging/build_agent_config.py"))["build"]
+        artifact = component_build(PACK, case / "component-build")
+        descriptor = json.loads((root / "plugins/maintenance/component.json").read_bytes())
+        self.assertEqual(descriptor["artifact"]["sha256"], artifact["sha256"])
+        probe = """import json, runpy, sys
+from pathlib import Path
+plugin, case, archive = (Path(value) for value in sys.argv[1:4])
+module = runpy.run_path(str(plugin / "plugins/maintenance/launcher.py"))
+component_root = case / "component"
+data = module["descriptor"](plugin / "plugins/maintenance/component.json")
+if sys.argv[4] == "prepare-fixture":
+    target = module["prepare"](component_root, data, archive)
+    sys.path.insert(0, str(target))
+    from native_config.service import ModelService
+    service = ModelService(case / "data", home=case / "home", preparation_source=plugin)
+    print(json.dumps(service.prepare_missing_builtins()))
+else:
+    report, code = module["run"](["rebind", "--host", sys.argv[4], "--home", str(case / "home"),
+                                  *sys.argv[5:]], component_root=component_root)
+    print(json.dumps(report))
+    raise SystemExit(code)
+"""
+        def invoke(*arguments, expected=0):
+            result = subprocess.run([sys.executable, "-I", "-B", "-c", probe, str(root), str(case),
+                                     artifact["artifact"], *arguments], cwd=case, text=True,
+                                    capture_output=True, timeout=30)
+            self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+            return json.loads(result.stdout)
+
+        self.assertGreater(invoke("prepare-fixture")["created"], 0)
+        definition = home / ".codex/agents/xy-backend.toml"
+        current = definition.read_bytes()
+        # 复用组件刚刚生成并校验过的真实受管正文，仅模拟旧缓存物理根。
+        # 其余六份定义已绑定当前来源，不应进入预览或被变更。
+        old = current.replace(str(root).encode(), str(root.parent / "3.0.6").encode())
+        self.assertNotEqual(current, old)
+        definition.write_bytes(old)
+        preview = invoke("codex")["native_rebind"]
+        self.assertEqual(("preview", ["xy-backend"]), (preview["status"], preview["roles"]))
+        self.assertEqual(old, definition.read_bytes())
+        for other in ("claude", "antigravity"):
+            self.assertEqual("invalid_arguments", invoke(other, expected=2)["code"])
+        self.assertEqual(old, definition.read_bytes())
+        applied = invoke("codex", "--confirm", preview["revision"])["native_rebind"]
+        self.assertEqual(("applied", ["xy-backend"]), (applied["status"], applied["roles"]))
+        self.assertEqual(current, definition.read_bytes())
+
     def test_launcher_version_source_slots_preserve_legacy_ready_and_share_cross_project(self):
         # 运行两个真实打包物理入口，只替换独立组件选择/进程边界。旧连接记录代表
         # 仍在服务的旧版本：启动器不得为打开新组件重写、迁移或删除它们。
@@ -272,12 +333,14 @@ def launch(source, version, action, project):
         assert snapshot() == before, "只读入口改动状态目录"
     assert status == 0 and report["state"] == "ready", report
 # 同组件同来源跨项目复用；同host更换组件版本、或同版本更换物理来源必须分流。
-launch(sys.argv[1], "0.1.5", "status", projects[0])
-launch(sys.argv[1], "0.1.5", "doctor", projects[0])
-launch(sys.argv[1], "0.1.5", "open", projects[0])
-launch(sys.argv[1], "0.1.5", "open", projects[1])
+# 当前槽位使用本次真实打包的描述版本，明确固定的 0.1.4 仅作为历史连接夹具。
+current_version = json.loads(Path(sys.argv[1]).with_name("component.json").read_bytes())["version"]
+launch(sys.argv[1], current_version, "status", projects[0])
+launch(sys.argv[1], current_version, "doctor", projects[0])
+launch(sys.argv[1], current_version, "open", projects[0])
+launch(sys.argv[1], current_version, "open", projects[1])
 launch(sys.argv[1], "0.1.4", "open", projects[0])
-launch(sys.argv[2], "0.1.5", "open", projects[0])
+launch(sys.argv[2], current_version, "open", projects[0])
 assert legacy_before == [(path.read_bytes(), path.stat().st_mtime_ns) for path in legacy], "旧ready记录被改动"
 assert not home.exists(), "生命周期分流不能复制真实配置根"
 print(json.dumps({"calls": calls, "legacy_preserved": True, "home_unchanged": True}))

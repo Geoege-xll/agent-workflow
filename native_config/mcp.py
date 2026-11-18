@@ -142,6 +142,12 @@ class McpSession:
                 scope = arguments.get("scope", "project" if project else "global")
                 if scope not in {"global", "project"} or (scope == "project" and project is None):
                     raise ValueError("无效范围")
+                if scope == "global":
+                    # 当前调用可覆盖启动时的项目默认值。只有调用本身同时指定了全局和
+                    # 项目才是参数冲突；清除继承的项目可避免把项目定义带入全局查询。
+                    if "project" in arguments:
+                        raise ValueError("全局范围不能指定项目")
+                    project = None
             elif name == "resolve_subagent":
                 role = arguments["role"]
                 if not isinstance(role, str) or not 1 <= len(role) <= 200:
@@ -156,8 +162,13 @@ class McpSession:
             elif name == "resolve_subagent":
                 result = self.service.resolve_subagent(host, role, project=project)
             else:
-                result = self.console_opener(self.data_dir, host, project, home=self.home,
-                                             open_browser=arguments.get("open_browser", False))
+                options = {"home": self.home, "open_browser": arguments.get("open_browser", False)}
+                # 只转发会话服务启动时已绑定的来源。省略来源的旧调用沿用原参数，
+                # 显式绑定的调用则与 CLI 使用相同服务身份，避免误启另一个控制台。
+                source = getattr(self.service, "preparation_source", None)
+                if source is not None:
+                    options["preparation_source"] = source
+                result = self.console_opener(self.data_dir, host, project, **options)
             # 同时提供 text 和 structuredContent，兼容旧客户端及结构化消费者。
             return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, allow_nan=False)}],
                     "structuredContent": result, "isError": False}

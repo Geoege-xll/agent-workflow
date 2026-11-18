@@ -2,7 +2,7 @@
 
 This schema adapts the [agency-agents](https://github.com/msitarzewski/agency-agents) model of
 "narrow specialization + deliverables + workflow + success criteria" to this pack's
-**`project.yaml` sandbox model + setup-generated multi-platform agents**.
+**host-discovered plugin roles and task-pack ownership**.
 
 ## 1. Role ID Conventions
 
@@ -11,7 +11,7 @@ This schema adapts the [agency-agents](https://github.com/msitarzewski/agency-ag
 | Prefix | Always `xy-` |
 | Naming | Lowercase kebab-case: `xy-web`, `xy-desktop`, `xy-backend`, `xy-apple`, `xy-android`, `xy-uiux`, `xy-qa` |
 | Single responsibility | One role equals one delivery surface. `xy-desktop` owns complete Electron/Tauri applications, `xy-backend` covers backend and systems work across languages, and native platform roles remain separate |
-| Enablement | Setup generates the canonical roles automatically discovered from repository modules, always including `xy-qa` and adding `xy-uiux` for UI-bearing modules |
+| Enablement | The plugin ships all seven canonical roles. Repository modules guide PM selection; the current task pack grants exact write scope |
 
 ## 2. `ROLES.yaml` Metadata (Machine-Readable and Required)
 
@@ -22,7 +22,7 @@ xy-example:
   description: One-sentence specialization used in the Claude agent description
   division: engineering | design | quality | architecture | product
   sandbox_key: xy-example          # Role key used to bind automatically discovered module scopes
-  toolsets: write | write+delegation | write-tests | read
+  toolsets: write | read
   tags: [ios, android, flutter]    # Search and routing tags
   deliverables:                    # Artifact types that count as completion for this role
     - "Compilable mobile changes"
@@ -40,7 +40,7 @@ xy-example:
 | `division` | Department or function classification aligned with the agency division categories |
 | `tags` | PM routing keywords such as mobile, ios, or api |
 | `deliverables` | Acceptance-checklist hints for task packs |
-| `toolsets` | Setup mapping for tools and `disallowedTools` |
+| `toolsets` | Role capability class. Native tool allowlists and the current task pack constrain each Worker |
 | `sandbox_key` | Role key used to bind automatically discovered module scopes as a soft preference |
 | `claude_skills` | List only hard gates whose absence makes it unsafe for the role to start; optional specialist Skills are matched on demand by the Skill tool |
 
@@ -51,11 +51,10 @@ or replace an explicit exceptional workspace override.
 PM metadata is outside the ordinary role schema. The top-level `pm.toolsets: none` value describes
 the main-session orchestrator and does not extend the role `toolsets` enum above.
 
-Claude generation rules:
+Plugin role and Skill projection rules:
 
-- Every role receives the `Skill tool`; non-delegation roles also receive `disallowedTools: Agent`.
-- Codex, Claude Code, and shared configuration use the same hyphenated role ID, such as `xy-web`,
-  and generate `.codex/agents/xy-*.toml` and `.claude/agents/xy-*.md`, respectively.
+- Claude Worker definitions allow the Skill tool and exclude the Agent tool. The QA definition also excludes Edit and Write.
+- All three packages use the same canonical role ID, such as `xy-web`. The host entry points below refer to paths relative to the verified plugin root.
 - Implementation roles preload `xy-code-standards` and `xy-build-verify`; production UI reads
   the applicable `xy-ui-design` branch only when `surface_kind: production_ui`.
 - `xy-web` additionally binds `xy-playwright` for scoped production Web verification; other implementers do not preload it.
@@ -64,18 +63,15 @@ Claude generation rules:
 - `xy-qa` preloads `xy-qa-review`; other local specialist Skills are matched on demand from
   `audit_surfaces` and are not written into the role manifest.
 - QA consumes the same specialist methods read-only for actual code or UI review surfaces; pure-document/backend tasks do not preload complete UI text. Static bindings come from `lib/skills/role_skills.py`; metadata and current artifacts across all three hosts must match. Reading creates no new permissions or stages.
-- Generated Claude Agents always use `permissionMode: default`, preserving the parent session's
-  normal permission prompts. The sandbox remains a soft role scope.
-
-Generation destinations for the three hosts:
+- Workers use the host's applicable permission prompts. Static module scopes only assist task routing.
 
 | Host | PM entry point | Role artifacts | Core Skill artifacts |
 |:-----|:---------------|:---------------|:---------------------|
-| Codex | Root `AGENTS.md` + `$xy-workflow` | `.codex/agents/xy-*.toml` | `.agents/skills/xy-*` |
-| Claude Code | `AGENTS.md` + `/xy-workflow` | `.claude/agents/xy-*.md` | `.claude/skills/xy-*` |
-| Antigravity | Root `AGENTS.md` + `/xy-workflow` | `.agents/agents/xy-*.md` | `.agents/skills/xy-*` |
+| Codex | Trusted SessionStart Hook in `hooks/` or discovered `$xy-workflow:xy-workflow` | Full roles in `roles/`, Worker constraints, and opt-in native definitions prepared from `native-agent-templates/codex/` | `skills/xy-*/SKILL.md` |
+| Claude Code | Plugin `settings.json` selects `agents/pm.md` | `agents/xy-*.md` | `skills/xy-*/SKILL.md` |
+| Antigravity | Plugin `rules/AGENTS.md` | `agents/xy-*.md` | `skills/xy-*/SKILL.md` |
 
-The nine core Skills have one authoritative source: `platforms/shared/skills/`. Host adapter layers
+The built-in Skills have one authoritative source: `platforms/shared/skills/`. Host adapter layers
 provide only native bootstrap behavior, Agent formats, tool policies, and invocation aliases. They
 must not copy or fork the core workflow text.
 
@@ -205,9 +201,9 @@ projection; canonical PROJECT/plans accepted-baseline truth is not changed until
 invokes:
 
 ```text
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/task_graph_cli.py validate --input <runtime-task-graph.json>
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/task_graph_cli.py ready --input <runtime-task-graph.json>
-bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/task_graph_cli.py qa-ready --input <runtime-task-graph.json>
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py validate --input <runtime-task-graph.json>
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py ready --input <runtime-task-graph.json>
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py qa-ready --input <runtime-task-graph.json>
 ```
 
 Every implementation task pack also declares the controlled-document decision:
@@ -233,7 +229,7 @@ feature truth, then follows only task-relevant feature or other controlled-docum
 requires heading or keyword selection before detailed-body reading. `full` requires an explicit
 whole-document justification. `skip` means the body must not be opened. Shared architecture details
 and recovery plans are read only when relevant.
-Every Writer independently reads applicable built-in engineering/UI sources and project-specific standards, following project-index links only when the index exists. non_ui uses engineering, production_ui uses both domains, and xy-uiux + design_ui uses design. Every selected source binds current SHA, applicable IDs, and owned paths; return missing/stale/insufficient coverage to the PM. index_path/root retain configured values; index_fingerprint is null only with no project rule leaves and a physically absent index, while an existing index binds actual SHA. Do not create an empty index or GENERAL. Only the three exact built-in paths and their .agent-workflow/ prefixes qualify as built-in sources, without expanding project write boundaries. init/document validation checks actual existence; JSON-only graph validation checks structure alone.
+Every Writer independently reads applicable built-in engineering/UI sources and project-specific standards, following project-index links only when the index exists. non_ui uses engineering, production_ui uses both domains, and xy-uiux + design_ui uses design. Every selected source binds current SHA, applicable IDs, and owned paths; return missing/stale/insufficient coverage to the PM. index_path/root retain configured values; index_fingerprint is null only with no project rule leaves and a physically absent index, while an existing index binds actual SHA. Do not create an empty index or GENERAL. Write only the three canonical plugin-relative built-in paths in new records. Their source does not expand project write boundaries. init/document validation checks actual existence; JSON-only graph validation checks structure alone.
 
 The runtime graph freezes one unified standards authority and any explicit protected upstream boundary:
 
@@ -477,7 +473,7 @@ not all project work.
 | Agents Orchestrator persona | **Main-session PM** + native host `xy-workflow` entry point |
 | One-file oversized persona prompt | **Lean host bootstrap + progressively loaded shared core Skills** |
 | 140+ cross-industry roles | **Seven canonical workers selected by automatic repository discovery** |
-| Conversion to multiple IDEs | **setup_claude / codex / antigravity** |
+| Conversion to multiple IDEs | **Official Claude, Codex and Antigravity plugin packages** |
 
 **Do not copy:** the full marketing/sales role set, heavy vibe personas, or default hard write locks.
 
@@ -605,5 +601,5 @@ classification/clarification with on-demand auxiliary retrieval -> task graph RE
 1. Add metadata to `ROLES.yaml`, including `division`, `tags`, and `deliverables`.
 2. Add `roles/xy-*.md` using the Section 3 structure.
 3. Extend automatic discovery and routing evidence for the new delivery surface.
-4. Run `bash .agent-workflow/setup_all.sh`.
+4. Build the three host packages and run the plugin delivery and role contract tests.
 5. Update `/xy-workflow` routing and the role's hard Skill contract if PM auto-routing requires it.

@@ -105,6 +105,22 @@ class McpProtocolTest(unittest.TestCase):
             self.assertFalse(preferences["runtime_verified"])
             self.assertFalse((home / "state").exists())
 
+    def test_console_keeps_startup_preparation_identity(self):
+        from native_config import ModelService
+        from native_config.server import configuration_identity
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw).resolve()
+            # 即使指定来源暂不可用，物理路径仍属于配置身份，打开页面不能改选其他服务。
+            service = ModelService(home / "state", home, preparation_source=home / "plugin")
+            def opener(data_dir, host, project, *, home, open_browser, preparation_source=None):
+                return {"identity": configuration_identity(ModelService(
+                    data_dir, home, preparation_source=preparation_source))}
+            self.session = McpSession(service, data_dir=service.data_dir, home=home,
+                                      version="test", console_opener=opener)
+            self.ready()
+            result = self.call("open_console")["result"]["structuredContent"]
+            self.assertEqual(result["identity"], configuration_identity(service))
+
     def test_version_negotiation_and_malformed_json_capacity_recovery(self):
         negotiated = self.session.handle(initialize(version="2099-01-01"))["result"]
         self.assertEqual(negotiated["protocolVersion"], "2025-11-25")
@@ -227,6 +243,20 @@ class McpSubprocessTest(unittest.TestCase):
         child.terminate()
         self.assertEqual(child.wait(timeout=5), -signal.SIGTERM)
         self.assertFalse((self.data_dir / "console").exists())
+
+    def test_project_session_can_select_global_preferences(self):
+        child = self.start()
+        # 启动时带项目，缺省查询应沿用它；显式全局查询应排除项目配置与独有的 Agent。
+        request = self.call(child, "get_model_preferences", {"scope": "global"})
+        self.assertFalse(request["result"]["isError"], request)
+        context = request["result"]["structuredContent"]
+        self.assertIsNone(context["project"])
+        self.assertEqual(context["roles"], [])
+        conflict = self.call(child, "get_model_preferences", {"scope": "global", "project": str(self.project)})
+        self.assertEqual(conflict["error"]["code"], -32602)
+        inherited = self.call(child, "get_model_preferences")["result"]["structuredContent"]
+        self.assertEqual(inherited["project"], str(self.project))
+        self.assertEqual(len(inherited["roles"]), 1)
 
 
 if __name__ == "__main__":

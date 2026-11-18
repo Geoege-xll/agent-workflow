@@ -8,6 +8,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
+import subprocess
 import tempfile
 import time
 import tomllib
@@ -23,19 +26,19 @@ from native_config.service import ModelService, _Plan
 TEST_NAMES = ("xy-web", "xy-desktop", "xy-backend", "xy-apple", "xy-android", "xy-uiux", "xy-qa")
 
 
-def make_source(root, names=TEST_NAMES):
+def make_source(root, names=TEST_NAMES, *, version="3.0.4", role_body="角色正文"):
     """最小真实双摘要源包；测试修改后须显式重签，避免绕过完整性检查。"""
     root.mkdir(parents=True)
     files = {"roles/source.md": b"canonical role\n", "product/ROLES.yaml": b"roles: canonical\n",
              "platforms/codex/WORKER_CONSTRAINTS.md": b"constraints\n", "plugins/codex/native-agent-context.md": b"context\n",
-             ".codex-plugin/plugin.json": json.dumps({"name": "xy-workflow", "version": "3.0.4"}).encode()}
+             ".codex-plugin/plugin.json": json.dumps({"name": "xy-workflow", "version": version}).encode()}
     entries, projections = [], {}
     dependencies = {name: hashlib.sha256(files[name]).hexdigest() for name in
                     ("product/ROLES.yaml", "platforms/codex/WORKER_CONSTRAINTS.md", "plugins/codex/native-agent-context.md")}
     for name in names:
         files["roles/" + name + ".md"] = b"canonical role\n"
         document = {"name": name, "description": "角色 " + name,
-                    "developer_instructions": "角色正文；物理来源 " + preparation.PLACEHOLDER}
+                    "developer_instructions": "资源绝对根是：" + preparation.PLACEHOLDER + "\n" + role_body}
         body = ("\n".join(key + " = " + json.dumps(value, ensure_ascii=False) for key, value in document.items()) + "\n").encode()
         relative = "native-agent-templates/codex/" + name + ".toml"
         files[relative] = body
@@ -46,7 +49,7 @@ def make_source(root, names=TEST_NAMES):
                                  "source_sha256": hashlib.sha256(files["roles/" + name + ".md"]).hexdigest(),
                                  "projection_sha256": hashlib.sha256(body).hexdigest()}
     files[preparation.INDEX] = json.dumps({"schema_version": 1, "product": "xy-workflow", "host": "codex",
-                                           "version": "3.0.4", "templates": entries}).encode()
+                                           "version": version, "templates": entries}).encode()
     canonical = {key: hashlib.sha256(value).hexdigest() for key, value in files.items()
                  if not key.startswith("native-agent-templates/") and key != ".codex-plugin/plugin.json"}
     projections[preparation.INDEX] = {"source": "product/ROLES.yaml", "transform": "codex-native-template-index-v1",
@@ -54,7 +57,7 @@ def make_source(root, names=TEST_NAMES):
                                       "projection_sha256": hashlib.sha256(files[preparation.INDEX]).hexdigest(),
                                       "dependencies": {entry["path"]: entry["sha256"] for entry in entries}}
     files["workflow-sources.json"] = json.dumps({"schema_version": 1, "files": canonical}).encode()
-    files["sources.json"] = json.dumps({"schema_version": 1, "plugin_name": "xy-workflow", "plugin_version": "3.0.4",
+    files["sources.json"] = json.dumps({"schema_version": 1, "plugin_name": "xy-workflow", "plugin_version": version,
                                         "host": "codex", "product": "workflow-core",
                                         "source_files": canonical, "projections": projections,
                                         "payload_sha256": {key: hashlib.sha256(value).hexdigest() for key, value in files.items()}}).encode()
@@ -80,6 +83,15 @@ class NativePreparationTest(unittest.TestCase):
 
     def context(self, project=False):
         return self.service.context("codex", "project" if project else "global", str(self.project) if project else None)
+
+    def test_recovery_command_reopens_same_source_bound_service(self):
+        from native_config.cli import parser
+        command = self.context(project=True)["workflow_activation"]["recovery"]["open_command"]
+        # 用真正的 CLI 参数解析器重建实例，覆盖带引号的路径与来源修订共同参与身份的情况。
+        args = parser().parse_args(shlex.split(command)[2:])
+        recovered = ModelService(args.data_dir, args.home, preparation_source=args.preparation_source)
+        self.assertEqual(configuration_identity(recovered), configuration_identity(self.service))
+        self.assertEqual(args.project, str(self.project))
 
     def plan(self, service=None, project=None):
         """构造内部未发布计划，以真实来源和清单测试既有 guard 的并发拒绝。"""
@@ -185,6 +197,66 @@ class NativePreparationTest(unittest.TestCase):
             self.assertEqual(next_service.prepare_missing_builtins()["status"], "unchanged")
         self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before})
         self.assertFalse((parent / "xy-web.toml").exists())
+
+    def test_cli_rebind_removed_cache_stale_confirmation_and_byte_preservation(self):
+        old = make_source(self.root / "3.0.6", version="3.0.6")
+        previous = ModelService(self.root / "data", home=self.home, preparation_source=old)
+        previous.prepare_missing_builtins()
+        shutil.rmtree(old)
+        parent = self.home / ".codex/agents"
+        own = parent / "xy-backend.toml"
+        extras = ('model = "personal" # 保留\nmodel_reasoning_effort = "high"\n'
+                  '[extras]\nnotes = """\ndeveloper_instructions = "保留"\n"""\n'
+                  + 'old = ' + json.dumps(str(old)) + '\n').encode()
+        own.write_bytes(own.read_bytes() + extras)
+        # 伪造文字仍保留正确的来源行和创建标记，完整旧模板摘要必须能区分。
+        custom = parent / "xy-qa.toml"
+        custom.write_bytes(custom.read_bytes().replace("角色正文".encode(), "私人正文".encode()))
+        project_agent = self.project / ".codex/agents/xy-web.toml"
+        project_agent.parent.mkdir(parents=True)
+        project_agent.write_bytes((parent / "xy-web.toml").read_bytes())
+        protected = {path: path.read_bytes() for path in (custom, project_agent, parent / "xy-web.toml")}
+        before = {path: path.read_bytes() for path in parent.glob("*.toml")}
+        script = Path(__file__).resolve().parents[1] / "scripts/agent_config.sh"
+        command = ["bash", str(script), "rebind", "--host", "codex", "--home", str(self.home),
+                   "--project", str(self.project), "--data-dir", str(self.root / "data"),
+                   "--preparation-source", str(self.source)]
+
+        def run(*flags, expected=0):
+            result = subprocess.run(command + list(flags), capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+            return json.loads(result.stdout)
+
+        preview = run()["native_rebind"]
+        self.assertEqual(set(preview["roles"]), set(TEST_NAMES) - {"xy-qa", "xy-web"})
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertFalse((self.root / "data").exists())
+        own.write_bytes(own.read_bytes() + b"# concurrent\n")
+        rejected = run("--confirm", preview["revision"], expected=1)
+        self.assertEqual(rejected["code"], "native_rebind_conflict")
+        self.assertIn(str(old), tomllib.loads(own.read_text())["developer_instructions"])
+        fresh = run()["native_rebind"]
+        self.assertEqual(run("--confirm", fresh["revision"])["native_rebind"]["status"], "applied")
+        self.assertIn(str(self.source), tomllib.loads(own.read_text())["developer_instructions"])
+        self.assertTrue(own.read_bytes().endswith(extras + b"# concurrent\n"))
+        self.assertEqual(protected, {path: path.read_bytes() for path in protected})
+        self.assertEqual(run()["native_rebind"]["roles"], [])
+
+    def test_changed_release_template_requires_independent_historical_digest(self):
+        old = make_source(self.root / "3.0.6", ("xy-uiux",), version="3.0.6", role_body="旧版规范正文")
+        previous = ModelService(self.root / "data", home=self.home, preparation_source=old)
+        previous.prepare_missing_builtins()
+        template_sha = hashlib.sha256((old / "native-agent-templates/codex/xy-uiux.toml").read_bytes()).hexdigest()
+        shutil.rmtree(old)
+        target = self.home / ".codex/agents/xy-uiux.toml"
+        # 夹具中的旧版与当前模板内容不同，实际发行表也不会认证测试夹具。
+        self.assertEqual(self.service.rebind_builtins()["roles"], [])
+        with mock.patch.dict(preparation._RELEASE_TEMPLATES, {"3.0.6": {"xy-uiux": template_sha}}):
+            preview = self.service.rebind_builtins()
+            self.assertEqual(preview["roles"], ["xy-uiux"])
+            self.service.rebind_builtins(confirm=preview["revision"])
+        self.assertEqual(tomllib.loads(target.read_text())["developer_instructions"],
+                         "资源绝对根是：" + str(self.source) + "\n角色正文")
 
     def test_invalid_inventory_symlink_and_incomplete_source_fail_without_creation(self):
         parent = self.home / ".codex/agents"

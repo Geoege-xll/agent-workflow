@@ -40,9 +40,9 @@ import sys
 from typing import Any
 
 if __package__:
-    from lib.hosts.claude_instructions import read_file
+    from lib.safe_text import read_file
 else:
-    from lib.hosts.claude_instructions import read_file
+    from lib.safe_text import read_file
 
 
 MAX_INPUTS = 32

@@ -19,6 +19,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from git_tree_reader import tree_blobs
 from product.command_identity import load_identity
 from product.release_channels import CHANNELS, compare_versions, validate_channel
 IDENTITY = load_identity(ROOT)
@@ -116,6 +117,37 @@ def validate_local_source(plugin, local, host, channel="alpha"):
     return dict(plugin)
 
 
+def validate_published_component(channel, binding, descriptor_body):
+    """安装源发布及远程验收在同一渠道使用相同的组件状态与下载来源规则。"""
+    # 首轮正式 CI 可产出 unpublished 候选供独立组件发行；Git 安装源只能消费
+    # 后续已发布、下载核验并精确绑定同一原生 ZIP 的候选，避免先插件后组件。
+    # 历史 alpha 的离线候选合同保持原样，不把新正式门禁追溯到旧渠道。
+    if channel == "stable" and (binding["release_status"] != "published"
+                                or binding["artifact_matches_candidate"] is not True):
+        raise ValueError("正式插件发布前必须先发布并固定验证原生组件")
+    if channel == "stable":
+        # 下载地址的仓库／资产安全规则由组件仓唯一维护；不因 publisher 只读 ZIP
+        # 就退化成接受任意 HTTPS。这里不重新下载，也不启动配置业务或读取用户根。
+        from plugins.maintenance.component_store import ComponentError, release_url
+        descriptor = json.loads(descriptor_body)
+        try:
+            release_url(descriptor["artifact"]["url"], descriptor["artifact"]["name"])
+        except ComponentError as error:
+            raise ValueError("正式组件固定发行来源无效") from error
+
+
+def expected_artifacts(versions):
+    """发布与安装验收使用同一组七包路径及产品身份，两个版本分别取值。"""
+    expected = {}
+    for host in HOSTS:
+        for kind, suffix in (("plugin", ""), ("local-source", "-local-source")):
+            name = f"workflow/{IDENTITY['artifact_prefix']}-{host}-{versions['workflow']}{suffix}.zip"
+            expected[name] = {"product": "workflow", "host": host, "kind": kind, "version": versions["workflow"]}
+    expected[f"native/native-agent-config-{versions['native-config']}.zip"] = {
+        "product": "native-config", "kind": "standalone", "version": versions["native-config"]}
+    return expected
+
+
 def load_candidate(candidate_dir, source_revision, repository, channel="alpha"):
     """完整核对七包身份、哈希、ZIP 安全及来源闭包，不读取当前源码工作树。"""
     if repository != REPOSITORY or not re.fullmatch(r"[0-9a-f]{40}", source_revision):
@@ -137,13 +169,7 @@ def load_candidate(candidate_dir, source_revision, repository, channel="alpha"):
     # 两个独立版本都必须匹配显式发布渠道，不能靠候选 channel 字段冒充正式发行。
     for version in versions.values():
         validate_channel(version, channel)
-    expected = {}
-    for host in HOSTS:
-        for kind, suffix in (("plugin", ""), ("local-source", "-local-source")):
-            name = f"workflow/{IDENTITY['artifact_prefix']}-{host}-{versions['workflow']}{suffix}.zip"
-            expected[name] = {"product": "workflow", "host": host, "kind": kind, "version": versions["workflow"]}
-    expected[f"native/native-agent-config-{versions['native-config']}.zip"] = {
-        "product": "native-config", "kind": "standalone", "version": versions["native-config"]}
+    expected = expected_artifacts(versions)
     rows = candidate["artifacts"]
     if len(rows) != 7 or {row["path"] for row in rows} != set(expected):
         raise ValueError("候选必须恰好绑定既有七包")
@@ -201,21 +227,7 @@ def load_candidate(candidate_dir, source_revision, repository, channel="alpha"):
         root / f"native/native-agent-config-{versions['native-config']}.zip", versions["native-config"])
     if binding != candidate["maintenance_component"]:
         raise ValueError("候选组件绑定记录不一致")
-    # 首轮正式 CI 可产出 unpublished 候选供独立组件发行；Git 安装源只能消费
-    # 后续已发布、下载核验并精确绑定同一原生 ZIP 的候选，避免先插件后组件。
-    # 历史 alpha 的离线候选合同保持原样，不把新正式门禁追溯到旧渠道。
-    if channel == "stable" and (binding["release_status"] != "published"
-                                or binding["artifact_matches_candidate"] is not True):
-        raise ValueError("正式插件发布前必须先发布并固定验证原生组件")
-    if channel == "stable":
-        # 下载地址的仓库／资产安全规则由组件仓唯一维护；不因 publisher 只读 ZIP
-        # 就退化成接受任意 HTTPS。这里不重新下载，也不启动配置业务或读取用户根。
-        from plugins.maintenance.component_store import ComponentError, release_url
-        descriptor = json.loads(next(iter(descriptors)))
-        try:
-            release_url(descriptor["artifact"]["url"], descriptor["artifact"]["name"])
-        except ComponentError as error:
-            raise ValueError("正式组件固定发行来源无效") from error
+    validate_published_component(channel, binding, next(iter(descriptors)))
     for host, files in distributions.items():
         if "distribution.json" in files:
             raise ValueError("插件不能占用外层分发记录路径")
@@ -235,41 +247,37 @@ def file_closure(files):
     return {name: {"sha256": digest(body), "mode": mode} for name, (body, mode) in files.items()}
 
 
-def git(directory, *args, input=None):
+def git_environment():
     """Git 仅操作临时仓库；固定作者与时间，不借用用户配置或运行用户 Hook。"""
-    environment = {**os.environ, "GIT_AUTHOR_NAME": "Agent Workflow", "GIT_COMMITTER_NAME": "Agent Workflow",
+    return {**os.environ, "GIT_AUTHOR_NAME": "Agent Workflow", "GIT_COMMITTER_NAME": "Agent Workflow",
         "GIT_AUTHOR_EMAIL": "plugins@agent-workflow.invalid", "GIT_COMMITTER_EMAIL": "plugins@agent-workflow.invalid",
         "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+0000", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+0000"}
+
+
+def git(directory, *args, input=None):
     return subprocess.check_output(["git", "-c", "core.hooksPath=/dev/null", "-C", str(directory), *args],
-        input=input, stderr=subprocess.PIPE, env=environment)
+        input=input, stderr=subprocess.PIPE, env=git_environment())
 
 
-def tree_files(repository, revision):
-    """读取远程提交的完整文件闭包，任何链接、子模块或额外文件均会被核验拒绝。"""
-    result = {}
-    for entry in git(repository, "ls-tree", "-r", "-z", revision).split(b"\0"):
-        if not entry:
-            continue
-        metadata, raw_name = entry.split(b"\t", 1)
-        mode, kind, sha = metadata.decode().split()
-        name = safe_name(raw_name.decode("utf-8"))
-        if kind != "blob" or mode not in {"100644", "100755"}:
-            raise ValueError("已有分支含非普通文件：" + name)
-        result[name] = (git(repository, "cat-file", "blob", sha), mode)
-    return result
-
-
-def validate_owned(files, expected):
-    """首次可创建空分支；更新仅接受同发布器拥有且完整闭包未变的分发树。"""
-    if "distribution.json" not in files:
+def validate_owned(repository, revision, expected):
+    """逐项核对旧分支，只保留摘要、模式和发布记录，避免复制整棵树的载荷。"""
+    closure = {}
+    record = None
+    with tree_blobs(repository, revision, env=git_environment()) as entries:
+        for name, mode, body in entries:
+            safe_name(name)
+            if name == "distribution.json":
+                if mode != "100644":
+                    raise ValueError("已有分支的发布标记模式不匹配")
+                record = json.loads(body)
+            else:
+                closure[name] = {"sha256": digest(body), "mode": mode}
+    if record is None:
         raise ValueError("已有分支缺少受管发布标记")
-    record = json.loads(files["distribution.json"][0])
     for key in ("schema_version", "managed_by", "repository", "host", "channel", "ref"):
         if record.get(key) != expected[key]:
             raise ValueError("已有分支的发布所有权不匹配")
-    if (files["distribution.json"][1] != "100644"
-            or record["files"] != file_closure({name: value for name, value in files.items()
-                                               if name != "distribution.json"})):
+    if record["files"] != closure:
         raise ValueError("已有分支含未知文件或闭包被修改")
     return record
 
@@ -305,8 +313,7 @@ def publish(candidate_dir, source_revision, repository, remote, channel="alpha",
             record = json.loads(files["distribution.json"][0])
             ref, parent = record["ref"], tips.get(record["ref"])
             if parent:
-                old_files = tree_files(work, parent)
-                old = validate_owned(old_files, record)
+                old = validate_owned(work, parent, record)
                 if old["version"] == record["version"]:
                     # 同版仅当七个原始 ZIP 和完整安装树完全相同才幂等；候选外层文档
                     # 或源码提交变化不单独产生提交，保留首次发布的来源记录。
@@ -363,6 +370,11 @@ def main():
     args = parser.parse_args()
     try:
         result = publish(**vars(args))
+    except subprocess.TimeoutExpired as error:
+        # Git 超时属于正常可报告的发布失败。只输出时限，避免把命令参数、
+        # 临时仓库路径或进程的部分输出随 traceback 带入终端与 CI 日志。
+        print(f"插件来源发布失败：Git 操作超时（{error.timeout} 秒）", file=sys.stderr)
+        return 1
     except (ValueError, OSError, UnicodeError, KeyError, TypeError, zipfile.BadZipFile,
             subprocess.CalledProcessError) as error:
         print("插件来源发布失败：" + str(error), file=sys.stderr)

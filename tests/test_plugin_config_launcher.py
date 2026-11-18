@@ -103,6 +103,34 @@ class PluginConfigLauncherTest(unittest.TestCase):
         self.assertEqual((code, response["code"]), (2, "preparation_confirmation_required"))
         self.assertFalse(self.root.exists())
 
+    def test_public_receipt_only_projects_documented_preparation_fields(self):
+        args = launcher.arguments(["open", "--host", "codex"])
+        response = launcher.receipt(args, self.data, "ready", "ready")
+        safe = {"supported": True, "status": "created", "created": 5, "preserved": 0,
+                "project_provided": 2, "runtime_verified": False}
+        response["native_preparation"] = {**safe, "body": "private instructions"}
+        self.assertEqual(launcher.safe_response(json.dumps(response), args, self.data)["native_preparation"], safe)
+        for invalid in (-1, True, 2.0, "1", None):
+            with self.subTest(invalid=invalid), self.assertRaises(launcher.ComponentError):
+                response["native_preparation"]["created"] = invalid
+                launcher.safe_response(json.dumps(response), args, self.data)
+
+    def test_rebind_forwards_only_exact_confirmation_under_codex(self):
+        self.prepare()
+        revision = "a" * 64
+        def confirmed(command, **options):
+            self.assertEqual(command[-2:], ["--confirm", revision])
+            raw = self.fake_command(command, **options)
+            receipt = json.loads(raw.stdout)
+            receipt["native_rebind"] = {"status": "applied", "revision": revision, "roles": ["xy-backend"]}
+            return SimpleNamespace(stdout=json.dumps(receipt), stderr="", returncode=0)
+        result, code = self.run_launcher("rebind", "--confirm", revision, invoke=confirmed)
+        self.assertEqual((code, result["native_rebind"]["roles"]), (0, ["xy-backend"]))
+        for args in (["rebind", "--confirm", "YES", "--host", "codex"],
+                     ["open", "--confirm", revision, "--host", "codex"], ["rebind", "--host", "claude"]):
+            with self.subTest(args=args), self.assertRaises(launcher.InputError):
+                launcher.arguments(args)
+
     def test_unpublished_empty_digest_cannot_download_even_after_confirmation(self):
         self.write_descriptor()
         with patch.object(launcher, "prepare", wraps=launcher.prepare) as prepare:

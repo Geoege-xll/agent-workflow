@@ -46,6 +46,12 @@ for(const requirements of [[{id:'REQ-007',label:'旧目录'}],['REQ-007','REQ-00
 }
 assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,schema_version:3})).context,null);
 assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,context:{...boot.context,schema_version:2}})).context,null);
+// 新上下文只接受与启动入口相同的来源种类，旧上下文仍拒绝多余字段。
+const offlineContext = {...boot.context,schema_version:4,source_kind:'offline'};
+assert.ok(window.PrototypeReviewState.parseStartup(encode({...boot,context:offlineContext})).context);
+for (const context of [{...offlineContext,source_kind:'live'},{...boot.context,schema_version:4},{...boot.context,source_kind:'offline'}]) {
+  assert.equal(window.PrototypeReviewState.parseStartup(encode({...boot,context})).context,null);
+}
 """,
     "operations_and_independent_numbers": r"""
 model.select(record('first')); const anchor=model.addAnchor(); assert.equal(anchor.number,1);
@@ -256,6 +262,10 @@ assert.equal(model.exportPayload().items.length,256);
         scenario = r"""
 const liveBoot={...boot,schema_version:5,pages:boot.pages.map(entry=>({...entry,url:'/content/'+'a'.repeat(48)+'/'+entry.path+'#bridge='+'b'.repeat(32)}))};
 const live=window.PrototypeReviewState.parseStartup(encode(liveBoot)); assert.ok(live.context,live.error); assert.equal(live.schema_version,5);
+for (const kind of ['offline','live']) {
+  const context={...liveBoot.context,schema_version:4,source_kind:kind};
+  assert.equal(Boolean(window.PrototypeReviewState.parseStartup(encode({...liveBoot,context})).context),kind==='live');
+}
 for(const url of ['https://evil.test/content/'+ 'a'.repeat(48)+'/'+boot.pages[0].path, '/content/'+'a'.repeat(48)+'/../escape#bridge='+'b'.repeat(32), 'project/'+boot.pages[0].path]) {
   assert.equal(window.PrototypeReviewState.parseStartup(encode({...liveBoot,pages:[{...liveBoot.pages[0],url},liveBoot.pages[1]]})).context,null);
 }

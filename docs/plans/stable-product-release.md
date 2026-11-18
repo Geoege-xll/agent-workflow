@@ -1,12 +1,14 @@
 # 工作流与配置工具正式发行
 
 - 主题 ID：`stable-product-release`
-- 阶段：`completed`
+- 阶段：`active`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
 - 已验收版本：`3.0.6`
 
 ## 目标与范围
+
+当前迭代交付 `xy-workflow 3.0.7` 和 Native Agent Config `0.1.6`。合入已验收的 [UI 与 QA 整改](ui-qa-audit-remediation.md) 与 [受管计划改进](plan-document-quality.md)，按 GitHub CI 的同源归档正式发布并通过三个官方客户端更新本机。以下保留 `3.0.6` 的既有已验收基线。
 
 本轮已正式发布xy-workflow `3.0.6`／Native Agent Config `0.1.5`，并通过官方客户端升级本机三端插件和独立组件。交付自动补齐缺失内置原生Agent、简洁名称列表、单一搜索焦点、调用偏好自动准备目录、统一工具外壳及画布原生滚动边界。升级后已完成旧版本与重复产物清理，保留模型、推理、项目启停、原稿及评审记录。功能与边界见[模型配置主题](native-model-preferences.md)和[工具外壳主题](workbench-solid-glass-style.md)。
 

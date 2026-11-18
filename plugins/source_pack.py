@@ -35,7 +35,7 @@ HELPERS = frozenset({
     "lib/validate_project_docs.py",
     "lib/project/validate_project_config.py", "lib/project/ensure_project_id.py",
     "lib/delivery/qa_handoff_cli.py", "lib/delivery/worktree_cli.py",
-    "lib/delivery/native_usage.py",
+    "lib/delivery/native_usage.py", "lib/hosts/capabilities.py", "lib/project/project_profile_cli.py",
     "plugins/project_context.py",
 })
 

@@ -23,7 +23,7 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="workflow-python-runtime-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.environment = dict(os.environ)
@@ -89,7 +89,7 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
         target = self.interpreter("relative-python", supported=True)
         self.environment["AGENT_WORKFLOW_PYTHON"] = os.path.relpath(target, PACK)
         result = subprocess.run(
-            ["/bin/bash", "-c", 'source lib/common.sh && cd / && python3 -c "print(42)"'],
+            ["/bin/bash", "-c", 'source lib/python_runtime.sh && workflow_select_python && cd / && "$AGENT_WORKFLOW_PYTHON" -c "print(42)"'],
             cwd=PACK, env={**self.environment, "PATH": self.environment["PATH"] + ":/usr/bin:/bin"},
             text=True, capture_output=True, check=False,
         )
@@ -129,22 +129,19 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
 
     def documented_scheduler(self, stage: str = "ready") -> str:
         # 直接执行派发文档中的示例，避免另写一份正确脚本、却漏掉文档示例回归。
-        # 临时项目只通过符号链接读取源包；测试入口禁止生成源包字节码。
-        runtime = self.root / ".agent-workflow"
-        if not runtime.exists():
-            runtime.symlink_to(PACK, target_is_directory=True)
+        # 正式发布的插件从物理包执行。一次夹具只构建一份；每次调用仍重新校验来源。
+        from tests.test_dispatch_admission import plugin_fixture
+        if not hasattr(self, "installed"):
+            self.installed = plugin_fixture(self.root)
         self.environment["PATH"] = str(self.bin) + ":/usr/bin:/bin"
         self.environment["workflow_graph"] = str(self.root / "当前 graph.json")
         body = (PACK / "platforms/shared/skills/xy-workflow/references/dispatch.md").read_text(
             encoding="utf-8"
         )
-        # 本夹具没有中央标记或任务 pin，只消费明确的 source-pack 分支；中央示例
-        # 已由真实 pin 测试覆盖，不能把两种不同输入合同误算成重复调度示例。
-        body = body.split("### Source-pack development\n", 1)[1]
         examples = [block for block in re.findall(r"```bash\n(.*?)```", body, re.DOTALL)
-                    if "task_graph_cli.py validate" in block]
+                    if "task_graph_cli.py validate" in block and "&&" in block and "workflow_graph" in block]
         self.assertEqual(1, len(examples), "应有一个可复用的受保护调度示例")
-        return examples[0].replace("task_graph_cli.py ready", f"task_graph_cli.py {stage}")
+        return examples[0].replace("<plugin-root>", str(self.installed)).replace("<absolute-project>", str(self.root)).replace("task_graph_cli.py ready", f"task_graph_cli.py {stage}")
 
     def run_scheduler_example(self, command: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -158,7 +155,7 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
         graph = Path(self.environment["workflow_graph"])
         graph.write_text("stale snapshot", encoding="utf-8")
         # 文件存在不能替代生成成功；若校验误执行，会产生额外错误并覆盖退出码。
-        producer = "bash .agent-workflow/lib/python_runtime.sh -X utf8 -c 'raise SystemExit(7)'"
+        producer = "bash " + shlex.quote(str(self.installed / "lib/python_runtime.sh")) + " -X utf8 -c 'raise SystemExit(7)'"
         result = self.run_scheduler_example(producer + " &&\n" + command)
         self.assertEqual(7, result.returncode, result.stdout + result.stderr)
         self.assertEqual("", result.stdout + result.stderr)
@@ -216,25 +213,10 @@ class PythonRuntimeSelectionTest(unittest.TestCase):
         )
         diagnostic = next(block for block in re.findall(r"```bash\n(.*?)```", body, re.DOTALL)
                           if "print(sys.executable)" in block)
-        result = self.run_scheduler_example(diagnostic)
+        result = self.run_scheduler_example(diagnostic.replace("<plugin-root>", str(self.installed)))
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual(str(Path(sys.executable)) + "\n", result.stdout)
 
-    def test_setup_rejects_unsupported_explicit_runtime_before_project_writes(self) -> None:
-        project = self.root / "Project"
-        project.mkdir()
-        shutil.copytree(PACK, project / "agent_workflow", ignore=shutil.ignore_patterns("__pycache__"))
-        self.environment["AGENT_WORKFLOW_PYTHON"] = str(self.interpreter("old", supported=False))
-        self.environment["PATH"] += os.pathsep + "/usr/bin:/bin"
-        before = {path.relative_to(project): path.read_bytes() for path in project.rglob("*") if path.is_file()}
-        result = subprocess.run(
-            ["/bin/bash", "agent_workflow/setup_all.sh"], cwd=project,
-            env=self.environment, text=True, capture_output=True, check=False,
-        )
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("Python >= 3.11", result.stderr)
-        after = {path.relative_to(project): path.read_bytes() for path in project.rglob("*") if path.is_file()}
-        self.assertEqual(before, after)
 
 
 class HostWorkspaceDiscoveryTest(unittest.TestCase):

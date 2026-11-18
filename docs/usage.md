@@ -1,8 +1,8 @@
 # Agent Workflow 3.0 使用手册
 
-当前正式插件为 [xy-workflow 3.0.4](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.4)，通过 Codex、Claude Code、Antigravity 的官方插件运行。三个stable来源与本机三端已更新，安装字节及执行位匹配成功最终CI，模型偏好摘要不变；Claude当前源码项目仍停用，安装范围仍为用户级，不表示全部项目启用。独立工具保持已发布的 [Native Agent Config 0.1.3](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.3)及原published descriptor，本轮不重复发行或修改模型功能。
+工作流通过 Codex、Claude Code 和 Antigravity 的官方插件运行。安装前可核对当前正式插件及其固定配套的配置组件。[版本与安装入口](../README.md) · [发行记录](plans/stable-product-release.md)
 
-3.0.4文件交付行为通过本轮唯一独立QA与真实生产工具浏览器验证；双系统CI各681项OK，含4项既有跳过。mt-shop的55份具体HTML已接入统一交付工具，原文除受管入口外不变，当前3页评审服务就绪。历史发行与安装记录见[发行主题](plans/stable-product-release.md)。Codex App共享缓存已更新，App GUI新会话、指定模型实际运行及完整读屏仍按相应实测分别判断；官方公开目录尚未上架，Windows暂停。helper需要已有Python 3.11+与Bash，安装见[插件安装说明](../plugins/INSTALL.md)。
+运行 helper 需要已有 Python 3.11+ 和 Bash。各客户端分别管理安装范围与启用状态，项目级设置可能覆盖用户级默认。Windows 原生适配暂停。[插件安装说明](../plugins/INSTALL.md)
 
 ## 安装与会话入口
 
@@ -12,7 +12,7 @@
 
 安装后开启新会话，并按宿主实际发现的入口使用工作流。Codex 的 SessionStart Hook 需要在官方客户端审阅并信任；Claude 的插件默认 PM 仍受用户设置优先级约束；Antigravity 由插件规则路由业务请求。发现 Skill、安装成功和配置文件正确，分别只能证明对应层次的状态，不能代替模型实际接管证据。
 
-历史工作流插件 alpha.5 的 CI、发布与安装发现按[远程安装记录](plans/plugin-remote-install.md)分别验收，不从发布推断模型运行。更早插件 alpha.4 的本机精确安装检查中，Codex CLI 实际启动通过；Claude 插件发现通过，但默认模型在 90 秒预算内未回应，PM 实际接管未验；Antigravity 安装通过，后续运行等待登录；App 图形界面未验。这些历史插件版本不等同本轮独立组件 `0.1.0-alpha.5` 候选；较早的单项证据见[原生验收记录](plans/plugin-v3-native-acceptance.md)，不能扩大为当前所有客户端均通过。
+各宿主的新会话、原生子代理和指定模型运行分别留有验收记录。按对应宿主及版本查阅。[原生验收记录](archive/plugin-v3-native-acceptance.md)
 
 市场刷新与已安装插件更新按宿主分别处理，具体步骤见[安装说明](../plugins/INSTALL.md)。插件更新前先收尾或交接活动任务；当前版本尚无活动任务跨缓存更新的自动资源保留协议。仓库清理和本机安装不代表自动替换其他用户、其他项目或所有旧安装。
 
@@ -62,7 +62,7 @@ Full 在目标、范围、约束、验收和方案完整可评审后，请求一
 
 需要原型的 UI 任务由设计 Agent 在所选 adapter 的 `docs.standards_root/prototype` 内制作可交互 HTML，并返回需求覆盖、规范符合性和交付一致性的三维自检。PM 将 REQ 到具体页面及实际状态锚点的关联写入同一主题计划；原型 HTML、静态验收、依赖指纹与视觉确认继续保留，不恢复计划 Markdown 转 HTML 生成链，也不增加第二个原型 QA。
 
-3.0.4 候选的完整交付入口是具体 file HTML。Agent／PM 交付前先从当前物理插件白名单 helper 执行 `prepare-delivery`，显式指定实际项目、同一 adapter 和本轮 pages；它幂等准备受管入口／公开目录，不启动服务或业务请求。再用 `open` 指定相同项目／adapter、唯一需求 Markdown、request-id 与 pages。open 先验证准备，缺失返回准确的 `preparation_required`，不会暗改业务 HTML。未准备模板不可作为完整交付。
+交付入口是项目内具体原型页的 file URL。Agent／PM 交付前先从当前物理插件白名单 helper 执行 `prepare-delivery`，显式指定实际项目、同一 adapter 和本轮 pages；它幂等准备受管入口／公开目录，不启动服务或业务请求。再用 `open` 指定相同项目／adapter、唯一需求 Markdown、request-id 与 pages。open 先验证准备，缺失返回准确的 `preparation_required`，不会暗改业务 HTML。未准备模板不可作为完整交付。
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py prepare-delivery --root <physical-project-root> --adapter <selected-project-adapter> --pages <project-relative-HTML>
@@ -79,7 +79,7 @@ file 顶层经典 bootstrap 不依赖 file fetch 或 ES 模块，业务只在一
 
 独立评审进入即批注，无目录、持久浏览模式切换或开发说明；按工具提示修饰键临时操作设计，释放回批注。两页读取同一原稿并分别保留相机和交互状态。未准备、binding 失效或服务不可用时，准确显示恢复说明，由交付方重跑相同显式 prepare-delivery／open；不猜端口、不冷启动、不虚称 ready。status／stop 管理精确项目请求实例且保留意见，不配置系统自启动或 URL 协议。
 
-新 live 使用 boot 5、严格 context 3 与 feedback 5 四字段 `schema_version/review/anchors/items`。短 review 只有 request_id/review_id，绑定真实来源修订；复制和下载采用相同紧凑 JSON／Markdown，不附重复摘要。标记 A 与整改分别编号且不设等级；节点修改／新增／删除、页面修改／新增、整体修改及显式跨页引用保持。REQ／交互／接口只从真实目标源还原，匿名来源键仅在响应注入，动态无来源节点明确要求选择真实源父层。
+新 live 使用 boot 5、标明来源类型的 context 4 与 feedback 5 四字段 `schema_version/review/anchors/items`。短 review 只有 request_id/review_id，绑定真实来源修订；复制和下载采用相同紧凑 JSON／Markdown，不附重复摘要。标记 A 与整改分别编号且不设等级；节点修改／新增／删除、页面修改／新增、整体修改及显式跨页引用保持。REQ／交互／接口只从真实目标源还原，匿名来源键仅在响应注入，动态无来源节点明确要求选择真实源父层。
 
 草稿通过带 revision 的 CAS 保存，刷新或重新进入可恢复；冲突明确提示，不静默覆盖。原稿变化保留旧意见并阻止错误定位与交还，不用活动指针重绑旧 review_id。validate 以相同项目和 adapter 核验显式反馈及其真实 live 修订，只返回 current、短 review、必要 anchors、按目标分组的精简 changes 和“修订输入非批准”提示；PM 将这些结果连同当前完整任务包交回原 UI Agent。普通整改只交还明确引用的 A，无整改时交还全部明确标记，不推断整改。
 
@@ -101,11 +101,11 @@ agentmemory 是可选服务。只有工具能强制按项目过滤并返回匹�
 
 ## 模型配置与工作流启停
 
-没有调用偏好时，工作流沿宿主当前模型与推理设置。显式调用插件的 `xy-config [open|status|doctor]` 可打开配置页，省略动作等价 open；操作细节见[原生 Agent 配置工具](agent-configuration.md)。普通业务请求中出现命令名称不会触发维护路径。
+没有调用偏好时，工作流沿用宿主当前模型与推理设置。显式调用插件的 `xy-config` 或 `xy-config open` 可打开配置页。`status` 查看状态，`doctor` 读取诊断。Codex 还支持 `rebind`，可先预览上个插件版本留下的受管角色，再确认重新绑定。普通业务请求中提及命令名称不会触发维护操作。详见[原生 Agent 配置工具](agent-configuration.md)。
 
 首次缺组件时先展示固定版本、来源和准备信息，经确认才下载已核验发行包。配置页默认管理“调用偏好”，提供用户级和当前项目的通用默认／逐 Agent 设置；没有原生文件时也有通用入口。设置先预览再保存，PM 在下一次派发前通过纯只读 helper 解析，不需要常驻 HTTP 或 MCP。无法表达的已配置字段会明确报告，不会悄悄忽略。
 
-0.1.3 通过短期派生会话恢复普通刷新后的平台／范围／真实项目；原入口片段首次使用后清除，原入口令牌不写浏览器存储。派生会话绑定精确 origin 与服务实例并有期限；存储拒绝时当前有效页面仅内存运行，刷新须重新打开。失效页面明确提示重开，恢复不会自动保存草稿。
+配置页通过短期派生会话恢复普通刷新后的平台／范围／真实项目；原入口片段首次使用后清除，原入口令牌不写浏览器存储。派生会话绑定精确 origin 与服务实例并有期限；存储拒绝时当前有效页面仅内存运行，刷新须重新打开。失效页面明确提示重开，恢复不会自动保存草稿。
 
 “原生定义文件”采用搜索列表与详情双栏，保留实际身份、来源和未知状态以及完整定义编辑，插件缓存始终只读；模型目录按本机对应客户端／有效配置读取，推理选项按当前模型处理。调用偏好保存、原生文件重新加载和实际指定模型运行分别判断，不改变当前主会话或运行中的 Agent。
 

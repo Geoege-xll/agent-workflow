@@ -88,7 +88,7 @@ class ModelService:
         found = inventory.discover(host, self.home, path, host_roots=self.host_roots)
         enabled = activation.capture(host, scope, path, self.host_roots[host], data_dir=self.data_dir,
                                      home=self.home if self._explicit_home else None,
-                                     environment=self.environment)
+                                     environment=self.environment, preparation_source=self.preparation_source)
         preferred = preferences.capture(host, self.host_roots[host], path)
         revision = hashlib.sha256(json_bytes([host, scope, str(path) if path else None, identity, found.revision(), enabled.revision(), preferred.revision()])).hexdigest()
         prepared = preparation.capture(self.preparation_source) if host == "codex" else None
@@ -313,6 +313,29 @@ class ModelService:
                 raise ConflictError("原生定义补齐后回读不一致")
             return {"status": "created", "created": len(writes),
                     "preserved": preserved, "project_provided": project_provided, "runtime_verified": False}
+
+    def rebind_builtins(self, project=None, confirm=None):
+        """独立命令间使用内容绑定的预览摘要，预览无需服务、状态文件或写权限。"""
+        with self._lock:
+            state = self._capture("codex", "project" if project is not None else "global", project)
+            writes = preparation.rebind_plan(state.preparation, state, self.host_roots["codex"])
+            # 摘要同时绑定物理来源、明确项目、完整清单及新前后像。两个命令
+            # 各自读取当前状态，不能拿另一次预览的确认去应用新出现的候选。
+            changes = [(item.role, item.before.revision(), hashlib.sha256(item.after).hexdigest()) for item in writes]
+            revision = hashlib.sha256(json_bytes(["rebind-v1", state.preparation.id, state.preparation.revision,
+                                                  state.revision, changes])).hexdigest()
+            summary = {"status": "preview", "roles": [item.role for item in writes], "revision": revision}
+            if confirm is None:
+                return summary
+            if confirm != revision:
+                raise ConflictError("重绑来源或清单已变化，请重新预览")
+            if writes:
+                result = self._apply_plan(_Plan(state, writes, time.monotonic(), "native_preparation"))
+                if not result["saved"]:
+                    raise ConfigError("受管原生定义重绑未完整保存，请核对实际文件")
+                if any(storage.read(item.path).body != item.after for item in writes):
+                    raise ConflictError("受管原生定义保存后回读不一致")
+            return {**summary, "status": "applied" if writes else "unchanged"}
 
     def _apply_plan(self, plan):
         """唯一事务通路；调用方持有服务锁，外部进程仍由原有完整 guard/CAS 防护。"""

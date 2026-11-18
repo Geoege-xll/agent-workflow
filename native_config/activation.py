@@ -42,10 +42,14 @@ class Activation:
         return hashlib.sha256(json_bytes([material, directories, self.public], limit=MAX_INVENTORY_BYTES)).hexdigest()
 
 
-def _recovery(host, scope, project, plugin_id, *, data_dir, home, environment):
+def _recovery(host, scope, project, plugin_id, *, data_dir, home, environment, preparation_source):
     # __file__ 定位源码与离开源码后的独立包；绝不依赖被停用 Skill 的路径。
     script = Path(__file__).resolve().parents[1] / "scripts/agent_config.sh"
     arguments = ["bash", str(script), "open", "--host", host, "--data-dir", str(data_dir)]
+    if preparation_source is not None:
+        # 维护入口将物理插件来源及其修订纳入服务身份。恢复命令沿用启动时选定
+        # 的目录，否则即使宿主和状态根相同，仍无法通过原控制台的身份握手。
+        arguments.extend(("--preparation-source", str(preparation_source)))
     if home is not None:
         arguments.extend(("--home", str(home)))
     else:
@@ -70,7 +74,7 @@ def _recovery(host, scope, project, plugin_id, *, data_dir, home, environment):
     return {"open_command": command, "official_steps": steps, "documentation_url": DOCUMENTATION[host]}
 
 
-def capture(host, scope, project, host_root, *, data_dir, home, environment):
+def capture(host, scope, project, host_root, *, data_dir, home, environment, preparation_source=None):
     target = ((project / (".codex/config.toml" if host == "codex" else ".claude/settings.local.json"))
               if scope == "project" else host_root / ("config.toml" if host == "codex" else "settings.json"))
     public = {"supported": host != "antigravity", "writable": False, "state": "unknown", "plugin_id": None,
@@ -221,7 +225,7 @@ def capture(host, scope, project, host_root, *, data_dir, home, environment):
         public["read_only_reason"] = reason if host != "antigravity" else "该平台尚不支持配置文件启停。"
         diagnostic("activation_unavailable" if host != "antigravity" else "unsupported_platform", public["read_only_reason"])
     public["recovery"] = _recovery(host, scope, project, plugin_id, data_dir=data_dir,
-                                   home=home, environment=environment)
+                                   home=home, environment=environment, preparation_source=preparation_source)
     return found
 
 

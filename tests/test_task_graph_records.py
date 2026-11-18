@@ -111,7 +111,7 @@ class RecordUpdateTest(unittest.TestCase):
         self.assertEqual([], _execute("ready", pending)["ready"])
 
     def test_v2_general_is_only_a_project_supplement_and_full_cannot_waive_qa(self):
-        """项目规则仍完整保留，但不能以GENERAL恢复2.0已删除的内置底线替代。"""
+        """项目规则仍完整保留，但不能以GENERAL恢复schema 2已删除的内置底线替代。"""
         source = copy.deepcopy(self.original)
         source["standards_contract"]["leaves"] = [leaf for leaf in source["standards_contract"]["leaves"] if not leaf["path"].startswith("platforms/")]
         source["tasks"][0]["controlled_document_access"]["documents"] = [document for document in source["tasks"][0]["controlled_document_access"]["documents"] if not document["path"].startswith("platforms/")]
@@ -253,8 +253,10 @@ class RecordUpdateTest(unittest.TestCase):
                 switched = self.update({"tasks": {"qa": {"set": {"state": alternate}}}}, own)
                 self.assertEqual(own["active_paths"], switched["active_paths"])
                 self.assertEqual(own["active_semantic_locks"], switched["active_semantic_locks"])
-                # 记录已由原交接确立的 PASS，仅验证锁释放，不在这里伪造审查证据。
-                done = self.update({"tasks": {"qa": {"set": {"state": "QA_PASSED"}}}}, switched)
+                # 锁释放独立于结论。正式 PASS 必须有原字节回执，单独的定向回归覆盖。
+                with self.assertRaisesRegex(ValueError, "accept_request"):
+                    self.update({"tasks": {"qa": {"set": {"state": "QA_PASSED"}}}}, switched)
+                done = self.update({"tasks": {"qa": {"set": {"state": "DECLARED"}}}}, switched)
                 self.assertEqual(["external/"], done["active_paths"])
                 self.assertEqual(["external-lock"], done["active_semantic_locks"])
 
@@ -712,7 +714,7 @@ class RecordCliTest(unittest.TestCase):
                 self.assertNotIn("Traceback", rejected.stderr)
 
     def test_continuation_cli_is_read_only_and_requires_current_host_observation(self):
-        """通过真实CLI验证2.0图、绑定、CAS、当前观察及阻塞建议，查询不发布文件。"""
+        """通过真实CLI验证schema 2图、绑定、CAS、当前观察及阻塞建议，查询不发布文件。"""
         query = ("continuation", "--input", self.source, "--task-id", "api", "--host", "codex")
         before = self.source.read_bytes()
         result = self.invoke(*query, "--observed-state", "idle")
@@ -826,6 +828,25 @@ class RecordCliTest(unittest.TestCase):
         result = self.invoke("task", "--input", self.source, "--task-id", "api")
         self.assertEqual(2, result.returncode)
         self.assertNotIn("Traceback", result.stderr)
+
+    def test_query_and_export_reject_the_same_duplicate_task_field(self):
+        """同一份图即使两次写入相同的目标文字，各入口也应报告同一个重复字段。"""
+        document = self.source.read_text(encoding="utf-8")
+        goal = json.dumps(graph()["tasks"][0]["goal"], ensure_ascii=False)
+        field = '"goal": ' + goal
+        self.assertEqual(1, document.count(field))
+        document = document.replace(field, field + ", " + field)
+        self.source.write_text(document, encoding="utf-8")
+        for args, stdin in [
+            (("task", "--input", self.source, "--task-id", "api"), None),
+            (("validate", "--input", self.source), None),
+            (("ready",), document),
+        ]:
+            with self.subTest(command=args[0]):
+                result = self.invoke(*args, input=stdin)
+                self.assertEqual(2, result.returncode, result.stderr)
+                self.assertEqual({"error": "duplicate JSON key: goal"}, json.loads(result.stderr))
+                self.assertEqual("", result.stdout)
 
     def test_invalid_running_field_type_is_json_error_and_keeps_bytes(self):
         running = records.update(graph(), {"tasks": {"api": {"set": {"state": "RUNNING"}}}}, None, _execute)
@@ -1364,103 +1385,6 @@ class ScratchWorkspaceTest(unittest.TestCase):
         self.assertEqual(logical_size, preview["planned_logical_bytes"])
         self.assertEqual(logical_size, result["removed_logical_bytes"])
         self.assertFalse(target.exists())
-
-
-class RecordInstalledRuntimeTest(unittest.TestCase):
-    def test_three_host_install_exports_helpers_and_runs_from_detached_runtime(self):
-        """在临时后端夹具执行真实安装与自带三宿主验收，不运行任何业务构建。"""
-        with tempfile.TemporaryDirectory(prefix="workflow-record-install-") as raw:
-            root = Path(raw).resolve()
-            project = root / "示例 Project"
-            project.mkdir()
-            business = project / "go.mod"
-            business.write_bytes(b"module example.test/records\n")
-            state = root / "state"
-            env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state)}
-            result = subprocess.run(["bash", str(PACK / "install.sh"), str(project), "--state-dir", str(state)],
-                                    cwd=root, text=True, capture_output=True, check=False, timeout=120)
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            runtime = project / ".agent-workflow"
-            binding = json.loads((runtime / "runtime.json").read_bytes())["runtime_binding"]
-            bridge_cli = ["bash", str(runtime / "lib/python_runtime.sh"), "-B", "-X", "utf8",
-                          str(runtime / "runtime.py"), "--binding", json.dumps(binding)]
-            runtime_cli = [*bridge_cli, "helper", "lib/task_graph_cli.py"]
-            # 薄桥读取真实固定 core，并逐字节检查 helper 载荷；项目不再复制完整运行时。
-            for relative in ("lib/task_graph_records.py", "lib/agent_continuation.py"):
-                read = subprocess.run([*bridge_cli, "read", relative], cwd=project, env=env,
-                                      capture_output=True, check=False, timeout=15)
-                self.assertEqual(0, read.returncode, read.stderr)
-                self.assertEqual((PACK / relative).read_bytes(), read.stdout)
-            checked = subprocess.run([*bridge_cli, "check"], cwd=project, env=env,
-                                     capture_output=True, text=True, check=False, timeout=15)
-            self.assertEqual(0, checked.returncode, checked.stderr)
-            self.assertTrue(json.loads(checked.stdout)["enabled"])
-            from manager import runtime_service
-            self.assertEqual({"codex", "claude", "antigravity"}, set(runtime_service.status(state, project)["hosts"]))
-            reference = "xy-workflow/references/runtime-records.md"
-            for directory in (".claude/skills", ".agents/skills"):
-                self.assertEqual((PACK / "platforms/shared/skills" / reference).read_bytes(), (project / directory / reference).read_bytes())
-            source = root / "graph.json"
-            payload = graph()
-            payload["runtime_binding"] = binding
-            source.write_text(json.dumps(payload), encoding="utf-8")
-            result = subprocess.run([
-                *runtime_cli,
-                "update", "--input", str(source), "--expect-sha256", records.digest(source.read_bytes()), "--patch", "-",
-            ], input='{"tasks":{"api":{"set":{"state":"RUNNING"}}}}',
-                cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual("RUNNING", json.loads(source.read_text(encoding="utf-8"))["tasks"][0]["state"])
-            # 安装态从业务根加载新 helper，并经原 CAS 绑定后实际运行只读查询。
-            result = subprocess.run([
-                *runtime_cli,
-                "update", "--input", str(source), "--expect-sha256", records.digest(source.read_bytes()), "--patch", "-",
-            ], input='{"tasks":{"api":{"set":{"agent_ref":{"host":"codex","agent_id":"fixture-installed-agent"}}}}}',
-                cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
-            self.assertEqual(0, result.returncode, result.stderr)
-            before = source.read_bytes()
-            result = subprocess.run([
-                *runtime_cli,
-                "continuation", "--input", str(source), "--task-id", "api", "--host", "codex", "--observed-state", "idle",
-            ], cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual("followup", json.loads(result.stdout)["action"])
-            self.assertEqual(before, source.read_bytes())
-            # 从业务项目的固定 pin 薄桥实际消费 CAS、续用和 scratch 收口参数；
-            # 源码目录中的测试函数不能替代这个真实安装消费者证据。
-
-            def invoke_cleanup(*options):
-                return subprocess.run([*runtime_cli, "cleanup-scratch", "--root", str(project),
-                                       "--request-id", "installed-cleanup", *options],
-                                      cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
-
-            allocated = subprocess.run([*runtime_cli, "scratch", "--root", str(project),
-                                        "--request-id", "installed-cleanup"],
-                                       cwd=project, env=env, text=True, capture_output=True, check=False, timeout=15)
-            self.assertEqual(0, allocated.returncode, allocated.stderr)
-            scratch = Path(json.loads(allocated.stdout)["scratch_dir"])
-            try:
-                (scratch / "keep.log").write_bytes(b"complete installed evidence")
-                (scratch / "build.tmp").write_bytes(b"temporary build")
-                preview = invoke_cleanup("--dry-run", "--keep", "keep.log")
-                self.assertEqual(0, preview.returncode, preview.stderr)
-                preview_body = json.loads(preview.stdout)
-                cleaned = invoke_cleanup("--keep", "keep.log", "--expect-sha256", preview_body["snapshot_sha256"])
-                self.assertEqual(0, cleaned.returncode, cleaned.stderr)
-                self.assertEqual(len(b"temporary build"), json.loads(cleaned.stdout)["removed_logical_bytes"])
-                self.assertEqual(b"complete installed evidence", (scratch / "keep.log").read_bytes())
-                self.assertFalse((scratch / "build.tmp").exists())
-                final_preview = invoke_cleanup("--dry-run")
-                self.assertEqual(0, final_preview.returncode, final_preview.stderr)
-                final = invoke_cleanup("--expect-sha256", json.loads(final_preview.stdout)["snapshot_sha256"])
-                self.assertEqual(0, final.returncode, final.stderr)
-                self.assertFalse(scratch.exists())
-            finally:
-                # 只处理本夹具刚创建的请求，不使用 --all，也不清理安装器或其他任务资源。
-                if scratch.exists():
-                    pending = records.cleanup_scratch(project, "installed-cleanup", dry_run=True)
-                    records.cleanup_scratch(project, "installed-cleanup", expected=pending["snapshot_sha256"])
-            self.assertEqual(b"module example.test/records\n", business.read_bytes())
 
 
 if __name__ == "__main__":

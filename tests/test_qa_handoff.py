@@ -9,8 +9,6 @@ import tempfile
 import unittest
 from pathlib import Path
 from tests.test_scheduler_boundaries import v2_task
-from tests.test_task_graph_init import BUILTIN_ENGINEERING, PACK, pinned_environment, pinned_fixture
-from lib import runtime_store
 
 
 def qa_task_pack(host: str = "codex") -> dict:
@@ -99,70 +97,72 @@ class QAHandoffValidationTest(unittest.TestCase):
         self.task_pack_body = json.dumps(self.task_pack, ensure_ascii=False).encode("utf-8")
         self.payload["handoff_ref"] = handoff_ref(self.task_pack, self.task_pack_body)
 
-    def invoke(self, payload: dict[str, object], *, task_pack_body: bytes | None = None,
-               env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def invoke(self, payload: dict[str, object] | bytes, *, task_pack_body: bytes | None = None,
+               env: dict[str, str] | None = None, stdin: bool = False) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="qa-handoff-") as raw:
-            source = Path(raw) / "handoff.json"
-            source.write_text(json.dumps(payload), encoding="utf-8")
-            current_pack = Path(raw).resolve() / "qa-task-pack.json"
-            current_pack.write_bytes(self.task_pack_body if task_pack_body is None else task_pack_body)
-            return subprocess.run(
-                [sys.executable, str(self.cli), "validate", "--input", str(source), "--task-pack", str(current_pack)],
-                text=True,
-                capture_output=True,
-                check=False,
-                env=env,
-            )
-
-    def test_central_qa_uses_task_pin_for_rule_bytes_and_severity_after_project_upgrade(self):
-        with tempfile.TemporaryDirectory(prefix="qa-pinned-core-") as raw:
             root = Path(raw).resolve()
-            # 固定旧核心故意与本机源码有不同严重性，证明真实 QA 消费 pin 正文。
-            old_body = (PACK / BUILTIN_ENGINEERING).read_bytes().replace(
-                b"[eng-common-005] [hard]", b"[eng-common-005] [advisory]")
-            source, state, old = pinned_fixture(root, engineering_body=old_body)
-            payload = self.builtin_payload()
-            fingerprint = hashlib.sha256(old_body).hexdigest()
-            self.task_pack["runtime_binding"] = old.binding()
-            self.task_pack["standards_contract"]["leaves"][0]["content_fingerprint"] = fingerprint
-            coverage = payload["standards_policy_coverage"]["rule_checks"][0]
-            coverage.update(source_fingerprint=fingerprint, severity="advisory")
-            self.task_pack_body = json.dumps(self.task_pack, ensure_ascii=False).encode()
-            payload["handoff_ref"] = handoff_ref(self.task_pack, self.task_pack_body)
-            (source / BUILTIN_ENGINEERING).write_bytes((PACK / BUILTIN_ENGINEERING).read_bytes())
-            new = runtime_store.import_core(source, state)
-            (root / ".agent-workflow").mkdir()
-            (root / ".agent-workflow/runtime.json").write_text(json.dumps({
-                "schema_version": 1, "kind": "central", "runtime_binding": new.binding()}))
-            env = pinned_environment(root, state, old)
-            accepted = self.invoke(payload, env=env)
-            self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
-            forged = json.loads(json.dumps(payload))
-            forged["standards_policy_coverage"]["rule_checks"][0]["severity"] = "hard"
-            rejected = self.invoke(forged, env=env)
-            self.assertEqual(2, rejected.returncode)
-            self.assertIn("ID/severity", rejected.stderr)
-            conflict = self.invoke(payload, env=pinned_environment(root, state, new))
-            self.assertEqual(2, conflict.returncode)
-            self.assertIn("冲突", conflict.stderr)
-            missing = {key: value for key, value in self.task_pack.items() if key != "runtime_binding"}
-            missing_body = json.dumps(missing).encode()
-            rejected = self.invoke({**payload, "handoff_ref": handoff_ref(missing, missing_body)},
-                                   task_pack_body=missing_body, env=env)
-            self.assertEqual(2, rejected.returncode)
-            self.assertIn("缺少 runtime_binding", rejected.stderr)
-            damaged = old.root / BUILTIN_ENGINEERING
-            damaged.chmod(0o600)
-            damaged.write_bytes(b"damaged frozen standards\n")
-            damaged.chmod(0o444)
-            rejected = self.invoke(payload, env=env)
-            self.assertEqual(2, rejected.returncode)
-            self.assertIn("invalid current QA task pack", rejected.stderr)
+            current_pack = root / "qa-task-pack.json"
+            current_pack.write_bytes(self.task_pack_body if task_pack_body is None else task_pack_body)
+            body = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            args = [sys.executable, str(self.cli), "validate", "--task-pack", str(current_pack)]
+            if not stdin:
+                source = root / "handoff.json"
+                source.write_bytes(body)
+                args.extend(("--input", str(source)))
+            result = subprocess.run(args, input=body if stdin else None, capture_output=True, check=False, env=env)
+            return subprocess.CompletedProcess(args, result.returncode, result.stdout.decode(), result.stderr.decode())
+
 
     def test_complete_standards_coverage_can_pass(self) -> None:
-        result = self.invoke(self.payload)
+        for stdin in (False, True):
+            with self.subTest(stdin=stdin):
+                result = self.invoke(self.payload, stdin=stdin)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual({"status": "valid"}, json.loads(result.stdout))
+
+    def test_current_pack_requires_exact_skill_ids_and_preserves_optional_coverage_gap(self) -> None:
+        pack = self.task_pack
+        pack["task"].update(required_skills=["xy-mobile-ui"], audit_surfaces=["standards-conformance", "concurrency"])
+        body = json.dumps(pack).encode("utf-8")
+        self.payload["handoff_ref"] = handoff_ref(pack, body)
+        evidence = self.payload["skill_evidence"]
+        for substitute in ([], ["xy-mobile-ui-extra"], [" xy-mobile-ui "], ["xy-workflow:xy-mobile-ui"]):
+            with self.subTest(substitute=substitute):
+                evidence["skills_used"] = ["xy-qa-review", *substitute]
+                result = self.invoke(self.payload, task_pack_body=body)
+                self.assertEqual(2, result.returncode)
+                self.assertIn("required Skill(s): xy-mobile-ui", result.stderr)
+
+        evidence["skills_used"] = ["xy-qa-review", "xy-mobile-ui"]
+        evidence["uncovered_audit_surfaces"] = ["concurrency"]
+        result = self.invoke(self.payload, task_pack_body=body)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertEqual({"status": "valid"}, json.loads(result.stdout))
+        evidence["uncovered_audit_surfaces"].append("standards-conformance")
+        result = self.invoke(self.payload, task_pack_body=body)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("mandatory audit surface(s) uncovered: standards-conformance", result.stderr)
+
+    def test_production_ui_pack_excludes_pass_with_uncovered_ui_or_accessibility(self) -> None:
+        """使用正式 Writer 投影和完整规则覆盖，排除 QA 任务自身 non_ui 标签造成的绕过。"""
+        from lib.task_graph_cli import export_task_pack
+        from tests import test_foundation_qa as fixtures
+
+        with tempfile.TemporaryDirectory(prefix="qa-ui-surfaces-") as raw:
+            root = Path(raw).resolve()
+            with fixtures.working_root(root):
+                graph = fixtures.graph(root)
+                graph["tasks"][2].update(state="QA", agent_ref={"host": "codex", "agent_id": "fixture-reviewer"})
+                pack = export_task_pack(graph, "qa")
+                body = json.dumps(pack).encode("utf-8")
+                payload = fixtures.handoff(pack, body)
+                result = self.invoke(payload, task_pack_body=body)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                for surface in ("ui", "accessibility"):
+                    with self.subTest(surface=surface):
+                        payload["skill_evidence"]["uncovered_audit_surfaces"] = [surface]
+                        result = self.invoke(payload, task_pack_body=body)
+                        self.assertEqual(2, result.returncode)
+                        self.assertIn(f"mandatory audit surface(s) uncovered: {surface}", result.stderr)
 
     def test_v2_result_cannot_reuse_old_pass_identity_or_reencoded_pack(self):
         """每个身份维度和真正交接包的字节都必须匹配，FAIL也不能换Reviewer。"""
@@ -276,6 +276,8 @@ class QAHandoffValidationTest(unittest.TestCase):
                     payload = json.loads(json.dumps(self.payload))
                     payload["audit_result"] = outcome
                     payload["review_method"].update(method)
+                    if outcome == "FAIL":
+                        payload["standards_policy_coverage"]["rule_checks"][0]["disposition"] = "fail"
                     result = self.invoke(payload)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
@@ -412,7 +414,11 @@ class QAHandoffValidationTest(unittest.TestCase):
         """QA 可以补读规则证明 PM 漏选，但不能把错误任务包静默修成 PASS。"""
 
         payload = json.loads(json.dumps(self.payload))
-        payload["standards_policy_coverage"]["task_pack_rule_ids"] = []
+        coverage = payload["standards_policy_coverage"]
+        # 冻结包确实漏派了第二条规则，而非让回执自行删去已有规则假冒缺漏。
+        coverage["required_engineering_rule_ids"].append("eng-service-contract")
+        coverage["path_checks"][0]["applicable_rule_ids"].append("eng-service-contract")
+        coverage["rule_checks"].append({**coverage["rule_checks"][0], "rule_id": "eng-service-contract"})
         result = self.invoke(payload)
         self.assertEqual(2, result.returncode)
         self.assertIn("omitted from the PM Task Pack", result.stderr)
@@ -420,6 +426,18 @@ class QAHandoffValidationTest(unittest.TestCase):
         # 相同证据作为 FAIL 交回 PM 是合法的，因为它准确暴露了编排缺口。
         payload["audit_result"] = "FAIL"
         result = self.invoke(payload)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_legacy_fail_requires_actionable_mandatory_evidence(self) -> None:
+        self.payload["audit_result"] = "FAIL"
+        self.payload["standards_policy_coverage"]["task_pack_rule_ids"] = []
+        result = self.invoke(self.payload)
+        self.assertEqual(2, result.returncode)
+        self.assertIn("FAIL requires actionable", result.stderr)
+
+        # 已有的强制规则、适用路径及直接证据足以定位问题，无需补造结构化发现。
+        self.payload["standards_policy_coverage"]["rule_checks"][0]["disposition"] = "fail"
+        result = self.invoke(self.payload)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
@@ -456,14 +474,14 @@ class NativeQAHandoffTest(unittest.TestCase):
                 "structured_output": payload, "response": json.dumps(payload),
                 "usage": {"total_tokens": 57}}
 
-    def invoke_path(self, host: str, source: Path) -> subprocess.CompletedProcess[str]:
+    def invoke_path(self, host: str | None, source: Path) -> subprocess.CompletedProcess[str]:
+        command = ["validate"] if host is None else ["extract", "--host", host]
         return subprocess.run(
-            [sys.executable, str(self.cli), "extract", "--host", host, "--input", str(source),
-             "--task-pack", str(self.pack_file)],
-            text=True, capture_output=True, check=False,
+            [sys.executable, str(self.cli), *command, "--input", str(source), "--task-pack", str(self.pack_file)],
+            text=True, capture_output=True, check=False, timeout=15,
         )
 
-    def invoke(self, host: str, value: object) -> subprocess.CompletedProcess[str]:
+    def invoke(self, host: str | None, value: object) -> subprocess.CompletedProcess[str]:
         body = value if isinstance(value, bytes) else json.dumps(value).encode("utf-8")
         with tempfile.TemporaryDirectory(prefix="qa-native-") as raw:
             # macOS 的系统临时路径可能有 /var 别名；正常夹具使用其实际普通父目录。
@@ -483,13 +501,14 @@ class NativeQAHandoffTest(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         self.assertIsInstance(json.loads(result.stderr)["error"], str)
 
-    def test_schema_is_complete_strict_minimal_contract(self) -> None:
+    def test_schema_is_strict_and_supports_findings_verification_and_rework(self) -> None:
         result = subprocess.run([sys.executable, str(self.cli), "schema"],
                                 text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         schema = json.loads(result.stdout)
         self.assertEqual("object", schema["type"])
-        self.assertEqual({"schema_version", "handoff_ref", "audit_result", "review_method", "standards_policy_coverage", "skill_evidence"},
+        self.assertEqual({"schema_version", "handoff_ref", "audit_result", "review_method",
+                          "standards_policy_coverage", "skill_evidence", "review_details"},
                          set(schema["properties"]))
         self.assertEqual(["PASS", "FAIL"], schema["properties"]["audit_result"]["enum"])
         method = schema["properties"]["review_method"]["properties"]
@@ -504,6 +523,13 @@ class NativeQAHandoffTest(unittest.TestCase):
         self.assertIn("rule_checks", coverage)
         self.assertIn("null", coverage["index_fingerprint"]["type"])
         self.assertIn("path_checks", coverage)
+        details = schema["properties"]["review_details"]["properties"]
+        finding = details["findings"]["items"]["properties"]
+        self.assertEqual({"severity", "blocking", "detail", "evidence_refs", "owner_role", "next_step"},
+                         set(finding))
+        self.assertIn("xy-backend", finding["owner_role"]["enum"])
+        self.assertEqual({"command", "exit_code", "log_ref"},
+                         set(details["verification"]["items"]["properties"]))
 
         def check_objects(value: object) -> None:
             # OpenAI strict 要求每层对象字段全部 required，不能只约束最外层。
@@ -525,12 +551,49 @@ class NativeQAHandoffTest(unittest.TestCase):
                     payload = json.loads(json.dumps(self.payload))
                     payload.update(audit_result=outcome, findings=[{"severity": "P2", "detail": "原始发现"}],
                                    metadata={"source": "fixture", "count": 0})
-                    if outcome == "FAIL":
-                        payload["standards_policy_coverage"]["rule_checks"][0]["disposition"] = "fail"
-                        payload["skill_evidence"]["unavailable_required_skills"] = ["required-skill"]
+                    payload["review_details"] = self.review_details(blocking=outcome == "FAIL")
                     result = self.invoke(host, self.envelope(host, payload))
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                     self.assertEqual(payload, json.loads(result.stdout))
+
+    def review_details(self, *, blocking: bool) -> dict:
+        return {
+            "findings": [{
+                "severity": "P1" if blocking else "P3",
+                "blocking": blocking,
+                "detail": "回执重复键掩盖冲突结论" if blocking else "维护性建议",
+                "evidence_refs": ["diff:services/api.py", "logs:validation-full"],
+                "owner_role": "xy-backend" if blocking else None,
+                "next_step": "拒绝冲突键并补充回归验证" if blocking else None,
+            }],
+            "verification": [{"command": "python -m unittest", "exit_code": 1 if blocking else 0,
+                              "log_ref": "logs:validation-full"}],
+        }
+
+    def test_findings_require_evidence_and_actionable_blockers(self) -> None:
+        for outcome, section, mutation, error in (
+            ("FAIL", "findings", {}, "actionable blocking"),
+            ("PASS", "findings", {}, "PASS cannot contain blocking"),
+            ("FAIL", "findings", {"severity": ["P1"]}, "severity"),
+            ("FAIL", "findings", {"evidence_refs": []}, "evidence_refs"),
+            ("FAIL", "findings", {"owner_role": None}, "owner_role"),
+            ("FAIL", "findings", {"owner_role": "fixture-worker"}, "owner_role"),
+            ("FAIL", "findings", {"next_step": " "}, "next_step"),
+            ("FAIL", "verification", {"exit_code": False}, "exit_code"),
+            ("FAIL", "verification", {"log_ref": ""}, "log_ref"),
+        ):
+            with self.subTest(outcome=outcome, mutation=mutation):
+                payload = json.loads(json.dumps(self.payload))
+                payload["audit_result"] = outcome
+                details = self.review_details(blocking=True)
+                if mutation:
+                    details[section][0].update(mutation)
+                elif outcome == "FAIL":
+                    details["findings"] = []
+                payload["review_details"] = details
+                result = self.invoke("codex", payload)
+                self.assert_rejected(result)
+                self.assertIn(error, result.stderr)
 
     def test_failed_cancelled_partial_and_nonterminal_envelopes_are_rejected(self) -> None:
         cases = [
@@ -644,9 +707,18 @@ class NativeQAHandoffTest(unittest.TestCase):
                    good[:-1] + b',"metadata":NaN}', good[:-1] + b',"metadata":Infinity}',
                    good[:-1] + b',"metadata":1e400}', good[:-1] + b',"metadata":"\\ud800"}',
                    b"\xff", b" " * (4 * 1024 * 1024 + 1)]
-        for index, body in enumerate(invalid):
-            with self.subTest(case=index):
-                self.assert_rejected(self.invoke("codex", body))
+        for host in (None, "codex"):
+            for index, body in enumerate(invalid):
+                with self.subTest(host=host, case=index):
+                    self.assert_rejected(self.invoke(host, body))
+
+    def test_validate_stdin_rejects_conflicting_keys_and_non_utf8_bytes(self) -> None:
+        fixture = QAHandoffValidationTest()
+        fixture.setUp()
+        good = json.dumps(self.payload).encode("utf-8")
+        for body in (b'{"audit_result":"FAIL",' + good[1:], b"\xff", b" " * (4 * 1024 * 1024 + 1)):
+            result = fixture.invoke(body, stdin=True)
+            self.assert_rejected(result)
 
     def test_unsafe_file_nodes_and_parent_paths_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="qa-native-files-") as raw:
@@ -663,13 +735,15 @@ class NativeQAHandoffTest(unittest.TestCase):
             candidates = [linked, parent / source.name, root, root / "missing", root / "child/../terminal.json"]
             if os.name != "nt":
                 candidates.append(fifo)
-            for candidate in candidates:
-                with self.subTest(path=candidate):
-                    self.assert_rejected(self.invoke_path("codex", candidate))
+            for host in (None, "codex"):
+                for candidate in candidates:
+                    with self.subTest(host=host, path=candidate):
+                        self.assert_rejected(self.invoke_path(host, candidate))
             hardlink = root / "hardlink.json"
             os.link(source, hardlink)
-            self.assert_rejected(self.invoke_path("codex", source))
-            self.assert_rejected(self.invoke_path("codex", hardlink))
+            for host in (None, "codex"):
+                self.assert_rejected(self.invoke_path(host, source))
+                self.assert_rejected(self.invoke_path(host, hardlink))
 
 
 if __name__ == "__main__":

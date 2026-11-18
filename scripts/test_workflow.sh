@@ -20,99 +20,51 @@ def modules(*names):
     return tuple("tests.test_" + name for name in names)
 
 
-# 分组只声明真实模块/类/方法，不导入 TestCase 作为夹具。旧入口的模块范围保持不变；
-# service/tui 与 pty 按真实节点拆开，因此普通单元验证不会隐式启动伪终端。
+# 只登记 3.x 的现行模块。一个模块可同时服务于产品和交付验证；组合选择器时，
+# 下方统一按模块和真实用例去重，避免重复执行写入临时项目的集成测试。
 GROUPS = {
-    # 两个当前产品各自声明真实模块，不混入旧安装器/TUI/PTY或另一产品生命周期。
-    # records 只选择插件实际使用的记录/发布/CLI/临时目录合同；历史三宿主安装
-    # 夹具仍留在 full，不能借此宣称已经修复或通过旧安装器的完整兼容验收。
-    "plugin": modules("plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract", "plugin_maintenance_contract",
-                      "continuous_intake_capabilities", "agent_continuation", "dispatch_admission", "task_settlement",
-                      "task_graph", "scheduler_boundaries", "foundation_qa", "plugin_worktree_delivery") + tuple(
-                          "tests.test_task_graph_records." + name for name in (
-                              "RecordUpdateTest", "RecordPublicationTest", "RecordCliTest", "ScratchWorkspaceTest")),
-    # 调用偏好属于独立配置核心；current 直接继承本组，确保实际 CI 同时执行其
-    # 解析合同与事务安全回归，不能只依赖作者临时显式点选这些测试节点。
-    # browser_sessions 独立覆盖派生凭据的过期、容量及实例边界，显式加入才会被
-    # current 的双系统 CI 收集；不使用全树发现替代这里的当前产品合同。
-    "native-config": modules("native_config", "native_preparation", "native_preferences", "native_inventory", "native_config_codecs", "native_config_commands",
-                             "native_config_server", "browser_sessions", "native_config_mcp", "native_config_packaging", "plugin_console",
-                             "plugin_config_launcher", "config_distribution"),
-    "codex": modules("codex_workflow", "shared_memory_contract"),
-    "claude": modules("claude_workflow", "claude_instructions", "shared_memory_contract"),
-    "antigravity": modules("antigravity_workflow"),
-    # 原型入口同时覆盖既有 Node 控制器、历史只读包和 live 来源/HTTP 生命周期；
-    # 新旧协议分别验证，不能把服务成功冒称旧包或业务原型的视觉批准。
-    "prototype": modules("document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
-                         "prototype_workspace_runtime", "prototype_feedback", "prototype_review",
-                         "prototype_live", "prototype_server", "prototype_file_entry"),
-    # 只收指定计划入口及六个真实生命周期基线；不把同模块旧事务/UI大类带入 current。
-    "plans": ("tests.test_plan_and_shallow_docs.SelectedPlanValidationTest",) + tuple(
-        "tests.test_plan_and_shallow_docs.PlanAndShallowDocsTest." + name for name in (
-            "test_template_and_config_share_the_real_lifecycle_model",
-            "test_iteration_pause_and_cancellation_preserve_old_accepted_baseline",
-            "test_unindexed_legacy_completed_plan_is_preserved_but_cannot_be_indexed",
-            "test_completed_unaccepted_or_removed_plan_cannot_be_current_baseline",
-            "test_duplicate_topic_and_missing_baseline_proof_are_rejected",
-            "test_plan_lifecycle_reference_is_shipped_and_discoverable")),
-    "packaging": modules("plugin_delivery", "native_config_packaging", "candidate_delivery",
-                         "plugin_config_launcher", "config_distribution", "plugin_source_publication", "remote_install_smoke"),
-    "central": modules("central_project", "runtime_store", "runtime_state", "central_runtime", "runtime_lifecycle") + (
-        "tests.test_workflow_manager.CentralCliIntegrationTest",
-        "tests.test_workflow_manager.InstalledProjectIntegrationTest",
+    "plugin": modules(
+        "plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract",
+        "plugin_maintenance_contract", "continuous_intake_capabilities", "agent_continuation",
+        "dispatch_admission", "task_settlement", "task_graph", "task_graph_init", "task_graph_records",
+        "scheduler_boundaries", "foundation_qa", "qa_handoff", "plugin_worktree_delivery",
+        "worktree_delivery", "design_standards_lifecycle", "production_only_revisions", "light_ui_copy",
+        "context_read", "profile_context", "project_id_initialization", "project_discovery",
+        "bootstrap_routing", "astra_instruction_adaptation", "runtime_and_discovery",
+        "workflow_authorities", "rule_boundary_contracts", "shared_memory_contract", "platform_fs", "native_usage",
     ),
-    "service": tuple("tests.test_workflow_manager." + name for name in (
-        "ModelContractTest", "CatalogTest", "ClaudeExecutionAndDiagnosticsTest",
-        "TransactionTest", "AddInstallTest", "InstallerBoundaryTest", "CliLauncherTest",
-        "TerminalAndCliTest.test_deep_json_model_source_cli_has_safe_projection",
-        "TerminalAndCliTest.test_tui_interrupt_waits_for_synchronous_central_settlement",
-        "TerminalAndCliTest.test_launcher_preserves_relative_project_paths",
-    )) + modules("role_preferences", "native_usage", "platform_bridge", "native_agents", "install_cli"),
-    "tui": tuple("tests.test_manager_tui." + name for name in (
-        "TextInputTest", "TuiTest", "TerminalCellsTest",
-        "ProjectTuiIntegrationTest.test_real_project_lifecycle_versions_details_and_deletion_focus",
-        "ProjectTuiIntegrationTest.test_hand_edit_conflict_and_unknown_pin_remain_visible_without_fallback",
-        "ProjectTuiIntegrationTest.test_damaged_version_list_fails_and_keeps_model_draft",
-    )),
-    "pty": (
-        "tests.test_manager_tui.ProjectTuiIntegrationTest.test_real_pty_registration_cancel_enable_disable_versions_conflict_and_resize",
-        "tests.test_workflow_manager.TerminalAndCliTest.test_real_terminal_keyboard_and_resize_smoke",
+    "native-config": modules(
+        "native_config", "native_preparation", "native_preferences", "native_inventory",
+        "native_config_codecs", "native_config_commands", "native_config_server", "browser_sessions",
+        "native_config_mcp", "native_config_packaging", "plugin_console", "plugin_config_launcher",
+        "config_distribution",
+    ),
+    "prototype": modules(
+        "document_safety", "prototype_adapters", "prototype_fingerprints", "prototype_workspace",
+        "prototype_workspace_runtime", "prototype_feedback", "prototype_review", "prototype_live",
+        "prototype_server", "prototype_file_entry",
+    ),
+    "plans": modules("plan_and_shallow_docs"),
+    "packaging": modules(
+        "plugin_delivery", "native_config_packaging", "candidate_delivery", "plugin_config_launcher",
+        "config_distribution", "plugin_source_publication", "remote_install_smoke",
     ),
 }
-GROUPS["hosts"] = (
-    GROUPS["codex"] + GROUPS["claude"] + GROUPS["antigravity"]
-    + modules("unified_host_workflow", "antigravity_upgrade_boundaries", "claude_options",
-              "bootstrap_routing", "astra_instruction_adaptation", "project_role_lifecycle")
-)
-# legacy CI 保留2.x CLI/pin/中央软链和真实PTY的显式维护范围，
-# 不代表两个当前产品的3.0全套验收；当前产品请显式选plugin或native-config。
-GROUPS["legacy-ci"] = (
-    modules("validation_runner")
-    + ("tests.test_workflow_manager.CentralCliIntegrationTest",)
-    + modules("central_project", "runtime_state", "central_runtime", "runtime_lifecycle", "native_agents", "install_cli")
-    + ("tests.test_manager_tui.TuiTest.test_platform_reset_is_independent_and_consumes_only_captured_keys",
-       "tests.test_manager_tui.TuiTest.test_runtime_actions_use_captured_context_and_modal_focus")
-    + ("tests.test_unified_host_workflow.UnifiedSetupContractTest.test_all_hosts_generate_core_skills_from_one_shared_source",)
-    + GROUPS["pty"]
-)
-# 保留现有显式调用的兼容别名；自动 PR/push 门禁只消费 current。
-GROUPS["ci"] = GROUPS["legacy-ci"]
-GROUPS["current"] = (modules("validation_runner", "candidate_delivery", "plugin_source_publication", "remote_install_smoke") + GROUPS["plugin"]
-                     + GROUPS["native-config"] + GROUPS["prototype"] + GROUPS["plans"])
+# current 是 CI 的显式维护清单。full 独立发现仓库测试，可以发现已建立但漏登记的模块。
+# 入口自测对照两者，使新增测试必须归到对应产品组才能通过 CI。
+GROUPS["current"] = modules("validation_runner") + tuple(target for group in GROUPS.values() for target in group)
 
 
 def make_parser():
     parser = argparse.ArgumentParser(
-        description="唯一 unittest 入口；无参数只显示帮助；full 是混合历史全仓显式发现，不代表3.0全套。",
-        epilog=("当前产品组：plugin、native-config；两者均不隐式运行PTY。\n"
-                "current：两个产品、保留原型链、验证入口和候选交付合同；是当前PR/push门禁。\n"
-                "legacy/通用预置组：" + ", ".join(name for name in GROUPS if name not in {"plugin", "native-config", "current"}) + "。\n"
-                "ci 是 legacy-ci 的兼容别名，仅维护2.x；不代表当前产品门禁。\n"
-                "full：显式发现全部现有test_模块，包含尚未退役的2.x夹具。\n"
-                "节点：tests.test_模块[.测试类[.test_方法]]；允许与组组合。\n"
+        description="运行 3.x 的 unittest 验证，无参数时只显示帮助。",
+        epilog=("产品分组：plugin、native-config、prototype、plans、packaging。\n"
+                "current：运行上述各组与验证入口自测，用于 PR/push 门禁。\n"
+                "full：发现并运行 tests 目录下全部 test_*.py 模块。\n"
+                "节点：tests.test_模块[.测试类[.test_方法]]，允许与组组合。\n"
                 "示例：bash scripts/test_workflow.sh --list plugin native-config\n"
-                "      bash scripts/test_workflow.sh plugin tests.test_task_graph_init\n"
-                "依赖：Python >= 3.11；native-config/current 的网页JS需要 Node；PTY 需要 POSIX。"),
+                "      bash scripts/test_workflow.sh tests.test_task_graph_init\n"
+                "依赖：Python >= 3.11，原生配置网页 JS 验证需要 Node。"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--list", action="store_true", help="校验后逐行显示实际测试目标，不运行测试")

@@ -3,16 +3,10 @@ name: pm
 description: Main-session entry for Agent Workflow requirements, native delegation and acceptance.
 ---
 
-# Agent Workflow 主会话入口
+# Agent Workflow main session
 
-保持当前主会话 PM 身份。先应用本入口中的主会话精准路由；只有业务分支读取完整
-工作流与其资源适配。原有工作流仍拥有业务规则，本入口不另建业务流程。
-业务 Full 接单由主会话主动完整加载原版 `grilling`（实际插件命名空间以发现项为准），
-不把 Worker 的 skills 预载当作 PM 已加载；原版 `grill-me` 只接受用户显式调用。
-内部覆盖记录归 xy-workflow/references/requirements-intake.md，不冒称上游 schema。
+The current main session is PM. Apply the main-session route before loading workflow authority. Only the business branch loads the business adapter and complete workflow. For Full business intake, PM reads the complete upstream `grilling` primitive using the host-discovered plugin name. A Worker's Skills declaration does not establish that PM loaded it. Upstream `grill-me` requires the current user's explicit invocation. Use the workflow's `xy-workflow/references/requirements-intake.md` for coverage records.
 
-使用宿主默认或已配置的模型与权限，本入口不授予额外工具、权限、批准或生产源码
-所有权。普通业务不依赖模型配置服务、配置网页或 MCP 连接。
+Use the host's configured or default models and permissions. This entry grants no additional tools, approvals, or ownership of production source. Ordinary business requests require no model configuration service, configuration page or MCP connection.
 
-本入口只用于主会话。若作为 Worker 被调用，向既有主会话 PM 返回入口不匹配，
-不得创建第二个 PM 或开始生产工作。
+If invoked as a Worker, report the mismatch to the existing main-session PM. Do not create another PM or start production work.

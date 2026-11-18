@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -27,18 +28,22 @@ class Parser(argparse.ArgumentParser):
 
 def arguments(argv):
     parser = Parser(description="原生 Agent 配置组件安全入口", allow_abbrev=False)
-    parser.add_argument("action", nargs="?", choices=("open", "status", "doctor"), default="open")
+    parser.add_argument("action", nargs="?", choices=("open", "status", "doctor", "rebind"), default="open")
     parser.add_argument("--host", required=True, choices=("codex", "claude", "antigravity"))
     parser.add_argument("--project", type=Path)
     parser.add_argument("--home", type=Path)
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--confirm", metavar="预览摘要")
     args = parser.parse_args(argv)
     if args.action != "open" and (args.prepare or args.artifact is not None or args.no_browser):
         raise InputError("invalid_arguments")
     if args.artifact is not None and not args.prepare:
         raise InputError("preparation_confirmation_required")
+    if (args.action == "rebind" and args.host != "codex") or (args.confirm is not None and
+            (args.action != "rebind" or not re.fullmatch(r"[0-9a-f]{64}", args.confirm))):
+        raise InputError("invalid_arguments")
     for path in (args.project, args.home, args.artifact):
         if path is not None and (not path.is_absolute() or ".." in path.parts):
             raise InputError("absolute_path_required")
@@ -82,7 +87,39 @@ def safe_response(raw, args, data):
                 raise ValueError
         if args.action != "open" and value.get("launch_file") is not None:
             raise ValueError
-        return {key: value.get(key) for key in expected}
+        response = {key: value.get(key) for key in expected}
+        if "native_preparation" in value:
+            # 计数来自独立组件；只带出已知字段，严格拒绝布尔冒充整数、
+            # 负数、正文及来源路径，未来新增私有字段也不会被整个字典透传。
+            preparation = value["native_preparation"]
+            if not isinstance(preparation, dict) or type(preparation.get("supported")) is not bool:
+                raise ValueError
+            safe = {"supported": preparation["supported"]}
+            if "status" in preparation:
+                if preparation["status"] not in {"created", "unchanged", "failed"}:
+                    raise ValueError
+                safe["status"] = preparation["status"]
+            if "runtime_verified" in preparation:
+                if preparation["runtime_verified"] is not False:
+                    raise ValueError
+                safe["runtime_verified"] = False
+            for key in ("created", "preserved", "project_provided"):
+                if key in preparation:
+                    if type(preparation[key]) is not int or preparation[key] < 0:
+                        raise ValueError
+                    safe[key] = preparation[key]
+            response["native_preparation"] = safe
+        if "native_rebind" in value:
+            summary = value["native_rebind"]
+            if (args.action != "rebind" or not isinstance(summary, dict)
+                    or summary.get("status") not in ({"preview"} if args.confirm is None else {"applied", "unchanged"})
+                    or not isinstance(summary.get("revision"), str) or not re.fullmatch(r"[0-9a-f]{64}", summary["revision"])
+                    or not isinstance(summary.get("roles"), list) or len(summary["roles"]) > 64
+                    or any(not isinstance(role, str) or not re.fullmatch(r"xy-[a-z][a-z0-9-]{0,63}", role)
+                           for role in summary["roles"])):
+                raise ValueError
+            response["native_rebind"] = {key: summary[key] for key in ("status", "revision", "roles")}
+        return response
     except (ValueError, TypeError, KeyError, AttributeError):
         raise ComponentError("invalid_component_response") from None
 
@@ -120,6 +157,8 @@ def run(argv, *, component_root=None, descriptor_path=None, invoke=subprocess.ru
                 command.extend((flag, str(value)))
         if args.no_browser:
             command.append("--no-browser")
+        if args.confirm is not None:
+            command.extend(("--confirm", args.confirm))
         # 固定 argv、不使用 shell=True；空格和以破折号开头的项目名均作为单个绝对路径。
         result = invoke(command, capture_output=True, text=True, timeout=40)
         if len(result.stdout) > 64 * 1024:

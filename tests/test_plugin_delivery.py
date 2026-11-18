@@ -83,7 +83,8 @@ class ArchiveModesTest(unittest.TestCase):
 class GuidanceProjectionTest(unittest.TestCase):
     def test_guidance_stays_discoverable_without_unconditional_native_role_preload(self):
         from lib.skills.role_skills import CLAUDE_ROLE_SKILLS, ANTIGRAVITY_ROLE_SKILLS
-        optional = {"xy-web-guidance", "xy-apple-guidance"}
+        optional = {"xy-web-guidance", "xy-apple-guidance", "xy-mobile-ui"}
+        mobile_consumers = {"xy-uiux", "xy-apple", "xy-android", "xy-web", "xy-qa"}
         self.assertTrue(optional <= builder.CORE_SKILLS)
         for host in builder.HOSTS:
             envelope_path = "plugins/antigravity/plugin-context.md" if host == "antigravity" else "plugins/plugin-context.md"
@@ -97,6 +98,9 @@ class GuidanceProjectionTest(unittest.TestCase):
                 self.assertTrue(body.endswith(builder.split_frontmatter(original)[1]))
             for role, bound in builder.ROLE_SKILLS.items():
                 self.assertTrue(optional.isdisjoint(bound))
+                # 原生移动 UI 与微信小程序由对应角色按需引用，发现不会改变固定预载。
+                role_source = (PACK / "roles" / (role + ".md")).read_bytes()
+                self.assertEqual(role in mobile_consumers, b"`xy-mobile-ui`" in role_source)
                 if host == "codex":
                     # Codex既有Shell生成器消费同一名称CLI，实际输出不能自动加新指导入口。
                     projected = subprocess.run([sys.executable, "-B", str(PACK / "lib/skills/role_skills.py"), role],
@@ -104,8 +108,7 @@ class GuidanceProjectionTest(unittest.TestCase):
                     self.assertEqual(0, projected.returncode, projected.stdout + projected.stderr)
                     self.assertEqual(list(bound), projected.stdout.splitlines())
                 else:
-                    header, _ = builder.split_frontmatter(builder.render_agent(
-                        role, (PACK / "roles" / (role + ".md")).read_bytes(), envelope, host))
+                    header, _ = builder.split_frontmatter(builder.render_agent(role, role_source, envelope, host))
                     for skill in optional:
                         native = (builder.PLUGIN_NAME + ":" if host == "claude" else "skills/") + skill
                         self.assertNotIn(("  - " + native + "\n").encode(), header)
@@ -174,8 +177,10 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual(allowed[host], set(manifest))
                 self.assertNotIn("agents", manifest)
                 self.assertEqual((PACK / "product/PLUGIN_VERSION").read_text().strip(), manifest["version"])
-                self.assertEqual((PACK / "product/VERSION").read_text().strip(),
-                                 (root / "product/VERSION").read_text().strip())
+                # 3.x 插件以 PLUGIN_VERSION 为唯一产品版本源，三端发现清单与包内字节需一致。
+                self.assertRegex(manifest["version"], r"^3\.")
+                self.assertEqual(manifest["version"], (root / "product/PLUGIN_VERSION").read_text().strip())
+                self.assertFalse((root / "product/VERSION").exists())
                 self.assertTrue((root / "skills/xy-workflow/SKILL.md").is_file())
                 self.assertEqual(host != "codex", (root / "agents").exists())
                 if host == "codex":
@@ -342,6 +347,8 @@ class PluginDeliveryTest(unittest.TestCase):
                                  "templates/prototype/feedback.js", "templates/prototype/feedback.css",
                                  "platforms/shared/skills/xy-ui-design/references/prototype-feedback.md"):
                     self.assertIn(relative, files.namelist())
+                # 插件只分发真实宿主入口，已下线的项目注入模板不能夹带在 platforms 载荷中。
+                self.assertFalse(any(Path(name).match("platforms/*/AGENTS.*.tpl") for name in files.namelist()))
                 self.assertNotIn("lib/documents/requirement_html.py", files.namelist())
                 self.assertFalse(any(name.startswith("lib/vendor/answer-me-with-html/") for name in files.namelist()))
                 self.assertFalse(any(name.startswith(("plugin_runtime/", "native_config/", "manager/")) for name in files.namelist()))
@@ -389,6 +396,8 @@ class PluginDeliveryTest(unittest.TestCase):
         # 在已声明模板根放入未登记脚本，证明真实构建不会因目录中新增文件而
         # 扩大工具闭包；不复制或扫描业务计划与任何用户未跟踪资料。
         (source / "templates/prototype/unlisted-tool.js").write_bytes(b"unlisted template must stay outside the package\n")
+        # 在隔离夹具中模拟旧 checkout 残留。即使工作树中存在旧版本源，也不能进任何插件。
+        (source / "product/VERSION").write_text("2.1.3\n")
         for host in builder.HOSTS:
             with self.subTest(host=host):
                 archive = builder.build(source, self.root / "core-only-build", host)
@@ -398,6 +407,8 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertNotIn("model_service_included", metadata)
                     self.assertIn("lib/task_graph_cli.py", files.namelist())
                     self.assertIn(builder.PREFERENCE_PROJECTION, files.namelist())
+                    self.assertNotIn("product/VERSION", files.namelist())
+                    self.assertNotIn("product/VERSION", metadata["source_files"])
                     self.assertNotIn("templates/prototype/unlisted-tool.js", files.namelist())
                     self.assertFalse(any(name.startswith("native_config/") for name in files.namelist()))
 
@@ -558,17 +569,32 @@ class PluginDeliveryTest(unittest.TestCase):
     def test_detached_resource_entry_uses_packaged_authority_without_project_bridge(self):
         project = self.root / "resource-project"
         project.mkdir(exist_ok=True)
+        mobile = "platforms/shared/skills/xy-mobile-ui"
+        resources = (
+            "product/WORKFLOW.md",
+            "platforms/shared/skills/xy-workflow/references/skill-selection.md",
+            f"{mobile}/SKILL.md", f"{mobile}/references/mobile-rules.md",
+            f"{mobile}/references/apple.md", f"{mobile}/references/android.md",
+            f"{mobile}/references/wechat-miniprogram.md",
+            f"{mobile}/references/sources.md",
+        )
         for host, root in self.installed.items():
-            with self.subTest(host=host):
-                result = subprocess.run([sys.executable, "-B", str(root / "plugins/source_pack.py"),
-                                         "resource", ".agent-workflow/product/WORKFLOW.md"],
-                                        cwd=project, env=isolated_environment(self.root / "home"),
-                                        capture_output=True, text=True, timeout=15)
-                self.assertEqual(0, result.returncode, result.stderr)
-                resource = json.loads(result.stdout)
-                self.assertEqual(str(root / "product/WORKFLOW.md"), resource["path"])
-                self.assertFalse(resource["runtime_verified"])
-                self.assertEqual([], list(project.iterdir()))
+            for relative in resources:
+                with self.subTest(host=host, resource=relative):
+                    result = subprocess.run([sys.executable, "-B", str(root / "plugins/source_pack.py"),
+                                             "resource", relative],
+                                            cwd=project, env=isolated_environment(self.root / "home"),
+                                            capture_output=True, text=True, timeout=15)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    resource = json.loads(result.stdout)
+                    self.assertEqual(str(root / relative), resource["path"])
+                    original = (PACK / relative).read_bytes()
+                    self.assertEqual(hashlib.sha256(original).hexdigest(), resource["sha256"])
+                    self.assertFalse(resource["runtime_verified"])
+                    if "/references/" in relative:
+                        # 发现入口与规范资源共用同根引用；源路径可解析之外，发现路径也要保留原文。
+                        self.assertEqual(original, (root / relative.removeprefix("platforms/shared/")).read_bytes())
+                    self.assertEqual([], list(project.iterdir()))
 
     def test_detached_selected_skill_failures_reject_before_any_script(self):
         from lib.skills.selected_skills import VENDOR, skill_path
@@ -928,7 +954,8 @@ class PluginDeliveryTest(unittest.TestCase):
                         boot = json.loads(matches[0])
                         self.assertEqual({"schema_version", "context", "pages"}, set(boot))
                         self.assertEqual(5, boot["schema_version"])
-                        self.assertEqual(3, boot["context"]["schema_version"])
+                        # 外层实时引导仍为 v5。内部 v4 上下文必须标明来源，以便导入时复验正确的导航摘要。
+                        self.assertEqual((4, "live"), (boot["context"]["schema_version"], boot["context"]["source_kind"]))
                         self.assertEqual(ready["review_id"], boot["context"]["review_id"])
                         self.assertEqual([page], [entry["path"] for entry in boot["pages"]])
                         self.assertIn('sandbox="allow-scripts"', shell)
@@ -1050,7 +1077,8 @@ class PluginDeliveryTest(unittest.TestCase):
                 bundle = Path(ready["bundle_path"])
                 bundle_before = tree_snapshot(bundle)
                 self.assertTrue(bundle.is_relative_to(self.root / "review-data"))
-                self.assertEqual(3, ready["context"]["schema_version"])
+                # 离线清单保持 v4，并将来源纳入上下文身份；避免误用实时页面导航验签。
+                self.assertEqual((4, "offline"), (ready["context"]["schema_version"], ready["context"]["source_kind"]))
                 self.assertEqual(4, json.loads((bundle / "manifest.json").read_bytes())["schema_version"])
                 self.assertEqual((root / "product/PLUGIN_VERSION").read_text().strip(),
                                  ready["context"]["tool"]["version"])

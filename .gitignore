@@ -1,4 +1,3 @@
-.sync-backups/
 dist/
 __pycache__/
 *.py[cod]

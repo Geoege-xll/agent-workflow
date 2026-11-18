@@ -30,7 +30,7 @@ plan_state: draft
 - Identify controlled-document candidates, but leave the post-QA projection decision to the PM.
 - This draft Skill does not persist files. After requirements approval PM saves Full plans under
   adapter-resolved `docs.plans` before first dispatch, following
-  `.agent-workflow/platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
+  `platforms/shared/skills/xy-workflow/references/plan-lifecycle.md`.
 - Formal Full requirements review uses one Markdown source. PM owns the pre-approval scratch draft
   and post-approval `.md` persistence before dispatch. Requirements/plan Markdown-to-HTML generation is retired;
   existing plan HTML remains historical material; prototype HTML and verification remain active under
@@ -65,7 +65,7 @@ plan_state: draft
    Independently identify initial, incremental, replacement, or unnecessary design-standard updates;
    a PROJECT/feature no-op does not decide this question. Use the existing `input_contracts` and
    `output_contracts` for scope, approval basis, replaced/retained rules, ownership and adoption order.
-   Read `.agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant.
+   Read `platforms/shared/skills/xy-workflow/references/design-standards.md` when relevant.
    A necessary `xy-uiux + design_ui` standards task uses `design_mode: standards_only`, exact standard
    Markdown leaves, and no visual gate/prototype procedure. Waived production may depend on it;
    required production still needs a genuine prototype task. Schedule shared-rule adoption and PM

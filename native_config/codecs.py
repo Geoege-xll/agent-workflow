@@ -281,6 +281,34 @@ def parse(host: str, body: bytes) -> AgentDocument:
     return _toml(text) if host == "codex" else _yaml(host, text)
 
 
+def patch_prepared_fields(document, old, target):
+    """只替换根级受管字段的字符串值；用户额外字段、注释、表和换行保留原字节。"""
+    text = document.text
+    replacements = {}
+    changed = {key for key in ("description", "developer_instructions") if old[key] != target[key]}
+    # 已创建的定义使用单行 JSON 转义。复用 TOML 语句边界，防止多行用户
+    # 设置或子表中出现看似赋值的行时误改；无法精确定位则保留整个定义。
+    for start, end in _statements(text):
+        statement = text[start:end]
+        if statement.lstrip(" \t").startswith("["):
+            break
+        assignment = re.match(r"[ \t]*(description|developer_instructions)[ \t]*=[ \t]*", statement)
+        if assignment is None or assignment[1] not in changed:
+            continue
+        key = assignment[1]
+        encoded = json.dumps(old[key], ensure_ascii=False)
+        offset = assignment.end()
+        if not statement.startswith(encoded, offset):
+            return None
+        first = start + offset
+        replacements[key] = (first, first + len(encoded), json.dumps(target[key], ensure_ascii=False))
+    if replacements.keys() != changed:
+        return None
+    for start, end, value in sorted(replacements.values(), reverse=True):
+        text = text[:start] + value + text[end:]
+    return text.encode()
+
+
 def patch(host: str, body: bytes, edits: dict) -> bytes:
     """按原解析跨度从后往前替换；非目标字段、注释、正文和换行保持原字节。"""
     document = parse(host, body)

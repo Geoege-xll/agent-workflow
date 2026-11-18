@@ -1,4 +1,4 @@
-"""验证2.0轻量文案的实际交接、标准覆盖、Full门禁与三宿主分发。
+"""验证schema 2轻量文案的实际交接、标准覆盖、Full门禁与三宿主分发。
 
 CLI通过仅证明确定性合同与安装产物，不冒充模型已判断低风险、读取真实页面或执行
 原生实例隔离；这些语义继续由当前任务证据与唯一独立QA核对。
@@ -15,7 +15,6 @@ from pathlib import Path
 
 from lib.task_graph_cli import export_task_pack
 from tests import test_design_standards_lifecycle as lifecycle
-from tests.test_unified_host_workflow import UnifiedHostFixture
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -68,31 +67,7 @@ def light_copy_pack() -> dict:
     return pack
 
 
-class LightUICopyContractTest(UnifiedHostFixture, unittest.TestCase):
-    def test_all_hosts_install_current_shared_modes_without_old_direct_pm_route(self):
-        temporary, project, pack = self.install_all()
-        self.addCleanup(temporary.cleanup)
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
-        body = (project / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertNotIn("General Trivial early exit", body)
-        self.assertIn(".agent-workflow/product/WORKFLOW.md", body)
-        # 按字节核对实际分发的共用Skill和完整参考树；这证明没有宿主分叉或遗漏模式，
-        # 不以某一句提示文案代替运行时或模型行为验证。
-        for skill in ("xy-workflow", "xy-build-verify", "xy-qa-review", "xy-project-memory"):
-            source = pack / "platforms/shared/skills" / skill
-            expected = {str(path.relative_to(source)): path.read_bytes()
-                        for path in source.rglob("*") if path.is_file()}
-            for root in (".agents/skills", ".claude/skills"):
-                actual_root = project / root / skill
-                actual = {str(path.relative_to(actual_root)): path.read_bytes()
-                          for path in actual_root.rglob("*") if path.is_file()}
-                with self.subTest(skill=skill, root=root):
-                    # 安装器自己的隐藏管理记录不是Skill正文；所有源文件仍逐个完整比较。
-                    self.assertTrue(set(expected).issubset(actual))
-                    for relative, content in expected.items():
-                        self.assertEqual(content, actual[relative], relative)
-        checked = self.run_script(project, "setup_all.sh", "--check")
-        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+class LightUICopyContractTest(unittest.TestCase):
 
     def test_light_ui_uses_real_conformance_contract_without_full_graph_or_approval(self):
         pack = light_copy_pack()

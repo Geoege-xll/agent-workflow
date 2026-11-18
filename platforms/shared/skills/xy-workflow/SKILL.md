@@ -10,7 +10,7 @@ description: "Orchestrate current Light／Full implementation, UI changes and re
 Accept only Light／Full and `schema_version: 2`. Code changes retain applicable methods and standards
 from `xy-code-standards`; both levels default to native implementers. PM exceptions, independent context
 and instance closure follow
-`.agent-workflow/product/WORKFLOW.md#implementation-ownership` and `#agent-instance-lifecycle`.
+`product/WORKFLOW.md#implementation-ownership` and `#agent-instance-lifecycle`.
 
 ## Standalone read-only audit
 
@@ -52,18 +52,9 @@ No reusable rule change means no update. `xy-uiux + design_ui` supports `design_
 for exact normative Markdown leaves without prototype writes, `xy-prototype-verify`, or visual gates.
 Existing user confirmation stages are unchanged; adopted design rules do not imply migrated production.
 
-Use `.agent-workflow/product/WORKFLOW.md` as the canonical product procedure and
-`.agent-workflow/project.yaml` as the project adapter.
-
-In central mode, first verify machine-local enablement under WORKFLOW's “Centrally Pinned Versions and
-Project Adapters”. Host Skill symlinks aid discovery only; a clone without a machine binding cannot
-orchestrate automatically. New graphs/single packs pin a strict three-field `runtime_binding`. Running
-tasks do not switch versions, and missing pins, conflicts or corruption do not fall back. For each managed
-read/helper execution, use the linked shared bridge boundary with the current pack's pin. A changed project
-Skill version must not redirect reads/execution to a new version; do not assume shell environment survives
-from a previous tool call. Source-pack development retains its source entry points; version 2.1 has no
-old self-contained execution branch. The central adapter
-always belongs to the actual project's `.agent-workflow/project.yaml`.
+Read `product/WORKFLOW.md` from the verified plugin root and use the actual project's selected adapter.
+New plugin tasks use the unpinned source-pack contract. For legacy resource aliases and helper examples
+below, follow WORKFLOW's **Official Plugin Lifecycle and Project Adapters** section.
 
 Formal Full requirements review uses one Markdown source. PM keeps any pre-approval draft in the current
 request scratch, saves the approved plans `.md` before dispatch, and writes prototype coverage back to it.
@@ -79,7 +70,7 @@ Antigravity CLI: `/xy-project-memory`) and `xy-build-verify` (Codex:
 ## Main-session contract
 
 - Keep accepting natural-language requirements while existing workers run. Apply
-  `.agent-workflow/product/WORKFLOW.md#continuous-pm-intake` for independent requests, result reuse,
+  `product/WORKFLOW.md#continuous-pm-intake` for independent requests, result reuse,
   same-task append, splitting and resource waiting; do not require users to supply IDs or manage Agents.
   Before dispatch, PM checks explicit current records and actual native occupancy through
   [shared dispatch](references/dispatch.md#continuous-intake-dispatch). Original records own state;

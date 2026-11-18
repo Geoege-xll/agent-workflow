@@ -6,6 +6,7 @@ import hashlib
 import html
 import importlib.util
 import os
+import re
 from pathlib import Path, PurePosixPath
 import secrets
 import stat
@@ -183,7 +184,8 @@ def _private_launch_file(data_dir, authenticated_url):
     return str(path)
 
 
-def execute(action, data_dir, host="codex", project=None, *, home=None, preparation_source=None, no_browser=False):
+def execute(action, data_dir, host="codex", project=None, *, home=None, preparation_source=None,
+            no_browser=False, confirm=None):
     """返回安全回执及退出码：0 正常，1 服务/组件失败，2 参数错误，3 浏览器失败。"""
     component, diagnostics = _component(action)
     result = {"schema_version": 1, "action": action, "state": "error", "code": "invalid_component",
@@ -211,6 +213,25 @@ def execute(action, data_dir, host="codex", project=None, *, home=None, preparat
                 result["diagnostics"].append(_diagnostic(diagnostic["code"], diagnostic["message"], "warning"))
         if project is not None and not Path(project).is_dir():
             result["diagnostics"].append(_diagnostic("project_unavailable", "指定项目目录当前不可用。", "warning"))
+        if action == "rebind":
+            if host != "codex" or preparation_source is None or (confirm is not None and
+                    (not isinstance(confirm, str) or not re.fullmatch(r"[0-9a-f]{64}", confirm))):
+                raise ValueError("重绑需要 Codex 来源及有效预览摘要")
+            if not supported:
+                result.update(state="error", code="native_preparation_source_unavailable")
+                return result, 1
+            # 此命令只操作受管原生定义，无需启动控制台、浏览器或创建连接记录。
+            from .contracts import ConflictError
+            try:
+                summary = service.rebind_builtins(project, confirm)
+            except (OSError, ValueError) as exc:
+                conflict = isinstance(exc, ConflictError)
+                code = "native_rebind_conflict" if conflict else "native_rebind_failed"
+                result.update(state="error", code=code)
+                result["diagnostics"].append(_diagnostic(code, "重绑未完成，请核对实际定义并重新预览。"))
+                return result, 1
+            result.update(state=summary["status"], code="native_rebind_" + summary["status"], native_rebind=summary)
+            return result, 0
         if action == "doctor":
             # 只检查范围是否存在，不调用 discover/context/catalog 或宿主版本探测。
             root = service.host_roots[host]

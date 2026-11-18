@@ -12,7 +12,7 @@ from lib.task_graph_cli import _execute
 
 
 def v2_task(task: dict, *, level: str = "Full") -> dict:
-    """为既有行为夹具明确提供2.0身份；仅用于测试，不迁移生产旧记录。
+    """为既有行为夹具明确提供schema 2身份；仅用于测试，不迁移生产旧记录。
 
     Writer故意缺少role的反例必须保留；非Writer旧夹具则补其真实只读职责。
     """
@@ -62,7 +62,7 @@ def with_builtin_standards(payload: dict) -> dict:
             access = task.get("controlled_document_access")
             if isinstance(access, dict) and isinstance(access.get("documents"), list) and not any(
                     document["path"] == path for document in access["documents"]):
-                access["documents"].append({"path": path, "mode": "full", "reason": "读取当前2.0内置底线",
+                access["documents"].append({"path": path, "mode": "full", "reason": "读取当前schema 2内置底线",
                     "sections_or_queries": [], "content_fingerprint": fingerprint, "rule_ids": [rule],
                     "applies_to": list(task["owned_paths"])})
     return payload

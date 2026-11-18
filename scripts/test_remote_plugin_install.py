@@ -13,6 +13,7 @@ from pathlib import Path
 import platform
 import pwd
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -24,6 +25,11 @@ ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "Geoege-xll/agent-workflow"
 REMOTE = "https://github.com/" + REPOSITORY + ".git"
 sys.path.insert(0, str(ROOT))
+# 发布工具随源码仓交付，远程验收直接复用其只读身份合同与 Git 树读取器。
+sys.path.insert(0, str(ROOT / "packaging"))
+from build_candidates import validate_component_metadata
+from git_tree_reader import tree_blobs
+from publish_plugin_sources import expected_artifacts, native_binding, validate_published_component
 from product.command_identity import load_identity
 from product.release_channels import CHANNELS, validate_channel, version_channel
 IDENTITY = load_identity(ROOT)
@@ -107,12 +113,17 @@ def validate_distribution(record, host, expected_revision, expected_version, cha
             or record["channel"] != channel or record["ref"] != branch
             or record["source_revision"] != expected_revision or record["version"] != expected_version):
         raise ValueError("Git 分发记录与本次来源/版本/宿主不一致")
+    # 独立组件有自己的版本。先从唯一 Native ZIP 名称解析并核实渠道，再按
+    # 发布器的同一合同列出三个宿主各自的主包及 local-source，校验精确路径集合。
+    native_version, _ = native_binding(record)
+    expected = expected_artifacts({"workflow": expected_version, "native-config": native_version})
+    hashes = record["artifacts_sha256"]
     primary = "workflow/" + IDENTITY["artifact_prefix"] + "-" + host + "-" + expected_version + ".zip"
     if (not re.fullmatch(r"[0-9a-f]{64}", record["candidate_sha256"])
             or not re.fullmatch(r"[0-9a-f]{64}", record["source_tree_sha256"])
-            or len(record["artifacts_sha256"]) != 7
-            or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in record["artifacts_sha256"].values())
-            or record["plugin_zip_sha256"] != record["artifacts_sha256"][primary]):
+            or set(hashes) != set(expected)
+            or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes.values())
+            or record["plugin_zip_sha256"] != hashes.get(primary)):
         raise ValueError("Git 分发记录缺少七候选摘要或宿主主 ZIP 摘要绑定")
 
 
@@ -169,6 +180,37 @@ def verified_git_metadata(root, host, distribution_commit, channel="alpha"):
                    "branch": branch, "origin": origin}
 
 
+def verify_git_tree(reference, commit, record, host):
+    # 读取 Git 对象元数据并按对象 ID 取字节，和发布器保持同一普通文件合同。
+    # 外层记录不摘要自身，但与其它文件一样具有固定类型及模式。
+    expected = {**record["files"], "distribution.json": {"mode": "100644"}}
+    prefix = "" if host == "antigravity" else "plugins/" + PLUGIN + "/"
+    descriptor_name = prefix + "plugins/maintenance/component.json"
+    if descriptor_name not in record["files"]:
+        raise ValueError("远程 Git 分发缺少插件绑定的组件描述")
+    seen = set()
+    with tree_blobs(reference, commit) as entries:
+        for name, mode, body in entries:
+            if name not in expected or name in seen:
+                raise ValueError("远程 Git 文件闭包与分发记录不一致：" + host)
+            seen.add(name)
+            if expected[name]["mode"] != mode:
+                raise ValueError("远程 Git 文件模式与分发记录不一致：" + host + "/" + name)
+            if name == "distribution.json":
+                continue
+            if hashlib.sha256(body).hexdigest() != expected[name]["sha256"]:
+                raise ValueError("远程 Git 文件摘要与分发记录不一致：" + host + "/" + name)
+            if name == descriptor_name:
+                # 用实际 Git 中已校验的描述交叉核对独立版本。保留历史 alpha
+                # 尚未冻结的空摘要；一旦具有冻结摘要，就必须对应同一候选 ZIP。
+                native_version, native_hash = native_binding(record)
+                name = f"native-agent-config-{native_version}.zip"
+                binding = validate_component_metadata(body, name, native_version, native_hash)
+                validate_published_component(record["channel"], binding, body)
+    if seen != set(expected):
+        raise ValueError("远程 Git 文件闭包与分发记录不一致：" + host)
+
+
 def verify_installed(root, record, host, expected_revision, expected_version, *, distribution_commit=None, channel=None):
     """以分发提交的完整文件摘要核对真实安装缓存；不修补、重打包或写入缓存。"""
     channel = version_channel(expected_version) if channel is None else validate_channel(expected_version, channel)
@@ -178,19 +220,35 @@ def verify_installed(root, record, host, expected_revision, expected_version, *,
              if name.startswith(prefix) and name != "distribution.json"}
     if not files or "sources.json" not in files:
         raise ValueError("Git 分发记录缺少插件来源闭包")
-    actual = {path.relative_to(root).as_posix(): path for path in root.rglob("*") if path.is_file()}
-    # AGY 从整个分发根安装，可能保留额外的只读分发记录；不把它误计入原始插件 ZIP。
-    actual.pop("distribution.json", None)
-    # 诊断 run43189367154 已证明只有 AGY 保留 .git；先核管理身份，再精确分离该目录。
-    # 不删除/改写缓存，不忽略其他额外文件，原始插件载荷的所有字节和执行位继续严格核对。
-    metadata_files, metadata_evidence = verified_git_metadata(root, host, distribution_commit, channel)
-    actual = {name: path for name, path in actual.items() if name not in metadata_files}
+    # 先核实 AGY 保留的 Git 目录，随后才允许从插件载荷中分离其完整子树。
+    _, metadata_evidence = verified_git_metadata(root, host, distribution_commit, channel)
+    directories = {parent for name in files for parent in Path(name).parents}
+    actual = {}
+    for path in root.rglob("*"):
+        relative = path.relative_to(root)
+        if metadata_evidence is not None and relative.parts[0] == ".git":
+            continue
+        name = relative.as_posix()
+        mode = path.lstat().st_mode
+        if stat.S_ISDIR(mode) and relative in directories:
+            continue
+        # AGY 从整个分发根安装，允许保留与该提交一致的普通分发记录。
+        # 其它宿主的同名文件，以及多出的目录、链接、特殊节点，都参与差异检查。
+        if host == "antigravity" and name == "distribution.json":
+            if not stat.S_ISREG(mode) or mode & 0o111 or json.loads(path.read_bytes()) != record:
+                raise ValueError("AGY 缓存的分发记录与本次提交不一致")
+            continue
+        actual[name] = path
     if set(actual) != set(files):
         raise FileClosureMismatch(host, set(files) - set(actual), set(actual) - set(files))
     for name, item in files.items():
         path = actual[name]
-        if (path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]
-                or bool(path.stat().st_mode & 0o111) != (item["mode"] == "100755")):
+        mode = path.lstat().st_mode
+        # 可执行资源允许安装时的 umask 收紧组和其他用户权限；普通资源则不应
+        # 拥有任何执行位，不能把仅组可执行的文件误判为普通的 100644 载荷。
+        mode_matches = (item["mode"] == "100755" and bool(mode & stat.S_IXUSR)
+                        or item["mode"] == "100644" and not mode & 0o111)
+        if not stat.S_ISREG(mode) or not mode_matches or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
             raise ValueError("官方安装缓存字节与分发记录不一致：" + host + "/" + name)
     sources = json.loads((root / "sources.json").read_text())
     if sources["host"] != host or sources["plugin_version"] != expected_version:
@@ -213,14 +271,17 @@ def smoke(vendor, output, channel="stable"):
     validate_channel(version, channel)
     marketplace = IDENTITY["marketplaces"][channel]
     revision = os.environ["GITHUB_SHA"]
-    clients = {"codex": vendor / "node_modules/.bin/codex", "claude": vendor / "node_modules/.bin/claude",
-               "antigravity": install_agy(vendor)}
     evidence = {"status": "INSTALL_DISCOVERY_BYTES_VERIFIED", "verification_revision": revision,
                 "version": version, "channel": channel, "runtime_verified": False, "model_sessions_started": 0, "hosts": {}}
     published_revision = None
     candidate_binding = None
     with tempfile.TemporaryDirectory(prefix="awf-official-install-", dir=runner_temp) as temporary, evidence_receipt(output, evidence):
         work = Path(temporary)
+        # 下载、固定摘要校验和解包都可能失败。先进入回执保护范围，使 CI 的
+        # 汇总及上传步骤在准备失败时也能取得具体的宿主和阶段。
+        evidence["progress"] = {"host": "antigravity", "stage": "client_preparation"}
+        clients = {"codex": vendor / "node_modules/.bin/codex", "claude": vendor / "node_modules/.bin/claude",
+                   "antigravity": install_agy(vendor)}
         for host, client in clients.items():
             evidence["progress"] = {"host": host, "stage": "client_preflight"}
             cli_version = command([client, "--version"], work)
@@ -256,14 +317,7 @@ def smoke(vendor, output, channel="stable"):
                 candidate_binding = binding
             if binding != candidate_binding:
                 raise ValueError("三个宿主并非来自同一个七附件候选")
-            # 比较分发记录与已 fetch 的提交本身，记录不能只约束客户端复制后的缓存。
-            names = command(["git", "ls-tree", "-r", "--name-only", "-z", commit], reference).split("\0")
-            if set(filter(None, names)) != set(record["files"]) | {"distribution.json"}:
-                raise ValueError("远程 Git 文件闭包与分发记录不一致：" + host)
-            for name, item in record["files"].items():
-                body = command(["git", "show", commit + ":" + name], reference, raw=True)
-                if hashlib.sha256(body).hexdigest() != item["sha256"]:
-                    raise ValueError("远程 Git 文件摘要与分发记录不一致：" + host)
+            verify_git_tree(reference, commit, record, host)
             evidence["progress"]["stage"] = "official_git_installation"
             if host in {"codex", "claude"}:
                 source = REMOTE if host == "codex" else REMOTE + "#plugins-claude-" + channel

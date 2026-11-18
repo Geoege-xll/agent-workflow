@@ -12,20 +12,14 @@ if not __package__:
 
 import json
 import re
-if __package__:
-    from lib.platform_fs import os
-else:
-    from lib.platform_fs import os
+from lib.platform_fs import os
 import stat
 import sys
 from pathlib import Path
 from typing import Iterable
 
 # 直接脚本由上方可信 __file__ 引导到核心根，包模式则沿用调用方已选定的固定核心。
-if __package__:
-    from lib.skills.skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract, expand_skill_contract, verification_scope_errors
-else:
-    from lib.skills.skill_contracts import BOOTSTRAP_TARGETS, expand_bootstrap_contract, expand_skill_contract, verification_scope_errors
+from lib.skills.skill_contracts import expand_skill_contract, verification_scope_errors
 
 
 DEFAULT_POLICY = """business_confirmation_policy:
@@ -40,7 +34,7 @@ COMMON_SOURCES = (
     "product/WORKFLOW.md",
     "product/AGENT_SCHEMA.md",
     "product/GLOBAL_CONSTRAINTS.md",
-    "platforms/shared/AGENTS.product.tpl",
+    "plugins/main-session-context.md",
     "platforms/shared/skills/xy-workflow/SKILL.md",
     "platforms/shared/skills/xy-prototype-verify/SKILL.md",
     "platforms/shared/skills/xy-build-verify/SKILL.md",
@@ -48,17 +42,18 @@ COMMON_SOURCES = (
     "product/ROLES.yaml",
 )
 
-HOST_SOURCES = {
-    "codex": ("platforms/codex/AGENTS.codex.tpl", "platforms/codex/WORKER_CONSTRAINTS.md"),
-    "claude": ("platforms/claude/AGENTS.claude.tpl",),
-    "antigravity": ("platforms/antigravity/AGENTS.antigravity.tpl",),
-    "all": (
-        "platforms/codex/AGENTS.codex.tpl",
-        "platforms/codex/WORKER_CONSTRAINTS.md",
-        "platforms/claude/AGENTS.claude.tpl",
-        "platforms/antigravity/AGENTS.antigravity.tpl",
-    ),
+# 三端均从主会话进入业务适配，再按宿主选取 PM 细则。直接核验这些随包发布的
+# 文件，确保变更到达真实调用链；不为检查器额外制造一份“安装后”指令模板。
+HOST_INTEGRATIONS = {
+    host: f"platforms/{host}/references/pm-integration.md"
+    for host in ("codex", "claude", "antigravity")
 }
+HOST_SOURCES = {
+    "codex": ("plugins/plugin-context.md", HOST_INTEGRATIONS["codex"], "platforms/codex/WORKER_CONSTRAINTS.md"),
+    "claude": ("plugins/plugin-context.md", HOST_INTEGRATIONS["claude"]),
+    "antigravity": ("plugins/antigravity/plugin-context.md", HOST_INTEGRATIONS["antigravity"]),
+}
+HOST_SOURCES["all"] = tuple(dict.fromkeys(path for paths in HOST_SOURCES.values() for path in paths))
 
 REQUIRED_ANCHORS = (
     "requirements_approved",
@@ -507,20 +502,13 @@ def read_instruction_contract(root: Path, relative: str) -> str:
     """读取入口及其显式分支用于语义校验，引用仍经过同样的安全文件读取。
 
     不展开普通辅助链接，不修改 Skill 文件。将入口缩短不能让审批/QA 规则逃过
-    安装前检查；分支缺失、非法引用和非普通文件都会使调用方拒绝本次安装。
+    构建检查；分支缺失、非法引用或非普通文件都会使插件构建失败。
     """
     body = _secure_read_pack_text(root, relative)
     # Codex 的强制注入源不能为空；预检和渲染共用此入口，避免“文件存在但角色
-    # 边界为空”仍安装成功。只约束 Codex 专属文件，不给另外两个宿主增加依赖。
+    # 边界为空”仍被打包。只约束 Codex 专属文件，不给另外两个宿主增加依赖。
     if relative == "platforms/codex/WORKER_CONSTRAINTS.md" and not body.strip():
         raise ValueError("Codex WORKER_CONSTRAINTS.md must not be empty")
-    if relative in BOOTSTRAP_TARGETS:
-        # 入口模板是路由而非完整正文。机器展开契约继续检查审批/QA 语义，
-        # Agent 端不作导入；共享 Skill 的分支仍由原来的安全展开器处理。
-        return expand_bootstrap_contract(
-            body, lambda reference: read_instruction_contract(root, reference),
-            BOOTSTRAP_TARGETS[relative],
-        )
     if Path(relative).name != "SKILL.md":
         return body
     return expand_skill_contract(
@@ -553,35 +541,45 @@ def validate_business_confirmation_texts(
     return errors
 
 
-def validate_v2_execution_texts(sources: Iterable[tuple[Path, str]]) -> list[str]:
-    """三宿主共用当前执行合同检查，不为旧等级或旧交接保留运行分支。
-
-    规范与宿主入口都可能独立残留旧路由，因此每个实际来源分别拒绝旧等级；身份字段
-    则在两份权威合同检查，避免要求所有薄入口复制整段正文。磁盘所有权识别不在此处，
-    安装器仍可凭历史签名安全替换资源，但这种证明不能让旧内容通过当前源检查。
-    """
+def validate_execution_texts(sources: Iterable[tuple[Path, str]]) -> list[str]:
+    """核对当前插件的执行等级、schema 2 任务包和各宿主独立调度边界。"""
     errors: list[str] = []
     required = (
         "Light", "Full", "schema_version: 2", "workflow_level", "module", "role",
         "agent_alias", "instance_policy: fresh", "context_policy: handoff_only", "agent_retired",
     )
     host_required = {
-        "AGENTS.codex.tpl": ('fork_turns: "none"', "agent_retired", "interrupt_agent"),
-        "AGENTS.claude.tpl": ("Agent(xy-*)", "SendMessage", "TaskStop", "agent_retired"),
-        "AGENTS.antigravity.tpl": ("invoke_subagent", "worktree", "agent_retired"),
+        "codex": ('fork_turns: "none"', "agent_retired", "interrupt_agent", "nested delegation disabled"),
+        "claude": ("plugin-qualified `subagent_type`", "xy-workflow:xy-backend", "SendMessage", "TaskStop", "agent_retired", "never delegate"),
+        "antigravity": ("invoke_subagent", "worktree", "agent_retired", "role Agents never delegate"),
     }
     for path, body in sources:
         # 等级名大小写固定为 Trivial；普通英文形容词 trivial 不是一条执行路由。
         if re.search(r"\bTrivial\b", body):
-            errors.append(f"2.0 execution contract contains retired Trivial routing: {path}")
+            errors.append(f"plugin execution contract contains retired Trivial routing: {path}")
         normalized = " ".join(body.split())
         anchors = required if path.name in {"WORKFLOW.md", "AGENT_SCHEMA.md"} else ()
-        if path.name in host_required:
+        # 三端细则文件同名，使用其固定的宿主父目录区分调度工具与禁嵌套约束。
+        if path.name == "pm-integration.md":
+            host = path.parent.parent.name
+            if host not in host_required:
+                errors.append(f"unsupported host integration source: {path}")
+                continue
             anchors = ("schema_version: 2", "instance_policy: fresh", "context_policy: handoff_only",
-                       *host_required[path.name])
+                       *host_required[host])
+        elif path.name == "main-session-context.md":
+            # 原生 Hook、Claude PM 和 AGY 规则都投影此入口；缺少任一分支即无法到达后续权威。
+            anchors = ("@INVOCATION@ [@MAINTENANCE_ACTIONS@]", "skills/xy-config/SKILL.md", "`@BUSINESS_ADAPTER@`",
+                       "skills/xy-workflow/SKILL.md", "product/WORKFLOW.md")
+        elif path.name == "plugin-context.md":
+            # 只承认同包指定细则。共享 adapter 在运行时按宿主替换路径里的 <host>。
+            integration = (HOST_INTEGRATIONS["antigravity"] if path.parent.name == "antigravity"
+                           else "platforms/<host>/references/pm-integration.md")
+            anchors = (integration, "product/WORKFLOW.md", "instance_policy: fresh",
+                       "context_policy: handoff_only")
         for anchor in anchors:
             if anchor not in normalized:
-                errors.append(f"2.0 execution contract missing {anchor!r}: {path}")
+                errors.append(f"plugin execution contract missing {anchor!r}: {path}")
     return errors
 
 
@@ -613,7 +611,7 @@ def validate_business_confirmation_pack(pack: Path, host: str) -> list[str]:
             )
 
     errors.extend(validate_business_confirmation_texts(sources))
-    errors.extend(validate_v2_execution_texts(sources))
+    errors.extend(validate_execution_texts(sources))
     # 三个宿主都调用这个只读源检查，因此验证范围策略只维护一套，且缺失/反向
     # 规则在实际项目写入之前拒绝，不依赖安装后的模型自行发现冲突。
     verification = next((body for path, body in sources

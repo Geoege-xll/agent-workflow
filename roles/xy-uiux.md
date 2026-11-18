@@ -57,8 +57,13 @@ mode. `standards_only` follows the restricted maintenance branch in the intake/e
 
 ### Specialist Methods and Canvas Entry Points
 
-- Activate [$xy-ui-design](.agent-workflow/platforms/shared/skills/xy-ui-design/SKILL.md) for design analysis and standards maintenance, reading design-quality or prototype-canvas references for the current phase; applicable project standards govern specialist methods, without inferring user aesthetic preferences.
+- Activate [$xy-ui-design](../platforms/shared/skills/xy-ui-design/SKILL.md) for design analysis and standards maintenance, reading design-quality or prototype-canvas references for the current phase; applicable project standards govern specialist methods, without inferring user aesthetic preferences.
 - Prototype mode follows that Skill's `references/prototype-canvas.md` to maintain high-fidelity, stable, build-free interactive pages; `standards_only` and direct production development do not create prototypes through this entry. These entry points do not relax this role's permanent boundaries.
+- Follow the shared Skill-selection policy for `xy-mobile-ui` when the current Task Pack targets
+  affected native iOS, iPadOS or Android UI or a WeChat Mini Program, including when the
+  deliverable is HTML. Use relevant design guidance in the existing five-section in-page
+  contract or in authorized design leaves in `standards_only` mode. Keep the existing design
+  ownership and approval branches.
 
 收到节点反馈修订时，按需读取 `xy-ui-design/references/prototype-feedback.md`，只消费已由同一项目 adapter 复核为 `current` 的精简 `changes`、必要 `anchors`、短 `review` 引用及当前完整任务包；PM 不重复转发原反馈全文或完整校验 context。短引用依赖本机真实不可变快照，缺包或来源变化先返回 PM，不自行扫描、覆盖或重绑。反馈及 `after_text` 是修订输入，不成为批准或自动 patch。仍在当前 `owned_paths` 内原位修改稳定 HTML，保持需求 Markdown 唯一权威，并返回 `$xy-prototype-verify` 的原静态证据。需求变化与适用视觉批准仍归 PM 沿既有规则处理。
 
@@ -77,7 +82,7 @@ Preserve existing work; resume prototype edits only on a current, explicitly aut
 
 The PM selects `design_mode: prototype | standards_only` (default `prototype`). For standard
 establishment, extension, or visual replacement, read
-`.agent-workflow/platforms/shared/skills/xy-workflow/references/design-standards.md`.
+`platforms/shared/skills/xy-workflow/references/design-standards.md`.
 `standards_only` requires exact design-standard Markdown leaves, adopted requirement/design evidence,
 and a scoped rule delta instead of target pages or a UI tier. It must not write prototype files,
 references, production code, or the STANDARDS index; PM maintains directory links. Do not invoke
@@ -91,11 +96,9 @@ Canonical standard leaves are not prohibited companion design documents.
 2. Activate `$xy-ui-design` and reuse its design-analysis methods; establish the smallest stable page, shared-style, or standards-leaf boundary.
    For `standards_only`, maintain only the authorized normative text, preserve unaffected rules and
    stable IDs, and return the rule delta, approval basis, scope, and document-validation evidence.
-   Run `bash .agent-workflow/lib/python_runtime.sh .agent-workflow/lib/validate_project_docs.py <selected-project-adapter> .`.
+   Run `bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/validate_project_docs.py <selected-project-adapter> .`.
    Use the adapter already selected in this task's controlled_document_access; never choose by path precedence.
-   In an official plugin, run the same helper through
-   `bash <physical-plugin-root>/lib/python_runtime.sh <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/validate_project_docs.py <selected-project-adapter> <physical-project-root>`;
-   skip the remaining prototype steps. Missing prototype files or browser evidence is not a failure.
+   After validating the standards, skip the remaining prototype steps. This mode requires neither prototype files nor browser evidence.
 3. Reuse compatible current patterns; do not redesign unrelated pages.
 4. Update the stable page, executable interactions, navigation, states, accessibility, and in-page contract together.
 5. Reuse `prototype.css`; add only the smallest shared rule justified by multiple pages.

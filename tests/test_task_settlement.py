@@ -519,7 +519,7 @@ class SettlementWorktreeConsumerTest(unittest.TestCase):
         """复用已有真实Git/验证QA夹具，只增加本变更缺失的结果依赖消费者场景。"""
         from tests.test_worktree_delivery import GitDeliveryTest
         from tests.test_scheduler_boundaries import v2_task
-        from lib.delivery.worktree_cli import merge_check
+        from lib.delivery.worktree_cli import DeliveryError, merge_check
         fixture = GitDeliveryTest()
         try:
             # 子Python也明确禁止pyc；既有真实Git夹具不得被验证本身制造脏文件。
@@ -530,6 +530,13 @@ class SettlementWorktreeConsumerTest(unittest.TestCase):
                                   "gates": [], "owned_paths": [], "semantic_locks": []})
             fixture.tasks[0]["depends_on"] = ["result"]
             fixture.tasks.append(dependency)
+            # 即使候选 Git 内容未变，新增前置依赖也改变 Writer 合同，必须由原
+            # Reviewer 对当前合同重新生成任务包和回执，才允许隔离交付。
+            with self.assertRaisesRegex(DeliveryError, "requires current accept_request evidence"):
+                merge_check(fixture.repo, fixture.config, fixture.payload)
+            original_reviewer = copy.deepcopy(fixture.qa_task["agent_ref"])
+            fixture.refresh_candidate()
+            self.assertEqual(original_reviewer, fixture.qa_task["agent_ref"])
             self.assertEqual("merge_ready", merge_check(fixture.repo, fixture.config, fixture.payload)["status"])
         finally:
             fixture.doCleanups()

@@ -34,12 +34,13 @@ def draft_lock(directory_fd):
     finally: os.close(fd)
 
 
-def capture_live(root, adapter, plan, request_id, pages=None, *, tool=None):
-    """复用原始安全闭包与context3语义；仅工具摘要域与持久化种类区分live。"""
+def capture_live(root, adapter, plan, request_id, pages=None, *, tool=None, context_version=4, registered_context=None):
+    """新登记绑定活动来源与当前需求语义；重读按该修订保存的上下文版本捕获。"""
     if tool is None: tool, _ = review.capture_tool(format_version=5)
     # live目录只来自显式登记页；不可沿用历史离线包对可选index壳的身份绑定。
     return review.capture_review(root, adapter, plan, request_id, pages, tool=tool, format_version=4,
-                                 navigation_source="registered_pages")
+                                 navigation_source="registered_pages", context_version=context_version,
+                                 registered_context=registered_context)
 
 
 @contextmanager
@@ -73,7 +74,7 @@ def read_json(fd, name, limit):
 
 def register_live(root, context, *, data_dir=None):
     review.require_external_data_dir(root, data_dir)
-    check_context(context, schema_version=3)
+    check_context(context, compact_source="live")
     value = {"schema_version": 5, "kind": "live", "context": context}
     with live_directory(context, data_dir, create=True) as (_, fd), review._lock(fd):
         try:
@@ -93,7 +94,7 @@ def resolve_live(root, reference, *, data_dir=None):
     _object(value, {"schema_version", "kind", "context"}, "活动原稿元数据")
     if type(value["schema_version"]) is not int or value["schema_version"] != 5 or value["kind"] != "live":
         raise FeedbackError("短引用不是活动原稿5")
-    context = check_context(value["context"], schema_version=3)
+    context = check_context(value["context"], compact_source="live")
     if any(context[key] != identity[key] for key in identity): raise FeedbackError("活动原稿不属于当前项目或修订")
     return context
 
@@ -102,7 +103,8 @@ def require_current(root, context):
     """来源身份固定在登记时；重读失败也按来源变化处理，旧草稿仍允许读取。"""
     try:
         current, metadata, files, navigation = capture_live(root, context["adapter"], context["plan_source"],
-            context["request_id"], [page["path"] for page in context["pages"]], tool=context["tool"])
+            context["request_id"], [page["path"] for page in context["pages"]], tool=context["tool"],
+            context_version=context["schema_version"], registered_context=context)
         if current != context: raise FeedbackError("来源修订已改变")
         return metadata, files, navigation
     except (ValueError, OSError, UnicodeError) as exc:

@@ -43,7 +43,7 @@ def _read_connection(fd, identity=None):
         raise ValueError("私有连接进程或端口无效")
     for field in ("instance", "token", "management"):
         if not isinstance(value[field], str) or not re.fullmatch(r"[a-f0-9]{48,128}", value[field]): raise ValueError("私有连接身份无效")
-    review.check_context(value["context"], schema_version=3)
+    review.check_context(value["context"], compact_source="live")
     if identity and any(value["context"][key] != identity[key] for key in ("project_id", "request_id")):
         raise ValueError("私有连接不属于当前项目请求")
     return value

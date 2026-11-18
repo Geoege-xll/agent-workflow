@@ -25,6 +25,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install fixed official clients as isolated CI test dependencies
+        id: clients
         shell: bash
         run: |
           set -euo pipefail
@@ -36,15 +37,34 @@ jobs:
           npm ci --prefix "$RUNNER_TEMP/awf-native-vendor" --registry https://registry.npmjs.org \
             --cache "$RUNNER_TEMP/awf-native-npm-cache" --no-audit --no-fund
       - name: Install from official Git URLs and verify discovery and exact published bytes
+        id: smoke
         run: >-
           python3 -B -X utf8 scripts/test_remote_plugin_install.py
           --vendor-dir "${{ runner.temp }}/awf-native-vendor"
           --output "${{ runner.temp }}/native-install-smoke.json"
       - name: Summarize installation evidence
         if: always()
-        run: cat "$RUNNER_TEMP/native-install-smoke.json" >> "$GITHUB_STEP_SUMMARY"
+        id: summary
+        env:
+          CLIENT_OUTCOME: ${{ steps.clients.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          set -euo pipefail
+          # 客户端准备失败时验收脚本尚未运行；保留原失败原因并免去无文件上传。
+          # 已通过准备的运行应产生回执。若缺少回执则显式失败，不让汇总掩盖证据缺口。
+          if [[ -s "$RUNNER_TEMP/native-install-smoke.json" ]]; then
+            cat "$RUNNER_TEMP/native-install-smoke.json" >> "$GITHUB_STEP_SUMMARY"
+            echo 'has_receipt=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'has_receipt=false' >> "$GITHUB_OUTPUT"
+            if [[ "$CLIENT_OUTCOME" == success ]]; then
+              echo "客户端准备成功，安装验收步骤状态为 ${SMOKE_OUTCOME}，缺少安装回执。" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            echo "客户端准备步骤状态为 ${CLIENT_OUTCOME}，安装验收步骤状态为 ${SMOKE_OUTCOME}。" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Upload the installation-only evidence
-        if: always()
+        if: always() && steps.summary.outputs.has_receipt == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-install-smoke-${{ github.sha }}

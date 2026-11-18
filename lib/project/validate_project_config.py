@@ -24,8 +24,6 @@ from pathlib import PurePosixPath
 sys.dont_write_bytecode = True
 
 try:
-    from lib.skills.role_skills import CORE_SKILLS as ANTIGRAVITY_CORE_SKILLS
-    from lib.hosts.workflow_hook_settings import hook_mode
     from lib.worktree_policy import WorktreePolicyError, settings as worktree_settings
     from lib.project.project_discovery import (
         DiscoveryError,
@@ -35,8 +33,6 @@ try:
         discover_project,
     )
 except ImportError:
-    from lib.skills.role_skills import CORE_SKILLS as ANTIGRAVITY_CORE_SKILLS
-    from lib.hosts.workflow_hook_settings import hook_mode
     from lib.worktree_policy import WorktreePolicyError, settings as worktree_settings
     from lib.project.project_discovery import (  # type: ignore[no-redef]
         DiscoveryError,
@@ -72,23 +68,6 @@ DOC_DIR_KEYS = CANONICAL_DOC_DIR_KEYS
 DOC_KEYS = DOC_FILE_KEYS | DOC_DIR_KEYS
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$")
 DOC_PATH_RE = re.compile(r"^docs/[A-Za-z0-9_./-]+$")
-MANAGED_OUTPUT_PATHS = {
-    Path("AGENTS.md"),
-    Path(".codex/config.toml"),
-    Path(".codex/agents"),
-    Path(".agents/skills"),
-}
-MANAGED_OUTPUT_DIRECTORIES = {
-    Path("docs"),
-    Path(".codex"),
-    Path(".codex/agents"),
-    Path(".agents"),
-    Path(".agents/skills"),
-}
-MANAGED_OUTPUT_FILES = {
-    Path("AGENTS.md"),
-    Path(".codex/config.toml"),
-}
 RETIRED_WORKSPACE_KEYS = frozenset(
     {"sandboxes", "enabled_roles", "commands", "role_reads"}
 )
@@ -270,6 +249,15 @@ def validate_docs(lines: list[str], root: Path, errors: list[str]) -> dict[str, 
     return docs
 
 
+def validate_explicit_docs(text: str, root: Path, errors: list[str]) -> dict[str, str]:
+    """校验调用者已经安全读取的显式适配器，避免不同入口各自选择 docs 块。"""
+    lines = text.splitlines()
+    if sum(bool(re.fullmatch(r"docs:\s*(?:#.*)?", line)) for line in lines) != 1:
+        raise ValueError("适配器必须包含唯一 docs 配置")
+    # 文件来源、快照及异常呈现仍由入口管理；配置字段和路径继续使用共同的原校验器。
+    return validate_docs(lines, root, errors)
+
+
 def _top_level_entries(lines: list[str]) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
     pattern = re.compile(
@@ -427,7 +415,7 @@ def validate_with_profile(
 ) -> ValidationResult:
     """校验真实适配器或调用方已捕获的实际正文，所有后续语义检查完全共用。
 
-    config_bytes 仅解决中央无写入预览中新生成配置尚未落盘的边界；不改变默认
+    config_bytes 用于在插件引导预览中验证尚未落盘的候选配置；不改变默认
     文件读取方式，也不豁免项目输出路径的符号/硬链接、退役旧键等原检查。
     显式字节输入必须有界且为 UTF-8，调用方负责其文件前像/事务条件。
     """
@@ -438,15 +426,6 @@ def validate_with_profile(
         if not isinstance(config_bytes, bytes) or len(config_bytes) > 1024 * 1024:
             raise ValueError("config_bytes 必须是不超过 1 MiB 的原始配置字节")
         text = config_bytes.decode("utf-8", errors="strict")
-    elif os.name == "nt":
-        if __package__:
-            from lib.windows_fs import read_file
-        else:
-            from lib.windows_fs import read_file
-        body = read_file(yaml_path)
-        if body is None:
-            raise FileNotFoundError(yaml_path)
-        text = body.decode("utf-8")
     else:
         text = yaml_path.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -456,32 +435,9 @@ def validate_with_profile(
     profile: ProjectProfile | None = None
     # 共享配置只决定调度/交付策略，不在安装时创建 Git 分支或改写宿主全局设置。
     try:
-        hook_mode(text)
-    except ValueError as exc:
-        errors.append(str(exc))
-    try:
         worktree_settings(lines)
     except WorktreePolicyError as exc:
         errors.append(str(exc))
-    # 模型偏好独立于编排参数；安装预检与管理器必须使用同一份字段合同。
-    try:
-        if __package__:
-            from lib.role_models import parse as parse_role_models
-        else:
-            from lib.role_models import parse as parse_role_models
-        parse_role_models(text)
-    except ValueError as exc:
-        errors.append(str(exc))
-    # 可选宿主能力和模型字段各自有界；三宿主预检使用同一合同，拒绝静默忽略错配。
-    try:
-        if __package__:
-            from lib.hosts.claude_options import parse as parse_claude_options
-        else:
-            from lib.hosts.claude_options import parse as parse_claude_options
-        parse_claude_options(text)
-    except ValueError as exc:
-        errors.append(str(exc))
-
     top_level_keys: dict[str, int] = {}
     for key, _ in _top_level_entries(lines):
         top_level_keys[key] = top_level_keys.get(key, 0) + 1
@@ -570,25 +526,10 @@ def validate_with_profile(
     if writers is not None and threads is not None and writers > threads:
         errors.append("max_parallel_writers cannot exceed max_concurrent_subagents")
 
-    managed_directories = set(MANAGED_OUTPUT_DIRECTORIES)
-    managed_files = set(MANAGED_OUTPUT_FILES)
-    managed_directories.update(
-        Path(value) for key, value in docs.items() if key in DOC_DIR_KEYS
-    )
-    managed_files.update(
-        Path(value) for key, value in docs.items() if key in DOC_FILE_KEYS
-    )
-    managed_files.update(
-        Path(".codex/agents") / f"{role_file.stem}.toml"
-        for role_file in roles_dir.glob("xy-*.md")
-    )
-    managed_files.update(
-        Path(".agents/agents") / f"{role}.md" for role in enabled_roles
-    )
-    managed_directories.add(Path(".agents/agents"))
-    for skill in ANTIGRAVITY_CORE_SKILLS:
-        managed_directories.add(Path(".agents/skills") / skill)
-        managed_files.add(Path(".agents/skills") / skill / "SKILL.md")
+    # 插件只消费实际适配器声明的项目文档。宿主原生配置不属于项目写入目标，
+    # 工作目录中已有的独立宿主配置不能参与本次文档路径授权或阻断项目画像。
+    managed_directories = {Path(value) for key, value in docs.items() if key in DOC_DIR_KEYS}
+    managed_files = {Path(value) for key, value in docs.items() if key in DOC_FILE_KEYS}
     managed_paths = managed_directories | managed_files
     for relative in sorted(managed_paths):
         target = root / relative

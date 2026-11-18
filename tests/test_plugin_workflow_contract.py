@@ -165,7 +165,7 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(expected).hexdigest(), resource["sha256"])
                 loaded = subprocess.run(
                     [*base, "helper", "--project", str(project), "lib/documents/context_read.py",
-                     ".agent-workflow/" + relative, "--root", str(project), "--limit", "24000"],
+                     relative, "--root", str(project), "--limit", "24000"],
                     cwd=project, env=isolated_environment(self.root / "home"),
                     capture_output=True, text=True, timeout=15)
                 self.assertEqual(0, loaded.returncode, loaded.stdout + loaded.stderr)
@@ -456,7 +456,7 @@ class PluginWorkflowContractTest(unittest.TestCase):
             with self.subTest(host=host):
                 base = [sys.executable, "-B", str(root / "plugins/source_pack.py"),
                         "helper", "--project", str(project), "lib/documents/context_read.py"]
-                result = subprocess.run([*base, ".agent-workflow/product/WORKFLOW.md", "--root", str(project)],
+                result = subprocess.run([*base, "product/WORKFLOW.md", "--root", str(project)],
                                         cwd=project, env=isolated_environment(self.root / "home"),
                                         capture_output=True, text=True, timeout=15)
                 self.assertEqual(0, result.returncode, result.stderr)
@@ -473,6 +473,54 @@ class PluginWorkflowContractTest(unittest.TestCase):
                                                  cwd=project, env=isolated_environment(self.root / "home"),
                                                  capture_output=True, text=True, timeout=15)
                 self.assertEqual(2, wrong_resource.returncode)
+
+    def test_ui_skills_resolve_and_page_their_canonical_references(self):
+        project = self.root / "ui-reference-project"
+        project.mkdir()
+        env = isolated_environment(self.root / "home")
+        references = (
+            ("xy-ui-design", "xy-ui-design/references/design-quality.md"),
+            ("xy-mobile-ui", "xy-mobile-ui/references/mobile-rules.md"),
+            ("xy-qa-review", "xy-qa-review/references/inputs.md"),
+            ("xy-prototype-verify", "xy-ui-design/references/prototype-feedback.md"),
+        )
+        for skill, reference in references:
+            relative = f"platforms/shared/skills/{reference}"
+            original = (PACK / relative).read_bytes()
+            # 三端从真实项目 cwd 调用白名单工具。保留同名项目文件作为反例，防止
+            # 只测试相对链接或投影副本，放过实际分页错误读取项目内容的回归。
+            decoy = project / relative
+            decoy.parent.mkdir(parents=True, exist_ok=True)
+            decoy.write_text("project-owned decoy", encoding="utf-8")
+            for host, root in self.installed.items():
+                with self.subTest(host=host, skill=skill):
+                    skill_body = (root / f"skills/{skill}/SKILL.md").read_text(encoding="utf-8")
+                    self.assertIn(f"`{relative}`", skill_body)
+                    self.assertEqual(original, (root / "skills" / reference).read_bytes())
+                    base = [sys.executable, "-B", str(root / "plugins/source_pack.py")]
+                    located = subprocess.run([*base, "resource", relative], cwd=project,
+                                             env=env, capture_output=True, text=True, timeout=15)
+                    self.assertEqual(0, located.returncode, located.stderr)
+                    resource = json.loads(located.stdout)
+                    self.assertEqual(root / relative, Path(resource["path"]))
+                    self.assertEqual(hashlib.sha256(original).hexdigest(), resource["sha256"])
+                    pager = [*base, "helper", "--project", str(project), "lib/documents/context_read.py",
+                             relative, "--root", str(project)]
+                    first = subprocess.run([*pager, "--limit", "128"], cwd=project,
+                                           env=env, capture_output=True, text=True, timeout=15)
+                    self.assertEqual(0, first.returncode, first.stderr)
+                    first_page = json.loads(first.stdout)
+                    self.assertFalse(first_page["eof"])
+                    rest = subprocess.run(
+                        [*pager, "--offset", str(first_page["next_offset"]), "--expect-sha256",
+                         first_page["sha256"], "--limit", "24000"], cwd=project,
+                        env=env, capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertEqual(0, rest.returncode, rest.stderr)
+                    last_page = json.loads(rest.stdout)
+                    self.assertTrue(last_page["eof"])
+                    self.assertEqual(resource["sha256"], last_page["sha256"])
+                    self.assertEqual(original.decode("utf-8"), first_page["text"] + last_page["text"])
 
     def test_central_markers_and_bridge_environment_are_rejected_without_fallback(self):
         project = self.root / "central-project"

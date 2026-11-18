@@ -124,42 +124,26 @@ class ContinuationCliTest(unittest.TestCase):
         self.source.symlink_to(target)
         self.assertEqual(2, self.invoke().returncode)
 
-    def test_installed_pinned_bridge_consumes_new_helper_and_rejects_pin_conflict(self):
-        """真实导入当前候选、安装薄项目并执行查询；不调用宿主模型或真实HOME。"""
+    def test_packaged_helper_uses_current_source_and_rejects_old_bindings(self):
+        """使用实际插件入口检查追加建议与来源隔离，保留只读记录断言。"""
+        from tests.test_dispatch_admission import plugin_fixture, plugin_helper
         project = self.root / "业务项目"
         project.mkdir()
-        (project / "go.mod").write_text("module example.test/continuation\n", encoding="utf-8")
-        home = self.root / "home"
-        home.mkdir()
-        state = self.root / "state"
-        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CODEX_HOME": str(home / ".codex"),
-               "CLAUDE_CONFIG_DIR": str(home / ".claude"), "GEMINI_CLI_HOME": str(home / ".gemini"),
-               "AGENT_WORKFLOW_STATE_DIR": str(state)}
-        installed = subprocess.run([*PYTHON, str(PACK / "lib/install/install_workflow.py"), str(project), "--state-dir", str(state)],
-                                   cwd=PACK, env=env, text=True, capture_output=True, check=False, timeout=180)
-        self.assertEqual(0, installed.returncode, installed.stdout + installed.stderr)
-        runtime = project / ".agent-workflow"
-        binding = json.loads((runtime / "runtime.json").read_bytes())["runtime_binding"]
+        installed = plugin_fixture(self.root)
+        bridge = plugin_helper(installed, project, "lib/agent_continuation_cli.py")
         record = running_record()
-        record["runtime_binding"] = copy.deepcopy(binding)
         self.source.write_text(json.dumps(record), encoding="utf-8")
         before = self.source.read_bytes()
-        launcher = ["bash", str(runtime / "lib/python_runtime.sh"), "-B", "-X", "utf8"]
-        bridge = [*launcher, str(runtime / "runtime.py"), "--binding", json.dumps(binding),
-                  "helper", "lib/agent_continuation_cli.py"]
         options = ["--input", str(self.source), "--task-id", "api", "--host", "codex", "--observed-state", "running",
                    "--intent", "append", "--capability", "non_interrupting_message"]
-        result = subprocess.run([*bridge, *options], cwd=project, env=env, text=True, capture_output=True, check=False, timeout=30)
+        result = subprocess.run([*bridge, *options], cwd=project, text=True, capture_output=True, check=False, timeout=30)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("message", json.loads(result.stdout)["action"])
         self.assertEqual(before, self.source.read_bytes())
-        # 当前pin固定读取该版本；伪造包pin不能被环境或latest静默覆盖。
-        record["runtime_binding"]["content_id"] = "0" * 64
-        record["runtime_binding"]["manifest_sha256"] = "0" * 64
+        record["runtime_binding"] = {"content_id": "0" * 64}
         self.source.write_text(json.dumps(record), encoding="utf-8")
-        rejected = subprocess.run([*bridge, *options], cwd=project, env=env, text=True, capture_output=True, check=False, timeout=30)
+        rejected = subprocess.run([*bridge, *options], cwd=project, text=True, capture_output=True, check=False, timeout=30)
         self.assertEqual(2, rejected.returncode, rejected.stderr)
-        print("INSTALLED_CONTINUATION: actual current-source import/install/bridge action=message; mismatched pack pin rejected; native runtime unverified", flush=True)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,25 @@ from .contracts import ConfigError, ConflictError, MAX_BATCH, absolute_path, uni
 INDEX = "native-agent-templates/codex/index.json"
 PLACEHOLDER = "__XY_WORKFLOW_PLUGIN_ROOT__"
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_CREATED_HEADER = "# 由显式选择的 xy-workflow 插件候选创建；后续修改由用户维护。\n"
+# v3.0.6 已发行 Codex 包 native-agent-templates/codex/index.json 中的原始模板 SHA。
+# 旧缓存已回收时仍能独立认证原生文件中的完整三个受管字段；不能使用文件
+# 自述的“准备时规范来源摘要”代替这张由新组件发行物固定的表。
+_RELEASE_TEMPLATES = {"3.0.6": {
+    "xy-android": "f74e9efe5b836a537d3d68e60388665b3554daa32f6c4cb7a40703892f4c39a4",
+    "xy-apple": "f5932a5e71df801fafc90baea6d50b1e77b26c17762626c79ab0c78ec911e314",
+    "xy-backend": "030ea00b974c5688e2124ba9925d3935122ff72f1aeba736671cf6e827fe2856",
+    "xy-desktop": "d93b2164a97b031a874a354f12b8a3662d121486d5b1863c5b5351e2ac0a8c53",
+    "xy-qa": "409ce8facf795d98e39b7b6276d2e685bc6f87ab5b88c50688e8d9b43c2771a1",
+    "xy-uiux": "3d92c180c97b40d10c138fe7fc401be4636bab85aff8cc886123774f4485be20",
+    "xy-web": "9c5d56c7b2b673da922af7b3401223f627f89a8356509824dfbbb4b322428fdb",
+}}
+
+
+def _template_bytes(fields):
+    """重现发行投影器的字段顺序及 TOML 字符串转义，用于比较完整旧模板。"""
+    return ("\n".join(key + " = " + json.dumps(fields[key], ensure_ascii=False)
+                      for key in ("name", "description", "developer_instructions")) + "\n").encode()
 
 
 def _hash(body):
@@ -38,6 +57,7 @@ class Candidate:
     id: str
     name: str
     body: bytes
+    template_sha256: str
 
 
 @dataclass(frozen=True)
@@ -148,13 +168,12 @@ def load(root: Path) -> Source:
         # 先解析再序列化，物理插件根即使含引号/反斜杠也只能成为字符串正文，
         # 不能通过原文替换注入 TOML 字段。仅此一个固定占位符具有替换语义。
         document["developer_instructions"] = document["developer_instructions"].replace(PLACEHOLDER, str(root))
-        rendered = ("# 由显式选择的 xy-workflow 插件候选创建；后续修改由用户维护。\n"
-                    + "\n".join(key + " = " + json.dumps(value, ensure_ascii=False) for key, value in document.items()) + "\n").encode()
+        rendered = _CREATED_HEADER.encode() + _template_bytes(document)
         codecs.parse("codex", rendered)
         names.add(entry["name"])
         paths.add(entry["path"])
         candidates.append(Candidate("candidate_" + _hash((source_id + "\0" + entry["name"]).encode()),
-                                    entry["name"], rendered))
+                                    entry["name"], rendered, entry["sha256"]))
     index_projection = projections.get(INDEX)
     if (not isinstance(index_projection, dict) or index_projection.get("source") != "product/ROLES.yaml"
             or index_projection.get("transform") != "codex-native-template-index-v1"
@@ -202,6 +221,55 @@ def unavailable_diagnostic(root):
             "runtime_verified": False}
 
 
+def _require_complete(source, state):
+    """补缺与重绑共享同一清单完整性门槛，未知项目定义不能被当作空缺。"""
+    if (source is None or state.host != "codex" or state.scope not in {"global", "project"}
+            or (state.scope == "project") != (state.project is not None)):
+        raise ConfigError("当前来源不支持用户级原生定义维护")
+    if not state.inventory.complete or any(row.get("code") in {"invalid_agent", "unsupported_format", "agent_missing"}
+                                          for row in state.inventory.diagnostics):
+        raise ConfigError("原生定义清单无法安全读取")
+
+
+def rebind_plan(source, state, host_root):
+    """从明确来源和完整当前范围挑选唯一用户定义；旧路径只作为数据，绝不打开。"""
+    _require_complete(source, state)
+    by_name = {}
+    for agent in state.inventory.agents:
+        by_name.setdefault(agent.document.name, []).append(agent)
+    writes = []
+    for item in source.candidates:
+        agents = by_name.get(item.name, [])
+        if len(agents) != 1:
+            continue
+        agent = agents[0]
+        if (agent.origin != "user" or agent.path != host_root / "agents" / (item.name + ".toml")
+                or not agent.snapshot.identity[2] & 0o200
+                or not agent.document.text.startswith(_CREATED_HEADER)):
+            continue
+        old = tomllib.loads(agent.document.text)
+        instructions = old["developer_instructions"]
+        match = re.search(r"(?m)^资源绝对根是：([^\r\n]+)$", instructions)
+        if match is None:
+            continue
+        # 旧根必须是当前安装同族的版本目录。仅还原模板约定的这一个位置，
+        # 避免把正文中用户新加的同名路径一并替换后错误认证为原版。
+        old_root = Path(match[1])
+        if (str(old_root) != match[1] or old_root.parent != source.root.parent or old_root == source.root
+                or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", old_root.name)):
+            continue
+        normalized = {**old, "developer_instructions": instructions[:match.start(1)] + PLACEHOLDER + instructions[match.end(1):]}
+        digest = _hash(_template_bytes(normalized))
+        if digest not in {item.template_sha256, _RELEASE_TEMPLATES.get(old_root.name, {}).get(item.name)}:
+            continue
+        target = tomllib.loads(item.body.decode())
+        after = codecs.patch_prepared_fields(agent.document, old, target)
+        if after is not None:
+            writes.append(storage.Write(item.name, agent.path, agent.snapshot, after,
+                                        storage.directory_stamp(agent.path.parent)))
+    return tuple(writes)
+
+
 def missing_plan(source, state, host_root):
     """仅供维护 open 内部使用：固定用户级写入目标，保留当前范围全部同名定义。
 
@@ -209,12 +277,7 @@ def missing_plan(source, state, host_root):
     计划仍使用 storage.Write 与后续服务 guard，不提供客户端候选选择、目标路径
     或任意正文入口。未能完整读取清单时失败关闭，防止误判同名定义不存在。
     """
-    if (source is None or state.host != "codex" or state.scope not in {"global", "project"}
-            or (state.scope == "project") != (state.project is not None)):
-        raise ConfigError("当前来源不支持用户级原生定义补齐")
-    if not state.inventory.complete or any(row.get("code") in {"invalid_agent", "unsupported_format", "agent_missing"}
-                                          for row in state.inventory.diagnostics):
-        raise ConfigError("原生定义清单无法安全读取，未自动补齐")
+    _require_complete(source, state)
     parent = host_root / "agents"
     parent_stamp = storage.directory_stamp(parent)
     existing_names = {agent.document.name for agent in state.inventory.agents}

@@ -1,8 +1,8 @@
 # Agent Workflow 3.0 开发手册
 
-本源码对应工作流插件 `xy-workflow 3.0.6` 和固定配套的独立配置工具 `Native Agent Config 0.1.5`，版本源分别为 `product/PLUGIN_VERSION`、`native_config/VERSION`。固定 Native 组件已采用同 SHA 成功 CI 原始包正式发布并真实下载核验，唯一生成器已生成 `published` 固定描述。插件真实发行以 GitHub Release 和三个 stable 来源为准，本机版本、启用状态与范围以官方客户端实际列表和安装回执为准。历史版本及 QA、CI、发行、本机操作记录统一见[发行主题](plans/stable-product-release.md)；用户入口见[使用手册](usage.md)，架构见[插件说明](plugin-v3.md)，宿主命令见[安装说明](../plugins/INSTALL.md)。
+源码使用独立的插件和组件版本文件。准备候选时，在本地构建组件 ZIP 并生成 unpublished 描述。正式发行须使用通过 CI 的原始归档，经发布、重下载验证后生成 published 描述。[插件版本](../product/PLUGIN_VERSION) · [组件版本](../native_config/VERSION) · [发行记录](plans/stable-product-release.md)
 
-薄启动器向独立组件传入 `--preparation-source`，必须由固定 `component.json` 精确绑定本轮 `0.1.5`，不能沿用旧组件或仅凭库存活动版本启动。
+薄启动器向独立组件传入 `--preparation-source`，使用随插件固定的组件版本和摘要。[组件描述](../plugins/maintenance/component.json)
 
 ## 权威与职责
 
@@ -33,7 +33,7 @@
 
 调用偏好的唯一只读合同源是 `native_config/preference_contract.py`，纯标准库且不导入服务。插件构建逐字节投影为 `plugins/dispatch_preferences.py` 并记录来源摘要，`source_pack.py dispatch-preferences` 校验出处后调用；源包开发运行原文件。两边共用固定宿主根、版本化格式与字段解析，不手写第二份验证逻辑，也不恢复只支持固定七角色的旧管理器。目录发现、偏好预览和保存仍由独立核心持有，UI 不直接写文件。
 
-3.0 不以中央登记、CLI/TUI 管理器、Homebrew/npm 或旧项目同步作为当前入口。尚存的历史源码和测试只按真实消费者维护；`product/VERSION` 不表示插件版本，不将旧安装机制重新包装成默认流程。
+仓库只维护 3.x 插件和独立的 Native Agent Config。旧中央运行时、TUI 和安装器的实现可从 Git 历史查阅。四份早期插件记录在 `docs/archive/`，当前计划保存在 `docs/plans/`。
 
 ## 本地构建
 
@@ -68,7 +68,7 @@ agy plugin install /absolute/new-output-directory/local/antigravity/xy-workflow
 
 发布器校验候选来源、摘要、版本与干净输入，向固定仓库 `Geoege-xll/agent-workflow` 的 所选渠道的 `plugins-codex-*`、`plugins-claude-*`、`plugins-antigravity-*` 投影对应宿主完整来源。正式渠道市场名为 `xy-workflow`；历史 alpha 市场为 `xy-workflow-alpha`，开发本地市场为 `xy-workflow-local`，均取自唯一命令身份声明。拒绝未知分支和同版不同载荷；相同输入重发幂等，三个分支通过普通 Git atomic push 一并发布，不 force 覆盖未知历史。
 
-CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。正式 Git 分发与官方公开目录审查分别判断，渠道名不授予额外权限。实际分支与安装发现应在发布后分别核对，并与源码 SHA、artifact 和载荷摘要对应；设计与验收见[远程安装计划](plans/plugin-remote-install.md)。
+CI 验证作业与发布作业分离，只有专用发布 job 获得写权限。正式 Git 分发与官方公开目录审查分别判断，渠道名不授予额外权限。实际分支与安装发现应在发布后分别核对，并与源码 SHA、artifact 和载荷摘要对应；设计与验收见[远程安装计划](archive/plugin-remote-install.md)。
 
 独立工具的源码命令、HTTP 生命周期、包结构和恢复资料边界见[原生配置说明](agent-configuration.md)。组件发行描述只登记实际发布且下载校验过的资产，不猜测 URL，不把本地构建成功写成公开稳定发行。
 
@@ -115,15 +115,15 @@ bash scripts/test_workflow.sh current
 
 `prototype` 及继承它的 `current` 包含 `prototype_workspace_runtime`、`prototype_feedback` 与 `prototype_review` 的真实模块，runner 隔离样本和独立 expected 同步维护。runtime 用例消费生产模板，不是业务原型自动化授权。三宿主独立包的 prepare／validate 集成由 `plugin_delivery` 覆盖；浏览器、CLI、静态证据与宿主模型运行分层报告。
 
-按影响可选 `plugin`、`native-config`、`prototype` 或 `packaging`，组合节点按实际入口去重。`current` 覆盖两个当前产品、原型及交付合同；`ci` 是 `legacy-ci` 别名，`full` 仍含历史消费者，不用名称推断当前产品验收。纯文档整理以受影响引用、链接、原型静态合同及独立文档复核为准，不重复无关全量回归。
+按影响可选 `plugin`、`native-config`、`prototype` 或 `packaging`，组合节点按实际入口去重。`current` 覆盖两个当前产品、原型及交付合同；`full` 发现仓内现行测试。纯文档整理以受影响引用、链接、原型静态合同及独立文档复核为准，不重复无关全量回归。
 
 离线包清单、来源 SHA、静态配置和安装发现只证明各自层次。默认 PM、fresh/handoff_only、新 Agent 模型与推理生效、持续接单、同 ID 追加和独立 QA 收口需要对应真实宿主事件。包内 `runtime_verified:false` 不因构建成功自动改为 true。
 
-历史宿主安装、模型运行、失败及未验证范围在[原生验收记录](plans/plugin-v3-native-acceptance.md)和[发行主题](plans/stable-product-release.md)中按实际版本保留。插件与独立组件的版本号分别管理，历史单项成功不能扩大为新版本实际运行通过。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
+历史宿主安装、模型运行、失败及未验证范围在[原生验收记录](archive/plugin-v3-native-acceptance.md)和[发行主题](plans/stable-product-release.md)中按实际版本保留。插件与独立组件的版本号分别管理，历史单项成功不能扩大为新版本实际运行通过。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
 
 ## 交付与文档维护
 
-生产职责实例完成必要验证后交请求级唯一独立 QA；返工由原职责作者处理，增量复核沿原 Reviewer。PM 在适用验收后投影当前已交付事实，并按已有授权完成 Git 与发布操作。候选附件、独立组件预发行、插件公开市场、源码合并和本机安装分别记录，不能互相替代。
+生产职责实例完成必要验证后交请求级唯一独立 QA。返工由原职责作者处理，增量复核沿用原 Reviewer。QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口、最终报告。PM 根据已有授权决定 Git 操作与发布范围。候选附件、独立组件预发行、插件公开市场、源码合并和本机安装分别记录。
 
 旧渠道与旧计划执行记录可从 Git 追溯。当前导航不保留退役 TUI、中央运行时或旧同步说明；有效的确认、PM 调度、原型、QA、交付、主题文档与 notes 归属要求已归入使用手册和文档指南，执行权威仍由产品与 Skill 源维护。
 

@@ -157,7 +157,7 @@ def serve(data_dir, host="codex", project=None, *, home=None, preparation_source
 def parser():
     result = argparse.ArgumentParser(description="独立三平台原生 Agent 配置服务（Python 3.11+）")
     commands = result.add_subparsers(dest="command", required=True)
-    for command in ("console", "serve", "list", "resolve", "mcp", "open", "status", "doctor"):
+    for command in ("console", "serve", "list", "resolve", "mcp", "open", "status", "doctor", "rebind"):
         sub = commands.add_parser(command)
         sub.add_argument("--data-dir", type=Path, default=None)
         sub.add_argument("--host", choices=HOSTS, default="codex")
@@ -166,6 +166,8 @@ def parser():
         sub.add_argument("--preparation-source", type=Path, default=None, help="显式绑定当前插件的物理准备来源；省略时不提供准备能力")
         if command in {"console", "open"}:
             sub.add_argument("--no-browser", action="store_true")
+        elif command == "rebind":
+            sub.add_argument("--confirm", metavar="预览摘要", help="确认应用同一来源、项目及文件快照的重绑预览")
         elif command == "serve":
             sub.add_argument("--port", type=int, default=0)
             sub.add_argument("--idle-timeout", type=int, default=1800)
@@ -179,11 +181,12 @@ def parser():
 def main(argv=None):
     argument_parser = parser()
     args = argument_parser.parse_args(argv)
-    if args.command in {"open", "status", "doctor"}:
+    if args.command in {"open", "status", "doctor", "rebind"}:
         from .commands import execute
         result, exit_code = execute(args.command, args.data_dir or default_data_dir(), args.host,
                                     args.project, home=args.home, preparation_source=args.preparation_source,
-                                    no_browser=getattr(args, "no_browser", False))
+                                    no_browser=getattr(args, "no_browser", False),
+                                    confirm=getattr(args, "confirm", None))
         print(json.dumps(result, ensure_ascii=False), flush=True)
         return exit_code
     try:

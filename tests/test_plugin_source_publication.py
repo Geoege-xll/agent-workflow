@@ -131,11 +131,68 @@ class PluginSourcePublicationTest(unittest.TestCase):
         callback(value)
         path.write_bytes(publisher.json_bytes(value))
 
+    def read_fixture_tree(self, ref):
+        # 测试需要比较完整的小型夹具；实际发布只保留旧分支摘要和元数据。
+        with publisher.tree_blobs(self.remote, ref) as entries:
+            return {name: (body, mode) for name, mode, body in entries}
+
+    def test_batch_reader_preserves_binary_frames_and_reaps_process_on_rejection(self):
+        # 使用真实 Git 对象覆盖空正文、内嵌换行、NUL 和非文本字节；追踪启动的
+        # 真实子进程，仅统计 cat-file，确保文件数增加不会恢复逐对象派生进程。
+        work = self.root / "binary-tree"
+        work.mkdir()
+        self.git("init", "--quiet", str(work))
+        expected = {"a": b"", "b": b"\0\n\xff\0", "c": b"tail\n"}
+        for name, body in expected.items():
+            (work / name).write_bytes(body)
+        publisher.git(work, "add", ".")
+        tree = publisher.git(work, "write-tree").decode().strip()
+        started = []
+        popen = subprocess.Popen
+        def track(arguments, **kwargs):
+            child = popen(arguments, **kwargs)
+            if "cat-file" in arguments:
+                started.append(child)
+            return child
+        with patch.object(subprocess, "Popen", side_effect=track):
+            with publisher.tree_blobs(work, tree) as entries:
+                self.assertEqual(expected, {name: body for name, _, body in entries})
+            self.assertEqual([0], [child.returncode for child in started])
+            # 消费者发现错误提前退出时，管道仍有后续对象可读。离开上下文后
+            # 子进程及两端流都应关闭，原始拒绝原因继续向上传递。
+            with self.assertRaisesRegex(ValueError, "停止读取"):
+                with publisher.tree_blobs(work, tree) as entries:
+                    next(entries)
+                    raise ValueError("停止读取")
+            self.assertEqual(2, len(started))
+            self.assertIsNotNone(started[-1].poll())
+            self.assertTrue(started[-1].stdin.closed and started[-1].stdout.closed)
+
+    def test_publication_cli_returns_failure_when_git_tree_metadata_times_out(self):
+        # 复用本地候选和临时 bare 仓库。首次发布建立分支，随后在正常预检
+        # 读取旧分支时仅替换 ls-tree 的返回结果，确认超时不会成为未捕获异常。
+        self.publish(apply=True)
+        before = self.refs()
+        original = subprocess.check_output
+        def timeout_on_tree(command, **kwargs):
+            if "ls-tree" in command:
+                raise subprocess.TimeoutExpired(command, timeout=180)
+            return original(command, **kwargs)
+        args = ["publish_plugin_sources.py", "--candidate-dir", str(self.candidate),
+                "--source-revision", self.revision, "--repository", publisher.REPOSITORY,
+                "--remote", str(self.remote), "--channel", "alpha"]
+        with patch.object(sys, "argv", args), patch.object(sys, "stderr", new_callable=io.StringIO) as error, \
+             patch.object(subprocess, "check_output", side_effect=timeout_on_tree):
+            self.assertEqual(1, publisher.main())
+            self.assertIn("插件来源发布失败", error.getvalue())
+            self.assertIn("超时", error.getvalue())
+        self.assertEqual(before, self.refs())
+
     def remote_commit(self, host, extra):
         """直接构造测试远端竞争提交，保证发布器实际经历非快进拒绝。"""
         ref = "refs/heads/plugins-" + host + "-alpha"
         old = self.git("rev-parse", ref)
-        files = publisher.tree_files(self.remote, old)
+        files = self.read_fixture_tree(old)
         files.update(extra)
         self.git("read-tree", "--empty")
         for name, (body, mode) in files.items():
@@ -154,7 +211,7 @@ class PluginSourcePublicationTest(unittest.TestCase):
         self.assertEqual(3, len(self.refs().splitlines()))
         self.assertEqual(["create"] * 3, [row["action"] for row in result["branches"]])
         for host in publisher.HOSTS:
-            files = publisher.tree_files(self.remote, "plugins-" + host + "-alpha")
+            files = self.read_fixture_tree("plugins-" + host + "-alpha")
             prefix = "" if host == "antigravity" else "plugins/xy-workflow/"
             primary = self.candidate / f"workflow/xy-workflow-{host}-3.0.0-alpha.5.zip"
             for name, value in publisher.archive_files(primary.read_bytes()).items():
@@ -177,7 +234,7 @@ class PluginSourcePublicationTest(unittest.TestCase):
             self.assertIn(line, self.refs().splitlines())
         for row in result["branches"]:
             self.assertTrue(row["ref"].endswith("-stable"))
-            files = publisher.tree_files(self.remote, row["ref"])
+            files = self.read_fixture_tree(row["ref"])
             record = json.loads(files["distribution.json"][0])
             self.assertEqual(("stable", "3.0.1"), (record["channel"], record["version"]))
             if row["host"] in publisher.MARKET:

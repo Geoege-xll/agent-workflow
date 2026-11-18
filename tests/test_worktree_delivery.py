@@ -11,12 +11,12 @@ import sys
 import tempfile
 import unittest
 
-from lib.task_graph_cli import _execute
+from lib import task_graph_records as records
+from lib.task_graph_cli import _execute, export_task_pack
 from lib.delivery.worktree_cli import DeliveryError, create, git, head, merge, merge_check, scope, target_branch
 from lib.worktree_policy import WorktreePolicyError, settings
 from tests import test_qa_handoff as qa_fixtures
 from tests.test_scheduler_boundaries import _writer_payload, v2_graph, v2_task
-from tests.test_unified_host_workflow import HOSTS, UnifiedHostFixture
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -109,7 +109,7 @@ class GitDeliveryTest(unittest.TestCase):
         checked = subprocess.run([sys.executable, "-c", "from src.a import a; from src.b import b; assert a == b == 1"],
                                  cwd=self.integration, capture_output=True, check=False)
         self.assertEqual(0, checked.returncode, checked.stderr)
-        self.qa_task = v2_task({"id": "qa", "request_id": "req", "task_type": "qa", "state": "QA_PASSED",
+        self.qa_task = v2_task({"id": "qa", "request_id": "req", "task_type": "qa", "state": "QA",
                                "depends_on": [], "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": [],
                                "agent_ref": {"host": "codex", "agent_id": "current-reviewer"}})
         self.tasks.append(self.qa_task)
@@ -132,17 +132,32 @@ class GitDeliveryTest(unittest.TestCase):
         coverage["rule_checks"].append({**copy.deepcopy(coverage["rule_checks"][0]), "rule_id": "eng-common-005",
             "source_path": builtin_path, "source_fingerprint": hashlib.sha256(builtin.read_bytes()).hexdigest(),
             "source_anchor": "配置、错误和维护"})
-        current_pack = {"schema_version": 2, "task": copy.deepcopy(self.qa_task),
-                        "standards_contract": copy.deepcopy(standards), "approved_gates": []}
-        current_pack["task"]["state"] = "QA"
-        body = json.dumps(current_pack).encode("utf-8")
         self.qa_pack_file = self.root / "current-qa-pack.json"
-        self.qa_pack_file.write_bytes(body)
-        qa["handoff_ref"] = qa_fixtures.handoff_ref(current_pack, body)
         self.payload = {"task_graph": self.graph, "qa_handoff": qa, "qa_task_pack": str(self.qa_pack_file), "authorization": {
             "mode": "confirm", "source": "user:approve-current-merge", "request_id": "req",
             "target_branch": "main", "target_base": self.base, "head_revision": self.tip,
             "diff_fingerprint": actual["diff_fingerprint"]}}
+        self.accept_candidate()
+
+    def accept_candidate(self) -> None:
+        """使用同一测试 Reviewer 的真实导出与接收入口，测试随后单独运行正式 Git 交付。"""
+        if self.qa_task["state"] == "QA_PASSED":
+            reopened = records.update(self.graph, {"tasks": {"qa": {"set": {"state": "QA"}}}}, self.repo, _execute)
+            self.qa_task.clear()
+            self.qa_task.update(next(task for task in reopened["tasks"] if task["id"] == "qa"))
+        current_pack = export_task_pack(self.graph, "qa", root=self.repo)
+        body = json.dumps(current_pack).encode("utf-8")
+        qa = self.payload["qa_handoff"]
+        qa["handoff_ref"] = qa_fixtures.handoff_ref(current_pack, body)
+        result_file = self.root / "current-qa-handoff.json"
+        result = json.dumps(qa).encode("utf-8")
+        self.qa_pack_file.write_bytes(body)
+        result_file.write_bytes(result)
+        accepted = records.update(self.graph, {"tasks": {"qa": {"accept_request": {
+            "task_pack": {"path": str(self.qa_pack_file), "sha256": records.digest(body)},
+            "handoff": {"path": str(result_file), "sha256": records.digest(result)},
+        }}}}, self.repo, _execute)
+        self.qa_task.update(next(task for task in accepted["tasks"] if task["id"] == "qa"))
 
     def test_parallel_writes_are_isolated_and_confirmed_merge_delivers_both(self) -> None:
         self.assertEqual("b = 0\n", (self.workers[0] / "src/b.py").read_text())
@@ -158,20 +173,49 @@ class GitDeliveryTest(unittest.TestCase):
         self.assertEqual("b = 1\n", (self.repo / "src/b.py").read_text())
         self.assertTrue(all(path.is_dir() for path in self.workers))
 
-    def refresh_candidate(self, base: str | None = None) -> None:
-        """夹具中真实提交变化后同步完整候选绑定；不制造与实际差异不一致的成功证据。"""
+    def test_cleaned_candidate_satisfies_dependencies_only_after_its_actual_delivery(self) -> None:
+        from lib.foundation_qa import current_request_receipt
+        from tests.test_foundation_qa import working_root
+
+        self.tasks.append(v2_task({"id": "after-delivery", "request_id": "downstream", "task_type": "read_only",
+                                   "state": "DECLARED", "depends_on": ["qa"], "blocks": [], "gates": [],
+                                   "owned_paths": [], "semantic_locks": []}))
+        self.graph.update(active_paths=[], active_semantic_locks=[], capacity=2)
+        self.qa_task["blocks"] = ["after-delivery"]
+        with working_root(self.repo):
+            self.assertIn("after-delivery", _execute("ready", self.graph)["ready"])
+            git(self.repo, "worktree", "remove", str(self.integration))
+            self.assertNotIn("after-delivery", _execute("ready", self.graph)["ready"])
+            with self.assertRaises((OSError, ValueError)):
+                merge_check(self.repo, self.config, self.payload)
+            # 重建同一真实候选并经正式交付后清理。只有目标分支的实际祖先关系
+            # 才允许依赖继续使用原收据；单独拥有候选 Git 对象不构成交付事实。
+            create(self.repo, self.integration, self.tip)
+            self.assertEqual("merged", merge(self.repo, self.config, self.payload)["status"])
+            git(self.repo, "worktree", "remove", str(self.integration))
+            for worker in self.workers:
+                git(self.repo, "worktree", "remove", str(worker))
+            self.assertTrue(current_request_receipt(self.graph, self.qa_task))
+            self.assertIn("after-delivery", _execute("ready", self.graph)["ready"])
+            updated = records.update(self.graph, {"capacity": 2}, self.repo, _execute)
+            self.assertEqual("QA_PASSED", next(task for task in updated["tasks"] if task["id"] == "qa")["state"])
+
+    def refresh_candidate(self, base: str | None = None, *, accept: bool = True) -> None:
+        """同步真实提交范围；针对陈旧/不安全候选的负控须保留上一轮已验收回执。"""
         self.tip = head(self.integration)
         self.record.update(target_base=base or self.record["target_base"], head_revision=self.tip)
         self.record["verification"][0]["head_revision"] = self.tip
         actual = scope(self.repo, self.record["target_base"], self.tip)
         self.payload["qa_handoff"]["review_method"]["scope_ref"]["repositories"] = [actual]
         coverage = self.payload["qa_handoff"]["standards_policy_coverage"]
-        coverage["path_checks"] = [{"path": path, "applicable_rule_ids": ["eng-source-boundary"],
+        coverage["path_checks"] = [{"path": path, "applicable_rule_ids": list(coverage["required_engineering_rule_ids"]),
                                     "reason": "fixture source"} for path in actual["changed_paths"]]
         for check in coverage["rule_checks"]:
             check["affected_paths"] = actual["changed_paths"]
         self.payload["authorization"].update(target_base=self.record["target_base"], head_revision=self.tip,
                                               diff_fingerprint=actual["diff_fingerprint"])
+        if accept:
+            self.accept_candidate()
 
     def test_running_or_failed_qa_cannot_be_overridden_by_a_cached_pass(self) -> None:
         reviewer = self.qa_task
@@ -332,6 +376,7 @@ class GitDeliveryTest(unittest.TestCase):
         self.payload["authorization"].update(mode="auto", source="project:parallel_worktrees.merge",
                                               target_base=new_base, head_revision=new_tip,
                                               diff_fingerprint=actual["diff_fingerprint"])
+        self.accept_candidate()
         self.assertEqual("merged", merge(self.repo, self.config, self.payload)["status"])
 
     def test_changed_target_is_not_automatically_rebased_or_merged(self) -> None:
@@ -443,29 +488,3 @@ class GitDeliveryTest(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(2, result.returncode)
         self.assertNotIn("Traceback", result.stderr)
-
-
-class HostWorktreePolicyTest(UnifiedHostFixture, unittest.TestCase):
-    def test_all_hosts_install_reference_without_forcing_every_role_to_worktree(self) -> None:
-        temporary, project, pack = self.install_all()
-        self.addCleanup(temporary.cleanup)
-        for root in (".agents/skills", ".claude/skills"):
-            relative = "xy-workflow/references/worktree-delivery.md"
-            self.assertEqual((pack / "platforms/shared/skills" / relative).read_bytes(),
-                             (project / root / relative).read_bytes())
-        for role in (project / ".claude/agents").glob("*.md"):
-            self.assertNotIn("\nisolation: worktree\n", role.read_text())
-        for host in HOSTS:
-            result = self.run_script(project, f"setup_{host}.sh", "--check")
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-
-    def test_invalid_merge_setting_stops_every_host_before_writes(self) -> None:
-        for host in HOSTS:
-            with self.subTest(host=host):
-                temporary, project, pack = self.make_fixture()
-                self.addCleanup(temporary.cleanup)
-                config = pack / "project.yaml"
-                config.write_text(config.read_text().replace("merge: confirm", "merge: force"))
-                result = self.run_script(project, f"setup_{host}.sh", "--preflight")
-                self.assertNotEqual(0, result.returncode)
-                self.assert_no_project_outputs(project)

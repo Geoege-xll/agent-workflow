@@ -9,11 +9,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-import uuid
 
 from lib import task_graph_records as records
-from lib import runtime_store
-from lib.standard_paths import BUILTIN_STANDARD_SOURCES
 from lib.task_graph_cli import _execute
 from lib.task_graph_init import initialize
 from tests.test_scheduler_boundaries import v2_graph
@@ -27,87 +24,7 @@ ADAPTER = """docs:
   standards_root: docs/standards/
   project: docs/PROJECT.md
   plans: docs/plans/
-workflow_hooks:
-  mode: off
 """
-
-
-def activate_fixture_pin(root: Path, state: Path, core, *, used=()):
-    """为最小规则库建立真实本机启用前置，不再只靠伪造桥环境猜测新任务许可。
-
-    此夹具通过正式role_resource建立Codex两角色完整local投影和locator，
-    避免把缺少全局角色的稀疏目录冒充可用项目。完整安装/原生宿主消费者由
-    central_project测试承担，本文件只验证规则图初始化与固定来源读取。
-    """
-    from lib.central import runtime_project as project_files
-    from lib.central.runtime_project import Node, Tree, absolute_directory, json_bytes, node_id
-    from manager import runtime_policy
-    from manager.runtime_state import read_state, state_relative, write_control, write_private
-    with runtime_policy.coordination(state), absolute_directory(state / "bindings", create=True), Tree(root) as project, Tree(state) as machine:
-        marker = project.read(".agent-workflow/runtime.json")
-        binding = core.binding()
-        resources = project_files.Resources(core.root, json_bytes(binding), core.label, core)
-        config = project_files.initial_config(resources, root).replace(b"mode: assist", b"mode: off")
-        (root / ".agent-workflow/project.yaml").write_bytes(config)
-        managed = {".agent-workflow/runtime.json": {"purpose": "locator", "baseline": Node().value(), "expected": marker.value()}}
-        for role in ("xy-qa", "xy-uiux"):
-            relative = f".codex/agents/{role}.toml"
-            target = root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(project_files.role_resource(resources, config, "codex", role, binding))
-            target.chmod(0o644)
-            managed[relative] = {"purpose": "role", "baseline": Node().value(), "expected": project.read(relative).value()}
-        history = list(used)
-        if binding not in history:
-            history.append(binding)
-        record = {"schema_version": 1, "project_root": str(root), "project_identity": list(node_id(root.stat())),
-                  "runtime_binding": binding, "enabled": True, "hosts": ["codex"], "previous_binding": None,
-                  "used_bindings": history, "managed": managed,
-                  "retained_nodes": [], "generation": uuid.uuid4().hex}
-        write_private(machine, state_relative(root, "bindings"), json_bytes(record))
-        write_control(machine, runtime_policy.CURRENT, json_bytes({"schema_version": 1, "runtime_binding": binding,
-                      "previous_binding": None, "generation": uuid.uuid4().hex, "native_roots": []}), expected=read_state(state, runtime_policy.CURRENT))
-
-
-def pinned_fixture(workspace: Path, *, engineering_body: bytes | None = None):
-    """复用当前短命目录创建最小真实内容库；不复制整仓或建立第二业务环境。
-
-    三份规则使用真实来源，分页入口及其六个直接／传递依赖也用生产源码。这样固定
-    版本的字节、规则严重性和可运行读取均由真实 import_core／load_core 验证。
-    """
-    source, state = workspace / "pin-source", workspace / "pin-state"
-    for name in runtime_store.CORE_DIRECTORIES:
-        (source / name).mkdir(parents=True, exist_ok=True)
-    for name in runtime_store.SETUP_FILES:
-        (source / name).write_bytes(b"#!/bin/sh\nexit 0\n")
-    for relative in BUILTIN_STANDARD_SOURCES:
-        target = source / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        body = (engineering_body if relative == BUILTIN_ENGINEERING and engineering_body is not None
-                else (PACK / relative).read_bytes())
-        target.write_bytes(body)
-    # 冻结真正运行的所属模块和纯文档包标识，不能再用旧平铺名称拼出不存在的路径。
-    for relative in ("lib/__init__.py", "lib/documents/__init__.py", "lib/documents/context_read.py",
-                     "lib/runtime_pins.py", "lib/runtime_store.py", "lib/standard_paths.py",
-                     "lib/hosts/__init__.py", "lib/hosts/claude_instructions.py", "lib/platform_fs.py",
-                     "templates/project.yaml.example", "roles/xy-qa.md", "roles/xy-uiux.md"):
-        target = source / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((PACK / relative).read_bytes())
-    # 该最小核心仅供规则图单元夹具使用，明确提供current静态资格元数据；真实
-    # 薄入口加载/调用完整bridge由中央项目消费者验证，不能借缺失声明放宽门禁。
-    (source / "lib/runtime_bridge.py").write_bytes(b"CENTRAL_CONTROL_PROTOCOL = 1\n")
-    (source / "product/WORKFLOW.md").write_bytes("固定旧版工作流正文\n".encode())
-    return source, state, runtime_store.import_core(source, state)
-
-
-def pinned_environment(root: Path, state: Path, core) -> dict[str, str]:
-    """只向本次子进程投影冻结桥合同，不更改宿主环境或全局安装。"""
-    return {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state),
-            "AGENT_WORKFLOW_RUNTIME_BINDING": json.dumps(core.binding()),
-            "AGENT_WORKFLOW_PROJECT_ROOT": str(root),
-            "AGENT_WORKFLOW_CONFIG_PATH": str(root / ".agent-workflow/project.yaml"),
-            "AGENT_WORKFLOW_CORE_ROOT": str(core.root)}
 
 
 def decisions():
@@ -154,121 +71,6 @@ class TaskGraphInitTest(unittest.TestCase):
                                str(PACK / "lib/task_graph_cli.py"), *map(str, args)],
                               input=input, text=True, capture_output=True, check=False, timeout=15, env=env)
 
-    def test_central_init_export_refresh_and_old_pin_survive_project_upgrade(self):
-        old_body = (PACK / BUILTIN_ENGINEERING).read_bytes() + "\n旧版中央规则正文\n".encode()
-        source, state, old = pinned_fixture(self.root, engineering_body=old_body)
-        installed = self.root / ".agent-workflow"
-        installed.mkdir()
-        (installed / "project.yaml").write_text(ADAPTER, encoding="utf-8")
-        # 根适配器故意无效，证明中央初始化只使用桥计算的项目适配器。
-        (self.root / "project.yaml").write_text("not the central adapter\n", encoding="utf-8")
-        marker = installed / "runtime.json"
-        marker.write_text(json.dumps({"schema_version": 1, "kind": "central", "runtime_binding": old.binding()}))
-        activate_fixture_pin(self.root, state, old)
-        (self.root / BUILTIN_ENGINEERING).unlink()
-        (self.root / MINI).unlink()
-        (self.root / "docs/STANDARDS.md").unlink()
-        value = decisions()
-        alias = ".agent-workflow/" + BUILTIN_ENGINEERING
-        value["standards"].update(required_engineering_rule_ids=["eng-common-005"],
-                                  leaves=[{"path": alias, "domain": "engineering", "rule_ids": ["eng-common-005"]}])
-        value["tasks"][0]["selected_standards"] = [alias]
-        env = pinned_environment(self.root, state, old)
-        result = self.invoke("init", "--root", self.root, "--output", self.target,
-                             input=json.dumps(value), env=env)
-        self.assertEqual(0, result.returncode, result.stderr)
-        graph = json.loads(self.target.read_bytes())
-        self.assertEqual(old.binding(), graph["runtime_binding"])
-        self.assertIsNone(graph["standards_contract"]["index_fingerprint"])
-        self.assertEqual(records.digest(old_body), graph["standards_contract"]["leaves"][0]["content_fingerprint"])
-        self.assertFalse((self.root / "docs/STANDARDS.md").exists())
-        self.assertFalse((self.root / "docs/standards/GENERAL.md").exists())
-        exported = self.invoke("task", "--input", self.target, "--task-id", "api", env=env)
-        self.assertEqual(0, exported.returncode, exported.stderr)
-        self.assertEqual(old.binding(), json.loads(exported.stdout)["runtime_binding"])
-        # 在同一最小来源原地换版并真实导入；项目的当前 marker／Skill 目录改到新版。
-        (source / BUILTIN_ENGINEERING).write_bytes(old_body.replace("旧版".encode(), "新版".encode()))
-        new = runtime_store.import_core(source, state)
-        self.assertNotEqual(old.binding(), new.binding())
-        marker.write_text(json.dumps({"schema_version": 1, "kind": "central", "runtime_binding": new.binding()}))
-        (installed / "platforms").symlink_to(new.root / "platforms", target_is_directory=True)
-        refreshed = self.invoke("update", "--input", self.target, "--root", self.root,
-                                "--expect-sha256", records.digest(self.target.read_bytes()), "--patch", "-",
-                                input=json.dumps({"refresh_documents": [alias]}), env=env)
-        self.assertEqual(0, refreshed.returncode, refreshed.stderr)
-        self.assertEqual(old.binding(), json.loads(self.target.read_bytes())["runtime_binding"])
-        checked = self.invoke("validate", "--input", self.target, env=env)
-        self.assertEqual(0, checked.returncode, checked.stderr)
-        (self.root / "docs/PROJECT.md").write_text("# 当前项目\n", encoding="utf-8")
-        (self.root / "docs/plans").mkdir()
-        documents = subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
-                                    str(PACK / "lib/validate_project_docs.py"), str(installed / "project.yaml"),
-                                    str(self.root)], env=env, capture_output=True, text=True,
-                                   encoding="utf-8", timeout=15, check=False)
-        self.assertEqual(0, documents.returncode, documents.stdout + documents.stderr)
-        # 普通文件指纹没有获得跟随 Skill／目录链接读取外部核心的权限。
-        with self.assertRaisesRegex(ValueError, "symlink"):
-            records.file_digest(self.root, alias)
-        conflict = self.invoke("validate", "--input", self.target,
-                               env=pinned_environment(self.root, state, new))
-        self.assertEqual(2, conflict.returncode)
-        self.assertIn("冲突", conflict.stderr)
-        # update 不能用任意层级的补丁把运行记录切到新核心。
-        changed = self.invoke("update", "--input", self.target, "--expect-sha256",
-                              records.digest(self.target.read_bytes()), "--patch", "-",
-                              input=json.dumps({"runtime_binding": new.binding()}), env=env)
-        self.assertEqual(2, changed.returncode)
-        self.assertIn("supports only", changed.stderr)
-        # 中央上下文缺 pin、跨项目显式根、伪造 core/config 根均拒绝，不创建新图。
-        no_pin = dict(env)
-        no_pin.pop("AGENT_WORKFLOW_RUNTIME_BINDING")
-        for bad_env, bad_root in ((no_pin, self.root), (env, source),
-                                  ({**env, "AGENT_WORKFLOW_CORE_ROOT": str(new.root)}, self.root),
-                                  ({**env, "AGENT_WORKFLOW_CONFIG_PATH": str(self.root / "project.yaml")}, self.root)):
-            with self.subTest(bad_root=bad_root, env_keys=sorted(bad_env)):
-                rejected = self.invoke("init", "--root", bad_root, "--output", self.root / "never-created.json",
-                                       input=json.dumps(value), env=bad_env)
-                self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
-                self.assertFalse((self.root / "never-created.json").exists())
-        wrong_adapter = copy.deepcopy(value)
-        wrong_adapter["standards"].update(index_path="other/STANDARDS.md", root="other/standards")
-        # 新任务必须使用有效策略版；旧图的refresh/read已在上方证明继续固定旧pin。
-        activate_fixture_pin(self.root, state, new, used=(old.binding(),))
-        rejected = self.invoke("init", "--root", self.root, "--output", self.root / "never-created.json",
-                               input=json.dumps(wrong_adapter), env=pinned_environment(self.root, state, new))
-        self.assertEqual(2, rejected.returncode)
-        self.assertIn("verified project adapter", rejected.stderr)
-
-    def test_central_binding_is_closed_and_missing_or_corrupt_pin_has_no_fallback(self):
-        _source, state, core = pinned_fixture(self.root)
-        value = decisions()
-        env = {**os.environ, "AGENT_WORKFLOW_STATE_DIR": str(state)}
-        for binding in (None, {**core.binding(), "core_root": str(core.root)},
-                        {**core.binding(), "protocol_version": True},
-                        {"protocol_version": 1, "content_id": "0" * 64, "manifest_sha256": "0" * 64}):
-            candidate = {**value, "runtime_binding": binding}
-            rejected = self.invoke("init", "--root", self.root, "--output", self.target,
-                                   input=json.dumps(candidate), env=env)
-            self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
-            self.assertFalse(self.target.exists())
-        # 先验证存在的 pin，再篡改真实只读快照；本机源码仍完好也不能兜底。
-        damaged = core.root / BUILTIN_ENGINEERING
-        damaged.chmod(0o600)
-        damaged.write_bytes(b"broken frozen rules\n")
-        damaged.chmod(0o444)
-        rejected = self.invoke("init", "--root", self.root, "--output", self.target,
-                               input=json.dumps({**value, "runtime_binding": core.binding()}), env=env)
-        self.assertEqual(2, rejected.returncode)
-        self.assertFalse(self.target.exists())
-        config = self.root / ".agent-workflow/project.yaml"
-        config.parent.mkdir()
-        config.write_text(ADAPTER)
-        documents = subprocess.run(["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
-                                    str(PACK / "lib/validate_project_docs.py"), str(config), str(self.root)],
-                                   env=pinned_environment(self.root, state, core), capture_output=True,
-                                   text=True, encoding="utf-8", timeout=15, check=False)
-        self.assertEqual(1, documents.returncode)
-        self.assertIn("invalid runtime binding", documents.stderr)
 
     def init(self, value=None, *, raw=None, extra=()):
         return self.invoke("init", "--root", self.root, "--output", self.target, *extra,
@@ -405,12 +207,14 @@ class TaskGraphInitTest(unittest.TestCase):
         self.assertEqual("RUNNING", json.loads(self.target.read_text(encoding="utf-8"))["tasks"][0]["state"])
 
     def test_adapter_selection_is_explicit_and_source_override_requires_both_paths(self):
-        installed = self.root / ".agent-workflow"
+        installed = self.root / ".awf"
         installed.mkdir()
         (self.root / "project.yaml").rename(installed / "project.yaml")
         self.assert_rejected(contains="project.yaml")
         source = decisions()
         source["adapter_path"] = ".agent-workflow/project.yaml"
+        self.assert_rejected(source, contains="adapter_path")
+        source["adapter_path"] = ".awf/project.yaml"
         result = self.init(source)
         self.assertEqual(0, result.returncode, result.stderr)
         self.target.unlink()

@@ -11,10 +11,10 @@ This entire managed section applies only in Antigravity; ignore other hosts' int
 Standalone read-only audits follow WORKFLOW's matching branch and stop at the scoped conclusion,
 without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 
-Use `/xy-workflow` for Light and Full implementation. Central roles are in the configured user Antigravity root's `agents/` (normally `~/.gemini/config/agents/`), with only required sparse project overrides in `.agents/agents/xy-*.md`; Skills remain project discovery symlinks at `.agents/skills/xy-*/SKILL.md`. A missing local role file is not an unavailable-role verdict. Native discovery/precedence and actual role/model selection still require target-session evidence; parsed descriptors or task labels do not prove execution.
+Use the installed plugin’s workflow Skill for Light and Full implementation. Resolve roles from its declared `agents/` directory and use the actual host selector. Verify the native role and model in the target session.
 
-Central maintenance uses shared `awf-cli runtime install`, `runtime activate ID --dry-run` / `runtime activate ID`, and `repair PROJECT --dry-run` / `repair PROJECT`. Thin central projects have no `.agent-workflow/setup_antigravity.sh`; only source-pack development runs `bash setup_antigravity.sh` / `bash setup_antigravity.sh --check` from the verified source-pack root. Only the PM may use `invoke_subagent`; role Agents never delegate and
-`max_depth` is `1`. Light/Full defaults to the corresponding subagent; see `.agent-workflow/product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates.
+Only the PM may use `invoke_subagent`; role Agents never delegate and
+`max_depth` is `1`. Light/Full defaults to the corresponding subagent; see `product/WORKFLOW.md#implementation-ownership` for the PM implementation exception and recovery boundaries, preserving the original level's gates.
 For Full READY tasks: `inherit` stays `inherit`, `worktree` becomes `branch`
 only when the actual runtime proves a distinct registered worktree root and the required base;
 `share` is forbidden. A branch name alone is not filesystem isolation. For multi-feature selection,
@@ -65,14 +65,7 @@ Superpowers option is `requesting-code-review/code-reviewer.md`. Findings or `FA
 review method or reviewer.
 
 Final QA outcome: PASS | FAIL. Require `qa_handoff_cli.py validate --task-pack <current-qa-pack.json>`. Completion: QA PASS → projection
-→ PM commit assessment → memory closeout via `/xy-project-memory` → final user report. Setup owns
-marked artifacts and one signed, named assist Hook in `.agents/hooks.json`; other host settings,
-MCP, plugins, permissions, Agent mode and Artifact review policy stay unchanged. The Hook reminds
-at native SessionStart, not on every model invocation, and creates no temporary deduplication markers.
-It does not infer user turns or context recovery from invocation counters or user message content.
-The actual client must support and execute SessionStart; generated configuration alone is not proof.
-See `.agent-workflow/platforms/shared/HOOKS.md`
-only for Hook setup or diagnostics.
+→ PM commit assessment → memory closeout via `/xy-project-memory` → final user report. The installed plugin rule supplies the entry point. Verify actual host discovery and task dispatch in the current session.
 
 ## Native Tool Short Path
 
@@ -98,7 +91,7 @@ Dispatch only current schema_version: 2 single-task packs: task, applicable stan
 
 Continuous same-task implementation, recent short rework, and same-round Reviewer delta checks may follow up to the original ID. After the feedback window, PM acceptance, and necessary verification/QA, first protect temporary-worktree results, unique logs, and necessary evidence, then use the currently exposed authorized native termination capability. Official kill removes temporary worktrees and prevents recovery while retaining historical transcripts; never kill before retrieving the only delivery, or claim permanent history deletion. Without native capabilities such as manage_subagents kill, or if invocation fails, only record agent_retired and prohibit continuation, with native termination unconfirmed; do not claim destruction, context clearing, or thread-capacity release. Retirement releases no still-running task locks. Observe running/open-thread counts separately under actual host definitions; under pressure reclaim accepted instances with sufficient handoff first, retain executing instances, undelivered evidence, and necessary reviewers, and reserve later necessary QA/integration capacity. resume/compact is not prepareForReuse; create no Agent pool, runner, daemon, or second state machine.
 
-Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace PM coverage through bundled `grilling` or change aliases.
+Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe-version` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace PM coverage through bundled `grilling` or change aliases.
 
 PM records the actual `invoke_subagent` result ID as `agent_ref` through existing update and queries `continuation --host antigravity --observed-state <current-observation>`; only currently exposed authorized native follow-up/wait tools may execute its advice. Cancelled, unknown, invalid, or cross-host states block automatic continuation; still hand off the complete Task Pack/scope. Retirement prohibits continuation; absent capabilities do not justify a custom runner, daemon, MCP, or replacement Reviewer. AGY native cumulative usage retains an unknown initial baseline, last_cumulative, and observed_delta rather than summing each record.
 

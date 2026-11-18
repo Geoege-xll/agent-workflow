@@ -85,6 +85,9 @@ class AdmissionTest(unittest.TestCase):
             from lib.task_graph_cli import export_task_pack
             value = export_task_pack(value, task["id"])
             value["task"]["workflow_level"] = "Light"
+            # Light 只保留原单包字段；测试复用导出的合同数据，不复制 Full 请求检查点。
+            value.pop("qa_checkpoint", None)
+            value.pop("qa_checkpoint_fingerprint", None)
         path = self.project / f"{name}.json"
         path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
         self.manifest["records"].append({"path": str(path), "sha256": records.digest(path.read_bytes()),
@@ -604,8 +607,7 @@ class AdmissionTest(unittest.TestCase):
         path = self.add_record("a")
         self.modify(path, lambda payload: payload.update(runtime_binding={"unexpected": "old core"}))
         # 应在本地资源守卫明确拒绝；禁止启动任何记录helper或访问旧中央内容库。
-        with patch("lib.runtime_store.load_core", side_effect=AssertionError("legacy store must not run")), \
-                patch.object(cli.subprocess, "run", side_effect=AssertionError("helper must not start")):
+        with patch.object(cli.subprocess, "run", side_effect=AssertionError("helper must not start")):
             # 非Git项目身份查询也是只读进程，因此只直接进入同包调用边界做负控。
             with self.assertRaisesRegex(ValueError, "runtime_binding"):
                 cli._invocation(json.loads(path.read_bytes()), self.project, ["ready"])

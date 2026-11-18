@@ -13,7 +13,6 @@ import unittest
 from pathlib import Path
 
 from tests import test_design_standards_lifecycle as design_cases
-from tests.test_unified_host_workflow import UnifiedHostFixture
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -131,33 +130,3 @@ class ProductionOnlyRevisionTest(unittest.TestCase):
         payload["approved_gates"] = []
         result = self.helper.invoke(payload, "ready")
         self.assertEqual({"ready": []}, json.loads(result.stdout))
-
-
-class RevisionRuleInstallationTest(UnifiedHostFixture, unittest.TestCase):
-    def test_full_revision_contract_is_installed_on_each_host(self) -> None:
-        temporary, project, pack = self.make_fixture()
-        self.addCleanup(temporary.cleanup)
-        # 角色按真实项目模块发现生成；提供最小 Web 模块才能验证设计角色的三端分发。
-        web = project / "apps/web"
-        web.mkdir(parents=True)
-        (web / "package.json").write_text(
-            '{"dependencies":{"react":"19"},"scripts":{"build":"vite build"}}',
-            encoding="utf-8",
-        )
-        installed = self.run_script(project, "setup_all.sh")
-        self.assertEqual(0, installed.returncode, installed.stdout + installed.stderr)
-        files = ("xy-workflow/SKILL.md", "xy-workflow/references/plan-lifecycle.md",
-                 "xy-plan/SKILL.md", "xy-qa-review/SKILL.md")
-        for root in (".agents/skills", ".claude/skills"):
-            for relative in files:
-                with self.subTest(root=root, relative=relative):
-                    self.assertEqual((pack / "platforms/shared/skills" / relative).read_bytes(),
-                                     (project / root / relative).read_bytes())
-        for root in (".agents/agents", ".claude/agents", ".codex/agents"):
-            for role in ("xy-uiux", "xy-qa"):
-                with self.subTest(root=root, role=role):
-                    suffix = ".toml" if root == ".codex/agents" else ".md"
-                    self.assertTrue((project / root / (role + suffix)).is_file())
-        # --check 会核对生成角色语义/来源与受管入口；不是只检查源码目录存在。
-        checked = self.run_script(project, "setup_all.sh", "--check")
-        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
