@@ -114,7 +114,7 @@ Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付
 | 范围 | 判定依据与边界 |
 | --- | --- |
 | 插件版本与发行 | 工作树版本见 [PLUGIN_VERSION](product/PLUGIN_VERSION)，正式资产与来源见 GitHub Release 和对应 stable 分发记录 |
-| 独立组件 | 正式插件配套 Native `0.1.5`，候选版本和获取方式见[随包组件描述](plugins/maintenance/component.json) |
+| 独立组件 | 正式插件配套 Native `0.1.7`，候选版本和获取方式见[随包组件描述](plugins/maintenance/component.json) |
 | 原生定义 | Codex 显式打开自动补齐用户级缺失定义，当前项目同名及既有定义保持；文件创建、发现、宿主加载与按名称调用分别核实 |
 | 模型与推理 | 使用实际目录和当前模型能力；目录可见、草稿选择及保存均不证明指定模型已实际运行 |
 | 本机安装与范围 | 以客户端实际列表和安装回执核对版本、载荷、启用与安装范围；不从源码或缓存存在推断 |

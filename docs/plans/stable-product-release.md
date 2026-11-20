@@ -4,11 +4,11 @@
 - 阶段：`completed`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
-- 已验收版本：`3.0.8`
+- 已验收版本：`3.0.9`
 
 ## 目标与范围
 
-本轮发布 `xy-workflow 3.0.8`，插件继续使用已发布的 Native Agent Config `0.1.6`。上一版 `3.0.7` 的两项独立验收分别记录在 [UI 与 QA 整改](ui-qa-audit-remediation.md) 和 [受管计划改进](plan-document-quality.md)。
+本轮发布 `xy-workflow 3.0.9` 和 Native Agent Config `0.1.7`，修复 AGY 默认派工漏执行以及 macOS 沙箱读取调用偏好时的额外授权。上一版 `3.0.8` 配套 Native Agent Config `0.1.6`。上一版 `3.0.7` 的两项独立验收分别记录在 [UI 与 QA 整改](ui-qa-audit-remediation.md) 和 [受管计划改进](plan-document-quality.md)。
 
 上一版已正式发布xy-workflow `3.0.6`／Native Agent Config `0.1.5`，并通过官方客户端升级本机三端插件和独立组件。交付自动补齐缺失内置原生Agent、简洁名称列表、单一搜索焦点、调用偏好自动准备目录、统一工具外壳及画布原生滚动边界。升级后已完成旧版本与重复产物清理，保留模型、推理、项目启停、原稿及评审记录。功能与边界见[模型配置主题](native-model-preferences.md)和[工具外壳主题](workbench-solid-glass-style.md)。
 
@@ -43,6 +43,16 @@
 本轮按已批准第六版配置工作台和最终评审工作台实现后发版，UI依据、功能验收分别见[模型偏好主题](native-model-preferences.md)和[评审主题](workflow-document-lifecycle.md)。来源技能及公共按需加载见 [角色技能主题](role-skill-routing.md)，文档质量见 [计划规范主题](plan-document-quality.md)。
 
 ## 当前进展与恢复入口
+
+### 3.0.9 与 0.1.7 发行及本机验收
+
+工作流正式标签指向 `f93cf3316e0fd926eb8e213910c8186f5f63e026`。最终提交通过 Ubuntu 和 macOS 完整回归，三条 stable 分发分支使用同一候选。重新下载的六份工作流 ZIP、校验清单及候选清单与发布前一致。配置组件按独立候选先行发布，正式 ZIP 的 SHA-256 为 `2cf437014ff98edcff882c81dd47b2ea812ee5c012aacb6bfdf33eb4274d8d39`。 [工作流发行](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.9) · [配置组件发行](https://github.com/Geoege-xll/agent-workflow/releases/tag/native-agent-config-v0.1.7) · [双平台 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/44751189319) · [三端分发](https://github.com/Geoege-xll/agent-workflow/actions/runs/44756349512)
+
+本机 Codex、Claude Code 和 AGY 均启用正式 `3.0.9`，安装文件及执行位与对应正式包相符。三个入口的 doctor 均核对组件 `0.1.7` 完整。七份匹配正式旧模板的 Codex 受管角色已更新到新资源路径，模型和其余已核对的设置均保持原值。Codex 新进程发现 17 个技能，SessionStart Hook 源码字节与上一版一致，客户端显示 `modified` 并等待通过 `/hooks` 审阅。
+
+使用本机正式 AGY 安装在隔离项目复测。原生编辑与终端直接写入均被拦，读取和只读命令成功。普通修复请求派发并绑定真实实现子代理，由其修改源码并通过测试。宿主未返回权限拒绝。
+
+本机已卸载两个停用的本地候选来源，共将 13 项独立旧缓存或组件移到废纸篓。三端管理器重新读取的生效版本均为 `3.0.9`。本机详细回执位于 `dist/evidence/agy-write-guard-20261120/release-309/`。
 
 ### 3.0.8 发布范围与后续实测
 
