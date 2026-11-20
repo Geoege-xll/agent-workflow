@@ -110,8 +110,8 @@ class NativePreferencesTest(unittest.TestCase):
             if kwargs.get("dir_fd") is not None:
                 parent = fcntl.fcntl(kwargs["dir_fd"], fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0]
                 target = Path(os.fsdecode(parent)) / target
-            search_flag = getattr(os, "O_SEARCH", 0)
-            search_only = bool(search_flag) and (flags & search_flag) == search_flag
+            # 直接核对 Darwin 内核要求的 O_EXEC 位，避免测试依赖解释器是否导出 O_SEARCH。
+            search_only = bool(flags & 0x40000000)
             if (target in ancestors and not search_only) or (deny_file and target == path):
                 raise PermissionError("测试沙箱拒绝读取此节点")
             return original_open(name, flags, *args, **kwargs)
@@ -120,7 +120,10 @@ class NativePreferencesTest(unittest.TestCase):
                 code = contract.main(["--host", host, "--agent", "xy-qa", "--project", str(self.project),
                                       "--home", str(self.home)])
             return code, json.loads(output.getvalue())
-        with patch.object(os, "open", side_effect=sandbox_open):
+        # GitHub macOS 的 Python 3.11 未导出 O_SEARCH。本机解释器即使提供它，
+        # 也让同一测试实际执行兼容分支，并保持所有 open 都由当前 macOS 内核执行。
+        with (patch.object(os, "O_SEARCH", None, create=True),
+              patch.object(os, "open", side_effect=sandbox_open)):
             code, result = lookup()
             self.assertEqual((0, "unconfigured"), (code, result.get("status")), result)
             path.parent.mkdir(parents=True)

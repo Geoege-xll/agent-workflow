@@ -64,9 +64,14 @@ def _open_directory(path):
     descriptors, links = [], []
     # 祖先句柄仅用于相对查找、固定身份与复查。支持 O_SEARCH 时只申请穿越权限，
     # 避免沙箱把访问已授权子目录误判为读取祖先目录。末级仍要求原有目录读取权限；
-    # 未提供这个标志的平台继续按原方式打开，所有层级均禁止跟随符号链接。
+    # 部分 macOS Python 3.11 构建未导出 O_SEARCH。Darwin 的 sys/fcntl.h
+    # 固定将它定义为 O_EXEC（0x40000000）与 O_DIRECTORY 的组合。
+    # 其余平台若未提供 O_SEARCH，继续按原方式打开。所有层级仍禁止跟随符号链接。
     directory_flags = os.O_DIRECTORY | os.O_NOFOLLOW
-    ancestor_flags = directory_flags | getattr(os, "O_SEARCH", os.O_RDONLY)
+    search_flag = getattr(os, "O_SEARCH", None)
+    if search_flag is None:
+        search_flag = 0x40000000 if sys.platform == "darwin" else os.O_RDONLY
+    ancestor_flags = directory_flags | search_flag
     target_flags = directory_flags | os.O_RDONLY
     try:
         parts = path.parts[1:]
