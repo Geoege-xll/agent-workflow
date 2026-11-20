@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""校验 PROJECT 的 plans 已验收基线与独立 STANDARDS 规范入口。"""
+"""校验 PROJECT 主题目录、既有验收基线与独立 STANDARDS 入口，并按需查询链接。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import argparse
+import json
 import re
 import hashlib
 import os
@@ -342,8 +343,8 @@ def validate(config: Path, project_root: Path, *, body: bytes | None = None) -> 
     return errors
 
 
-def locate_topic(root: Path, adapter: Path, topic: str, candidates: list[Path]) -> tuple[Path, Path | None]:
-    """用显式业务适配器读取 plans 路径，避免默认位置误导新建或重开主题。"""
+def project_docs_layout(root: Path, adapter: Path) -> tuple[Path, dict[str, str]]:
+    """从同一显式适配器验证受控文档路径，定位、目录核对和关系查询均沿用它。"""
     root = project_directory(root)
     validate_task_source({}, root=root)
     adapter = project_path(root, adapter)
@@ -356,20 +357,49 @@ def locate_topic(root: Path, adapter: Path, topic: str, candidates: list[Path]) 
     docs = validate_explicit_docs(body.decode("utf-8"), root, errors)
     if errors:
         raise ValueError("适配器文档配置无效：" + "；".join(errors))
+    return root, docs
+
+
+def locate_topic(root: Path, adapter: Path, topic: str, candidates: list[Path]) -> tuple[Path, Path | None]:
+    """按实际 plans 路径在已跟踪或显式指定的候选中定位稳定主题。"""
+    root, docs = project_docs_layout(root, adapter)
     return root, locate_plan(root, root / docs["plans"], topic, candidates)
 
 
 def main() -> int:
-    # 选中文件模式只路由到计划核心，不读 adapter/PROJECT、扫描无关文档树。
+    # 独立 --plan 不读 adapter/PROJECT。显式传入 adapter 才打开受控导航。
     # 既有两位置参数继续进入原 validate，保留项目文档和历史计划的校验合同。
     if any(argument.startswith("--") for argument in sys.argv[1:]):
-        parser = argparse.ArgumentParser(description="只读校验指定计划，或按实际项目配置定位已有主题")
+        parser = argparse.ArgumentParser(description="只读校验所选 Markdown 链接、主题或文档关系")
         parser.add_argument("--root", required=True, type=Path, help="实际项目根")
-        parser.add_argument("--adapter", type=Path, help="主题定位使用的实际项目适配器")
+        parser.add_argument("--adapter", type=Path, help="主题定位、索引核对或关系查询使用的实际项目适配器")
         parser.add_argument("--topic", help="新建或更新前查询已有来源的稳定主题 ID")
         parser.add_argument("--plan", default=[], action="append", type=Path,
                             help="待校验的 Markdown，或主题定位时的显式候选；可重复指定")
+        parser.add_argument("--document", default=[], action="append", type=Path,
+                            help="检查任意选中 Markdown 的本地引用及 Markdown 锚点；可重复指定")
+        parser.add_argument("--relations", type=Path, help="查询此项目文档的出链和入链")
+        parser.add_argument("--source", type=Path, action="append", default=[], help="另外核对的入链候选，可重复")
+        parser.add_argument("--limit", type=int, help="关系查询最多返回的结果数，默认 32")
         arguments = parser.parse_args()
+        if arguments.document and (arguments.adapter is not None or arguments.topic is not None
+                                   or arguments.plan or arguments.relations is not None):
+            parser.error("--document 单独配合 --root 使用，来源文档可重复指定")
+        if arguments.relations is not None:
+            if arguments.adapter is None or arguments.topic is not None or arguments.plan:
+                parser.error("--relations 须配合 --adapter，不能同时指定 --topic 或 --plan")
+            from lib.documents.query_relations import query_relations
+            try:
+                root, docs = project_docs_layout(arguments.root, arguments.adapter)
+                result = query_relations(root, docs, arguments.relations, arguments.source,
+                                         32 if arguments.limit is None else arguments.limit)
+            except (OSError, UnicodeError, ValueError) as exc:
+                print(f"[ERROR] {exc}", file=sys.stderr)
+                return 1
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        if arguments.source or arguments.limit is not None:
+            parser.error("--source 和 --limit 只用于 --relations")
         if arguments.topic is not None:
             if arguments.adapter is None:
                 parser.error("--topic 须同时指定 --adapter")
@@ -383,14 +413,27 @@ def main() -> int:
             else:
                 print(f"[OK] 现有计划: {match.relative_to(root).as_posix()}")
             return 0
-        if arguments.adapter is not None or not arguments.plan:
-            parser.error("请指定 --plan，或使用 --adapter 和 --topic 定位已有主题")
-        errors = validate_selected_plans(arguments.root, arguments.plan)
+        if not arguments.plan and not arguments.document:
+            parser.error("请指定 --document 或 --plan，或使用 --adapter 和 --topic 定位已有主题")
+        try:
+            if arguments.document:
+                # 普通项目资料可独立校验，无需重读适配器、扫描计划树或加载生命周期元信息。
+                from lib.documents.document_links import validate_document_links
+                errors = validate_document_links(arguments.root, arguments.document)
+            else:
+                root, docs = ((arguments.root, None) if arguments.adapter is None
+                              else project_docs_layout(arguments.root, arguments.adapter))
+                errors = validate_selected_plans(root, arguments.plan, docs=docs)
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors = [str(exc)]
         if errors:
             for error in errors:
                 print(f"[ERROR] {error}", file=sys.stderr)
             return 1
-        print(f"[OK] selected plans: {len(arguments.plan)}；机械检查通过不代表批准或验收")
+        if arguments.document:
+            print("[OK] 所选 Markdown 的本地链接检查通过")
+        else:
+            print(f"[OK] selected plans: {len(arguments.plan)}；机械检查通过不代表批准或验收")
         return 0
     if len(sys.argv) != 3:
         print("usage: validate_project_docs.py PROJECT_YAML PROJECT_ROOT", file=sys.stderr)

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .agent_continuation import active
+from .request_scope import check_record_scopes
+from .solution_confirmation import decision_gates
 from .task_graph import TaskGraphError
 
 
@@ -39,6 +41,8 @@ class RecordView:
     external_semantic_locks: tuple[str, ...] = ()
     resource_paths: dict[str, tuple[ResourceIdentity, ...]] | None = None
     external_resources: tuple[ResourceIdentity, ...] | None = None
+    request_scopes: dict[str, str] | None = None
+    approved_gates: frozenset[str] = frozenset()
 
 
 def task_key(record: RecordView, task: dict[str, Any]) -> dict[str, str]:
@@ -85,13 +89,29 @@ def select_candidates(records: tuple[RecordView, ...], capacity: dict[str, int])
     threads = writers = unbound_claims = 0
     references: set[tuple[str, str]] = set()
     reviewers: dict[tuple[str, str], dict[str, str]] = {}
+    delivery_scopes: dict[tuple[str, str], str | None] = {}
+    versions: dict[tuple[str, str, str], set[str]] = {}
+    pending_decisions = set()
+    decisions_by_task = {}
     for record in records:
         scope = record.semantic_scope or record.project_root
+        check_record_scopes(delivery_scopes, scope, (task["request_id"] for task in record.tasks),
+                            record.request_scopes or {})
         if record.external_paths and record.external_resources is None:
             raise TaskGraphError("external resource identities must be projected by the admission file boundary")
         paths.extend(record.external_resources or ())
         locks.update((scope, item) for item in record.external_semantic_locks)
         for task in record.tasks:
+            # 多个独立 Light 包或 Full 图共享项目时，同一请求的同一决定仍只有一份
+            # 当前正文。其他流程用不同决定 ID，不因邻居待确认就失去候选资格。
+            required = set()
+            for identifier, gate in decision_gates(task).items():
+                key = (scope, task["request_id"], identifier)
+                required.add(key)
+                versions.setdefault(key, set()).add(gate)
+                if gate not in record.approved_gates:
+                    pending_decisions.add(key)
+            decisions_by_task[record.path, task["id"]] = required
             if task["task_type"] == "qa":
                 # 单图校验之外，Light包或拆分的权威记录也必须共享同一个请求
                 # Reviewer。scope来自CLI核实的物理Git共同目录（非Git项目为
@@ -120,6 +140,7 @@ def select_candidates(records: tuple[RecordView, ...], capacity: dict[str, int])
     thread_slots = max(0, min(capacity["configured_subagents"] - threads,
                               capacity["host_available_subagents"] - unbound_claims))
     writer_slots = max(0, capacity["configured_writers"] - writers)
+    conflicting = {key for key, gates in versions.items() if len(gates) > 1}
     candidates, waiting = [], []
     for record in sorted(records, key=lambda value: value.path):
         for task in sorted(record.tasks, key=lambda value: (value["request_id"], value["id"])):
@@ -133,6 +154,13 @@ def select_candidates(records: tuple[RecordView, ...], capacity: dict[str, int])
                 reasons.append("task_not_pending")
             if task["id"] not in record.eligible:
                 reasons.append("record_gates_dependencies_locks_or_qa")
+            # 独立记录各自 CAS；单个副本撤回后，所有声明相同决定的待派任务都须等
+            # 当前清单各权威一致。仅比较此任务的门，不连带阻塞其他请求或无关工作。
+            required = decisions_by_task[record.path, task["id"]]
+            if required & conflicting:
+                reasons.append("solution_content_conflict")
+            if required & pending_decisions:
+                reasons.append("solution_approval_pending")
             owned = _paths(record, task)
             semantic = {(record.semantic_scope or record.project_root, item) for item in task.get("semantic_locks", ())}
             if any(_overlap(candidate, held) for candidate in owned for held in paths):

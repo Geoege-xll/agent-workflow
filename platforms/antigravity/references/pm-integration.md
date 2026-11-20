@@ -25,14 +25,13 @@ never emulate isolation by concurrently switching branches in one directory or o
 Light first assesses the current goal, risk, scope, and implementer, dispatching the corresponding native role subagent by default with mandatory minimum sufficient verification; assess independent QA, documentation, and memory at handoff without mandatory Full planning, DAG, saved plans, or duplicate confirmation.
 
 Full: classify → facts → Grill Me coverage through original `/xy-grilling` → `xy-plan` draft → projection decision →
-`requirements_approved`; Grill Me remains requirements-only. For design-change UI, include the PM
-recommendation and prototype choice in that confirmation; freeze truth until QA PASS.
+`requirements_approved`. Grill Me remains requirements-only. For applicable solution and page decisions follow `product/WORKFLOW.md#business-confirmation-policy` and the shared PM confirmation reference. Confirm the material solution before dispatching dependent design or implementation. Retain the user’s applicable prototype choice and the last accepted baseline until QA PASS.
 `/xy-grill-me` is user-invoked only; use the actually discovered plugin-qualified `/xy-grilling` for PM intake.
 Read xy-workflow/references/requirements-intake.md for the PM-owned schema and canonical fallback;
 declared skills paths do not prove runtime loading.
 Full work records the Grill Me coverage check and `plan_state: draft`; the pre-approval projection
 decision remains a draft, while post-QA controlled-document projection happens only after QA PASS.
-PM saves the approved Full plan in `docs.plans` before first design/implementation dispatch.
+PM 在首次设计或实现派发前保存单一可恢复的 Full 批准稿，按计划生命周期选择稳定主题或现有持久请求交接。原型绑定配置的 `docs.plans` 内稳定原稿与当前 REQ。
 Light saves only for actual pause/recovery/handoff or user request.
 For revisions/recovery follow `/xy-workflow`'s `references/plan-lifecycle.md`: one requirement, one
 current plan; replace affected complete worker/QA inputs and reuse unaffected verified work.
@@ -59,10 +58,14 @@ Current controlled documents and explicit user approvals win over recalled memor
 isolation or provenance, call neither recall nor save. For Full or Light assessed as requiring independent QA, at BUILD_VERIFIED dispatch exactly one
 integrated, read-only `xy-qa`. Waived work skips old-prototype comparison.
 
+### Native review method
+
 The reviewer tries `host-native-review`, then one `installed-code-review-skill` proven installed and
 capable, then `internal-xy-qa-procedure`, moving forward only on technical unavailability. The sole
 Superpowers option is `requesting-code-review/code-reviewer.md`. Findings or `FAIL` never switch
-review method or reviewer.
+review method or reviewer. Human diff/Artifact review must not impersonate native AI review or independent AI QA; do not automatically enable native, boost, or teamwork modes, or adjust existing Artifact policy, permissions, or model/effort to enable invocation.
+
+先查看当前 Reviewer 实际可用工具。若只提供 Artifact／diff 人工审阅，记录缺少可调用的原生 AI 审查入口，按既有顺序回退。若宿主确实提供同一 Reviewer 可只读调用的 AI 审查工具，按[核对原生审查目标](../../shared/skills/xy-qa-review/references/inputs.md#核对原生审查目标)核对它接收的实际范围和返回结果。不要套用其他宿主的 slash 命令或 CLI 参数。
 
 Final QA outcome: PASS | FAIL. Require `qa_handoff_cli.py validate --task-pack <current-qa-pack.json>`. Completion: QA PASS → projection
 → PM commit assessment → memory closeout via `/xy-project-memory` → final user report. The installed plugin rule supplies the entry point. Verify actual host discovery and task dispatch in the current session.
@@ -87,7 +90,7 @@ tool is available, declare `idle_followup` for the same task/ID. Killed agents c
 Target-session delivery, wait wakeup, A's continuity, idle followup and parent-final/cancellation lifecycle
 remain separate runtime checks; documentation/configuration/version probes cannot make them verified.
 
-Dispatch only current schema_version: 2 single-task packs: task, applicable standards_contract, and necessary approval/UI evidence. Stable agent_alias binds project-relative module and canonical role; instance_policy: fresh and context_policy: handoff_only forbid complete PM/sibling history copies. Invoke invoke_subagent on demand for each independent task, obtaining a new ID with a self-contained current-task initial Prompt; still read required current files and standards completely. If native independent initial context cannot be proven, report a blocker without falling back to a parent-history fork, precreating instances, or filling platform capacity.
+Dispatch only current schema_version: 2 single-task packs: task, applicable standards_contract, and necessary approval/UI evidence. Stable agent_alias binds project-relative module and canonical role; instance_policy: fresh and context_policy: handoff_only forbid complete PM/sibling history copies. Invoke invoke_subagent on demand for each independent task, obtaining a new ID with a self-contained current-task initial Prompt. 接收方独立读完当前任务包、选中的 Skill 入口及明确要求全文的材料，其余依受控范围读完适用条款和必要上下文。 If native independent initial context cannot be proven, report a blocker without falling back to a parent-history fork, precreating instances, or filling platform capacity.
 
 Continuous same-task implementation, recent short rework, and same-round Reviewer delta checks may follow up to the original ID. After the feedback window, PM acceptance, and necessary verification/QA, first protect temporary-worktree results, unique logs, and necessary evidence, then use the currently exposed authorized native termination capability. Official kill removes temporary worktrees and prevents recovery while retaining historical transcripts; never kill before retrieving the only delivery, or claim permanent history deletion. Without native capabilities such as manage_subagents kill, or if invocation fails, only record agent_retired and prohibit continuation, with native termination unconfirmed; do not claim destruction, context clearing, or thread-capacity release. Retirement releases no still-running task locks. Observe running/open-thread counts separately under actual host definitions; under pressure reclaim accepted instances with sufficient handoff first, retain executing instances, undelivered evidence, and necessary reviewers, and reserve later necessary QA/integration capacity. resume/compact is not prepareForReuse; create no Agent pool, runner, daemon, or second state machine.
 
@@ -95,4 +98,4 @@ Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-rec
 
 PM records the actual `invoke_subagent` result ID as `agent_ref` through existing update and queries `continuation --host antigravity --observed-state <current-observation>`; only currently exposed authorized native follow-up/wait tools may execute its advice. Cancelled, unknown, invalid, or cross-host states block automatic continuation; still hand off the complete Task Pack/scope. Retirement prohibits continuation; absent capabilities do not justify a custom runner, daemon, MCP, or replacement Reviewer. AGY native cumulative usage retains an unknown initial baseline, last_cumulative, and observed_delta rather than summing each record.
 
-See `xy-qa-review/references/inputs.md` for structured QA output: when supported, use `--json-schema <schema-json>` in the same authorized invocation, then `qa_handoff_cli.py extract --host antigravity --input <native-result.json> --task-pack <current-qa-pack.json>`. Missing optional usage is not a QA gate. Human diff/Artifact review must not impersonate native AI review or independent AI QA; do not automatically enable native, boost, or teamwork modes, or adjust existing Artifact policy, permissions, or model/effort to enable invocation.
+See `xy-qa-review/references/inputs.md` for structured QA output: when supported, use `--json-schema <schema-json>` in the same authorized invocation, then `qa_handoff_cli.py extract --host antigravity --input <native-result.json> --task-pack <current-qa-pack.json>`. Missing optional usage is not a QA gate.

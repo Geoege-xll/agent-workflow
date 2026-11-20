@@ -7,7 +7,7 @@ description: Use when a design Agent must statically validate concrete build-fre
 
 # xy-prototype-verify
 
-The active concrete page and its in-page `Page design and interaction contract` are the design
+The active concrete page and its in-page developer notes are the design
 evidence. The verifier is read-only: it validates the stable workspace and returns deterministic
 static evidence without creating metadata, reports, screenshots, or revision copies. The prototype
 is a user-review artifact; this procedure is not a second visual reviewer or an automated UI test.
@@ -46,19 +46,10 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    check, whose existing index and local-tool checks below remain applicable. Do not copy the generic
    plugin shell into a new project to satisfy that legacy entry.
    Keep the returned per-page fingerprints as internal evidence, not a user-facing JSON report.
-3. Verify every scoped active page contains exactly one non-empty
-   `Page design and interaction contract` with these exact five sections:
-
-   ```html
-   <section data-contract-section="purpose">...</section>
-   <section data-contract-section="navigation">...</section>
-   <section data-contract-section="interactions">...</section>
-   <section data-contract-section="states">...</section>
-   <section data-contract-section="exceptions">...</section>
-   ```
-
-   Each material interactive control needs a stable `id`, exactly one matching
-   `data-contract-for`, and executable declared outcomes.
+3. 每个具体页保留一个默认折叠的 `details.prototype-contract`，首个 summary 写「开发说明」。
+   只核对操作原型后仍不明确、且已有决定的交互。已有规则链接至需求 Markdown 原章节，无补充时允许为空；
+   未决行为交 PM。旧稿原有分节可读。重要控件保留稳定 ID；如有 data-contract-for，目标须唯一且确实可交互。
+   保留已确认目录分组，并核对真实登记页在各自层级中只出现一次；无来源的旧页仍可访问。
    Native disclosure controls may map the stable ID of a `details` element's first direct-child `summary`
    to the interaction contract. Same-name tags in ordinary containers or a second summary do not count as
    executable disclosure controls. The index may group pages with native `details/summary` inside the single
@@ -102,8 +93,7 @@ requesting visual approval. A preloaded Skill is not a mandate to execute an ina
    may carry non-material changes forward after the documented old/new-delta review and retained user
    approval; uncertain or material changes return to the existing scoped visual-confirmation step.
    The verifier never grants approval or decides visual equivalence.
-7. The design Agent performs three self-checks in the same handoff: requirements coverage compares the five
-   contract sections with frozen requirements/acceptance; standards conformance checks applicable built-in
+7. The design Agent performs three self-checks in the same handoff: requirements coverage compares the concrete page behavior, developer notes and linked requirements with frozen requirements/acceptance; standards conformance checks applicable built-in
    rules and project-specific standards; delivery consistency checks pages, controls, navigation, declared
    outcomes, shared styles and current dependency fingerprints. Omissions, unauthorized additions, conflicts
    or unresolved inconsistency are FAIL. Check only current scope and state exceptions/unverified behavior.
@@ -153,8 +143,8 @@ and functional QA after production implementation remains. A host without browse
 of completing the default procedure; browser evidence is not required and the PM must not supplement
 it merely because the host could not render or operate the prototype.
 
-Before user handoff, the PM independently compares all five in-page contract sections with the frozen
-approved requirements and acceptance criteria. The PM rejects omitted, invented, broadened, or
+Before user handoff, the PM independently compares the concrete page behavior, developer notes and linked requirements with the frozen
+approved requirements, applicable solution decisions and acceptance criteria. The PM rejects omitted, invented, broadened, or
 conflicting behavior and returns it to `xy-uiux`; it must not ask the user to approve a knowingly
 divergent contract. The PM also reviews scope, contract completeness, static evidence freshness and
 consistency, fingerprints, and the user-approval handoff. This is a text-and-requirements conformance

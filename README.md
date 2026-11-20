@@ -1,8 +1,10 @@
 # xy-workflow
 
-面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，保留适用的需求确认、原型与视觉确认、独立 QA 和交付流程。
+面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，按任务选择需求、方案与原型确认，并组织验证和交付。
 
-本源码为 **xy-workflow 3.0.7**，配套 **Native Agent Config 0.1.6**。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+本源码为 **xy-workflow 3.0.8**，配套 **Native Agent Config 0.1.6**。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+
+`3.0.8` 支持 PM 按任务名称查看、修改和撤回已委托的工作。要求原型的任务在原型完成并确认后才可交接和登记交付。独立 QA 可核对用户批准的方案正文，PM 可在原需求主题登记验收结果。[持续接单与调度](docs/usage.md#pm-持续接单与调度)
 
 `3.0.7` 将普通 Full 的验收绑定到实际差异和同一 Reviewer 的回执，统一普通和原生 QA 校验。文档按现有主题更新，PROJECT 基线索引去重，评审只收录明确的当前需求。工程、UI 与移动端指导按实际语言、框架和运行端选读，合法微信原生小程序可通过配置和真实入口识别。
 
@@ -11,7 +13,7 @@
 ## 工作流保持
 
 - PM 持续接单：A 执行期间可以继续讨论 B、C，按真实依赖选择并行、复用、追加或等待。
-- 需要原型的 Full UI 设计变更保留需求确认、视觉确认。Light、非 UI、一致性任务及用户明确选择直接开发，按各自原有规则执行。
+- 交付分 Light 和 Full。PM 先对齐目标，有待决定的规则或重要技术取舍时确认方案，需要原型时再确认可操作的页面。已明确批准的内容沿用原决定。[使用示例](docs/usage.md#两档交付与按需确认)
 - 原型设计、可交互 HTML、原型验收与视觉确认保留；计划使用 Markdown，不生成计划 HTML。
 - 实现交给对应原生子代理。独立新任务使用新实例和必要交接，不复制完整 PM 会话；同任务追加及短返工可复用。收口保全证据后原生关闭，缺少关闭能力时逻辑退休，不把退休当作清空记忆或释放仍在占用的资源。
 - Full 保留请求级唯一独立只读 QA。内置技能提供精选能力，所有角色仍按当前任务选择可用技能，不无条件预读所有内容。
@@ -42,6 +44,16 @@ codex plugin list --json
 安装后在官方 `/hooks` 中审阅并信任当前 SessionStart 定义，再开始新会话。安装不自动授予 Hook 信任；Codex App 图形界面的运行验证单独判定。
 
 ### Claude Code
+
+**首次安装并选择跨项目来源说明。** 在装有官方 Claude Code CLI 和 Python 3.11+ 的 macOS 或 Linux 电脑上，可在本版本源码仓根目录运行 `python3 scripts/install_claude.py`。也可以只复制[独立安装脚本](scripts/install_claude.py)到新电脑，审阅后在文件所在目录运行以下命令。
+
+```bash
+python3 install_claude.py
+```
+
+脚本通过 Claude 官方 CLI 安装到当前用户，并显示准备添加的来源说明。键入 `yes` 后，Claude Auto 可在这台电脑的各项目复用该说明；回车即可只安装插件。通过官方 `/plugin install` 或下列 CLI 命令安装时，Claude 只安装插件。希望事后补选的用户可在同一脚本命令后加 `--configure-source`。
+
+也可以直接使用官方命令安装：
 
 ```bash
 claude plugin marketplace add 'https://github.com/Geoege-xll/agent-workflow.git#plugins-claude-stable'
@@ -81,7 +93,7 @@ Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付
 
 新增 `xy-web-guidance` 和 `xy-apple-guidance` **可发现、按条件推荐，不进入角色无条件预载**。前者随包提供 GoogleChrome 官方固定版本的完整现代 Web 指导与离线查询，查询需要已有 Node 22+；后者只读使用本机 Xcode 官方 SwiftUI 指导，当前验证边界为观察到的 Xcode 27.x 布局，不再分发 Apple 正文。详见[角色技能主题](docs/plans/role-skill-routing.md)。
 
-计划文档借鉴 Anthropic doc-coauthoring 的分节精修与读者检查，保留五项元信息、六个固定章节及原地更新；显式计划校验不扫描未选文件，不增加访谈、确认或读者 Agent，见[计划规范主题](docs/plans/plan-document-quality.md)。
+项目知识从两个薄目录进入。PROJECT 的「主题目录」按能力或长期决定链接原文，STANDARDS 按适用范围链接项目特有规范。一个主题只维护一份 Markdown，先写当前行为，再按需补充本轮要求、交互和证据。已知目标时可直接读对应章节。普通目录链接用于导航，已验收声明须有真实批准与验收证据。Full 批准稿在首次派发前保存；纯执行或纯符合性修复可复用请求的持久交接，长期业务事实才进入计划目录。参见[计划生命周期](platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)。
 
 3.0.2 的通用评审工作台提供浏览／批注、固定视口相机、独立 A 标记和节点／页面／全局整改，不设置意见等级。JSON 与 Markdown 交还同一 feedback 3，先通过后端重读源复核。项目保留具体页面及业务资产；私有离线评审快照固定工具版本，插件更新不覆盖正在使用的快照，原型阶段完整保留。
 

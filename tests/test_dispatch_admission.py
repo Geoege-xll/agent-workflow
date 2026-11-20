@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import importlib.util
-import zipfile
 import json
 import os
 from pathlib import Path
@@ -32,8 +31,7 @@ def plugin_fixture(root: Path) -> Path:
     archive = builder.build(PACK, root / "archives", "codex")
     installed = root / "installed-plugin"
     installed.mkdir()
-    with zipfile.ZipFile(archive) as payload:
-        payload.extractall(installed)
+    builder.unpack_archive(archive, installed)
     return installed
 
 
@@ -153,6 +151,172 @@ class AdmissionTest(unittest.TestCase):
         self.assertEqual("qa", after["task"]["task_type"])
         self.assertEqual(before["reviewed_ui_changes"], after["reviewed_ui_changes"])
         self.assertEqual("RUNNING", after["task"]["state"])
+
+    def test_light_claim_and_handoff_require_the_same_bound_solution_as_ready(self):
+        pending = self.add_record("pending", level="Light")
+        other = self.add_record("other", owned="src/two", lock="two", level="Light")
+        decision = {"id": "refund", "content": "退款必须回到原支付账户。"}
+        self.modify(pending, lambda value: value["task"].update(solution_decisions=[decision]))
+        self.assertEqual([self.key(other)], cli.admission("view", self.manifest)["candidates"])
+        with self.assertRaisesRegex(ValueError, "not an admitted"):
+            cli.admission("claim", self.manifest, self.key(pending))
+        command = [*PYTHON, str(PACK / "lib/task_graph_cli.py")]
+        export = subprocess.run([*command, "task", "--input", str(pending)], capture_output=True, text=True)
+        self.assertEqual(2, export.returncode, export.stderr)
+        approval = {"request_id": "pending", "task_id": "api", **decision}
+        result = subprocess.run([*command, "update", "--input", str(pending), "--expect-sha256",
+                                 records.digest(pending.read_bytes()), "--patch", "-"],
+                                input=json.dumps({"approve_solutions": [approval]}), capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        # 同一正文、同名任务复制到另一请求，不能用旧门领取。之后把两包放回同一
+        # 请求，同时声明不同正文，则跨记录准入必须指出冲突。
+        granted = json.loads(pending.read_bytes())["approved_gates"]
+        def replay(value):
+            value["task"]["solution_decisions"] = [decision]
+            value["approved_gates"] = granted
+        self.modify(other, replay)
+        self.refresh(pending)
+        self.assertEqual([self.key(pending)], cli.admission("view", self.manifest)["candidates"])
+        # 两份独立权威对同一请求/正文原先都已批准。只撤回其中一份后，另一份旧
+        # 批准不能通过联合领取；第三个不依赖此决定的流程仍可执行。
+        self.modify(other, lambda value: value["task"].update(request_id="pending"))
+        separate = self.add_record("separate", owned="src/third", lock="third", level="Light")
+        for operation in ("revoke_solutions", "approve_solutions"):
+            change = subprocess.run([*command, "update", "--input", str(pending), "--expect-sha256",
+                                     records.digest(pending.read_bytes()), "--patch", "-"],
+                                    input=json.dumps({operation: [approval]}), capture_output=True, text=True)
+            self.assertEqual(0, change.returncode, change.stderr)
+            self.refresh(pending)
+            if operation == "revoke_solutions":
+                self.assertEqual([self.key(separate)], cli.admission("view", self.manifest)["candidates"])
+                with self.assertRaisesRegex(ValueError, "not an admitted"):
+                    cli.admission("claim", self.manifest, self.key(other))
+        self.assertEqual("claimed", cli.admission("claim", self.manifest, self.key(pending))["status"])
+        self.refresh(pending)
+        self.modify(other, lambda value: value["task"].update(
+            request_id="pending", solution_decisions=[{**decision, "content": "退款发至账户余额。"}]))
+        result = cli.admission("view", self.manifest)
+        self.assertEqual([self.key(separate)], result["candidates"])
+        self.assertIn("solution_content_conflict", next(row["reasons"] for row in result["waiting"]
+                                                       if row["record"] == str(other)))
+        self.assertEqual("claimed", cli.admission("claim", self.manifest, self.key(separate))["status"])
+
+    def test_registered_light_full_solution_guards_original_publish_and_handoff(self):
+        from lib.solution_confirmation import bind_decisions, decision_gates
+        light = self.add_record("same", level="Light")
+        original = self.add_record("b", owned="src/two", lock="other")
+        other_dir = self.project / "full"
+        other_dir.mkdir()
+        full = original.rename(other_dir / original.name)
+        self.manifest["records"][-1]["path"] = str(full)
+        choice = {"id": "refund", "content": "退回原账户"}
+        def declare(payload):
+            task = payload.get("task") or payload["tasks"][0]
+            task.update(request_id="same", solution_decisions=[choice])
+            bind_decisions(task)
+            payload["approved_gates"].extend(decision_gates(task).values())
+        for path in (light, full):
+            self.modify(path, declare)
+        cli_path = [*PYTHON, str(PACK / "lib/task_graph_cli.py")]
+        def command(path, operation, *extra, body=None):
+            return subprocess.run([*cli_path, operation, "--input", str(path), *extra],
+                                  input=json.dumps(body) if body is not None else None,
+                                  capture_output=True, text=True)
+        approval = {"request_id": "same", "task_id": "api", **choice}
+        def update(path, patch):
+            return command(path, "update", "--expect-sha256", records.digest(path.read_bytes()), "--patch", "-", body=patch)
+        initial = {path: path.read_bytes() for path in (light, full)}
+        # 旧 update 已占用另一目录时，首次登记不能越过该锁或提前发布任何成员。
+        with records._publication_lock(full):
+            with self.assertRaisesRegex(ValueError, "busy"):
+                cli.admission("bind-solutions", self.manifest)
+        with patch("lib.shared_solution_records.os.replace", side_effect=OSError("cannot publish membership")):
+            with self.assertRaisesRegex(OSError, "cannot publish"):
+                cli.admission("bind-solutions", self.manifest)
+        self.assertEqual(initial, {path: path.read_bytes() for path in (light, full)})
+        self.assertEqual(1, cli.admission("bind-solutions", self.manifest)["changed_decisions"])
+        self.assertEqual(initial, {path: path.read_bytes() for path in (light, full)})
+        # 同一清单重复登记无副作用。原单包旧入口直接撤回后，未被写入的 Full 也无法使用旧门。
+        self.assertEqual(0, cli.admission("bind-solutions", self.manifest)["changed_decisions"])
+        # 注册后，Light 的旧单文件更新还要取得 Full 所在的另一目录锁。
+        with records._publication_lock(full):
+            refused = update(light, {"revoke_solutions": [approval]})
+            self.assertEqual(2, refused.returncode, refused.stderr)
+            self.assertIn("busy", refused.stderr)
+        result = update(light, {"revoke_solutions": [approval]})
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(initial[full], full.read_bytes())
+        self.assertEqual([], json.loads(command(full, "ready").stdout)["ready"])
+        self.assertEqual(2, command(full, "task", "--task-id", "api").returncode)
+        self.assertEqual(2, update(full, {"tasks": {"api": {"set": {"state": "RUNNING"}}}}).returncode)
+        self.refresh(light)
+        with self.assertRaisesRegex(ValueError, "not an admitted"):
+            cli.admission("claim", self.manifest, self.key(full))
+        result = update(light, {"approve_solutions": [{**approval, "source_ref": "user:refund-confirmed"}]})
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("user:refund-confirmed", json.loads(light.read_bytes())["solution_approval_sources"].values())
+        self.refresh(light)
+        self.assertEqual("claimed", cli.admission("claim", self.manifest, self.key(full))["status"])
+        saved = light.read_bytes()
+        for patch_body in ({"revoke_solutions": [approval]},
+                           {"tasks": {"api": {"set": {"solution_decisions": [{**choice, "content": "改为余额"}]}}}}):
+            refused = update(light, patch_body)
+            self.assertEqual(2, refused.returncode, refused.stderr)
+            self.assertIn("running or delivered", refused.stderr)
+            self.assertEqual(saved, light.read_bytes())
+        # 模拟 PM 归档该副本、从当前调度清单移出。登记的成员仍须回读；无关项目工作
+        # 可继续，不能因为同一目录的一个请求暂时缺档而让其它请求的领取也失败。
+        independent = self.add_record("independent", owned="src/third", lock="independent", level="Light")
+        full.rename(full.with_suffix(".archived"))
+        self.manifest["records"] = [entry for entry in self.manifest["records"] if entry["path"] != str(full)]
+        self.assertEqual([self.key(independent)], cli.admission("view", self.manifest)["candidates"])
+        self.assertEqual("claimed", cli.admission("claim", self.manifest, self.key(independent))["status"])
+        self.assertEqual(2, command(light, "task").returncode)
+
+    def test_capacity_one_skips_revoked_shared_writer_inside_full_record(self):
+        from lib.solution_confirmation import bind_decisions, decision_gates
+        full = self.add_record("full")
+        light = self.add_record("light", level="Light", owned="src/peer", lock="peer")
+        choice = {"id": "payment", "content": "款项原路退回"}
+        for path in (full, light):
+            value = json.loads(path.read_bytes())
+            writer = value.get("task") or value["tasks"][0]
+            writer["request_id"] = "shared-request"
+            if path == full:
+                # 两个 Writer 的原图容量为 1。第一个按 ID 排在前面，第二个使用
+                # 独立路径、语义锁和合同，撤回邻居的方案后仍应取得这个名额。
+                independent = copy.deepcopy(writer)
+                independent.update(id="z-independent", agent_alias="fixture-independent",
+                                   owned_paths=["src/independent"], semantic_locks=["independent"])
+                for doc in independent["controlled_document_access"]["documents"]:
+                    doc["applies_to"] = list(independent["owned_paths"])
+                value["tasks"].append(independent)
+                value["capacity"] = 1
+                self.manifest["records"][0]["execution_roots"]["z-independent"] = str(self.project)
+            writer["solution_decisions"] = [choice]
+            bind_decisions(writer)
+            value["approved_gates"].extend(decision_gates(writer).values())
+            path.write_text(json.dumps(value), encoding="utf-8")
+            self.refresh(path)
+        self.assertEqual("bound", cli.admission("bind-solutions", self.manifest)["status"])
+        entry = [*PYTHON, str(PACK / "lib/task_graph_cli.py")]
+        def ready():
+            result = subprocess.run([*entry, "ready", "--input", str(full)], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            return json.loads(result.stdout)["ready"]
+        self.assertEqual(["api"], ready())
+        revoked = subprocess.run([*entry, "update", "--input", str(light), "--expect-sha256",
+                                  records.digest(light.read_bytes()), "--patch", "-"],
+                                 input=json.dumps({"revoke_solutions": [
+                                     {"request_id": "shared-request", "task_id": "api", **choice}]}),
+                                 capture_output=True, text=True)
+        self.assertEqual(0, revoked.returncode, revoked.stderr)
+        self.refresh(light)
+        self.assertEqual(["z-independent"], ready())
+        self.manifest["capacity"].update(configured_writers=1, configured_subagents=1)
+        key = {"record": str(full), "request_id": "shared-request", "task_id": "z-independent"}
+        self.assertEqual([key], cli.admission("view", self.manifest)["candidates"])
+        self.assertEqual("claimed", cli.admission("claim", self.manifest, key)["status"])
 
     def test_unbound_claim_reserves_the_native_slot_before_agent_creation(self):
         a = self.add_record("a")

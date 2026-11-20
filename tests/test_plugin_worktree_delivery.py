@@ -13,7 +13,6 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
-import zipfile
 
 from lib.delivery import worktree_cli as delivery
 from tests import test_plugin_delivery as plugin_fixtures
@@ -322,8 +321,7 @@ class PluginWorktreeDeliveryTest(DeliveryFixture, unittest.TestCase):
         archive = plugin_fixtures.builder.build(PACK, cls.package_root / "build", "codex")
         cls.plugin = cls.package_root / "installed"
         cls.plugin.mkdir()
-        with zipfile.ZipFile(archive) as payload:
-            payload.extractall(cls.plugin)
+        plugin_fixtures.builder.unpack_archive(archive, cls.plugin)
 
     @classmethod
     def tearDownClass(cls):

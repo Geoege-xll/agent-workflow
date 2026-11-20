@@ -111,6 +111,18 @@ class PrototypeServerTest(unittest.TestCase):
         self.assertEqual(403, self.request("GET", "/_service/" + "0" * 64 + "/status")[0])
         self.assertEqual(before, tree_snapshot(self.project))
 
+    def test_developer_requirement_only_opens_bound_markdown_in_same_origin_top_level(self):
+        # 同源交付壳可新标签查阅本页的真实需求，不能借该路径读取未登记文件。
+        path = "/requirement/" + self.server.content_cap + "/settings.html"
+        top = {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "same-origin"}
+        status, headers, body = self.request("GET", path, headers=top)
+        self.assertEqual(200, status)
+        self.assertEqual("text/plain; charset=utf-8", headers["Content-Type"])
+        self.assertEqual((self.project / "docs/plans/settings.md").read_bytes(), body)
+        for changed in ({"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Dest": "iframe"}, {"Sec-Fetch-Mode": "cors"}):
+            self.assertEqual(403, self.request("GET", path, headers={**top, **changed})[0])
+        self.assertEqual(404, self.request("GET", path.replace("settings.html", "project.yaml"), headers=top)[0])
+
     def test_http_draft_conflict_duplicate_fields_source_change_and_old_read(self):
         initial = json.loads(self.request("GET", "/api/draft", headers=self.auth())[2])
         self.assertEqual(400, self.request("PUT", "/api/draft", headers=self.auth(), raw=b'{"revision":0,"revision":0,"draft":null}')[0])

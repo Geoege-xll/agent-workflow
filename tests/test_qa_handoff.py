@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import os
@@ -98,13 +99,16 @@ class QAHandoffValidationTest(unittest.TestCase):
         self.payload["handoff_ref"] = handoff_ref(self.task_pack, self.task_pack_body)
 
     def invoke(self, payload: dict[str, object] | bytes, *, task_pack_body: bytes | None = None,
-               env: dict[str, str] | None = None, stdin: bool = False) -> subprocess.CompletedProcess[str]:
+               env: dict[str, str] | None = None, stdin: bool = False,
+               command: str = "validate", host: str | None = None) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="qa-handoff-") as raw:
             root = Path(raw).resolve()
             current_pack = root / "qa-task-pack.json"
             current_pack.write_bytes(self.task_pack_body if task_pack_body is None else task_pack_body)
             body = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            args = [sys.executable, str(self.cli), "validate", "--task-pack", str(current_pack)]
+            args = [sys.executable, str(self.cli), command, "--task-pack", str(current_pack)]
+            if host is not None:
+                args.extend(("--host", host))
             if not stdin:
                 source = root / "handoff.json"
                 source.write_bytes(body)
@@ -119,6 +123,42 @@ class QAHandoffValidationTest(unittest.TestCase):
                 result = self.invoke(self.payload, stdin=stdin)
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertEqual({"status": "valid"}, json.loads(result.stdout))
+
+    def test_light_solution_review_checks_authoritative_writer_and_legacy_gate(self):
+        """Light 单包直接核对已批准正文；旧记录无来源时只展示真实的批准门。"""
+        from lib.solution_confirmation import bind_decisions
+        from lib.task_graph_cli import _verify_solution_scope, reviewed_solutions, export_task_pack
+        from tests.test_task_graph_records import graph
+        source = export_task_pack(graph(), "api")
+        writer = source["task"]
+        writer.update(workflow_level="Light", blocks=[], depends_on=[],
+                      solution_decisions=[{"id": "retry", "content": "失败时由用户重试"}])
+        bind_decisions(writer)
+        gate = next(gate for gate in writer["gates"] if gate.startswith("solution_approved:"))
+        source["approved_gates"].append(gate)
+        pack = qa_task_pack()
+        pack["task"].update(workflow_level="Light", request_id=writer["request_id"])
+        pack["approved_gates"] = [gate]
+        pack["reviewed_solution_decisions"] = reviewed_solutions([writer], source)
+        with tempfile.TemporaryDirectory() as fixture:
+            directory = Path(fixture).resolve()
+            writer_file, qa_file = directory / "writer.json", directory / "reviewer.json"
+            writer_file.write_text(json.dumps(source))
+            qa_file.write_text(json.dumps({key: value for key, value in pack.items() if key != "reviewed_solution_decisions"}))
+            result = subprocess.run([sys.executable, str(self.cli.parents[1] / "task_graph_cli.py"), "task",
+                "--input", str(qa_file), "--source", str(writer_file)], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(pack["reviewed_solution_decisions"], json.loads(result.stdout)["reviewed_solution_decisions"])
+        self.assertNotIn("source_ref", pack["reviewed_solution_decisions"][0])
+        _verify_solution_scope(pack, source)
+        stamped = copy.deepcopy(pack)
+        stamped["solution_approval_sources"] = {gate: "fixture:wrong-reply"}
+        stamped["reviewed_solution_decisions"][0]["source_ref"] = "fixture:wrong-reply"
+        with self.assertRaisesRegex(ValueError, "authoritative"):
+            _verify_solution_scope(stamped, source)
+        del pack["reviewed_solution_decisions"]
+        with self.assertRaisesRegex(ValueError, "authoritative"):
+            _verify_solution_scope(pack, source)
 
     def test_current_pack_requires_exact_skill_ids_and_preserves_optional_coverage_gap(self) -> None:
         pack = self.task_pack
@@ -441,6 +481,195 @@ class QAHandoffValidationTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
+class QAComposeTest(unittest.TestCase):
+    """直接运行命令行，将 Reviewer 判定回填为可再次 validate 的多仓回执。"""
+
+    def setUp(self):
+        self.fixture = QAHandoffValidationTest()
+        self.fixture.setUp()
+        self.pack = self.fixture.task_pack
+        self.scope = copy.deepcopy(self.fixture.payload["review_method"]["scope_ref"])
+        self.scope["repositories"].append({"path": "web", "base_revision": "web-base", "head_revision": "web-head",
+                                           "diff_fingerprint": "a" * 64, "changed_paths": ["web/a.ts", "web/b.ts"]})
+        self.pack["task"]["qa_scope_ref"] = self.scope
+        contract = self.pack["standards_contract"]
+        self.project_rules = ["eng-source-boundary", "eng-error-boundary"]
+        contract["leaves"][0]["rule_ids"] = [*self.project_rules, "eng-not-used"]
+        self.builtin_path = "platforms/shared/skills/xy-code-standards/references/rules.md"
+        fingerprint = hashlib.sha256((self.fixture.cli.parents[2] / self.builtin_path).read_bytes()).hexdigest()
+        contract["leaves"].append({"domain": "engineering", "path": self.builtin_path,
+                                   "content_fingerprint": fingerprint, "rule_ids": ["eng-common-005"]})
+        contract["required_engineering_rule_ids"] = [*self.project_rules, "eng-not-used", "eng-common-005"]
+        self.body = json.dumps(self.pack, ensure_ascii=False, indent=2).encode()
+        self.decisions = {
+            "task_pack_sha256": hashlib.sha256(self.body).hexdigest(), "audit_result": "PASS",
+            "review_method": {"selected": "host-native-review", "capability_evidence": ["logs:host-review"]},
+            "skill_evidence": self.fixture.payload["skill_evidence"],
+            "review_details": {"findings": [], "verification": [
+                {"command": "fixture-check", "exit_code": 0, "log_ref": "logs:complete-fixture"}]},
+            "path_groups": [
+                {"paths": ["web/a.ts", "web/b.ts"], "rule_ids": self.project_rules, "reason": "两个页面处理相同错误"},
+                {"paths": ["services/api.py"], "rule_ids": ["eng-common-005"], "reason": "API 的配置处理"},
+            ],
+            "rule_groups": [
+                {"rule_ids": self.project_rules, "severity": "hard", "disposition": "pass",
+                 "evidence_refs": ["diff:web/a.ts", "diff:web/b.ts"]},
+                {"rule_ids": ["eng-common-005"], "disposition": "pass", "evidence_refs": ["diff:services/api.py"]},
+                {"rule_ids": ["eng-not-used"], "severity": "advisory", "disposition": "not_applicable",
+                 "not_applicable_reason": "固定范围未调用该接口", "evidence_refs": []},
+            ],
+        }
+
+    def compose(self, decisions, *, body=None, stdin=False):
+        return self.fixture.invoke(decisions, task_pack_body=self.body if body is None else body,
+                                   command="compose", stdin=stdin)
+
+    def assert_rejected(self, result, error):
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("", result.stdout)
+        self.assertIn(error, json.loads(result.stderr)["error"])
+
+    def test_compose_validates_complete_grouped_multirepo_receipt_and_binds_original_bytes(self):
+        for stdin in (False, True):
+            with self.subTest(stdin=stdin):
+                result = self.compose(self.decisions, stdin=stdin)
+                self.assertEqual(0, result.returncode, result.stderr)
+                receipt = json.loads(result.stdout)
+                self.assertEqual(handoff_ref(self.pack, self.body), receipt["handoff_ref"])
+                self.assertEqual(self.scope, receipt["review_method"]["scope_ref"])
+                self.assertEqual(self.decisions["review_details"], receipt["review_details"])
+                self.assertEqual(self.decisions["skill_evidence"], receipt["skill_evidence"])
+                coverage = receipt["standards_policy_coverage"]
+                checks = {check["rule_id"]: check for check in coverage["rule_checks"]}
+                self.assertEqual(sorted(checks), sorted(coverage["task_pack_rule_ids"]))
+                for rule in self.project_rules:
+                    self.assertEqual(["web/a.ts", "web/b.ts"], checks[rule]["affected_paths"])
+                    self.assertEqual(rule, checks[rule]["source_anchor"])
+                    self.assertEqual("f" * 64, checks[rule]["source_fingerprint"])
+                self.assertEqual(self.builtin_path, checks["eng-common-005"]["source_path"])
+                self.assertEqual("hard", checks["eng-common-005"]["severity"])
+                self.assertEqual([], checks["eng-not-used"]["affected_paths"])
+                self.assertEqual(3, len(coverage["path_checks"]))
+                checked = self.fixture.invoke(result.stdout.encode(), task_pack_body=self.body)
+                self.assertEqual({"status": "valid"}, json.loads(checked.stdout), checked.stderr)
+
+    def test_missing_frozen_scope_requires_reviewer_scope_and_frozen_scope_cannot_be_replaced(self):
+        changed_scope = copy.deepcopy(self.scope)
+        changed_scope["repositories"][1]["head_revision"] = "different-head"
+        self.decisions["review_method"]["scope_ref"] = changed_scope
+        self.assert_rejected(self.compose(self.decisions), "qa_scope_ref")
+        del self.pack["task"]["qa_scope_ref"]
+        self.body = json.dumps(self.pack).encode()
+        self.decisions["task_pack_sha256"] = hashlib.sha256(self.body).hexdigest()
+        del self.decisions["review_method"]["scope_ref"]
+        self.assert_rejected(self.compose(self.decisions), "scope_ref")
+        self.decisions["review_method"]["scope_ref"] = self.scope
+        result = self.compose(self.decisions)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(self.scope, json.loads(result.stdout)["review_method"]["scope_ref"])
+
+    def test_all_receipt_commands_bind_the_complete_frozen_scope_including_array_order(self):
+        baseline = self.compose(self.decisions)
+        self.assertEqual(0, baseline.returncode, baseline.stderr)
+        for mutate in (lambda repos: repos[1].update(head_revision="changed"),
+                       lambda repos: repos[1].update(diff_fingerprint="b" * 64),
+                       lambda repos: repos.reverse(),
+                       lambda repos: repos[1]["changed_paths"].reverse()):
+            # 使用同一合法结果，仅改一个冻结维度，覆盖完整回执直接校验、原生终端解包
+            # 和 Reviewer 显式传入范围三种路径。所有命令均须在输出回执前拒绝。
+            scope = copy.deepcopy(self.scope)
+            mutate(scope["repositories"])
+            decisions = copy.deepcopy(self.decisions)
+            decisions["review_method"]["scope_ref"] = scope
+            self.assert_rejected(self.compose(decisions), "qa_scope_ref")
+            receipt = json.loads(baseline.stdout)
+            receipt["review_method"]["scope_ref"] = scope
+            for command, host in (("validate", None), ("extract", "codex")):
+                with self.subTest(command=command, scope=scope):
+                    self.assert_rejected(self.fixture.invoke(receipt, task_pack_body=self.body,
+                                                             command=command, host=host), "qa_scope_ref")
+
+    def test_compose_rejects_stale_decisions_missing_judgments_and_conflicting_evidence(self):
+        # 仅重新编码就已是另一份包。同请求换 Reviewer 也不能把旧结论直接重绑为 PASS。
+        self.assert_rejected(self.compose(self.decisions, body=json.dumps(self.pack).encode()), "task_pack_sha256")
+        self.pack["task"]["agent_ref"]["agent_id"] = "replacement"
+        self.assert_rejected(self.compose(self.decisions, body=json.dumps(self.pack).encode()), "task_pack_sha256")
+        mutations = [
+            (lambda d: d.pop("task_pack_sha256"), "task_pack_sha256"),
+            (lambda d: d.pop("audit_result"), "audit_result"),
+            (lambda d: d.pop("skill_evidence"), "skill_evidence"),
+            (lambda d: d["review_method"].pop("capability_evidence"), "capability_evidence"),
+            (lambda d: d["review_method"].update(selected="internal-xy-qa-procedure"), "fallback_reason"),
+            (lambda d: d["rule_groups"].pop(), "missing required standards rule"),
+            (lambda d: d["rule_groups"][0].pop("disposition"), "disposition"),
+            (lambda d: d["rule_groups"][0].pop("severity"), "severity"),
+            (lambda d: d["rule_groups"][0].update(evidence_refs=[]), "evidence_refs"),
+            (lambda d: d["rule_groups"][1].update(severity="advisory"), "ID/severity"),
+            (lambda d: d["rule_groups"][0].update(disposition="fail"), "hard standards rule failure"),
+            (lambda d: d["rule_groups"][-1].pop("not_applicable_reason"), "not_applicable_reason"),
+            (lambda d: d["rule_groups"].append(d["rule_groups"][0]), "duplicate rule IDs"),
+            (lambda d: d["path_groups"][0]["paths"].pop(), "classify every changed path"),
+            (lambda d: d["path_groups"][0]["paths"].append("other/a.ts"), "outside fixed scope"),
+            (lambda d: d["path_groups"].append(d["path_groups"][0]), "duplicates"),
+            (lambda d: d["path_groups"][0].update(rule_ids=["*"]), "invalid stable rule ID"),
+            (lambda d: d.update(handoff_ref={}), "compose must contain exactly"),
+        ]
+        for mutate, error in mutations:
+            with self.subTest(error=error):
+                decisions = copy.deepcopy(self.decisions)
+                mutate(decisions)
+                self.assert_rejected(self.compose(decisions), error)
+
+    def test_undispatched_applicable_rule_allows_actionable_fail_only(self):
+        omitted = "eng-omitted"
+        self.decisions["path_groups"][1]["rule_ids"].append(omitted)
+        self.decisions["rule_groups"].append({
+            "rule_ids": [omitted], "source_path": "docs/standards/GENERAL.md", "source_fingerprint": "f" * 64,
+            "severity": "hard", "disposition": "pass", "evidence_refs": ["diff:services/api.py"],
+        })
+        self.assert_rejected(self.compose(self.decisions), "omitted from the PM Task Pack")
+        self.decisions["audit_result"] = "FAIL"
+        self.assert_rejected(self.compose(self.decisions), "actionable blocking")
+        self.decisions["review_details"]["findings"] = [
+            {"severity": "P1", "blocking": True, "detail": "PM 漏派接口规则", "evidence_refs": ["spec:eng-omitted"],
+             "owner_role": "pm", "next_step": "修正接口规则并刷新任务包"}]
+        result = self.compose(self.decisions)
+        self.assertEqual(0, result.returncode, result.stderr)
+        receipt = json.loads(result.stdout)
+        self.assertEqual("FAIL", receipt["audit_result"])
+        self.assertNotIn(omitted, receipt["standards_policy_coverage"]["task_pack_rule_ids"])
+        self.assertIn(omitted, receipt["standards_policy_coverage"]["required_engineering_rule_ids"])
+        self.assertEqual({"status": "valid"}, json.loads(self.fixture.invoke(receipt, task_pack_body=self.body).stdout))
+        # 对已展开结果只删汇总 ID，保留逐路径和逐规则的实审记录；手填结果和宿主
+        # 解包都不能利用这份不完整汇总偷渡 PASS。合法 FAIL 仍保留真实漏派与返工依据。
+        receipt["standards_policy_coverage"]["required_engineering_rule_ids"].remove(omitted)
+        for command, host in (("validate", None), ("extract", "codex")):
+            with self.subTest(command=command):
+                failed = self.fixture.invoke(receipt, task_pack_body=self.body, command=command, host=host)
+                self.assertEqual(0, failed.returncode, failed.stderr)
+                forged = copy.deepcopy(receipt)
+                forged["audit_result"] = "PASS"
+                forged["review_details"]["findings"] = []
+                result = self.fixture.invoke(forged, task_pack_body=self.body, command=command, host=host)
+                self.assert_rejected(result, "omitted from the PM Task Pack")
+
+    def test_group_expansion_cannot_emit_a_receipt_larger_than_the_input_limit(self):
+        # 一份很短的规则列表会多次展开同一条长证据，失败时不输出任何局部回执。
+        self.decisions["rule_groups"][0]["evidence_refs"] = ["x" * (2 * 1024 * 1024)]
+        self.assert_rejected(self.compose(self.decisions), "4 MiB")
+
+    def test_pack_cannot_supply_ambiguous_rule_metadata(self):
+        # JSON 图的规则登记按领域索引，完整回执则按全局规则 ID 索引。重名时不能依
+        # 叶子顺序取最后一项，否则同一份明确判定会意外通过另一个规则来源。
+        self.pack["standards_contract"]["leaves"].insert(0, {
+            "path": "docs/standards/DESIGN_TEST.md", "domain": "design", "content_fingerprint": "c" * 64,
+            "rule_ids": ["eng-source-boundary"],
+        })
+        self.body = json.dumps(self.pack).encode()
+        self.decisions["task_pack_sha256"] = hashlib.sha256(self.body).hexdigest()
+        self.assert_rejected(self.compose(self.decisions), "多个来源")
+
+
 class NativeQAHandoffTest(unittest.TestCase):
     """从真实 CLI 验证原生终端合同；封装夹具不冒充真实模型执行证据。"""
 
@@ -599,6 +828,11 @@ class NativeQAHandoffTest(unittest.TestCase):
         cases = [
             ("codex", {"type": "turn.failed", "structured_output": self.payload}),
             ("codex", {"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(self.payload)}}),
+            # 即使错误事件带有可解析的 PASS 对象，也不能作为 Claude 成功终端回执。
+            ("claude", {"type": "assistant", "isApiErrorMessage": True, "error": "invalid_request",
+                        "message": {"model": "<synthetic>", "content": [{"type": "text", "text":
+                            "Prompt is too long · automatic compaction failed: summarization produced empty response"}]},
+                        "structured_output": self.envelope("claude", self.payload)["structured_output"]}),
         ]
         for field, values in {"type": ["assistant", None], "subtype": ["error", "cancelled", "partial", None],
                               "is_error": [True, 0, None]}.items():

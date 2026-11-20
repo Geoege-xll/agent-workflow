@@ -33,7 +33,7 @@ PACKAGING_MODULES = {
     "plugin_delivery", "native_config_packaging", "candidate_delivery", "plugin_config_launcher",
     "config_distribution", "plugin_source_publication", "remote_install_smoke",
 }
-PLAN_MODULES = {"plan_and_shallow_docs"}
+PLAN_MODULES = {"plan_and_shallow_docs", "document_relations", "document_links"}
 
 
 def repository_targets():

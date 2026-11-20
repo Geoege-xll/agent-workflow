@@ -51,8 +51,10 @@ class SelectedPlanValidationTest(unittest.TestCase):
     def invoke(self, *plans, legacy=False, adapter=None, topic=None):
         arguments = ([str(self.root / "project.yaml"), str(self.root)] if legacy else
                      ["--root", str(self.root), *[value for plan in plans for value in ("--plan", str(plan))]])
+        if adapter is not None:
+            arguments.extend(("--adapter", str(adapter)))
         if topic is not None:
-            arguments.extend(("--adapter", str(adapter), "--topic", topic))
+            arguments.extend(("--topic", topic))
         return subprocess.run(
             ["bash", str(PACK / "lib/python_runtime.sh"), "-B", "-X", "utf8",
              str(PACK / "lib/validate_project_docs.py"), *arguments],
@@ -143,7 +145,7 @@ class SelectedPlanValidationTest(unittest.TestCase):
 
     def test_real_cli_reports_every_selected_failure_and_never_rewrites(self):
         first = self.write_plan("# 缺少生命周期元信息\n", "first.md")
-        second = self.write_plan(PlanAndShallowDocsTest.lifecycle() + "\n## 多余专题\n", "second.md")
+        second = self.write_plan(PlanAndShallowDocsTest.lifecycle() + "\n## 需求与验收\n", "second.md")
         before = {path: path.read_bytes() for path in (first, second)}
         result = self.invoke(first, second)
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
@@ -177,7 +179,7 @@ class SelectedPlanValidationTest(unittest.TestCase):
             with self.subTest(fence=fence):
                 self.assert_rejected(f"# 示例\n{fence}markdown\n{body}\n{fence}\n", "主题 ID")
                 header, sections = body.split("\n## ", 1)
-                self.assert_rejected(header + f"\n{fence}\n## " + sections + f"\n{fence}\n", "六节")
+                self.assert_rejected(header + f"\n{fence}\n## " + sections + f"\n{fence}\n", "需求与验收")
         accepted = PlanAndShallowDocsTest.lifecycle(version="v1")
         accepted = accepted.replace("- 批准依据: 原始用户批准记录 request-old", "```\n- 批准依据: 原始用户批准记录 request-old\n```")
         self.assert_rejected(accepted, "批准依据")
@@ -185,17 +187,36 @@ class SelectedPlanValidationTest(unittest.TestCase):
         valid = body + "\n   ````md\n- 阶段: cancelled\n## 示例标题\n[示例](../../../../outside.md)\n```\n   ````\n"
         self.assertEqual([], validate_selected_plans(self.root, [self.write_plan(valid)]))
 
-    def test_full_rejects_extra_duplicate_reordered_h2_but_accepts_h3(self):
+    def test_compact_full_accepts_reader_order_and_requires_unique_effective_sections(self):
         body = PlanAndShallowDocsTest.lifecycle()
-        swapped = body.replace("## 目标与范围", "## 临时").replace(
-            "## 需求与验收", "## 目标与范围").replace("## 临时", "## 需求与验收")
-        for modified, reason in ((body + "\n## 新专题\n", "H2"),
-                                 (body + "\n## 目标与范围\n", "重复"),
-                                 (swapped, "乱序"),
-                                 (body.replace("## 需求与验收", "## 方案与原型关联"), "重复")):
-            with self.subTest(reason=reason):
-                self.assert_rejected(modified, reason)
-        self.assertEqual([], validate_selected_plans(self.root, [self.write_plan(body + "\n### 额外专题\n说明。\n")]))
+        header = body.split("\n## ", 1)[0]
+        compact = (header + "\n## 验收结果与当前已交付行为\n尚无基线。\n"
+                   "\n## 需求与验收\n能查到指定订单。\n\n## 订单来源\n订单从业务接口读取。\n")
+        self.assertEqual([], validate_selected_plans(self.root, [self.write_plan(compact)]))
+        self.assert_rejected(compact + "\n## 需求与验收\n另一个目标。", "重复")
+        self.assert_rejected(compact.replace("能查到指定订单。", "<!-- 仍待补充 -->"), "非空")
+        accepted = PlanAndShallowDocsTest.lifecycle(version="v1")
+        # 无关章节不能向上一个证据节“借出”验收依据，避免换标题之后误绑旧证据。
+        self.assert_rejected(accepted.replace("- 验收证据:", "## 外部资料\n- 验收证据:"), "验收证据")
+        self.assert_rejected(accepted.replace("- 验收证据:", "<!--\n- 验收证据:") + "\n-->", "验收证据")
+
+    def test_adapter_plan_checks_only_incoming_links_to_selected_nodes(self):
+        adapter = self.root / "project.yaml"
+        adapter.write_bytes((PACK / "project.yaml").read_bytes())
+        plan = self.write_plan()
+        project = self.root / "docs/PROJECT.md"
+        # 同目录含不可解码历史原稿与失效链接。定向校验只核对所选来源及它的目录项。
+        self.write_plan(name="unselected.md").write_bytes(b"\xff")
+        body = ("## 主题目录\n- [历史待核](plans/unselected.md#坏锚点)\n- [待修复](plans/missing.md)\n"
+                "- [查订单](plans/selected.md#需求与验收)\n")
+        project.write_text(body)
+        result = self.invoke(plan, adapter=adapter)
+        self.assertEqual(0, result.returncode, result.stderr)
+        project.write_text(body.replace("需求与验收", "不存在的标题"))
+        failure = self.invoke(plan, adapter=adapter)
+        self.assertEqual(1, failure.returncode)
+        self.assertIn("锚点不存在", failure.stderr)
+        self.assertEqual(0, self.invoke(plan).returncode)
 
     def test_selected_cli_validates_explicit_current_requirement_section(self):
         body = PlanAndShallowDocsTest.lifecycle().replace("可观察验收。", "### 当前有效需求\n- REQ-001 可观察验收。")
@@ -262,6 +283,31 @@ class SelectedPlanValidationTest(unittest.TestCase):
             for label in ("[错误链接]", "![图片]"):
                 with self.subTest(link=raw, label=label):
                     self.assert_rejected(PlanAndShallowDocsTest.lifecycle() + f"\n{label}({raw})\n", "")
+
+    def test_selected_resolves_titled_links_and_images_to_their_actual_targets(self):
+        docs = self.root / "docs"
+        standards = docs / "standards"
+        decisions = docs / "decisions"
+        standards.mkdir()
+        decisions.mkdir()
+        (standards / "DESIGN_MINI_PROGRAM.md").touch()
+        (decisions / "order (v2).md").touch()
+        image = decisions / "order (v2).png"
+        image.touch()
+        compact = (PlanAndShallowDocsTest.lifecycle() +
+                   '\n[触控](../standards/DESIGN_MINI_PROGRAM.md#触控与间距 "规范依据")\n'
+                   '[决定](<../decisions/order (v2).md> "确定依据")\n'
+                   '> ![图](../decisions/order%20(v2).png "示意图")\n'
+                   '说明中举例的 `![图](missing.png)` 不产生实际链接。\n')
+        result = self.invoke(self.write_plan(compact))
+        self.assertEqual(0, result.returncode, result.stderr)
+        # 确认图片仍在校验范围，也不允许带标题的格式绕过缺失、父跳转或软链检查。
+        image.unlink()
+        self.assert_rejected(compact, "order (v2).png")
+        image.symlink_to(decisions / "order (v2).md")
+        self.assert_rejected(compact, "单链接")
+        self.assert_rejected(compact.replace("../standards/DESIGN_MINI_PROGRAM.md", "../../../escape.md"), "越出")
+        self.assert_rejected(compact.replace("order (v2).md", "order%09(v2).md"), "文档链接须位于项目内")
 
     def test_legacy_cli_and_default_parser_keep_unindexed_history_behavior(self):
         legacy = self.write_plan("# 历史计划\n- Status: completed\n", "legacy.md")
@@ -346,7 +392,7 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         document = parse_plan(template, "PLAN.md", required=True)
         self.assertEqual("none", document.accepted_version)
         self.assertFalse(document.has_current_baseline)
-        self.assertEqual(list(SECTIONS), list(document.sections))
+        self.assertEqual([SECTIONS[4], SECTIONS[1]], list(document.sections))
         self.assertFalse((PACK / "templates/docs/FEATURE.md").exists())
         errors = []
         validate_docs((self.config.read_text() + "  features: docs/plans/\n").splitlines(), self.root, errors)
@@ -378,6 +424,45 @@ class PlanAndShallowDocsTest(unittest.TestCase):
                 self.write_plan(self.lifecycle(stage=stage, version=version))
                 self.assertTrue(any("只能链接明确" in error for error in validate_documents(self.config, self.root)))
 
+    def test_topic_catalog_distinguishes_navigation_claims_and_archived_sources(self):
+        project = self.docs / "PROJECT.md"
+        entry = "- [未验收查询](plans/topic.md#需求与验收)\n"
+        for stage, version, expected in (("draft", "none", True), ("active", "none", True),
+                                         ("paused", "none", True), ("cancelled", "v1", True),
+                                         ("cancelled", "none", False), ("completed", "none", False),
+                                         ("removed", "v1", False)):
+            with self.subTest(stage=stage, version=version):
+                self.write_plan(self.lifecycle(stage=stage, version=version))
+                project.write_text("## 主题目录\n" + entry)
+                self.assertEqual(expected, not validate_documents(self.config, self.root))
+        plan = self.write_plan(self.lifecycle())
+        for prefix in ("## 主题目录\n- 已验收：", "## 当前已验收基线\n- ", "## 概况\n",
+                       "## 概况\n> 原有正文声明："):
+            project.write_text(prefix + "[查询](plans/topic.md)\n")
+            self.assertTrue(any("只能链接明确" in e for e in validate_documents(self.config, self.root)))
+        plan.write_text(self.lifecycle(version="v1"))
+        project.write_text("## 主题目录\n- 已验收：[查询](plans/topic.md)\n")
+        self.assertEqual([], validate_documents(self.config, self.root))
+        plan.write_text("# 无生命周期的旧历史\n")
+        self.assertTrue(validate_documents(self.config, self.root))
+
+    def test_topic_catalog_checks_real_anchors_deduplicates_aliases_and_preserves_sources(self):
+        project = self.docs / "PROJECT.md"
+        plan = self.write_plan(self.lifecycle() + '\n<a id="short"></a>\n### 两个 Step\n')
+        directory = "## 主题目录\n"
+        for anchor in ("short", "两个-step", "%E9%9C%80%E6%B1%82%E4%B8%8E%E9%AA%8C%E6%94%B6"):
+            project.write_text(directory + f"- [查询](plans/topic.md#{anchor})\n")
+            self.assertEqual([], validate_documents(self.config, self.root))
+        before = plan.read_bytes()
+        for links, error in ((("- [查询](plans/topic.md#已删除)",), "锚点不存在"),
+                             (("- [一](plans/topic.md#short)", "- [二](./plans/%74opic.md)"), "重复索引"),
+                             (("- [旧稿](plans/missing.md)",), "missing"),
+                             (("- [其他](STANDARDS.md)",), "docs.plans")):
+            with self.subTest(links=links):
+                project.write_text(directory + "\n".join(links))
+                self.assertTrue(any(error in item for item in validate_documents(self.config, self.root)))
+        self.assertEqual(before, plan.read_bytes())
+
     def test_duplicate_topic_and_missing_baseline_proof_are_rejected(self) -> None:
         self.write_plan(self.lifecycle(version="v1"))
         other = self.write_plan(self.lifecycle(version="v1"), "duplicate.md")
@@ -385,6 +470,19 @@ class PlanAndShallowDocsTest(unittest.TestCase):
         other.write_text(self.lifecycle(topic="TOPIC-TWO", version="v2").replace(
             "- 验收证据: 已有验收记录 qa-old", "- 验收证据: none"))
         self.assertTrue(any("不能是待定" in error for error in validate_documents(self.config, self.root)))
+
+    def test_baseline_proof_accepts_angle_destination_but_still_checks_file_and_placeholders(self):
+        decision = self.docs / "order (v2).md"
+        decision.write_text("用户确认了订单范围。")
+        original = self.lifecycle(version="v1").replace(
+            "原始用户批准记录 request-old", '[决定](<../order (v2).md> "确定依据")')
+        plan = self.write_plan(original)
+        (self.docs / "PROJECT.md").write_text("## 主题目录\n- 已验收：[订单](plans/topic.md)")
+        self.assertEqual([], validate_documents(self.config, self.root))
+        decision.unlink()
+        self.assertTrue(any("证据链接不存在" in e for e in validate_documents(self.config, self.root)))
+        plan.write_text(original.replace("[决定]", "<待填> [决定]"))
+        self.assertTrue(any("模板占位" in e for e in validate_documents(self.config, self.root)))
 
     def test_project_indexes_each_accepted_plan_once_and_retains_explanatory_links(self):
         accepted = self.write_plan(self.lifecycle(version="v1"))

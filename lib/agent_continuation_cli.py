@@ -29,20 +29,25 @@ def main() -> int:
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--host", choices=HOSTS, required=True)
     parser.add_argument("--observed-state", choices=OBSERVED_STATES, required=True)
+    parser.add_argument("--claude-event", type=Path, help="当前终止通知对应的同 ID 单条原生 JSON 事件")
     parser.add_argument("--intent", choices=INTENTS, default="observe")
     parser.add_argument("--capability", choices=CAPABILITIES, action="append", default=[])
     args = parser.parse_args()
     try:
+        if args.claude_event and args.host != "claude":
+            raise records.TaskGraphError("--claude-event applies only to Claude continuation")
         payload = decode(read_record(args.input))
         if not isinstance(payload, dict):
             raise records.TaskGraphError("task record must be a JSON object")
         records._execute("validate", payload)
-        tasks = payload.get("tasks") or [payload.get("task")]
+        # 无执行节点的讨论范围可以与原请求一起恢复。空图确实没有可续用的实例。
+        tasks = [payload["task"]] if "task" in payload else payload["tasks"]
         selected = next((task for task in tasks if task["id"] == args.task_id), None)
         if selected is None:
             raise records.TaskGraphError("unknown task ID")
         result = continuation(selected, args.host, args.observed_state,
-                              intent=args.intent, capabilities=args.capability)
+                              intent=args.intent, capabilities=args.capability,
+                              claude_event=records.read_claude_event(args.claude_event))
     except (records.TaskGraphError, records.WorktreePolicyError, OSError, UnicodeError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

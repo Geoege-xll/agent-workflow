@@ -13,6 +13,7 @@ import unittest
 from lib.agent_continuation import HOSTS, continuation
 from lib.task_graph import TaskGraphError
 from tests.test_task_graph_records import graph
+from tests.test_qa_handoff import qa_task_pack
 
 
 PACK = Path(__file__).resolve().parents[1]
@@ -54,7 +55,7 @@ class ContinuationDecisionTest(unittest.TestCase):
             self.assertEqual(before, task)
 
     def test_invalid_lifecycle_blocks_even_with_capabilities_or_independent_intent(self):
-        for state in ("cancelled", "missing", "unknown"):
+        for state in ("cancelled", "missing", "unknown", "context_exhausted"):
             for intent in ("progress", "append", "independent"):
                 result = continuation(running_record()["tasks"][0], "codex", state, intent=intent,
                                       capabilities=("non_interrupting_message", "idle_followup"))
@@ -123,6 +124,53 @@ class ContinuationCliTest(unittest.TestCase):
         self.source.unlink()
         self.source.symlink_to(target)
         self.assertEqual(2, self.invoke().returncode)
+
+    def test_bound_claude_terminal_event_blocks_both_cli_replays_and_preserves_qa(self):
+        """回放精简的合成事件；保留原生标记及身份，错误正文单独出现不能改变续用决策。"""
+        record = graph()
+        writer = record["tasks"][0]
+        qa = qa_task_pack("claude")["task"]
+        qa.update(request_id=writer["request_id"], depends_on=[writer["id"]])
+        writer.update(state="BUILD_VERIFIED", blocks=[qa["id"]])
+        record["tasks"].append(qa)
+        self.source.write_text(json.dumps(record), encoding="utf-8")
+        before = self.source.read_bytes()
+        event_path = self.root / "event.json"
+        event = {
+            "type": "assistant", "agentId": qa["agent_ref"]["agent_id"], "isSidechain": True,
+            "isApiErrorMessage": True, "error": "invalid_request",
+            "message": {"model": "<synthetic>", "content": [{"type": "text", "text":
+                "Prompt is too long · automatic compaction failed: summarization produced empty response"}]},
+        }
+        shared = ["--input", str(self.source), "--task-id", qa["id"], "--host", "claude",
+                  "--observed-state", "idle", "--claude-event", str(event_path)]
+        for command in (
+            [*PYTHON, str(PACK / "lib/task_graph_cli.py"), "continuation"],
+            [*self.command, "--intent", "append", "--capability", "idle_followup"],
+        ):
+            for raw, expected in (
+                (event, "blocked"),
+                ({**event, "type": "user"}, "followup"),
+                ({**event, "type": "system", "subtype": "compact_boundary"}, "followup"),
+                ({**event, "isApiErrorMessage": False}, "followup"),
+                ({**event, "agentId": "other-native-id"}, "invalid"),
+            ):
+                event_path.write_text(json.dumps(raw), encoding="utf-8")
+                with self.subTest(command=command[-1], event_type=raw["type"], expected=expected):
+                    result = subprocess.run([*command, *shared], cwd=PACK, text=True,
+                                            capture_output=True, check=False, timeout=20)
+                    if expected == "invalid":
+                        self.assertEqual(2, result.returncode)
+                        self.assertFalse(result.stdout)
+                        continue
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    decision = json.loads(result.stdout)
+                    self.assertEqual(expected, decision["action"])
+                    self.assertEqual(expected != "blocked", decision["reuse_allowed"])
+                    self.assertEqual("context_exhausted" if expected == "blocked" else "idle", decision["reason"])
+                    self.assertEqual(qa["agent_ref"], decision["agent_ref"])
+        # 双入口均是查询：Writer 已验构建、待验 QA 节点与原生绑定完整保留。
+        self.assertEqual(before, self.source.read_bytes())
 
     def test_packaged_helper_uses_current_source_and_rejects_old_bindings(self):
         """使用实际插件入口检查追加建议与来源隔离，保留只读记录断言。"""

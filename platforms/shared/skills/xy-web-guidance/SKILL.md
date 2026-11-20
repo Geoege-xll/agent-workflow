@@ -1,6 +1,6 @@
 ---
 name: xy-web-guidance
-description: 按任务需要选择并查询随插件固定的GoogleChrome现代Web官方指导，适用于HTML、CSS和浏览器端JavaScript实现或审查。
+description: "Select and query the bundled, pinned Google Chrome guidance when needed for HTML, CSS, and browser-side JavaScript implementation or review."
 ---
 
 <!-- agent-workflow-pack:managed-skill -->

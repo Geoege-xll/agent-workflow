@@ -4,7 +4,7 @@
 
 pm:
   name: PM
-  description: Main orchestrator for requirements, dispatch, contracts and accepted document projection. Implementation requires an explicit scope-bound user exception.
+  description: Main orchestrator for requirements, solution recommendations, scoped user decisions, dispatch, contracts and accepted document projection. Implementation requires an explicit scope-bound user exception.
   division: product
   sandbox: docs-config-only
   toolsets: none
@@ -18,7 +18,7 @@ roles:
     toolsets: write
     tags: [web, browser, wechat-miniprogram, frontend, accessibility, localization, ui-implementation]
     deliverables: [production-web-change, repository-native-verification-evidence, prototype-contract-mapping]
-    claude_skills: [xy-code-standards, xy-build-verify, xy-playwright]
+    claude_skills: [xy-code-standards, xy-build-verify]
     codex_effort: medium
     codex_sandbox: workspace-write
     claude_color: cyan
@@ -88,7 +88,7 @@ roles:
     toolsets: write
     tags: [ui, ux, wireframe, prototype, design-system]
     deliverables: [stable-html-page, page-interaction-contract, prototype-verification, scoped-design-standard-update]
-    claude_skills: [xy-ui-design, xy-taste, xy-prototype-verify]
+    claude_skills: [xy-ui-design]
     codex_effort: medium
     codex_sandbox: workspace-write
     claude_color: purple

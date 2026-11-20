@@ -15,21 +15,9 @@ approval, QA or record stage.
 
 <!-- workflow-contract: references/rules.md -->
 
-## Choose implementation from facts
-
-- Follow actual call chains to establish the behavioral goal, entry points, data/state owners and consumers.
-  Use nearby code, tests and executable configuration to distinguish facts, assumptions and gaps. Verify
-  discoverable facts first; return unresolved tradeoffs affecting contracts, permissions or side effects to
-  the original decision-maker. Do not automatically treat an observed old implementation as an upgrade target.
-- Before reuse, check semantics, inputs/outputs, failure modes and dependency direction. Before extraction,
-  identify the actual shared responsibility, variation point or isolation benefit. Similar syntax, fewer lines
-  or anticipated future extension does not justify consolidation or added layers.
-- Compare approaches by their changed behavior, preserved contracts and affected consumers; choose the smallest
-  complete change that meets current requirements. Remove redundancy caused by this change and report other
-  issues within the original task boundary. Explain non-obvious tradeoffs with comments required by applicable
-  standards and update those comments with behavior.
-
 ## Read-only review and evidence
+
+按验收项对照真实变更路径与受影响调用方，使用[工程条款](references/rules.md)的标题、规则 ID 和项目特定规范定位适用条款；同时独立检查包内遗漏。展开完整条款、适用条件、例外和交叉引用，用当前源代码或可核验的日志形成结论。合同要求全文的来源仍完整读取。架构、语言和设计模式案例按下方的实际问题选读。
 
 Read-only review does not write code. Findings include a concrete location, trigger, actual impact and supporting
 evidence. Distinguish proven defects, evidence gaps and design preferences; naming, line counts or missing evidence
@@ -42,6 +30,7 @@ the applicable `xy-build-verify` branch.
 
 下方相对链接用于已发现的 Skill 内导航。通过插件的 `source_pack.py resource` 定位或以 `helper` 调用 `context_read.py` 分页时，从已验证的插件包读取，使用以 `platforms/shared/skills/xy-code-standards/references/` 开头的路径，例如 `platforms/shared/skills/xy-code-standards/references/architecture.md`。
 
+- 编写或重构代码时使用架构参考中的 [Choose implementation from facts](references/architecture.md#choose-implementation-from-facts)。
 - 需要判断职责拆分、依赖方向、公开封装或兼容迁移时，按当前问题阅读[架构设计与增量演进](references/architecture.md)。
 - 需要判断是否采用某种设计模式时，按当前问题选读[设计模式案例](references/design-patterns.md)。
 - 需要在实际语言、框架和支持版本内选择惯用做法时，按任务选读 [Swift](references/swift.md)、[Kotlin](references/kotlin.md)、[Python](references/python.md) 或 [Go](references/go.md)。

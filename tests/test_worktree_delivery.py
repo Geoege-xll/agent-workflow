@@ -268,6 +268,50 @@ class GitDeliveryTest(unittest.TestCase):
                 merge(self.repo, self.config, self.payload)
             self.assertEqual(self.base, head(self.repo))
 
+    def test_post_qa_plan_and_reviewed_architecture_merge_with_original_receipt(self) -> None:
+        """结构说明进入受审候选；只有计划验收事实在 PASS 后提交，授权绑定最终合并 diff。"""
+        from lib.foundation_qa import current_request_receipt
+        architecture = "docs/ARCHITECTURE.md"
+        (self.integration / architecture).write_text("# 架构\n模块 A 和 B 分别维护独立配置。\n")
+        git(self.integration, "add", architecture)
+        git(self.integration, "commit", "-m", "review the actual architecture description")
+        name = "docs/plans/baseline.md"
+        # 被审 Writer 也从这个 PM 主题选读已批准的内容。隔离候选的后像要同时
+        # 按文档差异及该真实读取合同回放，最终集成可继续复用原回执。
+        self.tasks[0]["controlled_document_access"]["documents"].append({
+            "path": name, "mode": "targeted", "reason": "保留旧基线的批准依据",
+            "sections_or_queries": ["批准依据"], "content_fingerprint": records.digest((self.integration / name).read_bytes()),
+            "applies_to": self.tasks[0]["owned_paths"], "rule_ids": []})
+        self.refresh_candidate()
+        original = copy.deepcopy(self.qa_task["request_receipt"])
+        path = self.integration / name
+        saved = self.root / "reviewed-baseline.md"
+        saved.write_bytes(path.read_bytes())
+        path.write_text(path.read_text().replace("已有行为。", "新交付说明。\n\n已有行为。").replace(
+            "既有验收记录", "既有验收记录 " + original["handoff"]["sha256"]))
+        git(self.integration, "add", name)
+        git(self.integration, "commit", "-m", "PM records acceptance evidence")
+        projected_tip = head(self.integration)
+        operation = {"adapter": str(self.config.relative_to(self.repo)), "head_revision": projected_tip, "documents": [{
+            "path": name, "reviewed": {"path": str(saved), "sha256": records.digest(saved.read_bytes())},
+            "projected_sha256": records.digest(path.read_bytes())}]}
+        updated = records.update(self.graph, {"tasks": {"qa": {"record_qa_projection": operation}}}, self.repo, _execute)
+        self.payload["task_graph"] = updated
+        reviewer = next(task for task in updated["tasks"] if task["id"] == "qa")
+        self.assertEqual(original, reviewer["request_receipt"])
+        self.payload["projection_paths"] = [architecture, name]
+        with self.assertRaisesRegex(DeliveryError, "authorization"):
+            merge_check(self.repo, self.config, self.payload)
+        self.payload["authorization"].update(head_revision=projected_tip,
+            diff_fingerprint=scope(self.repo, self.base, projected_tip)["diff_fingerprint"])
+        self.assertEqual("merged", merge(self.repo, self.config, self.payload)["status"])
+        self.assertEqual(original, reviewer["request_receipt"])
+        git(self.repo, "worktree", "remove", str(self.integration))
+        self.assertTrue(current_request_receipt(updated, reviewer, root=self.repo))
+        # 清理候选后仍要从已合并的 Git 对象和原档重放，不能仅凭目标分支祖先放行。
+        saved.write_text("事后替换原档")
+        self.assertFalse(current_request_receipt(updated, reviewer, root=self.repo))
+
     def test_exact_validated_pm_projection_merges_with_refreshed_full_qa_scope(self) -> None:
         document = self.integration / "docs/plans/features.md"
         document.parent.mkdir(exist_ok=True)

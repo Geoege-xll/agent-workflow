@@ -2,31 +2,39 @@
 (() => {
   "use strict";
   const context = window.XYFilePageContext; if (!context || parent === window || location.protocol !== "file:") return;
+  const scriptURL = document.currentScript.src;
   let connected = false, space = false, pan = null, panMoved = false;
   const send = (type, body = {}) => { if (connected) parent.postMessage({ type: `xy-file:${type}`, page: context.name, nonce: context.nonce, ...body }, "*"); };
   function start() {
     const root = document.querySelector("[data-prototype-page-content]"); if (!root) return;
     // 保留stage/frame本身的布局约束，仅隐藏外围说明与导航；不把祖先变为contents。
-    let branch = document.querySelector(".prototype-stage") || document.querySelector(".prototype-frame") || root;
+    const frame = document.querySelector(".prototype-frame") || root;
+    const stage = frame.parentElement?.closest(".prototype-stage");
+    let branch = stage || frame;
     while (branch && branch !== document.body) { for (const sibling of branch.parentElement.children) if (sibling !== branch && !["SCRIPT", "STYLE", "LINK"].includes(sibling.tagName)) sibling.hidden = true; branch = branch.parentElement; }
     document.body.style.margin = "0"; document.body.style.padding = "0";
     // iframe 的根滚动链在文档边界结束；nested scrollport 保留业务原有 overflow、
     // overscroll 与自然链路。只设置根，不拦截普通 wheel，也不靠 stopPropagation 假隔离。
     document.documentElement.style.overscrollBehavior = "contain";
     if (document.scrollingElement) document.scrollingElement.style.overscrollBehavior = "contain";
-    const frame = document.querySelector(".prototype-frame") || root;
     // 原始手机frame保持固定宽高；外层stage仅移除展示页的居中留白，避免在真实390视口里再次偏移。
     for (let ancestor = frame.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
       ancestor.style.margin = "0"; ancestor.style.padding = "0"; ancestor.style.minHeight = "0";
       if (getComputedStyle(ancestor).display.includes("flex")) { ancestor.style.justifyContent = "flex-start"; ancestor.style.alignItems = "flex-start"; }
     }
     const measure = () => { if (document.body.dataset.prototypeDisplay !== "fixed") return;
-      const r = frame.getBoundingClientRect(); send("size", { width: r.width, height: r.height }); };
-    const contract = document.querySelector('[data-contract-section="purpose"]')?.closest("details");
-    const sections = ["purpose", "navigation", "interactions", "states", "exceptions"].map((name) => ({ name, text: Array.from((contract || document).querySelectorAll(`[data-contract-section="${name}"]`)).map((node) => node.textContent.trim()).join("\n") }));
+      const r = frame.getBoundingClientRect(); send("size", { display: "fixed", width: r.width, height: r.height }); };
     window.addEventListener("message", (event) => { const data = event.data;
       if (event.source !== parent || event.origin !== "null" || data?.type !== "xy-file:connect" || data.page !== context.name || data.nonce !== context.nonce) return;
-      connected = true; send("ready"); measure(); send("contract", { sections }); });
+      if (connected) return;
+      connected = true;
+      // 只有本轮只读握手通过后，才启用与 HTTP 评审共用的根及舞台背景规则。
+      document.documentElement.classList.add("prototype-canvas-embedded");
+      stage?.classList.add("prototype-canvas-stage");
+      const stylesheet = document.createElement("link");
+      stylesheet.rel = "stylesheet"; stylesheet.href = new URL("feedback.css", scriptURL).href;
+      document.head.append(stylesheet);
+      send("ready", { colorScheme: getComputedStyle(document.documentElement).colorScheme }); measure(); send("contract", window.PrototypeCanvasPresentation.readNotes()); });
     new ResizeObserver(measure).observe(frame);
     document.addEventListener("click", (event) => { if (panMoved) { event.preventDefault(); event.stopImmediatePropagation(); return; } const link = event.target.closest?.("a[href]"); if (!link || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       const href = link.getAttribute("href"); if (!href || href.startsWith("#")) return; event.preventDefault(); send("navigate", { target: href }); }, true);

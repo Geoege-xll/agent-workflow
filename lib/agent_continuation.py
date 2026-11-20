@@ -18,13 +18,14 @@ except ImportError:
 
 
 HOSTS = ("codex", "claude", "antigravity")
-OBSERVED_STATES = ("running", "idle", "cancelled", "missing", "unknown")
+OBSERVED_STATES = ("running", "idle", "cancelled", "missing", "unknown", "context_exhausted")
 INTENTS = ("observe", "progress", "append", "independent")
 CAPABILITIES = ("non_interrupting_message", "idle_followup")
 MAX_AGENT_ID_LENGTH = 256
 IDENTITY_FIELDS = frozenset({"workflow_level", "module", "role", "agent_alias", "instance_policy", "context_policy"})
 ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
 ROLE_RE = re.compile(r"xy-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+CLAUDE_EMPTY_SUMMARY = "Prompt is too long · automatic compaction failed: summarization produced empty response"
 
 
 def validate_identity(task: dict[str, Any]) -> None:
@@ -70,7 +71,7 @@ def validate_identity(task: dict[str, Any]) -> None:
 
 def active(task: dict[str, Any]) -> bool:
     """沿用原任务图的活动语义：Writer 的 QA 已交接，显式 QA 的 QA 仍在审查。"""
-    return task.get("state") == "RUNNING" or (
+    return task.get("state") in {"RUNNING", "STOP_REQUESTED"} or (
         task.get("task_type") == "qa" and task.get("state") == "QA"
     )
 
@@ -124,12 +125,34 @@ def check_binding(before: dict[str, Any], reference: Any) -> None:
     if "agent_ref" in before:
         if before["agent_ref"] != reference:
             raise TaskGraphError("existing agent_ref cannot be replaced or cleared")
-    elif before.get("agent_retired") or not active(before):
+    elif (before.get("agent_retired") and before.get("state") != "STOP_REQUESTED") or not active(before):
         raise TaskGraphError("first agent_ref binding requires an existing RUNNING task or explicit qa task in QA")
 
 
+def _claude_context_exhausted(event: Any, reference: dict[str, str], host: str) -> bool:
+    """仅判别 PM 从当前终止通知定位的单条原生事件；来源和时序仍由 PM 核实。
+
+    转述、工具返回和成功压缩也可能带相同文字，不能对全文做关键词搜索。
+    先核对原生身份，传错实例时拒绝整个查询，避免把另一实例的空闲状态用于续发。
+    """
+    if (host != "claude" or not isinstance(event, dict)
+            or event.get("agentId") != reference["agent_id"]):
+        raise TaskGraphError("Claude event must match the current bound native agent ID")
+    message = event.get("message")
+    if (event.get("type") != "assistant" or event.get("isSidechain") is not True
+            or event.get("isApiErrorMessage") is not True or event.get("error") != "invalid_request"
+            or not isinstance(message, dict) or message.get("model") != "<synthetic>"):
+        return False
+    content = message.get("content")
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "text" and block.get("text") == CLAUDE_EMPTY_SUMMARY
+        for block in content
+    )
+
+
 def continuation(task: dict[str, Any], host: str, observed_state: str, *,
-                 intent: str | None = None, capabilities: tuple[str, ...] = ()) -> dict[str, Any]:
+                 intent: str | None = None, capabilities: tuple[str, ...] = (),
+                 claude_event: dict[str, Any] | None = None) -> dict[str, Any]:
     """按当前观察、动作意图与实际能力返回建议，不执行原生动作。
 
     不传 intent 的旧调用保留 running→wait、idle→followup 合同；新调用必须显式
@@ -150,7 +173,9 @@ def continuation(task: dict[str, Any], host: str, observed_state: str, *,
     reason = "unbound"
     if reference is not None:
         validate_reference(reference)
-        if task.get("agent_retired"):
+        if task.get("state") in {"STOP_REQUESTED", "WITHDRAWN"}:
+            reason = "withdrawal"
+        elif task.get("agent_retired"):
             reason = "agent_retired"
         elif reference["host"] != host:
             reason = "host_mismatch"
@@ -158,6 +183,14 @@ def continuation(task: dict[str, Any], host: str, observed_state: str, *,
             reason = "task_not_active"
         else:
             reason = observed_state
+            # 原生工具仍可能把这次失败的实例显示为 idle；先保留既有取消等否决，
+            # 再用同 ID 的明确终止事件阻止 message/followup，包括无 intent 的旧入口。
+            if claude_event is not None:
+                exhausted = _claude_context_exhausted(claude_event, reference, host)
+                if reason == "context_exhausted" and not exhausted:
+                    raise TaskGraphError("Claude event does not confirm the claimed context exhaustion")
+                if exhausted and reason in {"idle", "running", "unknown"}:
+                    reason = "context_exhausted"
     elif task.get("agent_retired"):
         reason = "agent_retired"
     allowed = reason in {"running", "idle"}
@@ -172,6 +205,10 @@ def continuation(task: dict[str, Any], host: str, observed_state: str, *,
         ),
         "limitations": "ID 不证明存活、角色权限、批准或完成；本结果不派发、不发消息、不改状态。",
     }
+    if reason == "context_exhausted":
+        result["advice"] = "保留终止事件定位，由 PM 处理当前任务的恢复；停止自动向该 ID 重放。"
+        if task.get("task_type") == "qa":
+            result["advice"] += " 保留 Writer 验证证据和原 Reviewer 身份；缺少本轮有效回执时，独立 QA 仍待验。"
     if intent is None:
         return result
 

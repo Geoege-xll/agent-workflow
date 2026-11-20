@@ -11,7 +11,10 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from lib.skills.selected_skills import LOCK, VENDOR, SPECS, read_regular, snapshot, validate_lock, unique_object, load_git_archive, load_playwright_archives, load_modern_web_archive
+from lib.skills.selected_skills import (
+    LOCK, VENDOR, SPECS, load_agent_desktop_archives, load_git_archive, load_modern_web_archive,
+    load_playwright_archives, read_regular, snapshot, unique_object, validate_lock,
+)
 
 
 def candidate(dependency: str, ref: str, archive: Path | list[Path], output: Path, runtime_manifest: Path | None = None) -> dict:
@@ -30,7 +33,16 @@ def candidate(dependency: str, ref: str, archive: Path | list[Path], output: Pat
     lock, files = snapshot(ROOT)
     archives = [archive] if isinstance(archive, Path) else archive
     ignored = 0
-    if dependency == "modern-web-guidance":
+    if dependency == "agent-desktop":
+        if runtime_manifest is None:
+            raise ValueError("agent-desktop update requires the reviewed --runtime-manifest and three archives")
+        # 本地清单采用锁中 release 字段的结构，绑定 GitHub 公布的资产摘要和源码压缩包。
+        # 参数顺序固定为源码、arm64、x86_64；审核候选不会自动改写当前 vendor 或锁。
+        release = json.loads(read_regular(runtime_manifest.parent, runtime_manifest.name), object_pairs_hook=unique_object)
+        item, selected, ignored = load_agent_desktop_archives(ref, release, archives)
+        archive_digest = {"source": release["source_archive"]["sha256"],
+                          **{arch: asset["sha256"] for arch, asset in release["assets"].items()}}
+    elif dependency == "modern-web-guidance":
         if runtime_manifest is None or len(archives) != 1:
             raise ValueError("modern Web update requires one fixed official archive and --runtime-manifest")
         manifest = json.loads(read_regular(runtime_manifest.parent, runtime_manifest.name), object_pairs_hook=unique_object)
@@ -82,7 +94,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dependency", choices=sorted(SPECS), required=True)
     parser.add_argument("--ref", required=True)
-    parser.add_argument("--archive", type=Path, action="append", required=True)
+    parser.add_argument("--archive", type=Path, action="append", required=True,
+                        help="本地归档，可重复传入。agent-desktop 依次为源码、arm64、x86_64")
     parser.add_argument("--runtime-manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)

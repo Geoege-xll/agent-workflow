@@ -29,25 +29,100 @@ Read paths and limits from the selected project adapter. ProjectProfile is routi
 write authority. Each task pack fixes current facts, `owned_paths`, reads/Skills, dependencies,
 acceptance, and commands.
 
+### 跨项目复用 Claude Auto 的来源说明（可选）
+
+已安装并启用插件的用户可从任一已信任项目进入工作流。希望向 Claude Auto 长期说明插件来源时，
+由用户在自己的 `~/.claude/settings.json` 配置一次。分类器忽略项目内 `.claude/settings.json`
+和 `.claude/settings.local.json` 的 `autoMode`。可将下列来源描述追加到现有
+`autoMode.environment`，保留已有条目和其它字段。新建数组时包含一次 `"$defaults"`
+以继承默认环境；若用户已自定义默认项的取舍，保留其原有选择。插件不代写此设置。
+
+```json
+{
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "本机已安装的 xy-workflow 插件来源为 https://github.com/Geoege-xll/agent-workflow 。此说明仅涉及从该安装版本已核实的物理根运行本地工作流校验、读取当前派发身份的偏好，以及在当前项目和请求范围内读取或写入任务记录。"
+    ]
+  }
+}
+```
+
+保存后在任一项目运行 `claude auto-mode config`，核对有效的 `environment` 中同时出现
+该条目和原有条目。此项向分类器描述来源；宿主仍按每次操作执行 ask、deny 和组织策略，
+用户仍可能看到提示。[Claude Auto 官方配置说明](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration)
+
+### 核对已安装的可执行来源
+
+宿主已通过 qualified Skill 交付的静态正文直接阅读。首次确需运行包内 helper（含解释器选择器和
+资源定位命令）时，先用当前 Claude 配置、当前项目的官方只读登记关联以下事实。当前会话已完整
+掌握这些事实时直接复用；需要补证时只查询缺少的一项。
+
+For the stable Git installation, use the following registration checks.
+
+1. 用 `claude plugin marketplace list --json` 确认唯一的 `xy-workflow` 市场为 Git 来源，
+   URL 为 `https://github.com/Geoege-xll/agent-workflow.git`，ref 为 `plugins-claude-stable`。
+2. 用 `claude plugin list --json` 核对用户范围已启用的 `xy-workflow@xy-workflow`，
+   取其 `installPath` 与 `version`。把登记的物理路径、版本与本会话宿主实际载入项的根、
+   版本逐项对应（原生 Skill 的 Base directory 可定位根）。当前载入来源必须能唯一对应这条安装记录。
+
+For a maintainer-pinned macOS test installation of `xy-workflow@xy-workflow-local`, follow
+[the local candidate receipt](candidate-receipt.md#read-the-current-candidate-receipt) before the first
+packaged operation. This branch uses the host-loaded component, current official registrations and
+a separate maintenance receipt. The ZIP verifier runs only during an authorized installation or
+update. An older RC2 session whose external verifier was denied keeps that denial. Resume candidate
+testing in a fresh session after an authorized maintenance update. Stop the affected operation on
+missing or stale proof, an unsupported system query, or a host denial.
+
+仅在对应成功后从该物理根运行所需命令，使用带引号的实际绝对路径，使宿主能辨认此次具体操作。
+包内自述、缓存目录名、Shell 变量或用户的来源说明均不能代替官方登记。遇到 `--plugin-dir` /
+inline 加载、同名来源歧义、链接到其他载荷或路径、版本不一致时，报告实际差异并停止相关执行。
+正式 Git 安装可复用当前会话同一配置、载入来源、根和版本的结果。来源发生变化或恢复时证据缺失，再核对正式登记。本机候选按维护收据的有效条件处理。
+普通注册查询受宿主权限约束；若该查询或包内操作已被拒绝，沿用下节的拒绝结果。
+
+### 当前会话遇到工具权限拒绝
+
+仅在 Claude 实际拒绝本次必需操作时，暂停受影响的步骤。在原会话一次说明当前项目的物理路径、
+插件来源仓库与安装版本（未核实的项目标为未知），以及拒绝的操作和本任务已确定要用的具体
+helper、子命令、读写范围及用途。例如，来源校验读取已安装包以核对摘要。
+[`dispatch-preferences`](../../shared/skills/xy-workflow/references/dispatch.md#read-only-native-dispatch-preferences)
+只读当前派发身份的用户／项目偏好。
+[`task_graph_cli.py scratch`](../../shared/skills/xy-workflow/references/runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace)
+会创建或复用该项目和请求的临时目录。只列当前任务确需的操作，写明实际目标。
+
+由用户在原会话决定是否授权这些操作。逐次遵守宿主返回的权限结果，只执行已获准的具体调用；
+用户拒绝、未授权或宿主仍然拒绝时保留阻断原因。不得切换工具重试同一被拒操作、修改
+权限设置或请求对整个缓存的永久放行。正常可执行的请求沿现有流程处理。
+
+向用户展示命令时，用本次已经核实的实际绝对路径、角色和请求 ID 替换下列占位符。
+每次直接引用同一物理插件根内的解释器入口与脚本，项目参数也指向同一物理项目。
+上下文压缩后如来源证据缺失，先恢复来源与版本；保留已拒绝的结果，不以改写命令获取放行。
+
+```bash
+bash "<插件绝对根>/lib/python_runtime.sh" -B -X utf8 "<插件绝对根>/plugins/source_pack.py" helper --project "<项目绝对根>" lib/task_graph_cli.py validate --input "<任务图绝对路径>"
+bash "<插件绝对根>/lib/python_runtime.sh" -B -X utf8 "<插件绝对根>/plugins/source_pack.py" dispatch-preferences --host claude --agent "<本次完整角色名>" --project "<项目绝对根>"
+bash "<插件绝对根>/lib/python_runtime.sh" -B -X utf8 "<插件绝对根>/plugins/source_pack.py" helper --project "<项目绝对根>" lib/task_graph_cli.py scratch --root "<项目绝对根>" --request-id "<当前请求 ID>"
+```
+
 Internal orchestration records are not user-facing output. Never paste raw workflow YAML or DAG JSON into user messages.
 Report concise natural-language goals, scope, decisions, risks, validation, and next actions. Accept
 an explicit natural-language confirmation and record the internal gate; never demand a gate token.
 For design-change UI, also present one reasoned prototype recommendation and require the user to
 select prototype work, direct implementation, or the clearly named recommendation.
-Finish the brief before the single approval choice; add no material details afterward.
+按 `product/WORKFLOW.md#business-confirmation-policy` 与共享 PM 确认参考处理具体待决事项，已明确选择的同请求内容直接复用。
 
 ## Gates and execution
 
 - Full: classify → optional relevant facts → Grill Me coverage check via `/xy-workflow:xy-grilling` → `/xy-workflow:xy-plan`
   with `plan_state: draft` → PM
-  post-QA controlled-document projection decision → ask once for `requirements_approved` → freeze and run.
+  post-QA controlled-document projection decision → confirm scope and any material solution before dependent prototype or implementation → dispatch eligible work.
   Keep accepted PROJECT/plans baselines at its last QA-verified state until integrated QA PASS. Clear
   Light work may skip the two Skills when facts are complete.
 - PM loads bundled original `grilling` in the main session, using the actual discovered plugin-qualified
   Skill entry; `grill-me` remains user-invoked only. Read xy-workflow/references/requirements-intake.md
   for the PM-owned coverage schema. Worker `skills` preloading does not prove main-session loading.
   Grill Me remains requirements-only. Superpowers is disabled by default except the bounded reviewer
-  fallback below; `xy-plan` is the local planner. Reopen approval only for material scope change.
+  fallback below; `xy-plan` is the local planner. Reopen only the affected scope, solution or page decision when its substance changes.
 - Full `UI-Conformance` requires `design_delta: none` and has no visual gate. It also requires
   `surface_kind: production_ui`, `qa_scope: request`, `prototype_policy: not_applicable`, structured
   resolved/fingerprinted `design_authority_refs`, zero design writes, and full UI/accessibility QA.
@@ -79,35 +154,14 @@ Superpowers fallback is its installed `requesting-code-review/code-reviewer.md` 
 
 ### Native review method
 
-Claude's bundled `/code-review` (also `/review`) supplies general code-review evidence. Confirm the
-current session exposes the genuine bundled entry: a same-named installed Skill can replace
-`/code-review`, while `/review` remains the bundled alias on supporting clients. Check exposed
-capability and effective disabling/override settings without scanning personal Skill directories.
-The managed GitHub Code Review service and `REVIEW.md` are separate; local review follows the
-project's `CLAUDE.md`. Do not enable cloud review or add another rules document for this method.
+**选入口。** 先确认当前会话可调用内置 `/code-review`。同名 Skill 可能覆盖该名称，支持的版本仍可用内置别名 `/review`。默认终端交互入口会派后台子 Agent；同一 Reviewer 应接着检查非交互 `claude -p` 能否在前台完成本地审查并返回结果。以当前会话实际权限为准，保持项目的 `CLAUDE.md`、模型和推理力度（含审查上次记住的力度）。核实工作区已经受信任、有效工具权限排除了写入、对外发言和再派 Agent；`-p` 会跳过信任对话框。只取报告，避开 `--fix`、`--comment`、`--post`、`ultra`，保留原有后台及权限设置。参见 [Claude Code 本地审查](https://code.claude.com/docs/en/code-review-local)。
 
-Default interactive review runs as a background subagent, which does not fit QA's no-nested-Agent
-boundary. Where supported and already permitted, use the native non-interactive `-p` foreground
-entry with an explicit fixed review target, such as `/review <fixed-base>..<fixed-head>`, and wait
-for its actual result in the same reviewer's execution. Keep exactly one reviewer; do not alter
-global background/fork settings, weaken disallowed tools or spawn another reviewer to obtain it.
-Without a safe available foreground entry, record technical unavailability and use the next method.
+**选目标。** 按[核对原生审查目标](../../shared/skills/xy-qa-review/references/inputs.md#核对原生审查目标)比对实际差异。
 
-Use only an already trusted workspace and verified effective project/role configuration: `-p`
-skips workspace-trust dialogs and is not proof of trust or read-only permissions. Invalid settings
-may be ignored by the host, so establish that its actual tool/permission boundary excludes writes,
-external posting and Agent delegation before invocation. Do not use safe/restricted modes to drop
-project rules, or change settings to force a launch. Run report-only review without `--fix`,
-`--comment`, `--post` or `ultra`; a prompt requesting read-only behavior is not a permission boundary.
+- 干净工作树中，若完整的本次差异已提交且恰好等于固定区间，可以前台调用 `claude -p "/review $base..$head"`，其中两个变量是已核实的完整提交 ID。使用当前宿主支持的选项保持原有模型、力度和只读限制。核对实际执行结果与审前、审后的范围，成功后只核实发现并补齐业务验收。
+- 工作树中同一文件同时有本次改动和原有改动时，路径目标会把两者混在一起，提交区间又可能漏掉本次未提交的部分。无目标的默认审查还可能读到分支领先上游的提交。即使 `-p` 可用，只要没有入口能精确接收已冻结的差异，就记录实际范围缺口并按既有顺序回退。保留原工作树及暂存区。
 
-Preserve the effective QA model and effort through supported current-host invocation options,
-including native override layers and review effort reuse; do not introduce a new default. Pin every
-root/nested repository and verify exact base/head, changed paths and dirty-diff fingerprints before
-and after review. The default current-branch target is insufficient when it omits committed request
-changes; reject output with a changed/unrepresentable scope. Put actual invocation, capability,
-permissions, scope and result references in `review_method`; static help is not runtime verification.
-The same QA verifies findings and supplements uncovered project acceptance, not another full generic
-review. Findings/FAIL still go to PM for bounded rework, never trigger a different method.
+**核对返回。** 阅读实际报告和错误信息。退出码 0、`subtype: success` 和 `num_turns: 0` 都可能出现在成功或失败的调用中。如果正文只有 HTTP 429，且没有实际审查报告，保留服务错误并记录调用未完成。若收到可核实的审查报告，结合目标、实际模型记录（如提供）和发现所指的源码判断。只有报告明确完成且无发现时，才记录「零条发现」。
 
 ### Background execution and recovery
 
@@ -135,7 +189,16 @@ an Agent ID or an empty active panel is not completion evidence. Avoid busy poll
 sleep loops. Use native background waiting/monitoring only when available, without creating another
 supervisor Agent. Never alter fork/background settings merely to obtain foreground waiting.
 
-Dispatch passes only the current schema_version: 2 task envelope: task, applicable standards_contract, and necessary approval/UI evidence, without complete PM/sibling conversations. Check module, canonical role, stable agent_alias, instance_policy: fresh, and context_policy: handoff_only; invoke the named `xy-*` role again for each new independent task to obtain a new native ID, without precreating all aliases or filling capacity. The receiver still reads all current required standards completely.
+收到后台终止通知时，先核对本次调用和已绑定的 `agent_ref`。若同 ID 的宿主事件明确报告
+上下文已满且自动压缩返回空摘要，两个 continuation 入口均可用 `--observed-state context_exhausted`
+查询。已有单条原生 JSON 事件时，可附 `--claude-event <event.json>`，即使面板
+显示 idle，helper 也会按同一 `agentId`、子代理 API 错误标志、合成模型和精确错误信息识别中断。
+事件由 PM 从本次实际终止通知定位，helper 不采集会话，也不能证明输入文件的来源。
+用户转述、普通消息、工具日志和成功的 `compact_boundary` 均不足以判定耗尽。确认中断后停止
+自动 `SendMessage` 重放，按[共用恢复合同](../../shared/skills/xy-workflow/references/runtime-records.md#reviewer-context-exhaustion)
+保留未验项、原生身份和已有证据。
+
+Dispatch passes only the current schema_version: 2 task envelope: task, applicable standards_contract, and necessary approval/UI evidence, without complete PM/sibling conversations. Check module, canonical role, stable agent_alias, instance_policy: fresh, and context_policy: handoff_only; invoke the named `xy-*` role again for each new independent task to obtain a new native ID, without precreating all aliases or filling capacity. 接收方独立读完当前任务包、选中的 Skill 入口及明确要求全文的材料，其余依受控范围读完适用条款和必要上下文。
 
 Keep the returned native Agent ID in the existing task handoff, and in an existing recovery plan only
 when needed. Use `SendMessage` to that verified ID only for the same task's follow-ups and bounded QA rework; a completed
@@ -175,7 +238,7 @@ record. Current controlled documents and explicit user approvals win over recall
 `/xy-workflow:xy-project-memory` start retrieval is on demand and requires provider-enforced project isolation
 and matching provenance; otherwise call neither recall nor save.
 
-`PROJECT.md` is the current verified project directory, not task history; details and accepted baselines live in the same topic under `docs.plans`.
+PROJECT 的主题目录链接现有稳定主题，STANDARDS 按适用范围链接规范叶子。已验收声明须在同一主题有真实版本、已交付行为及批准和验收证据。
 An accepted complete removal removes only the current `PROJECT.md` link and marks the phase `removed` in the same topic source, retaining necessary history and rationale at the original path without renaming or copies.
 Feature details include current architectural rationale; no separate ADR category.
 Plan storage follows the current levels: Light only for actual

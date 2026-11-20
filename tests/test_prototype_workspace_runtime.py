@@ -445,6 +445,37 @@ const beforeMiddle={...value};listeners.get('pointerdown')(event({button:1}));li
 listeners.get('keydown')(event({code:'Space'}));windowEvents.get('blur')();const beforeBlur=JSON.stringify(value);listeners.get('pointerdown')(event());listeners.get('pointermove')(event({clientX:99}));assert.equal(JSON.stringify(value),beforeBlur,'失焦后不保留Space状态');
 listeners.get('keydown')(event({key:'ArrowLeft'}));assert.equal(value.x,JSON.parse(beforeBlur).x+40,'聚焦画布的既有方向键可访问性保留');
 camera.close();
+// 两个正式外壳传入同一可用区，位置随工具组改变；缩放或定位后由使用者接管相机。
+let usable={width:600,height:450,paddingX:24,paddingY:24};
+const modern=window.PrototypeReviewCamera.create({viewport,world,read:()=>value,write:next=>{value=next;},
+  dimensions:()=>({width:390,height:844}),readArea:()=>usable});
+function assertCentered() {
+  assert.ok(Math.abs(value.x + 390*value.k/2 - usable.width/2)<1e-9);
+  assert.ok(Math.abs(value.y + 844*value.k/2 - usable.height/2)<1e-9);
+  assert.ok(value.y >= 0 && value.y + 844*value.k < usable.height, '完整画板在底部工具条之前');
+}
+modern.fit();assertCentered();
+usable={...usable,height:360};modern.refresh();assertCentered();
+modern.zoom(1.25);const manual=value;usable={width:290,height:48,paddingX:24,paddingY:12};modern.refresh();assert.equal(value,manual);
+modern.fit();assertCentered();assert.ok(value.k>0 && value.k<.08,'极短视口仍能适应完整手机');
+const compact=value.k;modern.zoom(1.25);assert.equal(value.k,compact*1.25);
+// 放大后的比例仍低于历史 8% 时，减按钮和组合键滚轮都必须能缩回同一个适应下限。
+modern.zoom(1/1.25);assert.ok(Math.abs(value.k-compact)<1e-9,'缩小按钮缩回极短视口原始适应比例');
+modern.zoom(.5);assert.equal(value.k,compact,'再次缩小仍停在实际适应比例');
+for(const modifier of ['ctrlKey','metaKey']) {
+  listeners.get('wheel')(event({[modifier]:true,deltaY:-90}));assert.ok(value.k>compact && value.k<.08);
+  listeners.get('wheel')(event({[modifier]:true,deltaY:180}));assert.equal(value.k,compact,'组合键滚轮可缩回同一适应下限');
+}
+modern.zoom(1.25);const compactManual=value;
+usable={width:600,height:450,paddingX:24,paddingY:24};modern.refresh();assert.equal(value,compactManual,'手动相机在尺寸变化后保持显示比例');
+modern.zoom(.5);assert.equal(value.k,compact,'未重新适应时，保留已由当前画板建立的下限');
+modern.fit();modern.zoom(.01);assert.equal(value.k,.08,'宽视口重新适应后沿用常规下限');
+usable={width:290,height:48,paddingX:24,paddingY:12};modern.fit();
+value={x:10,y:20,k:.12};modern.restore();modern.zoom(.5);
+assert.equal(value.k,.08,'恢复另一页的持久相机时，采用历史下限');
+modern.focus({x:10,y:24,w:20,h:16});assert.equal(value.y+(24+8)*value.k,usable.height/2);
+modern.resetZoom();assert.equal(value.k,1,'百分比按钮按当前展示相机恢复 100%');
+modern.close();
 """
         result = subprocess.run(["node", "-e", script], input=json.dumps(source), text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -457,17 +488,27 @@ const context={window};vm.runInNewContext(JSON.parse(require('node:fs').readFile
 const valid=window.PrototypeCanvasPresentation.validSize;
 for(const size of [{width:1,height:1},{width:390,height:844},{width:16384,height:16384}]) assert.equal(valid(size),true);
 for(const size of [{width:0,height:844},{width:-1,height:844},{width:16385,height:844},{width:Infinity,height:844},{width:'390',height:844}]) assert.equal(valid(size),false);
-let observer;context.ResizeObserver=class {constructor(fn){observer=fn;}observe(){}disconnect(){}};
-let rect={width:900,height:700};const viewport={getBoundingClientRect:()=>rect},world={style:{}},preview={style:{}};
-const presentation=window.PrototypeCanvasPresentation.create({viewport,world,preview,entry:{display:'responsive',viewport:null}});
-assert.equal(presentation.read().height,652);assert.equal(presentation.read().width,852);
-assert.equal(presentation.resize({width:852,height:12000},true),false,'长内容不能扩大responsive iframe');assert.equal(preview.style.height,'652px');
-rect={width:800,height:600};observer();assert.equal(preview.style.height,'552px','窗口变化更新可用设计视口');
+const observed=[];let observer;context.ResizeObserver=class {constructor(fn){observer=fn;}observe(node){observed.push(node);}disconnect(){}};
+let rect={top:50,width:900,height:700},toolbarTop=690,reportedHeight;
+const viewport={getBoundingClientRect:()=>rect},toolbar={getBoundingClientRect:()=>({top:toolbarTop})},world={style:{}},preview={style:{}};
+const presentation=window.PrototypeCanvasPresentation.create({viewport,world,preview,toolbar,entry:{display:'responsive',viewport:null},onResize:()=>{reportedHeight=preview.style.height;}});
+assert.deepEqual(observed,[viewport,toolbar]);assert.equal(presentation.read().height,592);assert.equal(presentation.read().width,852);
+assert.equal(presentation.resize({width:852,height:12000},true),false,'长内容不能扩大responsive iframe');assert.equal(preview.style.height,'592px');
+toolbarTop=630;observer();assert.equal(reportedHeight,'532px','只有工具组换行时也先更新子视口，再重算相机');
+rect={top:50,width:800,height:600};toolbarTop=570;observer();assert.equal(preview.style.height,'472px','窗口变化更新可用设计视口');
 presentation.select({display:'fixed',viewport:{width:390,height:844}});assert.equal(preview.style.height,'844px');
 assert.equal(presentation.resize({width:390,height:12000},true),false,'子稿不能覆盖固定声明');assert.equal(preview.style.height,'844px');
 presentation.select({display:'fixed',viewport:null});assert.equal(presentation.resize({width:390,height:844},true),true);
 assert.equal(presentation.resize({width:390,height:12000},true),false,'只接受首次真实fixed frame测量');assert.equal(preview.style.height,'844px');
 presentation.select({display:'responsive',viewport:{width:390,height:844}});assert.equal(preview.style.width,'752px','responsive按父可用视口而非历史设备尺寸');
+assert.equal(presentation.resize({display:'fixed',width:390,height:844},true),false,'目录明示 responsive 时拒绝子稿固定尺寸');
+presentation.select({label:'HTTP 登记页'});
+assert.equal(presentation.resize({width:390,height:844},true),false,'导航目录没有展示声明时不接受无类型尺寸');
+assert.equal(presentation.resize({display:'fixed',width:390,height:844},true),true,'认证 HTTP 子桥可用真实画板补足固定视口');
+assert.equal(presentation.resize({display:'fixed',width:390,height:12000},true),false,'固定视口补足只接受一次');
+presentation.matchColorScheme('only light');assert.equal(preview.style.colorScheme,'light');
+presentation.select({display:'responsive',viewport:null});assert.equal(preview.style.colorScheme,'','切页重新协商色系');
+presentation.matchColorScheme('light dark');assert.equal(preview.style.colorScheme,'','保留支持双色系稿件的当前偏好');
 let frameHeight=12000;context.document={body:{dataset:{prototypeDisplay:'responsive'}},querySelectorAll:()=>[{getBoundingClientRect:()=>({width:390,height:frameHeight})}]};context.innerWidth=752;context.innerHeight=552;
 assert.equal(window.PrototypeCanvasPresentation.measure().height,552,'responsive测量返回视口而非自然长内容');
 context.document.body.dataset.prototypeDisplay='fixed';frameHeight=844;assert.equal(window.PrototypeCanvasPresentation.measure().height,844);
@@ -485,23 +526,29 @@ const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
 function run(file) {
  const documentEvents=new Map(),windowEvents=new Map(),messages=[],scrollCalls=[];
  class Node {
-  constructor(tag='DIV'){this.tagName=tag;this.style={};this.dataset={};this.attrs={};this.children=[];this.classList={add(){},toggle(){},remove(){}};this.textContent='Long content';this.innerText='Long content';this.id='';}
-  append(child){this.children.push(child);child.parentElement=this;}addEventListener(){}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k]??null;}querySelectorAll(){return [];}querySelector(){return null;}closest(){return null;}matches(){return false;}contains(node){return node===this || this.children.some(child=>child.contains(node));}getBoundingClientRect(){return {left:0,top:0,x:0,y:0,width:800,height:12000};}setPointerCapture(){}replaceChildren(){this.children=[];}scrollTo(options){scrollCalls.push({node:this,options});this.scrollTop=options.top;this.scrollLeft=options.left;}
+  constructor(tag='DIV'){this.tagName=tag;this.style={};this.dataset={};this.attrs={};this.children=[];this.classes=new Set();this.classList={add:v=>this.classes.add(v),toggle(){},remove(){}};this.textContent='Long content';this.innerText='Long content';this.id='';}
+  append(child){this.children.push(child);child.parentElement=this;}addEventListener(){}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k]??null;}querySelectorAll(){return [];}querySelector(){return null;}closest(selector){return this.classes.has(selector.slice(1))?this:null;}matches(){return false;}contains(node){return node===this || this.children.some(child=>child.contains(node));}getBoundingClientRect(){return {left:0,top:0,x:0,y:0,width:800,height:12000};}setPointerCapture(){}replaceChildren(){this.children=[];}scrollTo(options){scrollCalls.push({node:this,options});this.scrollTop=options.top;this.scrollLeft=options.left;}
  }
- const html=new Node('HTML'),body=new Node('BODY'),head=new Node('HEAD'),frame=new Node(),root=new Node('MAIN'),nested=new Node();html.append(body);body.append(frame);frame.append(root);
+ const html=new Node('HTML'),body=new Node('BODY'),head=new Node('HEAD'),stage=new Node(),frame=new Node(),root=new Node('MAIN'),nested=new Node();
+ stage.classes.add('prototype-stage');html.append(body);body.append(stage);stage.append(frame);frame.append(root);
  nested.style={overflow:'auto',overscrollBehavior:'auto'};nested.scrollTop=0;root.append(nested);
  body.dataset.prototypeDisplay='responsive';root.id='design';root.attrs.id='design';root.attrs['data-prototype-review-source']='source-'+'a'.repeat(64);
  Object.assign(html,{scrollTop:0,scrollLeft:0,scrollHeight:12000,clientHeight:600,scrollWidth:800,clientWidth:800});
  root.getBoundingClientRect=()=>({left:20,top:2400-html.scrollTop,x:20,y:2400-html.scrollTop,width:200,height:40});
  const document={documentElement:html,scrollingElement:html,body,head,readyState:'complete',
- currentScript:{src:'http://127.0.0.1:12345/assets/page-shell.js',getAttribute:key=>({'data-prototype-review-bridge':'5','data-prototype-review-page':'docs/prototype/settings.html','data-prototype-review-token':'a'.repeat(48)})[key]},
- querySelector(selector){if(selector==='[data-prototype-page-content]')return root;if(selector==='.prototype-frame')return frame;return null;},
+ currentScript:{src:file?'file:///fixture/assets/file-page.js':'http://127.0.0.1:12345/assets/page-shell.js',getAttribute:key=>({'data-prototype-review-bridge':'5','data-prototype-review-page':'docs/prototype/settings.html','data-prototype-review-token':'a'.repeat(48)})[key]},
+ querySelector(selector){return {'[data-prototype-page-content]':root,'.prototype-frame':frame,'.prototype-stage':stage}[selector]??null;},
  querySelectorAll(selector){return ['[data-prototype-page-content]','[id]','[data-prototype-review-source]'].includes(selector)?[root]:[];},createElement:tag=>new Node(tag.toUpperCase()),addEventListener:(type,fn)=>documentEvents.set(type,fn)};
  const parent={postMessage:value=>messages.push(value)},window={parent,location:{protocol:file?'file:':'http:',pathname:'/docs/prototype/settings.html'},XYFilePageContext:{name:'settings.html',nonce:'b'.repeat(48)},addEventListener:(type,fn)=>windowEvents.set(type,fn)};
- const context={window,parent,document,location:window.location,URL,Element:Node,HTMLElement:Node,getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),ResizeObserver:class{observe(){}},MutationObserver:class{observe(){}},requestAnimationFrame:()=>1,setTimeout:()=>1,innerWidth:800,innerHeight:600};
+ const context={window,parent,document,location:window.location,URL,Element:Node,HTMLElement:Node,getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1',colorScheme:'light'}),ResizeObserver:class{observe(){}},MutationObserver:class{observe(){}},requestAnimationFrame:()=>1,setTimeout:()=>1,innerWidth:800,innerHeight:600};
+ vm.runInNewContext(source.presentation,context);
  vm.runInNewContext(file?source.file:source.review,context);
+ assert.equal(html.classes.has('prototype-canvas-embedded'),false,'握手前不启用透明派生样式');
  windowEvents.get('message')({source:parent,origin:file?'null':'http://127.0.0.1:12345',data:file?{type:'xy-file:connect',page:'settings.html',nonce:'b'.repeat(48)}:{type:'prototype-review:connect',version:5,page:'docs/prototype/settings.html',token:'a'.repeat(48),mode:'browse'}});
  assert.equal(html.style.overscrollBehavior,'contain');assert.deepEqual(nested.style,{overflow:'auto',overscrollBehavior:'auto'},'不得修改业务nested scrollport');
+ assert.equal(messages.find(value=>value.type.endsWith(':ready')).colorScheme,'light');
+ assert.equal(html.classes.has('prototype-canvas-embedded'),true);assert.equal(stage.classes.has('prototype-canvas-stage'),true);
+ assert.equal(frame.classes.has('prototype-canvas-stage'),false,'业务画板本身不应用透明背景');
  assert.equal(messages.some(value=>value.type.endsWith(':size')),false,'responsive长内容不再向父层上报整页高度');
  if(!file) {
   const locate=()=>windowEvents.get('message')({source:parent,origin:'http://127.0.0.1:12345',data:{type:'prototype-review:review',version:5,page:'docs/prototype/settings.html',token:'a'.repeat(48),action:'locate',request:'root-location',target:{scope:'node',page:'docs/prototype/settings.html',locator:{type:'id',id:'design'}}}});
@@ -538,6 +585,7 @@ function run(file) {
 run(true);run(false);
 """
         result = subprocess.run(["node", "-e", script], input=json.dumps({
+            "presentation": (TEMPLATES / "canvas-presentation.js").read_text(encoding="utf-8"),
             "file": (TEMPLATES / "file-page.js").read_text(encoding="utf-8"),
             "review": (TEMPLATES / "page-shell.js").read_text(encoding="utf-8")}),
             text=True, capture_output=True, check=False)
@@ -551,13 +599,14 @@ const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
 function node() {return {style:{},dataset:{},hidden:false,attrs:{},textContent:'',children:[],addEventListener(){},append(value){this.children.push(value);},replaceChildren(){this.children=[];},querySelectorAll(){return [];},setAttribute(key,value){this.attrs[key]=value;},removeAttribute(key){delete this.attrs[key];}};}
 const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,node());return elements.get(id);};
 const original='file:///fixture/prototype/settings.html';
-const window={addEventListener(){},XYFileDeliveryEntry:{state:{name:'settings.html',originalFileURL:original,catalog:{schema_version:1,directory_sha256:'a'.repeat(64),pages:[{name:'settings.html',path:'docs/prototype/settings.html',label:'Settings',viewport:null,binding:{request_id:'one',review_id:'b'.repeat(64),instance:'c'.repeat(48),origin:'http://127.0.0.1:12345'}}]}}},
+const window={addEventListener(){},XYFileDeliveryEntry:{state:{name:'settings.html',originalFileURL:original,catalog:{schema_version:1,directory_sha256:'a'.repeat(64),pages:[{name:'settings.html',path:'docs/prototype/settings.html',label:'Settings',groups:[],viewport:null,binding:{request_id:'one',review_id:'b'.repeat(64),instance:'c'.repeat(48),origin:'http://127.0.0.1:12345'}}]}}},
  PrototypeCanvasPresentation:{create(){return {select(){},read:()=>({width:800,height:600}),close(){}};}},
  PrototypeReviewCamera:{create(options){return {fit(){options.write({x:0,y:0,k:1});},zoom(){},close(){}};}}};
 const context={window,parent:window,location:{protocol:'file:',href:original,assign(){throw Error('不能跳到旧目录');}},URL,URLSearchParams,TextEncoder,
  document:{getElementById:get,createElement:node,addEventListener(){}},setTimeout(){throw Error('无握手降级不能等待伪ready');},clearTimeout(){}};
 (async()=>{
- await assert.doesNotReject(vm.runInNewContext(source,context));
+ const fake=window.PrototypeCanvasPresentation;vm.runInNewContext(source.presentation,context);window.PrototypeCanvasPresentation={...window.PrototypeCanvasPresentation,...fake};
+ await assert.doesNotReject(vm.runInNewContext(source.file,context));
  assert.equal(get('prototype-preview').src,original,'整个crypto缺失仍必须载入原稿');
  assert.equal(get('prototype-preview').hidden,false);assert.equal(get('prototype-preview').attrs['aria-busy'],'false');
  assert.equal(get('open-review').attrs.href,undefined);assert.equal(get('open-review').attrs['aria-disabled'],'true');
@@ -565,7 +614,7 @@ const context={window,parent:window,location:{protocol:'file:',href:original,ass
  assert.equal(get('prototype-pages').children.length,1,'不能启用旧目录中的其他页面');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
-        result = subprocess.run(["node", "-e", script], input=json.dumps((TEMPLATES / "file-delivery.js").read_text(encoding="utf-8")),
+        result = subprocess.run(["node", "-e", script], input=json.dumps({"file": (TEMPLATES / "file-delivery.js").read_text(), "presentation": (TEMPLATES / "canvas-presentation.js").read_text()}),
                                 text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
@@ -576,10 +625,10 @@ const vm=require('node:vm'),assert=require('node:assert/strict'),{webcrypto}=req
 const source=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
 async function run(file) {
  const elements=new Map(),events=new Map();let focused='',assigned='';
- function node(){return {children:[],style:{},attrs:{},dataset:{},hidden:false,listeners:new Map(),classList:{contains(){return false;}},addEventListener(type,fn){this.listeners.set(type,fn);},append(...items){this.children.push(...items);},replaceChildren(){this.children=[];},setAttribute(k,v){this.attrs[k]=v;},getAttribute(k){return this.attrs[k];},removeAttribute(k){delete this.attrs[k];},querySelectorAll(){return this.children;},focus(){focused=this.id;},showModal(){},close(){}};}
+ function node(){return {children:[],style:{},attrs:{},dataset:{},hidden:false,listeners:new Map(),classList:{contains(){return false;}},addEventListener(type,fn){this.listeners.set(type,fn);},append(...items){for(const item of items){item.parentElement=this;this.children.push(item);}},replaceChildren(){this.children=[];},setAttribute(k,v){this.attrs[k]=v;},getAttribute(k){return this.attrs[k];},removeAttribute(k){delete this.attrs[k];},querySelectorAll(){return this.children;},focus(){focused=this.id;},showModal(){},close(){}};}
  const get=id=>{if(!elements.has(id)){const value=node();value.id=id;elements.set(id,value);}return elements.get(id);};
  get('delivery-navigation').hidden=true;get('prototype-preview').attrs.sandbox='allow-scripts';get('prototype-preview').contentWindow={postMessage(){}};
- const pages=['settings','details'].map(name=>({name:name+'.html',path:'docs/prototype/'+name+'.html',label:name}));
+ const pages=['settings','details','orders'].map((name,i)=>({name:name+'.html',path:'docs/prototype/'+name+'.html',label:name,groups:[{label:i===1?'门店':'用户',open:false},{label:'主页面',open:false}]}));
  const original='file:///fixture/prototype/settings.html';
  const digest=await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(new URL('.',original).href));
  const directory_sha256=Buffer.from(digest).toString('hex'),context={review_id:'a'.repeat(64)};
@@ -596,20 +645,25 @@ async function run(file) {
  get('review-workspace').insertBefore=()=>{};
  const location={protocol:file?'file:':'http:',href:original,pathname:'/delivery/settings.html',assign(value){assigned=value;}};
  const runtime={window,parent:window,document,location,crypto:webcrypto,URL,URLSearchParams,TextEncoder,history:{replaceState(){}},setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,clearInterval(){}};
+ const fake=window.PrototypeCanvasPresentation;vm.runInNewContext(source.presentation,runtime);window.PrototypeCanvasPresentation={...window.PrototypeCanvasPresentation,...fake};
  await vm.runInNewContext(file?source.file:source.live,runtime);await new Promise(resolve=>setImmediate(resolve));
  const toggle=get('navigation-toggle'),nav=get('delivery-navigation');
  toggle.listeners.get('click')();assert.equal(nav.hidden,false);assert.equal(toggle.attrs['aria-expanded'],'true');
  const event={key:'Escape',preventDefault(){this.prevented=true;}};events.get('keydown')(event);
  assert.equal(nav.hidden,true);assert.equal(toggle.attrs['aria-expanded'],'false');assert.equal(focused,'navigation-toggle');assert.equal(event.prevented,true);
- toggle.listeners.get('click')();const link=get('prototype-pages').children[1];assert.equal(link.dataset.page,file?'details.html':pages[1].path);
+ toggle.listeners.get('click')();const groups=get('prototype-pages').children;assert.equal(groups.length,2);
+ assert.equal(groups[0].children[0].textContent,'用户');assert.equal(groups[0].open,true);assert.equal(groups[1].open,false);
+ const firstSubgroup=groups[0].children[1];assert.equal(firstSubgroup.children.length,3);assert.equal(firstSubgroup.children[1].attrs['aria-current'],'page');
+ const link=groups[1].children[1].children[1];assert.equal(link.dataset.page,'details.html');
  const click={button:0,preventDefault(){this.prevented=true;}};link.listeners.get('click')(click);
  assert.equal(click.prevented,true);assert.equal(nav.hidden,true);assert.equal(toggle.attrs['aria-expanded'],'false');assert.equal(focused,'navigation-toggle');
- if(file)assert.equal(assigned,'file:///fixture/prototype/details.html');
+ if(file)assert.equal(assigned,'file:///fixture/prototype/details.html');else {assert.equal(link.attrs['aria-current'],'page');assert.equal(firstSubgroup.children[1].attrs['aria-current'],undefined);assert.equal(groups[1].open,true);}
 }
 (async()=>{await run(true);await run(false);})().catch(error=>{console.error(error);process.exitCode=1;});
 """
         result = subprocess.run(["node", "-e", script], input=json.dumps({
             "file": (TEMPLATES / "file-delivery.js").read_text(encoding="utf-8"),
+            "presentation": (TEMPLATES / "canvas-presentation.js").read_text(),
             "live": (TEMPLATES / "live-workspace.js").read_text(encoding="utf-8")}),
             text=True, capture_output=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -634,8 +688,9 @@ assert.equal(row.children[0].children[0].textContent,'R01');
 assert.equal(anchorRow.children[0].children[0].textContent,'A01');
 model.setCamera(boot.pages[0].path,{x:0,y:0,k:1});
 let receive;window.addEventListener=(type,handler)=>{if(type==='message')receive=handler;};
-window.PrototypeCanvasPresentation={create:()=>({select(){},read:()=>({width:800,height:600}),close(){}})};
-window.PrototypeReviewCamera={create:()=>({applyCam(){},fit(){},close(){}})};
+window.PrototypeCanvasPresentation={create:()=>({select(){},read:()=>({width:800,height:600}),matchColorScheme(){},close(){}})};
+let cameraIO;
+window.PrototypeReviewCamera={create:options=>{cameraIO=options;return {applyCam(){},fit(){},restore(){},close(){}};}};
 get('prototype-preview').contentWindow={postMessage(){}};
 Object.assign(context,{URL,location:{origin:'http://127.0.0.1:12345'},setTimeout:()=>1,clearTimeout(){}});
 vm.runInNewContext(input.host,context);
@@ -647,6 +702,12 @@ const item=model.state.items[0];
 emit({type:'prototype-review:geometry',marks:[{kind:'item',id:item.id,number:item.number,offset:0,operation:item.operation,bounds:{x:1,y:1,w:20,h:20}},{kind:'anchor',id:anchor.id,number:anchor.number,offset:1,bounds:{x:1,y:1,w:20,h:20}}]});
 const markers=get('canvas-viewport').children[0].children.filter(child=>child.className?.startsWith('live-marker'));
 assert.deepEqual(markers.map(child=>child.textContent),['R01','A01']);
+// 短视口临时相机只推动当前图层；稀疏标记及导出仍使用已存在的整改记录和旧相机合同。
+const storedCamera=model.state.cameras[boot.pages[0].path];
+cameraIO.write({x:5,y:12,k:.04});
+assert.equal(cameraIO.read().k,.04);assert.equal(model.state.cameras[boot.pages[0].path],storedCamera);
+cameraIO.onApply(cameraIO.read());
+assert.equal(get('canvas-viewport').children[0].children.find(child=>child.textContent==='R01').style.left,'5.04px');
 assert.equal(JSON.stringify(model.exportPayload()),before);
 """
         result = subprocess.run(["node", "-e", STATE_SETUP + scenario],

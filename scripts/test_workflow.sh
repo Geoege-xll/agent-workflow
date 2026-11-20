@@ -15,6 +15,10 @@ import shutil
 import sys
 import unittest
 
+# stdin 启动的 Python 以空串表示实时 cwd。把它替换为上方已切入的物理源包根，
+# 使测试进入临时项目后延迟导入的 lib、product 仍来自本仓，也兼容已禁用空串的解释器。
+sys.path[:] = [str(Path.cwd()), *(entry for entry in sys.path if entry)]
+
 
 def modules(*names):
     return tuple("tests.test_" + name for name in names)
@@ -24,10 +28,11 @@ def modules(*names):
 # 下方统一按模块和真实用例去重，避免重复执行写入临时项目的集成测试。
 GROUPS = {
     "plugin": modules(
-        "plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract",
-        "plugin_maintenance_contract", "continuous_intake_capabilities", "agent_continuation",
-        "dispatch_admission", "task_settlement", "task_graph", "task_graph_init", "task_graph_records",
-        "scheduler_boundaries", "foundation_qa", "qa_handoff", "plugin_worktree_delivery",
+        "claude_first_install", "claude_candidate_source", "plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract",
+        "plugin_maintenance_contract", "continuous_intake_capabilities", "conversation_scope", "agent_continuation",
+        "dispatch_admission", "task_pool", "task_intent", "plugin_task_pool",
+        "task_settlement", "task_graph", "task_graph_init", "task_graph_records",
+        "scheduler_boundaries", "workflow_closure", "foundation_qa", "qa_handoff", "qa_rule_routing", "review_target", "plugin_worktree_delivery",
         "worktree_delivery", "design_standards_lifecycle", "production_only_revisions", "light_ui_copy",
         "context_read", "profile_context", "project_id_initialization", "project_discovery",
         "bootstrap_routing", "astra_instruction_adaptation", "runtime_and_discovery",
@@ -44,7 +49,7 @@ GROUPS = {
         "prototype_workspace_runtime", "prototype_feedback", "prototype_review", "prototype_live",
         "prototype_server", "prototype_file_entry",
     ),
-    "plans": modules("plan_and_shallow_docs"),
+    "plans": modules("plan_and_shallow_docs", "document_relations", "document_links"),
     "packaging": modules(
         "plugin_delivery", "native_config_packaging", "candidate_delivery", "plugin_config_launcher",
         "config_distribution", "plugin_source_publication", "remote_install_smoke",

@@ -90,9 +90,9 @@ class GuidanceProjectionTest(unittest.TestCase):
             envelope_path = "plugins/antigravity/plugin-context.md" if host == "antigravity" else "plugins/plugin-context.md"
             envelope = (PACK / envelope_path).read_bytes()
             for skill in optional:
-                # 走与实包相同的三端资源渲染入口，保留可发现frontmatter和完整适配正文。
+                # 走与实包相同的三端渲染入口，保留可发现 frontmatter 和完整共享正文。
                 original = (PACK / "platforms/shared/skills" / skill / "SKILL.md").read_bytes()
-                header, body = builder.split_frontmatter(builder.render_skill(original, envelope))
+                header, body = builder.split_frontmatter(builder.render_skill(original, envelope_path))
                 self.assertIn(("name: " + skill + "\n").encode(), header)
                 self.assertNotIn(b"disable-model-invocation: true", header)
                 self.assertTrue(body.endswith(builder.split_frontmatter(original)[1]))
@@ -147,8 +147,7 @@ class PluginDeliveryTest(unittest.TestCase):
                 archive = builder.build(PACK, cls.root / "first", host)
             installed = cls.root / "installed" / host
             installed.mkdir(parents=True, exist_ok=bool(retained))
-            with zipfile.ZipFile(archive) as payload:
-                payload.extractall(installed)
+            builder.unpack_archive(archive, installed)
             cls.archives[host], cls.installed[host] = archive, installed
 
     @classmethod
@@ -175,6 +174,19 @@ class PluginDeliveryTest(unittest.TestCase):
             with self.subTest(host=host):
                 manifest = json.loads((root / builder.MANIFESTS[host]).read_bytes())
                 self.assertEqual(allowed[host], set(manifest))
+                # 从三个真实解包目录检查宿主直接发现的描述。正文、显示名称及
+                # 第三方原件可保留原语言；仅防止中文描述重新投影到发现面。
+                descriptions = [manifest["description"]]
+                for entry in [*root.glob("skills/*/SKILL.md"), *root.glob("agents/*.md")]:
+                    header, _ = builder.split_frontmatter(entry.read_bytes())
+                    description = re.search(r"(?m)^description: (.+(?:\n[ \t]+[^\n]+)*)", header.decode())
+                    self.assertIsNotNone(description, entry)
+                    descriptions.append(description[1])
+                for metadata in root.glob("skills/*/agents/openai.yaml"):
+                    descriptions.extend(re.findall(r"(?m)^\s*short_description:\s*(.+)$", metadata.read_text()))
+                for value in descriptions:
+                    self.assertRegex(value, "[a-zA-Z]")
+                    self.assertNotRegex(value, r"[\u3400-\u9fff\uff00-\uffef]")
                 self.assertNotIn("agents", manifest)
                 self.assertEqual((PACK / "product/PLUGIN_VERSION").read_text().strip(), manifest["version"])
                 # 3.x 插件以 PLUGIN_VERSION 为唯一产品版本源，三端发现清单与包内字节需一致。
@@ -290,21 +302,30 @@ class PluginDeliveryTest(unittest.TestCase):
             original = (PACK / "platforms/shared" / relative).read_bytes()
             header, original_body = builder.split_frontmatter(original)
             generated = (root / relative).read_bytes()
-            self.assertEqual(header + b"\n" + adapter + b"\n" + original_body, generated)
+            # 从发现目录实际解引用，避免把项目 cwd、其它宿主或同名插件当作适配来源。
+            generated_header, generated_body = builder.split_frontmatter(generated)
+            self.assertEqual(header, generated_header)
+            self.assertTrue(generated_body.endswith(original_body))
+            locator = generated_body.removesuffix(original_body)
+            self.assertNotIn(adapter, locator)
+            targets = re.findall(rb"\]\(([^)]+)\)", locator)
+            self.assertEqual(1, len(targets))
+            self.assertEqual(root / adapter_source,
+                             ((root / relative).parent / targets[0].decode()).resolve())
             self.assertEqual(adapter_source, metadata["projections"][relative]["adapter"])
             self.assertLessEqual(len(builder.split_frontmatter(generated)[1].strip()), 24_000)
 
     def test_antigravity_rejects_native_truncation_before_creating_an_archive(self):
-        # 模拟适配文本将来增长；UTF-8 中文按字节计数，不能把字符数误当预算。
+        # 模拟实际进入发现目录的正文增长；UTF-8 中文按字节计数，不能把字符数误当预算。
         # 使用真实构建路径验证会在创建输出目录前失败，避免产生可安装的残缺候选。
         read_source = builder.read_source
-        def oversized_adapter(source, relative):
+        def oversized_skill(source, relative):
             original = read_source(source, relative)
-            if relative == "plugins/antigravity/plugin-context.md":
-                return original + ("中" * 2_000).encode("utf-8")
+            if relative == "platforms/shared/skills/xy-workflow/SKILL.md":
+                return original + ("中" * 8_000).encode("utf-8")
             return original
         output = self.root / "oversized-antigravity-output"
-        with mock.patch.object(builder, "read_source", side_effect=oversized_adapter):
+        with mock.patch.object(builder, "read_source", side_effect=oversized_skill):
             with self.assertRaisesRegex(ValueError, "Antigravity skill body exceeds 24000 bytes"):
                 builder.build(PACK, output, "antigravity")
         self.assertFalse(output.exists())
@@ -339,6 +360,11 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertFalse(Path(name).name.startswith("setup_"), name)
                 self.assertIn("lib/documents/safe_documents.py", files.namelist())
                 self.assertIn("lib/documents/validate_prototype_workspace.py", files.namelist())
+                # 业务项目可以没有工作流源码。每个宿主的离线包都要带上按需使用的架构模板，
+                # 以及两条 Markdown 命令实际导入的共用模块，避免本仓测试通过但安装后缺文件。
+                for relative in ("templates/docs/ARCHITECTURE.md", "lib/documents/markdown_headings.py",
+                                 "lib/documents/markdown_links.py"):
+                    self.assertEqual((PACK / relative).read_bytes(), files.read(relative))
                 # 文档和明确模板闭包进入三端包，不能依靠开发仓补齐反馈依赖。
                 for relative in ("lib/documents/prototype_feedback.py",
                                  "lib/documents/prototype_handoff.py",
@@ -387,7 +413,9 @@ class PluginDeliveryTest(unittest.TestCase):
         for relative in originals:
             target = source / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((PACK / relative).read_bytes())
+            original = PACK / relative
+            target.write_bytes(original.read_bytes())
+            target.chmod(stat.S_IMODE(original.stat().st_mode))
         self.assertFalse((source / "plugin_runtime").exists())
         self.assertEqual([source / builder.PREFERENCE_SOURCE],
                          list((source / "native_config").rglob("*")))
@@ -433,9 +461,17 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertTrue((plugin / builder.MANIFESTS[host]).is_file())
                 source_zip = archive.with_name(archive.stem + "-local-source.zip")
                 self.assertTrue(source_zip.is_file())
-                with zipfile.ZipFile(source_zip) as distribution:
-                    expected = plugin.relative_to(output / "local" / host) / builder.MANIFESTS[host]
+                with zipfile.ZipFile(archive) as package, zipfile.ZipFile(source_zip) as distribution:
+                    prefix = plugin.relative_to(output / "local" / host)
+                    expected = prefix / builder.MANIFESTS[host]
                     self.assertIn(expected.as_posix(), distribution.namelist())
+                    # 主包、解包目录与继续发布所需的本地源 ZIP 都必须带齐两对执行位。
+                    for arch in ("arm64", "x86_64"):
+                        for binary in ("agent-desktop", "agent-desktop-macos-helper"):
+                            relative = f"{builder.SELECTED_VENDOR}/agent-desktop/runtime/macos/{arch}/{binary}"
+                            self.assertEqual(0o100755, package.getinfo(relative).external_attr >> 16)
+                            self.assertEqual(0o100755, distribution.getinfo((prefix / relative).as_posix()).external_attr >> 16)
+                            self.assertEqual(0o755, stat.S_IMODE((plugin / relative).stat().st_mode))
                 with self.assertRaises(FileExistsError):
                     builder.local_source(archive, output, host)
 
@@ -627,10 +663,99 @@ class PluginDeliveryTest(unittest.TestCase):
             target.write_bytes(original)
             extra.unlink(missing_ok=True)
 
+    def test_detached_desktop_runtime_rejects_lost_executable_modes(self):
+        from lib.skills.selected_skills import DESKTOP_BINARIES, DESKTOP_MACOS_TARGETS, VENDOR
+        root = self.installed["codex"]
+        command = [sys.executable, "-B", str(root / "plugins/source_pack.py")]
+        environment = isolated_environment(self.root / "desktop-mode-rejection")
+        for arch in DESKTOP_MACOS_TARGETS:
+            for binary in DESKTOP_BINARIES:
+                relative = f"{VENDOR}/agent-desktop/runtime/macos/{arch}/{binary}"
+                target = root / relative
+                with self.subTest(arch=arch, binary=binary):
+                    self.assertEqual(0o755, stat.S_IMODE(target.stat().st_mode))
+                    try:
+                        # 保留原字节与锁，仅撤掉文件执行位，证明摘要相同仍会被两个入口拒绝。
+                        target.chmod(0o644)
+                        for arguments in (("selected-skills", "check"), ("resource", relative)):
+                            result = subprocess.run([*command, *arguments], cwd=self.root, env=environment,
+                                                    capture_output=True, text=True, timeout=20)
+                            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                            self.assertIn("selected skill mode mismatch: " + relative, result.stderr)
+                    finally:
+                        target.chmod(0o755)
+
+    def test_detached_selected_read_requires_its_locked_source_without_probing_other_files(self):
+        from lib.skills.selected_skills import LOCK, skill_path
+        root = self.installed["codex"]
+        command = [sys.executable, "-B", str(root / "plugins/source_pack.py"), "selected-skills"]
+        environment = isolated_environment(self.root / "selected-scoped-read")
+
+        def invoke(*args):
+            return subprocess.run([*command, *args], cwd=self.root, env=environment,
+                                  capture_output=True, text=True, timeout=20)
+
+        # 两条真实入口面对同一损坏安装时有不同范围。读 Taste 仍可用，显式 check 拒绝缺项。
+        unrelated = root / skill_path("grilling")
+        original = unrelated.read_bytes()
+        try:
+            unrelated.unlink()
+            page = invoke("read", "xy-taste")
+            self.assertEqual(0, page.returncode, page.stdout + page.stderr)
+            self.assertEqual(skill_path("design-taste-frontend"), json.loads(page.stdout)["path"])
+            self.assertEqual(2, invoke("check").returncode)
+        finally:
+            unrelated.write_bytes(original)
+
+        relative = skill_path("design-taste-frontend")
+        target, lock, manifest = root / relative, root / LOCK, root / "sources.json"
+        document, raw_lock, provenance = target.read_bytes(), lock.read_bytes(), manifest.read_bytes()
+        try:
+            target.unlink()
+            self.assertEqual(2, invoke("read", "xy-taste").returncode)
+            target.write_bytes(b"x" + document[1:])
+            result = invoke("read", "xy-taste")
+            self.assertEqual(2, result.returncode)
+            self.assertIn("selected skill digest mismatch", result.stderr)
+            target.write_bytes(document)
+            # 即使 JSON 语义不变，替换锁原字节也会破坏其与当前发行清单的绑定。
+            lock.write_bytes(raw_lock + b"\n")
+            result = invoke("read", "xy-taste")
+            self.assertEqual(2, result.returncode)
+            self.assertIn(LOCK, result.stderr)
+            lock.write_bytes(raw_lock)
+            altered = json.loads(provenance)
+            del altered["payload_sha256"][relative]
+            manifest.write_text(json.dumps(altered), encoding="utf-8")
+            result = invoke("read", "xy-taste")
+            self.assertEqual(2, result.returncode)
+            self.assertIn(relative, result.stderr)
+        finally:
+            target.write_bytes(document)
+            lock.write_bytes(raw_lock)
+            manifest.write_bytes(provenance)
+
+        for name, change in (
+                ("lib/skills/role_skills.py", b'\nSELECTED_SKILL_ALIASES["xy-taste"] = "grilling"\n'),
+                ("product/command_identity.py", b'\nraise RuntimeError("tampered identity module ran")\n'),
+                ("product/command_identity.json", b"\n")):
+            with self.subTest(source=name):
+                source = root / name
+                original = source.read_bytes()
+                try:
+                    # 被篡改的是实际 Python 别名/身份来源，目标和锁仍保持合法，不能误读另一篇原文。
+                    source.write_bytes(original + change)
+                    result = invoke("read", "xy-taste")
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertIn("selected skill package source digest mismatch: " + name, result.stderr)
+                    self.assertEqual("", result.stdout)
+                finally:
+                    source.write_bytes(original)
+
     def test_selected_skills_are_complete_detached_and_do_not_register_taste_hooks(self):
         """真实三端载荷消费同一原文，连续读取覆盖全部字节，绝不执行原版脚本。"""
-        from lib.skills.selected_skills import LOCK, VENDOR, SPECS, snapshot, skill_path
-        lock, originals = snapshot(PACK)
+        from lib.skills.selected_skills import DESKTOP_SKILL_ROOT, LOCK, VENDOR, snapshot, skill_path
+        _, originals = snapshot(PACK)
         project = self.root / "selected-skills-project"
         project.mkdir()
         # 包外最小原始布局夹具只验证CLI消费，不冒称当前机器的Apple官方资源证据。
@@ -655,9 +780,38 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(body).hexdigest(), metadata["source_files"][relative])
                 from lib.skills.role_skills import SELECTED_SKILL_ALIASES
                 for alias, canonical in SELECTED_SKILL_ALIASES.items():
-                    self.assertEqual((PACK / "plugins/selected-skills" / alias / "SKILL.md").read_bytes(),
-                                     (root / "skills" / alias / "SKILL.md").read_bytes())
+                    adapter_path = "plugins/selected-skills/" + alias + "/SKILL.md"
+                    adapter = (PACK / adapter_path).read_bytes()
+                    target = "skills/" + alias + "/SKILL.md"
+                    if canonical in ("grill-me", "grilling"):
+                        # 宿主只加载发现入口。直接比对原版完整字节与投影来源，同时检查
+                        # 外层元数据仍归适配，单独进入此 Skill 不会收到执行前置命令。
+                        upstream = skill_path(canonical)
+                        self.assertEqual(adapter + b"\n" + originals[upstream], (root / target).read_bytes())
+                        projection = metadata["projections"][target]
+                        self.assertEqual(adapter_path, projection["source"])
+                        self.assertEqual({upstream: hashlib.sha256(originals[upstream]).hexdigest()},
+                                         projection["dependencies"])
+                        self.assertNotIn(b"selected-skills check", adapter)
+                        self.assertNotIn(b"source_pack.py", adapter)
+                        header, _ = builder.split_frontmatter(adapter)
+                        self.assertEqual(canonical == "grill-me", b"disable-model-invocation: true" in header)
+                    else:
+                        self.assertEqual(adapter, (root / target).read_bytes())
                     self.assertFalse((root / "skills" / canonical).exists())
+                desktop = originals[skill_path("agent-desktop")]
+                self.assertEqual(desktop, (root / DESKTOP_SKILL_ROOT / "SKILL.md").read_bytes())
+                self.assertTrue((root / DESKTOP_SKILL_ROOT / "LICENSE").is_file())
+                self.assertEqual(set((root / DESKTOP_SKILL_ROOT / "references").iterdir()),
+                                 {root / name.removeprefix(VENDOR + "/agent-desktop/") for name in originals
+                                  if name.startswith(f"{VENDOR}/agent-desktop/{DESKTOP_SKILL_ROOT}/references/")})
+                for target in (root / DESKTOP_SKILL_ROOT).rglob("*"):
+                    if target.is_file():
+                        relative = target.relative_to(root).as_posix()
+                        source = VENDOR + "/agent-desktop/" + ("LICENSE" if target.name == "LICENSE" else relative)
+                        self.assertEqual(originals[source], target.read_bytes())
+                        self.assertEqual({"source": source, "transform": "identity"}, metadata["projections"][relative])
+                self.assertFalse((root / "skills/xy-agent-desktop").exists())
                 adapter = (root / "skills/xy-taste/SKILL.md").read_bytes()
                 header, _ = builder.split_frontmatter(adapter)
                 self.assertNotIn(b"hooks:", header)
@@ -705,11 +859,13 @@ class PluginDeliveryTest(unittest.TestCase):
                 self.assertEqual(0, apple_read.returncode, apple_read.stdout + apple_read.stderr)
                 self.assertEqual("官方布局夹具引用\n", json.loads(apple_read.stdout)["content"])
                 chunks, offset = [], 0
+                taste_digest = hashlib.sha256(originals[skill_path("design-taste-frontend")]).hexdigest()
                 while True:
                     result = subprocess.run([*command, "selected-skills", "read", "xy-taste", "--offset", str(offset), "--length", "12000"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                     page = json.loads(result.stdout)
                     self.assertEqual(offset, page["offset"])
+                    self.assertEqual(taste_digest, page["sha256"])
                     chunks.append(page["content"].encode("utf-8"))
                     offset = page["next_offset"]
                     if page["eof"]:
@@ -1241,7 +1397,7 @@ class PluginDeliveryTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         # guidance 已纳入当前可发现技能，原生清单必须与唯一产品声明完整一致，
         # 不能继续硬编码旧的 13 项，也不能仅凭总数正确就漏验实际名称。
-        skills = sorted(builder.CORE_SKILLS | set(builder.IDENTITY["skill_aliases"]))
+        skills = sorted(builder.CORE_SKILLS | set(builder.IDENTITY["skill_aliases"]) | {"agent-desktop"})
         self.assertIn("Skills (" + str(len(skills)) + ")  " + ", ".join(skills), result.stdout)
         self.assertIn("xy-config", result.stdout)
         self.assertIn("Agents (8)", result.stdout)

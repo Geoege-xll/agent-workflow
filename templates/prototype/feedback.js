@@ -59,7 +59,7 @@
     $("mode-browse")?.addEventListener("change", () => setMode("browse")); $("mode-annotate")?.addEventListener("change", () => setMode("annotate"));
     function setMode(mode) { model.setMode(mode); send("mode", { mode }); if ($("mode-browse")) $("mode-browse").checked = mode === "browse"; if ($("mode-annotate")) $("mode-annotate").checked = mode === "annotate"; announce(mode === "browse" ? "浏览模式：原生控件、滚动与业务导航保持可用。" : "批注模式：点选元素后标记位置或添加整改。"); }
     $("canvas-fit").addEventListener("click", camera.fit); $("canvas-zoom-out").addEventListener("click", () => camera.zoom(1 / 1.25));
-    $("canvas-zoom-in").addEventListener("click", () => camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", () => camera.zoom(1 / state.cameras[state.page].k));
+    $("canvas-zoom-in").addEventListener("click", () => camera.zoom(1.25)); $("canvas-zoom-reset").addEventListener("click", camera.resetZoom);
     $("show-anchors").addEventListener("change", () => model.setView({ showAnchors: $("show-anchors").checked }));
     $("show-rectifications").addEventListener("change", () => model.setView({ showItems: $("show-rectifications").checked }));
     $("select-parent").addEventListener("click", () => send("parent"));
@@ -255,6 +255,18 @@
         busy = false; if (exporter.open && epoch === exportEpoch) enableExport(Boolean(backup) && !model.activeDrafts().length);
       }
     });
+    function positionSelection(bounds) {
+      if (!bounds || ![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite)) return;
+      const cam = camera.read(), vp = $("canvas-viewport"); if (!cam) return;
+      const toolbar = $("selection-tools"), area = camera.readArea?.();
+      // 选中浮条与定位都取当前显示相机。短窗口将此浮条约束到主工具条之前，
+      // 内容超长时可在浮条内滚动；旧版仍用原来的底部间距与最低位置。
+      if (area) toolbar.style.maxBlockSize = `${Math.max(0, area.height - 8)}px`;
+      const maxTop = (area ? area.height - 8 : vp.clientHeight - 60) - toolbar.offsetHeight;
+      const minTop = area ? Math.max(0, Math.min(70, maxTop)) : 70;
+      toolbar.style.left = `${Math.max(14, Math.min(vp.clientWidth - toolbar.offsetWidth - 14, cam.x + bounds.x * cam.k))}px`;
+      toolbar.style.top = `${Math.max(minTop, Math.min(maxTop, cam.y + (bounds.y + bounds.h) * cam.k + 12))}px`;
+    }
     $("target-directory").addEventListener("change", () => { const key = $("target-directory").value; if (key) { setMode("annotate"); send("select", { key }); } });
     model.subscribe(renderLists); renderLists();
     return Object.freeze({
@@ -262,12 +274,10 @@
       catalog() { const select = $("target-directory"), old = select.value; select.replaceChildren(new Option("选择设计稿中的元素", "")); for (const record of model.catalog()) select.add(new Option(record.label, record.key)); if (model.catalog().some((record) => record.key === old)) select.value = old; },
       selected(bounds) {
         model.setView({ activeAnchor: null, activeItem: null }); renderSelection();
-        if (!bounds || ![bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite)) return;
-        const cam = state.cameras[state.page], vp = $("canvas-viewport"); if (!cam) return;
-        const toolbar = $("selection-tools"); toolbar.style.left = `${Math.max(14, Math.min(vp.clientWidth - toolbar.offsetWidth - 14, cam.x + bounds.x * cam.k))}px`;
-        toolbar.style.top = `${Math.max(70, Math.min(vp.clientHeight - toolbar.offsetHeight - 60, cam.y + (bounds.y + bounds.h) * cam.k + 12))}px`;
+        positionSelection(bounds);
         if (!state.selection?.target) announce("当前动态元素无来源；整改输入可以保留，请显式选择有来源的父层。");
       },
+      positionSelection,
       selectRecord(kind, id) {
         const entries = kind === "anchor" ? state.anchors : state.items, entry = entries.find((value) => value.id === id); if (!entry || entry.target.page !== state.page) return;
         model.setView({ activeAnchor: kind === "anchor" ? id : null, activeItem: kind === "item" ? id : null, tab: kind === "anchor" ? "anchors" : "rectifications", filter: "all" }); openPanel(); scrollRecord(id, kind === "anchor");

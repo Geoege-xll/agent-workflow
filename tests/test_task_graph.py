@@ -1496,7 +1496,9 @@ class TaskGraphTest(unittest.TestCase):
         """Patch/Page/Flow 都必须等待与已批准页面一一匹配的视觉 Gate。"""
 
         cli = Path(__file__).resolve().parents[1] / "lib/task_graph_cli.py"
-        fingerprint = "b" * 64
+        from tests.test_scheduler_boundaries import write_visual_page
+        project = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        fingerprint = write_visual_page(project)
         engineering_fingerprint = "e" * 64
         expected_gate = f"visual_approved:settings@{fingerprint}"
 
@@ -1613,7 +1615,7 @@ class TaskGraphTest(unittest.TestCase):
                 )
                 return subprocess.run(
                     [sys.executable, str(cli), command, "--input", str(source)],
-                    text=True,
+                    cwd=project, text=True,
                     capture_output=True,
                     check=False,
                 )

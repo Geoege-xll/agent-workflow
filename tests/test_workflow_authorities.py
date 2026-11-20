@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from tests.skill_contract_helpers import read_contract
+from lib.skills.business_confirmation_policy import validate_business_confirmation_texts
 from lib.skills.qa_review_policy import validate_pack_qa_review_policy
 
 
@@ -317,8 +318,8 @@ class CanonicalRoleConvergenceContractTest(unittest.TestCase):
             if phrase not in intake:
                 missing.append(f"intake:{phrase}")
         for phrase in (
-            "full five-section",
-            "page design and interaction contract",
+            "developer notes",
+            "linked original requirements",
             "recompute",
             "before implementation",
         ):
@@ -384,11 +385,10 @@ class CanonicalRoleConvergenceContractTest(unittest.TestCase):
         uiux = self._role_text("xy-uiux")
         for phrase in (
             "build-free",
-            'data-contract-section="purpose"',
-            'data-contract-section="navigation"',
-            'data-contract-section="interactions"',
-            'data-contract-section="states"',
-            'data-contract-section="exceptions"',
+            "开发说明",
+            "操作原型后仍不明确",
+            "允许留空",
+            "原章节",
             "direct link to each concrete changed page",
             "MUST NOT generate, persist, attach, or present screenshots",
             "must not create a Manifest",
@@ -442,6 +442,7 @@ class CanonicalRoleConvergenceContractTest(unittest.TestCase):
             self.assertIn(role, workflow)
         for phrase in (
             "requirements_approved",
+            "solution_approved",
             "visual_approved",
             "dependency closure",
             "PASS",
@@ -450,6 +451,7 @@ class CanonicalRoleConvergenceContractTest(unittest.TestCase):
         ):
             self.assertIn(phrase, workflow)
         self.assertIn("requirements_approved", constraints)
+        self.assertIn("solution_approved", constraints)
         self.assertIn("visual_approved", constraints)
         self.assertIn("PM", constraints)
 
@@ -1119,7 +1121,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                 "Internal orchestration records are not user-facing output.",
                 "Never paste raw workflow YAML or DAG JSON into user messages.",
                 "`commit_decision`",
-                "Do not require the user to type `requirements_approved`",
+                "无需用户输入内部令牌",
             ),
         }
         for relative, anchors in skill_expectations.items():
@@ -1162,19 +1164,18 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                 with self.subTest(source=relative, anchor=anchor):
                     self.assertIn(anchor, body)
 
-        for relative in (
-            "product/WORKFLOW.md",
-            "platforms/shared/skills/xy-workflow/SKILL.md",
+        # 宿主先展示完整信息，再把回答映射到明确事项。两份权威均需同时
+        # 保留自然语言同意和免输内部令牌的边界，使用各自实际对读者的措辞。
+        for relative, affirmative, internal in (
+            ("product/WORKFLOW.md", "Accept any explicit affirmative reply in natural language",
+             "Do not require the user to type `requirements_approved`"),
+            ("platforms/shared/skills/xy-workflow/SKILL.md", "接受可明确对应所问内容的肯定答复",
+             "无需用户输入内部令牌"),
         ):
-            body = self._text(relative)
-            self.assertIn(
-                "Accept any explicit affirmative reply in natural language",
-                body,
-            )
-            self.assertIn(
-                "Do not require the user to type `requirements_approved`",
-                body,
-            )
+            with self.subTest(source=relative):
+                body = self._text(relative)
+                self.assertIn(affirmative, body)
+                self.assertIn(internal, body)
 
     def test_pm_dispatch_contract_invokes_the_deterministic_task_graph_cli(self) -> None:
         """DAG 不得只停留在提示词；派发与 QA 前都要有确定性计算入口。"""
@@ -1279,8 +1280,8 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
             workflow,
         )
 
-    def test_pm_assesses_a_scoped_commit_after_qa_without_a_third_business_gate(self) -> None:
-        """提交是 QA 后的 PM 收口动作；它不能抢跑、扩大暂存范围或变成第三次确认。"""
+    def test_pm_assesses_a_scoped_commit_after_qa_without_an_extra_business_gate(self) -> None:
+        """提交是 QA 后的 PM 收口动作；它不能抢跑、扩大暂存范围或引入固定签字。"""
 
         lifecycle = (
             "QA PASS -> controlled-document projection -> PM commit assessment -> "
@@ -1311,7 +1312,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                 "commit_decision:",
                 "must not stage unrelated or unverified changes",
                 "must not use `git add -A` or `git add .`",
-                "does not create a third business-confirmation stage",
+                "does not create a business-confirmation stage",
             ):
                 with self.subTest(source=relative, anchor=anchor):
                     self.assertIn(anchor, body)
@@ -1568,6 +1569,9 @@ class BusinessConfirmationPolicyTest(unittest.TestCase):
             "The PM must obtain QA approval from the user.",
             "The PM must obtain rework approval from the user.",
             "The PM must obtain closeout approval from the user.",
+            "The PM must obtain release approval before development.",
+            "All Full requests must obtain solution approval.",
+            "UI-Conformance tasks have no business confirmation after `requirements_approved`.",
         )
         for index, mutation in enumerate(mutations):
             with self.subTest(mutation=mutation):
@@ -1598,99 +1602,57 @@ class BusinessConfirmationPolicyTest(unittest.TestCase):
                 )
                 self.assertIn("[ERROR]", result.stderr)
 
-    def test_business_confirmation_policy_rejects_duplicate_or_legacy_machine_policy(self) -> None:
-        current_policy = (
-            "business_confirmation_policy:\n"
-            "  default_gates:\n"
-            "    - requirements_approved\n"
-            "  ui_only_gates:\n"
-            "    - visual_approved\n"
-            "  additional_gates: exceptional"
-        )
-        legacy_policy = (
-            "business_confirmation_policy:\n"
-            "  default_gates:\n"
-            "    - requirements_approved\n"
-            "    - visual_approved\n"
-            "  additional_gates: exceptional"
-        )
-        for label, mutation in (
-            ("duplicate", current_policy),
-            ("legacy unconditional UI gate", legacy_policy),
+    def test_policy_declares_one_owner_and_preserves_each_condition(self) -> None:
+        # 直接修改实际随包文档的候选文本，区分丢失条件、重复政策和断开的来源引用。
+        owner = Path("product/WORKFLOW.md")
+        body = (PACK / owner).read_text(encoding="utf-8")
+        for current, invalid in (
+            ("current_goal_and_scope", "every_request_requires_another_answer"),
+            ("material_solution_decision", "all_full_requests"),
+            ("selected_required_prototype", "every_ui_task"),
+            ("additional_gates: exceptional", "additional_gates: exceptional\n  release_approved: always"),
+            ("### Business confirmation policy", "### Other decisions"),
         ):
-            with self.subTest(label=label):
-                temporary, _, pack = self.make_fixture()
-                self.addCleanup(temporary.cleanup)
-                for relative in ("product/WORKFLOW.md", "product/AGENT_SCHEMA.md"):
-                    path = pack / relative
-                    path.write_text(
-                        path.read_text(encoding="utf-8") + "\n\n" + mutation + "\n",
-                        encoding="utf-8",
-                    )
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        str(pack / "lib/skills/business_confirmation_policy.py"),
-                        str(pack),
-                        "all",
-                    ],
-                    cwd=pack.parent,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=30,
-                )
-                self.assertEqual(
-                    1,
-                    result.returncode,
-                    f"{label} policy accepted\n{result.stdout}{result.stderr}",
-                )
-                self.assertIn("[ERROR]", result.stderr)
+            with self.subTest(current=current):
+                self.assertIn(current, body)
+                errors = validate_business_confirmation_texts([(owner, body.replace(current, invalid, 1))])
+                self.assertTrue(any("invalid canonical" in error for error in errors), errors)
+        for name in ("AGENT_SCHEMA.md", "GLOBAL_CONSTRAINTS.md"):
+            consumer = Path("product") / name
+            original = (PACK / consumer).read_text(encoding="utf-8")
+            linked = [(owner, body), (consumer, original)]
+            with self.subTest(consumer=name):
+                self.assertEqual([], validate_business_confirmation_texts(linked))
+                duplicate = original + "\n```yaml\nbusiness_confirmation_policy:\n  default_gates: []\n```"
+                errors = validate_business_confirmation_texts([(owner, body), (consumer, duplicate)])
+                self.assertTrue(any("duplicate business confirmation" in error for error in errors), errors)
+                broken = original.replace("(WORKFLOW.md#business-confirmation-policy)", "(WORKFLOW.md#retired)")
+                errors = validate_business_confirmation_texts([(owner, body), (consumer, broken)])
+                self.assertTrue(any("missing canonical" in error for error in errors), errors)
 
-    def test_business_confirmation_policy_requires_all_three_canonical_policy_sources(self) -> None:
-        temporary, _, pack = self.make_fixture()
-        self.addCleanup(temporary.cleanup)
-        constraints = pack / "product/GLOBAL_CONSTRAINTS.md"
-        canonical = (
-            "business_confirmation_policy:\n"
-            "  default_gates:\n"
-            "    - requirements_approved\n"
-            "  ui_only_gates:\n"
-            "    - visual_approved\n"
-            "  additional_gates: exceptional"
-        )
-        self.assertIn(canonical, constraints.read_text(encoding="utf-8"))
-        constraints.write_text(
-            constraints.read_text(encoding="utf-8").replace(
-                canonical,
-                canonical.replace("ui_only_gates", "legacy_ui_gates"),
-                1,
-            ),
-            encoding="utf-8",
-        )
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(pack / "lib/skills/business_confirmation_policy.py"),
-                str(pack),
-                "all",
-            ],
-            cwd=pack.parent,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
-        self.assertIn("product/GLOBAL_CONSTRAINTS.md", result.stderr)
+    def test_solution_prose_distinguishes_material_decisions_from_routine_approval(self) -> None:
+        # 同一句的实质方案属于常规适用门；只有统一签字却没有适用条件时仍应失败。
+        owner = Path("product/WORKFLOW.md")
+        workflow = (PACK / owner).read_text(encoding="utf-8")
+        bounded = "The PM must obtain solution approval for a material unresolved decision."
+        for addition, accepted in (
+            (bounded, True),
+            ("The PM must obtain solution approval before every task.", False),
+            (bounded + " The PM must obtain solution approval before every task.", False),
+        ):
+            with self.subTest(addition=addition):
+                errors = validate_business_confirmation_texts([(owner, workflow + "\n" + addition)])
+                self.assertEqual(accepted, not errors, errors)
 
-    def test_business_confirmation_policy_rejects_unparsed_or_scoped_gate_values(self) -> None:
+    def test_business_confirmation_policy_rejects_invalid_gate_scope(self) -> None:
         invalid_gate_blocks = (
             'gates: [""]',
             "gates: [42]",
             "gates:\n  - visual_approved:\n      page: checkout",
             'gates: ["platform_security_prompt:anything"]',
             'gates: ["architecture-decision:scope"]',
+            'gates: ["solution_approved"]',
+            'gates: ["solution_approved:retry-policy@deadbeef"]',
         )
         for gate_block in invalid_gate_blocks:
             with self.subTest(gate_block=gate_block):
@@ -1734,16 +1696,17 @@ class BusinessConfirmationPolicyTest(unittest.TestCase):
 gates:
   - platform_security_prompt
   - "visual_approved:checkout@sha256-deadbeef"
-  - architecture-decision
+  - "solution_approved:retry-policy@c79b0544fe2e5695baa7af57ebb741c50c4b1d283e3bd0cdab41b686af923591"
+  - external-review
 additional_business_confirmation:
-  name: architecture-decision
-  reason: This decision cannot safely be folded into an existing confirmation.
-  decision_scope: Select the migration architecture.
+  name: external-review
+  reason: Explicit user request for a separate external review.
+  decision_scope: Choose the external review window.
   options:
-    - in-place
-    - side-by-side
+    - morning
+    - afternoon
   evidence:
-    - docs/plans/architecture-options.md
+    - docs/plans/review-windows.md
   resume_condition: The user selects one named option.
 ```
 """,
@@ -1807,16 +1770,16 @@ additional_business_confirmation:
             workflow.read_text(encoding="utf-8")
             + """
 
-The PM must obtain architecture approval for this material migration decision.
+The PM must obtain external review approval for the user-requested handoff.
 
 ```yaml
-gates: [architecture-decision]
+gates: [external-review]
 additional_business_confirmation:
-  name: architecture-decision
-  reason: This material migration decision cannot safely be folded into an existing confirmation.
-  decision_scope: Select the migration architecture.
-  options: [in-place, side-by-side]
-  evidence: [docs/plans/architecture-options.md]
+  name: external-review
+  reason: Explicit user request for a separate external review.
+  decision_scope: Select the external review window.
+  options: [morning, afternoon]
+  evidence: [docs/plans/review-windows.md]
   resume_condition: The user selects one named option.
 ```
 """,
@@ -1852,7 +1815,7 @@ additional_business_confirmation:
         ):
             self.assertIn(field, policy_sources)
 
-    def test_business_confirmation_policy_rejects_an_unstructured_third_gate(self) -> None:
+    def test_business_confirmation_policy_rejects_an_unstructured_extra_gate(self) -> None:
         temporary, _, pack = self.make_fixture()
         self.addCleanup(temporary.cleanup)
         workflow = pack / "product/WORKFLOW.md"

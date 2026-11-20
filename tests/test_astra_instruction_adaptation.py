@@ -10,8 +10,11 @@ import re
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
+from urllib.parse import urlsplit
 
 from lib.skills.skill_contracts import expand_skill_contract, verification_scope_errors
+from lib.documents.document_links import document_prose
+from lib.documents.markdown_links import document_links
 from tests.skill_contract_helpers import read_contract
 
 
@@ -34,6 +37,37 @@ class ProgressiveContractTest(unittest.TestCase):
                           "Reuse evidence without checking inputs."):
             with self.subTest(inversion=inversion):
                 self.assertTrue(verification_scope_errors(body + "\n" + inversion))
+
+    def test_build_stage_links_reach_applicable_evidence_contracts(self) -> None:
+        # 读者按入口链接只取目标章节。即使校验器展开整份参考仍可找到条款，
+        # 错误锚点或把必需条款移到另一个阶段，也会使该次定向阅读漏掉合同。
+        entry = PACK / "platforms/shared/skills/xy-build-verify/SKILL.md"
+        links = re.findall(r"\]\((references/verification-scope\.md)#([^)]+)\)",
+                           entry.read_text(encoding="utf-8"))
+        selected = {}
+        for relative, anchor in links:
+            body = (entry.parent / relative).read_text(encoding="utf-8")
+            sections = re.split(r"(?m)^## (.+)$", body)
+            matches = [clause for title, clause in zip(sections[1::2], sections[2::2])
+                       if title.lower().replace(" ", "-") == anchor]
+            self.assertEqual(1, len(matches), anchor)
+            selected[anchor] = " ".join(matches[0].split())
+
+        # 对比原政策中区分这些分支的核心证据。命中失败章节时必须连同拒绝对照、
+        # 修复上限与阻断结果一起读到；不能因同文档的其他章节有绿灯条件就放行。
+        for anchor, clauses in {
+            "determine-minimum-sufficient-verification-first": ("Keep explicitly required checks",),
+            "verification-by-change-type": ("real loading path", "compilation/packaging"),
+            "production-delivery-must-build-and-run": ("actual import/syntax", "startup/key-entry"),
+            "failure-diagnosis-and-repair-limits": ("negative control", "two failed implementer",
+                                                    "mandatory evidence prevents BUILD_VERIFIED"),
+            "handoff-and-valid-evidence": ("mandatory checks actually pass", "Required CI"),
+            "independent-qa-review-and-pm-delivery": ("actual diff/source", "actual composed candidate"),
+        }.items():
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, selected)
+                for clause in clauses:
+                    self.assertIn(clause, selected[anchor])
 
     def test_expansion_preserves_sequence_and_ignores_auxiliary_links(self) -> None:
         reader = Mock(return_value="required approval\n")
@@ -70,12 +104,22 @@ class ProgressiveContractTest(unittest.TestCase):
                 expand_skill_contract(body, lambda _reference: detail)
 
     def test_entrypoints_are_smaller_and_all_relative_markdown_links_resolve(self) -> None:
+        def missing_links(path, body):
+            # 与项目文档解析同一份可见 Markdown 正文；围栏中的项目示例不会
+            # 在插件目录里生成真实文件依赖，正文、列表和引用中的相对链接仍须存在。
+            missing = []
+            for _, link in document_links(document_prose(body)):
+                target = urlsplit(link.raw)
+                if (not target.scheme and not target.netloc and target.path.endswith(".md")
+                        and not (path.parent / target.path).is_file()):
+                    missing.append(target.path)
+            return missing
+
+        sample = "```md\n[教学示例](missing-example.md)\n```\n[实际断链](missing-target.md)\n"
+        self.assertEqual(["missing-target.md"], missing_links(PACK / "sample.md", sample))
         for skill in ("xy-workflow", "xy-plan", "xy-qa-review"):
             directory = PACK / "platforms/shared/skills" / skill
             entry = directory / "SKILL.md"
             self.assertLess(len(entry.read_bytes()), len(read_contract(entry).encode("utf-8")))
             for path in directory.rglob("*.md"):
-                for target in re.findall(r"\[[^\]\n]+\]\(([^)]+\.md)(?:#[^)]*)?\)",
-                                         path.read_text(encoding="utf-8")):
-                    if "://" not in target:
-                        self.assertTrue((path.parent / target).is_file(), (path, target))
+                self.assertEqual([], missing_links(path, path.read_text(encoding="utf-8")), path)

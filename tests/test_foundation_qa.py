@@ -73,6 +73,36 @@ def graph(root):
     return result
 
 
+def required_prototype_graph(root: Path, requirement_sha: str) -> tuple[dict, dict]:
+    """以同一份真实设置页和工程规范建立普通 Full 图，包含共享基础、原型及其生产消费者。"""
+    from lib.documents.validate_prototype_workspace import capture_selected_pages
+    from tests.test_prototype_workspace import PROTOTYPE_RELATIVE
+    source = graph(root)
+    source["tasks"][2].pop("foundation_task_id")
+    feature = source["tasks"][1]
+    prototype = PROTOTYPE_RELATIVE.as_posix()
+    page = capture_selected_pages(root, prototype, pages=["settings.html"], adapter="project.yaml")["pages"][0]
+    fingerprint = page["dependency_fingerprint"]
+    gate = f"visual_approved:settings@{fingerprint}"
+    source["requirements_fingerprint"] = requirement_sha
+    source["approved_gates"].append(gate)
+    feature.update(state="BUILD_VERIFIED", depends_on=["foundation", "prototype"], gates=["requirements_approved", gate])
+    feature["ui_change"].update(route="UI-Page", design_delta="changed", prototype_policy="required",
+        prototype_decision={"source": "requirements_confirmation_user_choice", "choice_ref": "user:settings/prototype",
+            "requirement_fingerprint": source["requirements_fingerprint"], "affected_surfaces": ["page"],
+            "selected_policy": "required", "recommended_policy": "required", "recommendation_reason": "核对界面交互"},
+        design_authority_refs=[{"kind": "prototype_contract", "authority_id": "settings", "path": page["path"],
+            "anchor": "page-design-and-interaction-contract", "content_fingerprint": fingerprint, "resolution_state": "resolved"}])
+    designer = copy.deepcopy(source["tasks"][0])
+    designer.update(id="prototype", role="xy-uiux", surface_kind="design_ui", agent_alias="fixture-prototype",
+                    blocks=["feature"], owned_paths=[page["path"]])
+    designer.pop("ui_change")
+    for doc in designer["controlled_document_access"]["documents"]:
+        doc["applies_to"] = designer["owned_paths"]
+    source["tasks"].append(designer)
+    return source, page
+
+
 def handoff(pack, body, *, scope_ref=None):
     """构造完整规则覆盖结果，复用生产校验器验证，而非mock掉QA语义检查。"""
     task = pack["task"]
@@ -118,7 +148,8 @@ class FoundationQATest(unittest.TestCase):
         self.source = graph(self.root)
 
     def update(self, source, task_id, operation):
-        return records.update(source, {"tasks": {task_id: operation}}, self.root, _execute)
+        return records.update(source, {"tasks": {task_id: operation}}, self.root,
+                              lambda command, value: _execute(command, value, root=self.root))
 
     def start(self, source):
         started = self.update(source, "qa", {"set": {"state": "QA"}})
@@ -296,33 +327,12 @@ class FoundationQATest(unittest.TestCase):
         self.assertEqual("QA_PASSED", self.update(resumed, "qa", {"accept_request": new_refs})["tasks"][2]["state"])
 
     def test_ordinary_required_prototype_uses_page_dependency_fingerprint(self):
-        from lib.documents.validate_prototype_workspace import capture_selected_pages
         from tests.test_prototype_workspace import PROTOTYPE_RELATIVE, write_valid_project
 
         self.root = write_valid_project(self.root).resolve()
-        source = graph(self.root)
-        source["tasks"][2].pop("foundation_task_id")
-        feature = source["tasks"][1]
-        prototype = PROTOTYPE_RELATIVE.as_posix()
-        page = capture_selected_pages(self.root, prototype, pages=["settings.html"], adapter="project.yaml")["pages"][0]
+        source, page = required_prototype_graph(self.root, "c" * 64)
         fingerprint = page["dependency_fingerprint"]
-        gate = f"visual_approved:settings@{fingerprint}"
-        source["requirements_fingerprint"] = "c" * 64
-        source["approved_gates"].append(gate)
-        feature.update(state="BUILD_VERIFIED", depends_on=["foundation", "prototype"], gates=["requirements_approved", gate])
-        feature["ui_change"].update(route="UI-Page", design_delta="changed", prototype_policy="required",
-            prototype_decision={"source": "requirements_confirmation_user_choice", "choice_ref": "user:settings/prototype",
-                "requirement_fingerprint": source["requirements_fingerprint"], "affected_surfaces": ["page"],
-                "selected_policy": "required", "recommended_policy": "required", "recommendation_reason": "核对界面交互"},
-            design_authority_refs=[{"kind": "prototype_contract", "authority_id": "settings", "path": page["path"],
-                "anchor": "page-design-and-interaction-contract", "content_fingerprint": fingerprint, "resolution_state": "resolved"}])
-        designer = copy.deepcopy(source["tasks"][0])
-        designer.update(id="prototype", role="xy-uiux", surface_kind="design_ui", agent_alias="fixture-prototype",
-                        blocks=["feature"], owned_paths=[page["path"]])
-        designer.pop("ui_change")
-        for doc in designer["controlled_document_access"]["documents"]:
-            doc["applies_to"] = designer["owned_paths"]
-        source["tasks"].append(designer)
+        prototype = PROTOTYPE_RELATIVE.as_posix()
         started = self.start(self.freeze(source, ["src/foundation.py", "src/feature.py", page["path"]]))
         _, _, refs = self.evidence(started, "ordinary-required-prototype")
         self.assertNotEqual(fingerprint, records.file_digest(self.root, page["path"]))
@@ -331,6 +341,111 @@ class FoundationQATest(unittest.TestCase):
         css.write_bytes(css.read_bytes() + b"\n")
         with self.assertRaisesRegex(ValueError, "prototype dependency fingerprint is stale"):
             self.update(started, "qa", {"accept_request": refs})
+
+    def test_foundation_with_required_page_rechecks_dependency_digest_at_both_checkpoints(self):
+        """基础设施本身采用已批准原型时，要用页面依赖摘要完成两个检查点。"""
+        from tests.test_prototype_workspace import write_valid_project
+        self.root = write_valid_project(self.root).resolve()
+        source, page = required_prototype_graph(self.root, "f" * 64)
+        source["tasks"][2]["foundation_task_id"] = "feature"
+        started = self.start(source)
+        stage, _, stage_refs = self.evidence(started, "adopted-stage")
+        self.assertEqual("foundation", stage["qa_checkpoint"]["kind"])
+        self.assertNotEqual(page["dependency_fingerprint"], records.file_digest(self.root, page["path"]))
+        passed = self.update(started, "qa", {"accept_foundation": stage_refs})
+        final = self.start(passed)
+        final_pack, _, final_refs = self.evidence(final, "adopted-final")
+        self.assertEqual("request", final_pack["qa_checkpoint"]["kind"])
+        accepted = self.update(final, "qa", {"accept_request": final_refs})
+        self.assertTrue(foundation_qa.current_request_receipt(accepted, accepted["tasks"][2], root=self.root))
+        css = (self.root / page["path"]).parent / "prototype.css"
+        css.write_bytes(css.read_bytes() + b"\n")
+        self.assertFalse(foundation_qa.valid_receipt(accepted, accepted["tasks"][2], root=self.root))
+        self.assertFalse(foundation_qa.current_request_receipt(accepted, accepted["tasks"][2], root=self.root))
+        with self.assertRaisesRegex(ValueError, "prototype dependency fingerprint is stale"):
+            self.update(started, "qa", {"accept_foundation": stage_refs})
+
+    def test_isolated_foundation_uses_approved_page_and_replays_targeted_plan_after_qa(self):
+        """主树保留旧样式，当前设计、采用者和组合候选均带真实获准页面；最终投影保留两套回执。"""
+        from lib.delivery.worktree_cli import create, git, head, scope
+        from tests.test_prototype_workspace import write_valid_project
+        outside = self.root
+        self.root = write_valid_project(outside).resolve()
+        self.enterContext(working_root(self.root))
+        (self.root / "project.yaml").write_bytes((REPO / "project.yaml").read_bytes())
+        source, page = required_prototype_graph(self.root, "f" * 64)
+        foundation, feature, qa, designer = source["tasks"]
+        qa["foundation_task_id"] = feature["id"]
+        name = "docs/plans/checkout.md"
+        plan = self.root / name
+        plan.parent.mkdir()
+        plan.write_text("# 结算\n- 主题 ID: checkout\n- 阶段: active\n- 模块: checkout\n- 任务等级: Full\n- 已验收版本: v1\n"
+                        "## 需求与验收\n保留输入。\n## 验收结果与当前已交付行为\n已有行为。\n"
+                        "## 批准依据与必要证据\n- 批准依据: 用户已确认\n- 验收证据: 首次交付\n")
+        feature["controlled_document_access"]["documents"].append({
+            "path": name, "mode": "targeted", "sections_or_queries": ["需求与验收"], "reason": "核对结算范围",
+            "content_fingerprint": records.digest(plan.read_bytes()), "applies_to": feature["owned_paths"], "rule_ids": []})
+        css = str(Path(page["path"]).parent / "prototype.css")
+        approved_css = (self.root / css).read_bytes()
+        (self.root / css).write_bytes(approved_css + b"/* original main */")
+        git(self.root, "init", "-b", "main")
+        git(self.root, "config", "user.name", "Isolated Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        git(self.root, "add", "project.yaml", "docs", "src", "platforms")
+        git(self.root, "commit", "-m", "project baseline")
+        base = head(self.root)
+        create(self.root, outside / "foundation", base)
+        foundation["execution_workspace"] = {"root": str(outside / "foundation"), "base_revision": base, "head_revision": base}
+        design_root = outside / "prototype"
+        create(self.root, design_root, base)
+        (design_root / css).write_bytes(approved_css)
+        designer["owned_paths"].append(css)
+        git(design_root, "add", css)
+        git(design_root, "commit", "-m", "approve new styles with page")
+        design_head = head(design_root)
+        designer["execution_workspace"] = {"root": str(design_root), "base_revision": base, "head_revision": design_head}
+        feature_root = outside / "feature"
+        create(self.root, feature_root, design_head)
+        (feature_root / "src/feature.py").write_text("validated = True")
+        git(feature_root, "add", "src/feature.py")
+        git(feature_root, "commit", "-m", "deliver approved feature")
+        tip = head(feature_root)
+        feature["execution_workspace"] = {"root": str(feature_root), "base_revision": design_head, "head_revision": tip}
+        integration = outside / "candidate"
+        create(self.root, integration, tip)
+        source["worktree_integrations"] = {source["request_id"]: {"root": str(integration), "target_branch": "main",
+            "target_base": base, "head_revision": tip, "verification": [{"command": "fixture-smoke", "log_ref": "fixture:smoke",
+            "exit_code": 0, "head_revision": tip}]}}
+        current = self.start(source)
+        for kind in ("foundation", "request"):
+            pack, _, refs = self.evidence(current, "isolated-" + kind)
+            body = Path(refs["task_pack"]["path"]).read_bytes()
+            result = json.dumps(handoff(pack, body, scope_ref={"repositories": [scope(self.root, base, tip)]})).encode()
+            Path(refs["handoff"]["path"]).write_bytes(result)
+            refs["handoff"]["sha256"] = records.digest(result)
+            current = self.update(current, "qa", {"accept_" + kind: refs})
+            if kind == "foundation":
+                current = self.start(current)
+        self.assertTrue(foundation_qa.current_request_receipt(current, current["tasks"][2], root=self.root))
+        changed_root = copy.deepcopy(current)
+        changed_root["tasks"][1]["execution_workspace"]["root"] = str(outside)
+        self.assertFalse(foundation_qa.valid_receipt(changed_root, changed_root["tasks"][2], root=self.root))
+        (integration / css).write_bytes(approved_css + b"/* post-review drift */")
+        self.assertFalse(foundation_qa.valid_receipt(current, current["tasks"][2], root=self.root))
+        (integration / css).write_bytes(approved_css)
+        reviewed = outside / "reviewed-checkout.md"
+        reviewed.write_bytes((integration / name).read_bytes())
+        (integration / name).write_text(reviewed.read_text().replace("已有行为。", "设置通过验收。\n\n已有行为。")
+                                      .replace("首次交付", "首次交付 " + refs["handoff"]["sha256"]))
+        git(integration, "add", name)
+        git(integration, "commit", "-m", "record accepted behavior")
+        registration = {"adapter": "project.yaml", "head_revision": head(integration), "documents": [{
+            "path": name, "reviewed": {"path": str(reviewed), "sha256": records.digest(reviewed.read_bytes())},
+            "projected_sha256": records.digest((integration / name).read_bytes())}]}
+        projected = self.update(current, "qa", {"record_qa_projection": registration})
+        self.assertEqual(current["tasks"][2]["foundation_receipt"], projected["tasks"][2]["foundation_receipt"])
+        self.assertEqual(current["tasks"][2]["request_receipt"], projected["tasks"][2]["request_receipt"])
+        self.assertTrue(foundation_qa.current_request_receipt(projected, projected["tasks"][2], root=self.root))
 
     def test_foundation_unblocks_original_deadlock_without_releasing_feature_early(self):
         from lib.task_graph import qa_ready
@@ -373,6 +488,177 @@ class FoundationQATest(unittest.TestCase):
         self.assertEqual("DECLARED", reopened["tasks"][2]["state"])
         self.assertNotIn("foundation_receipt", reopened["tasks"][2])
         self.assertNotIn("request_receipt", reopened["tasks"][2])
+
+    def test_final_foundation_solution_change_preserves_stage_and_blocks_dependents(self):
+        """先拿到两个真实回执，再改变功能方案，主动更新和直接读取都须失效。"""
+        from lib.solution_confirmation import bind_decisions
+        from lib.task_graph_cli import _verify_solution_scope
+        for writer in self.source["tasks"][:2]:
+            writer["solution_decisions"] = [{"id": "retry", "content": "用户手动重试"}]
+            bind_decisions(writer)
+        gate = self.source["tasks"][0]["gates"][-1]
+        self.source["approved_gates"].append(gate)
+        self.source["solution_approval_sources"] = {gate: "fixture:explicit-reply"}
+        stage = self.start(self.source)
+        stage_pack, _, refs = self.evidence(stage)
+        row = stage_pack["reviewed_solution_decisions"][0]
+        self.assertEqual(["foundation"], row["writer_ids"])
+        self.assertEqual("fixture:explicit-reply", row["source_ref"])
+        passed = self.update(stage, "qa", {"accept_foundation": refs})
+        completed = self.update(passed, "feature", {"set": {"state": "BUILD_VERIFIED"}})
+        final = self.start(completed)
+        pack, _, refs = self.evidence(final, "final-solution")
+        self.assertEqual([{**row, "writer_ids": ["feature", "foundation"]}], pack["reviewed_solution_decisions"])
+        _verify_solution_scope(pack, final)
+        dropped = copy.deepcopy(pack)
+        del dropped["reviewed_solution_decisions"]
+        with self.assertRaisesRegex(ValueError, "authoritative"):
+            _verify_solution_scope(dropped, final)
+        accepted = self.update(final, "qa", {"accept_request": refs})
+        qa = accepted["tasks"][2]
+        self.assertTrue(foundation_qa.current_request_receipt(accepted, qa))
+        qa["blocks"] = ["after"]
+        accepted["tasks"].append(v2_task({"id": "after", "request_id": "other", "task_type": "read_only",
+            "state": "DECLARED", "depends_on": ["qa"], "blocks": [], "gates": [], "owned_paths": [],
+            "semantic_locks": []}))
+        self.assertIn("after", _execute("ready", accepted)["ready"])
+        (self.root / "src/feature.py").write_text("feature-v2")
+        self.assertFalse(foundation_qa.current_request_receipt(accepted, qa))
+        self.assertNotIn("after", _execute("ready", accepted)["ready"])
+        changed = self.update(accepted, "feature", {"set": {"state": "DECLARED", "solution_decisions": [
+            {"id": "fallback", "content": "返回账号登录"}]}})
+        self.assertEqual("DECLARED", changed["tasks"][2]["state"])
+        self.assertNotIn("request_receipt", changed["tasks"][2])
+        self.assertEqual(qa["foundation_receipt"], changed["tasks"][2]["foundation_receipt"])
+        self.assertFalse(_execute("qa-ready", changed)["qa_ready"])
+        self.assertNotIn("after", _execute("ready", changed)["ready"])
+
+    def test_pm_projection_replays_ordinary_receipt_and_rejects_contract_edits(self):
+        self.check_plan_projection(staged=False, adopted=True)
+
+    def test_staged_pm_projection_replays_same_document_as_qa_authority(self):
+        self.check_plan_projection(staged=True, adopted=True)
+
+    def test_staged_pm_only_plan_uses_git_object_from_accepted_final_pack(self):
+        self.check_plan_projection(staged=True, adopted=False)
+
+    def check_plan_projection(self, *, staged, adopted):
+        """对同一原主题执行真实单树收口，包括阶段/最终受审权威和完全 PM 专有的 Git 计划。"""
+        from lib.delivery.worktree_cli import git, head
+        name = "docs/plans/topic.md"
+        plan = self.root / name
+        plan.parent.mkdir(exist_ok=True)
+        template = (REPO / "templates/docs/PLAN.md").read_text()
+        # 沿用实际模板的生命周期字段和受审章节。在提交前放入夹具自己的具体权限规则，
+        # 使两种篡改都能改变本次审查的业务内容，且不依赖模板里给作者的写作提示。
+        reviewed_rule = "只有项目管理员可以修改设置。"
+        changed_rule = "所有项目成员都可以修改设置。"
+        heading = "## 需求与验收\n"
+        self.assertEqual(1, template.count(heading))
+        reviewed = template.replace(heading, f"{heading}\n{reviewed_rule}\n", 1)
+        plan.write_text(reviewed)
+        (self.root / "project.yaml").write_bytes((REPO / "project.yaml").read_bytes())
+        git(self.root, "init", "-b", "main")
+        git(self.root, "config", "user.name", "Projection Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        git(self.root, "add", name, "project.yaml")
+        git(self.root, "commit", "-m", "existing PM plan")
+        self.base_revision = head(self.root)
+        source = self.source if staged else self.ordinary_source()
+        source["requirements_fingerprint"] = "a" * 64
+        if adopted:
+            for writer in source["tasks"][:2]:
+                writer["controlled_document_access"]["documents"].append({
+                    "path": name, "mode": "targeted", "reason": "核对受审主题的当前需求",
+                    "sections_or_queries": ["需求与验收"], "content_fingerprint": records.digest(plan.read_bytes()),
+                    "applies_to": writer["owned_paths"], "rule_ids": []})
+        if staged:
+            stage = self.start(source)
+            _, _, original_stage = self.evidence(stage, "projected-stage")
+            passed = self.update(stage, "qa", {"accept_foundation": original_stage})
+            started = self.start(self.update(passed, "feature", {"set": {"state": "BUILD_VERIFIED"}}))
+        else:
+            started = self.start(self.freeze(source, commit=True))
+        _, _, refs = self.evidence(started, "projected")
+        accepted = self.update(started, "qa", {"accept_request": refs})
+        previous = self.root / "reviewed-plan.md"
+        previous.write_text(reviewed)
+        snapshot = {"path": str(previous), "sha256": records.digest(previous.read_bytes())}
+        after = reviewed.replace("已验收版本: `none`", "已验收版本: `local-v1`").replace(
+            template.split("## 验收结果与当前已交付行为\n\n")[1].split("\n")[0], "两项已交付行为经 QA 核实。")
+        after += "\n## 批准依据与必要证据\n\n- 批准依据: requirements_approved@" + "a" * 64
+        after += "\n- 验收证据: " + refs["handoff"]["sha256"] + "\n"
+        def projection():
+            entry = {"path": name, "reviewed": snapshot, "projected_sha256": records.digest(plan.read_bytes())}
+            return {"record_qa_projection": {"adapter": "project.yaml", "documents": [entry]}}
+        plan.write_text(after)
+        updated = self.update(accepted, "qa", projection())
+        self.assertEqual(accepted["tasks"][2]["request_receipt"], updated["tasks"][2]["request_receipt"])
+        self.assertTrue(foundation_qa.current_request_receipt(updated, updated["tasks"][2]))
+        if staged:
+            self.assertEqual(accepted["tasks"][2]["foundation_receipt"], updated["tasks"][2]["foundation_receipt"])
+            self.assertTrue(foundation_qa.valid_receipt(updated, updated["tasks"][2]))
+        tampered_after = after.replace(reviewed_rule, changed_rule, 1)
+        self.assertNotEqual(after, tampered_after)
+        plan.write_text(tampered_after)
+        self.assertFalse(foundation_qa.current_request_receipt(updated, updated["tasks"][2]))
+        with self.assertRaisesRegex(ValueError, "changed reviewed"):
+            self.update(accepted, "qa", projection())
+        # 即便攻击者使伪造前像与伪造后像业务文字相同、并自行重填两份字节 SHA，
+        # 原图实际采用的文档或原提交仍须匹配；文档差异合法本身不能代替此前审查。
+        tampered_before = reviewed.replace(reviewed_rule, changed_rule, 1)
+        self.assertNotEqual(reviewed, tampered_before)
+        previous.write_text(tampered_before)
+        snapshot["sha256"] = records.digest(previous.read_bytes())
+        with self.assertRaises(ValueError):
+            self.update(accepted, "qa", projection())
+
+    def test_untracked_pm_plan_can_be_bound_without_writer_permission(self):
+        self.check_untracked_pm_plan(staged=False)
+
+    def test_untracked_pm_plan_can_be_frozen_at_final_foundation_checkpoint(self):
+        self.check_untracked_pm_plan(staged=True)
+
+    def check_untracked_pm_plan(self, *, staged):
+        """非提交中的 PM 草稿先在已有冻结步骤取前像，受审业务范围和所有权保持各自来源。"""
+        plan = self.root / "docs/plans/untracked.md"
+        plan.parent.mkdir()
+        plan.write_text((REPO / "templates/docs/PLAN.md").read_text())
+        (self.root / "project.yaml").write_bytes((REPO / "project.yaml").read_bytes())
+        original = plan.read_bytes()
+        source = self.source if staged else self.ordinary_source()
+        source["requirements_fingerprint"] = "a" * 64
+        if staged:
+            stage = self.start(source)
+            _, _, refs = self.evidence(stage, "pre-baseline-stage")
+            passed = self.update(stage, "qa", {"accept_foundation": refs})
+            source = self.update(passed, "feature", {"set": {"state": "BUILD_VERIFIED"}})
+        frozen = self.freeze(source)
+        name = str(plan.relative_to(self.root))
+        fixed = frozen["tasks"][2]["qa_scope_ref"]
+        frozen = self.update(frozen, "qa", {"freeze_qa_scope": {"scope_ref": fixed, "projection_paths": [name]}})
+        self.assertEqual({name: records.digest(original)}, frozen["tasks"][2]["qa_projection_baselines"])
+        self.assertNotIn(name, fixed["repositories"][0]["changed_paths"])
+        self.assertTrue(all(name not in task["owned_paths"] for task in frozen["tasks"]))
+        active = self.start(frozen)
+        _, _, refs = self.evidence(active, "first-pm-baseline")
+        plan.write_text("未验收的内容替换")
+        with self.assertRaisesRegex(ValueError, "baseline changed"):
+            self.update(active, "qa", {"accept_request": refs})
+        plan.write_bytes(original)
+        accepted = self.update(active, "qa", {"accept_request": refs})
+        before = self.root / "untracked-original.md"
+        before.write_bytes(original)
+        delivered = original.decode().replace("已验收版本: `none`", "已验收版本: `v1`")
+        placeholder = delivered.split("## 验收结果与当前已交付行为\n\n")[1].split("\n")[0]
+        delivered = delivered.replace(placeholder, "已验证失败后可重试。")
+        delivered += "\n## 批准依据与必要证据\n\n- 批准依据: requirements_approved@" + "a" * 64
+        plan.write_text(delivered + "\n- 验收证据: " + refs["handoff"]["sha256"] + "\n")
+        entry = {"path": name, "reviewed": {"path": str(before), "sha256": records.digest(original)},
+                 "projected_sha256": records.digest(plan.read_bytes())}
+        updated = self.update(accepted, "qa", {"record_qa_projection": {"adapter": "project.yaml", "documents": [entry]}})
+        self.assertTrue(foundation_qa.current_request_receipt(updated, updated["tasks"][2]))
+        self.assertEqual(accepted["tasks"][2]["request_receipt"], updated["tasks"][2]["request_receipt"])
 
     def test_old_wrong_and_failed_handoff_cannot_release_features(self):
         started = self.start(self.source)
@@ -461,6 +747,8 @@ class FoundationQATest(unittest.TestCase):
         for directory in (self.root / "foundation", self.root / "integration"):
             (directory / "src").mkdir(parents=True)
             (directory / "src/foundation.py").write_text("foundation-v1")
+            (directory / "docs").mkdir()
+            (directory / "docs/ui.md").write_bytes((self.root / "docs/ui.md").read_bytes())
         started = self.start(source)
         _, _, refs = self.evidence(started, "worktree-stage")
         passed = self.update(started, "qa", {"accept_foundation": refs})
@@ -477,6 +765,59 @@ class FoundationQATest(unittest.TestCase):
         (self.root / "integration/src/foundation.py").write_text("wrong combined foundation")
         self.assertFalse(foundation_qa.valid_receipt(passed, passed["tasks"][2]))
 
+
+    def test_delivered_staged_receipts_survive_worktree_cleanup_only_with_original_evidence(self):
+        """清理后只认真实合并、原合同和两份回执；尚未合并或替换阶段原档均不得放行。"""
+        from lib.delivery.worktree_cli import create, git, head, scope
+        git(self.root, "init", "-b", "main")
+        git(self.root, "config", "user.name", "Foundation Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        git(self.root, "add", "src", "docs", "platforms")
+        git(self.root, "commit", "-m", "fixture baseline")
+        base = head(self.root)
+        checkout = tempfile.TemporaryDirectory(prefix="foundation-worktrees-")
+        self.addCleanup(checkout.cleanup)
+        outside = Path(checkout.name).resolve()
+        integration = outside / "candidate"
+        create(self.root, integration, base)
+        source = copy.deepcopy(self.source)
+        for writer in source["tasks"][:2]:
+            path = outside / writer["id"]
+            create(self.root, path, base)
+            relative = writer["owned_paths"][0]
+            (path / relative).write_text("verified-" + writer["id"])
+            git(path, "add", relative)
+            git(path, "commit", "-m", writer["id"])
+            git(integration, "merge", "--no-edit", head(path))
+            writer["execution_workspace"] = {"root": str(path), "base_revision": base,
+                "head_revision": head(path) if writer["state"] == "BUILD_VERIFIED" else None}
+        tip = head(integration)
+        source["worktree_integrations"] = {source["request_id"]: {"root": str(integration), "target_base": base,
+            "target_branch": "main", "head_revision": tip, "verification": [{"head_revision": tip,
+            "command": "fixture-smoke", "log_ref": "fixture:probe", "exit_code": 0}]}}
+        active = self.start(source)
+        _, _, stage_refs = self.evidence(active, "real-stage")
+        passed = self.update(active, "qa", {"accept_foundation": stage_refs})
+        passed["tasks"][1]["execution_workspace"]["head_revision"] = head(outside / "feature")
+        passed["tasks"][1]["state"] = "BUILD_VERIFIED"
+        final = self.start(passed)
+        pack, _, refs = self.evidence(final, "real-final")
+        body = Path(refs["task_pack"]["path"]).read_bytes()
+        result = json.dumps(handoff(pack, body, scope_ref={"repositories": [scope(self.root, base, tip)]})).encode()
+        Path(refs["handoff"]["path"]).write_bytes(result)
+        refs["handoff"]["sha256"] = records.digest(result)
+        accepted = self.update(final, "qa", {"accept_request": refs})
+        qa = accepted["tasks"][2]
+        for path in (integration, outside / "feature", outside / "foundation"):
+            git(self.root, "worktree", "remove", str(path))
+        self.assertFalse(foundation_qa.valid_receipt(accepted, qa))
+        git(self.root, "merge", "--ff-only", tip)
+        self.assertTrue(foundation_qa.current_request_receipt(accepted, qa))
+        self.assertTrue(foundation_qa.valid_receipt(accepted, qa))
+        refreshed = records.update(accepted, {"capacity": 3}, self.root, _execute)
+        self.assertEqual(qa, refreshed["tasks"][2])
+        Path(stage_refs["handoff"]["path"]).write_text("retired evidence")
+        self.assertFalse(foundation_qa.current_request_receipt(accepted, qa))
 
     def test_receipt_publication_rechecks_independent_bytes(self):
         started = self.start(self.source)

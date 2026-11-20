@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -72,7 +73,43 @@ class RecordUpdateTest(unittest.TestCase):
         self.assertEqual({"status": "valid"}, _execute("validate", self.original))
 
     def update(self, change, source=None, root=None):
-        return records.update(source or self.original, change, root, _execute)
+        return records.update(source or self.original, change, root, lambda command, value: _execute(command, value, root=root))
+
+    def test_approved_solution_and_previous_visual_gate_cannot_export_an_unfinished_prototype(self):
+        from lib.task_graph_cli import export_task_pack
+        from tests.test_plugin_workflow_contract import visual_request
+        from tests.test_foundation_qa import working_root
+        project = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.enterContext(working_root(project))
+        graph, visual = visual_request("UI-Page", project)
+        prototype, writer = graph["tasks"]
+        writer.update(goal="实现订单交互", input_contracts=["当前原型"], output_contracts=["正式页面"],
+                      acceptance_evidence=["交互核对"], verification_commands=["构建检查"])
+        decision = {"id": "checkout", "content": "提交前显示确认步骤。"}
+        graph["approved_gates"].append(visual)
+        prototype["state"] = "DECLARED"
+        graph = self.update({"tasks": {"web": {"set": {"solution_decisions": [decision]}}}}, graph)
+        graph = self.update({"approve_solutions": [{"request_id": writer["request_id"], "task_id": "web", **decision}]}, graph)
+        self.assertNotIn("web", _execute("ready", graph)["ready"])
+        with self.assertRaisesRegex(ValueError, "prerequisite delivery: prototype"):
+            export_task_pack(graph, "web")
+        graph["tasks"][0]["state"] = "BUILD_VERIFIED"
+        # 领取成功已占用自己的锁，交接仍应成立，不能用第二次 ready 代替前置核对。
+        graph = self.update({"tasks": {"web": {"set": {"state": "RUNNING"}}}}, graph)
+        self.assertEqual("RUNNING", export_task_pack(graph, "web")["task"]["state"])
+
+    def test_unapproved_foundation_stage_blocks_ordinary_feature_export_and_all_new_delivery_states(self):
+        from lib.task_graph_cli import export_task_pack
+        from tests.test_foundation_qa import graph as foundation_graph
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            staged = foundation_graph(root)
+            self.assertNotIn("feature", _execute("ready", staged, root=root)["ready"])
+            with self.assertRaisesRegex(ValueError, "Foundation QA receipt"):
+                export_task_pack(staged, "feature", root=root)
+            for state in ("RUNNING", "QA", "QA_SCOPE_READY", "BUILD_VERIFIED"):
+                with self.subTest(state=state), self.assertRaises(ValueError):
+                    self.update({"tasks": {"feature": {"set": {"state": state}}}}, staged, root)
 
     def test_v2_rejects_old_or_inherited_context_and_module_drift(self):
         """版本/上下文声明是新合同边界，别名和模块根不能扩大精确写范围。"""
@@ -510,6 +547,159 @@ class RecordCliTest(unittest.TestCase):
                                str(PACK / "lib/task_graph_cli.py"), *map(str, args)],
                               input=input, text=True, capture_output=True, check=False, timeout=15, env=env)
 
+    def test_solution_writer_cannot_deliver_before_its_prototype_and_unblock_a_downstream_task(self):
+        from tests.test_plugin_workflow_contract import visual_request
+        value, page_gate = visual_request("UI-Page", self.root)
+        prototype, web = value["tasks"]
+        prototype["state"] = "DECLARED"
+        web["blocks"] = ["consumer"]
+        value["tasks"].append(v2_task({"id": "consumer", "request_id": web["request_id"],
+                                      "task_type": "read_only", "state": "DECLARED", "depends_on": ["web"],
+                                      "blocks": [], "gates": [], "owned_paths": [], "semantic_locks": []}))
+        choice = {"id": "confirm", "content": "提交前必须确认。"}
+        value["approved_gates"].append(page_gate)
+        value = records.update(value, {"tasks": {"web": {"set": {"solution_decisions": [choice]}}}}, None, _execute)
+        value = records.update(value, {"approve_solutions": [
+            {"request_id": web["request_id"], "task_id": "web", **choice}]}, None, _execute)
+        self.source.write_text(json.dumps(value), encoding="utf-8")
+
+        def update_state(task_id, state):
+            return self.invoke("update", "--input", self.source, "--root", self.root, "--expect-sha256", records.digest(self.source.read_bytes()),
+                               "--patch", "-", input=json.dumps({"tasks": {task_id: {"set": {"state": state}}}}))
+
+        before = self.source.read_bytes()
+        for state in ("RUNNING", "BUILD_VERIFIED", "QA_SCOPE_READY", "QA"):
+            with self.subTest(state=state):
+                denied = update_state("web", state)
+                self.assertEqual(2, denied.returncode, denied.stderr)
+                self.assertEqual(before, self.source.read_bytes())
+        self.assertNotIn("consumer", _execute("ready", json.loads(self.source.read_bytes()))["ready"])
+        # 用户的两项批准原已具备。仅当前置真实交付后，相同更新才能成功发布，
+        # 正常依赖这一结果的普通任务才会从同一权威图进入 ready。
+        for task_id in ("prototype", "web"):
+            accepted = update_state(task_id, "BUILD_VERIFIED")
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertIn("consumer", _execute("ready", json.loads(self.source.read_bytes()))["ready"])
+
+    def test_ordinary_and_light_writer_require_gates_for_handoff_and_every_new_delivery(self):
+        from lib.task_graph_cli import export_task_pack
+        full = graph()
+        light = export_task_pack(full, "api")
+        light["task"]["workflow_level"] = "Light"
+        for data in (full, light):
+            data["approved_gates"] = []
+            self.source.write_text(json.dumps(data), encoding="utf-8")
+            before = self.source.read_bytes()
+            self.assertEqual([], _execute("ready", data)["ready"])
+            args = [] if "task" in data else ["--task-id", "api"]
+            self.assertEqual(2, self.invoke("task", "--input", self.source, *args).returncode)
+            for state in ("RUNNING", "BUILD_VERIFIED", "QA_SCOPE_READY", "QA"):
+                denied = self.invoke("update", "--input", self.source, "--expect-sha256", records.digest(before),
+                                     "--patch", "-", input=json.dumps({"tasks": {"api": {"set": {"state": state}}}}))
+                self.assertEqual(2, denied.returncode, (args, state, denied.stderr))
+                self.assertEqual(before, self.source.read_bytes())
+
+    def test_legacy_visual_gate_rechecks_actual_page_before_handoff_and_new_delivery(self):
+        from tests.test_foundation_qa import working_root
+        from tests.test_plugin_workflow_contract import visual_request
+
+        self.enterContext(working_root(self.root))
+        value, gate = visual_request("UI-Page", self.root)
+        writer = value["tasks"][1]
+        writer.update(goal="设置页", input_contracts=["历史已确认页面"], output_contracts=["生产页面"],
+                      acceptance_evidence=["冒烟证据"], verification_commands=["build"])
+        value["approved_gates"].append(gate)
+        self.source.write_text(json.dumps(value))
+        html = self.root / writer["ui_change"]["design_authority_refs"][0]["path"]
+        original = html.read_bytes()
+        def check(allowed):
+            self.assertEqual(allowed, "web" in json.loads(self.invoke("ready", "--input", self.source).stdout)["ready"])
+            self.assertEqual(0 if allowed else 2, self.invoke("task", "--input", self.source, "--task-id", "web").returncode)
+        check(True)
+        for content in (original.replace(b"Configure the project settings.", b"Change application settings."), None):
+            if content is None:
+                html.unlink()
+            else:
+                html.write_bytes(content)
+            # 旧图未携带新格式回执、原型 Writer 仍显示已交付，也须按实物拒绝；结构查询继续可读。
+            check(False)
+            self.assertEqual(0, self.invoke("validate", "--input", self.source).returncode)
+            for state in ("RUNNING", "BUILD_VERIFIED", "QA_SCOPE_READY", "QA"):
+                before = self.source.read_bytes()
+                rejected = self.invoke("update", "--input", self.source, "--patch", "-",
+                                       "--expect-sha256", records.digest(before),
+                                       input=json.dumps({"tasks": {"web": {"set": {"state": state}}}}))
+                self.assertEqual(2, rejected.returncode, rejected.stderr)
+                self.assertEqual(before, self.source.read_bytes())
+        html.write_bytes(original)
+        check(True)
+
+    def test_visual_approval_rebinds_only_verified_page_after_real_prototype_rework(self):
+        from lib.documents.validate_prototype_workspace import capture_selected_pages
+        from lib.task_graph_cli import export_task_pack
+        from tests.test_plugin_workflow_contract import visual_request
+        from tests.test_prototype_workspace import write_valid_project
+        project = write_valid_project(self.root)
+        value, gate = visual_request("UI-Page")
+        prototype, web = value["tasks"]
+        web.update(goal="设置页", input_contracts=["已批准设置页"], output_contracts=["生产设置页"],
+                   acceptance_evidence=["冒烟检查"], verification_commands=["build"])
+        self.source.write_text(json.dumps(value), encoding="utf-8")
+        relative = "docs/standards/prototype"
+        def fingerprint():
+            return capture_selected_pages(project, relative, pages=["settings.html"],
+                                          adapter="project.yaml")["pages"][0]["dependency_fingerprint"]
+        def update(change, old_sha=None):
+            return self.invoke("update", "--input", self.source, "--root", project, "--expect-sha256",
+                               old_sha or records.digest(self.source.read_bytes()), "--patch", "-", input=json.dumps(change))
+        def state(task_id, next_state):
+            return update({"tasks": {task_id: {"set": {"state": next_state}}}})
+        def stored():
+            return json.loads(self.source.read_bytes())
+        first = {"request_id": web["request_id"], "task_id": web["id"], "authority_id": "settings",
+                 "path": relative + "/settings.html", "requirements_fingerprint": value["requirements_fingerprint"],
+                 "previous_fingerprint": gate.split("@")[1], "dependency_fingerprint": fingerprint(),
+                 "changed_scope": ["设置确认框"], "interactions": ["打开并关闭确认框"], "approval_ref": "user:settings/one"}
+        before = self.source.read_bytes()
+        for key, bad in (("request_id", "other"), ("task_id", "prototype"), ("authority_id", "wrong"),
+                         ("path", "../settings.html"), ("requirements_fingerprint", "9"*64),
+                         ("previous_fingerprint", "1"*64), ("dependency_fingerprint", "2"*64),
+                         ("changed_scope", []), ("approval_ref", "")):
+            result = update({"approve_visuals": [{**first, key: bad}]})
+            self.assertEqual(2, result.returncode, (key, result.stderr))
+            self.assertEqual(before, self.source.read_bytes())
+        self.assertEqual(0, state("prototype", "DECLARED").returncode)
+        self.assertEqual(2, update({"approve_visuals": [first]}).returncode)
+        self.assertEqual(0, state("prototype", "BUILD_VERIFIED").returncode)
+        approved = update({"approve_visuals": [first]})
+        self.assertEqual(0, approved.returncode, approved.stderr)
+        self.assertEqual(2, update({"approve_visuals": [first]}, records.digest(before)).returncode)
+        self.assertIn("web", _execute("ready", stored(), root=project)["ready"])
+        self.assertEqual(0, state("web", "RUNNING").returncode)
+        self.assertEqual("RUNNING", export_task_pack(stored(), "web", root=project)["task"]["state"])
+        self.assertEqual(0, state("web", "DECLARED").returncode)
+        self.assertEqual(0, state("prototype", "DECLARED").returncode)
+        self.assertNotIn("web", _execute("ready", stored(), root=project)["ready"])
+        css = project / relative / "prototype.css"
+        css.write_text(css.read_text() + "\nbutton { padding: 1rem; }\n")
+        self.assertEqual(0, state("prototype", "BUILD_VERIFIED").returncode)
+        before = self.source.read_bytes()
+        self.assertNotIn("web", _execute("ready", stored(), root=project)["ready"])
+        with self.assertRaisesRegex(ValueError, "stale visual"):
+            export_task_pack(stored(), "web", root=project)
+        for new_state in ("RUNNING", "BUILD_VERIFIED", "QA_SCOPE_READY", "QA"):
+            self.assertEqual(2, state("web", new_state).returncode)
+            self.assertEqual(before, self.source.read_bytes())
+        second = {**first, "previous_fingerprint": first["dependency_fingerprint"],
+                  "dependency_fingerprint": fingerprint(), "approval_ref": "user:settings/two"}
+        self.assertNotEqual(first["dependency_fingerprint"], second["dependency_fingerprint"])
+        approved = update({"approve_visuals": [second]})
+        self.assertEqual(0, approved.returncode, approved.stderr)
+        pack = export_task_pack(stored(), "web", root=project)
+        self.assertEqual("user:settings/two", pack["task"]["visual_approval"]["pages"][0]["approval_ref"])
+        self.assertNotIn("visual_approved:settings@" + first["dependency_fingerprint"], pack["approved_gates"])
+        self.assertEqual(0, state("web", "BUILD_VERIFIED").returncode)
+
     def test_light_single_pack_validates_updates_and_retires_without_a_graph(self):
         """通过实际CLI走Light自包含交接、首绑和退役，不输出额外DAG或旁账。"""
         from lib.task_graph_cli import export_task_pack
@@ -640,7 +830,9 @@ class RecordCliTest(unittest.TestCase):
             "agent_ref": {"host": "codex", "agent_id": "current-qa"}}),
             v2_task({"id": "other", "request_id": "other-request", "task_type": "read_only", "state": "DECLARED",
             "depends_on": [], "blocks": [], "gates": ["exceptional:unrelated-fix"], "owned_paths": [],
-            "semantic_locks": [], "goal": "不属于当前审查的兄弟请求"})]
+            "additional_business_confirmation": {"name": "unrelated-fix", "reason": "用户明确要求此事单独确认",
+                "decision_scope": "另一请求的处置方式", "options": ["保留", "返工"], "evidence": ["user:other/choice"],
+                "resume_condition": "用户明确选择返工"}, "semantic_locks": [], "goal": "不属于当前审查的兄弟请求"})]
         result = export_task_pack(source, "qa")
         self.assertEqual("qa", result["task"]["id"])
         self.assertEqual(["requirements_approved", "exceptional:current-fix"], result["approved_gates"])
@@ -859,6 +1051,55 @@ class RecordCliTest(unittest.TestCase):
                 self.assertEqual(2, result.returncode)
                 self.assertIn("error", json.loads(result.stderr))
                 self.assertEqual(before, self.source.read_bytes())
+
+    def test_fingerprints_compare_only_the_selected_commands_declared_inputs(self):
+        # 二者共用业务模块，但只有加载入口依赖文案。实际执行时保留命令、输出和
+        # 退出码；helper 仅核对这次执行对应的文件，无法替代新的编译/真实资源加载。
+        (self.root / "logic.py").write_text("def amount(): return 42\n", encoding="utf-8")
+        catalog = self.root / "message.txt"
+        catalog.write_text("原文", encoding="utf-8")
+        scripts = {"logic": "from logic import amount\nassert amount() == 42\n",
+                   "load": "from logic import amount\nfrom pathlib import Path\n"
+                           "print(amount(), Path('message.txt').read_text(encoding='utf-8'))\n"}
+        checks = []
+        for name, body in scripts.items():
+            script = name + "_check.py"
+            (self.root / script).write_text(body, encoding="utf-8")
+            inputs = [script, "logic.py"] + (["message.txt"] if name == "load" else [])
+            checks.append({"run": f"python -B {script}", "expected": "退出 0", "inputs": inputs})
+        graph_value = graph()
+        graph_value["tasks"][0]["verification_commands"] = checks
+        self.source.write_text(json.dumps(graph_value), encoding="utf-8")
+        pack = self.root / "pack.json"
+        exported = self.invoke("task", "--input", self.source, "--task-id", "api", "--output", pack,
+                               "--expect-sha256", "missing")
+        self.assertEqual(0, exported.returncode, exported.stderr)
+        def compare(index, *extra):
+            return self.invoke("fingerprints", "--root", self.root, "--input", pack,
+                               "--check-command", checks[index]["run"], *extra)
+        snapshots = []
+        for i, name in enumerate(scripts):
+            actual = subprocess.run([sys.executable, "-B", name + "_check.py"], cwd=self.root, check=True,
+                                    text=True, capture_output=True)
+            if name == "load":
+                self.assertEqual("42 原文", actual.stdout.strip())
+            capture = compare(i)
+            self.assertEqual(0, capture.returncode, capture.stderr)
+            snapshot = self.root / (name + ".json")
+            snapshot.write_text(capture.stdout, encoding="utf-8")
+            snapshots.append(snapshot)
+        catalog.write_text("修订文案", encoding="utf-8")
+        unchanged = compare(0, "--source", snapshots[0])
+        self.assertEqual(0, unchanged.returncode, unchanged.stderr)
+        self.assertTrue(json.loads(unchanged.stdout)["matched"])
+        changed = compare(1, "--source", snapshots[1])
+        self.assertEqual(1, changed.returncode, changed.stderr)
+        self.assertEqual(["message.txt"], json.loads(changed.stdout)["changed"])
+        self.assertEqual(2, compare(1, "--source", snapshots[0]).returncode)
+        subprocess.run([sys.executable, "-m", "py_compile", "load_check.py"], cwd=self.root, check=True)
+        loaded = subprocess.run([sys.executable, "-B", "load_check.py"], cwd=self.root, check=True,
+                                capture_output=True, text=True)
+        self.assertEqual("42 修订文案", loaded.stdout.strip())
 
     def test_fingerprints_accept_existing_receipt_fields_and_detect_stale_evidence(self):
         binary = self.root / "app.bin"

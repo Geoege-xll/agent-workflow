@@ -28,7 +28,10 @@ from lib.skills.role_skills import CORE_SKILLS, IMPLEMENTER_ROLES, ROLE_SKILLS
 from lib.documents.prototype_review import LIVE_TOOL_ASSETS as PROTOTYPE_LIVE_TOOL_ASSETS, V4_TOOL_ASSETS as PROTOTYPE_V4_TOOL_ASSETS
 from product.command_identity import load_identity
 from product.release_channels import version_channel
-from lib.skills.selected_skills import LOCK as SELECTED_LOCK, VENDOR as SELECTED_VENDOR, SPECS as SELECTED_SPECS, snapshot as selected_snapshot
+from lib.skills.selected_skills import (
+    DESKTOP_SKILL_ROOT, LOCK as SELECTED_LOCK, VENDOR as SELECTED_VENDOR,
+    skill_path as selected_skill_path, snapshot as selected_snapshot,
+)
 
 
 # 宿主原生角色的工具白名单随构建器一同校验摘要，避免交付已退役安装器的实现。
@@ -102,8 +105,11 @@ PRODUCT_FILES = (
 )
 LIB_FILES = (
     "__init__.py", "safe_text.py", "agent_continuation.py", "agent_continuation_cli.py", "platform_fs.py", "plugin_resources.py",
-    "python_runtime.sh", "task_sources.py", "standard_paths.py", "task_graph.py",
-    "dispatch_admission.py", "dispatch_admission_cli.py", "task_settlement.py", "foundation_qa.py",
+    "python_runtime.sh", "task_sources.py", "standard_paths.py", "task_graph.py", "request_scope.py", "solution_confirmation.py", "shared_solution_records.py", "writer_prerequisites.py", "visual_authority.py",
+    "dispatch_admission.py", "dispatch_admission_cli.py", "task_settlement.py", "foundation_qa.py", "qa_projection.py",
+    # 三个宿主共用同一任务池。原图、准入与更新入口也会读取撤回和改版合同，
+    # 因此任务意图模块属于包内运行依赖，即使调用者继续使用旧 CLI 也必须随包交付。
+    "task_pool.py", "task_pool_cli.py", "task_intent.py", "verification_inputs.py",
     "task_graph_cli.py", "task_graph_init.py", "task_graph_records.py",
     "validate_project_docs.py", "worktree_policy.py",
 )
@@ -115,7 +121,9 @@ MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "compon
 # live 名单回验或扩写旧 V4 包。仍不遍历 templates 整树，未知文件不会借目录入包。
 # file 入口四项由 live 权威名单提供；这里只按稳定顺序去重并集，避免装配层复制第二份名单。
 PROTOTYPE_TOOL_ASSETS = tuple(dict.fromkeys((*PROTOTYPE_V4_TOOL_ASSETS, *PROTOTYPE_LIVE_TOOL_ASSETS)))
-TEMPLATE_FILES = ("project.yaml.example", "docs/STANDARDS.md", "docs/PLAN.md", "docs/PROJECT.md",
+# 架构模板随插件分发，供 PM 在项目确有结构变化时选用。项目初始化只消费适配器模板，
+# 不应因模板进入载荷就向空项目写入架构页或尚不可访问的目录链接。
+TEMPLATE_FILES = ("project.yaml.example", "docs/STANDARDS.md", "docs/PLAN.md", "docs/PROJECT.md", "docs/ARCHITECTURE.md",
                   "prototype/page.html", "prototype/prototype.css",
                   *("prototype/" + name for name in PROTOTYPE_TOOL_ASSETS))
 MAINTENANCE_SKILL = "plugins/maintenance/skills/" + CONFIG_SKILL + "/SKILL.md"
@@ -224,9 +232,34 @@ def split_frontmatter(body: bytes) -> tuple[bytes, bytes]:
     return body[:match.end()], body[match.end():]
 
 
-def render_skill(body: bytes, envelope: bytes) -> bytes:
+def with_preamble(body: bytes, preamble: bytes) -> bytes:
+    """保留原始前置元数据和正文的字节，仅在二者之间加入指定入口说明。"""
     header, original_body = split_frontmatter(body)
-    return header + b"\n" + envelope + b"\n" + original_body
+    return header + b"\n" + preamble + b"\n" + original_body
+
+
+def render_skill(body: bytes, adapter_source: str, *, conversation_entry: bool = False) -> bytes:
+    """独立发现的核心 Skill 也能从自身位置找到同包适配，不依赖主会话初始化。
+
+    此处只写相对链接。由实际加载 Skill 的实例判断当前来源和内容是否完整，
+    不跨实例共享已读状态，也不把开发机的绝对路径固化到可搬移的插件包中。
+    """
+    locator = (
+        f"从本 Skill 的物理目录向上两级确定插件根。使用同包的[宿主资源说明](../../{adapter_source})。"
+        "当前实例已具备同一物理来源、同一版本的完整说明时直接复用；"
+        "独立启动或内容缺失时补读，来源或版本变化时重新读取。\n"
+    )
+    if conversation_entry:
+        # 三端发现入口共用这个前缀。先区分无需读盘的对话，再说明资源解析的先后：
+        # 如果把宿主说明和业务引用列为同批读取，来源尚未获准就会触发多个额外弹窗。
+        # 只有缺失说明时才串行等它返回；同源同版本已完整载入时仍直接复用。
+        locator = ("用户仅想讨论、澄清或归纳且对话材料已足够时，直接在对话中回答，"
+                   "跳过以下资源定位步骤，无须读取项目、适配器或插件文件。"
+                   "已委托的工作需要访问资源、且当前缺少宿主资源说明时，"
+                   "第一批只读取下方链接的宿主资源说明，等它成功返回后再选当前阶段所需材料。"
+                   "不要把产品全文、阶段引用或项目文件并入这次读取。"
+                   "读取被拒时暂停依赖它的操作，不得换工具绕过。\n" + locator)
+    return with_preamble(body, locator.encode("utf-8"))
 
 
 def render_maintenance_route(body: bytes, host: str) -> bytes:
@@ -379,7 +412,26 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     for relative, body in selected_files.items():
         result[relative] = body
         source_files[relative] = digest(body)
-    # 发现目录只接本项目xy别名薄适配，第三方原name/frontmatter永远留在vendor。
+    # 桌面 Skill 由宿主直接发现官方原版。各端共用同一份已校验的原文、相对引用及
+    # LICENSE，不注入工作流 envelope。程序仍位于按架构区分的 vendor 目录，CLI
+    # 可以按上游约定在自身旁边找到同版本 helper。
+    desktop_vendor = SELECTED_VENDOR + "/agent-desktop/"
+    desktop_body = selected_files[desktop_vendor + DESKTOP_SKILL_ROOT + "/SKILL.md"]
+    header, _ = split_frontmatter(desktop_body)
+    if not re.search(rb"(?m)^name: agent-desktop$", header) or re.search(rb"(?m)^(hooks|allowed-tools)[ \t]*:", header):
+        raise ValueError("official agent-desktop must retain its name without permission/hook metadata")
+    for relative, body in selected_files.items():
+        if relative.startswith(desktop_vendor + DESKTOP_SKILL_ROOT + "/"):
+            target = relative.removeprefix(desktop_vendor)
+        elif relative == desktop_vendor + "LICENSE":
+            target = DESKTOP_SKILL_ROOT + "/LICENSE"
+        else:
+            continue
+        result[target] = body
+        projections[target] = {"source": relative, "transform": "identity"}
+    if host == "antigravity":
+        validate_antigravity_skill_body(DESKTOP_SKILL_ROOT + "/SKILL.md", desktop_body)
+    # 其余精选上游技能仍由现有 xy 别名薄适配公开；原名、正文和元数据保留在 vendor。
     adapters = tree_files(source, "plugins/selected-skills")
     public = set(IDENTITY["skill_aliases"]) - {CONFIG_SKILL}
     if {path.split("/")[2] for path in adapters} != public:
@@ -387,13 +439,21 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     for adapter in adapters:
         copy(adapter)
         target = adapter.replace("plugins/selected-skills/", "skills/", 1)
+        result[target] = result[adapter]
+        projections[target] = {"source": adapter, "transform": "identity"}
         if target.endswith("/SKILL.md"):
             header, _ = split_frontmatter(result[adapter])
             name = target.split("/")[1]
             if not re.search(rb"(?m)^name: " + name.encode("ascii") + rb"$", header) or re.search(rb"(?m)^(hooks|allowed-tools):", header):
                 raise ValueError("selected adapter must use its public name without permission/hook metadata")
-        result[target] = result[adapter]
-        projections[target] = {"source": adapter, "transform": "identity"}
+            canonical = IDENTITY["skill_aliases"][name]
+            if canonical in ("grill-me", "grilling"):
+                # 两份短访谈原文直接随宿主 Skill 交付。只追加同一批锁校验过的完整字节，
+                # 外层 frontmatter 始终来自适配；更新 vendor 后重新构建就能同步所有宿主。
+                upstream = selected_skill_path(canonical)
+                result[target] += b"\n" + selected_files[upstream]
+                projections[target] = {"source": adapter, "transform": "append_locked_skill",
+                                       "dependencies": {upstream: source_files[upstream]}}
         if host == "antigravity" and target.endswith("/SKILL.md"):
             validate_antigravity_skill_body(target, result[target])
     # 唯一允许进入工作流插件的独立配置来源：只读合同按字节原样投影，包内不建
@@ -413,8 +473,8 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     copy("plugins/PLUGIN.md", "PLUGIN.md")
     copy("plugins/INSTALL.md", "INSTALL.md")
     result["README.md"] = result["PLUGIN.md"]
-    # AGY 的原生 24KB 正文上限要求使用宿主专属的精简资源适配，不能裁剪唯一
-    # 共享正文。实际适配来源保留原文件与摘要，并写入每个生成组件的来源记录。
+    # 完整适配仍随包交付给独立实例，原生角色也保留其权限边界。核心 Skill
+    # 只引用本宿主的适配文件；通过来源记录可核对链接实际指向的包内字节。
     envelope_source = ("plugins/antigravity/plugin-context.md" if host == "antigravity"
                        else "plugins/plugin-context.md")
     if envelope_source not in result:
@@ -446,10 +506,11 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
             continue
         target = relative.removeprefix("platforms/shared/")
         if relative.endswith("/SKILL.md"):
-            result[target] = render_skill(result[relative], envelope)
+            result[target] = render_skill(result[relative], envelope_source,
+                                          conversation_entry=relative == "platforms/shared/skills/xy-workflow/SKILL.md")
             if host == "antigravity":
                 validate_antigravity_skill_body(target, result[target])
-            transform = "skill-plugin-envelope-v1"
+            transform = "skill-plugin-locator-v1"
         else:
             result[target] = result[relative]
             transform = "identity"
@@ -490,7 +551,7 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     if host == "claude":
         copy("plugins/claude/pm.md")
         copy("plugins/claude/settings.json", "settings.json")
-        result["agents/pm.md"] = render_skill(result["plugins/claude/pm.md"], main_context)
+        result["agents/pm.md"] = with_preamble(result["plugins/claude/pm.md"], main_context)
         projections["agents/pm.md"] = {"source": "plugins/claude/pm.md", "transform": "main-session-entry-route-v1",
                                       "adapter": "plugins/main-session-context.md"}
         projections["settings.json"] = {"source": "plugins/claude/settings.json", "transform": "identity"}
@@ -588,6 +649,21 @@ def build(source: Path, output: Path, host: str) -> Path:
     return target
 
 
+def unpack_archive(archive: Path, destination: Path) -> None:
+    """将构建产物展开到调用方准备的目录，保留 ZIP 的 Unix 文件模式。"""
+    # ZipFile.extractall 只写正文，不能保留上游 CLI/helper 的执行位。本地源和
+    # 包外消费测试共用这一条解包路径，避免测试夹具把完整发行误装成不可执行版本。
+    with zipfile.ZipFile(archive) as package:
+        for entry in package.infolist():
+            relative = Path(entry.filename)
+            if relative.is_absolute() or ".." in relative.parts or stat.S_ISLNK(entry.external_attr >> 16):
+                raise ValueError("local source ZIP must contain only in-root regular resources")
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(package.read(entry))
+            target.chmod((entry.external_attr >> 16) & 0o777)
+
+
 def local_source(archive: Path, output: Path, host: str) -> Path:
     """把已经构建的精确ZIP展开为官方本地source，不指向源码仓或未发布远端。
 
@@ -598,15 +674,7 @@ def local_source(archive: Path, output: Path, host: str) -> Path:
     market.mkdir(parents=True, exist_ok=False)
     plugin = market / (PLUGIN_NAME if host == "antigravity" else "plugins/" + PLUGIN_NAME)
     plugin.mkdir(parents=True)
-    with zipfile.ZipFile(archive) as package:
-        for entry in package.infolist():
-            relative = Path(entry.filename)
-            if relative.is_absolute() or ".." in relative.parts or stat.S_ISLNK(entry.external_attr >> 16):
-                raise ValueError("local source ZIP must contain only in-root regular resources")
-            target = plugin / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(package.read(entry))
-            target.chmod((entry.external_attr >> 16) & 0o777)
+    unpack_archive(archive, plugin)
     if host == "codex":
         manifest = {"name": IDENTITY["marketplaces"]["local"], "plugins": [{
             "name": PLUGIN_NAME, "source": {"source": "local", "path": "./plugins/" + PLUGIN_NAME},

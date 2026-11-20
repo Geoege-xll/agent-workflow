@@ -6,6 +6,8 @@
 
 ## 权威与职责
 
+三个宿主用英文发现和选择插件能力。自维护 Skill、插件和原生 Agent 的 `description` 以及宿主展示的短描述均使用英文，并写清用途和触发边界。修改权威源后检查实际发行包中的投影。界面及用户文档使用各自面向的语言。
+
 | 路径 | 职责 |
 | --- | --- |
 | `product/WORKFLOW.md` | 工作流唯一产品权威：Light/Full、确认、调度、所有权、QA 与收口 |
@@ -62,6 +64,8 @@ agy plugin install /absolute/new-output-directory/local/antigravity/xy-workflow
 
 这些官方命令在执行时会改变对应客户端状态，构建本身不安装。保留来源目录，不将临时测试安装误报为用户全局迁移。Codex Hook 仍须官方审阅与信任；本地和远程同名候选避免同时启用。
 
+在 macOS 上测试 Claude 本地目录候选时，维护者需先针对实际安装登记签发本机限时收据，再启动普通 Auto 会话。候选更新或系统重启后须重新核对；收据仅支持默认 Claude 配置和具备所需元数据的 APFS 卷。[Claude 本地候选维护说明](../platforms/claude/references/candidate-receipt.md#安装或更新候选)
+
 ## 发行分发维护
 
 唯一构建器继续生成三宿主 plugin/local-source 六包及独立配置一包。手动发布工作流只允许 main，固定触发时的 `github.sha`，从成功的 `release.yml` push/main 运行中读取同 SHA 的唯一候选 artifact；不是再从发布分支另行构建。
@@ -90,7 +94,7 @@ Codex 七角色的完整原生定义只由同源角色生成到插件非发现�
 
 插件资源从同一安装版本精确解析，helper 在明确的实际项目目录执行；项目 adapter 与插件权威分开。inspect 只读，显式 apply 仅创建缺失的最小 `.awf/project.yaml`。不能写全局或项目指令替代官方发现、Hook 信任和权限审阅。
 
-原型工具必须接收任务已选择的同一adapter，沿其`docs.plans`和`docs.standards_root`读取。计划仅维护Markdown；具体HTML、五段设计与交互契约、业务资产和视觉依赖指纹继续保留。3.0.4交付前先从物理插件解析`templates/prototype/page.html`，再通过白名单helper执行`prepare-delivery --root --adapter --pages`，最后以相同项目／adapter及本轮需求、request-id、明确pages执行`open`。正式入口是项目具体HTML的file URI；文件页提供默认收起的浮动目录、可缩放画布与开发说明弹窗，“进入评审”新开同一页。评审进入即批注，无目录、预览切换和开发说明。缺少准备准确报`preparation_required`；file按钮不负责启动Python，服务由Agent在交付时准备并启动。
+原型工具必须接收任务已选择的同一adapter，沿其`docs.plans`和`docs.standards_root`读取。计划仅维护Markdown；具体 HTML 保存业务设计与必要的开发说明，校验业务资产和视觉依赖指纹。3.0.4交付前先从物理插件解析`templates/prototype/page.html`，再通过白名单helper执行`prepare-delivery --root --adapter --pages`，最后以相同项目／adapter及本轮需求、request-id、明确pages执行`open`。正式入口是项目具体HTML的file URI；文件页提供默认收起的浮动目录、可缩放画布与开发说明弹窗，“进入评审”新开同一页。评审进入即批注，无目录、预览切换和开发说明。缺少准备准确报`preparation_required`；file按钮不负责启动Python，服务由Agent在交付时准备并启动。
 
 业务HTML只增加固定受管入口，不复制业务稿或通用工具；`.xy-prototype-entry`连接到用户级共享工具，唯一`delivery.html`投影中央shell。目录最多256页，单次open仍只绑定同一已批准需求的最多16页，其他页可有独立请求绑定。已有index及旧壳属于历史资料，不作为新交付入口；只有明确证明纯导航／工具、保留可恢复原件并获得对应项目清理授权后才清理，不按文件名删除业务首页或共享CSS／JS。维护规则见[文档与原型指南](plans/workflow-document-lifecycle.md)。
 
@@ -104,7 +108,17 @@ Codex 七角色的完整原生定义只由同源角色生成到插件非发现�
 bash lib/python_runtime.sh -B -X utf8 lib/validate_project_docs.py --root /path/to/project --plan docs/plans/topic.md --plan docs/plans/another.md
 ```
 
-该模式只读取显式选中的计划，检查五项元信息、Full 六节的标题与顺序，以及本地链接的安全路径和存在性；代码围栏示例不参与合同识别，链接目标不读取正文，远程链接不请求。Light 无基线计划仍可简化。校验不会扫描未选计划、创建配置或修改文档。通过仅代表机械结构成立，内容是否去重、前后一致、能回答读者问题，仍由 PM 和适用的独立 QA 判断；文档、勾选与校验成功不能代替用户批准或验收。原两位置参数入口保留 PROJECT 基线与规范校验及历史计划识别行为。
+裸 `--plan` 只读选中的稿件，校验元信息、紧凑或历史正文、已有的验收依据与本地链接安全。增加 `--adapter` 可同时核对 PROJECT 中指向该主题的条目。普通导航和明确的验收声明分别校验。
+
+要找引用某项规范的主题，可以在源码根运行下列只读查询。将示例中的根、适配器和目标替换为实际路径。
+
+```bash
+bash lib/python_runtime.sh -B -X utf8 lib/validate_project_docs.py \
+  --root /path/to/project --adapter .awf/project.yaml \
+  --relations docs/standards/DESIGN_MINI_PROGRAM.md
+```
+
+查询返回普通 Markdown 链接的位置和覆盖范围，供 PM 或 QA 核查。业务是否依赖某项规则、相应页面是否已验收，仍须对照正文及证据。
 
 当前门禁入口为：
 
@@ -122,6 +136,18 @@ bash scripts/test_workflow.sh current
 历史宿主安装、模型运行、失败及未验证范围在[原生验收记录](archive/plugin-v3-native-acceptance.md)和[发行主题](plans/stable-product-release.md)中按实际版本保留。插件与独立组件的版本号分别管理，历史单项成功不能扩大为新版本实际运行通过。Windows 暂停，活动任务跨插件更新自动保留协议尚未实现，更新前先收尾或交接。
 
 ## 交付与文档维护
+
+### 在本仓库定位文档
+
+| 当前要回答的问题 | 从哪里读 |
+|---|---|
+| 应该先读哪段代码？ | 进入[代码架构的模块目录](ARCHITECTURE.md#模块与目录)，找到职责对应的小节，再打开链接中的代码和测试。 |
+| 插件怎样使用、配置或维护？ | 按主题进入[使用手册](usage.md)、[原生 Agent 配置](agent-configuration.md)或本页的小节。产品行为由[工作流定义](../product/WORKFLOW.md)和对应 Skill 维护。 |
+| 一项需求正在做什么、此前交付了什么？ | 在 `docs/plans/` 按稳定主题 ID 定位。恢复工作看「当前进展与恢复入口」，核对已交付行为看「验收结果与当前已交付行为」。长节同时含历史时，进一步定位当前小节。 |
+| 要实现或核对哪项页面交互？ | 从需求或任务包给出的具体 `docs/standards/prototype/*.html` 和状态锚点进入。只有定位到的交互依赖共享 CSS 或脚本时，才继续查看相关实现；视觉验收仍覆盖约定的页面和状态。 |
+| 为什么旧版这样做？ | 只有当前决策确实依赖历史时，才沿主题中的证据引用进入 `docs/archive/` 或 Git。 |
+
+业务项目使用自己所选 adapter 的 `docs.*` 路径。本仓库的 [PROJECT 模板](../templates/docs/PROJECT.md)和[规范索引模板](../templates/docs/STANDARDS.md)供项目接入使用。模板不能提供本项目的基线或批准依据。派发给独立开发者和 QA 时，文档读取按[受控文档合同](../platforms/shared/skills/xy-workflow/references/dispatch.md)执行。
 
 生产职责实例完成必要验证后交请求级唯一独立 QA。返工由原职责作者处理，增量复核沿用原 Reviewer。QA 通过后的顺序仍为受控文档投影、PM 提交评估、记忆收口、最终报告。PM 根据已有授权决定 Git 操作与发布范围。候选附件、独立组件预发行、插件公开市场、源码合并和本机安装分别记录。
 

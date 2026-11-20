@@ -11,6 +11,18 @@ from lib.task_graph import Task, TaskGraphError, effective_dispatch_capacity, re
 from lib.task_graph_cli import _execute
 
 
+def write_visual_page(project: Path, name: str = "settings.html") -> str:
+    """复用完整可验证的真实静态页面，供正式调度测试取得与 CSS 绑定的页面指纹。"""
+    from lib.documents.validate_prototype_workspace import capture_selected_pages
+    from tests.test_prototype_workspace import PAGE_HTML, PROTOTYPE_CSS, PROTOTYPE_RELATIVE
+    directory = project / PROTOTYPE_RELATIVE
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(PAGE_HTML, encoding="utf-8")
+    (directory / "prototype.css").write_text(PROTOTYPE_CSS, encoding="utf-8")
+    return capture_selected_pages(project, PROTOTYPE_RELATIVE.as_posix(), pages=[name],
+                                  adapter="project.yaml")["pages"][0]["dependency_fingerprint"]
+
+
 def v2_task(task: dict, *, level: str = "Full") -> dict:
     """为既有行为夹具明确提供schema 2身份；仅用于测试，不迁移生产旧记录。
 

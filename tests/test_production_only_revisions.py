@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +21,9 @@ PACK = Path(__file__).resolve().parents[1]
 
 class ProductionOnlyRevisionTest(unittest.TestCase):
     def setUp(self) -> None:
+        from tests.test_foundation_qa import working_root
+        self.project = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.enterContext(working_root(self.project))
         self.helper = design_cases.DesignStandardsLifecycleTest()
 
     def graph(self, *, required: bool = False) -> dict:
@@ -34,6 +38,8 @@ class ProductionOnlyRevisionTest(unittest.TestCase):
         writer["input_contracts"] = ["当前用户明确选择直接修改产品；原型仅为历史参考"]
         if not required:
             return payload
+        from tests.test_scheduler_boundaries import write_visual_page
+        fingerprint = write_visual_page(self.project, "admin.html")
         designer.update(id="prototype", design_mode="prototype", state="BUILD_VERIFIED",
                         owned_paths=["docs/standards/prototype/admin.html"], blocks=["web"])
         for document in designer["controlled_document_access"]["documents"]:
@@ -44,16 +50,16 @@ class ProductionOnlyRevisionTest(unittest.TestCase):
         writer["ui_change"]["design_authority_refs"] = [{
             "kind": "prototype_contract", "authority_id": "admin",
             "path": "docs/standards/prototype/admin.html", "anchor": "contract",
-            "content_fingerprint": "f" * 64, "resolution_state": "resolved",
+            "content_fingerprint": fingerprint, "resolution_state": "resolved",
         }]
-        writer["gates"].append("visual_approved:admin@" + "f" * 64)
+        writer["gates"].append("visual_approved:admin@" + fingerprint)
         payload["tasks"] = [designer, writer]
         return payload
 
     def test_replacement_is_ready_and_keeps_historical_policy_separate(self) -> None:
         previous = self.graph(required=True)
         historical = copy.deepcopy(previous)
-        previous["approved_gates"].append("visual_approved:admin@" + "f" * 64)
+        previous["approved_gates"].append(previous["tasks"][1]["gates"][-1])
         before = self.helper.invoke(previous, "ready")
         self.assertEqual({"ready": ["web"]}, json.loads(before.stdout), before.stderr)
 
@@ -108,7 +114,7 @@ class ProductionOnlyRevisionTest(unittest.TestCase):
         result = self.helper.invoke(payload, "ready")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"ready": ["settings-fix"]}, json.loads(result.stdout))
-        payload["approved_gates"].append("visual_approved:admin@" + "f" * 64)
+        payload["approved_gates"].append(payload["tasks"][1]["gates"][-1])
         result = self.helper.invoke(payload, "ready")
         self.assertEqual({"ready": ["settings-fix", "web"]}, json.loads(result.stdout))
 

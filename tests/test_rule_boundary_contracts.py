@@ -61,7 +61,8 @@ class RuleBoundaryContractTest(unittest.TestCase):
     def test_native_bug_steps_do_not_unconditionally_dispatch_qa(self) -> None:
         for relative in ("product/WORKFLOW.md", "platforms/shared/skills/xy-workflow/SKILL.md"):
             with self.subTest(source=relative):
-                body = (PACK / relative).read_text()
+                # 从真正入口展开显式路由；未链接的修复步骤无法通过此断言。
+                body = read_contract(PACK / relative)
                 match = re.search(r"native_bug_fix:\n(?P<steps>.*?)```", body, re.DOTALL)
                 self.assertIsNotNone(match)
                 steps = re.findall(r"^\s+- (\S+)$", match["steps"], re.MULTILINE)

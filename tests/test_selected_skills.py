@@ -42,8 +42,8 @@ class SelectedSkillsTest(unittest.TestCase):
         self.lock = {"schema_version": 1, "dependencies": {}}
         # 最小来源夹具只服务拒绝合同；真实原版身份另由独立的固定闭包摘要断言。
         for name, spec in selected.SPECS.items():
-            if name in {"playwright-cli", "modern-web-guidance"}:
-                # npm边界必须使用完整且合法的三包闭包，不能沿用Git技能的两文件伪装。
+            if name in {"agent-desktop", "playwright-cli", "modern-web-guidance"}:
+                # 含运行时的依赖需要真实的完整闭包，不能沿用普通 Git 技能的两文件夹具。
                 self.lock["dependencies"][name] = copy.deepcopy(self.original_lock["dependencies"][name])
                 prefix = selected.VENDOR + "/" + name + "/"
                 for relative, body in self.original_files.items():
@@ -51,6 +51,8 @@ class SelectedSkillsTest(unittest.TestCase):
                         path = self.fixture / relative
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_bytes(body)
+                        record = self.lock["dependencies"][name]["files"][relative.removeprefix(prefix)]
+                        path.chmod(record.get("mode", 0o644))
                 continue
             files = {}
             for relative in {spec["license"], *spec["skills"].values()}:
@@ -86,8 +88,8 @@ class SelectedSkillsTest(unittest.TestCase):
         self.assertNotIn("grill-me", CORE_SKILLS)
         self.assertEqual({"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}, set(SELECTED_SKILLS))
         self.assertEqual(("xy-grilling",), PM_SKILLS)
-        self.assertIn("xy-taste", ROLE_SKILLS["xy-uiux"])
-        self.assertIn("xy-playwright", ROLE_SKILLS["xy-web"])
+        self.assertNotIn("xy-taste", ROLE_SKILLS["xy-uiux"])
+        self.assertNotIn("xy-playwright", ROLE_SKILLS["xy-web"])
         playwright = lock["dependencies"]["playwright-cli"]
         self.assertEqual("261206400b18cd0629a8b45dd14ea5488fcf261f", playwright["commit"])
         self.assertEqual(192, len(playwright["files"]))
@@ -97,6 +99,26 @@ class SelectedSkillsTest(unittest.TestCase):
         self.assertEqual("db2563118ab78a9bd1263d8add4db28c775a78dd512789acf9cccda1148782bf", hashlib.sha256(serialized).hexdigest())
         for alias, canonical in SELECTED_SKILL_ALIASES.items():
             self.assertEqual(selected.skill_path(canonical), selected.skill_path(alias))
+
+    def test_agent_desktop_release_is_fixed_and_runtime_pairs_are_required(self):
+        lock = copy.deepcopy(self.original_lock)
+        desktop = lock["dependencies"]["agent-desktop"]
+        self.assertEqual("b0b7277bea09b770ef9d1fb45aad667bc432cd57", desktop["commit"])
+        self.assertEqual("v1.3.1", desktop["release"]["tag"])
+        self.assertEqual({"arm64": "9b7b7cfc74892eab46c2c85d6cb7dc4863bf8dab0a222cfcfb8ae4604c69c86c",
+                          "x86_64": "469da10cfb68928c58caff88b92b30526e0ca895ac06bc86b7f533b1d9b309b3"},
+                         {arch: asset["sha256"] for arch, asset in desktop["release"]["assets"].items()})
+        self.assertEqual(10, len(desktop["files"]))
+        body = self.original_files[selected.skill_path("agent-desktop")]
+        self.assertEqual(9849, len(body))
+        self.assertEqual("abd913be10552c028e461e0a45c20e3734a7a1e5251fc2f9ef6fd63fdd606a6e", hashlib.sha256(body).hexdigest())
+        # 即使有人同步更新库存，缺 helper 或丢执行位都不能形成可构建的依赖闭包。
+        helper = desktop["files"].pop("runtime/macos/arm64/agent-desktop-macos-helper")
+        with self.assertRaisesRegex(ValueError, "both executable pairs"):
+            selected.validate_lock(lock)
+        desktop["files"]["runtime/macos/arm64/agent-desktop-macos-helper"] = {**helper, "mode": 0o644}
+        with self.assertRaisesRegex(ValueError, "both executable pairs"):
+            selected.validate_lock(lock)
 
     def test_missing_extra_tampered_symlink_hardlink_and_special_files_fail_closed(self):
         selected.snapshot(self.fixture)
@@ -149,24 +171,29 @@ class SelectedSkillsTest(unittest.TestCase):
             json.loads('{"schema_version":1,"schema_version":1}', object_pairs_hook=selected.unique_object)
 
     def test_chunked_read_preserves_utf8_full_coverage_and_rejects_bad_ranges(self):
-        _, files = selected.snapshot(self.fixture)
-        body = files[selected.skill_path("design-taste-frontend")]
+        path = selected.skill_path("design-taste-frontend")
+        body = (self.fixture / path).read_bytes()
+        digest = hashlib.sha256(body).hexdigest()
         offset, chunks = 0, []
-        while True:
-            page = selected.read_chunk(files, "design-taste-frontend", offset, 4)
-            self.assertEqual(offset, page["offset"])
-            chunks.append(page["content"].encode())
-            self.assertGreater(page["next_offset"], offset)
-            offset = page["next_offset"]
-            if page["eof"]:
-                break
+        # 每页固定为一次锁读取和一次正文读取，跨 UTF-8 边界重组仍与原字节相同。
+        with mock.patch.object(selected, "read_regular", wraps=selected.read_regular) as reads:
+            while True:
+                page = selected.read_selected_chunk(self.fixture, "design-taste-frontend", offset, 4)
+                self.assertEqual(offset, page["offset"])
+                self.assertEqual(digest, page["sha256"])
+                chunks.append(page["content"].encode())
+                self.assertGreater(page["next_offset"], offset)
+                offset = page["next_offset"]
+                if page["eof"]:
+                    break
+            self.assertEqual([selected.LOCK, path] * len(chunks), [call.args[1] for call in reads.call_args_list])
         self.assertEqual(body, b"".join(chunks))
-        page = selected.read_chunk(files, "design-taste-frontend", len(body), 4)
+        page = selected.read_selected_chunk(self.fixture, "design-taste-frontend", len(body), 4)
         self.assertTrue(page["eof"])
         self.assertEqual("", page["content"])
         for offset, length in ((-1, 12000), (len(body) + 1, 12000), (0, 0), (0, 16001), (body.index("中".encode()) + 1, 4)):
             with self.subTest(offset=offset, length=length), self.assertRaises(ValueError):
-                selected.read_chunk(files, "design-taste-frontend", offset, length)
+                selected.read_selected_chunk(self.fixture, "design-taste-frontend", offset, length)
 
     def test_playwright_archives_require_exact_graph_integrity_and_full_inventory(self):
         expected_item = copy.deepcopy(self.original_lock["dependencies"]["playwright-cli"])

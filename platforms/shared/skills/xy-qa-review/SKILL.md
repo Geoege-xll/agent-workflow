@@ -63,10 +63,7 @@ qa_review_policy:
   findings_or_fail_do_not_trigger_fallback: true
 ```
 
-Use the current host's native review when its exposed capability, fixed scope, effective read-only
-permissions and non-recursive execution are established; read only that host's existing
-`platforms/<host>/references/pm-integration.md` when invocation needs resolving. A documented feature
-or installed binary alone does not prove this reviewer can invoke it safely.
+先读当前宿主 `platforms/<host>/references/pm-integration.md` 的「Native review method」。如果交互入口会再派 Agent，继续核对同一 Reviewer 能否使用已有权限的前台入口。能前台运行后，仍须按[核对原生审查目标](references/inputs.md#核对原生审查目标)确认它实际会读到的差异与 PM 冻结的本次差异一致，并保留现行模型、推理力度和只读权限。
 
 Otherwise select at most one host-exposed installed Skill proven code-review capable, read-only,
 request-scoped and non-recursive. Do not scan personal Skill directories. The installed
@@ -80,27 +77,27 @@ unavailability in `review_method`; findings, disagreement and FAIL require PM-ow
 not another method or reviewer. Reject mutated/unbound output and return any workspace change to PM;
 do not silently restore files or accept stale evidence before continuing.
 
-Native review supplies the general code-review evidence. Independently verify its findings and the
-source/evidence needed for project acceptance; supplement uncovered request, standards, integration
-or specialist checks. Do not launch a second complete generic review merely because this Skill is
-active. No findings is not implementation QA PASS. Model/effort and permissions retain their current
-project/host authority; a review method grants no additional tools or actions.
+原生审查成功返回且范围核对通过后，同一 Reviewer 核实发现的源码和证据，只补尚未覆盖的需求、规范、集成或专项验收。原生结果为零条发现时也要核对这些验收项。保留原生结果引用，避免并行或事后重做整轮通用审查。
 
 `review-swarm` is an explicit high-risk escalation, never automatic fallback.
 `review-and-simplify-changes` is allowed only in `review-only` mode for an explicitly requested
 maintainability audit. Both must not enter the ordinary fallback chain. Grill Me, feedback handling and bug
 investigation are not code-review methods.
 
-Read [input contracts](references/inputs.md) and [implementation checks](references/implementation-acceptance.md)
-for Full acceptance or Light acceptance requiring independent QA. They retain mandatory evidence, independent standards coverage, memory
-authority, worktree integration and bounded rework. Missing mandatory evidence blocks PASS.
+### 按验收项取证
 
-When the current scope includes a saved plan or plan-writing rules, read
-[document quality](../xy-plan/references/document-quality.md) and apply its reader check within this same
-review. Inspect only the selected current plan and necessary references; return ambiguous scope, conflicting
-status/baselines or missing authority to PM. Reuse applicable selected-plan validation evidence from
-[plan lifecycle](../xy-workflow/references/plan-lifecycle.md); a format pass is not approval or QA PASS.
-Do not launch reader Agents, add a reader report/gate or require another business confirmation for wording fixes.
+完整读取当前任务包。先用验收项、每个固定变更路径及其受影响调用方、声明的审计面，独立确定要核对的规则和证据。以包内 `rule_ids`、`sections_or_queries` 和既有索引为起点，同时检查实际变更可能触发的漏派规则。按[输入约定](references/inputs.md)中的「Inputs」「当前包与范围」绑定身份与依据，依[实现验收](references/implementation-acceptance.md)中的「Scope, source and verification」「Independent standards coverage」核对固定范围、验证及规则；其余按适用条件展开。
+
+| 当前要判断什么 | 从哪里取证 |
+| --- | --- |
+| 行为、错误处理、构建或回归 | 实际差异、调用方、原 Writer 的命令及完整日志引用；按[工程规范入口](../xy-code-standards/SKILL.md#read-only-review-and-evidence) 定位原规则 |
+| 生产 UI 或设计规范变更 | [UI 验收](references/ui-review.md)中各 Writer 实际路线、运行端与无障碍证据；从[设计规范入口](../xy-ui-design/SKILL.md#生产实现与-qa-只读入口)直接定位适用条款 |
+| 计划本身或计划编写规则属于验收对象 | [读者检查](../xy-plan/references/document-quality.md#在现有自查与唯一-qa-中检查读者理解)与被审修订。仅作功能依据的长期计划按当前批准项、锚点和指纹取证 |
+| 宿主调用或回执存在缺口 | 只定位当前宿主 `pm-integration.md` 中所选方法的调用段，或输入约定中的当前宿主回执段 |
+
+长文件或相近实现依[源码取证示例](references/implementation-acceptance.md#按符号和行段核对源码)先定位符号，再逐个读取命中处、受影响调用方和必要行段。规则按同版原文展开条件、例外及依赖，未命中时核对相邻章节和实际入口。全文合同仍须连续读完。每批结论依[分批取证](references/inputs.md#分批取证)保留证据与待查项。
+
+本轮计划确属审查对象时，复用[计划生命周期](../xy-workflow/references/plan-lifecycle.md)中适用的已有校验，向 PM 交回范围歧义、状态冲突或缺失依据。若声称已验收，核对原始批准、实际行为和验收证据。目录收录或格式校验均不能产生批准或 PASS，沿用同一 Reviewer 和既有业务确认。
 
 <!-- workflow-contract: references/inputs.md -->
 <!-- workflow-contract: references/implementation-acceptance.md -->
@@ -153,6 +150,5 @@ identities or old-pack PASS are rejected. The same Reviewer checks rework deltas
 pack. Stop after valid PASS; close natively or retire after PM accepts evidence and the necessary feedback
 window ends. Retirement does not prove physical erasure or lock release.
 
-原生结构化交接在同一份回执的 `review_details` 提供 `findings` 和 `verification`，携带有证据的
-发现、返工角色、验证命令、退出码与完整日志引用。字段合同见[输入约定](references/inputs.md)。
-现有文本型交接继续适用。复用同一次回执校验，无须再发一次调用收集这些字段。
+同一次授权调用支持结构化输出时，按[原生提取](references/inputs.md#原生结构化交接)取得最终回执。
+普通后台 Reviewer 无此输出时，只通过原交接提交自己已完成的判定和证据，由 PM 按[固定回执构造](references/inputs.md#固定回执构造)组装。已有完整 schema 2 回执可直接校验。未完成的批次继续待验。

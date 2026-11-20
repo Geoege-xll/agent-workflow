@@ -1,5 +1,84 @@
 {
   "dependencies": {
+    "agent-desktop": {
+      "commit": "b0b7277bea09b770ef9d1fb45aad667bc432cd57",
+      "files": {
+        "LICENSE": {
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "size": 11358
+        },
+        "runtime/macos/arm64/agent-desktop": {
+          "mode": 493,
+          "sha256": "9a6b0829736a486da532a9d1ceed1e07192fa8967326c7b27125646adab6baf7",
+          "size": 4039520
+        },
+        "runtime/macos/arm64/agent-desktop-macos-helper": {
+          "mode": 493,
+          "sha256": "87348178e546974ee0f96b74dd03410f61f4972cae5eb5fbd36bf04d2cb50a42",
+          "size": 529616
+        },
+        "runtime/macos/x86_64/agent-desktop": {
+          "mode": 493,
+          "sha256": "f762f8ed6a14b114f8a50b902205d3ecb6bcf554d8031f67abd7938af88663cb",
+          "size": 4736308
+        },
+        "runtime/macos/x86_64/agent-desktop-macos-helper": {
+          "mode": 493,
+          "sha256": "95eb80c7a18119319e3345a0ab6587c508e5999985cb7f1bdf1fb887553ea072",
+          "size": 571156
+        },
+        "skills/agent-desktop/SKILL.md": {
+          "sha256": "abd913be10552c028e461e0a45c20e3734a7a1e5251fc2f9ef6fd63fdd606a6e",
+          "size": 9849
+        },
+        "skills/agent-desktop/references/commands-interaction.md": {
+          "sha256": "5ef8a87be8aed9b0102adb3c332dcd50586c7fb28dc0f1490207ab9321673bf5",
+          "size": 22477
+        },
+        "skills/agent-desktop/references/commands-observation.md": {
+          "sha256": "9c31aec6f51dacfc14ff68dc04533a8dcf3ed5edb3f935d90e453f471894b936",
+          "size": 12069
+        },
+        "skills/agent-desktop/references/commands-system.md": {
+          "sha256": "673c931a285b360c1deb669983e87ca8571ee8520f48c81f00d49f711e0e95ac",
+          "size": 24779
+        },
+        "skills/agent-desktop/references/workflows.md": {
+          "sha256": "9c5a93361f992d73eff50e9ec99bb895424ababd57d3f6742ff71e73734c1af1",
+          "size": 9078
+        }
+      },
+      "license": "LICENSE",
+      "release": {
+        "assets": {
+          "arm64": {
+            "compressed_bytes": 2321358,
+            "sha256": "9b7b7cfc74892eab46c2c85d6cb7dc4863bf8dab0a222cfcfb8ae4604c69c86c",
+            "url": "https://github.com/vercel-labs/agent-desktop/releases/download/v1.3.1/agent-desktop-v1.3.1-aarch64-apple-darwin.tar.gz"
+          },
+          "x86_64": {
+            "compressed_bytes": 2453626,
+            "sha256": "469da10cfb68928c58caff88b92b30526e0ca895ac06bc86b7f533b1d9b309b3",
+            "url": "https://github.com/vercel-labs/agent-desktop/releases/download/v1.3.1/agent-desktop-v1.3.1-x86_64-apple-darwin.tar.gz"
+          }
+        },
+        "source_archive": {
+          "compressed_bytes": 43044706,
+          "sha256": "e5b919bcf1a2a0be05b90cad96592ea8d3699426a149a1beb60dae48b741a7a1",
+          "url": "https://codeload.github.com/vercel-labs/agent-desktop/tar.gz/b0b7277bea09b770ef9d1fb45aad667bc432cd57"
+        },
+        "tag": "v1.3.1",
+        "url": "https://github.com/vercel-labs/agent-desktop/releases/tag/v1.3.1"
+      },
+      "repository": "https://github.com/vercel-labs/agent-desktop",
+      "roots": [
+        "skills/agent-desktop",
+        "runtime/macos"
+      ],
+      "skills": {
+        "agent-desktop": "skills/agent-desktop/SKILL.md"
+      }
+    },
     "grill-me": {
       "commit": "5863806dd4e15c63174bee4e7515a4256792ecfa",
       "files": {

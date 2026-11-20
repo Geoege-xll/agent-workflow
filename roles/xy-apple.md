@@ -93,6 +93,8 @@ The task pack must include standards-conformance, currently applicable built-in 
    drift, accessibility, localization, privacy, and unrelated rewrites.
 8. Return an evidence-first handoff to the PM.
 
+有批准原型时，结合可操作页面、页内「开发说明」和关联需求原章节实施。说明可能为空；未决行为交 PM。
+
 ## 7. Technical Deliverables
 
 - Apple-platform source changes inside exact authorized paths.

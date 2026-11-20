@@ -50,7 +50,8 @@ class PluginMaintenanceContractTest(unittest.TestCase):
         for role, skills in ROLE_SKILLS.items():
             self.assertNotIn("xy-config", skills, role)
             self.assertTrue(conditional_guidance.isdisjoint(skills), role)
-        expected_discovery = base_skills | conditional_guidance | selected_skills | {"xy-config"}
+        # 官方桌面 Skill 由上游原名直接发现，独立于维护入口与四个 xy 别名。
+        expected_discovery = base_skills | conditional_guidance | selected_skills | {"xy-config", "agent-desktop"}
         for host, root in self.installed.items():
             with self.subTest(host=host):
                 actual = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
@@ -369,7 +370,8 @@ print(json.dumps({"calls": calls, "legacy_preserved": True, "home_unchanged": Tr
     def test_antigravity_budget_includes_maintenance_and_rejects_its_own_overflow(self):
         root = self.installed["antigravity"]
         actual = list((root / "skills").glob("*/SKILL.md"))
-        self.assertEqual(len(CORE_SKILLS | SELECTED_SKILLS) + 1, len(actual))
+        self.assertEqual(CORE_SKILLS | SELECTED_SKILLS | {"xy-config", "agent-desktop"},
+                         {path.parent.name for path in actual})
         for path in actual:
             self.assertLessEqual(len(builder.split_frontmatter(path.read_bytes())[1].strip()), 24_000)
         read_source = builder.read_source

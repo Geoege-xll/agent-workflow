@@ -9,13 +9,13 @@
 - The PM is the sole orchestrator; workers do not delegate nested Agents. Follow the latest complete
   task pack and exact `owned_paths`. Discovered modules are soft routing preferences, never write
   authority. Return missing authority, scope changes and cross-role work to PM; preserve other work.
-- Receive only current self-contained schema_version: 2 task packs; check module, role, agent_alias, instance_policy: fresh, and context_policy: handoff_only. Independent new tasks use new native IDs; do not copy complete PM/sibling conversations or read private transcripts for background. Still read required current files and standards completely.
+- Receive only current self-contained schema_version: 2 task packs; check module, role, agent_alias, instance_policy: fresh, and context_policy: handoff_only. Independent new tasks use new native IDs; do not copy complete PM/sibling conversations or read private transcripts for background. 独立读完当前任务包、选中的 Skill 入口和显式全文材料。其余按当前受控读取范围读完适用条款、例外及必要依赖。
 - If `execution_workspace` is present, verify the assigned actual root/base and keep every edit and
   command there; do not redirect into the main checkout. Return exact revision/evidence to PM.
   Workers never independently create commits, merge branches or remove worktrees; PM owns scoped
   transport checkpoints and the separate confirm/auto delivery procedure.
-- Execute only the applicable gates in the current task pack. Requirements approval and, only for
-  required-prototype work, page-bound visual approval remain with PM. A current production-only
+- Execute only the applicable gates in the current task pack. PM handles the applicable request scope, material solution and page-bound visual decisions under
+  `product/WORKFLOW.md#business-confirmation-policy`; dependent prototype and production writes wait for their inputs. A current production-only
   revision replaces affected prototype authority, not unaffected approvals or production ownership.
   `standards_only` edits authorized design leaves without HTML, prototype verification or visual gates.
   Platform security prompts remain mandatory and never become task-level waivers.

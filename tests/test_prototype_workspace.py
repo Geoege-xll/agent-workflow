@@ -16,6 +16,7 @@ import uuid
 from html.parser import HTMLParser
 from pathlib import Path
 from unittest import mock
+from urllib.parse import quote
 
 from lib.documents import validate_prototype_workspace as validator_module
 
@@ -153,8 +154,8 @@ def bind_requirement_documents(project: Path, *, source_body: str | None = None,
                                adapter: str = "project.yaml") -> tuple[Path, Path]:
     """保留带旧版本记录的历史 HTML 夹具；不依赖已退役的生成器。
 
-    导航只承诺实际文件/路径/竞态安全，不要求历史页记录或摘要与修订后原稿一致，
-    也不把 helper 代码变动当作重验所有历史原型的理由。
+    整页导航只承诺实际文件/路径/竞态安全；若显式链接 Markdown 片段，再核对其锚点。
+    历史页记录或摘要可早于修订后的原稿，helper 代码变动也不会触发历史原型重验。
     """
     config = project / adapter
     config.parent.mkdir(parents=True, exist_ok=True)
@@ -362,10 +363,8 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
         self.assertIn('href="prototype.css"', page)
         self.assertNotIn('href="index.html"', page)
         self.assertEqual(1, page.count('class="prototype-contract"'))
-        self.assertEqual(
-            list(MANDATORY_SECTIONS),
-            re.findall(r'data-contract-section="([^"]+)"', page),
-        )
+        self.assertIn('>开发说明</summary>', page)
+        self.assertNotIn("data-contract-section=", page)
         # 新源页不携带通用工具；prepare仅在项目外快照副本注入版本绑定桥。
         self.assertNotIn('src="page-shell.js"', page)
         self.assertNotIn('href="feedback.css"', page)
@@ -504,10 +503,6 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                     # 校验器只做结构静态验证；同步夹具描述也不能替代真实任务的语义审查。
                     self.replace_once(self.page(project), '· 响应式内容区 ·',
                                       '· 固定预览：1200 × 800 CSS px ·')
-                    self.replace_once(self.page(project),
-                                      'Display: responsive. 内容按可用宽度自然展开，使用 CSS px，无固定窗口。',
-                                      'Display: fixed. 固定预览 1200 × 800 CSS px，按原尺寸显示。')
-                    self.replace_once(self.page(project), '初始显示响应式产品插槽', '初始显示固定尺寸产品插槽')
                 before = tree_snapshot(project)
                 result = validator_module.validate_workspace(project.resolve(), PROTOTYPE_RELATIVE.as_posix(),
                     standalone=True, pages=["settings.html"], adapter="project.yaml")
@@ -762,6 +757,64 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             result = self.run_validator(project)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def test_selected_page_and_plan_check_each_direction_of_section_navigation(self) -> None:
+        """对同一对文件运行两个正式入口，分别定位回到需求章节和跳到原型状态的断链。"""
+        with tempfile.TemporaryDirectory(prefix="prototype-section-navigation-") as temporary:
+            project = write_valid_project(Path(temporary)).resolve()
+            source, _ = bind_requirement_documents(project)
+            page = self.page(project)
+            original_page = page.read_text(encoding="utf-8")
+            # 原稿中该章节的链接实际指向设置页按钮。同行主题可保留不依赖标题的稳定锚点；
+            # 故意让锚点含百分号，验证 href 解码一次后仍精确匹配原文和大小写。
+            section = "方案与原型关联"
+            stable = "REQ%2F001"
+            plan = source.read_text(encoding="utf-8").replace(
+                f"## {section}\n", f'## {section}\n<a id="{stable}"></a>\n'
+            ) + '\n~~~md\n## 仅作示例\n<a id="Example"></a>\n~~~\n'
+            source.write_text(plan, encoding="utf-8")
+            source.with_name("无关.md").write_bytes(b"\xff")
+
+            def check(script, *args):
+                return subprocess.run([sys.executable, str(script), *args], cwd=project,
+                                      capture_output=True, text=True, timeout=10)
+
+            check_page = (VALIDATOR, str(project), PROTOTYPE_RELATIVE.as_posix(),
+                          "--adapter", "project.yaml", "--standalone", "--page", page.name)
+            check_plan = (PACK / "lib/validate_project_docs.py", "--root", str(project),
+                          "--plan", str(source))
+
+            def set_return_link(fragment):
+                # 仅替换导航 href，声明来源仍使用规范的项目相对文件路径。
+                page.write_text(original_page.replace('../../plans/settings.md"',
+                                f'../../plans/%73ettings.md#{fragment}"'), encoding="utf-8")
+
+            for fragment in (quote(section), quote(stable)):
+                with self.subTest(valid=fragment):
+                    set_return_link(fragment)
+                    result = check(*check_page)
+                    self.assertEqual(0, result.returncode, result.stderr)
+            result = check(*check_plan)
+            self.assertEqual(0, result.returncode, result.stderr)
+
+            for fragment in (quote("仅作示例"), "Example", "removed", stable):
+                with self.subTest(invalid=fragment):
+                    set_return_link(fragment)
+                    result = check(*check_page)
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn(".md#" + fragment, result.stderr)
+                    self.assertIn("找不到", result.stderr)
+            # HTML 的坏回链不影响定向主题检查。反过来，删掉正向引用的状态锚点时，
+            # 只应由主题入口报错；孤立交付页没有扫描整份原稿或检查每项回链的职责。
+            result = check(*check_plan)
+            self.assertEqual(0, result.returncode, result.stderr)
+            set_return_link(quote(stable))
+            self.replace_once(source, "settings.html#open-settings-dialog", "settings.html#removed-state")
+            result = check(*check_plan)
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertIn("HTML id 或 a[name] #removed-state", result.stderr)
+            result = check(*check_page)
+            self.assertEqual(0, result.returncode, result.stderr)
+
     def test_requirement_navigation_requires_independent_safe_browsing_context(self) -> None:
         """无 page-shell 的合法页也须保护工作区上下文，两个文档锚点逐一校验。"""
         with tempfile.TemporaryDirectory(prefix="prototype-requirement-context-") as temporary:
@@ -895,18 +948,24 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                 mutation(project)
                 self.assert_rejected_without_mutation(project, case)
 
-    def test_each_mandatory_contract_section_is_required(self) -> None:
-        for section in MANDATORY_SECTIONS:
-            with self.subTest(section=section), tempfile.TemporaryDirectory(
-                prefix="prototype-section-"
-            ) as temporary:
+    def test_developer_notes_can_be_empty_or_contain_a_single_confirmed_behavior(self) -> None:
+        for note in ("", "<p>提交超时保留输入；确认上次提交失败后才允许重试。</p>",
+                     "<details><summary>提交超时</summary><p>保留输入，先核对原提交结果。</p></details>"):
+            with self.subTest(note=note), tempfile.TemporaryDirectory() as temporary:
                 project = write_valid_project(Path(temporary))
-                self.replace_once(self.page(project), SECTION_HTML[section], "")
-                self.assert_rejected_without_mutation(
-                    project, f"missing {section} section"
-                )
+                disclosure = '<details class="prototype-contract"><summary>开发说明</summary>' + note + '</details>'
+                self.replace_once(self.page(project), CONTRACT_HTML, disclosure)
+                result = self.run_validator(project)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
-    def test_duplicate_or_unknown_contract_sections_are_rejected(self) -> None:
+    def test_freeform_placeholder_is_not_confirmed_developer_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = write_valid_project(Path(temporary))
+            disclosure = '<details class="prototype-contract"><summary>开发说明</summary><p>TBD</p></details>'
+            self.replace_once(self.page(project), CONTRACT_HTML, disclosure)
+            self.assert_rejected_without_mutation(project, "placeholder developer guidance")
+
+    def test_section_names_are_flexible_but_explicit_sections_remain_unique(self) -> None:
         for section in MANDATORY_SECTIONS:
             with self.subTest(section=section), tempfile.TemporaryDirectory(
                 prefix="prototype-duplicate-section-"
@@ -941,7 +1000,8 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             for required in MANDATORY_SECTIONS:
                 self.assertEqual(1, names.count(required))
             self.assertEqual(1, names.count("unknown"))
-            self.assert_rejected_without_mutation(project, "unknown contract section")
+            result = self.run_validator(project)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_empty_or_placeholder_only_contract_section_is_rejected(self) -> None:
         replacements = {
@@ -979,16 +1039,6 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
             self.assertNotIn('id="open-settings-dialog"', body)
             self.assertNotIn('data-contract-for="open-settings-dialog"', body)
 
-        def button_without_contract(project: Path) -> None:
-            self.replace_once(
-                self.page(project),
-                ' data-contract-for="open-settings-dialog"',
-                "",
-            )
-            body = self.page(project).read_text(encoding="utf-8")
-            self.assertIn('id="open-settings-dialog"', body)
-            self.assertNotIn('data-contract-for="open-settings-dialog"', body)
-
         def missing_contract_target(project: Path) -> None:
             self.replace_once(
                 self.page(project),
@@ -1022,41 +1072,16 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                 1, body.count('data-contract-for="open-settings-dialog"')
             )
 
-        def mapping_outside_interactions(project: Path) -> None:
+        def mapping_outside_notes(project: Path) -> None:
             self.replace_once(self.page(project), OPEN_MAPPING_HTML, "")
-            outside_mapping = f"<table><tbody>{OPEN_MAPPING_HTML}</tbody></table>"
-            self.replace_once(
-                self.page(project),
-                SECTION_HTML["exceptions"],
-                SECTION_HTML["exceptions"].replace(
-                    "</section>", outside_mapping + "</section>"
-                ),
-            )
-            body = self.page(project).read_text(encoding="utf-8")
-            self.assertEqual(1, body.count(OPEN_MAPPING_HTML))
-            self.assertEqual(
-                1, body.count('data-contract-for="open-settings-dialog"')
-            )
-            interactions_start = body.index(
-                'data-contract-section="interactions"'
-            )
-            interactions_end = body.index("</section>", interactions_start)
-            mapping_position = body.index(
-                'data-contract-for="open-settings-dialog"'
-            )
-            self.assertGreater(mapping_position, interactions_end)
-            exceptions_start = body.index('data-contract-section="exceptions"')
-            exceptions_end = body.index("</section>", exceptions_start)
-            self.assertGreater(mapping_position, exceptions_start)
-            self.assertLess(mapping_position, exceptions_end)
+            self.replace_once(self.page(project), "</main>", '<p data-contract-for="open-settings-dialog">备注</p></main>')
 
         cases = (
             ("button without stable id", button_without_id),
-            ("button without matching contract", button_without_contract),
             ("contract target does not exist", missing_contract_target),
             ("control with duplicate contract mappings", duplicate_contract_mapping),
             ("duplicate control id", duplicate_control_id),
-            ("mapping outside interactions section", mapping_outside_interactions),
+            ("mapping outside developer notes", mapping_outside_notes),
         )
         for case, mutation in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory(
@@ -1066,7 +1091,7 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                 mutation(project)
                 self.assert_rejected_without_mutation(project, case)
 
-    def test_button_like_inputs_require_stable_id_and_exactly_one_mapping(self) -> None:
+    def test_button_like_inputs_require_stable_id_and_allow_omitted_mapping(self) -> None:
         original_button = (
             '<button id="open-settings-dialog" type="button">'
             "Open settings dialog</button>"
@@ -1101,9 +1126,11 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                     self.assertNotIn(
                         'data-contract-for="open-settings-dialog"', body
                     )
-                    self.assert_rejected_without_mutation(
-                        project, f"input type={input_type} with {condition}"
-                    )
+                    result = self.run_validator(project)
+                    if condition == "missing id":
+                        self.assertNotEqual(0, result.returncode)
+                    else:
+                        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_external_script_style_and_cdn_dependencies_are_rejected(self) -> None:
         def external_script(project: Path) -> None:

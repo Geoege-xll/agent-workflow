@@ -1,6 +1,6 @@
 ---
 name: xy-apple-guidance
-description: 按任务需要选择并只读消费本机选定Xcode内Apple官方SwiftUI Specialist与What’s New in SwiftUI资料，用于相关SwiftUI实现或审查。
+description: "Select and read Apple's SwiftUI Specialist and What's New in SwiftUI guidance from the locally selected Xcode when needed for SwiftUI implementation or review."
 ---
 
 <!-- agent-workflow-pack:managed-skill -->

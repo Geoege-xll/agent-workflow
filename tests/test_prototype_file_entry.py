@@ -38,11 +38,29 @@ class PrototypeFileEntryTest(unittest.TestCase):
             with self.assertRaises(entry.PreparationError): entry.entry_present(bad.encode())
 
     def test_presentation_uses_declared_frame_without_guessing(self):
-        self.assertEqual({"platform": "", "display": "", "viewport": None, "plan_source": ""}, entry.presentation(b"<body><div></div></body>"))
+        self.assertEqual({"platform": "", "display": "", "viewport": None, "plan_source": "", "groups": None}, entry.presentation(b"<body><div></div></body>"))
         declared = b'<body data-prototype-platform="ios" data-prototype-display="fixed"><div class="prototype-frame" style="--prototype-frame-width:390px;--prototype-frame-height:844px"></div></body>'
         self.assertEqual({"width": 390, "height": 844}, entry.presentation(declared)["viewport"])
         for invalid in (b"-1px", b"99999px", b"100%", b"var(--width)"):
             self.assertIsNone(entry.presentation(declared.replace(b"390px", invalid))["viewport"])
+
+    def test_delivery_groups_preserve_old_registration_and_explicit_hierarchy(self):
+        def register(group=None):
+            entry.prepare_delivery(self.project, "project.yaml", [self.page], data_dir=self.data, group=group)
+            value = entry.require_prepared(self.project, "project.yaml", [self.page], data_dir=self.data)
+            return [item["label"] for item in value["pages"][0]["groups"]]
+
+        # 旧稿一轮显式归组即可。随后单页重新登记和更新工具均不能丢掉已确认的层级。
+        self.assertEqual(["用户端", "订单"], register("用户端/订单"))
+        first = (self.project / self.page).read_bytes()
+        self.assertEqual(["用户端", "订单"], register())
+        self.assertEqual(first, (self.project / self.page).read_bytes())
+        self.assertEqual([], register(""))
+        file = self.project / self.page
+        file.write_bytes(first.replace(b"<body", '<body data-prototype-group="门店/订单"'.encode(), 1))
+        self.assertEqual(["门店", "订单"], register())
+        with self.assertRaisesRegex(ValueError, "冲突"):
+            register("用户端/订单")
 
     def test_prepare_idempotence_trusted_mount_catalog_binding_and_fingerprint(self):
         self.prepare()
@@ -290,7 +308,7 @@ class PrototypeFileEntryTest(unittest.TestCase):
         try:
             # 只改变file目录的纯展示投影，同tool、同原稿字节下不得改变旧live5的
             # canonical导航/修订；HTTP startup和feedback继续使用原五字段页面合同。
-            with mock.patch.object(entry, "presentation", return_value={"platform": "ios", "display": "fixed",
+            with mock.patch.object(entry, "presentation", return_value={"platform": "ios", "display": "fixed", "groups": None,
                     "viewport": {"width": 390, "height": 844}, "plan_source": ""}):
                 self.prepare()
             after, _, new_files, new_navigation = capture_live(self.project, "project.yaml", "docs/plans/settings.md", "display-projection", [self.page], tool=tool)

@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 from lib import task_graph_records as records
-from lib.task_graph_cli import _execute
+from lib.task_graph_cli import _execute, export_task_pack
 from lib.task_graph_init import initialize
 from tests.test_scheduler_boundaries import v2_graph
 
@@ -107,6 +107,12 @@ class TaskGraphInitTest(unittest.TestCase):
         for document in task["controlled_document_access"]["documents"]:
             self.assertEqual(records.file_digest(self.root, document["path"]), document["content_fingerprint"])
             self.assertEqual(["src/api.py"], document["applies_to"])
+        index, builtin, project = task["controlled_document_access"]["documents"]
+        self.assertEqual(("docs/STANDARDS.md", "full", []), (index["path"], index["mode"], index["rule_ids"]))
+        for document, rule_id in ((builtin, "eng-common-005"), (project, "eng-mini-001")):
+            self.assertEqual("targeted", document["mode"])
+            self.assertEqual([rule_id], document["rule_ids"])
+            self.assertEqual([rule_id], document["sections_or_queries"])
         # 使用独立 CLI 查询证明生成物被原入口消费；缺需求批准时不会 READY。
         for command, expected in (("validate", {"status": "valid"}), ("ready", {"ready": []})):
             checked = self.invoke(command, "--input", self.target)
@@ -114,6 +120,179 @@ class TaskGraphInitTest(unittest.TestCase):
             self.assertEqual(expected, json.loads(checked.stdout))
         checked = self.invoke("qa-ready", "--input", self.target)
         self.assertFalse(json.loads(checked.stdout)["qa_ready"])
+
+    def test_explicit_read_scopes_survive_real_task_pack_export(self):
+        source = decisions()
+        source["approved_gates"] = ["requirements_approved"]
+        reason = "接口改动涉及多个互相约束的项目条款，需通读项目叶核对其例外。"
+        heading = "Configuration, errors and maintenance"
+        source["tasks"][0]["selected_standards"] = [
+            {"path": BUILTIN_ENGINEERING, "mode": "targeted", "reason": "核对工程条款及其适用条件。",
+             "sections_or_queries": [heading, "eng-common-005"]},
+            {"path": MINI, "mode": "full", "reason": reason},
+        ]
+        # 走真实 init → task --output，验证 PM 的全文理由、附加定位、SHA 与写范围
+        # 均进入独立 Worker 包；有针对性的查询也不能把已选规则替换成另一段正文。
+        initialized = self.init(source)
+        self.assertEqual(0, initialized.returncode, initialized.stderr)
+        target = self.root / "worker-pack.json"
+        exported = self.invoke("task", "--input", self.target, "--task-id", "api",
+                               "--output", target, "--expect-sha256", "missing")
+        self.assertEqual(0, exported.returncode, exported.stderr)
+        graph = json.loads(self.target.read_bytes())
+        pack = json.loads(target.read_bytes())
+        access = pack["task"]["controlled_document_access"]
+        self.assertEqual(graph["tasks"][0]["controlled_document_access"], access)
+        _, builtin, project = access["documents"]
+        self.assertEqual(["eng-common-005", heading], builtin["sections_or_queries"])
+        self.assertEqual("targeted", builtin["mode"])
+        self.assertEqual(("full", reason, []), (project["mode"], project["reason"], project["sections_or_queries"]))
+        self.assertEqual(["eng-mini-001"], project["rule_ids"])
+        self.assertEqual(records.file_digest(self.root, MINI), project["content_fingerprint"])
+        self.assertEqual(["src/api.py"], project["applies_to"])
+
+    def test_solution_approval_is_reused_only_for_current_request_and_content(self):
+        request = decisions()
+        request.update(capacity=4, approved_gates=["requirements_approved"])
+        decision = {"id": "retry-policy", "content": "失败后只允许手动重试。"}
+        writers = request["tasks"]
+        for task_id in ("client", "independent"):
+            writers.append({**copy.deepcopy(writers[0]), "id": task_id, "owned_paths": [f"src/{task_id}.py"]})
+        for writer in writers[:2]:
+            writer["solution_decisions"] = [decision]
+        writers.append({"id": "facts", "role": "xy-backend", "surface_kind": "non_ui", "solution_consultation": True,
+                        "task_type": "read_only", "gates": [], "owned_paths": []})
+        v2_graph(request)
+        writers[-1].pop("qa_scope")  # init 根据既有角色合同生成此字段，精简输入只给决定。
+        initialized = self.init(request)
+        self.assertEqual(0, initialized.returncode, initialized.stderr)
+
+        def patch(change):
+            return self.invoke("update", "--input", self.target, "--expect-sha256",
+                               records.digest(self.target.read_bytes()), "--patch", "-", input=json.dumps(change))
+
+        def ready():
+            result = self.invoke("ready", "--input", self.target)
+            self.assertEqual(0, result.returncode, result.stderr)
+            return set(json.loads(result.stdout)["ready"])
+
+        self.assertEqual({"facts", "independent"}, ready())
+        refused = self.invoke("task", "--input", self.target, "--task-id", "api")
+        self.assertEqual(2, refused.returncode)
+        self.assertIn("solution_approved", refused.stderr)
+        approved = {"request_id": request["request_id"], "task_id": "api", **decision}
+        before = self.target.read_bytes()
+        for choice in ({**approved, "request_id": "另一请求"}, {**approved, "content": "允许自动重试。"}):
+            denied = patch({"approve_solutions": [choice]})
+            self.assertEqual(2, denied.returncode, denied.stderr)
+            self.assertEqual(before, self.target.read_bytes())
+        result = patch({"approve_solutions": [approved]})
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"api", "client", "facts", "independent"}, ready())
+        pack = self.invoke("task", "--input", self.target, "--task-id", "client")
+        self.assertEqual(0, pack.returncode, pack.stderr)
+        data = json.loads(pack.stdout)
+        self.assertEqual([decision], data["task"]["solution_decisions"])
+        gate, = [gate for gate in data["approved_gates"] if gate.startswith("solution_approved:")]
+        self.assertRegex(gate, r"^solution_approved:retry-policy@[a-f0-9]{64}$")
+        revoked = patch({"revoke_solutions": [approved]})
+        self.assertEqual(0, revoked.returncode, revoked.stderr)
+        self.assertEqual({"facts", "independent"}, ready())
+        current = json.loads(self.target.read_bytes())["tasks"][0]
+        self.assertEqual([decision], current["solution_decisions"])
+        self.assertIn(gate, current["gates"])
+        confirmed = patch({"approve_solutions": [approved]})
+        self.assertEqual(0, confirmed.returncode, confirmed.stderr)
+        # 已经交出的执行权限不能靠改批准数组冒称已经实际停止；同门其他 Writer
+        # 也受此保护。协调并据实停回待派后，PM 才能修订或撤回。
+        started = patch({"tasks": {"client": {"set": {"state": "RUNNING"}}}})
+        self.assertEqual(0, started.returncode, started.stderr)
+        before = self.target.read_bytes()
+        self.assertIn("running or delivered", patch({"revoke_solutions": [approved]}).stderr)
+        self.assertEqual(before, self.target.read_bytes())
+        stopped = patch({"tasks": {"client": {"set": {"state": "DECLARED"}}}})
+        self.assertEqual(0, stopped.returncode, stopped.stderr)
+        facts = self.invoke("task", "--input", self.target, "--task-id", "facts")
+        self.assertEqual(0, facts.returncode, facts.stderr)
+        consult = json.loads(facts.stdout)
+        for kind in ("read_only", "evidence"):
+            revised_task = {**consult["task"], "task_type": kind, "owned_paths": ["src/api.py"]}
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "solution_consultation"):
+                _execute("validate", {**consult, "task": revised_task})
+
+        # 同请求同 ID 必须一次更新全部使用者。冲突拒绝后原图仍有效；
+        # 真正换版本只撤下旧方案批准，原需求批准仍然可用。
+        revised = {"set": {"solution_decisions": [{**decision, "content": "失败后自动重试一次。"}]}}
+        before = self.target.read_bytes()
+        conflict = patch({"tasks": {"api": revised}})
+        self.assertEqual(2, conflict.returncode)
+        self.assertIn("conflicting solution_decisions", conflict.stderr)
+        self.assertEqual(before, self.target.read_bytes())
+        changed = patch({"tasks": {"api": revised, "client": revised}})
+        self.assertEqual(0, changed.returncode, changed.stderr)
+        self.assertEqual(["requirements_approved"], json.loads(self.target.read_bytes())["approved_gates"])
+        self.assertEqual({"facts", "independent"}, ready())
+        self.assertEqual(2, patch({"approve_solutions": [approved]}).returncode)
+
+    def test_design_consultation_can_be_claimed_while_the_prototype_waits(self):
+        from lib.dispatch_admission_cli import admission
+
+        source = decisions()
+        source.update(request_scope="implementation", approved_gates=["requirements_approved"])
+        design = "platforms/shared/skills/xy-ui-design/references/foundations-rules.md"
+        (self.root / design).parent.mkdir(parents=True)
+        (self.root / design).write_bytes((PACK / design).read_bytes())
+        source["standards"]["required_design_rule_ids"] = ["des-baseline-001"]
+        source["standards"]["leaves"].append({"path": design, "domain": "design", "rule_ids": ["des-baseline-001"]})
+        prototype = source["tasks"][0]
+        prototype.update(id="prototype", role="xy-uiux", surface_kind="design_ui",
+                         owned_paths=["docs/standards/prototype/checkout.html"], selected_standards=[design],
+                         audit_surfaces=["ui", "accessibility"], solution_decisions=[
+                             {"id": "checkout", "content": "提交前显示订单确认步骤。"}])
+        source["tasks"].append({**prototype, "id": "consult", "task_type": "read_only", "solution_consultation": True,
+                                "goal": "只读核实现有订单确认表现", "owned_paths": [], "gates": []})
+        source["tasks"][-1].pop("solution_decisions")
+        initialized = self.init(source)
+        self.assertEqual(0, initialized.returncode, initialized.stderr)
+        result = self.invoke("ready", "--input", self.target)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(["consult"], json.loads(result.stdout)["ready"])
+        handoff = self.invoke("task", "--input", self.target, "--task-id", "consult")
+        self.assertEqual(0, handoff.returncode, handoff.stderr)
+        pack = json.loads(handoff.stdout)
+        self.assertEqual([design], [leaf["path"] for leaf in pack["standards_contract"]["leaves"]])
+        descriptor = {"path": str(self.target), "sha256": records.digest(self.target.read_bytes()),
+                      "execution_roots": {task["id"]: str(self.root) for task in source["tasks"]}}
+        manifest = {"schema_version": 1, "project_root": str(self.root), "records": [descriptor],
+                    "capacity": {"configured_subagents": 2, "configured_writers": 1, "host_available_subagents": 2}}
+        target = {"record": str(self.target), "request_id": source["request_id"], "task_id": "consult"}
+        self.assertEqual("claimed", admission("claim", manifest, target)["status"])
+        claimed = json.loads(self.target.read_bytes())
+        self.assertEqual("RUNNING", claimed["tasks"][1]["state"])
+        self.assertEqual([], claimed["active_paths"])
+
+        # 只读咨询没有原型或生产写范围，不能转成 Light 设计；原包即使合法，
+        # 改用只讨论/仅原型范围时也必须按原权限拒绝派发。
+        for fields in ({"owned_paths": ["src/checkout.py"]}, {"design_mode": "prototype"},
+                       {"surface_kind": "production_ui"}, {"workflow_level": "Light"}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                _execute("validate", {**pack, "task": {**pack["task"], **fields}}, root=self.root)
+        for scope in ("discussion_only", "prototype_only"):
+            with self.subTest(scope=scope), self.assertRaisesRegex(ValueError, scope):
+                _execute("validate", {**pack, "request_scope": scope}, root=self.root)
+
+    def test_invalid_read_decisions_cannot_hide_or_redefine_selected_rules(self):
+        selection = {"path": MINI, "mode": "targeted", "reason": "按已选接口条款核对。"}
+        for entry in (dict(selection, mode="skip"), dict(selection, mode="full", reason=" "),
+                      dict(selection, sections_or_queries=[None]), dict(selection, rule_ids=[]),
+                      dict(selection, path="docs/standards/unselected.md")):
+            source = decisions()
+            source["tasks"][0]["selected_standards"] = [BUILTIN_ENGINEERING, entry]
+            with self.subTest(entry=entry):
+                self.assert_rejected(source)
+        source = decisions()
+        source["tasks"][0]["selected_standards"].append(selection)
+        self.assert_rejected(source, contains="duplicate paths")
 
     def test_builtin_only_init_has_no_project_general_or_phantom_index(self):
         source = decisions()
@@ -256,9 +435,52 @@ class TaskGraphInitTest(unittest.TestCase):
         graph = json.loads(self.target.read_text(encoding="utf-8"))
         self.assertEqual("forbidden_without_exception", graph["standards_contract"]["protected_paths"][0]["direct_edit"])
         self.assertEqual([], _execute("ready", graph)["ready"])
+        # 用户同意本任务的技术方案，不代表同意修改受保护的上游文件。就绪和正式
+        # Writer 导出都必须继续等待原来的例外，且批准只针对具体决定的当前正文。
+        choice = {"id": "repair", "content": "采用兼容现有协议的修复。"}
+        graph = records.update(graph, {"tasks": {"api": {"set": {"solution_decisions": [choice]}}}},
+                               self.root, _execute)
+        graph = records.update(graph, {"approve_solutions": [
+            {"request_id": source["request_id"], "task_id": "api", **choice}]}, self.root, _execute)
+        self.assertEqual([], _execute("ready", graph)["ready"])
+        with self.assertRaisesRegex(ValueError, "exceptional:upstream-fix"):
+            export_task_pack(graph, "api")
         self.target.unlink()
         source["standards"]["protected_paths"][0]["direct_edit"] = False
         self.assert_rejected(source, contains="forbidden_without_exception")
+
+    def test_business_exception_is_bound_to_its_gate_on_init_export_and_qa(self):
+        from lib.task_graph_cli import _execute, export_task_pack, _verify_solution_scope
+        from tests.test_scheduler_boundaries import v2_task
+        source = decisions()
+        task = source["tasks"][0]
+        gate = "exceptional:rollback-window"
+        task["gates"].append(gate)
+        source["approved_gates"] = ["requirements_approved", gate]
+        self.assert_rejected(source, contains="additional_business_confirmation")
+        record = {"name": "rollback-window", "reason": "用户明确要求单独选择回滚窗口",
+                  "decision_scope": "数据回滚保留时间", "options": ["两天", "一周"],
+                  "evidence": ["user:request/retain-week"], "resume_condition": "明确选择保留一周"}
+        for field, value in (("name", "another"), ("reason", " "), ("decision_scope", []),
+                             ("options", []), ("evidence", [None]), ("resume_condition", "TBD")):
+            task["additional_business_confirmation"] = {**record, field: value}
+            self.assert_rejected(source, contains="additional_business_confirmation")
+        task["additional_business_confirmation"] = record
+        out = self.init(source)
+        self.assertEqual(0, out.returncode, out.stderr)
+        stored = json.loads(self.target.read_bytes())
+        self.assertEqual(record, export_task_pack(stored, task["id"])["task"]["additional_business_confirmation"])
+        stored["tasks"][0].update(state="BUILD_VERIFIED", blocks=["qa"])
+        stored["tasks"].append(v2_task({"id": "qa", "request_id": source["request_id"], "task_type": "qa",
+                                        "state": "DECLARED", "depends_on": [task["id"]], "blocks": [],
+                                        "gates": [], "owned_paths": [], "semantic_locks": []}))
+        qa = export_task_pack(stored, "qa", root=self.root)
+        self.assertEqual(record, qa["reviewed_business_confirmations"][0]["additional_business_confirmation"])
+        self.assertEqual({"status": "valid"}, _execute("validate", qa))
+        changed = copy.deepcopy(qa)
+        changed["reviewed_business_confirmations"][0]["additional_business_confirmation"]["options"] = ["错误内容"]
+        with self.assertRaisesRegex(ValueError, "business confirmations differ"):
+            _verify_solution_scope(changed, stored)
 
     def test_invalid_values_old_graphs_and_completion_containers_are_rejected(self):
         cases = []
