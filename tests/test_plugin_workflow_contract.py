@@ -137,6 +137,13 @@ class PluginWorkflowContractTest(unittest.TestCase):
                         self.assertIn("已有有效确认则直接复用", route)
                         self.assertIn("到设计交接时再读", route)
                         self.assertIn(b"](references/ui-design.md)", body)
+                        # 沿三端实际交付的 UI 交接入口找到独立原型的领取与绑定规则。
+                        # 首轮禁用直接引用时，误删下游入口或改错派发锚点也应使测试失败。
+                        references = root / "skills" / skill / "references"
+                        ui_design = (references / "ui-design.md").read_text(encoding="utf-8")
+                        self.assertIn("](dispatch.md#continuous-intake-dispatch)", ui_design)
+                        dispatch = (references / "dispatch.md").read_text(encoding="utf-8")
+                        self.assertIn('<a id="continuous-intake-dispatch"></a>', dispatch)
                         self.assertIn("完整读取[需求接单](references/requirements-intake.md)及选中的 `grilling` 原版".encode(), body)
                     else:
                         self.assertNotIn(serial_read, locator)

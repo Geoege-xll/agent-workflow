@@ -105,10 +105,16 @@ class SharedMemoryContractTest(unittest.TestCase):
         self.assertIn("prototype_refs:", normalized)
         self.assertIn("only when concrete page references actually changed", normalized)
         self.assertIn("approval remains in workflow task state", normalized.casefold())
-        # 新模型必须把 PROJECT/feature 当成 QA 后的当前事实，不能退回 STATUS 流水账。
-        self.assertIn("PROJECT and a topic source's accepted-behavior section", normalized)
-        self.assertIn("only after integrated QA PASS for Full", normalized)
-        self.assertIn("Mark accepted deletion as removed in the same topic source", normalized)
+        # 普通目录链接可指向当前主题；只有验收声明和基线替换才需要相应的批准、验收依据。
+        # 同时拦住旧版仅允许链接已验收主题的条款，防止新旧要求并存。
+        closeout = normalized.split("## Closeout after QA PASS", 1)[1]
+        self.assertIn("PROJECT 的 `## 主题目录` 可用普通链接收录有持续查阅价值的当前主题", closeout)
+        self.assertIn("明确标记为已验收的条目须有真实版本、行为及批准和验收证据", closeout)
+        self.assertNotIn("PROJECT and a topic source's accepted-behavior section describe only the baseline", closeout)
+        self.assertNotIn("ordinary links to explicitly accepted plans baselines", closeout)
+        self.assertIn("only after integrated QA PASS for Full, or accepted minimum verification "
+                      "and actually necessary independent audit for Light", closeout)
+        self.assertIn("Mark accepted deletion as removed in the same topic source", closeout)
         projection = body.split("memory_projection:", 1)[1].split("```", 1)[0]
         fields = {
             line.strip().split(":", 1)[0]

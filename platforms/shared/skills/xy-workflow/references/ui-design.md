@@ -1,5 +1,7 @@
 新页面或新流程，先核对本次目标与验收，再从同一需求主题取得影响原型的已确认方案，包括角色、状态转移、权限、失败提示与恢复。只向 `xy-uiux` 交付已就绪的范围；尚有实质分歧时由 PM 先取得对应决定，原型用于呈现和检验已定行为。仅原型同样遵守这一顺序，最后停在设计交付。详见[当前请求的确认](requirements-confirmation.md)。
 
+设计交接时，PM 按[任务池派发](dispatch.md#continuous-intake-dispatch)逐个领取已就绪的独立原型任务，并将每个任务绑定到宿主实际创建的 `xy-uiux` 实例。
+
 - Ordinary low-risk Light UI copy uses production_ui with existing UI-Conformance, zero design delta,
   real resolved/frozen authority and engineering/design standards. Retain minimum verification and
   handoff risk assessment without forcing Full planning/confirmation/QA. Actual design/interaction
