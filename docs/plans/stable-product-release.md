@@ -4,7 +4,7 @@
 - 阶段：`completed`
 - 模块：版本、独立组件发行、三平台 Git 分发与本机安装
 - 任务等级：`Full`
-- 已验收版本：`3.0.7`
+- 已验收版本：`3.0.8`
 
 ## 目标与范围
 
@@ -45,6 +45,12 @@
 ## 当前进展与恢复入口
 
 ### 3.0.8 发布范围与后续实测
+
+`v3.0.8` 已设为 GitHub 最新正式版，标签指向 `c1759ebf00d00687dbec2469cd3172de5eac070c`。首轮 CI 发现仅原型入口提前引用下游派发细则，另有文档目录断言与已批准规则冲突。修复经独立 QA 复核，最终 macOS、Ubuntu 各执行 1,197 项，分别通过 1,192 和 1,191 项，其余分别跳过 5 和 6 项。三端 stable 分支由同一成功候选发布。8 项公开附件重新下载后的 SHA-256 全部匹配，独立组件 `0.1.6` 包与既有发行一致。[正式发行](https://github.com/Geoege-xll/agent-workflow/releases/tag/v3.0.8) · [双平台 CI](https://github.com/Geoege-xll/agent-workflow/actions/runs/44679144597) · [三端分发](https://github.com/Geoege-xll/agent-workflow/actions/runs/44681896028)
+
+本机已启用三个客户端的正式来源。Codex、Claude Code、Antigravity 分别核对 2,386、2,385、2,382 个安装文件，内容及可执行位均与正式包匹配。Codex 新启动的 app-server 发现正式来源的 17 个 Skill，本地候选为 0。Claude 用户级候选已停用，Antigravity 已用正式分支替换候选。
+
+本机 Codex 的两项激活状态另外跟踪。宿主将 SessionStart Hook 标记为 `modified`，需在官方 `/hooks` 审阅。七份用户级原生角色仍逐字节匹配 `3.0.7` 正式模板，引用的旧缓存已被宿主移除；配置组件 `0.1.6` 的只读重绑预览返回 0 项。更新这七份定义须保留旧原件，并验证正式组件实际生成的新文件。
 
 独立 QA 已通过冻结源码、三端候选包及原型目录分组恢复。三个宿主的插件均包含 17 个使用英文描述的 Skill。项目维护者批准先发布并更新本机，下列三项保留为发布后的真实会话验收。
 
