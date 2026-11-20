@@ -1,0 +1,16 @@
+{
+  "xy-workflow-write-ownership": {
+    "PreToolUse": [
+      {
+        "matcher": "^(edit_file|write_file|write_to_file|replace_file_content|multi_replace_file_content|run_command|manage_task|send_command_input)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ./lib/python_runtime.sh -I -B -X utf8 ./hooks/write_guard.py || printf '%s\\n' '{\"decision\":\"deny\",\"reason\":\"xy-workflow 写入守卫未能启动，请核对插件和 Python 运行时。\"}'",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

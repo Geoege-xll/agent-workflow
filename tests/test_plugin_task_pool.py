@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from uuid import uuid4
 
 from tests.test_conversation_scope import project_files
 from tests.test_dispatch_admission import plugin_helper
@@ -58,6 +59,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         # 系统 scratch 也放入这一个夹具，以便断言纯讨论没有建立索引或写入其他文件。
         self.env = isolated_environment(self.workspace)
         self.env["TMPDIR"] = str(self.workspace)
+        self.agy_pm = "antigravity:" + str(uuid4())
 
     def invoke(self, host, helper, *args, value=None, code=0):
         command = plugin_helper(self.plugins[host], self.project, helper)
@@ -71,7 +73,8 @@ class PackagedTaskPoolTest(unittest.TestCase):
 
     def pool(self, host, command, *args, code=0):
         # 新进程只拿到宿主提供的同一 PM 标识，恢复查询不传上轮记录名或任务 ID。
-        return self.invoke(host, POOL, command, "--root", self.project, "--pm-id", host + ":main-session",
+        pm = self.agy_pm if host == "antigravity" else host + ":main-session"
+        return self.invoke(host, POOL, command, "--root", self.project, "--pm-id", pm,
                            *args, code=code)
 
     def register(self, host, request, title, *, light=False, owned=None):
@@ -343,10 +346,259 @@ class PackagedTaskPoolTest(unittest.TestCase):
         for path, title in ((a, "全量交付"), (b, "小修改")):
             self.assertNotIn("task_revision", task_in(path))
             row = self.locate(host, title)
-            self.claim(host, row)
+            receipt = self.claim(host, row)
+            file = self.workspace / (path.stem + "-receipt.json")
+            file.write_text(json.dumps(receipt), encoding="utf-8")
+            # 普通 Full 及 Light 同走实包首绑守卫。冒用角色名、改 --host，
+            # 或使用无宿主证明的旧 update，均应原样保留 RUNNING 和原件字节。
+            for other_host in ("antigravity", "codex"):
+                expected = digest(path)
+                denied = self.pool(host, "bind", "--host", other_host, "--agent-id", "xy-backend",
+                                   "--receipt", file, code=2)
+                self.assertIn("AGY", denied["error"])
+                denied = self.update(host, row, {"set": {"agent_ref": {"host": other_host,
+                                     "agent_id": "xy-backend"}}}, expected=expected, code=2)
+                self.assertIn("AGY", denied["error"])
+                self.assertEqual(expected, digest(path))
             self.claim(host, self.locate(host, title), code=2)
             self.assertEqual("RUNNING", task_in(path)["state"])
         c_bytes = withdrawn.read_bytes()
         self.pool(host, "archive", "--record", withdrawn, "--expect-sha256", digest(withdrawn))
         self.assertEqual(c_bytes, withdrawn.read_bytes())
         self.assertEqual({"a", "b"}, {item["request_id"] for item in self.pool(host, "view")["tasks"]})
+
+    def test_antigravity_independent_qa_needs_bound_reviewer_and_natural_language_route(self):
+        host = "antigravity"
+        rules = (self.plugins[host] / "rules/AGENTS.md").read_text(encoding="utf-8")
+        # 这里检查用户实际安装后由 AGY 自动加载的入口。其它宿主继续采用原模板。
+        for term in ("自然语言", "即进入 xy-workflow", "明确授权继续有效", "invoke_subagent", "dispatch_marker",
+                     "独立 QA 仍须真实 Reviewer", "纯讨论和显式维护"):
+            self.assertIn(term, rules)
+        for other in ("codex", "claude"):
+            self.assertNotIn("dispatch_marker", (self.plugins[other] / "main-session-context.md").read_text())
+        original = self.register(host, "writer", "原始实现", light=True)
+        qa = self.workspace / "review.json"
+        value = json.loads(original.read_bytes())
+        task = value["task"]
+        task.update(state="RUNNING", task_type="qa", role="xy-qa")
+        row = {"record": str(qa), "task_id": task["id"]}
+        for historical_ref in (None, {"host": host, "agent_id": "xy-qa"}):
+            if historical_ref:
+                task["agent_ref"] = historical_ref
+            qa.write_text(json.dumps(value), encoding="utf-8")
+            row["sha256"] = digest(qa)
+            self.invoke(host, GRAPH, "validate", "--input", qa)
+            error = self.update(host, row, {"set": {"state": "QA_PASSED"}}, code=2)
+            self.assertIn("native-bound Reviewer", error["error"])
+            self.assertEqual(row["sha256"], digest(qa))
+
+    def test_antigravity_light_example_validates_and_claims_from_the_installed_guide(self):
+        host = "antigravity"
+        installed = self.plugins[host]
+        guide = (installed / "skills/xy-workflow/references/dispatch.md").read_text(encoding="utf-8")
+        section = guide.split('<a id="light-non-ui-pack"></a>', 1)[1]
+        template = section.split("```json\n", 1)[1].split("\n```", 1)[0]
+        # 读实际装配的发现入口及当前包提供的规范摘要。这里只替换文档明确标出的槽，
+        # 不从测试 fixture 拼任务字段，这样模板缺字段、相对链接或规范路径失效都会暴露。
+        relative = json.loads(template)["standards_contract"]["leaves"][0]["path"]
+        resource = subprocess.run(["bash", str(installed / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                                   str(installed / "plugins/source_pack.py"), "resource", relative],
+                                  cwd=self.project, env=self.env, text=True, capture_output=True, timeout=30)
+        self.assertEqual(0, resource.returncode, resource.stderr)
+        pack = json.loads(template.replace("<rules-sha256>", json.loads(resource.stdout)["sha256"]))
+        pack["task"]["input_contracts"] = ["测试用户明确委托修复 total([]) 并覆盖回归。"]
+        path = self.workspace / "total.json"
+        def claim(code):
+            return self.pool(host, "claim", "--register", "--record", path, "--request-id", pack["task"]["request_id"],
+                             "--task-id", pack["task"]["id"], "--expect-sha256", digest(path), *CAPACITY, code=code)
+        self.assertEqual([], pack["approved_gates"])
+        path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+        self.assertIn("approvals", claim(2)["error"])
+        pack["approved_gates"] = ["requirements_approved"]
+        path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual("valid", self.invoke(host, GRAPH, "validate", "--input", path)["status"])
+        result = claim(0)
+        self.assertEqual("claimed", result["status"])
+        self.assertRegex(result["dispatch_marker"], r"^XY-WORKFLOW-CLAIM [0-9a-f]{64}$")
+
+    def agy_log(self, identifier, *events):
+        location = self.workspace / "brain" / identifier / ".system_generated" / "logs"
+        location.mkdir(parents=True, exist_ok=True)
+        body = "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events)
+        for name in ("transcript.jsonl", "transcript_full.jsonl"):
+            (location / name).write_text(body, encoding="utf-8")
+        return location / "transcript_full.jsonl"
+
+    def hook_decision(self, transcript, tool, args, user="请直接修改并验证"):
+        plugin = self.plugins["antigravity"]
+        # 唯一替身是临时宿主 brain 物理根；保留实际包内 stdin/stdout 入口、原生
+        # 结构校验、工作区外安装路径、任务池状态、执行目录和子会话识别的完整链路。
+        entry = (
+            "from pathlib import Path\nimport sys,runpy\n"
+            "sys.path.insert(0, sys.argv[1])\nfrom lib.hosts import antigravity_dispatch\n"
+            "antigravity_dispatch._brain = lambda: Path(sys.argv[2])\n"
+            "runpy.run_path(str(Path(sys.argv[1])/'hooks/write_guard.py'), run_name='__main__')\n"
+        )
+        event = {"toolCall": {"name": tool, "args": args}, "conversationId": transcript.parents[2].name,
+                 "transcriptPath": str(transcript), "lastUserInput": user, "workspacePaths": [str(self.project)],
+                 "cwd": str(plugin)}
+        result = subprocess.run(
+            ["bash", str(plugin / "lib/python_runtime.sh"), "-I", "-B", "-c", entry, str(plugin),
+             str(self.workspace / "brain")], cwd=plugin, env=self.env, input=json.dumps(event),
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertLessEqual(set(value), {"decision", "reason"})
+        return value["decision"]
+
+    def test_antigravity_pretool_pm_current_request_and_preparation(self):
+        pm = self.agy_pm.split(":")[1]
+        start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
+        log = self.agy_log(pm, start)
+        plugin = self.plugins["antigravity"]
+        manifest = json.loads((plugin / "hooks.json").read_bytes())
+        self.assertIn("write_guard.py", manifest["xy-workflow-write-ownership"]["PreToolUse"][0]["hooks"][0]["command"])
+        for other in ("codex", "claude"):
+            self.assertFalse((self.plugins[other] / "hooks.json").exists())
+            self.assertFalse((self.plugins[other] / "hooks/write_guard.py").exists())
+        scratch = Path(self.invoke("antigravity", GRAPH, "scratch", "--root", self.project,
+                                   "--request-id", "pm-guard")["scratch_dir"])
+        self.assertEqual(self.project / ".awf/agy-requests", scratch.parent)
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True, env=self.env)
+        self.assertEqual(0, subprocess.run(["git", "check-ignore", "-q", str(scratch / "task.json")],
+                                           cwd=self.project, env=self.env).returncode)
+        target = scratch / "task.json"
+        helper = (f"bash {plugin}/lib/python_runtime.sh -B -X utf8 {plugin}/plugins/source_pack.py "
+                  f"helper --project {self.project} {GRAPH}")
+        for command, result in (
+                ("pwd", "allow"), ("git log -n 5 --oneline && git status", "allow"),
+                ("rg -n total src | head -n 30", "allow"), ("git status && touch src/no.txt", "deny"),
+                ("find . -maxdepth 3 -type f -name '*dispatch*'", "allow"),
+                ("find . -name '*.py' -delete", "deny"), ("find . -name *dispatch*", "deny"),
+                ("mkdir -p docs/plans", "allow"),
+                ("git diff --output=src/other.txt", "deny"), ("echo changed > src/fixture.txt", "deny"),
+                ("python3 -c 'print(1)'", "deny"), ("mkdir -p src/new", "deny"),
+                (f"{helper} task --input {target} --task-id api > {scratch}/export.json", "allow"),
+                (f"{helper} task --input {target} --task-id api --output {self.project}/src/fixture.txt", "deny"),
+                (f"{helper} task --input {target} --task-id api --output {scratch}/../outside.json", "deny")):
+            with self.subTest(command=command):
+                self.assertEqual(result, self.hook_decision(log, "run_command", {"CommandLine": command}))
+        for path, prompt, result in (
+                (str(target), "准备任务包", "allow"), (str(scratch / "test_payload.py"), "准备任务包", "deny"),
+                ("docs/plans/release.md", "准备计划", "allow"),
+                ("docs/PROJECT.md", "整理索引", "allow"), ("src/fixture.txt", "这次由主会话亲自改", "allow"),
+                ("src/fixture.txt", "请 PM 本人直接修改 src/fixture.txt，参考 README.md。", "allow"),
+                ("README.md", "请 PM 本人直接修改 src/fixture.txt，参考 README.md。", "deny"),
+                (".git/config", "这次由主会话亲自改", "deny"),
+                ("src/fixture.txt", "例如“这次由主会话亲自改”", "deny"),
+                ("Makefile", "这次由主会话亲自改 Makefile\n然后运行 test_labels.py", "allow"),
+                ("other.txt", "这次由主会话亲自改 Makefile\n然后运行 test_labels.py", "deny"),
+                ("Makefile", "这次由主会话亲自改\n目标文件：Makefile\n验证输出是“ok”。", "allow"),
+                ("src/fixture.txt", "请 PM 本人修改 src/fixture.txt\n运行 test_labels.py", "allow"),
+                ("Makefile", "如果验收失败，再执行下面的指令\n这次由主会话亲自改 Makefile", "deny"),
+                ("Makefile", "这次由主会话亲自改 Makefile\n前提是用户另行批准。", "deny"),
+                ("Makefile", "这次由主会话亲自改 Makefile\n如果测试失败才修改。", "deny"),
+                ("Makefile", "这次由主会话亲自改 Makefile。\n运行 test_labels.py；如果测试失败，请报告结果。", "allow"),
+                ("客户与订单.md", "请 PM 本人直接修改 客户与订单.md", "allow"),
+                ("订单.md", "请 PM 本人直接修改 客户与订单.md", "deny"),
+                ("客户", "请 PM 本人直接修改 客户与订单.md", "deny"),
+                ("文件管理.py", "请 PM 本人直接修改 文件管理.py", "allow"),
+                ("管理.py", "请 PM 本人直接修改 文件管理.py", "deny"),
+                ("文件管理.py", "这次由主会话亲自改\n文件管理.py", "allow"),
+                ("管理.py", "这次由主会话亲自改\n文件管理.py", "deny"),
+                ("客户以及订单.md", "请 PM 本人直接修改 客户和地址.md、客户以及订单.md", "allow"),
+                ("地址.md", "请 PM 本人直接修改 客户和地址.md、客户以及订单.md", "deny"),
+                ("src/fixture.txt", "请不要让 PM 本人直接修改 src/fixture.txt", "deny"),
+                ("src/fixture.txt", "继续修复，可以直接修改", "deny")):
+            with self.subTest(prompt=prompt, path=path):
+                self.assertEqual(result, self.hook_decision(log, "write_file", {"Path": path}, prompt))
+        prompt = "这次由主会话亲自改 labels.py 并运行 test_labels.py"
+        for file, expected in (("labels.py", "allow"), ("test_labels.py", "deny")):
+            self.assertEqual(expected, self.hook_decision(log, "edit_file", {"Path": file}, prompt))
+        for file, expected in (("test_labels.py", "allow"), ("test_other.py", "deny")):
+            self.assertEqual(expected, self.hook_decision(log, "run_command", {"CommandLine": "python3 " + file}, prompt))
+        launcher = f"bash {plugin}/plugins/maintenance/launcher.sh"
+        for user, action, expected in (("/xy-config doctor", "doctor", "allow"), ("/xy-config", "open", "allow"),
+                                       ("/xy-config status", "open", "deny"), ("修复 /xy-config status", "status", "deny")):
+            command = f"{launcher} {action} --host antigravity --project {self.project}"
+            self.assertEqual(expected, self.hook_decision(log, "run_command", {"CommandLine": command}, user))
+        # 准备组件需要同一项 open 的真实回执及当前明确同意。普通打开和冒用旧同意均不能批准。
+        open_cmd = f"{launcher} open --host antigravity --project {self.project}"
+        prepare = {"CommandLine": open_cmd + " --prepare"}
+        self.assertEqual("deny", self.hook_decision(log, "run_command", prepare, "/xy-config open"))
+        invocation = {**start, "content": "<USER_REQUEST>/xy-config open</USER_REQUEST>"}
+        consent = {**start, "content": "<USER_REQUEST>同意准备组件</USER_REQUEST>"}
+        events = [invocation, {"source": "MODEL", "type": "PLANNER_RESPONSE", "tool_calls": [
+            {"name": "run_command", "args": {"CommandLine": open_cmd}}]},
+                  {"source": "MODEL", "type": "GENERIC", "content": '{"state":"preparation_required"}'}, consent]
+        self.agy_log(pm, *events)
+        self.assertEqual("allow", self.hook_decision(log, "run_command", prepare, "同意准备组件"))
+        self.agy_log(pm, *events, consent)
+        self.assertEqual("deny", self.hook_decision(log, "run_command", prepare, "同意准备组件"))
+        # 文件系统别名不能把默认可写计划或临时交接输出指向业务文件。
+        linked = scratch / "linked.json"
+        linked.symlink_to(self.project / "src/fixture.txt")
+        self.assertEqual("deny", self.hook_decision(log, "edit_file", {"Path": str(linked)}))
+        self.assertEqual("deny", self.hook_decision(log, "run_command", {"CommandLine":
+            f"{helper} task --input {target} --task-id api --output {linked}"}))
+
+    def test_antigravity_pretool_writer_before_binding_and_read_only_role(self):
+        host = "antigravity"
+        pm = self.agy_pm.split(":")[1]
+        path = self.register(host, "changes", "修正", light=True, owned="src/fixture.txt")
+        # 和项目发现器使用相同的真实清单入口，核对登记命令、模块 cwd 与实际终端
+        # 是否一致。这些仅为守卫入参，不在开发机上安装或执行 Gradle/Xcode 等工具。
+        manifests = {"build.gradle.kts": 'plugins { id("java") }', "gradlew": "#!/bin/sh\n",
+                     "api/pyproject.toml": '[project]\nname="api"\nversion="1"\ndependencies=["pytest"]',
+                     "api/uv.lock": "version = 1\n",
+                     "jobs/pyproject.toml": '[tool.poetry]\nname="jobs"\nversion="1"\n[tool.poetry.group.dev.dependencies]\npytest="^9"',
+                     "jobs/poetry.lock": "package = []\n",
+                     "ios/App.xcodeproj/project.pbxproj": ('// !$*UTF8*$!\n{\n objects = {\n A1 = {\n isa = PBXNativeTarget;\n'
+                                                          ' productType = "com.apple.product-type.application";\n };\n };\n}\n'),
+                     "ios/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme": '<Scheme version="1.7"/>'}
+        for relative, body in manifests.items():
+            file = self.project / relative
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(body, encoding="utf-8")
+        checks = ["python3 test_total.py", "./gradlew test", "uv run pytest", "poetry run pytest",
+                  "xcodebuild -scheme App build", "python3 -c 'print(1)'"]
+        self.update(host, self.locate(host, "修正"), {"set": {"verification_commands": checks}})
+        claim = self.claim(host, self.locate(host, "修正"))
+        marker = claim["dispatch_marker"]
+        child = str(uuid4())
+        child_log = self.agy_log(child, {
+            "step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+            "content": "\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender=" + pm
+                       + " priority=MESSAGE_PRIORITY_HIGH content=" + marker + "\n实现当前任务\n</SYSTEM_MESSAGE>",
+        })
+        def dispatch(role):
+            call = {"name": "invoke_subagent", "args": {"TypeName": json.dumps(role), "Prompt": json.dumps(marker)}}
+            receipt = {"conversationId": child, "logAbsoluteUri": child_log.with_name("transcript.jsonl").as_uri(),
+                       "workspaceUris": [self.project.as_uri()]}
+            return self.agy_log(pm, {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"},
+                         {"step_index": 1, "source": "MODEL", "status": "DONE",
+                              "type": "PLANNER_RESPONSE", "tool_calls": [call]},
+                         {"step_index": 2, "source": "MODEL", "status": "DONE", "type": "GENERIC",
+                          "content": "Created the following subagent:\n" + json.dumps(receipt)
+                          + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
+                            "There is no need to poll for its response."})
+        parent_log = dispatch("xy-backend")
+        self.assertNotIn("agent_ref", task_in(path))
+        self.assertEqual("allow", self.hook_decision(child_log, "edit_file", {"Path": "src/fixture.txt"}))
+        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", {"Path": "src/other.txt"}))
+        for current in (parent_log, child_log):
+            self.assertEqual("allow", self.hook_decision(current, "run_command", {"CommandLine": "python3 test_total.py"}))
+            self.assertEqual("allow", self.hook_decision(current, "run_command", {"CommandLine": "python -B test_total.py"}))
+            self.assertEqual("deny", self.hook_decision(current, "run_command", {"CommandLine": "python3 test_other.py"}))
+            for cmd, subdir, allowed in (("./gradlew test", ".", "allow"), ("uv run pytest", "api", "allow"),
+                                         ("poetry run pytest", "jobs", "allow"), ("xcodebuild -scheme App build", "ios", "allow"),
+                                         ("uv run pytest", "jobs", "deny"), ("./gradlew build", ".", "deny"),
+                                         ("python3 -c 'print(1)'", ".", "deny")):
+                with self.subTest(actor=current, command=cmd, directory=subdir):
+                    self.assertEqual(allowed, self.hook_decision(current, "run_command", {
+                        "CommandLine": cmd, "Cwd": str(self.project / subdir)}))
+        dispatch("xy-qa")
+        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", {"Path": "src/fixture.txt"},
+                                                    "这次由主会话亲自改"))
+        self.assertEqual("allow", self.hook_decision(child_log, "run_command", {"CommandLine": "git diff --stat"}))

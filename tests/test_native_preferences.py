@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import http.client
+import io
 import json
 import os
 from pathlib import Path
@@ -92,6 +93,44 @@ class NativePreferencesTest(unittest.TestCase):
         self.assertFalse(row["dispatch_ready"])
         self.assertFalse(row["invoke_name_verified"])
         self.save({name: {"model": None}}, host="claude")
+
+    @unittest.skipUnless(sys.platform == "darwin" and getattr(os, "O_NOFOLLOW_ANY", 0), "需要 macOS 全路径禁链打开")
+    def test_antigravity_sandbox_preference_lookup_requires_only_permitted_target(self):
+        import fcntl
+        host = "antigravity"
+        path = contract.preference_path(host, self.home)
+        permitted = (path.parent, self.project)
+        ancestors = {parent for target in permitted for parent in target.parents}
+        original_open = os.open
+        deny_file = False
+        def sandbox_open(name, flags, *args, **kwargs):
+            # 允许穿越上级定位项目及配置，模拟沙箱只拒绝将祖先作为可读目录打开；
+            # 真正需要读取的配置文件若被宿主拒绝，不能让同一修复把拒绝报告成未配置。
+            target = Path(name)
+            if kwargs.get("dir_fd") is not None:
+                parent = fcntl.fcntl(kwargs["dir_fd"], fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0]
+                target = Path(os.fsdecode(parent)) / target
+            search_flag = getattr(os, "O_SEARCH", 0)
+            search_only = bool(search_flag) and (flags & search_flag) == search_flag
+            if (target in ancestors and not search_only) or (deny_file and target == path):
+                raise PermissionError("测试沙箱拒绝读取此节点")
+            return original_open(name, flags, *args, **kwargs)
+        def lookup():
+            with patch("sys.stdout", new_callable=io.StringIO) as output:
+                code = contract.main(["--host", host, "--agent", "xy-qa", "--project", str(self.project),
+                                      "--home", str(self.home)])
+            return code, json.loads(output.getvalue())
+        with patch.object(os, "open", side_effect=sandbox_open):
+            code, result = lookup()
+            self.assertEqual((0, "unconfigured"), (code, result.get("status")), result)
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({**contract.empty_document(host), "defaults": {"model": "flash"}}))
+            code, result = lookup()
+            self.assertEqual((0, {"model": "flash"}), (code, result.get("preferences")), result)
+            self.assertEqual("user_default", result["sources"]["model"])
+            deny_file = True
+            code, result = lookup()
+            self.assertEqual((1, "invalid_preferences"), (code, result.get("error", {}).get("code")), result)
 
     def test_known_legacy_claude_roles_fill_fields_at_each_layer_without_writes(self):
         """七个精确旧键只补新键缺失字段，四层优先级和原文件字节都保留。"""

@@ -9,7 +9,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+from uuid import uuid4
 
+from lib import task_graph_records, task_pool
+from lib.hosts import antigravity_dispatch
 from lib.task_graph_cli import export_task_pack
 from lib.task_graph_records import digest
 from tests.test_task_graph_records import graph
@@ -208,6 +212,17 @@ class TaskPoolTest(unittest.TestCase):
                                 cwd=self.root, env=self.env, text=True, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def rejected_update(self, path, operation):
+        # 特意直接走公开 CLI，以当前真实摘要提交完整补丁，排除参数错误或过期 CAS 造成的假阴性。
+        before = path.read_bytes()
+        result = subprocess.run([sys.executable, "-B", str(PACK / "lib/task_graph_cli.py"), "update",
+                                 "--input", str(path), "--root", str(self.root), "--patch", "-",
+                                 "--expect-sha256", self.sha(path)], cwd=self.root, env=self.env,
+                                input=json.dumps({"tasks": {path.stem: operation}}), capture_output=True, text=True)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(before, path.read_bytes())
+        return json.loads(result.stderr)["error"]
+
     def test_shared_solution_retains_required_member_until_its_peer_finishes(self):
         from lib.solution_confirmation import bind_decisions, decision_gates
         first = self.record("a", request="orders")
@@ -252,3 +267,161 @@ class TaskPoolTest(unittest.TestCase):
         self.assertEqual("retained", self.call([*cmd, "unknown"])["status"])
         self.assertEqual("WITHDRAWN", self.call([*cmd, "definitely_not_created"])["state"])
         self.assertEqual("archived", self.call(["archive", "--record", str(item), "--expect-sha256", self.sha(item)])["status"])
+
+    def test_antigravity_binds_only_its_current_native_creation(self):
+        parent, child, other = (str(uuid4()) for _ in range(3))
+        self.pm = "antigravity:" + parent
+        path = self.record("review")
+        qa = json.loads(path.read_bytes())
+        qa["task"].update(task_type="qa", role="xy-qa")
+        self.write(path, qa)
+        self.reg(path)
+        old = self.claim(path)
+        receipt_path = self.work / "claim.json"
+        self.write(receipt_path, old)
+        self.call(["release", "--receipt", str(receipt_path), "--outcome", "definitely_not_created", *self.capacity])
+        current = self.claim(path)
+        marker = current["dispatch_marker"]
+        self.assertNotEqual(old["dispatch_marker"], marker)
+        self.assertRegex(marker, r"^XY-WORKFLOW-CLAIM [0-9a-f]{64}$")
+        claimed = path.read_bytes()
+        exported = self.work / "review-handoff.json"
+        def export(source, expected):
+            return subprocess.run([sys.executable, "-B", str(PACK / "lib/task_graph_cli.py"), "task",
+                                   "--root", str(self.root), "--input", str(source), "--output", str(exported),
+                                   "--expect-sha256", expected], capture_output=True, text=True, env=self.env)
+        result = export(path, "missing")
+        self.assertEqual(0, result.returncode, result.stderr)
+        # 发布旧格式的交接副本不能帮助人工绑定。之后真正的绑定却仍可刷新这一
+        # 输出文件；原生 ID 是领取后才出现，不应破坏原先交接包的 CAS 覆盖约定。
+        unproven = self.work / "historical.json"
+        historical = json.loads(exported.read_bytes())
+        historical["task"]["agent_ref"] = {"host": "antigravity", "agent_id": "xy-qa"}
+        self.write(unproven, historical)
+        unbound_sha = self.sha(exported)
+        denied = export(unproven, unbound_sha)
+        self.assertEqual(2, denied.returncode, denied.stdout)
+        self.assertIn("AGY first binding", denied.stderr)
+        self.assertEqual(unbound_sha, self.sha(exported))
+        # 只在本测试进程替换系统日志定位。生产 CLI 无可指定日志路径或验证结果的选项；
+        # 登记、两次领取、释放、原件发布和 CAS 都经过与正常入口相同的实际逻辑。
+        brain = self.work / "native"
+        relative = Path(".system_generated/logs/transcript.jsonl")
+        log = brain / parent / relative
+        log.parent.mkdir(parents=True)
+        self.enterContext(mock.patch.object(antigravity_dispatch, "_brain", return_value=brain))
+        self.enterContext(mock.patch.object(tempfile, "tempdir", str(self.work)))
+
+        def bind(ident=child, receipt=current):
+            return task_pool.bind(self.root, self.pm, receipt, {"host": "antigravity", "agent_id": ident})
+
+        def invocation(text, name="invoke_subagent", selector="xy-qa"):
+            return {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                    "tool_calls": [{"name": name, "args": {"Prompt": json.dumps(text), "TypeName": json.dumps(selector),
+                                                           "Role": json.dumps("xy-qa")}}]}
+
+        native = {"conversationId": child, "logAbsoluteUri": (brain / child / relative).as_uri(),
+                  "workspaceUris": [self.root.as_uri()]}
+        def response(payload=native):
+            return {"step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                    "content": ("Created At: 2026-11-20T17:22:32+08:00\nCompleted At: 2026-11-20T17:22:32+08:00\n"
+                                "Created the following subagent:\n" + json.dumps(payload, indent=2)
+                                + "\nThe subagent will send you a message when it has completed its task or requires "
+                                "guidance. There is no need to poll for its response.")}
+
+        def transcript(events, target=log):
+            target.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+        creation = invocation("只读取本次完整任务包。\n" + marker)
+        valid = [creation, response()]
+        role_source = (PACK / "roles/xy-qa.md").read_text(encoding="utf-8")
+        role_prompt = marker + "\n" + role_source
+        # 真 UUID、同父其它领取或其它父会话中的真事件均不够。聊天、命令输出、
+        # 已失败或不相邻的调用也不能借相同字符串生成一条成功绑定。
+        other_log = brain / other / relative
+        other_log.parent.mkdir(parents=True)
+        transcript(valid, other_log)
+        for label, events in {
+                "other parent": [],
+                "previous claim": [invocation(old["dispatch_marker"]), response()],
+                "two markers": [invocation(old["dispatch_marker"] + "\n" + marker), response()],
+                "quoted marker": [invocation("引用 " + marker), response()],
+                "user message": [{**creation, "source": "USER_EXPLICIT"}, response()],
+                "response in chat": [creation, {**response(), "type": "PLANNER_RESPONSE"}],
+                "command output": [invocation(marker, "run_command"), response()],
+                "wrong named role": [invocation(role_prompt, selector="xy-backend"), response()],
+                "only role label": [invocation(marker, selector="research"), response()],
+                "incomplete role": [invocation(role_prompt[:-160], selector="research"), response()],
+                "unknown generic alias": [invocation(role_prompt, selector="reviewer"), response()],
+                "interrupted": [creation, {**response(), "step_index": 3}],
+                "parallel calls": [{**creation, "tool_calls": creation["tool_calls"] * 2}, response()],
+                "failed creation": [creation, {**response(), "status": "ERROR"}],
+                "wrong workspace": [creation, response({**native, "workspaceUris": [self.work.as_uri()]})],
+                "wrong transcript URI": [creation, response({**native, "logAbsoluteUri": other_log.as_uri()})],
+        }.items():
+            with self.subTest(case=label):
+                transcript(events)
+                with self.assertRaisesRegex(ValueError, "no matching native"):
+                    bind()
+                self.assertEqual(claimed, path.read_bytes())
+                if label == "wrong named role":
+                    self.assertIn("native-bound Reviewer", self.rejected_update(path, {"set": {"state": "QA_PASSED"}}))
+        # 通用入口必须在同一创建调用实际交付属于当前版本的完整角色，且保留相同领取与工作区。
+        transcript([invocation(role_prompt, selector="research"), response()])
+        antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-qa")
+        transcript(valid)
+        for ident in ("xy-qa", parent, other):
+            with self.subTest(agent=ident), self.assertRaises(ValueError):
+                bind(ident)
+        with self.assertRaisesRegex(ValueError, "original claim"):
+            bind(receipt=old)
+        with self.assertRaisesRegex(ValueError, "dispatch marker"):
+            bind(receipt={**current, "dispatch_marker": old["dispatch_marker"]})
+        self.assertEqual(claimed, path.read_bytes())
+        result = bind()
+        self.assertEqual({"host": "antigravity", "agent_id": child}, result["agent_ref"])
+        self.assertEqual(result["agent_ref"], json.loads(path.read_bytes())["task"]["agent_ref"])
+        refreshed = export(path, unbound_sha)
+        self.assertEqual(0, refreshed.returncode, refreshed.stderr)
+        self.assertEqual(result["agent_ref"], json.loads(exported.read_bytes())["task"]["agent_ref"])
+        log.unlink()
+        self.assertEqual(result, bind())
+
+    def test_antigravity_only_pool_can_release_or_confirm_uncreated(self):
+        self.pm = "antigravity:" + str(uuid4())
+        path = self.record("waiting")
+        self.reg(path)
+        receipt_path = self.work / "receipt.json"
+        for stopping in (False, True):
+            with self.subTest(stopping=stopping):
+                receipt = self.claim(path)
+                self.write(receipt_path, receipt)
+                operation = {"previous_sha256": receipt["previous_sha256"], "outcome": "definitely_not_created"}
+                if stopping:
+                    self.withdraw(path, path.stem)
+                    direct = {"confirm_uncreated": operation}
+                else:
+                    direct = {"release_claim": {**operation, "prior_state": receipt["prior_state"]}}
+                self.assertIn("current PM task pool", self.rejected_update(path, direct))
+                cmd = ["release", "--receipt", str(receipt_path), *self.capacity, "--outcome"]
+                self.assertEqual("retained", self.call([*cmd, "unknown"])["status"])
+                self.assertEqual("WITHDRAWN" if stopping else receipt["prior_state"],
+                                 self.call([*cmd, "definitely_not_created"])["state"])
+
+    @unittest.skipUnless(getattr(os, "O_NOFOLLOW_ANY", 0), "系统未提供全路径禁链打开")
+    def test_sandbox_scratch_needs_only_target_read_permission_and_rejects_symlink_ancestor(self):
+        base = self.work / "native-temp/inner/pool/project"
+        base.parent.parent.mkdir(parents=True)
+        original_open = os.open
+        def sandbox_open(path, flags, *, dir_fd=None):
+            # 模拟宿主只允许读取当前临时根：上级可以穿越，但不能单独将其打开为可读目录。
+            if dir_fd is None and Path(path) in base.parent.parent.parents:
+                raise PermissionError(path)
+            return original_open(path, flags, dir_fd=dir_fd)
+        with mock.patch.object(os, "open", side_effect=sandbox_open):
+            with task_graph_records._scratch_base_directory(base, create=True) as descriptor:
+                self.assertEqual(base.stat().st_ino, os.fstat(descriptor).st_ino)
+        alias = self.work / "borrowed-temp"
+        alias.symlink_to(self.work / "native-temp", target_is_directory=True)
+        with self.assertRaises(OSError), task_graph_records._scratch_base_directory(alias / "inner/pool/project"):
+            self.fail("系统临时根的祖先软链必须在取得目录描述符之前被拒绝")

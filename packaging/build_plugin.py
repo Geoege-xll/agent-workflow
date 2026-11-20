@@ -113,7 +113,7 @@ LIB_FILES = (
     "task_graph_cli.py", "task_graph_init.py", "task_graph_records.py",
     "validate_project_docs.py", "worktree_policy.py",
 )
-HOST_LIB_FILES = ("__init__.py", "capabilities.py")
+HOST_LIB_FILES = ("__init__.py", "capabilities.py", "antigravity_dispatch.py")
 # 维护入口单独封闭白名单：既不遍历维护目录，也不读取独立产品源码或网页。
 # 新的薄模块必须经显式审查后加入；Skill 不属于九个业务核心或角色预载列表。
 MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
@@ -276,6 +276,22 @@ def render_main_context(body: bytes, host: str, envelope_source: str) -> bytes:
     host 和调用名称来自构建枚举而非用户输入；项目路径留给真实 session/workspace，
     不在构建时写入开发机 cwd、源码路径或默认项目。业务适配在业务分支中延迟读取。
     """
+    if host == "antigravity":
+        # AGY 始终加载 rules/AGENTS.md。明确只有配置维护依赖显式调用，
+        # 否则宿主容易把通用开头理解成业务开发必须先由用户手动调用 Skill。
+        body = body.replace(b"Use the host's actual Skill invocation event or a complete command",
+                            b"For maintenance, require the host's actual Skill invocation event or a complete command")
+        body = body.replace(b"**Delegated work.**", (
+            "用户用自然语言要求实现、制作设计交付物或独立 QA 时，主会话即进入 xy-workflow。"
+            "同一当前范围内的明确授权继续有效。依照既有 Light/Full 门禁，只就缺失的实质决定提问，"
+            "无需用户再次要求启动工作流或派发。需要交接原件时，先通过本包 task_graph_cli.py scratch "
+            "取得当前项目 .awf/agy-requests 下的 scratch_dir，用原生 write_file 写完整包，再用本包 task_pool_cli.py "
+            "claim --register 领取；把实际包路径交给工作者原生 read_file。PM 按职责调用原生 invoke_subagent，"
+            "将本次领取的 dispatch_marker 单独放入初始 Prompt，并用真实子会话回执完成绑定。"
+            "回执缺失或被拒时，保留占用并报告阻塞；PM 不得接手该实例的工作或宣称独立 QA 通过。"
+            "用户明确点名 PM 本人实施当前范围时沿用原有实施者例外；独立 QA 仍须真实 Reviewer。"
+            "保留宿主权限、纯讨论和显式维护分支。"
+        ).encode("utf-8"))
     return render_maintenance_route(body, host).replace(b"@BUSINESS_ADAPTER@", envelope_source.encode("ascii"))
 
 
@@ -563,6 +579,13 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         for name in ("hooks.json", "session_start.py"):
             projections["hooks/" + name] = {"source": "plugins/codex/hooks/" + name, "transform": "identity"}
     if host == "antigravity":
+        # AGY CLI 从插件根的 hooks.json 发现处理器，并以插件根作为工作目录。
+        # 保留原始来源和投影，使离线候选与本地安装源能校验实际执行的字节。
+        for name, target in (("hooks.json", "hooks.json"), ("write_guard.py", "hooks/write_guard.py"),
+                             ("guard_command.py", "hooks/guard_command.py")):
+            source_name = "plugins/antigravity/" + name
+            copy(source_name, target)
+            projections[target] = {"source": source_name, "transform": "identity"}
         # AGY官方默认发现的always-on入口属于插件rules目录，不修改项目AGENTS。
         # 只给主会话已有Skill的入口；角色正文继续约束Worker，不能把它变成PM。
         result["rules/AGENTS.md"] = main_context

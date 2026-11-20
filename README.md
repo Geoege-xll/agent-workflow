@@ -2,7 +2,9 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，按任务选择需求、方案与原型确认，并组织验证和交付。
 
-本源码为 **xy-workflow 3.0.8**，配套 **Native Agent Config 0.1.6**。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+本源码为 **xy-workflow 3.0.9**，配套 **Native Agent Config 0.1.7**。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+
+`3.0.9` 在 AGY CLI 的原生工具执行前核对写入分工。普通委托通过任务池领取并派给真实实现者。当前用户明确指定主会话亲自修改时，按指定目标放行。AGY 在项目内交接任务包，减少系统临时目录触发的宿主权限请求。
 
 `3.0.8` 支持 PM 按任务名称查看、修改和撤回已委托的工作。要求原型的任务在原型完成并确认后才可交接和登记交付。独立 QA 可核对用户批准的方案正文，PM 可在原需求主题登记验收结果。[持续接单与调度](docs/usage.md#pm-持续接单与调度)
 
